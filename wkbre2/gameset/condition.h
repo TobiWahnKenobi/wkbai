@@ -21,4 +21,6 @@ struct GSCondition {
 	void parse(GSFileParser &gsf, GameSet &gs);
 	std::string getFormattedHint(const Language& lang, ScriptContext* ctx) const;
 	static std::string getFormattedHint(const std::string& hint, const std::vector<ValueDeterminer*>& hintValues, const Language& lang, ScriptContext* ctx);
+	// Reads the rest of a HINT / DEFAULT_HINT line
+	static void readHintValues(GSFileParser& gsf, const GameSet& gs, std::vector<ValueDeterminer*>& hintValues);
 };

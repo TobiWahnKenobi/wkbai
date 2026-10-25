@@ -56,9 +56,7 @@ void Command::parse(GSFileParser &gsf, GameSet &gs) {
 			stampdownObject = gs.readObjBlueprintPtr(gsf);
 		else if (strtag == "DEFAULT_HINT") {
 			defaultHint = gsf.nextString(false);
-			while (!gsf.eol) {
-				defaultHintValues.push_back(ReadValueDeterminer(gsf, gs));
-			}
+			GSCondition::readHintValues(gsf, gs, defaultHintValues);
 		}
 		else if (strtag == "FLAG") {
 			auto flagName = gsf.nextString();

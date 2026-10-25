@@ -17,6 +17,7 @@
 #include "ScriptContext.h"
 #include "../terrain.h"
 #include "../Pathfinding.h"
+#include "KeywordStubs.h"
 
 namespace {
 	float RandomFromZeroToOne() { return (float)(rand() & 0xFFFF) / 32768.0f; }
@@ -35,6 +36,14 @@ struct ValueUnknown : ValueDeterminer {
 	virtual float eval(ScriptContext* ctx) override { ferr("Unknown value determiner %s called from the %s!", name.c_str(), ctx->gameState->getProgramName()); return 0.0f; }
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {}
 	ValueUnknown(const std::string& name) : name(name) {}
+};
+
+// Known keyword without an implementation yet, see KeywordStubs.h
+struct ValueStub : ValueDeterminer {
+	KeywordStubArgs args;
+	virtual float eval(ScriptContext* ctx) override { args.warnOnce(); return 0.0f; }
+	virtual void parse(GSFileParser &gsf, const GameSet &gs) override { args.parse(gsf, gs); }
+	ValueStub(const std::string& name, const char* signature) : args(name, signature) {}
 };
 
 struct ValueConstant : ValueDeterminer {
@@ -870,6 +879,11 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 	case Tags::VALUE_AVERAGE_ITEM_VALUE: vd = new ValueAverageItemValue; break;
 	case Tags::VALUE_IS_IN_FRONT_OF: vd = new ValueIsInFrontOf; break;
 	default:
+		if (const char* signature = FindStubSignature(valueStubSignatures, strtag)) {
+			vd = new ValueStub(strtag, signature);
+			printf("WARNING: Value determiner %s is not implemented (arguments read, evaluates to 0) at %s\n", strtag.c_str(), gsf.locate().c_str());
+			break;
+		}
 		vd = new ValueUnknown(strtag);
 		printf("WARNING: Unknown value determiner %s at %s\n", strtag.c_str(), gsf.locate().c_str());
 		break;
@@ -905,6 +919,10 @@ struct EnodeIsNegative : UnaryEnode {
 
 struct EnodeAbsoluteValue : UnaryEnode {
 	virtual float eval(ScriptContext* ctx) override { return std::abs(a->eval(ctx)); }
+};
+
+struct EnodeCeil : UnaryEnode {
+	virtual float eval(ScriptContext* ctx) override { return std::ceil(a->eval(ctx)); }
 };
 
 struct EnodeNegate : UnaryEnode {
@@ -1076,7 +1094,8 @@ ValueDeterminer *ReadEquationNode(::GSFileParser &gsf, const ::GameSet &gs)
 		else if (strtag == "ENODE") {
 			const char *oldcur = gsf.cursor;
 			ValueDeterminer *vd;
-			switch (Tags::ENODE_tagDict.getTagID(gsf.nextString().c_str())) {
+			std::string nodename = gsf.nextString();
+			switch (Tags::ENODE_tagDict.getTagID(nodename.c_str())) {
 			case Tags::ENODE_ADDITION: vd = new EnodeAddition; break;
 			case Tags::ENODE_NEGATE: vd = new EnodeNegate; break;
 			case Tags::ENODE_SUBTRACTION: vd = new EnodeSubtraction; break;
@@ -1104,7 +1123,8 @@ ValueDeterminer *ReadEquationNode(::GSFileParser &gsf, const ::GameSet &gs)
 			case Tags::ENODE_IF_THEN_ELSE: vd = new EnodeIfThenElse; break;
 			case Tags::ENODE_IS_BETWEEN: vd = new EnodeIsBetween; break;
 			case Tags::ENODE_FRONT_BACK_LEFT_RIGHT: vd = new EnodeFrontBackLeftRight; break;
-			default: 
+			default:
+				if (nodename == "CEIL") { vd = new EnodeCeil; break; }
 				gsf.cursor = oldcur;
 				return ReadValueDeterminer(gsf, gs);
 			}

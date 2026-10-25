@@ -19,6 +19,7 @@
 #include "GameObjBlueprint.h"
 #include "../Model.h"
 #include "gameset.h"
+#include "KeywordStubs.h"
 
 namespace {
 	OrientedPosition PosFromObjVec(const ObjectFinderResult &vec) {
@@ -40,6 +41,24 @@ struct PDUnknown : PositionDeterminer {
 	{
 	}
 	PDUnknown(const std::string& name) : name(name) {}
+};
+
+// Known keyword without an implementation yet, see KeywordStubs.h.
+// Falls back to its first position argument, or the location of its first finder
+// argument, rather than the map origin.
+struct PDStub : PositionDeterminer {
+	KeywordStubArgs args;
+	virtual OrientedPosition eval(ScriptContext* ctx) override
+	{
+		args.warnOnce();
+		if (!args.positions.empty())
+			return args.positions[0]->eval(ctx);
+		if (!args.finders.empty())
+			return PosFromObjVec(args.finders[0]->eval(ctx));
+		return OrientedPosition();
+	}
+	virtual void parse(GSFileParser & gsf, const GameSet & gs) override { args.parse(gsf, gs); }
+	PDStub(const std::string& name, const char* signature) : args(name, signature) {}
 };
 
 struct PDLocationOf : PositionDeterminer {
@@ -502,6 +521,11 @@ PositionDeterminer * PositionDeterminer::createFrom(GSFileParser & gsf, const Ga
 	case Tags::POSITION_RANDOM_ATTACHMENT_POINT: pos = new PDRandomAttachmentPoint; break;
 	case Tags::POSITION_NEAREST_CONSTRUCTION_SITE: pos = new PDNearestConstructionSite; break;
 	default:
+		if (const char* signature = FindStubSignature(positionStubSignatures, tag)) {
+			pos = new PDStub(tag, signature);
+			printf("WARNING: Position determiner %s is not implemented (arguments read, uses its first argument's position) at %s\n", tag.c_str(), gsf.locate().c_str());
+			break;
+		}
 		pos = new PDUnknown(tag);
 		printf("WARNING: Unknown position determiner %s at %s\n", tag.c_str(), gsf.locate().c_str());
 		break;

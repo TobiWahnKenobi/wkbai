@@ -42,6 +42,8 @@
 #include "ParticleSystem.h"
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
+#include "settings.h"
+#include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -51,7 +53,8 @@ void Test_GameSet()
 {
 	LoadBCP("data.bcp"); // C:\\Apps\\Warrior Kings - Battles\\
 
-	GameSet gameSet("Warrior Kings Game Set\\multi-player extensions.cpp", GameSet::GSVERSION_UNKNOWN);
+	// Use the configured game version like Server::loadSaveGame does; Battles scripts need the Battles readers
+	GameSet gameSet("Warrior Kings Game Set\\multi-player extensions.cpp", g_settings.value<int>("gameVersion", 0));
 
 	printf("List of %i items:\n", gameSet.items.names.size());
 	for (const std::string &item : gameSet.items.names)

@@ -6,6 +6,23 @@
 #include "gameset.h"
 #include "../util/GSFileParser.h"
 #include "../Language.h"
+#include "../tags.h"
+
+void GSCondition::readHintValues(GSFileParser& gsf, const GameSet& gs, std::vector<ValueDeterminer*>& hintValues)
+{
+	while (!gsf.eol) {
+		// Battles hints can also name a blueprint, e.g. `DEFINED_VALUE "Wood Cost" BUILDING "Unaligned Wall"`.
+		// Its use in the hint text is not known yet; skip it so it isn't read as value determiners.
+		const char* oldcur = gsf.cursor;
+		std::string word = gsf.nextString();
+		if (Tags::GAMEOBJCLASS_tagDict.getTagID(word.c_str()) != -1) {
+			gsf.nextString(true);
+			continue;
+		}
+		gsf.cursor = oldcur;
+		hintValues.push_back(ReadValueDeterminer(gsf, gs));
+	}
+}
 
 void GSCondition::parse(GSFileParser & gsf, GameSet & gs)
 {
@@ -17,9 +34,7 @@ void GSCondition::parse(GSFileParser & gsf, GameSet & gs)
 		}
 		else if (tag == "HINT") {
 			hint = gsf.nextString();
-			while (!gsf.eol) {
-				hintValues.push_back(ReadValueDeterminer(gsf, gs));
-			}
+			readHintValues(gsf, gs, hintValues);
 		}
 		else if (tag == "END_CONDITION")
 			break;

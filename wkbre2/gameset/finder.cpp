@@ -13,6 +13,7 @@
 #include "ScriptContext.h"
 #include <cassert>
 #include <iterator>
+#include "KeywordStubs.h"
 
 ObjectFinderResult ObjectFinder::fail(ScriptContext* ctx) {
 	ferr("Invalid object finder call from %s", ctx->gameState->getProgramName());
@@ -28,6 +29,14 @@ struct FinderUnknown : ObjectFinder {
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 	}
 	FinderUnknown(const std::string& name) : name(name) {}
+};
+
+// Known keyword without an implementation yet, see KeywordStubs.h
+struct FinderStub : ObjectFinder {
+	KeywordStubArgs args;
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override { args.warnOnce(); return {}; }
+	virtual void parse(GSFileParser &gsf, const GameSet &gs) override { args.parse(gsf, gs); }
+	FinderStub(const std::string& name, const char* signature) : args(name, signature) {}
 };
 
 struct FinderSelf : ObjectFinder {
@@ -416,6 +425,11 @@ ObjectFinder *ReadFinder(GSFileParser &gsf, const GameSet &gs)
 	default:
 		if (findername == "AG_ALL_OF_TYPE") { finder = new FinderAgAllOfType; break; }
 		if (findername == "AG_AS_OBJ") { finder = new FinderAgAsObj; break; }
+		if (const char* signature = FindStubSignature(finderStubSignatures, findername)) {
+			finder = new FinderStub(strtag, signature);
+			printf("WARNING: Finder %s is not implemented (arguments read, finds nothing) at %s\n", strtag.c_str(), gsf.locate().c_str());
+			break;
+		}
 		finder = new FinderUnknown(strtag);
 		printf("WARNING: Unknown finder %s at %s\n", strtag.c_str(), gsf.locate().c_str());
 		break;
