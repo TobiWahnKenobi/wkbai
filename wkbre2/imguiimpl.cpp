@@ -9,8 +9,7 @@
 #include "window.h"
 #include <algorithm>
 #include <cstdint>
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
+#include <SDL3/SDL.h>
 
 
 uint32_t iglasttime;
@@ -94,12 +93,7 @@ void ImGuiImpl_Init()
 	//imguienabled = true;
 	ImGuiIO &io = ImGui::GetIO();
 
-#ifdef _WIN32
-	SDL_SysWMinfo syswm;
-	SDL_GetWindowWMInfo(g_sdlWindow, &syswm);
-	HWND hWindow = syswm.info.win.window;
-	//io.ImeWindowHandle = hWindow; // FIXME (as in XXL Editor)
-#endif
+	//io.ImeWindowHandle = WndGetNativeWindowHandle(); // FIXME (as in XXL Editor)
 
 	iglasttime = SDL_GetTicks();
 }
@@ -114,9 +108,9 @@ void ImGuiImpl_NewFrame()
 	iglasttime = newtime;
 
 	SDL_Keymod kmod = SDL_GetModState();
-	io.KeyCtrl = kmod  & KMOD_CTRL;
-	io.KeyShift = kmod & KMOD_SHIFT;
-	io.KeyAlt = kmod & KMOD_ALT;
+	io.KeyCtrl = kmod & SDL_KMOD_CTRL;
+	io.KeyShift = kmod & SDL_KMOD_SHIFT;
+	io.KeyAlt = kmod & SDL_KMOD_ALT;
 	io.KeySuper = false;
 
 	ImGui::NewFrame();

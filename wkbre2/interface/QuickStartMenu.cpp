@@ -8,7 +8,7 @@
 #include "../imguiimpl.h"
 #include "../window.h"
 #include "../gfx/renderer.h"
-#include <SDL2/SDL_keycode.h>
+#include <SDL3/SDL_keycode.h>
 
 #include "../server.h"
 #include "../client.h"

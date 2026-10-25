@@ -14,10 +14,6 @@
 #include <vector>
 #include <d3d9.h>
 
-#include <SDL.h>
-#include <SDL_syswm.h>
-#include <SDL_system.h>
-extern SDL_Window *g_sdlWindow;
 
 typedef unsigned int uint;
 
@@ -185,10 +181,7 @@ struct D3D9Renderer : public IRenderer
 
 	void Init() override
 	{
-		SDL_SysWMinfo syswm;
-		SDL_VERSION(&syswm.version);
-		SDL_GetWindowWMInfo(g_sdlWindow, &syswm);
-		HWND hWindow = syswm.info.win.window;
+		HWND hWindow = (HWND)WndGetNativeWindowHandle();
 		// Initializing Direct3D 9
 		dpp.hDeviceWindow = hWindow;
 		dpp.PresentationInterval = VSYNCenabled ? ((VSYNCenabled==2)?D3DPRESENT_INTERVAL_ONE:D3DPRESENT_INTERVAL_DEFAULT) : D3DPRESENT_INTERVAL_IMMEDIATE;

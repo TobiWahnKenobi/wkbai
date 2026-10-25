@@ -10,7 +10,7 @@
 #include <cassert>
 #include "terrain.h"
 #include "interface/ClientInterface.h"
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include "gameset/ScriptContext.h"
 #include <cmath>
 #include "SoundPlayer.h"

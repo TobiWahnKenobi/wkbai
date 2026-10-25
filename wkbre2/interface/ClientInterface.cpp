@@ -10,8 +10,8 @@
 #include "ClientDebugger.h"
 #include "../imguiimpl.h"
 #include "../window.h"
-#include <SDL2/SDL_scancode.h>
-#include <SDL2/SDL_mouse.h>
+#include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_mouse.h>
 #include "../tags.h"
 #include "../gameset/gameset.h"
 #include "../gfx/SceneRenderer.h"
@@ -19,7 +19,7 @@
 #include "../imgui/imgui.h"
 #include <ctime>
 #include "../terrain.h"
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include "../gameset/ScriptContext.h"
 #include <stdexcept>
 #include "../ParticleContainer.h"

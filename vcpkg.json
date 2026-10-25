@@ -9,7 +9,7 @@
     "mpg123",
     "nlohmann-json",
     "openal-soft",
-    "sdl2",
+    "sdl3",
     "sol2",
     "stb"
   ],

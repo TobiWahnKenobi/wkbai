@@ -20,6 +20,8 @@ extern int g_mouseDoubleClicked;
 void InitWindow();
 void HandleWindow();
 void SetRenderer(IRenderer *gfx);
+// Native handle of the game window (HWND on Windows, nullptr elsewhere)
+void *WndGetNativeWindowHandle();
 
 struct WndCursor;
 

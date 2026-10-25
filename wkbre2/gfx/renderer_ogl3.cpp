@@ -14,9 +14,7 @@
 #include <GL/wglew.h>
 #endif
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_syswm.h>
-#include <SDL2/SDL_system.h>
+#include <SDL3/SDL.h>
 extern SDL_Window* g_sdlWindow;
 
 static const char* glsl_common = R"---(
@@ -212,10 +210,7 @@ struct OGL3Renderer : IRenderer {
 
 	virtual void Init() override {
 	#ifdef _WIN32
-		SDL_SysWMinfo syswm;
-		SDL_VERSION(&syswm.version);
-		SDL_GetWindowWMInfo(g_sdlWindow, &syswm);
-		HWND hWindow = syswm.info.win.window;
+		HWND hWindow = (HWND)WndGetNativeWindowHandle();
 		windowHdc = GetDC(hWindow);
 
 		// Set the pixel format

@@ -13,7 +13,7 @@
 #include "../gameset/ScriptContext.h"
 #include "../platform.h"
 #include <atomic>
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 
 extern int g_diag_animHits, g_diag_animMisses;
 extern std::atomic_int g_diag_serverTicks;

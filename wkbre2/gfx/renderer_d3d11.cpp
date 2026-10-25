@@ -20,10 +20,6 @@
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
 
-#include <SDL.h>
-#include <SDL_syswm.h>
-#include <SDL_system.h>
-extern SDL_Window* g_sdlWindow;
 
 #include <nlohmann/json.hpp>
 
@@ -249,10 +245,7 @@ ID3D11PixelShader* D3D11Renderer::getPixelShader(ID3DBlob* blob) {
 // Initialisation
 
 void D3D11Renderer::Init() {
-	SDL_SysWMinfo syswm;
-	SDL_VERSION(&syswm.version);
-	SDL_GetWindowWMInfo(g_sdlWindow, &syswm);
-	HWND hWindow = syswm.info.win.window;
+	HWND hWindow = (HWND)WndGetNativeWindowHandle();
 
 	msaaNumSamples = g_settings.value<int>("msaaNumSamples", 1);
 

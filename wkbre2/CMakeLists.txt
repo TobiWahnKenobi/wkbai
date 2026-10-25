@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory ("imgui")
 
 find_package (BZip2 REQUIRED)
-find_package (SDL2 CONFIG REQUIRED)
+find_package (SDL3 CONFIG REQUIRED)
 find_package (nlohmann_json CONFIG REQUIRED)
 find_package(OpenAL CONFIG REQUIRED)
 find_package(mpg123 CONFIG REQUIRED)
@@ -63,7 +63,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp")
 target_link_libraries (wkbre2
   imgui
-  SDL2::SDL2
+  SDL3::SDL3
   ${ENET_LIBRARY}
   BZip2::BZip2
   nlohmann_json::nlohmann_json

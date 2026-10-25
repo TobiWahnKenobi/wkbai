@@ -4,7 +4,7 @@
 
 #include "TimeManager.h"
 #include "util/GSFileParser.h"
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include "imgui/imgui.h"
 
 void TimeManager::reset(game_time_t initialTime) {

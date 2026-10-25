@@ -22,7 +22,7 @@
 #include "gfx/TextureCache.h"
 #include "TrnTextureDb.h"
 #include "terrain.h"
-#include <SDL2/SDL_keycode.h>
+#include <SDL3/SDL_keycode.h>
 #include "mesh.h"
 #include "client.h"
 #include "network.h"
@@ -36,7 +36,7 @@
 #include "gfx/DefaultTerrainRenderer.h"
 #include "interface/ClientInterface.h"
 #include "scene.h"
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include "SoundPlayer.h"
 #include "Pathfinding.h"
 #include "ParticleSystem.h"
