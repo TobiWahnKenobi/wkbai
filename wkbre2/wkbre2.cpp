@@ -65,6 +65,9 @@ int main()
 
 	LoadSettings();
 	g_gamePath = std::filesystem::u8path(g_settings.value<std::string>("gamePath", "."));
+	// Like the original game, also load every other *.bcp in the game folder (e.g. WKB_Plus.bcp);
+	// the most recent timestamp of a file wins.
+	g_allowBCPPatches = g_settings.value<bool>("allowBCPPatches", false);
 
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";
