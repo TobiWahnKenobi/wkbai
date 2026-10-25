@@ -9,6 +9,10 @@
 IRenderer* CreateRenderer() {
 #ifdef _WIN32
 	auto setting = g_settings.value("renderer", "d3d9");
+#ifdef WKBRE2_HAS_DILIGENT
+	if (setting == "diligent")
+		return CreateDiligentRenderer();
+#endif
 	return (setting == "ogl3") ? CreateOGL3Renderer() : ((setting == "d3d11") ? CreateD3D11Renderer() : CreateD3D9Renderer());
 #else
 	return CreateOGL3Renderer();

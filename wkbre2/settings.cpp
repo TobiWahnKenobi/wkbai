@@ -29,6 +29,8 @@ static void ResetDefaultSettings()
 	g_settings["d3d11AdapterIndex"] = 0;
 	g_settings["enhancedGraphics"] = true;
 	g_settings["vsync"] = true;
+	// Used when "renderer" is "diligent": "d3d12" or "vulkan"
+	g_settings["diligentBackend"] = "d3d12";
 #endif
 }
 

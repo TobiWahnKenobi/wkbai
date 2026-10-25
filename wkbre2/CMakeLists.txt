@@ -49,6 +49,30 @@ FetchContent_Declare(tracy
   EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(tracy)
 
+# Diligent Engine (https://github.com/DiligentGraphics/DiligentCore), the render hardware
+# interface for the new renderer, with only the Direct3D 12 and Vulkan backends.
+# Not in vcpkg, so it is fetched at a pinned commit. To reuse a local clone, configure with
+# -DFETCHCONTENT_SOURCE_DIR_DILIGENTCORE=<path>.
+if(WIN32)
+  option(WKBRE2_DILIGENT "Build the Diligent (Direct3D 12 / Vulkan) renderer" ON)
+endif()
+if(WKBRE2_DILIGENT)
+  set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
+  set(DILIGENT_NO_OPENGL ON CACHE BOOL "" FORCE)
+  set(DILIGENT_NO_METAL ON CACHE BOOL "" FORCE)
+  set(DILIGENT_NO_WEBGPU ON CACHE BOOL "" FORCE)
+  set(DILIGENT_NO_ARCHIVER ON CACHE BOOL "" FORCE)
+  set(DILIGENT_NO_SUPER_RESOLUTION ON CACHE BOOL "" FORCE)
+  set(DILIGENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(DILIGENT_INSTALL_CORE OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(DiligentCore
+    GIT_REPOSITORY https://github.com/DiligentGraphics/DiligentCore.git
+    GIT_TAG cd2329b912aa8add6a4cac538424756534266104
+    GIT_SUBMODULES_RECURSE ON
+    EXCLUDE_FROM_ALL)
+  FetchContent_MakeAvailable(DiligentCore)
+endif()
+
 # Find Discord-RPC
 option(USE_DISCORD "Enables the most useless feature of all time. Setting it up and using it will waste tons of time. Not recommended if you want to keep your precious time." OFF)
 if(${USE_DISCORD})
@@ -77,7 +101,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "gfx/D3D11EnhancedTerrainRenderer.h" "gfx/renderer_d3d11.h" "gfx/D3D11EnhancedSceneRenderer.h" "gfx/D3D11EnhancedSceneRenderer.cpp" "gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
 "FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp"
-"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp")
+"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "gfx/renderer_diligent.cpp")
 target_link_libraries (wkbre2
   imgui
   SDL3::SDL3
@@ -101,6 +125,10 @@ target_link_libraries (wkbre2
     dxgi
   >
 )
+if(WKBRE2_DILIGENT)
+  target_link_libraries(wkbre2 Diligent-GraphicsEngineD3D12-static Diligent-GraphicsEngineVk-static Diligent-Common Vulkan::Headers)
+  target_compile_definitions(wkbre2 PRIVATE WKBRE2_HAS_DILIGENT)
+endif()
 target_include_directories(wkbre2
   PRIVATE
   ${ENET_INCLUDE_DIR}

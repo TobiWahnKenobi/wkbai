@@ -238,6 +238,12 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	return hovered;
 }
 
+// The enhanced renderers use Direct3D 11 directly, so they only work with the D3D11 renderer.
+static bool UseEnhancedD3D11Renderers()
+{
+	return g_settings.value<bool>("enhancedGraphics", false) && g_settings.value<std::string>("renderer", "") == "d3d11";
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -781,7 +787,7 @@ void ClientInterface::iter()
 			client->sendStartLevelRequest();
 		ImGui::Checkbox("Terrain", &showTerrain);
 #ifdef _WIN32
-		if (g_settings.value<bool>("enhancedGraphics", false)) {
+		if (UseEnhancedD3D11Renderers()) {
 			if (D3D11EnhancedTerrainRenderer* etr = static_cast<D3D11EnhancedTerrainRenderer*>(terrainRenderer)) {
 				if (client->terrain)
 					ImGui::DragFloat3("Sun", &client->terrain->sunVector.x, 0.1f);
@@ -1287,7 +1293,7 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 		if (!sceneRenderer) {
 #ifdef _WIN32
-			if (g_settings.value<bool>("enhancedGraphics", false))
+			if (UseEnhancedD3D11Renderers())
 				sceneRenderer = new D3D11EnhancedSceneRenderer(gfx, scene, &client->camera);
 			else
 				sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
@@ -1361,7 +1367,7 @@ void ClientInterface::render()
 
 void ClientInterface::updateTerrain() {
 #ifdef _WIN32
-	if (g_settings.value<bool>("enhancedGraphics", false))
+	if (UseEnhancedD3D11Renderers())
 		this->terrainRenderer = new D3D11EnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
 	else
 		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);

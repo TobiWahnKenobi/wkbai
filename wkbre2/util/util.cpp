@@ -15,6 +15,12 @@
 #include <Windows.h>
 #endif
 
+// Test and benchmark runs are started by scripts: print only, a dialog would block them
+static bool DialogsAllowed()
+{
+	return !g_settings.is_object() || (!g_settings.value<bool>("test", false) && !g_settings.contains("benchmark"));
+}
+
 void fc_ferr(const char *f, int l, const char *s, ...)
 {
 	char t[512]; va_list v;
@@ -24,8 +30,7 @@ void fc_ferr(const char *f, int l, const char *s, ...)
 	snprintf(msg, sizeof(msg), "Error: %s\nLook at: %s, Line %i\n", t, f, l);
 	puts(msg);
 #ifdef _WIN32
-	// Test mode is run headless by scripts: print only, a dialog would block them
-	if (!g_settings.is_object() || !g_settings.value<bool>("test", false))
+	if (DialogsAllowed())
 		MessageBoxA(NULL, msg, "Fatal Error", 16);
 #endif
 	fflush(stdout); abort(); exit(-2);
@@ -36,7 +41,7 @@ void ShowWarningDialog(const char *title, const char *msg)
 	printf("WARNING: %s\n%s\n", title, msg);
 	fflush(stdout);
 #ifdef _WIN32
-	if (!g_settings.is_object() || !g_settings.value<bool>("test", false))
+	if (DialogsAllowed())
 		MessageBoxA(NULL, msg, title, MB_OK | MB_ICONWARNING);
 #endif
 }
