@@ -1,0 +1,17 @@
+{
+  "name": "wkbre2",
+  "version-string": "0.0.0",
+  "dependencies": [
+    "bzip2",
+    "enet",
+    "glew",
+    "lua",
+    "mpg123",
+    "nlohmann-json",
+    "openal-soft",
+    "sdl2",
+    "sol2",
+    "stb"
+  ],
+  "builtin-baseline": "817892b0ecbc6af994dd6df999c73faf795adbf2"
+}

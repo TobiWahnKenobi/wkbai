@@ -18,8 +18,17 @@ find_package(Lua REQUIRED)
 
 # Find enet
 find_path(ENET_INCLUDE_DIR enet/enet.h)
-find_library(ENET_LIBRARY enet)
-message(${ENET_LIBRARY})
+if(DEFINED VCPKG_INSTALLED_DIR)
+  # vcpkg's enet has no CMake config, and a plain find_library can pick the debug
+  # build for release configurations, so look for both and select per configuration.
+  find_library(ENET_LIBRARY_RELEASE enet PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib" NO_DEFAULT_PATH)
+  find_library(ENET_LIBRARY_DEBUG enet PATHS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/debug/lib" NO_DEFAULT_PATH)
+  include(SelectLibraryConfigurations)
+  select_library_configurations(ENET)
+else()
+  find_library(ENET_LIBRARY enet)
+endif()
+message("${ENET_LIBRARY}")
 message(${ENET_INCLUDE_DIR})
 
 # Find Discord-RPC
