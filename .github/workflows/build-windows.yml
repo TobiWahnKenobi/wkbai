@@ -12,10 +12,10 @@ jobs:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vcpkg-bincache
           key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json') }}
@@ -37,7 +37,7 @@ jobs:
         run: cmake --build build --config RelWithDebInfo --parallel
 
       - name: Upload wkbre2
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wkbre2-windows-x64
           path: |
