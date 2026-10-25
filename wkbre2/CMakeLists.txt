@@ -32,6 +32,23 @@ endif()
 message("${ENET_LIBRARY}")
 message(${ENET_INCLUDE_DIR})
 
+# Tracy profiler client (https://github.com/wolfpld/tracy). Built from source rather than vcpkg
+# so the client can be limited to localhost (no firewall prompt) and only collect while a
+# profiler is connected (on-demand), which keeps the overhead negligible otherwise.
+option(WKBRE2_PROFILING "Build with the Tracy profiler client" ON)
+include(FetchContent)
+set(TRACY_STATIC ON CACHE BOOL "" FORCE)
+set(TRACY_ENABLE ${WKBRE2_PROFILING} CACHE BOOL "" FORCE)
+set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
+set(TRACY_NO_BROADCAST ON CACHE BOOL "" FORCE)
+set(TRACY_NO_CRASH_HANDLER ON CACHE BOOL "" FORCE)
+FetchContent_Declare(tracy
+  URL https://github.com/wolfpld/tracy/archive/refs/tags/v0.14.1.tar.gz
+  URL_HASH SHA256=bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1
+  EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(tracy)
+
 # Find Discord-RPC
 option(USE_DISCORD "Enables the most useless feature of all time. Setting it up and using it will waste tons of time. Not recommended if you want to keep your precious time." OFF)
 if(${USE_DISCORD})
@@ -60,7 +77,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "gfx/D3D11EnhancedTerrainRenderer.h" "gfx/renderer_d3d11.h" "gfx/D3D11EnhancedSceneRenderer.h" "gfx/D3D11EnhancedSceneRenderer.cpp" "gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
 "FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp"
-"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp")
+"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp")
 target_link_libraries (wkbre2
   imgui
   SDL3::SDL3
@@ -73,6 +90,7 @@ target_link_libraries (wkbre2
   GLEW::GLEW
   sol2::sol2
   ${LUA_LIBRARIES}
+  Tracy::TracyClient
   $<$<PLATFORM_ID:Windows>:
     d3d9
     ws2_32

@@ -18,6 +18,7 @@
 #include <locale>
 #include "gameset/finder.h"
 #include "StampdownPlan.h"
+#include <tracy/Tracy.hpp>
 
 Server *Server::instance = nullptr;
 
@@ -1352,6 +1353,7 @@ void Server::removeClient(NetLink* link)
 
 void Server::tick()
 {
+	ZoneScoped;
 	timeManager.tick();
 
 	auto it = delayedSequences.begin();

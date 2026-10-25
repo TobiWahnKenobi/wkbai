@@ -42,6 +42,7 @@ struct D3D11Renderer : IRenderer {
 	ID3D11RasterizerState* scissorRasterizerState = nullptr;
 	texture whiteTexture;
 	int msaaNumSamples = 1;
+	bool vsync = true;
 
 	// State
 	bool fogEnabled = false;

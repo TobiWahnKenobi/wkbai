@@ -14,6 +14,7 @@
 #include "gameset/ScriptContext.h"
 #include <cmath>
 #include "SoundPlayer.h"
+#include <tracy/Tracy.hpp>
 
 Client * Client::instance = nullptr;
 
@@ -23,6 +24,7 @@ void Client::loadFromServerObject(Server & server)
 
 void Client::tick()
 {
+	ZoneScoped;
 	timeManager.tick();
 
 	const auto walkObj = [this](ClientGameObject *obj, auto &rec) -> void {

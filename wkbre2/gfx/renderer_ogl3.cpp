@@ -6,6 +6,8 @@
 #include "../window.h"
 #include "bitmap.h"
 #include "../util/util.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
 #include <cassert>
 #include <string>
 
@@ -242,7 +244,7 @@ struct OGL3Renderer : IRenderer {
 		wglMakeCurrent(windowHdc, glContext);
 
 		// VSync
-		wglSwapIntervalEXT(1);
+		wglSwapIntervalEXT(g_settings.value("vsync", true) ? 1 : 0);
 	#else
 		SDL_GL_CreateContext(g_sdlWindow);
 		glewInit();

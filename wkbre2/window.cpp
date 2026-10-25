@@ -15,6 +15,7 @@
 #include "imgui/imgui.h"
 #include "gfx/renderer.h"
 #include "gfx/bitmap.h"
+#include <tracy/Tracy.hpp>
 
 SDL_Window *g_sdlWindow = nullptr;
 bool g_windowQuit = false;
@@ -118,6 +119,8 @@ void HandleImGui(const SDL_Event &event)
 
 void HandleWindow()
 {
+	FrameMark;
+	ZoneScoped;
 	SDL_Event event;
 	bool imguion = ImGui::GetCurrentContext() != nullptr;
 	for (int i = 0; i < SDL_SCANCODE_COUNT; i++)

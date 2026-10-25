@@ -248,6 +248,7 @@ void D3D11Renderer::Init() {
 	HWND hWindow = (HWND)WndGetNativeWindowHandle();
 
 	msaaNumSamples = g_settings.value<int>("msaaNumSamples", 1);
+	vsync = g_settings.value<bool>("vsync", true);
 
 	ComPtr<IDXGIFactory> dxgiFactory0;
 	ComPtr<IDXGIAdapter> dxgiAdapter0;
@@ -443,7 +444,7 @@ void D3D11Renderer::BeginDrawing() {
 
 void D3D11Renderer::EndDrawing() {
 	HRESULT hres;
-	hres = dxgiSwapChain->Present(1, 0);
+	hres = dxgiSwapChain->Present(vsync ? 1 : 0, 0);
 	if (hres != S_OK) {
 		Sleep(100);
 	}

@@ -28,6 +28,9 @@
 
 #include <thread>
 #include "../platform.h"
+#include "../util/FrameStats.h"
+#include <tracy/Tracy.hpp>
+#include <algorithm>
 
 namespace {
 #ifdef HAS_DISCORD
@@ -99,6 +102,17 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 
 	initDiscordRPC();
 	updateDiscordRPC("In menu", nullptr);
+
+	if (BenchmarkEnabled()) {
+		auto it = std::find(savegames.begin(), savegames.end(), BenchmarkSaveGame());
+		if (it != savegames.end()) {
+			savselected = it - savegames.begin();
+			skirmishMenu.changeSettingsForLevel(*it);
+			modeChosen = MODE_SINGLEPLAYER;
+		}
+		else
+			printf("Benchmark: save game \"%s\" not found in Save_Games\n", BenchmarkSaveGame());
+	}
 }
 
 QuickStartMenu::~QuickStartMenu()
@@ -275,6 +289,7 @@ void QuickStartMenu::launchGame()
 		std::string savfile = std::string("Save_Games\\") + savegames.at(savselected);
 		std::mutex srvMutex;
 		std::thread srvThread([this, savfile, &srvMutex]() {
+			tracy::SetThreadName("Server");
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
 			skirmishMenu.applySettings(*server);

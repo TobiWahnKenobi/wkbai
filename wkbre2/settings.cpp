@@ -28,6 +28,7 @@ static void ResetDefaultSettings()
 	g_settings["msaaNumSamples"] = 1;
 	g_settings["d3d11AdapterIndex"] = 0;
 	g_settings["enhancedGraphics"] = true;
+	g_settings["vsync"] = true;
 #endif
 }
 

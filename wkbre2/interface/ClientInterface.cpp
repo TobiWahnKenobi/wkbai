@@ -1,4 +1,4 @@
-// wkbre2 - WK Engine Reimplementation
+﻿// wkbre2 - WK Engine Reimplementation
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
@@ -36,6 +36,9 @@
 
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
+#include "../util/FrameStats.h"
 
 namespace {
 	Vector3 getRay(const Camera &cam) {
@@ -431,6 +434,7 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 
 void ClientInterface::iter()
 {
+	ZoneScoped;
 	static uint32_t oldCliTime = SDL_GetTicks();
 	uint32_t cliTime = SDL_GetTicks();
 	uint32_t cliDeltaTime = cliTime - oldCliTime;
@@ -453,6 +457,7 @@ void ClientInterface::iter()
 	}
 
 	//----- Command cursors -----//
+	TracyCZoneN(zoneInput, "Input and commands", 1);
 
 	static Command* selectedCursorCommand = nullptr;
 	WndCursor *nextCursor = nullptr;
@@ -756,7 +761,10 @@ void ClientInterface::iter()
 		selection.merge(formationsSelected);
 	}
 
+	TracyCZoneEnd(zoneInput);
+
 	//----- ImGui -----//
+	TracyCZoneN(zoneUi, "UI (ImGui, UI script)", 1);
 
 	ImGuiImpl_NewFrame();
 	if (debuggerOn) {
@@ -765,6 +773,8 @@ void ClientInterface::iter()
 		ImGui::Begin("Client Interface Debug");
 		ImGui::Text("ODPF: %i", numObjectsDrawn);
 		ImGui::Text("FPS: %i", framesPerSecond);
+		const FrameStats::Summary ft = g_frameStats.summarize();
+		ImGui::Text("Frame ms (last %zu): avg %.2f  p50 %.2f  p99 %.2f  max %.2f", ft.frames, ft.avgMs, ft.p50Ms, ft.p99Ms, ft.maxMs);
 		ImGui::DragFloat3("peapos", &peapos.x);
 		ImGui::Checkbox("Dev mode", &devMode);
 		if (ImGui::Button("Start level"))
@@ -1137,7 +1147,10 @@ void ClientInterface::iter()
 		lua = {};
 	}
 
+	TracyCZoneEnd(zoneUi);
+
 	//----- Rendering -----//
+	TracyCZoneN(zoneScene, "Scene building", 1);
 
 	gfx->ClearFrame(true, true, client->terrain ? client->terrain->fogColor : 0);
 	gfx->BeginDrawing();
@@ -1282,12 +1295,21 @@ void ClientInterface::iter()
 			sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
 #endif
 		}
-		sceneRenderer->render();
+		TracyCZoneEnd(zoneScene);
+		{
+			ZoneScopedN("Scene rendering");
+			sceneRenderer->render();
+		}
 		scene->clear();
 	}
+	else {
+		TracyCZoneEnd(zoneScene);
+	}
 
-	if (terrainRenderer && showTerrain)
+	if (terrainRenderer && showTerrain) {
+		ZoneScopedN("Terrain rendering");
 		terrainRenderer->render();
+	}
 
 	if (terrainSpriteRenderer && showTerrain)
 		terrainSpriteRenderer->render();
@@ -1295,6 +1317,7 @@ void ClientInterface::iter()
 		terrainSpriteContainer->clear();
 
 	if (particleRenderer && particlesContainer) {
+		ZoneScopedN("Particles");
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
@@ -1307,10 +1330,18 @@ void ClientInterface::iter()
 		gfx->DrawFrame(selBoxStartX, selBoxStartY, selBoxEndX - selBoxStartX, selBoxEndY - selBoxStartY, -1);
 	}
 
-	gfx->InitImGuiDrawing();
-	ImGuiImpl_Render(gfx);
+	{
+		ZoneScopedN("ImGui rendering");
+		gfx->InitImGuiDrawing();
+		ImGuiImpl_Render(gfx);
+	}
 
-	gfx->EndDrawing();
+	{
+		ZoneScopedN("Present");
+		gfx->EndDrawing();
+	}
+	g_frameStats.frameEnd();
+	BenchmarkFrameEnd(client->terrain && client->gameSet);
 	HandleWindow();
 
 	nextFps++;
