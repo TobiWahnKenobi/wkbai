@@ -16,6 +16,8 @@
 #include "gfx/renderer.h"
 #include "gfx/bitmap.h"
 #include <tracy/Tracy.hpp>
+#include "settings.h"
+#include <nlohmann/json.hpp>
 
 SDL_Window *g_sdlWindow = nullptr;
 bool g_windowQuit = false;
@@ -39,6 +41,9 @@ void InitWindow()
 	SDL_SetMainReady();
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
 	auto flags = SDL_WINDOW_RESIZABLE;
+	// Initial size of the window's drawing area (the render resolution)
+	g_windowWidth = g_settings.value<int>("windowWidth", g_windowWidth);
+	g_windowHeight = g_settings.value<int>("windowHeight", g_windowHeight);
 	g_sdlWindow = SDL_CreateWindow("wkbre2 \"Next\"", g_windowWidth, g_windowHeight, flags); // SDL3 centers new windows
 	SDL_StartTextInput(g_sdlWindow); // text input events are opt-in in SDL3 (ImGui text fields need them)
 }

@@ -480,6 +480,7 @@ struct DiligentRenderer : DiligentGfx
 		scDesc.Height = g_windowHeight;
 		scDesc.ColorBufferFormat = TEX_FORMAT_RGBA8_UNORM;
 		scDesc.DepthBufferFormat = TEX_FORMAT_D32_FLOAT;
+		scDesc.Usage = SWAP_CHAIN_USAGE_RENDER_TARGET | SWAP_CHAIN_USAGE_COPY_SOURCE; // for SaveScreenshot
 		Win32NativeWindow window{ WndGetNativeWindowHandle() };
 
 		IDeviceContext* contexts[1] = {};
@@ -598,6 +599,53 @@ struct DiligentRenderer : DiligentGfx
 		}
 		if (clearDepth)
 			ctx->ClearDepthStencil(swapChain->GetDepthBufferDSV(), CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+
+	bool SaveScreenshot(const char* path) override
+	{
+		ITexture* backBuffer = swapChain->GetCurrentBackBufferRTV()->GetTexture();
+		TextureDesc desc = backBuffer->GetDesc();
+		desc.Name = "Screenshot readback";
+		desc.Usage = USAGE_STAGING;
+		desc.BindFlags = BIND_NONE;
+		desc.CPUAccessFlags = CPU_ACCESS_READ;
+		desc.MipLevels = 1;
+		RefCntAutoPtr<ITexture> staging;
+		device->CreateTexture(desc, nullptr, &staging);
+		if (!staging)
+			return false;
+		CopyTextureAttribs copy{ backBuffer, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, staging, RESOURCE_STATE_TRANSITION_MODE_TRANSITION };
+		ctx->CopyTexture(copy);
+		ctx->WaitForIdle();
+		MappedTextureSubresource mapped;
+		ctx->MapTextureSubresource(staging, 0, 0, MAP_READ, MAP_FLAG_DO_NOT_WAIT, nullptr, mapped); // WaitForIdle above already synchronized
+		if (!mapped.pData)
+			return false;
+
+		const uint32_t w = desc.Width, h = desc.Height, rowSize = (w * 3 + 3) & ~3u;
+		std::vector<uint8_t> file(54 + (size_t)rowSize * h, 0);
+		auto put32 = [&file](size_t at, uint32_t v) { memcpy(&file[at], &v, 4); };
+		file[0] = 'B'; file[1] = 'M';
+		put32(2, (uint32_t)file.size()); put32(10, 54); put32(14, 40);
+		put32(18, w); put32(22, h);
+		file[26] = 1; file[28] = 24;
+		const bool bgra = desc.Format == TEX_FORMAT_BGRA8_UNORM || desc.Format == TEX_FORMAT_BGRA8_UNORM_SRGB;
+		for (uint32_t y = 0; y < h; y++) {
+			const uint8_t* src = (const uint8_t*)mapped.pData + (size_t)(h - 1 - y) * mapped.Stride; // BMP rows go bottom-up
+			uint8_t* dst = &file[54 + (size_t)y * rowSize];
+			for (uint32_t x = 0; x < w; x++) {
+				dst[x * 3 + 0] = src[x * 4 + (bgra ? 0 : 2)];
+				dst[x * 3 + 1] = src[x * 4 + 1];
+				dst[x * 3 + 2] = src[x * 4 + (bgra ? 2 : 0)];
+			}
+		}
+		ctx->UnmapTextureSubresource(staging, 0, 0);
+		FILE* f = fopen(path, "wb");
+		if (!f)
+			return false;
+		fwrite(file.data(), 1, file.size(), f);
+		fclose(f);
+		return true;
 	}
 
 	// Textures management

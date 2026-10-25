@@ -120,6 +120,10 @@ struct IRenderer
 	virtual void BeginParticles() {}
 	virtual void SetLineTopology() {}
 	virtual void SetTriangleTopology() {}
+
+	// Writes what has been drawn so far in this frame to a 24-bit BMP file (call before
+	// EndDrawing). Returns false if the renderer can't.
+	virtual bool SaveScreenshot(const char* path) { return false; }
 };
 
 IRenderer *CreateRenderer();

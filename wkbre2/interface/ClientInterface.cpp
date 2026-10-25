@@ -1159,6 +1159,11 @@ void ClientInterface::iter()
 	gfx->ClearFrame(true, true, client->terrain ? client->terrain->fogColor : 0);
 	gfx->BeginDrawing();
 
+	Vector3 benchmarkPosition, benchmarkOrientation;
+	if (BenchmarkCamera(benchmarkPosition, benchmarkOrientation)) {
+		client->camera.position = benchmarkPosition;
+		client->camera.orientation = benchmarkOrientation;
+	}
 	client->camera.updateMatrix();
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);
 
@@ -1338,6 +1343,8 @@ void ClientInterface::iter()
 
 	{
 		ZoneScopedN("Present");
+		if (const char* screenshot = BenchmarkScreenshotDue())
+			printf("Screenshot %s: %s\n", screenshot, gfx->SaveScreenshot(screenshot) ? "saved" : "failed");
 		gfx->EndDrawing();
 	}
 	g_frameStats.frameEnd();

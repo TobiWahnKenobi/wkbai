@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include "vecmat.h"
 
 // Frame times of the last frames (CPU wall time between two presented frames),
 // used for the debug overlay and the benchmark report.
@@ -38,7 +39,11 @@ extern FrameStats g_frameStats;
 // records the frame times and writes the report, then quits. "frameBudgetMs" (default
 // 16.667) sets the budget the report is checked against. With "paused": true the game clock
 // stays at the save game's start, so every run renders the same frame (for comparing renderers).
+// "camera": [x, y, z, pitch, yaw] holds the camera there; "screenshot": "<file.bmp>" saves the
+// first recorded frame (after the warm-up).
 bool BenchmarkEnabled();
+bool BenchmarkCamera(Vector3& position, Vector3& orientation);
+const char* BenchmarkScreenshotDue();
 bool BenchmarkPaused();
 const char* BenchmarkSaveGame();
 void BenchmarkFrameEnd(bool worldLoaded);

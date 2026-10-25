@@ -87,12 +87,39 @@ const char* BenchmarkSaveGame()
 	return saveGame.c_str();
 }
 
+static int s_benchmarkFrame = 0; // frames since the map was loaded
+
+bool BenchmarkCamera(Vector3& position, Vector3& orientation)
+{
+	const auto* bm = BenchmarkSettings();
+	if (!bm || !bm->contains("camera"))
+		return false;
+	const auto& c = bm->at("camera");
+	if (!c.is_array() || c.size() != 5)
+		return false;
+	position = Vector3(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+	orientation = Vector3(c[3].get<float>(), c[4].get<float>(), 0.0f);
+	return true;
+}
+
+const char* BenchmarkScreenshotDue()
+{
+	static bool taken = false;
+	static std::string path;
+	const auto* bm = BenchmarkSettings();
+	if (taken || !bm || !bm->contains("screenshot") || s_benchmarkFrame < bm->value("warmupFrames", 120))
+		return nullptr;
+	taken = true;
+	path = bm->value("screenshot", "");
+	return path.c_str();
+}
+
 void BenchmarkFrameEnd(bool worldLoaded)
 {
 	const auto* bm = BenchmarkSettings();
 	if (!bm || !worldLoaded)
 		return;
-	static int frame = 0;
+	int& frame = s_benchmarkFrame;
 	static FrameStats recorded(0);
 	const int warmup = bm->value("warmupFrames", 120);
 	const int frames = bm->value("frames", 600);
