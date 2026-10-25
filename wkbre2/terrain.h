@@ -60,6 +60,10 @@ struct Terrain
 	DynArray<uint8_t> vertices;
 	Tile *tiles;
 
+	// Minimap image of the playable area (row 0 = north edge), RGBA; empty if the map has none
+	std::vector<uint8_t> minimapRGBA;
+	int minimapWidth = 0, minimapHeight = 0;
+
 	std::pair<int, int> getNumPlayableTiles() const { return { width - 2 * edge, height - 2 * edge }; }
 	std::pair<float, float> getPlayableArea() const { return { 5.0f * (width - 2 * edge), 5.0f * (height - 2 * edge) }; }
 

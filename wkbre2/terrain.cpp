@@ -124,6 +124,16 @@ void Terrain::readBCM(const char * filename) {
 	int numVerts = (width + 1)*(height + 1);
 	vertices.resize(numVerts);
 
+	// 128x128 RGB minimap of the playable area
+	minimapWidth = minimapHeight = 128;
+	minimapRGBA.resize(128 * 128 * 4);
+	for (int i = 0; i < 128 * 128; i++) {
+		minimapRGBA[i * 4 + 0] = (uint8_t)fp[i * 3 + 0];
+		minimapRGBA[i * 4 + 1] = (uint8_t)fp[i * 3 + 1];
+		minimapRGBA[i * 4 + 2] = (uint8_t)fp[i * 3 + 2];
+		minimapRGBA[i * 4 + 3] = 255;
+	}
+
 	BitReader br(fp + 0xC000);
 
 	// Lakes
@@ -255,6 +265,13 @@ void Terrain::readSNR(const char* filename)
 			skyTextureDirectory = std::wstring(str.begin(), str.end());
 		}
 		else if (tag == "SCENARIO_MINIMAP") {
+			std::string minimapFile = gsf.nextString(true);
+			if (!minimapFile.empty() && FileExists(minimapFile.c_str())) {
+				Bitmap bmp = Bitmap::loadBitmap(minimapFile.c_str()).convertToR8G8B8A8();
+				minimapWidth = bmp.width;
+				minimapHeight = bmp.height;
+				minimapRGBA.assign(bmp.pixels.data(), bmp.pixels.data() + bmp.width * bmp.height * 4);
+			}
 		}
 		else if (tag == "SCENARIO_LAKE") {
 			Vector3 vec;

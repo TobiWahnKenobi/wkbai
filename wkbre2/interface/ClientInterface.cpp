@@ -152,6 +152,89 @@ namespace {
 	}
 }
 
+bool ClientInterface::drawMinimap(int x, int y, int w, int h)
+{
+	const Terrain* terrain = client->terrain;
+	if (!terrain || w <= 0 || h <= 0)
+		return false;
+
+	if (minimapTerrain != terrain) {
+		if (minimapTexture)
+			gfx->FreeTexture(minimapTexture);
+		minimapTexture = nullptr;
+		if (!terrain->minimapRGBA.empty()) {
+			Bitmap bmp;
+			bmp.width = terrain->minimapWidth;
+			bmp.height = terrain->minimapHeight;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize(terrain->minimapRGBA.size());
+			memcpy(bmp.pixels.data(), terrain->minimapRGBA.data(), terrain->minimapRGBA.size());
+			minimapTexture = gfx->CreateTexture(bmp, 1);
+		}
+		minimapTerrain = terrain;
+	}
+
+	ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+	const ImVec2 p0((float)x, (float)y), p1((float)(x + w), (float)(y + h));
+	if (minimapTexture)
+		drawList->AddImage(minimapTexture, p0, p1);
+	else
+		drawList->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 255));
+
+	// Image row 0 is the north edge (largest z) of the playable area
+	const auto [areaWidth, areaDepth] = terrain->getPlayableArea();
+	auto toMinimap = [&](float px, float pz) {
+		return ImVec2(x + std::clamp(px / areaWidth, 0.0f, 1.0f) * w, y + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * h);
+	};
+
+	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
+	// (colours taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga)
+	static const ImU32 playerColors[9] = {
+		IM_COL32(200, 200, 200, 255), IM_COL32(114, 97, 187, 255), IM_COL32(212, 198, 74, 255),
+		IM_COL32(226, 50, 55, 255), IM_COL32(93, 155, 57, 255), IM_COL32(212, 91, 173, 255),
+		IM_COL32(204, 99, 55, 255), IM_COL32(103, 160, 182, 255), IM_COL32(180, 74, 32, 255),
+	};
+	static const ImU32 treeColor = IM_COL32(28, 72, 24, 255);
+	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self((ClientGameObject*)child, self);
+		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
+			return;
+		CommonGameObject* player = obj->getPlayer();
+		int color = player ? player->color : 0;
+		ImU32 dotColor = playerColors[(color >= 0 && color < 9) ? color : 0];
+		if (color == 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER)
+			dotColor = treeColor; // neutral resources such as trees
+		const float size = (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) ? 2.5f : 1.5f;
+		ImVec2 c = toMinimap(obj->position.x, obj->position.z);
+		drawList->AddRectFilled(ImVec2(c.x - size, c.y - size), ImVec2(c.x + size, c.y + size), dotColor);
+	};
+	if (client->getLevel())
+		drawDots(client->getLevel(), drawDots);
+
+	// Where the camera looks: its view direction hits the ground at about the camera's height
+	const Camera& cam = client->camera;
+	Vector3 lookAt = cam.position;
+	if (cam.direction.y < -0.01f) {
+		float groundY = terrain->getHeight(cam.position.x, cam.position.z);
+		float t = (cam.position.y - groundY) / -cam.direction.y;
+		lookAt = cam.position + cam.direction * t;
+	}
+	const float viewHalf = std::max(10.0f, cam.position.y - terrain->getHeight(cam.position.x, cam.position.z));
+	drawList->AddRect(toMinimap(lookAt.x - viewHalf, lookAt.z + viewHalf), toMinimap(lookAt.x + viewHalf, lookAt.z - viewHalf), IM_COL32(255, 255, 255, 220));
+
+	// Click or drag on the minimap: move the camera so it looks at that point
+	const bool hovered = g_mouseX >= x && g_mouseX < x + w && g_mouseY >= y && g_mouseY < y + h;
+	if (hovered && g_mouseDown[SDL_BUTTON_LEFT]) {
+		float targetX = (float)(g_mouseX - x) / w * areaWidth;
+		float targetZ = (1.0f - (float)(g_mouseY - y) / h) * areaDepth;
+		client->camera.position.x += targetX - lookAt.x;
+		client->camera.position.z += targetZ - lookAt.z;
+	}
+	return hovered;
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -966,6 +1049,12 @@ void ClientInterface::iter()
 		// ImGui
 		lua.set_function("setTooltip",[](const std::string& str) { ImGui::SetTooltip("%s", str.c_str()); });
 		// Button
+		// Minimap; a click on it is UI input, not a click into the world
+		lua.set_function("drawMinimap",
+			[this](int x, int y, int w, int h) {
+				if (drawMinimap(x, y, w, h))
+					clickedScriptedUi = true;
+			});
 		lua.set_function("handleButton",
 			[]() -> int {
 				clickedScriptedUi = true;

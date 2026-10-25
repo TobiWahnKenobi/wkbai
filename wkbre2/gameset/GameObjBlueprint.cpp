@@ -48,6 +48,11 @@ void GameObjBlueprint::loadAnimations(GameObjBlueprint::BPAppearance &ap, const 
 	}
 }
 
+void GameObjBlueprint::init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet) {
+	bpClass = i_bpClass; bpId = i_bpId; name = i_name; gameSet = i_gameSet;
+	displayOnMinimap = (bpClass == Tags::GAMEOBJCLASS_CHARACTER || bpClass == Tags::GAMEOBJCLASS_BUILDING);
+}
+
 void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, bool isExtension) {
 	//printf("Parsing blueprint \"%s\"\n", this->name.c_str());
 	// TODO: read model path
@@ -319,6 +324,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		}
 		if (strtag == "AI__SPAWN_LOCATION_SELECTOR") {
 			aiSpawnLocationSelector = ReadFinder(gsf, *gameSet);
+		}
+		else if (strtag == "DISPLAY_ON_MINIMAP") {
+			displayOnMinimap = gsf.nextInt() != 0;
 		}
 		gsf.advanceLine();
 	}

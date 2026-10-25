@@ -103,10 +103,12 @@ struct GameObjBlueprint {
 	bool hasDynamicShadow = false;
 	bool hasStaticShadow = false;
 
+	// DISPLAY_ON_MINIMAP. Default inferred from the shipped game set: it only ever sets 0 on
+	// characters and buildings and 1 on containers and props (not verified in the exe yet).
+	bool displayOnMinimap = false;
+
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);
-	void init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet) {
-		bpClass = i_bpClass; bpId = i_bpId; name = i_name; gameSet = i_gameSet;
-	}
+	void init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet);
 
 	uint32_t getFullId() const;
 	std::string getFullName() const;

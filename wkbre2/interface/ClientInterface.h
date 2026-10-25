@@ -71,6 +71,13 @@ private:
 	bool devMode = false;
 	std::unordered_set<ClientGameObject*> highlightedObjects;
 
+	// Minimap: terrain image of the current map, created on first use
+	void* minimapTexture = nullptr;
+	const void* minimapTerrain = nullptr;
+	// Draws the minimap into the given screen rectangle (called from the HUD script);
+	// returns true while the mouse is over it, a left click/drag moves the camera there
+	bool drawMinimap(int x, int y, int w, int h);
+
 	void drawObject(ClientGameObject* obj);
 	void drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t objid = 0);
 };
