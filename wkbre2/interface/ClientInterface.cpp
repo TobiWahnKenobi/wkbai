@@ -764,7 +764,7 @@ void ClientInterface::iter()
 	TracyCZoneEnd(zoneInput);
 
 	//----- ImGui -----//
-	TracyCZoneN(zoneUi, "UI (ImGui, UI script)", 1);
+	TracyCZoneN(zoneUi, "UI (ImGui and UI script)", 1);
 
 	ImGuiImpl_NewFrame();
 	if (debuggerOn) {
