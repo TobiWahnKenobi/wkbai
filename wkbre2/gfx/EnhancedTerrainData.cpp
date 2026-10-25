@@ -1,0 +1,200 @@
+// wkbre2 - WK Engine Reimplementation
+// (C) 2021 AdrienTD
+// Licensed under the GNU General Public License 3
+
+#include "EnhancedTerrainData.h"
+#include "../terrain.h"
+#include "TextureCache.h"
+#include "bitmap.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+#include <string>
+#include <utility>
+
+static constexpr uint32_t Vec3ToR10G10B10A2(const Vector3& vec) {
+	uint32_t res = (uint32_t)(vec.x * 1023.0f);
+	res |= (uint32_t)(vec.y * 1023.0f) << 10;
+	res |= (uint32_t)(vec.z * 1023.0f) << 20;
+	return res;
+}
+static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
+	return Vec3ToR10G10B10A2((vec + Vector3(1, 1, 1)) * 0.5f);
+}
+
+void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::map<TerrainTexture*, EnhancedTerrainTexture>& textures)
+{
+	// Load terrain color textures
+	for (const auto &grp : terrain->texDb.groups) {
+		printf("%s\n", grp.first.c_str());
+		for (const auto &tex : grp.second->textures) {
+			EnhancedTerrainTexture ld;
+			ld.diffuseMap = texcache->getTexture(tex.second->file.c_str());
+
+			std::string nrm;
+			size_t ext = tex.second->file.rfind('.');
+			if (ext != nrm.npos)
+				nrm = tex.second->file.substr(0, ext);
+			else
+				nrm = tex.second->file;
+			if (g_settings.value<int>("gameVersion", 0) < 2) {
+				nrm.append("_NormalMap.pcx");
+				ld.normalMap = texcache->getTexture(nrm.c_str());
+			}
+			else {
+				nrm.append("_BumpMap.pcx");
+				ld.normalMap = texcache->getTextureIfCached(nrm.c_str());
+				if (!ld.normalMap) {
+					Bitmap bmp = Bitmap::loadBitmap((texcache->directory + nrm).c_str());
+					Bitmap nmap; nmap.width = bmp.width; nmap.height = bmp.height; nmap.format = BMFORMAT_R8G8B8A8;
+					nmap.pixels.resize(nmap.width * nmap.height * 4);
+					uint8_t* bmpix = (uint8_t*)bmp.pixels.data();
+					uint8_t* nmpix = (uint8_t*)nmap.pixels.data();
+					int pitch = nmap.width;
+					for (int tz = 0; tz < 4; tz++) {
+						for (int tx = 0; tx < 4; tx++) {
+							int sx = 64 * tx, sz = 64 * tz;
+							for (int cz = 0; cz < 64; cz++) {
+								for (int cx = 0; cx < 64; cx++) {
+									int ax = (cx + 1) & 63, az = (cz + 1) & 63;
+									int bx = (cx - 1) & 63, bz = (cz - 1) & 63;
+
+									int cheight = bmpix[(sz + cz) * pitch + sx + cx];
+
+									int dx1 = 0, dx2 = 0, dz1 = 0, dz2 = 0;
+									if(ax != 0)
+										dx1 = (int)bmpix[(sz + cz) * pitch + sx + ax] - cheight;
+									if(bx != 63)
+										dx2 = (int)bmpix[(sz + cz) * pitch + sx + bx] - cheight;
+									if(az != 0)
+										dz1 = (int)bmpix[(sz + az) * pitch + sx + cx] - cheight;
+									if(bz != 63)
+										dz2 = (int)bmpix[(sz + bz) * pitch + sx + cx] - cheight;
+
+									float fx = (-dx1+dx2) / 510.0f, fz = (-dz1+dz2) / 510.0f;
+									//fx *= 3.0f; fz *= 3.0f;
+									//float fy = 1.0f - fx * fx - fz * fz;
+									float fy = 0.1f;
+									float norm = std::sqrt(fx * fx + fy * fy + fz * fz);
+									fx /= norm; fy /= norm; fz /= norm;
+
+									int dx = (int)(fx * 255.0f);
+									int dy = (int)(fy * 255.0f);
+									int dz = (int)(fz * 255.0f);
+
+									uint8_t* out = nmpix + ((sz + cz) * pitch + sx + cx) * 4;
+									out[0] = (uint8_t)((dx + 255) / 2);
+									out[1] = (uint8_t)((dy + 255) / 2);
+									out[2] = (uint8_t)((dz + 255) / 2);
+									out[3] = 255;
+								}
+							}
+						}
+					}
+					ld.normalMap = texcache->createTexture(nrm.c_str(), 0, nmap);
+				}
+			}
+			textures[tex.second.get()] = ld;
+		}
+	}
+}
+
+std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain)
+{
+	// Precompute terrain normals
+	std::vector<uint32_t> trnNormals((terrain->width + 1) * (terrain->height + 1));
+	size_t ni = 0;
+	for (int z = 0; z <= terrain->height; z++) {
+		for (int x = 0; x <= terrain->width; x++) {
+			trnNormals[ni++] = NormalToR10G10B10A2(terrain->getNormal(x, z));
+		}
+	}
+
+	// Terrain vertex buffer
+	std::vector<EnhancedTerrainVertex> trnVertices;
+	assert(terrain != nullptr);
+	for (int z = 0; z < terrain->height; z++) {
+		for (int x = 0; x < terrain->width; x++) {
+			int lx = x - terrain->edge, lz = z - terrain->edge;
+			const Terrain::Tile* tile = terrain->getTile(x, z);
+
+			TerrainTexture* trntex = tile->texture;
+			float sx = trntex->startx / 256.0f;
+			float sy = trntex->starty / 256.0f;
+			float tw = trntex->width / 256.0f;
+			float th = trntex->height / 256.0f;
+			std::array<std::pair<float, float>, 4> uvs{ { {sx, sy}, {sx + tw, sy}, { sx + tw, sy + th }, {sx, sy + th } } };
+			bool xflip = (bool)tile->xflip != (bool)(tile->rot & 2);
+			bool zflip = (bool)tile->zflip != (bool)(tile->rot & 2);
+			bool rot = tile->rot & 1;
+			if (!xflip) {
+				std::swap(uvs[0], uvs[3]);
+				std::swap(uvs[1], uvs[2]);
+			}
+			if (zflip) {
+				std::swap(uvs[0], uvs[1]);
+				std::swap(uvs[2], uvs[3]);
+			}
+			if (rot) {
+				auto tmp = uvs[0];
+				uvs[0] = uvs[1];
+				uvs[1] = uvs[2];
+				uvs[2] = uvs[3];
+				uvs[3] = tmp;
+			}
+
+			constexpr float tilesize = 5.0f;
+			Vector3 poses[4];
+			poses[0] = Vector3(lx * tilesize, terrain->getVertex(x, z), lz * tilesize);
+			poses[1] = Vector3((lx + 1) * tilesize, terrain->getVertex(x + 1, z), lz * tilesize);
+			poses[2] = Vector3((lx + 1) * tilesize, terrain->getVertex(x + 1, z + 1), (lz + 1) * tilesize);
+			poses[3] = Vector3(lx * tilesize, terrain->getVertex(x, z + 1), (lz + 1) * tilesize);
+
+			float du1 = uvs[3].first - uvs[0].first, dv1 = uvs[3].second - uvs[0].second;
+			float du2 = uvs[1].first - uvs[0].first, dv2 = uvs[1].second - uvs[0].second;
+			Vector3 edge1 = poses[3] - poses[0];
+			Vector3 edge2 = poses[1] - poses[0];
+			float idet = 1.0f / (du1 * dv2 - du2 * dv1);
+			Vector3 tangent = (edge1 * dv2 - edge2 * dv1) * idet;
+			Vector3 bitangent = (edge2 * du1 - edge1 * du2) * idet;
+			uint32_t cmprTangent = NormalToR10G10B10A2(tangent.normal());
+			uint32_t cmprBitangent = NormalToR10G10B10A2(bitangent.normal());
+
+			auto getPrecomputedNormal = [&](int x, int z) { return trnNormals[z * (terrain->width + 1) + x]; };
+			const uint32_t colorBits =
+				(x >= terrain->edge && z >= terrain->edge && x < terrain->width - terrain->edge && z < terrain->height - terrain->edge) ?
+				0xC000'0000 : 0;
+
+			EnhancedTerrainVertex outvert[4];
+			outvert[0].pos = poses[0];
+			outvert[0].normal = getPrecomputedNormal(x, z) | colorBits;
+			outvert[0].tangent = cmprTangent;
+			outvert[0].bitangent = cmprBitangent;
+			outvert[0].u = uvs[0].first;
+			outvert[0].v = uvs[0].second;
+			outvert[1].pos = poses[1];
+			outvert[1].normal = getPrecomputedNormal(x + 1, z) | colorBits;
+			outvert[1].tangent = cmprTangent;
+			outvert[1].bitangent = cmprBitangent;
+			outvert[1].u = uvs[1].first;
+			outvert[1].v = uvs[1].second;
+			outvert[2].pos = poses[2];
+			outvert[2].normal = getPrecomputedNormal(x + 1, z + 1) | colorBits;
+			outvert[2].tangent = cmprTangent;
+			outvert[2].bitangent = cmprBitangent;
+			outvert[2].u = uvs[2].first;
+			outvert[2].v = uvs[2].second;
+			outvert[3].pos = poses[3];
+			outvert[3].normal = getPrecomputedNormal(x, z + 1) | colorBits;
+			outvert[3].tangent = cmprTangent;
+			outvert[3].bitangent = cmprBitangent;
+			outvert[3].u = uvs[3].first;
+			outvert[3].v = uvs[3].second;
+			trnVertices.insert(trnVertices.end(), std::begin(outvert), std::end(outvert));
+		}
+	}
+	return trnVertices;
+}

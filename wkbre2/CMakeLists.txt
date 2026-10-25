@@ -101,7 +101,9 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "gfx/D3D11EnhancedTerrainRenderer.h" "gfx/renderer_d3d11.h" "gfx/D3D11EnhancedSceneRenderer.h" "gfx/D3D11EnhancedSceneRenderer.cpp" "gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
 "FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp"
-"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "gfx/renderer_diligent.cpp")
+"platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "gfx/renderer_diligent.cpp" "gfx/renderer_diligent.h"
+"gfx/DiligentEnhancedSceneRenderer.h" "gfx/DiligentEnhancedSceneRenderer.cpp" "gfx/DiligentEnhancedTerrainRenderer.h" "gfx/DiligentEnhancedTerrainRenderer.cpp"
+"gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp")
 target_link_libraries (wkbre2
   imgui
   SDL3::SDL3

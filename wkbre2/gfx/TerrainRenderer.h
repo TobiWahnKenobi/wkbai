@@ -15,4 +15,6 @@ struct TerrainRenderer {
 	TerrainRenderer(IRenderer *gfx, Terrain *terrain, Camera *camera) : gfx(gfx), terrain(terrain), camera(camera) {}
 	virtual ~TerrainRenderer() {}
 	virtual void render() = 0;
+	// Bump mapping switch of the renderers that have one (shown in the debug window)
+	virtual bool* bumpMapping() { return nullptr; }
 };

@@ -10,7 +10,7 @@
 
 #if defined(_WIN32) && defined(WKBRE2_HAS_DILIGENT)
 
-#include "renderer.h"
+#include "renderer_diligent.h"
 #include "bitmap.h"
 #include "../window.h"
 #include "../settings.h"
@@ -26,10 +26,6 @@
 
 #include "EngineFactoryD3D12.h"
 #include "EngineFactoryVk.h"
-#include "RenderDevice.h"
-#include "DeviceContext.h"
-#include "SwapChain.h"
-#include "RefCntAutoPtr.hpp"
 
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
@@ -251,7 +247,7 @@ struct RBatchDiligent : public RBatch
 	void flush() override;
 };
 
-struct DiligentRenderer : IRenderer
+struct DiligentRenderer : DiligentGfx
 {
 	// Pipeline state selected by the IRenderer calls
 	enum VSKind : uint8_t { VS_PLAIN, VS_FOG };
@@ -268,13 +264,9 @@ struct DiligentRenderer : IRenderer
 		uint32_t key() const { return vs | (ps << 1) | (alphaBlend << 3) | (depth << 4) | (scissor << 6) | (topology << 7); }
 	};
 
-	RefCntAutoPtr<IRenderDevice> device;
-	RefCntAutoPtr<IDeviceContext> ctx;
-	RefCntAutoPtr<ISwapChain> swapChain;
 	RefCntAutoPtr<IPipelineResourceSignature> signature;
 	RefCntAutoPtr<IShader> vertexShaders[2], pixelShaders[4];
 	std::map<uint32_t, RefCntAutoPtr<IPipelineState>> pipelines;
-	RefCntAutoPtr<IBuffer> transformBuffer, fogBuffer;
 
 	// Dynamic buffers that batches and shapes are appended to: the first write in a frame (or
 	// when full) discards, later writes add behind the previous ones, so each draw only takes
@@ -406,6 +398,8 @@ struct DiligentRenderer : IRenderer
 	// Copies data into a stream ring and returns its byte offset there.
 	uint64_t streamWrite(StreamRing& ring, const void* data, uint64_t size)
 	{
+		if (size > ring.capacity)
+			ferr("Diligent: %llu bytes don't fit in a %llu-byte stream buffer.", (unsigned long long)size, (unsigned long long)ring.capacity);
 		MAP_FLAGS flags = MAP_FLAG_NO_OVERWRITE;
 		if (ring.mappedFrame != frame || ring.cursor + size > ring.capacity) {
 			flags = MAP_FLAG_DISCARD;
@@ -419,6 +413,23 @@ struct DiligentRenderer : IRenderer
 		ctx->UnmapBuffer(ring.buf, MAP_WRITE);
 		ring.cursor += (size + 15) & ~15ull;
 		return offset;
+	}
+
+	ITextureView* GetTextureView(texture t) override
+	{
+		return ((DiligentTexture*)(t ? t : whiteTexture))->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+	}
+
+	IBuffer* StreamVertexData(const void* data, uint64_t size, uint64_t& offset) override
+	{
+		offset = streamWrite(vertexRing, data, size);
+		return vertexRing.buf;
+	}
+
+	IBuffer* StreamIndexData(const void* data, uint64_t size, uint64_t& offset) override
+	{
+		offset = streamWrite(indexRing, data, size);
+		return indexRing.buf;
 	}
 
 	void streamVertices(const batchVertex* verts, uint32_t count)

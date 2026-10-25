@@ -21,6 +21,7 @@ public:
 	~D3D11EnhancedTerrainRenderer();
 	void render() override;
 	void init();
+	bool* bumpMapping() override { return &m_bumpOn; }
 
 	bool m_bumpOn = true;
 private:

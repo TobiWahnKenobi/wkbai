@@ -29,6 +29,8 @@
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "../gfx/D3D11EnhancedSceneRenderer.h"
+#include "../gfx/DiligentEnhancedSceneRenderer.h"
+#include "../gfx/DiligentEnhancedTerrainRenderer.h"
 #include "../StampdownPlan.h"
 #include "../gfx/TerrainSpriteContainer.h"
 #include "../gfx/TerrainSpriteRenderer.h"
@@ -238,10 +240,18 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	return hovered;
 }
 
-// The enhanced renderers use Direct3D 11 directly, so they only work with the D3D11 renderer.
-static bool UseEnhancedD3D11Renderers()
+// The enhanced scene and terrain renderers draw with the graphics API directly, so there is one
+// version per renderer that has them: "d3d11" or "diligent". Empty if not used.
+static std::string EnhancedRenderersAPI()
 {
-	return g_settings.value<bool>("enhancedGraphics", false) && g_settings.value<std::string>("renderer", "") == "d3d11";
+	if (!g_settings.value<bool>("enhancedGraphics", false))
+		return {};
+	std::string renderer = g_settings.value<std::string>("renderer", "");
+#ifdef WKBRE2_HAS_DILIGENT
+	if (renderer == "diligent")
+		return renderer;
+#endif
+	return (renderer == "d3d11") ? renderer : std::string();
 }
 
 void ClientInterface::drawObject(ClientGameObject *obj)
@@ -787,12 +797,10 @@ void ClientInterface::iter()
 			client->sendStartLevelRequest();
 		ImGui::Checkbox("Terrain", &showTerrain);
 #ifdef _WIN32
-		if (UseEnhancedD3D11Renderers()) {
-			if (D3D11EnhancedTerrainRenderer* etr = static_cast<D3D11EnhancedTerrainRenderer*>(terrainRenderer)) {
-				if (client->terrain)
-					ImGui::DragFloat3("Sun", &client->terrain->sunVector.x, 0.1f);
-				ImGui::Checkbox("Bump", &etr->m_bumpOn);
-			}
+		if (bool* bump = terrainRenderer ? terrainRenderer->bumpMapping() : nullptr) {
+			if (client->terrain)
+				ImGui::DragFloat3("Sun", &client->terrain->sunVector.x, 0.1f);
+			ImGui::Checkbox("Bump", bump);
 		}
 #endif
 		ImGui::End();
@@ -1293,8 +1301,13 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 		if (!sceneRenderer) {
 #ifdef _WIN32
-			if (UseEnhancedD3D11Renderers())
+			const std::string enhanced = EnhancedRenderersAPI();
+			if (enhanced == "d3d11")
 				sceneRenderer = new D3D11EnhancedSceneRenderer(gfx, scene, &client->camera);
+#ifdef WKBRE2_HAS_DILIGENT
+			else if (enhanced == "diligent")
+				sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);
+#endif
 			else
 				sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
 #else
@@ -1367,8 +1380,13 @@ void ClientInterface::render()
 
 void ClientInterface::updateTerrain() {
 #ifdef _WIN32
-	if (UseEnhancedD3D11Renderers())
+	const std::string enhanced = EnhancedRenderersAPI();
+	if (enhanced == "d3d11")
 		this->terrainRenderer = new D3D11EnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
+#ifdef WKBRE2_HAS_DILIGENT
+	else if (enhanced == "diligent")
+		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
+#endif
 	else
 		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
 #else

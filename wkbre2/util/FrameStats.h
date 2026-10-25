@@ -36,7 +36,9 @@ extern FrameStats g_frameStats;
 //                  "report": "benchmark.json" }
 // The game loads the save game, skips the warm-up frames (counted once the map is loaded),
 // records the frame times and writes the report, then quits. "frameBudgetMs" (default
-// 16.667) sets the budget the report is checked against.
+// 16.667) sets the budget the report is checked against. With "paused": true the game clock
+// stays at the save game's start, so every run renders the same frame (for comparing renderers).
 bool BenchmarkEnabled();
+bool BenchmarkPaused();
 const char* BenchmarkSaveGame();
 void BenchmarkFrameEnd(bool worldLoaded);

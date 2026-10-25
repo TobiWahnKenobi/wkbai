@@ -293,6 +293,8 @@ void QuickStartMenu::launchGame()
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
 			skirmishMenu.applySettings(*server);
+			if (BenchmarkPaused())
+				server->timeManager.pause();
 			srvMutex.unlock();
 			while (!g_windowQuit) {
 				srvMutex.lock();

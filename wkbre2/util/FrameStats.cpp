@@ -73,6 +73,12 @@ bool BenchmarkEnabled()
 	return BenchmarkSettings() != nullptr;
 }
 
+bool BenchmarkPaused()
+{
+	const auto* bm = BenchmarkSettings();
+	return bm && bm->value("paused", false);
+}
+
 const char* BenchmarkSaveGame()
 {
 	static std::string saveGame;
