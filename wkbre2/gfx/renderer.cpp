@@ -5,16 +5,17 @@
 #include "renderer.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
+#include <cstdio>
+#include <string>
 
+// "renderer": "diligent" (Direct3D 12 or Vulkan, see "diligentBackend") or "null" (draws
+// nothing). The old values "d3d9", "d3d11", "ogl1" and "ogl3" select Diligent: those
+// renderers were removed.
 IRenderer* CreateRenderer() {
-#ifdef _WIN32
-	auto setting = g_settings.value("renderer", "d3d9");
-#ifdef WKBRE2_HAS_DILIGENT
-	if (setting == "diligent")
-		return CreateDiligentRenderer();
-#endif
-	return (setting == "ogl3") ? CreateOGL3Renderer() : ((setting == "d3d11") ? CreateD3D11Renderer() : CreateD3D9Renderer());
-#else
-	return CreateOGL3Renderer();
-#endif
+	std::string setting = g_settings.value("renderer", "diligent");
+	if (setting == "null")
+		return CreateNULLRenderer();
+	if (setting != "diligent")
+		printf("Renderer \"%s\" no longer exists, using \"diligent\".\n", setting.c_str());
+	return CreateDiligentRenderer();
 }

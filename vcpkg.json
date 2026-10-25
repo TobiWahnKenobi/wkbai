@@ -4,7 +4,6 @@
   "dependencies": [
     "bzip2",
     "enet",
-    "glew",
     "lua",
     "mpg123",
     "nlohmann-json",

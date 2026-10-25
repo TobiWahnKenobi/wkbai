@@ -95,13 +95,12 @@ The server on one core would do all the game logic, pathfinding, ... and the cli
 the other core would do the rendering of the scene. This means it is possible to keep a
 good framerate even during local server lags, and no lags in game logic during heavy rendering.
 
-For graphics rendering, wkbre2 supports several APIs: Direct3D 9, Direct3D 11
-as well as OpenGL 3.3 (Core Profile). The rendering code is structured
-such that each part of the rendering process (scene, terrain, particles) can
-have different implementations: there is one "default" implementation that will
-work on all APIs, but in the future we might have "special" implementations
-that take advantages of the API's modern features to optimize performance
-and image quality.
+For graphics rendering, this fork uses [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore)
+with Direct3D 12 or Vulkan (`"diligentBackend"` in wkconfig.json). The former Direct3D 9,
+Direct3D 11 and OpenGL renderers were removed; a "null" renderer that draws nothing remains for tests.
+Each part of the rendering process (scene, terrain, particles) has a "default"
+implementation that works through the generic renderer interface, and the "enhanced"
+scene and terrain renderers (lighting, bump mapping) draw with Diligent directly.
 
 ## Usage
  - [Download a build](https://github.com/AdrienTD/wkbre2/releases) and extract the zip.
@@ -127,7 +126,6 @@ The dependencies needed to build the project can be easily installed via [vcpkg]
 The following packages need to be installed via `vcpkg install`:
  - bzip2
  - enet
- - glew
  - lua
  - mpg123
  - nlohmann-json

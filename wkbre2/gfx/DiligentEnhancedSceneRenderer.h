@@ -6,7 +6,8 @@
 
 #include "SceneRenderer.h"
 
-// D3D11EnhancedSceneRenderer on Diligent (Direct3D 12 / Vulkan): same look, same batching.
+// Lit, instanced meshes on Diligent (Direct3D 12 / Vulkan); a port of the former
+// D3D11EnhancedSceneRenderer with the same look and batching.
 struct DiligentEnhancedSceneRenderer : SceneRenderer
 {
 	DiligentEnhancedSceneRenderer(IRenderer* gfx, Scene* scene, Camera* camera) : SceneRenderer(gfx, scene, camera) { init(); }

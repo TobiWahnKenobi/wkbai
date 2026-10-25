@@ -23,19 +23,10 @@ static void ResetDefaultSettings()
 	g_settings["gamePath"] = ".";
 	g_settings["gameVersion"] = 0;
 	g_settings["musicEnabled"] = true;
-#ifdef _WIN32
-#ifdef WKBRE2_HAS_DILIGENT
 	g_settings["renderer"] = "diligent";
-#else
-	g_settings["renderer"] = "d3d11";
-#endif
-	g_settings["msaaNumSamples"] = 1;
-	g_settings["d3d11AdapterIndex"] = 0;
+	g_settings["diligentBackend"] = "d3d12"; // or "vulkan"
 	g_settings["enhancedGraphics"] = true;
 	g_settings["vsync"] = true;
-	// Used when "renderer" is "diligent": "d3d12" or "vulkan"
-	g_settings["diligentBackend"] = "d3d12";
-#endif
 }
 
 static void WriteSettings()

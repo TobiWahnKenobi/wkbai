@@ -109,7 +109,7 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	report["saveGame"] = bm->value("saveGame", "");
 	report["renderer"] = g_settings.value("renderer", "");
 	report["enhancedGraphics"] = g_settings.value("enhancedGraphics", false);
-	report["msaaNumSamples"] = g_settings.value("msaaNumSamples", 1);
+	report["diligentBackend"] = g_settings.value("diligentBackend", "d3d12");
 	report["vsync"] = g_settings.value("vsync", true);
 	report["windowWidth"] = g_windowWidth;
 	report["windowHeight"] = g_windowHeight;

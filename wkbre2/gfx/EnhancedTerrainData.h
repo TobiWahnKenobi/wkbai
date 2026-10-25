@@ -14,7 +14,7 @@ struct Terrain;
 struct TerrainTexture;
 struct TextureCache;
 
-// CPU-side data shared by the enhanced terrain renderers (Direct3D 11 and Diligent).
+// CPU-side data of the enhanced terrain renderer (shared with the former D3D11 version).
 
 // Terrain vertex: normal, tangent and bitangent packed as R10G10B10A2 (n * 0.5 + 0.5); the
 // normal's 2-bit alpha is 3 inside the playable area and 0 on the map edge (drawn darker).

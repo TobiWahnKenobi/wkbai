@@ -4,8 +4,6 @@
 
 #pragma once
 
-#if defined(_WIN32) && defined(WKBRE2_HAS_DILIGENT)
-
 #include "renderer.h"
 
 #include "RenderDevice.h"
@@ -35,4 +33,3 @@ struct DiligentGfx : IRenderer
 	virtual Diligent::IBuffer* StreamIndexData(const void* data, uint64_t size, uint64_t& offset) = 0;
 };
 
-#endif // _WIN32 && WKBRE2_HAS_DILIGENT

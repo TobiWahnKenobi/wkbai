@@ -124,8 +124,4 @@ struct IRenderer
 
 IRenderer *CreateRenderer();
 IRenderer *CreateNULLRenderer();
-IRenderer *CreateD3D9Renderer();
-IRenderer *CreateD3D11Renderer();
-IRenderer *CreateOGL1Renderer();
-IRenderer *CreateOGL3Renderer();
 IRenderer *CreateDiligentRenderer();

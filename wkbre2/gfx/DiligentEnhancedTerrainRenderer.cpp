@@ -2,11 +2,9 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
-// Port of D3D11EnhancedTerrainRenderer to Diligent: same shader, same culling of tiles, tiles
+// Port of the former D3D11EnhancedTerrainRenderer to Diligent: same shader, same culling of tiles, tiles
 // drawn grouped by texture from one vertex buffer of the whole map, then lakes through
 // IRenderer. The packed normals/tangents are unpacked in the vertex shader.
-
-#if defined(_WIN32) && defined(WKBRE2_HAS_DILIGENT)
 
 #include "DiligentEnhancedTerrainRenderer.h"
 #include "EnhancedTerrainData.h"
@@ -378,4 +376,3 @@ void DiligentEnhancedTerrainRenderer::render()
 		pack.second.clear();
 }
 
-#endif // _WIN32 && WKBRE2_HAS_DILIGENT

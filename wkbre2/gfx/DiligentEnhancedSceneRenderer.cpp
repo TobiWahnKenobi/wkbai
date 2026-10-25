@@ -2,12 +2,10 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
-// Port of D3D11EnhancedSceneRenderer to Diligent. The shader and the batching (instances of
+// Port of the former D3D11EnhancedSceneRenderer to Diligent. The shader and the batching (instances of
 // one model and material, up to 16 per draw, split on animation frame, colour and flags) are
 // the same. Normals are still packed as 10:10:10:2, but unpacked in the vertex shader because
 // Diligent has no such vertex format.
-
-#if defined(_WIN32) && defined(WKBRE2_HAS_DILIGENT)
 
 #include "DiligentEnhancedSceneRenderer.h"
 #include "renderer_diligent.h"
@@ -465,4 +463,3 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 }
 
-#endif // _WIN32 && WKBRE2_HAS_DILIGENT

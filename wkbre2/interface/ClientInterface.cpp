@@ -25,10 +25,9 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
-#include "../gfx/D3D11EnhancedTerrainRenderer.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
-#include "../gfx/D3D11EnhancedSceneRenderer.h"
+#include "../gfx/renderer_diligent.h"
 #include "../gfx/DiligentEnhancedSceneRenderer.h"
 #include "../gfx/DiligentEnhancedTerrainRenderer.h"
 #include "../StampdownPlan.h"
@@ -240,18 +239,11 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	return hovered;
 }
 
-// The enhanced scene and terrain renderers draw with the graphics API directly, so there is one
-// version per renderer that has them: "d3d11" or "diligent". Empty if not used.
-static std::string EnhancedRenderersAPI()
+// The enhanced scene and terrain renderers draw with Diligent directly, so they need the
+// Diligent renderer (not the null renderer).
+static bool UseEnhancedRenderers(IRenderer* gfx)
 {
-	if (!g_settings.value<bool>("enhancedGraphics", false))
-		return {};
-	std::string renderer = g_settings.value<std::string>("renderer", "");
-#ifdef WKBRE2_HAS_DILIGENT
-	if (renderer == "diligent")
-		return renderer;
-#endif
-	return (renderer == "d3d11") ? renderer : std::string();
+	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
 void ClientInterface::drawObject(ClientGameObject *obj)
@@ -796,13 +788,11 @@ void ClientInterface::iter()
 		if (ImGui::Button("Start level"))
 			client->sendStartLevelRequest();
 		ImGui::Checkbox("Terrain", &showTerrain);
-#ifdef _WIN32
 		if (bool* bump = terrainRenderer ? terrainRenderer->bumpMapping() : nullptr) {
 			if (client->terrain)
 				ImGui::DragFloat3("Sun", &client->terrain->sunVector.x, 0.1f);
 			ImGui::Checkbox("Bump", bump);
 		}
-#endif
 		ImGui::End();
 	}
 
@@ -1300,19 +1290,10 @@ void ClientInterface::iter()
 		if (client->terrain)
 			scene->sunDirection = client->terrain->sunVector;
 		if (!sceneRenderer) {
-#ifdef _WIN32
-			const std::string enhanced = EnhancedRenderersAPI();
-			if (enhanced == "d3d11")
-				sceneRenderer = new D3D11EnhancedSceneRenderer(gfx, scene, &client->camera);
-#ifdef WKBRE2_HAS_DILIGENT
-			else if (enhanced == "diligent")
+			if (UseEnhancedRenderers(gfx))
 				sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);
-#endif
 			else
 				sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
-#else
-			sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
-#endif
 		}
 		TracyCZoneEnd(zoneScene);
 		{
@@ -1379,19 +1360,10 @@ void ClientInterface::render()
 }
 
 void ClientInterface::updateTerrain() {
-#ifdef _WIN32
-	const std::string enhanced = EnhancedRenderersAPI();
-	if (enhanced == "d3d11")
-		this->terrainRenderer = new D3D11EnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
-#ifdef WKBRE2_HAS_DILIGENT
-	else if (enhanced == "diligent")
+	if (UseEnhancedRenderers(gfx))
 		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
-#endif
 	else
 		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
-#else
-	this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
-#endif
 	this->terrainSpriteContainer = new TerrainSpriteContainer;
 	this->terrainSpriteRenderer = new TerrainSpriteRenderer(gfx, client->terrain, this->terrainSpriteContainer);
 }

@@ -8,8 +8,8 @@
 
 struct TextureCache;
 
-// D3D11EnhancedTerrainRenderer on Diligent (Direct3D 12 / Vulkan): bump-mapped terrain with
-// per-pixel sun light, and lakes.
+// Bump-mapped terrain with per-pixel sun light, and lakes, on Diligent (Direct3D 12 / Vulkan);
+// a port of the former D3D11EnhancedTerrainRenderer.
 struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera) : TerrainRenderer(gfx, terrain, camera) { init(); }
 	~DiligentEnhancedTerrainRenderer();

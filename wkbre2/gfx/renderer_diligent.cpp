@@ -3,12 +3,10 @@
 // Licensed under the GNU General Public License 3
 
 // IRenderer on Diligent Engine (Direct3D 12 or Vulkan).
-// It reproduces the D3D11 renderer (renderer_d3d11.cpp): same shaders and the same state
+// It reproduces the former D3D11 renderer (renderer_d3d11.cpp): same shaders and the same state
 // behaviour. IRenderer's state toggles select one of a few pipeline states, which are created
 // on first use; every pipeline shares one resource signature, so each texture has its own
 // shader resource binding that works with all of them.
-
-#if defined(_WIN32) && defined(WKBRE2_HAS_DILIGENT)
 
 #include "renderer_diligent.h"
 #include "bitmap.h"
@@ -896,4 +894,3 @@ void RBatchDiligent::flush()
 
 IRenderer* CreateDiligentRenderer() { return new DiligentRenderer; }
 
-#endif // _WIN32 && WKBRE2_HAS_DILIGENT
