@@ -36,6 +36,9 @@ jobs:
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
 
+      - name: Test file system and mod load order
+        run: python tests/test_vfs.py -v
+
       - name: Upload wkbre2
         uses: actions/upload-artifact@v7
         with:

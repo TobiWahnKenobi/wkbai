@@ -59,7 +59,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "ParticleContainer.cpp" "gfx/ParticleRenderer.h" "gfx/DefaultParticleRenderer.h" "gfx/DefaultParticleRenderer.cpp" "gfx/renderer_ogl3.cpp" "gfx/D3D11EnhancedTerrainRenderer.cpp"
 "gfx/D3D11EnhancedTerrainRenderer.h" "gfx/renderer_d3d11.h" "gfx/D3D11EnhancedSceneRenderer.h" "gfx/D3D11EnhancedSceneRenderer.cpp" "gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
-"FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp"
+"FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp"
 "platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp")
 target_link_libraries (wkbre2
   imgui

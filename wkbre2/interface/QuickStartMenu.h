@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "QuickSkirmishMenu.h"
+#include "ModMenu.h"
 
 struct IRenderer;
 struct NetEnetLink;
@@ -47,7 +48,9 @@ private:
 	char joinAddress[64] = "localhost"; uint16_t joinPort = 1234;
 
 	QuickSkirmishMenu skirmishMenu;
+	ModMenu modMenu;
 
+	void refreshSaveGames();
 	void netInit();
 	void netHandle();
 	void netDeinit();

@@ -6,12 +6,19 @@
 #include "file.h"
 #include "util/util.h"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <fstream>
+#include <memory>
 #include <mutex>
+#include <set>
+#include <nlohmann/json.hpp>
+#include "settings.h"
 #include "util/StriCompare.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <Windows.h>
 #endif
 
@@ -60,6 +67,9 @@ struct BCPReader
 	std::string BCPReadString();
 	void LookAtDir(BCPDirectory *bd, int isroot, BCPDirectory *prev);
 	BCPReader(const std::filesystem::path& bcpPath);
+	~BCPReader();
+	BCPReader(const BCPReader&) = delete;
+	BCPReader& operator=(const BCPReader&) = delete;
 	void ExtractFile(int id, char **out, int *outsize, int extraBytes);
 	BCPFile *getFile(const char *fn);
 	BCPDirectory *getDirectory(const char *dn);
@@ -70,8 +80,7 @@ struct BCPReader
 };
 
 std::filesystem::path g_gamePath = ".";
-bool g_allowBCPPatches = false, g_allowDataDirectory = true, g_macFileNamesFallbackEnabled = true;
-std::vector<BCPReader*> bcpacks;
+bool g_allowDataDirectory = true, g_macFileNamesFallbackEnabled = true;
 
 static FILE* FsOpen(const std::filesystem::path& filePath, const char* mode)
 {
@@ -142,6 +151,24 @@ BCPReader::BCPReader(const std::filesystem::path& bcpPath)
 
 	fseek(bcpfile, fentof+4+nfiles*20, SEEK_SET);
 	LookAtDir(&bcproot, 1, &bcproot);
+}
+
+static void FreeBCPDirectory(BCPDirectory *bd)
+{
+	// files/dirs are only allocated when their count is non-zero
+	if (bd->nfiles) delete[] bd->files;
+	if (bd->ndirs) {
+		for (int i = 0; i < bd->ndirs; i++)
+			FreeBCPDirectory(&bd->dirs[i]);
+		delete[] bd->dirs;
+	}
+}
+
+BCPReader::~BCPReader()
+{
+	FreeBCPDirectory(&bcproot);
+	free(fent);
+	if (bcpfile) fclose(bcpfile);
 }
 
 void BCPReader::ExtractFile(int id, char **out, int *outsize, int extraBytes)
@@ -325,41 +352,6 @@ void BCPReader::listDirectories(const char *dn, std::vector<std::string> *gsl)
 			gsl->push_back(ad->dirs[i].name);
 }
 
-BCPReader *mainbcp;
-
-void LoadBCP(const char *fn)
-{
-	//mainbcp = new BCPack(fn);
-
-	if(!g_allowBCPPatches)
-		{bcpacks.push_back(new BCPReader(fn)); return;}
-#ifdef _WIN32
-	HANDLE hf; WIN32_FIND_DATAW fnd;
-	auto filter = g_gamePath / "*.bcp";
-	hf = FindFirstFileW(filter.c_str(), &fnd);
-	if(hf == INVALID_HANDLE_VALUE) return;
-	do {
-		bcpacks.push_back(new BCPReader(fnd.cFileName));
-	} while(FindNextFileW(hf, &fnd));
-#endif
-}
-
-BCPReader *GetBCPWithMostRecentFile(const char *fn)
-{
-	BCPReader *bestpack = 0; uint64_t besttime = 0;
-	for(BCPReader *t : bcpacks)
-	{
-		BCPFile *f = t->getFile(fn);
-		if(!f) continue;
-		if(f->time >= besttime)
-		{
-			bestpack = t;
-			besttime = f->time;
-		}
-	}
-	return bestpack;
-}
-
 std::string GetMacName(const char *fn)
 {
 	if (const char *sh = strrchr(fn, '\\'))
@@ -385,22 +377,321 @@ std::string portablePath(std::string p)
 	return p;
 }
 
+// ---- Layered file system ----
+//
+// The original game (WKB 1.1, FUN_00741790 / FUN_007415c0) mounts data.bcp and every other *.bcp
+// in the game folder into one group, and for each file uses the copy with the newest timestamp
+// (File::is_newer_than via CompareFileTime; ties keep the first-mounted copy). That is the default
+// here too, extended with the game folder's loose data\ directory and mod folders in "mods/".
+// A user-defined load order ("modLoadOrder") instead stacks the mods on top of data.bcp, a later mod
+// overriding an earlier one. Below all of this come the saved\ folder, the REDATA resources and redata/.
+
+namespace {
+
+uint64_t FileTimeOf(const std::filesystem::path& path)
+{
+	std::error_code ec;
+	auto ft = std::filesystem::last_write_time(path, ec);
+	if (ec) return 0;
+	auto sys = std::chrono::clock_cast<std::chrono::system_clock>(ft);
+	auto ticks = std::chrono::duration_cast<std::chrono::duration<int64_t, std::ratio<1, 10000000>>>(sys.time_since_epoch()).count();
+	return (uint64_t)(ticks + 116444736000000000LL); // FILETIME: 100 ns intervals since 1601
+}
+
+void AddUniqueName(std::vector<std::string>* gsl, std::string name)
+{
+	if (std::find_if(gsl->begin(), gsl->end(), [&](const std::string& s) { return !StrCICompare(s, name); }) == gsl->end())
+		gsl->push_back(std::move(name));
+}
+
+bool HasBcpExtension(const std::filesystem::path& path)
+{
+	return !StrCICompare(PathToUtf8(path.extension()), ".bcp");
+}
+
+struct FileSource {
+	std::string description;
+	virtual ~FileSource() = default;
+	// True if the source has the file; also returns its timestamp (FILETIME)
+	virtual bool find(const char* fn, uint64_t& time) = 0;
+	virtual bool load(const char* fn, char** out, int* outsize, int extraBytes) = 0;
+	virtual void listFiles(const char* dn, std::vector<std::string>* gsl) = 0;
+	virtual void listDirectories(const char* dn, std::vector<std::string>* gsl) = 0;
+	virtual uint64_t newestTime() = 0;
+};
+
+struct BCPSource : FileSource {
+	BCPReader reader;
+	BCPSource(const std::filesystem::path& path) : reader(path) { description = PathToUtf8(path.filename()); }
+	bool find(const char* fn, uint64_t& time) override {
+		BCPFile* file = reader.getFile(fn);
+		if (!file) return false;
+		time = file->time;
+		return true;
+	}
+	bool load(const char* fn, char** out, int* outsize, int extraBytes) override { return reader.loadFile(fn, out, outsize, extraBytes); }
+	void listFiles(const char* dn, std::vector<std::string>* gsl) override { reader.listFileNames(dn, gsl); }
+	void listDirectories(const char* dn, std::vector<std::string>* gsl) override { reader.listDirectories(dn, gsl); }
+	uint64_t newestTime() override {
+		uint64_t newest = 0;
+		auto walk = [&](auto&& self, BCPDirectory* dir) -> void {
+			for (int i = 0; i < dir->nfiles; i++) newest = std::max(newest, dir->files[i].time);
+			for (int i = 0; i < dir->ndirs; i++) self(self, &dir->dirs[i]);
+		};
+		walk(walk, &reader.bcproot);
+		return newest;
+	}
+};
+
+struct DirectorySource : FileSource {
+	std::filesystem::path root;
+	DirectorySource(std::filesystem::path root, std::string desc) : root(std::move(root)) { description = std::move(desc); }
+	std::filesystem::path pathOf(const char* fn) const { return root / PathFromUtf8(portablePath(fn)); }
+	bool find(const char* fn, uint64_t& time) override {
+		std::error_code ec;
+		auto path = pathOf(fn);
+		if (!std::filesystem::is_regular_file(path, ec)) return false;
+		time = FileTimeOf(path);
+		return true;
+	}
+	bool load(const char* fn, char** out, int* outsize, int extraBytes) override {
+		FILE* sf = FsOpen(pathOf(fn), "rb");
+		if (!sf) return false;
+		fseek(sf, 0, SEEK_END);
+		int ss = ftell(sf);
+		fseek(sf, 0, SEEK_SET);
+		char* mout = (char*)malloc(ss + extraBytes);
+		if (!mout) ferr("No mem. left for reading the file \"%s\".", fn);
+		fread(mout, ss, 1, sf);
+		fclose(sf);
+		*out = mout; *outsize = ss;
+		return true;
+	}
+	void list(const char* dn, std::vector<std::string>* gsl, bool directories) {
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::directory_iterator(pathOf(dn), ec))
+			if (directories ? entry.is_directory(ec) : entry.is_regular_file(ec))
+				AddUniqueName(gsl, PathToUtf8(entry.path().filename()));
+	}
+	void listFiles(const char* dn, std::vector<std::string>* gsl) override { list(dn, gsl, false); }
+	void listDirectories(const char* dn, std::vector<std::string>* gsl) override { list(dn, gsl, true); }
+	uint64_t newestTime() override {
+		uint64_t newest = 0;
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec))
+			if (entry.is_regular_file(ec))
+				newest = std::max(newest, FileTimeOf(entry.path()));
+		return newest;
+	}
+};
+
+// Sources resolved together: per file, the newest timestamp wins (first source on a tie)
+struct FileGroup {
+	std::string name;
+	std::vector<std::unique_ptr<FileSource>> sources;
+	FileSource* findNewest(const char* fn) {
+		FileSource* best = nullptr;
+		uint64_t bestTime = 0;
+		for (auto& src : sources) {
+			uint64_t time;
+			if (src->find(fn, time) && (!best || time > bestTime)) {
+				best = src.get();
+				bestTime = time;
+			}
+		}
+		return best;
+	}
+};
+
+std::vector<FileGroup> g_fileGroups; // lowest priority first
+std::vector<ModInfo> g_mods;
+bool g_customModOrder = false;
+
+std::filesystem::path ModsPath()
+{
+	return PathFromUtf8(g_settings.value<std::string>("modsPath", "mods"));
+}
+
+void AddModSources(const ModInfo& mod, FileGroup& group)
+{
+	if (mod.id == "data/") {
+		group.sources.push_back(std::make_unique<DirectorySource>(g_gamePath / "data", "data/"));
+	}
+	else if (mod.id.rfind("mods/", 0) == 0) {
+		std::filesystem::path folder = ModsPath() / PathFromUtf8(mod.id.substr(5));
+		group.sources.push_back(std::make_unique<DirectorySource>(folder, mod.id));
+		std::vector<std::filesystem::path> archives;
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::directory_iterator(folder, ec))
+			if (entry.is_regular_file(ec) && HasBcpExtension(entry.path()))
+				archives.push_back(entry.path());
+		std::sort(archives.begin(), archives.end());
+		for (const auto& archive : archives)
+			group.sources.push_back(std::make_unique<BCPSource>(archive));
+	}
+	else {
+		group.sources.push_back(std::make_unique<BCPSource>(g_gamePath / PathFromUtf8(mod.id)));
+	}
+}
+
+std::vector<ModInfo> DiscoverMods()
+{
+	std::vector<ModInfo> mods;
+	std::error_code ec;
+
+	// Archives next to data.bcp, as loaded by the original game
+	std::vector<std::string> archives;
+	for (const auto& entry : std::filesystem::directory_iterator(g_gamePath, ec))
+		if (entry.is_regular_file(ec) && HasBcpExtension(entry.path()) && StrCICompare(PathToUtf8(entry.path().filename()), "data.bcp"))
+			archives.push_back(PathToUtf8(entry.path().filename()));
+	std::sort(archives.begin(), archives.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
+	for (const auto& archive : archives)
+		mods.push_back({ archive, archive, "", "archive in the game folder" });
+
+	if (g_allowDataDirectory && std::filesystem::is_directory(g_gamePath / "data", ec))
+		mods.push_back({ "data/", "data (loose files)", "", "data folder in the game folder" });
+
+	std::vector<std::string> folders;
+	for (const auto& entry : std::filesystem::directory_iterator(ModsPath(), ec))
+		if (entry.is_directory(ec))
+			folders.push_back(PathToUtf8(entry.path().filename()));
+	std::sort(folders.begin(), folders.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
+	for (const auto& folder : folders) {
+		ModInfo mod{ "mods/" + folder, folder, "", "mod folder" };
+		std::ifstream manifest(ModsPath() / PathFromUtf8(folder) / "mod.json");
+		if (manifest.good()) {
+			try {
+				nlohmann::json json;
+				manifest >> json;
+				mod.name = json.value<std::string>("name", mod.name);
+				mod.description = json.value<std::string>("description", "");
+			}
+			catch (const nlohmann::json::exception& exc) {
+				printf("WARNING: Invalid mod.json in mod %s: %s\n", folder.c_str(), exc.what());
+			}
+		}
+		mods.push_back(std::move(mod));
+	}
+	return mods;
+}
+
+FileSource* FindFileSource(const char* fn)
+{
+	for (auto group = g_fileGroups.rbegin(); group != g_fileGroups.rend(); ++group)
+		if (FileSource* src = group->findNewest(fn))
+			return src;
+	return nullptr;
+}
+
+} // namespace
+
+void InitFileSystem()
+{
+	g_fileGroups.clear();
+	std::vector<ModInfo> mods = DiscoverMods();
+
+	std::set<std::string> disabled;
+	if (auto it = g_settings.find("disabledMods"); it != g_settings.end() && it->is_array())
+		for (const auto& id : *it)
+			if (id.is_string()) disabled.insert(id.get<std::string>());
+	for (auto& mod : mods)
+		mod.enabled = !disabled.count(mod.id);
+
+	FileGroup base{ "data.bcp" };
+	base.sources.push_back(std::make_unique<BCPSource>(std::filesystem::path("data.bcp")));
+
+	auto orderIt = g_settings.find("modLoadOrder");
+	g_customModOrder = orderIt != g_settings.end() && orderIt->is_array();
+	if (g_customModOrder) {
+		// Mods named in the saved order first, in that order; mods found since keep discovery order at the end
+		std::vector<ModInfo> ordered;
+		for (const auto& id : *orderIt) {
+			if (!id.is_string()) continue;
+			auto mod = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& m) { return m.id == id.get<std::string>(); });
+			if (mod != mods.end()) {
+				ordered.push_back(std::move(*mod));
+				mods.erase(mod);
+			}
+		}
+		for (auto& mod : mods)
+			ordered.push_back(std::move(mod));
+		mods = std::move(ordered);
+
+		g_fileGroups.push_back(std::move(base));
+		for (auto& mod : mods) {
+			FileGroup group{ mod.id };
+			AddModSources(mod, group);
+			for (auto& src : group.sources) mod.newestTime = std::max(mod.newestTime, src->newestTime());
+			if (mod.enabled)
+				g_fileGroups.push_back(std::move(group));
+		}
+	}
+	else {
+		for (auto& mod : mods) {
+			FileGroup scratch;
+			AddModSources(mod, scratch);
+			for (auto& src : scratch.sources) mod.newestTime = std::max(mod.newestTime, src->newestTime());
+			if (mod.enabled)
+				for (auto& src : scratch.sources)
+					base.sources.push_back(std::move(src));
+		}
+		// Shown in the menu in order of their newest file: the effective order when files compete by timestamp
+		std::stable_sort(mods.begin(), mods.end(), [](const ModInfo& a, const ModInfo& b) { return a.newestTime < b.newestTime; });
+		g_fileGroups.push_back(std::move(base));
+	}
+	g_mods = std::move(mods);
+
+	printf("File system: data.bcp + %zu mod(s), %s order\n", g_mods.size(), g_customModOrder ? "custom" : "original (newest file wins)");
+	for (const auto& mod : g_mods)
+		printf("  [%c] %s (%s)\n", mod.enabled ? 'x' : ' ', mod.id.c_str(), mod.kind.c_str());
+}
+
+const std::vector<ModInfo>& GetMods()
+{
+	return g_mods;
+}
+
+bool IsCustomModLoadOrder()
+{
+	return g_customModOrder;
+}
+
+void ApplyModConfiguration(const std::vector<ModInfo>& mods, bool customOrder)
+{
+	nlohmann::json disabled = nlohmann::json::array(), order = nlohmann::json::array();
+	for (const auto& mod : mods) {
+		if (!mod.enabled) disabled.push_back(mod.id);
+		order.push_back(mod.id);
+	}
+	g_settings["disabledMods"] = disabled;
+	if (customOrder)
+		g_settings["modLoadOrder"] = order;
+	else
+		g_settings.erase("modLoadOrder");
+	SaveSettings();
+	InitFileSystem();
+}
+
+std::string DescribeFileSource(const char* fn)
+{
+	FileSource* src = FindFileSource(fn);
+	return src ? src->description : std::string();
+}
+
+void LoadBCP(const char *fn)
+{
+	InitFileSystem();
+}
+
 void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 {
-	BCPReader *bp = GetBCPWithMostRecentFile(fn);
-	if(bp) if(bp->loadFile(fn, out, outsize, extraBytes)) return;
+	if (FileSource* src = FindFileSource(fn))
+		if (src->load(fn, out, outsize, extraBytes))
+			return;
 
-	// File not found in the BCPs. Find it in the "data", "saved" and "redata" directories.
+	// Not in data.bcp or a mod. Find it in the "saved" and "redata" directories.
 	const auto u8fn = PathFromUtf8(portablePath(fn));
-	FILE *sf = 0;
-	if(g_allowDataDirectory)
-	{
-		sf = FsOpen(g_gamePath / "data" / u8fn, "rb");
-	}
-	if(!sf)
-	{
-		sf = FsOpen(g_gamePath / "saved" / u8fn, "rb");
-	}
+	FILE *sf = FsOpen(g_gamePath / "saved" / u8fn, "rb");
 #ifdef _WIN32
 	if (!sf)
 		if(HRSRC h = FindResourceA(NULL, fn, "REDATA"))
@@ -441,14 +732,12 @@ void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 
 int FileExists(const char *fn)
 {
-	//if(mainbcp->fileExists(fn)) return 1;
-	for(BCPReader *bcp : bcpacks)
-		if(bcp->fileExists(fn))
-			return 1;
+	if (FindFileSource(fn))
+		return 1;
 
 	const auto u8fn = PathFromUtf8(portablePath(fn));
 
-	// File not found in the BCPs. Find it in the "saved" and "redata" folder.
+	// Not in data.bcp or a mod. Find it in the "saved" and "redata" folder.
 	if (std::filesystem::exists(g_gamePath / "saved" / u8fn))
 		return 1;
 
@@ -459,11 +748,6 @@ int FileExists(const char *fn)
 
 	if (std::filesystem::exists("redata" / u8fn))
 		return 1;
-
-	if (g_allowDataDirectory) {
-		if (std::filesystem::exists(g_gamePath / "data" / u8fn))
-			return 1;
-	}
 
 	if (g_macFileNamesFallbackEnabled)
 		if (auto nfn = GetMacName(fn); !nfn.empty()) {
@@ -494,13 +778,9 @@ std::vector<std::string>* ListFiles(const char *dn, std::vector<std::string>* gs
 {
 	if(!gsl) gsl = new std::vector<std::string>;
 
-	//mainbcp->listFileNames(dn, gsl);
-	for (BCPReader* bcp : bcpacks)
-		bcp->listFileNames(dn, gsl);
-
-	if (g_allowDataDirectory) {
-		FindFiles(g_gamePath / "data" / dn / "*.*", gsl);
-	}
+	for (auto& group : g_fileGroups)
+		for (auto& src : group.sources)
+			src->listFiles(dn, gsl);
 
 	FindFiles(g_gamePath / "saved" / dn / "*.*", gsl);
 
@@ -510,8 +790,9 @@ std::vector<std::string>* ListFiles(const char *dn, std::vector<std::string>* gs
 std::vector<std::string>* ListDirectories(const char *dn)
 {
 	std::vector<std::string>* gsl = new std::vector<std::string>;
-	for (BCPReader* bcp : bcpacks)
-		bcp->listDirectories(dn, gsl);
+	for (auto& group : g_fileGroups)
+		for (auto& src : group.sources)
+			src->listDirectories(dn, gsl);
 	return gsl;
 }
 

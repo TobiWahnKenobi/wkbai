@@ -9,3 +9,5 @@
 extern nlohmann::json g_settings;
 
 void LoadSettings();
+// Writes g_settings back to wkconfig.json
+void SaveSettings();

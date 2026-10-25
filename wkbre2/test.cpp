@@ -947,6 +947,32 @@ void Test_PFRayTraversal() {
 	getchar();
 }
 
+// Mounts the file system, then prints the mods and, for every file name read from stdin
+// (until an empty line), the archive/folder it resolves to and its contents.
+// Driven by tests/test_vfs.py.
+void Test_VFS()
+{
+	LoadBCP("data.bcp");
+	printf("ORDER %s\n", IsCustomModLoadOrder() ? "custom" : "original");
+	for (const ModInfo& mod : GetMods())
+		printf("MOD %s|%s|%s|%d\n", mod.id.c_str(), mod.name.c_str(), mod.kind.c_str(), mod.enabled ? 1 : 0);
+	char line[512];
+	while (fgets(line, sizeof(line), stdin)) {
+		line[strcspn(line, "\r\n")] = 0;
+		if (!line[0])
+			break;
+		std::string content;
+		if (FileExists(line)) {
+			char* data; int size;
+			LoadFile(line, &data, &size);
+			content.assign(data, size);
+			free(data);
+		}
+		printf("RESOLVE %s|%s|%s\n", line, DescribeFileSource(line).c_str(), content.c_str());
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -967,6 +993,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Pathfinding, "Pathfinding"},
 {Test_ParticleSystem, "Particle system"},
 {Test_PFRayTraversal, "PF Ray Traversal"},
+{Test_VFS, "VFS (file system and mods)"},
 };
 
 void LaunchTest()

@@ -10,6 +10,8 @@
 #include <filesystem>
 #include "settings.h"
 #include "file.h"
+#include "util/util.h"
+#include <exception>
 #include <nlohmann/json.hpp>
 
 #include "interface/QuickStartMenu.h"
@@ -61,13 +63,12 @@ void LaunchQSM() {
 int main()
 //int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR cmdArgs, int showMode)
 {
+	// Unbuffered so redirected logs keep everything up to a crash
+	setvbuf(stdout, nullptr, _IONBF, 0);
 	printf("Welcome to wkbre2 ! :)\n\n");
 
 	LoadSettings();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
-	// Like the original game, also load every other *.bcp in the game folder (e.g. WKB_Plus.bcp);
-	// the most recent timestamp of a file wins.
-	g_allowBCPPatches = g_settings.value<bool>("allowBCPPatches", false);
 
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";
@@ -80,10 +81,16 @@ int main()
 		return -5;
 	}
 
-	if (g_settings.value<bool>("test", false))
-		LaunchTest();
-	else
-		LaunchQSM();
-	
+	try {
+		if (g_settings.value<bool>("test", false))
+			LaunchTest();
+		else
+			LaunchQSM();
+	}
+	catch (const std::exception& exc) {
+		// Report instead of terminating silently
+		ferr("Unhandled exception: %s", exc.what());
+	}
+
 	return 0;
 }

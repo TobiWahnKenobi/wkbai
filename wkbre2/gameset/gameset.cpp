@@ -6,6 +6,7 @@
 #include "../file.h"
 #include "../util/GSFileParser.h"
 #include "../tags.h"
+#include "../util/util.h"
 #include <vector>
 #include <string>
 #include <set>
@@ -463,8 +464,17 @@ void GameSet::parseFile(const char * fn, int pass)
 
 	for (std::string &lf : linkedFiles) {
 		std::string lfpath = "Warrior Kings Game Set\\" + lf;
-		if (!processedFiles.count(lfpath))
-			parseFile(lfpath.c_str(), pass);
+		if (processedFiles.count(lfpath))
+			continue;
+		if (!FileExists(lfpath.c_str())) {
+			// Usually mods that don't fit together in the current load order: skip and warn after loading
+			if (pass == 0) {
+				printf("WARNING: Linked game set file %s not found (linked from %s), skipping it\n", lfpath.c_str(), fn);
+				missingLinkedFiles.push_back(lfpath + " (linked from " + fn + ")");
+			}
+			continue;
+		}
+		parseFile(lfpath.c_str(), pass);
 	}
 
 	if (--callcount == 0)
@@ -535,6 +545,15 @@ void GameSet::load(const char * fn)
 	printf("Gameset pass 2...\n");
 	parseFile(fn, 1);
 	printf("Gameset loaded!\n");
+
+	if (!missingLinkedFiles.empty()) {
+		std::string msg = "These game set files are linked but missing, and were skipped:\n\n";
+		for (const std::string& missing : missingLinkedFiles)
+			msg += "- " + missing + "\n";
+		msg += "\nThe game may not work correctly. This usually means the active mods don't fit together "
+			"in the current load order. Try \"Use original order\" or disabling a mod in the Mods menu.";
+		ShowWarningDialog("Missing game set files", msg.c_str());
+	}
 }
 
 const GameObjBlueprint* GameSet::readObjBlueprintPtr(GSFileParser& gsf) const

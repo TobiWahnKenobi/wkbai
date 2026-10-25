@@ -85,12 +85,7 @@ namespace {
 
 QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 {
-	auto* gsl = ListFiles("Save_Games");
-	savegames = std::move(*gsl);
-	delete gsl;
-	if (!savegames.empty()) {
-		skirmishMenu.changeSettingsForLevel(savegames[0]);
-	}
+	refreshSaveGames();
 	//SoundPlayer::getSoundPlayer()->playMusic("Warrior Kings Game Set\\Sounds\\Music\\title_version_2.mp2");
 	
 	server = new Server;
@@ -111,10 +106,23 @@ QuickStartMenu::~QuickStartMenu()
 	closeDiscordRPC();
 }
 
+void QuickStartMenu::refreshSaveGames()
+{
+	auto* gsl = ListFiles("Save_Games");
+	savegames = std::move(*gsl);
+	delete gsl;
+	savselected = 0;
+	if (!savegames.empty()) {
+		skirmishMenu.changeSettingsForLevel(savegames[0]);
+	}
+}
+
 void QuickStartMenu::draw()
 {	
+	// Wide enough for the row of buttons below the list (a smaller size may be restored from imgui.ini)
+	ImGui::SetNextWindowSizeConstraints(ImVec2(400, 0), ImVec2(FLT_MAX, FLT_MAX));
 	ImGui::Begin("Select sav");
-	
+
 	ImGui::PushItemWidth(-1.0f);
 	ImVec2 boxSize = ImGui::GetContentRegionAvail();
 	boxSize.y -= ImGui::GetFrameHeightWithSpacing();
@@ -144,7 +152,14 @@ void QuickStartMenu::draw()
 	ImGui::SameLine();
 	if (ImGui::Button("Join"))
 		showJoinWnd = true;
+	ImGui::SameLine();
+	if (ImGui::Button("Mods"))
+		modMenu.open();
 	ImGui::End();
+
+	// Mods can add or replace levels, so list them again after a change
+	if (modMenu.draw())
+		refreshSaveGames();
 
 	if (showSkirmishWnd) {
 		ImGui::Begin("Skirmish settings", &showSkirmishWnd);

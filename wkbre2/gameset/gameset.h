@@ -125,6 +125,8 @@ struct GameSet
 	int version = 0;
 
 	IndexedStringList gsfFileList;
+	// LINK_GAME_SET targets that don't exist ("<file> (linked from <file>)"), skipped while loading
+	std::vector<std::string> missingLinkedFiles;
 
 	void parseFile(const char *fn, int pass);
 	void load(const char *fn);

@@ -39,6 +39,10 @@ static void WriteSettings()
 	}
 }
 
+void SaveSettings() {
+	WriteSettings();
+}
+
 void LoadSettings() {
 
 	if (!std::filesystem::exists(configPath)) {
