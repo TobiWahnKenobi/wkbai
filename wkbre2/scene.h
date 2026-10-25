@@ -46,6 +46,7 @@ struct Scene {
 	ModelCache *modelCache;
 
 	Vector3 sunDirection = Vector3(1,1,1);
+	uint32_t sunColor = 0xFFFFFF; // 0xRRGGBB
 
 	void add(SceneEntity *ent);
 	void clear();

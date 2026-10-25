@@ -24,7 +24,46 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <DbgHelp.h>
 #undef LoadBitmap
+#pragma comment(lib, "dbghelp.lib")
+
+// Prints the exception and a symbolized stack to stdout (the log of scripted runs), then lets
+// Windows handle the crash as usual.
+static LONG WINAPI PrintCrash(EXCEPTION_POINTERS* info)
+{
+	const EXCEPTION_RECORD* rec = info->ExceptionRecord;
+	printf("\nCRASH: exception 0x%08lX at %p", rec->ExceptionCode, rec->ExceptionAddress);
+	if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2)
+		printf(" (%s address %p)", rec->ExceptionInformation[0] ? "writing" : "reading", (void*)rec->ExceptionInformation[1]);
+	printf("\n");
+	HANDLE process = GetCurrentProcess();
+	SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+	SymInitialize(process, nullptr, TRUE);
+	CONTEXT ctx = *info->ContextRecord;
+	STACKFRAME64 frame{};
+	frame.AddrPC.Offset = ctx.Rip; frame.AddrPC.Mode = AddrModeFlat;
+	frame.AddrFrame.Offset = ctx.Rbp; frame.AddrFrame.Mode = AddrModeFlat;
+	frame.AddrStack.Offset = ctx.Rsp; frame.AddrStack.Mode = AddrModeFlat;
+	for (int i = 0; i < 32 && StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, GetCurrentThread(), &frame, &ctx, nullptr,
+		SymFunctionTableAccess64, SymGetModuleBase64, nullptr); i++) {
+		char buffer[sizeof(SYMBOL_INFO) + 256] = {};
+		SYMBOL_INFO* symbol = (SYMBOL_INFO*)buffer;
+		symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+		symbol->MaxNameLen = 255;
+		DWORD64 displacement = 0;
+		IMAGEHLP_LINE64 line{ sizeof(IMAGEHLP_LINE64) };
+		DWORD lineDisplacement = 0;
+		const bool hasSymbol = SymFromAddr(process, frame.AddrPC.Offset, &displacement, symbol);
+		const bool hasLine = SymGetLineFromAddr64(process, frame.AddrPC.Offset, &lineDisplacement, &line);
+		printf("  #%02d %s", i, hasSymbol ? symbol->Name : "?");
+		if (hasLine)
+			printf("  %s:%lu", line.FileName, line.LineNumber);
+		printf("\n");
+	}
+	fflush(stdout);
+	return EXCEPTION_CONTINUE_SEARCH;
+}
 #endif
 
 void LaunchTest();
@@ -65,6 +104,9 @@ int main()
 {
 	// Unbuffered so redirected logs keep everything up to a crash
 	setvbuf(stdout, nullptr, _IONBF, 0);
+#ifdef _WIN32
+	SetUnhandledExceptionFilter(PrintCrash);
+#endif
 	printf("Welcome to wkbre2 ! :)\n\n");
 
 	LoadSettings();

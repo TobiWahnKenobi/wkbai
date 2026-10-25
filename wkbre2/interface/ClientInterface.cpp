@@ -1292,8 +1292,10 @@ void ClientInterface::iter()
 				drawAttachmentPoints(&lsfx.second);
 			}
 		}
-		if (client->terrain)
+		if (client->terrain) {
 			scene->sunDirection = client->terrain->sunVector;
+			scene->sunColor = client->terrain->sunColor;
+		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))
 				sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);

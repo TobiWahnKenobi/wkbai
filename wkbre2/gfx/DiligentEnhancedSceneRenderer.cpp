@@ -52,7 +52,15 @@ cbuffer SunBuffer
 {
 	float3 SunDirection;
 	int BumpOn;
+	float4 SunColour;
 };
+
+// The original's mesh lighting (reverse-engineered, see docs/re/lighting.md): computed per
+// vertex on the CPU as ambient + diffuse * max(N.L, 0), clamped, then multiplied with the
+// texture. Ambient is a grey of 91/255; diffuse is the map's sun colour times an object
+// factor of 188/256.
+static const float AMBIENT = 91.0 / 255.0;
+static const float DIFFUSE_FACTOR = 188.0 / 256.0;
 
 cbuffer SceneBuffer
 {
@@ -89,7 +97,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 	}
 	else {
 		output.Norm = normalize(mul(float4(Normal * 2 - float3(1,1,1), 0), EntityTransform).xyz);
-		output.Color = float4( clamp((dot(output.Norm, normalize(SunDirection)) + 1.0) * 0.5, 160.0/255.0, 1.0) * float3(1,1,1), 1 );
+		float lambert = max(dot(output.Norm, normalize(SunDirection)), 0);
+		output.Color = float4(min(AMBIENT + DIFFUSE_FACTOR * SunColour.rgb * lambert, 1), 1);
 	}
 	output.Texcoord = Texcoord;
 	output.Fog = clamp((output.Pos.w-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
@@ -248,7 +257,7 @@ void DiligentEnhancedSceneRenderer::init()
 	IRenderDevice* device = dgfx->device;
 
 	BufferDesc cbDesc;
-	cbDesc.Size = 16;
+	cbDesc.Size = 32;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -356,8 +365,13 @@ void DiligentEnhancedSceneRenderer::render()
 
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 16);
+	memset(mapped, 0, 32);
 	*(Vector3*)mapped = scene->sunDirection.normal();
+	float* sunColour = (float*)mapped + 4;
+	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
+	sunColour[1] = ((scene->sunColor >> 8) & 255) / 255.0f;
+	sunColour[2] = (scene->sunColor & 255) / 255.0f;
+	sunColour[3] = 1.0f;
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	auto getBinding = [&](texture tex) -> IShaderResourceBinding* {

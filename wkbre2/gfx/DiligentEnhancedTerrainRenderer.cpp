@@ -95,7 +95,11 @@ float4 PS(VS_OUTPUT input) : SV_Target
 
 	float4 tex = inpTexture.Sample(inpSampler, fuv);
 
-	float lum = 0.2;
+	// The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the
+	// per-vertex light vector (the sun direction in tangent space, shortened where static and
+	// cloud shadows fall) dotted with the normal map, clamped, times the texture.
+	// See docs/re/lighting.md.
+	float lum = 0;
 
 	if(BumpOn) {
 		float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
