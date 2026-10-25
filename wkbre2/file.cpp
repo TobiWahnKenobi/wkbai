@@ -391,7 +391,7 @@ void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 	if(bp) if(bp->loadFile(fn, out, outsize, extraBytes)) return;
 
 	// File not found in the BCPs. Find it in the "data", "saved" and "redata" directories.
-	const auto u8fn = std::filesystem::u8path(portablePath(fn));
+	const auto u8fn = PathFromUtf8(portablePath(fn));
 	FILE *sf = 0;
 	if(g_allowDataDirectory)
 	{
@@ -446,7 +446,7 @@ int FileExists(const char *fn)
 		if(bcp->fileExists(fn))
 			return 1;
 
-	const auto u8fn = std::filesystem::u8path(portablePath(fn));
+	const auto u8fn = PathFromUtf8(portablePath(fn));
 
 	// File not found in the BCPs. Find it in the "saved" and "redata" folder.
 	if (std::filesystem::exists(g_gamePath / "saved" / u8fn))
@@ -481,7 +481,7 @@ void FindFiles(const std::filesystem::path& filter, std::vector<std::string>* gs
 	if(hf == INVALID_HANDLE_VALUE) return;
 	do {
 		if (!(fnd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-			auto upath = std::filesystem::path(fnd.cFileName).u8string();
+			auto upath = PathToUtf8(std::filesystem::path(fnd.cFileName));
 			if (std::find_if(gsl->begin(), gsl->end(), [&](const std::string& s) { return !StrCICompare(s, upath); }) == gsl->end()) {
 				gsl->push_back(std::move(upath));
 			}

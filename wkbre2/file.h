@@ -56,6 +56,16 @@ public:
 extern std::filesystem::path g_gamePath;
 extern bool g_allowBCPPatches, g_allowDataDirectory, g_macFileNamesFallbackEnabled;
 
+// UTF-8 conversions between std::string and paths. In C++20, path::u8string() returns
+// std::u8string and std::filesystem::u8path is deprecated.
+inline std::filesystem::path PathFromUtf8(const std::string& str) {
+	return std::filesystem::path(std::u8string(str.begin(), str.end()));
+}
+inline std::string PathToUtf8(const std::filesystem::path& path) {
+	std::u8string u8 = path.u8string();
+	return std::string(u8.begin(), u8.end());
+}
+
 void LoadBCP(const char *fn);
 void LoadFile(const char *fn, char **out, int *outsize, int extraBytes = 0);
 //void TestBCP();

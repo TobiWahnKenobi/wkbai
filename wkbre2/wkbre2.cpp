@@ -64,14 +64,14 @@ int main()
 	printf("Welcome to wkbre2 ! :)\n\n");
 
 	LoadSettings();
-	g_gamePath = std::filesystem::u8path(g_settings.value<std::string>("gamePath", "."));
+	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
 	// Like the original game, also load every other *.bcp in the game folder (e.g. WKB_Plus.bcp);
 	// the most recent timestamp of a file wins.
 	g_allowBCPPatches = g_settings.value<bool>("allowBCPPatches", false);
 
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";
-		message += std::filesystem::absolute(g_gamePath).u8string();
+		message += PathToUtf8(std::filesystem::absolute(g_gamePath));
 		message += "\n\nYou can also change the entire path in the configuration file \"wkconfig.json\".";
 		printf("%s\n", message.c_str());
 #ifdef _WIN32
