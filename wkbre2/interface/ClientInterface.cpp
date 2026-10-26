@@ -34,6 +34,8 @@
 #include "../gfx/TerrainSpriteContainer.h"
 #include "../gfx/TerrainSpriteRenderer.h"
 #include "../gfx/bitmap.h"
+#include "../Mesh.h"
+#include "../file.h"
 
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
@@ -225,8 +227,36 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		float t = (cam.position.y - groundY) / -cam.direction.y;
 		lookAt = cam.position + cam.direction * t;
 	}
-	const float viewHalf = std::max(10.0f, cam.position.y - terrain->getHeight(cam.position.x, cam.position.z));
-	drawList->AddRect(toMinimap(lookAt.x - viewHalf, lookAt.z + viewHalf), toMinimap(lookAt.x + viewHalf, lookAt.z - viewHalf), IM_COL32(255, 255, 255, 220));
+	// The camera marker of the original: the flat mesh Interface\Mini_Map_Arrow4.mesh3 (tip at
+	// +y), placed at the camera's position and pointing along its view. Its size follows the
+	// minimap's (one mesh unit ≈ 0.16 of the side, measured on the original's frame).
+	static const std::vector<Vector3> arrowTriangles = [] {
+		std::vector<Vector3> tris;
+		const char* path = "Interface\\Mini_Map_Arrow4.mesh3";
+		if (!FileExists(path))
+			return tris;
+		Mesh mesh(path);
+		for (size_t g = 0; g < mesh.polyLists[0].groups.size() && g < mesh.groupIndices.size(); g++)
+			for (const auto& tri : mesh.polyLists[0].groups[g].tupleIndex)
+				for (uint16_t t : tri)
+					tris.push_back(*(const Vector3*)(mesh.vertices.data() + 3 * mesh.groupIndices[g][t].vertex));
+		return tris;
+	}();
+	float forwardX = cam.direction.x, forwardZ = cam.direction.z;
+	const float forwardLen = std::sqrt(forwardX * forwardX + forwardZ * forwardZ);
+	if (forwardLen > 1e-4f && !arrowTriangles.empty()) {
+		forwardX /= forwardLen; forwardZ /= forwardLen;
+		const float unit = 0.16f * std::min(w, h);
+		const ImVec2 origin = toMinimap(cam.position.x, cam.position.z);
+		// Screen axes: forward is the view direction (minimap y grows southwards), right is
+		// 90° clockwise from it.
+		const ImVec2 sf(forwardX * unit, -forwardZ * unit), sr(forwardZ * unit, forwardX * unit);
+		auto toScreen = [&](const Vector3& v) { return ImVec2(origin.x + v.x * sr.x + v.y * sf.x, origin.y + v.x * sr.y + v.y * sf.y); };
+		drawList->PushClipRect(p0, p1, true);
+		for (size_t i = 0; i + 2 < arrowTriangles.size(); i += 3)
+			drawList->AddTriangleFilled(toScreen(arrowTriangles[i]), toScreen(arrowTriangles[i + 1]), toScreen(arrowTriangles[i + 2]), IM_COL32(255, 255, 255, 255));
+		drawList->PopClipRect();
+	}
 
 	// Click or drag on the minimap: move the camera so it looks at that point
 	const bool hovered = g_mouseX >= x && g_mouseX < x + w && g_mouseY >= y && g_mouseY < y + h;
