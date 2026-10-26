@@ -1,146 +1,122 @@
-# wkbre2
+# wkbre2 — modernization fork
 
-An open-source engine reimplementation for Warrior Kings (Battles), a Real-Time Strategy game
-developed by Black Cactus and released in 2002/2003, now with multiplayer support!
+> **This is a fork of [AdrienTD/wkbre2](https://github.com/AdrienTD/wkbre2)**, the open-source engine
+> reimplementation of Warrior Kings and Warrior Kings: Battles (Black Cactus, 2002/2003).
+> This fork is developed **with AI assistance (Claude) and reverse engineering of the original game**.
+> The original executable is analysed (Ghidra, disassembly, Direct3D call traces, side-by-side captures)
+> to find out how the original renders and behaves, and wkbre2 is then changed to match it or to improve on it.
+> All credit for wkbre2 itself goes to AdrienTD and its contributors.
+>
+> The work happens on the `modernization` branch. No code or assets of the original game are included:
+> you need your own copy of the game.
 
-This is an early development in progress. It's still not completely playable.
+![A town in a campaign save, rendered by this fork](docs/screenshot-town.jpg)
 
-Currently works on Windows as well as on Ubuntu!
+*The stress-test scene: a campaign save with about 4,850 objects in view, drawn with Direct3D 12.*
 
-[Small demo video on YouTube:](https://youtu.be/WBQn7A8Gpwg)
+![The whole map of the same save without fog](docs/screenshot-map.jpg)
 
-[![wkbre2 Video Demo](https://img.youtube.com/vi/WBQn7A8Gpwg/0.jpg)](https://youtu.be/WBQn7A8Gpwg)
+## What this fork changes
 
+Compared with upstream wkbre2:
 
-## Why?
+- **Renderer**
+  - [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore) with **Direct3D 12 and Vulkan**. The old Direct3D 9/11 and OpenGL renderers are gone, and a null renderer remains for tests.
+- **Faithful look, from reverse engineering the original**
+  - **Lighting:** the original's model and terrain lighting.
+  - **Shadows:** the original's static building shadows, scrolling cloud shadows and unit blob shadows.
+  - **Sky and fog:** the sky cube with its horizon fade, the fog distances, and an edge fog that hides the map border.
+  - **Water:** a water surface with scrolling texture layers, ripples and a sun glint.
+  - **Models:** `SHEAR_MODEL` models adapt to sloped ground.
+- **Gameplay and interface**
+  - **Minimap:** player dots, the camera arrow and the four mode buttons.
+  - **Camera:** limits on pitch and height, and Shift to scroll faster.
+  - **Order flags:** a flag marks the target of an order.
+  - **Deleting:** the Delete key destroys the selected object, with its death animation.
+- **Performance**
+  - **Terrain:** drawn in chunks, with water in a single draw call.
+  - **Loading:** models are prepared at level start, so new parts of the map no longer stutter into view.
+  - **Shadows on the GPU:** blob shadows are drawn on the GPU.
+  - **Scene building:** cheaper per-object work.
+  - **Result:** the stress test above runs in about 4.3 ms per frame (was 8.0 ms).
+- **Engine**
+  - **Toolchain:** x64, C++20 and SDL 3, built with a vcpkg manifest and Windows CI.
+  - **Profiling:** a Tracy profiler client and a benchmark mode with frame-time reports.
+- **Mods**
+  - **File system:** a layered file system that follows the original's archive rules (the newest timestamp wins).
+  - **Mod folders:** mod folders with `mod.json`, and a Mods menu to enable them and change their load order.
+- **Robustness**
+  - **Scripts:** the game-set parser stays in sync on unimplemented keywords.
+  - **Missing files:** broken mod combinations no longer crash.
+- **Settings:** a temporary settings window on **F10** for the view distance, fog, field of view, colour grading, shadows, water and camera speed.
 
-Maybe you already know me and have heard about **wkbre**, which was my first attempt at making
-an engine reimplementation of WK that I made a while ago.
+## Status
 
-It would open the game files and read the game assets (unit definitions, models, ...) to let you 
-see a savegame and edit it. It also was able to let you play the game in it, even though it was
-very limited, and was especially designed to only work in single player.
+The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase: 4, the modern renderer**, starting with a mode that looks like the original. **Next:** the main menu, the Settings menu and the in-game Esc menu, then bugs found in play-testing.
 
-For wkbre I mainly focused on the "map editor" aspects, so that players could finally
-make their own custom maps, as the original engine didn't really have a map editor (there
-is a hidden map editor in the original game, but it was buggy and limited to terrain editing,
-and the devs didn't have the opportunity to finish it).
+| Phase | Progress | Done | Open |
+|---|---|---|---|
+| 0 Setup | 4/7 | Repository, toolchain, Ghidra connected | DXVK quick win, baseline captures |
+| 1 Asset formats | 2/4 | BCP archive reader/writer, round-trip tests | Format specs, asset inventory |
+| 2 Binary reverse engineering (ongoing) | 4/7 | Class hierarchy (RTTI), script keyword coverage, file system | Pathfinding, combat and AI; differential tests |
+| 3 Engine foundation | 6/6 | Fork, CI, x64/C++20/SDL 3, layered file system, renderer choice, profiler | — |
+| **4 Modern renderer** (current) | 1/8 | Diligent (D3D12/Vulkan) | Faithful mode (in progress), GPU skinning and culling, PBR, lighting and effects, splat-map terrain, glTF/KTX2, UI scaling |
+| 5 Gameplay parity | 2/7 | WKB Plus evaluated, minimap | Menus, play-test bugs, script gaps, deterministic simulation, original engine bugs |
+| 6 Map editor | 0/3 | — | Port the wkbre editor, new map format, undo and play-testing |
+| 7 Modding | 1/4 | Mod package format | Overrides, hot reload, modding docs |
+| 8 AI overhaul | 0/4 | — | Reverse-engineer the original AI, new strategic and tactical layers |
+| 9 Release | 0/1 | — | Launcher and packaging |
 
-Now, why a second engine reimplementation? The reason is because the code of the first wkbre
-didn't age well. I made it around 6 years ago, I was only 16, back then I just
-started programming in C++, as before I only did C, and that shows xD. There's a lot of bad code:
-very short variable names, a lot of global variables and functions... :yuck:
-
-Additionally, the original engine also starts to have its issues: random crashes on big games,
-performance issues, pathfinding of units stop working, graphics issues on modern GPUs, and more...
-And fans who work on mods on the game also realise its limitations, such as model and texture
-size restrictions which stop them from implementing what they would like to see in their mods.
-
-Thus, there is a need for a new engine replacement that could solve all issues the original engine has,
-as well as add improvements such as QoL features and better mod support.
-
-## How?
-
-This project is an engine recreation. That means it basically tries to imitate the original engine
-by loading the exact same asset and script files from the original.
-
-WK uses a set of script files named the **game set**, which are files that define all the types of units
-(characters, buildings) as well as the scripting for the game mechanics, commands and orders in the game.
-What is nice about the game set is that, once extracted from the data.bcp archive file,
-all the game set files are text-based, which makes reverse engineering and modding a lot easier. 
-
-The goal of the new engine is to actually load the definitions and interpret the scripts
-in the game set, similar to for example ScummVM which interprets scripting languages of several
-adventure games, but here we have a 3D RTS game instead. this way the new engine already supports
-nearly all mechanics of the game without having to reimplement them from scratch, saving
-lots of time in making a "new" WK.
-
-One catch though is that by reusing the game set, the new engine might become close to
-the original engine. One might think this could bring back design flaws and bugs the original
-had. However, I do believe that with few improvements to the design and game set, as well
-as bugfix mods to the game set files, we could fix all of the issues and bring the game up to "modern standards".
-
-## Architecture
-
-For the original engine, as the game has to support multi-player, the devs knew that
-multi-player had to be taken in consideration during early development if they wanted
-a good network implementation, unlike lots of other games where multi-player is added at the end
-of development which could cause lots of issues if the devs realize that what they have done so far
-wasn't well designed for multi-player.
-
-The devs opted for a **client-server architecture**. The game is actually split into
-two separate programs: the **server** handles all the game logic processing and state of a game,
-whereas the **client** is only a way for the player to see a *preview* of the server's game
-(locations of units, buildings) and send *commands* to the server (issue orders to a unit).
-Every time something changes in the game, like a unit spawned, the server will send a notification
-to all clients describing what happened, and the clients register that to update the player's view.
-Because the server is the only one who maintains the main state of the game, and that
-all unit orders have to pass through the server, the integrity of the game is maintained
-and cheating can be prevented by having the server check the client's order validity before
-accepting it.
-
-For the new engine, I decided to stick with the same architecture, since I believe the
-current architecture is already good enough and I don't see better alternatives. One
-disadvantage of client-server architecture is that it might need more network traffic,
-but we need to consider that the game was released in 2003 and some people already managed
-to play multiplayer back then, and I do hope that since then until 2021 people have better
-Internet connections now. xD
-
-Additionally, there is one advantage for single-player and the multi-player host:
-As the server and client are separate programs, we can run them both at the same,
-each having their own thread. This means that if you have a dual-core CPU, which are already
-common since the mid 2000's, both server and client can run at the same time, each on their
-own core, which could improve the game's performance significantly.
-The server on one core would do all the game logic, pathfinding, ... and the client on
-the other core would do the rendering of the scene. This means it is possible to keep a
-good framerate even during local server lags, and no lags in game logic during heavy rendering.
-
-For graphics rendering, this fork uses [Diligent Engine](https://github.com/DiligentGraphics/DiligentCore)
-with Direct3D 12 or Vulkan (`"diligentBackend"` in wkconfig.json). The former Direct3D 9,
-Direct3D 11 and OpenGL renderers were removed; a "null" renderer that draws nothing remains for tests.
-Each part of the rendering process (scene, terrain, particles) has a "default"
-implementation that works through the generic renderer interface, and the "enhanced"
-scene and terrain renderers (lighting, bump mapping) draw with Diligent directly.
+**Known issues from play-testing:**
+- **Building placement:** buildings can be placed on top of other buildings.
+- **Formations:** they move as one block, without animations.
+- **Guarding:** a unit told to guard another walks into it instead of keeping its distance.
+- **Range circles:** they are missing.
+- **Rally flag:** selecting a building doesn't show its rally flag.
 
 ## Usage
- - [Download a build](https://github.com/AdrienTD/wkbre2/releases) and extract the zip.
- - Open the **wkconfig.json** file and change:
-   - **game_path** to the location of the folder where the game is installed
-     (where data.bcp is present, double black-slashes \\\\ are important!)
-   - **gameVersion** to 1 if the located game is the first **Warrior Kings**,
-     2 if it is the second **Warrior Kings Battles**.
- - Launch wkbre2
 
-**NOTE**: If the program crashes right at the start without any error, ensure that
-**wkconfig.json** doesn't have any syntax errors (missing commas, quotes, braces, ...).
+- Build the `modernization` branch (see below). Windows only for now: the Diligent renderer still needs a Linux window path.
+- Create **wkconfig.json** next to the executable, or edit it if it is already there:
+  - **gamePath:** the folder where the game is installed, the one that contains data.bcp. Write each backslash twice (`\\`).
+  - **gameVersion:** 1 for **Warrior Kings**, 2 for **Warrior Kings: Battles**.
+  - **diligentBackend:** optionally, `"d3d12"` (the default) or `"vulkan"`.
+- Launch wkbre2. Press **F10** in game for the settings window.
+
+**Note:** if the program closes at startup without an error, check **wkconfig.json** for syntax errors (missing commas, quotes or braces).
 
 ## Compiling
 
-You need a C++ compiler that complies to the C++17 standard.
-On Windows, it will work with Visual Studio 2019 and later versions (though VS 2022 is recommended).
+You need:
+- Visual Studio 2022 or later, with C++20;
+- [CMake](https://cmake.org/);
+- [vcpkg](https://vcpkg.io).
 
-This project uses [CMake](https://cmake.org/) to generate the projects/makefiles that can build wkbre2.
+The dependencies come from the `vcpkg.json` manifest. Diligent Engine is fetched by CMake.
 
-The dependencies needed to build the project can be easily installed via [vcpkg](https://vcpkg.io), which works on both Windows and Linux.
-
-The following packages need to be installed via `vcpkg install`:
- - bzip2
- - enet
- - lua
- - mpg123
- - nlohmann-json
- - openal-soft
- - sdl2
- - sol2
- - stb
-
-On Windows, if you use Visual Studio, then you can open the root folder of this repository as a CMake project, and compile the project.
-
-Otherwise it is possible to generate from the command line as follows:
 ```
-cd <wkbre2 repository path>
-mkdir build
-cd build
-cmake .. -DCMAKE_TOOLCHAIN_FILE=<vcpkg root folder>/scripts/buildsystems/vcpkg.cmake
+cmake -S . -B build -A x64 -DCMAKE_TOOLCHAIN_FILE=<vcpkg root>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build build --config RelWithDebInfo
 ```
-On Linux, by default it will generate a Makefile, with which you can build wkbre2 with the `make` command.
+
+---
+
+## About wkbre2 (from the upstream README)
+
+wkbre2 is an engine recreation: it loads the original game's own asset and script files. The original
+game uses a set of text-based script files, the **game set**, that define all units, buildings, game mechanics,
+commands and orders. wkbre2 interprets this game set, much as ScummVM interprets the scripts of adventure games.
+This way it supports nearly all of the game's mechanics without reimplementing them from scratch.
+
+Like the original engine, wkbre2 has a **client-server architecture**:
+- the **server** runs all game logic and holds the state of the game;
+- each **client** shows the player a view of that state and sends the player's commands to the server.
+
+This architecture is what makes multiplayer possible. In single player, the server and the client run on
+separate threads, so the game logic and the rendering don't slow each other down.
+
+See [AdrienTD/wkbre2](https://github.com/AdrienTD/wkbre2) for the original project, its history and its releases.
+
+## License
+
+GPL-3.0, as upstream: see [LICENSE](LICENSE).
