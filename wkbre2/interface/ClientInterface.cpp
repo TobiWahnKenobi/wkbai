@@ -185,26 +185,25 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	const ImVec2 p0((float)x, (float)y), p1((float)(x + w), (float)(y + h));
 	// Image row 0 is the north edge (largest z) of the playable area
 	const auto [areaWidth, areaDepth] = terrain->getPlayableArea();
-	if (minimapTexture) {
-		// A non-square map is letterboxed in the square image (dark bars at the sides, e.g.
-		// Sutherlands Siege, 150x250 tiles): show only the map part, so that it fills the
-		// minimap like the objects drawn on it.
-		ImVec2 uv0(0, 0), uv1(1, 1);
-		if (areaWidth < areaDepth) {
-			const float half = 0.5f * areaWidth / areaDepth;
-			uv0.x = 0.5f - half; uv1.x = 0.5f + half;
-		}
-		else if (areaDepth < areaWidth) {
-			const float half = 0.5f * areaDepth / areaWidth;
-			uv0.y = 0.5f - half; uv1.y = 0.5f + half;
-		}
-		drawList->AddImage(minimapTexture, p0, p1, uv0, uv1);
-	}
+	if (minimapTexture)
+		drawList->AddImage(minimapTexture, p0, p1);
 	else
 		drawList->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 255));
 
+	// A non-square map is letterboxed in the square image, centred with dark bars (e.g.
+	// Sutherlands Siege, 150x250 tiles), and the original shows it that way: the map part is
+	// this rectangle of the widget.
+	float mapX = (float)x, mapY = (float)y, mapW = (float)w, mapH = (float)h;
+	if (areaWidth < areaDepth) {
+		mapW = w * areaWidth / areaDepth;
+		mapX = x + (w - mapW) * 0.5f;
+	}
+	else if (areaDepth < areaWidth) {
+		mapH = h * areaDepth / areaWidth;
+		mapY = y + (h - mapH) * 0.5f;
+	}
 	auto toMinimap = [&](float px, float pz) {
-		return ImVec2(x + std::clamp(px / areaWidth, 0.0f, 1.0f) * w, y + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * h);
+		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
 
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
@@ -279,8 +278,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	// Click or drag on the minimap: move the camera so it looks at that point
 	const bool hovered = g_mouseX >= x && g_mouseX < x + w && g_mouseY >= y && g_mouseY < y + h;
 	if (hovered && g_mouseDown[SDL_BUTTON_LEFT]) {
-		float targetX = (float)(g_mouseX - x) / w * areaWidth;
-		float targetZ = (1.0f - (float)(g_mouseY - y) / h) * areaDepth;
+		// in the map part; a click on the bars goes to the nearest map edge
+		float targetX = std::clamp((g_mouseX - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
+		float targetZ = (1.0f - std::clamp((g_mouseY - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
 		client->camera.position.x += targetX - lookAt.x;
 		client->camera.position.z += targetZ - lookAt.z;
 	}
