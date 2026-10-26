@@ -29,6 +29,8 @@ function CCUI_PerFrame()
 	drawImage(getWindowWidth()-345, getWindowHeight()-343, 345, 343, "Interface/InGame/Bottom_Right_Panel.tga")
 	-- Minimap inside the panel's inner frame (pixels 53-287 x 53-286 of Bottom_Right_Panel.tga)
 	drawMinimap(getWindowWidth()-345+53, getWindowHeight()-343+53, 235, 234)
+	-- Military / civilian / resource toggles and the peasant activity button around it
+	drawMinimapButtons(getWindowWidth()-345, getWindowHeight()-343)
 
 
 	-- Top Panel Information

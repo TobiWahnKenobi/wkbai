@@ -109,6 +109,10 @@ struct GameObjBlueprint {
 	// DISPLAY_ON_MINIMAP. Default inferred from the shipped game set: it only ever sets 0 on
 	// characters and buildings and 1 on containers and props (not verified in the exe yet).
 	bool displayOnMinimap = false;
+	// MINIMAP_DISPLAY_CATEGORY MILITARY / ECONOMIC / RESOURCE (several allowed): which of the
+	// minimap's display toggles show the object. 0 = always shown.
+	enum { MINIMAP_MILITARY = 1, MINIMAP_ECONOMIC = 2, MINIMAP_RESOURCE = 4 };
+	uint8_t minimapCategories = 0;
 
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);
 	void init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet);

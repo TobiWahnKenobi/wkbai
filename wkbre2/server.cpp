@@ -1583,7 +1583,15 @@ void Server::tick()
 			}
 			case NETSRVMSG_TERMINATE_OBJECT: {
 				if (ServerGameObject* obj = findObject(br.readUint32())) {
-					deleteObject(obj);
+					// As the original's Delete key: send the game set's "Die" event, which runs
+					// the death sequence (death animation; for buildings the explosion, the
+					// ruin and then the termination, Mechanics/Death.cpp). Without that event
+					// the object is removed at once.
+					const int dieEvent = gameSet->events.names.getIndex("Die");
+					if (dieEvent >= 0)
+						obj->sendEvent(dieEvent, obj);
+					else
+						deleteObject(obj);
 				}
 				break;
 			}

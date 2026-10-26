@@ -332,6 +332,12 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}
+		else if (strtag == "MINIMAP_DISPLAY_CATEGORY") {
+			const std::string category = gsf.nextString();
+			if (category == "MILITARY") minimapCategories |= MINIMAP_MILITARY;
+			else if (category == "ECONOMIC") minimapCategories |= MINIMAP_ECONOMIC;
+			else if (category == "RESOURCE") minimapCategories |= MINIMAP_RESOURCE;
+		}
 		gsf.advanceLine();
 	}
 	// If there are no subtypes, make a Default subtype with one Default appearance

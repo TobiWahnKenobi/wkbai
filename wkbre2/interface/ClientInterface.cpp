@@ -182,13 +182,26 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 
 	ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 	const ImVec2 p0((float)x, (float)y), p1((float)(x + w), (float)(y + h));
-	if (minimapTexture)
-		drawList->AddImage(minimapTexture, p0, p1);
+	// Image row 0 is the north edge (largest z) of the playable area
+	const auto [areaWidth, areaDepth] = terrain->getPlayableArea();
+	if (minimapTexture) {
+		// A non-square map is letterboxed in the square image (dark bars at the sides, e.g.
+		// Sutherlands Siege, 150x250 tiles): show only the map part, so that it fills the
+		// minimap like the objects drawn on it.
+		ImVec2 uv0(0, 0), uv1(1, 1);
+		if (areaWidth < areaDepth) {
+			const float half = 0.5f * areaWidth / areaDepth;
+			uv0.x = 0.5f - half; uv1.x = 0.5f + half;
+		}
+		else if (areaDepth < areaWidth) {
+			const float half = 0.5f * areaDepth / areaWidth;
+			uv0.y = 0.5f - half; uv1.y = 0.5f + half;
+		}
+		drawList->AddImage(minimapTexture, p0, p1, uv0, uv1);
+	}
 	else
 		drawList->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 255));
 
-	// Image row 0 is the north edge (largest z) of the playable area
-	const auto [areaWidth, areaDepth] = terrain->getPlayableArea();
 	auto toMinimap = [&](float px, float pz) {
 		return ImVec2(x + std::clamp(px / areaWidth, 0.0f, 1.0f) * w, y + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * h);
 	};
@@ -206,6 +219,10 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			for (CommonGameObject* child : children)
 				self((ClientGameObject*)child, self);
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
+			return;
+		// Hidden when all its display categories are toggled off
+		const uint8_t categories = obj->blueprint->minimapCategories;
+		if (categories && !(categories & ~minimapHiddenCategories))
 			return;
 		CommonGameObject* player = obj->getPlayer();
 		int color = player ? player->color : 0;
@@ -267,6 +284,50 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		client->camera.position.z += targetZ - lookAt.z;
 	}
 	return hovered;
+}
+
+// The original's minimap panel (CMinimapPanel) has four buttons on the arcs around the map:
+// military units (left), civilian units (bottom), resources (right), each toggling that
+// MINIMAP_DISPLAY_CATEGORY on the map, and the peasant activity interface (top, not
+// implemented yet, drawn greyed out). A toggled-off category shows the "Depressed" image.
+// Positions in Bottom_Right_Panel.tga found by matching the images against the panel.
+bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
+{
+	struct MinimapButton {
+		const char* image;
+		int x, y;
+		uint8_t category;
+		Bitmap mask; // alpha of the image, for hit tests on the arc
+		texture tex = nullptr;
+	};
+	static MinimapButton buttons[] = {
+		{ "Interface\\InGame\\Military Mini Map Button Depressed.tga", 7, 67, GameObjBlueprint::MINIMAP_MILITARY },
+		{ "Interface\\InGame\\Economic Mini Map Button Depressed.tga", 72, 294, GameObjBlueprint::MINIMAP_ECONOMIC },
+		{ "Interface\\InGame\\Resource Mini Map Button Depressed.tga", 294, 70, GameObjBlueprint::MINIMAP_RESOURCE },
+		{ "Interface\\InGame\\Statistics Mini Map Button Grey.tga", 71, 7, 0 },
+	};
+	ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+	bool hoveredAny = false;
+	for (MinimapButton& button : buttons) {
+		if (!button.tex) {
+			if (!FileExists(button.image))
+				continue;
+			button.mask = Bitmap::loadBitmap(button.image).convertToR8G8B8A8();
+			button.tex = gfx->CreateTexture(button.mask, 1);
+		}
+		const int lx = g_mouseX - (panelX + button.x), ly = g_mouseY - (panelY + button.y);
+		const bool hovered = lx >= 0 && ly >= 0 && lx < button.mask.width && ly < button.mask.height
+			&& button.mask.pixels[4 * (ly * button.mask.width + lx) + 3] >= 128;
+		hoveredAny |= hovered;
+		if (hovered && button.category && g_mousePressed[SDL_BUTTON_LEFT])
+			minimapHiddenCategories ^= button.category;
+		const bool depressed = button.category ? (minimapHiddenCategories & button.category) != 0 : true;
+		if (depressed) {
+			const ImVec2 p0((float)(panelX + button.x), (float)(panelY + button.y));
+			drawList->AddImage(button.tex, p0, ImVec2(p0.x + button.mask.width, p0.y + button.mask.height));
+		}
+	}
+	return hoveredAny;
 }
 
 // The enhanced scene and terrain renderers draw with Diligent directly, so they need the
@@ -608,7 +669,8 @@ void ClientInterface::iter()
 
 	Vector3 forward = client->camera.direction.normal2xz();
 	Vector3 strafe = forward.cross(Vector3(0, 1, 0));
-	const float camSpeed = 2.0f * cliDeltaTime / (1000.0f / 60.0f);
+	// Shift scrolls faster
+	const float camSpeed = (g_modShift ? 3.0f : 1.0f) * 2.0f * cliDeltaTime / (1000.0f / 60.0f);
 	forward *= camSpeed;
 	strafe *= camSpeed;
 
@@ -629,7 +691,10 @@ void ClientInterface::iter()
 			camrotoriy = client->camera.orientation.y;
 			camroton = true;
 		}
-		client->camera.orientation.x = camrotorix - (g_mouseY - camrotoffy) * 0.01f;
+		// Pitch stays within straight down and straight up, so the view never flips over;
+		// yaw is unlimited.
+		constexpr float maxPitch = 1.5707963f - 0.001f;
+		client->camera.orientation.x = std::clamp(camrotorix - (g_mouseY - camrotoffy) * 0.01f, -maxPitch, maxPitch);
 		client->camera.orientation.y = camrotoriy - (g_mouseX - camrotoffx) * 0.01f;
 	}
 	else
@@ -1130,6 +1195,11 @@ void ClientInterface::iter()
 		lua.set_function("drawMinimap",
 			[this](int x, int y, int w, int h) {
 				if (drawMinimap(x, y, w, h))
+					clickedScriptedUi = true;
+			});
+		lua.set_function("drawMinimapButtons",
+			[this](int panelX, int panelY) {
+				if (drawMinimapButtons(panelX, panelY))
 					clickedScriptedUi = true;
 			});
 		lua.set_function("handleButton",
