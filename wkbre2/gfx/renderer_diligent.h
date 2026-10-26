@@ -21,7 +21,7 @@ struct DiligentGfx : IRenderer
 
 	// Dynamic constant buffers kept up to date by SetTransformMatrix and SetFog:
 	// cbuffer TransformBuffer { matrix Transform; } and
-	// cbuffer FogBuffer { float4 FogColor; float FogStartDist; float FogEndDist; }
+	// cbuffer FogBuffer { float4 FogColor; float FogStartDist; float FogEndDist; float4 FogCamera; }
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> transformBuffer, fogBuffer;
 
 	// Shader resource view of a texture from CreateTexture (a white texture for nullptr).
@@ -31,6 +31,10 @@ struct DiligentGfx : IRenderer
 	// offset to bind it at. The data stays valid until the end of the frame.
 	virtual Diligent::IBuffer* StreamVertexData(const void* data, uint64_t size, uint64_t& offset) = 0;
 	virtual Diligent::IBuffer* StreamIndexData(const void* data, uint64_t size, uint64_t& offset) = 0;
+
+	// Camera position for the enhanced renderers' fog, which like the original's grows with the
+	// distance to the camera rather than with the view depth (FogBuffer.FogCamera).
+	virtual void SetFogCamera(const Vector3& position) = 0;
 
 	// Binds the swap chain's targets and the full viewport again after drawing offscreen.
 	virtual void RestoreRenderTargets() = 0;

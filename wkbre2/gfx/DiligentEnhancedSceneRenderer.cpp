@@ -51,6 +51,7 @@ cbuffer FogBuffer
 	float4 FogColor;
 	float FogStartDist;
 	float FogEndDist;
+	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 };
 
 cbuffer SunBuffer
@@ -107,7 +108,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
 	}
 	output.Texcoord = Texcoord;
-	output.Fog = clamp((output.Pos.w-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
+	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
+	output.Fog = clamp((distance(worldPos, FogCamera.xyz)-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
 	return output;
 }
 

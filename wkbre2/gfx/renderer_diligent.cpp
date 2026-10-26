@@ -95,6 +95,7 @@ cbuffer FogBuffer
 	float4 FogColor;
 	float FogStartDist;
 	float FogEndDist;
+	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 };
 
 struct VS_OUTPUT
@@ -280,6 +281,8 @@ struct DiligentRenderer : DiligentGfx
 	Matrix transform = Matrix::getIdentity();
 	uint32_t fogColor = 0;
 	float fogFar = 250.0f;
+	float fogStart = 0.5f; // where the fog starts, as a fraction of its end distance
+	Vector3 fogCamera;
 	bool fogEnabled = false;
 	bool vsync = true;
 	bool isVulkan = false;
@@ -430,6 +433,12 @@ struct DiligentRenderer : DiligentGfx
 		return indexRing.buf;
 	}
 
+	void SetFogCamera(const Vector3& position) override
+	{
+		fogCamera = position;
+		writeFogBuffer();
+	}
+
 	void RestoreRenderTargets() override
 	{
 		setRenderTargets();
@@ -466,9 +475,17 @@ struct DiligentRenderer : DiligentGfx
 		cc[1] = ((fogColor >> 8) & 255) / 255.0f;
 		cc[2] = (fogColor & 255) / 255.0f;
 		cc[3] = ((fogColor >> 24) & 255) / 255.0f;
-		cc[4] = fogFar * 0.5f;
-		cc[5] = fogFar;
+		// The original's fog (0x60A870): linear, ending at 0.95 x far clip - near clip (1),
+		// starting halfway there ("fogStart" changes that), so that geometry has faded out
+		// before it is clipped.
+		const float fogEnd = 0.95f * fogFar - 1.0f;
+		cc[4] = fogEnd * fogStart;
+		cc[5] = fogEnd;
 		cc[6] = cc[7] = 0.0f;
+		cc[8] = fogCamera.x;
+		cc[9] = fogCamera.y;
+		cc[10] = fogCamera.z;
+		cc[11] = 1.0f;
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -477,6 +494,7 @@ struct DiligentRenderer : DiligentGfx
 	void Init() override
 	{
 		vsync = g_settings.value<bool>("vsync", true);
+		fogStart = std::clamp(g_settings.value<float>("fogStart", 0.5f), 0.0f, 0.99f);
 		isVulkan = g_settings.value<std::string>("diligentBackend", "d3d12") == "vulkan";
 		const int adapter = g_settings.value<int>("adapterIndex", -1);
 		const bool validation = g_settings.value<bool>("gfxValidation", false);
@@ -545,7 +563,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 32, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 48, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

@@ -45,6 +45,7 @@ cbuffer FogBuffer
 	float4 FogColor;
 	float FogStartDist;
 	float FogEndDist;
+	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 };
 
 cbuffer SunBuffer
@@ -113,7 +114,7 @@ VS_OUTPUT VS(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint TangentPac
 	output.Norm = Normal.xyz * 2 - float3(1,1,1);
 	output.Color = float4((Normal.w * 0.5 + 0.5).xxx, 1);
 	output.Texcoord = Texcoord;
-	output.Fog = clamp((output.Pos.w-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
+	output.Fog = clamp((distance(Pos.xyz, FogCamera.xyz)-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
 	output.Tangent = Tangent * 2 - float3(1,1,1);
 	output.Bitangent = Bitangent * 2 - float3(1,1,1);
 	return output;

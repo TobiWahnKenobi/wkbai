@@ -1169,6 +1169,8 @@ void ClientInterface::iter()
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);
 
 	gfx->SetFog(client->terrain ? client->terrain->fogColor : 0, client->camera.farDist);
+	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
+		dgfx->SetFogCamera(client->camera.position);
 
 	// Get ray
 	rayDirection = getRay(client->camera).normal();
@@ -1372,6 +1374,17 @@ void ClientInterface::render()
 }
 
 void ClientInterface::updateTerrain() {
+	// View distance: the original's far_clip setting (default 350, slider 280-1000), which also
+	// sets the fog. "farClip": 0 pushes it out to the whole map, so that the fog only shows at
+	// the far end of the map.
+	float farClip = g_settings.value<float>("farClip", 350.0f);
+	if (farClip <= 0.0f && client->terrain) {
+		const float mapWidth = 5.0f * client->terrain->width, mapHeight = 5.0f * client->terrain->height;
+		farClip = std::sqrt(mapWidth * mapWidth + mapHeight * mapHeight) / 0.95f + 1.0f;
+	}
+	if (farClip > 0.0f)
+		client->camera.farDist = farClip;
+
 	if (UseEnhancedRenderers(gfx))
 		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
 	else
