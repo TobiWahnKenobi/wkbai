@@ -29,6 +29,7 @@ struct ClientInterface {
 	IRenderer *gfx;
 	TerrainRenderer *terrainRenderer;
 	SceneRenderer *sceneRenderer;
+	struct DiligentSkyRenderer* skyRenderer = nullptr;
 	ClientDebugger debugger;
 	Scene *scene;
 	ParticleContainer* particlesContainer;

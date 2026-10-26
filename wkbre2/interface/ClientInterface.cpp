@@ -30,6 +30,7 @@
 #include "../gfx/renderer_diligent.h"
 #include "../gfx/DiligentEnhancedSceneRenderer.h"
 #include "../gfx/DiligentEnhancedTerrainRenderer.h"
+#include "../gfx/DiligentSkyRenderer.h"
 #include "../StampdownPlan.h"
 #include "../gfx/TerrainSpriteContainer.h"
 #include "../gfx/TerrainSpriteRenderer.h"
@@ -1303,6 +1304,8 @@ void ClientInterface::iter()
 	gfx->SetFog(client->terrain ? client->terrain->fogColor : 0, client->camera.farDist);
 	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
 		dgfx->SetFogCamera(client->camera.position);
+	if (skyRenderer)
+		skyRenderer->render();
 
 	// Get ray
 	rayDirection = getRay(client->camera).normal();
@@ -1517,6 +1520,10 @@ void ClientInterface::updateTerrain() {
 	if (farClip > 0.0f)
 		client->camera.farDist = farClip;
 
+	delete skyRenderer;
+	skyRenderer = nullptr;
+	if (UseEnhancedRenderers(gfx) && g_settings.value<bool>("sky", true))
+		skyRenderer = new DiligentSkyRenderer(gfx, client->terrain, &client->camera);
 	if (UseEnhancedRenderers(gfx))
 		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
 	else
