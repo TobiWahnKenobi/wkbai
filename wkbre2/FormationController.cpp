@@ -6,6 +6,7 @@
 
 #include "server.h"
 #include "gameset/GameObjBlueprint.h"
+#include "terrain.h"
 
 static std::pair<float, float> formationMemberPosition(FormationType type, int numMembers, float memberDistance, int member)
 {
@@ -53,6 +54,7 @@ void FormationController::update()
 	else if (formation->blueprint->name == "Orb")
 		type = FormationType::Orb;
 
+	Server* server = Server::instance;
 	Matrix transformMatrix = formation->getWorldMatrix();
 
 	int numMembers = 0;
@@ -72,7 +74,27 @@ void FormationController::update()
 					const float memberOutDistance = 1.0f;
 					const float memberDistance = memberOutDistance + 2.0f * memberRadius;
 					auto [posX, posZ] = formationMemberPosition(type, numMembers, memberDistance, memberIndex);
-					srvCharacter->setPosition(Vector3(posX, 0, posZ).transform(transformMatrix));
+					Vector3 slot = Vector3(posX, 0, posZ).transform(transformMatrix);
+					if (server->terrain)
+						slot.y = server->terrain->getHeightEx(slot.x, slot.z, srvCharacter->blueprint->canWalkOnWater());
+					// The members walk to their places (with their walking animation, around
+					// obstacles) instead of being put there: into formation, and along with it
+					// while it moves. A new walk starts only when the place has moved on from
+					// where the member is heading, so that the paths aren't recomputed every tick.
+					constexpr float ARRIVED = 0.6f, RETARGET = 1.5f;
+					const bool moving = srvCharacter->movementController.isMoving();
+					if ((srvCharacter->position - slot).sqlen2xz() > ARRIVED * ARRIVED) {
+						if (!moving || (srvCharacter->movementController.getDestination() - slot).sqlen2xz() > RETARGET * RETARGET)
+							srvCharacter->movementController.startMovement(slot);
+					}
+					else if (!formation->movement.isMoving()) {
+						// in place, and the formation stands: stop, facing its way (while it
+						// marches the member walks on rather than stop and start at every step)
+						if (moving)
+							srvCharacter->movementController.stopMovement();
+						if (srvCharacter->orientation.y != formation->orientation.y)
+							srvCharacter->setOrientation(Vector3(0, formation->orientation.y, 0));
+					}
 				}
 				memberIndex += 1;
 			}

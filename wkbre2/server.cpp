@@ -1097,6 +1097,16 @@ float ServerGameObject::computeSpeed()
 		SrvScriptContext ctx{ Server::instance, this };
 		speed = Server::instance->gameSet->equations[blueprint->movementSpeedEquation]->eval(&ctx);
 	}
+	// A formation goes a little slower than its slowest member: the members walk to their places
+	// in it (FormationController) and would otherwise trail behind
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		float slowest = speed;
+		for (const auto& [type, members] : children)
+			if (type.bpClass() == Tags::GAMEOBJCLASS_CHARACTER)
+				for (CommonGameObject* member : members)
+					slowest = std::min(slowest, member->dyncast<ServerGameObject>()->computeSpeed());
+		speed = std::min(speed, slowest * 0.9f);
+	}
 	return speed;
 }
 
@@ -1421,7 +1431,9 @@ void Server::tick()
 	const auto processObjOrders = [this](ServerGameObject *obj, auto &func) -> void {
 		if (obj->disableCount > 0)
 			return;
-		if (!obj->orderConfig.orders.empty() || obj->blueprint->receiveSightRangeEvents || obj->blueprint->removeWhenNotReferenced)
+		// moving without an order too: formation members walking to their places
+		if (!obj->orderConfig.orders.empty() || obj->blueprint->receiveSightRangeEvents || obj->blueprint->removeWhenNotReferenced
+			|| obj->movement.isMoving())
 			toprocess.emplace_back(obj);
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY) {
 			Vector3 avg(0,0,0);

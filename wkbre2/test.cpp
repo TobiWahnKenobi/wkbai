@@ -1015,6 +1015,65 @@ void Test_Stampdown()
 	fflush(stdout);
 }
 
+// Formations (needs the game data): the player's characters form up and the formation moves; the
+// members should walk (with an animation) into and along with it. Prints per second
+// "FORMATION t=<s> formation (x,z) member <i> (x,z) moving <0|1> anim <name>".
+void Test_Formation()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	std::vector<ServerGameObject*> members;
+	auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					members.push_back(child->dyncast<ServerGameObject>());
+				else
+					self(child, self);
+			}
+	};
+	if (player)
+		collect(player, collect);
+	const int moveCommand = server.gameSet->commands.names.getIndex("Move");
+	if (members.size() < 2 || moveCommand < 0 || server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+		printf("FORMATION not set up: %zu members\n", members.size());
+		return;
+	}
+	// as NETSRVMSG_CREATE_NEW_FORMATION
+	ServerGameObject* formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+	Vector3 sum;
+	for (ServerGameObject* m : members) {
+		sum += m->position;
+		m->setParent(formation);
+	}
+	formation->setPosition(sum / (float)members.size());
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	server.timeManager.unpause();
+	const uint64_t start = SDL_GetTicks();
+	bool moved = false;
+	int lastPrint = -1;
+	while (SDL_GetTicks() - start < 16000) {
+		server.tick();
+		const float t = (SDL_GetTicks() - start) / 1000.0f;
+		if (!moved && t > 4.0f) {
+			moved = true;
+			server.gameSet->commands[moveCommand].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position + Vector3(30, 0, 30));
+		}
+		if ((int)t != lastPrint) {
+			lastPrint = (int)t;
+			printf("FORMATION t=%d formation (%.1f,%.1f)", lastPrint, formation->position.x, formation->position.z);
+			for (size_t i = 0; i < members.size(); i++)
+				printf(" | %zu (%.1f,%.1f) %d %s", i, members[i]->position.x, members[i]->position.z, (int)members[i]->movement.isMoving(),
+					members[i]->animationIndex >= 0 ? server.gameSet->animations.names.getString(members[i]->animationIndex).c_str() : "-");
+			printf("\n");
+		}
+		SDL_Delay(16);
+	}
+	fflush(stdout);
+}
+
 // Guarding (needs the game data): a peasant guards another one, which then walks away; the
 // guard should follow at its offset, not walk into it. Prints "GUARD t=<s> distance=<m>".
 void Test_Guard()
@@ -1097,6 +1156,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_VFS, "VFS (file system and mods)"},
 {Test_Stampdown, "Stampdown (building placement)"},
 {Test_Guard, "Guard (follow at a distance)"},
+{Test_Formation, "Formation (members walk into place)"},
 };
 
 void LaunchTest()
