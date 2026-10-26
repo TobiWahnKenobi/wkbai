@@ -329,6 +329,15 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		if (strtag == "AI__SPAWN_LOCATION_SELECTOR") {
 			aiSpawnLocationSelector = ReadFinder(gsf, *gameSet);
 		}
+		else if (strtag == "DISPLAY_SPRITE_WHEN_SELECTED" || strtag == "DISPLAY_SPRITE_WHEN_STAMPING_DOWN") {
+			RangeSprite sprite;
+			sprite.texture = "Warrior Kings Game Set\\Textures\\" + gsf.nextString(true);
+			sprite.radius = ReadValueDeterminer(gsf, *gameSet);
+			(strtag == "DISPLAY_SPRITE_WHEN_SELECTED" ? spritesWhenSelected : spritesWhenStampingDown).push_back(std::move(sprite));
+		}
+		else if (strtag == "DISPLAY_SPRITE_WHEN_SELECTED_FOR") {
+			spritesWhenSelectedFor.push_back(ReadFinder(gsf, *gameSet));
+		}
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}

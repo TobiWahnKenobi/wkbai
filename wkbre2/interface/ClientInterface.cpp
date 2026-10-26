@@ -42,6 +42,7 @@
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
 #include "FrontEnd.h"
+#include "../gameset/finder.h"
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
@@ -384,6 +385,61 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 	orderFlagPosition = position;
 	if (rallyPoint)
 		orderFlagUnits.clear();
+}
+
+// The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
+// are strips (arrows, dots, links) that repeat around the circle, the texture's height across
+// the band, its top outwards. Drawn on the ground with the particles' state (alpha blended,
+// depth tested); one texture repeat per band width, each with its own texture coordinates 0..1
+// (the batch sampler clamps).
+void ClientInterface::drawRangeBands()
+{
+	if (rangeBands.empty() || !client->terrain)
+		return;
+	constexpr int TILES_PER_BATCH = 256, SEGMENTS_PER_TILE = 4;
+	if (!rangeBandBatch)
+		rangeBandBatch = gfx->CreateBatch(TILES_PER_BATCH * SEGMENTS_PER_TILE * 4, TILES_PER_BATCH * SEGMENTS_PER_TILE * 12);
+	gfx->BeginParticles();
+	gfx->BeginBatchDrawing();
+	gfx->SetBlendColor(-1);
+	const Terrain* terrain = client->terrain;
+	auto ground = [terrain](float x, float z) { return terrain->getHeightEx(x, z, true) + 0.15f; };
+	for (const RangeBand& band : rangeBands) {
+		gfx->SetTexture(0, (texture)band.tex);
+		rangeBandBatch->begin();
+		const float width = std::clamp(band.radius * 0.08f, 2.5f, 6.0f);
+		const float outer = band.radius, inner = std::max(0.0f, band.radius - width);
+		const float circumference = 2.0f * 3.14159265f * outer;
+		const int tiles = std::max(4, (int)std::round(circumference / width));
+		for (int t = 0; t < tiles; t++) {
+			for (int s = 0; s < SEGMENTS_PER_TILE; s++) {
+				const float u0 = (float)s / SEGMENTS_PER_TILE, u1 = (float)(s + 1) / SEGMENTS_PER_TILE;
+				const float a0 = (t + u0) / tiles * 2.0f * 3.14159265f, a1 = (t + u1) / tiles * 2.0f * 3.14159265f;
+				batchVertex* v;
+				uint16_t* ix;
+				uint32_t first;
+				rangeBandBatch->next(4, 12, &v, &ix, &first);
+				const float c0 = std::cos(a0), s0 = std::sin(a0), c1 = std::cos(a1), s1 = std::sin(a1);
+				const Vector3 p[4] = {
+					band.centre + Vector3(c0, 0, s0) * outer, band.centre + Vector3(c1, 0, s1) * outer,
+					band.centre + Vector3(c1, 0, s1) * inner, band.centre + Vector3(c0, 0, s0) * inner };
+				const float uv[4][2] = { { u0, 0 }, { u1, 0 }, { u1, 1 }, { u0, 1 } };
+				for (int i = 0; i < 4; i++) {
+					v[i].x = p[i].x;
+					v[i].y = ground(p[i].x, p[i].z);
+					v[i].z = p[i].z;
+					v[i].u = uv[i][0];
+					v[i].v = uv[i][1];
+					v[i].color = 0xFFFFFFFF;
+				}
+				// both windings: seen from above whatever the batch pipeline culls
+				for (const int& c : { 0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2 })
+					*(ix++) = (uint16_t)(first + c);
+			}
+		}
+		rangeBandBatch->flush();
+		rangeBandBatch->end();
+	}
 }
 
 // The camera stays between a little above the ground under it and a high ceiling (for an
@@ -846,6 +902,27 @@ void ClientInterface::iter()
 			opened = true;
 			for (const auto& screen : screens)
 				frontEnd->open(screen.get<std::string>());
+		}
+	}
+	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
+	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
+		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
+		if (!name.empty()) {
+			ClientGameObject* found = nullptr;
+			auto search = [&](ClientGameObject* obj, auto& self) -> void {
+				if (found)
+					return;
+				if (obj->blueprint->name == name) {
+					found = obj;
+					return;
+				}
+				for (const auto& [type, children] : obj->children)
+					for (CommonGameObject* child : children)
+						self(child->dyncast<ClientGameObject>(), self);
+			};
+			search(client->clientPlayer.get(), search);
+			if (found)
+				selection.insert(found);
 		}
 	}
 	const bool menuOpen = frontEnd && frontEnd->isOpen();
@@ -1736,6 +1813,36 @@ void ClientInterface::iter()
 		}
 		highlightedObjects.clear();
 
+		// The range circles of the selected objects (DISPLAY_SPRITE_WHEN_SELECTED, and those of the
+		// objects that DISPLAY_SPRITE_WHEN_SELECTED_FOR finds), and later of the building being
+		// placed: band textures on the ground, the value being the radius in metres
+		rangeBands.clear();
+		auto addRangeBand = [this](const GameObjBlueprint::RangeSprite& band, const Vector3& centre, ScriptContext* ctx) {
+			if (!band.radius || !client->terrain)
+				return;
+			const float r = band.radius->eval(ctx);
+			if (!(r > 0.0f && r < 5000.0f))
+				return;
+			if (texture tex = uiTexCache.getTexture(band.texture.c_str(), false))
+				rangeBands.push_back({ tex, centre, r });
+		};
+		auto addSelectedBands = [&](ClientGameObject* obj) {
+			CliScriptContext ctx{ client, obj };
+			for (const auto& band : obj->blueprint->spritesWhenSelected)
+				addRangeBand(band, obj->position, &ctx);
+		};
+		for (ClientGameObject* sel : selection) {
+			if (!sel)
+				continue;
+			addSelectedBands(sel);
+			for (ObjectFinder* finder : sel->blueprint->spritesWhenSelectedFor) {
+				CliScriptContext ctx{ client, sel };
+				for (CommonGameObject* found : finder->eval(&ctx))
+					if (found && !selection.count(found->dyncast<ClientGameObject>()))
+						addSelectedBands(found->dyncast<ClientGameObject>());
+			}
+		}
+
 		// test
 		//Vector3 peapos = client->camera.position + getRay(client->camera).normal() * 16;
 		peapos = Vector3(0, 0, 0);
@@ -1759,6 +1866,15 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, Vector3(0, 0, 0));
+				// where it can't stand (on another building), red; the server refuses it too
+				if (plan.status != StampdownPlan::Status::Valid)
+					test.flags |= SceneEntity::SEFLAG_BLOCKED;
+				// its range circles, the values those of the player ("run on player!" in the game set)
+				{
+					CliScriptContext ctx{ client, stampdownPlayer.get() };
+					for (const auto& band : stampdownBlueprint->spritesWhenStampingDown)
+						addRangeBand(band, peapos, &ctx);
+				}
 				planEntities.reserve(plan.toCreate.size());
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
@@ -1792,6 +1908,22 @@ void ClientInterface::iter()
 			}
 			else
 				orderFlagActive = false;
+		}
+		// The rally points of the selected buildings (where their new units go), with the
+		// original's rally flag
+		rallyFlagEntities.clear();
+		static const char* rallyFlagPath = "Warrior Kings Game Set\\Flags\\Land_Spawn_Rally_Point.ANIM3";
+		for (ClientGameObject* sel : selection) {
+			if (!sel || sel->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || sel->spawnedUnitCommand < 0
+				|| sel->spawnedUnitDestination.x < 0.0f || !client->terrain || !FileExists(rallyFlagPath))
+				continue;
+			const Vector3& dest = sel->spawnedUnitDestination;
+			SceneEntity& flag = rallyFlagEntities.emplace_back();
+			flag.model = client->gameSet->modelCache.getModel(rallyFlagPath);
+			flag.transform = Matrix::getTranslationMatrix(Vector3(dest.x, client->terrain->getHeightEx(dest.x, dest.z, true), dest.z));
+			flag.color = sel->getPlayer()->color;
+			flag.animTime = (uint32_t)SDL_GetTicks();
+			scene->add(&flag);
 		}
 		for (auto& lsfx : client->loopingSpecialEffects) {
 			Vector3 ttpp = lsfx.second.transform.getTranslationVector().transformScreenCoords(client->camera.sceneMatrix);
@@ -1844,6 +1976,8 @@ void ClientInterface::iter()
 	}
 	if (terrainSpriteContainer)
 		terrainSpriteContainer->clear();
+	if (showTerrain)
+		drawRangeBands();
 
 	if (particleRenderer && particlesContainer) {
 		ZoneScopedN("Particles");

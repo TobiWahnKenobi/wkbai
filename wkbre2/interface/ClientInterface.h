@@ -94,6 +94,16 @@ private:
 	void showOrderFlag(const Vector3& position, bool rallyPoint);
 	bool orderFlagDone(float age) const;
 	SceneEntity orderFlagEntity;
+	std::deque<SceneEntity> rallyFlagEntities; // of the selected buildings, this frame
+	// This frame's range circles: a band texture repeated around a circle on the ground
+	struct RangeBand {
+		void* tex;
+		Vector3 centre;
+		float radius;
+	};
+	std::vector<RangeBand> rangeBands;
+	RBatch* rangeBandBatch = nullptr;
+	void drawRangeBands();
 	uint64_t orderFlagStartTicks = 0; // SDL ticks (ms): a UI marker, independent of the game clock
 	bool orderFlagActive = false;
 	bool orderFlagRally = false;

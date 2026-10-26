@@ -4,6 +4,9 @@
 #include "gameset/GameObjBlueprint.h"
 #include "tags.h"
 #include "terrain.h"
+#include "gameset/Footprint.h"
+#include <algorithm>
+#include <iterator>
 
 StampdownPlan StampdownPlan::getStampdownPlan(
 	CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation)
@@ -17,7 +20,38 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		Tags::BUILDINGTYPE_WALL_CROSSROADS
 	};
 
-	if (blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC || blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE) {
+	const bool civic = blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC || blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE;
+
+	// The footprint's tiles must lie on the playable map and be free of other buildings, as
+	// the new building would take them (CommonGameState::updateOccupiedTiles). Passable tiles
+	// (such as a gateway) may share a tile with another building's passable tile; civic
+	// buildings may stand on walls, which they replace.
+	if (const Footprint* fp = blueprint->footprint; fp && gameState->tiles && gameState->terrain) {
+		const auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
+		const auto rotOrigin = fp->rotateOrigin(orientation.y);
+		const int ox = (int)((position.x - rotOrigin.first) / 5.0f);
+		const int oz = (int)((position.z - rotOrigin.second) / 5.0f);
+		for (const auto& to : fp->tiles) {
+			const auto [rx, rz] = to.rotate(orientation.y);
+			const int px = ox + rx, pz = oz + rz;
+			if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight) {
+				plan.status = Status::InvalidTerrain;
+				return plan;
+			}
+			const auto& tile = gameState->tiles[pz * tileWidth + px];
+			const CommonGameObject* other = tile.building.getFrom(gameState);
+			if (!other)
+				continue;
+			if (civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes))
+				continue;
+			if (to.mode && tile.buildingPassable)
+				continue;
+			plan.status = Status::InvalidOccupied;
+			return plan;
+		}
+	}
+
+	if (civic) {
 		using CityRectangle = CommonGameObject::CityRectangle;
 		
 		const auto cityContainsTile = [](const std::vector<CityRectangle>& cityRectangles, int x, int z) -> bool {

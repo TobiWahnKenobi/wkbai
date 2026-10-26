@@ -43,6 +43,7 @@
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
 #include "settings.h"
+#include "StampdownPlan.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -973,6 +974,47 @@ void Test_VFS()
 	fflush(stdout);
 }
 
+// Building placement (needs the game data): on another building it is refused, in the open allowed.
+// Prints "STAMPDOWN <where> <status>" (0 = valid, see StampdownPlan::Status).
+void Test_Stampdown()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	const GameObjBlueprint* windmill = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Windmill");
+	if (!windmill) {
+		printf("STAMPDOWN no Windmill blueprint\n");
+		return;
+	}
+	for (const auto& [type, players] : server.getLevel()->children) {
+		for (CommonGameObject* player : players) {
+			if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+				continue;
+			// the player's buildings, at any depth (towns, cities)
+			std::vector<CommonGameObject*> buildings;
+			auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+				for (const auto& [ctype, children] : obj->children)
+					for (CommonGameObject* child : children) {
+						if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && child->blueprint->footprint)
+							buildings.push_back(child);
+						self(child, self);
+					}
+			};
+			collect(player, collect);
+			for (CommonGameObject* b : buildings) {
+				const auto plan = StampdownPlan::getStampdownPlan(&server, player, windmill, b->position, Vector3(0, 0, 0));
+				printf("STAMPDOWN on %s %d\n", b->blueprint->name.c_str(), (int)plan.status);
+			}
+			if (!buildings.empty()) {
+				const Vector3 open = buildings[0]->position + Vector3(60, 0, 60);
+				const auto plan = StampdownPlan::getStampdownPlan(&server, player, windmill, open, Vector3(0, 0, 0));
+				printf("STAMPDOWN open %d\n", (int)plan.status);
+			}
+		}
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -994,6 +1036,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ParticleSystem, "Particle system"},
 {Test_PFRayTraversal, "PF Ray Traversal"},
 {Test_VFS, "VFS (file system and mods)"},
+{Test_Stampdown, "Stampdown (building placement)"},
 };
 
 void LaunchTest()

@@ -612,7 +612,7 @@ void Client::tick()
 				if (!(commandIndex >= 0 && commandIndex < gameSet->commands.size()))
 					break;
 				obj->spawnedUnitCommand = commandIndex;
-				obj->spawnedUnitTarget = objectId;
+				obj->spawnedUnitTarget = targetId;
 				obj->spawnedUnitDestination = destination;
 				obj->spawnedUnitFaceTo = faceTo;
 				break;

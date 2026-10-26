@@ -114,6 +114,18 @@ struct GameObjBlueprint {
 	enum { MINIMAP_MILITARY = 1, MINIMAP_ECONOMIC = 2, MINIMAP_RESOURCE = 4 };
 	uint8_t minimapCategories = 0;
 
+	// The original's range circles: a band texture (Textures\Border Bands) drawn on the ground
+	// around the object, its radius a value in metres. DISPLAY_SPRITE_WHEN_SELECTED: while the
+	// object is selected (value of the object); DISPLAY_SPRITE_WHEN_STAMPING_DOWN: while it is
+	// being placed (value of the player); DISPLAY_SPRITE_WHEN_SELECTED_FOR: selecting the object
+	// also shows the found objects' bands (a farm shows its windmills').
+	struct RangeSprite {
+		std::string texture;
+		ValueDeterminer* radius = nullptr;
+	};
+	std::vector<RangeSprite> spritesWhenSelected, spritesWhenStampingDown;
+	std::vector<ObjectFinder*> spritesWhenSelectedFor;
+
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);
 	void init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet);
 
