@@ -389,7 +389,7 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 
 // The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
 // are strips (arrows, dots, links) that repeat around the circle: the texture's width runs along
-// the circle, stretched to 6 band widths per repeat, its height across the band (top outwards).
+// the circle, stretched to 5 band widths per repeat, its height across the band (top outwards).
 // Drawn on the ground with the particles' state (alpha blended, depth tested); each repeat has
 // its own texture coordinates 0..1 (the batch sampler clamps).
 void ClientInterface::drawRangeBands()
@@ -397,9 +397,9 @@ void ClientInterface::drawRangeBands()
 	if (rangeBands.empty() || !client->terrain)
 		return;
 	constexpr int TILES_PER_BATCH = 256, SEGMENTS_PER_TILE = 4;
-	// one texture repeat along the circle per 6 band widths: the strips' narrow marks (three
+	// one texture repeat along the circle per 5 band widths (6 m): the strips' narrow marks (three
 	// ovals or arrows per repeat) are stretched along the circle, as in the original
-	constexpr float TILE_LENGTH = 6.0f;
+	constexpr float TILE_LENGTH = 5.0f, BAND_WIDTH = 1.2f;
 	if (!rangeBandBatch)
 		rangeBandBatch = gfx->CreateBatch(TILES_PER_BATCH * SEGMENTS_PER_TILE * 4, TILES_PER_BATCH * SEGMENTS_PER_TILE * 12);
 	gfx->BeginParticles();
@@ -410,7 +410,9 @@ void ClientInterface::drawRangeBands()
 	for (const RangeBand& band : rangeBands) {
 		gfx->SetTexture(0, (texture)band.tex);
 		rangeBandBatch->begin();
-		const float width = std::clamp(band.radius * 0.08f, 2.5f, 6.0f);
+		// the original's marks keep their size whatever the radius: about 1 m long and 0.6 m
+		// across, one every 2 m (three per repeat)
+		const float width = std::min(BAND_WIDTH, band.radius);
 		const float outer = band.radius, inner = std::max(0.0f, band.radius - width);
 		const float circumference = 2.0f * 3.14159265f * outer;
 		const int tiles = std::max(4, (int)std::round(circumference / (width * TILE_LENGTH)));
