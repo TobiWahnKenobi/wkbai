@@ -14,6 +14,7 @@ struct DiligentEnhancedSceneRenderer : SceneRenderer
 	~DiligentEnhancedSceneRenderer();
 	void init();
 	void render() override;
+	void prewarm(Model* model) override;
 private:
 	struct Impl;
 	Impl* _impl;

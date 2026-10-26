@@ -5,6 +5,14 @@
 #include "scene.h"
 #include "Model.h"
 
+void Scene::prewarm(Model* model)
+{
+	const uint32_t* mat = model->getMaterialIds();
+	const size_t numMats = model->getNumMaterials();
+	for (size_t i = 0; i < numMats; i++)
+		texCache.getTexture(modelCache->getMaterial(mat[i]).textureFilename.c_str());
+}
+
 void Scene::add(SceneEntity * ent)
 {
 	const uint32_t *mat = ent->model->getMaterialIds();

@@ -7,6 +7,7 @@
 struct IRenderer;
 struct Scene;
 struct Camera;
+struct Model;
 
 struct SceneRenderer {
 	IRenderer* gfx;
@@ -14,4 +15,6 @@ struct SceneRenderer {
 	Camera* camera;
 	SceneRenderer(IRenderer* gfx, Scene* scene, Camera* camera) : gfx(gfx), scene(scene), camera(camera) {}
 	virtual void render() = 0;
+	// Creates the model's GPU resources ahead of its first draw (e.g. at level start)
+	virtual void prewarm(Model* model) {}
 };

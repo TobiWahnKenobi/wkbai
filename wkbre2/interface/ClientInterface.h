@@ -94,5 +94,11 @@ private:
 	uint8_t minimapHiddenCategories = 0; // GameObjBlueprint::MINIMAP_* toggled off
 
 	void drawObject(ClientGameObject* obj);
+	// Loads every object's models and textures and creates their GPU resources once per level,
+	// so that the first look at a part of the map doesn't stutter.
+	void prewarmLevel();
+	const void* prewarmedLevel = nullptr;
+	std::unordered_set<Model*> prewarmedModels;
+	int prewarmCountdown = 0;
 	void drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t objid = 0);
 };

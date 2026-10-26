@@ -237,11 +237,14 @@ struct DilMesh
 	}
 };
 
+// All keyframes of an animation in one position and one normal buffer, one frame after the
+// other (selected with the vertex buffer offset): creating a buffer per keyframe made the first
+// view of a model cost up to ~100 ms.
 struct DilAnim
 {
 	std::vector<uint32_t> animTimes;
-	std::vector<RefCntAutoPtr<IBuffer>> animVertices;
-	std::vector<RefCntAutoPtr<IBuffer>> animNormals;
+	RefCntAutoPtr<IBuffer> animVertices, animNormals;
+	uint64_t frameVertexBytes = 0, frameNormalBytes = 0;
 	static DilAnim create(AnimatedModel* model, IRenderDevice* device) {
 		DilAnim enh;
 		model->prepare();
@@ -254,21 +257,26 @@ struct DilAnim
 			animTimesSet.insert(anim.coords[c].frameTimes.begin(), anim.coords[c].frameTimes.end());
 		enh.animTimes.assign(animTimesSet.begin(), animTimesSet.end());
 		enh.animTimes.back() -= 1; // prevents last frame from becoming first frame
-		enh.animVertices.resize(enh.animTimes.size());
-		enh.animNormals.resize(enh.animTimes.size());
+		std::vector<Vector3> pVertices; std::vector<uint32_t> pNormals;
+		size_t perFrame = 0;
+		for (auto& mat : mesh.groupIndices)
+			perFrame += mat.size();
+		pVertices.reserve(perFrame * enh.animTimes.size());
+		pNormals.reserve(perFrame * enh.animTimes.size());
 		for (size_t frame = 0; frame < enh.animTimes.size(); ++frame) {
 			const Vector3* intVertices = (const Vector3*)model->interpolate(enh.animTimes[frame]);
 			const Vector3* intNormals = model->interpolateNormals(enh.animTimes[frame]);
-			std::vector<Vector3> pVertices; std::vector<uint32_t> pNormals;
 			for (auto& mat : mesh.groupIndices) {
 				for (auto& grp : mat) {
 					pVertices.push_back(intVertices[grp.vertex]);
 					pNormals.push_back(NormalToR10G10B10A2(intNormals[grp.normal].normal()));
 				}
 			}
-			enh.animVertices[frame] = CreateImmutableBuffer(device, "Anim positions", BIND_VERTEX_BUFFER, pVertices.data(), pVertices.size() * 12);
-			enh.animNormals[frame] = CreateImmutableBuffer(device, "Anim normals", BIND_VERTEX_BUFFER, pNormals.data(), pNormals.size() * 4);
 		}
+		enh.frameVertexBytes = perFrame * 12;
+		enh.frameNormalBytes = perFrame * 4;
+		enh.animVertices = CreateImmutableBuffer(device, "Anim positions", BIND_VERTEX_BUFFER, pVertices.data(), pVertices.size() * 12);
+		enh.animNormals = CreateImmutableBuffer(device, "Anim normals", BIND_VERTEX_BUFFER, pNormals.data(), pNormals.size() * 4);
 		return enh;
 	}
 };
@@ -431,6 +439,19 @@ void DiligentEnhancedSceneRenderer::init()
 	}
 }
 
+void DiligentEnhancedSceneRenderer::prewarm(Model* model)
+{
+	IRenderDevice* device = ((DiligentGfx*)gfx)->device;
+	StaticModel* staticModel = model->getStaticModel();
+	if (_impl->meshMap.find(staticModel) == _impl->meshMap.end())
+		_impl->meshMap.emplace(staticModel, DilMesh::create(staticModel, device));
+	if (model != staticModel) {
+		auto* animModel = (AnimatedModel*)model;
+		if (_impl->animMap.find(animModel) == _impl->animMap.end())
+			_impl->animMap.emplace(animModel, DilAnim::create(animModel, device));
+	}
+}
+
 void DiligentEnhancedSceneRenderer::render()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
@@ -529,9 +550,11 @@ void DiligentEnhancedSceneRenderer::render()
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				if (enhAnim) {
-					IBuffer* buffers[6] = { enhAnim->animVertices[prevFrame], enhAnim->animNormals[prevFrame], enhMesh->texcoords[prevColor],
-						enhAnim->animVertices[prevFrame + 1], enhAnim->animNormals[prevFrame + 1], instanceBuffer };
-					const Uint64 offsets[6] = { 0, 0, 0, 0, 0, instanceOffset };
+					const size_t nextFrame = std::min<size_t>(prevFrame + 1, enhAnim->animTimes.size() - 1);
+					IBuffer* buffers[6] = { enhAnim->animVertices, enhAnim->animNormals, enhMesh->texcoords[prevColor],
+						enhAnim->animVertices, enhAnim->animNormals, instanceBuffer };
+					const Uint64 offsets[6] = { prevFrame * enhAnim->frameVertexBytes, prevFrame * enhAnim->frameNormalBytes, 0,
+						nextFrame * enhAnim->frameVertexBytes, nextFrame * enhAnim->frameNormalBytes, instanceOffset };
 					ctx->SetVertexBuffers(0, 6, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 				}
 				else {

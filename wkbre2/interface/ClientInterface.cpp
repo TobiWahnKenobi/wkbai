@@ -529,6 +529,43 @@ static Matrix GetShearToGroundMatrix(const Terrain* terrain, Model* model, const
 	return shear;
 }
 
+void ClientInterface::prewarmLevel()
+{
+	ZoneScopedN("Prewarm level");
+	if (prewarmedLevel != client->getLevel())
+		prewarmedModels.clear();
+	prewarmedLevel = client->getLevel();
+	prewarmCountdown = 60;
+	if (!client->getLevel() || !sceneRenderer)
+		return;
+	const uint64_t start = SDL_GetTicks();
+	std::vector<Model*> models;
+	auto collect = [&](ClientGameObject* obj, const auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self((ClientGameObject*)child, self);
+		if (!obj->blueprint)
+			return;
+		// The animation it plays now and the default one, all variants
+		if (const auto* appear = obj->blueprint->getAppearance(obj->subtype, obj->appearance)) {
+			for (int index : { obj->animationIndex, 0 }) {
+				auto it = appear->animations.find(index);
+				if (it != appear->animations.end())
+					for (Model* m : it->second)
+						if (m && prewarmedModels.insert(m).second)
+							models.push_back(m);
+			}
+		}
+	};
+	collect(client->getLevel(), collect);
+	for (Model* model : models) {
+		scene->prewarm(model);
+		sceneRenderer->prewarm(model);
+	}
+	if (!models.empty())
+		printf("Prewarmed %zu models in %llu ms\n", models.size(), (unsigned long long)(SDL_GetTicks() - start));
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -1682,6 +1719,10 @@ void ClientInterface::iter()
 				sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
 		}
 		TracyCZoneEnd(zoneScene);
+		// Once per level, then about once a second for objects that arrived since
+		static const bool prewarm = g_settings.value<bool>("prewarmModels", true);
+		if (prewarm && (prewarmedLevel != client->getLevel() || --prewarmCountdown <= 0))
+			prewarmLevel();
 		{
 			ZoneScopedN("Scene rendering");
 			sceneRenderer->render();

@@ -50,6 +50,8 @@ struct Scene {
 	uint32_t sunColor = 0xFFFFFF; // 0xRRGGBB
 
 	void add(SceneEntity *ent);
+	// Loads the model and its materials' textures without drawing it
+	void prewarm(Model* model);
 	void clear();
 
 	Scene(IRenderer *gfx, ModelCache *modelCache) : texCache(gfx, "Warrior Kings Game Set\\Textures\\"), modelCache(modelCache) {}
