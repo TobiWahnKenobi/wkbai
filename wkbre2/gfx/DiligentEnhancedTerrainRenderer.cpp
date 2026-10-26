@@ -35,6 +35,7 @@ Texture2D cloudTexture;
 SamplerState cloudSampler;
 Texture2D<float> shadowTexture;
 SamplerComparisonState shadowSampler;
+Texture2D<float> blobTexture;
 
 cbuffer TransformBuffer
 {
@@ -82,7 +83,45 @@ cbuffer SunBuffer
 	float4 WaterLayers; // UV offsets of the two texture layers
 	float4 WaterRipples; // UV offsets of the two ripple layers
 	float4 WaterParams; // on, UV per world unit, ripple UV per world unit
+	float4 BlobParams; // on, 1 / map width, 1 / map depth, map edge in world units
 };
+
+// The unit blob shadows, drawn into a map-sized texture of the light they leave
+float BlobLight(float3 pos)
+{
+	float light = 1;
+	if (BlobParams.x != 0)
+		light = blobTexture.Sample(inpSampler, (pos.xz + BlobParams.w) * BlobParams.yz);
+	return light;
+}
+
+// Blob shadows: one quad per blob, from its corners p1, p2 = p1 + u, p3 = p1 + v in map space,
+// into the blob texture (u = 0 at the left, v = 0 at the top). Each multiplies the light by
+// 1 - its alpha, as the original's blobs alpha-blend black onto the ground.
+cbuffer BlobBuffer
+{
+	float4 BlobScale; // 1 / map width, 1 / map depth
+};
+
+struct BLOB_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	float2 Uv : TEXCOORD0;
+};
+
+BLOB_OUTPUT VS_Blob(float2 P1 : ATTRIB0, float2 P2 : ATTRIB1, float2 P3 : ATTRIB2, uint id : SV_VertexID)
+{
+	BLOB_OUTPUT output;
+	output.Uv = float2(id & 1, id >> 1);
+	float2 m = P1 + output.Uv.x * (P2 - P1) + output.Uv.y * (P3 - P1);
+	output.Pos = float4(m.x * BlobScale.x * 2 - 1, 1 - m.y * BlobScale.y * 2, 0, 1);
+	return output;
+}
+
+float4 PS_Blob(BLOB_OUTPUT input) : SV_Target
+{
+	return float4(0, 0, 0, inpTexture.Sample(inpSampler, input.Uv).r);
+}
 
 // The original's terrain shadows (docs/re/shadows.md): the light is scaled by the scrolling
 // sky_shadow_map.pcx, and buildings with HAS_STATIC_SHADOW darken the ground under them to
@@ -240,7 +279,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
-	float4 c = lerp(float4(lum.xxx, 1) * input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(float4((lum * BlobLight(input.FragPos)).xxx, 1) * input.Color * tex, FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 )---";
@@ -272,7 +311,17 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	texture cloudMap = nullptr;
 	texture waterTexture = nullptr, rippleTexture = nullptr;
 	RefCntAutoPtr<ITexture> shadowMap;
+	// Blob shadows: their own pipeline, drawing into blobMap
+	RefCntAutoPtr<IPipelineResourceSignature> blobSignature;
+	RefCntAutoPtr<IPipelineState> blobPipeline;
+	RefCntAutoPtr<IShaderResourceBinding> blobBinding;
+	RefCntAutoPtr<IBuffer> blobBuffer;
+	RefCntAutoPtr<ITexture> blobMap;
+	texture blobSprite = nullptr;
 };
+
+// Texels of the blob shadow texture per world unit (at most 4096 per side)
+static constexpr float BLOB_TEXELS_PER_UNIT = 2.0f;
 
 // A tileable map of ripple slopes for the water: smoothed random heights, their slope in x and
 // z in red and green (0.5 = flat). It stands in for the original's grid of random normals.
@@ -343,7 +392,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 176;
+	cbDesc.Size = 192;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -357,6 +406,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -415,6 +465,45 @@ void DiligentEnhancedTerrainRenderer::init()
 	shadows.staticShadowSRV = _impl->shadowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 	shadows.staticShadowValid = false;
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "shadowTexture")->Set(shadows.staticShadowSRV);
+
+	// Blob shadow texture over the whole map mesh, edges included
+	TextureDesc blobDesc;
+	blobDesc.Name = "Blob shadow map";
+	blobDesc.Type = RESOURCE_DIM_TEX_2D;
+	blobDesc.Width = (Uint32)std::clamp((int)(terrain->width * 5.0f * BLOB_TEXELS_PER_UNIT), 16, 4096);
+	blobDesc.Height = (Uint32)std::clamp((int)(terrain->height * 5.0f * BLOB_TEXELS_PER_UNIT), 16, 4096);
+	blobDesc.Format = TEX_FORMAT_R8_UNORM;
+	blobDesc.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+	blobDesc.ClearValue.Format = TEX_FORMAT_R8_UNORM;
+	blobDesc.ClearValue.Color[0] = 1.0f;
+	device->CreateTexture(blobDesc, nullptr, &_impl->blobMap);
+	if (!_impl->blobMap)
+		ferr("Diligent: could not create the blob shadow map.");
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "blobTexture")->Set(_impl->blobMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	{
+		Bitmap blob = Bitmap::loadBitmap("Warrior Kings Game Set\\Textures\\shadow.pcx").convertToR8G8B8A8();
+		_impl->blobSprite = gfx->CreateTexture(blob, 1);
+	}
+	cbDesc.Name = "Blob shadow constants";
+	cbDesc.Size = 16;
+	device->CreateBuffer(cbDesc, nullptr, &_impl->blobBuffer);
+	const PipelineResourceDesc blobResources[] = {
+		{ SHADER_TYPE_VERTEX, "BlobBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+	};
+	const ImmutableSamplerDesc blobSamplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler } };
+	PipelineResourceSignatureDesc blobSigDesc;
+	blobSigDesc.Name = "Blob shadow resources";
+	blobSigDesc.Resources = blobResources;
+	blobSigDesc.NumResources = (Uint32)std::size(blobResources);
+	blobSigDesc.ImmutableSamplers = blobSamplers;
+	blobSigDesc.NumImmutableSamplers = (Uint32)std::size(blobSamplers);
+	device->CreatePipelineResourceSignature(blobSigDesc, &_impl->blobSignature);
+	if (!_impl->blobSignature)
+		ferr("Diligent: could not create the blob shadow resource signature.");
+	_impl->blobSignature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "BlobBuffer")->Set(_impl->blobBuffer);
+	_impl->blobSignature->CreateShaderResourceBinding(&_impl->blobBinding, true);
+	_impl->blobBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(_impl->blobSprite));
 
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
@@ -487,6 +576,43 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->lakePipeline);
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
+
+	{
+		RefCntAutoPtr<IShader> blobVs = createShader(SHADER_TYPE_VERTEX, "VS_Blob");
+		RefCntAutoPtr<IShader> blobPs = createShader(SHADER_TYPE_PIXEL, "PS_Blob");
+		static const LayoutElement blobLayout[] = {
+			LayoutElement{ 0, 0, 2, VT_FLOAT32, False, 0, 24, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+			LayoutElement{ 1, 0, 2, VT_FLOAT32, False, 8, 24, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+			LayoutElement{ 2, 0, 2, VT_FLOAT32, False, 16, 24, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+		};
+		GraphicsPipelineStateCreateInfo bci;
+		bci.PSODesc.Name = "Blob shadows";
+		bci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+		auto& bgp = bci.GraphicsPipeline;
+		bgp.NumRenderTargets = 1;
+		bgp.RTVFormats[0] = TEX_FORMAT_R8_UNORM;
+		bgp.DSVFormat = TEX_FORMAT_UNKNOWN;
+		bgp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+		bgp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+		bgp.DepthStencilDesc.DepthEnable = False;
+		bgp.DepthStencilDesc.DepthWriteEnable = False;
+		auto& bb = bgp.BlendDesc.RenderTargets[0];
+		bb.BlendEnable = True;
+		bb.SrcBlend = BLEND_FACTOR_ZERO; // light * (1 - alpha)
+		bb.DestBlend = BLEND_FACTOR_INV_SRC_ALPHA;
+		bb.SrcBlendAlpha = BLEND_FACTOR_ZERO;
+		bb.DestBlendAlpha = BLEND_FACTOR_ONE;
+		bgp.InputLayout.LayoutElements = blobLayout;
+		bgp.InputLayout.NumElements = (Uint32)std::size(blobLayout);
+		bci.pVS = blobVs;
+		bci.pPS = blobPs;
+		IPipelineResourceSignature* blobSignatures[] = { _impl->blobSignature };
+		bci.ppResourceSignatures = blobSignatures;
+		bci.ResourceSignaturesCount = 1;
+		device->CreateGraphicsPipelineState(bci, &_impl->blobPipeline);
+		if (!_impl->blobPipeline)
+			ferr("Diligent: could not create the blob shadow pipeline.");
+	}
 	_impl->signature->CreateShaderResourceBinding(&_impl->lakeBinding, true);
 	const std::string waterPath = skyDirectory + "Water_Surface.tga";
 	if (!skyDirectory.empty() && FileExists(waterPath.c_str()))
@@ -567,6 +693,9 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 			gfx->FreeTexture(_impl->waterTexture);
 		if (_impl->rippleTexture)
 			gfx->FreeTexture(_impl->rippleTexture);
+		if (_impl->blobSprite)
+			gfx->FreeTexture(_impl->blobSprite);
+		shadows.blobs.clear();
 	}
 	delete texcache;
 	delete _impl;
@@ -625,7 +754,44 @@ void DiligentEnhancedTerrainRenderer::render()
 	water[9] = 0.1f;  // one texture repeat per two tiles
 	water[10] = 0.04f;
 	water[11] = 0.0f;
+	const bool blobsOn = !shadows.blobs.empty();
+	float* blobParams = (float*)(sbdata + 176);
+	blobParams[0] = blobsOn ? 1.0f : 0.0f;
+	blobParams[1] = 1.0f / (terrain->width * tilesize);
+	blobParams[2] = 1.0f / (terrain->height * tilesize);
+	blobParams[3] = terrain->edge * tilesize;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
+
+	// Blob shadows into the blob shadow map, one instanced quad each
+	if (blobsOn) {
+		ctx->MapBuffer(_impl->blobBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+		float* scale = (float*)mapped;
+		scale[0] = blobParams[1];
+		scale[1] = blobParams[2];
+		scale[2] = scale[3] = 0.0f;
+		ctx->UnmapBuffer(_impl->blobBuffer, MAP_WRITE);
+		ITextureView* rtv = _impl->blobMap->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		const float white[4] = { 1, 1, 1, 1 };
+		ctx->ClearRenderTarget(rtv, white, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetPipelineState(_impl->blobPipeline);
+		ctx->CommitShaderResources(_impl->blobBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		constexpr size_t maxBlobsPerDraw = 16384; // 384 KiB of the stream buffer
+		const size_t numBlobs = shadows.blobs.size() / 6;
+		for (size_t first = 0; first < numBlobs; first += maxBlobsPerDraw) {
+			const size_t count = std::min(numBlobs - first, maxBlobsPerDraw);
+			uint64_t offset = 0;
+			IBuffer* ib = dgfx->StreamVertexData(shadows.blobs.data() + first * 6, count * 24, offset);
+			ctx->SetVertexBuffers(0, 1, &ib, &offset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+			ctx->Draw(DrawAttribs{ 4, DRAW_FLAG_VERIFY_ALL, (Uint32)count });
+		}
+		dgfx->RestoreRenderTargets();
+		// the terrain samples the map
+		StateTransitionDesc barrier{ _impl->blobMap, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_SHADER_RESOURCE, STATE_TRANSITION_FLAG_UPDATE_STATE };
+		ctx->TransitionResourceStates(1, &barrier);
+	}
+	shadows.blobs.clear();
 
 	// Visible chunks: a chunk is culled when all corners of its bounding box lie outside the same
 	// clip plane (row vectors: clip = (x, y, z, 1) * sceneMatrix; depth 0..w).

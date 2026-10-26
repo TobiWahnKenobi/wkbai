@@ -52,6 +52,10 @@ struct DiligentGfx : IRenderer
 		Diligent::RefCntAutoPtr<Diligent::ITextureView> staticShadowDSV, staticShadowSRV;
 		Matrix staticShadowMatrix; // world → shadow map clip space, row vectors
 		bool staticShadowValid = false; // drawn in this frame
+		// The frame's unit blob shadows (Shadow.pcx), each as its sprite's corners p1, p2, p3
+		// (x, z, in map space: world plus the map edge). The terrain renderer draws them into a
+		// map-sized shadow texture that the terrain multiplies in, and clears the list.
+		std::vector<float> blobs;
 	} shadows;
 };
 

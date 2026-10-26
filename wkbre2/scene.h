@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include "util/vecmat.h"
 #include "mesh.h"
@@ -42,7 +44,13 @@ struct Scene {
 		texture tex;
 	};
 
-	std::map<std::pair<uint32_t, Model*>, MaterialInst> matInsts;
+	struct MaterialKeyHash {
+		size_t operator()(const std::pair<uint32_t, Model*>& k) const {
+			return std::hash<Model*>()(k.second) ^ ((size_t)k.first * 0x9E3779B97F4A7C15ull);
+		}
+	};
+	// a hash map: added to for every drawn object each frame
+	std::unordered_map<std::pair<uint32_t, Model*>, MaterialInst, MaterialKeyHash> matInsts;
 	TextureCache texCache;
 	ModelCache *modelCache;
 

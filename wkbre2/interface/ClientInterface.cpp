@@ -588,9 +588,14 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		return;
 
 	const Vector3 side = client->camera.direction.cross(Vector3(0, 1, 0));
+	// the same for all objects of a frame
+	static float lastFovX = -1.0f, tanFov = 0.0f, cosFov = 1.0f;
 	const float fovX = client->camera.fovY * client->camera.aspect;
-	const float tanFov = std::tan(fovX / 2.0f);
-	const float cosFov = std::cos(fovX / 2.0f);
+	if (fovX != lastFovX) {
+		lastFovX = fovX;
+		tanFov = std::tan(fovX / 2.0f);
+		cosFov = std::cos(fovX / 2.0f);
+	}
 	const float sideDist = std::abs(side.dot(obj->position - client->camera.position));
 	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov;
 	if (sideDist > sideBound)
@@ -664,7 +669,14 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
 
 	// shadow
-	if (model && obj->blueprint->hasDynamicShadow) {
+	if (model && obj->blueprint->hasDynamicShadow && gpuBlobShadows) {
+		// A round blob as wide as the model's bounding sphere (see below), drawn by the terrain renderer
+		const Vector3 centre = sphereCenter + Vector3(1, 0, 1) * (client->terrain->edge * 5.0f);
+		const float radius = model->getSphereRadius() * std::max(obj->scale.x, obj->scale.z);
+		gpuBlobShadows->insert(gpuBlobShadows->end(), { centre.x - radius, centre.z - radius,
+			centre.x - radius, centre.z + radius, centre.x + radius, centre.z - radius });
+	}
+	else if (model && obj->blueprint->hasDynamicShadow) {
 		static std::optional<texture> shadowTexture;
 		if (!shadowTexture) {
 			Bitmap bmp = Bitmap::loadBitmap("Warrior Kings Game Set\\Textures\\shadow.pcx").convertToR8G8B8A8();
@@ -738,19 +750,22 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 	Model* model = sceneEntity->model;
 	size_t numAPs = model->getNumAPs();
 	for (size_t i = 0; i < numAPs; i++) {
-		auto ap = model->getAPInfo(i);
+		const AttachmentPoint& ap = model->getAPInfo(i);
 		auto state = model->getAPState(i, sceneEntity->animTime);
 		if (state.on) {
 			if (StrCICompare(ap.tag, "PS_Trail") == 0) {
 				particlesContainer->generateTrail(state.position.transform(sceneEntity->transform), objid, client->timeManager.previousTime, client->timeManager.currentTime);
 			}
-			else if (ap.tag.substr(0, 3) == "PS_") {
+			else if (std::string_view(ap.tag).substr(0, 3) == "PS_") {
 				particlesContainer->generate(psCache->getPS(ap.tag.substr(3)), state.position.transform(sceneEntity->transform), objid, client->timeManager.previousTime, client->timeManager.currentTime);
 			}
 			if (!ap.path.empty()) {
 				attachSceneEntities.emplace_back();
 				auto& apse = attachSceneEntities.back();
-				apse.model = model->cache->getModel("Warrior Kings Game Set\\" + ap.path);
+				auto [cached, isNew] = attachmentModels.try_emplace(&ap, nullptr);
+				if (isNew)
+					cached->second = model->cache->getModel("Warrior Kings Game Set\\" + ap.path);
+				apse.model = cached->second;
 				apse.transform = Matrix::getTranslationMatrix(state.position) * sceneEntity->transform;
 				apse.color = sceneEntity->color;
 				apse.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
@@ -1591,6 +1606,11 @@ void ClientInterface::iter()
 
 		numObjectsDrawn = 0;
 		attachSceneEntities.clear();
+		gpuBlobShadows = nullptr;
+		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx); dgfx && client->terrain && UseEnhancedRenderers(gfx)) {
+			gpuBlobShadows = &dgfx->shadows.blobs;
+			gpuBlobShadows->clear();
+		}
 		if (client->getLevel())
 			drawObject(client->getLevel());
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
@@ -1737,8 +1757,10 @@ void ClientInterface::iter()
 		terrainRenderer->render();
 	}
 
-	if (terrainSpriteRenderer && showTerrain)
+	if (terrainSpriteRenderer && showTerrain) {
+		ZoneScopedN("Terrain sprites");
 		terrainSpriteRenderer->render();
+	}
 	if (terrainSpriteContainer)
 		terrainSpriteContainer->clear();
 

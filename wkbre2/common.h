@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -86,6 +87,17 @@ struct CommonGameObject {
 	CommonGameObject* getPlayer() const;
 
 	Matrix getWorldMatrix() const {
+		if (orientation.x == 0.0f && orientation.z == 0.0f) {
+			// Most objects only turn around y: scale * rotation y * translation, written out
+			// (drawn objects call this every frame)
+			const float c = std::cos(-orientation.y), s = std::sin(-orientation.y);
+			Matrix m = Matrix::getZeroMatrix();
+			m.m[0][0] = scale.x * c; m.m[0][2] = -scale.x * s;
+			m.m[1][1] = scale.y;
+			m.m[2][0] = scale.z * s; m.m[2][2] = scale.z * c;
+			m.m[3][0] = position.x; m.m[3][1] = position.y; m.m[3][2] = position.z; m.m[3][3] = 1.0f;
+			return m;
+		}
 		return Matrix::getScaleMatrix(scale)
 			* Matrix::getRotationXMatrix(-orientation.x)
 			* Matrix::getRotationYMatrix(-orientation.y)

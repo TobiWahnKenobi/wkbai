@@ -66,6 +66,8 @@ private:
 	float nextSelObjDistanceByMesh = 0.0f, nextSelObjDistanceBySphere = 0.0f;
 	Language lang;
 	std::deque<SceneEntity> attachSceneEntities;
+	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
+	std::vector<float>* gpuBlobShadows = nullptr; // this frame's blob shadows for the enhanced terrain renderer
 	bool selBoxOn = false;
 	int selBoxStartX, selBoxStartY, selBoxEndX, selBoxEndY;
 	std::vector<CliGORef> nextSelFromBox;
