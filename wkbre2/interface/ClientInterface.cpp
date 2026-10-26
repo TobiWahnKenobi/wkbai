@@ -339,6 +339,52 @@ static bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
+// Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
+// target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
+// Here a unit order's flag stays until the units sent there have arrived (at least 1 s, at
+// most 30 s), a rally point's for 3 s, with their animations.
+bool ClientInterface::orderFlagDone(float age) const
+{
+	if (orderFlagRally || orderFlagUnits.empty())
+		return age >= 3.0f;
+	if (age < 1.0f)
+		return false;
+	if (age >= 30.0f)
+		return true;
+	for (const CliGORef& ref : orderFlagUnits) {
+		const ClientGameObject* unit = ref.get();
+		if (unit && !(unit->flags & ClientGameObject::fTerminated)
+			&& (unit->position - orderFlagPosition).sqlen2xz() > 3.0f * 3.0f)
+			return false;
+	}
+	return true;
+}
+
+void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
+{
+	if (!client->terrain || !client->gameSet)
+		return;
+	const float ground = client->terrain->getHeight(position.x, position.z);
+	const float surface = client->terrain->getHeightEx(position.x, position.z, true);
+	const bool onWater = surface > ground + 0.01f;
+	const char* path = rallyPoint ? "Warrior Kings Game Set\\Flags\\Land_Spawn_Rally_Point.ANIM3"
+		: onWater ? "Warrior Kings Game Set\\Resources\\Bouy\\DEFAULT.ANIM3"
+		: "Warrior Kings Game Set\\Flags\\Way_Point1.ANIM3";
+	if (!FileExists(path))
+		return;
+	orderFlagEntity.model = client->gameSet->modelCache.getModel(path);
+	orderFlagEntity.transform = Matrix::getTranslationMatrix(Vector3(position.x, surface, position.z));
+	orderFlagEntity.color = client->clientPlayer ? client->clientPlayer->color : 0;
+	orderFlagEntity.flags = 0;
+	orderFlagStartTicks = SDL_GetTicks();
+	orderFlagActive = true;
+	orderFlagRally = rallyPoint;
+	orderFlagPosition = position;
+	if (rallyPoint)
+		orderFlagUnits.clear();
+}
+
 // The camera stays between a little above the ground under it and a high ceiling (for an
 // overview of the map); the pitch limit is applied where the camera turns.
 void ClientInterface::applyCameraLimits()
@@ -369,7 +415,24 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::TextDisabled("The original's far_clip: 350 (options slider 280-1000)");
 		ImGui::Checkbox("Fog off", &s.fogOff);
 		ImGui::BeginDisabled(s.fogOff);
-		ImGui::SliderFloat("Fog start (of fog end)", &s.fogStart, 0.0f, 0.99f, "%.2f");
+		ImGui::Checkbox("Own fog distances", &s.fogCustom);
+		if (s.fogCustom) {
+			const float viewDistance = client->camera.farDist;
+			ImGui::SliderFloat("Fog near", &s.fogNear, 0.0f, 50000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+			ImGui::SliderFloat("Fog far (opaque)", &s.fogFar, 1.0f, 50000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+			s.fogNear = std::min(s.fogNear, s.fogFar);
+			if (s.fogFar > viewDistance)
+				ImGui::TextDisabled("Fog far is capped at the view distance (%.0f)", viewDistance);
+		}
+		else
+			ImGui::SliderFloat("Fog start (of fog end)", &s.fogStart, 0.0f, 0.99f, "%.2f");
+		ImGui::EndDisabled();
+		ImGui::Checkbox("Map-edge fog", &s.edgeFog);
+		ImGui::BeginDisabled(!s.edgeFog);
+		ImGui::SliderFloat("Edge fog starts (of edge band)", &s.edgeFogStart, 0.0f, 0.95f, "%.2f");
+		ImGui::SliderFloat("Edge fog opaque at (of edge band)", &s.edgeFogOpaque, 0.0f, 0.95f, "%.2f");
+		s.edgeFogStart = std::min(s.edgeFogStart, s.edgeFogOpaque);
+		ImGui::TextDisabled("Band from the playable area's edge (0) to the map mesh's edge (1)");
 		ImGui::EndDisabled();
 		ImGui::Checkbox("Own fog colour", &s.fogColourOverride);
 		ImGui::BeginDisabled(!s.fogColourOverride);
@@ -866,6 +929,7 @@ void ClientInterface::iter()
 			}
 		}
 		else if (rightClickCommand) {
+			int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
 			Vector3 destPos = peapos;
 			const int NUM_DIRECTIONS = 8;
 			const float SEPARATION = 3.0f;
@@ -878,6 +942,12 @@ void ClientInterface::iter()
 						// if object offers this command, send the command
 						int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 						client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos);
+						if (!nextSelectedObject) {
+							if (orderFlag == 0)
+								orderFlagUnits.clear();
+							orderFlag = 1;
+							orderFlagUnits.push_back(sel);
+						}
 						// calc destination pos for next selected object
 						destPos = peapos + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
 						nextPosDir += SEPARATION / nextPosRadius;
@@ -899,6 +969,7 @@ void ClientInterface::iter()
 											printf("Order for spawned unit changed to: %s\n", client->gameSet->commands.getString(cmd).c_str());
 											if (cmd->order && cmd->order->classType == Tags::ORDTSKTYPE_MOVE) {
 												client->sendSetBuildingSpawnedUnitOrderToDestination(sel, client->gameSet->commands.getIndex(cmd), peapos);
+												orderFlag = std::max(orderFlag, 2);
 											}
 											else {
 												client->sendSetBuildingSpawnedUnitOrderToTarget(sel, client->gameSet->commands.getIndex(cmd), nextSelectedObject);
@@ -911,6 +982,8 @@ void ClientInterface::iter()
 					}
 				}
 			}
+			if (orderFlag)
+				showOrderFlag(peapos, orderFlag == 2);
 		}
 	}
 
@@ -1424,8 +1497,19 @@ void ClientInterface::iter()
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);
 
 	gfx->SetFog(fogColour, client->camera.farDist);
-	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
+	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 		dgfx->SetFogCamera(client->camera.position);
+		// Map-edge fog: opaque inside the band between the playable area and the mesh's edge
+		if (client->terrain && g_renderSettings.edgeFog) {
+			const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+			const float band = 5.0f * client->terrain->edge;
+			const float opaque = std::clamp(g_renderSettings.edgeFogOpaque, 0.0f, 0.95f);
+			const float start = std::min(std::clamp(g_renderSettings.edgeFogStart, 0.0f, 0.95f), opaque * 0.999f);
+			dgfx->SetFogEdge(areaWidth, areaDepth, band * start, band * opaque);
+		}
+		else
+			dgfx->SetFogEdge(1e9f, 1e9f, 1e9f, 2e9f);
+	}
 	if (skyRenderer)
 		skyRenderer->render();
 
@@ -1543,6 +1627,15 @@ void ClientInterface::iter()
 				scene->add(&sfx.entity);
 				drawAttachmentPoints(&sfx.entity);
 			}
+		}
+		if (orderFlagActive && orderFlagEntity.model) {
+			const float age = (SDL_GetTicks() - orderFlagStartTicks) / 1000.0f;
+			if (age >= 0.0f && !orderFlagDone(age)) {
+				orderFlagEntity.animTime = (uint32_t)(age * 1000.0f);
+				scene->add(&orderFlagEntity);
+			}
+			else
+				orderFlagActive = false;
 		}
 		for (auto& lsfx : client->loopingSpecialEffects) {
 			Vector3 ttpp = lsfx.second.transform.getTranslationVector().transformScreenCoords(client->camera.sceneMatrix);

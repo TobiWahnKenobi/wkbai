@@ -98,7 +98,19 @@ cbuffer FogBuffer
 	float FogEndDist;
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 	float4 Grade; // exposure, brightness, contrast, saturation
+	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
 };
+
+// Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
+// fog grows with the distance outside the playable area (the larger of x and z, so that it follows
+// the square band of the map's edge) and is opaque before the map mesh ends.
+float FogAmount(float3 worldPos, float distanceToCamera)
+{
+	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
+	float2 outside = max(max(-worldPos.xz, worldPos.xz - EdgeFog.xy), 0);
+	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
+	return max(distanceFog, edgeFog);
+}
 
 // Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
 float3 GradeColour(float3 c)
@@ -134,7 +146,7 @@ VS_OUTPUT VS_Fog(float3 Pos : ATTRIB0, float4 Color : ATTRIB1, float2 Texcoord :
 	output.Pos = mul(float4(Pos, 1.0), Transform);
 	output.Color = Color.bgra;
 	output.Texcoord = Texcoord;
-	output.Fog = clamp((output.Pos.w-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
+	output.Fog = FogAmount(Pos, output.Pos.w);
 	return output;
 }
 
@@ -292,6 +304,7 @@ struct DiligentRenderer : DiligentGfx
 	uint32_t fogColor = 0;
 	float fogFar = 250.0f;
 	Vector3 fogCamera;
+	float fogEdge[4] = { 1e9f, 1e9f, 1e9f, 2e9f }; // no edge fog until a map sets it
 	bool fogEnabled = false;
 	bool vsync = true;
 	bool isVulkan = false;
@@ -448,6 +461,15 @@ struct DiligentRenderer : DiligentGfx
 		writeFogBuffer();
 	}
 
+	void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) override
+	{
+		fogEdge[0] = playableWidth;
+		fogEdge[1] = playableDepth;
+		fogEdge[2] = start;
+		fogEdge[3] = opaque;
+		writeFogBuffer();
+	}
+
 	void RestoreRenderTargets() override
 	{
 		setRenderTargets();
@@ -490,6 +512,11 @@ struct DiligentRenderer : DiligentGfx
 		const float fogEnd = 0.95f * fogFar - 1.0f;
 		cc[4] = fogEnd * std::clamp(g_renderSettings.fogStart, 0.0f, 0.99f);
 		cc[5] = fogEnd;
+		if (g_renderSettings.fogCustom) {
+			// Own near and far, the far end never beyond the view distance
+			cc[5] = std::min(g_renderSettings.fogFar, fogFar);
+			cc[4] = std::min(g_renderSettings.fogNear, cc[5] * 0.999f);
+		}
 		if (g_renderSettings.fogOff) {
 			// No fog: start and end beyond any distance (the sky shader checks for this too)
 			cc[4] = 1e9f;
@@ -504,6 +531,10 @@ struct DiligentRenderer : DiligentGfx
 		cc[13] = g_renderSettings.brightness;
 		cc[14] = g_renderSettings.contrast;
 		cc[15] = g_renderSettings.saturation;
+		cc[16] = fogEdge[0];
+		cc[17] = fogEdge[1];
+		cc[18] = fogEdge[2];
+		cc[19] = fogEdge[3];
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -580,7 +611,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 80, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

@@ -16,6 +16,12 @@ void RenderSettings::load()
 	farClip = farClipWholeMap ? def.farClip : far;
 	fogStart = g_settings.value<float>("fogStart", def.fogStart);
 	fogOff = g_settings.value<bool>("fogOff", def.fogOff);
+	fogCustom = g_settings.value<bool>("fogCustom", def.fogCustom);
+	fogNear = g_settings.value<float>("fogNear", def.fogNear);
+	fogFar = g_settings.value<float>("fogFar", def.fogFar);
+	edgeFog = g_settings.value<bool>("edgeFog", def.edgeFog);
+	edgeFogStart = g_settings.value<float>("edgeFogStart", def.edgeFogStart);
+	edgeFogOpaque = g_settings.value<float>("edgeFogOpaque", def.edgeFogOpaque);
 	const auto fog = g_settings.value("fogColourOverride", nlohmann::json());
 	fogColourOverride = fog.is_array() && fog.size() == 3;
 	if (fogColourOverride)
@@ -47,6 +53,12 @@ void RenderSettings::save()
 	g_settings["farClip"] = farClipWholeMap ? 0.0f : farClip;
 	g_settings["fogStart"] = fogStart;
 	g_settings["fogOff"] = fogOff;
+	g_settings["fogCustom"] = fogCustom;
+	g_settings["fogNear"] = fogNear;
+	g_settings["fogFar"] = fogFar;
+	g_settings["edgeFog"] = edgeFog;
+	g_settings["edgeFogStart"] = edgeFogStart;
+	g_settings["edgeFogOpaque"] = edgeFogOpaque;
 	if (fogColourOverride)
 		g_settings["fogColourOverride"] = { fogColour[0], fogColour[1], fogColour[2] };
 	else

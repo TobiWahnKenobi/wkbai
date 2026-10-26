@@ -39,6 +39,7 @@ cbuffer FogBuffer
 	float FogEndDist;
 	float4 FogCamera;
 	float4 Grade; // exposure, brightness, contrast, saturation
+	float4 EdgeFog;
 };
 
 float3 GradeColour(float3 c)

@@ -13,6 +13,11 @@ struct RenderSettings {
 	bool farClipWholeMap = false;    // view distance: the whole map
 	float fogStart = 0.5f;           // fog start as a fraction of the fog's end
 	bool fogOff = false;             // no distance fog at all
+	bool fogCustom = false;          // own fog distances instead of the original's (from the view distance)
+	float fogNear = 165.75f, fogFar = 331.5f; // the original's values at far_clip 350; far <= view distance
+	// Map-edge fog: by distance outside the playable area, opaque before the map mesh ends
+	bool edgeFog = true;
+	float edgeFogStart = 0.0f, edgeFogOpaque = 0.8f; // fractions of the band between playable and mesh edge
 	bool fogColourOverride = false;  // instead of the map's fog colour
 	float fogColour[3] = { 159 / 255.0f, 197 / 255.0f, 230 / 255.0f };
 	float fovYDegrees = 51.566f;     // 0.9 rad, as wkbre2 always had

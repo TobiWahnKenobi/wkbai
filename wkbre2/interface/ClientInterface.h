@@ -79,6 +79,15 @@ private:
 	// returns true while the mouse is over it, a left click/drag moves the camera there
 	bool drawMinimap(int x, int y, int w, int h);
 	void drawSettingsWindow(bool* open);
+	// The original's marker at the ground target of a right-click order
+	void showOrderFlag(const Vector3& position, bool rallyPoint);
+	bool orderFlagDone(float age) const;
+	SceneEntity orderFlagEntity;
+	uint64_t orderFlagStartTicks = 0; // SDL ticks (ms): a UI marker, independent of the game clock
+	bool orderFlagActive = false;
+	bool orderFlagRally = false;
+	Vector3 orderFlagPosition;
+	std::vector<CliGORef> orderFlagUnits; // the units sent there; the flag goes when they arrive
 	void applyCameraLimits();
 	// The four mode buttons around the minimap, at the top-left corner of Bottom_Right_Panel.tga
 	bool drawMinimapButtons(int panelX, int panelY);

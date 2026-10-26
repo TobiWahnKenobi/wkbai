@@ -54,7 +54,19 @@ cbuffer FogBuffer
 	float FogEndDist;
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 	float4 Grade; // exposure, brightness, contrast, saturation
+	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
 };
+
+// Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
+// fog grows with the distance outside the playable area (the larger of x and z, so that it follows
+// the square band of the map's edge) and is opaque before the map mesh ends.
+float FogAmount(float3 worldPos, float distanceToCamera)
+{
+	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
+	float2 outside = max(max(-worldPos.xz, worldPos.xz - EdgeFog.xy), 0);
+	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
+	return max(distanceFog, edgeFog);
+}
 
 // Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
 float3 GradeColour(float3 c)
@@ -119,7 +131,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 	}
 	output.Texcoord = Texcoord;
 	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
-	output.Fog = clamp((distance(worldPos, FogCamera.xyz)-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
+	output.Fog = FogAmount(worldPos, distance(worldPos, FogCamera.xyz));
 	return output;
 }
 
