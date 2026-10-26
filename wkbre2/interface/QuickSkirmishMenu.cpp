@@ -82,6 +82,30 @@ void QuickSkirmishMenu::imguiWindow()
 	ImGui::PopItemWidth();
 }
 
+void QuickSkirmishMenu::setSetting(const std::string& name, int value)
+{
+	// skirmish maps only: other levels keep the mode chosen for them
+	if (name == "mode") {
+		if (mode == StandardMode || mode == ValhallaMode)
+			mode = (value == 1) ? ValhallaMode : StandardMode;
+	}
+	else if (name == "startFood") startFood = value;
+	else if (name == "startWood") startWood = value;
+	else if (name == "startGold") startGold = value;
+	else if (name == "populationLimit") populationLimit = value;
+	else if (name == "randomiseResources") randomiseResources = value;
+	else if (name == "kingPiece") kingPiece = value != 0;
+	else if (name == "clearFogOfWar") clearFogOfWar = value != 0;
+	else if (name == "allowDiplomacy") allowDiplomacy = value != 0;
+	else if (name == "teamReconnaissance") teamReconnaissance = value != 0;
+	else if (name == "barbarianTribes") barbarianTribes = value != 0;
+	else if (name == "resourcePoints") resourcePoints = value;
+	else if (name == "victoryPointLimit") victoryPointLimit = value;
+	else if (name == "valhallaModeFood") valhallaModeFood = value;
+	else if (name == "unitLives") unitLives = value;
+	else if (name == "capturableFlags") capturableFlags = value;
+}
+
 void QuickSkirmishMenu::changeSettingsForLevel(std::string_view levelName)
 {
 	// If it is not a LVL (such as SAV), then always use DevMode (to not restart the level).
@@ -233,30 +257,48 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		}
 
 		bool humanPlaced = false;
+		std::vector<std::pair<ServerGameObject*, int>> playing; // with their teams
 		for (size_t i = 0; i < players.size(); i++) {
 			const Slot slot = i < slots.size() ? slots[i] : Slot{};
 			ServerGameObject* player = players[i];
-			if (slot.type == Slot::HUMAN && !humanPlaced) {
-				server.setClientPlayerControl(0, player->id);
-				humanPlaced = true;
-				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
-				continue;
-			}
 			if (slot.type == Slot::EMPTY) {
 				// nobody plays here: the player goes with its units and buildings
 				printf("Skirmish: position %zu (player %u): empty\n", i + 1, player->id);
 				server.deleteObject(player);
 				continue;
 			}
-			const GameObjBlueprint* general = slot.general.empty() ? nullptr
-				: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);
-			if (!general && !generals.empty())
-				general = generals[rand() % generals.size()];
-			if (general) {
-				player->convertTo(general);
-				printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());
+			if (slot.type == Slot::HUMAN && !humanPlaced) {
+				server.setClientPlayerControl(0, player->id);
+				humanPlaced = true;
+				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
 			}
+			else {
+				const GameObjBlueprint* general = slot.general.empty() ? nullptr
+					: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);
+				if (!general && !generals.empty())
+					general = generals[rand() % generals.size()];
+				if (general) {
+					player->convertTo(general);
+					printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());
+				}
+			}
+			if (slot.colour > 0)
+				player->setColor(slot.colour);
+			playing.emplace_back(player, slot.team);
 		}
+
+		// Teams: allied within a team, enemies to everyone else (the map's own diplomacy when no
+		// teams are chosen)
+		const bool anyTeam = std::any_of(playing.begin(), playing.end(), [](const auto& p) { return p.second > 0; });
+		const int allied = server.gameSet->diplomaticStatuses.names.getIndex("Allied");
+		const int enemy = server.gameSet->diplomaticStatuses.names.getIndex("Enemy");
+		if (anyTeam && allied >= 0 && enemy >= 0)
+			for (size_t a = 0; a < playing.size(); a++)
+				for (size_t b = a + 1; b < playing.size(); b++) {
+					const bool sameTeam = playing[a].second > 0 && playing[a].second == playing[b].second;
+					server.setDiplomaticStatus(playing[a].first, playing[b].first, sameTeam ? allied : enemy);
+					printf("Skirmish: players %u and %u %s\n", playing[a].first->id, playing[b].first->id, sameTeam ? "allied" : "enemies");
+				}
 	}
 	else if (mode != DevMode && isWKBattles) {
 		auto* humanPlayer = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Human Player");

@@ -19,6 +19,7 @@
 #include <sol/sol.hpp>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <map>
 #include <algorithm>
 #include <memory>
@@ -113,6 +114,62 @@ struct FrontEnd::Impl {
 			else
 				printf("WARNING: menu image \"%s\" not found\n", path.c_str());
 		}
+		return it->second;
+	}
+
+	// The minimap image of a level's map, for a map preview: the level file names the map
+	// (MAP "Maps\...\x.bcm"), and a .bcm keeps a 128x128 RGB image of its playable area right
+	// after its header strings (docs/re/minimap.md). Cached under "level:<name>"; empty when the
+	// map is no .bcm.
+	const Image& levelPreview(const std::string& level)
+	{
+		auto [it, isNew] = images.try_emplace("level:" + level);
+		if (!isNew)
+			return it->second;
+		const std::string path = "Save_Games\\" + level;
+		if (!FileExists(path.c_str()))
+			return it->second;
+		char* data = nullptr;
+		int size = 0;
+		LoadFile(path.c_str(), &data, &size, 1);
+		data[size] = 0;
+		std::string map;
+		if (const char* m = strstr(data, "MAP \"")) {
+			const char* end = strchr(m + 5, '"');
+			if (end)
+				map.assign(m + 5, end);
+		}
+		free(data);
+		if (map.size() < 4 || StrCICompare(std::string_view(map).substr(map.size() - 4), ".bcm") != 0 || !FileExists(map.c_str()))
+			return it->second;
+		LoadFile(map.c_str(), &data, &size);
+		const uint8_t* fp = (const uint8_t*)data + 24;
+		const uint8_t* fileEnd = (const uint8_t*)data + size;
+		auto skipString = [&]() {
+			if (fp + 2 > fileEnd) return false;
+			const uint16_t bytes = *(const uint16_t*)fp;
+			fp += 2 + bytes;
+			return fp <= fileEnd;
+		};
+		// texture database path, scale, sun colour, sun vector, fog colour, sky directory
+		bool ok = skipString();
+		fp += 4 + 12 + 12 + 12;
+		ok = ok && skipString() && fp + 128 * 128 * 3 <= fileEnd;
+		if (ok) {
+			Bitmap bmp;
+			bmp.width = bmp.height = 128;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize(128 * 128 * 4);
+			for (int i = 0; i < 128 * 128; i++) {
+				bmp.pixels[i * 4 + 0] = fp[i * 3 + 0];
+				bmp.pixels[i * 4 + 1] = fp[i * 3 + 1];
+				bmp.pixels[i * 4 + 2] = fp[i * 3 + 2];
+				bmp.pixels[i * 4 + 3] = 255;
+			}
+			it->second.width = it->second.height = 128;
+			it->second.tex = gfx->CreateTexture(bmp, 1);
+		}
+		free(data);
 		return it->second;
 	}
 
@@ -213,6 +270,13 @@ struct FrontEnd::Impl {
 		lua.set_function("getPlace", [this]() { return place == Place::IN_GAME ? "game" : "menu"; });
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
+		// Draws a level's map image into a box; returns false when the level has none
+		lua.set_function("drawLevelPreview", [this](const std::string& level, float x, float y, float w, float h) {
+			const Image& img = levelPreview(level);
+			if (img.tex)
+				drawList->AddImage((ImTextureID)img.tex, ImVec2(x, y), ImVec2(x + w, y + h));
+			return img.tex != nullptr;
+		});
 		// The original's AI Generals: { blueprint, name, category ("CONSCRIPT", "VETERAN", "ELITE"), portrait, biography }
 		lua.set_function("getGenerals", [this]() {
 			static const std::vector<General> generals = LoadGenerals();

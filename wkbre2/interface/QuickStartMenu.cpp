@@ -171,26 +171,49 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	else if (request.action == "select_level")
 		selectSaveGame(request.arg);
 	else if (request.action == "slots") {
-		// "H|A:<AI General>|A|E": human, an AI General (or a random one), empty
+		// "H;c1;t1|A:<AI General>;c3|A|E": per position human, an AI General (or a random one) or
+		// empty, then optionally ";c<colour>" and ";t<team>"
 		std::vector<QuickSkirmishMenu::Slot> slots;
-		size_t start = 0;
-		while (start <= request.arg.size()) {
-			size_t end = request.arg.find('|', start);
-			if (end == std::string::npos)
-				end = request.arg.size();
-			const std::string part = request.arg.substr(start, end - start);
+		auto split = [](const std::string& text, char sep) {
+			std::vector<std::string> parts;
+			size_t start = 0;
+			while (start <= text.size()) {
+				size_t end = text.find(sep, start);
+				if (end == std::string::npos)
+					end = text.size();
+				parts.push_back(text.substr(start, end - start));
+				start = end + 1;
+			}
+			return parts;
+		};
+		for (const std::string& part : split(request.arg, '|')) {
+			if (part.empty())
+				continue;
+			const std::vector<std::string> fields = split(part, ';');
 			QuickSkirmishMenu::Slot slot;
-			if (part == "H")
+			const std::string& type = fields[0];
+			if (type == "H")
 				slot.type = QuickSkirmishMenu::Slot::HUMAN;
-			else if (part == "E")
+			else if (type == "E")
 				slot.type = QuickSkirmishMenu::Slot::EMPTY;
-			else if (part.rfind("A:", 0) == 0)
-				slot.general = part.substr(2);
-			if (!part.empty())
-				slots.push_back(slot);
-			start = end + 1;
+			else if (type.rfind("A:", 0) == 0)
+				slot.general = type.substr(2);
+			for (size_t f = 1; f < fields.size(); f++) {
+				if (fields[f].size() < 2)
+					continue;
+				const int value = atoi(fields[f].c_str() + 1);
+				if (fields[f][0] == 'c') slot.colour = value;
+				else if (fields[f][0] == 't') slot.team = value;
+			}
+			slots.push_back(slot);
 		}
 		skirmishMenu.setSlots(std::move(slots));
+	}
+	else if (request.action == "skirmish_setting") {
+		// "<name>=<value>"
+		const size_t eq = request.arg.find('=');
+		if (eq != std::string::npos)
+			skirmishMenu.setSetting(request.arg.substr(0, eq), atoi(request.arg.c_str() + eq + 1));
 	}
 	else if (request.action == "skirmish_settings")
 		showSkirmishWnd = true;

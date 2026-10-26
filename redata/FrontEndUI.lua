@@ -421,12 +421,13 @@ Screens.load = {
 -- Skirmish -----------------------------------------------------------------------------
 
 local levelState = { selected = 1, scroll = 0 }
--- The skirmish maps ("2 Player 4 Peaks.lvl"), shown as the original does: "4 Peaks (2)"
-local function levelList()
+-- The skirmish maps ("2 Player 4 Peaks.lvl"), shown as the original does: "4 Peaks (2)";
+-- filter: only the maps for that many players (0: all)
+local function levelList(filter)
 	local levels, names = {}, {}
 	for _, l in ipairs(savesOfType(".lvl")) do
 		local players, name = string.match(stripExtension(l), "^(%d+) Player (.+)$")
-		if players then
+		if players and (not filter or filter == 0 or tonumber(players) == filter) then
 			levels[#levels + 1] = l
 			names[#names + 1] = name .. " (" .. players .. ")"
 		end
@@ -434,9 +435,9 @@ local function levelList()
 	return levels, names
 end
 
-local function levelPicker(x, y, w, h)
+local function levelPicker(x, y, w, h, filter)
 	x, y, w, h = x or X(20), y or Y(80), w or L(1880), h or L(920)
-	local levels, names = levelList()
+	local levels, names = levelList(filter)
 	panel(x, y, w, h)
 	local before = levelState.selected
 	local activated = listBox(levelState, names, x + L(2), y + L(4), w - L(4), h - L(8))
@@ -445,9 +446,15 @@ local function levelPicker(x, y, w, h)
 	return chosen, activated
 end
 
+-- The player colours (index 1 ... 8, as the game's) and their swatches
+local COLOURS = { "Blue", "Yellow", "Red", "Green", "Purple", "Orange", "Light_Blue", "Brown" }
+local function colourSwatch(index)
+	return "Interface\\FrontEnd\\Player Colours\\" .. (COLOURS[index] or "Blue") .. ".tga"
+end
+
 -- Who plays at each start position: { type = "human" | "ai" | "empty", general = blueprint or nil (random) }
 local skirmish = { tab = 1, slots = {}, slotList = { selected = 1, scroll = 0 }, tier = 1,
-	generalList = { selected = 0, scroll = 0 }, level = nil }
+	generalList = { selected = 0, scroll = 0 }, level = nil, playerFilter = 0 }
 
 local TIERS = { { "CONSCRIPT", "FRONT_END_CHAT_AI_CONSCRIPT" }, { "VETERAN", "FRONT_END_CHAT_AI_VETERAN" }, { "ELITE", "FRONT_END_CHAT_AI_ELITE" } }
 
@@ -457,7 +464,7 @@ local function resetSlots(level)
 	skirmish.slots = {}
 	local players = tonumber(string.match(level or "", "^(%d+) Player")) or 2
 	for i = 1, players do
-		skirmish.slots[i] = { type = (i == 1) and "human" or "ai" }
+		skirmish.slots[i] = { type = (i == 1) and "human" or "ai", colour = ((i - 1) % 8) + 1, team = 0 }
 	end
 	skirmish.slotList.selected = math.min(2, players)
 end
@@ -479,13 +486,14 @@ local function slotText(slot)
 	return g and g.name or T("FRONT_END_CHAT_RANDOM_GENERAL"), YELLOW
 end
 
--- Sent before the start: "H|A:<general>|A|E"
+-- Sent before the start: "H;c1;t0|A:<general>;c2;t0|A;c3;t0|E"
 local function slotsRequest()
 	local parts = {}
 	for i, slot in ipairs(skirmish.slots) do
 		if slot.type == "human" then parts[i] = "H"
 		elseif slot.type == "empty" then parts[i] = "E"
 		else parts[i] = "A:" .. (slot.general or "") end
+		parts[i] = parts[i] .. ";c" .. (slot.colour or 0) .. ";t" .. (slot.team or 0)
 	end
 	request("slots", table.concat(parts, "|"))
 end
@@ -496,25 +504,40 @@ local function playersTab()
 	-- the start positions
 	panel(X(20), Y(88), L(408), L(197))
 	drawText(FONT_LIST, X(28), Y(94), "#  " .. T("FRONT_END_CHAT_PLAYER"), WHITE, S)
+	drawText(FONT_LIST, X(300), Y(94), T("FRONT_END_CHAT_COLOUR"), WHITE, S)
+	drawText(FONT_LIST, X(372), Y(94), T("FRONT_END_CHAT_TEAM"), WHITE, S)
 	local rows = {}
 	for i, slot in ipairs(slots) do
 		local text, colour = slotText(slot)
 		rows[i] = { i .. "  " .. text, colour }
 	end
 	listBox(skirmish.slotList, rows, X(22), Y(110), L(404), L(130))
+	-- colour and team of each position: a click changes them
+	for r = 1, 8 do
+		local i = skirmish.slotList.scroll + r
+		local slot = slots[i]
+		if not slot then break end
+		local ry = Y(110) + L(4) + (r - 1) * L(16)
+		if slot.type ~= "empty" then
+			drawImage(colourSwatch(slot.colour), X(304), ry + L(1), L(36), L(14))
+			centredText(FONT_LIST, (slot.team or 0) > 0 and tostring(slot.team) or "-", X(372), ry, L(40), L(16), WHITE)
+			if hovered(X(300), ry, L(44), L(16)) and mouse.released then slot.colour = (slot.colour % 8) + 1 end
+			if hovered(X(368), ry, L(48), L(16)) and mouse.released then slot.team = ((slot.team or 0) + 1) % 5 end
+		end
+	end
 	local sel = slots[skirmish.slotList.selected]
 	if button(T("FRONT_END_CHAT_PLAYER_NAME"), X(28), Y(252), L(124), L(24), sel ~= nil and sel.type ~= "human") then
 		-- one human: the previous position becomes free
 		for _, other in ipairs(slots) do
 			if other.type == "human" then other.type = "empty" end
 		end
-		slots[skirmish.slotList.selected] = { type = "human" }
+		slots[skirmish.slotList.selected] = { type = "human", colour = sel.colour, team = sel.team }
 	end
 	if button(T("FRONT_END_CHAT_KICK_GENERAL"), X(160), Y(252), L(124), L(24), sel ~= nil and sel.type == "ai") then
-		slots[skirmish.slotList.selected] = { type = "empty" }
+		slots[skirmish.slotList.selected] = { type = "empty", colour = sel.colour, team = sel.team }
 	end
 	if button(T("FRONT_END_CHAT_ADD_AI_GENERAL"), X(292), Y(252), L(128), L(24), sel ~= nil and sel.type ~= "ai") then
-		slots[skirmish.slotList.selected] = { type = "ai" }
+		slots[skirmish.slotList.selected] = { type = "ai", colour = sel.colour, team = sel.team }
 	end
 	sel = slots[skirmish.slotList.selected]
 
@@ -546,7 +569,7 @@ local function playersTab()
 	local _, hoveredRow = listBox(skirmish.generalList, list, X(439), Y(110), L(1461), L(113))
 	if skirmish.generalList.selected ~= before and sel then
 		local g = entries[skirmish.generalList.selected]
-		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil }
+		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team }
 	end
 
 	-- portrait and biography of the general under the mouse, or of the selected position's
@@ -566,12 +589,123 @@ local function playersTab()
 	end
 end
 
+
+-- The game settings (QuickSkirmishMenu::setSetting), with the original's defaults
+local SETTINGS = {
+	mode = 0, startFood = 500, startWood = 500, startGold = 200, populationLimit = 200,
+	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
+	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
+	unitLives = 0, capturableFlags = 4,
+}
+skirmish.settings = {}
+for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
+
+local function settingsRequests()
+	for name, value in pairs(skirmish.settings) do
+		request("skirmish_setting", name .. "=" .. math.floor(value))
+	end
+end
+
+-- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked
+local function roundButton(x, y, size, on, enabled)
+	local hot = enabled and hovered(x, y, size, size)
+	local art = "Interface\\FrontEnd\\Check_Box_" .. (not enabled and "Grey" or (on and "On" or (hot and "Blank_High" or "Blank"))) .. ".tga"
+	drawImage(art, x, y, size, size)
+	return hot and mouse.released
+end
+
+local function plusMinusButton(kind, x, y, size)
+	local hot = hovered(x, y, size, size)
+	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
+	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
+	return hot and mouse.released
+end
+
+-- A value with - and + buttons, as the original's Start Food etc.
+local function stepperRow(label, icon, name, step, min, max, y)
+	local s = skirmish.settings
+	local lw = textWidth(FONT_LIST, label, S)
+	drawText(FONT_LIST, X(170) - lw, y + L(18), label, WHITE, S)
+	if icon then drawImage(icon, X(174), y + L(12), L(20), L(24)) end
+	if plusMinusButton("Minus", X(200), y, L(52)) then s[name] = math.max(min, s[name] - step) end
+	centredText(FONT_LIST, tostring(math.floor(s[name])), X(260), y, L(620), L(52), WHITE)
+	if plusMinusButton("Plus", X(892), y, L(52)) then s[name] = math.min(max, s[name] + step) end
+end
+
+local RESOURCE_LEVELS = { "FRONT_END_SETTINGS_RESOURCE_LEVEL_OFF", "FRONT_END_SETTINGS_RESOURCE_LEVEL_LOW",
+	"FRONT_END_SETTINGS_RESOURCE_LEVEL_MEDIUM", "FRONT_END_SETTINGS_RESOURCE_LEVEL_HIGH" }
+
 local function settingsTab()
-	-- the map; the other game settings are still the ImGui window
-	local chosen = levelPicker(X(955), Y(100), L(945), L(890))
-	if chosen ~= skirmish.level then resetSlots(chosen) end
-	if button(T("FRONT_END_LOBBY_SETTINGS") .. "...", X(100), Y(120), L(240), L(30), chosen ~= nil) then
-		request("skirmish_settings")
+	local s = skirmish.settings
+	-- the map: a filter by player count, the list (map preview still to come)
+	panel(X(106), Y(123), L(742), L(364))
+	-- the map's image, square and centred (the original letterboxes it the same way)
+	if skirmish.level and not drawLevelPreview(skirmish.level, X(106) + (L(742) - L(364)) / 2, Y(123), L(364), L(364)) then
+		local name = string.gsub(string.gsub(skirmish.level, "%.lvl$", ""), "^(%d+) Player (.+)$", "%2 (%1)")
+		centredText(FONT_BUTTON, name, X(106), Y(123), L(742), L(364), WHITE)
+	end
+	if button(T("FRONT_END_SETTINGS_MAP_ALL"), X(965), Y(127), L(680), L(30), true, skirmish.playerFilter == 0) then
+		skirmish.playerFilter = 0
+	end
+	for n = 2, 8 do
+		local x = X(1655) + (n - 2) * L(35)
+		local hot = hovered(x, Y(126), L(32), L(32))
+		drawImage("Interface\\FrontEnd\\Check_Box_" .. ((skirmish.playerFilter == n) and "On" or (hot and "Blank_High" or "Blank")) .. ".tga", x, Y(126), L(32), L(32))
+		centredText(FONT_LIST, tostring(n), x, Y(126), L(32), L(32), WHITE)
+		if hot and mouse.released then skirmish.playerFilter = n end
+	end
+	-- a new filter keeps the chosen map selected where it is still listed
+	if skirmish.playerFilter ~= skirmish.listedFilter then
+		skirmish.listedFilter = skirmish.playerFilter
+		local levels = levelList(skirmish.playerFilter)
+		levelState.selected, levelState.scroll = 1, 0
+		for i, l in ipairs(levels) do
+			if l == skirmish.level then levelState.selected = i end
+		end
+	end
+	local chosen = levelPicker(X(955), Y(167), L(945), L(323), skirmish.playerFilter)
+	if chosen and chosen ~= skirmish.level then
+		resetSlots(chosen)
+		request("select_level", chosen)
+	end
+
+	-- the resources (Standard mode) or the Valhalla settings
+	if s.mode == 0 then
+		stepperRow(T("FRONT_END_SETTINGS_START_FOOD"), "Interface\\InGame\\Info Panel\\Chicken.tga", "startFood", 100, 0, 100000, Y(514))
+		stepperRow(T("FRONT_END_SETTINGS_START_WOOD"), "Interface\\InGame\\Info Panel\\Tree.tga", "startWood", 100, 0, 100000, Y(590))
+		stepperRow(T("FRONT_END_SETTINGS_START_GOLD"), "Interface\\InGame\\Info Panel\\Coin.tga", "startGold", 50, 0, 100000, Y(666))
+		stepperRow(T("FRONT_END_SETTINGS_POPULATION_LIMIT"), "Interface\\InGame\\Info Panel\\Man.tga", "populationLimit", 10, 10, 1000, Y(742))
+		local lw = textWidth(FONT_LIST, T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), S)
+		drawText(FONT_LIST, X(170) - lw, Y(838), T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), WHITE, S)
+		if button(T(RESOURCE_LEVELS[s.randomiseResources + 1]), X(200), Y(826), L(744), L(38)) then
+			s.randomiseResources = (s.randomiseResources + 1) % 4
+		end
+	else
+		stepperRow(T("FRONT_END_SETTINGS_RESOURCE_POINTS"), nil, "resourcePoints", 250, 0, 100000, Y(514))
+		stepperRow(T("FRONT_END_SETTINGS_VICTORY_TIME"), nil, "victoryPointLimit", 1000, 1000, 1000000, Y(590))
+		stepperRow(T("FRONT_END_SETTINGS_VALHALLA_MODE_FOOD"), nil, "valhallaModeFood", 1000, 0, 1000000, Y(666))
+		stepperRow(T("FRONT_END_SETTINGS_UNIT_LIVES"), nil, "unitLives", 1, 0, 100, Y(742))
+		stepperRow(T("FRONT_END_SETTINGS_CAPTURABLE_FLAGS"), nil, "capturableFlags", 1, 0, 20, Y(818))
+	end
+
+	-- the mode, and the switches
+	if roundButton(X(958), Y(514), L(52), s.mode == 0, true) then s.mode = 0 end
+	drawText(FONT_LIST, X(1022), Y(532), T("FRONT_END_SETTINGS_GAME_TYPE_STANDARD_MODE"), s.mode == 0 and YELLOW or WHITE, S)
+	if roundButton(X(958), Y(590), L(52), s.mode == 1, true) then s.mode = 1 end
+	drawText(FONT_LIST, X(1022), Y(608), T("FRONT_END_SETTINGS_GAME_TYPE_VALHALLA_MODE"), s.mode == 1 and YELLOW or WHITE, S)
+	local switches = {
+		{ "clearFogOfWar", "FRONT_END_SETTINGS_FOG_OF_WAR", Y(590) },
+		{ "allowDiplomacy", "FRONT_END_SETTINGS_ALLOW_DIPLOMACY", Y(666) },
+		{ "teamReconnaissance", "FRONT_END_SETTINGS_TEAM_RECONNAISSANCE", Y(742) },
+		{ "barbarianTribes", "FRONT_END_SETTINGS_BARBARIAN_TRIBES", Y(818) },
+	}
+	if s.mode == 0 then
+		table.insert(switches, 1, { "kingPiece", "FRONT_END_SETTINGS_GAME_TYPE_KING_PIECE", Y(514) })
+	end
+	for _, sw in ipairs(switches) do
+		local name, key, y = sw[1], sw[2], sw[3]
+		if roundButton(X(1393), y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, X(1457), y + L(18), T(key), WHITE, S)
 	end
 end
 
@@ -592,6 +726,7 @@ Screens.skirmish = {
 		for _, slot in ipairs(skirmish.slots) do if slot.type == "human" then humans = humans + 1 end end
 		local canStart = skirmish.level ~= nil and humans == 1
 		if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
+			settingsRequests()
 			slotsRequest()
 			request("start", skirmish.level)
 		end
@@ -788,6 +923,12 @@ function FE_IsOpen()
 end
 
 function FE_Open(name)
+	-- "screen.tab" opens a screen at one of its tabs (tests)
+	local screenName, tab = string.match(name, "^([^.]+)%.(.+)$")
+	if screenName == "skirmish" then
+		name = screenName
+		skirmish.tab = (tab == "settings") and 2 or 1
+	end
 	if #stack == 0 or stack[#stack] ~= name then push(name) end
 	openedThisFrame = true
 end

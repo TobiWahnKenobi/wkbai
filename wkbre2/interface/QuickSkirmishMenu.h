@@ -20,8 +20,12 @@ public:
 	struct Slot {
 		enum Type { HUMAN, AI, EMPTY } type = AI;
 		std::string general; // AI: an AI General (PLAYER blueprint); empty: a random one
+		int colour = 0;      // player colour index (1 blue ... 8 brown); 0: the map's
+		int team = 0;        // 0: no team
 	};
 	void setSlots(std::vector<Slot> newSlots) { slots = std::move(newSlots); }
+	// A game setting by name, as the skirmish menu sends them ("startFood", "mode", ...)
+	void setSetting(const std::string& name, int value);
 
 private:
 	enum GameMode {
