@@ -673,15 +673,13 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 			}
 			shadowTexture = gfx->CreateTexture(bmp, 1);
 		}
-		const auto [aabbLow, aabbHigh] = model->interpolateBoundingBox(obj->sceneEntity.animTime);
-		const Vector3 preOff = -(aabbLow + aabbHigh) / 2.0f;
-		const Vector3 postOff = Vector3(1, 0, 1) * (client->terrain->edge * 5.0f);
-		const Vector3 v1 = (Vector3(aabbLow.x, 0.0f, aabbLow.z) + preOff).transform(transformMatrix) + postOff;
-		const Vector3 v2 = (Vector3(aabbLow.x, 0.0f, aabbHigh.z) + preOff).transform(transformMatrix) + postOff;
-		const Vector3 v3 = (Vector3(aabbHigh.x, 0.0f, aabbLow.z) + preOff).transform(transformMatrix) + postOff;
-		const TerrainSpriteContainer::Point p1{ v1.x, v1.z };
-		const TerrainSpriteContainer::Point p2{ v2.x, v2.z };
-		const TerrainSpriteContainer::Point p3{ v3.x, v3.z };
+		// A round blob as wide as the model's bounding sphere: the bounding box's footprint is no
+		// wider than the unit itself, so the unit hid its whole shadow.
+		const Vector3 centre = sphereCenter + Vector3(1, 0, 1) * (client->terrain->edge * 5.0f);
+		const float radius = model->getSphereRadius() * std::max(obj->scale.x, obj->scale.z);
+		const TerrainSpriteContainer::Point p1{ centre.x - radius, centre.z - radius };
+		const TerrainSpriteContainer::Point p2{ centre.x - radius, centre.z + radius };
+		const TerrainSpriteContainer::Point p3{ centre.x + radius, centre.z - radius };
 		terrainSpriteContainer->addSprite(*shadowTexture, p1, p2, p3);
 	}
 

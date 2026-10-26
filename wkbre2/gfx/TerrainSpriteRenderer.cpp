@@ -6,6 +6,8 @@
 #include "../util/vecmat.h"
 
 #include <algorithm>
+#include <cmath>
+#include <utility>
 
 void TerrainSpriteRenderer::init()
 {
@@ -41,20 +43,15 @@ void TerrainSpriteRenderer::render()
 			int tileEndX = std::min((int)(xMax / tileSize), terrain->width - 1);
 			int tileEndZ = std::min((int)(yMax / tileSize), terrain->height - 1);
 
-			Matrix matUv2World = Matrix::getIdentity();
-			matUv2World._11 = p2.x - p1.x;
-			matUv2World._12 = p2.y - p1.y;
-			matUv2World._21 = p3.x - p1.x;
-			matUv2World._22 = p3.y - p1.y;
-			matUv2World._41 = p1.x;
-			matUv2World._42 = p1.y;
-			const float det = matUv2World._11 * matUv2World._22 - matUv2World._21 * matUv2World._12;
-			Matrix matWorld2Uv = Matrix::getIdentity();
-			matWorld2Uv._11 = matUv2World._22 / det;
-			matWorld2Uv._12 = -matUv2World._12 / det;
-			matWorld2Uv._21 = -matUv2World._21 / det;
-			matWorld2Uv._22 = matUv2World._11 / det;
-			matWorld2Uv = Matrix::getTranslationMatrix(-Vector3(p1.x, p1.y, 0.0f)) * matWorld2Uv;
+			// The sprite's UV at a ground point w: w - p1 = u * (p2 - p1) + v * (p3 - p1), solved in 2D
+			const float ax = p2.x - p1.x, ay = p2.y - p1.y, bx = p3.x - p1.x, by = p3.y - p1.y;
+			const float det = ax * by - ay * bx;
+			if (std::abs(det) < 1e-6f)
+				continue;
+			auto toUv = [&](float wx, float wy) {
+				const float dx = wx - p1.x, dy = wy - p1.y;
+				return std::make_pair((dx * by - dy * bx) / det, (ax * dy - ay * dx) / det);
+			};
 
 			for (int tileZ = tileStartZ; tileZ <= tileEndZ; ++tileZ) {
 				for (int tileX = tileStartX; tileX <= tileEndX; ++tileX) {
@@ -68,12 +65,13 @@ void TerrainSpriteRenderer::render()
 						int pz = (i == 2 || i == 3) ? 1 : 0;
 
 						verts[i].x = (tileX + px) * tileSize - tileOffset;
-						verts[i].y = terrain->getVertex(tileX + px, tileZ + pz);
+						// a little above the ground, so that the depth test against the terrain passes
+						verts[i].y = terrain->getVertex(tileX + px, tileZ + pz) + 0.05f;
 						verts[i].z = (tileZ + pz) * tileSize - tileOffset;
 
-						Vector3 t = Vector3((tileX + px) * tileSize, (tileZ + pz) * tileSize, 0.0f).transform(matWorld2Uv);
-						verts[i].u = t.x;
-						verts[i].v = t.y;
+						const auto uv = toUv((tileX + px) * tileSize, (tileZ + pz) * tileSize);
+						verts[i].u = uv.first;
+						verts[i].v = uv.second;
 						verts[i].color = 0xFFFFFFFF;
 					}
 					
