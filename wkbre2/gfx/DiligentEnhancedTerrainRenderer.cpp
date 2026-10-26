@@ -54,7 +54,7 @@ cbuffer SunBuffer
 	int BumpOn;
 	matrix ShadowMatrix; // world -> static shadow map clip space
 	float4 CloudParams; // UV offset, UV per world unit, on
-	float4 ShadowParams; // on, light left in the shadow, shadow map texel size
+	float4 ShadowParams; // on, light left in the shadow
 };
 
 // The original's terrain shadows (docs/re/shadows.md): the light is scaled by the scrolling
@@ -68,18 +68,35 @@ float CloudLight(float3 pos)
 	return light;
 }
 
+// One static shadow texel of the original: in or out of shadow at its sample point, seen along
+// the sun from the ground (here: the depth test against the sun shadow map).
+float StaticShadowSample(float2 xz, float y)
+{
+	float4 sp = mul(float4(xz.x, y, xz.y, 1), ShadowMatrix);
+	float2 uv = sp.xy * float2(0.5, -0.5) + 0.5;
+	float lit = 1;
+	if (all(uv >= 0) && all(uv <= 1) && sp.z <= 1)
+		lit = shadowTexture.SampleCmpLevelZero(shadowSampler, uv, sp.z);
+	return lit;
+}
+
+// The original ray-casts 4x4 points per 5-unit tile, 1 unit apart starting 1 unit in, to the
+// sun against the casters' triangles, stores each as fully lit or shadowed in a texture of 4
+// texels per tile (1.25 units), and draws that bilinearly filtered: the soft edge is that filter.
 float StaticShadowLight(float3 pos)
 {
 	float light = 1;
-	float4 sp = mul(float4(pos, 1), ShadowMatrix);
-	float2 uv = sp.xy * float2(0.5, -0.5) + 0.5;
-	if (ShadowParams.x != 0 && all(uv >= 0) && all(uv <= 1) && sp.z <= 1) {
-		// 6x6 percentage-closer taps, 4 texels (0.8 units) apart, for the soft edge
-		float lit = 0;
-		for (int y = 0; y < 6; y++)
-			for (int x = 0; x < 6; x++)
-				lit += shadowTexture.SampleCmpLevelZero(shadowSampler, uv + (float2(x, y) - 2.5) * 4 * ShadowParams.z, sp.z);
-		light = lerp(ShadowParams.y, 1, lit / 36);
+	if (ShadowParams.x != 0) {
+		float2 t = pos.xz * 0.8 - 0.5; // texel space, texel centres at whole numbers
+		float2 t0 = floor(t), f = t - t0;
+		float lit[4];
+		for (int i = 0; i < 4; i++) {
+			float2 k = t0 + float2(i & 1, i >> 1);
+			float2 tile = floor(k / 4);
+			lit[i] = StaticShadowSample(tile * 5 + (k - tile * 4) + 1, pos.y);
+		}
+		float l = lerp(lerp(lit[0], lit[1], f.x), lerp(lit[2], lit[3], f.x), f.y);
+		light = lerp(ShadowParams.y, 1, l);
 	}
 	return light;
 }
@@ -226,7 +243,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
 	SamplerDesc shadowSampler;
-	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_LINEAR;
+	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_POINT;
 	shadowSampler.ComparisonFunc = COMPARISON_FUNC_LESS_EQUAL;
 	shadowSampler.AddressU = shadowSampler.AddressV = shadowSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
@@ -394,7 +411,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* shadowParams = (float*)(sbdata + 96);
 	shadowParams[0] = shadows.staticShadowValid ? 1.0f : 0.0f;
 	shadowParams[1] = STATIC_SHADOW_LIGHT;
-	shadowParams[2] = 1.0f / STATIC_SHADOW_MAP_SIZE;
+	shadowParams[2] = 0.0f;
 	shadowParams[3] = 0.0f;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
