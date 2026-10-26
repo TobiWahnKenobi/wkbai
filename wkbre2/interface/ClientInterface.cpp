@@ -322,6 +322,7 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * 1000.0f);
 	obj->sceneEntity.flags = 0;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
+	if (obj->blueprint->hasStaticShadow) obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;
@@ -1296,6 +1297,8 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 			scene->sunColor = client->terrain->sunColor;
 		}
+		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
+			dgfx->shadows.time = client->timeManager.currentTime;
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))
 				sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);

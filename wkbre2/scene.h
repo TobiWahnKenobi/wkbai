@@ -24,6 +24,7 @@ struct SceneEntity {
 	enum Flags {
 		SEFLAG_NOLIGHTING = 1, // disable light shading on entity
 		SEFLAG_ANIM_CLAMP_END = 2, // clamp to last anim frame instead of repeating animation from the beginning
+		SEFLAG_STATIC_SHADOW = 4, // casts the original's static shadow on the terrain (HAS_STATIC_SHADOW)
 	};
 };
 

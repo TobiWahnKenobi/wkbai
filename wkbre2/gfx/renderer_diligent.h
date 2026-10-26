@@ -31,5 +31,25 @@ struct DiligentGfx : IRenderer
 	// offset to bind it at. The data stays valid until the end of the frame.
 	virtual Diligent::IBuffer* StreamVertexData(const void* data, uint64_t size, uint64_t& offset) = 0;
 	virtual Diligent::IBuffer* StreamIndexData(const void* data, uint64_t size, uint64_t& offset) = 0;
+
+	// Binds the swap chain's targets and the full viewport again after drawing offscreen.
+	virtual void RestoreRenderTargets() = 0;
+
+	// The original's terrain shadows, shared by the enhanced renderers (see docs/re/shadows.md
+	// in the RE repository). The terrain renderer creates the maps, the scene renderer draws
+	// the static shadow casters into the shadow map before the terrain samples it.
+	struct ShadowEnvironment {
+		float time = 0.0f; // game time in seconds, scrolls the cloud shadows
+		bool cloudShadows = true, staticShadows = true;
+		Diligent::RefCntAutoPtr<Diligent::ITextureView> cloudMap; // sky_shadow_map.pcx, or null
+		Diligent::RefCntAutoPtr<Diligent::ITextureView> staticShadowDSV, staticShadowSRV;
+		Matrix staticShadowMatrix; // world → shadow map clip space, row vectors
+		bool staticShadowValid = false; // drawn in this frame
+	} shadows;
 };
+
+// The cloud shadow mapping measured in the original: one texel of the 256×256 map covers
+// 4×4 world units, and the map scrolls by (4.06, 1.17) texels per second of game time.
+constexpr float CLOUD_UV_PER_UNIT = 1.0f / 1024.0f;
+constexpr float CLOUD_SCROLL_U = 4.06f / 256.0f, CLOUD_SCROLL_V = 1.17f / 256.0f;
 

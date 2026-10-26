@@ -13,6 +13,10 @@
 #include "../terrain.h"
 #include "../Camera.h"
 #include "../util/util.h"
+#include "../file.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
+#include "bitmap.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -26,6 +30,10 @@ static const char tshaderCode[] = R"---(
 Texture2D inpTexture;
 Texture2D normalTexture;
 SamplerState inpSampler;
+Texture2D cloudTexture;
+SamplerState cloudSampler;
+Texture2D<float> shadowTexture;
+SamplerComparisonState shadowSampler;
 
 cbuffer TransformBuffer
 {
@@ -43,7 +51,37 @@ cbuffer SunBuffer
 {
 	float3 SunDirection;
 	int BumpOn;
+	matrix ShadowMatrix; // world -> static shadow map clip space
+	float4 CloudParams; // UV offset, UV per world unit, on
+	float4 ShadowParams; // on, light left in the shadow, shadow map texel size
 };
+
+// The original's terrain shadows (docs/re/shadows.md): the light is scaled by the scrolling
+// sky_shadow_map.pcx, and buildings with HAS_STATIC_SHADOW darken the ground under them to
+// 0.706 with soft edges. wkbre2 draws the static shadows from a sun shadow map.
+float CloudLight(float3 pos)
+{
+	float light = 1;
+	if (CloudParams.w != 0)
+		light = cloudTexture.Sample(cloudSampler, pos.xz * CloudParams.z + CloudParams.xy).r;
+	return light;
+}
+
+float StaticShadowLight(float3 pos)
+{
+	float light = 1;
+	float4 sp = mul(float4(pos, 1), ShadowMatrix);
+	float2 uv = sp.xy * float2(0.5, -0.5) + 0.5;
+	if (ShadowParams.x != 0 && all(uv >= 0) && all(uv <= 1) && sp.z <= 1) {
+		// 6x6 percentage-closer taps, 4 texels (0.8 units) apart, for the soft edge
+		float lit = 0;
+		for (int y = 0; y < 6; y++)
+			for (int x = 0; x < 6; x++)
+				lit += shadowTexture.SampleCmpLevelZero(shadowSampler, uv + (float2(x, y) - 2.5) * 4 * ShadowParams.z, sp.z);
+		light = lerp(ShadowParams.y, 1, lit / 36);
+	}
+	return light;
+}
 
 struct VS_OUTPUT
 {
@@ -96,8 +134,8 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float4 tex = inpTexture.Sample(inpSampler, fuv);
 
 	// The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the
-	// per-vertex light vector (the sun direction in tangent space, shortened where static and
-	// cloud shadows fall) dotted with the normal map, clamped, times the texture.
+	// per-vertex light vector (the sun direction in tangent space, shortened by the cloud
+	// shadows) dotted with the normal map, clamped, times the texture.
 	// See docs/re/lighting.md.
 	float lum = 0;
 
@@ -115,6 +153,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		lum += clamp(dot(input.Norm, SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
 	}
+	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
 	return lerp(float4(lum.xxx, 1) * input.Color * tex, FogColor, input.Fog);
 }
 )---";
@@ -131,7 +170,14 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	std::map<TexturePair, RefCntAutoPtr<IShaderResourceBinding>> bindings;
 	std::map<TexturePair, std::vector<const TerrainTile*>> tilesPerTex;
 	std::vector<uint32_t> indices;
+	texture cloudMap = nullptr;
+	RefCntAutoPtr<ITexture> shadowMap;
 };
+
+// The static shadow map: 2048² texels over the square drawn by the scene renderer
+static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
+// Light left on the ground in a static shadow (the shadow's vertex colour in the original)
+static constexpr float STATIC_SHADOW_LIGHT = 0xB4 / 255.0f;
 
 void DiligentEnhancedTerrainRenderer::init()
 {
@@ -159,7 +205,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 16;
+	cbDesc.Size = 112;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -171,10 +217,19 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
-	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler } };
+	SamplerDesc cloudSampler; // the cloud map tiles the map
+	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+	SamplerDesc shadowSampler;
+	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_LINEAR;
+	shadowSampler.ComparisonFunc = COMPARISON_FUNC_LESS_EQUAL;
+	shadowSampler.AddressU = shadowSampler.AddressV = shadowSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
+		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced terrain resources";
 	sigDesc.Resources = resources;
@@ -188,6 +243,42 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunBuffer);
+
+	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
+	// a map of full light when it is missing.
+	auto& shadows = dgfx->shadows;
+	shadows.cloudShadows = g_settings.value<bool>("cloudShadows", true);
+	shadows.staticShadows = g_settings.value<bool>("staticShadows", true);
+	std::string cloudMapPath;
+	for (wchar_t c : terrain->skyTextureDirectory) {
+		if (!c) break; // the .bcm's string includes its terminator
+		cloudMapPath += (char)c;
+	}
+	if (!cloudMapPath.empty() && cloudMapPath.back() != '\\' && cloudMapPath.back() != '/')
+		cloudMapPath += '\\';
+	cloudMapPath += "sky_shadow_map.pcx";
+	shadows.cloudMap = nullptr;
+	if (!terrain->skyTextureDirectory.empty() && FileExists(cloudMapPath.c_str())) {
+		_impl->cloudMap = gfx->CreateTexture(Bitmap::loadBitmap(cloudMapPath.c_str()), 1);
+		shadows.cloudMap = dgfx->GetTextureView(_impl->cloudMap);
+	}
+	else
+		printf("No cloud shadows: \"%s\" not found\n", cloudMapPath.c_str());
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudTexture")->Set(dgfx->GetTextureView(_impl->cloudMap));
+
+	TextureDesc smDesc;
+	smDesc.Name = "Static shadow map";
+	smDesc.Type = RESOURCE_DIM_TEX_2D;
+	smDesc.Width = smDesc.Height = STATIC_SHADOW_MAP_SIZE;
+	smDesc.Format = TEX_FORMAT_D32_FLOAT;
+	smDesc.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
+	device->CreateTexture(smDesc, nullptr, &_impl->shadowMap);
+	if (!_impl->shadowMap)
+		ferr("Diligent: could not create the static shadow map.");
+	shadows.staticShadowDSV = _impl->shadowMap->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
+	shadows.staticShadowSRV = _impl->shadowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+	shadows.staticShadowValid = false;
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "shadowTexture")->Set(shadows.staticShadowSRV);
 
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
@@ -243,6 +334,14 @@ void DiligentEnhancedTerrainRenderer::init()
 
 DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 {
+	if (_impl) {
+		auto& shadows = ((DiligentGfx*)gfx)->shadows;
+		shadows.cloudMap = nullptr;
+		shadows.staticShadowDSV = shadows.staticShadowSRV = nullptr;
+		shadows.staticShadowValid = false;
+		if (_impl->cloudMap)
+			gfx->FreeTexture(_impl->cloudMap);
+	}
 	delete texcache;
 	delete _impl;
 }
@@ -284,6 +383,18 @@ void DiligentEnhancedTerrainRenderer::render()
 	char* sbdata = (char*)mapped;
 	*(Vector3*)(sbdata + 0) = sunNormal;
 	*(int*)(sbdata + 12) = m_bumpOn ? 1 : 0;
+	auto& shadows = dgfx->shadows;
+	*(Matrix*)(sbdata + 16) = shadows.staticShadowMatrix.getTranspose();
+	float* cloudParams = (float*)(sbdata + 80);
+	cloudParams[0] = std::fmod(shadows.time * CLOUD_SCROLL_U, 1.0f);
+	cloudParams[1] = std::fmod(shadows.time * CLOUD_SCROLL_V, 1.0f);
+	cloudParams[2] = CLOUD_UV_PER_UNIT;
+	cloudParams[3] = (shadows.cloudShadows && _impl->cloudMap) ? 1.0f : 0.0f;
+	float* shadowParams = (float*)(sbdata + 96);
+	shadowParams[0] = shadows.staticShadowValid ? 1.0f : 0.0f;
+	shadowParams[1] = STATIC_SHADOW_LIGHT;
+	shadowParams[2] = 1.0f / STATIC_SHADOW_MAP_SIZE;
+	shadowParams[3] = 0.0f;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
 	for (int z = tlsz; z <= tlez; z++) {
@@ -378,5 +489,6 @@ void DiligentEnhancedTerrainRenderer::render()
 
 	for (auto& pack : _impl->tilesPerTex)
 		pack.second.clear();
+	shadows.staticShadowValid = false;
 }
 

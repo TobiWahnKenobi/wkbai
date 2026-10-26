@@ -430,6 +430,12 @@ struct DiligentRenderer : DiligentGfx
 		return indexRing.buf;
 	}
 
+	void RestoreRenderTargets() override
+	{
+		setRenderTargets();
+		ctx->SetViewports(1, nullptr, 0, 0);
+	}
+
 	void streamVertices(const batchVertex* verts, uint32_t count)
 	{
 		IBuffer* vb = vertexRing.buf;

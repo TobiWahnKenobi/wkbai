@@ -13,6 +13,9 @@
 #include "../scene.h"
 #include "../Camera.h"
 #include "../util/util.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
+#include <cmath>
 #include <algorithm>
 #include <iterator>
 #include <map>
@@ -35,6 +38,8 @@ static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
 static const char esShaderCode[] = R"---(
 Texture2D inpTexture;
 SamplerState inpSampler;
+Texture2D cloudTexture;
+SamplerState cloudSampler;
 
 cbuffer TransformBuffer
 {
@@ -53,14 +58,9 @@ cbuffer SunBuffer
 	float3 SunDirection;
 	int BumpOn;
 	float4 SunColour;
+	float4 CloudParams; // UV offset, UV per world unit, on
+	float4 MeshLighting; // ambient, diffuse factor
 };
-
-// The original's mesh lighting (reverse-engineered, see docs/re/lighting.md): computed per
-// vertex on the CPU as ambient + diffuse * max(N.L, 0), clamped, then multiplied with the
-// texture. Ambient is a grey of 91/255; diffuse is the map's sun colour times an object
-// factor of 188/256.
-static const float AMBIENT = 91.0 / 255.0;
-static const float DIFFUSE_FACTOR = 188.0 / 256.0;
 
 cbuffer SceneBuffer
 {
@@ -96,9 +96,15 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Color = float4(1,1,1,1);
 	}
 	else {
+		// The original's mesh lighting (docs/re/lighting.md): per vertex,
+		// ambient + diffuse * max(N.L, 0), clamped, times the cloud shadow at the object's
+		// position (which scales both terms), then multiplied with the texture.
 		output.Norm = normalize(mul(float4(Normal * 2 - float3(1,1,1), 0), EntityTransform).xyz);
 		float lambert = max(dot(output.Norm, normalize(SunDirection)), 0);
-		output.Color = float4(min(AMBIENT + DIFFUSE_FACTOR * SunColour.rgb * lambert, 1), 1);
+		float cloud = 1;
+		if (CloudParams.w != 0)
+			cloud = cloudTexture.SampleLevel(cloudSampler, EntityTransform[3].xz * CloudParams.z + CloudParams.xy, 0).r;
+		output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
 	}
 	output.Texcoord = Texcoord;
 	output.Fog = clamp((output.Pos.w-FogStartDist) / (FogEndDist-FogStartDist), 0, 1);
@@ -129,6 +135,12 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
 	return lerp(input.Color * tex, FogColor, input.Fog);
+}
+
+// Static shadow casters with alpha-tested materials
+void PS_ShadowAlpha(VS_OUTPUT input)
+{
+	if(inpTexture.Sample(inpSampler, input.Texcoord).a < ALPHA_REF) discard;
 }
 )---";
 
@@ -234,14 +246,28 @@ struct DilAnim
 	}
 };
 
+// Mesh lighting of the original (docs/re/lighting.md) where no cloud shadow falls: ambient grey
+// and the factor applied to the sun colour. "meshLighting": [ambient, diffuse] in wkconfig.json
+// overrides them.
+static constexpr float MESH_AMBIENT = 97.0f / 255.0f;
+static constexpr float MESH_DIFFUSE_FACTOR = 200.0f / 256.0f;
+
+// Half the side of the square around the camera's view centre covered by the static shadow map
+static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
+static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
+
 struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
 	std::map<AnimatedModel*, DilAnim> animMap;
-	RefCntAutoPtr<IPipelineResourceSignature> signature;
+	// Textures (one binding per texture), and the frame's environment (the cloud map)
+	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature;
 	// [animated][alpha test]
-	RefCntAutoPtr<IPipelineState> pipelines[2][2];
+	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
+	RefCntAutoPtr<IShaderResourceBinding> envBinding;
+	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
+	float meshAmbient = MESH_AMBIENT, meshDiffuse = MESH_DIFFUSE_FACTOR;
 	static constexpr size_t MAX_INSTANCES = 16;
 };
 
@@ -264,7 +290,14 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
+	cbDesc.Size = 64;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
+
+	const auto meshLighting = g_settings.value("meshLighting", nlohmann::json::array());
+	if (meshLighting.is_array() && meshLighting.size() == 2) {
+		_impl->meshAmbient = meshLighting[0].get<float>();
+		_impl->meshDiffuse = meshLighting[1].get<float>();
+	}
 
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -291,6 +324,23 @@ void DiligentEnhancedSceneRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SunBuffer")->Set(_impl->sunConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SceneBuffer")->Set(_impl->sceneConstBuffer);
 
+	const PipelineResourceDesc envResources[] = {
+		{ SHADER_TYPE_VERTEX, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+	};
+	SamplerDesc cloudSampler; // the cloud map tiles the map
+	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+	const ImmutableSamplerDesc envSamplers[] = { { SHADER_TYPE_VERTEX, "cloudSampler", cloudSampler } };
+	PipelineResourceSignatureDesc envSigDesc;
+	envSigDesc.Name = "Enhanced scene environment";
+	envSigDesc.Resources = envResources;
+	envSigDesc.NumResources = (Uint32)std::size(envResources);
+	envSigDesc.ImmutableSamplers = envSamplers;
+	envSigDesc.NumImmutableSamplers = (Uint32)std::size(envSamplers);
+	envSigDesc.BindingIndex = 1;
+	device->CreatePipelineResourceSignature(envSigDesc, &_impl->envSignature);
+	if (!_impl->envSignature)
+		ferr("Diligent: could not create the enhanced scene environment signature.");
+
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
@@ -307,6 +357,7 @@ void DiligentEnhancedSceneRenderer::init()
 	};
 	RefCntAutoPtr<IShader> vertexShaders[2] = { createShader(SHADER_TYPE_VERTEX, "VS"), createShader(SHADER_TYPE_VERTEX, "VS_Anim") };
 	RefCntAutoPtr<IShader> pixelShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS"), createShader(SHADER_TYPE_PIXEL, "PS_Alpha") };
+	RefCntAutoPtr<IShader> shadowAlphaShader = createShader(SHADER_TYPE_PIXEL, "PS_ShadowAlpha");
 
 	// Buffer slots: static mesh = positions, normals, UVs, instances;
 	// animated mesh = positions, normals, UVs, next positions, next normals, instances.
@@ -321,33 +372,45 @@ void DiligentEnhancedSceneRenderer::init()
 		LayoutElement{3, 3, 3, VT_FLOAT32, False}, LayoutElement{4, 4, 1, VT_UINT32, False} };
 	instanceElements(layouts[1], 5, 5);
 
-	for (int anim = 0; anim < 2; anim++) {
-		for (int alpha = 0; alpha < 2; alpha++) {
-			GraphicsPipelineStateCreateInfo ci;
-			ci.PSODesc.Name = "Enhanced scene";
-			ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
-			auto& gp = ci.GraphicsPipeline;
-			gp.NumRenderTargets = 1;
-			gp.RTVFormats[0] = dgfx->swapChain->GetDesc().ColorBufferFormat;
-			gp.DSVFormat = dgfx->swapChain->GetDesc().DepthBufferFormat;
-			gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-			// As after IRenderer::BeginMeshDrawing() on D3D11: no blending, depth test
-			// LESS_EQUAL with writes, default rasterizer (back faces culled).
-			gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
-			gp.DepthStencilDesc.DepthEnable = True;
-			gp.DepthStencilDesc.DepthWriteEnable = True;
-			gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
-			gp.BlendDesc.RenderTargets[0].BlendEnable = False;
-			gp.InputLayout.LayoutElements = layouts[anim].data();
-			gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
-			ci.pVS = vertexShaders[anim];
-			ci.pPS = pixelShaders[alpha];
-			IPipelineResourceSignature* signatures[] = { _impl->signature };
-			ci.ppResourceSignatures = signatures;
-			ci.ResourceSignaturesCount = 1;
-			device->CreateGraphicsPipelineState(ci, &_impl->pipelines[anim][alpha]);
-			if (!_impl->pipelines[anim][alpha])
-				ferr("Diligent: could not create the enhanced scene pipeline.");
+	for (int shadow = 0; shadow < 2; shadow++) {
+		for (int anim = 0; anim < 2; anim++) {
+			for (int alpha = 0; alpha < 2; alpha++) {
+				GraphicsPipelineStateCreateInfo ci;
+				ci.PSODesc.Name = shadow ? "Enhanced scene static shadow" : "Enhanced scene";
+				ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+				auto& gp = ci.GraphicsPipeline;
+				if (shadow) {
+					// Depth only, into the static shadow map; both faces, as the meshes
+					// aren't all closed.
+					gp.NumRenderTargets = 0;
+					gp.DSVFormat = TEX_FORMAT_D32_FLOAT;
+					gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+				}
+				else {
+					gp.NumRenderTargets = 1;
+					gp.RTVFormats[0] = dgfx->swapChain->GetDesc().ColorBufferFormat;
+					gp.DSVFormat = dgfx->swapChain->GetDesc().DepthBufferFormat;
+					// As after IRenderer::BeginMeshDrawing() on D3D11: no blending, depth test
+					// LESS_EQUAL with writes, default rasterizer (back faces culled).
+					gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
+				}
+				gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+				gp.DepthStencilDesc.DepthEnable = True;
+				gp.DepthStencilDesc.DepthWriteEnable = True;
+				gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+				gp.BlendDesc.RenderTargets[0].BlendEnable = False;
+				gp.InputLayout.LayoutElements = layouts[anim].data();
+				gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
+				ci.pVS = vertexShaders[anim];
+				ci.pPS = shadow ? (alpha ? shadowAlphaShader.RawPtr() : nullptr) : pixelShaders[alpha].RawPtr();
+				IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature };
+				ci.ppResourceSignatures = signatures;
+				ci.ResourceSignaturesCount = 2;
+				auto& pso = shadow ? _impl->shadowPipelines[anim][alpha] : _impl->pipelines[anim][alpha];
+				device->CreateGraphicsPipelineState(ci, &pso);
+				if (!pso)
+					ferr("Diligent: could not create the enhanced scene pipeline.");
+			}
 		}
 	}
 }
@@ -363,16 +426,32 @@ void DiligentEnhancedSceneRenderer::render()
 	gfx->BeginMeshDrawing();
 	gfx->BeginBatchDrawing();
 
+	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 32);
+	memset(mapped, 0, 64);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
 	sunColour[1] = ((scene->sunColor >> 8) & 255) / 255.0f;
 	sunColour[2] = (scene->sunColor & 255) / 255.0f;
 	sunColour[3] = 1.0f;
+	float* cloudParams = (float*)mapped + 8;
+	cloudParams[0] = std::fmod(shadows.time * CLOUD_SCROLL_U, 1.0f);
+	cloudParams[1] = std::fmod(shadows.time * CLOUD_SCROLL_V, 1.0f);
+	cloudParams[2] = CLOUD_UV_PER_UNIT;
+	cloudParams[3] = (shadows.cloudShadows && shadows.cloudMap) ? 1.0f : 0.0f;
+	float* meshLighting = (float*)mapped + 12;
+	meshLighting[0] = _impl->meshAmbient;
+	meshLighting[1] = _impl->meshDiffuse;
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
+
+	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {
+		_impl->envBinding.Release();
+		_impl->envSignature->CreateShaderResourceBinding(&_impl->envBinding, true);
+		_impl->envCloudMap = shadows.cloudMap.RawPtr();
+		_impl->envBinding->GetVariableByName(SHADER_TYPE_VERTEX, "cloudTexture")->Set(shadows.cloudMap ? shadows.cloudMap.RawPtr() : dgfx->GetTextureView(nullptr));
+	}
 
 	auto getBinding = [&](texture tex) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
@@ -384,96 +463,136 @@ void DiligentEnhancedSceneRenderer::render()
 	};
 
 	std::vector<Matrix> instTransforms;
-	for (const auto& it : scene->matInsts) {
-		const Material& mat = scene->modelCache->getMaterial(it.first.first);
-		const int alpha = mat.alphaTest ? 1 : 0;
-		IShaderResourceBinding* srb = getBinding(it.second.tex);
+	// Draws the scene's meshes, or only the static shadow casters into the bound shadow map.
+	// Returns whether anything was drawn.
+	auto drawMeshes = [&](bool shadowPass) {
+		bool drawn = false;
+		for (const auto& it : scene->matInsts) {
+			const Material& mat = scene->modelCache->getMaterial(it.first.first);
+			const int alpha = mat.alphaTest ? 1 : 0;
+			IShaderResourceBinding* srb = getBinding(it.second.tex);
 
-		auto* model = it.first.second;
-		auto* staticModel = model->getStaticModel();
+			auto* model = it.first.second;
+			auto* staticModel = model->getStaticModel();
 
-		auto mt = _impl->meshMap.find(staticModel);
-		if (mt == _impl->meshMap.end())
-			mt = _impl->meshMap.emplace(staticModel, DilMesh::create(staticModel, device)).first;
-		const DilMesh* enhMesh = &mt->second;
+			auto mt = _impl->meshMap.find(staticModel);
+			if (mt == _impl->meshMap.end())
+				mt = _impl->meshMap.emplace(staticModel, DilMesh::create(staticModel, device)).first;
+			const DilMesh* enhMesh = &mt->second;
 
-		const DilAnim* enhAnim = nullptr;
-		if (model != staticModel) {
-			auto* animModel = (AnimatedModel*)model;
-			auto at = _impl->animMap.find(animModel);
-			if (at == _impl->animMap.end())
-				at = _impl->animMap.emplace(animModel, DilAnim::create(animModel, device)).first;
-			enhAnim = &at->second;
-		}
-
-		int prevFrame = -1;
-		float prevAnimLerp = -1.0f;
-		int prevColor = -1;
-		uint32_t prevFlags = -1;
-		instTransforms.clear();
-
-		auto flush = [&]() {
-			if (instTransforms.empty()) return;
-			uint64_t instanceOffset = 0;
-			IBuffer* instanceBuffer = dgfx->StreamVertexData(instTransforms.data(), instTransforms.size() * 64, instanceOffset);
-
-			void* mapped = nullptr;
-			ctx->MapBuffer(_impl->sceneConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-			uint8_t* sceneBufferBytes = (uint8_t*)mapped;
-			memset(sceneBufferBytes, 0, 16);
-			*(uint32_t*)(sceneBufferBytes + 0) = prevFlags;
-			*(float*)(sceneBufferBytes + 4) = prevAnimLerp;
-			ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
-
-			ctx->SetPipelineState(_impl->pipelines[enhAnim ? 1 : 0][alpha]);
-			ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-			if (enhAnim) {
-				IBuffer* buffers[6] = { enhAnim->animVertices[prevFrame], enhAnim->animNormals[prevFrame], enhMesh->texcoords[prevColor],
-					enhAnim->animVertices[prevFrame + 1], enhAnim->animNormals[prevFrame + 1], instanceBuffer };
-				const Uint64 offsets[6] = { 0, 0, 0, 0, 0, instanceOffset };
-				ctx->SetVertexBuffers(0, 6, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-			}
-			else {
-				IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
-				const Uint64 offsets[4] = { 0, 0, 0, instanceOffset };
-				ctx->SetVertexBuffers(0, 4, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-			}
-			ctx->SetIndexBuffer(enhMesh->indices, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-
-			PolygonList& polylist = staticModel->mesh.polyLists[0];
-			uint32_t startIndex = 0, startVertex = 0;
-			for (size_t g = 0; g < polylist.groups.size(); g++) {
-				uint32_t numIndices = 3 * polylist.groups[g].tupleIndex.size();
-				uint32_t numVertices = staticModel->mesh.groupIndices[g].size();
-				if (staticModel->matIds[g] == it.first.first && numIndices > 0)
-					ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instTransforms.size(), startIndex, startVertex });
-				startIndex += numIndices;
-				startVertex += numVertices;
-			}
-
-			instTransforms.clear();
-		};
-
-		for (const SceneEntity* ent : it.second.list) {
-			size_t frame = 0;
-			float animLerp = 0.0f;
-			if (enhAnim) {
+			const DilAnim* enhAnim = nullptr;
+			if (model != staticModel) {
 				auto* animModel = (AnimatedModel*)model;
-				uint32_t animtime = ent->animTime % animModel->anim.duration;
-				for (; frame < enhAnim->animTimes.size() - 1; frame++)
-					if (enhAnim->animTimes[frame + 1] >= animtime)
-						break;
-				animLerp = (float)(animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]);
+				auto at = _impl->animMap.find(animModel);
+				if (at == _impl->animMap.end())
+					at = _impl->animMap.emplace(animModel, DilAnim::create(animModel, device)).first;
+				enhAnim = &at->second;
 			}
-			int actualColor = ent->color % enhMesh->texcoords.size();
 
-			if (instTransforms.size() >= _impl->MAX_INSTANCES || std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) != std::tie(frame, animLerp, actualColor, ent->flags)) {
-				flush();
+			int prevFrame = -1;
+			float prevAnimLerp = -1.0f;
+			int prevColor = -1;
+			uint32_t prevFlags = -1;
+			instTransforms.clear();
+
+			auto flush = [&]() {
+				if (instTransforms.empty()) return;
+				uint64_t instanceOffset = 0;
+				IBuffer* instanceBuffer = dgfx->StreamVertexData(instTransforms.data(), instTransforms.size() * 64, instanceOffset);
+
+				void* mapped = nullptr;
+				ctx->MapBuffer(_impl->sceneConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+				uint8_t* sceneBufferBytes = (uint8_t*)mapped;
+				memset(sceneBufferBytes, 0, 16);
+				*(uint32_t*)(sceneBufferBytes + 0) = prevFlags;
+				*(float*)(sceneBufferBytes + 4) = prevAnimLerp;
+				ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
+
+				ctx->SetPipelineState((shadowPass ? _impl->shadowPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
+				drawn = true;
+				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				if (enhAnim) {
+					IBuffer* buffers[6] = { enhAnim->animVertices[prevFrame], enhAnim->animNormals[prevFrame], enhMesh->texcoords[prevColor],
+						enhAnim->animVertices[prevFrame + 1], enhAnim->animNormals[prevFrame + 1], instanceBuffer };
+					const Uint64 offsets[6] = { 0, 0, 0, 0, 0, instanceOffset };
+					ctx->SetVertexBuffers(0, 6, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+				}
+				else {
+					IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
+					const Uint64 offsets[4] = { 0, 0, 0, instanceOffset };
+					ctx->SetVertexBuffers(0, 4, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+				}
+				ctx->SetIndexBuffer(enhMesh->indices, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+				PolygonList& polylist = staticModel->mesh.polyLists[0];
+				uint32_t startIndex = 0, startVertex = 0;
+				for (size_t g = 0; g < polylist.groups.size(); g++) {
+					uint32_t numIndices = 3 * polylist.groups[g].tupleIndex.size();
+					uint32_t numVertices = staticModel->mesh.groupIndices[g].size();
+					if (staticModel->matIds[g] == it.first.first && numIndices > 0)
+						ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instTransforms.size(), startIndex, startVertex });
+					startIndex += numIndices;
+					startVertex += numVertices;
+				}
+
+				instTransforms.clear();
+			};
+
+			for (const SceneEntity* ent : it.second.list) {
+				if (shadowPass && !(ent->flags & SceneEntity::SEFLAG_STATIC_SHADOW))
+					continue;
+				size_t frame = 0;
+				float animLerp = 0.0f;
+				if (enhAnim) {
+					auto* animModel = (AnimatedModel*)model;
+					uint32_t animtime = ent->animTime % animModel->anim.duration;
+					for (; frame < enhAnim->animTimes.size() - 1; frame++)
+						if (enhAnim->animTimes[frame + 1] >= animtime)
+							break;
+					animLerp = (float)(animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]);
+				}
+				int actualColor = ent->color % enhMesh->texcoords.size();
+
+				if (instTransforms.size() >= _impl->MAX_INSTANCES || std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) != std::tie(frame, animLerp, actualColor, ent->flags)) {
+					flush();
+				}
+				std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) = std::tie(frame, animLerp, actualColor, ent->flags);
+				instTransforms.push_back(ent->transform.getTranspose());
 			}
-			std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) = std::tie(frame, animLerp, actualColor, ent->flags);
-			instTransforms.push_back(ent->transform.getTranspose());
+			flush();
 		}
-		flush();
+		return drawn;
+	};
+
+	// Static shadows: the casters seen from the sun, orthographic over a square around the
+	// point the camera looks at, snapped to whole texels so that the edges don't shimmer.
+	shadows.staticShadowValid = false;
+	if (shadows.staticShadows && shadows.staticShadowDSV) {
+		const Vector3 sun = scene->sunDirection.normal();
+		const Vector3 target = camera->position + camera->direction.normal() * STATIC_SHADOW_RADIUS * 0.75f;
+		const Vector3 up = std::abs(sun.y) > 0.99f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
+		Matrix view = Matrix::getLHLookAtViewMatrix(target + sun * (STATIC_SHADOW_DEPTH * 0.5f), target, up);
+		const float texel = 2.0f * STATIC_SHADOW_RADIUS / shadows.staticShadowDSV->GetTexture()->GetDesc().Width;
+		view._41 = std::round(view._41 / texel) * texel;
+		view._42 = std::round(view._42 / texel) * texel;
+		Matrix ortho = Matrix::getZeroMatrix();
+		ortho._11 = ortho._22 = 1.0f / STATIC_SHADOW_RADIUS;
+		ortho._33 = 1.0f / STATIC_SHADOW_DEPTH;
+		ortho._44 = 1.0f;
+		const Matrix lightMatrix = view * ortho;
+
+		ITextureView* dsv = shadows.staticShadowDSV;
+		ctx->SetRenderTargets(0, nullptr, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		gfx->SetTransformMatrix(&lightMatrix);
+		shadows.staticShadowValid = drawMeshes(true);
+		shadows.staticShadowMatrix = lightMatrix;
+		gfx->SetTransformMatrix(&camera->sceneMatrix);
+		dgfx->RestoreRenderTargets();
 	}
+
+	drawMeshes(false);
 }
 
