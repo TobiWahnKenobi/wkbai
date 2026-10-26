@@ -52,12 +52,13 @@ cbuffer FogBuffer
 };
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
-// fog grows with the distance outside the playable area (the larger of x and z, so that it follows
-// the square band of the map's edge) and is opaque before the map mesh ends.
+// fog follows the signed distance to the playable area's border (negative inside; the larger of x
+// and z, so that it follows the square band of the map's edge): it may start inside the playable
+// area and is opaque before the map mesh ends.
 float FogAmount(float3 worldPos, float distanceToCamera)
 {
 	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
-	float2 outside = max(max(-worldPos.xz, worldPos.xz - EdgeFog.xy), 0);
+	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
 	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
 	return max(distanceFog, edgeFog);
 }
@@ -77,6 +78,7 @@ cbuffer SunBuffer
 	matrix ShadowMatrix; // world -> static shadow map clip space
 	float4 CloudParams; // UV offset, UV per world unit, on
 	float4 ShadowParams; // on, light left in the shadow
+	float4 LakeColour; // water surface: the map's fog colour, half transparent (as in wkbre2 before)
 };
 
 // The original's terrain shadows (docs/re/shadows.md): the light is scaled by the scrolling
@@ -159,6 +161,25 @@ VS_OUTPUT VS(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint TangentPac
 	return output;
 }
 
+struct LAKE_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	float Fog : FOG;
+};
+
+LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0)
+{
+	LAKE_OUTPUT output;
+	output.Pos = mul(float4(Pos, 1), Transform);
+	output.Fog = FogAmount(Pos, distance(Pos, FogCamera.xyz));
+	return output;
+}
+
+float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
+{
+	return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	// Compute the length of a half pixel in the current mipmap
@@ -204,13 +225,25 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> pipeline;
 	RefCntAutoPtr<IBuffer> sunBuffer;
 	RefCntAutoPtr<IBuffer> trnVertexBuffer;
-	std::unique_ptr<RBatch> lakeBatch;
 
 	using TexturePair = std::pair<texture, texture>; // diffuse, normal map
 	std::map<TerrainTexture*, TexturePair> textures;
 	std::map<TexturePair, RefCntAutoPtr<IShaderResourceBinding>> bindings;
-	std::map<TexturePair, std::vector<const TerrainTile*>> tilesPerTex;
-	std::vector<uint32_t> indices;
+	// The terrain in chunks of CHUNK x CHUNK tiles, with their index lists per texture and their
+	// water quads prebuilt: each frame only the chunks' bounding boxes are tested against the
+	// view, and the visible chunks' lists are concatenated (one draw per texture, one for water).
+	struct Chunk {
+		Vector3 low, high;
+		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
+		std::vector<uint32_t> lakeIndices;
+	};
+	std::vector<Chunk> chunks;
+	std::vector<TexturePair> texturePairs;
+	std::vector<std::vector<uint32_t>> frameIndices; // per texture pair, this frame
+	std::vector<uint32_t> frameLakeIndices;
+	RefCntAutoPtr<IBuffer> lakeVertexBuffer;
+	RefCntAutoPtr<IPipelineState> lakePipeline;
+	RefCntAutoPtr<IShaderResourceBinding> lakeBinding;
 	texture cloudMap = nullptr;
 	RefCntAutoPtr<ITexture> shadowMap;
 };
@@ -224,7 +257,6 @@ void DiligentEnhancedTerrainRenderer::init()
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
 	IRenderDevice* device = dgfx->device;
 	_impl = new Impl;
-	_impl->lakeBatch.reset(gfx->CreateBatch(4 * 256, 6 * 256));
 	texcache = new TextureCache(gfx, "Maps\\Map_Textures\\");
 
 	std::map<TerrainTexture*, EnhancedTerrainTexture> textures;
@@ -245,7 +277,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 112;
+	cbDesc.Size = 128;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -368,6 +400,84 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
+
+	// Water: half transparent over the terrain, depth tested but not written
+	RefCntAutoPtr<IShader> lakeVs = createShader(SHADER_TYPE_VERTEX, "VS_Lake");
+	RefCntAutoPtr<IShader> lakePs = createShader(SHADER_TYPE_PIXEL, "PS_Lake");
+	static const LayoutElement lakeLayout[] = { LayoutElement{0, 0, 3, VT_FLOAT32, False} };
+	ci.PSODesc.Name = "Enhanced terrain water";
+	gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+	gp.DepthStencilDesc.DepthWriteEnable = False;
+	auto& blend = gp.BlendDesc.RenderTargets[0];
+	blend.BlendEnable = True;
+	blend.SrcBlend = BLEND_FACTOR_SRC_ALPHA;
+	blend.DestBlend = BLEND_FACTOR_INV_SRC_ALPHA;
+	blend.SrcBlendAlpha = BLEND_FACTOR_ONE;
+	blend.DestBlendAlpha = BLEND_FACTOR_INV_SRC_ALPHA;
+	gp.InputLayout.LayoutElements = lakeLayout;
+	gp.InputLayout.NumElements = (Uint32)std::size(lakeLayout);
+	ci.pVS = lakeVs;
+	ci.pPS = lakePs;
+	device->CreateGraphicsPipelineState(ci, &_impl->lakePipeline);
+	if (!_impl->lakePipeline)
+		ferr("Diligent: could not create the enhanced terrain water pipeline.");
+	_impl->signature->CreateShaderResourceBinding(&_impl->lakeBinding, true);
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(nullptr));
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(nullptr));
+
+	// Chunks
+	constexpr int CHUNK = 16;
+	constexpr float tilesize = 5.0f;
+	std::map<Impl::TexturePair, int> pairIndex;
+	std::vector<Vector3> lakeVertices;
+	for (int cz = 0; cz < (int)terrain->height; cz += CHUNK) {
+		for (int cx = 0; cx < (int)terrain->width; cx += CHUNK) {
+			Impl::Chunk chunk;
+			chunk.low = Vector3(1e9f, 1e9f, 1e9f);
+			chunk.high = Vector3(-1e9f, -1e9f, -1e9f);
+			std::map<int, std::vector<uint32_t>> perTexture;
+			for (int z = cz; z < std::min(cz + CHUNK, (int)terrain->height); z++) {
+				for (int x = cx; x < std::min(cx + CHUNK, (int)terrain->width); x++) {
+					const TerrainTile* tile = terrain->getTile(x, z);
+					const Impl::TexturePair pair = _impl->textures.at(tile->texture);
+					auto [it, isNew] = pairIndex.try_emplace(pair, (int)_impl->texturePairs.size());
+					if (isNew)
+						_impl->texturePairs.push_back(pair);
+					const uint32_t first = 4 * (z * terrain->width + x);
+					auto& list = perTexture[it->second];
+					for (const int& c : { 0,3,1,1,3,2 })
+						list.push_back(first + c);
+					const float lx = (x - (int)terrain->edge) * tilesize, lz = (z - (int)terrain->edge) * tilesize;
+					float top = std::max({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
+					float bottom = std::min({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
+					if (tile->fullOfWater) {
+						const uint32_t v0 = (uint32_t)lakeVertices.size();
+						lakeVertices.insert(lakeVertices.end(), {
+							Vector3(lx, tile->waterLevel, lz), Vector3(lx + tilesize, tile->waterLevel, lz),
+							Vector3(lx + tilesize, tile->waterLevel, lz + tilesize), Vector3(lx, tile->waterLevel, lz + tilesize) });
+						for (const int& c : { 0,3,1,1,3,2 })
+							chunk.lakeIndices.push_back(v0 + c);
+						top = std::max(top, tile->waterLevel);
+					}
+					chunk.low = Vector3(std::min(chunk.low.x, lx), std::min(chunk.low.y, bottom), std::min(chunk.low.z, lz));
+					chunk.high = Vector3(std::max(chunk.high.x, lx + tilesize), std::max(chunk.high.y, top), std::max(chunk.high.z, lz + tilesize));
+				}
+			}
+			for (auto& [index, list] : perTexture)
+				chunk.indicesPerTexture.emplace_back(index, std::move(list));
+			_impl->chunks.push_back(std::move(chunk));
+		}
+	}
+	_impl->frameIndices.resize(_impl->texturePairs.size());
+	if (!lakeVertices.empty()) {
+		BufferDesc lakeDesc;
+		lakeDesc.Name = "Terrain water vertices";
+		lakeDesc.Size = lakeVertices.size() * sizeof(Vector3);
+		lakeDesc.BindFlags = BIND_VERTEX_BUFFER;
+		lakeDesc.Usage = USAGE_IMMUTABLE;
+		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
+		device->CreateBuffer(lakeDesc, &lakeData, &_impl->lakeVertexBuffer);
+	}
 }
 
 DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
@@ -394,26 +504,6 @@ void DiligentEnhancedTerrainRenderer::render()
 	constexpr float tilesize = 5.0f;
 	Vector3 sunNormal = terrain->sunVector.normal();
 
-	// camera space bounding box
-	const Vector3& camstart = camera->position;
-	Vector3 camend = camera->position + camera->direction * camera->farDist;
-	float farheight = std::tan(camera->fovY) * camera->farDist;
-	float farwidth = farheight * camera->aspect;
-	Vector3 camside = camera->direction.cross(Vector3(0, 1, 0)).normal();
-	Vector3 campup = camside.cross(camera->direction).normal();
-	Vector3 farleft = camend + camside * farwidth;
-	Vector3 farright = camend - camside * farwidth;
-	Vector3 farup = camend + campup * farheight;
-	Vector3 fardown = camend - campup * farheight;
-	float bbx1, bbz1, bbx2, bbz2;
-	std::tie(bbx1, bbx2) = std::minmax({ camstart.x, farleft.x, farright.x, farup.x, fardown.x });
-	std::tie(bbz1, bbz2) = std::minmax({ camstart.z, farleft.z, farright.z, farup.z, fardown.z });
-	auto clamp = [](auto val, auto low, auto high) {return std::max(low, std::min(high, val)); };
-	int tlsx = clamp((int)std::floor(bbx1 / tilesize) + (int)terrain->edge, 0, (int)terrain->width - 1);
-	int tlsz = clamp((int)std::floor(bbz1 / tilesize) + (int)terrain->edge, 0, (int)terrain->height - 1);
-	int tlex = clamp((int)std::ceil(bbx2 / tilesize) + (int)terrain->edge, 0, (int)terrain->width - 1);
-	int tlez = clamp((int)std::ceil(bbz2 / tilesize) + (int)terrain->edge, 0, (int)terrain->height - 1);
-
 	gfx->BeginBatchDrawing();
 
 	void* mapped = nullptr;
@@ -433,100 +523,83 @@ void DiligentEnhancedTerrainRenderer::render()
 	shadowParams[1] = g_renderSettings.staticShadowLight;
 	shadowParams[2] = 0.0f;
 	shadowParams[3] = 0.0f;
+	float* lakeColour = (float*)(sbdata + 112);
+	lakeColour[0] = ((terrain->fogColor >> 16) & 255) / 255.0f;
+	lakeColour[1] = ((terrain->fogColor >> 8) & 255) / 255.0f;
+	lakeColour[2] = (terrain->fogColor & 255) / 255.0f;
+	lakeColour[3] = 0x80 / 255.0f;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
-	for (int z = tlsz; z <= tlez; z++) {
-		for (int x = tlsx; x <= tlex; x++) {
-			int lx = x - terrain->edge, lz = z - terrain->edge;
-			Vector3 pp((lx + 0.5f) * tilesize, terrain->getVertex(x, z), (lz + 0.5f) * tilesize);
-			Vector3 camcenter = camera->position + camera->direction * 125.0f;
-			pp += (camcenter - pp).normal() * tilesize * sqrtf(2.0f);
-			Vector3 ttpp = pp.transformScreenCoords(camera->sceneMatrix);
-			if (ttpp.x < -1 || ttpp.x > 1 || ttpp.y < -1 || ttpp.y > 1 || ttpp.z < -1 || ttpp.z > 1)
-				continue;
-			const Terrain::Tile* tile = terrain->getTile(x, z);
-			_impl->tilesPerTex[_impl->textures.at(tile->texture)].push_back(tile);
+	// Visible chunks: a chunk is culled when all corners of its bounding box lie outside the same
+	// clip plane (row vectors: clip = (x, y, z, 1) * sceneMatrix; depth 0..w).
+	const Matrix& m = camera->sceneMatrix;
+	auto visible = [&](const Vector3& lo, const Vector3& hi) {
+		int outside[6] = {};
+		for (int i = 0; i < 8; i++) {
+			const float x = (i & 1) ? hi.x : lo.x, y = (i & 2) ? hi.y : lo.y, z = (i & 4) ? hi.z : lo.z;
+			const float cx = x * m._11 + y * m._21 + z * m._31 + m._41;
+			const float cy = x * m._12 + y * m._22 + z * m._32 + m._42;
+			const float cz = x * m._13 + y * m._23 + z * m._33 + m._43;
+			const float cw = x * m._14 + y * m._24 + z * m._34 + m._44;
+			outside[0] += cx < -cw; outside[1] += cx > cw;
+			outside[2] += cy < -cw; outside[3] += cy > cw;
+			outside[4] += cz < 0; outside[5] += cz > cw;
 		}
+		for (int n : outside)
+			if (n == 8)
+				return false;
+		return true;
+	};
+	for (auto& list : _impl->frameIndices)
+		list.clear();
+	_impl->frameLakeIndices.clear();
+	for (const Impl::Chunk& chunk : _impl->chunks) {
+		if (!visible(chunk.low, chunk.high))
+			continue;
+		for (const auto& [index, list] : chunk.indicesPerTexture)
+			_impl->frameIndices[index].insert(_impl->frameIndices[index].end(), list.begin(), list.end());
+		_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.lakeIndices.begin(), chunk.lakeIndices.end());
 	}
+
+	// Draws in blocks that fit in the stream buffer
+	auto drawIndices = [&](const std::vector<uint32_t>& indices) {
+		constexpr size_t maxIndicesPerDraw = 6 * 8192;
+		for (size_t first = 0; first < indices.size(); first += maxIndicesPerDraw) {
+			const size_t count = std::min(indices.size() - first, maxIndicesPerDraw);
+			uint64_t ibOffset = 0;
+			IBuffer* ib = dgfx->StreamIndexData(indices.data() + first, count * sizeof(uint32_t), ibOffset);
+			ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)count, VT_UINT32, DRAW_FLAG_VERIFY_ALL });
+		}
+	};
 
 	ctx->SetPipelineState(_impl->pipeline);
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
 	ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-	auto& indices = _impl->indices;
-	for (auto& pack : _impl->tilesPerTex) {
-		if (pack.second.empty())
+	for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
+		if (_impl->frameIndices[t].empty())
 			continue;
-		auto& srb = _impl->bindings[pack.first];
+		const Impl::TexturePair& pair = _impl->texturePairs[t];
+		auto& srb = _impl->bindings[pair];
 		if (!srb) {
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pack.first.first));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pack.first.second));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pair.first));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
 		}
 		ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		// One draw per texture and up to 8192 tiles (the D3D11 renderer splits every 1024
-		// indices), so that the indices fit in the stream buffer.
-		constexpr size_t maxTilesPerDraw = 8192;
-		for (size_t first = 0; first < pack.second.size(); first += maxTilesPerDraw) {
-			const size_t last = std::min(pack.second.size(), first + maxTilesPerDraw);
-			indices.clear();
-			for (size_t t = first; t < last; t++) {
-				const TerrainTile* tile = pack.second[t];
-				uint32_t firstindex = 4 * (tile->z * terrain->width + tile->x);
-				for (const int& c : { 0,3,1,1,3,2 })
-					indices.push_back(firstindex + c);
-			}
-			uint64_t ibOffset = 0;
-			IBuffer* ib = dgfx->StreamIndexData(indices.data(), indices.size() * sizeof(uint32_t), ibOffset);
-			ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-			ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)indices.size(), VT_UINT32, DRAW_FLAG_VERIFY_ALL });
-		}
+		drawIndices(_impl->frameIndices[t]);
 	}
 
-	// ----- Lakes -----
-	gfx->BeginBatchDrawing();
-	gfx->NoTexture(0);
-	auto* lakeBatch = _impl->lakeBatch.get();
-	lakeBatch->begin();
-	gfx->BeginLakeDrawing();
-	const uint32_t color = (terrain->fogColor & 0xFFFFFF) | 0x80000000;
-	for (int z = tlsz; z <= tlez; z++) {
-		for (int x = tlsx; x <= tlex; x++) {
-			const TerrainTile* tile = terrain->getTile(x, z);
-			if (tile && tile->fullOfWater) {
-				unsigned int x = tile->x;
-				unsigned int z = tile->z;
-				int lx = x - terrain->edge, lz = z - terrain->edge;
-
-				// is water tile visible on screen?
-				Vector3 pp((lx + 0.5f) * tilesize, tile->waterLevel, (lz + 0.5f) * tilesize);
-				Vector3 camcenter = camera->position + camera->direction * 125.0f;
-				pp += (camcenter - pp).normal() * tilesize * sqrtf(2.0f);
-				Vector3 ttpp = pp.transformScreenCoords(camera->sceneMatrix);
-				if (ttpp.x < -1 || ttpp.x > 1 || ttpp.y < -1 || ttpp.y > 1 || ttpp.z < -1 || ttpp.z > 1)
-					continue;
-
-				batchVertex* outvert; uint16_t* outindices; unsigned int firstindex;
-				lakeBatch->next(4, 6, &outvert, &outindices, &firstindex);
-				outvert[0].x = lx * tilesize; outvert[0].y = tile->waterLevel; outvert[0].z = lz * tilesize;
-				outvert[0].color = color; outvert[0].u = 0.0f; outvert[0].v = 0.0f;
-				outvert[1].x = (lx + 1) * tilesize; outvert[1].y = tile->waterLevel; outvert[1].z = lz * tilesize;
-				outvert[1].color = color; outvert[1].u = 0.0f; outvert[1].v = 0.0f;
-				outvert[2].x = (lx + 1) * tilesize; outvert[2].y = tile->waterLevel; outvert[2].z = (lz + 1) * tilesize;
-				outvert[2].color = color; outvert[2].u = 0.0f; outvert[2].v = 0.0f;
-				outvert[3].x = lx * tilesize; outvert[3].y = tile->waterLevel; outvert[3].z = (lz + 1) * tilesize;
-				outvert[3].color = color; outvert[3].u = 0.0f; outvert[3].v = 0.0f;
-				uint16_t* oix = outindices;
-				for (const int& c : { 0,3,1,1,3,2 })
-					*(oix++) = firstindex + c;
-			}
-		}
+	// ----- Water -----
+	if (_impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty()) {
+		ctx->SetPipelineState(_impl->lakePipeline);
+		IBuffer* lvb = _impl->lakeVertexBuffer;
+		ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		drawIndices(_impl->frameLakeIndices);
 	}
-	lakeBatch->flush();
-	lakeBatch->end();
 
-	for (auto& pack : _impl->tilesPerTex)
-		pack.second.clear();
 	shadows.staticShadowValid = false;
 }
 

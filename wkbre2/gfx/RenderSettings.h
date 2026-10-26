@@ -17,7 +17,8 @@ struct RenderSettings {
 	float fogNear = 165.75f, fogFar = 331.5f; // the original's values at far_clip 350; far <= view distance
 	// Map-edge fog: by distance outside the playable area, opaque before the map mesh ends
 	bool edgeFog = true;
-	float edgeFogStart = 0.0f, edgeFogOpaque = 0.8f; // fractions of the band between playable and mesh edge
+	// fractions of the band between playable and mesh edge; the start may lie inside the playable area
+	float edgeFogStart = -0.25f, edgeFogOpaque = 0.5f;
 	bool fogColourOverride = false;  // instead of the map's fog colour
 	float fogColour[3] = { 159 / 255.0f, 197 / 255.0f, 230 / 255.0f };
 	float fovYDegrees = 51.566f;     // 0.9 rad, as wkbre2 always had
@@ -36,6 +37,8 @@ struct RenderSettings {
 	float mouseLookSensitivity = 0.01f; // radians per pixel, middle mouse button
 	float minHeightAboveGround = 3.0f;
 	float maxHeight = 1000.0f;
+
+	bool showFps = false;            // FPS counter in the top-left corner
 
 	void load();  // from g_settings
 	void save();  // into g_settings and wkconfig.json

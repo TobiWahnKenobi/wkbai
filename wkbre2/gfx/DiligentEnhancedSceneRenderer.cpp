@@ -58,12 +58,13 @@ cbuffer FogBuffer
 };
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
-// fog grows with the distance outside the playable area (the larger of x and z, so that it follows
-// the square band of the map's edge) and is opaque before the map mesh ends.
+// fog follows the signed distance to the playable area's border (negative inside; the larger of x
+// and z, so that it follows the square band of the map's edge): it may start inside the playable
+// area and is opaque before the map mesh ends.
 float FogAmount(float3 worldPos, float distanceToCamera)
 {
 	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
-	float2 outside = max(max(-worldPos.xz, worldPos.xz - EdgeFog.xy), 0);
+	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
 	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
 	return max(distanceFog, edgeFog);
 }

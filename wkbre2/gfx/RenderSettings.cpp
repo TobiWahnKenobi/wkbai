@@ -46,6 +46,7 @@ void RenderSettings::load()
 	mouseLookSensitivity = g_settings.value<float>("mouseLookSensitivity", def.mouseLookSensitivity);
 	minHeightAboveGround = g_settings.value<float>("cameraMinHeightAboveGround", def.minHeightAboveGround);
 	maxHeight = g_settings.value<float>("cameraMaxHeight", def.maxHeight);
+	showFps = g_settings.value<bool>("showFps", def.showFps);
 }
 
 void RenderSettings::save()
@@ -78,5 +79,6 @@ void RenderSettings::save()
 	g_settings["mouseLookSensitivity"] = mouseLookSensitivity;
 	g_settings["cameraMinHeightAboveGround"] = minHeightAboveGround;
 	g_settings["cameraMaxHeight"] = maxHeight;
+	g_settings["showFps"] = showFps;
 	SaveSettings();
 }

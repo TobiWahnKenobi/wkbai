@@ -59,7 +59,7 @@ namespace {
 		Vector3 xvec = cam.direction.normal().cross(Vector3(0, 1, 0)).normal();
 		Vector3 yvec = cam.direction.normal().cross(xvec).normal();
 		//Vector3 nearori = cam.position + cam.direction.normal() * zNear;
-		float ys = tan(0.45f) * zNear;
+		float ys = tan(cam.fovY * 0.5f) * zNear; // half the vertical field of view
 		yvec *= ys;
 		xvec *= ys * g_windowWidth / g_windowHeight;
 		yvec *= (1 - g_mouseY * 2.0f / g_windowHeight);
@@ -428,11 +428,12 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::SliderFloat("Fog start (of fog end)", &s.fogStart, 0.0f, 0.99f, "%.2f");
 		ImGui::EndDisabled();
 		ImGui::Checkbox("Map-edge fog", &s.edgeFog);
+		ImGui::TextDisabled("The sliders apply to long views (fog off, own fog, whole map, view distance > 525);\nwith the original fog the edge fog is gentle (0 to 0.95) to keep the distant mountains");
 		ImGui::BeginDisabled(!s.edgeFog);
-		ImGui::SliderFloat("Edge fog starts (of edge band)", &s.edgeFogStart, 0.0f, 0.95f, "%.2f");
+		ImGui::SliderFloat("Edge fog starts (of edge band)", &s.edgeFogStart, -1.0f, 0.95f, "%.2f");
 		ImGui::SliderFloat("Edge fog opaque at (of edge band)", &s.edgeFogOpaque, 0.0f, 0.95f, "%.2f");
 		s.edgeFogStart = std::min(s.edgeFogStart, s.edgeFogOpaque);
-		ImGui::TextDisabled("Band from the playable area's edge (0) to the map mesh's edge (1)");
+		ImGui::TextDisabled("Band from the playable area's edge (0) to the map mesh's edge (1); below 0 is inside the playable area");
 		ImGui::EndDisabled();
 		ImGui::Checkbox("Own fog colour", &s.fogColourOverride);
 		ImGui::BeginDisabled(!s.fogColourOverride);
@@ -485,6 +486,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			g_settings["windowHeight"] = size[1];
 		}
 	}
+	ImGui::Checkbox("Show FPS counter", &s.showFps);
 	ImGui::Separator();
 	if (ImGui::Button("Save to wkconfig.json"))
 		s.save();
@@ -1081,6 +1083,16 @@ void ClientInterface::iter()
 	ImGuiImpl_NewFrame();
 	if (settingsOn)
 		drawSettingsWindow(&settingsOn);
+	if (g_renderSettings.showFps) {
+		const FrameStats::Summary ft = g_frameStats.summarize();
+		char text[96];
+		snprintf(text, sizeof(text), "%d FPS  %.2f ms (p99 %.2f)", framesPerSecond, ft.avgMs, ft.p99Ms);
+		ImDrawList* fg = ImGui::GetForegroundDrawList();
+		const ImVec2 pos(12.0f, 92.0f); // below the top panel
+		const ImVec2 size = ImGui::CalcTextSize(text);
+		fg->AddRectFilled(ImVec2(pos.x - 4, pos.y - 2), ImVec2(pos.x + size.x + 4, pos.y + size.y + 2), IM_COL32(0, 0, 0, 160));
+		fg->AddText(pos, IM_COL32(255, 255, 255, 255), text);
+	}
 	if (debuggerOn) {
 		debugger.draw();
 
@@ -1503,8 +1515,17 @@ void ClientInterface::iter()
 		if (client->terrain && g_renderSettings.edgeFog) {
 			const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
 			const float band = 5.0f * client->terrain->edge;
-			const float opaque = std::clamp(g_renderSettings.edgeFogOpaque, 0.0f, 0.95f);
-			const float start = std::min(std::clamp(g_renderSettings.edgeFogStart, 0.0f, 0.95f), opaque * 0.999f);
+			// With the original's fog and view distance the distance fog hides the far terrain, and
+			// the edge band keeps the original's distant mountains: a gentle edge fog. Longer views
+			// (fog off, own fog distances, whole map, a view distance well beyond the original's)
+			// use the settings' stronger edge fog.
+			const RenderSettings& rs = g_renderSettings;
+			const bool longView = rs.fogOff || rs.fogCustom || rs.farClipWholeMap || rs.farClip > 1.5f * 350.0f;
+			float opaque = 0.95f, start = 0.0f;
+			if (longView) {
+				opaque = std::clamp(rs.edgeFogOpaque, 0.0f, 0.95f);
+				start = std::min(std::clamp(rs.edgeFogStart, -1.0f, 0.95f), opaque - 0.001f);
+			}
 			dgfx->SetFogEdge(areaWidth, areaDepth, band * start, band * opaque);
 		}
 		else
