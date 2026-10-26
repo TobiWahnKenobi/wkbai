@@ -627,9 +627,40 @@ void ObjectReferenceTask::onUpdate()
 	}
 	if (this->target) {
 		ServerGameObject* go = this->order->gameObject;
+		// Following (Follow, guarding): the game set gives the follower the engine items "Follow
+		// X Offset" and "Follow Y Offset" (random, -10..10; Y -30 for sappers, behind the target),
+		// so it keeps that offset to the target's side and front instead of walking into it.
+		// Applied where the target is a character or formation of the same player and the
+		// task wants to reach it exactly (proximity 0).
+		Vector3 goal = target->position;
+		const bool following = this->proximity == 0.0f && go->getPlayer() == target->getPlayer()
+			&& (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || target->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION);
+		if (following) {
+			static const GameSet* itemsOf = nullptr;
+			static int followX = -1, followY = -1;
+			if (itemsOf != Server::instance->gameSet.get()) {
+				itemsOf = Server::instance->gameSet.get();
+				followX = itemsOf->items.names.getIndex("Follow X Offset");
+				followY = itemsOf->items.names.getIndex("Follow Y Offset");
+			}
+			const float ox = followX >= 0 ? go->getItem(followX) : 0.0f;
+			const float oy = followY >= 0 ? go->getItem(followY) : 0.0f;
+			if (ox != 0.0f || oy != 0.0f) {
+				const float yaw = target->orientation.y;
+				const Vector3 forward(std::sin(yaw), 0.0f, -std::cos(yaw)), right(std::cos(yaw), 0.0f, std::sin(yaw));
+				goal = target->position + right * ox + forward * oy;
+				if (Server::instance->terrain)
+					goal.y = Server::instance->terrain->getHeightEx(goal.x, goal.z, go->blueprint->canWalkOnWater());
+			}
+		}
 		float prox = this->proximity;
-		if (prox >= 0.0f) prox = std::max(prox - (destination - target->position).len2xz(), 0.1f);
-		if (prox < 0.0f || (go->position - destination).sqlen2xz() < prox * prox) {
+		if (prox >= 0.0f) prox = std::max(prox - (destination - goal).len2xz(), 0.1f);
+		// a follower is there while it stands near the target's current goal (the last
+		// movement's destination stays behind when the target walks on)
+		constexpr float FOLLOW_TOLERANCE = 1.5f;
+		const bool arrived = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
+			: (prox < 0.0f || (go->position - destination).sqlen2xz() < prox * prox);
+		if (arrived) {
 			this->startTriggers();
 			if (go->movementController.isMoving())
 				go->movementController.stopMovement();
@@ -669,12 +700,12 @@ void ObjectReferenceTask::onUpdate()
 
 				this->stopTriggers();
 				if (!go->movementController.isMoving())
-					destination = go->movementController.startMovement(this->target->position);
+					destination = go->movementController.startMovement(goal);
 				// If target slightly moves during the movement, restart the movement
 				if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 					if (go->movementController.isMoving())
-						if ((this->target->position - go->movementController.getDestination()).sqlen2xz() > 0.01f)
-							destination = go->movementController.startMovement(this->target->position);
+						if ((goal - go->movementController.getDestination()).sqlen2xz() > 0.01f)
+							destination = go->movementController.startMovement(goal);
 				if (proximitySatisfied) {
 					proximitySatisfied = false;
 					//if (blueprint->defaultAnim != -1)

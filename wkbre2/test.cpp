@@ -1015,6 +1015,65 @@ void Test_Stampdown()
 	fflush(stdout);
 }
 
+// Guarding (needs the game data): a peasant guards another one, which then walks away; the
+// guard should follow at its offset, not walk into it. Prints "GUARD t=<s> distance=<m>".
+void Test_Guard()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	std::vector<ServerGameObject*> characters;
+	auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					characters.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	if (ServerGameObject* player = server.findObject(1027))
+		collect(player, collect);
+	const int guardCommand = server.gameSet->commands.names.getIndex("Guard");
+	const int moveCommand = server.gameSet->commands.names.getIndex("Move");
+	if (characters.size() < 2 || guardCommand < 0 || moveCommand < 0) {
+		printf("GUARD not set up: %zu characters, commands %d %d\n", characters.size(), guardCommand, moveCommand);
+		return;
+	}
+	ServerGameObject* guard = characters[0];
+	ServerGameObject* guardee = characters[1];
+	SrvGORef guardRef = guard, guardeeRef = guardee;
+	server.timeManager.unpause();
+	server.gameSet->commands[guardCommand].execute(guard, guardee, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	const uint64_t start = SDL_GetTicks();
+	bool moved = false;
+	int lastPrint = -1;
+	while (SDL_GetTicks() - start < 20000) {
+		server.tick();
+		const float t = (SDL_GetTicks() - start) / 1000.0f;
+		if (!guardRef || !guardeeRef)
+			break;
+		if (!moved && t > 3.0f) {
+			moved = true;
+			server.gameSet->commands[moveCommand].execute(guardee, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, guardee->position + Vector3(40, 0, 25));
+		}
+		if ((int)t != lastPrint) {
+			lastPrint = (int)t;
+			std::string order = "-";
+			uint32_t taskTarget = 0;
+			if (Order* o = guard->orderConfig.getCurrentOrder()) {
+				order = server.gameSet->orders.getString(o->blueprint->bpid);
+				if (Task* task = o->getCurrentTask())
+					taskTarget = task->target ? task->target->id : 0;
+			}
+			printf("GUARD t=%d distance=%.1f order=%s target=%u guardee=%u guard (%.0f,%.0f) guardee (%.0f,%.0f) parent %s\n", lastPrint,
+				(guard->position - guardee->position).len2xz(), order.c_str(), taskTarget, guardee->id,
+				guard->position.x, guard->position.z, guardee->position.x, guardee->position.z, guard->parent ? guard->parent->blueprint->name.c_str() : "-");
+		}
+		SDL_Delay(16);
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1037,6 +1096,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PFRayTraversal, "PF Ray Traversal"},
 {Test_VFS, "VFS (file system and mods)"},
 {Test_Stampdown, "Stampdown (building placement)"},
+{Test_Guard, "Guard (follow at a distance)"},
 };
 
 void LaunchTest()

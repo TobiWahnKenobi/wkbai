@@ -388,8 +388,8 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 }
 
 // The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
-// are strips (arrows, dots, links) that repeat around the circle, the texture's height across
-// the band, its top outwards. Drawn on the ground with the particles' state (alpha blended,
+// are strips (arrows, dots, links) that repeat around the circle, their long side along it: the
+// texture's height runs around the circle, its width across the band (left edge outwards). Drawn on the ground with the particles' state (alpha blended,
 // depth tested); one texture repeat per band width, each with its own texture coordinates 0..1
 // (the batch sampler clamps).
 void ClientInterface::drawRangeBands()
@@ -423,7 +423,8 @@ void ClientInterface::drawRangeBands()
 				const Vector3 p[4] = {
 					band.centre + Vector3(c0, 0, s0) * outer, band.centre + Vector3(c1, 0, s1) * outer,
 					band.centre + Vector3(c1, 0, s1) * inner, band.centre + Vector3(c0, 0, s0) * inner };
-				const float uv[4][2] = { { u0, 0 }, { u1, 0 }, { u1, 1 }, { u0, 1 } };
+				// the strip's height runs around the circle, its width across the band
+				const float uv[4][2] = { { 0, u0 }, { 0, u1 }, { 1, u1 }, { 1, u0 } };
 				for (int i = 0; i < 4; i++) {
 					v[i].x = p[i].x;
 					v[i].y = ground(p[i].x, p[i].z);
