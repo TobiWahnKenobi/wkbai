@@ -78,6 +78,8 @@ private:
 	// Draws the minimap into the given screen rectangle (called from the HUD script);
 	// returns true while the mouse is over it, a left click/drag moves the camera there
 	bool drawMinimap(int x, int y, int w, int h);
+	void drawSettingsWindow(bool* open);
+	void applyCameraLimits();
 	// The four mode buttons around the minimap, at the top-left corner of Bottom_Right_Panel.tga
 	bool drawMinimapButtons(int panelX, int panelY);
 	uint8_t minimapHiddenCategories = 0; // GameObjBlueprint::MINIMAP_* toggled off

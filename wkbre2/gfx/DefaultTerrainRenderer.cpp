@@ -45,7 +45,7 @@ void DefaultTerrainRenderer::render() {
 	// camera space bounding box
 	const Vector3& camstart = camera->position;
 	Vector3 camend = camera->position + camera->direction * camera->farDist;
-	float farheight = std::tan(0.9f) * camera->farDist;
+	float farheight = std::tan(camera->fovY) * camera->farDist;
 	float farwidth = farheight * camera->aspect;
 	Vector3 camside = camera->direction.cross(Vector3(0, 1, 0)).normal();
 	Vector3 campup = camside.cross(camera->direction).normal();

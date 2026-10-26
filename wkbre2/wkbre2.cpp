@@ -19,6 +19,7 @@
 #include "window.h"
 #include "imguiimpl.h"
 #include "gfx/bitmap.h"
+#include "gfx/RenderSettings.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -110,6 +111,7 @@ int main()
 	printf("Welcome to wkbre2 ! :)\n\n");
 
 	LoadSettings();
+	g_renderSettings.load();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
 
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {

@@ -14,6 +14,7 @@
 #include "../Camera.h"
 #include "../util/util.h"
 #include "../settings.h"
+#include "RenderSettings.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <algorithm>
@@ -52,7 +53,16 @@ cbuffer FogBuffer
 	float FogStartDist;
 	float FogEndDist;
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
+	float4 Grade; // exposure, brightness, contrast, saturation
 };
+
+// Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
+float3 GradeColour(float3 c)
+{
+	c *= Grade.x;
+	c = lerp(dot(c, float3(0.299, 0.587, 0.114)).xxx, c, Grade.w);
+	return saturate((c - 0.5) * Grade.z + 0.5 + Grade.y);
+}
 
 cbuffer SunBuffer
 {
@@ -128,7 +138,8 @@ VS_OUTPUT VS_Anim(float3 Pos1 : ATTRIB0, uint Normal1 : ATTRIB1, float2 Texcoord
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	return lerp(input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(input.Color * tex, FogColor, input.Fog);
+	return float4(GradeColour(c.rgb), c.a);
 }
 
 static const float ALPHA_REF = 0.94;
@@ -136,7 +147,8 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
-	return lerp(input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(input.Color * tex, FogColor, input.Fog);
+	return float4(GradeColour(c.rgb), c.a);
 }
 
 // Static shadow casters with alpha-tested materials
@@ -248,11 +260,6 @@ struct DilAnim
 	}
 };
 
-// Mesh lighting of the original (docs/re/lighting.md) where no cloud shadow falls: ambient grey
-// and the factor applied to the sun colour. "meshLighting": [ambient, diffuse] in wkconfig.json
-// overrides them.
-static constexpr float MESH_AMBIENT = 97.0f / 255.0f;
-static constexpr float MESH_DIFFUSE_FACTOR = 200.0f / 256.0f;
 
 // Half the side of the square around the camera's view centre covered by the static shadow map
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
@@ -269,7 +276,6 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
-	float meshAmbient = MESH_AMBIENT, meshDiffuse = MESH_DIFFUSE_FACTOR;
 	static constexpr size_t MAX_INSTANCES = 16;
 };
 
@@ -295,11 +301,6 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Size = 64;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 
-	const auto meshLighting = g_settings.value("meshLighting", nlohmann::json::array());
-	if (meshLighting.is_array() && meshLighting.size() == 2) {
-		_impl->meshAmbient = meshLighting[0].get<float>();
-		_impl->meshDiffuse = meshLighting[1].get<float>();
-	}
 
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -444,8 +445,8 @@ void DiligentEnhancedSceneRenderer::render()
 	cloudParams[2] = CLOUD_UV_PER_UNIT;
 	cloudParams[3] = (shadows.cloudShadows && shadows.cloudMap) ? 1.0f : 0.0f;
 	float* meshLighting = (float*)mapped + 12;
-	meshLighting[0] = _impl->meshAmbient;
-	meshLighting[1] = _impl->meshDiffuse;
+	meshLighting[0] = g_renderSettings.meshAmbient;
+	meshLighting[1] = g_renderSettings.meshDiffuse;
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {

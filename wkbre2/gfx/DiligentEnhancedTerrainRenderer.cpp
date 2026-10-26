@@ -17,6 +17,7 @@
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "bitmap.h"
+#include "RenderSettings.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -46,7 +47,16 @@ cbuffer FogBuffer
 	float FogStartDist;
 	float FogEndDist;
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
+	float4 Grade; // exposure, brightness, contrast, saturation
 };
+
+// Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
+float3 GradeColour(float3 c)
+{
+	c *= Grade.x;
+	c = lerp(dot(c, float3(0.299, 0.587, 0.114)).xxx, c, Grade.w);
+	return saturate((c - 0.5) * Grade.z + 0.5 + Grade.y);
+}
 
 cbuffer SunBuffer
 {
@@ -172,7 +182,8 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
-	return lerp(float4(lum.xxx, 1) * input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(float4(lum.xxx, 1) * input.Color * tex, FogColor, input.Fog);
+	return float4(GradeColour(c.rgb), c.a);
 }
 )---";
 
@@ -194,8 +205,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 
 // The static shadow map: 2048² texels over the square drawn by the scene renderer
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
-// Light left on the ground in a static shadow (the shadow's vertex colour in the original)
-static constexpr float STATIC_SHADOW_LIGHT = 0xB4 / 255.0f;
+
 
 void DiligentEnhancedTerrainRenderer::init()
 {
@@ -265,8 +275,6 @@ void DiligentEnhancedTerrainRenderer::init()
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
 	// a map of full light when it is missing.
 	auto& shadows = dgfx->shadows;
-	shadows.cloudShadows = g_settings.value<bool>("cloudShadows", true);
-	shadows.staticShadows = g_settings.value<bool>("staticShadows", true);
 	std::string cloudMapPath;
 	for (wchar_t c : terrain->skyTextureDirectory) {
 		if (!c) break; // the .bcm's string includes its terminator
@@ -377,7 +385,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	// camera space bounding box
 	const Vector3& camstart = camera->position;
 	Vector3 camend = camera->position + camera->direction * camera->farDist;
-	float farheight = std::tan(0.9f) * camera->farDist;
+	float farheight = std::tan(camera->fovY) * camera->farDist;
 	float farwidth = farheight * camera->aspect;
 	Vector3 camside = camera->direction.cross(Vector3(0, 1, 0)).normal();
 	Vector3 campup = camside.cross(camera->direction).normal();
@@ -410,7 +418,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	cloudParams[3] = (shadows.cloudShadows && _impl->cloudMap) ? 1.0f : 0.0f;
 	float* shadowParams = (float*)(sbdata + 96);
 	shadowParams[0] = shadows.staticShadowValid ? 1.0f : 0.0f;
-	shadowParams[1] = STATIC_SHADOW_LIGHT;
+	shadowParams[1] = g_renderSettings.staticShadowLight;
 	shadowParams[2] = 0.0f;
 	shadowParams[3] = 0.0f;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);

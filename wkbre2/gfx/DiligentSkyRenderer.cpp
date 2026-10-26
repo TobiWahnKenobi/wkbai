@@ -12,6 +12,7 @@
 #include "DiligentSkyRenderer.h"
 #include "renderer_diligent.h"
 #include "bitmap.h"
+#include "RenderSettings.h"
 #include "../terrain.h"
 #include "../Camera.h"
 #include "../file.h"
@@ -28,6 +29,7 @@ Texture2D skyRight;
 Texture2D skyBack;
 Texture2D skyLeft;
 Texture2D skyTop;
+Texture2D skyBottom; // only in a full six-face sky (no shipped sky has one)
 SamplerState skySampler;
 
 cbuffer FogBuffer
@@ -35,7 +37,16 @@ cbuffer FogBuffer
 	float4 FogColor;
 	float FogStartDist;
 	float FogEndDist;
+	float4 FogCamera;
+	float4 Grade; // exposure, brightness, contrast, saturation
 };
+
+float3 GradeColour(float3 c)
+{
+	c *= Grade.x;
+	c = lerp(dot(c, float3(0.299, 0.587, 0.114)).xxx, c, Grade.w);
+	return saturate((c - 0.5) * Grade.z + 0.5 + Grade.y);
+}
 
 cbuffer SkyBuffer
 {
@@ -44,6 +55,7 @@ cbuffer SkyBuffer
 	float4 CamUp;
 	float4 SkyFront;   // world direction of sky_front.tga
 	float4 SkyRight;   // world direction of sky_right.tga
+	float4 SkyFlags;   // x: the sky has all six faces
 };
 
 struct VS_OUTPUT
@@ -77,12 +89,18 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float3 d = CamForward.xyz + input.Ndc.x * CamForward.w * CamRight.xyz + input.Ndc.y * CamRight.w * CamUp.xyz;
 	float a = dot(d, SkyFront.xyz), b = dot(d, SkyRight.xyz), c = d.y;
 	float horizontal = sqrt(a * a + b * b);
-	float fog = c < 0 ? 1 : SkyFog(c / max(horizontal, 1e-6));
+	// The original's five-face sky always fades into the fog colour at the horizon and below,
+	// where it has no texture. Only a full six-face sky may drop the fade, when the fog is off
+	// (fog start beyond any distance).
+	bool sixFaces = SkyFlags.x != 0;
+	float fog = (sixFaces && FogStartDist > 1e8) ? 0 : (c < 0 ? 1 : SkyFog(c / max(horizontal, 1e-6)));
 	float3 colour = FogColor.rgb;
 	if (fog < 1) {
 		float3 tex;
 		if (c >= max(abs(a), abs(b)))
 			tex = skyTop.SampleLevel(skySampler, float2(0.5 + 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
+		else if (-c >= max(abs(a), abs(b)))
+			tex = skyBottom.SampleLevel(skySampler, float2(0.5 - 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
 		else if (abs(a) >= abs(b)) {
 			if (a > 0) tex = skyFront.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 - 0.5 * c / a), 0).rgb;
 			else       tex = skyBack.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 + 0.5 * c / a), 0).rgb;
@@ -93,14 +111,15 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		}
 		colour = lerp(tex, FogColor.rgb, fog);
 	}
-	return float4(colour, 1);
+	return float4(GradeColour(colour), 1);
 }
 )---";
 
 struct DiligentSkyRenderer::Impl {
 	DiligentGfx* dgfx;
 	const Camera* camera;
-	texture faces[5] = {};
+	texture faces[6] = {};
+	bool sixFaces = false;
 	RefCntAutoPtr<IPipelineResourceSignature> signature;
 	RefCntAutoPtr<IPipelineState> pipeline;
 	RefCntAutoPtr<IShaderResourceBinding> srb;
@@ -122,7 +141,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	}
 	if (!dir.empty() && dir.back() != '\\' && dir.back() != '/')
 		dir += '\\';
-	static const char* faceNames[5] = { "sky_front.tga", "sky_right.tga", "sky_back.tga", "sky_left.tga", "sky_top.tga" };
+	static const char* faceNames[6] = { "sky_front.tga", "sky_right.tga", "sky_back.tga", "sky_left.tga", "sky_top.tga", "sky_bottom.tga" };
 	_impl->loaded = !terrain->skyTextureDirectory.empty();
 	for (int i = 0; i < 5 && _impl->loaded; i++) {
 		const std::string path = dir + faceNames[i];
@@ -135,16 +154,21 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	}
 	if (!_impl->loaded)
 		return;
+	const std::string bottomPath = dir + faceNames[5];
+	if (FileExists(bottomPath.c_str())) {
+		_impl->faces[5] = gfx->CreateTexture(Bitmap::loadBitmap(bottomPath.c_str()), 1);
+		_impl->sixFaces = true;
+	}
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Sky camera";
-	cbDesc.Size = 80;
+	cbDesc.Size = 96;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->skyBuffer);
 
-	static const char* texNames[5] = { "skyFront", "skyRight", "skyBack", "skyLeft", "skyTop" };
+	static const char* texNames[6] = { "skyFront", "skyRight", "skyBack", "skyLeft", "skyTop", "skyBottom" };
 	std::vector<PipelineResourceDesc> resources = {
 		{ SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "SkyBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -165,7 +189,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		ferr("Diligent: could not create the sky resource signature.");
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(_impl->dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SkyBuffer")->Set(_impl->skyBuffer);
-	for (int i = 0; i < 5; i++)
+	for (int i = 0; i < 6; i++)
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, texNames[i])->Set(_impl->dgfx->GetTextureView(_impl->faces[i]));
 
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
@@ -219,7 +243,7 @@ DiligentSkyRenderer::~DiligentSkyRenderer()
 
 void DiligentSkyRenderer::render()
 {
-	if (!_impl->loaded)
+	if (!_impl->loaded || !g_renderSettings.sky)
 		return;
 	IDeviceContext* ctx = _impl->dgfx->ctx;
 	const Camera& cam = *_impl->camera;
@@ -228,17 +252,18 @@ void DiligentSkyRenderer::render()
 	const Vector3 forward = cam.direction.normal();
 	const Vector3 right = Vector3(0, 1, 0).cross(forward).normal();
 	const Vector3 up = forward.cross(right);
-	const float tanY = std::tan(0.9f * 0.5f);
+	const float tanY = std::tan(cam.fovY * 0.5f);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->skyBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	float* f = (float*)mapped;
-	const float data[20] = {
+	const float data[24] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,
 		up.x, up.y, up.z, 0,
 		// sky_front.tga faces +z (north) and sky_right.tga +x, as seen in the original
 		0, 0, 1, 0,
 		1, 0, 0, 0,
+		_impl->sixFaces ? 1.0f : 0.0f, 0, 0, 0,
 	};
 	memcpy(f, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->skyBuffer, MAP_WRITE);

@@ -12,6 +12,7 @@
 #include "bitmap.h"
 #include "../window.h"
 #include "../settings.h"
+#include "RenderSettings.h"
 #include "../util/util.h"
 
 #include <algorithm>
@@ -96,7 +97,16 @@ cbuffer FogBuffer
 	float FogStartDist;
 	float FogEndDist;
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
+	float4 Grade; // exposure, brightness, contrast, saturation
 };
+
+// Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
+float3 GradeColour(float3 c)
+{
+	c *= Grade.x;
+	c = lerp(dot(c, float3(0.299, 0.587, 0.114)).xxx, c, Grade.w);
+	return saturate((c - 0.5) * Grade.z + 0.5 + Grade.y);
+}
 
 struct VS_OUTPUT
 {
@@ -281,7 +291,6 @@ struct DiligentRenderer : DiligentGfx
 	Matrix transform = Matrix::getIdentity();
 	uint32_t fogColor = 0;
 	float fogFar = 250.0f;
-	float fogStart = 0.5f; // where the fog starts, as a fraction of its end distance
 	Vector3 fogCamera;
 	bool fogEnabled = false;
 	bool vsync = true;
@@ -479,13 +488,22 @@ struct DiligentRenderer : DiligentGfx
 		// starting halfway there ("fogStart" changes that), so that geometry has faded out
 		// before it is clipped.
 		const float fogEnd = 0.95f * fogFar - 1.0f;
-		cc[4] = fogEnd * fogStart;
+		cc[4] = fogEnd * std::clamp(g_renderSettings.fogStart, 0.0f, 0.99f);
 		cc[5] = fogEnd;
+		if (g_renderSettings.fogOff) {
+			// No fog: start and end beyond any distance (the sky shader checks for this too)
+			cc[4] = 1e9f;
+			cc[5] = 2e9f;
+		}
 		cc[6] = cc[7] = 0.0f;
 		cc[8] = fogCamera.x;
 		cc[9] = fogCamera.y;
 		cc[10] = fogCamera.z;
 		cc[11] = 1.0f;
+		cc[12] = g_renderSettings.exposure;
+		cc[13] = g_renderSettings.brightness;
+		cc[14] = g_renderSettings.contrast;
+		cc[15] = g_renderSettings.saturation;
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -494,7 +512,6 @@ struct DiligentRenderer : DiligentGfx
 	void Init() override
 	{
 		vsync = g_settings.value<bool>("vsync", true);
-		fogStart = std::clamp(g_settings.value<float>("fogStart", 0.5f), 0.0f, 0.99f);
 		isVulkan = g_settings.value<std::string>("diligentBackend", "d3d12") == "vulkan";
 		const int adapter = g_settings.value<int>("adapterIndex", -1);
 		const bool validation = g_settings.value<bool>("gfxValidation", false);
@@ -563,7 +580,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 48, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

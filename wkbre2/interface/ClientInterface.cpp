@@ -31,6 +31,7 @@
 #include "../gfx/DiligentEnhancedSceneRenderer.h"
 #include "../gfx/DiligentEnhancedTerrainRenderer.h"
 #include "../gfx/DiligentSkyRenderer.h"
+#include "../gfx/RenderSettings.h"
 #include "../StampdownPlan.h"
 #include "../gfx/TerrainSpriteContainer.h"
 #include "../gfx/TerrainSpriteRenderer.h"
@@ -338,6 +339,101 @@ static bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// The camera stays between a little above the ground under it and a high ceiling (for an
+// overview of the map); the pitch limit is applied where the camera turns.
+void ClientInterface::applyCameraLimits()
+{
+	if (!client->terrain)
+		return;
+	Vector3& pos = client->camera.position;
+	const float ground = client->terrain->getHeight(pos.x, pos.z);
+	pos.y = std::max(pos.y, ground + g_renderSettings.minHeightAboveGround);
+	pos.y = std::min(pos.y, std::max(g_renderSettings.maxHeight, ground + g_renderSettings.minHeightAboveGround));
+}
+
+// Temporary settings window (F10) for trying the render and camera settings while playing.
+// "Save" writes them to wkconfig.json; the renderer section only applies after a restart.
+void ClientInterface::drawSettingsWindow(bool* open)
+{
+	RenderSettings& s = g_renderSettings;
+	ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Settings (temporary, F10)", open)) {
+		ImGui::End();
+		return;
+	}
+	if (ImGui::CollapsingHeader("View and fog", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("View distance: whole map", &s.farClipWholeMap);
+		ImGui::BeginDisabled(s.farClipWholeMap);
+		ImGui::SliderFloat("View distance (sets the fog)", &s.farClip, 100.0f, 50000.0f, "%.0f", ImGuiSliderFlags_Logarithmic);
+		ImGui::EndDisabled();
+		ImGui::TextDisabled("The original's far_clip: 350 (options slider 280-1000)");
+		ImGui::Checkbox("Fog off", &s.fogOff);
+		ImGui::BeginDisabled(s.fogOff);
+		ImGui::SliderFloat("Fog start (of fog end)", &s.fogStart, 0.0f, 0.99f, "%.2f");
+		ImGui::EndDisabled();
+		ImGui::Checkbox("Own fog colour", &s.fogColourOverride);
+		ImGui::BeginDisabled(!s.fogColourOverride);
+		ImGui::ColorEdit3("Fog colour", s.fogColour);
+		ImGui::EndDisabled();
+		ImGui::SliderFloat("Field of view (vertical)", &s.fovYDegrees, 20.0f, 100.0f, "%.1f deg");
+		ImGui::Checkbox("Sky", &s.sky);
+	}
+	if (ImGui::CollapsingHeader("Picture", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("Exposure", &s.exposure, 0.25f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+		ImGui::SliderFloat("Brightness", &s.brightness, -0.5f, 0.5f, "%.2f");
+		ImGui::SliderFloat("Contrast", &s.contrast, 0.25f, 2.0f, "%.2f");
+		ImGui::SliderFloat("Saturation", &s.saturation, 0.0f, 2.0f, "%.2f");
+		ImGui::TextDisabled("Applies to the 3D scene, not the HUD");
+	}
+	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
+		ImGui::Checkbox("Static shadows", &s.staticShadows);
+		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
+		if (bool* bump = terrainRenderer ? terrainRenderer->bumpMapping() : nullptr)
+			ImGui::Checkbox("Terrain bump mapping", bump);
+	}
+	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");
+		ImGui::SliderFloat("Shift scroll factor", &s.shiftScrollFactor, 1.0f, 10.0f, "%.1f");
+		ImGui::SliderFloat("Mouse look sensitivity", &s.mouseLookSensitivity, 0.001f, 0.05f, "%.3f");
+		ImGui::SliderFloat("Lowest height above ground", &s.minHeightAboveGround, 0.5f, 50.0f, "%.1f");
+		ImGui::SliderFloat("Highest camera height", &s.maxHeight, 100.0f, 3000.0f, "%.0f");
+	}
+	if (ImGui::CollapsingHeader("Renderer (after a restart)")) {
+		static const char* backends[] = { "d3d12", "vulkan" };
+		std::string backend = g_settings.value<std::string>("diligentBackend", "d3d12");
+		int backendIndex = backend == "vulkan" ? 1 : 0;
+		if (ImGui::Combo("Backend", &backendIndex, backends, 2))
+			g_settings["diligentBackend"] = backends[backendIndex];
+		bool enhanced = g_settings.value<bool>("enhancedGraphics", false);
+		if (ImGui::Checkbox("Enhanced graphics", &enhanced))
+			g_settings["enhancedGraphics"] = enhanced;
+		bool vsync = g_settings.value<bool>("vsync", true);
+		if (ImGui::Checkbox("VSync", &vsync))
+			g_settings["vsync"] = vsync;
+		bool validation = g_settings.value<bool>("gfxValidation", false);
+		if (ImGui::Checkbox("Graphics validation (debug)", &validation))
+			g_settings["gfxValidation"] = validation;
+		int size[2] = { g_settings.value<int>("windowWidth", 1280), g_settings.value<int>("windowHeight", 720) };
+		if (ImGui::InputInt2("Window size", size)) {
+			g_settings["windowWidth"] = size[0];
+			g_settings["windowHeight"] = size[1];
+		}
+	}
+	ImGui::Separator();
+	if (ImGui::Button("Save to wkconfig.json"))
+		s.save();
+	ImGui::SameLine();
+	if (ImGui::Button("Original values"))
+		s = RenderSettings();
+	ImGui::SameLine();
+	if (ImGui::Button("Reload saved"))
+		s.load();
+	ImGui::End();
+}
+
 // SHEAR_MODEL: a world-space shear that keeps the model upright but lifts each vertex by the
 // ground's slope under the object, so that wall segments follow the terrain as one band. The
 // slope comes from the ground heights at the ends of the model's bounding box along its own
@@ -389,7 +485,7 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		return;
 
 	const Vector3 side = client->camera.direction.cross(Vector3(0, 1, 0));
-	const float fovX = 0.9f * client->camera.aspect;
+	const float fovX = client->camera.fovY * client->camera.aspect;
 	const float tanFov = std::tan(fovX / 2.0f);
 	const float cosFov = std::cos(fovX / 2.0f);
 	const float sideDist = std::abs(side.dot(obj->position - client->camera.position));
@@ -671,7 +767,7 @@ void ClientInterface::iter()
 	Vector3 forward = client->camera.direction.normal2xz();
 	Vector3 strafe = forward.cross(Vector3(0, 1, 0));
 	// Shift scrolls faster
-	const float camSpeed = (g_modShift ? 3.0f : 1.0f) * 2.0f * cliDeltaTime / (1000.0f / 60.0f);
+	const float camSpeed = g_renderSettings.scrollSpeed * (g_modShift ? g_renderSettings.shiftScrollFactor : 1.0f) * 2.0f * cliDeltaTime / (1000.0f / 60.0f);
 	forward *= camSpeed;
 	strafe *= camSpeed;
 
@@ -695,8 +791,9 @@ void ClientInterface::iter()
 		// Pitch stays within straight down and straight up, so the view never flips over;
 		// yaw is unlimited.
 		constexpr float maxPitch = 1.5707963f - 0.001f;
-		client->camera.orientation.x = std::clamp(camrotorix - (g_mouseY - camrotoffy) * 0.01f, -maxPitch, maxPitch);
-		client->camera.orientation.y = camrotoriy - (g_mouseX - camrotoffx) * 0.01f;
+		const float sensitivity = g_renderSettings.mouseLookSensitivity;
+		client->camera.orientation.x = std::clamp(camrotorix - (g_mouseY - camrotoffy) * sensitivity, -maxPitch, maxPitch);
+		client->camera.orientation.y = camrotoriy - (g_mouseX - camrotoffx) * sensitivity;
 	}
 	else
 		camroton = false;
@@ -853,6 +950,11 @@ void ClientInterface::iter()
 	}
 	if (g_mouseDown[SDL_BUTTON_X1])
 		client->camera.position.y = elevatorCamStart + (elevatorMouseStart - g_mouseY) * 0.1f;
+	applyCameraLimits();
+
+	static bool settingsOn = false;
+	if (g_keyPressed[SDL_SCANCODE_F10])
+		settingsOn = !settingsOn;
 
 	if (g_keyPressed[SDL_SCANCODE_E]) {
 		// select available cursor command next to the one currently shown
@@ -904,6 +1006,8 @@ void ClientInterface::iter()
 	TracyCZoneN(zoneUi, "UI (ImGui and UI script)", 1);
 
 	ImGuiImpl_NewFrame();
+	if (settingsOn)
+		drawSettingsWindow(&settingsOn);
 	if (debuggerOn) {
 		debugger.draw();
 
@@ -1290,7 +1394,13 @@ void ClientInterface::iter()
 	//----- Rendering -----//
 	TracyCZoneN(zoneScene, "Scene building", 1);
 
-	gfx->ClearFrame(true, true, client->terrain ? client->terrain->fogColor : 0);
+	// Fog colour: the map's, or the settings window's override
+	uint32_t fogColour = client->terrain ? client->terrain->fogColor : 0;
+	if (g_renderSettings.fogColourOverride) {
+		auto channel = [](float c) { return (uint32_t)std::clamp((int)std::lround(c * 255.0f), 0, 255); };
+		fogColour = (channel(g_renderSettings.fogColour[0]) << 16) | (channel(g_renderSettings.fogColour[1]) << 8) | channel(g_renderSettings.fogColour[2]);
+	}
+	gfx->ClearFrame(true, true, fogColour);
 	gfx->BeginDrawing();
 
 	Vector3 benchmarkPosition, benchmarkOrientation;
@@ -1298,10 +1408,22 @@ void ClientInterface::iter()
 		client->camera.position = benchmarkPosition;
 		client->camera.orientation = benchmarkOrientation;
 	}
+	// View distance (the original's far_clip, default 350, slider 280-1000; it also sets the
+	// fog) or the whole map, and the field of view, from the settings
+	if (g_renderSettings.farClipWholeMap && client->terrain) {
+		const float mapWidth = 5.0f * client->terrain->width, mapHeight = 5.0f * client->terrain->height;
+		client->camera.farDist = std::sqrt(mapWidth * mapWidth + mapHeight * mapHeight) / 0.95f + 1.0f;
+	}
+	else
+		client->camera.farDist = g_renderSettings.farClip;
+	// Near plane: the original's near_clip of 1, pushed out for very long view distances to keep
+	// the depth precision
+	client->camera.nearDist = std::max(1.0f, client->camera.farDist / 10000.0f);
+	client->camera.fovY = g_renderSettings.fovY();
 	client->camera.updateMatrix();
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);
 
-	gfx->SetFog(client->terrain ? client->terrain->fogColor : 0, client->camera.farDist);
+	gfx->SetFog(fogColour, client->camera.farDist);
 	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
 		dgfx->SetFogCamera(client->camera.position);
 	if (skyRenderer)
@@ -1434,8 +1556,11 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 			scene->sunColor = client->terrain->sunColor;
 		}
-		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx))
+		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 			dgfx->shadows.time = client->timeManager.currentTime;
+			dgfx->shadows.cloudShadows = g_renderSettings.cloudShadows;
+			dgfx->shadows.staticShadows = g_renderSettings.staticShadows;
+		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))
 				sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);
@@ -1509,20 +1634,9 @@ void ClientInterface::render()
 }
 
 void ClientInterface::updateTerrain() {
-	// View distance: the original's far_clip setting (default 350, slider 280-1000), which also
-	// sets the fog. "farClip": 0 pushes it out to the whole map, so that the fog only shows at
-	// the far end of the map.
-	float farClip = g_settings.value<float>("farClip", 350.0f);
-	if (farClip <= 0.0f && client->terrain) {
-		const float mapWidth = 5.0f * client->terrain->width, mapHeight = 5.0f * client->terrain->height;
-		farClip = std::sqrt(mapWidth * mapWidth + mapHeight * mapHeight) / 0.95f + 1.0f;
-	}
-	if (farClip > 0.0f)
-		client->camera.farDist = farClip;
-
 	delete skyRenderer;
 	skyRenderer = nullptr;
-	if (UseEnhancedRenderers(gfx) && g_settings.value<bool>("sky", true))
+	if (UseEnhancedRenderers(gfx))
 		skyRenderer = new DiligentSkyRenderer(gfx, client->terrain, &client->camera);
 	if (UseEnhancedRenderers(gfx))
 		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
