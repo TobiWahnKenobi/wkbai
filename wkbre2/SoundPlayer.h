@@ -18,6 +18,8 @@ struct SoundPlayer {
 	virtual void setListenerPosition(const Vector3& pos, const Vector3& at) = 0;
 	virtual void playMusic(const std::string& filePath) = 0;
 	virtual bool isMusicPlaying() = 0;
+	// Applies the music and effects volumes of g_renderSettings to what is playing
+	virtual void applyVolumes() {}
 
 	static std::unique_ptr<SoundPlayer> s_soundPlayer;
 	static SoundPlayer* getSoundPlayer();

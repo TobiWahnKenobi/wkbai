@@ -35,6 +35,9 @@ void RenderSettings::load()
 	sky = g_settings.value<bool>("sky", def.sky);
 	cloudShadows = g_settings.value<bool>("cloudShadows", def.cloudShadows);
 	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
+	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
+	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
+	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
 	const auto meshLighting = g_settings.value("meshLighting", nlohmann::json());
@@ -47,6 +50,9 @@ void RenderSettings::load()
 	mouseLookSensitivity = g_settings.value<float>("mouseLookSensitivity", def.mouseLookSensitivity);
 	minHeightAboveGround = g_settings.value<float>("cameraMinHeightAboveGround", def.minHeightAboveGround);
 	maxHeight = g_settings.value<float>("cameraMaxHeight", def.maxHeight);
+	invertMouseWheel = g_settings.value<bool>("invertMouseWheel", def.invertMouseWheel);
+	musicVolume = g_settings.value<float>("musicVolume", def.musicVolume);
+	effectsVolume = g_settings.value<float>("effectsVolume", def.effectsVolume);
 	showFps = g_settings.value<bool>("showFps", def.showFps);
 }
 
@@ -73,6 +79,9 @@ void RenderSettings::save()
 	g_settings["sky"] = sky;
 	g_settings["cloudShadows"] = cloudShadows;
 	g_settings["waterSurface"] = waterSurface;
+	g_settings["bumpMapping"] = bumpMapping;
+	g_settings["characterShadows"] = characterShadows;
+	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;
 	g_settings["meshLighting"] = { meshAmbient, meshDiffuse };
@@ -81,6 +90,9 @@ void RenderSettings::save()
 	g_settings["mouseLookSensitivity"] = mouseLookSensitivity;
 	g_settings["cameraMinHeightAboveGround"] = minHeightAboveGround;
 	g_settings["cameraMaxHeight"] = maxHeight;
+	g_settings["invertMouseWheel"] = invertMouseWheel;
+	g_settings["musicVolume"] = musicVolume;
+	g_settings["effectsVolume"] = effectsVolume;
 	g_settings["showFps"] = showFps;
 	SaveSettings();
 }

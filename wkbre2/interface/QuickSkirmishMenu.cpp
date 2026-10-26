@@ -7,6 +7,7 @@
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <regex>
 
 void QuickSkirmishMenu::imguiWindow()
@@ -213,7 +214,51 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		}
 	}
 
-	if (mode != DevMode && isWKBattles) {
+	if (mode != DevMode && isWKBattles && !slots.empty()) {
+		// The map's start positions in the order of their player ids
+		auto* humanPlayer = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Human Player");
+		std::vector<ServerGameObject*> players;
+		if (auto it = server.getLevel()->children.find(humanPlayer); it != server.getLevel()->children.end())
+			for (CommonGameObject* obj : it->second)
+				players.push_back(obj->dyncast<ServerGameObject>());
+		std::sort(players.begin(), players.end(), [](auto* a, auto* b) { return a->id < b->id; });
+
+		// The AI Generals: the PLAYER blueprints "... Kingmaker" (AI_Personalities.gsf)
+		std::vector<const GameObjBlueprint*> generals;
+		const auto& playerTypes = server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_PLAYER];
+		for (size_t i = 0; i < playerTypes.size(); i++) {
+			const std::string& name = playerTypes.names.getString(i);
+			if (name.size() > 10 && StrCICompare(std::string_view(name).substr(name.size() - 10), " Kingmaker") == 0)
+				generals.push_back(&playerTypes[i]);
+		}
+
+		bool humanPlaced = false;
+		for (size_t i = 0; i < players.size(); i++) {
+			const Slot slot = i < slots.size() ? slots[i] : Slot{};
+			ServerGameObject* player = players[i];
+			if (slot.type == Slot::HUMAN && !humanPlaced) {
+				server.setClientPlayerControl(0, player->id);
+				humanPlaced = true;
+				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
+				continue;
+			}
+			if (slot.type == Slot::EMPTY) {
+				// nobody plays here: the player goes with its units and buildings
+				printf("Skirmish: position %zu (player %u): empty\n", i + 1, player->id);
+				server.deleteObject(player);
+				continue;
+			}
+			const GameObjBlueprint* general = slot.general.empty() ? nullptr
+				: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);
+			if (!general && !generals.empty())
+				general = generals[rand() % generals.size()];
+			if (general) {
+				player->convertTo(general);
+				printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());
+			}
+		}
+	}
+	else if (mode != DevMode && isWKBattles) {
 		auto* humanPlayer = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Human Player");
 		const char* aiPlayerNames[] = {
 			"Ignis the Lord Protector Kingmaker",

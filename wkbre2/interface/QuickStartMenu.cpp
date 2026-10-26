@@ -31,6 +31,7 @@
 #include "../util/FrameStats.h"
 #include <tracy/Tracy.hpp>
 #include <algorithm>
+#include <atomic>
 
 namespace {
 #ifdef HAS_DISCORD
@@ -91,14 +92,7 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 	refreshSaveGames();
 	//SoundPlayer::getSoundPlayer()->playMusic("Warrior Kings Game Set\\Sounds\\Music\\title_version_2.mp2");
 	
-	server = new Server;
-	client = new Client;
-	queue1 = new NetLocalBuffer;
-	queue2 = new NetLocalBuffer;
-	srv2cli = new NetLocalLink(queue1, queue2);
-	cli2srv = new NetLocalLink(queue2, queue1);
-	server->addClient(srv2cli);
-	client->serverLink = cli2srv;
+	newSession();
 
 	initDiscordRPC();
 	updateDiscordRPC("In menu", nullptr);
@@ -109,6 +103,10 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 			savselected = it - savegames.begin();
 			skirmishMenu.changeSettingsForLevel(*it);
 			modeChosen = MODE_SINGLEPLAYER;
+			// test runs: "benchmark": { ..., "slots": "H|A:<AI General>|E" } as chosen in the skirmish menu
+			const std::string slots = g_settings.value("benchmark", nlohmann::json()).value("slots", std::string());
+			if (!slots.empty())
+				handleRequest({ "slots", slots });
 		}
 		else
 			printf("Benchmark: save game \"%s\" not found in Save_Games\n", BenchmarkSaveGame());
@@ -120,6 +118,25 @@ QuickStartMenu::~QuickStartMenu()
 	closeDiscordRPC();
 }
 
+void QuickStartMenu::newSession()
+{
+	// The previous game's objects are not freed yet (Server and Client have no destructors)
+	delete server;
+	delete client;
+	delete srv2cli;
+	delete cli2srv;
+	delete queue1;
+	delete queue2;
+	server = new Server;
+	client = new Client;
+	queue1 = new NetLocalBuffer;
+	queue2 = new NetLocalBuffer;
+	srv2cli = new NetLocalLink(queue1, queue2);
+	cli2srv = new NetLocalLink(queue2, queue1);
+	server->addClient(srv2cli);
+	client->serverLink = cli2srv;
+}
+
 void QuickStartMenu::refreshSaveGames()
 {
 	auto* gsl = ListFiles("Save_Games");
@@ -129,48 +146,81 @@ void QuickStartMenu::refreshSaveGames()
 	if (!savegames.empty()) {
 		skirmishMenu.changeSettingsForLevel(savegames[0]);
 	}
+	if (FrontEnd* fe = FrontEnd::get())
+		fe->setSaveGames(savegames);
+}
+
+void QuickStartMenu::selectSaveGame(const std::string& name)
+{
+	auto it = std::find(savegames.begin(), savegames.end(), name);
+	if (it == savegames.end())
+		return;
+	const size_t index = it - savegames.begin();
+	if (index != savselected) {
+		savselected = index;
+		skirmishMenu.changeSettingsForLevel(name);
+	}
+}
+
+void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
+{
+	if (request.action == "start") {
+		selectSaveGame(request.arg);
+		modeChosen = MODE_SINGLEPLAYER;
+	}
+	else if (request.action == "select_level")
+		selectSaveGame(request.arg);
+	else if (request.action == "slots") {
+		// "H|A:<AI General>|A|E": human, an AI General (or a random one), empty
+		std::vector<QuickSkirmishMenu::Slot> slots;
+		size_t start = 0;
+		while (start <= request.arg.size()) {
+			size_t end = request.arg.find('|', start);
+			if (end == std::string::npos)
+				end = request.arg.size();
+			const std::string part = request.arg.substr(start, end - start);
+			QuickSkirmishMenu::Slot slot;
+			if (part == "H")
+				slot.type = QuickSkirmishMenu::Slot::HUMAN;
+			else if (part == "E")
+				slot.type = QuickSkirmishMenu::Slot::EMPTY;
+			else if (part.rfind("A:", 0) == 0)
+				slot.general = part.substr(2);
+			if (!part.empty())
+				slots.push_back(slot);
+			start = end + 1;
+		}
+		skirmishMenu.setSlots(std::move(slots));
+	}
+	else if (request.action == "skirmish_settings")
+		showSkirmishWnd = true;
+	else if (request.action == "host") {
+		netInit();
+		showHostWnd = true;
+	}
+	else if (request.action == "join")
+		showJoinWnd = true;
+	else if (request.action == "mods")
+		modMenu.open();
+	else if (request.action == "quit")
+		g_windowQuit = true;
+}
+
+void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string& leaveArg)
+{
+	newSession();
+	showHostWnd = showJoinWnd = false;
+	modeChosen = MODE_UNDEFINED;
+	if (FrontEnd* fe = FrontEnd::get())
+		fe->close();
+	if (leaveAction == "restart")
+		modeChosen = MODE_SINGLEPLAYER;
+	else if (leaveAction == "start")
+		handleRequest({ "start", leaveArg });
 }
 
 void QuickStartMenu::draw()
 {	
-	// Wide enough for the row of buttons below the list (a smaller size may be restored from imgui.ini)
-	ImGui::SetNextWindowSizeConstraints(ImVec2(400, 0), ImVec2(FLT_MAX, FLT_MAX));
-	ImGui::Begin("Select sav");
-
-	ImGui::PushItemWidth(-1.0f);
-	ImVec2 boxSize = ImGui::GetContentRegionAvail();
-	boxSize.y -= ImGui::GetFrameHeightWithSpacing();
-	if (ImGui::BeginListBox("##SaveBox", boxSize)) {
-		for (size_t i = 0; i < savegames.size(); i++) {
-			if (ImGui::Selectable(savegames[i].c_str(), savselected == i, ImGuiSelectableFlags_AllowDoubleClick)) {
-				savselected = i;
-				skirmishMenu.changeSettingsForLevel(savegames[i]);
-				if (!showHostWnd && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-					modeChosen = MODE_SINGLEPLAYER;
-			}
-		}
-		ImGui::EndListBox();
-	}
-	ImGui::PopItemWidth();
-
-	if (ImGui::Button("Load"))
-		modeChosen = MODE_SINGLEPLAYER;
-	ImGui::SameLine();
-	if (ImGui::Button("Skirmish settings"))
-		showSkirmishWnd = true;
-	ImGui::SameLine();
-	if (ImGui::Button("Host")) {
-		netInit();
-		showHostWnd = true;
-	}
-	ImGui::SameLine();
-	if (ImGui::Button("Join"))
-		showJoinWnd = true;
-	ImGui::SameLine();
-	if (ImGui::Button("Mods"))
-		modMenu.open();
-	ImGui::End();
-
 	// Mods can add or replace levels, so list them again after a change
 	if (modMenu.draw())
 		refreshSaveGames();
@@ -235,6 +285,12 @@ void QuickStartMenu::launchGame()
 	if (modeChosen == MODE_UNDEFINED)
 		return;
 
+	// What the player chose in the in-game menu when the game ended
+	std::string leaveAction, leaveArg;
+	// The main menu's screens are gone in the game; Esc opens the in-game menu
+	if (FrontEnd* fe = FrontEnd::get())
+		fe->close();
+
 	if (modeChosen == MODE_MULTIPLAYER_JOIN) {
 		updateDiscordRPC("Multiplayer", "?");
 		netInit();
@@ -249,7 +305,7 @@ void QuickStartMenu::launchGame()
 		ClientInterface cliui(client, gfx);
 		client->attachInterface(&cliui);
 
-		while (!g_windowQuit) {
+		while (!g_windowQuit && !cliui.wantsToLeave()) {
 			client->tick();
 
 			ENetEvent event;
@@ -280,6 +336,8 @@ void QuickStartMenu::launchGame()
 			cliui.iter();
 			runDiscordCallbacks();
 		}
+		leaveAction = cliui.leaveAction;
+		leaveArg = cliui.leaveArg;
 		enet_host_destroy(eclient);
 		netDeinit();
 	}
@@ -288,7 +346,8 @@ void QuickStartMenu::launchGame()
 		client->localServer = true;
 		std::string savfile = std::string("Save_Games\\") + savegames.at(savselected);
 		std::mutex srvMutex;
-		std::thread srvThread([this, savfile, &srvMutex]() {
+		std::atomic<bool> stopServer = false;
+		std::thread srvThread([this, savfile, &srvMutex, &stopServer]() {
 			tracy::SetThreadName("Server");
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
@@ -296,7 +355,7 @@ void QuickStartMenu::launchGame()
 			if (BenchmarkPaused())
 				server->timeManager.pause();
 			srvMutex.unlock();
-			while (!g_windowQuit) {
+			while (!g_windowQuit && !stopServer) {
 				srvMutex.lock();
 				server->tick();
 				srvMutex.unlock();
@@ -305,11 +364,12 @@ void QuickStartMenu::launchGame()
 			});
 
 		ClientInterface cliui(client, gfx);
+		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
 		client->attachInterface(&cliui);
 		ServerDebugger srvdbg(server);
 		bool onServerUi = false;
 
-		while (!g_windowQuit) {
+		while (!g_windowQuit && !cliui.wantsToLeave()) {
 			client->tick();
 			netHandle();
 			if (g_keyPressed[SDL_SCANCODE_F1]) {
@@ -337,8 +397,13 @@ void QuickStartMenu::launchGame()
 		if (onServerUi)
 			srvMutex.unlock();
 
+		stopServer = true;
 		srvThread.join();
+		leaveAction = cliui.leaveAction;
+		leaveArg = cliui.leaveArg;
 	}
+	if (!g_windowQuit)
+		afterGame(leaveAction, leaveArg);
 }
 
 void QuickStartMenu::netInit()

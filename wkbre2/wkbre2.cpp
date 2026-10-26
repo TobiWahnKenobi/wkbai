@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include "interface/QuickStartMenu.h"
+#include "interface/FrontEnd.h"
 #include "gfx/renderer.h"
 #include "window.h"
 #include "imguiimpl.h"
@@ -78,21 +79,38 @@ void LaunchQSM() {
 	SetRenderer(gfx);
 	ImGuiImpl_CreateFontsTexture(gfx);
 
-	texture bgtex = gfx->CreateTexture(Bitmap::loadBitmap("Interface\\Startup Screen.tga"), 1);
+	// The menus (redata/FrontEndUI.lua), with the game's cursor
+	FrontEnd frontEnd{ gfx };
+	WndSetCursor(WndCreateCursor("Interface\\C_DEFAULT.TGA"));
 
 	QuickStartMenu qsm{ gfx };
+
+	// Test runs: "menuTest": { "open": [screens], "frames": n, "screenshot": path } opens the
+	// screens, saves a screenshot after n frames and quits
+	const nlohmann::json menuTest = g_settings.value("menuTest", nlohmann::json());
+	int menuFrame = 0;
 
 	while (!g_windowQuit) {
 		ImGuiImpl_NewFrame();
 		qsm.draw();
+		frontEnd.frame(FrontEnd::Place::MAIN_MENU);
+		for (const FrontEnd::Request& request : frontEnd.takeRequests())
+			qsm.handleRequest(request);
 
 		gfx->ClearFrame();
 		gfx->BeginDrawing();
-		gfx->InitRectDrawing();
-		gfx->SetTexture(0, bgtex);
-		gfx->DrawRect(0, 0, g_windowWidth, g_windowHeight);
 		gfx->InitImGuiDrawing();
 		ImGuiImpl_Render(gfx);
+		if (menuTest.is_object()) {
+			menuFrame++;
+			if (menuFrame == 2)
+				for (const auto& screen : menuTest.value("open", nlohmann::json::array()))
+					frontEnd.open(screen.get<std::string>());
+			if (menuFrame == menuTest.value("frames", 60)) {
+				gfx->SaveScreenshot(menuTest.value("screenshot", std::string("menu.bmp")).c_str());
+				g_windowQuit = true;
+			}
+		}
 		gfx->EndDrawing();
 		HandleWindow();
 

@@ -1273,7 +1273,12 @@ void Server::setGameSpeed(float nextSpeed)
 
 void Server::setClientPlayerControl(int clientIndex, uint32_t playerObjId)
 {
+	// the players know which client controls them (not yet while a save game is loading)
+	if (ServerGameObject* old = clientPlayerObjects[clientIndex])
+		old->clientIndex = -1;
 	clientPlayerObjects[clientIndex] = playerObjId;
+	if (ServerGameObject* player = clientPlayerObjects[clientIndex])
+		player->clientIndex = clientIndex;
 	NetPacketWriter msg{ NETCLIMSG_CONTROL_PLAYER };
 	msg.writeUint32(playerObjId);
 	clientLinks[clientIndex]->send(msg);

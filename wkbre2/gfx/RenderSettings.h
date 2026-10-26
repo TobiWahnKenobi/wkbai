@@ -29,6 +29,9 @@ struct RenderSettings {
 	// The original's sky, shadows and model lighting
 	bool sky = true, cloudShadows = true, staticShadows = true;
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
+	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
+	bool characterShadows = true;    // the units' blob shadows
+	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;
 
@@ -38,6 +41,11 @@ struct RenderSettings {
 	float mouseLookSensitivity = 0.01f; // radians per pixel, middle mouse button
 	float minHeightAboveGround = 3.0f;
 	float maxHeight = 1000.0f;
+
+	bool invertMouseWheel = false;
+
+	// Sound, 0..1
+	float musicVolume = 1.0f, effectsVolume = 1.0f;
 
 	bool showFps = false;            // FPS counter in the top-left corner
 

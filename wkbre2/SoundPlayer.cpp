@@ -26,6 +26,7 @@
 #include <mpg123.h>
 
 #include "settings.h"
+#include "gfx/RenderSettings.h"
 #include <nlohmann/json.hpp>
 
 struct OALSoundPlayer : SoundPlayer {
@@ -139,6 +140,7 @@ struct OALSoundPlayer : SoundPlayer {
 				auto src = sources[i];
 				alSourcei(src, AL_BUFFER, *optBuffer);
 				alSourcef(src, AL_MIN_GAIN, 1.0f);
+				alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
 				alSourcei(src, AL_SOURCE_RELATIVE, AL_TRUE);
 				alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
 				alSourcePlay(src);
@@ -168,6 +170,7 @@ struct OALSoundPlayer : SoundPlayer {
 				auto src = sources[i];
 				alSourcei(src, AL_BUFFER, *optBuffer);
 				alSourcef(src, AL_MIN_GAIN, 0.0f);
+				alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
 				alSourcei(src, AL_SOURCE_RELATIVE, AL_FALSE);
 				alSourcef(src, AL_REFERENCE_DISTANCE, refDist);
 				//alSourcef(src, AL_MAX_DISTANCE, maxDist);
@@ -247,6 +250,7 @@ struct OALSoundPlayer : SoundPlayer {
 		alSourcei(musicSource, AL_BUFFER, musicBuffer);
 		alSourcei(musicSource, AL_SOURCE_RELATIVE, AL_TRUE);
 		alSource3f(musicSource, AL_POSITION, 0.0f, 0.0f, 0.0f);
+		alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume);
 		alSourcePlay(musicSource);
 	}
 
@@ -260,6 +264,14 @@ struct OALSoundPlayer : SoundPlayer {
 			playMusicImp(filePath);
 			isMusicLoading = false;
 		});
+	}
+
+	virtual void applyVolumes() override {
+		if (!initialised)
+			return;
+		alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume);
+		for (auto src : sources)
+			alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
 	}
 
 	virtual bool isMusicPlaying() override {

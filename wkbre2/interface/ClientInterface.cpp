@@ -41,6 +41,7 @@
 
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
+#include "FrontEnd.h"
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
@@ -456,8 +457,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
-		if (bool* bump = terrainRenderer ? terrainRenderer->bumpMapping() : nullptr)
-			ImGui::Checkbox("Terrain bump mapping", bump);
+		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
+		ImGui::Checkbox("Character shadows", &s.characterShadows);
 	}
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");
@@ -669,14 +670,15 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
 
 	// shadow
-	if (model && obj->blueprint->hasDynamicShadow && gpuBlobShadows) {
+	const bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
+	if (blobShadow && gpuBlobShadows) {
 		// A round blob as wide as the model's bounding sphere (see below), drawn by the terrain renderer
 		const Vector3 centre = sphereCenter + Vector3(1, 0, 1) * (client->terrain->edge * 5.0f);
 		const float radius = model->getSphereRadius() * std::max(obj->scale.x, obj->scale.z);
 		gpuBlobShadows->insert(gpuBlobShadows->end(), { centre.x - radius, centre.z - radius,
 			centre.x - radius, centre.z + radius, centre.x + radius, centre.z - radius });
 	}
-	else if (model && obj->blueprint->hasDynamicShadow) {
+	else if (blobShadow) {
 		static std::optional<texture> shadowTexture;
 		if (!shadowTexture) {
 			Bitmap bmp = Bitmap::loadBitmap("Warrior Kings Game Set\\Textures\\shadow.pcx").convertToR8G8B8A8();
@@ -777,6 +779,32 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 	}
 }
 
+namespace {
+	// The frame's input, set aside for the in-game menu while it is open
+	struct MenuInput {
+		bool keyDown[std::size(g_keyDown)], keyPressed[std::size(g_keyPressed)];
+		bool mouseDown[std::size(g_mouseDown)], mousePressed[std::size(g_mousePressed)], mouseReleased[std::size(g_mouseReleased)];
+		int mouseWheel = 0, mouseDoubleClicked = 0;
+
+		template <typename T, size_t N> static void move(T (&to)[N], T (&from)[N]) {
+			std::copy(std::begin(from), std::end(from), std::begin(to));
+			std::fill(std::begin(from), std::end(from), T());
+		}
+		void take() {
+			move(keyDown, g_keyDown); move(keyPressed, g_keyPressed);
+			move(mouseDown, g_mouseDown); move(mousePressed, g_mousePressed); move(mouseReleased, g_mouseReleased);
+			mouseWheel = std::exchange(g_mouseWheel, 0);
+			mouseDoubleClicked = std::exchange(g_mouseDoubleClicked, 0);
+		}
+		void give() {
+			move(g_keyDown, keyDown); move(g_keyPressed, keyPressed);
+			move(g_mouseDown, mouseDown); move(g_mousePressed, mousePressed); move(g_mouseReleased, mouseReleased);
+			g_mouseWheel = mouseWheel;
+			g_mouseDoubleClicked = mouseDoubleClicked;
+		}
+	};
+}
+
 void ClientInterface::iter()
 {
 	ZoneScoped;
@@ -789,17 +817,41 @@ void ClientInterface::iter()
 	static Vector3 peapos(0, 0, 0);
 	static bool showTerrain = true;
 
-	static bool firstTime = true;
 	static WndCursor *arrowCursor;
 	static WndCursor *currentCursor = nullptr;
-	if (firstTime) {
-		firstTime = false;
+	if (firstFrame) {
+		firstFrame = false;
 		//arrowCursor = WndCreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
 		arrowCursor = WndCreateCursor("Interface\\C_DEFAULT.TGA");
 		WndSetCursor(arrowCursor);
 		currentCursor = arrowCursor;
 		lang.load("Languages\\Language.txt");
 	}
+
+	// The in-game menu (Esc): while it is open, it gets the frame's input and the game none
+	FrontEnd* frontEnd = FrontEnd::get();
+	if (frontEnd && !frontEnd->isOpen() && g_keyPressed[SDL_SCANCODE_ESCAPE] && client->getLevel()) {
+		frontEnd->setSinglePlayer(singlePlayer);
+		frontEnd->open("ingame");
+		if (singlePlayer && !client->timeManager.paused) {
+			client->sendPauseRequest(true);
+			menuPausedGame = true;
+		}
+	}
+	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
+	if (frontEnd && BenchmarkEnabled() && client->getLevel() && !frontEnd->isOpen()) {
+		static bool opened = false;
+		const auto screens = g_settings.value("benchmark", nlohmann::json()).value("openMenu", nlohmann::json::array());
+		if (!opened && !screens.empty()) {
+			opened = true;
+			for (const auto& screen : screens)
+				frontEnd->open(screen.get<std::string>());
+		}
+	}
+	const bool menuOpen = frontEnd && frontEnd->isOpen();
+	static MenuInput menuInput;
+	if (menuOpen)
+		menuInput.take();
 
 	//----- Command cursors -----//
 	TracyCZoneN(zoneInput, "Input and commands", 1);
@@ -915,7 +967,7 @@ void ClientInterface::iter()
 		camroton = false;
 
 	if (g_mouseWheel)
-		client->camera.position.y += g_mouseWheel * 2;
+		client->camera.position.y += g_mouseWheel * (g_renderSettings.invertMouseWheel ? -2 : 2);
 
 	static bool clickedScriptedUi = false;
 	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_LEFT]) {
@@ -1216,6 +1268,15 @@ void ClientInterface::iter()
 	static sol::state lua;
 	static sol::load_result luaScript;
 	static TextureCache csTextureCache(gfx);
+	// The script's functions capture this ClientInterface: a new one (after going back to the
+	// main menu) starts a new script
+	static ClientInterface* luaOwner = nullptr;
+	if (luaOwner != this) {
+		luaOwner = this;
+		luaInitialized = false;
+		luaScript = {};
+		lua = {};
+	}
 	if (uiScriptOn && !luaInitialized) {
 		lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
 		// UI functions
@@ -1525,6 +1586,24 @@ void ClientInterface::iter()
 		lua = {};
 	}
 
+	if (frontEnd) {
+		if (menuOpen)
+			menuInput.give();
+		frontEnd->frame(FrontEnd::Place::IN_GAME);
+		for (const FrontEnd::Request& r : frontEnd->takeRequests()) {
+			if (r.action == "quit")
+				g_windowQuit = true;
+			else if (r.action == "exit_to_menu" || r.action == "restart" || r.action == "start") {
+				leaveAction = r.action;
+				leaveArg = r.arg;
+			}
+		}
+		if (menuPausedGame && !frontEnd->isOpen()) {
+			client->sendPauseRequest(false);
+			menuPausedGame = false;
+		}
+	}
+
 	TracyCZoneEnd(zoneUi);
 
 	//----- Rendering -----//
@@ -1629,14 +1708,14 @@ void ClientInterface::iter()
 				}
 			}
 		}
-		static bool healthTexLoaded = false;
+		static ClientInterface* healthTexOwner = nullptr; // from this ClientInterface's uiTexCache
 		static texture healthTex[8];
-		if (!healthTexLoaded) {
+		if (healthTexOwner != this) {
+			healthTexOwner = this;
 			for (int i = 0; i < 8; ++i) {
 				std::string name = "Interface\\InGame\\health" + std::to_string(i + 1) + ".tga";
 				healthTex[i] = uiTexCache.getTexture(name.c_str(), false);
 			}
-			healthTexLoaded = true;
 		}
 		for (const auto& obj : highlightedObjects) {
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_NOLIGHTING;
@@ -1754,6 +1833,8 @@ void ClientInterface::iter()
 
 	if (terrainRenderer && showTerrain) {
 		ZoneScopedN("Terrain rendering");
+		if (bool* bump = terrainRenderer->bumpMapping())
+			*bump = g_renderSettings.bumpMapping;
 		terrainRenderer->render();
 	}
 

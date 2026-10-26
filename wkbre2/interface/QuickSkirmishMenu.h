@@ -1,6 +1,8 @@
 #pragma once
 
+#include <string>
 #include <string_view>
+#include <vector>
 
 class Server;
 
@@ -12,6 +14,14 @@ public:
 	void imguiWindow();
 	void changeSettingsForLevel(std::string_view levelName);
 	void applySettings(Server& server);
+
+	// Who plays at each start position of the map (the level's players in the order of their
+	// ids), as chosen in the skirmish menu
+	struct Slot {
+		enum Type { HUMAN, AI, EMPTY } type = AI;
+		std::string general; // AI: an AI General (PLAYER blueprint); empty: a random one
+	};
+	void setSlots(std::vector<Slot> newSlots) { slots = std::move(newSlots); }
 
 private:
 	enum GameMode {
@@ -44,4 +54,7 @@ private:
 	int battlesCampaignImperialTechLevel = 0;
 	int battlesCampaignPaganTechLevel = 0;
 	int battlesCampaignRenaissanceTechLevel = 0;
+
+	// none chosen: player 1 is the human, the others random AI Generals
+	std::vector<Slot> slots;
 };

@@ -9,6 +9,7 @@
 #include <vector>
 #include "QuickSkirmishMenu.h"
 #include "ModMenu.h"
+#include "FrontEnd.h"
 
 struct IRenderer;
 struct NetEnetLink;
@@ -21,7 +22,10 @@ struct NetLocalLink;
 struct QuickStartMenu {
 	QuickStartMenu(IRenderer* gfx);
 	~QuickStartMenu();
+	// The ImGui windows that the menus still open (skirmish settings, host, join, mods)
 	void draw();
+	// What the player chose in the menus (FrontEnd requests)
+	void handleRequest(const FrontEnd::Request& request);
 	void launchGame();
 private:
 	std::vector<std::string> savegames;
@@ -51,6 +55,11 @@ private:
 	ModMenu modMenu;
 
 	void refreshSaveGames();
+	void selectSaveGame(const std::string& name);
+	// A new server and client, for the next game
+	void newSession();
+	// After a game: what the player chose in the in-game menu
+	void afterGame(const std::string& leaveAction, const std::string& leaveArg);
 	void netInit();
 	void netHandle();
 	void netDeinit();

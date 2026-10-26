@@ -307,7 +307,6 @@ struct DiligentRenderer : DiligentGfx
 	Vector3 fogCamera;
 	float fogEdge[4] = { 1e9f, 1e9f, 1e9f, 2e9f }; // no edge fog until a map sets it
 	bool fogEnabled = false;
-	bool vsync = true;
 	bool isVulkan = false;
 	uint64_t frame = 0; // presented frames, for buffers whose dynamic memory expires
 
@@ -543,7 +542,6 @@ struct DiligentRenderer : DiligentGfx
 
 	void Init() override
 	{
-		vsync = g_settings.value<bool>("vsync", true);
 		isVulkan = g_settings.value<std::string>("diligentBackend", "d3d12") == "vulkan";
 		const int adapter = g_settings.value<int>("adapterIndex", -1);
 		const bool validation = g_settings.value<bool>("gfxValidation", false);
@@ -659,7 +657,7 @@ struct DiligentRenderer : DiligentGfx
 
 	void EndDrawing() override
 	{
-		swapChain->Present(vsync ? 1 : 0);
+		swapChain->Present(g_renderSettings.vsync ? 1 : 0);
 		frame++;
 	}
 

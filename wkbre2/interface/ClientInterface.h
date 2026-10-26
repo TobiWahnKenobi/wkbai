@@ -53,7 +53,16 @@ struct ClientInterface {
 	bool stampdownFromCommand = false;
 	std::unordered_set<CliGORef> selection;
 	TextureCache uiTexCache;
+
+	// Set by the game's owner: the in-game menu pauses a single-player game
+	bool singlePlayer = false;
+	// The player chose to leave the game from the in-game menu: "exit_to_menu", "restart" or
+	// "start" (load the save game leaveArg); the game loop then ends
+	std::string leaveAction, leaveArg;
+	bool wantsToLeave() const { return !leaveAction.empty(); }
 private:
+	bool firstFrame = true;
+	bool menuPausedGame = false;
 	int camrotoffx, camrotoffy;
 	float camrotorix, camrotoriy;
 	bool camroton = false;
