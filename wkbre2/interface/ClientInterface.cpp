@@ -276,6 +276,36 @@ static bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// SHEAR_MODEL: a world-space shear that keeps the model upright but lifts each vertex by the
+// ground's slope under the object, so that wall segments follow the terrain as one band. The
+// slope comes from the ground heights at the ends of the model's bounding box along its own
+// axes; the longer axis also sets the height, so that neighbouring segments meet at their ends.
+static Matrix GetShearToGroundMatrix(const Terrain* terrain, Model* model, const Matrix& world, const Vector3& position)
+{
+	const auto [low, high] = model->interpolateBoundingBox(0);
+	const Vector3 centre = (low + high) * 0.5f;
+	struct AxisSlope { Vector3 dir; float slope, length, midHeight; };
+	auto axisSlope = [&](const Vector3& a, const Vector3& b) {
+		const Vector3 wa = a.transform(world), wb = b.transform(world);
+		Vector3 d(wb.x - wa.x, 0.0f, wb.z - wa.z);
+		const float len = d.len2xz();
+		const float ha = terrain->getHeight(wa.x, wa.z), hb = terrain->getHeight(wb.x, wb.z);
+		return AxisSlope{ len > 1e-3f ? d / len : Vector3(0, 0, 0), len > 1e-3f ? (hb - ha) / len : 0.0f, len, (ha + hb) * 0.5f };
+	};
+	const AxisSlope ax = axisSlope(Vector3(low.x, 0, centre.z), Vector3(high.x, 0, centre.z));
+	const AxisSlope az = axisSlope(Vector3(centre.x, 0, low.z), Vector3(centre.x, 0, high.z));
+	// Ground gradient (the two axes are perpendicular in the ground plane)
+	const float gx = ax.dir.x * ax.slope + az.dir.x * az.slope;
+	const float gz = ax.dir.z * ax.slope + az.dir.z * az.slope;
+	const float dy = (ax.length >= az.length ? ax.midHeight : az.midHeight) - position.y;
+	// Row vectors: y' = y + gx * (x - px) + gz * (z - pz) + dy
+	Matrix shear = Matrix::getIdentity();
+	shear.m[0][1] = gx;
+	shear.m[2][1] = gz;
+	shear.m[3][1] = dy - gx * position.x - gz * position.z;
+	return shear;
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -342,6 +372,8 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 
 	obj->sceneEntity.model = model;
 	obj->sceneEntity.transform = transformMatrix;
+	if (obj->blueprint->shearModel && client->terrain)
+		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
 	obj->sceneEntity.color = obj->getPlayer()->color;
 	if (obj->animSynchronizedTask != -1) {
 		CliScriptContext ctx{ client, obj };

@@ -88,7 +88,7 @@ TagDict<5> Tags::CCOMMAND_tagDict({
     "START_SEQUENCE",
 });
 
-TagDict<40> Tags::CBLUEPRINT_tagDict({
+TagDict<41> Tags::CBLUEPRINT_tagDict({
     "BLUEPRINT_TOOLTIP",
     "BUILDING_TYPE",
     "CAN_BUILD",
@@ -120,6 +120,7 @@ TagDict<40> Tags::CBLUEPRINT_tagDict({
     "REMOVE_WHEN_NOT_REFERENCED",
     "REPRESENT_AS",
     "SCALE_APPEARANCE",
+    "SHEAR_MODEL",
     "SHOULD_PROCESS_SIGHT_RANGE",
     "SIGHT_RANGE_EQUATION",
     "STARTS_WITH_ITEM",

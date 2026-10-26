@@ -321,6 +321,10 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			hasStaticShadow = gsf.nextInt() != 0;
 			break;
 		}
+		case Tags::CBLUEPRINT_SHEAR_MODEL: {
+			shearModel = true;
+			break;
+		}
 		}
 		if (strtag == "AI__SPAWN_LOCATION_SELECTOR") {
 			aiSpawnLocationSelector = ReadFinder(gsf, *gameSet);

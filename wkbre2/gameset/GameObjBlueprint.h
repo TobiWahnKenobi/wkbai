@@ -102,6 +102,9 @@ struct GameObjBlueprint {
 
 	bool hasDynamicShadow = false;
 	bool hasStaticShadow = false;
+	// SHEAR_MODEL (walls, palings, the battering ram): the model is sheared vertically to
+	// follow the slope of the ground under it.
+	bool shearModel = false;
 
 	// DISPLAY_ON_MINIMAP. Default inferred from the shipped game set: it only ever sets 0 on
 	// characters and buildings and 1 on containers and props (not verified in the exe yet).
