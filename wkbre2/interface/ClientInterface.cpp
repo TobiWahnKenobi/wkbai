@@ -451,6 +451,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	}
 	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
+		ImGui::Checkbox("Water surface", &s.waterSurface);
 		ImGui::Checkbox("Static shadows", &s.staticShadows);
 		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");

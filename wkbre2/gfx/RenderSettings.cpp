@@ -34,6 +34,7 @@ void RenderSettings::load()
 	saturation = g_settings.value<float>("saturation", def.saturation);
 	sky = g_settings.value<bool>("sky", def.sky);
 	cloudShadows = g_settings.value<bool>("cloudShadows", def.cloudShadows);
+	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
 	const auto meshLighting = g_settings.value("meshLighting", nlohmann::json());
@@ -71,6 +72,7 @@ void RenderSettings::save()
 	g_settings["saturation"] = saturation;
 	g_settings["sky"] = sky;
 	g_settings["cloudShadows"] = cloudShadows;
+	g_settings["waterSurface"] = waterSurface;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;
 	g_settings["meshLighting"] = { meshAmbient, meshDiffuse };

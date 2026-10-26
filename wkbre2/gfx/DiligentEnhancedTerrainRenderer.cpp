@@ -79,6 +79,9 @@ cbuffer SunBuffer
 	float4 CloudParams; // UV offset, UV per world unit, on
 	float4 ShadowParams; // on, light left in the shadow
 	float4 LakeColour; // water surface: the map's fog colour, half transparent (as in wkbre2 before)
+	float4 WaterLayers; // UV offsets of the two texture layers
+	float4 WaterRipples; // UV offsets of the two ripple layers
+	float4 WaterParams; // on, UV per world unit, ripple UV per world unit
 };
 
 // The original's terrain shadows (docs/re/shadows.md): the light is scaled by the scrolling
@@ -164,20 +167,42 @@ VS_OUTPUT VS(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint TangentPac
 struct LAKE_OUTPUT
 {
 	float4 Pos : SV_POSITION;
+	float3 World : COLOR1;
+	float Depth : TEXCOORD0;
 	float Fog : FOG;
 };
 
-LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0)
+LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 {
 	LAKE_OUTPUT output;
 	output.Pos = mul(float4(Pos, 1), Transform);
+	output.World = Pos;
+	output.Depth = Depth;
 	output.Fog = FogAmount(Pos, distance(Pos, FogCamera.xyz));
 	return output;
 }
 
+// The water surface (docs/re/water.md). The original scrolls its texture layers along two wind
+// vectors and lights each tile corner with a sun glint off a scrolling field of normals. Here
+// per pixel: the map's Water_Surface.tga in two scrolling layers, two layers of a ripple normal
+// map, a sun glint, the sky (fog) colour reflected at grazing angles, and more transparency
+// where the water is shallow.
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
-	return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
+	if (WaterParams.x == 0)
+		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
+	float2 uv = input.World.xz * WaterParams.y;
+	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
+	float2 ruv = input.World.xz * WaterParams.z;
+	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
+	float3 n = normalize(float3(slope.x - 1, 1, slope.y - 1));
+	float3 v = normalize(FogCamera.xyz - input.World);
+	float3 r = reflect(-v, n);
+	float glint = pow(saturate(dot(r, SunDirection)), 64) * 0.7 + pow(saturate(dot(r, SunDirection)), 3) * 0.06;
+	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
+	float3 c = lerp(tex, FogColor.rgb, fresnel * 0.6) + glint;
+	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint);
+	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -245,8 +270,49 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> lakePipeline;
 	RefCntAutoPtr<IShaderResourceBinding> lakeBinding;
 	texture cloudMap = nullptr;
+	texture waterTexture = nullptr, rippleTexture = nullptr;
 	RefCntAutoPtr<ITexture> shadowMap;
 };
+
+// A tileable map of ripple slopes for the water: smoothed random heights, their slope in x and
+// z in red and green (0.5 = flat). It stands in for the original's grid of random normals.
+static texture CreateRippleTexture(IRenderer* gfx)
+{
+	constexpr int N = 64;
+	std::vector<float> h(N * N);
+	uint32_t seed = 12345;
+	for (float& v : h) {
+		seed = seed * 1664525u + 1013904223u;
+		v = (seed >> 8) / 16777216.0f;
+	}
+	for (int pass = 0; pass < 3; pass++) { // box blur with wrapping
+		std::vector<float> o(N * N);
+		for (int y = 0; y < N; y++)
+			for (int x = 0; x < N; x++) {
+				float sum = 0;
+				for (int dy = -1; dy <= 1; dy++)
+					for (int dx = -1; dx <= 1; dx++)
+						sum += h[((y + dy + N) % N) * N + (x + dx + N) % N];
+				o[y * N + x] = sum / 9;
+			}
+		h = std::move(o);
+	}
+	Bitmap bmp;
+	bmp.width = bmp.height = N;
+	bmp.format = BMFORMAT_R8G8B8A8;
+	bmp.pixels.resize(N * N * 4);
+	for (int y = 0; y < N; y++)
+		for (int x = 0; x < N; x++) {
+			const float sx = h[y * N + (x + 1) % N] - h[y * N + (x + N - 1) % N];
+			const float sz = h[((y + 1) % N) * N + x] - h[((y + N - 1) % N) * N + x];
+			uint8_t* px = &bmp.pixels[(y * N + x) * 4];
+			px[0] = (uint8_t)std::clamp(128.0f + sx * 1200.0f, 0.0f, 255.0f);
+			px[1] = (uint8_t)std::clamp(128.0f + sz * 1200.0f, 0.0f, 255.0f);
+			px[2] = 128;
+			px[3] = 255;
+		}
+	return gfx->CreateTexture(bmp, 0);
+}
 
 // The static shadow map: 2048² texels over the square drawn by the scene renderer
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
@@ -277,7 +343,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 128;
+	cbDesc.Size = 176;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -319,14 +385,14 @@ void DiligentEnhancedTerrainRenderer::init()
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
 	// a map of full light when it is missing.
 	auto& shadows = dgfx->shadows;
-	std::string cloudMapPath;
+	std::string skyDirectory;
 	for (wchar_t c : terrain->skyTextureDirectory) {
 		if (!c) break; // the .bcm's string includes its terminator
-		cloudMapPath += (char)c;
+		skyDirectory += (char)c;
 	}
-	if (!cloudMapPath.empty() && cloudMapPath.back() != '\\' && cloudMapPath.back() != '/')
-		cloudMapPath += '\\';
-	cloudMapPath += "sky_shadow_map.pcx";
+	if (!skyDirectory.empty() && skyDirectory.back() != '\\' && skyDirectory.back() != '/')
+		skyDirectory += '\\';
+	const std::string cloudMapPath = skyDirectory + "sky_shadow_map.pcx";
 	shadows.cloudMap = nullptr;
 	if (!terrain->skyTextureDirectory.empty() && FileExists(cloudMapPath.c_str())) {
 		_impl->cloudMap = gfx->CreateTexture(Bitmap::loadBitmap(cloudMapPath.c_str()), 1);
@@ -404,7 +470,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	// Water: half transparent over the terrain, depth tested but not written
 	RefCntAutoPtr<IShader> lakeVs = createShader(SHADER_TYPE_VERTEX, "VS_Lake");
 	RefCntAutoPtr<IShader> lakePs = createShader(SHADER_TYPE_PIXEL, "PS_Lake");
-	static const LayoutElement lakeLayout[] = { LayoutElement{0, 0, 3, VT_FLOAT32, False} };
+	static const LayoutElement lakeLayout[] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 0, 1, VT_FLOAT32, False} };
 	ci.PSODesc.Name = "Enhanced terrain water";
 	gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
 	gp.DepthStencilDesc.DepthWriteEnable = False;
@@ -422,14 +488,19 @@ void DiligentEnhancedTerrainRenderer::init()
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
 	_impl->signature->CreateShaderResourceBinding(&_impl->lakeBinding, true);
-	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(nullptr));
-	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(nullptr));
+	const std::string waterPath = skyDirectory + "Water_Surface.tga";
+	if (!skyDirectory.empty() && FileExists(waterPath.c_str()))
+		_impl->waterTexture = gfx->CreateTexture(Bitmap::loadBitmap(waterPath.c_str()), 0);
+	_impl->rippleTexture = CreateRippleTexture(gfx);
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(_impl->waterTexture));
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(_impl->rippleTexture));
 
 	// Chunks
 	constexpr int CHUNK = 16;
 	constexpr float tilesize = 5.0f;
 	std::map<Impl::TexturePair, int> pairIndex;
-	std::vector<Vector3> lakeVertices;
+	struct LakeVertex { Vector3 pos; float depth; };
+	std::vector<LakeVertex> lakeVertices;
 	for (int cz = 0; cz < (int)terrain->height; cz += CHUNK) {
 		for (int cx = 0; cx < (int)terrain->width; cx += CHUNK) {
 			Impl::Chunk chunk;
@@ -452,9 +523,12 @@ void DiligentEnhancedTerrainRenderer::init()
 					float bottom = std::min({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
 					if (tile->fullOfWater) {
 						const uint32_t v0 = (uint32_t)lakeVertices.size();
+						const float wl = tile->waterLevel;
 						lakeVertices.insert(lakeVertices.end(), {
-							Vector3(lx, tile->waterLevel, lz), Vector3(lx + tilesize, tile->waterLevel, lz),
-							Vector3(lx + tilesize, tile->waterLevel, lz + tilesize), Vector3(lx, tile->waterLevel, lz + tilesize) });
+							LakeVertex{ Vector3(lx, wl, lz), wl - terrain->getVertex(x, z) },
+							LakeVertex{ Vector3(lx + tilesize, wl, lz), wl - terrain->getVertex(x + 1, z) },
+							LakeVertex{ Vector3(lx + tilesize, wl, lz + tilesize), wl - terrain->getVertex(x + 1, z + 1) },
+							LakeVertex{ Vector3(lx, wl, lz + tilesize), wl - terrain->getVertex(x, z + 1) } });
 						for (const int& c : { 0,3,1,1,3,2 })
 							chunk.lakeIndices.push_back(v0 + c);
 						top = std::max(top, tile->waterLevel);
@@ -472,7 +546,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	if (!lakeVertices.empty()) {
 		BufferDesc lakeDesc;
 		lakeDesc.Name = "Terrain water vertices";
-		lakeDesc.Size = lakeVertices.size() * sizeof(Vector3);
+		lakeDesc.Size = lakeVertices.size() * sizeof(LakeVertex);
 		lakeDesc.BindFlags = BIND_VERTEX_BUFFER;
 		lakeDesc.Usage = USAGE_IMMUTABLE;
 		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
@@ -489,6 +563,10 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 		shadows.staticShadowValid = false;
 		if (_impl->cloudMap)
 			gfx->FreeTexture(_impl->cloudMap);
+		if (_impl->waterTexture)
+			gfx->FreeTexture(_impl->waterTexture);
+		if (_impl->rippleTexture)
+			gfx->FreeTexture(_impl->rippleTexture);
 	}
 	delete texcache;
 	delete _impl;
@@ -528,6 +606,25 @@ void DiligentEnhancedTerrainRenderer::render()
 	lakeColour[1] = ((terrain->fogColor >> 8) & 255) / 255.0f;
 	lakeColour[2] = (terrain->fogColor & 255) / 255.0f;
 	lakeColour[3] = 0x80 / 255.0f;
+	// The original's texture scroll (0x5F3830): the offset moves along the wind vector by
+	// (ms >> 4) / 128 and surges with a 4.1 s sine, ((sin + 0.8) * 0.3)^2; it wraps at 0.5.
+	const uint32_t ms = (uint32_t)(shadows.time * 1000.0f);
+	const float surgePhase = ((ms >> 2) & 1023) / 1024.0f * 6.2831853f;
+	const float surge = (std::sin(surgePhase) + 0.8f) * 0.3f;
+	auto scroll = [&](float wx, float wy, float* out) {
+		const float k = (ms >> 4) * 0.0078125f + surge * surge;
+		out[0] = std::fmod(wx * k, 0.5f);
+		out[1] = std::fmod(wy * k, 0.5f);
+	};
+	float* water = (float*)(sbdata + 128);
+	scroll(0.088f, -0.052f, water + 0);
+	scroll(0.1f, 0.3f, water + 2);
+	scroll(0.9f * 0.25f, 0.34f * 0.25f, water + 4); // the original's normal field wind, slowed for the finer ripples
+	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6);
+	water[8] = (g_renderSettings.waterSurface && _impl->waterTexture) ? 1.0f : 0.0f;
+	water[9] = 0.1f;  // one texture repeat per two tiles
+	water[10] = 0.04f;
+	water[11] = 0.0f;
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
 	// Visible chunks: a chunk is culled when all corners of its bounding box lie outside the same

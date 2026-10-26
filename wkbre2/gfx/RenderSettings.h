@@ -28,6 +28,7 @@ struct RenderSettings {
 
 	// The original's sky, shadows and model lighting
 	bool sky = true, cloudShadows = true, staticShadows = true;
+	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
 	float staticShadowLight = 0xB4 / 255.0f;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;
 
