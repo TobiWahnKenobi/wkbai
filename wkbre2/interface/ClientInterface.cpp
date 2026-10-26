@@ -388,15 +388,18 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 }
 
 // The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
-// are strips (arrows, dots, links) that repeat around the circle, their long side along it: the
-// texture's height runs around the circle, its width across the band (left edge outwards). Drawn on the ground with the particles' state (alpha blended,
-// depth tested); one texture repeat per band width, each with its own texture coordinates 0..1
-// (the batch sampler clamps).
+// are strips (arrows, dots, links) that repeat around the circle: the texture's width runs along
+// the circle, stretched to 6 band widths per repeat, its height across the band (top outwards).
+// Drawn on the ground with the particles' state (alpha blended, depth tested); each repeat has
+// its own texture coordinates 0..1 (the batch sampler clamps).
 void ClientInterface::drawRangeBands()
 {
 	if (rangeBands.empty() || !client->terrain)
 		return;
 	constexpr int TILES_PER_BATCH = 256, SEGMENTS_PER_TILE = 4;
+	// one texture repeat along the circle per 6 band widths: the strips' narrow marks (three
+	// ovals or arrows per repeat) are stretched along the circle, as in the original
+	constexpr float TILE_LENGTH = 6.0f;
 	if (!rangeBandBatch)
 		rangeBandBatch = gfx->CreateBatch(TILES_PER_BATCH * SEGMENTS_PER_TILE * 4, TILES_PER_BATCH * SEGMENTS_PER_TILE * 12);
 	gfx->BeginParticles();
@@ -410,7 +413,7 @@ void ClientInterface::drawRangeBands()
 		const float width = std::clamp(band.radius * 0.08f, 2.5f, 6.0f);
 		const float outer = band.radius, inner = std::max(0.0f, band.radius - width);
 		const float circumference = 2.0f * 3.14159265f * outer;
-		const int tiles = std::max(4, (int)std::round(circumference / width));
+		const int tiles = std::max(4, (int)std::round(circumference / (width * TILE_LENGTH)));
 		for (int t = 0; t < tiles; t++) {
 			for (int s = 0; s < SEGMENTS_PER_TILE; s++) {
 				const float u0 = (float)s / SEGMENTS_PER_TILE, u1 = (float)(s + 1) / SEGMENTS_PER_TILE;
@@ -423,8 +426,7 @@ void ClientInterface::drawRangeBands()
 				const Vector3 p[4] = {
 					band.centre + Vector3(c0, 0, s0) * outer, band.centre + Vector3(c1, 0, s1) * outer,
 					band.centre + Vector3(c1, 0, s1) * inner, band.centre + Vector3(c0, 0, s0) * inner };
-				// the strip's height runs around the circle, its width across the band
-				const float uv[4][2] = { { 0, u0 }, { 0, u1 }, { 1, u1 }, { 1, u0 } };
+				const float uv[4][2] = { { u0, 0 }, { u1, 0 }, { u1, 1 }, { u0, 1 } };
 				for (int i = 0; i < 4; i++) {
 					v[i].x = p[i].x;
 					v[i].y = ground(p[i].x, p[i].z);
