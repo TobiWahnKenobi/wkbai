@@ -1715,6 +1715,13 @@ Screens.options = {
 				local np = slider(o.id, p, cx - L(6), ry - L(4), L(210), enabled)
 				if np ~= p then setOption(o.id, sliderValue(o, np)) end
 				drawText(FONT_LIST, cx + L(220), ry + L(22), formatValue(o, getOption(o.id)), enabled and YELLOW or GREY, S)
+				-- a swatch of the fog colour after its last channel (colours are 0xAABBGGRR)
+				if o.id == "fogColourB" and enabled then
+					local function channel(id) return math.floor(math.max(0, math.min(1, getOption(id))) * 255 + 0.5) end
+					local colour = 0xFF000000 + channel("fogColourB") * 0x10000 + channel("fogColourG") * 0x100 + channel("fogColourR")
+					drawRect(cx + L(300), ry + L(8), L(60), L(36), PANEL_BORDER)
+					drawRect(cx + L(302), ry + L(10), L(56), L(32), colour)
+				end
 			end
 			if o.needsRestart then
 				drawText(FONT_LIST, cx + L(240), ry + L(22), "(after a restart)", GREY, S)

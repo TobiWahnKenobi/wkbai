@@ -60,6 +60,11 @@ namespace {
 			[&rs]() { return !rs.fogOff && rs.fogCustom; }));
 		list.push_back(withEnabled(slider("fogStart", "view", "Fog start (of fog end)", rs.fogStart, 0.0f, 0.99f),
 			[&rs]() { return !rs.fogOff && !rs.fogCustom; }));
+		list.push_back(toggle("fogColourOverride", "view", "Own fog colour", rs.fogColourOverride));
+		static const char* const fogChannels[3] = { "Fog colour: red", "Fog colour: green", "Fog colour: blue" };
+		for (int i = 0; i < 3; i++)
+			list.push_back(withEnabled(slider(std::string("fogColour") + "RGB"[i], "view", fogChannels[i], rs.fogColour[i], 0.0f, 1.0f),
+				[&rs]() { return rs.fogColourOverride; }));
 		list.push_back(toggle("edgeFog", "view", "Map-edge fog", rs.edgeFog));
 		list.push_back(withEnabled(slider("edgeFogStart", "view", "Edge fog starts", rs.edgeFogStart, -1.0f, 0.95f),
 			[&rs]() { return rs.edgeFog; }));
