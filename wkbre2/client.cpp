@@ -606,6 +606,32 @@ void Client::tick()
 					obj->cityRectangles.push_back(rect);
 				break;
 			}
+			case NETCLIMSG_GAME_SET_FILE: {
+				const uint16_t file = br.readUint16(), files = br.readUint16();
+				const uint8_t part = br.readUint8(), parts = br.readUint8();
+				const std::string name = br.readStringZ();
+				std::string text = br.readStringZ();
+				if (file == 0 && part == 0) {
+					hostFiles.clear();
+					hostFilesComplete.clear();
+				}
+				if (files > 0) {
+					if (part == 0)
+						hostFiles[name].clear();
+					hostFiles[name] += text;
+					if (part + 1 == parts)
+						hostFilesComplete.insert(name);
+				}
+				if (hostFilesComplete.size() == files) {
+					// all of them: the game set will take these instead of this computer's own
+					auto& folder = g_gameSetFolderOverrides["Warrior Kings Game Set\\AI Generals"];
+					folder.clear();
+					for (const auto& [n, t] : hostFiles)
+						folder[n] = t;
+					printf("Client: %u AI General files from the host\n", (unsigned)files);
+				}
+				break;
+			}
 			case NETCLIMSG_LOBBY_STATE: {
 				const uint8_t part = br.readUint8(), parts = br.readUint8();
 				if (part == 0)

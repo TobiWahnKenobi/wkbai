@@ -8,6 +8,8 @@
 #include <list>
 #include <map>
 #include <vector>
+#include <map>
+#include <set>
 #include "common.h"
 #include "util/vecmat.h"
 #include "Camera.h"
@@ -52,6 +54,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::string> chatMessages;
 	// Multiplayer guests: the lobby as the host shows it (NETCLIMSG_LOBBY_STATE), and its parts so far
 	std::string lobbyState, lobbyStateParts;
+	// The host's AI General files being received (NETCLIMSG_GAME_SET_FILE)
+	std::map<std::string, std::string> hostFiles;
+	std::set<std::string> hostFilesComplete;
 
 	NetLink *serverLink;
 

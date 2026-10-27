@@ -67,6 +67,9 @@ enum NetClientMessages {
 	NETCLIMSG_BUILDING_SPAWNED_UNIT_ORDER_CHANGED,
 	// The multiplayer lobby as the host shows it, for the guests (text, in parts: a packet is small)
 	NETCLIMSG_LOBBY_STATE,
+	// The host's AI General files (the game set links AI Generals\\*.gsf), for the guests to load
+	// the same game set: file index, file count, part, parts, name, text (in parts)
+	NETCLIMSG_GAME_SET_FILE,
 };
 
 enum NetServerMessages {

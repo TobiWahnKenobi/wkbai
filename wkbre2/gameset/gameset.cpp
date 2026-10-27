@@ -203,6 +203,21 @@ namespace {
 	};
 }
 
+std::map<std::string, std::map<std::string, std::string, StrCICompareClass>, StrCICompareClass> g_gameSetFolderOverrides;
+
+// The text of a file in an overridden folder, or null
+static const std::string* OverriddenFile(const std::string& path)
+{
+	const size_t slash = path.rfind('\\');
+	if (slash == std::string::npos)
+		return nullptr;
+	auto folder = g_gameSetFolderOverrides.find(path.substr(0, slash));
+	if (folder == g_gameSetFolderOverrides.end())
+		return nullptr;
+	auto file = folder->second.find(path.substr(slash + 1));
+	return file == folder->second.end() ? nullptr : &file->second;
+}
+
 void GameSet::parseFile(const char * fn, int pass)
 {
 	static std::set<std::string, StrCICompareClass> processedFiles;
@@ -217,7 +232,13 @@ void GameSet::parseFile(const char * fn, int pass)
 	}
 
 	char *text; int filesize;
-	LoadFile(fn, &text, &filesize, 1);
+	if (const std::string* given = OverriddenFile(fn)) {
+		filesize = (int)given->size();
+		text = (char*)malloc(filesize + 1);
+		memcpy(text, given->data(), filesize);
+	}
+	else
+		LoadFile(fn, &text, &filesize, 1);
 	text[filesize] = 0;
 	GSFileParser gsf(text);
 	gsf.fileName = fn;
@@ -245,6 +266,11 @@ void GameSet::parseFile(const char * fn, int pass)
 				const std::string dir = slash == std::string::npos ? std::string() : lf.substr(0, slash);
 				const std::string ending = lf.substr(lf.find('*') + 1);
 				std::unique_ptr<std::vector<std::string>> files(ListFiles(("Warrior Kings Game Set\\" + dir).c_str()));
+				if (auto over = g_gameSetFolderOverrides.find("Warrior Kings Game Set\\" + dir); over != g_gameSetFolderOverrides.end()) {
+					files = std::make_unique<std::vector<std::string>>();
+					for (const auto& [name, text] : over->second)
+						files->push_back(name);
+				}
 				std::vector<std::string> found;
 				if (files)
 					for (const std::string& f : *files)
@@ -660,7 +686,7 @@ void GameSet::parseFile(const char * fn, int pass)
 		std::string lfpath = "Warrior Kings Game Set\\" + lf;
 		if (processedFiles.count(lfpath))
 			continue;
-		if (!FileExists(lfpath.c_str())) {
+		if (!OverriddenFile(lfpath) && !FileExists(lfpath.c_str())) {
 			// Usually mods that don't fit together in the current load order: skip and warn after loading
 			if (pass == 0) {
 				printf("WARNING: Linked game set file %s not found (linked from %s), skipping it\n", lfpath.c_str(), fn);

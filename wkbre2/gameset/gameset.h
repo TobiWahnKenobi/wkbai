@@ -69,6 +69,11 @@ template<> struct GSBlueprintList<void> {
 	int readIndex(GSFileParser &gsf) const { return names.getIndex(gsf.nextString(true)); }
 };
 
+// Folders of game set files replaced by files given in memory: a multiplayer guest takes the
+// host's AI Generals (its own would make the game sets differ). Folder
+// ("Warrior Kings Game Set\\AI Generals") -> file name -> text.
+extern std::map<std::string, std::map<std::string, std::string, StrCICompareClass>, StrCICompareClass> g_gameSetFolderOverrides;
+
 struct GameSet
 {
 	GSBlueprintList<GameObjBlueprint> objBlueprints[Tags::GAMEOBJCLASS_COUNT];

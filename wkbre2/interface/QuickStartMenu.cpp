@@ -488,6 +488,10 @@ void QuickStartMenu::launchGame()
 		}
 		enet_host_destroy(eclient);
 		enet_deinitialize();
+		// this computer's own AI Generals again
+		g_gameSetFolderOverrides.clear();
+		client->hostFiles.clear();
+		client->hostFilesComplete.clear();
 	}
 	else {
 		updateDiscordRPC((modeChosen == MODE_MULTIPLAYER_HOST) ? "Multiplayer (Host)" : "Singleplayer", savegames.at(savselected).c_str());
@@ -656,6 +660,43 @@ std::string QuickStartMenu::playerName() const
 	return g_settings.value("playerName", std::string("Player"));
 }
 
+void QuickStartMenu::sendGameSetFiles(NetEnetLink* link)
+{
+	const char* dir = "Warrior Kings Game Set\\AI Generals";
+	std::vector<std::pair<std::string, std::string>> files;
+	std::unique_ptr<std::vector<std::string>> names(ListFiles(dir));
+	if (names)
+		for (const std::string& n : *names)
+			if (n.size() > 4 && StrCICompare(std::string_view(n).substr(n.size() - 4), ".gsf") == 0) {
+				const std::string path = std::string(dir) + "\\" + n;
+				char* data = nullptr;
+				int size = 0;
+				LoadFile(path.c_str(), &data, &size, 1);
+				files.emplace_back(n, std::string(data, size));
+				free(data);
+			}
+	const size_t PART = 150;
+	auto send = [&](size_t file, size_t part, size_t parts, const std::string& name, const std::string& text) {
+		NetPacketWriter msg(NETCLIMSG_GAME_SET_FILE);
+		msg.writeUint16((uint16_t)file);
+		msg.writeUint16((uint16_t)files.size());
+		msg.writeUint8((uint8_t)part);
+		msg.writeUint8((uint8_t)parts);
+		msg.writeStringZ(name);
+		msg.writeStringZ(text);
+		static_cast<NetLink*>(link)->send(msg);
+	};
+	if (files.empty())
+		send(0, 0, 1, std::string(), std::string());
+	for (size_t f = 0; f < files.size(); f++) {
+		const std::string& text = files[f].second;
+		const size_t parts = std::max<size_t>(1, std::min<size_t>(255, (text.size() + PART - 1) / PART));
+		for (size_t p = 0; p < parts; p++)
+			send(f, p, parts, files[f].first, text.substr(p * PART, PART));
+	}
+	printf("Lobby: sent %zu AI General files to a guest\n", files.size());
+}
+
 void QuickStartMenu::updateLobby()
 {
 	FrontEnd* fe = FrontEnd::get();
@@ -675,6 +716,16 @@ void QuickStartMenu::updateLobby()
 	}
 	for (auto it = guestIds.begin(); it != guestIds.end();)
 		it = (std::find(guests.begin(), guests.end(), it->first) == guests.end()) ? guestIds.erase(it) : std::next(it);
+	// a guest that said hello gets the host's AI General files, so that its game set is the same
+	for (NetEnetLink* link : guests)
+		if (!generalsSent.count(link))
+			if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
+				ci != server->clientLinks.end() && !server->clientInfos[ci - server->clientLinks.begin()].name.empty()) {
+				generalsSent.insert(link);
+				sendGameSetFiles(link);
+			}
+	for (auto it = generalsSent.begin(); it != generalsSent.end();)
+		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? generalsSent.erase(it) : std::next(it);
 	fe->setLobby(std::move(list), client->chatMessages, std::string(), "connected");
 
 	// the lobby for the guests, again every second (for the ones who just joined), in parts
@@ -741,11 +792,14 @@ void QuickStartMenu::lobbyTest()
 	done = true;
 	const int players = atoi(level.c_str()) > 0 ? atoi(level.c_str()) : 2;
 	const int guestSlot = test.value("guestSlot", 2);
+	// "aiGeneral": "<blueprint>" plays the other positions (else they are empty)
+	const std::string aiGeneral = test.value("aiGeneral", std::string());
+	const std::string other = aiGeneral.empty() ? std::string("E") : "A:" + aiGeneral + ";c3";
 	std::string slots;
 	for (int i = 1; i <= players; i++) {
 		if (i > 1)
 			slots += "|";
-		slots += (i == 1) ? "H;c1" : (i == guestSlot) ? "G" + std::to_string(guestIds[guests[0]]) + ";c2" : "E";
+		slots += (i == 1) ? "H;c1" : (i == guestSlot) ? "G" + std::to_string(guestIds[guests[0]]) + ";c2" : other;
 	}
 	printf("Lobby test: starting %s with slots %s\n", level.c_str(), slots.c_str());
 	handleRequest({ "slots", slots });

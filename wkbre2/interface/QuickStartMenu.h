@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include "QuickSkirmishMenu.h"
 #include "ModMenu.h"
 #include "FrontEnd.h"
@@ -58,6 +59,9 @@ private:
 	int nextGuestId = 1;
 	std::string lobbyText;
 	uint64_t lobbySentTime = 0;
+	// the guests that have the host's AI General files
+	std::set<NetEnetLink*> generalsSent;
+	void sendGameSetFiles(NetEnetLink* link);
 	// Guest: the host to join ("address[:port]")
 	std::string joinTarget;
 	// Kingmaker campaign: the profile and province of the game being started or played
