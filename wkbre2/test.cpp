@@ -1345,6 +1345,154 @@ void Test_Gather()
 	fflush(stdout);
 }
 
+// Farming (needs the game data): a peasant builds a field and should farm it after; then it is
+// sent away and a second peasant is ordered to farm the field. Prints "FARM t=<s> ..." on changes.
+void Test_Farm()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	std::vector<ServerGameObject*> peasants;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant")
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	const GameObjBlueprint* foundationType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+	const int build = server.gameSet->commands.names.getIndex("Build");
+	const int farm = server.gameSet->commands.names.getIndex("Farm");
+	const int move = server.gameSet->commands.names.getIndex("Move");
+	if (peasants.size() < 2 || !foundationType || build < 0 || farm < 0 || move < 0) {
+		printf("FARM not set up (%zu peasants)\n", peasants.size());
+		return;
+	}
+	server.timeManager.unpause();
+	server.startLevel();
+	ServerGameObject* a = peasants[0];
+	ServerGameObject* b = peasants[1];
+	// a free spot for the field, near the first peasant
+	Vector3 spot = a->position + Vector3(25, 0, 0);
+	for (int i = 0; i < 40; i++) {
+		const Vector3 tryAt = a->position + Vector3(20.0f + 5.0f * (i % 8), 0, -20.0f + 10.0f * (i / 8));
+		if (StampdownPlan::getStampdownPlan(&server, player, foundationType, tryAt, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid) {
+			spot = tryAt;
+			break;
+		}
+	}
+	ServerGameObject* foundation = server.spawnObject(foundationType, player, spot, Vector3(0, 0, 0));
+	foundation->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+	server.gameSet->commands[build].execute(a, foundation, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	const int worked = server.gameSet->items.names.getIndex("I'm Being Worked at");
+	SrvGORef fieldRef = foundation;
+	auto describe = [&](ServerGameObject* p) {
+		std::string order = "-", task = "-", target = "-";
+		if (Order* o = p->orderConfig.getCurrentOrder()) {
+			order = server.gameSet->orders.getString(o->blueprint->bpid);
+			if (Task* tk = o->getCurrentTask()) {
+				task = server.gameSet->tasks.getString(tk->blueprint->bpid);
+				if (tk->target)
+					target = tk->target->blueprint->name + " #" + std::to_string(tk->target->id);
+			}
+		}
+		return order + " / " + task + " -> " + target;
+	};
+	const uint64_t start = SDL_GetTicks();
+	bool sentAway = false, secondOrdered = false;
+	std::string last;
+	while (SDL_GetTicks() - start < 150000) {
+		server.tick();
+		const int t = (int)((SDL_GetTicks() - start) / 1000);
+		ServerGameObject* field = fieldRef.get();
+		// once the first peasant farms, send it away; then order the second one to the field
+		static int farmingSince = -1;
+		if (farmingSince < 0 && describe(a).rfind("Farm /", 0) == 0)
+			farmingSince = t;
+		if (!sentAway && field && field->blueprint->name.find("Foundation") == std::string::npos
+			&& farmingSince >= 0 && t > farmingSince + 25) {
+			sentAway = true;
+			server.gameSet->commands[move].execute(a, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, a->position + Vector3(-30, 0, 0));
+			printf("FARM t=%d first peasant sent away\n", t);
+		}
+		static int awayAt = -1;
+		if (sentAway && awayAt < 0)
+			awayAt = t;
+		if (sentAway && !secondOrdered && t > awayAt + 4 && field) {
+			secondOrdered = true;
+			server.gameSet->commands[farm].execute(b, field, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			printf("FARM t=%d second peasant ordered to farm\n", t);
+		}
+		const std::string now = "A: " + describe(a) + " | B: " + describe(b) + " | field " +
+			(field ? field->blueprint->name + " worked at " + std::to_string((int)field->getItem(worked)) : std::string("gone"));
+		if (now != last) {
+			last = now;
+			printf("FARM t=%d %s\n", t, now.c_str());
+		}
+		if (secondOrdered && t > awayAt + 40)
+			break;
+		SDL_Delay(16);
+	}
+
+	// a spawned farmer: the Manor's spawned units get the Farm command on a second, finished field
+	const GameObjBlueprint* fieldType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm");
+	ServerGameObject* manor = nullptr;
+	auto findManor = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!manor && child->blueprint->name == "Manor")
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	findManor(player, findManor);
+	const int spawnPeasant = server.gameSet->commands.names.getIndex("Spawn Peasant");
+	if (!fieldType || !manor || spawnPeasant < 0) {
+		printf("FARM spawn part not set up\n");
+		return;
+	}
+	Vector3 spot2 = spot + Vector3(0, 0, 30);
+	for (int i = 0; i < 40; i++) {
+		const Vector3 tryAt = spot + Vector3(-20.0f + 5.0f * (i % 8), 0, 20.0f + 10.0f * (i / 8));
+		if (StampdownPlan::getStampdownPlan(&server, player, fieldType, tryAt, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid) {
+			spot2 = tryAt;
+			break;
+		}
+	}
+	ServerGameObject* field2 = server.spawnObject(fieldType, player, spot2, Vector3(0, 0, 0));
+	field2->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+	manor->setBuildingSpawnedUnitOrderToTarget(farm, field2);
+	std::set<ServerGameObject*> before(peasants.begin(), peasants.end());
+	server.gameSet->commands[spawnPeasant].execute(manor, nullptr, Tags::ORDERASSIGNMODE_DO_LAST);
+	printf("FARM spawning a peasant at the Manor for field %u\n", field2->id);
+	ServerGameObject* spawned = nullptr;
+	const uint64_t start2 = SDL_GetTicks();
+	last.clear();
+	while (SDL_GetTicks() - start2 < 60000) {
+		server.tick();
+		const int t = (int)((SDL_GetTicks() - start2) / 1000);
+		if (!spawned) {
+			peasants.clear();
+			find(player, find);
+			for (ServerGameObject* p : peasants)
+				if (!before.count(p))
+					spawned = p;
+		}
+		const std::string now = std::string("spawned: ") + (spawned ? describe(spawned) : std::string("not yet")) +
+			" | field 2 worked at " + std::to_string((int)field2->getItem(worked));
+		if (now != last) {
+			last = now;
+			printf("FARM spawn t=%d %s\n", t, now.c_str());
+		}
+		SDL_Delay(16);
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1372,6 +1520,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SaveRoundTrip, "Save game round trip"},
 {Test_RallyPoint, "Rally point (free spots)"},
 {Test_Gather, "Gathering (the next tree)"},
+{Test_Farm, "Farming (build a field, farm it, a second farmer)"},
 };
 
 void LaunchTest()
