@@ -1006,7 +1006,8 @@ local function openLobby(multiplayer)
 end
 
 -- Multiplayer host: what the guests asked for (NETSRVMSG_LOBBY_REQUEST): "slot <n>" takes a
--- position no player has, "colour <c>" changes the colour of the guest's position, "ready <0|1>"
+-- position no player has, "colour <c>" and "team <t>" (0: none) change the guest's position,
+-- "ready <0|1>"
 skirmish.ready = {}
 local function handleGuestRequests()
 	for _, g in ipairs(getLobbyGuests()) do
@@ -1025,6 +1026,10 @@ local function handleGuestRequests()
 			elseif what == "colour" and value >= 1 and value <= 8 then
 				for _, slot in ipairs(skirmish.slots) do
 					if slot.type == "guest" and slot.guest == g.id then slot.colour = value end
+				end
+			elseif what == "team" and value >= 0 and value <= 4 then
+				for _, slot in ipairs(skirmish.slots) do
+					if slot.type == "guest" and slot.guest == g.id then slot.team = value end
 				end
 			elseif what == "ready" then
 				skirmish.ready[g.id] = value ~= 0
@@ -1120,8 +1125,8 @@ Screens.mpguest = {
 			drawText(FONT_LIST, X(32), Y(180), "#  " .. T("FRONT_END_CHAT_PLAYER"), WHITE, S)
 			drawText(FONT_LIST, X(640), Y(180), T("FRONT_END_CHAT_COLOUR"), WHITE, S)
 			drawText(FONT_LIST, X(760), Y(180), T("FRONT_END_CHAT_TEAM"), WHITE, S)
-			-- a free position (an AI or nobody) is taken by a click; the guest's own colour changes
-			-- by a click on it (the host's lobby does it)
+			-- a free position (an AI or nobody) is taken by a click; the guest's own colour and team
+			-- change by a click on them (the host's lobby does it)
 			local me = getPlayerName()
 			for i = 2, #lines do
 				local kind, name, colour, team, ready = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)|?(%d*)$")
@@ -1141,6 +1146,10 @@ Screens.mpguest = {
 						if mine and hovered(X(640), ry, L(44), L(16)) and mouse.released then
 							request("lobby_request", "colour " .. ((tonumber(colour) % 8) + 1))
 						end
+						if mine and hovered(X(756), ry, L(48), L(16)) then
+							drawImage(ART.listRollover, X(756), ry, L(48), L(18))
+							if mouse.released then request("lobby_request", "team " .. ((tonumber(team) + 1) % 5)) end
+						end
 						drawText(FONT_LIST, X(770), ry, tonumber(team) > 0 and team or "-", WHITE, S)
 					end
 					if kind == "G" then
@@ -1148,7 +1157,7 @@ Screens.mpguest = {
 					end
 				end
 			end
-			drawText(FONT_LIST, X(32), Y(980), "Click a free position to take it, your colour to change it.", GREY, S)
+			drawText(FONT_LIST, X(32), Y(980), "Click a free position to take it, your colour or team to change it.", GREY, S)
 		elseif status == "connected" then
 			drawText(FONT_LIST, X(32), Y(140), "Waiting for the host ...", GREY, S)
 		end

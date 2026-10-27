@@ -92,7 +92,7 @@ enum NetServerMessages {
 	NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_DESTINATION,
 	// A guest joining the lobby: its player name
 	NETSRVMSG_LOBBY_HELLO,
-	// A guest asking the lobby's host for something: "slot <n>", "colour <c>", "ready <0|1>"
+	// A guest asking the lobby's host for something: "slot <n>", "colour <c>", "team <t>", "ready <0|1>"
 	NETSRVMSG_LOBBY_REQUEST,
 };
 
