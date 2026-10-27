@@ -221,6 +221,32 @@ local function listBox(state, items, x, y, w, h)
 	return activated, hoveredRow
 end
 
+-- A one-line text entry (always focused: the screen has one); state = { text = "" }. Typed
+-- characters in `refused` are ignored. Returns whether Enter was pressed.
+local function textField(state, x, y, w, h, refused, maxLength)
+	panel(x, y, w, h)
+	for ch in string.gmatch(getTypedText(), "[%z\1-\127\194-\244][\128-\191]*") do
+		if not (refused and string.find(refused, ch, 1, true)) and #state.text < (maxLength or 64) then
+			state.text = state.text .. ch
+		end
+	end
+	if isKeyPressed("Backspace") then
+		state.text = string.gsub(state.text, "[%z\1-\127\194-\244][\128-\191]*$", "")
+	end
+	local th = fontHeight(FONT_TEXT, S)
+	pushClip(x, y, w, h)
+	local tx, ty = x + L(8), y + (h - th) / 2
+	-- the end of a long text stays in view
+	local tw = textWidth(FONT_TEXT, state.text, S)
+	if tw > w - L(20) then tx = x + w - L(12) - tw end
+	drawText(FONT_TEXT, tx, ty, state.text, YELLOW, S)
+	if math.floor(getTime() * 2) % 2 == 0 then
+		drawRect(tx + tw + L(1), ty + L(2), L(2), th - L(4), YELLOW)
+	end
+	popClip()
+	return isKeyPressed("Return") or isKeyPressed("Keypad Enter")
+end
+
 -- Splits text into lines that fit a width (keeping its own line breaks)
 local function wrapText(font, text, width)
 	local lines = {}
@@ -417,6 +443,62 @@ Screens.load = {
 		if button(T("FRONT_END_BUTTON_BACK"), X(1045), Y(1022), L(141), L(24)) then pop() end
 	end,
 }
+
+-- Save Game As (in game) ----------------------------------------------------------------
+
+-- A short message over the screen ("Game saved successfully"), for a few seconds
+local notice = nil
+
+-- what a file name can't have
+local FILE_NAME_REFUSED = "\\/:*?\"<>|"
+
+local saveState = { selected = 0, scroll = 0, text = "" }
+Screens.save = {
+	open = function()
+		saveState.selected = 0
+		saveState.scroll = 0
+		saveState.text = getCurrentSave()
+		saveState.pending = nil
+	end,
+	draw = function()
+		local w, h = L(720), L(640)
+		local x, y = X(960) - w / 2, (H - h) / 2
+		goldFrame(x, y, w, h)
+		centredText(FONT_BUTTON, T("FRONT_END_MAIN_MENU_SAVE_GAME_AS"), x, y + L(30), w, L(30), WHITE)
+		-- the existing save games: picking one fills in its name (to overwrite it)
+		local saves = savesOfType(".sav")
+		local names = {}
+		for i, sv in ipairs(saves) do names[i] = stripExtension(sv) end
+		local before = saveState.selected
+		local lx, ly, lw, lh = x + L(50), y + L(75), w - L(100), L(380)
+		panel(lx, ly, lw, lh)
+		local activated = listBox(saveState, names, lx + L(2), ly + L(2), lw - L(4), lh - L(4))
+		if saveState.selected ~= before and names[saveState.selected] then saveState.text = names[saveState.selected] end
+		drawText(FONT_TEXT, lx, ly + lh + L(16), T("FRONT_END_SAVE_GAME_FILENAME"), WHITE, S)
+		local entered = textField(saveState, lx, ly + lh + L(44), lw, L(32), FILE_NAME_REFUSED)
+		local name = string.match(saveState.text, "^%s*(.-)%s*$")
+		local valid = name ~= "" and not string.match(name, "^%.+$")
+		local save = button(T("FRONT_END_BUTTON_SAVE"), X(960) - L(150), y + h - L(70), L(141), L(26), valid)
+		if (save or entered or activated) and valid and not dialog then
+			local exists = false
+			for _, n in ipairs(names) do if string.lower(n) == string.lower(name) then exists = true end end
+			if exists then
+				confirm(string.format(T("FRONT_END_SAVE_GAME_OVERWRITE"), name), function() request("save", name) end)
+			else
+				request("save", name)
+			end
+			saveState.pending = name
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), X(960) + L(9), y + h - L(70), L(141), L(26)) then pop() end
+	end,
+}
+
+-- The program's answer to a "save" request
+function FE_Saved(ok, name)
+	notice = { text = ok and T("GAME_SAVED_SUCCESSFULLY") or ("Could not save \"" .. name .. "\""), until_ = getTime() + 2.5 }
+	-- back to the in-game menu once saved
+	if ok and stack[#stack] == "save" then pop() end
+end
 
 -- Skirmish -----------------------------------------------------------------------------
 
@@ -849,8 +931,11 @@ Screens.options = {
 
 InGameMenuItems = {
 	{ key = "IN_GAME_Return_To_Game", action = function() pop() end },
-	{ key = "IN_GAME_Save", enabled = false },
-	{ key = "IN_GAME_Save_As", enabled = false },
+	-- single player only (multiplayer games aren't saved yet); "Save Game" asks for a name the first time
+	{ key = "IN_GAME_Save", enabled = function() return isSinglePlayer() end, action = function()
+		if getCurrentSave() ~= "" then request("save", getCurrentSave()) else push("save") end
+	end },
+	{ key = "IN_GAME_Save_As", enabled = function() return isSinglePlayer() end, action = function() push("save") end },
 	{ key = "IN_GAME_Load", action = function() push("load") end },
 	{ key = "IN_GAME_Restart_Level", action = function()
 		confirm(T("RESTART_LEVEL_ARE_YOU_SURE"), function() request("restart") end)
@@ -908,6 +993,16 @@ function FE_Frame(place)
 	screen.draw()
 	mouse.blocked = blocked
 	if dialog then drawDialog() end
+	if notice then
+		if getTime() > notice.until_ then
+			notice = nil
+		else
+			local nw, nh = L(440), L(90)
+			local nx, ny = (W - nw) / 2, H - L(200)
+			goldFrame(nx, ny, nw, nh)
+			centredText(FONT_TEXT, notice.text, nx, ny + L(30), nw, L(30), 0xFF9CE6F0)
+		end
+	end
 
 	-- Esc goes back (Options handles it itself, as Cancel)
 	if isKeyPressed("Escape") and name ~= "options" and not openedThisFrame then

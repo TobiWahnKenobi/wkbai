@@ -95,6 +95,7 @@ struct FrontEnd::Impl {
 	std::map<std::string, std::unique_ptr<BitmapFont>, StrCICompareClass> fonts;
 	std::vector<Request> requests;
 	std::vector<std::string> saveGames;
+	std::string currentSave;
 	bool singlePlayer = true;
 	Place place = Place::MAIN_MENU;
 	ImDrawList* drawList = nullptr;
@@ -258,6 +259,7 @@ struct FrontEnd::Impl {
 			const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str());
 			return sc != SDL_SCANCODE_UNKNOWN && sc < (int)std::size(g_keyPressed) && g_keyPressed[sc];
 		});
+		lua.set_function("getTypedText", []() { return g_textTyped; });
 		lua.set_function("playSound", [](const std::string& path) {
 			if (FileExists(path.c_str()))
 				SoundPlayer::getSoundPlayer()->playSound(path);
@@ -270,6 +272,7 @@ struct FrontEnd::Impl {
 		lua.set_function("getPlace", [this]() { return place == Place::IN_GAME ? "game" : "menu"; });
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
+		lua.set_function("getCurrentSave", [this]() { return currentSave; });
 		// Draws a level's map image into a box; returns false when the level has none
 		lua.set_function("drawLevelPreview", [this](const std::string& level, float x, float y, float w, float h) {
 			const Image& img = levelPreview(level);
@@ -431,3 +434,5 @@ std::vector<FrontEnd::Request> FrontEnd::takeRequests()
 
 void FrontEnd::setSaveGames(std::vector<std::string> saves) { impl->saveGames = std::move(saves); }
 void FrontEnd::setSinglePlayer(bool singlePlayer) { impl->singlePlayer = singlePlayer; }
+void FrontEnd::setCurrentSave(const std::string& name) { impl->currentSave = name; }
+void FrontEnd::saved(bool ok, const std::string& name) { impl->call("FE_Saved", ok, name); }

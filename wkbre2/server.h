@@ -145,12 +145,19 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	time_t lastSync;
 
 	std::vector<std::tuple<ServerGameObject*, int, int>> postAssociations;
+	// task targets read from a save game, set once all objects are loaded (a target can come later in the file)
+	std::vector<std::pair<Task*, int>> postTaskTargets;
 
 	ServerGameObject* objToDelete = nullptr, * objToDeleteLast = nullptr;
 
 	Server() { instance = this; }
 
 	void loadSaveGame(const char *filename);
+	// Writes the game to a save game file (a file system path, its folders are created) that
+	// loadSaveGame reads back (ServerSave.cpp)
+	bool saveGame(const char* filename);
+	// what the game was loaded from, for saving
+	std::string gameSetFile, mapFile;
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
 	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation);
 	ServerGameObject* stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation,

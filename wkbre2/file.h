@@ -54,6 +54,9 @@ public:
 };
 
 extern std::filesystem::path g_gamePath;
+// Where the player's own files go (save games), so the game folder is never written to:
+// "userPath" in wkconfig.json, else %APPDATA%\wkbre2. Its "saved" folder is searched before the game's.
+extern std::filesystem::path g_userPath;
 extern bool g_allowDataDirectory, g_macFileNamesFallbackEnabled;
 
 // A content source mounted on top of data.bcp

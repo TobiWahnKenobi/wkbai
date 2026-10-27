@@ -131,6 +131,10 @@ int main()
 	LoadSettings();
 	g_renderSettings.load();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
+	if (g_settings.contains("userPath"))
+		g_userPath = PathFromUtf8(g_settings.at("userPath").get<std::string>());
+	else if (const char* appData = getenv("APPDATA"))
+		g_userPath = PathFromUtf8(appData) / "wkbre2";
 
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";

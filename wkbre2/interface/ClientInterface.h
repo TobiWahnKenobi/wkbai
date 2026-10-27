@@ -10,6 +10,7 @@
 #include "../GameObjectRef.h"
 #include "../Language.h"
 #include <deque>
+#include <functional>
 #include <unordered_set>
 
 struct Client;
@@ -60,8 +61,13 @@ struct ClientInterface {
 	// "start" (load the save game leaveArg); the game loop then ends
 	std::string leaveAction, leaveArg;
 	bool wantsToLeave() const { return !leaveAction.empty(); }
+	// Set by the game's owner when it can save the game (single player): saves it under a name
+	// ("Save_Games\\<name>.sav" in the user folder), returns whether it worked
+	std::function<bool(const std::string& name)> saveGame;
 private:
 	bool firstFrame = true;
+	// The menu's "save" request: saves (saveGame) and tells the menu
+	void saveRequested(const std::string& name);
 	bool menuPausedGame = false;
 	int camrotoffx, camrotoffy;
 	float camrotorix, camrotoriy;

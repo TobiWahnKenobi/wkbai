@@ -912,6 +912,15 @@ void ClientInterface::iter()
 				frontEnd->open(screen.get<std::string>());
 		}
 	}
+	// Test runs: "benchmark": { ..., "saveAs": "<name>" } saves the game once it has run 2 seconds
+	if (frontEnd && BenchmarkEnabled() && client->getLevel() && client->timeManager.currentTime > 2.0f) {
+		static bool saved = false;
+		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("saveAs", std::string());
+		if (!saved && !name.empty()) {
+			saved = true;
+			saveRequested(name);
+		}
+	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
@@ -1682,6 +1691,8 @@ void ClientInterface::iter()
 				leaveAction = r.action;
 				leaveArg = r.arg;
 			}
+			else if (r.action == "save")
+				saveRequested(r.arg);
 		}
 		if (menuPausedGame && !frontEnd->isOpen()) {
 			client->sendPauseRequest(false);
@@ -2133,4 +2144,14 @@ void ClientInterface::updateTerrain() {
 		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
 	this->terrainSpriteContainer = new TerrainSpriteContainer;
 	this->terrainSpriteRenderer = new TerrainSpriteRenderer(gfx, client->terrain, this->terrainSpriteContainer);
+}
+
+void ClientInterface::saveRequested(const std::string& name)
+{
+	const bool ok = saveGame && !name.empty() && saveGame(name);
+	if (FrontEnd* frontEnd = FrontEnd::get()) {
+		if (ok)
+			frontEnd->setCurrentSave(name);
+		frontEnd->saved(ok, name);
+	}
 }

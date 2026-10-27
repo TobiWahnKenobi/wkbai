@@ -28,6 +28,7 @@ IRenderer *g_gfxRenderer = nullptr;
 bool g_mouseDown[16], g_mousePressed[16], g_mouseReleased[16];
 int g_mouseX, g_mouseY, g_mouseWheel;
 int g_mouseDoubleClicked = 0;
+std::string g_textTyped;
 
 void InitWindow()
 {
@@ -129,6 +130,7 @@ void HandleWindow()
 		b = false;
 	g_mouseWheel = 0;
 	g_mouseDoubleClicked = 0;
+	g_textTyped.clear();
 
 	bool igWantsMouse = false;
 	if (imguion) {
@@ -178,6 +180,9 @@ void HandleWindow()
 		case SDL_EVENT_MOUSE_MOTION:
 			g_mouseX = (int)event.motion.x;
 			g_mouseY = (int)event.motion.y;
+			break;
+		case SDL_EVENT_TEXT_INPUT:
+			g_textTyped += event.text.text;
 			break;
 		case SDL_EVENT_MOUSE_WHEEL:
 			if(!igWantsMouse)

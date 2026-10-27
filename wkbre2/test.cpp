@@ -11,6 +11,8 @@
 //#include <direct.h>
 #include <utility>
 #include <thread>
+#include <fstream>
+#include <sstream>
 #include "gameset/gameset.h"
 #include "file.h"
 #include "gameset/values.h"
@@ -1133,6 +1135,103 @@ void Test_Guard()
 	fflush(stdout);
 }
 
+// Save games (needs the game data): a game is loaded, run for a few seconds (with a unit walking),
+// saved, loaded into a new server and saved again. The two files should be identical. Done for
+// 4 Peaks and, when it is in the user folder's Save_Games, for "Original.sav", a save written by
+// the original game. Prints "SAVE <name> objects=<n> identical=<0|1>" and the first differing line.
+static size_t CountObjects(const CommonGameObject* obj)
+{
+	size_t n = 1;
+	for (const auto& [type, children] : obj->children)
+		for (const CommonGameObject* child : children)
+			n += CountObjects(child);
+	return n;
+}
+
+// Same words, numbers equal within 0.05 (a unit's height snaps to the terrain again on loading)
+static bool SameSaveLine(const std::string& a, const std::string& b)
+{
+	std::istringstream sa(a), sb(b);
+	std::string wa, wb;
+	while (true) {
+		const bool ga = (bool)(sa >> wa), gb = (bool)(sb >> wb);
+		if (!ga || !gb)
+			return ga == gb;
+		if (wa == wb)
+			continue;
+		char* ea, * eb;
+		const double da = strtod(wa.c_str(), &ea), db = strtod(wb.c_str(), &eb);
+		if (*ea || *eb || std::abs(da - db) > 0.05)
+			return false;
+	}
+}
+
+static void SaveRoundTrip(const char* source, const char* label, uint32_t runMs)
+{
+	const std::string name = std::string("Save_Games\\wkbre2 round trip ") + label;
+	const std::string first = PathToUtf8(g_userPath / "saved" / PathFromUtf8(name + " 1.sav"));
+	const std::string second = PathToUtf8(g_userPath / "saved" / PathFromUtf8(name + " 2.sav"));
+	size_t objects = 0;
+	{
+		Server server;
+		server.loadSaveGame(source);
+		const int moveCommand = server.gameSet->commands.names.getIndex("Move");
+		ServerGameObject* walker = nullptr;
+		auto find = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (!walker && child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						walker = child->dyncast<ServerGameObject>();
+					self(child, self);
+				}
+		};
+		if (ServerGameObject* player = server.findObject(1027))
+			find(player, find);
+		if (walker && moveCommand >= 0)
+			server.gameSet->commands[moveCommand].execute(walker, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, walker->position + Vector3(40, 0, 25));
+		const uint64_t start = SDL_GetTicks();
+		while (SDL_GetTicks() - start < runMs) {
+			server.tick();
+			SDL_Delay(16);
+		}
+		server.timeManager.pause();
+		objects = CountObjects(server.level);
+		printf("SAVE %s first: %d\n", label, (int)server.saveGame(first.c_str()));
+	}
+	{
+		Server server;
+		server.loadSaveGame((name + " 1.sav").c_str());
+		server.timeManager.pause(); // the loader starts the clock
+		printf("SAVE %s loaded objects %zu of %zu\n", label, CountObjects(server.level), objects);
+		printf("SAVE %s second: %d\n", label, (int)server.saveGame(second.c_str()));
+	}
+	std::ifstream a(PathFromUtf8(first)), b(PathFromUtf8(second));
+	std::string la, lb;
+	int line = 0;
+	bool identical = true;
+	while (true) {
+		const bool ga = (bool)std::getline(a, la), gb = (bool)std::getline(b, lb);
+		line++;
+		if (!ga && !gb)
+			break;
+		if (ga != gb || !SameSaveLine(la, lb)) {
+			printf("SAVE %s differ at line %d:\n  %s\n  %s\n", label, line, la.c_str(), lb.c_str());
+			identical = false;
+			break;
+		}
+	}
+	printf("SAVE %s objects=%zu lines=%d identical=%d\n", label, objects, line, (int)identical);
+}
+
+void Test_SaveRoundTrip()
+{
+	LoadBCP("data.bcp");
+	SaveRoundTrip("Save_Games\\2 Player 4 Peaks.lvl", "4 Peaks", 3000);
+	if (FileExists("Save_Games\\Original.sav"))
+		SaveRoundTrip("Save_Games\\Original.sav", "original", 3000);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1157,6 +1256,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Stampdown, "Stampdown (building placement)"},
 {Test_Guard, "Guard (follow at a distance)"},
 {Test_Formation, "Formation (members walk into place)"},
+{Test_SaveRoundTrip, "Save game round trip"},
 };
 
 void LaunchTest()

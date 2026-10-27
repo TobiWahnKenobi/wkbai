@@ -80,6 +80,7 @@ struct BCPReader
 };
 
 std::filesystem::path g_gamePath = ".";
+std::filesystem::path g_userPath = ".";
 bool g_allowDataDirectory = true, g_macFileNamesFallbackEnabled = true;
 
 static FILE* FsOpen(const std::filesystem::path& filePath, const char* mode)
@@ -691,7 +692,9 @@ void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 
 	// Not in data.bcp or a mod. Find it in the "saved" and "redata" directories.
 	const auto u8fn = PathFromUtf8(portablePath(fn));
-	FILE *sf = FsOpen(g_gamePath / "saved" / u8fn, "rb");
+	FILE *sf = FsOpen(g_userPath / "saved" / u8fn, "rb");
+	if (!sf)
+		sf = FsOpen(g_gamePath / "saved" / u8fn, "rb");
 #ifdef _WIN32
 	if (!sf)
 		if(HRSRC h = FindResourceA(NULL, fn, "REDATA"))
@@ -738,7 +741,7 @@ int FileExists(const char *fn)
 	const auto u8fn = PathFromUtf8(portablePath(fn));
 
 	// Not in data.bcp or a mod. Find it in the "saved" and "redata" folder.
-	if (std::filesystem::exists(g_gamePath / "saved" / u8fn))
+	if (std::filesystem::exists(g_userPath / "saved" / u8fn) || std::filesystem::exists(g_gamePath / "saved" / u8fn))
 		return 1;
 
 #ifdef _WIN32
@@ -782,6 +785,7 @@ std::vector<std::string>* ListFiles(const char *dn, std::vector<std::string>* gs
 		for (auto& src : group.sources)
 			src->listFiles(dn, gsl);
 
+	FindFiles(g_userPath / "saved" / dn / "*.*", gsl);
 	FindFiles(g_gamePath / "saved" / dn / "*.*", gsl);
 
 	return gsl;

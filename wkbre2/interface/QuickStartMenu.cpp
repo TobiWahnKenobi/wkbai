@@ -31,6 +31,7 @@
 #include "../util/FrameStats.h"
 #include <tracy/Tracy.hpp>
 #include <algorithm>
+#include "../util/StriCompare.h"
 #include <atomic>
 
 namespace {
@@ -137,13 +138,16 @@ void QuickStartMenu::newSession()
 	client->serverLink = cli2srv;
 }
 
-void QuickStartMenu::refreshSaveGames()
+void QuickStartMenu::refreshSaveGames(bool keepSelection)
 {
+	const std::string selected = (keepSelection && savselected < savegames.size()) ? savegames[savselected] : std::string();
 	auto* gsl = ListFiles("Save_Games");
 	savegames = std::move(*gsl);
 	delete gsl;
 	savselected = 0;
-	if (!savegames.empty()) {
+	if (auto it = std::find(savegames.begin(), savegames.end(), selected); !selected.empty() && it != savegames.end())
+		savselected = it - savegames.begin();
+	else if (!savegames.empty()) {
 		skirmishMenu.changeSettingsForLevel(savegames[0]);
 	}
 	if (FrontEnd* fe = FrontEnd::get())
@@ -388,6 +392,25 @@ void QuickStartMenu::launchGame()
 
 		ClientInterface cliui(client, gfx);
 		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
+		if (cliui.singlePlayer)
+			cliui.saveGame = [this, &srvMutex](const std::string& name) {
+				// a file name, not a path
+				if (name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.find_first_not_of(" .") == std::string::npos)
+					return false;
+				const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(name + ".sav"));
+				srvMutex.lock();
+				const bool ok = server->saveGame(path.c_str());
+				srvMutex.unlock();
+				printf("Saving the game to %s: %s\n", path.c_str(), ok ? "done" : "failed");
+				refreshSaveGames(true);
+				return ok;
+			};
+		if (FrontEnd* fe = FrontEnd::get()) {
+			// a save game (not a level) is the one "Save Game" writes to
+			const std::string& file = savegames.at(savselected);
+			const bool isSave = file.size() > 4 && StrCICompare(std::string_view(file).substr(file.size() - 4), ".sav") == 0;
+			fe->setCurrentSave(isSave ? file.substr(0, file.size() - 4) : std::string());
+		}
 		client->attachInterface(&cliui);
 		ServerDebugger srvdbg(server);
 		bool onServerUi = false;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <string>
+
 struct SDL_Window;
 struct IRenderer;
 
@@ -16,6 +18,8 @@ extern IRenderer *g_gfxRenderer;
 extern bool g_mouseDown[16], g_mousePressed[16], g_mouseReleased[16];
 extern int g_mouseX, g_mouseY, g_mouseWheel;
 extern int g_mouseDoubleClicked;
+// The text typed since the last frame (UTF-8)
+extern std::string g_textTyped;
 
 void InitWindow();
 void HandleWindow();

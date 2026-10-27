@@ -39,6 +39,7 @@ void Server::loadSaveGame(const char * filename)
 		switch (tag) {
 		case Tags::SAVEGAME_GAME_SET: {
 			std::string gsFileName = gsf.nextString(true);
+			gameSetFile = gsFileName;
 			int version = g_settings.at("gameVersion").get<int>();
 			gameSet = std::make_shared<GameSet>(gsFileName.c_str(), version);
 			NetPacketWriter msg(NETCLIMSG_GAME_SET);
@@ -73,6 +74,10 @@ void Server::loadSaveGame(const char * filename)
 
 	for (auto &t : postAssociations)
 		std::get<0>(t)->associateObject(std::get<1>(t), findObject(std::get<2>(t)));
+	postAssociations.clear();
+	for (auto& [task, id] : postTaskTargets)
+		task->setTarget(findObject(id));
+	postTaskTargets.clear();
 
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
 		clientPlayerObjects[i]->clientIndex = i;
@@ -281,6 +286,7 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		}
 		case Tags::GAMEOBJ_MAP: {
 			std::string mapfp = gsf.nextString(true);
+			mapFile = mapfp;
 			this->terrain = new Terrain();
 			this->terrain->readFromFile(mapfp.c_str());
 			NetPacketWriter packet(NETCLIMSG_TERRAIN_SET);
@@ -341,7 +347,7 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 							while (!gsf.eof) {
 								std::string tsktag = gsf.nextTag();
 								if (tsktag == "TARGET") {
-									task.setTarget(findObject(gsf.nextInt()));
+									postTaskTargets.emplace_back(&task, gsf.nextInt());
 								}
 								else if (tsktag == "PROXIMITY") {
 									task.proximity = gsf.nextFloat();

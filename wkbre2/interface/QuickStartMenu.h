@@ -54,7 +54,8 @@ private:
 	QuickSkirmishMenu skirmishMenu;
 	ModMenu modMenu;
 
-	void refreshSaveGames();
+	// keepSelection: the selected level stays (a save game was added during the game)
+	void refreshSaveGames(bool keepSelection = false);
 	void selectSaveGame(const std::string& name);
 	// A new server and client, for the next game
 	void newSession();

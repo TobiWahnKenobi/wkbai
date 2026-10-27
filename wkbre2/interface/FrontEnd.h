@@ -33,6 +33,11 @@ struct FrontEnd {
 
 	void setSaveGames(std::vector<std::string> saves);
 	void setSinglePlayer(bool singlePlayer);
+	// The save game the game in progress was loaded from or last saved to (no extension), or empty:
+	// "Save Game" saves there without asking
+	void setCurrentSave(const std::string& name);
+	// The result of a "save" request, shown by the menu
+	void saved(bool ok, const std::string& name);
 
 	// The one front end of the program, or null (tests)
 	static FrontEnd* get();
