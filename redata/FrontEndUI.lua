@@ -105,8 +105,8 @@ local function button(text, x, y, w, h, enabled, selected)
 end
 
 -- A slider over a 0..1 position; returns the new position
-local function slider(id, pos, x, y, w, enabled)
-	local h = w / 3
+local function slider(id, pos, x, y, w, enabled, height)
+	local h = height or w / 3
 	drawImage(enabled and ART.slider or ART.sliderGrey, x, y, w, h)
 	-- the track runs between the rounded ends of the bar
 	local x0, x1 = x + w * 0.06, x + w * 0.94
@@ -422,7 +422,7 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
 	{ text = "Mods", action = function() request("mods") end },
-	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", enabled = false },
+	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
 	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
 	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() request("quit") end },
 }
@@ -1318,6 +1318,173 @@ Screens.campaignmap = {
 	end,
 }
 
+-- AI General Editor --------------------------------------------------------------------
+-- As the original's IDD_ADDON_GENERAL_CREATION (positions of its 640 x 480 dialog): a portrait,
+-- the general's name and background, and the AI stats (0 ... 100) the Kingmaker AI reads for a
+-- "player designed" general. Saved as a PLAYER "<name> Kingmaker" in the user folder's
+-- Warrior Kings Game Set\AI Generals, which the game set links.
+
+local GE_MILITARY = {
+	{ "Economic - Military AI Stat", { "ECONOMIC", "MILITARY" } },
+	{ "Raiding - Siege AI Stat", { "RAIDING", "SIEGE" } },
+	{ "Pagan - Tech - Imperial AI Stat", { "PAGAN", "RENAISSANCE", "IMPERIAL" } },
+	{ "Infantry - Cavalry AI Stat", { "INFANTRY", "CAVALRY" } },
+	{ "Heavy - Light AI Stat", { "HEAVY", "LIGHT" } },
+	{ "Leadership AI Stat", { "LEADERSHIP" } },
+	{ "Fervour AI Stat", { "FERVOUR" } },
+}
+local GE_DIPLOMATIC = {
+	{ "Toady - Neutral - Arrogant AI Stat", { "TOADY", "NEUTRAL", "ARROGANT" } },
+	{ "Diplomatic Frequency AI Stat", { "DIPLOMATIC_FREQUENCY" } },
+	{ "Greediness AI Stat", { "GREEDINESS" } },
+	{ "Treachery AI Stat", { "TREACHERY" } },
+	{ "Pride AI Stat", { "PRIDE" } },
+	{ "Friendliness AI Stat", { "FRIENDLINESS" } },
+	{ "Chattiness AI Stat", { "CHATTINESS" } },
+}
+local GE_CATEGORIES = { "CONSCRIPT", "VETERAN", "ELITE" }
+local GE_ALIGNMENTS = { "Pagan", "Renaissance", "Imperial" }
+
+local editor = { name = { text = "" }, background = { text = "" }, stats = {}, portrait = 1, category = 2, alignment = 2, editing = 0 }
+
+local function editorPortraits()
+	local list = {}
+	for _, f in ipairs(listDataFiles("Interface\\FrontEnd\\Portraits")) do
+		local lower = string.lower(f)
+		if string.sub(lower, -4) == ".tga" and lower ~= "locked general.tga" and lower ~= "random general.tga" then
+			list[#list + 1] = "Interface\\FrontEnd\\Portraits\\" .. f
+		end
+	end
+	return list
+end
+
+local function customGenerals()
+	local list = {}
+	for _, g in ipairs(getGenerals()) do if g.custom then list[#list + 1] = g end end
+	return list
+end
+
+-- A new general (all stats in the middle), or the custom general g
+local function editorLoad(g)
+	editor.stats = {}
+	for _, st in ipairs(GE_MILITARY) do editor.stats[st[1]] = 50 end
+	for _, st in ipairs(GE_DIPLOMATIC) do editor.stats[st[1]] = 50 end
+	editor.name.text, editor.background.text = "", ""
+	editor.portrait, editor.category, editor.alignment = 1, 2, 2
+	if not g then return end
+	editor.name.text = g.name
+	editor.background.text = g.biography or ""
+	for item, v in pairs(g.stats or {}) do
+		for k in pairs(editor.stats) do if string.lower(k) == string.lower(item) then editor.stats[k] = v end end
+	end
+	for i, c in ipairs(GE_CATEGORIES) do if c == g.category then editor.category = i end end
+	for i, a in ipairs(GE_ALIGNMENTS) do if a == g.alignment then editor.alignment = i end end
+	for i, path in ipairs(editorPortraits()) do if string.lower(path) == string.lower(g.portrait or "") then editor.portrait = i end end
+end
+
+Screens.generaleditor = {
+	background = sunsetBackground,
+	open = function() editor.editing = 0; editorLoad(nil) end,
+	draw = function()
+		-- the original dialog's coordinates
+		local function px(x) return X(960 + (x - 320) * 2.25) end
+		local function py(y) return Y(y * 2.25) end
+		local function pl(v) return L(v * 2.25) end
+		title(T("FRONT_END_GENERAL_CREATION_TITLE"))
+		panel(px(4), py(34), pl(632), pl(436), true)
+
+		-- portrait
+		local portraits = editorPortraits()
+		editor.portrait = math.max(1, math.min(editor.portrait, #portraits))
+		if portraits[editor.portrait] then drawImage(portraits[editor.portrait], px(10), py(90), pl(150), pl(200)) end
+		drawFrame(px(10), py(90), pl(150), pl(200), PANEL_BORDER, L(2))
+		if button("<", px(10), py(294), pl(40), pl(20), #portraits > 1) then editor.portrait = (editor.portrait - 2) % #portraits + 1 end
+		if button(">", px(120), py(294), pl(40), pl(20), #portraits > 1) then editor.portrait = editor.portrait % #portraits + 1 end
+		centredText(FONT_LIST, editor.portrait .. " / " .. #portraits, px(50), py(294), pl(70), pl(20), WHITE)
+
+		-- name
+		drawText(FONT_LIST, px(10), py(40), T("FRONT_END_GENERAL_CREATION_NAME"), WHITE, S)
+		local nameField = textField(editor.name, px(10), py(58), pl(150), pl(24), FILE_NAME_REFUSED, 32)
+
+		-- category, alignment, random
+		if button(T(TIER_TEXT[GE_CATEGORIES[editor.category]] or GE_CATEGORIES[editor.category]), px(10), py(320), pl(150), pl(22)) then
+			editor.category = editor.category % #GE_CATEGORIES + 1
+		end
+		if button(GE_ALIGNMENTS[editor.alignment], px(10), py(346), pl(150), pl(22)) then
+			editor.alignment = editor.alignment % #GE_ALIGNMENTS + 1
+		end
+		if button(T("FRONT_END_GENERAL_CREATION_RANDOM"), px(10), py(372), pl(150), pl(22)) then
+			for k in pairs(editor.stats) do editor.stats[k] = math.random(0, 100) end
+			editor.portrait = math.random(math.max(1, #portraits))
+		end
+
+		-- the stats: a slider each, its labels under it
+		local function column(list, x, heading)
+			drawText(FONT_LIST, px(x), py(40), T("FRONT_END_GENERAL_CREATION_" .. heading), 0xFF9CE6F0, S)
+			for i, st in ipairs(list) do
+				local y = 58 + (i - 1) * 45
+				local v = editor.stats[st[1]] or 50
+				local pos = slider("ge" .. st[1], v / 100, px(x), py(y), pl(200), true, pl(20))
+				editor.stats[st[1]] = math.floor(pos * 100 + 0.5)
+				local labels = st[2]
+				local lh = fontHeight(FONT_LIST, S)
+				for li, key in ipairs(labels) do
+					local text = T("FRONT_END_GENERAL_CREATION_" .. key)
+					local w = textWidth(FONT_LIST, text, S)
+					local tx = px(x)
+					if #labels == 1 then tx = px(x) + (pl(200) - w) / 2
+					elseif li == #labels then tx = px(x) + pl(200) - w
+					elseif li > 1 then tx = px(x) + (pl(200) - w) / 2 end
+					drawText(FONT_LIST, tx, py(y + 21), text, WHITE, S)
+				end
+				drawText(FONT_LIST, px(x + 205), py(y + 4), tostring(editor.stats[st[1]]), YELLOW, S)
+			end
+		end
+		column(GE_MILITARY, 164, "MILITARY_BEHAVIOUR")
+		column(GE_DIPLOMATIC, 399, "DIPLOMATIC_BEHAVIOUR")
+
+		-- the generals made before: pick one to change it
+		local custom = customGenerals()
+		local current = custom[editor.editing]
+		if button(current and current.name or T("FRONT_END_GENERAL_CREATION_NEW_GENERAL"), px(174), py(375), pl(200), pl(22), #custom > 0) then
+			editor.editing = (editor.editing + 1) % (#custom + 1)
+			editorLoad(custom[editor.editing])
+		end
+		if button(T("DIALOG_BUTTON_DELETE"), px(399), py(375), pl(95), pl(22), current ~= nil) then
+			confirm(T("DIALOG_BUTTON_DELETE") .. " '" .. current.name .. "'?", function()
+				deleteAIGeneral(current.name)
+				generalsByBlueprint = nil
+				editor.editing = 0
+				editorLoad(nil)
+			end)
+		end
+		if button(T("FRONT_END_GENERAL_CREATION_NEW_GENERAL"), px(504), py(375), pl(95), pl(22)) then
+			editor.editing = 0
+			editorLoad(nil)
+		end
+
+		-- background
+		drawText(FONT_LIST, px(10), py(409), T("FRONT_END_GENERAL_CREATION_BACKGROUND"), WHITE, S)
+		textField(editor.background, px(174), py(405), pl(425), pl(25), nil, 200)
+
+		local testSave = editor.testSave
+		if testSave then
+			editor.testSave = nil
+			editor.name.text = testSave
+			for k in pairs(editor.stats) do editor.stats[k] = math.random(0, 100) end
+		end
+		local name = string.match(editor.name.text, "^%s*(.-)%s*$")
+		if button(T("FRONT_END_GENERAL_CREATION_SAVE_GENERAL"), px(90), py(440), pl(220), pl(25), name ~= "") or testSave then
+			local ok = saveAIGeneral({ name = name, category = GE_CATEGORIES[editor.category], alignment = GE_ALIGNMENTS[editor.alignment],
+				portrait = portraits[editor.portrait] or "", background = editor.background.text, stats = editor.stats })
+			generalsByBlueprint = nil
+			notice = { text = ok and (name .. ": " .. T("FRONT_END_BUTTON_SAVE")) or ("Could not save \"" .. name .. "\""), until_ = getTime() + 2.5 }
+			for i, g in ipairs(customGenerals()) do if g.name == name then editor.editing = i end end
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), px(330), py(440), pl(220), pl(25)) then pop() end
+	end,
+}
+
 -- Multiplayer --------------------------------------------------------------------------
 
 -- Multiplayer host, a saved game: its human players, each taken by the host, a guest (the one of
@@ -1671,6 +1838,11 @@ function FE_Open(name)
 		name = screenName
 		mpLoad.save = tab
 		mpLoad.autoStart = getTime()
+	end
+	-- "generaleditor.<name>" (tests): a random general of that name, saved
+	if screenName == "generaleditor" then
+		name = screenName
+		editor.testSave = tab
 	end
 	-- "campaignmap.<profile>": the campaign map of a profile
 	if screenName == "campaignmap" then

@@ -38,29 +38,32 @@ namespace {
 		std::vector<uint8_t> alpha; // kept for imageAlpha (hit tests on shaped images)
 	};
 
-	// An AI General of the original (a PLAYER blueprint in AI_Personalities.gsf)
+	// An AI General: a PLAYER blueprint "... Kingmaker" of the original's AI_Personalities.gsf, or
+	// one the player made with the AI General Editor (Warrior Kings Game Set\AI Generals\*.gsf)
 	struct General {
-		std::string blueprint, nameTag, portrait, background, category;
+		std::string blueprint, nameTag, name, portrait, background, category, alignment;
+		bool custom = false;
+		std::map<std::string, float> stats; // STARTS_WITH_ITEM of a custom one
 	};
 
-	// Read from the game set file itself, as the menus have no game set loaded
-	std::vector<General> LoadGenerals()
+	const char* const AI_GENERALS_DIR = "Warrior Kings Game Set\\AI Generals";
+
+	// Read from the game set files themselves, as the menus have no game set loaded
+	void ReadGenerals(const std::string& path, bool custom, std::vector<General>& generals)
 	{
-		static const char* path = "Warrior Kings Game Set\\AI\\Kingmaker AI\\Personalities\\AI_Personalities.gsf";
-		std::vector<General> generals;
-		if (!FileExists(path))
-			return generals;
+		if (!FileExists(path.c_str()))
+			return;
 		char* data = nullptr;
 		int size = 0;
-		LoadFile(path, &data, &size, 1);
-		data[size] = 0;
-		std::istringstream in(data);
+		LoadFile(path.c_str(), &data, &size, 1);
+		std::istringstream in(std::string(data, size));
 		free(data);
 		auto quoted = [](const std::string& line) {
 			const size_t a = line.find('"'), b = line.rfind('"');
 			return (a != std::string::npos && b > a) ? line.substr(a + 1, b - a - 1) : std::string();
 		};
 		auto word = [](std::istringstream& ls) { std::string w; ls >> w; return w; };
+		const size_t first = generals.size();
 		std::string line;
 		while (std::getline(in, line)) {
 			if (!line.empty() && line.back() == '\r')
@@ -69,25 +72,56 @@ namespace {
 			const std::string key = word(ls);
 			if (key == "PLAYER") {
 				const std::string name = quoted(line);
-				if (name.size() > 10 && name.compare(name.size() - 10, 10, " Kingmaker") == 0)
+				if (name.size() > 10 && name.compare(name.size() - 10, 10, " Kingmaker") == 0) {
 					generals.push_back({ name });
+					generals.back().custom = custom;
+				}
 			}
-			else if (generals.empty() || key.empty())
+			else if (generals.size() == first || key.empty())
 				continue;
 			else if (key == "END_PLAYER" || key == "END_GAME_OBJECT")
 				continue;
 			else if (key == "STARTS_WITH_NAME_TAG")
 				generals.back().nameTag = word(ls);
+			else if (key == "STARTS_WITH_NAME")
+				generals.back().name = quoted(line);
 			else if (key == "GENERAL_PORTRAIT")
 				generals.back().portrait = quoted(line);
 			else if (key == "GENERAL_BACKGROUND")
-				generals.back().background = word(ls);
+				// a Language.txt key, or (made in the editor) the text itself
+				generals.back().background = line.find('"') != std::string::npos ? "\"" + quoted(line) : word(ls);
 			else if (key == "GENERAL_CATEGORY")
 				generals.back().category = word(ls);
+			else if (key == "GENERAL_ALIGNMENT")
+				generals.back().alignment = quoted(line);
+			else if (key == "STARTS_WITH_ITEM" && custom) {
+				const std::string item = quoted(line);
+				const size_t end = line.rfind('"');
+				generals.back().stats[item] = (float)atof(line.c_str() + end + 1);
+			}
+		}
+	}
+
+	std::vector<General> LoadGenerals()
+	{
+		std::vector<General> generals;
+		ReadGenerals("Warrior Kings Game Set\\AI\\Kingmaker AI\\Personalities\\AI_Personalities.gsf", false, generals);
+		std::unique_ptr<std::vector<std::string>> files(ListFiles(AI_GENERALS_DIR));
+		if (files) {
+			std::sort(files->begin(), files->end());
+			for (const std::string& f : *files)
+				if (f.size() > 4 && StrCICompare(std::string_view(f).substr(f.size() - 4), ".gsf") == 0)
+					ReadGenerals(std::string(AI_GENERALS_DIR) + "\\" + f, true, generals);
 		}
 		// only the ones the original lists (with a category)
 		generals.erase(std::remove_if(generals.begin(), generals.end(), [](const General& g) { return g.category.empty(); }), generals.end());
 		return generals;
+	}
+
+	// The file of a general made in the editor, in the user folder (never the game folder)
+	std::filesystem::path CustomGeneralFile(const std::string& name)
+	{
+		return g_userPath / "saved" / "Warrior Kings Game Set" / "AI Generals" / PathFromUtf8(name + ".gsf");
 	}
 }
 
@@ -108,6 +142,8 @@ struct FrontEnd::Impl {
 	bool singlePlayer = true;
 	Place place = Place::MAIN_MENU;
 	ImDrawList* drawList = nullptr;
+	std::vector<General> generals;
+	bool generalsLoaded = false;
 
 	explicit Impl(IRenderer* gfx) : gfx(gfx) {}
 
@@ -317,6 +353,59 @@ struct FrontEnd::Impl {
 			return sol::make_object(lua, text);
 		});
 
+		// The files of a game data folder (data.bcp, mods, the user folder)
+		lua.set_function("listDataFiles", [](const std::string& dir) {
+			std::unique_ptr<std::vector<std::string>> files(ListFiles(dir.c_str()));
+			std::vector<std::string> list = files ? *files : std::vector<std::string>();
+			std::sort(list.begin(), list.end());
+			return sol::as_table(list);
+		});
+
+		// The AI General Editor: { name, category, alignment, portrait, background, stats = { item = value } }
+		// as a PLAYER "<name> Kingmaker" like the original's generals, in the user folder's
+		// Warrior Kings Game Set\AI Generals (the game set links AI Generals\*.gsf)
+		lua.set_function("saveAIGeneral", [this](sol::table t) {
+			const std::string name = t.get_or("name", std::string());
+			if (!CampaignProfile::validName(name))
+				return false;
+			const std::filesystem::path file = CustomGeneralFile(name);
+			std::error_code ec;
+			std::filesystem::create_directories(file.parent_path(), ec);
+			FILE* f = _wfopen(file.c_str(), L"w");
+			if (!f)
+				return false;
+			auto clean = [](std::string text) {
+				for (char& c : text)
+					if (c == '"' || c == '\n' || c == '\r')
+						c = c == '"' ? '\'' : ' ';
+				return text;
+			};
+			fprintf(f, "// Made with the wkbre2 AI General Editor\n\n");
+			fprintf(f, "\tPLAYER \"%s Kingmaker\"\n\n", clean(name).c_str());
+			fprintf(f, "\t\tINHERITS_FROM \"Kingmaker Player\"\n");
+			fprintf(f, "\t\tSTARTS_WITH_NAME \"%s\"\n\n", clean(name).c_str());
+			fprintf(f, "\t\tGENERAL_PORTRAIT \"%s\"\n", clean(t.get_or("portrait", std::string())).c_str());
+			fprintf(f, "\t\tGENERAL_BACKGROUND \"%s\"\n", clean(t.get_or("background", std::string())).c_str());
+			fprintf(f, "\t\tGENERAL_CATEGORY %s\n", clean(t.get_or("category", std::string("VETERAN"))).c_str());
+			fprintf(f, "\t\tGENERAL_ALIGNMENT \"%s\"\n\n", clean(t.get_or("alignment", std::string("Renaissance"))).c_str());
+			fprintf(f, "\t\tSTARTS_WITH_ITEM \"I Am A Player Designed AI General\" 1\n");
+			if (sol::optional<sol::table> stats = t["stats"])
+				for (const auto& [k, v] : *stats)
+					if (k.is<std::string>() && v.is<double>())
+						fprintf(f, "\t\tSTARTS_WITH_ITEM \"%s\" %g\n", clean(k.as<std::string>()).c_str(), v.as<double>());
+			fprintf(f, "\n\tEND_PLAYER\n");
+			const bool ok = !ferror(f);
+			fclose(f);
+			generalsLoaded = false;
+			return ok;
+		});
+		lua.set_function("deleteAIGeneral", [this](const std::string& name) {
+			std::error_code ec;
+			const bool ok = CampaignProfile::validName(name) && std::filesystem::remove(CustomGeneralFile(name), ec);
+			generalsLoaded = false;
+			return ok;
+		});
+
 		// Kingmaker campaign profiles (CampaignProfile.h)
 		lua.set_function("getCampaignProfiles", []() { return sol::as_table(CampaignProfile::list()); });
 		lua.set_function("getCampaignProfile", [this](const std::string& name) -> sol::object {
@@ -363,11 +452,15 @@ struct FrontEnd::Impl {
 		});
 		// The original's AI Generals: { blueprint, name, category ("CONSCRIPT", "VETERAN", "ELITE"), portrait, biography }
 		lua.set_function("getGenerals", [this]() {
-			static const std::vector<General> generals = LoadGenerals();
+			if (!generalsLoaded) {
+				generals = LoadGenerals();
+				generalsLoaded = true;
+			}
 			sol::table list = lua.create_table();
 			int i = 1;
 			for (const General& g : generals) {
-				std::string bio = g.background.empty() ? std::string() : lang.getText(g.background);
+				std::string bio = g.background.empty() ? std::string()
+					: g.background[0] == '"' ? g.background.substr(1) : lang.getText(g.background);
 				// "|Name|%s\n..." in Language.txt: the name between bars and a placeholder line
 				if (!bio.empty() && bio[0] == '|') {
 					const size_t end = bio.find('|', 1);
@@ -380,9 +473,13 @@ struct FrontEnd::Impl {
 				// Language.txt writes line breaks as a backslash and n
 				while ((pos = bio.find("\\n")) != std::string::npos)
 					bio.replace(pos, 2, "\n");
+				sol::table stats = lua.create_table();
+				for (const auto& [item, value] : g.stats)
+					stats[item] = value;
 				list[i++] = lua.create_table_with("blueprint", g.blueprint,
-					"name", g.nameTag.empty() ? g.blueprint : lang.getText(g.nameTag),
-					"category", g.category, "portrait", g.portrait, "biography", bio);
+					"name", !g.nameTag.empty() ? lang.getText(g.nameTag) : !g.name.empty() ? g.name : g.blueprint,
+					"category", g.category, "portrait", g.portrait, "biography", bio,
+					"custom", g.custom, "alignment", g.alignment, "stats", stats);
 			}
 			return list;
 		});
