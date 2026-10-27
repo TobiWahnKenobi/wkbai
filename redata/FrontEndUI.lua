@@ -416,7 +416,7 @@ end
 
 MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_LOAD_GAME", action = function() push("load") end },
-	{ key = "FRONT_END_MAIN_MENU_CAMPAIGN", enabled = false },
+	{ key = "FRONT_END_MAIN_MENU_CAMPAIGN", action = function() push("campaign") end },
 	{ key = "FRONT_END_MAIN_MENU_SKIRMISH", action = function() push("skirmish") end },
 	{ key = "FRONT_END_MAIN_MENU_MULTIPLAYER", action = function() push("multiplayer") end },
 	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
@@ -1091,6 +1091,233 @@ Screens.mpguest = {
 	onEscape = function() request("leave_lobby") end,
 }
 
+-- Kingmaker campaign -------------------------------------------------------------------
+-- The provinces of the original's campaign map (its table at 0x8c0268 in WKB.exe): the region
+-- image's place on Orbis_Map.tga (1600 x 1236; the exe gives them x 1.875), the place of the
+-- marker, and the neighbouring provinces (indices here).
+local PROVINCES = {
+	{ key = "Akaia", level = "CH2_Akaia.lvl", x = 1011.7, y = 902.4, mx = 1145.6, my = 958.9, neighbours = { 19, 20 } },
+	{ key = "Amboise", level = "CH2_Amboise.lvl", x = 619.7, y = 517.9, mx = 684.3, my = 633.6, neighbours = { 17, 5, 8, 21, 12 } },
+	{ key = "Andalus", level = "CH2_Andalus.lvl", x = 125.9, y = 882.7, mx = 164.8, my = 1002.1, neighbours = { 11 } },
+	{ key = "Angland", level = "CH2_Angland.lvl", x = 243.7, y = 255.5, mx = 337.6, my = 404.8, neighbours = { 5 } },
+	{ key = "Aquilos", level = "CH2_Aquilos.lvl", x = 369.1, y = 475.7, mx = 560.0, my = 619.7, neighbours = { 16, 4, 17, 2 } },
+	{ key = "Bohemundia", level = "CH2_Bohemundia.lvl", x = 1072.5, y = 392.5, mx = 1188.3, my = 580.3, neighbours = { 14, 18, 22, 15, 9 } },
+	{ key = "Burgosia", level = "CH2_Burgosia.lvl", x = 392.0, y = 946.1, mx = 490.1, my = 969.6, neighbours = { 10, 11, 20 } },
+	{ key = "Cravant", level = "CH2_Cravant.lvl", x = 716.3, y = 467.7, mx = 857.1, my = 526.4, neighbours = { 2, 21 } },
+	{ key = "Dacianus", level = "CH2_Dacianus.lvl", x = 926.4, y = 653.3, mx = 1110.9, my = 737.6, neighbours = { 14, 6, 15, 19 } },
+	{ key = "Etruscia", level = "CH2_Etruscia.lvl", x = 747.7, y = 883.7, mx = 814.4, my = 929.6, neighbours = { 7, 13, 20 } },
+	{ key = "Ibericus", level = "CH2_Ibericus.lvl", x = 161.6, y = 567.5, mx = 289.1, my = 759.5, neighbours = { 3, 7, 16 } },
+	{ key = "Illyricus", level = "CH2_Illyricus.lvl", x = 734.9, y = 630.9, mx = 772.8, my = 725.9, neighbours = { 2, 21, 14, 19 } },
+	{ key = "Liguriensis", level = "CH2_Liguriensis.lvl", x = 604.3, y = 810.7, mx = 676.8, my = 930.7, neighbours = { 17, 10 } },
+	{ key = "Losatia", level = "CH2_Losatia.lvl", x = 910.4, y = 402.7, mx = 1082.7, my = 584.5, neighbours = { 21, 6, 9, 12 } },
+	{ key = "Magiaria", level = "CH2_Magiaria.lvl", x = 1112.0, y = 694.9, mx = 1249.1, my = 733.9, neighbours = { 19, 9, 6, 22, 18 } },
+	{ key = "Occitania", level = "CH2_Occitania.lvl", x = 401.6, y = 698.1, mx = 489.6, my = 747.7, neighbours = { 11, 17, 5 } },
+	{ key = "Ostrovir", level = "CH2_Ostrovir.lvl", x = 586.1, y = 645.3, mx = 626.1, my = 714.1, neighbours = { 16, 5, 2, 13 } },
+	{ key = "Rusland", level = "CH2_Rusland.lvl", x = 1220.3, y = 227.2, mx = 1393.6, my = 459.7, neighbours = { 6, 15, 22 } },
+	{ key = "Ryetia", level = "CH2_Ryetia.lvl", x = 920.5, y = 759.5, mx = 1039.5, my = 779.2, neighbours = { 12, 9, 15, 1 } },
+	{ key = "Samnos", level = "CH2_Samnos.lvl", x = 884.8, y = 917.9, mx = 924.8, my = 1027.2, neighbours = { 1, 7, 10 } },
+	{ key = "Tharingia", level = "CH2_Tharingia.lvl", x = 800.0, y = 258.1, mx = 973.9, my = 498.1, neighbours = { 2, 8, 14, 12 } },
+	{ key = "Valakia", level = "CH2_Valakia.lvl", x = 1270.4, y = 527.5, mx = 1329.6, my = 601.6, neighbours = { 6, 18, 15 } },
+}
+
+-- Campaigns\Kingmaker.cam: the first province's level and the AI Generals of each level (tiers)
+local campaignDef = nil
+local function campaignDefinition()
+	if campaignDef then return campaignDef end
+	campaignDef = { first = "", levels = {} }
+	local current = nil
+	for line in string.gmatch((readDataFile("Campaigns\\Kingmaker.cam") or "") .. "\n", "(.-)\n") do
+		local word, rest = string.match(line, "^%s*(%S+)%s*(.-)%s*$")
+		if word == "FIRST_LEVEL" then
+			campaignDef.first = string.lower(string.match(rest, '"(.-)"') or "")
+		elseif word == "LEVEL" then
+			current = { tiers = {} }
+			campaignDef.levels[string.lower(string.match(rest, '"(.-)"') or "")] = current
+		elseif word == "CHOOSE_FROM" and current then
+			current.tiers[#current.tiers + 1] = rest
+		elseif word == "END_LEVEL" then
+			current = nil
+		end
+	end
+	return campaignDef
+end
+
+local campaign = { profile = nil, data = nil, selected = nil, list = { selected = 0, scroll = 0 }, name = { text = "" } }
+
+-- The provinces that can be attacked: the first one, then the neighbours of the conquered ones
+local function campaignState()
+	local conquered, attackable = {}, {}
+	for _, key in ipairs((campaign.data and campaign.data.conquered) or {}) do conquered[key] = true end
+	local any = false
+	for i, prov in ipairs(PROVINCES) do
+		if conquered[prov.key] then
+			any = true
+			for _, n in ipairs(prov.neighbours) do
+				if PROVINCES[n] and not conquered[PROVINCES[n].key] then attackable[PROVINCES[n].key] = true end
+			end
+		end
+	end
+	if not any then
+		local first = campaignDefinition().first
+		for _, prov in ipairs(PROVINCES) do
+			if string.lower(prov.level) == first then attackable[prov.key] = true end
+		end
+	end
+	return conquered, attackable
+end
+
+-- Starts a province: the player at the first position, the level's AI Generals (random ones of
+-- their tiers) after, the other positions empty
+local function startProvince(prov)
+	local def = campaignDefinition().levels[string.lower(prov.level)] or { tiers = { "VETERAN" } }
+	local parts = { "H;c1" }
+	for i, tier in ipairs(def.tiers) do
+		local pool = {}
+		for _, g in ipairs(generals()) do if g.category == tier then pool[#pool + 1] = g end end
+		local g = pool[math.random(math.max(1, #pool))]
+		parts[#parts + 1] = (g and ("A:" .. g.blueprint) or "A") .. ";c" .. (i + 1)
+	end
+	for _ = 1, 8 do parts[#parts + 1] = "E" end
+	request("slots", table.concat(parts, "|"))
+	request("campaign_play", campaign.profile .. "|" .. prov.key)
+	request("start", prov.level)
+end
+
+Screens.campaign = {
+	background = sunsetBackground,
+	open = function() campaign.list.selected = 0; campaign.name.text = "" end,
+	draw = function()
+		title(T("FRONT_END_CAMPAIGN_TITLE"))
+		local profiles = getCampaignProfiles()
+		local x, w = X(560), L(800)
+		panel(x, Y(90), w, L(600))
+		local activated = listBox(campaign.list, profiles, x + L(2), Y(92), w - L(4), L(596))
+		local chosen = profiles[campaign.list.selected]
+		drawText(FONT_TEXT, x, Y(710), T("FRONT_END_CAMPAIGN_ENTER_CAMPAIGN_NAME"), WHITE, S)
+		local entered = textField(campaign.name, x, Y(740), w, L(32), FILE_NAME_REFUSED, 40)
+		local name = string.match(campaign.name.text, "^%s*(.-)%s*$")
+		if (button(T("FRONT_END_CAMPAIGN_NEW"), x, Y(800), L(250), L(30), name ~= "") or entered) and name ~= "" then
+			if createCampaignProfile(name) then
+				campaign.profile = name
+				push("campaignmap")
+			else
+				dialog = { text = string.format(T("FRONT_END_CAMPAIGN_OVERWRITE_PROFILE"), name), buttons = {
+					{ T("FRONT_END_DIALOG_BUTTON_YES"), function()
+						dialog = nil
+						deleteCampaignProfile(name)
+						createCampaignProfile(name)
+						campaign.profile = name
+						push("campaignmap")
+					end },
+					{ T("FRONT_END_DIALOG_BUTTON_NO"), function() dialog = nil end },
+				} }
+			end
+		end
+		if (button(T("FRONT_END_CAMPAIGN_LOAD"), x + L(275), Y(800), L(250), L(30), chosen ~= nil) or activated) and chosen then
+			campaign.profile = chosen
+			push("campaignmap")
+		end
+		if button(T("DIALOG_BUTTON_DELETE"), x + L(550), Y(800), L(250), L(30), chosen ~= nil) then
+			confirm(T("DIALOG_BUTTON_DELETE") .. " '" .. chosen .. "'?", function() deleteCampaignProfile(chosen) end)
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), X(869), Y(1032), L(182), L(24)) then pop() end
+	end,
+}
+
+local TIER_TEXT = { CONSCRIPT = "FRONT_END_CHAT_AI_CONSCRIPT", VETERAN = "FRONT_END_CHAT_AI_VETERAN", ELITE = "FRONT_END_CHAT_AI_ELITE" }
+
+-- The campaign map: conquered provinces in the player's colour, the ones that can be attacked
+-- marked; a click shows a province, Start attacks it
+Screens.campaignmap = {
+	background = seaBackground,
+	open = function()
+		campaign.data = campaign.profile and getCampaignProfile(campaign.profile) or nil
+		campaign.selected = nil
+	end,
+	draw = function()
+		if not campaign.data then pop(); return end
+		local conquered, attackable = campaignState()
+		-- the map, as large as it fits left of the panel
+		local boxW, boxH = L(1300), H - Y(70) - L(20)
+		local k = math.min(boxW / 1600, boxH / 1236)
+		local mx, my = X(20) + (boxW - 1600 * k) / 2, Y(70)
+		drawImage("Interface\\FrontEnd\\Orbis_Map.tga", mx, my, 1600 * k, 1236 * k)
+		drawFrame(mx, my, 1600 * k, 1236 * k, PANEL_BORDER, L(2))
+		-- the province under the mouse
+		local hoveredProv = nil
+		if hovered(mx, my, 1600 * k, 1236 * k) then
+			local ux, uy = (mouse.x - mx) / k, (mouse.y - my) / k
+			for _, prov in ipairs(PROVINCES) do
+				local img = "Interface\\FrontEnd\\Regions\\" .. prov.key .. ".tga"
+				if imageAlpha(img, math.floor(ux - prov.x), math.floor(uy - prov.y)) > 128 then hoveredProv = prov end
+			end
+		end
+		if hoveredProv and mouse.released then campaign.selected = hoveredProv end
+		for _, prov in ipairs(PROVINCES) do
+			local img = "Interface\\FrontEnd\\Regions\\" .. prov.key .. ".tga"
+			local w, h = imageSize(img)
+			local colour = nil
+			if conquered[prov.key] then colour = 0xFFFFFFFF
+			elseif prov == campaign.selected then colour = 0xC0FFFFFF
+			elseif prov == hoveredProv then colour = 0x70FFFFFF end
+			if colour then drawImage(img, mx + prov.x * k, my + prov.y * k, w * k, h * k, colour) end
+		end
+		local pulse = 0.85 + 0.15 * math.sin(getTime() * 4)
+		for _, prov in ipairs(PROVINCES) do
+			if attackable[prov.key] then
+				local size = L(56) * pulse
+				drawImage("Interface\\FrontEnd\\Campaign_Target.tga", mx + prov.mx * k - size / 2, my + prov.my * k - size / 2, size, size * 0.89)
+			elseif conquered[prov.key] then
+				local size = L(40)
+				drawImage("Interface\\FrontEnd\\Campaign_Location.tga", mx + prov.mx * k - size / 2, my + prov.my * k - size / 2, size, size)
+			end
+		end
+
+		-- the panel: the campaign, then the province chosen
+		local px, pw = X(1340), L(560)
+		title(T("FRONT_END_CAMPAIGN_TITLE") .. ": " .. campaign.profile)
+		panel(px, Y(70), pw, H - Y(70) - L(70), true)
+		local items = campaign.data.items or {}
+		local y = Y(84)
+		local function line(font, text, colour)
+			for _, l in ipairs(wrapText(font, text, pw - L(32))) do
+				drawText(font, px + L(16), y, l, colour or WHITE, S)
+				y = y + fontHeight(font, S)
+			end
+		end
+		local count = 0
+		for _ in pairs(conquered) do count = count + 1 end
+		line(FONT_LIST, count .. " / " .. #PROVINCES, YELLOW)
+		if next(items) then
+			line(FONT_LIST, string.format("%s %d   %s %d   %s %d", T("FRONT_END_CAMPAIGN_STARTING_FOOD"), items["FOOD"] or items["Food"] or 0,
+				T("FRONT_END_CAMPAIGN_STARTING_WOOD"), items["WOOD"] or items["Wood"] or 0, T("FRONT_END_CAMPAIGN_STARTING_GOLD"), items["GOLD"] or items["Gold"] or 0), 0xFFE6E6E6)
+		end
+		y = y + L(16)
+		local prov = campaign.selected or hoveredProv
+		if prov then
+			line(FONT_BUTTON, T("FRONT_END_CAMPAIGN_" .. prov.key), 0xFF9CE6F0)
+			y = y + L(6)
+			if conquered[prov.key] then line(FONT_LIST, "Conquered", 0xFF80FF80) end
+			local def = campaignDefinition().levels[string.lower(prov.level)]
+			if def then
+				local tiers = {}
+				for _, t in ipairs(def.tiers) do tiers[#tiers + 1] = T(TIER_TEXT[t] or t) end
+				line(FONT_LIST, #def.tiers .. " AI Generals: " .. table.concat(tiers, ", "), YELLOW)
+			end
+			y = y + L(10)
+			line(FONT_LIST, T("FRONT_END_CAMPAIGN_CONQUER_THIS_PROVINCE"), WHITE)
+			line(FONT_LIST, T("Province_Bonus_" .. prov.key), 0xFF80FF80)
+			y = y + L(10)
+			line(FONT_LIST, T("Province_" .. prov.key), 0xFFE6E6E6)
+		end
+		local canStart = campaign.selected ~= nil and attackable[campaign.selected.key] == true
+		if button(T("FRONT_END_CAMPAIGN_START"), px + L(20), H - L(56), L(250), L(30), canStart) then
+			startProvince(campaign.selected)
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), px + pw - L(270), H - L(56), L(250), L(30)) then pop() end
+	end,
+}
+
 -- Multiplayer --------------------------------------------------------------------------
 
 local mpName, mpAddress = { text = "" }, { text = "" }
@@ -1317,6 +1544,11 @@ function FE_Open(name)
 	if screenName == "skirmish" then
 		name = screenName
 		skirmish.tab = (tab == "settings") and 2 or 1
+	end
+	-- "campaignmap.<profile>": the campaign map of a profile
+	if screenName == "campaignmap" then
+		name = screenName
+		campaign.profile = tab
 	end
 	if #stack == 0 or stack[#stack] ~= name then push(name) end
 	openedThisFrame = true

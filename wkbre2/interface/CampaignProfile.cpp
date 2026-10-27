@@ -42,10 +42,12 @@ bool CampaignProfile::load(const std::string& name, CampaignProfile& out)
 		return false;
 	out = {};
 	out.name = name;
-	for (const auto& p : j.value("conquered", nlohmann::json::array()))
+	const nlohmann::json conquered = j.value("conquered", nlohmann::json::array());
+	for (const auto& p : conquered)
 		if (p.is_string())
 			out.conquered.push_back(p.get<std::string>());
-	for (const auto& [item, value] : j.value("items", nlohmann::json::object()).items())
+	const nlohmann::json items = j.value("items", nlohmann::json::object());
+	for (const auto& [item, value] : items.items())
 		if (value.is_number())
 			out.items[item] = value.get<float>();
 	return true;

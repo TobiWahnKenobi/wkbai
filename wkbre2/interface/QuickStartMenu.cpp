@@ -281,6 +281,7 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 	// Kingmaker campaign: a won province goes into the profile, with the USER object's items
 	// (as UPDATE_USER_PROFILE kept them, else as they are now)
 	const bool conquered = leaveAction == "campaign_conquered";
+	const std::string profileName = campaignProfile;
 	if (conquered) {
 		CampaignProfile profile;
 		CampaignProfile::load(campaignProfile, profile);
@@ -314,7 +315,7 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		handleRequest({ "start", leaveArg });
 	else if (conquered)
 		if (FrontEnd* fe = FrontEnd::get())
-			fe->open("campaignmap");
+			fe->open("campaignmap." + profileName);
 }
 
 void QuickStartMenu::draw()
@@ -335,6 +336,17 @@ void QuickStartMenu::draw()
 	}
 	updateLobby();
 	lobbyTest();
+	// Test runs: "campaignTest": { "profile": name, "province": key, "level": file, "conquerAfter": s }
+	// starts a province of a campaign profile and wins it after that many seconds of play
+	if (static bool started = false; !started && modeChosen == MODE_UNDEFINED) {
+		const nlohmann::json test = g_settings.value("campaignTest", nlohmann::json());
+		if (test.is_object()) {
+			started = true;
+			handleRequest({ "slots", "H;c1|A;c2|A;c3|E|E|E|E|E" });
+			handleRequest({ "campaign_play", test.value("profile", std::string()) + "|" + test.value("province", std::string()) });
+			handleRequest({ "start", test.value("level", std::string()) });
+		}
+	}
 
 	netHandle();
 	server->tick();
@@ -509,6 +521,16 @@ void QuickStartMenu::launchGame()
 			// Kingmaker campaign: the province is won (CONQUER_LEVEL)
 			if (server->levelConquered && !campaignProvince.empty())
 				cliui.leaveAction = "campaign_conquered";
+			// test runs: "campaignTest": { ..., "conquerAfter": seconds } runs the province's ending
+			// actions through the script chat ("!<action>")
+			if (static bool conquerSent = false; !conquerSent && !campaignProvince.empty() && client->getLevel()) {
+				const float after = g_settings.value("campaignTest", nlohmann::json()).value("conquerAfter", 0.0f);
+				if (after > 0.0f && client->timeManager.currentTime > after) {
+					conquerSent = true;
+					client->sendMessage("!UPDATE_USER_PROFILE");
+					client->sendMessage("!CONQUER_LEVEL");
+				}
+			}
 			client->tick();
 			netHandle();
 			if (g_keyPressed[SDL_SCANCODE_F1]) {
