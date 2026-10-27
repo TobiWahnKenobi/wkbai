@@ -423,7 +423,7 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
 	{ text = "Mods", action = function() request("mods") end },
 	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", enabled = false },
-	{ key = "FRONT_END_MAIN_MENU_CREDITS", enabled = false },
+	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
 	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() request("quit") end },
 }
 
@@ -435,6 +435,94 @@ Screens.main = {
 		drawImage(ART.logo, X(960 - 500 * k), Y(40), L(1000 * k), L(264 * k))
 		buttonColumn(MainMenuItems, Y(377), Y(1010))
 		drawText(FONT_LIST, W - L(100), H - L(26), "wkbre2", WHITE, S)
+	end,
+}
+
+-- Credits ------------------------------------------------------------------------------
+-- The original's credits (built in its exe: the role titles from Language.txt, the names in the
+-- code), scrolling up as there, then wkbre2's. Entries: { "heading" | "role" | "name" | "note", text or key }
+local function C(kind, text) return { kind, text } end
+local CREDITS = {
+	C("heading", "FRONT_END_CREDITS_BLACK_CACTUS"),
+	C("role", "FRONT_END_CREDITS_CREATIVE_DIRECTOR"), C("name", "Jamie Thomson"),
+	C("role", "FRONT_END_CREDITS_PROJECT_MANAGER_DESIGNER"), C("name", "Steve Bristow"),
+	C("role", "FRONT_END_CREDITS_LEAD_DESIGNER"), C("name", "Charlie Bewsher"),
+	C("role", "FRONT_END_CREDITS_CAMPAIGN_VALHALLA_DESIGNER"), C("name", "Andy Trowers"),
+	C("role", "FRONT_END_CREDITS_AI_DESIGN"), C("name", "Mike West"),
+	C("role", "FRONT_END_CREDITS_ADDITIONAL_DESIGN"), C("name", "Nick Ricks"),
+	C("role", "FRONT_END_CREDITS_LEAD_ARTIST"), C("name", "Mark Tatham"),
+	C("role", "FRONT_END_CREDITS_SENIOR_ARTIST"), C("name", "Chi Chan"),
+	C("role", "FRONT_END_CREDITS_SENIOR_ARTIST"), C("name", "Julia Wren"),
+	C("role", "FRONT_END_CREDITS_ARTIST"), C("name", "Nick Thomas"),
+	C("role", "FRONT_END_CREDITS_LEAD_PROGRAMMER"), C("name", "Paul Carroll"),
+	C("role", "FRONT_END_CREDITS_SENIOR_PROGRAMMER"), C("name", "Alex Dowdeswell"),
+	C("role", "FRONT_END_CREDITS_ENGINE_PROGRAMMER"), C("name", "Matt Curran"),
+	C("role", "FRONT_END_CREDITS_SENIOR_PROGRAMMER_HARDWARE"), C("name", "Pete Howarth"),
+	C("role", "FRONT_END_CREDITS_SENIOR_PROGRAMMER"), C("name", "Scott Davis"),
+	C("role", "FRONT_END_CREDITS_SENIOR_PROGRAMMER"), C("name", "Jim Blackler"),
+	C("role", "FRONT_END_CREDITS_PROGRAMMER"), C("name", "Bob Kang"),
+	C("role", "FRONT_END_CREDITS_INTERNAL_QA"), C("name", "George Addo"),
+	C("role", "FRONT_END_CREDITS_MARKETING_AND_PROMOTIONS"), C("name", "Dawn Pinkney"),
+	C("role", "FRONT_END_CREDITS_COMMERCIAL_DIRECTOR"), C("name", "Ian Turnbull"),
+	C("role", "FRONT_END_CREDITS_MANAGING_DIRECTOR"), C("name", "David Bailey"),
+	C("heading", "FRONT_END_CREDITS_EMPIRE"),
+	C("role", "FRONT_END_CREDITS_PRODUCER"), C("name", "Iain Hancock"),
+	C("role", "FRONT_END_CREDITS_QA_MANAGER"), C("name", "Dave Cleaveley"),
+	C("role", "FRONT_END_CREDITS_LEAD_TESTER"), C("name", "Phil Octave"),
+	C("role", "FRONT_END_CREDITS_ASSISTANT_LEAD"), C("name", "Richard Naughten"), C("name", "Chris Matlub"),
+	C("role", "FRONT_END_CREDITS_QA"), C("name", "Gareth West"), C("name", "Mark Jones"), C("name", "Ryan Kalis"),
+	C("name", "Darren T Bennett"), C("name", "Vernon Richards"), C("name", "Olivier Banal"),
+	C("role", "FRONT_END_CREDITS_LOCALISATION_MANAGER"), C("name", "Jayshree Mistry"),
+	C("role", "FRONT_END_CREDITS_INSTALLER_PROGRAMMING"), C("name", "Dan Clarke"),
+	C("role", "FRONT_END_CREDITS_ADDITIONAL_ARTWORK"), C("name", "Ben Willsher"), C("name", "Steve Packer"), C("name", "Dave Swan"),
+	C("role", "FRONT_END_CREDITS_MUSIC_SPEECH_SFX"), C("name", "Earcom Ltd., Paul Weir"),
+	C("note", "This product contains software technology licensed from GameSpy Industries, Inc. (c) 1999-2003 GameSpy Industries, Inc. GameSpy and the \"Powered by GameSpy\" design are trademarks of GameSpy Industries, Inc. All rights reserved."),
+	C("heading", "wkbre2"),
+	C("role", "Engine reimplementation"), C("name", "AdrienTD"),
+	C("role", "Modernization fork (with AI and reverse engineering)"), C("name", "TobiWahnKenobi"),
+}
+
+local creditsState = { start = 0 }
+Screens.credits = {
+	background = sunsetBackground,
+	open = function() creditsState.start = getTime() end,
+	draw = function()
+		title(T("FRONT_END_CREDITS_TITLE"))
+		local top, bottom = Y(80), Y(1010)
+		-- a dark column behind the text, readable over the bright sky
+		drawRect(X(560), top, L(800), bottom - top, 0xA0000000)
+		drawFrame(X(560), top, L(800), bottom - top, PANEL_BORDER, L(2))
+		pushClip(0, top, W, bottom - top)
+		-- from below the window upwards, 50 pixels (of 1080) a second, then again
+		local speed = L(50)
+		local y = bottom - (getTime() - creditsState.start) * speed
+		local function line(font, text, colour, gap)
+			for _, l in ipairs(wrapText(font, text, L(1200))) do
+				local h = fontHeight(font, S)
+				if y + h > top and y < bottom then centredText(font, l, 0, y, W, h, colour) end
+				y = y + h
+			end
+			y = y + (gap or 0)
+		end
+		for i, entry in ipairs(CREDITS) do
+			local kind, text = entry[1], entry[2]
+			local resolved = string.match(text, "^FRONT_END_") and T(text) or text
+			if kind == "heading" then
+				if i > 1 then y = y + L(60) end
+				line(FONT_TITLE, resolved, 0xFF9CE6F0, L(30))
+			elseif kind == "role" then
+				y = y + L(18)
+				line(FONT_LIST, resolved, YELLOW, L(4))
+			elseif kind == "name" then
+				line(FONT_TEXT, resolved, WHITE)
+			else
+				y = y + L(60)
+				line(FONT_LIST, resolved, GREY)
+			end
+		end
+		popClip()
+		if y < top then creditsState.start = getTime() end
+		if button(T("FRONT_END_BUTTON_BACK"), X(869), Y(1032), L(182), L(24)) then pop() end
 	end,
 }
 
