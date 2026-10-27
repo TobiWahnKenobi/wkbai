@@ -1011,6 +1011,14 @@ void Test_Stampdown()
 				const Vector3 open = buildings[0]->position + Vector3(60, 0, 60);
 				const auto plan = StampdownPlan::getStampdownPlan(&server, player, windmill, open, Vector3(0, 0, 0));
 				printf("STAMPDOWN open %d\n", (int)plan.status);
+				// a field on a field (fields are passable, but may not share tiles)
+				if (const GameObjBlueprint* field = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm")) {
+					const auto first = StampdownPlan::getStampdownPlan(&server, player, field, open, Vector3(0, 0, 0));
+					ServerGameObject* placed = server.spawnObject(field, player->dyncast<ServerGameObject>(), open, Vector3(0, 0, 0));
+					const auto second = StampdownPlan::getStampdownPlan(&server, player, field, open + Vector3(5, 0, 5), Vector3(0, 0, 0));
+					printf("STAMPDOWN field on open ground %d, on a field %d\n", (int)first.status, (int)second.status);
+					server.deleteObject(placed);
+				}
 			}
 		}
 	}

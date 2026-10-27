@@ -1916,6 +1916,10 @@ void ClientInterface::iter()
 				// where it can't stand (on another building), red; the server refuses it too
 				if (plan.status != StampdownPlan::Status::Valid)
 					test.flags |= SceneEntity::SEFLAG_BLOCKED;
+				// a field (its whole footprint passable) shows green where it can be placed
+				else if (const Footprint* fp = stampdownBlueprint->footprint; fp && !fp->tiles.empty()
+					&& std::all_of(fp->tiles.begin(), fp->tiles.end(), [](const auto& t) { return t.mode != 0; }))
+					test.flags |= SceneEntity::SEFLAG_PLACEABLE;
 				// its range circles, the values those of the player ("run on player!" in the game set)
 				{
 					CliScriptContext ctx{ client, stampdownPlayer.get() };

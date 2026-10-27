@@ -21,10 +21,15 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 	};
 
 	const bool civic = blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC || blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE;
+	// walls, towers and gatehouses: their passable tiles (a gateway, a wall walk) may share
+	auto isWallLike = [](int type) {
+		return type == Tags::BUILDINGTYPE_GATEHOUSE || (type >= Tags::BUILDINGTYPE_TOWER && type <= Tags::BUILDINGTYPE_WALL_CROSSROADS);
+	};
 
 	// The footprint's tiles must lie on the playable map and be free of other buildings, as
 	// the new building would take them (CommonGameState::updateOccupiedTiles). Passable tiles
-	// (such as a gateway) may share a tile with another building's passable tile; civic
+	// of a wall, tower or gatehouse (such as a gateway) may share a tile with another building's
+	// passable tile (not a field's with another field's, though fields are passable); civic
 	// buildings may stand on walls, which they replace.
 	if (const Footprint* fp = blueprint->footprint; fp && gameState->tiles && gameState->terrain) {
 		const auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
@@ -44,7 +49,7 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				continue;
 			if (civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes))
 				continue;
-			if (to.mode && tile.buildingPassable)
+			if (to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType)))
 				continue;
 			plan.status = Status::InvalidOccupied;
 			return plan;

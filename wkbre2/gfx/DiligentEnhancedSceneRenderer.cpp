@@ -132,6 +132,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 	}
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Color.rgb *= float3(1.0, 0.25, 0.25);
+	if (EntityFlags & 16) // SEFLAG_PLACEABLE
+		output.Color.rgb *= float3(0.35, 1.0, 0.35);
 	output.Texcoord = Texcoord;
 	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
 	output.Fog = FogAmount(worldPos, distance(worldPos, FogCamera.xyz));
