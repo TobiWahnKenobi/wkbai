@@ -14,6 +14,8 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
+#include <atomic>
+#include <string>
 #include "MovementController.h"
 #include "AIController.h"
 #include "FormationController.h"
@@ -159,6 +161,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool saveGame(const char* filename);
 	// what the game was loaded from, for saving
 	std::string gameSetFile, mapFile;
+	// The Kingmaker campaign: CONQUER_LEVEL (the province is won, the game ends) and
+	// UPDATE_USER_PROFILE (the USER object's items, kept in the campaign profile)
+	std::atomic<bool> levelConquered = false;
+	bool userProfileUpdated = false;
+	std::map<std::string, float> userProfileItems;
+	// The USER object (under the first player, as FINDER_USER), or null
+	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
 	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation);
 	ServerGameObject* stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation,

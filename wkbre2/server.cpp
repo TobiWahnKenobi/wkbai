@@ -1353,6 +1353,15 @@ void Server::startLevel()
 	walk(getLevel(), walk);
 }
 
+ServerGameObject* Server::findUser()
+{
+	if (ServerGameObject* first = findObject(1027))
+		for (auto& [type, children] : first->children)
+			if (type.bpClass() == Tags::GAMEOBJCLASS_USER && !children.empty())
+				return children[0]->dyncast<ServerGameObject>();
+	return nullptr;
+}
+
 void Server::addClient(NetLink* link)
 {
 	clientLinks.push_back(link);

@@ -569,6 +569,27 @@ struct ActionNop : Action {
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {}
 };
 
+// The Kingmaker campaign: the province is won; the game goes back to the campaign map
+struct ActionConquerLevel : Action {
+	virtual void run(SrvScriptContext* ctx) override { ctx->server->levelConquered = true; }
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// The Kingmaker campaign: the USER object's items go into the player's campaign profile
+struct ActionUpdateUserProfile : Action {
+	virtual void run(SrvScriptContext* ctx) override {
+		Server* server = ctx->server;
+		ServerGameObject* user = server->findUser();
+		if (!user)
+			return;
+		server->userProfileItems.clear();
+		for (const auto& [item, value] : user->items)
+			server->userProfileItems[server->gameSet->items.names.getString(item)] = value;
+		server->userProfileUpdated = true;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
 struct ActionSwitchAppearance : Action {
 	int appear;
 	std::unique_ptr<ObjectFinder> finder;
@@ -1661,11 +1682,9 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_SEND_CHAT_MESSAGE:
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER:
 	case Tags::ACTION_SET_CHAT_PERSONALITY:
-	case Tags::ACTION_UPDATE_USER_PROFILE:
 	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_BOOT_LEVEL:
 	case Tags::ACTION_EXIT_TO_MAIN_MENU:
-	case Tags::ACTION_CONQUER_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:
@@ -1681,6 +1700,8 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:
 	case Tags::ACTION_REGISTER_VICTOR:
 		action = new ActionNop; break;
+	case Tags::ACTION_CONQUER_LEVEL: action = new ActionConquerLevel; break;
+	case Tags::ACTION_UPDATE_USER_PROFILE: action = new ActionUpdateUserProfile; break;
 		//
 	default: action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}

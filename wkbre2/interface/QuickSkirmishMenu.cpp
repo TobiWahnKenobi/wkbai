@@ -222,7 +222,13 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			ServerGameObject* userObject = server.createObject(userBlueprint);
 			userObject->setParent(firstPlayerObject);
 
-			if (isWKBattles) {
+			if (isWKBattles && campaignProfile && !campaignUserItems.empty()) {
+				// carried over from the provinces conquered before
+				setItemByName(level, "Skirmish Campaign Level", 1.0f);
+				for (const auto& [item, value] : campaignUserItems)
+					setItemByName(userObject, item.c_str(), value);
+			}
+			else if (isWKBattles) {
 				setItemByName(level, "Skirmish Campaign Level", 1.0f);
 				setItemByName(userObject, "Food", startFood);
 				setItemByName(userObject, "Wood", startWood);

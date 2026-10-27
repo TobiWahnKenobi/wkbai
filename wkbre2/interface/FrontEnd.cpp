@@ -4,6 +4,7 @@
 
 #include "FrontEnd.h"
 #include "MenuOptions.h"
+#include "CampaignProfile.h"
 #include "../gfx/BitmapFont.h"
 #include "../gfx/bitmap.h"
 #include "../gfx/renderer.h"
@@ -33,6 +34,7 @@ namespace {
 	struct Image {
 		texture tex = nullptr;
 		int width = 0, height = 0;
+		std::vector<uint8_t> alpha; // kept for imageAlpha (hit tests on shaped images)
 	};
 
 	// An AI General of the original (a PLAYER blueprint in AI_Personalities.gsf)
@@ -115,6 +117,11 @@ struct FrontEnd::Impl {
 				Bitmap bmp = Bitmap::loadBitmap(path.c_str());
 				it->second.width = bmp.width;
 				it->second.height = bmp.height;
+				if (bmp.format == BMFORMAT_B8G8R8A8 || bmp.format == BMFORMAT_R8G8B8A8) {
+					it->second.alpha.resize((size_t)bmp.width * bmp.height);
+					for (size_t i = 0; i < it->second.alpha.size(); i++)
+						it->second.alpha[i] = bmp.pixels[i * 4 + 3];
+				}
 				it->second.tex = gfx->CreateTexture(bmp, 1);
 			}
 			else
@@ -226,6 +233,13 @@ struct FrontEnd::Impl {
 			const Image& img = image(path);
 			return std::make_tuple(img.width, img.height);
 		});
+		// The alpha (0..255) of an image's pixel, for hit tests on shaped images (0 outside)
+		lua.set_function("imageAlpha", [this](const std::string& path, int x, int y) {
+			const Image& img = image(path);
+			if (x < 0 || y < 0 || x >= img.width || y >= img.height || img.alpha.empty())
+				return 0;
+			return (int)img.alpha[(size_t)y * img.width + x];
+		});
 		lua.set_function("drawRect", [this](float x, float y, float w, float h, uint32_t colour) {
 			drawList->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), colour);
 		});
@@ -278,6 +292,43 @@ struct FrontEnd::Impl {
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
 		lua.set_function("getCurrentSave", [this]() { return currentSave; });
+
+		// A text file of the game's data (data.bcp, mods), or nil: lets the script read game data
+		// such as Campaigns\\Kingmaker.cam
+		lua.set_function("readDataFile", [this](const std::string& path) -> sol::object {
+			if (!FileExists(path.c_str()))
+				return sol::lua_nil;
+			char* data = nullptr;
+			int size = 0;
+			LoadFile(path.c_str(), &data, &size, 1);
+			std::string text(data, size);
+			free(data);
+			return sol::make_object(lua, text);
+		});
+
+		// Kingmaker campaign profiles (CampaignProfile.h)
+		lua.set_function("getCampaignProfiles", []() { return sol::as_table(CampaignProfile::list()); });
+		lua.set_function("getCampaignProfile", [this](const std::string& name) -> sol::object {
+			CampaignProfile p;
+			if (!CampaignProfile::load(name, p))
+				return sol::lua_nil;
+			sol::table t = lua.create_table();
+			t["name"] = p.name;
+			t["conquered"] = sol::as_table(p.conquered);
+			sol::table items = lua.create_table();
+			for (const auto& [item, value] : p.items)
+				items[item] = value;
+			t["items"] = items;
+			return t;
+		});
+		lua.set_function("createCampaignProfile", [](const std::string& name) {
+			CampaignProfile p;
+			if (CampaignProfile::load(name, p))
+				return false; // exists
+			p.name = name;
+			return p.save();
+		});
+		lua.set_function("deleteCampaignProfile", [](const std::string& name) { return CampaignProfile::remove(name); });
 
 		// Multiplayer lobby
 		lua.set_function("getLobbyGuests", [this]() {

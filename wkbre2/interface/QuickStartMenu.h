@@ -60,6 +60,8 @@ private:
 	uint64_t lobbySentTime = 0;
 	// Guest: the host to join ("address[:port]")
 	std::string joinTarget;
+	// Kingmaker campaign: the profile and province of the game being started or played
+	std::string campaignProfile, campaignProvince;
 	void updateLobby();
 	void lobbyTest();
 	std::string playerName() const;

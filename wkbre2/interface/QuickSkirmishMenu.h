@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <map>
 
 class Server;
 
@@ -25,6 +26,9 @@ public:
 		int team = 0;        // 0: no team
 	};
 	void setSlots(std::vector<Slot> newSlots) { slots = std::move(newSlots); }
+	// Kingmaker campaign: the USER object's items from the player's profile (none: a new one)
+	bool campaignProfile = false;
+	std::map<std::string, float> campaignUserItems;
 	// A game setting by name, as the skirmish menu sends them ("startFood", "mode", ...)
 	void setSetting(const std::string& name, int value);
 

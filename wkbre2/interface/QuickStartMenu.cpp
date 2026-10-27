@@ -33,6 +33,8 @@
 #include <tracy/Tracy.hpp>
 #include <algorithm>
 #include "../util/StriCompare.h"
+#include "CampaignProfile.h"
+#include "../gameset/gameset.h"
 #include <atomic>
 
 namespace {
@@ -240,6 +242,16 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	}
 	else if (request.action == "stop_hosting")
 		hosting = false;
+	else if (request.action == "campaign_play") {
+		// "<profile>|<province>", before the "slots" and "start" of the province's level
+		const size_t bar = request.arg.find('|');
+		campaignProfile = request.arg.substr(0, bar);
+		campaignProvince = bar == std::string::npos ? std::string() : request.arg.substr(bar + 1);
+		CampaignProfile profile;
+		const bool loaded = CampaignProfile::load(campaignProfile, profile);
+		skirmishMenu.campaignProfile = true;
+		skirmishMenu.campaignUserItems = loaded ? profile.items : std::map<std::string, float>();
+	}
 	else if (request.action == "start_multiplayer") {
 		selectSaveGame(request.arg);
 		modeChosen = MODE_MULTIPLAYER_HOST;
@@ -266,6 +278,31 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 
 void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string& leaveArg)
 {
+	// Kingmaker campaign: a won province goes into the profile, with the USER object's items
+	// (as UPDATE_USER_PROFILE kept them, else as they are now)
+	const bool conquered = leaveAction == "campaign_conquered";
+	if (conquered) {
+		CampaignProfile profile;
+		CampaignProfile::load(campaignProfile, profile);
+		profile.name = campaignProfile;
+		if (std::find(profile.conquered.begin(), profile.conquered.end(), campaignProvince) == profile.conquered.end())
+			profile.conquered.push_back(campaignProvince);
+		if (server->userProfileUpdated)
+			profile.items = server->userProfileItems;
+		else if (ServerGameObject* user = server->findUser()) {
+			profile.items.clear();
+			for (const auto& [item, value] : user->items)
+				profile.items[server->gameSet->items.names.getString(item)] = value;
+		}
+		printf("Campaign: %s conquered %s (%zu provinces): %s\n", campaignProfile.c_str(), campaignProvince.c_str(),
+			profile.conquered.size(), profile.save() ? "saved" : "not saved");
+	}
+	if (leaveAction != "restart") {
+		campaignProfile.clear();
+		campaignProvince.clear();
+		skirmishMenu.campaignProfile = false;
+		skirmishMenu.campaignUserItems.clear();
+	}
 	newSession();
 	hosting = false;
 	modeChosen = MODE_UNDEFINED;
@@ -275,6 +312,9 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		modeChosen = MODE_SINGLEPLAYER;
 	else if (leaveAction == "start")
 		handleRequest({ "start", leaveArg });
+	else if (conquered)
+		if (FrontEnd* fe = FrontEnd::get())
+			fe->open("campaignmap");
 }
 
 void QuickStartMenu::draw()
@@ -466,6 +506,9 @@ void QuickStartMenu::launchGame()
 		bool onServerUi = false;
 
 		while (!g_windowQuit && !cliui.wantsToLeave()) {
+			// Kingmaker campaign: the province is won (CONQUER_LEVEL)
+			if (server->levelConquered && !campaignProvince.empty())
+				cliui.leaveAction = "campaign_conquered";
 			client->tick();
 			netHandle();
 			if (g_keyPressed[SDL_SCANCODE_F1]) {
