@@ -1551,7 +1551,9 @@ void Server::tick()
 				chatMessages.push_back(msg);
 				printf("Server got message: %s\n", msg.c_str());
 
-				if (msg.size() >= 2 && msg[0] == '!') {
+				// "!<action>": a script action, from the host's own client only (tests, the debugger),
+				// not from a guest
+				if (msg.size() >= 2 && msg[0] == '!' && clientIndex == 0) {
 					GSFileParser gsf = GSFileParser(msg.c_str() + 1);
 					Action* act = ReadAction(gsf, *gameSet);
 					SrvScriptContext ctx(this, player);

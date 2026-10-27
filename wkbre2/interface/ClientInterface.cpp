@@ -928,6 +928,84 @@ namespace {
 	};
 }
 
+void ClientInterface::chatFrame()
+{
+	const uint32_t now = SDL_GetTicks();
+	if (chatSeen == (size_t)-1)
+		chatSeen = client->chatMessages.size();
+	for (; chatSeen < client->chatMessages.size(); chatSeen++) {
+		const std::string& msg = client->chatMessages[chatSeen];
+		if (!msg.empty() && msg[0] != '!') // script lines (tests, the debugger)
+			chatLines.push_back({ msg, now });
+	}
+	if (chatLines.size() > 50)
+		chatLines.erase(chatLines.begin(), chatLines.end() - 50);
+	// test runs: "lobbyTest": { ..., "gameChat": "<text>" } says it once the game has run 3 seconds
+	if (static bool said = false; !said && client->timeManager.currentTime > 3.0f && client->serverLink) {
+		said = true;
+		if (const std::string text = g_settings.value("lobbyTest", nlohmann::json()).value("gameChat", std::string()); !text.empty())
+			client->sendMessage(g_settings.value("playerName", std::string("Player")) + ": " + text);
+	}
+
+	const bool enter = g_keyPressed[SDL_SCANCODE_RETURN] || g_keyPressed[SDL_SCANCODE_KP_ENTER];
+	if (chatOpen) {
+		if (g_keyPressed[SDL_SCANCODE_ESCAPE])
+			chatOpen = false;
+		else if (enter) {
+			if (chatInput[0] && client->serverLink)
+				client->sendMessage(g_settings.value("playerName", std::string("Player")) + ": " + chatInput);
+			chatOpen = false;
+		}
+		// while typing, the game gets no keys (Esc doesn't open the menu)
+		std::fill(std::begin(g_keyDown), std::end(g_keyDown), false);
+		std::fill(std::begin(g_keyPressed), std::end(g_keyPressed), false);
+	}
+	else if (enter && !ImGui::GetIO().WantTextInput) {
+		chatOpen = chatFocus = true;
+		chatInput[0] = 0;
+		g_keyPressed[SDL_SCANCODE_RETURN] = g_keyPressed[SDL_SCANCODE_KP_ENTER] = false;
+	}
+
+}
+
+// The chat's messages and its typing line (in the ImGui frame)
+void ClientInterface::chatDraw()
+{
+	const uint32_t now = SDL_GetTicks();
+	// the last messages (all of the last ones while typing), fading out after 15 seconds
+	const ImGuiIO& io = ImGui::GetIO();
+	const float size = std::max(14.0f, std::round(io.DisplaySize.y / 48.0f));
+	const float x = std::round(io.DisplaySize.x * 0.01f);
+	float y = std::round(io.DisplaySize.y * 0.1f);
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	const size_t first = chatLines.size() > 8 ? chatLines.size() - 8 : 0;
+	for (size_t i = first; i < chatLines.size(); i++) {
+		const uint32_t age = now - chatLines[i].second;
+		if (!chatOpen && age > 15000)
+			continue;
+		const int alpha = chatOpen ? 255 : (int)(255 * std::clamp((15000 - age) / 2000.0f, 0.0f, 1.0f));
+		const char* text = chatLines[i].first.c_str();
+		dl->AddText(ImGui::GetFont(), size, ImVec2(x + 1, y + 1), IM_COL32(0, 0, 0, alpha), text);
+		dl->AddText(ImGui::GetFont(), size, ImVec2(x, y), IM_COL32(255, 230, 150, alpha), text);
+		y += std::round(size * 1.15f);
+	}
+	if (chatOpen) {
+		ImGui::SetNextWindowPos(ImVec2(x, y + size * 0.3f));
+		ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.4f, 0));
+		ImGui::SetNextWindowBgAlpha(0.6f);
+		ImGui::Begin("##chat", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+		ImGui::TextUnformatted("Say:");
+		ImGui::SameLine();
+		if (chatFocus) {
+			ImGui::SetKeyboardFocusHere();
+			chatFocus = false;
+		}
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputText("##say", chatInput, sizeof(chatInput));
+		ImGui::End();
+	}
+}
+
 void ClientInterface::iter()
 {
 	ZoneScoped;
@@ -953,6 +1031,8 @@ void ClientInterface::iter()
 
 	// The in-game menu (Esc): while it is open, it gets the frame's input and the game none
 	FrontEnd* frontEnd = FrontEnd::get();
+	if (!singlePlayer && client->getLevel() && !(frontEnd && frontEnd->isOpen()))
+		chatFrame();
 	if (frontEnd && !frontEnd->isOpen() && g_keyPressed[SDL_SCANCODE_ESCAPE] && client->getLevel()) {
 		frontEnd->setSinglePlayer(singlePlayer);
 		frontEnd->setCanSave((bool)saveGame);
@@ -1325,6 +1405,8 @@ void ClientInterface::iter()
 	TracyCZoneN(zoneUi, "UI (ImGui and UI script)", 1);
 
 	ImGuiImpl_NewFrame();
+	if (!singlePlayer && client->getLevel() && !(frontEnd && frontEnd->isOpen()))
+		chatDraw();
 	if (settingsOn)
 		drawSettingsWindow(&settingsOn);
 	if (g_renderSettings.showFps) {

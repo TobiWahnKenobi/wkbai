@@ -79,6 +79,14 @@ private:
 		Command* command = nullptr;
 	} formationDrag;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
+	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the
+	// messages show for a while at the top left
+	void chatFrame(); // the keys and the messages
+	void chatDraw();
+	bool chatOpen = false, chatFocus = false;
+	char chatInput[200] = {};
+	size_t chatSeen = (size_t)-1; // client->chatMessages shown so far (at first: the lobby's, not shown)
+	std::vector<std::pair<std::string, uint32_t>> chatLines; // a message, when it came (SDL ticks)
 	bool menuPausedGame = false;
 	int camrotoffx, camrotoffy;
 	float camrotorix, camrotoriy;
