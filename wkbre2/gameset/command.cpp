@@ -63,6 +63,8 @@ void Command::parse(GSFileParser &gsf, GameSet &gs) {
 			if (flagName == "CAN_BE_ASSIGNED_TO_SPAWNED_UNITS") {
 				canBeAssignedToSpawnedUnits = true;
 			}
+			else if (flagName == "ALWAYS_OFFERED_BY_FORMATION")
+				alwaysOfferedByFormation = true;
 		}
 		else if (strtag == "END_COMMAND")
 			return;

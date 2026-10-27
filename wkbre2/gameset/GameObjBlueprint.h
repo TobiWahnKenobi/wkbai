@@ -113,6 +113,9 @@ struct GameObjBlueprint {
 	// minimap's display toggles show the object. 0 = always shown.
 	enum { MINIMAP_MILITARY = 1, MINIMAP_ECONOMIC = 2, MINIMAP_RESOURCE = 4 };
 	uint8_t minimapCategories = 0;
+	// DISPLAY_CATEGORY (ECONOMIC, MILITARY, ALIGNMENT): the build menu tab of a building (the
+	// original offers no build command for a building without one)
+	std::string displayCategory;
 
 	// The original's range circles: a band texture (Textures\Border Bands) drawn on the ground
 	// around the object, its radius a value in metres. DISPLAY_SPRITE_WHEN_SELECTED: while the

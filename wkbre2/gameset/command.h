@@ -29,6 +29,9 @@ struct Command {
 	std::string defaultHint;
 	std::vector<ValueDeterminer*> defaultHintValues;
 	bool canBeAssignedToSpawnedUnits = false;
+	// FLAG ALWAYS_OFFERED_BY_FORMATION: a formation offers it even when none of its members does
+	// (the others a formation offers only when a member offers them too)
+	bool alwaysOfferedByFormation = false;
 
 	void parse(GSFileParser &gsf, GameSet &gs);
 	bool canBeExecuted(ServerGameObject* self, ServerGameObject* target = nullptr) const;

@@ -347,6 +347,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}
+		else if (strtag == "DISPLAY_CATEGORY") {
+			displayCategory = gsf.nextString();
+		}
 		else if (strtag == "MINIMAP_DISPLAY_CATEGORY") {
 			const std::string category = gsf.nextString();
 			if (category == "MILITARY") minimapCategories |= MINIMAP_MILITARY;

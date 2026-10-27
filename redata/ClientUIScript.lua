@@ -99,6 +99,9 @@ function CCUI_PerFrame()
 
 		-- Commands
 
+		-- the building selection tab ("ECONOMIC", "MILITARY", "ALIGNMENT")
+		buildTab = buildTab or "ECONOMIC"
+
 		local commandButton = function (x, y, w, h, cs, assignMode, count)
 			local mx = getMouseX()
 			local my = getMouseY()
@@ -156,18 +159,43 @@ function CCUI_PerFrame()
 		end
 
 		if bp.bpClass == GAMEOBJCLASS_CHARACTER then
-			-- Build commands
+			-- Build commands, as the original's building selection window: three tabs (the
+			-- DISPLAY_CATEGORY of the building), two columns of buttons in a frame. A building
+			-- without a category isn't offered.
 			local vec = listSelectionCommands(function (x) return string.find(x, "Build ") == 1 end )
-			for i = 1,#vec do
-				local cs = vec[i]
-				local hi = 64
-				if #cs.texpath > 0 then
-					x = 24 + ((i-1) % 5) * (hi+2)
-					y = 64 + ((i-1) // 5) * (hi+2)
+			if #vec > 0 then
+				local k = 64 / 58 -- the original's 58 pixel buttons (at 1024 x 768) as ours of 64
+				local px, py = 0, 44
+				local art = "Interface\\InGame\\Top Panel\\"
+				local tabs = { { "MILITARY", "Military Building Button Highlighted.tga", 4, "TOOLTIP_MILITARY_BUILDINGS" },
+					{ "ALIGNMENT", "Civic Building Button Highlighted.tga", 42, "TOOLTIP_ALIGNMENT_BUILDINGS" },
+					{ "ECONOMIC", "Economic Building Button Highlighted.tga", 80, "TOOLTIP_ECONOMIC_BUILDINGS" } }
+				drawImage(px, py, 150 * k, 56 * k, art .. "Panel with Building Tabs.tga")
+				for _, tab in ipairs(tabs) do
+					local tx, ty, ts = px + tab[3] * k, py + 12 * k, 31 * k
+					local mx, my = getMouseX(), getMouseY()
+					local over = tx <= mx and mx < tx + ts and ty <= my and my < ty + ts
+					if over then
+						setTooltip(getText(tab[4]))
+						if handleButton() == 1 then buildTab = tab[1] end
+					end
+					if buildTab == tab[1] or over then drawImage(tx, ty, ts, ts, art .. tab[2]) end
+					if buildTab == tab[1] then drawImage(tx - 3.5 * k, ty - 5 * k, 38 * k, 42 * k, art .. "Tab Marker.tga") end
+				end
+				local shown = {}
+				for i = 1,#vec do
+					if #vec[i].texpath > 0 and getCommandBuildCategory(vec[i].command) == buildTab then shown[#shown + 1] = vec[i] end
+				end
+				local rows = math.max(7, (#shown + 1) // 2)
+				local fy = py + 56 * k
+				drawImage(px, fy, 127 * k, 424 * k * rows / 7, art .. "Frame.tga")
+				for i, cs in ipairs(shown) do
+					x = px + (11 + ((i-1) % 2) * 58) * k - 7 * k
+					y = fy + (2 + ((i-1) // 2) * 58) * k
 					local assignMode = ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE
 					if isCtrlHeld() then assignMode = ORDERASSIGNMODE_DO_FIRST
 					elseif isShiftHeld() then assignMode = ORDERASSIGNMODE_DO_LAST end
-					commandButton(x, y, hi, hi, cs, assignMode, 1)
+					commandButton(x, y, 56 * k, 56 * k, cs, assignMode, 1)
 				end
 			end
 		elseif bp.bpClass == GAMEOBJCLASS_BUILDING then

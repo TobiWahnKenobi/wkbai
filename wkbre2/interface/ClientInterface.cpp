@@ -1470,6 +1470,11 @@ void ClientInterface::iter()
 		lua.set("buttonHighlighted", sol::readonly(&Command::buttonHighlighted));
 		lua.set("buttonImpossible", sol::readonly(&Command::buttonImpossible));
 		lua.set("buttonWait", sol::readonly(&Command::buttonWait));
+		lua.set_function("getText", [this](const std::string& key) { return lang.getText(key); });
+		// The build menu tab of a build command: its building's DISPLAY_CATEGORY ("" for none)
+		lua.set_function("getCommandBuildCategory", [](const Command* cmd) -> std::string {
+			return (cmd && cmd->stampdownObject) ? cmd->stampdownObject->displayCategory : std::string();
+		});
 		lua.set_function("getCommandHint",
 			[this](const Command* cmd, uint32_t objid) -> std::string {
 				ClientGameObject* obj = client->findObject(objid);
@@ -1547,6 +1552,18 @@ void ClientInterface::iter()
 				for (Command* cmd : sel->blueprint->offeredCommands) {
 					if (cmd->buttonAvailable.empty() && cmd->buttonEnabled.empty())
 						continue;
+					// a formation offers a command only if one of its members does (Formations.cpp:
+					// "These commands will only be offered if the units offer them")
+					if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && !cmd->alwaysOfferedByFormation) {
+						bool offered = false;
+						for (const auto& [type, members] : sel->children)
+							if (!members.empty()) {
+								const auto& memberCommands = members[0]->blueprint->offeredCommands;
+								offered = offered || std::find(memberCommands.begin(), memberCommands.end(), cmd) != memberCommands.end();
+							}
+						if (!offered)
+							continue;
+					}
 					const std::string cmdname = client->gameSet->commands.names.getString(cmd->id);
 					if (!filter(cmdname))
 						continue;
