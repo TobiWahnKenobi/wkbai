@@ -12,6 +12,8 @@
 #include "gameset/ScriptContext.h"
 #include "gameset/gameset.h"
 #include "terrain.h"
+#include "gameset/Footprint.h"
+#include "gameset/GameObjBlueprint.h"
 #include "NNSearch.h"
 
 void Order::init()
@@ -598,6 +600,29 @@ void MoveTask::onUpdate()
 		destination = go->movementController.startMovement(dest);
 }
 
+// Horizontal distance from a point to the nearest tile of a building's footprint (0 inside it);
+// -1 when the object isn't a building with a footprint
+static float FootprintDistance(const Vector3& point, const ServerGameObject* building)
+{
+	if (!building || building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !building->blueprint->footprint)
+		return -1.0f;
+	const Footprint* fp = building->blueprint->footprint;
+	if (fp->tiles.empty())
+		return -1.0f;
+	const auto rotOrigin = fp->rotateOrigin(building->orientation.y);
+	const int ox = (int)((building->position.x - rotOrigin.first) / 5.0f);
+	const int oz = (int)((building->position.z - rotOrigin.second) / 5.0f);
+	float best = 1e30f;
+	for (const auto& to : fp->tiles) {
+		const auto [rx, rz] = to.rotate(building->orientation.y);
+		const float x0 = (ox + rx) * 5.0f, z0 = (oz + rz) * 5.0f;
+		const float dx = std::max({ x0 - point.x, 0.0f, point.x - (x0 + 5.0f) });
+		const float dz = std::max({ z0 - point.z, 0.0f, point.z - (z0 + 5.0f) });
+		best = std::min(best, dx * dx + dz * dz);
+	}
+	return std::sqrt(best);
+}
+
 void ObjectReferenceTask::onStart()
 {
 	this->proximitySatisfied = false; // might need to do this on resumption too
@@ -658,8 +683,16 @@ void ObjectReferenceTask::onUpdate()
 		// a follower is there while it stands near the target's current goal (the last
 		// movement's destination stays behind when the target walks on)
 		constexpr float FOLLOW_TOLERANCE = 1.5f;
+		// A building with a footprint is reached from its edge (its footprint's tiles), not its
+		// centre: builders, deliverers and attackers stand around it (the original sends them to
+		// its activity path) and a large building's centre can't be come near
+		const float edge = FootprintDistance(go->position, target.get());
 		const bool arrived = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
-			: (prox < 0.0f || (go->position - destination).sqlen2xz() < prox * prox);
+			: (prox < 0.0f || (edge >= 0.0f
+				// within the proximity of the edge, or, when the path ends a little further out
+				// (its last tile next to the footprint was taken), within one tile more
+				? (edge < this->proximity || (!go->movementController.isMoving() && edge < this->proximity + 5.0f))
+				: (go->position - destination).sqlen2xz() < prox * prox));
 		if (arrived) {
 			this->startTriggers();
 			if (go->movementController.isMoving())

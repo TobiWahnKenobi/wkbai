@@ -43,6 +43,9 @@
 #include <sol/sol.hpp>
 #include "FrontEnd.h"
 #include "../gameset/finder.h"
+#include "../gameset/Footprint.h"
+#include "../server.h"
+#include "../gameset/OrderBlueprint.h"
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
@@ -2011,6 +2014,96 @@ void ClientInterface::iter()
 		gfx->EndDrawing();
 	}
 	g_frameStats.frameEnd();
+	// Test runs: "benchmark": { ..., "census": <seconds> } prints each player's characters and
+	// buildings by type every that many seconds of game time ("CENSUS t=... player ...")
+	if (BenchmarkEnabled() && client->getLevel()) {
+		static float nextCensus = 0.0f;
+		const float every = g_settings.value("benchmark", nlohmann::json()).value("census", 0.0f);
+		if (every > 0.0f && client->timeManager.currentTime >= nextCensus) {
+			nextCensus = client->timeManager.currentTime + every;
+			for (const auto& [type, players] : client->getLevel()->children) {
+				for (CommonGameObject* player : players) {
+					if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+						continue;
+					std::map<std::string, int> counts;
+					int characters = 0, buildings = 0;
+					auto count = [&](CommonGameObject* obj, auto& self) -> void {
+						for (const auto& [ctype, children] : obj->children)
+							for (CommonGameObject* child : children) {
+								const int cls = child->blueprint->bpClass;
+								if (cls == Tags::GAMEOBJCLASS_CHARACTER) {
+									characters++;
+									counts[child->blueprint->name]++;
+									// what they are doing (single player: the local server's objects)
+									if (Server* server = Server::instance)
+										if (ServerGameObject* sobj = server->findObject(child->id)) {
+											const Order* order = sobj->orderConfig.getCurrentOrder();
+											counts["order:" + (order ? server->gameSet->orders.getString(order->blueprint->bpid) : std::string("idle"))]++;
+										}
+								}
+								else if (cls == Tags::GAMEOBJCLASS_BUILDING) {
+									buildings++;
+									counts[child->blueprint->name]++;
+									// resources stored in buildings (villages, warehouses)
+									for (int item : { Tags::PDITEM_FOOD, Tags::PDITEM_WOOD, Tags::PDITEM_GOLD })
+										if (const float v = child->getItem(item); v != 0.0f)
+											counts[std::string("stock:") + child->blueprint->name + ":" + Tags::PDITEM_tagDict.getStringFromID(item)] += (int)v;
+								}
+								self(child, self);
+							}
+					};
+					count(player, count);
+					printf("CENSUS t=%.0f player %u (%s): food %.0f wood %.0f gold %.0f, %d characters, %d buildings:", client->timeManager.currentTime,
+						player->id, player->blueprint->name.c_str(), player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD),
+						player->getItem(Tags::PDITEM_GOLD), characters, buildings);
+					for (const auto& [name, n] : counts)
+						printf(" %s=%d", name.c_str(), n);
+					printf("\n");
+				}
+			}
+			fflush(stdout);
+		}
+		// "traceOrder": "<order>": every 2 s of game time, the first unit doing that order (its
+		// task, target and items), to follow a unit's work in a test run ("TRACE t=...")
+		const std::string traceOrder = g_settings.value("benchmark", nlohmann::json()).value("traceOrder", std::string());
+		static float nextTrace = 0.0f;
+		static uint32_t tracedId = 0;
+		if (!traceOrder.empty() && Server::instance && client->timeManager.currentTime >= nextTrace) {
+			nextTrace = client->timeManager.currentTime + 2.0f;
+			Server* server = Server::instance;
+			const int orderIndex = server->gameSet->orders.names.getIndex(traceOrder);
+			ServerGameObject* traced = tracedId ? server->findObject(tracedId) : nullptr;
+			if (!traced && orderIndex >= 0) {
+				for (const auto& [id, obj] : server->idmap) {
+					auto* s = obj->dyncast<ServerGameObject>();
+					const Order* o = s->orderConfig.getCurrentOrder();
+					if (o && o->blueprint->bpid == orderIndex) { traced = s; tracedId = id; break; }
+				}
+			}
+			if (traced) {
+				std::string task = "-", target = "-";
+				float distance = -1.0f;
+				if (Order* o = traced->orderConfig.getCurrentOrder()) {
+					task = server->gameSet->orders.getString(o->blueprint->bpid);
+					if (Task* t = o->getCurrentTask()) {
+						task += " / " + server->gameSet->tasks.getString(t->blueprint->bpid);
+						if (ServerGameObject* tg = t->target.get()) {
+							target = tg->blueprint->name + " #" + std::to_string(tg->id) + " at (" + std::to_string((int)tg->position.x) + ","
+								+ std::to_string((int)tg->position.z) + ") footprint tiles " + std::to_string(tg->blueprint->footprint ? tg->blueprint->footprint->tiles.size() : 0);
+							distance = (tg->position - traced->position).len2xz();
+						}
+					}
+				}
+				printf("TRACE t=%.0f unit %u at (%.0f,%.0f) moving %d anim %d: %s -> %s dist %.1f items:", client->timeManager.currentTime, traced->id,
+					traced->position.x, traced->position.z, (int)traced->movement.isMoving(), traced->animationIndex, task.c_str(), target.c_str(), distance);
+				for (const auto& [item, value] : traced->items)
+					if (value != 0.0f)
+						printf(" %s=%g", server->gameSet->items.names.getString(item).c_str(), value);
+				printf("\n");
+				fflush(stdout);
+			}
+		}
+	}
 	BenchmarkFrameEnd(client->terrain && client->gameSet);
 	HandleWindow();
 
