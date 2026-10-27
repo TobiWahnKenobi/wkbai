@@ -164,6 +164,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// The Kingmaker campaign: CONQUER_LEVEL (the province is won, the game ends) and
 	// UPDATE_USER_PROFILE (the USER object's items, kept in the campaign profile)
 	std::atomic<bool> levelConquered = false;
+	// EXIT_TO_MAIN_MENU and BOOT_LEVEL "<level>" (the game endings, the tutorials' next lesson):
+	// the game ends; bootLevel is set before the flag
+	std::string bootLevel;
+	std::atomic<bool> exitToMenu = false, levelBooted = false;
 	bool userProfileUpdated = false;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null

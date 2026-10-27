@@ -569,6 +569,27 @@ struct ActionNop : Action {
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {}
 };
 
+// The game ends, back to the main menu (the campaign map in a campaign)
+struct ActionExitToMainMenu : Action {
+	virtual void run(SrvScriptContext* ctx) override { ctx->server->exitToMenu = true; }
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// The game ends and the level (from Save_Games) starts: the tutorials' next lesson or a repeat
+struct ActionBootLevel : Action {
+	std::string level;
+	virtual void run(SrvScriptContext* ctx) override {
+		ctx->server->bootLevel = level;
+		ctx->server->levelBooted = true;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		level = gsf.nextString(true);
+		// "Save_Games\x.lvl" or "x.lvl"
+		if (const size_t slash = level.find_last_of("\\/"); slash != std::string::npos)
+			level = level.substr(slash + 1);
+	}
+};
+
 // The Kingmaker campaign: the province is won; the game goes back to the campaign map
 struct ActionConquerLevel : Action {
 	virtual void run(SrvScriptContext* ctx) override { ctx->server->levelConquered = true; }
@@ -1683,8 +1704,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER:
 	case Tags::ACTION_SET_CHAT_PERSONALITY:
 	case Tags::ACTION_UNLOCK_LEVEL:
-	case Tags::ACTION_BOOT_LEVEL:
-	case Tags::ACTION_EXIT_TO_MAIN_MENU:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:
@@ -1701,6 +1720,8 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_REGISTER_VICTOR:
 		action = new ActionNop; break;
 	case Tags::ACTION_CONQUER_LEVEL: action = new ActionConquerLevel; break;
+	case Tags::ACTION_EXIT_TO_MAIN_MENU: action = new ActionExitToMainMenu; break;
+	case Tags::ACTION_BOOT_LEVEL: action = new ActionBootLevel; break;
 	case Tags::ACTION_UPDATE_USER_PROFILE: action = new ActionUpdateUserProfile; break;
 		//
 	default: action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;

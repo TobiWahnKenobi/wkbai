@@ -922,6 +922,16 @@ void ClientInterface::iter()
 			saveRequested(name);
 		}
 	}
+	// Test runs: "benchmark": { ..., "script": [seconds, "<action>"] } runs a script action (on the
+	// server, through the script chat) once the game has run that long
+	if (BenchmarkEnabled() && client->getLevel()) {
+		static bool ran = false;
+		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json()).value("script", nlohmann::json());
+		if (!ran && script.is_array() && script.size() == 2 && client->timeManager.currentTime > script[0].get<float>()) {
+			ran = true;
+			client->sendMessage("!" + script[1].get<std::string>());
+		}
+	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());

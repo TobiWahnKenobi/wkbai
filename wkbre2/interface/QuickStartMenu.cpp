@@ -332,7 +332,7 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		modeChosen = MODE_SINGLEPLAYER;
 	else if (leaveAction == "start")
 		handleRequest({ "start", leaveArg });
-	else if (conquered)
+	else if (conquered || leaveAction == "campaign_lost")
 		if (FrontEnd* fe = FrontEnd::get())
 			fe->open("campaignmap." + profileName);
 }
@@ -493,6 +493,7 @@ void QuickStartMenu::launchGame()
 		updateDiscordRPC((modeChosen == MODE_MULTIPLAYER_HOST) ? "Multiplayer (Host)" : "Singleplayer", savegames.at(savselected).c_str());
 		client->localServer = true;
 		std::string savfile = std::string("Save_Games\\") + savegames.at(savselected);
+		printf("Starting %s\n", savfile.c_str());
 		std::mutex srvMutex;
 		std::atomic<bool> stopServer = false;
 		std::thread srvThread([this, savfile, &srvMutex, &stopServer]() {
@@ -547,6 +548,13 @@ void QuickStartMenu::launchGame()
 			// Kingmaker campaign: the province is won (CONQUER_LEVEL)
 			if (server->levelConquered && !campaignProvince.empty())
 				cliui.leaveAction = "campaign_conquered";
+			// the scripts end the game: EXIT_TO_MAIN_MENU (in a campaign: back to its map), BOOT_LEVEL
+			else if (server->exitToMenu)
+				cliui.leaveAction = campaignProvince.empty() ? "exit_to_menu" : "campaign_lost";
+			else if (server->levelBooted) {
+				cliui.leaveAction = "start";
+				cliui.leaveArg = server->bootLevel;
+			}
 			// test runs: "campaignTest": { ..., "conquerAfter": seconds } runs the province's ending
 			// actions through the script chat ("!<action>")
 			if (static bool conquerSent = false; !conquerSent && !campaignProvince.empty() && client->getLevel()) {
