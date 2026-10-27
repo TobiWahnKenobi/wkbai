@@ -660,11 +660,11 @@ void ServerGameObject::setColor(int color)
 	Server::instance->sendToAll(msg);
 }
 
-void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int synchronizedTask)
+void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int synchronizedTask, float startTime)
 {
 	this->animationIndex = animationIndex;
 	this->animationVariant = animationVariant;
-	this->animStartTime = Server::instance->timeManager.currentTime;
+	this->animStartTime = startTime >= 0.0f ? startTime : Server::instance->timeManager.currentTime;
 	this->animClamped = isClamped;
 	this->animSynchronizedTask = synchronizedTask;
 	NetPacketWriter msg(NETCLIMSG_OBJECT_ANIM_SET);
@@ -679,6 +679,7 @@ void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int sync
 
 void ServerGameObject::startMovement(const Vector3 & destination)
 {
+	const bool wasMoving = movement.isMoving();
 	float speed = computeSpeed();
 	movement.startMovement(position, destination, Server::instance->timeManager.currentTime, speed);
 	currentSpeed = speed;
@@ -711,11 +712,24 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 	auto* currentAppearance = blueprint->getAppearance(subtype, appearance);
 	if (anim == -1 || !currentAppearance || currentAppearance->animations.count(anim) == 0)
 		anim = Server::instance->gameSet->animations.names["Move"];
-	setAnimation(anim);
+	// already walking with it (the next path segment, a formation member following its place),
+	// or stopped just now after walking with it: the walk goes on, not from its first frame again
+	const float now = Server::instance->timeManager.currentTime;
+	if (wasMoving && anim == animationIndex)
+		return;
+	if (anim == lastWalkAnim && lastWalkStop >= 0.0f && now - lastWalkStop < 0.5f)
+		setAnimation(anim, false, -1, lastWalkAnimStart);
+	else
+		setAnimation(anim);
 }
 
 void ServerGameObject::stopMovement()
 {
+	if (movement.isMoving()) {
+		lastWalkAnim = animationIndex;
+		lastWalkAnimStart = animStartTime;
+		lastWalkStop = Server::instance->timeManager.currentTime;
+	}
 	movement.stopMovement();
 	currentSpeed = 0.0f;
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STOPPED };

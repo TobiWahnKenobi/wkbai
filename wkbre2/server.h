@@ -58,9 +58,14 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void setOrientation(const Vector3 &orientation);
 	void setSubtypeAndAppearance(int new_subtype, int new_appearance);
 	void setColor(int color);
-	void setAnimation(int animationIndex, bool isClamped = false, int synchronizedTask = -1);
+	// startTime: when the animation began (< 0: now)
+	void setAnimation(int animationIndex, bool isClamped = false, int synchronizedTask = -1, float startTime = -1.0f);
 	void startMovement(const Vector3 &destination);
 	void stopMovement();
+	// the walk animation of the last movement, to go on with it when the next movement follows
+	// at once (a formation member reaching its moving place stops and starts again)
+	int lastWalkAnim = -1;
+	float lastWalkAnimStart = 0.0f, lastWalkStop = -1.0f;
 	void sendEvent(int evt, ServerGameObject *sender = nullptr);
 	void associateObject(int category, ServerGameObject *associated);
 	void dissociateObject(int category, ServerGameObject *associated);

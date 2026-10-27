@@ -1077,8 +1077,9 @@ void Test_Formation()
 			lastPrint = (int)t;
 			printf("FORMATION t=%d formation (%.1f,%.1f) facing %.2f", lastPrint, formation->position.x, formation->position.z, formation->orientation.y);
 			for (size_t i = 0; i < members.size(); i++)
-				printf(" | %zu (%.1f,%.1f) %d %s", i, members[i]->position.x, members[i]->position.z, (int)members[i]->movement.isMoving(),
-					members[i]->animationIndex >= 0 ? server.gameSet->animations.names.getString(members[i]->animationIndex).c_str() : "-");
+				printf(" | %zu (%.1f,%.1f) %d %s from %.1f", i, members[i]->position.x, members[i]->position.z, (int)members[i]->movement.isMoving(),
+					members[i]->animationIndex >= 0 ? server.gameSet->animations.names.getString(members[i]->animationIndex).c_str() : "-",
+					members[i]->animStartTime);
 			printf("\n");
 		}
 		SDL_Delay(16);
