@@ -24,6 +24,185 @@ void ignoreBlueprintEx(GSFileParser &gsf, const std::string &endtag)
 }
 void ignoreBlueprint(GSFileParser& gsf, const std::string& tag) { ignoreBlueprintEx(gsf, "END_" + tag); }
 
+namespace {
+	// The items the original engine declares itself (WKB.exe, its item names from 0x8adda0): the
+	// game set uses them without DECLARE_ITEM (the AI stats, "Diplomacy Enabled", ...)
+	// and the events it sends itself (from 0x8ad820), some of which wkbre2 doesn't send yet
+	const char* const ENGINE_EVENTS[] = {
+		"On Terrain Changed",
+		"On Diplomatic Status Changed",
+		"On Tribute Received",
+		"On Commissioned",
+		"On Form Up Failed",
+		"On Formation Disband",
+		"On Formation Form Up",
+		"On Subordinate Created",
+		"On Subordinate Received",
+		"On Control Transferred",
+		"On Last Subordinate Released",
+		"On Spawn",
+		"On Stampdown",
+		"On Session Start",
+		"On Level Start",
+		"On All Players Terminated",
+		"On Last Player Standing",
+		"On Busy",
+		"On Idle",
+		"On Object Exits",
+		"On Object Enters",
+		"On Exit Zone",
+		"On Enter Zone",
+		"On Not Seen Anymore",
+		"On First Seen",
+		"On Stop Seeing Object",
+		"On Seeing Object",
+		"On Share Tile",
+		"On Collision",
+		"On Conversion End",
+		"On Conversion Begin",
+		"On Termination",
+		"On Destruction"
+	};
+	const char* const ENGINE_ITEMS[] = {
+	"Structural Points Capacity",
+	"Structural Points",
+	"Amount Of Spare Heavy Arms",
+	"Amount Of Spare Horses",
+	"Habitation Limit",
+	"Teams Selected",
+	"Tutorial Level",
+	"Settings - Fog Of War",
+	"Settings - Team Recon",
+	"Settings - Barbarian Tribes",
+	"Settings - Team Placement",
+	"Settings - Resource Level",
+	"Settings - Capturable Flags",
+	"Settings - Unit Lives",
+	"Settings - Resource Points",
+	"Settings - Valhalla Mode Food",
+	"Settings - Victory Time",
+	"Settings - Population Limit",
+	"Settings - Start Gold",
+	"Settings - Start Wood",
+	"Settings - Start Food",
+	"Settings - Multiplayer Game Type",
+	"Disallow Diplomacy",
+	"Renaissance Tech Level",
+	"Imperial Tech Level",
+	"Pagan Tech Level",
+	"Tribute Received Type",
+	"Random Barbarians Chosen",
+	"This Prestige Level",
+	"Current Prestige",
+	"Number Of Capturable Flags",
+	"Diplomacy Enabled",
+	"Skirmish Campaign Level",
+	"Military Status",
+	"I Am A Player Designed AI General",
+	"Chattiness AI Stat",
+	"Friendliness AI Stat",
+	"Pride AI Stat",
+	"Treachery AI Stat",
+	"Greediness AI Stat",
+	"Diplomatic Frequency AI Stat",
+	"Toady - Neutral - Arrogant AI Stat",
+	"Fervour AI Stat",
+	"Leadership AI Stat",
+	"Heavy - Light AI Stat",
+	"Infantry - Cavalry AI Stat",
+	"Pagan - Tech - Imperial AI Stat",
+	"Raiding - Siege AI Stat",
+	"Economic - Military AI Stat",
+	"Valhalla Resource Points",
+	"No. Of Lives Left",
+	"Amount Of Resources",
+	"Valhalla Mode Chosen",
+	"I Am A Kingmaker Player",
+	"Diplomatic Status New",
+	"Diplomatic Status Old",
+	"Diplomatic Status Player ID",
+	"Tribute Received Amount",
+	"Tribute Received Player ID",
+	"Victory Time Limit",
+	"Battle Mode Food",
+	"King Piece Lose Condition Set",
+	"I am a Dock",
+	"I am a Cog",
+	"Wood Repair Cost",
+	"Food Repair Cost",
+	"Gold Repair Cost",
+	"Invulnerable",
+	"Trade Goods",
+	"Lose on Manor Destroyed",
+	"Number of Farmers",
+	"Idle Peasant Count",
+	"Gold Miner Count",
+	"Stone Miner Count",
+	"Builder Count",
+	"Player Shut Down",
+	"I am a tree",
+	"Shop Keeper Count",
+	"Wood Chopper Count",
+	"Food Support Value",
+	"Player Score",
+	"I am a stone sack",
+	"I am a gold sack",
+	"I am a food sack",
+	"I am a wood sack",
+	"Single Click Selects All Units Of This Type",
+	"I Am A Cart Sans Rider",
+	"I Am A Cart",
+	"Light Cavalry Weapon Upgrade",
+	"Light Cavalry Armour Upgrade",
+	"Heavy Cavalry Weapon Upgrade",
+	"Heavy Cavalry Armour Upgrade",
+	"Light Infantry Weapon Upgrade",
+	"Light Infantry Armour Upgrade",
+	"Heavy Infantry Weapon Upgrade",
+	"Heavy Infantry Armour Upgrade",
+	"Maximum Experience",
+	"Experience",
+	"Front Armour",
+	"Missile Damage",
+	"H2H Damage",
+	"Palace Building",
+	"I Am A Peasant",
+	"Total Population Count",
+	"Population Count",
+	"Sight Range",
+	"Follow Y Offset",
+	"Follow X Offset",
+	"Race Type",
+	"Wall Index",
+	"Maximum Missile Range",
+	"Charge Bar Capacity",
+	"Charge Bar",
+	"Building Paid For",
+	"I'm A Military Unit",
+	"Actual Sight Range",
+	"I Am A Merchant",
+	"Food Consumption",
+	"Lead Unit Relative Speed",
+	"Movement Maximum Relative Speed",
+	"Movement Minimum Relative Speed",
+	"Is a Foundation",
+	"Structural Integrity Capacity",
+	"Structural Integrity",
+	"Hit Point Capacity",
+	"Hit Point Capacity Of Object Being Spawned",
+	"Hit Points Of Object Being Spawned",
+	"Hit Points",
+	"I Am A Village",
+	"Stone",
+	"Wood",
+	"Wood Cost",
+	"Food",
+	"Food Cost",
+	"Gold",
+	"Gold Cost"
+	};
+}
+
 void GameSet::parseFile(const char * fn, int pass)
 {
 	static std::set<std::string, StrCICompareClass> processedFiles;
@@ -59,6 +238,21 @@ void GameSet::parseFile(const char * fn, int pass)
 			std::string lf = gsf.nextString(true);
 			if(lf.find('*') == std::string::npos)
 				linkedFiles.push_back(lf);
+			else {
+				// "AI Generals\*.gsf": every file of that folder with that ending (data.bcp, mods,
+				// the user folder's saved\, where the AI General Editor writes), in name order
+				const size_t slash = lf.rfind('\\');
+				const std::string dir = slash == std::string::npos ? std::string() : lf.substr(0, slash);
+				const std::string ending = lf.substr(lf.find('*') + 1);
+				std::unique_ptr<std::vector<std::string>> files(ListFiles(("Warrior Kings Game Set\\" + dir).c_str()));
+				std::vector<std::string> found;
+				if (files)
+					for (const std::string& f : *files)
+						if (f.size() >= ending.size() && StrCICompare(std::string_view(f).substr(f.size() - ending.size()), ending) == 0)
+							found.push_back(dir.empty() ? f : dir + "\\" + f);
+				std::sort(found.begin(), found.end());
+				linkedFiles.insert(linkedFiles.end(), found.begin(), found.end());
+			}
 		}
 		else if (pass == 0) {
 			switch (tag) {
@@ -498,6 +692,10 @@ void GameSet::load(const char * fn)
 		for (char& c : s) if (c == '_') c = ' ';
 		items.names.insertString(s);
 	}
+	for (const char* item : ENGINE_ITEMS)
+		items.names.insertString(item);
+	for (const char* event : ENGINE_EVENTS)
+		events.names.insertString(event);
 
 	printf("Gameset pass 1...\n");
 	parseFile(fn, 0);
