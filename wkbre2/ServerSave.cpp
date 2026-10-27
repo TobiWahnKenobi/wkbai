@@ -61,7 +61,7 @@ namespace {
 		else if (auto* t = dynamic_cast<const AnimationLoopTrigger*>(trigger))
 			w.line("REFERENCE_TIME %d", (int)(t->referenceTime * 1000.0f));
 		else if (auto* t = dynamic_cast<const AttachmentPointTrigger*>(trigger))
-			w.line("REFERENCE_TIME %u", t->referenceTime);
+			w.line("REFERENCE_TIME %d", (int)t->referenceTime); // read back as a signed int
 		w.depth--;
 		w.line("END_TRIGGER");
 	}
