@@ -62,6 +62,14 @@ private:
 	std::string joinTarget;
 	// Kingmaker campaign: the profile and province of the game being started or played
 	std::string campaignProfile, campaignProvince;
+	// A multiplayer save game being loaded: who takes each of its human players ("H" the host,
+	// "G<guest id>", "AI": an AI General takes over)
+	struct SavedPlayer {
+		uint32_t playerId = 0;
+		std::string who;
+	};
+	std::vector<SavedPlayer> savedPlayers;
+	void applySavedPlayers();
 	void updateLobby();
 	void lobbyTest();
 	std::string playerName() const;

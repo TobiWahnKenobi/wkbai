@@ -1320,7 +1320,110 @@ Screens.campaignmap = {
 
 -- Multiplayer --------------------------------------------------------------------------
 
+-- Multiplayer host, a saved game: its human players, each taken by the host, a guest (the one of
+-- the same name joins it by itself) or, when nobody takes it, an AI General
+mpLoad = { save = nil, humans = {}, list = { selected = 1, scroll = 0 }, guestList = { selected = 0, scroll = 0 } }
+local lastSavedLobbyText = nil
+Screens.mpload = {
+	background = sunsetBackground,
+	open = function()
+		mpLoad.humans = getSaveGameHumans(mpLoad.save or "")
+		for _, h in ipairs(mpLoad.humans) do h.who = nil end
+		mpLoad.list.selected = 1
+		lastSavedLobbyText = nil
+		request("select_level", mpLoad.save)
+	end,
+	draw = function()
+		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER") .. ": " .. stripExtension(mpLoad.save or ""))
+		panel(X(8), Y(80), L(1907), L(988), true)
+		local guests = getLobbyGuests()
+		local humans = mpLoad.humans
+		local function guestOf(who)
+			if type(who) ~= "string" or string.sub(who, 1, 1) ~= "G" then return nil end
+			return guestById(tonumber(string.sub(who, 2)))
+		end
+		-- who is still here, and the players' own names find their places
+		local taken = {}
+		for _, h in ipairs(humans) do
+			if h.who and h.who ~= "AI" and h.who ~= "H" and not guestOf(h.who) then h.who = nil end
+			if h.who then taken[h.who] = true end
+		end
+		for _, h in ipairs(humans) do
+			if not h.who then
+				if not taken["H"] and string.lower(h.name) == string.lower(getPlayerName()) then h.who = "H"; taken["H"] = true end
+				for _, g in ipairs(guests) do
+					if not h.who and not taken["G" .. g.id] and string.lower(g.name) == string.lower(h.name) then
+						h.who = "G" .. g.id; taken[h.who] = true
+					end
+				end
+			end
+		end
+		if not taken["H"] and humans[1] and not humans[1].who then humans[1].who = "H"; taken["H"] = true end
+
+		-- the saved players and who takes them
+		panel(X(20), Y(92), L(930), L(600))
+		drawText(FONT_LIST, X(28), Y(98), "#  Saved player  ->  played by", WHITE, S)
+		local rows = {}
+		for i, h in ipairs(humans) do
+			local by, c
+			if h.who == "H" then by, c = getPlayerName() .. " (host)", 0xFF80FF80
+			elseif guestOf(h.who) then by, c = guestOf(h.who).name, 0xFF80FF80
+			else by, c = "AI General", YELLOW end
+			rows[i] = { i .. "  " .. h.name .. "  ->  " .. by, c }
+		end
+		listBox(mpLoad.list, rows, X(22), Y(116), L(926), L(574))
+		local sel = humans[mpLoad.list.selected]
+		local function give(who)
+			for _, h in ipairs(humans) do if h.who == who then h.who = "AI" end end
+			sel.who = who
+		end
+		if button("Me", X(28), Y(700), L(200), L(28), sel ~= nil) then give("H") end
+		if button("AI General", X(240), Y(700), L(200), L(28), sel ~= nil) then sel.who = "AI" end
+
+		-- the guests: a click gives the selected player to one
+		panel(X(960), Y(92), L(942), L(300))
+		drawText(FONT_LIST, X(968), Y(98), T("FRONT_END_CHAT_PLAYER"), WHITE, S)
+		local grows = {}
+		for i, g in ipairs(guests) do
+			local at = nil
+			for hi, h in ipairs(humans) do if h.who == "G" .. g.id then at = hi end end
+			grows[i] = { g.name .. (at and ("  (" .. at .. ")") or ""), at and 0xFF80FF80 or YELLOW }
+		end
+		mpLoad.guestList.selected = 0
+		listBox(mpLoad.guestList, grows, X(962), Y(116), L(938), L(274))
+		if mpLoad.guestList.selected > 0 and sel then give("G" .. guests[mpLoad.guestList.selected].id) end
+		if #guests == 0 then drawText(FONT_LIST, X(970), Y(120), "Waiting for players to join ...", GREY, S) end
+		chatPanel(X(960), Y(400), L(942), L(600))
+
+		-- the guests see this lobby
+		local lines = { stripExtension(mpLoad.save or "") }
+		for i, h in ipairs(humans) do
+			local kind, name = "A", h.name .. " (AI General)"
+			if h.who == "H" then kind, name = "H", h.name .. " - " .. getPlayerName()
+			elseif guestOf(h.who) then kind, name = "G", h.name .. " - " .. guestOf(h.who).name end
+			lines[#lines + 1] = kind .. "|" .. string.gsub(name, "[|\n]", " ") .. "|" .. (h.colour or 0) .. "|0"
+		end
+		local text = table.concat(lines, "\n")
+		if text ~= lastSavedLobbyText then lastSavedLobbyText = text; request("lobby_state", text) end
+
+		-- the host plays one of them, and every guest has one
+		local canStart = taken["H"] == true
+		for _, g in ipairs(guests) do if not taken["G" .. g.id] then canStart = false end end
+		local auto = mpLoad.autoStart and canStart and ((#guests > 0 and getTime() - mpLoad.autoStart > 4) or getTime() - mpLoad.autoStart > 20)
+		if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) or auto then
+			mpLoad.autoStart = nil
+			local parts = {}
+			for _, h in ipairs(humans) do parts[#parts + 1] = h.id .. "=" .. (h.who or "AI") end
+			request("mp_saved_players", table.concat(parts, "|"))
+			request("start_multiplayer", mpLoad.save)
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), X(970), Y(1032), L(182), L(24)) then Screens.mpload.onEscape() end
+	end,
+	onEscape = function() request("stop_hosting"); pop() end,
+}
+
 local mpName, mpAddress = { text = "" }, { text = "" }
+local mpState = { tab = 1, saves = { selected = 0, scroll = 0 } }
 Screens.multiplayer = {
 	background = sunsetBackground,
 	open = function()
@@ -1330,7 +1433,19 @@ Screens.multiplayer = {
 	end,
 	draw = function()
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
-		local chosen = levelPicker(X(20), Y(80), L(1880), L(880))
+		-- a new game on a map, or a saved game to go on with
+		mpState.tab = tabs({ T("FRONT_END_LOAD_GAME_SKIRMISH"), T("FRONT_END_LOAD_GAME_MULTIPLAYER") }, mpState.tab, X(20), Y(50), L(30))
+		local chosen
+		if mpState.tab == 1 then
+			chosen = levelPicker(X(20), Y(80), L(1880), L(880))
+		else
+			local saves = savesOfType(".sav")
+			local names = {}
+			for i, sv in ipairs(saves) do names[i] = stripExtension(sv) end
+			panel(X(20), Y(80), L(1880), L(880))
+			listBox(mpState.saves, names, X(22), Y(82), L(1876), L(876))
+			chosen = saves[mpState.saves.selected]
+		end
 		-- the player name (both), the host's address (joining: "address" or "address:port")
 		drawText(FONT_LIST, X(24), Y(972), "Name", WHITE, S)
 		textField(mpName, X(80), Y(966), L(360), L(28), "|", 24)
@@ -1344,7 +1459,12 @@ Screens.multiplayer = {
 		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil and name ~= "") then
 			remember()
 			request("host")
-			push("mphost")
+			if mpState.tab == 1 then
+				push("mphost")
+			else
+				mpLoad.save = chosen
+				push("mpload")
+			end
 		end
 		if (button(T("FRONT_END_MULTIPLAYER_BUTTON_JOIN_IP"), X(1250), Y(1052), L(210), L(24), name ~= "" and mpAddress.text ~= "") or enterJoin)
 			and name ~= "" and mpAddress.text ~= "" then
@@ -1451,11 +1571,11 @@ Screens.options = {
 
 InGameMenuItems = {
 	{ key = "IN_GAME_Return_To_Game", action = function() pop() end },
-	-- single player only (multiplayer games aren't saved yet); "Save Game" asks for a name the first time
-	{ key = "IN_GAME_Save", enabled = function() return isSinglePlayer() end, action = function()
+	-- single player and the multiplayer host; "Save Game" asks for a name the first time
+	{ key = "IN_GAME_Save", enabled = function() return canSaveGame() end, action = function()
 		if getCurrentSave() ~= "" then request("save", getCurrentSave()) else push("save") end
 	end },
-	{ key = "IN_GAME_Save_As", enabled = function() return isSinglePlayer() end, action = function() push("save") end },
+	{ key = "IN_GAME_Save_As", enabled = function() return canSaveGame() end, action = function() push("save") end },
 	{ key = "IN_GAME_Load", action = function() push("load") end },
 	{ key = "IN_GAME_Restart_Level", action = function()
 		confirm(T("RESTART_LEVEL_ARE_YOU_SURE"), function() request("restart") end)
@@ -1544,6 +1664,13 @@ function FE_Open(name)
 	if screenName == "skirmish" then
 		name = screenName
 		skirmish.tab = (tab == "settings") and 2 or 1
+	end
+	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a
+	-- place or after 20 seconds alone
+	if screenName == "mpload" then
+		name = screenName
+		mpLoad.save = tab
+		mpLoad.autoStart = getTime()
 	end
 	-- "campaignmap.<profile>": the campaign map of a profile
 	if screenName == "campaignmap" then

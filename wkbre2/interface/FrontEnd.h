@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,8 @@ struct FrontEnd {
 	// The save game the game in progress was loaded from or last saved to (no extension), or empty:
 	// "Save Game" saves there without asking
 	void setCurrentSave(const std::string& name);
+	// The game in progress can be saved (single player, a multiplayer host)
+	void setCanSave(bool canSave);
 	// The result of a "save" request, shown by the menu
 	void saved(bool ok, const std::string& name);
 
@@ -45,6 +48,13 @@ struct FrontEnd {
 		int id;
 		std::string name;
 	};
+	// A human player of a save game: player id, its NAME and colour
+	struct SaveGameHuman {
+		uint32_t id = 0;
+		std::string name;
+		int colour = 0;
+	};
+	static std::vector<SaveGameHuman> ReadSaveGameHumans(const std::string& path);
 	void setLobby(std::vector<Guest> guests, const std::vector<std::string>& chat, const std::string& state, const std::string& status);
 
 	// The one front end of the program, or null (tests)

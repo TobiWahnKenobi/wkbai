@@ -22,6 +22,7 @@ public:
 		enum Type { HUMAN, AI, EMPTY, GUEST } type = AI;
 		std::string general; // AI: an AI General (PLAYER blueprint); empty: a random one
 		int client = 0;      // GUEST: the server's client index of the multiplayer guest
+		std::string name;    // multiplayer: the human's player name (kept in save games)
 		int colour = 0;      // player colour index (1 blue ... 8 brown); 0: the map's
 		int team = 0;        // 0: no team
 	};

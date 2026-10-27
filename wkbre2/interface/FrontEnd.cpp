@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <memory>
 #include <sstream>
+#include <filesystem>
 
 namespace {
 	FrontEnd* g_frontEnd = nullptr;
@@ -100,6 +101,7 @@ struct FrontEnd::Impl {
 	std::vector<Request> requests;
 	std::vector<std::string> saveGames;
 	std::string currentSave;
+	bool canSave = true;
 	std::vector<Guest> guests;
 	std::vector<std::string> chat;
 	std::string lobbyState, lobbyStatus;
@@ -292,6 +294,15 @@ struct FrontEnd::Impl {
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
 		lua.set_function("getCurrentSave", [this]() { return currentSave; });
+		lua.set_function("canSaveGame", [this]() { return canSave; });
+		// The human players of a save game ({ id, name, colour }), as NUM_HUMAN_PLAYERS lists them
+		lua.set_function("getSaveGameHumans", [this](const std::string& file) {
+			sol::table list = lua.create_table();
+			int n = 1;
+			for (const SaveGameHuman& h : ReadSaveGameHumans("Save_Games\\" + file))
+				list[n++] = lua.create_table_with("id", h.id, "name", h.name, "colour", h.colour);
+			return list;
+		});
 
 		// A text file of the game's data (data.bcp, mods), or nil: lets the script read game data
 		// such as Campaigns\\Kingmaker.cam
@@ -505,6 +516,78 @@ std::vector<FrontEnd::Request> FrontEnd::takeRequests()
 void FrontEnd::setSaveGames(std::vector<std::string> saves) { impl->saveGames = std::move(saves); }
 void FrontEnd::setSinglePlayer(bool singlePlayer) { impl->singlePlayer = singlePlayer; }
 void FrontEnd::setCurrentSave(const std::string& name) { impl->currentSave = name; }
+void FrontEnd::setCanSave(bool canSave) { impl->canSave = canSave; }
+
+std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& path)
+{
+	std::vector<SaveGameHuman> humans;
+	if (!FileExists(path.c_str()))
+		return humans;
+	char* data = nullptr;
+	int size = 0;
+	LoadFile(path.c_str(), &data, &size, 1);
+	std::istringstream in(std::string(data, size));
+	free(data);
+	std::string line;
+	SaveGameHuman* current = nullptr;
+	int depth = 0;
+	while (std::getline(in, line)) {
+		std::istringstream ls(line);
+		std::string tag;
+		ls >> tag;
+		if (tag == "NUM_HUMAN_PLAYERS") {
+			int count = 0;
+			ls >> count;
+			for (int i = 0; i < count; i++) {
+				SaveGameHuman h;
+				ls >> h.id;
+				humans.push_back(h);
+			}
+		}
+		else if (tag == "PLAYER") {
+			uint32_t id = 0;
+			ls >> id;
+			current = nullptr;
+			for (SaveGameHuman& h : humans)
+				if (h.id == id)
+					current = &h;
+			depth = 0;
+		}
+		else if (!current)
+			continue;
+		else if (tag.rfind("END_", 0) == 0) {
+			if (tag == "END_PLAYER" && depth == 0)
+				current = nullptr;
+			else
+				depth--;
+		}
+		else if (tag == "CHARACTER" || tag == "BUILDING" || tag == "CITY" || tag == "TOWN" || tag == "ARMY" || tag == "FORMATION"
+			|| tag == "MARKER" || tag == "CONTAINER" || tag == "PROP" || tag == "MISSILE" || tag == "TERRAIN_ZONE" || tag == "USER")
+			depth++;
+		else if (depth > 0)
+			continue;
+		else if (tag == "COLOUR_INDEX")
+			ls >> current->colour;
+		else if (tag == "NAME") {
+			// Battles: a character count and the codes; otherwise a quoted string
+			std::string rest;
+			std::getline(ls, rest);
+			const size_t q = rest.find('"');
+			if (q != std::string::npos)
+				current->name = rest.substr(q + 1, rest.rfind('"') - q - 1);
+			else {
+				std::istringstream cs(rest);
+				int count = 0, code = 0;
+				cs >> count;
+				std::wstring w;
+				for (int i = 0; i < count && cs >> code; i++)
+					w += (wchar_t)code;
+				current->name = PathToUtf8(std::filesystem::path(w));
+			}
+		}
+	}
+	return humans;
+}
 void FrontEnd::saved(bool ok, const std::string& name) { impl->call("FE_Saved", ok, name); }
 
 void FrontEnd::setLobby(std::vector<Guest> guests, const std::vector<std::string>& chat, const std::string& state, const std::string& status)

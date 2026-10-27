@@ -896,6 +896,7 @@ void ClientInterface::iter()
 	FrontEnd* frontEnd = FrontEnd::get();
 	if (frontEnd && !frontEnd->isOpen() && g_keyPressed[SDL_SCANCODE_ESCAPE] && client->getLevel()) {
 		frontEnd->setSinglePlayer(singlePlayer);
+		frontEnd->setCanSave((bool)saveGame);
 		frontEnd->open("ingame");
 		if (singlePlayer && !client->timeManager.paused) {
 			client->sendPauseRequest(true);

@@ -276,10 +276,14 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			if (slot.type == Slot::HUMAN && !humanPlaced) {
 				server.setClientPlayerControl(0, player->id);
 				humanPlaced = true;
+				if (!slot.name.empty())
+					player->setName(slot.name);
 				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
 			}
 			else if (slot.type == Slot::GUEST && slot.client > 0 && slot.client < (int)server.clientLinks.size()) {
 				server.setClientPlayerControl(slot.client, player->id);
+				if (!slot.name.empty())
+					player->setName(slot.name);
 				printf("Skirmish: position %zu (player %u): guest %d\n", i + 1, player->id, slot.client);
 			}
 			else {

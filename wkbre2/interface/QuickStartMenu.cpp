@@ -199,8 +199,11 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			const std::vector<std::string> fields = split(part, ';');
 			QuickSkirmishMenu::Slot slot;
 			const std::string& type = fields[0];
-			if (type == "H")
+			if (type == "H") {
 				slot.type = QuickSkirmishMenu::Slot::HUMAN;
+				if (hosting)
+					slot.name = playerName();
+			}
 			else if (type.size() > 1 && type[0] == 'G') {
 				// a guest by its lobby id: its client index now
 				slot.type = QuickSkirmishMenu::Slot::EMPTY;
@@ -210,6 +213,7 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 						if (auto it = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); it != server->clientLinks.end()) {
 							slot.type = QuickSkirmishMenu::Slot::GUEST;
 							slot.client = (int)(it - server->clientLinks.begin());
+							slot.name = server->clientInfos[slot.client].name;
 						}
 			}
 			else if (type == "E")
@@ -251,6 +255,20 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 		const bool loaded = CampaignProfile::load(campaignProfile, profile);
 		skirmishMenu.campaignProfile = true;
 		skirmishMenu.campaignUserItems = loaded ? profile.items : std::map<std::string, float>();
+	}
+	else if (request.action == "mp_saved_players") {
+		// "<player id>=<H|G<id>|AI>|...", before "start_multiplayer" of a save game
+		savedPlayers.clear();
+		size_t start = 0;
+		while (start < request.arg.size()) {
+			size_t end = request.arg.find('|', start);
+			if (end == std::string::npos)
+				end = request.arg.size();
+			const std::string part = request.arg.substr(start, end - start);
+			if (const size_t eq = part.find('='); eq != std::string::npos)
+				savedPlayers.push_back({ (uint32_t)atoi(part.c_str()), part.substr(eq + 1) });
+			start = end + 1;
+		}
 	}
 	else if (request.action == "start_multiplayer") {
 		selectSaveGame(request.arg);
@@ -298,6 +316,7 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		printf("Campaign: %s conquered %s (%zu provinces): %s\n", campaignProfile.c_str(), campaignProvince.c_str(),
 			profile.conquered.size(), profile.save() ? "saved" : "not saved");
 	}
+	savedPlayers.clear();
 	if (leaveAction != "restart") {
 		campaignProfile.clear();
 		campaignProvince.clear();
@@ -481,6 +500,13 @@ void QuickStartMenu::launchGame()
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
 			skirmishMenu.applySettings(*server);
+			applySavedPlayers();
+			// a save game doesn't start its level (startLevel), which puts the cameras: put each
+			// human's at its player's start
+			if (savfile.size() > 4 && StrCICompare(std::string_view(savfile).substr(savfile.size() - 4), ".sav") == 0)
+				for (const SrvGORef& ref : server->clientPlayerObjects)
+					if (ServerGameObject* player = ref.get())
+						server->snapCameraPosition(player, player->playerStartCameraPosition, player->playerStartCameraOrientation);
 			if (BenchmarkPaused())
 				server->timeManager.pause();
 			srvMutex.unlock();
@@ -494,19 +520,19 @@ void QuickStartMenu::launchGame()
 
 		ClientInterface cliui(client, gfx);
 		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
-		if (cliui.singlePlayer)
-			cliui.saveGame = [this, &srvMutex](const std::string& name) {
-				// a file name, not a path
-				if (name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.find_first_not_of(" .") == std::string::npos)
-					return false;
-				const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(name + ".sav"));
-				srvMutex.lock();
-				const bool ok = server->saveGame(path.c_str());
-				srvMutex.unlock();
-				printf("Saving the game to %s: %s\n", path.c_str(), ok ? "done" : "failed");
-				refreshSaveGames(true);
-				return ok;
-			};
+		// single player and the multiplayer host (who runs the game) can save
+		cliui.saveGame = [this, &srvMutex](const std::string& name) {
+			// a file name, not a path
+			if (name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.find_first_not_of(" .") == std::string::npos)
+				return false;
+			const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(name + ".sav"));
+			srvMutex.lock();
+			const bool ok = server->saveGame(path.c_str());
+			srvMutex.unlock();
+			printf("Saving the game to %s: %s\n", path.c_str(), ok ? "done" : "failed");
+			refreshSaveGames(true);
+			return ok;
+		};
 		if (FrontEnd* fe = FrontEnd::get()) {
 			// a save game (not a level) is the one "Save Game" writes to
 			const std::string& file = savegames.at(savselected);
@@ -567,6 +593,56 @@ void QuickStartMenu::launchGame()
 		afterGame(leaveAction, leaveArg);
 }
 
+// A multiplayer save game: its human players go to the host and the guests the lobby gave them;
+// the ones nobody takes become AI Generals (a random one; "Setup My AI Player Stuff" starts its AI
+// as the game set does for a player who leaves)
+void QuickStartMenu::applySavedPlayers()
+{
+	if (savedPlayers.empty())
+		return;
+	std::vector<const GameObjBlueprint*> generals;
+	const auto& playerTypes = server->gameSet->objBlueprints[Tags::GAMEOBJCLASS_PLAYER];
+	for (size_t i = 0; i < playerTypes.size(); i++) {
+		const std::string& name = playerTypes.names.getString(i);
+		if (name.size() > 10 && StrCICompare(std::string_view(name).substr(name.size() - 10), " Kingmaker") == 0)
+			generals.push_back(&playerTypes[i]);
+	}
+	// no client keeps a player the save gave it by its order
+	for (size_t i = 0; i < server->clientLinks.size(); i++)
+		server->setClientPlayerControl((int)i, 0);
+	const int setupAi = server->gameSet->events.names.getIndex("Setup My AI Player Stuff");
+	for (const SavedPlayer& sp : savedPlayers) {
+		ServerGameObject* player = server->findObject(sp.playerId);
+		if (!player)
+			continue;
+		int client = -1;
+		if (sp.who == "H")
+			client = 0;
+		else if (sp.who.size() > 1 && sp.who[0] == 'G') {
+			const int id = atoi(sp.who.c_str() + 1);
+			for (const auto& [link, guestId] : guestIds)
+				if (guestId == id)
+					if (auto it = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); it != server->clientLinks.end())
+						client = (int)(it - server->clientLinks.begin());
+		}
+		if (client >= 0) {
+			server->setClientPlayerControl(client, player->id);
+			if (client > 0 && !server->clientInfos[client].name.empty())
+				player->setName(server->clientInfos[client].name);
+			else if (client == 0)
+				player->setName(playerName());
+			printf("Save game: player %u to client %d\n", player->id, client);
+		}
+		else if (!generals.empty()) {
+			const GameObjBlueprint* general = generals[rand() % generals.size()];
+			player->convertTo(general);
+			if (setupAi != -1)
+				player->sendEvent(setupAi);
+			printf("Save game: player %u to the AI (%s)\n", player->id, general->name.c_str());
+		}
+	}
+}
+
 std::string QuickStartMenu::playerName() const
 {
 	return g_settings.value("playerName", std::string("Player"));
@@ -624,10 +700,18 @@ void QuickStartMenu::lobbyTest()
 		handleRequest({ "join", test.value("join", std::string("localhost")) });
 		return;
 	}
+	FrontEnd* fe = FrontEnd::get();
+	// { "load": "<save game>" }: host a saved game (the menu script matches the players and starts)
+	if (const std::string save = test.value("load", std::string()); !save.empty()) {
+		done = true;
+		handleRequest({ "host", "" });
+		if (fe)
+			fe->open("mpload." + save);
+		return;
+	}
 	const std::string level = test.value("host", std::string());
 	if (level.empty())
 		return;
-	FrontEnd* fe = FrontEnd::get();
 	if (!hosting) {
 		handleRequest({ "select_level", level });
 		handleRequest({ "host", "" });
