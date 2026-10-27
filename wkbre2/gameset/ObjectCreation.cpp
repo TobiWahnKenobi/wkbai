@@ -43,6 +43,14 @@ void ObjectCreation::parse(GSFileParser & gsf, const GameSet & gs)
 
 void ObjectCreation::run(ServerGameObject * creator, SrvScriptContext* ctx) const
 {
+	// a post-creation sequence that creates again (the Kingmaker AI's "Muster Marker" tries other
+	// places until a battering ram could reach the palace): at most 64 deep, not a stack overflow
+	static int depth = 0;
+	if (depth >= 64) {
+		printf("WARNING: object creations nested more than 64 deep, stopped\n");
+		return;
+	}
+	struct DepthGuard { DepthGuard() { depth++; } ~DepthGuard() { depth--; } } depthGuard;
 	auto _0 = ctx->changeSelf(creator);
 	auto _1 = ctx->change(ctx->creator, creator);
 	const GameObjBlueprint* type = nullptr;

@@ -20,6 +20,8 @@
 #include "KeywordStubs.h"
 #include "Commission.h"
 #include "../AIController.h"
+#include "../MovementController.h"
+#include <unordered_set>
 
 namespace {
 	float RandomFromZeroToOne() { return (float)(rand() & 0xFFFF) / 32768.0f; }
@@ -448,15 +450,46 @@ struct ValueWaterBeneath : ValueDeterminer {
 	}
 };
 
+// ANGLE_BETWEEN <HORIZONTAL|VERTICAL|3D> <a> <b>: the angle from a's facing to the direction
+// from a to b, in half turns (-1..1), as WKB.exe's VD_Angle_Between (0x453dc0). HORIZONTAL: in
+// the ground plane, signed by the side b is on; VERTICAL: a's facing's elevation less the
+// direction's (each as sign(y) acos(1 - |y|)), so it is above 0 when a is higher than b (the game
+// set's height bonuses); 3D: the angle between the two in space. 0 when a and b are at one place.
 struct ValueAngleBetween : ValueDeterminer {
-	int mode;
+	int mode = 0; // 0: HORIZONTAL, 1: VERTICAL, 2: 3D (the original's order)
 	std::unique_ptr<ObjectFinder> a, b;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO (apparently it always returns 0?)
-		return 0.0f;
+		CommonGameObject* oa = a->getFirst(ctx);
+		CommonGameObject* ob = b->getFirst(ctx);
+		if (!oa || !ob)
+			return 0.0f;
+		Vector3 diff = ob->position - oa->position;
+		if (diff.x == 0.0f && diff.y == 0.0f && diff.z == 0.0f)
+			return 0.0f;
+		// a's facing: the yaw as setOrientation takes it (atan2(x, -z)), the pitch from orientation.x
+		const float yaw = oa->orientation.y, pitch = oa->orientation.x;
+		Vector3 facing(std::sin(yaw) * std::cos(pitch), -std::sin(pitch), -std::cos(yaw) * std::cos(pitch));
+		if (mode == 1) {
+			const Vector3 dir = diff.normal();
+			auto elevation = [](float y) { return y > 0.0f ? std::acos(1.0f - y) : -std::acos(std::min(1.0f, 1.0f + y)); };
+			return (elevation(facing.y) - elevation(dir.y)) / 3.14159265f;
+		}
+		if (mode == 0) {
+			facing.y = 0.0f;
+			diff.y = 0.0f;
+			if (diff.x == 0.0f && diff.z == 0.0f)
+				return 0.0f;
+			facing = facing.normal();
+		}
+		const Vector3 dir = diff.normal();
+		const float dot = std::clamp(facing.x * dir.x + facing.y * dir.y + facing.z * dir.z, -1.0f, 1.0f);
+		const float angle = std::acos(dot);
+		// the side: the up part of facing x dir
+		return ((facing.z * dir.x - facing.x * dir.z) < 0.0f ? -angle : angle) / 3.14159265f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
-		gsf.nextString();
+		const std::string tag = gsf.nextString();
+		mode = (tag == "VERTICAL") ? 1 : (tag == "3D") ? 2 : 0;
 		a.reset(ReadFinder(gsf, gs));
 		b.reset(ReadFinder(gsf, gs));
 	}
@@ -719,12 +752,42 @@ struct ValueIsVisible : ValueDeterminer {
 		fPlayer.reset(ReadFinder(gsf, gs));
 	}
 };
+// COULD_REACH <character type> <from> <to>: whether that type could walk from one place to near
+// the other (within 4 tiles, as the place is often a building's): a flood fill over the tiles it
+// can stand on (MovementController::isTileBlocked). Up to 40000 tiles; beyond, reachable. The AI
+// asks it before sending a battering ram at a palace behind walls.
 struct ValueCouldReach : ValueDeterminer {
 	const GameObjBlueprint* objtype;
 	std::unique_ptr<PositionDeterminer> pStart, pEnd;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO
-		return 1.0f;
+		if (!ctx->isServer() || !objtype)
+			return 1.0f;
+		// from the nearest tiles the type can stand on (the places are often a building's or a marker's)
+		const Vector3 from = MovementController::nearestValidPosition(objtype, pStart->eval(ctx).position, 16);
+		const Vector3 to = MovementController::nearestValidPosition(objtype, pEnd->eval(ctx).position, 16);
+		const int sx = (int)(from.x / 5.0f), sz = (int)(from.z / 5.0f);
+		const int ex = (int)(to.x / 5.0f), ez = (int)(to.z / 5.0f);
+		constexpr int NEAR = 4, LIMIT = 40000;
+		std::unordered_set<int64_t> seen;
+		std::vector<std::pair<int, int>> open = { { sx, sz } };
+		seen.insert(((int64_t)sx << 32) | (uint32_t)sz);
+		while (!open.empty()) {
+			const auto [x, z] = open.back();
+			open.pop_back();
+			if (std::abs(x - ex) <= NEAR && std::abs(z - ez) <= NEAR)
+				return 1.0f;
+			if ((int)seen.size() > LIMIT)
+				return 1.0f;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int nx = x + dx, nz = z + dz;
+					if ((dx == 0 && dz == 0) || !seen.insert(((int64_t)nx << 32) | (uint32_t)nz).second)
+						continue;
+					if (!MovementController::isTileBlocked(objtype, nx, nz))
+						open.push_back({ nx, nz });
+				}
+		}
+		return 0.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		objtype = gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].readPtr(gsf);
