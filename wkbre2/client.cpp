@@ -666,6 +666,12 @@ void Client::sendLobbyHello(const std::string& name) {
 	serverLink->send(packet);
 }
 
+void Client::sendLobbyRequest(const std::string& request) {
+	NetPacketWriter packet(NETSRVMSG_LOBBY_REQUEST);
+	packet.writeStringZ(request);
+	serverLink->send(packet);
+}
+
 void Client::sendMessage(const std::string &msg) {
 	NetPacketWriter packet(NETSRVMSG_TEST);
 	packet.writeStringZ(msg);

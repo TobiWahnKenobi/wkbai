@@ -1569,6 +1569,12 @@ void Server::tick()
 				printf("Lobby: %s joined\n", clientInfos[clientIndex].name.c_str());
 				break;
 			}
+			case NETSRVMSG_LOBBY_REQUEST: {
+				auto& requests = clientInfos[clientIndex].lobbyRequests;
+				if (requests.size() < 32)
+					requests.push_back(br.readStringZ());
+				break;
+			}
 			case NETSRVMSG_COMMAND: {
 				int cmdid = br.readUint32();
 				int objid = br.readUint32();

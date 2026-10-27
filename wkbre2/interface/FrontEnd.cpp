@@ -435,7 +435,7 @@ struct FrontEnd::Impl {
 			sol::table list = lua.create_table();
 			int i = 1;
 			for (const Guest& g : guests)
-				list[i++] = lua.create_table_with("id", g.id, "name", g.name);
+				list[i++] = lua.create_table_with("id", g.id, "name", g.name, "requests", sol::as_table(g.requests));
 			return list;
 		});
 		lua.set_function("getChat", [this]() { return sol::as_table(chat); });

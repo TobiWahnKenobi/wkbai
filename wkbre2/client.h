@@ -102,6 +102,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 
 	void sendMessage(const std::string &msg);
 	void sendLobbyHello(const std::string& name);
+	void sendLobbyRequest(const std::string& request);
 	// faceTo: where to face at the end (a formation's right-drag; x < 0: nowhere)
 	void sendCommand(ClientGameObject *obj, const Command *cmd, int assignmentMode, ClientGameObject *target = nullptr, const Vector3 & destination = Vector3(), const Vector3& faceTo = Vector3(-1,0,0));
 	void sendPauseRequest(uint8_t pauseState);

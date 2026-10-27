@@ -42,11 +42,13 @@ struct FrontEnd {
 	// The result of a "save" request, shown by the menu
 	void saved(bool ok, const std::string& name);
 
-	// The multiplayer lobby: the guests connected to this host ({ id, name }), the chat, the
-	// host's lobby as text (for a guest) and the connection ("connecting", "connected", "lost")
+	// The multiplayer lobby: the guests connected to this host ({ id, name, the requests they
+	// sent since the last frame }), the chat, the host's lobby as text (for a guest) and the
+	// connection ("connecting", "connected", "lost")
 	struct Guest {
 		int id;
 		std::string name;
+		std::vector<std::string> requests;
 	};
 	// A human player of a save game: player id, its NAME and colour
 	struct SaveGameHuman {

@@ -819,11 +819,29 @@ local function playersTab()
 		for i, g in ipairs(guests) do
 			local at = nil
 			for si, slot in ipairs(slots) do if slot.type == "guest" and slot.guest == g.id then at = si end end
-			rows[i] = { g.name .. (at and ("  (" .. at .. ")") or ""), at and 0xFF80FF80 or YELLOW }
+			local state = at and (skirmish.ready[g.id] and "  ready" or "  not ready") or ""
+			rows[i] = { g.name .. (at and ("  (" .. at .. ")") or "") .. state, at and 0xFF80FF80 or YELLOW }
 		end
 		skirmish.guestList = skirmish.guestList or { selected = 0, scroll = 0 }
 		skirmish.guestList.selected = 0
-		local _, row = listBox(skirmish.guestList, rows, X(962), Y(312), L(938), L(174))
+		-- "Remove" at the end of the row under the mouse disconnects that guest
+		local listX, listY, listW = X(962), Y(312), L(938)
+		local removeX = listX + listW - L(100)
+		local removing = nil
+		for r = 1, #guests - skirmish.guestList.scroll do
+			local ry = listY + L(4) + (r - 1) * L(16)
+			if ry + L(16) > listY + L(174) then break end
+			if hovered(listX, ry, listW, L(16)) then
+				local hot = hovered(removeX, ry, L(100), L(16))
+				drawText(FONT_LIST, removeX + L(10), ry, "Remove", hot and 0xFF6060FF or GREY, S)
+				if hot and mouse.pressed then removing = guests[skirmish.guestList.scroll + r] end
+			end
+		end
+		local _, row = listBox(skirmish.guestList, rows, listX, listY, listW, L(174))
+		if removing then
+			request("kick_guest", tostring(removing.id))
+			skirmish.guestList.selected = 0
+		end
 		if skirmish.guestList.selected > 0 and sel then
 			local g = guests[skirmish.guestList.selected]
 			for _, other in ipairs(slots) do
@@ -987,14 +1005,43 @@ local function openLobby(multiplayer)
 	end
 end
 
--- Multiplayer host: the lobby as text for the guests ("level\nH|name|colour|team\n...")
+-- Multiplayer host: what the guests asked for (NETSRVMSG_LOBBY_REQUEST): "slot <n>" takes a
+-- position no player has, "colour <c>" changes the colour of the guest's position, "ready <0|1>"
+skirmish.ready = {}
+local function handleGuestRequests()
+	for _, g in ipairs(getLobbyGuests()) do
+		for _, r in ipairs(g.requests or {}) do
+			local what, value = string.match(r, "^(%a+) (%d+)$")
+			value = tonumber(value)
+			if what == "slot" then
+				local target = skirmish.slots[value]
+				if target and (target.type == "ai" or target.type == "empty") then
+					for _, other in ipairs(skirmish.slots) do
+						if other.type == "guest" and other.guest == g.id then other.type = "empty"; other.guest = nil end
+					end
+					skirmish.slots[value] = { type = "guest", guest = g.id, colour = target.colour, team = target.team }
+					skirmish.ready[g.id] = false
+				end
+			elseif what == "colour" and value >= 1 and value <= 8 then
+				for _, slot in ipairs(skirmish.slots) do
+					if slot.type == "guest" and slot.guest == g.id then slot.colour = value end
+				end
+			elseif what == "ready" then
+				skirmish.ready[g.id] = value ~= 0
+			end
+		end
+	end
+end
+
+-- Multiplayer host: the lobby as text for the guests ("level\nH|name|colour|team|ready\n...")
 local lastLobbyText = nil
 local function sendLobbyState()
 	local lines = { levelTitle(skirmish.level) }
 	for _, slot in ipairs(skirmish.slots) do
 		local text = slotText(slot)
 		local kind = ({ human = "H", guest = "G", ai = "A", empty = "E" })[slot.type] or "E"
-		lines[#lines + 1] = kind .. "|" .. string.gsub(text, "[|\n]", " ") .. "|" .. (slot.colour or 0) .. "|" .. (slot.team or 0)
+		local ready = (slot.type == "guest" and skirmish.ready[slot.guest]) and 1 or 0
+		lines[#lines + 1] = kind .. "|" .. string.gsub(text, "[|\n]", " ") .. "|" .. (slot.colour or 0) .. "|" .. (slot.team or 0) .. "|" .. ready
 	end
 	local text = table.concat(lines, "\n")
 	if text ~= lastLobbyText then
@@ -1004,6 +1051,7 @@ local function sendLobbyState()
 end
 
 local function drawLobby(multiplayer)
+	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
 	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS") }, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
@@ -1012,8 +1060,8 @@ local function drawLobby(multiplayer)
 	local canStart = skirmish.level ~= nil
 	for _, slot in ipairs(skirmish.slots) do
 		if slot.type == "human" then humans = humans + 1 end
-		-- a guest who left can't play
-		if slot.type == "guest" and not guestById(slot.guest) then canStart = false end
+		-- a guest who left can't play, and every guest has to be ready
+		if slot.type == "guest" and not (guestById(slot.guest) and skirmish.ready[slot.guest]) then canStart = false end
 	end
 	canStart = canStart and humans == 1
 	if multiplayer then
@@ -1050,7 +1098,9 @@ Screens.mphost = {
 	onEscape = function() request("stop_hosting"); pop() end,
 }
 
--- Multiplayer guest: the host's lobby (read only) and the chat, until the host starts
+-- Multiplayer guest: the host's lobby and the chat, until the host starts; the guest can take a
+-- free position, change its colour and say it is ready
+local mpGuestReady = false
 Screens.mpguest = {
 	background = sunsetBackground,
 	draw = function()
@@ -1070,22 +1120,43 @@ Screens.mpguest = {
 			drawText(FONT_LIST, X(32), Y(180), "#  " .. T("FRONT_END_CHAT_PLAYER"), WHITE, S)
 			drawText(FONT_LIST, X(640), Y(180), T("FRONT_END_CHAT_COLOUR"), WHITE, S)
 			drawText(FONT_LIST, X(760), Y(180), T("FRONT_END_CHAT_TEAM"), WHITE, S)
+			-- a free position (an AI or nobody) is taken by a click; the guest's own colour changes
+			-- by a click on it (the host's lobby does it)
+			local me = getPlayerName()
 			for i = 2, #lines do
-				local kind, name, colour, team = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)$")
+				local kind, name, colour, team, ready = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)|?(%d*)$")
 				if kind then
 					local ry = Y(200) + (i - 2) * L(22)
-					local c = (kind == "H" or kind == "G") and 0xFF80FF80 or (kind == "E" and GREY or YELLOW)
+					local mine = kind == "G" and name == me
+					local free = kind == "A" or kind == "E"
+					if mine then mpGuestReady = ready == "1" end
+					if free and hovered(X(28), ry, L(600), L(22)) then
+						drawImage(ART.listRollover, X(28), ry, L(600), L(20))
+						if mouse.released then request("lobby_request", "slot " .. (i - 1)) end
+					end
+					local c = mine and 0xFFFFC070 or (kind == "H" or kind == "G") and 0xFF80FF80 or (kind == "E" and GREY or YELLOW)
 					drawText(FONT_LIST, X(32), ry, (i - 1) .. "  " .. name, c, S)
 					if kind ~= "E" then
 						drawImage(colourSwatch(tonumber(colour)), X(644), ry + L(1), L(36), L(14))
+						if mine and hovered(X(640), ry, L(44), L(16)) and mouse.released then
+							request("lobby_request", "colour " .. ((tonumber(colour) % 8) + 1))
+						end
 						drawText(FONT_LIST, X(770), ry, tonumber(team) > 0 and team or "-", WHITE, S)
+					end
+					if kind == "G" then
+						drawText(FONT_LIST, X(830), ry, ready == "1" and "ready" or "", 0xFF80FF80, S)
 					end
 				end
 			end
+			drawText(FONT_LIST, X(32), Y(980), "Click a free position to take it, your colour to change it.", GREY, S)
 		elseif status == "connected" then
 			drawText(FONT_LIST, X(32), Y(140), "Waiting for the host ...", GREY, S)
 		end
 		chatPanel(X(960), Y(130), L(942), L(870))
+		-- Ready: the host starts once every guest is
+		if button(mpGuestReady and "Not ready" or "Ready", X(669), Y(1032), L(182), L(24), status == "connected" and state ~= "") then
+			request("lobby_request", "ready " .. (mpGuestReady and 0 or 1))
+		end
 		if button(T("FRONT_END_BUTTON_BACK"), X(869), Y(1032), L(182), L(24)) then Screens.mpguest.onEscape() end
 	end,
 	onEscape = function() request("leave_lobby") end,

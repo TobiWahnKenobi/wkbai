@@ -246,6 +246,15 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	}
 	else if (request.action == "stop_hosting")
 		hosting = false;
+	else if (request.action == "kick_guest") {
+		// a guest by its lobby id: disconnected (it sees its lobby lost)
+		const int id = atoi(request.arg.c_str());
+		for (const auto& [link, guestId] : guestIds)
+			if (guestId == id) {
+				printf("Lobby: guest %d removed\n", id);
+				enet_peer_disconnect(((NetEnetLink*)link)->peer, 0);
+			}
+	}
 	else if (request.action == "campaign_play") {
 		// "<profile>|<province>", before the "slots" and "start" of the province's level
 		const size_t bar = request.arg.find('|');
@@ -425,6 +434,9 @@ void QuickStartMenu::launchGame()
 					// test runs: "lobbyTest": { ..., "chat": "<text>" }
 					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json()).value("chat", std::string()); !chat.empty())
 						client->sendMessage(playerName() + ": " + chat);
+					// { ..., "requests": ["slot 3", "ready 1"] } asks the host's lobby for these
+					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json()).value("requests", nlohmann::json::array()))
+						client->sendLobbyRequest(r.get<std::string>());
 					break;
 				}
 				case ENET_EVENT_TYPE_DISCONNECT: {
@@ -456,6 +468,8 @@ void QuickStartMenu::launchGame()
 				for (const FrontEnd::Request& r : fe->takeRequests()) {
 					if (r.action == "chat" && !r.arg.empty() && client->serverLink)
 						client->sendMessage(playerName() + ": " + r.arg);
+					else if (r.action == "lobby_request" && client->serverLink)
+						client->sendLobbyRequest(r.arg);
 					else if (r.action == "leave_lobby")
 						leave = true;
 					else if (r.action == "quit")
@@ -710,9 +724,14 @@ void QuickStartMenu::updateLobby()
 		if (isNew)
 			nextGuestId++;
 		std::string name;
-		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); ci != server->clientLinks.end())
-			name = server->clientInfos[ci - server->clientLinks.begin()].name;
-		list.push_back({ it->second, name.empty() ? "Player " + std::to_string(it->second) : name });
+		std::vector<std::string> requests;
+		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); ci != server->clientLinks.end()) {
+			auto& info = server->clientInfos[ci - server->clientLinks.begin()];
+			name = info.name;
+			requests = std::move(info.lobbyRequests);
+			info.lobbyRequests.clear();
+		}
+		list.push_back({ it->second, name.empty() ? "Player " + std::to_string(it->second) : name, std::move(requests) });
 	}
 	for (auto it = guestIds.begin(); it != guestIds.end();)
 		it = (std::find(guests.begin(), guests.end(), it->first) == guests.end()) ? guestIds.erase(it) : std::next(it);

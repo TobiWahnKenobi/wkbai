@@ -145,6 +145,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 
 	struct ClientInfo {
 		std::string name; // the player name a guest gave in the lobby
+		std::vector<std::string> lobbyRequests; // NETSRVMSG_LOBBY_REQUEST, for the lobby to handle
 		SrvGORef lastStampdown;
 		std::vector<SrvGORef> unitsForNewFormation;
 	};
