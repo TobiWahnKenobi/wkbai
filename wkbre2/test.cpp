@@ -1271,6 +1271,80 @@ void Test_RallyPoint()
 	fflush(stdout);
 }
 
+// Gathering (needs the game data): a peasant chops a tree that has only 12 wood left; once it
+// is gone the peasant should go on with the next tree. Prints "GATHER t=<s> order task target".
+void Test_Gather()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+	ServerGameObject* peasant = nullptr;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!peasant && child->blueprint->name == "Peasant")
+					peasant = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	// the nearest tree
+	ServerGameObject* tree = nullptr;
+	float best = 1e12f;
+	auto findTree = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (peasant && child->blueprint->name == "Coniferous Tree") {
+					const float d = (child->position - peasant->position).sqlen2xz();
+					if (d < best) { best = d; tree = child->dyncast<ServerGameObject>(); }
+				}
+				self(child, self);
+			}
+	};
+	findTree(server.getLevel(), findTree);
+	if (!peasant || !tree || chop < 0) {
+		printf("GATHER not set up\n");
+		return;
+	}
+	const int wood = server.gameSet->items.names.getIndex("Wood");
+	tree->setItem(wood, 12.0f);
+	SrvGORef treeRef = tree;
+	printf("GATHER peasant %u, tree %u at %.0f m\n", peasant->id, tree->id, std::sqrt(best));
+	server.timeManager.unpause();
+	server.startLevel(); // as a game does: the level start reactions register the deliverable buildings
+	server.gameSet->commands[chop].execute(peasant, tree, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	const uint64_t start = SDL_GetTicks();
+	int lastPrint = -1;
+	while (SDL_GetTicks() - start < 80000) {
+		server.tick();
+		const int t = (int)((SDL_GetTicks() - start) / 1000);
+		{
+			std::string order = "-", task = "-", target = "-";
+			if (Order* o = peasant->orderConfig.getCurrentOrder()) {
+				order = server.gameSet->orders.getString(o->blueprint->bpid);
+				if (Task* tk = o->getCurrentTask()) {
+					task = server.gameSet->tasks.getString(tk->blueprint->bpid);
+					if (tk->target)
+						target = tk->target->blueprint->name + " #" + std::to_string(tk->target->id);
+				}
+			}
+			// each change of order, task or target, and every 10 seconds
+			static std::string last;
+			const std::string now = order + " / " + task + " -> " + target;
+			if (now != last || t / 10 != lastPrint) {
+				last = now;
+				lastPrint = t / 10;
+				printf("GATHER t=%d %s | first tree %s | wood %.0f\n", t, now.c_str(), treeRef ? "there" : "gone", peasant->getItem(wood));
+			}
+		}
+		SDL_Delay(16);
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1297,6 +1371,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Formation, "Formation (members walk into place)"},
 {Test_SaveRoundTrip, "Save game round trip"},
 {Test_RallyPoint, "Rally point (free spots)"},
+{Test_Gather, "Gathering (the next tree)"},
 };
 
 void LaunchTest()

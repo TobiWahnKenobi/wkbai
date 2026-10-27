@@ -238,17 +238,26 @@ struct FinderNearestToSatisfy : ObjectFinder {
 	std::unique_ptr<ValueDeterminer> vdcond, vdradius;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		using AnyGO = CommonGameObject;
+		// the nearest object within the radius that satisfies the condition (only that one)
 		float radius = vdradius->eval(ctx);
+		const Vector3 center = ctx->getSelf()->position;
 		NNSearch search;
-		search.start(ctx->gameState, ctx->getSelf()->position, radius);
-		ObjectFinderResult res;
+		search.start(ctx->gameState, center, radius);
+		AnyGO* nearest = nullptr;
+		float nearestDist = radius * radius;
 		while (AnyGO* obj = (AnyGO*)search.next()) {
 			if (!obj->isInteractable()) continue;
+			const float d = (obj->position - center).sqlen2xz();
+			if (d > nearestDist || (nearest && d == nearestDist)) continue;
 			auto _ = ctx->change(ctx->candidate, obj);
-			if (vdcond->eval(ctx) > 0.0f)
-				res.push_back(obj);
+			if (vdcond->eval(ctx) > 0.0f) {
+				nearest = obj;
+				nearestDist = d;
+			}
 		}
-		return res;
+		if (nearest)
+			return { nearest };
+		return {};
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		vdcond.reset(ReadValueDeterminer(gsf, gs));
