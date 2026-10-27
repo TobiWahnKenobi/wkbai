@@ -7,6 +7,7 @@
 // IRenderer. The packed normals/tangents are unpacked in the vertex shader.
 
 #include "DiligentEnhancedTerrainRenderer.h"
+#include <SDL3/SDL_timer.h>
 #include "EnhancedTerrainData.h"
 #include "renderer_diligent.h"
 #include "TextureCache.h"
@@ -735,15 +736,17 @@ void DiligentEnhancedTerrainRenderer::render()
 	lakeColour[1] = ((terrain->fogColor >> 8) & 255) / 255.0f;
 	lakeColour[2] = (terrain->fogColor & 255) / 255.0f;
 	lakeColour[3] = 0x80 / 255.0f;
-	// The original's texture scroll (0x5F3830): the offset moves along the wind vector by
-	// (ms >> 4) / 128 and surges with a 4.1 s sine, ((sin + 0.8) * 0.3)^2; it wraps at 0.5.
-	const uint32_t ms = (uint32_t)(shadows.time * 1000.0f);
-	const float surgePhase = ((ms >> 2) & 1023) / 1024.0f * 6.2831853f;
-	const float surge = (std::sin(surgePhase) + 0.8f) * 0.3f;
+	// The texture scroll: the offset moves along the wind vector at the original's speed
+	// (0x5F3830: (ms >> 4) / 128 per millisecond), but steadily. The original adds a 4.1 s surge,
+	// ((sin + 0.8) * 0.3)^2, which made the water speed up, slow down and swing back, and wraps
+	// at 0.5, which jumped the texture by half a repeat; wrapping at 1.0 is seamless.
+	// a steady clock: the game time is nudged by the server's time sync, which made the water
+	// jump; the water flows on regardless of the game's speed
+	const double seconds = SDL_GetTicks() / 1000.0;
 	auto scroll = [&](float wx, float wy, float* out) {
-		const float k = (ms >> 4) * 0.0078125f + surge * surge;
-		out[0] = std::fmod(wx * k, 0.5f);
-		out[1] = std::fmod(wy * k, 0.5f);
+		const double k = seconds * (1000.0 / 16.0 / 128.0);
+		out[0] = (float)std::fmod(wx * k, 1.0);
+		out[1] = (float)std::fmod(wy * k, 1.0);
 	};
 	float* water = (float*)(sbdata + 128);
 	scroll(0.088f, -0.052f, water + 0);
