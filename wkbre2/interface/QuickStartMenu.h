@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 #include "QuickSkirmishMenu.h"
 #include "ModMenu.h"
 #include "FrontEnd.h"
@@ -22,7 +23,7 @@ struct NetLocalLink;
 struct QuickStartMenu {
 	QuickStartMenu(IRenderer* gfx);
 	~QuickStartMenu();
-	// The ImGui windows that the menus still open (skirmish settings, host, join, mods)
+	// The ImGui windows that the menus still open (skirmish settings, mods); the menu-time networking
 	void draw();
 	// What the player chose in the menus (FrontEnd requests)
 	void handleRequest(const FrontEnd::Request& request);
@@ -48,8 +49,20 @@ private:
 	NetLocalLink* srv2cli = nullptr, * cli2srv = nullptr;
 	bool enetOn = false;
 
-	bool showSkirmishWnd = false, showHostWnd = false, showJoinWnd = false;
-	char joinAddress[64] = "localhost"; uint16_t joinPort = 1234;
+	bool showSkirmishWnd = false;
+
+	// Multiplayer lobby. Host: the lobby screen is open (the network stays up), the guests' ids
+	// (stable while they are connected) and the lobby text the guests are sent
+	bool hosting = false;
+	std::map<NetEnetLink*, int> guestIds;
+	int nextGuestId = 1;
+	std::string lobbyText;
+	uint64_t lobbySentTime = 0;
+	// Guest: the host to join ("address[:port]")
+	std::string joinTarget;
+	void updateLobby();
+	void lobbyTest();
+	std::string playerName() const;
 
 	QuickSkirmishMenu skirmishMenu;
 	ModMenu modMenu;

@@ -13,6 +13,7 @@
 #include "../server.h"
 #include "../client.h"
 #include "../network.h"
+#include <SDL3/SDL_timer.h>
 #include "ClientInterface.h"
 #include "ServerDebugger.h"
 #include "../SoundPlayer.h"
@@ -198,6 +199,17 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			const std::string& type = fields[0];
 			if (type == "H")
 				slot.type = QuickSkirmishMenu::Slot::HUMAN;
+			else if (type.size() > 1 && type[0] == 'G') {
+				// a guest by its lobby id: its client index now
+				slot.type = QuickSkirmishMenu::Slot::EMPTY;
+				const int id = atoi(type.c_str() + 1);
+				for (const auto& [link, guestId] : guestIds)
+					if (guestId == id)
+						if (auto it = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); it != server->clientLinks.end()) {
+							slot.type = QuickSkirmishMenu::Slot::GUEST;
+							slot.client = (int)(it - server->clientLinks.begin());
+						}
+			}
 			else if (type == "E")
 				slot.type = QuickSkirmishMenu::Slot::EMPTY;
 			else if (type.rfind("A:", 0) == 0)
@@ -222,11 +234,30 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	else if (request.action == "skirmish_settings")
 		showSkirmishWnd = true;
 	else if (request.action == "host") {
+		// the lobby screen (FrontEndUI.lua) is open: guests can join
 		netInit();
-		showHostWnd = true;
+		hosting = true;
 	}
-	else if (request.action == "join")
-		showJoinWnd = true;
+	else if (request.action == "stop_hosting")
+		hosting = false;
+	else if (request.action == "start_multiplayer") {
+		selectSaveGame(request.arg);
+		modeChosen = MODE_MULTIPLAYER_HOST;
+	}
+	else if (request.action == "join") {
+		joinTarget = request.arg;
+		modeChosen = MODE_MULTIPLAYER_JOIN;
+	}
+	else if (request.action == "chat") {
+		if (!request.arg.empty())
+			client->sendMessage(playerName() + ": " + request.arg);
+	}
+	else if (request.action == "lobby_state")
+		lobbyText = request.arg;
+	else if (request.action == "player_name" || request.action == "join_address") {
+		g_settings[request.action == "player_name" ? "playerName" : "joinAddress"] = request.arg;
+		SaveSettings();
+	}
 	else if (request.action == "mods")
 		modMenu.open();
 	else if (request.action == "quit")
@@ -236,7 +267,7 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string& leaveArg)
 {
 	newSession();
-	showHostWnd = showJoinWnd = false;
+	hosting = false;
 	modeChosen = MODE_UNDEFINED;
 	if (FrontEnd* fe = FrontEnd::get())
 		fe->close();
@@ -258,49 +289,12 @@ void QuickStartMenu::draw()
 		ImGui::End();
 	}
 
-	if (showHostWnd) {
-		ImGui::Begin("Host game", &showHostWnd);
-		char taddress[64];
-		enet_address_get_host_ip(&eserver->address, taddress, sizeof(taddress));
-		ImGui::Text("IP Address: %s", taddress);
-		ImGui::Text("Num players: %zu", server->clientLinks.size());
-		ImGui::Separator();
-		ImGui::BeginChild("Chat", ImVec2(0, 128), true);
-		for (auto& s : server->chatMessages)
-			ImGui::TextUnformatted(s.data(), s.data() + s.size());
-		ImGui::EndChild();
-		static char chatInput[128];
-		bool enter = ImGui::InputText("##ChatInput", chatInput, sizeof(chatInput), ImGuiInputTextFlags_EnterReturnsTrue);
-		ImGui::SameLine();
-		enter |= ImGui::Button("Send");
-		if (enter)
-			client->sendMessage(chatInput);
-		ImGui::Separator();
-		if (ImGui::Button("Start"))
-			modeChosen = MODE_MULTIPLAYER_HOST;
-		ImGui::SameLine();
-		if (ImGui::Button("Cancel"))
-			showHostWnd = false;
-		ImGui::End();
-	}
-	else {
+	// the network is up while the multiplayer lobby is open
+	if (!hosting) {
 		netDeinit();
 	}
-
-	if (showJoinWnd) {
-		ImGui::Begin("Join", &showJoinWnd);
-		ImGui::InputText("Address (IP)", joinAddress, sizeof(joinAddress));
-		int port = (int)joinPort;
-		ImGui::InputInt("Port", &port);
-		joinPort = (uint16_t)port;
-		if (ImGui::Button("Join")) {
-			modeChosen = MODE_MULTIPLAYER_JOIN;
-		}
-		ImGui::SameLine();
-		if (ImGui::Button("Cancel"))
-			showJoinWnd = false;
-		ImGui::End();
-	}
+	updateLobby();
+	lobbyTest();
 
 	netHandle();
 	server->tick();
@@ -320,19 +314,31 @@ void QuickStartMenu::launchGame()
 
 	if (modeChosen == MODE_MULTIPLAYER_JOIN) {
 		updateDiscordRPC("Multiplayer", "?");
-		netInit();
 		enet_initialize();
-		ENetHost* eclient;
-		eclient = enet_host_create(nullptr, 1, 2, 0, 0);
+		ENetHost* eclient = enet_host_create(nullptr, 1, 2, 0, 0);
+		// "address[:port]"
+		std::string host = joinTarget.empty() ? std::string("localhost") : joinTarget;
 		ENetAddress address;
-		enet_address_set_host(&address, "localhost");
 		address.port = 1234;
-		ENetPeer* pserver = enet_host_connect(eclient, &address, 2, 0);
+		if (const size_t colon = host.rfind(':'); colon != std::string::npos) {
+			address.port = (uint16_t)atoi(host.c_str() + colon + 1);
+			host.resize(colon);
+		}
+		const bool resolved = enet_address_set_host(&address, host.c_str()) == 0;
+		if (resolved)
+			enet_host_connect(eclient, &address, 2, 0);
+		printf("Joining %s port %u%s\n", host.c_str(), address.port, resolved ? "" : ": address not found");
+		std::string status = resolved ? "connecting" : "lost";
 
 		ClientInterface cliui(client, gfx);
 		client->attachInterface(&cliui);
+		// until the host starts the game, the guest's lobby screen (FrontEndUI.lua)
+		FrontEnd* fe = FrontEnd::get();
+		if (fe)
+			fe->open("mpguest");
+		bool inLobby = true, leave = false;
 
-		while (!g_windowQuit && !cliui.wantsToLeave()) {
+		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
 
 			ENetEvent event;
@@ -343,11 +349,17 @@ void QuickStartMenu::launchGame()
 					NetEnetLink* link = new NetEnetLink(eclient, event.peer);
 					client->serverLink = link;
 					event.peer->data = link;
+					client->sendLobbyHello(playerName());
+					status = "connected";
+					// test runs: "lobbyTest": { ..., "chat": "<text>" }
+					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json()).value("chat", std::string()); !chat.empty())
+						client->sendMessage(playerName() + ": " + chat);
 					break;
 				}
 				case ENET_EVENT_TYPE_DISCONNECT: {
 					printf("disconnected\n");
 					client->serverLink = nullptr;
+					status = "lost";
 					break;
 				}
 				case ENET_EVENT_TYPE_RECEIVE: {
@@ -360,13 +372,51 @@ void QuickStartMenu::launchGame()
 				}
 			}
 
-			cliui.iter();
+			if (inLobby && client->getLevel()) {
+				// the host started: the game
+				inLobby = false;
+				if (fe)
+					fe->close();
+			}
+			if (inLobby && fe) {
+				ImGuiImpl_NewFrame();
+				fe->setLobby({}, client->chatMessages, client->lobbyState, status);
+				fe->frame(FrontEnd::Place::MAIN_MENU);
+				for (const FrontEnd::Request& r : fe->takeRequests()) {
+					if (r.action == "chat" && !r.arg.empty() && client->serverLink)
+						client->sendMessage(playerName() + ": " + r.arg);
+					else if (r.action == "leave_lobby")
+						leave = true;
+					else if (r.action == "quit")
+						g_windowQuit = true;
+				}
+				gfx->ClearFrame();
+				gfx->BeginDrawing();
+				gfx->InitImGuiDrawing();
+				ImGuiImpl_Render(gfx);
+				// test runs: "lobbyTest": { ..., "screenshot": path } of the lobby after 6 seconds
+				static const uint64_t lobbyStart = SDL_GetTicks();
+				static bool lobbyShot = false;
+				if (!lobbyShot && SDL_GetTicks() - lobbyStart > 6000) {
+					lobbyShot = true;
+					if (const std::string shot = g_settings.value("lobbyTest", nlohmann::json()).value("screenshot", std::string()); !shot.empty())
+						gfx->SaveScreenshot(shot.c_str());
+				}
+				gfx->EndDrawing();
+				HandleWindow();
+			}
+			else
+				cliui.iter();
 			runDiscordCallbacks();
 		}
-		leaveAction = cliui.leaveAction;
-		leaveArg = cliui.leaveArg;
+		if (leave)
+			leaveAction = "exit_to_menu";
+		else {
+			leaveAction = cliui.leaveAction;
+			leaveArg = cliui.leaveArg;
+		}
 		enet_host_destroy(eclient);
-		netDeinit();
+		enet_deinitialize();
 	}
 	else {
 		updateDiscordRPC((modeChosen == MODE_MULTIPLAYER_HOST) ? "Multiplayer (Host)" : "Singleplayer", savegames.at(savselected).c_str());
@@ -452,6 +502,99 @@ void QuickStartMenu::launchGame()
 		afterGame(leaveAction, leaveArg);
 }
 
+std::string QuickStartMenu::playerName() const
+{
+	return g_settings.value("playerName", std::string("Player"));
+}
+
+void QuickStartMenu::updateLobby()
+{
+	FrontEnd* fe = FrontEnd::get();
+	if (!fe || !hosting) {
+		guestIds.clear();
+		return;
+	}
+	std::vector<FrontEnd::Guest> list;
+	for (NetEnetLink* link : guests) {
+		auto [it, isNew] = guestIds.try_emplace(link, nextGuestId);
+		if (isNew)
+			nextGuestId++;
+		std::string name;
+		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); ci != server->clientLinks.end())
+			name = server->clientInfos[ci - server->clientLinks.begin()].name;
+		list.push_back({ it->second, name.empty() ? "Player " + std::to_string(it->second) : name });
+	}
+	for (auto it = guestIds.begin(); it != guestIds.end();)
+		it = (std::find(guests.begin(), guests.end(), it->first) == guests.end()) ? guestIds.erase(it) : std::next(it);
+	fe->setLobby(std::move(list), client->chatMessages, std::string(), "connected");
+
+	// the lobby for the guests, again every second (for the ones who just joined), in parts
+	const uint64_t now = SDL_GetTicks();
+	if (!lobbyText.empty() && now - lobbySentTime >= 1000) {
+		lobbySentTime = now;
+		const size_t PART = 200;
+		const size_t parts = std::min<size_t>(255, (lobbyText.size() + PART - 1) / PART);
+		for (size_t i = 0; i < parts; i++) {
+			NetPacketWriter msg(NETCLIMSG_LOBBY_STATE);
+			msg.writeUint8((uint8_t)i);
+			msg.writeUint8((uint8_t)parts);
+			msg.writeStringZ(lobbyText.substr(i * PART, PART));
+			for (NetEnetLink* link : guests)
+				static_cast<NetLink*>(link)->send(msg);
+		}
+	}
+}
+
+// Test runs (two instances on one machine): "lobbyTest": { "host": "<level>", "guestSlot": n }
+// hosts the level and starts once a guest has joined, with the guest at position n;
+// { "join": "<address>", "chat": "<text>" } joins and says something in the lobby
+void QuickStartMenu::lobbyTest()
+{
+	static bool done = false;
+	const nlohmann::json test = g_settings.value("lobbyTest", nlohmann::json());
+	if (done || !test.is_object() || modeChosen != MODE_UNDEFINED)
+		return;
+	if (test.contains("join")) {
+		done = true;
+		handleRequest({ "join", test.value("join", std::string("localhost")) });
+		return;
+	}
+	const std::string level = test.value("host", std::string());
+	if (level.empty())
+		return;
+	FrontEnd* fe = FrontEnd::get();
+	if (!hosting) {
+		handleRequest({ "select_level", level });
+		handleRequest({ "host", "" });
+		if (fe)
+			fe->open("mphost");
+		return;
+	}
+	// a guest with its name: wait a moment for its chat, then start
+	static uint64_t joinedTime = 0;
+	if (guests.empty() || guestIds.empty())
+		return;
+	auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)guests[0]);
+	if (ci == server->clientLinks.end() || server->clientInfos[ci - server->clientLinks.begin()].name.empty())
+		return;
+	if (!joinedTime)
+		joinedTime = SDL_GetTicks();
+	if (SDL_GetTicks() - joinedTime < test.value("startAfter", 3000u))
+		return;
+	done = true;
+	const int players = atoi(level.c_str()) > 0 ? atoi(level.c_str()) : 2;
+	const int guestSlot = test.value("guestSlot", 2);
+	std::string slots;
+	for (int i = 1; i <= players; i++) {
+		if (i > 1)
+			slots += "|";
+		slots += (i == 1) ? "H;c1" : (i == guestSlot) ? "G" + std::to_string(guestIds[guests[0]]) + ";c2" : "E";
+	}
+	printf("Lobby test: starting %s with slots %s\n", level.c_str(), slots.c_str());
+	handleRequest({ "slots", slots });
+	handleRequest({ "start_multiplayer", level });
+}
+
 void QuickStartMenu::netInit()
 {
 	if (enetOn) return;
@@ -460,7 +603,15 @@ void QuickStartMenu::netInit()
 	ENetAddress address;
 	address.host = ENET_HOST_ANY;
 	address.port = 1234;
+	// "hostBind": "127.0.0.1" only takes guests from this machine (tests)
+	if (const std::string bind = g_settings.value("hostBind", std::string()); !bind.empty())
+		enet_address_set_host(&address, bind.c_str());
 	eserver = enet_host_create(&address, 16, 2, 0, 0);
+	if (!eserver) {
+		printf("Hosting: could not open port %u\n", address.port);
+		enetOn = false;
+		enet_deinitialize();
+	}
 }
 
 void QuickStartMenu::netHandle()

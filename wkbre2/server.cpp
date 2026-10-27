@@ -1541,6 +1541,11 @@ void Server::tick()
 				sendToAll(echo);
 				break;
 			}
+			case NETSRVMSG_LOBBY_HELLO: {
+				clientInfos[clientIndex].name = br.readStringZ();
+				printf("Lobby: %s joined\n", clientInfos[clientIndex].name.c_str());
+				break;
+			}
 			case NETSRVMSG_COMMAND: {
 				int cmdid = br.readUint32();
 				int objid = br.readUint32();

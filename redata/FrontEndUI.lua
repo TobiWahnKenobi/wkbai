@@ -221,32 +221,6 @@ local function listBox(state, items, x, y, w, h)
 	return activated, hoveredRow
 end
 
--- A one-line text entry (always focused: the screen has one); state = { text = "" }. Typed
--- characters in `refused` are ignored. Returns whether Enter was pressed.
-local function textField(state, x, y, w, h, refused, maxLength)
-	panel(x, y, w, h)
-	for ch in string.gmatch(getTypedText(), "[%z\1-\127\194-\244][\128-\191]*") do
-		if not (refused and string.find(refused, ch, 1, true)) and #state.text < (maxLength or 64) then
-			state.text = state.text .. ch
-		end
-	end
-	if isKeyPressed("Backspace") then
-		state.text = string.gsub(state.text, "[%z\1-\127\194-\244][\128-\191]*$", "")
-	end
-	local th = fontHeight(FONT_TEXT, S)
-	pushClip(x, y, w, h)
-	local tx, ty = x + L(8), y + (h - th) / 2
-	-- the end of a long text stays in view
-	local tw = textWidth(FONT_TEXT, state.text, S)
-	if tw > w - L(20) then tx = x + w - L(12) - tw end
-	drawText(FONT_TEXT, tx, ty, state.text, YELLOW, S)
-	if math.floor(getTime() * 2) % 2 == 0 then
-		drawRect(tx + tw + L(1), ty + L(2), L(2), th - L(4), YELLOW)
-	end
-	popClip()
-	return isKeyPressed("Return") or isKeyPressed("Keypad Enter")
-end
-
 -- Splits text into lines that fit a width (keeping its own line breaks)
 local function wrapText(font, text, width)
 	local lines = {}
@@ -264,6 +238,60 @@ local function wrapText(font, text, width)
 		lines[#lines + 1] = line
 	end
 	return lines
+end
+
+-- A one-line text entry; state = { text = "" }. The field clicked last gets the typing (the
+-- first one drawn until then). Typed characters in `refused` are ignored. Returns whether Enter
+-- was pressed in it.
+local focusedField = nil
+local function textField(state, x, y, w, h, refused, maxLength)
+	panel(x, y, w, h)
+	if hovered(x, y, w, h) and mouse.pressed then focusedField = state end
+	if focusedField == nil then focusedField = state end
+	local focused = focusedField == state and not mouse.blocked
+	if focused then
+		for ch in string.gmatch(getTypedText(), "[%z\1-\127\194-\244][\128-\191]*") do
+			if not (refused and string.find(refused, ch, 1, true)) and #state.text < (maxLength or 64) then
+				state.text = state.text .. ch
+			end
+		end
+		if isKeyPressed("Backspace") then
+			state.text = string.gsub(state.text, "[%z\1-\127\194-\244][\128-\191]*$", "")
+		end
+	end
+	local th = fontHeight(FONT_TEXT, S)
+	pushClip(x, y, w, h)
+	local tx, ty = x + L(8), y + (h - th) / 2
+	-- the end of a long text stays in view
+	local tw = textWidth(FONT_TEXT, state.text, S)
+	if tw > w - L(20) then tx = x + w - L(12) - tw end
+	drawText(FONT_TEXT, tx, ty, state.text, YELLOW, S)
+	if focused and math.floor(getTime() * 2) % 2 == 0 then
+		drawRect(tx + tw + L(1), ty + L(2), L(2), th - L(4), YELLOW)
+	end
+	popClip()
+	return focused and (isKeyPressed("Return") or isKeyPressed("Keypad Enter"))
+end
+
+-- The lobby chat: the latest messages over an entry line; Enter sends
+local chatInput = { text = "" }
+local function chatPanel(x, y, w, h)
+	panel(x, y, w, h)
+	local lh = L(16)
+	local inputH = L(30)
+	local lines = {}
+	for _, message in ipairs(getChat()) do
+		for _, line in ipairs(wrapText(FONT_LIST, message, w - L(16))) do lines[#lines + 1] = line end
+	end
+	local rows = math.floor((h - inputH - L(12)) / lh)
+	local first = math.max(1, #lines - rows + 1)
+	for i = first, #lines do
+		drawText(FONT_LIST, x + L(8), y + L(4) + (i - first) * lh, lines[i], 0xFFE6E6E6, S)
+	end
+	if textField(chatInput, x + L(4), y + h - inputH - L(4), w - L(8), inputH, nil, 120) and chatInput.text ~= "" then
+		request("chat", chatInput.text)
+		chatInput.text = ""
+	end
 end
 
 local function title(text)
@@ -318,6 +346,7 @@ local function push(name)
 	local screen = Screens[name]
 	if not screen then return end
 	stack[#stack + 1] = name
+	focusedField = nil
 	if screen.open then screen.open() end
 end
 
@@ -561,8 +590,20 @@ local function generals()
 	return list
 end
 
+-- Multiplayer host: the connected guests by lobby id ({ id, name })
+local function guestById(id)
+	for _, g in ipairs(getLobbyGuests()) do if g.id == id then return g end end
+	return nil
+end
+
 local function slotText(slot)
-	if slot.type == "human" then return T("FRONT_END_CHAT_PLAYER_NAME"), 0xFFFFC070 end
+	if slot.type == "human" then
+		return skirmish.multiplayer and getPlayerName() or T("FRONT_END_CHAT_PLAYER_NAME"), 0xFFFFC070
+	end
+	if slot.type == "guest" then
+		local g = guestById(slot.guest)
+		return g and g.name or "-", g and 0xFF80FF80 or GREY
+	end
 	if slot.type == "empty" then return T("FRONT_END_CHAT_AI_PLAYER"), GREY end
 	local g = slot.general and generalsByBlueprint and generalsByBlueprint[slot.general]
 	return g and g.name or T("FRONT_END_CHAT_RANDOM_GENERAL"), YELLOW
@@ -573,6 +614,7 @@ local function slotsRequest()
 	local parts = {}
 	for i, slot in ipairs(skirmish.slots) do
 		if slot.type == "human" then parts[i] = "H"
+		elseif slot.type == "guest" then parts[i] = "G" .. slot.guest
 		elseif slot.type == "empty" then parts[i] = "E"
 		else parts[i] = "A:" .. (slot.general or "") end
 		parts[i] = parts[i] .. ";c" .. (slot.colour or 0) .. ";t" .. (slot.team or 0)
@@ -657,12 +699,39 @@ local function playersTab()
 	-- portrait and biography of the general under the mouse, or of the selected position's
 	local shown = hoveredRow and entries[hoveredRow]
 	if hoveredRow == nil and sel and sel.type == "ai" and sel.general then shown = generalsByBlueprint[sel.general] end
-	panel(X(20), Y(288), L(1882), L(712))
+	local bioW = skirmish.multiplayer and L(930) or L(1882)
+	panel(X(20), Y(288), bioW, L(712))
+	if skirmish.multiplayer then
+		-- the guests: a click puts one at the selected position
+		panel(X(960), Y(288), L(942), L(200))
+		drawText(FONT_LIST, X(968), Y(294), T("FRONT_END_CHAT_PLAYER") .. " (" .. getPlayerName() .. ", host)", WHITE, S)
+		local guests = getLobbyGuests()
+		local rows = {}
+		for i, g in ipairs(guests) do
+			local at = nil
+			for si, slot in ipairs(slots) do if slot.type == "guest" and slot.guest == g.id then at = si end end
+			rows[i] = { g.name .. (at and ("  (" .. at .. ")") or ""), at and 0xFF80FF80 or YELLOW }
+		end
+		skirmish.guestList = skirmish.guestList or { selected = 0, scroll = 0 }
+		skirmish.guestList.selected = 0
+		local _, row = listBox(skirmish.guestList, rows, X(962), Y(312), L(938), L(174))
+		if skirmish.guestList.selected > 0 and sel then
+			local g = guests[skirmish.guestList.selected]
+			for _, other in ipairs(slots) do
+				if other.type == "guest" and other.guest == g.id then other.type = "empty"; other.guest = nil end
+			end
+			slots[skirmish.slotList.selected] = { type = "guest", guest = g.id, colour = sel.colour, team = sel.team }
+		end
+		if #guests == 0 then
+			drawText(FONT_LIST, X(970), Y(316), "Waiting for players to join ...", GREY, S)
+		end
+		chatPanel(X(960), Y(496), L(942), L(504))
+	end
 	if shown then
 		if shown.portrait ~= "" then drawImage(shown.portrait, X(30), Y(298), L(150), L(200)) end
 		drawText(FONT_LIST, X(192), Y(300), shown.name, YELLOW, S)
 		local y = Y(320)
-		for _, line in ipairs(wrapText(FONT_LIST, shown.biography or "", L(1690))) do
+		for _, line in ipairs(wrapText(FONT_LIST, shown.biography or "", bioW - L(192))) do
 			drawText(FONT_LIST, X(192), y, line, 0xFFE6E6E6, S)
 			y = y + L(16)
 		end
@@ -791,45 +860,160 @@ local function settingsTab()
 	end
 end
 
+-- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
+local function levelTitle(level)
+	local players, name = string.match(stripExtension(level or ""), "^(%d+) Player (.+)$")
+	return players and (name .. " (" .. players .. ")") or stripExtension(level or "")
+end
+
+local function openLobby(multiplayer)
+	skirmish.multiplayer = multiplayer
+	local levels = levelList()
+	local level = levels[levelState.selected]
+	if level then request("select_level", level) end
+	if level ~= skirmish.level then resetSlots(level) end
+	-- guests from an earlier lobby are gone
+	for _, slot in ipairs(skirmish.slots) do
+		if slot.type == "guest" then slot.type = "empty"; slot.guest = nil end
+	end
+end
+
+-- Multiplayer host: the lobby as text for the guests ("level\nH|name|colour|team\n...")
+local lastLobbyText = nil
+local function sendLobbyState()
+	local lines = { levelTitle(skirmish.level) }
+	for _, slot in ipairs(skirmish.slots) do
+		local text = slotText(slot)
+		local kind = ({ human = "H", guest = "G", ai = "A", empty = "E" })[slot.type] or "E"
+		lines[#lines + 1] = kind .. "|" .. string.gsub(text, "[|\n]", " ") .. "|" .. (slot.colour or 0) .. "|" .. (slot.team or 0)
+	end
+	local text = table.concat(lines, "\n")
+	if text ~= lastLobbyText then
+		lastLobbyText = text
+		request("lobby_state", text)
+	end
+end
+
+local function drawLobby(multiplayer)
+	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
+	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS") }, skirmish.tab, X(8), Y(50), L(30))
+	panel(X(8), Y(80), L(1907), L(988), true)
+	if skirmish.tab == 1 then playersTab() else settingsTab() end
+	local humans = 0
+	local canStart = skirmish.level ~= nil
+	for _, slot in ipairs(skirmish.slots) do
+		if slot.type == "human" then humans = humans + 1 end
+		-- a guest who left can't play
+		if slot.type == "guest" and not guestById(slot.guest) then canStart = false end
+	end
+	canStart = canStart and humans == 1
+	if multiplayer then
+		-- every guest needs a position
+		for _, g in ipairs(getLobbyGuests()) do
+			local placed = false
+			for _, slot in ipairs(skirmish.slots) do if slot.type == "guest" and slot.guest == g.id then placed = true end end
+			if not placed then canStart = false end
+		end
+		sendLobbyState()
+	end
+	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
+		settingsRequests()
+		slotsRequest()
+		request(multiplayer and "start_multiplayer" or "start", skirmish.level)
+	end
+	if button(T("FRONT_END_BUTTON_BACK"), X(970), Y(1032), L(182), L(24)) then
+		Screens[multiplayer and "mphost" or "skirmish"].onEscape()
+	end
+end
+
 Screens.skirmish = {
 	background = sunsetBackground,
-	open = function()
-		local levels = levelList()
-		local level = levels[levelState.selected]
-		if level then request("select_level", level) end
-		if level ~= skirmish.level then resetSlots(level) end
-	end,
+	open = function() openLobby(false) end,
+	draw = function() drawLobby(false) end,
+	onEscape = function() pop() end,
+}
+
+-- Multiplayer host: the skirmish lobby with the guests who joined and the chat
+Screens.mphost = {
+	background = sunsetBackground,
+	open = function() openLobby(true); lastLobbyText = nil end,
+	draw = function() drawLobby(true) end,
+	onEscape = function() request("stop_hosting"); pop() end,
+}
+
+-- Multiplayer guest: the host's lobby (read only) and the chat, until the host starts
+Screens.mpguest = {
+	background = sunsetBackground,
 	draw = function()
-		title(T("FRONT_END_LOBBY_TITLE_SKIRMISH"))
-		skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS") }, skirmish.tab, X(8), Y(50), L(30))
+		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
 		panel(X(8), Y(80), L(1907), L(988), true)
-		if skirmish.tab == 1 then playersTab() else settingsTab() end
-		local humans = 0
-		for _, slot in ipairs(skirmish.slots) do if slot.type == "human" then humans = humans + 1 end end
-		local canStart = skirmish.level ~= nil and humans == 1
-		if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
-			settingsRequests()
-			slotsRequest()
-			request("start", skirmish.level)
+		local status = getLobbyStatus()
+		local statusText = (status == "connected") and ("Connected as " .. getPlayerName())
+			or (status == "connecting") and ("Connecting to " .. getJoinAddress() .. " ...")
+			or ("No connection to " .. getJoinAddress())
+		drawText(FONT_TEXT, X(28), Y(92), statusText, status == "lost" and 0xFF6060FF or WHITE, S)
+		local state = getLobbyState()
+		local lines = {}
+		for line in string.gmatch(state .. "\n", "(.-)\n") do lines[#lines + 1] = line end
+		panel(X(20), Y(130), L(930), L(870))
+		if state ~= "" then
+			drawText(FONT_TEXT, X(32), Y(140), lines[1] or "", YELLOW, S)
+			drawText(FONT_LIST, X(32), Y(180), "#  " .. T("FRONT_END_CHAT_PLAYER"), WHITE, S)
+			drawText(FONT_LIST, X(640), Y(180), T("FRONT_END_CHAT_COLOUR"), WHITE, S)
+			drawText(FONT_LIST, X(760), Y(180), T("FRONT_END_CHAT_TEAM"), WHITE, S)
+			for i = 2, #lines do
+				local kind, name, colour, team = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)$")
+				if kind then
+					local ry = Y(200) + (i - 2) * L(22)
+					local c = (kind == "H" or kind == "G") and 0xFF80FF80 or (kind == "E" and GREY or YELLOW)
+					drawText(FONT_LIST, X(32), ry, (i - 1) .. "  " .. name, c, S)
+					if kind ~= "E" then
+						drawImage(colourSwatch(tonumber(colour)), X(644), ry + L(1), L(36), L(14))
+						drawText(FONT_LIST, X(770), ry, tonumber(team) > 0 and team or "-", WHITE, S)
+					end
+				end
+			end
+		elseif status == "connected" then
+			drawText(FONT_LIST, X(32), Y(140), "Waiting for the host ...", GREY, S)
 		end
-		if button(T("FRONT_END_BUTTON_BACK_TO_MAIN_MENU"), X(970), Y(1032), L(182), L(24)) then pop() end
+		chatPanel(X(960), Y(130), L(942), L(870))
+		if button(T("FRONT_END_BUTTON_BACK"), X(869), Y(1032), L(182), L(24)) then Screens.mpguest.onEscape() end
 	end,
+	onEscape = function() request("leave_lobby") end,
 }
 
 -- Multiplayer --------------------------------------------------------------------------
 
+local mpName, mpAddress = { text = "" }, { text = "" }
 Screens.multiplayer = {
 	background = sunsetBackground,
-	open = Screens.skirmish.open,
+	open = function()
+		mpName.text = getPlayerName()
+		mpAddress.text = getJoinAddress()
+		focusedField = mpName
+	end,
 	draw = function()
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
-		local chosen = levelPicker()
-		-- hosting and joining are still the ImGui windows
-		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil) then
-			request("host")
+		local chosen = levelPicker(X(20), Y(80), L(1880), L(880))
+		-- the player name (both), the host's address (joining: "address" or "address:port")
+		drawText(FONT_LIST, X(24), Y(972), "Name", WHITE, S)
+		textField(mpName, X(80), Y(966), L(360), L(28), "|", 24)
+		drawText(FONT_LIST, X(470), Y(972), "Host address", WHITE, S)
+		local enterJoin = textField(mpAddress, X(580), Y(966), L(420), L(28), " ", 64)
+		local name = string.match(mpName.text, "^%s*(.-)%s*$")
+		local function remember()
+			request("player_name", name)
+			request("join_address", mpAddress.text)
 		end
-		if button(T("FRONT_END_MULTIPLAYER_BUTTON_JOIN_IP"), X(1250), Y(1052), L(210), L(24)) then
-			request("join")
+		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil and name ~= "") then
+			remember()
+			request("host")
+			push("mphost")
+		end
+		if (button(T("FRONT_END_MULTIPLAYER_BUTTON_JOIN_IP"), X(1250), Y(1052), L(210), L(24), name ~= "" and mpAddress.text ~= "") or enterJoin)
+			and name ~= "" and mpAddress.text ~= "" then
+			remember()
+			request("join", mpAddress.text)
 		end
 		if button(T("FRONT_END_BUTTON_BACK"), X(1697), Y(1052), L(210), L(24)) then pop() end
 	end,
@@ -1007,6 +1191,7 @@ function FE_Frame(place)
 	-- Esc goes back (Options handles it itself, as Cancel)
 	if isKeyPressed("Escape") and name ~= "options" and not openedThisFrame then
 		if dialog then dialog = nil
+		elseif screen.onEscape then screen.onEscape()
 		elseif name ~= "main" then pop() end
 	end
 	openedThisFrame = false

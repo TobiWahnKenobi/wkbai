@@ -154,7 +154,9 @@ void Client::tick()
 				break;
 			}
 			case NETCLIMSG_CONTROL_PLAYER: {
-				clientPlayer = br.readUint32();
+				const uint32_t playerId = br.readUint32();
+				clientPlayer = playerId;
+				printf("Client: controlling player %u\n", playerId);
 				break;
 			}
 			case NETCLIMSG_OBJECT_CREATED: {
@@ -604,6 +606,15 @@ void Client::tick()
 					obj->cityRectangles.push_back(rect);
 				break;
 			}
+			case NETCLIMSG_LOBBY_STATE: {
+				const uint8_t part = br.readUint8(), parts = br.readUint8();
+				if (part == 0)
+					lobbyStateParts.clear();
+				lobbyStateParts += br.readStringZ();
+				if (part + 1 == parts)
+					lobbyState = std::move(lobbyStateParts);
+				break;
+			}
 			case NETCLIMSG_BUILDING_SPAWNED_UNIT_ORDER_CHANGED: {
 				auto [objectId, commandIndex, targetId, destination, faceTo] = br.readValues<uint32_t, uint32_t, uint32_t, Vector3, Vector3>();
 				ClientGameObject* obj = findObject(objectId);
@@ -621,6 +632,12 @@ void Client::tick()
 		}
 		dbgNumMessagesInCurrentSec += dbgNumMessagesPerTick;
 	}
+}
+
+void Client::sendLobbyHello(const std::string& name) {
+	NetPacketWriter packet(NETSRVMSG_LOBBY_HELLO);
+	packet.writeStringZ(name);
+	serverLink->send(packet);
 }
 
 void Client::sendMessage(const std::string &msg) {

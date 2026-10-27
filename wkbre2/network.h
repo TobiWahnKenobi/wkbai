@@ -65,6 +65,8 @@ enum NetClientMessages {
 	NETCLIMSG_UPDATE_BUILDING_ORDER_COUNT_MAP,
 	NETCLIMSG_CITY_RECTANGLE_ADDED,
 	NETCLIMSG_BUILDING_SPAWNED_UNIT_ORDER_CHANGED,
+	// The multiplayer lobby as the host shows it, for the guests (text, in parts: a packet is small)
+	NETCLIMSG_LOBBY_STATE,
 };
 
 enum NetServerMessages {
@@ -85,6 +87,8 @@ enum NetServerMessages {
 	NETSRVMSG_CREATE_NEW_FORMATION,
 	NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_TARGET,
 	NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_DESTINATION,
+	// A guest joining the lobby: its player name
+	NETSRVMSG_LOBBY_HELLO,
 };
 
 struct NetPacketWriter {

@@ -272,6 +272,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				humanPlaced = true;
 				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
 			}
+			else if (slot.type == Slot::GUEST && slot.client > 0 && slot.client < (int)server.clientLinks.size()) {
+				server.setClientPlayerControl(slot.client, player->id);
+				printf("Skirmish: position %zu (player %u): guest %d\n", i + 1, player->id, slot.client);
+			}
 			else {
 				const GameObjBlueprint* general = slot.general.empty() ? nullptr
 					: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);

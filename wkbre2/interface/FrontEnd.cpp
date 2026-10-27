@@ -13,6 +13,8 @@
 #include "../Language.h"
 #include "../SoundPlayer.h"
 #include "../util/StriCompare.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
@@ -96,6 +98,9 @@ struct FrontEnd::Impl {
 	std::vector<Request> requests;
 	std::vector<std::string> saveGames;
 	std::string currentSave;
+	std::vector<Guest> guests;
+	std::vector<std::string> chat;
+	std::string lobbyState, lobbyStatus;
 	bool singlePlayer = true;
 	Place place = Place::MAIN_MENU;
 	ImDrawList* drawList = nullptr;
@@ -273,6 +278,20 @@ struct FrontEnd::Impl {
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
 		lua.set_function("getCurrentSave", [this]() { return currentSave; });
+
+		// Multiplayer lobby
+		lua.set_function("getLobbyGuests", [this]() {
+			sol::table list = lua.create_table();
+			int i = 1;
+			for (const Guest& g : guests)
+				list[i++] = lua.create_table_with("id", g.id, "name", g.name);
+			return list;
+		});
+		lua.set_function("getChat", [this]() { return sol::as_table(chat); });
+		lua.set_function("getLobbyState", [this]() { return lobbyState; });
+		lua.set_function("getLobbyStatus", [this]() { return lobbyStatus; });
+		lua.set_function("getPlayerName", []() { return g_settings.value("playerName", std::string("Player")); });
+		lua.set_function("getJoinAddress", []() { return g_settings.value("joinAddress", std::string("localhost")); });
 		// Draws a level's map image into a box; returns false when the level has none
 		lua.set_function("drawLevelPreview", [this](const std::string& level, float x, float y, float w, float h) {
 			const Image& img = levelPreview(level);
@@ -436,3 +455,12 @@ void FrontEnd::setSaveGames(std::vector<std::string> saves) { impl->saveGames = 
 void FrontEnd::setSinglePlayer(bool singlePlayer) { impl->singlePlayer = singlePlayer; }
 void FrontEnd::setCurrentSave(const std::string& name) { impl->currentSave = name; }
 void FrontEnd::saved(bool ok, const std::string& name) { impl->call("FE_Saved", ok, name); }
+
+void FrontEnd::setLobby(std::vector<Guest> guests, const std::vector<std::string>& chat, const std::string& state, const std::string& status)
+{
+	impl->guests = std::move(guests);
+	if (chat.size() != impl->chat.size())
+		impl->chat = chat;
+	impl->lobbyState = state;
+	impl->lobbyStatus = status;
+}

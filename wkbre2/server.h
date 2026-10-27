@@ -137,6 +137,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::vector<SrvGORef> clientPlayerObjects;
 
 	struct ClientInfo {
+		std::string name; // the player name a guest gave in the lobby
 		SrvGORef lastStampdown;
 		std::vector<SrvGORef> unitsForNewFormation;
 	};

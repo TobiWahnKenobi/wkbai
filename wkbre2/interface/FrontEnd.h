@@ -39,6 +39,14 @@ struct FrontEnd {
 	// The result of a "save" request, shown by the menu
 	void saved(bool ok, const std::string& name);
 
+	// The multiplayer lobby: the guests connected to this host ({ id, name }), the chat, the
+	// host's lobby as text (for a guest) and the connection ("connecting", "connected", "lost")
+	struct Guest {
+		int id;
+		std::string name;
+	};
+	void setLobby(std::vector<Guest> guests, const std::vector<std::string>& chat, const std::string& state, const std::string& status);
+
 	// The one front end of the program, or null (tests)
 	static FrontEnd* get();
 

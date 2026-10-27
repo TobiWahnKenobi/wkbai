@@ -50,6 +50,8 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	//std::map<uint32_t, ClientGameObject*> idmap;
 
 	std::vector<std::string> chatMessages;
+	// Multiplayer guests: the lobby as the host shows it (NETCLIMSG_LOBBY_STATE), and its parts so far
+	std::string lobbyState, lobbyStateParts;
 
 	NetLink *serverLink;
 
@@ -94,6 +96,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	void tick();
 
 	void sendMessage(const std::string &msg);
+	void sendLobbyHello(const std::string& name);
 	void sendCommand(ClientGameObject *obj, const Command *cmd, int assignmentMode, ClientGameObject *target = nullptr, const Vector3 & destination = Vector3());
 	void sendPauseRequest(uint8_t pauseState);
 	void sendStampdown(const GameObjBlueprint *blueprint, ClientGameObject *player, const Vector3 &position, bool sendEvent = false, bool inGameplay = false);

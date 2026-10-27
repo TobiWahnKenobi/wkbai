@@ -18,8 +18,9 @@ public:
 	// Who plays at each start position of the map (the level's players in the order of their
 	// ids), as chosen in the skirmish menu
 	struct Slot {
-		enum Type { HUMAN, AI, EMPTY } type = AI;
+		enum Type { HUMAN, AI, EMPTY, GUEST } type = AI;
 		std::string general; // AI: an AI General (PLAYER blueprint); empty: a random one
+		int client = 0;      // GUEST: the server's client index of the multiplayer guest
 		int colour = 0;      // player colour index (1 blue ... 8 brown); 0: the map's
 		int team = 0;        // 0: no team
 	};
