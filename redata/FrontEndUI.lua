@@ -419,7 +419,7 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_CAMPAIGN", enabled = false },
 	{ key = "FRONT_END_MAIN_MENU_SKIRMISH", action = function() push("skirmish") end },
 	{ key = "FRONT_END_MAIN_MENU_MULTIPLAYER", action = function() push("multiplayer") end },
-	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", enabled = false },
+	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
 	{ text = "Mods", action = function() request("mods") end },
 	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", enabled = false },
@@ -435,6 +435,27 @@ Screens.main = {
 		drawImage(ART.logo, X(960 - 500 * k), Y(40), L(1000 * k), L(264 * k))
 		buttonColumn(MainMenuItems, Y(377), Y(1010))
 		drawText(FONT_LIST, W - L(100), H - L(26), "wkbre2", WHITE, S)
+	end,
+}
+
+-- Tutorial -----------------------------------------------------------------------------
+-- As the original's IDD_ADDON_TUTORIAL: the interactive tutorial and the four lessons, each a level
+
+local TutorialItems = {
+	{ key = "FRONT_END_TUTORIAL_INTERACTIVE", action = function() request("start", "Interactive Tutorial.lvl") end },
+	{ key = "FRONT_END_TUTORIAL_1", action = function() request("start", "Basic Economy.lvl") end },
+	{ key = "FRONT_END_TUTORIAL_2", action = function() request("start", "Advanced Economy.lvl") end },
+	{ key = "FRONT_END_TUTORIAL_3", action = function() request("start", "Basic Military.lvl") end },
+	{ key = "FRONT_END_TUTORIAL_4", action = function() request("start", "Advanced Military.lvl") end },
+}
+
+Screens.tutorial = {
+	background = sunsetBackground,
+	draw = function()
+		title(T("FRONT_END_TUTORIAL_TITLE"))
+		-- the original's places (of 640 x 480): the buttons from 130 to 290, Back at 370
+		buttonColumn(TutorialItems, Y(292), Y(652))
+		if button(T("FRONT_END_BUTTON_BACK"), X(960 - 101.5), Y(832), L(203), L(38)) then pop() end
 	end,
 }
 
