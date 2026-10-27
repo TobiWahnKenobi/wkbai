@@ -18,6 +18,8 @@
 #include "../terrain.h"
 #include "../Pathfinding.h"
 #include "KeywordStubs.h"
+#include "Commission.h"
+#include "../AIController.h"
 
 namespace {
 	float RandomFromZeroToOne() { return (float)(rand() & 0xFFFF) / 32768.0f; }
@@ -731,11 +733,23 @@ struct ValueCouldReach : ValueDeterminer {
 	}
 };
 
+// AI_CONTROLLED <finder>: 1 when every object found belongs to a player run by an AI (WKB.exe's
+// VD_AI_Controlled, server 0x4537c0: the player has an AI controller); on a client 0. The game set
+// uses it to cancel an AI's spawning at the population limit, which would else block the building.
 struct ValueAiControlled : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fPlayer;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO
-		return 0.0f;
+		if (!ctx->isServer())
+			return 0.0f;
+		const auto objects = fPlayer->eval(ctx);
+		if (objects.empty())
+			return 0.0f;
+		for (CommonGameObject* obj : objects) {
+			const AIController& ai = ((ServerGameObject*)obj)->getPlayer()->aiController;
+			if (!(ai.planBlueprint || !ai.commissionInstances.empty() || !ai.workOrderInstances.empty()))
+				return 0.0f;
+		}
+		return 1.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		fPlayer.reset(ReadFinder(gsf, gs));
@@ -773,15 +787,87 @@ struct ValueAverageEquationResult : ValueDeterminer {
 	}
 };
 
+// CAN_AFFORD_COMMISSION <commission> <handler finder> [FORCE_BALANCE] [BEST_QUALITY], as WKB.exe's
+// VD_Can_Afford_Commission (server 0x457730, the check 0x4cb440): the handler's player's resources,
+// less what each requirement still misses times its cost, must not go below zero. A character
+// requirement takes the first entry of its ladder (best first) that has a building to spawn it
+// and that it can pay for; with BEST_QUALITY only the first such entry. On a client: 0.
 struct ValueCanAffordCommission : ValueDeterminer {
-	std::unique_ptr<ObjectFinder> fPlayer;
+	const GSCommission* commission = nullptr;
+	std::unique_ptr<ObjectFinder> fHandler;
+	bool bestQuality = false;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO
+		if (!ctx->isServer() || !commission)
+			return 0.0f;
+		ServerGameObject* handler = (ServerGameObject*)fHandler->getFirst(ctx);
+		if (!handler)
+			return 0.0f;
+		ServerGameObject* player = handler->getPlayer();
+		static const std::pair<int, int> costItems[3] = { // as in server.cpp
+			{Tags::PDITEM_FOOD, Tags::PDITEM_FOOD_COST},
+			{Tags::PDITEM_WOOD, Tags::PDITEM_WOOD_COST},
+			{Tags::PDITEM_GOLD, Tags::PDITEM_GOLD_COST},
+		};
+		float left[3];
+		for (int r = 0; r < 3; r++)
+			left[r] = player->getItem(costItems[r].first);
+		// takes count times the type's cost from these resources, if they have it
+		auto pay = [&](float* from, const GameObjBlueprint* type, int count) {
+			float after[3];
+			for (int r = 0; r < 3; r++) {
+				after[r] = from[r] - count * std::max(0.0f, type->getStartingItemValue(costItems[r].second));
+				if (after[r] < 0.0f)
+					return false;
+			}
+			std::copy(std::begin(after), std::end(after), from);
+			return true;
+		};
+		// the foundations this commission has started already, when it is active
+		const CommissionInstance* active = nullptr;
+		for (const CommissionInstance& ci : player->aiController.commissionInstances)
+			if (ci.blueprint == commission && ci.handlerObject.get() == handler)
+				active = &ci;
+		SrvScriptContext hctx(Server::instance, handler);
+		for (const auto& req : commission->characterRequirements) {
+			const int missing = (int)std::ceil(req.vdCountNeeded->eval(&hctx)) - (int)req.fdAlreadyHaving->eval(&hctx).size();
+			if (missing <= 0)
+				continue;
+			bool paid = false;
+			for (const auto& entry : req.ladder->entries) {
+				if (entry.finder->eval(&hctx).empty())
+					continue;
+				if (pay(left, entry.type, missing)) {
+					paid = true;
+					break;
+				}
+				if (bestQuality)
+					break;
+			}
+			if (!paid)
+				return 0.0f;
+		}
+		for (size_t i = 0; i < commission->buildingRequirements.size(); i++) {
+			const auto& req = commission->buildingRequirements[i];
+			int missing = (int)req.vdCountNeeded->eval(&hctx) - (int)req.fdAlreadyHaving->eval(&hctx).size();
+			if (active && i < active->buildingReqInsts.size())
+				for (const SrvGORef& foundation : active->buildingReqInsts[i].foundations)
+					if (foundation)
+						missing--;
+			if (missing > 0 && !pay(left, req.bpBuilding, missing))
+				return 0.0f;
+		}
 		return 1.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
-		gsf.nextString(true);
-		fPlayer.reset(ReadFinder(gsf, gs));
+		commission = gs.commissions.readPtr(gsf);
+		fHandler.reset(ReadFinder(gsf, gs));
+		while (!gsf.eol) {
+			const std::string flag = gsf.nextString();
+			if (flag == "BEST_QUALITY")
+				bestQuality = true;
+			else if (flag.empty())
+				break;
+		}
 	}
 };
 
