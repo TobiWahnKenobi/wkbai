@@ -14,6 +14,7 @@
 #include <cassert>
 #include <iterator>
 #include "KeywordStubs.h"
+#include "Package.h"
 
 ObjectFinderResult ObjectFinder::fail(ScriptContext* ctx) {
 	ferr("Invalid object finder call from %s", ctx->gameState->getProgramName());
@@ -208,6 +209,18 @@ struct FinderPackageSender : ObjectFinder {
 		auto obj = ctx->get(ctx->packageSender);
 		if (obj) return { obj };
 		else return {};
+	}
+	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {}
+};
+
+// FINDER_PACKAGE_RELATED_PARTY: the related party of the package being received
+struct FinderPackageRelatedParty : ObjectFinder {
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		ObjectFinderResult result;
+		for (ServerGameObject* obj : GSPackage::currentRelatedParty)
+			if (obj && !obj->deleted)
+				result.push_back(obj);
+		return result;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {}
 };
@@ -412,6 +425,7 @@ ObjectFinder *ReadFinder(GSFileParser &gsf, const GameSet &gs)
 	case Tags::FINDER_CANDIDATE: finder = new FinderCandidate; break;
 	case Tags::FINDER_CREATOR: finder = new FinderCreator; break;
 	case Tags::FINDER_PACKAGE_SENDER: finder = new FinderPackageSender; break;
+	case Tags::FINDER_PACKAGE_RELATED_PARTY: finder = new FinderPackageRelatedParty; break;
 	case Tags::FINDER_SEQUENCE_EXECUTOR: finder = new FinderSequenceExecutor; break;
 	case Tags::FINDER_NEAREST_TO_SATISFY: finder = new FinderNearestToSatisfy; break;
 	case Tags::FINDER_LEVEL: finder = new FinderLevel; break;

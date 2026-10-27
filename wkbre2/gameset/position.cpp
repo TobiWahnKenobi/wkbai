@@ -131,16 +131,104 @@ struct PDThisOtherSideOf : PositionDeterminer {
 	}
 };
 
+// NEAREST_VALID_POSITION_FOR <object> <position>: the nearest place to the position where the
+// object can stand (MovementController::isTileBlocked)
 struct PDNearestValidPositionFor : PositionDeterminer {
 	std::unique_ptr<ObjectFinder> a;
 	std::unique_ptr<PositionDeterminer> p;
 	virtual OrientedPosition eval(ScriptContext* ctx) override {
-		// TODO
-		return p->eval(ctx);
+		OrientedPosition po = p->eval(ctx);
+		if (!ctx->isServer())
+			return po;
+		if (CommonGameObject* obj = a->getFirst(ctx))
+			po.position = MovementController::nearestValidPosition(obj->blueprint, po.position);
+		return po;
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
 		a.reset(ReadFinder(gsf, gs));
 		p.reset(PositionDeterminer::createFrom(gsf, gs));
+	}
+};
+
+// NEAREST_VALID_POSITION_TOWARDS <object> <from> <towards>: as far as the object can go from the
+// first position in a straight line towards the second ("Move to Nearest Valid Position Towards
+// Target"); from a place it can't stand on, the nearest place it can
+struct PDNearestValidPositionTowards : PositionDeterminer {
+	std::unique_ptr<ObjectFinder> a;
+	std::unique_ptr<PositionDeterminer> from, towards;
+	virtual OrientedPosition eval(ScriptContext* ctx) override {
+		OrientedPosition po = from->eval(ctx);
+		const Vector3 goal = towards->eval(ctx).position;
+		CommonGameObject* obj = a->getFirst(ctx);
+		if (!ctx->isServer() || !obj)
+			return po;
+		const GameObjBlueprint* bp = obj->blueprint;
+		auto blocked = [bp](const Vector3& v) { return MovementController::isTileBlocked(bp, (int)(v.x / 5.0f), (int)(v.z / 5.0f)); };
+		if (blocked(po.position)) {
+			po.position = MovementController::nearestValidPosition(bp, po.position);
+			return po;
+		}
+		const Vector3 start = po.position;
+		const float length = (goal - start).len2xz();
+		const int steps = (int)(length / 2.5f);
+		Vector3 last = start;
+		for (int i = 1; i <= steps; i++) {
+			const Vector3 v = start + (goal - start) * ((float)i / steps);
+			if (blocked(v))
+				break;
+			last = v;
+		}
+		if (steps > 0 && !blocked(goal) && (last - start).sqlen2xz() >= (goal - start).sqlen2xz() * 0.98f)
+			last = goal;
+		po.position = last;
+		if (Server::instance && Server::instance->terrain)
+			po.position.y = Server::instance->terrain->getHeightEx(last.x, last.z, bp->canWalkOnWater());
+		return po;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		a.reset(ReadFinder(gsf, gs));
+		from.reset(PositionDeterminer::createFrom(gsf, gs));
+		towards.reset(PositionDeterminer::createFrom(gsf, gs));
+	}
+};
+
+// DESTINATION_OF <object>: where the object is moving to, or where it is
+struct PDDestinationOf : PositionDeterminer {
+	std::unique_ptr<ObjectFinder> f;
+	virtual OrientedPosition eval(ScriptContext* ctx) override {
+		CommonGameObject* obj = f->getFirst(ctx);
+		if (!obj)
+			return {};
+		OrientedPosition po{ obj->position, obj->orientation };
+		if (ctx->isServer()) {
+			auto* sobj = (ServerGameObject*)obj;
+			if (sobj->movementController.isMoving())
+				po.position = sobj->movementController.getDestination();
+			else if (sobj->movement.isMoving())
+				po.position = sobj->movement.getDestination();
+		}
+		return po;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		f.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// POSITION_BETWEEN <a> <b> <fraction>: the point that fraction of the way from a to b
+struct PDPositionBetween : PositionDeterminer {
+	std::unique_ptr<ObjectFinder> fa, fb;
+	std::unique_ptr<ValueDeterminer> fraction;
+	virtual OrientedPosition eval(ScriptContext* ctx) override {
+		OrientedPosition a = PosFromObjVec(fa->eval(ctx));
+		const OrientedPosition b = PosFromObjVec(fb->eval(ctx));
+		const float t = fraction->eval(ctx);
+		a.position = a.position + (b.position - a.position) * t;
+		return a;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fa.reset(ReadFinder(gsf, gs));
+		fb.reset(ReadFinder(gsf, gs));
+		fraction.reset(ReadValueDeterminer(gsf, gs));
 	}
 };
 
@@ -507,6 +595,7 @@ PositionDeterminer * PositionDeterminer::createFrom(GSFileParser & gsf, const Ga
 	case Tags::POSITION_THIS_SIDE_OF: pos = new PDThisSideOf; break;
 	case Tags::POSITION_THE_OTHER_SIDE_OF: pos = new PDThisOtherSideOf; break;
 	case Tags::POSITION_NEAREST_VALID_POSITION_FOR: pos = new PDNearestValidPositionFor; break;
+	case Tags::POSITION_DESTINATION_OF: pos = new PDDestinationOf; break;
 	case Tags::POSITION_OUT_AT_ANGLE: pos = new PDOutAtAngle; break;
 	case Tags::POSITION_TOWARDS: pos = new PDTowards; break;
 	case Tags::POSITION_AWAY_FROM: pos = new PDAwayFrom; break;
@@ -521,6 +610,8 @@ PositionDeterminer * PositionDeterminer::createFrom(GSFileParser & gsf, const Ga
 	case Tags::POSITION_RANDOM_ATTACHMENT_POINT: pos = new PDRandomAttachmentPoint; break;
 	case Tags::POSITION_NEAREST_CONSTRUCTION_SITE: pos = new PDNearestConstructionSite; break;
 	default:
+		if (tag == "NEAREST_VALID_POSITION_TOWARDS") { pos = new PDNearestValidPositionTowards; break; }
+		if (tag == "POSITION_BETWEEN") { pos = new PDPositionBetween; break; }
 		if (const char* signature = FindStubSignature(positionStubSignatures, tag)) {
 			pos = new PDStub(tag, signature);
 			printf("WARNING: Position determiner %s is not implemented (arguments read, uses its first argument's position) at %s\n", tag.c_str(), gsf.locate().c_str());

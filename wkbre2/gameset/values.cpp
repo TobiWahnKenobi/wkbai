@@ -805,24 +805,111 @@ struct ValueAverageItemValue : ValueDeterminer {
 	}
 };
 
+// The way an object faces: orientation.y as movement sets it, atan2(dir.x, -dir.z)
+static Vector3 FacingDirection(const CommonGameObject* obj)
+{
+	const float angle = obj->orientation.y;
+	return { std::sin(angle), 0.0f, -std::cos(angle) };
+}
+
+// IS_IN_FRONT_OF / IS_BEHIND <subject> <object>: the subject is in front of / behind the
+// object, as the object faces ("I'm Attacking HI Formed up From the Front":
+// IS_IN_FRONT_OF FINDER_SELF FINDER_TARGET)
 struct ValueIsInFrontOf : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> subjectFinder, objectFinder;
+	bool behind = false;
+	ValueIsInFrontOf(bool behind = false) : behind(behind) {}
 	virtual float eval(ScriptContext* ctx) override {
 		// TODO Handle multiple objects from the finder
 		const auto* subject = subjectFinder->getFirst(ctx);
 		const auto* object = objectFinder->getFirst(ctx);
 		if (!subject || !object)
 			return 0.0f;
-		const float angle = object->orientation.y;
-		const Vector3 objectDirection = { std::cos(angle), 0.0f, std::sin(angle) };
-		const Vector3 objectToSubject = subject->position - object->position;
-		const bool inFront = objectDirection.dot(objectToSubject) > 0.0f;
-		return inFront ? 1.0f : 0.0f;
+		const float d = FacingDirection(object).dot(subject->position - object->position);
+		return (behind ? d < 0.0f : d > 0.0f) ? 1.0f : 0.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		subjectFinder.reset(ReadFinder(gsf, gs));
 		objectFinder.reset(ReadFinder(gsf, gs));
 	}
+};
+
+// NUM_ORDERS <finder>: the orders in the first object's queue
+struct ValueNumOrders : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer()) return fail(ctx);
+		auto* obj = finder->getFirst(ctx);
+		return obj ? (float)((ServerGameObject*)obj)->orderConfig.orders.size() : 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// DOING_SAME_ORDER <a> <b>: both have a current order, of the same type (double-click selects
+// the units doing what the clicked one does)
+struct ValueDoingSameOrder : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> fa, fb;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer()) return fail(ctx);
+		auto* a = (ServerGameObject*)fa->getFirst(ctx);
+		auto* b = (ServerGameObject*)fb->getFirst(ctx);
+		if (!a || !b)
+			return 0.0f;
+		const Order* oa = a->orderConfig.getCurrentOrder();
+		const Order* ob = b->orderConfig.getCurrentOrder();
+		return (oa && ob && oa->blueprint == ob->blueprint) ? 1.0f : 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fa.reset(ReadFinder(gsf, gs));
+		fb.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// CAN_TRAVERSE_TILE <traveller> <place>: the traveller could stand on the tile of the place
+// (passengers: the vessel is not at sea). CAN_TRAVERSE_NEIGHBOURING_TILE <place> <travellers>:
+// one of the 8 tiles around the place can take all the travellers (they can disembark).
+struct ValueCanTraverseTile : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> f1, f2;
+	bool neighbouring;
+	ValueCanTraverseTile(bool neighbouring) : neighbouring(neighbouring) {}
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer()) return fail(ctx);
+		if (!neighbouring) {
+			auto* traveller = f1->getFirst(ctx);
+			auto* place = f2->getFirst(ctx);
+			if (!traveller || !place)
+				return 0.0f;
+			return MovementController::isTileBlocked(traveller->blueprint, (int)(place->position.x / 5.0f), (int)(place->position.z / 5.0f)) ? 0.0f : 1.0f;
+		}
+		auto* place = f1->getFirst(ctx);
+		auto travellers = f2->eval(ctx);
+		if (!place || travellers.empty())
+			return 0.0f;
+		const int px = (int)(place->position.x / 5.0f), pz = (int)(place->position.z / 5.0f);
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dz == 0)
+					continue;
+				bool all = true;
+				for (CommonGameObject* t : travellers)
+					if (MovementController::isTileBlocked(t->blueprint, px + dx, pz + dz)) { all = false; break; }
+				if (all)
+					return 1.0f;
+			}
+		return 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		f1.reset(ReadFinder(gsf, gs));
+		f2.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// RANDOM_FRACTION: a random number in [0, 1)
+struct ValueRandomFraction : ValueDeterminer {
+	virtual float eval(ScriptContext* ctx) override { return (float)rand() / ((float)RAND_MAX + 1.0f); }
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
 ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
@@ -888,6 +975,13 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 	case Tags::VALUE_AVERAGE_ITEM_VALUE: vd = new ValueAverageItemValue; break;
 	case Tags::VALUE_IS_IN_FRONT_OF: vd = new ValueIsInFrontOf; break;
 	default:
+		// keywords of the original without a tag in wkbre2's list
+		if (strtag == "IS_BEHIND") { vd = new ValueIsInFrontOf(true); break; }
+		if (strtag == "NUM_ORDERS") { vd = new ValueNumOrders; break; }
+		if (strtag == "DOING_SAME_ORDER") { vd = new ValueDoingSameOrder; break; }
+		if (strtag == "CAN_TRAVERSE_TILE") { vd = new ValueCanTraverseTile(false); break; }
+		if (strtag == "CAN_TRAVERSE_NEIGHBOURING_TILE") { vd = new ValueCanTraverseTile(true); break; }
+		if (strtag == "RANDOM_FRACTION") { vd = new ValueRandomFraction; break; }
 		if (const char* signature = FindStubSignature(valueStubSignatures, strtag)) {
 			vd = new ValueStub(strtag, signature);
 			printf("WARNING: Value determiner %s is not implemented (arguments read, evaluates to 0) at %s\n", strtag.c_str(), gsf.locate().c_str());

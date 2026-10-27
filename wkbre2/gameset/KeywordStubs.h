@@ -29,13 +29,7 @@
 struct KeywordStubSignature { const char* keyword; const char* args; };
 
 inline const KeywordStubSignature valueStubSignatures[] = {
-	{"CAN_TRAVERSE_NEIGHBOURING_TILE", "FF"},
-	{"CAN_TRAVERSE_TILE", "FF"},
 	{"COMMISSION_POSSIBLE", "SF"},
-	{"DOING_SAME_ORDER", "FF"},
-	{"IS_BEHIND", "FF"},
-	{"NUM_ORDERS", "F"},
-	{"RANDOM_FRACTION", ""},
 	{"WITHIN_ARC", "FFVVV"},
 	{"WITHIN_ARC_TOWARDS", "FFFVV"},
 };
@@ -43,16 +37,12 @@ inline const KeywordStubSignature valueStubSignatures[] = {
 // Finder keywords without the "FINDER_" prefix
 inline const KeywordStubSignature finderStubSignatures[] = {
 	{"GRADE_SELECT_CANDIDATES", "MVV"},
-	{"PACKAGE_RELATED_PARTY", ""},
 	{"WITHIN_HORIZ_DISTANCE", "V"},
 };
 
 inline const KeywordStubSignature positionStubSignatures[] = {
 	{"ATTACHMENT_POINT_BY_INDEX", "SFV"},
-	{"DESTINATION_OF", "F"},
-	{"NEAREST_VALID_POSITION_TOWARDS", "FPP"},
 	{"POINT_ALONG_PATH", "FPPV"},
-	{"POSITION_BETWEEN", "FFV"},
 };
 
 template <size_t N>

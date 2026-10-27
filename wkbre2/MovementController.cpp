@@ -41,6 +41,61 @@ namespace {
 	}
 }
 
+bool MovementController::isTileBlocked(const GameObjBlueprint* blueprint, int tx, int tz)
+{
+	const Server* server = Server::instance;
+	const Terrain* trn = server ? server->terrain : nullptr;
+	if (!trn || !server->tiles)
+		return false;
+	const auto trnsize = trn->getNumPlayableTiles();
+	if (!(tx >= 0 && tx < trnsize.first && tz >= 0 && tz < trnsize.second))
+		return true;
+
+	const auto& tile = server->tiles[tz * trnsize.first + tx];
+	if (tile.building.getFrom<Server>() && !tile.buildingPassable)
+		return true;
+
+	const auto* trnTile = trn->getPlayableTile(tx, tz);
+	if (trnTile) {
+		const float h[4] = {
+			trn->getVertex(trn->edge + tx, trn->edge + tz),
+			trn->getVertex(trn->edge + tx + 1, trn->edge + tz),
+			trn->getVertex(trn->edge + tx, trn->edge + tz + 1),
+			trn->getVertex(trn->edge + tx + 1, trn->edge + tz + 1)
+		};
+		auto [minH, maxH] = std::minmax_element(std::begin(h), std::end(h));
+
+		const bool waterUnit = blueprint->canWalkOnWater() && blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION;
+		if (waterUnit && !trnTile->fullOfWater)
+			return true;
+
+		if (!waterUnit && trnTile->fullOfWater) {
+			if (trnTile->waterLevel - *minH > 1.5f)
+				return true;
+		}
+
+		// no gradients above 45 degrees
+		if (!waterUnit && *maxH - *minH > 5.0f)
+			return true;
+	}
+
+	return false;
+}
+
+Vector3 MovementController::nearestValidPosition(const GameObjBlueprint* blueprint, const Vector3& position, int maxRadius)
+{
+	const Pathfinding::PFPos start{ (int)(position.x / 5.0f), (int)(position.z / 5.0f) };
+	if (!isTileBlocked(blueprint, start.x, start.z))
+		return position;
+	const auto found = findNearestUnblockedPos(start, [blueprint](Pathfinding::PFPos p) { return isTileBlocked(blueprint, p.x, p.z); }, maxRadius);
+	if (found.x < 0)
+		return position;
+	Vector3 result(found.x * 5.0f + 2.5f, 0.0f, found.z * 5.0f + 2.5f);
+	if (const Terrain* trn = Server::instance ? Server::instance->terrain : nullptr)
+		result.y = trn->getHeightEx(result.x, result.z, blueprint->canWalkOnWater());
+	return result;
+}
+
 Vector3 MovementController::startMovement(const Vector3& destination)
 {
 	//m_object->startMovement(destination);
@@ -48,42 +103,9 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 
 	using namespace Pathfinding;
 	Terrain* trn = Server::instance->terrain;
-	auto& tiles = Server::instance->tiles;
 	auto trnsize = trn->getNumPlayableTiles();
-	auto pred = [&](PFPos pfp) -> bool {
-		if (!(pfp.x >= 0 && pfp.x < trnsize.first && pfp.z >= 0 && pfp.z < trnsize.second))
-			return true;
-
-		const auto& tile = tiles[pfp.z * trnsize.first + pfp.x];
-		if (tile.building.getFrom<Server>() && !tile.buildingPassable)
-			return true;
-
-		const auto* trnTile = trn->getPlayableTile(pfp.x, pfp.z);
-		if (trnTile) {
-			const float h[4] = {
-				trn->getVertex(trn->edge + pfp.x, trn->edge + pfp.z),
-				trn->getVertex(trn->edge + pfp.x + 1, trn->edge + pfp.z),
-				trn->getVertex(trn->edge + pfp.x, trn->edge + pfp.z + 1),
-				trn->getVertex(trn->edge + pfp.x + 1, trn->edge + pfp.z + 1)
-			};
-			auto [minH, maxH] = std::minmax_element(std::begin(h), std::end(h));
-
-			const bool waterUnit = m_object->blueprint->canWalkOnWater() && m_object->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION;
-			if (waterUnit && !trnTile->fullOfWater)
-				return true;
-
-			if (!waterUnit && trnTile->fullOfWater) {
-				if (trnTile->waterLevel - *minH > 1.5f)
-					return true;
-			}
-
-			// no gradients above 45 degrees
-			if (!waterUnit && *maxH - *minH > 5.0f)
-				return true;
-		}
-
-		return false;
-	};
+	const GameObjBlueprint* blueprint = m_object->blueprint;
+	auto pred = [blueprint](PFPos pfp) -> bool { return isTileBlocked(blueprint, pfp.x, pfp.z); };
 
 	PFPos posStart{ (int)(m_object->position.x / 5.0f), (int)(m_object->position.z / 5.0f) };
 	PFPos posEnd{ (int)(destination.x / 5.0f), (int)(destination.z / 5.0f) };

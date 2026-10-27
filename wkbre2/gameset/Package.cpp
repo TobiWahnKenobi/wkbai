@@ -50,6 +50,15 @@ void GSPackage::send(ServerGameObject* obj, SrvScriptContext* ctx) const
 			obj->setItem(mod.item, obj->getItem(mod.item) - val);
 		}
 	}
+	// the receiver's reactions run during sendEvent: nested deliveries keep their own party
+	std::vector<ServerGameObject*> party;
+	if (relatedParty)
+		for (CommonGameObject* p : relatedParty->eval(ctx))
+			party.push_back(p->dyncast<ServerGameObject>());
+	std::swap(currentRelatedParty, party);
 	for (int evt : gameEvents)
 		obj->sendEvent(evt, ctx->getSelf());
+	std::swap(currentRelatedParty, party);
 }
+
+std::vector<ServerGameObject*> GSPackage::currentRelatedParty;

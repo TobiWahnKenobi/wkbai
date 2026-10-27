@@ -26,4 +26,8 @@ struct GSPackage {
 
 	void parse(GSFileParser& gsf, const GameSet& gs);
 	void send(ServerGameObject* obj, SrvScriptContext* ctx) const;
+
+	// The related party of the package being delivered (FINDER_PACKAGE_RELATED_PARTY): found in
+	// the sender's context when the package is sent, valid while the receiver reacts to it
+	static std::vector<ServerGameObject*> currentRelatedParty;
 };
