@@ -15,6 +15,7 @@
 #include <iterator>
 #include "KeywordStubs.h"
 #include "Package.h"
+#include "../util/SimRandom.h"
 
 ObjectFinderResult ObjectFinder::fail(ScriptContext* ctx) {
 	ferr("Invalid object finder call from %s", ctx->gameState->getProgramName());
@@ -784,7 +785,7 @@ struct FinderRandomSelection : ObjectFinder {
 		auto vec = finder->eval(ctx);
 		size_t cnt = std::min(vec.size(), (size_t)vCount->eval(ctx));
 		for (size_t i = 0; i < cnt; i++) {
-			size_t s = rand() % (vec.size() - i) + i;
+			size_t s = ScriptRand(ctx) % (vec.size() - i) + i;
 			std::swap(vec[i], vec[s]);
 		}
 		vec.resize(cnt);

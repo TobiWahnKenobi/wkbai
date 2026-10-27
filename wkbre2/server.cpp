@@ -19,10 +19,22 @@
 #include "gameset/finder.h"
 #include "StampdownPlan.h"
 #include <tracy/Tracy.hpp>
+#include "util/SimRandom.h"
+#include <SDL3/SDL_timer.h>
+#include <optional>
 
 Server *Server::instance = nullptr;
 
 std::atomic_int g_diag_serverTicks{ 0 };
+
+SimRandom g_simRandom;
+
+Server::Server()
+{
+	instance = this;
+	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
+	timeManager.stepMs = g_settings.value("simStepMs", 20u);
+}
 
 void Server::loadSaveGame(const char * filename)
 {
@@ -30,6 +42,8 @@ void Server::loadSaveGame(const char * filename)
 	LoadFile(filename, &filetext, &filesize, 1);
 	filetext[filesize] = 0;
 	GSFileParser gsf(filetext);
+	// the random state as saved, set once everything is loaded (creating the objects draws numbers)
+	std::optional<uint32_t> randomSeed;
 
 	while (!gsf.eof)
 	{
@@ -51,6 +65,10 @@ void Server::loadSaveGame(const char * filename)
 		case Tags::SAVEGAME_NEXT_UNIQUE_ID:
 			nextUniqueId = gsf.nextInt();
 			break;
+		case Tags::SAVEGAME_RANDOM_SEED:
+			// the simulation's random state (util/SimRandom.h)
+			randomSeed = (uint32_t)std::strtoul(gsf.nextString().c_str(), nullptr, 10);
+			break;
 		case Tags::SAVEGAME_PREDEC:
 			loadSavePredec(gsf); break;
 		case Tags::SAVEGAME_LEVEL:
@@ -69,6 +87,8 @@ void Server::loadSaveGame(const char * filename)
 		}
 		gsf.advanceLine();
 	}
+	if (randomSeed)
+		g_simRandom.seed(*randomSeed);
 
 	free(filetext);
 
@@ -96,14 +116,14 @@ ServerGameObject* Server::createObject(const GameObjBlueprint * blueprint, uint3
 	ServerGameObject *obj = new ServerGameObject(id, blueprint);
 	idmap[id] = obj;
 
-	obj->subtype = rand() % blueprint->subtypeNames.size();
+	obj->subtype = SimRand() % blueprint->subtypeNames.size();
 	auto bpSubtype = blueprint->subtypes.find(obj->subtype);
 	if (bpSubtype != blueprint->subtypes.end()) {
 		auto& stappearances = bpSubtype->second.appearances;
 		if (stappearances.count(0))
 			obj->appearance = 0;
 		else if (!stappearances.empty())
-			obj->appearance = std::next(stappearances.begin(), rand() % stappearances.size())->first;
+			obj->appearance = std::next(stappearances.begin(), SimRand() % stappearances.size())->first;
 	}
 
 	NetPacketWriter msg(NETCLIMSG_OBJECT_CREATED);
@@ -115,7 +135,7 @@ ServerGameObject* Server::createObject(const GameObjBlueprint * blueprint, uint3
 
 	obj->updateSightRange();
 
-	Vector3 randVec{ (float)rand() / (float)(RAND_MAX), (float)rand() / (float)(RAND_MAX), (float)rand() / (float)(RAND_MAX) };
+	Vector3 randVec{ (float)SimRand() / (float)(SIM_RAND_MAX), (float)SimRand() / (float)(SIM_RAND_MAX), (float)SimRand() / (float)(SIM_RAND_MAX) };
 	Vector3 varyScale = blueprint->minScaleVary + randVec * (blueprint->maxScaleVary - blueprint->minScaleVary);
 	obj->setScale(blueprint->scaleAppearance * varyScale);
 
@@ -632,7 +652,7 @@ void ServerGameObject::setSubtypeAndAppearance(int new_subtype, int new_appearan
 		auto& stappearances = bpSubtype->second.appearances;
 		if (stappearances.count(new_appearance) == 0) {
 			if (!stappearances.empty())
-				new_appearance = std::next(stappearances.begin(), rand() % stappearances.size())->first;
+				new_appearance = std::next(stappearances.begin(), SimRand() % stappearances.size())->first;
 			else
 				new_appearance = 0;
 		}
@@ -1351,6 +1371,9 @@ void Server::clearAlias(int aliasIndex)
 
 void Server::startLevel()
 {
+	// a new game: new random numbers, or the same ones every time with "simSeed" (tests)
+	g_simRandom.seed(g_settings.value("simSeed", (uint32_t)SDL_GetTicks() ^ (uint32_t)time(nullptr)));
+
 	for (const auto& player : this->clientPlayerObjects) {
 		if (player) {
 			this->snapCameraPosition(player, player->playerStartCameraPosition, player->playerStartCameraOrientation);
@@ -1399,7 +1422,19 @@ void Server::tick()
 {
 	ZoneScoped;
 	timeManager.tick();
+	// the simulation in fixed steps ("simStepMs"), so that it goes the same at any frame rate;
+	// while paused (or without steps) once, without moving the clock
+	if (timeManager.stepMs == 0 || timeManager.paused)
+		simulate();
+	else
+		while (timeManager.step())
+			simulate();
+	network();
+}
 
+void Server::simulate()
+{
+	ZoneScoped;
 	auto it = delayedSequences.begin();
 	for (; it != delayedSequences.end(); it++) {
 		if (it->first > timeManager.currentTime) {
@@ -1529,7 +1564,10 @@ void Server::tick()
 		if (obj->blueprint->removeWhenNotReferenced)
 			obj->removeIfNotReferenced();
 	}
+}
 
+void Server::network()
+{
 	time_t curtime = time(NULL);
 	if (curtime - lastSync >= 1) {
 		lastSync = curtime;

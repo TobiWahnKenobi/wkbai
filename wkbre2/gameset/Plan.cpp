@@ -9,6 +9,7 @@
 #include "../server.h"
 #include "finder.h"
 #include "ScriptContext.h"
+#include "../util/SimRandom.h"
 
 struct PFNUnknown : PlanNodeBlueprint {
 	struct State : PlanNodeState {
@@ -154,7 +155,7 @@ struct PFNDeployArmyFrom : PlanNodeBlueprint {
 			ServerGameObject* army = ctx->server->createObject(schedule->armyType);
 			army->setParent(settlement->getPlayer());
 			for (auto& spawn : schedule->spawnCharacters) {
-				ServerGameObject* building = buildingCandidates[rand() % buildingCandidates.size()];
+				ServerGameObject* building = buildingCandidates[SimRand() % buildingCandidates.size()];
 				// create the units
 				auto _ = ctx->changeSelf(army);
 				int numUnits = (int)spawn.count->eval(ctx); // Not sure what should be the SELF
@@ -206,7 +207,7 @@ struct PFNChooseAtRandom : PlanNodeBlueprint {
 	}
 	virtual void reset(PlanNodeState* state) override {
 		State* s = (State*)state;
-		s->index = rand() % sequence.nodes.size();
+		s->index = SimRand() % sequence.nodes.size();
 		s->seqState.currentNode = s->index;
 		sequence.nodes[s->index]->reset(s->seqState.nodeStates[s->index]);
 	}

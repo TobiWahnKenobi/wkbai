@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include "util/SimRandom.h"
 
 namespace {
 	struct SaveWriter {
@@ -253,6 +254,8 @@ bool Server::saveGame(const char* filename)
 	for (const SrvGORef& player : clientPlayerObjects)
 		humans += " " + std::to_string(player.get() ? player.get()->id : 0);
 	w.line("NUM_HUMAN_PLAYERS %zu%s", clientPlayerObjects.size(), humans.c_str());
+	w.line("");
+	w.line("RANDOM_SEED %u", g_simRandom.state);
 	w.line("");
 	w.line("TIME_MANAGER_STATE");
 	w.depth++;

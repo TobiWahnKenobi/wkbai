@@ -5,6 +5,8 @@
 #include "TimeManager.h"
 #include "util/GSFileParser.h"
 #include <SDL3/SDL_timer.h>
+#include <algorithm>
+#include <cmath>
 #include "imgui/imgui.h"
 
 void TimeManager::reset(game_time_t initialTime) {
@@ -44,10 +46,26 @@ void TimeManager::tick() {
 	if (paused) return;
 	if (elapsedSDLTime >= 1000)
 		elapsedSDLTime = 34;
+	if (stepMs) {
+		// at most 10 steps behind: a slow frame doesn't make the next ones catch up for long
+		pendingMs = std::min(pendingMs + (uint32_t)roundf(elapsedSDLTime * timeSpeed), 10 * stepMs);
+		return;
+	}
 	previousTime = currentTime;
 	psCurrentTime += (uint32_t)roundf(elapsedSDLTime * timeSpeed);
 	currentTime = (float)psCurrentTime / 1000.0f;
 	elapsedTime = currentTime - previousTime;
+}
+
+bool TimeManager::step() {
+	if (paused || !stepMs || pendingMs < stepMs)
+		return false;
+	pendingMs -= stepMs;
+	previousTime = currentTime;
+	psCurrentTime += stepMs;
+	currentTime = (float)psCurrentTime / 1000.0f;
+	elapsedTime = currentTime - previousTime;
+	return true;
 }
 
 void TimeManager::imgui() {

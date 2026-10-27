@@ -20,6 +20,7 @@
 #include "../Model.h"
 #include "gameset.h"
 #include "KeywordStubs.h"
+#include "../util/SimRandom.h"
 
 namespace {
 	OrientedPosition PosFromObjVec(const ObjectFinderResult &vec) {
@@ -542,7 +543,7 @@ struct PDRandomAttachmentPoint : public PositionDeterminer {
 				}
 			}
 			if (numValidAPs > 0) {
-				size_t randomAP = rand() % numValidAPs;
+				size_t randomAP = ScriptRand(ctx) % numValidAPs;
 				return model->getAPInfo(validAPs[randomAP]).staticState.position.transform(obj->getWorldMatrix());
 			}
 		}

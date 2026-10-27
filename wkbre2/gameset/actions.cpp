@@ -15,6 +15,7 @@
 #include <cassert>
 #include <string_view>
 #include <nlohmann/json.hpp>
+#include "../util/SimRandom.h"
 
 static bool traceMessageEnabled(std::string_view message)
 {
@@ -268,7 +269,7 @@ struct ActionExecuteOneAtRandom : Action {
 	ActionSequence actionseq;
 	virtual void run(SrvScriptContext* ctx) override {
 		if (!actionseq.actionList.empty()) {
-			int x = rand() % actionseq.actionList.size();
+			int x = SimRand() % actionseq.actionList.size();
 			if (actionseq.debugInfo) {
 				BreakpointManager::instance().checkAndBreak(actionseq.debugInfo->fileIndex, actionseq.debugInfo->actionLineIndices[x]);
 			}

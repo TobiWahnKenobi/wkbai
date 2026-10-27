@@ -22,9 +22,10 @@
 #include "../AIController.h"
 #include "../MovementController.h"
 #include <unordered_set>
+#include "../util/SimRandom.h"
 
 namespace {
-	float RandomFromZeroToOne() { return (float)(rand() & 0xFFFF) / 32768.0f; }
+	float RandomFromZeroToOne(ScriptContext* ctx) { return (float)(ScriptRand(ctx) & 0xFFFF) / 32768.0f; }
 }
 
 //namespace Script
@@ -1057,7 +1058,7 @@ struct ValueCanTraverseTile : ValueDeterminer {
 
 // RANDOM_FRACTION: a random number in [0, 1)
 struct ValueRandomFraction : ValueDeterminer {
-	virtual float eval(ScriptContext* ctx) override { return (float)rand() / ((float)RAND_MAX + 1.0f); }
+	virtual float eval(ScriptContext* ctx) override { return (float)ScriptRand(ctx) / ((float)SIM_RAND_MAX + 1.0f); }
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
@@ -1182,7 +1183,7 @@ struct EnodeNegate : UnaryEnode {
 };
 
 struct EnodeRandomUpTo : UnaryEnode {
-	virtual float eval(ScriptContext* ctx) override { return RandomFromZeroToOne() * a->eval(ctx); }
+	virtual float eval(ScriptContext* ctx) override { return RandomFromZeroToOne(ctx) * a->eval(ctx); }
 };
 
 struct EnodeRound : UnaryEnode {
@@ -1258,14 +1259,14 @@ struct EnodeMin : BinaryEnode {
 struct EnodeRandomInteger : BinaryEnode {
 	virtual float eval(ScriptContext* ctx) override {
 		int x = (int)a->eval(ctx), y = (int)b->eval(ctx);
-		return (float)(rand() % (y - x + 1) + x);
+		return (float)(ScriptRand(ctx) % (y - x + 1) + x);
 	}
 };
 
 struct EnodeRandomRange : BinaryEnode {
 	virtual float eval(ScriptContext* ctx) override {
 		float x = a->eval(ctx), y = b->eval(ctx);
-		return RandomFromZeroToOne() * (y - x) + x;
+		return RandomFromZeroToOne(ctx) * (y - x) + x;
 	}
 };
 

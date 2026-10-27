@@ -159,7 +159,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 
 	ServerGameObject* objToDelete = nullptr, * objToDeleteLast = nullptr;
 
-	Server() { instance = this; }
+	Server();
 
 	void loadSaveGame(const char *filename);
 	// Writes the game to a save game file (a file system path, its folders are created) that
@@ -214,6 +214,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void startLevel();
 
 	void tick();
+	// tick's parts: the game for one time step, then the clients' messages and the time sync
+	void simulate();
+	void network();
 
 private:
 	std::map<uint32_t, const GameObjBlueprint*> predec;

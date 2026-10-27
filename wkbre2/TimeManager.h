@@ -18,6 +18,12 @@ struct TimeManager {
 	
 	uint32_t previousSDLTime;
 
+	// Fixed steps (the server's simulation, "simStepMs"; 0: one step per frame, as long as the
+	// frame took): tick() then only collects the elapsed game time, and each step() moves the
+	// clock on by stepMs while a whole step is due
+	uint32_t stepMs = 0, pendingMs = 0;
+	bool step();
+
 	// synch to clients ...
 
 	void reset(game_time_t initialTime);

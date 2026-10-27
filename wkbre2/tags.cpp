@@ -423,7 +423,7 @@ TagDict<6> Tags::OBJCREATE_tagDict({
     "TYPE_TO_CREATE",
 });
 
-TagDict<15> Tags::SAVEGAME_tagDict({
+TagDict<16> Tags::SAVEGAME_tagDict({
     "CLIENT_STATE",
     "DELAYED_SEQUENCE_EXECUTION",
     "EXECUTE_SEQUENCE_OVER_PERIOD",
@@ -435,6 +435,7 @@ TagDict<15> Tags::SAVEGAME_tagDict({
     "NUM_HUMAN_PLAYERS",
     "PART_OF_CAMPAIGN",
     "PREDEC",
+    "RANDOM_SEED",
     "REPEAT_SEQUENCE_OVER_PERIOD",
     "SERVER_NAME",
     "TIME_MANAGER_STATE",

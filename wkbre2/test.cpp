@@ -45,6 +45,7 @@
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
 #include "settings.h"
+#include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include <nlohmann/json.hpp>
 
@@ -1493,6 +1494,79 @@ void Test_Farm()
 	fflush(stdout);
 }
 
+// Determinism (needs the game data): 4 Peaks with a fixed seed, every peasant chopping wood, 3000
+// fixed steps (60 s); a hash of every object's position, orientation and items. Twice with the
+// same seed must give the same hash. Prints "DETERMINISM seed <s> hash <h> objects <n>" and
+// "DETERMINISM same 1" when it holds.
+static uint64_t DeterminismRun(uint32_t seed)
+{
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	g_settings["simSeed"] = seed;
+	server.startLevel();
+	const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+	std::vector<ServerGameObject*> peasants, trees;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant")
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				else if (child->blueprint->name == "Coniferous Tree")
+					trees.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	find(server.getLevel(), find);
+	for (ServerGameObject* peasant : peasants) {
+		ServerGameObject* best = nullptr;
+		float bestDist = 1e12f;
+		for (ServerGameObject* tree : trees)
+			if (float d = (tree->position - peasant->position).sqlen2xz(); d < bestDist) { bestDist = d; best = tree; }
+		if (best && chop >= 0)
+			server.gameSet->commands[chop].execute(peasant, best, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	const Vector3 firstAt = peasants.empty() ? Vector3() : peasants[0]->position;
+	const uint32_t randomBefore = g_simRandom.state;
+	for (int i = 0; i < 3000; i++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs; // a step without the real clock
+		if (server.timeManager.step())
+			server.simulate();
+	}
+	uint64_t hash = 1469598103934665603ull;
+	auto mix = [&](const void* data, size_t n) {
+		for (size_t i = 0; i < n; i++) { hash ^= ((const uint8_t*)data)[i]; hash *= 1099511628211ull; }
+	};
+	size_t objects = 0;
+	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+		objects++;
+		mix(&obj->id, sizeof(obj->id));
+		mix(&obj->position, sizeof(obj->position));
+		mix(&obj->orientation, sizeof(obj->orientation));
+		for (const auto& [item, value] : obj->items) { mix(&item, sizeof(item)); mix(&value, sizeof(value)); }
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self(child, self);
+	};
+	walk(server.getLevel(), walk);
+	printf("DETERMINISM seed %u hash %016llx objects %zu, first peasant moved %.1f m, random numbers drawn %d\n", seed,
+		(unsigned long long)hash, objects, peasants.empty() ? 0.0f : (peasants[0]->position - firstAt).len2xz(),
+		(int)(g_simRandom.state != randomBefore));
+	fflush(stdout);
+	return hash;
+}
+
+void Test_Determinism()
+{
+	LoadBCP("data.bcp");
+	const uint64_t a = DeterminismRun(12345);
+	const uint64_t b = DeterminismRun(12345);
+	DeterminismRun(777);
+	printf("DETERMINISM same %d\n", (int)(a == b));
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1521,6 +1595,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_RallyPoint, "Rally point (free spots)"},
 {Test_Gather, "Gathering (the next tree)"},
 {Test_Farm, "Farming (build a field, farm it, a second farmer)"},
+{Test_Determinism, "Determinism (same seed, same game)"},
 };
 
 void LaunchTest()
