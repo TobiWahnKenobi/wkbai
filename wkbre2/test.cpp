@@ -1240,6 +1240,34 @@ void Test_SaveRoundTrip()
 	fflush(stdout);
 }
 
+// Rally point (needs the game data): peasants sent one after another to the same place get
+// different free spots. Prints "RALLY <i> (x,z)" and the closest pair's distance.
+void Test_RallyPoint()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* peasant = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	if (!player || !peasant)
+		return;
+	const Vector3 rally(560, 0, 160);
+	std::vector<Vector3> spots;
+	for (int i = 0; i < 5; i++) {
+		ServerGameObject* unit = server.spawnObject(peasant, player, Vector3(540, 0, 140), Vector3(0, 0, 0));
+		const Vector3 spot = FreeStandingSpot(unit, rally);
+		unit->movementController.startMovement(spot);
+		spots.push_back(spot);
+		printf("RALLY %d (%.1f,%.1f)\n", i, spot.x, spot.z);
+	}
+	float closest = 1e9f;
+	for (size_t a = 0; a < spots.size(); a++)
+		for (size_t b = a + 1; b < spots.size(); b++)
+			closest = std::min(closest, (spots[a] - spots[b]).len2xz());
+	printf("RALLY closest pair %.1f m\n", closest);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1265,6 +1293,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Guard, "Guard (follow at a distance)"},
 {Test_Formation, "Formation (members walk into place)"},
 {Test_SaveRoundTrip, "Save game round trip"},
+{Test_RallyPoint, "Rally point (free spots)"},
 };
 
 void LaunchTest()

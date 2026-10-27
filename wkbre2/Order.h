@@ -178,3 +178,7 @@ struct OrderConfiguration {
 
 	Order *getCurrentOrder() { return orders.empty() ? nullptr : &orders[0]; }
 };
+
+// The spot nearest to a place where a unit can stand clear of the other characters there or
+// walking there (a rally point's units gather around it)
+Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place);

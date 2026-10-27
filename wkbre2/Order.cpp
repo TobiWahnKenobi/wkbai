@@ -792,6 +792,45 @@ void SpawnTask::onStart()
 	obj->setItem(Tags::PDITEM_HIT_POINT_CAPACITY_OF_OBJECT_BEING_SPAWNED, toSpawn->startItemValues.at(Tags::PDITEM_HIT_POINT_CAPACITY));
 }
 
+// The spot nearest to a place where a unit can stand clear of the other characters there or
+// walking there (rings 3 m apart around it, walkable tiles only): the units a building sends
+// to its rally point gather around it instead of on top of each other.
+Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
+{
+	constexpr float SPACING = 3.0f;
+	constexpr int RINGS = 10;
+	std::vector<Vector3> taken;
+	NNSearch nns;
+	nns.start(Server::instance, place, SPACING * RINGS + 40.0f);
+	while (CommonGameObject* o = nns.next()) {
+		ServerGameObject* other = o->dyncast<ServerGameObject>();
+		if (other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+			continue;
+		if (other->movementController.isMoving())
+			taken.push_back(other->movementController.getDestination());
+		else
+			taken.push_back(other->position);
+	}
+	auto isFree = [&](const Vector3& spot) {
+		if (MovementController::isTileBlocked(unit->blueprint, (int)(spot.x / 5.0f), (int)(spot.z / 5.0f)))
+			return false;
+		for (const Vector3& t : taken)
+			if ((t - spot).sqlen2xz() < SPACING * SPACING * 0.8f)
+				return false;
+		return true;
+	};
+	for (int ring = 0; ring <= RINGS; ring++) {
+		const int count = ring == 0 ? 1 : (int)(6.2831853f * ring);
+		for (int i = 0; i < count; i++) {
+			const float angle = 6.2831853f * i / count;
+			const Vector3 spot = place + Vector3(std::cos(angle), 0, std::sin(angle)) * (ring * SPACING);
+			if (isFree(spot))
+				return spot;
+		}
+	}
+	return place;
+}
+
 void SpawnTask::onUpdate()
 {
 	this->startTriggers();
@@ -809,8 +848,12 @@ void SpawnTask::onUpdate()
 				const auto& spawnedOfferedCommands = spawned->blueprint->offeredCommands;
 				const auto it = std::find(spawnedOfferedCommands.begin(), spawnedOfferedCommands.end(), command);
 				if (it != spawnedOfferedCommands.end()) {
-					command->execute(
-						spawned, obj->spawnedUnitTarget.getFrom<Server>(), Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, obj->spawnedUnitDestination);
+					ServerGameObject* target = obj->spawnedUnitTarget.getFrom<Server>();
+					Vector3 destination = obj->spawnedUnitDestination;
+					// to a place (the rally point): each unit to a free spot next to it, not all on it
+					if (!target && destination.x >= 0.0f)
+						destination = FreeStandingSpot(spawned, destination);
+					command->execute(spawned, target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, destination);
 				}
 			}
 			if (ServerGameObject* com = aiCommissioner.get()) {
