@@ -65,4 +65,6 @@ struct FrontEnd {
 private:
 	struct Impl;
 	std::unique_ptr<Impl> impl;
+	void loadScripts();
+	void reloadScriptsIfChanged();
 };

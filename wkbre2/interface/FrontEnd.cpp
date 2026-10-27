@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "FrontEnd.h"
+#include "LuaScripts.h"
 #include "MenuOptions.h"
 #include "CampaignProfile.h"
 #include "../gfx/BitmapFont.h"
@@ -129,6 +130,8 @@ struct FrontEnd::Impl {
 	IRenderer* gfx;
 	sol::state lua;
 	bool scriptOk = false;
+	UIScriptFiles scriptFiles; // what loadScripts ran (hot reload)
+	uint64_t scriptCheckTime = 0;
 	Language lang;
 	std::map<std::string, Image, StrCICompareClass> images;
 	std::map<std::string, std::unique_ptr<BitmapFont>, StrCICompareClass> fonts;
@@ -484,6 +487,34 @@ struct FrontEnd::Impl {
 			return list;
 		});
 
+		// Mods (file.h): the mods in load order, { id, name, description, kind, version, enabled,
+		// problem }, whether the order is the player's own, and applying a new list
+		lua.set_function("getMods", [this]() {
+			sol::table list = lua.create_table();
+			int i = 1;
+			for (const ModInfo& m : GetMods())
+				list[i++] = lua.create_table_with("id", m.id, "name", m.name, "description", m.description, "kind", m.kind,
+					"version", m.version, "enabled", m.enabled, "problem", m.problem);
+			return list;
+		});
+		lua.set_function("isCustomModOrder", []() { return IsCustomModLoadOrder(); });
+		// mods: { { id, enabled }, ... } in the new order; custom: keep that order (else newest file wins)
+		lua.set_function("applyMods", [](sol::table list, bool custom) {
+			const std::vector<ModInfo>& current = GetMods();
+			std::vector<ModInfo> mods;
+			for (size_t i = 1; i <= list.size(); i++) {
+				sol::table entry = list[i];
+				const std::string id = entry.get_or("id", std::string());
+				auto it = std::find_if(current.begin(), current.end(), [&](const ModInfo& m) { return m.id == id; });
+				if (it == current.end())
+					continue;
+				ModInfo mod = *it;
+				mod.enabled = entry.get_or("enabled", true);
+				mods.push_back(std::move(mod));
+			}
+			ApplyModConfiguration(mods, custom);
+		});
+
 		// Options (MenuOptions.h)
 		lua.set_function("getOptionPages", [this]() {
 			sol::table pages = lua.create_table();
@@ -557,17 +588,44 @@ FrontEnd::FrontEnd(IRenderer* gfx) : impl(std::make_unique<Impl>(gfx))
 	g_frontEnd = this;
 	impl->lang.load("Languages\\Language.txt");
 	impl->bind();
+	loadScripts();
+}
+
+void FrontEnd::loadScripts()
+{
 	try {
-		sol::protected_function_result r = impl->lua.safe_script_file("redata/FrontEndUI.lua", sol::script_pass_on_error);
-		impl->scriptOk = r.valid();
-		if (!r.valid()) {
-			sol::error err = r;
-			printf("Menu script error:\n%s\n", err.what());
-		}
+		// FrontEndUI.lua (a mod's or redata's), then the mods' Lua\FrontEnd\*.lua
+		impl->scriptOk = RunUIScripts(impl->lua, "FrontEndUI.lua", "Lua\\FrontEnd", "Menu", &impl->scriptFiles);
 	}
 	catch (const sol::error& err) {
 		printf("Menu script error:\n%s\n", err.what());
 	}
+	impl->scriptCheckTime = SDL_GetTicks();
+}
+
+// Hot reload: a script edited, added or removed (checked every second) restarts the menu
+// scripts in a new Lua state, on the screen that was open
+void FrontEnd::reloadScriptsIfChanged()
+{
+	if (!HotReloadEnabled() || SDL_GetTicks() - impl->scriptCheckTime < 1000)
+		return;
+	impl->scriptCheckTime = SDL_GetTicks();
+	if (!impl->scriptFiles.changed())
+		return;
+	std::string screen;
+	try {
+		sol::protected_function top = impl->lua["FE_Top"];
+		if (top.valid())
+			if (sol::protected_function_result r = top(); r.valid() && r.get_type() == sol::type::string)
+				screen = r.get<std::string>();
+	}
+	catch (const sol::error&) {}
+	printf("Hot reload: menu scripts (screen \"%s\")\n", screen.c_str());
+	impl->lua = sol::state();
+	impl->bind();
+	loadScripts();
+	if (!screen.empty())
+		open(screen);
 }
 
 FrontEnd::~FrontEnd()
@@ -580,6 +638,7 @@ FrontEnd* FrontEnd::get() { return g_frontEnd; }
 
 void FrontEnd::frame(Place place)
 {
+	reloadScriptsIfChanged();
 	impl->place = place;
 	// The main menu is the background; the in-game menu covers the game and its HUD
 	impl->drawList = place == Place::MAIN_MENU ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();

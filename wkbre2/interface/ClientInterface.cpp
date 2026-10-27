@@ -42,6 +42,7 @@
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
 #include "FrontEnd.h"
+#include "LuaScripts.h"
 #include "../gameset/finder.h"
 #include "../gameset/Footprint.h"
 #include "../server.h"
@@ -1494,7 +1495,22 @@ void ClientInterface::iter()
 	// The script's functions capture this ClientInterface: a new one (after going back to the
 	// main menu) starts a new script
 	static ClientInterface* luaOwner = nullptr;
-	if (luaOwner != this) {
+	// hot reload (every second): changed textures in place, and the script in a new state when a
+	// file of it was edited, added or removed
+	static UIScriptFiles luaScriptFiles;
+	static uint32_t hotReloadCheck = 0;
+	bool reloadScript = false;
+	if (HotReloadEnabled() && SDL_GetTicks() - hotReloadCheck >= 1000) {
+		hotReloadCheck = SDL_GetTicks();
+		TextureCache::ReloadChangedTextures();
+		// also after a script error: fixing the file brings the UI back
+		if (!luaScriptFiles.files.empty() && luaScriptFiles.changed()) {
+			printf("Hot reload: in-game UI script\n");
+			reloadScript = true;
+			uiScriptOn = true;
+		}
+	}
+	if (luaOwner != this || reloadScript) {
 		luaOwner = this;
 		luaInitialized = false;
 		luaScript = {};
@@ -1804,7 +1820,9 @@ void ClientInterface::iter()
 		//luaScript = lua.load_file("redata/ClientUIScript.lua");
 		luaInitialized = true;
 		try {
-			lua.script_file("redata/ClientUIScript.lua");
+			// ClientUIScript.lua (a mod's or redata's), then the mods' Lua\InGame\*.lua
+			if (!RunUIScripts(lua, "ClientUIScript.lua", "Lua\\InGame", "In-game UI", &luaScriptFiles))
+				uiScriptOn = false;
 		}
 		catch (const sol::error& err) {
 			printf("Sol init error:\n%s\n", err.what());

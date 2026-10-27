@@ -67,7 +67,18 @@ struct ModInfo {
 	std::string kind;        // human-readable source type
 	bool enabled = true;
 	uint64_t newestTime = 0; // newest file timestamp (FILETIME), orders the list in original mode
+	// From mod.json: its own id (others name it in "requires"; default: the folder name), its
+	// version, the mods it needs, and the oldest mod format ("wkbre2") it works with
+	std::string modId, version;
+	std::vector<std::string> dependencies; // mod.json "requires"
+	int apiVersion = 0;
+	// Why it may not work, "" if nothing: a needed mod missing or disabled, a newer mod format
+	std::string problem;
 };
+
+// The mod format this build supports (mod.json "wkbre2"): 1 = folders and archives overriding any
+// game file, mod.json, Lua\FrontEnd\*.lua and Lua\InGame\*.lua extending the UI scripts
+constexpr int MOD_API_VERSION = 1;
 
 // Mounts data.bcp and the enabled mods according to wkconfig.json ("disabledMods", "modLoadOrder", "modsPath").
 // Without "modLoadOrder" files resolve like the original game: data.bcp and all mods form one group
@@ -96,6 +107,9 @@ void LoadBCP(const char *fn); // kept for existing callers; mounts everything vi
 void LoadFile(const char *fn, char **out, int *outsize, int extraBytes = 0);
 //void TestBCP();
 int FileExists(const char *fn);
+// The timestamp (FILETIME) of the copy LoadFile would read, 0 if none: a changed file in a mod
+// folder or redata gets a new one (hot reload); files in archives keep theirs
+uint64_t FileModificationTime(const char* fn);
 std::vector<std::string> *ListFiles(const char *dn, std::vector<std::string> *gsl = nullptr);
 std::vector<std::string> *ListDirectories(const char *dn);
 //void SetGameDir();

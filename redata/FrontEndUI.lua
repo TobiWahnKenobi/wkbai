@@ -421,7 +421,7 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_MULTIPLAYER", action = function() push("multiplayer") end },
 	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
-	{ text = "Mods", action = function() request("mods") end },
+	{ text = "Mods", action = function() push("mods") end },
 	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
 	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
 	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() request("quit") end },
@@ -456,6 +456,79 @@ Screens.tutorial = {
 		-- the original's places (of 640 x 480): the buttons from 130 to 290, Back at 370
 		buttonColumn(TutorialItems, Y(292), Y(652))
 		if button(T("FRONT_END_BUTTON_BACK"), X(960 - 101.5), Y(832), L(203), L(38)) then pop() end
+	end,
+}
+
+-- Mods ---------------------------------------------------------------------------------
+-- The mod manager: archives next to data.bcp, the game folder's data\ and the mod folders in
+-- "mods" (file.h). Each can be switched on or off and moved; moving one sets the player's own
+-- load order (a mod further down overrides the ones above), "Original order" goes back to the
+-- original's rule (each file from wherever it is newest). Apply remounts the files.
+local modsState = { list = {}, custom = false, dirty = false, scroll = 0 }
+
+local function openMods()
+	modsState.list = {}
+	for i, m in ipairs(getMods()) do modsState.list[i] = m end
+	modsState.custom = isCustomModOrder()
+	modsState.dirty = false
+	modsState.scroll = 0
+end
+
+Screens.mods = {
+	background = sunsetBackground,
+	open = openMods,
+	draw = function()
+		title("Mods")
+		local px, py, pw, ph = X(90), Y(100), L(1740), L(880)
+		panel(px, py, pw, ph, true)
+		local list = modsState.list
+		drawText(FONT_LIST, px + L(20), py + L(14), modsState.custom
+			and "Your own load order: a mod further down overrides the ones above it."
+			or "Original order: each file comes from whichever archive or folder has the newest copy. Move a mod to set your own order.", GREY, S)
+		drawText(FONT_LIST, px + L(20), py + L(40), "data.bcp (the game, always loaded first)", GREY, S)
+		local rowH = L(56)
+		local top = py + L(70)
+		local rows = math.floor((ph - L(90)) / rowH)
+		if hovered(px, py, pw, ph) and mouse.wheel ~= 0 then modsState.scroll = modsState.scroll - mouse.wheel end
+		modsState.scroll = math.max(0, math.min(modsState.scroll, math.max(0, #list - rows)))
+		for r = 1, rows do
+			local i = modsState.scroll + r
+			local m = list[i]
+			if not m then break end
+			local ry = top + (r - 1) * rowH
+			if button(m.enabled and T("FRONT_END_BUTTON_ON") or T("FRONT_END_BUTTON_OFF"), px + L(20), ry + L(4), L(140), L(34)) then
+				m.enabled = not m.enabled
+				modsState.dirty = true
+			end
+			if button("Up", px + L(170), ry + L(4), L(90), L(34), i > 1) then
+				list[i], list[i - 1] = list[i - 1], list[i]
+				modsState.custom, modsState.dirty = true, true
+			end
+			if button("Down", px + L(270), ry + L(4), L(90), L(34), i < #list) then
+				list[i], list[i + 1] = list[i + 1], list[i]
+				modsState.custom, modsState.dirty = true, true
+			end
+			local name = m.name .. ((m.version ~= "") and ("  " .. m.version) or "")
+			drawText(FONT_BUTTON, px + L(380), ry + L(2), name, m.enabled and WHITE or GREY, S)
+			local detail = (m.problem ~= "" and m.enabled) and m.problem or (m.description ~= "" and m.description or m.kind)
+			drawText(FONT_LIST, px + L(380), ry + L(30), detail, (m.problem ~= "" and m.enabled) and 0xFF6060FF or GREY, S)
+		end
+		if #list == 0 then
+			drawText(FONT_LIST, px + L(20), top, "No mods found. Put .bcp archives into the game folder, or mod folders into \"mods\".", YELLOW, S)
+		end
+		if #list > rows then
+			drawText(FONT_LIST, px + pw - L(260), py + ph - L(22), "Scroll for more mods", GREY, S)
+		end
+		if button("Apply", X(620), Y(1022), L(210), L(26), modsState.dirty) then
+			local out = {}
+			for i, m in ipairs(list) do out[i] = { id = m.id, enabled = m.enabled } end
+			applyMods(out, modsState.custom)
+			openMods()
+		end
+		if button("Original order", X(855), Y(1022), L(210), L(26), modsState.custom) then
+			modsState.custom, modsState.dirty = false, true
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), X(1090), Y(1022), L(210), L(26)) or isKeyPressed("Escape") then pop() end
 	end,
 }
 
@@ -1945,3 +2018,20 @@ function FE_Close()
 	dialog = nil
 	activeDrag = nil
 end
+
+-- The open screen's name, or nil (hot reload reopens it)
+function FE_Top()
+	return stack[#stack]
+end
+
+-- For mods: the scripts in a mod's Lua\FrontEnd folder run after this one (in name order) and
+-- reach the menus through this table. A mod adds a screen with UI.Screens.<name> = { draw = ... }
+-- and opens it with UI.push("<name>"); it adds a main menu entry to MainMenuItems.
+UI = {
+	Screens = Screens, push = push, pop = pop,
+	button = button, panel = panel, title = title, listBox = listBox, hovered = hovered,
+	X = X, Y = Y, L = L, scale = function() return S end, size = function() return W, H end,
+	T = T, background = sunsetBackground,
+	fonts = { title = FONT_TITLE, button = FONT_BUTTON, smallButton = FONT_SMALL_BUTTON, list = FONT_LIST, text = FONT_TEXT },
+	colours = { white = WHITE, grey = GREY, yellow = YELLOW },
+}

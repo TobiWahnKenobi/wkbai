@@ -559,6 +559,7 @@ std::vector<ModInfo> DiscoverMods()
 	std::sort(folders.begin(), folders.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
 	for (const auto& folder : folders) {
 		ModInfo mod{ "mods/" + folder, folder, "", "mod folder" };
+		mod.modId = folder;
 		std::ifstream manifest(ModsPath() / PathFromUtf8(folder) / "mod.json");
 		if (manifest.good()) {
 			try {
@@ -566,6 +567,13 @@ std::vector<ModInfo> DiscoverMods()
 				manifest >> json;
 				mod.name = json.value<std::string>("name", mod.name);
 				mod.description = json.value<std::string>("description", "");
+				mod.modId = json.value<std::string>("id", mod.modId);
+				mod.version = json.value<std::string>("version", "");
+				mod.apiVersion = json.value<int>("wkbre2", 0);
+				if (auto req = json.find("requires"); req != json.end() && req->is_array())
+					for (const auto& r : *req)
+						if (r.is_string())
+							mod.dependencies.push_back(r.get<std::string>());
 			}
 			catch (const nlohmann::json::exception& exc) {
 				printf("WARNING: Invalid mod.json in mod %s: %s\n", folder.c_str(), exc.what());
@@ -582,6 +590,33 @@ FileSource* FindFileSource(const char* fn)
 		if (FileSource* src = group->findNewest(fn))
 			return src;
 	return nullptr;
+}
+
+// What may keep each enabled mod from working: a mod it requires that is missing or disabled
+// (matched by mod.json "id", or by the folder or archive name), or a newer mod format
+void CheckModProblems(std::vector<ModInfo>& mods)
+{
+	auto find = [&](const std::string& id) {
+		return std::find_if(mods.begin(), mods.end(), [&](const ModInfo& m) {
+			return !StrCICompare(m.modId, id) || !StrCICompare(m.id, id) || !StrCICompare(m.name, id); });
+	};
+	for (ModInfo& mod : mods) {
+		mod.problem.clear();
+		if (!mod.enabled)
+			continue;
+		auto add = [&](const std::string& text) { mod.problem += (mod.problem.empty() ? "" : "; ") + text; };
+		for (const std::string& req : mod.dependencies) {
+			auto it = find(req);
+			if (it == mods.end())
+				add("needs \"" + req + "\", which isn't installed");
+			else if (!it->enabled)
+				add("needs \"" + it->name + "\", which is disabled");
+		}
+		if (mod.apiVersion > MOD_API_VERSION)
+			add("made for a newer wkbre2 (mod format " + std::to_string(mod.apiVersion) + ", this one has " + std::to_string(MOD_API_VERSION) + ")");
+		if (!mod.problem.empty())
+			printf("WARNING: Mod %s: %s\n", mod.name.c_str(), mod.problem.c_str());
+	}
 }
 
 } // namespace
@@ -640,6 +675,7 @@ void InitFileSystem()
 		std::stable_sort(mods.begin(), mods.end(), [](const ModInfo& a, const ModInfo& b) { return a.newestTime < b.newestTime; });
 		g_fileGroups.push_back(std::move(base));
 	}
+	CheckModProblems(mods);
 	g_mods = std::move(mods);
 
 	printf("File system: data.bcp + %zu mod(s), %s order\n", g_mods.size(), g_customModOrder ? "custom" : "original (newest file wins)");
@@ -731,6 +767,20 @@ void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 	fclose(sf);
 	*out = mout; *outsize = ss;
 	return;
+}
+
+uint64_t FileModificationTime(const char* fn)
+{
+	uint64_t time = 0;
+	if (FileSource* src = FindFileSource(fn))
+		return src->find(fn, time) ? time : 0;
+	const auto u8fn = PathFromUtf8(portablePath(fn));
+	for (const auto& path : { g_userPath / "saved" / u8fn, g_gamePath / "saved" / u8fn, "redata" / u8fn }) {
+		std::error_code ec;
+		if (std::filesystem::is_regular_file(path, ec))
+			return FileTimeOf(path);
+	}
+	return 0;
 }
 
 int FileExists(const char *fn)
