@@ -19,6 +19,7 @@ struct IRenderer;
 struct SceneRenderer;
 struct ClientGameObject;
 struct GameObjBlueprint;
+struct Command;
 struct ParticleContainer;
 struct PSCache;
 struct ParticleRenderer;
@@ -68,6 +69,16 @@ private:
 	bool firstFrame = true;
 	// The menu's "save" request: saves (saveGame) and tells the menu
 	void saveRequested(const std::string& name);
+	// A right-click command to the selection (units spread around the place, buildings' rally
+	// points); faceTo: where the units face at the end (x < 0: nowhere)
+	void sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo);
+	// a formation's right-drag: the move waits for the button's release, facing the drag
+	struct FormationDrag {
+		bool active = false;
+		Vector3 start;
+		Command* command = nullptr;
+	} formationDrag;
+	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	bool menuPausedGame = false;
 	int camrotoffx, camrotoffy;
 	float camrotorix, camrotoriy;

@@ -35,5 +35,6 @@ struct Command {
 
 	void parse(GSFileParser &gsf, GameSet &gs);
 	bool canBeExecuted(ServerGameObject* self, ServerGameObject* target = nullptr) const;
-	void execute(ServerGameObject *self, ServerGameObject *target = nullptr, int assignmentMode = 0, const Vector3 &destination = Vector3()) const;
+	// faceTo: a point the order's Face Towards task faces (x < 0: none)
+	void execute(ServerGameObject *self, ServerGameObject *target = nullptr, int assignmentMode = 0, const Vector3 &destination = Vector3(), const Vector3& faceTo = Vector3(-1, 0, 0)) const;
 };

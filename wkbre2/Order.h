@@ -115,6 +115,9 @@ struct ObjectReferenceTask : Task {
 };
 
 struct FaceTowardsTask : Task {
+	// a point to face (the end of a right-drag) when the task has no target
+	Vector3 faceTo;
+	bool hasFaceTo = false;
 	using Task::Task;
 	//virtual void onStart() override;
 	virtual void onUpdate() override;

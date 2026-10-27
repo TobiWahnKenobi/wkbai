@@ -1064,16 +1064,18 @@ void Test_Formation()
 	const uint64_t start = SDL_GetTicks();
 	bool moved = false;
 	int lastPrint = -1;
-	while (SDL_GetTicks() - start < 16000) {
+	while (SDL_GetTicks() - start < 24000) {
 		server.tick();
 		const float t = (SDL_GetTicks() - start) / 1000.0f;
 		if (!moved && t > 4.0f) {
 			moved = true;
-			server.gameSet->commands[moveCommand].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position + Vector3(30, 0, 30));
+			// as a right-drag: then facing 20 m east of the destination (orientation pi/2)
+			const Vector3 destination = formation->position + Vector3(30, 0, 30);
+			server.gameSet->commands[moveCommand].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, destination, destination + Vector3(20, 0, 0));
 		}
 		if ((int)t != lastPrint) {
 			lastPrint = (int)t;
-			printf("FORMATION t=%d formation (%.1f,%.1f)", lastPrint, formation->position.x, formation->position.z);
+			printf("FORMATION t=%d formation (%.1f,%.1f) facing %.2f", lastPrint, formation->position.x, formation->position.z, formation->orientation.y);
 			for (size_t i = 0; i < members.size(); i++)
 				printf(" | %zu (%.1f,%.1f) %d %s", i, members[i]->position.x, members[i]->position.z, (int)members[i]->movement.isMoving(),
 					members[i]->animationIndex >= 0 ? server.gameSet->animations.names.getString(members[i]->animationIndex).c_str() : "-");

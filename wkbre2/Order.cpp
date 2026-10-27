@@ -760,10 +760,11 @@ void ObjectReferenceTask::onUpdate()
 
 void FaceTowardsTask::onUpdate()
 {
-	if (target) {
-		ServerGameObject* obj = this->order->gameObject;
-		Vector3 dir = target->position - obj->position;
-		obj->setOrientation(Vector3(0.0f, std::atan2(dir.x, -dir.z), 0.0f));
+	ServerGameObject* obj = this->order->gameObject;
+	if (target || hasFaceTo) {
+		const Vector3 dir = (target ? target->position : faceTo) - obj->position;
+		if (dir.sqlen2xz() > 0.01f)
+			obj->setOrientation(Vector3(0.0f, std::atan2(dir.x, -dir.z), 0.0f));
 	}
 	terminate();
 }

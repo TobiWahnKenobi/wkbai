@@ -672,7 +672,7 @@ void Client::sendMessage(const std::string &msg) {
 	serverLink->send(packet);
 }
 
-void Client::sendCommand(ClientGameObject * obj, const Command * cmd, int assignmentMode, ClientGameObject *target, const Vector3 & destination)
+void Client::sendCommand(ClientGameObject * obj, const Command * cmd, int assignmentMode, ClientGameObject *target, const Vector3 & destination, const Vector3& faceTo)
 {
 	NetPacketWriter packet(NETSRVMSG_COMMAND);
 	packet.writeUint32(cmd->id);
@@ -680,6 +680,7 @@ void Client::sendCommand(ClientGameObject * obj, const Command * cmd, int assign
 	packet.writeUint8(assignmentMode);
 	packet.writeUint32(target ? target->id : 0);
 	packet.writeVector3(destination);
+	packet.writeVector3(faceTo);
 	serverLink->send(packet);
 }
 

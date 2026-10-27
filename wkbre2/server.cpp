@@ -1561,7 +1561,8 @@ void Server::tick()
 				int mode = br.readUint8();
 				int targetid = br.readUint32();
 				Vector3 destination = br.readVector3();
-				gameSet->commands[cmdid].execute(findObject(objid), findObject(targetid), mode, destination);
+				Vector3 faceTo = br.readVector3();
+				gameSet->commands[cmdid].execute(findObject(objid), findObject(targetid), mode, destination, faceTo);
 				break;
 			}
 			case NETSRVMSG_PAUSE: {

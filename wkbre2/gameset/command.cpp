@@ -87,7 +87,7 @@ bool Command::canBeExecuted(ServerGameObject* self, ServerGameObject* target) co
 			|| std::all_of(this->cursorConditions.begin(), this->cursorConditions.end(), testEquation));
 }
 
-void Command::execute(ServerGameObject *self, ServerGameObject *target, int assignmentMode, const Vector3 &destination) const
+void Command::execute(ServerGameObject *self, ServerGameObject *target, int assignmentMode, const Vector3 &destination, const Vector3& faceTo) const
 {
 	if (!canBeExecuted(self, target))
 		return;
@@ -98,6 +98,12 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 	// TODO: order (what to do first?)
 	if (this->order) {
 		Order* neworder = self->orderConfig.addOrder(this->order, assignmentMode, target, destination, false);
+		if (neworder && faceTo.x >= 0.0f)
+			for (auto& task : neworder->tasks)
+				if (auto* face = dynamic_cast<FaceTowardsTask*>(task.get())) {
+					face->faceTo = faceTo;
+					face->hasFaceTo = true;
+				}
 		// Give blueprint for spawn tasks
 		if (this->order->classType == Tags::ORDTSKTYPE_SPAWN) {
 			auto& gs = *ctx.server->gameSet;

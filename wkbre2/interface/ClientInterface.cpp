@@ -366,6 +366,65 @@ bool ClientInterface::orderFlagDone(float age) const
 	return true;
 }
 
+void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo)
+{
+	int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
+	Vector3 destPos = peapos;
+	const int NUM_DIRECTIONS = 8;
+	const float SEPARATION = 3.0f;
+	const float TWOPI = 2.0f * 3.1415f;
+	float nextPosDir = 0.0f;
+	float nextPosRadius = SEPARATION;
+	for (ClientGameObject *sel : selection) {
+		if (sel) {
+			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
+				// if object offers this command, send the command
+				int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+				client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos, faceTo);
+				if (!nextSelectedObject) {
+					if (orderFlag == 0)
+						orderFlagUnits.clear();
+					orderFlag = 1;
+					orderFlagUnits.push_back(sel);
+				}
+				// calc destination pos for next selected object
+				destPos = peapos + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
+				nextPosDir += SEPARATION / nextPosRadius;
+				if (nextPosDir >= TWOPI) {
+					nextPosDir = 0.0f;
+					nextPosRadius += SEPARATION;
+				}
+			}
+			else if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+				for (const auto* scmd : sel->blueprint->offeredCommands) {
+					const std::string_view name = client->gameSet->commands.getString(scmd);
+					if (name.substr(0, 6) == "Spawn ") {
+						auto unitName = std::string(name.substr(6));
+						int x = client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].names.getIndex(unitName);
+						if (x >= 0) {
+							const GameObjBlueprint* unitType = &client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][x];
+							for (const auto* cmd : unitType->offeredCommands) {
+								if (cmd == rightClickCommand && cmd->canBeAssignedToSpawnedUnits) {
+									printf("Order for spawned unit changed to: %s\n", client->gameSet->commands.getString(cmd).c_str());
+									if (cmd->order && cmd->order->classType == Tags::ORDTSKTYPE_MOVE) {
+										client->sendSetBuildingSpawnedUnitOrderToDestination(sel, client->gameSet->commands.getIndex(cmd), peapos);
+										orderFlag = std::max(orderFlag, 2);
+									}
+									else {
+										client->sendSetBuildingSpawnedUnitOrderToTarget(sel, client->gameSet->commands.getIndex(cmd), nextSelectedObject);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if (orderFlag)
+		showOrderFlag(peapos, orderFlag == 2);
+}
+
 void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 {
 	if (!client->terrain || !client->gameSet)
@@ -1138,66 +1197,43 @@ void ClientInterface::iter()
 					stampdownBlueprint = nullptr;
 			}
 		}
-		else if (rightClickCommand) {
-			int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
-			Vector3 destPos = peapos;
-			const int NUM_DIRECTIONS = 8;
-			const float SEPARATION = 3.0f;
-			const float TWOPI = 2.0f * 3.1415f;
-			float nextPosDir = 0.0f;
-			float nextPosRadius = SEPARATION;
-			for (ClientGameObject *sel : selection) {
-				if (sel) {
-					if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
-						// if object offers this command, send the command
-						int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
-						client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos);
-						if (!nextSelectedObject) {
-							if (orderFlag == 0)
-								orderFlagUnits.clear();
-							orderFlag = 1;
-							orderFlagUnits.push_back(sel);
-						}
-						// calc destination pos for next selected object
-						destPos = peapos + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
-						nextPosDir += SEPARATION / nextPosRadius;
-						if (nextPosDir >= TWOPI) {
-							nextPosDir = 0.0f;
-							nextPosRadius += SEPARATION;
-						}
-					}
-					else if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
-						for (const auto* scmd : sel->blueprint->offeredCommands) {
-							const std::string_view name = client->gameSet->commands.getString(scmd);
-							if (name.substr(0, 6) == "Spawn ") {
-								auto unitName = std::string(name.substr(6));
-								int x = client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].names.getIndex(unitName);
-								if (x >= 0) {
-									const GameObjBlueprint* unitType = &client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][x];
-									for (const auto* cmd : unitType->offeredCommands) {
-										if (cmd == rightClickCommand && cmd->canBeAssignedToSpawnedUnits) {
-											printf("Order for spawned unit changed to: %s\n", client->gameSet->commands.getString(cmd).c_str());
-											if (cmd->order && cmd->order->classType == Tags::ORDTSKTYPE_MOVE) {
-												client->sendSetBuildingSpawnedUnitOrderToDestination(sel, client->gameSet->commands.getIndex(cmd), peapos);
-												orderFlag = std::max(orderFlag, 2);
-											}
-											else {
-												client->sendSetBuildingSpawnedUnitOrderToTarget(sel, client->gameSet->commands.getIndex(cmd), nextSelectedObject);
-											}
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			if (orderFlag)
-				showOrderFlag(peapos, orderFlag == 2);
+		else if (rightClickCommand && !nextSelectedObject && !formationDrag.active
+			&& std::any_of(selection.begin(), selection.end(), [](const auto& s) { return s && s->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION; })) {
+			// a formation sent to the ground: the move goes on releasing the button, facing
+			// the way the mouse was dragged meanwhile (the arrow shows it)
+			formationDrag = { true, peapos, rightClickCommand };
 		}
+		else if (rightClickCommand)
+			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
+	}
+	if (formationDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
+		formationDrag.active = false;
+		const bool dragged = (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN;
+		sendRightClickCommand(formationDrag.command, nullptr, formationDrag.start, dragged ? peapos : Vector3(-1, 0, 0));
 	}
 
 	clickedScriptedUi = false;
+
+	// a formation's right-drag: an arrow from where it goes to where it will face
+	if (formationDrag.active && (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN) {
+		auto toScreen = [this](const Vector3& p) {
+			const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
+			return ImVec2((t.x + 1) * 0.5f * g_windowWidth, (1 - t.y) * 0.5f * g_windowHeight);
+		};
+		const Vector3 a = formationDrag.start, b = peapos;
+		const Vector3 dir = (b - a).normal();
+		const Vector3 side(-dir.z, 0, dir.x);
+		const Vector3 head = b - dir * 3.0f;
+		ImDrawList* dl = ImGui::GetBackgroundDrawList();
+		const ImU32 colour = IM_COL32(255, 210, 60, 230), shadow = IM_COL32(0, 0, 0, 160);
+		for (int pass = 0; pass < 2; pass++) {
+			const ImU32 c = pass == 0 ? shadow : colour;
+			const float w = pass == 0 ? 7.0f : 4.0f;
+			dl->AddLine(toScreen(a), toScreen(head), c, w);
+			dl->AddTriangleFilled(toScreen(b), toScreen(head + side * 1.8f), toScreen(head - side * 1.8f), c);
+		}
+		dl->AddCircleFilled(toScreen(a), 5.0f, colour);
+	}
 
 	if (g_keyPressed[SDL_SCANCODE_P]) {
 		static bool pauseState = false;
