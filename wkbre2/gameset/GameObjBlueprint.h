@@ -124,6 +124,9 @@ struct GameObjBlueprint {
 		ValueDeterminer* radius = nullptr;
 	};
 	std::vector<RangeSprite> spritesWhenSelected, spritesWhenStampingDown;
+	// FORMATION_SEPERATION_X/Y: a character's distance to its neighbours in a formation, across
+	// and between rows (the original's default 2.8 m; cavalry 4 x 6)
+	float formationSeparationX = 2.8f, formationSeparationY = 2.8f;
 	std::vector<ObjectFinder*> spritesWhenSelectedFor;
 
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);

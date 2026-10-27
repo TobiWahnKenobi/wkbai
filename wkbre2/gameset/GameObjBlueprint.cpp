@@ -338,6 +338,12 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "DISPLAY_SPRITE_WHEN_SELECTED_FOR") {
 			spritesWhenSelectedFor.push_back(ReadFinder(gsf, *gameSet));
 		}
+		else if (strtag == "FORMATION_SEPERATION_X") {
+			formationSeparationX = gsf.nextFloat();
+		}
+		else if (strtag == "FORMATION_SEPERATION_Y") {
+			formationSeparationY = gsf.nextFloat();
+		}
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}

@@ -3,43 +3,71 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <utility>
+#include <vector>
+#include <algorithm>
 
 #include "server.h"
 #include "gameset/GameObjBlueprint.h"
 #include "terrain.h"
 
-static std::pair<float, float> formationMemberPosition(FormationType type, int numMembers, float memberDistance, int member)
+// The member places of the original's formations (WKB.exe: Line 0x64a7a0, Column 0x64a900,
+// Wedge 0x64aa70, Orb 0x64ad50), chosen by the formation type at 0x550c60. x is across, z
+// backwards from the front row at 0; sepX between neighbours, sepY between rows (rings).
+static std::vector<std::pair<float, float>> formationPlaces(FormationType type, int numMembers, float sepX, float sepY)
 {
-	if (numMembers <= 1) {
-		return { 0.0f, 0.0f };
-	}
-	if (type == FormationType::Line) {
-		const int numRows = (int)std::sqrt(numMembers / 2.0f);
-		const int numColumns = numMembers / numRows;
-		const float rowOffset = (numColumns - 1) * memberDistance / 2.0f;
-		return { (member % numColumns) * memberDistance - rowOffset, (member / numColumns) * memberDistance };
-	}
-	if (type == FormationType::Column) {
-		const int numColumns = (int)std::sqrt(numMembers / 2.0f);
-		const float rowOffset = (numColumns - 1) * memberDistance / 2.0f;
-		return { (member % numColumns) * memberDistance - rowOffset, (member / numColumns) * memberDistance };
-	}
-	if (type == FormationType::Wedge) {
-		// we solve n(n+1)/2 = member
-		const int row = (-1 + (int)std::sqrt(float(1 + 8 * member))) / 2;
-		const int rowFirstMember = row * (row + 1) / 2;
-		const float rowOffset = std::min(row, numMembers - rowFirstMember - 1) * memberDistance / 2.0f;
-		return { (member - rowFirstMember) * memberDistance - rowOffset, row * memberDistance };
-	}
-	if (type == FormationType::Orb) {
-		if (numMembers <= 2) {
-			return { 0.0f, 0.0f };
+	std::vector<std::pair<float, float>> places;
+	if (numMembers <= 0)
+		return places;
+	places.reserve(numMembers);
+	// centred rows of `perRow` (or row k of k for the wedge)
+	auto rows = [&](int perRow, bool wedge) {
+		int remaining = numMembers;
+		for (int row = 0; remaining > 0; row++) {
+			const int count = std::min(remaining, wedge ? row + 1 : perRow);
+			for (int i = 0; i < count; i++)
+				places.emplace_back(i * sepX - (count - 1) * sepX * 0.5f, row * sepY);
+			remaining -= count;
 		}
-		const float angleStep = 2.0f * M_PI / numMembers;
-		const float formationRadius = (memberDistance / 2.0f) / std::sin(angleStep / 2.0f);
-		return { std::cos(angleStep * member) * formationRadius, std::sin(angleStep * member) * formationRadius };
+	};
+	if (type == FormationType::Line) {
+		const int numRows = std::max(2, (numMembers + 11) / 12);
+		rows((numRows - 1 + numMembers) / numRows, false);
 	}
-	return { 0.0f, 0.0f };
+	else if (type == FormationType::Column) {
+		const int a = std::max(2, numMembers / 10);
+		const int b = std::max(1, (numMembers + 1) / a);
+		rows((b - 1 + numMembers) / b, false);
+	}
+	else if (type == FormationType::Wedge)
+		rows(0, true);
+	else if (type == FormationType::Orb) {
+		// rings from the outside in, sepY apart; the outer ring starts at 12 m and grows by sepX
+		// until everyone fits. The front of the outer ring is at 0.
+		const float TWO_PI = 6.2831855f;
+		for (float outer = 12.0f; places.size() < (size_t)numMembers; outer += sepX) {
+			places.clear();
+			int remaining = numMembers;
+			float offset = 0.0f;
+			for (float r = outer; r >= 0.0f && remaining > 0; r -= sepY) {
+				r = std::min(r, remaining * sepX / TWO_PI);
+				if (offset == 0.0f)
+					offset = r;
+				const int count = std::min(remaining, (int)(r * TWO_PI / sepX));
+				for (int i = 0; i < count; i++) {
+					const float angle = (float)(count - i) / count * TWO_PI;
+					places.emplace_back(std::sin(angle) * r, offset - std::cos(angle) * r);
+				}
+				remaining -= count;
+			}
+			if (remaining > 0)
+				places.clear();
+			if (outer > 1000.0f)
+				break; // not with sensible separations
+		}
+	}
+	while (places.size() < (size_t)numMembers)
+		places.emplace_back(0.0f, 0.0f);
+	return places;
 }
 
 void FormationController::update()
@@ -58,11 +86,18 @@ void FormationController::update()
 	Matrix transformMatrix = formation->getWorldMatrix();
 
 	int numMembers = 0;
+	const GameObjBlueprint* first = nullptr;
 	for (auto& [childType, childList] : formation->children) {
 		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER) {
 			numMembers += childList.size();
+			if (!first && !childList.empty())
+				first = childList.front()->blueprint;
 		}
 	}
+	if (!first)
+		return;
+	// as the original, the separations of one member's type
+	const auto places = formationPlaces(type, numMembers, first->formationSeparationX, first->formationSeparationY);
 
 	int memberIndex = 0;
 	for (auto& [childType, childList] : formation->children) {
@@ -70,10 +105,7 @@ void FormationController::update()
 			for (CommonGameObject* character : childList) {
 				ServerGameObject* srvCharacter = character->dyncast<ServerGameObject>();
 				if (srvCharacter->orderConfig.getCurrentOrder() == nullptr) {
-					const float memberRadius = 1.0f;
-					const float memberOutDistance = 1.0f;
-					const float memberDistance = memberOutDistance + 2.0f * memberRadius;
-					auto [posX, posZ] = formationMemberPosition(type, numMembers, memberDistance, memberIndex);
+					auto [posX, posZ] = places[memberIndex];
 					Vector3 slot = Vector3(posX, 0, posZ).transform(transformMatrix);
 					if (server->terrain)
 						slot.y = server->terrain->getHeightEx(slot.x, slot.z, srvCharacter->blueprint->canWalkOnWater());
