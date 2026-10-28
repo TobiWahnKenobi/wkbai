@@ -7,6 +7,25 @@
 #include "gameset/finder.h"
 #include "Order.h"
 #include "gameset/command.h"
+#include <numeric>
+
+// Whether the building offers "Spawn <type>" for a fighter (not a peasant, cart, merchant,
+// priest, scout or wagon): the Barracks and Stables, not the Manor or a Church
+static bool TrainsFighters(const GameObjBlueprint* building)
+{
+	static std::map<const GameObjBlueprint*, bool> known;
+	if (auto it = known.find(building); it != known.end())
+		return it->second;
+	static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout", "Wagon" };
+	const GameSet* gs = Server::instance->gameSet.get();
+	bool fighters = false;
+	for (const Command* cmd : building->offeredCommands) {
+		const std::string& name = gs->commands.getString(cmd);
+		if (name.rfind("Spawn ", 0) == 0 && std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return name.find(c) != std::string::npos; }))
+			fighters = true;
+	}
+	return known[building] = fighters;
+}
 
 void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 {
@@ -281,7 +300,17 @@ void AIController::update()
 
 		// Building Requirements
 		int isFoundationItem = Server::instance->gameSet->items.names.getIndex("Is a Foundation");
-		for (size_t ri = 0; ri < cominst.buildingReqInsts.size(); ++ri) {
+		// The aggressive AI places the buildings that train fighters (Barracks, Stables) first and
+		// saves for them: while one is short of its cost, the others wait. The requirements' own
+		// order put farms first, which took the wood as fast as it came; the first barracks came
+		// after 9 to 12 minutes.
+		std::vector<size_t> buildOrder(cominst.buildingReqInsts.size());
+		std::iota(buildOrder.begin(), buildOrder.end(), 0);
+		const bool aggressive = Server::instance->aggressiveAI;
+		if (aggressive)
+			std::stable_partition(buildOrder.begin(), buildOrder.end(), [&](size_t ri) { return TrainsFighters(gscomm->buildingRequirements[ri].bpBuilding); });
+		bool saving = false;
+		for (size_t ri : buildOrder) {
 			auto& gsreq = gscomm->buildingRequirements[ri];
 			auto& reqinst = cominst.buildingReqInsts[ri];
 			auto it = std::remove_if(reqinst.foundations.begin(), reqinst.foundations.end(),
@@ -291,15 +320,18 @@ void AIController::update()
 			size_t requiredCount = (size_t)gsreq.vdCountNeeded->eval(&ctx);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			size_t inCtrCount = reqinst.foundations.size();
-			while (existingCount + inCtrCount < requiredCount) {
+			while (!saving && existingCount + inCtrCount < requiredCount) {
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
 				// no site (the position's finder found nothing): no foundation this time
 				if (posori.position.x == 0.0f && posori.position.z == 0.0f)
 					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);
-				if (!foundation)
+				if (!foundation) {
+					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding) && !obj->getPlayer()->canAffordObject(bpFoundation))
+						saving = true;
 					break;
+				}
 				obj->sendEvent(Tags::PDEVENT_ON_COMMISSIONED, foundation);
 				reqinst.foundations.emplace_back(foundation);
 				inCtrCount = reqinst.foundations.size();
