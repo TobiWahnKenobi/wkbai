@@ -168,6 +168,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 
 	ServerGameObject* level = server.getLevel();
 	const bool isWKBattles = server.gameSet->version == GameSet::GSVERSION_WKBATTLES;
+	std::vector<SrvGORef> aiPlayers; // the AI players, in a game without any human
 
 	if (mode == StandardMode) {
 		for (auto& [objType, objList] : level->children) {
@@ -262,7 +263,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				generals.push_back(&playerTypes[i]);
 		}
 
-		bool humanPlaced = false;
+		bool humanPlaced = false, guestPlaced = false;
 		std::vector<std::pair<ServerGameObject*, int>> playing; // with their teams
 		for (size_t i = 0; i < players.size(); i++) {
 			const Slot slot = i < slots.size() ? slots[i] : Slot{};
@@ -282,11 +283,13 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			}
 			else if (slot.type == Slot::GUEST && slot.client > 0 && slot.client < (int)server.clientLinks.size()) {
 				server.setClientPlayerControl(slot.client, player->id);
+				guestPlaced = true;
 				if (!slot.name.empty())
 					player->setName(slot.name);
 				printf("Skirmish: position %zu (player %u): guest %d\n", i + 1, player->id, slot.client);
 			}
 			else {
+				aiPlayers.emplace_back(player);
 				const GameObjBlueprint* general = slot.general.empty() ? nullptr
 					: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);
 				if (!general && !generals.empty())
@@ -300,6 +303,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				player->setColor(slot.colour);
 			playing.emplace_back(player, slot.team);
 		}
+		if (humanPlaced || guestPlaced)
+			aiPlayers.clear();
 
 		// Teams: allied within a team, enemies to everyone else (the map's own diplomacy when no
 		// teams are chosen)
@@ -348,5 +353,15 @@ void QuickSkirmishMenu::applySettings(Server& server)
 
 	if (mode != DevMode) {
 		server.startLevel();
+		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or
+		// Veteran AI's population limit to a part of the human's, i.e. to 0: that AI then wants no
+		// peasants and never trains any. The original's skirmish always has a human; AI-only games
+		// (wkbre2's lobby, the headless AI test) give such an AI the skirmish's limit.
+		for (const SrvGORef& ref : aiPlayers)
+			if (ServerGameObject* player = ref.get())
+				if (const int item = server.gameSet->items.names.getIndex("Total Population Count"); item >= 0 && player->getItem(item) <= 0.0f) {
+					player->setItem(item, (float)populationLimit);
+					printf("Skirmish: AI-only game, player %u gets population limit %d\n", player->id, populationLimit);
+				}
 	}
 }

@@ -1647,11 +1647,12 @@ void Test_AIvsAI()
 		slots.push_back(slot);
 	}
 	skirmish.setSlots(slots);
-	skirmish.applySettings(server);
-	// as a game does: the clock runs when the level starts (its start reactions schedule sequences)
+	// as a game does: the clock runs when the level starts (its start reactions schedule sequences);
+	// applySettings starts it (starting it a second time ran every "On Level Start" reaction twice:
+	// two of every AI marker, commission and work order)
 	server.timeManager.unpause();
 	server.timeManager.stepMs = 20;
-	server.startLevel();
+	skirmish.applySettings(server);
 
 	auto census = [&](const char* when) {
 		ServerGameObject* lvl = server.getLevel();
