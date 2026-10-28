@@ -138,14 +138,16 @@ void Terrain::readBCM(const char * filename) {
 	BitReader br(fp + 0xC000);
 
 	// Lakes
+	bcmLakesBitOffset = (uint64_t)(br.bytepos - (uint8_t*)fcnt) * 8 + br.bitpos;
 	int mapnlakes = br.readnb(6);
+	lakeExtraBits.clear();
 	for (int i = 0; i < mapnlakes; i++)
 	{
 		Vector3 v; int j;
 		j = br.readnb(32); v.x = *(float*)&j;
 		j = br.readnb(32); v.y = *(float*)&j;
 		j = br.readnb(32); v.z = *(float*)&j;
-		br.readnb(2);
+		lakeExtraBits.push_back((uint8_t)br.readnb(2));
 		lakes.push_back(std::move(v));
 	}
 
@@ -221,10 +223,10 @@ bool Terrain::writeBCM(const std::filesystem::path& path) const
 {
 	if (bcmData.empty() || !tiles)
 		return false;
-	// everything before the texture tables as read (header, minimap, lakes), then the tables,
-	// tiles, the (group, id) list and the heights written again, then whatever followed them
-	std::vector<uint8_t> out(bcmData.begin(), bcmData.begin() + (size_t)((bcmTablesBitOffset + 7) / 8));
-	uint64_t bit = bcmTablesBitOffset;
+	// everything before the lakes as read (header, minimap), then the lakes, texture tables, tiles,
+	// the (group, id) list and the heights written again, then whatever followed them
+	std::vector<uint8_t> out(bcmData.begin(), bcmData.begin() + (size_t)((bcmLakesBitOffset + 7) / 8));
+	uint64_t bit = bcmLakesBitOffset;
 	// the bits as BitReader reads them: least significant first
 	auto put = [&](uint32_t value, int bits) {
 		for (int i = 0; i < bits; i++, bit++) {
@@ -250,6 +252,17 @@ bool Terrain::writeBCM(const std::filesystem::path& path) const
 			indexOf(groups, tex->grp);
 			indexOf(ids, tex->id);
 		}
+	// the lakes: a point each (its y is the water level), at most 63
+	const size_t lakeCount = std::min<size_t>(lakes.size(), 63);
+	put((uint32_t)lakeCount, 6);
+	for (size_t i = 0; i < lakeCount; i++) {
+		for (float f : { lakes[i].x, lakes[i].y, lakes[i].z }) {
+			uint32_t u;
+			memcpy(&u, &f, 4);
+			put(u, 32);
+		}
+		put(i < lakeExtraBits.size() ? lakeExtraBits[i] : 0, 2);
+	}
 	put((uint32_t)groups.size(), 16);
 	for (TerrainTextureGroup* g : groups) {
 		put((uint32_t)g->name.size(), 8);
@@ -454,4 +467,13 @@ void Terrain::floodfillWater()
 	for (Vector3& lake : lakes) {
 		floodfill((int)(lake.x / 5.0f), (int)(lake.z / 5.0f), lake.y, floodfill);
 	}
+}
+
+void Terrain::refillWater()
+{
+	for (int i = 0; i < width * height; i++) {
+		tiles[i].fullOfWater = false;
+		tiles[i].waterLevel = -1.0f;
+	}
+	floodfillWater();
 }

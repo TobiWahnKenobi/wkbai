@@ -1640,6 +1640,19 @@ void Test_BCMRoundTrip()
 			&& painted.vertices[z * (painted.width + 1) + x] == (uint8_t)(before + 37);
 		printf("BCM painted tile read back %d (%s %d; tables %zu groups %zu ids, were %zu %zu)\n", (int)paintOk, paint->grp->name.c_str(), paint->id,
 			painted.bcmGroups.size(), painted.bcmIds.size(), t.bcmGroups.size(), t.bcmIds.size());
+
+		// a lake added a tile away (its water 5 units above the ground there): it reads back and
+		// floods that tile, and the painted tile is still painted
+		const size_t lakesBefore = t.lakes.size();
+		const int lx = x + 3, lz = z + 3;
+		t.lakes.emplace_back(lx * 5.0f + 2.5f, t.getVertex(lx, lz) + 5.0f, lz * 5.0f + 2.5f);
+		t.writeBCM(out);
+		std::filesystem::copy_file(out, saved, std::filesystem::copy_options::overwrite_existing);
+		Terrain flooded;
+		flooded.readBCM("wkbre2-bcm-test.bcm");
+		const bool lakeOk = flooded.lakes.size() == lakesBefore + 1 && flooded.getTile(lx, lz)->fullOfWater
+			&& flooded.getTile(x, z)->texture->grp->name == paint->grp->name;
+		printf("BCM lake read back %d (%zu lakes, were %zu)\n", (int)lakeOk, flooded.lakes.size(), lakesBefore);
 		std::filesystem::remove(saved);
 	}
 	fflush(stdout);

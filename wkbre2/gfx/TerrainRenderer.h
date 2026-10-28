@@ -22,4 +22,6 @@ struct TerrainRenderer {
 	virtual bool updateHeights() { return true; }
 	// The tiles' textures, turns or flips changed (the map editor), as updateHeights
 	virtual bool updateTiles() { return true; }
+	// The water changed (lakes added, moved or removed), as updateHeights
+	virtual bool updateWater() { return true; }
 };

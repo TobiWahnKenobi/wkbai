@@ -55,7 +55,12 @@ namespace {
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, OBJECTS };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS };
+	// water: a click adds a lake (its point, the water level that much above the ground there) or
+	// removes the lake whose water is under the cursor
+	enum WaterTool { ADD_LAKE, REMOVE_LAKE };
+	int waterTool = ADD_LAKE;
+	float waterDepth = 3.0f; // metres
 	enum Tool { RAISE, LOWER, SMOOTH, FLATTEN };
 	int mode = TERRAIN, tool = RAISE;
 	// texture painting: the texture (group and id), its turn (0-3, quarter turns) and flips;
@@ -91,6 +96,9 @@ struct ClientInterface::EditorState {
 		std::vector<uint8_t> heights;
 		uint32_t placed = 0;
 		std::vector<TileState> tiles;
+		bool hasLakes = false;
+		std::vector<Vector3> lakes;
+		std::vector<uint8_t> lakeBits;
 	};
 	std::vector<Undo> undo;
 	static constexpr size_t MAX_UNDO = 30;
@@ -100,6 +108,23 @@ struct ClientInterface::EditorState {
 			undo.erase(undo.begin());
 	}
 };
+
+void ClientInterface::setLakes(const std::vector<Vector3>& lakes, const std::vector<uint8_t>& bits)
+{
+	Terrain* trn = client->terrain;
+	trn->lakes = lakes;
+	trn->lakeExtraBits = bits;
+	trn->refillWater();
+	withServer([&](Server& server) {
+		if (server.terrain && server.terrain != trn && server.terrain->width == trn->width && server.terrain->height == trn->height) {
+			server.terrain->lakes = lakes;
+			server.terrain->lakeExtraBits = bits;
+			server.terrain->refillWater();
+		}
+	});
+	if (!terrainRenderer || !terrainRenderer->updateWater())
+		rebuildTerrainRenderer(true);
+}
 
 void ClientInterface::rebuildTerrainRenderer(bool tiles)
 {
@@ -145,6 +170,57 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		if (placed)
 			ed.pushUndo({ {}, placed });
 		ed.status = "Placed " + type->name;
+		return true;
+	}
+
+	// water: a click adds or removes a lake; the client's and the server's water filled again
+	if (ed.mode == EditorState::WATER) {
+		if (overUi || !g_mousePressed[SDL_BUTTON_LEFT])
+			return false;
+		std::vector<Vector3> lakes = trn->lakes;
+		std::vector<uint8_t> bits = trn->lakeExtraBits;
+		bits.resize(lakes.size(), 0);
+		const int tx = (int)(cursor.x / 5.0f) + trn->edge, tz = (int)(cursor.z / 5.0f) + trn->edge;
+		if (!trn->getTile(tx, tz))
+			return false;
+		if (ed.waterTool == EditorState::ADD_LAKE) {
+			if (lakes.size() >= 63) {
+				ed.status = "A map has at most 63 lakes";
+				return true;
+			}
+			// the lake's point in the whole map's coordinates (with the edge), as the BCM keeps it
+			lakes.emplace_back(cursor.x + trn->edge * 5.0f, trn->getHeight(cursor.x, cursor.z) + ed.waterDepth, cursor.z + trn->edge * 5.0f);
+			bits.push_back(0);
+			ed.status = "Lake added";
+		}
+		else {
+			// a tile's water level is that of the highest lake reaching it: the nearest lake at
+			// that level goes (where another lake's water stays, a second click removes that one)
+			const TerrainTile* tile = trn->getTile(tx, tz);
+			if (!tile->fullOfWater) {
+				ed.status = "No water here";
+				return true;
+			}
+			const Vector3 at(cursor.x + trn->edge * 5.0f, 0, cursor.z + trn->edge * 5.0f);
+			int best = -1;
+			for (size_t i = 0; i < lakes.size(); i++)
+				if (std::abs(lakes[i].y - tile->waterLevel) < 0.01f
+					&& (best < 0 || (lakes[i] - at).len2xz() < (lakes[best] - at).len2xz()))
+					best = (int)i;
+			if (best < 0) {
+				ed.status = "No lake found for this water";
+				return true;
+			}
+			lakes.erase(lakes.begin() + best);
+			bits.erase(bits.begin() + best);
+			ed.status = "Lake removed";
+		}
+		EditorState::Undo u;
+		u.hasLakes = true;
+		u.lakes = trn->lakes;
+		u.lakeBits = trn->lakeExtraBits;
+		ed.pushUndo(std::move(u));
+		setLakes(lakes, bits);
 		return true;
 	}
 
@@ -291,6 +367,9 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		if (ed.terrainChanged)
 			rebuildTerrainRenderer();
 		ed.terrainChanged = false;
+		// the lakes fill the new ground
+		if (!trn->lakes.empty())
+			setLakes(trn->lakes, trn->lakeExtraBits);
 		// the objects in the changed area stand on the new ground
 		const Vector3 centre = (ed.strokeMin + ed.strokeMax) * 0.5f;
 		const float reach = std::max(ed.strokeMax.x - ed.strokeMin.x, ed.strokeMax.z - ed.strokeMin.z) * 0.75f + 5.0f;
@@ -318,9 +397,20 @@ void ClientInterface::editorWindow()
 		ImGui::SameLine();
 		ImGui::RadioButton("Textures", &ed.mode, EditorState::TEXTURES);
 		ImGui::SameLine();
+		ImGui::RadioButton("Water", &ed.mode, EditorState::WATER);
+		ImGui::SameLine();
 		ImGui::RadioButton("Objects", &ed.mode, EditorState::OBJECTS);
 		ImGui::Separator();
-		if (ed.mode == EditorState::TEXTURES && client->terrain) {
+		if (ed.mode == EditorState::WATER && client->terrain) {
+			ImGui::RadioButton("Add a lake", &ed.waterTool, EditorState::ADD_LAKE);
+			ImGui::SameLine();
+			ImGui::RadioButton("Remove a lake", &ed.waterTool, EditorState::REMOVE_LAKE);
+			if (ed.waterTool == EditorState::ADD_LAKE)
+				ImGui::SliderFloat("Depth (m)", &ed.waterDepth, 0.5f, 30.0f, "%.1f");
+			ImGui::Text("%zu lakes (at most 63)", client->terrain->lakes.size());
+			ImGui::TextWrapped("A lake fills the ground around the click up to its level (the ground there plus the depth), as far as the ground stays lower. Remove takes away the lake whose water is under the cursor.");
+		}
+		else if (ed.mode == EditorState::TEXTURES && client->terrain) {
 			// the map's texture database: a group, then one of its textures
 			const auto& groups = client->terrain->texDb.groups;
 			if (ed.paintGroup.empty() || !groups.count(ed.paintGroup))
@@ -458,7 +548,13 @@ void ClientInterface::editorUndo()
 				obj->setPosition(Vector3(obj->position.x, server.terrain->getHeight(obj->position.x, obj->position.z), obj->position.z));
 		});
 		rebuildTerrainRenderer();
+		if (!client->terrain->lakes.empty())
+			setLakes(client->terrain->lakes, client->terrain->lakeExtraBits);
 		ed.status = "Undone: a brush stroke";
+	}
+	else if (u.hasLakes && client->terrain) {
+		setLakes(u.lakes, u.lakeBits);
+		ed.status = "Undone: a lake change";
 	}
 	else if (!u.tiles.empty() && client->terrain && u.tiles.size() == (size_t)client->terrain->width * client->terrain->height) {
 		Terrain* trn = client->terrain;
@@ -619,6 +715,27 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 				serverTile = st->texture->grp->name + " " + std::to_string(st->texture->id);
 		});
 		printf("EDITORTEST tile after %s %d (server %s)\n", tile->texture->grp->name.c_str(), tile->texture->id, serverTile.c_str());
+		// then a lake 1 m deep, 50 m to the side
+		ed.mode = EditorState::WATER;
+		ed.waterTool = EditorState::ADD_LAKE;
+		ed.waterDepth = 1.0f;
+		cursor = target + Vector3(-50, 0, 0);
+		g_mousePressed[SDL_BUTTON_LEFT] = true;
+	}
+	if (frame == 128) {
+		const Vector3 lake = target + Vector3(-50, 0, 0);
+		const int x = (int)(lake.x / 5.0f) + client->terrain->edge, z = (int)(lake.z / 5.0f) + client->terrain->edge;
+		int flooded = 0, serverFlooded = 0;
+		for (int i = 0; i < client->terrain->width * client->terrain->height; i++)
+			flooded += client->terrain->tiles[i].fullOfWater;
+		bool serverWater = false;
+		withServer([&](Server& server) {
+			serverWater = server.terrain->getTile(x, z)->fullOfWater;
+			for (int i = 0; i < server.terrain->width * server.terrain->height; i++)
+				serverFlooded += server.terrain->tiles[i].fullOfWater;
+		});
+		printf("EDITORTEST lake: %zu lakes, water at the click %d (server %d), %d tiles under water (server %d)\n", client->terrain->lakes.size(),
+			(int)client->terrain->getTile(x, z)->fullOfWater, (int)serverWater, flooded, serverFlooded);
 	}
 	if (frame == 130) {
 		ed.mode = EditorState::OBJECTS;
@@ -638,15 +755,14 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		printf("EDITORTEST %s\n", ed.status.c_str());
 	}
 	if (frame == 170) {
-		// undo the windmill, the texture stroke, then the height stroke: the ground as before
+		// undo the windmill, the lake, the texture stroke, then the height stroke: the ground as before
 		const size_t steps = ed.undo.size();
-		editorUndo();
-		editorUndo();
-		editorUndo();
+		for (int i = 0; i < 4; i++)
+			editorUndo();
 		const int x = (int)(target.x / 5.0f) + client->terrain->edge, z = (int)(target.z / 5.0f) + client->terrain->edge;
 		const TerrainTile* tile = client->terrain->getTile(x, z);
-		printf("EDITORTEST undo: %zu steps before, height now %d, tile %s %d\n", steps, client->terrain->vertices[z * (client->terrain->width + 1) + x],
-			tile->texture->grp->name.c_str(), tile->texture->id);
+		printf("EDITORTEST undo: %zu steps before, height now %d, tile %s %d, %zu lakes\n", steps, client->terrain->vertices[z * (client->terrain->width + 1) + x],
+			tile->texture->grp->name.c_str(), tile->texture->id, client->terrain->lakes.size());
 	}
 	if (frame == 180)
 		for (const std::string& w : editorCheck())

@@ -97,7 +97,8 @@ struct Terrain
 	// (bits from the file's start), the (group, id) list after the tiles, and where the heights
 	// start; textures painted that the tables lack are appended to them
 	std::vector<uint8_t> bcmData;
-	uint64_t bcmTablesBitOffset = 0, bcmHeightBitOffset = 0;
+	uint64_t bcmLakesBitOffset = 0, bcmTablesBitOffset = 0, bcmHeightBitOffset = 0;
+	std::vector<uint8_t> lakeExtraBits; // per lake, the 2 bits after its point (unknown; 0 for new lakes)
 	std::vector<TerrainTextureGroup*> bcmGroups;
 	std::vector<int> bcmIds;
 	uint32_t bcmExtraConstant = 0x62;
@@ -108,5 +109,7 @@ struct Terrain
 	void readTRN(const char* filename);
 
 	void floodfillWater();
+	// the water again from the lakes (the map editor added, moved or removed one)
+	void refillWater();
 };
 		

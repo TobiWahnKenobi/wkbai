@@ -756,6 +756,51 @@ bool DiligentEnhancedTerrainRenderer::updateTiles()
 	return true;
 }
 
+bool DiligentEnhancedTerrainRenderer::updateWater()
+{
+	// the water quads of the flooded tiles and each chunk's list of them, as init made them
+	constexpr int CHUNK = 16;
+	constexpr float tilesize = 5.0f;
+	struct LakeVertex { Vector3 pos; float depth; };
+	std::vector<LakeVertex> lakeVertices;
+	size_t c = 0;
+	for (int cz = 0; cz < (int)terrain->height; cz += CHUNK)
+		for (int cx = 0; cx < (int)terrain->width; cx += CHUNK, c++) {
+			if (c >= _impl->chunks.size())
+				return false;
+			auto& chunk = _impl->chunks[c];
+			chunk.lakeIndices.clear();
+			for (int z = cz; z < std::min(cz + CHUNK, (int)terrain->height); z++)
+				for (int x = cx; x < std::min(cx + CHUNK, (int)terrain->width); x++) {
+					const TerrainTile* tile = terrain->getTile(x, z);
+					if (!tile->fullOfWater)
+						continue;
+					const float lx = (x - (int)terrain->edge) * tilesize, lz = (z - (int)terrain->edge) * tilesize;
+					const uint32_t v0 = (uint32_t)lakeVertices.size();
+					const float wl = tile->waterLevel;
+					lakeVertices.insert(lakeVertices.end(), {
+						LakeVertex{ Vector3(lx, wl, lz), wl - terrain->getVertex(x, z) },
+						LakeVertex{ Vector3(lx + tilesize, wl, lz), wl - terrain->getVertex(x + 1, z) },
+						LakeVertex{ Vector3(lx + tilesize, wl, lz + tilesize), wl - terrain->getVertex(x + 1, z + 1) },
+						LakeVertex{ Vector3(lx, wl, lz + tilesize), wl - terrain->getVertex(x, z + 1) } });
+					for (const int& k : { 0,3,1,1,3,2 })
+						chunk.lakeIndices.push_back(v0 + k);
+					chunk.high.y = std::max(chunk.high.y, wl);
+				}
+		}
+	_impl->lakeVertexBuffer.Release();
+	if (!lakeVertices.empty()) {
+		BufferDesc lakeDesc;
+		lakeDesc.Name = "Terrain water vertices";
+		lakeDesc.Size = lakeVertices.size() * sizeof(LakeVertex);
+		lakeDesc.BindFlags = BIND_VERTEX_BUFFER;
+		lakeDesc.Usage = USAGE_IMMUTABLE;
+		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
+		((DiligentGfx*)gfx)->device->CreateBuffer(lakeDesc, &lakeData, &_impl->lakeVertexBuffer);
+	}
+	return true;
+}
+
 void DiligentEnhancedTerrainRenderer::render()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
