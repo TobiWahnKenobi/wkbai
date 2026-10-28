@@ -1686,8 +1686,10 @@ void Test_AIvsAI()
 	skirmish.setSlots(slots);
 	// the skirmish settings, as the menu's ("settings": { "populationLimit": 1000, ... }); the
 	// original's defaults otherwise
-	for (const auto& [name, value] : cfg.value("settings", nlohmann::json::object()).items())
-		skirmish.setSetting(name, value.get<int>());
+	// (the json kept in a variable: items() of the temporary that value() returns dangles)
+	const nlohmann::json settings = cfg.value("settings", nlohmann::json::object());
+	for (const auto& item : settings.items())
+		skirmish.setSetting(item.key(), item.value().get<int>());
 	// as a game does: the clock runs when the level starts (its start reactions schedule sequences);
 	// applySettings starts it (starting it a second time ran every "On Level Start" reaction twice:
 	// two of every AI marker, commission and work order)

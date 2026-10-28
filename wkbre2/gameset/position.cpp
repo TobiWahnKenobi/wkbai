@@ -497,7 +497,10 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	}
 	virtual OrientedPosition eval(ScriptContext* ctx) override {
 		auto po = p->eval(ctx);
-		if (!objbp->footprint)
+		// no place to start from (LOCATION_OF a finder that found nothing): none, not the map's
+		// corner. The Kingmaker AI's farms went to the far side of the map when it had no village
+		// for them, and its builders spent the game walking there.
+		if (!objbp->footprint || (po.position.x == 0.0f && po.position.z == 0.0f))
 			return po;
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
@@ -560,7 +563,10 @@ struct PDNearestConstructionSite : public PDNearestValidStampdownPos {
 	std::unique_ptr<ObjectFinder> fExemptTilesReservedBy;
 	virtual OrientedPosition eval(ScriptContext* ctx) override {
 		auto po = p->eval(ctx);
-		if (!objbp->footprint)
+		// no place to start from (LOCATION_OF a finder that found nothing): none, not the map's
+		// corner. The Kingmaker AI's farms went to the far side of the map when it had no village
+		// for them, and its builders spent the game walking there.
+		if (!objbp->footprint || (po.position.x == 0.0f && po.position.z == 0.0f))
 			return po;
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);

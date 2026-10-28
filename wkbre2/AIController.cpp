@@ -277,6 +277,9 @@ void AIController::update()
 			size_t inCtrCount = reqinst.foundations.size();
 			while (existingCount + inCtrCount < requiredCount) {
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
+				// no site (the position's finder found nothing): no foundation this time
+				if (posori.position.x == 0.0f && posori.position.z == 0.0f)
+					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);
 				if (!foundation)
