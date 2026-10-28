@@ -12,6 +12,8 @@
 #include "file.h"
 #include "util/util.h"
 #include <exception>
+#include <fstream>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include "interface/QuickStartMenu.h"
@@ -64,7 +66,67 @@ static LONG WINAPI PrintCrash(EXCEPTION_POINTERS* info)
 		printf("\n");
 	}
 	fflush(stdout);
+
+	// A crash report: a minidump in the user folder's "crashes" (for a debugger), and in normal
+	// play a message saying where it is (test and benchmark runs leave no dialog on the screen)
+	std::error_code ec;
+	const std::filesystem::path dir = g_userPath / "crashes";
+	std::filesystem::create_directories(dir, ec);
+	char name[64];
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	snprintf(name, sizeof(name), "crash-%04d%02d%02d-%02d%02d%02d.dmp", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+	const std::filesystem::path dumpPath = dir / name;
+	HANDLE file = CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (file != INVALID_HANDLE_VALUE) {
+		MINIDUMP_EXCEPTION_INFORMATION mei{ GetCurrentThreadId(), info, FALSE };
+		const bool ok = MiniDumpWriteDump(process, GetCurrentProcessId(), file,
+			(MINIDUMP_TYPE)(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory), &mei, nullptr, nullptr);
+		CloseHandle(file);
+		printf("Crash report %s: %s\n", ok ? "written" : "failed", PathToUtf8(dumpPath).c_str());
+		const bool scripted = g_settings.value("test", false) || g_settings.contains("benchmark") || g_settings.contains("menuTest")
+			|| g_settings.contains("lobbyTest");
+		if (ok && !scripted) {
+			const std::string text = "wkbre2 has crashed. A crash report was saved to\n\n" + PathToUtf8(dumpPath)
+				+ "\n\nPlease attach it (and wkbre2's log) when you report the problem.";
+			MessageBoxA(nullptr, text.c_str(), "wkbre2", MB_ICONERROR);
+		}
+	}
 	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+// The game folder when wkconfig.json's "gamePath" has no data.bcp: the Steam install of Warrior
+// Kings: Battles (Steam's folder from the registry, its other library folders from
+// steamapps\libraryfolders.vdf). Empty if not found.
+static std::filesystem::path FindSteamGameFolder()
+{
+	wchar_t steam[MAX_PATH] = {};
+	DWORD size = sizeof(steam);
+	if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam", L"SteamPath", RRF_RT_REG_SZ, nullptr, steam, &size) != ERROR_SUCCESS)
+		return {};
+	std::vector<std::filesystem::path> libraries = { std::filesystem::path(steam) };
+	std::ifstream vdf(std::filesystem::path(steam) / "steamapps" / "libraryfolders.vdf");
+	std::string line;
+	while (std::getline(vdf, line)) {
+		// "path"		"D:\\SteamLibrary"
+		const size_t key = line.find("\"path\"");
+		if (key == std::string::npos)
+			continue;
+		const size_t a = line.find('"', key + 6), b = line.rfind('"');
+		if (a == std::string::npos || b <= a)
+			continue;
+		std::string path = line.substr(a + 1, b - a - 1);
+		for (size_t i = 0; (i = path.find("\\\\", i)) != std::string::npos; i++)
+			path.erase(i, 1);
+		libraries.push_back(PathFromUtf8(path));
+	}
+	for (const auto& library : libraries) {
+		const auto folder = library / "steamapps" / "common" / "Warrior Kings Battles";
+		std::error_code ec;
+		if (std::filesystem::exists(folder / "data.bcp", ec))
+			return folder;
+	}
+	return {};
 }
 #endif
 
@@ -136,6 +198,16 @@ int main()
 	else if (const char* appData = getenv("APPDATA"))
 		g_userPath = PathFromUtf8(appData) / "wkbre2";
 
+#ifdef _WIN32
+	if (!std::filesystem::exists(g_gamePath / "data.bcp"))
+		if (const auto steam = FindSteamGameFolder(); !steam.empty()) {
+			// the first run: use the Steam install (only read from, never written to)
+			printf("Game folder found: %s\n", PathToUtf8(steam).c_str());
+			g_gamePath = steam;
+			g_settings["gamePath"] = PathToUtf8(steam);
+			SaveSettings();
+		}
+#endif
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";
 		message += PathToUtf8(std::filesystem::absolute(g_gamePath));

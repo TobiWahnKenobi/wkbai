@@ -44,3 +44,4 @@ imgui.ini
 CMakeSettings.json
 CMakeUserPresets.json
 wkconfig.json
+dist/
