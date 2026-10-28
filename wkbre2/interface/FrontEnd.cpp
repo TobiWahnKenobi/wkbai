@@ -308,6 +308,7 @@ struct FrontEnd::Impl {
 		lua.set_function("getWindowWidth", []() { return (int)(g_windowWidth / g_uiScale); });
 		lua.set_function("getWindowHeight", []() { return (int)(g_windowHeight / g_uiScale); });
 		lua.set_function("getTime", []() { return SDL_GetTicks() / 1000.0; });
+		lua.set_function("isShiftHeld", []() { return g_modShift; });
 		lua.set_function("getMouseX", []() { return UiMouseX(); });
 		lua.set_function("getMouseY", []() { return UiMouseY(); });
 		lua.set_function("getMouseWheel", []() { return g_mouseWheel; });

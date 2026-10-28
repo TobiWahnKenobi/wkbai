@@ -86,6 +86,7 @@ namespace {
 		list.push_back(toggle("buildingShadows", "lighting", "Building shadows", rs.staticShadows));
 		list.push_back(withEnabled(slider("staticShadowLight", "lighting", "Light in building shadows", rs.staticShadowLight, 0.0f, 1.0f),
 			[&rs]() { return rs.staticShadows; }));
+		list.push_back(withEnabled(toggle("wallShadows", "lighting", "Wall shadows", rs.wallShadows), [&rs]() { return rs.staticShadows; }));
 		list.push_back(toggle("characterShadows", "lighting", "Character shadows", rs.characterShadows));
 		list.push_back(withEnabled(toggle("realCharacterShadows", "lighting", "Real character shadows", rs.realCharacterShadows),
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));

@@ -585,6 +585,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Character shadows", &s.characterShadows);
 		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
+		ImGui::Checkbox("Wall shadows", &s.wallShadows);
 		ImGui::Checkbox("Ambient occlusion", &s.ssao);
 		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
 		ImGui::SliderFloat("AO strength", &s.ssaoStrength, 0.0f, 1.0f, "%.2f");
@@ -783,7 +784,8 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * 1000.0f);
 	obj->sceneEntity.flags = 0;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
-	if (obj->blueprint->hasStaticShadow) obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
+	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && obj->blueprint->shearModel && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING))
+		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;
@@ -1597,6 +1599,8 @@ void ClientInterface::iter()
 		lua.set("GSVERSION_WKBATTLES", GameSet::GSVERSION_WKBATTLES);
 		lua.set_function("getGameTime", [this]() {return client->timeManager.currentTime; });
 		lua.set_function("getSystemTime", [this]() {return (float)SDL_GetTicks() / 1000.0f; });
+		lua.set_function("getGameSpeed", [this]() { return client->timeManager.timeSpeed; });
+		lua.set_function("isGamePaused", [this]() { return client->timeManager.paused; });
 		// Game set
 		lua.set_function("computeEquation",
 			[this](const std::string& equationName, uint32_t objId) -> float {
@@ -1984,6 +1988,45 @@ void ClientInterface::iter()
 		}
 		if (client->getLevel())
 			drawObject(client->getLevel());
+		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
+		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
+		// The particle renderer only draws sprites; these were blank squares before.
+		if (particlesContainer) {
+			const float now = client->timeManager.currentTime;
+			for (auto& [key, list] : particlesContainer->particles)
+				for (Particle& p : list) {
+					PS_Particles& def = p.system->Particles;
+					if (def.type != PSType::Mesh || def.Mesh.empty())
+						continue;
+					const float age = now - p.startTime;
+					if (age < 0 || age > p.maxAge)
+						continue;
+					std::string path = def.Mesh;
+					std::replace(path.begin(), path.end(), '/', '\\');
+					const uint32_t seed = (uint32_t)(p.startTime * 7919.0f) ^ (uint32_t)(p.startPosition.x * 104729.0f);
+					const float rps = def.Rotations_Per_Second[0] + (def.Rotations_Per_Second[1] - def.Rotations_Per_Second[0]) * ((seed & 255) / 255.0f);
+					const float angle = age * rps * 6.2831853f;
+					const auto [s1, s2, si] = def.Scale_Gradient.getAtTime(age, 1.0f);
+					const float scale = s1 + (s2 - s1) * si;
+					attachSceneEntities.emplace_back();
+					SceneEntity& e = attachSceneEntities.back();
+					e.model = client->gameSet->modelCache.getModel(path);
+					e.transform = Matrix::getScaleMatrix(Vector3(scale, scale, scale)) * Matrix::getRotationXMatrix(angle + ((seed >> 8) & 255) * 0.0246f)
+						* Matrix::getRotationYMatrix(angle * 0.7f + ((seed >> 16) & 255) * 0.0246f) * Matrix::getTranslationMatrix(p.getPosition(now));
+					e.color = 0;
+					e.animTime = 0;
+					e.flags = 0;
+					scene->add(&e);
+				}
+		}
+		// test runs: "benchmark": { ..., "particleTest": "<particle system>" } emits it 25 m in front
+		// of the camera, to see a particle system on a screenshot
+		static const std::string particleTest = g_settings.value("benchmark", nlohmann::json::object()).value("particleTest", std::string());
+		if (!particleTest.empty() && particlesContainer && psCache && client->terrain) {
+			Vector3 at = client->camera.position + Vector3(client->camera.direction.x, 0, client->camera.direction.z).normal() * 25.0f;
+			at.y = client->terrain->getHeight(at.x, at.z) + 8.0f;
+			particlesContainer->generate(psCache->getPS(particleTest), at, 0, client->timeManager.previousTime, client->timeManager.currentTime);
+		}
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
 
 		// highlight hovered object

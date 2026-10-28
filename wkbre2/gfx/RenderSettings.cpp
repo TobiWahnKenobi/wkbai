@@ -38,6 +38,7 @@ void RenderSettings::load()
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
 	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
+	wallShadows = g_settings.value<bool>("wallShadows", def.wallShadows);
 	ssao = g_settings.value<bool>("ssao", def.ssao);
 	bloom = g_settings.value<bool>("bloom", def.bloom);
 	ssaoRadius = g_settings.value<float>("ssaoRadius", def.ssaoRadius);
@@ -89,6 +90,7 @@ void RenderSettings::save()
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["characterShadows"] = characterShadows;
 	g_settings["realCharacterShadows"] = realCharacterShadows;
+	g_settings["wallShadows"] = wallShadows;
 	g_settings["ssao"] = ssao;
 	g_settings["bloom"] = bloom;
 	g_settings["ssaoRadius"] = ssaoRadius;

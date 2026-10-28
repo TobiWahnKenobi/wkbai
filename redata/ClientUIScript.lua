@@ -12,6 +12,33 @@ else
 	progressColorDark = 0xFF000080
 end
 
+-- A resource or other item as a whole number (items are floats: 2000.0 showed as "2000.0")
+function whole(v)
+	return tostring(math.floor(v + 0.5))
+end
+
+-- The game speed actually reached: game seconds per real second over the last second (the
+-- simulation may fall behind a high speed setting)
+speedMeasure = { real = 0, game = 0, value = 1 }
+function measuredSpeed()
+	local real, game = getSystemTime(), getGameTime()
+	if speedMeasure.real == 0 or real < speedMeasure.real then
+		speedMeasure.real, speedMeasure.game = real, game
+	elseif real - speedMeasure.real >= 1 then
+		speedMeasure.value = (game - speedMeasure.game) / (real - speedMeasure.real)
+		speedMeasure.real, speedMeasure.game = real, game
+	end
+	return speedMeasure.value
+end
+
+-- "1x", "2x", "0.5x", one decimal when needed
+function speedText(v)
+	if math.abs(v - math.floor(v + 0.5)) < 0.05 then
+		return tostring(math.floor(v + 0.5)) .. "x"
+	end
+	return string.format("%.1fx", v)
+end
+
 -- This function is executed every frame
 function CCUI_PerFrame()
 
@@ -40,9 +67,21 @@ function CCUI_PerFrame()
 		local tpm = getWindowWidth() / 1024.0
 		drawText(674*tpm, 24, tostring(math.floor(getItem(player, "Population Count"))))
 		drawText(674*tpm, 42, tostring(math.floor(getItem(player, "Total Population Count"))))
-		drawText(748*tpm, 24, tostring(getItem(player, "Food")))
-		drawText(838*tpm, 24, tostring(getItem(player, "Wood")))
-		drawText(930*tpm, 24, tostring(getItem(player, "Gold")))
+		drawText(748*tpm, 24, whole(getItem(player, "Food")))
+		drawText(838*tpm, 24, whole(getItem(player, "Wood")))
+		drawText(930*tpm, 24, whole(getItem(player, "Gold")))
+		-- the game speed under the top panel: as set, and as reached when that is lower
+		local speedLine
+		if isGamePaused() then
+			speedLine = "Paused"
+		else
+			local set, reached = getGameSpeed(), measuredSpeed()
+			speedLine = "Speed " .. speedText(set)
+			if reached < set * 0.95 then
+				speedLine = speedLine .. " (reached " .. speedText(reached) .. ")"
+			end
+		end
+		drawText(12, 88, speedLine)
 		local color = getColor(player) % 8
 		if color == 0 then color = 8 end
 		drawImage((650+8) * tpm - 8, 22, 16, 36, "Interface/InGame/Top Panel/Player" .. tostring(color) .. ".tga")
@@ -86,15 +125,15 @@ function CCUI_PerFrame()
 
 		n = 2
 		if bp.bpClass == GAMEOBJCLASS_CHARACTER then
-			drawText(70, ypos + n*h, "HP: " .. tostring(getItem(sel, "Hit Points")) .. "/" .. tostring(getItem(sel, "Hit Point Capacity")))
+			drawText(70, ypos + n*h, "HP: " .. whole(getItem(sel, "Hit Points")) .. "/" .. whole(getItem(sel, "Hit Point Capacity")))
 			n = n+1
 		elseif bp.bpClass == GAMEOBJCLASS_BUILDING then
-			drawText(70, ypos + n*h, "SI: " .. tostring(getItem(sel, "Structural Integrity")) .. "/" .. tostring(getItem(sel, "Structural Integrity Capacity")))
+			drawText(70, ypos + n*h, "SI: " .. whole(getItem(sel, "Structural Integrity")) .. "/" .. whole(getItem(sel, "Structural Integrity Capacity")))
 			n = n+1
 		end
-		drawText(70, ypos + n*h, "Food: " .. tostring(getItem(sel, "Food"))); n=n+1
-		drawText(70, ypos + n*h, "Wood: " .. tostring(getItem(sel, "Wood"))); n=n+1
-		drawText(70, ypos + n*h, "Gold: " .. tostring(getItem(sel, "Gold"))); n=n+1
+		drawText(70, ypos + n*h, "Food: " .. whole(getItem(sel, "Food"))); n=n+1
+		drawText(70, ypos + n*h, "Wood: " .. whole(getItem(sel, "Wood"))); n=n+1
+		drawText(70, ypos + n*h, "Gold: " .. whole(getItem(sel, "Gold"))); n=n+1
 
 
 		-- Commands

@@ -34,6 +34,9 @@ struct RenderSettings {
 	// the units drawn into the sun's shadow map instead (their real shape; enhanced renderers with
 	// building shadows on): the original only has the blobs
 	bool realCharacterShadows = true;
+	// walls and palisades (SHEAR_MODEL buildings) cast shadows too: the game set gives them
+	// HAS_STATIC_SHADOW 0, so the original has none
+	bool wallShadows = true;
 	// post-processing of the 3D scene (enhanced graphics on Diligent): ambient occlusion and bloom
 	bool ssao = true, bloom = true;
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1

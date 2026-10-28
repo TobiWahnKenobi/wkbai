@@ -34,13 +34,18 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 			Vector3 pos = particle.getPosition(nextTime);
 			Vector3 sc = pos.transformScreenCoords(camera.sceneMatrix);
 
-			if (particle.system->Particles.type == PSType::Sprites) {
-				texture tex = texCache.getTexture(particle.system->Particles.Sprites.c_str(), true);
-				if (tex != curTexture) {
-					batch->flush();
+			// mesh particles are models in the scene (ClientInterface); points and streaks have
+			// no texture of their own: untextured, not whatever sprite was drawn before them
+			if (particle.system->Particles.type == PSType::Mesh)
+				continue;
+			texture tex = particle.system->Particles.type == PSType::Sprites ? texCache.getTexture(particle.system->Particles.Sprites.c_str(), true) : nullptr;
+			if (tex != curTexture) {
+				batch->flush();
+				if (tex)
 					gfx->SetTexture(0, tex);
-					curTexture = tex;
-				}
+				else
+					gfx->NoTexture(0);
+				curTexture = tex;
 			}
 
 			float ss1, ss2, ssi;

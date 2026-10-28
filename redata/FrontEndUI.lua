@@ -990,22 +990,45 @@ local function roundButton(x, y, size, on, enabled)
 	return hot and mouse.released
 end
 
-local function plusMinusButton(kind, x, y, size)
+-- A - or + button that steps on the press and again while held: after 0.4 s, then faster and
+-- faster (from 6 to 30 steps a second over 2 s). Returns how many steps to take this frame.
+local stepperHold = {} -- the button held: its key, when the press began, when it steps next
+local function stepperButton(kind, key, x, y, size)
 	local hot = hovered(x, y, size, size)
 	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
 	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
-	return hot and mouse.released
+	local t = getTime()
+	if hot and mouse.pressed then
+		stepperHold = { key = key, start = t, nextStep = t + 0.4 }
+		return 1
+	end
+	if stepperHold.key ~= key then return 0 end
+	if not (hot and mouse.down) then
+		stepperHold = {}
+		return 0
+	end
+	local steps = 0
+	while t >= stepperHold.nextStep and steps < 10 do
+		steps = steps + 1
+		local held = t - stepperHold.start - 0.4
+		stepperHold.nextStep = stepperHold.nextStep + 1 / (6 + 24 * math.min(1, held / 2))
+	end
+	return steps
 end
 
--- A value with - and + buttons, as the original's Start Food etc.
+-- A value with - and + buttons, as the original's Start Food etc. Shift makes each step ten
+-- times as large (population: 100 instead of 10).
 local function stepperRow(label, icon, name, step, min, max, y)
 	local s = skirmish.settings
 	local lw = textWidth(FONT_LIST, label, S)
 	drawText(FONT_LIST, X(170) - lw, y + L(18), label, WHITE, S)
 	if icon then drawImage(icon, X(174), y + L(12), L(20), L(24)) end
-	if plusMinusButton("Minus", X(200), y, L(52)) then s[name] = math.max(min, s[name] - step) end
+	local big = (isShiftHeld and isShiftHeld()) and step * 10 or step
+	local down = stepperButton("Minus", name .. "-", X(200), y, L(52))
+	if down > 0 then s[name] = math.max(min, s[name] - big * down) end
 	centredText(FONT_LIST, tostring(math.floor(s[name])), X(260), y, L(620), L(52), WHITE)
-	if plusMinusButton("Plus", X(892), y, L(52)) then s[name] = math.min(max, s[name] + step) end
+	local up = stepperButton("Plus", name .. "+", X(892), y, L(52))
+	if up > 0 then s[name] = math.min(max, s[name] + big * up) end
 end
 
 local RESOURCE_LEVELS = { "FRONT_END_SETTINGS_RESOURCE_LEVEL_OFF", "FRONT_END_SETTINGS_RESOURCE_LEVEL_LOW",
@@ -1050,7 +1073,7 @@ local function settingsTab()
 		stepperRow(T("FRONT_END_SETTINGS_START_FOOD"), "Interface\\InGame\\Info Panel\\Chicken.tga", "startFood", 100, 0, 100000, Y(514))
 		stepperRow(T("FRONT_END_SETTINGS_START_WOOD"), "Interface\\InGame\\Info Panel\\Tree.tga", "startWood", 100, 0, 100000, Y(590))
 		stepperRow(T("FRONT_END_SETTINGS_START_GOLD"), "Interface\\InGame\\Info Panel\\Coin.tga", "startGold", 50, 0, 100000, Y(666))
-		stepperRow(T("FRONT_END_SETTINGS_POPULATION_LIMIT"), "Interface\\InGame\\Info Panel\\Man.tga", "populationLimit", 10, 10, 1000, Y(742))
+		stepperRow(T("FRONT_END_SETTINGS_POPULATION_LIMIT"), "Interface\\InGame\\Info Panel\\Man.tga", "populationLimit", 10, 10, 10000, Y(742))
 		local lw = textWidth(FONT_LIST, T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), S)
 		drawText(FONT_LIST, X(170) - lw, Y(838), T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), WHITE, S)
 		if button(T(RESOURCE_LEVELS[s.randomiseResources + 1]), X(200), Y(826), L(744), L(38)) then
