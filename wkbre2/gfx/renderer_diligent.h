@@ -39,8 +39,15 @@ struct DiligentGfx : IRenderer
 	// starts and becomes opaque (FogBuffer.EdgeFog).
 	virtual void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) = 0;
 
-	// Binds the swap chain's targets and the full viewport again after drawing offscreen.
+	// Binds the swap chain's targets and the full viewport again after drawing offscreen (the
+	// post-processing scene targets instead while those are on).
 	virtual void RestoreRenderTargets() = 0;
+
+	// Post-processing (ambient occlusion, bloom): BeginPostProcessing(true) before ClearFrame sends
+	// the frame's 3D drawing into offscreen targets; ApplyPostProcessing, after the 3D scene and
+	// before the HUD, writes the processed scene into the back buffer and binds that again.
+	virtual void BeginPostProcessing(bool on) = 0;
+	virtual void ApplyPostProcessing(const Matrix& projection) = 0;
 
 	// The original's terrain shadows, shared by the enhanced renderers (see docs/re/shadows.md
 	// in the RE repository). The terrain renderer creates the maps, the scene renderer draws

@@ -34,6 +34,10 @@ struct RenderSettings {
 	// the units drawn into the sun's shadow map instead (their real shape; enhanced renderers with
 	// building shadows on): the original only has the blobs
 	bool realCharacterShadows = true;
+	// post-processing of the 3D scene (enhanced graphics on Diligent): ambient occlusion and bloom
+	bool ssao = true, bloom = true;
+	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
+	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
 	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;

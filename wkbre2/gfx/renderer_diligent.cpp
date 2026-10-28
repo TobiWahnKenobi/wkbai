@@ -9,6 +9,7 @@
 // shader resource binding that works with all of them.
 
 #include "renderer_diligent.h"
+#include "DiligentPostProcess.h"
 #include "bitmap.h"
 #include "../window.h"
 #include "../settings.h"
@@ -298,6 +299,10 @@ struct DiligentRenderer : DiligentGfx
 		uint64_t capacity = 0, cursor = 0, mappedFrame = ~0ull;
 	};
 	StreamRing vertexRing, indexRing;
+
+	// post-processing: made when first used; on in this frame (the 3D scene drawn offscreen)
+	std::unique_ptr<DiligentPostProcess> post;
+	bool postActive = false;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
 	State state;
@@ -412,10 +417,41 @@ struct DiligentRenderer : DiligentGfx
 		ctx->CommitShaderResources(t->srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	}
 
+	ITextureView* currentColorTarget() { return postActive ? post->colorRTV() : swapChain->GetCurrentBackBufferRTV(); }
+	ITextureView* currentDepthTarget() { return postActive ? post->depthDSV() : swapChain->GetDepthBufferDSV(); }
+
 	void setRenderTargets()
 	{
-		ITextureView* rtv = swapChain->GetCurrentBackBufferRTV();
-		ctx->SetRenderTargets(1, &rtv, swapChain->GetDepthBufferDSV(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ITextureView* rtv = currentColorTarget();
+		ctx->SetRenderTargets(1, &rtv, currentDepthTarget(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+
+	void BeginPostProcessing(bool on) override
+	{
+		postActive = false;
+		if (!on)
+			return;
+		if (!post)
+			post = std::make_unique<DiligentPostProcess>(device, swapChain->GetDesc().ColorBufferFormat, swapChain->GetDesc().DepthBufferFormat);
+		post->resize(swapChain->GetDesc().Width, swapChain->GetDesc().Height);
+		postActive = true;
+	}
+
+	void ApplyPostProcessing(const Matrix& projection) override
+	{
+		if (!postActive)
+			return;
+		postActive = false;
+		DiligentPostProcess::Settings s;
+		s.ssao = g_renderSettings.ssao;
+		s.ssaoRadius = g_renderSettings.ssaoRadius;
+		s.ssaoStrength = g_renderSettings.ssaoStrength;
+		s.bloom = g_renderSettings.bloom;
+		s.bloomThreshold = g_renderSettings.bloomThreshold;
+		s.bloomIntensity = g_renderSettings.bloomIntensity;
+		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
+		setRenderTargets();
+		ctx->SetViewports(1, nullptr, 0, 0);
 	}
 
 	// Copies data into a stream ring and returns its byte offset there.
@@ -666,10 +702,10 @@ struct DiligentRenderer : DiligentGfx
 		setRenderTargets();
 		if (clearColors) {
 			const float cc[4] = { ((color >> 16) & 255) / 255.0f, ((color >> 8) & 255) / 255.0f, (color & 255) / 255.0f, ((color >> 24) & 255) / 255.0f };
-			ctx->ClearRenderTarget(swapChain->GetCurrentBackBufferRTV(), cc, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->ClearRenderTarget(currentColorTarget(), cc, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		}
 		if (clearDepth)
-			ctx->ClearDepthStencil(swapChain->GetDepthBufferDSV(), CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->ClearDepthStencil(currentDepthTarget(), CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	}
 
 	bool SaveScreenshot(const char* path) override

@@ -585,6 +585,12 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Character shadows", &s.characterShadows);
 		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
+		ImGui::Checkbox("Ambient occlusion", &s.ssao);
+		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
+		ImGui::SliderFloat("AO strength", &s.ssaoStrength, 0.0f, 1.0f, "%.2f");
+		ImGui::Checkbox("Bloom", &s.bloom);
+		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
 	}
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");
@@ -1897,6 +1903,10 @@ void ClientInterface::iter()
 		auto channel = [](float c) { return (uint32_t)std::clamp((int)std::lround(c * 255.0f), 0, 255); };
 		fogColour = (channel(g_renderSettings.fogColour[0]) << 16) | (channel(g_renderSettings.fogColour[1]) << 8) | channel(g_renderSettings.fogColour[2]);
 	}
+	// the 3D scene post-processed (enhanced graphics on Diligent)
+	DiligentGfx* postGfx = dynamic_cast<DiligentGfx*>(gfx);
+	if (postGfx)
+		postGfx->BeginPostProcessing(UseEnhancedRenderers(gfx) && client->getLevel() && (g_renderSettings.ssao || g_renderSettings.bloom));
 	gfx->ClearFrame(true, true, fogColour);
 	gfx->BeginDrawing();
 
@@ -2195,6 +2205,9 @@ void ClientInterface::iter()
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
 	}
+
+	if (postGfx)
+		postGfx->ApplyPostProcessing(client->camera.projMatrix);
 
 	if (selBoxOn) {
 		gfx->InitRectDrawing();

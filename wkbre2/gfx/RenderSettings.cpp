@@ -38,6 +38,12 @@ void RenderSettings::load()
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
 	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
+	ssao = g_settings.value<bool>("ssao", def.ssao);
+	bloom = g_settings.value<bool>("bloom", def.bloom);
+	ssaoRadius = g_settings.value<float>("ssaoRadius", def.ssaoRadius);
+	ssaoStrength = g_settings.value<float>("ssaoStrength", def.ssaoStrength);
+	bloomThreshold = g_settings.value<float>("bloomThreshold", def.bloomThreshold);
+	bloomIntensity = g_settings.value<float>("bloomIntensity", def.bloomIntensity);
 	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
@@ -83,6 +89,12 @@ void RenderSettings::save()
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["characterShadows"] = characterShadows;
 	g_settings["realCharacterShadows"] = realCharacterShadows;
+	g_settings["ssao"] = ssao;
+	g_settings["bloom"] = bloom;
+	g_settings["ssaoRadius"] = ssaoRadius;
+	g_settings["ssaoStrength"] = ssaoStrength;
+	g_settings["bloomThreshold"] = bloomThreshold;
+	g_settings["bloomIntensity"] = bloomIntensity;
 	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;
