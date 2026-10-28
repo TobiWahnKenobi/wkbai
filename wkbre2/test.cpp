@@ -46,6 +46,8 @@
 #include "ParticleContainer.h"
 #include "settings.h"
 #include "interface/QuickSkirmishMenu.h"
+#include "gameset/finder.h"
+#include "gameset/ScriptContext.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include <nlohmann/json.hpp>
@@ -1694,6 +1696,13 @@ void Test_AIvsAI()
 				printf("AITEST %s t=%.0f player %u (%s): %d characters, %d buildings, food %.0f wood %.0f gold %.0f\n", when,
 					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
+				std::string works;
+				for (const auto& woi : player->aiController.workOrderInstances)
+					if (ServerGameObject* city = woi.city.get()) {
+						SrvScriptContext cityCtx(&server, city);
+						works += " " + city->blueprint->name + "#" + std::to_string(city->id) + ":" + std::to_string(woi.unitFinder->eval(&cityCtx).size()) + " units";
+					}
+				printf("AITEST   work orders:%s\n", works.c_str());
 				std::string line;
 				for (const auto& [name, n] : orders)
 					line += " " + name + "=" + std::to_string(n);

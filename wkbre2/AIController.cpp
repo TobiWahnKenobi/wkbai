@@ -279,6 +279,13 @@ void AIController::abandonPlan()
 
 void AIController::registerWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder, const WorkOrder* workOrder)
 {
+	// the same work order registered again for a city replaces the earlier one (the scripts do
+	// it again and again; kept twice, the same workers got their orders from both)
+	for (auto& woi : workOrderInstances)
+		if (woi.city.get() == city && woi.workOrder == workOrder) {
+			woi.unitFinder = unitFinder;
+			return;
+		}
 	WorkOrderInstance woi{ city, unitFinder, workOrder };
 	workOrderInstances.push_back(std::move(woi));
 }
