@@ -83,7 +83,10 @@ private:
 	bool editorInput(const Vector3& cursor);
 	// test runs: "benchmark": { ..., "editorTest": true } paints, places and saves by itself
 	void editorTestStep(Vector3& cursor);
-	void editorSave(const std::string& name);
+	bool editorSave(const std::string& name);
+	void editorUndo();
+	// what may keep the level from playing: players without a start camera or without objects
+	std::vector<std::string> editorCheck();
 	void editorWindow();
 	void rebuildTerrainRenderer();
 	// The menu's "save" request: saves (saveGame) and tells the menu

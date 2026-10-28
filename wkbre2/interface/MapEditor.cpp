@@ -65,6 +65,20 @@ struct ClientInterface::EditorState {
 
 	char saveName[64] = "My map";
 	std::string status;
+	std::vector<std::string> warnings;
+
+	// undo: a stroke's heights before it, or an object placed (its id)
+	struct Undo {
+		std::vector<uint8_t> heights;
+		uint32_t placed = 0;
+	};
+	std::vector<Undo> undo;
+	static constexpr size_t MAX_UNDO = 30;
+	void pushUndo(Undo u) {
+		undo.push_back(std::move(u));
+		if (undo.size() > MAX_UNDO)
+			undo.erase(undo.begin());
+	}
 };
 
 void ClientInterface::rebuildTerrainRenderer()
@@ -88,6 +102,8 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		return false;
 	const bool overUi = ImGui::GetIO().WantCaptureMouse;
 	const uint32_t now = SDL_GetTicks();
+	if (g_modCtrl && g_keyPressed[SDL_SCANCODE_Z] && !ImGui::GetIO().WantTextInput)
+		editorUndo();
 
 	if (ed.mode == EditorState::OBJECTS) {
 		if (overUi || !g_mousePressed[SDL_BUTTON_LEFT] || ed.placeType < 0)
@@ -96,14 +112,18 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		const uint32_t playerId = ed.placePlayer;
 		const Vector3 at = cursor;
 		const float yaw = ed.placeYaw;
+		uint32_t placed = 0;
 		withServer([&](Server& server) {
 			ServerGameObject* player = server.findObject(playerId);
 			if (!player)
 				return;
 			Vector3 pos = at;
 			pos.y = server.terrain->getHeight(pos.x, pos.z);
-			server.spawnObject(type, player, pos, Vector3(0, yaw, 0));
+			if (ServerGameObject* obj = server.spawnObject(type, player, pos, Vector3(0, yaw, 0)))
+				placed = obj->id;
 		});
+		if (placed)
+			ed.pushUndo({ {}, placed });
 		ed.status = "Placed " + type->name;
 		return true;
 	}
@@ -116,6 +136,7 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		ed.flattenTo = trn->getHeight(cursor.x, cursor.z) / trn->scale;
 		ed.strokeMin = ed.strokeMax = cursor;
 		ed.pending.assign(trn->vertices.size(), 0.0f);
+		ed.pushUndo({ std::vector<uint8_t>(trn->vertices.begin(), trn->vertices.end()), 0 });
 	}
 	if (ed.stroke && down) {
 		const float dt = std::min(0.1f, (now - ed.lastApply) / 1000.0f);
@@ -263,8 +284,25 @@ void ClientInterface::editorWindow()
 		}
 		ImGui::Separator();
 		ImGui::InputText("Map name", ed.saveName, sizeof(ed.saveName));
+		if (ImGui::Button("Undo (Ctrl+Z)"))
+			editorUndo();
+		ImGui::SameLine();
+		ImGui::TextDisabled("%zu steps", ed.undo.size());
 		if (ImGui::Button("Save map"))
 			editorSave(ed.saveName);
+		ImGui::SameLine();
+		// the saved level started as a game
+		if (ImGui::Button("Save and play")) {
+			if (editorSave(ed.saveName)) {
+				leaveAction = "start";
+				leaveArg = std::string(ed.saveName) + ".lvl";
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button("Check"))
+			ed.warnings = editorCheck();
+		for (const std::string& w : ed.warnings)
+			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", w.c_str());
 		if (!ed.status.empty())
 			ImGui::TextWrapped("%s", ed.status.c_str());
 	}
@@ -273,9 +311,67 @@ void ClientInterface::editorWindow()
 		editorOn = false;
 }
 
-void ClientInterface::editorSave(const std::string& name)
+void ClientInterface::editorUndo()
+{
+	if (!editor || editor->undo.empty())
+		return;
+	EditorState& ed = *editor;
+	EditorState::Undo u = std::move(ed.undo.back());
+	ed.undo.pop_back();
+	if (!u.heights.empty() && client->terrain && u.heights.size() == client->terrain->vertices.size()) {
+		std::copy(u.heights.begin(), u.heights.end(), client->terrain->vertices.begin());
+		withServer([&](Server& server) {
+			if (server.terrain && server.terrain->vertices.size() == u.heights.size())
+				std::copy(u.heights.begin(), u.heights.end(), server.terrain->vertices.begin());
+			// the objects on the ground as it was
+			NNSearch search;
+			const auto area = server.terrain->getPlayableArea();
+			search.start(&server, Vector3(area.first / 2, 0, area.second / 2), std::max(area.first, area.second));
+			while (ServerGameObject* obj = (ServerGameObject*)search.next())
+				obj->setPosition(Vector3(obj->position.x, server.terrain->getHeight(obj->position.x, obj->position.z), obj->position.z));
+		});
+		rebuildTerrainRenderer();
+		ed.status = "Undone: a brush stroke";
+	}
+	else if (u.placed) {
+		if (ClientGameObject* obj = client->findObject(u.placed))
+			client->sendTerminateObject(obj);
+		ed.status = "Undone: an object placed";
+	}
+}
+
+std::vector<std::string> ClientInterface::editorCheck()
+{
+	std::vector<std::string> warnings;
+	withServer([&](Server& server) {
+		ServerGameObject* level = server.getLevel();
+		if (!level)
+			return;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* player = (ServerGameObject*)child;
+				// the neutral and the barbarians' (Baresark) players start empty
+				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || player->blueprint->name == "Neutral Player" || player->blueprint->name == "Baresark Player")
+					continue;
+				size_t objects = 0;
+				for (const auto& [t, c] : player->children)
+					objects += c.size();
+				const std::string who = std::to_string(player->id) + " " + player->blueprint->name;
+				if (player->playerStartCameraPosition == Vector3(0, 0, 0))
+					warnings.push_back(who + ": no start camera (the player starts at the map's corner)");
+				if (objects == 0)
+					warnings.push_back(who + ": no units or buildings");
+			}
+	});
+	if (warnings.empty())
+		warnings.push_back("No problems found");
+	return warnings;
+}
+
+bool ClientInterface::editorSave(const std::string& name)
 {
 	EditorState& ed = *editor;
+	bool savedOk = false;
 		if (name.empty() || name.find_first_of("\\/:*?\"<>|") != std::string::npos)
 			ed.status = "Not a valid name";
 		else
@@ -308,9 +404,10 @@ void ClientInterface::editorSave(const std::string& name)
 					ok = server.saveGame(lvl.c_str());
 				}
 				ed.status = ok ? "Saved " + name + ".lvl (in Skirmish)" : "Saving failed";
+				savedOk = ok;
 				printf("Map editor: %s %s\n", lvl.c_str(), ok ? "saved" : "failed");
 			});
-	
+	return savedOk;
 }
 
 // Test runs ("benchmark": { ..., "editorTest": true }): a raise stroke where the camera looks,
@@ -364,4 +461,15 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		editorSave("Editor Test");
 		printf("EDITORTEST %s\n", ed.status.c_str());
 	}
+	if (frame == 170) {
+		// undo the windmill, then the stroke: the height as before
+		const size_t steps = ed.undo.size();
+		editorUndo();
+		editorUndo();
+		const int x = (int)(target.x / 5.0f) + client->terrain->edge, z = (int)(target.z / 5.0f) + client->terrain->edge;
+		printf("EDITORTEST undo: %zu steps before, height now %d\n", steps, client->terrain->vertices[z * (client->terrain->width + 1) + x]);
+	}
+	if (frame == 180)
+		for (const std::string& w : editorCheck())
+			printf("EDITORTEST check: %s\n", w.c_str());
 }

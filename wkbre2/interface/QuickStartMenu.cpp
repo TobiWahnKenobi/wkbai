@@ -346,8 +346,10 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		fe->close();
 	if (leaveAction == "restart")
 		modeChosen = MODE_SINGLEPLAYER;
-	else if (leaveAction == "start")
+	else if (leaveAction == "start") {
+		refreshSaveGames(true); // a level saved in the game (the map editor's play test)
 		handleRequest({ "start", leaveArg });
+	}
 	else if (conquered || leaveAction == "campaign_lost")
 		if (FrontEnd* fe = FrontEnd::get())
 			fe->open("campaignmap." + profileName);
