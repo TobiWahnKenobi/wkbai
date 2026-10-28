@@ -868,6 +868,32 @@ struct ValueAverageEquationResult : ValueDeterminer {
 // less what each requirement still misses times its cost, must not go below zero. A character
 // requirement takes the first entry of its ladder (best first) that has a building to spawn it
 // and that it can pay for; with BEST_QUALITY only the first such entry. On a client: 0.
+// Whether one of these buildings may spawn the type (WKB.exe 0x4c9af0: a building for it, and the
+// type allowed): it has the "Spawn <type>" order, and the command of that name, if any, has no
+// impossible condition (tech level, alignment; the wait conditions, such as the cost now, don't
+// count). Counting locked rungs made every BEST_QUALITY army unaffordable: the AI never attacked.
+static bool SpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildings)
+{
+	const GameSet* gs = Server::instance->gameSet.get();
+	const std::string spawnName = "Spawn " + type->name;
+	if (gs->orders.names.getIndex(spawnName) < 0)
+		return false;
+	const int cmdid = gs->commands.names.getIndex(spawnName);
+	const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
+	for (ServerGameObject* building : buildings) {
+		if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+			continue;
+		if (!command)
+			return true;
+		SrvScriptContext ctx(Server::instance, building);
+		auto _ = ctx.selectedObject.change(building);
+		if (std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(),
+			[&](GSCondition* cond) { return cond->test->booleval(&ctx); }))
+			return true;
+	}
+	return false;
+}
+
 struct ValueCanAffordCommission : ValueDeterminer {
 	const GSCommission* commission = nullptr;
 	std::unique_ptr<ObjectFinder> fHandler;
@@ -910,7 +936,7 @@ struct ValueCanAffordCommission : ValueDeterminer {
 				continue;
 			bool paid = false;
 			for (const auto& entry : req.ladder->entries) {
-				if (entry.finder->eval(&hctx).empty())
+				if (!SpawnAllowed(entry.type, entry.finder->eval(&hctx)))
 					continue;
 				if (pay(left, entry.type, missing)) {
 					paid = true;

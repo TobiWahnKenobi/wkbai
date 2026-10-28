@@ -42,10 +42,13 @@ private:
 	};
 	GameMode mode = DevMode;
 
-	int startFood = 2000;
-	int startWood = 2000;
-	int startGold = 500;
-	int populationLimit = 800;
+	// the original's skirmish defaults, as the front end's (FrontEndUI.lua): the headless AI test
+	// plays with these, and with 800 population the Kingmaker AI wanted 320 peasants before it would
+	// turn to war
+	int startFood = 500;
+	int startWood = 500;
+	int startGold = 200;
+	int populationLimit = 200;
 	int randomiseResources = 2; // Medium, the front end's default (0: the map's own resources only)
 	int loseOnManorDestroyed = 1;
 	bool kingPiece = false;

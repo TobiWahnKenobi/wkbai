@@ -7,6 +7,8 @@
 #include "gameset/Footprint.h"
 #include <algorithm>
 #include <iterator>
+#include <map>
+#include <cmath>
 
 StampdownPlan StampdownPlan::getStampdownPlan(
 	CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation)
@@ -226,6 +228,53 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 					}
 				}
 			}
+		}
+	}
+
+	// CREATE_GATEHOUSE_WHEN_AUTOWALLING (Manor, towns): a gatehouse in place of four straight wall
+	// pieces in the middle of the side the building's door faces (the model's +z, turned with the
+	// building; the Manor's door faces its palisade's opening on 4 Peaks), so that the ring has a
+	// way out. That the original takes the door's side is from playing it, not traced.
+	if (civic && blueprint->createGatehouseWhenAutowalling && gameState->terrain && !plan.toCreate.empty()) {
+		const GameSet* gameSet = gameState->gameSet.get();
+		const GameObjBlueprint* bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Foundation");
+		const GameObjBlueprint* bpGate = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
+		const Vector3 door(std::sin(orientation.y), 0, std::cos(orientation.y));
+		// the straight pieces by side (their angle)
+		std::map<int, std::vector<size_t>> sides;
+		for (size_t i = 0; i < plan.toCreate.size(); i++)
+			if (plan.toCreate[i].blueprint == bpWall)
+				sides[(int)std::lround(plan.toCreate[i].orientation.y * 100.0f)].push_back(i);
+		int bestSide = 0;
+		float bestAhead = -1e30f;
+		for (const auto& [side, pieces] : sides) {
+			if (pieces.size() < 4)
+				continue;
+			Vector3 mid(0, 0, 0);
+			for (size_t i : pieces)
+				mid += plan.toCreate[i].position;
+			mid *= 1.0f / pieces.size();
+			const float ahead = (mid.x - position.x) * door.x + (mid.z - position.z) * door.z;
+			if (ahead > bestAhead) { bestAhead = ahead; bestSide = side; }
+		}
+		if (bpGate && bestAhead > -1e30f) {
+			std::vector<size_t> pieces = sides[bestSide];
+			// in order along the side
+			std::sort(pieces.begin(), pieces.end(), [&](size_t a, size_t b) {
+				const Vector3& pa = plan.toCreate[a].position;
+				const Vector3& pb = plan.toCreate[b].position;
+				return pa.x + pa.z < pb.x + pb.z; });
+			const size_t first = pieces.size() / 2 - 2;
+			Vector3 at(0, 0, 0);
+			for (size_t k = 0; k < 4; k++)
+				at += plan.toCreate[pieces[first + k]].position;
+			at *= 0.25f;
+			const Vector3 orientation = plan.toCreate[pieces[first]].orientation;
+			std::vector<size_t> drop(pieces.begin() + first, pieces.begin() + first + 4);
+			std::sort(drop.rbegin(), drop.rend());
+			for (size_t i : drop)
+				plan.toCreate.erase(plan.toCreate.begin() + i);
+			plan.toCreate.push_back({ bpGate, at, orientation });
 		}
 	}
 

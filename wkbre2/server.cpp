@@ -167,6 +167,7 @@ ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerG
 ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation, bool sendEvent, bool inGameplay)
 {
 	ServerGameObject* parent = player;
+	std::vector<ServerGameObject*> walls;
 
 	if (inGameplay) {
 		if (!player->canAffordObject(blueprint))
@@ -187,12 +188,11 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 		for (const auto& removal : plan.toRemove) {
 			destroyObject(removal.object.getFrom<Server>());
 		}
-		for (const auto& creation : plan.toCreate) {
-			if (player->aiController.planBlueprint) // TEMP: no wall creation for AI
-				continue;
-			spawnObject(creation.blueprint, parent, creation.position, creation.orientation);
-		}
-
+		// the city's walls (the stockade foundations around the new civic building), for AI players
+		// too: wkbre2 left them out for AIs, so their towns had no walls. They are stamped down,
+		// which is how the Kingmaker AI takes them into its settlement's work order ("Build Wall").
+		for (const auto& creation : plan.toCreate)
+			walls.push_back(spawnObject(creation.blueprint, parent, creation.position, creation.orientation));
 	}
 
 	ServerGameObject* obj = spawnObject(blueprint, parent, position, Vector3(0, 0, 0));
@@ -200,6 +200,10 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 		player->payObjectCost(obj->blueprint);
 	if (sendEvent)
 		obj->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+	if (sendEvent)
+		for (ServerGameObject* wall : walls)
+			if (wall)
+				wall->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
 
 	return obj;
 }

@@ -325,6 +325,10 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			shearModel = true;
 			break;
 		}
+		case Tags::CBLUEPRINT_CREATE_GATEHOUSE_WHEN_AUTOWALLING: {
+			createGatehouseWhenAutowalling = true;
+			break;
+		}
 		}
 		if (strtag == "AI__SPAWN_LOCATION_SELECTOR") {
 			aiSpawnLocationSelector = ReadFinder(gsf, *gameSet);

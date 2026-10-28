@@ -1684,6 +1684,10 @@ void Test_AIvsAI()
 		slots.push_back(slot);
 	}
 	skirmish.setSlots(slots);
+	// the skirmish settings, as the menu's ("settings": { "populationLimit": 1000, ... }); the
+	// original's defaults otherwise
+	for (const auto& [name, value] : cfg.value("settings", nlohmann::json::object()).items())
+		skirmish.setSetting(name, value.get<int>());
 	// as a game does: the clock runs when the level starts (its start reactions schedule sequences);
 	// applySettings starts it (starting it a second time ran every "On Level Start" reaction twice:
 	// two of every AI marker, commission and work order)
@@ -1699,7 +1703,7 @@ void Test_AIvsAI()
 				ServerGameObject* player = (ServerGameObject*)c;
 				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !player->aiController.planBlueprint)
 					continue;
-				int characters = 0, buildings = 0;
+				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
 				std::map<std::string, int> orders; // the characters' current orders
 				std::map<std::string, int> markers; // markers by blueprint
 				char sample[256] = {}, villageStock[128] = {}, cartInfo[256] = {};
@@ -1708,6 +1712,11 @@ void Test_AIvsAI()
 						for (CommonGameObject* o : ch) {
 							if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 								characters++;
+								{
+									static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout" };
+									const std::string& n = o->blueprint->name;
+									soldiers += std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; });
+								}
 								Order* order = ((ServerGameObject*)o)->orderConfig.getCurrentOrder();
 								orders[order ? server.gameSet->orders.getString(order->blueprint->bpid) : std::string("idle")]++;
 								if (order && server.gameSet->orders.getString(order->blueprint->bpid).rfind("Transport", 0) == 0)
@@ -1750,8 +1759,8 @@ void Test_AIvsAI()
 						}
 				};
 				count(player, count);
-				printf("AITEST %s t=%.0f player %u (%s): %d characters, %d buildings, food %.0f wood %.0f gold %.0f\n", when,
-					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, buildings,
+				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
+					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
 				std::string markerList;
 				for (const auto& [name, n] : markers)
@@ -1866,6 +1875,41 @@ void Test_GltfRoundTrip()
 	fflush(stdout);
 }
 
+// Automatic walls: a Manor stamped down on open ground of 4 Peaks for player 1027, turned 0 and a
+// quarter: the stockade foundations around it and the gatehouse, which must be on the door's side
+// (+z turned with the building). Prints "AUTOWALL turn <t>: <n> wall pieces, gatehouse at (dx, dz)".
+void Test_AutoWall()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* manor = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor");
+	if (!player || !manor) {
+		printf("AUTOWALL no player or Manor\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_FOOD, 1e6f);
+	player->setItem(Tags::PDITEM_WOOD, 1e6f);
+	player->setItem(Tags::PDITEM_GOLD, 1e6f);
+	const Vector3 at[2] = { Vector3(300, 0, 300), Vector3(300, 0, 420) };
+	const float turns[2] = { 0.0f, 1.5707963f };
+	for (int k = 0; k < 2; k++) {
+		const auto plan = StampdownPlan::getStampdownPlan(&server, player, manor, at[k], Vector3(0, turns[k], 0));
+		int walls = 0;
+		Vector3 gate(-1, -1, -1);
+		for (const auto& c : plan.toCreate) {
+			if (c.blueprint->name.find("Gatehouse") != std::string::npos)
+				gate = c.position;
+			else
+				walls++;
+		}
+		printf("AUTOWALL turn %.2f: status %d, %d wall pieces, gatehouse at (%.0f, %.0f) from the Manor\n", turns[k], (int)plan.status, walls,
+			gate.x - at[k].x, gate.z - at[k].z);
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1899,6 +1943,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_BCMRoundTrip, "BCM round trip (map editor's writer)"},
 {Test_AIvsAI, "AI against AI (headless)"},
 {Test_GltfRoundTrip, "glTF round trip (the game's meshes as .glb and back)"},
+{Test_AutoWall, "Automatic walls and gatehouse around a Manor"},
 };
 
 void LaunchTest()
