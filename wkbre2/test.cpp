@@ -1677,8 +1677,9 @@ void Test_AIvsAI()
 								if (order && !sample[0] && server.gameSet->orders.getString(order->blueprint->bpid) == "AI Chop Tree")
 									if (Task* task = order->getCurrentTask()) {
 										const std::string tname = server.gameSet->tasks.getString(task->blueprint->bpid);
-										snprintf(sample, sizeof(sample), "%u: task %s -> %s, carrying wood %.0f, at (%.0f,%.0f)", o->id, tname.c_str(),
-											task->target ? task->target->blueprint->name.c_str() : "-", o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z);
+										snprintf(sample, sizeof(sample), "%u: task %s -> %s, carrying wood %.0f, at (%.0f,%.0f), %.0f m from it, moving %d", o->id, tname.c_str(),
+											task->target ? task->target->blueprint->name.c_str() : "-", o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z,
+											task->target ? (task->target->position - o->position).len2xz() : 0.0f, (int)((ServerGameObject*)o)->movement.isMoving());
 									}
 							}
 							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
