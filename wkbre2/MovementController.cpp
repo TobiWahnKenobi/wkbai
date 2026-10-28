@@ -164,15 +164,22 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 		m_started = true;
 	}
 	else {
-		auto tileList = DoPathfinding(posStart, posEnd, pred, ManhattanDiagHeuristic);
+		auto tileList = DoPathfinding(posStart, posEnd, pred, ManhattanDiagHeuristic, trnsize.first, trnsize.second);
 		if (tileList.size() >= 1) {
 			m_pathNodes.clear();
-			m_pathNodes.emplace_back(realDestination);
+			// a search cut short ends at the tile nearest to the destination: the unit goes there,
+			// not on in a straight line through what is in the way
+			if (tileList.front() == posEnd)
+				m_pathNodes.emplace_back(realDestination);
 			for (PFPos& pfp : tileList) {
 				m_pathNodes.emplace_back(pfp.x * 5.0f + 2.5f, m_object->position.y, pfp.z * 5.0f + 2.5f);
 			}
-			m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
-			m_started = true;
+			if (m_pathNodes.size() >= 2) {
+				m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
+				m_started = true;
+			}
+			else
+				stopMovement(); // cut short without getting any nearer
 		}
 		else
 			stopMovement();

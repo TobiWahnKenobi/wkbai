@@ -1454,6 +1454,7 @@ void Server::tick()
 namespace {
 	struct SimProfile {
 		double total = 0, sequences = 0, tree = 0, ai = 0, orders = 0, movement = 0, sight = 0;
+		std::map<std::string, double> byOrder; // orders time per order (with profileSim)
 		uint64_t steps = 0, lastPrint = 0, objects = 0;
 		static double now() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
 	} g_simProfile;
@@ -1482,6 +1483,16 @@ void Server::simulate()
 		if (p.lastPrint)
 			printf("SIMPROFILE   pathfinding %.2f ms per step, %llu searches, %.2f ms per search\n", g_pathfindingMs / p.steps,
 				(unsigned long long)g_pathfindingSearches, g_pathfindingSearches ? g_pathfindingMs / g_pathfindingSearches : 0.0);
+		if (p.lastPrint) {
+			std::vector<std::pair<double, std::string>> top;
+			for (const auto& [name, ms] : p.byOrder)
+				top.emplace_back(ms, name);
+			std::sort(top.rbegin(), top.rend());
+			std::string line;
+			for (size_t i = 0; i < top.size() && i < 5; i++)
+				line += " " + top[i].second + " " + std::to_string(top[i].first / p.steps).substr(0, 5);
+			printf("SIMPROFILE   orders, ms per step:%s\n", line.c_str());
+		}
 		g_pathfindingMs = 0.0;
 		g_pathfindingSearches = 0;
 		p = SimProfile();
@@ -1596,7 +1607,16 @@ void Server::simulate()
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
 		if (!obj) continue;
-		{
+		if (profile) {
+			Order* current = obj->orderConfig.getCurrentOrder();
+			const std::string name = current ? gameSet->orders.getString(current->blueprint->bpid) : std::string("(none)");
+			const double start = SimProfile::now();
+			obj->orderConfig.process();
+			const double took = SimProfile::now() - start;
+			g_simProfile.orders += took;
+			g_simProfile.byOrder[name] += took;
+		}
+		else {
 			SimTimer ordersTimer(g_simProfile.orders);
 			obj->orderConfig.process();
 		}

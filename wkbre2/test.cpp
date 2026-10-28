@@ -1596,6 +1596,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Gather, "Gathering (the next tree)"},
 {Test_Farm, "Farming (build a field, farm it, a second farmer)"},
 {Test_Determinism, "Determinism (same seed, same game)"},
+{[]() { printf("CRASHTEST crashing now\n"); fflush(stdout); volatile int* p = nullptr; *p = 1; }, "Crash (writes a crash report)"},
 };
 
 void LaunchTest()
