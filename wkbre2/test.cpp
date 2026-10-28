@@ -1804,6 +1804,68 @@ void Test_AIvsAI()
 	fflush(stdout);
 }
 
+// glTF round trip: the game's Mesh3 models (all under Warrior Kings Game Set, up to 400) written as
+// .glb and read back; the triangles, positions, normals, UVs and textures must come back. Prints
+// "GLTF meshes <n> identical <m>" and the worst position error.
+void Test_GltfRoundTrip()
+{
+	LoadBCP("data.bcp");
+	std::vector<std::string> meshes;
+	auto walk = [&](const std::string& dir, auto& self) -> void {
+		if (meshes.size() >= 400)
+			return;
+		std::unique_ptr<std::vector<std::string>> files(ListFiles(dir.c_str()));
+		for (const std::string& f : *files)
+			if (f.size() > 6 && StrCICompare(f.substr(f.size() - 6).c_str(), ".mesh3") == 0)
+				meshes.push_back(dir + "\\" + f);
+		std::unique_ptr<std::vector<std::string>> dirs(ListDirectories(dir.c_str()));
+		for (const std::string& d : *dirs)
+			self(dir + "\\" + d, self);
+	};
+	walk("Warrior Kings Game Set", walk);
+	const std::filesystem::path out = std::filesystem::temp_directory_path() / "wkbre2-gltf-test.glb";
+	const std::filesystem::path saved = g_userPath / "saved" / "wkbre2-gltf-test.glb";
+	std::filesystem::create_directories(saved.parent_path());
+	int identical = 0;
+	float worst = 0;
+	for (const std::string& path : meshes) {
+		Mesh m;
+		m.load(path.c_str());
+		if (!m.saveGltf(out.string().c_str()))
+			continue;
+		std::filesystem::copy_file(out, saved, std::filesystem::copy_options::overwrite_existing);
+		Mesh back;
+		back.loadGltf("wkbre2-gltf-test.glb");
+		// every triangle of the most detailed list, corner by corner
+		bool same = back.materials.size() == m.materials.size();
+		size_t tris = 0, backTris = 0;
+		for (size_t g = 0; same && g < m.groupIndices.size(); g++) {
+			const auto& a = m.polyLists[0].groups[g].tupleIndex;
+			const auto& b = back.polyLists[0].groups[g].tupleIndex;
+			tris += a.size();
+			backTris += b.size();
+			same = a.size() == b.size() && m.materials[g].textureFilename == back.materials[g].textureFilename
+				&& m.materials[g].alphaTest == back.materials[g].alphaTest;
+			for (size_t t = 0; same && t < a.size(); t++)
+				for (int k = 0; k < 3; k++) {
+					const IndexTuple& ta = m.groupIndices[g][a[t][k]];
+					const IndexTuple& tb = back.groupIndices[g][b[t][k]];
+					for (int c = 0; c < 3; c++)
+						worst = std::max(worst, std::abs(m.vertices[ta.vertex * 3 + c] - back.vertices[tb.vertex * 3 + c]));
+					same = same && m.normals[ta.normal] == back.normals[tb.normal]
+						&& m.uvLists[0][ta.uv * 2] == back.uvLists[0][tb.uv * 2] && m.uvLists[0][ta.uv * 2 + 1] == back.uvLists[0][tb.uv * 2 + 1];
+				}
+		}
+		same = same && worst < 1e-4f;
+		identical += same;
+		if (!same)
+			printf("GLTF %s differs (%zu vs %zu triangles)\n", path.c_str(), tris, backTris);
+	}
+	std::filesystem::remove(saved);
+	printf("GLTF meshes %zu identical %d, worst position error %g\n", meshes.size(), identical, worst);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1836,6 +1898,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {[]() { printf("CRASHTEST crashing now\n"); fflush(stdout); volatile int* p = nullptr; *p = 1; }, "Crash (writes a crash report)"},
 {Test_BCMRoundTrip, "BCM round trip (map editor's writer)"},
 {Test_AIvsAI, "AI against AI (headless)"},
+{Test_GltfRoundTrip, "glTF round trip (the game's meshes as .glb and back)"},
 };
 
 void LaunchTest()

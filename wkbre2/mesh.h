@@ -64,7 +64,11 @@ struct Mesh
 
 	Vector3 aabbLow, aabbHigh;
 
+	// a Mesh3 file; "<name>.glb" or "<name>.gltf" beside it (or in a mod) is read instead
 	void load(const char *filename);
+	// glTF 2.0 (gltf.cpp): a static model read into this mesh, or this mesh written as .glb
+	void loadGltf(const char* filename);
+	bool saveGltf(const char* path) const;
 	const Vector3* decodeNormals();
 
 	Mesh() {}

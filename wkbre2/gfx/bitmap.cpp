@@ -11,6 +11,10 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #define STBIR_DEFAULT_FILTER_DOWNSAMPLE  STBIR_FILTER_BOX
 #include <stb_image_resize2.h>
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#include <stb_image.h>
 
 Bitmap Bitmap::loadBitmap(const char *fn)
 {
@@ -21,8 +25,27 @@ Bitmap Bitmap::loadBitmap(const char *fn)
 		return loadTGA(d, s);
 	if(!StrCICompare(e, ".pcx"))
 		return loadPCX(d, s);
+	if (!StrCICompare(e, ".png") || !StrCICompare(e, ".jpg") || !StrCICompare(e, ".jpeg"))
+		return loadImage(d, s);
 	ferr("Unknown bitmap file extension.");
 	return {};
+}
+
+// PNG and JPEG (the usual images of glTF models), as RGBA
+Bitmap Bitmap::loadImage(const void* data, size_t length)
+{
+	Bitmap bm;
+	int w = 0, h = 0, channels = 0;
+	stbi_uc* pixels = stbi_load_from_memory((const stbi_uc*)data, (int)length, &w, &h, &channels, 4);
+	if (!pixels)
+		ferr("Could not read an image: %s", stbi_failure_reason());
+	bm.width = w;
+	bm.height = h;
+	bm.format = BMFORMAT_R8G8B8A8;
+	bm.pixels.resize((size_t)w * h * 4);
+	memcpy(bm.pixels.data(), pixels, (size_t)w * h * 4);
+	stbi_image_free(pixels);
+	return bm;
 }
 
 Bitmap Bitmap::loadTGA(const void* _data, size_t length)

@@ -24,6 +24,7 @@ struct Bitmap
 	static Bitmap loadBitmap(const char* fn);
 	static Bitmap loadTGA(const void* data, size_t length);
 	static Bitmap loadPCX(const void* data, size_t length);
+	static Bitmap loadImage(const void* data, size_t length); // PNG, JPEG
 
 	Bitmap convertToR8G8B8A8() const;
 	Bitmap convertToB8G8R8A8() const;

@@ -18,7 +18,7 @@ Model * ModelCache::getModel(const std::string & filename) {
 	}
 
 	const char *ext = strrchr(filename.c_str(), '.');
-	if (!StrCICompare(ext + 1, "mesh3")) {
+	if (!StrCICompare(ext + 1, "mesh3") || !StrCICompare(ext + 1, "glb") || !StrCICompare(ext + 1, "gltf")) {
 		StaticModel *m = new StaticModel(this, filename);
 		models[filename].reset(m);
 		return m;

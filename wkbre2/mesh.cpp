@@ -5,6 +5,7 @@
 #include "mesh.h"
 #include "file.h"
 #include "util/BinaryReader.h"
+#include "util/StriCompare.h"
 
 #include <cassert>
 #include <limits>
@@ -30,6 +31,21 @@ Vector3{0.808092f, 0.444655f, -0.386355f}, {-0.456426f, -0.729133f, 0.509942f}, 
 
 void Mesh::load(const char * filename)
 {
+	// a glTF model of the same name takes the Mesh3's place (mods), or is the file itself
+	const std::string name = filename;
+	const size_t dot = name.find_last_of('.');
+	const std::string base = name.substr(0, dot);
+	const std::string ext = dot == std::string::npos ? std::string() : name.substr(dot);
+	if (!StrCICompare(ext.c_str(), ".glb") || !StrCICompare(ext.c_str(), ".gltf")) {
+		loadGltf(filename);
+		return;
+	}
+	for (const char* gltfExt : { ".glb", ".gltf" })
+		if (FileExists((base + gltfExt).c_str())) {
+			loadGltf((base + gltfExt).c_str());
+			return;
+		}
+
 	char *fcnt; int fsize;
 	LoadFile(filename, &fcnt, &fsize);
 	BinaryReader br(fcnt);
