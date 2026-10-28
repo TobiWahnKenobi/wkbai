@@ -45,6 +45,8 @@
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
 #include "settings.h"
+#include "MovementController.h"
+#include <set>
 #include "interface/QuickSkirmishMenu.h"
 #include "gameset/finder.h"
 #include "gameset/ScriptContext.h"
@@ -1661,6 +1663,7 @@ void Test_AIvsAI()
 					continue;
 				int characters = 0, buildings = 0;
 				std::map<std::string, int> orders; // the characters' current orders
+				std::map<std::string, int> markers; // markers by blueprint
 				char sample[256] = {}, villageStock[128] = {}, cartInfo[256] = {};
 				auto count = [&](CommonGameObject* obj, auto& self) -> void {
 					for (const auto& [t, ch] : obj->children)
@@ -1682,12 +1685,28 @@ void Test_AIvsAI()
 										snprintf(sample, sizeof(sample), "%u: task %s -> %s, carrying wood %.0f, at (%.0f,%.0f), %.0f m from it, moving %d", o->id, tname.c_str(),
 											task->target ? task->target->blueprint->name.c_str() : "-", o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z,
 											task->target ? (task->target->position - o->position).len2xz() : 0.0f, (int)((ServerGameObject*)o)->movement.isMoving());
-									}
+											// once per player: the blocked tiles between a delivering woodcutter and its building
+											static std::set<uint32_t> mapped;
+											if (task->target && tname.rfind("Deliver", 0) == 0 && mapped.insert(player->id).second) {
+												const int ux = (int)(o->position.x / 5), uz = (int)(o->position.z / 5);
+												const int tx = (int)(task->target->position.x / 5), tz = (int)(task->target->position.z / 5);
+												printf("AITEST   tiles from woodcutter U (%d,%d) to %s T (%d,%d), # blocked:\n", ux, uz, task->target->blueprint->name.c_str(), tx, tz);
+												for (int z = std::max(uz, tz) + 6; z >= std::min(uz, tz) - 6; z--) {
+													std::string row;
+													for (int x = std::min(ux, tx) - 6; x <= std::max(ux, tx) + 6; x++)
+														row += (x == ux && z == uz) ? 'U' : (x == tx && z == tz) ? 'T' : MovementController::isTileBlocked(o->blueprint, x, z) ? '#' : '.';
+													printf("AITEST     %s\n", row.c_str());
+												}
+											}
+										}
 							}
 							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
 								buildings++;
 								if (o->blueprint->name.rfind("Village", 0) == 0 && o->blueprint->name.find("Foundation") == std::string::npos)
 									snprintf(villageStock, sizeof(villageStock), "%s wood %.0f food %.0f", o->blueprint->name.c_str(), o->getItem(Tags::PDITEM_WOOD), o->getItem(Tags::PDITEM_FOOD));
+							}
+							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_MARKER) {
+								markers[o->blueprint->name]++;
 							}
 							self(o, self);
 						}
@@ -1696,6 +1715,10 @@ void Test_AIvsAI()
 				printf("AITEST %s t=%.0f player %u (%s): %d characters, %d buildings, food %.0f wood %.0f gold %.0f\n", when,
 					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
+				std::string markerList;
+				for (const auto& [name, n] : markers)
+					markerList += " " + name + "=" + std::to_string(n);
+				printf("AITEST   markers:%s\n", markerList.c_str());
 				std::string works;
 				for (const auto& woi : player->aiController.workOrderInstances)
 					if (ServerGameObject* city = woi.city.get()) {

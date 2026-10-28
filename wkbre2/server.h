@@ -184,6 +184,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool sendEvent, bool inGameplay);
 	void deleteObject(ServerGameObject *obj);
 	void destroyObject(ServerGameObject* obj);
+	void freeDeletedObjects();
 
 	//ServerGameObject* findObject(uint32_t id) { auto it = idmap.find(id); return (it != idmap.end()) ? it->second : nullptr; }
 

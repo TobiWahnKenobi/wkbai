@@ -6,6 +6,7 @@
 
 #include "gameset/Plan.h"
 #include "GameObjectRef.h"
+#include <map>
 
 struct ServerGameObject;
 struct GSFileParser;
@@ -47,6 +48,9 @@ struct AIController {
 	ServerGameObject* gameObj;
 	const PlanNodeSequence* planBlueprint = nullptr; PlanNodeSequence::State planState;
 	std::vector<WorkOrderInstance> workOrderInstances;
+	// unit id -> the (city id, work order) that had the unit at the last update: a unit listed by
+	// several work orders stays with that one while it still lists the unit
+	std::map<uint32_t, std::pair<uint32_t, const WorkOrder*>> unitWorkOrder;
 	std::vector<CommissionInstance> commissionInstances;
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}

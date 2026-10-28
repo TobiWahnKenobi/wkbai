@@ -1651,6 +1651,7 @@ void Server::simulate()
 		if (obj->blueprint->removeWhenNotReferenced)
 			obj->removeIfNotReferenced();
 	}
+	freeDeletedObjects();
 }
 
 void Server::network()
@@ -1844,7 +1845,18 @@ void Server::network()
 		}
 	}
 
-	// Free up deleted objects
+	freeDeletedObjects();
+
+	++g_diag_serverTicks;
+}
+
+// Frees the objects deleted since the last call. After every simulation step, not only once per
+// frame: a removed object went on running its orders and triggers until the frame's end (in the
+// headless AI test for ever, as it never calls network()), so the game depended on the frame rate.
+// The Kingmaker's "Transfer Peasants Marker" removes itself in its 1 s timer; left alive it moved all
+// peasants back to the first town every second, and they never built or delivered anything.
+void Server::freeDeletedObjects()
+{
 	auto* obj = objToDelete;
 	while (obj) {
 		auto* next = obj->nextDeleted;
@@ -1853,6 +1865,4 @@ void Server::network()
 	}
 	objToDelete = nullptr;
 	objToDeleteLast = nullptr;
-
-	++g_diag_serverTicks;
 }
