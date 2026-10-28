@@ -36,8 +36,8 @@ void ImGuiImpl_RenderDrawLists(ImDrawData *dr, IRenderer *renderer)
 		for(int j = 0; j < cl->VtxBuffer.size(); j++)
 		{
 			ImDrawVert *a = &cl->VtxBuffer[j];
-			vm[j].x = a->pos.x;
-			vm[j].y = a->pos.y;
+			vm[j].x = a->pos.x * g_uiScale;
+			vm[j].y = a->pos.y * g_uiScale;
 			vm[j].z = 0;
 			vm[j].color = BGRA_TO_RGBA(a->col);
 			vm[j].u = a->uv.x;
@@ -59,9 +59,9 @@ void ImGuiImpl_RenderDrawLists(ImDrawData *dr, IRenderer *renderer)
 				renderer->SetTexture(0, (texture)cmd->GetTexID());
 			//else
 			//	renderer->NoTexture(0);
-			renderer->SetScissorRect((int)cmd->ClipRect.x, (int)cmd->ClipRect.y,
-						(int)(cmd->ClipRect.z - cmd->ClipRect.x),
-						(int)(cmd->ClipRect.w - cmd->ClipRect.y));
+			renderer->SetScissorRect((int)(cmd->ClipRect.x * g_uiScale), (int)(cmd->ClipRect.y * g_uiScale),
+						(int)((cmd->ClipRect.z - cmd->ClipRect.x) * g_uiScale),
+						(int)((cmd->ClipRect.w - cmd->ClipRect.y) * g_uiScale));
 			renderer->DrawBuffer(e, cmd->ElemCount);
 			e += cmd->ElemCount;
 		}
@@ -101,7 +101,8 @@ void ImGuiImpl_Init()
 void ImGuiImpl_NewFrame()
 {
 	ImGuiIO &io = ImGui::GetIO();
-	io.DisplaySize = ImVec2((float)g_windowWidth, (float)g_windowHeight);
+	// in points (window.h): the draw lists are scaled to pixels when rendered
+	io.DisplaySize = ImVec2((float)g_windowWidth / g_uiScale, (float)g_windowHeight / g_uiScale);
 
 	uint32_t newtime = SDL_GetTicks();
 	io.DeltaTime = std::max((newtime - iglasttime) / 1000.f, 0.001f);

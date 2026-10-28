@@ -4,6 +4,7 @@
 
 #include "window.h"
 #include <cstdio>
+#include <algorithm>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -28,6 +29,7 @@ IRenderer *g_gfxRenderer = nullptr;
 bool g_mouseDown[16], g_mousePressed[16], g_mouseReleased[16];
 int g_mouseX, g_mouseY, g_mouseWheel;
 int g_mouseDoubleClicked = 0;
+float g_uiScale = 1.0f;
 std::string g_textTyped;
 
 void InitWindow()
@@ -37,7 +39,9 @@ void InitWindow()
 	// pixel-sized UI at native resolution, i.e. smaller on scaled displays. Keep SDL2's
 	// behaviour (Windows scales the window) until the renderer and UI handle DPI scaling.
 	// The awareness can only be set once per process, so SDL's own attempt is then ignored.
-	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
+	// "dpiAware": true renders at the display's real resolution, with the interface scaled.
+	if (!g_settings.value("dpiAware", false))
+		SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
 #endif
 	SDL_SetMainReady();
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
@@ -47,6 +51,9 @@ void InitWindow()
 	g_windowHeight = g_settings.value<int>("windowHeight", g_windowHeight);
 	g_sdlWindow = SDL_CreateWindow("wkbre2 \"Next\"", g_windowWidth, g_windowHeight, flags); // SDL3 centers new windows
 	SDL_StartTextInput(g_sdlWindow); // text input events are opt-in in SDL3 (ImGui text fields need them)
+	const float uiScale = g_settings.value("uiScale", 0.0f);
+	g_uiScale = uiScale > 0.0f ? uiScale : g_settings.value("dpiAware", false) ? std::max(1.0f, SDL_GetWindowDisplayScale(g_sdlWindow)) : 1.0f;
+	printf("Interface scale %.2f\n", g_uiScale);
 }
 
 void *WndGetNativeWindowHandle()
@@ -90,7 +97,7 @@ void HandleImGui(const SDL_Event &event)
 	ImGuiIO &igio = ImGui::GetIO();
 	switch (event.type) {
 	case SDL_EVENT_MOUSE_MOTION:
-		igio.MousePos = ImVec2(event.motion.x, event.motion.y);
+		igio.MousePos = ImVec2(event.motion.x / g_uiScale, event.motion.y / g_uiScale);
 		break;
 	case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		igio.MouseDown[0] = true;

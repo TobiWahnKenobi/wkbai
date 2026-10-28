@@ -304,11 +304,12 @@ struct FrontEnd::Impl {
 		lua.set_function("getText", [this](const std::string& key) { return lang.getText(key); });
 
 		// Window, time and input
-		lua.set_function("getWindowWidth", []() { return g_windowWidth; });
-		lua.set_function("getWindowHeight", []() { return g_windowHeight; });
+		// in points (window.h)
+		lua.set_function("getWindowWidth", []() { return (int)(g_windowWidth / g_uiScale); });
+		lua.set_function("getWindowHeight", []() { return (int)(g_windowHeight / g_uiScale); });
 		lua.set_function("getTime", []() { return SDL_GetTicks() / 1000.0; });
-		lua.set_function("getMouseX", []() { return g_mouseX; });
-		lua.set_function("getMouseY", []() { return g_mouseY; });
+		lua.set_function("getMouseX", []() { return UiMouseX(); });
+		lua.set_function("getMouseY", []() { return UiMouseY(); });
 		lua.set_function("getMouseWheel", []() { return g_mouseWheel; });
 		lua.set_function("isMouseDown", [](int b) { return g_mouseDown[b % std::size(g_mouseDown)]; });
 		lua.set_function("isMousePressed", [](int b) { return g_mousePressed[b % std::size(g_mousePressed)]; });

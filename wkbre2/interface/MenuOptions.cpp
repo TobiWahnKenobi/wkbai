@@ -7,6 +7,8 @@
 #include "../settings.h"
 #include "../SoundPlayer.h"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace {
 	MenuOption toggle(std::string id, std::string page, std::string label, bool& value)
@@ -122,6 +124,32 @@ namespace {
 		}
 		list.push_back(toggle("vsync", "system", "V-sync", rs.vsync));
 		list.push_back(toggle("showFps", "system", "Show FPS", rs.showFps));
+		// the display's real pixels, and the interface's size (window.h, g_uiScale)
+		{
+			MenuOption o;
+			o.id = "dpiAware"; o.page = "system"; o.label = "Full display resolution (high DPI)";
+			o.get = []() { return g_settings.value("dpiAware", false) ? 1.0f : 0.0f; };
+			o.set = [](float v) { g_settings["dpiAware"] = v != 0.0f; };
+			o.needsRestart = true;
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "uiScale"; o.page = "system"; o.label = "Interface size";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Automatic", "100%", "125%", "150%", "175%", "200%" };
+			static const float scales[] = { 0.0f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f };
+			o.get = []() {
+				const float s = g_settings.value("uiScale", 0.0f);
+				for (int i = 0; i < 6; i++)
+					if (std::abs(scales[i] - s) < 0.01f)
+						return (float)i;
+				return 0.0f;
+			};
+			o.set = [](float v) { g_settings["uiScale"] = scales[std::clamp((int)v, 0, 5)]; };
+			o.needsRestart = true;
+			list.push_back(o);
+		}
 		return list;
 	}
 }

@@ -283,11 +283,12 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	}
 
 	// Click or drag on the minimap: move the camera so it looks at that point
-	const bool hovered = g_mouseX >= x && g_mouseX < x + w && g_mouseY >= y && g_mouseY < y + h;
+	const int mx = UiMouseX(), my = UiMouseY(); // the minimap is in points
+	const bool hovered = mx >= x && mx < x + w && my >= y && my < y + h;
 	if (hovered && g_mouseDown[SDL_BUTTON_LEFT]) {
 		// in the map part; a click on the bars goes to the nearest map edge
-		float targetX = std::clamp((g_mouseX - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
-		float targetZ = (1.0f - std::clamp((g_mouseY - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
+		float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
+		float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
 		client->camera.position.x += targetX - lookAt.x;
 		client->camera.position.z += targetZ - lookAt.z;
 	}
@@ -323,7 +324,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 			button.mask = Bitmap::loadBitmap(button.image).convertToR8G8B8A8();
 			button.tex = gfx->CreateTexture(button.mask, 1);
 		}
-		const int lx = g_mouseX - (panelX + button.x), ly = g_mouseY - (panelY + button.y);
+		const int lx = UiMouseX() - (panelX + button.x), ly = UiMouseY() - (panelY + button.y);
 		const bool hovered = lx >= 0 && ly >= 0 && lx < button.mask.width && ly < button.mask.height
 			&& button.mask.pixels[4 * (ly * button.mask.width + lx) + 3] >= 128;
 		hoveredAny |= hovered;
@@ -1311,7 +1312,7 @@ void ClientInterface::iter()
 	if (formationDrag.active && (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN) {
 		auto toScreen = [this](const Vector3& p) {
 			const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
-			return ImVec2((t.x + 1) * 0.5f * g_windowWidth, (1 - t.y) * 0.5f * g_windowHeight);
+			return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
 		};
 		const Vector3 a = formationDrag.start, b = peapos;
 		const Vector3 dir = (b - a).normal();
@@ -1460,7 +1461,7 @@ void ClientInterface::iter()
 		auto& gtw = client->gameSet->gameTextWindows[activeGtw.first];
 		auto& page = gtw.pages[activeGtw.second];
 		std::string title = "[GTW] " + client->gameSet->gameTextWindows.names[activeGtw.first];
-		ImGui::SetNextWindowPos(ImVec2((float)g_windowWidth/2, (float)g_windowHeight/2), 0, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowPos(ImVec2(g_windowWidth / 2 / g_uiScale, g_windowHeight / 2 / g_uiScale), 0, ImVec2(0.5f, 0.5f));
 		ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoSavedSettings);
 		auto loctext = lang.getText(page.textBody);
 		std::string ptext;
@@ -1546,8 +1547,9 @@ void ClientInterface::iter()
 				texture tex = csTextureCache.getTexture(path.c_str(), true);
 				ImGui::GetBackgroundDrawList()->AddImage(tex, ImVec2((float)x, (float)y), ImVec2((float)(x + width), (float)(y + height)));
 			});
-		lua.set_function("getWindowWidth", []() {return g_windowWidth; });
-		lua.set_function("getWindowHeight", []() {return g_windowHeight; });
+		// the HUD lays out in points (window.h)
+		lua.set_function("getWindowWidth", []() {return (int)(g_windowWidth / g_uiScale); });
+		lua.set_function("getWindowHeight", []() {return (int)(g_windowHeight / g_uiScale); });
 		// Client object
 		lua.set_function("getPlayerID",
 			[this]() { ClientGameObject* obj = client->clientPlayer.get(); return obj ? obj->id : 0u; }
@@ -1752,8 +1754,8 @@ void ClientInterface::iter()
 			return sol::as_nested(cmdStates);
 			});
 		// Mouse
-		lua.set_function("getMouseX", []() {return g_mouseX; });
-		lua.set_function("getMouseY", []() {return g_mouseY; });
+		lua.set_function("getMouseX", []() {return UiMouseX(); });
+		lua.set_function("getMouseY", []() {return UiMouseY(); });
 		lua.set_function("isMousePressed", [](int button) {return g_mousePressed[button % std::size(g_mousePressed)]; });
 		lua.set_function("isMouseDown", [](int button) {return g_mouseDown[button % std::size(g_mouseDown)]; });
 		// Keyboard
