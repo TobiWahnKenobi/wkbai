@@ -40,7 +40,7 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	std::unordered_set<const Reaction*> individualReactions;
 	std::unordered_map<int, std::unordered_set<SrvGORef>> associates, associators;
 	std::vector<SrvGORef> referencers;
-	std::unordered_set<SrvGORef> seenObjects;
+	std::vector<uint32_t> seenObjects; // ids of the objects in sight range, sorted
 	std::set<std::pair<int, int>> zoneTiles;
 	int clientIndex = -1;
 	bool isMusicPlaying = false;
@@ -216,6 +216,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void tick();
 	// tick's parts: the game for one time step, then the clients' messages and the time sync
 	void simulate();
+	// simulate() calls so far (staggers the work that doesn't need every step)
+	uint64_t simStepIndex = 0;
 	void network();
 
 private:

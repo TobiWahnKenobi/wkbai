@@ -1071,22 +1071,40 @@ void ServerGameObject::lookForSightRangeEvents()
 	float dist = Server::instance->gameSet->equations[blueprint->sightRangeEquation]->eval(&ctx);
 	if (dist <= 0.0f)
 		return;
-	std::unordered_set<SrvGORef> objfound;
+	// the objects in range now, by id, against the ones before (both sorted): the new ones are
+	// seen, the ones gone stop being seen (a sorted list: hash sets per call were most of the
+	// simulation's time in large games)
+	static std::vector<std::pair<uint32_t, ServerGameObject*>> found;
+	found.clear();
 	NNSearch search;
 	search.start(Server::instance, this->position, dist * 5.0f);
-	while (ServerGameObject* nobj = (ServerGameObject*)search.next()) {
-		if (!nobj->blueprint->generateSightRangeEvents)
-			continue;
-		objfound.insert(nobj);
-		if (seenObjects.count(nobj) == 0) {
-			this->sendEvent(Tags::PDEVENT_ON_SEEING_OBJECT, nobj);
+	while (ServerGameObject* nobj = (ServerGameObject*)search.next())
+		if (nobj->blueprint->generateSightRangeEvents)
+			found.emplace_back(nobj->id, nobj);
+	std::sort(found.begin(), found.end());
+	std::vector<uint32_t> before = std::move(seenObjects);
+	seenObjects.clear();
+	seenObjects.reserve(found.size());
+	for (const auto& [id, obj] : found)
+		seenObjects.push_back(id);
+	SrvGORef self = this;
+	size_t b = 0;
+	for (const auto& [id, obj] : found) {
+		while (b < before.size() && before[b] < id) {
+			if (ServerGameObject* gone = Server::instance->findObject(before[b]))
+				this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
+			b++;
 		}
+		if (b < before.size() && before[b] == id)
+			b++;
+		else if (ServerGameObject* seen = Server::instance->findObject(id)) // by id: an event may have removed it
+			this->sendEvent(Tags::PDEVENT_ON_SEEING_OBJECT, seen);
+		if (!self)
+			return;
 	}
-	for (auto& prevSeenObj : seenObjects)
-		if (prevSeenObj)
-			if (objfound.count(prevSeenObj) == 0)
-				this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, prevSeenObj);
-	seenObjects = std::move(objfound);
+	for (; b < before.size(); b++)
+		if (ServerGameObject* gone = Server::instance->findObject(before[b]))
+			this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
 }
 
 void ServerGameObject::addZoneTile(int tx, int tz)
@@ -1432,9 +1450,44 @@ void Server::tick()
 	network();
 }
 
+// "profileSim": true prints where the simulation's time goes, every 10 s (per step, in ms)
+namespace {
+	struct SimProfile {
+		double total = 0, sequences = 0, tree = 0, ai = 0, orders = 0, movement = 0, sight = 0;
+		uint64_t steps = 0, lastPrint = 0, objects = 0;
+		static double now() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
+	} g_simProfile;
+	struct SimTimer {
+		double* into; double start;
+		SimTimer(double& d) : into(&d), start(SimProfile::now()) {}
+		~SimTimer() { *into += SimProfile::now() - start; }
+	};
+}
+
 void Server::simulate()
 {
 	ZoneScoped;
+	static const bool profile = g_settings.value("profileSim", false);
+	SimTimer totalTimer(g_simProfile.total);
+	g_simProfile.steps++;
+	simStepIndex++;
+	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
+		auto& p = g_simProfile;
+		if (p.lastPrint)
+			printf("SIMPROFILE t=%.0f steps %llu, per step ms: total %.2f, sequences %.2f, object tree %.2f (AI %.2f), orders %.2f, movement %.2f, sight %.2f; %llu objects processed per step\n",
+				timeManager.currentTime, (unsigned long long)p.steps, p.total / p.steps, p.sequences / p.steps, (p.tree - p.ai) / p.steps, p.ai / p.steps,
+				p.orders / p.steps, p.movement / p.steps, p.sight / p.steps, (unsigned long long)(p.objects / p.steps));
+		extern double g_pathfindingMs;
+		extern uint64_t g_pathfindingSearches;
+		if (p.lastPrint)
+			printf("SIMPROFILE   pathfinding %.2f ms per step, %llu searches, %.2f ms per search\n", g_pathfindingMs / p.steps,
+				(unsigned long long)g_pathfindingSearches, g_pathfindingSearches ? g_pathfindingMs / g_pathfindingSearches : 0.0);
+		g_pathfindingMs = 0.0;
+		g_pathfindingSearches = 0;
+		p = SimProfile();
+		p.lastPrint = SDL_GetTicks();
+	}
+	std::optional<SimTimer> seqTimer(std::in_place, g_simProfile.sequences);
 	auto it = delayedSequences.begin();
 	for (; it != delayedSequences.end(); it++) {
 		if (it->first > timeManager.currentTime) {
@@ -1513,7 +1566,10 @@ void Server::simulate()
 				obj->updatePosition(avg, false);
 			}
 		}
-		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER) {
+		// a player's AI and farmer count every 10th step (5 times a second), the players on
+		// different steps: every step took 3 ms with 8 AI players
+		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && (simStepIndex + obj->id) % 10 == 0) {
+			SimTimer aiTimer(g_simProfile.ai);
 			obj->aiController.update();
 			// Update "Number of Farmers" item (important for Food Consumption to work properly)
 			static const std::string numFarmersName = "Number of Farmers";
@@ -1531,13 +1587,21 @@ void Server::simulate()
 				func((ServerGameObject*)child, func);
 		}
 	};
-	if(getLevel())
+	seqTimer.reset();
+	if (getLevel()) {
+		SimTimer treeTimer(g_simProfile.tree);
 		processObjOrders(getLevel(), processObjOrders);
+	}
+	g_simProfile.objects += toprocess.size();
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
 		if (!obj) continue;
-		obj->orderConfig.process();
+		{
+			SimTimer ordersTimer(g_simProfile.orders);
+			obj->orderConfig.process();
+		}
 		if (!ref) continue;
+		std::optional<SimTimer> moveTimer(std::in_place, g_simProfile.movement);
 		if (obj->movement.isMoving()) {
 			auto newpos = obj->movement.getNewPosition(timeManager.currentTime);
 			newpos.y = terrain->getHeightEx(obj->position.x, obj->position.z, obj->blueprint->canWalkOnWater());
@@ -1557,7 +1621,10 @@ void Server::simulate()
 			obj->updatePosition(obj->trajectory.getPosition(timeManager.currentTime));
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);
 		}
-		if (obj->blueprint->receiveSightRangeEvents) {
+		moveTimer.reset();
+		// sight range events every 4th step (80 ms), the objects on different steps
+		if (obj->blueprint->receiveSightRangeEvents && (simStepIndex + obj->id) % 4 == 0) {
+			SimTimer sightTimer(g_simProfile.sight);
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
 		}

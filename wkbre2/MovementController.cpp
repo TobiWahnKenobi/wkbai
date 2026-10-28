@@ -7,6 +7,7 @@
 #include "Pathfinding.h"
 #include "terrain.h"
 #include <cassert>
+#include <SDL3/SDL_timer.h>
 
 namespace {
 	template<typename Predicate> Pathfinding::PFPos findNearestUnblockedPos(Pathfinding::PFPos pfpos, Predicate pred, int maxr) {
@@ -96,8 +97,20 @@ Vector3 MovementController::nearestValidPosition(const GameObjBlueprint* bluepri
 	return result;
 }
 
+// the time spent finding paths, for the server's "profileSim" report (ms)
+double g_pathfindingMs = 0.0;
+uint64_t g_pathfindingSearches = 0;
+
 Vector3 MovementController::startMovement(const Vector3& destination)
 {
+	const uint64_t profileStart = SDL_GetPerformanceCounter();
+	struct ProfileEnd {
+		uint64_t start;
+		~ProfileEnd() {
+			g_pathfindingMs += (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+			g_pathfindingSearches++;
+		}
+	} profileEnd{ profileStart };
 	//m_object->startMovement(destination);
 	//m_pathNodes = { destination };
 
