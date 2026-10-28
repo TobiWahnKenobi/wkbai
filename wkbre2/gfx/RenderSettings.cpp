@@ -37,6 +37,7 @@ void RenderSettings::load()
 	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
+	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
 	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
@@ -81,6 +82,7 @@ void RenderSettings::save()
 	g_settings["waterSurface"] = waterSurface;
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["characterShadows"] = characterShadows;
+	g_settings["realCharacterShadows"] = realCharacterShadows;
 	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;

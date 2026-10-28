@@ -646,7 +646,7 @@ void DiligentEnhancedSceneRenderer::render()
 			};
 
 			for (const SceneEntity* ent : it.second.list) {
-				if (shadowPass && !(ent->flags & SceneEntity::SEFLAG_STATIC_SHADOW))
+				if (shadowPass && !(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
 					continue;
 				Instance inst;
 				inst.transform = ent->transform.getTranspose();

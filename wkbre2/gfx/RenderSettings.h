@@ -31,6 +31,9 @@ struct RenderSettings {
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
 	bool characterShadows = true;    // the units' blob shadows
+	// the units drawn into the sun's shadow map instead (their real shape; enhanced renderers with
+	// building shadows on): the original only has the blobs
+	bool realCharacterShadows = true;
 	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;

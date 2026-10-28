@@ -584,6 +584,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Character shadows", &s.characterShadows);
+		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
 	}
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");
@@ -795,7 +796,12 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
 
 	// shadow
-	const bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
+	bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
+	// the shadow of the unit's shape from the sun's shadow map, where the renderer draws one
+	if (blobShadow && gpuBlobShadows && g_renderSettings.realCharacterShadows && g_renderSettings.staticShadows) {
+		obj->sceneEntity.flags |= SceneEntity::SEFLAG_DYNAMIC_SHADOW;
+		blobShadow = false;
+	}
 	if (blobShadow && gpuBlobShadows) {
 		// A round blob as wide as the model's bounding sphere (see below), drawn by the terrain renderer
 		const Vector3 centre = sphereCenter + Vector3(1, 0, 1) * (client->terrain->edge * 5.0f);
