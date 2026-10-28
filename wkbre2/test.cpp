@@ -1567,6 +1567,55 @@ void Test_Determinism()
 	fflush(stdout);
 }
 
+// The map editor's BCM writer: every map of data.bcp read and written again unchanged must give
+// the same bytes; then a height changed must read back. Prints "BCM <map> identical <0|1>" and
+// "BCM edited read back <0|1>".
+void Test_BCMRoundTrip()
+{
+	LoadBCP("data.bcp");
+	std::unique_ptr<std::vector<std::string>> dirs(ListDirectories("Maps"));
+	int maps = 0, identical = 0;
+	std::string firstMap;
+	for (const std::string& dir : *dirs) {
+		const std::string bcm = "Maps\\" + dir + "\\" + dir + ".bcm";
+		if (!FileExists(bcm.c_str()))
+			continue;
+		Terrain t;
+		t.readBCM(bcm.c_str());
+		const std::filesystem::path out = std::filesystem::temp_directory_path() / "wkbre2-bcm-test.bcm";
+		t.writeBCM(out);
+		std::ifstream f(out, std::ios::binary);
+		std::vector<uint8_t> written((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		const bool same = written == t.bcmData;
+		maps++;
+		identical += same;
+		if (!same)
+			printf("BCM %s identical 0 (%zu vs %zu bytes)\n", bcm.c_str(), written.size(), t.bcmData.size());
+		if (firstMap.empty())
+			firstMap = bcm;
+	}
+	printf("BCM maps %d identical %d\n", maps, identical);
+	if (!firstMap.empty()) {
+		Terrain t;
+		t.readBCM(firstMap.c_str());
+		const int x = t.width / 2, z = t.height / 3;
+		const uint8_t before = t.vertices[z * (t.width + 1) + x];
+		t.vertices[z * (t.width + 1) + x] = (uint8_t)(before + 37);
+		const std::filesystem::path out = std::filesystem::temp_directory_path() / "wkbre2-bcm-test.bcm";
+		t.writeBCM(out);
+		// read it back through a copy in the user folder's saved\ (LoadFile looks there)
+		const std::filesystem::path saved = g_userPath / "saved" / "wkbre2-bcm-test.bcm";
+		std::filesystem::create_directories(saved.parent_path());
+		std::filesystem::copy_file(out, saved, std::filesystem::copy_options::overwrite_existing);
+		Terrain back;
+		back.readBCM("wkbre2-bcm-test.bcm");
+		const bool ok = back.vertices[z * (back.width + 1) + x] == (uint8_t)(before + 37) && back.width == t.width;
+		printf("BCM edited read back %d\n", (int)ok);
+		std::filesystem::remove(saved);
+	}
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1597,6 +1646,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Farm, "Farming (build a field, farm it, a second farmer)"},
 {Test_Determinism, "Determinism (same seed, same game)"},
 {[]() { printf("CRASHTEST crashing now\n"); fflush(stdout); volatile int* p = nullptr; *p = 1; }, "Crash (writes a crash report)"},
+{Test_BCMRoundTrip, "BCM round trip (map editor's writer)"},
 };
 
 void LaunchTest()

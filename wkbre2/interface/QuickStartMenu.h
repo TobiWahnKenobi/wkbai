@@ -58,6 +58,8 @@ private:
 	std::map<NetEnetLink*, int> guestIds;
 	int nextGuestId = 1;
 	std::string lobbyText;
+	// the menu's Map Editor: the next level opens paused with the map editor
+	bool editLevel = false;
 	uint64_t lobbySentTime = 0;
 	// the guests that have the host's AI General files
 	std::set<NetEnetLink*> generalsSent;

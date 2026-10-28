@@ -422,6 +422,7 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
 	{ text = "Mods", action = function() push("mods") end },
+	{ text = "Map Editor", action = function() push("editlevels") end },
 	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
 	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
 	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() request("quit") end },
@@ -715,15 +716,23 @@ end
 
 local levelState = { selected = 1, scroll = 0 }
 -- The skirmish maps ("2 Player 4 Peaks.lvl"), shown as the original does: "4 Peaks (2)";
--- filter: only the maps for that many players (0: all)
+-- filter: only the maps for that many players (0: all). Levels named otherwise (the map
+-- editor's) come last, under their own name, when not filtered.
 local function levelList(filter)
 	local levels, names = {}, {}
+	local others = {}
 	for _, l in ipairs(savesOfType(".lvl")) do
 		local players, name = string.match(stripExtension(l), "^(%d+) Player (.+)$")
 		if players and (not filter or filter == 0 or tonumber(players) == filter) then
 			levels[#levels + 1] = l
 			names[#names + 1] = name .. " (" .. players .. ")"
+		elseif not players and (not filter or filter == 0) then
+			others[#others + 1] = l
 		end
+	end
+	for _, l in ipairs(others) do
+		levels[#levels + 1] = l
+		names[#names + 1] = stripExtension(l)
 	end
 	return levels, names
 end
@@ -738,6 +747,22 @@ local function levelPicker(x, y, w, h, filter)
 	if chosen and levelState.selected ~= before then request("select_level", chosen) end
 	return chosen, activated
 end
+
+-- Map Editor ---------------------------------------------------------------------------
+-- A level to edit: it opens paused with the map editor (interface/MapEditor.cpp), which saves
+-- the result as a new map and level in the user folder (listed here and in Skirmish then)
+Screens.editlevels = {
+	background = sunsetBackground,
+	open = function() levelState.selected, levelState.scroll = 1, 0 end,
+	draw = function()
+		title("Map Editor")
+		local chosen, activated = levelPicker(X(20), Y(80), L(1880), L(920), 0)
+		if button("Edit", X(770), Y(1032), L(182), L(24), chosen ~= nil) or (activated and chosen) then
+			request("edit_level", chosen)
+		end
+		if button(T("FRONT_END_BUTTON_BACK"), X(970), Y(1032), L(182), L(24)) or isKeyPressed("Escape") then pop() end
+	end,
+}
 
 -- The player colours (index 1 ... 8, as the game's) and their swatches
 local COLOURS = { "Blue", "Yellow", "Red", "Green", "Purple", "Orange", "Light_Blue", "Brown" }

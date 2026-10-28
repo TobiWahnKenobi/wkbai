@@ -10,6 +10,7 @@
 #include "util/vecmat.h"
 #include "TrnTextureDb.h"
 #include "util/DynArray.h"
+#include <filesystem>
 
 struct BitReader
 {
@@ -91,6 +92,11 @@ struct Terrain
 
 	void readFromFile(const char* filename);
 	void readBCM(const char *filename);
+	// The BCM as read and where its height map starts (in bits), for the map editor: writeBCM
+	// writes that file again with the current heights (everything else unchanged)
+	std::vector<uint8_t> bcmData;
+	uint64_t bcmHeightBitOffset = 0;
+	bool writeBCM(const std::filesystem::path& path) const;
 	void readSNR(const char* filename);
 	void readTRN(const char* filename);
 

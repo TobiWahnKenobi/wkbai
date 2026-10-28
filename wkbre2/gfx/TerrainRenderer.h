@@ -17,4 +17,7 @@ struct TerrainRenderer {
 	virtual void render() = 0;
 	// Bump mapping switch of the renderers that have one (shown in the debug window)
 	virtual bool* bumpMapping() { return nullptr; }
+	// The terrain's heights changed (the map editor): the renderers that keep their own copy of
+	// the mesh update it; returns false when the renderer has to be made again instead
+	virtual bool updateHeights() { return true; }
 };

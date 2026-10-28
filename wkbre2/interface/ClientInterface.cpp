@@ -340,7 +340,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 
 // The enhanced scene and terrain renderers draw with Diligent directly, so they need the
 // Diligent renderer (not the null renderer).
-static bool UseEnhancedRenderers(IRenderer* gfx)
+bool UseEnhancedRenderers(IRenderer* gfx)
 {
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
@@ -1214,6 +1214,18 @@ void ClientInterface::iter()
 	if (g_mouseWheel)
 		client->camera.position.y += g_mouseWheel * (g_renderSettings.invertMouseWheel ? -2 : 2);
 
+	// the map editor (F8 in single player) takes the clicks it uses
+	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer)
+		editorOn = !editorOn;
+	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorTest", false)) {
+		editorOn = true;
+		editorTestStep(peapos);
+	}
+	if (editorOn && withServer && editorInput(peapos)) {
+		g_mousePressed[SDL_BUTTON_LEFT] = false;
+		g_mouseDown[SDL_BUTTON_LEFT] = false;
+	}
+
 	static bool clickedScriptedUi = false;
 	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_LEFT]) {
 		debugger.selectObject(nextSelectedObject);
@@ -1406,6 +1418,8 @@ void ClientInterface::iter()
 	TracyCZoneN(zoneUi, "UI (ImGui and UI script)", 1);
 
 	ImGuiImpl_NewFrame();
+	if (editorOn && withServer)
+		editorWindow();
 	if (!singlePlayer && client->getLevel() && !(frontEnd && frontEnd->isOpen()))
 		chatDraw();
 	if (settingsOn)

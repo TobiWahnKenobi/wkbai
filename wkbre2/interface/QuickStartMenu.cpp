@@ -174,6 +174,13 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	if (request.action == "start") {
 		selectSaveGame(request.arg);
 		modeChosen = MODE_SINGLEPLAYER;
+		editLevel = false;
+	}
+	else if (request.action == "edit_level") {
+		// the menu's Map Editor: the level in single player, paused, with the editor open
+		selectSaveGame(request.arg);
+		modeChosen = MODE_SINGLEPLAYER;
+		editLevel = true;
 	}
 	else if (request.action == "select_level")
 		selectSaveGame(request.arg);
@@ -526,7 +533,7 @@ void QuickStartMenu::launchGame()
 				for (const SrvGORef& ref : server->clientPlayerObjects)
 					if (ServerGameObject* player = ref.get())
 						server->snapCameraPosition(player, player->playerStartCameraPosition, player->playerStartCameraOrientation);
-			if (BenchmarkPaused())
+			if (BenchmarkPaused() || editLevel)
 				server->timeManager.pause();
 			srvMutex.unlock();
 			while (!g_windowQuit && !stopServer) {
@@ -539,6 +546,14 @@ void QuickStartMenu::launchGame()
 
 		ClientInterface cliui(client, gfx);
 		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
+		// the map editor changes the server's state while its thread waits
+		if (modeChosen == MODE_SINGLEPLAYER)
+			cliui.withServer = [this, &srvMutex](const std::function<void(Server&)>& f) {
+				srvMutex.lock();
+				f(*server);
+				srvMutex.unlock();
+			};
+		cliui.editorOn = editLevel;
 		// single player and the multiplayer host (who runs the game) can save
 		cliui.saveGame = [this, &srvMutex](const std::string& name) {
 			// a file name, not a path

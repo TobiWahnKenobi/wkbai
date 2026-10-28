@@ -11,6 +11,9 @@
 #include "../Language.h"
 #include <deque>
 #include <functional>
+#include <memory>
+
+struct Server;
 #include <unordered_set>
 
 struct Client;
@@ -65,8 +68,24 @@ struct ClientInterface {
 	// Set by the game's owner when it can save the game (single player): saves it under a name
 	// ("Save_Games\\<name>.sav" in the user folder), returns whether it worked
 	std::function<bool(const std::string& name)> saveGame;
+	// The map editor (interface/MapEditor.cpp): F8 in single player, or on from the start when the
+	// menu's Map Editor opens a level
+	bool editorOn = false;
+	// Runs code on the server while its thread is held (set by the game's owner; without it, e.g.
+	// as a multiplayer guest, there is no editor)
+	std::function<void(const std::function<void(Server&)>&)> withServer;
 private:
 	bool firstFrame = true;
+	// the map editor: its state, its mouse input (before the game's; true when it used the
+	// click), its window, and the terrain shown again after its heights changed
+	struct EditorState;
+	std::shared_ptr<EditorState> editor;
+	bool editorInput(const Vector3& cursor);
+	// test runs: "benchmark": { ..., "editorTest": true } paints, places and saves by itself
+	void editorTestStep(Vector3& cursor);
+	void editorSave(const std::string& name);
+	void editorWindow();
+	void rebuildTerrainRenderer();
 	// The menu's "save" request: saves (saveGame) and tells the menu
 	void saveRequested(const std::string& name);
 	// A right-click command to the selection (units spread around the place, buildings' rally

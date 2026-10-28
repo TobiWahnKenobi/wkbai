@@ -99,7 +99,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "ParticleContainer.cpp" "gfx/ParticleRenderer.h" "gfx/DefaultParticleRenderer.h" "gfx/DefaultParticleRenderer.cpp"
 "gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
-"FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp"
+"FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp" "interface/MapEditor.cpp"
 "platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "gfx/renderer_diligent.cpp" "gfx/renderer_diligent.h"
 "gfx/DiligentEnhancedSceneRenderer.h" "gfx/DiligentEnhancedSceneRenderer.cpp" "gfx/DiligentEnhancedTerrainRenderer.h" "gfx/DiligentEnhancedTerrainRenderer.cpp" "gfx/DiligentSkyRenderer.h" "gfx/DiligentSkyRenderer.cpp" "gfx/RenderSettings.h" "gfx/RenderSettings.cpp" "gfx/BitmapFont.h" "gfx/BitmapFont.cpp" "interface/FrontEnd.h" "interface/FrontEnd.cpp" "interface/MenuOptions.h" "interface/MenuOptions.cpp" "ServerSave.cpp" "interface/CampaignProfile.h" "interface/CampaignProfile.cpp"
 "gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp")

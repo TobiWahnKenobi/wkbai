@@ -385,7 +385,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	vbDesc.Name = "Terrain vertices";
 	vbDesc.Size = trnVertices.size() * sizeof(EnhancedTerrainVertex);
 	vbDesc.BindFlags = BIND_VERTEX_BUFFER;
-	vbDesc.Usage = USAGE_IMMUTABLE;
+	vbDesc.Usage = USAGE_DEFAULT; // updateHeights writes it again
 	BufferData vbData{ trnVertices.data(), vbDesc.Size };
 	device->CreateBuffer(vbDesc, &vbData, &_impl->trnVertexBuffer);
 	if (!_impl->trnVertexBuffer)
@@ -700,6 +700,22 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 	}
 	delete texcache;
 	delete _impl;
+}
+
+bool DiligentEnhancedTerrainRenderer::updateHeights()
+{
+	DiligentGfx* dgfx = (DiligentGfx*)gfx;
+	const std::vector<EnhancedTerrainVertex> trnVertices = BuildEnhancedTerrainVertices(terrain);
+	const uint64_t size = trnVertices.size() * sizeof(EnhancedTerrainVertex);
+	if (size != _impl->trnVertexBuffer->GetDesc().Size)
+		return false;
+	dgfx->ctx->UpdateBuffer(_impl->trnVertexBuffer, 0, size, trnVertices.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	// the chunks' boxes: every height the map can have (the edited ones aren't measured again)
+	for (Impl::Chunk& chunk : _impl->chunks) {
+		chunk.low.y = std::min(chunk.low.y, 0.0f);
+		chunk.high.y = std::max(chunk.high.y, 255.0f * terrain->scale);
+	}
+	return true;
 }
 
 void DiligentEnhancedTerrainRenderer::render()

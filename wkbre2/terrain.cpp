@@ -10,6 +10,7 @@
 #include "gfx/bitmap.h"
 #include <algorithm>
 #include <cstring>
+#include <fstream>
 
 float Terrain::getHeight(float ipx, float ipy) const {
 	//int tx = floorf(x / 5) + edge, tz = floorf(z / 5) + edge;
@@ -199,7 +200,9 @@ void Terrain::readBCM(const char * filename) {
 		br.readnb(ngrpbits); br.readnb(nidbits);
 	}
 
-	// Heightmap
+	// Heightmap (kept with the file's bytes for writeBCM)
+	bcmData.assign((uint8_t*)fcnt, (uint8_t*)fcnt + fsize);
+	bcmHeightBitOffset = (uint64_t)(br.bytepos - (uint8_t*)fcnt) * 8 + br.bitpos;
 	for (int y = 0; y <= height; y++)
 		for (int x = 0; x <= width; x++)
 			vertices[(height - y) * (width + 1) + x] = (uint8_t)br.readnb(8);
@@ -207,6 +210,34 @@ void Terrain::readBCM(const char * filename) {
 	free(fcnt);
 
 	floodfillWater();
+}
+
+bool Terrain::writeBCM(const std::filesystem::path& path) const
+{
+	if (bcmData.empty())
+		return false;
+	std::vector<uint8_t> out = bcmData;
+	uint64_t bit = bcmHeightBitOffset;
+	// the bits as BitReader reads them: least significant first
+	auto put = [&](int value) {
+		const size_t byte = (size_t)(bit / 8);
+		const uint8_t mask = (uint8_t)(1 << (bit % 8));
+		if (byte >= out.size())
+			out.resize(byte + 1, 0);
+		out[byte] = value ? (out[byte] | mask) : (out[byte] & ~mask);
+		bit++;
+	};
+	for (int y = 0; y <= height; y++)
+		for (int x = 0; x <= width; x++) {
+			const uint8_t h = vertices[(height - y) * (width + 1) + x];
+			for (int i = 0; i < 8; i++)
+				put((h >> i) & 1);
+		}
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream f(path, std::ios::binary);
+	f.write((const char*)out.data(), (std::streamsize)out.size());
+	return (bool)f;
 }
 
 void Terrain::readSNR(const char* filename)
