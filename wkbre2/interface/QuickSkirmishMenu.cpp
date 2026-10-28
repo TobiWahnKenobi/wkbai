@@ -44,6 +44,7 @@ void QuickSkirmishMenu::imguiWindow()
 			ImGui::Checkbox("Allow Diplomacy", &allowDiplomacy);
 			ImGui::Checkbox("Team Reconnaissance", &teamReconnaissance);
 			ImGui::Checkbox("Barbarian Tribes", &barbarianTribes);
+			ImGui::Checkbox("Aggressive AI", &aggressiveAI);
 		}
 		else {
 			ImGui::SeparatorText("Victory Condition");
@@ -99,6 +100,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "allowDiplomacy") allowDiplomacy = value != 0;
 	else if (name == "teamReconnaissance") teamReconnaissance = value != 0;
 	else if (name == "barbarianTribes") barbarianTribes = value != 0;
+	else if (name == "aggressiveAI") aggressiveAI = value != 0;
 	else if (name == "resourcePoints") resourcePoints = value;
 	else if (name == "victoryPointLimit") victoryPointLimit = value;
 	else if (name == "valhallaModeFood") valhallaModeFood = value;
@@ -351,6 +353,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		}
 	}
 
+	server.aggressiveAI = aggressiveAI;
 	if (mode != DevMode) {
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or

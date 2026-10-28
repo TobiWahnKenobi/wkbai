@@ -56,6 +56,7 @@ private:
 	bool allowDiplomacy = false;
 	bool teamReconnaissance = false;
 	bool barbarianTribes = false;
+	bool aggressiveAI = true; // Server::aggressiveAI
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

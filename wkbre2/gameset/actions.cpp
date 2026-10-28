@@ -1498,13 +1498,23 @@ struct ActionAbandonPlan : Action {
 struct ActionActivateCommission : Action {
 	const GSCommission* commission;
 	std::unique_ptr<ObjectFinder> finder;
+	bool forceBalance = false;
 	virtual void run(SrvScriptContext* ctx) override {
 		for (ServerGameObject* obj : finder->eval(ctx))
-			obj->getPlayer()->aiController.activateCommission(commission, obj);
+			obj->getPlayer()->aiController.activateCommission(commission, obj, forceBalance);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		commission = gs.commissions.readPtr(gsf);
 		finder.reset(ReadFinder(gsf, gs));
+		// FORCE_BALANCE, BEST_QUALITY (the AI's character requirements take their ladders'
+		// best spawnable rung anyway)
+		while (!gsf.eol) {
+			const std::string flag = gsf.nextString();
+			if (flag == "FORCE_BALANCE")
+				forceBalance = true;
+			else if (flag.empty())
+				break;
+		}
 	}
 };
 

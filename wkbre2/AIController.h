@@ -14,6 +14,9 @@ struct GameSet;
 struct WorkOrder;
 struct ObjectFinder;
 struct GSCommission;
+struct GameObjBlueprint;
+struct SrvScriptContext;
+template <typename T> struct SpecificFinderResult;
 
 struct WorkOrderInstance {
 	SrvGORef city;
@@ -37,6 +40,8 @@ struct CommissionInstance {
 	};
 
 	const GSCommission* blueprint;
+	bool forceBalance = false; // ACTIVATE_COMMISSION ... FORCE_BALANCE
+	float suspendedSince = -1.0f; // game time the suspension condition became true, -1 when not suspended
 	SrvGORef handlerObject;
 	
 	std::vector<CharacterRequirementInstance> characterReqInsts;
@@ -60,6 +65,15 @@ struct AIController {
 	void activatePlan(int planTag);
 	void abandonPlan();
 	void registerWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder, const WorkOrder* workOrder);
-	void activateCommission(const GSCommission* commission, ServerGameObject* handler);
+	void activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance = false);
 	void deactivateCommission(const GSCommission* commission, ServerGameObject* handler);
 };
+
+// Whether one of the buildings may spawn the type now (gameset/values.cpp)
+bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<ServerGameObject>& buildings);
+// How many characters each character requirement of the commission needs, evaluated for its
+// handler; with forceBalance, a requirement none of whose ladder's types can be spawned now
+// gives what it still misses to the others that can and need some (gameset/values.cpp)
+std::vector<int> AICharacterNeeds(const GSCommission* commission, SrvScriptContext* handlerCtx, bool forceBalance);
+// The aggressive AI (Server::aggressiveAI): wraps the Kingmaker equations it changes (gameset/values.cpp)
+void InstallAIAggressionOverrides(GameSet& gs);

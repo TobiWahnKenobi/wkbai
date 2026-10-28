@@ -175,6 +175,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::string bootLevel;
 	std::atomic<bool> exitToMenu = false, levelBooted = false;
 	bool userProfileUpdated = false;
+	// the aggressive AI (InstallAIAggressionOverrides): the skirmish setting "aggressiveAI"
+	bool aggressiveAI = true;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

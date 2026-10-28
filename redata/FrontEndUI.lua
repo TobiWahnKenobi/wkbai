@@ -971,7 +971,7 @@ local SETTINGS = {
 	mode = 0, startFood = 500, startWood = 500, startGold = 200, populationLimit = 200,
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
-	unitLives = 0, capturableFlags = 4,
+	unitLives = 0, capturableFlags = 4, aggressiveAI = 1,
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1106,6 +1106,9 @@ local function settingsTab()
 		if roundButton(X(1393), y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, X(1457), y + L(18), T(key), WHITE, S)
 	end
+	-- wkbre2's own: the AI with fewer peasants that attacks whenever it can afford an army
+	if roundButton(X(1393), Y(894), L(52), s.aggressiveAI ~= 0, true) then s.aggressiveAI = (s.aggressiveAI ~= 0) and 0 or 1 end
+	drawText(FONT_LIST, X(1457), Y(912), "Aggressive AI", WHITE, S)
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"

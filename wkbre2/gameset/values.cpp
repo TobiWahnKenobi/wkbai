@@ -872,7 +872,7 @@ struct ValueAverageEquationResult : ValueDeterminer {
 // type allowed): it has the "Spawn <type>" order, and the command of that name, if any, has no
 // impossible condition (tech level, alignment; the wait conditions, such as the cost now, don't
 // count). Counting locked rungs made every BEST_QUALITY army unaffordable: the AI never attacked.
-static bool SpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildings)
+bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildings)
 {
 	const GameSet* gs = Server::instance->gameSet.get();
 	const std::string spawnName = "Spawn " + type->name;
@@ -894,10 +894,146 @@ static bool SpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& bu
 	return false;
 }
 
+// FORCE_BALANCE, my reading of the flag (not traced in WKB.exe): the Kingmaker's armies are
+// combined arms, and cavalry needs Stables that an AI may not have built yet. Without the flag's
+// balancing the cavalry requirements could never be met, so no army was ever affordable or
+// complete and the AI never attacked; with it, their share goes to the infantry and archers.
+std::vector<int> AICharacterNeeds(const GSCommission* commission, SrvScriptContext* hctx, bool forceBalance)
+{
+	const size_t n = commission->characterRequirements.size();
+	std::vector<int> needed(n), having(n);
+	std::vector<bool> spawnable(n, true);
+	for (size_t i = 0; i < n; i++) {
+		const auto& req = commission->characterRequirements[i];
+		needed[i] = (int)std::ceil(req.vdCountNeeded->eval(hctx));
+		having[i] = (int)req.fdAlreadyHaving->eval(hctx).size();
+	}
+	if (!forceBalance)
+		return needed;
+	int moved = 0;
+	std::vector<size_t> takers, givers, fighters;
+	for (size_t i = 0; i < n; i++) {
+		const auto& entries = commission->characterRequirements[i].ladder->entries;
+		spawnable[i] = std::any_of(entries.begin(), entries.end(), [&](const auto& e) { return AISpawnAllowed(e.type, e.finder->eval(hctx)); });
+		// the supply wagons' requirement takes no fighters' share
+		const bool wagons = std::any_of(entries.begin(), entries.end(), [](const auto& e) { return e.type->name.find("Wagon") != std::string::npos; });
+		if (spawnable[i] && !wagons)
+			fighters.push_back(i);
+		if (needed[i] > having[i])
+			(spawnable[i] ? takers : givers).push_back(i);
+	}
+	// only cavalry short: the infantry and archers that can be spawned take its share
+	if (takers.empty())
+		takers = fighters;
+	// nothing that can be spawned to give it to (no barracks yet): unchanged, so the army stays
+	// unaffordable rather than becoming an empty one that is "complete" at once
+	if (takers.empty())
+		return needed;
+	for (size_t i : givers) {
+		moved += needed[i] - having[i];
+		needed[i] = having[i];
+	}
+	for (size_t k = 0; moved > 0; k++, moved--)
+		needed[takers[k % takers.size()]]++;
+
+	// The aggressive AI: a requirement whose best type the player can't pay for now (short of
+	// wood or gold) gives its share to the fighters that don't cost what is short, such as the
+	// Spearman (60 food). The user: "there are enough troops types that do not require gold".
+	// The armies had waited for archers' wood while hundreds of food stood unused.
+	if (Server::instance && Server::instance->aggressiveAI) {
+		static const int costItems[3] = { Tags::PDITEM_FOOD_COST, Tags::PDITEM_WOOD_COST, Tags::PDITEM_GOLD_COST };
+		static const int stockItems[3] = { Tags::PDITEM_FOOD, Tags::PDITEM_WOOD, Tags::PDITEM_GOLD };
+		ServerGameObject* player = ((ServerGameObject*)hctx->getSelf())->getPlayer();
+		auto bestType = [&](size_t i) -> const GameObjBlueprint* {
+			for (const auto& e : commission->characterRequirements[i].ladder->entries)
+				if (AISpawnAllowed(e.type, e.finder->eval(hctx)))
+					return e.type;
+			return nullptr;
+		};
+		// paid in the requirements' order from what the player has, as CAN_AFFORD_COMMISSION does
+		bool shortOf[3] = {};
+		float left[3];
+		for (int r = 0; r < 3; r++)
+			left[r] = player->getItem(stockItems[r]);
+		std::vector<size_t> unpaid;
+		for (size_t i = 0; i < n; i++) {
+			const GameObjBlueprint* type = spawnable[i] && needed[i] > having[i] ? bestType(i) : nullptr;
+			if (!type)
+				continue;
+			bool fits = true;
+			for (int r = 0; r < 3; r++)
+				if ((needed[i] - having[i]) * type->getStartingItemValue(costItems[r]) > left[r]) {
+					shortOf[r] = true;
+					fits = false;
+				}
+			if (fits)
+				for (int r = 0; r < 3; r++)
+					left[r] -= (needed[i] - having[i]) * type->getStartingItemValue(costItems[r]);
+			else
+				unpaid.push_back(i);
+		}
+		std::vector<size_t> payers;
+		for (size_t i : fighters) {
+			const GameObjBlueprint* type = bestType(i);
+			bool usesShort = false;
+			for (int r = 0; r < 3; r++)
+				usesShort |= shortOf[r] && type->getStartingItemValue(costItems[r]) > 0.0f;
+			if (!usesShort)
+				payers.push_back(i);
+		}
+		if (!unpaid.empty() && !payers.empty()) {
+			int extra = 0;
+			for (size_t i : unpaid)
+				if (std::find(payers.begin(), payers.end(), i) == payers.end()) {
+					extra += needed[i] - having[i];
+					needed[i] = having[i];
+				}
+			for (size_t k = 0; extra > 0; k++, extra--)
+				needed[payers[k % payers.size()]]++;
+		}
+	}
+	return needed;
+}
+
+// The aggressive AI, on unless the skirmish setting turns it off (the user: the AI should be
+// "vastly more aggressive"; not in WKB.exe). With the original Kingmaker scripts an AI wants
+// 0.4 x its population limit of peasants before it builds anything else of note, 400 at the
+// user's 1000, and takes ten minutes or more to raise its first army; then it launches one only
+// on a roll against its Impatience (15-100) each minute. The aggressive AI wants at most the
+// peasants of the original's default limit of 200 (80) and always launches an army it can
+// afford. Both wrap the scripts' equations, so the scripts themselves are unchanged.
+struct ValueAggressionOverride : ValueDeterminer {
+	ValueDeterminer* original;
+	float limit;
+	bool asMinimum; // the result is at least limit (else at most)
+	ValueAggressionOverride(ValueDeterminer* original, float limit, bool asMinimum) : original(original), limit(limit), asMinimum(asMinimum) {}
+	~ValueAggressionOverride() { delete original; }
+	virtual float eval(ScriptContext* ctx) override {
+		const float value = original->eval(ctx);
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI)
+			return value;
+		return asMinimum ? std::max(value, limit) : std::min(value, limit);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+void InstallAIAggressionOverrides(GameSet& gs)
+{
+	const std::pair<const char*, std::pair<float, bool>> overrides[] = {
+		{ "Total Peasants Needed", { 80.0f, false } },
+		{ "I Have Enough Resources For Maximum Attack Of My Next Army Type Or I Have Become Impatient", { 1.0f, true } },
+	};
+	for (const auto& [name, how] : overrides) {
+		const int eq = gs.equations.names.getIndex(name);
+		if (eq >= 0)
+			gs.equations[eq] = new ValueAggressionOverride(gs.equations[eq], how.first, how.second);
+	}
+}
+
 struct ValueCanAffordCommission : ValueDeterminer {
 	const GSCommission* commission = nullptr;
 	std::unique_ptr<ObjectFinder> fHandler;
-	bool bestQuality = false;
+	bool bestQuality = false, forceBalance = false;
 	virtual float eval(ScriptContext* ctx) override {
 		if (!ctx->isServer() || !commission)
 			return 0.0f;
@@ -930,13 +1066,15 @@ struct ValueCanAffordCommission : ValueDeterminer {
 			if (ci.blueprint == commission && ci.handlerObject.get() == handler)
 				active = &ci;
 		SrvScriptContext hctx(Server::instance, handler);
-		for (const auto& req : commission->characterRequirements) {
-			const int missing = (int)std::ceil(req.vdCountNeeded->eval(&hctx)) - (int)req.fdAlreadyHaving->eval(&hctx).size();
+		const std::vector<int> needs = AICharacterNeeds(commission, &hctx, forceBalance);
+		for (size_t ri = 0; ri < commission->characterRequirements.size(); ri++) {
+			const auto& req = commission->characterRequirements[ri];
+			const int missing = needs[ri] - (int)req.fdAlreadyHaving->eval(&hctx).size();
 			if (missing <= 0)
 				continue;
 			bool paid = false;
 			for (const auto& entry : req.ladder->entries) {
-				if (!SpawnAllowed(entry.type, entry.finder->eval(&hctx)))
+				if (!AISpawnAllowed(entry.type, entry.finder->eval(&hctx)))
 					continue;
 				if (pay(left, entry.type, missing)) {
 					paid = true;
@@ -967,6 +1105,8 @@ struct ValueCanAffordCommission : ValueDeterminer {
 			const std::string flag = gsf.nextString();
 			if (flag == "BEST_QUALITY")
 				bestQuality = true;
+			else if (flag == "FORCE_BALANCE")
+				forceBalance = true;
 			else if (flag.empty())
 				break;
 		}

@@ -49,6 +49,8 @@
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
 #include "gameset/finder.h"
+#include "gameset/Commission.h"
+#include "AIController.h"
 #include "gameset/ScriptContext.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
@@ -1768,6 +1770,19 @@ void Test_AIvsAI()
 				for (const auto& [name, n] : markers)
 					markerList += " " + name + "=" + std::to_string(n);
 				printf("AITEST   markers:%s\n", markerList.c_str());
+				{
+					SrvScriptContext pctx(&server, player);
+					std::string probe;
+					for (const char* name : { "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference" }) {
+						const int item = server.gameSet->items.names.getIndex(name);
+						probe += std::string(" ") + name + "=" + (item >= 0 ? std::to_string((int)player->getItem(item)) : "?");
+					}
+					for (const char* name : { "My Resource Markers", "All Tree Markers", "All Non Associated Tree Markers", "Number of Resource Villages With More Than Village Limit Associated Resources", "All My Kingmaker Villages & Foundations", "Nearest Resource Marker To My Manor", "Palace Building Of Player" }) {
+						const int fi = server.gameSet->objectFinderDefinitions.names.getIndex(name);
+						probe += std::string(" | ") + name + ": " + (fi >= 0 ? std::to_string(server.gameSet->objectFinderDefinitions[fi]->eval(&pctx).size()) : "?");
+					}
+					printf("AITEST   probe:%s\n", probe.c_str());
+				}
 				std::string works;
 				for (const auto& woi : player->aiController.workOrderInstances)
 					if (ServerGameObject* city = woi.city.get()) {
@@ -1775,6 +1790,56 @@ void Test_AIvsAI()
 						works += " " + city->blueprint->name + "#" + std::to_string(city->id) + ":" + std::to_string(woi.unitFinder->eval(&cityCtx).size()) + " units";
 					}
 				printf("AITEST   work orders:%s\n", works.c_str());
+				// the commissions: suspended or not, and per requirement how many are needed and there
+				for (const CommissionInstance& ci : player->aiController.commissionInstances) {
+					ServerGameObject* handler = ci.handlerObject.get();
+					if (!handler)
+						continue;
+					SrvScriptContext hctx(&server, handler);
+					const GSCommission* gc = ci.blueprint;
+					std::string reqs;
+					for (const auto& req : gc->characterRequirements)
+						reqs += " chars " + std::to_string((int)std::ceil(req.vdCountNeeded->eval(&hctx))) + "/" + std::to_string(req.fdAlreadyHaving->eval(&hctx).size());
+					for (const auto& req : gc->buildingRequirements)
+						reqs += " " + req.bpBuilding->name + " " + std::to_string((int)req.vdCountNeeded->eval(&hctx)) + "/" + std::to_string(req.fdAlreadyHaving->eval(&hctx).size());
+					printf("AITEST   commission %s at %s#%u%s:%s\n", server.gameSet->commissions.getString(gc).c_str(), handler->blueprint->name.c_str(), handler->id,
+						gc->suspensionCondition && gc->suspensionCondition->booleval(&hctx) ? " (suspended)" : "", reqs.c_str());
+					std::string hitems;
+					for (const char* name : { "The Army Type I Was Trying To Spawn", "I Can Commission Minimum Army", "I Can Commission Maximum Army", "Army Can Be Spawned", "I Have Spawned An Army", "Spawn Size", "Number Of Heavy Infantry In Defence", "Number Of Light Infantry In Defence", "Number of Attacking Heavy Infantry In Defence", "Number of Attacking Light Infantry In Defence", "We Are Outnumbered In Defence", "My Next Army Type", "Last Army Has Been Finished", "Current Offensive Loop", "Combined Arms Spawn Chance", "Fire Arrow Spawn Chance", "Raiding Army Spawn Chance", "Siege Weapon Army Spawn Chance" }) {
+						const int item = server.gameSet->items.names.getIndex(name);
+						if (item >= 0 && handler->getItem(item) != 0.0f)
+							hitems += std::string(" ") + name + "=" + std::to_string(handler->getItem(item));
+					}
+					const Order* hord = handler->orderConfig.getCurrentOrder();
+					printf("AITEST     handler items:%s; order %s\n", hitems.c_str(), hord ? server.gameSet->orders.getString(hord->blueprint).c_str() : "none");
+					if (handler->blueprint->name.find("Defensive Army") != std::string::npos && !gc->characterRequirements.empty()) {
+						std::string rungs;
+						for (const auto& req : gc->characterRequirements) {
+							rungs += " [";
+							for (const auto& rung : req.ladder->entries) {
+								const SrvFinderResult where = rung.finder->eval(&hctx);
+								const std::string spawnName = "Spawn " + rung.type->name;
+								const int cmdid = server.gameSet->commands.names.getIndex(spawnName);
+								const char* verdict = server.gameSet->orders.names.getIndex(spawnName) < 0 ? "no order" : cmdid < 0 ? "no command" : "impossible";
+								std::string failed;
+								for (ServerGameObject* b : where) {
+									if (b->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || cmdid < 0)
+										continue;
+									SrvScriptContext bctx(&server, b);
+									auto _ = bctx.selectedObject.change(b);
+									failed.clear();
+									for (GSCondition* cond : server.gameSet->commands[cmdid].conditionsImpossible)
+										if (!cond->test->booleval(&bctx))
+											failed += "!" + server.gameSet->conditions.getString(cond);
+									if (failed.empty()) { verdict = "ok"; break; }
+								}
+								rungs += " " + rung.type->name + " at " + std::to_string(where.size()) + " " + verdict + failed + ";";
+							}
+							rungs += "]";
+						}
+						printf("AITEST     rungs:%s\n", rungs.c_str());
+					}
+				}
 				std::string line;
 				for (const auto& [name, n] : orders)
 					line += " " + name + "=" + std::to_string(n);

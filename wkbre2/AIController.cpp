@@ -6,6 +6,7 @@
 #include "util/GSFileParser.h"
 #include "gameset/finder.h"
 #include "Order.h"
+#include "gameset/command.h"
 
 void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 {
@@ -210,16 +211,31 @@ void AIController::update()
 		ServerGameObject* obj = cominst.handlerObject.get();
 		if (!obj) continue;
 		SrvScriptContext ctx{ Server::instance, obj };
-		if (gscomm->suspensionCondition && gscomm->suspensionCondition->booleval(&ctx))
-			continue;
+		// A suspended building commission resumes after 90 s, for 90 s at a time. The Kingmaker
+		// AI pauses its buildings to save 300 food and wood for Flaming Arrows ("Kingmaker Do I Need
+		// Flaming Arrow Upgrade Pause Buildings"), but with no food income (no farms yet, its start food spent
+		// on peasants) the research never came and nor did the village and farms
+		// that would pay for it: the AI stood still for the whole game. Not in WKB.exe; my deadlock
+		// breaker, for the user's "vastly more aggressive" AI.
+		if (gscomm->suspensionCondition && gscomm->suspensionCondition->booleval(&ctx)) {
+			const float now = Server::instance->timeManager.currentTime;
+			if (cominst.suspendedSince < 0.0f)
+				cominst.suspendedSince = now;
+			const float suspended = now - cominst.suspendedSince;
+			if (gscomm->buildingRequirements.empty() || std::fmod(suspended, 180.0f) < 90.0f)
+				continue;
+		}
+		else
+			cominst.suspendedSince = -1.0f;
 
 		size_t completeCount = 0;
 
 		// Character Requirements
+		const std::vector<int> charNeeds = AICharacterNeeds(gscomm, &ctx, cominst.forceBalance);
 		for (size_t ri = 0; ri < cominst.characterReqInsts.size(); ++ri) {
 			auto& gsreq = gscomm->characterRequirements[ri];
 			auto& reqinst = cominst.characterReqInsts[ri];
-			size_t requiredCount = (size_t)std::ceil(gsreq.vdCountNeeded->eval(&ctx));
+			size_t requiredCount = (size_t)std::max(0, charNeeds[ri]);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			//size_t inCtrCount = reqinst.foundations.size();
 			if (existingCount < requiredCount) {
@@ -297,25 +313,39 @@ void AIController::update()
 		for (size_t ri = 0; ri < cominst.upgradeReqInsts.size(); ++ri) {
 			auto& gsreq = gscomm->upgradeRequirements[ri];
 			auto& reqinst = cominst.upgradeReqInsts[ri];
-			size_t requiredCount = (size_t)gsreq.vdCountNeeded->eval(&ctx);
-			if (!reqinst.done && requiredCount > 0) {
-				// find supporting buildings and launch upgrades
-				// TODO: Prevent upgrades from happening multiple times (check preconditions)
-				// might need to use COMMAND instead of ORDER
-				SrvFinderResult buildingList = gsreq.fdSupportedBuildings->eval(&ctx);
-				for (ServerGameObject* building : buildingList) {
-					if (building->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
-						if (building->orderConfig.getCurrentOrder() == nullptr) {
-							OrderBlueprint* orderBp = gsreq.order;
-							Order* order = building->orderConfig.addOrder(orderBp, Tags::ORDERASSIGNMODE_DO_FIRST);
-							reqinst.done = true;
-							break;
-						}
-					}
-				}
-			}
-			else if (reqinst.done) {
+			// complete once nothing is needed any more (the needed value, such as "Kingmaker Do I Need
+			// Flaming Arrow Upgrade", drops to 0 when the research is done); until then, while no
+			// supporting building is researching it, the upgrade's command is run on an idle one, which
+			// tests its conditions and takes its cost. The research was started once and taken as
+			// done for good: when it didn't happen, the commissions waiting for it ("... Pause
+			// Buildings") stayed suspended for the whole game, and a requirement needing nothing
+			// never counted as complete.
+			const float requiredCount = gsreq.vdCountNeeded->eval(&ctx);
+			if (requiredCount <= 0.0f) {
 				completeCount += 1;
+			}
+			else if (gsreq.order) {
+				SrvFinderResult buildingList = gsreq.fdSupportedBuildings->eval(&ctx);
+				const bool researching = std::any_of(buildingList.begin(), buildingList.end(), [&](ServerGameObject* b) {
+					Order* current = b->orderConfig.getCurrentOrder();
+					return current && current->blueprint == gsreq.order; });
+				const GameSet* gs = Server::instance->gameSet.get();
+				const int cmdid = gs->commands.names.getIndex(gs->orders.getString(gsreq.order));
+				const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
+				if (!researching)
+					for (ServerGameObject* building : buildingList) {
+						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || building->orderConfig.getCurrentOrder())
+							continue;
+						if (command) {
+							if (!command->canBeExecuted(building))
+								continue;
+							command->execute(building, nullptr, Tags::ORDERASSIGNMODE_DO_FIRST);
+						}
+						else
+							building->orderConfig.addOrder(gsreq.order, Tags::ORDERASSIGNMODE_DO_FIRST);
+						reqinst.done = true;
+						break;
+					}
 			}
 		}
 
@@ -361,11 +391,12 @@ void AIController::registerWorkOrder(ServerGameObject* city, ObjectFinder* unitF
 	workOrderInstances.push_back(std::move(woi));
 }
 
-void AIController::activateCommission(const GSCommission* commission, ServerGameObject* handler)
+void AIController::activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance)
 {
 	deactivateCommission(commission, handler);
 	CommissionInstance& ci = commissionInstances.emplace_back();
 	ci.blueprint = commission;
+	ci.forceBalance = forceBalance;
 	ci.handlerObject = handler;
 	ci.characterReqInsts.resize(commission->characterRequirements.size());
 	ci.buildingReqInsts.resize(commission->buildingRequirements.size());

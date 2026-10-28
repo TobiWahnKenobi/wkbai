@@ -55,7 +55,9 @@ void Server::loadSaveGame(const char * filename)
 			std::string gsFileName = gsf.nextString(true);
 			gameSetFile = gsFileName;
 			int version = g_settings.at("gameVersion").get<int>();
-			gameSet = std::make_shared<GameSet>(gsFileName.c_str(), version);
+			auto loaded = std::make_shared<GameSet>(gsFileName.c_str(), version);
+			InstallAIAggressionOverrides(*loaded);
+			gameSet = loaded;
 			NetPacketWriter msg(NETCLIMSG_GAME_SET);
 			msg.writeStringZ(gsFileName);
 			msg.writeUint8((uint8_t)version);
