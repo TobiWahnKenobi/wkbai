@@ -46,7 +46,7 @@ private:
 	int startWood = 2000;
 	int startGold = 500;
 	int populationLimit = 800;
-	int randomiseResources = 0;
+	int randomiseResources = 2; // Medium, the front end's default (0: the map's own resources only)
 	int loseOnManorDestroyed = 1;
 	bool kingPiece = false;
 	bool clearFogOfWar = false;
