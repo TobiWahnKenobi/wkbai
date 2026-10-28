@@ -88,9 +88,13 @@ cbuffer SunBuffer
 
 cbuffer SceneBuffer
 {
-	int EntityFlags;
-	float EntityTime;
+	uint VertexBase; // animated meshes: the material group's first vertex in a frame
 };
+
+// Animated meshes: every key frame's positions (3 floats each) and packed normals, one frame
+// after the other (float arrays, as float3 arrays have a different stride on Vulkan)
+StructuredBuffer<float> AnimPositions;
+StructuredBuffer<uint> AnimNormals;
 
 struct VS_OUTPUT
 {
@@ -108,8 +112,9 @@ float3 UnpackNormal(uint p)
 }
 
 // The instance transform comes in as its four columns (the D3D11 input layout had a
-// float4x4 TRANSFORM input, which column-major packing fills by columns).
-VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1, float4 T2, float4 T3)
+// float4x4 TRANSFORM input, which column-major packing fills by columns). Anim: the instance's
+// first vertex in its key frame and in the next one, the blend between them, and its flags.
+VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1, float4 T2, float4 T3, uint EntityFlags)
 {
 	float4x4 EntityTransform = transpose(float4x4(T0, T1, T2, T3));
 	VS_OUTPUT output = (VS_OUTPUT)0;
@@ -141,15 +146,21 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 }
 
 VS_OUTPUT VS(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTRIB2,
-	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6)
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7)
 {
-	return Shade(Pos, UnpackNormal(Normal), Texcoord, T0, T1, T2, T3);
+	return Shade(Pos, UnpackNormal(Normal), Texcoord, T0, T1, T2, T3, Anim.w);
 }
 
-VS_OUTPUT VS_Anim(float3 Pos1 : ATTRIB0, uint Normal1 : ATTRIB1, float2 Texcoord : ATTRIB2, float3 Pos2 : ATTRIB3, uint Normal2 : ATTRIB4,
-	float4 T0 : ATTRIB5, float4 T1 : ATTRIB6, float4 T2 : ATTRIB7, float4 T3 : ATTRIB8)
+// Every instance at its own key frame: drawn with base vertex 0, the vertex id counts within the
+// material group (VertexBase is where the group starts in a frame)
+VS_OUTPUT VS_Anim(float2 Texcoord : ATTRIB0, float4 T0 : ATTRIB1, float4 T1 : ATTRIB2, float4 T2 : ATTRIB3, float4 T3 : ATTRIB4,
+	uint4 Anim : ATTRIB5, uint VertexId : SV_VertexID)
 {
-	return Shade(lerp(Pos1, Pos2, EntityTime), lerp(UnpackNormal(Normal1), UnpackNormal(Normal2), EntityTime), Texcoord, T0, T1, T2, T3);
+	uint v1 = Anim.x + VertexBase + VertexId, v2 = Anim.y + VertexBase + VertexId;
+	float3 pos1 = float3(AnimPositions[3 * v1], AnimPositions[3 * v1 + 1], AnimPositions[3 * v1 + 2]);
+	float3 pos2 = float3(AnimPositions[3 * v2], AnimPositions[3 * v2 + 1], AnimPositions[3 * v2 + 2]);
+	float t = asfloat(Anim.z);
+	return Shade(lerp(pos1, pos2, t), lerp(UnpackNormal(AnimNormals[v1]), UnpackNormal(AnimNormals[v2]), t), Texcoord, T0, T1, T2, T3, Anim.w);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -182,6 +193,24 @@ static RefCntAutoPtr<IBuffer> CreateImmutableBuffer(IRenderDevice* device, const
 	desc.Size = std::max<uint64_t>(size, 4);
 	desc.BindFlags = bind;
 	desc.Usage = USAGE_IMMUTABLE;
+	BufferData init{ data, size };
+	RefCntAutoPtr<IBuffer> buf;
+	device->CreateBuffer(desc, size ? &init : nullptr, &buf);
+	if (!buf)
+		ferr("Diligent: could not create buffer \"%s\"", name);
+	return buf;
+}
+
+// A buffer the vertex shader reads as a StructuredBuffer of 4-byte elements
+static RefCntAutoPtr<IBuffer> CreateStructuredBuffer(IRenderDevice* device, const char* name, const void* data, uint64_t size)
+{
+	BufferDesc desc;
+	desc.Name = name;
+	desc.Size = std::max<uint64_t>(size, 4);
+	desc.BindFlags = BIND_SHADER_RESOURCE;
+	desc.Usage = USAGE_IMMUTABLE;
+	desc.Mode = BUFFER_MODE_STRUCTURED;
+	desc.ElementByteStride = 4;
 	BufferData init{ data, size };
 	RefCntAutoPtr<IBuffer> buf;
 	device->CreateBuffer(desc, size ? &init : nullptr, &buf);
@@ -242,13 +271,16 @@ struct DilMesh
 };
 
 // All keyframes of an animation in one position and one normal buffer, one frame after the
-// other (selected with the vertex buffer offset): creating a buffer per keyframe made the first
-// view of a model cost up to ~100 ms.
+// other: creating a buffer per keyframe made the first view of a model cost up to ~100 ms. The
+// vertex shader reads them (AnimPositions, AnimNormals), so that every instance of a draw can be
+// at its own key frame.
 struct DilAnim
 {
 	std::vector<uint32_t> animTimes;
 	RefCntAutoPtr<IBuffer> animVertices, animNormals;
+	RefCntAutoPtr<IShaderResourceBinding> binding; // the two buffers, made at the first draw
 	uint64_t frameVertexBytes = 0, frameNormalBytes = 0;
+	uint32_t frameVertices() const { return (uint32_t)(frameVertexBytes / 12); }
 	static DilAnim create(AnimatedModel* model, IRenderDevice* device) {
 		DilAnim enh;
 		model->prepare();
@@ -279,12 +311,21 @@ struct DilAnim
 		}
 		enh.frameVertexBytes = perFrame * 12;
 		enh.frameNormalBytes = perFrame * 4;
-		enh.animVertices = CreateImmutableBuffer(device, "Anim positions", BIND_VERTEX_BUFFER, pVertices.data(), pVertices.size() * 12);
-		enh.animNormals = CreateImmutableBuffer(device, "Anim normals", BIND_VERTEX_BUFFER, pNormals.data(), pNormals.size() * 4);
+		enh.animVertices = CreateStructuredBuffer(device, "Anim positions", pVertices.data(), pVertices.size() * 12);
+		enh.animNormals = CreateStructuredBuffer(device, "Anim normals", pNormals.data(), pNormals.size() * 4);
 		return enh;
 	}
 };
 
+
+// One instance of a draw (the instance vertex buffer)
+struct Instance {
+	Matrix transform; // transposed: its columns
+	uint32_t frameStart = 0, nextFrameStart = 0; // the key frames' first vertex in the animation buffers
+	float blend = 0.0f;
+	uint32_t flags = 0;
+};
+static_assert(sizeof(Instance) == 80);
 
 // Half the side of the square around the camera's view centre covered by the static shadow map
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
@@ -294,14 +335,16 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
 	std::map<AnimatedModel*, DilAnim> animMap;
 	// Textures (one binding per texture), and the frame's environment (the cloud map)
-	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature;
+	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
-	static constexpr size_t MAX_INSTANCES = 16;
+	// instances per draw: every instance has its own key frame, so a draw takes all the instances
+	// of a model, material and team colour (80 bytes each, streamed)
+	static constexpr size_t MAX_INSTANCES = 1024;
 };
 
 DiligentEnhancedSceneRenderer::~DiligentEnhancedSceneRenderer()
@@ -369,6 +412,19 @@ void DiligentEnhancedSceneRenderer::init()
 	if (!_impl->envSignature)
 		ferr("Diligent: could not create the enhanced scene environment signature.");
 
+	const PipelineResourceDesc animResources[] = {
+		{ SHADER_TYPE_VERTEX, "AnimPositions", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX, "AnimNormals", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+	};
+	PipelineResourceSignatureDesc animSigDesc;
+	animSigDesc.Name = "Enhanced scene animation";
+	animSigDesc.Resources = animResources;
+	animSigDesc.NumResources = (Uint32)std::size(animResources);
+	animSigDesc.BindingIndex = 2;
+	device->CreatePipelineResourceSignature(animSigDesc, &_impl->animSignature);
+	if (!_impl->animSignature)
+		ferr("Diligent: could not create the enhanced scene animation signature.");
+
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
@@ -387,18 +443,19 @@ void DiligentEnhancedSceneRenderer::init()
 	RefCntAutoPtr<IShader> pixelShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS"), createShader(SHADER_TYPE_PIXEL, "PS_Alpha") };
 	RefCntAutoPtr<IShader> shadowAlphaShader = createShader(SHADER_TYPE_PIXEL, "PS_ShadowAlpha");
 
-	// Buffer slots: static mesh = positions, normals, UVs, instances;
-	// animated mesh = positions, normals, UVs, next positions, next normals, instances.
+	// Buffer slots: static mesh = positions, normals, UVs, instances; animated mesh = UVs,
+	// instances (its positions and normals come from the animation buffers). An instance is its
+	// transform (four columns) and four uints: key frame start, next key frame start, blend, flags.
 	auto instanceElements = [](std::vector<LayoutElement>& layout, Uint32 firstInput, Uint32 slot) {
 		for (Uint32 i = 0; i < 4; i++)
-			layout.push_back(LayoutElement{ firstInput + i, slot, 4, VT_FLOAT32, False, i * 16, 64, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 });
+			layout.push_back(LayoutElement{ firstInput + i, slot, 4, VT_FLOAT32, False, i * 16, sizeof(Instance), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 });
+		layout.push_back(LayoutElement{ firstInput + 4, slot, 4, VT_UINT32, False, 64, sizeof(Instance), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 });
 	};
 	std::vector<LayoutElement> layouts[2];
 	layouts[0] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False} };
 	instanceElements(layouts[0], 3, 3);
-	layouts[1] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False},
-		LayoutElement{3, 3, 3, VT_FLOAT32, False}, LayoutElement{4, 4, 1, VT_UINT32, False} };
-	instanceElements(layouts[1], 5, 5);
+	layouts[1] = { LayoutElement{0, 0, 2, VT_FLOAT32, False} };
+	instanceElements(layouts[1], 1, 1);
 
 	for (int shadow = 0; shadow < 2; shadow++) {
 		for (int anim = 0; anim < 2; anim++) {
@@ -431,9 +488,9 @@ void DiligentEnhancedSceneRenderer::init()
 				gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
 				ci.pVS = vertexShaders[anim];
 				ci.pPS = shadow ? (alpha ? shadowAlphaShader.RawPtr() : nullptr) : pixelShaders[alpha].RawPtr();
-				IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature };
+				IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
 				ci.ppResourceSignatures = signatures;
-				ci.ResourceSignaturesCount = 2;
+				ci.ResourceSignaturesCount = anim ? 3 : 2;
 				auto& pso = shadow ? _impl->shadowPipelines[anim][alpha] : _impl->pipelines[anim][alpha];
 				device->CreateGraphicsPipelineState(ci, &pso);
 				if (!pso)
@@ -503,7 +560,7 @@ void DiligentEnhancedSceneRenderer::render()
 		return srb;
 	};
 
-	std::vector<Matrix> instTransforms;
+	std::vector<Instance> instances;
 	// Draws the scene's meshes, or only the static shadow casters into the bound shadow map.
 	// Returns whether anything was drawn.
 	auto drawMeshes = [&](bool shadowPass) {
@@ -530,37 +587,28 @@ void DiligentEnhancedSceneRenderer::render()
 				enhAnim = &at->second;
 			}
 
-			int prevFrame = -1;
-			float prevAnimLerp = -1.0f;
+			if (enhAnim && !enhAnim->binding) {
+				DilAnim* a = const_cast<DilAnim*>(enhAnim);
+				_impl->animSignature->CreateShaderResourceBinding(&a->binding, true);
+				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimPositions")->Set(a->animVertices->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimNormals")->Set(a->animNormals->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			}
+
+			// one draw per team colour (the UV set): the instances keep their own key frame and flags
 			int prevColor = -1;
-			uint32_t prevFlags = -1;
-			instTransforms.clear();
+			instances.clear();
 
 			auto flush = [&]() {
-				if (instTransforms.empty()) return;
+				if (instances.empty()) return;
 				uint64_t instanceOffset = 0;
-				IBuffer* instanceBuffer = dgfx->StreamVertexData(instTransforms.data(), instTransforms.size() * 64, instanceOffset);
-
-				void* mapped = nullptr;
-				ctx->MapBuffer(_impl->sceneConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-				uint8_t* sceneBufferBytes = (uint8_t*)mapped;
-				memset(sceneBufferBytes, 0, 16);
-				*(uint32_t*)(sceneBufferBytes + 0) = prevFlags;
-				*(float*)(sceneBufferBytes + 4) = prevAnimLerp;
-				ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
+				IBuffer* instanceBuffer = dgfx->StreamVertexData(instances.data(), instances.size() * sizeof(Instance), instanceOffset);
 
 				ctx->SetPipelineState((shadowPass ? _impl->shadowPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-				if (enhAnim) {
-					const size_t nextFrame = std::min<size_t>(prevFrame + 1, enhAnim->animTimes.size() - 1);
-					IBuffer* buffers[6] = { enhAnim->animVertices, enhAnim->animNormals, enhMesh->texcoords[prevColor],
-						enhAnim->animVertices, enhAnim->animNormals, instanceBuffer };
-					const Uint64 offsets[6] = { prevFrame * enhAnim->frameVertexBytes, prevFrame * enhAnim->frameNormalBytes, 0,
-						nextFrame * enhAnim->frameVertexBytes, nextFrame * enhAnim->frameNormalBytes, instanceOffset };
-					ctx->SetVertexBuffers(0, 6, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-				}
+				if (enhAnim)
+					ctx->CommitShaderResources(enhAnim->binding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				else {
 					IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
 					const Uint64 offsets[4] = { 0, 0, 0, instanceOffset };
@@ -573,35 +621,53 @@ void DiligentEnhancedSceneRenderer::render()
 				for (size_t g = 0; g < polylist.groups.size(); g++) {
 					uint32_t numIndices = 3 * polylist.groups[g].tupleIndex.size();
 					uint32_t numVertices = staticModel->mesh.groupIndices[g].size();
-					if (staticModel->matIds[g] == it.first.first && numIndices > 0)
-						ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instTransforms.size(), startIndex, startVertex });
+					if (staticModel->matIds[g] == it.first.first && numIndices > 0) {
+						if (enhAnim) {
+							// base vertex 0 (whether SV_VertexID includes it differs between APIs): the
+							// group's start goes in VertexBase, and its UVs from their offset
+							void* mapped = nullptr;
+							ctx->MapBuffer(_impl->sceneConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+							memset(mapped, 0, 16);
+							*(uint32_t*)mapped = startVertex;
+							ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
+							IBuffer* buffers[2] = { enhMesh->texcoords[prevColor], instanceBuffer };
+							const Uint64 offsets[2] = { (Uint64)startVertex * 8, instanceOffset };
+							ctx->SetVertexBuffers(0, 2, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instances.size(), startIndex, 0 });
+						}
+						else
+							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instances.size(), startIndex, startVertex });
+					}
 					startIndex += numIndices;
 					startVertex += numVertices;
 				}
 
-				instTransforms.clear();
+				instances.clear();
 			};
 
 			for (const SceneEntity* ent : it.second.list) {
 				if (shadowPass && !(ent->flags & SceneEntity::SEFLAG_STATIC_SHADOW))
 					continue;
-				size_t frame = 0;
-				float animLerp = 0.0f;
-				if (enhAnim) {
+				Instance inst;
+				inst.transform = ent->transform.getTranspose();
+				inst.flags = ent->flags;
+				if (enhAnim && enhAnim->animTimes.size() >= 2) {
 					auto* animModel = (AnimatedModel*)model;
 					uint32_t animtime = ent->animTime % animModel->anim.duration;
+					size_t frame = 0;
 					for (; frame < enhAnim->animTimes.size() - 1; frame++)
 						if (enhAnim->animTimes[frame + 1] >= animtime)
 							break;
-					animLerp = (float)(animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]);
+					frame = std::min(frame, enhAnim->animTimes.size() - 2);
+					inst.blend = std::clamp((float)((int64_t)animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]), 0.0f, 1.0f);
+					inst.frameStart = (uint32_t)frame * enhAnim->frameVertices();
+					inst.nextFrameStart = (uint32_t)(frame + 1) * enhAnim->frameVertices();
 				}
-				int actualColor = ent->color % enhMesh->texcoords.size();
-
-				if (instTransforms.size() >= _impl->MAX_INSTANCES || std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) != std::tie(frame, animLerp, actualColor, ent->flags)) {
+				const int actualColor = ent->color % enhMesh->texcoords.size();
+				if (instances.size() >= _impl->MAX_INSTANCES || actualColor != prevColor)
 					flush();
-				}
-				std::tie(prevFrame, prevAnimLerp, prevColor, prevFlags) = std::tie(frame, animLerp, actualColor, ent->flags);
-				instTransforms.push_back(ent->transform.getTranspose());
+				prevColor = actualColor;
+				instances.push_back(inst);
 			}
 			flush();
 		}
