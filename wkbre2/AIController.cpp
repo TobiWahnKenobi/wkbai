@@ -155,22 +155,39 @@ void AIController::update()
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			//size_t inCtrCount = reqinst.foundations.size();
 			if (existingCount < requiredCount) {
-				// find spawn buildings and create spawn order if available
-				auto& charToSpawn = gsreq.ladder->entries.back();
-				SrvFinderResult buildingList = charToSpawn.finder->eval(&ctx);
-				for (ServerGameObject* building : buildingList) {
-					if (!this->gameObj->canAffordObject(charToSpawn.type))
+				// The ladder's rungs best first, as WKB.exe (AI_Character_Requirement 0x4c7da0, which
+				// tries each rung in order and stops at the first that spawns): a rung is spawned at
+				// the idle buildings of its finder where its "Spawn <type>" command can be executed
+				// now (tech level, alignment, cost, population); a rung already being spawned
+				// counts too, so a busy building doesn't make the AI fall back to a worse rung
+				const GameSet* gs = Server::instance->gameSet.get();
+				for (auto& rung : gsreq.ladder->entries) {
+					const std::string spawnName = "Spawn " + rung.type->name;
+					const int ordid = gs->orders.names.getIndex(spawnName);
+					if (ordid < 0)
 						continue;
-					if (building->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
-						if (building->orderConfig.getCurrentOrder() == nullptr) {
-							int ordid = Server::instance->gameSet->orders.names.getIndex("Spawn " + charToSpawn.type->name);
-							const OrderBlueprint* orderBp = &Server::instance->gameSet->orders[ordid];
-							Order* order = building->orderConfig.addOrder(orderBp, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, {-1,-1,-1}, false);
-							auto* task = (SpawnTask*)(order->tasks[0].get());
-							task->setSpawnBlueprint(charToSpawn.type);
-							task->aiCommissioner = obj;
+					const OrderBlueprint* orderBp = &gs->orders[ordid];
+					const int cmdid = gs->commands.names.getIndex(spawnName);
+					const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
+					bool served = false;
+					for (ServerGameObject* building : rung.finder->eval(&ctx)) {
+						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+							continue;
+						if (Order* current = building->orderConfig.getCurrentOrder()) {
+							if (current->blueprint == orderBp)
+								served = true;
+							continue;
 						}
+						if ((command && !command->canBeExecuted(building)) || !this->gameObj->canAffordObject(rung.type))
+							continue;
+						Order* order = building->orderConfig.addOrder(orderBp, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, {-1,-1,-1}, false);
+						auto* task = (SpawnTask*)(order->tasks[0].get());
+						task->setSpawnBlueprint(rung.type);
+						task->aiCommissioner = obj;
+						served = true;
 					}
+					if (served)
+						break;
 				}
 			}
 			else {
