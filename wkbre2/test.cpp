@@ -45,6 +45,7 @@
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
 #include "settings.h"
+#include "interface/QuickSkirmishMenu.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include <nlohmann/json.hpp>
@@ -1616,6 +1617,122 @@ void Test_BCMRoundTrip()
 	fflush(stdout);
 }
 
+// AI against AI without a window (needs the game data): every position an AI General, the
+// simulation run as fast as it goes. "aiTest": { "level": "<.lvl>", "generals": ["<blueprint>" or ""
+// (random), ...], "minutes": n, "seed": n } (default: 4 Peaks, two random generals, 20 minutes).
+// Prints "AITEST t=<s> player <id> (<general>): <characters> characters, <buildings> buildings,
+// food/wood/gold" every game minute, then "AITEST end ... standing: ..." and the speed against
+// real time.
+void Test_AIvsAI()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("aiTest", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
+	const float minutes = cfg.value("minutes", 20.0f);
+	g_settings["simSeed"] = cfg.value("seed", 1u);
+	Server server;
+	server.loadSaveGame(("Save_Games\\" + level).c_str());
+	QuickSkirmishMenu skirmish;
+	skirmish.changeSettingsForLevel(level);
+	std::vector<QuickSkirmishMenu::Slot> slots;
+	const nlohmann::json generals = cfg.value("generals", nlohmann::json::array({ "", "" }));
+	for (const auto& g : generals) {
+		QuickSkirmishMenu::Slot slot;
+		slot.type = QuickSkirmishMenu::Slot::AI;
+		slot.general = g.get<std::string>();
+		slots.push_back(slot);
+	}
+	skirmish.setSlots(slots);
+	skirmish.applySettings(server);
+	// as a game does: the clock runs when the level starts (its start reactions schedule sequences)
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	server.startLevel();
+
+	auto census = [&](const char* when) {
+		ServerGameObject* lvl = server.getLevel();
+		std::vector<std::string> standing;
+		for (const auto& [type, children] : lvl->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* player = (ServerGameObject*)c;
+				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !player->aiController.planBlueprint)
+					continue;
+				int characters = 0, buildings = 0;
+				std::map<std::string, int> orders; // the characters' current orders
+				char sample[256] = {}, villageStock[128] = {}, cartInfo[256] = {};
+				auto count = [&](CommonGameObject* obj, auto& self) -> void {
+					for (const auto& [t, ch] : obj->children)
+						for (CommonGameObject* o : ch) {
+							if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+								characters++;
+								Order* order = ((ServerGameObject*)o)->orderConfig.getCurrentOrder();
+								orders[order ? server.gameSet->orders.getString(order->blueprint->bpid) : std::string("idle")]++;
+								if (order && server.gameSet->orders.getString(order->blueprint->bpid).rfind("Transport", 0) == 0)
+									if (Task* task = order->getCurrentTask())
+										snprintf(cartInfo, sizeof(cartInfo), "cart %u: task %s -> %s %u, carrying wood %.0f, at (%.0f,%.0f), target at (%.0f,%.0f), moving %d", o->id,
+											server.gameSet->tasks.getString(task->blueprint->bpid).c_str(), task->target ? task->target->blueprint->name.c_str() : "-",
+											task->target ? task->target->id : 0, o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z,
+											task->target ? task->target->position.x : 0.0f, task->target ? task->target->position.z : 0.0f,
+											(int)((ServerGameObject*)o)->movement.isMoving());
+								if (order && !sample[0] && server.gameSet->orders.getString(order->blueprint->bpid) == "AI Chop Tree")
+									if (Task* task = order->getCurrentTask()) {
+										const std::string tname = server.gameSet->tasks.getString(task->blueprint->bpid);
+										snprintf(sample, sizeof(sample), "%u: task %s -> %s, carrying wood %.0f, at (%.0f,%.0f)", o->id, tname.c_str(),
+											task->target ? task->target->blueprint->name.c_str() : "-", o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z);
+									}
+							}
+							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+								buildings++;
+								if (o->blueprint->name.rfind("Village", 0) == 0 && o->blueprint->name.find("Foundation") == std::string::npos)
+									snprintf(villageStock, sizeof(villageStock), "%s wood %.0f food %.0f", o->blueprint->name.c_str(), o->getItem(Tags::PDITEM_WOOD), o->getItem(Tags::PDITEM_FOOD));
+							}
+							self(o, self);
+						}
+				};
+				count(player, count);
+				printf("AITEST %s t=%.0f player %u (%s): %d characters, %d buildings, food %.0f wood %.0f gold %.0f\n", when,
+					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, buildings,
+					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
+				std::string line;
+				for (const auto& [name, n] : orders)
+					line += " " + name + "=" + std::to_string(n);
+				printf("AITEST   orders:%s\n", line.c_str());
+				printf("AITEST   a woodcutter: %s; %s; %s\n", sample, villageStock, cartInfo);
+				if (characters + buildings > 0)
+					standing.push_back(player->blueprint->name);
+			}
+		return standing;
+	};
+	const uint64_t start = SDL_GetTicks();
+	float nextCensus = 60.0f;
+	while (server.timeManager.currentTime < minutes * 60.0f) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		if (server.timeManager.currentTime >= nextCensus) {
+			nextCensus += 60.0f;
+			census("at");
+		}
+	}
+	{
+		const int alias = server.gameSet->aliases.names.getIndex("Deliverable Buildings");
+		std::string list;
+		if (alias >= 0)
+			for (auto& ref : server.aliases[alias])
+				if (CommonGameObject* obj = ref.getFrom(&server))
+					list += " " + obj->blueprint->name + "/" + std::to_string(obj->getPlayer()->id);
+		printf("AITEST alias Deliverable Buildings:%s\n", list.c_str());
+	}
+	const std::vector<std::string> standing = census("end");
+	const double wall = (SDL_GetTicks() - start) / 1000.0;
+	std::string list;
+	for (const std::string& n : standing)
+		list += " " + n;
+	printf("AITEST end after %.0f game s in %.1f real s (%.1fx real time); standing:%s\n", server.timeManager.currentTime, wall,
+		server.timeManager.currentTime / std::max(wall, 0.001), list.c_str());
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -1647,6 +1764,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Determinism, "Determinism (same seed, same game)"},
 {[]() { printf("CRASHTEST crashing now\n"); fflush(stdout); volatile int* p = nullptr; *p = 1; }, "Crash (writes a crash report)"},
 {Test_BCMRoundTrip, "BCM round trip (map editor's writer)"},
+{Test_AIvsAI, "AI against AI (headless)"},
 };
 
 void LaunchTest()

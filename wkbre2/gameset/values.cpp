@@ -313,14 +313,26 @@ struct ValueDiplomaticStatusAtLeast : ValueDeterminer {
 	}
 };
 
+// ARE_ASSOCIATED <a> <category> <b>: whether every a is an associate of every b in that category
+// (b did REGISTER_ASSOCIATES b <category> a), as WKB.exe's VD_Are_Associated (0x454900): each a's
+// associators must include each b; an a without any is 0, no a at all is 1. wkbre2 checked the
+// other way round, so "Not the Village I Collect From" let carts deliver to their own village.
 struct ValueAreAssociated : ValueDeterminer {
 	int category;
 	std::unique_ptr<ObjectFinder> a, b;
 	virtual float eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return fail(ctx);
-		ServerGameObject *x = (ServerGameObject*)a->getFirst(ctx), *y = (ServerGameObject*)b->getFirst(ctx);
-		if (!(x && y)) return 0.0f;
-		return x->associates[category].count(y) ? 1.0f : 0.0f;
+		const auto as = a->eval(ctx), bs = b->eval(ctx);
+		for (CommonGameObject* x : as) {
+			auto& associators = ((ServerGameObject*)x)->associators;
+			auto it = associators.find(category);
+			if (it == associators.end())
+				return 0.0f;
+			for (CommonGameObject* y : bs)
+				if (!it->second.count((ServerGameObject*)y))
+					return 0.0f;
+		}
+		return 1.0f;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		a.reset(ReadFinder(gsf, gs));
