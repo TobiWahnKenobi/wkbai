@@ -42,12 +42,27 @@ namespace {
 		auto lower = [](std::string s) { for (char& c : s) c = (char)tolower((unsigned char)c); return s; };
 		return lower(text).find(lower(part)) != std::string::npos;
 	}
+
+	// The texture of a group and id in this terrain's database (client and server each have one)
+	TerrainTexture* FindTexture(Terrain* trn, const std::string& group, int id)
+	{
+		auto g = trn->texDb.groups.find(group);
+		if (g == trn->texDb.groups.end() || !g->second)
+			return nullptr;
+		auto t = g->second->textures.find(id);
+		return t != g->second->textures.end() ? t->second.get() : nullptr;
+	}
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, OBJECTS };
+	enum Mode { TERRAIN, TEXTURES, OBJECTS };
 	enum Tool { RAISE, LOWER, SMOOTH, FLATTEN };
 	int mode = TERRAIN, tool = RAISE;
+	// texture painting: the texture (group and id), its turn (0-3, quarter turns) and flips;
+	// "random turn" gives each tile its own, which hides the repeats
+	std::string paintGroup;
+	int paintId = -1, paintTurn = 0;
+	bool paintFlipX = false, paintFlipZ = false, paintRandomTurn = false;
 	float radius = 20.0f;   // metres
 	float strength = 20.0f; // height steps (map units) per second at the centre
 	float flattenTo = 0.0f; // the height a flatten stroke keeps (from where it began)
@@ -67,10 +82,15 @@ struct ClientInterface::EditorState {
 	std::string status;
 	std::vector<std::string> warnings;
 
-	// undo: a stroke's heights before it, or an object placed (its id)
+	// undo: a stroke's heights or tiles before it, or an object placed (its id)
+	struct TileState {
+		TerrainTexture* texture;
+		uint8_t rot, xflip, zflip;
+	};
 	struct Undo {
 		std::vector<uint8_t> heights;
 		uint32_t placed = 0;
+		std::vector<TileState> tiles;
 	};
 	std::vector<Undo> undo;
 	static constexpr size_t MAX_UNDO = 30;
@@ -81,9 +101,9 @@ struct ClientInterface::EditorState {
 	}
 };
 
-void ClientInterface::rebuildTerrainRenderer()
+void ClientInterface::rebuildTerrainRenderer(bool tiles)
 {
-	if (terrainRenderer && terrainRenderer->updateHeights())
+	if (terrainRenderer && (tiles ? terrainRenderer->updateTiles() : terrainRenderer->updateHeights()))
 		return;
 	delete terrainRenderer;
 	if (UseEnhancedRenderers(gfx))
@@ -126,6 +146,74 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 			ed.pushUndo({ {}, placed });
 		ed.status = "Placed " + type->name;
 		return true;
+	}
+
+	// texture brush: the tiles within the radius get the texture, on the client and the server
+	if (ed.mode == EditorState::TEXTURES) {
+		const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.stroke || !overUi);
+		TerrainTexture* tex = FindTexture(trn, ed.paintGroup, ed.paintId);
+		if (down && tex) {
+			if (!ed.stroke) {
+				ed.stroke = true;
+				EditorState::Undo u;
+				u.tiles.reserve((size_t)trn->width * trn->height);
+				for (int i = 0; i < trn->width * trn->height; i++)
+					u.tiles.push_back({ trn->tiles[i].texture, (uint8_t)trn->tiles[i].rot, (uint8_t)trn->tiles[i].xflip, (uint8_t)trn->tiles[i].zflip });
+				ed.pushUndo(std::move(u));
+			}
+			const float r = std::max(0.5f, ed.radius / 5.0f); // in tiles
+			const float cx = cursor.x / 5.0f + trn->edge, cz = cursor.z / 5.0f + trn->edge;
+			struct Paint { int x, z, rot; };
+			std::vector<Paint> painted;
+			for (int z = (int)std::floor(cz - r); z <= (int)std::ceil(cz + r); z++)
+				for (int x = (int)std::floor(cx - r); x <= (int)std::ceil(cx + r); x++) {
+					const float dx = x + 0.5f - cx, dz = z + 0.5f - cz;
+					TerrainTile* tile = trn->getTileMutable(x, z);
+					if (!tile || dx * dx + dz * dz > r * r)
+						continue;
+					// a random turn per tile, the same while the stroke passes over it again
+					const int rot = ed.paintRandomTurn ? (int)((x * 73856093u ^ z * 19349663u) >> 7) & 3 : ed.paintTurn;
+					if (tile->texture == tex && tile->rot == (unsigned)rot && tile->xflip == (unsigned)ed.paintFlipX && tile->zflip == (unsigned)ed.paintFlipZ)
+						continue;
+					tile->texture = tex;
+					tile->rot = rot;
+					tile->xflip = ed.paintFlipX;
+					tile->zflip = ed.paintFlipZ;
+					painted.push_back({ x, z, rot });
+				}
+			if (!painted.empty()) {
+				const std::string group = ed.paintGroup;
+				const int id = ed.paintId;
+				const bool fx = ed.paintFlipX, fz = ed.paintFlipZ;
+				withServer([&](Server& server) {
+					if (!server.terrain)
+						return;
+					TerrainTexture* stex = FindTexture(server.terrain, group, id);
+					for (const Paint& p : painted)
+						if (TerrainTile* tile = server.terrain->getTileMutable(p.x, p.z); tile && stex) {
+							tile->texture = stex;
+							tile->rot = p.rot;
+							tile->xflip = fx;
+							tile->zflip = fz;
+						}
+				});
+				ed.terrainChanged = true;
+			}
+			if (ed.terrainChanged && now - ed.lastRebuild > 200) {
+				rebuildTerrainRenderer(true);
+				ed.lastRebuild = now;
+				ed.terrainChanged = false;
+			}
+			return true;
+		}
+		if (ed.stroke && !down) {
+			ed.stroke = false;
+			if (ed.terrainChanged)
+				rebuildTerrainRenderer(true);
+			ed.terrainChanged = false;
+			return true;
+		}
+		return false;
 	}
 
 	// terrain brush: while the left button is held
@@ -228,9 +316,48 @@ void ClientInterface::editorWindow()
 	if (ImGui::Begin("Map editor (F8)", &open)) {
 		ImGui::RadioButton("Terrain", &ed.mode, EditorState::TERRAIN);
 		ImGui::SameLine();
+		ImGui::RadioButton("Textures", &ed.mode, EditorState::TEXTURES);
+		ImGui::SameLine();
 		ImGui::RadioButton("Objects", &ed.mode, EditorState::OBJECTS);
 		ImGui::Separator();
-		if (ed.mode == EditorState::TERRAIN) {
+		if (ed.mode == EditorState::TEXTURES && client->terrain) {
+			// the map's texture database: a group, then one of its textures
+			const auto& groups = client->terrain->texDb.groups;
+			if (ed.paintGroup.empty() || !groups.count(ed.paintGroup))
+				for (const auto& [name, g] : groups)
+					if (g && !g->textures.empty()) {
+						ed.paintGroup = name;
+						ed.paintId = g->textures.begin()->first;
+						break;
+					}
+			if (ImGui::BeginCombo("Group", ed.paintGroup.c_str())) {
+				for (const auto& [name, g] : groups)
+					if (g && !g->textures.empty() && ImGui::Selectable(name.c_str(), name == ed.paintGroup)) {
+						ed.paintGroup = name;
+						ed.paintId = g->textures.begin()->first;
+					}
+				ImGui::EndCombo();
+			}
+			if (auto g = groups.find(ed.paintGroup); g != groups.end() && g->second && ImGui::BeginListBox("##textures", ImVec2(-1, 180))) {
+				for (const auto& [id, tex] : g->second->textures) {
+					const std::string label = std::to_string(id) + ": " + tex->file + " (" + std::to_string(tex->startx) + ", " + std::to_string(tex->starty) + ")";
+					if (ImGui::Selectable(label.c_str(), id == ed.paintId))
+						ed.paintId = id;
+				}
+				ImGui::EndListBox();
+			}
+			ImGui::SliderFloat("Radius (m)", &ed.radius, 2.5f, 60.0f, "%.1f");
+			ImGui::Checkbox("Random turn", &ed.paintRandomTurn);
+			if (!ed.paintRandomTurn) {
+				ImGui::SameLine();
+				ImGui::SliderInt("Turn", &ed.paintTurn, 0, 3, "%d x 90");
+			}
+			ImGui::Checkbox("Flip x", &ed.paintFlipX);
+			ImGui::SameLine();
+			ImGui::Checkbox("Flip z", &ed.paintFlipZ);
+			ImGui::TextWrapped("Hold the left mouse button on the ground to paint the tiles within the radius.");
+		}
+		else if (ed.mode == EditorState::TERRAIN) {
 			ImGui::RadioButton("Raise", &ed.tool, EditorState::RAISE); ImGui::SameLine();
 			ImGui::RadioButton("Lower", &ed.tool, EditorState::LOWER); ImGui::SameLine();
 			ImGui::RadioButton("Smooth", &ed.tool, EditorState::SMOOTH); ImGui::SameLine();
@@ -332,6 +459,30 @@ void ClientInterface::editorUndo()
 		});
 		rebuildTerrainRenderer();
 		ed.status = "Undone: a brush stroke";
+	}
+	else if (!u.tiles.empty() && client->terrain && u.tiles.size() == (size_t)client->terrain->width * client->terrain->height) {
+		Terrain* trn = client->terrain;
+		for (size_t i = 0; i < u.tiles.size(); i++) {
+			trn->tiles[i].texture = u.tiles[i].texture;
+			trn->tiles[i].rot = u.tiles[i].rot;
+			trn->tiles[i].xflip = u.tiles[i].xflip;
+			trn->tiles[i].zflip = u.tiles[i].zflip;
+		}
+		withServer([&](Server& server) {
+			Terrain* st = server.terrain;
+			if (!st || st == trn || (size_t)st->width * st->height != u.tiles.size())
+				return;
+			for (size_t i = 0; i < u.tiles.size(); i++) {
+				TerrainTexture* tex = u.tiles[i].texture;
+				if (TerrainTexture* stex = tex ? FindTexture(st, tex->grp->name, tex->id) : nullptr)
+					st->tiles[i].texture = stex;
+				st->tiles[i].rot = u.tiles[i].rot;
+				st->tiles[i].xflip = u.tiles[i].xflip;
+				st->tiles[i].zflip = u.tiles[i].zflip;
+			}
+		});
+		rebuildTerrainRenderer(true);
+		ed.status = "Undone: a texture stroke";
 	}
 	else if (u.placed) {
 		if (ClientGameObject* obj = client->findObject(u.placed))
@@ -443,6 +594,31 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		int serverHeight = -1;
 		withServer([&](Server& server) { serverHeight = server.terrain->vertices[z * (server.terrain->width + 1) + x]; });
 		printf("EDITORTEST height after %d (server %d)\n", client->terrain->vertices[z * (client->terrain->width + 1) + x], serverHeight);
+		// then a texture stroke there: the first texture of another group than the tile's
+		ed.mode = EditorState::TEXTURES;
+		ed.radius = 10.0f;
+		const TerrainTile* tile = client->terrain->getTile(x, z);
+		for (const auto& [name, g] : client->terrain->texDb.groups)
+			if (g && !g->textures.empty() && g.get() != tile->texture->grp) {
+				ed.paintGroup = name;
+				ed.paintId = g->textures.begin()->first;
+				break;
+			}
+		printf("EDITORTEST tile before %s %d, painting %s %d\n", tile->texture->grp->name.c_str(), tile->texture->id, ed.paintGroup.c_str(), ed.paintId);
+	}
+	if (frame >= 122 && frame < 126) {
+		cursor = target;
+		g_mouseDown[SDL_BUTTON_LEFT] = true;
+	}
+	if (frame == 127) {
+		const int x = (int)(target.x / 5.0f) + client->terrain->edge, z = (int)(target.z / 5.0f) + client->terrain->edge;
+		const TerrainTile* tile = client->terrain->getTile(x, z);
+		std::string serverTile;
+		withServer([&](Server& server) {
+			if (const TerrainTile* st = server.terrain->getTile(x, z))
+				serverTile = st->texture->grp->name + " " + std::to_string(st->texture->id);
+		});
+		printf("EDITORTEST tile after %s %d (server %s)\n", tile->texture->grp->name.c_str(), tile->texture->id, serverTile.c_str());
 	}
 	if (frame == 130) {
 		ed.mode = EditorState::OBJECTS;
@@ -462,12 +638,15 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		printf("EDITORTEST %s\n", ed.status.c_str());
 	}
 	if (frame == 170) {
-		// undo the windmill, then the stroke: the height as before
+		// undo the windmill, the texture stroke, then the height stroke: the ground as before
 		const size_t steps = ed.undo.size();
 		editorUndo();
 		editorUndo();
+		editorUndo();
 		const int x = (int)(target.x / 5.0f) + client->terrain->edge, z = (int)(target.z / 5.0f) + client->terrain->edge;
-		printf("EDITORTEST undo: %zu steps before, height now %d\n", steps, client->terrain->vertices[z * (client->terrain->width + 1) + x]);
+		const TerrainTile* tile = client->terrain->getTile(x, z);
+		printf("EDITORTEST undo: %zu steps before, height now %d, tile %s %d\n", steps, client->terrain->vertices[z * (client->terrain->width + 1) + x],
+			tile->texture->grp->name.c_str(), tile->texture->id);
 	}
 	if (frame == 180)
 		for (const std::string& w : editorCheck())

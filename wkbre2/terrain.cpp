@@ -150,6 +150,7 @@ void Terrain::readBCM(const char * filename) {
 	}
 
 	// Group name table
+	bcmTablesBitOffset = (uint64_t)(br.bytepos - (uint8_t*)fcnt) * 8 + br.bitpos;
 	int nnames = br.readnb(16);
 	TerrainTextureGroup **grptable = new TerrainTextureGroup*[nnames];
 	for (int i = 0; i < nnames; i++)
@@ -190,15 +191,19 @@ void Terrain::readBCM(const char * filename) {
 			t++;
 		}
 	}
-	//delete[] grptable; delete[] idtable;
+	bcmGroups.assign(grptable, grptable + nnames);
+	bcmIds.assign(idtable, idtable + nids);
 
 	// ?
 	int nunk = br.readnb(32);
-	br.readnb(32); // this should return 0x62
+	bcmExtraConstant = br.readnb(32); // this should return 0x62
+	bcmExtra.clear();
 	for (int i = 0; i < nunk; i++)
 	{
-		br.readnb(ngrpbits); br.readnb(nidbits);
+		const int g = br.readnb(ngrpbits), d = br.readnb(nidbits);
+		bcmExtra.emplace_back(g < nnames ? grptable[g] : nullptr, d < nids ? idtable[d] : 0);
 	}
+	delete[] grptable; delete[] idtable;
 
 	// Heightmap (kept with the file's bytes for writeBCM)
 	bcmData.assign((uint8_t*)fcnt, (uint8_t*)fcnt + fsize);
@@ -214,25 +219,69 @@ void Terrain::readBCM(const char * filename) {
 
 bool Terrain::writeBCM(const std::filesystem::path& path) const
 {
-	if (bcmData.empty())
+	if (bcmData.empty() || !tiles)
 		return false;
-	std::vector<uint8_t> out = bcmData;
-	uint64_t bit = bcmHeightBitOffset;
+	// everything before the texture tables as read (header, minimap, lakes), then the tables,
+	// tiles, the (group, id) list and the heights written again, then whatever followed them
+	std::vector<uint8_t> out(bcmData.begin(), bcmData.begin() + (size_t)((bcmTablesBitOffset + 7) / 8));
+	uint64_t bit = bcmTablesBitOffset;
 	// the bits as BitReader reads them: least significant first
-	auto put = [&](int value) {
-		const size_t byte = (size_t)(bit / 8);
-		const uint8_t mask = (uint8_t)(1 << (bit % 8));
-		if (byte >= out.size())
-			out.resize(byte + 1, 0);
-		out[byte] = value ? (out[byte] | mask) : (out[byte] & ~mask);
-		bit++;
-	};
-	for (int y = 0; y <= height; y++)
-		for (int x = 0; x <= width; x++) {
-			const uint8_t h = vertices[(height - y) * (width + 1) + x];
-			for (int i = 0; i < 8; i++)
-				put((h >> i) & 1);
+	auto put = [&](uint32_t value, int bits) {
+		for (int i = 0; i < bits; i++, bit++) {
+			const size_t byte = (size_t)(bit / 8);
+			const uint8_t mask = (uint8_t)(1 << (bit % 8));
+			if (byte >= out.size())
+				out.resize(byte + 1, 0);
+			out[byte] = ((value >> i) & 1) ? (out[byte] | mask) : (out[byte] & ~mask);
 		}
+	};
+	// the tables as read, with the textures painted since appended
+	std::vector<TerrainTextureGroup*> groups = bcmGroups;
+	std::vector<int> ids = bcmIds;
+	auto indexOf = [](auto& list, auto value) {
+		const auto it = std::find(list.begin(), list.end(), value);
+		if (it != list.end())
+			return (uint32_t)(it - list.begin());
+		list.push_back(value);
+		return (uint32_t)(list.size() - 1);
+	};
+	for (int i = 0; i < width * height; i++)
+		if (TerrainTexture* tex = tiles[i].texture) {
+			indexOf(groups, tex->grp);
+			indexOf(ids, tex->id);
+		}
+	put((uint32_t)groups.size(), 16);
+	for (TerrainTextureGroup* g : groups) {
+		put((uint32_t)g->name.size(), 8);
+		for (char c : g->name)
+			put((uint8_t)c, 8);
+	}
+	put((uint32_t)ids.size(), 16);
+	for (int id : ids)
+		put((uint32_t)id, 32);
+	const int groupBits = GetMaxBits((int)groups.size()), idBits = GetMaxBits((int)ids.size());
+	for (int z = height - 1; z >= 0; z--)
+		for (int x = 0; x < width; x++) {
+			const Tile& t = tiles[z * width + x];
+			put(t.texture ? indexOf(groups, t.texture->grp) : 0, groupBits);
+			put(t.texture ? indexOf(ids, t.texture->id) : 0, idBits);
+			put(t.rot, 2);
+			put(t.xflip, 1);
+			put(t.zflip, 1);
+		}
+	put((uint32_t)bcmExtra.size(), 32);
+	put(bcmExtraConstant, 32);
+	for (const auto& [g, id] : bcmExtra) {
+		put(g ? indexOf(groups, g) : 0, groupBits);
+		put(indexOf(ids, id), idBits);
+	}
+	for (int y = 0; y <= height; y++)
+		for (int x = 0; x <= width; x++)
+			put(vertices[(height - y) * (width + 1) + x], 8);
+	// the rest of the file after the heights, bit by bit
+	const uint64_t end = (uint64_t)bcmData.size() * 8;
+	for (uint64_t from = bcmHeightBitOffset + (uint64_t)(width + 1) * (height + 1) * 8; from < end; from++)
+		put((bcmData[(size_t)(from / 8)] >> (from % 8)) & 1, 1);
 	std::error_code ec;
 	std::filesystem::create_directories(path.parent_path(), ec);
 	std::ofstream f(path, std::ios::binary);

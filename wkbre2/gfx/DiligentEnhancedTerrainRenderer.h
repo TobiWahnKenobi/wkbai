@@ -16,6 +16,7 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	void init();
 	void render() override;
 	bool updateHeights() override;
+	bool updateTiles() override;
 	bool* bumpMapping() override { return &m_bumpOn; }
 
 	bool m_bumpOn = true;

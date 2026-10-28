@@ -20,4 +20,6 @@ struct TerrainRenderer {
 	// The terrain's heights changed (the map editor): the renderers that keep their own copy of
 	// the mesh update it; returns false when the renderer has to be made again instead
 	virtual bool updateHeights() { return true; }
+	// The tiles' textures, turns or flips changed (the map editor), as updateHeights
+	virtual bool updateTiles() { return true; }
 };

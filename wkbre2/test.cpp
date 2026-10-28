@@ -1616,6 +1616,30 @@ void Test_BCMRoundTrip()
 		back.readBCM("wkbre2-bcm-test.bcm");
 		const bool ok = back.vertices[z * (back.width + 1) + x] == (uint8_t)(before + 37) && back.width == t.width;
 		printf("BCM edited read back %d\n", (int)ok);
+
+		// a tile painted with a texture the map's tables lack (when there is one), turned and
+		// flipped: the tables grow, the tile and its neighbour read back as written
+		TerrainTexture* paint = nullptr;
+		for (const auto& [name, group] : t.texDb.groups)
+			for (const auto& [id, tex] : group->textures)
+				if (!paint || (std::find(t.bcmGroups.begin(), t.bcmGroups.end(), group.get()) == t.bcmGroups.end()
+					&& std::find(t.bcmIds.begin(), t.bcmIds.end(), id) == t.bcmIds.end()))
+					paint = tex.get();
+		TerrainTile* tile = t.getTileMutable(x, z);
+		const TerrainTile neighbour = *t.getTile(x + 1, z);
+		tile->texture = paint;
+		tile->rot = 3; tile->xflip = 1; tile->zflip = 0;
+		t.writeBCM(out);
+		std::filesystem::copy_file(out, saved, std::filesystem::copy_options::overwrite_existing);
+		Terrain painted;
+		painted.readBCM("wkbre2-bcm-test.bcm");
+		const TerrainTile* pt = painted.getTile(x, z);
+		const TerrainTile* pn = painted.getTile(x + 1, z);
+		const bool paintOk = pt->texture->grp->name == paint->grp->name && pt->texture->id == paint->id && pt->rot == 3 && pt->xflip == 1
+			&& pt->zflip == 0 && pn->texture->grp->name == neighbour.texture->grp->name && pn->texture->id == neighbour.texture->id
+			&& painted.vertices[z * (painted.width + 1) + x] == (uint8_t)(before + 37);
+		printf("BCM painted tile read back %d (%s %d; tables %zu groups %zu ids, were %zu %zu)\n", (int)paintOk, paint->grp->name.c_str(), paint->id,
+			painted.bcmGroups.size(), painted.bcmIds.size(), t.bcmGroups.size(), t.bcmIds.size());
 		std::filesystem::remove(saved);
 	}
 	fflush(stdout);

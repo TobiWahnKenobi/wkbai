@@ -718,6 +718,44 @@ bool DiligentEnhancedTerrainRenderer::updateHeights()
 	return true;
 }
 
+bool DiligentEnhancedTerrainRenderer::updateTiles()
+{
+	// the texture coordinates (turns, flips, the texture's part of its page) are in the vertices
+	if (!updateHeights())
+		return false;
+	// each chunk's index lists per texture pair again, as init made them (16 × 16 tiles, in rows)
+	constexpr int CHUNK = 16;
+	std::map<Impl::TexturePair, int> pairIndex;
+	for (size_t i = 0; i < _impl->texturePairs.size(); i++)
+		pairIndex.emplace(_impl->texturePairs[i], (int)i);
+	size_t c = 0;
+	for (int cz = 0; cz < (int)terrain->height; cz += CHUNK)
+		for (int cx = 0; cx < (int)terrain->width; cx += CHUNK, c++) {
+			if (c >= _impl->chunks.size())
+				return false;
+			std::map<int, std::vector<uint32_t>> perTexture;
+			for (int z = cz; z < std::min(cz + CHUNK, (int)terrain->height); z++)
+				for (int x = cx; x < std::min(cx + CHUNK, (int)terrain->width); x++) {
+					auto tex = _impl->textures.find(terrain->getTile(x, z)->texture);
+					if (tex == _impl->textures.end())
+						return false;
+					auto [it, isNew] = pairIndex.try_emplace(tex->second, (int)_impl->texturePairs.size());
+					if (isNew)
+						_impl->texturePairs.push_back(tex->second);
+					const uint32_t first = 4 * (z * terrain->width + x);
+					auto& list = perTexture[it->second];
+					for (const int& k : { 0,3,1,1,3,2 })
+						list.push_back(first + k);
+				}
+			auto& chunk = _impl->chunks[c];
+			chunk.indicesPerTexture.clear();
+			for (auto& [index, list] : perTexture)
+				chunk.indicesPerTexture.emplace_back(index, std::move(list));
+		}
+	_impl->frameIndices.resize(_impl->texturePairs.size());
+	return true;
+}
+
 void DiligentEnhancedTerrainRenderer::render()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;

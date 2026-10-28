@@ -88,7 +88,8 @@ private:
 	// what may keep the level from playing: players without a start camera or without objects
 	std::vector<std::string> editorCheck();
 	void editorWindow();
-	void rebuildTerrainRenderer();
+	// the terrain renderer updated after an edit of the heights (or of the tiles), or made again
+	void rebuildTerrainRenderer(bool tiles = false);
 	// The menu's "save" request: saves (saveGame) and tells the menu
 	void saveRequested(const std::string& name);
 	// A right-click command to the selection (units spread around the place, buildings' rally

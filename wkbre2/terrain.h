@@ -92,10 +92,17 @@ struct Terrain
 
 	void readFromFile(const char* filename);
 	void readBCM(const char *filename);
-	// The BCM as read and where its height map starts (in bits), for the map editor: writeBCM
-	// writes that file again with the current heights (everything else unchanged)
+	// The BCM as read, for the map editor: writeBCM writes that file again with the current tiles
+	// and heights (everything else unchanged). Its texture group and id tables, where they start
+	// (bits from the file's start), the (group, id) list after the tiles, and where the heights
+	// start; textures painted that the tables lack are appended to them
 	std::vector<uint8_t> bcmData;
-	uint64_t bcmHeightBitOffset = 0;
+	uint64_t bcmTablesBitOffset = 0, bcmHeightBitOffset = 0;
+	std::vector<TerrainTextureGroup*> bcmGroups;
+	std::vector<int> bcmIds;
+	uint32_t bcmExtraConstant = 0x62;
+	std::vector<std::pair<TerrainTextureGroup*, int>> bcmExtra;
+	Tile* getTileMutable(int tx, int tz) { return (tx >= 0 && tx < width && tz >= 0 && tz < height) ? &tiles[tz * width + tx] : nullptr; }
 	bool writeBCM(const std::filesystem::path& path) const;
 	void readSNR(const char* filename);
 	void readTRN(const char* filename);
