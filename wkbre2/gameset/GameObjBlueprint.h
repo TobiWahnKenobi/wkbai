@@ -66,6 +66,12 @@ struct GameObjBlueprint {
 	Model* representAs = nullptr;
 
 	ValueDeterminer* missileSpeed = nullptr;
+	// a missile's aim (WKB.exe, Task_Missile 0x5094b0): SPATIAL_INACCURACY (a random offset up to
+	// that in x and z), LEAD_ACCURACY (0-1: how exactly a moving target is led), and whether
+	// buildings get either (APPLY_INACCURACY_TO_BUILDING_TARGETS)
+	ValueDeterminer* spatialInaccuracy = nullptr;
+	ValueDeterminer* leadAccuracy = nullptr;
+	bool inaccuracyOnBuildings = false;
 	ValueDeterminer* doNotCollideWith = nullptr;
 	int strikeFloorSound = -1;
 	int strikeWaterSound = -1;

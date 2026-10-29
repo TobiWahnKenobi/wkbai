@@ -348,6 +348,15 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "FORMATION_SEPERATION_Y") {
 			formationSeparationY = gsf.nextFloat();
 		}
+		else if (strtag == "SPATIAL_INACCURACY") {
+			spatialInaccuracy = ReadValueDeterminer(gsf, *gameSet);
+		}
+		else if (strtag == "LEAD_ACCURACY") {
+			leadAccuracy = ReadValueDeterminer(gsf, *gameSet);
+		}
+		else if (strtag == "APPLY_INACCURACY_TO_BUILDING_TARGETS") {
+			inaccuracyOnBuildings = true;
+		}
 		else if (strtag == "USE_PASSABILITY_FIELDS") {
 			passabilityFieldsName = gsf.nextString(true);
 		}

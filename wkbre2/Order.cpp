@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Order.h"
+#include "util/SimRandom.h"
 #include "tags.h"
 #include "gameset/OrderBlueprint.h"
 #include "gameset/values.h"
@@ -501,17 +502,42 @@ void MissileTask::onStart()
 			center.y = dest.y;
 		dest = center;
 	}
-	// add target's movement into account
-	if (this->target->movement.isMoving()) {
-		const float terrainOffset = dest.y - Server::instance->terrain->getHeightEx(dest.x, dest.z, this->target->blueprint->floatsOnWater);
-
-		// Note: This is not perfect, as it kind of assumes that the time the missile will take to hit
-		// the adjusted position won't change, which is not always true. For slow target movement this
-		// might be ok, but faster ones not so much.
+	// the aim, as WKB.exe's Task_Missile (0x5094b0): a building is hit where it is, unless the
+	// missile has APPLY_INACCURACY_TO_BUILDING_TARGETS; anything else is led and scattered
+	const GameObjBlueprint* mbp = this->order->gameObject->blueprint;
+	const bool exact = this->target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !mbp->inaccuracyOnBuildings;
+	const float terrainOffset = dest.y - Server::instance->terrain->getHeightEx(dest.x, dest.z, this->target->blueprint->floatsOnWater);
+	auto random01 = []() { return (float)SimRand() / (float)(SIM_RAND_MAX + 1); };
+	bool moved = false;
+	// a moving target: led by where it will be when the missile gets there (the flight time over
+	// the horizontal distance at the missile's speed). LEAD_ACCURACY L in (0, 1] (else 1): with
+	// L = 1 exactly, below that the lead is scaled by a random factor in [L, 2 - L].
+	if (!exact && this->target->movement.isMoving()) {
+		float lead = mbp->leadAccuracy ? mbp->leadAccuracy->eval(&ssc) : 1.0f;
+		if (!(lead > 0.0f && lead <= 1.0f))
+			lead = 1.0f;
 		Vector3 hvec = (dest - this->order->gameObject->position);
-		float b = hvec.len2xz() / speed; // time when missile hits target on XZ coordinates (on original position!!!)
-		dest += this->target->movement.getNewPosition(Server::instance->timeManager.currentTime + b) - this->target->position;
-
+		float b = hvec.len2xz() / speed; // the flight time to the target's position now
+		Vector3 ahead = this->target->movement.getNewPosition(Server::instance->timeManager.currentTime + b) - this->target->position;
+		if (lead < 1.0f)
+			ahead *= lead + random01() * (2.0f - 2.0f * lead);
+		dest.x += ahead.x;
+		dest.z += ahead.z;
+		moved = true;
+	}
+	// SPATIAL_INACCURACY S > 0: a random offset in [-S, S] in x and in z
+	if (!exact && mbp->spatialInaccuracy) {
+		const float s = mbp->spatialInaccuracy->eval(&ssc);
+		if (s > 0.0f) {
+			dest.x += -s + random01() * 2.0f * s;
+			dest.z += -s + random01() * 2.0f * s;
+			moved = true;
+		}
+	}
+	if (moved) {
+		const auto area = Server::instance->terrain->getPlayableArea();
+		dest.x = std::clamp(dest.x, 0.0f, (float)area.first);
+		dest.z = std::clamp(dest.z, 0.0f, (float)area.second);
 		dest.y = Server::instance->terrain->getHeightEx(dest.x, dest.z, this->target->blueprint->floatsOnWater) + terrainOffset;
 	}
 
