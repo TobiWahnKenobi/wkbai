@@ -31,6 +31,8 @@ Bitmap Bitmap::loadBitmap(const char *fn)
 		return loadImage(d, s);
 	if (!StrCICompare(e, ".dds"))
 		return loadDDS(d, s);
+	if (!StrCICompare(e, ".ktx2"))
+		return loadKTX2(d, s);
 	ferr("Unknown bitmap file extension.");
 	return {};
 }
@@ -88,71 +90,14 @@ static void DecodeBC4Block(const uint8_t* b, uint8_t out[16])
 		out[i] = v[(bits >> (3 * i)) & 7];
 }
 
-Bitmap Bitmap::loadDDS(const void* data, size_t length)
+// BCn blocks (bc 1-5) of a width x height image into RGBA texels; BC5 as a normal map (z rebuilt)
+static void DecodeBlocks(const uint8_t* src, int width, int height, int bc, uint8_t* dst)
 {
-	const uint8_t* p = (const uint8_t*)data;
-	auto u32 = [&](size_t off) { return off + 4 <= length ? (uint32_t)(p[off] | (p[off + 1] << 8) | (p[off + 2] << 16) | ((uint32_t)p[off + 3] << 24)) : 0u; };
-	if (length < 128 || memcmp(p, "DDS ", 4) != 0)
-		ferr("Not a DDS file.");
-	const int height = (int)u32(12), width = (int)u32(16);
-	const uint32_t pfFlags = u32(80), fourCC = u32(84), bits = u32(88);
-	const uint32_t rMask = u32(92), aMask = u32(104);
-	size_t off = 128;
-	auto cc = [](const char* s) { return (uint32_t)(uint8_t)s[0] | ((uint32_t)(uint8_t)s[1] << 8) | ((uint32_t)(uint8_t)s[2] << 16) | ((uint32_t)(uint8_t)s[3] << 24); };
-	int bc = 0; // 0: uncompressed, 1-5: BCn
-	bool bgra = false;
-	if (pfFlags & 4) { // a FourCC
-		if (fourCC == cc("DXT1")) bc = 1;
-		else if (fourCC == cc("DXT2") || fourCC == cc("DXT3")) bc = 2;
-		else if (fourCC == cc("DXT4") || fourCC == cc("DXT5")) bc = 3;
-		else if (fourCC == cc("ATI1") || fourCC == cc("BC4U")) bc = 4;
-		else if (fourCC == cc("ATI2") || fourCC == cc("BC5U")) bc = 5;
-		else if (fourCC == cc("DX10")) {
-			const uint32_t dxgi = u32(128);
-			off += 20;
-			if (dxgi == 70 || dxgi == 71 || dxgi == 72) bc = 1;
-			else if (dxgi == 73 || dxgi == 74 || dxgi == 75) bc = 2;
-			else if (dxgi == 76 || dxgi == 77 || dxgi == 78) bc = 3;
-			else if (dxgi == 79 || dxgi == 80) bc = 4;
-			else if (dxgi == 82 || dxgi == 83) bc = 5;
-			else if (dxgi == 27 || dxgi == 28 || dxgi == 29) bc = 0;
-			else if (dxgi == 87 || dxgi == 88 || dxgi == 90 || dxgi == 91) bgra = true;
-			else
-				ferr("DDS: DXGI format %u is not supported (BC1-BC5 and 8-bit RGBA/BGRA are).", dxgi);
-		}
-		else
-			ferr("DDS: this FourCC is not supported (DXT1-5, ATI1/2 and DX10 BC1-BC5 are).");
-	}
-	else {
-		if (bits != 32)
-			ferr("DDS: only 32-bit uncompressed textures are supported.");
-		bgra = rMask == 0x00FF0000;
-	}
-	Bitmap bm;
-	bm.width = width;
-	bm.height = height;
-	bm.format = BMFORMAT_R8G8B8A8;
-	bm.pixels.resize((size_t)width * height * 4);
-	uint8_t* dst = bm.pixels.data();
-	if (bc == 0) {
-		if (off + (size_t)width * height * 4 > length)
-			ferr("DDS: the file is too short.");
-		for (size_t i = 0; i < (size_t)width * height; i++) {
-			const uint8_t* s = p + off + i * 4;
-			dst[i * 4 + 0] = bgra ? s[2] : s[0];
-			dst[i * 4 + 1] = s[1];
-			dst[i * 4 + 2] = bgra ? s[0] : s[2];
-			dst[i * 4 + 3] = (aMask || (pfFlags & 4)) ? s[3] : 255;
-		}
-		return bm;
-	}
 	const size_t blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
 	const int bw = (width + 3) / 4, bh = (height + 3) / 4;
-	if (off + (size_t)bw * bh * blockBytes > length)
-		ferr("DDS: the file is too short.");
 	for (int by = 0; by < bh; by++)
 		for (int bx = 0; bx < bw; bx++) {
-			const uint8_t* b = p + off + ((size_t)by * bw + bx) * blockBytes;
+			const uint8_t* b = src + ((size_t)by * bw + bx) * blockBytes;
 			uint8_t texel[16][4];
 			uint8_t a[16], g[16];
 			switch (bc) {
@@ -192,6 +137,181 @@ Bitmap Bitmap::loadDDS(const void* data, size_t length)
 					memcpy(dst + ((size_t)y * width + x) * 4, texel[i], 4);
 			}
 		}
+}
+
+static size_t BlockLevelBytes(int width, int height, size_t blockBytes)
+{
+	return (size_t)std::max(1, (width + 3) / 4) * std::max(1, (height + 3) / 4) * blockBytes;
+}
+
+// A BC7 image kept compressed: the levels that are in the file (at most count), from src
+static Bitmap KeepBC7(const uint8_t* src, size_t available, int width, int height, int count, const char* what)
+{
+	if (width % 4 || height % 4)
+		ferr("%s: a BC7 texture's size must be a multiple of 4 (%ix%i).", what, width, height);
+	Bitmap bm;
+	bm.width = width;
+	bm.height = height;
+	bm.format = BMFORMAT_BC7;
+	size_t total = 0;
+	for (int l = 0, w = width, h = height; l < std::max(1, count) && w >= 4 && h >= 4; l++, w /= 2, h /= 2) {
+		const size_t bytes = BlockLevelBytes(w, h, 16);
+		if (total + bytes > available)
+			break;
+		bm.levels.push_back(total);
+		total += bytes;
+	}
+	if (bm.levels.empty())
+		ferr("%s: the file is too short.", what);
+	bm.pixels.resize(total);
+	memcpy(bm.pixels.data(), src, total);
+	return bm;
+}
+
+Bitmap Bitmap::loadDDS(const void* data, size_t length)
+{
+	const uint8_t* p = (const uint8_t*)data;
+	auto u32 = [&](size_t off) { return off + 4 <= length ? (uint32_t)(p[off] | (p[off + 1] << 8) | (p[off + 2] << 16) | ((uint32_t)p[off + 3] << 24)) : 0u; };
+	if (length < 128 || memcmp(p, "DDS ", 4) != 0)
+		ferr("Not a DDS file.");
+	const int height = (int)u32(12), width = (int)u32(16);
+	const uint32_t pfFlags = u32(80), fourCC = u32(84), bits = u32(88);
+	const uint32_t rMask = u32(92), aMask = u32(104);
+	size_t off = 128;
+	auto cc = [](const char* s) { return (uint32_t)(uint8_t)s[0] | ((uint32_t)(uint8_t)s[1] << 8) | ((uint32_t)(uint8_t)s[2] << 16) | ((uint32_t)(uint8_t)s[3] << 24); };
+	int bc = 0; // 0: uncompressed, 1-5, 7: BCn
+	bool bgra = false;
+	if (pfFlags & 4) { // a FourCC
+		if (fourCC == cc("DXT1")) bc = 1;
+		else if (fourCC == cc("DXT2") || fourCC == cc("DXT3")) bc = 2;
+		else if (fourCC == cc("DXT4") || fourCC == cc("DXT5")) bc = 3;
+		else if (fourCC == cc("ATI1") || fourCC == cc("BC4U")) bc = 4;
+		else if (fourCC == cc("ATI2") || fourCC == cc("BC5U")) bc = 5;
+		else if (fourCC == cc("DX10")) {
+			const uint32_t dxgi = u32(128);
+			off += 20;
+			if (dxgi == 70 || dxgi == 71 || dxgi == 72) bc = 1;
+			else if (dxgi == 73 || dxgi == 74 || dxgi == 75) bc = 2;
+			else if (dxgi == 76 || dxgi == 77 || dxgi == 78) bc = 3;
+			else if (dxgi == 79 || dxgi == 80) bc = 4;
+			else if (dxgi == 82 || dxgi == 83) bc = 5;
+			else if (dxgi == 97 || dxgi == 98 || dxgi == 99) bc = 7;
+			else if (dxgi == 27 || dxgi == 28 || dxgi == 29) bc = 0;
+			else if (dxgi == 87 || dxgi == 88 || dxgi == 90 || dxgi == 91) bgra = true;
+			else
+				ferr("DDS: DXGI format %u is not supported (BC1-BC5, BC7 and 8-bit RGBA/BGRA are).", dxgi);
+		}
+		else
+			ferr("DDS: this FourCC is not supported (DXT1-5, ATI1/2 and DX10 BC1-BC5 or BC7 are).");
+	}
+	else {
+		if (bits != 32)
+			ferr("DDS: only 32-bit uncompressed textures are supported.");
+		bgra = rMask == 0x00FF0000;
+	}
+	if (bc == 7)
+		return KeepBC7(p + off, length - off, width, height, (int)u32(28), "DDS");
+	Bitmap bm;
+	bm.width = width;
+	bm.height = height;
+	bm.format = BMFORMAT_R8G8B8A8;
+	bm.pixels.resize((size_t)width * height * 4);
+	uint8_t* dst = bm.pixels.data();
+	if (bc == 0) {
+		if (off + (size_t)width * height * 4 > length)
+			ferr("DDS: the file is too short.");
+		for (size_t i = 0; i < (size_t)width * height; i++) {
+			const uint8_t* s = p + off + i * 4;
+			dst[i * 4 + 0] = bgra ? s[2] : s[0];
+			dst[i * 4 + 1] = s[1];
+			dst[i * 4 + 2] = bgra ? s[0] : s[2];
+			dst[i * 4 + 3] = (aMask || (pfFlags & 4)) ? s[3] : 255;
+		}
+		return bm;
+	}
+	if (off + BlockLevelBytes(width, height, (bc == 1 || bc == 4) ? 8 : 16) > length)
+		ferr("DDS: the file is too short.");
+	DecodeBlocks(p + off, width, height, bc, dst);
+	return bm;
+}
+
+// KTX2 (Khronos): the 80-byte header and the level index after it; no supercompression (Basis
+// Universal and zstd files need a transcoder, which wkbre2 doesn't have)
+Bitmap Bitmap::loadKTX2(const void* data, size_t length)
+{
+	static const uint8_t magic[12] = { 0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A };
+	const uint8_t* p = (const uint8_t*)data;
+	auto u32 = [&](size_t off) { return off + 4 <= length ? (uint32_t)(p[off] | (p[off + 1] << 8) | (p[off + 2] << 16) | ((uint32_t)p[off + 3] << 24)) : 0u; };
+	auto u64 = [&](size_t off) { return (uint64_t)u32(off) | ((uint64_t)u32(off + 4) << 32); };
+	if (length < 104 || memcmp(p, magic, 12) != 0)
+		ferr("Not a KTX2 file.");
+	const uint32_t vkFormat = u32(12);
+	const int width = (int)u32(20), height = (int)std::max(1u, u32(24));
+	const int levelCount = (int)std::max(1u, u32(40));
+	if (u32(44) != 0)
+		ferr("KTX2: supercompressed files (Basis Universal, zstd) are not supported; save it without supercompression.");
+	const uint64_t offset = u64(80), bytes = u64(88);
+	if (offset + bytes > length)
+		ferr("KTX2: the file is too short.");
+	const uint8_t* src = p + offset;
+	int bc = -1;
+	bool bgra = false;
+	switch (vkFormat) {
+	case 37: case 43: bc = 0; break;               // R8G8B8A8 UNORM, SRGB
+	case 44: case 50: bc = 0; bgra = true; break;   // B8G8R8A8 UNORM, SRGB
+	case 131: case 132: case 133: case 134: bc = 1; break;
+	case 135: case 136: bc = 2; break;
+	case 137: case 138: bc = 3; break;
+	case 139: case 140: bc = 4; break;
+	case 141: case 142: bc = 5; break;
+	case 145: case 146: bc = 7; break;
+	default: ferr("KTX2: Vulkan format %u is not supported (8-bit RGBA/BGRA, BC1-BC5 and BC7 are).", vkFormat);
+	}
+	if (bc == 7) {
+		// the levels are stored smallest first, each with its own offset: copy them largest first
+		Bitmap bm;
+		bm.width = width;
+		bm.height = height;
+		bm.format = BMFORMAT_BC7;
+		if (width % 4 || height % 4)
+			ferr("KTX2: a BC7 texture's size must be a multiple of 4 (%ix%i).", width, height);
+		std::vector<std::pair<uint64_t, uint64_t>> parts;
+		for (int l = 0, w = width, h = height; l < levelCount && w >= 4 && h >= 4; l++, w /= 2, h /= 2) {
+			const uint64_t lo = u64(80 + 24 * l), lb = u64(88 + 24 * l);
+			if (lo + lb > length || lb != BlockLevelBytes(w, h, 16))
+				break;
+			parts.push_back({ lo, lb });
+		}
+		size_t total = 0;
+		for (const auto& part : parts) {
+			bm.levels.push_back(total);
+			total += (size_t)part.second;
+		}
+		bm.pixels.resize(total);
+		for (size_t l = 0; l < parts.size(); l++)
+			memcpy(bm.pixels.data() + bm.levels[l], p + parts[l].first, (size_t)parts[l].second);
+		return bm;
+	}
+	Bitmap bm;
+	bm.width = width;
+	bm.height = height;
+	bm.format = BMFORMAT_R8G8B8A8;
+	bm.pixels.resize((size_t)width * height * 4);
+	if (bc == 0) {
+		if (bytes < (uint64_t)width * height * 4)
+			ferr("KTX2: the file is too short.");
+		for (size_t i = 0; i < (size_t)width * height; i++) {
+			const uint8_t* s = src + i * 4;
+			bm.pixels[i * 4 + 0] = bgra ? s[2] : s[0];
+			bm.pixels[i * 4 + 1] = s[1];
+			bm.pixels[i * 4 + 2] = bgra ? s[0] : s[2];
+			bm.pixels[i * 4 + 3] = s[3];
+		}
+		return bm;
+	}
+	if (bytes < BlockLevelBytes(width, height, (bc == 1 || bc == 4) ? 8 : 16))
+		ferr("KTX2: the file is too short.");
+	DecodeBlocks(src, width, height, bc, bm.pixels.data());
 	return bm;
 }
 
@@ -336,6 +456,8 @@ Bitmap Bitmap::loadPCX(const void* _data, size_t length)
 
 Bitmap Bitmap::convertToR8G8B8A8() const
 {
+	if (format == BMFORMAT_BC7)
+		ferr("A BC7 texture can only be used where it goes to the GPU as it is (model textures), not here.");
 	Bitmap bm; const Bitmap* sb = this;
 	bm.width = sb->width; bm.height = sb->height;
 	bm.format = BMFORMAT_R8G8B8A8;

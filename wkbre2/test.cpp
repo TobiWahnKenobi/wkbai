@@ -2105,6 +2105,46 @@ void Test_DDS()
 	Bitmap d = Bitmap::loadDDS(f.data(), f.size());
 	const bool bc5Ok = px(d, 0, 0) == 128 && px(d, 0, 1) == 128 && px(d, 0, 2) >= 254;
 	printf("DDS BC5 %d (normal %d %d %d)\n", bc5Ok, px(d, 0, 0), px(d, 0, 1), px(d, 0, 2));
+	// BC7 (DX10 header, DXGI 98), 8 x 8 with 2 mip levels: kept compressed, both levels
+	header(f, 8, 8, 4, "DX10", 0, 0, 0);
+	{ uint32_t mips = 2; memcpy(&f[28], &mips, 4); }
+	f.resize(148, 0);
+	{ uint32_t dxgi = 98; memcpy(&f[128], &dxgi, 4); }
+	for (int i = 0; i < 64 + 16; i++) f.push_back((uint8_t)i);
+	Bitmap e = Bitmap::loadDDS(f.data(), f.size());
+	const bool bc7Ok = e.format == BMFORMAT_BC7 && e.levels.size() == 2 && e.levels[1] == 64 && e.pixels.size() == 80 && e.pixels[64] == 64;
+	printf("DDS BC7 %d (kept compressed, %zu levels)\n", bc7Ok, e.levels.size());
+	// KTX2: the header, then the level index (offset, length, uncompressed length per level)
+	auto ktx2 = [](uint32_t vkFormat, int w, int h, const std::vector<std::vector<uint8_t>>& levels) {
+		std::vector<uint8_t> k(80 + 24 * levels.size(), 0);
+		static const uint8_t magic[12] = { 0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A };
+		memcpy(k.data(), magic, 12);
+		auto put = [&](size_t off, uint64_t v, int bytes) { memcpy(&k[off], &v, bytes); };
+		put(12, vkFormat, 4); put(16, 1, 4); put(20, w, 4); put(24, h, 4); put(40, levels.size(), 4);
+		// the levels' data smallest first, as KTX2 files keep them
+		std::vector<uint64_t> offsets(levels.size());
+		for (size_t l = levels.size(); l-- > 0;) {
+			offsets[l] = k.size();
+			k.insert(k.end(), levels[l].begin(), levels[l].end());
+		}
+		for (size_t l = 0; l < levels.size(); l++) {
+			put(80 + 24 * l, offsets[l], 8);
+			put(88 + 24 * l, levels[l].size(), 8);
+			put(96 + 24 * l, levels[l].size(), 8);
+		}
+		return k;
+	};
+	std::vector<uint8_t> k = ktx2(37, 2, 1, { { 10, 20, 30, 40, 50, 60, 70, 80 } });
+	Bitmap g = Bitmap::loadKTX2(k.data(), k.size());
+	printf("KTX2 RGBA8 %d\n", g.width == 2 && g.pixels[0] == 10 && g.pixels[7] == 80);
+	k = ktx2(131, 4, 4, { { 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 } });
+	Bitmap hb = Bitmap::loadKTX2(k.data(), k.size());
+	printf("KTX2 BC1 %d\n", px(hb, 0, 0) == 255 && px(hb, 1, 2) == 255 && px(hb, 3, 0) == 85);
+	std::vector<uint8_t> big(64, 1), small(16, 2);
+	k = ktx2(145, 8, 8, { big, small });
+	Bitmap kb = Bitmap::loadKTX2(k.data(), k.size());
+	const bool ktxBc7Ok = kb.format == BMFORMAT_BC7 && kb.levels.size() == 2 && kb.pixels[0] == 1 && kb.pixels[64] == 2;
+	printf("KTX2 BC7 %d (levels largest first: %d %d)\n", ktxBc7Ok, kb.pixels.size() ? kb.pixels[0] : -1, kb.pixels.size() > 64 ? kb.pixels[64] : -1);
 	fflush(stdout);
 }
 

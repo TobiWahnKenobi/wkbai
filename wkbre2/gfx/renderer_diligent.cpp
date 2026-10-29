@@ -759,6 +759,8 @@ struct DiligentRenderer : DiligentGfx
 
 	texture CreateTexture(const Bitmap& bm, int mipmaps) override
 	{
+		if (bm.format == BMFORMAT_BC7)
+			return createBC7Texture(bm, mipmaps);
 		Bitmap cvtbmp = bm.convertToR8G8B8A8();
 
 		// Same mipmap chain as the D3D11 renderer
@@ -800,6 +802,33 @@ struct DiligentRenderer : DiligentGfx
 		return (texture)t;
 	}
 
+	// BC7 (DDS, KTX2) as it is, with the file's mip levels (one if mipmaps is 1)
+	texture createBC7Texture(const Bitmap& bm, int mipmaps)
+	{
+		const size_t count = mipmaps == 1 ? 1 : bm.levels.size();
+		std::vector<TextureSubResData> sub(count);
+		for (size_t i = 0; i < count; i++) {
+			sub[i].pData = bm.pixels.data() + bm.levels[i];
+			sub[i].Stride = (Uint64)std::max(1, (bm.width >> i) / 4) * 16;
+		}
+		TextureDesc desc;
+		desc.Type = RESOURCE_DIM_TEX_2D;
+		desc.Width = bm.width;
+		desc.Height = bm.height;
+		desc.MipLevels = (Uint32)count;
+		desc.Format = TEX_FORMAT_BC7_UNORM;
+		desc.BindFlags = BIND_SHADER_RESOURCE;
+		desc.Usage = USAGE_DEFAULT;
+		TextureData data{ sub.data(), (Uint32)sub.size() };
+		DiligentTexture* t = new DiligentTexture;
+		device->CreateTexture(desc, &data, &t->tex);
+		if (!t->tex)
+			ferr("Diligent: could not create a %ix%i BC7 texture.", bm.width, bm.height);
+		signature->CreateShaderResourceBinding(&t->srb, true);
+		t->srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(t->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		return (texture)t;
+	}
+
 	void FreeTexture(texture t) override
 	{
 		if (t && t != whiteTexture) {
@@ -813,6 +842,10 @@ struct DiligentRenderer : DiligentGfx
 	{
 		DiligentTexture* dt = (DiligentTexture*)t;
 		const TextureDesc& desc = dt->tex->GetDesc();
+		if (bmp.format == BMFORMAT_BC7 || desc.Format == TEX_FORMAT_BC7_UNORM) {
+			printf("Hot reload: BC7 textures are not reloaded (restart to see the change)\n");
+			return;
+		}
 		Bitmap cvtbmp = bmp.convertToR8G8B8A8();
 		if (cvtbmp.width != (int)desc.Width || cvtbmp.height != (int)desc.Height)
 			return;
