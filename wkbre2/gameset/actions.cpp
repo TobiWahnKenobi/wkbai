@@ -1422,6 +1422,8 @@ struct ActionCreateObject : Action {
 	std::unique_ptr<PositionDeterminer> pPosition;
 	virtual void run(SrvScriptContext* ctx) override {
 		auto posori = pPosition->eval(ctx);
+		if (!posori.found)
+			return;
 		ServerGameObject* obj = ctx->server->spawnObject(objbp, ctx->getSelf()->getPlayer(), posori.position, posori.rotation);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {

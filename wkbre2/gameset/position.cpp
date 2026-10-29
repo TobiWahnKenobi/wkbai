@@ -21,6 +21,8 @@
 #include "gameset.h"
 #include "KeywordStubs.h"
 #include "../util/SimRandom.h"
+#include <map>
+#include <numeric>
 
 namespace {
 	OrientedPosition PosFromObjVec(const ObjectFinderResult &vec) {
@@ -558,21 +560,73 @@ struct PDRandomAttachmentPoint : public PositionDeterminer {
 	}
 };
 
+// NEAREST_CONSTRUCTION_SITE <position> <building> <minimum sites> <cluster distance> <range>, as
+// WKB.exe's (0x4a6a40; parser 0x4a6780): every site within <range> metres of the position
+// (snapped to the tile grid) where the building fits, grouped into clusters of sites within
+// <cluster distance> of each other (WKB.exe squares it), clusters smaller than <minimum sites>
+// left out; the centre of the largest cluster, snapped to the grid: the middle of the biggest
+// open area. None (found = false) when a value isn't positive or there is no such cluster:
+// the Kingmaker's Farmland Marker (1, 15, 60) then isn't made and the AI knows it has no room
+// for another farm. wkbre2 had taken the nearest free spot at any distance.
 struct PDNearestConstructionSite : public PDNearestValidStampdownPos {
 	std::unique_ptr<ValueDeterminer> val1, val2, val3;
 	std::unique_ptr<ObjectFinder> fExemptTilesReservedBy;
 	virtual OrientedPosition eval(ScriptContext* ctx) override {
 		auto po = p->eval(ctx);
+		OrientedPosition none = po;
+		none.found = false;
 		// no place to start from (LOCATION_OF a finder that found nothing): none, not the map's
 		// corner. The Kingmaker AI's farms went to the far side of the map when it had no village
 		// for them, and its builders spent the game walking there.
 		if (!objbp->footprint || (po.position.x == 0.0f && po.position.z == 0.0f))
-			return po;
-		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
-		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
-		std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
-		float fx = ox * 5 + objbp->footprint->originX + 2.5f;
-		float fz = oz * 5 + objbp->footprint->originZ + 2.5f;
+			return none;
+		const int minSites = (int)val1->eval(ctx);
+		const int join = (int)val2->eval(ctx), range = (int)val3->eval(ctx);
+		if (minSites <= 0 || join <= 0 || range <= 0)
+			return none;
+		const int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
+		const int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
+		const int r = range / 5, jr = join / 5;
+		// the sites, and their index by tile
+		std::vector<std::pair<int, int>> sites;
+		std::map<std::pair<int, int>, int> siteAt;
+		for (int dz = -r; dz <= r; dz++)
+			for (int dx = -r; dx <= r; dx++)
+				if ((dx * dx + dz * dz) * 25 <= range * range && canBuildOn(ctx->gameState, ox + dx, oz + dz)) {
+					siteAt[{ ox + dx, oz + dz }] = (int)sites.size();
+					sites.push_back({ ox + dx, oz + dz });
+				}
+		if (sites.empty())
+			return none;
+		// clusters: sites within the cluster distance joined (union-find)
+		std::vector<int> parent(sites.size());
+		std::iota(parent.begin(), parent.end(), 0);
+		auto root = [&](int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
+		for (size_t i = 0; i < sites.size(); i++)
+			for (int dz = -jr; dz <= jr; dz++)
+				for (int dx = -jr; dx <= jr; dx++) {
+					if ((dx * dx + dz * dz) * 25 > join * join)
+						continue;
+					auto it = siteAt.find({ sites[i].first + dx, sites[i].second + dz });
+					if (it != siteAt.end())
+						parent[root((int)i)] = root(it->second);
+				}
+		std::map<int, std::pair<int, std::pair<double, double>>> clusters; // root: count, sum of x and z
+		for (size_t i = 0; i < sites.size(); i++) {
+			auto& c = clusters[root((int)i)];
+			c.first++;
+			c.second.first += sites[i].first;
+			c.second.second += sites[i].second;
+		}
+		const std::pair<int, std::pair<double, double>>* best = nullptr;
+		for (const auto& [_, c] : clusters)
+			if (c.first >= minSites && (!best || c.first > best->first))
+				best = &c;
+		if (!best)
+			return none;
+		const int bx = (int)std::lround(best->second.first / best->first), bz = (int)std::lround(best->second.second / best->first);
+		float fx = bx * 5 + objbp->footprint->originX + 2.5f;
+		float fz = bz * 5 + objbp->footprint->originZ + 2.5f;
 		return { Vector3(fx, ctx->gameState->terrain->getHeight(fx, fz), fz) };
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {

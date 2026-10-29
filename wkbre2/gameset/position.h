@@ -16,6 +16,9 @@ struct CliScriptContext;
 struct OrientedPosition {
 	Vector3 position = Vector3(0.0f, 0.0f, 0.0f);
 	Vector3 rotation = Vector3(0.0f, 0.0f, 0.0f); //float yRotation = 0.0f, xRotation = 0.0f;
+	// false: the determiner found no position (as WKB.exe's returning false), e.g.
+	// NEAREST_CONSTRUCTION_SITE with no room in range; CREATE_OBJECT then creates nothing
+	bool found = true;
 
 	OrientedPosition operator+(const OrientedPosition &op) const { return { position + op.position, rotation + op.rotation }; }
 	OrientedPosition &operator+=(const OrientedPosition &op) { position += op.position; rotation += op.rotation; return *this; }

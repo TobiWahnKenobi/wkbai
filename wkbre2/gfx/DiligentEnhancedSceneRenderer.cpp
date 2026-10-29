@@ -209,7 +209,12 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
 	float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
 	float3 specular = SunColour.rgb * (d * vis * f * nl / 4) * MeshLighting.w;
-	return (diffuse * albedo * (1 - metal) + specular) * input.Tint.a * input.Tint.rgb;
+	// the sky's light reflected (a stand-in for image-based light): the map's fog colour, the
+	// sky's at the horizon, by the Fresnel of the view and the surface's occlusion; rough
+	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
+	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
+	float3 sky = FogColor.rgb * fv * orm.r * (1 - 0.5 * roughness);
+	return (diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a * input.Tint.rgb;
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
