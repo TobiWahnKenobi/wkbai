@@ -69,6 +69,8 @@ struct Mesh
 	// glTF 2.0 (gltf.cpp): a static model read into this mesh, or this mesh written as .glb
 	void loadGltf(const char* filename);
 	bool saveGltf(const char* path) const;
+	// the Mesh3 file itself, without looking for a glTF override
+	void loadMesh3(const char* filename);
 	const Vector3* decodeNormals();
 
 	Mesh() {}

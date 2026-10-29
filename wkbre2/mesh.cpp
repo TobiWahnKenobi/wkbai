@@ -43,9 +43,21 @@ void Mesh::load(const char * filename)
 	for (const char* gltfExt : { ".glb", ".gltf" })
 		if (FileExists((base + gltfExt).c_str())) {
 			loadGltf((base + gltfExt).c_str());
+			// glTF has no attachment points (flags, smoke, the spots where units appear): the
+			// Mesh3's are kept, so a replaced building still flies its flags
+			if (FileExists(filename)) {
+				Mesh original;
+				original.loadMesh3(filename);
+				numAttachPoints = original.numAttachPoints;
+				attachPoints = std::move(original.attachPoints);
+			}
 			return;
 		}
+	loadMesh3(filename);
+}
 
+void Mesh::loadMesh3(const char* filename)
+{
 	char *fcnt; int fsize;
 	LoadFile(filename, &fcnt, &fsize);
 	BinaryReader br(fcnt);

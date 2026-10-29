@@ -23,6 +23,8 @@
 #include "imguiimpl.h"
 #include "gfx/bitmap.h"
 #include "gfx/RenderSettings.h"
+#include "mesh.h"
+#include "util/StriCompare.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -132,6 +134,48 @@ static std::filesystem::path FindSteamGameFolder()
 
 void LaunchTest();
 
+// "exportGltf": [paths] in wkconfig.json: each Mesh3 model (or every one in a folder and its
+// subfolders, in data.bcp or a mod) written as .glb under the user folder's "exported" folder, at
+// its own path ("Buildings\Manor\Fully Built\DEFAULT.glb"); then wkbre2 exits. A modder edits
+// one and puts it in "saved" at the same path, where it replaces the model (docs/engine/gltf.md).
+static void ExportGltfModels(const nlohmann::json& list)
+{
+	LoadBCP("data.bcp");
+	std::vector<std::string> meshes;
+	auto isMesh = [](const std::string& f) { return f.size() > 6 && StrCICompare(f.substr(f.size() - 6).c_str(), ".mesh3") == 0; };
+	auto walk = [&](const std::string& dir, auto& self) -> void {
+		std::unique_ptr<std::vector<std::string>> files(ListFiles(dir.c_str()));
+		for (const std::string& f : *files)
+			if (isMesh(f))
+				meshes.push_back(dir + "\\" + f);
+		std::unique_ptr<std::vector<std::string>> dirs(ListDirectories(dir.c_str()));
+		for (const std::string& d : *dirs)
+			self(dir + "\\" + d, self);
+	};
+	for (const auto& item : list.is_array() ? list : nlohmann::json::array({ list })) {
+		const std::string path = item.get<std::string>();
+		if (isMesh(path))
+			meshes.push_back(path);
+		else
+			walk(path, walk);
+	}
+	int written = 0;
+	for (const std::string& path : meshes) {
+		Mesh mesh;
+		mesh.load(path.c_str());
+		std::filesystem::path out = g_userPath / "exported" / PathFromUtf8(path);
+		out.replace_extension(".glb");
+		std::filesystem::create_directories(out.parent_path());
+		if (mesh.saveGltf(PathToUtf8(out).c_str())) {
+			printf("Exported %s\n", PathToUtf8(out).c_str());
+			written++;
+		}
+		else
+			printf("Could not export %s\n", path.c_str());
+	}
+	printf("Exported %d of %zu models\n", written, meshes.size());
+}
+
 void LaunchQSM() {
 	LoadBCP("data.bcp");
 	InitWindow();
@@ -220,7 +264,9 @@ int main()
 	}
 
 	try {
-		if (g_settings.value<bool>("test", false))
+		if (g_settings.contains("exportGltf"))
+			ExportGltfModels(g_settings.at("exportGltf"));
+		else if (g_settings.value<bool>("test", false))
 			LaunchTest();
 		else
 			LaunchQSM();
