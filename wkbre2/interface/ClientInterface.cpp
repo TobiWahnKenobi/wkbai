@@ -586,6 +586,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Blended terrain (splat map)", &s.terrainSplat);
 		ImGui::Checkbox("Models lit per pixel, with highlights", &s.modelLighting);
 		ImGui::SliderFloat("Model highlight strength", &s.modelSpecular, 0.0f, 3.0f, "%.2f");
+		ImGui::Checkbox("Sky light on models (with per-pixel lighting)", &s.skyLight);
 		ImGui::Checkbox("Character shadows", &s.characterShadows);
 		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
 		ImGui::Checkbox("Wall shadows", &s.wallShadows);

@@ -89,6 +89,11 @@ cbuffer SunBuffer
 	float4 SunColour;
 	float4 CloudParams; // UV offset, UV per world unit, on
 	float4 MeshLighting; // ambient, diffuse factor, per-pixel lighting on, specular strength
+	// the sky light (ShadowEnvironment::skyLight): above (w: on), at the horizon (w: the mean
+	// brightness, which the ambient is divided by, so it keeps its strength), below
+	float4 SkyUp;
+	float4 SkyHorizon;
+	float4 SkyDown;
 };
 
 cbuffer SceneBuffer
@@ -178,6 +183,12 @@ VS_OUTPUT VS_Anim(float2 Texcoord : ATTRIB0, float4 T0 : ATTRIB1, float4 T1 : AT
 // (RenderSettings::modelLighting, the legacy adapter of PLAN.md's PBR step) the same ambient and
 // sun term per pixel plus the sun's highlight of a dielectric surface (GGX, Schlick's Fresnel
 // with F0 0.04, Smith's visibility). The original's textures have no roughness: a rough 0.65.
+// The sky's colour towards a direction: between the horizon's and the zenith's (or the ground's)
+float3 SkyColour(float3 d)
+{
+	return d.y >= 0 ? lerp(SkyHorizon.rgb, SkyUp.rgb, saturate(d.y)) : lerp(SkyHorizon.rgb, SkyDown.rgb, saturate(-d.y));
+}
+
 float3 ModelLight(VS_OUTPUT input, float3 albedo)
 {
 	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
@@ -200,7 +211,15 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 v = normalize(FogCamera.xyz - input.WorldPos);
 	float3 h = normalize(l + v);
 	float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3), nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
-	float3 diffuse = min(MeshLighting.x * orm.r + MeshLighting.y * SunColour.rgb * nl, 1);
+	// image-based light from the sky box (a stand-in for a filtered cube map): the ambient takes
+	// the sky's colour where the surface faces, at the same mean strength, and reflections the
+	// sky's colour along the reflected view. Without a sky, the map's fog colour.
+	float3 ambientTint = float3(1, 1, 1), skyReflected = FogColor.rgb;
+	if (SkyUp.w != 0) {
+		ambientTint = SkyColour(n) / SkyHorizon.w;
+		skyReflected = SkyColour(reflect(-v, n));
+	}
+	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl, 1);
 	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
 	float a = roughness * roughness, a2 = a * a;
 	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
@@ -209,11 +228,10 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
 	float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
 	float3 specular = SunColour.rgb * (d * vis * f * nl / 4) * MeshLighting.w;
-	// the sky's light reflected (a stand-in for image-based light): the map's fog colour, the
-	// sky's at the horizon, by the Fresnel of the view and the surface's occlusion; rough
+	// the sky's light reflected, by the Fresnel of the view and the surface's occlusion; rough
 	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
-	float3 sky = FogColor.rgb * fv * orm.r * (1 - 0.5 * roughness);
+	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness);
 	return (diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a * input.Tint.rgb;
 }
 
@@ -421,7 +439,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 64;
+	cbDesc.Size = 112;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 
 
@@ -585,7 +603,7 @@ void DiligentEnhancedSceneRenderer::render()
 	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 64);
+	memset(mapped, 0, 112);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -602,6 +620,14 @@ void DiligentEnhancedSceneRenderer::render()
 	meshLighting[1] = g_renderSettings.meshDiffuse;
 	meshLighting[2] = g_renderSettings.modelLighting ? 1.0f : 0.0f;
 	meshLighting[3] = g_renderSettings.modelSpecular;
+	float* sky = (float*)mapped + 16;
+	if (shadows.skyLightValid && g_renderSettings.skyLight) {
+		for (int k = 0; k < 3; k++)
+			for (int c = 0; c < 3; c++)
+				sky[k * 4 + c] = shadows.skyLight[k][c];
+		sky[3] = 1.0f;
+		sky[7] = shadows.skyLightLuminance;
+	}
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {

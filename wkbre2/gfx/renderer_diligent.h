@@ -63,6 +63,12 @@ struct DiligentGfx : IRenderer
 		// (x, z, in map space: world plus the map edge). The terrain renderer draws them into a
 		// map-sized shadow texture that the terrain multiplies in, and clears the list.
 		std::vector<float> blobs;
+		// The sky's mean colours above, at the horizon and below (0-1, from the sky box's faces,
+		// DiligentSkyRenderer), and their mean brightness: the models' image-based light
+		// (per-pixel lighting); invalid without a sky
+		float skyLight[3][3] = {};
+		float skyLightLuminance = 1.0f;
+		bool skyLightValid = false;
 	} shadows;
 };
 

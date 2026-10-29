@@ -51,6 +51,8 @@ struct RenderSettings {
 	// original lights them per vertex, without highlights)
 	bool modelLighting = false;
 	float modelSpecular = 1.0f;
+	// with per-pixel lighting: the ambient and reflections take the sky box's colours
+	bool skyLight = true;
 
 	// Camera
 	float scrollSpeed = 1.0f;        // WASD/arrows, multiplier

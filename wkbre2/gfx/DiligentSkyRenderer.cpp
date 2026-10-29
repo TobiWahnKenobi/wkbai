@@ -144,6 +144,21 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		dir += '\\';
 	static const char* faceNames[6] = { "sky_front.tga", "sky_right.tga", "sky_back.tga", "sky_left.tga", "sky_top.tga", "sky_bottom.tga" };
 	_impl->loaded = !terrain->skyTextureDirectory.empty();
+	// the sky light (ShadowEnvironment::skyLight): the top face's mean colour above, the side
+	// faces' lowest quarter (image rows at the bottom are the horizon) at the horizon, the
+	// bottom face's below (or the horizon's, darker, as ground)
+	double sums[3][3] = {};
+	auto meanColour = [](const Bitmap& bmp, int fromRow, double out[3]) {
+		Bitmap rgba = bmp.format == BMFORMAT_R8G8B8A8 ? bmp : bmp.convertToR8G8B8A8();
+		double s[3] = {};
+		size_t n = 0;
+		for (int y = fromRow; y < rgba.height; y++)
+			for (int x = 0; x < rgba.width; x++, n++)
+				for (int c = 0; c < 3; c++)
+					s[c] += rgba.pixels[((size_t)y * rgba.width + x) * 4 + c];
+		for (int c = 0; c < 3; c++)
+			out[c] += n ? s[c] / n / 255.0 : 0.0;
+	};
 	for (int i = 0; i < 5 && _impl->loaded; i++) {
 		const std::string path = dir + faceNames[i];
 		if (!FileExists(path.c_str())) {
@@ -151,15 +166,35 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 			_impl->loaded = false;
 			break;
 		}
-		_impl->faces[i] = gfx->CreateTexture(Bitmap::loadBitmap(path.c_str()), 1);
+		const Bitmap bmp = Bitmap::loadBitmap(path.c_str());
+		if (bmp.format != BMFORMAT_BC7)
+			meanColour(bmp, i == 4 ? 0 : bmp.height * 3 / 4, sums[i == 4 ? 0 : 1]);
+		_impl->faces[i] = gfx->CreateTexture(bmp, 1);
 	}
 	if (!_impl->loaded)
 		return;
 	const std::string bottomPath = dir + faceNames[5];
+	bool hasBottom = false;
 	if (FileExists(bottomPath.c_str())) {
-		_impl->faces[5] = gfx->CreateTexture(Bitmap::loadBitmap(bottomPath.c_str()), 1);
+		const Bitmap bmp = Bitmap::loadBitmap(bottomPath.c_str());
+		if (bmp.format != BMFORMAT_BC7) {
+			meanColour(bmp, 0, sums[2]);
+			hasBottom = true;
+		}
+		_impl->faces[5] = gfx->CreateTexture(bmp, 1);
 		_impl->sixFaces = true;
 	}
+	auto& light = _impl->dgfx->shadows;
+	for (int c = 0; c < 3; c++) {
+		light.skyLight[0][c] = (float)sums[0][c];
+		light.skyLight[1][c] = (float)(sums[1][c] / 4);
+		light.skyLight[2][c] = hasBottom ? (float)sums[2][c] : light.skyLight[1][c] * 0.5f;
+	}
+	auto lum = [](const float* c) { return 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]; };
+	light.skyLightLuminance = std::max(0.05f, (lum(light.skyLight[0]) + 2 * lum(light.skyLight[1]) + lum(light.skyLight[2])) / 4);
+	light.skyLightValid = true;
+	printf("Sky light: above %.2f %.2f %.2f, horizon %.2f %.2f %.2f, below %.2f %.2f %.2f\n", light.skyLight[0][0], light.skyLight[0][1], light.skyLight[0][2],
+		light.skyLight[1][0], light.skyLight[1][1], light.skyLight[1][2], light.skyLight[2][0], light.skyLight[2][1], light.skyLight[2][2]);
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Sky camera";
