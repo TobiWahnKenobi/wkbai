@@ -9,6 +9,8 @@
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <algorithm>
+#include <array>
+#include <map>
 #include <cstring>
 #include <fstream>
 
@@ -126,6 +128,7 @@ void Terrain::readBCM(const char * filename) {
 	vertices.resize(numVerts);
 
 	// 128x128 RGB minimap of the playable area
+	bcmMinimapOffset = (size_t)((const char*)fp - (const char*)fcnt);
 	minimapWidth = minimapHeight = 128;
 	minimapRGBA.resize(128 * 128 * 4);
 	for (int i = 0; i < 128 * 128; i++) {
@@ -219,13 +222,70 @@ void Terrain::readBCM(const char * filename) {
 	floodfillWater();
 }
 
-bool Terrain::writeBCM(const std::filesystem::path& path) const
+std::vector<uint8_t> Terrain::drawMinimap(bool flipX, bool flipZ) const
+{
+	std::vector<uint8_t> rgb(128 * 128 * 3, 0);
+	if (!tiles || width <= 2 * edge || height <= 2 * edge)
+		return rgb;
+	// the mean colour of each texture's piece of its atlas
+	std::map<const TerrainTexture*, std::array<float, 3>> colours;
+	std::map<std::string, Bitmap> atlases;
+	auto colourOf = [&](const TerrainTexture* tex) -> const std::array<float, 3>& {
+		auto it = colours.find(tex);
+		if (it != colours.end())
+			return it->second;
+		auto at = atlases.find(tex->file);
+		if (at == atlases.end())
+			at = atlases.emplace(tex->file, Bitmap::loadBitmap(("Maps\\Map_Textures\\" + tex->file).c_str()).convertToR8G8B8A8()).first;
+		const Bitmap& a = at->second;
+		double sum[3] = {};
+		int n = 0;
+		for (int z = tex->starty; z < tex->starty + tex->height && z < a.height; z++)
+			for (int x = tex->startx; x < tex->startx + tex->width && x < a.width; x++, n++)
+				for (int c = 0; c < 3; c++)
+					sum[c] += a.pixels[(z * a.width + x) * 4 + c];
+		std::array<float, 3> mean = { 128, 128, 128 };
+		if (n > 0)
+			mean = { (float)(sum[0] / n), (float)(sum[1] / n), (float)(sum[2] / n) };
+		return colours[tex] = mean;
+	};
+	const int pw = width - 2 * edge, ph = height - 2 * edge;
+	const Vector3 sun = sunVector.normal();
+	for (int py = 0; py < 128; py++)
+		for (int px = 0; px < 128; px++) {
+			int tx = px * pw / 128, tz = py * ph / 128;
+			if (flipX) tx = pw - 1 - tx;
+			if (flipZ) tz = ph - 1 - tz;
+			const Tile* tile = getPlayableTile(tx, tz);
+			std::array<float, 3> c = tile && tile->texture ? colourOf(tile->texture) : std::array<float, 3>{ 128, 128, 128 };
+			const Vector3 n = getNormal(tx + edge, tz + edge);
+			const float light = std::clamp(0.45f + 0.75f * (n.x * sun.x + n.y * sun.y + n.z * sun.z), 0.35f, 1.15f);
+			// the original's minimaps are more saturated than the textures' means
+			const float grey = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2];
+			for (float& v : c)
+				v = (grey + (v - grey) * 1.4f) * light;
+			if (tile && tile->fullOfWater) { // water: blue over the bed
+				c[0] = c[0] * 0.3f + 60 * 0.7f;
+				c[1] = c[1] * 0.3f + 140 * 0.7f;
+				c[2] = c[2] * 0.3f + 185 * 0.7f;
+			}
+			for (int k = 0; k < 3; k++)
+				rgb[(py * 128 + px) * 3 + k] = (uint8_t)std::clamp(c[k], 0.0f, 255.0f);
+		}
+	return rgb;
+}
+
+bool Terrain::writeBCM(const std::filesystem::path& path, bool newMinimap) const
 {
 	if (bcmData.empty() || !tiles)
 		return false;
 	// everything before the lakes as read (header, minimap), then the lakes, texture tables, tiles,
 	// the (group, id) list and the heights written again, then whatever followed them
 	std::vector<uint8_t> out(bcmData.begin(), bcmData.begin() + (size_t)((bcmLakesBitOffset + 7) / 8));
+	if (newMinimap && bcmMinimapOffset > 0 && bcmMinimapOffset + 128 * 128 * 3 <= out.size()) {
+		const std::vector<uint8_t> minimap = drawMinimap();
+		std::copy(minimap.begin(), minimap.end(), out.begin() + bcmMinimapOffset);
+	}
 	uint64_t bit = bcmLakesBitOffset;
 	// the bits as BitReader reads them: least significant first
 	auto put = [&](uint32_t value, int bits) {

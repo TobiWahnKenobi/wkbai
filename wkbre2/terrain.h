@@ -64,6 +64,10 @@ struct Terrain
 	// Minimap image of the playable area (row 0 = north edge), RGBA; empty if the map has none
 	std::vector<uint8_t> minimapRGBA;
 	int minimapWidth = 0, minimapHeight = 0;
+	// A 128 x 128 RGB minimap of the playable area drawn from the terrain, as the BCM's: each
+	// tile's texture's mean colour, lit by the sun on its slope, water tinted. flipX/flipZ: the
+	// orientation (test 33 found the BCM's by comparing with the maps' own minimaps).
+	std::vector<uint8_t> drawMinimap(bool flipX = false, bool flipZ = true) const;
 
 	std::pair<int, int> getNumPlayableTiles() const { return { width - 2 * edge, height - 2 * edge }; }
 	std::pair<float, float> getPlayableArea() const { return { 5.0f * (width - 2 * edge), 5.0f * (height - 2 * edge) }; }
@@ -98,13 +102,15 @@ struct Terrain
 	// start; textures painted that the tables lack are appended to them
 	std::vector<uint8_t> bcmData;
 	uint64_t bcmLakesBitOffset = 0, bcmTablesBitOffset = 0, bcmHeightBitOffset = 0;
+	size_t bcmMinimapOffset = 0; // the 128 x 128 RGB minimap's first byte
 	std::vector<uint8_t> lakeExtraBits; // per lake, the 2 bits after its point (unknown; 0 for new lakes)
 	std::vector<TerrainTextureGroup*> bcmGroups;
 	std::vector<int> bcmIds;
 	uint32_t bcmExtraConstant = 0x62;
 	std::vector<std::pair<TerrainTextureGroup*, int>> bcmExtra;
 	Tile* getTileMutable(int tx, int tz) { return (tx >= 0 && tx < width && tz >= 0 && tz < height) ? &tiles[tz * width + tx] : nullptr; }
-	bool writeBCM(const std::filesystem::path& path) const;
+	// newMinimap: the minimap drawn again from the terrain (the map editor), else as read
+	bool writeBCM(const std::filesystem::path& path, bool newMinimap = false) const;
 	void readSNR(const char* filename);
 	void readTRN(const char* filename);
 

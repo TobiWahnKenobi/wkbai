@@ -632,7 +632,7 @@ bool ClientInterface::editorSave(const std::string& name)
 				const std::string oldLttt = server.terrain->texDb.getLTTTPath(server.mapFile);
 				const std::string newLttt = server.terrain->texDb.getLTTTPath(bcm);
 				const auto saved = g_userPath / "saved";
-				bool ok = server.terrain->writeBCM(saved / PathFromUtf8(portablePath(bcm)));
+				bool ok = server.terrain->writeBCM(saved / PathFromUtf8(portablePath(bcm)), true);
 				if (ok && FileExists(oldLttt.c_str())) {
 					char* data; int size;
 					LoadFile(oldLttt.c_str(), &data, &size);

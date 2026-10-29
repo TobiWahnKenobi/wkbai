@@ -24,6 +24,7 @@
 #include "gfx/TextureCache.h"
 #include "TrnTextureDb.h"
 #include "terrain.h"
+#include "gfx/bitmap.h"
 #include <SDL3/SDL_keycode.h>
 #include "mesh.h"
 #include "client.h"
@@ -1981,6 +1982,52 @@ void Test_AutoWall()
 	fflush(stdout);
 }
 
+// The minimap drawn from the terrain (Terrain::drawMinimap) against every map's own in its BCM: the
+// mean difference per channel (0-255) for each of the four orientations; prints the best one and
+// the mean difference over all maps. Writes the 4 Peaks pair as a PCX to the temp folder.
+void Test_Minimap()
+{
+	LoadBCP("data.bcp");
+	std::unique_ptr<std::vector<std::string>> dirs(ListDirectories("Maps"));
+	double total[4] = {};
+	int maps = 0, best[4] = {};
+	for (const std::string& dir : *dirs) {
+		const std::string bcm = "Maps\\" + dir + "\\" + dir + ".bcm";
+		if (!FileExists(bcm.c_str()))
+			continue;
+		Terrain t;
+		t.readBCM(bcm.c_str());
+		double diff[4];
+		for (int o = 0; o < 4; o++) {
+			const std::vector<uint8_t> drawn = t.drawMinimap(o & 1, (o & 2) != 0);
+			double sum = 0;
+			for (int i = 0; i < 128 * 128; i++)
+				for (int c = 0; c < 3; c++)
+					sum += std::abs((int)drawn[i * 3 + c] - (int)t.minimapRGBA[i * 4 + c]);
+			diff[o] = sum / (128 * 128 * 3);
+			total[o] += diff[o];
+		}
+		best[std::min_element(diff, diff + 4) - diff]++;
+		maps++;
+		if (dir.find("Peaks") != std::string::npos && dir.find("Snow") == std::string::npos) {
+			// the map's own minimap and the drawn one side by side, as a binary PPM
+			const std::vector<uint8_t> drawn = t.drawMinimap();
+			const std::filesystem::path ppm = std::filesystem::temp_directory_path() / "wkbre2-minimap.ppm";
+			std::ofstream f(ppm, std::ios::binary);
+			f << "P6\n256 128\n255\n";
+			for (int y = 0; y < 128; y++) {
+				for (int x = 0; x < 128; x++)
+					f.write((const char*)&t.minimapRGBA[(y * 128 + x) * 4], 3);
+				f.write((const char*)&drawn[y * 128 * 3], 128 * 3);
+			}
+			printf("MINIMAP %s: %s\n", dir.c_str(), ppm.string().c_str());
+		}
+	}
+	for (int o = 0; o < 4; o++)
+		printf("MINIMAP orientation flipX %d flipZ %d: mean difference %.1f, best for %d of %d maps\n", o & 1, (o & 2) != 0, total[o] / std::max(maps, 1), best[o], maps);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -2015,6 +2062,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AIvsAI, "AI against AI (headless)"},
 {Test_GltfRoundTrip, "glTF round trip (the game's meshes as .glb and back)"},
 {Test_AutoWall, "Automatic walls and gatehouse around a Manor"},
+{Test_Minimap, "Minimap drawn from the terrain against the maps' own"},
 };
 
 void LaunchTest()
