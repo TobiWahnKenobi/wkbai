@@ -178,8 +178,11 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool userProfileUpdated = false;
 	// the aggressive AI (InstallAIAggressionOverrides): the skirmish setting "aggressiveAI"
 	bool aggressiveAI = true;
-	// with it, AIs found villages at gold (ValueGoldExpansion): the setting "aiGoldExpansion"
-	bool aiGoldExpansion = true;
+	// with it, AIs found villages at gold (ValueGoldExpansion): the setting "aiGoldExpansion", off
+	// (25-minute tournament: 341 soldiers raised with it, 358 without; more gold, much less wood)
+	bool aiGoldExpansion = false;
+	// with it, an AI's armies attack the nearest enemy (FinderFocusedEnemyPalaces): "aiFocusAttacks"
+	bool aiFocusAttacks = true;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

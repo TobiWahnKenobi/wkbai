@@ -101,6 +101,8 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "teamReconnaissance") teamReconnaissance = value != 0;
 	else if (name == "barbarianTribes") barbarianTribes = value != 0;
 	else if (name == "aggressiveAI") aggressiveAI = value != 0;
+	else if (name == "aiGoldExpansion") aiGoldExpansion = value != 0;
+	else if (name == "aiFocusAttacks") aiFocusAttacks = value != 0;
 	else if (name == "resourcePoints") resourcePoints = value;
 	else if (name == "victoryPointLimit") victoryPointLimit = value;
 	else if (name == "valhallaModeFood") valhallaModeFood = value;
@@ -354,6 +356,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	}
 
 	server.aggressiveAI = aggressiveAI;
+	server.aiGoldExpansion = aiGoldExpansion;
+	server.aiFocusAttacks = aiFocusAttacks;
 	if (mode != DevMode) {
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or

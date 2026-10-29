@@ -57,6 +57,8 @@ private:
 	bool teamReconnaissance = false;
 	bool barbarianTribes = false;
 	bool aggressiveAI = true; // Server::aggressiveAI
+	bool aiGoldExpansion = false; // Server::aiGoldExpansion
+	bool aiFocusAttacks = true; // Server::aiFocusAttacks
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

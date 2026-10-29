@@ -22,6 +22,8 @@
 #include "../AIController.h"
 #include "../MovementController.h"
 #include <unordered_set>
+#include <map>
+#include <set>
 #include "../util/SimRandom.h"
 
 namespace {
@@ -1065,6 +1067,179 @@ struct ValueAggressionOverride : ValueDeterminer {
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
+// The aggressive AI's expansion to gold (not in WKB.exe). The Kingmaker scripts found resource
+// villages only at clusters of trees (the gold clusters are commented out in "Find Me A New
+// Resource Village Placement"), and a settlement takes the gold within 20 tiles of it, so an AI
+// whose start has no gold in reach never gets any: its gold stays at the start's 150 and its
+// armies, most of which need gold, are never raised. When none of an AI's settlements has gold
+// left, this wraps "How Many Resource Villages I Want" (evaluated on the player by the economy
+// loop): the player's only Resource Marker is put on the unclaimed gold deposit nearest to its
+// palace, and one resource village is wanted. The scripts' village commission then builds it 25 m
+// this side of the marker, and the village's own reaction claims the gold and sets miners. A
+// deposit whose marker the commission removed (no room to build) isn't tried again.
+struct ValueGoldExpansion : ValueDeterminer {
+	ValueDeterminer* original;
+	struct Attempt { SrvGORef marker; uint32_t deposit = 0; };
+	std::map<uint32_t, Attempt> attempts; // by player
+	std::map<uint32_t, std::set<uint32_t>> tried; // by player: deposits with no room
+	const Server* server = nullptr;
+	static constexpr float maxDistance = 400.0f; // from the palace
+	explicit ValueGoldExpansion(ValueDeterminer* original) : original(original) {}
+	~ValueGoldExpansion() { delete original; }
+	virtual float eval(ScriptContext* ctx) override {
+		const float value = original->eval(ctx);
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI || !Server::instance->aiGoldExpansion)
+			return value;
+		Server* srv = Server::instance;
+		if (server != srv) {
+			attempts.clear();
+			tried.clear();
+			server = srv;
+		}
+		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
+		ServerGameObject* player = sctx->getSelf();
+		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+			return value;
+		const GameSet& gs = *srv->gameSet;
+		const int goldCat = gs.associations.names.getIndex("My Settlement Gold Outcroppings");
+		const int isGold = gs.items.names.getIndex("I am a gold deposit");
+		const int palaceFinder = gs.objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		const int neutralFinder = gs.objectFinderDefinitions.names.getIndex("The Neutral Player");
+		const GameObjBlueprint* markerBp = gs.findBlueprint(Tags::GAMEOBJCLASS_MARKER, "Resource Marker");
+		if (goldCat < 0 || isGold < 0 || palaceFinder < 0 || neutralFinder < 0 || !markerBp)
+			return value;
+		ServerGameObject* palace = gs.objectFinderDefinitions[palaceFinder]->getFirst(sctx);
+		ServerGameObject* neutral = gs.objectFinderDefinitions[neutralFinder]->getFirst(sctx);
+		if (!palace || !neutral)
+			return value;
+		// the gold deposits, and whether one of this player's settlements has gold
+		std::vector<ServerGameObject*> unclaimed;
+		bool hasGold = false;
+		for (auto& [bpi, vec] : neutral->children) {
+			if (bpi.bpClass() != Tags::GAMEOBJCLASS_CONTAINER)
+				continue;
+			for (CommonGameObject* c : vec) {
+				ServerGameObject* deposit = (ServerGameObject*)c;
+				if (deposit->deleted || deposit->getItem(isGold) <= 0.0f || deposit->getItem(Tags::PDITEM_GOLD) <= 0.0f)
+					continue;
+				bool claimed = false;
+				auto it = deposit->associators.find(goldCat);
+				if (it != deposit->associators.end())
+					for (const SrvGORef& ref : it->second)
+						if (ServerGameObject* settlement = ref.get()) {
+							claimed = true;
+							if (settlement->getPlayer() == player)
+								hasGold = true;
+						}
+				if (!claimed)
+					unclaimed.push_back(deposit);
+			}
+		}
+		Attempt& attempt = attempts[player->id];
+		if (hasGold) {
+			attempt = {};
+			return value;
+		}
+		// the last marker was removed without a village claiming the gold: no room there
+		if (attempt.deposit && !attempt.marker.get()) {
+			tried[player->id].insert(attempt.deposit);
+			attempt = {};
+		}
+		const auto& skip = tried[player->id];
+		ServerGameObject* best = nullptr;
+		float bestDistance = maxDistance * maxDistance;
+		for (ServerGameObject* deposit : unclaimed) {
+			if (skip.count(deposit->id))
+				continue;
+			const float dx = deposit->position.x - palace->position.x, dz = deposit->position.z - palace->position.z;
+			const float d = dx * dx + dz * dz;
+			if (d < bestDistance) {
+				bestDistance = d;
+				best = deposit;
+			}
+		}
+		if (!best)
+			return value;
+		if (attempt.deposit != best->id || !attempt.marker.get()) {
+			// the gold's marker the only one, so "Nearest Resource Marker To My Manor" finds it
+			auto mit = player->children.find(GameObjBlueprintIndex(markerBp));
+			if (mit != player->children.end())
+				for (CommonGameObject* m : std::vector<CommonGameObject*>(mit->second)) {
+					((ServerGameObject*)m)->terminate();
+					((ServerGameObject*)m)->destroy();
+				}
+			ServerGameObject* marker = srv->spawnObject(markerBp, player, best->position, Vector3(0.0f, 0.0f, 0.0f));
+			attempt.marker = marker;
+			attempt.deposit = best->id;
+		}
+		return std::max(value, 1.0f);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// The aggressive AI's focused attacks (not in WKB.exe). The Kingmaker's siege armies attack the
+// palaces of the "main enemy", which only the diplomacy loop sets (not in skirmishes without
+// diplomacy), else those of "All Random Enemy Palaces": a random enemy player for each army
+// each time its targets are worked out. In an 8-player game the armies of one AI spread over
+// seven enemies and nobody falls. This wraps "All Random Enemy Palaces": the palaces of the
+// enemy player whose nearest palace is closest to the asking army's player's palace, so all of
+// an AI's armies go for the same neighbour until it has no palace left. The scripts' own
+// equations decide what an enemy and a palace are.
+struct FinderFocusedEnemyPalaces : ObjectFinder {
+	ObjectFinder* original;
+	explicit FinderFocusedEnemyPalaces(ObjectFinder* original) : original(original) {}
+	~FinderFocusedEnemyPalaces() { delete original; }
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI || !Server::instance->aiFocusAttacks)
+			return original->eval(ctx);
+		const GameSet& gs = *ctx->gameState->gameSet;
+		const int isEnemy = gs.equations.names.getIndex("Candidate Is Enemy To Me");
+		const int isPalace = gs.equations.names.getIndex("Candidate is a Global Delivery Point");
+		const int homeFinder = gs.objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		CommonGameObject* self = ctx->getSelf();
+		CommonGameObject* level = ctx->gameState->level;
+		if (isEnemy < 0 || isPalace < 0 || !self || !level)
+			return original->eval(ctx);
+		CommonGameObject* player = self->getPlayer();
+		CommonGameObject* home = homeFinder >= 0 ? gs.objectFinderDefinitions[homeFinder]->getFirst(ctx) : nullptr;
+		const Vector3 from = home ? home->position : self->position;
+		ObjectFinderResult best;
+		float bestDistance = 1e30f;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* other : children) {
+				if (other == player || other->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+					continue;
+				{
+					auto _ = ctx->change(ctx->candidate, other);
+					if (gs.equations[isEnemy]->eval(ctx) <= 0.0f)
+						continue;
+				}
+				ObjectFinderResult palaces;
+				float nearest = 1e30f;
+				auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+					for (const auto& [t, objs] : obj->children)
+						for (CommonGameObject* o : objs) {
+							if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+								auto _ = ctx->change(ctx->candidate, o);
+								if (gs.equations[isPalace]->eval(ctx) > 0.0f) {
+									palaces.push_back(o);
+									nearest = std::min(nearest, (o->position - from).sqlen2xz());
+								}
+							}
+							self(o, self);
+						}
+				};
+				walk(other, walk);
+				if (!palaces.empty() && nearest < bestDistance) {
+					bestDistance = nearest;
+					best = std::move(palaces);
+				}
+			}
+		return best.empty() ? original->eval(ctx) : best;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
 void InstallAIAggressionOverrides(GameSet& gs)
 {
 	const std::pair<const char*, std::pair<float, bool>> overrides[] = {
@@ -1076,6 +1251,12 @@ void InstallAIAggressionOverrides(GameSet& gs)
 		if (eq >= 0)
 			gs.equations[eq] = new ValueAggressionOverride(gs.equations[eq], how.first, how.second);
 	}
+	const int villages = gs.equations.names.getIndex("How Many Resource Villages I Want");
+	if (villages >= 0)
+		gs.equations[villages] = new ValueGoldExpansion(gs.equations[villages]);
+	const int palaces = gs.objectFinderDefinitions.names.getIndex("All Random Enemy Palaces");
+	if (palaces >= 0)
+		gs.objectFinderDefinitions[palaces] = new FinderFocusedEnemyPalaces(gs.objectFinderDefinitions[palaces]);
 }
 
 struct ValueCanAffordCommission : ValueDeterminer {
