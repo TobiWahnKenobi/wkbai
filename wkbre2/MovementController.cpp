@@ -6,6 +6,8 @@
 #include "server.h"
 #include "Pathfinding.h"
 #include "terrain.h"
+#include "gameset/gameset.h"
+#include "TrnTextureDb.h"
 #include <cassert>
 #include <SDL3/SDL_timer.h>
 
@@ -69,6 +71,22 @@ bool MovementController::isTileBlocked(const GameObjBlueprint* blueprint, int tx
 		const bool waterUnit = blueprint->canWalkOnWater() && blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION;
 		if (waterUnit && !trnTile->fullOfWater)
 			return true;
+
+		// the type's passability fields (USE_PASSABILITY_FIELDS, Passability_Fields.cpp; WKB.exe
+		// reads them, its pathfinder's use of them isn't traced): a land unit can't
+		// stand on water, river beds or mountains (by the tile's texture), however flat
+		if (const std::vector<bool>* passable = blueprint->getPassableTerrains()) {
+			auto& tile = server->tiles[tz * trnsize.first + tx];
+			if (tile.terrainType == -2) {
+				tile.terrainType = -1;
+				const auto& groups = server->gameSet->associatedTileTexGroups;
+				auto it = trnTile->texture && trnTile->texture->grp ? groups.find(trnTile->texture->grp->name) : groups.end();
+				if (it != groups.end())
+					tile.terrainType = (short)(it->second - &server->gameSet->terrains[0]);
+			}
+			if (tile.terrainType >= 0 && tile.terrainType < (int)passable->size() && !(*passable)[tile.terrainType])
+				return true;
+		}
 
 		if (!waterUnit && trnTile->fullOfWater) {
 			if (trnTile->waterLevel - *minH > 1.5f)

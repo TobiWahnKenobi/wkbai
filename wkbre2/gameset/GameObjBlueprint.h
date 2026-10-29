@@ -86,6 +86,11 @@ struct GameObjBlueprint {
 	Vector3 maxScaleVary = Vector3(1, 1, 1);
 
 	bool floatsOnWater = false;
+	// USE_PASSABILITY_FIELDS: the fields' name (GameSet::passabilityFields), resolved on first use
+	std::string passabilityFieldsName;
+	mutable const std::vector<bool>* passableTerrains = nullptr;
+	mutable bool passableTerrainsResolved = false;
+	const std::vector<bool>* getPassableTerrains() const;
 
 	bool removeWhenNotReferenced = false;
 

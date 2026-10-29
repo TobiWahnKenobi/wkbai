@@ -96,6 +96,7 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();
 	void addZoneTile(int tx, int tz);
+	void removeZoneTile(int tx, int tz);
 	//void removeZoneTile(int tx, int tz);
 	void updateSightRange();
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);
@@ -177,6 +178,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool userProfileUpdated = false;
 	// the aggressive AI (InstallAIAggressionOverrides): the skirmish setting "aggressiveAI"
 	bool aggressiveAI = true;
+	// with it, AIs found villages at gold (ValueGoldExpansion): the setting "aiGoldExpansion"
+	bool aiGoldExpansion = true;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

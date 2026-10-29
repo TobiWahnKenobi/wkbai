@@ -13,6 +13,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <array>
 #include "gameset/gameset.h"
 #include "file.h"
 #include "gameset/values.h"
@@ -1982,6 +1983,43 @@ void Test_AutoWall()
 	fflush(stdout);
 }
 
+// The passability fields (USE_PASSABILITY_FIELDS): on 8 Player Continent, per terrain type, the
+// tiles a Peasant can't stand on with the fields and without them (water depth and slope only)
+void Test_Passability()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\8 Player Continent.lvl");
+	const GameObjBlueprint* peasant = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	if (!peasant || !server.terrain) {
+		printf("PASSABILITY no Peasant or terrain\n");
+		return;
+	}
+	const std::vector<bool>* fields = peasant->getPassableTerrains();
+	printf("PASSABILITY Peasant fields %s (%zu field sets)\n", fields ? "found" : "missing", server.gameSet->passabilityFields.size());
+	const auto area = server.terrain->getNumPlayableTiles();
+	std::map<std::string, std::array<int, 3>> perTerrain; // tiles, blocked with fields, blocked without
+	int with = 0, without = 0;
+	for (int z = 0; z < area.second; z++)
+		for (int x = 0; x < area.first; x++) {
+			const bool a = MovementController::isTileBlocked(peasant, x, z);
+			peasant->passableTerrains = nullptr; // without the fields (resolved again below)
+			const bool b = MovementController::isTileBlocked(peasant, x, z);
+			peasant->passableTerrains = fields;
+			const short t = server.tiles[z * area.first + x].terrainType;
+			auto& row = perTerrain[t >= 0 ? server.gameSet->terrains.names.getString(t) : std::string("(none)")];
+			row[0]++;
+			row[1] += a;
+			row[2] += b;
+			with += a;
+			without += b;
+		}
+	for (const auto& [name, row] : perTerrain)
+		printf("PASSABILITY %-24s tiles %6d blocked %6d (without fields %6d)\n", name.c_str(), row[0], row[1], row[2]);
+	printf("PASSABILITY total blocked %d with fields, %d without, of %d tiles\n", with, without, area.first * area.second);
+	fflush(stdout);
+}
+
 // The minimap drawn from the terrain (Terrain::drawMinimap) against every map's own in its BCM: the
 // mean difference per channel (0-255) for each of the four orientations; prints the best one and
 // the mean difference over all maps. Writes the 4 Peaks pair as a PCX to the temp folder.
@@ -2106,6 +2144,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AutoWall, "Automatic walls and gatehouse around a Manor"},
 {Test_Minimap, "Minimap drawn from the terrain against the maps' own"},
 {Test_DDS, "DDS textures decoded (uncompressed, BC1, BC3, BC5)"},
+{Test_Passability, "Passability fields (terrain types a unit can't stand on)"},
 };
 
 void LaunchTest()

@@ -491,6 +491,23 @@ void GameSet::parseFile(const char * fn, int pass)
 		}
 		else if (pass == 1) {
 			switch (tag) {
+			case Tags::GAMESET_PASSABILITY_FIELDS: {
+				std::vector<bool>& passable = passabilityFields[gsf.nextString(true)];
+				passable.assign(terrains.size(), false);
+				gsf.advanceLine();
+				while (!gsf.eof) {
+					const std::string ptag = gsf.nextTag();
+					if (ptag == "END_PASSABILITY_FIELDS")
+						break;
+					if (ptag == "PASSABLE_TERRAIN") {
+						const int t = terrains.names.getIndex(gsf.nextString(true));
+						if (t >= 0)
+							passable[t] = true;
+					}
+					gsf.advanceLine();
+				}
+				break;
+			}
 			case Tags::GAMESET_DECLARE_ITEM: {
 				int x = items.names.getIndex(gsf.nextString(true));
 				//int side = 0;

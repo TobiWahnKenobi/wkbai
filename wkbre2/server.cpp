@@ -1115,14 +1115,28 @@ void ServerGameObject::lookForSightRangeEvents()
 
 void ServerGameObject::addZoneTile(int tx, int tz)
 {
-	this->zoneTiles.emplace(tx, tz);
 	Server* server = Server::instance;
 	auto areaSize = server->terrain->getNumPlayableTiles();
 	int tileIndex = tz * areaSize.first + tx;
+	// a tile is in one zone: the one it was in loses it
+	if (ServerGameObject* previous = server->tiles[tileIndex].zone.getFrom<Server>(); previous && previous != this)
+		previous->zoneTiles.erase({ tx, tz });
+	this->zoneTiles.emplace(tx, tz);
 	server->tiles[tileIndex].zone = this->id;
 	//auto& zl = server->tiles[tileIndex].zoneList;
 	//if (std::find(zl.begin(), zl.end(), this) == zl.end())
 	//	zl.emplace_back(this);
+}
+
+void ServerGameObject::removeZoneTile(int tx, int tz)
+{
+	if (!this->zoneTiles.erase({ tx, tz }))
+		return;
+	Server* server = Server::instance;
+	auto areaSize = server->terrain->getNumPlayableTiles();
+	auto& tile = server->tiles[tz * areaSize.first + tx];
+	if (tile.zone.getFrom<Server>() == this)
+		tile.zone = CmnGORef();
 }
 
 void ServerGameObject::updateSightRange()

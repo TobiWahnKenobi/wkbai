@@ -348,6 +348,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "FORMATION_SEPERATION_Y") {
 			formationSeparationY = gsf.nextFloat();
 		}
+		else if (strtag == "USE_PASSABILITY_FIELDS") {
+			passabilityFieldsName = gsf.nextString(true);
+		}
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}
@@ -454,6 +457,17 @@ Model* GameObjBlueprint::getSpecialEffect(int sfxTag) const
 		return (*vec)[rand() % vec->size()];
 	}
 	return nullptr;
+}
+
+const std::vector<bool>* GameObjBlueprint::getPassableTerrains() const
+{
+	if (!passableTerrainsResolved) {
+		passableTerrainsResolved = true;
+		auto it = gameSet->passabilityFields.find(passabilityFieldsName);
+		if (!passabilityFieldsName.empty() && it != gameSet->passabilityFields.end())
+			passableTerrains = &it->second;
+	}
+	return passableTerrains;
 }
 
 bool GameObjBlueprint::canWalkOnWater() const { return floatsOnWater || bpClass != Tags::GAMEOBJCLASS_CHARACTER; }

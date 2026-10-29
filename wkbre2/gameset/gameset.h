@@ -119,6 +119,10 @@ struct GameSet
 	int defaultDiplomaticStatus = 0;
 	std::map<int, std::vector<GameObjBlueprint::SoundRef>> globalSoundMap;
 	std::map<std::string, GSTerrain*> associatedTileTexGroups;
+	// PASSABILITY_FIELDS "<name>": per terrain (index in terrains), whether a unit using the
+	// fields (USE_PASSABILITY_FIELDS) can stand on it. The game set's "Land Unit" leaves out water,
+	// river beds, coastline and mountains.
+	std::map<std::string, std::vector<bool>> passabilityFields;
 
 	mutable ModelCache modelCache;
 

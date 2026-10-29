@@ -981,6 +981,33 @@ struct ActionSwitchHighest : ActionSwitchCommon {
 
 // SWITCH_LOWEST: the case of the lowest value, as SWITCH_HIGHEST the highest (mods; no shipped
 // script uses it)
+// PAUSE_GAME / RESUME_GAME (for mods; no shipped script uses them): the game clock stops or
+// goes on, as the pause key does, and the clients are told
+struct ActionPauseGame : Action {
+	bool pause;
+	explicit ActionPauseGame(bool pause) : pause(pause) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		if (pause)
+			ctx->server->timeManager.pause();
+		else
+			ctx->server->timeManager.unpause();
+		ctx->server->syncTime();
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// RECALCULATE_SIGHT_RANGE <finder> (for mods): the objects' sight range from their equation again
+struct ActionRecalculateSightRange : Action {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			obj->updateSightRange();
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ActionSwitchLowest : ActionSwitchCommon {
 	virtual void run(SrvScriptContext* ctx) override {
 		float minvalue = INFINITY;
@@ -1761,6 +1788,14 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	default:
 		// keywords of the original without a tag in wkbre2's list
 		if (name == "SWITCH_LOWEST") { action = new ActionSwitchLowest; break; }
+		// the *_STAT traces read as the plain ones (debug output; extra words on the line are skipped)
+		if (name == "TRACE_STAT") { action = new ActionTrace; break; }
+		if (name == "TRACE_VALUE_STAT") { action = new ActionTraceValue; break; }
+		if (name == "TRACE_FINDER_RESULTS_STAT") { action = new ActionTraceFinderResults; break; }
+		if (name == "PAUSE_GAME") { action = new ActionPauseGame(true); break; }
+		if (name == "RESUME_GAME") { action = new ActionPauseGame(false); break; }
+		if (name == "RECALCULATE_SIGHT_RANGE") { action = new ActionRecalculateSightRange; break; }
+		if (name == "STOP_MUSIC") { action = new ActionNop; break; } // as FADE_STOP_MUSIC
 		action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}
 	action->parse(gsf, gs);

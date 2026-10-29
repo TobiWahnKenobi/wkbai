@@ -142,6 +142,9 @@ struct CommonGameState {
 		CmnGORef zone;
 		CmnGORef building;
 		bool buildingPassable;
+		// the tile's TERRAIN (GameSet::terrains index, -1 none), from its texture group; -2 not
+		// looked up yet (MovementController::isTileBlocked; reset when the texture changes)
+		short terrainType = -2;
 	};
 	std::unique_ptr<Tile[]> tiles;
 	Terrain* terrain = nullptr;

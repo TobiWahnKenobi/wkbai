@@ -42,6 +42,16 @@ namespace {
 		auto lower = [](std::string s) { for (char& c : s) c = (char)tolower((unsigned char)c); return s; };
 		return lower(text).find(lower(part)) != std::string::npos;
 	}
+// the tiles' terrain types are looked up again (MovementController::isTileBlocked) after painting
+static void ResetTileTerrainTypes(Server& server)
+{
+	if (!server.terrain || !server.tiles)
+		return;
+	const auto area = server.terrain->getNumPlayableTiles();
+	for (int i = 0; i < area.first * area.second; i++)
+		server.tiles[i].terrainType = -2;
+}
+
 
 	// The texture of a group and id in this terrain's database (client and server each have one)
 	TerrainTexture* FindTexture(Terrain* trn, const std::string& group, int id)
@@ -55,7 +65,12 @@ namespace {
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES };
+	// zones (TERRAIN_ZONE objects, which triggers and finders use): the one being painted, by
+	// id, and whether the brush adds tiles to it or takes them away
+	uint32_t zoneId = 0;
+	enum ZoneTool { ADD_TILES, REMOVE_TILES };
+	int zoneTool = ADD_TILES, zoneType = 0;
 	// water: a click adds a lake (its point, the water level that much above the ground there) or
 	// removes the lake whose water is under the cursor
 	enum WaterTool { ADD_LAKE, REMOVE_LAKE };
@@ -272,6 +287,7 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 							tile->xflip = fx;
 							tile->zflip = fz;
 						}
+					ResetTileTerrainTypes(server);
 				});
 				ed.terrainChanged = true;
 			}
@@ -291,6 +307,35 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		}
 		return false;
 	}
+	// zone brush: the playable tiles within the radius join the zone (or leave it), on the server
+	if (ed.mode == EditorState::ZONES) {
+		const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.stroke || !overUi);
+		ed.stroke = down;
+		if (!down || !ed.zoneId)
+			return down;
+		const float r = std::max(0.5f, ed.radius / 5.0f);
+		const float cx = cursor.x / 5.0f, cz = cursor.z / 5.0f;
+		const uint32_t zoneId = ed.zoneId;
+		const bool add = ed.zoneTool == EditorState::ADD_TILES;
+		withServer([&](Server& server) {
+			ServerGameObject* zone = server.findObject(zoneId);
+			if (!zone || !server.terrain)
+				return;
+			const auto area = server.terrain->getNumPlayableTiles();
+			for (int z = (int)std::floor(cz - r); z <= (int)std::ceil(cz + r); z++)
+				for (int x = (int)std::floor(cx - r); x <= (int)std::ceil(cx + r); x++) {
+					const float dx = x + 0.5f - cx, dz = z + 0.5f - cz;
+					if (x < 0 || z < 0 || x >= area.first || z >= area.second || dx * dx + dz * dz > r * r)
+						continue;
+					if (add)
+						zone->addZoneTile(x, z);
+					else
+						zone->removeZoneTile(x, z);
+				}
+		});
+		return true;
+	}
+
 	if (ed.mode != EditorState::TERRAIN) // the Players mode has no clicks on the map
 		return false;
 
@@ -386,6 +431,118 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 	return false;
 }
 
+// The Zones mode's panel: the level's terrain zones (a new one, its name, deleting it), the
+// brush, and the chosen zone's tiles drawn over the map. Zones live on the server only.
+void ClientInterface::editorZones()
+{
+	EditorState& ed = *editor;
+	struct ZoneRow { uint32_t id; std::string type, name; size_t tiles; };
+	std::vector<ZoneRow> zones;
+	std::vector<std::pair<int, int>> selectedTiles;
+	std::vector<std::string> zoneTypes;
+	withServer([&](Server& server) {
+		const auto& types = server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_TERRAIN_ZONE];
+		for (size_t i = 0; i < types.size(); i++)
+			zoneTypes.push_back(types.names.getString((int)i));
+		ServerGameObject* level = server.getLevel();
+		if (!level)
+			return;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children)
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_TERRAIN_ZONE) {
+					ServerGameObject* zone = (ServerGameObject*)child;
+					zones.push_back({ zone->id, zone->blueprint->name, zone->name, zone->zoneTiles.size() });
+					if (zone->id == ed.zoneId)
+						selectedTiles.assign(zone->zoneTiles.begin(), zone->zoneTiles.end());
+				}
+	});
+	if (zoneTypes.empty()) {
+		ImGui::TextWrapped("The game set has no TERRAIN_ZONE types.");
+		return;
+	}
+	ed.zoneType = std::clamp(ed.zoneType, 0, (int)zoneTypes.size() - 1);
+	if (ImGui::BeginCombo("Type", zoneTypes[ed.zoneType].c_str())) {
+		for (int i = 0; i < (int)zoneTypes.size(); i++)
+			if (ImGui::Selectable(zoneTypes[i].c_str(), i == ed.zoneType))
+				ed.zoneType = i;
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("New zone")) {
+		const int type = ed.zoneType;
+		const size_t count = zones.size();
+		withServer([&](Server& server) {
+			if (ServerGameObject* level = server.getLevel())
+				if (ServerGameObject* zone = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_TERRAIN_ZONE][type], level, Vector3(0, 0, 0), Vector3(0, 0, 0))) {
+					zone->name = "Zone " + std::to_string(count + 1);
+					ed.zoneId = zone->id;
+				}
+		});
+		ed.status = "New zone: paint its tiles";
+	}
+	if (ImGui::BeginListBox("##zones", ImVec2(-1, 120))) {
+		for (const ZoneRow& z : zones) {
+			const std::string label = (z.name.empty() ? std::string("(no name)") : z.name) + " - " + z.type + ", " + std::to_string(z.tiles) + " tiles##" + std::to_string(z.id);
+			if (ImGui::Selectable(label.c_str(), z.id == ed.zoneId))
+				ed.zoneId = z.id;
+		}
+		ImGui::EndListBox();
+	}
+	auto selected = std::find_if(zones.begin(), zones.end(), [&](const ZoneRow& z) { return z.id == ed.zoneId; });
+	if (selected == zones.end()) {
+		ed.zoneId = 0;
+		ImGui::TextWrapped("Make a zone or choose one, then paint its tiles on the map. Triggers and finders find a zone by its name.");
+		return;
+	}
+	char name[64];
+	snprintf(name, sizeof(name), "%s", selected->name.c_str());
+	if (ImGui::InputText("Name", name, sizeof(name))) {
+		const std::string newName = name;
+		const uint32_t id = ed.zoneId;
+		withServer([&](Server& server) {
+			if (ServerGameObject* zone = server.findObject(id))
+				zone->name = newName;
+		});
+	}
+	ImGui::RadioButton("Add tiles", &ed.zoneTool, EditorState::ADD_TILES);
+	ImGui::SameLine();
+	ImGui::RadioButton("Remove tiles", &ed.zoneTool, EditorState::REMOVE_TILES);
+	ImGui::SliderFloat("Radius (m)", &ed.radius, 2.5f, 100.0f, "%.1f");
+	if (ImGui::Button("Delete zone")) {
+		const uint32_t id = ed.zoneId;
+		withServer([&](Server& server) {
+			if (ServerGameObject* zone = server.findObject(id)) {
+				for (const auto& [x, z] : std::vector<std::pair<int, int>>(zone->zoneTiles.begin(), zone->zoneTiles.end()))
+					zone->removeZoneTile(x, z);
+				server.deleteObject(zone);
+			}
+		});
+		ed.zoneId = 0;
+		ed.status = "Zone deleted";
+		return;
+	}
+	// the zone's tiles over the map (at most 20000; the tile corners at ground height)
+	if (client->terrain) {
+		ImDrawList* dl = ImGui::GetBackgroundDrawList();
+		auto toScreen = [&](float x, float z, bool& visible) {
+			const Vector3 t = Vector3(x, client->terrain->getHeight(x, z) + 0.3f, z).transformScreenCoords(client->camera.sceneMatrix);
+			visible = visible && t.z > 0.0f && t.z < 1.0f;
+			return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+		};
+		const ImU32 fill = IM_COL32(80, 200, 255, 70), edge = IM_COL32(80, 200, 255, 200);
+		for (size_t i = 0; i < selectedTiles.size() && i < 20000; i++) {
+			const float x0 = selectedTiles[i].first * 5.0f, z0 = selectedTiles[i].second * 5.0f;
+			bool visible = true;
+			const ImVec2 a = toScreen(x0, z0, visible), b = toScreen(x0 + 5, z0, visible), c = toScreen(x0 + 5, z0 + 5, visible), d = toScreen(x0, z0 + 5, visible);
+			if (!visible)
+				continue;
+			dl->AddQuadFilled(a, b, c, d, fill);
+			dl->AddQuad(a, b, c, d, edge);
+		}
+	}
+	ImGui::TextWrapped("Hold the left button to paint. A tile belongs to one zone: adding it to this zone takes it from another. Zones are saved with the map.");
+}
+
 void ClientInterface::editorWindow()
 {
 	if (!editor)
@@ -402,10 +559,13 @@ void ClientInterface::editorWindow()
 		ImGui::RadioButton("Water", &ed.mode, EditorState::WATER);
 		ImGui::SameLine();
 		ImGui::RadioButton("Objects", &ed.mode, EditorState::OBJECTS);
-		ImGui::SameLine();
 		ImGui::RadioButton("Players", &ed.mode, EditorState::PLAYERS);
+		ImGui::SameLine();
+		ImGui::RadioButton("Zones", &ed.mode, EditorState::ZONES);
 		ImGui::Separator();
-		if (ed.mode == EditorState::PLAYERS) {
+		if (ed.mode == EditorState::ZONES)
+			editorZones();
+		else if (ed.mode == EditorState::PLAYERS) {
 			// each player's starting resources and its diplomacy towards the others, set on the
 			// server: the level is saved from there
 			std::vector<ClientGameObject*> players;
@@ -628,6 +788,7 @@ void ClientInterface::editorUndo()
 				st->tiles[i].xflip = u.tiles[i].xflip;
 				st->tiles[i].zflip = u.tiles[i].zflip;
 			}
+			ResetTileTerrainTypes(server);
 		});
 		rebuildTerrainRenderer(true);
 		ed.status = "Undone: a texture stroke";
@@ -716,7 +877,7 @@ void ClientInterface::editorOpenMode(const std::string& mode)
 	if (!editor)
 		editor = std::make_shared<EditorState>();
 	static const std::pair<const char*, int> modes[] = { { "terrain", EditorState::TERRAIN }, { "textures", EditorState::TEXTURES },
-		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS } };
+		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS }, { "zones", EditorState::ZONES } };
 	for (const auto& [name, m] : modes)
 		if (mode == name)
 			editor->mode = m;
@@ -812,6 +973,36 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		cursor = target + Vector3(40, 0, 0);
 		g_mousePressed[SDL_BUTTON_LEFT] = true;
 		printf("EDITORTEST placing a Windmill (type %d) for player %u\n", ed.placeType, ed.placePlayer);
+	}
+	if (frame == 140) {
+		// then a zone, painted 10 m around the hill's top
+		ed.mode = EditorState::ZONES;
+		ed.zoneTool = EditorState::ADD_TILES;
+		ed.radius = 10.0f;
+		withServer([&](Server& server) {
+			const auto& types = server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_TERRAIN_ZONE];
+			if (ServerGameObject* level = server.getLevel(); level && types.size())
+				if (ServerGameObject* zone = server.spawnObject(&types[0], level, Vector3(0, 0, 0), Vector3(0, 0, 0))) {
+					zone->name = "Editor Test Zone";
+					ed.zoneId = zone->id;
+				}
+		});
+	}
+	if (frame >= 141 && frame < 145) {
+		cursor = target;
+		g_mouseDown[SDL_BUTTON_LEFT] = true;
+	}
+	if (frame == 146) {
+		size_t tiles = 0;
+		bool tileInZone = false;
+		withServer([&](Server& server) {
+			if (ServerGameObject* zone = server.findObject(ed.zoneId)) {
+				tiles = zone->zoneTiles.size();
+				const auto area = server.terrain->getNumPlayableTiles();
+				tileInZone = server.tiles[(int)(target.z / 5.0f) * area.first + (int)(target.x / 5.0f)].zone.getFrom<Server>() == zone;
+			}
+		});
+		printf("EDITORTEST zone: %zu tiles, the hill's tile in it %d\n", tiles, (int)tileInZone);
 	}
 	if (frame == 160) {
 		editorSave("Editor Test");
