@@ -1699,6 +1699,7 @@ void Test_AIvsAI()
 	server.timeManager.stepMs = 20;
 	skirmish.applySettings(server);
 
+	std::map<uint32_t, std::set<uint32_t>> raised; // per player, every soldier seen at a census
 	auto census = [&](const char* when) {
 		ServerGameObject* lvl = server.getLevel();
 		std::vector<std::string> standing;
@@ -1719,7 +1720,10 @@ void Test_AIvsAI()
 								{
 									static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout" };
 									const std::string& n = o->blueprint->name;
-									soldiers += std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; });
+									if (std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; })) {
+										soldiers++;
+										raised[player->id].insert(o->id);
+									}
 								}
 								Order* order = ((ServerGameObject*)o)->orderConfig.getCurrentOrder();
 								orders[order ? server.gameSet->orders.getString(order->blueprint->bpid) : std::string("idle")]++;
@@ -1763,8 +1767,8 @@ void Test_AIvsAI()
 						}
 				};
 				count(player, count);
-				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
-					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, buildings,
+				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
+					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
 				std::string markerList;
 				for (const auto& [name, n] : markers)
