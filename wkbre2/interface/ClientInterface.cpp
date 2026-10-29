@@ -1240,6 +1240,15 @@ void ClientInterface::iter()
 		editorOn = true;
 		editorTestStep(peapos);
 	}
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorBlankTest", false)) {
+		// a test run: the map made blank, then saved as "Blank Test"
+		editorOn = true;
+		static int frame = 0;
+		if (++frame == 30) {
+			editorBlankMap();
+			editorSave("Blank Test");
+		}
+	}
 	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json()).value("editorMode", std::string()).empty() && !editorOn) {
 		editorOn = true;
 		editorOpenMode(g_settings["benchmark"]["editorMode"].get<std::string>());

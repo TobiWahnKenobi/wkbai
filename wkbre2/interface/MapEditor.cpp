@@ -730,6 +730,20 @@ void ClientInterface::editorWindow()
 		ImGui::SameLine();
 		if (ImGui::Button("Check"))
 			ed.warnings = editorCheck();
+		// a new map from this one: its size, sky and texture database, nothing else
+		if (ImGui::Button("New blank map..."))
+			ImGui::OpenPopup("New blank map");
+		if (ImGui::BeginPopupModal("New blank map", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextWrapped("Flat ground of one texture (the Textures mode's), no lakes, and no objects but the players. The map keeps its size, sky and textures. Undo can't bring the old map back; it stays as it was saved.");
+			if (ImGui::Button("Make it blank")) {
+				editorBlankMap();
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel"))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 		for (const std::string& w : ed.warnings)
 			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", w.c_str());
 		if (!ed.status.empty())
@@ -738,6 +752,81 @@ void ClientInterface::editorWindow()
 	ImGui::End();
 	if (!open)
 		editorOn = false;
+}
+
+// "New blank map": the heights flat, every tile the chosen texture (turned 0, no flips), no
+// lakes, and every object removed but the players (their start cameras and resources stay), on
+// the client and the server. The size, the sky and the texture database are the open map's.
+void ClientInterface::editorBlankMap()
+{
+	if (!editor)
+		editor = std::make_shared<EditorState>();
+	if (!client->terrain)
+		return;
+	EditorState& ed = *editor;
+	Terrain* trn = client->terrain;
+	std::string group = ed.paintGroup;
+	int id = ed.paintId;
+	// no texture chosen: a plain grass group's first texture (GRASS..., not a blend), else any grass, else the first
+	if (!FindTexture(trn, group, id))
+		for (int pass = 0; pass < 3 && !FindTexture(trn, group, id); pass++)
+			for (const auto& [name, g] : trn->texDb.groups)
+				if (g && !g->textures.empty() && (pass == 2 || (pass == 1 && name.find("GRASS") != std::string::npos)
+					|| (name.rfind("GRASS", 0) == 0 && name.find('-') == std::string::npos))) {
+					group = name;
+					id = g->textures.begin()->first;
+					break;
+				}
+	const uint8_t flatHeight = 20;
+	auto blank = [&](Terrain* t, TerrainTexture* tex) {
+		std::fill(t->vertices.begin(), t->vertices.end(), flatHeight);
+		for (int i = 0; i < t->width * t->height; i++) {
+			if (tex)
+				t->tiles[i].texture = tex;
+			t->tiles[i].rot = 0;
+			t->tiles[i].xflip = 0;
+			t->tiles[i].zflip = 0;
+		}
+	};
+	blank(trn, FindTexture(trn, group, id));
+	size_t removed = 0;
+	withServer([&](Server& server) {
+		if (server.terrain && server.terrain != trn)
+			blank(server.terrain, FindTexture(server.terrain, group, id));
+		ResetTileTerrainTypes(server);
+		std::vector<ServerGameObject*> gone;
+		if (ServerGameObject* level = server.getLevel())
+			for (const auto& [type, children] : level->children)
+				for (CommonGameObject* child : children) {
+					if (child->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER) {
+						gone.push_back((ServerGameObject*)child);
+						continue;
+					}
+					for (const auto& [subType, subs] : child->children)
+						for (CommonGameObject* sub : subs)
+							gone.push_back((ServerGameObject*)sub);
+				}
+		for (ServerGameObject* obj : gone)
+			server.deleteObject(obj);
+		removed = gone.size();
+	});
+	ed.undo.clear();
+	ed.zoneId = 0;
+	setLakes({}, {});
+	rebuildTerrainRenderer(false);
+	rebuildTerrainRenderer(true);
+	// the HUD's minimap drawn again from the blank ground (as the save writes it into the BCM)
+	const std::vector<uint8_t> rgb = trn->drawMinimap();
+	trn->minimapWidth = trn->minimapHeight = 128;
+	trn->minimapRGBA.resize(128 * 128 * 4);
+	for (size_t i = 0; i < 128 * 128; i++) {
+		for (int c = 0; c < 3; c++)
+			trn->minimapRGBA[i * 4 + c] = rgb[i * 3 + c];
+		trn->minimapRGBA[i * 4 + 3] = 255;
+	}
+	minimapTerrain = nullptr;
+	ed.status = "Blank map: " + std::to_string(removed) + " objects removed, the ground flat with " + group + " " + std::to_string(id) + ". Save it under a new name.";
+	printf("EDITORBLANK %s\n", ed.status.c_str());
 }
 
 void ClientInterface::editorUndo()
