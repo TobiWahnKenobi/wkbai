@@ -11,6 +11,9 @@
 #include "renderer_diligent.h"
 #include "../Model.h"
 #include "../scene.h"
+#include "../file.h"
+#include "bitmap.h"
+#include "TextureCache.h"
 #include "../Camera.h"
 #include "../util/util.h"
 #include "../settings.h"
@@ -38,6 +41,8 @@ static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
 
 static const char esShaderCode[] = R"---(
 Texture2D inpTexture;
+Texture2D normalMap; // override packs: <texture>_normal (tangent space, +z out), else flat
+Texture2D ormMap;    // override packs: <texture>_orm (occlusion, roughness, metalness), else 1, 0.65, 0
 SamplerState inpSampler;
 Texture2D cloudTexture;
 SamplerState cloudSampler;
@@ -178,19 +183,33 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
 		return input.Color.rgb * albedo;
 	float3 n = normalize(input.Norm);
+	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
+	// no tangents)
+	float3 tn = normalMap.Sample(inpSampler, input.Texcoord).xyz * 2 - 1;
+	if (abs(tn.z - 1) > 1e-3) {
+		float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
+		float2 duv1 = ddx(input.Texcoord), duv2 = ddy(input.Texcoord);
+		float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+		float3 t = dp2perp * duv1.x + dp1perp * duv2.x;
+		float3 b = dp2perp * duv1.y + dp1perp * duv2.y;
+		float invmax = rsqrt(max(max(dot(t, t), dot(b, b)), 1e-12));
+		n = normalize(t * invmax * tn.x + b * invmax * tn.y + n * tn.z);
+	}
+	float3 orm = ormMap.Sample(inpSampler, input.Texcoord).rgb;
 	float3 l = normalize(SunDirection);
 	float3 v = normalize(FogCamera.xyz - input.WorldPos);
 	float3 h = normalize(l + v);
 	float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3), nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
-	float3 diffuse = min(MeshLighting.x + MeshLighting.y * SunColour.rgb * nl, 1);
-	const float roughness = 0.65;
+	float3 diffuse = min(MeshLighting.x * orm.r + MeshLighting.y * SunColour.rgb * nl, 1);
+	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
 	float a = roughness * roughness, a2 = a * a;
 	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
 	float k = a / 2;
 	float vis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
-	float f = 0.04 + 0.96 * pow(1 - vh, 5);
+	float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
+	float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
 	float3 specular = SunColour.rgb * (d * vis * f * nl / 4) * MeshLighting.w;
-	return (diffuse * albedo + specular) * input.Tint.a * input.Tint.rgb;
+	return (diffuse * albedo * (1 - metal) + specular) * input.Tint.a * input.Tint.rgb;
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -369,6 +388,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
+	texture flatNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
@@ -406,6 +426,8 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX, "SceneBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "normalMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -584,11 +606,37 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->envBinding->GetVariableByName(SHADER_TYPE_VERTEX, "cloudTexture")->Set(shadows.cloudMap ? shadows.cloudMap.RawPtr() : dgfx->GetTextureView(nullptr));
 	}
 
-	auto getBinding = [&](texture tex) -> IShaderResourceBinding* {
+	// a material's binding: its texture, and the override pack's normal and ORM maps beside it
+	// (<texture>_normal, <texture>_orm, .png or .tga) or flat defaults
+	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b) {
+		Bitmap bmp;
+		bmp.width = bmp.height = 1;
+		bmp.format = BMFORMAT_R8G8B8A8;
+		bmp.pixels.resize(4);
+		bmp.pixels[0] = r; bmp.pixels[1] = g; bmp.pixels[2] = b; bmp.pixels[3] = 255;
+		return gfx->CreateTexture(bmp, 1);
+	};
+	if (!_impl->flatNormal) {
+		_impl->flatNormal = pixel(128, 128, 255);
+		_impl->defaultOrm = pixel(255, 166, 0);
+	}
+	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
 		if (!srb) {
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(tex));
+			auto overrideMap = [&](const char* suffix) -> texture {
+				const std::string base = filename.substr(0, filename.find_last_of('.'));
+				for (const char* ext : { ".png", ".tga" }) {
+					const std::string name = base + suffix + ext;
+					if (FileExists((scene->texCache.directory + name).c_str()))
+						return scene->texCache.getTexture(name.c_str());
+				}
+				return nullptr;
+			};
+			texture nrm = overrideMap("_normal"), orm = overrideMap("_orm");
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->flatNormal));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));
 		}
 		return srb;
 	};
@@ -601,7 +649,7 @@ void DiligentEnhancedSceneRenderer::render()
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
 			const int alpha = mat.alphaTest ? 1 : 0;
-			IShaderResourceBinding* srb = getBinding(it.second.tex);
+			IShaderResourceBinding* srb = getBinding(it.second.tex, mat.textureFilename);
 
 			auto* model = it.first.second;
 			auto* staticModel = model->getStaticModel();
