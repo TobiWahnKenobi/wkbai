@@ -634,6 +634,9 @@ struct FinderFilter : ObjectFinder {
 
 struct FinderMetreRadius : ObjectFinder {
 	std::unique_ptr<ValueDeterminer> vdradius;
+	// FINDER_METRE_RADIUS <radius> [<finder>] <terms>: the search centre, else self ("... CONSTANT 10
+	// FINDER_SELF ALLIED_UNITS" in Guard.cpp and Skirmish.cpp)
+	std::unique_ptr<ObjectFinder> fCentre;
 	bool useOriginalSelf = false;
 	int relationship = 0;
 	int classFilter = 0;
@@ -652,6 +655,8 @@ struct FinderMetreRadius : ObjectFinder {
 		case 1: if (objclass != Tags::GAMEOBJCLASS_BUILDING) return false; break;
 		case 2: if (objclass != Tags::GAMEOBJCLASS_CHARACTER) return false; break;
 		case 3: if (objclass != Tags::GAMEOBJCLASS_BUILDING && objclass != Tags::GAMEOBJCLASS_CHARACTER) return false; break;
+		case 4: if (objclass != Tags::GAMEOBJCLASS_MARKER) return false; break;
+		case 5: if (objclass != Tags::GAMEOBJCLASS_CONTAINER) return false; break; // trees and other resources
 		default:;
 		}
 		return true;
@@ -660,8 +665,15 @@ struct FinderMetreRadius : ObjectFinder {
 		using AnyGO = CommonGameObject;
 		float radius = vdradius->eval(ctx);
 		AnyGO* player = (useOriginalSelf ? ctx->get(ctx->chainOriginalSelf) : ctx->getSelf())->getPlayer();
+		Vector3 centre = ctx->getSelf()->position;
+		if (fCentre) {
+			AnyGO* first = fCentre->getFirst(ctx);
+			if (!first)
+				return {};
+			centre = first->position;
+		}
 		NNSearch search;
-		search.start(ctx->gameState, ctx->getSelf()->position, radius);
+		search.start(ctx->gameState, centre, radius);
 		ObjectFinderResult res;
 		while (AnyGO* obj = (AnyGO*)search.next())
 			if (eligible(obj, player, ctx))
@@ -671,7 +683,13 @@ struct FinderMetreRadius : ObjectFinder {
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		vdradius.reset(ReadValueDeterminer(gsf, gs));
 		// ...
+		auto cursor = gsf.cursor;
 		std::string word = gsf.nextString();
+		if (word.rfind("FINDER_", 0) == 0) {
+			gsf.cursor = cursor;
+			fCentre.reset(ReadFinderNode(gsf, gs));
+			word = gsf.nextString();
+		}
 		while (!word.empty()) {
 			if (word == "SAME_PLAYER_UNITS") relationship = 1;
 			else if (word == "ALLIED_UNITS") relationship = 2;
@@ -682,6 +700,8 @@ struct FinderMetreRadius : ObjectFinder {
 			else if (word == "BUILDINGS_ONLY") classFilter = 1;
 			else if (word == "CHARACTERS_ONLY") classFilter = 2;
 			else if (word == "CHARACTERS_AND_BUILDINGS_ONLY") classFilter = 3;
+			else if (word == "MARKERS_ONLY") classFilter = 4;
+			else if (word == "CONTAINER_ONLY") classFilter = 5;
 			else printf("Unknown METRE_RADIUS term %s\n", word.c_str());
 			word = gsf.nextString();
 		}
