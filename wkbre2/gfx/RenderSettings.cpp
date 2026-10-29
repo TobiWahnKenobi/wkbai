@@ -37,6 +37,8 @@ void RenderSettings::load()
 	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	terrainSplat = g_settings.value<bool>("terrainSplat", def.terrainSplat);
+	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
+	modelSpecular = g_settings.value<float>("modelSpecular", def.modelSpecular);
 	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
 	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
 	wallShadows = g_settings.value<bool>("wallShadows", def.wallShadows);
@@ -90,6 +92,8 @@ void RenderSettings::save()
 	g_settings["waterSurface"] = waterSurface;
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["terrainSplat"] = terrainSplat;
+	g_settings["modelLighting"] = modelLighting;
+	g_settings["modelSpecular"] = modelSpecular;
 	g_settings["characterShadows"] = characterShadows;
 	g_settings["realCharacterShadows"] = realCharacterShadows;
 	g_settings["wallShadows"] = wallShadows;

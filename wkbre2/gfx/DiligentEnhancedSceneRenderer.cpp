@@ -83,7 +83,7 @@ cbuffer SunBuffer
 	int BumpOn;
 	float4 SunColour;
 	float4 CloudParams; // UV offset, UV per world unit, on
-	float4 MeshLighting; // ambient, diffuse factor
+	float4 MeshLighting; // ambient, diffuse factor, per-pixel lighting on, specular strength
 };
 
 cbuffer SceneBuffer
@@ -103,6 +103,8 @@ struct VS_OUTPUT
 	float4 Color : COLOR0;
 	float2 Texcoord : TEXCOORD0;
 	float Fog : FOG;
+	float3 WorldPos : TEXCOORD1;
+	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
 };
 
 // R10G10B10A2_UNORM
@@ -134,13 +136,17 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		if (CloudParams.w != 0)
 			cloud = cloudTexture.SampleLevel(cloudSampler, EntityTransform[3].xz * CloudParams.z + CloudParams.xy, 0).r;
 		output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
+		output.Tint.a = cloud;
 	}
+	output.Tint.rgb = float3(1, 1, 1);
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
-		output.Color.rgb *= float3(1.0, 0.25, 0.25);
+		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
 	if (EntityFlags & 16) // SEFLAG_PLACEABLE
-		output.Color.rgb *= float3(0.35, 1.0, 0.35);
+		output.Tint.rgb *= float3(0.35, 1.0, 0.35);
+	output.Color.rgb *= output.Tint.rgb;
 	output.Texcoord = Texcoord;
 	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
+	output.WorldPos = worldPos;
 	output.Fog = FogAmount(worldPos, distance(worldPos, FogCamera.xyz));
 	return output;
 }
@@ -163,10 +169,34 @@ VS_OUTPUT VS_Anim(float2 Texcoord : ATTRIB0, float4 T0 : ATTRIB1, float4 T1 : AT
 	return Shade(lerp(pos1, pos2, t), lerp(UnpackNormal(AnimNormals[v1]), UnpackNormal(AnimNormals[v2]), t), Texcoord, T0, T1, T2, T3, Anim.w);
 }
 
+// The light on a model: the original's per vertex (Color), or with per-pixel lighting on
+// (RenderSettings::modelLighting, the legacy adapter of PLAN.md's PBR step) the same ambient and
+// sun term per pixel plus the sun's highlight of a dielectric surface (GGX, Schlick's Fresnel
+// with F0 0.04, Smith's visibility). The original's textures have no roughness: a rough 0.65.
+float3 ModelLight(VS_OUTPUT input, float3 albedo)
+{
+	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
+		return input.Color.rgb * albedo;
+	float3 n = normalize(input.Norm);
+	float3 l = normalize(SunDirection);
+	float3 v = normalize(FogCamera.xyz - input.WorldPos);
+	float3 h = normalize(l + v);
+	float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3), nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
+	float3 diffuse = min(MeshLighting.x + MeshLighting.y * SunColour.rgb * nl, 1);
+	const float roughness = 0.65;
+	float a = roughness * roughness, a2 = a * a;
+	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
+	float k = a / 2;
+	float vis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
+	float f = 0.04 + 0.96 * pow(1 - vh, 5);
+	float3 specular = SunColour.rgb * (d * vis * f * nl / 4) * MeshLighting.w;
+	return (diffuse * albedo + specular) * input.Tint.a * input.Tint.rgb;
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	float4 c = lerp(input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -175,7 +205,7 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
-	float4 c = lerp(input.Color * tex, FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -373,7 +403,7 @@ void DiligentEnhancedSceneRenderer::init()
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_VERTEX, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX, "SceneBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
@@ -393,6 +423,7 @@ void DiligentEnhancedSceneRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SunBuffer")->Set(_impl->sunConstBuffer);
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SceneBuffer")->Set(_impl->sceneConstBuffer);
 
 	const PipelineResourceDesc envResources[] = {
@@ -542,6 +573,8 @@ void DiligentEnhancedSceneRenderer::render()
 	float* meshLighting = (float*)mapped + 12;
 	meshLighting[0] = g_renderSettings.meshAmbient;
 	meshLighting[1] = g_renderSettings.meshDiffuse;
+	meshLighting[2] = g_renderSettings.modelLighting ? 1.0f : 0.0f;
+	meshLighting[3] = g_renderSettings.modelSpecular;
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {

@@ -47,6 +47,10 @@ struct RenderSettings {
 	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;
+	// models lit per pixel with the sun's highlight (enhanced renderer on Diligent; the
+	// original lights them per vertex, without highlights)
+	bool modelLighting = false;
+	float modelSpecular = 1.0f;
 
 	// Camera
 	float scrollSpeed = 1.0f;        // WASD/arrows, multiplier
