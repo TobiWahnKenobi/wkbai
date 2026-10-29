@@ -55,7 +55,7 @@ namespace {
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS };
 	// water: a click adds a lake (its point, the water level that much above the ground there) or
 	// removes the lake whose water is under the cursor
 	enum WaterTool { ADD_LAKE, REMOVE_LAKE };
@@ -291,6 +291,8 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		}
 		return false;
 	}
+	if (ed.mode != EditorState::TERRAIN) // the Players mode has no clicks on the map
+		return false;
 
 	// terrain brush: while the left button is held
 	const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.stroke || !overUi);
@@ -400,8 +402,58 @@ void ClientInterface::editorWindow()
 		ImGui::RadioButton("Water", &ed.mode, EditorState::WATER);
 		ImGui::SameLine();
 		ImGui::RadioButton("Objects", &ed.mode, EditorState::OBJECTS);
+		ImGui::SameLine();
+		ImGui::RadioButton("Players", &ed.mode, EditorState::PLAYERS);
 		ImGui::Separator();
-		if (ed.mode == EditorState::WATER && client->terrain) {
+		if (ed.mode == EditorState::PLAYERS) {
+			// each player's starting resources and its diplomacy towards the others, set on the
+			// server: the level is saved from there
+			std::vector<ClientGameObject*> players;
+			if (ClientGameObject* level = client->getLevel())
+				for (const auto& [type, children] : level->children)
+					for (CommonGameObject* child : children)
+						if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && child->blueprint->name != "Neutral Player")
+							players.push_back((ClientGameObject*)child);
+			static const char* resourceNames[] = { "Food", "Wood", "Gold", "Stone" };
+			static const char* statusNames[] = { "Allied", "Neutral", "Enemy" };
+			for (ClientGameObject* player : players) {
+				const std::string label = std::to_string(player->id) + " " + player->blueprint->name;
+				if (!ImGui::CollapsingHeader(label.c_str(), player == players.front() ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+					continue;
+				ImGui::PushID((int)player->id);
+				for (const char* resource : resourceNames) {
+					const int item = client->gameSet->items.names.getIndex(resource);
+					if (item < 0)
+						continue;
+					int value = (int)player->getItem(item);
+					if (ImGui::InputInt(resource, &value, 50, 500)) {
+						const uint32_t id = player->id;
+						withServer([&](Server& server) {
+							if (ServerGameObject* sp = server.findObject(id))
+								sp->setItem(item, (float)std::max(0, value));
+						});
+					}
+				}
+				for (ClientGameObject* other : players) {
+					if (other == player)
+						continue;
+					int status = std::clamp(client->getDiplomaticStatus(player, other), 0, 2);
+					const std::string otherLabel = "towards " + std::to_string(other->id) + " " + other->blueprint->name;
+					if (ImGui::Combo(otherLabel.c_str(), &status, statusNames, 3)) {
+						const uint32_t a = player->id, b = other->id;
+						withServer([&](Server& server) {
+							ServerGameObject* sa = server.findObject(a);
+							ServerGameObject* sb = server.findObject(b);
+							if (sa && sb)
+								server.setDiplomaticStatus(sa, sb, status);
+						});
+					}
+				}
+				ImGui::PopID();
+			}
+			ImGui::TextWrapped("The resources each player starts with, and how it stands to the others (both ways). A skirmish's settings replace the resources when the map is played as a skirmish.");
+		}
+		else if (ed.mode == EditorState::WATER && client->terrain) {
 			ImGui::RadioButton("Add a lake", &ed.waterTool, EditorState::ADD_LAKE);
 			ImGui::SameLine();
 			ImGui::RadioButton("Remove a lake", &ed.waterTool, EditorState::REMOVE_LAKE);
@@ -659,6 +711,17 @@ bool ClientInterface::editorSave(const std::string& name)
 
 // Test runs ("benchmark": { ..., "editorTest": true }): a raise stroke where the camera looks,
 // then a building beside it, then the map saved as "Editor Test", by the same input as a player's
+void ClientInterface::editorOpenMode(const std::string& mode)
+{
+	if (!editor)
+		editor = std::make_shared<EditorState>();
+	static const std::pair<const char*, int> modes[] = { { "terrain", EditorState::TERRAIN }, { "textures", EditorState::TEXTURES },
+		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS } };
+	for (const auto& [name, m] : modes)
+		if (mode == name)
+			editor->mode = m;
+}
+
 void ClientInterface::editorTestStep(Vector3& cursor)
 {
 	if (!editor)

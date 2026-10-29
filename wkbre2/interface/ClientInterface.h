@@ -83,6 +83,8 @@ private:
 	bool editorInput(const Vector3& cursor);
 	// test runs: "benchmark": { ..., "editorTest": true } paints, places and saves by itself
 	void editorTestStep(Vector3& cursor);
+	// "benchmark": { "editorMode": "players" }: the editor open in that mode (for screenshots)
+	void editorOpenMode(const std::string& mode);
 	bool editorSave(const std::string& name);
 	void editorUndo();
 	// what may keep the level from playing: players without a start camera or without objects

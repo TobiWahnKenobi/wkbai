@@ -1237,6 +1237,10 @@ void ClientInterface::iter()
 		editorOn = true;
 		editorTestStep(peapos);
 	}
+	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json()).value("editorMode", std::string()).empty() && !editorOn) {
+		editorOn = true;
+		editorOpenMode(g_settings["benchmark"]["editorMode"].get<std::string>());
+	}
 	if (editorOn && withServer && editorInput(peapos)) {
 		g_mousePressed[SDL_BUTTON_LEFT] = false;
 		g_mouseDown[SDL_BUTTON_LEFT] = false;
