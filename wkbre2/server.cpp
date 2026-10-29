@@ -769,6 +769,9 @@ void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 	// Problem: reaction can be executed twice if it is in both intrinsics and individuals, but is it worth checking that?
 	SrvScriptContext ctx(Server::instance, this);
 	auto _ = ctx.change(ctx.packageSender, sender);
+	if (const char* traceId = getenv("WKB_TRACE_EVENTS_ID"); traceId && (uint32_t)atoi(traceId) == this->id)
+		printf("EVENT t=%.2f to %u: %s from %s %u\n", Server::instance->timeManager.currentTime, this->id, Server::instance->gameSet->events.names.getString(evt).c_str(),
+			sender ? sender->blueprint->name.c_str() : "-", sender ? sender->id : 0);
 	const auto ircopy = individualReactions;
 	for (const Reaction* r : ircopy)
 		if (r->canBeTriggeredBy(evt, this, sender))

@@ -747,17 +747,22 @@ struct ValueWithinForwardArc : ValueDeterminer {
 	virtual float eval(ScriptContext* ctx) override {
 		auto* oCenter = fCenter->getFirst(ctx);
 		auto* oTarget = fTarget->getFirst(ctx);
-		float arcAngle = vArcAngle->eval(ctx);
-		float arcRadius = vArcRadius->eval(ctx);
+		if (!oCenter || !oTarget)
+			return 0.0f;
+		// as WKB.exe's VD_Within_Forward_Arc (0x46e8c0): the arc is its full width in degrees
+		// (half of it either side of the facing), the radius a maximum distance, 0 for none
+		const float halfArc = vArcAngle->eval(ctx) * 0.5f * 3.14159265f / 180.0f;
+		const float arcRadius = vArcRadius->eval(ctx);
 		Vector3 centerDir{ sinf(oCenter->orientation.y), 0.0f, -cosf(oCenter->orientation.y) };
 		Vector3 centerToTarget = oTarget->position - oCenter->position;
+		centerToTarget.y = 0.0f;
 		float dist = centerToTarget.len2xz();
-		if (dist > arcRadius)
+		if (arcRadius > 0.0f && dist > arcRadius)
 			return 0.0f;
 		if (dist <= 0.0f)
-			return 1.0f; // :thinking:
-		float alpha = std::acos(centerDir.dot(centerToTarget/dist));
-		return std::abs(alpha) < arcAngle;
+			return 1.0f;
+		float alpha = std::acos(std::clamp(centerDir.dot(centerToTarget / dist), -1.0f, 1.0f));
+		return alpha <= halfArc ? 1.0f : 0.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		fCenter.reset(ReadFinder(gsf, gs));

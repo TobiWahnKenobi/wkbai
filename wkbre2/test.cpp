@@ -2013,6 +2013,17 @@ void Test_DiffRun()
 	server.aggressiveAI = cfg.value("aggressiveAI", true);
 	server.loadSaveGame(source.c_str());
 	const float start = server.timeManager.currentTime;
+	// "probe": { "self": <object id>, "equations": [ ... ] }: those equations at the start
+	if (cfg.contains("probe")) {
+		const nlohmann::json& probe = cfg["probe"];
+		ServerGameObject* self = server.findObject(probe.value("self", 0u));
+		SrvScriptContext ctx(&server, self);
+		for (const auto& name : probe.value("equations", nlohmann::json::array())) {
+			const int eq = server.gameSet->equations.names.getIndex(name.get<std::string>());
+			const std::string value = eq >= 0 && self ? std::to_string(server.gameSet->equations[eq]->eval(&ctx)) : "?";
+			printf("DIFFRUN probe %s = %s\n", name.get<std::string>().c_str(), value.c_str());
+		}
+	}
 	server.timeManager.unpause();
 	server.timeManager.stepMs = 20;
 	while (server.timeManager.currentTime < start + seconds) {

@@ -347,6 +347,15 @@ struct ActionTransferControl : Action {
 			if (oldParent == recipient) {
 				continue;
 			}
+			if (getenv("WKB_TRACE_TRANSFER") && recipient->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			{
+				Order* o = obj->orderConfig.getCurrentOrder();
+				Task* t = o ? o->getCurrentTask() : nullptr;
+				ServerGameObject* tg = t ? t->target.get() : nullptr;
+				printf("TRANSFER t=%.2f %u %s from %s to player, order %s, target %s %u at %.1f m, sight %.1f\n", Server::instance->timeManager.currentTime, obj->id, obj->blueprint->name.c_str(),
+					oldParent ? oldParent->blueprint->name.c_str() : "-", o ? Server::instance->gameSet->orders.names.getString(o->blueprint->bpid).c_str() : "-",
+					tg ? tg->blueprint->name.c_str() : "-", tg ? tg->id : 0, tg ? (tg->position - obj->position).len2xz() : 0.0f, obj->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) * 5.0f);
+			}
 
 			if (!recipient->deleted) {
 				obj->setParent(recipient);
