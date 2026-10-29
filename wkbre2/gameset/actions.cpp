@@ -979,6 +979,27 @@ struct ActionSwitchHighest : ActionSwitchCommon {
 	}
 };
 
+// SWITCH_LOWEST: the case of the lowest value, as SWITCH_HIGHEST the highest (mods; no shipped
+// script uses it)
+struct ActionSwitchLowest : ActionSwitchCommon {
+	virtual void run(SrvScriptContext* ctx) override {
+		float minvalue = INFINITY;
+		SwitchCase* mincase = nullptr;
+		for (auto& scase : cases) {
+			float value = scase.value->eval(ctx);
+			if (value < minvalue) {
+				minvalue = value;
+				mincase = &scase;
+			}
+		}
+		if (mincase)
+			mincase->actions.run(ctx);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		parseCases(gsf, gs, "END_SWITCH_LOWEST");
+	}
+};
+
 struct ActionPlayClip : Action {
 	int clip;
 	std::unique_ptr<ObjectFinder> finder;
@@ -1735,7 +1756,10 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_BOOT_LEVEL: action = new ActionBootLevel; break;
 	case Tags::ACTION_UPDATE_USER_PROFILE: action = new ActionUpdateUserProfile; break;
 		//
-	default: action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
+	default:
+		// keywords of the original without a tag in wkbre2's list
+		if (name == "SWITCH_LOWEST") { action = new ActionSwitchLowest; break; }
+		action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}
 	action->parse(gsf, gs);
 	return action;

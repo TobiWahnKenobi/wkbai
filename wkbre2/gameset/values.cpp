@@ -136,6 +136,31 @@ struct ValueEquationResult : ValueDeterminer {
 	//ValueEquationResult(int equation, ObjectFinder *finder) : equation(equation), finder(finder) {}
 };
 
+// MIN_EQUATION_RESULT, MAX_EQUATION_RESULT, TOTAL_EQUATION_RESULT <equation> <finder>: the
+// equation with each found object as self, the least, greatest or sum (0 when none; mods)
+struct ValueEquationResultOver : ValueDeterminer {
+	enum Kind { MIN, MAX, TOTAL } kind;
+	int equation;
+	std::unique_ptr<ObjectFinder> finder;
+	ValueEquationResultOver(Kind kind) : kind(kind) {}
+	virtual float eval(ScriptContext* ctx) override {
+		float result = 0.0f;
+		bool first = true;
+		for (CommonGameObject* obj : finder->eval(ctx)) {
+			auto _ = ctx->changeSelf(obj);
+			const float v = ctx->gameState->gameSet->equations[equation]->eval(ctx);
+			if (kind == TOTAL) result += v;
+			else if (first || (kind == MIN ? v < result : v > result)) result = v;
+			first = false;
+		}
+		return result;
+	}
+	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
+		equation = gs.equations.readIndex(gsf);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ValueIsSubsetOf : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fnd_sub, fnd_super;
 	virtual float eval(ScriptContext* ctx) override {
@@ -287,6 +312,29 @@ struct ValueValueTagInterpretation : ValueDeterminer {
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		valueTag = gs.valueTags.readIndex(gsf);
 		fnd.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// DIPLOMATIC_STATUS_IS <status> <finder> <finder>: every pair of the two finders' players is at
+// exactly that status (mods; DIPLOMATIC_STATUS_AT_LEAST below is at that status or friendlier)
+struct ValueDiplomaticStatusIs : ValueDeterminer {
+	int status;
+	std::unique_ptr<ObjectFinder> a, b;
+	virtual float eval(ScriptContext* ctx) override {
+		auto objlist1 = a->eval(ctx);
+		auto objlist2 = b->eval(ctx);
+		if (objlist1.empty() || objlist2.empty())
+			return 0.0f;
+		for (auto* obj1 : objlist1)
+			for (auto* obj2 : objlist2)
+				if (ctx->gameState->getDiplomaticStatus(obj1->getPlayer(), obj2->getPlayer()) != status)
+					return 0.0f;
+		return 1.0f;
+	}
+	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
+		status = gs.diplomaticStatuses.readIndex(gsf);
+		a.reset(ReadFinder(gsf, gs));
+		b.reset(ReadFinder(gsf, gs));
 	}
 };
 
@@ -1310,6 +1358,10 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 		if (strtag == "CAN_TRAVERSE_TILE") { vd = new ValueCanTraverseTile(false); break; }
 		if (strtag == "CAN_TRAVERSE_NEIGHBOURING_TILE") { vd = new ValueCanTraverseTile(true); break; }
 		if (strtag == "RANDOM_FRACTION") { vd = new ValueRandomFraction; break; }
+		if (strtag == "MIN_EQUATION_RESULT") { vd = new ValueEquationResultOver(ValueEquationResultOver::MIN); break; }
+		if (strtag == "MAX_EQUATION_RESULT") { vd = new ValueEquationResultOver(ValueEquationResultOver::MAX); break; }
+		if (strtag == "TOTAL_EQUATION_RESULT") { vd = new ValueEquationResultOver(ValueEquationResultOver::TOTAL); break; }
+		if (strtag == "DIPLOMATIC_STATUS_IS") { vd = new ValueDiplomaticStatusIs; break; }
 		if (const char* signature = FindStubSignature(valueStubSignatures, strtag)) {
 			vd = new ValueStub(strtag, signature);
 			printf("WARNING: Value determiner %s is not implemented (arguments read, evaluates to 0) at %s\n", strtag.c_str(), gsf.locate().c_str());
