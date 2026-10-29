@@ -2010,6 +2010,7 @@ void Test_DiffRun()
 	const float seconds = cfg.value("seconds", 60.0f);
 	const std::string out = cfg.value("out", std::string("diff run"));
 	Server server;
+	server.aggressiveAI = cfg.value("aggressiveAI", true);
 	server.loadSaveGame(source.c_str());
 	const float start = server.timeManager.currentTime;
 	server.timeManager.unpause();
