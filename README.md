@@ -48,31 +48,37 @@ Compared with upstream wkbre2:
 - **Robustness**
   - **Scripts:** the game-set parser stays in sync on unimplemented keywords.
   - **Missing files:** broken mod combinations no longer crash.
-- **Settings:** a temporary settings window on **F10** for the view distance, fog, field of view, colour grading, shadows, water and camera speed.
+- **AI**
+  - **Kingmaker AI:** stalls fixed (deleted objects, work orders, farms at the map's corner, an upgrade waited for forever), towns get their walls and gatehouse, and the armies' `FORCE_BALANCE` works.
+  - **Aggressive AI** (skirmish setting, on by default): at most 80 peasants, barracks first, armies launched as soon as they can be paid, and food-only fighters when wood or gold is short.
+  - **Headless AI-vs-AI test** (test 30) with a census per minute.
+- **Graphics options** (enhanced renderer)
+  - **Post-processing:** ambient occlusion and bloom.
+  - **Real unit shadows** from the sun's shadow map, and wall shadows.
+  - **Blended terrain:** materials blended at the tile corners, triplanar on cliffs (off by default).
+  - **Model highlights:** per-pixel lighting with GGX sun highlights, and override packs (`<texture>_normal`, `<texture>_orm`) for modders (off by default).
+- **Formats:** glTF 2.0 models (import as overrides, export with `"exportGltf"`), and DDS textures (BC1-BC5).
+- **Map editor** (F8): heights, texture painting, lakes, objects, the players' resources and diplomacy, undo, a new minimap on saving, and save-and-play.
+- **Settings:** an options menu, and a settings window on **F10** for the view distance, fog, field of view, colour grading, shadows, water and camera speed.
 
 ## Status
 
-The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase: 4, the modern renderer**, starting with a mode that looks like the original. **Next:** the main menu, the Settings menu and the in-game Esc menu, then bugs found in play-testing.
+The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase:** 4, modern renderer. **Next:** Phase 2: differential harness, renderer signatures, pathfinding/combat RE; Phase 8: strategic and tactical AI layers; Phase 4: image-based light, KTX2/BC7, multi-tile splat layers; Phase 6: terrain zones, triggers, a new map from nothing.
 
 | Phase | Progress | Done | Open |
 |---|---|---|---|
-| 0 Setup | 4/7 | Repository, toolchain, Ghidra connected | DXVK quick win, baseline captures |
-| 1 Asset formats | 2/4 | BCP archive reader/writer, round-trip tests | Format specs, asset inventory |
-| 2 Binary reverse engineering (ongoing) | 4/7 | Class hierarchy (RTTI), script keyword coverage, file system | Pathfinding, combat and AI; differential tests |
-| 3 Engine foundation | 6/6 | Fork, CI, x64/C++20/SDL 3, layered file system, renderer choice, profiler | — |
-| **4 Modern renderer** (current) | 1/8 | Diligent (D3D12/Vulkan) | Faithful mode (in progress), GPU skinning and culling, PBR, lighting and effects, splat-map terrain, glTF/KTX2, UI scaling |
-| 5 Gameplay parity | 2/7 | WKB Plus evaluated, minimap | Menus, play-test bugs, script gaps, deterministic simulation, original engine bugs |
-| 6 Map editor | 0/3 | — | Port the wkbre editor, new map format, undo and play-testing |
-| 7 Modding | 1/4 | Mod package format | Overrides, hot reload, modding docs |
-| 8 AI overhaul | 0/4 | — | Reverse-engineer the original AI, new strategic and tactical layers |
-| 9 Release | 0/1 | — | Launcher and packaging |
+| 0 Setup & quick wins | 7/7 | Git repo, Pristine SHA-256 hashes, Toolchain installed, REA + Ghidra connected, DXVK quick win, Baseline perf captures, Identify version.dll | — |
+| 1 Asset & format knowledge | 4/4 | BCP reader/extractor, Format specs, Round-trip tests, Asset inventory | — |
+| 2 Binary RE (ongoing) | 4/7 | Exe in Ghidra via REA, RTTI class hierarchy, Keyword diff vs wkbre2, Original file system (BCP load rule) | Renderer interface signatures, Pathfinding/combat/AI RE, Differential test harness |
+| 3 Engine foundation (wkbre2) | 6/6 | Fork & build wkbre2, Run against game data, CI + round-trip tests, x64 · C++20 · SDL3, Layered VFS (BCP → mods), RHI decision + Tracy | — |
+| **4 Modern renderer** (current) | 3/8 | Diligent integration (D3D12/Vulkan), GPU skinning/instancing/culling, Resolution & UI scaling | Faithful mode (in progress), PBR materials (in progress), Lighting & effects (in progress), Splat-map terrain (in progress), glTF / KTX2 (in progress) |
+| 5 Gameplay parity | 7/8 | Evaluate WKB Plus patch, Minimap + DISPLAY_ON_MINIMAP, Main menu, Settings, in-game Esc menu, Play-test bugs: stampdown overlap, formations, guard, range circles, rally flag, Deterministic simulation, Fix original engine bugs, Population limit up to 10,000 | Close script/order gaps (in progress) |
+| 6 Map editor | 1/3 | Undo / play-test / validation | Port wkbre editor features (in progress), Export original + new format (in progress) |
+| 7 Modding | 4/4 | Mod package format, Asset/script/Lua overrides, Hot reload + mod manager, Modding docs | — |
+| 8 AI overhaul | 2/4 | RE original AI, Headless AI-vs-AI testing | Strategic layer, Operational/tactical layers |
+| 9 Release | 1/1 | Launcher + packaging | — |
 
-**Known issues from play-testing:**
-- **Building placement:** buildings can be placed on top of other buildings.
-- **Formations:** they move as one block, without animations.
-- **Guarding:** a unit told to guard another walks into it instead of keeping its distance.
-- **Range circles:** they are missing.
-- **Rally flag:** selecting a building doesn't show its rally flag.
+**Play-testing:** the issues found in three play tests are fixed or listed in the reverse-engineering repository's notes (building placement, formations, guarding, range circles, rally flags, AI armies and walls, particles, wall shadows, the HUD and the settings steppers).
 
 ## Usage
 
