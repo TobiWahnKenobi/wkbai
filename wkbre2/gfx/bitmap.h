@@ -25,6 +25,9 @@ struct Bitmap
 	static Bitmap loadTGA(const void* data, size_t length);
 	static Bitmap loadPCX(const void* data, size_t length);
 	static Bitmap loadImage(const void* data, size_t length); // PNG, JPEG
+	// DDS: uncompressed RGBA/BGRA (8 bits a channel) and BC1-BC5 (DXT1/3/5, ATI1/2), the
+	// largest mipmap, as RGBA; BC5 as a normal map (z rebuilt)
+	static Bitmap loadDDS(const void* data, size_t length);
 
 	Bitmap convertToR8G8B8A8() const;
 	Bitmap convertToB8G8R8A8() const;

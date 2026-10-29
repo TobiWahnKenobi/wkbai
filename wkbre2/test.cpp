@@ -2028,6 +2028,48 @@ void Test_Minimap()
 	fflush(stdout);
 }
 
+// DDS: made-up files decoded (Bitmap::loadDDS): an uncompressed BGRA one, a BC1 block of red
+// and blue, a BC3 block with an alpha ramp and a BC5 normal. Prints "DDS <case> <ok>".
+void Test_DDS()
+{
+	auto header = [](std::vector<uint8_t>& f, int w, int h, uint32_t pfFlags, const char* fourCC, uint32_t bits, uint32_t rMask, uint32_t aMask) {
+		f.assign(128, 0);
+		memcpy(f.data(), "DDS ", 4);
+		auto put = [&](size_t off, uint32_t v) { memcpy(&f[off], &v, 4); };
+		put(4, 124); put(12, h); put(16, w); put(76, 32); put(80, pfFlags);
+		if (fourCC) memcpy(&f[84], fourCC, 4);
+		put(88, bits); put(92, rMask); put(104, aMask);
+	};
+	std::vector<uint8_t> f;
+	// 2 x 1 BGRA: (10, 20, 30, 40), (50, 60, 70, 80) in RGBA
+	header(f, 2, 1, 0x41, nullptr, 32, 0x00FF0000, 0xFF000000);
+	for (uint8_t v : { 30, 20, 10, 40, 70, 60, 50, 80 }) f.push_back(v);
+	Bitmap a = Bitmap::loadDDS(f.data(), f.size());
+	const bool bgraOk = a.width == 2 && a.pixels[0] == 10 && a.pixels[2] == 30 && a.pixels[3] == 40 && a.pixels[4] == 50 && a.pixels[7] == 80;
+	printf("DDS uncompressed BGRA %d\n", bgraOk);
+	// BC1: colour 0 red, colour 1 blue, texel i takes index i % 4
+	header(f, 4, 4, 4, "DXT1", 0, 0, 0);
+	for (uint8_t v : { 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 }) f.push_back(v);
+	Bitmap b = Bitmap::loadDDS(f.data(), f.size());
+	auto px = [](const Bitmap& bm, int i, int c) { return (int)bm.pixels[i * 4 + c]; };
+	const bool bc1Ok = px(b, 0, 0) == 255 && px(b, 0, 2) == 0 && px(b, 1, 0) == 0 && px(b, 1, 2) == 255 && px(b, 2, 0) == 170 && px(b, 3, 0) == 85;
+	printf("DDS BC1 %d (texel 2: %d %d %d)\n", bc1Ok, px(b, 2, 0), px(b, 2, 1), px(b, 2, 2));
+	// BC3: alpha 255 to 0 over the eight indices (0, 1: the ends; 2-7 between), colour as above
+	header(f, 4, 4, 4, "DXT5", 0, 0, 0);
+	for (uint8_t v : { 255, 0, 0x88, 0xC6, 0xFA, 0x00, 0x00, 0x00, 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 }) f.push_back(v);
+	Bitmap c = Bitmap::loadDDS(f.data(), f.size());
+	const bool bc3Ok = px(c, 0, 3) == 255 && px(c, 1, 3) == 0 && px(c, 0, 0) == 255;
+	printf("DDS BC3 %d (alpha %d %d %d %d)\n", bc3Ok, px(c, 0, 3), px(c, 1, 3), px(c, 2, 3), px(c, 3, 3));
+	// BC5: x and y both at the middle (128): the normal points along z
+	header(f, 4, 4, 4, "ATI2", 0, 0, 0);
+	for (int k = 0; k < 2; k++)
+		for (uint8_t v : { 128, 128, 0, 0, 0, 0, 0, 0 }) f.push_back(v);
+	Bitmap d = Bitmap::loadDDS(f.data(), f.size());
+	const bool bc5Ok = px(d, 0, 0) == 128 && px(d, 0, 1) == 128 && px(d, 0, 2) >= 254;
+	printf("DDS BC5 %d (normal %d %d %d)\n", bc5Ok, px(d, 0, 0), px(d, 0, 1), px(d, 0, 2));
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -2063,6 +2105,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GltfRoundTrip, "glTF round trip (the game's meshes as .glb and back)"},
 {Test_AutoWall, "Automatic walls and gatehouse around a Manor"},
 {Test_Minimap, "Minimap drawn from the terrain against the maps' own"},
+{Test_DDS, "DDS textures decoded (uncompressed, BC1, BC3, BC5)"},
 };
 
 void LaunchTest()

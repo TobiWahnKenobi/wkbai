@@ -1,3 +1,5 @@
+#include <cmath>
+#include <algorithm>
 // wkbre2 - WK Engine Reimplementation
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
@@ -27,8 +29,170 @@ Bitmap Bitmap::loadBitmap(const char *fn)
 		return loadPCX(d, s);
 	if (!StrCICompare(e, ".png") || !StrCICompare(e, ".jpg") || !StrCICompare(e, ".jpeg"))
 		return loadImage(d, s);
+	if (!StrCICompare(e, ".dds"))
+		return loadDDS(d, s);
 	ferr("Unknown bitmap file extension.");
 	return {};
+}
+
+// A BC1 colour block (8 bytes) into 4 x 4 RGBA texels; fourColours: BC2/BC3's colour part,
+// which has no transparent mode
+static void DecodeBC1Block(const uint8_t* b, uint8_t out[16][4], bool fourColours)
+{
+	const uint16_t c0 = b[0] | (b[1] << 8), c1 = b[2] | (b[3] << 8);
+	auto expand = [](uint16_t c, uint8_t* o) {
+		o[0] = (uint8_t)(((c >> 11) & 31) * 255 / 31);
+		o[1] = (uint8_t)(((c >> 5) & 63) * 255 / 63);
+		o[2] = (uint8_t)((c & 31) * 255 / 31);
+		o[3] = 255;
+	};
+	uint8_t pal[4][4];
+	expand(c0, pal[0]);
+	expand(c1, pal[1]);
+	for (int k = 0; k < 3; k++) {
+		if (c0 > c1 || fourColours) {
+			pal[2][k] = (uint8_t)((2 * pal[0][k] + pal[1][k]) / 3);
+			pal[3][k] = (uint8_t)((pal[0][k] + 2 * pal[1][k]) / 3);
+		}
+		else {
+			pal[2][k] = (uint8_t)((pal[0][k] + pal[1][k]) / 2);
+			pal[3][k] = 0;
+		}
+	}
+	pal[2][3] = 255;
+	pal[3][3] = (c0 > c1 || fourColours) ? 255 : 0;
+	const uint32_t idx = b[4] | (b[5] << 8) | (b[6] << 16) | ((uint32_t)b[7] << 24);
+	for (int i = 0; i < 16; i++)
+		memcpy(out[i], pal[(idx >> (2 * i)) & 3], 4);
+}
+
+// A BC4 block (BC3's alpha, BC4/BC5's channels: 8 bytes) into 16 values
+static void DecodeBC4Block(const uint8_t* b, uint8_t out[16])
+{
+	uint8_t v[8];
+	v[0] = b[0];
+	v[1] = b[1];
+	if (v[0] > v[1])
+		for (int i = 1; i < 7; i++)
+			v[i + 1] = (uint8_t)(((7 - i) * v[0] + i * v[1]) / 7);
+	else {
+		for (int i = 1; i < 5; i++)
+			v[i + 1] = (uint8_t)(((5 - i) * v[0] + i * v[1]) / 5);
+		v[6] = 0;
+		v[7] = 255;
+	}
+	uint64_t bits = 0;
+	for (int i = 0; i < 6; i++)
+		bits |= (uint64_t)b[2 + i] << (8 * i);
+	for (int i = 0; i < 16; i++)
+		out[i] = v[(bits >> (3 * i)) & 7];
+}
+
+Bitmap Bitmap::loadDDS(const void* data, size_t length)
+{
+	const uint8_t* p = (const uint8_t*)data;
+	auto u32 = [&](size_t off) { return off + 4 <= length ? (uint32_t)(p[off] | (p[off + 1] << 8) | (p[off + 2] << 16) | ((uint32_t)p[off + 3] << 24)) : 0u; };
+	if (length < 128 || memcmp(p, "DDS ", 4) != 0)
+		ferr("Not a DDS file.");
+	const int height = (int)u32(12), width = (int)u32(16);
+	const uint32_t pfFlags = u32(80), fourCC = u32(84), bits = u32(88);
+	const uint32_t rMask = u32(92), aMask = u32(104);
+	size_t off = 128;
+	auto cc = [](const char* s) { return (uint32_t)(uint8_t)s[0] | ((uint32_t)(uint8_t)s[1] << 8) | ((uint32_t)(uint8_t)s[2] << 16) | ((uint32_t)(uint8_t)s[3] << 24); };
+	int bc = 0; // 0: uncompressed, 1-5: BCn
+	bool bgra = false;
+	if (pfFlags & 4) { // a FourCC
+		if (fourCC == cc("DXT1")) bc = 1;
+		else if (fourCC == cc("DXT2") || fourCC == cc("DXT3")) bc = 2;
+		else if (fourCC == cc("DXT4") || fourCC == cc("DXT5")) bc = 3;
+		else if (fourCC == cc("ATI1") || fourCC == cc("BC4U")) bc = 4;
+		else if (fourCC == cc("ATI2") || fourCC == cc("BC5U")) bc = 5;
+		else if (fourCC == cc("DX10")) {
+			const uint32_t dxgi = u32(128);
+			off += 20;
+			if (dxgi == 70 || dxgi == 71 || dxgi == 72) bc = 1;
+			else if (dxgi == 73 || dxgi == 74 || dxgi == 75) bc = 2;
+			else if (dxgi == 76 || dxgi == 77 || dxgi == 78) bc = 3;
+			else if (dxgi == 79 || dxgi == 80) bc = 4;
+			else if (dxgi == 82 || dxgi == 83) bc = 5;
+			else if (dxgi == 27 || dxgi == 28 || dxgi == 29) bc = 0;
+			else if (dxgi == 87 || dxgi == 88 || dxgi == 90 || dxgi == 91) bgra = true;
+			else
+				ferr("DDS: DXGI format %u is not supported (BC1-BC5 and 8-bit RGBA/BGRA are).", dxgi);
+		}
+		else
+			ferr("DDS: this FourCC is not supported (DXT1-5, ATI1/2 and DX10 BC1-BC5 are).");
+	}
+	else {
+		if (bits != 32)
+			ferr("DDS: only 32-bit uncompressed textures are supported.");
+		bgra = rMask == 0x00FF0000;
+	}
+	Bitmap bm;
+	bm.width = width;
+	bm.height = height;
+	bm.format = BMFORMAT_R8G8B8A8;
+	bm.pixels.resize((size_t)width * height * 4);
+	uint8_t* dst = bm.pixels.data();
+	if (bc == 0) {
+		if (off + (size_t)width * height * 4 > length)
+			ferr("DDS: the file is too short.");
+		for (size_t i = 0; i < (size_t)width * height; i++) {
+			const uint8_t* s = p + off + i * 4;
+			dst[i * 4 + 0] = bgra ? s[2] : s[0];
+			dst[i * 4 + 1] = s[1];
+			dst[i * 4 + 2] = bgra ? s[0] : s[2];
+			dst[i * 4 + 3] = (aMask || (pfFlags & 4)) ? s[3] : 255;
+		}
+		return bm;
+	}
+	const size_t blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
+	const int bw = (width + 3) / 4, bh = (height + 3) / 4;
+	if (off + (size_t)bw * bh * blockBytes > length)
+		ferr("DDS: the file is too short.");
+	for (int by = 0; by < bh; by++)
+		for (int bx = 0; bx < bw; bx++) {
+			const uint8_t* b = p + off + ((size_t)by * bw + bx) * blockBytes;
+			uint8_t texel[16][4];
+			uint8_t a[16], g[16];
+			switch (bc) {
+			case 1: DecodeBC1Block(b, texel, false); break;
+			case 2:
+				DecodeBC1Block(b + 8, texel, true);
+				for (int i = 0; i < 16; i++)
+					texel[i][3] = (uint8_t)(((b[i / 2] >> (4 * (i & 1))) & 15) * 17);
+				break;
+			case 3:
+				DecodeBC1Block(b + 8, texel, true);
+				DecodeBC4Block(b, a);
+				for (int i = 0; i < 16; i++)
+					texel[i][3] = a[i];
+				break;
+			case 4:
+				DecodeBC4Block(b, a);
+				for (int i = 0; i < 16; i++)
+					texel[i][0] = texel[i][1] = texel[i][2] = a[i], texel[i][3] = 255;
+				break;
+			case 5: // two channels of a normal map: z from x and y
+				DecodeBC4Block(b, a);
+				DecodeBC4Block(b + 8, g);
+				for (int i = 0; i < 16; i++) {
+					const float x = a[i] / 127.5f - 1, y = g[i] / 127.5f - 1;
+					const float z = std::sqrt(std::max(0.0f, 1 - x * x - y * y));
+					texel[i][0] = a[i];
+					texel[i][1] = g[i];
+					texel[i][2] = (uint8_t)std::clamp((z * 0.5f + 0.5f) * 255.0f, 0.0f, 255.0f);
+					texel[i][3] = 255;
+				}
+				break;
+			}
+			for (int i = 0; i < 16; i++) {
+				const int x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+				if (x < width && y < height)
+					memcpy(dst + ((size_t)y * width + x) * 4, texel[i], 4);
+			}
+		}
+	return bm;
 }
 
 // PNG and JPEG (the usual images of glTF models), as RGBA

@@ -607,7 +607,7 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 
 	// a material's binding: its texture, and the override pack's normal and ORM maps beside it
-	// (<texture>_normal, <texture>_orm, .png or .tga) or flat defaults
+	// (<texture>_normal, <texture>_orm, .png, .tga or .dds) or flat defaults
 	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b) {
 		Bitmap bmp;
 		bmp.width = bmp.height = 1;
@@ -627,7 +627,7 @@ void DiligentEnhancedSceneRenderer::render()
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(tex));
 			auto overrideMap = [&](const char* suffix) -> texture {
 				const std::string base = filename.substr(0, filename.find_last_of('.'));
-				for (const char* ext : { ".png", ".tga" }) {
+				for (const char* ext : { ".png", ".tga", ".dds" }) {
 					const std::string name = base + suffix + ext;
 					if (FileExists((scene->texCache.directory + name).c_str()))
 						return scene->texCache.getTexture(name.c_str());
