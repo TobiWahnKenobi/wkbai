@@ -2220,6 +2220,12 @@ void ClientInterface::iter()
 			}
 		}
 		if (client->terrain) {
+			// a test run's sun ("benchmark": { "sunVector": [x, y, z] }), for comparing with the original
+			if (BenchmarkEnabled()) {
+				const auto& bench = g_settings.value("benchmark", nlohmann::json());
+				if (bench.contains("sunVector") && bench["sunVector"].is_array() && bench["sunVector"].size() == 3)
+					client->terrain->sunVector = Vector3(bench["sunVector"][0].get<float>(), bench["sunVector"][1].get<float>(), bench["sunVector"][2].get<float>());
+			}
 			scene->sunDirection = client->terrain->sunVector;
 			scene->sunColor = client->terrain->sunColor;
 		}
