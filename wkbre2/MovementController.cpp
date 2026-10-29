@@ -57,6 +57,18 @@ bool MovementController::isTileBlocked(const GameObjBlueprint* blueprint, int tx
 	const auto& tile = server->tiles[tz * trnsize.first + tx];
 	if (tile.building.getFrom<Server>() && !tile.buildingPassable)
 		return true;
+	return isTerrainBlocked(blueprint, tx, tz);
+}
+
+bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int tx, int tz)
+{
+	const Server* server = Server::instance;
+	const Terrain* trn = server ? server->terrain : nullptr;
+	if (!trn || !server->tiles)
+		return false;
+	const auto trnsize = trn->getNumPlayableTiles();
+	if (!(tx >= 0 && tx < trnsize.first && tz >= 0 && tz < trnsize.second))
+		return true;
 
 	const auto* trnTile = trn->getPlayableTile(tx, tz);
 	if (trnTile) {

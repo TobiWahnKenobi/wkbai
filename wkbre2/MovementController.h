@@ -26,6 +26,8 @@ struct MovementController {
 	// building that isn't passable, water too deep for a land unit or land for a boat, a slope
 	// steeper than 45 degrees. The same test as the pathfinding.
 	static bool isTileBlocked(const GameObjBlueprint* blueprint, int tx, int tz);
+	// the same without the buildings: whether the ground itself keeps the type off the tile
+	static bool isTerrainBlocked(const GameObjBlueprint* blueprint, int tx, int tz);
 	// The nearest tile centre around a position where the object can stand (searching up to
 	// maxRadius tiles out); the position itself when none is found
 	static Vector3 nearestValidPosition(const GameObjBlueprint* blueprint, const Vector3& position, int maxRadius = 32);

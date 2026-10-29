@@ -1240,6 +1240,13 @@ void ClientInterface::iter()
 		editorOn = true;
 		editorTestStep(peapos);
 	}
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorCheckTest", false)) {
+		// a test run: the map editor's check printed once
+		static int frame = 0;
+		if (++frame == 30)
+			for (const std::string& w : editorCheck())
+				printf("EDITORCHECK %s\n", w.c_str());
+	}
 	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorBlankTest", false)) {
 		// a test run: the map made blank, then saved as "Blank Test"
 		editorOn = true;

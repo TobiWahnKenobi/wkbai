@@ -8,6 +8,7 @@
 // skirmish menu finds it. F8 switches it on and off in single player.
 
 #include "ClientInterface.h"
+#include "../MovementController.h"
 #include "../client.h"
 #include "../server.h"
 #include "../terrain.h"
@@ -911,6 +912,63 @@ std::vector<std::string> ClientInterface::editorCheck()
 				if (objects == 0)
 					warnings.push_back(who + ": no units or buildings");
 			}
+		// reachability by land: from the first player's start, over the ground a Peasant can
+		// stand on (buildings and walls left out: they open), every other player's start
+		const GameObjBlueprint* peasant = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+		if (!peasant || !server.terrain)
+			return;
+		const auto area = server.terrain->getNumPlayableTiles();
+		struct Start { std::string who; int x, z; };
+		std::vector<Start> starts;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* player = (ServerGameObject*)child;
+				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || player->blueprint->name == "Neutral Player" || player->blueprint->name == "Baresark Player")
+					continue;
+				// its first building, else its first unit
+				CommonGameObject* home = nullptr;
+				for (const auto& [t, c] : player->children)
+					for (CommonGameObject* o : c)
+						if (!home || (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && home->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
+							home = o;
+				if (!home)
+					continue;
+				// the nearest tile a Peasant can stand on, within 10 tiles
+				const int hx = (int)(home->position.x / 5), hz = (int)(home->position.z / 5);
+				int bx = -1, bz = -1;
+				for (int r = 0; r <= 10 && bx < 0; r++)
+					for (int dz = -r; dz <= r && bx < 0; dz++)
+						for (int dx = -r; dx <= r; dx++)
+							if ((std::abs(dx) == r || std::abs(dz) == r) && !MovementController::isTerrainBlocked(peasant, hx + dx, hz + dz)) {
+								bx = hx + dx;
+								bz = hz + dz;
+								break;
+							}
+				if (bx >= 0)
+					starts.push_back({ std::to_string(player->id) + " " + player->blueprint->name, bx, bz });
+			}
+		if (starts.size() < 2)
+			return;
+		std::vector<uint8_t> reached((size_t)area.first * area.second, 0);
+		std::vector<std::pair<int, int>> open{ { starts[0].x, starts[0].z } };
+		reached[(size_t)starts[0].z * area.first + starts[0].x] = 1;
+		while (!open.empty()) {
+			const auto [x, z] = open.back();
+			open.pop_back();
+			static const int dirs[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+			for (const auto& d : dirs) {
+				const int nx = x + d[0], nz = z + d[1];
+				if (nx < 0 || nz < 0 || nx >= area.first || nz >= area.second || reached[(size_t)nz * area.first + nx])
+					continue;
+				if (MovementController::isTerrainBlocked(peasant, nx, nz))
+					continue;
+				reached[(size_t)nz * area.first + nx] = 1;
+				open.push_back({ nx, nz });
+			}
+		}
+		for (size_t i = 1; i < starts.size(); i++)
+			if (!reached[(size_t)starts[i].z * area.first + starts[i].x])
+				warnings.push_back(starts[i].who + ": can't be reached by land from " + starts[0].who);
 	});
 	if (warnings.empty())
 		warnings.push_back("No problems found");
