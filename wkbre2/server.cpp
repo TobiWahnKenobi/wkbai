@@ -1250,7 +1250,10 @@ void Server::sendTo(ServerGameObject* player, const NetPacketWriter& packet)
 {
 	assert(player->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER);
 	if (player->clientIndex == -1) {
-		printf("WARNING: Sending packet to player %i that has no assigned client!\n", player->id);
+		// AI players have no client: once per player (it printed thousands of lines a game)
+		static std::set<uint32_t> warned;
+		if (warned.insert(player->id).second)
+			printf("WARNING: Sending packet to player %i that has no assigned client! (not repeated)\n", player->id);
 		return;
 	}
 	clientLinks[player->clientIndex]->send(packet);
