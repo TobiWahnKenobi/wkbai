@@ -583,6 +583,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
+		ImGui::Checkbox("Blended terrain (splat map)", &s.terrainSplat);
 		ImGui::Checkbox("Character shadows", &s.characterShadows);
 		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
 		ImGui::Checkbox("Wall shadows", &s.wallShadows);

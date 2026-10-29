@@ -30,6 +30,9 @@ struct RenderSettings {
 	bool sky = true, cloudShadows = true, staticShadows = true;
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
+	// the terrain's materials blended at the tile corners instead of the original's painted tiles
+	// (enhanced renderer on Diligent; gfx/EnhancedTerrainData.h)
+	bool terrainSplat = false;
 	bool characterShadows = true;    // the units' blob shadows
 	// the units drawn into the sun's shadow map instead (their real shape; enhanced renderers with
 	// building shadows on): the original only has the blobs

@@ -94,6 +94,7 @@ namespace {
 		list.push_back(toggle("ssao", "lighting", "Ambient occlusion", rs.ssao));
 		list.push_back(toggle("bloom", "lighting", "Bloom", rs.bloom));
 		list.push_back(toggle("bumpMapping", "lighting", "Terrain bump mapping", rs.bumpMapping));
+		list.push_back(toggle("terrainSplat", "lighting", "Blended terrain", rs.terrainSplat));
 		list.push_back(slider("meshAmbient", "lighting", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
 		list.push_back(slider("meshDiffuse", "lighting", "Model sunlight", rs.meshDiffuse, 0.0f, 1.5f));
 
