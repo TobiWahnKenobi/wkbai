@@ -1998,6 +1998,34 @@ void Test_AutoWall()
 	fflush(stdout);
 }
 
+// The differential harness's wkbre2 side ("diffRun": { "source": "Save_Games\\X.sav",
+// "seconds": N, "out": "name" } in wkconfig.json): the save loaded, run for N game seconds in
+// fixed 20 ms steps, then saved as saved\Save_Games\<out>.sav, to compare with the original's
+// save after the same time (RE repository, tools/savdiff.py).
+void Test_DiffRun()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("diffRun", nlohmann::json::object());
+	const std::string source = cfg.value("source", std::string("Save_Games\\2 Player 4 Peaks.lvl"));
+	const float seconds = cfg.value("seconds", 60.0f);
+	const std::string out = cfg.value("out", std::string("diff run"));
+	Server server;
+	server.loadSaveGame(source.c_str());
+	const float start = server.timeManager.currentTime;
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	while (server.timeManager.currentTime < start + seconds) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+	}
+	server.timeManager.pause();
+	const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(out + ".sav"));
+	const bool ok = server.saveGame(path.c_str());
+	printf("DIFFRUN %s: %.2f -> %.2f game s, saved %d to %s\n", source.c_str(), start, server.timeManager.currentTime, (int)ok, path.c_str());
+	fflush(stdout);
+}
+
 // The passability fields (USE_PASSABILITY_FIELDS): on 8 Player Continent, per terrain type, the
 // tiles a Peasant can't stand on with the fields and without them (water depth and slope only)
 void Test_Passability()
@@ -2200,6 +2228,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Minimap, "Minimap drawn from the terrain against the maps' own"},
 {Test_DDS, "DDS textures decoded (uncompressed, BC1, BC3, BC5)"},
 {Test_Passability, "Passability fields (terrain types a unit can't stand on)"},
+{Test_DiffRun, "Differential run (a save run for N game seconds, then saved)"},
 };
 
 void LaunchTest()
