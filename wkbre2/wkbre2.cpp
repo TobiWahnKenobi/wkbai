@@ -20,6 +20,7 @@
 #include "interface/FrontEnd.h"
 #include "gfx/renderer.h"
 #include "window.h"
+#include <SDL3/SDL_mouse.h>
 #include "imguiimpl.h"
 #include "gfx/bitmap.h"
 #include "gfx/RenderSettings.h"
@@ -197,6 +198,22 @@ void LaunchQSM() {
 	int menuFrame = 0;
 
 	while (!g_windowQuit) {
+		// "menuTest": { ..., "hold": { "x", "y", "from", "to" } }: the left button held there from
+		// frame "from" to frame "to" (window pixels), as a player holding a button
+		if (menuTest.is_object() && menuTest.contains("hold")) {
+			const nlohmann::json& hold = menuTest["hold"];
+			const int from = hold.value("from", 30), to = hold.value("to", 90);
+			if (menuFrame + 1 >= from && menuFrame + 1 <= to) {
+				g_mouseX = hold.value("x", 0);
+				g_mouseY = hold.value("y", 0);
+				g_mousePressed[SDL_BUTTON_LEFT] = menuFrame + 1 == from;
+				g_mouseDown[SDL_BUTTON_LEFT] = true;
+			}
+			else if (menuFrame + 1 == to + 1) {
+				g_mouseDown[SDL_BUTTON_LEFT] = false;
+				g_mouseReleased[SDL_BUTTON_LEFT] = true;
+			}
+		}
 		ImGuiImpl_NewFrame();
 		qsm.draw();
 		frontEnd.frame(FrontEnd::Place::MAIN_MENU);
