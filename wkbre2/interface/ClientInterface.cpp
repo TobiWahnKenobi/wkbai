@@ -583,6 +583,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
+		ImGui::Checkbox("Terrain lit as the original (slopes by bump maps only)", &s.terrainWorldFrame);
 		ImGui::Checkbox("Blended terrain (splat map)", &s.terrainSplat);
 		ImGui::Checkbox("Models lit per pixel, with highlights", &s.modelLighting);
 		ImGui::SliderFloat("Model highlight strength", &s.modelSpecular, 0.0f, 3.0f, "%.2f");

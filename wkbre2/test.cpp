@@ -2038,6 +2038,28 @@ void Test_DiffRun()
 	fflush(stdout);
 }
 
+// The terrain's vertex normals (Terrain::getNormal) and heights of 4 Peaks as a text file in the
+// temp folder ("x z height nx ny nz" per vertex, world units), to compare with the original's
+// per-vertex Dot3 light vectors (RE repository, docs/engine/original-comparison.md)
+void Test_TerrainNormals()
+{
+	LoadBCP("data.bcp");
+	Terrain trn;
+	trn.readFromFile("Maps\\128_4Peaks\\128_4Peaks.bcm");
+	const std::string path = (std::filesystem::temp_directory_path() / "wkbre2-terrain-normals.txt").string();
+	FILE* f = fopen(path.c_str(), "w");
+	if (!f)
+		return;
+	for (int z = 0; z <= trn.height; z++)
+		for (int x = 0; x <= trn.width; x++) {
+			const Vector3 n = trn.getNormal(x, z);
+			fprintf(f, "%.1f %.1f %.3f %.4f %.4f %.4f\n", (x - trn.edge) * 5.0f, (z - trn.edge) * 5.0f, trn.getVertex(x, z), n.x, n.y, n.z);
+		}
+	fclose(f);
+	printf("NORMALS %dx%d edge %d scale %.3f -> %s\n", trn.width, trn.height, trn.edge, trn.scale, path.c_str());
+	fflush(stdout);
+}
+
 // The passability fields (USE_PASSABILITY_FIELDS): on 8 Player Continent, per terrain type, the
 // tiles a Peasant can't stand on with the fields and without them (water depth and slope only)
 void Test_Passability()
@@ -2241,6 +2263,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_DDS, "DDS textures decoded (uncompressed, BC1, BC3, BC5)"},
 {Test_Passability, "Passability fields (terrain types a unit can't stand on)"},
 {Test_DiffRun, "Differential run (a save run for N game seconds, then saved)"},
+{Test_TerrainNormals, "Terrain normals of 4 Peaks (a text file, for the lighting comparison)"},
 };
 
 void LaunchTest()

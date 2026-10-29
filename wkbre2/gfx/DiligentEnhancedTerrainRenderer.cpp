@@ -257,13 +257,25 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 {
 	float lum = 0;
 
-	if(BumpOn) {
-		float3 actnorm = nrm.xxx * tangent + nrm.yyy * input.Norm + nrm.zzz * bitangent;
+	// BumpOn & 2 (RenderSettings::terrainWorldFrame): the original's frame. Its per-vertex Dot3
+	// light vectors don't follow the slope: the tangent space has world up as its normal and the
+	// tile's texture directions flattened, so slopes are shaded by the bump maps alone (RE
+	// repository, docs/engine/original-comparison.md)
+	float3 vertexNormal = input.Norm;
+	if (BumpOn & 2) {
+		vertexNormal = float3(0, 1, 0);
+		if (BumpOn & 4) {
+			tangent = normalize(float3(tangent.x, 0, tangent.z) + float3(1e-5, 0, 0));
+			bitangent = normalize(float3(bitangent.x, 0, bitangent.z) + float3(0, 0, 1e-5));
+		}
+	}
+	if(BumpOn & 1) {
+		float3 actnorm = nrm.xxx * tangent + nrm.yyy * vertexNormal + nrm.zzz * bitangent;
 		lum += clamp(dot(normalize(actnorm), SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
 	}
 	else {
-		lum += clamp(dot(input.Norm, SunDirection), 0, 1);
+		lum += clamp(dot(vertexNormal, SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
@@ -1004,7 +1016,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	ctx->MapBuffer(_impl->sunBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	char* sbdata = (char*)mapped;
 	*(Vector3*)(sbdata + 0) = sunNormal;
-	*(int*)(sbdata + 12) = m_bumpOn ? 1 : 0;
+	*(int*)(sbdata + 12) = (m_bumpOn ? 1 : 0) | (g_renderSettings.terrainWorldFrame ? 2 : 0);
 	auto& shadows = dgfx->shadows;
 	*(Matrix*)(sbdata + 16) = shadows.staticShadowMatrix.getTranspose();
 	float* cloudParams = (float*)(sbdata + 80);
