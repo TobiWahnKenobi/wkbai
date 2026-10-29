@@ -1285,6 +1285,31 @@ struct ActionTeleport : Action {
 	}
 };
 
+// MAKE_DIPLOMATIC_OFFER "<status>" <from> <to>: each player found by <to> gets the event
+// "Diplomatic Offer - <status>" with the offering player as its package sender. The AI players'
+// reactions to it (AI\Diplomacy\Diplomacy.cpp) weigh the offer and change the status themselves.
+// Human players get no offer window yet.
+struct ActionMakeDiplomaticOffer : Action {
+	int event = -1;
+	std::unique_ptr<ObjectFinder> fFrom, fTo;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (event < 0)
+			return;
+		ServerGameObject* from = fFrom->getFirst(ctx);
+		if (!from)
+			return;
+		for (ServerGameObject* to : fTo->eval(ctx))
+			if (to != from)
+				to->sendEvent(event, from);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		const std::string status = gsf.nextString(true);
+		event = gs.events.names.getIndex("Diplomatic Offer - " + status);
+		fFrom.reset(ReadFinder(gsf, gs));
+		fTo.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ActionChangeDiplomaticStatus : Action {
 	std::unique_ptr<ObjectFinder> fPlayer1;
 	std::unique_ptr<ObjectFinder> fPlayer2;
@@ -1762,7 +1787,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_FADE_STOP_MUSIC:
 	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER:
 	case Tags::ACTION_SEND_CHAT_MESSAGE:
-	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER:
 	case Tags::ACTION_SET_CHAT_PERSONALITY:
 	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
@@ -1780,6 +1804,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:
 	case Tags::ACTION_REGISTER_VICTOR:
 		action = new ActionNop; break;
+	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
 	case Tags::ACTION_CONQUER_LEVEL: action = new ActionConquerLevel; break;
 	case Tags::ACTION_EXIT_TO_MAIN_MENU: action = new ActionExitToMainMenu; break;
 	case Tags::ACTION_BOOT_LEVEL: action = new ActionBootLevel; break;

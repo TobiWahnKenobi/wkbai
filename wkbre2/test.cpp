@@ -1883,6 +1883,21 @@ void Test_AIvsAI()
 		list += " " + n;
 	printf("AITEST end after %.0f game s in %.1f real s (%.1fx real time); standing:%s\n", server.timeManager.currentTime, wall,
 		server.timeManager.currentTime / std::max(wall, 0.001), list.c_str());
+	// the players no longer at war with each other (diplomacy: offers and the AIs' answers)
+	std::string peace;
+	std::vector<CommonGameObject*> players;
+	if (CommonGameObject* level = server.getLevel())
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && c->blueprint->name != "Neutral Player")
+					players.push_back(c);
+	for (size_t i = 0; i < players.size(); i++)
+		for (size_t j = i + 1; j < players.size(); j++) {
+			const int st = server.getDiplomaticStatus(players[i], players[j]);
+			if (st != 2)
+				peace += " " + std::to_string(players[i]->id) + "-" + std::to_string(players[j]->id) + ":" + server.gameSet->diplomaticStatuses.names.getString(st);
+		}
+	printf("AITEST end diplomacy:%s\n", peace.empty() ? " all at war" : peace.c_str());
 	fflush(stdout);
 }
 

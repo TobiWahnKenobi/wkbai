@@ -29,6 +29,11 @@ namespace {
 	// game set uses them without DECLARE_ITEM (the AI stats, "Diplomacy Enabled", ...)
 	// and the events it sends itself (from 0x8ad820), some of which wkbre2 doesn't send yet
 	const char* const ENGINE_EVENTS[] = {
+		// MAKE_DIPLOMATIC_OFFER's, to the player offered to: WKB.exe makes the name from the
+		// offered status ("Diplomatic Offer - %s" at 0x8a3b6c), the game set's ladder has these
+		"Diplomatic Offer - Allied",
+		"Diplomatic Offer - Neutral",
+		"Diplomatic Offer - Enemy",
 		"On Terrain Changed",
 		"On Diplomatic Status Changed",
 		"On Tribute Received",
