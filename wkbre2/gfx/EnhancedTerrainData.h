@@ -40,13 +40,15 @@ std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain
 // The splat-map terrain (RenderSettings::terrainSplat). The original paints each tile with a
 // 64-texel piece of a texture atlas, and the texture database's groups are materials ("SAND1")
 // and the transitions between two ("SAND1-SAND2"). Here every material becomes one layer of a
-// texture array: its most used tile on the map, repeated 2 x 2 (128 texels, every two tiles).
+// texture array: its four most used tiles on the map in 2 x 2 quadrants (128 texels), of which
+// the shader shows one per tile of the ground, picked by a hash of the tile (a material's tiles
+// fit side by side, as the maps use them; repeating them 2 x 2 showed as a checkerboard).
 // Every tile corner gets a material: a material's tile gives its own to its corners, a
 // transition tile gives each corner the one of its two that the texels at that corner are
 // closer to in colour (with the tile's turn and flips). Where a tile's four corners agree the
 // shader keeps the tile's own picture, so the ground keeps the original's variety; elsewhere it
 // blends the corners' materials across the tile, so materials meet smoothly instead of along
-// the painted transition tiles. (Four different tiles side by side showed as a checkerboard.)
+// the painted transition tiles.
 struct TerrainSplatData {
 	static constexpr int LAYER_SIZE = 128;
 	std::vector<std::string> names;              // per layer

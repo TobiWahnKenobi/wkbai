@@ -310,6 +310,18 @@ float2 ValueNoise2(float2 p)
 	return lerp(lerp(Hash2(i), Hash2(i + float2(1, 0)), u.x), lerp(Hash2(i + float2(0, 1)), Hash2(i + float2(1, 1)), u.x), u.y);
 }
 
+// A material layer at a ground position (p in world units, tile-aligned): one of its four tiles
+// (the layer's quadrants), picked per 5-unit cell by a hash, with the gradients of the continuous
+// position so the mip level doesn't jump at the cells' borders
+float4 SampleVariant(Texture2DArray<float4> layers, float2 p, uint layer)
+{
+	float2 cell = floor(p / 5);
+	uint q = (uint)(Hash2(cell + 17.0).x * 4) & 3;
+	float2 uv = (float2(q & 1, q >> 1) + (p / 5 - cell)) * 0.5;
+	float2 g = p / 10;
+	return layers.SampleGrad(splatSampler, float3(uv, layer), ddx(g), ddy(g));
+}
+
 uint4 CornerLayers(int2 c0)
 {
 	return uint4(splatCorners.Load(int3(c0, 0)), splatCorners.Load(int3(c0 + int2(1, 0), 0)),
@@ -339,7 +351,7 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	bool oneMaterial = all(own4 == own4.xxxx);
 	if (oneMaterial && steep == 0)
 		return ShadeTerrain(input, own, ownNrm, input.Tangent, input.Bitangent);
-	float2 uv = input.FragPos.xz / 10;
+	float2 gp = input.FragPos.xz + BlobParams.w; // on the tile grid
 	float3 tw = pow(abs(n), 4);
 	tw /= tw.x + tw.y + tw.z;
 	float4 tex = 0;
@@ -349,11 +361,11 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	float h[4];
 	float top = 0;
 	[unroll] for (int i = 0; i < 4; i++) {
-		s[i] = splatDiffuse.Sample(splatSampler, float3(uv, l[i]));
+		s[i] = SampleVariant(splatDiffuse, gp, l[i]);
 		if (steep > 0)
-			s[i] = lerp(s[i], tw.y * s[i] + tw.x * splatDiffuse.Sample(splatSampler, float3(input.FragPos.zy / 10, l[i]))
-				+ tw.z * splatDiffuse.Sample(splatSampler, float3(input.FragPos.xy / 10, l[i])), steep);
-		sn[i] = splatNormal.Sample(splatSampler, float3(uv, l[i])).xyz * 2 - 1;
+			s[i] = lerp(s[i], tw.y * s[i] + tw.x * SampleVariant(splatDiffuse, input.FragPos.zy, l[i])
+				+ tw.z * SampleVariant(splatDiffuse, input.FragPos.xy, l[i]), steep);
+		sn[i] = SampleVariant(splatNormal, gp, l[i]).xyz * 2 - 1;
 		h[i] = w[i] + dot(s[i].rgb, float3(0.299, 0.587, 0.114)) * 0.35;
 		top = max(top, h[i]);
 	}

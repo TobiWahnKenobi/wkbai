@@ -274,11 +274,19 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 		for (const auto& [id, tex] : git->second->textures)
 			textures.push_back(tex.get());
 		std::stable_sort(textures.begin(), textures.end(), [&](const TerrainTexture* a, const TerrainTexture* b) { return uses[a] > uses[b]; });
+		// the four quadrants: the material's most used tiles on the map (repeated if it uses
+		// fewer); the shader picks one per tile of the ground
+		std::vector<const TerrainTexture*> variants;
+		for (const TerrainTexture* t : textures)
+			if (uses[t] > 0 && variants.size() < 4)
+				variants.push_back(t);
+		if (variants.empty())
+			variants.push_back(textures[0]);
 		constexpr int L = TerrainSplatData::LAYER_SIZE, T = L / 2;
 		std::vector<uint8_t> diffuse(L * L * 4), normal(L * L * 4);
 		double sum[3] = {};
 		for (int q = 0; q < 4; q++) {
-			const TerrainTexture* tex = textures[0];
+			const TerrainTexture* tex = variants[q % variants.size()];
 			const int ox = (q & 1) * T, oz = (q >> 1) * T;
 			const Bitmap& a = atlas(tex->file);
 			const Bitmap& b = normalSource(tex->file);
