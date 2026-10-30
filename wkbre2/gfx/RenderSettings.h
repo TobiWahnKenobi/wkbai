@@ -35,9 +35,10 @@ struct RenderSettings {
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;
 	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
-	// square unit (taking effect on the next map) and how far from the camera they are drawn
+	// square unit (0 to TerrainGrassBuilder::MAX_DENSITY), their height (times 0.4-0.85 units)
+	// and how far from the camera they are drawn
 	bool grass = true;
-	float grassDensity = 3.0f, grassDistance = 80.0f;
+	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
 	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
 	// 1/3 up, so slopes facing away from the sun stay lit

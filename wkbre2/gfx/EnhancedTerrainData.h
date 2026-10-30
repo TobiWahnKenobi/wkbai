@@ -64,11 +64,12 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain);
 // coloured from the picture under them (with the tile's turn and flips), on gentle dry ground
 struct GrassBlade {
 	float x, y, z;     // root, in world units
-	uint32_t colour;   // RGBA8, R in the low byte
+	uint32_t colour;   // RGB8, R in the low byte; A: a random 0-255, drawn while below the density
 	float yaw, height; // the direction it leans in (radians), its height in world units
 };
 struct TerrainGrassBuilder {
 	std::map<std::string, Bitmap> atlases; // the tile pictures, by texture file
+	static constexpr float MAX_DENSITY = 6.0f; // blades per square unit at the density slider's top
 	// adds tile (x, z)'s blades, about density per square unit
 	void addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out);
 };

@@ -475,7 +475,7 @@ void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density,
 		blade.x = lx + fx * tilesize;
 		blade.z = lz + fz * tilesize;
 		blade.y = (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
-		blade.colour = channel(r) | (channel(g) << 8) | (channel(b) << 16) | 0xFF000000u;
+		blade.colour = channel(r) | (channel(g) << 8) | (channel(b) << 16) | ((uint32_t)(rnd() * 255.0f) << 24);
 		blade.yaw = rnd() * 6.2831853f;
 		blade.height = 0.4f + 0.45f * rnd();
 		out.push_back(blade);

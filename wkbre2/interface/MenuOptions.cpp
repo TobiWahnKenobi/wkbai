@@ -105,6 +105,10 @@ namespace {
 		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterSurface && rs.waterDetail; }));
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		list.push_back(toggle("grass", "lighting", "Grass", rs.grass));
+		list.push_back(withEnabled(slider("grassDensity", "lighting", "Grass density", rs.grassDensity, 0.0f, 6.0f, "%.1f"),
+			[&rs]() { return rs.grass; }));
+		list.push_back(withEnabled(slider("grassHeight", "lighting", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
+			[&rs]() { return rs.grass; }));
 		list.push_back(withEnabled(slider("grassDistance", "lighting", "Grass distance", rs.grassDistance, 10.0f, 250.0f, "%.0f"),
 			[&rs]() { return rs.grass; }));
 		list.push_back(toggle("ssao", "lighting", "Ambient occlusion", rs.ssao));

@@ -582,7 +582,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
 		ImGui::Checkbox("Grass", &s.grass);
-		ImGui::SliderFloat("Grass density (next map)", &s.grassDensity, 0.0f, 6.0f, "%.1f");
+		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 6.0f, "%.1f");
+		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Grass distance", &s.grassDistance, 10.0f, 250.0f, "%.0f");
 		ImGui::Checkbox("Static shadows", &s.staticShadows);
 		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");

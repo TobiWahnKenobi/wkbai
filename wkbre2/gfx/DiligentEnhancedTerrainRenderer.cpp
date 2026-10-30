@@ -98,6 +98,7 @@ cbuffer SunBuffer
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 GrassParams; // grass: on, distance, game time in seconds
 	float4 WaterFlowParams; // on, speed in units per second at full flow
+	float4 GrassLook; // grass: the share of the blades drawn (density / maximum), height factor
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -345,13 +346,22 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
 // base, a narrower middle, the tip), leaning its own way and swaying in the wind, shrinking to
-// nothing over the last 30% of the grass distance. Lit as flat ground: the sun's height (at
-// least 1/3, as the terrain's light vector), the clouds, static and blob shadows and fires.
+// nothing over the last 30% of the grass distance. A blade is drawn while its random value
+// (the colour's alpha) is below the density share, so the density slider works at once.
+// Shading is physically based, with values for grass leaves: a waxy dielectric cuticle
+// (F0 0.04, roughness 0.6) over a diffuse, translucent blade. It gets the sun through its own
+// normal (wrapped a little, as leaves scatter light inside), light through the blade where its
+// other side faces the sun (about 30% transmits; more looking into the sun through it), the
+// sky's colour as ambient, darker towards
+// the root where the blades shade each other, a GGX highlight, the clouds, static and blob
+// shadows and fires.
 struct GRASS_OUTPUT
 {
 	float4 Pos : SV_POSITION;
 	float3 World : COLOR1;
 	float4 Colour : COLOR0;
+	float3 Normal : NORMAL;
+	float Up : TEXCOORD0; // 0 at the root, 1 at the tip
 	float Fog : FOG;
 };
 
@@ -361,8 +371,8 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 		float2(-0.7, 0.55), float2(-0.7, 0.55), float2(0.7, 0.55), float2(0, 1) };
 	float2 s = shape[VertexId];
 	float dist = distance(Root, FogCamera.xyz);
-	float grow = saturate((GrassParams.y - dist) / (GrassParams.y * 0.3));
-	float height = YawHeight.y * grow;
+	float grow = saturate((GrassParams.y - dist) / (GrassParams.y * 0.3)) * step(Colour.a, GrassLook.x);
+	float height = YawHeight.y * grow * GrassLook.y;
 	float2 dir = float2(cos(YawHeight.x), sin(YawHeight.x));
 	float2 side = float2(-dir.y, dir.x);
 	float sway = sin(GrassParams.z * 1.7 + Root.x * 0.35 + Root.z * 0.23) * 0.5 + 0.5;
@@ -371,16 +381,44 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	GRASS_OUTPUT output;
 	output.Pos = mul(float4(p, 1), Transform);
 	output.World = p;
-	output.Colour = float4(Colour.rgb * (0.85 + 0.35 * s.y), 1);
+	output.Colour = float4(Colour.rgb, 1);
+	// the blade's face: towards its lean, turning up as it bends, rounded across its width
+	output.Normal = float3(dir.x, 0, dir.y) + float3(0, 0.5 + 0.9 * s.y, 0) + float3(side.x, 0, side.y) * (s.x * 0.35);
+	output.Up = s.y;
 	output.Fog = FogAmount(p, dist);
 	return output;
 }
 
 float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 {
-	float lum = max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World) * StaticShadowLight(input.World) * BlobLight(input.World);
-	float3 light = lum.xxx + FireLight(input.World, float3(0, 1, 0));
-	float3 c = lerp(input.Colour.rgb * light, FogColor.rgb, input.Fog);
+	// the blade's normal, bent towards the ground's (up): seen from above, a meadow's blades
+	// face the sky more than their shape alone says
+	float3 n = normalize(lerp(normalize(input.Normal), float3(0, 1, 0), 0.55));
+	float3 v = normalize(FogCamera.xyz - input.World);
+	if (dot(n, v) < 0)
+		n = -n; // both sides of the blade
+	float3 l = normalize(SunDirection);
+	float shadow = CloudLight(input.World) * StaticShadowLight(input.World) * BlobLight(input.World);
+	float3 albedo = input.Colour.rgb;
+	float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3);
+	float wrapped = saturate((dot(n, l) + 0.25) / 1.25);
+	// light through the blade: about 30% of what falls on its other side, diffusely, and more
+	// when looking towards the sun through it
+	float transmitted = saturate(-dot(n, l)) * 0.3 + pow(saturate(dot(-v, l)), 3) * 0.2;
+	// GGX highlight of the cuticle: F0 0.04, roughness 0.6
+	const float a = 0.36, a2 = a * a, k = a / 2;
+	float3 h = normalize(l + v);
+	float nh = saturate(dot(n, h)), vh = saturate(dot(v, h));
+	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
+	float vis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
+	float f = 0.04 + 0.96 * pow(1 - vh, 5);
+	float specular = d * vis * f * nl / 4;
+	// the sky above as ambient (the sky box's colours with the water's detail on, else the fog)
+	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(n.y)) : FogColor.rgb;
+	float occlusion = lerp(0.35, 1.0, input.Up);
+	float3 c = albedo * ((wrapped * 0.75 + transmitted) * shadow + sky * 0.3 * occlusion) + specular * shadow
+		+ albedo * FireLight(input.World, n);
+	c = lerp(c, FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), 1);
 }
 
@@ -678,7 +716,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 784;
+	cbDesc.Size = 800;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1047,8 +1085,7 @@ void DiligentEnhancedTerrainRenderer::init()
 					if (isNew)
 						_impl->texturePairs.push_back(pair);
 					const uint32_t first = 4 * (z * terrain->width + x);
-					if (g_renderSettings.grassDensity > 0)
-						grassBuilder.addTile(terrain, x, z, g_renderSettings.grassDensity, grass);
+					grassBuilder.addTile(terrain, x, z, TerrainGrassBuilder::MAX_DENSITY, grass);
 					auto& list = perTexture[it->second];
 					for (const int& c : { 0,3,1,1,3,2 })
 						list.push_back(first + c);
@@ -1298,6 +1335,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	grassParams[1] = std::max(1.0f, g_renderSettings.grassDistance);
 	grassParams[2] = (float)std::fmod(shadows.time, 3600.0);
 	grassParams[3] = 0.0f;
+	float* grassLook = (float*)(sbdata + 784);
+	grassLook[0] = std::clamp(g_renderSettings.grassDensity / TerrainGrassBuilder::MAX_DENSITY, 0.0f, 1.0f);
+	grassLook[1] = std::max(0.0f, g_renderSettings.grassHeight);
+	grassLook[2] = grassLook[3] = 0.0f;
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 1.3f;
