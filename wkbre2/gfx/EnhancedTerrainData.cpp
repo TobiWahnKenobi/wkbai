@@ -675,28 +675,46 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		}
 	}
 	const int numBodies = (int)bodies.size();
-	// smoothed: two passes of a 3 x 3 average over water tiles of the same body
-	for (int pass = 0; pass < 2; pass++) {
-		std::vector<float> sx = dirX, sz = dirZ;
+	// smoothed: the velocity (direction x speed) and the river share, ten passes of a 3 x 3
+	// average over water tiles of the same body. Two passes of the bare direction had left it
+	// turning from tile to tile, and the ripples carried along it tore into swirls and streaks;
+	// averaging the velocity also slows the water where flows meet instead of turning it.
+	for (int t = 0; t < W * H; t++) {
+		dirX[t] *= speed[t];
+		dirZ[t] *= speed[t];
+	}
+	for (int pass = 0; pass < 10; pass++) {
+		std::vector<float> sx = dirX, sz = dirZ, sr = river;
 		for (int t = 0; t < W * H; t++) {
-			if (body[t] < 0 || speed[t] == 0)
+			if (body[t] < 0)
 				continue;
 			const int x = t % W, z = t / W;
-			float ax = 0, az = 0;
+			float ax = 0, az = 0, ar = 0;
+			int n = 0;
 			for (int dz = -1; dz <= 1; dz++)
 				for (int dx = -1; dx <= 1; dx++)
 					if (isWater(x + dx, z + dz) && body[(z + dz) * W + x + dx] == body[t]) {
-						ax += dirX[(z + dz) * W + x + dx];
-						az += dirZ[(z + dz) * W + x + dx];
+						const int u = (z + dz) * W + x + dx;
+						ax += dirX[u];
+						az += dirZ[u];
+						ar += river[u];
+						n++;
 					}
-			const float len = std::sqrt(ax * ax + az * az);
-			if (len > 1e-4f) {
-				sx[t] = ax / len;
-				sz[t] = az / len;
-			}
+			sx[t] = ax / n;
+			sz[t] = az / n;
+			sr[t] = ar / n;
 		}
 		dirX = std::move(sx);
 		dirZ = std::move(sz);
+		river = std::move(sr);
+	}
+	for (int t = 0; t < W * H; t++) {
+		const float len = std::sqrt(dirX[t] * dirX[t] + dirZ[t] * dirZ[t]);
+		speed[t] = std::min(len, 1.0f);
+		if (len > 1e-4f) {
+			dirX[t] /= len;
+			dirZ[t] /= len;
+		}
 	}
 	for (int t = 0; t < W * H; t++) {
 		out[t * 4] = (uint8_t)std::clamp(dirX[t] * 127.5f + 128.0f, 0.0f, 255.0f);

@@ -337,7 +337,8 @@ struct LAKE_OUTPUT
 	float Depth : TEXCOORD0;
 	float Fog : FOG;
 	float3 Normal : NORMAL;  // High water: the waves' normal (else 0)
-	float Crest : TEXCOORD1; // High water: how near the top of a steep wave (0-1)
+	float Crest : TEXCOORD1; // High water: how near the top of a wave (0-1)
+	float2 Base : TEXCOORD2; // the point on the still water (High water's waves move it)
 };
 
 LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
@@ -349,6 +350,7 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 	output.Fog = FogAmount(Pos, distance(Pos, FogCamera.xyz));
 	output.Normal = float3(0, 0, 0);
 	output.Crest = 0;
+	output.Base = Pos.xz;
 	return output;
 }
 
@@ -372,42 +374,40 @@ float4 FlowAtTexel(float2 xz)
 // lod: 1 where the water is tessellated finest, falling to 0 with the detail (WaterLod)
 void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 offset, out float3 normal, out float crest)
 {
-	float2 fdir = flow.xy * 2 - 1;
-	float2 dir = length(fdir) > 0.1 ? normalize(fdir) : float2(0.8, 0.6);
+	// seas and lakes only (rivers get flowing ripples): five long, smooth waves along one steady
+	// wind, fading in from the shore over 6 units of depth and out with the distance (lod).
+	// The direction must not vary over the map: the phase is direction . position, hundreds of
+	// units out, so turning it with the flow map shifted the waves by whole wavelengths from tile
+	// to tile (terraced chevrons). Near the shore the surf's bands run in along the depth.
+	// Their sideways movement is shared out so that the surface never folds (sum of
+	// k * a * q 0.6): the folds had drawn spikes.
+	const float2 dir = float2(0.8, 0.6);
 	float river = flow.a;
-	// fading in smoothly from the waterline: over a flat beach even small waves dipped under
-	// the sand and back, a zigzag line of water and sand
-	float amp = lerp(0.3 * smoothstep(0, 3, depth), 0.05 * smoothstep(0, 1, depth), river) * lod;
-	// six waves of unrelated lengths and spread directions, so the pattern doesn't repeat, and
-	// gentle: their steepness adds up to 0.22 (at 0.55 the crests drew into sharp points, a
-	// sawtooth)
-	const float lengths[6] = { 27, 15.3, 9.1, 5.7, 3.9, 2.6 };
-	const float share[6] = { 1, 0.62, 0.38, 0.24, 0.16, 0.1 };
-	const float turn[6] = { 0, 0.45, -0.7, 1.1, -1.6, 2.4 };
-	const float steepness = 0.22 / 6;
+	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod;
+	const float lengths[5] = { 34, 21, 13, 8.5, 5.6 };
+	const float share[5] = { 1, 0.55, 0.33, 0.2, 0.12 };
+	const float turn[5] = { 0, 0.5, -0.6, 1.0, -1.3 };
 	offset = float3(0, 0, 0);
 	float3 n = float3(0, 1, 0);
 	crest = 0;
 	float t = GrassParams.z;
-	[unroll] for (int i = 0; i < 6; i++) {
+	[unroll] for (int i = 0; i < 5; i++) {
 		float cs = cos(turn[i]), sn = sin(turn[i]);
 		float2 d = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
 		float k = 6.2831853 / lengths[i];
-		float w = sqrt(9.8 * k) * 0.8;
+		float w = sqrt(9.8 * k) * 0.6;
 		float a = amp * share[i];
-		float q = min(steepness / (k * max(a, 1e-4)), 1.0);
-		// towards the shore: the phase falls as the wave moves along d
+		float q = a > 1e-4 ? min(0.6 / (k * a * 5), 1.0) : 0;
 		float phase = k * dot(d, xz) - w * t + i * 1.7;
-		float s = sin(phase), c = cos(phase);
-		offset += float3(q * a * d.x * c, a * s, q * a * d.y * c);
-		n -= float3(d.x * k * a * c, q * k * a * s, d.y * k * a * c);
-		crest += k * a * s;
+		float sp = sin(phase), cp = cos(phase);
+		offset += float3(q * a * d.x * cp, a * sp, q * a * d.y * cp);
+		n -= float3(d.x * k * a * cp, q * k * a * sp, d.y * k * a * cp);
+		crest += share[i] * sp;
 	}
-	// and never down into the bed: a trough stops 30% of the depth above it
 	offset.y = max(offset.y, -0.7 * depth);
 	normal = normalize(n);
-	// the slope's sum at its peaks, about 0.3 in deep water
-	crest = saturate(crest * 2.2);
+	// 0 in the troughs, 1 at the highest crests (where the waves add up), none without waves
+	crest = amp > 1e-3 ? saturate(0.5 + 0.5 * crest / 1.4) * saturate(amp / 0.25) : 0;
 }
 
 // How much of the tessellation's detail is left at a point (as HS_LakeConst's factors): the
@@ -454,6 +454,7 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 	float depth = max(pos.y - SmoothHeight(pos.xz), 0);
 	float3 offset, n;
 	float crest;
+	o.Base = pos.xz;
 	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), WaterLod(pos), offset, n, crest);
 	pos += offset;
 	o.Pos = mul(float4(pos, 1), Transform);
@@ -575,51 +576,62 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 // sky and sun as on Low, and foam on the crests and in the surf, broken up by the ripple map
 float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 {
-	float2 uv = input.World.xz * WaterParams.y;
-	float2 ruv = input.World.xz * WaterParams.z * 2.5;
-	float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
+	float2 base = input.Base;
+	float depth = input.Depth;
+	float4 f = flowTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
 	float2 fdir = f.xy * 2 - 1;
 	float river = f.a;
-	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x;
+	// the waves' normal and crest again here, per pixel, from the same function (per vertex
+	// they were faceted)
+	float3 offset, wn;
+	float crest;
+	GerstnerWaves(base, depth, f, WaterLod(input.World), offset, wn, crest);
+	// fine ripples on them, carried by the current on rivers: the sparkles and the rivers' look
+	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x * river;
 	const float cycle = 2.0;
 	float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
 	float w0 = 1 - abs(2 * p0 - 1);
-	float2 off0 = -flow * (p0 * cycle) * WaterParams.z * 2.5, off1 = -flow * (p1 * cycle) * WaterParams.z * 2.5;
+	float2 ruv = base * WaterParams.z * 3.0;
+	float2 off0 = -flow * (p0 * cycle) * WaterParams.z * 3.0, off1 = -flow * (p1 * cycle) * WaterParams.z * 3.0;
 	float2 detail = FlowSlope(ruv, off0) * w0 + FlowSlope(ruv, off1) * (1 - w0);
-	detail += (normalTexture.Sample(cloudSampler, ruv * 4.3 + WaterRipples.zw * 3).xy - 0.5) * 0.3;
-	float3 n = normalize(input.Normal + float3(detail.x, 0, detail.y) * lerp(0.45, 0.7, river));
+	float2 fine = normalTexture.Sample(cloudSampler, ruv * 3.7 + WaterRipples.zw * 4).xy - 0.5;
+	float3 n = normalize(wn + float3(detail.x, 0, detail.y) * lerp(0.3, 0.45, river) + float3(fine.x, 0, fine.y) * 0.22);
 	float3 v = normalize(FogCamera.xyz - input.World);
+	float3 l = normalize(SunDirection);
 	float3 r = reflect(-v, n);
-	float sr = saturate(dot(r, SunDirection));
-	float glint = pow(sr, 64) * 0.6 + pow(sr, 600) * 1.6 + pow(sr, 3) * 0.05;
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
-	float3 tex = lerp(inpTexture.Sample(cloudSampler, uv + WaterLayers.xy - flow * (p1 * cycle) * WaterParams.y * 0.5).rgb,
-		inpTexture.Sample(cloudSampler, uv + WaterLayers.xy - flow * (p0 * cycle) * WaterParams.y * 0.5).rgb, w0) * 0.5
-		+ 0.5 * inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb;
-	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(r.y)) : FogColor.rgb;
-	tex *= lerp(1.0, float3(0.55, 0.7, 0.8), saturate(input.Depth / 6));
-	tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10));
 	float cloud = CloudLight(input.World);
-	tex *= cloud;
+	// the water's own colour: turquoise in the shallows to a deep blue, a little of the map's
+	// water texture, lit by the sun through the surface
+	float2 uv = base * WaterParams.y;
+	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
+	float3 body = lerp(float3(0.07, 0.38, 0.42), float3(0.015, 0.15, 0.26), smoothstep(0.5, 8, depth));
+	body = lerp(body, tex * float3(0.55, 0.75, 0.85), 0.25);
+	body *= (0.6 + 0.4 * saturate(dot(wn, l))) * cloud;
+	// light through the waves' faces: they glow turquoise as they rise, most against the sun
+	float through = crest * saturate(dot(-v, l) * 0.4 + 0.7);
+	body += float3(0.04, 0.32, 0.28) * through * 0.55 * cloud;
+	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(r.y)) : FogColor.rgb;
 	sky *= lerp(1, cloud, 0.5);
-	// foam: broken up by two soft, low layers of the ripple map (sharp thresholds of finer ones
-	// gave it jagged edges)
+	// the sun: a broad highlight off the waves, many small sparkles off the ripples
+	float sw = saturate(dot(reflect(-v, wn), l)), sr = saturate(dot(r, l));
+	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * 2.2) * cloud;
+	// foam: streaks on the highest crests, broken up by the ripple map
 	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.35 + WaterRipples.xy).xy - 0.5) * 2.5)
 		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 - WaterRipples.yx).xy - 0.5) * 2.5 + 0.4);
-	// on the waves' crests
-	float crestFoam = saturate((input.Crest - 0.55) * 3) * smoothstep(0.05, 0.75, noise);
-	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep
-	// (over a flat beach the whole shallows had been foam), and the swash at the waterline
-	float surf = saturate((sin(input.Depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, input.Depth) * smoothstep(0.05, 0.15, input.Depth);
-	float swash = smoothstep(0.25, 0.0, input.Depth);
+	float crestFoam = smoothstep(0.72, 0.92, crest) * smoothstep(0.15, 0.7, noise);
+	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep,
+	// and the swash at the waterline
+	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth);
+	float swash = smoothstep(0.25, 0.0, depth);
 	float shoreFoam = max(surf * smoothstep(0.1, 0.7, noise), swash * smoothstep(0.0, 0.6, noise)) * (1 - 0.6 * river);
 	// white water where a narrow river runs fast
 	float rush = f.z * saturate(length(fdir) * 1.5) * river;
-	float riverFoam = saturate((detail.x + detail.y) * 3 - 0.4) * rush * rush * 0.35;
+	float riverFoam = saturate((detail.x + detail.y) * 3 - 0.4) * rush * rush * 0.3;
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
-	float3 c = lerp(lerp(tex, sky, fresnel * 0.65), float3(0.93, 0.96, 0.97) * lerp(1, cloud, 0.5), foam) + glint * cloud * (1 - foam);
-	float alpha = saturate(lerp(0.3, 0.85, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
-	return WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
+	float3 c = lerp(lerp(body, sky, fresnel * 0.8), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam);
+	float alpha = saturate(lerp(0.35, 0.95, saturate(depth / 2.5)) + fresnel * 0.2 + glint + foam);
+	return WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
@@ -795,11 +807,17 @@ float2 ValueNoise2(float2 p)
 // position so the mip level doesn't jump at the cells' borders
 float4 SampleVariant(Texture2DArray<float4> layers, float2 p, uint layer)
 {
-	float2 cell = floor(p / 5);
-	uint q = (uint)(Hash2(cell + 17.0).x * 4) & 3;
-	float2 uv = (float2(q & 1, q >> 1) + (p / 5 - cell)) * 0.5;
+	// the material's four tiles blended by smooth, low noise (about 25 units across). One tile
+	// chosen outright per 5-unit cell drew a grid of differently toned squares.
+	float2 a = smoothstep(0.4, 0.6, ValueNoise2(p * 0.04 + 3.7)); // mostly one tile, narrow seams between
+	float2 local = frac(p / 5) * 0.5;
 	float2 g = p / 10;
-	return layers.SampleGrad(splatSampler, float3(uv, layer), ddx(g), ddy(g));
+	float2 gx = ddx(g), gy = ddy(g);
+	float4 s0 = layers.SampleGrad(splatSampler, float3(local, layer), gx, gy);
+	float4 s1 = layers.SampleGrad(splatSampler, float3(local + float2(0.5, 0), layer), gx, gy);
+	float4 s2 = layers.SampleGrad(splatSampler, float3(local + float2(0, 0.5), layer), gx, gy);
+	float4 s3 = layers.SampleGrad(splatSampler, float3(local + float2(0.5, 0.5), layer), gx, gy);
+	return lerp(lerp(s0, s1, a.x), lerp(s2, s3, a.x), a.y);
 }
 
 uint4 CornerLayers(int2 c0)
@@ -810,9 +828,9 @@ uint4 CornerLayers(int2 c0)
 
 float4 PS_Splat(VS_OUTPUT input) : SV_Target
 {
-	// the tile's own corners decide whether it keeps its picture; the blend looks the corners up
-	// at a position warped by noise, so that the materials' borders don't follow the tile grid
-	uint4 own4 = CornerLayers((int2)floor((input.FragPos.xz + BlobParams.w) / 5));
+	// the blend looks the corners up at a position warped by noise, so that the materials'
+	// borders don't follow the tile grid. (Tiles whose corners all agree had kept their own
+	// picture, whose tone differs from the blended layers: every such tile showed as a square.)
 	float2 wpos = input.FragPos.xz + (ValueNoise2(input.FragPos.xz * 0.15) - 0.5) * 3.5;
 	float2 c = (wpos + BlobParams.w) / 5;
 	int2 c0 = (int2)floor(c);
@@ -824,13 +842,6 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	// tiles' pictures stretch down a slope
 	float3 n = normalize(input.Norm);
 	float steep = saturate((0.8 - n.y) * 4);
-	// the tile's own picture where its corners agree
-	float2 fuv = AtlasUV(input.Texcoord);
-	float4 own = inpTexture.Sample(inpSampler, fuv);
-	float3 ownNrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
-	bool oneMaterial = all(own4 == own4.xxxx);
-	if (oneMaterial && steep == 0)
-		return ShadeTerrain(input, own, ownNrm, input.Tangent, input.Bitangent);
 	float2 gp = input.FragPos.xz + BlobParams.w; // on the tile grid
 	float3 tw = pow(abs(n), 4);
 	tw /= tw.x + tw.y + tw.z;
@@ -860,11 +871,6 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	nrm /= total;
 	// on cliffs the normal maps' detail fades: their planar projection doesn't fit there
 	nrm = normalize(lerp(nrm, float3(0, 1, 0), steep));
-	if (oneMaterial) { // the tile's own picture on gentler ground, the projection on cliffs
-		tex = lerp(own, tex, steep);
-		nrm = normalize(lerp(ownNrm, nrm, steep));
-		return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
-	}
 	float3 t = normalize(float3(1, 0, 0) - n * n.x);
 	float3 b = normalize(float3(0, 0, 1) - n * n.z);
 	return ShadeTerrain(input, tex, nrm, t, b);
@@ -1753,7 +1759,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	grassLook[2] = grassLook[3] = 0.0f;
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
-	flowParams[1] = 1.3f;
+	flowParams[1] = 0.7f; // the ripples move at most 0.7 units a second (1.3 stretched them)
 	flowParams[2] = 64.0f;  // High water: most pieces per tile edge near the camera (the GPU's most)
 	flowParams[3] = 600.0f; // and the fade: full detail to 150 units, none from 750 (for fast PCs)
 	float* fire = (float*)(sbdata + 224);
