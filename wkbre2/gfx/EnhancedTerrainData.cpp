@@ -403,3 +403,57 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 	printf("Splat terrain: %zu materials\n", splat.names.size());
 	return splat;
 }
+
+void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out)
+{
+	const TerrainTile* tile = terrain->getTile(x, z);
+	if (tile->fullOfWater || !tile->texture)
+		return;
+	constexpr float tilesize = 5.0f;
+	const float h00 = terrain->getVertex(x, z), h10 = terrain->getVertex(x + 1, z);
+	const float h11 = terrain->getVertex(x + 1, z + 1), h01 = terrain->getVertex(x, z + 1);
+	// none on steep ground (a rise of more than 0.6 per unit)
+	const float rise = std::max({ std::abs(h10 - h00), std::abs(h01 - h00), std::abs(h11 - h01), std::abs(h11 - h10) }) / tilesize;
+	if (rise > 0.6f)
+		return;
+	auto it = atlases.find(tile->texture->file);
+	if (it == atlases.end())
+		it = atlases.emplace(tile->texture->file, Bitmap::loadBitmap(("Maps\\Map_Textures\\" + tile->texture->file).c_str()).convertToR8G8B8A8()).first;
+	const Bitmap& a = it->second;
+	if (a.width <= 0 || a.height <= 0)
+		return;
+	const auto uvs = TileCornerUVs(tile);
+	uint32_t seed = ((uint32_t)x * 73856093u) ^ ((uint32_t)z * 19349663u) ^ 0x9e3779b9u;
+	auto rnd = [&]() {
+		seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+		return (seed & 0xFFFFFF) / 16777216.0f;
+	};
+	const float lx = (x - (int)terrain->edge) * tilesize, lz = (z - (int)terrain->edge) * tilesize;
+	const int count = (int)(density * tilesize * tilesize + 0.5f);
+	for (int i = 0; i < count; i++) {
+		const float fx = rnd(), fz = rnd();
+		// the picture's texel there: the corners' UVs, bilinearly
+		const float u = (uvs[0].first + (uvs[1].first - uvs[0].first) * fx) * (1 - fz) + (uvs[3].first + (uvs[2].first - uvs[3].first) * fx) * fz;
+		const float v = (uvs[0].second + (uvs[1].second - uvs[0].second) * fx) * (1 - fz) + (uvs[3].second + (uvs[2].second - uvs[3].second) * fx) * fz;
+		// 3 x 3 texels: a single one is often a dark speck of the picture
+		float r = 0, g = 0, b = 0;
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dx = -1; dx <= 1; dx++) {
+				const int px = std::clamp((int)(u * a.width) + dx, 0, a.width - 1), pz = std::clamp((int)(v * a.height) + dz, 0, a.height - 1);
+				const uint8_t* t = &a.pixels[(pz * a.width + px) * 4];
+				r += t[0] / 9.0f; g += t[1] / 9.0f; b += t[2] / 9.0f;
+			}
+		if (!(g > r * 1.05f && g > b * 1.15f && g > 40))
+			continue; // not grass: rock, sand, earth, snow
+		const float shade = 0.8f + 0.4f * rnd();
+		auto channel = [&](float c) { return (uint32_t)std::clamp(c * shade, 0.0f, 255.0f); };
+		GrassBlade blade;
+		blade.x = lx + fx * tilesize;
+		blade.z = lz + fz * tilesize;
+		blade.y = (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
+		blade.colour = channel(r) | (channel(g) << 8) | (channel(b) << 16) | 0xFF000000u;
+		blade.yaw = rnd() * 6.2831853f;
+		blade.height = 0.4f + 0.45f * rnd();
+		out.push_back(blade);
+	}
+}

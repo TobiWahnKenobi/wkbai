@@ -95,6 +95,7 @@ cbuffer SunBuffer
 	float4 WaterSkyHorizon;
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
+	float4 GrassParams; // grass: on, distance, game time in seconds
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -290,6 +291,47 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
+// Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
+// base, a narrower middle, the tip), leaning its own way and swaying in the wind, shrinking to
+// nothing over the last 30% of the grass distance. Lit as flat ground: the sun's height (at
+// least 1/3, as the terrain's light vector), the clouds, static and blob shadows and fires.
+struct GRASS_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	float3 World : COLOR1;
+	float4 Colour : COLOR0;
+	float Fog : FOG;
+};
+
+GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 YawHeight : ATTRIB2, uint VertexId : SV_VertexID)
+{
+	static const float2 shape[9] = { float2(-1, 0), float2(1, 0), float2(-0.7, 0.55), float2(1, 0), float2(0.7, 0.55),
+		float2(-0.7, 0.55), float2(-0.7, 0.55), float2(0.7, 0.55), float2(0, 1) };
+	float2 s = shape[VertexId];
+	float dist = distance(Root, FogCamera.xyz);
+	float grow = saturate((GrassParams.y - dist) / (GrassParams.y * 0.3));
+	float height = YawHeight.y * grow;
+	float2 dir = float2(cos(YawHeight.x), sin(YawHeight.x));
+	float2 side = float2(-dir.y, dir.x);
+	float sway = sin(GrassParams.z * 1.7 + Root.x * 0.35 + Root.z * 0.23) * 0.5 + 0.5;
+	float bend = (0.15 + 0.25 * sway) * height * s.y * s.y;
+	float3 p = Root + float3(side.x, 0, side.y) * (s.x * 0.07 * grow) + float3(dir.x, 0, dir.y) * bend + float3(0, s.y * height, 0);
+	GRASS_OUTPUT output;
+	output.Pos = mul(float4(p, 1), Transform);
+	output.World = p;
+	output.Colour = float4(Colour.rgb * (0.85 + 0.35 * s.y), 1);
+	output.Fog = FogAmount(p, dist);
+	return output;
+}
+
+float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
+{
+	float lum = max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World) * StaticShadowLight(input.World) * BlobLight(input.World);
+	float3 light = lum.xxx + FireLight(input.World, float3(0, 1, 0));
+	float3 c = lerp(input.Colour.rgb * light, FogColor.rgb, input.Fog);
+	return float4(GradeColour(c), 1);
+}
+
 // The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the
 // per-vertex light vector (the sun direction in tangent space, shortened by the cloud
 // shadows) dotted with the normal map, clamped, times the texture.
@@ -470,6 +512,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	// view, and the visible chunks' lists are concatenated (one draw per texture, one for water).
 	struct Chunk {
 		Vector3 low, high;
+		uint32_t grassFirst = 0, grassCount = 0; // its blades in grassBuffer
 		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
 		std::vector<uint32_t> lakeIndices;
 	};
@@ -479,6 +522,8 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	std::vector<uint32_t> frameLakeIndices;
 	RefCntAutoPtr<IBuffer> lakeVertexBuffer;
 	RefCntAutoPtr<IPipelineState> lakePipeline;
+	RefCntAutoPtr<IPipelineState> grassPipeline;
+	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	RefCntAutoPtr<IShaderResourceBinding> lakeBinding;
 	texture cloudMap = nullptr;
 	texture waterTexture = nullptr, rippleTexture = nullptr;
@@ -565,7 +610,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 752;
+	cbDesc.Size = 768;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -574,7 +619,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_PIXEL, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VS_PS, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -828,6 +873,25 @@ void DiligentEnhancedTerrainRenderer::init()
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
 
+	// Grass: opaque blades, both sides, one instance per blade
+	RefCntAutoPtr<IShader> grassVs = createShader(SHADER_TYPE_VERTEX, "VS_Grass");
+	RefCntAutoPtr<IShader> grassPs = createShader(SHADER_TYPE_PIXEL, "PS_Grass");
+	static const LayoutElement grassLayout[] = {
+		LayoutElement{ 0, 0, 3, VT_FLOAT32, False, 0, sizeof(GrassBlade), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+		LayoutElement{ 1, 0, 4, VT_UINT8, True, 12, sizeof(GrassBlade), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+		LayoutElement{ 2, 0, 2, VT_FLOAT32, False, 16, sizeof(GrassBlade), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 } };
+	ci.PSODesc.Name = "Enhanced terrain grass";
+	gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+	gp.DepthStencilDesc.DepthWriteEnable = True;
+	blend.BlendEnable = False;
+	gp.InputLayout.LayoutElements = grassLayout;
+	gp.InputLayout.NumElements = (Uint32)std::size(grassLayout);
+	ci.pVS = grassVs;
+	ci.pPS = grassPs;
+	device->CreateGraphicsPipelineState(ci, &_impl->grassPipeline);
+	if (!_impl->grassPipeline)
+		ferr("Diligent: could not create the enhanced terrain grass pipeline.");
+
 	{
 		RefCntAutoPtr<IShader> blobVs = createShader(SHADER_TYPE_VERTEX, "VS_Blob");
 		RefCntAutoPtr<IShader> blobPs = createShader(SHADER_TYPE_PIXEL, "PS_Blob");
@@ -878,9 +942,12 @@ void DiligentEnhancedTerrainRenderer::init()
 	std::map<Impl::TexturePair, int> pairIndex;
 	struct LakeVertex { Vector3 pos; float depth; };
 	std::vector<LakeVertex> lakeVertices;
+	TerrainGrassBuilder grassBuilder;
+	std::vector<GrassBlade> grass;
 	for (int cz = 0; cz < (int)terrain->height; cz += CHUNK) {
 		for (int cx = 0; cx < (int)terrain->width; cx += CHUNK) {
 			Impl::Chunk chunk;
+			chunk.grassFirst = (uint32_t)grass.size();
 			chunk.low = Vector3(1e9f, 1e9f, 1e9f);
 			chunk.high = Vector3(-1e9f, -1e9f, -1e9f);
 			std::map<int, std::vector<uint32_t>> perTexture;
@@ -892,6 +959,8 @@ void DiligentEnhancedTerrainRenderer::init()
 					if (isNew)
 						_impl->texturePairs.push_back(pair);
 					const uint32_t first = 4 * (z * terrain->width + x);
+					if (g_renderSettings.grassDensity > 0)
+						grassBuilder.addTile(terrain, x, z, g_renderSettings.grassDensity, grass);
 					auto& list = perTexture[it->second];
 					for (const int& c : { 0,3,1,1,3,2 })
 						list.push_back(first + c);
@@ -916,10 +985,22 @@ void DiligentEnhancedTerrainRenderer::init()
 			}
 			for (auto& [index, list] : perTexture)
 				chunk.indicesPerTexture.emplace_back(index, std::move(list));
+			chunk.grassCount = (uint32_t)grass.size() - chunk.grassFirst;
+			chunk.high.y += 1.0f; // the blades above the ground
 			_impl->chunks.push_back(std::move(chunk));
 		}
 	}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
+	if (!grass.empty()) {
+		BufferDesc grassDesc;
+		grassDesc.Name = "Terrain grass blades";
+		grassDesc.Usage = USAGE_IMMUTABLE;
+		grassDesc.BindFlags = BIND_VERTEX_BUFFER;
+		grassDesc.Size = grass.size() * sizeof(GrassBlade);
+		BufferData grassData{ grass.data(), grassDesc.Size };
+		device->CreateBuffer(grassDesc, &grassData, &_impl->grassBuffer);
+		printf("Grass: %zu blades\n", grass.size());
+	}
 	if (!lakeVertices.empty()) {
 		BufferDesc lakeDesc;
 		lakeDesc.Name = "Terrain water vertices";
@@ -1124,6 +1205,11 @@ void DiligentEnhancedTerrainRenderer::render()
 	}
 	else
 		std::fill(waterSky, waterSky + 8, 0.0f);
+	float* grassParams = (float*)(sbdata + 752);
+	grassParams[0] = g_renderSettings.grass ? 1.0f : 0.0f;
+	grassParams[1] = std::max(1.0f, g_renderSettings.grassDistance);
+	grassParams[2] = (float)std::fmod(shadows.time, 3600.0);
+	grassParams[3] = 0.0f;
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -1189,9 +1275,19 @@ void DiligentEnhancedTerrainRenderer::render()
 	for (auto& list : _impl->frameIndices)
 		list.clear();
 	_impl->frameLakeIndices.clear();
+	std::vector<const Impl::Chunk*> grassChunks;
 	for (const Impl::Chunk& chunk : _impl->chunks) {
 		if (!visible(chunk.low, chunk.high))
 			continue;
+		if (chunk.grassCount > 0) {
+			// within the grass distance of the camera, by the box's nearest point
+			const Vector3& cam = camera->position;
+			const float dx = std::max({ chunk.low.x - cam.x, 0.0f, cam.x - chunk.high.x });
+			const float dz = std::max({ chunk.low.z - cam.z, 0.0f, cam.z - chunk.high.z });
+			const float dy = std::max({ chunk.low.y - cam.y, 0.0f, cam.y - chunk.high.y });
+			if (dx * dx + dy * dy + dz * dz < g_renderSettings.grassDistance * g_renderSettings.grassDistance)
+				grassChunks.push_back(&chunk);
+		}
 		for (const auto& [index, list] : chunk.indicesPerTexture)
 			_impl->frameIndices[index].insert(_impl->frameIndices[index].end(), list.begin(), list.end());
 		_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.lakeIndices.begin(), chunk.lakeIndices.end());
@@ -1226,6 +1322,22 @@ void DiligentEnhancedTerrainRenderer::render()
 		}
 		ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		drawIndices(_impl->frameIndices[t]);
+	}
+
+	// ----- Grass -----
+	if (g_renderSettings.grass && _impl->grassBuffer && !grassChunks.empty()) {
+		ctx->SetPipelineState(_impl->grassPipeline);
+		IBuffer* gvb = _impl->grassBuffer;
+		ctx->SetVertexBuffers(0, 1, &gvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		for (const Impl::Chunk* chunk : grassChunks) {
+			DrawAttribs draw;
+			draw.NumVertices = 9;
+			draw.NumInstances = chunk->grassCount;
+			draw.FirstInstanceLocation = chunk->grassFirst;
+			draw.Flags = DRAW_FLAG_VERIFY_ALL;
+			ctx->Draw(draw);
+		}
 	}
 
 	// ----- Water -----

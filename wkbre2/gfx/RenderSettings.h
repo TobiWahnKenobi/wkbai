@@ -29,10 +29,14 @@ struct RenderSettings {
 	// The original's sky, shadows and model lighting
 	bool sky = true, cloudShadows = true, staticShadows = true;
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
-	bool waterDetail = true;
+	bool waterDetail = true;         // with it: the sky reflected, deeper water darker, cloud shadows, shore foam
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
-	bool fireLights = true;         // with it: the sky reflected, deeper water darker, cloud shadows, shore foam
+	bool fireLights = true;
+	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
+	// square unit (taking effect on the next map) and how far from the camera they are drawn
+	bool grass = true;
+	float grassDensity = 3.0f, grassDistance = 80.0f;
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
 	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
 	// 1/3 up, so slopes facing away from the sun stay lit

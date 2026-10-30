@@ -37,6 +37,9 @@ void RenderSettings::load()
 	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
 	waterDetail = g_settings.value<bool>("waterDetail", def.waterDetail);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
+	grass = g_settings.value<bool>("grass", def.grass);
+	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
+	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	terrainSplat = g_settings.value<bool>("terrainSplat", def.terrainSplat);
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
@@ -100,6 +103,9 @@ void RenderSettings::save()
 	g_settings["waterSurface"] = waterSurface;
 	g_settings["waterDetail"] = waterDetail;
 	g_settings["fireLights"] = fireLights;
+	g_settings["grass"] = grass;
+	g_settings["grassDensity"] = grassDensity;
+	g_settings["grassDistance"] = grassDistance;
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["terrainSplat"] = terrainSplat;
 	g_settings["modelLighting"] = modelLighting;

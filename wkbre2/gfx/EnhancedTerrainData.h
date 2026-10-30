@@ -6,6 +6,7 @@
 
 #include "renderer.h"
 #include "../util/vecmat.h"
+#include "bitmap.h"
 #include <cstdint>
 #include <map>
 #include <string>
@@ -57,3 +58,16 @@ struct TerrainSplatData {
 	std::vector<uint8_t> corners;                // layer per tile corner, (x, z) at z * (width + 1) + x
 };
 TerrainSplatData BuildTerrainSplat(Terrain* terrain);
+
+// Grass (RenderSettings::grass): short blades scattered over a tile where its picture is green,
+// coloured from the picture under them (with the tile's turn and flips), on gentle dry ground
+struct GrassBlade {
+	float x, y, z;     // root, in world units
+	uint32_t colour;   // RGBA8, R in the low byte
+	float yaw, height; // the direction it leans in (radians), its height in world units
+};
+struct TerrainGrassBuilder {
+	std::map<std::string, Bitmap> atlases; // the tile pictures, by texture file
+	// adds tile (x, z)'s blades, about density per square unit
+	void addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out);
+};
