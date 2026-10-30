@@ -40,7 +40,7 @@ void RenderSettings::load()
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
 	modelSpecular = g_settings.value<float>("modelSpecular", def.modelSpecular);
 	skyLight = g_settings.value<bool>("skyLight", def.skyLight);
-	terrainWorldFrame = g_settings.value<bool>("terrainWorldFrame", def.terrainWorldFrame);
+	terrainOriginalLight = g_settings.value<bool>("terrainOriginalLight", def.terrainOriginalLight);
 	characterShadows = g_settings.value<bool>("characterShadows", def.characterShadows);
 	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
 	wallShadows = g_settings.value<bool>("wallShadows", def.wallShadows);
@@ -97,7 +97,7 @@ void RenderSettings::save()
 	g_settings["modelLighting"] = modelLighting;
 	g_settings["modelSpecular"] = modelSpecular;
 	g_settings["skyLight"] = skyLight;
-	g_settings["terrainWorldFrame"] = terrainWorldFrame;
+	g_settings["terrainOriginalLight"] = terrainOriginalLight;
 	g_settings["characterShadows"] = characterShadows;
 	g_settings["realCharacterShadows"] = realCharacterShadows;
 	g_settings["wallShadows"] = wallShadows;

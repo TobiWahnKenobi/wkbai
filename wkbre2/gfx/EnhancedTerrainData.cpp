@@ -27,6 +27,11 @@ static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
 	return Vec3ToR10G10B10A2((vec + Vector3(1, 1, 1)) * 0.5f);
 }
 
+// The up component of a bump map texel's normal before normalizing, against height differences
+// / 510: fitted so the terrain is as dark as the original's on 4 Peaks (docs/engine/
+// original-comparison.md in the RE repository); Rock1's normals then average 0.80 up
+static constexpr float BUMP_NORMAL_UP = 0.05f;
+
 void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::map<TerrainTexture*, EnhancedTerrainTexture>& textures)
 {
 	// Load terrain color textures
@@ -79,7 +84,7 @@ void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::
 									float fx = (-dx1+dx2) / 510.0f, fz = (-dz1+dz2) / 510.0f;
 									//fx *= 3.0f; fz *= 3.0f;
 									//float fy = 1.0f - fx * fx - fz * fz;
-									float fy = 0.1f;
+									float fy = BUMP_NORMAL_UP;
 									float norm = std::sqrt(fx * fx + fy * fy + fz * fz);
 									fx /= norm; fy /= norm; fz /= norm;
 
@@ -220,7 +225,7 @@ static void BumpTileToNormals(const uint8_t* heights, int pitch, int size, uint8
 			const int dx2 = (int)heights[cz * pitch + (cx + size - 1) % size] - c;
 			const int dz1 = (int)heights[((cz + 1) % size) * pitch + cx] - c;
 			const int dz2 = (int)heights[((cz + size - 1) % size) * pitch + cx] - c;
-			float fx = (-dx1 + dx2) / 510.0f, fz = (-dz1 + dz2) / 510.0f, fy = 0.1f;
+			float fx = (-dx1 + dx2) / 510.0f, fz = (-dz1 + dz2) / 510.0f, fy = BUMP_NORMAL_UP;
 			const float norm = std::sqrt(fx * fx + fy * fy + fz * fz);
 			fx /= norm; fy /= norm; fz /= norm;
 			uint8_t* o = out + (cz * outPitch + cx) * 4;

@@ -30,9 +30,9 @@ struct RenderSettings {
 	bool sky = true, cloudShadows = true, staticShadows = true;
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
-	// the terrain lit in the original's Dot3 frame (world up, not the slope's normal: slopes are
-	// shaded by the bump maps only)
-	bool terrainWorldFrame = true;
+	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
+	// 1/3 up, so slopes facing away from the sun stay lit
+	bool terrainOriginalLight = true;
 	// the terrain's materials blended at the tile corners instead of the original's painted tiles
 	// (enhanced renderer on Diligent; gfx/EnhancedTerrainData.h)
 	bool terrainSplat = false;

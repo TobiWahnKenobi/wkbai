@@ -257,19 +257,27 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 {
 	float lum = 0;
 
-	// BumpOn & 2 (RenderSettings::terrainWorldFrame): the original's frame. Its per-vertex Dot3
-	// light vectors don't follow the slope: the tangent space has world up as its normal and the
-	// tile's texture directions flattened, so slopes are shaded by the bump maps alone (RE
-	// repository, docs/engine/original-comparison.md)
+	// BumpOn & 2 (RenderSettings::terrainOriginalLight): the original's per-vertex Dot3 light
+	// vector. It is the sun in the slope's tangent frame, but its up component is at least 1/3
+	// (the sides shortened to keep it unit length), so faces turned away from the sun keep a
+	// third of the light (fitted to its traced vertices; RE repository,
+	// docs/engine/original-comparison.md)
 	float3 vertexNormal = input.Norm;
 	if (BumpOn & 2) {
-		vertexNormal = float3(0, 1, 0);
-		if (BumpOn & 4) {
-			tangent = normalize(float3(tangent.x, 0, tangent.z) + float3(1e-5, 0, 0));
-			bitangent = normalize(float3(bitangent.x, 0, bitangent.z) + float3(0, 0, 1e-5));
+		float3 n = normalize(vertexNormal);
+		float3 t = normalize(tangent - n * dot(tangent, n));
+		float3 b = normalize(bitangent - n * dot(bitangent, n) - t * dot(bitangent, t));
+		float3 l = float3(dot(SunDirection, t), dot(SunDirection, n), dot(SunDirection, b));
+		if (l.y < 1.0 / 3.0) {
+			l.xz *= 0.9428090 / max(length(l.xz), 1e-5); // sqrt(8/9)
+			l.y = 1.0 / 3.0;
 		}
+		// the filtered normal as it is, as the original's DOTPRODUCT3 stage: rough bump maps
+		// average to a shorter normal in the distance, which darkens them
+		lum = (BumpOn & 1) ? dot(nrm, l) : l.y;
+		lum = clamp(lum, 0, 1);
 	}
-	if(BumpOn & 1) {
+	else if(BumpOn & 1) {
 		float3 actnorm = nrm.xxx * tangent + nrm.yyy * vertexNormal + nrm.zzz * bitangent;
 		lum += clamp(dot(normalize(actnorm), SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
@@ -1016,7 +1024,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	ctx->MapBuffer(_impl->sunBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	char* sbdata = (char*)mapped;
 	*(Vector3*)(sbdata + 0) = sunNormal;
-	*(int*)(sbdata + 12) = (m_bumpOn ? 1 : 0) | (g_renderSettings.terrainWorldFrame ? 2 : 0);
+	*(int*)(sbdata + 12) = (m_bumpOn ? 1 : 0) | (g_renderSettings.terrainOriginalLight ? 2 : 0);
 	auto& shadows = dgfx->shadows;
 	*(Matrix*)(sbdata + 16) = shadows.staticShadowMatrix.getTranspose();
 	float* cloudParams = (float*)(sbdata + 80);
