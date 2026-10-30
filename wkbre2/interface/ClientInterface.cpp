@@ -578,6 +578,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
 		ImGui::Checkbox("Water surface", &s.waterSurface);
+		ImGui::Checkbox("Water: sky reflection, depth, shore foam", &s.waterDetail);
+		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
 		ImGui::Checkbox("Static shadows", &s.staticShadows);
 		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
 		{
@@ -2064,6 +2066,54 @@ void ClientInterface::iter()
 					e.flags = 0;
 					scene->add(&e);
 				}
+		}
+		// Fire lights: one per fire (system and object), at its live particles' centre, its colour
+		// their mean colour, stronger with more particles; the nearest to the camera are kept
+		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx); dgfx && particlesContainer && gpuBlobShadows) {
+			std::vector<float>& lights = dgfx->shadows.fireLights;
+			lights.clear();
+			if (g_renderSettings.fireLights) {
+				struct Fire { Vector3 sum; float colour[3] = {}, alpha = 0, lowest = 1e9f; int count = 0; };
+				std::map<std::pair<void*, uint32_t>, Fire> fires;
+				const float now = client->timeManager.currentTime;
+				for (auto& [key, list] : particlesContainer->particles)
+					for (Particle& p : list) {
+						if (!p.system->emitsLight)
+							continue;
+						const float age = now - p.startTime;
+						if (age < 0 || age > p.maxAge)
+							continue;
+						Fire& f = fires[{ key, p.objid }];
+						const Vector3 at = p.getPosition(now);
+						f.sum += at;
+						f.lowest = std::min(f.lowest, at.y);
+						const uint32_t c = p.getColor(now);
+						const float a = (c >> 24) / 255.0f;
+						for (int i = 0; i < 3; i++)
+							f.colour[i] += ((c >> (16 - 8 * i)) & 255) / 255.0f * a;
+						f.alpha += a;
+						f.count++;
+					}
+				std::vector<std::pair<float, std::array<float, 7>>> list;
+				for (auto& [key, f] : fires) {
+					// at the fire's base (its particles rise), so that it lights the ground around it
+					Vector3 at = f.sum / (float)f.count;
+					at.y = f.lowest + 1.5f;
+					// the fire's hue at full brightness (the sprites' alpha-weighted colour, warmed:
+					// their middles are near white), as strong as there are visible sprites
+					if (f.alpha <= 0)
+						continue;
+					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
+					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
+					const float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					std::array<float, 7> l = { at.x, at.y, at.z, 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f),
+						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
+					list.push_back({ (at - client->camera.position).sqlen3(), l });
+				}
+				std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+				for (size_t i = 0; i < list.size() && i < (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS; i++)
+					lights.insert(lights.end(), list[i].second.begin(), list[i].second.end());
+			}
 		}
 		// test runs: "benchmark": { ..., "particleTest": "<particle system>" } emits it 25 m in front
 		// of the camera, to see a particle system on a screenshot

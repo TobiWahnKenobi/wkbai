@@ -101,6 +101,8 @@ namespace {
 		list.push_back(withEnabled(toggle("realCharacterShadows", "lighting", "Real character shadows", rs.realCharacterShadows),
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));
 		list.push_back(toggle("waterSurface", "lighting", "Water surface", rs.waterSurface));
+		list.push_back(withEnabled(toggle("waterDetail", "lighting", "Water reflections and foam", rs.waterDetail), [&rs]() { return rs.waterSurface; }));
+		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		list.push_back(toggle("ssao", "lighting", "Ambient occlusion", rs.ssao));
 		list.push_back(toggle("bloom", "lighting", "Bloom", rs.bloom));
 		list.push_back(toggle("bumpMapping", "lighting", "Terrain bump mapping", rs.bumpMapping));

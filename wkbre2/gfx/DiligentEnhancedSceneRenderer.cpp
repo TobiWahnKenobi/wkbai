@@ -97,7 +97,27 @@ cbuffer SunBuffer
 	// x: the strength of the normals derived from the albedo's brightness, for materials
 	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat)
 	float4 Material;
+	float4 FireLightCount; // x: how many of FireLights are in use
+	float4 FireLights[32]; // per light: position and radius, colour
 };
+
+// The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
+// out over its radius, half wrapped around the surface so that fires also light the ground
+// beside them
+float3 FireLight(float3 pos, float3 n)
+{
+	float3 sum = float3(0, 0, 0);
+	for (int i = 0; i < (int)FireLightCount.x; i++) {
+		float4 at = FireLights[2 * i];
+		float3 d = at.xyz - pos;
+		float dist = length(d);
+		float fade = saturate(1 - dist / at.w);
+		float wrap = saturate(dot(n, d / max(dist, 1e-3))) * 0.7 + 0.3;
+		sum += FireLights[2 * i + 1].rgb * (fade * fade * wrap);
+	}
+	return sum;
+}
+
 
 cbuffer SceneBuffer
 {
@@ -194,8 +214,10 @@ float3 SkyColour(float3 d)
 
 float3 ModelLight(VS_OUTPUT input, float3 albedo)
 {
-	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
+	if (dot(input.Norm, input.Norm) == 0)
 		return input.Color.rgb * albedo;
+	if (MeshLighting.z == 0)
+		return (input.Color.rgb + FireLight(input.WorldPos, normalize(input.Norm)) * input.Tint.rgb) * albedo;
 	float3 n = normalize(input.Norm);
 	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
 	// no tangents)
@@ -249,7 +271,8 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
 	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness);
-	return (diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a * input.Tint.rgb;
+	float3 fire = FireLight(input.WorldPos, n) * orm.r;
+	return ((diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -456,7 +479,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 128;
+	cbDesc.Size = 656;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 
 
@@ -620,7 +643,7 @@ void DiligentEnhancedSceneRenderer::render()
 	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 128);
+	memset(mapped, 0, 656);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -647,6 +670,14 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 	float* material = (float*)mapped + 28;
 	material[0] = g_renderSettings.modelDetailNormals;
+	float* fire = (float*)mapped + 32;
+	const std::vector<float>& fireLights = shadows.fireLights;
+	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
+	fire[0] = (float)numFires;
+	for (int i = 0; i < numFires; i++) {
+		std::copy_n(&fireLights[i * 7], 4, fire + 4 + i * 8);
+		std::copy_n(&fireLights[i * 7 + 4], 3, fire + 8 + i * 8);
+	}
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {

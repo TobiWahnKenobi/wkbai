@@ -3,6 +3,8 @@
 // Licensed under the GNU General Public License 3
 
 #include "ParticleSystem.h"
+#include <algorithm>
+#include <cctype>
 #include "util/GSFileParser.h"
 #include "file.h"
 
@@ -207,6 +209,11 @@ ParticleSystem* PSCache::getPS(const std::string& name) {
 		auto& ps = cache[name];
 		ps.parse(psp);
 		free(text);
+		std::string lower = name;
+		std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+		ps.emitsLight = lower.find("smoke") == std::string::npos
+			&& (lower.find("fire") != std::string::npos || lower.find("flame") != std::string::npos
+				|| lower.find("burn") != std::string::npos || lower.find("torch") != std::string::npos);
 		return &ps;
 	}
 }

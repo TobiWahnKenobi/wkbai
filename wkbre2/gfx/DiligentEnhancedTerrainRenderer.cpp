@@ -89,7 +89,31 @@ cbuffer SunBuffer
 	float4 WaterRipples; // UV offsets of the two ripple layers
 	float4 WaterParams; // on, UV per world unit, ripple UV per world unit
 	float4 BlobParams; // on, 1 / map width, 1 / map depth, map edge in world units
+	// RenderSettings::waterDetail: the sky box's colour above (w: on) and at the horizon, for
+	// the water's reflection (ShadowEnvironment::skyLight), else the fog colour
+	float4 WaterSkyUp;
+	float4 WaterSkyHorizon;
+	float4 FireLightCount; // x: how many of FireLights are in use
+	float4 FireLights[32]; // per light: position and radius, colour
 };
+
+// The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
+// out over its radius, half wrapped around the surface so that fires also light the ground
+// beside them
+float3 FireLight(float3 pos, float3 n)
+{
+	float3 sum = float3(0, 0, 0);
+	for (int i = 0; i < (int)FireLightCount.x; i++) {
+		float4 at = FireLights[2 * i];
+		float3 d = at.xyz - pos;
+		float dist = length(d);
+		float fade = saturate(1 - dist / at.w);
+		float wrap = saturate(dot(n, d / max(dist, 1e-3))) * 0.7 + 0.3;
+		sum += FireLights[2 * i + 1].rgb * (fade * fade * wrap);
+	}
+	return sum;
+}
+
 
 // The unit blob shadows, drawn into a map-sized texture of the light they leave
 float BlobLight(float3 pos)
@@ -233,7 +257,9 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 // vectors and lights each tile corner with a sun glint off a scrolling field of normals. Here
 // per pixel: the map's Water_Surface.tga in two scrolling layers, two layers of a ripple normal
 // map, a sun glint, the sky (fog) colour reflected at grazing angles, and more transparency
-// where the water is shallow.
+// where the water is shallow. With RenderSettings::waterDetail also: the sky box's colours
+// reflected along the view, a darker colour with depth, cloud shadows (on all but the glint)
+// and foam along the shore, broken up by the ripples.
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	if (WaterParams.x == 0)
@@ -247,8 +273,20 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 r = reflect(-v, n);
 	float glint = pow(saturate(dot(r, SunDirection)), 64) * 0.7 + pow(saturate(dot(r, SunDirection)), 3) * 0.06;
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
-	float3 c = lerp(tex, FogColor.rgb, fresnel * 0.6) + glint;
-	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint);
+	float3 sky = FogColor.rgb;
+	float foam = 0;
+	if (WaterSkyUp.w != 0) {
+		sky = lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(r.y));
+		tex *= lerp(1.0, float3(0.55, 0.7, 0.8), saturate(input.Depth / 6));
+		float cloud = CloudLight(input.World);
+		tex *= cloud;
+		sky *= lerp(1, cloud, 0.5);
+		// foam: a band where the water is shallower than 0.8 units, its edge moved by the ripples
+		float edge = input.Depth + (slope.x + slope.y - 2) * 0.35;
+		foam = saturate(1 - edge / 0.8) * saturate(input.Depth * 4) * 0.55;
+	}
+	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
+	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
 	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
@@ -290,7 +328,8 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
-	float4 c = lerp(float4((lum * BlobLight(input.FragPos)).xxx, 1) * input.Color * tex, FogColor, input.Fog);
+	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
+	float4 c = lerp(float4(light, 1) * input.Color * tex, FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -526,7 +565,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 192;
+	cbDesc.Size = 752;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1073,6 +1112,27 @@ void DiligentEnhancedTerrainRenderer::render()
 	blobParams[1] = 1.0f / (terrain->width * tilesize);
 	blobParams[2] = 1.0f / (terrain->height * tilesize);
 	blobParams[3] = terrain->edge * tilesize;
+	float* waterSky = (float*)(sbdata + 192);
+	if (g_renderSettings.waterDetail) {
+		const bool skyOn = shadows.skyLightValid && g_renderSettings.sky;
+		for (int c = 0; c < 3; c++) {
+			const float fog = ((terrain->fogColor >> (16 - 8 * c)) & 255) / 255.0f;
+			waterSky[c] = skyOn ? shadows.skyLight[0][c] : fog;
+			waterSky[4 + c] = skyOn ? shadows.skyLight[1][c] : fog;
+		}
+		waterSky[3] = 1.0f;
+	}
+	else
+		std::fill(waterSky, waterSky + 8, 0.0f);
+	float* fire = (float*)(sbdata + 224);
+	const std::vector<float>& fireLights = shadows.fireLights;
+	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
+	std::fill(fire, fire + 4 + 8 * DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS, 0.0f);
+	fire[0] = (float)numFires;
+	for (int i = 0; i < numFires; i++) {
+		std::copy_n(&fireLights[i * 7], 4, fire + 4 + i * 8);
+		std::copy_n(&fireLights[i * 7 + 4], 3, fire + 8 + i * 8);
+	}
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
 	// Blob shadows into the blob shadow map, one instanced quad each

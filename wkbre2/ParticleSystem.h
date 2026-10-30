@@ -147,6 +147,9 @@ struct PS_State_Generation {
 };
 
 struct ParticleSystem {
+	// a fire (its name has fire, flame, burn or torch, and not smoke): lights the ground and
+	// models around it (RenderSettings::fireLights)
+	bool emitsLight = false;
 	PS_Particles Particles;
 	PS_Generation_Decision Generation_Decision;
 	PS_State_Generation State_Generation;

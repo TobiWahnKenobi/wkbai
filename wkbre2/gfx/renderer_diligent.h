@@ -63,6 +63,11 @@ struct DiligentGfx : IRenderer
 		// (x, z, in map space: world plus the map edge). The terrain renderer draws them into a
 		// map-sized shadow texture that the terrain multiplies in, and clears the list.
 		std::vector<float> blobs;
+		// The frame's fire lights (RenderSettings::fireLights), at most MAX_FIRE_LIGHTS, nearest
+		// to the camera first: each as position x, y, z, radius, then colour r, g, b (0-1, times
+		// the strength). Filled by the client interface from the fire particle systems.
+		static constexpr int MAX_FIRE_LIGHTS = 16;
+		std::vector<float> fireLights;
 		// The sky's mean colours above, at the horizon and below (0-1, from the sky box's faces,
 		// DiligentSkyRenderer), and their mean brightness: the models' image-based light
 		// (per-pixel lighting); invalid without a sky
