@@ -158,13 +158,16 @@ float StaticShadowLight(float3 pos)
 {
 	float light = 1;
 	if (ShadowParams.x != 0) {
-		float2 t = pos.xz * 0.8 - 0.5; // texel space, texel centres at whole numbers
+		// n points per tile side (ShadowParams.z: 4 as the original, more with
+		// RenderSettings::shadowResolution), 5 / (n + 1) apart starting that far in
+		float n = ShadowParams.z;
+		float2 t = pos.xz * (n / 5) - 0.5; // texel space, texel centres at whole numbers
 		float2 t0 = floor(t), f = t - t0;
 		float lit[4];
 		for (int i = 0; i < 4; i++) {
 			float2 k = t0 + float2(i & 1, i >> 1);
-			float2 tile = floor(k / 4);
-			lit[i] = StaticShadowSample(tile * 5 + (k - tile * 4) + 1, pos.y);
+			float2 tile = floor(k / n);
+			lit[i] = StaticShadowSample(tile * 5 + (k - tile * n + 1) * (5 / (n + 1)), pos.y);
 		}
 		float l = lerp(lerp(lit[0], lit[1], f.x), lerp(lit[2], lit[3], f.x), f.y);
 		light = lerp(ShadowParams.y, 1, l);
@@ -493,7 +496,8 @@ static texture CreateRippleTexture(IRenderer* gfx)
 	return gfx->CreateTexture(bmp, 0);
 }
 
-// The static shadow map: 2048² texels over the square drawn by the scene renderer
+// The static shadow map: 2048² texels over the square drawn by the scene renderer, 4096² with
+// a higher RenderSettings::shadowResolution
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
 
 
@@ -656,7 +660,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	TextureDesc smDesc;
 	smDesc.Name = "Static shadow map";
 	smDesc.Type = RESOURCE_DIM_TEX_2D;
-	smDesc.Width = smDesc.Height = STATIC_SHADOW_MAP_SIZE;
+	smDesc.Width = smDesc.Height = STATIC_SHADOW_MAP_SIZE * (g_renderSettings.shadowResolution > 1 ? 2 : 1);
 	smDesc.Format = TEX_FORMAT_D32_FLOAT;
 	smDesc.BindFlags = BIND_DEPTH_STENCIL | BIND_SHADER_RESOURCE;
 	device->CreateTexture(smDesc, nullptr, &_impl->shadowMap);
@@ -1035,7 +1039,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* shadowParams = (float*)(sbdata + 96);
 	shadowParams[0] = shadows.staticShadowValid ? 1.0f : 0.0f;
 	shadowParams[1] = g_renderSettings.staticShadowLight;
-	shadowParams[2] = 0.0f;
+	shadowParams[2] = 4.0f * g_renderSettings.shadowResolution; // sample points per tile side
 	shadowParams[3] = 0.0f;
 	float* lakeColour = (float*)(sbdata + 112);
 	lakeColour[0] = ((terrain->fogColor >> 16) & 255) / 255.0f;

@@ -580,6 +580,12 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Water surface", &s.waterSurface);
 		ImGui::Checkbox("Static shadows", &s.staticShadows);
 		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
+		{
+			static const char* const levels[] = { "Original (4 x 4 per tile)", "High (8 x 8)", "Very high (16 x 16)" };
+			int level = s.shadowResolution == 4 ? 2 : s.shadowResolution == 2 ? 1 : 0;
+			if (ImGui::Combo("Static shadow detail", &level, levels, 3))
+				s.shadowResolution = level == 2 ? 4 : level == 1 ? 2 : 1;
+		}
 		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
@@ -789,7 +795,21 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * 1000.0f);
 	obj->sceneEntity.flags = 0;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
-	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && obj->blueprint->shearModel && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING))
+	// walls (RenderSettings::wallShadows): the sheared wall segments and every other piece of a
+	// wall line by its building type, as the corners aren't sheared and would leave holes
+	auto isWallPiece = [](const GameObjBlueprint* bp) {
+		if (bp->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+			return false;
+		switch (bp->buildingType) {
+		case Tags::BUILDINGTYPE_WALL: case Tags::BUILDINGTYPE_WALL_CORNER_IN: case Tags::BUILDINGTYPE_WALL_CORNER_OUT:
+		case Tags::BUILDINGTYPE_WALL_CROSSROADS: case Tags::BUILDINGTYPE_TOWER: case Tags::BUILDINGTYPE_TOWER_CORNER_IN:
+		case Tags::BUILDINGTYPE_TOWER_CORNER_OUT: case Tags::BUILDINGTYPE_GATEHOUSE:
+			return true;
+		default:
+			return bp->shearModel;
+		}
+	};
+	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 
 	// highlight selected object

@@ -87,6 +87,16 @@ namespace {
 		list.push_back(withEnabled(slider("staticShadowLight", "lighting", "Light in building shadows", rs.staticShadowLight, 0.0f, 1.0f),
 			[&rs]() { return rs.staticShadows; }));
 		list.push_back(withEnabled(toggle("wallShadows", "lighting", "Wall shadows", rs.wallShadows), [&rs]() { return rs.staticShadows; }));
+		{
+			MenuOption o;
+			o.id = "shadowResolution"; o.page = "lighting"; o.label = "Building shadow detail";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Original", "High", "Very high" };
+			o.get = [&rs]() { return rs.shadowResolution == 4 ? 2.0f : rs.shadowResolution == 2 ? 1.0f : 0.0f; };
+			o.set = [&rs](float v) { rs.shadowResolution = v >= 2.0f ? 4 : v >= 1.0f ? 2 : 1; };
+			o.enabled = [&rs]() { return rs.staticShadows; };
+			list.push_back(o);
+		}
 		list.push_back(toggle("characterShadows", "lighting", "Character shadows", rs.characterShadows));
 		list.push_back(withEnabled(toggle("realCharacterShadows", "lighting", "Real character shadows", rs.realCharacterShadows),
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));

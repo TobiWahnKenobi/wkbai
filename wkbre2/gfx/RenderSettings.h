@@ -49,6 +49,9 @@ struct RenderSettings {
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
 	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
+	// static shadow detail: 1 = the original's 4 x 4 points per tile on a 2048² sun shadow map,
+	// 2 = 8 x 8 on 4096², 4 = 16 x 16 on 4096² (the map's size takes effect on the next map)
+	int shadowResolution = 1;
 	float meshAmbient = 97.0f / 255.0f, meshDiffuse = 200.0f / 256.0f;
 	// models lit per pixel with the sun's highlight (enhanced renderer on Diligent; the
 	// original lights them per vertex, without highlights)

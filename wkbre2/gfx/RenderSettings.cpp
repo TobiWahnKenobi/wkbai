@@ -53,6 +53,9 @@ void RenderSettings::load()
 	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
+	shadowResolution = g_settings.value<int>("shadowResolution", def.shadowResolution);
+	if (shadowResolution != 2 && shadowResolution != 4)
+		shadowResolution = 1;
 	const auto meshLighting = g_settings.value("meshLighting", nlohmann::json());
 	if (meshLighting.is_array() && meshLighting.size() == 2) {
 		meshAmbient = meshLighting[0].get<float>();
@@ -110,6 +113,7 @@ void RenderSettings::save()
 	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;
+	g_settings["shadowResolution"] = shadowResolution;
 	g_settings["meshLighting"] = { meshAmbient, meshDiffuse };
 	g_settings["scrollSpeed"] = scrollSpeed;
 	g_settings["shiftScrollFactor"] = shiftScrollFactor;
