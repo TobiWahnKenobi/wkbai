@@ -116,6 +116,8 @@ struct GameObjBlueprint {
 	// SHEAR_MODEL (walls, palings, the battering ram): the model is sheared vertically to
 	// follow the slope of the ground under it.
 	bool shearModel = false;
+	// CAN_BE_BUILT_UPON (tree stumps): removed when a building takes its tile
+	bool canBeBuiltUpon = false;
 	// CREATE_GATEHOUSE_WHEN_AUTOWALLING: the walls laid around this civic building get a gatehouse
 	bool createGatehouseWhenAutowalling = false;
 

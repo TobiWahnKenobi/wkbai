@@ -68,6 +68,11 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		int tag = Tags::CBLUEPRINT_tagDict.getTagID(strtag.c_str());
 		if (strtag == endtag)
 			break;
+		if (strtag == "CAN_BE_BUILT_UPON") {
+			canBeBuiltUpon = gsf.nextInt() != 0;
+			gsf.advanceLine();
+			continue;
+		}
 		switch (tag) {
 		case Tags::CBLUEPRINT_ITEM:
 		case Tags::CBLUEPRINT_STARTS_WITH_ITEM: {
