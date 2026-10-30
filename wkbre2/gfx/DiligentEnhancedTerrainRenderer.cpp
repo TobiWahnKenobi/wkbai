@@ -353,9 +353,9 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 }
 
 // High water (RenderSettings::waterQuality 3). The water's tiles are patches cut into up to
-// WaterFlowParams.z pieces per edge near the camera and moved by four Gerstner waves (22, 11,
-// 6.5 and 3.7 units long): on seas and lakes they roll in towards the shore along the flow map
-// (0.35 units high in deep water, less in the shallows), on rivers they are small and follow
+// WaterFlowParams.z pieces per edge near the camera and moved by six gentle Gerstner waves
+// (27 to 2.6 units long): on seas and lakes they roll in towards the shore along the flow map
+// (0.3 units high in deep water, less in the shallows), on rivers they are small and follow
 // the current. The pixel shader adds finer ripples, foam on the waves' crests and the surf.
 float4 FlowAtTexel(float2 xz)
 {
@@ -369,36 +369,53 @@ float4 FlowAtTexel(float2 xz)
 	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
-void GerstnerWaves(float2 xz, float depth, float4 flow, out float3 offset, out float3 normal, out float crest)
+// lod: 1 where the water is tessellated finest, falling to 0 with the detail (WaterLod)
+void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 offset, out float3 normal, out float crest)
 {
 	float2 fdir = flow.xy * 2 - 1;
 	float2 dir = length(fdir) > 0.1 ? normalize(fdir) : float2(0.8, 0.6);
 	float river = flow.a;
-	float amp = lerp(0.35 * saturate(depth / 2.5), 0.06 * saturate(depth / 1.0), river);
-	const float lengths[4] = { 22, 11, 6.5, 3.7 };
-	const float share[4] = { 1, 0.5, 0.25, 0.12 };
-	const float turn[4] = { 0, 0.6, -0.9, 2.1 };
+	// fading in smoothly from the waterline: over a flat beach even small waves dipped under
+	// the sand and back, a zigzag line of water and sand
+	float amp = lerp(0.3 * smoothstep(0, 3, depth), 0.05 * smoothstep(0, 1, depth), river) * lod;
+	// six waves of unrelated lengths and spread directions, so the pattern doesn't repeat, and
+	// gentle: their steepness adds up to 0.22 (at 0.55 the crests drew into sharp points, a
+	// sawtooth)
+	const float lengths[6] = { 27, 15.3, 9.1, 5.7, 3.9, 2.6 };
+	const float share[6] = { 1, 0.62, 0.38, 0.24, 0.16, 0.1 };
+	const float turn[6] = { 0, 0.45, -0.7, 1.1, -1.6, 2.4 };
+	const float steepness = 0.22 / 6;
 	offset = float3(0, 0, 0);
 	float3 n = float3(0, 1, 0);
 	crest = 0;
 	float t = GrassParams.z;
-	[unroll] for (int i = 0; i < 4; i++) {
+	[unroll] for (int i = 0; i < 6; i++) {
 		float cs = cos(turn[i]), sn = sin(turn[i]);
 		float2 d = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
 		float k = 6.2831853 / lengths[i];
 		float w = sqrt(9.8 * k) * 0.8;
 		float a = amp * share[i];
-		float q = 0.55 / (k * max(a, 1e-4) * 4); // steepness, shared out so the crests don't loop
-		q = min(q, 1.0);
+		float q = min(steepness / (k * max(a, 1e-4)), 1.0);
 		// towards the shore: the phase falls as the wave moves along d
 		float phase = k * dot(d, xz) - w * t + i * 1.7;
 		float s = sin(phase), c = cos(phase);
 		offset += float3(q * a * d.x * c, a * s, q * a * d.y * c);
 		n -= float3(d.x * k * a * c, q * k * a * s, d.y * k * a * c);
-		crest += q * k * a * s;
+		crest += k * a * s;
 	}
+	// and never down into the bed: a trough stops 30% of the depth above it
+	offset.y = max(offset.y, -0.7 * depth);
 	normal = normalize(n);
-	crest = saturate(crest * 1.4);
+	// the slope's sum at its peaks, about 0.3 in deep water
+	crest = saturate(crest * 2.2);
+}
+
+// How much of the tessellation's detail is left at a point (as HS_LakeConst's factors): the
+// waves shrink with it, so that the coarser pieces far out don't show them as jagged triangles
+float WaterLod(float3 p)
+{
+	float d = distance(p, FogCamera.xyz);
+	return saturate(1 - (d - WaterFlowParams.w * 0.25) / WaterFlowParams.w);
 }
 
 LAKE_OUTPUT VS_LakeTess(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
@@ -411,8 +428,7 @@ TESS_FACTORS HS_LakeConst(InputPatch<LAKE_OUTPUT, 3> p)
 	TESS_FACTORS o;
 	float3 m[3] = { 0.5 * (p[1].World + p[2].World), 0.5 * (p[2].World + p[0].World), 0.5 * (p[0].World + p[1].World) };
 	[unroll] for (int i = 0; i < 3; i++) {
-		float d = distance(m[i], FogCamera.xyz);
-		o.Edges[i] = clamp(WaterFlowParams.z * saturate(1 - (d - WaterFlowParams.w * 0.25) / WaterFlowParams.w), 1, WaterFlowParams.z);
+		o.Edges[i] = clamp(WaterFlowParams.z * WaterLod(m[i]), 1, WaterFlowParams.z);
 	}
 	o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
 	return o;
@@ -433,10 +449,12 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 {
 	LAKE_OUTPUT o;
 	float3 pos = p[0].World * b.x + p[1].World * b.y + p[2].World * b.z;
-	float depth = p[0].Depth * b.x + p[1].Depth * b.y + p[2].Depth * b.z;
+	// the depth from the water level and the terrain's smooth surface: from the tiles' corners
+	// it bent at every triangle's edge, and the waves, surf and foam drew a sawtooth along them
+	float depth = max(pos.y - SmoothHeight(pos.xz), 0);
 	float3 offset, n;
 	float crest;
-	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), offset, n, crest);
+	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), WaterLod(pos), offset, n, crest);
 	pos += offset;
 	o.Pos = mul(float4(pos, 1), Transform);
 	o.World = pos;
@@ -480,6 +498,9 @@ float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, f
 
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
+	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
+	if (WaterSkyUp.w != 0)
+		input.Depth = max(input.World.y - SmoothHeight(input.World.xz), 0);
 	if (WaterParams.x == 0)
 		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
 	float2 uv = input.World.xz * WaterParams.y;
@@ -581,16 +602,17 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float cloud = CloudLight(input.World);
 	tex *= cloud;
 	sky *= lerp(1, cloud, 0.5);
-	// foam: broken up by two layers of the ripple map
-	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 + WaterRipples.xy).xy - 0.5) * 3)
-		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 2.7 - WaterRipples.yx).xy - 0.5) * 3 + 0.3);
+	// foam: broken up by two soft, low layers of the ripple map (sharp thresholds of finer ones
+	// gave it jagged edges)
+	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.35 + WaterRipples.xy).xy - 0.5) * 2.5)
+		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 - WaterRipples.yx).xy - 0.5) * 2.5 + 0.4);
 	// on the waves' crests
-	float crestFoam = saturate((input.Crest - 0.55) * 4) * smoothstep(0.15, 0.6, noise);
-	// the surf: bands that run in with the swell and break in the last 2 units of depth, and the
-	// swash right at the waterline
-	float surf = saturate((sin(input.Depth * 3 + GrassParams.z * 1.6) - 0.5) * 3) * saturate(1 - input.Depth / 2) * saturate(input.Depth * 6);
-	float swash = saturate(1 - input.Depth / 0.35);
-	float shoreFoam = max(surf * smoothstep(0.2, 0.55, noise), swash * smoothstep(0.1, 0.45, noise)) * (1 - 0.6 * river);
+	float crestFoam = saturate((input.Crest - 0.55) * 3) * smoothstep(0.05, 0.75, noise);
+	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep
+	// (over a flat beach the whole shallows had been foam), and the swash at the waterline
+	float surf = saturate((sin(input.Depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, input.Depth) * smoothstep(0.05, 0.15, input.Depth);
+	float swash = smoothstep(0.25, 0.0, input.Depth);
+	float shoreFoam = max(surf * smoothstep(0.1, 0.7, noise), swash * smoothstep(0.0, 0.6, noise)) * (1 - 0.6 * river);
 	// white water where a narrow river runs fast
 	float rush = f.z * saturate(length(fdir) * 1.5) * river;
 	float riverFoam = saturate((detail.x + detail.y) * 3 - 0.4) * rush * rush * 0.35;
@@ -997,7 +1019,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_VERTEX | tessStages, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VS_PS | tessStages, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_VERTEX | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1733,7 +1755,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 1.3f;
 	flowParams[2] = 64.0f;  // High water: most pieces per tile edge near the camera (the GPU's most)
-	flowParams[3] = 220.0f; // and the distance of full detail
+	flowParams[3] = 600.0f; // and the fade: full detail to 150 units, none from 750 (for fast PCs)
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
