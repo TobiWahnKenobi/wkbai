@@ -240,8 +240,9 @@ std::vector<uint8_t> Terrain::drawMinimap(bool flipX, bool flipZ) const
 		const Bitmap& a = at->second;
 		double sum[3] = {};
 		int n = 0;
-		for (int z = tex->starty; z < tex->starty + tex->height && z < a.height; z++)
-			for (int x = tex->startx; x < tex->startx + tex->width && x < a.width; x++, n++)
+		const int s = std::max(a.width / 256, 1); // a high-resolution mod's atlas: its texels per original texel
+		for (int z = tex->starty * s; z < (tex->starty + tex->height) * s && z < a.height; z++)
+			for (int x = tex->startx * s; x < (tex->startx + tex->width) * s && x < a.width; x++, n++)
 				for (int c = 0; c < 3; c++)
 					sum[c] += a.pixels[(z * a.width + x) * 4 + c];
 		std::array<float, 3> mean = { 128, 128, 128 };

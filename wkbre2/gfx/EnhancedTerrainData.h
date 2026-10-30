@@ -51,10 +51,11 @@ std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain
 // blends the corners' materials across the tile, so materials meet smoothly instead of along
 // the painted transition tiles.
 struct TerrainSplatData {
-	static constexpr int LAYER_SIZE = 128;
+	static constexpr int LAYER_SIZE = 128;       // with the original 256-texel atlases
+	int layerSize = LAYER_SIZE;                  // 2 or 4 times that with a high-resolution mod's
 	std::vector<std::string> names;              // per layer
-	std::vector<std::vector<uint8_t>> diffuse;   // per layer, LAYER_SIZE² RGBA8
-	std::vector<std::vector<uint8_t>> normal;    // per layer, LAYER_SIZE² RGBA8, as the tiles' normal maps
+	std::vector<std::vector<uint8_t>> diffuse;   // per layer, layerSize² RGBA8
+	std::vector<std::vector<uint8_t>> normal;    // per layer, layerSize² RGBA8, as the tiles' normal maps
 	std::vector<uint8_t> corners;                // layer per tile corner, (x, z) at z * (width + 1) + x
 };
 TerrainSplatData BuildTerrainSplat(Terrain* terrain);

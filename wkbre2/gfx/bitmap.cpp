@@ -18,8 +18,25 @@
 #define STBI_ONLY_JPEG
 #include <stb_image.h>
 
-Bitmap Bitmap::loadBitmap(const char *fn)
+std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
 {
+	const size_t dot = fn.find_last_of('.');
+	if (dot == std::string::npos || (StrCICompare(fn.c_str() + dot, ".tga") && StrCICompare(fn.c_str() + dot, ".pcx")))
+		return fn;
+	const std::string base = fn.substr(0, dot);
+	for (const char* ext : { ".ktx2", ".dds", ".png" }) {
+		if (!gpu && ext[1] != 'p')
+			continue;
+		if (FileExists((base + ext).c_str()))
+			return base + ext;
+	}
+	return fn;
+}
+
+Bitmap Bitmap::loadBitmap(const char *fname)
+{
+	const std::string resolved = replacementFile(fname);
+	const char* fn = resolved.c_str();
 	char *d; int s;
 	const char *e = strrchr(fn, '.');
 	LoadFile(fn, &d, &s);

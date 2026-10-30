@@ -266,6 +266,13 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 		for (int x = 0; x < terrain->width; x++)
 			uses[terrain->getTile(x, z)->texture]++;
 
+	// the layers' size: LAYER_SIZE, or 2 or 4 times that with a high-resolution mod's atlases
+	// (Bitmap::replacementFile), so the blended ground keeps their detail
+	for (const auto& [tex, n] : uses)
+		if (tex && n > 0)
+			while (splat.layerSize < TerrainSplatData::LAYER_SIZE * 4 && atlas(tex->file).width >= 256 * splat.layerSize / TerrainSplatData::LAYER_SIZE * 2)
+				splat.layerSize *= 2;
+
 	// the layers, by material (group) name
 	std::map<std::string, int> layerOf;
 	std::vector<std::array<float, 3>> meanColour;
@@ -287,8 +294,9 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 				variants.push_back(t);
 		if (variants.empty())
 			variants.push_back(textures[0]);
-		constexpr int L = TerrainSplatData::LAYER_SIZE, T = L / 2;
-		std::vector<uint8_t> diffuse(L * L * 4), normal(L * L * 4);
+		const int L = splat.layerSize, T = L / 2;
+		constexpr int T0 = TerrainSplatData::LAYER_SIZE / 2; // a tile's texels in the original atlases
+		std::vector<uint8_t> diffuse(L * L * 4), normal(L * L * 4), tileNormal(T0 * T0 * 4);
 		double sum[3] = {};
 		for (int q = 0; q < 4; q++) {
 			const TerrainTexture* tex = variants[q % variants.size()];
@@ -297,8 +305,9 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 			const Bitmap& b = normalSource(tex->file);
 			for (int cz = 0; cz < T; cz++)
 				for (int cx = 0; cx < T; cx++) {
-					const int sx = std::min(tex->startx + cx * tex->width / T, a.width - 1);
-					const int sz = std::min(tex->starty + cz * tex->height / T, a.height - 1);
+					// the atlas may be larger than the 256 texels the database counts in
+					const int sx = std::min((tex->startx * a.width + cx * tex->width * a.width / T) / 256, a.width - 1);
+					const int sz = std::min((tex->starty * a.height + cz * tex->height * a.height / T) / 256, a.height - 1);
 					uint8_t* d = &diffuse[((oz + cz) * L + ox + cx) * 4];
 					if (a.width > 0)
 						std::copy_n(&a.pixels[(sz * a.width + sx) * 4], 4, d);
@@ -307,19 +316,33 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 					for (int c = 0; c < 3; c++)
 						sum[c] += d[c];
 				}
-			uint8_t* n = &normal[(oz * L + ox) * 4];
-			if (battles && b.width >= tex->startx + tex->width && b.height >= tex->starty + tex->height && tex->width == T && tex->height == T)
-				BumpTileToNormals(&b.pixels[tex->starty * b.width + tex->startx], b.width, T, n, L);
-			else if (!battles && b.width >= tex->startx + tex->width && tex->width == T && tex->height == T) {
-				for (int cz = 0; cz < T; cz++)
-					std::copy_n(&b.pixels[((tex->starty + cz) * b.width + tex->startx) * 4], T * 4, &normal[((oz + cz) * L + ox) * 4]);
+			// the tile's normals at the bump map's resolution, then bilinearly (wrapping) to T
+			if (battles && b.width >= tex->startx + tex->width && b.height >= tex->starty + tex->height && tex->width == T0 && tex->height == T0)
+				BumpTileToNormals(&b.pixels[tex->starty * b.width + tex->startx], b.width, T0, tileNormal.data(), T0);
+			else if (!battles && b.width >= tex->startx + tex->width && tex->width == T0 && tex->height == T0) {
+				for (int cz = 0; cz < T0; cz++)
+					std::copy_n(&b.pixels[((tex->starty + cz) * b.width + tex->startx) * 4], T0 * 4, &tileNormal[cz * T0 * 4]);
 			}
 			else
-				for (int cz = 0; cz < T; cz++)
-					for (int cx = 0; cx < T; cx++) {
-						uint8_t* o = &normal[((oz + cz) * L + ox + cx) * 4];
-						o[0] = 128; o[1] = 255; o[2] = 128; o[3] = 255;
+				for (int i = 0; i < T0 * T0; i++) {
+					uint8_t* o = &tileNormal[i * 4];
+					o[0] = 128; o[1] = 255; o[2] = 128; o[3] = 255;
+				}
+			for (int cz = 0; cz < T; cz++)
+				for (int cx = 0; cx < T; cx++) {
+					uint8_t* o = &normal[((oz + cz) * L + ox + cx) * 4];
+					if (T == T0) {
+						std::copy_n(&tileNormal[(cz * T0 + cx) * 4], 4, o);
+						continue;
 					}
+					const float fx = (cx + 0.5f) * T0 / T - 0.5f, fz = (cz + 0.5f) * T0 / T - 0.5f;
+					const int x0 = (int)std::floor(fx), z0 = (int)std::floor(fz);
+					const float wx = fx - x0, wz = fz - z0;
+					auto at = [&](int x, int z) { return &tileNormal[((((z % T0) + T0) % T0) * T0 + ((x % T0) + T0) % T0) * 4]; };
+					for (int c = 0; c < 4; c++)
+						o[c] = (uint8_t)std::lround((at(x0, z0)[c] * (1 - wx) + at(x0 + 1, z0)[c] * wx) * (1 - wz)
+							+ (at(x0, z0 + 1)[c] * (1 - wx) + at(x0 + 1, z0 + 1)[c] * wx) * wz);
+				}
 		}
 		const int index = (int)splat.names.size();
 		splat.names.push_back(name);
@@ -360,6 +383,7 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 			const Bitmap& a = atlas(tile->texture->file);
 			const auto uvs = TileCornerUVs(tile);
 			const float cu = (uvs[0].first + uvs[2].first) * 0.5f * 256.0f, cv = (uvs[0].second + uvs[2].second) * 0.5f * 256.0f;
+			const float as = a.width > 0 ? a.width / 256.0f : 1.0f; // a high-resolution atlas: its texels per original texel
 			for (int k = 0; k < 4; k++) {
 				float u = uvs[k].first * 256.0f, v = uvs[k].second * 256.0f;
 				const float du = cu > u ? 1.0f : -1.0f, dv = cv > v ? 1.0f : -1.0f;
@@ -367,8 +391,8 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 				int n = 0;
 				for (int i = 0; i < 12 && a.width > 0; i++)
 					for (int j = 0; j < 12; j++) {
-						const int px = std::clamp((int)(u + du * (i + 0.5f)), 0, a.width - 1);
-						const int pz = std::clamp((int)(v + dv * (j + 0.5f)), 0, a.height - 1);
+						const int px = std::clamp((int)((u + du * (i + 0.5f)) * as), 0, a.width - 1);
+						const int pz = std::clamp((int)((v + dv * (j + 0.5f)) * as), 0, a.height - 1);
 						const uint8_t* t = &a.pixels[(pz * a.width + px) * 4];
 						c[0] += t[0]; c[1] += t[1]; c[2] += t[2];
 						n++;
@@ -397,10 +421,10 @@ TerrainSplatData BuildTerrainSplat(Terrain* terrain)
 	}
 	if (splat.names.empty()) { // no texture database: one white layer
 		splat.names.push_back("none");
-		splat.diffuse.emplace_back(TerrainSplatData::LAYER_SIZE * TerrainSplatData::LAYER_SIZE * 4, (uint8_t)255);
-		splat.normal.emplace_back(TerrainSplatData::LAYER_SIZE * TerrainSplatData::LAYER_SIZE * 4, (uint8_t)128);
+		splat.diffuse.emplace_back(splat.layerSize * splat.layerSize * 4, (uint8_t)255);
+		splat.normal.emplace_back(splat.layerSize * splat.layerSize * 4, (uint8_t)128);
 	}
-	printf("Splat terrain: %zu materials\n", splat.names.size());
+	printf("Splat terrain: %zu materials, %i texels\n", splat.names.size(), splat.layerSize);
 	return splat;
 }
 

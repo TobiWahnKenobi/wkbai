@@ -174,7 +174,9 @@ float4 PS_Map(VS_OUTPUT input) : SV_Target
 {
 	// Compute the length of a half pixel in the current mipmap
 	float lod = inpTexture.CalculateLevelOfDetail(inpSampler, input.Texcoord);
-	float ha = 0.5 / (256 >> (int)ceil(lod));
+	uint aw, ah, levels; // the atlas: 256 texels, or more in a high-resolution mod
+	inpTexture.GetDimensions(0, aw, ah, levels);
+	float ha = 0.5 / max(aw >> (int)ceil(lod), 1u);
 
 	float2 stc = clamp(input.Texcoord, float2(ha,ha), float2(1.0-ha,1.0-ha));
 	float2 tile = floor(stc / float2(0.25,0.25)); // tile index in the 4x4 atlas

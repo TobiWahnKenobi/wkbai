@@ -30,7 +30,7 @@ texture TextureCache::getTexture(const char * filename, bool mipmaps) {
 	auto it = loadedTextures.find(filename);
 	if (it != loadedTextures.end())
 		return it->second;
-	const std::string path = directory + filename;
+	const std::string path = Bitmap::replacementFile(directory + filename, true); // a mod's .png/.dds/.ktx2 for a .tga/.pcx
 	texture tex = loadTexture(path.c_str(), mipmaps ? 0 : 1); // todo
 	loadedTextures[filename] = tex;
 	if (tex)
