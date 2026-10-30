@@ -288,17 +288,15 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		float2 flow = fdir * f.z * WaterFlowParams.y; // units per second
 		river = f.a;
 		rush = f.z * saturate(length(fdir) * 1.5) * river;
-		const float cycle = 3.0;
+		const float cycle = 2.0;
 		float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
 		float w0 = 1 - abs(2 * p0 - 1);
 		float2 off0 = -flow * (p0 * cycle) * WaterParams.z, off1 = -flow * (p1 * cycle) * WaterParams.z;
-		// the river look: fine ripples, stretched along the current (in a frame along the flow)
-		float2 along = normalize(fdir + float2(1e-4, 0)), across = float2(-along.y, along.x);
-		const float2 stretch = float2(1.4, 3.2);
-		float2 rr = float2(dot(ruv, along), dot(ruv, across)) * stretch;
-		float2 sr = FlowSlope(rr, float2(dot(off0, along), dot(off0, across)) * stretch) * w0
-			+ FlowSlope(rr, float2(dot(off1, along), dot(off1, across)) * stretch) * (1 - w0);
-		float2 sRiver = (sr.x * along + sr.y * across) * 0.6;
+		// the river look: finer, smaller ripples carried by the current. (Not turned along the
+		// flow: turning the world-scale ripple coordinates tore the texture wherever the direction
+		// changed, and stretching them drew streaks.)
+		float2 along = normalize(fdir + float2(1e-4, 0));
+		float2 sRiver = (FlowSlope(ruv * 1.8, off0 * 1.8) * w0 + FlowSlope(ruv * 1.8, off1 * 1.8) * (1 - w0)) * 0.55;
 		// the sea's (and a lake's) look: larger waves, and a swell rolling in over the shallows
 		// towards the shore (bands along the depth's contours, as waves follow the bed)
 		float2 sSea = (FlowSlope(ruv * 0.7, off0 * 0.7) * w0 + FlowSlope(ruv * 0.7, off1 * 0.7) * (1 - w0)) * 0.8;
@@ -307,7 +305,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		sSea -= along * cos(swellPhase) * swell * 0.55;
 		float2 s = lerp(sSea, sRiver, river);
 		slope = s * 0.9 + 1; // as the two-sample sum: centred on 1
-		float2 tuv0 = uv - flow * (p0 * cycle) * WaterParams.y, tuv1 = uv - flow * (p1 * cycle) * WaterParams.y;
+		// the texture moves half as far: at its larger scale the full shift smeared it
+		float2 tuv0 = uv - flow * (p0 * cycle) * WaterParams.y * 0.5, tuv1 = uv - flow * (p1 * cycle) * WaterParams.y * 0.5;
 		tex = lerp(inpTexture.Sample(cloudSampler, tuv1 + WaterLayers.xy).rgb, inpTexture.Sample(cloudSampler, tuv0 + WaterLayers.xy).rgb, w0) * 0.5
 			+ 0.5 * inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb;
 	}
@@ -1299,7 +1298,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	grassParams[3] = 0.0f;
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
-	flowParams[1] = 2.2f;
+	flowParams[1] = 1.3f;
 	flowParams[2] = flowParams[3] = 0.0f;
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;

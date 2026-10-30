@@ -487,45 +487,43 @@ void Terrain::readTRN(const char* filename)
 
 void Terrain::floodfillWater()
 {
-	auto fillTile = [this](int tx, int tz, float lvl) -> bool {
-		Tile& tile = tiles[tz * width + tx];
-		if (tile.fullOfWater && lvl <= tile.waterLevel)
-			return false;
-
-		float h00 = getVertex(tx, tz);
-		float h01 = getVertex(tx, tz+1);
-		float h10 = getVertex(tx+1, tz);
-		float h11 = getVertex(tx+1, tz+1);
-		if (std::min({ h00,h01,h10,h11 }) < lvl) {
-			tile.waterLevel = lvl;
-			tile.fullOfWater = true;
-			return true;
+	// Each lake is a point whose height is its water level. The water spreads from the point's
+	// tile to a neighbour only across their shared edge, where one of the edge's two corners is
+	// below the level: a tile that merely touches the water with its other corners stays dry.
+	// (Spreading to any tile with a corner below the level let a mountain tarn on 6 Player Tribes
+	// Unite leak over its rim through diagonal corners and flood the whole map.) A higher lake
+	// overrides a lower one's tiles.
+	std::vector<std::pair<int, int>> queue;
+	for (const Vector3& lake : lakes) {
+		const int sx = (int)(lake.x / 5.0f), sz = (int)(lake.z / 5.0f);
+		const float lvl = lake.y;
+		if (sx < 0 || sz < 0 || sx >= (int)width || sz >= (int)height)
+			continue;
+		Tile& seed = tiles[sz * width + sx];
+		if ((seed.fullOfWater && lvl <= seed.waterLevel)
+			|| std::min({ getVertex(sx, sz), getVertex(sx + 1, sz), getVertex(sx, sz + 1), getVertex(sx + 1, sz + 1) }) >= lvl)
+			continue;
+		seed.waterLevel = lvl;
+		seed.fullOfWater = true;
+		queue.assign(1, { sx, sz });
+		for (size_t q = 0; q < queue.size(); q++) {
+			const auto [x, z] = queue[q];
+			// the neighbour, and the two corners of the edge shared with it
+			const int nb[4][6] = { { x + 1, z, x + 1, z, x + 1, z + 1 }, { x - 1, z, x, z, x, z + 1 },
+				{ x, z + 1, x, z + 1, x + 1, z + 1 }, { x, z - 1, x, z, x + 1, z } };
+			for (const auto& n : nb) {
+				if (n[0] < 0 || n[1] < 0 || n[0] >= (int)width || n[1] >= (int)height)
+					continue;
+				Tile& tile = tiles[n[1] * width + n[0]];
+				if (tile.fullOfWater && lvl <= tile.waterLevel)
+					continue;
+				if (std::min(getVertex(n[2], n[3]), getVertex(n[4], n[5])) >= lvl)
+					continue;
+				tile.waterLevel = lvl;
+				tile.fullOfWater = true;
+				queue.push_back({ n[0], n[1] });
+			}
 		}
-		return false;
-	};
-	auto floodfill = [this, &fillTile](int tx, int tz, float lvl, const auto& rec) -> void {
-		bool done = fillTile(tx, tz, lvl);
-		if (!done) return;
-		int x, xmin, xmax;
-		for (x = tx - 1; x >= 0; x--) {
-			bool done = fillTile(x, tz, lvl);
-			if (!done) break;
-		}
-		xmin = x+1;
-		for (x = tx + 1; x < width; x++) {
-			bool done = fillTile(x, tz, lvl);
-			if (!done) break;
-		}
-		xmax = x-1;
-		for (x = xmin; x <= xmax; x++) {
-			if (tz - 1 >= 0)
-				rec(x, tz - 1, lvl, rec);
-			if (tz + 1 < height)
-				rec(x, tz + 1, lvl, rec);
-		}
-	};
-	for (Vector3& lake : lakes) {
-		floodfill((int)(lake.x / 5.0f), (int)(lake.z / 5.0f), lake.y, floodfill);
 	}
 }
 
