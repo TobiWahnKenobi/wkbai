@@ -57,6 +57,9 @@ struct RenderSettings {
 	// original lights them per vertex, without highlights)
 	bool modelLighting = false;
 	float modelSpecular = 1.0f;
+	// with per-pixel lighting: the strength of the normals derived from the brightness of a
+	// texture without a <texture>_normal map (PBR legacy adapter); 0 = flat
+	float modelDetailNormals = 2.0f;
 	// with per-pixel lighting: the ambient and reflections take the sky box's colours
 	bool skyLight = true;
 

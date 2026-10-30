@@ -41,7 +41,7 @@ static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
 
 static const char esShaderCode[] = R"---(
 Texture2D inpTexture;
-Texture2D normalMap; // override packs: <texture>_normal (tangent space, +z out), else flat
+Texture2D normalMap; // override packs: <texture>_normal (tangent space, +z out), else flat with alpha 0 (derive)
 Texture2D ormMap;    // override packs: <texture>_orm (occlusion, roughness, metalness), else 1, 0.65, 0
 SamplerState inpSampler;
 Texture2D cloudTexture;
@@ -94,6 +94,9 @@ cbuffer SunBuffer
 	float4 SkyUp;
 	float4 SkyHorizon;
 	float4 SkyDown;
+	// x: the strength of the normals derived from the albedo's brightness, for materials
+	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat)
+	float4 Material;
 };
 
 cbuffer SceneBuffer
@@ -196,7 +199,21 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 n = normalize(input.Norm);
 	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
 	// no tangents)
-	float3 tn = normalMap.Sample(inpSampler, input.Texcoord).xyz * 2 - 1;
+	float4 ns = normalMap.Sample(inpSampler, input.Texcoord);
+	float3 tn = ns.xyz * 2 - 1;
+	// the legacy adapter's normals: without a normal map, the albedo's brightness as a height
+	// (bright = raised), its slope over one texel of the current mip level
+	if (ns.a < 0.5 && Material.x > 0) {
+		float2 size;
+		inpTexture.GetDimensions(size.x, size.y);
+		float2 duv = max(fwidth(input.Texcoord), 1 / size);
+		const float3 lw = float3(0.299, 0.587, 0.114);
+		float hx = dot(inpTexture.Sample(inpSampler, input.Texcoord + float2(duv.x, 0)).rgb, lw)
+			- dot(inpTexture.Sample(inpSampler, input.Texcoord - float2(duv.x, 0)).rgb, lw);
+		float hy = dot(inpTexture.Sample(inpSampler, input.Texcoord + float2(0, duv.y)).rgb, lw)
+			- dot(inpTexture.Sample(inpSampler, input.Texcoord - float2(0, duv.y)).rgb, lw);
+		tn = normalize(float3(-hx * Material.x, -hy * Material.x, 1));
+	}
 	if (abs(tn.z - 1) > 1e-3) {
 		float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
 		float2 duv1 = ddx(input.Texcoord), duv2 = ddy(input.Texcoord);
@@ -411,7 +428,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
-	texture flatNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
+	texture deriveNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
@@ -439,7 +456,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 112;
+	cbDesc.Size = 128;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 
 
@@ -603,7 +620,7 @@ void DiligentEnhancedSceneRenderer::render()
 	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 112);
+	memset(mapped, 0, 128);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -628,6 +645,8 @@ void DiligentEnhancedSceneRenderer::render()
 		sky[3] = 1.0f;
 		sky[7] = shadows.skyLightLuminance;
 	}
+	float* material = (float*)mapped + 28;
+	material[0] = g_renderSettings.modelDetailNormals;
 	ctx->UnmapBuffer(_impl->sunConstBuffer, MAP_WRITE);
 
 	if (!_impl->envBinding || _impl->envCloudMap != shadows.cloudMap.RawPtr()) {
@@ -637,25 +656,25 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->envBinding->GetVariableByName(SHADER_TYPE_VERTEX, "cloudTexture")->Set(shadows.cloudMap ? shadows.cloudMap.RawPtr() : dgfx->GetTextureView(nullptr));
 	}
 
-	// a material's binding: its texture, and the override pack's normal and ORM maps beside it
-	// (<texture>_normal, <texture>_orm, .png, .tga, .dds or .ktx2) or flat defaults
-	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b) {
+	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
+	// beside it (<texture>_albedo, _normal, _orm, .png, .tga, .dds or .ktx2) or defaults: the
+	// original texture, a flat normal marked (alpha 0) for deriving one from it, 1 / 0.65 / 0
+	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 		Bitmap bmp;
 		bmp.width = bmp.height = 1;
 		bmp.format = BMFORMAT_R8G8B8A8;
 		bmp.pixels.resize(4);
-		bmp.pixels[0] = r; bmp.pixels[1] = g; bmp.pixels[2] = b; bmp.pixels[3] = 255;
+		bmp.pixels[0] = r; bmp.pixels[1] = g; bmp.pixels[2] = b; bmp.pixels[3] = a;
 		return gfx->CreateTexture(bmp, 1);
 	};
-	if (!_impl->flatNormal) {
-		_impl->flatNormal = pixel(128, 128, 255);
+	if (!_impl->deriveNormal) {
+		_impl->deriveNormal = pixel(128, 128, 255, 0);
 		_impl->defaultOrm = pixel(255, 166, 0);
 	}
 	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
 		if (!srb) {
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(tex));
 			auto overrideMap = [&](const char* suffix) -> texture {
 				const std::string base = filename.substr(0, filename.find_last_of('.'));
 				for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
@@ -665,8 +684,9 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 				return nullptr;
 			};
-			texture nrm = overrideMap("_normal"), orm = overrideMap("_orm");
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->flatNormal));
+			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm");
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));
 		}
 		return srb;
