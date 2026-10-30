@@ -385,6 +385,19 @@ float4 FlowAtTexel(float2 xz)
 }
 
 // lod: 1 where the water is tessellated finest, falling to 0 with the detail (WaterLod)
+// Smooth value noise in 0..1, two channels
+float2 Hash2(float2 p)
+{
+	p = float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)));
+	return frac(sin(p) * 43758.5453);
+}
+float2 ValueNoise2(float2 p)
+{
+	float2 i = floor(p), f = p - i;
+	float2 u = f * f * (3 - 2 * f);
+	return lerp(lerp(Hash2(i), Hash2(i + float2(1, 0)), u.x), lerp(Hash2(i + float2(0, 1)), Hash2(i + float2(1, 1)), u.x), u.y);
+}
+
 void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 offset, out float3 normal, out float crest)
 {
 	// seas and lakes only (rivers get flowing ripples): five long, smooth waves along one steady
@@ -409,7 +422,10 @@ void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 of
 		float2 d = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
 		float k = 6.2831853 / lengths[i];
 		float w = sqrt(9.8 * k) * 0.6;
-		float a = amp * share[i];
+		// wave groups: each wave's height rises and falls over 60-110 units by its own noise,
+		// drifting with the wind, so the sea never shows a repeating pattern
+		float group = ValueNoise2(xz / (60 + 12 * i) - dir * (t * 0.02) + i * 3.1).x;
+		float a = amp * share[i] * (0.4 + 1.2 * group);
 		float q = a > 1e-4 ? min(0.6 / (k * a * 5), 1.0) : 0;
 		float phase = k * dot(d, xz) - w * t + i * 1.7;
 		float sp = sin(phase), cp = cos(phase);
@@ -762,7 +778,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// foam: streaks on the highest crests, broken up by the ripple map
 	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.35 + WaterRipples.xy).xy - 0.5) * 2.5)
 		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 - WaterRipples.yx).xy - 0.5) * 2.5 + 0.4);
-	float crestFoam = smoothstep(0.72, 0.92, crest) * smoothstep(0.15, 0.7, noise);
+	// (more of it in some stretches than others, by a slow noise: no regular pattern)
+	float foamPatch = smoothstep(0.25, 0.75, ValueNoise2(base / 45 - float2(0.8, 0.6) * GrassParams.z * 0.015 + 9.7).y);
+	float crestFoam = smoothstep(0.72, 0.92, crest) * smoothstep(0.15, 0.7, noise) * lerp(0.35, 1.2, foamPatch);
 	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep,
 	// and the swash at the waterline
 	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth);
@@ -946,18 +964,6 @@ float4 PS(VS_OUTPUT input) : SV_Target
 // tile, blended by distance to the corners and sharpened by the textures' brightness (a
 // height blend: the brighter material shows through first), with world-space UVs, one repeat
 // per two tiles. The tangent frame follows the world's x and z.
-// Smooth value noise in 0..1, two channels
-float2 Hash2(float2 p)
-{
-	p = float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)));
-	return frac(sin(p) * 43758.5453);
-}
-float2 ValueNoise2(float2 p)
-{
-	float2 i = floor(p), f = p - i;
-	float2 u = f * f * (3 - 2 * f);
-	return lerp(lerp(Hash2(i), Hash2(i + float2(1, 0)), u.x), lerp(Hash2(i + float2(0, 1)), Hash2(i + float2(1, 1)), u.x), u.y);
-}
 
 // A material layer at a ground position (p in world units, tile-aligned): one of its four tiles
 // (the layer's quadrants), picked per 5-unit cell by a hash, with the gradients of the continuous
