@@ -6,6 +6,7 @@
 
 #include "../util/DynArray.h"
 #include <vector>
+#include <string>
 
 #define BMFORMAT_P8 1
 #define BMFORMAT_R8G8B8 2
@@ -26,7 +27,12 @@ struct Bitmap
 	Bitmap() : width(0), height(0), format(0) {}
 	~Bitmap();
 
+	// Loads by extension; an original .tga or .pcx with a replacement (replacementFile) loads that
 	static Bitmap loadBitmap(const char* fn);
+	// A mod's replacement for an original .tga or .pcx: the same name as .png, or with gpu first
+	// .ktx2 or .dds (which may be BC7, so only for textures going to the GPU as they are);
+	// else fn itself. High-resolution texture packs use it (mod format 2).
+	static std::string replacementFile(const std::string& fn, bool gpu = false);
 	static Bitmap loadTGA(const void* data, size_t length);
 	static Bitmap loadPCX(const void* data, size_t length);
 	static Bitmap loadImage(const void* data, size_t length); // PNG, JPEG

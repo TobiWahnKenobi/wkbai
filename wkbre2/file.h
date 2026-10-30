@@ -77,8 +77,9 @@ struct ModInfo {
 };
 
 // The mod format this build supports (mod.json "wkbre2"): 1 = folders and archives overriding any
-// game file, mod.json, Lua\FrontEnd\*.lua and Lua\InGame\*.lua extending the UI scripts
-constexpr int MOD_API_VERSION = 1;
+// game file, mod.json, Lua\FrontEnd\*.lua and Lua\InGame\*.lua extending the UI scripts;
+// 2 = also .png/.dds/.ktx2 replacing a .tga/.pcx texture of any size (Bitmap::replacementFile)
+constexpr int MOD_API_VERSION = 2;
 
 // Mounts data.bcp and the enabled mods according to wkconfig.json ("disabledMods", "modLoadOrder", "modsPath").
 // Without "modLoadOrder" files resolve like the original game: data.bcp and all mods form one group
