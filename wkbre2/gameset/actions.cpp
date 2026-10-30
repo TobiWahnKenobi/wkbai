@@ -357,6 +357,13 @@ struct ActionTransferControl : Action {
 					tg ? tg->blueprint->name.c_str() : "-", tg ? tg->id : 0, tg ? (tg->position - obj->position).len2xz() : 0.0f, obj->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) * 5.0f);
 			}
 
+			if (const char* only = getenv("WKB_TRACE_TRANSFER_ID"); only && (uint32_t)atoi(only) == obj->id) {
+				ServerGameObject* self = ctx->getSelf();
+				Order* so = self ? self->orderConfig.getCurrentOrder() : nullptr;
+				printf("TRANSFERID t=%.2f %u from %s %u to %s %u, run by %s %u (order %s)\n", Server::instance->timeManager.currentTime, obj->id,
+					oldParent ? oldParent->blueprint->name.c_str() : "-", oldParent ? oldParent->id : 0, recipient->blueprint->name.c_str(), recipient->id,
+					self ? self->blueprint->name.c_str() : "-", self ? self->id : 0, so ? Server::instance->gameSet->orders.names.getString(so->blueprint->bpid).c_str() : "-");
+			}
 			if (!recipient->deleted) {
 				obj->setParent(recipient);
 			}
@@ -501,8 +508,15 @@ struct ActionCreateObjectVia : Action {
 	const ObjectCreation *info;
 	std::unique_ptr<ObjectFinder> finder;
 	virtual void run(SrvScriptContext* ctx) override {
-		for (ServerGameObject *obj : finder->eval(ctx))
+		for (ServerGameObject *obj : finder->eval(ctx)) {
+			if (getenv("WKB_TRACE_CREATION")) {
+				ServerGameObject* self = ctx->getSelf();
+				printf("CREATION t=%.2f \"%s\" for %s %u, run by %s %u (next id %u)\n", Server::instance->timeManager.currentTime,
+					Server::instance->gameSet->objectCreations.getString(info).c_str(), obj->blueprint->name.c_str(), obj->id,
+					self ? self->blueprint->name.c_str() : "-", self ? self->id : 0, Server::instance->nextUniqueId + 1);
+			}
 			info->run(obj, ctx);
+		}
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
 		info = gs.objectCreations.readPtr(gsf);

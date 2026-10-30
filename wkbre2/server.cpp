@@ -316,6 +316,7 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		blueprint = gameSet->findBlueprint(cls, bpname);
 
 	ServerGameObject *obj = createObject(blueprint, goid);
+	obj->sightFromSave = true;
 
 	gsf.advanceLine();
 	std::string endtag = "END_" + clsname;
@@ -1132,6 +1133,10 @@ void ServerGameObject::lookForSightRangeEvents()
 	seenObjects.reserve(found.size());
 	for (const auto& [id, obj] : found)
 		seenObjects.push_back(id);
+	if (sightFromSave) {
+		sightFromSave = false;
+		return;
+	}
 	SrvGORef self = this;
 	size_t b = 0;
 	for (const auto& [id, obj] : found) {

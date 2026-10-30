@@ -41,6 +41,11 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	std::unordered_map<int, std::unordered_set<SrvGORef>> associates, associators;
 	std::vector<SrvGORef> referencers;
 	std::vector<uint32_t> seenObjects; // ids of the objects in sight range, sorted
+	// loaded from a save: the first sight update only notes what is in range, without events
+	// (WKB.exe's saves don't store what each object sees, and its units don't react to the
+	// objects already around them after loading; wkbre2's did: on the Marjoria's Keep save the
+	// human archers newly "saw" everyone nearby and formed an army against a spy)
+	bool sightFromSave = false;
 	std::set<std::pair<int, int>> zoneTiles;
 	int clientIndex = -1;
 	bool isMusicPlaying = false;

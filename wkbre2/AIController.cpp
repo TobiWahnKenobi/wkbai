@@ -300,6 +300,7 @@ void AIController::update()
 
 		// Character Requirements
 		const std::vector<int> charNeeds = AICharacterNeeds(gscomm, &ctx, cominst.forceBalance);
+		bool shortOfResources = false; // a requirement found nothing it could pay for
 		for (size_t ri = 0; ri < cominst.characterReqInsts.size(); ++ri) {
 			auto& gsreq = gscomm->characterRequirements[ri];
 			auto& reqinst = cominst.characterReqInsts[ri];
@@ -315,6 +316,7 @@ void AIController::update()
 				// now (tech level, alignment, cost, population); a rung already being spawned
 				// counts too, so a busy building doesn't make the AI fall back to a worse rung
 				const GameSet* gs = Server::instance->gameSet.get();
+				bool anyServed = false, anyUnaffordable = false;
 				for (auto& rung : gsreq.ladder->entries) {
 					const std::string spawnName = "Spawn " + rung.type->name;
 					const int ordid = gs->orders.names.getIndex(spawnName);
@@ -360,17 +362,25 @@ void AIController::update()
 						task->aiCommissioner = obj;
 						served = true;
 					}
-					if (served)
-						break;
-					// the best rung that could be spawned but can't be paid for: the resources are
-					// kept for it (no cheaper rung, nothing lower down)
-					if (unaffordable && !Server::instance->aggressiveAI) {
-						reserved = true;
+					anyUnaffordable |= unaffordable;
+					if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
+						printf("RUNG t=%.2f \"%s\" req %zu: %s served %d unaffordable %d (required %zu, existing %zu, reserved %d)\n", Server::instance->timeManager.currentTime,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), ri, rung.type->name.c_str(), (int)served, (int)unaffordable, requiredCount, existingCount, (int)reserved);
+					if (served) {
+						anyServed = true;
 						break;
 					}
+					// a rung it can't pay for: down to the next, cheaper one (the original's save:
+					// Pikeman CANT_AFFORD, then Spearman spawned)
 				}
+				if (!anyServed && anyUnaffordable)
+					shortOfResources = true;
 			}
 		}
+		// a commission that couldn't pay for what it needs keeps the resources: the ones below it
+		// spawn nothing in this update (not for the aggressive AI, which spends what it has)
+		if (shortOfResources && !Server::instance->aggressiveAI)
+			reserved = true;
 
 		// Building Requirements
 		int isFoundationItem = Server::instance->gameSet->items.names.getIndex("Is a Foundation");

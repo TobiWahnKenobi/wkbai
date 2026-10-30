@@ -25,6 +25,7 @@
 #include <map>
 #include <set>
 #include "../util/SimRandom.h"
+#include "../NNSearch.h"
 
 namespace {
 	float RandomFromZeroToOne(ScriptContext* ctx) { return (float)(ScriptRand(ctx) & 0xFFFF) / 32768.0f; }
@@ -798,10 +799,57 @@ struct ValueIsDisabled : ValueDeterminer {
 	}
 };
 
+// Whether a player sees an object: one of its own or its allies' characters or buildings has the
+// object within its sight range ("actual sight range", in tiles of 5 m). Both used to be stubs
+// that saw everything: the Kingmaker's defence (its "Enemies Within 250m of My Manor" filters by
+// "Candidate Is Visible") sent a counter army every 2 s at a human Scout none of its units could
+// see, 298 m from them; WKB.exe's AI didn't (differential test 36).
+static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameObject* player)
+{
+	if (!obj || !player)
+		return false;
+	if (obj->getPlayer() == player)
+		return true;
+	constexpr float MAX_SIGHT = 150.0f;
+	NNSearch search;
+	search.start(ctx->gameState, obj->position, MAX_SIGHT);
+	while (CommonGameObject* viewer = search.next()) {
+		const int cls = viewer->blueprint->bpClass;
+		if (cls != Tags::GAMEOBJCLASS_CHARACTER && cls != Tags::GAMEOBJCLASS_BUILDING)
+			continue;
+		CommonGameObject* vp = viewer->getPlayer();
+		if (vp != player && ctx->gameState->getDiplomaticStatus(vp, player) != 0)
+			continue;
+		const float sight = viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) * 5.0f;
+		if ((viewer->position - obj->position).sqlen2xz() <= sight * sight)
+			return true;
+	}
+	return false;
+}
+
 struct ValueIsDiscovered : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fObjects, fPlayer;
+	// once seen, discovered for good (per player and object), for this server
+	static inline std::set<std::pair<uint32_t, uint32_t>> discovered;
+	static inline const void* forServer = nullptr;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO
+		if (!ctx->isServer())
+			return 1.0f;
+		if (forServer != Server::instance) {
+			discovered.clear();
+			forServer = Server::instance;
+		}
+		CommonGameObject* obj = fObjects->getFirst(ctx);
+		CommonGameObject* pl = fPlayer->getFirst(ctx);
+		if (!obj || !pl)
+			return 0.0f;
+		pl = pl->getPlayer();
+		const auto key = std::make_pair(pl->id, obj->id);
+		if (discovered.count(key))
+			return 1.0f;
+		if (!SeenByPlayer(ctx, obj, pl))
+			return 0.0f;
+		discovered.insert(key);
 		return 1.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
@@ -812,8 +860,11 @@ struct ValueIsDiscovered : ValueDeterminer {
 struct ValueIsVisible : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fObjects, fPlayer;
 	virtual float eval(ScriptContext* ctx) override {
-		// TODO
-		return 1.0f;
+		if (!ctx->isServer())
+			return 1.0f;
+		CommonGameObject* obj = fObjects->getFirst(ctx);
+		CommonGameObject* pl = fPlayer->getFirst(ctx);
+		return (obj && pl && SeenByPlayer(ctx, obj, pl->getPlayer())) ? 1.0f : 0.0f;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		fObjects.reset(ReadFinder(gsf, gs));
