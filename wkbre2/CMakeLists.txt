@@ -129,4 +129,10 @@ target_include_directories(wkbre2
   ${LUA_INCLUDE_DIR}
 )
 
+# The Lua UI scripts are read from "redata" beside the exe (the working directory): copy them on
+# every build, so a run from the build folder never uses an older copy
+add_custom_command(TARGET wkbre2 POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/redata" "$<TARGET_FILE_DIR:wkbre2>/redata"
+)
+
 # TODO: Ajoutez des tests et installez des cibles si nécessaire.

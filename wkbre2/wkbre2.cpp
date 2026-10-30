@@ -198,8 +198,9 @@ void LaunchQSM() {
 	int menuFrame = 0;
 
 	while (!g_windowQuit) {
-		// "menuTest": { ..., "hold": { "x", "y", "from", "to" } }: the left button held there from
-		// frame "from" to frame "to" (window pixels), as a player holding a button
+		// "menuTest": { ..., "hold": { "x", "y", "from", "to", "shift" } }: the left button held
+		// there from frame "from" to frame "to" (window pixels), as a player holding a button,
+		// with Shift held as well if "shift" is true
 		if (menuTest.is_object() && menuTest.contains("hold")) {
 			const nlohmann::json& hold = menuTest["hold"];
 			const int from = hold.value("from", 30), to = hold.value("to", 90);
@@ -208,10 +209,12 @@ void LaunchQSM() {
 				g_mouseY = hold.value("y", 0);
 				g_mousePressed[SDL_BUTTON_LEFT] = menuFrame + 1 == from;
 				g_mouseDown[SDL_BUTTON_LEFT] = true;
+				g_modShift = hold.value("shift", false);
 			}
 			else if (menuFrame + 1 == to + 1) {
 				g_mouseDown[SDL_BUTTON_LEFT] = false;
 				g_mouseReleased[SDL_BUTTON_LEFT] = true;
+				g_modShift = false;
 			}
 		}
 		ImGuiImpl_NewFrame();
