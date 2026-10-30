@@ -86,6 +86,13 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->proximityRequirement = ReadValueDeterminer(gsf, gs);
 		else if (tag == "PROXIMITY_SATISFIED_SEQUENCE")
 			this->proximitySatisfiedSequence.init(gsf, gs, "END_PROXIMITY_SATISFIED_SEQUENCE");
+		else if (tag == "PROXIMITY_DISSATISFIED_SEQUENCE") {
+			if (!gsf.eol) {
+				this->proximityDissatisfiedEquation = gs.equations.readIndex(gsf);
+				this->proximityDissatisfiedFinder = ReadFinder(gsf, gs);
+			}
+			this->proximityDissatisfiedSequence.init(gsf, gs, "END_PROXIMITY_DISSATISFIED_SEQUENCE");
+		}
 		else if (tag == "PLAY_ANIMATION") {
 			auto animtype = gsf.nextString();
 			if (animtype == "TAG")

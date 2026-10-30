@@ -17,6 +17,23 @@
 #include "gameset/GameObjBlueprint.h"
 #include "NNSearch.h"
 
+static float FootprintDistance(const Vector3& point, const ServerGameObject* building);
+
+// A task's PROXIMITY_DISSATISFIED_SEQUENCE, if its condition (when it has one) holds
+static void RunProximityDissatisfied(const TaskBlueprint* bp, ServerGameObject* self)
+{
+	if (bp->proximityDissatisfiedEquation >= 0) {
+		SrvScriptContext ctx(Server::instance, self);
+		CommonGameObject* obj = bp->proximityDissatisfiedFinder ? bp->proximityDissatisfiedFinder->getFirst(&ctx) : self;
+		if (!obj)
+			return;
+		auto _ = ctx.changeSelf(obj);
+		if (!Server::instance->gameSet->equations[bp->proximityDissatisfiedEquation]->booleval(&ctx))
+			return;
+	}
+	bp->proximityDissatisfiedSequence.run(self);
+}
+
 void Order::init()
 {
 	for (auto& task : this->tasks)
@@ -153,12 +170,29 @@ void Task::start()
 
 	if (this->target) {
 		if (!this->startSequenceExecuted) {
-			this->blueprint->startSequence.run(order->gameObject);
-			this->startSequenceExecuted = true;
 			if (this->blueprint->proximityRequirement) {
 				SrvScriptContext ctx(Server::instance, this->order->gameObject);
 				this->proximity = this->blueprint->proximityRequirement->eval(&ctx); // should this be here?
 			}
+			// A target out of the proximity runs PROXIMITY_DISSATISFIED_SEQUENCE first, and the
+			// start sequence only if the task still runs after it. The missile tasks (Fire
+			// Javelin, Fire Arrow, ...) hand a unit that may not move back to its player there
+			// and end the whole order; their start sequence does the same for a target out of
+			// missile range but only ends the task, which a cycling order restarts at once (the
+			// AI's ranged units went round 130-580 times in 30 s, 3,874 transfers in all).
+			// (a proximity of 0, as TASK "Follow" has, is no requirement here)
+			if (this->blueprint->proximityRequirement && this->proximity > 0.0f) {
+				ServerGameObject* go = this->order->gameObject;
+				const float edge = FootprintDistance(go->position, target.get());
+				const float dist = edge >= 0.0f ? edge : (target->position - go->position).len2xz();
+				if (dist >= this->proximity) {
+					RunProximityDissatisfied(this->blueprint, go);
+					if (!this->isWorking() || !this->order->isWorking())
+						return;
+				}
+			}
+			this->blueprint->startSequence.run(order->gameObject);
+			this->startSequenceExecuted = true;
 		}
 	}
 	this->onStart();
@@ -769,6 +803,7 @@ void ObjectReferenceTask::onUpdate()
 					proximitySatisfied = false;
 					//if (blueprint->defaultAnim != -1)
 					//	go->setAnimation(0);
+					RunProximityDissatisfied(blueprint, order->gameObject);
 				}
 			}
 		}

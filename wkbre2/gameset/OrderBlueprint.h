@@ -48,6 +48,12 @@ struct TaskBlueprint {
 
 	ValueDeterminer *proximityRequirement = nullptr;
 	ActionSequence proximitySatisfiedSequence;
+	// run when the target is out of the proximity: at the task's start (before its start
+	// sequence) and whenever the proximity is lost; with "PROXIMITY_DISSATISFIED_SEQUENCE
+	// <equation> <finder>" only while that equation holds for the found object
+	ActionSequence proximityDissatisfiedSequence;
+	int proximityDissatisfiedEquation = -1;
+	ObjectFinder* proximityDissatisfiedFinder = nullptr;
 
 	std::vector<std::pair<int, int>> equAnims;
 	int defaultAnim = -1;
