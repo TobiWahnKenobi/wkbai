@@ -482,6 +482,393 @@ void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density,
 	}
 }
 
+std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>& flow, std::vector<float>* halfWidth)
+{
+	constexpr int R = RIVER_FIELD_RES;
+	constexpr float cell = 5.0f / R;
+	const int W = (int)terrain->width, H = (int)terrain->height;
+	const int GW = W * R, GH = H * R;
+	const size_t N = (size_t)GW * GH;
+	std::vector<float> out(N * 4, 0.0f);
+	if (halfWidth)
+		halfWidth->assign(N, 0.0f);
+	// the river share between the tiles' centres
+	auto share = [&](float gx, float gz) {
+		const float fx = gx - 0.5f, fz = gz - 0.5f;
+		const int ix = (int)std::floor(fx), iz = (int)std::floor(fz);
+		const float tx = fx - ix, tz = fz - iz;
+		auto at = [&](int x, int z) {
+			x = std::clamp(x, 0, W - 1);
+			z = std::clamp(z, 0, H - 1);
+			return flow[((size_t)z * W + x) * 4 + 3] / 255.0f;
+		};
+		return (at(ix, iz) * (1 - tx) + at(ix + 1, iz) * tx) * (1 - tz) + (at(ix, iz + 1) * (1 - tx) + at(ix + 1, iz + 1) * tx) * tz;
+	};
+	std::vector<uint8_t> wet(N, 0), riv(N, 0);
+	bool anyRiver = false;
+	for (int z = 0; z < GH; z++)
+		for (int x = 0; x < GW; x++) {
+			const TerrainTile* tile = terrain->getTile(x / R, z / R);
+			if (!tile->fullOfWater)
+				continue;
+			const float gx = (x + 0.5f) / R, gz = (z + 0.5f) / R;
+			const float ground = terrain->getSmoothHeight((gx - terrain->edge) * 5.0f, (gz - terrain->edge) * 5.0f);
+			if (tile->waterLevel <= ground)
+				continue;
+			const size_t i = (size_t)z * GW + x;
+			wet[i] = 1;
+			if (share(gx, gz) >= 0.5f) {
+				riv[i] = 1;
+				anyRiver = true;
+			}
+		}
+	if (!anyRiver)
+		return out;
+	using Item = std::pair<float, int>;
+	// the nearest bank: each texel keeps the dry point it was reached from (Euclidean distance)
+	std::vector<float> bank(N, 1e30f);
+	std::vector<int> from(N, -1);
+	{
+		std::vector<Item> heap;
+		for (int i = 0; i < (int)N; i++)
+			if (!wet[i]) {
+				const int x = i % GW, z = i / GW;
+				bool nearWet = false;
+				for (int dz = -1; dz <= 1 && !nearWet; dz++)
+					for (int dx = -1; dx <= 1; dx++) {
+						const int ax = x + dx, az = z + dz;
+						if (ax >= 0 && az >= 0 && ax < GW && az < GH && wet[(size_t)az * GW + ax]) {
+							nearWet = true;
+							break;
+						}
+					}
+				if (nearWet) {
+					bank[i] = 0;
+					from[i] = i;
+					heap.push_back({ 0.0f, i });
+				}
+			}
+		std::make_heap(heap.begin(), heap.end(), std::greater<>());
+		while (!heap.empty()) {
+			std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+			const auto [dt, i] = heap.back();
+			heap.pop_back();
+			if (dt > bank[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			const int sx = from[i] % GW, sz = from[i] / GW;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int ax = x + dx, az = z + dz;
+					if ((dx == 0 && dz == 0) || ax < 0 || az < 0 || ax >= GW || az >= GH)
+						continue;
+					const int n = az * GW + ax;
+					if (!wet[n])
+						continue;
+					const float nd = std::sqrt((float)((ax - sx) * (ax - sx) + (az - sz) * (az - sz))) * cell;
+					if (nd < bank[n]) {
+						bank[n] = nd;
+						from[n] = from[i];
+						heap.push_back({ nd, n });
+						std::push_heap(heap.begin(), heap.end(), std::greater<>());
+					}
+				}
+		}
+	}
+	// the way to the mouth along the channel: Dijkstra over the river texels with sixteen
+	// neighbours (the knight's moves too, so that the fronts stay round and cross the channel
+	// at right angles), from the texels next to wide water
+	static const int mx[16] = { 1, -1, 0, 0, 1, 1, -1, -1, 2, 2, -2, -2, 1, 1, -1, -1 };
+	static const int mz[16] = { 0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 2, -2, 2, -2 };
+	std::vector<float> down(N, 1e30f);
+	auto march = [&](std::vector<Item> heap) {
+		std::make_heap(heap.begin(), heap.end(), std::greater<>());
+		while (!heap.empty()) {
+			std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+			const auto [dt, i] = heap.back();
+			heap.pop_back();
+			if (dt > down[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			for (int k = 0; k < 16; k++) {
+				const int ax = x + mx[k], az = z + mz[k];
+				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+					continue;
+				const int n = az * GW + ax;
+				if (!riv[n])
+					continue;
+				if (k >= 8) { // a knight's move: through river water only
+					const int hx = x + (mx[k] / 2), hz = z + (mz[k] / 2);
+					const int ox = x + mx[k] - (mx[k] / 2), oz = z + mz[k] - (mz[k] / 2);
+					if (!riv[(size_t)hz * GW + hx] || !riv[(size_t)oz * GW + ox])
+						continue;
+				}
+				const float nd = dt + std::sqrt((float)(mx[k] * mx[k] + mz[k] * mz[k])) * cell;
+				if (nd < down[n]) {
+					down[n] = nd;
+					heap.push_back({ nd, n });
+					std::push_heap(heap.begin(), heap.end(), std::greater<>());
+				}
+			}
+		}
+	};
+	// Each river network (river texels, connected) flows into the largest wide water it meets,
+	// or off the map's edge: a small lake on its way feeds it instead of drawing it both ways
+	{
+		std::vector<int> wide(N, -1), wideSize;
+		for (int i = 0; i < (int)N; i++) {
+			if (!wet[i] || riv[i] || wide[i] >= 0)
+				continue;
+			const int c = (int)wideSize.size();
+			std::vector<int> stack = { i };
+			wide[i] = c;
+			int size = 0;
+			while (!stack.empty()) {
+				const int t = stack.back();
+				stack.pop_back();
+				size++;
+				const int x = t % GW, z = t / GW;
+				for (int k = 0; k < 4; k++) {
+					const int ax = x + mx[k], az = z + mz[k];
+					if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+						continue;
+					const int n = az * GW + ax;
+					if (wet[n] && !riv[n] && wide[n] < 0) {
+						wide[n] = c;
+						stack.push_back(n);
+					}
+				}
+			}
+			wideSize.push_back(size);
+		}
+		std::vector<uint8_t> inNet(N, 0);
+		for (int i = 0; i < (int)N; i++) {
+			if (!riv[i] || inNet[i])
+				continue;
+			std::vector<int> net = { i };
+			inNet[i] = 1;
+			for (size_t c = 0; c < net.size(); c++) {
+				const int x = net[c] % GW, z = net[c] / GW;
+				for (int k = 0; k < 4; k++) {
+					const int ax = x + mx[k], az = z + mz[k];
+					if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+						continue;
+					const int n = az * GW + ax;
+					if (riv[n] && !inNet[n]) {
+						inNet[n] = 1;
+						net.push_back(n);
+					}
+				}
+			}
+			// its outlet: the map's edge (-2) above all, else its largest wide water
+			int best = -1;
+			auto outletOf = [&](int t) {
+				const int x = t % GW, z = t / GW;
+				int o = -1;
+				if (x == 0 || z == 0 || x == GW - 1 || z == GH - 1)
+					return -2;
+				for (int k = 0; k < 4; k++) {
+					const int n = (z + mz[k]) * GW + x + mx[k];
+					if (wide[n] >= 0 && (o < 0 || wideSize[wide[n]] > wideSize[o]))
+						o = wide[n];
+				}
+				return o;
+			};
+			auto better = [&](int a, int b) { return a == -2 ? b != -2 : a >= 0 && b != -2 && (b < 0 || wideSize[a] > wideSize[b]); };
+			for (int t : net) {
+				const int o = outletOf(t);
+				if (better(o, best))
+					best = o;
+			}
+			std::vector<Item> seeds;
+			for (int t : net)
+				if (best != -1) {
+					const int o = outletOf(t);
+					bool touches = o == best;
+					if (!touches && best >= 0) { // any wide neighbour of that water, not only the largest
+						const int x = t % GW, z = t / GW;
+						for (int k = 0; k < 4 && !touches; k++) {
+							const int ax = x + mx[k], az = z + mz[k];
+							if (ax >= 0 && az >= 0 && ax < GW && az < GH && wide[(size_t)az * GW + ax] == best)
+								touches = true;
+						}
+					}
+					if (touches) {
+						down[t] = 0;
+						seeds.push_back({ 0.0f, t });
+					}
+				}
+			march(seeds);
+		}
+	}
+	// rivers without a mouth: towards their widest point
+	for (int i = 0; i < (int)N; i++) {
+		if (!riv[i] || down[i] < 1e29f)
+			continue;
+		std::vector<int> comp = { i };
+		std::vector<uint8_t> seen(N, 0);
+		seen[i] = 1;
+		int widest = i;
+		for (size_t c = 0; c < comp.size(); c++) {
+			const int x = comp[c] % GW, z = comp[c] / GW;
+			if (bank[comp[c]] > bank[widest])
+				widest = comp[c];
+			for (int k = 0; k < 4; k++) {
+				const int ax = x + mx[k], az = z + mz[k];
+				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+					continue;
+				const int n = az * GW + ax;
+				if (riv[n] && !seen[n] && down[n] >= 1e29f) {
+					seen[n] = 1;
+					comp.push_back(n);
+				}
+			}
+		}
+		down[widest] = 0;
+		march({ { 0.0f, widest } });
+	}
+	// the way downstream: down the distance, smoothed (three 3 x 3 passes) and of unit length
+	std::vector<float> tx(N, 0.0f), tz(N, 0.0f);
+	for (int i = 0; i < (int)N; i++) {
+		if (!riv[i])
+			continue;
+		const int x = i % GW, z = i / GW;
+		auto at = [&](int ax, int az) {
+			if (ax < 0 || az < 0 || ax >= GW || az >= GH || !riv[(size_t)az * GW + ax])
+				return down[i];
+			return down[(size_t)az * GW + ax];
+		};
+		tx[i] = at(x - 1, z) - at(x + 1, z);
+		tz[i] = at(x, z - 1) - at(x, z + 1);
+	}
+	for (int pass = 0; pass < 3; pass++) {
+		std::vector<float> ax(N, 0.0f), az(N, 0.0f);
+		for (int i = 0; i < (int)N; i++) {
+			if (!riv[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int bx = x + dx, bz = z + dz;
+					if (bx < 0 || bz < 0 || bx >= GW || bz >= GH || !riv[(size_t)bz * GW + bx])
+						continue;
+					ax[i] += tx[(size_t)bz * GW + bx];
+					az[i] += tz[(size_t)bz * GW + bx];
+				}
+		}
+		tx = std::move(ax);
+		tz = std::move(az);
+	}
+	// the half width: the largest bank distance, falling off by 0.15 per unit away from it (so
+	// it reaches the banks at 85% and changes gently along the river)
+	if (halfWidth) {
+		std::vector<float>& hw = *halfWidth;
+		std::vector<Item> heap;
+		for (int i = 0; i < (int)N; i++)
+			if (wet[i]) {
+				hw[i] = bank[i];
+				heap.push_back({ -bank[i], i });
+			}
+		std::make_heap(heap.begin(), heap.end(), std::greater<>());
+		// largest first: a max-heap by -value under std::greater is a min-heap of -value
+		while (!heap.empty()) {
+			std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+			const auto [nv, i] = heap.back();
+			heap.pop_back();
+			if (-nv < hw[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			for (int k = 0; k < 8; k++) {
+				const int ax = x + mx[k], az = z + mz[k];
+				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+					continue;
+				const int n = az * GW + ax;
+				if (!wet[n])
+					continue;
+				const float v = hw[i] - 0.15f * cell * (k < 4 ? 1.0f : 1.41421f);
+				if (v > hw[n]) {
+					hw[n] = v;
+					heap.push_back({ -v, n });
+					std::push_heap(heap.begin(), heap.end(), std::greater<>());
+				}
+			}
+		}
+		// onto the land beside, for the filtering
+		for (int pass = 0; pass < 4; pass++) {
+			std::vector<float> next = hw;
+			for (int i = 0; i < (int)N; i++) {
+				if (wet[i])
+					continue;
+				const int x = i % GW, z = i / GW;
+				float m = 0;
+				for (int k = 0; k < 8; k++) {
+					const int ax = x + mx[k], az = z + mz[k];
+					if (ax >= 0 && az >= 0 && ax < GW && az < GH)
+						m = std::max(m, hw[(size_t)az * GW + ax]);
+				}
+				next[i] = m;
+			}
+			hw = std::move(next);
+		}
+	}
+	std::vector<uint8_t> done(N, 0);
+	for (int i = 0; i < (int)N; i++) {
+		if (!riv[i] || down[i] >= 1e29f)
+			continue;
+		const float len = std::sqrt(tx[i] * tx[i] + tz[i] * tz[i]);
+		out[i * 4] = down[i];
+		out[i * 4 + 1] = bank[i];
+		out[i * 4 + 2] = len > 1e-6f ? tx[i] / len : 0.0f;
+		out[i * 4 + 3] = len > 1e-6f ? tz[i] / len : 0.0f;
+		done[i] = 1;
+	}
+	// out from the rivers: their values carried six texels into wide water and onto the land
+	// (the bank's distance 0 on land)
+	for (int pass = 0; pass < 6; pass++) {
+		std::vector<uint8_t> next = done;
+		for (int i = 0; i < (int)N; i++) {
+			if (done[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			float acc[4] = {};
+			int n = 0;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int bx = x + dx, bz = z + dz;
+					if (bx < 0 || bz < 0 || bx >= GW || bz >= GH || !done[(size_t)bz * GW + bx])
+						continue;
+					for (int c = 0; c < 4; c++)
+						acc[c] += out[((size_t)bz * GW + bx) * 4 + c];
+					n++;
+				}
+			if (n == 0)
+				continue;
+			for (int c = 0; c < 4; c++)
+				out[i * 4 + c] = acc[c] / n;
+			if (!wet[i])
+				out[i * 4 + 1] = 0;
+			else
+				out[i * 4 + 1] = std::min(out[i * 4 + 1], bank[i]);
+			next[i] = 1;
+		}
+		done = std::move(next);
+	}
+	// debugging: "WKB_DUMP_RIVER=<file>" writes the field as a PPM: red the distance downstream
+	// in bands of 10 units, green the bank's distance (up to 25 units), blue the river texels
+	if (const char* dump = getenv("WKB_DUMP_RIVER")) {
+		if (FILE* f = fopen(dump, "wb")) {
+			fprintf(f, "P6\n%d %d\n255\n", GW, GH);
+			for (size_t i = 0; i < N; i++) {
+				const uint8_t px[3] = { (uint8_t)(done[i] ? std::fmod(out[i * 4], 10.0f) * 25.5f : 0),
+					(uint8_t)std::min(out[i * 4 + 1] * 10.0f, 255.0f), (uint8_t)(riv[i] ? 200 : wet[i] ? 80 : 0) };
+				fwrite(px, 1, 3, f);
+			}
+			fclose(f);
+		}
+	}
+	return out;
+}
+
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 {
 	const int W = (int)terrain->width, H = (int)terrain->height;

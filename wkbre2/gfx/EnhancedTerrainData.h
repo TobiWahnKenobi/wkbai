@@ -89,3 +89,17 @@ struct TerrainGrassBuilder {
 // flows towards its shore (waves rolling in), except off a river's mouth, where the river's
 // water carries on out into it. A body narrow all through flows towards its widest part.
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain);
+
+// The rivers' own coordinates (High's river look, from Medium), RIVER_FIELD_RES texels per tile
+// edge, four floats per texel ((x, z) at z * width * RES + x): how far downstream the river's
+// mouth still is along the channel (world units), how far the nearest bank is, and the way
+// downstream (x, z; unit length). The banks are where the water level meets the terrain's smooth
+// surface, not the tiles' edges, so the coordinates follow the river's real shape, as a mesh
+// laid along it would. Its mouth is where it meets its wide water (the flow map's river share
+// falls below a half); a river with none flows towards its widest point. Wide water and land
+// get the values of the nearest river texels, a few texels out, so the filtering doesn't mix
+// in nonsense at the shore.
+constexpr int RIVER_FIELD_RES = 4;
+// halfWidth (if given) gets the river's half width at each texel (world units; the widest
+// bank distance nearby, carried across and along the channel with a slope of 0.15).
+std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>& flow, std::vector<float>* halfWidth = nullptr);

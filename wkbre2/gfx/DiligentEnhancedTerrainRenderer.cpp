@@ -38,6 +38,8 @@ Texture2D<float> shadowTexture;
 SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
+Texture2D riverTexture; // the rivers' coordinates, 4 texels per tile (BuildRiverField)
+Texture2D<float> riverWidth; // and their half width
 Texture2D sceneTexture; // the frame behind the water, for its refraction and reflections (from Low)
 Texture2D<float> depthTexture; // its depth, for the reflections' rays
 Texture2D skyFront; // the sky box (ShadowEnvironment::skyFaces), reflected from Low
@@ -504,7 +506,14 @@ float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, f
 	float2 size;
 	sceneTexture.GetDimensions(size.x, size.y);
 	float2 suv = svpos.xy / size + n.xz * (0.03 * saturate(depth / 1.5));
-	float3 behind = sceneTexture.Sample(inpSampler, saturate(suv)).rgb;
+	// blurred with the depth, as water scatters the light from the bed (up to 6 pixels; a
+	// sharp bed showed its tiles' edges through clear rivers)
+	float2 r = saturate(depth / 3) * 6 / size;
+	float3 behind = (sceneTexture.Sample(inpSampler, saturate(suv)).rgb * 2
+		+ sceneTexture.Sample(inpSampler, saturate(suv + float2(r.x, r.y * 0.4))).rgb
+		+ sceneTexture.Sample(inpSampler, saturate(suv + float2(-r.x * 0.4, r.y))).rgb
+		+ sceneTexture.Sample(inpSampler, saturate(suv + float2(-r.x, -r.y * 0.4))).rgb
+		+ sceneTexture.Sample(inpSampler, saturate(suv + float2(r.x * 0.4, -r.y))).rgb) / 6;
 	return float4(lerp(behind, waterGraded, alpha), 1);
 }
 
@@ -668,6 +677,23 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
+// The rivers' ripples at (s, d): s the distance to the mouth along the channel, d the distance
+// to the bank. Small, round waves (the same scale along and across; drawn out along the flow
+// their ridges caught the sun as white lines, which no river has), in two sizes. Slopes along
+// and across.
+float2 RiverSlope(float s, float d)
+{
+	float2 c = normalTexture.Sample(cloudSampler, float2(s, d) * 0.09 + float2(0.71, 0.13)).xy - 0.5;
+	float2 a = normalTexture.Sample(cloudSampler, float2(s, d) * 0.22).xy - 0.5;
+	float2 b = normalTexture.Sample(cloudSampler, float2(s, d) * 0.5 + float2(0.31, 0.63)).yx - 0.5;
+	return c * 0.8 + a + b * 0.5;
+}
+
+float RiverNoise(float2 uv)
+{
+	return saturate(length(normalTexture.Sample(cloudSampler, uv).xy - 0.5) * 2.5);
+}
+
 // High water's pixels: the waves' normal with finer ripples on it (carried by the flow), the
 // sky and sun as on Low, and foam on the crests and in the surf, broken up by the ripple map
 float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
@@ -693,7 +719,26 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float2 off0 = -flow * (p0 * cycle) * WaterParams.z * 3.0, off1 = -flow * (p1 * cycle) * WaterParams.z * 3.0;
 	float2 detail = FlowSlope(ruv, off0) * w0 + FlowSlope(ruv, off1) * (1 - w0);
 	float2 fine = normalTexture.Sample(cloudSampler, ruv * 3.7 + WaterRipples.zw * 4).xy - 0.5;
-	float3 n = normalize(wn + float3(detail.x, 0, detail.y) * lerp(0.3, 0.45, river) + float3(fine.x, 0, fine.y) * 0.22);
+	// the rivers' own look (BuildRiverField): ripples laid along the channel, following its
+	// bends from bank to bank, carried downstream by the current (faster where narrower), in
+	// two phases half a cycle apart so that speed changes along it never stretch them for long
+	float4 rf = riverTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
+	float2 along = dot(rf.zw, rf.zw) > 0.01 ? normalize(rf.zw) : float2(1, 0);
+	float2 across = float2(-along.y, along.x);
+	// the current by the river's width: 3.5 units a second where it is 8 wide or less,
+	// slowing to 0.6 where it is 50 wide and more
+	float halfWidth = max(riverWidth.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz), 1.5);
+	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x; // units per second
+	float tight = saturate((17 - halfWidth) / 11); // 1 where it is 12 units wide or less, 0 from 34
+	const float rcycle = 3.0;
+	float q0 = frac(GrassParams.z / rcycle), q1 = frac(GrassParams.z / rcycle + 0.5);
+	float v0 = 1 - abs(2 * q0 - 1);
+	float s0 = rf.x + current * q0 * rcycle, s1 = rf.x + current * q1 * rcycle + 7.3;
+	float2 rs = RiverSlope(s0, rf.y) * v0 + RiverSlope(s1, rf.y) * (1 - v0);
+	float2 riverDetail = rs.x * along + rs.y * across;
+	float2 seaDetail = detail * 0.3 + fine * 0.22;
+	float2 slope = lerp(seaDetail, riverDetail * 0.5, river);
+	float3 n = normalize(wn + float3(slope.x, 0, slope.y));
 	float3 v = normalize(FogCamera.xyz - input.World);
 	float3 l = normalize(SunDirection);
 	float3 r = reflect(-v, n);
@@ -713,7 +758,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 sky = SkyAlong(rr) * lerp(1, cloud, 0.5);
 	// the sun: a broad highlight off the waves, many small sparkles off the ripples
 	float sw = saturate(dot(reflect(-v, wn), l)), sr = saturate(dot(r, l));
-	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * 2.2) * cloud;
+	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * lerp(2.2, 0.5, river)) * cloud;
 	// foam: streaks on the highest crests, broken up by the ripple map
 	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.35 + WaterRipples.xy).xy - 0.5) * 2.5)
 		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 - WaterRipples.yx).xy - 0.5) * 2.5 + 0.4);
@@ -723,9 +768,13 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth);
 	float swash = smoothstep(0.25, 0.0, depth);
 	float shoreFoam = max(surf * smoothstep(0.1, 0.7, noise), swash * smoothstep(0.0, 0.6, noise)) * (1 - 0.6 * river);
-	// white water where a narrow river runs fast
-	float rush = f.z * saturate(length(fdir) * 1.5) * river;
-	float riverFoam = saturate((detail.x + detail.y) * 3 - 0.4) * rush * rush * 0.3;
+	// the rivers' foam: a thin, broken edge along the banks, carried with the current
+	float bankNoise = RiverNoise(float2(s0, rf.y) * 0.3) * v0 + RiverNoise(float2(s1, rf.y) * 0.3 + 0.5) * (1 - v0);
+	float bankFoam = saturate(saturate(1 - rf.y / 1.2) * 1.4 - bankNoise * 1.2) * 0.55;
+	// small white crests on the ripples where the river runs tight, carried with them
+	float crestNoise = RiverNoise(float2(s0, rf.y) * 1.1 + 0.17) * v0 + RiverNoise(float2(s1, rf.y) * 1.1 + 0.67) * (1 - v0);
+	float riverCrest = smoothstep(0.8, 0.93, crestNoise) * tight * tight * saturate(rf.y / 0.8);
+	float riverFoam = max(bankFoam, riverCrest) * river;
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
@@ -734,7 +783,8 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 reflected = lerp(sky, seen.rgb, seen.a);
 	mirror = lerp(mirror, max(mirror, 0.4), seen.a);
 	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7);
-	float alpha = saturate(lerp(0.35, 0.95, saturate(depth / 2.5)) + mirror * 0.25 + glint + foam);
+	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
+	float alpha = saturate(clear + mirror * 0.25 + glint + foam);
 	return WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
@@ -991,6 +1041,8 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> splatPipeline;
 	RefCntAutoPtr<ITexture> splatDiffuse, splatNormal, splatCorners;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
+	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
+	RefCntAutoPtr<ITexture> riverWidth; // and their half width
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline, tessSplatPipeline;
@@ -1152,6 +1204,8 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "riverTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "riverWidth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatCorners", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -1288,6 +1342,27 @@ void DiligentEnhancedTerrainRenderer::init()
 		if (!_impl->flowMap)
 			ferr("Diligent: could not create the water flow map.");
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "flowTexture")->Set(_impl->flowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		std::vector<float> halfWidth;
+		const std::vector<float> field = BuildRiverField(terrain, flow, &halfWidth);
+		TextureDesc rdesc = fdesc;
+		rdesc.Name = "River coordinates";
+		rdesc.Width = terrain->width * RIVER_FIELD_RES;
+		rdesc.Height = terrain->height * RIVER_FIELD_RES;
+		rdesc.Format = TEX_FORMAT_RGBA32_FLOAT;
+		TextureSubResData rsub{ field.data(), (Uint64)rdesc.Width * 16 };
+		TextureData rdata{ &rsub, 1 };
+		device->CreateTexture(rdesc, &rdata, &_impl->riverField);
+		if (!_impl->riverField)
+			ferr("Diligent: could not create the river coordinates.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "riverTexture")->Set(_impl->riverField->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		rdesc.Name = "River half width";
+		rdesc.Format = TEX_FORMAT_R32_FLOAT;
+		TextureSubResData wsub{ halfWidth.data(), (Uint64)rdesc.Width * 4 };
+		TextureData wdata{ &wsub, 1 };
+		device->CreateTexture(rdesc, &wdata, &_impl->riverWidth);
+		if (!_impl->riverWidth)
+			ferr("Diligent: could not create the river width.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "riverWidth")->Set(_impl->riverWidth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
