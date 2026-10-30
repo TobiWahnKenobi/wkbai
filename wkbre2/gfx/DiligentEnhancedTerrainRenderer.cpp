@@ -1732,8 +1732,8 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 1.3f;
-	flowParams[2] = 16.0f;  // High water: most pieces per tile edge near the camera
-	flowParams[3] = 140.0f; // and the distance of full detail
+	flowParams[2] = 64.0f;  // High water: most pieces per tile edge near the camera (the GPU's most)
+	flowParams[3] = 220.0f; // and the distance of full detail
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
