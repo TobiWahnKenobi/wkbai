@@ -193,13 +193,41 @@ namespace {
 					writeObject(w, server, c);
 			}
 		// after the children, as the original: the work orders name cities
-		if (obj->aiController.planBlueprint || !obj->aiController.workOrderInstances.empty()) {
+		if (obj->aiController.planBlueprint || !obj->aiController.workOrderInstances.empty() || !obj->aiController.commissionInstances.empty()) {
 			w.line("AI_CONTROLLER");
 			w.depth++;
 			if (obj->aiController.planBlueprint) {
 				// the plan restarts from its beginning: its progress isn't read back
 				w.line("MASTER_PLAN %s", inQuotes(w.gs.plans.getString(obj->aiController.planBlueprint)).c_str());
 				w.line("END_MASTER_PLAN");
+			}
+			// the running commissions, as the original: their requirements by name in the
+			// blueprint's order, with the foundations under construction
+			for (const auto& ci : obj->aiController.commissionInstances) {
+				const ServerGameObject* handler = ci.handlerObject.get();
+				if (!handler || !ci.blueprint)
+					continue;
+				w.line("COMMISSION %s %u", inQuotes(w.gs.commissions.getString(ci.blueprint)).c_str(), handler->id);
+				w.depth++;
+				if (ci.forceBalance)
+					w.line("FORCE_BALANCE");
+				for (const auto& req : ci.blueprint->characterRequirements) {
+					w.line("REQUIREMENT CHARACTER_REQUIREMENT %s", inQuotes(w.gs.characterLadders.getString(req.ladder)).c_str());
+					w.line("END_REQUIREMENT");
+				}
+				for (size_t r = 0; r < ci.blueprint->buildingRequirements.size(); r++) {
+					const auto* bp = ci.blueprint->buildingRequirements[r].bpBuilding;
+					w.line("REQUIREMENT BUILDING_REQUIREMENT %s", inQuotes(bp ? bp->name : std::string()).c_str());
+					w.depth++;
+					if (r < ci.buildingReqInsts.size())
+						for (const SrvGORef& f : ci.buildingReqInsts[r].foundations)
+							if (f.get())
+								w.line("FOUNDATION %u", f.get()->id);
+					w.depth--;
+					w.line("END_REQUIREMENT");
+				}
+				w.depth--;
+				w.line("END_COMMISSION");
 			}
 			for (const auto& woi : obj->aiController.workOrderInstances) {
 				const ServerGameObject* city = woi.city.get();

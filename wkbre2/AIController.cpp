@@ -37,6 +37,39 @@ void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 		else if (strtag == "MASTER_PLAN") {
 			activatePlan(gs.plans.readIndex(gsf));
 		}
+		else if (strtag == "COMMISSION") {
+			// COMMISSION "<name>" <handler id>, then its state and requirements up to
+			// END_COMMISSION. wkbre2 works the requirements out again each update, so only
+			// FORCE_BALANCE and the building requirements' FOUNDATIONs under construction are kept
+			// (building requirements in the blueprint's order). The original's saves have the AI's
+			// running commissions here: without them a loaded AI spawned no soldiers until its
+			// scripts commissioned new ones.
+			const GSCommission* commission = gs.commissions.readPtr(gsf);
+			ServerGameObject* handler = Server::instance->findObject(gsf.nextInt());
+			CommissionInstance* ci = nullptr;
+			if (commission && handler) {
+				activateCommission(commission, handler);
+				ci = &commissionInstances.back();
+			}
+			int buildingReq = -1;
+			gsf.advanceLine();
+			while (!gsf.eof) {
+				const std::string tag = gsf.nextTag();
+				if (tag == "END_COMMISSION")
+					break;
+				if (ci && tag == "FORCE_BALANCE")
+					ci->forceBalance = true;
+				else if (tag == "REQUIREMENT") {
+					if (gsf.nextString() == "BUILDING_REQUIREMENT")
+						buildingReq++;
+				}
+				else if (ci && tag == "FOUNDATION" && buildingReq >= 0 && buildingReq < (int)ci->buildingReqInsts.size()) {
+					if (ServerGameObject* foundation = Server::instance->findObject(gsf.nextInt()))
+						ci->buildingReqInsts[buildingReq].foundations.emplace_back(foundation);
+				}
+				gsf.advanceLine();
+			}
+		}
 		else if (strtag == "WORK_ORDER") {
 			// WKBattles work orders
 			ServerGameObject* city = Server::instance->findObject(gsf.nextInt());
@@ -223,9 +256,25 @@ void AIController::update()
 	completedComInsts.clear();
 
 	// ---- Commissions ----
-	int cid = -1;
-	for (auto& cominst : commissionInstances) {
-		++cid;
+	// Highest PRIORITY first. While a commission can't afford the spawn it wants, the
+	// resources are reserved for it: the ones below it spawn nothing in that update (the
+	// original's saves show this: a priority-0 "Monk Spawning Army" stays UNPROCESSED while the
+	// army above it is CANT_AFFORD, and its other rungs RESOURCE_REQUIRED_RESERVED). Not for the
+	// aggressive AI, which spends what it has.
+	std::vector<std::pair<float, size_t>> byPriority;
+	for (size_t i = 0; i < commissionInstances.size(); i++) {
+		ServerGameObject* handler = commissionInstances[i].handlerObject.get();
+		float priority = 0.0f;
+		if (handler && commissionInstances[i].blueprint->priority) {
+			SrvScriptContext pctx{ Server::instance, handler };
+			priority = commissionInstances[i].blueprint->priority->eval(&pctx);
+		}
+		byPriority.push_back({ priority, i });
+	}
+	std::stable_sort(byPriority.begin(), byPriority.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+	bool reserved = false;
+	for (const auto& [commissionPriority, cid] : byPriority) {
+		auto& cominst = commissionInstances[cid];
 		const GSCommission* gscomm = cominst.blueprint;
 		ServerGameObject* obj = cominst.handlerObject.get();
 		if (!obj) continue;
@@ -257,7 +306,9 @@ void AIController::update()
 			size_t requiredCount = (size_t)std::max(0, charNeeds[ri]);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			//size_t inCtrCount = reqinst.foundations.size();
-			if (existingCount < requiredCount) {
+			if (existingCount >= requiredCount)
+				completeCount += 1;
+			else if (!reserved) {
 				// The ladder's rungs best first, as WKB.exe (AI_Character_Requirement 0x4c7da0, which
 				// tries each rung in order and stops at the first that spawns): a rung is spawned at
 				// the idle buildings of its finder where its "Spawn <type>" command can be executed
@@ -272,7 +323,7 @@ void AIController::update()
 					const OrderBlueprint* orderBp = &gs->orders[ordid];
 					const int cmdid = gs->commands.names.getIndex(spawnName);
 					const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
-					bool served = false;
+					bool served = false, unaffordable = false;
 					for (ServerGameObject* building : rung.finder->eval(&ctx)) {
 						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 							continue;
@@ -281,8 +332,28 @@ void AIController::update()
 								served = true;
 							continue;
 						}
-						if ((command && !command->canBeExecuted(building)) || !this->gameObj->canAffordObject(rung.type))
+						// impossible here (tech level, alignment): try another building; only waiting
+						// (the cost, population) or short of the type's cost: the rung can't be paid
+						if (command) {
+							SrvScriptContext cctx(Server::instance, building);
+							auto _s = cctx.selectedObject.change(building);
+							auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+							if (!std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
+								continue;
+							if (!std::all_of(command->conditionsWait.begin(), command->conditionsWait.end(), holds)) {
+								unaffordable = true;
+								continue;
+							}
+							if (!command->canBeExecuted(building))
+								continue;
+						}
+						if (!this->gameObj->canAffordObject(rung.type)) {
+							unaffordable = true;
 							continue;
+						}
+						if (getenv("WKB_TRACE_COMMISSION"))
+							printf("COMMISSION t=%.2f \"%s\" (priority %.1f, handler %u): spawn %s at %u, required %zu, existing %zu\n", Server::instance->timeManager.currentTime,
+								Server::instance->gameSet->commissions.getString(gscomm).c_str(), commissionPriority, obj->id, rung.type->name.c_str(), building->id, requiredCount, existingCount);
 						Order* order = building->orderConfig.addOrder(orderBp, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, {-1,-1,-1}, false);
 						auto* task = (SpawnTask*)(order->tasks[0].get());
 						task->setSpawnBlueprint(rung.type);
@@ -291,10 +362,13 @@ void AIController::update()
 					}
 					if (served)
 						break;
+					// the best rung that could be spawned but can't be paid for: the resources are
+					// kept for it (no cheaper rung, nothing lower down)
+					if (unaffordable && !Server::instance->aggressiveAI) {
+						reserved = true;
+						break;
+					}
 				}
-			}
-			else {
-				completeCount += 1;
 			}
 		}
 
