@@ -651,6 +651,12 @@ struct FinderMetreRadius : ObjectFinder {
 		default:;
 		}
 		int objclass = obj->blueprint->bpClass;
+		// WKB.exe's radius search doesn't find markers (it has no MARKERS_ONLY term): in the
+		// original's 30 s from its Marjoria's Keep save, "Pecked by Crow" created all 8 due crow
+		// markers, so "Less than 2 Crow Markers Within 50m" never counted the ones beside it;
+		// counting them held wkbre2 to 3
+		if (objclass == Tags::GAMEOBJCLASS_MARKER && classFilter != 4)
+			return false;
 		switch (classFilter) {
 		case 1: if (objclass != Tags::GAMEOBJCLASS_BUILDING) return false; break;
 		case 2: if (objclass != Tags::GAMEOBJCLASS_CHARACTER) return false; break;

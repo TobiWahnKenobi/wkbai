@@ -298,6 +298,32 @@ bool Server::saveGame(const char* filename)
 	w.line("NEXT_UNIQUE_ID %u", nextUniqueId);
 	w.line("");
 	writeObject(w, *this, level->dyncast<ServerGameObject>());
+	// the pending scripted sequences, as the original (after the level)
+	w.line("");
+	auto ids = [](const std::vector<SrvGORef>& objs) {
+		std::string s;
+		size_t n = 0;
+		for (const SrvGORef& r : objs)
+			if (r.get()) { s += " " + std::to_string(r.get()->id); n++; }
+		return std::to_string(n) + s;
+	};
+	for (const auto& [at, ds] : delayedSequences) {
+		const ServerGameObject* executor = ds.executor.get();
+		if (!ds.actionSequence || !executor)
+			continue;
+		w.line("DELAYED_SEQUENCE_EXECUTION %.9g %s %u %s 1", at, inQuotes(w.gs.actionSequences.getString(ds.actionSequence)).c_str(),
+			executor->id, ids(ds.selfs).c_str());
+	}
+	w.line("");
+	for (int repeat = 0; repeat < 2; repeat++)
+		for (const auto& ops : repeat ? repeatOverPeriodSequences : overPeriodSequences) {
+			const ServerGameObject* executor = ops.executor.get();
+			if (!ops.actionSequence || !executor)
+				continue;
+			w.line("%s %s %u %.9g %.9g %d %d %s", repeat ? "REPEAT_SEQUENCE_OVER_PERIOD" : "EXECUTE_SEQUENCE_OVER_PERIOD",
+				inQuotes(w.gs.actionSequences.getString(ops.actionSequence)).c_str(), executor->id, ops.startTime, ops.period,
+				ops.numTotalExecutions, ops.numExecutionsDone, ids(ops.remainingObjects).c_str());
+		}
 	const bool ok = !ferror(f);
 	fclose(f);
 	return ok;

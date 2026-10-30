@@ -79,6 +79,42 @@ void Server::loadSaveGame(const char * filename)
 		case Tags::SAVEGAME_TIME_MANAGER_STATE:
 			timeManager.load(gsf);
 			break;
+		// The pending scripted sequences, after the level (they name its objects). The original's
+		// saves have hundreds (corpses' "Sink And Remove", "Pecked by Crow", ambient sounds); a
+		// loaded game had lost them all, so dead units never sank and no crows came.
+		// DELAYED_SEQUENCE_EXECUTION <time> "<sequence>" <executor> <count> <ids...> <1>
+		case Tags::SAVEGAME_DELAYED_SEQUENCE_EXECUTION: {
+			const game_time_t at = (game_time_t)gsf.nextFloat();
+			DelayedSequence ds;
+			ds.actionSequence = gameSet->actionSequences.readPtr(gsf);
+			ds.executor = findObject(gsf.nextInt());
+			const int count = gsf.nextInt();
+			for (int i = 0; i < count; i++)
+				if (ServerGameObject* obj = findObject(gsf.nextInt()))
+					ds.selfs.emplace_back(obj);
+			if (ds.actionSequence)
+				delayedSequences.insert({ at, ds });
+			break;
+		}
+		// EXECUTE_SEQUENCE_OVER_PERIOD / REPEAT_SEQUENCE_OVER_PERIOD "<sequence>" <executor>
+		// <start time> <period> <executions in all> <done> <count> <remaining ids...>
+		case Tags::SAVEGAME_EXECUTE_SEQUENCE_OVER_PERIOD:
+		case Tags::SAVEGAME_REPEAT_SEQUENCE_OVER_PERIOD: {
+			OverPeriodSequence ops;
+			ops.actionSequence = gameSet->actionSequences.readPtr(gsf);
+			ops.executor = findObject(gsf.nextInt());
+			ops.startTime = gsf.nextFloat();
+			ops.period = gsf.nextFloat();
+			ops.numTotalExecutions = gsf.nextInt();
+			ops.numExecutionsDone = gsf.nextInt();
+			const int count = gsf.nextInt();
+			for (int i = 0; i < count; i++)
+				if (ServerGameObject* obj = findObject(gsf.nextInt()))
+					ops.remainingObjects.emplace_back(obj);
+			if (ops.actionSequence)
+				(tag == Tags::SAVEGAME_REPEAT_SEQUENCE_OVER_PERIOD ? repeatOverPeriodSequences : overPeriodSequences).push_back(std::move(ops));
+			break;
+		}
 		case Tags::SAVEGAME_NUM_HUMAN_PLAYERS: {
 			size_t numPlayers = gsf.nextInt();
 			numPlayers = std::min(clientLinks.size(), numPlayers);
