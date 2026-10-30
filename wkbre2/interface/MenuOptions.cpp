@@ -104,6 +104,15 @@ namespace {
 		list.push_back(withEnabled(toggle("waterDetail", "lighting", "Water reflections and foam", rs.waterDetail), [&rs]() { return rs.waterSurface; }));
 		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterSurface && rs.waterDetail; }));
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
+		{
+			MenuOption o;
+			o.id = "terrainTessellation"; o.page = "lighting"; o.label = "Terrain tessellation";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.terrainTessellation; };
+			o.set = [&rs](float v) { rs.terrainTessellation = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("grass", "lighting", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "lighting", "Grass density", rs.grassDensity, 0.0f, 6.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));

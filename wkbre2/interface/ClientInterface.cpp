@@ -581,6 +581,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Water: sky reflection, depth, shore foam", &s.waterDetail);
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
+			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
+		}
 		ImGui::Checkbox("Grass", &s.grass);
 		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 6.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
@@ -657,6 +661,13 @@ void ClientInterface::drawSettingsWindow(bool* open)
 // ground's slope under the object, so that wall segments follow the terrain as one band. The
 // slope comes from the ground heights at the ends of the model's bounding box along its own
 // axes; the longer axis also sets the height, so that neighbouring segments meet at their ends.
+// The ground's height where the terrain is drawn: the tessellated terrain's smooth surface, or
+// the game's own heights
+static float VisualGroundHeight(const Terrain* terrain, float x, float z)
+{
+	return g_terrainTessellationActive ? terrain->getSmoothHeight(x, z) : terrain->getHeight(x, z);
+}
+
 static Matrix GetShearToGroundMatrix(const Terrain* terrain, Model* model, const Matrix& world, const Vector3& position)
 {
 	const auto [low, high] = model->interpolateBoundingBox(0);
@@ -666,7 +677,7 @@ static Matrix GetShearToGroundMatrix(const Terrain* terrain, Model* model, const
 		const Vector3 wa = a.transform(world), wb = b.transform(world);
 		Vector3 d(wb.x - wa.x, 0.0f, wb.z - wa.z);
 		const float len = d.len2xz();
-		const float ha = terrain->getHeight(wa.x, wa.z), hb = terrain->getHeight(wb.x, wb.z);
+		const float ha = VisualGroundHeight(terrain, wa.x, wa.z), hb = VisualGroundHeight(terrain, wb.x, wb.z);
 		return AxisSlope{ len > 1e-3f ? d / len : Vector3(0, 0, 0), len > 1e-3f ? (hb - ha) / len : 0.0f, len, (ha + hb) * 0.5f };
 	};
 	const AxisSlope ax = axisSlope(Vector3(low.x, 0, centre.z), Vector3(high.x, 0, centre.z));
@@ -791,6 +802,14 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 
 	obj->sceneEntity.model = model;
 	obj->sceneEntity.transform = transformMatrix;
+	// with the terrain tessellated, an object standing on the ground is drawn on its smooth
+	// surface: lifted or lowered by the difference to the game's height there (the game itself
+	// keeps its heights: placement, movement and multiplayer are unchanged)
+	if (g_terrainTessellationActive && client->terrain && !obj->blueprint->shearModel) {
+		const float ground = client->terrain->getHeight(obj->position.x, obj->position.z);
+		if (std::abs(obj->position.y - ground) < 0.25f)
+			obj->sceneEntity.transform._42 += client->terrain->getSmoothHeight(obj->position.x, obj->position.z) - ground;
+	}
 	if (obj->blueprint->shearModel && client->terrain)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
 	obj->sceneEntity.color = obj->getPlayer()->color;

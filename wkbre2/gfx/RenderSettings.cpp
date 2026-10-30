@@ -3,6 +3,8 @@
 // Licensed under the GNU General Public License 3
 
 #include "RenderSettings.h"
+
+bool g_terrainTessellationActive = false;
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 
@@ -39,6 +41,7 @@ void RenderSettings::load()
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	grass = g_settings.value<bool>("grass", def.grass);
+	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
 	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
@@ -107,6 +110,7 @@ void RenderSettings::save()
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
 	g_settings["grass"] = grass;
+	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["grassDensity"] = grassDensity;
 	g_settings["grassHeight"] = grassHeight;
 	g_settings["grassDistance"] = grassDistance;

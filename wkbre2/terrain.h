@@ -78,6 +78,9 @@ struct Terrain
 	}
 
 	float getHeight(float x, float z) const;
+	// the smooth surface the tessellated terrain is drawn with: a Catmull-Rom spline through the
+	// vertex heights (exact at the vertices), as the terrain renderer's SmoothHeight
+	float getSmoothHeight(float x, float z) const;
 	float getHeightEx(float x, float z, bool floatOnWater) const;
 
 	Vector3 getNormal(int x, int z) const;

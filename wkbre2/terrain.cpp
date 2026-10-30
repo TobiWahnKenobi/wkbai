@@ -32,6 +32,23 @@ float Terrain::getHeight(float ipx, float ipy) const {
 	return hr;
 }
 
+float Terrain::getSmoothHeight(float ipx, float ipz) const
+{
+	const float gx = edge + ipx / 5.0f, gz = edge + ipz / 5.0f;
+	const int ix = (int)std::floor(gx), iz = (int)std::floor(gz);
+	const float fx = gx - ix, fz = gz - iz;
+	auto at = [&](int x, int z) {
+		return getVertex(std::clamp(x, 0, (int)width), std::clamp(z, 0, (int)height));
+	};
+	auto spline = [](float a, float b, float c, float d, float t) {
+		return 0.5f * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (3 * b - a - 3 * c + d) * t * t * t);
+	};
+	float row[4];
+	for (int k = -1; k <= 2; k++)
+		row[k + 1] = spline(at(ix - 1, iz + k), at(ix, iz + k), at(ix + 1, iz + k), at(ix + 2, iz + k), fx);
+	return spline(row[0], row[1], row[2], row[3], fz);
+}
+
 float Terrain::getHeightEx(float x, float z, bool floatOnWater) const
 {
 	float h = getHeight(x, z);

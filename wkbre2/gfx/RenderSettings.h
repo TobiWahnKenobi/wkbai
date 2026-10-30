@@ -4,6 +4,10 @@
 
 #pragma once
 
+// whether the terrain is drawn tessellated this frame (the setting is on and the GPU can):
+// the client draws objects on the smooth surface then (Terrain::getSmoothHeight)
+extern bool g_terrainTessellationActive;
+
 // Render and camera settings that can change while the game runs (the temporary settings
 // window, F10). Loaded from wkconfig.json at startup; the renderers read them every frame.
 // The defaults are the original game's values where it has them.
@@ -37,6 +41,10 @@ struct RenderSettings {
 	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
 	// square unit (0 to TerrainGrassBuilder::MAX_DENSITY), their height (times 0.4-0.85 units)
 	// and how far from the camera they are drawn
+	// the terrain subdivided on the GPU into a smooth surface through its height points (0 off,
+	// 1-3: up to 4, 8, 16 pieces per tile edge near the camera); objects are drawn on that surface
+	// (the game's own heights don't change). Only with a GPU that can tessellate.
+	int terrainTessellation = 2;
 	bool grass = true;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping

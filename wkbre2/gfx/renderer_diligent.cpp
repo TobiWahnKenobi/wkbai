@@ -598,6 +598,7 @@ struct DiligentRenderer : DiligentGfx
 			factory->SetMessageCallback(DiligentMessage);
 			EngineVkCreateInfo eci;
 			eci.EnableValidation = validation;
+			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
 			eci.DynamicHeapSize = 64 << 20;
 			eci.AdapterId = (adapter >= 0) ? (Uint32)adapter : PickVulkanAdapter();
 			factory->CreateDeviceAndContextsVk(eci, &device, contexts);
@@ -613,6 +614,7 @@ struct DiligentRenderer : DiligentGfx
 				ferr("Diligent: could not load d3d12.dll.");
 			EngineD3D12CreateInfo eci;
 			eci.EnableValidation = validation;
+			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
 			if (adapter >= 0) eci.AdapterId = (Uint32)adapter;
 			factory->CreateDeviceAndContextsD3D12(eci, &device, contexts);
 			ctx.Attach(contexts[0]);

@@ -99,7 +99,34 @@ cbuffer SunBuffer
 	float4 GrassParams; // grass: on, distance, game time in seconds
 	float4 WaterFlowParams; // on, speed in units per second at full flow
 	float4 GrassLook; // grass: the share of the blades drawn (density / maximum), height factor
+	float4 TessParams; // terrain tessellation: on, most pieces per tile edge, distance of full detail, map edge in tiles
+	float4 TessGrid;   // the height grid's last indices (width, height)
 };
+
+Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
+
+// The tessellated terrain's surface: a Catmull-Rom spline through the vertex heights in both
+// directions (exact at the vertices); Terrain::getSmoothHeight is the same on the CPU
+float GridHeight(int2 g)
+{
+	return heightTexture.Load(int3(clamp(g, int2(0, 0), (int2)TessGrid.xy), 0));
+}
+
+float CatmullRom(float a, float b, float c, float d, float t)
+{
+	return 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (3 * b - a - 3 * c + d) * t * t * t);
+}
+
+float SmoothHeight(float2 xz)
+{
+	float2 g = xz / 5 + TessParams.w;
+	int2 i = (int2)floor(g);
+	float2 f = g - i;
+	float row[4];
+	[unroll] for (int k = -1; k <= 2; k++)
+		row[k + 1] = CatmullRom(GridHeight(i + int2(-1, k)), GridHeight(i + int2(0, k)), GridHeight(i + int2(1, k)), GridHeight(i + int2(2, k)), f.x);
+	return CatmullRom(row[0], row[1], row[2], row[3], f.y);
+}
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
 // out over its radius, half wrapped around the surface so that fires also light the ground
@@ -239,6 +266,69 @@ VS_OUTPUT VS(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint TangentPac
 	return output;
 }
 
+// Terrain tessellation (RenderSettings::terrainTessellation): each triangle is cut into up to
+// TessParams.y pieces per edge near the camera, fewer further out (an edge's factor from its
+// midpoint, so neighbours always agree and no cracks open), and every new point is put on the
+// smooth surface, with the normal from its slope
+VS_OUTPUT VS_Tess(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint TangentPacked : ATTRIB2, uint BitangentPacked : ATTRIB3, float2 Texcoord : ATTRIB4)
+{
+	return VS(Pos3, NormalPacked, TangentPacked, BitangentPacked, Texcoord);
+}
+
+struct TESS_FACTORS
+{
+	float Edges[3] : SV_TessFactor;
+	float Inside : SV_InsideTessFactor;
+};
+
+float TessFactorAt(float3 p)
+{
+	float d = distance(p, FogCamera.xyz);
+	return clamp(TessParams.y * saturate(1 - (d - TessParams.z * 0.25) / TessParams.z), 1, TessParams.y);
+}
+
+TESS_FACTORS HS_Const(InputPatch<VS_OUTPUT, 3> p)
+{
+	TESS_FACTORS o;
+	o.Edges[0] = TessFactorAt(0.5 * (p[1].FragPos + p[2].FragPos));
+	o.Edges[1] = TessFactorAt(0.5 * (p[2].FragPos + p[0].FragPos));
+	o.Edges[2] = TessFactorAt(0.5 * (p[0].FragPos + p[1].FragPos));
+	o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
+	return o;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HS_Const")]
+VS_OUTPUT HS(InputPatch<VS_OUTPUT, 3> p, uint i : SV_OutputControlPointID)
+{
+	return p[i];
+}
+
+[domain("tri")]
+VS_OUTPUT DS(TESS_FACTORS factors, float3 b : SV_DomainLocation, const OutputPatch<VS_OUTPUT, 3> p)
+{
+	VS_OUTPUT o;
+	float3 pos = p[0].FragPos * b.x + p[1].FragPos * b.y + p[2].FragPos * b.z;
+	pos.y = SmoothHeight(pos.xz);
+	const float e = 0.6;
+	float3 n = normalize(float3(SmoothHeight(pos.xz - float2(e, 0)) - SmoothHeight(pos.xz + float2(e, 0)), 2 * e,
+		SmoothHeight(pos.xz - float2(0, e)) - SmoothHeight(pos.xz + float2(0, e))));
+	float3 t = p[0].Tangent * b.x + p[1].Tangent * b.y + p[2].Tangent * b.z;
+	float3 bt = p[0].Bitangent * b.x + p[1].Bitangent * b.y + p[2].Bitangent * b.z;
+	o.Pos = mul(float4(pos, 1), Transform);
+	o.FragPos = pos;
+	o.Norm = n;
+	o.Color = p[0].Color * b.x + p[1].Color * b.y + p[2].Color * b.z;
+	o.Texcoord = p[0].Texcoord * b.x + p[1].Texcoord * b.y + p[2].Texcoord * b.z;
+	o.Fog = FogAmount(pos, distance(pos, FogCamera.xyz));
+	o.Tangent = normalize(t - n * dot(t, n));
+	o.Bitangent = normalize(bt - n * dot(bt, n));
+	return o;
+}
+
 struct LAKE_OUTPUT
 {
 	float4 Pos : SV_POSITION;
@@ -370,6 +460,8 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	static const float2 shape[9] = { float2(-1, 0), float2(1, 0), float2(-0.7, 0.55), float2(1, 0), float2(0.7, 0.55),
 		float2(-0.7, 0.55), float2(-0.7, 0.55), float2(0.7, 0.55), float2(0, 1) };
 	float2 s = shape[VertexId];
+	if (TessParams.x != 0)
+		Root.y = SmoothHeight(Root.xz);
 	float dist = distance(Root, FogCamera.xyz);
 	float grow = saturate((GrassParams.y - dist) / (GrassParams.y * 0.3)) * step(Colour.a, GrassLook.x);
 	float height = YawHeight.y * grow * GrassLook.y;
@@ -418,6 +510,10 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	float occlusion = lerp(0.35, 1.0, input.Up);
 	float3 c = albedo * ((wrapped * 0.75 + transmitted) * shadow + sky * 0.3 * occlusion) + specular * shadow
 		+ albedo * FireLight(input.World, n);
+	// never much darker than the ground under it: seen edge-on from low down, a blade's side away
+	// from the sun still gets the light bounced up from the sunlit meadow around it
+	float ground = max(SunDirection.y, 1.0 / 3.0) * shadow;
+	c = max(c, albedo * ground * lerp(0.7, 0.9, input.Up));
 	c = lerp(c, FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), 1);
 }
@@ -594,6 +690,9 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> splatPipeline;
 	RefCntAutoPtr<ITexture> splatDiffuse, splatNormal, splatCorners;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
+	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
+	bool tessellation = false; // the GPU can tessellate
+	RefCntAutoPtr<IPipelineState> tessPipeline, tessSplatPipeline;
 	RefCntAutoPtr<IBuffer> sunBuffer;
 	RefCntAutoPtr<IBuffer> trnVertexBuffer;
 
@@ -716,16 +815,20 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 800;
+	cbDesc.Size = 832;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunBuffer);
 
+	// the hull and domain shaders of the tessellated terrain, where the GPU has them
+	_impl->tessellation = device->GetDeviceInfo().Features.Tessellation == DEVICE_FEATURE_STATE_ENABLED;
+	const SHADER_TYPE tessStages = _impl->tessellation ? (SHADER_TYPE_HULL | SHADER_TYPE_DOMAIN) : SHADER_TYPE_UNKNOWN;
 	const PipelineResourceDesc resources[] = {
-		{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_VS_PS, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | tessStages, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VS_PS | tessStages, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -826,6 +929,28 @@ void DiligentEnhancedTerrainRenderer::init()
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatDiffuse")->Set(_impl->splatDiffuse->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatNormal")->Set(_impl->splatNormal->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatCorners")->Set(_impl->splatCorners->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	}
+
+	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
+	{
+		std::vector<float> heights((size_t)(terrain->width + 1) * (terrain->height + 1));
+		for (int z = 0; z <= (int)terrain->height; z++)
+			for (int x = 0; x <= (int)terrain->width; x++)
+				heights[(size_t)z * (terrain->width + 1) + x] = terrain->getVertex(x, z);
+		TextureDesc hdesc;
+		hdesc.Name = "Terrain heights";
+		hdesc.Type = RESOURCE_DIM_TEX_2D;
+		hdesc.Width = terrain->width + 1;
+		hdesc.Height = terrain->height + 1;
+		hdesc.Format = TEX_FORMAT_R32_FLOAT;
+		hdesc.BindFlags = BIND_SHADER_RESOURCE;
+		hdesc.Usage = USAGE_DEFAULT;
+		TextureSubResData hsub{ heights.data(), (Uint64)hdesc.Width * 4 };
+		TextureData hdata{ &hsub, 1 };
+		device->CreateTexture(hdesc, &hdata, &_impl->heightMap);
+		if (!_impl->heightMap)
+			ferr("Diligent: could not create the terrain height texture.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "heightTexture")->Set(_impl->heightMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	// The water's flow map: one texel per tile
@@ -977,6 +1102,33 @@ void DiligentEnhancedTerrainRenderer::init()
 	if (!_impl->splatPipeline)
 		ferr("Diligent: could not create the splat terrain pipeline.");
 	ci.pPS = ps;
+	if (_impl->tessellation) {
+		// the same with the terrain tessellated: triangles as patches, both faces (the
+		// tessellator's winding isn't the index lists')
+		RefCntAutoPtr<IShader> tessVs = createShader(SHADER_TYPE_VERTEX, "VS_Tess");
+		RefCntAutoPtr<IShader> hs = createShader(SHADER_TYPE_HULL, "HS");
+		RefCntAutoPtr<IShader> ds = createShader(SHADER_TYPE_DOMAIN, "DS");
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+		gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+		ci.pVS = tessVs;
+		ci.pHS = hs;
+		ci.pDS = ds;
+		ci.PSODesc.Name = "Enhanced terrain, tessellated";
+		device->CreateGraphicsPipelineState(ci, &_impl->tessPipeline);
+		ci.PSODesc.Name = "Splat terrain, tessellated";
+		ci.pPS = splatPs;
+		device->CreateGraphicsPipelineState(ci, &_impl->tessSplatPipeline);
+		if (!_impl->tessPipeline || !_impl->tessSplatPipeline) {
+			printf("Diligent: no tessellated terrain (pipeline failed)\n");
+			_impl->tessellation = false;
+		}
+		ci.pHS = nullptr;
+		ci.pDS = nullptr;
+		ci.pVS = vs;
+		ci.pPS = ps;
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
+	}
 
 	// Water: half transparent over the terrain, depth tested but not written
 	RefCntAutoPtr<IShader> lakeVs = createShader(SHADER_TYPE_VERTEX, "VS_Lake");
@@ -1166,6 +1318,15 @@ bool DiligentEnhancedTerrainRenderer::updateHeights()
 	if (size != _impl->trnVertexBuffer->GetDesc().Size)
 		return false;
 	dgfx->ctx->UpdateBuffer(_impl->trnVertexBuffer, 0, size, trnVertices.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	if (_impl->heightMap) {
+		std::vector<float> heights((size_t)(terrain->width + 1) * (terrain->height + 1));
+		for (int z = 0; z <= (int)terrain->height; z++)
+			for (int x = 0; x <= (int)terrain->width; x++)
+				heights[(size_t)z * (terrain->width + 1) + x] = terrain->getVertex(x, z);
+		Box box{ 0, (Uint32)(terrain->width + 1), 0, (Uint32)(terrain->height + 1) };
+		TextureSubResData sub{ heights.data(), (Uint64)(terrain->width + 1) * 4 };
+		dgfx->ctx->UpdateTexture(_impl->heightMap, 0, 0, box, sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
 	// the chunks' boxes: every height the map can have (the edited ones aren't measured again)
 	for (Impl::Chunk& chunk : _impl->chunks) {
 		chunk.low.y = std::min(chunk.low.y, 0.0f);
@@ -1335,6 +1496,17 @@ void DiligentEnhancedTerrainRenderer::render()
 	grassParams[1] = std::max(1.0f, g_renderSettings.grassDistance);
 	grassParams[2] = (float)std::fmod(shadows.time, 3600.0);
 	grassParams[3] = 0.0f;
+	const bool tessOn = _impl->tessellation && g_renderSettings.terrainTessellation > 0;
+	g_terrainTessellationActive = tessOn;
+	float* tessParams = (float*)(sbdata + 800);
+	tessParams[0] = tessOn ? 1.0f : 0.0f;
+	tessParams[1] = (float)(2 << g_renderSettings.terrainTessellation); // 4, 8, 16
+	tessParams[2] = 160.0f;
+	tessParams[3] = (float)terrain->edge;
+	float* tessGrid = (float*)(sbdata + 816);
+	tessGrid[0] = (float)terrain->width;
+	tessGrid[1] = (float)terrain->height;
+	tessGrid[2] = tessGrid[3] = 0.0f;
 	float* grassLook = (float*)(sbdata + 784);
 	grassLook[0] = std::clamp(g_renderSettings.grassDensity / TerrainGrassBuilder::MAX_DENSITY, 0.0f, 1.0f);
 	grassLook[1] = std::max(0.0f, g_renderSettings.grassHeight);
@@ -1442,7 +1614,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	const Uint64 vbOffset = 0;
 	ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 	// the splat pipeline shares the signature: the same bindings per tile texture
-	ctx->SetPipelineState(g_renderSettings.terrainSplat ? _impl->splatPipeline : _impl->pipeline);
+	if (g_terrainTessellationActive)
+		ctx->SetPipelineState(g_renderSettings.terrainSplat ? _impl->tessSplatPipeline : _impl->tessPipeline);
+	else
+		ctx->SetPipelineState(g_renderSettings.terrainSplat ? _impl->splatPipeline : _impl->pipeline);
 	for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
 		if (_impl->frameIndices[t].empty())
 			continue;
