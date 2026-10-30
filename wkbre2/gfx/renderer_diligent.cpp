@@ -509,6 +509,7 @@ struct DiligentRenderer : DiligentGfx
 	}
 
 	ITextureView* CurrentColorTarget() override { return currentColorTarget(); }
+	ITextureView* CurrentDepthTarget() override { return currentDepthTarget(); }
 
 	void RestoreRenderTargets() override
 	{

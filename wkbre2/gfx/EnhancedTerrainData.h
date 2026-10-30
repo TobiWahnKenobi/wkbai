@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 #include "renderer.h"
 #include "../util/vecmat.h"
 #include "bitmap.h"
@@ -69,7 +72,10 @@ struct GrassBlade {
 };
 struct TerrainGrassBuilder {
 	std::map<std::string, Bitmap> atlases; // the tile pictures, by texture file
-	static constexpr float MAX_DENSITY = 6.0f; // blades per square unit at the density slider's top
+	static constexpr float MAX_DENSITY = 24.0f; // blades per square unit at the density slider's top
+	// the blades are built in steps of 6 per square unit, at least the density in use: the
+	// density slider then draws a share of them (rebuilt when it goes above)
+	static float BuildDensity(float density) { return std::clamp(std::ceil(density / 6.0f - 1e-3f) * 6.0f, 6.0f, MAX_DENSITY); }
 	// adds tile (x, z)'s blades, about density per square unit
 	void addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out);
 };

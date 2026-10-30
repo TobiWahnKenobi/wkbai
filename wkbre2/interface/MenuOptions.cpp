@@ -104,9 +104,9 @@ namespace {
 			MenuOption o;
 			o.id = "waterQuality"; o.page = "lighting"; o.label = "Water";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "Original", "Low", "High" };
+			o.choices = { "Off", "Original", "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.waterQuality; };
-			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, 3); };
+			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, 5); };
 			list.push_back(o);
 		}
 		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
@@ -121,7 +121,7 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("grass", "lighting", "Grass", rs.grass));
-		list.push_back(withEnabled(slider("grassDensity", "lighting", "Grass density", rs.grassDensity, 0.0f, 6.0f, "%.1f"),
+		list.push_back(withEnabled(slider("grassDensity", "lighting", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
 		list.push_back(withEnabled(slider("grassHeight", "lighting", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
 			[&rs]() { return rs.grass; }));

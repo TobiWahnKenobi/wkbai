@@ -578,8 +578,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
 		{
-			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "High (tessellated waves)" };
-			ImGui::Combo("Water", &s.waterQuality, waterLevels, 4);
+			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "Medium", "High (tessellated waves)", "Ultra" };
+			ImGui::Combo("Water", &s.waterQuality, waterLevels, 6);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
@@ -588,7 +588,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
 		}
 		ImGui::Checkbox("Grass", &s.grass);
-		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 6.0f, "%.1f");
+		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 24.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Grass distance", &s.grassDistance, 10.0f, 250.0f, "%.0f");
 		ImGui::Checkbox("Static shadows", &s.staticShadows);

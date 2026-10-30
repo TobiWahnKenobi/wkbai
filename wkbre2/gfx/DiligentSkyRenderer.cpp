@@ -17,6 +17,7 @@
 #include "../Camera.h"
 #include "../file.h"
 #include "../util/util.h"
+#include <algorithm>
 #include <cmath>
 #include <iterator>
 #include <string>
@@ -267,10 +268,13 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the sky pipeline.");
 	_impl->signature->CreateShaderResourceBinding(&_impl->srb, true);
+	for (int i = 0; i < 5; i++) // the water reflects them
+		_impl->dgfx->shadows.skyFaces[i] = _impl->loaded ? _impl->faces[i] : nullptr;
 }
 
 DiligentSkyRenderer::~DiligentSkyRenderer()
 {
+	std::fill(std::begin(_impl->dgfx->shadows.skyFaces), std::end(_impl->dgfx->shadows.skyFaces), nullptr);
 	for (texture t : _impl->faces)
 		if (t)
 			_impl->dgfx->FreeTexture(t);

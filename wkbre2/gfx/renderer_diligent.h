@@ -45,6 +45,7 @@ struct DiligentGfx : IRenderer
 	// The colour target the 3D scene is being drawn into (the back buffer, or the
 	// post-processing scene target while that is on): the water copies it for its refraction
 	virtual Diligent::ITextureView* CurrentColorTarget() = 0;
+	virtual Diligent::ITextureView* CurrentDepthTarget() = 0;
 
 	// Post-processing (ambient occlusion, bloom): BeginPostProcessing(true) before ClearFrame sends
 	// the frame's 3D drawing into offscreen targets; ApplyPostProcessing, after the 3D scene and
@@ -77,6 +78,9 @@ struct DiligentGfx : IRenderer
 		float skyLight[3][3] = {};
 		float skyLightLuminance = 1.0f;
 		bool skyLightValid = false;
+		// the sky box's faces front (+z), right (+x), back, left and top (DiligentSkyRenderer),
+		// for the water's reflection; null without a sky
+		texture skyFaces[5] = {};
 	} shadows;
 };
 
