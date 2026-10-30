@@ -38,6 +38,7 @@ Texture2D<float> shadowTexture;
 SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
+Texture2D sceneTexture; // the frame behind the water, for its refraction (Low and High)
 Texture2DArray splatDiffuse;
 Texture2DArray splatNormal;
 Texture2D<uint> splatCorners;
@@ -88,16 +89,16 @@ cbuffer SunBuffer
 	float4 LakeColour; // water surface: the map's fog colour, half transparent (as in wkbre2 before)
 	float4 WaterLayers; // UV offsets of the two texture layers
 	float4 WaterRipples; // UV offsets of the two ripple layers
-	float4 WaterParams; // on, UV per world unit, ripple UV per world unit
+	float4 WaterParams; // on, UV per world unit, ripple UV per world unit, refraction on
 	float4 BlobParams; // on, 1 / map width, 1 / map depth, map edge in world units
-	// RenderSettings::waterDetail: the sky box's colour above (w: on) and at the horizon, for
+	// from RenderSettings::waterQuality 2 (Low): the sky box's colour above (w: on) and at the horizon, for
 	// the water's reflection (ShadowEnvironment::skyLight), else the fog colour
 	float4 WaterSkyUp;
 	float4 WaterSkyHorizon;
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
-	float4 GrassParams; // grass: on, distance, game time in seconds
-	float4 WaterFlowParams; // on, speed in units per second at full flow
+	float4 GrassParams; // grass: on, distance, a steady clock in seconds (the waves', flow's and sway's)
+	float4 WaterFlowParams; // on, speed in units per second at full flow; High water: most pieces per tile edge, distance of full detail
 	float4 GrassLook; // grass: the share of the blades drawn (density / maximum), height factor
 	float4 TessParams; // terrain tessellation: on, most pieces per tile edge, distance of full detail, map edge in tiles
 	float4 TessGrid;   // the height grid's last indices (width, height)
@@ -335,6 +336,8 @@ struct LAKE_OUTPUT
 	float3 World : COLOR1;
 	float Depth : TEXCOORD0;
 	float Fog : FOG;
+	float3 Normal : NORMAL;  // High water: the waves' normal (else 0)
+	float Crest : TEXCOORD1; // High water: how near the top of a steep wave (0-1)
 };
 
 LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
@@ -344,14 +347,111 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 	output.World = Pos;
 	output.Depth = Depth;
 	output.Fog = FogAmount(Pos, distance(Pos, FogCamera.xyz));
+	output.Normal = float3(0, 0, 0);
+	output.Crest = 0;
 	return output;
+}
+
+// High water (RenderSettings::waterQuality 3). The water's tiles are patches cut into up to
+// WaterFlowParams.z pieces per edge near the camera and moved by four Gerstner waves (22, 11,
+// 6.5 and 3.7 units long): on seas and lakes they roll in towards the shore along the flow map
+// (0.35 units high in deep water, less in the shallows), on rivers they are small and follow
+// the current. The pixel shader adds finer ripples, foam on the waves' crests and the surf.
+float4 FlowAtTexel(float2 xz)
+{
+	// the flow map by texel fetches (no sampler in the domain shader), bilinear between tiles
+	float2 g = xz / 5 + TessParams.w - 0.5;
+	int2 i = (int2)floor(g);
+	float2 f = g - i;
+	int2 last = (int2)TessGrid.xy - 1;
+	float4 a = flowTexture.Load(int3(clamp(i, 0, last), 0)), b = flowTexture.Load(int3(clamp(i + int2(1, 0), 0, last), 0));
+	float4 c = flowTexture.Load(int3(clamp(i + int2(0, 1), 0, last), 0)), d = flowTexture.Load(int3(clamp(i + int2(1, 1), 0, last), 0));
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+void GerstnerWaves(float2 xz, float depth, float4 flow, out float3 offset, out float3 normal, out float crest)
+{
+	float2 fdir = flow.xy * 2 - 1;
+	float2 dir = length(fdir) > 0.1 ? normalize(fdir) : float2(0.8, 0.6);
+	float river = flow.a;
+	float amp = lerp(0.35 * saturate(depth / 2.5), 0.06 * saturate(depth / 1.0), river);
+	const float lengths[4] = { 22, 11, 6.5, 3.7 };
+	const float share[4] = { 1, 0.5, 0.25, 0.12 };
+	const float turn[4] = { 0, 0.6, -0.9, 2.1 };
+	offset = float3(0, 0, 0);
+	float3 n = float3(0, 1, 0);
+	crest = 0;
+	float t = GrassParams.z;
+	[unroll] for (int i = 0; i < 4; i++) {
+		float cs = cos(turn[i]), sn = sin(turn[i]);
+		float2 d = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
+		float k = 6.2831853 / lengths[i];
+		float w = sqrt(9.8 * k) * 0.8;
+		float a = amp * share[i];
+		float q = 0.55 / (k * max(a, 1e-4) * 4); // steepness, shared out so the crests don't loop
+		q = min(q, 1.0);
+		// towards the shore: the phase falls as the wave moves along d
+		float phase = k * dot(d, xz) - w * t + i * 1.7;
+		float s = sin(phase), c = cos(phase);
+		offset += float3(q * a * d.x * c, a * s, q * a * d.y * c);
+		n -= float3(d.x * k * a * c, q * k * a * s, d.y * k * a * c);
+		crest += q * k * a * s;
+	}
+	normal = normalize(n);
+	crest = saturate(crest * 1.4);
+}
+
+LAKE_OUTPUT VS_LakeTess(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
+{
+	return VS_Lake(Pos, Depth);
+}
+
+TESS_FACTORS HS_LakeConst(InputPatch<LAKE_OUTPUT, 3> p)
+{
+	TESS_FACTORS o;
+	float3 m[3] = { 0.5 * (p[1].World + p[2].World), 0.5 * (p[2].World + p[0].World), 0.5 * (p[0].World + p[1].World) };
+	[unroll] for (int i = 0; i < 3; i++) {
+		float d = distance(m[i], FogCamera.xyz);
+		o.Edges[i] = clamp(WaterFlowParams.z * saturate(1 - (d - WaterFlowParams.w * 0.25) / WaterFlowParams.w), 1, WaterFlowParams.z);
+	}
+	o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
+	return o;
+}
+
+[domain("tri")]
+[partitioning("fractional_odd")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(3)]
+[patchconstantfunc("HS_LakeConst")]
+LAKE_OUTPUT HS_Lake(InputPatch<LAKE_OUTPUT, 3> p, uint i : SV_OutputControlPointID)
+{
+	return p[i];
+}
+
+[domain("tri")]
+LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const OutputPatch<LAKE_OUTPUT, 3> p)
+{
+	LAKE_OUTPUT o;
+	float3 pos = p[0].World * b.x + p[1].World * b.y + p[2].World * b.z;
+	float depth = p[0].Depth * b.x + p[1].Depth * b.y + p[2].Depth * b.z;
+	float3 offset, n;
+	float crest;
+	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), offset, n, crest);
+	pos += offset;
+	o.Pos = mul(float4(pos, 1), Transform);
+	o.World = pos;
+	o.Depth = depth;
+	o.Fog = FogAmount(pos, distance(pos, FogCamera.xyz));
+	o.Normal = n;
+	o.Crest = crest;
+	return o;
 }
 
 // The water surface (docs/re/water.md). The original scrolls its texture layers along two wind
 // vectors and lights each tile corner with a sun glint off a scrolling field of normals. Here
 // per pixel: the map's Water_Surface.tga in two scrolling layers, two layers of a ripple normal
 // map, a sun glint, the sky (fog) colour reflected at grazing angles, and more transparency
-// where the water is shallow. With RenderSettings::waterDetail also: the sky box's colours
+// where the water is shallow. From RenderSettings::waterQuality 2 (Low) also: the sky box's colours
 // reflected along the view, a darker colour with depth, cloud shadows (on all but the glint)
 // and foam along the shore, broken up by the ripples. And with RenderSettings::waterFlow: the
 // ripples in three octaves, moving along the map's flow map (rivers downstream into their lake,
@@ -362,6 +462,20 @@ float2 FlowSlope(float2 ruv, float2 offset)
 	return (normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy + offset).xy - 0.5)
 		+ (normalTexture.Sample(cloudSampler, ruv * 2.3 + WaterRipples.zw + offset * 2.3).yx - 0.5) * 0.6
 		+ (normalTexture.Sample(cloudSampler, ruv * 0.43 - WaterRipples.yx + offset * 0.43).xy - 0.5) * 0.35;
+}
+
+// Slight refraction (Low and High): the ground under the water seen through it, shifted by the
+// surface's slope, more in deeper water. The water's own colour goes over it by its alpha;
+// both are graded and fogged (the frame behind it already is), so the result is opaque.
+float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, float alpha)
+{
+	if (WaterParams.w == 0)
+		return float4(waterGraded, alpha);
+	float2 size;
+	sceneTexture.GetDimensions(size.x, size.y);
+	float2 suv = svpos.xy / size + n.xz * (0.03 * saturate(depth / 1.5));
+	float3 behind = sceneTexture.Sample(inpSampler, saturate(suv)).rgb;
+	return float4(lerp(behind, waterGraded, alpha), 1);
 }
 
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
@@ -431,7 +545,59 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	}
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
+	if (WaterSkyUp.w != 0)
+		return WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
+}
+
+// High water's pixels: the waves' normal with finer ripples on it (carried by the flow), the
+// sky and sun as on Low, and foam on the crests and in the surf, broken up by the ripple map
+float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
+{
+	float2 uv = input.World.xz * WaterParams.y;
+	float2 ruv = input.World.xz * WaterParams.z * 2.5;
+	float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
+	float2 fdir = f.xy * 2 - 1;
+	float river = f.a;
+	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x;
+	const float cycle = 2.0;
+	float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
+	float w0 = 1 - abs(2 * p0 - 1);
+	float2 off0 = -flow * (p0 * cycle) * WaterParams.z * 2.5, off1 = -flow * (p1 * cycle) * WaterParams.z * 2.5;
+	float2 detail = FlowSlope(ruv, off0) * w0 + FlowSlope(ruv, off1) * (1 - w0);
+	detail += (normalTexture.Sample(cloudSampler, ruv * 4.3 + WaterRipples.zw * 3).xy - 0.5) * 0.3;
+	float3 n = normalize(input.Normal + float3(detail.x, 0, detail.y) * lerp(0.45, 0.7, river));
+	float3 v = normalize(FogCamera.xyz - input.World);
+	float3 r = reflect(-v, n);
+	float sr = saturate(dot(r, SunDirection));
+	float glint = pow(sr, 64) * 0.6 + pow(sr, 600) * 1.6 + pow(sr, 3) * 0.05;
+	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
+	float3 tex = lerp(inpTexture.Sample(cloudSampler, uv + WaterLayers.xy - flow * (p1 * cycle) * WaterParams.y * 0.5).rgb,
+		inpTexture.Sample(cloudSampler, uv + WaterLayers.xy - flow * (p0 * cycle) * WaterParams.y * 0.5).rgb, w0) * 0.5
+		+ 0.5 * inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb;
+	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(r.y)) : FogColor.rgb;
+	tex *= lerp(1.0, float3(0.55, 0.7, 0.8), saturate(input.Depth / 6));
+	tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10));
+	float cloud = CloudLight(input.World);
+	tex *= cloud;
+	sky *= lerp(1, cloud, 0.5);
+	// foam: broken up by two layers of the ripple map
+	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 + WaterRipples.xy).xy - 0.5) * 3)
+		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 2.7 - WaterRipples.yx).xy - 0.5) * 3 + 0.3);
+	// on the waves' crests
+	float crestFoam = saturate((input.Crest - 0.55) * 4) * smoothstep(0.15, 0.6, noise);
+	// the surf: bands that run in with the swell and break in the last 2 units of depth, and the
+	// swash right at the waterline
+	float surf = saturate((sin(input.Depth * 3 + GrassParams.z * 1.6) - 0.5) * 3) * saturate(1 - input.Depth / 2) * saturate(input.Depth * 6);
+	float swash = saturate(1 - input.Depth / 0.35);
+	float shoreFoam = max(surf * smoothstep(0.2, 0.55, noise), swash * smoothstep(0.1, 0.45, noise)) * (1 - 0.6 * river);
+	// white water where a narrow river runs fast
+	float rush = f.z * saturate(length(fdir) * 1.5) * river;
+	float riverFoam = saturate((detail.x + detail.y) * 3 - 0.4) * rush * rush * 0.35;
+	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
+	float3 c = lerp(lerp(tex, sky, fresnel * 0.65), float3(0.93, 0.96, 0.97) * lerp(1, cloud, 0.5), foam) + glint * cloud * (1 - foam);
+	float alpha = saturate(lerp(0.3, 0.85, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
+	return WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
 }
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
@@ -693,6 +859,9 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline, tessSplatPipeline;
+	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::waterQuality 3
+	RefCntAutoPtr<ITexture> sceneCopy; // the frame before the water, for its refraction
+	bool refraction = false; // this frame
 	RefCntAutoPtr<IBuffer> sunBuffer;
 	RefCntAutoPtr<IBuffer> trnVertexBuffer;
 
@@ -831,10 +1000,11 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_VERTEX | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_PIXEL, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatCorners", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -1150,6 +1320,26 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->lakePipeline);
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
+	if (_impl->tessellation) {
+		RefCntAutoPtr<IShader> lakeTessVs = createShader(SHADER_TYPE_VERTEX, "VS_LakeTess");
+		RefCntAutoPtr<IShader> lakeHs = createShader(SHADER_TYPE_HULL, "HS_Lake");
+		RefCntAutoPtr<IShader> lakeDs = createShader(SHADER_TYPE_DOMAIN, "DS_Lake");
+		RefCntAutoPtr<IShader> lakeHighPs = createShader(SHADER_TYPE_PIXEL, "PS_LakeHigh");
+		ci.PSODesc.Name = "Enhanced terrain water, high";
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+		ci.pVS = lakeTessVs;
+		ci.pHS = lakeHs;
+		ci.pDS = lakeDs;
+		ci.pPS = lakeHighPs;
+		device->CreateGraphicsPipelineState(ci, &_impl->highWaterPipeline);
+		if (!_impl->highWaterPipeline)
+			printf("Diligent: no high water (pipeline failed)\n");
+		ci.pHS = nullptr;
+		ci.pDS = nullptr;
+		ci.pVS = lakeVs;
+		ci.pPS = lakePs;
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+	}
 
 	// Grass: opaque blades, both sides, one instance per blade
 	RefCntAutoPtr<IShader> grassVs = createShader(SHADER_TYPE_VERTEX, "VS_Grass");
@@ -1213,6 +1403,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->rippleTexture = CreateRippleTexture(gfx);
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(_impl->waterTexture));
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(_impl->rippleTexture));
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 
 	// Chunks
 	constexpr int CHUNK = 16;
@@ -1469,10 +1660,35 @@ void DiligentEnhancedTerrainRenderer::render()
 	scroll(0.1f, 0.3f, water + 2);
 	scroll(0.9f * 0.25f, 0.34f * 0.25f, water + 4); // the original's normal field wind, slowed for the finer ripples
 	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6);
-	water[8] = (g_renderSettings.waterSurface && _impl->waterTexture) ? 1.0f : 0.0f;
+	water[8] = (g_renderSettings.waterQuality >= 1 && _impl->waterTexture) ? 1.0f : 0.0f;
 	water[9] = 0.1f;  // one texture repeat per two tiles
 	water[10] = 0.04f;
-	water[11] = 0.0f;
+	// refraction from Low up: the scene target copied before the water (not with multisampling)
+	_impl->refraction = false;
+	if (g_renderSettings.waterQuality >= 2 && !_impl->frameLakeIndices.empty()) {
+		ITexture* target = dgfx->CurrentColorTarget()->GetTexture();
+		const TextureDesc& td = target->GetDesc();
+		if (td.SampleCount == 1) {
+			if (!_impl->sceneCopy || _impl->sceneCopy->GetDesc().Width != td.Width || _impl->sceneCopy->GetDesc().Height != td.Height
+				|| _impl->sceneCopy->GetDesc().Format != td.Format) {
+				TextureDesc cd;
+				cd.Name = "Scene behind the water";
+				cd.Type = RESOURCE_DIM_TEX_2D;
+				cd.Width = td.Width;
+				cd.Height = td.Height;
+				cd.Format = td.Format;
+				cd.BindFlags = BIND_SHADER_RESOURCE;
+				cd.Usage = USAGE_DEFAULT;
+				_impl->sceneCopy.Release();
+				dgfx->device->CreateTexture(cd, nullptr, &_impl->sceneCopy);
+				if (_impl->sceneCopy)
+					_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(_impl->sceneCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
+						SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			}
+			_impl->refraction = _impl->sceneCopy != nullptr;
+		}
+	}
+	water[11] = _impl->refraction ? 1.0f : 0.0f;
 	const bool blobsOn = !shadows.blobs.empty();
 	float* blobParams = (float*)(sbdata + 176);
 	blobParams[0] = blobsOn ? 1.0f : 0.0f;
@@ -1480,7 +1696,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	blobParams[2] = 1.0f / (terrain->height * tilesize);
 	blobParams[3] = terrain->edge * tilesize;
 	float* waterSky = (float*)(sbdata + 192);
-	if (g_renderSettings.waterDetail) {
+	if (g_renderSettings.waterQuality >= 2) {
 		const bool skyOn = shadows.skyLightValid && g_renderSettings.sky;
 		for (int c = 0; c < 3; c++) {
 			const float fog = ((terrain->fogColor >> (16 - 8 * c)) & 255) / 255.0f;
@@ -1494,7 +1710,9 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* grassParams = (float*)(sbdata + 752);
 	grassParams[0] = g_renderSettings.grass ? 1.0f : 0.0f;
 	grassParams[1] = std::max(1.0f, g_renderSettings.grassDistance);
-	grassParams[2] = (float)std::fmod(shadows.time, 3600.0);
+	// the waves, the flow and the grass's sway run on the water's steady clock (the game time is
+	// nudged by the server's time sync and stops while paused, which made the waves jump or stand)
+	grassParams[2] = (float)std::fmod(SDL_GetTicks() / 1000.0, 3600.0);
 	grassParams[3] = 0.0f;
 	const bool tessOn = _impl->tessellation && g_renderSettings.terrainTessellation > 0;
 	g_terrainTessellationActive = tessOn;
@@ -1514,7 +1732,8 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 1.3f;
-	flowParams[2] = flowParams[3] = 0.0f;
+	flowParams[2] = 16.0f;  // High water: most pieces per tile edge near the camera
+	flowParams[3] = 140.0f; // and the distance of full detail
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -1627,6 +1846,7 @@ void DiligentEnhancedTerrainRenderer::render()
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pair.first));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 		}
 		ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		drawIndices(_impl->frameIndices[t]);
@@ -1650,7 +1870,14 @@ void DiligentEnhancedTerrainRenderer::render()
 
 	// ----- Water -----
 	if (_impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty()) {
-		ctx->SetPipelineState(_impl->lakePipeline);
+		if (_impl->refraction) {
+			CopyTextureAttribs copy(dgfx->CurrentColorTarget()->GetTexture(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
+				_impl->sceneCopy, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->CopyTexture(copy);
+			dgfx->RestoreRenderTargets();
+		}
+		const bool high = g_renderSettings.waterQuality >= 3 && _impl->highWaterPipeline && _impl->waterTexture;
+		ctx->SetPipelineState(high ? _impl->highWaterPipeline : _impl->lakePipeline);
 		IBuffer* lvb = _impl->lakeVertexBuffer;
 		ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);

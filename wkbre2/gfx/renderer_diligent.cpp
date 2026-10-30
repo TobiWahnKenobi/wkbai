@@ -508,6 +508,8 @@ struct DiligentRenderer : DiligentGfx
 		writeFogBuffer();
 	}
 
+	ITextureView* CurrentColorTarget() override { return currentColorTarget(); }
+
 	void RestoreRenderTargets() override
 	{
 		setRenderTargets();

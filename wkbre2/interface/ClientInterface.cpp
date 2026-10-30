@@ -577,8 +577,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	}
 	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
-		ImGui::Checkbox("Water surface", &s.waterSurface);
-		ImGui::Checkbox("Water: sky reflection, depth, shore foam", &s.waterDetail);
+		{
+			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "High (tessellated waves)" };
+			ImGui::Combo("Water", &s.waterQuality, waterLevels, 4);
+		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
 		{

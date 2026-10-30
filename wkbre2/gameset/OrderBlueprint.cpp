@@ -87,9 +87,14 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 		else if (tag == "PROXIMITY_SATISFIED_SEQUENCE")
 			this->proximitySatisfiedSequence.init(gsf, gs, "END_PROXIMITY_SATISFIED_SEQUENCE");
 		else if (tag == "PROXIMITY_DISSATISFIED_SEQUENCE") {
+			// an optional condition on the line; a comment there ("// ..." in Fire Arrow) is none
 			if (!gsf.eol) {
-				this->proximityDissatisfiedEquation = gs.equations.readIndex(gsf);
-				this->proximityDissatisfiedFinder = ReadFinder(gsf, gs);
+				const std::string name = gsf.nextString(true);
+				if (name.rfind("//", 0) != 0) {
+					this->proximityDissatisfiedEquation = gs.equations.names.getIndex(name);
+					if (this->proximityDissatisfiedEquation >= 0)
+						this->proximityDissatisfiedFinder = ReadFinder(gsf, gs);
+				}
 			}
 			this->proximityDissatisfiedSequence.init(gsf, gs, "END_PROXIMITY_DISSATISFIED_SEQUENCE");
 		}

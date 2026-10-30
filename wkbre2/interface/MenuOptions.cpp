@@ -100,9 +100,16 @@ namespace {
 		list.push_back(toggle("characterShadows", "lighting", "Character shadows", rs.characterShadows));
 		list.push_back(withEnabled(toggle("realCharacterShadows", "lighting", "Real character shadows", rs.realCharacterShadows),
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));
-		list.push_back(toggle("waterSurface", "lighting", "Water surface", rs.waterSurface));
-		list.push_back(withEnabled(toggle("waterDetail", "lighting", "Water reflections and foam", rs.waterDetail), [&rs]() { return rs.waterSurface; }));
-		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterSurface && rs.waterDetail; }));
+		{
+			MenuOption o;
+			o.id = "waterQuality"; o.page = "lighting"; o.label = "Water";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Original", "Low", "High" };
+			o.get = [&rs]() { return (float)rs.waterQuality; };
+			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
+		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		{
 			MenuOption o;

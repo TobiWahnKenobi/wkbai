@@ -32,9 +32,13 @@ struct RenderSettings {
 
 	// The original's sky, shadows and model lighting
 	bool sky = true, cloudShadows = true, staticShadows = true;
-	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
-	bool waterDetail = true;         // with it: the sky reflected, deeper water darker, cloud shadows, shore foam
-	bool waterFlow = true;           // and rivers flowing downstream (a flow map from the map's water)
+	// the water: 0 Off (a plain colour), 1 Original (the original's textured water with its sun
+	// glint off rippled normals), 2 Low (with the sky reflected, deeper water darker, cloud
+	// shadows, shore foam, separate river and sea looks), 3 High (the surface tessellated on the
+	// GPU and moved by waves, finer detail, foam on the crests and in the surf; Low without a GPU
+	// that can tessellate)
+	int waterQuality = 3;
+	bool waterFlow = true;           // from Low: rivers flowing downstream (a flow map from the map's water)
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;

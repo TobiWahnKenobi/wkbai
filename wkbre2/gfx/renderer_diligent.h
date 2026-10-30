@@ -42,6 +42,9 @@ struct DiligentGfx : IRenderer
 	// Binds the swap chain's targets and the full viewport again after drawing offscreen (the
 	// post-processing scene targets instead while those are on).
 	virtual void RestoreRenderTargets() = 0;
+	// The colour target the 3D scene is being drawn into (the back buffer, or the
+	// post-processing scene target while that is on): the water copies it for its refraction
+	virtual Diligent::ITextureView* CurrentColorTarget() = 0;
 
 	// Post-processing (ambient occlusion, bloom): BeginPostProcessing(true) before ClearFrame sends
 	// the frame's 3D drawing into offscreen targets; ApplyPostProcessing, after the 3D scene and
