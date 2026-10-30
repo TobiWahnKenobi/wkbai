@@ -73,10 +73,11 @@ struct TerrainGrassBuilder {
 };
 
 // The water's flow (RenderSettings::waterFlow), one RGBA8 texel per tile ((x, z) at
-// z * width + x): the direction it flows in (x, z as r, g; n * 0.5 + 0.5) and its speed (b, 0-1).
-// Each body of water (connected water tiles) flows towards its sinks: where its water levels
-// differ, its lowest tiles; else its open water (5 tiles or more from the shore: a river runs
-// into its lake or sea); else, when it reaches the map's border, the border where its bed is
-// deepest (a river leaving the map). A pond with none of these stays still. The direction is
-// down a distance field from the sinks, smoothed; narrow water flows fastest, open water barely.
+// z * width + x): the direction it flows in (x, z as r, g; n * 0.5 + 0.5), its speed (b, 0-1)
+// and how much it is a river (a: 1 a river, 0 wide water). In each body of water (connected
+// water tiles), its wide water is what lies more than a third of its widest point from the
+// shore (6-30 tiles): a sea, a lake. Rivers are its narrow water beyond the wide water's coastal
+// band; they flow from their narrow parts into the wide water, faster where narrower. Wide water
+// flows towards its shore (waves rolling in), except off a river's mouth, where the river's
+// water carries on out into it. A body narrow all through flows towards its widest part.
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain);

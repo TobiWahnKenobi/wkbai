@@ -501,6 +501,7 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 	std::vector<int> body((size_t)W * H, -1);
 	std::vector<float> dist((size_t)W * H, 1e30f);
 	std::vector<float> dirX((size_t)W * H, 0), dirZ((size_t)W * H, 0), speed((size_t)W * H, 0);
+	std::vector<float> river((size_t)W * H, 0); // 1 in rivers, 0 in wide water (a sea, a lake), between off a river's mouth
 	// the bodies of water: their tiles, level and widest point
 	struct Body { std::vector<int> tiles, edge; float lo = 1e30f, hi = -1e30f; int widest = 0; bool border = false; };
 	std::vector<Body> bodies;
@@ -532,120 +533,121 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		}
 		bodies.push_back(std::move(bd));
 	}
-	auto isSea = [&](const Body& bd) { return bd.widest >= 25; };
-	int flowing = 0;
-	for (size_t bi = 0; bi < bodies.size(); bi++) {
-		const Body& bd = bodies[bi];
-		std::vector<int> sinks;
-		if (bd.hi - bd.lo > 0.25f) {
-			// levels that step down within the body: towards its lowest tiles
-			for (int t : bd.tiles)
-				if (level(t) <= bd.lo + 0.1f)
-					sinks.push_back(t);
-		}
-		else if (isSea(bd)) {
-			// rivers that are part of a sea's body (fjords, estuaries): into its open water
-			for (int t : bd.tiles)
-				if (shore[t] >= 8)
-					sinks.push_back(t);
-		}
-		else {
-			// the nearest body within 20 tiles that is lower or the sea: its outlet is this body's
-			// shore nearest to it
-			int best = -1;
-			float bestGap = 20.0f;
-			std::vector<float> gapOf;
-			for (size_t oi = 0; oi < bodies.size(); oi++) {
-				const Body& o = bodies[oi];
-				if (oi == bi || !(o.lo < bd.lo - 0.05f || isSea(o)))
-					continue;
-				std::vector<float> gaps(bd.edge.size(), 1e30f);
-				float gap = 1e30f;
-				for (size_t e = 0; e < bd.edge.size(); e++) {
-					const int ex = bd.edge[e] % W, ez = bd.edge[e] / W;
-					for (int t : o.edge) {
-						const float dx = (float)(t % W - ex), dz = (float)(t / W - ez);
-						gaps[e] = std::min(gaps[e], dx * dx + dz * dz);
-					}
-					gaps[e] = std::sqrt(gaps[e]);
-					gap = std::min(gap, gaps[e]);
-				}
-				if (gap < bestGap) {
-					bestGap = gap;
-					best = (int)oi;
-					gapOf = std::move(gaps);
-				}
-			}
-			if (best >= 0) {
-				for (size_t e = 0; e < bd.edge.size(); e++)
-					if (gapOf[e] <= bestGap + 3.0f)
-						sinks.push_back(bd.edge[e]);
-			}
-			else if (bd.border) {
-				// leaving the map: the border tiles near the deepest border tile
-				int deepest = -1;
-				for (int t : bd.tiles) {
-					const int x = t % W, z = t / W;
-					if ((x == 0 || z == 0 || x == W - 1 || z == H - 1) && (deepest < 0 || depth(t) > depth(deepest)))
-						deepest = t;
-				}
-				for (int t : bd.tiles) {
-					const int x = t % W, z = t / W;
-					if ((x == 0 || z == 0 || x == W - 1 || z == H - 1)
-						&& std::abs(x - deepest % W) + std::abs(z - deepest / W) <= 12)
-						sinks.push_back(t);
-				}
-			}
-		}
-		if (sinks.empty())
-			continue; // a sea or a pond: still
-		flowing++;
-		// the distance downstream to the sinks (Dijkstra over the body, eight neighbours)
+	// Dijkstra over body bi from seeds (eight neighbours), through the tiles allowed
+	auto distances = [&](int bi, const std::vector<int>& seeds, auto allowed, std::vector<float>& d) {
+		for (int t : bodies[bi].tiles)
+			d[t] = 1e30f;
 		std::vector<std::pair<float, int>> heap;
-		for (int t : sinks) {
-			dist[t] = 0;
+		for (int t : seeds) {
+			d[t] = 0;
 			heap.push_back({ 0.0f, t });
 		}
 		std::make_heap(heap.begin(), heap.end(), std::greater<>());
 		while (!heap.empty()) {
 			std::pop_heap(heap.begin(), heap.end(), std::greater<>());
-			const auto [d, t] = heap.back();
+			const auto [dt, t] = heap.back();
 			heap.pop_back();
-			if (d > dist[t])
+			if (dt > d[t])
 				continue;
 			const int x = t % W, z = t / W;
 			for (int k = 0; k < 8; k++) {
 				const int ax = x + nx[k], az = z + nz[k];
-				if (!isWater(ax, az) || body[az * W + ax] != body[t])
+				if (!isWater(ax, az) || body[az * W + ax] != bi || !allowed(az * W + ax))
 					continue;
-				const int a = az * W + ax;
-				const float nd = d + (k < 4 ? 1.0f : 1.41421f);
-				if (nd < dist[a]) {
-					dist[a] = nd;
-					heap.push_back({ nd, a });
+				const int n = az * W + ax;
+				const float nd = dt + (k < 4 ? 1.0f : 1.41421f);
+				if (nd < d[n]) {
+					d[n] = nd;
+					heap.push_back({ nd, n });
 					std::push_heap(heap.begin(), heap.end(), std::greater<>());
 				}
 			}
 		}
-		// downhill in that distance; a dry or other neighbour counts as uphill. Faster where the
-		// water is narrow, and wide water slower as a whole.
-		const float wide = std::clamp(10.0f / std::max(bd.widest, 1), 0.35f, 1.0f);
-		for (int t : bd.tiles) {
-			const int x = t % W, z = t / W;
-			auto at = [&](int ax, int az) {
-				return (isWater(ax, az) && body[az * W + ax] == body[t] && dist[az * W + ax] < 1e29f) ? dist[az * W + ax] : dist[t] + 1.0f;
-			};
-			float gx = at(x - 1, z) - at(x + 1, z), gz = at(x, z - 1) - at(x, z + 1);
-			const float len = std::sqrt(gx * gx + gz * gz);
-			if (len > 1e-4f) {
-				dirX[t] = gx / len;
-				dirZ[t] = gz / len;
+	};
+	// the direction down a distance field at tile t; a neighbour outside the field counts as
+	// higher (or lower, with dryIsLow: for the way to the shore)
+	auto downhill = [&](int t, const std::vector<float>& d, bool dryIsLow, float& gx, float& gz) {
+		const int x = t % W, z = t / W;
+		auto at = [&](int ax, int az) {
+			if (isWater(ax, az) && body[az * W + ax] == body[t] && d[az * W + ax] < 1e29f)
+				return d[az * W + ax];
+			return dryIsLow ? d[t] - 1.0f : d[t] + 1.0f;
+		};
+		gx = at(x - 1, z) - at(x + 1, z);
+		gz = at(x, z - 1) - at(x, z + 1);
+		const float len = std::sqrt(gx * gx + gz * gz);
+		if (len < 1e-4f) {
+			gx = gz = 0;
+			return false;
+		}
+		gx /= len;
+		gz /= len;
+		return true;
+	};
+	std::vector<float> toOpen((size_t)W * H, 1e30f), toRiver((size_t)W * H, 1e30f), toShore((size_t)W * H, 1e30f);
+	const auto everywhere = [](int) { return true; };
+	int flowing = 0;
+	for (int bi = 0; bi < (int)bodies.size(); bi++) {
+		const Body& bd = bodies[bi];
+		flowing++;
+		// wide water: a third of the body's widest point from the shore (6-30 tiles), so a fjord's
+		// channels are rivers of its sea and a lake's middle is its open water
+		const float openAt = std::clamp(bd.widest / 3.0f, 6.0f, 30.0f);
+		std::vector<int> open;
+		for (int t : bd.tiles)
+			if (shore[t] >= openAt)
+				open.push_back(t);
+		if (open.empty()) {
+			// narrow all through: towards its widest part
+			std::vector<int> widest;
+			for (int t : bd.tiles)
+				if (shore[t] == bd.widest)
+					widest.push_back(t);
+			distances(bi, widest, everywhere, toOpen);
+			for (int t : bd.tiles) {
+				downhill(t, toOpen, false, dirX[t], dirZ[t]);
+				speed[t] = std::clamp((7.0f - shore[t]) / 5.0f, 0.4f, 1.0f);
+				river[t] = 1.0f;
 			}
-			speed[t] = std::clamp((7.0f - shore[t]) / 5.0f, 0.3f, 1.0f) * wide;
-			// in a sea's body, only the rivers: calm along the sea's own shores, picking up with
-			// the distance up the river
-			if (isSea(bd))
-				speed[t] = std::clamp((10.0f - shore[t]) / 6.0f, 0.45f, 1.0f) * std::clamp((dist[t] - 3.0f) / 15.0f, 0.0f, 1.0f);
+			continue;
+		}
+		// the rivers: narrow water beyond the wide water's coastal band, flowing into it
+		distances(bi, open, everywhere, toOpen);
+		// (well beyond the coastal band, so that a bay of the coast stays the sea's)
+		auto isRiver = [&](int t) { return shore[t] < openAt && toOpen[t] > openAt * 1.6f + 6.0f; };
+		std::vector<int> rivers, coast;
+		for (int t : bd.tiles) {
+			if (isRiver(t))
+				rivers.push_back(t);
+			if (shore[t] == 1 && !isRiver(t))
+				coast.push_back(t);
+		}
+		// how far the rivers' water reaches into the wide water, and the way to its shore
+		distances(bi, rivers, [&](int n) { return !isRiver(n); }, toRiver);
+		distances(bi, coast, [&](int n) { return !isRiver(n); }, toShore);
+		for (int t : bd.tiles) {
+			if (isRiver(t)) {
+				downhill(t, toOpen, false, dirX[t], dirZ[t]);
+				speed[t] = std::clamp((8.0f - shore[t]) / 5.0f, 0.45f, 1.0f);
+				river[t] = 1.0f;
+				continue;
+			}
+			// wide water: towards the nearest shore, except off a river's mouth, where the
+			// river's water carries on out into it
+			float sx, sz, rx = 0, rz = 0;
+			downhill(t, toShore, true, sx, sz);
+			const float w = rivers.empty() ? 0.0f : std::clamp(1.0f - toRiver[t] / std::max(10.0f, openAt), 0.0f, 1.0f);
+			if (w > 0) {
+				downhill(t, toRiver, false, rx, rz); // towards the river: its water comes the other way
+				rx = -rx;
+				rz = -rz;
+			}
+			float gx = sx * (1 - w) + rx * w, gz = sz * (1 - w) + rz * w;
+			const float len = std::sqrt(gx * gx + gz * gz);
+			dirX[t] = len > 1e-4f ? gx / len : 0.0f;
+			dirZ[t] = len > 1e-4f ? gz / len : 0.0f;
+			speed[t] = 0.3f + 0.5f * w;
+			river[t] = w;
 		}
 	}
 	const int numBodies = (int)bodies.size();
@@ -676,10 +678,11 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		out[t * 4] = (uint8_t)std::clamp(dirX[t] * 127.5f + 128.0f, 0.0f, 255.0f);
 		out[t * 4 + 1] = (uint8_t)std::clamp(dirZ[t] * 127.5f + 128.0f, 0.0f, 255.0f);
 		out[t * 4 + 2] = (uint8_t)std::clamp(speed[t] * 255.0f, 0.0f, 255.0f);
+		out[t * 4 + 3] = (uint8_t)std::clamp(river[t] * 255.0f, 0.0f, 255.0f);
 	}
 	printf("Water flow: %d bodies of water, %d flowing\n", numBodies, flowing);
 	// debugging: "WKB_DUMP_FLOW=<file>" writes the flow map as a PPM (direction in red/green,
-	// speed in blue) and the water tiles' levels as text beside it
+	// speed in blue) and the water tiles (body, level, depth, shore distance, river) as text beside it
 	if (const char* dump = getenv("WKB_DUMP_FLOW")) {
 		if (FILE* f = fopen(dump, "wb")) {
 			fprintf(f, "P6\n%d %d\n255\n", W, H);
@@ -690,7 +693,7 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		if (FILE* f = fopen((std::string(dump) + ".txt").c_str(), "w")) {
 			for (int t = 0; t < W * H; t++)
 				if (body[t] >= 0)
-					fprintf(f, "%d %d %d %.2f %.2f %d\n", t % W, t / W, body[t], level(t), depth(t), shore[t]);
+					fprintf(f, "%d %d %d %.2f %.2f %d %.2f\n", t % W, t / W, body[t], level(t), depth(t), shore[t], river[t]);
 			fclose(f);
 		}
 	}

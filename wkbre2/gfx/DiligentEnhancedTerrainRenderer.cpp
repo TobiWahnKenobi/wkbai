@@ -281,15 +281,31 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
 	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
-	float rush = 0;
+	float rush = 0, river = 0, swellPhase = 0, swell = 0;
 	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0) {
 		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
-		float2 flow = (f.xy * 2 - 1) * f.z * WaterFlowParams.y; // units per second
-		rush = f.z * saturate(length(f.xy * 2 - 1) * 1.5);
+		float2 fdir = f.xy * 2 - 1;
+		float2 flow = fdir * f.z * WaterFlowParams.y; // units per second
+		river = f.a;
+		rush = f.z * saturate(length(fdir) * 1.5) * river;
 		const float cycle = 3.0;
 		float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
 		float w0 = 1 - abs(2 * p0 - 1);
-		float2 s = FlowSlope(ruv, -flow * (p0 * cycle) * WaterParams.z) * w0 + FlowSlope(ruv, -flow * (p1 * cycle) * WaterParams.z) * (1 - w0);
+		float2 off0 = -flow * (p0 * cycle) * WaterParams.z, off1 = -flow * (p1 * cycle) * WaterParams.z;
+		// the river look: fine ripples, stretched along the current (in a frame along the flow)
+		float2 along = normalize(fdir + float2(1e-4, 0)), across = float2(-along.y, along.x);
+		const float2 stretch = float2(1.4, 3.2);
+		float2 rr = float2(dot(ruv, along), dot(ruv, across)) * stretch;
+		float2 sr = FlowSlope(rr, float2(dot(off0, along), dot(off0, across)) * stretch) * w0
+			+ FlowSlope(rr, float2(dot(off1, along), dot(off1, across)) * stretch) * (1 - w0);
+		float2 sRiver = (sr.x * along + sr.y * across) * 0.6;
+		// the sea's (and a lake's) look: larger waves, and a swell rolling in over the shallows
+		// towards the shore (bands along the depth's contours, as waves follow the bed)
+		float2 sSea = (FlowSlope(ruv * 0.7, off0 * 0.7) * w0 + FlowSlope(ruv * 0.7, off1 * 0.7) * (1 - w0)) * 0.8;
+		swellPhase = input.Depth * 2.2 + GrassParams.z * 1.3;
+		swell = saturate(1 - input.Depth / 5) * saturate(input.Depth * 3) * (1 - river);
+		sSea -= along * cos(swellPhase) * swell * 0.55;
+		float2 s = lerp(sSea, sRiver, river);
 		slope = s * 0.9 + 1; // as the two-sample sum: centred on 1
 		float2 tuv0 = uv - flow * (p0 * cycle) * WaterParams.y, tuv1 = uv - flow * (p1 * cycle) * WaterParams.y;
 		tex = lerp(inpTexture.Sample(cloudSampler, tuv1 + WaterLayers.xy).rgb, inpTexture.Sample(cloudSampler, tuv0 + WaterLayers.xy).rgb, w0) * 0.5
@@ -311,10 +327,17 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		tex *= cloud;
 		sky *= lerp(1, cloud, 0.5);
 		// foam: a band where the water is shallower than 0.8 units, its edge moved by the ripples
+		// (with the flow map, in the sea only where it is shallower than 0.5)
 		float edge = input.Depth + (slope.x + slope.y - 2) * 0.35;
 		foam = saturate(1 - edge / 0.8) * saturate(input.Depth * 4) * 0.55;
+		if (WaterFlowParams.x != 0) // the sea's broad shallows: foam only right at the waterline
+			foam *= lerp(saturate(1 - input.Depth / 0.5), 1, river);
 		// white water where a narrow river runs fast, on the ripples' crests
 		foam = max(foam, saturate((slope.x + slope.y - 2) * 3 - 0.6) * rush * rush * 0.35);
+		// the swell breaking: foam on its crests in the last 1.2 units of depth
+		foam = max(foam, saturate((sin(swellPhase) - 0.7) * 4) * saturate(1 - input.Depth / 0.8) * swell * 0.7);
+		// open water darker and bluer farther out
+		tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10) * WaterFlowParams.x);
 	}
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
