@@ -102,6 +102,7 @@ namespace {
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));
 		list.push_back(toggle("waterSurface", "lighting", "Water surface", rs.waterSurface));
 		list.push_back(withEnabled(toggle("waterDetail", "lighting", "Water reflections and foam", rs.waterDetail), [&rs]() { return rs.waterSurface; }));
+		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterSurface && rs.waterDetail; }));
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		list.push_back(toggle("grass", "lighting", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDistance", "lighting", "Grass distance", rs.grassDistance, 10.0f, 250.0f, "%.0f"),

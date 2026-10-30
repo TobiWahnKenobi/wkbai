@@ -30,6 +30,7 @@ struct RenderSettings {
 	bool sky = true, cloudShadows = true, staticShadows = true;
 	bool waterSurface = true;        // textured, rippled water with a sun glint; off: flat fog colour
 	bool waterDetail = true;         // with it: the sky reflected, deeper water darker, cloud shadows, shore foam
+	bool waterFlow = true;           // and rivers flowing downstream (a flow map from the map's water)
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;

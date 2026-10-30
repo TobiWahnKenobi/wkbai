@@ -579,6 +579,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
 		ImGui::Checkbox("Water surface", &s.waterSurface);
 		ImGui::Checkbox("Water: sky reflection, depth, shore foam", &s.waterDetail);
+		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
 		ImGui::Checkbox("Grass", &s.grass);
 		ImGui::SliderFloat("Grass density (next map)", &s.grassDensity, 0.0f, 6.0f, "%.1f");

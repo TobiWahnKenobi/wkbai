@@ -36,6 +36,7 @@ void RenderSettings::load()
 	cloudShadows = g_settings.value<bool>("cloudShadows", def.cloudShadows);
 	waterSurface = g_settings.value<bool>("waterSurface", def.waterSurface);
 	waterDetail = g_settings.value<bool>("waterDetail", def.waterDetail);
+	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	grass = g_settings.value<bool>("grass", def.grass);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
@@ -102,6 +103,7 @@ void RenderSettings::save()
 	g_settings["cloudShadows"] = cloudShadows;
 	g_settings["waterSurface"] = waterSurface;
 	g_settings["waterDetail"] = waterDetail;
+	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
 	g_settings["grass"] = grass;
 	g_settings["grassDensity"] = grassDensity;

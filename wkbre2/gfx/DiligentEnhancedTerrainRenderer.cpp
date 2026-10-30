@@ -37,6 +37,7 @@ SamplerState cloudSampler;
 Texture2D<float> shadowTexture;
 SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
+Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
 Texture2DArray splatDiffuse;
 Texture2DArray splatNormal;
 Texture2D<uint> splatCorners;
@@ -96,6 +97,7 @@ cbuffer SunBuffer
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 GrassParams; // grass: on, distance, game time in seconds
+	float4 WaterFlowParams; // on, speed in units per second at full flow
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -260,7 +262,17 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 // map, a sun glint, the sky (fog) colour reflected at grazing angles, and more transparency
 // where the water is shallow. With RenderSettings::waterDetail also: the sky box's colours
 // reflected along the view, a darker colour with depth, cloud shadows (on all but the glint)
-// and foam along the shore, broken up by the ripples.
+// and foam along the shore, broken up by the ripples. And with RenderSettings::waterFlow: the
+// ripples in three octaves, moving along the map's flow map (rivers downstream into their lake,
+// sea or off the map), in two phases half a cycle apart, blended so that neither stretches for
+// long; white water where narrow rivers run fast; a sharper sun sparkle.
+float2 FlowSlope(float2 ruv, float2 offset)
+{
+	return (normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy + offset).xy - 0.5)
+		+ (normalTexture.Sample(cloudSampler, ruv * 2.3 + WaterRipples.zw + offset * 2.3).yx - 0.5) * 0.6
+		+ (normalTexture.Sample(cloudSampler, ruv * 0.43 - WaterRipples.yx + offset * 0.43).xy - 0.5) * 0.35;
+}
+
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	if (WaterParams.x == 0)
@@ -269,10 +281,26 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
 	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
+	float rush = 0;
+	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0) {
+		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
+		float2 flow = (f.xy * 2 - 1) * f.z * WaterFlowParams.y; // units per second
+		rush = f.z * saturate(length(f.xy * 2 - 1) * 1.5);
+		const float cycle = 3.0;
+		float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
+		float w0 = 1 - abs(2 * p0 - 1);
+		float2 s = FlowSlope(ruv, -flow * (p0 * cycle) * WaterParams.z) * w0 + FlowSlope(ruv, -flow * (p1 * cycle) * WaterParams.z) * (1 - w0);
+		slope = s * 0.9 + 1; // as the two-sample sum: centred on 1
+		float2 tuv0 = uv - flow * (p0 * cycle) * WaterParams.y, tuv1 = uv - flow * (p1 * cycle) * WaterParams.y;
+		tex = lerp(inpTexture.Sample(cloudSampler, tuv1 + WaterLayers.xy).rgb, inpTexture.Sample(cloudSampler, tuv0 + WaterLayers.xy).rgb, w0) * 0.5
+			+ 0.5 * inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb;
+	}
 	float3 n = normalize(float3(slope.x - 1, 1, slope.y - 1));
 	float3 v = normalize(FogCamera.xyz - input.World);
 	float3 r = reflect(-v, n);
 	float glint = pow(saturate(dot(r, SunDirection)), 64) * 0.7 + pow(saturate(dot(r, SunDirection)), 3) * 0.06;
+	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0)
+		glint += pow(saturate(dot(r, SunDirection)), 600) * 1.5;
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
 	float3 sky = FogColor.rgb;
 	float foam = 0;
@@ -285,6 +313,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// foam: a band where the water is shallower than 0.8 units, its edge moved by the ripples
 		float edge = input.Depth + (slope.x + slope.y - 2) * 0.35;
 		foam = saturate(1 - edge / 0.8) * saturate(input.Depth * 4) * 0.55;
+		// white water where a narrow river runs fast, on the ripples' crests
+		foam = max(foam, saturate((slope.x + slope.y - 2) * 3 - 0.6) * rush * rush * 0.35);
 	}
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
@@ -501,6 +531,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	// the splat-map terrain: its pipeline, material layers and corner materials
 	RefCntAutoPtr<IPipelineState> splatPipeline;
 	RefCntAutoPtr<ITexture> splatDiffuse, splatNormal, splatCorners;
+	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
 	RefCntAutoPtr<IBuffer> sunBuffer;
 	RefCntAutoPtr<IBuffer> trnVertexBuffer;
 
@@ -544,39 +575,52 @@ static constexpr float BLOB_TEXELS_PER_UNIT = 2.0f;
 // z in red and green (0.5 = flat). It stands in for the original's grid of random normals.
 static texture CreateRippleTexture(IRenderer* gfx)
 {
-	constexpr int N = 64;
-	std::vector<float> h(N * N);
+	// four octaves of wrapping value noise (cells of 64, 32, 16 and 8 texels, each half as
+	// strong as the one before) over 256 texels; the slopes are scaled so that 99% of them fit
+	constexpr int N = 256;
+	std::vector<float> h(N * N, 0.0f);
 	uint32_t seed = 12345;
-	for (float& v : h) {
-		seed = seed * 1664525u + 1013904223u;
-		v = (seed >> 8) / 16777216.0f;
-	}
-	for (int pass = 0; pass < 3; pass++) { // box blur with wrapping
-		std::vector<float> o(N * N);
+	float amplitude = 1.0f;
+	for (int cell = 64; cell >= 8; cell /= 2, amplitude *= 0.5f) {
+		const int G = N / cell;
+		std::vector<float> grid(G * G);
+		for (float& v : grid) {
+			seed = seed * 1664525u + 1013904223u;
+			v = (seed >> 8) / 16777216.0f;
+		}
 		for (int y = 0; y < N; y++)
 			for (int x = 0; x < N; x++) {
-				float sum = 0;
-				for (int dy = -1; dy <= 1; dy++)
-					for (int dx = -1; dx <= 1; dx++)
-						sum += h[((y + dy + N) % N) * N + (x + dx + N) % N];
-				o[y * N + x] = sum / 9;
+				const float fx = (float)x / cell, fy = (float)y / cell;
+				const int x0 = (int)fx, y0 = (int)fy;
+				float tx = fx - x0, ty = fy - y0;
+				tx = tx * tx * tx * (tx * (tx * 6 - 15) + 10);
+				ty = ty * ty * ty * (ty * (ty * 6 - 15) + 10);
+				auto g = [&](int gx, int gy) { return grid[((gy + G) % G) * G + (gx + G) % G]; };
+				const float top = g(x0, y0) + (g(x0 + 1, y0) - g(x0, y0)) * tx;
+				const float bottom = g(x0, y0 + 1) + (g(x0 + 1, y0 + 1) - g(x0, y0 + 1)) * tx;
+				h[y * N + x] += (top + (bottom - top) * ty) * amplitude * cell;
 			}
-		h = std::move(o);
 	}
+	std::vector<float> sx(N * N), sz(N * N), mags;
+	for (int y = 0; y < N; y++)
+		for (int x = 0; x < N; x++) {
+			sx[y * N + x] = h[y * N + (x + 1) % N] - h[y * N + (x + N - 1) % N];
+			sz[y * N + x] = h[((y + 1) % N) * N + x] - h[((y + N - 1) % N) * N + x];
+			mags.push_back(std::max(std::abs(sx[y * N + x]), std::abs(sz[y * N + x])));
+		}
+	std::nth_element(mags.begin(), mags.begin() + mags.size() * 99 / 100, mags.end());
+	const float scale = 110.0f / std::max(mags[mags.size() * 99 / 100], 1e-6f);
 	Bitmap bmp;
 	bmp.width = bmp.height = N;
 	bmp.format = BMFORMAT_R8G8B8A8;
 	bmp.pixels.resize(N * N * 4);
-	for (int y = 0; y < N; y++)
-		for (int x = 0; x < N; x++) {
-			const float sx = h[y * N + (x + 1) % N] - h[y * N + (x + N - 1) % N];
-			const float sz = h[((y + 1) % N) * N + x] - h[((y + N - 1) % N) * N + x];
-			uint8_t* px = &bmp.pixels[(y * N + x) * 4];
-			px[0] = (uint8_t)std::clamp(128.0f + sx * 1200.0f, 0.0f, 255.0f);
-			px[1] = (uint8_t)std::clamp(128.0f + sz * 1200.0f, 0.0f, 255.0f);
-			px[2] = 128;
-			px[3] = 255;
-		}
+	for (int i = 0; i < N * N; i++) {
+		uint8_t* px = &bmp.pixels[i * 4];
+		px[0] = (uint8_t)std::clamp(128.0f + sx[i] * scale, 0.0f, 255.0f);
+		px[1] = (uint8_t)std::clamp(128.0f + sz[i] * scale, 0.0f, 255.0f);
+		px[2] = 128;
+		px[3] = 255;
+	}
 	return gfx->CreateTexture(bmp, 0);
 }
 
@@ -610,7 +654,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 768;
+	cbDesc.Size = 784;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -625,6 +669,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatCorners", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -719,6 +764,25 @@ void DiligentEnhancedTerrainRenderer::init()
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatDiffuse")->Set(_impl->splatDiffuse->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatNormal")->Set(_impl->splatNormal->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatCorners")->Set(_impl->splatCorners->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	}
+
+	// The water's flow map: one texel per tile
+	{
+		const std::vector<uint8_t> flow = BuildWaterFlow(terrain);
+		TextureDesc fdesc;
+		fdesc.Name = "Water flow";
+		fdesc.Type = RESOURCE_DIM_TEX_2D;
+		fdesc.Width = terrain->width;
+		fdesc.Height = terrain->height;
+		fdesc.Format = TEX_FORMAT_RGBA8_UNORM;
+		fdesc.BindFlags = BIND_SHADER_RESOURCE;
+		fdesc.Usage = USAGE_IMMUTABLE;
+		TextureSubResData fsub{ flow.data(), (Uint64)fdesc.Width * 4 };
+		TextureData fdata{ &fsub, 1 };
+		device->CreateTexture(fdesc, &fdata, &_impl->flowMap);
+		if (!_impl->flowMap)
+			ferr("Diligent: could not create the water flow map.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "flowTexture")->Set(_impl->flowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
@@ -1210,6 +1274,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	grassParams[1] = std::max(1.0f, g_renderSettings.grassDistance);
 	grassParams[2] = (float)std::fmod(shadows.time, 3600.0);
 	grassParams[3] = 0.0f;
+	float* flowParams = (float*)(sbdata + 768);
+	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
+	flowParams[1] = 2.2f;
+	flowParams[2] = flowParams[3] = 0.0f;
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);

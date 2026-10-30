@@ -71,3 +71,12 @@ struct TerrainGrassBuilder {
 	// adds tile (x, z)'s blades, about density per square unit
 	void addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out);
 };
+
+// The water's flow (RenderSettings::waterFlow), one RGBA8 texel per tile ((x, z) at
+// z * width + x): the direction it flows in (x, z as r, g; n * 0.5 + 0.5) and its speed (b, 0-1).
+// Each body of water (connected water tiles) flows towards its sinks: where its water levels
+// differ, its lowest tiles; else its open water (5 tiles or more from the shore: a river runs
+// into its lake or sea); else, when it reaches the map's border, the border where its bed is
+// deepest (a river leaving the map). A pond with none of these stays still. The direction is
+// down a distance field from the sinks, smoothed; narrow water flows fastest, open water barely.
+std::vector<uint8_t> BuildWaterFlow(Terrain* terrain);
