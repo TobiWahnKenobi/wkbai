@@ -698,7 +698,14 @@ void ServerGameObject::setItem(int index, float value)
 
 void ServerGameObject::setParent(ServerGameObject * newParent)
 {
-	assert(!this->deleted && !newParent->deleted);
+	assert(!this->deleted);
+	// a parent deleted in this tick (an army whose script terminated it, say) is freed at the end
+	// of it: a unit put under it was left with a dangling parent, and crashed the next transfer
+	// (a 22-minute AI test with formation waves). Its first live ancestor takes the unit instead.
+	while (newParent && newParent->deleted)
+		newParent = newParent->parent ? newParent->parent->dyncast<ServerGameObject>() : nullptr;
+	if (!newParent)
+		return;
 
 	if (this->parent == newParent)
 		return;

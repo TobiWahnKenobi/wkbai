@@ -190,11 +190,23 @@ void AIController::update()
 				for (CommonGameObject* c : children)
 					if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 						members.push_back((ServerGameObject*)c);
+			// siege engines: at 25 minutes each AI had 1-6 (mostly Mangonels), in the defensive army or
+			// straight under the player (battering rams), and none went with the waves. They always go,
+			// never among the 10 who stay home.
+			static const char* engines[] = { "Battering Ram", "Trebuchet", "Mangonel", "Siege Tower" };
+			auto isEngine = [](const ServerGameObject* o) {
+				return Server::instance->aiWaveSiege && std::any_of(std::begin(engines), std::end(engines), [&](const char* e) { return o->blueprint->name.find(e) != std::string::npos; });
+			};
+			for (const auto& [type, children] : gameObj->children)
+				for (CommonGameObject* c : children)
+					if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && isEngine((ServerGameObject*)c))
+						members.push_back((ServerGameObject*)c);
 			SrvScriptContext ctx{ Server::instance, defensive };
 			ServerGameObject* target = (ServerGameObject*)gs->objectFinderDefinitions[palacesFinder]->getFirst(&ctx);
 			if (target && (int)members.size() > Server::instance->aiAttackWave) {
-				std::sort(members.begin(), members.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
-				members.erase(members.begin(), members.begin() + 10); // the 10 oldest stay home
+				std::sort(members.begin(), members.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+					return isEngine(a) != isEngine(b) ? !isEngine(a) : a->id < b->id; });
+				members.erase(members.begin(), members.begin() + 10); // the 10 oldest soldiers stay home
 				if (ServerGameObject* army = Server::instance->spawnObject(armyBp, gameObj, defensive->position, Vector3(0, 0, 0))) {
 					// gathering: first to a point 120 m short of the target on the home side, where
 					// they meet; streaming in one by one, the waves died at the walls
@@ -202,7 +214,39 @@ void AIController::update()
 					const Vector3 away = (defensive->position - target->position).normal2xz();
 					const Vector3 rally = target->position + away * 120.0f;
 					const bool gather = Server::instance->aiWaveGather && moveOrder >= 0 && (away.x != 0.0f || away.z != 0.0f);
+					// formations, as the original's Siege Armies: each unit type of 4 or more marches
+					// in Column to 50 m short of the target ("Formation Range"), forms a Line (heavy
+					// cavalry: a Wedge) facing it, then charges. The waves had walked there one by one.
+					const GameObjBlueprint* columnBp = gs->findBlueprint(Tags::GAMEOBJCLASS_FORMATION, "Column");
+					const int moveCommand = gs->commands.names.getIndex("Move");
+					if (Server::instance->aiWaveFormations && !gather && columnBp && moveCommand >= 0 && (away.x != 0.0f || away.z != 0.0f)) {
+						std::map<const GameObjBlueprint*, std::vector<ServerGameObject*>> byType;
+						for (ServerGameObject* unit : members)
+							if (!isEngine(unit))
+								byType[unit->blueprint].push_back(unit);
+						for (auto& [bp, units] : byType) {
+							if (units.size() < 4)
+								continue;
+							ServerGameObject* formation = Server::instance->spawnObject(columnBp, army, {}, {});
+							if (!formation)
+								continue;
+							Vector3 sum;
+							for (ServerGameObject* unit : units) {
+								sum += unit->position;
+								unit->orderConfig.cancelAllOrders();
+								unit->setParent(formation);
+							}
+							formation->setPosition(sum / (float)units.size());
+							formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+							const Vector3 point = target->position + (formation->position - target->position).normal2xz() * 50.0f;
+							gs->commands[moveCommand].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, point, target->position);
+							marchingFormations.push_back({ formation->id, target->id, point, Server::instance->timeManager.currentTime, -1.0f });
+							formationsSent++;
+						}
+					}
 					for (ServerGameObject* unit : members) {
+						if (unit->getParent() && unit->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+							continue;
 						unit->setParent(army);
 						if (gather)
 							unit->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, rally);
@@ -244,6 +288,61 @@ void AIController::update()
 				for (ServerGameObject* u : units)
 					u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 				it = gatheringWaves.erase(it);
+				continue;
+			}
+			++it;
+		}
+	}
+
+	// marching formations: at their point (or standing still, or after 300 s: at 150 s many were still marching, up to 96 m short) into Line or Wedge
+	// facing the target; 6 s later the members leave the formation and charge
+	if (!marchingFormations.empty()) {
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int attackOrder = gs->orders.names.getIndex("Attack");
+		const int moveCommand = gs->commands.names.getIndex("Move");
+		const int militaryUnit = gs->items.names.getIndex("I'm a Military Unit");
+		const GameObjBlueprint* lineBp = gs->findBlueprint(Tags::GAMEOBJCLASS_FORMATION, "Line");
+		const GameObjBlueprint* wedgeBp = gs->findBlueprint(Tags::GAMEOBJCLASS_FORMATION, "Wedge");
+		const float now = Server::instance->timeManager.currentTime;
+		for (auto it = marchingFormations.begin(); it != marchingFormations.end();) {
+			ServerGameObject* formation = Server::instance->findObject(it->formation);
+			ServerGameObject* target = Server::instance->findObject(it->target);
+			if (!formation || formation->deleted) {
+				it = marchingFormations.erase(it);
+				continue;
+			}
+			std::vector<ServerGameObject*> units;
+			for (const auto& [type, children] : formation->children)
+				for (CommonGameObject* c : children)
+					if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						units.push_back((ServerGameObject*)c);
+			const bool targetGone = !target || target->deleted;
+			if (it->lined < 0.0f && !targetGone && !units.empty()) {
+				const bool there = (formation->position - it->point).sqlen2xz() < 15.0f * 15.0f;
+				if (there || (!formation->movement.isMoving() && now - it->since > 5.0f) || now - it->since > 300.0f) {
+					const bool heavyCavalry = militaryUnit >= 0 && units[0]->getItem(militaryUnit) == 3.0f;
+					if (const GameObjBlueprint* bp = heavyCavalry && wedgeBp ? wedgeBp : lineBp)
+						formation->convertTo(bp);
+					if (moveCommand >= 0) // stand, facing the target
+						gs->commands[moveCommand].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position, target->position);
+					it->lined = now;
+					if (getenv("WKB_TRACE_WAVES"))
+						printf("WAVE formation %u (%zu %s) in %s at t=%.0f after %.0f s, %.0f m from its point\n", formation->id, units.size(), units[0]->blueprint->name.c_str(),
+							formation->blueprint->name.c_str(), now, now - it->since, (formation->position - it->point).len2xz());
+				}
+				++it;
+				continue;
+			}
+			if (targetGone || units.empty() || now - it->lined > 6.0f) {
+				ServerGameObject* army = formation->getParent();
+				if (getenv("WKB_TRACE_WAVES"))
+					printf("WAVE formation %u charges at t=%.0f with %zu units%s\n", formation->id, now, units.size(), targetGone ? " (target gone)" : "");
+				for (ServerGameObject* u : units) {
+					u->setParent(army);
+					if (!targetGone && attackOrder >= 0)
+						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+				}
+				it = marchingFormations.erase(it);
 				continue;
 			}
 			++it;

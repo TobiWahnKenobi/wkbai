@@ -66,6 +66,8 @@ private:
 	int aiRetreatHealth = 0; // Server::aiRetreatHealth, in percent (0: off)
 	int aiAttackWave = 50; // Server::aiAttackWave (0: off)
 	bool aiWaveGather = false; // Server::aiWaveGather
+	bool aiWaveSiege = false; // Server::aiWaveSiege
+	bool aiWaveFormations = true; // Server::aiWaveFormations
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

@@ -111,6 +111,8 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiRetreatHealth") aiRetreatHealth = value;
 	else if (name == "aiAttackWave") aiAttackWave = value;
 	else if (name == "aiWaveGather") aiWaveGather = value != 0;
+	else if (name == "aiWaveSiege") aiWaveSiege = value != 0;
+	else if (name == "aiWaveFormations") aiWaveFormations = value != 0;
 	else if (name == "resourcePoints") resourcePoints = value;
 	else if (name == "victoryPointLimit") victoryPointLimit = value;
 	else if (name == "valhallaModeFood") valhallaModeFood = value;
@@ -374,6 +376,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiRetreatHealth = aiRetreatHealth / 100.0f;
 	server.aiAttackWave = aiAttackWave;
 	server.aiWaveGather = aiWaveGather;
+	server.aiWaveSiege = aiWaveSiege;
+	server.aiWaveFormations = aiWaveFormations;
 	if (mode != DevMode) {
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or

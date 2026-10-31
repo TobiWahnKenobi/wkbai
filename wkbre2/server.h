@@ -220,6 +220,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, a wave gathers 120 m short of its target before it attacks: "aiWaveGather";
 	// off: waves stream in (they razed more buildings in the AI tests)
 	bool aiWaveGather = false;
+	// with it, waves take every siege engine along, never keeping one home: "aiWaveSiege";
+	// off: with it on the waves razed fewer buildings (the scripts' sapper armies lose them)
+	bool aiWaveSiege = false;
+	// with it, a wave's unit types of 4 or more march in Column, form a Line (heavy cavalry:
+	// a Wedge) 50 m short of the target and charge from there, as the original's Siege Armies:
+	// "aiWaveFormations"
+	bool aiWaveFormations = true;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
 	std::map<uint32_t, int> buildingsDestroyed;
 	std::map<std::string, float> userProfileItems;

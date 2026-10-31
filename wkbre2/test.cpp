@@ -1724,6 +1724,7 @@ void Test_AIvsAI()
 	skirmish.applySettings(server);
 
 	std::map<uint32_t, std::set<uint32_t>> raised; // per player, every soldier seen at a census
+	std::map<uint32_t, std::set<uint32_t>> siegeRaised; // per player, every siege engine seen at a census
 	auto census = [&](const char* when) {
 		ServerGameObject* lvl = server.getLevel();
 		std::vector<std::string> standing;
@@ -1735,6 +1736,7 @@ void Test_AIvsAI()
 				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
 				std::map<std::string, int> orders; // the characters' current orders
 				std::map<std::string, int> markers; // markers by blueprint
+				std::map<std::string, int> siege; // siege engines alive, by blueprint and parent
 				char sample[256] = {}, villageStock[128] = {}, cartInfo[256] = {};
 				auto count = [&](CommonGameObject* obj, auto& self) -> void {
 					for (const auto& [t, ch] : obj->children)
@@ -1747,6 +1749,11 @@ void Test_AIvsAI()
 									if (std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; })) {
 										soldiers++;
 										raised[player->id].insert(o->id);
+									}
+									static const char* engines[] = { "Battering Ram", "Trebuchet", "Mangonel", "Siege Tower" };
+									if (std::any_of(std::begin(engines), std::end(engines), [&](const char* e) { return n.find(e) != std::string::npos; })) {
+										siegeRaised[player->id].insert(o->id);
+										siege[n + " in " + obj->blueprint->name]++;
 									}
 								}
 								Order* order = ((ServerGameObject*)o)->orderConfig.getCurrentOrder();
@@ -1817,8 +1824,14 @@ void Test_AIvsAI()
 				std::string armyList;
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
-				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits);
+				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent);
 				printf("AITEST   losses player %u: %d buildings destroyed\n", player->id, server.buildingsDestroyed[player->id]);
+				{
+					std::string siegeList;
+					for (const auto& [name, n] : siege)
+						siegeList += " " + name + "=" + std::to_string(n);
+					printf("AITEST   siege player %u: %zu raised;%s\n", player->id, siegeRaised[player->id].size(), siegeList.c_str());
+				}
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;

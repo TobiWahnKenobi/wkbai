@@ -66,6 +66,11 @@ struct AIController {
 	// waves walking to their rally point before they attack together
 	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
 	std::vector<GatheringWave> gatheringWaves;
+	// waves' formations marching in Column to 50 m short of their target, then in Line (Wedge:
+	// heavy cavalry) before they charge; lined: the game time they were put in Line, else < 0
+	struct MarchingFormation { uint32_t formation, target; Vector3 point; float since, lined; };
+	std::vector<MarchingFormation> marchingFormations;
+	int formationsSent = 0;
 	std::vector<CommissionInstance> commissionInstances;
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}
