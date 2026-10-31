@@ -1164,7 +1164,10 @@ void ClientInterface::iter()
 	FrontEnd* frontEnd = FrontEnd::get();
 	if (!singlePlayer && client->getLevel() && !(frontEnd && frontEnd->isOpen()))
 		chatFrame();
-	if (frontEnd && !frontEnd->isOpen() && g_keyPressed[SDL_SCANCODE_ESCAPE] && client->getLevel()) {
+	// Esc, or the top bar's Settings button (openInGameMenu from the HUD script, the frame before)
+	const bool menuRequested = openMenuRequested;
+	openMenuRequested = false;
+	if (frontEnd && !frontEnd->isOpen() && (g_keyPressed[SDL_SCANCODE_ESCAPE] || menuRequested) && client->getLevel()) {
 		frontEnd->setSinglePlayer(singlePlayer);
 		frontEnd->setCanSave((bool)saveGame);
 		frontEnd->open("ingame");
@@ -1738,6 +1741,13 @@ void ClientInterface::iter()
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
 			});
+		// part of an image: its rectangle u0,v0 - u1,v1 (0..1) drawn into x, y, width, height
+		lua.set_function("drawImagePart",
+			[](int x, int y, int width, int height, const std::string& path, float u0, float v0, float u1, float v1) {
+				texture tex = csTextureCache.getTexture(path.c_str(), true);
+				ImGui::GetBackgroundDrawList()->AddImage(tex, ImVec2((float)x, (float)y), ImVec2((float)(x + width), (float)(y + height)), ImVec2(u0, v0), ImVec2(u1, v1));
+			});
+		lua.set_function("openInGameMenu", [this]() { openMenuRequested = true; });
 		// text in a colour (0xAABBGGRR, as drawRect)
 		lua.set_function("drawTextColor",
 			[](int x, int y, const std::string& text, uint32_t color) {

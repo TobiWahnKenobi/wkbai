@@ -170,6 +170,77 @@ function drawPeasantActivity()
 	end
 end
 
+-- The top panel (Standard Panel.tga, 1024 x 85) in two parts at its own size: the left one up to
+-- the end of the Tributes button (x 520), the right one with the resources against the window's
+-- right edge, and between them the Celtic band (x 530-610) repeated. Narrower windows than 1024
+-- get the whole panel scaled, as before.
+local topPanel = "Interface/InGame/Top Panel/Standard Panel.tga"
+local TOP_SPLIT, TOP_TILE0, TOP_TILE1 = 520, 530, 610
+
+function topPanelScale()
+	local w = getWindowWidth()
+	if w >= 1024 then return 1 end
+	return w / 1024
+end
+
+-- a panel x (0-1023) on the window
+function topPanelX(x)
+	local w = getWindowWidth()
+	if w < 1024 then return x * w / 1024 end
+	if x < TOP_SPLIT then return x end
+	return w - 1024 + x
+end
+
+function drawTopPanel()
+	local w = getWindowWidth()
+	if w < 1024 then
+		drawImage(0, 0, w, 85 * w / 1024, topPanel)
+		return
+	end
+	drawImagePart(0, 0, TOP_SPLIT, 85, topPanel, 0, 0, TOP_SPLIT / 1024, 1)
+	local gapEnd = w - (1024 - TOP_SPLIT)
+	local x = TOP_SPLIT
+	while x < gapEnd do
+		local tile = math.min(TOP_TILE1 - TOP_TILE0, gapEnd - x)
+		drawImagePart(x, 0, tile, 85, topPanel, TOP_TILE0 / 1024, 0, (TOP_TILE0 + tile) / 1024, 1)
+		x = x + tile
+	end
+	drawImagePart(gapEnd, 0, 1024 - TOP_SPLIT, 85, topPanel, TOP_SPLIT / 1024, 0, 1, 1)
+	drawTopButtons()
+end
+
+-- The five buttons in the left part (WKB.exe 0x790300: their rectangles as fractions of the
+-- panel). Settings opens the in-game menu; the others are grey, as in a skirmish.
+local topButtons = {
+	{ "Settings", 218, true },
+	{ "Mission Objectives", 278, false },
+	{ "Global Diplomacy", 337, false },
+	{ "Diplomacy", 395, false },
+	{ "Tributes", 455, false },
+}
+
+function drawTopButtons()
+	local s = topPanelScale()
+	for _, b in ipairs(topButtons) do
+		local x, y, bw, bh = topPanelX(b[2]), 20 * s, 56 * s, 14 * s
+		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
+		local mx, my = getMouseX(), getMouseY()
+		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
+		if not b[3] then
+			image = image .. " Grey"
+		elseif hovered then
+			image = image .. " Highlighted"
+		end
+		if hovered then
+			setTooltip(b[1])
+			-- grey ones take the click too (it doesn't go through to the map)
+			local clicked = handleButton()
+			if b[3] and clicked == 1 then openInGameMenu() end
+		end
+		drawImage(x, y, bw, bh, image .. ".tga")
+	end
+end
+
 -- This function is executed every frame
 function CCUI_PerFrame()
 
@@ -181,7 +252,7 @@ function CCUI_PerFrame()
 		local tpm = getWindowWidth() / 1024.0
 		drawImage(11*tpm, 16, 1002*tpm, 45, "Interface/InGame/Top Panel/Standard Panel.tga")
 	else
-		drawImage(0, 0, getWindowWidth(), 85, "Interface/InGame/Top Panel/Standard Panel.tga")
+		drawTopPanel()
 	end
 	drawImage(0, getWindowHeight()-326, 330, 326, "Interface/InGame/Bottom_Left_Panel.tga")
 	drawImage(getWindowWidth()-345, getWindowHeight()-343, 345, 343, "Interface/InGame/Bottom_Right_Panel.tga")
@@ -196,12 +267,17 @@ function CCUI_PerFrame()
 
 	player = getPlayerID()
 	if player ~= 0 then
-		local tpm = getWindowWidth() / 1024.0
-		drawText(674*tpm, 24, tostring(math.floor(getItem(player, "Population Count"))))
-		drawText(674*tpm, 42, tostring(math.floor(getItem(player, "Total Population Count"))))
-		drawText(748*tpm, 24, whole(getItem(player, "Food")))
-		drawText(838*tpm, 24, whole(getItem(player, "Wood")))
-		drawText(930*tpm, 24, whole(getItem(player, "Gold")))
+		-- x in the top panel's 1024 pixels: the right part's (drawTopPanel); widths as they are
+		local tx, tpm = topPanelX, topPanelScale()
+		if getWKVersion() == GSVERSION_WKONE then
+			tpm = getWindowWidth() / 1024.0
+			tx = function(x) return x * tpm end
+		end
+		drawText(tx(674), 24, tostring(math.floor(getItem(player, "Population Count"))))
+		drawText(tx(674), 42, tostring(math.floor(getItem(player, "Total Population Count"))))
+		drawText(tx(748), 24, whole(getItem(player, "Food")))
+		drawText(tx(838), 24, whole(getItem(player, "Wood")))
+		drawText(tx(930), 24, whole(getItem(player, "Gold")))
 		-- the game speed under the top panel: as set, and as reached when that is lower
 		local speedLine
 		if isGamePaused() then
@@ -216,7 +292,7 @@ function CCUI_PerFrame()
 		drawText(12, 88, speedLine)
 		local color = getColor(player) % 8
 		if color == 0 then color = 8 end
-		drawImage((650+8) * tpm - 8, 22, 16, 36, "Interface/InGame/Top Panel/Player" .. tostring(color) .. ".tga")
+		drawImage(tx(650+8) - 8, 22, 16, 36, "Interface/InGame/Top Panel/Player" .. tostring(color) .. ".tga")
 
 		local foodCons = getItem(player, "Food Consumption")
 		local foodProd = computeEquation("Support by Total Farmers by Player", player)
@@ -224,17 +300,17 @@ function CCUI_PerFrame()
 			local foodRatio = math.min(1, foodCons / foodProd)
 			if foodRatio < 1 then
 				local leftWidth = math.floor(64*foodRatio + 0.5)
-				drawRect(744*tpm, 42, leftWidth*tpm, 13, 0xFF004A7F)
-				drawRect((744+leftWidth)*tpm, 42, (64-leftWidth)*tpm, 13, 0xFF007817)
+				drawRect(tx(744), 42, leftWidth*tpm, 13, 0xFF004A7F)
+				drawRect(tx(744+leftWidth), 42, (64-leftWidth)*tpm, 13, 0xFF007817)
 			else
 				local t = math.floor(getSystemTime() * 2)
 				if (t & 1) == 0 then
-					drawRect(744*tpm, 42, 64*tpm, 13, 0xFF0000FF)
+					drawRect(tx(744), 42, 64*tpm, 13, 0xFF0000FF)
 				end
 			end
 		end
 		local foodText = string.format("%i/%i", foodCons, foodProd)
-		drawText(748*tpm, 42, foodText)
+		drawText(tx(748), 42, foodText)
 	end
 
 

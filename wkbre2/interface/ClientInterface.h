@@ -130,6 +130,8 @@ private:
 	// the peasant activity interface over the minimap: -1 closed, 0 the idle bar, 1 all five
 	// (benchmark "peasantActivity" sets it for screenshots)
 	int peasantActivityMode = -1;
+	// the top bar's Settings button asked for the in-game menu (opened the next frame)
+	bool openMenuRequested = false;
 	bool fogOfWarOn() const;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the
