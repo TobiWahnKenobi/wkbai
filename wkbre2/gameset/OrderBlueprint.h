@@ -62,6 +62,9 @@ struct TaskBlueprint {
 	ActionSequence movementCompletedSequence;
 
 	ValueDeterminer* synchAnimationToFraction = nullptr;
+	// PLAY_ANIMATION_TO_FIT <value>: the task's animation is played to last that many seconds (its
+	// loop triggers fire then): chopping takes "Chopper Time", attacks their "Attack Time"
+	ValueDeterminer* playAnimationToFit = nullptr;
 
 	std::vector<int> filterConditionEquations;
 

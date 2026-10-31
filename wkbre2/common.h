@@ -45,6 +45,7 @@ struct CommonGameObject {
 	int color = 0;
 
 	float animStartTime = 0.0f; // should be game_time_t?
+	float animSpeed = 1.0f; // playback rate (PLAY_ANIMATION_TO_FIT), times the animation's own
 	int animationIndex = 0, animationVariant = 0;
 	bool animClamped = false;
 	int animSynchronizedTask = -1;

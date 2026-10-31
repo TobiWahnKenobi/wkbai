@@ -322,6 +322,22 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 	std::string endtag = "END_" + clsname;
 	while (!gsf.eof) {
 		std::string strtag = gsf.nextTag();
+		// ANIMATION_STATE "<animation>" <variant> <start, ms> <rate> <0>: what the
+		// object is playing, as the original saves it (its rate from PLAY_ANIMATION_TO_FIT).
+		// Without it, loaded units had no animation and their animation triggers ran on the
+		// wrong length.
+		if (strtag == "ANIMATION_STATE") {
+			const int anim = gameSet->animations.names.getIndex(gsf.nextString(true));
+			const int variant = gsf.nextInt();
+			const float start = gsf.nextInt() / 1000.0f;
+			const float rate = gsf.nextFloat();
+			if (anim > 0) {
+				obj->animationVariant = std::max(0, variant);
+				obj->setAnimation(anim, false, -1, start, rate);
+			}
+			gsf.advanceLine();
+			continue;
+		}
 		int tag = Tags::GAMEOBJ_tagDict.getTagID(strtag.c_str());
 		switch (tag) {
 		case Tags::GAMEOBJ_ITEM: {
@@ -622,12 +638,12 @@ void ServerGameObject::setItem(int index, float value)
 {
 	assert(index != -1);
 	if (getItem(index) == value) return;
-	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item
+	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item (id 0: on any object)
 	static const char* traceItem = getenv("WKB_TRACE_ITEM");
 	if (traceItem) {
 		static const unsigned traceId = (unsigned)strtoul(traceItem, nullptr, 10);
 		static const char* traceName = strchr(traceItem, ':');
-		if (id == traceId && traceName && Server::instance->gameSet && StrCICompare(Server::instance->gameSet->items.names.getString(index), traceName + 1) == 0)
+		if ((traceId == 0 || id == traceId) && traceName && Server::instance->gameSet && StrCICompare(Server::instance->gameSet->items.names.getString(index), traceName + 1) == 0)
 			printf("ITEM t=%.2f %u \"%s\": %.3f -> %.3f\n", Server::instance->timeManager.currentTime, id, traceName + 1, getItem(index), value);
 	}
 	items[index] = value;
@@ -732,8 +748,9 @@ void ServerGameObject::setColor(int color)
 	Server::instance->sendToAll(msg);
 }
 
-void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int synchronizedTask, float startTime)
+void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int synchronizedTask, float startTime, float speed)
 {
+	this->animSpeed = speed > 0.0f ? speed : 1.0f;
 	this->animationIndex = animationIndex;
 	this->animationVariant = animationVariant;
 	this->animStartTime = startTime >= 0.0f ? startTime : Server::instance->timeManager.currentTime;
@@ -746,6 +763,7 @@ void ServerGameObject::setAnimation(int animationIndex, bool isClamped, int sync
 	msg.writeFloat(this->animStartTime);
 	msg.writeUint8(this->animClamped);
 	msg.writeUint32(this->animSynchronizedTask);
+	msg.writeFloat(this->animSpeed);
 	Server::instance->sendToAll(msg);
 }
 

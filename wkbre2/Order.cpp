@@ -142,6 +142,22 @@ void Task::init()
 
 static void TraceTask(const Task* task, const char* what);
 
+// PLAY_ANIMATION_TO_FIT: the playback rate that makes the task's animation last the given time
+// (1 without it). The original saves it as ANIMATION_STATE's fourth value: Chop_Log 1.10 and
+// Chop_Tree 0.92 for a "Chopper Time" of 2 s.
+float Task::AnimationSpeedToFit(ServerGameObject* go, int anim) const
+{
+	if (!blueprint->playAnimationToFit)
+		return 1.0f;
+	SrvScriptContext ctx(Server::instance, go);
+	const float fit = blueprint->playAnimationToFit->eval(&ctx);
+	Model* model = go->blueprint->getModel(go->subtype, go->appearance, anim, go->animationVariant);
+	const float duration = model ? model->getDuration() : 0.0f;
+	if (fit <= 0.01f || duration <= 0.0f)
+		return 1.0f;
+	return duration / fit;
+}
+
 void Task::start()
 {
 	if (isWorking()) return;
@@ -485,10 +501,19 @@ void AnimationLoopTrigger::update()
 		}
 	}
 	else {
-		float period = model ? model->getDuration() : 1.5f;
+		float period = (model ? model->getDuration() : 1.5f) / obj->animSpeed;
 		if (Server::instance->timeManager.currentTime >= referenceTime + period) {
 			this->blueprint->actions.run(this->task->order->gameObject);
 			this->referenceTime += period;
+			// a fit time that varies (attacks' "Random Missile Attack Time"): evaluated again
+			// for the next loop, the animation restarted at its rate
+			if (task->blueprint->playAnimationToFit && !task->isDone() && obj->animationIndex != 0) {
+				const float speed = task->AnimationSpeedToFit(obj, obj->animationIndex);
+				if (std::abs(speed - obj->animSpeed) > 1e-3f) {
+					obj->setAnimation(obj->animationIndex, obj->animClamped, obj->animSynchronizedTask, -1.0f, speed);
+					this->referenceTime = Server::instance->timeManager.currentTime;
+				}
+			}
 		}
 	}
 }
@@ -516,9 +541,11 @@ void AttachmentPointTrigger::update()
 	ServerGameObject* obj = this->task->order->gameObject;
 	Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant);
 	if (model) {
-		uint32_t startTime = (uint32_t)(obj->animStartTime * 1000.0f);
-		uint32_t prevTime = (uint32_t)(Server::instance->timeManager.previousTime * 1000.0f) - startTime;
-		uint32_t nextTime = (uint32_t)(Server::instance->timeManager.currentTime * 1000.0f) - startTime;
+		// in the animation's own time (its rate: PLAY_ANIMATION_TO_FIT)
+		const float prevT = std::max(0.0f, Server::instance->timeManager.previousTime - obj->animStartTime);
+		const float nextT = std::max(0.0f, Server::instance->timeManager.currentTime - obj->animStartTime);
+		uint32_t prevTime = (uint32_t)(prevT * obj->animSpeed * 1000.0f);
+		uint32_t nextTime = (uint32_t)(nextT * obj->animSpeed * 1000.0f);
 		size_t numAPs = model->getNumAPs();
 		for (size_t i = 0; i < numAPs; i++) {
 			if (model->getAPInfo(i).tag.substr(0, 3) == "SP_") {
@@ -804,7 +831,8 @@ void ObjectReferenceTask::onUpdate()
 				if (animtoplay == -1)
 					animtoplay = blueprint->defaultAnim;
 				if (animtoplay != -1)
-					go->setAnimation(animtoplay, blueprint->playAnimationOnce, blueprint->synchAnimationToFraction ? blueprint->bpid : -1);
+					go->setAnimation(animtoplay, blueprint->playAnimationOnce, blueprint->synchAnimationToFraction ? blueprint->bpid : -1,
+						-1.0f, AnimationSpeedToFit(go, animtoplay));
 
 				// Set orientation towards target, TODO: update when target moves (perhaps on Client?)
 				if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
@@ -817,7 +845,7 @@ void ObjectReferenceTask::onUpdate()
 		else {
 			ServerGameObject* obj = order->gameObject;
 			Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant);
-			float period = model ? model->getDuration() : 0.2f;
+			float period = (model ? model->getDuration() : 0.2f) / obj->animSpeed;
 			if (obj->animationIndex == 0 || Server::instance->timeManager.currentTime >= obj->animStartTime + period) {
 				// only then the proximity can be dissatisfied
 

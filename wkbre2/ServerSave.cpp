@@ -129,6 +129,9 @@ namespace {
 		if (!isLevel && !isPlayer) { // as the original: levels and players have no place
 			w.line("POSITION %.9g %.9g %.9g", obj->position.x, obj->position.y, obj->position.z);
 			w.line("ORIENTATION %.9g %.9g %.9g", obj->orientation.x, obj->orientation.y, obj->orientation.z);
+			if (obj->animationIndex > 0 && obj->animationIndex < (int)w.gs.animations.names.size())
+				w.line("ANIMATION_STATE %s %d %d %.9g 0", inQuotes(w.gs.animations.names.getString(obj->animationIndex)).c_str(),
+					obj->animationVariant, (int)(obj->animStartTime * 1000.0f), obj->animSpeed);
 		}
 		if (isPlayer) {
 			w.line("COLOUR_INDEX %d", obj->color);

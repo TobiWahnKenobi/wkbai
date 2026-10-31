@@ -453,8 +453,8 @@ Model* GameObjBlueprint::getModel(int subtype, int appearance, int animationInde
 		it = ap.animations.find(0);
 	if (it != ap.animations.end()) {
 		const auto& anim = it->second;
-		if (!anim.empty())
-			return anim[animationVariant];
+		if (!anim.empty()) // (a variant beyond the list: the last, e.g. from a save)
+			return anim[std::clamp(animationVariant, 0, (int)anim.size() - 1)];
 	}
 	return nullptr;
 }

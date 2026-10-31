@@ -64,7 +64,7 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void setSubtypeAndAppearance(int new_subtype, int new_appearance);
 	void setColor(int color);
 	// startTime: when the animation began (< 0: now)
-	void setAnimation(int animationIndex, bool isClamped = false, int synchronizedTask = -1, float startTime = -1.0f);
+	void setAnimation(int animationIndex, bool isClamped = false, int synchronizedTask = -1, float startTime = -1.0f, float speed = 1.0f);
 	void startMovement(const Vector3 &destination);
 	void stopMovement();
 	// the walk animation of the last movement, to go on with it when the next movement follows

@@ -826,7 +826,7 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * frac * 1000.0f);
 	}
 	else
-		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * 1000.0f);
+		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
 	obj->sceneEntity.flags = 0;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
 	// walls (RenderSettings::wallShadows): the sheared wall segments and every other piece of a
