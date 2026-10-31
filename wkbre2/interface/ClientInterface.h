@@ -95,6 +95,8 @@ private:
 	void editorGrab();
 	void editorTurn(float degrees);
 	void editorDeleteSelection();
+	// one selected object's name, owner and items, changed on the server (undoably)
+	void editorProperties();
 	// what may keep the level from playing: players without a start camera or without objects
 	std::vector<std::string> editorCheck();
 	void editorWindow();

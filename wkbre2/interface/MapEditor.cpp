@@ -127,6 +127,12 @@ struct ClientInterface::EditorState {
 		uint32_t id;
 		Vector3 position, orientation;
 	};
+	// an object's name, owner and items, as the properties panel found them before an edit
+	struct Props {
+		uint32_t id = 0, parent = 0;
+		std::string name;
+		std::map<int, float> items;
+	};
 	struct Undo {
 		std::vector<uint8_t> heights;
 		std::vector<uint32_t> placed;
@@ -136,7 +142,15 @@ struct ClientInterface::EditorState {
 		std::vector<uint8_t> lakeBits;
 		std::vector<Removed> removed;
 		std::vector<Moved> moved;
+		std::vector<Props> props;
 	};
+	// the properties panel: the object's state when an edit began, the name being typed, and
+	// the item chosen to add
+	Props editStart;
+	uint32_t nameOf = 0;
+	char nameBuf[128] = {};
+	char itemFilter[64] = {};
+	int addItem = -1;
 	std::vector<Undo> undo, redo;
 	static constexpr size_t MAX_UNDO = 30;
 	void pushUndo(Undo u) {
@@ -149,6 +163,8 @@ struct ClientInterface::EditorState {
 	// an object removed and placed again by undo or redo gets a new id: steps that name the old
 	// one find the new one through this
 	std::unordered_map<uint32_t, uint32_t> respawned;
+	static Props readProps(ServerGameObject* obj);
+	void applyProps(Server& server, ServerGameObject* obj, const Props& p) const;
 	uint32_t resolve(uint32_t id) const {
 		for (auto it = respawned.find(id); it != respawned.end(); it = respawned.find(id))
 			id = it->second;
@@ -769,6 +785,7 @@ void ClientInterface::editorWindow()
 				if (ImGui::Button("Remove (Delete)"))
 					editorDeleteSelection();
 				ImGui::TextWrapped("Click or drag a box to select, as in the game. Move: the selection follows the cursor; a left click puts it down, a right click puts it back.");
+				editorProperties();
 			}
 			else {
 			static const int classes[] = { Tags::GAMEOBJCLASS_BUILDING, Tags::GAMEOBJCLASS_CHARACTER, Tags::GAMEOBJCLASS_CONTAINER,
@@ -942,6 +959,36 @@ static ServerGameObject* FindLive(Server& server, uint32_t id)
 	return obj && !obj->deleted ? obj : nullptr;
 }
 
+ClientInterface::EditorState::Props ClientInterface::EditorState::readProps(ServerGameObject* obj)
+{
+	Props p;
+	p.id = obj->id;
+	p.parent = obj->parent ? obj->parent->id : 0;
+	p.name = obj->name;
+	p.items = obj->items;
+	return p;
+}
+
+// an object's name, owner and items set to the ones kept (an item it has now but didn't then
+// goes)
+void ClientInterface::EditorState::applyProps(Server& server, ServerGameObject* obj, const Props& p) const
+{
+	if (obj->name != p.name)
+		obj->setName(p.name);
+	if (ServerGameObject* parent = FindLive(server, resolve(p.parent)); parent && obj->parent && parent != obj->parent)
+		obj->setParent(parent);
+	std::vector<int> gone;
+	for (const auto& [item, value] : obj->items)
+		if (!p.items.count(item))
+			gone.push_back(item);
+	for (int item : gone) {
+		obj->setItem(item, 0.0f);
+		obj->items.erase(item);
+	}
+	for (const auto& [item, value] : p.items)
+		obj->setItem(item, value);
+}
+
 void ClientInterface::editorUndo() { editorStep(false); }
 void ClientInterface::editorRedo() { editorStep(true); }
 
@@ -1023,6 +1070,132 @@ void ClientInterface::editorDeleteSelection()
 	ed.pushUndo(std::move(u));
 }
 
+void ClientInterface::editorProperties()
+{
+	if (!editor || selection.size() != 1)
+		return;
+	EditorState& ed = *editor;
+	ClientGameObject* sel = selection.begin()->get();
+	if (!sel)
+		return;
+	const uint32_t id = sel->id;
+	EditorState::Props cur;
+	std::string typeName;
+	std::vector<std::pair<uint32_t, std::string>> players;
+	bool found = false;
+	withServer([&](Server& server) {
+		ServerGameObject* obj = FindLive(server, id);
+		if (!obj)
+			return;
+		found = true;
+		cur = EditorState::readProps(obj);
+		typeName = obj->blueprint->name;
+		if (ServerGameObject* level = server.getLevel())
+			for (const auto& [type, children] : level->children)
+				for (CommonGameObject* child : children)
+					if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+						players.emplace_back(child->id, std::to_string(child->id) + " " + child->blueprint->name);
+	});
+	if (!found)
+		return;
+	const auto& itemNames = client->gameSet->items.names;
+	// each edit applies at once; a field keeps the state from when it was entered, and its
+	// undo step goes in when it's left
+	auto change = [&](auto&& f) {
+		withServer([&](Server& server) {
+			if (ServerGameObject* obj = FindLive(server, id))
+				f(server, obj);
+		});
+	};
+	auto began = [&] {
+		if (ImGui::IsItemActivated())
+			ed.editStart = cur;
+	};
+	auto ended = [&] {
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			EditorState::Undo u;
+			u.props.push_back(ed.editStart);
+			ed.pushUndo(std::move(u));
+		}
+	};
+	auto undoNow = [&] {
+		EditorState::Undo u;
+		u.props.push_back(cur);
+		ed.pushUndo(std::move(u));
+	};
+
+	ImGui::Separator();
+	ImGui::Text("%u %s", id, typeName.c_str());
+	if (ed.nameOf != id) {
+		ed.nameOf = id;
+		snprintf(ed.nameBuf, sizeof(ed.nameBuf), "%s", cur.name.c_str());
+	}
+	if (ImGui::InputText("Name", ed.nameBuf, sizeof(ed.nameBuf))) {
+		const std::string name = ed.nameBuf;
+		change([&](Server&, ServerGameObject* obj) { obj->setName(name); });
+	}
+	began();
+	ended();
+	std::string owner;
+	for (const auto& p : players)
+		if (p.first == cur.parent)
+			owner = p.second;
+	if (!owner.empty() && ImGui::BeginCombo("Owner", owner.c_str())) {
+		for (const auto& p : players)
+			if (ImGui::Selectable(p.second.c_str(), p.first == cur.parent) && p.first != cur.parent) {
+				undoNow();
+				const uint32_t to = p.first;
+				change([&](Server& server, ServerGameObject* obj) {
+					if (ServerGameObject* player = FindLive(server, to))
+						obj->setParent(player);
+				});
+			}
+		ImGui::EndCombo();
+	}
+	ImGui::Text("Items (%zu)", cur.items.size());
+	int removeItem = -1;
+	for (const auto& [item, value] : cur.items) {
+		ImGui::PushID(item);
+		float v = value;
+		if (ImGui::SmallButton("x"))
+			removeItem = item;
+		ImGui::SameLine();
+		if (ImGui::InputFloat(itemNames.getString(item).c_str(), &v, 0.0f, 0.0f, "%.2f")) {
+			const int it = item;
+			change([&](Server&, ServerGameObject* obj) { obj->setItem(it, v); });
+		}
+		began();
+		ended();
+		ImGui::PopID();
+	}
+	if (removeItem >= 0) {
+		undoNow();
+		change([&](Server&, ServerGameObject* obj) {
+			obj->setItem(removeItem, 0.0f);
+			obj->items.erase(removeItem);
+		});
+	}
+	// a new item, from the game set's list (with a filter), set to 1
+	ImGui::InputText("Item filter", ed.itemFilter, sizeof(ed.itemFilter));
+	const std::string addName = ed.addItem >= 0 ? itemNames.getString(ed.addItem) : std::string();
+	if (ImGui::BeginCombo("New item", addName.c_str())) {
+		for (size_t i = 0; i < itemNames.size(); i++) {
+			const std::string& name = itemNames.getString((int)i);
+			if ((ed.itemFilter[0] && !ContainsNoCase(name, ed.itemFilter)) || cur.items.count((int)i))
+				continue;
+			if (ImGui::Selectable(name.c_str(), (int)i == ed.addItem))
+				ed.addItem = (int)i;
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Add") && ed.addItem >= 0 && !cur.items.count(ed.addItem)) {
+		undoNow();
+		const int it = ed.addItem;
+		change([&](Server&, ServerGameObject* obj) { obj->setItem(it, 1.0f); });
+	}
+}
+
 void ClientInterface::editorStep(bool redoing)
 {
 	if (!editor)
@@ -1049,8 +1222,15 @@ void ClientInterface::editorStep(bool redoing)
 		for (int i = 0; i < trn->width * trn->height; i++)
 			back.tiles.push_back({ trn->tiles[i].texture, (uint8_t)trn->tiles[i].rot, (uint8_t)trn->tiles[i].xflip, (uint8_t)trn->tiles[i].zflip });
 	}
-	if (!u.placed.empty() || !u.removed.empty() || !u.moved.empty()) {
+	if (!u.placed.empty() || !u.removed.empty() || !u.moved.empty() || !u.props.empty()) {
 		withServer([&](Server& server) {
+			// name, owner, items: as they were
+			for (const auto& p : u.props)
+				if (ServerGameObject* obj = FindLive(server, ed.resolve(p.id))) {
+					back.props.push_back(EditorState::readProps(obj));
+					back.props.back().id = p.id;
+					ed.applyProps(server, obj, p);
+				}
 			// placed: removed again
 			for (uint32_t pid : u.placed)
 				if (ServerGameObject* obj = FindLive(server, ed.resolve(pid)); obj && obj->parent) {
@@ -1073,7 +1253,7 @@ void ClientInterface::editorStep(bool redoing)
 					obj->setOrientation(m.orientation);
 				}
 		});
-		what = !u.moved.empty() ? "objects moved or turned" : !u.placed.empty() ? "objects placed" : "objects removed";
+		what = !u.props.empty() ? "an object's properties" : !u.moved.empty() ? "objects moved or turned" : !u.placed.empty() ? "objects placed" : "objects removed";
 	}
 	to.push_back(std::move(back));
 	if (to.size() > EditorState::MAX_UNDO)
@@ -1441,6 +1621,41 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 			editorUndo();
 		showWindmill("after 3 more undos");
 		ed.objectTool = EditorState::PLACE;
+	}
+	// its name, owner and an item changed as the properties panel does (the state before kept
+	// for undo), then undone and done again
+	if (windmill && frame == 151) {
+		auto showProps = [&](const char* when) {
+			withServer([&](Server& server) {
+				if (ServerGameObject* obj = FindLive(server, ed.resolve(windmill)))
+					printf("EDITORTEST windmill %s: name \"%s\", owner %u, %zu items, \"Food Production\" %.1f\n", when, obj->name.c_str(),
+						obj->parent ? obj->parent->id : 0, obj->items.size(), obj->getItem(server.gameSet->items.names.getIndex("Food Production")));
+			});
+		};
+		showProps("before");
+		EditorState::Undo u;
+		withServer([&](Server& server) {
+			ServerGameObject* obj = FindLive(server, ed.resolve(windmill));
+			ServerGameObject* other = nullptr;
+			if (ServerGameObject* level = server.getLevel())
+				for (const auto& [type, children] : level->children)
+					for (CommonGameObject* child : children)
+						if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && child != obj->parent && child->blueprint->name != "Neutral Player" && !other)
+							other = (ServerGameObject*)child;
+			u.props.push_back(EditorState::readProps(obj));
+			obj->setName("Test Mill");
+			obj->setItem(server.gameSet->items.names.getIndex("Food Production"), 7.0f);
+			if (other)
+				obj->setParent(other);
+		});
+		ed.pushUndo(std::move(u));
+		showProps("edited");
+		editorUndo();
+		showProps("undone");
+		editorRedo();
+		showProps("redone");
+		editorUndo();
+		showProps("undone again");
 	}
 	if (frame == 160) {
 		editorSave("Editor Test");
