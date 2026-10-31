@@ -167,6 +167,7 @@ void Task::start()
 	// with TRIGGERS_STARTED and a reference time from long before had its animation-loop
 	// trigger fire at once: the cart collected in the same update as it arrived)
 	this->loadedArrived = false;
+	this->loadedTriggers = false;
 	this->stopTriggers();
 	if (this->blueprint->usePreviousTaskTarget) {
 		if (this->id > 0)
@@ -808,6 +809,12 @@ void ObjectReferenceTask::onUpdate()
 				// (its last tile next to the footprint was taken), within one tile more
 				? (edge < this->proximity || (!go->movementController.isMoving() && edge < this->proximity + 5.0f))
 				: (go->position - destination).sqlen2xz() < prox * prox));
+		// a saved arrival is often stale: the original keeps the flag from the task's last cycle
+		// (finished tasks have it too) and its carriers flagged 40-100 m from their castle still
+		// walk. Trusted when the task's triggers were running or the unit is within 30 m of the
+		// target's centre (the Kingmaker's cart waited 28 m from its village without moving).
+		if (loadedArrived && !loadedTriggers && (go->position - target->position).sqlen2xz() > 30.0f * 30.0f)
+			loadedArrived = false;
 		const bool arrived = loadedArrived || measured;
 		if (arrived) {
 			this->startTriggers();

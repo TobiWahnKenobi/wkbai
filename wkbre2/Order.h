@@ -74,6 +74,7 @@ struct Task {
 	// footprint-edge test here doesn't count as arrived: the cart drove up and collected 4 s
 	// early, and the Kingmaker's food came 8 s early.
 	bool loadedArrived = false;
+	bool loadedTriggers = false; // and its triggers were running (TRIGGERS_STARTED 1)
 	float AnimationSpeedToFit(ServerGameObject* go, int anim) const;
 
 	Task(int id, const TaskBlueprint* blueprint, Order* order);

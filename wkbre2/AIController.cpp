@@ -420,7 +420,11 @@ void AIController::update()
 				[isFoundationItem](SrvGORef& ref) { return !(ref && ref->getItem(isFoundationItem) > 0.0f); }
 			);
 			reqinst.foundations.erase(it, reqinst.foundations.end());
-			size_t requiredCount = (size_t)gsreq.vdCountNeeded->eval(&ctx);
+			// rounded up, as the character requirements: the original's Kingmaker wants max(10,
+			// peasants / 2.5) farms, 34.8 for its 87 peasants, and placed a 35th foundation for its
+			// 34 farms (test 36, wood 1027 -> 972 by 1805.42); cut to 34, wkbai placed none
+			const float wanted = gsreq.vdCountNeeded->eval(&ctx);
+			size_t requiredCount = wanted > 0.0f ? (size_t)std::ceil(wanted - 1e-4f) : 0;
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			size_t inCtrCount = reqinst.foundations.size();
 			while (!saving && existingCount + inCtrCount < requiredCount) {
