@@ -137,6 +137,19 @@ void Server::loadSaveGame(const char * filename)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
 
+	// what can be built upon (tree stumps) goes from under every building, as WKB.exe does on
+	// loading: its Marjoria's Keep save loaded and saved again at once had lost the 5 stumps
+	// under three Barren Farms and a farm foundation, and nothing else had changed. Props only:
+	// the food sacks, grain piles, birds and stones (containers, also CAN_BE_BUILT_UPON) stayed
+	{
+		std::vector<ServerGameObject*> buildings;
+		for (auto& [id, obj] : idmap)
+			if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && obj->blueprint->footprint)
+				buildings.push_back((ServerGameObject*)obj);
+		for (ServerGameObject* b : buildings)
+			b->removeBuiltUponUnderFootprint(true);
+	}
+
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
 		clientPlayerObjects[i]->clientIndex = i;
 
@@ -706,6 +719,27 @@ void ServerGameObject::setOrientation(const Vector3 & orientation)
 	Server::instance->sendToAll(msg);
 }
 
+void ServerGameObject::removeBuiltUponUnderFootprint(bool propsOnly)
+{
+	if (blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !blueprint->footprint || !Server::instance->terrain)
+		return;
+	const auto rotOrigin = blueprint->footprint->rotateOrigin(orientation.y);
+	const int ox = (int)((position.x - rotOrigin.first) / 5.0f), oz = (int)((position.z - rotOrigin.second) / 5.0f);
+	std::vector<ServerGameObject*> doomed;
+	for (const auto& to : blueprint->footprint->tiles) {
+		const auto [rx, rz] = to.rotate(orientation.y);
+		const float x0 = (ox + rx) * 5.0f, z0 = (oz + rz) * 5.0f;
+		NNSearch search;
+		search.start(Server::instance, Vector3(x0 + 2.5f, 0, z0 + 2.5f), 4.0f);
+		while (ServerGameObject* o = (ServerGameObject*)search.next())
+			if (o != this && o->blueprint->canBeBuiltUpon && (!propsOnly || o->blueprint->bpClass == Tags::GAMEOBJCLASS_PROP)
+				&& o->position.x >= x0 && o->position.x < x0 + 5.0f && o->position.z >= z0 && o->position.z < z0 + 5.0f)
+				doomed.push_back(o);
+	}
+	for (ServerGameObject* o : doomed)
+		Server::instance->deleteObject(o);
+}
+
 void ServerGameObject::setSubtypeAndAppearance(int new_subtype, int new_appearance)
 {
 	auto bpSubtype = blueprint->subtypes.find(new_subtype);
@@ -890,26 +924,10 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	this->updateSightRange();
 	// update footprint
 	this->updateOccupiedTiles(this->position, this->orientation, this->position, this->orientation);
-	// what can be built upon (tree stumps) goes from the footprint's tiles: on Marjoria's Keep
-	// the original removed the stumps under its farms as they turned between barren and sown,
-	// and under a foundation as it was finished (placing the foundation had left it)
-	if (postbp->bpClass == Tags::GAMEOBJCLASS_BUILDING && postbp->footprint && Server::instance->terrain) {
-		const auto rotOrigin = postbp->footprint->rotateOrigin(orientation.y);
-		const int ox = (int)((position.x - rotOrigin.first) / 5.0f), oz = (int)((position.z - rotOrigin.second) / 5.0f);
-		std::vector<ServerGameObject*> doomed;
-		for (const auto& to : postbp->footprint->tiles) {
-			const auto [rx, rz] = to.rotate(orientation.y);
-			const float x0 = (ox + rx) * 5.0f, z0 = (oz + rz) * 5.0f;
-			NNSearch search;
-			search.start(Server::instance, Vector3(x0 + 2.5f, 0, z0 + 2.5f), 4.0f);
-			while (ServerGameObject* o = (ServerGameObject*)search.next())
-				if (o != this && o->blueprint->canBeBuiltUpon && o->position.x >= x0 && o->position.x < x0 + 5.0f
-					&& o->position.z >= z0 && o->position.z < z0 + 5.0f)
-					doomed.push_back(o);
-		}
-		for (ServerGameObject* o : doomed)
-			Server::instance->deleteObject(o);
-	}
+	// what can be built upon (tree stumps, props) goes from the footprint's tiles. (Seen first as
+	// the stump under a finished foundation; WKB.exe's saves show it gone on loading instead, so
+	// this only matters for a building converted onto new ground.)
+	removeBuiltUponUnderFootprint(true);
 	// reset flags
 	this->updateFlags((this->flags & ~(fRenderable | fSelectable | fTargetable)) | postbp->getStartingFlags());
 }

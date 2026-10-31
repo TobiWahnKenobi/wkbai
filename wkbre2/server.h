@@ -76,6 +76,8 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void dissociateObject(int category, ServerGameObject *associated);
 	void clearAssociates(int category);
 	void convertTo(const GameObjBlueprint *postbp);
+	// removes what can be built upon (CAN_BE_BUILT_UPON: tree stumps) from the footprint's tiles
+	void removeBuiltUponUnderFootprint(bool propsOnly = false);
 	void setScale(const Vector3& scale);
 	void terminate();
 	void destroy();
