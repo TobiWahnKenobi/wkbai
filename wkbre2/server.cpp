@@ -1623,6 +1623,63 @@ void Server::tick()
 	network();
 }
 
+void Server::updatePeasantActivity()
+{
+	if (!gameSet || !getLevel())
+		return;
+	const GameSet& gs = *gameSet;
+	enum { IDLE, FARMING, WOOD, SHOP, STONE, GOLD, BUILD, COUNT };
+	static const char* items[COUNT] = { "Idle Peasant Count", "Number of Farmers", "Wood Chopper Count", "Shop Keeper Count",
+		"Stone Miner Count", "Gold Miner Count", "Builder Count" };
+	static const char* categories[][2] = { { "Order Farming", nullptr }, { "Order Wood Chopping", nullptr }, { "Order Shop Keeping", nullptr },
+		{ "Order Mining", nullptr }, { "Order Gold Mining", nullptr }, { "Order Build", "Order Repair" } };
+	int itemIndex[COUNT];
+	for (int i = 0; i < COUNT; i++)
+		itemIndex[i] = gs.items.names.getIndex(items[i]);
+	// order category -> activity
+	std::map<int, int> byCategory;
+	for (int a = 0; a < COUNT - 1; a++)
+		for (const char* name : categories[a])
+			if (name)
+				if (int c = gs.orderCategories.names.getIndex(name); c >= 0)
+					byCategory[c] = a + 1;
+	const int isPeasant = gs.items.names.getIndex("I Am A Peasant");
+	if (isPeasant < 0)
+		return;
+	for (const auto& [type, children] : getLevel()->children)
+		for (CommonGameObject* c : children) {
+			ServerGameObject* player = (ServerGameObject*)c;
+			if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+				continue;
+			int counts[COUNT] = {};
+			auto walk = [&](ServerGameObject* obj, auto& self) -> void {
+				for (const auto& [t, ch] : obj->children)
+					for (CommonGameObject* o : ch) {
+						auto* so = (ServerGameObject*)o;
+						if (so->deleted)
+							continue;
+						if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && so->getItem(isPeasant) > 0.0f) {
+							Order* order = so->orderConfig.getCurrentOrder();
+							if (!order)
+								counts[IDLE]++;
+							else if (auto it = byCategory.find(order->blueprint->category); it != byCategory.end())
+								counts[it->second]++;
+							else if (getenv("WKB_TRACE_ACTIVITY"))
+								printf("ACTIVITY player %u peasant %u: order %s (category %d)\n", player->id, so->id,
+									gs.orders.getString(order->blueprint->bpid).c_str(), order->blueprint->category);
+						}
+						self(so, self);
+					}
+			};
+			walk(player, walk);
+			// "Number of Farmers" is the scripts' finder of the same name, kept with the AI update
+			// (the food support depends on it): not overwritten here
+			for (int i = 0; i < COUNT; i++)
+				if (i != FARMING && itemIndex[i] >= 0 && player->getItem(itemIndex[i]) != (float)counts[i])
+					player->setItem(itemIndex[i], (float)counts[i]);
+		}
+}
+
 // "profileSim": true prints where the simulation's time goes, every 10 s (per step, in ms)
 namespace {
 	struct SimProfile {
@@ -1645,6 +1702,11 @@ void Server::simulate()
 	SimTimer totalTimer(g_simProfile.total);
 	g_simProfile.steps++;
 	simStepIndex++;
+	// once a game second (while paused, every 30 steps: the clock stands)
+	if (timeManager.currentTime >= nextPeasantActivityUpdate || (timeManager.paused && simStepIndex % 30 == 0)) {
+		nextPeasantActivityUpdate = timeManager.currentTime + 1.0f;
+		updatePeasantActivity();
+	}
 	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)

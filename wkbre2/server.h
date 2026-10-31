@@ -274,6 +274,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void tick();
 	// tick's parts: the game for one time step, then the clients' messages and the time sync
 	void simulate();
+	// the players' peasant activity counts (Idle Peasant Count, Wood Chopper Count, ...), which
+	// WKB.exe's engine keeps and the peasant activity interface shows; once a game second
+	void updatePeasantActivity();
+	float nextPeasantActivityUpdate = 0.0f;
 	// simulate() calls so far (staggers the work that doesn't need every step)
 	uint64_t simStepIndex = 0;
 	void network();

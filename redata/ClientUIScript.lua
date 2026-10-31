@@ -128,6 +128,48 @@ function drawSelectionInformation(obj)
 	end
 end
 
+-- The peasant activity interface above the minimap (WKB.exe's CEconomicStatsWnd, drawn at
+-- 0x77BC70): the top arc of the minimap panel cycles closed, the idle peasants' tube, all five.
+-- Each tube (Tube 1.tga) holds its activity's icon at the right end, the count in cyan, and a red
+-- bar growing from the right with it; rods (Strip 1/2) frame the five.
+local activityRows = {
+	{ "Interface/Icons/SIC_Shop.tga", "Shop Keeper Count", "Gold Miner Count" },
+	{ "Interface/Icons/SIC_Farm.tga", "Number of Farmers" },
+	{ "Interface/Icons/SIC_Chop_Wood.tga", "Wood Chopper Count", "Stone Miner Count" },
+	{ "Interface/Icons/SIC_Build_Civic.tga", "Builder Count" },
+	{ "Interface/InGame/Lazy Peasant.tga", "Idle Peasant Count" },
+}
+
+function drawPeasantActivity()
+	local mode = getPeasantActivityMode()
+	local player = getPlayerID()
+	if mode < 0 or player == 0 then return end
+	local x0 = getWindowWidth() - 316
+	local idleY = getWindowHeight() - 343 - 40
+	local first = 5
+	if mode == 1 then first = 1 end
+	if mode == 1 then
+		drawImage(x0 + 14, idleY - 4 * 60 - 4, 8, 4 * 60 + 60, "Interface/InGame/Strip 1.tga")
+		drawImage(x0 + 276, idleY - 4 * 60 - 4, 8, 4 * 60 + 60, "Interface/InGame/Strip 2.tga")
+	end
+	for i = first, 5 do
+		local row = activityRows[i]
+		local y = idleY - (5 - i) * 60
+		local a = getItem(player, row[2])
+		local b = 0
+		local text = whole(a)
+		if row[3] then
+			b = getItem(player, row[3])
+			text = text .. " + " .. whole(b)
+		end
+		drawImage(x0, y, 308, 52, "Interface/InGame/Tube 1.tga")
+		local w = math.min((a + b) * 3, 220)
+		if w > 0 then drawRect(x0 + 250 - w, y + 18, w, 16, 0xFF1010C8) end
+		drawTextColor(x0 + 30, y + 18, text, 0xFFF2E12A)
+		drawImage(x0 + 258, y + 4, 44, 44, row[1])
+	end
+end
+
 -- This function is executed every frame
 function CCUI_PerFrame()
 
@@ -147,6 +189,7 @@ function CCUI_PerFrame()
 	drawMinimap(getWindowWidth()-345+53, getWindowHeight()-343+53, 235, 234)
 	-- Military / civilian / resource toggles and the peasant activity button around it
 	drawMinimapButtons(getWindowWidth()-345, getWindowHeight()-343)
+	drawPeasantActivity()
 
 
 	-- Top Panel Information

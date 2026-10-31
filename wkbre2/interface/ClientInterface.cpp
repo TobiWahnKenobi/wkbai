@@ -347,7 +347,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 		{ "Interface\\InGame\\Military Mini Map Button Depressed.tga", 7, 67, GameObjBlueprint::MINIMAP_MILITARY },
 		{ "Interface\\InGame\\Economic Mini Map Button Depressed.tga", 72, 294, GameObjBlueprint::MINIMAP_ECONOMIC },
 		{ "Interface\\InGame\\Resource Mini Map Button Depressed.tga", 294, 70, GameObjBlueprint::MINIMAP_RESOURCE },
-		{ "Interface\\InGame\\Statistics Mini Map Button Grey.tga", 71, 7, 0 },
+		{ "Interface\\InGame\\Statistics Mini Map Button Depressed.tga", 71, 7, 0 },
 	};
 	ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 	bool hoveredAny = false;
@@ -364,7 +364,14 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 		hoveredAny |= hovered;
 		if (hovered && button.category && g_mousePressed[SDL_BUTTON_LEFT])
 			minimapHiddenCategories ^= button.category;
-		const bool depressed = button.category ? (minimapHiddenCategories & button.category) != 0 : true;
+		// the top arc: the peasant activity interface (WKB.exe's CEconomicStatsWnd), each click
+		// the next of closed, the idle peasants' bar, all five activities' bars
+		if (hovered && !button.category) {
+			ImGui::SetTooltip("Display Peasant Activity Interface");
+			if (g_mousePressed[SDL_BUTTON_LEFT])
+				peasantActivityMode = peasantActivityMode == -1 ? 0 : peasantActivityMode == 0 ? 1 : -1;
+		}
+		const bool depressed = button.category ? (minimapHiddenCategories & button.category) != 0 : peasantActivityMode >= 0;
 		if (depressed) {
 			const ImVec2 p0((float)(panelX + button.x), (float)(panelY + button.y));
 			drawList->AddImage(button.tex, p0, ImVec2(p0.x + button.mask.width, p0.y + button.mask.height));
@@ -1195,6 +1202,14 @@ void ClientInterface::iter()
 			client->sendMessage("!" + script[1].get<std::string>());
 		}
 	}
+	// Test runs: "benchmark": { ..., "peasantActivity": 0 or 1 } opens the peasant activity interface
+	if (BenchmarkEnabled() && peasantActivityMode == -1) {
+		static bool applied = false;
+		if (!applied) {
+			applied = true;
+			peasantActivityMode = g_settings.value("benchmark", nlohmann::json()).value("peasantActivity", -1);
+		}
+	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
@@ -1723,6 +1738,13 @@ void ClientInterface::iter()
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
 			});
+		// text in a colour (0xAABBGGRR, as drawRect)
+		lua.set_function("drawTextColor",
+			[](int x, int y, const std::string& text, uint32_t color) {
+				ImGui::GetBackgroundDrawList()->AddText(ImVec2((float)x, (float)y), color, text.c_str());
+			});
+		// the peasant activity interface: -1 closed, 0 the idle bar, 1 all five bars
+		lua.set_function("getPeasantActivityMode", [this]() { return peasantActivityMode; });
 		lua.set_function("getTextWidth",
 			[](const std::string& text) { return (int)ImGui::CalcTextSize(text.c_str()).x; });
 		lua.set_function("getFirstSelection",
