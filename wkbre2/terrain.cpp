@@ -380,6 +380,59 @@ bool Terrain::writeBCM(const std::filesystem::path& path, bool newMinimap) const
 	return (bool)f;
 }
 
+bool Terrain::writeBlankBCM(const std::filesystem::path& path, int playableWidth, int playableHeight, const TerrainTexture* texture, uint8_t heightSteps) const
+{
+	if (bcmData.size() < 0x18 || bcmMinimapOffset < 0x18 || !texture || !texture->grp || playableWidth <= 0 || playableHeight <= 0)
+		return false;
+	const uint32_t w = (uint32_t)(playableWidth + 2 * edge), h = (uint32_t)(playableHeight + 2 * edge), e = (uint32_t)edge;
+	// the 12 header bytes, the size, then this map's texture database, scale, sun, fog and sky
+	std::vector<uint8_t> out(bcmData.begin(), bcmData.begin() + 12);
+	for (uint32_t v : { w, h, e })
+		out.insert(out.end(), (const uint8_t*)&v, (const uint8_t*)&v + 4);
+	out.insert(out.end(), bcmData.begin() + 0x18, bcmData.begin() + bcmMinimapOffset);
+	// the minimap: one colour, the mean of this map's (the editor draws it again on saving)
+	uint32_t sum[3] = {};
+	for (size_t i = 0; i < minimapRGBA.size() / 4; i++)
+		for (int c = 0; c < 3; c++)
+			sum[c] += minimapRGBA[i * 4 + c];
+	const size_t n = std::max<size_t>(1, minimapRGBA.size() / 4);
+	for (int i = 0; i < 128 * 128; i++)
+		for (int c = 0; c < 3; c++)
+			out.push_back((uint8_t)(sum[c] / n));
+	uint64_t bit = (uint64_t)out.size() * 8;
+	auto put = [&](uint32_t value, int bits) {
+		for (int i = 0; i < bits; i++, bit++) {
+			const size_t byte = (size_t)(bit / 8);
+			if (byte >= out.size())
+				out.resize(byte + 1, 0);
+			if ((value >> i) & 1)
+				out[byte] |= (uint8_t)(1 << (bit % 8));
+		}
+	};
+	put(0, 6); // no lakes
+	put(1, 16);
+	put((uint32_t)texture->grp->name.size(), 8);
+	for (char c : texture->grp->name)
+		put((uint8_t)c, 8);
+	put(1, 16);
+	put((uint32_t)texture->id, 32);
+	const int groupBits = GetMaxBits(1), idBits = GetMaxBits(1);
+	for (uint32_t i = 0; i < w * h; i++) {
+		put(0, groupBits);
+		put(0, idBits);
+		put(0, 4); // no turn, no flips
+	}
+	put(0, 32);
+	put(bcmExtraConstant, 32);
+	for (uint32_t i = 0; i < (w + 1) * (h + 1); i++)
+		put(heightSteps, 8);
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream f(path, std::ios::binary);
+	f.write((const char*)out.data(), (std::streamsize)out.size());
+	return (bool)f;
+}
+
 void Terrain::readSNR(const char* filename)
 {
 	char* text; int textsize;

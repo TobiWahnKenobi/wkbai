@@ -114,6 +114,10 @@ struct Terrain
 	Tile* getTileMutable(int tx, int tz) { return (tx >= 0 && tx < width && tz >= 0 && tz < height) ? &tiles[tz * width + tx] : nullptr; }
 	// newMinimap: the minimap drawn again from the terrain (the map editor), else as read
 	bool writeBCM(const std::filesystem::path& path, bool newMinimap = false) const;
+	// a new map of another size: playable tiles (plus this map's edge on each side), flat at
+	// height steps, one texture, no lakes; header (texture database, scale, sun, fog, sky) as this
+	// map's, the minimap one colour (this map's minimap's mean)
+	bool writeBlankBCM(const std::filesystem::path& path, int playableWidth, int playableHeight, const TerrainTexture* texture, uint8_t heightSteps) const;
 	void readSNR(const char* filename);
 	void readTRN(const char* filename);
 

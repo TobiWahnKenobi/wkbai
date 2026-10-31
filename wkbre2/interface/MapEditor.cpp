@@ -106,6 +106,9 @@ struct ClientInterface::EditorState {
 	float placeYaw = 0.0f;
 
 	char saveName[64] = "My map";
+	// a new map of another size: its playable tiles (from the open map's at first)
+	int newWidth = 128, newHeight = 128;
+	bool newSizeSet = false;
 	std::string status;
 	std::vector<std::string> warnings;
 
@@ -879,6 +882,31 @@ void ClientInterface::editorWindow()
 				ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
 		}
+		// a new map of another size: written, saved under the map name, and opened in the editor
+		ImGui::SameLine();
+		if (ImGui::Button("New map of another size..."))
+			ImGui::OpenPopup("New map of another size");
+		if (ImGui::BeginPopupModal("New map of another size", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			if (client->terrain && !ed.newSizeSet) {
+				const auto [w, h] = client->terrain->getNumPlayableTiles();
+				ed.newWidth = w;
+				ed.newHeight = h;
+				ed.newSizeSet = true;
+			}
+			ImGui::InputInt("Width (tiles of 5 m)", &ed.newWidth, 16, 64);
+			ImGui::InputInt("Height (tiles of 5 m)", &ed.newHeight, 16, 64);
+			ed.newWidth = std::clamp(ed.newWidth, 16, 1024);
+			ed.newHeight = std::clamp(ed.newHeight, 16, 1024);
+			ImGui::TextWrapped("Flat ground of one texture, no lakes, and the players with their start cameras kept inside the new area. It's saved as \"%s\" (the map name) and opened in the editor. The open map stays as it was saved.", ed.saveName);
+			if (ImGui::Button("Make it")) {
+				editorNewMap(ed.saveName, ed.newWidth, ed.newHeight);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel"))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 		for (const std::string& w : ed.warnings)
 			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", w.c_str());
 		if (!ed.status.empty())
@@ -999,6 +1027,67 @@ void ClientInterface::EditorState::applyProps(Server& server, ServerGameObject* 
 	}
 	for (const auto& [item, value] : p.items)
 		obj->setItem(item, value);
+}
+
+// A new map of another size: the open level is made blank (no objects but the players), its
+// terrain written again at the new size (flat, its one texture, no lakes) under the name, the
+// players' start cameras kept inside the new area, and the level saved with that map. It is then
+// opened in the editor (the client's and the server's terrain can't change size in place).
+bool ClientInterface::editorNewMap(const std::string& name, int width, int height)
+{
+	if (!editor)
+		editor = std::make_shared<EditorState>();
+	EditorState& ed = *editor;
+	if (name.empty() || name.find_first_of("\\/:*?\"<>|") != std::string::npos) {
+		ed.status = "Not a valid name";
+		return false;
+	}
+	editorBlankMap();
+	bool ok = false;
+	withServer([&](Server& server) {
+		Terrain* trn = server.terrain;
+		if (!trn || !trn->tiles)
+			return;
+		const std::string bcm = "Maps\\" + name + "\\" + name + ".bcm";
+		const auto saved = g_userPath / "saved";
+		ok = trn->writeBlankBCM(saved / PathFromUtf8(portablePath(bcm)), width, height, trn->tiles[0].texture, trn->vertices.size() ? trn->vertices[0] : (uint8_t)20);
+		// the map's texture translation, under the new name
+		const std::string oldLttt = trn->texDb.getLTTTPath(server.mapFile);
+		if (ok && FileExists(oldLttt.c_str())) {
+			char* data; int size;
+			LoadFile(oldLttt.c_str(), &data, &size);
+			const auto to = saved / PathFromUtf8(portablePath(trn->texDb.getLTTTPath(bcm)));
+			std::error_code ec;
+			std::filesystem::create_directories(to.parent_path(), ec);
+			std::ofstream f(to, std::ios::binary);
+			f.write(data, size);
+			free(data);
+			ok = (bool)f;
+		}
+		if (!ok)
+			return;
+		// the start cameras inside the new area
+		const float maxX = 5.0f * width, maxZ = 5.0f * height;
+		if (ServerGameObject* level = server.getLevel())
+			for (const auto& [type, children] : level->children)
+				for (CommonGameObject* child : children)
+					if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER) {
+						Vector3& cam = ((ServerGameObject*)child)->playerStartCameraPosition;
+						cam.x = std::clamp(cam.x, 0.0f, maxX);
+						cam.z = std::clamp(cam.z, 0.0f, maxZ);
+					}
+		server.mapFile = bcm;
+		ok = server.saveGame(PathToUtf8(saved / "Save_Games" / PathFromUtf8(name + ".lvl")).c_str());
+	});
+	if (!ok) {
+		ed.status = "Making the new map failed";
+		return false;
+	}
+	ed.status = "New map " + name + ": " + std::to_string(width) + " x " + std::to_string(height) + " tiles, opening it";
+	printf("EDITORNEWMAP %s\n", ed.status.c_str());
+	leaveAction = "edit";
+	leaveArg = name + ".lvl";
+	return true;
 }
 
 void ClientInterface::editorUndo() { editorStep(false); }

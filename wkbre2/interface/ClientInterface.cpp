@@ -1311,6 +1311,24 @@ void ClientInterface::iter()
 			editorSave("Blank Test");
 		}
 	}
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).contains("editorNewMapTest")) {
+		// a test run: "editorNewMapTest": [width, height] makes a new map of that size, saved as
+		// "Size Test", and opens it in the editor (once)
+		static int frame = 0;
+		static const Terrain* before = nullptr;
+		static bool shown = false;
+		if (++frame == 30) {
+			const auto size = g_settings["benchmark"]["editorNewMapTest"];
+			before = client->terrain;
+			editorOn = true;
+			editorNewMap("Size Test", size.at(0).get<int>(), size.at(1).get<int>());
+		}
+		else if (frame > 30 && client->terrain && client->terrain != before && client->getLevel() && !shown) {
+			shown = true;
+			const auto [w, h] = client->terrain->getNumPlayableTiles();
+			printf("EDITORNEWMAP opened: %d x %d playable tiles, %d edge, editor %d\n", w, h, client->terrain->edge, (int)editorOn);
+		}
+	}
 	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json()).value("editorMode", std::string()).empty() && !editorOn) {
 		editorOn = true;
 		editorOpenMode(g_settings["benchmark"]["editorMode"].get<std::string>());

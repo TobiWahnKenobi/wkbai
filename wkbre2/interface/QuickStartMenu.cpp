@@ -350,6 +350,10 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		refreshSaveGames(true); // a level saved in the game (the map editor's play test)
 		handleRequest({ "start", leaveArg });
 	}
+	else if (leaveAction == "edit") {
+		refreshSaveGames(true); // a level the map editor just made (a new map of another size)
+		handleRequest({ "edit_level", leaveArg });
+	}
 	else if (conquered || leaveAction == "campaign_lost")
 		if (FrontEnd* fe = FrontEnd::get())
 			fe->open("campaignmap." + profileName);

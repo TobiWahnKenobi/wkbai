@@ -104,6 +104,8 @@ private:
 	void editorWindow();
 	void editorZones();
 	void editorBlankMap();
+	// a new map of another size (playable tiles), saved under the name and opened in the editor
+	bool editorNewMap(const std::string& name, int width, int height);
 	// the terrain renderer updated after an edit of the heights (or of the tiles), or made again
 	void rebuildTerrainRenderer(bool tiles = false);
 	// the lakes set on the client and the server, their water filled again and shown (the map editor)
