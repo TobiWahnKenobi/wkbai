@@ -2252,12 +2252,22 @@ void ClientInterface::iter()
 		}
 		static ClientInterface* healthTexOwner = nullptr; // from this ClientInterface's uiTexCache
 		static texture healthTex[8];
+		// the charge bar's arc around the feet, beside the health ring (WKB.exe 0x64D88F):
+		// Power<n>.tga, n = 1 + 8 x Charge Bar / Charge Bar Capacity (at most 8), shown while it is
+		// above 0. A peasant's is what it carries (the scripts add each load, delivery empties
+		// it), an archer's its arrows, a cart's its load.
+		static texture powerTex[8];
+		static int chargeBar = -1, chargeBarCapacity = -1;
 		if (healthTexOwner != this) {
 			healthTexOwner = this;
 			for (int i = 0; i < 8; ++i) {
 				std::string name = "Interface\\InGame\\health" + std::to_string(i + 1) + ".tga";
 				healthTex[i] = uiTexCache.getTexture(name.c_str(), false);
+				name = "Interface\\InGame\\Power" + std::to_string(i + 1) + ".tga";
+				powerTex[i] = uiTexCache.getTexture(name.c_str(), false);
 			}
+			chargeBar = client->gameSet->items.names.getIndex("Charge Bar");
+			chargeBarCapacity = client->gameSet->items.names.getIndex("Charge Bar Capacity");
 		}
 		for (const auto& obj : highlightedObjects) {
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_NOLIGHTING;
@@ -2273,6 +2283,11 @@ void ClientInterface::iter()
 					TerrainSpriteContainer::Point p2{ pos.x + 2.0f * radius, pos.z };
 					TerrainSpriteContainer::Point p3{ pos.x, pos.z + 2.0f * radius };
 					terrainSpriteContainer->addSprite(healthTex[healthIndex], p1, p2, p3);
+					if (chargeBar >= 0 && chargeBarCapacity >= 0) {
+						const float charge = obj->getItem(chargeBar), chargeCap = obj->getItem(chargeBarCapacity);
+						if (chargeCap > 0.0f && charge > 0.0f && powerTex[0])
+							terrainSpriteContainer->addSprite(powerTex[std::min(7, (int)(charge * 8.0f / chargeCap))], p1, p2, p3);
+					}
 				}
 			}
 		}
