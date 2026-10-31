@@ -304,7 +304,8 @@ struct DiligentRenderer : DiligentGfx
 
 	// post-processing: made when first used; on in this frame (the 3D scene drawn offscreen)
 	std::unique_ptr<DiligentPostProcess> post;
-	bool postActive = false;
+	bool postActive = false, postEffects = true;
+	DiligentPostProcess::FogOfWar fog;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
 	State state;
@@ -428,15 +429,21 @@ struct DiligentRenderer : DiligentGfx
 		ctx->SetRenderTargets(1, &rtv, currentDepthTarget(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	}
 
-	void BeginPostProcessing(bool on) override
+	void BeginPostProcessing(bool on, bool effects) override
 	{
 		postActive = false;
+		postEffects = effects;
 		if (!on)
 			return;
 		if (!post)
 			post = std::make_unique<DiligentPostProcess>(device, swapChain->GetDesc().ColorBufferFormat, swapChain->GetDesc().DepthBufferFormat);
 		post->resize(swapChain->GetDesc().Width, swapChain->GetDesc().Height);
 		postActive = true;
+	}
+
+	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) override
+	{
+		fog = { tiles, width, height, version, inverseView, unseenBrightness };
 	}
 
 	void ApplyPostProcessing(const Matrix& projection) override
@@ -452,6 +459,10 @@ struct DiligentRenderer : DiligentGfx
 		s.bloomThreshold = g_renderSettings.bloomThreshold;
 		s.bloomIntensity = g_renderSettings.bloomIntensity;
 		s.fxaa = g_renderSettings.antiAliasing == 1;
+		if (!postEffects)
+			s.ssao = s.bloom = s.fxaa = false;
+		s.fog = fog;
+		fog.tiles = nullptr;
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();
 		ctx->SetViewports(1, nullptr, 0, 0);

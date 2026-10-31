@@ -14,7 +14,16 @@
 // object's colour and depth targets (same formats as the swap chain, so every pipeline fits), then
 // apply() writes the result into the back buffer, where the HUD is drawn on top.
 struct DiligentPostProcess {
+	// the fog of war: per 5 m tile of the playable area (row z, column x), 255 where the player's
+	// units see; version: changes with the data
+	struct FogOfWar {
+		const uint8_t* tiles = nullptr;
+		uint32_t width = 0, height = 0, version = 0;
+		Matrix inverseView;
+		float unseenBrightness = 0.55f;
+	};
 	struct Settings {
+		FogOfWar fog;
 		bool ssao = true, bloom = true;
 		float ssaoRadius = 2.5f;    // world units
 		float ssaoStrength = 0.7f;  // 0: none, 1: fully dark where occluded

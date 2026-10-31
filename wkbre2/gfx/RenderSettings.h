@@ -68,6 +68,9 @@ struct RenderSettings {
 	// HAS_STATIC_SHADOW 0, so the original has none
 	bool wallShadows = true;
 	// post-processing of the 3D scene (enhanced graphics on Diligent): ambient occlusion and bloom
+	// fog of war: what none of the player's units sees is darker (the original's), by this much
+	bool fogOfWar = true;
+	float fogOfWarBrightness = 0.55f;
 	bool ssao = true, bloom = true;
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;

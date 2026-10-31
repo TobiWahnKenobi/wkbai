@@ -9,6 +9,7 @@
 #include <ctime>
 #include "../GameObjectRef.h"
 #include "../Language.h"
+#include "FogOfWar.h"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -124,6 +125,9 @@ private:
 		Vector3 start;
 		Command* command = nullptr;
 	} formationDrag;
+	// what the player's units see (darker elsewhere, enemy characters hidden there)
+	FogOfWar fogOfWar;
+	bool fogOfWarOn() const;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the
 	// messages show for a while at the top left
@@ -157,6 +161,9 @@ private:
 	// Minimap: terrain image of the current map, created on first use
 	void* minimapTexture = nullptr;
 	const void* minimapTerrain = nullptr;
+	// the fog of war over the minimap, and the FogOfWar::version in it
+	void* minimapFogTexture = nullptr;
+	uint32_t minimapFogVersion = ~0u, minimapFogWidth = 0, minimapFogHeight = 0;
 	// Draws the minimap into the given screen rectangle (called from the HUD script);
 	// returns true while the mouse is over it, a left click/drag moves the camera there
 	bool drawMinimap(int x, int y, int w, int h);

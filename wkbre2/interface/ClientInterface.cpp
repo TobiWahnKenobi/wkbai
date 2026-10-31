@@ -213,6 +213,37 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
 
+	// the fog of war, darker where the player's units don't see (as on the original's minimap)
+	const bool fogOn = fogOfWarOn() && !fogOfWar.tiles.empty();
+	if (fogOn && fogOfWar.version != minimapFogVersion) {
+		Bitmap bmp;
+		bmp.width = (int)fogOfWar.width;
+		bmp.height = (int)fogOfWar.height;
+		bmp.format = BMFORMAT_R8G8B8A8;
+		bmp.pixels.resize((size_t)bmp.width * bmp.height * 4);
+		const float dark = 1.0f - g_renderSettings.fogOfWarBrightness;
+		for (int z = 0; z < bmp.height; z++)
+			for (int x = 0; x < bmp.width; x++) {
+				// image row 0 is the north edge (largest z)
+				uint8_t* px = &bmp.pixels[((size_t)(bmp.height - 1 - z) * bmp.width + x) * 4];
+				px[0] = px[1] = px[2] = 0;
+				px[3] = (uint8_t)((255 - fogOfWar.tiles[z * fogOfWar.width + x]) * dark);
+			}
+		if (minimapFogTexture && (minimapFogWidth != fogOfWar.width || minimapFogHeight != fogOfWar.height)) {
+			gfx->FreeTexture(minimapFogTexture);
+			minimapFogTexture = nullptr;
+		}
+		if (minimapFogTexture)
+			gfx->UpdateTexture(minimapFogTexture, bmp);
+		else
+			minimapFogTexture = gfx->CreateTexture(bmp, 1);
+		minimapFogWidth = fogOfWar.width;
+		minimapFogHeight = fogOfWar.height;
+		minimapFogVersion = fogOfWar.version;
+	}
+	if (fogOn && minimapFogTexture)
+		drawList->AddImage(minimapFogTexture, ImVec2(mapX, mapY), ImVec2(mapX + mapW, mapY + mapH));
+
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
 	// (colours taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga)
 	static const ImU32 playerColors[9] = {
@@ -226,6 +257,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			for (CommonGameObject* child : children)
 				self((ClientGameObject*)child, self);
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
+			return;
+		// enemy characters in the fog of war aren't shown
+		if (fogOn && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
 			return;
 		// Hidden when all its display categories are toggled off
 		const uint8_t categories = obj->blueprint->minimapCategories;
@@ -738,6 +772,12 @@ void ClientInterface::prewarmLevel()
 		printf("Prewarmed %zu models in %llu ms\n", models.size(), (unsigned long long)(SDL_GetTicks() - start));
 }
 
+bool ClientInterface::fogOfWarOn() const
+{
+	// not in the map editor, nor for an observer without a player
+	return g_renderSettings.fogOfWar && !editorOn && client->clientPlayer && client->getLevel();
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -749,6 +789,9 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	}
 
 	if (!devMode && !(obj->flags & ClientGameObject::fRenderable))
+		return;
+	// the fog of war hides enemy characters no unit of the player's sees
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && fogOfWarOn() && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
 		return;
 
 	static const float tolerance = 25.0f;
@@ -2010,8 +2053,13 @@ void ClientInterface::iter()
 	}
 	// the 3D scene post-processed (enhanced graphics on Diligent)
 	DiligentGfx* postGfx = dynamic_cast<DiligentGfx*>(gfx);
-	if (postGfx)
-		postGfx->BeginPostProcessing(UseEnhancedRenderers(gfx) && client->getLevel() && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0));
+	const bool fogOn = fogOfWarOn();
+	if (fogOn)
+		fogOfWar.update(client);
+	if (postGfx) {
+		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0);
+		postGfx->BeginPostProcessing(client->getLevel() && (effects || fogOn), UseEnhancedRenderers(gfx));
+	}
 	gfx->ClearFrame(true, true, fogColour);
 	gfx->BeginDrawing();
 
@@ -2404,8 +2452,12 @@ void ClientInterface::iter()
 		particlesContainer->update(client->timeManager.currentTime);
 	}
 
-	if (postGfx)
+	if (postGfx) {
+		if (fogOn && !fogOfWar.tiles.empty())
+			postGfx->SetFogOfWar(fogOfWar.tiles.data(), fogOfWar.width, fogOfWar.height, fogOfWar.version,
+				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness);
 		postGfx->ApplyPostProcessing(client->camera.projMatrix);
+	}
 
 	if (selBoxOn) {
 		gfx->InitRectDrawing();

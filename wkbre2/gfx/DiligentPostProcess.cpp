@@ -31,12 +31,16 @@ cbuffer PostBuffer
 	float4 Texel; // 1 / full width, 1 / full height, 1 / half width, 1 / half height
 	float4 Ao;    // radius, strength
 	float4 Bloom; // threshold, intensity, blur direction (texels)
+	float4 FogX;  // fog of war: world x of a view-space point (the inverse view's first column)
+	float4 FogZ;  // and its world z
+	float4 Fog;   // 1 / (5 m x tiles across), 1 / (5 m x tiles down), brightness where unseen, on
 };
 Texture2D tColor;
 Texture2D tDepth;
 Texture2D tAo;
 Texture2D tBloom;
 Texture2D tResolved; // the composite, for FXAA
+Texture2D tFog;      // fog of war: per 5 m tile, 1 where the player's units see
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -178,6 +182,13 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 		+ tAo.SampleLevel(sLinear, input.Uv + float2(-h.x, h.y), 0).r + tAo.SampleLevel(sLinear, input.Uv + float2(h.x, h.y), 0).r) * 0.25;
 	c *= lerp(1, ao, Ao.y);
 	c += tBloom.SampleLevel(sLinear, input.Uv, 0).rgb * Bloom.y;
+	// fog of war: what none of the player's units sees is darker (not on the sky)
+	if (Fog.w > 0 && tDepth.SampleLevel(sPoint, input.Uv, 0).r < 0.99999) {
+		float4 p = float4(ViewPos(input.Uv), 1);
+		float2 fuv = float2(dot(p, FogX), dot(p, FogZ)) * Fog.xy;
+		float seen = tFog.SampleLevel(sLinear, fuv, 0).r;
+		c *= lerp(Fog.z, 1, seen);
+	}
 	return float4(saturate(c), 1);
 }
 )---";
@@ -196,6 +207,9 @@ struct DiligentPostProcess::Impl {
 	TEXTURE_FORMAT colorFormat, depthFormat;
 	uint32_t width = 0, height = 0;
 	RefCntAutoPtr<ITexture> color, depth, ao, bloomA, bloomB, resolved;
+	// fog of war: the tiles' texture, its size, and the version of the data in it
+	RefCntAutoPtr<ITexture> fog;
+	uint32_t fogWidth = 0, fogHeight = 0, fogVersion = ~0u;
 	RefCntAutoPtr<IBuffer> buffer;
 	RefCntAutoPtr<IShader> vs;
 	Pass aoPass, brightPass, blurPass[2], compositePass, fxaaPass;
@@ -286,6 +300,37 @@ struct DiligentPostProcess::Impl {
 		return t;
 	}
 
+	// the fog of war's texture: one byte per tile (1x1 white when there is none)
+	void makeFog(uint32_t w, uint32_t h, const uint8_t* data)
+	{
+		TextureDesc desc;
+		desc.Name = "Fog of war";
+		desc.Type = RESOURCE_DIM_TEX_2D;
+		desc.Width = std::max(1u, w);
+		desc.Height = std::max(1u, h);
+		desc.Format = TEX_FORMAT_R8_UNORM;
+		desc.BindFlags = BIND_SHADER_RESOURCE;
+		desc.Usage = USAGE_DEFAULT;
+		const uint8_t white = 255;
+		TextureSubResData sub;
+		sub.pData = data ? data : &white;
+		sub.Stride = desc.Width;
+		TextureData init{ &sub, 1 };
+		fog.Release();
+		device->CreateTexture(desc, &init, &fog);
+		if (!fog)
+			ferr("Diligent: could not create the fog of war texture.");
+		fogWidth = w;
+		fogHeight = h;
+	}
+
+	void bindComposite()
+	{
+		if (!fog)
+			makeFog(0, 0, nullptr);
+		bind(compositePass, { color, ao, bloomA, depth, fog });
+	}
+
 	void run(IDeviceContext* ctx, Pass& pass, ITexture* into)
 	{
 		ITextureView* rtv = into->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
@@ -305,7 +350,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->depthFormat = depthFormat;
 	BufferDesc cb;
 	cb.Name = "Post-processing";
-	cb.Size = 64;
+	cb.Size = 112;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DYNAMIC;
 	cb.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -315,7 +360,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->makePass(_impl->brightPass, "PS_Bright", { "tColor" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
-	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom" }, colorFormat);
+	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog" }, colorFormat);
 	_impl->makePass(_impl->fxaaPass, "PS_Fxaa", { "tResolved" }, colorFormat);
 }
 
@@ -341,7 +386,7 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height)
 	_impl->bind(_impl->brightPass, { _impl->color });
 	_impl->bind(_impl->blurPass[0], { _impl->bloomA });
 	_impl->bind(_impl->blurPass[1], { _impl->bloomB });
-	_impl->bind(_impl->compositePass, { _impl->color, _impl->ao, _impl->bloomA });
+	_impl->bindComposite();
 	_impl->bind(_impl->fxaaPass, { _impl->resolved });
 }
 
@@ -358,14 +403,35 @@ ITextureView* DiligentPostProcess::depthDSV() const
 void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV, const Matrix& projection, const Settings& settings)
 {
 	const uint32_t hw = (_impl->width + 1) / 2, hh = (_impl->height + 1) / 2;
+	// the fog of war's tiles, into its texture when they changed
+	const FogOfWar& fog = settings.fog;
+	const bool fogOn = fog.tiles && fog.width > 0 && fog.height > 0;
+	if (fogOn && fog.version != _impl->fogVersion) {
+		if (fog.width != _impl->fogWidth || fog.height != _impl->fogHeight) {
+			_impl->makeFog(fog.width, fog.height, fog.tiles);
+			_impl->bindComposite();
+		}
+		else {
+			TextureSubResData sub;
+			sub.pData = fog.tiles;
+			sub.Stride = fog.width;
+			Box box{ 0, fog.width, 0, fog.height };
+			ctx->UpdateTexture(_impl->fog, 0, 0, box, sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		}
+		_impl->fogVersion = fog.version;
+	}
+	const Matrix& iv = fog.inverseView;
 	auto write = [&](float blurX, float blurY) {
 		void* mapped = nullptr;
 		ctx->MapBuffer(_impl->buffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-		const float data[16] = {
+		const float data[28] = {
 			projection._11, projection._22, projection._33, projection._43,
 			1.0f / _impl->width, 1.0f / _impl->height, 1.0f / hw, 1.0f / hh,
 			settings.ssaoRadius, settings.ssao ? settings.ssaoStrength : 0.0f, 0, 0,
 			settings.bloomThreshold, settings.bloom ? settings.bloomIntensity : 0.0f, blurX, blurY,
+			iv._11, iv._21, iv._31, iv._41,
+			iv._13, iv._23, iv._33, iv._43,
+			fogOn ? 1.0f / (5.0f * fog.width) : 0.0f, fogOn ? 1.0f / (5.0f * fog.height) : 0.0f, fog.unseenBrightness, fogOn ? 1.0f : 0.0f,
 		};
 		memcpy(mapped, data, sizeof(data));
 		ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
