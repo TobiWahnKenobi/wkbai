@@ -362,6 +362,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "APPLY_INACCURACY_TO_BUILDING_TARGETS") {
 			inaccuracyOnBuildings = true;
 		}
+		else if (strtag == "HEIGHT_SHOULD_NOT_AFFECT_SIGHT_RANGE") {
+			heightAffectsSight = false;
+		}
 		else if (strtag == "USE_PASSABILITY_FIELDS") {
 			passabilityFieldsName = gsf.nextString(true);
 		}

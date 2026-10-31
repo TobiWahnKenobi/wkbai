@@ -229,6 +229,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool aiWaveFormations = true;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
 	std::map<uint32_t, int> buildingsDestroyed;
+	// and their hit point capacities summed (with the damage to standing buildings, a steadier
+	// measure of the attacks than the count)
+	std::map<uint32_t, float> buildingHpDestroyed;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

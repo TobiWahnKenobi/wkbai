@@ -273,15 +273,19 @@ void Server::deleteObject(ServerGameObject * obj)
 	// are removed with theirs): counted for its player, for the AI tests
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && gameSet) {
 		static const GameSet* itemsOf = nullptr;
-		static int hp = -1, isFoundation = -1;
+		static int hp = -1, hpCap = -1, isFoundation = -1;
 		if (itemsOf != gameSet.get()) {
 			itemsOf = gameSet.get();
 			hp = itemsOf->items.names.getIndex("Hit Points");
+			hpCap = itemsOf->items.names.getIndex("Hit Point Capacity");
 			isFoundation = itemsOf->items.names.getIndex("Is a Foundation");
 		}
 		if (hp >= 0 && obj->getItem(hp) <= 0.0f && !(isFoundation >= 0 && obj->getItem(isFoundation) > 0.0f))
-			if (ServerGameObject* player = obj->getPlayer())
+			if (ServerGameObject* player = obj->getPlayer()) {
 				buildingsDestroyed[player->id]++;
+				if (hpCap >= 0)
+					buildingHpDestroyed[player->id] += obj->getItem(hpCap);
+			}
 	}
 	// delete subordinates first
 	for (auto& st : obj->children) {
@@ -1221,10 +1225,13 @@ void ServerGameObject::lookForSightRangeEvents()
 	// simulation's time in large games)
 	static std::vector<std::pair<uint32_t, ServerGameObject*>> found;
 	found.clear();
+	// as WKB.exe (0x566D70): the range rounded to whole 5 m tiles, and a sphere around the viewer
+	// (3D distance: no height bonus). The tile search alone took a square.
+	const float radius = std::floor(dist + 0.5f) * 5.0f;
 	NNSearch search;
-	search.start(Server::instance, this->position, dist * 5.0f);
+	search.start(Server::instance, this->position, radius);
 	while (ServerGameObject* nobj = (ServerGameObject*)search.next())
-		if (nobj->blueprint->generateSightRangeEvents)
+		if (nobj->blueprint->generateSightRangeEvents && (nobj->position - this->position).sqlen3() <= radius * radius)
 			found.emplace_back(nobj->id, nobj);
 	std::sort(found.begin(), found.end());
 	std::vector<uint32_t> before = std::move(seenObjects);

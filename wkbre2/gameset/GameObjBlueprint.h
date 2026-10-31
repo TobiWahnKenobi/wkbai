@@ -81,6 +81,9 @@ struct GameObjBlueprint {
 	std::map<int, std::vector<Model*>> specialEffectMap;
 
 	bool generateSightRangeEvents = false;
+	// off with HEIGHT_SHOULD_NOT_AFFECT_SIGHT_RANGE: WKB.exe adds 0.12 tiles of sight per metre
+	// above the map's lowest point (CommonGameObject::getItem)
+	bool heightAffectsSight = true;
 	bool receiveSightRangeEvents = false;
 	ValueDeterminer* shouldProcessSightRange = nullptr;
 	int sightRangeEquation = -1;

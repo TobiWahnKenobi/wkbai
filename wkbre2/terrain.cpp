@@ -9,6 +9,7 @@
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <algorithm>
+#include <limits>
 #include <set>
 #include <array>
 #include <map>
@@ -119,7 +120,15 @@ void Terrain::readFromFile(const char* filename)
 		readBCM(filename);
 	else
 		readSNR(filename);
+	// the lowest vertex, as WKB.exe's terrain keeps it (0x60DD50, +0x30): sight grows with the
+	// height above it
+	float lowest = std::numeric_limits<float>::max();
+	for (int i = 0; i < (width + 1) * (height + 1); i++)
+		lowest = std::min(lowest, heightSteps(i) * scale);
+	g_lowestTerrainHeight = lowest == std::numeric_limits<float>::max() ? 0.0f : lowest;
 }
+
+float g_lowestTerrainHeight = 0.0f;
 
 void Terrain::readBCM(const char * filename) {
 	char *fcnt, *fp; int fsize;

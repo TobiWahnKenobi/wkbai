@@ -820,8 +820,9 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 		CommonGameObject* vp = viewer->getPlayer();
 		if (vp != player && ctx->gameState->getDiplomaticStatus(vp, player) != 0)
 			continue;
-		const float sight = viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) * 5.0f;
-		if ((viewer->position - obj->position).sqlen2xz() <= sight * sight)
+		// as WKB.exe's sighting (0x566D70): rounded to whole 5 m tiles, 3D distance
+		const float sight = std::floor(viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) + 0.5f) * 5.0f;
+		if ((viewer->position - obj->position).sqlen3() <= sight * sight)
 			return true;
 	}
 	return false;

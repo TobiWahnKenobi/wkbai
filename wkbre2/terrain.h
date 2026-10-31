@@ -46,6 +46,9 @@ struct TerrainTile {
 	//unsigned int lakeId; // when removing lake, do a full autofill again.
 };
 
+// the lowest terrain vertex of the map last loaded (Terrain::readFromFile)
+extern float g_lowestTerrainHeight;
+
 struct Terrain
 {
 	typedef TerrainTile Tile;

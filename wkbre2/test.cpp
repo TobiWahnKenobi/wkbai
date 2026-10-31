@@ -1733,6 +1733,8 @@ void Test_AIvsAI()
 				ServerGameObject* player = (ServerGameObject*)c;
 				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !player->aiController.planBlueprint)
 					continue;
+				float damage = 0.0f; // hit points missing from the standing buildings
+				std::pair<float, float> sightLow{ 1e9f, 0.0f }, sightHigh{ -1e9f, 0.0f }; // characters' sight (tiles), at height
 				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
 				std::map<std::string, int> orders; // the characters' current orders
 				std::map<std::string, int> markers; // markers by blueprint
@@ -1743,6 +1745,12 @@ void Test_AIvsAI()
 						for (CommonGameObject* o : ch) {
 							if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 								characters++;
+								{
+									// the height term of the sight range (CommonGameObject::getItem)
+									const float s = o->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE);
+									if (s < sightLow.first) sightLow = { s, o->position.y };
+									if (s > sightHigh.first) sightHigh = { s, o->position.y };
+								}
 								{
 									static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout" };
 									const std::string& n = o->blueprint->name;
@@ -1788,6 +1796,13 @@ void Test_AIvsAI()
 							}
 							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
 								buildings++;
+								{
+									// hit points missing from standing buildings (not foundations, which fill up)
+									static const int hp = server.gameSet->items.names.getIndex("Hit Points"), hpCap = server.gameSet->items.names.getIndex("Hit Point Capacity");
+									static const int isFoundation = server.gameSet->items.names.getIndex("Is a Foundation");
+									if (hp >= 0 && hpCap >= 0 && !(isFoundation >= 0 && o->getItem(isFoundation) > 0.0f))
+										damage += std::max(0.0f, o->getItem(hpCap) - o->getItem(hp));
+								}
 								if (o->blueprint->name.rfind("Village", 0) == 0 && o->blueprint->name.find("Foundation") == std::string::npos)
 									snprintf(villageStock, sizeof(villageStock), "%s wood %.0f food %.0f", o->blueprint->name.c_str(), o->getItem(Tags::PDITEM_WOOD), o->getItem(Tags::PDITEM_FOOD));
 							}
@@ -1825,12 +1840,16 @@ void Test_AIvsAI()
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
 				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent);
-				printf("AITEST   losses player %u: %d buildings destroyed\n", player->id, server.buildingsDestroyed[player->id]);
+				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
+					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{
 					std::string siegeList;
 					for (const auto& [name, n] : siege)
 						siegeList += " " + name + "=" + std::to_string(n);
 					printf("AITEST   siege player %u: %zu raised;%s\n", player->id, siegeRaised[player->id].size(), siegeList.c_str());
+					if (characters)
+						printf("AITEST   sight player %u: characters' actual sight %.2f at y %.1f to %.2f at y %.1f (lowest ground %.1f)\n", player->id,
+							sightLow.first, sightLow.second, sightHigh.first, sightHigh.second, g_lowestTerrainHeight);
 				}
 				{
 					SrvScriptContext pctx(&server, player);

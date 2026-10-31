@@ -9,13 +9,19 @@
 
 float CommonGameObject::getItem(int item) const
 {
-	auto it = items.find(item);
-	if (it != items.end())
-		return it->second;
-	auto bt = blueprint->startItemValues.find(item);
-	if (bt != blueprint->startItemValues.end())
-		return bt->second;
-	return 0.0f;
+	float value = 0.0f;
+	if (auto it = items.find(item); it != items.end())
+		value = it->second;
+	else if (auto bt = blueprint->startItemValues.find(item); bt != blueprint->startItemValues.end())
+		value = bt->second;
+	// Height: WKB.exe's item getters for characters and buildings (0x51E580, 0x554B40) add 0.12
+	// tiles to the Actual Sight Range per metre above the map's lowest point, unless it is 1 or
+	// the blueprint says HEIGHT_SHOULD_NOT_AFFECT_SIGHT_RANGE. The scripts' missile range is that
+	// sight in metres, so high ground also shoots further.
+	if (item == Tags::PDITEM_ACTUAL_SIGHT_RANGE && value != 1.0f && blueprint->heightAffectsSight
+		&& (blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING))
+		value += (position.y - g_lowestTerrainHeight) * 0.12f;
+	return value;
 }
 
 float CommonGameObject::getIndexedItem(int item, int index) const {
