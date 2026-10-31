@@ -387,6 +387,9 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 // most 30 s), a rally point's for 3 s, with their animations.
 bool ClientInterface::orderFlagDone(float age) const
 {
+	// a right-drag's flag stands until the button is released
+	if (formationDrag.active)
+		return false;
 	if (orderFlagRally || orderFlagUnits.empty())
 		return age >= 3.0f;
 	if (age < 1.0f)
@@ -416,7 +419,9 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
 				// if object offers this command, send the command
 				int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
-				client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos, faceTo);
+				// a group dragged: each unit faces the same way from its own spot (not all at one point)
+				const Vector3 unitFaceTo = faceTo.x >= 0.0f ? destPos + (faceTo - peapos) : faceTo;
+				client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos, unitFaceTo);
 				if (!nextSelectedObject) {
 					if (orderFlag == 0)
 						orderFlagUnits.clear();
@@ -1447,10 +1452,14 @@ void ClientInterface::iter()
 			}
 		}
 		else if (rightClickCommand && !nextSelectedObject && !formationDrag.active
-			&& std::any_of(selection.begin(), selection.end(), [](const auto& s) { return s && s->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION; })) {
-			// a formation sent to the ground: the move goes on releasing the button, facing
-			// the way the mouse was dragged meanwhile (the arrow shows it)
+			&& std::any_of(selection.begin(), selection.end(), [](const auto& s) {
+				return s && (s->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || s->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER); })) {
+			// units, groups and formations sent to the ground: the move goes on releasing the
+			// button, facing the way the mouse was dragged meanwhile. As in the original, the
+			// order's flag stands at the destination from the press on, and a line shows the facing.
 			formationDrag = { true, peapos, rightClickCommand };
+			showOrderFlag(peapos, false);
+			orderFlagUnits.clear();
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
@@ -1463,25 +1472,14 @@ void ClientInterface::iter()
 
 	clickedScriptedUi = false;
 
-	// a formation's right-drag: an arrow from where it goes to where it will face
+	// a right-drag: the original's thin white line from the destination (its flag) to where the
+	// units will face
 	if (formationDrag.active && (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN) {
 		auto toScreen = [this](const Vector3& p) {
 			const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
 			return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
 		};
-		const Vector3 a = formationDrag.start, b = peapos;
-		const Vector3 dir = (b - a).normal();
-		const Vector3 side(-dir.z, 0, dir.x);
-		const Vector3 head = b - dir * 3.0f;
-		ImDrawList* dl = ImGui::GetBackgroundDrawList();
-		const ImU32 colour = IM_COL32(255, 210, 60, 230), shadow = IM_COL32(0, 0, 0, 160);
-		for (int pass = 0; pass < 2; pass++) {
-			const ImU32 c = pass == 0 ? shadow : colour;
-			const float w = pass == 0 ? 7.0f : 4.0f;
-			dl->AddLine(toScreen(a), toScreen(head), c, w);
-			dl->AddTriangleFilled(toScreen(b), toScreen(head + side * 1.8f), toScreen(head - side * 1.8f), c);
-		}
-		dl->AddCircleFilled(toScreen(a), 5.0f, colour);
+		ImGui::GetBackgroundDrawList()->AddLine(toScreen(formationDrag.start), toScreen(peapos), IM_COL32(255, 255, 255, 235), 2.0f);
 	}
 
 	if (g_keyPressed[SDL_SCANCODE_P]) {
