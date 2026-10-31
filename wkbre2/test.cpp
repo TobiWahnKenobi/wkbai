@@ -1818,6 +1818,7 @@ void Test_AIvsAI()
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
 				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits);
+				printf("AITEST   losses player %u: %d buildings destroyed\n", player->id, server.buildingsDestroyed[player->id]);
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;

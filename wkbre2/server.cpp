@@ -269,6 +269,20 @@ void Server::deleteObject(ServerGameObject * obj)
 {
 	if (obj->deleted) return;
 	obj->deleted = true;
+	// a building removed with no hit points left was destroyed (upgrades and finished foundations
+	// are removed with theirs): counted for its player, for the AI tests
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && gameSet) {
+		static const GameSet* itemsOf = nullptr;
+		static int hp = -1, isFoundation = -1;
+		if (itemsOf != gameSet.get()) {
+			itemsOf = gameSet.get();
+			hp = itemsOf->items.names.getIndex("Hit Points");
+			isFoundation = itemsOf->items.names.getIndex("Is a Foundation");
+		}
+		if (hp >= 0 && obj->getItem(hp) <= 0.0f && !(isFoundation >= 0 && obj->getItem(isFoundation) > 0.0f))
+			if (ServerGameObject* player = obj->getPlayer())
+				buildingsDestroyed[player->id]++;
+	}
 	// delete subordinates first
 	for (auto& st : obj->children) {
 		for (CommonGameObject* child : st.second) {
