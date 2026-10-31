@@ -97,6 +97,8 @@ private:
 	void editorDeleteSelection();
 	// one selected object's name, owner and items, changed on the server (undoably)
 	void editorProperties();
+	// the Scripts mode: the level's game set file (its scripts) and the objects in each alias
+	void editorScripts();
 	// what may keep the level from playing: players without a start camera or without objects
 	std::vector<std::string> editorCheck();
 	void editorWindow();

@@ -66,7 +66,13 @@ static void ResetTileTerrainTypes(Server& server)
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES, SCRIPTS };
+	// scripts: the alias chosen (the game set's DECLARE_ALIAS names, which a level's scripts
+	// find objects by), its filter, and the game set file being typed
+	int alias = -1;
+	char aliasFilter[64] = {};
+	char gameSetBuf[260] = {};
+	bool gameSetRead = false;
 	// zones (TERRAIN_ZONE objects, which triggers and finders use): the one being painted, by
 	// id, and whether the brush adds tiles to it or takes them away
 	uint32_t zoneId = 0;
@@ -143,6 +149,8 @@ struct ClientInterface::EditorState {
 		std::vector<Removed> removed;
 		std::vector<Moved> moved;
 		std::vector<Props> props;
+		// an alias's members before a change (alias index, object ids)
+		std::vector<std::pair<int, std::vector<uint32_t>>> aliasMembers;
 	};
 	// the properties panel: the object's state when an edit began, the name being typed, and
 	// the item chosen to add
@@ -656,9 +664,13 @@ void ClientInterface::editorWindow()
 		ImGui::RadioButton("Players", &ed.mode, EditorState::PLAYERS);
 		ImGui::SameLine();
 		ImGui::RadioButton("Zones", &ed.mode, EditorState::ZONES);
+		ImGui::SameLine();
+		ImGui::RadioButton("Scripts", &ed.mode, EditorState::SCRIPTS);
 		ImGui::Separator();
 		if (ed.mode == EditorState::ZONES)
 			editorZones();
+		else if (ed.mode == EditorState::SCRIPTS)
+			editorScripts();
 		else if (ed.mode == EditorState::PLAYERS) {
 			// each player's starting resources and its diplomacy towards the others, set on the
 			// server: the level is saved from there
@@ -1070,6 +1082,94 @@ void ClientInterface::editorDeleteSelection()
 	ed.pushUndo(std::move(u));
 }
 
+void ClientInterface::editorScripts()
+{
+	if (!editor || !client->gameSet) // (the first frames of a game, before its game set came)
+		return;
+	EditorState& ed = *editor;
+	// the level's game set file: its scripts (a mission's file holds its triggers). Saved with the
+	// level; the game set in use is the one loaded with it
+	std::string gameSetFile;
+	withServer([&](Server& server) { gameSetFile = server.gameSetFile; });
+	if (!ed.gameSetRead) {
+		ed.gameSetRead = true;
+		snprintf(ed.gameSetBuf, sizeof(ed.gameSetBuf), "%s", gameSetFile.c_str());
+	}
+	ImGui::TextWrapped("A level's scripts are its game set file: a mission's file holds its triggers, which find the level's objects through aliases.");
+	ImGui::InputText("Game set file", ed.gameSetBuf, sizeof(ed.gameSetBuf));
+	if (gameSetFile != ed.gameSetBuf && ImGui::Button("Use for the saved level")) {
+		const std::string file = ed.gameSetBuf;
+		withServer([&](Server& server) { server.gameSetFile = file; });
+		ed.status = "The level is saved with " + file + "; it takes effect when the level is loaded";
+	}
+
+	// the aliases the game set declares, each with its objects
+	const auto& names = client->gameSet->aliases.names;
+	std::map<int, std::vector<uint32_t>> members;
+	withServer([&](Server& server) {
+		for (const auto& [alias, set] : server.aliases)
+			for (const auto& ref : set)
+				if (FindLive(server, ref.objid))
+					members[alias].push_back(ref.objid);
+	});
+	ImGui::Separator();
+	ImGui::Text("Aliases (%zu declared by the game set)", names.size());
+	ImGui::InputText("Alias filter", ed.aliasFilter, sizeof(ed.aliasFilter));
+	if (ImGui::BeginListBox("##aliases", ImVec2(-1, 200))) {
+		for (size_t i = 0; i < names.size(); i++) {
+			const std::string& name = names.getString((int)i);
+			if (ed.aliasFilter[0] && !ContainsNoCase(name, ed.aliasFilter))
+				continue;
+			const auto m = members.find((int)i);
+			const std::string label = name + " (" + std::to_string(m != members.end() ? m->second.size() : 0) + ")";
+			if (ImGui::Selectable(label.c_str(), (int)i == ed.alias))
+				ed.alias = (int)i;
+		}
+		ImGui::EndListBox();
+	}
+	if (ed.alias < 0 || ed.alias >= (int)names.size()) {
+		ImGui::TextWrapped("Choose an alias to put the selected objects in it.");
+		return;
+	}
+	const int alias = ed.alias;
+	const std::vector<uint32_t> before = members[alias];
+	std::vector<uint32_t> chosen;
+	for (const auto& ref : selection)
+		if (ClientGameObject* obj = ref.get())
+			chosen.push_back(obj->id);
+	// a change to the alias, its members before it kept for undo
+	auto change = [&](const char* what, auto&& f) {
+		EditorState::Undo u;
+		u.aliasMembers.emplace_back(alias, before);
+		withServer([&](Server& server) { f(server); });
+		ed.pushUndo(std::move(u));
+		ed.status = std::string(what) + " \"" + names.getString(alias) + "\"";
+	};
+	ImGui::Text("%s: %zu objects; %zu selected", names.getString(alias).c_str(), before.size(), chosen.size());
+	if (ImGui::Button("Add the selection") && !chosen.empty())
+		change("Selection added to", [&](Server& server) {
+			for (uint32_t id : chosen)
+				if (ServerGameObject* obj = FindLive(server, id))
+					server.assignAlias(alias, obj);
+		});
+	ImGui::SameLine();
+	if (ImGui::Button("Take the selection out") && !chosen.empty())
+		change("Selection taken out of", [&](Server& server) {
+			for (uint32_t id : chosen)
+				if (ServerGameObject* obj = FindLive(server, id))
+					server.unassignAlias(alias, obj);
+		});
+	if (ImGui::Button("Select its objects")) {
+		selection.clear();
+		for (uint32_t id : before)
+			if (ClientGameObject* obj = client->findObject(id))
+				selection.insert(obj);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Empty it") && !before.empty())
+		change("Emptied", [&](Server& server) { server.clearAlias(alias); });
+}
+
 void ClientInterface::editorProperties()
 {
 	if (!editor || selection.size() != 1)
@@ -1222,8 +1322,19 @@ void ClientInterface::editorStep(bool redoing)
 		for (int i = 0; i < trn->width * trn->height; i++)
 			back.tiles.push_back({ trn->tiles[i].texture, (uint8_t)trn->tiles[i].rot, (uint8_t)trn->tiles[i].xflip, (uint8_t)trn->tiles[i].zflip });
 	}
-	if (!u.placed.empty() || !u.removed.empty() || !u.moved.empty() || !u.props.empty()) {
+	if (!u.placed.empty() || !u.removed.empty() || !u.moved.empty() || !u.props.empty() || !u.aliasMembers.empty()) {
 		withServer([&](Server& server) {
+			// an alias's members: as they were
+			for (const auto& [alias, ids] : u.aliasMembers) {
+				std::vector<uint32_t> now;
+				for (const auto& ref : server.aliases[alias])
+					now.push_back(ref.objid);
+				back.aliasMembers.emplace_back(alias, std::move(now));
+				server.clearAlias(alias);
+				for (uint32_t id : ids)
+					if (ServerGameObject* obj = FindLive(server, ed.resolve(id)))
+						server.assignAlias(alias, obj);
+			}
 			// name, owner, items: as they were
 			for (const auto& p : u.props)
 				if (ServerGameObject* obj = FindLive(server, ed.resolve(p.id))) {
@@ -1253,7 +1364,7 @@ void ClientInterface::editorStep(bool redoing)
 					obj->setOrientation(m.orientation);
 				}
 		});
-		what = !u.props.empty() ? "an object's properties" : !u.moved.empty() ? "objects moved or turned" : !u.placed.empty() ? "objects placed" : "objects removed";
+		what = !u.aliasMembers.empty() ? "an alias's objects" : !u.props.empty() ? "an object's properties" : !u.moved.empty() ? "objects moved or turned" : !u.placed.empty() ? "objects placed" : "objects removed";
 	}
 	to.push_back(std::move(back));
 	if (to.size() > EditorState::MAX_UNDO)
@@ -1444,7 +1555,8 @@ void ClientInterface::editorOpenMode(const std::string& mode)
 	if (!editor)
 		editor = std::make_shared<EditorState>();
 	static const std::pair<const char*, int> modes[] = { { "terrain", EditorState::TERRAIN }, { "textures", EditorState::TEXTURES },
-		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS }, { "zones", EditorState::ZONES } };
+		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS }, { "zones", EditorState::ZONES },
+		{ "scripts", EditorState::SCRIPTS } };
 	for (const auto& [name, m] : modes)
 		if (mode == name)
 			editor->mode = m;
@@ -1657,14 +1769,48 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 		editorUndo();
 		showProps("undone again");
 	}
+	// the windmill put in the game set's first alias (as the Scripts mode does), undone and done
+	// again: it is in the alias when the level is saved
+	static bool aliasStep = false;
+	if (windmill && frame == 152) {
+		const auto& names = client->gameSet->aliases.names;
+		auto members = [&] {
+			size_t n = 0;
+			withServer([&](Server& server) { n = server.aliases[0].count(GameObjectRef(ed.resolve(windmill))); });
+			return n;
+		};
+		printf("EDITORTEST aliases: %zu declared, game set %s\n", names.size(), [&] { std::string f; withServer([&](Server& s) { f = s.gameSetFile; }); return f; }().c_str());
+		if (names.size()) {
+			ed.mode = EditorState::SCRIPTS;
+			ed.alias = 0;
+			selection.clear();
+			if (ClientGameObject* obj = client->findObject(ed.resolve(windmill)))
+				selection.insert(obj);
+			EditorState::Undo u;
+			u.aliasMembers.emplace_back(0, std::vector<uint32_t>());
+			withServer([&](Server& server) {
+				for (const auto& ref : server.aliases[0])
+					u.aliasMembers[0].second.push_back(ref.objid);
+				if (ServerGameObject* obj = FindLive(server, ed.resolve(windmill)))
+					server.assignAlias(0, obj);
+			});
+			ed.pushUndo(std::move(u));
+			const size_t added = members();
+			editorUndo();
+			const size_t undone = members();
+			editorRedo();
+			printf("EDITORTEST alias \"%s\": windmill in it %zu, after undo %zu, after redo %zu\n", names.getString(0).c_str(), added, undone, members());
+			aliasStep = true;
+		}
+	}
 	if (frame == 160) {
 		editorSave("Editor Test");
 		printf("EDITORTEST %s\n", ed.status.c_str());
 	}
 	if (frame == 170) {
-		// undo the windmill, the lake, the texture stroke, then the height stroke: the ground as before
+		// undo the alias, the windmill, the lake, the texture stroke, then the height stroke: the ground as before
 		const size_t steps = ed.undo.size();
-		for (int i = 0; i < 4; i++)
+		for (int i = 0; i < (aliasStep ? 5 : 4); i++)
 			editorUndo();
 		const int x = (int)(target.x / 5.0f) + client->terrain->edge, z = (int)(target.z / 5.0f) + client->terrain->edge;
 		const TerrainTile* tile = client->terrain->getTile(x, z);
