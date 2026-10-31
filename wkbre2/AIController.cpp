@@ -27,6 +27,12 @@ static bool TrainsFighters(const GameObjBlueprint* building)
 	return known[building] = fighters;
 }
 
+// a building peasants farm (the Kingmaker's "Farm Wood", the desert farm): food comes from it
+static bool ProducesFood(const GameObjBlueprint* building)
+{
+	return building->name.rfind("Farm", 0) == 0 || building->name.find(" Farm") != std::string::npos;
+}
+
 void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 {
 	gsf.advanceLine();
@@ -360,6 +366,12 @@ void AIController::update()
 								continue;
 							if (!std::all_of(command->conditionsWait.begin(), command->conditionsWait.end(), holds)) {
 								unaffordable = true;
+								if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
+									for (GSCondition* cond : command->conditionsWait)
+										if (!holds(cond))
+											printf("RUNGWAIT t=%.0f %s at %u player %u food %.0f handler %u: \"%s\"\n", Server::instance->timeManager.currentTime, rung.type->name.c_str(), building->id,
+												building->getPlayer() ? building->getPlayer()->id : 0, building->getPlayer() ? building->getPlayer()->getItem(gs->items.names.getIndex("Food")) : -1.0f,
+												this->gameObj->id, gs->conditions.getString(cond).c_str());
 								continue;
 							}
 							if (!command->canBeExecuted(building))
@@ -367,6 +379,8 @@ void AIController::update()
 						}
 						if (!this->gameObj->canAffordObject(rung.type)) {
 							unaffordable = true;
+							if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
+								printf("RUNGWAIT %s at %u: cost (handler %u)\n", rung.type->name.c_str(), building->id, this->gameObj->id);
 							continue;
 						}
 						if (getenv("WKB_TRACE_COMMISSION"))
@@ -407,13 +421,25 @@ void AIController::update()
 		// saves for them: while one is short of its cost, the others wait. The requirements' own
 		// order put farms first, which took the wood as fast as it came; the first barracks came
 		// after 9 to 12 minutes.
+		// Fighters first starved the food instead: with every bit of wood on the barracks and walls,
+		// the AIs had no farm at 3 minutes, no food, trained no peasant, and stayed at their 15
+		// starting characters for 6-9 minutes. So the first few farms come before them (a pass of
+		// their own, at most AI_EARLY_FARMS), then the fighter buildings, then the rest.
 		std::vector<size_t> buildOrder(cominst.buildingReqInsts.size());
 		std::iota(buildOrder.begin(), buildOrder.end(), 0);
 		const bool aggressive = Server::instance->aggressiveAI;
-		if (aggressive)
+		std::vector<std::pair<size_t, size_t>> passes; // requirement, at most this many (SIZE_MAX: all)
+		if (aggressive) {
 			std::stable_partition(buildOrder.begin(), buildOrder.end(), [&](size_t ri) { return TrainsFighters(gscomm->buildingRequirements[ri].bpBuilding); });
+			for (size_t ri : buildOrder)
+				if (ProducesFood(gscomm->buildingRequirements[ri].bpBuilding))
+					passes.emplace_back(ri, (size_t)Server::instance->aiEarlyFarms);
+		}
+		for (size_t ri : buildOrder)
+			passes.emplace_back(ri, SIZE_MAX);
 		bool saving = false;
-		for (size_t ri : buildOrder) {
+		std::set<size_t> counted; // requirements counted towards completeCount
+		for (const auto& [ri, cap] : passes) {
 			auto& gsreq = gscomm->buildingRequirements[ri];
 			auto& reqinst = cominst.buildingReqInsts[ri];
 			auto it = std::remove_if(reqinst.foundations.begin(), reqinst.foundations.end(),
@@ -424,7 +450,8 @@ void AIController::update()
 			// peasants / 2.5) farms, 34.8 for its 87 peasants, and placed a 35th foundation for its
 			// 34 farms (test 36, wood 1027 -> 972 by 1805.42); cut to 34, wkbai placed none
 			const float wanted = gsreq.vdCountNeeded->eval(&ctx);
-			size_t requiredCount = wanted > 0.0f ? (size_t)std::ceil(wanted - 1e-4f) : 0;
+			const size_t fullCount = wanted > 0.0f ? (size_t)std::ceil(wanted - 1e-4f) : 0;
+			size_t requiredCount = std::min(fullCount, cap);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			size_t inCtrCount = reqinst.foundations.size();
 			while (!saving && existingCount + inCtrCount < requiredCount) {
@@ -443,7 +470,7 @@ void AIController::update()
 				reqinst.foundations.emplace_back(foundation);
 				inCtrCount = reqinst.foundations.size();
 			}
-			if (existingCount >= requiredCount) {
+			if (cap == SIZE_MAX && existingCount >= requiredCount && counted.insert(ri).second) {
 				completeCount += 1;
 			}
 		}

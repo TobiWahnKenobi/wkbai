@@ -1123,6 +1123,24 @@ struct ValueAggressionOverride : ValueDeterminer {
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
+// The aggressive AI's economic floor (not in WKB.exe): "Total Peasants Needed" is at least
+// Server::aiMinPeasants. The Kingmaker scripts freeze the peasants at the count they have when they
+// go to war ("War Peasants Needed" = all my peasants), which suits a grown economy. An AI that went
+// to war at minute 5 with 14 peasants and no food kept 14 for the rest of the game: no food, so no
+// army either (Amarak, 12-minute AI games).
+struct ValuePeasantFloor : ValueDeterminer {
+	ValueDeterminer* original;
+	ValuePeasantFloor(ValueDeterminer* original) : original(original) {}
+	~ValuePeasantFloor() { delete original; }
+	virtual float eval(ScriptContext* ctx) override {
+		const float value = original->eval(ctx);
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI)
+			return value;
+		return std::max(value, (float)Server::instance->aiMinPeasants);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
 // The aggressive AI's expansion to gold (not in WKB.exe). The Kingmaker scripts found resource
 // villages only at clusters of trees (the gold clusters are commented out in "Find Me A New
 // Resource Village Placement"), and a settlement takes the gold within 20 tiles of it, so an AI
@@ -1307,6 +1325,9 @@ void InstallAIAggressionOverrides(GameSet& gs)
 		if (eq >= 0)
 			gs.equations[eq] = new ValueAggressionOverride(gs.equations[eq], how.first, how.second);
 	}
+	// after the cap of 80: max(min(scripts, 80), floor)
+	if (const int peasants = gs.equations.names.getIndex("Total Peasants Needed"); peasants >= 0)
+		gs.equations[peasants] = new ValuePeasantFloor(gs.equations[peasants]);
 	const int villages = gs.equations.names.getIndex("How Many Resource Villages I Want");
 	if (villages >= 0)
 		gs.equations[villages] = new ValueGoldExpansion(gs.equations[villages]);

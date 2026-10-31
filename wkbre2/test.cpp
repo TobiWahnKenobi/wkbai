@@ -1800,7 +1800,7 @@ void Test_AIvsAI()
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;
-					for (const char* name : { "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference" }) {
+					for (const char* name : { "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Population Count", "Can Spawn Peasant", "Food", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference" }) {
 						const int item = server.gameSet->items.names.getIndex(name);
 						probe += std::string(" ") + name + "=" + (item >= 0 ? std::to_string((int)player->getItem(item)) : "?");
 					}
@@ -1827,8 +1827,13 @@ void Test_AIvsAI()
 					std::string reqs;
 					for (const auto& req : gc->characterRequirements)
 						reqs += " chars " + std::to_string((int)std::ceil(req.vdCountNeeded->eval(&hctx))) + "/" + std::to_string(req.fdAlreadyHaving->eval(&hctx).size());
-					for (const auto& req : gc->buildingRequirements)
+					// wanted/there, then +foundations placed
+					for (size_t bi = 0; bi < gc->buildingRequirements.size(); bi++) {
+						const auto& req = gc->buildingRequirements[bi];
 						reqs += " " + req.bpBuilding->name + " " + std::to_string((int)req.vdCountNeeded->eval(&hctx)) + "/" + std::to_string(req.fdAlreadyHaving->eval(&hctx).size());
+						if (bi < ci.buildingReqInsts.size() && !ci.buildingReqInsts[bi].foundations.empty())
+							reqs += "+" + std::to_string(ci.buildingReqInsts[bi].foundations.size());
+					}
 					printf("AITEST   commission %s at %s#%u%s:%s\n", server.gameSet->commissions.getString(gc).c_str(), handler->blueprint->name.c_str(), handler->id,
 						gc->suspensionCondition && gc->suspensionCondition->booleval(&hctx) ? " (suspended)" : "", reqs.c_str());
 					std::string hitems;

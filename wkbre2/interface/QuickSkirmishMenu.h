@@ -59,6 +59,8 @@ private:
 	bool aggressiveAI = true; // Server::aggressiveAI
 	bool aiGoldExpansion = false; // Server::aiGoldExpansion
 	bool aiFocusAttacks = true; // Server::aiFocusAttacks
+	int aiEarlyFarms = 0; // Server::aiEarlyFarms
+	int aiMinPeasants = 40; // Server::aiMinPeasants
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

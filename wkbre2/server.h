@@ -200,6 +200,11 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool aiGoldExpansion = false;
 	// with it, an AI's armies attack the nearest enemy (FinderFocusedEnemyPalaces): "aiFocusAttacks"
 	bool aiFocusAttacks = true;
+	// with it, an AI places its first this many farms before its fighter buildings (AIController):
+	// "aiEarlyFarms"; 0: fighter buildings first, as before
+	int aiEarlyFarms = 0;
+	// with it, an AI wants at least this many peasants, at war too (ValuePeasantFloor): "aiMinPeasants"
+	int aiMinPeasants = 40;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
