@@ -205,6 +205,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	int aiEarlyFarms = 0;
 	// with it, an AI wants at least this many peasants, at war too (ValuePeasantFloor): "aiMinPeasants"
 	int aiMinPeasants = 40;
+	// with it, a fighter building is wanted once more per aiSurplusPerBuilding of food and wood
+	// in stock, up to aiSurplusBuildings more (AIController): "aiSurplusBuildings", "aiSurplusPerBuilding"
+	int aiSurplusBuildings = 3;
+	float aiSurplusPerBuilding = 800.0f;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

@@ -61,6 +61,7 @@ private:
 	bool aiFocusAttacks = true; // Server::aiFocusAttacks
 	int aiEarlyFarms = 0; // Server::aiEarlyFarms
 	int aiMinPeasants = 40; // Server::aiMinPeasants
+	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

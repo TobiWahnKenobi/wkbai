@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Order.h"
+#include <set>
 #include "util/SimRandom.h"
 #include "tags.h"
 #include "gameset/OrderBlueprint.h"
@@ -209,8 +210,20 @@ void Task::start()
 				ServerGameObject* go = this->order->gameObject;
 				const float edge = FootprintDistance(go->position, target.get());
 				const float dist = edge >= 0.0f ? edge : (target->position - go->position).len2xz();
-				if (dist >= this->proximity) {
+				// not again for a unit whose dissatisfied sequence is running: one that assigns the
+				// unit an order (a SEND_EVENT, then ASSIGN_ORDER_VIA) whose task starts out of range
+				// too ran it again and again until the stack ran out (a 25-minute AI game, seed 2)
+				static std::set<const ServerGameObject*> running;
+				if (dist >= this->proximity && running.count(go)) {
+					static std::set<const TaskBlueprint*> warned;
+					if (warned.insert(this->blueprint).second)
+						printf("WARNING: task \"%s\" started again from its own proximity dissatisfied sequence (object %u); not run again\n",
+							Server::instance->gameSet->tasks.names.getString(this->blueprint->bpid).c_str(), go->id);
+				}
+				else if (dist >= this->proximity) {
+					running.insert(go);
 					RunProximityDissatisfied(this->blueprint, go);
+					running.erase(go);
 					if (!this->isWorking() || !this->order->isWorking())
 						return;
 				}

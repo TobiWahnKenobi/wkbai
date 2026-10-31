@@ -251,6 +251,21 @@ int main()
 	setvbuf(stdout, nullptr, _IONBF, 0);
 #ifdef _WIN32
 	SetUnhandledExceptionFilter(PrintCrash);
+	// also first: an access violation in a 25-minute AI game ended the process without the filter
+	// running (no report, no dump). Reported once; the search goes on as before.
+	// A stack overflow leaves the handler no stack to report on (it died itself, as an access
+	// violation): stack kept back for it, and overflows reported too
+	ULONG guarantee = 256 * 1024;
+	SetThreadStackGuarantee(&guarantee);
+	AddVectoredExceptionHandler(1, [](EXCEPTION_POINTERS* info) -> LONG {
+		static bool reported = false;
+		const DWORD code = info->ExceptionRecord->ExceptionCode;
+		if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW) && !reported) {
+			reported = true;
+			PrintCrash(info);
+		}
+		return EXCEPTION_CONTINUE_SEARCH;
+	});
 #endif
 	printf("Welcome to wkbai ! :)\n\n");
 

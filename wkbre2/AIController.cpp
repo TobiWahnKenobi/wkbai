@@ -450,7 +450,23 @@ void AIController::update()
 			// peasants / 2.5) farms, 34.8 for its 87 peasants, and placed a 35th foundation for its
 			// 34 farms (test 36, wood 1027 -> 972 by 1805.42); cut to 34, wkbai placed none
 			const float wanted = gsreq.vdCountNeeded->eval(&ctx);
-			const size_t fullCount = wanted > 0.0f ? (size_t)std::ceil(wanted - 1e-4f) : 0;
+			size_t fullCount = wanted > 0.0f ? (size_t)std::ceil(wanted - 1e-4f) : 0;
+			// The aggressive AI's surplus (not in WKB.exe): at 25 minutes the AIs had 1,100-2,300 food
+			// and 1,000-1,400 wood unspent while their one barracks trained one unit at a time. A
+			// fighter building already wanted is wanted once more per aiSurplusPerBuilding of food and
+			// wood together, up to aiSurplusBuildings more.
+			if (aggressive && fullCount > 0 && Server::instance->aiSurplusBuildings > 0 && TrainsFighters(gsreq.bpBuilding)) {
+				static int foodItem = -1, woodItem = -1;
+				static const GameSet* itemsOf = nullptr;
+				if (itemsOf != Server::instance->gameSet.get()) {
+					itemsOf = Server::instance->gameSet.get();
+					foodItem = itemsOf->items.names.getIndex("Food");
+					woodItem = itemsOf->items.names.getIndex("Wood");
+				}
+				ServerGameObject* player = obj->getPlayer();
+				const float stock = (foodItem >= 0 ? player->getItem(foodItem) : 0.0f) + (woodItem >= 0 ? player->getItem(woodItem) : 0.0f);
+				fullCount += std::min((size_t)Server::instance->aiSurplusBuildings, (size_t)(stock / std::max(1.0f, Server::instance->aiSurplusPerBuilding)));
+			}
 			size_t requiredCount = std::min(fullCount, cap);
 			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
 			size_t inCtrCount = reqinst.foundations.size();
