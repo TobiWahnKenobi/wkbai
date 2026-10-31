@@ -103,25 +103,56 @@ struct ClientInterface::EditorState {
 	std::string status;
 	std::vector<std::string> warnings;
 
-	// undo: a stroke's heights or tiles before it, or an object placed (its id)
+	// the Objects mode's tool: place new ones, or select (the game's clicks) and move or turn them
+	enum ObjectTool { PLACE, SELECT };
+	int objectTool = PLACE;
+	// moving the selection (G): it follows the cursor from where the grab began until a left
+	// click keeps it there or a right click puts it back
+	bool grabbing = false;
+	Vector3 grabFrom;
+	uint32_t lastGrabMove = 0;
+
+	// undo and redo: a stroke's heights or tiles before it, the lakes, objects placed (undone by
+	// removing them), objects removed (undone by placing them again) or objects moved or turned
 	struct TileState {
 		TerrainTexture* texture;
 		uint8_t rot, xflip, zflip;
 	};
+	struct Removed {
+		const GameObjBlueprint* type;
+		uint32_t id, parent;
+		Vector3 position, orientation;
+	};
+	struct Moved {
+		uint32_t id;
+		Vector3 position, orientation;
+	};
 	struct Undo {
 		std::vector<uint8_t> heights;
-		uint32_t placed = 0;
+		std::vector<uint32_t> placed;
 		std::vector<TileState> tiles;
 		bool hasLakes = false;
 		std::vector<Vector3> lakes;
 		std::vector<uint8_t> lakeBits;
+		std::vector<Removed> removed;
+		std::vector<Moved> moved;
 	};
-	std::vector<Undo> undo;
+	std::vector<Undo> undo, redo;
 	static constexpr size_t MAX_UNDO = 30;
 	void pushUndo(Undo u) {
 		undo.push_back(std::move(u));
 		if (undo.size() > MAX_UNDO)
 			undo.erase(undo.begin());
+		redo.clear();
+	}
+	std::vector<Moved> grabStart;
+	// an object removed and placed again by undo or redo gets a new id: steps that name the old
+	// one find the new one through this
+	std::unordered_map<uint32_t, uint32_t> respawned;
+	uint32_t resolve(uint32_t id) const {
+		for (auto it = respawned.find(id); it != respawned.end(); it = respawned.find(id))
+			id = it->second;
+		return id;
 	}
 };
 
@@ -164,7 +195,48 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 	const bool overUi = ImGui::GetIO().WantCaptureMouse;
 	const uint32_t now = SDL_GetTicks();
 	if (g_modCtrl && g_keyPressed[SDL_SCANCODE_Z] && !ImGui::GetIO().WantTextInput)
-		editorUndo();
+		g_modShift ? editorRedo() : editorUndo();
+	if (g_modCtrl && g_keyPressed[SDL_SCANCODE_Y] && !ImGui::GetIO().WantTextInput)
+		editorRedo();
+
+	if (ed.mode == EditorState::OBJECTS && ed.objectTool == EditorState::SELECT) {
+		const bool keys = !ImGui::GetIO().WantTextInput && !g_modCtrl;
+		if (!ed.grabbing && keys && g_keyPressed[SDL_SCANCODE_G])
+			editorGrab();
+		if (!ed.grabbing && keys && g_keyPressed[SDL_SCANCODE_R])
+			editorTurn(g_modShift ? -15.0f : 15.0f);
+		if (!ed.grabbing)
+			return false; // the game's clicks select
+		// the selection follows the cursor, each object keeping its offset from where the grab began
+		const Vector3 shift = cursor - ed.grabFrom;
+		if (now - ed.lastGrabMove > 30) {
+			ed.lastGrabMove = now;
+			const std::vector<EditorState::Moved> start = ed.grabStart;
+			withServer([&](Server& server) {
+				for (const auto& m : start)
+					if (ServerGameObject* obj = server.findObject(m.id))
+						obj->setPosition(Vector3(m.position.x + shift.x, 0, m.position.z + shift.z));
+			});
+		}
+		if (g_mousePressed[SDL_BUTTON_LEFT]) {
+			ed.grabbing = false;
+			EditorState::Undo u;
+			u.moved = ed.grabStart;
+			ed.pushUndo(std::move(u));
+			ed.status = "Moved " + std::to_string(ed.grabStart.size()) + " objects";
+		}
+		else if (g_mousePressed[SDL_BUTTON_RIGHT]) {
+			ed.grabbing = false;
+			const std::vector<EditorState::Moved> start = ed.grabStart;
+			withServer([&](Server& server) {
+				for (const auto& m : start)
+					if (ServerGameObject* obj = server.findObject(m.id))
+						obj->setPosition(m.position);
+			});
+			ed.status = "Move cancelled";
+		}
+		return true;
+	}
 
 	if (ed.mode == EditorState::OBJECTS) {
 		if (overUi || !g_mousePressed[SDL_BUTTON_LEFT] || ed.placeType < 0)
@@ -183,8 +255,11 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 			if (ServerGameObject* obj = server.spawnObject(type, player, pos, Vector3(0, yaw, 0)))
 				placed = obj->id;
 		});
-		if (placed)
-			ed.pushUndo({ {}, placed });
+		if (placed) {
+			EditorState::Undo u;
+			u.placed.push_back(placed);
+			ed.pushUndo(std::move(u));
+		}
 		ed.status = "Placed " + type->name;
 		return true;
 	}
@@ -348,7 +423,9 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		ed.flattenTo = trn->getHeight(cursor.x, cursor.z) / trn->scale;
 		ed.strokeMin = ed.strokeMax = cursor;
 		ed.pending.assign(trn->vertices.size(), 0.0f);
-		ed.pushUndo({ std::vector<uint8_t>(trn->vertices.begin(), trn->vertices.end()), 0 });
+		EditorState::Undo u;
+		u.heights.assign(trn->vertices.begin(), trn->vertices.end());
+		ed.pushUndo(std::move(u));
 	}
 	if (ed.stroke && down) {
 		const float dt = std::min(0.1f, (now - ed.lastApply) / 1000.0f);
@@ -670,6 +747,30 @@ void ClientInterface::editorWindow()
 			ImGui::TextWrapped("Hold the left mouse button on the ground to paint. Flatten keeps the height where the stroke began.");
 		}
 		else {
+			ImGui::RadioButton("Place", &ed.objectTool, EditorState::PLACE);
+			ImGui::SameLine();
+			ImGui::RadioButton("Select, move, turn", &ed.objectTool, EditorState::SELECT);
+			if (ed.objectTool == EditorState::SELECT) {
+				ImGui::Text("%zu selected", selection.size());
+				if (ImGui::Button("Move (G)"))
+					editorGrab();
+				ImGui::SameLine();
+				if (ImGui::Button("Turn -15 (Shift+R)"))
+					editorTurn(-15.0f);
+				ImGui::SameLine();
+				if (ImGui::Button("Turn +15 (R)"))
+					editorTurn(15.0f);
+				if (ImGui::Button("Turn -90"))
+					editorTurn(-90.0f);
+				ImGui::SameLine();
+				if (ImGui::Button("Turn +90"))
+					editorTurn(90.0f);
+				ImGui::SameLine();
+				if (ImGui::Button("Remove (Delete)"))
+					editorDeleteSelection();
+				ImGui::TextWrapped("Click or drag a box to select, as in the game. Move: the selection follows the cursor; a left click puts it down, a right click puts it back.");
+			}
+			else {
 			static const int classes[] = { Tags::GAMEOBJCLASS_BUILDING, Tags::GAMEOBJCLASS_CHARACTER, Tags::GAMEOBJCLASS_CONTAINER,
 				Tags::GAMEOBJCLASS_PROP, Tags::GAMEOBJCLASS_MARKER };
 			static const char* const classNames[] = { "Buildings", "Characters", "Containers (trees, ...)", "Props", "Markers" };
@@ -711,13 +812,17 @@ void ClientInterface::editorWindow()
 				ImGui::EndListBox();
 			}
 			ImGui::TextWrapped("Click the ground to place one. Select objects and press Delete to remove them.");
+			}
 		}
 		ImGui::Separator();
 		ImGui::InputText("Map name", ed.saveName, sizeof(ed.saveName));
 		if (ImGui::Button("Undo (Ctrl+Z)"))
 			editorUndo();
 		ImGui::SameLine();
-		ImGui::TextDisabled("%zu steps", ed.undo.size());
+		if (ImGui::Button("Redo (Ctrl+Y)"))
+			editorRedo();
+		ImGui::SameLine();
+		ImGui::TextDisabled("%zu / %zu steps", ed.undo.size(), ed.redo.size());
 		if (ImGui::Button("Save map"))
 			editorSave(ed.saveName);
 		ImGui::SameLine();
@@ -830,13 +935,153 @@ void ClientInterface::editorBlankMap()
 	printf("EDITORBLANK %s\n", ed.status.c_str());
 }
 
-void ClientInterface::editorUndo()
+// an object the server still has (one removed this frame is only marked, and goes at its end)
+static ServerGameObject* FindLive(Server& server, uint32_t id)
 {
-	if (!editor || editor->undo.empty())
+	ServerGameObject* obj = server.findObject(id);
+	return obj && !obj->deleted ? obj : nullptr;
+}
+
+void ClientInterface::editorUndo() { editorStep(false); }
+void ClientInterface::editorRedo() { editorStep(true); }
+
+void ClientInterface::editorGrab()
+{
+	if (!editor)
 		return;
 	EditorState& ed = *editor;
-	EditorState::Undo u = std::move(ed.undo.back());
-	ed.undo.pop_back();
+	std::vector<uint32_t> ids;
+	for (const auto& ref : selection)
+		if (ClientGameObject* obj = ref.get())
+			ids.push_back(obj->id);
+	ed.grabStart.clear();
+	withServer([&](Server& server) {
+		for (uint32_t id : ids)
+			if (ServerGameObject* obj = FindLive(server, id))
+				ed.grabStart.push_back({ id, obj->position, obj->orientation });
+	});
+	if (ed.grabStart.empty()) {
+		ed.status = "Select objects first";
+		return;
+	}
+	ed.grabbing = true;
+	ed.grabFrom = Vector3(0, 0, 0);
+	// from where the grab began: the selection's centre, so the objects stay under the cursor
+	for (const auto& m : ed.grabStart)
+		ed.grabFrom += m.position;
+	ed.grabFrom = ed.grabFrom * (1.0f / ed.grabStart.size());
+	ed.status = "Moving: left click to put them down, right click to cancel";
+}
+
+void ClientInterface::editorTurn(float degrees)
+{
+	if (!editor)
+		return;
+	EditorState& ed = *editor;
+	std::vector<uint32_t> ids;
+	for (const auto& ref : selection)
+		if (ClientGameObject* obj = ref.get())
+			ids.push_back(obj->id);
+	EditorState::Undo u;
+	withServer([&](Server& server) {
+		for (uint32_t id : ids)
+			if (ServerGameObject* obj = FindLive(server, id)) {
+				u.moved.push_back({ id, obj->position, obj->orientation });
+				obj->setOrientation(Vector3(obj->orientation.x, obj->orientation.y + degrees * 3.14159265f / 180.0f, obj->orientation.z));
+			}
+	});
+	if (u.moved.empty()) {
+		ed.status = "Select objects first";
+		return;
+	}
+	ed.status = "Turned " + std::to_string(u.moved.size()) + " objects";
+	ed.pushUndo(std::move(u));
+}
+
+// the selection removed on the server; undo places each again (its type, owner, place and
+// facing, not its items or orders)
+void ClientInterface::editorDeleteSelection()
+{
+	if (!editor)
+		editor = std::make_shared<EditorState>();
+	EditorState& ed = *editor;
+	std::vector<uint32_t> ids;
+	for (const auto& ref : selection)
+		if (ClientGameObject* obj = ref.get())
+			ids.push_back(obj->id);
+	EditorState::Undo u;
+	withServer([&](Server& server) {
+		for (uint32_t id : ids)
+			if (ServerGameObject* obj = FindLive(server, id); obj && obj->parent && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER) {
+				u.removed.push_back({ obj->blueprint, id, obj->parent->id, obj->position, obj->orientation });
+				server.deleteObject(obj);
+			}
+	});
+	if (u.removed.empty())
+		return;
+	ed.status = "Removed " + std::to_string(u.removed.size()) + " objects";
+	ed.pushUndo(std::move(u));
+}
+
+void ClientInterface::editorStep(bool redoing)
+{
+	if (!editor)
+		return;
+	EditorState& ed = *editor;
+	auto& from = redoing ? ed.redo : ed.undo;
+	auto& to = redoing ? ed.undo : ed.redo;
+	if (from.empty() || ed.grabbing)
+		return;
+	EditorState::Undo u = std::move(from.back());
+	from.pop_back();
+	// the state this step replaces, for the other list
+	EditorState::Undo back;
+	const char* what = "";
+	if (!u.heights.empty() && client->terrain)
+		back.heights.assign(client->terrain->vertices.begin(), client->terrain->vertices.end());
+	else if (u.hasLakes && client->terrain) {
+		back.hasLakes = true;
+		back.lakes = client->terrain->lakes;
+		back.lakeBits = client->terrain->lakeExtraBits;
+	}
+	else if (!u.tiles.empty() && client->terrain) {
+		Terrain* trn = client->terrain;
+		for (int i = 0; i < trn->width * trn->height; i++)
+			back.tiles.push_back({ trn->tiles[i].texture, (uint8_t)trn->tiles[i].rot, (uint8_t)trn->tiles[i].xflip, (uint8_t)trn->tiles[i].zflip });
+	}
+	if (!u.placed.empty() || !u.removed.empty() || !u.moved.empty()) {
+		withServer([&](Server& server) {
+			// placed: removed again
+			for (uint32_t pid : u.placed)
+				if (ServerGameObject* obj = FindLive(server, ed.resolve(pid)); obj && obj->parent) {
+					back.removed.push_back({ obj->blueprint, obj->id, obj->parent->id, obj->position, obj->orientation });
+					server.deleteObject(obj);
+				}
+			// removed: placed again (a new id, which steps naming the old one follow)
+			for (const auto& r : u.removed)
+				if (ServerGameObject* parent = FindLive(server, ed.resolve(r.parent)))
+					if (ServerGameObject* obj = server.spawnObject(r.type, parent, r.position, r.orientation)) {
+						if (obj->id != r.id)
+							ed.respawned[r.id] = obj->id;
+						back.placed.push_back(obj->id);
+					}
+			// moved or turned: back where it was
+			for (const auto& m : u.moved)
+				if (ServerGameObject* obj = FindLive(server, ed.resolve(m.id))) {
+					back.moved.push_back({ obj->id, obj->position, obj->orientation });
+					obj->setPosition(m.position);
+					obj->setOrientation(m.orientation);
+				}
+		});
+		what = !u.moved.empty() ? "objects moved or turned" : !u.placed.empty() ? "objects placed" : "objects removed";
+	}
+	to.push_back(std::move(back));
+	if (to.size() > EditorState::MAX_UNDO)
+		to.erase(to.begin());
+	if (*what) {
+		ed.status = std::string(redoing ? "Redone: " : "Undone: ") + what;
+		return;
+	}
 	if (!u.heights.empty() && client->terrain && u.heights.size() == client->terrain->vertices.size()) {
 		std::copy(u.heights.begin(), u.heights.end(), client->terrain->vertices.begin());
 		withServer([&](Server& server) {
@@ -852,11 +1097,11 @@ void ClientInterface::editorUndo()
 		rebuildTerrainRenderer();
 		if (!client->terrain->lakes.empty())
 			setLakes(client->terrain->lakes, client->terrain->lakeExtraBits);
-		ed.status = "Undone: a brush stroke";
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a brush stroke";
 	}
 	else if (u.hasLakes && client->terrain) {
 		setLakes(u.lakes, u.lakeBits);
-		ed.status = "Undone: a lake change";
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a lake change";
 	}
 	else if (!u.tiles.empty() && client->terrain && u.tiles.size() == (size_t)client->terrain->width * client->terrain->height) {
 		Terrain* trn = client->terrain;
@@ -881,12 +1126,7 @@ void ClientInterface::editorUndo()
 			ResetTileTerrainTypes(server);
 		});
 		rebuildTerrainRenderer(true);
-		ed.status = "Undone: a texture stroke";
-	}
-	else if (u.placed) {
-		if (ClientGameObject* obj = client->findObject(u.placed))
-			client->sendTerminateObject(obj);
-		ed.status = "Undone: an object placed";
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a texture stroke";
 	}
 }
 
@@ -1150,6 +1390,57 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 			}
 		});
 		printf("EDITORTEST zone: %zu tiles, the hill's tile in it %d\n", tiles, (int)tileInZone);
+	}
+	// the windmill selected, moved 20 m, turned 90 degrees and removed; the three undone, done
+	// again and undone again: it stands where it was placed
+	static uint32_t windmill = 0;
+	auto showWindmill = [&](const char* when) {
+		const uint32_t id = ed.resolve(windmill);
+		bool there = false;
+		Vector3 p, o;
+		withServer([&](Server& server) {
+			if (ServerGameObject* obj = FindLive(server, id)) {
+				there = true;
+				p = obj->position;
+				o = obj->orientation;
+			}
+		});
+		if (there)
+			printf("EDITORTEST windmill %s: %u at (%.1f, %.1f), facing %.0f; %zu undo, %zu redo\n", when, id, p.x, p.z, o.y * 180.0f / 3.14159265f, ed.undo.size(), ed.redo.size());
+		else
+			printf("EDITORTEST windmill %s: gone; %zu undo, %zu redo\n", when, ed.undo.size(), ed.redo.size());
+	};
+	if (frame == 147 && !ed.undo.empty() && !ed.undo.back().placed.empty()) {
+		windmill = ed.undo.back().placed[0];
+		showWindmill("placed");
+		ed.mode = EditorState::OBJECTS;
+		ed.objectTool = EditorState::SELECT;
+		selection.clear();
+		if (ClientGameObject* obj = client->findObject(windmill))
+			selection.insert(obj);
+		editorGrab();
+	}
+	if (windmill && (frame == 148 || frame == 149)) {
+		cursor = ed.grabFrom + Vector3(20, 0, 0);
+		if (frame == 149)
+			g_mousePressed[SDL_BUTTON_LEFT] = true;
+	}
+	if (windmill && frame == 150) {
+		showWindmill("moved");
+		editorTurn(90.0f);
+		showWindmill("turned");
+		editorDeleteSelection();
+		showWindmill("removed");
+		for (int i = 0; i < 3; i++)
+			editorUndo();
+		showWindmill("after 3 undos");
+		for (int i = 0; i < 3; i++)
+			editorRedo();
+		showWindmill("after 3 redos");
+		for (int i = 0; i < 3; i++)
+			editorUndo();
+		showWindmill("after 3 more undos");
+		ed.objectTool = EditorState::PLACE;
 	}
 	if (frame == 160) {
 		editorSave("Editor Test");

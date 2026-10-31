@@ -1434,9 +1434,13 @@ void ClientInterface::iter()
 		client->sendGameSpeedChange(client->timeManager.timeSpeed / 2.0f);
 	}
 	if (g_keyPressed[SDL_SCANCODE_DELETE]) {
-		for (ClientGameObject* sel : selection)
-			if (sel)
-				client->sendTerminateObject(sel);
+		// in the map editor, removed so that undo can place them again
+		if (editorOn && withServer)
+			editorDeleteSelection();
+		else
+			for (ClientGameObject* sel : selection)
+				if (sel)
+					client->sendTerminateObject(sel);
 	}
 
 	static bool debuggerOn = false;

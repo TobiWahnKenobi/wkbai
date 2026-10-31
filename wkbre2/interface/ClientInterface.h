@@ -87,6 +87,14 @@ private:
 	void editorOpenMode(const std::string& mode);
 	bool editorSave(const std::string& name);
 	void editorUndo();
+	void editorRedo();
+	// one step taken back (or done again): the state it replaces goes onto the other list
+	void editorStep(bool redo);
+	// the Objects mode's Select tool: the selection grabbed to follow the cursor, turned, or
+	// removed (undoably)
+	void editorGrab();
+	void editorTurn(float degrees);
+	void editorDeleteSelection();
 	// what may keep the level from playing: players without a start camera or without objects
 	std::vector<std::string> editorCheck();
 	void editorWindow();
