@@ -450,7 +450,6 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 								}
 								else if (tsktag == "TRIGGERS_STARTED") {
 									task.triggersStarted = gsf.nextInt();
-									task.loadedTriggers = task.triggersStarted;
 								}
 								else if (tsktag == "TRIGGER") {
 									task.triggers[gsf.nextInt()]->parse(gsf, *gameSet);
