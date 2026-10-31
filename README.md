@@ -9,19 +9,21 @@
 > reimplementation of Warrior Kings and Warrior Kings: Battles (Black Cactus, 2002/2003).
 > This fork is developed **with AI assistance (Claude) and reverse engineering of the original game**.
 > The original executable is analysed (Ghidra, disassembly, Direct3D call traces, side-by-side captures)
-> to find out how the original renders and behaves, and wkbre2 is then changed to match it or to improve on it.
+> to find out how the original renders and behaves, and the engine is then changed to match it or to improve on it.
 > All credit for wkbre2 itself goes to AdrienTD and its contributors.
 >
 > The work happens on the `modernization` branch. No code or assets of the original game are included:
 > you need your own copy of the game.
 
-![A town in a campaign save, rendered by this fork](docs/screenshot-town.jpg)
+![A town in a campaign save, rendered by wkbai](docs/screenshot-town.jpg)
 
-*The stress-test scene: a campaign save with about 4,850 objects in view, drawn with Direct3D 12.*
+*The stress-test scene: a campaign save with about 4,850 objects in view, drawn with Direct3D 12. Grass, fire lights, real unit shadows, terrain tessellation, FXAA and 16x anisotropic filtering are on.*
 
-![The whole map of the same save without fog](docs/screenshot-map.jpg)
+![The same save from above without fog, with the High water](docs/screenshot-map.jpg)
 
-## What this fork changes
+*The same save from above, without fog: the High water, with tessellated waves and whitecaps.*
+
+## What wkbai changes
 
 Compared with upstream wkbre2:
 
@@ -54,32 +56,50 @@ Compared with upstream wkbre2:
   - **Scripts:** the game-set parser stays in sync on unimplemented keywords.
   - **Missing files:** broken mod combinations no longer crash.
 - **AI**
-  - **Kingmaker AI:** stalls fixed (deleted objects, work orders, farms at the map's corner, an upgrade waited for forever), towns get their walls and gatehouse, and the armies' `FORCE_BALANCE` works.
+  - **Kingmaker AI:** stalls fixed (deleted objects, work orders, farms at the map's corner, an upgrade waited for forever), and towns get their walls and gatehouse.
+    - **Commissions:** saved and loaded. `FORCE_BALANCE` serves the least filled requirement first, as the original does, and a commission waiting for a busy building keeps its resources.
+    - **Sight:** the AI sees by sight (`IS_VISIBLE`, `IS_DISCOVERED`).
+  - **Differential tests against the original:** wkbai plays 30 game seconds on from a save of the original's (Marjoria's Keep) and is compared object by object with the original's own save after the same time. 135 of 138 unit and building counts now match.
   - **Aggressive AI** (skirmish setting, on by default): at most 80 peasants, barracks first, armies launched as soon as they can be paid, food-only fighters when wood or gold is short, and all of an AI's armies sent against its nearest enemy (an AI destroyed per 25-minute 8-player game, none before).
   - **Diplomacy:** AIs' diplomatic offers reach the players offered to, whose scripts answer them.
   - **Headless AI-vs-AI test** (test 30) with a census per minute, and a tournament tool over several seeds.
 - **Pathfinding:** units keep to the terrain their passability fields allow, as the original's per-tile test does (no walking over water, river beds or mountains).
 - **Graphics options** (enhanced renderer)
-  - **Post-processing:** ambient occlusion and bloom.
-  - **Real unit shadows** from the sun's shadow map, and wall shadows.
+  - **Post-processing:** ambient occlusion, bloom, and **FXAA** anti-aliasing (on by default).
+  - **Anisotropic filtering:** up to 16x for the terrain, the water and the models.
+  - **Real unit shadows** from the sun's shadow map, and wall shadows (higher-resolution shadow maps optional).
+  - **Fire lights:** burning buildings, flaming arrows and fire spells light the terrain and the models around them.
+  - **Water, in six levels:**
+    - **Off:** a plain colour, as the original without its water surface.
+    - **Original:** the original's textured water.
+    - **Low:** sky and screen-space reflections, refraction, depth colour, shore foam and flowing rivers.
+    - **Medium:** the ocean look on the flat surface.
+    - **High:** tessellated ocean waves with crest foam and surf.
+    - **Ultra:** finer waves out to the far distance.
+  - **Ocean:** long, smooth waves in groups that never repeat, deep teal water with light through the crests, sun sparkles and patchy foam.
+  - **Rivers:** they follow the geography, each with its own coordinates along and across its channel (from where the water meets the terrain). Small ripples are carried downstream by a current that is faster where the river is narrow, with foam along the banks and short-lived crests where it runs tight. They drain into the largest water they meet or off the map, and blend smoothly into the sea.
+  - **Reflections:** of what is on screen (from Low up) and of the sky box itself.
+  - **Terrain tessellation:** a smooth surface on the GPU, with objects placed exactly on it. The game's own heights are unchanged.
+  - **Grass:** PBR grass blades on green ground, with density (up to 24 per square metre) and height sliders, thinning out with the distance.
   - **Blended terrain:** materials blended at the tile corners, each from several of its tiles, triplanar on cliffs (off by default).
   - **Model highlights:** per-pixel lighting with GGX sun highlights, light from the sky box's colours, and override packs (`<texture>_normal`, `<texture>_orm`) for modders (off by default).
+  - **Particles:** sprites, and streaks (wood chips, sparks) drawn as thin lines.
 - **Formats:** glTF 2.0 models (import as overrides, export with `"exportGltf"`), DDS textures (BC1-BC5, BC7) and KTX2 (RGBA8, BC1-BC5, BC7; BC7 uploaded compressed).
 - **Map editor** (F8): heights, texture painting, lakes, objects, the players' resources and diplomacy, terrain zones, a new blank map, undo, a new minimap on saving, a check (missing start cameras, players that can't be reached by land), and save-and-play.
 - **Settings:** an options menu, and a settings window on **F10** for the view distance, fog, field of view, colour grading, shadows, water and camera speed.
 
 ## Status
 
-The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase:** 4, modern renderer. **Next:** Phase 8: focused attacks measured, then army retreat and regrouping; Phase 2: pathfinding search and combat RE, a menu-driven differential harness; Phase 6: triggers, the new map format; Phase 4: faithful mode, PBR override packs.
+The project follows a ten-phase plan, from setup (phase 0) to release (phase 9). **Current phase:** 5, gameplay parity. **Next:** Phase 5: test 36's last differences (wood after loading: saved animation-loop triggers; tree stumps; a farm foundation), the original's arrival rule for attachment paths; Phase 8: army retreat and regrouping; Phase 6: the new map format and editor features.
 
 | Phase | Progress | Done | Open |
 |---|---|---|---|
 | 0 Setup & quick wins | 7/7 | Git repo, Pristine SHA-256 hashes, Toolchain installed, REA + Ghidra connected, DXVK quick win, Baseline perf captures, Identify version.dll | — |
 | 1 Asset & format knowledge | 4/4 | BCP reader/extractor, Format specs, Round-trip tests, Asset inventory | — |
-| 2 Binary RE (ongoing) | 5/7 | Exe in Ghidra via REA, RTTI class hierarchy, Keyword diff vs wkbre2, Original file system (BCP load rule), Renderer interface signatures | Pathfinding/combat/AI RE (in progress), Differential test harness |
+| 2 Binary RE (ongoing) | 7/7 | Exe in Ghidra via REA, RTTI class hierarchy, Keyword diff vs wkbre2, Original file system (BCP load rule), Renderer interface signatures, Pathfinding/combat/AI RE, Differential test harness | — |
 | 3 Engine foundation (wkbre2) | 6/6 | Fork & build wkbre2, Run against game data, CI + round-trip tests, x64 · C++20 · SDL3, Layered VFS (BCP → mods), RHI decision + Tracy | — |
-| **4 Modern renderer** (current) | 4/8 | Diligent integration (D3D12/Vulkan), GPU skinning/instancing/culling, glTF / KTX2, Resolution & UI scaling | Faithful mode (in progress), PBR materials (in progress), Lighting & effects (in progress), Splat-map terrain (in progress) |
-| 5 Gameplay parity | 7/8 | Evaluate WKB Plus patch, Minimap + DISPLAY_ON_MINIMAP, Main menu, Settings, in-game Esc menu, Play-test bugs: stampdown overlap, formations, guard, range circles, rally flag, Deterministic simulation, Fix original engine bugs, Population limit up to 10,000 | Close script/order gaps (in progress) |
+| 4 Modern renderer | 8/8 | Diligent integration (D3D12/Vulkan), Faithful mode, GPU skinning/instancing/culling, PBR materials, Lighting & effects, Splat-map terrain, glTF / KTX2, Resolution & UI scaling | — |
+| **5 Gameplay parity** (current) | 7/8 | Evaluate WKB Plus patch, Minimap + DISPLAY_ON_MINIMAP, Main menu, Settings, in-game Esc menu, Play-test bugs: stampdown overlap, formations, guard, range circles, rally flag, Deterministic simulation, Fix original engine bugs, Population limit up to 10,000 | Close script/order gaps (in progress) |
 | 6 Map editor | 1/3 | Undo / play-test / validation | Port wkbre editor features (in progress), Export original + new format (in progress) |
 | 7 Modding | 4/4 | Mod package format, Asset/script/Lua overrides, Hot reload + mod manager, Modding docs | — |
 | 8 AI overhaul | 2/4 | RE original AI, Headless AI-vs-AI testing | Strategic layer (in progress), Operational/tactical layers (in progress) |
@@ -94,7 +114,7 @@ The project follows a ten-phase plan, from setup (phase 0) to release (phase 9).
   - **gamePath:** the folder where the game is installed, the one that contains data.bcp. Write each backslash twice (`\\`).
   - **gameVersion:** 1 for **Warrior Kings**, 2 for **Warrior Kings: Battles**.
   - **diligentBackend:** optionally, `"d3d12"` (the default) or `"vulkan"`.
-- Launch wkbre2. Press **F10** in game for the settings window.
+- Launch **wkbai.exe**. Press **F10** in game for the settings window. Settings, saves and mods go to `%APPDATA%\wkbai` (copied from `%APPDATA%\wkbre2` the first time).
 
 **Note:** if the program closes at startup without an error, check **wkconfig.json** for syntax errors (missing commas, quotes or braces).
 
