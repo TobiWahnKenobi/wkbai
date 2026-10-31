@@ -823,8 +823,9 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 			it = ap.animations.find(0);
 		if (it != ap.animations.end()) {
 			const auto& anim = it->second;
+			// a variant beyond the list (an original save's "Marjoria's Keep (5)") read past it
 			if (!anim.empty())
-				model = anim[obj->animationVariant];
+				model = anim[obj->animationVariant < anim.size() ? obj->animationVariant : 0];
 		}
 	}
 	if (!model && devMode)
@@ -1715,8 +1716,17 @@ void ClientInterface::iter()
 		lua.set_function("getItem",
 			[this](uint32_t id, const std::string& item) {
 				int itemId = client->gameSet->items.names.getIndex(item);
-				return client->findObject(id)->getItem(itemId);
+				ClientGameObject* obj = client->findObject(id);
+				return (obj && itemId >= 0) ? obj->getItem(itemId) : 0.0f;
 			});
+		// the object under the mouse (0: none), for the selection panel's stats on hover
+		lua.set_function("getHoveredObject",
+			[this]() -> uint32_t {
+				ClientGameObject* obj = nextSelectedObject.get();
+				return obj ? obj->id : 0u;
+			});
+		lua.set_function("getTextWidth",
+			[](const std::string& text) { return (int)ImGui::CalcTextSize(text.c_str()).x; });
 		lua.set_function("getFirstSelection",
 			[this]() -> uint32_t {
 				if (selection.empty()) return 0u;

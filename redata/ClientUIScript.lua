@@ -39,6 +39,95 @@ function speedText(v)
 	return string.format("%.1fx", v)
 end
 
+-- The selection information panel (WKB.exe's CSelectionInformationPanel, 0x78D4F0). Its layout
+-- is in fractions of a 1600 x 1200 screen there; here in pixels of Bottom_Left_Panel.tga.
+local infoPanel = "Interface/InGame/Info Panel/"
+-- the experience arc's 16 segments: x, y, width, height (exe tables 0x92DC20 and 0x92DBA0)
+local experienceBars = {
+	{ 58, 261, 25, 24 }, { 77, 273, 22, 21 }, { 96, 283, 20, 19 }, { 117, 287, 18, 17 },
+	{ 136, 286, 16, 18 }, { 152, 281, 19, 20 }, { 168, 273, 21, 20 }, { 182, 262, 21, 22 },
+	{ 194, 249, 21, 23 }, { 204, 236, 20, 20 }, { 211, 219, 20, 21 }, { 218, 201, 15, 19 },
+	{ 219, 178, 14, 21 }, { 214, 160, 18, 20 }, { 206, 141, 20, 21 }, { 194, 125, 22, 22 },
+}
+-- a value with an upgrade's share: "8" or "8+2" (the original's "%.0f" and "%.0f+%.0f")
+local function withUpgrade(base, upgrade)
+	if upgrade == 0 or upgrade == 1 then return whole(base) end
+	return whole(base) .. "+" .. whole(base * (upgrade - 1))
+end
+-- the military unit types' armour and weapon upgrades, by "I'm A Military Unit"
+local upgradeItems = {
+	{ "Heavy Infantry Armour Upgrade", "Heavy Infantry Weapon Upgrade" },
+	{ "Light Infantry Armour Upgrade", "Light Infantry Weapon Upgrade" },
+	{ "Heavy Cavalry Armour Upgrade", "Heavy Cavalry Weapon Upgrade" },
+	{ "Light Cavalry Armour Upgrade", "Light Cavalry Weapon Upgrade" },
+}
+
+function drawSelectionInformation(obj)
+	local bp = getBlueprint(obj)
+	local px, py = 0, getWindowHeight() - 326
+	local player = getPlayerID()
+	local isCharacter = bp.bpClass == GAMEOBJCLASS_CHARACTER
+	local isBuilding = bp.bpClass == GAMEOBJCLASS_BUILDING
+	if not isCharacter and not isBuilding then return end
+
+	-- hit points (structural integrity for buildings) under the heart
+	local hp, cap
+	if isCharacter then
+		hp, cap = getItem(obj, "Hit Points"), getItem(obj, "Hit Point Capacity")
+	else
+		hp, cap = getItem(obj, "Structural Integrity"), getItem(obj, "Structural Integrity Capacity")
+	end
+	if cap > 0 then
+		drawImage(px + 123, py + 92, 12, 13, infoPanel .. "Heart.tga")
+		local text = whole(hp) .. "/" .. whole(cap)
+		drawText(px + 129 - getTextWidth(text) / 2, py + 105, text)
+	end
+	if not isCharacter then return end
+
+	-- the rows on the left: an icon and its value
+	local row = 0
+	local function statRow(icon, text)
+		drawImage(px + 54, py + 147 + row * 30, 16, 21, infoPanel .. icon)
+		drawText(px + 78, py + 150 + row * 30, text)
+		row = row + 1
+	end
+
+	local military = getItem(obj, "I'm A Military Unit")
+	if military > 0 then
+		-- experience: segment i lit while i/16 of the maximum is below it
+		local exp, maxExp = getItem(obj, "Experience"), getItem(obj, "Maximum Experience")
+		if maxExp > 0 then
+			for i = 1, 16 do
+				if (i - 1) / 16 * maxExp >= exp then break end
+				local b = experienceBars[i]
+				drawImage(px + b[1], py + b[2], b[3], b[4], infoPanel .. "bar " .. i .. ".tga")
+			end
+		end
+		local up = upgradeItems[math.floor(military)]
+		local armourUp, weaponUp = 0, 0
+		if up and player ~= 0 then
+			armourUp, weaponUp = getItem(player, up[1]), getItem(player, up[2])
+		end
+		statRow("Shield.tga", withUpgrade(getItem(obj, "Front Armour"), armourUp))
+		local h2h, missile = getItem(obj, "H2H Damage"), getItem(obj, "Missile Damage")
+		if h2h > 0 or missile <= 0 then
+			statRow("Sword.tga", withUpgrade(h2h, weaponUp))
+		end
+		if missile > 0 then
+			statRow("Bow.tga", withUpgrade(missile, weaponUp))
+		end
+	elseif getItem(obj, "I Am A Merchant") > 0 then
+		statRow("Trade Goods.tga", whole(getItem(obj, "Trade Goods")))
+		statRow("Coin.tga", whole(getItem(obj, "Gold")))
+	else
+		-- peasants and carts: what they carry
+		statRow("Chicken.tga", whole(getItem(obj, "Food")))
+		statRow("Tree.tga", whole(getItem(obj, "Wood")))
+		statRow("Coin.tga", whole(getItem(obj, "Gold")))
+		statRow("Rock.tga", whole(getItem(obj, "Stone")))
+	end
+end
+
 -- This function is executed every frame
 function CCUI_PerFrame()
 
@@ -109,31 +198,13 @@ function CCUI_PerFrame()
 	-- Selection
 
 	sel = getFirstSelection()
+	-- the selection's information in the window of the lower left panel, as the original's
+	-- CSelectionInformationPanel (WKB.exe 0x78D4F0); with nothing selected, the object under the mouse
+	local info = sel
+	if info == 0 then info = getHoveredObject() end
+	if info ~= 0 then drawSelectionInformation(info) end
 	if sel ~= 0 then
-		local ypos = getWindowHeight() - 190
-		local h = 16
-		local n = 0
 		local bp = getBlueprint(sel)
-
-	
-		-- Selection information
-
-		drawText(70, ypos, bp.name)
-		drawText(71, ypos, bp.name)
-		drawText(70, ypos + h, "ID: " .. tostring(sel))
-		drawText(71, ypos + h, "ID: " .. tostring(sel))
-
-		n = 2
-		if bp.bpClass == GAMEOBJCLASS_CHARACTER then
-			drawText(70, ypos + n*h, "HP: " .. whole(getItem(sel, "Hit Points")) .. "/" .. whole(getItem(sel, "Hit Point Capacity")))
-			n = n+1
-		elseif bp.bpClass == GAMEOBJCLASS_BUILDING then
-			drawText(70, ypos + n*h, "SI: " .. whole(getItem(sel, "Structural Integrity")) .. "/" .. whole(getItem(sel, "Structural Integrity Capacity")))
-			n = n+1
-		end
-		drawText(70, ypos + n*h, "Food: " .. whole(getItem(sel, "Food"))); n=n+1
-		drawText(70, ypos + n*h, "Wood: " .. whole(getItem(sel, "Wood"))); n=n+1
-		drawText(70, ypos + n*h, "Gold: " .. whole(getItem(sel, "Gold"))); n=n+1
 
 
 		-- Commands
