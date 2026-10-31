@@ -155,6 +155,58 @@ void AIController::update()
 		}
 	}
 
+	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
+	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units
+	// while its attacking armies held 1-7, and no AI was destroyed. Every 30 s, unless enemies are
+	// at its door (Defensive Mode), a defensive army of more than aiAttackWave units sends all but
+	// 10 of them out as a new Kingmaker Attacking Army, each unit ordered to attack the palace the
+	// focused attacks go for (the nearest enemy's).
+	if (Server::instance->aggressiveAI && Server::instance->aiAttackWave > 0 && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextWaveCheck) {
+		nextWaveCheck = Server::instance->timeManager.currentTime + 30.0f;
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int defensiveMode = gs->items.names.getIndex("Defensive Mode");
+		const int palacesFinder = gs->objectFinderDefinitions.names.getIndex("All Random Enemy Palaces");
+		const int attackOrder = gs->orders.names.getIndex("Attack");
+		const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+		ServerGameObject* defensive = nullptr;
+		std::vector<ServerGameObject*> todo{ gameObj };
+		while (!todo.empty() && !defensive) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* child : children) {
+					auto* army = (ServerGameObject*)child;
+					if (army->deleted || army->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
+						continue;
+					if (army->blueprint->name == "Kingmaker Defensive Army")
+						defensive = army;
+					todo.push_back(army);
+				}
+		}
+		if (defensive && armyBp && attackOrder >= 0 && palacesFinder >= 0 && !(defensiveMode >= 0 && gameObj->getItem(defensiveMode) > 0.0f)) {
+			std::vector<ServerGameObject*> members;
+			for (const auto& [type, children] : defensive->children)
+				for (CommonGameObject* c : children)
+					if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						members.push_back((ServerGameObject*)c);
+			SrvScriptContext ctx{ Server::instance, defensive };
+			ServerGameObject* target = (ServerGameObject*)gs->objectFinderDefinitions[palacesFinder]->getFirst(&ctx);
+			if (target && (int)members.size() > Server::instance->aiAttackWave) {
+				std::sort(members.begin(), members.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+				members.erase(members.begin(), members.begin() + 10); // the 10 oldest stay home
+				if (ServerGameObject* army = Server::instance->spawnObject(armyBp, gameObj, defensive->position, Vector3(0, 0, 0))) {
+					for (ServerGameObject* unit : members) {
+						unit->setParent(army);
+						unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+					}
+					waves++;
+					waveUnits += (int)members.size();
+				}
+			}
+		}
+	}
+
 	// ---- Work Orders ----
 	// A unit can be listed by several work orders (a town's and a city's workforce, while peasants
 	// move between settlements): each unit works for one, the one that had it before if that still

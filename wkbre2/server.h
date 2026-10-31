@@ -214,6 +214,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, attackers below this share of their hit points go home to the defensive army
 	// (AIController): "aiRetreatHealth" in percent; 0: they fight on
 	float aiRetreatHealth = 0.0f;
+	// with it, a defensive army of more than this many units sends all but 10 to attack
+	// (AIController): "aiAttackWave"; 0: off
+	int aiAttackWave = 50;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

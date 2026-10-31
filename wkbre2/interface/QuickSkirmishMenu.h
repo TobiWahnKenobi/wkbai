@@ -64,6 +64,7 @@ private:
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding
 	bool aiLendFarmers = true; // Server::aiLendFarmers
 	int aiRetreatHealth = 0; // Server::aiRetreatHealth, in percent (0: off)
+	int aiAttackWave = 50; // Server::aiAttackWave (0: off)
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

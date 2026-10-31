@@ -59,6 +59,9 @@ struct AIController {
 	// wounded attackers sent home: the next check (game time), how many so far
 	float nextRetreatCheck = 0.0f;
 	int retreated = 0;
+	// attack waves sent: the next check (game time), how many, their units
+	float nextWaveCheck = 0.0f;
+	int waves = 0, waveUnits = 0;
 	std::vector<CommissionInstance> commissionInstances;
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}
