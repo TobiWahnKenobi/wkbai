@@ -121,10 +121,51 @@ void AIController::update()
 				it->second = { wi, true };
 		}
 	}
-	unitWorkOrder.clear();
 	for (size_t wi = 0; wi < workOrderInstances.size(); wi++) {
 		auto& list = unitLists[wi];
 		list.resize(std::remove_if(list.begin(), list.end(), [&](ServerGameObject* unit) { return owner[unit->id].first != wi; }) - list.begin());
+	}
+	// The aggressive AI lends farmers (not in WKB.exe): a settlement whose farms have no peasants
+	// gets one per farm from the settlement with the most, which keeps at least half. The farms
+	// mostly belong to towns whose workforce is empty, and the scripts' peasant transfers didn't
+	// fill them: at 25 minutes Ragnar had 18 farms and 4 farmers, his city 37 peasants on wood, 17
+	// food and 2,254 wood.
+	if (Server::instance->aggressiveAI && Server::instance->aiLendFarmers) {
+		auto farmJobs = [&](size_t wi) -> size_t {
+			auto& woi = workOrderInstances[wi];
+			SrvScriptContext ctx{ Server::instance, woi.city };
+			size_t n = 0;
+			for (const auto& asg : woi.workOrder->assignments)
+				if (asg.order && Server::instance->gameSet->orders.getString(asg.order) == "Farm" && asg.distFinder)
+					n += asg.distFinder->eval(&ctx).size();
+			return n;
+		};
+		for (size_t wi = 0; wi < workOrderInstances.size(); wi++) {
+			if (!workOrderInstances[wi].city || !unitLists[wi].empty())
+				continue;
+			const size_t farms = farmJobs(wi);
+			if (!farms)
+				continue;
+			size_t donor = SIZE_MAX;
+			for (size_t di = 0; di < workOrderInstances.size(); di++)
+				if (di != wi && workOrderInstances[di].workOrder == workOrderInstances[wi].workOrder
+					&& (donor == SIZE_MAX || unitLists[di].size() > unitLists[donor].size()))
+					donor = di;
+			if (donor == SIZE_MAX)
+				continue;
+			auto& from = unitLists[donor];
+			// peasants by id, the highest lent, so the same ones go each update
+			std::sort(from.begin(), from.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+			const size_t lend = std::min(farms, from.size() / 2);
+			for (size_t k = 0; k < lend; k++) {
+				unitLists[wi].push_back(from.back());
+				from.pop_back();
+			}
+		}
+	}
+	unitWorkOrder.clear();
+	for (size_t wi = 0; wi < workOrderInstances.size(); wi++) {
+		auto& list = unitLists[wi];
 		for (ServerGameObject* unit : list)
 			unitWorkOrder[unit->id] = { workOrderInstances[wi].city->id, workOrderInstances[wi].workOrder };
 	}
