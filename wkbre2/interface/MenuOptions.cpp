@@ -129,6 +129,25 @@ namespace {
 			[&rs]() { return rs.grass; }));
 		list.push_back(toggle("ssao", "lighting", "Ambient occlusion", rs.ssao));
 		list.push_back(toggle("bloom", "lighting", "Bloom", rs.bloom));
+		{
+			MenuOption o;
+			o.id = "antiAliasing"; o.page = "lighting"; o.label = "Anti-aliasing";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "FXAA" };
+			o.get = [&rs]() { return (float)rs.antiAliasing; };
+			o.set = [&rs](float v) { rs.antiAliasing = std::clamp((int)v, 0, 1); };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "2x", "4x", "8x", "16x" };
+			o.get = [&rs]() { int k = 0; while ((2 << k) <= rs.anisotropy && k < 4) k++; return (float)k; };
+			o.set = [&rs](float v) { const int k = std::clamp((int)v, 0, 4); rs.anisotropy = k == 0 ? 1 : (1 << k); };
+			o.needsRestart = true;
+			list.push_back(o);
+		}
 		list.push_back(toggle("bumpMapping", "lighting", "Terrain bump mapping", rs.bumpMapping));
 		list.push_back(toggle("terrainSplat", "lighting", "Blended terrain", rs.terrainSplat));
 		list.push_back(toggle("modelLighting", "lighting", "Model highlights", rs.modelLighting));

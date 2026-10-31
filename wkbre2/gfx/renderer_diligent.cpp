@@ -451,6 +451,7 @@ struct DiligentRenderer : DiligentGfx
 		s.bloom = g_renderSettings.bloom;
 		s.bloomThreshold = g_renderSettings.bloomThreshold;
 		s.bloomIntensity = g_renderSettings.bloomIntensity;
+		s.fxaa = g_renderSettings.antiAliasing == 1;
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();
 		ctx->SetViewports(1, nullptr, 0, 0);

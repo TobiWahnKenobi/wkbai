@@ -71,6 +71,12 @@ struct RenderSettings {
 	bool ssao = true, bloom = true;
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
+	// anti-aliasing of the 3D scene: 0 off, 1 FXAA (a pass after the post-processing; works with
+	// any renderer, forward or deferred, unlike MSAA, which the water's scene copy can't use)
+	int antiAliasing = 1;
+	// anisotropic filtering of the terrain's, water's and models' textures: 1 (off) to 16;
+	// applied to renderers made after the change (the next map)
+	int anisotropy = 16;
 	bool vsync = true;               // "vsync" in wkconfig.json, applied on the next frame
 	float staticShadowLight = 0xB4 / 255.0f;
 	// static shadow detail: 1 = the original's 4 x 4 points per tile on a 2048² sun shadow map,

@@ -19,6 +19,7 @@ struct DiligentPostProcess {
 		float ssaoRadius = 2.5f;    // world units
 		float ssaoStrength = 0.7f;  // 0: none, 1: fully dark where occluded
 		float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
+		bool fxaa = true;
 	};
 
 	DiligentPostProcess(Diligent::IRenderDevice* device, Diligent::TEXTURE_FORMAT colorFormat, Diligent::TEXTURE_FORMAT depthFormat);

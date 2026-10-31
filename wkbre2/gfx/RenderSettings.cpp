@@ -71,6 +71,8 @@ void RenderSettings::load()
 	ssaoStrength = g_settings.value<float>("ssaoStrength", def.ssaoStrength);
 	bloomThreshold = g_settings.value<float>("bloomThreshold", def.bloomThreshold);
 	bloomIntensity = g_settings.value<float>("bloomIntensity", def.bloomIntensity);
+	antiAliasing = std::clamp(g_settings.value<int>("antiAliasing", def.antiAliasing), 0, 1);
+	anisotropy = std::clamp(g_settings.value<int>("anisotropy", def.anisotropy), 1, 16);
 	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
 	staticShadowLight = g_settings.value<float>("staticShadowLight", def.staticShadowLight);
@@ -141,6 +143,8 @@ void RenderSettings::save()
 	g_settings["ssaoStrength"] = ssaoStrength;
 	g_settings["bloomThreshold"] = bloomThreshold;
 	g_settings["bloomIntensity"] = bloomIntensity;
+	g_settings["antiAliasing"] = antiAliasing;
+	g_settings["anisotropy"] = anisotropy;
 	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
 	g_settings["staticShadowLight"] = staticShadowLight;

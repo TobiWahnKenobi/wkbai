@@ -28,6 +28,28 @@
 
 using namespace Diligent;
 
+// The water surface's height at a tile corner: the mean level of the water tiles around it.
+// The map gives each tile its own level, and where neighbouring tiles differ the flat quads
+// stood at different heights: a stepped seam along the tiles' edges across open water, which
+// the waves, refraction and depth shading made plain.
+static float WaterLevelAtCorner(const Terrain* terrain, int x, int z)
+{
+	float sum = 0;
+	int n = 0;
+	for (int dz = -1; dz <= 0; dz++)
+		for (int dx = -1; dx <= 0; dx++) {
+			const int tx = x + dx, tz = z + dz;
+			if (tx < 0 || tz < 0 || tx >= (int)terrain->width || tz >= (int)terrain->height)
+				continue;
+			const auto* t = terrain->getTile(tx, tz);
+			if (t->fullOfWater) {
+				sum += t->waterLevel;
+				n++;
+			}
+		}
+	return n ? sum / n : 0.0f;
+}
+
 static const char tshaderCode[] = R"---(
 Texture2D inpTexture;
 Texture2D normalTexture;
@@ -775,12 +797,21 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// the sun: a broad highlight off the waves, many small sparkles off the ripples
 	float sw = saturate(dot(reflect(-v, wn), l)), sr = saturate(dot(r, l));
 	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * lerp(2.2, 0.5, river)) * cloud;
-	// foam: streaks on the highest crests, broken up by the ripple map
-	float noise = saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.35 + WaterRipples.xy).xy - 0.5) * 2.5)
-		* saturate(length(normalTexture.Sample(cloudSampler, ruv * 0.9 - WaterRipples.yx).xy - 0.5) * 2.5 + 0.4);
+	// foam: streaks on the highest crests, broken up by value noise in three octaves, its
+	// coordinates warped by a slower noise and drifting with the wind: nothing repeats (the
+	// ripple map had, every 24 units, and its shapes showed again and again over a wide sea)
+	float2 drift = float2(0.8, 0.6) * GrassParams.z * 0.6;
+	float2 wp = base - drift + (ValueNoise2(base / 31 + GrassParams.z * 0.02) - 0.5) * 14;
+	float fbm = ValueNoise2(wp / 7.0).x * 0.55 + ValueNoise2(wp / 3.1 + 5.3).y * 0.3 + ValueNoise2(wp / 1.3 + 9.7).x * 0.15;
+	// lacy edges from two fine layers of the ripple map (too small to show a pattern)
+	float lace = saturate(length(normalTexture.Sample(cloudSampler, wp * 0.21).xy - 0.5) * 3) * 0.6
+		+ saturate(length(normalTexture.Sample(cloudSampler, wp * 0.47 + 0.3).xy - 0.5) * 3) * 0.4;
+	float noise = saturate((fbm - 0.22) * 1.9) * lerp(0.35, 1.25, lace);
 	// (more of it in some stretches than others, by a slow noise: no regular pattern)
 	float foamPatch = smoothstep(0.25, 0.75, ValueNoise2(base / 45 - float2(0.8, 0.6) * GrassParams.z * 0.015 + 9.7).y);
-	float crestFoam = smoothstep(0.72, 0.92, crest) * smoothstep(0.15, 0.7, noise) * lerp(0.35, 1.2, foamPatch);
+	// (the crests foam at a height that varies by region too, so the rows of whitecaps differ)
+	float crestAt = lerp(0.66, 0.82, ValueNoise2(base / 57 + 3.3).x);
+	float crestFoam = smoothstep(crestAt, crestAt + 0.2, crest) * smoothstep(0.15, 0.7, noise) * lerp(0.35, 1.2, foamPatch);
 	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep,
 	// and the swash at the waterline
 	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth);
@@ -790,8 +821,32 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float bankNoise = RiverNoise(float2(s0, rf.y) * 0.3) * v0 + RiverNoise(float2(s1, rf.y) * 0.3 + 0.5) * (1 - v0);
 	float bankFoam = saturate(saturate(1 - rf.y / 1.2) * 1.4 - bankNoise * 1.2) * 0.55;
 	// small white crests on the ripples where the river runs tight, carried with them
-	float crestNoise = RiverNoise(float2(s0, rf.y) * 1.1 + 0.17) * v0 + RiverNoise(float2(s1, rf.y) * 1.1 + 0.67) * (1 - v0);
-	float riverCrest = smoothstep(0.8, 0.93, crestNoise) * tight * tight * saturate(rf.y / 0.8);
+	// (the user: the ripple map's crests made "an ugly repeating pattern"). Each is its own: the
+	// river's (along, across) coordinates in cells of 2.4 x 1.8 units, carried with the current;
+	// a cell has a crest only by its hash (more of them where tighter), at a random place, size,
+	// angle and time, rising and fading over a random 0.8-1.6 s of a 2.5-5 s cycle. Two such
+	// layers, offset by half a cell.
+	float riverCrest = 0;
+	float sAdv = rf.x + current * GrassParams.z;
+	[unroll] for (int layer = 0; layer < 2; layer++) {
+		float2 q = float2(sAdv / 2.4, rf.y / 1.8) + layer * float2(0.5, 0.37);
+		float2 cell = floor(q), fr = q - cell;
+		float2 h1 = Hash2(cell + layer * 17.1), h2 = Hash2(cell + 41.7 + layer * 9.3);
+		if (h1.x > tight * 0.55)
+			continue;
+		float period = 2.5 + 2.5 * h2.x;
+		float life = 0.8 + 0.8 * h2.y;
+		float at = frac(GrassParams.z / period + h1.y) * period;
+		float rise = saturate(at / (life * 0.3)) * saturate((life - at) / (life * 0.7));
+		float2 c = 0.25 + 0.5 * Hash2(cell + 7.7 + layer);
+		float2 dq = (fr - c) * float2(2.4, 1.8);
+		float ang = h2.x * 3.1;
+		float2 rq = float2(dq.x * cos(ang) - dq.y * sin(ang), dq.x * sin(ang) + dq.y * cos(ang));
+		float size = (0.25 + 0.35 * h1.y) * rise;
+		float shape = length(rq / float2(size * 1.6 + 1e-3, size * 0.7 + 1e-3));
+		riverCrest = max(riverCrest, saturate((1 - shape) * 3) * rise);
+	}
+	riverCrest *= tight * saturate(rf.y / 0.8);
 	float riverFoam = max(bankFoam, riverCrest) * river;
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
@@ -1220,6 +1275,13 @@ void DiligentEnhancedTerrainRenderer::init()
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+	// anisotropic (RenderSettings::anisotropy): the ground and the water are seen at low angles
+	const int aniso = std::clamp(g_renderSettings.anisotropy, 1, 16);
+	if (aniso > 1)
+		for (SamplerDesc* d : { &sampler, &cloudSampler }) {
+			d->MinFilter = d->MagFilter = d->MipFilter = FILTER_TYPE_ANISOTROPIC;
+			d->MaxAnisotropy = aniso;
+		}
 	SamplerDesc shadowSampler;
 	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_POINT;
 	shadowSampler.ComparisonFunc = COMPARISON_FUNC_LESS_EQUAL;
@@ -1228,7 +1290,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	splatSampler.AddressU = splatSampler.AddressV = TEXTURE_ADDRESS_WRAP;
 	splatSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	splatSampler.MinFilter = splatSampler.MagFilter = splatSampler.MipFilter = FILTER_TYPE_ANISOTROPIC;
-	splatSampler.MaxAnisotropy = 8;
+	splatSampler.MaxAnisotropy = std::max(aniso, 2);
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
 		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler },
 		{ SHADER_TYPE_PIXEL, "splatSampler", splatSampler } };
@@ -1674,15 +1736,16 @@ void DiligentEnhancedTerrainRenderer::init()
 					float bottom = std::min({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
 					if (tile->fullOfWater) {
 						const uint32_t v0 = (uint32_t)lakeVertices.size();
-						const float wl = tile->waterLevel;
+						const float w00 = WaterLevelAtCorner(terrain, x, z), w10 = WaterLevelAtCorner(terrain, x + 1, z);
+						const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1), w01 = WaterLevelAtCorner(terrain, x, z + 1);
 						lakeVertices.insert(lakeVertices.end(), {
-							LakeVertex{ Vector3(lx, wl, lz), wl - terrain->getVertex(x, z) },
-							LakeVertex{ Vector3(lx + tilesize, wl, lz), wl - terrain->getVertex(x + 1, z) },
-							LakeVertex{ Vector3(lx + tilesize, wl, lz + tilesize), wl - terrain->getVertex(x + 1, z + 1) },
-							LakeVertex{ Vector3(lx, wl, lz + tilesize), wl - terrain->getVertex(x, z + 1) } });
+							LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
+							LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
+							LakeVertex{ Vector3(lx + tilesize, w11, lz + tilesize), w11 - terrain->getVertex(x + 1, z + 1) },
+							LakeVertex{ Vector3(lx, w01, lz + tilesize), w01 - terrain->getVertex(x, z + 1) } });
 						for (const int& c : { 0,3,1,1,3,2 })
 							chunk.lakeIndices.push_back(v0 + c);
-						top = std::max(top, tile->waterLevel);
+						top = std::max({ top, tile->waterLevel, w00, w10, w11, w01 });
 					}
 					chunk.low = Vector3(std::min(chunk.low.x, lx), std::min(chunk.low.y, bottom), std::min(chunk.low.z, lz));
 					chunk.high = Vector3(std::max(chunk.high.x, lx + tilesize), std::max(chunk.high.y, top), std::max(chunk.high.z, lz + tilesize));
@@ -1843,14 +1906,16 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 					const float lx = (x - (int)terrain->edge) * tilesize, lz = (z - (int)terrain->edge) * tilesize;
 					const uint32_t v0 = (uint32_t)lakeVertices.size();
 					const float wl = tile->waterLevel;
+					const float w00 = WaterLevelAtCorner(terrain, x, z), w10 = WaterLevelAtCorner(terrain, x + 1, z);
+					const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1), w01 = WaterLevelAtCorner(terrain, x, z + 1);
 					lakeVertices.insert(lakeVertices.end(), {
-						LakeVertex{ Vector3(lx, wl, lz), wl - terrain->getVertex(x, z) },
-						LakeVertex{ Vector3(lx + tilesize, wl, lz), wl - terrain->getVertex(x + 1, z) },
-						LakeVertex{ Vector3(lx + tilesize, wl, lz + tilesize), wl - terrain->getVertex(x + 1, z + 1) },
-						LakeVertex{ Vector3(lx, wl, lz + tilesize), wl - terrain->getVertex(x, z + 1) } });
+						LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
+						LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
+						LakeVertex{ Vector3(lx + tilesize, w11, lz + tilesize), w11 - terrain->getVertex(x + 1, z + 1) },
+						LakeVertex{ Vector3(lx, w01, lz + tilesize), w01 - terrain->getVertex(x, z + 1) } });
 					for (const int& k : { 0,3,1,1,3,2 })
 						chunk.lakeIndices.push_back(v0 + k);
-					chunk.high.y = std::max(chunk.high.y, wl);
+					chunk.high.y = std::max({ chunk.high.y, wl, w00, w10, w11, w01 });
 				}
 		}
 	_impl->lakeVertexBuffer.Release();

@@ -494,6 +494,10 @@ void DiligentEnhancedSceneRenderer::init()
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+	if (g_renderSettings.anisotropy > 1) { // RenderSettings::anisotropy
+		sampler.MinFilter = sampler.MagFilter = sampler.MipFilter = FILTER_TYPE_ANISOTROPIC;
+		sampler.MaxAnisotropy = std::clamp(g_renderSettings.anisotropy, 1, 16);
+	}
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced scene resources";

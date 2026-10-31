@@ -11,6 +11,10 @@
 //  3. and 4. A 9-tap Gaussian blur of it, across and down.
 //  5. Composite into the back buffer: the scene times the AO (blurred by four bilinear taps), plus
 //     the bloom.
+//  6. With FXAA, the composite goes into a target first, and FXAA (after Lottes' FXAA 3.11
+//     quality: the edge's direction from the luma around, a search along it for its ends,
+//     the pixel blended across it by its place on the edge, plus a subpixel blend) writes it
+//     into the back buffer.
 
 #include "DiligentPostProcess.h"
 #include "../util/util.h"
@@ -32,6 +36,7 @@ Texture2D tColor;
 Texture2D tDepth;
 Texture2D tAo;
 Texture2D tBloom;
+Texture2D tResolved; // the composite, for FXAA
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -111,6 +116,60 @@ float4 PS_Blur(VS_OUTPUT input) : SV_Target
 	return float4(sum, 1);
 }
 
+float FxaaLuma(float2 uv)
+{
+	return dot(tResolved.SampleLevel(sLinear, uv, 0).rgb, float3(0.299, 0.587, 0.114));
+}
+
+float4 PS_Fxaa(VS_OUTPUT input) : SV_Target
+{
+	float2 uv = input.Uv, px = Texel.xy;
+	float3 rgbM = tResolved.SampleLevel(sLinear, uv, 0).rgb;
+	float lM = dot(rgbM, float3(0.299, 0.587, 0.114));
+	float lN = FxaaLuma(uv + float2(0, -px.y)), lS = FxaaLuma(uv + float2(0, px.y));
+	float lW = FxaaLuma(uv + float2(-px.x, 0)), lE = FxaaLuma(uv + float2(px.x, 0));
+	float lMax = max(lM, max(max(lN, lS), max(lW, lE))), lMin = min(lM, min(min(lN, lS), min(lW, lE)));
+	float range = lMax - lMin;
+	if (range < max(0.0312, lMax * 0.125))
+		return float4(rgbM, 1);
+	float lNW = FxaaLuma(uv + float2(-px.x, -px.y)), lNE = FxaaLuma(uv + float2(px.x, -px.y));
+	float lSW = FxaaLuma(uv + float2(-px.x, px.y)), lSE = FxaaLuma(uv + float2(px.x, px.y));
+	float edgeH = abs(-2 * lW + lNW + lSW) + 2 * abs(-2 * lM + lN + lS) + abs(-2 * lE + lNE + lSE);
+	float edgeV = abs(-2 * lN + lNW + lNE) + 2 * abs(-2 * lM + lW + lE) + abs(-2 * lS + lSW + lSE);
+	bool horz = edgeH >= edgeV;
+	float l1 = horz ? lN : lW, l2 = horz ? lS : lE;
+	float g1 = l1 - lM, g2 = l2 - lM;
+	bool steepest1 = abs(g1) >= abs(g2);
+	float gScaled = 0.25 * max(abs(g1), abs(g2));
+	float stepLen = horz ? px.y : px.x;
+	float lLocal = 0.5 * ((steepest1 ? l1 : l2) + lM);
+	if (steepest1)
+		stepLen = -stepLen;
+	float2 cur = uv + (horz ? float2(0, stepLen * 0.5) : float2(stepLen * 0.5, 0));
+	float2 off = horz ? float2(px.x, 0) : float2(0, px.y);
+	float2 uv1 = cur - off, uv2 = cur + off;
+	float e1 = FxaaLuma(uv1) - lLocal, e2 = FxaaLuma(uv2) - lLocal;
+	bool done1 = abs(e1) >= gScaled, done2 = abs(e2) >= gScaled;
+	static const float steps[10] = { 1, 1, 1, 1, 1.5, 2, 2, 2, 4, 8 };
+	[loop] for (int i = 0; i < 10 && !(done1 && done2); i++) {
+		if (!done1) { uv1 -= off * steps[i]; e1 = FxaaLuma(uv1) - lLocal; done1 = abs(e1) >= gScaled; }
+		if (!done2) { uv2 += off * steps[i]; e2 = FxaaLuma(uv2) - lLocal; done2 = abs(e2) >= gScaled; }
+	}
+	float d1 = horz ? uv.x - uv1.x : uv.y - uv1.y, d2 = horz ? uv2.x - uv.x : uv2.y - uv.y;
+	bool nearer1 = d1 < d2;
+	float dist = min(d1, d2), edgeLength = d1 + d2;
+	float pixelOffset = 0.5 - dist / edgeLength;
+	bool centreSmaller = lM < lLocal;
+	bool correct = ((nearer1 ? e1 : e2) < 0) != centreSmaller;
+	float offset = correct ? pixelOffset : 0;
+	float lAvg = (2 * (lN + lS + lW + lE) + lNW + lNE + lSW + lSE) / 12;
+	float sub = saturate(abs(lAvg - lM) / range);
+	sub = (-2 * sub + 3) * sub * sub;
+	offset = max(offset, sub * sub * 0.75);
+	float2 fuv = uv + (horz ? float2(0, offset * stepLen) : float2(offset * stepLen, 0));
+	return float4(tResolved.SampleLevel(sLinear, fuv, 0).rgb, 1);
+}
+
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
@@ -136,10 +195,10 @@ struct DiligentPostProcess::Impl {
 	IRenderDevice* device;
 	TEXTURE_FORMAT colorFormat, depthFormat;
 	uint32_t width = 0, height = 0;
-	RefCntAutoPtr<ITexture> color, depth, ao, bloomA, bloomB;
+	RefCntAutoPtr<ITexture> color, depth, ao, bloomA, bloomB, resolved;
 	RefCntAutoPtr<IBuffer> buffer;
 	RefCntAutoPtr<IShader> vs;
-	Pass aoPass, brightPass, blurPass[2], compositePass;
+	Pass aoPass, brightPass, blurPass[2], compositePass, fxaaPass;
 
 	RefCntAutoPtr<IShader> shader(SHADER_TYPE type, const char* entry)
 	{
@@ -257,6 +316,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom" }, colorFormat);
+	_impl->makePass(_impl->fxaaPass, "PS_Fxaa", { "tResolved" }, colorFormat);
 }
 
 DiligentPostProcess::~DiligentPostProcess()
@@ -276,11 +336,13 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height)
 	_impl->ao = _impl->target("Ambient occlusion", hw, hh, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
 	_impl->bloomA = _impl->target("Bloom A", hw, hh, TEX_FORMAT_RGBA8_UNORM, BIND_RENDER_TARGET);
 	_impl->bloomB = _impl->target("Bloom B", hw, hh, TEX_FORMAT_RGBA8_UNORM, BIND_RENDER_TARGET);
+	_impl->resolved = _impl->target("Scene before FXAA", width, height, _impl->colorFormat, BIND_RENDER_TARGET);
 	_impl->bind(_impl->aoPass, { _impl->depth });
 	_impl->bind(_impl->brightPass, { _impl->color });
 	_impl->bind(_impl->blurPass[0], { _impl->bloomA });
 	_impl->bind(_impl->blurPass[1], { _impl->bloomB });
 	_impl->bind(_impl->compositePass, { _impl->color, _impl->ao, _impl->bloomA });
+	_impl->bind(_impl->fxaaPass, { _impl->resolved });
 }
 
 ITextureView* DiligentPostProcess::colorRTV() const
@@ -328,6 +390,15 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		ITextureView* rtv = _impl->bloomA->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->ClearRenderTarget(rtv, black, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+	if (settings.fxaa) {
+		_impl->run(ctx, _impl->compositePass, _impl->resolved);
+		ctx->SetRenderTargets(1, &backBufferRTV, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->SetPipelineState(_impl->fxaaPass.pipeline);
+		ctx->CommitShaderResources(_impl->fxaaPass.srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });
+		return;
 	}
 	ctx->SetRenderTargets(1, &backBufferRTV, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	ctx->SetViewports(1, nullptr, 0, 0);

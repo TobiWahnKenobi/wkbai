@@ -727,14 +727,66 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 		down[widest] = 0;
 		march({ { 0.0f, widest } });
 	}
+	// on into the wide water: the distance falls on past the mouth (negative), so that the river
+	// look fades out over coordinates that carry on outwards (a constant value there had drawn
+	// its ripples as stripes)
+	std::vector<uint8_t> has(N, 0);
+	{
+		std::vector<float> seaDist(N, 1e30f), origin(N, 0.0f);
+		std::vector<Item> heap;
+		for (int i = 0; i < (int)N; i++) {
+			if (!riv[i] || down[i] >= 1e29f)
+				continue;
+			has[i] = 1;
+			const int x = i % GW, z = i / GW;
+			for (int k = 0; k < 4; k++) {
+				const int ax = x + mx[k], az = z + mz[k];
+				if (ax >= 0 && az >= 0 && ax < GW && az < GH && wet[(size_t)az * GW + ax] && !riv[(size_t)az * GW + ax]) {
+					seaDist[i] = 0;
+					origin[i] = down[i];
+					heap.push_back({ 0.0f, i });
+					break;
+				}
+			}
+		}
+		std::make_heap(heap.begin(), heap.end(), std::greater<>());
+		while (!heap.empty()) {
+			std::pop_heap(heap.begin(), heap.end(), std::greater<>());
+			const auto [dt, i] = heap.back();
+			heap.pop_back();
+			if (dt > seaDist[i])
+				continue;
+			const int x = i % GW, z = i / GW;
+			for (int k = 0; k < 8; k++) {
+				const int ax = x + mx[k], az = z + mz[k];
+				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
+					continue;
+				const int n = az * GW + ax;
+				if (!wet[n] || riv[n])
+					continue;
+				const float nd = dt + (k < 4 ? 1.0f : 1.41421f) * cell;
+				if (nd < seaDist[n]) {
+					seaDist[n] = nd;
+					origin[n] = origin[i];
+					heap.push_back({ nd, n });
+					std::push_heap(heap.begin(), heap.end(), std::greater<>());
+				}
+			}
+		}
+		for (int i = 0; i < (int)N; i++)
+			if (!riv[i] && seaDist[i] < 1e29f) {
+				down[i] = origin[i] - seaDist[i];
+				has[i] = 1;
+			}
+	}
 	// the way downstream: down the distance, smoothed (three 3 x 3 passes) and of unit length
 	std::vector<float> tx(N, 0.0f), tz(N, 0.0f);
 	for (int i = 0; i < (int)N; i++) {
-		if (!riv[i])
+		if (!has[i])
 			continue;
 		const int x = i % GW, z = i / GW;
 		auto at = [&](int ax, int az) {
-			if (ax < 0 || az < 0 || ax >= GW || az >= GH || !riv[(size_t)az * GW + ax])
+			if (ax < 0 || az < 0 || ax >= GW || az >= GH || !has[(size_t)az * GW + ax])
 				return down[i];
 			return down[(size_t)az * GW + ax];
 		};
@@ -744,13 +796,13 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 	for (int pass = 0; pass < 3; pass++) {
 		std::vector<float> ax(N, 0.0f), az(N, 0.0f);
 		for (int i = 0; i < (int)N; i++) {
-			if (!riv[i])
+			if (!has[i])
 				continue;
 			const int x = i % GW, z = i / GW;
 			for (int dz = -1; dz <= 1; dz++)
 				for (int dx = -1; dx <= 1; dx++) {
 					const int bx = x + dx, bz = z + dz;
-					if (bx < 0 || bz < 0 || bx >= GW || bz >= GH || !riv[(size_t)bz * GW + bx])
+					if (bx < 0 || bz < 0 || bx >= GW || bz >= GH || !has[(size_t)bz * GW + bx])
 						continue;
 					ax[i] += tx[(size_t)bz * GW + bx];
 					az[i] += tz[(size_t)bz * GW + bx];
@@ -813,7 +865,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 	}
 	std::vector<uint8_t> done(N, 0);
 	for (int i = 0; i < (int)N; i++) {
-		if (!riv[i] || down[i] >= 1e29f)
+		if (!has[i] || down[i] >= 1e29f)
 			continue;
 		const float len = std::sqrt(tx[i] * tx[i] + tz[i] * tz[i]);
 		out[i * 4] = down[i];
@@ -822,9 +874,14 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 		out[i * 4 + 3] = len > 1e-6f ? tz[i] / len : 0.0f;
 		done[i] = 1;
 	}
-	// out from the rivers: their values carried six texels into wide water and onto the land
-	// (the bank's distance 0 on land)
-	for (int pass = 0; pass < 6; pass++) {
+	// out from the rivers: their values carried over all the water around them (as far as the
+	// flow map gives it any river share, so the river look fades out on valid coordinates; six
+	// texels had left a jagged line in the sea) and three texels onto the land (the bank's
+	// distance 0 there)
+	for (int pass = 0, landPasses = 0; ; pass++) {
+		bool grew = false;
+		const bool land = landPasses < 3;
+		landPasses++;
 		std::vector<uint8_t> next = done;
 		for (int i = 0; i < (int)N; i++) {
 			if (done[i])
@@ -841,7 +898,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 						acc[c] += out[((size_t)bz * GW + bx) * 4 + c];
 					n++;
 				}
-			if (n == 0)
+			if (n == 0 || (!wet[i] && !land))
 				continue;
 			for (int c = 0; c < 4; c++)
 				out[i * 4 + c] = acc[c] / n;
@@ -849,9 +906,18 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 				out[i * 4 + 1] = 0;
 			else
 				out[i * 4 + 1] = std::min(out[i * 4 + 1], bank[i]);
+			// the way downstream kept at unit length (the averages shrink it where flows part)
+			const float len = std::sqrt(out[i * 4 + 2] * out[i * 4 + 2] + out[i * 4 + 3] * out[i * 4 + 3]);
+			if (len > 1e-4f) {
+				out[i * 4 + 2] /= len;
+				out[i * 4 + 3] /= len;
+			}
 			next[i] = 1;
+			grew = true;
 		}
 		done = std::move(next);
+		if (!grew || pass > 4 * (GW + GH))
+			break;
 	}
 	// debugging: "WKB_DUMP_RIVER=<file>" writes the field as a PPM: red the distance downstream
 	// in bands of 10 units, green the bank's distance (up to 25 units), blue the river texels
@@ -859,7 +925,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 		if (FILE* f = fopen(dump, "wb")) {
 			fprintf(f, "P6\n%d %d\n255\n", GW, GH);
 			for (size_t i = 0; i < N; i++) {
-				const uint8_t px[3] = { (uint8_t)(done[i] ? std::fmod(out[i * 4], 10.0f) * 25.5f : 0),
+				const uint8_t px[3] = { (uint8_t)(done[i] ? std::fmod(std::fmod(out[i * 4], 10.0f) + 10.0f, 10.0f) * 25.5f : 0),
 					(uint8_t)std::min(out[i * 4 + 1] * 10.0f, 255.0f), (uint8_t)(riv[i] ? 200 : wet[i] ? 80 : 0) };
 				fwrite(px, 1, 3, f);
 			}

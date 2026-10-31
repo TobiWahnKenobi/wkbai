@@ -617,6 +617,11 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Bloom", &s.bloom);
 		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
 		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
+		{
+			static const char* const aaLevels[] = { "Off", "FXAA" };
+			ImGui::Combo("Anti-aliasing", &s.antiAliasing, aaLevels, 2);
+		}
+		ImGui::SliderInt("Anisotropic filtering (next map)", &s.anisotropy, 1, 16);
 	}
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");
@@ -1984,7 +1989,7 @@ void ClientInterface::iter()
 	// the 3D scene post-processed (enhanced graphics on Diligent)
 	DiligentGfx* postGfx = dynamic_cast<DiligentGfx*>(gfx);
 	if (postGfx)
-		postGfx->BeginPostProcessing(UseEnhancedRenderers(gfx) && client->getLevel() && (g_renderSettings.ssao || g_renderSettings.bloom));
+		postGfx->BeginPostProcessing(UseEnhancedRenderers(gfx) && client->getLevel() && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0));
 	gfx->ClearFrame(true, true, fogColour);
 	gfx->BeginDrawing();
 
