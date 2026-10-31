@@ -25,9 +25,9 @@ void Footprint::parse(GSFileParser& gsf, GameSet& gs)
 				auto tag = gsf.nextTag();
 				if (tag == "SET_PATHFINDING") {
 					auto word = gsf.nextTag();
-					//tile.mode = word == "CANNOT_BE_CONSTRUCTED_UPON" || word == "PASSABLE";
-					//tile.mode = 1;
-					tile.mode = 1;
+					// BLOCKED is the default (the docks' water tiles and the 4 x 4 civic buildings'
+					// corners name it); the others can be walked over
+					tile.mode = word != "BLOCKED";
 				}
 				else if (tag == "END_TILE_OFFSET")
 					break;
