@@ -301,7 +301,21 @@ void AIController::update()
 		// Character Requirements
 		const std::vector<int> charNeeds = AICharacterNeeds(gscomm, &ctx, cominst.forceBalance);
 		bool shortOfResources = false; // a requirement found nothing it could pay for
-		for (size_t ri = 0; ri < cominst.characterReqInsts.size(); ++ri) {
+		// FORCE_BALANCE: the requirement furthest below its count first (the least filled share;
+		// ties in the commission's order). The original's test 36: the defensive army at heavy
+		// infantry 5 of 6 and light infantry 4 of 6 got an Archer, then the Spearman, then an
+		// Archer (ids 14244, 14255, 14263); in the commission's order the Spearman came first
+		// and its barracks then had no time for the archers.
+		std::vector<size_t> reqOrder(cominst.characterReqInsts.size());
+		std::iota(reqOrder.begin(), reqOrder.end(), 0);
+		if (cominst.forceBalance) {
+			std::vector<float> filled(reqOrder.size(), 1.0f);
+			for (size_t ri : reqOrder)
+				if (charNeeds[ri] > 0)
+					filled[ri] = (float)gscomm->characterRequirements[ri].fdAlreadyHaving->eval(&ctx).size() / charNeeds[ri];
+			std::stable_sort(reqOrder.begin(), reqOrder.end(), [&](size_t a, size_t b) { return filled[a] < filled[b]; });
+		}
+		for (size_t ri : reqOrder) {
 			auto& gsreq = gscomm->characterRequirements[ri];
 			auto& reqinst = cominst.characterReqInsts[ri];
 			size_t requiredCount = (size_t)std::max(0, charNeeds[ri]);
@@ -316,7 +330,7 @@ void AIController::update()
 				// now (tech level, alignment, cost, population); a rung already being spawned
 				// counts too, so a busy building doesn't make the AI fall back to a worse rung
 				const GameSet* gs = Server::instance->gameSet.get();
-				bool anyServed = false, anyUnaffordable = false;
+				bool anyServed = false, anyUnaffordable = false, anyBusy = false;
 				for (auto& rung : gsreq.ladder->entries) {
 					const std::string spawnName = "Spawn " + rung.type->name;
 					const int ordid = gs->orders.names.getIndex(spawnName);
@@ -325,13 +339,15 @@ void AIController::update()
 					const OrderBlueprint* orderBp = &gs->orders[ordid];
 					const int cmdid = gs->commands.names.getIndex(spawnName);
 					const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
-					bool served = false, unaffordable = false;
+					bool served = false, unaffordable = false, busy = false;
 					for (ServerGameObject* building : rung.finder->eval(&ctx)) {
 						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 							continue;
 						if (Order* current = building->orderConfig.getCurrentOrder()) {
 							if (current->blueprint == orderBp)
 								served = true;
+							else
+								busy = true;
 							continue;
 						}
 						// impossible here (tech level, alignment): try another building; only waiting
@@ -363,6 +379,7 @@ void AIController::update()
 						served = true;
 					}
 					anyUnaffordable |= unaffordable;
+					anyBusy |= busy;
 					if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
 						printf("RUNG t=%.2f \"%s\" req %zu: %s served %d unaffordable %d (required %zu, existing %zu, reserved %d)\n", Server::instance->timeManager.currentTime,
 							Server::instance->gameSet->commissions.getString(gscomm).c_str(), ri, rung.type->name.c_str(), (int)served, (int)unaffordable, requiredCount, existingCount, (int)reserved);
@@ -373,7 +390,9 @@ void AIController::update()
 					// a rung it can't pay for: down to the next, cheaper one (the original's save:
 					// Pikeman CANT_AFFORD, then Spearman spawned)
 				}
-				if (!anyServed && anyUnaffordable)
+				// waiting for a building busy with another spawn holds the resources too: the
+				// original spawned no Peasant or Monk while its one barracks trained the army
+				if (!anyServed && (anyUnaffordable || anyBusy))
 					shortOfResources = true;
 			}
 		}
