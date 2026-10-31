@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DefaultParticleRenderer.h"
+#include <algorithm>
 #include "../ParticleContainer.h"
 #include "renderer.h"
 #include "../client.h"
@@ -57,10 +58,32 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 			Vector3 camside = camera.direction.cross(Vector3(0, 1, 0)).normal();
 			Vector3 camhor = camside.cross(camera.direction).normal();
 			Vector3 points[4];
-			points[0] = pos + (camside + camhor) * spriteSize * 0.5f;
-			points[1] = pos + (camside - camhor) * spriteSize * 0.5f;
-			points[2] = pos + (-camside - camhor) * spriteSize * 0.5f;
-			points[3] = pos + (-camside + camhor) * spriteSize * 0.5f;
+			const PSType ptype = particle.system->Particles.type;
+			if (ptype == PSType::Streaks) {
+				// a streak: a thin line from where the particle was 0.06 s ago to where it is, as
+				// the original's (Woodchip: chips flying off a chopped tree). Drawn as squares one
+				// unit across, they were the "pixel quads" around every woodcutter.
+				const Vector3 tail = particle.getPosition(std::max(particle.startTime, nextTime - 0.06f));
+				Vector3 along = pos - tail;
+				Vector3 across = along.cross(camera.direction);
+				if (across.sqlen3() < 1e-8f)
+					across = camside;
+				across = across.normal() * 0.02f;
+				if (along.sqlen3() < 1e-6f)
+					along = camhor * 0.05f;
+				points[0] = pos + across;
+				points[1] = pos - across;
+				points[2] = pos - along - across;
+				points[3] = pos - along + across;
+			}
+			else {
+				// sprites at their scale; points as small dots
+				const float size = ptype == PSType::Points ? 0.06f : spriteSize;
+				points[0] = pos + (camside + camhor) * size * 0.5f;
+				points[1] = pos + (camside - camhor) * size * 0.5f;
+				points[2] = pos + (-camside - camhor) * size * 0.5f;
+				points[3] = pos + (-camside + camhor) * size * 0.5f;
+			}
 
 			batchVertex* verts; uint16_t* indices; uint32_t firstIndex;
 			batch->next(4, 6, &verts, &indices, &firstIndex);
