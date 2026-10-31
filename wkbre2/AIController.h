@@ -56,6 +56,9 @@ struct AIController {
 	// unit id -> the (city id, work order) that had the unit at the last update: a unit listed by
 	// several work orders stays with that one while it still lists the unit
 	std::map<uint32_t, std::pair<uint32_t, const WorkOrder*>> unitWorkOrder;
+	// wounded attackers sent home: the next check (game time), how many so far
+	float nextRetreatCheck = 0.0f;
+	int retreated = 0;
 	std::vector<CommissionInstance> commissionInstances;
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}

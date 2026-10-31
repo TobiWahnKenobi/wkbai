@@ -6,6 +6,7 @@
 #include "platform.h"
 
 #include <map>
+#include <functional>
 #include <string>
 #include <cstring>
 //#include <direct.h>
@@ -1790,13 +1791,33 @@ void Test_AIvsAI()
 						}
 				};
 				count(player, count);
-				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
-					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), buildings,
+				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
+					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), player->aiController.retreated, buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
 				std::string markerList;
 				for (const auto& [name, n] : markers)
 					markerList += " " + name + "=" + std::to_string(n);
 				printf("AITEST   markers:%s\n", markerList.c_str());
+				// the armies: type, then its members (direct children; formations count their own)
+				std::map<std::string, std::pair<int, int>> armies; // type -> (armies, members)
+				std::function<int(const CommonGameObject*)> members = [&](const CommonGameObject* o) {
+					int n = 0;
+					for (const auto& [t, cs] : o->children)
+						for (const CommonGameObject* c : cs)
+							n += c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER ? 1 : members(c);
+					return n;
+				};
+				for (const auto& [t, cs] : player->children)
+					for (const CommonGameObject* c : cs)
+						if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY) {
+							auto& a = armies[c->blueprint->name];
+							a.first++;
+							a.second += members(c);
+						}
+				std::string armyList;
+				for (const auto& [name, a] : armies)
+					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
+				printf("AITEST   armies (count/units):%s\n", armyList.c_str());
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;

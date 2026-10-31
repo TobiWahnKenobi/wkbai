@@ -108,6 +108,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiSurplusBuildings") aiSurplusBuildings = value;
 	else if (name == "aiSurplusPerBuilding") aiSurplusPerBuilding = (float)value;
 	else if (name == "aiLendFarmers") aiLendFarmers = value != 0;
+	else if (name == "aiRetreatHealth") aiRetreatHealth = value;
 	else if (name == "resourcePoints") resourcePoints = value;
 	else if (name == "victoryPointLimit") victoryPointLimit = value;
 	else if (name == "valhallaModeFood") valhallaModeFood = value;
@@ -368,6 +369,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiSurplusBuildings = aiSurplusBuildings;
 	server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;
 	server.aiLendFarmers = aiLendFarmers;
+	server.aiRetreatHealth = aiRetreatHealth / 100.0f;
 	if (mode != DevMode) {
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or

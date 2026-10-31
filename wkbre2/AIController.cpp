@@ -101,6 +101,60 @@ void AIController::update()
 		}
 	}
 
+	// ---- Wounded attackers home (the aggressive AI's tactics, not in WKB.exe) ----
+	// The Kingmaker's attacking armies fight until each unit dies; only its defensive army sends
+	// the wounded to heal ("Go Heal Or Train"). A unit of an attacking army below aiRetreatHealth of
+	// its hit points and over 150 m from its palace is handed to the player's defensive army, which
+	// heals it and keeps it home, and set walking to the palace ("Move to Manor").
+	if (Server::instance->aggressiveAI && Server::instance->aiRetreatHealth > 0.0f && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextRetreatCheck) {
+		nextRetreatCheck = Server::instance->timeManager.currentTime + 3.0f;
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int hp = gs->items.names.getIndex("Hit Points"), hpCap = gs->items.names.getIndex("Hit Point Capacity");
+		const int palaceFinder = gs->objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		const int moveHome = gs->orderAssignments.names.getIndex("Move to Manor");
+		// the armies anywhere below the player (the defensive army is under the Co-ordinator)
+		ServerGameObject* defensive = nullptr;
+		std::vector<ServerGameObject*> attackers;
+		std::vector<ServerGameObject*> todo{ gameObj };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* child : children) {
+					auto* army = (ServerGameObject*)child;
+					if (army->deleted || army->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
+						continue;
+					if (army->blueprint->name == "Kingmaker Defensive Army")
+						defensive = army;
+					else if (army->blueprint->name == "Kingmaker Attacking Army")
+						attackers.push_back(army);
+					todo.push_back(army);
+				}
+		}
+		SrvScriptContext ctx{ Server::instance, gameObj };
+		ServerGameObject* palace = palaceFinder >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[palaceFinder]->getFirst(&ctx) : nullptr;
+		if (defensive && palace && hp >= 0 && hpCap >= 0 && moveHome >= 0) {
+			std::vector<ServerGameObject*> wounded;
+			for (ServerGameObject* army : attackers)
+				for (const auto& [type, members] : army->children)
+					for (CommonGameObject* m : members) {
+						auto* unit = (ServerGameObject*)m;
+						if (unit->deleted || unit->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+							continue;
+						const float cap = unit->getItem(hpCap);
+						if (cap > 0.0f && unit->getItem(hp) < Server::instance->aiRetreatHealth * cap
+							&& (unit->position - palace->position).sqlen2xz() > 150.0f * 150.0f)
+							wounded.push_back(unit);
+					}
+			for (ServerGameObject* unit : wounded) {
+				unit->setParent(defensive);
+				gs->orderAssignments[moveHome].assignTo(unit, &ctx, gameObj);
+				retreated++;
+			}
+		}
+	}
+
 	// ---- Work Orders ----
 	// A unit can be listed by several work orders (a town's and a city's workforce, while peasants
 	// move between settlements): each unit works for one, the one that had it before if that still

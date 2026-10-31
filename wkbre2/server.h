@@ -211,6 +211,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	float aiSurplusPerBuilding = 800.0f;
 	// with it, a settlement whose farms have no peasants borrows them (AIController): "aiLendFarmers"
 	bool aiLendFarmers = true;
+	// with it, attackers below this share of their hit points go home to the defensive army
+	// (AIController): "aiRetreatHealth" in percent; 0: they fight on
+	float aiRetreatHealth = 0.0f;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
