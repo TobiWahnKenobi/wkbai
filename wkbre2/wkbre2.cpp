@@ -90,9 +90,9 @@ static LONG WINAPI PrintCrash(EXCEPTION_POINTERS* info)
 		const bool scripted = g_settings.value("test", false) || g_settings.contains("benchmark") || g_settings.contains("menuTest")
 			|| g_settings.contains("lobbyTest");
 		if (ok && !scripted) {
-			const std::string text = "wkbre2 has crashed. A crash report was saved to\n\n" + PathToUtf8(dumpPath)
-				+ "\n\nPlease attach it (and wkbre2's log) when you report the problem.";
-			MessageBoxA(nullptr, text.c_str(), "wkbre2", MB_ICONERROR);
+			const std::string text = "wkbai has crashed. A crash report was saved to\n\n" + PathToUtf8(dumpPath)
+				+ "\n\nPlease attach it (and wkbai's log) when you report the problem.";
+			MessageBoxA(nullptr, text.c_str(), "wkbai", MB_ICONERROR);
 		}
 	}
 	return EXCEPTION_CONTINUE_SEARCH;
@@ -252,15 +252,24 @@ int main()
 #ifdef _WIN32
 	SetUnhandledExceptionFilter(PrintCrash);
 #endif
-	printf("Welcome to wkbre2 ! :)\n\n");
+	printf("Welcome to wkbai ! :)\n\n");
 
 	LoadSettings();
 	g_renderSettings.load();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
 	if (g_settings.contains("userPath"))
 		g_userPath = PathFromUtf8(g_settings.at("userPath").get<std::string>());
-	else if (const char* appData = getenv("APPDATA"))
-		g_userPath = PathFromUtf8(appData) / "wkbre2";
+	else if (const char* appData = getenv("APPDATA")) {
+		// %APPDATA%\wkbai; the first time, a copy of the former %APPDATA%\wkbre2 (settings, saves,
+		// mods), which stays as it was
+		g_userPath = PathFromUtf8(appData) / "wkbai";
+		const std::filesystem::path former = PathFromUtf8(appData) / "wkbre2";
+		std::error_code ec;
+		if (!std::filesystem::exists(g_userPath, ec) && std::filesystem::is_directory(former, ec)) {
+			std::filesystem::copy(former, g_userPath, std::filesystem::copy_options::recursive, ec);
+			printf("User folder copied from %s to %s%s\n", PathToUtf8(former).c_str(), PathToUtf8(g_userPath).c_str(), ec ? " (incomplete)" : "");
+		}
+	}
 
 #ifdef _WIN32
 	if (!std::filesystem::exists(g_gamePath / "data.bcp"))
@@ -278,7 +287,7 @@ int main()
 		message += "\n\nYou can also change the entire path in the configuration file \"wkconfig.json\".";
 		printf("%s\n", message.c_str());
 #ifdef _WIN32
-		MessageBoxA(NULL, message.c_str(), "wkbre2", 16);
+		MessageBoxA(NULL, message.c_str(), "wkbai", 16);
 #endif
 		return -5;
 	}

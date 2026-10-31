@@ -332,7 +332,7 @@ bool Mesh::saveGltf(const char* path) const
 {
 	// one primitive per material group, from the most detailed polygon list; the first UV list
 	nlohmann::json doc;
-	doc["asset"] = { { "version", "2.0" }, { "generator", "wkbre2" } };
+	doc["asset"] = { { "version", "2.0" }, { "generator", "wkbai" } };
 	std::vector<uint8_t> bin;
 	auto append = [&](const void* data, size_t size) {
 		while (bin.size() % 4) bin.push_back(0);

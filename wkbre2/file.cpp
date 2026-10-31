@@ -569,7 +569,7 @@ std::vector<ModInfo> DiscoverMods()
 				mod.description = json.value<std::string>("description", "");
 				mod.modId = json.value<std::string>("id", mod.modId);
 				mod.version = json.value<std::string>("version", "");
-				mod.apiVersion = json.value<int>("wkbre2", 0);
+				mod.apiVersion = json.value<int>("wkbai", json.value<int>("wkbre2", 0)); // "wkbre2": before the rename
 				if (auto req = json.find("requires"); req != json.end() && req->is_array())
 					for (const auto& r : *req)
 						if (r.is_string())

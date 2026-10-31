@@ -39,10 +39,10 @@ jobs:
       - name: Test file system and mod load order
         run: python tests/test_vfs.py -v
 
-      - name: Upload wkbre2
+      - name: Upload wkbai
         uses: actions/upload-artifact@v7
         with:
-          name: wkbre2-windows-x64
+          name: wkbai-windows-x64
           path: |
             build/wkbre2/RelWithDebInfo/*.exe
             build/wkbre2/RelWithDebInfo/*.dll

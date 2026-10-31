@@ -1,4 +1,4 @@
--- wkbre2 menus: the main menu and its screens, and the in-game menu (Esc).
+-- wkbai menus: the main menu and its screens, and the in-game menu (Esc).
 --
 -- Drawn with the original's interface art and bitmap fonts. Positions are in pixels of a
 -- 1920x1080 window (the original draws its menus at native pixel size; these are measured
@@ -435,7 +435,7 @@ Screens.main = {
 		local k = 1.6
 		drawImage(ART.logo, X(960 - 500 * k), Y(40), L(1000 * k), L(264 * k))
 		buttonColumn(MainMenuItems, Y(377), Y(1010))
-		drawText(FONT_LIST, W - L(100), H - L(26), "wkbre2", WHITE, S)
+		drawText(FONT_LIST, W - L(100), H - L(26), "wkbai", WHITE, S)
 	end,
 }
 
@@ -572,9 +572,10 @@ local CREDITS = {
 	C("role", "FRONT_END_CREDITS_ADDITIONAL_ARTWORK"), C("name", "Ben Willsher"), C("name", "Steve Packer"), C("name", "Dave Swan"),
 	C("role", "FRONT_END_CREDITS_MUSIC_SPEECH_SFX"), C("name", "Earcom Ltd., Paul Weir"),
 	C("note", "This product contains software technology licensed from GameSpy Industries, Inc. (c) 1999-2003 GameSpy Industries, Inc. GameSpy and the \"Powered by GameSpy\" design are trademarks of GameSpy Industries, Inc. All rights reserved."),
-	C("heading", "wkbre2"),
-	C("role", "Engine reimplementation"), C("name", "AdrienTD"),
-	C("role", "Modernization fork (with AI and reverse engineering)"), C("name", "TobiWahnKenobi"),
+	C("heading", "wkbai"),
+	C("role", "Developed with AI and reverse engineering"), C("name", "TobiWahnKenobi"),
+	C("role", "Based on wkbre2, the engine reimplementation by"), C("name", "AdrienTD"),
+	C("note", "wkbai is an independent fan project, in no way affiliated with or endorsed by Black Cactus or the rights holders of Warrior Kings, nor by wkbre2 or AdrienTD."),
 }
 
 local creditsState = { start = 0 }

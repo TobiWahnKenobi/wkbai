@@ -66,13 +66,13 @@ BEGIN
     BEGIN
         BLOCK "040004b0"
         BEGIN
-            VALUE "CompanyName", "AdrienTD"
-            VALUE "FileDescription", "The New Warrior Kings Engine"
+            VALUE "CompanyName", "TobiWahnKenobi, after AdrienTD's wkbre2"
+            VALUE "FileDescription", "wkbai - Warrior Kings: Battles engine (a fork of wkbre2)"
             VALUE "FileVersion", "0.0.0.1"
-            VALUE "InternalName", "wkbre2"
-            VALUE "LegalCopyright", "Copyright (C) 2021 AdrienTD"
-            VALUE "OriginalFilename", "wkbre2.exe"
-            VALUE "ProductName", "The New Warrior Kings Engine"
+            VALUE "InternalName", "wkbai"
+            VALUE "LegalCopyright", "wkbre2 (C) 2021 AdrienTD; wkbai (C) 2026 TobiWahnKenobi. GPL 3. Not affiliated with Black Cactus or AdrienTD."
+            VALUE "OriginalFilename", "wkbai.exe"
+            VALUE "ProductName", "wkbai"
             VALUE "ProductVersion", "0.0.0.1"
         END
     END

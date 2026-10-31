@@ -49,7 +49,7 @@ void InitWindow()
 	// Initial size of the window's drawing area (the render resolution)
 	g_windowWidth = g_settings.value<int>("windowWidth", g_windowWidth);
 	g_windowHeight = g_settings.value<int>("windowHeight", g_windowHeight);
-	g_sdlWindow = SDL_CreateWindow("wkbre2 \"Next\"", g_windowWidth, g_windowHeight, flags); // SDL3 centers new windows
+	g_sdlWindow = SDL_CreateWindow("wkbai", g_windowWidth, g_windowHeight, flags); // SDL3 centers new windows
 	SDL_StartTextInput(g_sdlWindow); // text input events are opt-in in SDL3 (ImGui text fields need them)
 	const float uiScale = g_settings.value("uiScale", 0.0f);
 	g_uiScale = uiScale > 0.0f ? uiScale : g_settings.value("dpiAware", false) ? std::max(1.0f, SDL_GetWindowDisplayScale(g_sdlWindow)) : 1.0f;

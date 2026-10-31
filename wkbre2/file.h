@@ -55,7 +55,7 @@ public:
 
 extern std::filesystem::path g_gamePath;
 // Where the player's own files go (save games), so the game folder is never written to:
-// "userPath" in wkconfig.json, else %APPDATA%\wkbre2. Its "saved" folder is searched before the game's.
+// "userPath" in wkconfig.json, else %APPDATA%\wkbai (copied from %APPDATA%\wkbre2 the first time). Its "saved" folder is searched before the game's.
 extern std::filesystem::path g_userPath;
 extern bool g_allowDataDirectory, g_macFileNamesFallbackEnabled;
 
@@ -68,7 +68,7 @@ struct ModInfo {
 	bool enabled = true;
 	uint64_t newestTime = 0; // newest file timestamp (FILETIME), orders the list in original mode
 	// From mod.json: its own id (others name it in "requires"; default: the folder name), its
-	// version, the mods it needs, and the oldest mod format ("wkbre2") it works with
+	// version, the mods it needs, and the oldest mod format ("wkbai", formerly "wkbre2") it works with
 	std::string modId, version;
 	std::vector<std::string> dependencies; // mod.json "requires"
 	int apiVersion = 0;
@@ -76,7 +76,7 @@ struct ModInfo {
 	std::string problem;
 };
 
-// The mod format this build supports (mod.json "wkbre2"): 1 = folders and archives overriding any
+// The mod format this build supports (mod.json "wkbai"; "wkbre2" before the rename): 1 = folders and archives overriding any
 // game file, mod.json, Lua\FrontEnd\*.lua and Lua\InGame\*.lua extending the UI scripts;
 // 2 = also .png/.dds/.ktx2 replacing a .tga/.pcx texture of any size (Bitmap::replacementFile)
 constexpr int MOD_API_VERSION = 2;

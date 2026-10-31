@@ -64,7 +64,7 @@ void LoadSettings() {
 	}
 	else {
 #ifdef _WIN32
-		MessageBoxA(nullptr, "The configuration file wkconfig.json could not be opened.", "wkbre2", 16);
+		MessageBoxA(nullptr, "The configuration file wkconfig.json could not be opened.", "wkbai", 16);
 #endif
 	}
 }

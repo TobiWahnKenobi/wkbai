@@ -55,7 +55,7 @@ FetchContent_MakeAvailable(tracy)
 # The renderer only gets its window from Win32 so far (the old OpenGL renderer, the only one
 # for other systems, was removed).
 if(NOT WIN32)
-  message(FATAL_ERROR "wkbre2 currently builds on Windows only: the Diligent renderer needs a Linux (X11/Wayland) window path first.")
+  message(FATAL_ERROR "wkbai currently builds on Windows only: the Diligent renderer needs a Linux (X11/Wayland) window path first.")
 endif()
 set(DILIGENT_NO_DIRECT3D11 ON CACHE BOOL "" FORCE)
 set(DILIGENT_NO_OPENGL ON CACHE BOOL "" FORCE)
@@ -131,6 +131,15 @@ target_include_directories(wkbre2
 
 # The Lua UI scripts are read from "redata" beside the exe (the working directory): copy them on
 # every build, so a run from the build folder never uses an older copy
+# the exe is wkbai.exe (the fork's name since 2026-10-31; the target and folders keep wkbre2's)
+set_target_properties(wkbre2 PROPERTIES OUTPUT_NAME "wkbai")
+
+# the exe is wkbai.exe (the fork's name since 2026-10-31; the target and folders keep wkbre2's)
+set_target_properties(wkbre2 PROPERTIES OUTPUT_NAME "wkbai")
+
+# the exe is wkbai.exe (the fork's name since 2026-10-31; the target and folders keep wkbre2's)
+set_target_properties(wkbre2 PROPERTIES OUTPUT_NAME "wkbai")
+
 add_custom_command(TARGET wkbre2 POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/redata" "$<TARGET_FILE_DIR:wkbre2>/redata"
 )

@@ -1,6 +1,11 @@
-# wkbre2 — modernization fork
+# wkbai
 
-> **This is a fork of [AdrienTD/wkbre2](https://github.com/AdrienTD/wkbre2)**, the open-source engine
+> **wkbai is an independent fan project. It is in no way affiliated with, endorsed by or connected
+> to Black Cactus, the makers, publishers or rights holders of Warrior Kings and Warrior Kings:
+> Battles, nor to wkbre2 or its author AdrienTD.** Warrior Kings is a trademark of its owners.
+
+> **wkbai is a fork of [AdrienTD/wkbre2](https://github.com/AdrienTD/wkbre2)** (renamed on
+> 2026-10-31, as it has grown far from it), the open-source engine
 > reimplementation of Warrior Kings and Warrior Kings: Battles (Black Cactus, 2002/2003).
 > This fork is developed **with AI assistance (Claude) and reverse engineering of the original game**.
 > The original executable is analysed (Ghidra, disassembly, Direct3D call traces, side-by-side captures)

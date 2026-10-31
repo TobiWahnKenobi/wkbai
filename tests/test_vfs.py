@@ -7,7 +7,7 @@ several wkconfig.json variants and checks which archive/folder each file is load
         timestamp of a file wins, like the original game
     custom order ("modLoadOrder"): mods are layered on top of data.bcp, later ones win
 
-Run: python tests/test_vfs.py [-v]      (WKBRE2_EXE overrides the path of wkbre2.exe)
+Run: python tests/test_vfs.py [-v]      (WKBRE2_EXE overrides the path of wkbai.exe)
 """
 import json
 import os
@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbre2.exe'))
+EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbai.exe'))
 VFS_TEST_NAME = 'VFS (file system and mods)'
 
 

@@ -385,7 +385,7 @@ struct FrontEnd::Impl {
 						c = c == '"' ? '\'' : ' ';
 				return text;
 			};
-			fprintf(f, "// Made with the wkbre2 AI General Editor\n\n");
+			fprintf(f, "// Made with the wkbai AI General Editor\n\n");
 			fprintf(f, "\tPLAYER \"%s Kingmaker\"\n\n", clean(name).c_str());
 			fprintf(f, "\t\tINHERITS_FROM \"Kingmaker Player\"\n");
 			fprintf(f, "\t\tSTARTS_WITH_NAME \"%s\"\n\n", clean(name).c_str());
