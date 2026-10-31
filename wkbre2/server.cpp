@@ -67,6 +67,9 @@ void Server::loadSaveGame(const char * filename)
 		case Tags::SAVEGAME_NEXT_UNIQUE_ID:
 			nextUniqueId = gsf.nextInt();
 			break;
+		case Tags::SAVEGAME_GAME_TYPE:
+			gameType = gsf.nextInt();
+			break;
 		case Tags::SAVEGAME_RANDOM_SEED:
 			// the simulation's random state (util/SimRandom.h)
 			randomSeed = (uint32_t)std::strtoul(gsf.nextString().c_str(), nullptr, 10);
@@ -116,10 +119,13 @@ void Server::loadSaveGame(const char * filename)
 			break;
 		}
 		case Tags::SAVEGAME_NUM_HUMAN_PLAYERS: {
-			size_t numPlayers = gsf.nextInt();
-			numPlayers = std::min(clientLinks.size(), numPlayers);
+			// the players humans can take, all kept (a level saved again lists them all)
+			const size_t listed = gsf.nextInt();
+			humanPlayerIds.clear();
+			for (size_t i = 0; i < listed; i++)
+				humanPlayerIds.push_back((uint32_t)gsf.nextInt());
 			for (size_t i = 0; i < clientLinks.size(); i++)
-				setClientPlayerControl(i, gsf.nextInt());
+				setClientPlayerControl(i, i < humanPlayerIds.size() ? humanPlayerIds[i] : 0);
 			break;
 		}
 		}
@@ -339,6 +345,13 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		// object is playing, as the original saves it (its rate from PLAY_ANIMATION_TO_FIT).
 		// Without it, loaded units had no animation and their animation triggers ran on the
 		// wrong length.
+		// LANDSCAPE <id> (the level's terrain, holding its MAP): not an object here, its id kept
+		// for saving
+		if (strtag == "LANDSCAPE") {
+			landscapeId = (uint32_t)gsf.nextInt();
+			gsf.advanceLine();
+			continue;
+		}
 		if (strtag == "ANIMATION_STATE") {
 			const int anim = gameSet->animations.names.getIndex(gsf.nextString(true));
 			const int variant = gsf.nextInt();

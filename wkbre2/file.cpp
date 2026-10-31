@@ -865,7 +865,10 @@ void BCPWriter::WDirectory::insertFile(uint32_t id, const char *name)
 	BCPFile* wf = &files.back();
 	wf->id = id;
 	wf->name = name;
-	wf->time = 0;
+	// now, as a FILETIME: where archives hold the same file, the original (and wkbai) take the
+	// newest copy, so a written archive must be newer than data.bcp's (2003)
+	wf->time = (uint64_t)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() * 10000000ull
+		+ 116444736000000000ull;
 }
 
 BCPWriter::WDirectory::~WDirectory()

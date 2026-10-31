@@ -2,10 +2,10 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
-// Writing save games, in the original's text format (the "FORMAT SCENARIO" files of
-// Save_Games): what Server::loadSaveGame reads back. Not written yet: delayed and over-period
-// sequences, the AI's commissions and the client state (camera), which the loader doesn't read
-// either.
+// Writing save games and levels, in the original's text format (the "FORMAT SCENARIO" files of
+// Save_Games): what Server::loadSaveGame reads back, and what the original game loads (checked
+// with its Load Game: it needs GAME_TYPE, PREDEC wrapped as it wraps it, the LANDSCAPE object and
+// every pair's diplomacy). The client state's camera is the player's start camera.
 
 #include "server.h"
 #include "Order.h"
@@ -113,11 +113,13 @@ namespace {
 	void writeObject(SaveWriter& w, Server& server, const ServerGameObject* obj)
 	{
 		const char* cls = Tags::GAMEOBJCLASS_tagDict.getStringFromID(obj->blueprint->bpClass);
-		w.line("%s %u %s", cls, obj->id, inQuotes(obj->blueprint->name).c_str());
-		w.depth++;
 		const bool isLevel = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_LEVEL;
-		if (isLevel && !server.mapFile.empty())
-			w.line("MAP %s", inQuotes(server.mapFile).c_str());
+		// the level without its type, as the original (PREDEC names it)
+		if (isLevel)
+			w.line("%s %u", cls, obj->id);
+		else
+			w.line("%s %u %s", cls, obj->id, inQuotes(obj->blueprint->name).c_str());
+		w.depth++;
 		if (obj->blueprint->subtypeNames.size() > 0) {
 			const std::string& subtype = obj->blueprint->subtypeNames.getString(obj->subtype);
 			if (obj->appearance >= 0 && obj->appearance < (int)w.gs.appearances.names.size())
@@ -189,6 +191,14 @@ namespace {
 			w.line("ASSOCIATE %s %s", inQuotes(category).c_str(), ids.c_str());
 		writeOrders(w, obj);
 
+		// the level's terrain, as the original: a LANDSCAPE object holding the MAP, before the players
+		if (isLevel && !server.mapFile.empty()) {
+			w.line("LANDSCAPE %u", server.landscapeId);
+			w.depth++;
+			w.line("MAP %s", inQuotes(server.mapFile).c_str());
+			w.depth--;
+			w.line("END_LANDSCAPE");
+		}
 		for (const auto& [type, children] : obj->children)
 			for (const CommonGameObject* child : children) {
 				const ServerGameObject* c = child->dyncast<ServerGameObject>();
@@ -256,11 +266,25 @@ namespace {
 				if (!ids.empty())
 					w.line("ALIAS %s %s", inQuotes(w.gs.aliases.names.getString(alias)).c_str(), idList(ids).c_str());
 			}
-			for (const auto& [pair, status] : server.diplomaticStatuses)
-				w.line("DIPLOMATIC_STATUS_BETWEEN %d %d %s", pair.first, pair.second, inQuotes(w.gs.diplomaticStatuses.names.getString(status)).c_str());
+			// every pair of players, as the original writes them (the default status too: with
+			// only the pairs set, its loader stayed on its loading screen)
+			std::vector<const ServerGameObject*> players;
+			for (const auto& [type, children] : obj->children)
+				for (const CommonGameObject* child : children)
+					if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && !child->dyncast<ServerGameObject>()->deleted)
+						players.push_back(child->dyncast<ServerGameObject>());
+			std::sort(players.begin(), players.end(), [](auto* a, auto* b) { return a->id < b->id; });
+			for (size_t i = 0; i < players.size(); i++)
+				for (size_t j = i + 1; j < players.size(); j++) {
+					const int status = server.getDiplomaticStatus((CommonGameObject*)players[i], (CommonGameObject*)players[j]);
+					w.line("DIPLOMATIC_STATUS_BETWEEN %u %u %s", players[i]->id, players[j]->id, inQuotes(w.gs.diplomaticStatuses.names.getString(status)).c_str());
+				}
 		}
 		w.depth--;
-		w.line("END_%s", cls);
+		if (isLevel) // as the original: with its id
+			w.line("END_%s %u", cls, obj->id);
+		else
+			w.line("END_%s", cls);
 	}
 }
 
@@ -284,7 +308,26 @@ bool Server::saveGame(const char* filename)
 	std::string humans;
 	for (const SrvGORef& player : clientPlayerObjects)
 		humans += " " + std::to_string(player.get() ? player.get()->id : 0);
-	w.line("NUM_HUMAN_PLAYERS %zu%s", clientPlayerObjects.size(), humans.c_str());
+	// a level lists every player a human can take (as read); a game, the ones playing
+	if (savingLevel && !humanPlayerIds.empty()) {
+		std::vector<uint32_t> listed;
+		for (uint32_t id : humanPlayerIds)
+			if (ServerGameObject* p = findObject(id); p && !p->deleted)
+				listed.push_back(id);
+		humans.clear();
+		for (uint32_t id : listed)
+			humans += " " + std::to_string(id);
+		w.line("GAME_TYPE 4");
+		w.line("NUM_HUMAN_PLAYERS %zu%s", listed.size(), humans.c_str());
+	}
+	else {
+		w.line("GAME_TYPE %d", savingLevel ? 4 : (gameType == 4 ? 1 : gameType));
+		w.line("NUM_HUMAN_PLAYERS %zu%s", clientPlayerObjects.size(), humans.c_str());
+	}
+	w.line("");
+	// as the original's header (a level has 0 and 0.00)
+	w.line("UPDATE_ID 0");
+	w.line("NEXT_UPDATE_TIME_STAMP %.9g", savingLevel ? 0.0f : timeManager.currentTime);
 	w.line("");
 	w.line("RANDOM_SEED %u", g_simRandom.state);
 	w.line("");
@@ -298,8 +341,51 @@ bool Server::saveGame(const char* filename)
 	w.depth--;
 	w.line("END_TIME_MANAGER_STATE");
 	w.line("");
+	if (!landscapeId)
+		landscapeId = nextUniqueId++;
 	w.line("NEXT_UNIQUE_ID %u", nextUniqueId);
 	w.line("");
+	// PREDEC: every object's type and id before the tree, as the original writes them (its loader
+	// makes the objects from it; without it the original crashed loading a level). One line per
+	// type, wrapped as the original's (at about 1800 characters, going on after two tabs)
+	{
+		std::map<std::pair<int, std::string>, std::vector<uint32_t>> byType;
+		std::vector<const ServerGameObject*> todo{ level->dyncast<ServerGameObject>() };
+		while (!todo.empty()) {
+			const ServerGameObject* o = todo.back();
+			todo.pop_back();
+			if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_LEVEL)
+				byType[{ o->blueprint->bpClass, o->blueprint->name }].push_back(o->id);
+			for (const auto& [type, children] : o->children)
+				for (const CommonGameObject* child : children)
+					if (const ServerGameObject* c = child->dyncast<ServerGameObject>(); !c->deleted)
+						todo.push_back(c);
+		}
+		w.line("PREDEC");
+		w.depth++;
+		const ServerGameObject* lvl = level->dyncast<ServerGameObject>();
+		w.line("LEVEL %s 1 %u", inQuotes(lvl->blueprint->name).c_str(), lvl->id);
+		if (!mapFile.empty())
+			w.line("LANDSCAPE \"Standard\" 1 %u", landscapeId);
+		for (auto& [type, ids] : byType) {
+			std::sort(ids.begin(), ids.end());
+			// as the original: each id followed by a space, and a line broken after the id that
+			// takes it (with its tab) past 1800 characters. Its reader tells a line that goes on by
+			// that length: wrapped shorter, it stayed on its loading screen.
+			std::string text = std::string(" ") + Tags::GAMEOBJCLASS_tagDict.getStringFromID(type.first) + " " + inQuotes(type.second) + " " + std::to_string(ids.size()) + " ";
+			for (size_t k = 0; k < ids.size(); k++) {
+				text += std::to_string(ids[k]) + " ";
+				if (1 + text.size() > 1800 && k + 1 < ids.size()) {
+					w.line("%s", text.c_str());
+					text = "\t ";
+				}
+			}
+			w.line("%s", text.c_str());
+		}
+		w.depth--;
+		w.line("END_PREDEC");
+		w.line("");
+	}
 	writeObject(w, *this, level->dyncast<ServerGameObject>());
 	// the pending scripted sequences, as the original (after the level)
 	w.line("");
@@ -327,6 +413,27 @@ bool Server::saveGame(const char* filename)
 				inQuotes(w.gs.actionSequences.getString(ops.actionSequence)).c_str(), executor->id, ops.startTime, ops.period,
 				ops.numTotalExecutions, ops.numExecutionsDone, ids(ops.remainingObjects).c_str());
 		}
+	// the human's client state, as the original ends every level and save: its camera, here the
+	// player's start camera (the original's loader waited forever on its loading screen without it)
+	{
+		std::vector<uint32_t> clients;
+		if (savingLevel && !humanPlayerIds.empty())
+			clients.push_back(humanPlayerIds.front());
+		else
+			for (const SrvGORef& player : clientPlayerObjects)
+				if (player.get())
+					clients.push_back(player.get()->id);
+		for (uint32_t id : clients)
+			if (const ServerGameObject* player = findObject(id)) {
+				const Vector3& cp = player->playerStartCameraPosition;
+				const Vector3& co = player->playerStartCameraOrientation;
+				w.line("");
+				w.line("CLIENT_STATE %u", id);
+				w.line("UPDATE_ID 0");
+				w.line("CAMERA_POSITION %.9g %.9g %.9g %.9g %.9g", cp.x, cp.y, cp.z, co.x, co.y);
+				w.line("END_CLIENT_STATE");
+			}
+	}
 	const bool ok = !ferror(f);
 	fclose(f);
 	return ok;

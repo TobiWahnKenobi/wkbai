@@ -9,6 +9,7 @@
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <algorithm>
+#include <set>
 #include <array>
 #include <map>
 #include <cstring>
@@ -360,9 +361,28 @@ bool Terrain::writeBCM(const std::filesystem::path& path, bool newMinimap) const
 			put(t.xflip, 1);
 			put(t.zflip, 1);
 		}
-	put((uint32_t)bcmExtra.size(), 32);
+	// the (group, id) list: in all 54 shipped maps exactly the textures the tiles use, each once,
+	// and the original's loader looks a tile's texture up in it (a painted texture missing from it
+	// crashed the original). The pairs read are kept in their order while still used, new ones added
+	std::vector<std::pair<TerrainTextureGroup*, int>> extra;
+	{
+		std::set<std::pair<TerrainTextureGroup*, int>> used;
+		std::vector<std::pair<TerrainTextureGroup*, int>> usedInOrder;
+		for (int i = 0; i < width * height; i++)
+			if (TerrainTexture* tex = tiles[i].texture)
+				if (used.insert({ tex->grp, tex->id }).second)
+					usedInOrder.push_back({ tex->grp, tex->id });
+		std::set<std::pair<TerrainTextureGroup*, int>> listed;
+		for (const auto& pair : bcmExtra)
+			if (used.count(pair) && listed.insert(pair).second)
+				extra.push_back(pair);
+		for (const auto& pair : usedInOrder)
+			if (listed.insert(pair).second)
+				extra.push_back(pair);
+	}
+	put((uint32_t)extra.size(), 32);
 	put(bcmExtraConstant, 32);
-	for (const auto& [g, id] : bcmExtra) {
+	for (const auto& [g, id] : extra) {
 		put(g ? indexOf(groups, g) : 0, groupBits);
 		put(indexOf(ids, id), idBits);
 	}
@@ -422,8 +442,11 @@ bool Terrain::writeBlankBCM(const std::filesystem::path& path, int playableWidth
 		put(0, idBits);
 		put(0, 4); // no turn, no flips
 	}
-	put(0, 32);
+	// the (group, id) list of the textures used: the one
+	put(1, 32);
 	put(bcmExtraConstant, 32);
+	put(0, groupBits);
+	put(0, idBits);
 	for (uint32_t i = 0; i < (w + 1) * (h + 1); i++)
 		put(heightSteps, 8);
 	std::error_code ec;

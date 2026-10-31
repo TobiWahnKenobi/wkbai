@@ -175,6 +175,16 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool saveGame(const char* filename);
 	// what the game was loaded from, for saving
 	std::string gameSetFile, mapFile;
+	// GAME_TYPE: 4 in every shipped level, 1 in the original's skirmish saves (its Load Game
+	// lists a file by it). Saving writes it; a game started from a level is saved as 1, and the
+	// map editor saves levels as 4
+	int gameType = 4;
+	bool savingLevel = false;
+	// the LANDSCAPE object's id (the original's level holds its MAP in one); 0: none read, a new
+	// id on saving
+	uint32_t landscapeId = 0;
+	// NUM_HUMAN_PLAYERS as read: a level saved by the map editor lists them again
+	std::vector<uint32_t> humanPlayerIds;
 	// The Kingmaker campaign: CONQUER_LEVEL (the province is won, the game ends) and
 	// UPDATE_USER_PROFILE (the USER object's items, kept in the campaign profile)
 	std::atomic<bool> levelConquered = false;

@@ -86,6 +86,9 @@ private:
 	// "benchmark": { "editorMode": "players" }: the editor open in that mode (for screenshots)
 	void editorOpenMode(const std::string& mode);
 	bool editorSave(const std::string& name);
+	// for the original game: the map saved, then saved\Export\<name>.bcp (the map, and the level
+	// as replaceLevel, a built-in skirmish level's file, unless empty) and <name>.sav (Load Game)
+	bool editorExport(const std::string& name, const std::string& replaceLevel);
 	void editorUndo();
 	void editorRedo();
 	// one step taken back (or done again): the state it replaces goes onto the other list

@@ -109,6 +109,10 @@ struct ClientInterface::EditorState {
 	// a new map of another size: its playable tiles (from the open map's at first)
 	int newWidth = 128, newHeight = 128;
 	bool newSizeSet = false;
+	// the export for the original: the built-in skirmish levels ("N Player ...") and the one the
+	// exported level replaces (0: none)
+	std::vector<std::string> builtinLevels;
+	int exportReplace = 0;
 	std::string status;
 	std::vector<std::string> warnings;
 
@@ -882,6 +886,39 @@ void ClientInterface::editorWindow()
 				ImGui::CloseCurrentPopup();
 			ImGui::EndPopup();
 		}
+		// the map and level packed for the original game
+		ImGui::SameLine();
+		if (ImGui::Button("Export for the original...")) {
+			ed.builtinLevels.clear();
+			std::unique_ptr<std::vector<std::string>> files(ListFiles("Save_Games"));
+			if (files)
+				for (const std::string& f : *files)
+					if (f.size() > 13 && std::isdigit((unsigned char)f[0]) && f.compare(1, 8, " Player ") == 0 && f.compare(f.size() - 4, 4, ".lvl") == 0)
+						ed.builtinLevels.push_back(f);
+			std::sort(ed.builtinLevels.begin(), ed.builtinLevels.end());
+			ImGui::OpenPopup("Export for the original game");
+		}
+		if (ImGui::BeginPopupModal("Export for the original game", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextWrapped("The original reads maps only from .bcp archives in its folder, and its Skirmish screen lists only its own levels. The export writes \"%s.bcp\" (the map) and \"%s.sav\" (the level, for Load Game) to saved\\Export.", ed.saveName, ed.saveName);
+			const std::string current = ed.exportReplace > 0 && ed.exportReplace <= (int)ed.builtinLevels.size() ? ed.builtinLevels[ed.exportReplace - 1] : "None (Load Game only)";
+			if (ImGui::BeginCombo("Also replace in Skirmish", current.c_str())) {
+				if (ImGui::Selectable("None (Load Game only)", ed.exportReplace == 0))
+					ed.exportReplace = 0;
+				for (size_t i = 0; i < ed.builtinLevels.size(); i++)
+					if (ImGui::Selectable(ed.builtinLevels[i].c_str(), ed.exportReplace == (int)i + 1))
+						ed.exportReplace = (int)i + 1;
+				ImGui::EndCombo();
+			}
+			ImGui::TextWrapped("A replaced level shows under its own name in the original's Skirmish list until the .bcp is removed. Take one with the same number of players.");
+			if (ImGui::Button("Export")) {
+				editorExport(ed.saveName, ed.exportReplace > 0 && ed.exportReplace <= (int)ed.builtinLevels.size() ? ed.builtinLevels[ed.exportReplace - 1] : std::string());
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel"))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
 		// a new map of another size: written, saved under the map name, and opened in the editor
 		ImGui::SameLine();
 		if (ImGui::Button("New map of another size..."))
@@ -1077,7 +1114,9 @@ bool ClientInterface::editorNewMap(const std::string& name, int width, int heigh
 						cam.z = std::clamp(cam.z, 0.0f, maxZ);
 					}
 		server.mapFile = bcm;
+		server.savingLevel = true;
 		ok = server.saveGame(PathToUtf8(saved / "Save_Games" / PathFromUtf8(name + ".lvl")).c_str());
+		server.savingLevel = false;
 	});
 	if (!ok) {
 		ed.status = "Making the new map failed";
@@ -1628,13 +1667,75 @@ bool ClientInterface::editorSave(const std::string& name)
 				const std::string lvl = PathToUtf8(saved / "Save_Games" / PathFromUtf8(name + ".lvl"));
 				if (ok) {
 					server.mapFile = bcm;
+					server.savingLevel = true; // GAME_TYPE 4, as the shipped levels
 					ok = server.saveGame(lvl.c_str());
+					server.savingLevel = false;
 				}
 				ed.status = ok ? "Saved " + name + ".lvl (in Skirmish)" : "Saving failed";
 				savedOk = ok;
 				printf("Map editor: %s %s\n", lvl.c_str(), ok ? "saved" : "failed");
 			});
 	return savedOk;
+}
+
+// For the original game, which reads game data only from the .bcp archives in its folder (the
+// newest copy of a file wins) and lists in Skirmish only the levels its exe names:
+// - <name>.bcp: Maps\<name>\<name>.bcm (and the map's texture translation), and the level under
+//   replaceLevel's name (a built-in skirmish level, which it then replaces) unless that is empty;
+// - <name>.sav: the level as a save (GAME_TYPE 1), which the original's Load Game lists and starts.
+bool ClientInterface::editorExport(const std::string& name, const std::string& replaceLevel)
+{
+	EditorState& ed = *editor;
+	if (!editorSave(name))
+		return false;
+	const auto saved = g_userPath / "saved";
+	const std::string bcmRel = "Maps\\" + name + "\\" + name + ".bcm";
+	std::string ltttRel;
+	withServer([&](Server& server) {
+		if (server.terrain)
+			ltttRel = server.terrain->texDb.getLTTTPath(bcmRel);
+	});
+	auto readAll = [](const std::filesystem::path& p, std::string& out) {
+		std::ifstream f(p, std::ios::binary);
+		if (!f)
+			return false;
+		out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+		return true;
+	};
+	std::string bcm, lvl, lttt;
+	if (!readAll(saved / PathFromUtf8(portablePath(bcmRel)), bcm) || !readAll(saved / "Save_Games" / PathFromUtf8(name + ".lvl"), lvl)) {
+		ed.status = "Export failed: the saved map or level can't be read";
+		return false;
+	}
+	const bool hasLttt = !ltttRel.empty() && readAll(saved / PathFromUtf8(portablePath(ltttRel)), lttt);
+	const auto dir = saved / "Export";
+	std::error_code ec;
+	std::filesystem::create_directories(dir, ec);
+	{
+		BCPWriter w(PathToUtf8(dir / PathFromUtf8(name + ".bcp")).c_str());
+		BCPWriter::WDirectory* maps = w.root.addDir("Maps");
+		maps->addDir(name.c_str())->insertFile(w.createFile(bcm.data(), (uint32_t)bcm.size()), (name + ".bcm").c_str());
+		if (hasLttt) {
+			const std::string file = ltttRel.substr(ltttRel.find_last_of("\\/") + 1);
+			maps->addDir("Map_Textures")->insertFile(w.createFile(lttt.data(), (uint32_t)lttt.size()), file.c_str());
+		}
+		if (!replaceLevel.empty())
+			w.root.addDir("Save_Games")->insertFile(w.createFile(lvl.data(), (uint32_t)lvl.size()), replaceLevel.c_str());
+		w.finalize();
+	}
+	std::string sav = lvl;
+	if (const size_t at = sav.find("GAME_TYPE 4"); at != std::string::npos)
+		sav.replace(at, 11, "GAME_TYPE 1");
+	std::ofstream f(dir / PathFromUtf8(name + ".sav"), std::ios::binary);
+	f.write(sav.data(), (std::streamsize)sav.size());
+	if (!f) {
+		ed.status = "Export failed: the save can't be written";
+		return false;
+	}
+	ed.status = "Exported to " + PathToUtf8(dir) + ": put " + name + ".bcp in the original's folder (next to data.bcp) and " + name
+		+ ".sav in its saved\\Save_Games; Load Game lists it." + (replaceLevel.empty() ? "" : " Skirmish shows it as " + replaceLevel + ".");
+	printf("EDITOREXPORT %s\n", ed.status.c_str());
+	return true;
 }
 
 // Test runs ("benchmark": { ..., "editorTest": true }): a raise stroke where the camera looks,
@@ -1895,6 +1996,8 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 	if (frame == 160) {
 		editorSave("Editor Test");
 		printf("EDITORTEST %s\n", ed.status.c_str());
+		// and exported for the original, in place of 4 Peaks in its Skirmish list
+		editorExport("Editor Test", "2 Player 4 Peaks.lvl");
 	}
 	if (frame == 170) {
 		// undo the alias, the windmill, the lake, the texture stroke, then the height stroke: the ground as before
