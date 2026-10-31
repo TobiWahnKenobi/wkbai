@@ -74,8 +74,20 @@ struct Terrain
 
 	inline float getVertex(int x, int z) const
 	{
-		return vertices[z*(width+1) + x] * scale;
+		return heightSteps(z * (width + 1) + x) * scale;
 	}
+	// a vertex's height in steps, with its fraction (wkbai maps: finer than the BCM's whole steps)
+	inline float heightSteps(int i) const
+	{
+		return heightFraction.empty() ? (float)vertices[i] : vertices[i] + heightFraction[i] * (1.0f / 256.0f);
+	}
+	void setHeightSteps(int i, float steps);
+	// per vertex, the fraction of a step above `vertices` in 256ths; empty: none (as every BCM)
+	std::vector<uint8_t> heightFraction;
+	// <map>.wkbmap, what the BCM can't hold: finer heights, more than 63 lakes
+	void readMapExtras(const char* filename);
+	bool needsMapExtras() const;
+	bool writeMapExtras(const std::filesystem::path& path) const;
 
 	float getHeight(float x, float z) const;
 	// the smooth surface the tessellated terrain is drawn with: a Catmull-Rom spline through the

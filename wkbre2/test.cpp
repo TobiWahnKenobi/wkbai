@@ -1657,6 +1657,27 @@ void Test_BCMRoundTrip()
 		const bool lakeOk = flooded.lakes.size() == lakesBefore + 1 && flooded.getTile(lx, lz)->fullOfWater
 			&& flooded.getTile(x, z)->texture->grp->name == paint->grp->name;
 		printf("BCM lake read back %d (%zu lakes, were %zu)\n", (int)lakeOk, flooded.lakes.size(), lakesBefore);
+
+		// the wkbai map file (.wkbmap next to the BCM): a fine height and 70 lakes (the BCM holds
+		// 63) read back; the BCM alone has the whole step and the first 63 lakes
+		const int fi = (z + 1) * (t.width + 1) + x;
+		const float fine = t.heightSteps(fi) + 0.375f;
+		t.setHeightSteps(fi, fine);
+		while (t.lakes.size() < 70)
+			t.lakes.emplace_back(lx * 5.0f + 2.5f, t.getVertex(lx, lz) + 1.0f, lz * 5.0f + 2.5f);
+		t.writeBCM(out);
+		std::filesystem::copy_file(out, saved, std::filesystem::copy_options::overwrite_existing);
+		const std::filesystem::path extras = g_userPath / "saved" / "wkbre2-bcm-test.wkbmap";
+		const bool extrasWritten = t.needsMapExtras() && t.writeMapExtras(extras);
+		Terrain full;
+		full.readBCM("wkbre2-bcm-test.bcm");
+		std::filesystem::remove(extras);
+		Terrain bcmOnly;
+		bcmOnly.readBCM("wkbre2-bcm-test.bcm");
+		const bool extrasOk = extrasWritten && std::abs(full.heightSteps(fi) - fine) < 0.002f && full.lakes.size() == 70
+			&& bcmOnly.heightSteps(fi) == std::floor(fine) && bcmOnly.lakes.size() == 63;
+		printf("WKBMAP read back %d (height %.4f, was %.4f; %zu lakes; without it %.4f and %zu lakes)\n", (int)extrasOk, full.heightSteps(fi), fine,
+			full.lakes.size(), bcmOnly.heightSteps(fi), bcmOnly.lakes.size());
 		std::filesystem::remove(saved);
 	}
 	fflush(stdout);

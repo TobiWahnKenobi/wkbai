@@ -237,7 +237,119 @@ void Terrain::readBCM(const char * filename) {
 
 	free(fcnt);
 
+	// what the original's format can't hold, from <map>.wkbmap next to it (wkbai's map editor)
+	std::string extras = filename;
+	extras = extras.substr(0, extras.size() - 4) + ".wkbmap";
+	if (FileExists(extras.c_str()))
+		readMapExtras(extras.c_str());
+
 	floodfillWater();
+}
+
+// <map>.wkbmap: "WKBMAP\0\0", u32 version (1), then chunks of a 4-character tag, a u32 size and
+// the data; chunks with other tags are skipped, so later versions can add their own.
+//   HFRC: per vertex (rows as `vertices`), the fraction of a height step above it, in 256ths
+//   LAKE: u32 count, then per lake f32 x, y, z and u8 the 2 bits the BCM keeps (all of them;
+//         the BCM holds at most 63)
+static const char MAP_EXTRAS_MAGIC[8] = { 'W', 'K', 'B', 'M', 'A', 'P', 0, 0 };
+
+void Terrain::readMapExtras(const char* filename)
+{
+	char* data; int size;
+	LoadFile(filename, &data, &size);
+	const uint8_t* p = (const uint8_t*)data;
+	const uint8_t* end = p + size;
+	if (size < 12 || memcmp(p, MAP_EXTRAS_MAGIC, 8) != 0) {
+		printf("WARNING: %s is not a wkbai map file\n", filename);
+		free(data);
+		return;
+	}
+	p += 12;
+	while (end - p >= 8) {
+		char tag[5] = {};
+		memcpy(tag, p, 4);
+		uint32_t len;
+		memcpy(&len, p + 4, 4);
+		p += 8;
+		if ((size_t)(end - p) < len)
+			break;
+		if (!strcmp(tag, "HFRC") && len == vertices.size())
+			heightFraction.assign(p, p + len);
+		else if (!strcmp(tag, "LAKE") && len >= 4) {
+			uint32_t n;
+			memcpy(&n, p, 4);
+			if (len >= 4 + n * 13ull) {
+				lakes.clear();
+				lakeExtraBits.clear();
+				for (uint32_t i = 0; i < n; i++) {
+					const uint8_t* l = p + 4 + i * 13;
+					Vector3 v;
+					memcpy(&v.x, l, 4);
+					memcpy(&v.y, l + 4, 4);
+					memcpy(&v.z, l + 8, 4);
+					lakes.push_back(v);
+					lakeExtraBits.push_back(l[12]);
+				}
+			}
+		}
+		p += len;
+	}
+	free(data);
+}
+
+bool Terrain::needsMapExtras() const
+{
+	return lakes.size() > 63 || std::any_of(heightFraction.begin(), heightFraction.end(), [](uint8_t f) { return f != 0; });
+}
+
+bool Terrain::writeMapExtras(const std::filesystem::path& path) const
+{
+	std::vector<uint8_t> out(MAP_EXTRAS_MAGIC, MAP_EXTRAS_MAGIC + 8);
+	auto put32 = [&](uint32_t v) { out.insert(out.end(), (const uint8_t*)&v, (const uint8_t*)&v + 4); };
+	auto chunk = [&](const char* tag, const std::vector<uint8_t>& data) {
+		out.insert(out.end(), tag, tag + 4);
+		put32((uint32_t)data.size());
+		out.insert(out.end(), data.begin(), data.end());
+	};
+	put32(1);
+	if (std::any_of(heightFraction.begin(), heightFraction.end(), [](uint8_t f) { return f != 0; }))
+		chunk("HFRC", heightFraction);
+	if (lakes.size() > 63) {
+		std::vector<uint8_t> l;
+		const uint32_t n = (uint32_t)lakes.size();
+		l.insert(l.end(), (const uint8_t*)&n, (const uint8_t*)&n + 4);
+		for (size_t i = 0; i < lakes.size(); i++) {
+			for (float f : { lakes[i].x, lakes[i].y, lakes[i].z })
+				l.insert(l.end(), (const uint8_t*)&f, (const uint8_t*)&f + 4);
+			l.push_back(i < lakeExtraBits.size() ? lakeExtraBits[i] : 0);
+		}
+		chunk("LAKE", l);
+	}
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream f(path, std::ios::binary);
+	f.write((const char*)out.data(), (std::streamsize)out.size());
+	return (bool)f;
+}
+
+void Terrain::setHeightSteps(int i, float steps)
+{
+	steps = std::clamp(steps, 0.0f, 255.0f + 255.0f / 256.0f);
+	int whole = (int)std::floor(steps);
+	int frac = (int)std::lround((steps - whole) * 256.0f);
+	if (frac >= 256) {
+		frac -= 256;
+		whole++;
+	}
+	if (whole > 255) {
+		whole = 255;
+		frac = 255;
+	}
+	vertices[i] = (uint8_t)whole;
+	if (frac && heightFraction.size() != vertices.size())
+		heightFraction.assign(vertices.size(), 0);
+	if (!heightFraction.empty())
+		heightFraction[i] = (uint8_t)frac;
 }
 
 std::vector<uint8_t> Terrain::drawMinimap(bool flipX, bool flipZ) const

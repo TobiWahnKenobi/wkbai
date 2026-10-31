@@ -93,6 +93,9 @@ struct ClientInterface::EditorState {
 	float radius = 20.0f;   // metres
 	float strength = 20.0f; // height steps (map units) per second at the centre
 	float flattenTo = 0.0f; // the height a flatten stroke keeps (from where it began)
+	// heights finer than the BCM's whole steps, kept in the map's .wkbmap (the original sees the
+	// whole steps)
+	bool fineHeights = true;
 	bool stroke = false;
 	Vector3 strokeMin, strokeMax; // the area the stroke changed (objects there get the new heights)
 	std::vector<float> pending; // per vertex, the part of a step not applied yet
@@ -147,7 +150,7 @@ struct ClientInterface::EditorState {
 		std::map<int, float> items;
 	};
 	struct Undo {
-		std::vector<uint8_t> heights;
+		std::vector<uint8_t> heights, fractions; // fractions: as Terrain::heightFraction (empty: none)
 		std::vector<uint32_t> placed;
 		std::vector<TileState> tiles;
 		bool hasLakes = false;
@@ -306,8 +309,9 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		if (!trn->getTile(tx, tz))
 			return false;
 		if (ed.waterTool == EditorState::ADD_LAKE) {
-			if (lakes.size() >= 63) {
-				ed.status = "A map has at most 63 lakes";
+			// the BCM holds 63; the others are kept in the map's .wkbmap (wkbai only)
+			if (lakes.size() >= 1024) {
+				ed.status = "A map has at most 1024 lakes";
 				return true;
 			}
 			// the lake's point in the whole map's coordinates (with the edge), as the BCM keeps it
@@ -456,6 +460,7 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		ed.pending.assign(trn->vertices.size(), 0.0f);
 		EditorState::Undo u;
 		u.heights.assign(trn->vertices.begin(), trn->vertices.end());
+		u.fractions = trn->heightFraction;
 		ed.pushUndo(std::move(u));
 	}
 	if (ed.stroke && down) {
@@ -468,6 +473,7 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		ed.strokeMin = Vector3(std::min(ed.strokeMin.x, cursor.x - ed.radius), 0, std::min(ed.strokeMin.z, cursor.z - ed.radius));
 		ed.strokeMax = Vector3(std::max(ed.strokeMax.x, cursor.x + ed.radius), 0, std::max(ed.strokeMax.z, cursor.z + ed.radius));
 		std::vector<std::pair<int, uint8_t>> changes;
+		std::vector<std::pair<int, float>> fineChanges; // fine heights: vertex, height in steps
 		const int stride = trn->width + 1;
 		for (int z = z0; z <= z1; z++)
 			for (int x = x0; x <= x1; x++) {
@@ -477,13 +483,13 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 				float falloff = 1.0f - d / r;
 				falloff = falloff * falloff * (3.0f - 2.0f * falloff); // smoothstep
 				const int i = z * stride + x;
-				const float h = trn->vertices[i];
+				const float h = trn->heightSteps(i);
 				float delta = 0.0f;
 				switch (ed.tool) {
 				case EditorState::RAISE: delta = ed.strength * dt * falloff; break;
 				case EditorState::LOWER: delta = -ed.strength * dt * falloff; break;
 				case EditorState::SMOOTH: {
-					const float avg = (trn->vertices[i - 1] + trn->vertices[i + 1] + trn->vertices[i - stride] + trn->vertices[i + stride]) / 4.0f;
+					const float avg = (trn->heightSteps(i - 1) + trn->heightSteps(i + 1) + trn->heightSteps(i - stride) + trn->heightSteps(i + stride)) / 4.0f;
 					delta = (avg - h) * std::min(1.0f, ed.strength * dt * 0.25f) * falloff;
 					break;
 				}
@@ -491,22 +497,34 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 					delta = (ed.flattenTo - h) * std::min(1.0f, ed.strength * dt * 0.25f) * falloff;
 					break;
 				}
+				// fine heights (the wkbai map file): any fraction of a step; else whole steps,
+				// the parts of a step carried until they add up to one
+				if (ed.fineHeights) {
+					if (std::abs(delta) > 1e-4f)
+						fineChanges.emplace_back(i, h + delta);
+					continue;
+				}
 				ed.pending[i] += delta;
 				const int step = (int)ed.pending[i]; // whole height steps
 				if (step != 0) {
 					ed.pending[i] -= step;
-					const uint8_t nh = (uint8_t)std::clamp((int)h + step, 0, 255);
+					const uint8_t nh = (uint8_t)std::clamp((int)trn->vertices[i] + step, 0, 255);
 					if (nh != trn->vertices[i])
 						changes.emplace_back(i, nh);
 				}
 			}
-		if (!changes.empty()) {
+		if (!changes.empty() || !fineChanges.empty()) {
 			for (const auto& [i, h] : changes)
 				trn->vertices[i] = h;
+			for (const auto& [i, h] : fineChanges)
+				trn->setHeightSteps(i, h);
 			withServer([&](Server& server) {
-				if (server.terrain && server.terrain->vertices.size() == trn->vertices.size())
+				if (server.terrain && server.terrain != trn && server.terrain->vertices.size() == trn->vertices.size()) {
 					for (const auto& [i, h] : changes)
 						server.terrain->vertices[i] = h;
+					for (const auto& [i, h] : fineChanges)
+						server.terrain->setHeightSteps(i, h);
+				}
 			});
 			ed.terrainChanged = true;
 		}
@@ -732,7 +750,7 @@ void ClientInterface::editorWindow()
 			ImGui::RadioButton("Remove a lake", &ed.waterTool, EditorState::REMOVE_LAKE);
 			if (ed.waterTool == EditorState::ADD_LAKE)
 				ImGui::SliderFloat("Depth (m)", &ed.waterDepth, 0.5f, 30.0f, "%.1f");
-			ImGui::Text("%zu lakes (at most 63)", client->terrain->lakes.size());
+			ImGui::Text("%zu lakes (the original game sees the first 63)", client->terrain->lakes.size());
 			ImGui::TextWrapped("A lake fills the ground around the click up to its level (the ground there plus the depth), as far as the ground stays lower. Remove takes away the lake whose water is under the cursor.");
 		}
 		else if (ed.mode == EditorState::TEXTURES && client->terrain) {
@@ -779,6 +797,9 @@ void ClientInterface::editorWindow()
 			ImGui::RadioButton("Flatten", &ed.tool, EditorState::FLATTEN);
 			ImGui::SliderFloat("Radius (m)", &ed.radius, 5.0f, 100.0f, "%.0f");
 			ImGui::SliderFloat("Strength", &ed.strength, 1.0f, 100.0f, "%.0f");
+			ImGui::Checkbox("Fine heights", &ed.fineHeights);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Heights finer than the map's steps, kept in the map's .wkbmap file. The original game sees them rounded down to whole steps.");
 			ImGui::TextWrapped("Hold the left mouse button on the ground to paint. Flatten keeps the height where the stroke began.");
 		}
 		else {
@@ -980,6 +1001,7 @@ void ClientInterface::editorBlankMap()
 	const uint8_t flatHeight = 20;
 	auto blank = [&](Terrain* t, TerrainTexture* tex) {
 		std::fill(t->vertices.begin(), t->vertices.end(), flatHeight);
+		t->heightFraction.clear();
 		for (int i = 0; i < t->width * t->height; i++) {
 			if (tex)
 				t->tiles[i].texture = tex;
@@ -1439,7 +1461,10 @@ void ClientInterface::editorStep(bool redoing)
 	EditorState::Undo back;
 	const char* what = "";
 	if (!u.heights.empty() && client->terrain)
+	{
 		back.heights.assign(client->terrain->vertices.begin(), client->terrain->vertices.end());
+		back.fractions = client->terrain->heightFraction;
+	}
 	else if (u.hasLakes && client->terrain) {
 		back.hasLakes = true;
 		back.lakes = client->terrain->lakes;
@@ -1503,9 +1528,12 @@ void ClientInterface::editorStep(bool redoing)
 	}
 	if (!u.heights.empty() && client->terrain && u.heights.size() == client->terrain->vertices.size()) {
 		std::copy(u.heights.begin(), u.heights.end(), client->terrain->vertices.begin());
+		client->terrain->heightFraction = u.fractions;
 		withServer([&](Server& server) {
-			if (server.terrain && server.terrain->vertices.size() == u.heights.size())
+			if (server.terrain && server.terrain->vertices.size() == u.heights.size()) {
 				std::copy(u.heights.begin(), u.heights.end(), server.terrain->vertices.begin());
+				server.terrain->heightFraction = u.fractions;
+			}
 			// the objects on the ground as it was
 			NNSearch search;
 			const auto area = server.terrain->getPlayableArea();
@@ -1652,6 +1680,13 @@ bool ClientInterface::editorSave(const std::string& name)
 				const std::string newLttt = server.terrain->texDb.getLTTTPath(bcm);
 				const auto saved = g_userPath / "saved";
 				bool ok = server.terrain->writeBCM(saved / PathFromUtf8(portablePath(bcm)), true);
+				// what the BCM can't hold (finer heights, lakes past 63) in Maps\<name>\<name>.wkbmap
+				const auto extras = saved / PathFromUtf8(portablePath("Maps\\" + name + "\\" + name + ".wkbmap"));
+				std::error_code rmEc;
+				if (ok && server.terrain->needsMapExtras())
+					ok = server.terrain->writeMapExtras(extras);
+				else
+					std::filesystem::remove(extras, rmEc);
 				if (ok && FileExists(oldLttt.c_str())) {
 					char* data; int size;
 					LoadFile(oldLttt.c_str(), &data, &size);
