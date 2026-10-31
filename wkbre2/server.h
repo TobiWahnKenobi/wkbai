@@ -217,6 +217,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, a defensive army of more than this many units sends all but 10 to attack
 	// (AIController): "aiAttackWave"; 0: off
 	int aiAttackWave = 50;
+	// with it, a wave gathers 120 m short of its target before it attacks: "aiWaveGather"
+	bool aiWaveGather = true;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

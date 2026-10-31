@@ -6,6 +6,7 @@
 
 #include "gameset/Plan.h"
 #include "GameObjectRef.h"
+#include "util/vecmat.h"
 #include <map>
 
 struct ServerGameObject;
@@ -62,6 +63,9 @@ struct AIController {
 	// attack waves sent: the next check (game time), how many, their units
 	float nextWaveCheck = 0.0f;
 	int waves = 0, waveUnits = 0;
+	// waves walking to their rally point before they attack together
+	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
+	std::vector<GatheringWave> gatheringWaves;
 	std::vector<CommissionInstance> commissionInstances;
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}

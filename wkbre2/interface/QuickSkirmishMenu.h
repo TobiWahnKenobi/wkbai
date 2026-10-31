@@ -65,6 +65,7 @@ private:
 	bool aiLendFarmers = true; // Server::aiLendFarmers
 	int aiRetreatHealth = 0; // Server::aiRetreatHealth, in percent (0: off)
 	int aiAttackWave = 50; // Server::aiAttackWave (0: off)
+	bool aiWaveGather = true; // Server::aiWaveGather
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

@@ -196,14 +196,57 @@ void AIController::update()
 				std::sort(members.begin(), members.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 				members.erase(members.begin(), members.begin() + 10); // the 10 oldest stay home
 				if (ServerGameObject* army = Server::instance->spawnObject(armyBp, gameObj, defensive->position, Vector3(0, 0, 0))) {
+					// gathering: first to a point 120 m short of the target on the home side, where
+					// they meet; streaming in one by one, the waves died at the walls
+					const int moveOrder = gs->orders.names.getIndex("Move To");
+					const Vector3 away = (defensive->position - target->position).normal2xz();
+					const Vector3 rally = target->position + away * 120.0f;
+					const bool gather = Server::instance->aiWaveGather && moveOrder >= 0 && (away.x != 0.0f || away.z != 0.0f);
 					for (ServerGameObject* unit : members) {
 						unit->setParent(army);
-						unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+						if (gather)
+							unit->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, rally);
+						else
+							unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 					}
+					if (gather)
+						gatheringWaves.push_back({ army->id, target->id, rally, Server::instance->timeManager.currentTime });
 					waves++;
 					waveUnits += (int)members.size();
 				}
 			}
+		}
+	}
+
+	// gathered waves attack together: when 70% of the units are within 30 m of the rally point, or
+	// after 90 s
+	if (!gatheringWaves.empty()) {
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int attackOrder = gs->orders.names.getIndex("Attack");
+		const float now = Server::instance->timeManager.currentTime;
+		for (auto it = gatheringWaves.begin(); it != gatheringWaves.end();) {
+			ServerGameObject* army = Server::instance->findObject(it->army);
+			ServerGameObject* target = Server::instance->findObject(it->target);
+			std::vector<ServerGameObject*> units;
+			if (army && !army->deleted)
+				for (const auto& [type, children] : army->children)
+					for (CommonGameObject* c : children)
+						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							units.push_back((ServerGameObject*)c);
+			size_t there = 0;
+			for (ServerGameObject* u : units)
+				there += (u->position - it->rally).sqlen2xz() < 30.0f * 30.0f;
+			if (units.empty() || !target || target->deleted || attackOrder < 0) {
+				it = gatheringWaves.erase(it);
+				continue;
+			}
+			if (there >= units.size() * 0.7f || now - it->since > 90.0f) {
+				for (ServerGameObject* u : units)
+					u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+				it = gatheringWaves.erase(it);
+				continue;
+			}
+			++it;
 		}
 	}
 
