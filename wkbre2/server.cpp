@@ -417,6 +417,7 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 								}
 								else if (tsktag == "PROXIMITY_SATISFIED") {
 									task.proximitySatisfied = gsf.nextInt();
+									task.loadedArrived = task.proximitySatisfied;
 								}
 								else if (tsktag == "TRIGGERS_STARTED") {
 									task.triggersStarted = gsf.nextInt();
@@ -621,6 +622,14 @@ void ServerGameObject::setItem(int index, float value)
 {
 	assert(index != -1);
 	if (getItem(index) == value) return;
+	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item
+	static const char* traceItem = getenv("WKB_TRACE_ITEM");
+	if (traceItem) {
+		static const unsigned traceId = (unsigned)strtoul(traceItem, nullptr, 10);
+		static const char* traceName = strchr(traceItem, ':');
+		if (id == traceId && traceName && Server::instance->gameSet && StrCICompare(Server::instance->gameSet->items.names.getString(index), traceName + 1) == 0)
+			printf("ITEM t=%.2f %u \"%s\": %.3f -> %.3f\n", Server::instance->timeManager.currentTime, id, traceName + 1, getItem(index), value);
+	}
 	items[index] = value;
 
 	NetPacketWriter msg(NETCLIMSG_OBJECT_ITEM_SET);

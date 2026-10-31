@@ -68,6 +68,12 @@ struct Task {
 	SrvGORef target;
 	Vector3 destination;
 	float proximity = -1.0f; bool proximitySatisfied = false, lastDestinationValid = false;
+	// loaded from a save as having reached its target (PROXIMITY_SATISFIED 1): kept so until the
+	// task starts again or its target changes. The original's test 36 save has a cart "arrived"
+	// 28 m from its village's centre (15 m from its nearest delivery point), which the
+	// footprint-edge test here doesn't count as arrived: the cart drove up and collected 4 s
+	// early, and the Kingmaker's food came 8 s early.
+	bool loadedArrived = false;
 
 	Task(int id, const TaskBlueprint* blueprint, Order* order);
 	virtual ~Task();

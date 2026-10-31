@@ -140,10 +140,18 @@ void Task::init()
 	this->blueprint->initSequence.run(this->order->gameObject);
 }
 
+static void TraceTask(const Task* task, const char* what);
+
 void Task::start()
 {
 	if (isWorking()) return;
+	TraceTask(this, "start");
 	this->state = OTS_PROCESSING;
+	// a fresh start: no saved arrival, and the triggers start anew on arriving (a task loaded
+	// with TRIGGERS_STARTED and a reference time from long before had its animation-loop
+	// trigger fire at once: the cart collected in the same update as it arrived)
+	this->loadedArrived = false;
+	this->stopTriggers();
 	if (this->blueprint->usePreviousTaskTarget) {
 		if (this->id > 0)
 			this->setTarget(this->order->tasks[this->id - 1]->target.get());
@@ -198,6 +206,21 @@ void Task::start()
 	this->onStart();
 }
 
+
+// debugging: "WKB_TRACE_TASKS_ID=<object id>" prints that object's task starts, ends,
+// proximity changes and trigger firings
+static void TraceTask(const Task* task, const char* what)
+{
+	static const char* env = getenv("WKB_TRACE_TASKS_ID");
+	if (!env)
+		return;
+	static const unsigned id = (unsigned)strtoul(env, nullptr, 10);
+	if (!task->order || !task->order->gameObject || task->order->gameObject->id != id)
+		return;
+	printf("TASK t=%.2f %u \"%s\": %s\n", Server::instance->timeManager.currentTime, id,
+		Server::instance->gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), what);
+}
+
 void Task::suspend()
 {
 	if (!isWorking()) return;
@@ -212,6 +235,7 @@ void Task::suspend()
 
 void Task::resume()
 {
+	TraceTask(this, "resume");
 	this->state = OTS_PROCESSING;
 	this->blueprint->resumptionSequence.run(this->order->gameObject);
 	this->proximitySatisfied = false; // TODO: put this in "onResume"
@@ -232,6 +256,7 @@ void Task::cancel()
 void Task::terminate()
 {
 	if (isDone()) return;
+	TraceTask(this, "terminate");
 	this->state = OTS_TERMINATED;
 	this->stopTriggers();
 	ServerGameObject *go = this->order->gameObject;
@@ -270,6 +295,8 @@ void Task::stopTriggers()
 void Task::setTarget(ServerGameObject* newtarget)
 {
 	ServerGameObject* oldtarget = target.get();
+	if (oldtarget && oldtarget != newtarget) // (loading sets the saved target on an empty one)
+		loadedArrived = false;
 	//if (oldtarget == newtarget)
 	//	return;
 	// potential problem: if oldtarget was on deleted obj, and newtarget is null, the equality above will also turn true, leaving oldtarget on deleted obj
@@ -417,6 +444,7 @@ void TimerTrigger::init()
 void TimerTrigger::update()
 {
 	if (Server::instance->timeManager.currentTime >= referenceTime + period) {
+		TraceTask(this->task, "timer");
 		this->blueprint->actions.run(this->task->order->gameObject);
 		//TimerTrigger::init();
 		this->referenceTime += this->period;
@@ -747,18 +775,20 @@ void ObjectReferenceTask::onUpdate()
 		// centre: builders, deliverers and attackers stand around it (the original sends them to
 		// its activity path) and a large building's centre can't be come near
 		const float edge = FootprintDistance(go->position, target.get());
-		const bool arrived = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
+		const bool measured = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
 			: (prox < 0.0f || (edge >= 0.0f
 				// within the proximity of the edge, or, when the path ends a little further out
 				// (its last tile next to the footprint was taken), within one tile more
 				? (edge < this->proximity || (!go->movementController.isMoving() && edge < this->proximity + 5.0f))
 				: (go->position - destination).sqlen2xz() < prox * prox));
+		const bool arrived = loadedArrived || measured;
 		if (arrived) {
 			this->startTriggers();
 			if (go->movementController.isMoving())
 				go->movementController.stopMovement();
 			if (!proximitySatisfied) {
 				proximitySatisfied = true;
+				TraceTask(this, "proximity satisfied");
 				blueprint->proximitySatisfiedSequence.run(order->gameObject);
 				blueprint->movementCompletedSequence.run(order->gameObject);
 
@@ -801,6 +831,11 @@ void ObjectReferenceTask::onUpdate()
 							destination = go->movementController.startMovement(goal);
 				if (proximitySatisfied) {
 					proximitySatisfied = false;
+					if (getenv("WKB_TRACE_TASKS_ID")) {
+						char buf[160];
+						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
+						TraceTask(this, buf);
+					}
 					//if (blueprint->defaultAnim != -1)
 					//	go->setAnimation(0);
 					RunProximityDissatisfied(blueprint, order->gameObject);
