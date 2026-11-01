@@ -11,6 +11,7 @@
 #include "../imguiimpl.h"
 #include "../window.h"
 #include <SDL3/SDL_scancode.h>
+#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_mouse.h>
 #include "../tags.h"
 #include "../gameset/gameset.h"
@@ -1575,6 +1576,66 @@ void ClientInterface::chatDraw()
 	}
 }
 
+// Control groups: Ctrl+0-9 (top row or keypad 1-9; keypad 0 turns the camera) stores the
+// selection, the digit alone selects it again without the units lost since, and the same
+// digit twice within 400 ms also centres the camera on them
+void ClientInterface::controlGroupKeys()
+{
+	if (chatOpen || ImGui::GetIO().WantTextInput)
+		return;
+	int group = -1;
+	for (int i = 0; i < 10 && group == -1; i++) {
+		const int top = i == 0 ? SDL_SCANCODE_0 : SDL_SCANCODE_1 + i - 1;
+		if (g_keyPressed[top] || (i > 0 && g_keyPressed[SDL_SCANCODE_KP_1 + i - 1]))
+			group = i;
+	}
+	if (group == -1)
+		return;
+	std::unordered_set<CliGORef>& stored = controlGroups[group];
+	auto usable = [&](ClientGameObject* obj) {
+		return obj && !(obj->flags & ClientGameObject::fTerminated) && (obj->flags & ClientGameObject::fSelectable)
+			&& obj->getPlayer() == client->clientPlayer;
+	};
+	for (auto it = stored.begin(); it != stored.end();)
+		it = usable(it->get()) ? std::next(it) : stored.erase(it);
+	if (g_modCtrl) {
+		stored.clear();
+		for (const CliGORef& ref : selection)
+			if (usable(ref.get()))
+				stored.insert(ref);
+		lastGroupRecalled = -1;
+		if (BenchmarkEnabled())
+			printf("CONTROLGROUP store %d: %zu\n", group, stored.size());
+		return;
+	}
+	if (stored.empty())
+		return;
+	selection = stored;
+	const uint64_t now = SDL_GetTicks();
+	const bool twice = lastGroupRecalled == group && now - lastGroupRecallTicks < 400;
+	lastGroupRecalled = twice ? -1 : group;
+	lastGroupRecallTicks = now;
+	if (BenchmarkEnabled())
+		printf("CONTROLGROUP recall %d: %zu\n", group, selection.size());
+	if (!twice || !client->terrain)
+		return;
+	// where the camera looks moved to the group's middle, as a minimap click does
+	Vector3 centre(0, 0, 0);
+	for (const CliGORef& ref : selection)
+		centre += ref->position;
+	centre = centre / (float)selection.size();
+	Camera& cam = client->camera;
+	Vector3 lookAt = cam.position;
+	if (cam.direction.y < -0.01f) {
+		const float groundY = client->terrain->getHeight(cam.position.x, cam.position.z);
+		lookAt = cam.position + cam.direction * ((cam.position.y - groundY) / -cam.direction.y);
+	}
+	cam.position.x += centre.x - lookAt.x;
+	cam.position.z += centre.z - lookAt.z;
+	if (BenchmarkEnabled())
+		printf("CONTROLGROUP centre %d: group at %.1f %.1f, camera looked at %.1f %.1f\n", group, centre.x, centre.z, lookAt.x, lookAt.z);
+}
+
 void ClientInterface::iter()
 {
 	ZoneScoped;
@@ -1670,8 +1731,10 @@ void ClientInterface::iter()
 			fflush(stdout);
 		}
 	}
-	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
-	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
+	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of
+	// that type (once it is found, so that the selection can be emptied again)
+	static bool benchmarkSelected = false;
+	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty() && !benchmarkSelected) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("select", std::string());
 		if (!name.empty()) {
 			ClientGameObject* found = nullptr;
@@ -1687,8 +1750,10 @@ void ClientInterface::iter()
 						self(child->dyncast<ClientGameObject>(), self);
 			};
 			search(client->clientPlayer.get(), search);
-			if (found)
+			if (found) {
 				selection.insert(found);
+				benchmarkSelected = true;
+			}
 		}
 	}
 	const bool menuOpen = frontEnd && frontEnd->isOpen();
@@ -2003,6 +2068,30 @@ void ClientInterface::iter()
 		ImGui::GetBackgroundDrawList()->AddLine(toScreen(formationDrag.start), toScreen(peapos), IM_COL32(255, 255, 255, 235), 2.0f);
 	}
 
+	// Test runs: "benchmark": { ..., "keys": [[frame, "<key>"], ...] } presses each key (an SDL
+	// name, "Ctrl+" in front for Ctrl held; "Deselect" empties the selection) that many frames
+	// after the level is there
+	static bool simulatedCtrl = false;
+	if (BenchmarkEnabled() && client->getLevel()) {
+		static int keyFrame = 0;
+		keyFrame++;
+		for (const auto& key : g_settings.value("benchmark", nlohmann::json::object()).value("keys", nlohmann::json::array())) {
+			if (!key.is_array() || key.size() != 2 || key[0].get<int>() != keyFrame)
+				continue;
+			std::string name = key[1].get<std::string>();
+			if (name == "Deselect") {
+				selection.clear();
+				continue;
+			}
+			if (name.rfind("Ctrl+", 0) == 0) {
+				name = name.substr(5);
+				simulatedCtrl = !g_modCtrl;
+				g_modCtrl = true;
+			}
+			if (const SDL_Scancode sc = SDL_GetScancodeFromName(name.c_str()); sc != SDL_SCANCODE_UNKNOWN)
+				g_keyPressed[sc] = true;
+		}
+	}
 	if (g_keyPressed[SDL_SCANCODE_P]) {
 		static bool pauseState = false;
 		pauseState = !pauseState;
@@ -2023,6 +2112,9 @@ void ClientInterface::iter()
 				if (sel)
 					client->sendTerminateObject(sel);
 	}
+	controlGroupKeys();
+	if (simulatedCtrl)
+		g_modCtrl = simulatedCtrl = false;
 
 	static bool debuggerOn = false;
 	static bool uiScriptOn = true;
