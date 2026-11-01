@@ -18,6 +18,8 @@
 #include "../gfx/DefaultSceneRenderer.h"
 #include "../imgui/imgui.h"
 #include <ctime>
+#include <map>
+#include <optional>
 #include <random>
 #include "../terrain.h"
 #include <SDL3/SDL_timer.h>
@@ -1791,6 +1793,127 @@ void ClientInterface::iter()
 	if (g_keyDown[SDL_SCANCODE_LEFT] || g_keyDown[SDL_SCANCODE_A])
 		client->camera.position += strafe;
 
+	// moves the camera over the ground, at its height and angle, so that the middle of the view
+	// falls on target (looking level or up: straight over it)
+	auto centreCameraOn = [this](const Vector3& target) {
+		Camera& cam = client->camera;
+		const float pitch = cam.orientation.x, yaw = cam.orientation.y;
+		const Vector3 dir(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch));
+		const float dist = dir.y < -0.01f ? std::max((target.y - cam.position.y) / dir.y, 0.0f) : 0.0f;
+		cam.position.x = target.x - dir.x * dist;
+		cam.position.z = target.z - dir.z * dist;
+	};
+
+	// Test runs: "benchmark": { ..., "spaceTest": [ { "select": "<blueprint>", "count": n,
+	// "formation": true, "presses": k }, ... ] } selects the player's first n of that type that
+	// are in no formation (put into a new one first if asked), presses Space k times, 10 frames
+	// apart, and prints where each press took the camera
+	bool spaceTestPrint = false;
+	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer) {
+		static const nlohmann::json steps = g_settings.value("benchmark", nlohmann::json::object()).value("spaceTest", nlohmann::json::array());
+		static size_t step = 0;
+		static int frame = 0, wait = 0, press = 0, phase = 0;
+		static std::vector<CliGORef> picked;
+		if (++frame > 120 && step < steps.size() && --wait <= 0) {
+			const nlohmann::json& s = steps[step];
+			if (phase == 0) {
+				const std::string name = s.value("select", std::string());
+				const size_t count = s.value("count", 1);
+				picked.clear();
+				auto search = [&](ClientGameObject* obj, auto& self) -> void {
+					if (picked.size() >= count)
+						return;
+					if (obj->blueprint->name == name && (obj->flags & ClientGameObject::fSelectable)
+						&& !(obj->parent && obj->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)) {
+						picked.push_back(obj);
+						return;
+					}
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* child : children)
+							self(child->dyncast<ClientGameObject>(), self);
+				};
+				search(client->clientPlayer.get(), search);
+				if (s.value("formation", false)) {
+					for (ClientGameObject* obj : picked)
+						client->sendPutUnitIntoNewFormation(obj);
+					client->sendCreateNewFormation();
+				}
+				printf("SPACE step %zu: %zu of %s picked%s\n", step, picked.size(), name.c_str(), s.value("formation", false) ? ", put into a new formation" : "");
+				phase = 1;
+				wait = 30;
+			}
+			else if (phase == 1) {
+				selection.clear();
+				for (const CliGORef& ref : picked)
+					if (ref)
+						selection.insert(ref);
+				phase = 2;
+				press = 0;
+				wait = 5;
+			}
+			else if (press < s.value("presses", 1)) {
+				g_keyPressed[SDL_SCANCODE_SPACE] = true;
+				spaceTestPrint = true;
+				press++;
+				wait = 10;
+			}
+			else {
+				step++;
+				phase = 0;
+				if (step == steps.size())
+					printf("SPACE test done\n");
+			}
+			fflush(stdout);
+		}
+	}
+
+	// Space: the camera jumps to the selection at once, keeping its height and angle; each
+	// further press goes on to the next selected unit, in the order of their ids, a formation
+	// being one stop at its members' centre. A selection with anything new in it starts over at
+	// the first; one that only lost units (killed, or shift-clicked off) goes on from where it was.
+	static std::unordered_set<CliGORef> spaceSelection;
+	static uint32_t spaceLastStop = 0;
+	const bool selectionGrew = std::any_of(selection.begin(), selection.end(), [](const CliGORef& ref) { return !spaceSelection.count(ref); });
+	if (selectionGrew || selection.empty())
+		spaceLastStop = 0;
+	if (selectionGrew || selection.size() != spaceSelection.size())
+		spaceSelection = selection;
+	std::optional<Vector3> cameraJump;
+	size_t spaceStopCount = 0;
+	ClientGameObject* spaceStop = nullptr;
+	if (g_keyPressed[SDL_SCANCODE_SPACE] && !ImGui::GetIO().WantTextInput) {
+		std::map<uint32_t, ClientGameObject*> stops;
+		for (ClientGameObject* sel : selection) {
+			if (!sel)
+				continue;
+			ClientGameObject* stop = sel->parent && sel->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION ? sel->getParent() : sel;
+			stops.emplace(stop->id, stop);
+		}
+		if (!stops.empty()) {
+			auto it = stops.upper_bound(spaceLastStop);
+			if (it == stops.end())
+				it = stops.begin();
+			spaceLastStop = it->first;
+			spaceStop = it->second;
+			spaceStopCount = stops.size();
+			Vector3 target = spaceStop->position;
+			if (spaceStop->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+				Vector3 sum;
+				int members = 0;
+				for (const auto& [type, children] : spaceStop->children)
+					if (type.bpClass() == Tags::GAMEOBJCLASS_CHARACTER)
+						for (CommonGameObject* child : children) {
+							sum += child->position;
+							members++;
+						}
+				if (members)
+					target = sum / (float)members;
+			}
+			cameraJump = target;
+			centreCameraOn(target);
+		}
+	}
+
 	// The fixed camera (the original's default, without free look): a zoom from 0 (near) to 1
 	// (far) sets its height above the ground, 12 to 110 m, and its pitch, 35 to 62 degrees down;
 	// scrolling keeps that height over hills and valleys (eased, so it doesn't jolt); the middle
@@ -1811,6 +1934,15 @@ void ClientInterface::iter()
 		fixedGround += (ground - fixedGround) * ease;
 		client->camera.position.y = fixedGround + 12.0f + 98.0f * fixedZoom;
 		client->camera.orientation.x = -(0.61f + 0.47f * fixedZoom);
+		if (cameraJump) {
+			// a jump lands at once: the height over the new ground without easing, and the view
+			// centred again for that height
+			for (int i = 0; i < 2; i++) {
+				fixedGround = std::max(client->terrain->getHeight(cp.x, cp.z), 0.0f);
+				client->camera.position.y = fixedGround + 12.0f + 98.0f * fixedZoom;
+				centreCameraOn(*cameraJump);
+			}
+		}
 		if (getenv("WKB_TRACE_CAMERA")) printf("CAMERA pos (%.1f,%.1f,%.1f) pitch %.2f ground %.1f zoom %.2f\n", cp.x, cp.y, cp.z, client->camera.orientation.x, ground, fixedZoom);
 		if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
 			if (!camroton) {
@@ -2042,6 +2174,23 @@ void ClientInterface::iter()
 	if (g_mouseDown[SDL_BUTTON_X1])
 		client->camera.position.y = elevatorCamStart + (elevatorMouseStart - g_mouseY) * 0.1f;
 	applyCameraLimits();
+	if (cameraJump)
+		centreCameraOn(*cameraJump); // the limits may have lifted it
+	if (spaceTestPrint) {
+		const Camera& cam = client->camera;
+		const float pitch = cam.orientation.x, yaw = cam.orientation.y;
+		const Vector3 dir(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch));
+		if (cameraJump) {
+			const Vector3& t = *cameraJump;
+			const float dist = dir.y < -0.01f ? (t.y - cam.position.y) / dir.y : 0.0f;
+			printf("SPACE press: stop %u (%s) of %zu, target (%.1f,%.1f,%.1f), camera (%.1f,%.1f,%.1f) pitch %.2f yaw %.2f, view centre (%.1f,%.1f)\n",
+				spaceStop->id, spaceStop->blueprint->name.c_str(), spaceStopCount, t.x, t.y, t.z,
+				cam.position.x, cam.position.y, cam.position.z, pitch, yaw, cam.position.x + dir.x * dist, cam.position.z + dir.z * dist);
+		}
+		else
+			printf("SPACE press: nothing selected, camera stays at (%.1f,%.1f,%.1f)\n", cam.position.x, cam.position.y, cam.position.z);
+		fflush(stdout);
+	}
 
 	static bool settingsOn = false;
 	if (g_keyPressed[SDL_SCANCODE_F10])
