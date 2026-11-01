@@ -19,36 +19,16 @@
 #include <nlohmann/json.hpp>
 #include "bitmap.h"
 #include "RenderSettings.h"
+#include "DiligentWaterfalls.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 using namespace Diligent;
-
-// The water surface's height at a tile corner: the mean level of the water tiles around it.
-// The map gives each tile its own level, and where neighbouring tiles differ the flat quads
-// stood at different heights: a stepped seam along the tiles' edges across open water, which
-// the waves, refraction and depth shading made plain.
-static float WaterLevelAtCorner(const Terrain* terrain, int x, int z)
-{
-	float sum = 0;
-	int n = 0;
-	for (int dz = -1; dz <= 0; dz++)
-		for (int dx = -1; dx <= 0; dx++) {
-			const int tx = x + dx, tz = z + dz;
-			if (tx < 0 || tz < 0 || tx >= (int)terrain->width || tz >= (int)terrain->height)
-				continue;
-			const auto* t = terrain->getTile(tx, tz);
-			if (t->fullOfWater) {
-				sum += t->waterLevel;
-				n++;
-			}
-		}
-	return n ? sum / n : 0.0f;
-}
 
 static const char tshaderCode[] = R"---(
 Texture2D inpTexture;
@@ -1150,6 +1130,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> blobBuffer;
 	RefCntAutoPtr<ITexture> blobMap;
 	texture blobSprite = nullptr;
+	std::unique_ptr<DiligentWaterfalls> waterfalls; // where the water drops (from Low water)
 };
 
 // Texels of the blob shadow texture per world unit (at most 4096 per side)
@@ -1736,8 +1717,11 @@ void DiligentEnhancedTerrainRenderer::init()
 					float bottom = std::min({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
 					if (tile->fullOfWater) {
 						const uint32_t v0 = (uint32_t)lakeVertices.size();
-						const float w00 = WaterLevelAtCorner(terrain, x, z), w10 = WaterLevelAtCorner(terrain, x + 1, z);
-						const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1), w01 = WaterLevelAtCorner(terrain, x, z + 1);
+						// the corners at the mean level of the water around them at about this level (a clean
+						// step where waters at different heights meet: DiligentWaterfalls)
+						const float lv = tile->waterLevel;
+						const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
+						const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
 						lakeVertices.insert(lakeVertices.end(), {
 							LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 							LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
@@ -1768,6 +1752,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
 		device->CreateBuffer(lakeDesc, &lakeData, &_impl->lakeVertexBuffer);
 	}
+	_impl->waterfalls = std::make_unique<DiligentWaterfalls>(dgfx, terrain);
 }
 
 void DiligentEnhancedTerrainRenderer::Impl::buildGrass(IRenderDevice* device, Terrain* terrain, float density)
@@ -1843,6 +1828,8 @@ bool DiligentEnhancedTerrainRenderer::updateHeights()
 		chunk.low.y = std::min(chunk.low.y, 0.0f);
 		chunk.high.y = std::max(chunk.high.y, 255.0f * terrain->scale);
 	}
+	if (_impl->waterfalls)
+		_impl->waterfalls->rebuild();
 	return true;
 }
 
@@ -1906,8 +1893,11 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 					const float lx = (x - (int)terrain->edge) * tilesize, lz = (z - (int)terrain->edge) * tilesize;
 					const uint32_t v0 = (uint32_t)lakeVertices.size();
 					const float wl = tile->waterLevel;
-					const float w00 = WaterLevelAtCorner(terrain, x, z), w10 = WaterLevelAtCorner(terrain, x + 1, z);
-					const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1), w01 = WaterLevelAtCorner(terrain, x, z + 1);
+					// the corners at the mean level of the water around them at about this level (a clean
+					// step where waters at different heights meet: DiligentWaterfalls)
+					const float lv = tile->waterLevel;
+					const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
+					const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
 					lakeVertices.insert(lakeVertices.end(), {
 						LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 						LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
@@ -1928,6 +1918,8 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
 		((DiligentGfx*)gfx)->device->CreateBuffer(lakeDesc, &lakeData, &_impl->lakeVertexBuffer);
 	}
+	if (_impl->waterfalls)
+		_impl->waterfalls->rebuild();
 	return true;
 }
 
@@ -2260,6 +2252,13 @@ void DiligentEnhancedTerrainRenderer::render()
 		ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		drawIndices(_impl->frameLakeIndices);
+	}
+	// ----- Waterfalls, over the water -----
+	// (with the frame behind the water when it was copied in this frame)
+	if (_impl->waterfalls) {
+		const bool copied = _impl->refraction && _impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty();
+		_impl->waterfalls->render(camera, copied ? _impl->sceneCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr,
+			copied && _impl->depthCopy ? _impl->depthCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr);
 	}
 
 	shadows.staticShadowValid = false;
