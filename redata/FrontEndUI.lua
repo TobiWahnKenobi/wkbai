@@ -920,16 +920,17 @@ local function playersTab()
 		for i, start in ipairs(getLevelStarts(skirmish.level)) do
 			local slot = slots[i]
 			local sx, sy = mapX + start.x * mapSize, mapY + start.y * mapSize
-			local m = L(34)
-			drawRect(sx - m / 2 - L(2), sy - m / 2 - L(2), m + L(4), m + L(4), 0xE0000000)
-			if slot and slot.type ~= "empty" then
-				drawImage(colourSwatch(slot.colour), sx - m / 2, sy - m / 2, m, m)
+			-- the slot's flag (the in-game diplomacy window's Player Flag <colour>), faded for a
+			-- position nobody plays; its number above it, white on a soft shadow
+			local fw, fh = L(48), L(24)
+			local playing = slot and slot.type ~= "empty"
+			local flag = "Interface\\InGame\\Diplomacy\\Player Flag " .. ((playing and (slot.colour or 0)) or 0) .. ".tga"
+			drawImage(flag, sx - fw / 2, sy - fh / 2, fw, fh, playing and 0xFFFFFFFF or 0x80FFFFFF)
+			local ny = sy - fh / 2 - L(24)
+			for _, d in ipairs({ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } }) do
+				centredText(FONT_BUTTON, tostring(i), sx - fw / 2 + L(d[1] * 2), ny + L(d[2] * 2), fw, L(24), 0x90000000)
 			end
-			-- the number, white on a black shadow (readable on the light colours too)
-			for _, d in ipairs({ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { 1, 1 } }) do
-				centredText(FONT_BUTTON, tostring(i), sx - m / 2 + L(d[1] * 2), sy - m / 2 + L(d[2] * 2), m, m, 0xFF000000)
-			end
-			centredText(FONT_BUTTON, tostring(i), sx - m / 2, sy - m / 2, m, m, WHITE)
+			centredText(FONT_BUTTON, tostring(i), sx - fw / 2, ny, fw, L(24), playing and WHITE or 0xC0FFFFFF)
 		end
 	end
 	if skirmish.multiplayer then
