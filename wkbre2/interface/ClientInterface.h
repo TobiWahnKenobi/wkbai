@@ -133,6 +133,15 @@ private:
 	// the top bar's Settings button asked for the in-game menu (opened the next frame)
 	bool openMenuRequested = false;
 	bool fogOfWarOn() const;
+	// the original's loading screen over everything until the level has been drawn for a while:
+	// one of Loading Screen 1-9 (random, as WKB.exe 0x706300), the player's stage of 8 with its
+	// bar, and a tip ("Words of Wisdom")
+	void drawLoadingScreen();
+	const void* loadingFor = nullptr; // the level it was shown for (nullptr: before any)
+	int loadingScreenIndex = 0, loadingTip = 0, framesWithLevel = 0;
+	int loadingStage = 0;
+	uint64_t loadingStageSince = 0;
+	bool loadingDone = false;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the
 	// messages show for a while at the top left

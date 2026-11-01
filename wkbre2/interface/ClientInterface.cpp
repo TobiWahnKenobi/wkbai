@@ -18,6 +18,7 @@
 #include "../gfx/DefaultSceneRenderer.h"
 #include "../imgui/imgui.h"
 #include <ctime>
+#include <random>
 #include "../terrain.h"
 #include <SDL3/SDL_timer.h>
 #include "../gameset/ScriptContext.h"
@@ -788,6 +789,77 @@ bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
 	return g_renderSettings.fogOfWar && !editorOn && client->clientPlayer && client->getLevel();
+}
+
+// The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
+// player's row 138 above it, name at -227, "stage/8" at +73, the bar from +130 to +225 (14 high,
+// dark red, filling bright red); "Words of Wisdom" 38 below, over a dark box from -260 to +260,
+// 50 to 230 below, with one of the FRONT_END_TIP_n texts. The stages are what has arrived: the
+// local server's game set, map and level, then the client's, then the first frames drawn.
+void ClientInterface::drawLoadingScreen()
+{
+	if (loadingDone || editorOn)
+		return;
+	if (loadingScreenIndex == 0) {
+		std::random_device rd;
+		loadingScreenIndex = (int)(rd() % 9) + 1;
+		// a tip that the language file has (it numbers them 1-45 with gaps)
+		for (int tries = 0; tries < 50 && !loadingTip; tries++) {
+			const int n = (int)(rd() % 45) + 1;
+			const std::string key = "FRONT_END_TIP_" + std::to_string(n);
+			if (lang.getText(key) != key)
+				loadingTip = n;
+		}
+	}
+	const Server* srv = client->localServer ? Server::instance : nullptr;
+	int stage = 1;
+	if (srv && !srv->gameSet) stage = 1;
+	else if (srv && !srv->terrain) stage = 2;
+	else if (srv && !srv->getLevel()) stage = 3;
+	else if (!client->gameSet) stage = 4;
+	else if (!client->terrain) stage = 5;
+	else if (!client->getLevel()) stage = 6;
+	else if (framesWithLevel < 10) stage = 7;
+	else stage = 8;
+	if (client->getLevel() && client->terrain && ++framesWithLevel >= 30) {
+		loadingDone = true;
+		return;
+	}
+	if (stage != loadingStage) {
+		loadingStage = stage;
+		loadingStageSince = SDL_GetTicks();
+	}
+	// within a stage the bar creeps on (none of them report how far they are), to 90% of it
+	const float within = 0.9f * (1.0f - std::exp(-(float)(SDL_GetTicks() - loadingStageSince) / 1500.0f));
+	const float progress = std::clamp((stage - 1 + within) / 8.0f, 0.0f, 1.0f);
+
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	const ImVec2 size = ImGui::GetIO().DisplaySize;
+	const std::string bg = "Interface\\Loading Screen " + std::to_string(loadingScreenIndex) + ".TGA";
+	if (texture tex = uiTexCache.getTexture(bg.c_str(), false))
+		dl->AddImage(tex, ImVec2(0, 0), size);
+	else
+		dl->AddRectFilled(ImVec2(0, 0), size, IM_COL32(0, 0, 0, 255));
+	const float cx = size.x * 0.5f, cy = size.y * 0.5f;
+	auto outlined = [dl](ImVec2 p, ImU32 colour, const std::string& text) {
+		for (const ImVec2 d : { ImVec2(-1, 0), ImVec2(1, 0), ImVec2(0, -1), ImVec2(0, 1) })
+			dl->AddText(ImVec2(p.x + d.x, p.y + d.y), IM_COL32(0, 0, 0, 220), text.c_str());
+		dl->AddText(p, colour, text.c_str());
+	};
+	// the player's row
+	const std::string name = g_settings.value("playerName", lang.getText("DEFAULT_PLAYER_PROFILE"));
+	outlined(ImVec2(cx - 227, cy - 140), IM_COL32(70, 95, 215, 255), name);
+	outlined(ImVec2(cx + 73, cy - 140), IM_COL32(232, 214, 176, 255), std::to_string(stage) + "/8");
+	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 225, cy - 124), IM_COL32(96, 0, 0, 255));
+	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 130 + 95 * progress, cy - 124), IM_COL32(210, 0, 0, 255));
+	// the tip
+	if (loadingTip) {
+		const std::string title = lang.getText("FRONT_END_TITLE_TIP_OF_THE_DAY");
+		outlined(ImVec2(cx - ImGui::CalcTextSize(title.c_str()).x * 0.5f, cy + 30), IM_COL32(232, 214, 176, 255), title);
+		dl->AddRectFilled(ImVec2(cx - 260, cy + 50), ImVec2(cx + 260, cy + 230), IM_COL32(0, 0, 0, 110));
+		const std::string tip = lang.getText("FRONT_END_TIP_" + std::to_string(loadingTip));
+		dl->AddText(nullptr, 0.0f, ImVec2(cx - 254, cy + 56), IM_COL32(235, 235, 235, 255), tip.c_str(), nullptr, 508.0f);
+	}
 }
 
 void ClientInterface::drawObject(ClientGameObject *obj)
@@ -2520,10 +2592,21 @@ void ClientInterface::iter()
 		gfx->DrawFrame(selBoxStartX, selBoxStartY, selBoxEndX - selBoxStartX, selBoxEndY - selBoxStartY, -1);
 	}
 
+	drawLoadingScreen();
+
 	{
 		ZoneScopedN("ImGui rendering");
 		gfx->InitImGuiDrawing();
 		ImGuiImpl_Render(gfx);
+	}
+	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
+	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4) {
+		static bool shot = false;
+		const std::string path = g_settings.value("benchmark", nlohmann::json()).value("loadingScreenshot", std::string());
+		if (!shot && !path.empty()) {
+			shot = true;
+			printf("Loading screenshot %s: %s\n", path.c_str(), gfx->SaveScreenshot(path.c_str()) ? "saved" : "failed");
+		}
 	}
 
 	{
