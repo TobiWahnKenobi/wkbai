@@ -156,6 +156,11 @@ private:
 	int statisticsShown = 0; // the graph: food, wood, gold, peasants, soldiers, buildings
 	void drawChronicle();
 	int selectPeasantsByActivity(int row);
+	// control groups 0-9 (Ctrl+digit stores, digit selects, twice centres the camera); per game
+	std::unordered_set<CliGORef> controlGroups[10];
+	int lastGroupRecalled = -1;
+	uint64_t lastGroupRecallTicks = 0;
+	void controlGroupKeys();
 	// the selected (or hovered) character in the selection window, turning (after the HUD)
 	void drawSelectionPortrait();
 	// the lower left panel, its stained-glass window as refracting glass with enhanced graphics
