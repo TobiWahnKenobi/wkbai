@@ -36,6 +36,8 @@
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
 #include <memory>
+#include <chrono>
+#include <future>
 #include "../util/util.h"
 #include <algorithm>
 #include <cmath>
@@ -490,6 +492,7 @@ struct DiligentPostProcess::Impl {
 	// opaque copy, and whether the last frame used it (else its history is reset)
 	RefCntAutoPtr<ITexture> objectMotion, motion, opaque, afterWater, reactive;
 	std::unique_ptr<DiligentFsr3> fsr3;
+	std::future<std::unique_ptr<DiligentFsr3>> fsr3Pending;
 	ITexture* copySource = nullptr;
 	bool fsr3Frame = false, opaqueCopied = false, waterCopied = false, fsr3LastFrame = false;
 	// fog of war: the tiles' texture, its size, and the version of the data in it
@@ -718,6 +721,26 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height, uint32_t outpu
 	_impl->copySource = nullptr;
 }
 
+bool DiligentPostProcess::fsr3Ready()
+{
+	if (_impl->fsr3)
+		return true;
+	if (!_impl->fsr3Pending.valid()) {
+		IRenderDevice* device = _impl->device;
+		_impl->fsr3Pending = std::async(std::launch::async, [device]() {
+			const auto start = std::chrono::steady_clock::now();
+			auto made = std::make_unique<DiligentFsr3>(device);
+			printf("FSR 3.1: made in %.1f s (on a worker thread)\n", std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count());
+			return made;
+		});
+		return false;
+	}
+	if (_impl->fsr3Pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		return false;
+	_impl->fsr3 = _impl->fsr3Pending.get();
+	return true;
+}
+
 void DiligentPostProcess::beginFrame(IDeviceContext* ctx, bool fsr3)
 {
 	_impl->fsr3Frame = fsr3;
@@ -848,7 +871,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 	_impl->prevViewProj = viewProj;
 	// FSR 3.1: the composite with its motion vectors and reactive mask, anti-aliased and
 	// upscaled, copied into the back buffer
-	if (settings.fsr3 && !settings.ortho && _impl->fsr3Frame) {
+	if (settings.fsr3 && !settings.ortho && _impl->fsr3Frame && _impl->fsr3) {
 		_impl->run(ctx, _impl->compositePass, _impl->resolved);
 		_impl->run(ctx, _impl->motionPass, _impl->motion);
 		if (!_impl->fsr3)

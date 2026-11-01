@@ -253,6 +253,10 @@ int main()
 	// Unbuffered so redirected logs keep everything up to a crash
 	setvbuf(stdout, nullptr, _IONBF, 0);
 #ifdef _WIN32
+	// A window that handles no messages for 5 s (a map or the game set loading, shaders being
+	// compiled) is replaced by Windows with a frozen "ghost" copy at its windowed size: a
+	// borderless fullscreen game seemed to shrink to half its size and grow again
+	DisableProcessWindowsGhosting();
 	SetUnhandledExceptionFilter(PrintCrash);
 	// also first: an access violation in a 25-minute AI game ended the process without the filter
 	// running (no report, no dump). Reported once; the search goes on as before.

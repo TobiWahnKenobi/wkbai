@@ -19,7 +19,10 @@
 #include "DiligentFsr3.h"
 #include "../util/util.h"
 #include "ShaderSourceFactoryUtils.h"
+#include "../file.h"
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <cstring>
 #include <iterator>
@@ -154,11 +157,73 @@ struct DiligentFsr3::Impl {
 		ctx->UnmapBuffer(buf, MAP_WRITE);
 	}
 
+	// The compiled shaders are kept in the user folder (ShaderCache\fsr3-<hash>.bin): compiling
+	// them all took 27 s. The hash covers the SDK's sources, the pass, its macros and the device type.
+	std::filesystem::path cacheFile(const ShaderCreateInfo& sci) const
+	{
+		uint64_t h = 1469598103934665603ull;
+		auto mix = [&h](const void* data, size_t size) {
+			for (size_t i = 0; i < size; i++) {
+				h ^= ((const uint8_t*)data)[i];
+				h *= 1099511628211ull;
+			}
+		};
+		static uint64_t sourcesHash = 0;
+		if (!sourcesHash) {
+			uint64_t s = 1469598103934665603ull;
+			for (const FfxShaderFile& f : ffxShaderFiles)
+				for (size_t i = 0; i < f.length; i++) {
+					s ^= ((const uint8_t*)f.data)[i];
+					s *= 1099511628211ull;
+				}
+			sourcesHash = s;
+		}
+		mix(&sourcesHash, sizeof(sourcesHash));
+		const int type = (int)device->GetDeviceInfo().Type;
+		mix(&type, sizeof(type));
+		for (const char* text : { sci.FilePath, sci.Source, sci.EntryPoint, sci.Desc.Name })
+			if (text)
+				mix(text, sci.Source == text ? sci.SourceLength : strlen(text));
+		for (Uint32 m = 0; m < sci.Macros.Count; m++) {
+			mix(sci.Macros.Elements[m].Name, strlen(sci.Macros.Elements[m].Name));
+			mix(sci.Macros.Elements[m].Definition, strlen(sci.Macros.Elements[m].Definition));
+		}
+		char name[48];
+		snprintf(name, sizeof(name), "fsr3-%016llx.bin", (unsigned long long)h);
+		return g_userPath / "ShaderCache" / name;
+	}
+
 	// one pass: every resource variable dynamic, set from views before each dispatch
-	void makePipeline(RefCntAutoPtr<IPipelineState>& pso, RefCntAutoPtr<IShaderResourceBinding>& srb, const ShaderCreateInfo& sci)
+	void makePipeline(RefCntAutoPtr<IPipelineState>& pso, RefCntAutoPtr<IShaderResourceBinding>& srb, const ShaderCreateInfo& sciSource)
 	{
 		RefCntAutoPtr<IShader> shader;
-		device->CreateShader(sci, &shader);
+		const std::filesystem::path cached = cacheFile(sciSource);
+		{
+			std::ifstream in(cached, std::ios::binary);
+			const std::vector<char> code((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			if (!code.empty()) {
+				ShaderCreateInfo sci;
+				sci.ByteCode = code.data();
+				sci.ByteCodeSize = code.size();
+				sci.EntryPoint = sciSource.EntryPoint;
+				sci.Desc = sciSource.Desc;
+				sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+				device->CreateShader(sci, &shader);
+			}
+		}
+		if (!shader) {
+			device->CreateShader(sciSource, &shader);
+			const void* code = nullptr;
+			Uint64 size = 0;
+			if (shader)
+				shader->GetBytecode(&code, size);
+			if (code && size) {
+				std::error_code ec;
+				std::filesystem::create_directories(cached.parent_path(), ec);
+				std::ofstream(cached, std::ios::binary).write((const char*)code, (std::streamsize)size);
+			}
+		}
+		const ShaderCreateInfo& sci = sciSource;
 		if (!shader)
 			ferr("Diligent: failed to compile the FSR 3 shader %s.", sci.Desc.Name);
 		SamplerDesc linear;

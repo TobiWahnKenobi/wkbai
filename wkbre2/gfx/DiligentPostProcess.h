@@ -60,6 +60,9 @@ struct DiligentPostProcess {
 	// before its water, copyAfterWater before the rest of its transparent parts (waterfalls,
 	// particles), for the reactive mask
 	void beginFrame(Diligent::IDeviceContext* ctx, bool fsr3);
+	// FSR 3.1 made (its shaders take seconds to compile: on a worker thread, started by the first
+	// call; until it is made, frames use the other upscaling)
+	bool fsr3Ready();
 	Diligent::ITextureView* objectMotionRTV() const;
 	void copyOpaque(Diligent::IDeviceContext* ctx);
 	void copyAfterWater(Diligent::IDeviceContext* ctx);

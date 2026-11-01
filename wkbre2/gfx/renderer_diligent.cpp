@@ -453,7 +453,7 @@ struct DiligentRenderer : DiligentGfx
 		const float scale = effects ? g_renderSettings.renderScale() : 1.0f;
 		const uint32_t w = std::max(1u, (uint32_t)std::lround(ow * scale)), h = std::max(1u, (uint32_t)std::lround(oh * scale));
 		post->resize(w, h, ow, oh);
-		fsr3Active = effects && g_renderSettings.fsr3();
+		fsr3Active = effects && g_renderSettings.fsr3() && post->fsr3Ready();
 		post->beginFrame(ctx, fsr3Active);
 		// FSR 3.1: its Halton sequence, longer the more it upscales; TAA: the camera moved by a
 		// sub-pixel Halton (2, 3) offset, 8 steps
