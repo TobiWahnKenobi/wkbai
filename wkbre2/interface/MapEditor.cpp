@@ -21,6 +21,9 @@
 #include "../gfx/TerrainRenderer.h"
 #include "../gfx/DefaultTerrainRenderer.h"
 #include "../gfx/DiligentEnhancedTerrainRenderer.h"
+#include "../gfx/EnhancedTerrainData.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
 #include "../imgui/imgui.h"
 #include "../util/StriCompare.h"
 #include <SDL3/SDL_mouse.h>
@@ -66,7 +69,11 @@ static void ResetTileTerrainTypes(Server& server)
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES, SCRIPTS };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES, SCRIPTS, REGIONS };
+	// regions (the timeline's named map regions, MapRegions): the one chosen, the tool (paint its
+	// cells, or pick the region under the cursor) and the kind a new one gets
+	int regionId = 0, regionTool = 0, newRegionKind = 0;
+	bool regionStroke = false;
 	// scripts: the alias chosen (the game set's DECLARE_ALIAS names, which a level's scripts
 	// find objects by), its filter, and the game set file being typed
 	int alias = -1;
@@ -79,10 +86,18 @@ struct ClientInterface::EditorState {
 	enum ZoneTool { ADD_TILES, REMOVE_TILES };
 	int zoneTool = ADD_TILES, zoneType = 0;
 	// water: a click adds a lake (its point, the water level that much above the ground there) or
-	// removes the lake whose water is under the cursor
-	enum WaterTool { ADD_LAKE, REMOVE_LAKE };
+	// removes the lake whose water is under the cursor; or the water design's tools (the
+	// surface brush, the waterways, the placed waterfalls)
+	enum WaterTool { ADD_LAKE, REMOVE_LAKE, PAINT_SURFACE, DRAW_WATERWAY, PLACE_WATERFALL };
 	int waterTool = ADD_LAKE;
 	float waterDepth = 3.0f; // metres
+	// the surface brush: 0 found automatically, 1 river, 2 lake, 3 sea of surfaceRegion
+	int surfaceKind = 3, surfaceRegion = 0;
+	// the waterway points are added to (-1: a new one), a waterfall's first point
+	int waterway = -1;
+	bool fallStarted = false;
+	Vector3 fallFrom;
+	bool designStroke = false;
 	enum Tool { RAISE, LOWER, SMOOTH, FLATTEN };
 	int mode = TERRAIN, tool = RAISE;
 	// texture painting: the texture (group and id), its turn (0-3, quarter turns) and flips;
@@ -156,6 +171,12 @@ struct ClientInterface::EditorState {
 		bool hasLakes = false;
 		std::vector<Vector3> lakes;
 		std::vector<uint8_t> lakeBits;
+		// the water design before a change (null: none)
+		bool hasDesign = false;
+		std::shared_ptr<WaterDesign> design;
+		// the map's regions before a change
+		bool hasRegions = false;
+		std::shared_ptr<MapRegions> regions;
 		std::vector<Removed> removed;
 		std::vector<Moved> moved;
 		std::vector<Props> props;
@@ -296,6 +317,156 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		}
 		ed.status = "Placed " + type->name;
 		return true;
+	}
+
+	// the timeline's regions: their cells painted into the region chosen, or the region under the
+	// cursor picked
+	if (ed.mode == EditorState::REGIONS && chronicle.regions.ready()) {
+		MapRegions& mr = chronicle.regions;
+		const float cellSize = 5.0f * MapRegions::CELL;
+		if (ed.regionTool == 1) {
+			if (overUi || !g_mousePressed[SDL_BUTTON_LEFT])
+				return false;
+			const int r = mr.cellRegion((int)std::floor(cursor.x / cellSize), (int)std::floor(cursor.z / cellSize));
+			if (r >= 0) {
+				ed.regionId = r;
+				ed.status = "Region: " + mr.regions[r].name;
+			}
+			return true;
+		}
+		const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.regionStroke || !overUi);
+		if (down && ed.regionId >= 0 && ed.regionId < (int)mr.regions.size()) {
+			if (!ed.regionStroke) {
+				ed.regionStroke = true;
+				EditorState::Undo u;
+				u.hasRegions = true;
+				u.regions = std::make_shared<MapRegions>(mr);
+				ed.pushUndo(std::move(u));
+			}
+			const int reach = (int)std::ceil(ed.radius / cellSize);
+			const int cx = (int)std::floor(cursor.x / cellSize), cz = (int)std::floor(cursor.z / cellSize);
+			for (int z = cz - reach; z <= cz + reach; z++)
+				for (int x = cx - reach; x <= cx + reach; x++)
+					if (std::hypot((x + 0.5f) * cellSize - cursor.x, (z + 0.5f) * cellSize - cursor.z) <= std::max(ed.radius, cellSize * 0.5f))
+						mr.setCell(x, z, ed.regionId);
+			return true;
+		}
+		if (ed.regionStroke) {
+			ed.regionStroke = false;
+			ed.status = "Painted into " + mr.regions[ed.regionId].name + " (save the regions to keep it)";
+		}
+		return false;
+	}
+
+	// the water design (on the client's terrain: it only changes how the water is drawn)
+	if (ed.mode == EditorState::WATER && ed.waterTool >= EditorState::PAINT_SURFACE) {
+		auto design = [&]() -> WaterDesign& {
+			if (!trn->waterDesign)
+				trn->waterDesign = std::make_shared<WaterDesign>(WaterDesign::blank(trn->width, trn->height));
+			return *trn->waterDesign;
+		};
+		auto snapshot = [&]() {
+			EditorState::Undo u;
+			u.hasDesign = true;
+			if (trn->waterDesign)
+				u.design = std::make_shared<WaterDesign>(*trn->waterDesign);
+			ed.pushUndo(std::move(u));
+		};
+		const Vector3 at(cursor.x, 0, cursor.z);
+		if (ed.waterTool == EditorState::PAINT_SURFACE) {
+			// the brush: the tiles within the radius, while the button is held; the water drawn
+			// again when it is let go
+			const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.designStroke || !overUi);
+			if (down) {
+				if (!ed.designStroke) {
+					ed.designStroke = true;
+					snapshot();
+				}
+				WaterDesign& d = design();
+				const char kinds[3] = { WaterDesign::AUTO, WaterDesign::RIVER, WaterDesign::LAKE };
+				const char c = ed.surfaceKind < 3 ? kinds[ed.surfaceKind] : (char)('A' + std::clamp(ed.surfaceRegion, 0, (int)d.seas.size() - 1));
+				const int r = (int)std::ceil(ed.radius / 5.0f);
+				const int cx = (int)std::floor(cursor.x / 5.0f) + trn->edge, cz = (int)std::floor(cursor.z / 5.0f) + trn->edge;
+				for (int z = cz - r; z <= cz + r; z++)
+					for (int x = cx - r; x <= cx + r; x++) {
+						const float wx = (x - trn->edge + 0.5f) * 5.0f, wz = (z - trn->edge + 0.5f) * 5.0f;
+						if (x >= 0 && z >= 0 && x < d.width && z < d.height && std::hypot(wx - cursor.x, wz - cursor.z) <= ed.radius)
+							d.surface[(size_t)z * d.width + x] = c;
+					}
+				return true;
+			}
+			if (ed.designStroke) {
+				ed.designStroke = false;
+				applyWaterDesign();
+				ed.status = "Painted";
+			}
+			return false;
+		}
+		if (overUi)
+			return false;
+		if (ed.waterTool == EditorState::DRAW_WATERWAY) {
+			// a left click adds a point to the waterway (a new one first), a right click takes its
+			// last point away
+			if (g_mousePressed[SDL_BUTTON_LEFT]) {
+				snapshot();
+				WaterDesign& d = design();
+				if (ed.waterway < 0 || ed.waterway >= (int)d.waterways.size()) {
+					d.waterways.emplace_back();
+					ed.waterway = (int)d.waterways.size() - 1;
+				}
+				d.waterways[ed.waterway].points.push_back(at);
+				if (d.waterways[ed.waterway].points.size() >= 2)
+					applyWaterDesign();
+				ed.status = "Waterway " + std::to_string(ed.waterway + 1) + ": " + std::to_string(d.waterways[ed.waterway].points.size()) + " points";
+				return true;
+			}
+			if (g_mousePressed[SDL_BUTTON_RIGHT] && trn->waterDesign && ed.waterway >= 0 && ed.waterway < (int)trn->waterDesign->waterways.size()) {
+				snapshot();
+				auto& pts = trn->waterDesign->waterways[ed.waterway].points;
+				if (!pts.empty())
+					pts.pop_back();
+				applyWaterDesign();
+				ed.status = "Point removed";
+				return true;
+			}
+			return false;
+		}
+		// waterfalls: two left clicks, the lip's ends; a right click removes the one nearest
+		if (g_mousePressed[SDL_BUTTON_LEFT]) {
+			if (!ed.fallStarted) {
+				ed.fallStarted = true;
+				ed.fallFrom = at;
+				ed.status = "Click where the lip ends";
+				return true;
+			}
+			ed.fallStarted = false;
+			snapshot();
+			design().waterfalls.push_back({ ed.fallFrom, at });
+			applyWaterDesign();
+			ed.status = "Waterfall placed";
+			return true;
+		}
+		if (g_mousePressed[SDL_BUTTON_RIGHT] && trn->waterDesign) {
+			ed.fallStarted = false;
+			auto& falls = trn->waterDesign->waterfalls;
+			int best = -1;
+			float bestD = 20.0f;
+			for (int i = 0; i < (int)falls.size(); i++) {
+				const float d = ((falls[i].from + falls[i].to) * 0.5f - at).len2xz();
+				if (std::sqrt(d) < bestD) {
+					bestD = std::sqrt(d);
+					best = i;
+				}
+			}
+			if (best >= 0) {
+				snapshot();
+				falls.erase(falls.begin() + best);
+				applyWaterDesign();
+				ed.status = "Waterfall removed";
+			}
+			return true;
+		}
+		return false;
 	}
 
 	// water: a click adds or removes a lake; the client's and the server's water filled again
@@ -670,6 +841,395 @@ void ClientInterface::editorZones()
 	ImGui::TextWrapped("Hold the left button to paint. A tile belongs to one zone: adding it to this zone takes it from another. Zones are saved with the map.");
 }
 
+void ClientInterface::applyWaterDesign()
+{
+	if (!terrainRenderer || !terrainRenderer->updateWater())
+		rebuildTerrainRenderer(true);
+}
+
+void ClientInterface::editorWaterDesign()
+{
+	EditorState& ed = *editor;
+	Terrain* trn = client->terrain;
+	auto design = [&]() -> WaterDesign& {
+		if (!trn->waterDesign)
+			trn->waterDesign = std::make_shared<WaterDesign>(WaterDesign::blank(trn->width, trn->height));
+		return *trn->waterDesign;
+	};
+	auto snapshot = [&]() {
+		EditorState::Undo u;
+		u.hasDesign = true;
+		if (trn->waterDesign)
+			u.design = std::make_shared<WaterDesign>(*trn->waterDesign);
+		ed.pushUndo(std::move(u));
+	};
+	WaterDesign& d = design();
+	// a widget's edit: undoable to the design as it was before the widget took the mouse (the
+	// copy taken while none had it), the water drawn again when it ends
+	static WaterDesign before;
+	if (!ImGui::IsAnyItemActive())
+		before = d;
+	auto edited = [&]() {
+		if (ImGui::IsItemActivated()) {
+			EditorState::Undo u;
+			u.hasDesign = true;
+			u.design = std::make_shared<WaterDesign>(before);
+			ed.pushUndo(std::move(u));
+		}
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			applyWaterDesign();
+	};
+	static const ImU32 regionColours[WaterDesign::MAX_SEA_REGIONS] = {
+		IM_COL32(40, 90, 230, 255), IM_COL32(230, 60, 160, 255), IM_COL32(240, 170, 30, 255), IM_COL32(150, 70, 230, 255),
+		IM_COL32(30, 200, 200, 255), IM_COL32(230, 230, 60, 255), IM_COL32(230, 90, 40, 255), IM_COL32(120, 200, 60, 255) };
+
+	if (ed.waterTool == EditorState::PAINT_SURFACE) {
+		ImGui::RadioButton("Automatic", &ed.surfaceKind, 0);
+		ImGui::SameLine();
+		ImGui::RadioButton("River", &ed.surfaceKind, 1);
+		ImGui::SameLine();
+		ImGui::RadioButton("Lake", &ed.surfaceKind, 2);
+		ImGui::SameLine();
+		ImGui::RadioButton("Sea", &ed.surfaceKind, 3);
+		ed.surfaceRegion = std::clamp(ed.surfaceRegion, 0, (int)d.seas.size() - 1);
+		if (ed.surfaceKind == 3 && ImGui::BeginCombo("Sea region", d.seas[ed.surfaceRegion].name.c_str())) {
+			for (int r = 0; r < (int)d.seas.size(); r++)
+				if (ImGui::Selectable((std::string(1, (char)('A' + r)) + ": " + d.seas[r].name + "##region" + std::to_string(r)).c_str(), r == ed.surfaceRegion))
+					ed.surfaceRegion = r;
+			ImGui::EndCombo();
+		}
+		ImGui::SliderFloat("Radius (m)", &ed.radius, 2.5f, 100.0f, "%.1f");
+		ImGui::TextWrapped("Paint what the water is: a river (flowing, with the river look), a lake (calm, small waves) or a sea of a wind region (its waves). Automatic leaves it to what the map's water looks like. Land isn't changed: only water tiles use it.");
+	}
+	else if (ed.waterTool == EditorState::DRAW_WATERWAY) {
+		if (ImGui::BeginListBox("##waterways", ImVec2(-1, 90))) {
+			for (int w = 0; w < (int)d.waterways.size(); w++) {
+				const std::string label = "Waterway " + std::to_string(w + 1) + ": " + std::to_string(d.waterways[w].points.size()) + " points";
+				if (ImGui::Selectable(label.c_str(), w == ed.waterway))
+					ed.waterway = w;
+			}
+			ImGui::EndListBox();
+		}
+		if (ImGui::Button("New waterway")) {
+			ed.waterway = -1;
+			ed.status = "Click where the waterway begins";
+		}
+		if (ed.waterway >= 0 && ed.waterway < (int)d.waterways.size()) {
+			ImGui::SameLine();
+			if (ImGui::Button("Delete waterway")) {
+				snapshot();
+				d.waterways.erase(d.waterways.begin() + ed.waterway);
+				ed.waterway = -1;
+				applyWaterDesign();
+			}
+			else {
+				ImGui::SliderFloat("Width (m)", &d.waterways[ed.waterway].width, 2.5f, 100.0f, "%.1f");
+				edited();
+			}
+		}
+		ImGui::TextWrapped("A waterway is a river's course: click its points from its source to its mouth (right click: the last point away). The water within its width flows along it, and the river's mouth is its last point.");
+	}
+	else {
+		ImGui::Checkbox("Also the waterfalls found in the map", &d.autoWaterfalls);
+		edited();
+		ImGui::Text("%zu waterfalls placed", d.waterfalls.size());
+		ImGui::TextWrapped("Click the two ends of the lip the water pours over (it follows the tile edges along the line), right click near one to remove it. It falls to the lower side: from the water above it, or a spring where there is none, into the water below or onto the ground at the foot of the slope.");
+	}
+
+	if (ImGui::CollapsingHeader("Sea regions (wind)", ImGuiTreeNodeFlags_DefaultOpen)) {
+		for (int r = 0; r < (int)d.seas.size(); r++) {
+			ImGui::PushID(r);
+			ImGui::ColorButton("##colour", ImGui::ColorConvertU32ToFloat4(regionColours[r]), ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+			ImGui::SameLine();
+			char name[64];
+			snprintf(name, sizeof(name), "%s", d.seas[r].name.c_str());
+			ImGui::SetNextItemWidth(110);
+			if (ImGui::InputText("##name", name, sizeof(name)))
+				d.seas[r].name = name;
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(70);
+			ImGui::SliderFloat("##wind", &d.seas[r].windDegrees, 0.0f, 360.0f, "%.0f deg");
+			edited();
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(60);
+			ImGui::SliderFloat("##waves", &d.seas[r].waves, 0.0f, 3.0f, "x%.1f");
+			edited();
+			if (r > 0) {
+				ImGui::SameLine();
+				if (ImGui::SmallButton("x")) {
+					snapshot();
+					// its sea tiles go to the first region, the later regions' letters move down
+					for (char& c : d.surface) {
+						const int k = WaterDesign::seaRegionOf(c);
+						if (k == r)
+							c = 'A';
+						else if (k > r)
+							c = (char)(c - 1);
+					}
+					d.seas.erase(d.seas.begin() + r);
+					applyWaterDesign();
+					ImGui::PopID();
+					break;
+				}
+			}
+			ImGui::PopID();
+		}
+		if ((int)d.seas.size() < WaterDesign::MAX_SEA_REGIONS && ImGui::Button("Add a region")) {
+			snapshot();
+			WaterDesign::SeaRegion s;
+			s.name = "Region " + std::string(1, (char)('A' + d.seas.size()));
+			d.seas.push_back(s);
+			ed.surfaceKind = 3;
+			ed.surfaceRegion = (int)d.seas.size() - 1;
+		}
+		ImGui::TextWrapped("Each region's waves run the way of its arrow (degrees from east, the map's +x, turning south, +z), their height times the slider. Paint a region's sea with the Surface tool; where regions meet, their waves blend over %d tiles. The first region is also the wind of the seas left automatic and of the lakes.", WAVE_BLEND_TILES);
+	}
+
+	// the file: <map>.water beside the map, in saved\ (also for the game's own maps)
+	const std::string rel = WaterDesign::pathFor(trn->mapFile);
+	if (ImGui::Button("Save water design")) {
+		const auto path = g_userPath / "saved" / PathFromUtf8(portablePath(rel));
+		std::error_code ec;
+		if (d.isEmpty()) {
+			std::filesystem::remove(path, ec);
+			ed.status = "Nothing designed: no water file";
+		}
+		else
+			ed.status = d.save(path) ? "Saved " + rel : "Saving " + rel + " failed";
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Clear design")) {
+		snapshot();
+		trn->waterDesign.reset();
+		applyWaterDesign();
+		ed.status = "Water design cleared (save to remove the file)";
+		return;
+	}
+	ImGui::TextDisabled("%s", rel.c_str());
+
+	// over the map: the painted tiles, the waterways with their flow, the waterfalls' lips and
+	// the regions' winds
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	auto toScreen = [&](float x, float z, bool& visible, float above = 0.4f) {
+		const Vector3 t = Vector3(x, trn->getHeight(x, z) + above, z).transformScreenCoords(client->camera.sceneMatrix);
+		visible = visible && t.z > 0.0f && t.z < 1.0f;
+		return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+	};
+	const Vector3 look = client->camera.position + client->camera.direction.normal() * 150.0f;
+	int drawn = 0;
+	const int cx = (int)(look.x / 5.0f) + trn->edge, cz = (int)(look.z / 5.0f) + trn->edge;
+	for (int z = std::max(0, cz - 70); z < std::min(d.height, cz + 70) && drawn < 20000; z++)
+		for (int x = std::max(0, cx - 70); x < std::min(d.width, cx + 70) && drawn < 20000; x++) {
+			const char c = d.at(x, z);
+			if (c == WaterDesign::AUTO)
+				continue;
+			const ImU32 col = c == WaterDesign::RIVER ? IM_COL32(60, 200, 255, 255) : c == WaterDesign::LAKE ? IM_COL32(80, 230, 120, 255) : regionColours[WaterDesign::seaRegionOf(c)];
+			const float x0 = (x - trn->edge) * 5.0f, z0 = (z - trn->edge) * 5.0f;
+			bool visible = true;
+			const ImVec2 a = toScreen(x0, z0, visible), b = toScreen(x0 + 5, z0, visible), e = toScreen(x0 + 5, z0 + 5, visible), f = toScreen(x0, z0 + 5, visible);
+			if (!visible)
+				continue;
+			dl->AddQuadFilled(a, b, e, f, (col & 0x00FFFFFF) | (60u << 24));
+			drawn++;
+		}
+	auto arrow = [&](float x, float z, float dx, float dz, float length, ImU32 col, float thickness) {
+		bool visible = true;
+		const ImVec2 a = toScreen(x, z, visible, 1.0f), b = toScreen(x + dx * length, z + dz * length, visible, 1.0f);
+		const ImVec2 l = toScreen(x + dx * length * 0.7f - dz * length * 0.18f, z + dz * length * 0.7f + dx * length * 0.18f, visible, 1.0f);
+		const ImVec2 r = toScreen(x + dx * length * 0.7f + dz * length * 0.18f, z + dz * length * 0.7f - dx * length * 0.18f, visible, 1.0f);
+		if (!visible)
+			return;
+		dl->AddLine(a, b, col, thickness);
+		dl->AddLine(b, l, col, thickness);
+		dl->AddLine(b, r, col, thickness);
+	};
+	for (int w = 0; w < (int)d.waterways.size(); w++) {
+		const auto& pts = d.waterways[w].points;
+		const ImU32 col = w == ed.waterway ? IM_COL32(255, 255, 255, 255) : IM_COL32(60, 200, 255, 230);
+		for (size_t i = 0; i < pts.size(); i++) {
+			bool visible = true;
+			const ImVec2 p = toScreen(pts[i].x, pts[i].z, visible, 1.0f);
+			if (visible)
+				dl->AddCircleFilled(p, i + 1 == pts.size() ? 6.0f : 4.0f, col);
+			if (i + 1 < pts.size()) {
+				const float sx = pts[i + 1].x - pts[i].x, sz = pts[i + 1].z - pts[i].z, len = std::hypot(sx, sz);
+				const int steps = std::max(1, (int)(len / 5.0f));
+				for (int s = 0; s < steps; s++) {
+					bool v2 = true;
+					const ImVec2 a = toScreen(pts[i].x + sx * s / steps, pts[i].z + sz * s / steps, v2, 1.0f);
+					const ImVec2 b = toScreen(pts[i].x + sx * (s + 1) / steps, pts[i].z + sz * (s + 1) / steps, v2, 1.0f);
+					if (v2)
+						dl->AddLine(a, b, col, 2.5f);
+				}
+				if (len > 1e-3f)
+					arrow(pts[i].x + sx * 0.4f, pts[i].z + sz * 0.4f, sx / len, sz / len, std::min(12.0f, len * 0.3f), col, 2.5f);
+			}
+		}
+	}
+	for (const auto& f : d.waterfalls) {
+		bool visible = true;
+		const ImVec2 a = toScreen(f.from.x, f.from.z, visible, 1.0f), b = toScreen(f.to.x, f.to.z, visible, 1.0f);
+		if (visible)
+			dl->AddLine(a, b, IM_COL32(255, 150, 40, 255), 4.0f);
+	}
+	if (ed.fallStarted) {
+		bool visible = true;
+		const ImVec2 p = toScreen(ed.fallFrom.x, ed.fallFrom.z, visible, 1.0f);
+		if (visible)
+			dl->AddCircleFilled(p, 6.0f, IM_COL32(255, 150, 40, 255));
+	}
+	// each region's wind: an arrow at the middle of its painted sea near the view (the first
+	// region's at the view's centre when it has none there)
+	for (int r = 0; r < (int)d.seas.size(); r++) {
+		double sx = 0, sz = 0;
+		int n = 0;
+		for (int z = std::max(0, cz - 70); z < std::min(d.height, cz + 70); z++)
+			for (int x = std::max(0, cx - 70); x < std::min(d.width, cx + 70); x++)
+				if (WaterDesign::seaRegionOf(d.at(x, z)) == r) {
+					sx += (x - trn->edge + 0.5) * 5.0;
+					sz += (z - trn->edge + 0.5) * 5.0;
+					n++;
+				}
+		if (!n && r > 0)
+			continue;
+		const float x = n ? (float)(sx / n) : look.x, z = n ? (float)(sz / n) : look.z;
+		const float a = d.seas[r].windDegrees * 3.14159265f / 180.0f;
+		arrow(x, z, std::cos(a), std::sin(a), 30.0f, regionColours[r], 4.0f);
+	}
+}
+
+void ClientInterface::editorRegions()
+{
+	EditorState& ed = *editor;
+	MapRegions& mr = chronicle.regions;
+	if (!mr.ready() && !mr.build(client)) {
+		ImGui::TextWrapped("The regions are worked out once the level is loaded.");
+		return;
+	}
+	// an edit through a widget: undoable to the regions as they were before it took the mouse
+	static MapRegions before;
+	if (!ImGui::IsAnyItemActive())
+		before = mr;
+	auto edited = [&]() {
+		if (ImGui::IsItemActivated()) {
+			EditorState::Undo u;
+			u.hasRegions = true;
+			u.regions = std::make_shared<MapRegions>(before);
+			ed.pushUndo(std::move(u));
+		}
+	};
+	auto snapshot = [&]() {
+		EditorState::Undo u;
+		u.hasRegions = true;
+		u.regions = std::make_shared<MapRegions>(mr);
+		ed.pushUndo(std::move(u));
+	};
+	ImGui::RadioButton("Paint cells", &ed.regionTool, 0);
+	ImGui::SameLine();
+	ImGui::RadioButton("Pick a region", &ed.regionTool, 1);
+	if (ed.regionTool == 0)
+		ImGui::SliderFloat("Radius (m)", &ed.radius, 2.5f, 150.0f, "%.1f");
+	ed.regionId = std::clamp(ed.regionId, 0, (int)mr.regions.size() - 1);
+	if (ImGui::BeginListBox("##regions", ImVec2(-1, 150))) {
+		for (int r = 0; r < (int)mr.regions.size(); r++) {
+			const auto& reg = mr.regions[r];
+			const std::string label = reg.name + " - " + MapRegions::kindName(reg.kind) + ", " + std::to_string(reg.cells) + " cells##region" + std::to_string(r);
+			if (ImGui::Selectable(label.c_str(), r == ed.regionId))
+				ed.regionId = r;
+		}
+		ImGui::EndListBox();
+	}
+	MapRegions::Region& sel = mr.regions[ed.regionId];
+	char name[96];
+	snprintf(name, sizeof(name), "%s", sel.name.c_str());
+	if (ImGui::InputText("Name", name, sizeof(name))) {
+		sel.name = name;
+		mr.edited = true;
+	}
+	edited();
+	int kind = sel.kind;
+	if (ImGui::BeginCombo("Kind", MapRegions::kindName(sel.kind))) {
+		for (int k = 0; k < MapRegions::KindCount; k++)
+			if (ImGui::Selectable(MapRegions::kindName((MapRegions::Kind)k), k == kind)) {
+				snapshot();
+				sel.kind = (MapRegions::Kind)k;
+				mr.edited = true;
+			}
+		ImGui::EndCombo();
+	}
+	if (ImGui::Button("Delete region") && mr.regions.size() > 1) {
+		snapshot();
+		const std::string gone = sel.name;
+		mr.removeRegion(ed.regionId);
+		ed.regionId = std::min(ed.regionId, (int)mr.regions.size() - 1);
+		ed.status = gone + " deleted: its cells went to the region beside it";
+	}
+	ImGui::SetNextItemWidth(110);
+	if (ImGui::BeginCombo("##newkind", MapRegions::kindName((MapRegions::Kind)ed.newRegionKind))) {
+		for (int k = 0; k < MapRegions::KindCount; k++)
+			if (ImGui::Selectable(MapRegions::kindName((MapRegions::Kind)k), k == ed.newRegionKind))
+				ed.newRegionKind = k;
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("New region")) {
+		snapshot();
+		ed.regionId = mr.addRegion((MapRegions::Kind)ed.newRegionKind);
+		ed.regionTool = 0;
+		ed.status = "New region " + mr.regions[ed.regionId].name + ": paint its cells";
+	}
+	if (ImGui::Button("Save regions")) {
+		mr.edited = true;
+		ed.status = mr.save() ? "Regions saved (kept when the map changes)" : "Saving the regions failed";
+	}
+	ImGui::TextWrapped("The timeline (F7) names its events after the region they happen in (\"Battle of Ergor\"). A region is cells of %d x %d tiles; paint cells into the chosen region, or pick one by clicking it. Saved regions are kept when the map is edited, as long as it keeps its size; Save map keeps them under the new name.", MapRegions::CELL, MapRegions::CELL);
+
+	// over the map: each cell's outline in its region's colour (the chosen one filled), and the
+	// regions' names at their centres
+	Terrain* trn = client->terrain;
+	if (!trn)
+		return;
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	auto toScreen = [&](float x, float z, bool& visible) {
+		const Vector3 t = Vector3(x, trn->getHeight(x, z) + 0.5f, z).transformScreenCoords(client->camera.sceneMatrix);
+		visible = visible && t.z > 0.0f && t.z < 1.0f;
+		return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+	};
+	auto colour = [](int r, int alpha) {
+		const uint32_t h = (uint32_t)r * 2654435761u;
+		return IM_COL32(80 + (h >> 8) % 176, 80 + (h >> 16) % 176, 80 + (h >> 24) % 176, alpha);
+	};
+	const float cs = 5.0f * MapRegions::CELL;
+	for (int cz = 0; cz < mr.cellsHigh(); cz++)
+		for (int cx = 0; cx < mr.cellsWide(); cx++) {
+			const int r = mr.cellRegion(cx, cz);
+			bool visible = true;
+			const ImVec2 a = toScreen(cx * cs, cz * cs, visible), b = toScreen((cx + 1) * cs, cz * cs, visible);
+			const ImVec2 c = toScreen((cx + 1) * cs, (cz + 1) * cs, visible), d = toScreen(cx * cs, (cz + 1) * cs, visible);
+			if (!visible)
+				continue;
+			if (r == ed.regionId)
+				dl->AddQuadFilled(a, b, c, d, colour(r, 90));
+			// the borders between regions drawn strongly, within one faintly
+			const bool east = mr.cellRegion(cx + 1, cz) != r, south = mr.cellRegion(cx, cz + 1) != r;
+			dl->AddLine(b, c, east ? IM_COL32(255, 255, 255, 220) : colour(r, 60), east ? 2.5f : 1.0f);
+			dl->AddLine(c, d, south ? IM_COL32(255, 255, 255, 220) : colour(r, 60), south ? 2.5f : 1.0f);
+		}
+	for (int r = 0; r < (int)mr.regions.size(); r++) {
+		const auto& reg = mr.regions[r];
+		if (reg.cells == 0)
+			continue;
+		bool visible = true;
+		const ImVec2 p = toScreen(reg.centre.x, reg.centre.z, visible);
+		if (!visible)
+			continue;
+		const ImVec2 size = ImGui::CalcTextSize(reg.name.c_str());
+		const ImVec2 at(p.x - size.x * 0.5f, p.y - size.y * 0.5f);
+		dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + size.x + 3, at.y + size.y + 1), r == ed.regionId ? colour(r, 230) : IM_COL32(0, 0, 0, 160), 3.0f);
+		dl->AddText(at, r == ed.regionId ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255), reg.name.c_str());
+	}
+}
+
 void ClientInterface::editorWindow()
 {
 	if (!editor)
@@ -691,9 +1251,13 @@ void ClientInterface::editorWindow()
 		ImGui::RadioButton("Zones", &ed.mode, EditorState::ZONES);
 		ImGui::SameLine();
 		ImGui::RadioButton("Scripts", &ed.mode, EditorState::SCRIPTS);
+		ImGui::SameLine();
+		ImGui::RadioButton("Regions", &ed.mode, EditorState::REGIONS);
 		ImGui::Separator();
 		if (ed.mode == EditorState::ZONES)
 			editorZones();
+		else if (ed.mode == EditorState::REGIONS)
+			editorRegions();
 		else if (ed.mode == EditorState::SCRIPTS)
 			editorScripts();
 		else if (ed.mode == EditorState::PLAYERS) {
@@ -748,10 +1312,20 @@ void ClientInterface::editorWindow()
 			ImGui::RadioButton("Add a lake", &ed.waterTool, EditorState::ADD_LAKE);
 			ImGui::SameLine();
 			ImGui::RadioButton("Remove a lake", &ed.waterTool, EditorState::REMOVE_LAKE);
-			if (ed.waterTool == EditorState::ADD_LAKE)
-				ImGui::SliderFloat("Depth (m)", &ed.waterDepth, 0.5f, 30.0f, "%.1f");
-			ImGui::Text("%zu lakes (the original game sees the first 63)", client->terrain->lakes.size());
-			ImGui::TextWrapped("A lake fills the ground around the click up to its level (the ground there plus the depth), as far as the ground stays lower. Remove takes away the lake whose water is under the cursor.");
+			ImGui::RadioButton("Surface", &ed.waterTool, EditorState::PAINT_SURFACE);
+			ImGui::SameLine();
+			ImGui::RadioButton("Waterways", &ed.waterTool, EditorState::DRAW_WATERWAY);
+			ImGui::SameLine();
+			ImGui::RadioButton("Waterfalls", &ed.waterTool, EditorState::PLACE_WATERFALL);
+			ImGui::Separator();
+			if (ed.waterTool < EditorState::PAINT_SURFACE) {
+				if (ed.waterTool == EditorState::ADD_LAKE)
+					ImGui::SliderFloat("Depth (m)", &ed.waterDepth, 0.5f, 30.0f, "%.1f");
+				ImGui::Text("%zu lakes (the original game sees the first 63)", client->terrain->lakes.size());
+				ImGui::TextWrapped("A lake fills the ground around the click up to its level (the ground there plus the depth), as far as the ground stays lower. Remove takes away the lake whose water is under the cursor.");
+			}
+			else
+				editorWaterDesign();
 		}
 		else if (ed.mode == EditorState::TEXTURES && client->terrain) {
 			// the map's texture database: a group, then one of its textures
@@ -1470,6 +2044,15 @@ void ClientInterface::editorStep(bool redoing)
 		back.lakes = client->terrain->lakes;
 		back.lakeBits = client->terrain->lakeExtraBits;
 	}
+	else if (u.hasRegions) {
+		back.hasRegions = true;
+		back.regions = std::make_shared<MapRegions>(chronicle.regions);
+	}
+	else if (u.hasDesign && client->terrain) {
+		back.hasDesign = true;
+		if (client->terrain->waterDesign)
+			back.design = std::make_shared<WaterDesign>(*client->terrain->waterDesign);
+	}
 	else if (!u.tiles.empty() && client->terrain) {
 		Terrain* trn = client->terrain;
 		for (int i = 0; i < trn->width * trn->height; i++)
@@ -1549,6 +2132,15 @@ void ClientInterface::editorStep(bool redoing)
 	else if (u.hasLakes && client->terrain) {
 		setLakes(u.lakes, u.lakeBits);
 		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a lake change";
+	}
+	else if (u.hasRegions && u.regions) {
+		chronicle.regions = *u.regions;
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a region change";
+	}
+	else if (u.hasDesign && client->terrain) {
+		client->terrain->waterDesign = u.design ? std::make_shared<WaterDesign>(*u.design) : nullptr;
+		applyWaterDesign();
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a water design change";
 	}
 	else if (!u.tiles.empty() && client->terrain && u.tiles.size() == (size_t)client->terrain->width * client->terrain->height) {
 		Terrain* trn = client->terrain;
@@ -1687,6 +2279,15 @@ bool ClientInterface::editorSave(const std::string& name)
 					ok = server.terrain->writeMapExtras(extras);
 				else
 					std::filesystem::remove(extras, rmEc);
+				// the water design (the client's, which the editor changes) as Maps\<name>\<name>.water
+				const auto water = saved / PathFromUtf8(portablePath(WaterDesign::pathFor(bcm)));
+				if (ok && client->terrain && client->terrain->waterDesign && !client->terrain->waterDesign->isEmpty())
+					ok = client->terrain->waterDesign->save(water);
+				else
+					std::filesystem::remove(water, rmEc);
+				// regions edited by hand: under the new map's name too
+				if (ok && chronicle.regions.ready() && chronicle.regions.edited)
+					chronicle.regions.save(name);
 				if (ok && FileExists(oldLttt.c_str())) {
 					char* data; int size;
 					LoadFile(oldLttt.c_str(), &data, &size);
@@ -1781,7 +2382,7 @@ void ClientInterface::editorOpenMode(const std::string& mode)
 		editor = std::make_shared<EditorState>();
 	static const std::pair<const char*, int> modes[] = { { "terrain", EditorState::TERRAIN }, { "textures", EditorState::TEXTURES },
 		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS }, { "zones", EditorState::ZONES },
-		{ "scripts", EditorState::SCRIPTS } };
+		{ "scripts", EditorState::SCRIPTS }, { "regions", EditorState::REGIONS } };
 	for (const auto& [name, m] : modes)
 		if (mode == name)
 			editor->mode = m;
@@ -1797,6 +2398,104 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 	if (!client->getLevel() || !client->terrain)
 		return;
 	frame++;
+	// "editorWaterTest": [x, z] as well: the water design's tools around that point (on a lake):
+	// its water painted as a second sea region, a waterway across it, a waterfall placed on the
+	// first slope east of it, and the design saved
+	const nlohmann::json bm = g_settings.value("benchmark", nlohmann::json::object());
+	// "editorRegionTest": [x, z]: the region there renamed "Test Hollow" and grown east, a new
+	// forest region painted west of it, the regions saved
+	if (bm.contains("editorRegionTest")) {
+		MapRegions& mr = chronicle.regions;
+		const Vector3 at(bm["editorRegionTest"][0].get<float>(), 0, bm["editorRegionTest"][1].get<float>());
+		ed.mode = EditorState::REGIONS;
+		if (frame == 30) {
+			if (!mr.ready())
+				mr.build(client);
+			ed.regionTool = 1;
+			cursor = at;
+			g_mousePressed[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 32 && mr.ready()) {
+			printf("EDITORTEST region at (%.0f, %.0f): %s, %d cells\n", at.x, at.z, mr.regions[ed.regionId].name.c_str(), mr.regions[ed.regionId].cells);
+			mr.regions[ed.regionId].name = "Test Hollow";
+			mr.edited = true;
+			ed.regionTool = 0;
+			ed.radius = 60.0f;
+		}
+		if (frame >= 33 && frame < 38) {
+			cursor = at + Vector3(80, 0, 0);
+			g_mouseDown[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 40) {
+			ed.regionId = mr.addRegion(MapRegions::Forest);
+			ed.radius = 40.0f;
+		}
+		if (frame >= 41 && frame < 46) {
+			cursor = at - Vector3(80, 0, 0);
+			g_mouseDown[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 50) {
+			const bool saved = mr.save();
+			const MapRegions::Region* r = mr.at(at + Vector3(80, 0, 0));
+			const MapRegions::Region* w = mr.at(at - Vector3(80, 0, 0));
+			printf("EDITORTEST regions: %zu; east of the point %s, west %s (%d cells); saved %s\n", mr.regions.size(),
+				r ? r->name.c_str() : "-", w ? w->name.c_str() : "-", w ? w->cells : 0, saved ? "yes" : "no");
+		}
+		return;
+	}
+	if (bm.contains("editorWaterTest")) {
+		Terrain* trn = client->terrain;
+		const Vector3 centre(bm["editorWaterTest"][0].get<float>(), 0, bm["editorWaterTest"][1].get<float>());
+		ed.mode = EditorState::WATER;
+		if (frame == 30) {
+			ed.waterTool = EditorState::PAINT_SURFACE;
+			if (!trn->waterDesign)
+				trn->waterDesign = std::make_shared<WaterDesign>(WaterDesign::blank(trn->width, trn->height));
+			trn->waterDesign->seas.push_back({ "Lake region", 270.0f, 2.0f });
+			ed.surfaceKind = 3;
+			ed.surfaceRegion = 1;
+			ed.radius = 60.0f;
+		}
+		if (frame >= 30 && frame < 40) {
+			cursor = centre;
+			g_mouseDown[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 41)
+			ed.waterTool = EditorState::DRAW_WATERWAY;
+		for (int i = 0; i < 3; i++)
+			if (frame == 45 + i * 5) {
+				cursor = centre + Vector3(-20.0f + 20 * i, 0, -90.0f + 90 * i);
+				g_mousePressed[SDL_BUTTON_LEFT] = true;
+			}
+		if (frame == 70) {
+			ed.waterTool = EditorState::PLACE_WATERFALL;
+			// east of the centre: the first ground 6 units above the water there
+			const TerrainTile* c = trn->getTile((int)(centre.x / 5) + trn->edge, (int)(centre.z / 5) + trn->edge);
+			const float level = c && c->fullOfWater ? c->waterLevel : trn->getHeight(centre.x, centre.z);
+			target = centre;
+			for (float d = 0; d < 400; d += 5)
+				if (trn->getHeight(centre.x + d, centre.z) > level + 6.0f) {
+					target = centre + Vector3(d, 0, 0);
+					break;
+				}
+			printf("EDITORTEST waterfall lip at (%.0f, %.0f), %.1f above the water\n", target.x, target.z, trn->getHeight(target.x, target.z) - level);
+		}
+		if (frame == 72 || frame == 76) {
+			cursor = target + Vector3(0, 0, frame == 72 ? -12.0f : 12.0f);
+			g_mousePressed[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 90 && trn->waterDesign) {
+			const WaterDesign& d = *trn->waterDesign;
+			const auto path = g_userPath / "saved" / PathFromUtf8(portablePath(WaterDesign::pathFor(trn->mapFile)));
+			const bool saved = d.save(path);
+			size_t painted = std::count_if(d.surface.begin(), d.surface.end(), [](char ch) { return ch != WaterDesign::AUTO; });
+			printf("EDITORTEST water design: %zu tiles painted, %zu regions, %zu waterways (%zu points), %zu waterfalls; saved %s: %s\n",
+				painted, d.seas.size(), d.waterways.size(), d.waterways.empty() ? (size_t)0 : d.waterways[0].points.size(), d.waterfalls.size(),
+				PathToUtf8(path).c_str(), saved ? "yes" : "no");
+			ed.waterTool = EditorState::DRAW_WATERWAY;
+		}
+		return;
+	}
 	if (frame == 30) {
 		// 60 m ahead of the camera, on the ground
 		const Vector3 ahead = Vector3(client->camera.direction.x, 0, client->camera.direction.z).normal();

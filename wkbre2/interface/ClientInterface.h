@@ -114,6 +114,12 @@ private:
 	std::vector<std::string> editorCheck();
 	void editorWindow();
 	void editorZones();
+	// the Water mode's water design (WaterDesign.h): its panel, and the renderers' water made
+	// again from it
+	void editorWaterDesign();
+	void applyWaterDesign();
+	// the Regions mode: the timeline's named map regions (chronicle.regions)
+	void editorRegions();
 	void editorBlankMap();
 	// a new map of another size (playable tiles), saved under the name and opened in the editor
 	bool editorNewMap(const std::string& name, int width, int height);

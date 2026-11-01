@@ -122,6 +122,21 @@ void Terrain::readFromFile(const char* filename)
 		readSNR(filename);
 	// the map's file (its regions are kept by its name: MapRegions)
 	filePath = PathFromUtf8(filename).wstring();
+	mapFile = filename;
+	printf("Map: %s (%d x %d tiles)\n", filename, width, height);
+	// the map's water design, if it has one
+	waterDesign.reset();
+	auto design = std::make_shared<WaterDesign>();
+	std::string error;
+	if (!design->load(mapFile, error))
+		printf("WARNING: %s\n", error.c_str());
+	else if (design->width == width && design->height == height) {
+		waterDesign = design;
+		printf("Water design: %s (%zu sea regions, %zu waterways, %zu waterfalls)\n", WaterDesign::pathFor(mapFile).c_str(),
+			design->seas.size(), design->waterways.size(), design->waterfalls.size());
+	}
+	else if (design->width)
+		printf("WARNING: %s is for a map of %d x %d tiles, not %d x %d; not used\n", WaterDesign::pathFor(mapFile).c_str(), design->width, design->height, width, height);
 	// the lowest vertex, as WKB.exe's terrain keeps it (0x60DD50, +0x30): sight grows with the
 	// height above it
 	float lowest = std::numeric_limits<float>::max();

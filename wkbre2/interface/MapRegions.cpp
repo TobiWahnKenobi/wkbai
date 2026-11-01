@@ -7,6 +7,7 @@
 #include "../tags.h"
 #include "../file.h"
 #include "../gameset/gameset.h"
+#include "../gfx/EnhancedTerrainData.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cstdio>
@@ -166,10 +167,10 @@ bool MapRegions::build(Client* client)
 		}
 
 	const std::string name = PathToUtf8(std::filesystem::path(trn->filePath).stem());
-	const std::filesystem::path file = g_userPath / "saved" / "Regions" / PathFromUtf8(name + ".json");
+	const std::filesystem::path file = fileFor(name);
 	mapName = name;
 	hash = h;
-	if (load(file))
+	if (load(file, (tw + CELL - 1) / CELL, (th + CELL - 1) / CELL))
 		return true;
 
 	// the cells' kinds: the most tiles of a kind (forest and water count twice: a wood or a lake
@@ -268,33 +269,23 @@ bool MapRegions::build(Client* client)
 		reg.centre += Vector3(((c % width) + 0.5f) * CELL * 5.0f, 0.0f, ((c / width) + 0.5f) * CELL * 5.0f);
 		reg.cells++;
 	}
-	// wide water is a sea, as the renderer draws it (its sea look where the water is 6 tiles or
-	// more from the shore): each water tile's distance to land, then the regions holding such
-	std::vector<int> toLand((size_t)tw * th, 1 << 20);
-	std::vector<int> queue;
-	for (int t = 0; t < tw * th; t++)
-		if (kinds[t] != Water) {
-			toLand[t] = 0;
-			queue.push_back(t);
-		}
-	for (size_t q = 0; q < queue.size(); q++) {
-		const int t = queue[q], x = t % tw, z = t / tw;
-		const int nb[4][2] = { { x - 1, z }, { x + 1, z }, { x, z - 1 }, { x, z + 1 } };
-		for (const auto& n : nb)
-			if (n[0] >= 0 && n[1] >= 0 && n[0] < tw && n[1] < th) {
-				const int j = n[1] * tw + n[0];
-				if (toLand[j] > toLand[t] + 1) {
-					toLand[j] = toLand[t] + 1;
-					queue.push_back(j);
-				}
-			}
+	// a sea where the renderer draws one: open water reaching the map's edge, or painted as sea
+	// by the map's water design (EnhancedTerrainData's BuildWaterFlow); lakes stay water
+	std::vector<uint8_t> sea;
+	BuildWaterFlow(trn, &sea);
+	std::vector<int> seaTiles(regions.size(), 0), waterTiles(regions.size(), 0);
+	for (int t = 0; t < tw * th; t++) {
+		if (kinds[t] != Water)
+			continue;
+		const int c = ((t / tw) / CELL) * width + (t % tw) / CELL;
+		const size_t wt = (size_t)(t / tw + trn->edge) * trn->width + (t % tw + trn->edge);
+		waterTiles[cells[c]]++;
+		if (wt < sea.size() && sea[wt])
+			seaTiles[cells[c]]++;
 	}
-	for (int t = 0; t < tw * th; t++)
-		if (toLand[t] >= 6) {
-			const int c = ((t / tw) / CELL) * width + (t % tw) / CELL;
-			if (regions[cells[c]].kind == Water)
-				regions[cells[c]].kind = Sea;
-		}
+	for (size_t r = 0; r < regions.size(); r++)
+		if (regions[r].kind == Water && seaTiles[r] * 2 > waterTiles[r])
+			regions[r].kind = Sea;
 	std::set<std::string> used;
 	for (size_t r = 0; r < regions.size(); r++) {
 		Region& reg = regions[r];
@@ -316,14 +307,24 @@ bool MapRegions::build(Client* client)
 	return true;
 }
 
-bool MapRegions::load(const std::filesystem::path& file)
+std::filesystem::path MapRegions::fileFor(const std::string& mapName)
+{
+	return g_userPath / "saved" / "Regions" / PathFromUtf8(mapName + ".json");
+}
+
+bool MapRegions::load(const std::filesystem::path& file, int expectedWidth, int expectedHeight)
 {
 	std::ifstream in(file);
 	if (!in)
 		return false;
 	const nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
-	if (j.is_discarded() || j.value("hash", std::string()) != std::to_string(hash) || j.value("cell", 0) != CELL)
+	if (j.is_discarded() || j.value("cell", 0) != CELL)
 		return false;
+	// worked out for this terrain, or edited by hand for a map of this size
+	const bool handMade = j.value("edited", false) && j.value("width", 0) == expectedWidth && j.value("height", 0) == expectedHeight;
+	if (j.value("hash", std::string()) != std::to_string(hash) && !handMade)
+		return false;
+	edited = j.value("edited", false);
 	width = j.value("width", 0);
 	height = j.value("height", 0);
 	cells = j.value("cells", std::vector<int>());
@@ -352,6 +353,7 @@ void MapRegions::save(const std::filesystem::path& file) const
 	j["width"] = width;
 	j["height"] = height;
 	j["cells"] = cells;
+	j["edited"] = edited;
 	nlohmann::json list = nlohmann::json::array();
 	for (const Region& r : regions)
 		list.push_back({ { "kind", (int)r.kind }, { "kindName", kindName(r.kind) }, { "name", r.name }, { "x", r.centre.x }, { "z", r.centre.z }, { "cells", r.cells } });
@@ -359,4 +361,91 @@ void MapRegions::save(const std::filesystem::path& file) const
 	std::error_code ec;
 	std::filesystem::create_directories(file.parent_path(), ec);
 	std::ofstream(file) << j.dump(1);
+}
+
+bool MapRegions::save(const std::string& asMap) const
+{
+	if (cells.empty())
+		return false;
+	const std::filesystem::path file = fileFor(asMap.empty() ? mapName : asMap);
+	save(file);
+	return std::filesystem::exists(file);
+}
+
+void MapRegions::updateCentres()
+{
+	for (Region& r : regions) {
+		r.centre = Vector3(0, 0, 0);
+		r.cells = 0;
+	}
+	for (int c = 0; c < width * height; c++)
+		if (cells[c] >= 0 && cells[c] < (int)regions.size()) {
+			Region& reg = regions[cells[c]];
+			reg.centre += Vector3(((c % width) + 0.5f) * CELL * 5.0f, 0.0f, ((c / width) + 0.5f) * CELL * 5.0f);
+			reg.cells++;
+		}
+	for (Region& r : regions)
+		r.centre = r.centre * (1.0f / (float)std::max(r.cells, 1));
+}
+
+void MapRegions::setCell(int cx, int cz, int region)
+{
+	if (cx < 0 || cz < 0 || cx >= width || cz >= height || region < 0 || region >= (int)regions.size() || cells[cz * width + cx] == region)
+		return;
+	cells[cz * width + cx] = region;
+	edited = true;
+	updateCentres();
+}
+
+std::string MapRegions::nextName(Kind kind) const
+{
+	std::set<std::string> used;
+	for (const Region& r : regions)
+		used.insert(r.name);
+	for (const char* n : g_names[kind])
+		if (!used.count(n))
+			return n;
+	for (int i = 2; ; i++) {
+		const std::string n = std::string(g_names[kind][0]) + " " + std::to_string(i);
+		if (!used.count(n))
+			return n;
+	}
+}
+
+int MapRegions::addRegion(Kind kind)
+{
+	Region r;
+	r.kind = kind;
+	r.name = nextName(kind);
+	regions.push_back(r);
+	edited = true;
+	return (int)regions.size() - 1;
+}
+
+void MapRegions::removeRegion(int region)
+{
+	if (region < 0 || region >= (int)regions.size() || regions.size() <= 1)
+		return;
+	// its cells to the region it borders most (else the first other one)
+	std::map<int, int> border;
+	for (int c = 0; c < width * height; c++) {
+		if (cells[c] != region)
+			continue;
+		const int cx = c % width, cz = c / width;
+		const int nb[4][2] = { { cx - 1, cz }, { cx + 1, cz }, { cx, cz - 1 }, { cx, cz + 1 } };
+		for (const auto& n : nb)
+			if (n[0] >= 0 && n[1] >= 0 && n[0] < width && n[1] < height && cells[n[1] * width + n[0]] != region)
+				border[cells[n[1] * width + n[0]]]++;
+	}
+	const int into = border.empty() ? (region == 0 ? 1 : 0)
+		: std::max_element(border.begin(), border.end(), [](const auto& a, const auto& b) { return a.second < b.second; })->first;
+	for (int& c : cells) {
+		if (c == region)
+			c = into;
+		if (c > region)
+			c--;
+	}
+	regions.erase(regions.begin() + region);
+	edited = true;
+	updateCentres();
 }

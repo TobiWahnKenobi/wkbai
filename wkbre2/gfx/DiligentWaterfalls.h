@@ -36,14 +36,20 @@ struct Waterfall {
 	int edges = 0;               // its length in tile edges (5 units each), along +x or +z
 	std::vector<float> top;      // the upper water's level at each of the edges + 1 corners
 	std::vector<float> lip;      // the ground at each corner (the rim the water pours over)
-	float bottom = 0;            // the lower water's level
+	float bottom = 0;            // the lower water's level (or the ground's at its foot)
 	float reach = 0;             // how far from the edge the lower water starts (world units)
+	bool intoWater = true;       // false: a placed fall onto dry ground (no foam ring there)
 };
 
+// The falls found (unless the map's water design turns that off) and those its design places
+// (WaterDesign::waterfalls: a lip along the tile edges, falling to its lower side, from the
+// water above it or, where there is none, a spring at the lip; into the water below within 10
+// tiles, else onto the ground where it stops dropping steeply)
 std::vector<Waterfall> FindWaterfalls(const Terrain* terrain);
 
 // The waterfalls drawn after the water (DiligentEnhancedTerrainRenderer), by
-// RenderSettings::waterQuality: none on Off and Original; Low a falling sheet of streaked water
+// RenderSettings::waterfalls (its own setting; the refraction needs the water's scene copy, from
+// the water's Low): none when off; Low a falling sheet of streaked water
 // with foam at its foot, and the cascades; Medium also a foam patch on the lower water and a
 // little mist; High the sheet refracting what is behind it, tearing into strands, finer
 // streaks, more mist and some spray; Ultra the finest noise, the sheet swaying, the foam ringed
