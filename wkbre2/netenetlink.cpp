@@ -21,3 +21,10 @@ void NetEnetLink::send(const NetPacket & packet) {
 	ENetPacket *epacket = enet_packet_create(packet.data.c_str(), packet.data.size(), ENET_PACKET_FLAG_RELIABLE);
 	enet_peer_send((ENetPeer*)peer, 0, epacket);
 }
+
+void NetEnetLink::disconnect(bool afterSending) {
+	if (afterSending)
+		enet_peer_disconnect_later((ENetPeer*)peer, 0);
+	else
+		enet_peer_disconnect((ENetPeer*)peer, 0);
+}

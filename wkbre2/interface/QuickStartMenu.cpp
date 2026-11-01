@@ -18,7 +18,8 @@
 #include "ServerDebugger.h"
 #include "../SoundPlayer.h"
 #include "../netenetlink.h"
-#include <enet/enet.h>
+#include "../matchmaking/Matchmaking.h"
+#include "../matchmaking/EnetTransport.h"
 
 #ifdef HAS_DISCORD
 #include <discord_rpc.h>
@@ -100,6 +101,7 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 
 	initDiscordRPC();
 	updateDiscordRPC("In menu", nullptr);
+	Matchmaking::get().init();
 
 	// test runs: "benchmark": { ..., "replay": "<recording>" } plays a recording (saved\Recordings)
 	const std::string benchReplay = BenchmarkEnabled() ? g_settings.value("benchmark", nlohmann::json::object()).value("replay", std::string()) : std::string();
@@ -123,6 +125,8 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 
 QuickStartMenu::~QuickStartMenu()
 {
+	netDeinit();
+	Matchmaking::get().shutdown();
 	closeDiscordRPC();
 }
 
@@ -272,13 +276,28 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 		joinPassword = request.arg;
 	else if (request.action == "stop_hosting")
 		hosting = false;
+	else if (request.action == "host_offer") {
+		// "nakama,eos": the services the game is offered on besides the local network
+		std::set<std::string>& hostOffer = Matchmaking::get().offerOn;
+		hostOffer.clear();
+		size_t start = 0;
+		while (start < request.arg.size()) {
+			size_t end = request.arg.find(',', start);
+			if (end == std::string::npos)
+				end = request.arg.size();
+			if (end > start)
+				hostOffer.insert(request.arg.substr(start, end - start));
+			start = end + 1;
+		}
+		listingTime = 0; // offered (or withdrawn) at once
+	}
 	else if (request.action == "kick_guest") {
 		// a guest by its lobby id: disconnected (it sees its lobby lost)
 		const int id = atoi(request.arg.c_str());
 		for (const auto& [link, guestId] : guestIds)
 			if (guestId == id) {
 				printf("Lobby: guest %d removed\n", id);
-				enet_peer_disconnect(((NetEnetLink*)link)->peer, 0);
+				link->disconnect(false);
 			}
 	}
 	else if (request.action == "campaign_play") {
@@ -311,7 +330,22 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	}
 	else if (request.action == "join") {
 		joinTarget = request.arg;
+		joinListing.reset();
 		modeChosen = MODE_MULTIPLAYER_JOIN;
+	}
+	else if (request.action == "join_listing") {
+		// "<service>\t<listing id>": a game from the list
+		const size_t tab = request.arg.find('\t');
+		MatchmakingService* service = Matchmaking::get().find(request.arg.substr(0, tab));
+		if (service && tab != std::string::npos)
+			for (const GameListing& l : service->listings())
+				if (l.id == request.arg.substr(tab + 1)) {
+					joinListing = std::make_unique<GameListing>(l);
+					joinTarget = l.addresses.empty() ? std::string() : l.addresses[0];
+					modeChosen = MODE_MULTIPLAYER_JOIN;
+				}
+		if (!joinListing)
+			printf("Matchmaking: the game %s isn't listed any more\n", request.arg.c_str());
 	}
 	else if (request.action == "chat") {
 		if (!request.arg.empty())
@@ -410,6 +444,7 @@ void QuickStartMenu::draw()
 
 	netHandle();
 	server->tick();
+	Matchmaking::get().tick();
 	runDiscordCallbacks();
 }
 
@@ -426,21 +461,19 @@ void QuickStartMenu::launchGame()
 
 	if (modeChosen == MODE_MULTIPLAYER_JOIN) {
 		updateDiscordRPC("Multiplayer", "?");
-		enet_initialize();
-		ENetHost* eclient = enet_host_create(nullptr, 1, 2, 0, 0);
-		// "address[:port]"
-		std::string host = joinTarget.empty() ? std::string("localhost") : joinTarget;
-		ENetAddress address;
-		address.port = 1234;
-		if (const size_t colon = host.rfind(':'); colon != std::string::npos) {
-			address.port = (uint16_t)atoi(host.c_str() + colon + 1);
-			host.resize(colon);
+		// a game from the list: its service connects (ENet to an address it hands out, or its
+		// own transport); else ENet to the address typed in ("address[:port]")
+		std::unique_ptr<GuestConnection> connection;
+		const std::string bind = g_settings.value("hostBind", std::string());
+		if (joinListing) {
+			if (MatchmakingService* service = Matchmaking::get().find(joinListing->service))
+				connection = service->connect(*joinListing);
+			printf("Joining %s's game through %s\n", joinListing->hostName.c_str(), joinListing->service.c_str());
 		}
-		const bool resolved = enet_address_set_host(&address, host.c_str()) == 0;
-		if (resolved)
-			enet_host_connect(eclient, &address, 2, 0);
-		printf("Joining %s port %u%s\n", host.c_str(), address.port, resolved ? "" : ": address not found");
-		std::string status = resolved ? "connecting" : "lost";
+		else
+			connection = std::make_unique<EnetGuestConnection>(std::vector<std::string>{ joinTarget.empty() ? std::string("localhost") : joinTarget }, bind);
+		joinListing.reset();
+		std::string status = connection ? "connecting" : "lost";
 
 		ClientInterface cliui(client, gfx);
 		client->attachInterface(&cliui);
@@ -453,15 +486,11 @@ void QuickStartMenu::launchGame()
 		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
 
-			ENetEvent event;
-			while (enet_host_service(eclient, &event, 0) > 0) {
-				switch (event.type) {
-				case ENET_EVENT_TYPE_CONNECT: {
-					printf("connection\n");
-					NetEnetLink* link = new NetEnetLink(eclient, event.peer);
-					client->serverLink = link;
-					enet_peer_timeout(event.peer, 32, 20000, 60000);
-					event.peer->data = link;
+			Matchmaking::get().tick();
+			for (GuestConnection::Event e; connection && (e = connection->poll()) != GuestConnection::NONE;) {
+				if (e == GuestConnection::CONNECTED) {
+					printf("Connected (%s)\n", connection->describe().c_str());
+					client->serverLink = connection->link();
 					client->sendModManifest();
 					client->sendLobbyHello(playerName(), joinPassword);
 					status = "connected";
@@ -471,21 +500,11 @@ void QuickStartMenu::launchGame()
 					// { ..., "requests": ["slot 3", "ready 1"] } asks the host's lobby for these
 					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json::object()).value("requests", nlohmann::json::array()))
 						client->sendLobbyRequest(r.get<std::string>());
-					break;
 				}
-				case ENET_EVENT_TYPE_DISCONNECT: {
+				else {
 					printf("disconnected\n");
 					client->serverLink = nullptr;
 					status = "lost";
-					break;
-				}
-				case ENET_EVENT_TYPE_RECEIVE: {
-					//printf("message: %zu\n", event.packet->dataLength);
-					NetEnetLink* link = (NetEnetLink*)event.peer->data;
-					assert(link == client->serverLink);
-					link->packets.push(event.packet);
-					break;
-				}
 				}
 			}
 
@@ -584,20 +603,10 @@ void QuickStartMenu::launchGame()
 			leaveArg = cliui.leaveArg;
 		}
 		// the host is told at once (else it waits for the timeout before an AI takes over)
-		if (NetEnetLink* link = dynamic_cast<NetEnetLink*>(client->serverLink)) {
-			enet_peer_disconnect(link->peer, 0);
-			ENetEvent event;
-			const uint64_t until = SDL_GetTicks() + 1000;
-			bool gone = false;
-			while (!gone && SDL_GetTicks() < until && enet_host_service(eclient, &event, 50) >= 0)
-				if (event.type == ENET_EVENT_TYPE_DISCONNECT)
-					gone = true;
-				else if (event.type == ENET_EVENT_TYPE_RECEIVE)
-					enet_packet_destroy(event.packet);
-			client->serverLink = nullptr;
-		}
-		enet_host_destroy(eclient);
-		enet_deinitialize();
+		if (connection)
+			connection->close();
+		client->serverLink = nullptr;
+		connection.reset();
 		// the host's mods were for that game only
 		if (HasSessionMods()) {
 			ClearSessionMods();
@@ -750,6 +759,8 @@ void QuickStartMenu::launchGame()
 		client->attachInterface(&cliui);
 		ServerDebugger srvdbg(server);
 		bool onServerUi = false;
+		gameRunning = modeChosen == MODE_MULTIPLAYER_HOST;
+		listingTime = 0;
 
 		while (!g_windowQuit && !cliui.wantsToLeave()) {
 			// Kingmaker campaign: the province is won (CONQUER_LEVEL)
@@ -779,6 +790,7 @@ void QuickStartMenu::launchGame()
 			joinRunningGame();
 			if (!onServerUi)
 				srvMutex.unlock();
+			Matchmaking::get().tick();
 			if (g_keyPressed[SDL_SCANCODE_F1]) {
 				onServerUi = !onServerUi;
 				if (onServerUi)
@@ -806,6 +818,7 @@ void QuickStartMenu::launchGame()
 
 		stopServer = true;
 		srvThread.join();
+		gameRunning = false;
 		server->stopRecording();
 		server->replay.reset();
 		leaveAction = cliui.leaveAction;
@@ -870,7 +883,7 @@ std::string QuickStartMenu::playerName() const
 	return g_settings.value("playerName", std::string("Player"));
 }
 
-void QuickStartMenu::sendGameSetFiles(NetEnetLink* link)
+void QuickStartMenu::sendGameSetFiles(NetLink* link)
 {
 	const char* dir = "Warrior Kings Game Set\\AI Generals";
 	std::vector<std::pair<std::string, std::string>> files;
@@ -915,11 +928,11 @@ void QuickStartMenu::updateLobby()
 		return;
 	}
 	std::vector<FrontEnd::Guest> list;
-	for (NetEnetLink* link : guests) {
+	for (NetLink* link : guests) {
 		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
 			ci != server->clientLinks.end() && server->clientInfos[ci - server->clientLinks.begin()].refused) {
 			if (refusedSent.insert(link).second)
-				enet_peer_disconnect_later(link->peer, 0);
+				link->disconnect(true);
 			continue;
 		}
 		auto [it, isNew] = guestIds.try_emplace(link, nextGuestId);
@@ -938,7 +951,7 @@ void QuickStartMenu::updateLobby()
 	for (auto it = guestIds.begin(); it != guestIds.end();)
 		it = (std::find(guests.begin(), guests.end(), it->first) == guests.end()) ? guestIds.erase(it) : std::next(it);
 	// a guest that said hello gets the host's AI General files, so that its game set is the same
-	for (NetEnetLink* link : guests)
+	for (NetLink* link : guests)
 		if (!generalsSent.count(link))
 			if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
 				ci != server->clientLinks.end() && !server->clientInfos[ci - server->clientLinks.begin()].name.empty()) {
@@ -962,8 +975,8 @@ void QuickStartMenu::updateLobby()
 			msg.writeUint8((uint8_t)i);
 			msg.writeUint8((uint8_t)parts);
 			msg.writeStringZ(lobbyText.substr(i * PART, PART));
-			for (NetEnetLink* link : guests)
-				static_cast<NetLink*>(link)->send(msg);
+			for (NetLink* link : guests)
+				link->send(msg);
 		}
 	}
 }
@@ -977,6 +990,37 @@ void QuickStartMenu::lobbyTest()
 	const nlohmann::json test = g_settings.value("lobbyTest", nlohmann::json());
 	if (done || !test.is_object() || modeChosen != MODE_UNDEFINED)
 		return;
+	// { "find": "<service>", "findOnly": bool }: looks for games (every second) and joins the
+	// first that service lists; every listing is logged ("MATCHMAKING listing ...")
+	if (test.contains("find")) {
+		static uint64_t last = 0;
+		static std::set<std::string> logged;
+		const uint64_t now = SDL_GetTicks();
+		if (now - last < 1000)
+			return;
+		last = now;
+		Matchmaking::get().refresh();
+		const std::string want = test.value("find", std::string());
+		const std::string mine = ModManifest();
+		for (const auto& s : Matchmaking::get().services())
+			for (const GameListing& l : s->listings()) {
+				char line[1024];
+				snprintf(line, sizeof(line), "MATCHMAKING listing %s: \"%s\" host \"%s\" map \"%s\" players %d/%d spectators %d/%d password %d running %d version %s mods %s addresses %zu",
+					s->id().c_str(), l.name.c_str(), l.hostName.c_str(), l.map.c_str(), l.players, l.places, l.spectators, l.maxSpectators, (int)l.password, (int)l.running,
+					l.version.c_str(), l.modManifest.empty() ? "?" : CompareModLogic(l.modManifest, mine).empty() ? "match" : "differ", l.addresses.size());
+				if (logged.insert(line).second)
+					printf("%s ping %d\n", line, MatchmakingPing(l));
+			}
+		MatchmakingService* service = Matchmaking::get().find(want);
+		const std::vector<GameListing> list = service ? service->listings() : std::vector<GameListing>();
+		if (list.empty() || test.value("findOnly", false))
+			return;
+		done = true;
+		joinPassword = test.value("password", std::string());
+		printf("Lobby test: joining %s's game listed by %s\n", list[0].hostName.c_str(), want.c_str());
+		handleRequest({ "join_listing", want + "\t" + list[0].id });
+		return;
+	}
 	if (test.contains("join")) {
 		done = true;
 		// "password": "<text>" given to the host
@@ -998,9 +1042,18 @@ void QuickStartMenu::lobbyTest()
 		return;
 	if (!hosting) {
 		handleRequest({ "select_level", level });
+		// "password": "<text>" asked of guests
+		handleRequest({ "host_password", test.value("password", std::string()) });
 		handleRequest({ "host", "" });
 		if (fe)
 			fe->open("mphost");
+		// "offer": ["nakama", ...] offers the game there too (as the lobby's "Offer on" ticks)
+		std::string offer;
+		for (const auto& s : test.value("offer", nlohmann::json::array()))
+			if (s.is_string())
+				offer += (offer.empty() ? "" : ",") + s.get<std::string>();
+		if (!offer.empty())
+			handleRequest({ "host_offer", offer });
 		return;
 	}
 	// { "host": "<level>", "solo": true }: starts at once with no guest, the host alone (the other
@@ -1062,54 +1115,95 @@ void QuickStartMenu::lobbyTest()
 void QuickStartMenu::netInit()
 {
 	if (enetOn) return;
-	enetOn = true;
-	enet_initialize();
-	ENetAddress address;
-	address.host = ENET_HOST_ANY;
-	address.port = 1234;
 	// "hostBind": "127.0.0.1" only takes guests from this machine (tests)
-	if (const std::string bind = g_settings.value("hostBind", std::string()); !bind.empty())
-		enet_address_set_host(&address, bind.c_str());
-	eserver = enet_host_create(&address, 16, 2, 0, 0);
-	if (!eserver) {
-		printf("Hosting: could not open port %u\n", address.port);
-		enetOn = false;
-		enet_deinitialize();
-	}
+	if (!enetHost)
+		enetHost = std::make_unique<EnetHostTransport>();
+	enetOn = enetHost->open(g_settings.value("hostBind", std::string()), (uint16_t)g_settings.value("hostPort", 1234));
+	listingTime = 0;
 }
 
 void QuickStartMenu::netHandle()
 {
 	if (!enetOn) return;
-	ENetEvent event;
-	while (enet_host_service(eserver, &event, 0) > 0) {
-		switch (event.type) {
-		case ENET_EVENT_TYPE_CONNECT: {
-			printf("connection\n");
-			NetEnetLink* link = new NetEnetLink(eserver, event.peer);
-			event.peer->data = link;
-			// a guest loading the game set (or a running game's state) answers nothing for a while
-			enet_peer_timeout(event.peer, 32, 20000, 60000);
-			guests.push_back(link);
+	std::vector<HostTransport::Event> events;
+	enetHost->poll(events);
+	for (HostTransport* t : Matchmaking::get().hostTransports())
+		t->poll(events);
+	for (const HostTransport::Event& e : events) {
+		if (e.type == HostTransport::Event::CONNECTED) {
+			guests.push_back(e.link);
 			if (server)
-				server->addClient(link);
-			break;
+				server->addClient(e.link);
 		}
-		case ENET_EVENT_TYPE_DISCONNECT: {
-			printf("disconnected\n");
-			guests.erase(std::find(guests.begin(), guests.end(), (NetEnetLink*)event.peer->data));
+		else if (auto it = std::find(guests.begin(), guests.end(), e.link); it != guests.end()) {
+			guests.erase(it);
 			if (server)
-				server->removeClient((NetEnetLink*)event.peer->data);
-			break;
-		}
-		case ENET_EVENT_TYPE_RECEIVE: {
-			printf("message: %zu\n", event.packet->dataLength);
-			NetEnetLink* link = (NetEnetLink*)event.peer->data;
-			link->packets.push(event.packet);
-			break;
-		}
+				server->removeClient(e.link);
 		}
 	}
+	updateListing();
+}
+
+// The game as the matchmaking services list it, again every second (they pass it on when it
+// changed)
+void QuickStartMenu::updateListing()
+{
+	const uint64_t now = SDL_GetTicks();
+	if (listingTime && now - listingTime < 1000)
+		return;
+	listingTime = now;
+	GameListing l;
+	static const std::string hostId = std::to_string(SDL_GetPerformanceCounter()) + "-" + std::to_string(rand());
+	l.hostId = hostId;
+	l.hostName = playerName();
+	l.name = playerName() + "'s game";
+	l.version = MatchmakingGameVersion();
+	l.modManifest = ModManifest();
+	l.modPolicy = server->modPolicy;
+	l.password = !server->password.empty();
+	l.allowSpectators = server->allowSpectators;
+	l.maxSpectators = server->maxSpectators;
+	l.running = gameRunning;
+	if (gameRunning) {
+		// a game in progress: its humans and the places a guest can take
+		l.spectators = server->spectatorCount();
+		int humans = 0;
+		for (size_t i = 0; i < server->clientLinks.size(); i++)
+			if (server->clientPlayerObjects[i].get())
+				humans++;
+		l.players = humans;
+		l.places = humans + (int)server->freeSeats().size();
+	}
+	else {
+		// the lobby (FrontEndUI.lua's text): "level\nH|...\nG|...\nA|...\nE|..."
+		size_t start = 0;
+		int line = 0;
+		while (start < lobbyText.size()) {
+			size_t end = lobbyText.find('\n', start);
+			if (end == std::string::npos)
+				end = lobbyText.size();
+			const std::string part = lobbyText.substr(start, end - start);
+			if (line++ == 0)
+				l.map = part;
+			else if (!part.empty()) {
+				l.places++;
+				if (part[0] == 'H' || part[0] == 'G')
+					l.players++;
+			}
+			start = end + 1;
+		}
+		l.spectators = std::max(0, (int)guests.size() + 1 - l.players);
+	}
+	if (l.map.empty() && savselected < savegames.size()) {
+		l.map = savegames[savselected];
+		if (const size_t dot = l.map.rfind('.'); dot != std::string::npos)
+			l.map.resize(dot);
+	}
+	HostContext context;
+	context.enet = enetHost ? enetHost->host() : nullptr;
+	context.port = (uint16_t)g_settings.value("hostPort", 1234);
+	context.bind = g_settings.value("hostBind", std::string());
+	Matchmaking::get().host(l, Matchmaking::get().offerOn, context);
 }
 
 // The host's game: a guest who said hello to the running game gets the host's AI General files,
@@ -1119,7 +1213,7 @@ void QuickStartMenu::joinRunningGame()
 {
 	if (!enetOn)
 		return;
-	for (NetEnetLink* link : guests) {
+	for (NetLink* link : guests) {
 		auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
 		if (ci == server->clientLinks.end())
 			continue;
@@ -1134,7 +1228,7 @@ void QuickStartMenu::joinRunningGame()
 				server->sendStateTo(link);
 		}
 		if (server->clientInfos[index].refused && refusedSent.insert(link).second)
-			enet_peer_disconnect_later(link->peer, 0);
+			link->disconnect(true);
 	}
 	for (auto it = joinsSent.begin(); it != joinsSent.end();)
 		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? joinsSent.erase(it) : std::next(it);
@@ -1146,6 +1240,6 @@ void QuickStartMenu::netDeinit()
 {
 	if (!enetOn) return;
 	enetOn = false;
-	enet_host_destroy(eserver);
-	enet_deinitialize();
+	Matchmaking::get().stopHosting();
+	enetHost->close();
 }
