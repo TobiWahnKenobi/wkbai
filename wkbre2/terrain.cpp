@@ -120,6 +120,8 @@ void Terrain::readFromFile(const char* filename)
 		readBCM(filename);
 	else
 		readSNR(filename);
+	// the map's file (its regions are kept by its name: MapRegions)
+	filePath = PathFromUtf8(filename).wstring();
 	mapFile = filename;
 	printf("Map: %s (%d x %d tiles)\n", filename, width, height);
 	// the map's water design, if it has one

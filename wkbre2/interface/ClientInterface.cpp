@@ -838,7 +838,7 @@ void ClientInterface::prewarmLevel()
 bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
-	return g_renderSettings.fogOfWar && !editorOn && client->clientPlayer && client->getLevel();
+	return g_renderSettings.fogOfWar && !editorOn && !replayMode && client->clientPlayer && client->getLevel();
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
@@ -878,6 +878,7 @@ void ClientInterface::drawLoadingScreen()
 	if (stage != loadingStage) {
 		loadingStage = stage;
 		loadingStageSince = SDL_GetTicks();
+		client->sendLoadingStage(stage);
 	}
 	// within a stage the bar creeps on (none of them report how far they are), to 90% of it
 	const float within = 0.9f * (1.0f - std::exp(-(float)(SDL_GetTicks() - loadingStageSince) / 1500.0f));
@@ -903,10 +904,26 @@ void ClientInterface::drawLoadingScreen()
 		player = srv->clientPlayerObjects[0].get();
 	const std::string name = g_settings.value("playerName", lang.getText("DEFAULT_PLAYER_PROFILE"));
 	const int colour = player ? player->color : 1;
-	outlined(ImVec2(cx - 227, cy - 140), playerColors[(colour >= 0 && colour < 9) ? colour : 1], name);
-	outlined(ImVec2(cx + 73, cy - 140), IM_COL32(232, 214, 176, 255), std::to_string(stage) + "/8");
-	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 225, cy - 124), IM_COL32(96, 0, 0, 255));
-	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 130 + 95 * progress, cy - 124), IM_COL32(210, 0, 0, 255));
+	auto row = [&](float y, int rowColour, const std::string& rowName, int rowStage, float rowProgress) {
+		outlined(ImVec2(cx - 227, y), playerColors[(rowColour >= 0 && rowColour < 9) ? rowColour : 1], rowName);
+		outlined(ImVec2(cx + 73, y), IM_COL32(232, 214, 176, 255), std::to_string(rowStage) + "/8");
+		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 225, y + 16), IM_COL32(96, 0, 0, 255));
+		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 130 + 95 * rowProgress, y + 16), IM_COL32(210, 0, 0, 255));
+	};
+	// a multiplayer game: a row per human player, as the server reports them (this client's from
+	// its own stage, the others' at the start of theirs), 22 px apart; else this player's alone
+	if (client->loadingRows.size() > 1) {
+		float y = cy - 140;
+		for (const Client::LoadingRow& r : client->loadingRows) {
+			if (r.own)
+				row(y, player ? colour : r.colour, name, stage, progress);
+			else
+				row(y, r.colour, r.name, std::max(r.stage, 1), std::clamp((r.stage - 1) / 8.0f, 0.0f, 1.0f));
+			y += 22;
+		}
+	}
+	else
+		row(cy - 140, colour, name, stage, progress);
 	// the tip
 	if (loadingTip) {
 		const std::string title = lang.getText("FRONT_END_TITLE_TIP_OF_THE_DAY");
@@ -914,6 +931,145 @@ void ClientInterface::drawLoadingScreen()
 		dl->AddRectFilled(ImVec2(cx - 260, cy + 50), ImVec2(cx + 260, cy + 230), IM_COL32(0, 0, 0, 110));
 		const std::string tip = lang.getText("FRONT_END_TIP_" + std::to_string(loadingTip));
 		dl->AddText(nullptr, 0.0f, ImVec2(cx - 254, cy + 56), IM_COL32(235, 235, 235, 255), tip.c_str(), nullptr, 508.0f);
+	}
+}
+
+// The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
+// this player and its allies only, and the timeline what it saw; in a replay, everyone and
+// everything. A timeline entry clicked moves the camera there.
+void ClientInterface::drawChronicle()
+{
+	// a replay shows everyone and everything; a game the player's own statistics and its allies',
+	// and the events it saw (with fog of war; without, all events)
+	const bool all = replayMode;
+	chronicle.update(client, (all || !fogOfWarOn()) ? nullptr : &fogOfWar);
+	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
+	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+	auto shownPlayer = [&](uint32_t id) {
+		if (all || id == own)
+			return true;
+		CommonGameObject* me = client->clientPlayer.get();
+		CommonGameObject* other = client->findObject(id);
+		return me && other && alliedStatus >= 0 && client->getDiplomaticStatus(me, other) == alliedStatus;
+	};
+	auto colourOf = [&](uint32_t id) {
+		auto it = chronicle.playerColours.find(id);
+		const int c = it != chronicle.playerColours.end() ? it->second : 0;
+		return playerColors[(c >= 0 && c < 9) ? c : 0];
+	};
+	auto nameOf = [&](uint32_t id) {
+		auto it = chronicle.playerNames.find(id);
+		return it != chronicle.playerNames.end() ? it->second : std::to_string(id);
+	};
+	auto clock = [](float t) {
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%d:%02d", (int)t / 60, (int)t % 60);
+		return std::string(buf);
+	};
+	if (statisticsOpen) {
+		ImGui::SetNextWindowPos(ImVec2(20, 110), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(640, 400), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Statistics (F6)", &statisticsOpen)) {
+			if (ImGui::BeginTable("stats", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+				for (const char* h : { "Player", "Food", "Wood", "Gold", "Peasants", "Soldiers", "Buildings", "Units lost", "Buildings lost" })
+					ImGui::TableSetupColumn(h);
+				ImGui::TableHeadersRow();
+				for (const auto& [id, list] : chronicle.samples) {
+					if (list.empty() || !shownPlayer(id))
+						continue;
+					const GameChronicle::Sample& s = list.back();
+					ImGui::TableNextRow();
+					ImGui::TableNextColumn();
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(id)), "%s", nameOf(id).c_str());
+					for (float v : { s.food, s.wood, s.gold, (float)s.peasants, (float)s.soldiers, (float)s.buildings, (float)s.unitsLost, (float)s.buildingsLost }) {
+						ImGui::TableNextColumn();
+						ImGui::Text("%.0f", v);
+					}
+				}
+				ImGui::EndTable();
+			}
+			static const char* shown[6] = { "Food", "Wood", "Gold", "Peasants", "Soldiers", "Buildings" };
+			ImGui::Combo("Graph", &statisticsShown, shown, 6);
+			// the graph: each player's line in its colour, over the game so far
+			const ImVec2 p0 = ImGui::GetCursorScreenPos();
+			const ImVec2 size(std::max(ImGui::GetContentRegionAvail().x, 100.0f), std::max(ImGui::GetContentRegionAvail().y - 4.0f, 80.0f));
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			dl->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(0, 0, 0, 120));
+			auto value = [&](const GameChronicle::Sample& s) {
+				switch (statisticsShown) {
+				case 0: return s.food; case 1: return s.wood; case 2: return s.gold;
+				case 3: return (float)s.peasants; case 4: return (float)s.soldiers; default: return (float)s.buildings;
+				}
+			};
+			float tMax = 1.0f, vMax = 1.0f;
+			for (const auto& [id, list] : chronicle.samples)
+				if (shownPlayer(id))
+					for (const auto& s : list) {
+						tMax = std::max(tMax, s.time);
+						vMax = std::max(vMax, value(s));
+					}
+			for (const auto& [id, list] : chronicle.samples) {
+				if (!shownPlayer(id))
+					continue;
+				for (size_t i = 1; i < list.size(); i++) {
+					const ImVec2 a(p0.x + size.x * list[i - 1].time / tMax, p0.y + size.y * (1.0f - value(list[i - 1]) / vMax));
+					const ImVec2 b(p0.x + size.x * list[i].time / tMax, p0.y + size.y * (1.0f - value(list[i]) / vMax));
+					dl->AddLine(a, b, colourOf(id), 2.0f);
+				}
+			}
+			char label[32];
+			snprintf(label, sizeof(label), "%.0f", vMax);
+			dl->AddText(ImVec2(p0.x + 4, p0.y + 2), IM_COL32(255, 255, 255, 200), label);
+			dl->AddText(ImVec2(p0.x + size.x - 40, p0.y + size.y - 16), IM_COL32(255, 255, 255, 200), clock(tMax).c_str());
+			ImGui::Dummy(size);
+		}
+		ImGui::End();
+	}
+	if (timelineOpen) {
+		ImGui::SetNextWindowPos(ImVec2(680, 110), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Timeline (F7)", &timelineOpen)) {
+			int shownCount = 0;
+			for (size_t i = chronicle.events.size(); i-- > 0;) {
+				const GameChronicle::Event& e = chronicle.events[i];
+				if (!all && !e.seen)
+					continue;
+				shownCount++;
+				std::string text = clock(e.time) + "  " + e.title();
+				if (e.size)
+					text += " (" + std::to_string(e.size) + " fighters, " + clock(e.endTime - e.time) + ")";
+				ImGui::PushID((int)i);
+				if (ImGui::Selectable(text.c_str())) {
+					// the camera looks at it from where it is now, as high up
+					Camera& cam = client->camera;
+					const Vector3 dir = cam.direction;
+					const float down = std::max(-dir.y, 0.2f);
+					const float reach = (cam.position.y - e.position.y) / down;
+					cam.position.x = e.position.x - dir.x * reach;
+					cam.position.z = e.position.z - dir.z * reach;
+				}
+				// each side: its name, how many it brought, what it lost
+				for (uint32_t p : e.players) {
+					std::string side = "    " + nameOf(p);
+					if (auto it = e.strength.find(p); it != e.strength.end())
+						side += ": " + std::to_string(it->second) + " fighting";
+					if (auto it = e.lost.find(p); it != e.lost.end()) {
+						int total = 0;
+						std::string types;
+						for (const auto& [type, n] : it->second) {
+							total += n;
+							types += (types.empty() ? "" : ", ") + std::to_string(n) + " " + type;
+						}
+						side += ", lost " + std::to_string(total) + " (" + types + ")";
+					}
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(p)), "%s", side.c_str());
+				}
+				ImGui::PopID();
+			}
+			if (!shownCount)
+				ImGui::TextUnformatted(all ? "Nothing has happened yet." : "Nothing seen yet.");
+		}
+		ImGui::End();
 	}
 }
 
@@ -1356,7 +1512,7 @@ void ClientInterface::chatFrame()
 	// test runs: "lobbyTest": { ..., "gameChat": "<text>" } says it once the game has run 3 seconds
 	if (static bool said = false; !said && client->timeManager.currentTime > 3.0f && client->serverLink) {
 		said = true;
-		if (const std::string text = g_settings.value("lobbyTest", nlohmann::json()).value("gameChat", std::string()); !text.empty())
+		if (const std::string text = g_settings.value("lobbyTest", nlohmann::json::object()).value("gameChat", std::string()); !text.empty())
 			client->sendMessage(g_settings.value("playerName", std::string("Player")) + ": " + text);
 	}
 
@@ -1461,7 +1617,7 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
 	if (frontEnd && BenchmarkEnabled() && client->getLevel() && !frontEnd->isOpen()) {
 		static bool opened = false;
-		const auto screens = g_settings.value("benchmark", nlohmann::json()).value("openMenu", nlohmann::json::array());
+		const auto screens = g_settings.value("benchmark", nlohmann::json::object()).value("openMenu", nlohmann::json::array());
 		if (!opened && !screens.empty()) {
 			opened = true;
 			for (const auto& screen : screens)
@@ -1471,7 +1627,7 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "saveAs": "<name>" } saves the game once it has run 2 seconds
 	if (frontEnd && BenchmarkEnabled() && client->getLevel() && client->timeManager.currentTime > 2.0f) {
 		static bool saved = false;
-		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("saveAs", std::string());
+		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("saveAs", std::string());
 		if (!saved && !name.empty()) {
 			saved = true;
 			saveRequested(name);
@@ -1481,18 +1637,24 @@ void ClientInterface::iter()
 	// server, through the script chat) once the game has run that long
 	if (BenchmarkEnabled() && client->getLevel()) {
 		static bool ran = false;
-		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json()).value("script", nlohmann::json());
+		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json::object()).value("script", nlohmann::json());
 		if (!ran && script.is_array() && script.size() == 2 && client->timeManager.currentTime > script[0].get<float>()) {
 			ran = true;
 			client->sendMessage("!" + script[1].get<std::string>());
 		}
+	}
+	// the ground a building levelled, drawn anew
+	if (terrainHeightsChanged && terrainRenderer && SDL_GetTicks() - terrainHeightsRefreshed >= 250) {
+		terrainHeightsChanged = false;
+		terrainHeightsRefreshed = SDL_GetTicks();
+		rebuildTerrainRenderer(false);
 	}
 	// Test runs: "benchmark": { ..., "peasantActivity": 0 or 1 } opens the peasant activity interface
 	if (BenchmarkEnabled() && peasantActivityMode == -1) {
 		static bool applied = false;
 		if (!applied) {
 			applied = true;
-			peasantActivityMode = g_settings.value("benchmark", nlohmann::json()).value("peasantActivity", -1);
+			peasantActivityMode = g_settings.value("benchmark", nlohmann::json::object()).value("peasantActivity", -1);
 		}
 	}
 	// Test runs: "benchmark": { ..., "selectActivity": <row 1-5> } clicks that peasant activity
@@ -1501,7 +1663,7 @@ void ClientInterface::iter()
 	static int framesForActivity = 0;
 	if (BenchmarkEnabled() && client->getLevel() && ++framesForActivity > 120) {
 		static bool clicked = false;
-		const int row = g_settings.value("benchmark", nlohmann::json()).value("selectActivity", 0);
+		const int row = g_settings.value("benchmark", nlohmann::json::object()).value("selectActivity", 0);
 		if (!clicked && row > 0) {
 			clicked = true;
 			printf("ACTIVITY row %d selected %d\n", row, selectPeasantsByActivity(row));
@@ -1510,7 +1672,7 @@ void ClientInterface::iter()
 	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
-		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
+		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("select", std::string());
 		if (!name.empty()) {
 			ClientGameObject* found = nullptr;
 			auto search = [&](ClientGameObject* obj, auto& self) -> void {
@@ -1629,7 +1791,39 @@ void ClientInterface::iter()
 	if (g_keyDown[SDL_SCANCODE_LEFT] || g_keyDown[SDL_SCANCODE_A])
 		client->camera.position += strafe;
 
-	if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+	// The fixed camera (the original's default, without free look): a zoom from 0 (near) to 1
+	// (far) sets its height above the ground, 12 to 110 m, and its pitch, 35 to 62 degrees down;
+	// scrolling keeps that height over hills and valleys (eased, so it doesn't jolt); the middle
+	// mouse button turns it round only; the wheel zooms.
+	if (g_renderSettings.fixedCamera && client->terrain) {
+		static bool fixedInit = false;
+		static float fixedZoom = 0.4f, fixedGround = 0.0f;
+		const Vector3& cp = client->camera.position;
+		const float ground = std::max(client->terrain->getHeight(cp.x, cp.z), 0.0f);
+		if (!fixedInit) {
+			fixedInit = true;
+			fixedGround = ground;
+			fixedZoom = std::clamp((cp.y - ground - 12.0f) / 98.0f, 0.0f, 1.0f);
+		}
+		if (g_mouseWheel)
+			fixedZoom = std::clamp(fixedZoom - g_mouseWheel * (g_renderSettings.invertMouseWheel ? -0.05f : 0.05f), 0.0f, 1.0f);
+		const float ease = 1.0f - std::exp(-(float)cliDeltaTime / 250.0f);
+		fixedGround += (ground - fixedGround) * ease;
+		client->camera.position.y = fixedGround + 12.0f + 98.0f * fixedZoom;
+		client->camera.orientation.x = -(0.61f + 0.47f * fixedZoom);
+		if (getenv("WKB_TRACE_CAMERA")) printf("CAMERA pos (%.1f,%.1f,%.1f) pitch %.2f ground %.1f zoom %.2f\n", cp.x, cp.y, cp.z, client->camera.orientation.x, ground, fixedZoom);
+		if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+			if (!camroton) {
+				camrotoffx = g_mouseX;
+				camrotoriy = client->camera.orientation.y;
+				camroton = true;
+			}
+			client->camera.orientation.y = camrotoriy - (g_mouseX - camrotoffx) * g_renderSettings.mouseLookSensitivity;
+		}
+		else
+			camroton = false;
+	}
+	else if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
 		if (!camroton) {
 			camrotoffx = g_mouseX;
 			camrotoffy = g_mouseY;
@@ -1647,24 +1841,38 @@ void ClientInterface::iter()
 	else
 		camroton = false;
 
-	if (g_mouseWheel)
+	if (g_mouseWheel && !g_renderSettings.fixedCamera)
 		client->camera.position.y += g_mouseWheel * (g_renderSettings.invertMouseWheel ? -2 : 2);
 
 	// the map editor (F8 in single player) takes the clicks it uses
+	// test runs: "benchmark": { ..., "statistics": true, "timeline": true } opens them
+	if (BenchmarkEnabled()) {
+		static bool opened = false;
+		if (!opened) {
+			opened = true;
+			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
+			statisticsOpen = bench.value("statistics", false);
+			timelineOpen = bench.value("timeline", false);
+		}
+	}
+	if (g_keyPressed[SDL_SCANCODE_F6] && !ImGui::GetIO().WantTextInput)
+		statisticsOpen = !statisticsOpen;
+	if (g_keyPressed[SDL_SCANCODE_F7] && !ImGui::GetIO().WantTextInput)
+		timelineOpen = !timelineOpen;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer)
 		editorOn = !editorOn;
-	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorTest", false)) {
+	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;
 		editorTestStep(peapos);
 	}
-	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorCheckTest", false)) {
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorCheckTest", false)) {
 		// a test run: the map editor's check printed once
 		static int frame = 0;
 		if (++frame == 30)
 			for (const std::string& w : editorCheck())
 				printf("EDITORCHECK %s\n", w.c_str());
 	}
-	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorBlankTest", false)) {
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorBlankTest", false)) {
 		// a test run: the map made blank, then saved as "Blank Test"
 		editorOn = true;
 		static int frame = 0;
@@ -1691,7 +1899,7 @@ void ClientInterface::iter()
 			printf("EDITORNEWMAP opened: %d x %d playable tiles, %d edge, editor %d\n", w, h, client->terrain->edge, (int)editorOn);
 		}
 	}
-	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json()).value("editorMode", std::string()).empty() && !editorOn) {
+	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json::object()).value("editorMode", std::string()).empty() && !editorOn) {
 		editorOn = true;
 		editorOpenMode(g_settings["benchmark"]["editorMode"].get<std::string>());
 	}
@@ -2447,6 +2655,19 @@ void ClientInterface::iter()
 	if (skyRenderer)
 		skyRenderer->render();
 
+	// Test runs: "benchmark": { ..., "mouse": [x, y] } holds the cursor there (window pixels);
+	// "stampdown": "<blueprint>" places that building of the player's (its preview, tooltips)
+	if (BenchmarkEnabled()) {
+		const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json());
+		if (const nlohmann::json mouse = bench.value("mouse", nlohmann::json()); mouse.is_array() && mouse.size() == 2) {
+			g_mouseX = mouse[0].get<int>();
+			g_mouseY = mouse[1].get<int>();
+		}
+		if (const std::string name = bench.value("stampdown", std::string()); !name.empty() && !stampdownBlueprint && client->clientPlayer) {
+			stampdownBlueprint = client->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
+			stampdownPlayer = client->clientPlayer;
+		}
+	}
 	// Get ray
 	rayDirection = getRay(client->camera).normal();
 	nextSelectedObject = nullptr;
@@ -2687,6 +2908,27 @@ void ClientInterface::iter()
 					for (const auto& band : stampdownBlueprint->spritesWhenStampingDown)
 						addRangeBand(band, peapos, &ctx);
 				}
+				// a farm's soil, as WKB.exe's interface shows it while a "Standard Farm Foundation" is
+				// placed (0x64d480): the "Fertility" of the terrain under it (Terrains.cpp: 0.5 to
+				// 1.5) gives TOOLTIP_ARID_FARM up to 0.5, TOOLTIP_FERTILE_FARM from 1.5, else
+				// TOOLTIP_FARM; here with the value as a percentage too
+				if (stampdownBlueprint->name == "Standard Farm Foundation" && client->terrain) {
+					static int fertilityItem = -1;
+					static const GameSet* itemsOf = nullptr;
+					if (itemsOf != client->gameSet.get()) {
+						itemsOf = client->gameSet.get();
+						fertilityItem = itemsOf->items.names.getIndex("Fertility");
+					}
+					if (const auto* tile = client->terrain->getPlayableTile((int)(peapos.x / 5.0f), (int)(peapos.z / 5.0f)); tile && fertilityItem >= 0) {
+						float fertility = 0.0f;
+						auto& groups = client->gameSet->associatedTileTexGroups;
+						if (auto it = groups.find(tile->texture->grp->name); it != groups.end())
+							if (auto vt = it->second->itemValues.find(fertilityItem); vt != it->second->itemValues.end())
+								fertility = vt->second;
+						const char* key = fertility <= 0.5f ? "TOOLTIP_ARID_FARM" : fertility >= 1.5f ? "TOOLTIP_FERTILE_FARM" : "TOOLTIP_FARM";
+						ImGui::SetTooltip("%s\nFertility %d%%", lang.getText(key).c_str(), (int)std::lround(fertility * 100.0f));
+					}
+				}
 				planEntities.reserve(plan.toCreate.size());
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
@@ -2819,6 +3061,8 @@ void ClientInterface::iter()
 	}
 
 	drawLoadingScreen();
+	if (loadingDone)
+		drawChronicle();
 
 	{
 		ZoneScopedN("ImGui rendering");
@@ -2827,9 +3071,11 @@ void ClientInterface::iter()
 	}
 	drawSelectionPortrait();
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
-	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4) {
+	// (a guest: once the host has sent the rows of the players)
+	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
+	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4 && rowsIn) {
 		static bool shot = false;
-		const std::string path = g_settings.value("benchmark", nlohmann::json()).value("loadingScreenshot", std::string());
+		const std::string path = g_settings.value("benchmark", nlohmann::json::object()).value("loadingScreenshot", std::string());
 		if (!shot && !path.empty()) {
 			shot = true;
 			printf("Loading screenshot %s: %s\n", path.c_str(), gfx->SaveScreenshot(path.c_str()) ? "saved" : "failed");
@@ -2847,7 +3093,7 @@ void ClientInterface::iter()
 	// buildings by type every that many seconds of game time ("CENSUS t=... player ...")
 	if (BenchmarkEnabled() && client->getLevel()) {
 		static float nextCensus = 0.0f;
-		const float every = g_settings.value("benchmark", nlohmann::json()).value("census", 0.0f);
+		const float every = g_settings.value("benchmark", nlohmann::json::object()).value("census", 0.0f);
 		if (every > 0.0f && client->timeManager.currentTime >= nextCensus) {
 			nextCensus = client->timeManager.currentTime + every;
 			for (const auto& [type, players] : client->getLevel()->children) {
@@ -2894,7 +3140,7 @@ void ClientInterface::iter()
 		}
 		// "traceOrder": "<order>": every 2 s of game time, the first unit doing that order (its
 		// task, target and items), to follow a unit's work in a test run ("TRACE t=...")
-		const std::string traceOrder = g_settings.value("benchmark", nlohmann::json()).value("traceOrder", std::string());
+		const std::string traceOrder = g_settings.value("benchmark", nlohmann::json::object()).value("traceOrder", std::string());
 		static float nextTrace = 0.0f;
 		static uint32_t tracedId = 0;
 		if (!traceOrder.empty() && Server::instance && client->timeManager.currentTime >= nextTrace) {

@@ -54,6 +54,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::string> chatMessages;
 	// Multiplayer guests: the lobby as the host shows it (NETCLIMSG_LOBBY_STATE), and its parts so far
 	std::string lobbyState, lobbyStateParts;
+	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
+	struct LoadingRow { int stage, colour; bool own; std::string name; };
+	std::vector<LoadingRow> loadingRows;
 	// The host's AI General files being received (NETCLIMSG_GAME_SET_FILE)
 	std::map<std::string, std::string> hostFiles;
 	std::set<std::string> hostFilesComplete;
@@ -106,6 +109,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// faceTo: where to face at the end (a formation's right-drag; x < 0: nowhere)
 	void sendCommand(ClientGameObject *obj, const Command *cmd, int assignmentMode, ClientGameObject *target = nullptr, const Vector3 & destination = Vector3(), const Vector3& faceTo = Vector3(-1,0,0));
 	void sendPauseRequest(uint8_t pauseState);
+	void sendLoadingStage(int stage);
 	void sendStampdown(const GameObjBlueprint *blueprint, ClientGameObject *player, const Vector3 &position, bool sendEvent = false, bool inGameplay = false);
 	void sendStartLevelRequest();
 	void sendGameTextWindowButtonClicked(int gtwIndex, int buttonIndex);

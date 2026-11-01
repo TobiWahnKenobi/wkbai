@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -134,7 +135,9 @@ struct CommonGameState {
 	CommonGameObject* level = nullptr;
 	std::map<uint32_t, CommonGameObject*> idmap;
 
-	std::map<int, std::unordered_set<CmnGORef>> aliases;
+	// ordered by object id: the scripts walk them, and a set ordered by its insertions walked
+	// differently after a save game was loaded (a replay played another game)
+	std::map<int, std::set<CmnGORef>> aliases;
 	std::map<std::pair<int, int>, int> diplomaticStatuses;
 
 	struct Tile {

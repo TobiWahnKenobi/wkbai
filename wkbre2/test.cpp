@@ -1777,6 +1777,10 @@ void Test_AIvsAI()
 	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
 	const float minutes = cfg.value("minutes", 20.0f);
 	g_settings["simSeed"] = cfg.value("seed", 1u);
+	// "record": "<folder>" records the game there; "replay": "<folder>" plays such a recording
+	// instead of setting up a game (the same census, then the same end hash if it plays the same)
+	const std::string recordTo = cfg.value("record", std::string());
+	const std::string replayFrom = cfg.value("replay", std::string());
 	Server server;
 	server.loadSaveGame(("Save_Games\\" + level).c_str());
 	QuickSkirmishMenu skirmish;
@@ -1802,6 +1806,13 @@ void Test_AIvsAI()
 	server.timeManager.unpause();
 	server.timeManager.stepMs = 20;
 	skirmish.applySettings(server);
+	if (!recordTo.empty() && !server.startRecording(PathFromUtf8(recordTo), skirmish.setupJson(level, server.lastSeed)))
+		printf("AITEST can't record to %s\n", recordTo.c_str());
+	// a replay: the same setup (this config), then the recorded events
+	if (!replayFrom.empty() && !server.startReplay(PathFromUtf8(replayFrom))) {
+		printf("AITEST no recording in %s\n", replayFrom.c_str());
+		return;
+	}
 
 	std::map<uint32_t, std::set<uint32_t>> raised; // per player, every soldier seen at a census
 	std::map<uint32_t, std::set<uint32_t>> siegeRaised; // per player, every siege engine seen at a census
@@ -1853,6 +1864,17 @@ void Test_AIvsAI()
 											task->target ? task->target->id : 0, o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z,
 											task->target ? task->target->position.x : 0.0f, task->target ? task->target->position.z : 0.0f,
 											(int)((ServerGameObject*)o)->movement.isMoving());
+									// what stands on the cart's tile (a building placed over it traps it)
+									if (order && server.gameSet->orders.getString(order->blueprint->bpid).rfind("Transport", 0) == 0 && server.tiles && server.terrain) {
+										const auto [tw, th] = server.terrain->getNumPlayableTiles();
+										const int tx = (int)(o->position.x / 5.0f), tz = (int)(o->position.z / 5.0f);
+										if (tx >= 0 && tz >= 0 && tx < tw && tz < th) {
+											const CommonGameObject* b = server.tiles[tz * tw + tx].building.getFrom(&server);
+											const size_t len = strlen(cartInfo);
+											snprintf(cartInfo + len, sizeof(cartInfo) - len, ", tile: %s%s", b ? b->blueprint->name.c_str() : "free",
+												b && server.tiles[tz * tw + tx].buildingPassable ? " (passable)" : "");
+										}
+									}
 								if (order && !sample[0] && server.gameSet->orders.getString(order->blueprint->bpid) == "AI Chop Tree")
 									if (Task* task = order->getCurrentTask()) {
 										const std::string tname = server.gameSet->tasks.getString(task->blueprint->bpid);
@@ -1920,6 +1942,21 @@ void Test_AIvsAI()
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
 				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations, %d focus-fire orders\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent, player->aiController.focusOrders);
+				{
+					const AIController& ai = player->aiController;
+					static const GameSet* itemsOf = nullptr;
+					static int mix[4];
+					if (itemsOf != server.gameSet.get()) {
+						itemsOf = server.gameSet.get();
+						static const char* kinds[4] = { "Heavy Infantry", "Light Infantry", "Heavy Cavalry", "Light Cavalry" };
+						for (int k = 0; k < 4; k++)
+							mix[k] = server.gameSet->items.names.getIndex(std::string("Combined Arms ") + kinds[k] + " Percentage");
+					}
+					printf("AITEST   adapt player %u: seen HI %.0f LI %.0f HC %.0f LC %.0f; mix %.0f/%.0f/%.0f/%.0f (personality %.0f/%.0f/%.0f/%.0f), %d changes; grudge %u\n", player->id,
+						ai.enemySeen[1], ai.enemySeen[2], ai.enemySeen[3], ai.enemySeen[4],
+						mix[0] >= 0 ? player->getItem(mix[0]) : 0.0f, mix[1] >= 0 ? player->getItem(mix[1]) : 0.0f, mix[2] >= 0 ? player->getItem(mix[2]) : 0.0f, mix[3] >= 0 ? player->getItem(mix[3]) : 0.0f,
+						ai.baseMix[0], ai.baseMix[1], ai.baseMix[2], ai.baseMix[3], ai.mixChanges, ai.grudgePlayer);
+				}
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{
@@ -1934,11 +1971,11 @@ void Test_AIvsAI()
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;
-					for (const char* name : { "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Population Count", "Can Spawn Peasant", "Food", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference", "Idle Peasant Count", "Wood Chopper Count", "Builder Count", "Gold Miner Count", "Shop Keeper Count" }) {
+					for (const char* name : { "Commission Route", "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Population Count", "Can Spawn Peasant", "Food", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference", "Idle Peasant Count", "Wood Chopper Count", "Builder Count", "Gold Miner Count", "Shop Keeper Count" }) {
 						const int item = server.gameSet->items.names.getIndex(name);
 						probe += std::string(" ") + name + "=" + (item >= 0 ? std::to_string((int)player->getItem(item)) : "?");
 					}
-					for (const char* name : { "My Resource Markers", "All Tree Markers", "All Non Associated Tree Markers", "Number of Resource Villages With More Than Village Limit Associated Resources", "All My Kingmaker Villages & Foundations", "Nearest Resource Marker To My Manor", "Palace Building Of Player" }) {
+					for (const char* name : { "My Resource Markers", "All Tree Markers", "All Non Associated Tree Markers", "Number of Resource Villages With More Than Village Limit Associated Resources", "All My Kingmaker Villages & Foundations", "All My Kingmaker Villages", "Nearest Resource Marker To My Manor", "Palace Building Of Player" }) {
 						const int fi = server.gameSet->objectFinderDefinitions.names.getIndex(name);
 						probe += std::string(" | ") + name + ": " + (fi >= 0 ? std::to_string(server.gameSet->objectFinderDefinitions[fi]->eval(&pctx).size()) : "?");
 					}
@@ -2019,9 +2056,15 @@ void Test_AIvsAI()
 	const uint64_t start = SDL_GetTicks();
 	float nextCensus = 60.0f;
 	while (server.timeManager.currentTime < minutes * 60.0f) {
-		server.timeManager.pendingMs = server.timeManager.stepMs;
-		if (server.timeManager.step())
-			server.simulate();
+		if (server.replay) {
+			if (!server.replayEvent())
+				break;
+		}
+		else {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
 		if (server.timeManager.currentTime >= nextCensus) {
 			nextCensus += 60.0f;
 			census("at");
@@ -2037,6 +2080,51 @@ void Test_AIvsAI()
 		printf("AITEST alias Deliverable Buildings:%s\n", list.c_str());
 	}
 	const std::vector<std::string> standing = census("end");
+	server.stopRecording();
+	{
+		// every object's id, position, orientation and items (in any order), and the random state:
+		// a replay must end with the same
+		size_t objects = 0;
+		auto fnv = [](const void* data, size_t n, uint64_t h) {
+			for (size_t i = 0; i < n; i++) { h ^= ((const uint8_t*)data)[i]; h *= 1099511628211ull; }
+			return h;
+		};
+		uint64_t sum = 0;
+		// (not the height, which loading sets for cities, nor items at 0, which a save leaves out:
+		// neither changes the game)
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			objects++;
+			uint64_t h = fnv(&obj->id, sizeof(obj->id), 1469598103934665603ull);
+			h = fnv(&obj->position.x, sizeof(float), h);
+			h = fnv(&obj->position.z, sizeof(float), h);
+			h = fnv(&obj->orientation, sizeof(obj->orientation), h);
+			for (const auto& [item, value] : obj->items)
+				if (value != 0.0f)
+					h += fnv(&value, sizeof(value), fnv(&item, sizeof(item), 1469598103934665603ull));
+			sum += h;
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children)
+					self(child, self);
+		};
+		walk(server.getLevel(), walk);
+		// "WKB_HASH_DUMP=<file>": each object's state, to find where two runs differ
+		if (const char* dump = getenv("WKB_HASH_DUMP"))
+			if (FILE* f = fopen(dump, "w")) {
+				auto write = [&](CommonGameObject* obj, auto& self) -> void {
+					fprintf(f, "%u %s pos %.4f %.4f %.4f ori %.4f", obj->id, obj->blueprint->name.c_str(), obj->position.x, obj->position.y, obj->position.z, obj->orientation.y);
+					std::map<int, float> sorted(obj->items.begin(), obj->items.end());
+					for (const auto& [item, value] : sorted)
+						fprintf(f, " %d=%g", item, value);
+					fprintf(f, "\n");
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* child : children)
+							self(child, self);
+				};
+				write(server.getLevel(), write);
+				fclose(f);
+			}
+		printf("AITEST hash %016llx (%zu objects, random state %u, t=%.2f)\n", (unsigned long long)(sum ^ g_simRandom.state), objects, g_simRandom.state, server.timeManager.currentTime);
+	}
 	const double wall = (SDL_GetTicks() - start) / 1000.0;
 	std::string list;
 	for (const std::string& n : standing)
@@ -2201,6 +2289,71 @@ void Test_DiffRun()
 // The terrain's vertex normals (Terrain::getNormal) and heights of 4 Peaks as a text file in the
 // temp folder ("x z height nx ny nz" per vertex, world units), to compare with the original's
 // per-vertex Dot3 light vectors (RE repository, docs/engine/original-comparison.md)
+// Levelling (needs the game data): a Barracks foundation stamped down in play on the most
+// sloped spot near player 1027's Manor that still takes it flattens the ground under it.
+// Prints "LEVEL" lines: the spot, the heights under the footprint before and after.
+void Test_Levelling()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	if (!player || !bp || !bp->footprint || !server.terrain) {
+		printf("LEVEL not set up\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_WOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_FOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_GOLD, 10000.0f);
+	const Terrain& t = *server.terrain;
+	// the heights at the footprint's tile corners
+	auto spread = [&](const Vector3& at, float& lo, float& hi) {
+		const auto rot = bp->footprint->rotateOrigin(0.0f);
+		const int ox = (int)((at.x - rot.first) / 5.0f), oz = (int)((at.z - rot.second) / 5.0f);
+		lo = 1e9f; hi = -1e9f;
+		for (const auto& to : bp->footprint->tiles) {
+			if (!to.flatten)
+				continue;
+			const auto [rx, rz] = to.rotate(0.0f);
+			for (int dz = 0; dz <= 1; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const float h = t.getVertex(ox + rx + t.edge + dx, oz + rz + t.edge + dz);
+					lo = std::min(lo, h);
+					hi = std::max(hi, h);
+				}
+		}
+	};
+	// the spots around (540, 140), the start, that take a barracks: the most uneven one
+	Vector3 best;
+	float bestSpread = -1.0f;
+	for (float z = 60.0f; z <= 260.0f; z += 5.0f)
+		for (float x = 440.0f; x <= 640.0f; x += 5.0f) {
+			const Vector3 at(std::floor(x / 5.0f) * 5.0f + 2.5f + bp->footprint->originX, 0.0f, std::floor(z / 5.0f) * 5.0f + 2.5f + bp->footprint->originZ);
+			if (StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+				continue;
+			float lo, hi;
+			spread(at, lo, hi);
+			if (hi - lo > bestSpread) {
+				bestSpread = hi - lo;
+				best = at;
+			}
+		}
+	if (bestSpread < 0.0f) {
+		printf("LEVEL no spot takes a barracks\n");
+		return;
+	}
+	float lo, hi;
+	spread(best, lo, hi);
+	printf("LEVEL spot (%.1f, %.1f): heights %.2f to %.2f before\n", best.x, best.z, lo, hi);
+	best.y = t.getHeight(best.x, best.z);
+	ServerGameObject* obj = server.stampdownObject(bp, player, best, Vector3(0, 0, 0), true, true);
+	spread(best, lo, hi);
+	printf("LEVEL %s: heights %.2f to %.2f after, the foundation at y %.2f (ground %.2f)\n", obj ? "stamped down" : "refused", lo, hi,
+		obj ? obj->position.y : 0.0f, t.getHeight(best.x, best.z));
+	fflush(stdout);
+}
+
 void Test_TerrainNormals()
 {
 	LoadBCP("data.bcp");
@@ -2424,6 +2577,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Passability, "Passability fields (terrain types a unit can't stand on)"},
 {Test_DiffRun, "Differential run (a save run for N game seconds, then saved)"},
 {Test_TerrainNormals, "Terrain normals of 4 Peaks (a text file, for the lighting comparison)"},
+{Test_Levelling, "Levelling: a barracks stamped down flattens the ground under it"},
 };
 
 void LaunchTest()

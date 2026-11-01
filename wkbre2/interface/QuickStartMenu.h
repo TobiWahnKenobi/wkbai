@@ -60,6 +60,8 @@ private:
 	std::string lobbyText;
 	// the menu's Map Editor: the next level opens paused with the map editor
 	bool editLevel = false;
+	// a recording to play (its folder name in saved\Recordings), "" for a game
+	std::string replayName;
 	uint64_t lobbySentTime = 0;
 	// the guests that have the host's AI General files
 	std::set<NetEnetLink*> generalsSent;

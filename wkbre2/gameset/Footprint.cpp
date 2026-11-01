@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Footprint.h"
+#include <cstdlib>
 #include "gameset.h"
 #include "../util/GSFileParser.h"
 
@@ -15,6 +16,8 @@ void Footprint::parse(GSFileParser& gsf, GameSet& gs)
 			originX = gsf.nextFloat();
 			originZ = gsf.nextFloat();
 		}
+		else if (tag == "MAX_FOUNDATION_HEIGHT_DIFFERENTIAL")
+			maxHeightDifferential = getenv("WKB_NO_SLOPE_LIMIT") ? 0.0f : gsf.nextFloat();
 		else if (tag == "TILE_OFFSET") {
 			int ox = gsf.nextInt();
 			int oz = gsf.nextInt();
@@ -29,6 +32,8 @@ void Footprint::parse(GSFileParser& gsf, GameSet& gs)
 					// corners name it); the others can be walked over
 					tile.mode = word != "BLOCKED";
 				}
+				else if (tag == "DEFORM_TERRAIN")
+					tile.flatten = gsf.nextTag() != "LEAVE_AS_IS";
 				else if (tag == "END_TILE_OFFSET")
 					break;
 				gsf.advanceLine();

@@ -10,6 +10,8 @@
 #include <map>
 #include <cmath>
 
+bool (*StampdownPlan::exemptFromSlopeLimit)(CommonGameState*, CommonGameObject*) = nullptr;
+
 StampdownPlan StampdownPlan::getStampdownPlan(
 	CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation)
 {
@@ -38,6 +40,14 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		const auto rotOrigin = fp->rotateOrigin(orientation.y);
 		const int ox = (int)((position.x - rotOrigin.first) / 5.0f);
 		const int oz = (int)((position.z - rotOrigin.second) / 5.0f);
+		// MAX_FOUNDATION_HEIGHT_DIFFERENTIAL: the lowest and highest ground under the footprint's
+		// tiles that are levelled (DEFORM_TERRAIN FLATTEN; their corners) may differ by at most
+		// that much, in metres. Fields and walls level nothing and are not limited. Human players
+		// only: an AI's starting village moved a tile by the limit left its cart with no way out
+		// (8 Player Continent, seed 1: no wood, no farm, 15 characters all game), so the AIs
+		// place as before and their levelling is capped instead (Server::levelTerrainUnder).
+		const Terrain* trn = gameState->terrain;
+		float lowest = 1e30f, highest = -1e30f;
 		for (const auto& to : fp->tiles) {
 			const auto [rx, rz] = to.rotate(orientation.y);
 			const int px = ox + rx, pz = oz + rz;
@@ -45,6 +55,12 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				plan.status = Status::InvalidTerrain;
 				return plan;
 			}
+			for (int dz = 0; dz <= 1 && to.flatten; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
+					lowest = std::min(lowest, h);
+					highest = std::max(highest, h);
+				}
 			const auto& tile = gameState->tiles[pz * tileWidth + px];
 			const CommonGameObject* other = tile.building.getFrom(gameState);
 			if (!other)
@@ -54,6 +70,11 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			if (to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType)))
 				continue;
 			plan.status = Status::InvalidOccupied;
+			return plan;
+		}
+		if (fp->maxHeightDifferential > 0.0f && highest > lowest && highest - lowest > fp->maxHeightDifferential
+			&& !(exemptFromSlopeLimit && exemptFromSlopeLimit(gameState, playerObj))) {
+			plan.status = Status::InvalidTerrain;
 			return plan;
 		}
 	}

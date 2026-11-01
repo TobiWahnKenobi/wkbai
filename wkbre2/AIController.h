@@ -66,6 +66,20 @@ struct AIController {
 	// focus fire: the next check (game time), the attack orders given so far
 	float nextFocusFireCheck = 0.0f;
 	int focusOrders = 0;
+	// the first barracks: the next check (game time), the foundation laid down (none yet: null)
+	float nextBarracksCheck = 0.0f;
+	SrvGORef firstBarracks;
+	bool firstBarracksDone = false;
+	// the opponent model (aiAdapt): enemy soldiers met, by "I'm A Military Unit" (1 heavy
+	// infantry, 2 light infantry, 3 heavy cavalry, 4 light cavalry), fading; the personality's
+	// army make-up as it was set up (-1: not read yet); the enemy who attacked the base most
+	// lately, and when; the next checks
+	float enemySeen[5] = {};
+	float baseMix[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+	uint32_t grudgePlayer = 0;
+	float grudgeTime = -1.0f;
+	float nextAdaptScan = 0.0f, nextAdaptMix = 0.0f;
+	int mixChanges = 0;
 	// waves walking to their rally point before they attack together
 	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
 	std::vector<GatheringWave> gatheringWaves;

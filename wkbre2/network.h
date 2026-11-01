@@ -70,6 +70,12 @@ enum NetClientMessages {
 	// The host's AI General files (the game set links AI Generals\\*.gsf), for the guests to load
 	// the same game set: file index, file count, part, parts, name, text (in parts)
 	NETCLIMSG_GAME_SET_FILE,
+	// Terrain vertices set to one height (a building levelling the ground under it): count,
+	// height in steps (float), the vertex indices
+	NETCLIMSG_TERRAIN_HEIGHTS,
+	// The loading screen's rows, one per client (human player): count, then for each its stage
+	// (1-8), its player's colour index, whether it is the receiving client, its name
+	NETCLIMSG_LOADING_STAGES,
 };
 
 enum NetServerMessages {
@@ -94,6 +100,8 @@ enum NetServerMessages {
 	NETSRVMSG_LOBBY_HELLO,
 	// A guest asking the lobby's host for something: "slot <n>", "colour <c>", "team <t>", "ready <0|1>"
 	NETSRVMSG_LOBBY_REQUEST,
+	// A client's loading stage (1-8), for the others' loading screens
+	NETSRVMSG_LOADING_STAGE,
 };
 
 struct NetPacketWriter {

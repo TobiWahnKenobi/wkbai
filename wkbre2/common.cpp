@@ -45,6 +45,7 @@ Model* CommonGameObject::getModel() const {
 
 int CommonGameState::getDiplomaticStatus(CommonGameObject* a, CommonGameObject* b) const {
 	if (a == b) return 0; // player is always friendly with itself :)
+	if (!a || !b) return gameSet->defaultDiplomaticStatus; // an object without a player
 	auto it = (a->id <= b->id) ? diplomaticStatuses.find({ a->id, b->id }) : diplomaticStatuses.find({ b->id, a->id });
 	if (it != diplomaticStatuses.end())
 		return it->second;

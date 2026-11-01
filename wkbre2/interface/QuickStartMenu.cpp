@@ -101,14 +101,18 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 	initDiscordRPC();
 	updateDiscordRPC("In menu", nullptr);
 
-	if (BenchmarkEnabled()) {
+	// test runs: "benchmark": { ..., "replay": "<recording>" } plays a recording (saved\Recordings)
+	const std::string benchReplay = BenchmarkEnabled() ? g_settings.value("benchmark", nlohmann::json::object()).value("replay", std::string()) : std::string();
+	if (!benchReplay.empty())
+		handleRequest({ "replay", benchReplay });
+	else if (BenchmarkEnabled()) {
 		auto it = std::find(savegames.begin(), savegames.end(), BenchmarkSaveGame());
 		if (it != savegames.end()) {
 			savselected = it - savegames.begin();
 			skirmishMenu.changeSettingsForLevel(*it);
 			modeChosen = MODE_SINGLEPLAYER;
 			// test runs: "benchmark": { ..., "slots": "H|A:<AI General>|E" } as chosen in the skirmish menu
-			const std::string slots = g_settings.value("benchmark", nlohmann::json()).value("slots", std::string());
+			const std::string slots = g_settings.value("benchmark", nlohmann::json::object()).value("slots", std::string());
 			if (!slots.empty())
 				handleRequest({ "slots", slots });
 		}
@@ -173,6 +177,13 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 {
 	if (request.action == "start") {
 		selectSaveGame(request.arg);
+		modeChosen = MODE_SINGLEPLAYER;
+		editLevel = false;
+		replayName.clear();
+	}
+	else if (request.action == "replay") {
+		// a recording (saved\Recordings\<name>): its start, then its events
+		replayName = request.arg;
 		modeChosen = MODE_SINGLEPLAYER;
 		editLevel = false;
 	}
@@ -445,10 +456,10 @@ void QuickStartMenu::launchGame()
 					client->sendLobbyHello(playerName());
 					status = "connected";
 					// test runs: "lobbyTest": { ..., "chat": "<text>" }
-					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json()).value("chat", std::string()); !chat.empty())
+					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json::object()).value("chat", std::string()); !chat.empty())
 						client->sendMessage(playerName() + ": " + chat);
 					// { ..., "requests": ["slot 3", "ready 1"] } asks the host's lobby for these
-					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json()).value("requests", nlohmann::json::array()))
+					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json::object()).value("requests", nlohmann::json::array()))
 						client->sendLobbyRequest(r.get<std::string>());
 					break;
 				}
@@ -497,7 +508,7 @@ void QuickStartMenu::launchGame()
 				static bool lobbyShot = false;
 				if (!lobbyShot && SDL_GetTicks() - lobbyStart > 6000) {
 					lobbyShot = true;
-					if (const std::string shot = g_settings.value("lobbyTest", nlohmann::json()).value("screenshot", std::string()); !shot.empty())
+					if (const std::string shot = g_settings.value("lobbyTest", nlohmann::json::object()).value("screenshot", std::string()); !shot.empty())
 						gfx->SaveScreenshot(shot.c_str());
 				}
 				gfx->EndDrawing();
@@ -523,16 +534,75 @@ void QuickStartMenu::launchGame()
 	else {
 		updateDiscordRPC((modeChosen == MODE_MULTIPLAYER_HOST) ? "Multiplayer (Host)" : "Singleplayer", savegames.at(savselected).c_str());
 		client->localServer = true;
-		std::string savfile = std::string("Save_Games\\") + savegames.at(savselected);
+		std::string savfile = replayName.empty() ? std::string("Save_Games\\") + savegames.at(savselected)
+			: "Recordings\\" + replayName + "\\start.sav";
+		// a recording of a new level: its setup, to set the same game up again
+		std::string replaySetupText;
+		if (!replayName.empty())
+			if (FILE* sf = _wfopen((g_userPath / "saved" / "Recordings" / PathFromUtf8(replayName) / "setup.json").wstring().c_str(), L"rb")) {
+				char buf[4096];
+				size_t n;
+				while ((n = fread(buf, 1, sizeof(buf), sf)) > 0)
+					replaySetupText.append(buf, n);
+				fclose(sf);
+			}
+		std::string replayLevel;
+		uint32_t replaySeed = 0;
+		std::vector<std::pair<std::string, int>> replaySettings;
+		std::vector<QuickSkirmishMenu::Slot> replaySlots;
+		if (!replaySetupText.empty() && QuickSkirmishMenu::readSetupJson(replaySetupText, replayLevel, replaySeed, replaySettings, replaySlots))
+			savfile = "Save_Games\\" + replayLevel;
+		else
+			replayLevel.clear();
+		const std::string replay = replayName;
+		const std::string recordName = (skirmishMenu.recordGame && replay.empty())
+			? [&]() {
+				// "<level> 2026-11-01 14-30-05"
+				char when[32];
+				const time_t t = time(nullptr);
+				strftime(when, sizeof(when), "%Y-%m-%d %H-%M-%S", localtime(&t));
+				std::string level = savegames.at(savselected);
+				if (level.size() > 4)
+					level.resize(level.size() - 4);
+				return level + " " + when;
+			}()
+			: std::string();
 		printf("Starting %s\n", savfile.c_str());
 		std::mutex srvMutex;
 		std::atomic<bool> stopServer = false;
-		std::thread srvThread([this, savfile, &srvMutex, &stopServer]() {
+		std::thread srvThread([this, savfile, replay, recordName, replayLevel, replaySeed, replaySettings, replaySlots, &srvMutex, &stopServer]() {
 			tracy::SetThreadName("Server");
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
-			skirmishMenu.applySettings(*server);
-			applySavedPlayers();
+			if (!replay.empty()) {
+				// a recording: the same setup (a new level's) or its start as saved, then its events;
+				// this client views its host's player
+				if (!replayLevel.empty()) {
+					QuickSkirmishMenu setup;
+					setup.replaySetup = true;
+					setup.changeSettingsForLevel(replayLevel);
+					for (const auto& [name, value] : replaySettings)
+						setup.setSetting(name, value);
+					setup.setSlots(replaySlots);
+					const nlohmann::json seedBefore = g_settings.value("simSeed", nlohmann::json());
+					g_settings["simSeed"] = replaySeed;
+					setup.applySettings(*server);
+					if (seedBefore.is_null())
+						g_settings.erase("simSeed");
+					else
+						g_settings["simSeed"] = seedBefore;
+				}
+				if (server->startReplay(g_userPath / "saved" / "Recordings" / PathFromUtf8(replay)) && !server->replay->clientPlayers.empty())
+					server->setClientPlayerControl(0, server->replay->clientPlayers[0]);
+				// test runs: "benchmark": { ..., "replaySpeed": <times> } plays it faster
+				if (BenchmarkEnabled())
+					if (const float speed = g_settings.value("benchmark", nlohmann::json::object()).value("replaySpeed", 0.0f); speed > 0.0f)
+						server->timeManager.setSpeed(speed);
+			}
+			else {
+				skirmishMenu.applySettings(*server);
+				applySavedPlayers();
+			}
 			// a save game doesn't start its level (startLevel), which puts the cameras: put each
 			// human's at its player's start
 			if (savfile.size() > 4 && StrCICompare(std::string_view(savfile).substr(savfile.size() - 4), ".sav") == 0)
@@ -541,6 +611,13 @@ void QuickStartMenu::launchGame()
 						server->snapCameraPosition(player, player->playerStartCameraPosition, player->playerStartCameraOrientation);
 			if (BenchmarkPaused() || editLevel)
 				server->timeManager.pause();
+			// a new level's setup is recorded too (a replay sets up the same game); a save game's
+			// recording starts from its snapshot
+			const std::string level = savegames.at(savselected);
+			const bool fromLevel = level.size() > 4 && StrCICompare(std::string_view(level).substr(level.size() - 4), ".lvl") == 0;
+			if (!recordName.empty() && !server->startRecording(g_userPath / "saved" / "Recordings" / PathFromUtf8(recordName),
+				fromLevel ? skirmishMenu.setupJson(level, server->lastSeed) : std::string()))
+				printf("Can't record the game to %s\n", recordName.c_str());
 			srvMutex.unlock();
 			while (!g_windowQuit && !stopServer) {
 				srvMutex.lock();
@@ -552,6 +629,7 @@ void QuickStartMenu::launchGame()
 
 		ClientInterface cliui(client, gfx);
 		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
+		cliui.replayMode = !replay.empty();
 		// the map editor changes the server's state while its thread waits
 		if (modeChosen == MODE_SINGLEPLAYER)
 			cliui.withServer = [this, &srvMutex](const std::function<void(Server&)>& f) {
@@ -597,7 +675,7 @@ void QuickStartMenu::launchGame()
 			// test runs: "campaignTest": { ..., "conquerAfter": seconds } runs the province's ending
 			// actions through the script chat ("!<action>")
 			if (static bool conquerSent = false; !conquerSent && !campaignProvince.empty() && client->getLevel()) {
-				const float after = g_settings.value("campaignTest", nlohmann::json()).value("conquerAfter", 0.0f);
+				const float after = g_settings.value("campaignTest", nlohmann::json::object()).value("conquerAfter", 0.0f);
 				if (after > 0.0f && client->timeManager.currentTime > after) {
 					conquerSent = true;
 					client->sendMessage("!UPDATE_USER_PROFILE");
@@ -633,6 +711,8 @@ void QuickStartMenu::launchGame()
 
 		stopServer = true;
 		srvThread.join();
+		server->stopRecording();
+		server->replay.reset();
 		leaveAction = cliui.leaveAction;
 		leaveArg = cliui.leaveArg;
 	}
@@ -816,6 +896,28 @@ void QuickStartMenu::lobbyTest()
 		handleRequest({ "host", "" });
 		if (fe)
 			fe->open("mphost");
+		return;
+	}
+	// { "host": "<level>", "solo": true }: starts at once with no guest, the host alone (the other
+	// positions empty)
+	if (test.value("solo", false)) {
+		done = true;
+		const int players = atoi(level.c_str()) > 0 ? atoi(level.c_str()) : 2;
+		std::string slots = "H;c1";
+		for (int i = 2; i <= players; i++)
+			slots += "|E";
+		// "slots": "<slots>" as the skirmish menu sends them, instead
+		if (const std::string given = test.value("slots", std::string()); !given.empty())
+			slots = given;
+		printf("Lobby test: starting %s alone with slots %s\n", level.c_str(), slots.c_str());
+		// the settings as the menu's Start sends them (FrontEndUI.lua's SETTINGS defaults)
+		for (const char* setting : { "mode=0", "startFood=500", "startWood=500", "startGold=200", "populationLimit=200",
+			"randomiseResources=2", "kingPiece=0", "clearFogOfWar=1", "allowDiplomacy=0", "teamReconnaissance=0",
+			"barbarianTribes=0", "resourcePoints=2500", "victoryPointLimit=10000", "valhallaModeFood=20000",
+			"unitLives=0", "capturableFlags=4", "aggressiveAI=1", "recordGame=0" })
+			handleRequest({ "skirmish_setting", setting });
+		handleRequest({ "slots", slots });
+		handleRequest({ "start_multiplayer", level });
 		return;
 	}
 	// a guest with its name: wait a moment for its chat, then start

@@ -11,9 +11,13 @@ struct GSFileParser;
 
 struct Footprint {
 	float originX = 0.0f, originZ = 0.0f;
+	// MAX_FOUNDATION_HEIGHT_DIFFERENTIAL, metres; 0: no limit
+	float maxHeightDifferential = 0.0f;
 	struct TileOffset {
 		int offsetX, offsetZ;
 		int mode = 0;
+		// DEFORM_TERRAIN: FLATTEN (the default) or LEAVE_AS_IS
+		bool flatten = true;
 		TileOffset(int offsetX, int offsetZ) : offsetX(offsetX), offsetZ(offsetZ) {}
 		std::pair<int, int> rotate(float angle) const;
 	};
