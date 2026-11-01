@@ -87,6 +87,9 @@ struct RenderSettings {
 	int upscaling = 0;
 	float sharpness = 0.8f;          // FSR's sharpening (and TAA's): 0 soft to 1 sharpest
 	float renderScale() const;       // the scene's size by the upscaling, of the window's
+	// the window: 0 windowed, 1 borderless fullscreen (the desktop's resolution), 2 fullscreen
+	// (the display switched to the desktop's mode); applied at once (window.cpp)
+	int displayMode = 0;
 	// anisotropic filtering of the terrain's, water's and models' textures: 1 (off) to 16;
 	// applied to renderers made after the change (the next map)
 	int anisotropy = 16;

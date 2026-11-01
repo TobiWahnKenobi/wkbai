@@ -197,6 +197,16 @@ namespace {
 			o.needsRestart = true;
 			list.push_back(o);
 		}
+		{
+			// applied at once by the window (window.cpp)
+			MenuOption o;
+			o.id = "displayMode"; o.page = "system"; o.label = "Display mode";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Windowed", "Borderless fullscreen", "Fullscreen" };
+			o.get = [&rs]() { return (float)rs.displayMode; };
+			o.set = [&rs](float v) { rs.displayMode = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("vsync", "system", "V-sync", rs.vsync));
 		list.push_back(toggle("showFps", "system", "Show FPS", rs.showFps));
 		// the display's real pixels, and the interface's size (window.h, g_uiScale)

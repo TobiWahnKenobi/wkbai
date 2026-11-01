@@ -18,6 +18,7 @@
 #include "gfx/bitmap.h"
 #include <tracy/Tracy.hpp>
 #include "settings.h"
+#include "gfx/RenderSettings.h"
 #include <nlohmann/json.hpp>
 
 SDL_Window *g_sdlWindow = nullptr;
@@ -123,10 +124,34 @@ void HandleImGui(const SDL_Event &event)
 	}
 }
 
+// The window as RenderSettings::displayMode has it: windowed, borderless fullscreen (a desktop-
+// sized window without a mode change) or fullscreen (the display switched to its desktop mode);
+// done whenever the setting changes, the new size arriving as a resize event
+static int g_appliedDisplayMode = 0;
+
+static void ApplyDisplayMode(int mode)
+{
+	if (mode == 0)
+		SDL_SetWindowFullscreen(g_sdlWindow, false);
+	else {
+		const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(g_sdlWindow));
+		SDL_SetWindowFullscreenMode(g_sdlWindow, mode == 2 ? desktop : nullptr);
+		SDL_SetWindowFullscreen(g_sdlWindow, true);
+	}
+	SDL_SyncWindow(g_sdlWindow);
+	g_appliedDisplayMode = mode;
+	static const char* const names[3] = { "windowed", "borderless fullscreen", "fullscreen" };
+	int w = 0, h = 0;
+	SDL_GetWindowSizeInPixels(g_sdlWindow, &w, &h);
+	printf("Display mode: %s, %i x %i\n", names[mode], w, h);
+}
+
 void HandleWindow()
 {
 	FrameMark;
 	ZoneScoped;
+	if (g_renderSettings.displayMode != g_appliedDisplayMode)
+		ApplyDisplayMode(std::clamp(g_renderSettings.displayMode, 0, 2));
 	SDL_Event event;
 	bool imguion = ImGui::GetCurrentContext() != nullptr;
 	for (int i = 0; i < SDL_SCANCODE_COUNT; i++)

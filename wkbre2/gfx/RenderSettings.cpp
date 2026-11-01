@@ -84,6 +84,7 @@ void RenderSettings::load()
 	antiAliasing = std::clamp(g_settings.value<int>("antiAliasing", def.antiAliasing), 0, 2);
 	upscaling = std::clamp(g_settings.value<int>("upscaling", def.upscaling), 0, 4);
 	sharpness = std::clamp(g_settings.value<float>("sharpness", def.sharpness), 0.0f, 1.0f);
+	displayMode = std::clamp(g_settings.value<int>("displayMode", def.displayMode), 0, 2);
 	anisotropy = std::clamp(g_settings.value<int>("anisotropy", def.anisotropy), 1, 16);
 	vsync = g_settings.value<bool>("vsync", def.vsync);
 	staticShadows = g_settings.value<bool>("staticShadows", def.staticShadows);
@@ -161,6 +162,7 @@ void RenderSettings::save()
 	g_settings["antiAliasing"] = antiAliasing;
 	g_settings["upscaling"] = upscaling;
 	g_settings["sharpness"] = sharpness;
+	g_settings["displayMode"] = displayMode;
 	g_settings["anisotropy"] = anisotropy;
 	g_settings["vsync"] = vsync;
 	g_settings["staticShadows"] = staticShadows;
