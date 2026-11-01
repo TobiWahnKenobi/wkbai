@@ -42,6 +42,10 @@ struct DiligentGfx : IRenderer
 	// Binds the swap chain's targets and the full viewport again after drawing offscreen (the
 	// post-processing scene targets instead while those are on).
 	virtual void RestoreRenderTargets() = 0;
+	// A part of the window (pixels) to draw into, until RestoreRenderTargets; and the depth
+	// cleared, the colour kept (the selection window's unit portrait over the HUD)
+	virtual void SetViewportPixels(int x, int y, int width, int height) = 0;
+	virtual void ClearDepthOnly() = 0;
 	// The colour target the 3D scene is being drawn into (the back buffer, or the
 	// post-processing scene target while that is on): the water copies it for its refraction
 	virtual Diligent::ITextureView* CurrentColorTarget() = 0;

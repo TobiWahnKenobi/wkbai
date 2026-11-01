@@ -862,6 +862,76 @@ void ClientInterface::drawLoadingScreen()
 	}
 }
 
+// The selected (else the hovered) character standing in the middle of the lower left panel's
+// stained-glass window, slowly turning, as the original's selection window shows it: its model
+// with its current animation, drawn after the HUD into a square there (Diligent only).
+void ClientInterface::drawSelectionPortrait()
+{
+	DiligentGfx* dgfx = dynamic_cast<DiligentGfx*>(gfx);
+	FrontEnd* frontEnd = FrontEnd::get();
+	if (!dgfx || !sceneRenderer || !scene || !client->getLevel() || !loadingDone || editorOn || (frontEnd && frontEnd->isOpen()))
+		return;
+	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
+	if (!obj)
+		obj = nextSelectedObject.get();
+	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		return;
+	Model* model = obj->getModel();
+	if (!model)
+		return;
+	// the window's middle in the panel (330 x 326 at the bottom left), in points
+	constexpr float CX = 128.0f, CY = 195.0f, SIZE = 120.0f;
+	const float s = g_uiScale;
+	const float panelY = g_windowHeight / s - 326.0f;
+	const int px = (int)((CX - SIZE / 2) * s), py = (int)((panelY + CY - SIZE / 2) * s), size = (int)(SIZE * s);
+
+	static SceneEntity portrait;
+	const float angle = (float)(SDL_GetTicks() % 12000) / 12000.0f * 6.2831853f;
+	portrait = obj->sceneEntity;
+	portrait.model = model;
+	portrait.transform = Matrix::getRotationYMatrix(angle);
+	// lit normally (a selected unit is drawn unlit as its highlight)
+	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING);
+	// the camera a little above, the figure filling the square
+	const Vector3 centre = model->getSphereCenter();
+	const float radius = std::max(0.5f, model->getSphereRadius());
+	Camera cam;
+	cam.fovY = 0.6f;
+	cam.aspect = 1.0f;
+	cam.nearDist = 0.1f;
+	cam.farDist = 100.0f;
+	const float dist = radius / std::sin(cam.fovY * 0.5f) * 1.05f;
+	cam.position = centre + Vector3(0.0f, radius * 0.25f, -dist);
+	cam.direction = (centre - cam.position).normal();
+	cam.orientation = Vector3(std::asin(cam.direction.y), 0.0f, 0.0f);
+	cam.viewMatrix = Matrix::getLHLookAtViewMatrix(cam.position, centre, Vector3(0, 1, 0));
+	cam.projMatrix = Matrix::getLHPerspectiveMatrix(cam.fovY, 1.0f, cam.nearDist, cam.farDist);
+	cam.sceneMatrix = cam.viewMatrix * cam.projMatrix;
+
+	scene->clear();
+	scene->add(&portrait);
+	Camera* mainCamera = sceneRenderer->camera;
+	sceneRenderer->camera = &cam;
+	// ImGui leaves its last clip rectangle as the scissor
+	gfx->DisableScissor();
+	gfx->DisableFog();
+	// ImGui draws without the depth target: the colour and depth targets bound again
+	dgfx->RestoreRenderTargets();
+	dgfx->ClearDepthOnly();
+	dgfx->SetViewportPixels(px, py, size, size);
+	// the scene renderers draw with the transform set (the client sets the camera's for the world)
+	gfx->SetTransformMatrix(&cam.sceneMatrix);
+	// not the static shadow pass: it would draw the terrain's shadow map from the portrait alone
+	// (and reset the viewport)
+	const bool staticShadows = dgfx->shadows.staticShadows;
+	dgfx->shadows.staticShadows = false;
+	sceneRenderer->render();
+	dgfx->shadows.staticShadows = staticShadows;
+	dgfx->RestoreRenderTargets();
+	sceneRenderer->camera = mainCamera;
+	scene->clear();
+}
+
 void ClientInterface::drawObject(ClientGameObject *obj)
 {
 	using namespace Tags;
@@ -2599,6 +2669,7 @@ void ClientInterface::iter()
 		gfx->InitImGuiDrawing();
 		ImGuiImpl_Render(gfx);
 	}
+	drawSelectionPortrait();
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4) {
 		static bool shot = false;

@@ -137,6 +137,8 @@ private:
 	// one of Loading Screen 1-9 (random, as WKB.exe 0x706300), the player's stage of 8 with its
 	// bar, and a tip ("Words of Wisdom")
 	void drawLoadingScreen();
+	// the selected (or hovered) character in the selection window, turning (after the HUD)
+	void drawSelectionPortrait();
 	const void* loadingFor = nullptr; // the level it was shown for (nullptr: before any)
 	int loadingScreenIndex = 0, loadingTip = 0, framesWithLevel = 0;
 	int loadingStage = 0;

@@ -529,6 +529,25 @@ struct DiligentRenderer : DiligentGfx
 		ctx->SetViewports(1, nullptr, 0, 0);
 	}
 
+	void SetViewportPixels(int x, int y, int width, int height) override
+	{
+		Viewport vp;
+		vp.TopLeftX = (float)x;
+		vp.TopLeftY = (float)y;
+		vp.Width = (float)width;
+		vp.Height = (float)height;
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		const auto& desc = swapChain->GetDesc();
+		ctx->SetViewports(1, &vp, desc.Width, desc.Height);
+	}
+
+	void ClearDepthOnly() override
+	{
+		if (ITextureView* dsv = currentDepthTarget())
+			ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+
 	void streamVertices(const batchVertex* verts, uint32_t count)
 	{
 		IBuffer* vb = vertexRing.buf;
