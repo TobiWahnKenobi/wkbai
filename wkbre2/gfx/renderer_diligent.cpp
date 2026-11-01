@@ -10,13 +10,17 @@
 
 #include "renderer_diligent.h"
 #include "DiligentPostProcess.h"
+#include "DiligentFsr3.h"
 #include "bitmap.h"
 #include "../window.h"
 #include "../settings.h"
 #include "RenderSettings.h"
 #include "../util/util.h"
+#include "../Camera.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -305,6 +309,10 @@ struct DiligentRenderer : DiligentGfx
 	// post-processing: made when first used; on in this frame (the 3D scene drawn offscreen)
 	std::unique_ptr<DiligentPostProcess> post;
 	bool postActive = false, postEffects = true;
+	// FSR 3.1 in this frame, its jitter in render pixels, and when the last frame was processed
+	bool fsr3Active = false;
+	float jitterPixels[2] = {};
+	std::chrono::steady_clock::time_point lastApply;
 	DiligentPostProcess::FogOfWar fog;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
@@ -433,11 +441,41 @@ struct DiligentRenderer : DiligentGfx
 	{
 		postActive = false;
 		postEffects = effects;
+		fsr3Active = false;
+		g_projectionJitter[0] = g_projectionJitter[1] = 0.0f;
+		jitterPixels[0] = jitterPixels[1] = 0.0f;
 		if (!on)
 			return;
 		if (!post)
 			post = std::make_unique<DiligentPostProcess>(device, swapChain->GetDesc().ColorBufferFormat, swapChain->GetDesc().DepthBufferFormat);
-		post->resize(swapChain->GetDesc().Width, swapChain->GetDesc().Height);
+		// FSR: the scene smaller, scaled up to the back buffer in ApplyPostProcessing
+		const uint32_t ow = swapChain->GetDesc().Width, oh = swapChain->GetDesc().Height;
+		const float scale = effects ? g_renderSettings.renderScale() : 1.0f;
+		const uint32_t w = std::max(1u, (uint32_t)std::lround(ow * scale)), h = std::max(1u, (uint32_t)std::lround(oh * scale));
+		post->resize(w, h, ow, oh);
+		fsr3Active = effects && g_renderSettings.fsr3();
+		post->beginFrame(ctx, fsr3Active);
+		// FSR 3.1: its Halton sequence, longer the more it upscales; TAA: the camera moved by a
+		// sub-pixel Halton (2, 3) offset, 8 steps
+		if (fsr3Active) {
+			const int phases = DiligentFsr3::jitterPhaseCount(w, ow);
+			DiligentFsr3::jitterOffset((int)(frame % (uint64_t)phases), phases, jitterPixels[0], jitterPixels[1]);
+			g_projectionJitter[0] = 2.0f * jitterPixels[0] / w;
+			g_projectionJitter[1] = -2.0f * jitterPixels[1] / h;
+		}
+		else if (effects && g_renderSettings.antiAliasing == 2) {
+			auto halton = [](int i, int base) {
+				float f = 1.0f, r = 0.0f;
+				for (; i > 0; i /= base) {
+					f /= base;
+					r += f * (i % base);
+				}
+				return r;
+			};
+			const int i = (int)(frame % 8) + 1;
+			g_projectionJitter[0] = (halton(i, 2) - 0.5f) * 2.0f / w;
+			g_projectionJitter[1] = -(halton(i, 3) - 0.5f) * 2.0f / h;
+		}
 		postActive = true;
 	}
 
@@ -446,8 +484,9 @@ struct DiligentRenderer : DiligentGfx
 		fog = { tiles, width, height, version, inverseView, unseenBrightness };
 	}
 
-	void ApplyPostProcessing(const Matrix& projection) override
+	void ApplyPostProcessing(const Camera& camera) override
 	{
+		const Matrix& projection = camera.projMatrix;
 		if (!postActive)
 			return;
 		postActive = false;
@@ -458,9 +497,27 @@ struct DiligentRenderer : DiligentGfx
 		s.bloom = g_renderSettings.bloom;
 		s.bloomThreshold = g_renderSettings.bloomThreshold;
 		s.bloomIntensity = g_renderSettings.bloomIntensity;
-		s.fxaa = g_renderSettings.antiAliasing == 1;
-		if (!postEffects)
-			s.ssao = s.bloom = s.fxaa = false;
+		s.antiAliasing = g_renderSettings.antiAliasing;
+		s.sharpness = g_renderSettings.sharpness;
+		s.view = camera.viewMatrix;
+		s.projection = camera.projMatrix;
+		s.jitter[0] = camera.orthoMode ? 0.0f : g_projectionJitter[0];
+		s.jitter[1] = camera.orthoMode ? 0.0f : g_projectionJitter[1];
+		s.ortho = camera.orthoMode;
+		const auto now = std::chrono::steady_clock::now();
+		s.fsr3 = fsr3Active;
+		s.jitterPixels[0] = camera.orthoMode ? 0.0f : jitterPixels[0];
+		s.jitterPixels[1] = camera.orthoMode ? 0.0f : jitterPixels[1];
+		s.cameraNear = camera.nearDist;
+		s.cameraFar = camera.farDist;
+		s.fovY = camera.fovY;
+		s.frameTimeMs = std::chrono::duration<float, std::milli>(now - lastApply).count();
+		lastApply = now;
+		if (!postEffects) {
+			s.ssao = s.bloom = false;
+			s.antiAliasing = 0;
+			s.fsr3 = false;
+		}
 		s.fog = fog;
 		fog.tiles = nullptr;
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
@@ -522,6 +579,29 @@ struct DiligentRenderer : DiligentGfx
 
 	ITextureView* CurrentColorTarget() override { return currentColorTarget(); }
 	ITextureView* CurrentDepthTarget() override { return currentDepthTarget(); }
+
+	ITextureView* MotionVectorTarget() override
+	{
+		return postActive && fsr3Active ? post->objectMotionRTV() : nullptr;
+	}
+
+	void MarkOpaqueSceneDone() override
+	{
+		if (!postActive || !fsr3Active)
+			return;
+		post->copyOpaque(ctx);
+		RestoreRenderTargets();
+	}
+
+	void MarkWaterDone() override
+	{
+		if (!postActive || !fsr3Active)
+			return;
+		post->copyAfterWater(ctx);
+		RestoreRenderTargets();
+	}
+
+	uint64_t FrameIndex() override { return frame; }
 
 	void RestoreRenderTargets() override
 	{

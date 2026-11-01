@@ -77,8 +77,25 @@ struct RenderSettings {
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
 	// anti-aliasing of the 3D scene: 0 off, 1 FXAA (a pass after the post-processing; works with
-	// any renderer, forward or deferred, unlike MSAA, which the water's scene copy can't use)
+	// any renderer, forward or deferred, unlike MSAA, which the water's scene copy can't use),
+	// 2 TAA (the camera jittered, the frames blended through their depth; smoother edges and
+	// no shimmer, slightly softer, sharpened after), 3 AMD FSR 3.1 at the window's resolution
+	// (its temporal anti-aliasing, with motion vectors: the best edges and the least smearing)
 	int antiAliasing = 1;
+	// upscaling of the 3D scene (enhanced graphics on Diligent): 0 off (the window's resolution),
+	// 1 Ultra quality (77%), 2 Quality (67%), 3 Balanced (59%), 4 Performance (50% of the width
+	// and height); the HUD stays sharp at the window's size. By upscaler: 0 AMD FSR 1 (spatial,
+	// after the anti-aliasing), 1 AMD FSR 3.1 (temporal: anti-aliases and upscales together,
+	// replacing the anti-aliasing setting; sharper and steadier)
+	int upscaling = 0;
+	int upscaler = 1;
+	float sharpness = 0.8f;          // FSR's sharpening (and TAA's): 0 soft to 1 sharpest
+	float renderScale() const;       // the scene's size by the upscaling, of the window's
+	// whether FSR 3.1 renders the scene: as the anti-aliasing, or as the upscaler
+	bool fsr3() const { return antiAliasing == 3 || (upscaling > 0 && upscaler == 1); }
+	// the window: 0 windowed, 1 borderless fullscreen (the desktop's resolution), 2 fullscreen
+	// (the display switched to the desktop's mode); applied at once (window.cpp)
+	int displayMode = 0;
 	// anisotropic filtering of the terrain's, water's and models' textures: 1 (off) to 16;
 	// applied to renderers made after the change (the next map)
 	int anisotropy = 16;

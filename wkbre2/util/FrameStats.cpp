@@ -99,18 +99,35 @@ bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 		return false;
 	position = Vector3(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
 	orientation = Vector3(c[3].get<float>(), c[4].get<float>(), 0.0f);
+	// a camera moving by this much per frame (x, y, z, pitch, yaw): motion for the temporal
+	// anti-aliasing and upscaling
+	if (bm->contains("cameraMove")) {
+		const auto& m = bm->at("cameraMove");
+		if (m.is_array() && m.size() == 5) {
+			const float f = (float)s_benchmarkFrame;
+			position += Vector3(m[0].get<float>(), m[1].get<float>(), m[2].get<float>()) * f;
+			orientation += Vector3(m[3].get<float>(), m[4].get<float>(), 0.0f) * f;
+		}
+	}
 	return true;
 }
 
 const char* BenchmarkScreenshotDue()
 {
-	static bool taken = false;
+	// after the warm-up, one screenshot, or screenshotCount of the frames in a row (name_0.bmp,
+	// name_1.bmp, ...: the frame-to-frame flicker of the temporal anti-aliasing)
+	static int taken = 0;
 	static std::string path;
 	const auto* bm = BenchmarkSettings();
-	if (taken || !bm || !bm->contains("screenshot") || s_benchmarkFrame < bm->value("warmupFrames", 120))
+	const int count = bm ? bm->value("screenshotCount", 1) : 1;
+	if (taken >= count || !bm || !bm->contains("screenshot") || s_benchmarkFrame < bm->value("warmupFrames", 120))
 		return nullptr;
-	taken = true;
 	path = bm->value("screenshot", "");
+	if (count > 1) {
+		const size_t dot = path.find_last_of('.');
+		path.insert(dot == std::string::npos ? path.size() : dot, "_" + std::to_string(taken));
+	}
+	taken++;
 	return path.c_str();
 }
 

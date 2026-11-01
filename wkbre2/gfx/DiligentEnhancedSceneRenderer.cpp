@@ -20,6 +20,7 @@
 #include "RenderSettings.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <iterator>
 #include <map>
@@ -296,6 +297,74 @@ void PS_ShadowAlpha(VS_OUTPUT input)
 {
 	if(inpTexture.Sample(inpSampler, input.Texcoord).a < ALPHA_REF) discard;
 }
+
+// FSR 3.1's motion vectors of what moved since the last frame: drawn over the scene's depth at the
+// same (jittered) position, each vertex also where the unjittered camera sees it now and saw it in
+// the last frame, with the instance's transform and key frames then (the P and PrevAnim inputs)
+cbuffer MotionBuffer
+{
+	matrix MotionViewProj;     // this frame's view-projection, unjittered
+	matrix MotionPrevViewProj; // the last frame's
+};
+
+struct MOTION_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	float2 Texcoord : TEXCOORD0;
+	float4 Cur : TEXCOORD1;
+	float4 Prev : TEXCOORD2;
+};
+
+MOTION_OUTPUT Motion(float3 pos, float3 prevPos, float2 texcoord, float4 T0, float4 T1, float4 T2, float4 T3, float4 P0, float4 P1, float4 P2, float4 P3)
+{
+	float4x4 cur = transpose(float4x4(T0, T1, T2, T3)), prev = transpose(float4x4(P0, P1, P2, P3));
+	MOTION_OUTPUT o;
+	o.Pos = mul(float4(pos, 1), mul(cur, Transform));
+	o.Cur = mul(mul(float4(pos, 1), cur), MotionViewProj);
+	o.Prev = mul(mul(float4(prevPos, 1), prev), MotionPrevViewProj);
+	o.Texcoord = texcoord;
+	return o;
+}
+
+MOTION_OUTPUT VS_Motion(float3 Pos : ATTRIB0, float2 Texcoord : ATTRIB2,
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7,
+	float4 P0 : ATTRIB8, float4 P1 : ATTRIB9, float4 P2 : ATTRIB10, float4 P3 : ATTRIB11, uint4 PrevAnim : ATTRIB12)
+{
+	return Motion(Pos, Pos, Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
+}
+
+float3 AnimPosition(uint4 anim, uint vertexId)
+{
+	uint v1 = anim.x + VertexBase + vertexId, v2 = anim.y + VertexBase + vertexId;
+	float3 pos1 = float3(AnimPositions[3 * v1], AnimPositions[3 * v1 + 1], AnimPositions[3 * v1 + 2]);
+	float3 pos2 = float3(AnimPositions[3 * v2], AnimPositions[3 * v2 + 1], AnimPositions[3 * v2 + 2]);
+	return lerp(pos1, pos2, asfloat(anim.z));
+}
+
+MOTION_OUTPUT VS_AnimMotion(float2 Texcoord : ATTRIB0,
+	float4 T0 : ATTRIB1, float4 T1 : ATTRIB2, float4 T2 : ATTRIB3, float4 T3 : ATTRIB4, uint4 Anim : ATTRIB5,
+	float4 P0 : ATTRIB6, float4 P1 : ATTRIB7, float4 P2 : ATTRIB8, float4 P3 : ATTRIB9, uint4 PrevAnim : ATTRIB10,
+	uint VertexId : SV_VertexID)
+{
+	return Motion(AnimPosition(Anim, VertexId), AnimPosition(PrevAnim, VertexId), Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
+}
+
+// the last frame's position minus the current, in UV
+float2 MotionVector(MOTION_OUTPUT input)
+{
+	return (input.Prev.xy / input.Prev.w - input.Cur.xy / input.Cur.w) * float2(0.5, -0.5);
+}
+
+float2 PS_Motion(MOTION_OUTPUT input) : SV_Target
+{
+	return MotionVector(input);
+}
+
+float2 PS_MotionAlpha(MOTION_OUTPUT input) : SV_Target
+{
+	if(inpTexture.Sample(inpSampler, input.Texcoord).a < ALPHA_REF) discard;
+	return MotionVector(input);
+}
 )---";
 
 static RefCntAutoPtr<IBuffer> CreateImmutableBuffer(IRenderDevice* device, const char* name, BIND_FLAGS bind, const void* data, uint64_t size)
@@ -439,6 +508,12 @@ struct Instance {
 };
 static_assert(sizeof(Instance) == 80);
 
+// An instance of the motion vectors' draw: now and in the last frame
+struct MotionInstance {
+	Instance current, previous;
+};
+static_assert(sizeof(MotionInstance) == 160);
+
 // Half the side of the square around the camera's view centre covered by the static shadow map
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
 static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
@@ -449,12 +524,15 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// Textures (one binding per texture), and the frame's environment (the cloud map)
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
-	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2];
+	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
 	texture deriveNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
-	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer;
+	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer, motionConstBuffer;
+	// the motion vectors' camera (unjittered view-projection) and the frame it was drawn in
+	Matrix motionViewProj;
+	uint64_t motionFrame = ~0ull;
 	// instances per draw: every instance has its own key frame, so a draw takes all the instances
 	// of a model, material and team colour (80 bytes each, streamed)
 	static constexpr size_t MAX_INSTANCES = 1024;
@@ -481,6 +559,9 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene sun";
 	cbDesc.Size = 656;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
+	cbDesc.Name = "Scene motion";
+	cbDesc.Size = 128;
+	device->CreateBuffer(cbDesc, nullptr, &_impl->motionConstBuffer);
 
 
 	const PipelineResourceDesc resources[] = {
@@ -488,6 +569,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX, "SceneBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX, "MotionBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -514,6 +596,7 @@ void DiligentEnhancedSceneRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SunBuffer")->Set(_impl->sunConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SceneBuffer")->Set(_impl->sceneConstBuffer);
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "MotionBuffer")->Set(_impl->motionConstBuffer);
 
 	const PipelineResourceDesc envResources[] = {
 		{ SHADER_TYPE_VERTEX, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -616,6 +699,54 @@ void DiligentEnhancedSceneRenderer::init()
 				if (!pso)
 					ferr("Diligent: could not create the enhanced scene pipeline.");
 			}
+		}
+	}
+
+	// FSR 3.1's motion vectors (MotionInstance: an instance now, then in the last frame), into
+	// an RG16F target over the scene's depth: tested, not written, pulled a little towards the
+	// camera so that the same surface passes
+	RefCntAutoPtr<IShader> motionVertexShaders[2] = { createShader(SHADER_TYPE_VERTEX, "VS_Motion"), createShader(SHADER_TYPE_VERTEX, "VS_AnimMotion") };
+	RefCntAutoPtr<IShader> motionPixelShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS_Motion"), createShader(SHADER_TYPE_PIXEL, "PS_MotionAlpha") };
+	auto motionElements = [](std::vector<LayoutElement>& layout, Uint32 firstInput, Uint32 slot) {
+		for (Uint32 then = 0; then < 2; then++) {
+			const Uint32 base = then * (Uint32)sizeof(Instance);
+			for (Uint32 i = 0; i < 4; i++)
+				layout.push_back(LayoutElement{ firstInput + then * 5 + i, slot, 4, VT_FLOAT32, False, base + i * 16, sizeof(MotionInstance), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 });
+			layout.push_back(LayoutElement{ firstInput + then * 5 + 4, slot, 4, VT_UINT32, False, base + 64, sizeof(MotionInstance), INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 });
+		}
+	};
+	std::vector<LayoutElement> motionLayouts[2];
+	motionLayouts[0] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False} };
+	motionElements(motionLayouts[0], 3, 3);
+	motionLayouts[1] = { LayoutElement{0, 0, 2, VT_FLOAT32, False} };
+	motionElements(motionLayouts[1], 1, 1);
+	for (int anim = 0; anim < 2; anim++) {
+		for (int alpha = 0; alpha < 2; alpha++) {
+			GraphicsPipelineStateCreateInfo ci;
+			ci.PSODesc.Name = "Enhanced scene motion vectors";
+			ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+			auto& gp = ci.GraphicsPipeline;
+			gp.NumRenderTargets = 1;
+			gp.RTVFormats[0] = TEX_FORMAT_RG16_FLOAT;
+			gp.DSVFormat = dgfx->swapChain->GetDesc().DepthBufferFormat;
+			gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
+			gp.RasterizerDesc.DepthBias = -4;
+			gp.RasterizerDesc.SlopeScaledDepthBias = -1.0f;
+			gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+			gp.DepthStencilDesc.DepthEnable = True;
+			gp.DepthStencilDesc.DepthWriteEnable = False;
+			gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+			gp.BlendDesc.RenderTargets[0].BlendEnable = False;
+			gp.InputLayout.LayoutElements = motionLayouts[anim].data();
+			gp.InputLayout.NumElements = (Uint32)motionLayouts[anim].size();
+			ci.pVS = motionVertexShaders[anim];
+			ci.pPS = motionPixelShaders[alpha];
+			IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
+			ci.ppResourceSignatures = signatures;
+			ci.ResourceSignaturesCount = anim ? 3 : 2;
+			device->CreateGraphicsPipelineState(ci, &_impl->motionPipelines[anim][alpha]);
+			if (!_impl->motionPipelines[anim][alpha])
+				ferr("Diligent: could not create the enhanced scene motion vector pipeline.");
 		}
 	}
 }
@@ -728,9 +859,27 @@ void DiligentEnhancedSceneRenderer::render()
 	};
 
 	std::vector<Instance> instances;
-	// Draws the scene's meshes, or only the static shadow casters into the bound shadow map.
-	// Returns whether anything was drawn.
-	auto drawMeshes = [&](bool shadowPass) {
+	std::vector<MotionInstance> motionInstances;
+	// an instance's key frames and the blend between them at an animation time
+	auto keyFrames = [](Instance& inst, const DilAnim* enhAnim, AnimatedModel* animModel, uint32_t time) {
+		uint32_t animtime = time % animModel->anim.duration;
+		size_t frame = 0;
+		for (; frame < enhAnim->animTimes.size() - 1; frame++)
+			if (enhAnim->animTimes[frame + 1] >= animtime)
+				break;
+		frame = std::min(frame, enhAnim->animTimes.size() - 2);
+		inst.blend = std::clamp((float)((int64_t)animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]), 0.0f, 1.0f);
+		inst.frameStart = (uint32_t)frame * enhAnim->frameVertices();
+		inst.nextFrameStart = (uint32_t)(frame + 1) * enhAnim->frameVertices();
+	};
+	// Draws the scene's meshes, only the static shadow casters into the bound shadow map, or the
+	// motion vectors of the meshes that moved or animated since the last frame (FSR 3.1, into the
+	// bound motion vector target; the entities remember how they were drawn). Returns whether
+	// anything was drawn.
+	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION };
+	const uint64_t frameIndex = dgfx->FrameIndex();
+	auto drawMeshes = [&](DrawMode mode) {
+		const bool shadowPass = mode == DRAW_SHADOWS, motionPass = mode == DRAW_MOTION;
 		bool drawn = false;
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
@@ -764,13 +913,17 @@ void DiligentEnhancedSceneRenderer::render()
 			// one draw per team colour (the UV set): the instances keep their own key frame and flags
 			int prevColor = -1;
 			instances.clear();
+			motionInstances.clear();
 
 			auto flush = [&]() {
-				if (instances.empty()) return;
+				const size_t count = motionPass ? motionInstances.size() : instances.size();
+				if (count == 0) return;
 				uint64_t instanceOffset = 0;
-				IBuffer* instanceBuffer = dgfx->StreamVertexData(instances.data(), instances.size() * sizeof(Instance), instanceOffset);
+				IBuffer* instanceBuffer = motionPass
+					? dgfx->StreamVertexData(motionInstances.data(), count * sizeof(MotionInstance), instanceOffset)
+					: dgfx->StreamVertexData(instances.data(), count * sizeof(Instance), instanceOffset);
 
-				ctx->SetPipelineState((shadowPass ? _impl->shadowPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
+				ctx->SetPipelineState((shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -800,41 +953,60 @@ void DiligentEnhancedSceneRenderer::render()
 							IBuffer* buffers[2] = { enhMesh->texcoords[prevColor], instanceBuffer };
 							const Uint64 offsets[2] = { (Uint64)startVertex * 8, instanceOffset };
 							ctx->SetVertexBuffers(0, 2, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instances.size(), startIndex, 0 });
+							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)count, startIndex, 0 });
 						}
 						else
-							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)instances.size(), startIndex, startVertex });
+							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)count, startIndex, startVertex });
 					}
 					startIndex += numIndices;
 					startVertex += numVertices;
 				}
 
 				instances.clear();
+				motionInstances.clear();
 			};
 
-			for (const SceneEntity* ent : it.second.list) {
+			const bool animated = enhAnim && enhAnim->animTimes.size() >= 2;
+			for (SceneEntity* ent : it.second.list) {
 				if (shadowPass && !(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
 					continue;
+				if (motionPass) {
+					// the first of the entity's materials in this frame: what was drawn becomes the
+					// last frame's
+					if (ent->drawnFrame != frameIndex) {
+						ent->previousValid = ent->drawnFrame + 1 == frameIndex;
+						ent->previousTransform = ent->drawnTransform;
+						ent->previousAnimTime = ent->drawnAnimTime;
+						ent->drawnTransform = ent->transform;
+						ent->drawnAnimTime = ent->animTime;
+						ent->drawnFrame = frameIndex;
+					}
+					// still: the camera's motion covers it
+					const bool moved = memcmp(&ent->transform, &ent->previousTransform, sizeof(Matrix)) != 0
+						|| (animated && ent->animTime != ent->previousAnimTime);
+					if (!ent->previousValid || !moved)
+						continue;
+				}
 				Instance inst;
 				inst.transform = ent->transform.getTranspose();
 				inst.flags = ent->flags;
-				if (enhAnim && enhAnim->animTimes.size() >= 2) {
-					auto* animModel = (AnimatedModel*)model;
-					uint32_t animtime = ent->animTime % animModel->anim.duration;
-					size_t frame = 0;
-					for (; frame < enhAnim->animTimes.size() - 1; frame++)
-						if (enhAnim->animTimes[frame + 1] >= animtime)
-							break;
-					frame = std::min(frame, enhAnim->animTimes.size() - 2);
-					inst.blend = std::clamp((float)((int64_t)animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]), 0.0f, 1.0f);
-					inst.frameStart = (uint32_t)frame * enhAnim->frameVertices();
-					inst.nextFrameStart = (uint32_t)(frame + 1) * enhAnim->frameVertices();
-				}
+				if (animated)
+					keyFrames(inst, enhAnim, (AnimatedModel*)model, ent->animTime);
 				const int actualColor = ent->color % enhMesh->texcoords.size();
-				if (instances.size() >= _impl->MAX_INSTANCES || actualColor != prevColor)
+				if ((motionPass ? motionInstances.size() : instances.size()) >= _impl->MAX_INSTANCES || actualColor != prevColor)
 					flush();
 				prevColor = actualColor;
-				instances.push_back(inst);
+				if (motionPass) {
+					MotionInstance mi;
+					mi.current = inst;
+					mi.previous = inst;
+					mi.previous.transform = ent->previousTransform.getTranspose();
+					if (animated)
+						keyFrames(mi.previous, enhAnim, (AnimatedModel*)model, ent->previousAnimTime);
+					motionInstances.push_back(mi);
+				}
+				else
+					instances.push_back(inst);
 			}
 			flush();
 		}
@@ -863,12 +1035,35 @@ void DiligentEnhancedSceneRenderer::render()
 		ctx->SetViewports(1, nullptr, 0, 0);
 		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		gfx->SetTransformMatrix(&lightMatrix);
-		shadows.staticShadowValid = drawMeshes(true);
+		shadows.staticShadowValid = drawMeshes(DRAW_SHADOWS);
 		shadows.staticShadowMatrix = lightMatrix;
 		gfx->SetTransformMatrix(&camera->sceneMatrix);
 		dgfx->RestoreRenderTargets();
 	}
 
-	drawMeshes(false);
+	drawMeshes(DRAW_SCENE);
+
+	// FSR 3.1: the motion vectors of what moved, seen by the camera without its jitter now and
+	// in the last frame (none after a frame without them: no last camera)
+	if (ITextureView* motion = dgfx->MotionVectorTarget()) {
+		Matrix projection = camera->projMatrix;
+		if (!camera->orthoMode) {
+			projection._31 -= g_projectionJitter[0];
+			projection._32 -= g_projectionJitter[1];
+		}
+		const Matrix viewProj = camera->viewMatrix * projection;
+		const bool cameraValid = _impl->motionFrame + 1 == frameIndex;
+		const Matrix matrices[2] = { viewProj.getTranspose(), _impl->motionViewProj.getTranspose() };
+		_impl->motionViewProj = viewProj;
+		_impl->motionFrame = frameIndex;
+		ctx->MapBuffer(_impl->motionConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+		memcpy(mapped, matrices, sizeof(matrices));
+		ctx->UnmapBuffer(_impl->motionConstBuffer, MAP_WRITE);
+		if (cameraValid) {
+			ctx->SetRenderTargets(1, &motion, dgfx->CurrentDepthTarget(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			drawMeshes(DRAW_MOTION);
+			dgfx->RestoreRenderTargets();
+		}
+	}
 }
 

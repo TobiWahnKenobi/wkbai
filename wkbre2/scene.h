@@ -22,6 +22,12 @@ struct SceneEntity {
 	int color = 0;
 	uint32_t animTime = 0;
 	uint32_t flags = 0;
+	// The renderer's, for motion vectors (FSR 3.1): the transform and animation time when the
+	// entity was drawn in frame drawnFrame, and in the frame before that if previousValid
+	Matrix drawnTransform, previousTransform;
+	uint32_t drawnAnimTime = 0, previousAnimTime = 0;
+	uint64_t drawnFrame = ~0ull;
+	bool previousValid = false;
 
 	enum Flags {
 		SEFLAG_NOLIGHTING = 1, // disable light shading on entity
