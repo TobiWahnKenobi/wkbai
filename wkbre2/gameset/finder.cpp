@@ -650,6 +650,10 @@ struct FinderMetreRadius : ObjectFinder {
 	template<typename AnyGO> bool eligible(AnyGO* obj, AnyGO* refplayer, ScriptContext* ctx) {
 		if (!obj->isInteractable()) return false;
 		AnyGO* objplayer = obj->getPlayer();
+		// friend or foe needs both players (a skirmish's empty position: its player was removed
+		// and its objects, not freed yet, have none; the crash with every AI General kicked)
+		if ((relationship == 2 || relationship == 3) && (!objplayer || !refplayer))
+			return false;
 		switch (relationship) {
 		case 1: if (objplayer != refplayer) return false; break;
 		case 2: if (objplayer != refplayer && ctx->gameState->getDiplomaticStatus(objplayer, refplayer) >= 1) return false; break;
