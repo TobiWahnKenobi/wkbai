@@ -862,6 +862,91 @@ void ClientInterface::drawLoadingScreen()
 	}
 }
 
+// The lower left panel's stained-glass window as glass (enhanced graphics): each pane bulges
+// a little between the dark lead lines, so the painted pattern is refracted by its normal and
+// a light sweeping slowly across glints on it. Precomputed on the CPU as GLASS_FRAMES frames
+// of the panel (a cheap stand-in for a shader: the HUD is drawn through ImGui), cycled at 4 fps.
+static constexpr int GLASS_FRAMES = 32;
+void ClientInterface::drawStainedGlassPanel(int x, int y, int w, int h)
+{
+	static const char* path = "Interface\\InGame\\Bottom_Left_Panel.tga";
+	if (!UseEnhancedRenderers(gfx) || !g_renderSettings.stainedGlass) {
+		ImGui::GetBackgroundDrawList()->AddImage(uiTexCache.getTexture(path, false), ImVec2((float)x, (float)y), ImVec2((float)(x + w), (float)(y + h)));
+		return;
+	}
+	if (glassFrames.empty()) {
+		const Bitmap src = Bitmap::loadBitmap(path).convertToR8G8B8A8();
+		const int W = src.width, H = src.height;
+		if (W <= 0 || H <= 0)
+			return;
+		const unsigned char* px = src.pixels.data();
+		// the window's glass: inside its circle and not the dark lead
+		constexpr float CX = 128.0f, CY = 195.0f, R = 100.0f;
+		std::vector<float> mask(W * H, 0.0f), tmp(W * H);
+		for (int j = 0; j < H; j++)
+			for (int i = 0; i < W; i++) {
+				const unsigned char* p = px + (j * W + i) * 4;
+				const float lum = 0.3f * p[0] + 0.59f * p[1] + 0.11f * p[2];
+				const float dx = i - CX, dy = j - CY;
+				if (dx * dx + dy * dy < R * R && lum >= 45.0f)
+					mask[j * W + i] = 1.0f;
+			}
+		// the panes' height: the mask blurred (raised in the middle of each pane)
+		std::vector<float> height = mask;
+		for (int pass = 0; pass < 4; pass++) {
+			for (int j = 0; j < H; j++)
+				for (int i = 0; i < W; i++) {
+					float s = 0; int n = 0;
+					for (int k = -2; k <= 2; k++) { const int ii = std::clamp(i + k, 0, W - 1); s += height[j * W + ii]; n++; }
+					tmp[j * W + i] = s / n;
+				}
+			for (int j = 0; j < H; j++)
+				for (int i = 0; i < W; i++) {
+					float s = 0; int n = 0;
+					for (int k = -2; k <= 2; k++) { const int jj = std::clamp(j + k, 0, H - 1); s += tmp[jj * W + i]; n++; }
+					height[j * W + i] = s / n * mask[j * W + i];
+				}
+		}
+		auto sample = [&](float fx, float fy, int c) {
+			fx = std::clamp(fx, 0.0f, (float)W - 1.001f); fy = std::clamp(fy, 0.0f, (float)H - 1.001f);
+			const int i0 = (int)fx, j0 = (int)fy; const float ax = fx - i0, ay = fy - j0;
+			auto at = [&](int i, int j) { return (float)px[(j * W + i) * 4 + c]; };
+			return (at(i0, j0) * (1 - ax) + at(i0 + 1, j0) * ax) * (1 - ay) + (at(i0, j0 + 1) * (1 - ax) + at(i0 + 1, j0 + 1) * ax) * ay;
+		};
+		for (int f = 0; f < GLASS_FRAMES; f++) {
+			// the light sweeps from the upper left to the upper right and back
+			const float t = 0.5f - 0.5f * std::cos(f * 6.2831853f / GLASS_FRAMES);
+			Vector3 light(-0.8f + 1.6f * t, -0.6f, 0.9f);
+			light = light.normal();
+			Bitmap out;
+			out.width = W; out.height = H; out.format = BMFORMAT_R8G8B8A8;
+			out.pixels.resize((size_t)W * H * 4);
+			memcpy(out.pixels.data(), px, (size_t)W * H * 4);
+			for (int j = 1; j < H - 1; j++)
+				for (int i = 1; i < W - 1; i++) {
+					if (mask[j * W + i] <= 0.0f)
+						continue;
+					const float gx = (height[j * W + i + 1] - height[j * W + i - 1]) * 0.5f;
+					const float gy = (height[(j + 1) * W + i] - height[(j - 1) * W + i]) * 0.5f;
+					Vector3 n(-gx * 6.0f, -gy * 6.0f, 1.0f);
+					n = n.normal();
+					// refraction: the pattern seen through the bulge
+					const float rx = i + n.x * 2.2f, ry = j + n.y * 2.2f;
+					const float diffuse = 0.88f + 0.22f * std::max(0.0f, n.dot(light));
+					// the glint: the light reflected towards the viewer (0, 0, 1)
+					const Vector3 refl = n * (2.0f * n.dot(light)) - light;
+					const float spec = std::pow(std::max(0.0f, refl.z), 24.0f) * 110.0f;
+					unsigned char* o = &out.pixels[((size_t)j * W + i) * 4];
+					for (int c = 0; c < 3; c++)
+						o[c] = (unsigned char)std::clamp(sample(rx, ry, c) * diffuse + spec, 0.0f, 255.0f);
+				}
+			glassFrames.push_back(gfx->CreateTexture(out, 1));
+		}
+	}
+	const int f = (int)(SDL_GetTicks() / 250) % GLASS_FRAMES;
+	ImGui::GetBackgroundDrawList()->AddImage(glassFrames[f], ImVec2((float)x, (float)y), ImVec2((float)(x + w), (float)(y + h)));
+}
+
 // The selected (else the hovered) character standing in the middle of the lower left panel's
 // stained-glass window, slowly turning, as the original's selection window shows it: its model
 // with its current animation, drawn after the HUD into a square there (Diligent only).
@@ -1890,6 +1975,8 @@ void ClientInterface::iter()
 				ImGui::GetBackgroundDrawList()->AddImage(tex, ImVec2((float)x, (float)y), ImVec2((float)(x + width), (float)(y + height)), ImVec2(u0, v0), ImVec2(u1, v1));
 			});
 		lua.set_function("openInGameMenu", [this]() { openMenuRequested = true; });
+		// the lower left panel, its window as glass with enhanced graphics
+		lua.set_function("drawStainedGlassPanel", [this](int x, int y, int w, int h) { drawStainedGlassPanel(x, y, w, h); });
 		// text in a colour (0xAABBGGRR, as drawRect)
 		lua.set_function("drawTextColor",
 			[](int x, int y, const std::string& text, uint32_t color) {

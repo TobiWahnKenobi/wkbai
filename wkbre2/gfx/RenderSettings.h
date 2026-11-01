@@ -71,6 +71,8 @@ struct RenderSettings {
 	// fog of war: what none of the player's units sees is darker (the original's), by this much
 	bool fogOfWar = true;
 	float fogOfWarBrightness = 0.55f;
+	// the lower left panel's stained-glass window as refracting glass (enhanced graphics)
+	bool stainedGlass = true;
 	bool ssao = true, bloom = true;
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;

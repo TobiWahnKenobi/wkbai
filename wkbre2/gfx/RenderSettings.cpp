@@ -66,6 +66,7 @@ void RenderSettings::load()
 	realCharacterShadows = g_settings.value<bool>("realCharacterShadows", def.realCharacterShadows);
 	wallShadows = g_settings.value<bool>("wallShadows", def.wallShadows);
 	fogOfWar = g_settings.value<bool>("fogOfWar", def.fogOfWar);
+	stainedGlass = g_settings.value<bool>("stainedGlass", def.stainedGlass);
 	fogOfWarBrightness = g_settings.value<float>("fogOfWarBrightness", def.fogOfWarBrightness);
 	ssao = g_settings.value<bool>("ssao", def.ssao);
 	bloom = g_settings.value<bool>("bloom", def.bloom);
@@ -140,6 +141,7 @@ void RenderSettings::save()
 	g_settings["realCharacterShadows"] = realCharacterShadows;
 	g_settings["wallShadows"] = wallShadows;
 	g_settings["fogOfWar"] = fogOfWar;
+	g_settings["stainedGlass"] = stainedGlass;
 	g_settings["fogOfWarBrightness"] = fogOfWarBrightness;
 	g_settings["ssao"] = ssao;
 	g_settings["bloom"] = bloom;

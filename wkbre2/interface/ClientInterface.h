@@ -139,6 +139,9 @@ private:
 	void drawLoadingScreen();
 	// the selected (or hovered) character in the selection window, turning (after the HUD)
 	void drawSelectionPortrait();
+	// the lower left panel, its stained-glass window as refracting glass with enhanced graphics
+	void drawStainedGlassPanel(int x, int y, int w, int h);
+	std::vector<void*> glassFrames;
 	const void* loadingFor = nullptr; // the level it was shown for (nullptr: before any)
 	int loadingScreenIndex = 0, loadingTip = 0, framesWithLevel = 0;
 	int loadingStage = 0;
