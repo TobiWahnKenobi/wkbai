@@ -504,19 +504,37 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 		};
 		return (at(ix, iz) * (1 - tx) + at(ix + 1, iz) * tx) * (1 - tz) + (at(ix, iz + 1) * (1 - tx) + at(ix + 1, iz + 1) * tx) * tz;
 	};
-	std::vector<uint8_t> wet(N, 0), riv(N, 0);
+	// The field is only worked out near the rivers: within NEAR_TILES of a tile with any river
+	// share. Beyond, the shaders don't use it (their river look is weighted by that share), and
+	// working it out over a whole sea took seconds on the large maps (Continent: 6 s).
+	constexpr int NEAR_TILES = 3;
+	std::vector<uint8_t> nearTile((size_t)W * H, 0);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++)
+			if (flow[((size_t)z * W + x) * 4 + 3] > 0)
+				for (int dz = -NEAR_TILES; dz <= NEAR_TILES; dz++)
+					for (int dx = -NEAR_TILES; dx <= NEAR_TILES; dx++)
+						if (x + dx >= 0 && z + dz >= 0 && x + dx < W && z + dz < H)
+							nearTile[(size_t)(z + dz) * W + x + dx] = 1;
+	// wet: water above the smooth ground (away from the rivers, just the water tiles: there it
+	// only sizes the wide water); wn: wet and near the rivers, where the distances are worked out
+	std::vector<uint8_t> wet(N, 0), riv(N, 0), wn(N, 0);
 	bool anyRiver = false;
 	for (int z = 0; z < GH; z++)
 		for (int x = 0; x < GW; x++) {
 			const TerrainTile* tile = terrain->getTile(x / R, z / R);
 			if (!tile->fullOfWater)
 				continue;
+			const size_t i = (size_t)z * GW + x;
+			if (!nearTile[(size_t)(z / R) * W + x / R]) {
+				wet[i] = 1;
+				continue;
+			}
 			const float gx = (x + 0.5f) / R, gz = (z + 0.5f) / R;
 			const float ground = terrain->getSmoothHeight((gx - terrain->edge) * 5.0f, (gz - terrain->edge) * 5.0f);
 			if (tile->waterLevel <= ground)
 				continue;
-			const size_t i = (size_t)z * GW + x;
-			wet[i] = 1;
+			wet[i] = wn[i] = 1;
 			if (share(gx, gz) >= 0.5f) {
 				riv[i] = 1;
 				anyRiver = true;
@@ -537,7 +555,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 				for (int dz = -1; dz <= 1 && !nearWet; dz++)
 					for (int dx = -1; dx <= 1; dx++) {
 						const int ax = x + dx, az = z + dz;
-						if (ax >= 0 && az >= 0 && ax < GW && az < GH && wet[(size_t)az * GW + ax]) {
+						if (ax >= 0 && az >= 0 && ax < GW && az < GH && wn[(size_t)az * GW + ax]) {
 							nearWet = true;
 							break;
 						}
@@ -563,7 +581,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 					if ((dx == 0 && dz == 0) || ax < 0 || az < 0 || ax >= GW || az >= GH)
 						continue;
 					const int n = az * GW + ax;
-					if (!wet[n])
+					if (!wn[n])
 						continue;
 					const float nd = std::sqrt((float)((ax - sx) * (ax - sx) + (az - sz) * (az - sz))) * cell;
 					if (nd < bank[n]) {
@@ -762,7 +780,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
 					continue;
 				const int n = az * GW + ax;
-				if (!wet[n] || riv[n])
+				if (!wn[n] || riv[n])
 					continue;
 				const float nd = dt + (k < 4 ? 1.0f : 1.41421f) * cell;
 				if (nd < seaDist[n]) {
@@ -816,8 +834,10 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 	if (halfWidth) {
 		std::vector<float>& hw = *halfWidth;
 		std::vector<Item> heap;
+		// (from the river texels only: from all the water, a sea's distance to its shore, hundreds of
+		// units out, had carried over the whole map, and rivers beside it were taken for that wide)
 		for (int i = 0; i < (int)N; i++)
-			if (wet[i]) {
+			if (riv[i]) {
 				hw[i] = bank[i];
 				heap.push_back({ -bank[i], i });
 			}
@@ -835,7 +855,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 				if (ax < 0 || az < 0 || ax >= GW || az >= GH)
 					continue;
 				const int n = az * GW + ax;
-				if (!wet[n])
+				if (!wn[n])
 					continue;
 				const float v = hw[i] - 0.15f * cell * (k < 4 ? 1.0f : 1.41421f);
 				if (v > hw[n]) {
@@ -884,7 +904,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 		landPasses++;
 		std::vector<uint8_t> next = done;
 		for (int i = 0; i < (int)N; i++) {
-			if (done[i])
+			if (done[i] || (!wn[i] && !land))
 				continue;
 			const int x = i % GW, z = i / GW;
 			float acc[4] = {};
@@ -898,11 +918,11 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 						acc[c] += out[((size_t)bz * GW + bx) * 4 + c];
 					n++;
 				}
-			if (n == 0 || (!wet[i] && !land))
+			if (n == 0)
 				continue;
 			for (int c = 0; c < 4; c++)
 				out[i * 4 + c] = acc[c] / n;
-			if (!wet[i])
+			if (!wn[i])
 				out[i * 4 + 1] = 0;
 			else
 				out[i * 4 + 1] = std::min(out[i * 4 + 1], bank[i]);
