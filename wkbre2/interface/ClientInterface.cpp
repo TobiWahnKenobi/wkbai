@@ -715,8 +715,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
 		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
 		{
-			static const char* const aaLevels[] = { "Off", "FXAA" };
-			ImGui::Combo("Anti-aliasing", &s.antiAliasing, aaLevels, 2);
+			static const char* const aaLevels[] = { "Off", "FXAA", "TAA" };
+			ImGui::Combo("Anti-aliasing", &s.antiAliasing, aaLevels, 3);
 		}
 		ImGui::SliderInt("Anisotropic filtering (next map)", &s.anisotropy, 1, 16);
 	}
@@ -2395,7 +2395,7 @@ void ClientInterface::iter()
 	if (fogOn)
 		fogOfWar.update(client);
 	if (postGfx) {
-		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0);
+		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
 		postGfx->BeginPostProcessing(client->getLevel() && (effects || fogOn), UseEnhancedRenderers(gfx));
 	}
 	gfx->ClearFrame(true, true, fogColour);
@@ -2809,7 +2809,7 @@ void ClientInterface::iter()
 		if (fogOn && !fogOfWar.tiles.empty())
 			postGfx->SetFogOfWar(fogOfWar.tiles.data(), fogOfWar.width, fogOfWar.height, fogOfWar.version,
 				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness);
-		postGfx->ApplyPostProcessing(client->camera.projMatrix);
+		postGfx->ApplyPostProcessing(client->camera);
 	}
 
 	if (selBoxOn) {

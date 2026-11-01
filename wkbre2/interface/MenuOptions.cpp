@@ -133,11 +133,22 @@ namespace {
 			MenuOption o;
 			o.id = "antiAliasing"; o.page = "lighting"; o.label = "Anti-aliasing";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "FXAA" };
+			o.choices = { "Off", "FXAA", "TAA" };
 			o.get = [&rs]() { return (float)rs.antiAliasing; };
-			o.set = [&rs](float v) { rs.antiAliasing = std::clamp((int)v, 0, 1); };
+			o.set = [&rs](float v) { rs.antiAliasing = std::clamp((int)v, 0, 2); };
 			list.push_back(o);
 		}
+		{
+			MenuOption o;
+			o.id = "upscaling"; o.page = "lighting"; o.label = "Upscaling (AMD FSR)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Ultra quality", "Quality", "Balanced", "Performance" };
+			o.get = [&rs]() { return (float)rs.upscaling; };
+			o.set = [&rs](float v) { rs.upscaling = std::clamp((int)v, 0, 4); };
+			list.push_back(o);
+		}
+		list.push_back(withEnabled(slider("sharpness", "lighting", "Sharpening", rs.sharpness, 0.0f, 1.0f),
+			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing == 2; }));
 		{
 			MenuOption o;
 			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";

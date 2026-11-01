@@ -77,8 +77,16 @@ struct RenderSettings {
 	float ssaoRadius = 2.5f, ssaoStrength = 0.7f;      // world units; 0-1
 	float bloomThreshold = 0.72f, bloomIntensity = 0.35f;
 	// anti-aliasing of the 3D scene: 0 off, 1 FXAA (a pass after the post-processing; works with
-	// any renderer, forward or deferred, unlike MSAA, which the water's scene copy can't use)
+	// any renderer, forward or deferred, unlike MSAA, which the water's scene copy can't use),
+	// 2 TAA (the camera jittered, the frames blended through their depth; smoother edges and
+	// no shimmer, slightly softer, sharpened after)
 	int antiAliasing = 1;
+	// upscaling of the 3D scene with AMD FSR 1 (enhanced graphics on Diligent): 0 off (the
+	// window's resolution), 1 Ultra quality (77%), 2 Quality (67%), 3 Balanced (59%),
+	// 4 Performance (50% of the width and height); the HUD stays sharp at the window's size
+	int upscaling = 0;
+	float sharpness = 0.8f;          // FSR's sharpening (and TAA's): 0 soft to 1 sharpest
+	float renderScale() const;       // the scene's size by the upscaling, of the window's
 	// anisotropic filtering of the terrain's, water's and models' textures: 1 (off) to 16;
 	// applied to renderers made after the change (the next map)
 	int anisotropy = 16;

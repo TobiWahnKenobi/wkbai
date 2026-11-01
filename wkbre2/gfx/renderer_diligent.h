@@ -11,6 +11,8 @@
 #include "SwapChain.h"
 #include "RefCntAutoPtr.hpp"
 
+struct Camera;
+
 // The Diligent IRenderer, as seen by the renderers that draw with Diligent directly
 // (DiligentEnhancedSceneRenderer, DiligentEnhancedTerrainRenderer).
 struct DiligentGfx : IRenderer
@@ -54,9 +56,11 @@ struct DiligentGfx : IRenderer
 	// Post-processing (ambient occlusion, bloom): BeginPostProcessing(true) before ClearFrame sends
 	// the frame's 3D drawing into offscreen targets; ApplyPostProcessing, after the 3D scene and
 	// before the HUD, writes the processed scene into the back buffer and binds that again.
-	// effects: SSAO, bloom and FXAA as set (else only the fog of war: classic graphics)
+	// effects: SSAO, bloom, anti-aliasing and FSR upscaling as set (else only the fog of war:
+	// classic graphics). With TAA, BeginPostProcessing sets the frame's g_projectionJitter, so it
+	// comes before the camera's updateMatrix.
 	virtual void BeginPostProcessing(bool on, bool effects = true) = 0;
-	virtual void ApplyPostProcessing(const Matrix& projection) = 0;
+	virtual void ApplyPostProcessing(const Camera& camera) = 0;
 	// The fog of war for the next ApplyPostProcessing: per 5 m tile of the playable area (row z,
 	// column x), 255 where the player's units see; tiles nullptr: none. The data must stay valid
 	// until then; version changes with it.
