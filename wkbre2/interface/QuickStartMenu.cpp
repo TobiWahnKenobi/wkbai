@@ -898,6 +898,19 @@ void QuickStartMenu::lobbyTest()
 			fe->open("mphost");
 		return;
 	}
+	// { "host": "<level>", "solo": true }: starts at once with no guest, the host alone (the other
+	// positions empty)
+	if (test.value("solo", false)) {
+		done = true;
+		const int players = atoi(level.c_str()) > 0 ? atoi(level.c_str()) : 2;
+		std::string slots = "H;c1";
+		for (int i = 2; i <= players; i++)
+			slots += "|E";
+		printf("Lobby test: starting %s alone with slots %s\n", level.c_str(), slots.c_str());
+		handleRequest({ "slots", slots });
+		handleRequest({ "start_multiplayer", level });
+		return;
+	}
 	// a guest with its name: wait a moment for its chat, then start
 	static uint64_t joinedTime = 0;
 	if (guests.empty() || guestIds.empty())
