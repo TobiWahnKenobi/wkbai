@@ -18,6 +18,7 @@ struct NetEnetLink : NetLink {
 	bool available() override;
 	NetPacket receive() override;
 	void send(const NetPacket &packet) override;
+	void disconnect(bool afterSending) override;
 
 	NetEnetLink(_ENetHost *host, _ENetPeer *peer) : host(host), peer(peer) {}
 };

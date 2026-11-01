@@ -17,6 +17,7 @@
 #include "../SoundPlayer.h"
 #include "../util/StriCompare.h"
 #include "../settings.h"
+#include "../matchmaking/Matchmaking.h"
 #include <nlohmann/json.hpp>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
@@ -532,6 +533,82 @@ struct FrontEnd::Impl {
 		lua.set_function("getLobbyStatus", [this]() { return lobbyStatus; });
 		lua.set_function("getPlayerName", []() { return g_settings.value("playerName", std::string("Player")); });
 		lua.set_function("getJoinAddress", []() { return g_settings.value("joinAddress", std::string("localhost")); });
+
+		// Matchmaking: the games every service found, a group per service (the local network
+		// first): { id, title, state ("ready", "off", "signing in", "failed"), text, games = {
+		// { id, name, host, map, players, places, spectators, maxSpectators, allowSpectators,
+		// password, running, versionOk, mods ("match", "host sends", "differ", "no mods", "?"),
+		// modsOk, modsWhy, ping (ms, -1 unknown) }, ... } }
+		lua.set_function("getGameList", [this]() {
+			sol::table groups = lua.create_table();
+			const std::string mine = ModManifest();
+			const nlohmann::json mineJson = nlohmann::json::parse(mine, nullptr, false);
+			const bool haveMods = mineJson.is_object() && !mineJson.value("mods", nlohmann::json::array()).empty();
+			int g = 1;
+			for (const auto& s : Matchmaking::get().services()) {
+				static const char* states[] = { "off", "signing in", "ready", "failed" };
+				sol::table games = lua.create_table();
+				int i = 1;
+				for (const GameListing& l : s->listings()) {
+					if (!Matchmaking::get().filter.accepts(l))
+						continue;
+					std::string mods = "?", why;
+					bool modsOk = true;
+					if (!l.modManifest.empty()) {
+						why = CompareModLogic(l.modManifest, mine);
+						if (l.modPolicy == 2 && haveMods) // Server::MODS_NONE
+							mods = "no mods", modsOk = false, why = "the host allows no mods";
+						else if (why.empty())
+							mods = "match";
+						else if (l.modPolicy == 1) // Server::MODS_SEND
+							mods = "host sends";
+						else
+							mods = "differ", modsOk = false;
+					}
+					sol::table t = lua.create_table();
+					t["id"] = l.id;
+					t["name"] = l.name;
+					t["host"] = l.hostName;
+					t["map"] = l.map;
+					t["players"] = l.players;
+					t["places"] = l.places;
+					t["spectators"] = l.spectators;
+					t["maxSpectators"] = l.maxSpectators;
+					t["allowSpectators"] = l.allowSpectators;
+					t["password"] = l.password;
+					t["running"] = l.running;
+					t["versionOk"] = l.version == MatchmakingGameVersion();
+					t["mods"] = mods;
+					t["modsOk"] = modsOk;
+					t["modsWhy"] = why;
+					t["ping"] = MatchmakingPing(l);
+					games[i++] = t;
+				}
+				groups[g++] = lua.create_table_with("id", s->id(), "title", s->title(), "state", states[(int)s->state()],
+					"text", s->stateText(), "icon", s->icon(), "games", games);
+			}
+			return groups;
+		});
+		lua.set_function("refreshGameList", []() { Matchmaking::get().refresh(); });
+		// the list's filter: { hideFull, hidePassword, sameVersionOnly, text }
+		lua.set_function("setGameListFilter", [](sol::table f) {
+			ListFilter& filter = Matchmaking::get().filter;
+			filter.hideFull = f.get_or("hideFull", false);
+			filter.hidePassword = f.get_or("hidePassword", false);
+			filter.sameVersionOnly = f.get_or("sameVersionOnly", false);
+			filter.text = f.get_or("text", std::string());
+		});
+		// the services a host can offer its game on: { id, title, state, text, offered }
+		lua.set_function("getMatchmakingServices", [this]() {
+			sol::table list = lua.create_table();
+			int i = 1;
+			static const char* states[] = { "off", "signing in", "ready", "failed" };
+			for (const auto& s : Matchmaking::get().services())
+				list[i++] = lua.create_table_with("id", s->id(), "title", s->title(), "state", states[(int)s->state()],
+					"text", s->stateText(), "offered", Matchmaking::get().hostedOn().count(s->id()) > 0,
+					"chosen", Matchmaking::get().offerOn.count(s->id()) > 0);
+			return list;
+		});
 		// Draws a level's map image into a box; returns false when the level has none
 		lua.set_function("drawLevelPreview", [this](const std::string& level, float x, float y, float w, float h) {
 			const Image& img = levelPreview(level);

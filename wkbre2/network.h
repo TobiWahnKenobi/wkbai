@@ -181,6 +181,11 @@ struct NetLink {
 
 	void send(const NetPacketWriter &writer) { send(NetPacket(writer.getString())); }
 
+	// Ends the connection (the other side sees it gone): at once, or once what was sent before
+	// has gone out. Links of no network (NetLocalLink) do nothing.
+	virtual void disconnect(bool afterSending) {}
+	virtual ~NetLink() = default;
+
 	//int beginRead() = 0;
 	//void endRead() = 0;
 };

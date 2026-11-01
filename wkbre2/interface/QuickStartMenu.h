@@ -9,13 +9,15 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
 #include "QuickSkirmishMenu.h"
 #include "ModMenu.h"
 #include "FrontEnd.h"
 
 struct IRenderer;
-struct NetEnetLink;
-struct _ENetHost;
+struct NetLink;
+struct EnetHostTransport;
+struct GameListing;
 struct Server;
 struct Client;
 struct NetLocalBuffer;
@@ -42,8 +44,9 @@ private:
 	};
 	Mode modeChosen = MODE_UNDEFINED;
 
-	_ENetHost* eserver = nullptr;
-	std::vector<NetEnetLink*> guests;
+	// the game port (ENet), and the guests through it or a matchmaking service's own transport
+	std::unique_ptr<EnetHostTransport> enetHost;
+	std::vector<NetLink*> guests;
 	Server* server = nullptr;
 	Client* client = nullptr;
 	NetLocalBuffer* queue1 = nullptr, * queue2 = nullptr;
@@ -55,7 +58,7 @@ private:
 	// Multiplayer lobby. Host: the lobby screen is open (the network stays up), the guests' ids
 	// (stable while they are connected) and the lobby text the guests are sent
 	bool hosting = false;
-	std::map<NetEnetLink*, int> guestIds;
+	std::map<NetLink*, int> guestIds;
 	int nextGuestId = 1;
 	std::string lobbyText;
 	// the menu's Map Editor: the next level opens paused with the map editor
@@ -64,14 +67,20 @@ private:
 	std::string replayName;
 	uint64_t lobbySentTime = 0;
 	// the guests that have the host's AI General files
-	std::set<NetEnetLink*> generalsSent;
+	std::set<NetLink*> generalsSent;
 	// the guests who joined the running game and were sent its state; those turned away
-	std::set<NetEnetLink*> joinsSent, refusedSent;
+	std::set<NetLink*> joinsSent, refusedSent;
 	// the password the host asks for (empty: none), the one the guest gives
 	std::string hostPassword, joinPassword;
-	void sendGameSetFiles(NetEnetLink* link);
-	// Guest: the host to join ("address[:port]")
+	void sendGameSetFiles(NetLink* link);
+	// Guest: the host to join ("address[:port]"), or a game from the list (matchmaking)
 	std::string joinTarget;
+	std::unique_ptr<GameListing> joinListing;
+	// Host: the game's listing for the matchmaking services, kept up to date while the network is
+	// up (offered where Matchmaking::offerOn says)
+	bool gameRunning = false;
+	uint64_t listingTime = 0;
+	void updateListing();
 	// Kingmaker campaign: the profile and province of the game being started or played
 	std::string campaignProfile, campaignProvince;
 	// A multiplayer save game being loaded: who takes each of its human players ("H" the host,

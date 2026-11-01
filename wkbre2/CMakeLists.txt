@@ -102,7 +102,9 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp" "interface/MapEditor.cpp" "interface/FogOfWar.h" "interface/FogOfWar.cpp"
 "platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "WaterDesign.h" "WaterDesign.cpp" "gfx/renderer_diligent.cpp" "gfx/renderer_diligent.h"
 "gfx/DiligentEnhancedSceneRenderer.h" "gfx/DiligentEnhancedSceneRenderer.cpp" "gfx/DiligentEnhancedTerrainRenderer.h" "gfx/DiligentEnhancedTerrainRenderer.cpp" "gfx/DiligentSkyRenderer.h" "gfx/DiligentSkyRenderer.cpp" "gfx/DiligentPostProcess.h" "gfx/DiligentPostProcess.cpp" "gfx/DiligentFsr3.h" "gfx/DiligentFsr3.cpp" "gfx/DiligentWaterfalls.h" "gfx/DiligentWaterfalls.cpp" "gfx/RenderSettings.h" "gfx/RenderSettings.cpp" "gfx/BitmapFont.h" "gfx/BitmapFont.cpp" "interface/FrontEnd.h" "interface/FrontEnd.cpp" "interface/MenuOptions.h" "interface/MenuOptions.cpp" "ServerSave.cpp" "interface/CampaignProfile.h" "interface/CampaignProfile.cpp"
-"gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp")
+"gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp"
+"matchmaking/Matchmaking.h" "matchmaking/Matchmaking.cpp" "matchmaking/Services.h" "matchmaking/EnetTransport.h" "matchmaking/EnetTransport.cpp"
+"matchmaking/LocalService.cpp" "matchmaking/NakamaService.cpp" "matchmaking/PluginService.cpp" "matchmaking/HttpClient.h" "matchmaking/HttpClient.cpp" "matchmaking/wkbai_mm_plugin.h")
 target_link_libraries (wkbre2
   imgui
   SDL3::SDL3
@@ -122,6 +124,8 @@ target_link_libraries (wkbre2
   Vulkan::Headers
   ws2_32
   winmm
+  winhttp
+  iphlpapi
 )
 
 # AMD FidelityFX FSR 3.1's upscaler shaders (FidelityFX/: the SDK 1.1.4's passes and the headers

@@ -1234,6 +1234,34 @@ local function sendLobbyState()
 	end
 end
 
+-- Multiplayer host: where the game is offered. The local network always; each matchmaking
+-- service that is signed in (Nakama, plugins) when ticked ("chosen": the choice stays for the
+-- session, kept by the program).
+local function offerRow(x, y)
+	drawText(FONT_LIST, x, y + L(4), "Offer on:", WHITE, S)
+	x = x + L(80)
+	local services = getMatchmakingServices()
+	for _, s in ipairs(services) do
+		local ready = s.state == "ready"
+		local isLocal = s.id == "local"
+		local on = isLocal or (ready and s.chosen)
+		if roundButton(x, y, L(22), on, ready and not isLocal) then
+			local ids = {}
+			for _, o in ipairs(services) do
+				if o.id ~= "local" and (o.chosen ~= (o.id == s.id)) then ids[#ids + 1] = o.id end
+			end
+			request("host_offer", table.concat(ids, ","))
+		end
+		local label = s.title
+		if not ready then label = label .. " (" .. s.state .. ")" end
+		drawText(FONT_LIST, x + L(28), y + L(4), label, ready and YELLOW or GREY, S)
+		if hovered(x, y, L(28) + textWidth(FONT_LIST, label, S), L(22)) and s.text ~= "" then
+			drawText(FONT_LIST, X(28), y - L(22), s.text, GREY, S)
+		end
+		x = x + L(48) + textWidth(FONT_LIST, label, S)
+	end
+end
+
 local function drawLobby(multiplayer)
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
@@ -1259,6 +1287,7 @@ local function drawLobby(multiplayer)
 		local s = skirmish.settings
 		if unplaced > 0 and not (s.allowSpectators ~= 0 and unplaced <= s.maxSpectators) then canStart = false end
 		sendLobbyState()
+		offerRow(X(28), Y(1033))
 	end
 	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
 		settingsRequests()
@@ -1870,6 +1899,7 @@ Screens.mpload = {
 		local canStart = taken["H"] == true
 		for _, g in ipairs(guests) do if not taken["G" .. g.id] then canStart = false end end
 		local auto = mpLoad.autoStart and canStart and ((#guests > 0 and getTime() - mpLoad.autoStart > 4) or getTime() - mpLoad.autoStart > 20)
+		offerRow(X(28), Y(1033))
 		if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) or auto then
 			mpLoad.autoStart = nil
 			local parts = {}
@@ -1884,6 +1914,84 @@ Screens.mpload = {
 
 local mpName, mpAddress, mpPassword = { text = "" }, { text = "" }, { text = "", masked = true }
 local mpState = { tab = 1, saves = { selected = 0, scroll = 0 } }
+
+-- The games to join: one list, the local network's first, then each matchmaking service's under
+-- its name (getGameList). The rows are the groups' headings and their games; a game row keeps
+-- its service and id, so the selection stays on it while the list changes.
+local gameList = { scroll = 0, selectedKey = nil, lastRefresh = -100, hideFull = false, hidePassword = false }
+local GAME_COLUMNS = { { "Game", 12 }, { "Map", 460 }, { "Players", 860 }, { "Lock", 1010 }, { "Mods", 1110 }, { "Ping", 1330 }, { "", 1440 } }
+local function gameRows()
+	local rows = {}
+	for _, g in ipairs(getGameList()) do
+		local heading = g.title
+		if g.state ~= "ready" then heading = heading .. "  (" .. g.state .. (g.text ~= "" and (": " .. g.text) or "") .. ")"
+		elseif #g.games == 0 then heading = heading .. "  (no games found)" end
+		rows[#rows + 1] = { heading = heading, ready = g.state == "ready" }
+		for _, game in ipairs(g.games) do
+			rows[#rows + 1] = { game = game, service = g.id, key = g.id .. "\t" .. game.id }
+		end
+	end
+	return rows
+end
+
+local function drawGameList(x, y, w, h)
+	-- every 5 s the services look again
+	if getTime() - gameList.lastRefresh > 5 then
+		gameList.lastRefresh = getTime()
+		refreshGameList()
+	end
+	panel(x, y, w, h, true)
+	for _, c in ipairs(GAME_COLUMNS) do drawText(FONT_LIST, x + L(c[2]), y + L(6), c[1], WHITE, S) end
+	local rows = gameRows()
+	local rowH = L(20)
+	local top = y + L(28)
+	local visible = math.floor((h - L(32)) / rowH)
+	if hovered(x, y, w, h) and mouse.wheel ~= 0 then gameList.scroll = gameList.scroll - mouse.wheel * 3 end
+	gameList.scroll = math.max(0, math.min(gameList.scroll, math.max(0, #rows - visible)))
+	local selected, activated = nil, false
+	pushClip(x, y, w, h)
+	for r = 1, visible do
+		local row = rows[gameList.scroll + r]
+		if not row then break end
+		local ry = top + (r - 1) * rowH
+		if row.heading then
+			drawText(FONT_BUTTON, x + L(8), ry, row.heading, row.ready and 0xFF80D8FF or GREY, S * 0.8)
+		else
+			local game = row.game
+			local joinable = game.versionOk and game.modsOk
+			if row.key == gameList.selectedKey then
+				drawImage(ART.listSelection, x + L(2), ry, w - L(4), rowH)
+			elseif hovered(x, ry, w, rowH) then
+				drawImage(ART.listRollover, x + L(2), ry, w - L(4), rowH)
+			end
+			if hovered(x, ry, w, rowH) and mouse.pressed then
+				if gameList.selectedKey == row.key and gameList.lastClick and getTime() - gameList.lastClick < 0.4 then activated = true end
+				gameList.selectedKey = row.key
+				gameList.lastClick = getTime()
+			end
+			local c = joinable and YELLOW or GREY
+			local players = game.players .. " / " .. game.places
+			if game.allowSpectators then players = players .. "  +" .. game.spectators .. " watch" end
+			local cells = {
+				game.name, game.map, players, game.password and "locked" or "",
+				game.versionOk and game.mods or "other version",
+				game.ping >= 0 and (game.ping .. " ms") or "-",
+				game.running and "in progress" or "lobby",
+			}
+			for i, text in ipairs(cells) do
+				local colour = c
+				if i == 5 and game.versionOk then colour = game.modsOk and 0xFF80FF80 or 0xFF6060FF end
+				drawText(FONT_LIST, x + L(GAME_COLUMNS[i][2]), ry + L(2), text, colour, S)
+			end
+			if row.key == gameList.selectedKey then selected = row end
+		end
+	end
+	popClip()
+	return selected, activated
+end
+
+-- test runs: "menuTest": { "open": ["multiplayer.games"] } shows the list
+local function openGamesTab() mpState.tab = 3 end
 Screens.multiplayer = {
 	background = sunsetBackground,
 	open = function()
@@ -1894,10 +2002,33 @@ Screens.multiplayer = {
 	draw = function()
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
 		-- a new game on a map, or a saved game to go on with
-		mpState.tab = tabs({ "New Game", T("FRONT_END_MAIN_MENU_LOAD_GAME") }, mpState.tab, X(20), Y(50), L(30))
-		local chosen
+		-- or a game to join: the local network's and the matchmaking services'
+		mpState.tab = tabs({ "New Game", T("FRONT_END_MAIN_MENU_LOAD_GAME"), "Find Games" }, mpState.tab, X(20), Y(50), L(30))
+		local chosen, listed, activated
 		if mpState.tab == 1 then
 			chosen = levelPicker(X(20), Y(80), L(1880), L(880))
+		elseif mpState.tab == 3 then
+			listed, activated = drawGameList(X(20), Y(80), L(1880), L(880))
+			-- the filter
+			local fx = X(1200)
+			for _, f in ipairs({ { "hideFull", "Hide full" }, { "hidePassword", "Hide locked" } }) do
+				if roundButton(fx, Y(52), L(22), gameList[f[1]], true) then
+					gameList[f[1]] = not gameList[f[1]]
+					setGameListFilter({ hideFull = gameList.hideFull, hidePassword = gameList.hidePassword })
+				end
+				drawText(FONT_LIST, fx + L(28), Y(56), f[2], YELLOW, S)
+				fx = fx + L(140)
+			end
+			if button("Refresh", X(1600), Y(50), L(180), L(26)) then
+				gameList.lastRefresh = getTime()
+				refreshGameList()
+			end
+			-- why the selected game can't be joined
+			if listed and not listed.game.versionOk then
+				drawText(FONT_LIST, X(24), Y(1056), "Another version of wkbai hosts this game", 0xFF6060FF, S)
+			elseif listed and not listed.game.modsOk then
+				drawText(FONT_LIST, X(24), Y(1056), "Mods: " .. listed.game.modsWhy, 0xFF6060FF, S)
+			end
 		else
 			local saves = savesOfType(".sav")
 			local names = {}
@@ -1921,7 +2052,7 @@ Screens.multiplayer = {
 			request("host_password", mpPassword.text)
 			request("join_password", mpPassword.text)
 		end
-		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil and name ~= "") then
+		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil and name ~= "" and mpState.tab ~= 3) then
 			remember()
 			request("host")
 			if mpState.tab == 1 then
@@ -1935,6 +2066,14 @@ Screens.multiplayer = {
 			and name ~= "" and mpAddress.text ~= "" then
 			remember()
 			request("join", mpAddress.text)
+		end
+		-- a game from the list (double click, or the button)
+		if mpState.tab == 3 then
+			local canJoin = listed ~= nil and name ~= "" and listed.game.versionOk and listed.game.modsOk
+			if (button("Join game", X(1032), Y(1052), L(210), L(24), canJoin) or activated) and canJoin then
+				remember()
+				request("join_listing", listed.key)
+			end
 		end
 		if button(T("FRONT_END_BUTTON_BACK"), X(1697), Y(1052), L(210), L(24)) then pop() end
 	end,
@@ -2148,6 +2287,11 @@ function FE_Open(name)
 	if screenName == "generaleditor" then
 		name = screenName
 		editor.testSave = tab
+	end
+	-- "multiplayer.games" (tests): the multiplayer page at its list of games to join
+	if screenName == "multiplayer" then
+		name = screenName
+		if tab == "games" then openGamesTab() end
 	end
 	-- "campaignmap.<profile>": the campaign map of a profile
 	if screenName == "campaignmap" then
