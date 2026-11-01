@@ -838,7 +838,7 @@ void ClientInterface::prewarmLevel()
 bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
-	return g_renderSettings.fogOfWar && !editorOn && client->clientPlayer && client->getLevel();
+	return g_renderSettings.fogOfWar && !editorOn && !replayMode && client->clientPlayer && client->getLevel();
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
@@ -931,6 +931,135 @@ void ClientInterface::drawLoadingScreen()
 		dl->AddRectFilled(ImVec2(cx - 260, cy + 50), ImVec2(cx + 260, cy + 230), IM_COL32(0, 0, 0, 110));
 		const std::string tip = lang.getText("FRONT_END_TIP_" + std::to_string(loadingTip));
 		dl->AddText(nullptr, 0.0f, ImVec2(cx - 254, cy + 56), IM_COL32(235, 235, 235, 255), tip.c_str(), nullptr, 508.0f);
+	}
+}
+
+// The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
+// this player only and the timeline what it saw; in a replay, or without fog of war, everyone
+// and everything. A timeline entry clicked moves the camera there.
+void ClientInterface::drawChronicle()
+{
+	const bool all = replayMode || !fogOfWarOn();
+	chronicle.update(client, all ? nullptr : &fogOfWar);
+	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
+	auto colourOf = [&](uint32_t id) {
+		auto it = chronicle.playerColours.find(id);
+		const int c = it != chronicle.playerColours.end() ? it->second : 0;
+		return playerColors[(c >= 0 && c < 9) ? c : 0];
+	};
+	auto nameOf = [&](uint32_t id) {
+		auto it = chronicle.playerNames.find(id);
+		return it != chronicle.playerNames.end() ? it->second : std::to_string(id);
+	};
+	auto clock = [](float t) {
+		char buf[16];
+		snprintf(buf, sizeof(buf), "%d:%02d", (int)t / 60, (int)t % 60);
+		return std::string(buf);
+	};
+	if (statisticsOpen) {
+		ImGui::SetNextWindowPos(ImVec2(20, 110), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(640, 400), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Statistics (F6)", &statisticsOpen)) {
+			if (ImGui::BeginTable("stats", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+				for (const char* h : { "Player", "Food", "Wood", "Gold", "Peasants", "Soldiers", "Buildings", "Units lost", "Buildings lost" })
+					ImGui::TableSetupColumn(h);
+				ImGui::TableHeadersRow();
+				for (const auto& [id, list] : chronicle.samples) {
+					if (list.empty() || (!all && id != own))
+						continue;
+					const GameChronicle::Sample& s = list.back();
+					ImGui::TableNextRow();
+					ImGui::TableNextColumn();
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(id)), "%s", nameOf(id).c_str());
+					for (float v : { s.food, s.wood, s.gold, (float)s.peasants, (float)s.soldiers, (float)s.buildings, (float)s.unitsLost, (float)s.buildingsLost }) {
+						ImGui::TableNextColumn();
+						ImGui::Text("%.0f", v);
+					}
+				}
+				ImGui::EndTable();
+			}
+			static const char* shown[6] = { "Food", "Wood", "Gold", "Peasants", "Soldiers", "Buildings" };
+			ImGui::Combo("Graph", &statisticsShown, shown, 6);
+			// the graph: each player's line in its colour, over the game so far
+			const ImVec2 p0 = ImGui::GetCursorScreenPos();
+			const ImVec2 size(std::max(ImGui::GetContentRegionAvail().x, 100.0f), std::max(ImGui::GetContentRegionAvail().y - 4.0f, 80.0f));
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			dl->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), IM_COL32(0, 0, 0, 120));
+			auto value = [&](const GameChronicle::Sample& s) {
+				switch (statisticsShown) {
+				case 0: return s.food; case 1: return s.wood; case 2: return s.gold;
+				case 3: return (float)s.peasants; case 4: return (float)s.soldiers; default: return (float)s.buildings;
+				}
+			};
+			float tMax = 1.0f, vMax = 1.0f;
+			for (const auto& [id, list] : chronicle.samples)
+				if (all || id == own)
+					for (const auto& s : list) {
+						tMax = std::max(tMax, s.time);
+						vMax = std::max(vMax, value(s));
+					}
+			for (const auto& [id, list] : chronicle.samples) {
+				if (!all && id != own)
+					continue;
+				for (size_t i = 1; i < list.size(); i++) {
+					const ImVec2 a(p0.x + size.x * list[i - 1].time / tMax, p0.y + size.y * (1.0f - value(list[i - 1]) / vMax));
+					const ImVec2 b(p0.x + size.x * list[i].time / tMax, p0.y + size.y * (1.0f - value(list[i]) / vMax));
+					dl->AddLine(a, b, colourOf(id), 2.0f);
+				}
+			}
+			char label[32];
+			snprintf(label, sizeof(label), "%.0f", vMax);
+			dl->AddText(ImVec2(p0.x + 4, p0.y + 2), IM_COL32(255, 255, 255, 200), label);
+			dl->AddText(ImVec2(p0.x + size.x - 40, p0.y + size.y - 16), IM_COL32(255, 255, 255, 200), clock(tMax).c_str());
+			ImGui::Dummy(size);
+		}
+		ImGui::End();
+	}
+	if (timelineOpen) {
+		ImGui::SetNextWindowPos(ImVec2(680, 110), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+		if (ImGui::Begin("Timeline (F7)", &timelineOpen)) {
+			int shownCount = 0;
+			for (size_t i = chronicle.events.size(); i-- > 0;) {
+				const GameChronicle::Event& e = chronicle.events[i];
+				if (!all && !e.seen)
+					continue;
+				shownCount++;
+				std::string text = clock(e.time) + "  " + e.title();
+				if (e.size)
+					text += " (" + std::to_string(e.size) + " fighters, " + clock(e.endTime - e.time) + ")";
+				ImGui::PushID((int)i);
+				if (ImGui::Selectable(text.c_str())) {
+					// the camera looks at it from where it is now, as high up
+					Camera& cam = client->camera;
+					const Vector3 dir = cam.direction;
+					const float down = std::max(-dir.y, 0.2f);
+					const float reach = (cam.position.y - e.position.y) / down;
+					cam.position.x = e.position.x - dir.x * reach;
+					cam.position.z = e.position.z - dir.z * reach;
+				}
+				// each side: its name, how many it brought, what it lost
+				for (uint32_t p : e.players) {
+					std::string side = "    " + nameOf(p);
+					if (auto it = e.strength.find(p); it != e.strength.end())
+						side += ": " + std::to_string(it->second) + " fighting";
+					if (auto it = e.lost.find(p); it != e.lost.end()) {
+						int total = 0;
+						std::string types;
+						for (const auto& [type, n] : it->second) {
+							total += n;
+							types += (types.empty() ? "" : ", ") + std::to_string(n) + " " + type;
+						}
+						side += ", lost " + std::to_string(total) + " (" + types + ")";
+					}
+					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(p)), "%s", side.c_str());
+				}
+				ImGui::PopID();
+			}
+			if (!shownCount)
+				ImGui::TextUnformatted(all ? "Nothing has happened yet." : "Nothing seen yet.");
+		}
+		ImGui::End();
 	}
 }
 
@@ -1706,6 +1835,20 @@ void ClientInterface::iter()
 		client->camera.position.y += g_mouseWheel * (g_renderSettings.invertMouseWheel ? -2 : 2);
 
 	// the map editor (F8 in single player) takes the clicks it uses
+	// test runs: "benchmark": { ..., "statistics": true, "timeline": true } opens them
+	if (BenchmarkEnabled()) {
+		static bool opened = false;
+		if (!opened) {
+			opened = true;
+			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json());
+			statisticsOpen = bench.value("statistics", false);
+			timelineOpen = bench.value("timeline", false);
+		}
+	}
+	if (g_keyPressed[SDL_SCANCODE_F6] && !ImGui::GetIO().WantTextInput)
+		statisticsOpen = !statisticsOpen;
+	if (g_keyPressed[SDL_SCANCODE_F7] && !ImGui::GetIO().WantTextInput)
+		timelineOpen = !timelineOpen;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer)
 		editorOn = !editorOn;
 	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorTest", false)) {
@@ -2908,6 +3051,8 @@ void ClientInterface::iter()
 	}
 
 	drawLoadingScreen();
+	if (loadingDone)
+		drawChronicle();
 
 	{
 		ZoneScopedN("ImGui rendering");

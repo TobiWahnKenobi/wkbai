@@ -79,10 +79,11 @@ void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 		}
 		else if (strtag == "WORK_ORDER") {
 			// WKBattles work orders
-			ServerGameObject* city = Server::instance->findObject(gsf.nextInt());
+			// the city is loaded after the player: registered once all are (Server::loadSaveGame)
+			const uint32_t cityId = (uint32_t)gsf.nextInt();
 			ObjectFinder* unitFinder = gs.objectFinderDefinitions.readRef(gsf);
 			const WorkOrder* workOrder = gs.workOrders.readPtr(gsf);
-			registerWorkOrder(city, unitFinder, workOrder);
+			Server::instance->postWorkOrders.emplace_back(gameObj, cityId, unitFinder, workOrder);
 			// normally a block ending with END_WORK_ORDER comes afterwards, but apparently it is empty, no need to parse
 		}
 		// TODO: SETTLEMENT_CONTROLLER for WK1 work orders
@@ -224,6 +225,134 @@ void AIController::update()
 			}
 		}
 	}
+
+	// ---- The opponent model (the aggressive AI, not in WKB.exe) ----
+	// The Kingmaker reacts to enemies at its palace (Kingmaker Defensive Counter Attacks.cpp) and
+	// weighs enemy towers and forts when it picks an army type, but its armies' make-up is fixed
+	// by its personality at the start. Every 10 s the enemy soldiers within 300 m of its palace
+	// and 60 m of its attackers are counted by type (the counts fade by a tenth each time); every
+	// 60 s, once 5 or more are counted, the personality's percentages of heavy and light infantry
+	// and cavalry (for its defensive and combined arms armies) move halfway to the mix that
+	// counters what was met: spears against cavalry, archers and heavy horse against heavy
+	// infantry, horsemen against archers. The enemy with the most soldiers at the palace is the
+	// grudge: for 10 minutes the attacks go for it (FinderFocusedEnemyPalaces).
+	if (Server::instance->aggressiveAI && Server::instance->aiAdapt && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextAdaptScan) {
+		const float now = Server::instance->timeManager.currentTime;
+		nextAdaptScan = now + 10.0f;
+		const GameSet* gs = Server::instance->gameSet.get();
+		static const GameSet* itemsOf = nullptr;
+		static int military = -1, enemyEq = -1, palaceFinder = -1;
+		if (itemsOf != gs) {
+			itemsOf = gs;
+			military = gs->items.names.getIndex("I'm A Military Unit");
+			enemyEq = gs->equations.names.getIndex("Candidate Is Enemy To Me");
+			palaceFinder = gs->objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		}
+		SrvScriptContext ctx{ Server::instance, gameObj };
+		ServerGameObject* palace = palaceFinder >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[palaceFinder]->getFirst(&ctx) : nullptr;
+		for (float& n : enemySeen)
+			n *= 0.9f;
+		if (military >= 0 && enemyEq >= 0) {
+			std::set<ServerGameObject*> counted;
+			std::map<uint32_t, int> atBase;
+			auto look = [&](const Vector3& centre, float radius, bool base) {
+				NNSearch search;
+				search.start(Server::instance, centre, radius);
+				while (ServerGameObject* o = (ServerGameObject*)search.next()) {
+					if (o->deleted || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || counted.count(o))
+						continue;
+					const int type = (int)o->getItem(military);
+					if (type < 1 || type > 4)
+						continue;
+					ServerGameObject* owner = o->getPlayer();
+					if (!owner || owner == gameObj)
+						continue;
+					auto _ = ctx.change(ctx.candidate, owner);
+					if (gs->equations[enemyEq]->eval(&ctx) <= 0.0f)
+						continue;
+					counted.insert(o);
+					enemySeen[type] += 1.0f;
+					if (base)
+						atBase[owner->id]++;
+				}
+			};
+			if (palace)
+				look(palace->position, 300.0f, true);
+			// around a few of the attackers
+			int samples = 0;
+			std::vector<ServerGameObject*> todo{ gameObj };
+			while (!todo.empty() && samples < 8) {
+				ServerGameObject* o = todo.back();
+				todo.pop_back();
+				for (const auto& [type, children] : o->children)
+					for (CommonGameObject* child : children) {
+						auto* c = (ServerGameObject*)child;
+						if (c->deleted)
+							continue;
+						if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY && c->blueprint->name == "Kingmaker Attacking Army") {
+							for (const auto& [t, members] : c->children)
+								if (!members.empty() && samples < 8) {
+									look(members.front()->position, 60.0f, false);
+									samples++;
+								}
+						}
+						else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+							todo.push_back(c);
+					}
+			}
+			// the grudge: who brought the most soldiers (5 or more) to the palace
+			uint32_t worst = 0;
+			int worstCount = 4;
+			for (const auto& [id, n] : atBase)
+				if (n > worstCount) {
+					worst = id;
+					worstCount = n;
+				}
+			if (worst) {
+				grudgePlayer = worst;
+				grudgeTime = now;
+			}
+		}
+		if (now >= nextAdaptMix) {
+			nextAdaptMix = now + 60.0f;
+			static const char* armies[2] = { "Defensive", "Combined Arms" };
+			static const char* kinds[4] = { "Heavy Infantry", "Light Infantry", "Heavy Cavalry", "Light Cavalry" };
+			int items[2][4];
+			for (int a = 0; a < 2; a++)
+				for (int k = 0; k < 4; k++)
+					items[a][k] = gs->items.names.getIndex(std::string(armies[a]) + " " + kinds[k] + " Percentage");
+			if (baseMix[0] < 0.0f && items[0][0] >= 0)
+				for (int k = 0; k < 4; k++)
+					baseMix[k] = items[0][k] >= 0 ? gameObj->getItem(items[0][k]) : 0.0f;
+			const float total = enemySeen[1] + enemySeen[2] + enemySeen[3] + enemySeen[4];
+			if (total >= 5.0f && baseMix[0] >= 0.0f) {
+				// what counters each type met, as shares of heavy infantry, light infantry, heavy
+				// cavalry, light cavalry
+				static const float counters[4][4] = {
+					{ 0.0f, 0.6f, 0.4f, 0.0f }, // heavy infantry: archers, heavy horse
+					{ 0.0f, 0.0f, 0.4f, 0.6f }, // light infantry (archers): horsemen
+					{ 0.7f, 0.3f, 0.0f, 0.0f }, // heavy cavalry: spears, archers
+					{ 0.6f, 0.4f, 0.0f, 0.0f }, // light cavalry: spears, archers
+				};
+				float want[4] = {};
+				for (int t = 0; t < 4; t++)
+					for (int k = 0; k < 4; k++)
+						want[k] += enemySeen[t + 1] / total * counters[t][k];
+				const float baseSum = baseMix[0] + baseMix[1] + baseMix[2] + baseMix[3];
+				const float scale = baseSum > 0.0f ? baseSum : 100.0f;
+				for (int k = 0; k < 4; k++) {
+					const float mix = 0.5f * baseMix[k] + 0.5f * want[k] * scale;
+					for (int a = 0; a < 2; a++)
+						if (items[a][k] >= 0)
+							gameObj->setItem(items[a][k], mix);
+				}
+				mixChanges++;
+			}
+		}
+	}
+	if (grudgePlayer && Server::instance->timeManager.currentTime - grudgeTime > 600.0f)
+		grudgePlayer = 0;
 
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units

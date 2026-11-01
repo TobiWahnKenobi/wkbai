@@ -334,6 +334,19 @@ struct FrontEnd::Impl {
 		lua.set_function("getPlace", [this]() { return place == Place::IN_GAME ? "game" : "menu"; });
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
+		// the game recordings (folders in saved\Recordings with a start.sav), newest first
+		lua.set_function("getRecordings", []() {
+			std::vector<std::pair<std::filesystem::file_time_type, std::string>> found;
+			std::error_code ec;
+			for (const auto& entry : std::filesystem::directory_iterator(g_userPath / "saved" / "Recordings", ec))
+				if (entry.is_directory(ec) && std::filesystem::exists(entry.path() / "start.sav", ec))
+					found.emplace_back(entry.last_write_time(ec), PathToUtf8(entry.path().filename()));
+			std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+			std::vector<std::string> names;
+			for (auto& [time, name] : found)
+				names.push_back(std::move(name));
+			return sol::as_table(names);
+		});
 		lua.set_function("getCurrentSave", [this]() { return currentSave; });
 		lua.set_function("canSaveGame", [this]() { return canSave; });
 		// The human players of a save game ({ id, name, colour }), as NUM_HUMAN_PLAYERS lists them

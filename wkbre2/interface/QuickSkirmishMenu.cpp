@@ -83,8 +83,51 @@ void QuickSkirmishMenu::imguiWindow()
 	ImGui::PopItemWidth();
 }
 
+std::string QuickSkirmishMenu::setupJson(const std::string& level, uint32_t seed) const
+{
+	nlohmann::json j;
+	j["level"] = level;
+	j["seed"] = seed;
+	nlohmann::json settings = nlohmann::json::array();
+	for (const auto& [name, value] : settingLog)
+		settings.push_back({ name, value });
+	j["settings"] = settings;
+	nlohmann::json list = nlohmann::json::array();
+	for (const Slot& s : slots)
+		list.push_back({ { "type", (int)s.type }, { "general", s.general }, { "client", s.client }, { "name", s.name }, { "colour", s.colour }, { "team", s.team } });
+	j["slots"] = list;
+	return j.dump(1);
+}
+
+bool QuickSkirmishMenu::readSetupJson(const std::string& text, std::string& level, uint32_t& seed,
+	std::vector<std::pair<std::string, int>>& settings, std::vector<Slot>& slots)
+{
+	const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+	if (j.is_discarded() || !j.is_object())
+		return false;
+	level = j.value("level", std::string());
+	seed = j.value("seed", 0u);
+	settings.clear();
+	for (const auto& s : j.value("settings", nlohmann::json::array()))
+		if (s.is_array() && s.size() == 2)
+			settings.emplace_back(s[0].get<std::string>(), s[1].get<int>());
+	slots.clear();
+	for (const auto& s : j.value("slots", nlohmann::json::array())) {
+		Slot slot;
+		slot.type = (Slot::Type)s.value("type", 1);
+		slot.general = s.value("general", std::string());
+		slot.client = s.value("client", 0);
+		slot.name = s.value("name", std::string());
+		slot.colour = s.value("colour", 0);
+		slot.team = s.value("team", 0);
+		slots.push_back(std::move(slot));
+	}
+	return !level.empty();
+}
+
 void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 {
+	settingLog.emplace_back(name, value);
 	// skirmish maps only: other levels keep the mode chosen for them
 	if (name == "mode") {
 		if (mode == StandardMode || mode == ValhallaMode)
@@ -105,6 +148,8 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiFocusAttacks") aiFocusAttacks = value != 0;
 	else if (name == "aiEarlyFarms") aiEarlyFarms = value;
 	else if (name == "aiFirstBarracks") aiFirstBarracks = value;
+	else if (name == "aiAdapt") aiAdapt = value != 0;
+	else if (name == "recordGame") recordGame = value != 0;
 	else if (name == "aiMinPeasants") aiMinPeasants = value;
 	else if (name == "aiSurplusBuildings") aiSurplusBuildings = value;
 	else if (name == "aiSurplusPerBuilding") aiSurplusPerBuilding = (float)value;
@@ -297,7 +342,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 					player->setName(slot.name);
 				printf("Skirmish: position %zu (player %u): human\n", i + 1, player->id);
 			}
-			else if (slot.type == Slot::GUEST && slot.client > 0 && slot.client < (int)server.clientLinks.size()) {
+			else if (slot.type == Slot::GUEST && slot.client > 0 && (replaySetup || slot.client < (int)server.clientLinks.size())) {
 				server.setClientPlayerControl(slot.client, player->id);
 				guestPlaced = true;
 				if (!slot.name.empty())
@@ -310,6 +355,9 @@ void QuickSkirmishMenu::applySettings(Server& server)
 					: server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, slot.general);
 				if (!general && !generals.empty())
 					general = generals[rand() % generals.size()];
+				// the one chosen, for a recording's setup
+				if (general && i < slots.size())
+					slots[i].general = general->name;
 				if (general) {
 					player->convertTo(general);
 					printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());
@@ -372,6 +420,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiFocusAttacks = aiFocusAttacks;
 	server.aiEarlyFarms = aiEarlyFarms;
 	server.aiFirstBarracks = aiFirstBarracks;
+	server.aiAdapt = aiAdapt;
 	server.aiMinPeasants = aiMinPeasants;
 	server.aiSurplusBuildings = aiSurplusBuildings;
 	server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;

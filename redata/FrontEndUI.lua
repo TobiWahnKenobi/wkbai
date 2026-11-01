@@ -641,16 +641,20 @@ Screens.load = {
 	draw = function()
 		title(T("FRONT_END_LOAD_GAME_TITLE"))
 		-- saved games are not sorted by mode yet: all are under Skirmish
-		loadState.tab = tabs({ T("FRONT_END_LOAD_GAME_SKIRMISH"), T("FRONT_END_LOAD_GAME_CAMPAIGN"), T("FRONT_END_LOAD_GAME_MULTIPLAYER") },
-			loadState.tab, X(90), Y(70), L(30), { true, false, false })
-		local saves = savesOfType(".sav")
+		local before = loadState.tab
+		loadState.tab = tabs({ T("FRONT_END_LOAD_GAME_SKIRMISH"), T("FRONT_END_LOAD_GAME_CAMPAIGN"), T("FRONT_END_LOAD_GAME_MULTIPLAYER"), "Replays" },
+			loadState.tab, X(90), Y(70), L(30), { true, false, false, true })
+		if loadState.tab ~= before then loadState.selected = 0; loadState.scroll = 0 end
+		-- the Replays tab: the recorded games (wkbre2's own)
+		local replays = loadState.tab == 4
+		local saves = replays and getRecordings() or savesOfType(".sav")
 		local names = {}
-		for i, s in ipairs(saves) do names[i] = stripExtension(s) end
+		for i, s in ipairs(saves) do names[i] = replays and s or stripExtension(s) end
 		panel(X(90), Y(100), L(1740), L(910))
 		local activated = listBox(loadState, names, X(92), Y(104), L(1736), L(902))
 		local chosen = saves[loadState.selected]
 		if button(T("FRONT_END_BUTTON_LOAD"), X(735), Y(1022), L(141), L(24), chosen ~= nil) or (activated and chosen) then
-			request("start", chosen)
+			request(replays and "replay" or "start", chosen)
 		end
 		button(T("DIALOG_BUTTON_DELETE"), X(890), Y(1022), L(141), L(24), false)
 		if button(T("FRONT_END_BUTTON_BACK"), X(1045), Y(1022), L(141), L(24)) then pop() end
@@ -972,7 +976,7 @@ local SETTINGS = {
 	mode = 0, startFood = 500, startWood = 500, startGold = 200, populationLimit = 200,
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
-	unitLives = 0, capturableFlags = 4, aggressiveAI = 1,
+	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1110,6 +1114,9 @@ local function settingsTab()
 	-- wkbre2's own: the AI with fewer peasants that attacks whenever it can afford an army
 	if roundButton(X(1393), Y(894), L(52), s.aggressiveAI ~= 0, true) then s.aggressiveAI = (s.aggressiveAI ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(912), "Aggressive AI", WHITE, S)
+	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
+	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
+	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"

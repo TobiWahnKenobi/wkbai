@@ -1276,6 +1276,8 @@ struct FinderFocusedEnemyPalaces : ObjectFinder {
 		if (isEnemy < 0 || isPalace < 0 || !self || !level)
 			return original->eval(ctx);
 		CommonGameObject* player = self->getPlayer();
+		// the grudge (AIController's opponent model): the enemy who attacked the base lately
+		const uint32_t grudge = (Server::instance->aiAdapt && player) ? ((ServerGameObject*)player)->aiController.grudgePlayer : 0;
 		CommonGameObject* home = homeFinder >= 0 ? gs.objectFinderDefinitions[homeFinder]->getFirst(ctx) : nullptr;
 		const Vector3 from = home ? home->position : self->position;
 		ObjectFinderResult best;
@@ -1305,6 +1307,9 @@ struct FinderFocusedEnemyPalaces : ObjectFinder {
 						}
 				};
 				walk(other, walk);
+				// the grudge's palaces count as the nearest
+				if (!palaces.empty() && other->id == grudge)
+					nearest = 0.0f;
 				if (!palaces.empty() && nearest < bestDistance) {
 					bestDistance = nearest;
 					best = std::move(palaces);

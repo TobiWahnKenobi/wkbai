@@ -120,6 +120,8 @@ void Terrain::readFromFile(const char* filename)
 		readBCM(filename);
 	else
 		readSNR(filename);
+	// the map's file (its regions are kept by its name: MapRegions)
+	filePath = PathFromUtf8(filename).wstring();
 	// the lowest vertex, as WKB.exe's terrain keeps it (0x60DD50, +0x30): sight grows with the
 	// height above it
 	float lowest = std::numeric_limits<float>::max();

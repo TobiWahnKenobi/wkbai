@@ -33,6 +33,15 @@ public:
 	// A game setting by name, as the skirmish menu sends them ("startFood", "mode", ...)
 	void setSetting(const std::string& name, int value);
 
+	bool recordGame = false; // the game is recorded (Server::startRecording) when it starts
+	// A game recording's setup (setup.json): the level, the settings as set, the slots with the
+	// AI Generals chosen at random filled in (applySettings does that), so that a replay sets up
+	// the same game. replaySetup: guests' positions stay theirs without their clients connected.
+	std::string setupJson(const std::string& level, uint32_t seed) const;
+	static bool readSetupJson(const std::string& text, std::string& level, uint32_t& seed,
+		std::vector<std::pair<std::string, int>>& settings, std::vector<Slot>& slots);
+	bool replaySetup = false;
+	std::vector<std::pair<std::string, int>> settingLog; // setSetting's calls, in order
 private:
 	enum GameMode {
 		DevMode,
@@ -61,6 +70,7 @@ private:
 	bool aiFocusAttacks = true; // Server::aiFocusAttacks
 	int aiEarlyFarms = 0; // Server::aiEarlyFarms
 	int aiFirstBarracks = 90; // Server::aiFirstBarracks
+	bool aiAdapt = true; // Server::aiAdapt
 	int aiMinPeasants = 40; // Server::aiMinPeasants
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding
 	bool aiLendFarmers = true; // Server::aiLendFarmers

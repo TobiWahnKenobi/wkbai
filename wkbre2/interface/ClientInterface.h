@@ -10,6 +10,7 @@
 #include "../GameObjectRef.h"
 #include "../Language.h"
 #include "FogOfWar.h"
+#include "GameChronicle.h"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -48,6 +49,8 @@ struct ClientInterface {
 	void render();
 
 	void updateTerrain();
+	// playing a recording: everything shown (no fog of war), the commands ignored by the server
+	bool replayMode = false;
 	// heights changed by the server (buildings levelling the ground): the terrain renderer is
 	// refreshed, at most every 250 ms
 	bool terrainHeightsChanged = false;
@@ -141,6 +144,11 @@ private:
 	// one of Loading Screen 1-9 (random, as WKB.exe 0x706300), the player's stage of 8 with its
 	// bar, and a tip ("Words of Wisdom")
 	void drawLoadingScreen();
+	// the game's statistics (F6) and its timeline of events (F7)
+	GameChronicle chronicle;
+	bool statisticsOpen = false, timelineOpen = false;
+	int statisticsShown = 0; // the graph: food, wood, gold, peasants, soldiers, buildings
+	void drawChronicle();
 	int selectPeasantsByActivity(int row);
 	// the selected (or hovered) character in the selection window, turning (after the HUD)
 	void drawSelectionPortrait();

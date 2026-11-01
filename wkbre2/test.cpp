@@ -1777,6 +1777,10 @@ void Test_AIvsAI()
 	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
 	const float minutes = cfg.value("minutes", 20.0f);
 	g_settings["simSeed"] = cfg.value("seed", 1u);
+	// "record": "<folder>" records the game there; "replay": "<folder>" plays such a recording
+	// instead of setting up a game (the same census, then the same end hash if it plays the same)
+	const std::string recordTo = cfg.value("record", std::string());
+	const std::string replayFrom = cfg.value("replay", std::string());
 	Server server;
 	server.loadSaveGame(("Save_Games\\" + level).c_str());
 	QuickSkirmishMenu skirmish;
@@ -1802,6 +1806,13 @@ void Test_AIvsAI()
 	server.timeManager.unpause();
 	server.timeManager.stepMs = 20;
 	skirmish.applySettings(server);
+	if (!recordTo.empty() && !server.startRecording(PathFromUtf8(recordTo), skirmish.setupJson(level, server.lastSeed)))
+		printf("AITEST can't record to %s\n", recordTo.c_str());
+	// a replay: the same setup (this config), then the recorded events
+	if (!replayFrom.empty() && !server.startReplay(PathFromUtf8(replayFrom))) {
+		printf("AITEST no recording in %s\n", replayFrom.c_str());
+		return;
+	}
 
 	std::map<uint32_t, std::set<uint32_t>> raised; // per player, every soldier seen at a census
 	std::map<uint32_t, std::set<uint32_t>> siegeRaised; // per player, every siege engine seen at a census
@@ -1931,6 +1942,21 @@ void Test_AIvsAI()
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
 				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations, %d focus-fire orders\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent, player->aiController.focusOrders);
+				{
+					const AIController& ai = player->aiController;
+					static const GameSet* itemsOf = nullptr;
+					static int mix[4];
+					if (itemsOf != server.gameSet.get()) {
+						itemsOf = server.gameSet.get();
+						static const char* kinds[4] = { "Heavy Infantry", "Light Infantry", "Heavy Cavalry", "Light Cavalry" };
+						for (int k = 0; k < 4; k++)
+							mix[k] = server.gameSet->items.names.getIndex(std::string("Combined Arms ") + kinds[k] + " Percentage");
+					}
+					printf("AITEST   adapt player %u: seen HI %.0f LI %.0f HC %.0f LC %.0f; mix %.0f/%.0f/%.0f/%.0f (personality %.0f/%.0f/%.0f/%.0f), %d changes; grudge %u\n", player->id,
+						ai.enemySeen[1], ai.enemySeen[2], ai.enemySeen[3], ai.enemySeen[4],
+						mix[0] >= 0 ? player->getItem(mix[0]) : 0.0f, mix[1] >= 0 ? player->getItem(mix[1]) : 0.0f, mix[2] >= 0 ? player->getItem(mix[2]) : 0.0f, mix[3] >= 0 ? player->getItem(mix[3]) : 0.0f,
+						ai.baseMix[0], ai.baseMix[1], ai.baseMix[2], ai.baseMix[3], ai.mixChanges, ai.grudgePlayer);
+				}
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{
@@ -2030,9 +2056,15 @@ void Test_AIvsAI()
 	const uint64_t start = SDL_GetTicks();
 	float nextCensus = 60.0f;
 	while (server.timeManager.currentTime < minutes * 60.0f) {
-		server.timeManager.pendingMs = server.timeManager.stepMs;
-		if (server.timeManager.step())
-			server.simulate();
+		if (server.replay) {
+			if (!server.replayEvent())
+				break;
+		}
+		else {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
 		if (server.timeManager.currentTime >= nextCensus) {
 			nextCensus += 60.0f;
 			census("at");
@@ -2048,6 +2080,51 @@ void Test_AIvsAI()
 		printf("AITEST alias Deliverable Buildings:%s\n", list.c_str());
 	}
 	const std::vector<std::string> standing = census("end");
+	server.stopRecording();
+	{
+		// every object's id, position, orientation and items (in any order), and the random state:
+		// a replay must end with the same
+		size_t objects = 0;
+		auto fnv = [](const void* data, size_t n, uint64_t h) {
+			for (size_t i = 0; i < n; i++) { h ^= ((const uint8_t*)data)[i]; h *= 1099511628211ull; }
+			return h;
+		};
+		uint64_t sum = 0;
+		// (not the height, which loading sets for cities, nor items at 0, which a save leaves out:
+		// neither changes the game)
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			objects++;
+			uint64_t h = fnv(&obj->id, sizeof(obj->id), 1469598103934665603ull);
+			h = fnv(&obj->position.x, sizeof(float), h);
+			h = fnv(&obj->position.z, sizeof(float), h);
+			h = fnv(&obj->orientation, sizeof(obj->orientation), h);
+			for (const auto& [item, value] : obj->items)
+				if (value != 0.0f)
+					h += fnv(&value, sizeof(value), fnv(&item, sizeof(item), 1469598103934665603ull));
+			sum += h;
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children)
+					self(child, self);
+		};
+		walk(server.getLevel(), walk);
+		// "WKB_HASH_DUMP=<file>": each object's state, to find where two runs differ
+		if (const char* dump = getenv("WKB_HASH_DUMP"))
+			if (FILE* f = fopen(dump, "w")) {
+				auto write = [&](CommonGameObject* obj, auto& self) -> void {
+					fprintf(f, "%u %s pos %.4f %.4f %.4f ori %.4f", obj->id, obj->blueprint->name.c_str(), obj->position.x, obj->position.y, obj->position.z, obj->orientation.y);
+					std::map<int, float> sorted(obj->items.begin(), obj->items.end());
+					for (const auto& [item, value] : sorted)
+						fprintf(f, " %d=%g", item, value);
+					fprintf(f, "\n");
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* child : children)
+							self(child, self);
+				};
+				write(server.getLevel(), write);
+				fclose(f);
+			}
+		printf("AITEST hash %016llx (%zu objects, random state %u, t=%.2f)\n", (unsigned long long)(sum ^ g_simRandom.state), objects, g_simRandom.state, server.timeManager.currentTime);
+	}
 	const double wall = (SDL_GetTicks() - start) / 1000.0;
 	std::string list;
 	for (const std::string& n : standing)

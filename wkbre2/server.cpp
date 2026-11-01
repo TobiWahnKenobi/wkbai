@@ -151,6 +151,12 @@ void Server::loadSaveGame(const char * filename)
 	for (auto& [task, id] : postTaskTargets)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
+	// the work orders as saved, before any the scripts register again: their order decides which
+	// takes a unit listed by several (a replay played another game when they came in another)
+	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)
+		if (ServerGameObject* city = findObject(cityId))
+			player->aiController.registerWorkOrder(city, finder, workOrder);
+	postWorkOrders.clear();
 
 	// what can be built upon (tree stumps) goes from under every building, as WKB.exe does on
 	// loading: its Marjoria's Keep save loaded and saved again at once had lost the 5 stumps
@@ -370,6 +376,186 @@ void Server::sendLoadingStages()
 		}
 		clientLinks[to]->send(packet);
 	}
+}
+
+void Server::Recording::flushRun()
+{
+	if (!file || !runCount)
+		return;
+	fputc('S', file);
+	const uint8_t paused = runPaused ? 1 : 0;
+	fwrite(&runMs, 4, 1, file);
+	fwrite(&paused, 1, 1, file);
+	fwrite(&runCount, 4, 1, file);
+	runCount = 0;
+}
+
+std::string Server::aiSettingsText() const
+{
+	char buf[512];
+	snprintf(buf, sizeof(buf), "aggressiveAI=%d\naiGoldExpansion=%d\naiFocusAttacks=%d\naiEarlyFarms=%d\naiFirstBarracks=%d\naiAdapt=%d\n"
+		"aiMinPeasants=%d\naiSurplusBuildings=%d\naiSurplusPerBuilding=%g\naiLendFarmers=%d\naiRetreatHealth=%g\naiAttackWave=%d\n"
+		"aiWaveGather=%d\naiWaveSiege=%d\naiWaveFormations=%d\naiFocusFire=%d\n",
+		(int)aggressiveAI, (int)aiGoldExpansion, (int)aiFocusAttacks, aiEarlyFarms, aiFirstBarracks, (int)aiAdapt,
+		aiMinPeasants, aiSurplusBuildings, aiSurplusPerBuilding, (int)aiLendFarmers, aiRetreatHealth, aiAttackWave,
+		(int)aiWaveGather, (int)aiWaveSiege, (int)aiWaveFormations, (int)aiFocusFire);
+	return buf;
+}
+
+void Server::applyAiSettingsText(const std::string& text)
+{
+	size_t start = 0;
+	while (start < text.size()) {
+		size_t end = text.find('\n', start);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = text.substr(start, end - start);
+		start = end + 1;
+		const size_t eq = line.find('=');
+		if (eq == std::string::npos)
+			continue;
+		const std::string name = line.substr(0, eq);
+		const float v = (float)atof(line.c_str() + eq + 1);
+		if (name == "aggressiveAI") aggressiveAI = v != 0;
+		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
+		else if (name == "aiFocusAttacks") aiFocusAttacks = v != 0;
+		else if (name == "aiEarlyFarms") aiEarlyFarms = (int)v;
+		else if (name == "aiFirstBarracks") aiFirstBarracks = (int)v;
+		else if (name == "aiAdapt") aiAdapt = v != 0;
+		else if (name == "aiMinPeasants") aiMinPeasants = (int)v;
+		else if (name == "aiSurplusBuildings") aiSurplusBuildings = (int)v;
+		else if (name == "aiSurplusPerBuilding") aiSurplusPerBuilding = v;
+		else if (name == "aiLendFarmers") aiLendFarmers = v != 0;
+		else if (name == "aiRetreatHealth") aiRetreatHealth = v;
+		else if (name == "aiAttackWave") aiAttackWave = (int)v;
+		else if (name == "aiWaveGather") aiWaveGather = v != 0;
+		else if (name == "aiWaveSiege") aiWaveSiege = v != 0;
+		else if (name == "aiWaveFormations") aiWaveFormations = v != 0;
+		else if (name == "aiFocusFire") aiFocusFire = v != 0;
+	}
+}
+
+bool Server::startRecording(const std::filesystem::path& folder, const std::string& setupJson)
+{
+	std::error_code ec;
+	std::filesystem::create_directories(folder, ec);
+	if (!saveGame(PathToUtf8(folder / "start.sav").c_str()))
+		return false;
+	FILE* f = _wfopen((folder / "events.bin").wstring().c_str(), L"wb");
+	if (!f)
+		return false;
+	if (!setupJson.empty())
+		if (FILE* sf = _wfopen((folder / "setup.json").wstring().c_str(), L"wb")) {
+			fwrite(setupJson.data(), 1, setupJson.size(), sf);
+			fclose(sf);
+		}
+	if (FILE* ai = _wfopen((folder / "ai.txt").wstring().c_str(), L"wb")) {
+		const std::string text = aiSettingsText();
+		fwrite(text.data(), 1, text.size(), ai);
+		fclose(ai);
+	}
+	recording = std::make_unique<Recording>();
+	recording->file = f;
+	recording->lastTime = timeManager.psCurrentTime;
+	// the header: "WKBREC1", which client controls which player
+	fwrite("WKBREC1", 1, 7, f);
+	const uint8_t clients = (uint8_t)clientPlayerObjects.size();
+	fwrite(&clients, 1, 1, f);
+	for (const SrvGORef& ref : clientPlayerObjects) {
+		const uint32_t id = ref ? ref->id : 0;
+		fwrite(&id, 4, 1, f);
+	}
+	printf("Recording the game to %s\n", PathToUtf8(folder).c_str());
+	return true;
+}
+
+void Server::stopRecording()
+{
+	if (!recording || !recording->file)
+		return;
+	recording->flushRun();
+	fclose(recording->file);
+	recording.reset();
+}
+
+bool Server::startReplay(const std::filesystem::path& folder)
+{
+	if (FILE* ai = _wfopen((folder / "ai.txt").wstring().c_str(), L"rb")) {
+		std::string text;
+		char buf[256];
+		size_t n;
+		while ((n = fread(buf, 1, sizeof(buf), ai)) > 0)
+			text.append(buf, n);
+		fclose(ai);
+		applyAiSettingsText(text);
+	}
+	FILE* f = _wfopen((folder / "events.bin").wstring().c_str(), L"rb");
+	if (!f)
+		return false;
+	auto r = std::make_unique<Replay>();
+	char magic[7] = {};
+	uint8_t clients = 0;
+	if (fread(magic, 1, 7, f) != 7 || memcmp(magic, "WKBREC1", 7) != 0 || fread(&clients, 1, 1, f) != 1) {
+		fclose(f);
+		return false;
+	}
+	for (uint8_t i = 0; i < clients; i++) {
+		uint32_t id = 0;
+		fread(&id, 4, 1, f);
+		r->clientPlayers.push_back(id);
+	}
+	int type;
+	while ((type = fgetc(f)) != EOF) {
+		Replay::Event e;
+		e.type = (char)type;
+		if (type == 'S') {
+			uint8_t paused = 0;
+			if (fread(&e.ms, 4, 1, f) != 1 || fread(&paused, 1, 1, f) != 1 || fread(&e.count, 4, 1, f) != 1)
+				break;
+			e.paused = paused != 0;
+		}
+		else if (type == 'M') {
+			uint8_t client = 0;
+			uint16_t length = 0;
+			if (fread(&client, 1, 1, f) != 1 || fread(&length, 2, 1, f) != 1)
+				break;
+			e.client = client;
+			e.data.resize(length);
+			if (length && fread(e.data.data(), 1, length, f) != length)
+				break;
+		}
+		else
+			break;
+		r->events.push_back(std::move(e));
+	}
+	fclose(f);
+	replay = std::move(r);
+	printf("Replaying %s: %zu events\n", PathToUtf8(folder).c_str(), replay->events.size());
+	return true;
+}
+
+bool Server::replayEvent()
+{
+	if (!replay || replay->next >= replay->events.size())
+		return false;
+	Replay::Event& e = replay->events[replay->next];
+	if (e.type == 'M') {
+		handlePacket(e.client, e.data);
+		replay->next++;
+		return true;
+	}
+	if (!replay->leftInRun)
+		replay->leftInRun = e.count;
+	// one simulate() as recorded: the clock moved by e.ms, paused or not
+	timeManager.paused = e.paused;
+	timeManager.previousTime = timeManager.currentTime;
+	timeManager.psCurrentTime += e.ms;
+	timeManager.currentTime = (float)timeManager.psCurrentTime / 1000.0f;
+	timeManager.elapsedTime = timeManager.currentTime - timeManager.previousTime;
+	simulate();
+	if (--replay->leftInRun == 0)
+		replay->next++;
+	return true;
 }
 
 void Server::deleteObject(ServerGameObject * obj)
@@ -1670,7 +1856,8 @@ void Server::clearAlias(int aliasIndex)
 void Server::startLevel()
 {
 	// a new game: new random numbers, or the same ones every time with "simSeed" (tests)
-	g_simRandom.seed(g_settings.value("simSeed", (uint32_t)SDL_GetTicks() ^ (uint32_t)time(nullptr)));
+	lastSeed = g_settings.value("simSeed", (uint32_t)SDL_GetTicks() ^ (uint32_t)time(nullptr));
+	g_simRandom.seed(lastSeed);
 
 	for (const auto& player : this->clientPlayerObjects) {
 		if (player) {
@@ -1719,6 +1906,25 @@ void Server::removeClient(NetLink* link)
 void Server::tick()
 {
 	ZoneScoped;
+	if (replay) {
+		// the recorded calls at the viewer's speed: as many stepped ones as the time since the
+		// last frame (times the game speed) holds; the paused ones and the messages as they come
+		const uint32_t now = SDL_GetTicks();
+		const uint32_t elapsed = replay->lastSDLTime ? std::min(now - replay->lastSDLTime, 100u) : 0u;
+		replay->lastSDLTime = now;
+		if (!replayPaused)
+			replay->budgetMs = std::min(replay->budgetMs + (uint32_t)std::lround(elapsed * timeManager.timeSpeed), 2000u);
+		while (!replayPaused && replay->next < replay->events.size()) {
+			const Replay::Event& e = replay->events[replay->next];
+			if (e.type == 'S' && e.ms > 0 && replay->budgetMs < e.ms)
+				break;
+			if (e.type == 'S' && e.ms > 0)
+				replay->budgetMs -= e.ms;
+			replayEvent();
+		}
+		network();
+		return;
+	}
 	timeManager.tick();
 	// the simulation in fixed steps ("simStepMs"), so that it goes the same at any frame rate;
 	// while paused (or without steps) once, without moving the clock
@@ -1809,6 +2015,15 @@ void Server::simulate()
 	SimTimer totalTimer(g_simProfile.total);
 	g_simProfile.steps++;
 	simStepIndex++;
+	if (recording && recording->file) {
+		const uint32_t ms = timeManager.psCurrentTime - recording->lastTime;
+		recording->lastTime = timeManager.psCurrentTime;
+		if (recording->runCount && (ms != recording->runMs || timeManager.paused != recording->runPaused))
+			recording->flushRun();
+		recording->runMs = ms;
+		recording->runPaused = timeManager.paused;
+		recording->runCount++;
+	}
 	// once a game second (while paused, every 30 steps: the clock stands)
 	if (timeManager.currentTime >= nextPeasantActivityUpdate || (timeManager.paused && simStepIndex % 30 == 0)) {
 		nextPeasantActivityUpdate = timeManager.currentTime + 1.0f;
@@ -2006,11 +2221,59 @@ void Server::network()
 
 	int clientIndex = -1;
 	for (NetLink *cli : clientLinks) {
-		ServerGameObject* player = clientPlayerObjects[++clientIndex];
+		++clientIndex;
 		int pcnt = 20;
 		while (cli->available() && (pcnt--)) { // DDoS !!!
 			NetPacket packet = cli->receive();
-			BinaryReader br(packet.data.c_str());
+			const uint8_t type = packet.data.empty() ? 0 : (uint8_t)packet.data[0];
+			// a replay takes no orders from its viewer: only the joining, the loading stages and
+			// the pause and speed, which steer the playback
+			if (replay) {
+				if (type == NETSRVMSG_PAUSE) {
+					replayPaused = packet.data.size() > 1 && packet.data[1] != 0;
+					continue;
+				}
+				if (type == NETSRVMSG_CHANGE_GAME_SPEED) {
+					handlePacket(clientIndex, packet.data);
+					continue;
+				}
+				if (type != NETSRVMSG_HELLO && type != NETSRVMSG_LOADING_STAGE)
+					continue;
+			}
+			// the messages that change the game are recorded (not the joining, the lobby, the
+			// loading stages)
+			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
+				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE) {
+				recording->flushRun();
+				fputc('M', recording->file);
+				const uint8_t client = (uint8_t)clientIndex;
+				const uint16_t length = (uint16_t)packet.data.size();
+				fwrite(&client, 1, 1, recording->file);
+				fwrite(&length, 2, 1, recording->file);
+				fwrite(packet.data.data(), 1, length, recording->file);
+			}
+			handlePacket(clientIndex, packet.data);
+		}
+	}
+
+	freeDeletedObjects();
+
+	++g_diag_serverTicks;
+}
+
+void Server::handlePacket(int clientIndex, const std::string& data)
+{
+	if (clientIndex < 0)
+		return;
+	// a replay's clients beyond those connected now
+	while ((size_t)clientIndex >= clientPlayerObjects.size()) {
+		clientPlayerObjects.emplace_back();
+		clientInfos.emplace_back();
+	}
+	ServerGameObject* player = clientPlayerObjects[clientIndex];
+	{
+		{
+			BinaryReader br(data.c_str());
 			uint8_t type = br.readUint8();
 
 			switch (type) {
@@ -2191,10 +2454,6 @@ void Server::network()
 			}
 		}
 	}
-
-	freeDeletedObjects();
-
-	++g_diag_serverTicks;
 }
 
 // Frees the objects deleted since the last call. After every simulation step, not only once per

@@ -3,6 +3,8 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <filesystem>
+#include <memory>
 
 #include <cstdint>
 #include <map>
@@ -38,7 +40,8 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 
 	OrderConfiguration orderConfig;
 	std::unordered_set<const Reaction*> individualReactions;
-	std::unordered_map<int, std::unordered_set<SrvGORef>> associates, associators;
+	// ordered by object id (see CommonGameState::aliases)
+	std::map<int, std::set<SrvGORef>> associates, associators;
 	std::vector<SrvGORef> referencers;
 	std::vector<uint32_t> seenObjects; // ids of the objects in sight range, sorted
 	// loaded from a save: the first sight update only notes what is in range, without events
@@ -165,6 +168,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::vector<std::tuple<ServerGameObject*, int, int>> postAssociations;
 	// task targets read from a save game, set once all objects are loaded (a target can come later in the file)
 	std::vector<std::pair<Task*, int>> postTaskTargets;
+	// a save's AI work orders, registered in their order once all objects are loaded (their
+	// cities come after the players): player, city id, unit finder, work order
+	std::vector<std::tuple<ServerGameObject*, uint32_t, ObjectFinder*, const WorkOrder*>> postWorkOrders;
 
 	ServerGameObject* objToDelete = nullptr, * objToDeleteLast = nullptr;
 
@@ -207,6 +213,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, an AI with no building that trains fighters this many game seconds in lays down a
 	// barracks itself (AIController): "aiFirstBarracks"; 0: off
 	int aiFirstBarracks = 90;
+	// with it, an AI keeps a model of its enemies (AIController): the soldiers it meets, by type,
+	// steer its armies' make-up towards counters, and the enemy who attacked its base is the
+	// one its armies go for: "aiAdapt"
+	bool aiAdapt = true;
 	// with it, an AI wants at least this many peasants, at war too (ValuePeasantFloor): "aiMinPeasants"
 	int aiMinPeasants = 40;
 	// with it, a fighter building is wanted once more per aiSurplusPerBuilding of food and wood
@@ -293,6 +303,48 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// simulate() calls so far (staggers the work that doesn't need every step)
 	uint64_t simStepIndex = 0;
 	void network();
+	// one client message (NETSRVMSG_*), as network() receives it
+	void handlePacket(int clientIndex, const std::string& data);
+
+	// Game recordings: the game as it starts (a save game) and then, in order, each simulate()
+	// with how far the clock moved and whether the game was paused, and each client message.
+	// From the same start the simulation is deterministic, so a replay that feeds them in the
+	// same order plays the same game (the AIs included).
+	struct Recording {
+		// 'S' <ms> <paused> <count>: count simulate() calls with the clock moved by ms each;
+		// 'M' <client> <length> <bytes>: a client message
+		FILE* file = nullptr;
+		uint32_t runMs = 0, runCount = 0;
+		bool runPaused = false;
+		uint32_t lastTime = 0;
+		void flushRun();
+	};
+	std::unique_ptr<Recording> recording;
+	// the AI settings above (not in a save game), for a recording: "name=value" lines
+	std::string aiSettingsText() const;
+	void applyAiSettingsText(const std::string& text);
+	// starts recording into the folder (start.sav, events.bin, ai.txt); false if it can't be written
+	bool startRecording(const std::filesystem::path& folder, const std::string& setupJson = std::string());
+	// the seed startLevel gave the random numbers (a recording's setup)
+	uint32_t lastSeed = 0;
+	void stopRecording();
+	// a recording being played: its events, where it is, how many calls of the current run are
+	// left; replayPaused: the viewer's pause (the recorded pauses are part of the events)
+	struct Replay {
+		struct Event { char type; uint32_t ms = 0; bool paused = false; uint32_t count = 0; int client = 0; std::string data; };
+		std::vector<Event> events;
+		size_t next = 0;
+		uint32_t leftInRun = 0;
+		uint32_t budgetMs = 0, lastSDLTime = 0;
+		std::vector<uint32_t> clientPlayers;
+	};
+	std::unique_ptr<Replay> replay;
+	bool replayPaused = false;
+	// reads a recording's events (its start.sav is loaded as a save game first); false if none
+	bool startReplay(const std::filesystem::path& folder);
+	// one event of the replay; false at its end
+	bool replayEvent();
+	bool replayFinished() const { return replay && replay->next >= replay->events.size(); }
 
 private:
 	std::map<uint32_t, const GameObjBlueprint*> predec;

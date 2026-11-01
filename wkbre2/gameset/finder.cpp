@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "finder.h"
+#include <unordered_set>
 #include "../util/GSFileParser.h"
 #include "gameset.h"
 #include "../util/util.h"
@@ -295,7 +296,10 @@ struct FinderReferencers : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return fail(ctx);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
-		std::set<CommonGameObject*> vec;
+		// in the referencers' order, each once (a set of pointers came out in the order of their
+		// addresses, which differ from run to run: the same game played differently)
+		ObjectFinderResult vec;
+		std::unordered_set<CommonGameObject*> added;
 		for (CommonGameObject* obj : sctx->getSelf()->referencers) {
 			if (obj) {
 				Order* order = ((ServerGameObject*)obj)->orderConfig.getCurrentOrder();
@@ -304,11 +308,11 @@ struct FinderReferencers : ObjectFinder {
 				if (!task) continue;
 				//assert(task->target.get() == ctx->getSelf());
 				if (task->target != ctx->getSelf()) continue;
-				if (task->blueprint->category == category)
-					vec.insert(obj);
+				if (task->blueprint->category == category && added.insert(obj).second)
+					vec.push_back(obj);
 			}
 		}
-		return { vec.begin(), vec.end() };
+		return vec;
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		category = gs.taskCategories.readIndex(gsf);
@@ -536,27 +540,29 @@ struct FinderNSubs : ObjectFinder {
 
 struct FinderUnion : FinderNSubs {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		// in the order found, each once (not a hash set's order of addresses: see FinderReferencers)
+		ObjectFinderResult result;
 		std::unordered_set<CommonGameObject*> set;
-		for (auto &finder : finders) {
-			auto vec = finder->eval(ctx);
-			set.insert(vec.begin(), vec.end());
-		}
-		return { set.begin(), set.end() };
+		for (auto &finder : finders)
+			for (CommonGameObject* obj : finder->eval(ctx))
+				if (set.insert(obj).second)
+					result.push_back(obj);
+		return result;
 	}
 };
 
 struct FinderIntersection : FinderNSubs {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		// in the first finder's order (sorted by address, it differed from run to run)
 		auto objs = finders[0]->eval(ctx);
-		decltype(objs) intersected;
-		std::sort(objs.begin(), objs.end());
-		intersected.reserve(objs.size());
-		for (size_t f = 1; f < finders.size(); ++f) {
+		for (size_t f = 1; f < finders.size() && !objs.empty(); ++f) {
 			auto next = finders[f]->eval(ctx);
-			std::sort(next.begin(), next.end());
-			std::set_intersection(objs.begin(), objs.end(), next.begin(), next.end(), std::back_inserter(intersected));
-			std::swap(objs, intersected);
-			intersected.clear();
+			const std::unordered_set<CommonGameObject*> in(next.begin(), next.end());
+			ObjectFinderResult kept;
+			for (CommonGameObject* o : objs)
+				if (in.count(o))
+					kept.push_back(o);
+			objs = std::move(kept);
 		}
 		return objs;
 	}
@@ -731,7 +737,7 @@ struct FinderGradeSelect : ObjectFinder {
 			auto _ = ctx->change(ctx->candidate, vec[i]);
 			values[i] = { vd->eval(ctx), vec[i] };
 		}
-		std::sort(values.begin(), values.end(), [this](auto & a, auto & b) {return byHighest ? (a.first > b.first) : (a.first < b.first); });
+		std::stable_sort(values.begin(), values.end(), [this](auto & a, auto & b) {return byHighest ? (a.first > b.first) : (a.first < b.first); });
 		if (count <= 0 || (size_t)count > vec.size())
 			count = vec.size();
 		ObjectFinderResult res;
