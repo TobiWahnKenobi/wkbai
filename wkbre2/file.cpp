@@ -527,8 +527,10 @@ void AddModSources(const ModInfo& mod, FileGroup& group)
 			if (entry.is_regular_file(ec) && HasBcpExtension(entry.path()))
 				archives.push_back(entry.path());
 		std::sort(archives.begin(), archives.end());
+		// absolute, as BCPReader opens paths relative to the game folder and a relative modsPath
+		// ("mods", the default) is relative to the working directory
 		for (const auto& archive : archives)
-			group.sources.push_back(std::make_unique<BCPSource>(archive));
+			group.sources.push_back(std::make_unique<BCPSource>(std::filesystem::absolute(archive, ec)));
 	}
 	else {
 		group.sources.push_back(std::make_unique<BCPSource>(g_gamePath / PathFromUtf8(mod.id)));
