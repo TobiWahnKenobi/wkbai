@@ -913,6 +913,25 @@ local function playersTab()
 	if hoveredRow == nil and sel and sel.type == "ai" and sel.general then shown = generalsByBlueprint[sel.general] end
 	local bioW = skirmish.multiplayer and L(930) or L(1882)
 	panel(X(20), Y(288), bioW, L(712))
+	-- the map with each position's start, numbered and in its colour (wkbai's own)
+	local mapSize = L(420)
+	local mapX, mapY = X(20) + bioW - mapSize - L(10), Y(288) + L(712) - mapSize - L(10)
+	if skirmish.level and drawLevelPreview(skirmish.level, mapX, mapY, mapSize, mapSize) then
+		for i, start in ipairs(getLevelStarts(skirmish.level)) do
+			local slot = slots[i]
+			local sx, sy = mapX + start.x * mapSize, mapY + start.y * mapSize
+			local m = L(34)
+			drawRect(sx - m / 2 - L(2), sy - m / 2 - L(2), m + L(4), m + L(4), 0xE0000000)
+			if slot and slot.type ~= "empty" then
+				drawImage(colourSwatch(slot.colour), sx - m / 2, sy - m / 2, m, m)
+			end
+			-- the number, white on a black shadow (readable on the light colours too)
+			for _, d in ipairs({ { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 }, { 1, 1 } }) do
+				centredText(FONT_BUTTON, tostring(i), sx - m / 2 + L(d[1] * 2), sy - m / 2 + L(d[2] * 2), m, m, 0xFF000000)
+			end
+			centredText(FONT_BUTTON, tostring(i), sx - m / 2, sy - m / 2, m, m, WHITE)
+		end
+	end
 	if skirmish.multiplayer then
 		-- the guests: a click puts one at the selected position
 		panel(X(960), Y(288), L(942), L(200))
@@ -961,7 +980,7 @@ local function playersTab()
 		if shown.portrait ~= "" then drawImage(shown.portrait, X(30), Y(298), L(150), L(200)) end
 		drawText(FONT_LIST, X(192), Y(300), shown.name, YELLOW, S)
 		local y = Y(320)
-		for _, line in ipairs(wrapText(FONT_LIST, shown.biography or "", bioW - L(192))) do
+		for _, line in ipairs(wrapText(FONT_LIST, shown.biography or "", bioW - L(192) - L(440))) do
 			drawText(FONT_LIST, X(192), y, line, 0xFFE6E6E6, S)
 			y = y + L(16)
 		end

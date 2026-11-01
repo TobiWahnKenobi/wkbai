@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "FrontEnd.h"
+#include "../terrain.h"
 #include "LuaScripts.h"
 #include "MenuOptions.h"
 #include "CampaignProfile.h"
@@ -224,6 +225,76 @@ struct FrontEnd::Impl {
 			it->second.tex = gfx->CreateTexture(bmp, 1);
 		}
 		free(data);
+		return it->second;
+	}
+
+	// The start positions of a level's playable players ("Human Player"s, in the order of their
+	// ids, as the skirmish slots), as fractions of its map's playable area with north up (as the
+	// map's image): each player's Manor (Keep, Castle, Palace), else its start camera. Cached.
+	std::map<std::string, std::vector<std::pair<float, float>>> levelStarts;
+	const std::vector<std::pair<float, float>>& startsOf(const std::string& level)
+	{
+		auto [it, isNew] = levelStarts.try_emplace(level);
+		if (!isNew)
+			return it->second;
+		const std::string path = "Save_Games\\" + level;
+		if (!FileExists(path.c_str()))
+			return it->second;
+		char* data = nullptr;
+		int size = 0;
+		LoadFile(path.c_str(), &data, &size, 1);
+		data[size] = 0;
+		std::string map;
+		if (const char* m = strstr(data, "MAP \"")) {
+			const char* end = strchr(m + 5, '"');
+			if (end)
+				map.assign(m + 5, end);
+		}
+		// the players' blocks: "PLAYER <id> \"<blueprint>\"" (one tab in), their buildings and the
+		// POSITION after each, their START_CAMERA_POS
+		struct Start { uint32_t id; bool human; bool haveBase = false; float x = 0, z = 0, camX = 0, camZ = 0; };
+		std::vector<Start> players;
+		Start* cur = nullptr;
+		bool baseNext = false;
+		std::istringstream in(data);
+		std::string line;
+		while (std::getline(in, line)) {
+			const size_t first = line.find_first_not_of(" \t");
+			if (first == std::string::npos)
+				continue;
+			const std::string_view word = std::string_view(line).substr(first, line.find_first_of(" \t", first) - first);
+			if (word == "PLAYER" && first == 1 && line.find('"') != std::string::npos) {
+				Start s{ (uint32_t)strtoul(line.c_str() + first + 7, nullptr, 10), line.find("\"Human Player\"") != std::string::npos };
+				players.push_back(s);
+				cur = &players.back();
+				baseNext = false;
+			}
+			else if (cur && word == "BUILDING" && !cur->haveBase) {
+				for (const char* base : { "\"Manor\"", "\"Keep", "\"Castle", "\"Palace" })
+					if (line.find(base) != std::string::npos)
+						baseNext = true;
+			}
+			else if (cur && word == "POSITION" && baseNext) {
+				sscanf(line.c_str() + first + 8, "%f %*f %f", &cur->x, &cur->z);
+				cur->haveBase = true;
+				baseNext = false;
+			}
+			else if (cur && word == "START_CAMERA_POS")
+				sscanf(line.c_str() + first + 16, "%f %*f %f", &cur->camX, &cur->camZ);
+		}
+		free(data);
+		if (map.empty() || !FileExists(map.c_str()))
+			return it->second;
+		Terrain trn;
+		trn.readFromFile(map.c_str());
+		const auto [w, d] = trn.getPlayableArea();
+		std::sort(players.begin(), players.end(), [](const Start& a, const Start& b) { return a.id < b.id; });
+		for (const Start& s : players) {
+			if (!s.human)
+				continue;
+			const float x = s.haveBase ? s.x : s.camX, z = s.haveBase ? s.z : s.camZ;
+			it->second.emplace_back(std::clamp(x / std::max(w, 1.0f), 0.0f, 1.0f), std::clamp(1.0f - z / std::max(d, 1.0f), 0.0f, 1.0f));
+		}
 		return it->second;
 	}
 
@@ -467,6 +538,15 @@ struct FrontEnd::Impl {
 			if (img.tex)
 				drawList->AddImage((ImTextureID)img.tex, ImVec2(x, y), ImVec2(x + w, y + h));
 			return img.tex != nullptr;
+		});
+		// A level's start positions as { x, y } fractions of its map image (startsOf), in the order
+		// of the skirmish slots
+		lua.set_function("getLevelStarts", [this](const std::string& level) {
+			sol::table list = lua.create_table();
+			int n = 1;
+			for (const auto& [x, y] : startsOf(level))
+				list[n++] = lua.create_table_with("x", x, "y", y);
+			return list;
 		});
 		// The original's AI Generals: { blueprint, name, category ("CONSCRIPT", "VETERAN", "ELITE"), portrait, biography }
 		lua.set_function("getGenerals", [this]() {

@@ -935,13 +935,23 @@ void ClientInterface::drawLoadingScreen()
 }
 
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
-// this player only and the timeline what it saw; in a replay, or without fog of war, everyone
-// and everything. A timeline entry clicked moves the camera there.
+// this player and its allies only, and the timeline what it saw; in a replay, everyone and
+// everything. A timeline entry clicked moves the camera there.
 void ClientInterface::drawChronicle()
 {
-	const bool all = replayMode || !fogOfWarOn();
-	chronicle.update(client, all ? nullptr : &fogOfWar);
+	// a replay shows everyone and everything; a game the player's own statistics and its allies',
+	// and the events it saw (with fog of war; without, all events)
+	const bool all = replayMode;
+	chronicle.update(client, (all || !fogOfWarOn()) ? nullptr : &fogOfWar);
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
+	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+	auto shownPlayer = [&](uint32_t id) {
+		if (all || id == own)
+			return true;
+		CommonGameObject* me = client->clientPlayer.get();
+		CommonGameObject* other = client->findObject(id);
+		return me && other && alliedStatus >= 0 && client->getDiplomaticStatus(me, other) == alliedStatus;
+	};
 	auto colourOf = [&](uint32_t id) {
 		auto it = chronicle.playerColours.find(id);
 		const int c = it != chronicle.playerColours.end() ? it->second : 0;
@@ -965,7 +975,7 @@ void ClientInterface::drawChronicle()
 					ImGui::TableSetupColumn(h);
 				ImGui::TableHeadersRow();
 				for (const auto& [id, list] : chronicle.samples) {
-					if (list.empty() || (!all && id != own))
+					if (list.empty() || !shownPlayer(id))
 						continue;
 					const GameChronicle::Sample& s = list.back();
 					ImGui::TableNextRow();
@@ -993,13 +1003,13 @@ void ClientInterface::drawChronicle()
 			};
 			float tMax = 1.0f, vMax = 1.0f;
 			for (const auto& [id, list] : chronicle.samples)
-				if (all || id == own)
+				if (shownPlayer(id))
 					for (const auto& s : list) {
 						tMax = std::max(tMax, s.time);
 						vMax = std::max(vMax, value(s));
 					}
 			for (const auto& [id, list] : chronicle.samples) {
-				if (!all && id != own)
+				if (!shownPlayer(id))
 					continue;
 				for (size_t i = 1; i < list.size(); i++) {
 					const ImVec2 a(p0.x + size.x * list[i - 1].time / tMax, p0.y + size.y * (1.0f - value(list[i - 1]) / vMax));
