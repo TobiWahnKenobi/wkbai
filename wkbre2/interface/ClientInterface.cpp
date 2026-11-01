@@ -52,6 +52,13 @@
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
 
+// The players' colours by index, taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga
+static const ImU32 playerColors[9] = {
+	IM_COL32(200, 200, 200, 255), IM_COL32(114, 97, 187, 255), IM_COL32(212, 198, 74, 255),
+	IM_COL32(226, 50, 55, 255), IM_COL32(93, 155, 57, 255), IM_COL32(212, 91, 173, 255),
+	IM_COL32(204, 99, 55, 255), IM_COL32(103, 160, 182, 255), IM_COL32(180, 74, 32, 255),
+};
+
 namespace {
 	Vector3 getRay(const Camera &cam) {
 		//float ay = (1 - g_mouseX * 2.0f / g_windowWidth) * 0.45 * g_windowWidth / g_windowHeight;
@@ -246,12 +253,6 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		drawList->AddImage(minimapFogTexture, ImVec2(mapX, mapY), ImVec2(mapX + mapW, mapY + mapH));
 
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
-	// (colours taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga)
-	static const ImU32 playerColors[9] = {
-		IM_COL32(200, 200, 200, 255), IM_COL32(114, 97, 187, 255), IM_COL32(212, 198, 74, 255),
-		IM_COL32(226, 50, 55, 255), IM_COL32(93, 155, 57, 255), IM_COL32(212, 91, 173, 255),
-		IM_COL32(204, 99, 55, 255), IM_COL32(103, 160, 182, 255), IM_COL32(180, 74, 32, 255),
-	};
 	static const ImU32 treeColor = IM_COL32(28, 72, 24, 255);
 	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
@@ -792,7 +793,7 @@ bool ClientInterface::fogOfWarOn() const
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
-// player's row 138 above it, name at -227, "stage/8" at +73, the bar from +130 to +225 (14 high,
+// player's row 138 above it, name at -227 (in the player's colour), "stage/8" at +73, the bar from +130 to +225 (14 high,
 // dark red, filling bright red); "Words of Wisdom" 38 below, over a dark box from -260 to +260,
 // 50 to 230 below, with one of the FRONT_END_TIP_n texts. The stages are what has arrived: the
 // local server's game set, map and level, then the client's, then the first frames drawn.
@@ -846,9 +847,14 @@ void ClientInterface::drawLoadingScreen()
 			dl->AddText(ImVec2(p.x + d.x, p.y + d.y), IM_COL32(0, 0, 0, 220), text.c_str());
 		dl->AddText(p, colour, text.c_str());
 	};
-	// the player's row
+	// the player's row, the name in the player's colour: the client's player once its level is in,
+	// before that the local server's player for client 0
+	const CommonGameObject* player = client->clientPlayer.get();
+	if (!player && srv && srv->getLevel() && !srv->clientPlayerObjects.empty())
+		player = srv->clientPlayerObjects[0].get();
 	const std::string name = g_settings.value("playerName", lang.getText("DEFAULT_PLAYER_PROFILE"));
-	outlined(ImVec2(cx - 227, cy - 140), IM_COL32(70, 95, 215, 255), name);
+	const int colour = player ? player->color : 1;
+	outlined(ImVec2(cx - 227, cy - 140), playerColors[(colour >= 0 && colour < 9) ? colour : 1], name);
 	outlined(ImVec2(cx + 73, cy - 140), IM_COL32(232, 214, 176, 255), std::to_string(stage) + "/8");
 	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 225, cy - 124), IM_COL32(96, 0, 0, 255));
 	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 130 + 95 * progress, cy - 124), IM_COL32(210, 0, 0, 255));
