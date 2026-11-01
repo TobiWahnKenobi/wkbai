@@ -12,7 +12,7 @@ RenderSettings g_renderSettings;
 
 float RenderSettings::renderScale() const
 {
-	// FSR 1's presets: 1.3, 1.5, 1.7 and 2 times smaller per side
+	// FSR's presets: 1.3, 1.5, 1.7 and 2 times smaller per side
 	static const float scales[5] = { 1.0f, 1.0f / 1.3f, 1.0f / 1.5f, 1.0f / 1.7f, 0.5f };
 	return scales[std::clamp(upscaling, 0, 4)];
 }
@@ -81,8 +81,9 @@ void RenderSettings::load()
 	ssaoStrength = g_settings.value<float>("ssaoStrength", def.ssaoStrength);
 	bloomThreshold = g_settings.value<float>("bloomThreshold", def.bloomThreshold);
 	bloomIntensity = g_settings.value<float>("bloomIntensity", def.bloomIntensity);
-	antiAliasing = std::clamp(g_settings.value<int>("antiAliasing", def.antiAliasing), 0, 2);
+	antiAliasing = std::clamp(g_settings.value<int>("antiAliasing", def.antiAliasing), 0, 3);
 	upscaling = std::clamp(g_settings.value<int>("upscaling", def.upscaling), 0, 4);
+	upscaler = std::clamp(g_settings.value<int>("upscaler", def.upscaler), 0, 1);
 	sharpness = std::clamp(g_settings.value<float>("sharpness", def.sharpness), 0.0f, 1.0f);
 	displayMode = std::clamp(g_settings.value<int>("displayMode", def.displayMode), 0, 2);
 	anisotropy = std::clamp(g_settings.value<int>("anisotropy", def.anisotropy), 1, 16);
@@ -161,6 +162,7 @@ void RenderSettings::save()
 	g_settings["bloomIntensity"] = bloomIntensity;
 	g_settings["antiAliasing"] = antiAliasing;
 	g_settings["upscaling"] = upscaling;
+	g_settings["upscaler"] = upscaler;
 	g_settings["sharpness"] = sharpness;
 	g_settings["displayMode"] = displayMode;
 	g_settings["anisotropy"] = anisotropy;

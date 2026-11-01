@@ -2231,8 +2231,11 @@ void DiligentEnhancedTerrainRenderer::render()
 	}
 
 	// ----- Water -----
+	// (the opaque scene is done: FSR 3.1's reactive mask compares the rest against it)
+	dgfx->MarkOpaqueSceneDone();
 	if (_impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty()) {
 		if (_impl->refraction) {
+			ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
 			CopyTextureAttribs copy(dgfx->CurrentColorTarget()->GetTexture(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
 				_impl->sceneCopy, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			ctx->CopyTexture(copy);
@@ -2254,7 +2257,9 @@ void DiligentEnhancedTerrainRenderer::render()
 		drawIndices(_impl->frameLakeIndices);
 	}
 	// ----- Waterfalls, over the water -----
-	// (with the frame behind the water when it was copied in this frame)
+	// (with the frame behind the water when it was copied in this frame; FSR 3.1's reactive
+	// mask takes them as moving transparency, like the particles)
+	dgfx->MarkWaterDone();
 	if (_impl->waterfalls) {
 		const bool copied = _impl->refraction && _impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty();
 		_impl->waterfalls->render(camera, copied ? _impl->sceneCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr,

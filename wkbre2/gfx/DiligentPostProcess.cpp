@@ -25,8 +25,17 @@
 //     12-tap filter around the pixel, a Lanczos-like kernel stretched along the local edge's
 //     direction, clamped to the 4 nearest texels. RCAS then sharpens it (also after TAA without
 //     FSR): the most sharpening that doesn't clip the 4 neighbours, less where it looks like noise.
+//  9. With FSR 3.1 (instead of 6. to 8.), the motion vectors: the moving objects' as the scene
+//     renderer drew them, elsewhere the camera's motion through the depth (where the point was
+//     in the last frame). The reactive mask, where FSR trusts the current frame over its
+//     history: 0.6 where the water changed the scene (since copyOpaque: it animates, but less
+//     makes its surface shimmer with the jitter), 0.9 where the waterfalls and particles did
+//     (since copyAfterWater; faint sparks would leave trails). Then DiligentFsr3 anti-aliases
+//     and upscales the composite, and a copy puts its result into the back buffer.
 
 #include "DiligentPostProcess.h"
+#include "DiligentFsr3.h"
+#include <memory>
 #include "../util/util.h"
 #include <algorithm>
 #include <cmath>
@@ -53,6 +62,7 @@ cbuffer PostBuffer
 	float4 Taa;   // history valid, the current frame's weight
 	matrix TaaInverseView;  // view space -> world (row vectors)
 	matrix TaaPrevViewProj; // world -> the previous frame's clip space, unjittered
+	float4 Motion; // FSR 3: the jitter in UV, the object motion's "none" (NO_OBJECT_MOTION)
 };
 Texture2D tColor;
 Texture2D tDepth;
@@ -63,6 +73,10 @@ Texture2D tFog;      // fog of war: per 5 m tile, 1 where the player's units see
 Texture2D tHistory;  // TAA: the previous frames
 Texture2D tEasu;     // FSR: the image to scale up
 Texture2D tSharpen;  // RCAS: the image to sharpen
+Texture2D tObjectMotion; // FSR 3: the moving objects' motion vectors
+Texture2D tCopy;     // FSR 3's result, for the back buffer
+Texture2D tOpaque;   // FSR 3: the scene before its water
+Texture2D tWater;    // and before its other transparent parts
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -407,6 +421,47 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 	}
 	return float4(saturate(c), 1);
 }
+
+// FSR 3's motion vectors (UV, the last frame's position minus the current): a moving object's,
+// else the camera's, through the depth. The pixel's point is where the unjittered projection
+// puts it (the jitter taken off), so a still view has none.
+float2 PS_Motion(VS_OUTPUT input) : SV_Target
+{
+	int2 p = int2(input.Pos.xy);
+	float2 object = tObjectMotion.Load(int3(p, 0)).xy;
+	if (object.x < Motion.z * 0.5)
+		return object;
+	float2 uv = input.Uv - Motion.xy;
+	float3 world = mul(float4(ViewPosAt(uv, tDepth.Load(int3(p, 0)).r), 1), TaaInverseView).xyz;
+	float4 prev = mul(float4(world, 1), TaaPrevViewProj);
+	if (prev.w <= 1e-4)
+		return float2(0, 0);
+	return float2(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5) - uv;
+}
+
+float4 PS_Copy(VS_OUTPUT input) : SV_Target
+{
+	return float4(saturate(tCopy.Load(int3(input.Pos.xy, 0)).rgb), 1);
+}
+
+// FSR 3's reactive mask (after the SDK's generated one: the tone-mapped colours' largest
+// channel changed by the threshold or more; the opaque scene is the same in every copy)
+static const float REACTIVE_THRESHOLD = 0.04, REACTIVE_WATER = 0.6, REACTIVE_TRANSPARENT = 0.9;
+
+float ReactiveChange(float3 a, float3 b)
+{
+	float3 d = abs(a / (max(a.r, max(a.g, a.b)) + 1) - b / (max(b.r, max(b.g, b.b)) + 1));
+	return max(d.r, max(d.g, d.b));
+}
+
+float PS_Reactive(VS_OUTPUT input) : SV_Target
+{
+	int3 p = int3(input.Pos.xy, 0);
+	float3 opaque = tOpaque.Load(p).rgb, water = tWater.Load(p).rgb, final = tColor.Load(p).rgb;
+	if (ReactiveChange(water, final) >= REACTIVE_THRESHOLD)
+		return REACTIVE_TRANSPARENT;
+	return ReactiveChange(opaque, water) >= REACTIVE_THRESHOLD ? REACTIVE_WATER : 0;
+}
 )---";
 
 namespace {
@@ -430,6 +485,13 @@ struct DiligentPostProcess::Impl {
 	int historyCurrent = 0;
 	bool historyValid = false;
 	Matrix prevViewProj;
+	// FSR 3: the moving objects' motion vectors and all of them, the scene before its
+	// transparent parts and the reactive mask from it; whether this frame uses FSR 3, has the
+	// opaque copy, and whether the last frame used it (else its history is reset)
+	RefCntAutoPtr<ITexture> objectMotion, motion, opaque, afterWater, reactive;
+	std::unique_ptr<DiligentFsr3> fsr3;
+	ITexture* copySource = nullptr;
+	bool fsr3Frame = false, opaqueCopied = false, waterCopied = false, fsr3LastFrame = false;
 	// fog of war: the tiles' texture, its size, and the version of the data in it
 	RefCntAutoPtr<ITexture> fog;
 	uint32_t fogWidth = 0, fogHeight = 0, fogVersion = ~0u;
@@ -439,6 +501,9 @@ struct DiligentPostProcess::Impl {
 	// TAA into history[i]; EASU from aaOut, history[0], history[1], resolved; RCAS from
 	// upscaled, history[0], history[1]
 	Pass taaPass[2], easuPass[4], rcasPass[3];
+	// FSR 3: the motion vectors; the reactive mask after copyOpaque, with copyAfterWater [1] or
+	// without [0]; the result into the back buffer
+	Pass motionPass, reactivePass[2], copyPass;
 
 	RefCntAutoPtr<IShader> shader(SHADER_TYPE type, const char* entry)
 	{
@@ -580,7 +645,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->depthFormat = depthFormat;
 	BufferDesc cb;
 	cb.Name = "Post-processing";
-	cb.Size = 304;
+	cb.Size = 320;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DYNAMIC;
 	cb.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -598,7 +663,10 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 		_impl->makePass(pass, "PS_Easu", { "tEasu" }, colorFormat);
 	for (Pass& pass : _impl->rcasPass)
 		_impl->makePass(pass, "PS_Rcas", { "tSharpen" }, colorFormat);
-}
+	_impl->makePass(_impl->motionPass, "PS_Motion", { "tObjectMotion", "tDepth" }, TEX_FORMAT_RG16_FLOAT);
+	for (Pass& pass : _impl->reactivePass)
+		_impl->makePass(pass, "PS_Reactive", { "tColor", "tOpaque", "tWater" }, TEX_FORMAT_R8_UNORM);
+	_impl->makePass(_impl->copyPass, "PS_Copy", { "tCopy" }, colorFormat);}
 
 DiligentPostProcess::~DiligentPostProcess()
 {
@@ -639,6 +707,52 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height, uint32_t outpu
 	ITexture* rcasSources[3] = { _impl->upscaled, _impl->history[0], _impl->history[1] };
 	for (int i = 0; i < 3; i++)
 		_impl->bind(_impl->rcasPass[i], { rcasSources[i] });
+	_impl->objectMotion = _impl->target("Object motion vectors", width, height, TEX_FORMAT_RG16_FLOAT, BIND_RENDER_TARGET);
+	_impl->motion = _impl->target("Motion vectors", width, height, TEX_FORMAT_RG16_FLOAT, BIND_RENDER_TARGET);
+	_impl->opaque = _impl->target("Scene before water", width, height, _impl->colorFormat, BIND_NONE);
+	_impl->afterWater = _impl->target("Scene before transparency", width, height, _impl->colorFormat, BIND_NONE);
+	_impl->reactive = _impl->target("Reactive mask", width, height, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
+	_impl->bind(_impl->motionPass, { _impl->objectMotion, _impl->depth });
+	_impl->bind(_impl->reactivePass[0], { _impl->color, _impl->opaque, _impl->opaque });
+	_impl->bind(_impl->reactivePass[1], { _impl->color, _impl->opaque, _impl->afterWater });
+	_impl->copySource = nullptr;
+}
+
+void DiligentPostProcess::beginFrame(IDeviceContext* ctx, bool fsr3)
+{
+	_impl->fsr3Frame = fsr3;
+	_impl->opaqueCopied = _impl->waterCopied = false;
+	if (!fsr3)
+		return;
+	ITextureView* rtv = _impl->objectMotion->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+	const float none[4] = { NO_OBJECT_MOTION, NO_OBJECT_MOTION, 0, 0 };
+	ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->ClearRenderTarget(rtv, none, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+}
+
+ITextureView* DiligentPostProcess::objectMotionRTV() const
+{
+	return _impl->fsr3Frame ? _impl->objectMotion->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET) : nullptr;
+}
+
+void DiligentPostProcess::copyOpaque(IDeviceContext* ctx)
+{
+	if (!_impl->fsr3Frame || _impl->opaqueCopied)
+		return;
+	ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+	CopyTextureAttribs copy(_impl->color, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, _impl->opaque, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->CopyTexture(copy);
+	_impl->opaqueCopied = true;
+}
+
+void DiligentPostProcess::copyAfterWater(IDeviceContext* ctx)
+{
+	if (!_impl->fsr3Frame || !_impl->opaqueCopied || _impl->waterCopied)
+		return;
+	ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+	CopyTextureAttribs copy(_impl->color, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, _impl->afterWater, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->CopyTexture(copy);
+	_impl->waterCopied = true;
 }
 
 ITextureView* DiligentPostProcess::colorRTV() const
@@ -705,6 +819,8 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		memcpy(mapped, data, sizeof(data));
 		memcpy((float*)mapped + 44, &inverseView, sizeof(Matrix));
 		memcpy((float*)mapped + 60, &prevViewProj, sizeof(Matrix));
+		const float motion[4] = { settings.jitterPixels[0] / w, settings.jitterPixels[1] / h, NO_OBJECT_MOTION, 0 };
+		memcpy((float*)mapped + 76, motion, sizeof(motion));
 		ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
 	};
 	write(0, 0, w, h);
@@ -730,6 +846,43 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 	}
 	_impl->historyValid = taaOn;
 	_impl->prevViewProj = viewProj;
+	// FSR 3.1: the composite with its motion vectors and reactive mask, anti-aliased and
+	// upscaled, copied into the back buffer
+	if (settings.fsr3 && !settings.ortho && _impl->fsr3Frame) {
+		_impl->run(ctx, _impl->compositePass, _impl->resolved);
+		_impl->run(ctx, _impl->motionPass, _impl->motion);
+		if (!_impl->fsr3)
+			_impl->fsr3 = std::make_unique<DiligentFsr3>(_impl->device);
+		DiligentFsr3::Frame f;
+		if (_impl->opaqueCopied) {
+			_impl->run(ctx, _impl->reactivePass[_impl->waterCopied ? 1 : 0], _impl->reactive);
+			f.reactive = _impl->reactive;
+		}
+		f.color = _impl->resolved;
+		f.depth = _impl->depth;
+		f.motionVectors = _impl->motion;
+		f.renderWidth = w;
+		f.renderHeight = h;
+		f.outputWidth = ow;
+		f.outputHeight = oh;
+		f.jitterX = settings.jitterPixels[0];
+		f.jitterY = settings.jitterPixels[1];
+		f.cameraNear = settings.cameraNear;
+		f.cameraFar = settings.cameraFar;
+		f.fovY = settings.fovY;
+		f.frameTimeMs = settings.frameTimeMs;
+		f.sharpness = settings.sharpness;
+		f.reset = !_impl->fsr3LastFrame;
+		ITexture* out = _impl->fsr3->dispatch(ctx, f);
+		if (out != _impl->copySource) {
+			_impl->bind(_impl->copyPass, { out });
+			_impl->copySource = out;
+		}
+		_impl->runInto(ctx, _impl->copyPass, backBufferRTV);
+		_impl->fsr3LastFrame = true;
+		return;
+	}
+	_impl->fsr3LastFrame = false;
 	// the composite straight into the back buffer, without anti-aliasing or upscaling
 	if (!fxaa && !taaOn && !fsr) {
 		_impl->runInto(ctx, _impl->compositePass, backBufferRTV);

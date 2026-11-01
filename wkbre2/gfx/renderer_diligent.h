@@ -57,14 +57,24 @@ struct DiligentGfx : IRenderer
 	// the frame's 3D drawing into offscreen targets; ApplyPostProcessing, after the 3D scene and
 	// before the HUD, writes the processed scene into the back buffer and binds that again.
 	// effects: SSAO, bloom, anti-aliasing and FSR upscaling as set (else only the fog of war:
-	// classic graphics). With TAA, BeginPostProcessing sets the frame's g_projectionJitter, so it
-	// comes before the camera's updateMatrix.
+	// classic graphics). With TAA or FSR 3.1, BeginPostProcessing sets the frame's
+	// g_projectionJitter, so it comes before the camera's updateMatrix.
 	virtual void BeginPostProcessing(bool on, bool effects = true) = 0;
 	virtual void ApplyPostProcessing(const Camera& camera) = 0;
 	// The fog of war for the next ApplyPostProcessing: per 5 m tile of the playable area (row z,
 	// column x), 255 where the player's units see; tiles nullptr: none. The data must stay valid
 	// until then; version changes with it.
 	virtual void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) = 0;
+	// FSR 3.1 in this frame (RenderSettings::fsr3): the target the scene renderer draws its
+	// moving objects' motion vectors into, with the scene's depth (RG16F, UV: where the pixel
+	// was in the last frame minus where it is), else null; and the points where the opaque
+	// scene is done (before the water) and the water is (before the waterfalls and the
+	// particles), for FSR's reactive mask (each binds the scene's targets again)
+	virtual Diligent::ITextureView* MotionVectorTarget() = 0;
+	virtual void MarkOpaqueSceneDone() = 0;
+	virtual void MarkWaterDone() = 0;
+	// The frames presented so far: which drawing is in the same frame, or the next
+	virtual uint64_t FrameIndex() = 0;
 
 	// The original's terrain shadows, shared by the enhanced renderers (see docs/re/shadows.md
 	// in the RE repository). The terrain renderer creates the maps, the scene renderer draws

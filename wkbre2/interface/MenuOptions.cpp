@@ -133,10 +133,11 @@ namespace {
 			MenuOption o;
 			o.id = "antiAliasing"; o.page = "lighting"; o.label = "Anti-aliasing";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "FXAA", "TAA" };
+			o.choices = { "Off", "FXAA", "TAA", "AMD FSR 3.1" };
 			o.get = [&rs]() { return (float)rs.antiAliasing; };
-			o.set = [&rs](float v) { rs.antiAliasing = std::clamp((int)v, 0, 2); };
-			list.push_back(o);
+			o.set = [&rs](float v) { rs.antiAliasing = std::clamp((int)v, 0, 3); };
+			// FSR 3.1 upscaling anti-aliases by itself
+			list.push_back(withEnabled(o, [&rs]() { return !(rs.upscaling > 0 && rs.upscaler == 1); }));
 		}
 		{
 			MenuOption o;
@@ -147,8 +148,17 @@ namespace {
 			o.set = [&rs](float v) { rs.upscaling = std::clamp((int)v, 0, 4); };
 			list.push_back(o);
 		}
+		{
+			MenuOption o;
+			o.id = "upscaler"; o.page = "lighting"; o.label = "Upscaler";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "FSR 1", "FSR 3.1" };
+			o.get = [&rs]() { return (float)rs.upscaler; };
+			o.set = [&rs](float v) { rs.upscaler = std::clamp((int)v, 0, 1); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.upscaling > 0; }));
+		}
 		list.push_back(withEnabled(slider("sharpness", "lighting", "Sharpening", rs.sharpness, 0.0f, 1.0f),
-			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing == 2; }));
+			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing >= 2; }));
 		{
 			MenuOption o;
 			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";
