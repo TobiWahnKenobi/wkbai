@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <atomic>
 #include <filesystem>
 #include <memory>
 
@@ -376,7 +377,12 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		std::vector<uint32_t> clientPlayers;
 	};
 	std::unique_ptr<Replay> replay;
-	bool replayPaused = false;
+	// the viewer's playback (atomic: its interface reads them, and sets replaySeekMs, from its
+	// own thread): its pause, the game time played and the whole recording's (the stepped
+	// calls' ms), and a jump forward to replaySeekMs of played time (0: none), run as fast as
+	// it goes
+	std::atomic<bool> replayPaused = false;
+	std::atomic<uint32_t> replayPlayedMs = 0, replayTotalMs = 0, replaySeekMs = 0;
 	// reads a recording's events (its start.sav is loaded as a save game first); false if none
 	bool startReplay(const std::filesystem::path& folder);
 	// one event of the replay; false at its end

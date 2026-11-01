@@ -39,9 +39,12 @@ void GameChronicle::update(Client* client, const FogOfWar* fog)
 	if (!client || !client->getLevel() || !client->gameSet)
 		return;
 	const float now = client->timeManager.currentTime;
-	// a game loaded again or a new one: start over
-	if (now + 1.0f < nextSample - 10.0f) {
+	// a game loaded again or a new one (another level, or the clock a minute back): start over.
+	// Not on a few seconds back: a replay's clock runs ahead of a slow simulation and the time
+	// sync puts it back, which wiped the timeline.
+	if (client->getLevel() != level || now + 60.0f < nextSample - 10.0f) {
 		*this = GameChronicle();
+		level = client->getLevel();
 	}
 	if (!regions.ready())
 		regions.build(client);

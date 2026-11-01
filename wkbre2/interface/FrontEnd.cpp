@@ -30,6 +30,8 @@
 #include <memory>
 #include <sstream>
 #include <filesystem>
+#include <chrono>
+#include <ctime>
 
 namespace {
 	FrontEnd* g_frontEnd = nullptr;
@@ -124,6 +126,90 @@ namespace {
 	std::filesystem::path CustomGeneralFile(const std::string& name)
 	{
 		return g_userPath / "saved" / "Warrior Kings Game Set" / "AI Generals" / PathFromUtf8(name + ".gsf");
+	}
+
+	// What the Replays list shows of a recording: the name the player gave it (name.txt), its map
+	// (setup.json's level, else the level's NAME in start.sav) and its length (events.bin's
+	// stepped calls, as Server::startReplay reads them). Kept per folder until a file changes.
+	struct RecordingInfo {
+		std::string name, map;
+		uint64_t lengthMs = 0;
+	};
+
+	std::string ReadSmallFile(const std::filesystem::path& path, size_t limit)
+	{
+		std::string text;
+		if (FILE* f = _wfopen(path.wstring().c_str(), L"rb")) {
+			char buf[4096];
+			size_t n;
+			while (text.size() < limit && (n = fread(buf, 1, std::min(sizeof(buf), limit - text.size()), f)) > 0)
+				text.append(buf, n);
+			fclose(f);
+		}
+		return text;
+	}
+
+	RecordingInfo recordingInfo(const std::filesystem::path& folder)
+	{
+		struct Cached { std::filesystem::file_time_type events, name; RecordingInfo info; };
+		static std::map<std::filesystem::path, Cached> cache;
+		std::error_code ec;
+		const auto eventsTime = std::filesystem::last_write_time(folder / "events.bin", ec);
+		const auto nameTime = std::filesystem::last_write_time(folder / "name.txt", ec);
+		if (auto it = cache.find(folder); it != cache.end() && it->second.events == eventsTime && it->second.name == nameTime)
+			return it->second.info;
+		RecordingInfo info;
+		info.name = ReadSmallFile(folder / "name.txt", 200);
+		while (!info.name.empty() && (info.name.back() == '\n' || info.name.back() == '\r' || info.name.back() == ' '))
+			info.name.pop_back();
+		const nlohmann::json setup = nlohmann::json::parse(ReadSmallFile(folder / "setup.json", 1 << 20), nullptr, false);
+		if (setup.is_object())
+			info.map = setup.value("level", std::string());
+		if (info.map.empty()) {
+			// the level's NAME "<file>.lvl", near the start of the save game
+			const std::string sav = ReadSmallFile(folder / "start.sav", 64 << 10);
+			for (size_t at = sav.find("\nLEVEL "); at != std::string::npos;) {
+				const size_t q = sav.find("NAME \"", at);
+				const size_t e = q == std::string::npos ? q : sav.find('"', q + 6);
+				if (e != std::string::npos)
+					info.map = sav.substr(q + 6, e - q - 6);
+				break;
+			}
+		}
+		if (const size_t dot = info.map.rfind('.'); dot != std::string::npos)
+			info.map.resize(dot);
+		if (FILE* f = _wfopen((folder / "events.bin").wstring().c_str(), L"rb")) {
+			char magic[7] = {};
+			uint8_t clients = 0;
+			if (fread(magic, 1, 7, f) == 7 && memcmp(magic, "WKBREC1", 7) == 0 && fread(&clients, 1, 1, f) == 1
+				&& fseek(f, 4L * clients, SEEK_CUR) == 0) {
+				int type;
+				while ((type = fgetc(f)) != EOF) {
+					if (type == 'S') {
+						uint32_t ms = 0, count = 0;
+						uint8_t paused = 0;
+						if (fread(&ms, 4, 1, f) != 1 || fread(&paused, 1, 1, f) != 1 || fread(&count, 4, 1, f) != 1)
+							break;
+						info.lengthMs += (uint64_t)ms * count;
+					}
+					else if (type == 'M') {
+						uint8_t client = 0;
+						uint16_t length = 0;
+						if (fread(&client, 1, 1, f) != 1 || fread(&length, 2, 1, f) != 1 || fseek(f, length, SEEK_CUR) != 0)
+							break;
+					}
+					else if (type == 'R') {
+						if (fseek(f, 10, SEEK_CUR) != 0)
+							break;
+					}
+					else
+						break;
+				}
+			}
+			fclose(f);
+		}
+		cache[folder] = { eventsTime, nameTime, info };
+		return info;
 	}
 }
 
@@ -405,18 +491,48 @@ struct FrontEnd::Impl {
 		lua.set_function("getPlace", [this]() { return place == Place::IN_GAME ? "game" : "menu"; });
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
-		// the game recordings (folders in saved\Recordings with a start.sav), newest first
-		lua.set_function("getRecordings", []() {
-			std::vector<std::pair<std::filesystem::file_time_type, std::string>> found;
+		// the game recordings (folders in saved\Recordings with a start.sav), newest first (by
+		// their start.sav: a rename doesn't move one up): { folder, name (name.txt, else the
+		// folder's), map, date, length (seconds of game time) }
+		lua.set_function("getRecordings", [this]() {
+			struct Found { std::filesystem::file_time_type time; std::string folder; };
+			std::vector<Found> found;
 			std::error_code ec;
-			for (const auto& entry : std::filesystem::directory_iterator(g_userPath / "saved" / "Recordings", ec))
+			const std::filesystem::path root = g_userPath / "saved" / "Recordings";
+			for (const auto& entry : std::filesystem::directory_iterator(root, ec))
 				if (entry.is_directory(ec) && std::filesystem::exists(entry.path() / "start.sav", ec))
-					found.emplace_back(entry.last_write_time(ec), PathToUtf8(entry.path().filename()));
-			std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-			std::vector<std::string> names;
-			for (auto& [time, name] : found)
-				names.push_back(std::move(name));
-			return sol::as_table(names);
+					found.push_back({ std::filesystem::last_write_time(entry.path() / "start.sav", ec), PathToUtf8(entry.path().filename()) });
+			std::sort(found.begin(), found.end(), [](const Found& a, const Found& b) { return a.time > b.time; });
+			sol::table list = lua.create_table();
+			int n = 1;
+			for (const Found& f : found) {
+				const RecordingInfo info = recordingInfo(root / PathFromUtf8(f.folder));
+				char date[32] = {};
+				const std::time_t t = std::chrono::system_clock::to_time_t(std::chrono::clock_cast<std::chrono::system_clock>(f.time));
+				if (const std::tm* tm = std::localtime(&t))
+					std::strftime(date, sizeof(date), "%Y-%m-%d %H:%M", tm);
+				list[n++] = lua.create_table_with("folder", f.folder, "name", info.name.empty() ? f.folder : info.name,
+					"map", info.map, "date", std::string(date), "length", info.lengthMs / 1000.0);
+			}
+			return list;
+		});
+		// a recording's own name (its name.txt; the folder stays): empty goes back to the folder's
+		lua.set_function("renameRecording", [](const std::string& folder, const std::string& name) {
+			if (folder.empty() || folder.find_first_of("\/") != std::string::npos || folder.find("..") != std::string::npos)
+				return false;
+			const std::filesystem::path dir = g_userPath / "saved" / "Recordings" / PathFromUtf8(folder);
+			std::error_code ec;
+			if (!std::filesystem::is_directory(dir, ec))
+				return false;
+			const std::filesystem::path file = dir / "name.txt";
+			if (name.find_first_not_of(" ") == std::string::npos)
+				return std::filesystem::remove(file, ec) || !ec;
+			FILE* f = _wfopen(file.wstring().c_str(), L"wb");
+			if (!f)
+				return false;
+			const bool ok = fwrite(name.data(), 1, name.size(), f) == name.size();
+			fclose(f);
+			return ok;
 		});
 		lua.set_function("getCurrentSave", [this]() { return currentSave; });
 		lua.set_function("canSaveGame", [this]() { return canSave; });

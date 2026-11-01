@@ -11,6 +11,7 @@
 #include "../Language.h"
 #include "FogOfWar.h"
 #include "GameChronicle.h"
+#include "ReplayView.h"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -49,8 +50,12 @@ struct ClientInterface {
 	void render();
 
 	void updateTerrain();
-	// playing a recording: everything shown (no fog of war), the commands ignored by the server
+	// playing a recording: everything shown (no fog of war), the commands ignored by the server,
+	// no command panels; its playback controls and its events on the screen and the minimap.
+	// replayServer: the server playing it (in this program), for the controls
 	bool replayMode = false;
+	Server* replayServer = nullptr;
+	ReplayView replayView;
 	// heights changed by the server (buildings levelling the ground): the terrain renderer is
 	// refreshed, at most every 250 ms
 	bool terrainHeightsChanged = false;

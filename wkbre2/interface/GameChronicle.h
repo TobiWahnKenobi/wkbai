@@ -58,6 +58,7 @@ struct GameChronicle {
 private:
 	float nextSample = 0.0f, nextScan = 0.0f;
 	bool first = true;
+	const void* level = nullptr; // the level it is about
 	struct Known { uint32_t player; bool building, settlement, foundation; Vector3 position; std::string name; bool fighter = false; };
 	std::map<uint32_t, Known> known; // the objects at the last scan
 	std::map<uint32_t, int> unitsLost, buildingsLost;

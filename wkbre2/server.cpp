@@ -543,6 +543,13 @@ bool Server::startReplay(const std::filesystem::path& folder)
 		r->events.push_back(std::move(e));
 	}
 	fclose(f);
+	uint64_t total = 0;
+	for (const Replay::Event& e : r->events)
+		if (e.type == 'S')
+			total += (uint64_t)e.ms * e.count;
+	replayTotalMs = (uint32_t)std::min<uint64_t>(total, UINT32_MAX);
+	replayPlayedMs = 0;
+	replaySeekMs = 0;
 	replay = std::move(r);
 	printf("Replaying %s: %zu events\n", PathToUtf8(folder).c_str(), replay->events.size());
 	return true;
@@ -554,7 +561,10 @@ bool Server::replayEvent()
 		return false;
 	Replay::Event& e = replay->events[replay->next];
 	if (e.type == 'M') {
-		handlePacket(e.client, e.data);
+		// the recorded game speed doesn't change the game (its steps are as recorded): the
+		// replay goes at the viewer's
+		if (e.data.empty() || (uint8_t)e.data[0] != NETSRVMSG_CHANGE_GAME_SPEED)
+			handlePacket(e.client, e.data);
 		replay->next++;
 		return true;
 	}
@@ -589,6 +599,7 @@ bool Server::replayEvent()
 	timeManager.currentTime = (float)timeManager.psCurrentTime / 1000.0f;
 	timeManager.elapsedTime = timeManager.currentTime - timeManager.previousTime;
 	simulate();
+	replayPlayedMs += e.ms;
 	if (--replay->leftInRun == 0)
 		replay->next++;
 	return true;
@@ -1746,7 +1757,8 @@ void Server::syncTime()
 {
 	NetPacketWriter msg(NETCLIMSG_TIME_SYNC);
 	msg.writeUint32(timeManager.psCurrentTime);
-	msg.writeUint8(timeManager.paused);
+	// a replay's viewer paused: its clock stands still too
+	msg.writeUint8(timeManager.paused || (replay && replayPaused));
 	sendToAll(msg);
 }
 
@@ -2281,6 +2293,19 @@ void Server::tick()
 		// the recorded calls at the viewer's speed: as many stepped ones as the time since the
 		// last frame (times the game speed) holds; the paused ones and the messages as they come
 		const uint32_t now = SDL_GetTicks();
+		// a jump forward: the events as fast as they go, 50 ms of them per tick (the viewer's
+		// frames go on meanwhile), paused or not
+		if (const uint32_t seek = replaySeekMs; seek) {
+			while (replay->next < replay->events.size() && replayPlayedMs < seek && SDL_GetTicks() - now < 50)
+				replayEvent();
+			if (replayPlayedMs >= seek || replay->next >= replay->events.size())
+				replaySeekMs = 0;
+			syncTime();
+			replay->budgetMs = 0;
+			replay->lastSDLTime = SDL_GetTicks();
+			network();
+			return;
+		}
 		const uint32_t elapsed = replay->lastSDLTime ? std::min(now - replay->lastSDLTime, 100u) : 0u;
 		replay->lastSDLTime = now;
 		if (!replayPaused)
@@ -2293,6 +2318,10 @@ void Server::tick()
 				replay->budgetMs -= e.ms;
 			replayEvent();
 		}
+		// the viewer's clock every tick: at a speed the simulation can't keep up with, it runs
+		// ahead and a sync a second later puts it back by seconds
+		if (!replayPaused)
+			syncTime();
 		network();
 		return;
 	}
@@ -2602,6 +2631,7 @@ void Server::network()
 			if (replay) {
 				if (type == NETSRVMSG_PAUSE) {
 					replayPaused = packet.data.size() > 1 && packet.data[1] != 0;
+					syncTime();
 					continue;
 				}
 				if (type == NETSRVMSG_CHANGE_GAME_SPEED) {
