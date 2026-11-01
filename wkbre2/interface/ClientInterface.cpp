@@ -1512,7 +1512,7 @@ void ClientInterface::chatFrame()
 	// test runs: "lobbyTest": { ..., "gameChat": "<text>" } says it once the game has run 3 seconds
 	if (static bool said = false; !said && client->timeManager.currentTime > 3.0f && client->serverLink) {
 		said = true;
-		if (const std::string text = g_settings.value("lobbyTest", nlohmann::json()).value("gameChat", std::string()); !text.empty())
+		if (const std::string text = g_settings.value("lobbyTest", nlohmann::json::object()).value("gameChat", std::string()); !text.empty())
 			client->sendMessage(g_settings.value("playerName", std::string("Player")) + ": " + text);
 	}
 
@@ -1617,7 +1617,7 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
 	if (frontEnd && BenchmarkEnabled() && client->getLevel() && !frontEnd->isOpen()) {
 		static bool opened = false;
-		const auto screens = g_settings.value("benchmark", nlohmann::json()).value("openMenu", nlohmann::json::array());
+		const auto screens = g_settings.value("benchmark", nlohmann::json::object()).value("openMenu", nlohmann::json::array());
 		if (!opened && !screens.empty()) {
 			opened = true;
 			for (const auto& screen : screens)
@@ -1627,7 +1627,7 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "saveAs": "<name>" } saves the game once it has run 2 seconds
 	if (frontEnd && BenchmarkEnabled() && client->getLevel() && client->timeManager.currentTime > 2.0f) {
 		static bool saved = false;
-		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("saveAs", std::string());
+		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("saveAs", std::string());
 		if (!saved && !name.empty()) {
 			saved = true;
 			saveRequested(name);
@@ -1637,7 +1637,7 @@ void ClientInterface::iter()
 	// server, through the script chat) once the game has run that long
 	if (BenchmarkEnabled() && client->getLevel()) {
 		static bool ran = false;
-		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json()).value("script", nlohmann::json());
+		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json::object()).value("script", nlohmann::json());
 		if (!ran && script.is_array() && script.size() == 2 && client->timeManager.currentTime > script[0].get<float>()) {
 			ran = true;
 			client->sendMessage("!" + script[1].get<std::string>());
@@ -1654,7 +1654,7 @@ void ClientInterface::iter()
 		static bool applied = false;
 		if (!applied) {
 			applied = true;
-			peasantActivityMode = g_settings.value("benchmark", nlohmann::json()).value("peasantActivity", -1);
+			peasantActivityMode = g_settings.value("benchmark", nlohmann::json::object()).value("peasantActivity", -1);
 		}
 	}
 	// Test runs: "benchmark": { ..., "selectActivity": <row 1-5> } clicks that peasant activity
@@ -1663,7 +1663,7 @@ void ClientInterface::iter()
 	static int framesForActivity = 0;
 	if (BenchmarkEnabled() && client->getLevel() && ++framesForActivity > 120) {
 		static bool clicked = false;
-		const int row = g_settings.value("benchmark", nlohmann::json()).value("selectActivity", 0);
+		const int row = g_settings.value("benchmark", nlohmann::json::object()).value("selectActivity", 0);
 		if (!clicked && row > 0) {
 			clicked = true;
 			printf("ACTIVITY row %d selected %d\n", row, selectPeasantsByActivity(row));
@@ -1672,7 +1672,7 @@ void ClientInterface::iter()
 	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
-		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
+		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("select", std::string());
 		if (!name.empty()) {
 			ClientGameObject* found = nullptr;
 			auto search = [&](ClientGameObject* obj, auto& self) -> void {
@@ -1850,7 +1850,7 @@ void ClientInterface::iter()
 		static bool opened = false;
 		if (!opened) {
 			opened = true;
-			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json());
+			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
 			statisticsOpen = bench.value("statistics", false);
 			timelineOpen = bench.value("timeline", false);
 		}
@@ -1861,18 +1861,18 @@ void ClientInterface::iter()
 		timelineOpen = !timelineOpen;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer)
 		editorOn = !editorOn;
-	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorTest", false)) {
+	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;
 		editorTestStep(peapos);
 	}
-	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorCheckTest", false)) {
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorCheckTest", false)) {
 		// a test run: the map editor's check printed once
 		static int frame = 0;
 		if (++frame == 30)
 			for (const std::string& w : editorCheck())
 				printf("EDITORCHECK %s\n", w.c_str());
 	}
-	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json()).value("editorBlankTest", false)) {
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorBlankTest", false)) {
 		// a test run: the map made blank, then saved as "Blank Test"
 		editorOn = true;
 		static int frame = 0;
@@ -1899,7 +1899,7 @@ void ClientInterface::iter()
 			printf("EDITORNEWMAP opened: %d x %d playable tiles, %d edge, editor %d\n", w, h, client->terrain->edge, (int)editorOn);
 		}
 	}
-	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json()).value("editorMode", std::string()).empty() && !editorOn) {
+	else if (withServer && BenchmarkEnabled() && !g_settings.value("benchmark", nlohmann::json::object()).value("editorMode", std::string()).empty() && !editorOn) {
 		editorOn = true;
 		editorOpenMode(g_settings["benchmark"]["editorMode"].get<std::string>());
 	}
@@ -3075,7 +3075,7 @@ void ClientInterface::iter()
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
 	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4 && rowsIn) {
 		static bool shot = false;
-		const std::string path = g_settings.value("benchmark", nlohmann::json()).value("loadingScreenshot", std::string());
+		const std::string path = g_settings.value("benchmark", nlohmann::json::object()).value("loadingScreenshot", std::string());
 		if (!shot && !path.empty()) {
 			shot = true;
 			printf("Loading screenshot %s: %s\n", path.c_str(), gfx->SaveScreenshot(path.c_str()) ? "saved" : "failed");
@@ -3093,7 +3093,7 @@ void ClientInterface::iter()
 	// buildings by type every that many seconds of game time ("CENSUS t=... player ...")
 	if (BenchmarkEnabled() && client->getLevel()) {
 		static float nextCensus = 0.0f;
-		const float every = g_settings.value("benchmark", nlohmann::json()).value("census", 0.0f);
+		const float every = g_settings.value("benchmark", nlohmann::json::object()).value("census", 0.0f);
 		if (every > 0.0f && client->timeManager.currentTime >= nextCensus) {
 			nextCensus = client->timeManager.currentTime + every;
 			for (const auto& [type, players] : client->getLevel()->children) {
@@ -3140,7 +3140,7 @@ void ClientInterface::iter()
 		}
 		// "traceOrder": "<order>": every 2 s of game time, the first unit doing that order (its
 		// task, target and items), to follow a unit's work in a test run ("TRACE t=...")
-		const std::string traceOrder = g_settings.value("benchmark", nlohmann::json()).value("traceOrder", std::string());
+		const std::string traceOrder = g_settings.value("benchmark", nlohmann::json::object()).value("traceOrder", std::string());
 		static float nextTrace = 0.0f;
 		static uint32_t tracedId = 0;
 		if (!traceOrder.empty() && Server::instance && client->timeManager.currentTime >= nextTrace) {

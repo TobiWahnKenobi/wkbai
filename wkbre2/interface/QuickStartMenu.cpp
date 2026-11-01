@@ -102,7 +102,7 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 	updateDiscordRPC("In menu", nullptr);
 
 	// test runs: "benchmark": { ..., "replay": "<recording>" } plays a recording (saved\Recordings)
-	const std::string benchReplay = BenchmarkEnabled() ? g_settings.value("benchmark", nlohmann::json()).value("replay", std::string()) : std::string();
+	const std::string benchReplay = BenchmarkEnabled() ? g_settings.value("benchmark", nlohmann::json::object()).value("replay", std::string()) : std::string();
 	if (!benchReplay.empty())
 		handleRequest({ "replay", benchReplay });
 	else if (BenchmarkEnabled()) {
@@ -112,7 +112,7 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 			skirmishMenu.changeSettingsForLevel(*it);
 			modeChosen = MODE_SINGLEPLAYER;
 			// test runs: "benchmark": { ..., "slots": "H|A:<AI General>|E" } as chosen in the skirmish menu
-			const std::string slots = g_settings.value("benchmark", nlohmann::json()).value("slots", std::string());
+			const std::string slots = g_settings.value("benchmark", nlohmann::json::object()).value("slots", std::string());
 			if (!slots.empty())
 				handleRequest({ "slots", slots });
 		}
@@ -456,10 +456,10 @@ void QuickStartMenu::launchGame()
 					client->sendLobbyHello(playerName());
 					status = "connected";
 					// test runs: "lobbyTest": { ..., "chat": "<text>" }
-					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json()).value("chat", std::string()); !chat.empty())
+					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json::object()).value("chat", std::string()); !chat.empty())
 						client->sendMessage(playerName() + ": " + chat);
 					// { ..., "requests": ["slot 3", "ready 1"] } asks the host's lobby for these
-					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json()).value("requests", nlohmann::json::array()))
+					for (const auto& r : g_settings.value("lobbyTest", nlohmann::json::object()).value("requests", nlohmann::json::array()))
 						client->sendLobbyRequest(r.get<std::string>());
 					break;
 				}
@@ -508,7 +508,7 @@ void QuickStartMenu::launchGame()
 				static bool lobbyShot = false;
 				if (!lobbyShot && SDL_GetTicks() - lobbyStart > 6000) {
 					lobbyShot = true;
-					if (const std::string shot = g_settings.value("lobbyTest", nlohmann::json()).value("screenshot", std::string()); !shot.empty())
+					if (const std::string shot = g_settings.value("lobbyTest", nlohmann::json::object()).value("screenshot", std::string()); !shot.empty())
 						gfx->SaveScreenshot(shot.c_str());
 				}
 				gfx->EndDrawing();
@@ -596,7 +596,7 @@ void QuickStartMenu::launchGame()
 					server->setClientPlayerControl(0, server->replay->clientPlayers[0]);
 				// test runs: "benchmark": { ..., "replaySpeed": <times> } plays it faster
 				if (BenchmarkEnabled())
-					if (const float speed = g_settings.value("benchmark", nlohmann::json()).value("replaySpeed", 0.0f); speed > 0.0f)
+					if (const float speed = g_settings.value("benchmark", nlohmann::json::object()).value("replaySpeed", 0.0f); speed > 0.0f)
 						server->timeManager.setSpeed(speed);
 			}
 			else {
@@ -675,7 +675,7 @@ void QuickStartMenu::launchGame()
 			// test runs: "campaignTest": { ..., "conquerAfter": seconds } runs the province's ending
 			// actions through the script chat ("!<action>")
 			if (static bool conquerSent = false; !conquerSent && !campaignProvince.empty() && client->getLevel()) {
-				const float after = g_settings.value("campaignTest", nlohmann::json()).value("conquerAfter", 0.0f);
+				const float after = g_settings.value("campaignTest", nlohmann::json::object()).value("conquerAfter", 0.0f);
 				if (after > 0.0f && client->timeManager.currentTime > after) {
 					conquerSent = true;
 					client->sendMessage("!UPDATE_USER_PROFILE");
