@@ -185,6 +185,20 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 				assert(near != posStart);
 			}
 		}
+		// the free tile on the line towards the unit can be far beyond what is in the way: a
+		// building on a steep hillside (Tribes Unite), the line crossing the hill to its other
+		// side, where the unit then stood 50 m from what it was to build. A free tile much
+		// nearer to the destination (on any side) is taken instead; about as near, the one on
+		// the unit's side is kept
+		const PFPos goal{ (int)(destination.x / 5.0f), (int)(destination.z / 5.0f) };
+		const PFPos nearest = findNearestUnblockedPos(goal, pred, 24);
+		if (nearest.x >= 0) {
+			auto dist = [&](PFPos p) { return std::sqrt((float)((p.x - goal.x) * (p.x - goal.x) + (p.z - goal.z) * (p.z - goal.z))); };
+			if (pred(posEnd) || dist(nearest) + 2.0f < dist(posEnd)) {
+				posEnd = nearest;
+				realDestination = Vector3(nearest.x * 5.0f + 2.5f, destination.y, nearest.z * 5.0f + 2.5f);
+			}
+		}
 	}
 
 	auto rtres = SegmentTraversal(m_object->position.x / 5.0f, m_object->position.z / 5.0f, realDestination.x / 5.0f, realDestination.z / 5.0f, pred);
@@ -195,6 +209,11 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	}
 	else {
 		auto tileList = DoPathfinding(posStart, posEnd, pred, ManhattanDiagHeuristic, trnsize.first, trnsize.second);
+		// test runs: WKB_TRACE_PATH prints the searches cut short and where they send the unit
+		if (g_lastSearchCut && getenv("WKB_TRACE_PATH"))
+			printf("PATHCUT t=%.1f obj %u %s player %u from (%d,%d) to (%d,%d) goes to (%d,%d)\n", Server::instance->timeManager.currentTime,
+				m_object->id, m_object->blueprint->name.c_str(), m_object->getPlayer() ? m_object->getPlayer()->id : 0,
+				posStart.x, posStart.z, posEnd.x, posEnd.z, tileList.empty() ? -1 : tileList.front().x, tileList.empty() ? -1 : tileList.front().z);
 		if (tileList.size() >= 1) {
 			m_pathNodes.clear();
 			// a search cut short ends at the tile nearest to the destination: the unit goes there,

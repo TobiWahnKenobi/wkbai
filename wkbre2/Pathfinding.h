@@ -180,6 +180,8 @@ namespace Pathfinding {
     // Tiles each direction of the search may visit: a long or impossible path stopped there took
     // up to 0.4 s on the large maps; the unit then goes to the tile nearest to the end so far
     constexpr int MAX_SEARCH_STEPS = 20000;
+    // the last DoPathfinding stopped at MAX_SEARCH_STEPS (its path ends short of the end)
+    inline bool g_lastSearchCut = false;
 
     template<typename Predicate, typename Heuristic>
     std::vector<PFPos> DoPathfinding(PFPos start, PFPos end, Predicate pred, Heuristic heuristic, int width = 1024, int height = 1024) {
@@ -195,9 +197,12 @@ namespace Pathfinding {
         astar1.begin(start, end, width, height);
         astar2.begin(end, start, width, height);
 
+        g_lastSearchCut = false;
         for (int steps = 0;; steps++) {
-            if (steps >= MAX_SEARCH_STEPS)
+            if (steps >= MAX_SEARCH_STEPS) {
+                g_lastSearchCut = true;
                 return astar1.getTo(astar1.best);
+            }
             if (astar1.next(pred, heuristic)) return astar1.get();
             if (astar2.next(pred, heuristic)) {
                 auto vec = astar2.get();

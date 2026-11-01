@@ -1875,6 +1875,28 @@ void Test_AIvsAI()
 												b && server.tiles[tz * tw + tx].buildingPassable ? " (passable)" : "");
 										}
 									}
+								// a builder: where it is, what it builds and how far it is from it; once per
+								// player and target the blocked tiles between them
+								if (order && server.gameSet->orders.getString(order->blueprint->bpid) == "Build")
+									if (Task* task = order->getCurrentTask(); task && task->target) {
+										static std::map<uint32_t, uint32_t> shownBuilder;
+										if (shownBuilder[player->id] != task->target->id) {
+											shownBuilder[player->id] = task->target->id;
+											const int ux = (int)(o->position.x / 5), uz = (int)(o->position.z / 5);
+											const int tx = (int)(task->target->position.x / 5), tz = (int)(task->target->position.z / 5);
+											printf("AITEST   a builder %u: task %s -> %s#%u at (%.0f,%.0f), builder at (%.0f,%.0f) y %.1f, %.0f m, moving %d\n", o->id,
+												server.gameSet->tasks.getString(task->blueprint->bpid).c_str(), task->target->blueprint->name.c_str(), task->target->id,
+												task->target->position.x, task->target->position.z, o->position.x, o->position.z, o->position.y,
+												(task->target->position - o->position).len2xz(), (int)((ServerGameObject*)o)->movement.isMoving());
+											if (std::abs(ux - tx) < 70 && std::abs(uz - tz) < 70)
+												for (int z = std::max(uz, tz) + 6; z >= std::min(uz, tz) - 6; z--) {
+													std::string row;
+													for (int x = std::min(ux, tx) - 6; x <= std::max(ux, tx) + 6; x++)
+														row += (x == ux && z == uz) ? 'U' : (x == tx && z == tz) ? 'T' : MovementController::isTileBlocked(o->blueprint, x, z) ? '#' : '.';
+													printf("AITEST     %s\n", row.c_str());
+												}
+										}
+									}
 								if (order && !sample[0] && server.gameSet->orders.getString(order->blueprint->bpid) == "AI Chop Tree")
 									if (Task* task = order->getCurrentTask()) {
 										const std::string tname = server.gameSet->tasks.getString(task->blueprint->bpid);
