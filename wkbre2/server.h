@@ -156,6 +156,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		std::vector<std::string> lobbyRequests; // NETSRVMSG_LOBBY_REQUEST, for the lobby to handle
 		SrvGORef lastStampdown;
 		std::vector<SrvGORef> unitsForNewFormation;
+		int loadingStage = 0; // NETSRVMSG_LOADING_STAGE, 0: none reported
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -203,6 +204,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, an AI places its first this many farms before its fighter buildings (AIController):
 	// "aiEarlyFarms"; 0: fighter buildings first, as before
 	int aiEarlyFarms = 0;
+	// with it, an AI with no building that trains fighters this many game seconds in lays down a
+	// barracks itself (AIController): "aiFirstBarracks"; 0: off
+	int aiFirstBarracks = 90;
 	// with it, an AI wants at least this many peasants, at war too (ValuePeasantFloor): "aiMinPeasants"
 	int aiMinPeasants = 40;
 	// with it, a fighter building is wanted once more per aiSurplusPerBuilding of food and wood
@@ -254,6 +258,11 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void syncTime();
 
 	void setClientPlayerControl(int clientIndex, uint32_t playerObjId);
+	// a building stamped down in play levels the ground under the tiles of its footprint that
+	// flatten (DEFORM_TERRAIN), and the clients are told
+	void levelTerrainUnder(ServerGameObject* building);
+	// each client's loading stage, its player's colour and its name to every client
+	void sendLoadingStages();
 	void setDiplomaticStatus(ServerGameObject *a, ServerGameObject *b, int status);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	void hideGameTextWindow(ServerGameObject* player, int gtwIndex);

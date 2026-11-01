@@ -163,6 +163,7 @@ namespace {
 		list.push_back(slider("minHeight", "camera", "Lowest height above ground", rs.minHeightAboveGround, 0.5f, 50.0f, "%.1f"));
 		list.push_back(slider("maxHeight", "camera", "Highest camera height", rs.maxHeight, 100.0f, 3000.0f, "%.0f"));
 		list.push_back(toggle("invertMouseWheel", "camera", "Invert mouse wheel", rs.invertMouseWheel));
+		list.push_back(toggle("fixedCamera", "camera", "Fixed camera (no free look)", rs.fixedCamera));
 
 		// Sound
 		{

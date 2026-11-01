@@ -156,6 +156,75 @@ void AIController::update()
 		}
 	}
 
+	// ---- The first barracks (the aggressive AI, not in WKB.exe) ----
+	// The Kingmaker's opening commissions ("Succubus Rush", "Pure Celestial Economic Building", ...)
+	// hold farms, shops, a maypole, temples, but no building that trains fighters: the barracks
+	// come with the building commission that follows once the opening is complete, after 12-13
+	// minutes on 8 Player Continent. Until then no army could be commissioned at all, not even
+	// Spearmen (food only), and 3 of 8 AIs had no soldier at 15 minutes. So an AI with no building
+	// that trains fighters (nor its foundation) aiFirstBarracks seconds in lays one down where the
+	// scripts' "Archer Rush Commission" would, through its Co-ordinator, whose reaction to a
+	// commissioned foundation sends builders.
+	if (Server::instance->aggressiveAI && Server::instance->aiFirstBarracks > 0 && !firstBarracksDone
+		&& gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= std::max(nextBarracksCheck, (float)Server::instance->aiFirstBarracks)) {
+		nextBarracksCheck = Server::instance->timeManager.currentTime + 10.0f;
+		const GameSet* gs = Server::instance->gameSet.get();
+		bool have = firstBarracks && !firstBarracks->deleted;
+		if (!have) {
+			std::vector<ServerGameObject*> todo{ gameObj };
+			while (!todo.empty() && !have) {
+				ServerGameObject* o = todo.back();
+				todo.pop_back();
+				for (const auto& [type, children] : o->children)
+					for (CommonGameObject* child : children) {
+						auto* c = (ServerGameObject*)child;
+						if (c->deleted)
+							continue;
+						if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+							const GameObjBlueprint* bp = c->blueprint;
+							// a foundation counts as the building it becomes
+							static const std::string suffix = " Foundation";
+							if (bp->name.size() > suffix.size() && bp->name.compare(bp->name.size() - suffix.size(), suffix.size(), suffix) == 0)
+								bp = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, bp->name.substr(0, bp->name.size() - suffix.size()));
+							if (bp && TrainsFighters(bp))
+								have = true;
+						}
+						todo.push_back(c);
+					}
+			}
+		}
+		if (have)
+			firstBarracksDone = true;
+		else {
+			// the scripts' own barracks requirement, for its position
+			const int rushIndex = gs->commissions.names.getIndex("Archer Rush Commission");
+			const GSCommission* rush = rushIndex >= 0 ? &gs->commissions[rushIndex] : nullptr;
+			const GSCommission::BuildingRequirement* req = nullptr;
+			if (rush)
+				for (const auto& r : rush->buildingRequirements)
+					if (TrainsFighters(r.bpBuilding))
+						req = &r;
+			// the Co-ordinator: the handler of the player's commissions that place buildings
+			ServerGameObject* coordinator = nullptr;
+			for (const CommissionInstance& ci : commissionInstances)
+				if (ci.handlerObject && !ci.blueprint->buildingRequirements.empty())
+					coordinator = ci.handlerObject.get();
+			if (req && coordinator) {
+				const GameObjBlueprint* bpFoundation = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, req->bpBuilding->name + " Foundation");
+				SrvScriptContext ctx{ Server::instance, coordinator };
+				const auto posori = req->pdBuildPosition->eval(&ctx);
+				if (bpFoundation && !(posori.position.x == 0.0f && posori.position.z == 0.0f) && gameObj->canAffordObject(bpFoundation)) {
+					if (ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, gameObj, posori.position, Vector3(0, 0, 0), false, true)) {
+						coordinator->sendEvent(Tags::PDEVENT_ON_COMMISSIONED, foundation);
+						firstBarracks = foundation;
+						printf("AI %u: first barracks laid down at t=%.0f (%s)\n", gameObj->id, Server::instance->timeManager.currentTime, bpFoundation->name.c_str());
+					}
+				}
+			}
+		}
+	}
+
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units
 	// while its attacking armies held 1-7, and no AI was destroyed. Every 30 s, unless enemies are

@@ -93,6 +93,7 @@ void RenderSettings::load()
 	minHeightAboveGround = g_settings.value<float>("cameraMinHeightAboveGround", def.minHeightAboveGround);
 	maxHeight = g_settings.value<float>("cameraMaxHeight", def.maxHeight);
 	invertMouseWheel = g_settings.value<bool>("invertMouseWheel", def.invertMouseWheel);
+	fixedCamera = g_settings.value<bool>("fixedCamera", def.fixedCamera);
 	musicVolume = g_settings.value<float>("musicVolume", def.musicVolume);
 	effectsVolume = g_settings.value<float>("effectsVolume", def.effectsVolume);
 	showFps = g_settings.value<bool>("showFps", def.showFps);
@@ -162,6 +163,7 @@ void RenderSettings::save()
 	g_settings["cameraMinHeightAboveGround"] = minHeightAboveGround;
 	g_settings["cameraMaxHeight"] = maxHeight;
 	g_settings["invertMouseWheel"] = invertMouseWheel;
+	g_settings["fixedCamera"] = fixedCamera;
 	g_settings["musicVolume"] = musicVolume;
 	g_settings["effectsVolume"] = effectsVolume;
 	g_settings["showFps"] = showFps;

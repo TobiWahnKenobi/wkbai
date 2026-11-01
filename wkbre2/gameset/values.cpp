@@ -1345,8 +1345,11 @@ struct ValueCanAffordCommission : ValueDeterminer {
 		if (!ctx->isServer() || !commission)
 			return 0.0f;
 		ServerGameObject* handler = (ServerGameObject*)fHandler->getFirst(ctx);
-		if (!handler)
+		if (!handler) {
+			if (const char* e = getenv("WKB_TRACE_AFFORD"); e && ctx->getSelf() && (uint32_t)atoi(e) == ((ServerGameObject*)ctx->getSelf())->getPlayer()->id)
+				printf("AFFORD t=%.0f %s: no handler\n", Server::instance->timeManager.currentTime, Server::instance->gameSet->commissions.getString(commission).c_str());
 			return 0.0f;
+		}
 		ServerGameObject* player = handler->getPlayer();
 		static const std::pair<int, int> costItems[3] = { // as in server.cpp
 			{Tags::PDITEM_FOOD, Tags::PDITEM_FOOD_COST},
@@ -1390,8 +1393,22 @@ struct ValueCanAffordCommission : ValueDeterminer {
 				if (bestQuality)
 					break;
 			}
-			if (!paid)
+			if (!paid) {
+				// "WKB_TRACE_AFFORD=<player id>": why that player's army commissions can't be afforded
+				if (const char* e = getenv("WKB_TRACE_AFFORD"); e && (uint32_t)atoi(e) == player->id)
+					printf("AFFORD t=%.0f %s: requirement %zu (%s) misses %d, left food %.0f wood %.0f gold %.0f\n", Server::instance->timeManager.currentTime,
+						Server::instance->gameSet->commissions.getString(commission).c_str(), ri, req.ladder->entries.empty() ? "-" : req.ladder->entries[0].type->name.c_str(),
+						missing, left[0], left[1], left[2]);
+				if (const char* e = getenv("WKB_TRACE_AFFORD"); e && (uint32_t)atoi(e) == player->id)
+					for (const auto& entry : req.ladder->entries) {
+						const auto found = entry.finder->eval(&hctx);
+						std::string names;
+						for (ServerGameObject* b : found)
+							names += " " + b->blueprint->name + "(class " + std::to_string(b->blueprint->bpClass) + ")";
+						printf("AFFORD   %s: %zu buildings%s, allowed %d\n", entry.type->name.c_str(), found.size(), names.c_str(), (int)AISpawnAllowed(entry.type, found));
+					}
 				return 0.0f;
+			}
 		}
 		for (size_t i = 0; i < commission->buildingRequirements.size(); i++) {
 			const auto& req = commission->buildingRequirements[i];
@@ -1402,6 +1419,12 @@ struct ValueCanAffordCommission : ValueDeterminer {
 						missing--;
 			if (missing > 0 && !pay(left, req.bpBuilding, missing))
 				return 0.0f;
+		}
+		if (const char* e = getenv("WKB_TRACE_AFFORD"); e && (uint32_t)atoi(e) == player->id) {
+			std::string list;
+			for (size_t ri = 0; ri < needs.size(); ri++)
+				list += " " + std::to_string(needs[ri]);
+			printf("AFFORD t=%.0f %s: affordable, needs%s\n", Server::instance->timeManager.currentTime, Server::instance->gameSet->commissions.getString(commission).c_str(), list.c_str());
 		}
 		return 1.0f;
 	}

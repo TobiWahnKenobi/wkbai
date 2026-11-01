@@ -66,6 +66,10 @@ struct AIController {
 	// focus fire: the next check (game time), the attack orders given so far
 	float nextFocusFireCheck = 0.0f;
 	int focusOrders = 0;
+	// the first barracks: the next check (game time), the foundation laid down (none yet: null)
+	float nextBarracksCheck = 0.0f;
+	SrvGORef firstBarracks;
+	bool firstBarracksDone = false;
 	// waves walking to their rally point before they attack together
 	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
 	std::vector<GatheringWave> gatheringWaves;

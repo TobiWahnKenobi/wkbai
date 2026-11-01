@@ -1853,6 +1853,17 @@ void Test_AIvsAI()
 											task->target ? task->target->id : 0, o->getItem(Tags::PDITEM_WOOD), o->position.x, o->position.z,
 											task->target ? task->target->position.x : 0.0f, task->target ? task->target->position.z : 0.0f,
 											(int)((ServerGameObject*)o)->movement.isMoving());
+									// what stands on the cart's tile (a building placed over it traps it)
+									if (order && server.gameSet->orders.getString(order->blueprint->bpid).rfind("Transport", 0) == 0 && server.tiles && server.terrain) {
+										const auto [tw, th] = server.terrain->getNumPlayableTiles();
+										const int tx = (int)(o->position.x / 5.0f), tz = (int)(o->position.z / 5.0f);
+										if (tx >= 0 && tz >= 0 && tx < tw && tz < th) {
+											const CommonGameObject* b = server.tiles[tz * tw + tx].building.getFrom(&server);
+											const size_t len = strlen(cartInfo);
+											snprintf(cartInfo + len, sizeof(cartInfo) - len, ", tile: %s%s", b ? b->blueprint->name.c_str() : "free",
+												b && server.tiles[tz * tw + tx].buildingPassable ? " (passable)" : "");
+										}
+									}
 								if (order && !sample[0] && server.gameSet->orders.getString(order->blueprint->bpid) == "AI Chop Tree")
 									if (Task* task = order->getCurrentTask()) {
 										const std::string tname = server.gameSet->tasks.getString(task->blueprint->bpid);
@@ -1934,11 +1945,11 @@ void Test_AIvsAI()
 				{
 					SrvScriptContext pctx(&server, player);
 					std::string probe;
-					for (const char* name : { "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Population Count", "Can Spawn Peasant", "Food", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference", "Idle Peasant Count", "Wood Chopper Count", "Builder Count", "Gold Miner Count", "Shop Keeper Count" }) {
+					for (const char* name : { "Commission Route", "Kingmaker Resource Villages Required", "Kingmaker Farms Required", "Kingmaker Farming Villages Required", "War Mode", "War Override", "War Peasants Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "Peasants Required", "Total Population Count", "Population Count", "Can Spawn Peasant", "Food", "Aggression", "Blitzkreig", "Kingmaker Do I Need Flaming Arrow Upgrade Pause Buildings", "Flaming Arrow Upgrade Status", "War Wait", "I Should Shift Into War Mode", "Defensive Mode", "Current Impatience", "Using Full Commission", "Economic Commission", "Impatience", "My Combined Arms Preference", "My Rushing Army Preference", "My Fire Arrow Preference", "My Raiding Party Preference", "My Siege Weapon Preference", "Idle Peasant Count", "Wood Chopper Count", "Builder Count", "Gold Miner Count", "Shop Keeper Count" }) {
 						const int item = server.gameSet->items.names.getIndex(name);
 						probe += std::string(" ") + name + "=" + (item >= 0 ? std::to_string((int)player->getItem(item)) : "?");
 					}
-					for (const char* name : { "My Resource Markers", "All Tree Markers", "All Non Associated Tree Markers", "Number of Resource Villages With More Than Village Limit Associated Resources", "All My Kingmaker Villages & Foundations", "Nearest Resource Marker To My Manor", "Palace Building Of Player" }) {
+					for (const char* name : { "My Resource Markers", "All Tree Markers", "All Non Associated Tree Markers", "Number of Resource Villages With More Than Village Limit Associated Resources", "All My Kingmaker Villages & Foundations", "All My Kingmaker Villages", "Nearest Resource Marker To My Manor", "Palace Building Of Player" }) {
 						const int fi = server.gameSet->objectFinderDefinitions.names.getIndex(name);
 						probe += std::string(" | ") + name + ": " + (fi >= 0 ? std::to_string(server.gameSet->objectFinderDefinitions[fi]->eval(&pctx).size()) : "?");
 					}
@@ -2201,6 +2212,71 @@ void Test_DiffRun()
 // The terrain's vertex normals (Terrain::getNormal) and heights of 4 Peaks as a text file in the
 // temp folder ("x z height nx ny nz" per vertex, world units), to compare with the original's
 // per-vertex Dot3 light vectors (RE repository, docs/engine/original-comparison.md)
+// Levelling (needs the game data): a Barracks foundation stamped down in play on the most
+// sloped spot near player 1027's Manor that still takes it flattens the ground under it.
+// Prints "LEVEL" lines: the spot, the heights under the footprint before and after.
+void Test_Levelling()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	if (!player || !bp || !bp->footprint || !server.terrain) {
+		printf("LEVEL not set up\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_WOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_FOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_GOLD, 10000.0f);
+	const Terrain& t = *server.terrain;
+	// the heights at the footprint's tile corners
+	auto spread = [&](const Vector3& at, float& lo, float& hi) {
+		const auto rot = bp->footprint->rotateOrigin(0.0f);
+		const int ox = (int)((at.x - rot.first) / 5.0f), oz = (int)((at.z - rot.second) / 5.0f);
+		lo = 1e9f; hi = -1e9f;
+		for (const auto& to : bp->footprint->tiles) {
+			if (!to.flatten)
+				continue;
+			const auto [rx, rz] = to.rotate(0.0f);
+			for (int dz = 0; dz <= 1; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const float h = t.getVertex(ox + rx + t.edge + dx, oz + rz + t.edge + dz);
+					lo = std::min(lo, h);
+					hi = std::max(hi, h);
+				}
+		}
+	};
+	// the spots around (540, 140), the start, that take a barracks: the most uneven one
+	Vector3 best;
+	float bestSpread = -1.0f;
+	for (float z = 60.0f; z <= 260.0f; z += 5.0f)
+		for (float x = 440.0f; x <= 640.0f; x += 5.0f) {
+			const Vector3 at(std::floor(x / 5.0f) * 5.0f + 2.5f + bp->footprint->originX, 0.0f, std::floor(z / 5.0f) * 5.0f + 2.5f + bp->footprint->originZ);
+			if (StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+				continue;
+			float lo, hi;
+			spread(at, lo, hi);
+			if (hi - lo > bestSpread) {
+				bestSpread = hi - lo;
+				best = at;
+			}
+		}
+	if (bestSpread < 0.0f) {
+		printf("LEVEL no spot takes a barracks\n");
+		return;
+	}
+	float lo, hi;
+	spread(best, lo, hi);
+	printf("LEVEL spot (%.1f, %.1f): heights %.2f to %.2f before\n", best.x, best.z, lo, hi);
+	best.y = t.getHeight(best.x, best.z);
+	ServerGameObject* obj = server.stampdownObject(bp, player, best, Vector3(0, 0, 0), true, true);
+	spread(best, lo, hi);
+	printf("LEVEL %s: heights %.2f to %.2f after, the foundation at y %.2f (ground %.2f)\n", obj ? "stamped down" : "refused", lo, hi,
+		obj ? obj->position.y : 0.0f, t.getHeight(best.x, best.z));
+	fflush(stdout);
+}
+
 void Test_TerrainNormals()
 {
 	LoadBCP("data.bcp");
@@ -2424,6 +2500,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Passability, "Passability fields (terrain types a unit can't stand on)"},
 {Test_DiffRun, "Differential run (a save run for N game seconds, then saved)"},
 {Test_TerrainNormals, "Terrain normals of 4 Peaks (a text file, for the lighting comparison)"},
+{Test_Levelling, "Levelling: a barracks stamped down flattens the ground under it"},
 };
 
 void LaunchTest()

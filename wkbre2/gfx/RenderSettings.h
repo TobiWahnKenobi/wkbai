@@ -106,6 +106,10 @@ struct RenderSettings {
 	float maxHeight = 1000.0f;
 
 	bool invertMouseWheel = false;
+	// The original's two cameras (WKB.exe's "enable_mouse_free_look", off by default): the fixed
+	// one keeps its height above the ground and a pitch set by the zoom, the middle mouse button
+	// turning it only round; the free one (false) looks anywhere
+	bool fixedCamera = false;
 
 	// Sound, 0..1
 	float musicVolume = 1.0f, effectsVolume = 1.0f;

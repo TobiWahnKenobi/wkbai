@@ -48,6 +48,10 @@ struct ClientInterface {
 	void render();
 
 	void updateTerrain();
+	// heights changed by the server (buildings levelling the ground): the terrain renderer is
+	// refreshed, at most every 250 ms
+	bool terrainHeightsChanged = false;
+	uint64_t terrainHeightsRefreshed = 0;
 
 	ClientInterface(Client *client, IRenderer *gfx) : client(client), gfx(gfx), terrainRenderer(nullptr),
 		sceneRenderer(nullptr), debugger(client, this), scene(nullptr), particlesContainer(nullptr), psCache(nullptr),

@@ -60,6 +60,7 @@ private:
 	bool aiGoldExpansion = false; // Server::aiGoldExpansion
 	bool aiFocusAttacks = true; // Server::aiFocusAttacks
 	int aiEarlyFarms = 0; // Server::aiEarlyFarms
+	int aiFirstBarracks = 90; // Server::aiFirstBarracks
 	int aiMinPeasants = 40; // Server::aiMinPeasants
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding
 	bool aiLendFarmers = true; // Server::aiLendFarmers

@@ -878,6 +878,7 @@ void ClientInterface::drawLoadingScreen()
 	if (stage != loadingStage) {
 		loadingStage = stage;
 		loadingStageSince = SDL_GetTicks();
+		client->sendLoadingStage(stage);
 	}
 	// within a stage the bar creeps on (none of them report how far they are), to 90% of it
 	const float within = 0.9f * (1.0f - std::exp(-(float)(SDL_GetTicks() - loadingStageSince) / 1500.0f));
@@ -903,10 +904,26 @@ void ClientInterface::drawLoadingScreen()
 		player = srv->clientPlayerObjects[0].get();
 	const std::string name = g_settings.value("playerName", lang.getText("DEFAULT_PLAYER_PROFILE"));
 	const int colour = player ? player->color : 1;
-	outlined(ImVec2(cx - 227, cy - 140), playerColors[(colour >= 0 && colour < 9) ? colour : 1], name);
-	outlined(ImVec2(cx + 73, cy - 140), IM_COL32(232, 214, 176, 255), std::to_string(stage) + "/8");
-	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 225, cy - 124), IM_COL32(96, 0, 0, 255));
-	dl->AddRectFilled(ImVec2(cx + 130, cy - 138), ImVec2(cx + 130 + 95 * progress, cy - 124), IM_COL32(210, 0, 0, 255));
+	auto row = [&](float y, int rowColour, const std::string& rowName, int rowStage, float rowProgress) {
+		outlined(ImVec2(cx - 227, y), playerColors[(rowColour >= 0 && rowColour < 9) ? rowColour : 1], rowName);
+		outlined(ImVec2(cx + 73, y), IM_COL32(232, 214, 176, 255), std::to_string(rowStage) + "/8");
+		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 225, y + 16), IM_COL32(96, 0, 0, 255));
+		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 130 + 95 * rowProgress, y + 16), IM_COL32(210, 0, 0, 255));
+	};
+	// a multiplayer game: a row per human player, as the server reports them (this client's from
+	// its own stage, the others' at the start of theirs), 22 px apart; else this player's alone
+	if (client->loadingRows.size() > 1) {
+		float y = cy - 140;
+		for (const Client::LoadingRow& r : client->loadingRows) {
+			if (r.own)
+				row(y, player ? colour : r.colour, name, stage, progress);
+			else
+				row(y, r.colour, r.name, std::max(r.stage, 1), std::clamp((r.stage - 1) / 8.0f, 0.0f, 1.0f));
+			y += 22;
+		}
+	}
+	else
+		row(cy - 140, colour, name, stage, progress);
 	// the tip
 	if (loadingTip) {
 		const std::string title = lang.getText("FRONT_END_TITLE_TIP_OF_THE_DAY");
@@ -1487,6 +1504,12 @@ void ClientInterface::iter()
 			client->sendMessage("!" + script[1].get<std::string>());
 		}
 	}
+	// the ground a building levelled, drawn anew
+	if (terrainHeightsChanged && terrainRenderer && SDL_GetTicks() - terrainHeightsRefreshed >= 250) {
+		terrainHeightsChanged = false;
+		terrainHeightsRefreshed = SDL_GetTicks();
+		rebuildTerrainRenderer(false);
+	}
 	// Test runs: "benchmark": { ..., "peasantActivity": 0 or 1 } opens the peasant activity interface
 	if (BenchmarkEnabled() && peasantActivityMode == -1) {
 		static bool applied = false;
@@ -1629,7 +1652,39 @@ void ClientInterface::iter()
 	if (g_keyDown[SDL_SCANCODE_LEFT] || g_keyDown[SDL_SCANCODE_A])
 		client->camera.position += strafe;
 
-	if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+	// The fixed camera (the original's default, without free look): a zoom from 0 (near) to 1
+	// (far) sets its height above the ground, 12 to 110 m, and its pitch, 35 to 62 degrees down;
+	// scrolling keeps that height over hills and valleys (eased, so it doesn't jolt); the middle
+	// mouse button turns it round only; the wheel zooms.
+	if (g_renderSettings.fixedCamera && client->terrain) {
+		static bool fixedInit = false;
+		static float fixedZoom = 0.4f, fixedGround = 0.0f;
+		const Vector3& cp = client->camera.position;
+		const float ground = std::max(client->terrain->getHeight(cp.x, cp.z), 0.0f);
+		if (!fixedInit) {
+			fixedInit = true;
+			fixedGround = ground;
+			fixedZoom = std::clamp((cp.y - ground - 12.0f) / 98.0f, 0.0f, 1.0f);
+		}
+		if (g_mouseWheel)
+			fixedZoom = std::clamp(fixedZoom - g_mouseWheel * (g_renderSettings.invertMouseWheel ? -0.05f : 0.05f), 0.0f, 1.0f);
+		const float ease = 1.0f - std::exp(-(float)cliDeltaTime / 250.0f);
+		fixedGround += (ground - fixedGround) * ease;
+		client->camera.position.y = fixedGround + 12.0f + 98.0f * fixedZoom;
+		client->camera.orientation.x = -(0.61f + 0.47f * fixedZoom);
+		if (getenv("WKB_TRACE_CAMERA")) printf("CAMERA pos (%.1f,%.1f,%.1f) pitch %.2f ground %.1f zoom %.2f\n", cp.x, cp.y, cp.z, client->camera.orientation.x, ground, fixedZoom);
+		if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+			if (!camroton) {
+				camrotoffx = g_mouseX;
+				camrotoriy = client->camera.orientation.y;
+				camroton = true;
+			}
+			client->camera.orientation.y = camrotoriy - (g_mouseX - camrotoffx) * g_renderSettings.mouseLookSensitivity;
+		}
+		else
+			camroton = false;
+	}
+	else if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
 		if (!camroton) {
 			camrotoffx = g_mouseX;
 			camrotoffy = g_mouseY;
@@ -1647,7 +1702,7 @@ void ClientInterface::iter()
 	else
 		camroton = false;
 
-	if (g_mouseWheel)
+	if (g_mouseWheel && !g_renderSettings.fixedCamera)
 		client->camera.position.y += g_mouseWheel * (g_renderSettings.invertMouseWheel ? -2 : 2);
 
 	// the map editor (F8 in single player) takes the clicks it uses
@@ -2447,6 +2502,19 @@ void ClientInterface::iter()
 	if (skyRenderer)
 		skyRenderer->render();
 
+	// Test runs: "benchmark": { ..., "mouse": [x, y] } holds the cursor there (window pixels);
+	// "stampdown": "<blueprint>" places that building of the player's (its preview, tooltips)
+	if (BenchmarkEnabled()) {
+		const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json());
+		if (const nlohmann::json mouse = bench.value("mouse", nlohmann::json()); mouse.is_array() && mouse.size() == 2) {
+			g_mouseX = mouse[0].get<int>();
+			g_mouseY = mouse[1].get<int>();
+		}
+		if (const std::string name = bench.value("stampdown", std::string()); !name.empty() && !stampdownBlueprint && client->clientPlayer) {
+			stampdownBlueprint = client->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
+			stampdownPlayer = client->clientPlayer;
+		}
+	}
 	// Get ray
 	rayDirection = getRay(client->camera).normal();
 	nextSelectedObject = nullptr;
@@ -2687,6 +2755,27 @@ void ClientInterface::iter()
 					for (const auto& band : stampdownBlueprint->spritesWhenStampingDown)
 						addRangeBand(band, peapos, &ctx);
 				}
+				// a farm's soil, as WKB.exe's interface shows it while a "Standard Farm Foundation" is
+				// placed (0x64d480): the "Fertility" of the terrain under it (Terrains.cpp: 0.5 to
+				// 1.5) gives TOOLTIP_ARID_FARM up to 0.5, TOOLTIP_FERTILE_FARM from 1.5, else
+				// TOOLTIP_FARM; here with the value as a percentage too
+				if (stampdownBlueprint->name == "Standard Farm Foundation" && client->terrain) {
+					static int fertilityItem = -1;
+					static const GameSet* itemsOf = nullptr;
+					if (itemsOf != client->gameSet.get()) {
+						itemsOf = client->gameSet.get();
+						fertilityItem = itemsOf->items.names.getIndex("Fertility");
+					}
+					if (const auto* tile = client->terrain->getPlayableTile((int)(peapos.x / 5.0f), (int)(peapos.z / 5.0f)); tile && fertilityItem >= 0) {
+						float fertility = 0.0f;
+						auto& groups = client->gameSet->associatedTileTexGroups;
+						if (auto it = groups.find(tile->texture->grp->name); it != groups.end())
+							if (auto vt = it->second->itemValues.find(fertilityItem); vt != it->second->itemValues.end())
+								fertility = vt->second;
+						const char* key = fertility <= 0.5f ? "TOOLTIP_ARID_FARM" : fertility >= 1.5f ? "TOOLTIP_FERTILE_FARM" : "TOOLTIP_FARM";
+						ImGui::SetTooltip("%s\nFertility %d%%", lang.getText(key).c_str(), (int)std::lround(fertility * 100.0f));
+					}
+				}
 				planEntities.reserve(plan.toCreate.size());
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
@@ -2827,7 +2916,9 @@ void ClientInterface::iter()
 	}
 	drawSelectionPortrait();
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
-	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4) {
+	// (a guest: once the host has sent the rows of the players)
+	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
+	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4 && rowsIn) {
 		static bool shot = false;
 		const std::string path = g_settings.value("benchmark", nlohmann::json()).value("loadingScreenshot", std::string());
 		if (!shot && !path.empty()) {

@@ -104,6 +104,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiGoldExpansion") aiGoldExpansion = value != 0;
 	else if (name == "aiFocusAttacks") aiFocusAttacks = value != 0;
 	else if (name == "aiEarlyFarms") aiEarlyFarms = value;
+	else if (name == "aiFirstBarracks") aiFirstBarracks = value;
 	else if (name == "aiMinPeasants") aiMinPeasants = value;
 	else if (name == "aiSurplusBuildings") aiSurplusBuildings = value;
 	else if (name == "aiSurplusPerBuilding") aiSurplusPerBuilding = (float)value;
@@ -370,6 +371,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiGoldExpansion = aiGoldExpansion;
 	server.aiFocusAttacks = aiFocusAttacks;
 	server.aiEarlyFarms = aiEarlyFarms;
+	server.aiFirstBarracks = aiFirstBarracks;
 	server.aiMinPeasants = aiMinPeasants;
 	server.aiSurplusBuildings = aiSurplusBuildings;
 	server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;

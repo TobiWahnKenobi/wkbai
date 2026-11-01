@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "server.h"
+#include <set>
 #include "file.h"
 #include "util/GSFileParser.h"
 #include "tags.h"
@@ -34,6 +35,14 @@ Server::Server()
 	instance = this;
 	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
 	timeManager.stepMs = g_settings.value("simStepMs", 20u);
+	// the slope limit is for the human players: a player no client controls is an AI's
+	StampdownPlan::exemptFromSlopeLimit = [](CommonGameState* state, CommonGameObject* player) {
+		const Server* server = Server::instance;
+		if (state != (CommonGameState*)server || !player)
+			return false;
+		return std::none_of(server->clientPlayerObjects.begin(), server->clientPlayerObjects.end(),
+			[player](const SrvGORef& ref) { return ref.get() == (ServerGameObject*)player; });
+	};
 }
 
 void Server::loadSaveGame(const char * filename)
@@ -253,8 +262,10 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 	}
 
 	ServerGameObject* obj = spawnObject(blueprint, parent, position, Vector3(0, 0, 0));
-	if (inGameplay)
+	if (inGameplay) {
 		player->payObjectCost(obj->blueprint);
+		levelTerrainUnder(obj);
+	}
 	if (sendEvent)
 		obj->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
 	if (sendEvent)
@@ -263,6 +274,102 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 				wall->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
 
 	return obj;
+}
+
+// As in the original, placing a building levels the ground a bit: the footprint's tiles say
+// DEFORM_TERRAIN FLATTEN unless LEAVE_AS_IS (Footprints.cpp; farms, walls and docks leave it).
+// Their corner vertices are set to their mean height, which MAX_FOUNDATION_HEIGHT_DIFFERENTIAL
+// keeps a small change; the building is set on the new ground.
+void Server::levelTerrainUnder(ServerGameObject* building)
+{
+	const Footprint* fp = building->blueprint->footprint;
+	if (!terrain || !fp || building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+		return;
+	const auto rotOrigin = fp->rotateOrigin(building->orientation.y);
+	const int ox = (int)((building->position.x - rotOrigin.first) / 5.0f), oz = (int)((building->position.z - rotOrigin.second) / 5.0f);
+	const int stride = terrain->width + 1;
+	std::set<int> vertices;
+	for (const auto& to : fp->tiles) {
+		if (!to.flatten)
+			continue;
+		const auto [rx, rz] = to.rotate(building->orientation.y);
+		const int tx = ox + rx + terrain->edge, tz = oz + rz + terrain->edge;
+		if (tx < 0 || tz < 0 || tx >= terrain->width || tz >= terrain->height)
+			continue;
+		for (int dz = 0; dz <= 1; dz++)
+			for (int dx = 0; dx <= 1; dx++)
+				vertices.insert((tz + dz) * stride + tx + dx);
+	}
+	if (vertices.empty())
+		return;
+	float mean = 0.0f;
+	for (int i : vertices)
+		mean += terrain->heightSteps(i);
+	mean /= (float)vertices.size();
+	std::vector<int> list(vertices.begin(), vertices.end());
+	// an AI's building may stand where the ground differs more than the footprint allows
+	// (AIs are exempt from the limit): no vertex moves more than half the limit, so no cliff
+	// is carved; those vertices are sent one by one
+	const float limitSteps = fp->maxHeightDifferential > 0.0f ? 0.5f * fp->maxHeightDifferential / terrain->scale : 1e9f;
+	std::vector<int> uneven;
+	for (int i : list) {
+		const float h = terrain->heightSteps(i);
+		if (std::abs(mean - h) > limitSteps) {
+			terrain->setHeightSteps(i, h + std::clamp(mean - h, -limitSteps, limitSteps));
+			uneven.push_back(i);
+		}
+		else
+			terrain->setHeightSteps(i, mean);
+	}
+	for (int i : uneven) {
+		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
+		packet.writeUint32(1);
+		packet.writeFloat(terrain->heightSteps(i));
+		packet.writeUint32((uint32_t)i);
+		sendToAll(packet);
+	}
+	list.erase(std::remove_if(list.begin(), list.end(), [&](int i) { return std::find(uneven.begin(), uneven.end(), i) != uneven.end(); }), list.end());
+	if (list.empty())
+		return;
+	const float steps = terrain->heightSteps(list[0]);
+	// in packets of up to 50 vertices (a packet holds 256 bytes)
+	for (size_t first = 0; first < list.size(); first += 50) {
+		const size_t n = std::min<size_t>(50, list.size() - first);
+		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
+		packet.writeUint32((uint32_t)n);
+		packet.writeFloat(steps);
+		for (size_t k = 0; k < n; k++)
+			packet.writeUint32((uint32_t)list[first + k]);
+		sendToAll(packet);
+	}
+	if (getenv("WKB_TRACE_LEVEL"))
+		printf("LEVEL t=%.1f player %u %s at (%.0f,%.0f): %zu vertices to %.2f\n", timeManager.currentTime, building->getPlayer() ? building->getPlayer()->id : 0,
+			building->blueprint->name.c_str(), building->position.x, building->position.z, list.size(), steps * terrain->scale);
+	building->updatePosition(Vector3(building->position.x, terrain->getHeight(building->position.x, building->position.z), building->position.z));
+}
+
+// The original's loading screen shows a row per human player in that player's colour, with its
+// stage (WKB.exe 0x638890 sends each player's stage and percentage to the others).
+void Server::sendLoadingStages()
+{
+	for (size_t to = 0; to < clientLinks.size(); to++) {
+		NetPacketWriter packet(NETCLIMSG_LOADING_STAGES);
+		const size_t count = std::min<size_t>(clientLinks.size(), 8);
+		packet.writeUint8((uint8_t)count);
+		for (size_t i = 0; i < count; i++) {
+			const ServerGameObject* player = i < clientPlayerObjects.size() ? clientPlayerObjects[i].get() : nullptr;
+			std::string name = i < clientInfos.size() ? clientInfos[i].name : std::string();
+			if (name.empty() && player)
+				name = player->name;
+			if (name.size() > 18)
+				name.resize(18);
+			packet.writeUint8((uint8_t)(i < clientInfos.size() ? clientInfos[i].loadingStage : 0));
+			packet.writeUint8((uint8_t)(player ? player->color : 0));
+			packet.writeUint8(i == to ? 1 : 0);
+			packet.writeStringZ(name);
+		}
+		clientLinks[to]->send(packet);
+	}
 }
 
 void Server::deleteObject(ServerGameObject * obj)
@@ -1925,6 +2032,11 @@ void Server::network()
 				NetPacketWriter echo(NETCLIMSG_TEST);
 				echo.writeStringZ(msg);
 				sendToAll(echo);
+				break;
+			}
+			case NETSRVMSG_LOADING_STAGE: {
+				clientInfos[clientIndex].loadingStage = br.readUint8();
+				sendLoadingStages();
 				break;
 			}
 			case NETSRVMSG_LOBBY_HELLO: {

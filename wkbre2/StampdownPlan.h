@@ -34,4 +34,7 @@ struct StampdownPlan {
 
 	static StampdownPlan getStampdownPlan(
 		CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation);
+	// players the slope limit (MAX_FOUNDATION_HEIGHT_DIFFERENTIAL) doesn't apply to: the server
+	// sets it to exempt its AI players (see Server::Server)
+	static bool (*exemptFromSlopeLimit)(CommonGameState* gameState, CommonGameObject* playerObj);
 };

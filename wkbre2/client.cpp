@@ -208,6 +208,19 @@ void Client::tick()
 				this->tiles = std::make_unique<Tile[]>(area.first * area.second);
 				break;
 			}
+			case NETCLIMSG_TERRAIN_HEIGHTS: {
+				const uint32_t count = br.readUint32();
+				const float steps = br.readFloat();
+				for (uint32_t k = 0; k < count; k++) {
+					const uint32_t i = br.readUint32();
+					// a local server's terrain is the client's own only if it is the same object
+					if (terrain && i < terrain->vertices.size() && !(Server::instance && Server::instance->terrain == terrain))
+						terrain->setHeightSteps((int)i, steps);
+				}
+				if (cliInterface)
+					cliInterface->terrainHeightsChanged = true;
+				break;
+			}
 			case NETCLIMSG_OBJECT_POSITION_SET: {
 				uint32_t objid = br.readUint32();
 				Vector3 pos = br.readVector3();
@@ -633,6 +646,25 @@ void Client::tick()
 				}
 				break;
 			}
+			case NETCLIMSG_LOADING_STAGES: {
+				const uint8_t count = br.readUint8();
+				loadingRows.clear();
+				for (uint8_t k = 0; k < count; k++) {
+					LoadingRow row;
+					row.stage = br.readUint8();
+					row.colour = br.readUint8();
+					row.own = br.readUint8() != 0;
+					row.name = br.readStringZ();
+					loadingRows.push_back(std::move(row));
+				}
+				{
+					std::string rows;
+					for (const LoadingRow& r : loadingRows)
+						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " stage " + std::to_string(r.stage) + "]";
+					printf("LOADING rows:%s\n", rows.c_str());
+				}
+				break;
+			}
 			case NETCLIMSG_LOBBY_STATE: {
 				const uint8_t part = br.readUint8(), parts = br.readUint8();
 				if (part == 0)
@@ -688,6 +720,15 @@ void Client::sendCommand(ClientGameObject * obj, const Command * cmd, int assign
 	packet.writeUint32(target ? target->id : 0);
 	packet.writeVector3(destination);
 	packet.writeVector3(faceTo);
+	serverLink->send(packet);
+}
+
+void Client::sendLoadingStage(int stage)
+{
+	if (!serverLink)
+		return;
+	NetPacketWriter packet(NETSRVMSG_LOADING_STAGE);
+	packet.writeUint8((uint8_t)stage);
 	serverLink->send(packet);
 }
 
