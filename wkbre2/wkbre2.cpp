@@ -32,6 +32,9 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <DbgHelp.h>
+#include <csignal>
+#include <typeinfo>
+#include <cstdlib>
 #undef LoadBitmap
 #pragma comment(lib, "dbghelp.lib")
 
@@ -260,12 +263,53 @@ int main()
 	AddVectoredExceptionHandler(1, [](EXCEPTION_POINTERS* info) -> LONG {
 		static bool reported = false;
 		const DWORD code = info->ExceptionRecord->ExceptionCode;
-		if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW) && !reported) {
+		// also heap corruption, an illegal instruction and division by zero, which end the
+		// process without reaching the filter
+		if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_STACK_OVERFLOW || code == 0xC0000374 /* heap corruption */
+			|| code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO) && !reported) {
 			reported = true;
 			PrintCrash(info);
 		}
 		return EXCEPTION_CONTINUE_SEARCH;
 	});
+	// The ends that are no exception: an uncaught C++ exception (std::terminate), abort(), a
+	// C runtime error (an invalid parameter, a pure virtual call). A multiplayer game on Flynn's
+	// Fjords closed during loading with no report at all: each now reports where it was, with
+	// a dump, as a crash does.
+	static auto reportEnd = [](const char* what) {
+		static bool reported = false;
+		if (reported)
+			return;
+		reported = true;
+		printf("\nCRASH: %s\n", what);
+		CONTEXT ctx{};
+		RtlCaptureContext(&ctx);
+		EXCEPTION_RECORD rec{};
+		rec.ExceptionCode = 0xE0000001; // ours: no exception
+		rec.ExceptionAddress = (void*)ctx.Rip;
+		EXCEPTION_POINTERS pointers{ &rec, &ctx };
+		PrintCrash(&pointers);
+	};
+	std::set_terminate([]() {
+		std::string what = "std::terminate (an uncaught C++ exception)";
+		if (std::exception_ptr e = std::current_exception()) {
+			try { std::rethrow_exception(e); }
+			catch (const std::exception& ex) { what += std::string(": ") + typeid(ex).name() + ": " + ex.what(); }
+			catch (...) { what += ": not a std::exception"; }
+		}
+		reportEnd(what.c_str());
+		_exit(3);
+	});
+	signal(SIGABRT, [](int) { reportEnd("abort()"); });
+	_set_invalid_parameter_handler([](const wchar_t* expression, const wchar_t* function, const wchar_t* file, unsigned line, uintptr_t) {
+		char buf[512];
+		snprintf(buf, sizeof(buf), "a C runtime function was given an invalid parameter (%ls in %ls, %ls:%u)",
+			expression ? expression : L"?", function ? function : L"?", file ? file : L"?", line);
+		reportEnd(buf);
+		_exit(3);
+	});
+	_set_purecall_handler([]() { reportEnd("a pure virtual function was called"); _exit(3); });
+	atexit([]() { printf("wkbai: exiting\n"); });
 #endif
 	printf("Welcome to wkbai ! :)\n\n");
 
