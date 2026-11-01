@@ -1833,7 +1833,7 @@ Screens.multiplayer = {
 	draw = function()
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
 		-- a new game on a map, or a saved game to go on with
-		mpState.tab = tabs({ T("FRONT_END_LOAD_GAME_SKIRMISH"), T("FRONT_END_LOAD_GAME_MULTIPLAYER") }, mpState.tab, X(20), Y(50), L(30))
+		mpState.tab = tabs({ "New Game", T("FRONT_END_MAIN_MENU_LOAD_GAME") }, mpState.tab, X(20), Y(50), L(30))
 		local chosen
 		if mpState.tab == 1 then
 			chosen = levelPicker(X(20), Y(80), L(1880), L(880))
