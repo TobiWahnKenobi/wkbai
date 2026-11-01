@@ -416,24 +416,35 @@ float2 ValueNoise2(float2 p)
 	return lerp(lerp(Hash2(i), Hash2(i + float2(1, 0)), u.x), lerp(Hash2(i + float2(0, 1)), Hash2(i + float2(1, 1)), u.x), u.y);
 }
 
-void GerstnerWaves(float2 xz, float depth, float4 flow, float sea, float lod, out float3 offset, out float3 normal, out float crest)
+// The water design's sea regions (WaterDesign::seas, BuildWaveRegions): per region the way its
+// waves run (x, z) and their height; and each one's share of the waves per tile
+cbuffer WaveBuffer
 {
-	// seas and lakes only (rivers get flowing ripples): five long, smooth waves along one steady
-	// wind, fading in from the shore over 6 units of depth and out with the distance (lod).
-	// The direction must not vary over the map: the phase is direction . position, hundreds of
-	// units out, so turning it with the flow map shifted the waves by whole wavelengths from tile
-	// to tile (terraced chevrons). Near the shore the surf's bands run in along the depth.
-	// Their sideways movement is shared out so that the surface never folds (sum of
-	// k * a * q 0.6): the folds had drawn spikes.
-	const float2 dir = float2(0.8, 0.6);
-	float river = flow.a;
-	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod * lerp(LAKE_WAVES, 1, sea);
+	float4 WaveRegions[8];
+};
+Texture2D waveRegions0; // regions 1-4
+Texture2D waveRegions1; // regions 5-8
+
+// the regions' shares at a point: per texel fetches, bilinear between tiles (the domain shader
+// has no sampler)
+void RegionsAtTexel(float2 xz, out float4 r0, out float4 r1)
+{
+	float2 g = xz / 5 + TessParams.w - 0.5;
+	int2 i = (int2)floor(g);
+	float2 f = g - i;
+	int2 last = (int2)TessGrid.xy - 1;
+	int3 p00 = int3(clamp(i, 0, last), 0), p10 = int3(clamp(i + int2(1, 0), 0, last), 0);
+	int3 p01 = int3(clamp(i + int2(0, 1), 0, last), 0), p11 = int3(clamp(i + int2(1, 1), 0, last), 0);
+	r0 = lerp(lerp(waveRegions0.Load(p00), waveRegions0.Load(p10), f.x), lerp(waveRegions0.Load(p01), waveRegions0.Load(p11), f.x), f.y);
+	r1 = lerp(lerp(waveRegions1.Load(p00), waveRegions1.Load(p10), f.x), lerp(waveRegions1.Load(p01), waveRegions1.Load(p11), f.x), f.y);
+}
+
+// One region's waves, its share of them added: five long, smooth waves along its steady wind
+void GerstnerSet(float2 xz, float2 dir, float amp, float weight, inout float3 offset, inout float3 n, inout float crest)
+{
 	const float lengths[5] = { 34, 21, 13, 8.5, 5.6 };
 	const float share[5] = { 1, 0.55, 0.33, 0.2, 0.12 };
 	const float turn[5] = { 0, 0.5, -0.6, 1.0, -1.3 };
-	offset = float3(0, 0, 0);
-	float3 n = float3(0, 1, 0);
-	crest = 0;
 	float t = GrassParams.z;
 	[unroll] for (int i = 0; i < 5; i++) {
 		float cs = cos(turn[i]), sn = sin(turn[i]);
@@ -447,14 +458,41 @@ void GerstnerWaves(float2 xz, float depth, float4 flow, float sea, float lod, ou
 		float q = a > 1e-4 ? min(0.6 / (k * a * 5), 1.0) : 0;
 		float phase = k * dot(d, xz) - w * t + i * 1.7;
 		float sp = sin(phase), cp = cos(phase);
-		offset += float3(q * a * d.x * cp, a * sp, q * a * d.y * cp);
-		n -= float3(d.x * k * a * cp, q * k * a * sp, d.y * k * a * cp);
-		crest += share[i] * sp;
+		offset += weight * float3(q * a * d.x * cp, a * sp, q * a * d.y * cp);
+		n -= weight * float3(d.x * k * a * cp, q * k * a * sp, d.y * k * a * cp);
+		crest += weight * share[i] * sp;
+	}
+}
+
+void GerstnerWaves(float2 xz, float depth, float4 flow, float sea, float4 r0, float4 r1, float lod, out float3 offset, out float3 normal, out float crest)
+{
+	// seas and lakes only (rivers get flowing ripples), fading in from the shore over 6 units of
+	// depth and out with the distance (lod). Each sea region's waves run along its own steady wind,
+	// and where regions meet their whole wave sets blend by the regions' shares (not their
+	// directions: the phase is direction . position, hundreds of units out, so turning it from
+	// tile to tile shifted the waves by whole wavelengths, terraced chevrons). The first region
+	// takes what the others leave (lakes, and every map without a design: the default wind).
+	// Near the shore the surf's bands run in along the depth. The waves' sideways movement is
+	// shared out so that the surface never folds (sum of k * a * q 0.6): the folds had drawn spikes.
+	float river = flow.a;
+	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod * lerp(LAKE_WAVES, 1, sea);
+	float weights[8] = { r0.x, r0.y, r0.z, r0.w, r1.x, r1.y, r1.z, r1.w };
+	weights[0] += saturate(1 - dot(r0, 1) - dot(r1, 1));
+	offset = float3(0, 0, 0);
+	float3 n = float3(0, 1, 0);
+	crest = 0;
+	float height = 0;
+	[unroll] for (int r = 0; r < 8; r++) {
+		if (weights[r] > 0.004) {
+			GerstnerSet(xz, WaveRegions[r].xy, amp * WaveRegions[r].z, weights[r], offset, n, crest);
+			height += weights[r] * WaveRegions[r].z;
+		}
 	}
 	offset.y = max(offset.y, -0.7 * depth);
 	normal = normalize(n);
 	// 0 in the troughs, 1 at the highest crests (where the waves add up), none without waves
-	crest = amp > 1e-3 ? saturate(0.5 + 0.5 * crest / 1.4) * saturate(amp / 0.25) : 0;
+	float a = amp * height;
+	crest = a > 1e-3 ? saturate(0.5 + 0.5 * crest / 1.4) * saturate(a / 0.25) : 0;
 }
 
 // How much of the tessellation's detail is left at a point (as HS_LakeConst's factors): the
@@ -502,7 +540,9 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 	float3 offset, n;
 	float crest;
 	o.Base = pos.xz;
-	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), SeaAtTexel(pos.xz), WaterLod(pos), offset, n, crest);
+	float4 r0, r1;
+	RegionsAtTexel(pos.xz, r0, r1);
+	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), SeaAtTexel(pos.xz), r0, r1, WaterLod(pos), offset, n, crest);
 	pos += offset;
 	o.Pos = mul(float4(pos, 1), Transform);
 	o.World = pos;
@@ -745,7 +785,8 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// they were faceted)
 	float3 offset, wn;
 	float crest;
-	GerstnerWaves(base, depth, f, sea, WaterLod(input.World), offset, wn, crest);
+	float2 tuv = (base + BlobParams.w) * BlobParams.yz;
+	GerstnerWaves(base, depth, f, sea, waveRegions0.Sample(inpSampler, tuv), waveRegions1.Sample(inpSampler, tuv), WaterLod(input.World), offset, wn, crest);
 	// fine ripples on them, carried by the current on rivers: the sparkles and the rivers' look
 	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x * river;
 	const float cycle = 2.0;
@@ -1139,6 +1180,11 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
+	// the water's maps from the terrain and its water design: made the first time, written again
+	// afterwards (the signature's static variables keep the same textures)
+	void buildWaterMaps(IRenderDevice* device, IDeviceContext* ctx, Terrain* terrain);
+	RefCntAutoPtr<ITexture> waveRegions[2]; // the sea regions' shares (BuildWaveRegions), 4 per texture
+	RefCntAutoPtr<IBuffer> waveBuffer;      // cbuffer WaveBuffer
 	RefCntAutoPtr<IShaderResourceBinding> lakeBinding;
 	texture cloudMap = nullptr;
 	texture waterTexture = nullptr, rippleTexture = nullptr;
@@ -1267,6 +1313,9 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "seaTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions1", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL | tessStages, "WaveBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverWidth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -1395,59 +1444,8 @@ void DiligentEnhancedTerrainRenderer::init()
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "heightTexture")->Set(_impl->heightMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
-	// The water's flow map: one texel per tile
-	{
-		const uint64_t buildStart = SDL_GetTicksNS();
-		std::vector<uint8_t> sea;
-		const std::vector<uint8_t> flow = BuildWaterFlow(terrain, &sea);
-		const uint64_t flowDone = SDL_GetTicksNS();
-		TextureDesc fdesc;
-		fdesc.Name = "Water flow";
-		fdesc.Type = RESOURCE_DIM_TEX_2D;
-		fdesc.Width = terrain->width;
-		fdesc.Height = terrain->height;
-		fdesc.Format = TEX_FORMAT_RGBA8_UNORM;
-		fdesc.BindFlags = BIND_SHADER_RESOURCE;
-		fdesc.Usage = USAGE_IMMUTABLE;
-		TextureSubResData fsub{ flow.data(), (Uint64)fdesc.Width * 4 };
-		TextureData fdata{ &fsub, 1 };
-		device->CreateTexture(fdesc, &fdata, &_impl->flowMap);
-		if (!_impl->flowMap)
-			ferr("Diligent: could not create the water flow map.");
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "flowTexture")->Set(_impl->flowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		TextureDesc sdesc = fdesc;
-		sdesc.Name = "Open sea";
-		sdesc.Format = TEX_FORMAT_R8_UNORM;
-		TextureSubResData ssub{ sea.data(), (Uint64)sdesc.Width };
-		TextureData sdata{ &ssub, 1 };
-		device->CreateTexture(sdesc, &sdata, &_impl->seaMap);
-		if (!_impl->seaMap)
-			ferr("Diligent: could not create the open sea map.");
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "seaTexture")->Set(_impl->seaMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		std::vector<float> halfWidth;
-		const std::vector<float> field = BuildRiverField(terrain, flow, &halfWidth);
-		printf("Water maps built in %.0f ms (flow %.0f, river coordinates %.0f)\n", (SDL_GetTicksNS() - buildStart) / 1e6,
-			(flowDone - buildStart) / 1e6, (SDL_GetTicksNS() - flowDone) / 1e6);
-		TextureDesc rdesc = fdesc;
-		rdesc.Name = "River coordinates";
-		rdesc.Width = terrain->width * RIVER_FIELD_RES;
-		rdesc.Height = terrain->height * RIVER_FIELD_RES;
-		rdesc.Format = TEX_FORMAT_RGBA32_FLOAT;
-		TextureSubResData rsub{ field.data(), (Uint64)rdesc.Width * 16 };
-		TextureData rdata{ &rsub, 1 };
-		device->CreateTexture(rdesc, &rdata, &_impl->riverField);
-		if (!_impl->riverField)
-			ferr("Diligent: could not create the river coordinates.");
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "riverTexture")->Set(_impl->riverField->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		rdesc.Name = "River half width";
-		rdesc.Format = TEX_FORMAT_R32_FLOAT;
-		TextureSubResData wsub{ halfWidth.data(), (Uint64)rdesc.Width * 4 };
-		TextureData wdata{ &wsub, 1 };
-		device->CreateTexture(rdesc, &wdata, &_impl->riverWidth);
-		if (!_impl->riverWidth)
-			ferr("Diligent: could not create the river width.");
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "riverWidth")->Set(_impl->riverWidth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-	}
+	// The water's flow, sea, wave region and river maps (again when the water changes)
+	_impl->buildWaterMaps(device, dgfx->ctx, terrain);
 
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
 	// a map of full light when it is missing.
@@ -1790,6 +1788,80 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->waterfalls = std::make_unique<DiligentWaterfalls>(dgfx, terrain);
 }
 
+void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device, IDeviceContext* ctx, Terrain* terrain)
+{
+	const uint64_t buildStart = SDL_GetTicksNS();
+	std::vector<uint8_t> sea;
+	const std::vector<uint8_t> flow = BuildWaterFlow(terrain, &sea);
+	const std::vector<uint8_t> regions = BuildWaveRegions(terrain, sea);
+	const uint64_t flowDone = SDL_GetTicksNS();
+	std::vector<float> halfWidth;
+	const std::vector<float> field = BuildRiverField(terrain, flow, &halfWidth);
+	printf("Water maps built in %.0f ms (flow %.0f, river coordinates %.0f)\n", (SDL_GetTicksNS() - buildStart) / 1e6,
+		(flowDone - buildStart) / 1e6, (SDL_GetTicksNS() - flowDone) / 1e6);
+	// the wave regions' textures: their shares split in two RGBA8 images (regions 0-3, 4-7)
+	const size_t tiles = (size_t)terrain->width * terrain->height;
+	std::vector<uint8_t> regionHalves[2] = { std::vector<uint8_t>(tiles * 4), std::vector<uint8_t>(tiles * 4) };
+	for (size_t t = 0; t < tiles; t++)
+		for (int h = 0; h < 2; h++)
+			std::copy_n(&regions[t * 8 + h * 4], 4, &regionHalves[h][t * 4]);
+
+	// one texture: made with its data the first time, else written again
+	auto put = [&](RefCntAutoPtr<ITexture>& tex, const char* name, const char* variable, uint32_t width, uint32_t height, TEXTURE_FORMAT format, uint32_t texelBytes, const void* data) {
+		if (tex) {
+			TextureSubResData sub{ data, (Uint64)width * texelBytes };
+			ctx->UpdateTexture(tex, 0, 0, Box{ 0, width, 0, height }, sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			return;
+		}
+		TextureDesc desc;
+		desc.Name = name;
+		desc.Type = RESOURCE_DIM_TEX_2D;
+		desc.Width = width;
+		desc.Height = height;
+		desc.Format = format;
+		desc.BindFlags = BIND_SHADER_RESOURCE;
+		desc.Usage = USAGE_DEFAULT;
+		TextureSubResData sub{ data, (Uint64)width * texelBytes };
+		TextureData init{ &sub, 1 };
+		device->CreateTexture(desc, &init, &tex);
+		if (!tex)
+			ferr("Diligent: could not create the %s.", name);
+		signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, variable)->Set(tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	};
+	const uint32_t W = terrain->width, H = terrain->height;
+	put(flowMap, "water flow map", "flowTexture", W, H, TEX_FORMAT_RGBA8_UNORM, 4, flow.data());
+	put(seaMap, "open sea map", "seaTexture", W, H, TEX_FORMAT_R8_UNORM, 1, sea.data());
+	put(waveRegions[0], "wave regions (1-4)", "waveRegions0", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[0].data());
+	put(waveRegions[1], "wave regions (5-8)", "waveRegions1", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[1].data());
+	put(riverField, "river coordinates", "riverTexture", W * RIVER_FIELD_RES, H * RIVER_FIELD_RES, TEX_FORMAT_RGBA32_FLOAT, 16, field.data());
+	put(riverWidth, "river half width", "riverWidth", W * RIVER_FIELD_RES, H * RIVER_FIELD_RES, TEX_FORMAT_R32_FLOAT, 4, halfWidth.data());
+
+	// the regions' waves: the way they run (x, z) and their height; the first also where no
+	// region is (a design without regions, or none at all: the default wind)
+	float waves[WaterDesign::MAX_SEA_REGIONS * 4] = {};
+	const WaterDesign* design = terrain->waterDesign.get();
+	const std::vector<WaterDesign::SeaRegion> seas = design ? design->seas : std::vector<WaterDesign::SeaRegion>{ WaterDesign::SeaRegion() };
+	for (int r = 0; r < WaterDesign::MAX_SEA_REGIONS; r++) {
+		const WaterDesign::SeaRegion& s = r < (int)seas.size() ? seas[r] : seas[0];
+		const float a = s.windDegrees * 3.14159265f / 180.0f;
+		waves[r * 4] = std::cos(a);
+		waves[r * 4 + 1] = std::sin(a);
+		waves[r * 4 + 2] = s.waves;
+	}
+	if (!waveBuffer) {
+		BufferDesc desc;
+		desc.Name = "Wave regions";
+		desc.Size = sizeof(waves);
+		desc.BindFlags = BIND_UNIFORM_BUFFER;
+		desc.Usage = USAGE_DEFAULT;
+		BufferData init{ waves, sizeof(waves) };
+		device->CreateBuffer(desc, &init, &waveBuffer);
+		signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "WaveBuffer")->Set(waveBuffer);
+	}
+	else
+		ctx->UpdateBuffer(waveBuffer, 0, sizeof(waves), waves, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+}
+
 void DiligentEnhancedTerrainRenderer::Impl::buildGrass(IRenderDevice* device, Terrain* terrain, float density)
 {
 	constexpr int CHUNK = 16; // as the chunks were made
@@ -1953,6 +2025,8 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 		BufferData lakeData{ lakeVertices.data(), lakeDesc.Size };
 		((DiligentGfx*)gfx)->device->CreateBuffer(lakeDesc, &lakeData, &_impl->lakeVertexBuffer);
 	}
+	// the water's maps from the new water (and the water design)
+	_impl->buildWaterMaps(((DiligentGfx*)gfx)->device, ((DiligentGfx*)gfx)->ctx, terrain);
 	if (_impl->waterfalls)
 		_impl->waterfalls->rebuild();
 	return true;

@@ -699,6 +699,20 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 					best = o;
 			}
 			std::vector<Item> seeds;
+			// a designed waterway's mouth (its last point) in this network: the river flows there
+			if (const WaterDesign* design = terrain->waterDesign.get())
+				for (const auto& way : design->waterways) {
+					const Vector3& mouth = way.points.back();
+					for (int t : net) {
+						const float wx = ((t % GW + 0.5f) / R - terrain->edge) * 5.0f, wz = ((t / GW + 0.5f) / R - terrain->edge) * 5.0f;
+						if (std::hypot(wx - mouth.x, wz - mouth.z) <= std::max(way.width * 0.5f, 5.0f)) {
+							down[t] = 0;
+							seeds.push_back({ 0.0f, t });
+						}
+					}
+				}
+			if (!seeds.empty())
+				best = -1; // not the outlet found
 			for (int t : net)
 				if (best != -1) {
 					const int o = outletOf(t);
@@ -955,6 +969,45 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 	return out;
 }
 
+std::vector<uint8_t> BuildWaveRegions(Terrain* terrain, const std::vector<uint8_t>& sea)
+{
+	const int W = (int)terrain->width, H = (int)terrain->height;
+	const WaterDesign* design = terrain->waterDesign.get();
+	const int regions = design ? std::min((int)design->seas.size(), WaterDesign::MAX_SEA_REGIONS) : 1;
+	std::vector<uint8_t> out((size_t)W * H * 8, 0);
+	if (regions <= 1)
+		return out; // one region everywhere: the shaders' default
+	// per region, its sea tiles counted over a square of 2 * WAVE_BLEND_TILES + 1 (summed areas)
+	std::vector<std::vector<float>> share(regions, std::vector<float>((size_t)W * H, 0.0f));
+	std::vector<int> sum((size_t)(W + 1) * (H + 1));
+	for (int r = 0; r < regions; r++) {
+		std::fill(sum.begin(), sum.end(), 0);
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				const size_t t = (size_t)z * W + x;
+				const int painted = WaterDesign::seaRegionOf(design->at(x, z));
+				const int region = sea[t] ? (painted >= 0 ? painted : 0) : -1;
+				sum[(size_t)(z + 1) * (W + 1) + x + 1] = (region == r ? 1 : 0) + sum[(size_t)z * (W + 1) + x + 1] + sum[(size_t)(z + 1) * (W + 1) + x] - sum[(size_t)z * (W + 1) + x];
+			}
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				const int x0 = std::max(0, x - WAVE_BLEND_TILES), x1 = std::min(W, x + WAVE_BLEND_TILES + 1);
+				const int z0 = std::max(0, z - WAVE_BLEND_TILES), z1 = std::min(H, z + WAVE_BLEND_TILES + 1);
+				share[r][(size_t)z * W + x] = (float)(sum[(size_t)z1 * (W + 1) + x1] - sum[(size_t)z0 * (W + 1) + x1] - sum[(size_t)z1 * (W + 1) + x0] + sum[(size_t)z0 * (W + 1) + x0]);
+			}
+	}
+	for (size_t t = 0; t < (size_t)W * H; t++) {
+		float total = 0;
+		for (int r = 0; r < regions; r++)
+			total += share[r][t];
+		if (total <= 0)
+			continue;
+		for (int r = 0; r < regions; r++)
+			out[t * 8 + r] = (uint8_t)std::lround(share[r][t] / total * 255.0f);
+	}
+	return out;
+}
+
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 {
 	const int W = (int)terrain->width, H = (int)terrain->height;
@@ -1148,8 +1201,41 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 		}
 	}
 	const int numBodies = (int)bodies.size();
+	// the map's water design (WaterDesign.h), over what was found: its waterways make the water
+	// along them a river flowing their way; its painted rivers are rivers (flowing the way found,
+	// unless a waterway is there), its painted lakes and seas wide water
+	const WaterDesign* design = terrain->waterDesign.get();
+	int designed = 0;
+	if (design) {
+		for (int t = 0; t < W * H; t++) {
+			const int x = t % W, z = t / W;
+			if (!isWater(x, z))
+				continue;
+			const char c = design->at(x, z);
+			float wx, wz, wd, toMouth;
+			const bool onWay = design->nearestWaterway((x - terrain->edge + 0.5f) * 5.0f, (z - terrain->edge + 0.5f) * 5.0f, wx, wz, wd, toMouth) >= 0;
+			if (onWay && (c == WaterDesign::AUTO || c == WaterDesign::RIVER)) {
+				dirX[t] = wx;
+				dirZ[t] = wz;
+				speed[t] = std::clamp((8.0f - shore[t]) / 5.0f, 0.45f, 1.0f);
+				river[t] = 1.0f;
+				designed++;
+			}
+			else if (c == WaterDesign::RIVER) {
+				if (river[t] < 0.5f) // wide water made a river: along the way it went
+					speed[t] = std::clamp((8.0f - shore[t]) / 5.0f, 0.45f, 1.0f);
+				river[t] = 1.0f;
+				designed++;
+			}
+			else if (c != WaterDesign::AUTO) {
+				river[t] = 0.0f;
+				speed[t] = std::min(speed[t], 0.3f);
+				designed++;
+			}
+		}
+	}
 	// the seas: the wide water (less than half river) in pieces of its own, those reaching the
-	// map's edge
+	// map's edge (or as the design paints them)
 	int seas = 0, lakes = 0;
 	if (sea) {
 		sea->assign((size_t)W * H, 0);
@@ -1177,6 +1263,16 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 				for (int t : piece)
 					(*sea)[t] = 255;
 		}
+		if (design)
+			for (int t = 0; t < W * H; t++) {
+				if (!isWater(t % W, t / W))
+					continue;
+				const char c = design->at(t % W, t / W);
+				if (WaterDesign::seaRegionOf(c) >= 0)
+					(*sea)[t] = 255;
+				else if (c != WaterDesign::AUTO)
+					(*sea)[t] = 0;
+			}
 	}
 	// smoothed: the velocity (direction x speed) and the river share, ten passes of a 3 x 3
 	// average over water tiles of the same body. Two passes of the bare direction had left it
@@ -1225,7 +1321,7 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 		out[t * 4 + 2] = (uint8_t)std::clamp(speed[t] * 255.0f, 0.0f, 255.0f);
 		out[t * 4 + 3] = (uint8_t)std::clamp(river[t] * 255.0f, 0.0f, 255.0f);
 	}
-	printf("Water flow: %d bodies of water, %d flowing; open water: %d seas, %d lakes\n", numBodies, flowing, seas, lakes);
+	printf("Water flow: %d bodies of water, %d flowing; open water: %d seas, %d lakes; %d tiles as designed\n", numBodies, flowing, seas, lakes, designed);
 	// debugging: "WKB_DUMP_FLOW=<file>" writes the flow map as a PPM (direction in red/green,
 	// speed in blue) and the water tiles (body, level, depth, shore distance, river) as text beside it
 	if (const char* dump = getenv("WKB_DUMP_FLOW")) {

@@ -93,6 +93,14 @@ struct TerrainGrassBuilder {
 // river joins it to the sea (the wide water is grouped apart from the rivers).
 std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea = nullptr);
 
+// How much each of the water design's sea regions (WaterDesign::seas, at most 8) drives the waves
+// at each tile: 8 bytes per tile (z * width + x), the regions' shares in 255ths, summing to 255
+// (or 0 away from any sea: the first region's waves, as on lakes). A tile of the sea is in the
+// region the design paints it with, else in the first; the shares are the regions' part of the
+// sea tiles within WAVE_BLEND_TILES, so that where regions meet their waves cross-fade.
+constexpr int WAVE_BLEND_TILES = 6;
+std::vector<uint8_t> BuildWaveRegions(Terrain* terrain, const std::vector<uint8_t>& sea);
+
 // The rivers' own coordinates (High's river look, from Medium), RIVER_FIELD_RES texels per tile
 // edge, four floats per texel ((x, z) at z * width * RES + x): how far downstream the river's
 // mouth still is along the channel (world units), how far the nearest bank is, and the way

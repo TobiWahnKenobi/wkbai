@@ -93,10 +93,12 @@ std::vector<Waterfall> FindWaterfalls(const Terrain* terrain)
 {
 	// every tile edge that the water falls over: its direction, the line it lies on (the
 	// vertex column or row), its place along the line, the two levels and the reach
-	struct EdgeFall { int dir, line, along; float top, bottom, reach, lip; };
+	struct EdgeFall { int dir, line, along; float top, bottom, reach, lip; bool placed = false, intoWater = true; };
 	static const int DIRS[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
 	std::vector<EdgeFall> falls;
-	for (int tz = 0; tz < terrain->height; tz++)
+	const WaterDesign* design = terrain->waterDesign.get();
+	const bool findThem = !design || design->autoWaterfalls;
+	for (int tz = 0; findThem && tz < terrain->height; tz++)
 		for (int tx = 0; tx < terrain->width; tx++) {
 			const TerrainTile* t = terrain->getTile(tx, tz);
 			if (!t->fullOfWater)
@@ -164,6 +166,72 @@ std::vector<Waterfall> FindWaterfalls(const Terrain* terrain)
 	}
 	falls.erase(std::remove_if(falls.begin(), falls.end(), [&](const EdgeFall& f) { return f.lip > lowestLip[f.top] + SPILLWAY; }), falls.end());
 
+	// the design's falls: each a lip along the tile edges (x or z, as the line runs more), the
+	// tiles' edges it covers, falling to the side whose ground is lower
+	for (const WaterDesign::PlacedFall& pf : design ? design->waterfalls : std::vector<WaterDesign::PlacedFall>()) {
+		const float ax = pf.from.x / TILE + terrain->edge, az = pf.from.z / TILE + terrain->edge;
+		const float bx = pf.to.x / TILE + terrain->edge, bz = pf.to.z / TILE + terrain->edge;
+		const bool alongX = std::abs(bx - ax) >= std::abs(bz - az);
+		// the vertex row (or column) the lip lies on, and the tiles along it
+		const int line = (int)std::lround(alongX ? (az + bz) * 0.5f : (ax + bx) * 0.5f);
+		const int first = (int)std::floor(std::min(alongX ? ax : az, alongX ? bx : bz));
+		const int last = std::max(first, (int)std::ceil(std::max(alongX ? ax : az, alongX ? bx : bz)) - 1);
+		// the tile on either side of an edge: before (the -z or -x side) or after the line
+		auto tileAt = [&](int along, int side) { return alongX ? terrain->getTile(along, line + side) : terrain->getTile(line + side, along); };
+		auto groundAt = [&](int along, int side) {
+			const int tx = alongX ? along : line + side, tz = alongX ? line + side : along;
+			return (terrain->getVertex(tx, tz) + terrain->getVertex(tx + 1, tz) + terrain->getVertex(tx, tz + 1) + terrain->getVertex(tx + 1, tz + 1)) * 0.25f;
+		};
+		float before = 0, after = 0;
+		for (int a = first; a <= last; a++) {
+			before += groundAt(a, -1);
+			after += groundAt(a, 0);
+		}
+		const int fallSide = after < before ? 1 : -1; // towards +z (+x) or -z (-x)
+		const int dir = alongX ? (fallSide > 0 ? 2 : 3) : (fallSide > 0 ? 0 : 1);
+		const int dx = DIRS[dir][0], dz = DIRS[dir][1];
+		for (int a = first; a <= last; a++) {
+			const int upSide = fallSide > 0 ? -1 : 0; // the tile above the lip
+			const TerrainTile* up = tileAt(a, upSide);
+			const int ux = alongX ? a : line + upSide, uz = alongX ? line + upSide : a;
+			if (!up)
+				continue;
+			const float lipH = alongX ? (terrain->getVertex(a, line) + terrain->getVertex(a + 1, line)) * 0.5f
+				: (terrain->getVertex(line, a) + terrain->getVertex(line, a + 1)) * 0.5f;
+			const float top = up->fullOfWater ? std::max(up->waterLevel, lipH) : lipH + 0.3f; // a spring where no water is
+			// down beyond the lip: the water below, else the ground where it stops dropping
+			float bottom = lipH, reach = 0;
+			bool water = false;
+			float prev = lipH;
+			for (int k = 0; k < 10; k++) {
+				const int mx = ux + dx * (k + 1), mz = uz + dz * (k + 1);
+				const TerrainTile* m = terrain->getTile(mx, mz);
+				if (!m)
+					break;
+				if (m->fullOfWater) {
+					water = m->waterLevel < top - WATERFALL_MIN_DROP;
+					if (water) {
+						bottom = m->waterLevel;
+						reach = k * TILE;
+					}
+					break;
+				}
+				const float g = (terrain->getVertex(mx, mz) + terrain->getVertex(mx + 1, mz) + terrain->getVertex(mx, mz + 1) + terrain->getVertex(mx + 1, mz + 1)) * 0.25f;
+				if (k > 0 && prev - g < 0.3f * TILE)
+					break; // no longer steep: the foot
+				bottom = g;
+				reach = (k + 0.5f) * TILE;
+				prev = g;
+			}
+			if (top - bottom < WATERFALL_MIN_DROP)
+				continue;
+			EdgeFall f{ dir, line, a, top, bottom, reach, 0.0f };
+			f.placed = true;
+			f.intoWater = water;
+			falls.push_back(f);
+		}
+	}
+
 	// edges next to each other on a line, falling the same way at about the same levels, are one
 	std::sort(falls.begin(), falls.end(), [](const EdgeFall& a, const EdgeFall& b) {
 		return std::tie(a.dir, a.line, a.along) < std::tie(b.dir, b.line, b.along);
@@ -187,6 +255,7 @@ std::vector<Waterfall> FindWaterfalls(const Terrain* terrain)
 		}
 		w.bottom = bottom / w.edges;
 		w.reach = reach / w.edges;
+		w.intoWater = falls[i].intoWater;
 		for (int c = 0; c <= w.edges; c++) {
 			const int vx = w.dx != 0 ? line : first + c, vz = w.dx != 0 ? first + c : line;
 			const float top = falls[i + std::min(c, w.edges - 1)].top;
@@ -652,7 +721,7 @@ void DiligentWaterfalls::Impl::build()
 				fallIndices.insert(fallIndices.end(), { a, b, a + 1, a + 1, b, b + 1 });
 			}
 
-		emitFoot(Vector3(w.x0, 0, w.z0), along, ddx, ddz, length, impactSum / (columns + 1), w.bottom, drop, true);
+		emitFoot(Vector3(w.x0, 0, w.z0), along, ddx, ddz, length, impactSum / (columns + 1), w.bottom, drop, w.intoWater);
 		totalLength += length;
 	}
 
@@ -724,6 +793,9 @@ void DiligentWaterfalls::Impl::build()
 				steep[i] = steep[i] && wet[i];
 			}
 			printf("Waterfalls: %zu steep river tiles without water above them left dry\n", dry);
+			// none found where the map's water design turns that off
+			if (terrain->waterDesign && !terrain->waterDesign->autoWaterfalls)
+				std::fill(steep.begin(), steep.end(), (int8_t)0);
 		}
 		// a corner is opaque where all four tiles around it are river and one of them is steep
 		auto cornerOpacity = [&](int cx, int cz) {

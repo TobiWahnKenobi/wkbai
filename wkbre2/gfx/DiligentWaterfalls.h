@@ -36,10 +36,15 @@ struct Waterfall {
 	int edges = 0;               // its length in tile edges (5 units each), along +x or +z
 	std::vector<float> top;      // the upper water's level at each of the edges + 1 corners
 	std::vector<float> lip;      // the ground at each corner (the rim the water pours over)
-	float bottom = 0;            // the lower water's level
+	float bottom = 0;            // the lower water's level (or the ground's at its foot)
 	float reach = 0;             // how far from the edge the lower water starts (world units)
+	bool intoWater = true;       // false: a placed fall onto dry ground (no foam ring there)
 };
 
+// The falls found (unless the map's water design turns that off) and those its design places
+// (WaterDesign::waterfalls: a lip along the tile edges, falling to its lower side, from the
+// water above it or, where there is none, a spring at the lip; into the water below within 10
+// tiles, else onto the ground where it stops dropping steeply)
 std::vector<Waterfall> FindWaterfalls(const Terrain* terrain);
 
 // The waterfalls drawn after the water (DiligentEnhancedTerrainRenderer), by

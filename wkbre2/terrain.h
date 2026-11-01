@@ -10,7 +10,9 @@
 #include "util/vecmat.h"
 #include "TrnTextureDb.h"
 #include "util/DynArray.h"
+#include "WaterDesign.h"
 #include <filesystem>
+#include <memory>
 
 struct BitReader
 {
@@ -59,6 +61,10 @@ struct Terrain
 	Vector3 sunVector;
 	std::wstring texDbPath, skyTextureDirectory, filePath;
 	std::vector<Vector3> lakes;
+	// the map's file (as readFromFile got it), and its water design (<map>.water, WaterDesign.h;
+	// null: none, everything found automatically)
+	std::string mapFile;
+	std::shared_ptr<WaterDesign> waterDesign;
 
 	TerrainTextureDatabase texDb;
 	DynArray<uint8_t> vertices;
