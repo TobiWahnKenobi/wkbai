@@ -118,6 +118,8 @@ private:
 	// again from it
 	void editorWaterDesign();
 	void applyWaterDesign();
+	// the Regions mode: the timeline's named map regions (chronicle.regions)
+	void editorRegions();
 	void editorBlankMap();
 	// a new map of another size (playable tiles), saved under the name and opened in the editor
 	bool editorNewMap(const std::string& name, int width, int height);

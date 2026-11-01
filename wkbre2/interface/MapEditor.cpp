@@ -69,7 +69,11 @@ static void ResetTileTerrainTypes(Server& server)
 }
 
 struct ClientInterface::EditorState {
-	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES, SCRIPTS };
+	enum Mode { TERRAIN, TEXTURES, WATER, OBJECTS, PLAYERS, ZONES, SCRIPTS, REGIONS };
+	// regions (the timeline's named map regions, MapRegions): the one chosen, the tool (paint its
+	// cells, or pick the region under the cursor) and the kind a new one gets
+	int regionId = 0, regionTool = 0, newRegionKind = 0;
+	bool regionStroke = false;
 	// scripts: the alias chosen (the game set's DECLARE_ALIAS names, which a level's scripts
 	// find objects by), its filter, and the game set file being typed
 	int alias = -1;
@@ -170,6 +174,9 @@ struct ClientInterface::EditorState {
 		// the water design before a change (null: none)
 		bool hasDesign = false;
 		std::shared_ptr<WaterDesign> design;
+		// the map's regions before a change
+		bool hasRegions = false;
+		std::shared_ptr<MapRegions> regions;
 		std::vector<Removed> removed;
 		std::vector<Moved> moved;
 		std::vector<Props> props;
@@ -310,6 +317,45 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		}
 		ed.status = "Placed " + type->name;
 		return true;
+	}
+
+	// the timeline's regions: their cells painted into the region chosen, or the region under the
+	// cursor picked
+	if (ed.mode == EditorState::REGIONS && chronicle.regions.ready()) {
+		MapRegions& mr = chronicle.regions;
+		const float cellSize = 5.0f * MapRegions::CELL;
+		if (ed.regionTool == 1) {
+			if (overUi || !g_mousePressed[SDL_BUTTON_LEFT])
+				return false;
+			const int r = mr.cellRegion((int)std::floor(cursor.x / cellSize), (int)std::floor(cursor.z / cellSize));
+			if (r >= 0) {
+				ed.regionId = r;
+				ed.status = "Region: " + mr.regions[r].name;
+			}
+			return true;
+		}
+		const bool down = g_mouseDown[SDL_BUTTON_LEFT] && (ed.regionStroke || !overUi);
+		if (down && ed.regionId >= 0 && ed.regionId < (int)mr.regions.size()) {
+			if (!ed.regionStroke) {
+				ed.regionStroke = true;
+				EditorState::Undo u;
+				u.hasRegions = true;
+				u.regions = std::make_shared<MapRegions>(mr);
+				ed.pushUndo(std::move(u));
+			}
+			const int reach = (int)std::ceil(ed.radius / cellSize);
+			const int cx = (int)std::floor(cursor.x / cellSize), cz = (int)std::floor(cursor.z / cellSize);
+			for (int z = cz - reach; z <= cz + reach; z++)
+				for (int x = cx - reach; x <= cx + reach; x++)
+					if (std::hypot((x + 0.5f) * cellSize - cursor.x, (z + 0.5f) * cellSize - cursor.z) <= std::max(ed.radius, cellSize * 0.5f))
+						mr.setCell(x, z, ed.regionId);
+			return true;
+		}
+		if (ed.regionStroke) {
+			ed.regionStroke = false;
+			ed.status = "Painted into " + mr.regions[ed.regionId].name + " (save the regions to keep it)";
+		}
+		return false;
 	}
 
 	// the water design (on the client's terrain: it only changes how the water is drawn)
@@ -1052,6 +1098,138 @@ void ClientInterface::editorWaterDesign()
 	}
 }
 
+void ClientInterface::editorRegions()
+{
+	EditorState& ed = *editor;
+	MapRegions& mr = chronicle.regions;
+	if (!mr.ready() && !mr.build(client)) {
+		ImGui::TextWrapped("The regions are worked out once the level is loaded.");
+		return;
+	}
+	// an edit through a widget: undoable to the regions as they were before it took the mouse
+	static MapRegions before;
+	if (!ImGui::IsAnyItemActive())
+		before = mr;
+	auto edited = [&]() {
+		if (ImGui::IsItemActivated()) {
+			EditorState::Undo u;
+			u.hasRegions = true;
+			u.regions = std::make_shared<MapRegions>(before);
+			ed.pushUndo(std::move(u));
+		}
+	};
+	auto snapshot = [&]() {
+		EditorState::Undo u;
+		u.hasRegions = true;
+		u.regions = std::make_shared<MapRegions>(mr);
+		ed.pushUndo(std::move(u));
+	};
+	ImGui::RadioButton("Paint cells", &ed.regionTool, 0);
+	ImGui::SameLine();
+	ImGui::RadioButton("Pick a region", &ed.regionTool, 1);
+	if (ed.regionTool == 0)
+		ImGui::SliderFloat("Radius (m)", &ed.radius, 2.5f, 150.0f, "%.1f");
+	ed.regionId = std::clamp(ed.regionId, 0, (int)mr.regions.size() - 1);
+	if (ImGui::BeginListBox("##regions", ImVec2(-1, 150))) {
+		for (int r = 0; r < (int)mr.regions.size(); r++) {
+			const auto& reg = mr.regions[r];
+			const std::string label = reg.name + " - " + MapRegions::kindName(reg.kind) + ", " + std::to_string(reg.cells) + " cells##region" + std::to_string(r);
+			if (ImGui::Selectable(label.c_str(), r == ed.regionId))
+				ed.regionId = r;
+		}
+		ImGui::EndListBox();
+	}
+	MapRegions::Region& sel = mr.regions[ed.regionId];
+	char name[96];
+	snprintf(name, sizeof(name), "%s", sel.name.c_str());
+	if (ImGui::InputText("Name", name, sizeof(name))) {
+		sel.name = name;
+		mr.edited = true;
+	}
+	edited();
+	int kind = sel.kind;
+	if (ImGui::BeginCombo("Kind", MapRegions::kindName(sel.kind))) {
+		for (int k = 0; k < MapRegions::KindCount; k++)
+			if (ImGui::Selectable(MapRegions::kindName((MapRegions::Kind)k), k == kind)) {
+				snapshot();
+				sel.kind = (MapRegions::Kind)k;
+				mr.edited = true;
+			}
+		ImGui::EndCombo();
+	}
+	if (ImGui::Button("Delete region") && mr.regions.size() > 1) {
+		snapshot();
+		const std::string gone = sel.name;
+		mr.removeRegion(ed.regionId);
+		ed.regionId = std::min(ed.regionId, (int)mr.regions.size() - 1);
+		ed.status = gone + " deleted: its cells went to the region beside it";
+	}
+	ImGui::SetNextItemWidth(110);
+	if (ImGui::BeginCombo("##newkind", MapRegions::kindName((MapRegions::Kind)ed.newRegionKind))) {
+		for (int k = 0; k < MapRegions::KindCount; k++)
+			if (ImGui::Selectable(MapRegions::kindName((MapRegions::Kind)k), k == ed.newRegionKind))
+				ed.newRegionKind = k;
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("New region")) {
+		snapshot();
+		ed.regionId = mr.addRegion((MapRegions::Kind)ed.newRegionKind);
+		ed.regionTool = 0;
+		ed.status = "New region " + mr.regions[ed.regionId].name + ": paint its cells";
+	}
+	if (ImGui::Button("Save regions")) {
+		mr.edited = true;
+		ed.status = mr.save() ? "Regions saved (kept when the map changes)" : "Saving the regions failed";
+	}
+	ImGui::TextWrapped("The timeline (F7) names its events after the region they happen in (\"Battle of Ergor\"). A region is cells of %d x %d tiles; paint cells into the chosen region, or pick one by clicking it. Saved regions are kept when the map is edited, as long as it keeps its size; Save map keeps them under the new name.", MapRegions::CELL, MapRegions::CELL);
+
+	// over the map: each cell's outline in its region's colour (the chosen one filled), and the
+	// regions' names at their centres
+	Terrain* trn = client->terrain;
+	if (!trn)
+		return;
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	auto toScreen = [&](float x, float z, bool& visible) {
+		const Vector3 t = Vector3(x, trn->getHeight(x, z) + 0.5f, z).transformScreenCoords(client->camera.sceneMatrix);
+		visible = visible && t.z > 0.0f && t.z < 1.0f;
+		return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+	};
+	auto colour = [](int r, int alpha) {
+		const uint32_t h = (uint32_t)r * 2654435761u;
+		return IM_COL32(80 + (h >> 8) % 176, 80 + (h >> 16) % 176, 80 + (h >> 24) % 176, alpha);
+	};
+	const float cs = 5.0f * MapRegions::CELL;
+	for (int cz = 0; cz < mr.cellsHigh(); cz++)
+		for (int cx = 0; cx < mr.cellsWide(); cx++) {
+			const int r = mr.cellRegion(cx, cz);
+			bool visible = true;
+			const ImVec2 a = toScreen(cx * cs, cz * cs, visible), b = toScreen((cx + 1) * cs, cz * cs, visible);
+			const ImVec2 c = toScreen((cx + 1) * cs, (cz + 1) * cs, visible), d = toScreen(cx * cs, (cz + 1) * cs, visible);
+			if (!visible)
+				continue;
+			if (r == ed.regionId)
+				dl->AddQuadFilled(a, b, c, d, colour(r, 90));
+			// the borders between regions drawn strongly, within one faintly
+			const bool east = mr.cellRegion(cx + 1, cz) != r, south = mr.cellRegion(cx, cz + 1) != r;
+			dl->AddLine(b, c, east ? IM_COL32(255, 255, 255, 220) : colour(r, 60), east ? 2.5f : 1.0f);
+			dl->AddLine(c, d, south ? IM_COL32(255, 255, 255, 220) : colour(r, 60), south ? 2.5f : 1.0f);
+		}
+	for (int r = 0; r < (int)mr.regions.size(); r++) {
+		const auto& reg = mr.regions[r];
+		if (reg.cells == 0)
+			continue;
+		bool visible = true;
+		const ImVec2 p = toScreen(reg.centre.x, reg.centre.z, visible);
+		if (!visible)
+			continue;
+		const ImVec2 size = ImGui::CalcTextSize(reg.name.c_str());
+		const ImVec2 at(p.x - size.x * 0.5f, p.y - size.y * 0.5f);
+		dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + size.x + 3, at.y + size.y + 1), r == ed.regionId ? colour(r, 230) : IM_COL32(0, 0, 0, 160), 3.0f);
+		dl->AddText(at, r == ed.regionId ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 255, 255, 255), reg.name.c_str());
+	}
+}
+
 void ClientInterface::editorWindow()
 {
 	if (!editor)
@@ -1073,9 +1251,13 @@ void ClientInterface::editorWindow()
 		ImGui::RadioButton("Zones", &ed.mode, EditorState::ZONES);
 		ImGui::SameLine();
 		ImGui::RadioButton("Scripts", &ed.mode, EditorState::SCRIPTS);
+		ImGui::SameLine();
+		ImGui::RadioButton("Regions", &ed.mode, EditorState::REGIONS);
 		ImGui::Separator();
 		if (ed.mode == EditorState::ZONES)
 			editorZones();
+		else if (ed.mode == EditorState::REGIONS)
+			editorRegions();
 		else if (ed.mode == EditorState::SCRIPTS)
 			editorScripts();
 		else if (ed.mode == EditorState::PLAYERS) {
@@ -1862,6 +2044,10 @@ void ClientInterface::editorStep(bool redoing)
 		back.lakes = client->terrain->lakes;
 		back.lakeBits = client->terrain->lakeExtraBits;
 	}
+	else if (u.hasRegions) {
+		back.hasRegions = true;
+		back.regions = std::make_shared<MapRegions>(chronicle.regions);
+	}
 	else if (u.hasDesign && client->terrain) {
 		back.hasDesign = true;
 		if (client->terrain->waterDesign)
@@ -1946,6 +2132,10 @@ void ClientInterface::editorStep(bool redoing)
 	else if (u.hasLakes && client->terrain) {
 		setLakes(u.lakes, u.lakeBits);
 		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a lake change";
+	}
+	else if (u.hasRegions && u.regions) {
+		chronicle.regions = *u.regions;
+		ed.status = std::string(redoing ? "Redone" : "Undone") + ": a region change";
 	}
 	else if (u.hasDesign && client->terrain) {
 		client->terrain->waterDesign = u.design ? std::make_shared<WaterDesign>(*u.design) : nullptr;
@@ -2095,6 +2285,9 @@ bool ClientInterface::editorSave(const std::string& name)
 					ok = client->terrain->waterDesign->save(water);
 				else
 					std::filesystem::remove(water, rmEc);
+				// regions edited by hand: under the new map's name too
+				if (ok && chronicle.regions.ready() && chronicle.regions.edited)
+					chronicle.regions.save(name);
 				if (ok && FileExists(oldLttt.c_str())) {
 					char* data; int size;
 					LoadFile(oldLttt.c_str(), &data, &size);
@@ -2189,7 +2382,7 @@ void ClientInterface::editorOpenMode(const std::string& mode)
 		editor = std::make_shared<EditorState>();
 	static const std::pair<const char*, int> modes[] = { { "terrain", EditorState::TERRAIN }, { "textures", EditorState::TEXTURES },
 		{ "water", EditorState::WATER }, { "objects", EditorState::OBJECTS }, { "players", EditorState::PLAYERS }, { "zones", EditorState::ZONES },
-		{ "scripts", EditorState::SCRIPTS } };
+		{ "scripts", EditorState::SCRIPTS }, { "regions", EditorState::REGIONS } };
 	for (const auto& [name, m] : modes)
 		if (mode == name)
 			editor->mode = m;
@@ -2209,6 +2402,47 @@ void ClientInterface::editorTestStep(Vector3& cursor)
 	// its water painted as a second sea region, a waterway across it, a waterfall placed on the
 	// first slope east of it, and the design saved
 	const nlohmann::json bm = g_settings.value("benchmark", nlohmann::json::object());
+	// "editorRegionTest": [x, z]: the region there renamed "Test Hollow" and grown east, a new
+	// forest region painted west of it, the regions saved
+	if (bm.contains("editorRegionTest")) {
+		MapRegions& mr = chronicle.regions;
+		const Vector3 at(bm["editorRegionTest"][0].get<float>(), 0, bm["editorRegionTest"][1].get<float>());
+		ed.mode = EditorState::REGIONS;
+		if (frame == 30) {
+			if (!mr.ready())
+				mr.build(client);
+			ed.regionTool = 1;
+			cursor = at;
+			g_mousePressed[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 32 && mr.ready()) {
+			printf("EDITORTEST region at (%.0f, %.0f): %s, %d cells\n", at.x, at.z, mr.regions[ed.regionId].name.c_str(), mr.regions[ed.regionId].cells);
+			mr.regions[ed.regionId].name = "Test Hollow";
+			mr.edited = true;
+			ed.regionTool = 0;
+			ed.radius = 60.0f;
+		}
+		if (frame >= 33 && frame < 38) {
+			cursor = at + Vector3(80, 0, 0);
+			g_mouseDown[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 40) {
+			ed.regionId = mr.addRegion(MapRegions::Forest);
+			ed.radius = 40.0f;
+		}
+		if (frame >= 41 && frame < 46) {
+			cursor = at - Vector3(80, 0, 0);
+			g_mouseDown[SDL_BUTTON_LEFT] = true;
+		}
+		if (frame == 50) {
+			const bool saved = mr.save();
+			const MapRegions::Region* r = mr.at(at + Vector3(80, 0, 0));
+			const MapRegions::Region* w = mr.at(at - Vector3(80, 0, 0));
+			printf("EDITORTEST regions: %zu; east of the point %s, west %s (%d cells); saved %s\n", mr.regions.size(),
+				r ? r->name.c_str() : "-", w ? w->name.c_str() : "-", w ? w->cells : 0, saved ? "yes" : "no");
+		}
+		return;
+	}
 	if (bm.contains("editorWaterTest")) {
 		Terrain* trn = client->terrain;
 		const Vector3 centre(bm["editorWaterTest"][0].get<float>(), 0, bm["editorWaterTest"][1].get<float>());
