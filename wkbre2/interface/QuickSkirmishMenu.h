@@ -71,6 +71,8 @@ private:
 	int aiEarlyFarms = 0; // Server::aiEarlyFarms
 	int aiFirstBarracks = 90; // Server::aiFirstBarracks
 	bool aiAdapt = true; // Server::aiAdapt
+	bool aiTakeOver = true; // Server::aiTakeOver
+	bool allowSpectators = false; int maxSpectators = 4; // Server::allowSpectators, maxSpectators
 	int aiMinPeasants = 40; // Server::aiMinPeasants
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding
 	bool aiLendFarmers = true; // Server::aiLendFarmers

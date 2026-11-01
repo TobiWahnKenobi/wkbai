@@ -54,6 +54,14 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::string> chatMessages;
 	// Multiplayer guests: the lobby as the host shows it (NETCLIMSG_LOBBY_STATE), and its parts so far
 	std::string lobbyState, lobbyStateParts;
+	// a running game's places for this guest (NETCLIMSG_SEATS), as lobbyState; awaitingSeat until
+	// it takes one or watches
+	std::string seats, seatsParts;
+	bool awaitingSeat = false;
+	// it watches the game (NETCLIMSG_SPECTATOR)
+	bool spectator = false;
+	// the host turned it away (NETCLIMSG_JOIN_REFUSED): why
+	std::string refusedReason;
 	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
 	struct LoadingRow { int stage, colour; bool own; std::string name; };
 	std::vector<LoadingRow> loadingRows;
@@ -104,7 +112,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	void tick();
 
 	void sendMessage(const std::string &msg);
-	void sendLobbyHello(const std::string& name);
+	void sendLobbyHello(const std::string& name, const std::string& password = std::string());
+	// a running game: the place to take (a player id from seats), 0: watch
+	void sendTakeSeat(uint32_t playerId);
 	void sendLobbyRequest(const std::string& request);
 	// faceTo: where to face at the end (a formation's right-drag; x < 0: nowhere)
 	void sendCommand(ClientGameObject *obj, const Command *cmd, int assignmentMode, ClientGameObject *target = nullptr, const Vector3 & destination = Vector3(), const Vector3& faceTo = Vector3(-1,0,0));

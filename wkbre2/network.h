@@ -76,6 +76,15 @@ enum NetClientMessages {
 	// The loading screen's rows, one per client (human player): count, then for each its stage
 	// (1-8), its player's colour index, whether it is the receiving client, its name
 	NETCLIMSG_LOADING_STAGES,
+	// The host turned the guest away (a wrong password, a running game with no place left): the
+	// reason; the host disconnects it
+	NETCLIMSG_JOIN_REFUSED,
+	// A running game's places for a guest who joined it, before the game's state: text, in parts
+	// as NETCLIMSG_LOBBY_STATE, a line each: a title, then "A|name|colour|team|player id" (A: an AI
+	// plays it, D: its human left), a last line "S|n": n spectator places
+	NETCLIMSG_SEATS,
+	// The client watches (a spectator): no player of its own, no fog of war, its orders ignored
+	NETCLIMSG_SPECTATOR,
 };
 
 enum NetServerMessages {
@@ -102,6 +111,9 @@ enum NetServerMessages {
 	NETSRVMSG_LOBBY_REQUEST,
 	// A client's loading stage (1-8), for the others' loading screens
 	NETSRVMSG_LOADING_STAGE,
+	// A guest who joined a running game takes a place: the player's id (one NETCLIMSG_SEATS
+	// offered), 0: it watches
+	NETSRVMSG_TAKE_SEAT,
 };
 
 struct NetPacketWriter {

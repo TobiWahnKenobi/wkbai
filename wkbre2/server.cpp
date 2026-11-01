@@ -23,6 +23,8 @@
 #include "util/SimRandom.h"
 #include <SDL3/SDL_timer.h>
 #include <optional>
+#include <functional>
+#include "util/StriCompare.h"
 
 Server *Server::instance = nullptr;
 
@@ -327,6 +329,7 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 		else
 			terrain->setHeightSteps(i, mean);
 	}
+	levelledVertices.insert(list.begin(), list.end());
 	for (int i : uneven) {
 		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
 		packet.writeUint32(1);
@@ -524,6 +527,17 @@ bool Server::startReplay(const std::filesystem::path& folder)
 			if (length && fread(e.data.data(), 1, length, f) != length)
 				break;
 		}
+		else if (type == 'R') {
+			// a client left: its index, whether an AI took over, the player, the AI General
+			uint8_t client = 0, took = 0;
+			uint32_t ids[2] = {};
+			if (fread(&client, 1, 1, f) != 1 || fread(&took, 1, 1, f) != 1 || fread(ids, 4, 2, f) != 2)
+				break;
+			e.client = client;
+			e.takeOver = took != 0;
+			e.count = ids[0];
+			e.ms = ids[1];
+		}
 		else
 			break;
 		r->events.push_back(std::move(e));
@@ -542,6 +556,28 @@ bool Server::replayEvent()
 	if (e.type == 'M') {
 		handlePacket(e.client, e.data);
 		replay->next++;
+		return true;
+	}
+	if (e.type == 'R') {
+		// as recorded: the client's place goes, the same AI General takes its player over
+		// (e.count: the player id, e.ms: the AI General's blueprint)
+		replay->next++;
+		if (e.client <= 0)
+			return true;
+		ServerGameObject* player = findObject(e.count);
+		if ((size_t)e.client < clientPlayerObjects.size()) {
+			if (ServerGameObject* p = clientPlayerObjects[e.client])
+				p->clientIndex = -1;
+			clientPlayerObjects.erase(clientPlayerObjects.begin() + e.client);
+			if ((size_t)e.client < clientInfos.size())
+				clientInfos.erase(clientInfos.begin() + e.client);
+			for (size_t i = 0; i < clientPlayerObjects.size(); i++)
+				if (ServerGameObject* p = clientPlayerObjects[i])
+					p->clientIndex = (int)i;
+		}
+		if (e.takeOver && player)
+			if (const GameObjBlueprint* general = gameSet->getBlueprint(e.ms))
+				takeOverByAI(player, general);
 		return true;
 	}
 	if (!replay->leftInRun)
@@ -1679,14 +1715,18 @@ void ServerGameObject::reclaimObjectCost(const GameObjBlueprint* blueprint)
 
 void Server::sendToAll(const NetPacket & packet)
 {
-	for (NetLink *cli : clientLinks)
-		cli->send(packet);
+	// not to a guest who joined the running game before it has the game's state
+	for (size_t i = 0; i < clientLinks.size(); i++)
+		if (i >= clientInfos.size() || !clientInfos[i].awaitingState)
+			clientLinks[i]->send(packet);
 }
 
 void Server::sendToAll(const NetPacketWriter & packet)
 {
-	for (NetLink *cli : clientLinks)
-		cli->send(packet);
+	// not to a guest who joined the running game before it has the game's state
+	for (size_t i = 0; i < clientLinks.size(); i++)
+		if (i >= clientInfos.size() || !clientInfos[i].awaitingState)
+			clientLinks[i]->send(packet);
 }
 
 void Server::sendTo(ServerGameObject* player, const NetPacketWriter& packet)
@@ -1699,7 +1739,7 @@ void Server::sendTo(ServerGameObject* player, const NetPacketWriter& packet)
 			printf("WARNING: Sending packet to player %i that has no assigned client! (not repeated)\n", player->id);
 		return;
 	}
-	clientLinks[player->clientIndex]->send(packet);
+	sendToClient(player->clientIndex, packet);
 }
 
 void Server::syncTime()
@@ -1808,6 +1848,10 @@ void Server::setGameSpeed(float nextSpeed)
 void Server::setClientPlayerControl(int clientIndex, uint32_t playerObjId)
 {
 	// the players know which client controls them (not yet while a save game is loading)
+	while ((size_t)clientIndex >= clientPlayerObjects.size()) {
+		clientPlayerObjects.emplace_back();
+		clientInfos.emplace_back();
+	}
 	if (ServerGameObject* old = clientPlayerObjects[clientIndex])
 		old->clientIndex = -1;
 	clientPlayerObjects[clientIndex] = playerObjId;
@@ -1815,7 +1859,7 @@ void Server::setClientPlayerControl(int clientIndex, uint32_t playerObjId)
 		player->clientIndex = clientIndex;
 	NetPacketWriter msg{ NETCLIMSG_CONTROL_PLAYER };
 	msg.writeUint32(playerObjId);
-	clientLinks[clientIndex]->send(msg);
+	sendToClient(clientIndex, msg);
 }
 
 void Server::playMusic(ServerGameObject* player, int musicTag)
@@ -1889,6 +1933,8 @@ void Server::addClient(NetLink* link)
 	clientLinks.push_back(link);
 	clientPlayerObjects.emplace_back();
 	clientInfos.emplace_back();
+	// the game runs: it gets nothing of it until sendStateTo
+	clientInfos.back().awaitingState = gameSet && getLevel() && !replay;
 }
 
 void Server::removeClient(NetLink* link)
@@ -1896,11 +1942,336 @@ void Server::removeClient(NetLink* link)
 	auto it = std::find(clientLinks.begin(), clientLinks.end(), link);
 	assert(it != clientLinks.end());
 	size_t clientIndex = it - clientLinks.begin();
-	if (ServerGameObject* player = clientPlayerObjects[clientIndex])
-		player->clientIndex = -1;
+	// a guest leaving the running game: an AI General may take its player over (not a spectator's
+	// or a refused guest's: they have none)
+	const bool inGame = gameSet && getLevel() && !replay && clientIndex > 0;
+	const bool takeOver = inGame && aiTakeOver && !clientInfos[clientIndex].spectator;
 	clientLinks.erase(it);
-	clientPlayerObjects.erase(clientPlayerObjects.begin() + clientIndex);
-	clientInfos.erase(clientInfos.begin() + clientIndex);
+	clientLeftGame(clientIndex, takeOver);
+}
+
+void Server::clientLeftGame(size_t clientIndex, bool takeOver)
+{
+	ServerGameObject* player = clientIndex < clientPlayerObjects.size() ? clientPlayerObjects[clientIndex].get() : nullptr;
+	if (player)
+		player->clientIndex = -1;
+	if (clientIndex < clientPlayerObjects.size())
+		clientPlayerObjects.erase(clientPlayerObjects.begin() + clientIndex);
+	if (clientIndex < clientInfos.size())
+		clientInfos.erase(clientInfos.begin() + clientIndex);
+	// the clients after it moved down by one
+	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
+		if (ServerGameObject* p = clientPlayerObjects[i])
+			p->clientIndex = (int)i;
+	const GameObjBlueprint* general = nullptr;
+	if (takeOver && player && !(player->flags & (CommonGameObject::fTerminated | CommonGameObject::fPlayerTerminated)))
+		general = takeOverByAI(player);
+	// recorded: 'R' <client> <AI took over> <player id> <the AI General's blueprint>
+	if (recording && recording->file && gameSet && getLevel()) {
+		recording->flushRun();
+		fputc('R', recording->file);
+		const uint8_t client = (uint8_t)clientIndex, took = general ? 1 : 0;
+		const uint32_t playerId = player ? player->id : 0, generalId = general ? general->getFullId() : 0;
+		fwrite(&client, 1, 1, recording->file);
+		fwrite(&took, 1, 1, recording->file);
+		fwrite(&playerId, 4, 1, recording->file);
+		fwrite(&generalId, 4, 1, recording->file);
+	}
+}
+
+void Server::sendToClient(int clientIndex, const NetPacketWriter& packet)
+{
+	if (clientIndex >= 0 && (size_t)clientIndex < clientLinks.size() && !(replay && clientIndex > 0))
+		clientLinks[clientIndex]->send(packet);
+}
+
+const GameObjBlueprint* Server::takeOverByAI(ServerGameObject* player, const GameObjBlueprint* general)
+{
+	if (!general) {
+		// the AI Generals: the PLAYER blueprints "... Kingmaker" (AI_Personalities.gsf)
+		std::vector<const GameObjBlueprint*> generals;
+		const auto& playerTypes = gameSet->objBlueprints[Tags::GAMEOBJCLASS_PLAYER];
+		for (size_t i = 0; i < playerTypes.size(); i++) {
+			const std::string& name = playerTypes.names.getString(i);
+			if (name.size() > 10 && StrCICompare(std::string_view(name).substr(name.size() - 10), " Kingmaker") == 0)
+				generals.push_back(&playerTypes[i]);
+		}
+		if (generals.empty())
+			return nullptr;
+		general = generals[SimRand() % generals.size()];
+	}
+	humanBlueprints.try_emplace(player->id, player->blueprint);
+	player->convertTo(general);
+	if (const int setupAi = gameSet->events.names.getIndex("Setup My AI Player Stuff"); setupAi != -1)
+		player->sendEvent(setupAi);
+	if (!player->name.empty() && player->name.find(" (AI)") == std::string::npos)
+		player->setName(player->name + " (AI)");
+	printf("Multiplayer: player %u's human left, %s plays it\n", player->id, general->name.c_str());
+	NetPacketWriter chat(NETCLIMSG_TEST);
+	chat.writeStringZ(player->name.substr(0, 150) + ": an AI General took over");
+	sendToAll(chat);
+	return general;
+}
+
+std::vector<ServerGameObject*> Server::freeSeats()
+{
+	std::vector<ServerGameObject*> seats;
+	if (!getLevel())
+		return seats;
+	for (const auto& [type, children] : getLevel()->children) {
+		if (type.bpClass() != Tags::GAMEOBJCLASS_PLAYER)
+			continue;
+		for (CommonGameObject* child : children) {
+			ServerGameObject* p = child->dyncast<ServerGameObject>();
+			if (p->clientIndex != -1 || p->deleted || (p->flags & (CommonGameObject::fTerminated | CommonGameObject::fPlayerTerminated)))
+				continue;
+			const std::string& name = p->blueprint->name;
+			const bool ai = name.size() > 10 && StrCICompare(std::string_view(name).substr(name.size() - 10), " Kingmaker") == 0;
+			if (ai || name == "Human Player" || humanBlueprints.count(p->id))
+				seats.push_back(p);
+		}
+	}
+	std::sort(seats.begin(), seats.end(), [](auto* a, auto* b) { return a->id < b->id; });
+	return seats;
+}
+
+int Server::spectatorCount() const
+{
+	return (int)std::count_if(clientInfos.begin(), clientInfos.end(), [](const ClientInfo& i) { return i.spectator; });
+}
+
+void Server::offerSeats(int clientIndex)
+{
+	const std::vector<ServerGameObject*> seats = freeSeats();
+	const int watchers = allowSpectators ? std::max(0, maxSpectators - spectatorCount()) : 0;
+	if (seats.empty() && watchers == 0) {
+		refuseClient(clientIndex, "The game is running and has no free place");
+		return;
+	}
+	std::string text = "Game in progress";
+	for (ServerGameObject* p : seats) {
+		const std::string& bp = p->blueprint->name;
+		const bool ai = bp.size() > 10 && StrCICompare(std::string_view(bp).substr(bp.size() - 10), " Kingmaker") == 0;
+		std::string name = p->name.empty() ? bp : p->name;
+		std::replace(name.begin(), name.end(), '|', ' ');
+		std::replace(name.begin(), name.end(), '\n', ' ');
+		text += std::string("\n") + (ai ? "A" : "D") + "|" + name + "|" + std::to_string(p->color) + "|0|" + std::to_string(p->id);
+	}
+	text += "\nS|" + std::to_string(watchers);
+	const size_t PART = 200;
+	const size_t parts = std::min<size_t>(255, (text.size() + PART - 1) / PART);
+	for (size_t i = 0; i < parts; i++) {
+		NetPacketWriter msg(NETCLIMSG_SEATS);
+		msg.writeUint8((uint8_t)i);
+		msg.writeUint8((uint8_t)parts);
+		msg.writeStringZ(text.substr(i * PART, PART));
+		sendToClient(clientIndex, msg);
+	}
+	printf("Multiplayer: offered client %d %zu places and %d spectator places\n", clientIndex, seats.size(), watchers);
+}
+
+void Server::refuseClient(int clientIndex, const std::string& reason)
+{
+	if (clientIndex <= 0 || (size_t)clientIndex >= clientInfos.size())
+		return;
+	clientInfos[clientIndex].refused = true;
+	NetPacketWriter msg(NETCLIMSG_JOIN_REFUSED);
+	msg.writeStringZ(reason.substr(0, 200));
+	sendToClient(clientIndex, msg);
+	printf("Multiplayer: client %d turned away: %s\n", clientIndex, reason.c_str());
+}
+
+void Server::makeSpectator(int clientIndex)
+{
+	if (clientIndex <= 0 || (size_t)clientIndex >= clientInfos.size())
+		return;
+	clientInfos[clientIndex].spectator = true;
+	NetPacketWriter msg(NETCLIMSG_SPECTATOR);
+	msg.writeUint8(1);
+	sendToClient(clientIndex, msg);
+	// it sees through the host's player's eyes (without controlling it)
+	if (!clientPlayerObjects.empty())
+		if (ServerGameObject* host = clientPlayerObjects[0]) {
+			NetPacketWriter control{ NETCLIMSG_CONTROL_PLAYER };
+			control.writeUint32(host->id);
+			sendToClient(clientIndex, control);
+			NetPacketWriter cam{ NETCLIMSG_SNAP_CAMERA_POSITION };
+			cam.writeVector3(host->playerStartCameraPosition);
+			cam.writeVector3(host->playerStartCameraOrientation);
+			sendToClient(clientIndex, cam);
+		}
+	printf("Multiplayer: client %d watches\n", clientIndex);
+	if (!clientInfos[clientIndex].name.empty()) {
+		NetPacketWriter chat(NETCLIMSG_TEST);
+		chat.writeStringZ(clientInfos[clientIndex].name.substr(0, 150) + " watches the game");
+		sendToAll(chat);
+	}
+}
+
+void Server::sendStateTo(NetLink* link)
+{
+	if (!gameSet || !getLevel())
+		return;
+	size_t count = 0;
+	auto send = [&](const NetPacketWriter& p) { link->send(p); count++; };
+	{
+		NetPacketWriter msg(NETCLIMSG_GAME_SET);
+		msg.writeStringZ(gameSetFile);
+		msg.writeUint8((uint8_t)g_settings.at("gameVersion").get<int>());
+		send(msg);
+	}
+	if (terrain) {
+		NetPacketWriter msg(NETCLIMSG_TERRAIN_SET);
+		msg.writeStringZ(PathToUtf8(std::filesystem::path(terrain->filePath)));
+		send(msg);
+	}
+	// the objects, each after its parent, with what the clients were told of it
+	std::function<void(ServerGameObject*)> sendObject = [&](ServerGameObject* obj) {
+		if (obj->deleted)
+			return;
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_CREATED);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(obj->blueprint->getFullId());
+			msg.writeUint32(obj->subtype);
+			msg.writeUint32(obj->appearance);
+			send(msg);
+		}
+		if (obj->parent) {
+			NetPacketWriter msg(NETCLIMSG_OBJECT_PARENT_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(obj->parent->id);
+			send(msg);
+		}
+		for (const auto& [item, value] : obj->items) {
+			NetPacketWriter msg(NETCLIMSG_OBJECT_ITEM_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(item);
+			msg.writeFloat(value);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_POSITION_SET);
+			msg.writeUint32(obj->id);
+			msg.writeVector3(obj->position);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_ORIENTATION_SET);
+			msg.writeUint32(obj->id);
+			msg.writeVector3(obj->orientation);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_SCALE_SET);
+			msg.writeUint32(obj->id);
+			msg.writeVector3(obj->scale);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_COLOR_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint8((uint8_t)obj->color);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_FLAGS_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint8((uint8_t)obj->flags);
+			send(msg);
+		}
+		if (!obj->name.empty()) {
+			const std::string name = obj->name.substr(0, 200);
+			NetPacketWriter msg(NETCLIMSG_OBJECT_NAME_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint8((uint8_t)name.size());
+			msg.writeString(name);
+			send(msg);
+		}
+		{
+			NetPacketWriter msg(NETCLIMSG_OBJECT_ANIM_SET);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(obj->animationIndex);
+			msg.writeUint32(obj->animationVariant);
+			msg.writeFloat(obj->animStartTime);
+			msg.writeUint8(obj->animClamped);
+			msg.writeUint32(obj->animSynchronizedTask);
+			msg.writeFloat(obj->animSpeed);
+			send(msg);
+		}
+		if (obj->movement.isMoving()) {
+			NetPacketWriter msg(NETCLIMSG_OBJECT_MOVEMENT_STARTED);
+			msg.writeUint32(obj->id);
+			msg.writeVector3(obj->movement.getSource());
+			msg.writeVector3(obj->movement.getDestination());
+			msg.writeFloat(obj->movement.getStartTime());
+			msg.writeFloat(obj->movement.getSpeed());
+			send(msg);
+		}
+		if (obj->trajectory.isMoving()) {
+			NetPacketWriter msg(NETCLIMSG_OBJECT_TRAJECTORY_STARTED);
+			msg.writeValues(obj->id, obj->trajectory.initialPosition(), obj->trajectory.initialVelocity(), obj->trajectory.startTime());
+			send(msg);
+		}
+		if (obj->reportedCurrentOrder != -1) {
+			NetPacketWriter msg(NETCLIMSG_CURRENT_ORDER_REPORT);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(obj->reportedCurrentOrder);
+			send(msg);
+		}
+		for (const auto& r : obj->cityRectangles) {
+			NetPacketWriter msg(NETCLIMSG_CITY_RECTANGLE_ADDED);
+			msg.writeValues(obj->id, r.xStart, r.yStart, r.xEnd, r.yEnd);
+			send(msg);
+		}
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				sendObject(child->dyncast<ServerGameObject>());
+	};
+	sendObject(getLevel()->dyncast<ServerGameObject>());
+	for (const auto& [pair, status] : diplomaticStatuses) {
+		NetPacketWriter msg(NETCLIMSG_DIPLOMATIC_STATUS_SET);
+		msg.writeUint32(pair.first);
+		msg.writeUint32(pair.second);
+		msg.writeUint8((uint8_t)status);
+		send(msg);
+	}
+	for (const auto& [alias, objects] : aliases)
+		for (const auto& ref : objects) {
+			NetPacketWriter msg(NETCLIMSG_ALIAS_ASSIGNED);
+			msg.writeValues(alias, ref.objid);
+			send(msg);
+		}
+	// the levelled ground: the vertices of each height together, 50 to a packet
+	if (terrain) {
+		std::map<float, std::vector<int>> byHeight;
+		for (int i : levelledVertices)
+			byHeight[terrain->heightSteps(i)].push_back(i);
+		for (const auto& [steps, list] : byHeight)
+			for (size_t first = 0; first < list.size(); first += 50) {
+				const size_t n = std::min<size_t>(50, list.size() - first);
+				NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
+				packet.writeUint32((uint32_t)n);
+				packet.writeFloat(steps);
+				for (size_t k = 0; k < n; k++)
+					packet.writeUint32((uint32_t)list[first + k]);
+				send(packet);
+			}
+	}
+	{
+		NetPacketWriter msg{ NETCLIMSG_GAME_SPEED_CHANGED };
+		msg.writeFloat(timeManager.timeSpeed);
+		send(msg);
+	}
+	{
+		NetPacketWriter msg(NETCLIMSG_TIME_SYNC);
+		msg.writeUint32(timeManager.psCurrentTime);
+		msg.writeUint8(timeManager.paused);
+		send(msg);
+	}
+	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
+	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
+		clientInfos[it - clientLinks.begin()].awaitingState = false;
 }
 
 void Server::tick()
@@ -2240,6 +2611,14 @@ void Server::network()
 				if (type != NETSRVMSG_HELLO && type != NETSRVMSG_LOADING_STAGE)
 					continue;
 			}
+			// in a running game, a guest with no player (a spectator, one choosing its place, one
+			// turned away) only joins, talks and reports its loading
+			if (clientIndex > 0 && gameSet && getLevel() && !clientPlayerObjects[clientIndex]
+				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
+				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT)
+				continue;
+			if (clientIndex > 0 && clientInfos[clientIndex].refused)
+				continue;
 			// the messages that change the game are recorded (not the joining, the lobby, the
 			// loading stages)
 			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
@@ -2303,8 +2682,64 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				break;
 			}
 			case NETSRVMSG_LOBBY_HELLO: {
-				clientInfos[clientIndex].name = br.readStringZ();
-				printf("Lobby: %s joined\n", clientInfos[clientIndex].name.c_str());
+				// the name, then the password (a guest without one sends only its name)
+				const std::string name = br.readStringZ();
+				const size_t at = 2 + name.size();
+				const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
+				if (clientIndex > 0 && !password.empty() && given != password) {
+					refuseClient(clientIndex, "Wrong password");
+					break;
+				}
+				clientInfos[clientIndex].name = name;
+				printf("Lobby: %s joined\n", name.c_str());
+				// a running game: the host sends it the game's state and its places
+				// (QuickStartMenu::joinRunningGame)
+				if (clientIndex > 0 && gameSet && getLevel() && !replay)
+					clientInfos[clientIndex].joinedRunning = true;
+				break;
+			}
+			case NETSRVMSG_TAKE_SEAT: {
+				const uint32_t id = br.readUint32();
+				ClientInfo& info = clientInfos[clientIndex];
+				if (clientIndex == 0 || player || info.spectator || !getLevel())
+					break;
+				if (id == 0) {
+					if (allowSpectators && spectatorCount() < maxSpectators)
+						makeSpectator(clientIndex);
+					else
+						offerSeats(clientIndex);
+					break;
+				}
+				const std::vector<ServerGameObject*> seats = freeSeats();
+				auto seat = std::find_if(seats.begin(), seats.end(), [id](ServerGameObject* p) { return p->id == id; });
+				if (seat == seats.end()) {
+					// taken meanwhile: the places as they are now
+					offerSeats(clientIndex);
+					break;
+				}
+				ServerGameObject* taken = *seat;
+				// an AI's player goes back to a human's blueprint, its AI stopped
+				const std::string& bp = taken->blueprint->name;
+				if (bp.size() > 10 && StrCICompare(std::string_view(bp).substr(bp.size() - 10), " Kingmaker") == 0) {
+					auto hb = humanBlueprints.find(taken->id);
+					const GameObjBlueprint* human = hb != humanBlueprints.end() ? hb->second
+						: gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Human Player");
+					if (human)
+						taken->convertTo(human);
+					taken->aiController = AIController(taken);
+				}
+				humanBlueprints.erase(taken->id);
+				setClientPlayerControl(clientIndex, taken->id);
+				if (!info.name.empty())
+					taken->setName(info.name);
+				NetPacketWriter cam{ NETCLIMSG_SNAP_CAMERA_POSITION };
+				cam.writeVector3(taken->playerStartCameraPosition);
+				cam.writeVector3(taken->playerStartCameraOrientation);
+				sendToClient(clientIndex, cam);
+				printf("Multiplayer: client %d took player %u\n", clientIndex, taken->id);
+				NetPacketWriter chat(NETCLIMSG_TEST);
+				chat.writeStringZ(info.name.substr(0, 150) + " joined the game");
+				sendToAll(chat);
 				break;
 			}
 			case NETSRVMSG_LOBBY_REQUEST: {
@@ -2353,6 +2788,9 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				break;
 			}
 			case NETSRVMSG_START_LEVEL: {
+				// the host's (the debugger's button), not a guest's
+				if (clientIndex != 0)
+					break;
 				startLevel();
 				break;
 			}

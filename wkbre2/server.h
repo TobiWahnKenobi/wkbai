@@ -160,6 +160,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		SrvGORef lastStampdown;
 		std::vector<SrvGORef> unitsForNewFormation;
 		int loadingStage = 0; // NETSRVMSG_LOADING_STAGE, 0: none reported
+		bool spectator = false; // it watches (NETCLIMSG_SPECTATOR): its orders are ignored
+		bool refused = false; // turned away (NETCLIMSG_JOIN_REFUSED): the host disconnects it
+		bool joinedRunning = false; // it joined the running game: sent its state and the places
+		bool awaitingState = false; // it joined the running game: no broadcasts before its state
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -265,6 +269,39 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void addClient(NetLink* link);
 	void removeClient(NetLink* link);
 
+	// Multiplayer: an AI General takes over the player of a guest who leaves the game: "aiTakeOver"
+	bool aiTakeOver = true;
+	// guests with no position watch the game (spectators), at most maxSpectators of them
+	bool allowSpectators = false;
+	int maxSpectators = 4;
+	// the password a guest has to give (NETSRVMSG_LOBBY_HELLO); empty: none
+	std::string password;
+	// the players a human whose client left played, before an AI General took them over
+	std::map<uint32_t, const GameObjBlueprint*> humanBlueprints;
+	// a running game's state, for a guest who joins it: every object with what the clients
+	// know of it, the diplomacy, the aliases, the levelled ground, the time
+	void sendStateTo(NetLink* link);
+	// the players a guest who joins the running game can take: those an AI plays and those
+	// whose human left
+	std::vector<ServerGameObject*> freeSeats();
+	int spectatorCount() const;
+	// the running game's places to the client (NETCLIMSG_SEATS), or it is turned away when there
+	// are none and it can't watch
+	void offerSeats(int clientIndex);
+	void refuseClient(int clientIndex, const std::string& reason);
+	// the client watches the game, through the host's player's eyes
+	void makeSpectator(int clientIndex);
+	// an AI General plays the player from now on ("Setup My AI Player Stuff" starts its AI)
+	// (general: that one, else a random one; returns the one chosen)
+	const GameObjBlueprint* takeOverByAI(ServerGameObject* player, const GameObjBlueprint* general = nullptr);
+	// a message to one client (none in a replay to the recorded clients beyond its viewer)
+	void sendToClient(int clientIndex, const NetPacketWriter& packet);
+	// a client that left a running game: its player's control goes, an AI takes it over if
+	// takeOver; recorded ('R'), so that a replay does the same
+	void clientLeftGame(size_t clientIndex, bool takeOver);
+	// the vertices levelTerrainUnder changed (for sendStateTo)
+	std::set<int> levelledVertices;
+
 	void syncTime();
 
 	void setClientPlayerControl(int clientIndex, uint32_t playerObjId);
@@ -312,7 +349,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// same order plays the same game (the AIs included).
 	struct Recording {
 		// 'S' <ms> <paused> <count>: count simulate() calls with the clock moved by ms each;
-		// 'M' <client> <length> <bytes>: a client message
+		// 'M' <client> <length> <bytes>: a client message; 'R' <client> <takeover>: a client left
 		FILE* file = nullptr;
 		uint32_t runMs = 0, runCount = 0;
 		bool runPaused = false;
@@ -331,7 +368,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// a recording being played: its events, where it is, how many calls of the current run are
 	// left; replayPaused: the viewer's pause (the recorded pauses are part of the events)
 	struct Replay {
-		struct Event { char type; uint32_t ms = 0; bool paused = false; uint32_t count = 0; int client = 0; std::string data; };
+		struct Event { char type; uint32_t ms = 0; bool paused = false; uint32_t count = 0; int client = 0; std::string data; bool takeOver = false; };
 		std::vector<Event> events;
 		size_t next = 0;
 		uint32_t leftInRun = 0;

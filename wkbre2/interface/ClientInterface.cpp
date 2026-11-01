@@ -838,7 +838,7 @@ void ClientInterface::prewarmLevel()
 bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
-	return g_renderSettings.fogOfWar && !editorOn && !replayMode && client->clientPlayer && client->getLevel();
+	return g_renderSettings.fogOfWar && !editorOn && !replayMode && !client->spectator && client->clientPlayer && client->getLevel();
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
@@ -941,7 +941,7 @@ void ClientInterface::drawChronicle()
 {
 	// a replay shows everyone and everything; a game the player's own statistics and its allies',
 	// and the events it saw (with fog of war; without, all events)
-	const bool all = replayMode;
+	const bool all = replayMode || client->spectator;
 	chronicle.update(client, (all || !fogOfWarOn()) ? nullptr : &fogOfWar);
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
 	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;

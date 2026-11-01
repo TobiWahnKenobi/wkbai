@@ -262,10 +262,13 @@ local function textField(state, x, y, w, h, refused, maxLength)
 	local th = fontHeight(FONT_TEXT, S)
 	pushClip(x, y, w, h)
 	local tx, ty = x + L(8), y + (h - th) / 2
+	-- a password shows as stars
+	local shown = state.text
+	if state.masked then shown = string.gsub(state.text, "[%z\1-\127\194-\244][\128-\191]*", "*") end
 	-- the end of a long text stays in view
-	local tw = textWidth(FONT_TEXT, state.text, S)
+	local tw = textWidth(FONT_TEXT, shown, S)
 	if tw > w - L(20) then tx = x + w - L(12) - tw end
-	drawText(FONT_TEXT, tx, ty, state.text, YELLOW, S)
+	drawText(FONT_TEXT, tx, ty, shown, YELLOW, S)
 	if focused and math.floor(getTime() * 2) % 2 == 0 then
 		drawRect(tx + tw + L(1), ty + L(2), L(2), th - L(4), YELLOW)
 	end
@@ -997,6 +1000,7 @@ local SETTINGS = {
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
+	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4,
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1137,6 +1141,22 @@ local function settingsTab()
 	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
 	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
+	-- wkbre2's own, multiplayer: an AI General plays on for a guest who leaves; guests with no
+	-- position (and ones who join the running game) may watch, up to a number
+	if skirmish.multiplayer then
+		if roundButton(X(200), Y(894), L(52), s.aiTakeOver ~= 0, true) then s.aiTakeOver = (s.aiTakeOver ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, X(264), Y(912), "AI takes over players who leave", WHITE, S)
+		if roundButton(X(200), Y(970), L(52), s.allowSpectators ~= 0, true) then s.allowSpectators = (s.allowSpectators ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, X(264), Y(988), "Allow spectators", WHITE, S)
+		if s.allowSpectators ~= 0 then
+			drawText(FONT_LIST, X(520), Y(988), "at most", WHITE, S)
+			local down = stepperButton("Minus", "maxSpectators-", X(610), Y(970), L(52))
+			if down > 0 then s.maxSpectators = math.max(1, s.maxSpectators - down) end
+			centredText(FONT_LIST, tostring(math.floor(s.maxSpectators)), X(666), Y(970), L(80), L(52), WHITE)
+			local up = stepperButton("Plus", "maxSpectators+", X(750), Y(970), L(52))
+			if up > 0 then s.maxSpectators = math.min(12, s.maxSpectators + up) end
+		end
+	end
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
@@ -1222,12 +1242,15 @@ local function drawLobby(multiplayer)
 	end
 	canStart = canStart and humans == 1
 	if multiplayer then
-		-- every guest needs a position
+		-- every guest needs a position, or watches (spectators allowed, up to their number)
+		local unplaced = 0
 		for _, g in ipairs(getLobbyGuests()) do
 			local placed = false
 			for _, slot in ipairs(skirmish.slots) do if slot.type == "guest" and slot.guest == g.id then placed = true end end
-			if not placed then canStart = false end
+			if not placed then unplaced = unplaced + 1 end
 		end
+		local s = skirmish.settings
+		if unplaced > 0 and not (s.allowSpectators ~= 0 and unplaced <= s.maxSpectators) then canStart = false end
 		sendLobbyState()
 	end
 	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
@@ -1264,15 +1287,42 @@ Screens.mpguest = {
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
 		panel(X(8), Y(80), L(1907), L(988), true)
 		local status = getLobbyStatus()
-		local statusText = (status == "connected") and ("Connected as " .. getPlayerName())
+		local refused = string.match(status, "^refused:(.*)$")
+		local statusText = (status == "connected" or status == "seats") and ("Connected as " .. getPlayerName())
 			or (status == "connecting") and ("Connecting to " .. getJoinAddress() .. " ...")
+			or refused and ("The host turned you away: " .. refused)
 			or ("No connection to " .. getJoinAddress())
-		drawText(FONT_TEXT, X(28), Y(92), statusText, status == "lost" and 0xFF6060FF or WHITE, S)
+		drawText(FONT_TEXT, X(28), Y(92), statusText, (status == "lost" or refused) and 0xFF6060FF or WHITE, S)
 		local state = getLobbyState()
 		local lines = {}
 		for line in string.gmatch(state .. "\n", "(.-)\n") do lines[#lines + 1] = line end
 		panel(X(20), Y(130), L(930), L(870))
-		if state ~= "" then
+		if status == "seats" then
+			-- the game is running: a place an AI plays or whose human left, or watching
+			drawText(FONT_TEXT, X(32), Y(140), lines[1] or "", YELLOW, S)
+			drawText(FONT_LIST, X(32), Y(180), "Choose a place in the game:", WHITE, S)
+			local row, watch = 0, 0
+			for i = 2, #lines do
+				local kind, name, colour, team, id = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)|(%d+)$")
+				if kind == "A" or kind == "D" then
+					local ry = Y(210) + row * L(26)
+					row = row + 1
+					if hovered(X(28), ry, L(900), L(24)) then
+						drawImage(ART.listRollover, X(28), ry, L(900), L(22))
+						if mouse.released then request("take_seat", id) end
+					end
+					drawImage(colourSwatch(tonumber(colour)), X(36), ry + L(4), L(36), L(14))
+					drawText(FONT_LIST, X(84), ry + L(2), name .. (kind == "A" and "  (AI General)" or "  (left the game)"), YELLOW, S)
+				end
+				local n = string.match(lines[i], "^S|(%d+)$")
+				if n then watch = tonumber(n) end
+			end
+			if row == 0 then drawText(FONT_LIST, X(32), Y(210), "No place is free.", GREY, S) end
+			if watch > 0 then
+				if button("Watch the game", X(32), Y(940), L(300), L(28)) then request("take_seat", "0") end
+				drawText(FONT_LIST, X(350), Y(946), watch .. " spectator place" .. (watch == 1 and "" or "s") .. " free", GREY, S)
+			end
+		elseif state ~= "" then
 			drawText(FONT_TEXT, X(32), Y(140), lines[1] or "", YELLOW, S)
 			drawText(FONT_LIST, X(32), Y(180), "#  " .. T("FRONT_END_CHAT_PLAYER"), WHITE, S)
 			drawText(FONT_LIST, X(640), Y(180), T("FRONT_END_CHAT_COLOUR"), WHITE, S)
@@ -1821,7 +1871,7 @@ Screens.mpload = {
 	onEscape = function() request("stop_hosting"); pop() end,
 }
 
-local mpName, mpAddress = { text = "" }, { text = "" }
+local mpName, mpAddress, mpPassword = { text = "" }, { text = "" }, { text = "", masked = true }
 local mpState = { tab = 1, saves = { selected = 0, scroll = 0 } }
 Screens.multiplayer = {
 	background = sunsetBackground,
@@ -1850,10 +1900,15 @@ Screens.multiplayer = {
 		textField(mpName, X(80), Y(966), L(360), L(28), "|", 24)
 		drawText(FONT_LIST, X(470), Y(972), "Host address", WHITE, S)
 		local enterJoin = textField(mpAddress, X(580), Y(966), L(420), L(28), " ", 64)
+		-- a game created with a password takes only guests who give it (empty: anyone)
+		drawText(FONT_LIST, X(1030), Y(972), "Password", WHITE, S)
+		textField(mpPassword, X(1130), Y(966), L(300), L(28), "", 32)
 		local name = string.match(mpName.text, "^%s*(.-)%s*$")
 		local function remember()
 			request("player_name", name)
 			request("join_address", mpAddress.text)
+			request("host_password", mpPassword.text)
+			request("join_password", mpPassword.text)
 		end
 		if button(T("FRONT_END_MULTIPLAYER_BUTTON_CREATE"), X(1468), Y(1052), L(210), L(24), chosen ~= nil and name ~= "") then
 			remember()

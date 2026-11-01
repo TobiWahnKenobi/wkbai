@@ -156,6 +156,7 @@ void Client::tick()
 			case NETCLIMSG_CONTROL_PLAYER: {
 				const uint32_t playerId = br.readUint32();
 				clientPlayer = playerId;
+				awaitingSeat = false;
 				printf("Client: controlling player %u\n", playerId);
 				break;
 			}
@@ -665,6 +666,28 @@ void Client::tick()
 				}
 				break;
 			}
+			case NETCLIMSG_JOIN_REFUSED: {
+				refusedReason = br.readStringZ();
+				printf("Client: the host turned us away: %s\n", refusedReason.c_str());
+				break;
+			}
+			case NETCLIMSG_SEATS: {
+				const uint8_t part = br.readUint8(), parts = br.readUint8();
+				if (part == 0)
+					seatsParts.clear();
+				seatsParts += br.readStringZ();
+				if (part + 1 == parts) {
+					seats = std::move(seatsParts);
+					awaitingSeat = true;
+				}
+				break;
+			}
+			case NETCLIMSG_SPECTATOR: {
+				spectator = br.readUint8() != 0;
+				awaitingSeat = false;
+				printf("Client: watching the game\n");
+				break;
+			}
 			case NETCLIMSG_LOBBY_STATE: {
 				const uint8_t part = br.readUint8(), parts = br.readUint8();
 				if (part == 0)
@@ -693,9 +716,17 @@ void Client::tick()
 	}
 }
 
-void Client::sendLobbyHello(const std::string& name) {
+void Client::sendLobbyHello(const std::string& name, const std::string& password) {
 	NetPacketWriter packet(NETSRVMSG_LOBBY_HELLO);
-	packet.writeStringZ(name);
+	packet.writeStringZ(name.substr(0, 100));
+	if (!password.empty())
+		packet.writeStringZ(password.substr(0, 100));
+	serverLink->send(packet);
+}
+
+void Client::sendTakeSeat(uint32_t playerId) {
+	NetPacketWriter packet(NETSRVMSG_TAKE_SEAT);
+	packet.writeUint32(playerId);
 	serverLink->send(packet);
 }
 

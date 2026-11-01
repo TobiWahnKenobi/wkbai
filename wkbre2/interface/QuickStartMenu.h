@@ -65,6 +65,10 @@ private:
 	uint64_t lobbySentTime = 0;
 	// the guests that have the host's AI General files
 	std::set<NetEnetLink*> generalsSent;
+	// the guests who joined the running game and were sent its state; those turned away
+	std::set<NetEnetLink*> joinsSent, refusedSent;
+	// the password the host asks for (empty: none), the one the guest gives
+	std::string hostPassword, joinPassword;
 	void sendGameSetFiles(NetEnetLink* link);
 	// Guest: the host to join ("address[:port]")
 	std::string joinTarget;
@@ -94,5 +98,6 @@ private:
 	void afterGame(const std::string& leaveAction, const std::string& leaveArg);
 	void netInit();
 	void netHandle();
+	void joinRunningGame();
 	void netDeinit();
 };

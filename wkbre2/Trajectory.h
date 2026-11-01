@@ -15,6 +15,9 @@ public:
 	Vector3 getRotationAngles(float time);
 	void start(const Vector3& initPos, const Vector3& initVel, float startTime);
 	bool isMoving() { return m_started; }
+	Vector3 initialPosition() const { return m_initialPosition; }
+	Vector3 initialVelocity() const { return m_initialVelocity; }
+	float startTime() const { return m_startTime; }
 
 private:
 	bool m_started = false;

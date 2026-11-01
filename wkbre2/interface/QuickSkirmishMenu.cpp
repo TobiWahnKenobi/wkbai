@@ -150,6 +150,9 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiFirstBarracks") aiFirstBarracks = value;
 	else if (name == "aiAdapt") aiAdapt = value != 0;
 	else if (name == "recordGame") recordGame = value != 0;
+	else if (name == "aiTakeOver") aiTakeOver = value != 0;
+	else if (name == "allowSpectators") allowSpectators = value != 0;
+	else if (name == "maxSpectators") maxSpectators = std::max(0, value);
 	else if (name == "aiMinPeasants") aiMinPeasants = value;
 	else if (name == "aiSurplusBuildings") aiSurplusBuildings = value;
 	else if (name == "aiSurplusPerBuilding") aiSurplusPerBuilding = (float)value;
@@ -324,6 +327,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				generals.push_back(&playerTypes[i]);
 		}
 
+		// no guest keeps the player the level gave it by its order (one with no position would
+		// control an AI's player): the slots say who plays where
+		for (size_t i = 1; i < server.clientPlayerObjects.size(); i++)
+			server.setClientPlayerControl((int)i, 0);
 		bool humanPlaced = false, guestPlaced = false;
 		std::vector<std::pair<ServerGameObject*, int>> playing; // with their teams
 		for (size_t i = 0; i < players.size(); i++) {
@@ -421,6 +428,9 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiEarlyFarms = aiEarlyFarms;
 	server.aiFirstBarracks = aiFirstBarracks;
 	server.aiAdapt = aiAdapt;
+	server.aiTakeOver = aiTakeOver;
+	server.allowSpectators = allowSpectators;
+	server.maxSpectators = maxSpectators;
 	server.aiMinPeasants = aiMinPeasants;
 	server.aiSurplusBuildings = aiSurplusBuildings;
 	server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;

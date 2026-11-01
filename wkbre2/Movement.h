@@ -17,6 +17,9 @@ public:
 	bool isMoving() const { return m_started; }
 	Vector3 getDirection() const { return (m_destPoint - m_srcPoint).normal2xz(); }
 	Vector3 getDestination() const { return m_destPoint; }
+	Vector3 getSource() const { return m_srcPoint; }
+	float getStartTime() const { return m_startTime; }
+	float getSpeed() const { return m_speed; }
 private:
 	static constexpr float MIN_DISTANCE = 0.01f; // minimal distance to consider movement
 	bool m_started = false;

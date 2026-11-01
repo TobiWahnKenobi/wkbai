@@ -258,10 +258,15 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	else if (request.action == "skirmish_settings")
 		showSkirmishWnd = true;
 	else if (request.action == "host") {
-		// the lobby screen (FrontEndUI.lua) is open: guests can join
+		// the lobby screen (FrontEndUI.lua) is open: guests can join (with the password, if any)
 		netInit();
 		hosting = true;
+		server->password = hostPassword;
 	}
+	else if (request.action == "host_password")
+		hostPassword = request.arg;
+	else if (request.action == "join_password")
+		joinPassword = request.arg;
 	else if (request.action == "stop_hosting")
 		hosting = false;
 	else if (request.action == "kick_guest") {
@@ -452,8 +457,9 @@ void QuickStartMenu::launchGame()
 					printf("connection\n");
 					NetEnetLink* link = new NetEnetLink(eclient, event.peer);
 					client->serverLink = link;
+					enet_peer_timeout(event.peer, 32, 20000, 60000);
 					event.peer->data = link;
-					client->sendLobbyHello(playerName());
+					client->sendLobbyHello(playerName(), joinPassword);
 					status = "connected";
 					// test runs: "lobbyTest": { ..., "chat": "<text>" }
 					if (const std::string chat = g_settings.value("lobbyTest", nlohmann::json::object()).value("chat", std::string()); !chat.empty())
@@ -479,21 +485,51 @@ void QuickStartMenu::launchGame()
 				}
 			}
 
-			if (inLobby && client->getLevel()) {
+			// a running game: the guest takes a place (or watches) before it sees the game
+			if (inLobby && client->getLevel() && !client->awaitingSeat) {
 				// the host started: the game
 				inLobby = false;
 				if (fe)
 					fe->close();
 			}
+			// test runs: "lobbyTest": { ..., "takeSeat": n } takes the n-th place offered (0: watches)
+			if (client->awaitingSeat && client->serverLink)
+				if (const nlohmann::json t = g_settings.value("lobbyTest", nlohmann::json::object()); t.contains("takeSeat")) {
+					const int n = t.value("takeSeat", 0);
+					uint32_t id = 0;
+					int k = 0;
+					size_t start = 0;
+					while (n > 0 && start < client->seats.size()) {
+						size_t end = client->seats.find('\n', start);
+						if (end == std::string::npos) end = client->seats.size();
+						const std::string line = client->seats.substr(start, end - start);
+						if (line.size() > 2 && (line[0] == 'A' || line[0] == 'D') && line[1] == '|' && ++k == n)
+							id = (uint32_t)atoi(line.c_str() + line.rfind('|') + 1);
+						start = end + 1;
+					}
+					printf("Lobby test: taking place %d (player %u)\n", n, id);
+					client->sendTakeSeat(id);
+					client->awaitingSeat = false;
+				}
 			if (inLobby && fe) {
 				ImGuiImpl_NewFrame();
-				fe->setLobby({}, client->chatMessages, client->lobbyState, status);
+				// the lobby, or a running game's places ("seats"), or why the host turned it away
+				if (!client->refusedReason.empty())
+					fe->setLobby({}, client->chatMessages, std::string(), "refused:" + client->refusedReason);
+				else if (client->awaitingSeat)
+					fe->setLobby({}, client->chatMessages, client->seats, "seats");
+				else
+					fe->setLobby({}, client->chatMessages, client->lobbyState, status);
 				fe->frame(FrontEnd::Place::MAIN_MENU);
 				for (const FrontEnd::Request& r : fe->takeRequests()) {
 					if (r.action == "chat" && !r.arg.empty() && client->serverLink)
 						client->sendMessage(playerName() + ": " + r.arg);
 					else if (r.action == "lobby_request" && client->serverLink)
 						client->sendLobbyRequest(r.arg);
+					else if (r.action == "take_seat" && client->serverLink) {
+						client->sendTakeSeat((uint32_t)atoi(r.arg.c_str()));
+						client->awaitingSeat = false;
+					}
 					else if (r.action == "leave_lobby")
 						leave = true;
 					else if (r.action == "quit")
@@ -523,6 +559,19 @@ void QuickStartMenu::launchGame()
 		else {
 			leaveAction = cliui.leaveAction;
 			leaveArg = cliui.leaveArg;
+		}
+		// the host is told at once (else it waits for the timeout before an AI takes over)
+		if (NetEnetLink* link = dynamic_cast<NetEnetLink*>(client->serverLink)) {
+			enet_peer_disconnect(link->peer, 0);
+			ENetEvent event;
+			const uint64_t until = SDL_GetTicks() + 1000;
+			bool gone = false;
+			while (!gone && SDL_GetTicks() < until && enet_host_service(eclient, &event, 50) >= 0)
+				if (event.type == ENET_EVENT_TYPE_DISCONNECT)
+					gone = true;
+				else if (event.type == ENET_EVENT_TYPE_RECEIVE)
+					enet_packet_destroy(event.packet);
+			client->serverLink = nullptr;
 		}
 		enet_host_destroy(eclient);
 		enet_deinitialize();
@@ -602,6 +651,14 @@ void QuickStartMenu::launchGame()
 			else {
 				skirmishMenu.applySettings(*server);
 				applySavedPlayers();
+				if (modeChosen == MODE_MULTIPLAYER_HOST)
+					for (size_t i = 1; i < server->clientLinks.size(); i++)
+						if (!server->clientPlayerObjects[i]) {
+							if (server->allowSpectators && server->spectatorCount() < server->maxSpectators)
+								server->makeSpectator((int)i);
+							else
+								server->refuseClient((int)i, "No place in the game");
+						}
 			}
 			// a save game doesn't start its level (startLevel), which puts the cameras: put each
 			// human's at its player's start
@@ -683,7 +740,12 @@ void QuickStartMenu::launchGame()
 				}
 			}
 			client->tick();
+			if (!onServerUi)
+				srvMutex.lock();
 			netHandle();
+			joinRunningGame();
+			if (!onServerUi)
+				srvMutex.unlock();
 			if (g_keyPressed[SDL_SCANCODE_F1]) {
 				onServerUi = !onServerUi;
 				if (onServerUi)
@@ -821,6 +883,12 @@ void QuickStartMenu::updateLobby()
 	}
 	std::vector<FrontEnd::Guest> list;
 	for (NetEnetLink* link : guests) {
+		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
+			ci != server->clientLinks.end() && server->clientInfos[ci - server->clientLinks.begin()].refused) {
+			if (refusedSent.insert(link).second)
+				enet_peer_disconnect_later(link->peer, 0);
+			continue;
+		}
 		auto [it, isNew] = guestIds.try_emplace(link, nextGuestId);
 		if (isNew)
 			nextGuestId++;
@@ -846,6 +914,8 @@ void QuickStartMenu::updateLobby()
 			}
 	for (auto it = generalsSent.begin(); it != generalsSent.end();)
 		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? generalsSent.erase(it) : std::next(it);
+	for (auto it = refusedSent.begin(); it != refusedSent.end();)
+		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? refusedSent.erase(it) : std::next(it);
 	fe->setLobby(std::move(list), client->chatMessages, std::string(), "connected");
 
 	// the lobby for the guests, again every second (for the ones who just joined), in parts
@@ -876,6 +946,8 @@ void QuickStartMenu::lobbyTest()
 		return;
 	if (test.contains("join")) {
 		done = true;
+		// "password": "<text>" given to the host
+		joinPassword = test.value("password", std::string());
 		handleRequest({ "join", test.value("join", std::string("localhost")) });
 		return;
 	}
@@ -916,6 +988,10 @@ void QuickStartMenu::lobbyTest()
 			"barbarianTribes=0", "resourcePoints=2500", "victoryPointLimit=10000", "valhallaModeFood=20000",
 			"unitLives=0", "capturableFlags=4", "aggressiveAI=1", "recordGame=0" })
 			handleRequest({ "skirmish_setting", setting });
+		// "settings": ["allowSpectators=1", ...] besides, "password": "<text>" asked of guests
+		for (const auto& s : test.value("settings", nlohmann::json::array()))
+			handleRequest({ "skirmish_setting", s.get<std::string>() });
+		hostPassword = server->password = test.value("password", std::string());
 		handleRequest({ "slots", slots });
 		handleRequest({ "start_multiplayer", level });
 		return;
@@ -944,6 +1020,8 @@ void QuickStartMenu::lobbyTest()
 		slots += (i == 1) ? "H;c1" : (i == guestSlot) ? "G" + std::to_string(guestIds[guests[0]]) + ";c2" : other;
 	}
 	printf("Lobby test: starting %s with slots %s\n", level.c_str(), slots.c_str());
+	for (const auto& s : test.value("settings", nlohmann::json::array()))
+		handleRequest({ "skirmish_setting", s.get<std::string>() });
 	handleRequest({ "slots", slots });
 	handleRequest({ "start_multiplayer", level });
 }
@@ -977,6 +1055,8 @@ void QuickStartMenu::netHandle()
 			printf("connection\n");
 			NetEnetLink* link = new NetEnetLink(eserver, event.peer);
 			event.peer->data = link;
+			// a guest loading the game set (or a running game's state) answers nothing for a while
+			enet_peer_timeout(event.peer, 32, 20000, 60000);
 			guests.push_back(link);
 			if (server)
 				server->addClient(link);
@@ -997,6 +1077,36 @@ void QuickStartMenu::netHandle()
 		}
 		}
 	}
+}
+
+// The host's game: a guest who said hello to the running game gets the host's AI General files,
+// its places (QuickStartMenu's lock held), then the game's state; one turned away is disconnected
+// once the reason is sent
+void QuickStartMenu::joinRunningGame()
+{
+	if (!enetOn)
+		return;
+	for (NetEnetLink* link : guests) {
+		auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link);
+		if (ci == server->clientLinks.end())
+			continue;
+		const int index = (int)(ci - server->clientLinks.begin());
+		const Server::ClientInfo& info = server->clientInfos[index];
+		if (info.joinedRunning && !info.refused && joinsSent.insert(link).second) {
+			printf("Multiplayer: %s joins the running game\n", info.name.c_str());
+			sendGameSetFiles(link);
+			// the places first: the guest waits for one before it shows the game
+			server->offerSeats(index);
+			if (!server->clientInfos[index].refused)
+				server->sendStateTo(link);
+		}
+		if (server->clientInfos[index].refused && refusedSent.insert(link).second)
+			enet_peer_disconnect_later(link->peer, 0);
+	}
+	for (auto it = joinsSent.begin(); it != joinsSent.end();)
+		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? joinsSent.erase(it) : std::next(it);
+	for (auto it = refusedSent.begin(); it != refusedSent.end();)
+		it = (std::find(guests.begin(), guests.end(), *it) == guests.end()) ? refusedSent.erase(it) : std::next(it);
 }
 
 void QuickStartMenu::netDeinit()
