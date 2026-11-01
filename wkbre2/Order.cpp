@@ -760,6 +760,14 @@ void ObjectReferenceTask::onStart()
 
 void ObjectReferenceTask::onUpdate()
 {
+	// a terminated target is rejected first, so a new one is looked for at once: a gold or
+	// stone outcropping another miner emptied and removed is still there, terminated, in this
+	// miner's update, and with no new target TERMINATE_ENTIRE_ORDER_IF_NO_TARGET sent the miner
+	// idle (half loaded, beside more outcroppings)
+	if (blueprint->rejectTargetIfItIsTerminated) {
+		if (this->target && (this->target->flags & ServerGameObject::fTerminated))
+			this->setTarget(nullptr);
+	}
 	if (!this->target) {
 		this->stopTriggers();
 		ServerGameObject* go = this->order->gameObject;
@@ -767,15 +775,13 @@ void ObjectReferenceTask::onUpdate()
 			go->movementController.stopMovement();
 		if (blueprint->taskTarget) {
 			SrvScriptContext ctx(Server::instance, this->order->gameObject);
-			this->setTarget(blueprint->taskTarget->getFirst(&ctx));
-		}
-	}
-	if (blueprint->rejectTargetIfItIsTerminated) {
-		if (this->target && (this->target->flags & ServerGameObject::fTerminated)) {
-			this->setTarget(nullptr);
-			ServerGameObject* go = this->order->gameObject;
-			if (go->movementController.isMoving())
-				go->movementController.stopMovement();
+			ServerGameObject* found = blueprint->taskTarget->getFirst(&ctx);
+			if (found && blueprint->rejectTargetIfItIsTerminated && (found->flags & ServerGameObject::fTerminated))
+				found = nullptr;
+			this->setTarget(found);
+			// reaching the new one runs the proximity satisfied sequence again (the miner's
+			// "Gold Location" marker moves to it)
+			this->proximitySatisfied = false;
 		}
 	}
 	if (this->target) {

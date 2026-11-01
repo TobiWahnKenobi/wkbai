@@ -1283,14 +1283,23 @@ void Test_RallyPoint()
 }
 
 // Gathering (needs the game data): a peasant chops a tree that has only 12 wood left; once it
-// is gone the peasant should go on with the next tree. Prints "GATHER t=<s> order task target".
+// is gone the peasant should go on with the next tree. Prints "GATHER t=<s> order task target",
+// and when the peasant goes idle what it could have gone on with. Options (environment):
+// WKB_GATHER_KIND=gold|stone, WKB_GATHER_FULL=1, WKB_GATHER_PEASANTS=<n>, WKB_GATHER_SECONDS=<s>,
+// WKB_GATHER_CLEAR=<m>; four miners on a full outcropping went idle when it ran out.
 void Test_Gather()
 {
 	LoadBCP("data.bcp");
 	Server server;
 	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
 	ServerGameObject* player = server.findObject(1027);
-	const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+	// WKB_GATHER_KIND=gold|stone: mine an outcropping with 12 of that left instead
+	const char* kindEnv = getenv("WKB_GATHER_KIND");
+	const std::string kind = kindEnv ? kindEnv : "wood";
+	const char* command = kind == "gold" ? "Mine Gold" : kind == "stone" ? "Mine" : "Chop Tree";
+	const char* resource = kind == "gold" ? "Gold" : kind == "stone" ? "Stone" : "Wood";
+	const int chop = server.gameSet->commands.names.getIndex(command);
+	const int wood = server.gameSet->items.names.getIndex(resource);
 	ServerGameObject* peasant = nullptr;
 	auto find = [&](CommonGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
@@ -1308,7 +1317,8 @@ void Test_Gather()
 	auto findTree = [&](CommonGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
 			for (CommonGameObject* child : children) {
-				if (peasant && child->blueprint->name == "Coniferous Tree") {
+				if (peasant && (kind == "wood" ? child->blueprint->name == "Coniferous Tree"
+					: child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && child->dyncast<ServerGameObject>()->getItem(wood) > 0.0f)) {
 					const float d = (child->position - peasant->position).sqlen2xz();
 					if (d < best) { best = d; tree = child->dyncast<ServerGameObject>(); }
 				}
@@ -1320,18 +1330,53 @@ void Test_Gather()
 		printf("GATHER not set up\n");
 		return;
 	}
-	const int wood = server.gameSet->items.names.getIndex("Wood");
-	tree->setItem(wood, 12.0f);
+	// WKB_GATHER_FULL=1: the target keeps what it has (a longer game, see WKB_GATHER_SECONDS)
+	if (!getenv("WKB_GATHER_FULL"))
+		tree->setItem(wood, kind == "wood" ? 12.0f : 4.0f); // an outcropping is gone before the peasant is full
+	// WKB_GATHER_CLEAR=<m>: the other trees within that many metres of the first are removed
+	// (as chopped ones are), so the next one is farther than the 25 m the chop order looks
+	// around its tree
+	if (const char* e = getenv("WKB_GATHER_CLEAR")) {
+		const float r = (float)atof(e);
+		std::vector<ServerGameObject*> cleared;
+		auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (child != tree && child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && (kind == "wood" ? child->blueprint->name.find("Tree") != std::string::npos : child->dyncast<ServerGameObject>()->getItem(wood) > 0.0f)
+						&& (child->position - tree->position).len2xz() < r)
+						cleared.push_back(child->dyncast<ServerGameObject>());
+					self(child, self);
+				}
+		};
+		collect(server.getLevel(), collect);
+		for (ServerGameObject* obj : cleared) {
+			obj->terminate();
+			obj->destroy();
+		}
+		printf("GATHER removed %zu trees within %.0f m\n", cleared.size(), r);
+	}
 	SrvGORef treeRef = tree;
-	printf("GATHER peasant %u, tree %u at %.0f m\n", peasant->id, tree->id, std::sqrt(best));
+	printf("GATHER %s: peasant %u, target %u (%s) at %.0f m\n", kind.c_str(), peasant->id, tree->id, tree->blueprint->name.c_str(), std::sqrt(best));
 	server.timeManager.unpause();
 	server.startLevel(); // as a game does: the level start reactions register the deliverable buildings
 	server.gameSet->commands[chop].execute(peasant, tree, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
-	const uint64_t start = SDL_GetTicks();
-	int lastPrint = -1;
-	while (SDL_GetTicks() - start < 80000) {
-		server.tick();
-		const int t = (int)((SDL_GetTicks() - start) / 1000);
+	// WKB_GATHER_PEASANTS=<n>: n more peasants beside the first chop the same tree
+	std::vector<SrvGORef> others;
+	if (const char* e = getenv("WKB_GATHER_PEASANTS"))
+		for (int i = 0; i < atoi(e); i++) {
+			ServerGameObject* other = server.spawnObject(peasant->blueprint, player, peasant->position + Vector3((float)(i % 3) * 2.0f, 0, (float)(i / 3) * 2.0f + 2.0f), Vector3(0, 0, 0));
+			server.gameSet->commands[chop].execute(other, tree, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			others.push_back(other);
+		}
+	// WKB_GATHER_SECONDS=<s>: game seconds to run (default 80), simulated without the real clock
+	const int seconds = getenv("WKB_GATHER_SECONDS") ? atoi(getenv("WKB_GATHER_SECONDS")) : 80;
+	server.timeManager.stepMs = 20;
+	int lastPrint = -1, step = 0;
+	while (step * 20 < seconds * 1000) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		const int t = (++step * 20) / 1000;
 		{
 			std::string order = "-", task = "-", target = "-";
 			if (Order* o = peasant->orderConfig.getCurrentOrder()) {
@@ -1348,10 +1393,39 @@ void Test_Gather()
 			if (now != last || t / 10 != lastPrint) {
 				last = now;
 				lastPrint = t / 10;
-				printf("GATHER t=%d %s | first tree %s | wood %.0f\n", t, now.c_str(), treeRef ? "there" : "gone", peasant->getItem(wood));
+				printf("GATHER t=%d %s | first target %s | carrying %.0f\n", t, now.c_str(), treeRef ? "there" : "gone", peasant->getItem(wood));
+				// on going idle: the targets in reach of it
+				static bool reported = false;
+				if (order == "-" && !reported) {
+					reported = true;
+					std::vector<std::pair<float, CommonGameObject*>> inReach;
+					auto list = [&](CommonGameObject* obj, auto& self) -> void {
+						for (const auto& [type, children] : obj->children)
+							for (CommonGameObject* child : children) {
+								if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && child->dyncast<ServerGameObject>()->getItem(wood) > 0.0f)
+									inReach.push_back({ (child->position - peasant->position).len2xz(), child });
+								self(child, self);
+							}
+					};
+					list(server.getLevel(), list);
+					std::sort(inReach.begin(), inReach.end(), [](auto& a, auto& b) { return a.first < b.first; });
+					for (size_t i = 0; i < inReach.size() && i < 4; i++)
+						printf("GATHER   idle: %s #%u at %.0f m (%.0f left, interactable %d)\n", inReach[i].second->blueprint->name.c_str(), inReach[i].second->id, inReach[i].first,
+							inReach[i].second->dyncast<ServerGameObject>()->getItem(wood), (int)inReach[i].second->isInteractable());
+					const char* finderName = kind == "gold" ? "I Need Gold" : kind == "stone" ? "I Need Rock" : "I Need Wood";
+					const int fi = server.gameSet->objectFinderDefinitions.names.getIndex(finderName);
+					if (fi >= 0) {
+						SrvScriptContext ctx(&server, peasant);
+						for (ServerGameObject* found : server.gameSet->objectFinderDefinitions[fi]->eval(&ctx))
+							printf("GATHER   \"%s\" finds %s #%u (interactable %d)\n", finderName, found->blueprint->name.c_str(), found->id, (int)found->isInteractable());
+					}
+				}
 			}
 		}
-		SDL_Delay(16);
+	}
+	for (const SrvGORef& ref : others) {
+		Order* o = ref ? ref->orderConfig.getCurrentOrder() : nullptr;
+		printf("GATHER other %u: %s\n", ref ? ref->id : 0, o ? server.gameSet->orders.getString(o->blueprint->bpid).c_str() : "idle");
 	}
 	fflush(stdout);
 }
@@ -1514,7 +1588,13 @@ static uint64_t DeterminismRun(uint32_t seed)
 	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
 	g_settings["simSeed"] = seed;
 	server.startLevel();
-	const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+	// WKB_GATHER_KIND=gold|stone: mine an outcropping with 12 of that left instead
+	const char* kindEnv = getenv("WKB_GATHER_KIND");
+	const std::string kind = kindEnv ? kindEnv : "wood";
+	const char* command = kind == "gold" ? "Mine Gold" : kind == "stone" ? "Mine" : "Chop Tree";
+	const char* resource = kind == "gold" ? "Gold" : kind == "stone" ? "Stone" : "Wood";
+	const int chop = server.gameSet->commands.names.getIndex(command);
+	const int wood = server.gameSet->items.names.getIndex(resource);
 	std::vector<ServerGameObject*> peasants, trees;
 	auto find = [&](CommonGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
