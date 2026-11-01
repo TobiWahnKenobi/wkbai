@@ -82,4 +82,7 @@ struct WaterDesign {
 	// false (and an error) when the file is there but can't be read; nothing when it isn't there
 	bool load(const std::string& mapFile, std::string& error);
 	bool save(const std::filesystem::path& path) const;
+	// the file's JSON as text, and read from it (a multiplayer host's design for its guests)
+	std::string toText() const;
+	bool fromText(const std::string& text, std::string& error);
 };

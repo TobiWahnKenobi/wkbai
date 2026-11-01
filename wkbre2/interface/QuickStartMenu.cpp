@@ -660,6 +660,8 @@ void QuickStartMenu::launchGame()
 								server->refuseClient((int)i, "No place in the game");
 						}
 			}
+			// the timeline's map regions as this computer has them, for every client
+			server->prepareHostData();
 			// a save game doesn't start its level (startLevel), which puts the cameras: put each
 			// human's at its player's start
 			if (savfile.size() > 4 && StrCICompare(std::string_view(savfile).substr(savfile.size() - 4), ".sav") == 0)

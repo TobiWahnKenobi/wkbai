@@ -62,6 +62,11 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	bool spectator = false;
 	// the host turned it away (NETCLIMSG_JOIN_REFUSED): why
 	std::string refusedReason;
+	// the host's map regions (NETCLIMSG_HOST_DATA), counted up with each that arrives; the parts
+	// of the ones arriving
+	std::string hostRegions;
+	int hostRegionsSerial = 0;
+	std::map<int, std::string> hostDataParts;
 	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
 	struct LoadingRow { int stage, colour; bool own; std::string name; };
 	std::vector<LoadingRow> loadingRows;

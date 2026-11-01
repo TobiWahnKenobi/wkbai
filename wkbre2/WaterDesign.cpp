@@ -70,14 +70,24 @@ bool WaterDesign::load(const std::string& mapFile, std::string& error)
 	char* data;
 	int size;
 	LoadFile(path.c_str(), &data, &size);
-	nlohmann::json j = nlohmann::json::parse(data, data + size, nullptr, false);
+	const std::string text(data, size);
 	free(data);
+	if (!fromText(text, error)) {
+		error = path + ": " + error;
+		return false;
+	}
+	return true;
+}
+
+bool WaterDesign::fromText(const std::string& text, std::string& error)
+{
+	nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
 	if (j.is_discarded() || !j.is_object()) {
-		error = path + ": not JSON";
+		error = "not JSON";
 		return false;
 	}
 	if (j.value("format", "") != "wkbai water") {
-		error = path + ": not a wkbai water file";
+		error = "not a wkbai water file";
 		return false;
 	}
 	try {
@@ -123,7 +133,7 @@ bool WaterDesign::load(const std::string& mapFile, std::string& error)
 		autoWaterfalls = j.value("autoWaterfalls", true);
 	}
 	catch (const std::exception& e) {
-		error = path + ": " + e.what();
+		error = e.what();
 		*this = WaterDesign();
 		return false;
 	}
@@ -131,6 +141,15 @@ bool WaterDesign::load(const std::string& mapFile, std::string& error)
 }
 
 bool WaterDesign::save(const std::filesystem::path& path) const
+{
+	std::error_code ec;
+	std::filesystem::create_directories(path.parent_path(), ec);
+	std::ofstream f(path, std::ios::binary);
+	f << toText() << '\n';
+	return (bool)f;
+}
+
+std::string WaterDesign::toText() const
 {
 	nlohmann::ordered_json j;
 	j["format"] = "wkbai water";
@@ -157,11 +176,6 @@ bool WaterDesign::save(const std::filesystem::path& path) const
 		fs.push_back({ { "from", { f.from.x, f.from.z } }, { "to", { f.to.x, f.to.z } } });
 	j["waterfalls"] = fs;
 	j["autoWaterfalls"] = autoWaterfalls;
-	std::error_code ec;
-	std::filesystem::create_directories(path.parent_path(), ec);
-	std::ofstream f(path, std::ios::binary);
 	// one row of the surface per line, so the file stays readable and diffs well
-	std::string text = j.dump(1);
-	f << text << '\n';
-	return (bool)f;
+	return j.dump(1);
 }

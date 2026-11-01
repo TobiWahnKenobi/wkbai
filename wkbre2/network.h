@@ -85,6 +85,11 @@ enum NetClientMessages {
 	NETCLIMSG_SEATS,
 	// The client watches (a spectator): no player of its own, no fog of war, its orders ignored
 	NETCLIMSG_SPECTATOR,
+	// What the host works out from its own files, that a client's own files could have
+	// otherwise: kind (1: the timeline's map regions, MapRegions' JSON; 2: the map's water
+	// design, WaterDesign's JSON, empty: none), part, parts (16 bits each), length (8 bits),
+	// the bytes
+	NETCLIMSG_HOST_DATA,
 };
 
 enum NetServerMessages {

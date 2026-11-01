@@ -54,6 +54,8 @@ struct ClientInterface {
 	// heights changed by the server (buildings levelling the ground): the terrain renderer is
 	// refreshed, at most every 250 ms
 	bool terrainHeightsChanged = false;
+	// the host's water design came (Client, NETCLIMSG_HOST_DATA): the water made again
+	bool waterDesignChanged = false;
 	uint64_t terrainHeightsRefreshed = 0;
 
 	ClientInterface(Client *client, IRenderer *gfx) : client(client), gfx(gfx), terrainRenderer(nullptr),

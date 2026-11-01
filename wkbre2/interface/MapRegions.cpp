@@ -95,10 +95,15 @@ const MapRegions::Region* MapRegions::at(const Vector3& position) const
 
 bool MapRegions::build(Client* client)
 {
-	Terrain* trn = client ? client->terrain : nullptr;
-	if (!trn || !client->gameSet || !client->getLevel())
+	if (!client || !client->terrain || !client->gameSet || !client->getLevel())
 		return false;
-	const GameSet& gs = *client->gameSet;
+	return build(client->terrain, *client->gameSet, client->getLevel());
+}
+
+bool MapRegions::build(Terrain* trn, const GameSet& gs, CommonGameObject* level)
+{
+	if (!trn || !level)
+		return false;
 	const auto [tw, th] = trn->getNumPlayableTiles();
 	// the trees standing now, per tile
 	std::vector<uint8_t> trees((size_t)tw * th, 0);
@@ -113,7 +118,7 @@ bool MapRegions::build(Client* client)
 				self(o, self);
 			}
 	};
-	walk(client->getLevel(), walk);
+	walk(level, walk);
 
 	// each tile's kind, and the hash of what decides it
 	std::vector<Kind> kinds((size_t)tw * th, Plains);
@@ -324,6 +329,21 @@ bool MapRegions::load(const std::filesystem::path& file, int expectedWidth, int 
 	const bool handMade = j.value("edited", false) && j.value("width", 0) == expectedWidth && j.value("height", 0) == expectedHeight;
 	if (j.value("hash", std::string()) != std::to_string(hash) && !handMade)
 		return false;
+	return read(j);
+}
+
+bool MapRegions::fromText(const std::string& text)
+{
+	const nlohmann::json j = nlohmann::json::parse(text, nullptr, false);
+	if (j.is_discarded() || !j.is_object() || j.value("cell", 0) != CELL)
+		return false;
+	mapName = j.value("map", std::string());
+	hash = std::strtoull(j.value("hash", std::string("0")).c_str(), nullptr, 10);
+	return read(j);
+}
+
+bool MapRegions::read(const nlohmann::json& j)
+{
 	edited = j.value("edited", false);
 	width = j.value("width", 0);
 	height = j.value("height", 0);
@@ -346,6 +366,13 @@ bool MapRegions::load(const std::filesystem::path& file, int expectedWidth, int 
 
 void MapRegions::save(const std::filesystem::path& file) const
 {
+	std::error_code ec;
+	std::filesystem::create_directories(file.parent_path(), ec);
+	std::ofstream(file) << toText();
+}
+
+std::string MapRegions::toText() const
+{
 	nlohmann::json j;
 	j["map"] = mapName;
 	j["hash"] = std::to_string(hash);
@@ -358,9 +385,7 @@ void MapRegions::save(const std::filesystem::path& file) const
 	for (const Region& r : regions)
 		list.push_back({ { "kind", (int)r.kind }, { "kindName", kindName(r.kind) }, { "name", r.name }, { "x", r.centre.x }, { "z", r.centre.z }, { "cells", r.cells } });
 	j["regions"] = list;
-	std::error_code ec;
-	std::filesystem::create_directories(file.parent_path(), ec);
-	std::ofstream(file) << j.dump(1);
+	return j.dump(1);
 }
 
 bool MapRegions::save(const std::string& asMap) const

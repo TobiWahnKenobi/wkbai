@@ -43,7 +43,17 @@ void GameChronicle::update(Client* client, const FogOfWar* fog)
 	if (now + 1.0f < nextSample - 10.0f) {
 		*this = GameChronicle();
 	}
-	if (!regions.ready())
+	// the host's regions (every client the same names); without them (a host that sends none)
+	// the client's own, once the game has run a while
+	if (client->hostRegionsSerial != hostRegionsSerial) {
+		hostRegionsSerial = client->hostRegionsSerial;
+		MapRegions fromHost;
+		if (fromHost.fromText(client->hostRegions)) {
+			regions = std::move(fromHost);
+			printf("Chronicle: %zu map regions from the host, the first %s\n", regions.regions.size(), regions.regions.empty() ? "-" : regions.regions[0].name.c_str());
+		}
+	}
+	if (!regions.ready() && now > 5.0f)
 		regions.build(client);
 	if (now >= nextScan) {
 		nextScan = now + 5.0f;

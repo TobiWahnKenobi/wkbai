@@ -7,8 +7,12 @@
 #include <string>
 #include <vector>
 #include "../util/vecmat.h"
+#include <nlohmann/json_fwd.hpp>
 
 struct Client;
+struct Terrain;
+struct GameSet;
+struct CommonGameObject;
 
 // The map in 40 m cells (8 x 8 tiles), each of the kind most of its tiles are, from the terrain
 // type of its texture (the game set's TERRAIN blueprints: Forest, Swamp, Sand, Mountains, ...),
@@ -29,6 +33,12 @@ struct MapRegions {
 
 	// for the client's map (once, at the start: the trees are those standing then); true if made
 	bool build(Client* client);
+	// the same for a map, its game set and its level (the multiplayer host's server: its guests
+	// take its regions, whatever their own saved\Regions say)
+	bool build(Terrain* trn, const GameSet& gs, CommonGameObject* level);
+	// as saved\Regions' JSON, and read from it (a host's regions; they are not saved)
+	std::string toText() const;
+	bool fromText(const std::string& text);
 	bool ready() const { return !cells.empty(); }
 	// the region at a place, or nullptr
 	const Region* at(const Vector3& position) const;
@@ -57,5 +67,6 @@ private:
 	void updateCentres();
 	static std::filesystem::path fileFor(const std::string& mapName);
 	bool load(const std::filesystem::path& file, int expectedWidth, int expectedHeight);
+	bool read(const nlohmann::json& j);
 	void save(const std::filesystem::path& file) const;
 };

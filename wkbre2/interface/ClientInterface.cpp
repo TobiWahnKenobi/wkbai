@@ -1707,6 +1707,10 @@ void ClientInterface::iter()
 		}
 	}
 	// the ground a building levelled, drawn anew
+	if (waterDesignChanged && terrainRenderer) {
+		waterDesignChanged = false;
+		applyWaterDesign();
+	}
 	if (terrainHeightsChanged && terrainRenderer && SDL_GetTicks() - terrainHeightsRefreshed >= 250) {
 		terrainHeightsChanged = false;
 		terrainHeightsRefreshed = SDL_GetTicks();

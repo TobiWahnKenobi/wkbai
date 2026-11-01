@@ -4,6 +4,7 @@
 
 #define _USE_MATH_DEFINES
 #include "client.h"
+#include "WaterDesign.h"
 #include "server.h"
 #include "network.h"
 #include "gameset/gameset.h"
@@ -664,6 +665,40 @@ void Client::tick()
 						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " stage " + std::to_string(r.stage) + "]";
 					printf("LOADING rows:%s\n", rows.c_str());
 				}
+				break;
+			}
+			case NETCLIMSG_HOST_DATA: {
+				const uint8_t kind = br.readUint8();
+				const uint16_t part = br.readUint16(), parts = br.readUint16();
+				const uint8_t length = br.readUint8();
+				std::string& text = hostDataParts[kind];
+				if (part == 0)
+					text.clear();
+				text += br.readString(length);
+				if (part + 1 != parts)
+					break;
+				if (kind == 1) {
+					hostRegions = std::move(text);
+					hostRegionsSerial++;
+				}
+				else if (kind == 2 && terrain) {
+					// the host's water design: the renderers make the water again if it differs
+					const std::string own = terrain->waterDesign ? terrain->waterDesign->toText() : std::string();
+					if (text != own) {
+						std::string error;
+						auto design = std::make_shared<WaterDesign>();
+						if (text.empty())
+							terrain->waterDesign.reset();
+						else if (design->fromText(text, error))
+							terrain->waterDesign = design;
+						else
+							printf("Client: the host's water design can't be read: %s\n", error.c_str());
+						if (cliInterface)
+							cliInterface->waterDesignChanged = true;
+						printf("Client: the host's water design differs from ours, taken (%zu bytes)\n", text.size());
+					}
+				}
+				hostDataParts.erase(kind);
 				break;
 			}
 			case NETCLIMSG_JOIN_REFUSED: {

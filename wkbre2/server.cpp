@@ -25,6 +25,8 @@
 #include <optional>
 #include <functional>
 #include "util/StriCompare.h"
+#include "WaterDesign.h"
+#include "interface/MapRegions.h"
 
 Server *Server::instance = nullptr;
 
@@ -744,6 +746,8 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 			NetPacketWriter packet(NETCLIMSG_TERRAIN_SET);
 			packet.writeStringZ(mapfp);
 			sendToAll(packet);
+			// the host's water design for the map (a client's own could differ, or be missing)
+			sendHostData(2, this->terrain->waterDesign ? this->terrain->waterDesign->toText() : std::string());
 			auto area = this->terrain->getNumPlayableTiles();
 			this->tiles = std::make_unique<Tile[]>(area.first * area.second);
 			break;
@@ -1979,6 +1983,38 @@ void Server::clientLeftGame(size_t clientIndex, bool takeOver)
 	}
 }
 
+void Server::sendHostData(int kind, const std::string& text, NetLink* only)
+{
+	// in parts of 240 bytes (a packet holds 256)
+	const size_t PART = 240;
+	const size_t parts = std::max<size_t>(1, (text.size() + PART - 1) / PART);
+	if (parts > 65535)
+		return;
+	for (size_t i = 0; i < parts; i++) {
+		const std::string piece = text.substr(i * PART, PART);
+		NetPacketWriter msg(NETCLIMSG_HOST_DATA);
+		msg.writeUint8((uint8_t)kind);
+		msg.writeUint16((uint16_t)i);
+		msg.writeUint16((uint16_t)parts);
+		msg.writeUint8((uint8_t)piece.size());
+		msg.writeString(piece);
+		if (only)
+			only->send(msg);
+		else
+			sendToAll(msg);
+	}
+}
+
+void Server::prepareHostData()
+{
+	MapRegions regions;
+	if (terrain && gameSet && getLevel() && regions.build(terrain, *gameSet, getLevel())) {
+		hostRegionsText = regions.toText();
+		sendHostData(1, hostRegionsText);
+		printf("Host data: %zu map regions (%zu bytes) sent to the clients\n", regions.regions.size(), hostRegionsText.size());
+	}
+}
+
 void Server::sendToClient(int clientIndex, const NetPacketWriter& packet)
 {
 	if (clientIndex >= 0 && (size_t)clientIndex < clientLinks.size() && !(replay && clientIndex > 0))
@@ -2124,6 +2160,7 @@ void Server::sendStateTo(NetLink* link)
 		NetPacketWriter msg(NETCLIMSG_TERRAIN_SET);
 		msg.writeStringZ(PathToUtf8(std::filesystem::path(terrain->filePath)));
 		send(msg);
+		sendHostData(2, terrain->waterDesign ? terrain->waterDesign->toText() : std::string(), link);
 	}
 	// the objects, each after its parent, with what the clients were told of it
 	std::function<void(ServerGameObject*)> sendObject = [&](ServerGameObject* obj) {
@@ -2269,6 +2306,8 @@ void Server::sendStateTo(NetLink* link)
 		msg.writeUint8(timeManager.paused);
 		send(msg);
 	}
+	if (!hostRegionsText.empty())
+		sendHostData(1, hostRegionsText, link);
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;

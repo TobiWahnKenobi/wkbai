@@ -301,6 +301,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void clientLeftGame(size_t clientIndex, bool takeOver);
 	// the vertices levelTerrainUnder changed (for sendStateTo)
 	std::set<int> levelledVertices;
+	// What the host works out from its own files (NETCLIMSG_HOST_DATA), so that every client has
+	// the same: the timeline's map regions (its saved\Regions, or worked out on its map) and the
+	// map's water design. To every client (only: that one); prepareHostData works out the regions
+	// once the game is set up (the trees standing then) and sends them
+	void sendHostData(int kind, const std::string& text, NetLink* only = nullptr);
+	void prepareHostData();
+	std::string hostRegionsText;
 
 	void syncTime();
 

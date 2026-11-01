@@ -48,6 +48,7 @@ struct GameChronicle {
 		std::string title() const; // "Battle of Ergor", "Village founded at Fangorn"
 	};
 	MapRegions regions;
+	int hostRegionsSerial = 0; // the host's regions taken (Client::hostRegionsSerial)
 	std::vector<Event> events;
 
 	// once a frame; the scans themselves run every few game seconds. fog: this client's, or
