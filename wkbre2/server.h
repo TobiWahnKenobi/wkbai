@@ -164,6 +164,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool refused = false; // turned away (NETCLIMSG_JOIN_REFUSED): the host disconnects it
 		bool joinedRunning = false; // it joined the running game: sent its state and the places
 		bool awaitingState = false; // it joined the running game: no broadcasts before its state
+		std::string modManifest, modManifestParts; // its mods (NETSRVMSG_MOD_MANIFEST)
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -276,6 +277,17 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	int maxSpectators = 4;
 	// the password a guest has to give (NETSRVMSG_LOBBY_HELLO); empty: none
 	std::string password;
+	// Which mods guests may have ("modPolicy"): every one must have the host's game logic (the
+	// same mods with logic files: ModManifest, CompareModLogic), and
+	enum ModPolicy { MODS_MATCH = 0, // that is all (mods that only change looks are free)
+		MODS_SEND = 1, // the host sends its logic mods to a guest who lacks them, for this game
+		MODS_NONE = 2, // no mods at all, of any kind
+		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
+	int modPolicy = MODS_MATCH;
+	// a guest's mods checked at its hello: "" when it may join; a reason to turn it away; or
+	// "sent" when the host sent it its mods (it says hello again with them mounted)
+	std::string checkGuestMods(int clientIndex);
+	void sendModsTo(int clientIndex);
 	// the players a human whose client left played, before an AI General took them over
 	std::map<uint32_t, const GameObjBlueprint*> humanBlueprints;
 	// a running game's state, for a guest who joins it: every object with what the clients

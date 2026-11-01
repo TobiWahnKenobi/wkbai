@@ -4,6 +4,7 @@
 
 #include "wkbre2.h"
 #include "file.h"
+#include <functional>
 #include "util/util.h"
 #include <algorithm>
 #include <chrono>
@@ -413,6 +414,8 @@ bool HasBcpExtension(const std::filesystem::path& path)
 struct FileSource {
 	std::string description;
 	virtual ~FileSource() = default;
+	// every file it has: its game path ("dir\\file") and timestamp
+	virtual void forEachFile(const std::function<void(const std::string&, uint64_t)>& f) = 0;
 	// True if the source has the file; also returns its timestamp (FILETIME)
 	virtual bool find(const char* fn, uint64_t& time) = 0;
 	virtual bool load(const char* fn, char** out, int* outsize, int extraBytes) = 0;
@@ -441,6 +444,13 @@ struct BCPSource : FileSource {
 		};
 		walk(walk, &reader.bcproot);
 		return newest;
+	}
+	void forEachFile(const std::function<void(const std::string&, uint64_t)>& f) override {
+		auto walk = [&](auto&& self, BCPDirectory* dir, const std::string& prefix) -> void {
+			for (int i = 0; i < dir->nfiles; i++) f(prefix + dir->files[i].name, dir->files[i].time);
+			for (int i = 0; i < dir->ndirs; i++) self(self, &dir->dirs[i], prefix + dir->dirs[i].name + "\\");
+		};
+		walk(walk, &reader.bcproot, std::string());
 	}
 };
 
@@ -484,6 +494,15 @@ struct DirectorySource : FileSource {
 				newest = std::max(newest, FileTimeOf(entry.path()));
 		return newest;
 	}
+	void forEachFile(const std::function<void(const std::string&, uint64_t)>& f) override {
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec))
+			if (entry.is_regular_file(ec)) {
+				std::string rel = PathToUtf8(entry.path().lexically_relative(root));
+				std::replace(rel.begin(), rel.end(), '/', '\\');
+				f(rel, FileTimeOf(entry.path()));
+			}
+	}
 };
 
 // Sources resolved together: per file, the newest timestamp wins (first source on a tie)
@@ -507,6 +526,66 @@ struct FileGroup {
 std::vector<FileGroup> g_fileGroups; // lowest priority first
 std::vector<ModInfo> g_mods;
 bool g_customModOrder = false;
+// data.bcp's logic files (for the manifest)
+int g_baseLogicFiles = 0;
+std::string g_baseLogicHash;
+// a multiplayer game's mods (SetSessionMods)
+std::vector<SessionMod> g_sessionMods;
+bool g_sessionActive = false, g_sessionCustomOrder = false;
+
+bool IsLogicFileImpl(const std::string& path)
+{
+	const size_t dot = path.find_last_of('.');
+	if (dot == std::string::npos)
+		return false;
+	std::string ext = path.substr(dot + 1);
+	for (char& c : ext) c = (char)tolower((unsigned char)c);
+	if (ext == "cpp" || ext == "gsf" || ext == "h" || ext == "lvl" || ext == "sav" || ext == "bcm")
+		return true;
+	if (ext == "txt") {
+		std::string lower = path;
+		for (char& c : lower) c = (char)tolower((unsigned char)c);
+		return lower.rfind("warrior kings game set\\", 0) == 0;
+	}
+	return false;
+}
+
+namespace {
+	uint64_t Fnv1a(const void* data, size_t size, uint64_t h)
+	{
+		const uint8_t* p = (const uint8_t*)data;
+		for (size_t i = 0; i < size; i++) {
+			h ^= p[i];
+			h *= 1099511628211ull;
+		}
+		return h;
+	}
+
+	// the logic files of a set of sources: how many, and the hash of their lowercased paths and
+	// timestamps, in path order
+	void LogicSignature(const std::vector<std::unique_ptr<FileSource>>& sources, size_t first, int& files, std::string& hash)
+	{
+		std::vector<std::pair<std::string, uint64_t>> list;
+		for (size_t s = first; s < sources.size(); s++)
+			sources[s]->forEachFile([&](const std::string& path, uint64_t time) {
+				if (IsLogicFileImpl(path)) {
+					std::string lower = path;
+					for (char& c : lower) c = (char)tolower((unsigned char)c);
+					list.emplace_back(std::move(lower), time);
+				}
+			});
+		std::sort(list.begin(), list.end());
+		uint64_t h = 1469598103934665603ull;
+		for (const auto& [path, time] : list) {
+			h = Fnv1a(path.data(), path.size(), h);
+			h = Fnv1a(&time, sizeof(time), h);
+		}
+		files = (int)list.size();
+		char text[24];
+		snprintf(text, sizeof(text), "%016llx", (unsigned long long)h);
+		hash = text;
+	}
+}
 
 std::filesystem::path ModsPath()
 {
@@ -515,6 +594,12 @@ std::filesystem::path ModsPath()
 
 void AddModSources(const ModInfo& mod, FileGroup& group)
 {
+	if (mod.session) {
+		for (const SessionMod& s : g_sessionMods)
+			if (!s.folder.empty() && "session/" + PathToUtf8(s.folder.filename()) == mod.id)
+				group.sources.push_back(std::make_unique<DirectorySource>(s.folder, mod.id));
+		return;
+	}
 	if (mod.id == "data/") {
 		group.sources.push_back(std::make_unique<DirectorySource>(g_gamePath / "data", "data/"));
 	}
@@ -623,6 +708,11 @@ void CheckModProblems(std::vector<ModInfo>& mods)
 
 } // namespace
 
+bool IsLogicFile(const std::string& path)
+{
+	return IsLogicFileImpl(path);
+}
+
 void InitFileSystem()
 {
 	g_fileGroups.clear();
@@ -635,14 +725,54 @@ void InitFileSystem()
 	for (auto& mod : mods)
 		mod.enabled = !disabled.count(mod.id);
 
+	// each mod's logic files, and data.bcp's
+	for (auto& mod : mods) {
+		FileGroup scratch;
+		AddModSources(mod, scratch);
+		LogicSignature(scratch.sources, 0, mod.logicFiles, mod.logicHash);
+	}
+
+	// a multiplayer game's mods (the host's): the mods with logic files are the session's
+	// (this computer's own or the host's sent ones), in its order; the others as they were
+	bool customOrder = g_settings.find("modLoadOrder") != g_settings.end() && g_settings.find("modLoadOrder")->is_array();
+	if (g_sessionActive) {
+		for (auto& mod : mods)
+			if (mod.logicFiles > 0)
+				mod.enabled = std::any_of(g_sessionMods.begin(), g_sessionMods.end(), [&](const SessionMod& s) { return s.folder.empty() && s.id == mod.id; });
+		std::vector<ModInfo> ordered;
+		for (auto& mod : mods)
+			if (mod.logicFiles == 0)
+				ordered.push_back(mod);
+		for (const SessionMod& s : g_sessionMods) {
+			if (s.folder.empty()) {
+				auto it = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& m) { return m.id == s.id; });
+				if (it != mods.end())
+					ordered.push_back(*it);
+			}
+			else {
+				ModInfo m{ "session/" + PathToUtf8(s.folder.filename()), s.name, "", "the host's mod (this game only)" };
+				m.session = true;
+				FileGroup scratch;
+				scratch.sources.push_back(std::make_unique<DirectorySource>(s.folder, m.id));
+				LogicSignature(scratch.sources, 0, m.logicFiles, m.logicHash);
+				ordered.push_back(std::move(m));
+			}
+		}
+		mods = std::move(ordered);
+		customOrder = g_sessionCustomOrder;
+	}
+
 	FileGroup base{ "data.bcp" };
 	base.sources.push_back(std::make_unique<BCPSource>(std::filesystem::path("data.bcp")));
+	LogicSignature(base.sources, 0, g_baseLogicFiles, g_baseLogicHash);
 
 	auto orderIt = g_settings.find("modLoadOrder");
-	g_customModOrder = orderIt != g_settings.end() && orderIt->is_array();
+	g_customModOrder = customOrder;
 	if (g_customModOrder) {
 		// Mods named in the saved order first, in that order; mods found since keep discovery order at the end
+		// (a session's order is its own)
 		std::vector<ModInfo> ordered;
+		if (!g_sessionActive && orderIt != g_settings.end() && orderIt->is_array())
 		for (const auto& id : *orderIt) {
 			if (!id.is_string()) continue;
 			auto mod = std::find_if(mods.begin(), mods.end(), [&](const ModInfo& m) { return m.id == id.get<std::string>(); });
@@ -683,6 +813,126 @@ void InitFileSystem()
 	printf("File system: data.bcp + %zu mod(s), %s order\n", g_mods.size(), g_customModOrder ? "custom" : "original (newest file wins)");
 	for (const auto& mod : g_mods)
 		printf("  [%c] %s (%s)\n", mod.enabled ? 'x' : ' ', mod.id.c_str(), mod.kind.c_str());
+}
+
+std::string ModManifest()
+{
+	nlohmann::json j;
+	j["base"] = { { "logic", g_baseLogicHash }, { "files", g_baseLogicFiles } };
+	j["customOrder"] = g_customModOrder;
+	nlohmann::json list = nlohmann::json::array();
+	for (const ModInfo& m : g_mods)
+		if (m.enabled)
+			list.push_back({ { "id", m.id }, { "modId", m.modId }, { "name", m.name }, { "version", m.version }, { "logic", m.logicHash }, { "files", m.logicFiles } });
+	j["mods"] = list;
+	return j.dump();
+}
+
+std::string CompareModLogic(const std::string& hostText, const std::string& guestText)
+{
+	const nlohmann::json host = nlohmann::json::parse(hostText, nullptr, false), guest = nlohmann::json::parse(guestText, nullptr, false);
+	if (host.is_discarded() || guest.is_discarded() || !host.is_object() || !guest.is_object())
+		return "the mods couldn't be compared (an older wkbai?)";
+	if (host.value("base", nlohmann::json::object()).value("logic", std::string()) != guest.value("base", nlohmann::json::object()).value("logic", std::string()))
+		return "the game's own data (data.bcp) differs";
+	auto logicMods = [](const nlohmann::json& m) {
+		std::vector<std::pair<std::string, std::string>> list; // logic hash, name
+		for (const auto& mod : m.value("mods", nlohmann::json::array()))
+			if (mod.value("files", 0) > 0)
+				list.emplace_back(mod.value("logic", std::string()), mod.value("name", mod.value("id", std::string())));
+		return list;
+	};
+	auto h = logicMods(host), g = logicMods(guest);
+	// in the original order the newest file wins, whatever the list's order; in a custom order
+	// the order decides when there are two or more
+	const bool ordered = host.value("customOrder", false) && h.size() > 1;
+	if (!ordered) {
+		std::sort(h.begin(), h.end());
+		std::sort(g.begin(), g.end());
+	}
+	if (h == g && (!ordered || guest.value("customOrder", false)))
+		return std::string();
+	std::string missing, extra;
+	for (const auto& m : h)
+		if (std::find(g.begin(), g.end(), m) == g.end())
+			missing += (missing.empty() ? "" : ", ") + m.second;
+	for (const auto& m : g)
+		if (std::find(h.begin(), h.end(), m) == h.end())
+			extra += (extra.empty() ? "" : ", ") + m.second;
+	std::string why;
+	if (!missing.empty())
+		why += "the host's mods you lack (or have another version of): " + missing;
+	if (!extra.empty())
+		why += std::string(why.empty() ? "" : "; ") + "your mods the host doesn't have: " + extra;
+	if (why.empty())
+		why = "the mods are in another order";
+	return why;
+}
+
+std::vector<std::pair<std::string, uint64_t>> ModLogicFileList(const std::string& modSourceId)
+{
+	std::vector<std::pair<std::string, uint64_t>> list;
+	for (const ModInfo& m : g_mods)
+		if (m.id == modSourceId) {
+			FileGroup scratch;
+			AddModSources(m, scratch);
+			std::set<std::string> seen;
+			for (auto& src : scratch.sources)
+				src->forEachFile([&](const std::string& path, uint64_t time) {
+					if (IsLogicFile(path) && seen.insert(path).second)
+						list.emplace_back(path, time);
+				});
+		}
+	return list;
+}
+
+bool LoadModFile(const std::string& modSourceId, const std::string& path, std::string& data)
+{
+	for (const ModInfo& m : g_mods)
+		if (m.id == modSourceId) {
+			FileGroup scratch;
+			AddModSources(m, scratch);
+			// the last source of the mod that has it (as the mod mounts: its archives after its folder)
+			for (auto it = scratch.sources.rbegin(); it != scratch.sources.rend(); ++it) {
+				uint64_t time;
+				if ((*it)->find(path.c_str(), time)) {
+					char* out = nullptr;
+					int size = 0;
+					if (!(*it)->load(path.c_str(), &out, &size, 0))
+						return false;
+					data.assign(out, size);
+					free(out);
+					return true;
+				}
+			}
+		}
+	return false;
+}
+
+void SetFileTimeOf(const std::filesystem::path& path, uint64_t fileTime)
+{
+	using ticks = std::chrono::duration<int64_t, std::ratio<1, 10000000>>;
+	const std::chrono::system_clock::time_point sys{ std::chrono::duration_cast<std::chrono::system_clock::duration>(ticks((int64_t)fileTime - 116444736000000000LL)) };
+	std::error_code ec;
+	std::filesystem::last_write_time(path, std::chrono::clock_cast<std::filesystem::file_time_type::clock>(sys), ec);
+}
+
+void SetSessionMods(const std::vector<SessionMod>& mods, bool customOrder)
+{
+	g_sessionMods = mods;
+	g_sessionCustomOrder = customOrder;
+	g_sessionActive = true;
+}
+
+void ClearSessionMods()
+{
+	g_sessionMods.clear();
+	g_sessionActive = false;
+}
+
+bool HasSessionMods()
+{
+	return g_sessionActive;
 }
 
 const std::vector<ModInfo>& GetMods()

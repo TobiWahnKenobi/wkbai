@@ -72,6 +72,7 @@ private:
 	int aiFirstBarracks = 90; // Server::aiFirstBarracks
 	bool aiAdapt = true; // Server::aiAdapt
 	bool aiTakeOver = true; // Server::aiTakeOver
+	int modPolicy = 0; // Server::modPolicy
 	bool allowSpectators = false; int maxSpectators = 4; // Server::allowSpectators, maxSpectators
 	int aiMinPeasants = 40; // Server::aiMinPeasants
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding

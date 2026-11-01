@@ -67,6 +67,12 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::string hostRegions;
 	int hostRegionsSerial = 0;
 	std::map<int, std::string> hostDataParts;
+	// the host's mods for this game (NETCLIMSG_HOST_DATA 3): the session to mount, JSON; the
+	// folder its sent files went to
+	std::string sessionMods;
+	bool sessionModsReady = false;
+	// this computer's mods (ModManifest), to the host before the hello
+	void sendModManifest();
 	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
 	struct LoadingRow { int stage, colour; bool own; std::string name; };
 	std::vector<LoadingRow> loadingRows;

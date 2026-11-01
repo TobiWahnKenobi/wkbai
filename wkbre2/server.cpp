@@ -2015,6 +2015,91 @@ void Server::prepareHostData()
 	}
 }
 
+std::string Server::checkGuestMods(int clientIndex)
+{
+	const std::string& guestText = clientInfos[clientIndex].modManifest;
+	const nlohmann::json guest = nlohmann::json::parse(guestText, nullptr, false);
+	const std::string hostText = ModManifest();
+	const nlohmann::json host = nlohmann::json::parse(hostText, nullptr, false);
+	auto names = [](const std::vector<std::string>& list) {
+		std::string text;
+		for (const std::string& n : list)
+			text += (text.empty() ? "" : ", ") + n;
+		return text;
+	};
+	if (guest.is_object()) {
+		std::vector<std::string> guestMods, notAllowed;
+		for (const auto& m : guest.value("mods", nlohmann::json::array()))
+			guestMods.push_back(m.value("name", m.value("id", std::string())));
+		if (modPolicy == MODS_NONE && !guestMods.empty())
+			return "This game allows no mods; disable " + names(guestMods);
+		if (modPolicy == MODS_ALLOWED) {
+			std::set<std::string> allowed;
+			for (const auto& m : host.value("mods", nlohmann::json::array())) {
+				allowed.insert(m.value("id", std::string()));
+				allowed.insert(m.value("modId", std::string()));
+			}
+			for (const auto& id : g_settings.value("modAllowList", nlohmann::json::array()))
+				if (id.is_string())
+					allowed.insert(id.get<std::string>());
+			for (const auto& m : guest.value("mods", nlohmann::json::array()))
+				if (!allowed.count(m.value("id", std::string())) && !allowed.count(m.value("modId", std::string())))
+					notAllowed.push_back(m.value("name", m.value("id", std::string())));
+			if (!notAllowed.empty())
+				return "This game allows only the host's mods; disable " + names(notAllowed);
+		}
+	}
+	const std::string why = CompareModLogic(hostText, guestText);
+	if (why.empty())
+		return std::string();
+	// the host's mods sent, once (if they still differ after that, it is turned away)
+	if (modPolicy == MODS_SEND && guest.is_object() && why.find("data.bcp") == std::string::npos && !clientInfos[clientIndex].name.size()) {
+		static std::set<std::pair<NetLink*, std::string>> sent;
+		if (sent.insert({ clientLinks[clientIndex], guestText }).second) {
+			sendModsTo(clientIndex);
+			return "sent";
+		}
+	}
+	return "Your mods differ from the host's: " + why;
+}
+
+void Server::sendModsTo(int clientIndex)
+{
+	const nlohmann::json guest = nlohmann::json::parse(clientInfos[clientIndex].modManifest, nullptr, false);
+	nlohmann::json session;
+	session["customOrder"] = IsCustomModLoadOrder();
+	nlohmann::json list = nlohmann::json::array();
+	size_t files = 0, bytes = 0;
+	int index = 0;
+	NetLink* link = clientLinks[clientIndex];
+	for (const ModInfo& m : GetMods()) {
+		if (!m.enabled || m.logicFiles == 0)
+			continue;
+		// the guest's own copy of it (the same logic files), else the files
+		std::string local;
+		for (const auto& g : guest.value("mods", nlohmann::json::array()))
+			if (g.value("files", 0) > 0 && g.value("logic", std::string()) == m.logicHash)
+				local = g.value("id", std::string());
+		if (!local.empty()) {
+			list.push_back({ { "local", local } });
+			continue;
+		}
+		for (const auto& [path, time] : ModLogicFileList(m.id)) {
+			std::string data;
+			if (!LoadModFile(m.id, path, data))
+				continue;
+			sendHostData(4, std::to_string(index) + "\n" + path + "\n" + std::to_string(time) + "\n" + data, link);
+			files++;
+			bytes += data.size();
+		}
+		list.push_back({ { "sent", index }, { "name", m.name } });
+		index++;
+	}
+	session["mods"] = list;
+	sendHostData(3, session.dump(), link);
+	printf("Mods: sent client %d the host's mods (%zu files, %zu bytes)\n", clientIndex, files, bytes);
+}
+
 void Server::sendToClient(int clientIndex, const NetPacketWriter& packet)
 {
 	if (clientIndex >= 0 && (size_t)clientIndex < clientLinks.size() && !(replay && clientIndex > 0))
@@ -2654,14 +2739,15 @@ void Server::network()
 			// turned away) only joins, talks and reports its loading
 			if (clientIndex > 0 && gameSet && getLevel() && !clientPlayerObjects[clientIndex]
 				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
-				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT)
+				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
+				&& type != NETSRVMSG_MOD_MANIFEST)
 				continue;
 			if (clientIndex > 0 && clientInfos[clientIndex].refused)
 				continue;
 			// the messages that change the game are recorded (not the joining, the lobby, the
 			// loading stages)
 			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
-				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE) {
+				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_MOD_MANIFEST) {
 				recording->flushRun();
 				fputc('M', recording->file);
 				const uint8_t client = (uint8_t)clientIndex;
@@ -2729,12 +2815,34 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 					refuseClient(clientIndex, "Wrong password");
 					break;
 				}
+				// its mods: the host's game logic, and what the host's mod policy allows
+				if (clientIndex > 0) {
+					const std::string why = checkGuestMods(clientIndex);
+					if (why == "sent")
+						break;
+					if (!why.empty()) {
+						refuseClient(clientIndex, why);
+						break;
+					}
+				}
 				clientInfos[clientIndex].name = name;
 				printf("Lobby: %s joined\n", name.c_str());
 				// a running game: the host sends it the game's state and its places
 				// (QuickStartMenu::joinRunningGame)
 				if (clientIndex > 0 && gameSet && getLevel() && !replay)
 					clientInfos[clientIndex].joinedRunning = true;
+				break;
+			}
+			case NETSRVMSG_MOD_MANIFEST: {
+				ClientInfo& info = clientInfos[clientIndex];
+				const uint16_t part = br.readUint16(), parts = br.readUint16();
+				const uint8_t length = br.readUint8();
+				if (part == 0)
+					info.modManifestParts.clear();
+				if (info.modManifestParts.size() < 1000000)
+					info.modManifestParts += br.readString(length);
+				if (part + 1 == parts)
+					info.modManifest = std::move(info.modManifestParts);
 				break;
 			}
 			case NETSRVMSG_TAKE_SEAT: {

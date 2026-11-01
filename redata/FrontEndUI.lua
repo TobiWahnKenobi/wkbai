@@ -1000,7 +1000,7 @@ local SETTINGS = {
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
-	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4,
+	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1148,6 +1148,13 @@ local function settingsTab()
 		drawText(FONT_LIST, X(264), Y(912), "AI takes over players who leave", WHITE, S)
 		if roundButton(X(200), Y(970), L(52), s.allowSpectators ~= 0, true) then s.allowSpectators = (s.allowSpectators ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, X(264), Y(988), "Allow spectators", WHITE, S)
+		-- which mods guests may have: the host's game logic always (mods that change only looks
+		-- are free); the host sends its logic mods; no mods at all; only the host's own mods
+		local MOD_POLICIES = { "Mods: same game logic as the host", "Mods: the host sends its own", "Mods: none allowed", "Mods: only the host's" }
+		if button(MOD_POLICIES[s.modPolicy + 1], X(520), Y(900), L(424), L(34)) then
+			s.modPolicy = (s.modPolicy + 1) % 4
+			request("skirmish_setting", "modPolicy=" .. s.modPolicy)
+		end
 		if s.allowSpectators ~= 0 then
 			drawText(FONT_LIST, X(520), Y(988), "at most", WHITE, S)
 			local down = stepperButton("Minus", "maxSpectators-", X(610), Y(970), L(52))
@@ -1273,7 +1280,11 @@ Screens.skirmish = {
 -- Multiplayer host: the skirmish lobby with the guests who joined and the chat
 Screens.mphost = {
 	background = sunsetBackground,
-	open = function() openLobby(true); lastLobbyText = nil end,
+	open = function()
+		openLobby(true); lastLobbyText = nil
+		-- the host checks joining guests' mods with this while the lobby is open
+		request("skirmish_setting", "modPolicy=" .. skirmish.settings.modPolicy)
+	end,
 	draw = function() drawLobby(true) end,
 	onEscape = function() request("stop_hosting"); pop() end,
 }

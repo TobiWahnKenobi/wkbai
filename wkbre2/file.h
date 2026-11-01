@@ -74,7 +74,40 @@ struct ModInfo {
 	int apiVersion = 0;
 	// Why it may not work, "" if nothing: a needed mod missing or disabled, a newer mod format
 	std::string problem;
+	// Its files that change the game's logic (IsLogicFile: game set scripts, levels, maps, save
+	// games), and a hash of their paths and timestamps; 0 files: it only changes how the game
+	// looks or sounds (meshes, textures, sounds, the UI scripts)
+	int logicFiles = 0;
+	std::string logicHash;
+	// mounted for a multiplayer game only (SetSessionMods): the host's mod as it sent it
+	bool session = false;
 };
+
+// Whether a file (a game path) is part of the game's logic, which every computer in a
+// multiplayer game must have alike: the game set's scripts (.cpp, .gsf, .h, and .txt in the game
+// set), levels and save games (.lvl, .sav) and maps (.bcm)
+bool IsLogicFile(const std::string& path);
+// What this computer's game logic is made of, for multiplayer (and matchmaking listings):
+// { "base": { "logic": hash, "files": n }, "customOrder": bool,
+//   "mods": [ { "id", "modId", "name", "version", "logic", "files" }, ... ] } (the enabled ones,
+// in load order). As JSON text.
+std::string ModManifest();
+// "" when two manifests have the same game logic (the same data.bcp logic and the same mods with
+// logic files, in the same order when that order decides), else what differs, for the player
+std::string CompareModLogic(const std::string& hostManifest, const std::string& guestManifest);
+// A mod's logic files (game path, timestamp), and one of them loaded; by ModInfo::id
+std::vector<std::pair<std::string, uint64_t>> ModLogicFileList(const std::string& modSourceId);
+bool LoadModFile(const std::string& modSourceId, const std::string& path, std::string& data);
+// A multiplayer game's mods (the host's): the mods with logic files are exactly these, in this
+// order - a mod of this computer's (folder empty) or one the host sent (its folder); this
+// computer's mods without logic files stay as the player set them. InitFileSystem mounts them
+// until ClearSessionMods.
+struct SessionMod { std::string id, name; std::filesystem::path folder; };
+void SetSessionMods(const std::vector<SessionMod>& mods, bool customOrder);
+void ClearSessionMods();
+bool HasSessionMods();
+// a file's timestamp (FILETIME, as the file sources report it) set
+void SetFileTimeOf(const std::filesystem::path& path, uint64_t fileTime);
 
 // The mod format this build supports (mod.json "wkbai"; "wkbre2" before the rename): 1 = folders and archives overriding any
 // game file, mod.json, Lua\FrontEnd\*.lua and Lua\InGame\*.lua extending the UI scripts;

@@ -90,6 +90,11 @@ enum NetClientMessages {
 	// design, WaterDesign's JSON, empty: none), part, parts (16 bits each), length (8 bits),
 	// the bytes
 	NETCLIMSG_HOST_DATA,
+	// (NETCLIMSG_HOST_DATA kinds 3 and 4: a joining guest's mods for this game, when the host
+	// sends its mods: 4 is one logic file of a mod the guest lacks, "<mod index>\n<game path>\n
+	// <timestamp>\n" then its bytes; 3, after the files, the mods to mount in order, JSON
+	// { "customOrder", "mods": [ { "local": "<the guest's mod id>" } or { "sent": <index>,
+	// "name" } ] }: the guest mounts them and says hello again)
 };
 
 enum NetServerMessages {
@@ -119,6 +124,9 @@ enum NetServerMessages {
 	// A guest who joined a running game takes a place: the player's id (one NETCLIMSG_SEATS
 	// offered), 0: it watches
 	NETSRVMSG_TAKE_SEAT,
+	// The guest's mods (ModManifest, JSON), before its NETSRVMSG_LOBBY_HELLO: part, parts (16 bits
+	// each), length (8 bits), the bytes
+	NETSRVMSG_MOD_MANIFEST,
 };
 
 struct NetPacketWriter {

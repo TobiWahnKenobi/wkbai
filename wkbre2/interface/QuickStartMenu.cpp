@@ -252,8 +252,11 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 	else if (request.action == "skirmish_setting") {
 		// "<name>=<value>"
 		const size_t eq = request.arg.find('=');
-		if (eq != std::string::npos)
+		if (eq != std::string::npos) {
 			skirmishMenu.setSetting(request.arg.substr(0, eq), atoi(request.arg.c_str() + eq + 1));
+			if (request.arg.substr(0, eq) == "modPolicy")
+				server->modPolicy = atoi(request.arg.c_str() + eq + 1);
+		}
 	}
 	else if (request.action == "skirmish_settings")
 		showSkirmishWnd = true;
@@ -459,6 +462,7 @@ void QuickStartMenu::launchGame()
 					client->serverLink = link;
 					enet_peer_timeout(event.peer, 32, 20000, 60000);
 					event.peer->data = link;
+					client->sendModManifest();
 					client->sendLobbyHello(playerName(), joinPassword);
 					status = "connected";
 					// test runs: "lobbyTest": { ..., "chat": "<text>" }
@@ -485,6 +489,25 @@ void QuickStartMenu::launchGame()
 				}
 			}
 
+			// the host's mods for this game came: mounted (this computer's logic mods out), then
+			// hello again
+			if (client->sessionModsReady && client->serverLink) {
+				client->sessionModsReady = false;
+				const nlohmann::json session = nlohmann::json::parse(client->sessionMods, nullptr, false);
+				std::vector<SessionMod> mods;
+				if (session.is_object())
+					for (const auto& m : session.value("mods", nlohmann::json::array())) {
+						if (m.contains("local"))
+							mods.push_back({ m.value("local", std::string()), std::string(), {} });
+						else if (m.contains("sent"))
+							mods.push_back({ "", m.value("name", std::string("host mod")), g_userPath / "HostMods" / std::to_string(m.value("sent", 0)) });
+					}
+				SetSessionMods(mods, session.is_object() && session.value("customOrder", false));
+				InitFileSystem();
+				printf("Mods: the host's %zu mods mounted for this game\n", mods.size());
+				client->sendModManifest();
+				client->sendLobbyHello(playerName(), joinPassword);
+			}
 			// a running game: the guest takes a place (or watches) before it sees the game
 			if (inLobby && client->getLevel() && !client->awaitingSeat) {
 				// the host started: the game
@@ -575,6 +598,14 @@ void QuickStartMenu::launchGame()
 		}
 		enet_host_destroy(eclient);
 		enet_deinitialize();
+		// the host's mods were for that game only
+		if (HasSessionMods()) {
+			ClearSessionMods();
+			InitFileSystem();
+			std::error_code ec;
+			std::filesystem::remove_all(g_userPath / "HostMods", ec);
+			printf("Mods: this computer's own mods again\n");
+		}
 		// this computer's own AI Generals again
 		g_gameSetFolderOverrides.clear();
 		client->hostFiles.clear();

@@ -5,6 +5,9 @@
 #define _USE_MATH_DEFINES
 #include "client.h"
 #include "WaterDesign.h"
+#include <filesystem>
+#include <fstream>
+#include "file.h"
 #include "server.h"
 #include "network.h"
 #include "gameset/gameset.h"
@@ -681,6 +684,28 @@ void Client::tick()
 					hostRegions = std::move(text);
 					hostRegionsSerial++;
 				}
+				else if (kind == 4) {
+					// one of the host's mod files: under HostMods\<mod index>\, with its timestamp
+					const size_t a = text.find('\n'), b = a == std::string::npos ? a : text.find('\n', a + 1), c = b == std::string::npos ? b : text.find('\n', b + 1);
+					if (c != std::string::npos) {
+						const std::string index = text.substr(0, a), path = text.substr(a + 1, b - a - 1);
+						const uint64_t time = std::strtoull(text.substr(b + 1, c - b - 1).c_str(), nullptr, 10);
+						std::string rel = path;
+						std::replace(rel.begin(), rel.end(), '\\', '/');
+						if (rel.find("..") == std::string::npos && !rel.empty() && rel[0] != '/' && rel.find(':') == std::string::npos
+							&& index.find_first_not_of("0123456789") == std::string::npos) {
+							const std::filesystem::path file = g_userPath / "HostMods" / PathFromUtf8(index) / PathFromUtf8(rel);
+							std::error_code ec;
+							std::filesystem::create_directories(file.parent_path(), ec);
+							std::ofstream(file, std::ios::binary).write(text.data() + c + 1, (std::streamsize)(text.size() - c - 1));
+							SetFileTimeOf(file, time);
+						}
+					}
+				}
+				else if (kind == 3) {
+					sessionMods = std::move(text);
+					sessionModsReady = true;
+				}
 				else if (kind == 2 && terrain) {
 					// the host's water design: the renderers make the water again if it differs
 					const std::string own = terrain->waterDesign ? terrain->waterDesign->toText() : std::string();
@@ -757,6 +782,21 @@ void Client::sendLobbyHello(const std::string& name, const std::string& password
 	if (!password.empty())
 		packet.writeStringZ(password.substr(0, 100));
 	serverLink->send(packet);
+}
+
+void Client::sendModManifest() {
+	const std::string text = ModManifest();
+	const size_t PART = 240;
+	const size_t parts = std::max<size_t>(1, (text.size() + PART - 1) / PART);
+	for (size_t i = 0; i < parts && i < 65535; i++) {
+		const std::string piece = text.substr(i * PART, PART);
+		NetPacketWriter packet(NETSRVMSG_MOD_MANIFEST);
+		packet.writeUint16((uint16_t)i);
+		packet.writeUint16((uint16_t)parts);
+		packet.writeUint8((uint8_t)piece.size());
+		packet.writeString(piece);
+		serverLink->send(packet);
+	}
 }
 
 void Client::sendTakeSeat(uint32_t playerId) {
