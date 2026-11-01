@@ -68,6 +68,7 @@ private:
 	bool aiWaveGather = false; // Server::aiWaveGather
 	bool aiWaveSiege = false; // Server::aiWaveSiege
 	bool aiWaveFormations = true; // Server::aiWaveFormations
+	bool aiFocusFire = true; // Server::aiFocusFire
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

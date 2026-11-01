@@ -1839,7 +1839,7 @@ void Test_AIvsAI()
 				std::string armyList;
 				for (const auto& [name, a] : armies)
 					armyList += " " + name + "=" + std::to_string(a.first) + "/" + std::to_string(a.second);
-				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent);
+				printf("AITEST   armies (count/units):%s; attack waves sent %d, %d units, %d formations, %d focus-fire orders\n", armyList.c_str(), player->aiController.waves, player->aiController.waveUnits, player->aiController.formationsSent, player->aiController.focusOrders);
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{

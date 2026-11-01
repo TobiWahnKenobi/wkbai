@@ -7,6 +7,7 @@
 #include "gameset/finder.h"
 #include "Order.h"
 #include "gameset/command.h"
+#include "NNSearch.h"
 #include <numeric>
 
 // Whether the building offers "Spawn <type>" for a fighter (not a peasant, cart, merchant,
@@ -346,6 +347,85 @@ void AIController::update()
 				continue;
 			}
 			++it;
+		}
+	}
+
+	// ---- Focus fire (the aggressive AI's tactics, not in WKB.exe) ----
+	// Every 2 s, the ranged units of each attacking army shoot together at the weakest enemy
+	// character within 35 m of the army's centre, rather than each at its own: an enemy falls
+	// sooner. Units already attacking it are left alone (a new order restarts the attack).
+	if (Server::instance->aggressiveAI && Server::instance->aiFocusFire && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextFocusFireCheck) {
+		nextFocusFireCheck = Server::instance->timeManager.currentTime + 2.0f;
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int attackOrder = gs->orders.names.getIndex("Attack");
+		const int hp = gs->items.names.getIndex("Hit Points"), missile = gs->items.names.getIndex("Missile Damage");
+		std::vector<ServerGameObject*> armies, todo{ gameObj };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* a = (ServerGameObject*)c;
+					if (a->deleted || a->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
+						continue;
+					if (a->blueprint->name == "Kingmaker Attacking Army")
+						armies.push_back(a);
+					todo.push_back(a);
+				}
+		}
+		for (ServerGameObject* army : armies) {
+			if (attackOrder < 0 || hp < 0 || missile < 0)
+				break;
+			std::vector<ServerGameObject*> shooters;
+			Vector3 centre;
+			int members = 0;
+			auto collect = [&](ServerGameObject* o, auto& self) -> void {
+				for (const auto& [type, children] : o->children)
+					for (CommonGameObject* c : children) {
+						auto* u = (ServerGameObject*)c;
+						if (u->deleted)
+							continue;
+						if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+							centre += u->position;
+							members++;
+							if (u->getItem(missile) > 0.0f)
+								shooters.push_back(u);
+						}
+						else if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+							self(u, self);
+					}
+			};
+			collect(army, collect);
+			if (shooters.size() < 2)
+				continue;
+			centre = centre / (float)members;
+			ServerGameObject* weakest = nullptr;
+			float weakestHp = 0.0f;
+			NNSearch search;
+			search.start(Server::instance, centre, 35.0f);
+			while (ServerGameObject* e = (ServerGameObject*)search.next()) {
+				if (e->deleted || e->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || (e->position - centre).sqlen2xz() > 35.0f * 35.0f)
+					continue;
+				CommonGameObject* owner = e->getPlayer();
+				if (!owner || owner == gameObj || Server::instance->getDiplomaticStatus(owner, gameObj) == 0)
+					continue;
+				const float h = e->getItem(hp);
+				if (h > 0.0f && (!weakest || h < weakestHp)) {
+					weakest = e;
+					weakestHp = h;
+				}
+			}
+			if (!weakest)
+				continue;
+			for (ServerGameObject* u : shooters) {
+				Order* order = u->orderConfig.getCurrentOrder();
+				Task* task = order ? order->getCurrentTask() : nullptr;
+				if (order && order->blueprint == &gs->orders[attackOrder] && task && task->target.get() == weakest)
+					continue;
+				u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, weakest);
+				focusOrders++;
+			}
 		}
 	}
 

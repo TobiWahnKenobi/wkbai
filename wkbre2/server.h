@@ -227,6 +227,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// a Wedge) 50 m short of the target and charge from there, as the original's Siege Armies:
 	// "aiWaveFormations"
 	bool aiWaveFormations = true;
+	// with it, the ranged units of each attacking army shoot at the weakest enemy near it together:
+	// "aiFocusFire"
+	bool aiFocusFire = true;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
 	std::map<uint32_t, int> buildingsDestroyed;
 	// and their hit point capacities summed (with the damage to standing buildings, a steadier
