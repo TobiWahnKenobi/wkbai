@@ -133,11 +133,11 @@ end
 -- Each tube (Tube 1.tga) holds its activity's icon at the right end, the count in cyan, and a red
 -- bar growing from the right with it; rods (Strip 1/2) frame the five.
 local activityRows = {
-	{ "Interface/Icons/SIC_Shop.tga", "Shop Keeper Count", "Gold Miner Count" },
-	{ "Interface/Icons/SIC_Farm.tga", "Number of Farmers" },
-	{ "Interface/Icons/SIC_Chop_Wood.tga", "Wood Chopper Count", "Stone Miner Count" },
-	{ "Interface/Icons/SIC_Build_Civic.tga", "Builder Count" },
-	{ "Interface/InGame/Lazy Peasant.tga", "Idle Peasant Count" },
+	{ "Interface/Icons/SIC_Shop.tga", "Shop Keeper Count", "Gold Miner Count", "Select shop keepers and gold miners" },
+	{ "Interface/Icons/SIC_Farm.tga", "Number of Farmers", nil, "Select farmers" },
+	{ "Interface/Icons/SIC_Chop_Wood.tga", "Wood Chopper Count", "Stone Miner Count", "Select wood choppers and stone miners" },
+	{ "Interface/Icons/SIC_Build_Civic.tga", "Builder Count", nil, "Select builders" },
+	{ "Interface/InGame/Lazy Peasant.tga", "Idle Peasant Count", nil, "Select idle peasants" },
 }
 
 function drawPeasantActivity()
@@ -167,6 +167,12 @@ function drawPeasantActivity()
 		if w > 0 then drawRect(x0 + 250 - w, y + 18, w, 16, 0xFF1010C8) end
 		drawTextColor(x0 + 30, y + 18, text, 0xFFF2E12A)
 		drawImage(x0 + 258, y + 4, 44, 44, row[1])
+		-- the icon selects those peasants (shift: adds them); the click doesn't reach the map
+		local mx, my = getMouseX(), getMouseY()
+		if x0 + 258 <= mx and mx < x0 + 302 and y + 4 <= my and my < y + 48 then
+			setTooltip(row[4])
+			if handleButton() == 1 then selectPeasantsByActivity(i) end
+		end
 	end
 end
 

@@ -333,8 +333,8 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 
 // The original's minimap panel (CMinimapPanel) has four buttons on the arcs around the map:
 // military units (left), civilian units (bottom), resources (right), each toggling that
-// MINIMAP_DISPLAY_CATEGORY on the map, and the peasant activity interface (top, not
-// implemented yet, drawn greyed out). A toggled-off category shows the "Depressed" image.
+// MINIMAP_DISPLAY_CATEGORY on the map, and the peasant activity interface (top). A category
+// shown on the map shows the "Depressed" image (its green rim), a toggled-off one the panel's.
 // Positions in Bottom_Right_Panel.tga found by matching the images against the panel.
 bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 {
@@ -373,13 +373,62 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 			if (g_mousePressed[SDL_BUTTON_LEFT])
 				peasantActivityMode = peasantActivityMode == -1 ? 0 : peasantActivityMode == 0 ? 1 : -1;
 		}
-		const bool depressed = button.category ? (minimapHiddenCategories & button.category) != 0 : peasantActivityMode >= 0;
+		// the "Depressed" image (green-rimmed) shows what is on: a category shown on the map, the
+		// peasant activity interface open
+		const bool depressed = button.category ? (minimapHiddenCategories & button.category) == 0 : peasantActivityMode >= 0;
 		if (depressed) {
 			const ImVec2 p0((float)(panelX + button.x), (float)(panelY + button.y));
 			drawList->AddImage(button.tex, p0, ImVec2(p0.x + button.mask.width, p0.y + button.mask.height));
 		}
 	}
 	return hoveredAny;
+}
+
+// A peasant activity row's icon clicked: the player's peasants doing that activity (by the
+// order the server reports for each, as Server::updatePeasantActivity counts them) become the
+// selection (shift: are added); rows 1-5: shop keepers and gold miners, farmers, wood choppers
+// and stone miners, builders, idle peasants. Returns how many.
+int ClientInterface::selectPeasantsByActivity(int row)
+{
+		const GameSet* gs = client->gameSet.get();
+		ClientGameObject* player = client->clientPlayer.get();
+		if (!gs || !player)
+			return 0;
+		static const char* rowCategories[5][2] = { { "Order Shop Keeping", "Order Gold Mining" }, { "Order Farming", nullptr },
+			{ "Order Wood Chopping", "Order Mining" }, { "Order Build", "Order Repair" }, { nullptr, nullptr } };
+		if (row < 1 || row > 5)
+			return 0;
+		std::set<int> categories;
+		for (const char* name : rowCategories[row - 1])
+			if (name)
+				if (int c = gs->orderCategories.names.getIndex(name); c >= 0)
+					categories.insert(c);
+		const int isPeasant = gs->items.names.getIndex("I Am A Peasant");
+		if (isPeasant < 0)
+			return 0;
+		std::vector<ClientGameObject*> found;
+		auto walk = [&](ClientGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* c : children) {
+					auto* o = (ClientGameObject*)c;
+					if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !(o->flags & ClientGameObject::fTerminated) && o->getItem(isPeasant) > 0.0f) {
+						const int order = o->reportedCurrentOrder;
+						const bool match = row == 5 ? order < 0
+							: order >= 0 && order < (int)gs->orders.size() && categories.count(gs->orders[order].category);
+						if (match)
+							found.push_back(o);
+					}
+					self(o, self);
+				}
+		};
+		walk(player, walk);
+		if (!found.empty()) {
+			if (!g_modShift)
+				selection.clear();
+			for (ClientGameObject* o : found)
+				selection.insert(o);
+		}
+		return (int)found.size();
 }
 
 // The enhanced scene and terrain renderers draw with Diligent directly, so they need the
@@ -1446,6 +1495,19 @@ void ClientInterface::iter()
 			peasantActivityMode = g_settings.value("benchmark", nlohmann::json()).value("peasantActivity", -1);
 		}
 	}
+	// Test runs: "benchmark": { ..., "selectActivity": <row 1-5> } clicks that peasant activity
+	// row's icon once the level has been drawn 120 frames (paused runs too), and prints how many
+	// it selected
+	static int framesForActivity = 0;
+	if (BenchmarkEnabled() && client->getLevel() && ++framesForActivity > 120) {
+		static bool clicked = false;
+		const int row = g_settings.value("benchmark", nlohmann::json()).value("selectActivity", 0);
+		if (!clicked && row > 0) {
+			clicked = true;
+			printf("ACTIVITY row %d selected %d\n", row, selectPeasantsByActivity(row));
+			fflush(stdout);
+		}
+	}
 	// Test runs: "benchmark": { ..., "select": "<blueprint>" } selects the player's first object of that type
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer && selection.empty()) {
 		const std::string name = g_settings.value("benchmark", nlohmann::json()).value("select", std::string());
@@ -1990,6 +2052,7 @@ void ClientInterface::iter()
 			});
 		// the peasant activity interface: -1 closed, 0 the idle bar, 1 all five bars
 		lua.set_function("getPeasantActivityMode", [this]() { return peasantActivityMode; });
+		lua.set_function("selectPeasantsByActivity", [this](int row) { return selectPeasantsByActivity(row); });
 		lua.set_function("getTextWidth",
 			[](const std::string& text) { return (int)ImGui::CalcTextSize(text.c_str()).x; });
 		lua.set_function("getFirstSelection",
