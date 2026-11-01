@@ -40,6 +40,7 @@ Texture2D<float> shadowTexture;
 SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
+Texture2D<float> seaTexture; // per tile: 1 in a sea's open water, 0 elsewhere (lakes; BuildWaterFlow)
 Texture2D riverTexture; // the rivers' coordinates, 4 texels per tile (BuildRiverField)
 Texture2D<float> riverWidth; // and their half width
 Texture2D sceneTexture; // the frame behind the water, for its refraction and reflections (from Low)
@@ -386,6 +387,21 @@ float4 FlowAtTexel(float2 xz)
 	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
 }
 
+// the same for seaTexture
+float SeaAtTexel(float2 xz)
+{
+	float2 g = xz / 5 + TessParams.w - 0.5;
+	int2 i = (int2)floor(g);
+	float2 f = g - i;
+	int2 last = (int2)TessGrid.xy - 1;
+	float a = seaTexture.Load(int3(clamp(i, 0, last), 0)), b = seaTexture.Load(int3(clamp(i + int2(1, 0), 0, last), 0));
+	float c = seaTexture.Load(int3(clamp(i + int2(0, 1), 0, last), 0)), d = seaTexture.Load(int3(clamp(i + int2(1, 1), 0, last), 0));
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+}
+
+// A lake's waves, of the sea's: a short fetch, so a light chop without whitecaps or a swell
+static const float LAKE_WAVES = 0.3;
+
 // lod: 1 where the water is tessellated finest, falling to 0 with the detail (WaterLod)
 // Smooth value noise in 0..1, two channels
 float2 Hash2(float2 p)
@@ -400,7 +416,7 @@ float2 ValueNoise2(float2 p)
 	return lerp(lerp(Hash2(i), Hash2(i + float2(1, 0)), u.x), lerp(Hash2(i + float2(0, 1)), Hash2(i + float2(1, 1)), u.x), u.y);
 }
 
-void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 offset, out float3 normal, out float crest)
+void GerstnerWaves(float2 xz, float depth, float4 flow, float sea, float lod, out float3 offset, out float3 normal, out float crest)
 {
 	// seas and lakes only (rivers get flowing ripples): five long, smooth waves along one steady
 	// wind, fading in from the shore over 6 units of depth and out with the distance (lod).
@@ -411,7 +427,7 @@ void GerstnerWaves(float2 xz, float depth, float4 flow, float lod, out float3 of
 	// k * a * q 0.6): the folds had drawn spikes.
 	const float2 dir = float2(0.8, 0.6);
 	float river = flow.a;
-	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod;
+	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod * lerp(LAKE_WAVES, 1, sea);
 	const float lengths[5] = { 34, 21, 13, 8.5, 5.6 };
 	const float share[5] = { 1, 0.55, 0.33, 0.2, 0.12 };
 	const float turn[5] = { 0, 0.5, -0.6, 1.0, -1.3 };
@@ -486,7 +502,7 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 	float3 offset, n;
 	float crest;
 	o.Base = pos.xz;
-	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), WaterLod(pos), offset, n, crest);
+	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), SeaAtTexel(pos.xz), WaterLod(pos), offset, n, crest);
 	pos += offset;
 	o.Pos = mul(float4(pos, 1), Transform);
 	o.World = pos;
@@ -645,7 +661,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// towards the shore (bands along the depth's contours, as waves follow the bed)
 		float2 sSea = (FlowSlope(ruv * 0.7, off0 * 0.7) * w0 + FlowSlope(ruv * 0.7, off1 * 0.7) * (1 - w0)) * 0.8;
 		swellPhase = input.Depth * 2.2 + GrassParams.z * 1.3;
-		swell = saturate(1 - input.Depth / 5) * saturate(input.Depth * 3) * (1 - river);
+		swell = saturate(1 - input.Depth / 5) * saturate(input.Depth * 3) * (1 - river)
+			* seaTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz); // at sea only
 		sSea -= along * cos(swellPhase) * swell * 0.55;
 		float2 s = lerp(sSea, sRiver, river);
 		slope = s * 0.9 + 1; // as the two-sample sum: centred on 1
@@ -723,11 +740,12 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float4 f = flowTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
 	float2 fdir = f.xy * 2 - 1;
 	float river = f.a;
+	float sea = seaTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
 	// the waves' normal and crest again here, per pixel, from the same function (per vertex
 	// they were faceted)
 	float3 offset, wn;
 	float crest;
-	GerstnerWaves(base, depth, f, WaterLod(input.World), offset, wn, crest);
+	GerstnerWaves(base, depth, f, sea, WaterLod(input.World), offset, wn, crest);
 	// fine ripples on them, carried by the current on rivers: the sparkles and the rivers' look
 	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x * river;
 	const float cycle = 2.0;
@@ -791,10 +809,11 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float foamPatch = smoothstep(0.25, 0.75, ValueNoise2(base / 45 - float2(0.8, 0.6) * GrassParams.z * 0.015 + 9.7).y);
 	// (the crests foam at a height that varies by region too, so the rows of whitecaps differ)
 	float crestAt = lerp(0.66, 0.82, ValueNoise2(base / 57 + 3.3).x);
-	float crestFoam = smoothstep(crestAt, crestAt + 0.2, crest) * smoothstep(0.15, 0.7, noise) * lerp(0.35, 1.2, foamPatch);
+	// (whitecaps and surf at sea only: a lake laps at its shore)
+	float crestFoam = smoothstep(crestAt, crestAt + 0.2, crest) * smoothstep(0.15, 0.7, noise) * lerp(0.35, 1.2, foamPatch) * sea;
 	// the surf: bands that run in with the swell where the waves break, 1.2 to 0.15 units deep,
 	// and the swash at the waterline
-	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth);
+	float surf = saturate((sin(depth * 3 + GrassParams.z * 1.6) - 0.6) * 2.5) * smoothstep(1.2, 0.5, depth) * smoothstep(0.05, 0.15, depth) * sea;
 	float swash = smoothstep(0.25, 0.0, depth);
 	float shoreFoam = max(surf * smoothstep(0.1, 0.7, noise), swash * smoothstep(0.0, 0.6, noise)) * (1 - 0.6 * river);
 	// the rivers' foam: a thin, broken edge along the banks, carried with the current
@@ -1082,6 +1101,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> splatPipeline;
 	RefCntAutoPtr<ITexture> splatDiffuse, splatNormal, splatCorners;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
+	RefCntAutoPtr<ITexture> seaMap; // and where it is a sea's open water
 	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
@@ -1246,6 +1266,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "shadowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL | tessStages, "seaTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverWidth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -1376,7 +1397,10 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	// The water's flow map: one texel per tile
 	{
-		const std::vector<uint8_t> flow = BuildWaterFlow(terrain);
+		const uint64_t buildStart = SDL_GetTicksNS();
+		std::vector<uint8_t> sea;
+		const std::vector<uint8_t> flow = BuildWaterFlow(terrain, &sea);
+		const uint64_t flowDone = SDL_GetTicksNS();
 		TextureDesc fdesc;
 		fdesc.Name = "Water flow";
 		fdesc.Type = RESOURCE_DIM_TEX_2D;
@@ -1391,8 +1415,19 @@ void DiligentEnhancedTerrainRenderer::init()
 		if (!_impl->flowMap)
 			ferr("Diligent: could not create the water flow map.");
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "flowTexture")->Set(_impl->flowMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		TextureDesc sdesc = fdesc;
+		sdesc.Name = "Open sea";
+		sdesc.Format = TEX_FORMAT_R8_UNORM;
+		TextureSubResData ssub{ sea.data(), (Uint64)sdesc.Width };
+		TextureData sdata{ &ssub, 1 };
+		device->CreateTexture(sdesc, &sdata, &_impl->seaMap);
+		if (!_impl->seaMap)
+			ferr("Diligent: could not create the open sea map.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "seaTexture")->Set(_impl->seaMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		std::vector<float> halfWidth;
 		const std::vector<float> field = BuildRiverField(terrain, flow, &halfWidth);
+		printf("Water maps built in %.0f ms (flow %.0f, river coordinates %.0f)\n", (SDL_GetTicksNS() - buildStart) / 1e6,
+			(flowDone - buildStart) / 1e6, (SDL_GetTicksNS() - flowDone) / 1e6);
 		TextureDesc rdesc = fdesc;
 		rdesc.Name = "River coordinates";
 		rdesc.Width = terrain->width * RIVER_FIELD_RES;

@@ -88,7 +88,10 @@ struct TerrainGrassBuilder {
 // band; they flow from their narrow parts into the wide water, faster where narrower. Wide water
 // flows towards its shore (waves rolling in), except off a river's mouth, where the river's
 // water carries on out into it. A body narrow all through flows towards its widest part.
-std::vector<uint8_t> BuildWaterFlow(Terrain* terrain);
+// sea (if given) gets one byte per tile: 255 in the open water of a sea, 0 elsewhere. A sea is
+// wide water that reaches the map's edge; wide water enclosed by land is a lake, also when a
+// river joins it to the sea (the wide water is grouped apart from the rivers).
+std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea = nullptr);
 
 // The rivers' own coordinates (High's river look, from Medium), RIVER_FIELD_RES texels per tile
 // edge, four floats per texel ((x, z) at z * width * RES + x): how far downstream the river's

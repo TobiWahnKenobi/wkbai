@@ -110,6 +110,15 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
+		{
+			MenuOption o;
+			o.id = "waterfalls"; o.page = "lighting"; o.label = "Waterfalls";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "Medium", "High", "Ultra" };
+			o.get = [&rs]() { return (float)rs.waterfalls; };
+			o.set = [&rs](float v) { rs.waterfalls = std::clamp((int)v, 0, 4); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		{
 			MenuOption o;

@@ -40,7 +40,10 @@ struct RenderSettings {
 	// without a GPU that can tessellate), 5 Ultra (finer tessellation farther out, the longest
 	// reflections)
 	int waterQuality = 4;
-	bool waterFlow = true;           // from Low: rivers flowing downstream (a flow map from the map's water)
+	// the waterfalls and the cascades of painted rivers (DiligentWaterfalls), apart from the
+	// water: 0 off, 1 Low, 2 Medium, 3 High, 4 Ultra (High's refraction needs the water from Low)
+	int waterfalls = 3;
+	bool waterFlow = true;          // from Low: rivers flowing downstream (a flow map from the map's water)
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;

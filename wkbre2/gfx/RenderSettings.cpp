@@ -55,6 +55,7 @@ void RenderSettings::load()
 		waterQuality = !g_settings.value<bool>("waterSurface", true) ? 0 : !g_settings.value<bool>("waterDetail", true) ? 1 : def.waterQuality;
 	else
 		waterQuality = def.waterQuality;
+	waterfalls = std::clamp(g_settings.value<int>("waterfalls", def.waterfalls), 0, 4);
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	grass = g_settings.value<bool>("grass", def.grass);
@@ -132,6 +133,7 @@ void RenderSettings::save()
 	g_settings["sky"] = sky;
 	g_settings["cloudShadows"] = cloudShadows;
 	g_settings["waterLevel"] = waterQuality;
+	g_settings["waterfalls"] = waterfalls;
 	g_settings.erase("waterSurface");
 	g_settings.erase("waterDetail");
 	g_settings["waterFlow"] = waterFlow;

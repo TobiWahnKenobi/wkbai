@@ -43,7 +43,8 @@ struct Waterfall {
 std::vector<Waterfall> FindWaterfalls(const Terrain* terrain);
 
 // The waterfalls drawn after the water (DiligentEnhancedTerrainRenderer), by
-// RenderSettings::waterQuality: none on Off and Original; Low a falling sheet of streaked water
+// RenderSettings::waterfalls (its own setting; the refraction needs the water's scene copy, from
+// the water's Low): none when off; Low a falling sheet of streaked water
 // with foam at its foot, and the cascades; Medium also a foam patch on the lower water and a
 // little mist; High the sheet refracting what is behind it, tearing into strands, finer
 // streaks, more mist and some spray; Ultra the finest noise, the sheet swaying, the foam ringed

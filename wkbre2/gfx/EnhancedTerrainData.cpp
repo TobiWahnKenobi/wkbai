@@ -935,7 +935,7 @@ std::vector<float> BuildRiverField(Terrain* terrain, const std::vector<uint8_t>&
 	return out;
 }
 
-std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
+std::vector<uint8_t> BuildWaterFlow(Terrain* terrain, std::vector<uint8_t>* sea)
 {
 	const int W = (int)terrain->width, H = (int)terrain->height;
 	std::vector<uint8_t> out((size_t)W * H * 4);
@@ -1128,6 +1128,36 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		}
 	}
 	const int numBodies = (int)bodies.size();
+	// the seas: the wide water (less than half river) in pieces of its own, those reaching the
+	// map's edge
+	int seas = 0, lakes = 0;
+	if (sea) {
+		sea->assign((size_t)W * H, 0);
+		std::vector<int8_t> seen((size_t)W * H, 0);
+		auto wide = [&](int x, int z) { return isWater(x, z) && river[z * W + x] < 0.5f; };
+		for (int start = 0; start < W * H; start++) {
+			if (seen[start] || !wide(start % W, start / W))
+				continue;
+			std::vector<int> piece = { start };
+			seen[start] = 1;
+			bool edge = false;
+			for (size_t i = 0; i < piece.size(); i++) {
+				const int x = piece[i] % W, z = piece[i] / W;
+				edge = edge || x == 0 || z == 0 || x == W - 1 || z == H - 1;
+				for (int k = 0; k < 4; k++) {
+					const int ax = x + nx[k], az = z + nz[k];
+					if (wide(ax, az) && !seen[az * W + ax]) {
+						seen[az * W + ax] = 1;
+						piece.push_back(az * W + ax);
+					}
+				}
+			}
+			(edge ? seas : lakes)++;
+			if (edge)
+				for (int t : piece)
+					(*sea)[t] = 255;
+		}
+	}
 	// smoothed: the velocity (direction x speed) and the river share, ten passes of a 3 x 3
 	// average over water tiles of the same body. Two passes of the bare direction had left it
 	// turning from tile to tile, and the ripples carried along it tore into swirls and streaks;
@@ -1175,7 +1205,7 @@ std::vector<uint8_t> BuildWaterFlow(Terrain* terrain)
 		out[t * 4 + 2] = (uint8_t)std::clamp(speed[t] * 255.0f, 0.0f, 255.0f);
 		out[t * 4 + 3] = (uint8_t)std::clamp(river[t] * 255.0f, 0.0f, 255.0f);
 	}
-	printf("Water flow: %d bodies of water, %d flowing\n", numBodies, flowing);
+	printf("Water flow: %d bodies of water, %d flowing; open water: %d seas, %d lakes\n", numBodies, flowing, seas, lakes);
 	// debugging: "WKB_DUMP_FLOW=<file>" writes the flow map as a PPM (direction in red/green,
 	// speed in blue) and the water tiles (body, level, depth, shore distance, river) as text beside it
 	if (const char* dump = getenv("WKB_DUMP_FLOW")) {

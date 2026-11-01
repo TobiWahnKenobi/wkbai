@@ -682,8 +682,49 @@ void DiligentWaterfalls::Impl::build()
 			}
 		auto at = [&](const std::vector<int8_t>& v, int x, int z) { return (x < 0 || z < 0 || x >= W || z >= H) ? (int8_t)0 : v[z * W + x]; };
 		std::vector<int8_t> steep(W * H, 0);
-		for (int i = 0; i < W * H; i++)
-			steep[i] = kind[i] && tileDrop[i] >= CASCADE_DROP;
+		for (int i = 0; i < W * H; i++) // (not where it is in the water itself: a lake's sloping bed)
+			steep[i] = kind[i] && tileDrop[i] >= CASCADE_DROP && !terrain->getTile(i % W, i / W)->fullOfWater;
+		// Only where water comes from: a painted river is wet from a lake or river as high as it
+		// (its water spilling in) down along the painted channel, each tile no higher than the
+		// wet one before it (+0.5). Painted river texture without water above it (on hillsides,
+		// a river's steep banks falling from dry land into it) stays dry.
+		{
+			static const int EDGES[4][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
+			auto top = [&](int x, int z) {
+				return std::max({ terrain->getVertex(x, z), terrain->getVertex(x + 1, z), terrain->getVertex(x, z + 1), terrain->getVertex(x + 1, z + 1) });
+			};
+			std::vector<int8_t> wet(W * H, 0);
+			std::vector<int> queue;
+			for (int i = 0; i < W * H; i++) {
+				if (!kind[i])
+					continue;
+				const int x = i % W, z = i / W;
+				for (int d = 0; d < 4 && !wet[i]; d++) {
+					const TerrainTile* u = terrain->getTile(x + EDGES[d][0], z + EDGES[d][1]);
+					if (u && u->fullOfWater && u->waterLevel >= top(x, z) - 0.5f) {
+						wet[i] = 1;
+						queue.push_back(i);
+					}
+				}
+			}
+			for (size_t qi = 0; qi < queue.size(); qi++) {
+				const int x = queue[qi] % W, z = queue[qi] / W;
+				const float from = top(x, z);
+				for (int d = 0; d < 4; d++) {
+					const int ax = x + EDGES[d][0], az = z + EDGES[d][1];
+					if (at(kind, ax, az) && !wet[az * W + ax] && top(ax, az) <= from + 0.5f) {
+						wet[az * W + ax] = 1;
+						queue.push_back(az * W + ax);
+					}
+				}
+			}
+			size_t dry = 0;
+			for (int i = 0; i < W * H; i++) {
+				dry += steep[i] && !wet[i];
+				steep[i] = steep[i] && wet[i];
+			}
+			printf("Waterfalls: %zu steep river tiles without water above them left dry\n", dry);
+		}
 		// a corner is opaque where all four tiles around it are river and one of them is steep
 		auto cornerOpacity = [&](int cx, int cz) {
 			bool anySteep = false;
@@ -956,7 +997,9 @@ size_t DiligentWaterfalls::count() const
 
 void DiligentWaterfalls::render(const Camera* camera, ITextureView* scene, ITextureView* depth)
 {
-	const int quality = g_renderSettings.waterQuality;
+	// RenderSettings::waterfalls (Off, Low to Ultra) as the water levels the shaders count in
+	// (2 Low to 5 Ultra)
+	const int quality = g_renderSettings.waterfalls > 0 ? g_renderSettings.waterfalls + 1 : 0;
 	if (quality < 2 || !_impl->vertices)
 		return;
 	DiligentGfx* gfx = _impl->gfx;
