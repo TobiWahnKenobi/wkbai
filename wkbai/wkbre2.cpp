@@ -203,9 +203,14 @@ void LaunchQSM() {
 	while (!g_windowQuit) {
 		// "menuTest": { ..., "hold": { "x", "y", "from", "to", "shift" } }: the left button held
 		// there from frame "from" to frame "to" (window pixels), as a player holding a button,
-		// with Shift held as well if "shift" is true
-		if (menuTest.is_object() && menuTest.contains("hold")) {
-			const nlohmann::json& hold = menuTest["hold"];
+		// with Shift held as well if "shift" is true; "holds": [ ... ] for several in turn
+		nlohmann::json holds = nlohmann::json::array();
+		if (menuTest.is_object() && menuTest.contains("hold"))
+			holds.push_back(menuTest["hold"]);
+		if (menuTest.is_object() && menuTest.contains("holds"))
+			for (const auto& h : menuTest["holds"])
+				holds.push_back(h);
+		for (const nlohmann::json& hold : holds) {
 			const int from = hold.value("from", 30), to = hold.value("to", 90);
 			if (menuFrame + 1 >= from && menuFrame + 1 <= to) {
 				g_mouseX = hold.value("x", 0);
@@ -371,6 +376,20 @@ int main()
 	try {
 		if (g_settings.contains("exportGltf"))
 			ExportGltfModels(g_settings.at("exportGltf"));
+		else if (g_settings.contains("loadImagesTest")) {
+			// test runs: "loadImagesTest": [paths] loads each picture and prints its size and the
+			// mean colour, then quits (the 16-bit TGAs had ended the game)
+			LoadBCP("data.bcp");
+			for (const auto& path : g_settings.at("loadImagesTest")) {
+				const Bitmap bm = Bitmap::loadBitmap(path.get<std::string>().c_str()).convertToR8G8B8A8();
+				double sum[3] = {};
+				for (size_t i = 0; i + 3 < bm.pixels.size(); i += 4)
+					for (int c = 0; c < 3; c++)
+						sum[c] += bm.pixels[i + c];
+				const double n = std::max<double>(1, bm.pixels.size() / 4);
+				printf("IMAGE %s: %ix%i, mean %.0f %.0f %.0f\n", path.get<std::string>().c_str(), bm.width, bm.height, sum[0] / n, sum[1] / n, sum[2] / n);
+			}
+		}
 		else if (g_settings.value<bool>("test", false))
 			LaunchTest();
 		else

@@ -16,6 +16,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
+#define STBI_ONLY_TGA // the TGAs loadTGA doesn't read (16-bit)
 #include <stb_image.h>
 
 std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
@@ -362,7 +363,9 @@ Bitmap Bitmap::loadTGA(const void* _data, size_t length)
 	else if(((data[2]&7) == 2) && (data[16] == 32))
 		bm.format = BMFORMAT_B8G8R8A8;
 	else
-		ferr("Unknown TGA image format.");
+		// other kinds (the 16-bit portraits of Lord Weird, Mazaron the Black and Thomas Tancred,
+		// whose selection in the lobby had ended the game) by stb_image, as RGBA
+		return loadImage(_data, length);
 	const char *dp = data + 18 + (uint8_t)data[0];
 
 	// 24-bits palette: BB GG RR    (!)
