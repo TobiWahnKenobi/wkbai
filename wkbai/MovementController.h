@@ -19,6 +19,9 @@ struct MovementController {
 	bool isMoving() const { return m_started; }
 	//Vector3 getDirection() const { return (m_pathNodes[m_pathNodes.size()-1] - m_pathNodes.back()).normal2xz(); }
 	Vector3 getDestination() const { return m_pathNodes.front(); }
+	// the destination last asked for (the path can end elsewhere: next to it when it is blocked,
+	// or where a search cut short got nearest)
+	const Vector3& getRequestedDestination() const { return m_requested; }
 
 	MovementController(ServerGameObject* object) : m_object(object) {}
 
@@ -34,5 +37,6 @@ struct MovementController {
 
 	bool m_started = false;
 	std::vector<Vector3> m_pathNodes;
+	Vector3 m_requested;
 	ServerGameObject* m_object;
 };

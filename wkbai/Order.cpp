@@ -724,8 +724,12 @@ void MoveTask::onUpdate()
 	if ((go->position - dest).sqlen2xz() < 0.1f) {
 		terminate();
 	}
-	if (!go->movementController.isMoving())
+	// (a second between searches that found no way, as ObjectReferenceTask's)
+	if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 		destination = go->movementController.startMovement(dest);
+		if (!go->movementController.isMoving())
+			nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+	}
 }
 
 // Horizontal distance from a point to the nearest tile of a building's footprint (0 inside it);
@@ -869,13 +873,24 @@ void ObjectReferenceTask::onUpdate()
 				// only then the proximity can be dissatisfied
 
 				this->stopTriggers();
-				if (!go->movementController.isMoving())
+				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					destination = go->movementController.startMovement(goal);
-				// If target slightly moves during the movement, restart the movement
+					if (!go->movementController.isMoving())
+						nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				}
+				// If the target moves during the movement, restart the movement. Not for every
+				// 10 cm it moves: each restart is a path search, and late in a 6-AI game the
+				// fights' chasers searched every step (a third of the simulation's time). Only
+				// once the target is a tenth of the way off where the path goes, and at least
+				// 2 m: near it that is every few steps, far off every few seconds. (Against the goal
+				// asked for, not the path's end: a search cut short ends far from it, and those
+				// units searched again every step whatever the target did.)
 				if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-					if (go->movementController.isMoving())
-						if ((goal - go->movementController.getDestination()).sqlen2xz() > 0.01f)
+					if (go->movementController.isMoving()) {
+						const float off = std::max(2.0f, 0.1f * (goal - go->position).len2xz());
+						if ((goal - go->movementController.getRequestedDestination()).sqlen2xz() > off * off)
 							destination = go->movementController.startMovement(goal);
+					}
 				if (proximitySatisfied) {
 					proximitySatisfied = false;
 					if (getenv("WKB_TRACE_TASKS_ID")) {

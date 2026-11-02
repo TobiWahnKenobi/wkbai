@@ -144,6 +144,7 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	//m_object->startMovement(destination);
 	//m_pathNodes = { destination };
 
+	m_requested = destination;
 	using namespace Pathfinding;
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();

@@ -6,6 +6,7 @@
 #include "../settings.h"
 #include "../window.h"
 #include "../file.h"
+#include "../server.h"
 #include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -141,8 +142,17 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	const int warmup = bm->value("warmupFrames", 120);
 	const int frames = bm->value("frames", 600);
 	++frame;
-	if (frame <= warmup)
+	// the game clock over the recorded frames, against the real one: whether the simulation (on
+	// its own thread) keeps up with the game speed while this is drawn
+	static float gameStart = 0.0f;
+	static uint64_t realStart = 0;
+	if (frame <= warmup) {
+		if (frame == warmup && Server::instance) {
+			gameStart = Server::instance->timeManager.currentTime;
+			realStart = SDL_GetTicks();
+		}
 		return;
+	}
 	recorded.frameEnd();
 	if ((int)recorded.frameTimes().size() < frames)
 		return;
@@ -167,6 +177,14 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	report["avgFps"] = s.avgMs > 0 ? 1000.0 / s.avgMs : 0.0;
 	report["frameBudgetMs"] = budget;
 	report["p99WithinBudget"] = s.p99Ms <= budget;
+	if (Server::instance && realStart) {
+		const double real = (SDL_GetTicks() - realStart) / 1000.0;
+		report["gameStartTime"] = gameStart;
+		report["gameSeconds"] = Server::instance->timeManager.currentTime - gameStart;
+		report["realSeconds"] = real;
+		report["gameSpeed"] = real > 0.0 ? (Server::instance->timeManager.currentTime - gameStart) / real : 0.0;
+		report["timeSpeed"] = Server::instance->timeManager.timeSpeed;
+	}
 	report["frameTimesMs"] = recorded.frameTimes();
 
 	const std::string path = bm->value("report", "benchmark.json");

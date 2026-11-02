@@ -181,6 +181,7 @@ void Server::loadSaveGame(const char * filename)
 		for (auto& [id, obj] : idmap)
 			if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && obj->blueprint->footprint)
 				buildings.push_back((ServerGameObject*)obj);
+		std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 		for (ServerGameObject* b : buildings)
 			b->removeBuiltUponUnderFootprint(true);
 	}
@@ -712,6 +713,9 @@ void Server::destroyObject(ServerGameObject* obj)
 	//std::swap(*std::find(vec.begin(), vec.end(), obj), vec.back());
 	//vec.pop_back();
 
+	if (obj->sightBlock >= 0)
+		updateSightBlock(obj, true);
+
 	// remove from ID map
 	idmap.erase(obj->id);
 
@@ -804,6 +808,9 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 			sendHostData(2, this->terrain->waterDesign ? this->terrain->waterDesign->toText() : std::string());
 			auto area = this->terrain->getNumPlayableTiles();
 			this->tiles = std::make_unique<Tile[]>(area.first * area.second);
+			sightBlocksWidth = (area.first + SIGHT_BLOCK - 1) / SIGHT_BLOCK;
+			sightBlocksHeight = (area.second + SIGHT_BLOCK - 1) / SIGHT_BLOCK;
+			sightBlocks.assign(sightBlocksWidth * sightBlocksHeight, {});
 			break;
 		}
 		case Tags::GAMEOBJ_COLOUR_INDEX: {
@@ -1337,6 +1344,9 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	const GameObjBlueprint* prevbp = blueprint;
 	// now converted!
 	blueprint = postbp;
+	// a foundation become its building, and the like, may start or stop being seen
+	if (prevbp->generateSightRangeEvents != postbp->generateSightRangeEvents)
+		Server::instance->updateSightBlock(this, !postbp->generateSightRangeEvents);
 	// inform the clients
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_CONVERTED };
 	npw.writeUint32(this->id);
@@ -1591,6 +1601,31 @@ void ServerGameObject::updatePosition(const Vector3 & newposition, bool events)
 			updateOccupiedTiles(oldposition, orientation, newposition, orientation);
 		}
 	}
+	if (blueprint->generateSightRangeEvents)
+		server->updateSightBlock(this);
+}
+
+void Server::updateSightBlock(ServerGameObject* obj, bool removed)
+{
+	int block = -1;
+	if (!removed && sightBlocksWidth > 0) {
+		const int bx = (int)(obj->position.x / (5.0f * SIGHT_BLOCK)), bz = (int)(obj->position.z / (5.0f * SIGHT_BLOCK));
+		if (obj->position.x >= 0.0f && obj->position.z >= 0.0f && bx < sightBlocksWidth && bz < sightBlocksHeight)
+			block = bz * sightBlocksWidth + bx;
+	}
+	if (block == obj->sightBlock)
+		return;
+	if (obj->sightBlock >= 0) {
+		auto& list = sightBlocks[obj->sightBlock];
+		auto it = std::find(list.begin(), list.end(), obj->id);
+		if (it != list.end()) {
+			*it = list.back();
+			list.pop_back();
+		}
+	}
+	obj->sightBlock = block;
+	if (block >= 0)
+		sightBlocks[block].push_back(obj->id);
 }
 
 void ServerGameObject::lookForSightRangeEvents()
@@ -1615,11 +1650,16 @@ void ServerGameObject::lookForSightRangeEvents()
 	// as WKB.exe (0x566D70): the range rounded to whole 5 m tiles, and a sphere around the viewer
 	// (3D distance: no height bonus). The tile search alone took a square.
 	const float radius = std::floor(dist + 0.5f) * 5.0f;
-	NNSearch search;
-	search.start(Server::instance, this->position, radius);
-	while (ServerGameObject* nobj = (ServerGameObject*)search.next())
-		if (nobj->blueprint->generateSightRangeEvents && (nobj->position - this->position).sqlen3() <= radius * radius)
-			found.emplace_back(nobj->id, nobj);
+	// (the blocks of objects that generate the events, Server::sightBlocks)
+	Server* server = Server::instance;
+	const float blockSize = 5.0f * Server::SIGHT_BLOCK;
+	const int bx0 = std::max(0, (int)std::floor((position.x - radius) / blockSize)), bx1 = std::min(server->sightBlocksWidth - 1, (int)std::floor((position.x + radius) / blockSize));
+	const int bz0 = std::max(0, (int)std::floor((position.z - radius) / blockSize)), bz1 = std::min(server->sightBlocksHeight - 1, (int)std::floor((position.z + radius) / blockSize));
+	for (int bz = bz0; bz <= bz1; bz++)
+		for (int bx = bx0; bx <= bx1; bx++)
+			for (uint32_t id : server->sightBlocks[bz * server->sightBlocksWidth + bx])
+				if (ServerGameObject* nobj = server->findObject(id); nobj && (nobj->position - this->position).sqlen3() <= radius * radius)
+					found.emplace_back(id, nobj);
 	std::sort(found.begin(), found.end());
 	std::vector<uint32_t> before = std::move(seenObjects);
 	seenObjects.clear();
@@ -2579,6 +2619,25 @@ void Server::simulate()
 {
 	ZoneScoped;
 	static const bool profile = g_settings.value("profileSim", false);
+	// with profileSim, a step over 50 ms printed with its parts (a step that long loses game
+	// time: the server catches up 10 steps at most)
+	struct SpikeReport {
+		struct Parts { double sequences, tree, ai, orders, movement, sight; uint64_t steps; };
+		bool on; double start; Parts before; double pathBefore, planBefore, luaBefore; float time;
+		~SpikeReport() {
+			extern double g_pathfindingMs, g_aiPlanMs, g_aiLuaMs;
+			const double took = SimProfile::now() - start;
+			const SimProfile& p = g_simProfile;
+			if (on && took > 50.0 && p.steps > before.steps)
+				printf("SIMSPIKE t=%.2f %.1f ms: sequences %.1f, object tree %.1f (AI %.1f: plans %.1f, Lua %.1f), orders %.1f (pathfinding %.1f), movement %.1f, sight %.1f\n",
+					time, took, p.sequences - before.sequences, p.tree - before.tree - (p.ai - before.ai), p.ai - before.ai, g_aiPlanMs - planBefore, g_aiLuaMs - luaBefore,
+					p.orders - before.orders, g_pathfindingMs - pathBefore, p.movement - before.movement, p.sight - before.sight);
+		}
+	};
+	extern double g_pathfindingMs, g_aiPlanMs, g_aiLuaMs;
+	const SimProfile& sp = g_simProfile;
+	SpikeReport spike{ profile, SimProfile::now(), { sp.sequences, sp.tree, sp.ai, sp.orders, sp.movement, sp.sight, sp.steps },
+		g_pathfindingMs, g_aiPlanMs, g_aiLuaMs, timeManager.currentTime };
 	SimTimer totalTimer(g_simProfile.total);
 	g_simProfile.steps++;
 	simStepIndex++;
@@ -2617,6 +2676,13 @@ void Server::simulate()
 				line += " " + top[i].second + " " + std::to_string(top[i].first / p.steps).substr(0, 5);
 			printf("SIMPROFILE   orders, ms per step:%s\n", line.c_str());
 		}
+		extern uint64_t g_nnTiles, g_nnObjects;
+		extern double g_aiPlanMs, g_aiLuaMs, g_aiLuaMaxMs, g_aiWorkMs, g_aiCommissionMs;
+		if (p.lastPrint)
+			printf("SIMPROFILE   AI plans %.2f ms, Lua AIs %.2f ms (longest think %.1f ms), work orders %.2f ms, commissions %.2f ms per step; searches %.0f tiles, %.0f objects per step\n",
+				g_aiPlanMs / p.steps, g_aiLuaMs / p.steps, g_aiLuaMaxMs, g_aiWorkMs / p.steps, g_aiCommissionMs / p.steps, (double)g_nnTiles / p.steps, (double)g_nnObjects / p.steps);
+		g_nnTiles = g_nnObjects = 0;
+		g_aiPlanMs = g_aiLuaMs = g_aiLuaMaxMs = g_aiWorkMs = g_aiCommissionMs = 0.0;
 		g_pathfindingMs = 0.0;
 		g_pathfindingSearches = 0;
 		p = SimProfile();

@@ -74,6 +74,10 @@ struct Task {
 	// footprint-edge test here doesn't count as arrived: the cart drove up and collected 4 s
 	// early, and the Kingmaker's food came 8 s early.
 	bool loadedArrived = false;
+	// no new path search before this game time: one that found no way left the unit standing,
+	// and searching again every step for an unreachable target (woodcutters at a tree up a
+	// cliff) was most of the simulation's time 30 minutes into a 6-AI game
+	float nextMoveAttempt = 0.0f;
 	float AnimationSpeedToFit(ServerGameObject* go, int anim) const;
 
 	Task(int id, const TaskBlueprint* blueprint, Order* order);

@@ -8,6 +8,8 @@
 #include "Order.h"
 #include "gameset/command.h"
 #include "NNSearch.h"
+#include <SDL3/SDL_timer.h>
+#include <algorithm>
 #include <numeric>
 
 // A wave sent from home at a target: a new Kingmaker Attacking Army under the player; each unit
@@ -161,12 +163,29 @@ void AIController::parse(GSFileParser& gsf, const GameSet& gs)
 	}
 }
 
+// the simulation profile ("profileSim"): time in the scripts' plans and the Lua AIs, in ms, and
+// the longest Lua think
+double g_aiPlanMs = 0.0, g_aiLuaMs = 0.0, g_aiLuaMaxMs = 0.0, g_aiWorkMs = 0.0, g_aiCommissionMs = 0.0;
+static double ProfileNow() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
+
 void AIController::update()
 {
+	// (the work orders' and commissions' time, for the profile)
+	struct SectionTimes {
+		double work = 0.0, commissions = 0.0;
+		~SectionTimes() {
+			if (commissions > 0.0) {
+				g_aiCommissionMs += ProfileNow() - commissions;
+				g_aiWorkMs += commissions - work;
+			}
+		}
+	} sections;
 	// ---- Plan ----
 	if (planBlueprint) {
 		SrvScriptContext ctx{ Server::instance, gameObj };
+		const double planStart = ProfileNow();
 		bool done = planBlueprint->execute(&planState, &ctx);
+		g_aiPlanMs += ProfileNow() - planStart;
 		if (done) {
 			planBlueprint = nullptr;
 			planState.nodeStates.clear();
@@ -459,8 +478,13 @@ void AIController::update()
 
 	// ---- A Lua AI, or the advanced AI (AIAdvanced.cpp) ----
 	const bool lua = gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && luaActive();
-	if (lua)
+	if (lua) {
+		const double luaStart = ProfileNow();
 		luaThink();
+		const double took = ProfileNow() - luaStart;
+		g_aiLuaMs += took;
+		g_aiLuaMaxMs = std::max(g_aiLuaMaxMs, took);
+	}
 	else if (gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && advanced())
 		advancedUpdate();
 
@@ -710,6 +734,7 @@ void AIController::update()
 		}
 	}
 
+	sections.work = ProfileNow();
 	// ---- Work Orders ----
 	// A unit can be listed by several work orders (a town's and a city's workforce, while peasants
 	// move between settlements): each unit works for one, the one that had it before if that still
@@ -911,6 +936,7 @@ void AIController::update()
 	static std::vector<std::pair<const GSCommission*, SrvGORef>> completedComInsts;
 	completedComInsts.clear();
 
+	sections.commissions = ProfileNow();
 	// ---- Commissions ----
 	// Highest PRIORITY first. While a commission can't afford the spawn it wants, the
 	// resources are reserved for it: the ones below it spawn nothing in that update (the
