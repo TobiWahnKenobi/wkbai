@@ -1,0 +1,6 @@
+# HTTPS for Nakama's API and realtime socket (WebSockets pass through as they are); the
+# certificate comes from Let's Encrypt for the domain in .env
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy nakama:7350
+}

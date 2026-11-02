@@ -47,6 +47,9 @@ class Instance:
             'renderer': renderer, 'hostBind': '127.0.0.1', 'playerName': name, 'windowWidth': 1280, 'windowHeight': 720,
         }
         base.update(config)
+        # no STUN server (the default is a public one): the tests stay off the internet
+        if isinstance(base.get('matchmaking'), dict):
+            base['matchmaking'].setdefault('stun', '')
         (self.dir / 'wkconfig.json').write_text(json.dumps(base, indent=1))
         shutil.copytree(REPO / 'redata', self.dir / 'redata')
         self.log = open(self.dir / 'log.txt', 'w+', encoding='utf-8', errors='replace')
@@ -164,6 +167,21 @@ class Matchmaking(unittest.TestCase):
         p = self.start('Lister', {'matchmaking': {'local': {'targets': []}}, 'lobbyTest': {'find': 'eos', 'findOnly': True}})
         ok = wait_for(lambda: 'Matchmaking: plugin Epic Online Services' in p.text(), 30)
         self.assertTrue(ok, p.text()[-2000:])
+
+    def test_options(self):
+        """The Options page's Online tab: a new server typed in and OK makes Nakama again with it"""
+        server = self.nakama_server()
+        p = self.start('Options', {'matchmaking': {'local': {'targets': []}, 'nakama': {'server': 'http://127.0.0.1:9'}, 'plugins': False},
+                                   'menuTest': {'open': ['options.online', 'options.set=nakamaServer=' + server,
+                                                         'options.set=nakamaTitle=Test League', 'options.set=nakamaServerKey=',
+                                                         'options.save'], 'frames': 10 ** 7}})
+        ok = wait_for(lambda: 'Matchmaking: Nakama signed in at ' + server in p.text(), 60)
+        text = p.text()
+        self.assertTrue(ok, text[-3000:])
+        self.assertIn('Matchmaking: Nakama made again with the new settings', text)
+        saved = json.loads((p.dir / 'wkconfig.json').read_text(encoding='utf-8'))['matchmaking']
+        self.assertEqual(saved['nakama'], {'server': server, 'title': 'Test League'})
+        self.assertEqual(saved['stun'], '')
 
     @unittest.skipUnless(os.environ.get('WKB_SCREENSHOT'), 'WKB_SCREENSHOT not set')
     def test_screenshot(self):

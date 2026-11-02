@@ -7,7 +7,8 @@
 //     "relay": "auto"                     "auto": through Nakama when ENet can't connect directly,
 //                                         "always", "never"
 //     "title": "Nakama"                   the name the game list shows
-// } }, and "matchmaking": { "stun": "host:port" } for this side's public address.
+// } }, and "matchmaking": { "stun": "host:port" } for this side's public address (absent: a public
+// one, MatchmakingStunServer; "" or "none": none).
 //
 // Only Nakama's own API is used, no server module:
 //  - sign-in: a device id (made once, kept in the user folder's matchmaking.json), an account
@@ -211,6 +212,7 @@ struct NakamaService : MatchmakingService {
 	std::string id() const override { return "nakama"; }
 	std::string title() const override { return settings.value("title", std::string("Nakama")); }
 	State state() const override { return current; }
+	bool inUse() const override { return hosting || !guests.empty(); }
 	std::string stateText() const override { return stateMessage; }
 
 	// Worker -----------------------------------------------------------------------------
@@ -460,8 +462,8 @@ struct NakamaService : MatchmakingService {
 		lastPublished = listing;
 		if (!hosting) {
 			hosting = true;
-			// "matchmaking": { "stun": "host:port" }: this side's public address for the listing
-			if (const std::string s = g_settings.value("matchmaking", json::object()).value("stun", std::string()); !s.empty())
+			// this side's public address for the listing (MatchmakingStunServer)
+			if (const std::string s = MatchmakingStunServer(); !s.empty())
 				stun.start(context.enet, s);
 			sendEnvelope({ { "match_create", json::object() } }, [this](const json& m) {
 				if (!hosting)
@@ -687,7 +689,7 @@ struct NakamaGuestConnection : GuestConnection {
 		}
 		if (service->relayMode != "always" && !listing.addresses.empty()) {
 			direct = std::make_unique<EnetGuestConnection>(listing.addresses, g_settings.value("hostBind", std::string()));
-			if (const std::string s = g_settings.value("matchmaking", json::object()).value("stun", std::string()); !s.empty() && direct->host())
+			if (const std::string s = MatchmakingStunServer(); !s.empty() && direct->host())
 				stun.start(direct->host(), s);
 			phase = DIRECT;
 			sendHello();

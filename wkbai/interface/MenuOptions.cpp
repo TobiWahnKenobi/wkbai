@@ -6,6 +6,7 @@
 #include "../gfx/RenderSettings.h"
 #include "../settings.h"
 #include "../SoundPlayer.h"
+#include "../matchmaking/Matchmaking.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,41 @@ namespace {
 		o.format = std::move(format);
 		o.get = [&value]() { return value; };
 		o.set = [&value](float v) { value = v; };
+		return o;
+	}
+
+	// A text in wkconfig.json's "matchmaking" (path: its keys under it); empty: the key removed
+	MenuOption matchmakingText(std::string id, std::string label, std::vector<std::string> path, std::string hint, int maxLength = 100)
+	{
+		MenuOption o;
+		o.id = std::move(id); o.page = "online"; o.label = std::move(label);
+		o.type = MenuOption::TEXT;
+		o.hint = std::move(hint);
+		o.maxLength = maxLength;
+		o.getText = [path]() {
+			const nlohmann::json* j = &g_settings;
+			std::vector<std::string> keys = { "matchmaking" };
+			keys.insert(keys.end(), path.begin(), path.end());
+			for (const std::string& key : keys) {
+				if (!j->is_object() || !j->contains(key)) return std::string();
+				j = &(*j)[key];
+			}
+			return j->is_string() ? j->get<std::string>() : std::string();
+		};
+		o.setText = [path](const std::string& text) {
+			if (!g_settings["matchmaking"].is_object())
+				g_settings["matchmaking"] = nlohmann::json::object();
+			nlohmann::json* j = &g_settings["matchmaking"];
+			for (size_t i = 0; i + 1 < path.size(); i++) {
+				if (!(*j)[path[i]].is_object())
+					(*j)[path[i]] = nlohmann::json::object();
+				j = &(*j)[path[i]];
+			}
+			if (text.empty())
+				j->erase(path.back());
+			else
+				(*j)[path.back()] = text;
+		};
 		return o;
 	}
 
@@ -254,6 +290,35 @@ namespace {
 			o.needsRestart = true;
 			list.push_back(o);
 		}
+		// Online games (matchmaking/NakamaService.cpp); a changed server takes effect when OK is
+		// pressed (Matchmaking::settingsChanged)
+		list.push_back(matchmakingText("nakamaServer", "Nakama server", { "nakama", "server" }, "none (e.g. https://games.example.org)"));
+		list.push_back(withEnabled(matchmakingText("nakamaServerKey", "Nakama server key", { "nakama", "serverKey" }, "defaultkey"),
+			[]() { return !MatchmakingSettings("nakama").value("server", std::string()).empty(); }));
+		list.push_back(withEnabled(matchmakingText("nakamaTitle", "Its name in the game list", { "nakama", "title" }, "Nakama", 40),
+			[]() { return !MatchmakingSettings("nakama").value("server", std::string()).empty(); }));
+		{
+			MenuOption o;
+			o.id = "nakamaRelay"; o.page = "online"; o.label = "Games through the Nakama server";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "If direct fails", "Always", "Never" };
+			static const char* const modes[] = { "auto", "always", "never" };
+			o.get = []() {
+				const std::string m = MatchmakingSettings("nakama").value("relay", std::string("auto"));
+				return m == "always" ? 1.0f : m == "never" ? 2.0f : 0.0f;
+			};
+			o.set = [](float v) {
+				if (!g_settings["matchmaking"].is_object())
+					g_settings["matchmaking"] = nlohmann::json::object();
+				if (!g_settings["matchmaking"]["nakama"].is_object())
+					g_settings["matchmaking"]["nakama"] = nlohmann::json::object();
+				g_settings["matchmaking"]["nakama"]["relay"] = modes[std::clamp((int)v, 0, 2)];
+			};
+			o.enabled = []() { return !MatchmakingSettings("nakama").value("server", std::string()).empty(); };
+			list.push_back(o);
+		}
+		list.push_back(matchmakingText("stunServer", "STUN server (public address)", { "stun" },
+			std::string(DEFAULT_STUN_SERVER) + " (none: off)"));
 		return list;
 	}
 }
@@ -267,6 +332,7 @@ const std::vector<MenuPage>& GetMenuPages()
 		{ "camera", "Camera" },
 		{ "sound", "Sound" },
 		{ "system", "System" },
+		{ "online", "Online" },
 	};
 	return pages;
 }
@@ -289,6 +355,7 @@ void SaveMenuOptions()
 {
 	g_renderSettings.save();
 	SoundPlayer::getSoundPlayer()->applyVolumes();
+	Matchmaking::get().settingsChanged();
 }
 
 namespace {

@@ -2165,7 +2165,7 @@ Screens.multiplayer = {
 -- wkbre2's own settings, a page per tab (pages and settings come from MenuOptions.cpp), drawn
 -- with the original's sliders and buttons.
 
-local optionsState = { page = 1, scroll = 0 }
+local optionsState = { page = 1, scroll = 0, texts = {} }
 
 local function sliderPosition(o, v)
 	if o.logarithmic and o.min > 0 then
@@ -2192,7 +2192,7 @@ end
 
 Screens.options = {
 	background = sunsetBackground,
-	open = function() beginEditOptions(); optionsState.scroll = 0 end,
+	open = function() beginEditOptions(); optionsState.scroll = 0; optionsState.texts = {} end,
 	draw = function()
 		title(T("FRONT_END_OPTIONS_TITLE"))
 		local pages = getOptionPages()
@@ -2225,6 +2225,26 @@ Screens.options = {
 			if o.type == "toggle" then
 				local text = (v ~= 0) and T("FRONT_END_BUTTON_ON") or T("FRONT_END_BUTTON_OFF")
 				if button(text, cx, ry + L(6), L(172), L(38), enabled) then setOption(o.id, (v ~= 0) and 0 or 1) end
+			elseif o.type == "text" then
+				-- an entry line, written into the setting as it is typed; the hint while empty
+				local state = optionsState.texts[o.id]
+				if not state then
+					state = { text = getOptionText(o.id) }
+					optionsState.texts[o.id] = state
+				end
+				local fx, fy, fw, fh = cx, ry + L(8), L(700), L(34)
+				if enabled then
+					textField(state, fx, fy, fw, fh, o.id ~= "nakamaTitle" and " " or nil, o.maxLength)
+					if state.text ~= getOptionText(o.id) then setOptionText(o.id, state.text) end
+				else
+					panel(fx, fy, fw, fh)
+				end
+				local ty = fy + (fh - fontHeight(FONT_TEXT, S)) / 2
+				if state.text == "" then
+					drawText(FONT_TEXT, fx + L(14), ty, o.hint, GREY, S)
+				elseif not enabled then
+					drawText(FONT_TEXT, fx + L(8), ty, state.text, GREY, S)
+				end
 			elseif o.type == "choice" then
 				local index = math.floor(v + 0.5)
 				local text = o.choices[index + 1] or "?"
@@ -2387,6 +2407,23 @@ function FE_Open(name)
 	if screenName == "campaignmap" then
 		name = screenName
 		campaign.profile = tab
+	end
+	-- "options.<page id>": the Options screen at that page; then (tests) "options.set=<id>=<text>"
+	-- types a text option's value, "options.save" presses OK without closing
+	if screenName == "options" then
+		name = screenName
+		local id, text = string.match(tab, "^set=([^=]+)=(.*)$")
+		if id then
+			setOptionText(id, text)
+			optionsState.texts[id] = nil
+			return
+		elseif tab == "save" then
+			saveOptions()
+			return
+		end
+		for i, p in ipairs(getOptionPages()) do
+			if p.id == tab then optionsState.page = i end
+		end
 	end
 	if #stack == 0 or stack[#stack] ~= name then push(name) end
 	openedThisFrame = true

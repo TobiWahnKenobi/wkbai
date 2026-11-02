@@ -98,6 +98,17 @@ nlohmann::json MatchmakingSettings(const std::string& service)
 	return s.is_object() ? s : nlohmann::json::object();
 }
 
+const char* const DEFAULT_STUN_SERVER = "stun.l.google.com:19302";
+
+std::string MatchmakingStunServer()
+{
+	const nlohmann::json all = g_settings.value("matchmaking", nlohmann::json::object());
+	if (!all.is_object() || !all.contains("stun"))
+		return DEFAULT_STUN_SERVER;
+	const std::string s = all["stun"].is_string() ? all["stun"].get<std::string>() : std::string();
+	return s == "none" ? std::string() : s;
+}
+
 bool SplitHostPort(const std::string& text, std::string& host, uint16_t& port, uint16_t defaultPort)
 {
 	std::string t = text;
@@ -242,6 +253,7 @@ void Matchmaking::init()
 	enet_initialize();
 	list.push_back(CreateLocalService());
 	list.push_back(CreateNakamaService());
+	builtSettings = MatchmakingSettings("nakama");
 	loadPlugins();
 	for (auto& s : list)
 		s->signIn();
@@ -297,9 +309,37 @@ void Matchmaking::shutdown()
 
 void Matchmaking::tick()
 {
+	if (reloadWanted)
+		reloadBuiltIn();
 	for (auto& s : list)
 		s->tick();
 	receivePings();
+}
+
+void Matchmaking::settingsChanged()
+{
+	if (started && MatchmakingSettings("nakama") != builtSettings)
+		reloadWanted = true;
+	reloadBuiltIn();
+}
+
+void Matchmaking::reloadBuiltIn()
+{
+	if (!reloadWanted)
+		return;
+	for (auto& s : list) {
+		if (s->id() != "nakama")
+			continue;
+		if (s->inUse())
+			return;
+		offered.erase(s->id());
+		s.reset();
+		s = CreateNakamaService();
+		builtSettings = MatchmakingSettings("nakama");
+		s->signIn();
+		printf("Matchmaking: Nakama made again with the new settings\n");
+	}
+	reloadWanted = false;
 }
 
 MatchmakingService* Matchmaking::find(const std::string& id) const

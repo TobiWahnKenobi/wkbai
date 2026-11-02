@@ -1,0 +1,85 @@
+# A Nakama server for wkbai's online game list (see README.md)
+#
+#   python3 make_env.py        once: .env with your domain and new random keys
+#   docker compose up -d       Nakama, its database and Caddy (HTTPS from Let's Encrypt)
+#   docker compose --profile stun up -d    also a STUN server (coturn) on UDP 3478
+#
+# Open to the internet: TCP 80 and 443 (Caddy), and UDP 3478 with the stun profile. Nakama's
+# own ports stay inside: its API only through Caddy, its console only on this machine
+# (127.0.0.1:7351, reach it with an SSH tunnel).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run make_env.py first}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "nakama"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nakama:
+    # the version wkbai was tested against
+    image: heroiclabs/nakama:3.41.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - >
+        /nakama/nakama migrate up --database.address "postgres:${POSTGRES_PASSWORD}@postgres:5432/nakama" &&
+        exec /nakama/nakama --config /nakama/data/wkbai.yml
+        --database.address "postgres:${POSTGRES_PASSWORD}@postgres:5432/nakama"
+        --socket.server_key "${SERVER_KEY:?}"
+        --session.encryption_key "${SESSION_KEY:?}"
+        --session.refresh_encryption_key "${REFRESH_KEY:?}"
+        --console.username "${CONSOLE_USER:?}"
+        --console.password "${CONSOLE_PASSWORD:?}"
+        --console.signing_key "${CONSOLE_SIGNING_KEY:?}"
+        --runtime.http_key "${HTTP_KEY:?}"
+    volumes:
+      - ./nakama.yml:/nakama/data/wkbai.yml:ro
+    expose:
+      - "7350"
+    ports:
+      - "127.0.0.1:7351:7351"
+    healthcheck:
+      test: ["CMD", "/nakama/nakama", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - nakama
+    environment:
+      DOMAIN: ${DOMAIN:?}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+
+  # STUN only (no TURN, no accounts): tells players their public address, which direct
+  # connections between home networks need. Players then set "STUN server" to <domain>:3478.
+  stun:
+    image: coturn/coturn:4.6
+    profiles: ["stun"]
+    restart: unless-stopped
+    # the host's own network: a STUN answer must see the player's address, not Docker's
+    network_mode: host
+    command: ["--stun-only", "--listening-port=3478", "--no-cli", "--no-tls", "--no-dtls", "--log-file=stdout", "--simple-log"]
+
+volumes:
+  postgres:
+  caddy:
