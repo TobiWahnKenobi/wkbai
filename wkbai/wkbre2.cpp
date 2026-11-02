@@ -347,6 +347,16 @@ int main()
 			SaveSettings();
 		}
 #endif
+	// the game's version when wkconfig.json doesn't say: 2 (Battles) when the folder holds its exe
+	// or its WKB_Plus.bcp, else 0 (the original Warrior Kings)
+	if (!g_settings.contains("gameVersion") && std::filesystem::exists(g_gamePath / "data.bcp")) {
+		std::error_code ec;
+		const bool battles = std::filesystem::exists(g_gamePath / "Warrior Kings - Battles.exe", ec)
+			|| std::filesystem::exists(g_gamePath / "Warrior_Kings_Battles.exe", ec) || std::filesystem::exists(g_gamePath / "WKB_Plus.bcp", ec);
+		g_settings["gameVersion"] = battles ? 2 : 0;
+		printf("Game version: %s\n", battles ? "Battles (2)" : "Warrior Kings (0)");
+		SaveSettings();
+	}
 	if (!std::filesystem::exists(g_gamePath / "data.bcp")) {
 		std::string message = "Could not find the file \"data.bcp\".\n\nYou need to copy \"data.bcp\" from Warrior Kings (Battles) game to the following path:\n\n";
 		message += PathToUtf8(std::filesystem::absolute(g_gamePath));

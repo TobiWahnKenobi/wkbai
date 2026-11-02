@@ -21,7 +21,8 @@ static const std::filesystem::path configPath = "wkconfig.json";
 static void ResetDefaultSettings()
 {
 	g_settings["gamePath"] = ".";
-	g_settings["gameVersion"] = 0;
+	// "gameVersion" is left out: main finds it from the game folder (a fixed 0, the original
+	// Warrior Kings, had a new install read Battles' terrain as the original's: black tiles)
 	g_settings["musicEnabled"] = true;
 	g_settings["renderer"] = "diligent";
 	g_settings["diligentBackend"] = "d3d12"; // or "vulkan"
