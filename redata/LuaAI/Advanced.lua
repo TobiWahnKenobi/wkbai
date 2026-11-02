@@ -282,15 +282,63 @@ local function manageWaves(ai)
 	waves = kept
 end
 
+-- An enemy army at the door (the scripts' Defensive Mode): the scripts' attackers still within
+-- 300 m of the palace and not fighting come home to defend it (each at most every 120 s, so the
+-- scripts can send them out again; with 700 m and no pause the Duke of the Dead on 4 Peaks was
+-- called home over a thousand times and stopped attacking).
+local RALLY = false           -- off: on 4 Peaks it did no better than without
+local RALLY_RADIUS = 300
+local rallied = {}            -- unit id -> when it was last called home
+local function rallyHome(ai, now, px, pz)
+	local ours = {}
+	for _, w in ipairs(waves) do ours[w.army] = true end
+	local back = {}
+	for _, a in ipairs(ai.armies()) do
+		if not ours[a.id] then
+			for _, u in ipairs(a.units) do
+				local x, z = ai.position(u)
+				if dist2(x, z, px, pz) < RALLY_RADIUS * RALLY_RADIUS and #ai.enemiesNear(x, z, 40) == 0
+					and now - (rallied[u] or -1000) > 120 then
+					back[#back + 1] = u
+					rallied[u] = now
+				end
+			end
+		end
+	end
+	if #back > 0 then
+		ai.sendHome(back)
+		counts.rallied = (counts.rallied or 0) + #back
+	end
+end
+
+-- Surplus into soldiers: the scripts train what their commissions ask for and let the rest pile
+-- up (the Duke of the Dead ended a 4 Peaks game with 14,783 food). Above SURPLUS_FOOD, each idle
+-- building that can train a fighter now (and it is paid for) trains one, the types in turn; they
+-- join the defensive army, where the attacks above find them.
+local SURPLUS_FOOD = 500
+local nextType = 1
+local function spendSurplus(ai)
+	for _, t in ipairs(ai.trainers()) do
+		if ai.item(ai.id, "Food") <= SURPLUS_FOOD then return end
+		local type = t.types[(nextType - 1) % #t.types + 1]
+		if ai.train(t.id, type) then
+			nextType = nextType + 1
+			counts.trained = (counts.trained or 0) + 1
+		end
+	end
+end
+
 local nextWaveManage = 0
 -- The scripts turn peasants into militia when an attack outnumbers them three to one; on 4 Peaks
 -- both AIs lost every peasant that way and never trained another. With fewer than 25 peasants
--- they stay peasants (the scripts' "Cannot Use Militia").
+-- they stay peasants (the scripts' "Cannot Use Militia"), except with an enemy army at the door:
+-- there the peasants without arms died instead (and the lifeline now gives food for new ones).
 local MILITIA_PEASANTS = 25
 
 function think(ai)
 	local now = ai.time()
-	ai.setItem(ai.id, "Cannot Use Militia", #ai.peasants() < MILITIA_PEASANTS and 1 or 0)
+	local atTheDoor = ai.defensiveMode()
+	ai.setItem(ai.id, "Cannot Use Militia", (#ai.peasants() < MILITIA_PEASANTS and not atTheDoor) and 1 or 0)
 	local palace = ai.palace()
 	local px, pz = 0, 0
 	if palace then px, pz = ai.position(palace) end
@@ -298,6 +346,8 @@ function think(ai)
 	if now >= nextWaveManage then
 		nextWaveManage = now + 6
 		manageWaves(ai)
+		spendSurplus(ai)
+		if palace and atTheDoor and RALLY then rallyHome(ai, now, px, pz) end
 		if palace and MUSTER then gather(ai, px, pz) end
 	end
 	if now >= nextWaveCheck then
@@ -308,6 +358,6 @@ end
 
 -- for the AI test's census
 function census()
-	return string.format("threats met %d (%d defenders), peasants sent home %d; mustered %d; waves held %d, recalled %d, retargeted %d, out %d",
-		counts.threats, counts.defenders, counts.fled, counts.mustered or 0, counts.held, counts.recalled, counts.retargeted, #waves)
+	return string.format("threats met %d (%d defenders), peasants sent home %d; trained %d; rallied home %d; mustered %d; waves held %d, recalled %d, retargeted %d, out %d",
+		counts.threats, counts.defenders, counts.fled, counts.trained or 0, counts.rallied or 0, counts.mustered or 0, counts.held, counts.recalled, counts.retargeted, #waves)
 end

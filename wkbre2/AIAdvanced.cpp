@@ -870,6 +870,89 @@ void AIController::startLuaAI(const std::string& name)
 		p->aiController.waveUnits += (int)units.size();
 		return army->id;
 	});
+	// training: this AI's idle buildings and the fighters each can train now (its "Spawn <type>"
+	// command possible and waited for, and paid for), and an order to train one there; the soldier
+	// is commissioned by the defensive army, as the scripts' own are
+	ai.set_function("trainers", [player](sol::this_state ts) {
+		sol::state_view lua(ts);
+		sol::table list = lua.create_table();
+		ServerGameObject* p = player();
+		if (!p)
+			return list;
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		std::vector<ServerGameObject*> buildings, todo{ p };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* b = (ServerGameObject*)c;
+					if (b->deleted)
+						continue;
+					if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						buildings.push_back(b);
+					else if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER || b->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+						todo.push_back(b);
+				}
+		}
+		std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+		int i = 1;
+		for (ServerGameObject* b : buildings) {
+			if (b->orderConfig.getCurrentOrder())
+				continue;
+			sol::table types = lua.create_table();
+			int n = 1;
+			for (const Command* cmd : b->blueprint->offeredCommands) {
+				const std::string& name = gs->commands.getString(cmd);
+				if (name.rfind("Spawn ", 0) != 0)
+					continue;
+				const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6));
+				if (!type || gs->orders.names.getIndex(name) < 0)
+					continue;
+				SrvScriptContext cctx(Server::instance, b);
+				auto _s = cctx.selectedObject.change(b);
+				auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+				if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
+					|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
+					|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
+					continue;
+				// fighters only: the soldier's item (not peasants, carts, priests, ...)
+				if (g_items.military < 0 || !type->startItemValues.count(g_items.military) || type->startItemValues.at(g_items.military) <= 0.0f)
+					continue;
+				types[n++] = type->name;
+			}
+			if (n > 1) {
+				sol::table t = lua.create_table();
+				t["id"] = b->id;
+				t["type"] = b->blueprint->name;
+				t["types"] = types;
+				list[i++] = t;
+			}
+		}
+		return list;
+	});
+	ai.set_function("train", [player](uint32_t building, const std::string& typeName) {
+		ServerGameObject* p = player();
+		ServerGameObject* b = Server::instance->findObject(building);
+		const GameSet* gs = Server::instance->gameSet.get();
+		if (!p || !b || b->deleted || b->getPlayer() != p || b->orderConfig.getCurrentOrder())
+			return false;
+		const std::string spawnName = "Spawn " + typeName;
+		const int ordid = gs->orders.names.getIndex(spawnName);
+		const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, typeName);
+		if (ordid < 0 || !type || !p->canAffordObject(type))
+			return false;
+		Order* order = b->orderConfig.addOrder(&gs->orders[ordid], Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, { -1, -1, -1 }, false);
+		if (!order || order->tasks.empty())
+			return false;
+		auto* task = (SpawnTask*)(order->tasks[0].get());
+		task->setSpawnBlueprint(type);
+		if (ServerGameObject* home = HomeArmy(p))
+			task->aiCommissioner = home;
+		p->aiController.trained++;
+		return true;
+	});
 
 	// a replay: the copy its recording kept
 	std::string code, path = LuaAIPath(name);
