@@ -81,6 +81,9 @@ struct ClientInterface {
 	// The map editor (interface/MapEditor.cpp): F8 in single player, or on from the start when the
 	// menu's Map Editor opens a level
 	bool editorOn = false;
+	// F8 turns the map editor on and off: only when the game was started as the map editor (the
+	// menu's Map Editor), not in a game or a replay
+	bool editorAllowed = false;
 	// Runs code on the server while its thread is held (set by the game's owner; without it, e.g.
 	// as a multiplayer guest, there is no editor)
 	std::function<void(const std::function<void(Server&)>&)> withServer;

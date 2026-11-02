@@ -2060,7 +2060,7 @@ void ClientInterface::iter()
 		statisticsOpen = !statisticsOpen;
 	if (g_keyPressed[SDL_SCANCODE_F7] && !ImGui::GetIO().WantTextInput)
 		timelineOpen = !timelineOpen;
-	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer)
+	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
 	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;
@@ -2288,9 +2288,19 @@ void ClientInterface::iter()
 		fflush(stdout);
 	}
 
+	// F10: the Options screen (the in-game menu's, over the game; Back goes to the in-game menu),
+	// pausing a single-player game as Esc does
 	static bool settingsOn = false;
-	if (g_keyPressed[SDL_SCANCODE_F10])
-		settingsOn = !settingsOn;
+	if (g_keyPressed[SDL_SCANCODE_F10] && frontEnd && !frontEnd->isOpen() && client->getLevel()) {
+		frontEnd->setSinglePlayer(singlePlayer);
+		frontEnd->setCanSave((bool)saveGame);
+		frontEnd->open("ingame");
+		frontEnd->open("options");
+		if (singlePlayer && !client->timeManager.paused) {
+			client->sendPauseRequest(true);
+			menuPausedGame = true;
+		}
+	}
 
 	if (g_keyPressed[SDL_SCANCODE_E]) {
 		// select available cursor command next to the one currently shown

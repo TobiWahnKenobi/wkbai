@@ -737,6 +737,7 @@ void QuickStartMenu::launchGame()
 				srvMutex.unlock();
 			};
 		cliui.editorOn = editLevel;
+		cliui.editorAllowed = editLevel;
 		// single player and the multiplayer host (who runs the game) can save
 		cliui.saveGame = [this, &srvMutex](const std::string& name) {
 			// a file name, not a path

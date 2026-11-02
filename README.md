@@ -85,8 +85,8 @@ Compared with upstream wkbre2:
   - **Model highlights:** per-pixel lighting with GGX sun highlights, light from the sky box's colours, and override packs (`<texture>_normal`, `<texture>_orm`) for modders (off by default).
   - **Particles:** sprites, and streaks (wood chips, sparks) drawn as thin lines.
 - **Formats:** glTF 2.0 models (import as overrides, export with `"exportGltf"`), DDS textures (BC1-BC5, BC7) and KTX2 (RGBA8, BC1-BC5, BC7; BC7 uploaded compressed).
-- **Map editor** (F8): heights, texture painting, lakes, objects, the players' resources and diplomacy, terrain zones, a new blank map, undo, a new minimap on saving, a check (missing start cameras, players that can't be reached by land), and save-and-play.
-- **Settings:** an options menu, and a settings window on **F10** for the view distance, fog, field of view, colour grading, shadows, water and camera speed.
+- **Map editor** (Map Editor in the main menu; F8 turns it on and off there, not in games or replays): heights, texture painting, lakes, objects, the players' resources and diplomacy, terrain zones, a new blank map, undo, a new minimap on saving, a check (missing start cameras, players that can't be reached by land), and save-and-play.
+- **Settings:** the Options screen (main menu, in-game menu, or **F10** in a game) with the view distance, fog, field of view, colour grading, shadows, water, upscaling and camera speed.
 
 ## Status
 
@@ -114,7 +114,7 @@ The project follows a ten-phase plan, from setup (phase 0) to release (phase 9).
   - **gamePath:** the folder where the game is installed, the one that contains data.bcp. Write each backslash twice (`\\`).
   - **gameVersion:** 1 for **Warrior Kings**, 2 for **Warrior Kings: Battles**.
   - **diligentBackend:** optionally, `"d3d12"` (the default) or `"vulkan"`.
-- Launch **wkbai.exe**. Press **F10** in game for the settings window. Settings, saves and mods go to `%APPDATA%\wkbai` (copied from `%APPDATA%\wkbre2` the first time).
+- Launch **wkbai.exe**. Press **F10** in a game for the Options screen. Settings, saves and mods go to `%APPDATA%\wkbai` (copied from `%APPDATA%\wkbre2` the first time).
 
 **Note:** if the program closes at startup without an error, check **wkconfig.json** for syntax errors (missing commas, quotes or braces).
 
