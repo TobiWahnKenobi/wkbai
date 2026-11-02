@@ -819,8 +819,14 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// (the user, Tribes Unite: star bursts and a herringbone on the rivers. The ripples had been
 	// laid along the channel's coordinates: the distance to the mouth fans out from a point where
 	// a river widens or branches meet, and the distance to the banks folds at the middle. Now
-	// they are the sea's ripples, carried downstream by the flow map, a little stronger.)
-	float2 riverDetail = detail * 0.55 + fine * 0.25;
+	// they are the sea's ripples in world space, carried downstream at the current's speed, in
+	// the same two phases. At the flow map's speed alone, up to 1.3 units a second, they hardly
+	// moved: "flowing rivers don't work anymore".)
+	float2 downstream = dot(fdir, fdir) > 0.01 ? normalize(fdir) : along;
+	float2 rflow = downstream * current;
+	float2 roff0 = -rflow * (q0 * rcycle) * WaterParams.z * 3.0, roff1 = -rflow * (q1 * rcycle) * WaterParams.z * 3.0;
+	float2 carried = FlowSlope(ruv, roff0) * v0 + FlowSlope(ruv, roff1) * (1 - v0);
+	float2 riverDetail = carried * 0.6 + fine * 0.15;
 	float2 seaDetail = detail * 0.3 + fine * 0.22;
 	float2 slope = lerp(seaDetail, riverDetail, river);
 	float3 n = normalize(wn + float3(slope.x, 0, slope.y));
