@@ -2296,6 +2296,169 @@ void Test_AutoWall()
 	fflush(stdout);
 }
 
+// The wall ring as a city grows: a Manor stamped down on 4 Peaks for player 1027, then barracks
+// overlapping its rectangle on one side and then on another, so that the ring gets steps with
+// inner corners. After each, every tile of the city's border must have its one piece and no tile
+// inside a wall. Prints the ring as a map (- | straight, o outer corner, i inner corner, + cross
+// piece, G gatehouse, ? missing, ! not on the border, 2 two pieces, x turned so that its wall
+// ends at a tile with no piece) and
+// "WALLRING <stage>: <n> border tiles, <m> missing, <k> doubled, <j> inside, <l> turned wrong".
+void Test_WallRing()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* manor = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+	const GameObjBlueprint* barracks = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	if (!player || !manor || !barracks || !server.terrain || !server.tiles) {
+		printf("WALLRING not set up\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_FOOD, 1e6f);
+	player->setItem(Tags::PDITEM_WOOD, 1e6f);
+	player->setItem(Tags::PDITEM_GOLD, 1e6f);
+	auto tileCentre = [](const GameObjBlueprint* bp, int tx, int tz) {
+		return Vector3(tx * 5.0f + 2.5f + bp->footprint->originX, 0.0f, tz * 5.0f + 2.5f + bp->footprint->originZ);
+	};
+	auto check = [&](const char* stage, ServerGameObject* city) {
+		const auto [tw, th] = server.terrain->getNumPlayableTiles();
+		int x0 = 1 << 30, z0 = 1 << 30, x1 = -1, z1 = -1;
+		for (const auto& r : city->cityRectangles) {
+			x0 = std::min(x0, r.xStart - 1); z0 = std::min(z0, r.yStart - 1);
+			x1 = std::max(x1, r.xEnd + 1); z1 = std::max(z1, r.yEnd + 1);
+		}
+		auto inside = [&](int x, int z) {
+			for (const auto& r : city->cityRectangles)
+				if (r.xStart <= x && x <= r.xEnd && r.yStart <= z && z <= r.yEnd)
+					return true;
+			return false;
+		};
+		// the pieces positioned on a tile and the one whose footprint takes it (a gatehouse)
+		auto piecesOn = [&](int x, int z) {
+			std::vector<ServerGameObject*> pieces;
+			auto add = [&](ServerGameObject* o) {
+				if (o && o->parent == city && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING
+					&& (o->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE
+						|| (o->blueprint->buildingType >= Tags::BUILDINGTYPE_WALL && o->blueprint->buildingType <= Tags::BUILDINGTYPE_WALL_CROSSROADS))
+					&& std::find(pieces.begin(), pieces.end(), o) == pieces.end())
+					pieces.push_back(o);
+			};
+			if (x >= 0 && z >= 0 && x < tw && z < th) {
+				for (const auto& ref : server.tiles[z * tw + x].objList)
+					add(ref.getFrom<Server>());
+				add(server.tiles[z * tw + x].building.getFrom<Server>());
+			}
+			return pieces;
+		};
+		// where a piece's wall leaves its tile, from the models: a straight piece and a gatehouse
+		// along their x, the corners along -x and -z, the cross piece all four ways; turned a
+		// quarter at a time from x to z
+		auto arms = [](const ServerGameObject* o) {
+			std::vector<std::pair<int, int>> a;
+			switch (o->blueprint->buildingType) {
+			case Tags::BUILDINGTYPE_WALL_CORNER_IN: case Tags::BUILDINGTYPE_WALL_CORNER_OUT: a = { { -1, 0 }, { 0, -1 } }; break;
+			case Tags::BUILDINGTYPE_WALL_CROSSROADS: a = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; break;
+			default: a = { { 1, 0 }, { -1, 0 } }; break;
+			}
+			const int quarter = ((int)std::lround(o->orientation.y / 1.5707963f) % 4 + 4) % 4;
+			for (auto& [dx, dz] : a)
+				for (int q = 0; q < quarter; q++)
+					std::tie(dx, dz) = std::make_pair(-dz, dx);
+			return a;
+		};
+		int border = 0, missing = 0, doubled = 0, within = 0, loose = 0;
+		for (int z = z1; z >= z0; z--) {
+			std::string row;
+			for (int x = x0; x <= x1; x++) {
+				const std::vector<ServerGameObject*> pieces = piecesOn(x, z);
+				bool onBorder = false;
+				for (int dz = -1; dz <= 1; dz++)
+					for (int dx = -1; dx <= 1; dx++)
+						onBorder |= !inside(x + dx, z + dz);
+				const bool in = inside(x, z);
+				char c = in ? ' ' : '.';
+				if (in && onBorder) {
+					border++;
+					if (pieces.empty()) { c = '?'; missing++; }
+					else if (pieces.size() > 1) { c = '2'; doubled++; }
+					else {
+						const int quarter = ((int)std::lround(pieces[0]->orientation.y / 1.5707963f) % 4 + 4) % 4;
+						switch (pieces[0]->blueprint->buildingType) {
+						case Tags::BUILDINGTYPE_WALL: c = (quarter & 1) ? '|' : '-'; break;
+						case Tags::BUILDINGTYPE_WALL_CORNER_OUT: c = 'o'; break;
+						case Tags::BUILDINGTYPE_WALL_CORNER_IN: c = 'i'; break;
+						case Tags::BUILDINGTYPE_WALL_CROSSROADS: c = '+'; break;
+						default: c = 'G'; break;
+						}
+						// an arm into a tile with no piece leaves the ring open there
+						for (const auto& [dx, dz] : arms(pieces[0]))
+							if (piecesOn(x + dx, z + dz).empty()) {
+								c = 'x';
+								loose++;
+								break;
+							}
+					}
+				}
+				else if (!pieces.empty()) { c = '!'; within++; }
+				row += c;
+			}
+			printf("  %s\n", row.c_str());
+		}
+		printf("WALLRING %s: %d border tiles, %d missing, %d doubled, %d inside, %d turned wrong\n", stage, border, missing, doubled, within, loose);
+	};
+
+	// a Manor on open ground near the start, then barracks overlapping it on the east and the north
+	ServerGameObject* first = nullptr;
+	int mx = 0, mz = 0;
+	for (int tz = 50; tz <= 80 && !first; tz++)
+		for (int tx = 50; tx <= 80 && !first; tx++)
+			if ((first = server.stampdownObject(manor, player, tileCentre(manor, tx, tz), Vector3(0, 0, 0), true, true)))
+				mx = tx, mz = tz;
+	if (!first || !first->parent || first->parent->blueprint->bpClass != Tags::GAMEOBJCLASS_CITY) {
+		printf("WALLRING no Manor stamped down\n");
+		return;
+	}
+	ServerGameObject* city = (ServerGameObject*)first->parent;
+	check("manor", city);
+	const int steps[2][2] = { { 6, 3 }, { -3, 6 } };
+	const char* stages[2] = { "east barracks", "north barracks" };
+	for (int k = 0; k < 2; k++) {
+		ServerGameObject* b = nullptr;
+		for (int d = 0; d < 4 && !b; d++)
+			b = server.stampdownObject(barracks, player, tileCentre(barracks, mx + steps[k][0] + d, mz + steps[k][1]), Vector3(0, 0, 0), true, true);
+		if (!b)
+			printf("WALLRING %s not stamped down\n", stages[k]);
+		else if (b->parent != city)
+			printf("WALLRING %s at (%.1f, %.1f) started a city of its own\n", stages[k], b->position.x, b->position.z);
+		else
+			check(stages[k], city);
+	}
+
+	// for a look at it in game: the foundations swapped for their finished buildings (the
+	// blueprint without " Foundation"), saved as saved\Save_Games\WallRing.sav
+	const Vector3 manorAt = first->position;
+	std::vector<ServerGameObject*> foundations;
+	for (const auto& [bpid, objlist] : city->children)
+		for (CommonGameObject* c : objlist)
+			if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation"))
+				foundations.push_back((ServerGameObject*)c);
+	for (ServerGameObject* o : foundations) {
+		const std::string built = o->blueprint->name.substr(0, o->blueprint->name.size() - 11);
+		if (const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, built)) {
+			const Vector3 at = o->position, turn = o->orientation;
+			server.destroyObject(o);
+			server.spawnObject(bp, city, at, turn);
+		}
+	}
+	// the player as the human one, which a save to play needs
+	if (server.clientPlayerObjects.empty())
+		server.clientPlayerObjects.emplace_back(player->id);
+	const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / "WallRing.sav");
+	printf("WALLRING saved %d to %s, the Manor at (%.1f, %.1f)\n", (int)server.saveGame(path.c_str()), path.c_str(), manorAt.x, manorAt.z);
+	fflush(stdout);
+}
+
 // The differential harness's wkbre2 side ("diffRun": { "source": "Save_Games\\X.sav",
 // "seconds": N, "out": "name" } in wkconfig.json): the save loaded, run for N game seconds in
 // fixed 20 ms steps, then saved as saved\Save_Games\<out>.sav, to compare with the original's
@@ -2628,6 +2791,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_DiffRun, "Differential run (a save run for N game seconds, then saved)"},
 {Test_TerrainNormals, "Terrain normals of 4 Peaks (a text file, for the lighting comparison)"},
 {Test_Levelling, "Levelling: a barracks stamped down flattens the ground under it"},
+{Test_WallRing, "Wall ring as a city grows (corners where rectangles meet)"},
 };
 
 void LaunchTest()

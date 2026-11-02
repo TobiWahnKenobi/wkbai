@@ -90,12 +90,13 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			}
 			return false;
 			};
+		// the rectangles share a tile; wkbre2 asked whether an end of one lay within the other,
+		// which missed a rectangle reaching across a city's whole side: that started a city of
+		// its own, whose ring stood across the first one's
 		const auto cityIntersectsWithRect = [](const std::vector<CityRectangle>& cityRectangles, const CityRectangle& rect) -> bool {
 			for (const auto& cityRect : cityRectangles) {
-				bool intersects_x = (cityRect.xStart <= rect.xStart && rect.xStart <= cityRect.xEnd)
-					|| (cityRect.xStart <= rect.xEnd && rect.xEnd <= cityRect.xEnd);
-				bool intersects_y = (cityRect.yStart <= rect.yStart && rect.yStart <= cityRect.yEnd)
-					|| (cityRect.yStart <= rect.yEnd && rect.yEnd <= cityRect.yEnd);
+				const bool intersects_x = rect.xStart <= cityRect.xEnd && cityRect.xStart <= rect.xEnd;
+				const bool intersects_y = rect.yStart <= cityRect.yEnd && cityRect.yStart <= rect.yEnd;
 				if (intersects_x && intersects_y) {
 					return true;
 				}
@@ -141,112 +142,163 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 
 			cityRectangles.push_back(plan.cityRectangle);
 
-			for (int wall_x = footprint->wallOriginDefaultMinX; wall_x <= footprint->wallOriginDefaultMaxX; ++wall_x) {
-				for (int wall_y = footprint->wallOriginDefaultMinY; wall_y <= footprint->wallOriginDefaultMaxY; ++wall_y) {
-					Vector3 wallPos = position + Vector3(wall_x, 0, wall_y) * 5.0f;
-					int wx = static_cast<int>(position.x / 5.0f) + wall_x;
-					int wz = static_cast<int>(position.z / 5.0f) + wall_y;
+			// The ring around the city's rectangles, redone wherever the new rectangle changes it:
+			// on its tiles and the tiles next to it, as no other tile's neighbours change. wkbre2
+			// laid only the new rectangle's border and left the old ring as it was, so where two
+			// rectangles met, old corner pieces stood in the middle of a side, walls ran on inside
+			// the city, and the inner corners (no WALL_CORNER_IN was ever laid) stayed open.
+			//
+			// A border tile's piece follows from which of its eight neighbours lie outside the city:
+			// one side outside, a straight piece along it; two sides next to each other, an outer
+			// corner; no side but one diagonal, an inner corner; no side but more diagonals (two
+			// rectangles touching at a corner), the cross piece. The angles come from the models:
+			// the straight stockade runs along its x and the corner pieces have their two arms
+			// along -x and -z (Stockade*.mesh3), turned a quarter at a time (x to z, z to -x).
+			const int nx0 = std::max(plan.cityRectangle.xStart - 1, 0), nx1 = std::min(plan.cityRectangle.xEnd + 1, tileWidth - 1);
+			const int nz0 = std::max(plan.cityRectangle.yStart - 1, 0), nz1 = std::min(plan.cityRectangle.yEnd + 1, tileHeight - 1);
+			auto outside = [&](int tx, int tz) { return !cityContainsTile(cityRectangles, tx, tz); };
+			// the walls (and gatehouses, which stand in for four of them) already on a tile: those
+			// whose position is on it, and the building whose footprint takes it (a gatehouse's
+			// position is on one of its four tiles only)
+			auto wallsOn = [&, tileWidth = tileWidth](int tx, int tz) {
+				std::vector<CommonGameObject*> walls;
+				if (!gameState->tiles)
+					return walls;
+				const auto& tile = gameState->tiles[tz * tileWidth + tx];
+				auto add = [&](CommonGameObject* tileBuilding) {
+					if (tileBuilding && std::find(walls.begin(), walls.end(), tileBuilding) == walls.end()
+						&& (tileBuilding->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE
+							|| std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), tileBuilding->blueprint->buildingType) != std::end(wallBuildingTypes)))
+						walls.push_back(tileBuilding);
+				};
+				for (const auto& tileObjRef : tile.objList)
+					add(tileObjRef.getFrom(gameState));
+				add(tile.building.getFrom(gameState));
+				return walls;
+			};
+			auto remove = [&](CommonGameObject* obj) {
+				for (const auto& removal : plan.toRemove)
+					if (removal.object == obj->id)
+						return;
+				plan.toRemove.emplace_back().object = obj->id;
+			};
+			// straight pieces a gatehouse already stands in for: (the gatehouse, the piece)
+			std::vector<std::pair<GameObjectRef, StampdownCreateAction>> keptByGate;
 
-					if (!(0 <= wx && wx < tileWidth && 0 <= wz && wz < tileHeight))
+			// the piece a tile of the city takes (no blueprint: none, it is inside)
+			auto pieceFor = [&](int wx, int wz) {
+				const bool left = outside(wx - 1, wz), right = outside(wx + 1, wz);
+				const bool bottom = outside(wx, wz - 1), top = outside(wx, wz + 1);
+
+				const GameObjBlueprint* needWall = nullptr;
+				float needAngle = 0.0f;
+				if (!left && !right && !bottom && !top) {
+					const bool dl = outside(wx - 1, wz - 1), dr = outside(wx + 1, wz - 1);
+					const bool ur = outside(wx + 1, wz + 1), ul = outside(wx - 1, wz + 1);
+					const int diagonals = dl + dr + ur + ul;
+					if (diagonals == 1) {
+						needWall = bpWallCornerIn;
+						needAngle = dl ? 0.0f : dr ? 0.25f : ur ? 0.5f : 0.75f;
+					}
+					else if (diagonals > 1)
+						needWall = bpWallCrossPiece;
+				}
+				else if (left && !right && !top && bottom) {
+					// |.
+					needWall = bpWallCornerOut;
+					needAngle = 0.5f;
+				}
+				else if (!left && right && !top && bottom) {
+					// .|
+					needWall = bpWallCornerOut;
+					needAngle = 0.75f;
+				}
+				else if (!left && right && top && !bottom) {
+					// '|
+					needWall = bpWallCornerOut;
+					needAngle = 0.0f;
+				}
+				else if (left && !right && top && !bottom) {
+					// |'
+					needWall = bpWallCornerOut;
+					needAngle = 0.25f;
+				}
+				else if (!left && right) {
+					needWall = bpWall;
+					needAngle = 0.25f;
+				}
+				else if (!bottom && top) {
+					needWall = bpWall;
+					needAngle = 0.5f;
+				}
+				else if (left && !right) {
+					needWall = bpWall;
+					needAngle = 0.75f;
+				}
+				else if (bottom && !top) {
+					needWall = bpWall;
+					needAngle = 0.0f;
+				}
+				// a strip one tile wide: a straight piece across it
+				else if (left && right && !(bottom && top)) {
+					needWall = bpWall;
+					needAngle = 0.25f;
+				}
+				else if (bottom && top && !(left && right)) {
+					needWall = bpWall;
+					needAngle = 0.0f;
+				}
+				return StampdownCreateAction{ needWall, Vector3(wx * 5.0f + 2.5f, position.y, wz * 5.0f + 2.5f),
+					Vector3(0.0f, needAngle * 3.1415f * 2.0f, 0.0f) };
+			};
+
+			for (int wx = nx0; wx <= nx1; ++wx) {
+				for (int wz = nz0; wz <= nz1; ++wz) {
+					if (outside(wx, wz))
 						continue;
-
-					// are we on the border of the new rectangle?
-					if (wall_x == footprint->wallOriginDefaultMinX || wall_x == footprint->wallOriginDefaultMaxX
-						|| wall_y == footprint->wallOriginDefaultMinY || wall_y == footprint->wallOriginDefaultMaxY) {
-						enum TileType
-						{
-							TOutside,
-							TInside,
-							TWall
-						};
-						auto tileType = [&, tileWidth = tileWidth](int tx, int tz) {
-							if (cityContainsTile(cityRectangles, tx, tz)) {
-								if (!gameState->tiles)
-									return TInside;
-								//auto* tileBuilding = tiles[tz * tileWidth + tx].building.getFrom<Server>();
-								//if (tileBuilding) {
-								for (const auto& tileObjRef : gameState->tiles[tz * tileWidth + tx].objList) {
-									if (CommonGameObject* tileBuilding = tileObjRef.getFrom(gameState)) {
-										auto it = std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), tileBuilding->blueprint->buildingType);
-										if (it != std::end(wallBuildingTypes)) {
-											return TWall;
-										}
-									}
-								}
-								return TInside;
-							}
-							return TOutside;
-							};
-
-						const GameObjBlueprint* needWall = nullptr;
-						float needAngle = 0.0f;
-
-						TileType leftType = tileType(wx - 1, wz);
-						TileType rightType = tileType(wx + 1, wz);
-						TileType bottomType = tileType(wx, wz - 1);
-						TileType topType = tileType(wx, wz + 1);
-						//if (leftType != TOutside && rightType != TOutside && bottomType != TOutside && topType != TOutside) {
-						//	needWall = bpWallCrossPiece;
-						//	needAngle = 0.0f;
-						//}
-						if (leftType == TOutside && rightType != TOutside && topType != TOutside && bottomType == TOutside) {
-							// |.
-							needWall = bpWallCornerOut;
-							needAngle = 0.5f;
+					// what stands there already: kept if it is that piece (built or not, stockade
+					// or stone), else taken down; a gatehouse is kept where the wall runs on straight
+					const StampdownCreateAction piece = pieceFor(wx, wz);
+					const int needQuarter = (int)std::lround(piece.orientation.y / (3.1415f * 0.5f)) % 4;
+					bool keep = false;
+					for (CommonGameObject* wall : wallsOn(wx, wz)) {
+						const int type = wall->blueprint->buildingType;
+						const int quarter = ((int)std::lround(wall->orientation.y / (3.1415f * 0.5f)) % 4 + 4) % 4;
+						const bool same = piece.blueprint && type == piece.blueprint->buildingType && (piece.blueprint == bpWallCrossPiece || quarter == needQuarter);
+						if (same)
+							keep = true;
+						else if (piece.blueprint == bpWall && type == Tags::BUILDINGTYPE_GATEHOUSE) {
+							keptByGate.push_back({ wall->id, piece });
+							keep = true;
 						}
-						else if (leftType != TOutside && rightType == TOutside && topType != TOutside && bottomType == TOutside) {
-							// .|
-							needWall = bpWallCornerOut;
-							needAngle = 0.75f;
-						}
-						else if (leftType != TOutside && rightType == TOutside && topType == TOutside && bottomType != TOutside) {
-							// '|
-							needWall = bpWallCornerOut;
-							needAngle = 0.0f;
-						}
-						else if (leftType == TOutside && rightType != TOutside && topType == TOutside && bottomType != TOutside) {
-							// |'
-							needWall = bpWallCornerOut;
-							needAngle = 0.25f;
-						}
-						else if (leftType != TOutside && rightType == TOutside) {
-							needWall = bpWall;
-							needAngle = 0.25f;
-						}
-						else if (bottomType != TOutside && topType == TOutside) {
-							needWall = bpWall;
-							needAngle = 0.5f;
-						}
-						else if (leftType == TOutside && rightType != TOutside) {
-							needWall = bpWall;
-							needAngle = 0.75f;
-						}
-						else if (bottomType == TOutside && topType != TOutside) {
-							needWall = bpWall;
-							needAngle = 0.0f;
-						}
-
-						if (needWall) {
-							StampdownCreateAction& creation = plan.toCreate.emplace_back();
-							creation.blueprint = needWall;
-							creation.position = wallPos;
-							creation.orientation = Vector3(0.0f, needAngle * 3.1415f * 2.0f, 0.0f);
-						}
+						else
+							remove(wall);
 					}
-					else {
-						if (!gameState->tiles)
-							continue;
-						for (const auto& tileObjRef : gameState->tiles[wz * tileWidth + wx].objList) {
-							if (CommonGameObject* tileBuilding = tileObjRef.getFrom(gameState)) {
-								auto it = std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), tileBuilding->blueprint->buildingType);
-								if (it != std::end(wallBuildingTypes)) {
-									// wall now inside city, remove it
-									StampdownRemoveAction& removal = plan.toRemove.emplace_back();
-									removal.object = tileBuilding->id;
-								}
-							}
+					if (piece.blueprint && !keep)
+						plan.toCreate.push_back(piece);
+				}
+			}
+			// a gatehouse taken down on one of its tiles (where a corner goes now, or the city has
+			// grown over it) leaves its other tiles to straight pieces, also those past the tiles
+			// redone above
+			for (const auto& [gate, piece] : keptByGate)
+				if (std::any_of(plan.toRemove.begin(), plan.toRemove.end(), [&](const StampdownRemoveAction& r) { return r.object == gate; }))
+					plan.toCreate.push_back(piece);
+			if (gameState->tiles) {
+				for (const auto& removal : std::vector<StampdownRemoveAction>(plan.toRemove)) {
+					const CommonGameObject* gate = removal.object.getFrom(gameState);
+					if (!gate || gate->blueprint->buildingType != Tags::BUILDINGTYPE_GATEHOUSE)
+						continue;
+					const int gx = (int)(gate->position.x / 5.0f), gz = (int)(gate->position.z / 5.0f);
+					for (int wx = std::max(gx - 3, 0); wx <= std::min(gx + 3, tileWidth - 1); ++wx)
+						for (int wz = std::max(gz - 3, 0); wz <= std::min(gz + 3, tileHeight - 1); ++wz) {
+							if (nx0 <= wx && wx <= nx1 && nz0 <= wz && wz <= nz1)
+								continue;
+							if (gameState->tiles[wz * tileWidth + wx].building.getFrom(gameState) != gate || outside(wx, wz))
+								continue;
+							if (const StampdownCreateAction piece = pieceFor(wx, wz); piece.blueprint)
+								plan.toCreate.push_back(piece);
 						}
-					}
 				}
 			}
 		}
@@ -256,35 +308,57 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 	// pieces in the middle of the side the building's door faces (the model's +z, turned with the
 	// building; the Manor's door faces its palisade's opening on 4 Peaks), so that the ring has a
 	// way out. That the original takes the door's side is from playing it, not traced.
-	if (civic && blueprint->createGatehouseWhenAutowalling && gameState->terrain && !plan.toCreate.empty()) {
+	// A gatehouse the city grew over is laid again in the new run of wall nearest to where it
+	// stood, so that the ring keeps its way out (not traced either).
+	const CommonGameObject* lostGate = nullptr;
+	for (const auto& removal : plan.toRemove)
+		if (const CommonGameObject* obj = removal.object.getFrom(gameState); obj && obj->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE)
+			lostGate = obj;
+	if (civic && (blueprint->createGatehouseWhenAutowalling || lostGate) && gameState->terrain && !plan.toCreate.empty()) {
 		const GameSet* gameSet = gameState->gameSet.get();
 		const GameObjBlueprint* bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Foundation");
 		const GameObjBlueprint* bpGate = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
 		const Vector3 door(std::sin(orientation.y), 0, std::cos(orientation.y));
-		// the straight pieces by side (their angle)
-		std::map<int, std::vector<size_t>> sides;
+		// the new straight pieces by side (their angle and the line they stand on), then split
+		// into unbroken runs: where the city grew, a side's new pieces can be several runs
+		std::map<std::pair<int, int>, std::vector<size_t>> lines;
 		for (size_t i = 0; i < plan.toCreate.size(); i++)
-			if (plan.toCreate[i].blueprint == bpWall)
-				sides[(int)std::lround(plan.toCreate[i].orientation.y * 100.0f)].push_back(i);
-		int bestSide = 0;
+			if (plan.toCreate[i].blueprint == bpWall) {
+				const int angle = (int)std::lround(plan.toCreate[i].orientation.y * 100.0f);
+				const Vector3& p = plan.toCreate[i].position;
+				const bool alongZ = angle == 157 || angle == 471;
+				lines[{ angle, (int)std::floor((alongZ ? p.x : p.z) / 5.0f) }].push_back(i);
+			}
+		std::vector<std::vector<size_t>> sides;
+		for (auto& [key, pieces] : lines) {
+			std::sort(pieces.begin(), pieces.end(), [&](size_t a, size_t b) {
+				const Vector3& pa = plan.toCreate[a].position;
+				const Vector3& pb = plan.toCreate[b].position;
+				return pa.x + pa.z < pb.x + pb.z; });
+			for (size_t k = 0; k < pieces.size(); k++) {
+				const Vector3& prev = plan.toCreate[pieces[k ? k - 1 : 0]].position;
+				const Vector3& cur = plan.toCreate[pieces[k]].position;
+				if (k == 0 || std::abs(cur.x + cur.z - prev.x - prev.z) > 5.5f)
+					sides.emplace_back();
+				sides.back().push_back(pieces[k]);
+			}
+		}
+		size_t bestSide = 0;
 		float bestAhead = -1e30f;
-		for (const auto& [side, pieces] : sides) {
+		for (size_t side = 0; side < sides.size(); side++) {
+			const std::vector<size_t>& pieces = sides[side];
 			if (pieces.size() < 4)
 				continue;
 			Vector3 mid(0, 0, 0);
 			for (size_t i : pieces)
 				mid += plan.toCreate[i].position;
 			mid *= 1.0f / pieces.size();
-			const float ahead = (mid.x - position.x) * door.x + (mid.z - position.z) * door.z;
+			const float ahead = lostGate ? -(mid - lostGate->position).len2xz()
+				: (mid.x - position.x) * door.x + (mid.z - position.z) * door.z;
 			if (ahead > bestAhead) { bestAhead = ahead; bestSide = side; }
 		}
 		if (bpGate && bestAhead > -1e30f) {
-			std::vector<size_t> pieces = sides[bestSide];
-			// in order along the side
-			std::sort(pieces.begin(), pieces.end(), [&](size_t a, size_t b) {
-				const Vector3& pa = plan.toCreate[a].position;
-				const Vector3& pb = plan.toCreate[b].position;
-				return pa.x + pa.z < pb.x + pb.z; });
+			const std::vector<size_t> pieces = sides[bestSide];
 			const size_t first = pieces.size() / 2 - 2;
 			Vector3 at(0, 0, 0);
 			for (size_t k = 0; k < 4; k++)
