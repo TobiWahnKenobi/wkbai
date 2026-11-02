@@ -80,6 +80,7 @@ private:
 	// up (offered where Matchmaking::offerOn says)
 	bool gameRunning = false;
 	uint64_t listingTime = 0;
+	std::string listingMap; // the lobby's name of the map, kept for the running game
 	void updateListing();
 	// Kingmaker campaign: the profile and province of the game being started or played
 	std::string campaignProfile, campaignProvince;

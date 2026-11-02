@@ -314,6 +314,9 @@ int main()
 	printf("Welcome to wkbai ! :)\n\n");
 
 	LoadSettings();
+	// lobby tests stop the program from outside: the log unbuffered, so that nothing is lost
+	if (g_settings.contains("lobbyTest"))
+		setvbuf(stdout, nullptr, _IONBF, 0);
 	g_renderSettings.load();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
 	if (g_settings.contains("userPath"))

@@ -13,7 +13,8 @@
 //  - sign-in: a device id (made once, kept in the user folder's matchmaking.json), an account
 //    created for it the first time (POST /v2/account/authenticate/device);
 //  - a hosted game: a publicly readable storage object (collection "wkbai_games", key "game")
-//    holding the listing, written again every 30 s (a listing not written for 100 s is left out);
+//    holding the listing, written again every 20 s (a listing not written for 60 s is left out:
+//    its host is gone without withdrawing it); the newest first;
 //  - a relayed match (the realtime socket) per hosted game, through which guests reach the host:
 //      op 3 a guest's addresses: the host punches its NAT towards them, then the guest connects
 //           with ENet to the host's addresses
@@ -29,6 +30,7 @@
 #include "../file.h"
 #include <enet/enet.h>
 #include <SDL3/SDL_timer.h>
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <ctime>
@@ -437,7 +439,11 @@ struct NakamaService : MatchmakingService {
 		if (!hosting || hostMatchId.empty())
 			return;
 		lastWrite = SDL_GetTicks();
-		const json body = { { "objects", json::array({ { { "collection", COLLECTION }, { "key", "game" }, { "value", hostListing.dump() },
+		// Nakama leaves an object it is given unchanged as it was, its update_time too: the time of
+		// writing makes every write a change
+		json value = hostListing;
+		value["written"] = (int64_t)time(nullptr);
+		const json body = { { "objects", json::array({ { { "collection", COLLECTION }, { "key", "game" }, { "value", value.dump() },
 			{ "permission_read", 2 }, { "permission_write", 1 } } }) } };
 		post([this, body] {
 			const HttpResult r = api("PUT", "/v2/storage", body.dump());
@@ -545,15 +551,16 @@ struct NakamaService : MatchmakingService {
 				std::lock_guard lock(accountMutex);
 				me = userId;
 			}
-			std::vector<GameListing> list;
+			std::vector<std::pair<int64_t, GameListing>> written; // update time, listing
 			std::map<std::string, std::string> matches;
 			const json j = json::parse(r.body, nullptr, false);
 			const int64_t now = time(nullptr);
 			if (r.status == 200 && j.is_object())
 				for (const auto& o : j.value("objects", json::array())) {
 					const std::string owner = o.value("user_id", std::string());
-					// a listing not written for 100 s: its host is gone
-					if (owner.empty() || owner == me || now - ParseTime(o.value("update_time", std::string())) > 100)
+					// a listing not written for 60 s: its host is gone
+					const int64_t updated = ParseTime(o.value("update_time", std::string()));
+					if (owner.empty() || owner == me || now - updated > 60)
 						continue;
 					const json v = json::parse(o.value("value", std::string()), nullptr, false);
 					if (!v.is_object() || v.value("match", std::string()).empty())
@@ -563,8 +570,12 @@ struct NakamaService : MatchmakingService {
 					l.id = owner;
 					l.seen = SDL_GetTicks();
 					matches[owner] = v.value("match", std::string());
-					list.push_back(std::move(l));
+					written.emplace_back(updated, std::move(l));
 				}
+			std::stable_sort(written.begin(), written.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+			std::vector<GameListing> list;
+			for (auto& w : written)
+				list.push_back(std::move(w.second));
 			result([this, r, list = std::move(list), matches = std::move(matches)] {
 				listing = false;
 				if (r.status != 200) {
@@ -615,7 +626,7 @@ struct NakamaService : MatchmakingService {
 				hostListing = listingJson(lastPublished);
 				writeListing();
 			}
-			if (SDL_GetTicks() - lastWrite > 30000)
+			if (SDL_GetTicks() - lastWrite > 20000)
 				writeListing();
 		}
 		for (auto& [session, link] : transport.links)

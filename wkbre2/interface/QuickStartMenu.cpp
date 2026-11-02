@@ -1008,8 +1008,12 @@ void QuickStartMenu::lobbyTest()
 				snprintf(line, sizeof(line), "MATCHMAKING listing %s: \"%s\" host \"%s\" map \"%s\" players %d/%d spectators %d/%d password %d running %d version %s mods %s addresses %zu",
 					s->id().c_str(), l.name.c_str(), l.hostName.c_str(), l.map.c_str(), l.players, l.places, l.spectators, l.maxSpectators, (int)l.password, (int)l.running,
 					l.version.c_str(), l.modManifest.empty() ? "?" : CompareModLogic(l.modManifest, mine).empty() ? "match" : "differ", l.addresses.size());
-				if (logged.insert(line).second)
-					printf("%s ping %d\n", line, MatchmakingPing(l));
+				// with the ping (it comes with a later look); flushed, since tests stop the program
+				const std::string withPing = std::string(line) + " ping " + std::to_string(MatchmakingPing(l));
+				if (logged.insert(withPing).second) {
+					printf("%s\n", withPing.c_str());
+					fflush(stdout);
+				}
 			}
 		MatchmakingService* service = Matchmaking::get().find(want);
 		const std::vector<GameListing> list = service ? service->listings() : std::vector<GameListing>();
@@ -1184,7 +1188,7 @@ void QuickStartMenu::updateListing()
 				end = lobbyText.size();
 			const std::string part = lobbyText.substr(start, end - start);
 			if (line++ == 0)
-				l.map = part;
+				l.map = listingMap = part;
 			else if (!part.empty()) {
 				l.places++;
 				if (part[0] == 'H' || part[0] == 'G')
@@ -1194,6 +1198,8 @@ void QuickStartMenu::updateListing()
 		}
 		l.spectators = std::max(0, (int)guests.size() + 1 - l.players);
 	}
+	if (l.map.empty())
+		l.map = listingMap;
 	if (l.map.empty() && savselected < savegames.size()) {
 		l.map = savegames[savselected];
 		if (const size_t dot = l.map.rfind('.'); dot != std::string::npos)
