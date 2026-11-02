@@ -10,7 +10,9 @@ null renderer, so no window waits on the screen (the screenshot test opens one f
     relay      through Nakama with "relay": "always": the game's packets go through the server
     plugin     the Epic Online Services plugin (stub without the SDK) is loaded and listed
 
-Run: python tests/test_matchmaking.py [-v]   (WKBRE2_EXE overrides wkbai.exe, WKB_GAME_DATA the
+Run: python tests/test_matchmaking.py [-v]   (WKB_NAKAMA=http://127.0.0.1:7350 uses a real Nakama
+    server instead of the mock)
+       (WKBRE2_EXE overrides wkbai.exe, WKB_GAME_DATA the
     game folder; WKB_SCREENSHOT=<path.bmp> also saves the multiplayer page's game list)
 """
 import json
@@ -93,6 +95,11 @@ class Matchmaking(unittest.TestCase):
         self.procs.append(p)
         return p
 
+    def nakama_server(self):
+        """WKB_NAKAMA=http://127.0.0.1:7350: a real Nakama server, else the mock"""
+        real = os.environ.get('WKB_NAKAMA')
+        return real if real else 'http://127.0.0.1:%d' % self.start_mock()
+
     def start_mock(self):
         port = free_port()
         self.mock_log = open(Path(self.tmp) / 'nakama.txt', 'w+', encoding='utf-8')
@@ -102,6 +109,8 @@ class Matchmaking(unittest.TestCase):
         return port
 
     def mock_text(self):
+        if not self.mock:
+            return None
         self.mock_log.flush()
         return (Path(self.tmp) / 'nakama.txt').read_text(encoding='utf-8', errors='replace')
 
@@ -131,21 +140,22 @@ class Matchmaking(unittest.TestCase):
         self.play({'local': {'targets': ['127.0.0.1:1234']}, 'plugins': False}, 'local')
 
     def test_nakama(self):
-        port = self.start_mock()
         # the local network finds nothing (no targets): the game comes through Nakama only
-        mm = {'local': {'targets': []}, 'nakama': {'server': 'http://127.0.0.1:%d' % port}, 'plugins': False}
+        mm = {'local': {'targets': []}, 'nakama': {'server': self.nakama_server()}, 'plugins': False}
         h, g = self.play(mm, 'nakama', offer=['nakama'], expect_link='Nakama, then ENet 127.0.0.1:1234')
         self.assertIn('Matchmaking: the game is offered on Nakama', h)
         n = self.mock_text()
+        if n is None:
+            return
         self.assertIn('storage write wkbai_games game', n)
         self.assertIn('match op 3', n.replace('match data op', 'match op'))  # the guest's addresses for the punch
 
     def test_relay(self):
-        port = self.start_mock()
-        mm = {'local': {'targets': []}, 'nakama': {'server': 'http://127.0.0.1:%d' % port, 'relay': 'always'}, 'plugins': False}
+        mm = {'local': {'targets': []}, 'nakama': {'server': self.nakama_server(), 'relay': 'always'}, 'plugins': False}
         h, g = self.play(mm, 'nakama', offer=['nakama'], expect_link='Nakama relay')
         self.assertIn('Matchmaking: a guest joins through the Nakama relay', h)
-        self.assertIn('match data relayed', self.mock_text())
+        if self.mock:
+            self.assertIn('match data relayed', self.mock_text())
 
     def test_plugin(self):
         plugins = EXE.parent / 'plugins'
@@ -157,9 +167,9 @@ class Matchmaking(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('WKB_SCREENSHOT'), 'WKB_SCREENSHOT not set')
     def test_screenshot(self):
-        port = self.start_mock()
+        server = self.nakama_server()
         targets = {'targets': ['127.0.0.1:1234', '127.0.0.1:1240']}
-        nakama = {'server': 'http://127.0.0.1:%d' % port}
+        nakama = {'server': server}
         # a game on the local network with a password, one offered on Nakama too
         self.start('Anna', {'matchmaking': {'local': targets, 'nakama': nakama, 'plugins': False},
                             'lobbyTest': {'host': LEVEL, 'startAfter': 600000, 'password': 'secret'}})

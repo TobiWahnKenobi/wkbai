@@ -90,7 +90,9 @@ async def handle_http(method, path, query, headers, body, writer):
             storage[k] = {'collection': o['collection'], 'key': o['key'], 'user_id': user, 'value': o['value'],
                           'version': uuid.uuid4().hex, 'permission_read': o.get('permission_read', 1),
                           'permission_write': o.get('permission_write', 1),
-                          'create_time': old['create_time'] if old else now_text(), 'update_time': now_text()}
+                          'create_time': old['create_time'] if old else now_text(),
+                          # as Nakama: an unchanged value is no write, its update_time stays
+                          'update_time': old['update_time'] if old and old['value'] == o['value'] else now_text()}
             acks.append({'collection': o['collection'], 'key': o['key'], 'version': storage[k]['version'], 'user_id': user})
             log('storage write', o['collection'], o['key'], 'by', user, o['value'][:160])
         return await respond(writer, 200, {'acks': acks})
