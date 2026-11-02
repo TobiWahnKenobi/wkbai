@@ -186,8 +186,10 @@ void Server::loadSaveGame(const char * filename)
 			b->removeBuiltUponUnderFootprint(true);
 	}
 
+	// (a save of AIs only has no player for the client: it watches)
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
-		clientPlayerObjects[i]->clientIndex = i;
+		if (ServerGameObject* player = clientPlayerObjects[i])
+			player->clientIndex = i;
 
 	timeManager.unlock();
 	timeManager.unpause();
