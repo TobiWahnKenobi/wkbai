@@ -179,7 +179,6 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("bumpMapping", "lighting", "Terrain bump mapping", rs.bumpMapping));
-		list.push_back(toggle("terrainSplat", "lighting", "Blended terrain", rs.terrainSplat));
 		list.push_back(toggle("modelLighting", "lighting", "Model highlights", rs.modelLighting));
 		list.push_back(withEnabled(slider("modelDetailNormals", "lighting", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));

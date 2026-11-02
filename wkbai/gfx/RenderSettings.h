@@ -60,9 +60,6 @@ struct RenderSettings {
 	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
 	// 1/3 up, so slopes facing away from the sun stay lit
 	bool terrainOriginalLight = true;
-	// the terrain's materials blended at the tile corners instead of the original's painted tiles
-	// (enhanced renderer on Diligent; gfx/EnhancedTerrainData.h)
-	bool terrainSplat = false;
 	bool characterShadows = true;    // the units' blob shadows
 	// the units drawn into the sun's shadow map instead (their real shape; enhanced renderers with
 	// building shadows on): the original only has the blobs

@@ -50,10 +50,6 @@ Texture2D skyRight;
 Texture2D skyBack;
 Texture2D skyLeft;
 Texture2D skyTop;
-Texture2DArray splatDiffuse;
-Texture2DArray splatNormal;
-Texture2D<uint> splatCorners;
-SamplerState splatSampler;
 
 cbuffer TransformBuffer
 {
@@ -1066,132 +1062,18 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
 	return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
 }
-
-// The splat-map terrain (gfx/EnhancedTerrainData.h): the materials of the four corners of the
-// tile, blended by distance to the corners and sharpened by the textures' brightness (a
-// height blend: the brighter material shows through first), with world-space UVs, one repeat
-// per two tiles. The tangent frame follows the world's x and z.
-
-// A material layer at a ground position (p in world units, tile-aligned): one of its four tiles
-// (the layer's quadrants), picked per 5-unit cell by a hash, with the gradients of the continuous
-// position so the mip level doesn't jump at the cells' borders
-float4 SampleVariant(Texture2DArray<float4> layers, float2 p, uint layer)
-{
-	// the material's four tiles blended by smooth, low noise (about 25 units across). One tile
-	// chosen outright per 5-unit cell drew a grid of differently toned squares.
-	float2 a = smoothstep(0.4, 0.6, ValueNoise2(p * 0.04 + 3.7)); // mostly one tile, narrow seams between
-	float2 local = frac(p / 5) * 0.5;
-	float2 g = p / 10;
-	float2 gx = ddx(g), gy = ddy(g);
-	float4 s0 = layers.SampleGrad(splatSampler, float3(local, layer), gx, gy);
-	float4 s1 = layers.SampleGrad(splatSampler, float3(local + float2(0.5, 0), layer), gx, gy);
-	float4 s2 = layers.SampleGrad(splatSampler, float3(local + float2(0, 0.5), layer), gx, gy);
-	float4 s3 = layers.SampleGrad(splatSampler, float3(local + float2(0.5, 0.5), layer), gx, gy);
-	return lerp(lerp(s0, s1, a.x), lerp(s2, s3, a.x), a.y);
-}
-
-uint4 CornerLayers(int2 c0)
-{
-	return uint4(splatCorners.Load(int3(c0, 0)), splatCorners.Load(int3(c0 + int2(1, 0), 0)),
-		splatCorners.Load(int3(c0 + int2(0, 1), 0)), splatCorners.Load(int3(c0 + int2(1, 1), 0)));
-}
-
-float4 PS_Splat(VS_OUTPUT input) : SV_Target
-{
-	// the blend looks the corners up at a position warped by noise, so that the materials'
-	// borders don't follow the tile grid. (Tiles whose corners all agree had kept their own
-	// picture, whose tone differs from the blended layers: every such tile showed as a square.)
-	// Two octaves, the broad one up to a tile's width: with one of 3.5 units the borders still
-	// stepped along the 5-unit tiles (the user, Tribes Unite: worse than the painted tiles).
-	float2 wp = input.FragPos.xz;
-	// (the finer one small: at 2.5 units it drew squiggles along the borders over a meadow)
-	float2 wpos = wp + (ValueNoise2(wp * 0.06 + 1.3) - 0.5) * 6.5 + (ValueNoise2(wp * 0.21 + 7.9) - 0.5) * 1.0;
-	float2 c = (wpos + BlobParams.w) / 5;
-	int2 c0 = (int2)floor(c);
-	float2 f = c - c0;
-	uint4 l4 = CornerLayers(c0);
-	uint l[4] = { l4.x, l4.y, l4.z, l4.w };
-	float w[4] = { (1 - f.x) * (1 - f.y), f.x * (1 - f.y), (1 - f.x) * f.y, f.x * f.y };
-	// Where the corners around the (warped) point are one material, the tile's own painted
-	// picture and bump map, as with blending off; the blend only near the materials' borders,
-	// faded in by the same smooth weights, so the switch draws no squares. (The user, Tribes
-	// Unite with the HD textures: blended everywhere, the ground lost "all its detail", the bump
-	// mapping and every difference between tiles of a material.)
-	// Materials alike in colour (two grasses) count as one: their painted tiles meet well, and
-	// fading between the tiles and the blend over a meadow drew wavy bands. A material's colour:
-	// its layer's smallest mip.
-	uint lw, lh, le, lv;
-	splatDiffuse.GetDimensions(0, lw, lh, le, lv);
-	float3 mean[4];
-	[unroll] for (int im = 0; im < 4; im++)
-		mean[im] = splatDiffuse.SampleLevel(splatSampler, float3(0.5, 0.5, l[im]), lv - 1).rgb;
-	float agree = 0;
-	[unroll] for (int ia = 0; ia < 4; ia++) {
-		float same = 0;
-		[unroll] for (int ib = 0; ib < 4; ib++)
-			same += w[ib] * saturate(1 - (length(mean[ib] - mean[ia]) - 0.04) * 8);
-		agree = max(agree, same);
-	}
-	// (the blend in a narrow strip along the borders: wider, its tone, a little off the tiles',
-	// showed as bands)
-	float keep = smoothstep(0.7, 0.93, agree);
-	float2 fuv = AtlasUV(input.Texcoord);
-	float4 painted = ShadeTerrain(input, inpTexture.Sample(inpSampler, fuv), normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1,
-		input.Tangent, input.Bitangent);
-	// steep ground (cliffs): the materials projected along the three axes (triplanar), as the
-	// tiles' pictures stretch down a slope
-	float3 n = normalize(input.Norm);
-	float steep = saturate((0.8 - n.y) * 4);
-	float2 gp = input.FragPos.xz + BlobParams.w; // on the tile grid
-	float3 tw = pow(abs(n), 4);
-	tw /= tw.x + tw.y + tw.z;
-	float4 tex = 0;
-	float3 nrm = 0;
-	float4 s[4];
-	float3 sn[4];
-	float h[4];
-	float top = 0;
-	[unroll] for (int i = 0; i < 4; i++) {
-		s[i] = SampleVariant(splatDiffuse, gp, l[i]);
-		if (steep > 0)
-			s[i] = lerp(s[i], tw.y * s[i] + tw.x * SampleVariant(splatDiffuse, input.FragPos.zy, l[i])
-				+ tw.z * SampleVariant(splatDiffuse, input.FragPos.xy, l[i]), steep);
-		sn[i] = SampleVariant(splatNormal, gp, l[i]).xyz * 2 - 1;
-		h[i] = w[i] + dot(s[i].rgb, float3(0.299, 0.587, 0.114)) * 0.35;
-		top = max(top, h[i]);
-	}
-	float total = 0;
-	[unroll] for (int j = 0; j < 4; j++) {
-		// (by the weights alone: the height blend's brighter material first drew bright rims
-		// along the borders, now that the blend is a strip along them)
-		float b = w[j];
-		tex += s[j] * b;
-		nrm += sn[j] * b;
-		total += b;
-	}
-	tex /= total;
-	nrm /= total;
-	// on cliffs the normal maps' detail fades: their planar projection doesn't fit there
-	nrm = normalize(lerp(nrm, float3(0, 1, 0), steep));
-	float3 t = normalize(float3(1, 0, 0) - n * n.x);
-	float3 b = normalize(float3(0, 0, 1) - n * n.z);
-	return lerp(ShadeTerrain(input, tex, nrm, t, b), painted, keep);
-}
 )---";
 
 struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineResourceSignature> signature;
 	RefCntAutoPtr<IPipelineState> pipeline;
-	// the splat-map terrain: its pipeline, material layers and corner materials
-	RefCntAutoPtr<IPipelineState> splatPipeline;
-	RefCntAutoPtr<ITexture> splatDiffuse, splatNormal, splatCorners;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
 	RefCntAutoPtr<ITexture> seaMap; // and where it is a sea's open water
 	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	bool tessellation = false; // the GPU can tessellate
-	RefCntAutoPtr<IPipelineState> tessPipeline, tessSplatPipeline;
+	RefCntAutoPtr<IPipelineState> tessPipeline;
 	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::waterQuality 4 and 5 (High, Ultra)
 	RefCntAutoPtr<IPipelineState> mediumWaterPipeline; // 3 (Medium): High's pixels on the flat surface
 	RefCntAutoPtr<ITexture> sceneCopy; // the frame before the water, for its refraction and reflections
@@ -1362,9 +1244,6 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL | tessStages, "WaveBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverWidth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_PIXEL, "splatDiffuse", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_PIXEL, "splatNormal", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
-		{ SHADER_TYPE_PIXEL, "splatCorners", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1381,14 +1260,8 @@ void DiligentEnhancedTerrainRenderer::init()
 	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_POINT;
 	shadowSampler.ComparisonFunc = COMPARISON_FUNC_LESS_EQUAL;
 	shadowSampler.AddressU = shadowSampler.AddressV = shadowSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
-	SamplerDesc splatSampler; // the material layers repeat; anisotropic, as they are seen at low angles
-	splatSampler.AddressU = splatSampler.AddressV = TEXTURE_ADDRESS_WRAP;
-	splatSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
-	splatSampler.MinFilter = splatSampler.MagFilter = splatSampler.MipFilter = FILTER_TYPE_ANISOTROPIC;
-	splatSampler.MaxAnisotropy = std::max(aniso, 2);
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
-		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler },
-		{ SHADER_TYPE_PIXEL, "splatSampler", splatSampler } };
+		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced terrain resources";
 	sigDesc.Resources = resources;
@@ -1403,68 +1276,6 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunBuffer);
-
-	// The splat-map terrain's textures: the layers with their mipmaps (box filtered), and the
-	// corners' materials
-	{
-		const TerrainSplatData splat = BuildTerrainSplat(terrain);
-		const Uint32 L = (Uint32)splat.layerSize;
-		Uint32 mips = 1;
-		while ((L >> mips) > 0)
-			mips++;
-		auto createArray = [&](const std::vector<std::vector<uint8_t>>& layers, const char* name, RefCntAutoPtr<ITexture>& out) {
-			std::vector<std::vector<uint8_t>> levels; // per layer, per mip
-			std::vector<TextureSubResData> subres;
-			levels.reserve(layers.size() * mips);
-			for (const auto& base : layers) {
-				levels.push_back(base);
-				for (Uint32 m = 1; m < mips; m++) {
-					const Uint32 ps = L >> (m - 1), s = L >> m;
-					const std::vector<uint8_t>& prev = levels.back();
-					std::vector<uint8_t> next(s * s * 4);
-					for (Uint32 y = 0; y < s; y++)
-						for (Uint32 x = 0; x < s; x++)
-							for (int c = 0; c < 4; c++)
-								next[(y * s + x) * 4 + c] = (uint8_t)((prev[((2 * y) * ps + 2 * x) * 4 + c] + prev[((2 * y) * ps + 2 * x + 1) * 4 + c]
-									+ prev[((2 * y + 1) * ps + 2 * x) * 4 + c] + prev[((2 * y + 1) * ps + 2 * x + 1) * 4 + c] + 2) / 4);
-					levels.push_back(std::move(next));
-				}
-			}
-			for (size_t i = 0; i < levels.size(); i++)
-				subres.push_back(TextureSubResData{ levels[i].data(), (Uint64)(L >> (i % mips)) * 4 });
-			TextureDesc desc;
-			desc.Name = name;
-			desc.Type = RESOURCE_DIM_TEX_2D_ARRAY;
-			desc.Width = desc.Height = L;
-			desc.ArraySize = (Uint32)layers.size();
-			desc.MipLevels = mips;
-			desc.Format = TEX_FORMAT_RGBA8_UNORM;
-			desc.BindFlags = BIND_SHADER_RESOURCE;
-			desc.Usage = USAGE_IMMUTABLE;
-			TextureData data{ subres.data(), (Uint32)subres.size() };
-			device->CreateTexture(desc, &data, &out);
-			if (!out)
-				ferr("Diligent: could not create the %s.", name);
-		};
-		createArray(splat.diffuse, "Splat terrain materials", _impl->splatDiffuse);
-		createArray(splat.normal, "Splat terrain normal maps", _impl->splatNormal);
-		TextureDesc cdesc;
-		cdesc.Name = "Splat terrain corners";
-		cdesc.Type = RESOURCE_DIM_TEX_2D;
-		cdesc.Width = terrain->width + 1;
-		cdesc.Height = terrain->height + 1;
-		cdesc.Format = TEX_FORMAT_R8_UINT;
-		cdesc.BindFlags = BIND_SHADER_RESOURCE;
-		cdesc.Usage = USAGE_IMMUTABLE;
-		TextureSubResData csub{ splat.corners.data(), (Uint64)cdesc.Width };
-		TextureData cdata{ &csub, 1 };
-		device->CreateTexture(cdesc, &cdata, &_impl->splatCorners);
-		if (!_impl->splatCorners)
-			ferr("Diligent: could not create the splat terrain corners.");
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatDiffuse")->Set(_impl->splatDiffuse->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatNormal")->Set(_impl->splatNormal->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "splatCorners")->Set(_impl->splatCorners->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-	}
 
 	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
 	{
@@ -1614,13 +1425,6 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
-	RefCntAutoPtr<IShader> splatPs = createShader(SHADER_TYPE_PIXEL, "PS_Splat");
-	ci.PSODesc.Name = "Splat terrain";
-	ci.pPS = splatPs;
-	device->CreateGraphicsPipelineState(ci, &_impl->splatPipeline);
-	if (!_impl->splatPipeline)
-		ferr("Diligent: could not create the splat terrain pipeline.");
-	ci.pPS = ps;
 	if (_impl->tessellation) {
 		// the same with the terrain tessellated: triangles as patches, both faces (the
 		// tessellator's winding isn't the index lists')
@@ -1634,10 +1438,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		ci.pDS = ds;
 		ci.PSODesc.Name = "Enhanced terrain, tessellated";
 		device->CreateGraphicsPipelineState(ci, &_impl->tessPipeline);
-		ci.PSODesc.Name = "Splat terrain, tessellated";
-		ci.pPS = splatPs;
-		device->CreateGraphicsPipelineState(ci, &_impl->tessSplatPipeline);
-		if (!_impl->tessPipeline || !_impl->tessSplatPipeline) {
+		if (!_impl->tessPipeline) {
 			printf("Diligent: no tessellated terrain (pipeline failed)\n");
 			_impl->tessellation = false;
 		}
@@ -2344,11 +2145,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
 	ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-	// the splat pipeline shares the signature: the same bindings per tile texture
-	if (g_terrainTessellationActive)
-		ctx->SetPipelineState(g_renderSettings.terrainSplat ? _impl->tessSplatPipeline : _impl->tessPipeline);
-	else
-		ctx->SetPipelineState(g_renderSettings.terrainSplat ? _impl->splatPipeline : _impl->pipeline);
+	ctx->SetPipelineState(g_terrainTessellationActive ? _impl->tessPipeline : _impl->pipeline);
 	for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
 		if (_impl->frameIndices[t].empty())
 			continue;

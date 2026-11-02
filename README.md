@@ -81,7 +81,6 @@ Compared with upstream wkbre2:
   - **Reflections:** of what is on screen (from Low up) and of the sky box itself.
   - **Terrain tessellation:** a smooth surface on the GPU, with objects placed exactly on it. The game's own heights are unchanged.
   - **Grass:** PBR grass blades on green ground, with density (up to 24 per square metre) and height sliders, thinning out with the distance.
-  - **Blended terrain:** materials blended at the tile corners, each from several of its tiles, triplanar on cliffs (off by default).
   - **Model highlights:** per-pixel lighting with GGX sun highlights, light from the sky box's colours, and override packs (`<texture>_normal`, `<texture>_orm`) for modders (off by default).
   - **Particles:** sprites, and streaks (wood chips, sparks) drawn as thin lines.
 - **Formats:** glTF 2.0 models (import as overrides, export with `"exportGltf"`), DDS textures (BC1-BC5, BC7) and KTX2 (RGBA8, BC1-BC5, BC7; BC7 uploaded compressed).

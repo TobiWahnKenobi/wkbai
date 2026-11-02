@@ -64,7 +64,6 @@ void RenderSettings::load()
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
 	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
-	terrainSplat = g_settings.value<bool>("terrainSplat", def.terrainSplat);
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
 	modelSpecular = g_settings.value<float>("modelSpecular", def.modelSpecular);
 	modelDetailNormals = g_settings.value<float>("modelDetailNormals", def.modelDetailNormals);
@@ -145,7 +144,6 @@ void RenderSettings::save()
 	g_settings["grassHeight"] = grassHeight;
 	g_settings["grassDistance"] = grassDistance;
 	g_settings["bumpMapping"] = bumpMapping;
-	g_settings["terrainSplat"] = terrainSplat;
 	g_settings["modelLighting"] = modelLighting;
 	g_settings["modelSpecular"] = modelSpecular;
 	g_settings["modelDetailNormals"] = modelDetailNormals;

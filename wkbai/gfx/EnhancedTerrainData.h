@@ -41,28 +41,6 @@ void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::
 // Four vertices per tile, for the whole map, tile (x, z) at 4 * (z * width + x).
 std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain);
 
-// The splat-map terrain (RenderSettings::terrainSplat). The original paints each tile with a
-// 64-texel piece of a texture atlas, and the texture database's groups are materials ("SAND1")
-// and the transitions between two ("SAND1-SAND2"). Here every material becomes one layer of a
-// texture array: its four most used tiles on the map in 2 x 2 quadrants (128 texels), of which
-// the shader shows one per tile of the ground, picked by a hash of the tile (a material's tiles
-// fit side by side, as the maps use them; repeating them 2 x 2 showed as a checkerboard).
-// Every tile corner gets a material: a material's tile gives its own to its corners, a
-// transition tile gives each corner the one of its two that the texels at that corner are
-// closer to in colour (with the tile's turn and flips). Where a tile's four corners agree the
-// shader keeps the tile's own picture, so the ground keeps the original's variety; elsewhere it
-// blends the corners' materials across the tile, so materials meet smoothly instead of along
-// the painted transition tiles.
-struct TerrainSplatData {
-	static constexpr int LAYER_SIZE = 128;       // with the original 256-texel atlases
-	int layerSize = LAYER_SIZE;                  // 2 or 4 times that with a high-resolution mod's
-	std::vector<std::string> names;              // per layer
-	std::vector<std::vector<uint8_t>> diffuse;   // per layer, layerSize² RGBA8
-	std::vector<std::vector<uint8_t>> normal;    // per layer, layerSize² RGBA8, as the tiles' normal maps
-	std::vector<uint8_t> corners;                // layer per tile corner, (x, z) at z * (width + 1) + x
-};
-TerrainSplatData BuildTerrainSplat(Terrain* terrain);
-
 // Grass (RenderSettings::grass): short blades scattered over a tile where its picture is green,
 // coloured from the picture under them (with the tile's turn and flips), on gentle dry ground
 struct GrassBlade {
