@@ -822,11 +822,25 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// they are the sea's ripples in world space, carried downstream at the current's speed, in
 	// the same two phases. At the flow map's speed alone, up to 1.3 units a second, they hardly
 	// moved: "flowing rivers don't work anymore".)
+	// Drawn out into streaks along the current, as running water looks (and as the channel
+	// ripples were): each sample the mean of three, 1.2 units apart downstream (no turned
+	// coordinates, which had torn or fanned). Round ripples at the 0.6 units a second of a wide
+	// river looked like standing water (the user, still static), so at least 1.2 there.
 	float2 downstream = dot(fdir, fdir) > 0.01 ? normalize(fdir) : along;
-	float2 rflow = downstream * current;
+	float2 rflow = downstream * max(current, 1.2 * WaterFlowParams.x);
 	float2 roff0 = -rflow * (q0 * rcycle) * WaterParams.z * 3.0, roff1 = -rflow * (q1 * rcycle) * WaterParams.z * 3.0;
-	float2 carried = FlowSlope(ruv, roff0) * v0 + FlowSlope(ruv, roff1) * (1 - v0);
-	float2 riverDetail = carried * 0.6 + fine * 0.15;
+	float2 streak = downstream * 1.2 * WaterParams.z * 3.0;
+	float2 carried = (FlowSlope(ruv - streak, roff0) + FlowSlope(ruv, roff0) + FlowSlope(ruv + streak, roff0)) / 3 * v0
+		+ (FlowSlope(ruv - streak, roff1) + FlowSlope(ruv, roff1) + FlowSlope(ruv + streak, roff1)) / 3 * (1 - v0);
+	// The channel ripples (laid along the channel, following its bends, carried downstream: the
+	// rivers' look the user wants back) where the channel's field is clean, the carried streaks
+	// where it is not: where its direction turns fast (where a river widens or branches meet:
+	// the star bursts) and along the middle, where the distance to the banks folds (the
+	// herringbone). The turn per world unit from the pixel derivatives.
+	float2 channel = (rs.x * along + rs.y * across) * 0.5;
+	float turn = (length(ddx(along)) + length(ddy(along))) / max(length(ddx(base)) + length(ddy(base)), 1e-4);
+	float clean = saturate(1 - (turn - 0.04) * 10) * saturate((halfWidth - rf.y) / 3);
+	float2 riverDetail = lerp(carried * 0.6 + fine * 0.15, channel, clean);
 	float2 seaDetail = detail * 0.3 + fine * 0.22;
 	float2 slope = lerp(seaDetail, riverDetail, river);
 	float3 n = normalize(wn + float3(slope.x, 0, slope.y));
