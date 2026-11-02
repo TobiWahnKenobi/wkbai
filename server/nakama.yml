@@ -1,0 +1,24 @@
+# Nakama's settings for a wkbai game list (docker-compose.yml passes the keys from .env as flags,
+# so none is kept here). wkbai uses only Nakama's own API: no server modules.
+
+name: wkbai
+logger:
+  level: INFO
+  stdout: true
+
+session:
+  # wkbai signs in again before its token runs out; a shorter token is worth less if stolen
+  token_expiry_sec: 3600
+  refresh_token_expiry_sec: 86400
+
+socket:
+  # a relayed game's batches are up to 2400 bytes, base64 in JSON (about 3.3 KB a message)
+  max_message_size_bytes: 8192
+  # messages waiting for a slow player before Nakama drops them (64 by default); a relayed game
+  # sends bursts while it starts
+  outgoing_queue_size: 256
+
+console:
+  port: 7351
+
+# No matchmaker, leaderboards or tournaments are used; nothing else needs settings.

@@ -12,7 +12,7 @@
 // not the original's list. Pages show their options in the order registered here, and the menu
 // shows the pages in this order, so a new setting or page needs nothing but an entry here.
 struct MenuOption {
-	enum Type { TOGGLE, SLIDER, CHOICE };
+	enum Type { TOGGLE, SLIDER, CHOICE, TEXT };
 	std::string id;      // stable name, for scripts
 	std::string page;    // a MenuPage id
 	std::string label;   // plain text, or a Language.txt key
@@ -23,6 +23,10 @@ struct MenuOption {
 	std::vector<std::string> choices;          // CHOICE: labels, value = index
 	std::function<float()> get;
 	std::function<void(float)> set;
+	std::function<std::string()> getText;     // TEXT
+	std::function<void(const std::string&)> setText;
+	std::string hint;                           // TEXT: shown while it is empty
+	int maxLength = 64;                         // TEXT
 	std::function<bool()> enabled;             // optional: greyed out when false
 	bool needsRestart = false;                 // takes effect after restarting wkbre2
 };

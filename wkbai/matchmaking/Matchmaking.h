@@ -98,6 +98,8 @@ struct MatchmakingService {
 	// Anonymous / device sign-in; the manager calls it once at start
 	virtual void signIn() {}
 	virtual void tick() {}
+	// hosting or joining a game: the manager doesn't replace it for new settings until it's done
+	virtual bool inUse() const { return false; }
 
 	// Host: offer the game (again: its listing changed), take it off
 	virtual void publish(const GameListing& listing, const HostContext& context) = 0;
@@ -123,6 +125,9 @@ struct Matchmaking {
 	void init();
 	void shutdown();
 	void tick();
+	// After the Options page saved: a built-in service whose settings changed is made again (when
+	// it isn't in use, else once it is done)
+	void settingsChanged();
 	const std::vector<std::unique_ptr<MatchmakingService>>& services() const { return list; }
 	MatchmakingService* find(const std::string& id) const;
 
@@ -147,7 +152,10 @@ private:
 	std::set<std::string> offered;
 	std::string lastListing;
 	bool started = false;
+	bool reloadWanted = false;
+	nlohmann::json builtSettings; // the built-in services' settings when they were made
 	void loadPlugins();
+	void reloadBuiltIn();
 };
 
 // A listing's ping: its own (the local network's answers), else the best of its addresses
@@ -159,5 +167,9 @@ bool SplitHostPort(const std::string& text, std::string& host, uint16_t& port, u
 void LocalIPv4Addresses(std::vector<std::string>& addresses, std::vector<std::string>& broadcasts);
 // wkconfig.json "matchmaking": { "<service>": {...} }
 nlohmann::json MatchmakingSettings(const std::string& service);
+// "matchmaking": { "stun": "host:port" } for this side's public address; absent: a public one
+// (DEFAULT_STUN_SERVER), "" or "none": none (then "")
+std::string MatchmakingStunServer();
+extern const char* const DEFAULT_STUN_SERVER;
 std::string Base64Encode(const std::string& data);
 std::string Base64Decode(const std::string& text);

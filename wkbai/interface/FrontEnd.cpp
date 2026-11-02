@@ -823,7 +823,9 @@ struct FrontEnd::Impl {
 				sol::table t = lua.create_table();
 				t["id"] = o.id;
 				t["label"] = o.label;
-				t["type"] = o.type == MenuOption::TOGGLE ? "toggle" : o.type == MenuOption::SLIDER ? "slider" : "choice";
+				t["type"] = o.type == MenuOption::TOGGLE ? "toggle" : o.type == MenuOption::SLIDER ? "slider" : o.type == MenuOption::TEXT ? "text" : "choice";
+				t["hint"] = o.hint;
+				t["maxLength"] = o.maxLength;
 				t["min"] = o.min;
 				t["max"] = o.max;
 				t["step"] = o.step;
@@ -837,11 +839,19 @@ struct FrontEnd::Impl {
 		});
 		lua.set_function("getOption", [](const std::string& id) {
 			const MenuOption* o = FindMenuOption(id);
-			return o ? o->get() : 0.0f;
+			return o && o->get ? o->get() : 0.0f;
 		});
 		lua.set_function("setOption", [](const std::string& id, float v) {
-			if (const MenuOption* o = FindMenuOption(id))
+			if (const MenuOption* o = FindMenuOption(id); o && o->set)
 				o->set(v);
+		});
+		lua.set_function("getOptionText", [](const std::string& id) {
+			const MenuOption* o = FindMenuOption(id);
+			return o && o->getText ? o->getText() : std::string();
+		});
+		lua.set_function("setOptionText", [](const std::string& id, const std::string& text) {
+			if (const MenuOption* o = FindMenuOption(id); o && o->setText)
+				o->setText(text);
 		});
 		lua.set_function("isOptionEnabled", [](const std::string& id) {
 			const MenuOption* o = FindMenuOption(id);
