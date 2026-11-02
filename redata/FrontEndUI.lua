@@ -886,7 +886,9 @@ local function slotText(slot)
 	end
 	if slot.type == "empty" then return T("FRONT_END_CHAT_AI_PLAYER"), GREY end
 	local g = slot.general and generalsByBlueprint and generalsByBlueprint[slot.general]
-	return g and g.name or T("FRONT_END_CHAT_RANDOM_GENERAL"), YELLOW
+	local name = g and g.name or T("FRONT_END_CHAT_RANDOM_GENERAL")
+	if slot.aiScript and slot.aiScript ~= "" then name = name .. " [" .. slot.aiScript .. "]" end
+	return name, YELLOW
 end
 
 -- Sent before the start: "H;c1;t0|A:<general>;c2;t0|A;c3;t0|E"
@@ -898,6 +900,8 @@ local function slotsRequest()
 		elseif slot.type == "empty" then parts[i] = "E"
 		else parts[i] = "A:" .. (slot.general or "") end
 		parts[i] = parts[i] .. ";c" .. (slot.colour or 0) .. ";t" .. (slot.team or 0)
+		-- an AI's Lua AI (LuaAI\<name>.lua)
+		if slot.type == "ai" and slot.aiScript and slot.aiScript ~= "" then parts[i] = parts[i] .. ";s" .. slot.aiScript end
 	end
 	request("slots", table.concat(parts, "|"))
 end
@@ -973,7 +977,19 @@ local function playersTab()
 	local _, hoveredRow = listBox(skirmish.generalList, list, X(439), Y(110), L(1461), L(113))
 	if skirmish.generalList.selected ~= before and sel then
 		local g = entries[skirmish.generalList.selected]
-		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team }
+		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team, aiScript = sel.aiScript }
+	end
+	-- the selected AI's Lua AI (wkbai's own): none (the Kingmaker scripts alone) or one of the
+	-- LuaAI\*.lua there are (redata's and the mods'); a click takes the next
+	if sel and sel.type == "ai" then
+		local choices = { "" }
+		for _, name in ipairs(getLuaAIs()) do choices[#choices + 1] = name end
+		local current = 1
+		for i, c in ipairs(choices) do if c == (sel.aiScript or "") then current = i end end
+		local label = choices[current] == "" and "Lua AI: none (the Kingmaker scripts)" or ("Lua AI: " .. choices[current])
+		if button(label, X(439), Y(232), L(600), L(24)) then
+			sel.aiScript = choices[current % #choices + 1]
+		end
 	end
 
 	-- portrait and biography of the general under the mouse, or of the selected position's

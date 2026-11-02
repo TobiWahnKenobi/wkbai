@@ -94,7 +94,7 @@ std::string QuickSkirmishMenu::setupJson(const std::string& level, uint32_t seed
 	j["settings"] = settings;
 	nlohmann::json list = nlohmann::json::array();
 	for (const Slot& s : slots)
-		list.push_back({ { "type", (int)s.type }, { "general", s.general }, { "client", s.client }, { "name", s.name }, { "colour", s.colour }, { "team", s.team } });
+		list.push_back({ { "type", (int)s.type }, { "general", s.general }, { "client", s.client }, { "name", s.name }, { "colour", s.colour }, { "team", s.team }, { "aiScript", s.aiScript } });
 	j["slots"] = list;
 	return j.dump(1);
 }
@@ -116,6 +116,7 @@ bool QuickSkirmishMenu::readSetupJson(const std::string& text, std::string& leve
 		Slot slot;
 		slot.type = (Slot::Type)s.value("type", 1);
 		slot.general = s.value("general", std::string());
+		slot.aiScript = s.value("aiScript", std::string());
 		slot.client = s.value("client", 0);
 		slot.name = s.value("name", std::string());
 		slot.colour = s.value("colour", 0);
@@ -367,6 +368,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				// the one chosen, for a recording's setup
 				if (general && i < slots.size())
 					slots[i].general = general->name;
+				if (i < slots.size() && !slots[i].aiScript.empty())
+					server.aiScripts[player->id] = slots[i].aiScript;
 				if (general) {
 					player->convertTo(general);
 					printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());

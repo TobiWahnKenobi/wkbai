@@ -436,5 +436,22 @@ bool Server::saveGame(const char* filename)
 	}
 	const bool ok = !ferror(f);
 	fclose(f);
+	// the players' Lua AIs (wkbai's own), beside it: <save>.ai.txt
+	{
+		std::string scripts;
+		for (const auto& [id, name] : aiScripts)
+			if (!name.empty())
+				scripts += "aiScript." + std::to_string(id) + "=" + name + "\n";
+		std::filesystem::path side = path;
+		side += ".ai.txt";
+		if (!scripts.empty()) {
+			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
+				fwrite(scripts.data(), 1, scripts.size(), sf);
+				fclose(sf);
+			}
+		}
+		else
+			std::filesystem::remove(side, ec);
+	}
 	return ok;
 }

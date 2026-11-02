@@ -18,6 +18,7 @@
 #include "../util/StriCompare.h"
 #include "../settings.h"
 #include "../matchmaking/Matchmaking.h"
+#include "../AIController.h"
 #include <nlohmann/json.hpp>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
@@ -734,6 +735,8 @@ struct FrontEnd::Impl {
 		});
 		// A level's start positions as { x, y } fractions of its map image (startsOf), in the order
 		// of the skirmish slots
+		// the Lua AIs an AI position can have (LuaAI\*.lua: redata's and the mods')
+		lua.set_function("getLuaAIs", [this]() { return sol::as_table(ListLuaAIs()); });
 		lua.set_function("getLevelStarts", [this](const std::string& level) {
 			sol::table list = lua.create_table();
 			int n = 1;

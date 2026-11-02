@@ -26,6 +26,7 @@
 #include <functional>
 #include "util/StriCompare.h"
 #include "WaterDesign.h"
+#include "AIController.h"
 #include "interface/MapRegions.h"
 
 Server *Server::instance = nullptr;
@@ -51,6 +52,15 @@ Server::Server()
 
 void Server::loadSaveGame(const char * filename)
 {
+	// a save game's players' Lua AIs (<save>.ai.txt, wkbai's own)
+	aiScripts.clear();
+	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		applyAiSettingsText(std::string(text, size), true);
+		free(text);
+	}
 	char *filetext; int filesize;
 	LoadFile(filename, &filetext, &filesize, 1);
 	filetext[filesize] = 0;
@@ -404,10 +414,16 @@ std::string Server::aiSettingsText() const
 		(int)aggressiveAI, (int)aiGoldExpansion, (int)aiFocusAttacks, aiEarlyFarms, aiFirstBarracks, (int)aiAdapt,
 		aiMinPeasants, aiSurplusBuildings, aiSurplusPerBuilding, (int)aiLendFarmers, aiRetreatHealth, aiAttackWave,
 		(int)aiWaveGather, (int)aiWaveSiege, (int)aiWaveFormations, (int)aiFocusFire);
-	return buf;
+	std::string text = buf;
+	text += "aiAdvanced=" + std::to_string(aiAdvanced) + "\n";
+	// "aiScript.<player id>=<Lua AI>"
+	for (const auto& [id, name] : aiScripts)
+		if (!name.empty())
+			text += "aiScript." + std::to_string(id) + "=" + name + "\n";
+	return text;
 }
 
-void Server::applyAiSettingsText(const std::string& text)
+void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 {
 	size_t start = 0;
 	while (start < text.size()) {
@@ -421,7 +437,14 @@ void Server::applyAiSettingsText(const std::string& text)
 			continue;
 		const std::string name = line.substr(0, eq);
 		const float v = (float)atof(line.c_str() + eq + 1);
+		if (name.rfind("aiScript.", 0) == 0) {
+			aiScripts[(uint32_t)atoi(name.c_str() + 9)] = line.substr(eq + 1);
+			continue;
+		}
+		if (scriptsOnly)
+			continue;
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
+		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
 		else if (name == "aiFocusAttacks") aiFocusAttacks = v != 0;
 		else if (name == "aiEarlyFarms") aiEarlyFarms = (int)v;
@@ -459,6 +482,21 @@ bool Server::startRecording(const std::filesystem::path& folder, const std::stri
 		fwrite(text.data(), 1, text.size(), ai);
 		fclose(ai);
 	}
+	// the Lua AIs as they are now, so that the replay plays them though they change later
+	for (const auto& [id, name] : aiScripts) {
+		const std::string path = LuaAIPath(name);
+		if (name.empty() || !FileExists(path.c_str()))
+			continue;
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(path.c_str(), &text, &size);
+		std::filesystem::create_directories(folder / "LuaAI", ec);
+		if (FILE* lf = _wfopen((folder / "LuaAI" / PathFromUtf8(name + ".lua")).wstring().c_str(), L"wb")) {
+			fwrite(text, 1, size, lf);
+			fclose(lf);
+		}
+		free(text);
+	}
 	recording = std::make_unique<Recording>();
 	recording->file = f;
 	recording->lastTime = timeManager.psCurrentTime;
@@ -485,6 +523,7 @@ void Server::stopRecording()
 
 bool Server::startReplay(const std::filesystem::path& folder)
 {
+	replayScripts = folder / "LuaAI";
 	if (FILE* ai = _wfopen((folder / "ai.txt").wstring().c_str(), L"rb")) {
 		std::string text;
 		char buf[256];

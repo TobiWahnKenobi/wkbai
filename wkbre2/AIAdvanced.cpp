@@ -27,6 +27,12 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <sol/sol.hpp>
+#include <filesystem>
+#include <fstream>
+#include "file.h"
+#include "util/SimRandom.h"
+#include "util/StriCompare.h"
 
 namespace {
 	struct Items {
@@ -200,6 +206,45 @@ namespace {
 		return list;
 	}
 
+	// Where a player's soldiers wait at home: its Kingmaker Defensive Army, or (AI Generals whose
+	// scripts make none: the Duke of the Dead's soldiers stood straight under it) its Kingmaker
+	// Co-ordinator
+	ServerGameObject* HomeArmy(ServerGameObject* player)
+	{
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(player, armies);
+		ServerGameObject* coordinator = nullptr;
+		for (ServerGameObject* a : armies) {
+			if (a->blueprint->name == "Kingmaker Defensive Army")
+				return a;
+			if (a->blueprint->name == "Kingmaker Co-ordinator")
+				coordinator = a;
+		}
+		return coordinator;
+	}
+
+	// the soldiers at home: those in the defensive army, and those straight under the co-ordinator
+	std::vector<ServerGameObject*> HomeSoldiers(ServerGameObject* player)
+	{
+		std::vector<ServerGameObject*> list, armies;
+		CollectArmies(player, armies);
+		for (ServerGameObject* a : armies) {
+			if (a->blueprint->name == "Kingmaker Defensive Army") {
+				std::vector<ServerGameObject*> units;
+				CollectUnits(a, units);
+				for (ServerGameObject* u : units)
+					if (IsSoldier(u))
+						list.push_back(u);
+			}
+			else if (a->blueprint->name == "Kingmaker Co-ordinator")
+				for (const auto& [type, children] : a->children)
+					for (CommonGameObject* c : children)
+						if (!((ServerGameObject*)c)->deleted && IsSoldier((ServerGameObject*)c))
+							list.push_back((ServerGameObject*)c);
+		}
+		return list;
+	}
+
 	ServerGameObject* NearestEnemy(const std::vector<ServerGameObject*>& enemies, const Vector3& from)
 	{
 		ServerGameObject* best = nullptr;
@@ -272,10 +317,7 @@ void AIController::advancedUpdate()
 	ServerGameObject* palace = palaceFinder >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[palaceFinder]->getFirst(&ctx) : nullptr;
 	std::vector<ServerGameObject*> armies;
 	CollectArmies(gameObj, armies);
-	ServerGameObject* defensive = nullptr;
-	for (ServerGameObject* a : armies)
-		if (a->blueprint->name == "Kingmaker Defensive Army")
-			defensive = a;
+	ServerGameObject* defensive = HomeArmy(gameObj);
 
 	// ---- Defence of every settlement and of the peasants out working ----
 	// the threats: enemy soldiers near a town (other than the palace's, which the scripts defend)
@@ -324,13 +366,9 @@ void AIController::advancedUpdate()
 	}
 
 	std::vector<ServerGameObject*> available;
-	if (defensive) {
-		std::vector<ServerGameObject*> home;
-		CollectUnits(defensive, home);
-		for (ServerGameObject* u : home)
-			if (IsSoldier(u) && !defenders.count(u->id))
-				available.push_back(u);
-	}
+	for (ServerGameObject* u : HomeSoldiers(gameObj))
+		if (!defenders.count(u->id))
+			available.push_back(u);
 	for (Threat& t : threats) {
 		// already being met?
 		std::vector<ServerGameObject*> meeting;
@@ -489,4 +527,405 @@ ServerGameObject* AIController::advancedWaveTarget(const std::vector<ServerGameO
 		}
 	}
 	return best;
+}
+
+// ---- Lua AIs ----
+// An AI player can be steered by a Lua script, LuaAI\<name>.lua (redata's, or a mod's: a mod's copy
+// replaces redata's, and mods add their own), chosen per AI position in the lobby
+// (Server::aiScripts). The Kingmaker scripts still plan its economy, buildings and armies' types;
+// the Lua AI decides what the aggressive and advanced AI do in C++: when and where to attack, how
+// to defend, when to come home. Each AI player has its own Lua state; its "think(ai)" runs every
+// AI_INTERVAL seconds of game time (3 if the script doesn't set it). The state has Lua's base,
+// math, string and table libraries without file access; math.random is the game's random
+// numbers and pairs goes through the keys in order (numbers, then strings, then the rest),
+// so that a game plays the same again from its recording. The "ai" table (LuaAIApi below):
+// objects are their ids; a list of them is an array.
+struct LuaAIState {
+	sol::state lua;
+	bool ok = false;
+	std::string name;
+};
+
+namespace {
+	sol::table IdList(sol::state_view lua, const std::vector<ServerGameObject*>& objects)
+	{
+		sol::table t = lua.create_table((int)objects.size(), 0);
+		int i = 1;
+		for (ServerGameObject* o : objects)
+			t[i++] = o->id;
+		return t;
+	}
+
+	std::vector<ServerGameObject*> Objects(sol::optional<sol::table> ids)
+	{
+		std::vector<ServerGameObject*> list;
+		if (!ids)
+			return list;
+		for (size_t i = 1; i <= ids->size(); i++) {
+			const sol::optional<uint32_t> id = (*ids)[i];
+			if (id)
+				if (ServerGameObject* o = Server::instance->findObject(*id); o && !o->deleted)
+					list.push_back(o);
+		}
+		return list;
+	}
+
+	// pairs in key order: numbers ascending, then strings, then other keys as next gives them
+	const char* g_sortedPairs = R"(
+local next, type, tostring, sort = next, type, tostring, table.sort
+function pairs(t)
+	local keys, others = {}, {}
+	for k in next, t do
+		local kt = type(k)
+		if kt == "number" or kt == "string" then keys[#keys + 1] = k else others[#others + 1] = k end
+	end
+	sort(keys, function(a, b)
+		local ta, tb = type(a), type(b)
+		if ta ~= tb then return ta == "number" end
+		return a < b
+	end)
+	for _, k in next, others do keys[#keys + 1] = k end
+	local i = 0
+	return function()
+		i = i + 1
+		local k = keys[i]
+		if k ~= nil then return k, t[k] end
+	end, t, nil
+end
+)";
+}
+
+std::vector<std::string> ListLuaAIs()
+{
+	std::vector<std::string> names;
+	std::unique_ptr<std::vector<std::string>> files(ListFiles("LuaAI"));
+	if (files)
+		for (const std::string& f : *files)
+			if (f.size() > 4 && StrCICompare(f.substr(f.size() - 4), ".lua") == 0)
+				names.push_back(f.substr(0, f.size() - 4));
+	std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
+	return names;
+}
+
+std::string LuaAIPath(const std::string& name)
+{
+	return "LuaAI\\" + name + ".lua";
+}
+
+bool AIController::luaActive()
+{
+	Server* srv = Server::instance;
+	if (!srv->aggressiveAI)
+		return false;
+	auto it = srv->aiScripts.find(gameObj->id);
+	if (it == srv->aiScripts.end() || it->second.empty())
+		return false;
+	if (!luaAI || luaAI->name != it->second)
+		startLuaAI(it->second);
+	return luaAI && luaAI->ok;
+}
+
+void AIController::startLuaAI(const std::string& name)
+{
+	luaAI = std::make_shared<LuaAIState>();
+	luaAI->name = name;
+	sol::state& lua = luaAI->lua;
+	lua.open_libraries(sol::lib::base, sol::lib::math, sol::lib::string, sol::lib::table);
+	for (const char* unsafe : { "dofile", "loadfile", "load", "require", "collectgarbage" })
+		lua[unsafe] = sol::lua_nil;
+	lua["math"]["random"] = [](sol::optional<int> a, sol::optional<int> b) -> double {
+		if (!a)
+			return (double)SimRand() / (double)SIM_RAND_MAX;
+		const int lo = b ? *a : 1, hi = b ? *b : *a;
+		return hi < lo ? lo : lo + (int)(SimRand() % (uint32_t)(hi - lo + 1));
+	};
+	lua["math"]["randomseed"] = []() {};
+	lua.safe_script(g_sortedPairs);
+
+	const uint32_t me = gameObj->id;
+	auto player = [me]() { return Server::instance->findObject(me); };
+	sol::table ai = lua.create_named_table("ai");
+	ai["id"] = me;
+	ai.set_function("time", []() { return Server::instance->timeManager.currentTime; });
+	ai.set_function("log", [me](const std::string& text) {
+		if (getenv("WKB_TRACE_LUAAI"))
+			printf("LUAAI player %u t=%.0f: %s\n", me, Server::instance->timeManager.currentTime, text.c_str());
+	});
+	ai.set_function("alive", [](uint32_t id) { ServerGameObject* o = Server::instance->findObject(id); return o && !o->deleted; });
+	ai.set_function("position", [](uint32_t id) -> std::tuple<float, float> {
+		ServerGameObject* o = Server::instance->findObject(id);
+		return o ? std::make_tuple(o->position.x, o->position.z) : std::make_tuple(0.0f, 0.0f);
+	});
+	ai.set_function("unit", [](sol::this_state ts, uint32_t id) -> sol::object {
+		ServerGameObject* o = Server::instance->findObject(id);
+		sol::state_view lua(ts);
+		if (!o || o->deleted)
+			return sol::lua_nil;
+		g_items.update(Server::instance->gameSet.get());
+		sol::table t = lua.create_table();
+		t["id"] = o->id;
+		t["type"] = o->blueprint->name;
+		t["class"] = ClassOf(o);
+		t["soldier"] = IsSoldier(o);
+		t["peasant"] = IsPeasant(o);
+		t["building"] = o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+		t["hp"] = Item(o, g_items.hp);
+		t["hpMax"] = Item(o, g_items.hpCap);
+		t["melee"] = Item(o, g_items.h2h);
+		t["missile"] = Item(o, g_items.missile);
+		t["range"] = Item(o, g_items.range);
+		t["armour"] = Item(o, g_items.armour);
+		t["power"] = UnitPower(o);
+		t["x"] = o->position.x;
+		t["z"] = o->position.z;
+		ServerGameObject* owner = o->getPlayer();
+		t["owner"] = owner ? owner->id : 0;
+		return t;
+	});
+	ai.set_function("item", [](uint32_t id, const std::string& name) {
+		ServerGameObject* o = Server::instance->findObject(id);
+		const int item = Server::instance->gameSet->items.names.getIndex(name);
+		return o && item >= 0 ? o->getItem(item) : 0.0f;
+	});
+	ai.set_function("enemies", [player](sol::this_state ts) {
+		std::vector<ServerGameObject*> list;
+		g_items.update(Server::instance->gameSet.get());
+		if (ServerGameObject* p = player(); p && Server::instance->getLevel())
+			for (const auto& [type, children] : Server::instance->getLevel()->children)
+				if (type.bpClass() == Tags::GAMEOBJCLASS_PLAYER)
+					for (CommonGameObject* c : children)
+						if (c != p && !((ServerGameObject*)c)->deleted && g_items.enemyStatus >= 0 && Server::instance->getDiplomaticStatus(c, p) == g_items.enemyStatus)
+							list.push_back((ServerGameObject*)c);
+		return IdList(ts, list);
+	});
+	ai.set_function("palace", [player]() -> sol::optional<uint32_t> {
+		ServerGameObject* p = player();
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int finder = gs->objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		if (!p || finder < 0)
+			return sol::nullopt;
+		SrvScriptContext ctx{ Server::instance, p };
+		ServerGameObject* palace = (ServerGameObject*)gs->objectFinderDefinitions[finder]->getFirst(&ctx);
+		return palace ? sol::optional<uint32_t>(palace->id) : sol::nullopt;
+	});
+	ai.set_function("towns", [player](sol::this_state ts, sol::optional<uint32_t> of) {
+		sol::state_view lua(ts);
+		g_items.update(Server::instance->gameSet.get());
+		ServerGameObject* p = of ? Server::instance->findObject(*of) : player();
+		sol::table list = lua.create_table();
+		if (!p)
+			return list;
+		std::vector<ServerGameObject*> towns;
+		CollectTowns(p, towns);
+		int i = 1;
+		for (ServerGameObject* town : towns) {
+			const std::vector<ServerGameObject*> buildings = BuildingsOf(town);
+			if (buildings.empty())
+				continue;
+			bool palace = false, village = false;
+			for (ServerGameObject* b : buildings) {
+				palace |= b->blueprint->name.find("Manor") != std::string::npos || b->blueprint->name.find("Palace") != std::string::npos;
+				village |= Item(b, g_items.village) > 0.0f;
+			}
+			sol::table t = lua.create_table();
+			t["id"] = town->id;
+			t["x"] = town->position.x;
+			t["z"] = town->position.z;
+			t["palace"] = palace;
+			t["village"] = village;
+			t["buildings"] = IdList(ts, buildings);
+			list[i++] = t;
+		}
+		return list;
+	});
+	ai.set_function("enemiesNear", [player](sol::this_state ts, float x, float z, float radius, sol::optional<bool> towers) {
+		g_items.update(Server::instance->gameSet.get());
+		ServerGameObject* p = player();
+		return IdList(ts, p ? EnemiesNear(p, Vector3(x, 0, z), radius, towers.value_or(false)) : std::vector<ServerGameObject*>());
+	});
+	ai.set_function("buildingsNear", [player](sol::this_state ts, float x, float z, float radius) {
+		std::vector<ServerGameObject*> list;
+		ServerGameObject* p = player();
+		g_items.update(Server::instance->gameSet.get());
+		NNSearch search;
+		search.start(Server::instance, Vector3(x, 0, z), radius);
+		while (ServerGameObject* b = (ServerGameObject*)search.next())
+			if (p && !b->deleted && b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && IsEnemy(p, b)
+				&& (b->position - Vector3(x, 0, z)).sqlen2xz() <= radius * radius)
+				list.push_back(b);
+		std::sort(list.begin(), list.end(), [x, z](ServerGameObject* a, ServerGameObject* b) {
+			return (a->position - Vector3(x, 0, z)).sqlen2xz() < (b->position - Vector3(x, 0, z)).sqlen2xz(); });
+		return IdList(ts, list);
+	});
+	ai.set_function("peasants", [player](sol::this_state ts) {
+		std::vector<ServerGameObject*> list;
+		g_items.update(Server::instance->gameSet.get());
+		if (ServerGameObject* p = player())
+			for (const auto& [type, children] : p->children)
+				for (CommonGameObject* c : children)
+					if (!((ServerGameObject*)c)->deleted && IsPeasant((ServerGameObject*)c))
+						list.push_back((ServerGameObject*)c);
+		return IdList(ts, list);
+	});
+	// the soldiers at home (the defensive army), and the attacking armies with their units
+	ai.set_function("home", [player](sol::this_state ts) {
+		g_items.update(Server::instance->gameSet.get());
+		ServerGameObject* p = player();
+		return IdList(ts, p ? HomeSoldiers(p) : std::vector<ServerGameObject*>());
+	});
+	ai.set_function("armies", [player](sol::this_state ts) {
+		sol::state_view lua(ts);
+		std::vector<ServerGameObject*> armies;
+		if (ServerGameObject* p = player())
+			CollectArmies(p, armies);
+		sol::table list = lua.create_table();
+		int i = 1;
+		for (ServerGameObject* a : armies)
+			if (a->blueprint->name == "Kingmaker Attacking Army") {
+				std::vector<ServerGameObject*> units;
+				CollectUnits(a, units);
+				sol::table t = lua.create_table();
+				t["id"] = a->id;
+				t["units"] = IdList(ts, units);
+				list[i++] = t;
+			}
+		return list;
+	});
+	ai.set_function("strength", [](sol::table units, sol::table against) {
+		g_items.update(Server::instance->gameSet.get());
+		return Strength(Objects(units), Objects(against));
+	});
+	ai.set_function("defensiveMode", [player]() {
+		g_items.update(Server::instance->gameSet.get());
+		ServerGameObject* p = player();
+		return p && g_items.defensiveMode >= 0 && p->getItem(g_items.defensiveMode) > 0.0f;
+	});
+	// orders: each unit attacks the target; home (into the defensive army, walking to the manor);
+	// a wave (a new attacking army in formations, see AIController::launchWave): its army's id
+	ai.set_function("attack", [](sol::table units, uint32_t target) {
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		ServerGameObject* t = Server::instance->findObject(target);
+		if (!t || t->deleted || g_items.attackOrder < 0)
+			return;
+		for (ServerGameObject* u : Objects(units))
+			u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, t);
+	});
+	ai.set_function("sendHome", [player](sol::table units) {
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		ServerGameObject* p = player();
+		if (!p)
+			return;
+		ServerGameObject* defensive = HomeArmy(p);
+		SrvScriptContext ctx{ Server::instance, p };
+		for (ServerGameObject* u : Objects(units)) {
+			if (defensive && IsSoldier(u))
+				u->setParent(defensive);
+			if (g_items.moveHome >= 0)
+				gs->orderAssignments[g_items.moveHome].assignTo(u, &ctx, p);
+		}
+	});
+	// units held at a place: moved into an army of the AI's own (the given one if it still
+	// exists, else a new Kingmaker Attacking Army), out of the scripts' hands, walking there;
+	// returns the army's id
+	ai.set_function("hold", [player](sol::table units, float x, float z, sol::optional<uint32_t> armyId) -> sol::optional<uint32_t> {
+		ServerGameObject* p = player();
+		const GameSet* gs = Server::instance->gameSet.get();
+		const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+		const int moveOrder = gs->orders.names.getIndex("Move To");
+		if (!p || !armyBp || moveOrder < 0)
+			return sol::nullopt;
+		ServerGameObject* army = armyId ? Server::instance->findObject(*armyId) : nullptr;
+		if (!army || army->deleted || army->getPlayer() != p || army->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
+			army = Server::instance->spawnObject(armyBp, p, Vector3(x, 0, z), Vector3(0, 0, 0));
+		if (!army)
+			return sol::nullopt;
+		for (ServerGameObject* u : Objects(units)) {
+			if (u->getParent() != army)
+				u->setParent(army);
+			u->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, Vector3(x, 0, z));
+		}
+		return army->id;
+	});
+	ai.set_function("launch", [player](sol::table units, uint32_t target) -> sol::optional<uint32_t> {
+		ServerGameObject* p = player();
+		ServerGameObject* t = Server::instance->findObject(target);
+		if (!p || !t || t->deleted)
+			return sol::nullopt;
+		ServerGameObject* defensive = HomeArmy(p);
+		ServerGameObject* army = p->aiController.launchWave(Objects(units), t, defensive ? defensive : p);
+		if (!army)
+			return sol::nullopt;
+		p->aiController.waves++;
+		p->aiController.waveUnits += (int)units.size();
+		return army->id;
+	});
+
+	// a replay: the copy its recording kept
+	std::string code, path = LuaAIPath(name);
+	const std::filesystem::path recorded = Server::instance->replayScripts / PathFromUtf8(name + ".lua");
+	std::error_code ec;
+	if (Server::instance->replay && std::filesystem::is_regular_file(recorded, ec)) {
+		std::ifstream in(recorded, std::ios::binary);
+		code.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		path = PathToUtf8(recorded);
+	}
+	else {
+		if (!FileExists(path.c_str())) {
+			printf("Lua AI %s for player %u: %s not found\n", name.c_str(), me, path.c_str());
+			return;
+		}
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(path.c_str(), &text, &size);
+		code.assign(text, size);
+		free(text);
+	}
+	sol::protected_function_result r = lua.safe_script(code, sol::script_pass_on_error, "@" + path);
+	if (!r.valid()) {
+		sol::error err = r;
+		printf("Lua AI %s for player %u: %s\n", name.c_str(), me, err.what());
+		return;
+	}
+	luaAI->ok = true;
+	nextLuaThink = 0.0f;
+	printf("Lua AI %s for player %u\n", name.c_str(), me);
+}
+
+void AIController::luaThink()
+{
+	const float now = Server::instance->timeManager.currentTime;
+	if (!luaAI || !luaAI->ok || now < nextLuaThink)
+		return;
+	sol::state& lua = luaAI->lua;
+	const float interval = lua["AI_INTERVAL"].get_or(3.0f);
+	nextLuaThink = now + std::clamp(interval, 0.5f, 60.0f);
+	sol::protected_function think = lua["think"];
+	if (!think.valid())
+		return;
+	sol::protected_function_result r = think(lua["ai"]);
+	if (!r.valid()) {
+		sol::error err = r;
+		printf("Lua AI %s for player %u: %s\n", luaAI->name.c_str(), gameObj->id, err.what());
+		luaErrors++;
+		if (luaErrors >= 10) {
+			printf("Lua AI %s for player %u: stopped after 10 errors\n", luaAI->name.c_str(), gameObj->id);
+			luaAI->ok = false;
+		}
+	}
+}
+
+std::string AIController::luaCensus()
+{
+	if (!luaAI || !luaAI->ok)
+		return std::string();
+	sol::protected_function census = luaAI->lua["census"];
+	std::string text;
+	if (census.valid()) {
+		sol::protected_function_result r = census();
+		if (r.valid() && r.get_type() == sol::type::string)
+			text = r.get<std::string>();
+	}
+	return luaAI->name + ": " + text;
 }

@@ -253,6 +253,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the advanced AI (AIAdvanced.cpp): unit power, defence of every settlement, attacks chosen by
 	// strength: "aiAdvanced" 1 for every AI, 2 or 3 for every other one (comparisons), 0 off
 	int aiAdvanced = 0;
+	// each AI player's Lua AI (LuaAI\<name>.lua), by player id; none: the scripts and the C++ AI
+	std::map<uint32_t, std::string> aiScripts;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
 	std::map<uint32_t, int> buildingsDestroyed;
 	// and their hit point capacities summed (with the damage to standing buildings, a steadier
@@ -382,7 +384,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::unique_ptr<Recording> recording;
 	// the AI settings above (not in a save game), for a recording: "name=value" lines
 	std::string aiSettingsText() const;
-	void applyAiSettingsText(const std::string& text);
+	// (scriptsOnly: only the players' Lua AIs, as a save game's companion file has them)
+	void applyAiSettingsText(const std::string& text, bool scriptsOnly = false);
+	// a replay's copies of the Lua AIs its recording used (LuaAI\<name>.lua in its folder)
+	std::filesystem::path replayScripts;
 	// starts recording into the folder (start.sav, events.bin, ai.txt); false if it can't be written
 	bool startRecording(const std::filesystem::path& folder, const std::string& setupJson = std::string());
 	// the seed startLevel gave the random numbers (a recording's setup)

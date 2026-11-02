@@ -245,6 +245,11 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			for (size_t f = 1; f < fields.size(); f++) {
 				if (fields[f].size() < 2)
 					continue;
+				// ";s<name>": an AI's Lua AI
+				if (fields[f][0] == 's') {
+					slot.aiScript = fields[f].substr(1);
+					continue;
+				}
 				const int value = atoi(fields[f].c_str() + 1);
 				if (fields[f][0] == 'c') slot.colour = value;
 				else if (fields[f][0] == 't') slot.team = value;

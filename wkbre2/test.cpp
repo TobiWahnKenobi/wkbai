@@ -1787,10 +1787,14 @@ void Test_AIvsAI()
 	skirmish.changeSettingsForLevel(level);
 	std::vector<QuickSkirmishMenu::Slot> slots;
 	const nlohmann::json generals = cfg.value("generals", nlohmann::json::array({ "", "" }));
+	// "aiScripts": ["<Lua AI>" or "", ...]: each position's Lua AI
+	const nlohmann::json scripts = cfg.value("aiScripts", nlohmann::json::array());
 	for (const auto& g : generals) {
 		QuickSkirmishMenu::Slot slot;
 		slot.type = QuickSkirmishMenu::Slot::AI;
 		slot.general = g.get<std::string>();
+		if (slots.size() < scripts.size() && scripts[slots.size()].is_string())
+			slot.aiScript = scripts[slots.size()].get<std::string>();
 		slots.push_back(slot);
 	}
 	skirmish.setSlots(slots);
@@ -1979,6 +1983,9 @@ void Test_AIvsAI()
 						mix[0] >= 0 ? player->getItem(mix[0]) : 0.0f, mix[1] >= 0 ? player->getItem(mix[1]) : 0.0f, mix[2] >= 0 ? player->getItem(mix[2]) : 0.0f, mix[3] >= 0 ? player->getItem(mix[3]) : 0.0f,
 						ai.baseMix[0], ai.baseMix[1], ai.baseMix[2], ai.baseMix[3], ai.mixChanges, ai.grudgePlayer);
 				}
+				// its Lua AI, if any, and what it did (the script's census())
+				if (const std::string lua = player->aiController.luaCensus(); !lua.empty())
+					printf("AITEST   lua player %u: %s\n", player->id, lua.c_str());
 				// the advanced AI (AIAdvanced.cpp): whether this player has it, and what it did
 				printf("AITEST   advanced player %u: %s; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
 					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
@@ -2079,8 +2086,11 @@ void Test_AIvsAI()
 		return standing;
 	};
 	const uint64_t start = SDL_GetTicks();
-	float nextCensus = 60.0f;
-	while (server.timeManager.currentTime < minutes * 60.0f) {
+	// for that many minutes from the level's own clock (Coastline's is saved at 7272 s: the game
+	// ended before it began)
+	const float startTime = server.timeManager.currentTime;
+	float nextCensus = startTime + 60.0f;
+	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
 		if (server.replay) {
 			if (!server.replayEvent())
 				break;

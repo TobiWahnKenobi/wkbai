@@ -8,6 +8,9 @@
 #include "GameObjectRef.h"
 #include "util/vecmat.h"
 #include <map>
+#include <memory>
+#include <string>
+#include <vector>
 
 struct ServerGameObject;
 struct GSFileParser;
@@ -101,6 +104,17 @@ struct AIController {
 	std::vector<AdvancedWave> advancedWaves;
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
+	// a Lua AI (AIAdvanced.cpp, LuaAI\<name>.lua) steering this player: whether it has one (made
+	// the first time), its state, when it thinks next, its errors
+	std::shared_ptr<struct LuaAIState> luaAI;
+	float nextLuaThink = 0.0f;
+	int luaErrors = 0;
+	bool luaActive();
+	void startLuaAI(const std::string& name);
+	void luaThink();
+	// the Lua AI's name and its census() text (the AI test), empty without one
+	std::string luaCensus();
+	ServerGameObject* launchWave(const std::vector<ServerGameObject*>& members, ServerGameObject* target, ServerGameObject* home);
 	void advancedUpdate();
 	// the enemy settlement worth attacking most for what guards it, among those the wave would
 	// outmatch (1.4 times their strength; any, if anyway), as the building to attack; null: none
@@ -126,3 +140,7 @@ bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<Ser
 std::vector<int> AICharacterNeeds(const GSCommission* commission, SrvScriptContext* handlerCtx, bool forceBalance);
 // The aggressive AI (Server::aggressiveAI): wraps the Kingmaker equations it changes (gameset/values.cpp)
 void InstallAIAggressionOverrides(GameSet& gs);
+
+// the Lua AIs there are (LuaAI\*.lua, redata's and the mods'), by name; one's game path
+std::vector<std::string> ListLuaAIs();
+std::string LuaAIPath(const std::string& name);
