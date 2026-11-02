@@ -283,8 +283,14 @@ local function manageWaves(ai)
 end
 
 local nextWaveManage = 0
+-- The scripts turn peasants into militia when an attack outnumbers them three to one; on 4 Peaks
+-- both AIs lost every peasant that way and never trained another. With fewer than 25 peasants
+-- they stay peasants (the scripts' "Cannot Use Militia").
+local MILITIA_PEASANTS = 25
+
 function think(ai)
 	local now = ai.time()
+	ai.setItem(ai.id, "Cannot Use Militia", #ai.peasants() < MILITIA_PEASANTS and 1 or 0)
 	local palace = ai.palace()
 	local px, pz = 0, 0
 	if palace then px, pz = ai.position(palace) end

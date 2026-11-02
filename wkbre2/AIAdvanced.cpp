@@ -687,6 +687,15 @@ void AIController::startLuaAI(const std::string& name)
 		const int item = Server::instance->gameSet->items.names.getIndex(name);
 		return o && item >= 0 ? o->getItem(item) : 0.0f;
 	});
+	// an item of this AI's player or one of its objects set (the scripts read many: "Cannot Use
+	// Militia", "Defensive Mode", ...)
+	ai.set_function("setItem", [player](uint32_t id, const std::string& name, float value) {
+		ServerGameObject* p = player();
+		ServerGameObject* o = Server::instance->findObject(id);
+		const int item = Server::instance->gameSet->items.names.getIndex(name);
+		if (p && o && !o->deleted && item >= 0 && (o == p || o->getPlayer() == p))
+			o->setItem(item, value);
+	});
 	ai.set_function("enemies", [player](sol::this_state ts) {
 		std::vector<ServerGameObject*> list;
 		g_items.update(Server::instance->gameSet.get());

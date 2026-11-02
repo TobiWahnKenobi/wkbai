@@ -102,6 +102,8 @@ struct AIController {
 	std::map<uint32_t, Defending> defenders;
 	struct AdvancedWave { uint32_t army, target; Vector3 targetAt; size_t size; };
 	std::vector<AdvancedWave> advancedWaves;
+	float nextLifelineCheck = 0.0f;
+	int lifelines = 0; // the food given by the lifeline (AIController::update)
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
 	// a Lua AI (AIAdvanced.cpp, LuaAI\<name>.lua) steering this player: whether it has one (made

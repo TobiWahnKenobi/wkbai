@@ -227,6 +227,32 @@ void AIController::update()
 		}
 	}
 
+	// ---- The lifeline (the aggressive AI, not in WKB.exe) ----
+	// On 4 Peaks (seeds 2 and 3) both AIs lost every peasant 17-23 minutes in (militia sent at
+	// raiders) and were left with 28-34 food: a peasant costs 50, so they could never train one
+	// again and stood with 5-7 characters to the end. An AI with fewer than 4 peasants and less
+	// than a peasant's 50 food is given what is short of 50, at most every 30 s: "aiLifeline".
+	if (Server::instance->aggressiveAI && Server::instance->aiLifeline && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextLifelineCheck) {
+		nextLifelineCheck = Server::instance->timeManager.currentTime + 30.0f;
+		static const GameSet* itemsOf = nullptr;
+		static int peasantItem = -1;
+		if (itemsOf != Server::instance->gameSet.get()) {
+			itemsOf = Server::instance->gameSet.get();
+			peasantItem = itemsOf->items.names.getIndex("I Am A Peasant");
+		}
+		int peasants = 0;
+		for (const auto& [type, children] : gameObj->children)
+			for (CommonGameObject* c : children)
+				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && peasantItem >= 0 && c->getItem(peasantItem) > 0.0f)
+					peasants++;
+		const float food = gameObj->getItem(Tags::PDITEM_FOOD);
+		if (peasants < 4 && food < 50.0f) {
+			gameObj->setItem(Tags::PDITEM_FOOD, 50.0f);
+			lifelines++;
+		}
+	}
+
 	// ---- The first barracks (the aggressive AI, not in WKB.exe) ----
 	// The Kingmaker's opening commissions ("Succubus Rush", "Pure Celestial Economic Building", ...)
 	// hold farms, shops, a maypole, temples, but no building that trains fighters: the barracks

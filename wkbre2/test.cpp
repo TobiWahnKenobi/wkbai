@@ -1987,8 +1987,8 @@ void Test_AIvsAI()
 				if (const std::string lua = player->aiController.luaCensus(); !lua.empty())
 					printf("AITEST   lua player %u: %s\n", player->id, lua.c_str());
 				// the advanced AI (AIAdvanced.cpp): whether this player has it, and what it did
-				printf("AITEST   advanced player %u: %s; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
-					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
+				printf("AITEST   advanced player %u: %s, lifelines %d; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
+					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.lifelines, player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{

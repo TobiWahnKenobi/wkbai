@@ -253,6 +253,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the advanced AI (AIAdvanced.cpp): unit power, defence of every settlement, attacks chosen by
 	// strength: "aiAdvanced" 1 for every AI, 2 or 3 for every other one (comparisons), 0 off
 	int aiAdvanced = 0;
+	// with it, an AI left with fewer than 4 peasants and under 50 food (a peasant's cost) is given
+	// what is short of 50, at most every 30 s (AIController): "aiLifeline"
+	bool aiLifeline = true;
 	// each AI player's Lua AI (LuaAI\<name>.lua), by player id; none: the scripts and the C++ AI
 	std::map<uint32_t, std::string> aiScripts;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
