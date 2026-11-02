@@ -1,5 +1,5 @@
 """A stand-in for a Nakama server (Heroic Labs) for wkbai's matchmaking tests: the parts of
-Nakama's API wkbai uses (wkbre2/matchmaking/NakamaService.cpp), on 127.0.0.1 only, Python's
+Nakama's API wkbai uses (wkbai/matchmaking/NakamaService.cpp), on 127.0.0.1 only, Python's
 standard library only.
 
     POST /v2/account/authenticate/device?create=true   Basic <server key>:  {"id": device id}

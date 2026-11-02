@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbai.exe'))
+EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbai' / 'RelWithDebInfo' / 'wkbai.exe'))
 GAME = Path(os.environ.get('WKB_GAME', r'C:\Dev\wkb-orig'))
 SAVE = 's00.sav'
 

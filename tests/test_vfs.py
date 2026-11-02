@@ -21,15 +21,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbai.exe'))
+EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbai' / 'RelWithDebInfo' / 'wkbai.exe'))
 VFS_TEST_NAME = 'VFS (file system and mods)'
 
 
 def vfs_test_number():
-    """Index of the VFS test in testList (wkbre2/test.cpp). Read from the source rather than by
+    """Index of the VFS test in testList (wkbai/test.cpp). Read from the source rather than by
     starting wkbre2: LaunchTest() runs test 0 on any unexpected input, which shows a modal error
     without game data."""
-    lines = (REPO / 'wkbre2' / 'test.cpp').read_text(encoding='latin1').splitlines()
+    lines = (REPO / 'wkbai' / 'test.cpp').read_text(encoding='latin1').splitlines()
     start = next(i for i, l in enumerate(lines) if 'testList = {' in l)
     entries = [l for l in lines[start + 1:] if l.strip().startswith('{Test_')]
     return next(i for i, l in enumerate(entries) if VFS_TEST_NAME in l)
@@ -88,7 +88,7 @@ class VfsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not EXE.exists():
-            raise unittest.SkipTest(f'{EXE} not found; build wkbre2 first')
+            raise unittest.SkipTest(f'{EXE} not found; build wkbai first')
         cls.tmp = tempfile.TemporaryDirectory()
         root = Path(cls.tmp.name)
         cls.game, cls.mods, cls.work = root / 'game', root / 'mods', root / 'work'

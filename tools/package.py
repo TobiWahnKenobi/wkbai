@@ -3,7 +3,7 @@ redata folder, the licence and the README. Never any game file: players point wk
 copy of Warrior Kings: Battles (found by itself in a Steam install, else "gamePath" in
 wkconfig.json). The debug symbols (wkbai.pdb) go into a separate zip, for reading crash reports.
 
-Usage: python -I tools/package.py [build folder, default build/wkbre2/RelWithDebInfo]
+Usage: python -I tools/package.py [build folder, default build/wkbai/RelWithDebInfo]
 """
 import datetime
 import subprocess
@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main():
-    build = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'build' / 'wkbre2' / 'RelWithDebInfo'
+    build = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'build' / 'wkbai' / 'RelWithDebInfo'
     exe = build / 'wkbai.exe'
     if not exe.exists():
         sys.exit(f'{exe} not found: build wkbai first')

@@ -17,8 +17,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 
 set(EOS_SDK_DIR "" CACHE PATH "Epic Online Services SDK folder (with Include, Lib, Bin); empty: the plugin is a stub")
 
-add_library(wkbai_eos SHARED eos_plugin.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../../wkbre2/matchmaking/wkbai_mm_plugin.h")
-target_include_directories(wkbai_eos PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../wkbre2/matchmaking")
+add_library(wkbai_eos SHARED eos_plugin.cpp "${CMAKE_CURRENT_SOURCE_DIR}/../../wkbai/matchmaking/wkbai_mm_plugin.h")
+target_include_directories(wkbai_eos PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../wkbai/matchmaking")
 target_link_libraries(wkbai_eos PRIVATE nlohmann_json::nlohmann_json)
 
 if(EOS_SDK_DIR AND EXISTS "${EOS_SDK_DIR}/Include/eos_sdk.h")

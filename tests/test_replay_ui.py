@@ -28,7 +28,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbai.exe'))
+EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbai' / 'RelWithDebInfo' / 'wkbai.exe'))
 GAME = os.environ.get('WKB_GAME_DATA', r'C:\Dev\wkb-orig')
 LEVEL = os.environ.get('WKB_LEVEL', '2 Player 4 Peaks.lvl')
 MINUTES = float(os.environ.get('WKB_MINUTES', '16'))

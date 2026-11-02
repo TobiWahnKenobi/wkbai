@@ -1,4 +1,4 @@
-"""Tests for matchmaking (wkbre2/matchmaking): two wkbai instances on this machine, one hosting,
+"""Tests for matchmaking (wkbai/matchmaking): two wkbai instances on this machine, one hosting,
 one finding the game in the list and joining it. Loopback only ("hostBind": "127.0.0.1", the
 discovery sent to 127.0.0.1), so no firewall prompt; each instance has its own user folder; the
 null renderer, so no window waits on the screen (the screenshot test opens one for a moment).
@@ -27,7 +27,7 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbre2' / 'RelWithDebInfo' / 'wkbai.exe'))
+EXE = Path(os.environ.get('WKBRE2_EXE', REPO / 'build' / 'wkbai' / 'RelWithDebInfo' / 'wkbai.exe'))
 GAME = os.environ.get('WKB_GAME_DATA', r'C:\Dev\wkb-orig')
 LEVEL = '2 Player 4 Peaks.lvl'
 
