@@ -208,6 +208,10 @@ local function listBox(state, items, x, y, w, h)
 		local text, colour = item, YELLOW
 		if type(item) == "table" then text, colour = item[1], item[2] or YELLOW end
 		drawText(FONT_LIST, x + L(8), ry, text, colour, S)
+		-- more columns: { text, x from the row's left, colour }
+		if type(item) == "table" and item.columns then
+			for _, c in ipairs(item.columns) do drawText(FONT_LIST, x + L(8) + c[2], ry, c[1], c[3] or colour, S) end
+		end
 		if hovered(x, ry, w, rowH) then hoveredRow = i end
 		if hovered(x, ry, w, rowH) and mouse.pressed then
 			if state.selected == i and state.lastClick and getTime() - state.lastClick < 0.4 then
@@ -637,30 +641,91 @@ end
 
 local function stripExtension(name) return (string.gsub(name, "%.[^%.]*$", "")) end
 
+-- a recording's length, "1:05:09" or "25:40"
+local function lengthText(seconds)
+	local s = math.floor(seconds + 0.5)
+	if s >= 3600 then return string.format("%d:%02d:%02d", s // 3600, s // 60 % 60, s % 60) end
+	return string.format("%d:%02d", s // 60, s % 60)
+end
+
+-- the Replays tab's columns: name, map, when recorded, length (x from the row's left)
+local REPLAY_COLUMNS = { { "Name", 0 }, { "Map", 640 }, { "Recorded", 1160 }, { "Length", 1440 } }
+
 local loadState = { selected = 0, scroll = 0, tab = 1 }
+local renameState = { text = "" }
 Screens.load = {
 	background = sunsetBackground,
-	open = function() loadState.selected = 0; loadState.scroll = 0 end,
+	open = function() loadState.selected = 0; loadState.scroll = 0; loadState.renaming = nil end,
+	onEscape = function()
+		if loadState.renaming then loadState.renaming = nil else pop() end
+	end,
 	draw = function()
 		title(T("FRONT_END_LOAD_GAME_TITLE"))
+		-- while renaming, the screen below gets no clicks
+		local blocked = mouse.blocked
+		if loadState.renaming then mouse.blocked = true end
 		-- saved games are not sorted by mode yet: all are under Skirmish
 		local before = loadState.tab
 		loadState.tab = tabs({ T("FRONT_END_LOAD_GAME_SKIRMISH"), T("FRONT_END_LOAD_GAME_CAMPAIGN"), T("FRONT_END_LOAD_GAME_MULTIPLAYER"), "Replays" },
 			loadState.tab, X(90), Y(70), L(30), { true, false, false, true })
 		if loadState.tab ~= before then loadState.selected = 0; loadState.scroll = 0 end
-		-- the Replays tab: the recorded games (wkbre2's own)
+		-- the Replays tab: the recorded games (wkbre2's own), with their map, date and length
 		local replays = loadState.tab == 4
-		local saves = replays and getRecordings() or savesOfType(".sav")
-		local names = {}
-		for i, s in ipairs(saves) do names[i] = replays and s or stripExtension(s) end
+		local saves, names, recordings = {}, {}, {}
+		if replays then
+			recordings = getRecordings()
+			for i, r in ipairs(recordings) do
+				saves[i] = r.folder
+				names[i] = { r.name, YELLOW, columns = { { r.map, L(REPLAY_COLUMNS[2][2]), WHITE },
+					{ r.date, L(REPLAY_COLUMNS[3][2]), GREY }, { lengthText(r.length), L(REPLAY_COLUMNS[4][2]), WHITE } } }
+			end
+		else
+			saves = savesOfType(".sav")
+			for i, s in ipairs(saves) do names[i] = stripExtension(s) end
+		end
 		panel(X(90), Y(100), L(1740), L(910))
-		local activated = listBox(loadState, names, X(92), Y(104), L(1736), L(902))
+		local activated
+		if replays then
+			for _, c in ipairs(REPLAY_COLUMNS) do drawText(FONT_LIST, X(100) + L(c[2]), Y(108), c[1], GREY, S) end
+			drawRect(X(96), Y(126), L(1728), L(1), PANEL_BORDER)
+			activated = listBox(loadState, names, X(92), Y(128), L(1736), L(878))
+		else
+			activated = listBox(loadState, names, X(92), Y(104), L(1736), L(902))
+		end
 		local chosen = saves[loadState.selected]
 		if button(T("FRONT_END_BUTTON_LOAD"), X(735), Y(1022), L(141), L(24), chosen ~= nil) or (activated and chosen) then
 			request(replays and "replay" or "start", chosen)
 		end
+		if replays and button("Rename", X(580), Y(1022), L(141), L(24), chosen ~= nil) then
+			loadState.renaming = chosen
+			renameState.text = recordings[loadState.selected].name
+		end
+		if loadState.testRename and recordings[1] then
+			loadState.selected, loadState.renaming = 1, saves[1]
+			renameState.text = loadState.testRename[1]
+		end
 		button(T("DIALOG_BUTTON_DELETE"), X(890), Y(1022), L(141), L(24), false)
 		if button(T("FRONT_END_BUTTON_BACK"), X(1045), Y(1022), L(141), L(24)) then pop() end
+		mouse.blocked = blocked
+
+		-- the rename dialog: the recording's own name (its folder stays as it is)
+		if loadState.renaming then
+			local w, h = L(720), L(270)
+			local x, y = X(960) - w / 2, (H - h) / 2
+			drawRect(0, 0, W, H, DIM)
+			goldFrame(x, y, w, h)
+			centredText(FONT_BUTTON, "Rename the replay", x, y + L(44), w, L(30), WHITE)
+			local entered = textField(renameState, x + L(50), y + L(100), w - L(100), L(32), nil, 80)
+			local name = string.match(renameState.text, "^%s*(.-)%s*$")
+			local confirmed = loadState.testRename and loadState.testRename[2]
+			loadState.testRename = nil
+			if button(T("FRONT_END_BUTTON_OK"), X(960) - L(150), y + h - L(70), L(141), L(26), name ~= "") or ((entered or confirmed) and name ~= "") then
+				renameRecording(loadState.renaming, name)
+				loadState.renaming = nil
+			elseif button(T("FRONT_END_BUTTON_CANCEL"), X(960) + L(9), y + h - L(70), L(141), L(26)) then
+				loadState.renaming = nil
+			end
+		end
 	end,
 }
 
@@ -2292,6 +2357,14 @@ function FE_Open(name)
 	if screenName == "multiplayer" then
 		name = screenName
 		if tab == "games" then openGamesTab() end
+	end
+	-- "load.replays": Load Game at its Replays tab; "load.rename=<name>" with the rename dialog of
+	-- the newest recording open, that name typed in; "load.renamed=<name>" renamed so (tests)
+	if screenName == "load" then
+		name = screenName
+		loadState.tab = 4
+		local how, newName = string.match(tab, "^(rename%a*)=(.*)$")
+		if how then loadState.testRename = { newName, how == "renamed" } end
 	end
 	-- "campaignmap.<profile>": the campaign map of a profile
 	if screenName == "campaignmap" then

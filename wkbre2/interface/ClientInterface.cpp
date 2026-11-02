@@ -281,6 +281,12 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	};
 	if (client->getLevel())
 		drawDots(client->getLevel(), drawDots);
+	// a replay's events, marked for a while
+	if (replayMode) {
+		drawList->PushClipRect(p0, p1, true);
+		replayView.drawMinimapMarkers(drawList, uiTexCache, [&](float px, float pz) { return toMinimap(px, pz); }, (float)std::min(w, h));
+		drawList->PopClipRect();
+	}
 
 	// Where the camera looks: its view direction hits the ground at about the camera's height
 	const Camera& cam = client->camera;
@@ -946,6 +952,16 @@ void ClientInterface::drawChronicle()
 	// and the events it saw (with fog of war; without, all events)
 	const bool all = replayMode || client->spectator;
 	chronicle.update(client, (all || !fogOfWarOn()) ? nullptr : &fogOfWar);
+	// a replay: its controls (not over the in-game menu), and its events
+	if (replayMode) {
+		replayView.update(client, replayServer, chronicle, playerColors);
+		FrontEnd* frontEnd = FrontEnd::get();
+		if (!(frontEnd && frontEnd->isOpen())) {
+			replayView.drawControls(client, replayServer, gfx);
+			replayView.drawLog(client, uiTexCache);
+		}
+		replayView.drawAnnouncements(uiTexCache, gfx);
+	}
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
 	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
 	auto shownPlayer = [&](uint32_t id) {
@@ -2228,15 +2244,16 @@ void ClientInterface::iter()
 				g_keyPressed[sc] = true;
 		}
 	}
-	if (g_keyPressed[SDL_SCANCODE_P]) {
+	// (a replay's controls have their own keys)
+	if (g_keyPressed[SDL_SCANCODE_P] && !replayMode) {
 		static bool pauseState = false;
 		pauseState = !pauseState;
 		client->sendPauseRequest(pauseState);
 	}
-	if (g_keyPressed[SDL_SCANCODE_KP_PLUS]) {
+	if (g_keyPressed[SDL_SCANCODE_KP_PLUS] && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed * 2.0f);
 	}
-	if (g_keyPressed[SDL_SCANCODE_KP_MINUS]) {
+	if (g_keyPressed[SDL_SCANCODE_KP_MINUS] && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed / 2.0f);
 	}
 	if (g_keyPressed[SDL_SCANCODE_DELETE]) {
@@ -2546,6 +2563,8 @@ void ClientInterface::iter()
 		lua.set_function("getSystemTime", [this]() {return (float)SDL_GetTicks() / 1000.0f; });
 		lua.set_function("getGameSpeed", [this]() { return client->timeManager.timeSpeed; });
 		lua.set_function("isGamePaused", [this]() { return client->timeManager.paused; });
+		// a recording played: no command panels (the server takes no orders), its own speed line
+		lua.set_function("isReplay", [this]() { return replayMode; });
 		// Game set
 		lua.set_function("computeEquation",
 			[this](const std::string& equationName, uint32_t objId) -> float {

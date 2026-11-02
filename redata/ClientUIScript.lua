@@ -295,7 +295,8 @@ function CCUI_PerFrame()
 				speedLine = speedLine .. " (reached " .. speedText(reached) .. ")"
 			end
 		end
-		drawText(12, 88, speedLine)
+		-- (a replay shows its own, in its playback controls)
+		if not isReplay() then drawText(12, 88, speedLine) end
 		local color = getColor(player) % 8
 		if color == 0 then color = 8 end
 		drawImage(tx(650+8) - 8, 22, 16, 36, "Interface/InGame/Top Panel/Player" .. tostring(color) .. ".tga")
@@ -328,7 +329,8 @@ function CCUI_PerFrame()
 	local info = sel
 	if info == 0 then info = getHoveredObject() end
 	if info ~= 0 then drawSelectionInformation(info) end
-	if sel ~= 0 then
+	-- a replay takes no orders: no command panels, only what is selected
+	if sel ~= 0 and not isReplay() then
 		local bp = getBlueprint(sel)
 
 

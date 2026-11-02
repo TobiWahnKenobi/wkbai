@@ -686,7 +686,7 @@ void QuickStartMenu::launchGame()
 				// test runs: "benchmark": { ..., "replaySpeed": <times> } plays it faster
 				if (BenchmarkEnabled())
 					if (const float speed = g_settings.value("benchmark", nlohmann::json::object()).value("replaySpeed", 0.0f); speed > 0.0f)
-						server->timeManager.setSpeed(speed);
+						server->setGameSpeed(speed);
 			}
 			else {
 				skirmishMenu.applySettings(*server);
@@ -729,6 +729,7 @@ void QuickStartMenu::launchGame()
 		ClientInterface cliui(client, gfx);
 		cliui.singlePlayer = modeChosen == MODE_SINGLEPLAYER;
 		cliui.replayMode = !replay.empty();
+		cliui.replayServer = replay.empty() ? nullptr : server;
 		// the map editor changes the server's state while its thread waits
 		if (modeChosen == MODE_SINGLEPLAYER)
 			cliui.withServer = [this, &srvMutex](const std::function<void(Server&)>& f) {
