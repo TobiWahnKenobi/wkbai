@@ -257,21 +257,20 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
 	static const ImU32 treeColor = IM_COL32(28, 72, 24, 255);
-	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
-		for (const auto& [type, children] : obj->children)
-			for (CommonGameObject* child : children)
-				self((ClientGameObject*)child, self);
+	auto drawDot = [&](ClientGameObject* obj, bool remembered) {
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
 			return;
-		// enemy characters in the fog of war aren't shown
+		// enemy characters in the fog of war aren't shown, and enemy buildings only as last seen
 		if (fogOn && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
+			return;
+		if (fogOn && !remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 			return;
 		// Hidden when all its display categories are toggled off
 		const uint8_t categories = obj->blueprint->minimapCategories;
 		if (categories && !(categories & ~minimapHiddenCategories))
 			return;
 		CommonGameObject* player = obj->getPlayer();
-		int color = player ? player->color : 0;
+		int color = remembered ? obj->color : player ? player->color : 0;
 		ImU32 dotColor = playerColors[(color >= 0 && color < 9) ? color : 0];
 		if (color == 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER)
 			dotColor = treeColor; // neutral resources such as trees
@@ -279,8 +278,18 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		ImVec2 c = toMinimap(obj->position.x, obj->position.z);
 		drawList->AddRectFilled(ImVec2(c.x - size, c.y - size), ImVec2(c.x + size, c.y + size), dotColor);
 	};
+	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self((ClientGameObject*)child, self);
+		drawDot(obj, false);
+	};
 	if (client->getLevel())
 		drawDots(client->getLevel(), drawDots);
+	if (fogOn)
+		for (const auto& [id, copy] : fogOfWar.remembered)
+			if (!fogOfWar.isBuildingSeen(copy->position))
+				drawDot(copy.get(), true);
 	// a replay's events, marked for a while
 	if (replayMode) {
 		drawList->PushClipRect(p0, p1, true);
@@ -1246,7 +1255,7 @@ void ClientInterface::drawSelectionPortrait()
 	scene->clear();
 }
 
-void ClientInterface::drawObject(ClientGameObject *obj)
+void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 {
 	using namespace Tags;
 
@@ -1260,6 +1269,9 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 		return;
 	// the fog of war hides enemy characters no unit of the player's sees
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && fogOfWarOn() && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
+		return;
+	// and enemy buildings out of sight: drawn as last seen (FogOfWar::remembered) instead
+	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fogOfWarOn() && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 		return;
 
 	static const float tolerance = 25.0f;
@@ -1331,13 +1343,14 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	}
 	if (obj->blueprint->shearModel && client->terrain)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
-	obj->sceneEntity.color = obj->getPlayer()->color;
-	if (obj->animSynchronizedTask != -1) {
+	// a remembered building has no parent: its colour and frame are those it had when last seen
+	obj->sceneEntity.color = remembered ? obj->color : obj->getPlayer()->color;
+	if (obj->animSynchronizedTask != -1 && !remembered) {
 		CliScriptContext ctx{ client, obj };
 		float frac = client->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
 		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * frac * 1000.0f);
 	}
-	else
+	else if (!remembered)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
 	obj->sceneEntity.flags = 0;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
@@ -2873,6 +2886,47 @@ void ClientInterface::iter()
 	// the 3D scene post-processed (enhanced graphics on Diligent)
 	DiligentGfx* postGfx = dynamic_cast<DiligentGfx*>(gfx);
 	const bool fogOn = fogOfWarOn();
+	// Test runs: "benchmark": { ..., "fogReveal": [x, z, radius, from, until] } lights that circle
+	// (metres; seconds of game time) as a unit of the player's would, to fill the memory of the
+	// enemy buildings there; the counts are printed once a second
+	if (fogOn && BenchmarkEnabled()) {
+		const nlohmann::json reveal = g_settings.value("benchmark", nlohmann::json::object()).value("fogReveal", nlohmann::json());
+		fogOfWar.testViewers.clear();
+		const float now = client->timeManager.currentTime;
+		if (reveal.is_array() && reveal.size() == 5 && now >= reveal[3].get<float>() && now < reveal[4].get<float>())
+			fogOfWar.testViewers.push_back({ Vector3(reveal[0].get<float>(), 0, reveal[1].get<float>()), reveal[2].get<float>() });
+		static int lastPrinted = -1;
+		if ((int)now != lastPrinted && client->getLevel()) {
+			lastPrinted = (int)now;
+			int enemy = 0, shown = 0;
+			// and at the start, where each enemy's buildings stand (their mean)
+			std::map<uint32_t, std::pair<Vector3, int>> towns;
+			auto count = [&](CommonGameObject* obj, auto& self) -> void {
+				for (const auto& [type, children] : obj->children)
+					for (CommonGameObject* child : children) {
+						self(child, self);
+						if (fogOfWar.isRemembered(client, child) && !(child->flags & ClientGameObject::fTerminated)) {
+							enemy++;
+							shown += fogOfWar.isBuildingSeen(child->position);
+							auto& town = towns[child->getPlayer()->id];
+							town.first += child->position;
+							town.second++;
+						}
+					}
+			};
+			count(client->getLevel(), count);
+			if (lastPrinted == 0)
+				printf("FOG camera at (%.0f, %.0f, %.0f)\n", client->camera.position.x, client->camera.position.y, client->camera.position.z);
+			if (lastPrinted == 0)
+				for (const auto& [player, town] : towns)
+					printf("FOG player %u: %d buildings about (%.0f, %.0f)\n", player, town.second, town.first.x / town.second, town.first.z / town.second);
+			int remembered = 0;
+			for (const auto& [id, copy] : fogOfWar.remembered)
+				remembered += !fogOfWar.isBuildingSeen(copy->position);
+			printf("FOG t=%d enemy buildings %d, in sight %d, remembered out of sight %d\n", lastPrinted, enemy, shown, remembered);
+			fflush(stdout);
+		}
+	}
 	if (fogOn)
 		fogOfWar.update(client);
 	if (postGfx) {
@@ -2969,6 +3023,10 @@ void ClientInterface::iter()
 		}
 		if (client->getLevel())
 			drawObject(client->getLevel());
+		if (fogOfWarOn())
+			for (const auto& [id, copy] : fogOfWar.remembered)
+				if (!fogOfWar.isBuildingSeen(copy->position))
+					drawObject(copy.get(), true);
 		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
 		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
 		// The particle renderer only draws sprites; these were blank squares before.
