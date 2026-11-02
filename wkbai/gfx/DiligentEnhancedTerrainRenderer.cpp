@@ -580,6 +580,11 @@ float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, f
 	float2 size;
 	sceneTexture.GetDimensions(size.x, size.y);
 	float2 suv = svpos.xy / size + n.xz * (0.03 * saturate(depth / 1.5));
+	// (what the shifted pixel shows must lie behind the water's surface: else the shore and the
+	// hills were drawn into the water in jagged shards, close to the camera most; 0: no depth copy)
+	float bd = depthTexture.Load(int3(saturate(suv) * size, 0));
+	if (bd > 0 && bd < svpos.z)
+		suv = svpos.xy / size;
 	// blurred with the depth, as water scatters the light from the bed (up to 6 pixels; a
 	// sharp bed showed its tiles' edges through clear rivers)
 	float2 r = saturate(depth / 3) * 6 / size;
@@ -637,6 +642,9 @@ float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 		float k = (i - 1 + jitter) / steps;
 		float t = 0.4 + reach * k * k;
 		float3 q = world + r * t;
+		// (under the surface the ray would find the bed: no reflection)
+		if (q.y < world.y - 0.2)
+			break;
 		float4 clip = mul(float4(q, 1), Transform);
 		if (clip.w <= 0.05)
 			break;
@@ -812,9 +820,13 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float v0 = 1 - abs(2 * q0 - 1);
 	float s0 = rf.x + current * q0 * rcycle, s1 = rf.x + current * q1 * rcycle + 7.3;
 	float2 rs = RiverSlope(s0, rf.y) * v0 + RiverSlope(s1, rf.y) * (1 - v0);
-	float2 riverDetail = rs.x * along + rs.y * across;
+	// (the user, Tribes Unite: star bursts and a herringbone on the rivers. The ripples had been
+	// laid along the channel's coordinates: the distance to the mouth fans out from a point where
+	// a river widens or branches meet, and the distance to the banks folds at the middle. Now
+	// they are the sea's ripples, carried downstream by the flow map, a little stronger.)
+	float2 riverDetail = detail * 0.55 + fine * 0.25;
 	float2 seaDetail = detail * 0.3 + fine * 0.22;
-	float2 slope = lerp(seaDetail, riverDetail * 0.5, river);
+	float2 slope = lerp(seaDetail, riverDetail, river);
 	float3 n = normalize(wn + float3(slope.x, 0, slope.y));
 	float3 v = normalize(FogCamera.xyz - input.World);
 	float3 l = normalize(SunDirection);
@@ -1089,7 +1101,10 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	// the blend looks the corners up at a position warped by noise, so that the materials'
 	// borders don't follow the tile grid. (Tiles whose corners all agree had kept their own
 	// picture, whose tone differs from the blended layers: every such tile showed as a square.)
-	float2 wpos = input.FragPos.xz + (ValueNoise2(input.FragPos.xz * 0.15) - 0.5) * 3.5;
+	// Two octaves, the broad one up to a tile's width: with one of 3.5 units the borders still
+	// stepped along the 5-unit tiles (the user, Tribes Unite: worse than the painted tiles).
+	float2 wp = input.FragPos.xz;
+	float2 wpos = wp + (ValueNoise2(wp * 0.06 + 1.3) - 0.5) * 6.5 + (ValueNoise2(wp * 0.21 + 7.9) - 0.5) * 2.5;
 	float2 c = (wpos + BlobParams.w) / 5;
 	int2 c0 = (int2)floor(c);
 	float2 f = c - c0;
