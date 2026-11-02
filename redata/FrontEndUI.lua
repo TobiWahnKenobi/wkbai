@@ -987,7 +987,8 @@ local function playersTab()
 		local current = 1
 		for i, c in ipairs(choices) do if c == (sel.aiScript or "") then current = i end end
 		local label = choices[current] == "" and "Lua AI: none (the Kingmaker scripts)" or ("Lua AI: " .. choices[current])
-		if button(label, X(439), Y(232), L(600), L(24)) then
+		-- (disabled when there is none to choose)
+		if button(label, X(439), Y(232), L(600), L(24), #choices > 1) then
 			sel.aiScript = choices[current % #choices + 1]
 		end
 	end

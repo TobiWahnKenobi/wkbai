@@ -599,11 +599,18 @@ std::vector<std::string> ListLuaAIs()
 {
 	std::vector<std::string> names;
 	std::unique_ptr<std::vector<std::string>> files(ListFiles("LuaAI"));
+	// and redata's (ListFiles has the archives, mods and saved folders, not redata: the bundled
+	// Advanced was missing from the lobby, whose Lua AI button then did nothing)
+	std::error_code ec;
+	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path("redata") / "LuaAI", ec))
+		if (entry.is_regular_file(ec))
+			files->push_back(PathToUtf8(entry.path().filename()));
 	if (files)
 		for (const std::string& f : *files)
 			if (f.size() > 4 && StrCICompare(f.substr(f.size() - 4), ".lua") == 0)
 				names.push_back(f.substr(0, f.size() - 4));
 	std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
+	names.erase(std::unique(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) == 0; }), names.end());
 	return names;
 }
 
