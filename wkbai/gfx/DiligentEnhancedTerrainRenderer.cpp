@@ -1104,13 +1104,40 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	// Two octaves, the broad one up to a tile's width: with one of 3.5 units the borders still
 	// stepped along the 5-unit tiles (the user, Tribes Unite: worse than the painted tiles).
 	float2 wp = input.FragPos.xz;
-	float2 wpos = wp + (ValueNoise2(wp * 0.06 + 1.3) - 0.5) * 6.5 + (ValueNoise2(wp * 0.21 + 7.9) - 0.5) * 2.5;
+	// (the finer one small: at 2.5 units it drew squiggles along the borders over a meadow)
+	float2 wpos = wp + (ValueNoise2(wp * 0.06 + 1.3) - 0.5) * 6.5 + (ValueNoise2(wp * 0.21 + 7.9) - 0.5) * 1.0;
 	float2 c = (wpos + BlobParams.w) / 5;
 	int2 c0 = (int2)floor(c);
 	float2 f = c - c0;
 	uint4 l4 = CornerLayers(c0);
 	uint l[4] = { l4.x, l4.y, l4.z, l4.w };
 	float w[4] = { (1 - f.x) * (1 - f.y), f.x * (1 - f.y), (1 - f.x) * f.y, f.x * f.y };
+	// Where the corners around the (warped) point are one material, the tile's own painted
+	// picture and bump map, as with blending off; the blend only near the materials' borders,
+	// faded in by the same smooth weights, so the switch draws no squares. (The user, Tribes
+	// Unite with the HD textures: blended everywhere, the ground lost "all its detail", the bump
+	// mapping and every difference between tiles of a material.)
+	// Materials alike in colour (two grasses) count as one: their painted tiles meet well, and
+	// fading between the tiles and the blend over a meadow drew wavy bands. A material's colour:
+	// its layer's smallest mip.
+	uint lw, lh, le, lv;
+	splatDiffuse.GetDimensions(0, lw, lh, le, lv);
+	float3 mean[4];
+	[unroll] for (int im = 0; im < 4; im++)
+		mean[im] = splatDiffuse.SampleLevel(splatSampler, float3(0.5, 0.5, l[im]), lv - 1).rgb;
+	float agree = 0;
+	[unroll] for (int ia = 0; ia < 4; ia++) {
+		float same = 0;
+		[unroll] for (int ib = 0; ib < 4; ib++)
+			same += w[ib] * saturate(1 - (length(mean[ib] - mean[ia]) - 0.04) * 8);
+		agree = max(agree, same);
+	}
+	// (the blend in a narrow strip along the borders: wider, its tone, a little off the tiles',
+	// showed as bands)
+	float keep = smoothstep(0.7, 0.93, agree);
+	float2 fuv = AtlasUV(input.Texcoord);
+	float4 painted = ShadeTerrain(input, inpTexture.Sample(inpSampler, fuv), normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1,
+		input.Tangent, input.Bitangent);
 	// steep ground (cliffs): the materials projected along the three axes (triplanar), as the
 	// tiles' pictures stretch down a slope
 	float3 n = normalize(input.Norm);
@@ -1135,7 +1162,9 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	}
 	float total = 0;
 	[unroll] for (int j = 0; j < 4; j++) {
-		float b = max(h[j] - (top - 0.45), 0);
+		// (by the weights alone: the height blend's brighter material first drew bright rims
+		// along the borders, now that the blend is a strip along them)
+		float b = w[j];
 		tex += s[j] * b;
 		nrm += sn[j] * b;
 		total += b;
@@ -1146,7 +1175,7 @@ float4 PS_Splat(VS_OUTPUT input) : SV_Target
 	nrm = normalize(lerp(nrm, float3(0, 1, 0), steep));
 	float3 t = normalize(float3(1, 0, 0) - n * n.x);
 	float3 b = normalize(float3(0, 0, 1) - n * n.z);
-	return ShadeTerrain(input, tex, nrm, t, b);
+	return lerp(ShadeTerrain(input, tex, nrm, t, b), painted, keep);
 }
 )---";
 
