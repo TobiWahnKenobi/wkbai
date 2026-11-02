@@ -279,6 +279,95 @@ bool AIController::advanced()
 	return advancedState == 1;
 }
 
+// The aggressive AI's home guard (not in WKB.exe). The scripts spend every bit of food on peasants
+// (up to the floor of 80) and commission soldiers only for their armies' plans: on Tribes Unite
+// (6 AIs) five had no soldier at 10 minutes, and 5 barbarians raided a village unopposed (the
+// user). From minute 2 the guard grows by one soldier each 45 s up to 10; while it is short, an
+// idle building that can train a fighter now trains the cheapest one it can pay for, commissioned
+// by the defensive army as the scripts' own are. Returns the soldiers ordered.
+int AIController::homeGuard(float now)
+{
+	ServerGameObject* p = gameObj;
+	const GameSet* gs = Server::instance->gameSet.get();
+	g_items.update(gs);
+	const int target = std::clamp((int)((now - 120.0f) / 45.0f), 0, 10);
+	if (target == 0)
+		return 0;
+	int soldiers = 0;
+	std::vector<ServerGameObject*> buildings, todo{ p };
+	while (!todo.empty()) {
+		ServerGameObject* o = todo.back();
+		todo.pop_back();
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				auto* b = (ServerGameObject*)c;
+				if (b->deleted)
+					continue;
+				if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+					buildings.push_back(b);
+				else if (IsSoldier(b))
+					soldiers++;
+				if (b->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+					todo.push_back(b);
+			}
+	}
+	// fighters being trained count too
+	auto isFighter = [&](const GameObjBlueprint* type) {
+		return type && g_items.military >= 0 && type->startItemValues.count(g_items.military) && type->startItemValues.at(g_items.military) > 0.0f;
+	};
+	for (ServerGameObject* b : buildings)
+		if (Order* order = b->orderConfig.getCurrentOrder()) {
+			const std::string& name = gs->orders.getString(order->blueprint->bpid);
+			if (name.rfind("Spawn ", 0) == 0 && isFighter(gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6))))
+				soldiers++;
+		}
+	if (soldiers >= target)
+		return 0;
+	std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+	int ordered = 0;
+	for (ServerGameObject* b : buildings) {
+		if (soldiers + ordered >= target)
+			break;
+		if (b->orderConfig.getCurrentOrder())
+			continue;
+		const GameObjBlueprint* cheapest = nullptr;
+		float cheapestCost = 0;
+		for (const Command* cmd : b->blueprint->offeredCommands) {
+			const std::string& name = gs->commands.getString(cmd);
+			if (name.rfind("Spawn ", 0) != 0 || gs->orders.names.getIndex(name) < 0)
+				continue;
+			const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6));
+			if (!isFighter(type))
+				continue;
+			SrvScriptContext cctx(Server::instance, b);
+			auto _s = cctx.selectedObject.change(b);
+			auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+			if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
+				|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
+				|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
+				continue;
+			const float cost = type->getStartingItemValue(Tags::PDITEM_FOOD_COST) + type->getStartingItemValue(Tags::PDITEM_WOOD_COST)
+				+ type->getStartingItemValue(Tags::PDITEM_GOLD_COST);
+			if (!cheapest || cost < cheapestCost) {
+				cheapest = type;
+				cheapestCost = cost;
+			}
+		}
+		if (!cheapest)
+			continue;
+		Order* order = b->orderConfig.addOrder(&gs->orders[gs->orders.names.getIndex("Spawn " + cheapest->name)], Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, { -1, -1, -1 }, false);
+		if (!order || order->tasks.empty())
+			continue;
+		auto* task = (SpawnTask*)(order->tasks[0].get());
+		task->setSpawnBlueprint(cheapest);
+		if (ServerGameObject* home = HomeArmy(p))
+			task->aiCommissioner = home;
+		ordered++;
+	}
+	guardTrained += ordered;
+	return ordered;
+}
+
 float AIController::forceStrength(const std::vector<ServerGameObject*>& units, const std::vector<ServerGameObject*>& against)
 {
 	g_items.update(Server::instance->gameSet.get());

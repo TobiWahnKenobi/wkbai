@@ -103,6 +103,9 @@ struct AIController {
 	struct AdvancedWave { uint32_t army, target; Vector3 targetAt; size_t size; };
 	std::vector<AdvancedWave> advancedWaves;
 	float nextLifelineCheck = 0.0f;
+	float nextGuardCheck = 0.0f;
+	int guardTrained = 0; // the home guard's soldiers ordered (homeGuard)
+	int homeGuard(float now);
 	int trained = 0; // soldiers ordered by a Lua AI's ai.train
 	int lifelines = 0; // the food given by the lifeline (AIController::update)
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;

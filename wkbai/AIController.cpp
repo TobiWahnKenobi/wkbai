@@ -253,6 +253,13 @@ void AIController::update()
 		}
 	}
 
+	// ---- The home guard (the aggressive AI, not in WKB.exe; AIController::homeGuard) ----
+	if (Server::instance->aggressiveAI && Server::instance->aiHomeGuard && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
+		&& Server::instance->timeManager.currentTime >= nextGuardCheck) {
+		nextGuardCheck = Server::instance->timeManager.currentTime + 10.0f;
+		homeGuard(Server::instance->timeManager.currentTime);
+	}
+
 	// ---- The first barracks (the aggressive AI, not in WKB.exe) ----
 	// The Kingmaker's opening commissions ("Succubus Rush", "Pure Celestial Economic Building", ...)
 	// hold farms, shops, a maypole, temples, but no building that trains fighters: the barracks

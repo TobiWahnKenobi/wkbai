@@ -417,6 +417,7 @@ std::string Server::aiSettingsText() const
 	std::string text = buf;
 	text += "aiAdvanced=" + std::to_string(aiAdvanced) + "\n";
 	text += "aiLifeline=" + std::to_string((int)aiLifeline) + "\n";
+	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -447,6 +448,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
 		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiLifeline") aiLifeline = v != 0;
+		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
 		else if (name == "aiFocusAttacks") aiFocusAttacks = v != 0;
 		else if (name == "aiEarlyFarms") aiEarlyFarms = (int)v;

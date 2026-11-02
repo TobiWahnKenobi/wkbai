@@ -75,6 +75,7 @@ private:
 	bool aiTakeOver = true; // Server::aiTakeOver
 	int aiAdvanced = 0; // Server::aiAdvanced
 	bool aiLifeline = true; // Server::aiLifeline
+	bool aiHomeGuard = true; // Server::aiHomeGuard
 	int modPolicy = 0; // Server::modPolicy
 	bool allowSpectators = false; int maxSpectators = 4; // Server::allowSpectators, maxSpectators
 	int aiMinPeasants = 40; // Server::aiMinPeasants

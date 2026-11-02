@@ -1320,8 +1320,31 @@ struct FinderFocusedEnemyPalaces : ObjectFinder {
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
+// The aggressive AI's carts (not in WKB.exe). The Kingmaker wants round(1 + stock / 1500) carts
+// per village ("Carts I Need", evaluated on each village): a second one only once a village holds
+// 750. On Tribes Unite (6 AIs, 20 minutes) their villages held 300 to 1,900 food that one cart
+// couldn't bring home, the treasuries stood at 0 food and the AIs trained no soldiers (the user:
+// "never built a second cart and the village was overflowing with resources"). At least 2 per
+// village, one more per 400 it holds, at most 5.
+struct ValueCartsNeeded : ValueDeterminer {
+	ValueDeterminer* original;
+	ValueCartsNeeded(ValueDeterminer* original) : original(original) {}
+	~ValueCartsNeeded() { delete original; }
+	virtual float eval(ScriptContext* ctx) override {
+		const float value = original->eval(ctx);
+		CommonGameObject* village = ctx->isServer() ? ctx->getSelf() : nullptr;
+		if (!village || !Server::instance || !Server::instance->aggressiveAI)
+			return value;
+		const float stock = village->getItem(Tags::PDITEM_FOOD) + village->getItem(Tags::PDITEM_WOOD) + village->getItem(Tags::PDITEM_GOLD);
+		return std::max(value, std::min(5.0f, 2.0f + std::floor(stock / 400.0f)));
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
 void InstallAIAggressionOverrides(GameSet& gs)
 {
+	if (const int carts = gs.equations.names.getIndex("Carts I Need"); carts >= 0)
+		gs.equations[carts] = new ValueCartsNeeded(gs.equations[carts]);
 	const std::pair<const char*, std::pair<float, bool>> overrides[] = {
 		{ "Total Peasants Needed", { 80.0f, false } },
 		{ "I Have Enough Resources For Maximum Attack Of My Next Army Type Or I Have Become Impatient", { 1.0f, true } },

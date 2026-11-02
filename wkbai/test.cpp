@@ -1831,6 +1831,8 @@ void Test_AIvsAI()
 				float damage = 0.0f; // hit points missing from the standing buildings
 				std::pair<float, float> sightLow{ 1e9f, 0.0f }, sightHigh{ -1e9f, 0.0f }; // characters' sight (tiles), at height
 				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
+				int carts = 0, villages = 0;
+				float villageFood = 0, villageWood = 0, villageGold = 0; // what the villages hold, not yet carted home
 				std::map<std::string, int> orders; // the characters' current orders
 				std::map<std::string, int> markers; // markers by blueprint
 				std::map<std::string, int> siege; // siege engines alive, by blueprint and parent
@@ -1849,6 +1851,8 @@ void Test_AIvsAI()
 								{
 									static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout" };
 									const std::string& n = o->blueprint->name;
+									if (n.find("Cart") != std::string::npos)
+										carts++;
 									if (std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; })) {
 										soldiers++;
 										raised[player->id].insert(o->id);
@@ -1931,6 +1935,12 @@ void Test_AIvsAI()
 									if (hp >= 0 && hpCap >= 0 && !(isFoundation >= 0 && o->getItem(isFoundation) > 0.0f))
 										damage += std::max(0.0f, o->getItem(hpCap) - o->getItem(hp));
 								}
+								if (o->blueprint->name.rfind("Village", 0) == 0 && o->blueprint->name.find("Foundation") == std::string::npos) {
+									villages++;
+									villageFood += o->getItem(Tags::PDITEM_FOOD);
+									villageWood += o->getItem(Tags::PDITEM_WOOD);
+									villageGold += o->getItem(Tags::PDITEM_GOLD);
+								}
 								if (o->blueprint->name.rfind("Village", 0) == 0 && o->blueprint->name.find("Foundation") == std::string::npos)
 									snprintf(villageStock, sizeof(villageStock), "%s wood %.0f food %.0f", o->blueprint->name.c_str(), o->getItem(Tags::PDITEM_WOOD), o->getItem(Tags::PDITEM_FOOD));
 							}
@@ -1944,6 +1954,11 @@ void Test_AIvsAI()
 				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
 					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), player->aiController.retreated, buildings,
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
+				{
+					static const int cartsRequired = server.gameSet->items.names.getIndex("Carts Required");
+					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f\n", player->id, carts,
+						cartsRequired >= 0 ? player->getItem(cartsRequired) : -1.0f, villages, villageFood, villageWood, villageGold);
+				}
 				std::string markerList;
 				for (const auto& [name, n] : markers)
 					markerList += " " + name + "=" + std::to_string(n);
@@ -1987,8 +2002,8 @@ void Test_AIvsAI()
 				if (const std::string lua = player->aiController.luaCensus(); !lua.empty())
 					printf("AITEST   lua player %u: %s\n", player->id, lua.c_str());
 				// the advanced AI (AIAdvanced.cpp): whether this player has it, and what it did
-				printf("AITEST   advanced player %u: %s, lifelines %d; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
-					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.lifelines, player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
+				printf("AITEST   advanced player %u: %s, lifelines %d, home guard %d; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
+					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.lifelines, player->aiController.guardTrained, player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{
