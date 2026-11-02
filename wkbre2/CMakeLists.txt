@@ -97,7 +97,7 @@ add_executable (wkbre2 "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lz
 "gameset/Sound.cpp" "interface/QuickStartMenu.h" "interface/QuickStartMenu.cpp" "resources.rc" "gameset/Footprint.h" "gameset/Footprint.cpp" "gameset/GSTerrain.h" "gameset/GSTerrain.cpp"
 "gfx/renderer.cpp" "Pathfinding.h" "MovementController.h" "MovementController.cpp" "ParticleSystem.h" "ParticleSystem.cpp" "ParticleContainer.h"
 "ParticleContainer.cpp" "gfx/ParticleRenderer.h" "gfx/DefaultParticleRenderer.h" "gfx/DefaultParticleRenderer.cpp"
-"gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp"
+"gameset/Plan.cpp" "gameset/Plan.h"  "AIController.h" "AIController.cpp" "AIAdvanced.cpp"
 "gameset/ArmyCreationSchedule.h" "gameset/ArmyCreationSchedule.cpp" "gameset/WorkOrder.h" "gameset/WorkOrder.cpp" "common.cpp" "gameset/Commission.h" "gameset/Commission.cpp"
 "FormationController.h" "FormationController.cpp" "StampdownPlan.h" "StampdownPlan.cpp" "BreakpointManager.h" "BreakpointManager.cpp" "interface/QuickSkirmishMenu.h" "interface/QuickSkirmishMenu.cpp" "interface/ModMenu.h" "interface/ModMenu.cpp" "interface/MapEditor.cpp" "interface/FogOfWar.h" "interface/FogOfWar.cpp"
 "platform.cpp" "gfx/TerrainSpriteContainer.cpp" "gfx/TerrainSpriteContainer.h" "gfx/TerrainSpriteRenderer.h" "gfx/TerrainSpriteRenderer.cpp" "util/FrameStats.h" "util/FrameStats.cpp" "WaterDesign.h" "WaterDesign.cpp" "gfx/renderer_diligent.cpp" "gfx/renderer_diligent.h"

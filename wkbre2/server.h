@@ -250,6 +250,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, the ranged units of each attacking army shoot at the weakest enemy near it together:
 	// "aiFocusFire"
 	bool aiFocusFire = true;
+	// the advanced AI (AIAdvanced.cpp): unit power, defence of every settlement, attacks chosen by
+	// strength: "aiAdvanced" 1 for every AI, 2 or 3 for every other one (comparisons), 0 off
+	int aiAdvanced = 0;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
 	std::map<uint32_t, int> buildingsDestroyed;
 	// and their hit point capacities summed (with the damage to standing buildings, a steadier

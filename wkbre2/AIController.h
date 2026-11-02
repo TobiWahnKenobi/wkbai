@@ -89,6 +89,23 @@ struct AIController {
 	std::vector<MarchingFormation> marchingFormations;
 	int formationsSent = 0;
 	std::vector<CommissionInstance> commissionInstances;
+
+	// The advanced AI (AIAdvanced.cpp, "aiAdvanced"): whether this player has it (-1: not yet
+	// decided), the defenders out (unit id: where, since when), its waves (to bring home when
+	// losing, or on to the next building), and counts for the census
+	int advancedState = -1;
+	float nextAdvancedCheck = 0.0f, nextAdvancedWaveCheck = 0.0f;
+	struct Defending { Vector3 at; float since; };
+	std::map<uint32_t, Defending> defenders;
+	struct AdvancedWave { uint32_t army, target; Vector3 targetAt; size_t size; };
+	std::vector<AdvancedWave> advancedWaves;
+	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
+	bool advanced();
+	void advancedUpdate();
+	// the enemy settlement worth attacking most for what guards it, among those the wave would
+	// outmatch (1.4 times their strength; any, if anyway), as the building to attack; null: none
+	ServerGameObject* advancedWaveTarget(const std::vector<ServerGameObject*>& wave, const Vector3& home, bool anyway);
+	static float forceStrength(const std::vector<ServerGameObject*>& units, const std::vector<ServerGameObject*>& against);
 	
 	AIController(ServerGameObject* obj) : gameObj(obj) {}
 	void parse(GSFileParser& gsf, const GameSet& gs);

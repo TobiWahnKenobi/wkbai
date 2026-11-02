@@ -354,6 +354,10 @@ void AIController::update()
 	if (grudgePlayer && Server::instance->timeManager.currentTime - grudgeTime > 600.0f)
 		grudgePlayer = 0;
 
+	// ---- The advanced AI (AIAdvanced.cpp) ----
+	if (gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && advanced())
+		advancedUpdate();
+
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units
 	// while its attacking armies held 1-7, and no AI was destroyed. Every 30 s, unless enemies are
@@ -402,10 +406,30 @@ void AIController::update()
 						members.push_back((ServerGameObject*)c);
 			SrvScriptContext ctx{ Server::instance, defensive };
 			ServerGameObject* target = (ServerGameObject*)gs->objectFinderDefinitions[palacesFinder]->getFirst(&ctx);
-			if (target && (int)members.size() > Server::instance->aiAttackWave) {
+			// the advanced AI: a home guard of 10 and a fifth stays; the rest (12 or more) goes when
+			// there is an enemy settlement it outmatches, the one worth most for its guard (with
+			// more than 150, to the best one anyway)
+			const bool adv = advanced();
+			if (adv) {
 				std::sort(members.begin(), members.end(), [&](ServerGameObject* a, ServerGameObject* b) {
 					return isEngine(a) != isEngine(b) ? !isEngine(a) : a->id < b->id; });
-				members.erase(members.begin(), members.begin() + 10); // the 10 oldest soldiers stay home
+				const size_t keep = 10 + members.size() / 5;
+				target = nullptr;
+				if (members.size() >= keep + 12) {
+					std::vector<ServerGameObject*> wave(members.begin() + keep, members.end());
+					target = advancedWaveTarget(wave, defensive->position, members.size() > 150);
+					if (target)
+						members = std::move(wave);
+					else
+						wavesHeld++;
+				}
+			}
+			if (target && (adv || (int)members.size() > Server::instance->aiAttackWave)) {
+				if (!adv) {
+					std::sort(members.begin(), members.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+						return isEngine(a) != isEngine(b) ? !isEngine(a) : a->id < b->id; });
+					members.erase(members.begin(), members.begin() + 10); // the 10 oldest soldiers stay home
+				}
 				if (ServerGameObject* army = Server::instance->spawnObject(armyBp, gameObj, defensive->position, Vector3(0, 0, 0))) {
 					// gathering: first to a point 120 m short of the target on the home side, where
 					// they meet; streaming in one by one, the waves died at the walls
@@ -456,6 +480,8 @@ void AIController::update()
 						gatheringWaves.push_back({ army->id, target->id, rally, Server::instance->timeManager.currentTime });
 					waves++;
 					waveUnits += (int)members.size();
+					if (adv)
+						advancedWaves.push_back({ army->id, target->id, target->position, members.size() });
 				}
 			}
 		}
