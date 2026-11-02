@@ -185,8 +185,10 @@ void Server::loadSaveGame(const char * filename)
 			b->removeBuiltUponUnderFootprint(true);
 	}
 
+	// a save with fewer human players than clients (none: one saved headless) leaves some empty
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
-		clientPlayerObjects[i]->clientIndex = i;
+		if (clientPlayerObjects[i])
+			clientPlayerObjects[i]->clientIndex = i;
 
 	timeManager.unlock();
 	timeManager.unpause();

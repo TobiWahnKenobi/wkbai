@@ -18,6 +18,9 @@ struct Footprint {
 		int mode = 0;
 		// DEFORM_TERRAIN: FLATTEN (the default) or LEAVE_AS_IS
 		bool flatten = true;
+		// USE_TERRAIN_BLUEPRINT_LIST: per terrain (index in GameSet::terrains), whether the tile
+		// may stand on it (GameSet::terrainBlueprintLists); null: on any
+		const std::vector<bool>* terrains = nullptr;
 		TileOffset(int offsetX, int offsetZ) : offsetX(offsetX), offsetZ(offsetZ) {}
 		std::pair<int, int> rotate(float angle) const;
 	};

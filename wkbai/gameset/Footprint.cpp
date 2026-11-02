@@ -32,6 +32,8 @@ void Footprint::parse(GSFileParser& gsf, GameSet& gs)
 					// corners name it); the others can be walked over
 					tile.mode = word != "BLOCKED";
 				}
+				else if (tag == "USE_TERRAIN_BLUEPRINT_LIST")
+					tile.terrains = &gs.terrainBlueprintLists[gsf.nextString(true)];
 				else if (tag == "DEFORM_TERRAIN")
 					tile.flatten = gsf.nextTag() != "LEAVE_AS_IS";
 				else if (tag == "END_TILE_OFFSET")

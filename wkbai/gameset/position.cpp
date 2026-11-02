@@ -21,6 +21,7 @@
 #include "gameset.h"
 #include "KeywordStubs.h"
 #include "../util/SimRandom.h"
+#include "../StampdownPlan.h"
 #include <map>
 #include <numeric>
 
@@ -461,6 +462,9 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 			if (true /*!to.mode*/) {
 				int px = tx + to.offsetX, pz = tz + to.offsetZ;
 				if (!isTileFree(server, px, pz))
+					return false;
+				// as the placement itself (StampdownPlan): no farm on a hill, no house on sand
+				if (!StampdownPlan::tileTerrainAllowed(server, to, px, pz))
 					return false;
 			}
 		}

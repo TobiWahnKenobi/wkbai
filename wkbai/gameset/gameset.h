@@ -123,6 +123,11 @@ struct GameSet
 	// fields (USE_PASSABILITY_FIELDS) can stand on it. The game set's "Land Unit" leaves out water,
 	// river beds, coastline and mountains.
 	std::map<std::string, std::vector<bool>> passabilityFields;
+	// TERRAIN_BLUEPRINT_LIST "<name>" (Footprints.cpp): per terrain, whether a footprint tile
+	// using the list (USE_TERRAIN_BLUEPRINT_LIST) may be placed on it. "Can Support Buildings"
+	// leaves out sand, water, shores, mountains and swamps; "Can Be Farmed On" takes only the
+	// grasses and forest floors (no hills, rock or mud). Empty: a list never defined
+	std::map<std::string, std::vector<bool>> terrainBlueprintLists;
 
 	mutable ModelCache modelCache;
 
