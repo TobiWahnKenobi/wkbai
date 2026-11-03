@@ -10,6 +10,41 @@
 #include "TrnTextureDb.h"
 #include <cassert>
 #include <SDL3/SDL_timer.h>
+#include <cstdio>
+#include <cstdlib>
+#include <map>
+#include <string>
+
+// profiling: A* searches (not the straight walks), the tiles they visited, their time
+uint64_t g_astarSearches = 0, g_astarTiles = 0;
+double g_astarMs = 0.0;
+
+namespace {
+	// WKB_PATHDUMP=<folder> WKB_PATHDUMP_FROM=<game s> WKB_PATHDUMP_TO=<game s>: every A* search in that
+	// time to <folder>/queries.txt, and each movement type's blocked tiles (when first searched in it)
+	// to <folder>/grid_<n>.bin, for the GPU path finding spike to replay offline
+	void dumpSearch(const GameObjBlueprint* blueprint, Pathfinding::PFPos s, Pathfinding::PFPos e, int w, int h, double ms, int tiles, bool cut, size_t len) {
+		static const char* dir = getenv("WKB_PATHDUMP");
+		if (!dir) return;
+		static const float from = getenv("WKB_PATHDUMP_FROM") ? (float)atof(getenv("WKB_PATHDUMP_FROM")) : 0.0f;
+		static const float to = getenv("WKB_PATHDUMP_TO") ? (float)atof(getenv("WKB_PATHDUMP_TO")) : 1e9f;
+		const float t = Server::instance->timeManager.currentTime;
+		if (t < from || t > to) return;
+		static FILE* q = fopen((std::string(dir) + "/queries.txt").c_str(), "w");
+		static std::map<const GameObjBlueprint*, int> grids;
+		auto it = grids.find(blueprint);
+		if (it == grids.end()) {
+			it = grids.emplace(blueprint, (int)grids.size()).first;
+			std::vector<uint8_t> g((size_t)w * h);
+			for (int z = 0; z < h; z++) for (int x = 0; x < w; x++) g[(size_t)z * w + x] = MovementController::isTileBlocked(blueprint, x, z) ? 1 : 0;
+			if (FILE* f = fopen((std::string(dir) + "/grid_" + std::to_string(it->second) + ".bin").c_str(), "wb")) {
+				fwrite(&w, 4, 1, f); fwrite(&h, 4, 1, f); fwrite(g.data(), 1, g.size(), f); fclose(f);
+			}
+			fprintf(q, "grid %d %s\n", it->second, blueprint->name.c_str());
+		}
+		fprintf(q, "q %.2f %d %d %d %d %d %.3f %d %d %zu\n", t, it->second, s.x, s.z, e.x, e.z, ms, tiles, cut ? 1 : 0, len);
+	}
+}
 
 namespace {
 	template<typename Predicate> Pathfinding::PFPos findNearestUnblockedPos(Pathfinding::PFPos pfpos, Predicate pred, int maxr) {
@@ -216,7 +251,13 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 		walkToNextNode();
 	}
 	else {
+		const uint64_t astarStart = SDL_GetPerformanceCounter();
 		auto tileList = DoPathfinding(posStart, posEnd, pred, ManhattanDiagHeuristic, trnsize.first, trnsize.second);
+		const double astarMs = (double)(SDL_GetPerformanceCounter() - astarStart) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		g_astarSearches++;
+		g_astarTiles += g_lastSearchSteps;
+		g_astarMs += astarMs;
+		dumpSearch(blueprint, posStart, posEnd, trnsize.first, trnsize.second, astarMs, g_lastSearchSteps, g_lastSearchCut, tileList.size());
 		// test runs: WKB_TRACE_PATH prints the searches cut short and where they send the unit
 		if (g_lastSearchCut && getenv("WKB_TRACE_PATH"))
 			printf("PATHCUT t=%.1f obj %u %s player %u from (%d,%d) to (%d,%d) goes to (%d,%d)\n", Server::instance->timeManager.currentTime,

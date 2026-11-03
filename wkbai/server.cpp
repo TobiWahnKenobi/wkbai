@@ -1646,6 +1646,8 @@ void Server::updateSightBlock(ServerGameObject* obj, bool removed)
 		sightBlocks[block].push_back(obj->id);
 }
 
+uint64_t g_sightCalls = 0, g_sightCandidates = 0, g_sightInRange = 0;
+
 void ServerGameObject::lookForSightRangeEvents()
 {
 	if (!blueprint->receiveSightRangeEvents)
@@ -1668,6 +1670,7 @@ void ServerGameObject::lookForSightRangeEvents()
 	// as WKB.exe (0x566D70): the range rounded to whole 5 m tiles, and a sphere around the viewer
 	// (3D distance: no height bonus). The tile search alone took a square.
 	const float radius = std::floor(dist + 0.5f) * 5.0f;
+	g_sightCalls++;
 	// (the blocks of objects that generate the events, Server::sightBlocks)
 	Server* server = Server::instance;
 	const float blockSize = 5.0f * Server::SIGHT_BLOCK;
@@ -1676,8 +1679,9 @@ void ServerGameObject::lookForSightRangeEvents()
 	for (int bz = bz0; bz <= bz1; bz++)
 		for (int bx = bx0; bx <= bx1; bx++)
 			for (uint32_t id : server->sightBlocks[bz * server->sightBlocksWidth + bx])
-				if (ServerGameObject* nobj = server->findObject(id); nobj && (nobj->position - this->position).sqlen3() <= radius * radius)
+				if (ServerGameObject* nobj = (++g_sightCandidates, server->findObject(id)); nobj && (nobj->position - this->position).sqlen3() <= radius * radius)
 					found.emplace_back(id, nobj);
+	g_sightInRange += found.size();
 	std::sort(found.begin(), found.end());
 	std::vector<uint32_t> before = std::move(seenObjects);
 	seenObjects.clear();
@@ -2694,6 +2698,14 @@ void Server::simulate()
 				line += " " + top[i].second + " " + std::to_string(top[i].first / p.steps).substr(0, 5);
 			printf("SIMPROFILE   orders, ms per step:%s\n", line.c_str());
 		}
+		extern uint64_t g_astarSearches, g_astarTiles, g_sightCalls, g_sightCandidates, g_sightInRange;
+		extern double g_astarMs;
+		if (p.lastPrint)
+			printf("SIMPROFILE   astar %.2f ms per step, %.2f searches per step, %.0f tiles per search, %.3f ms per search; sight %.1f viewers, %.0f candidates, %.0f in range per step\n",
+				g_astarMs / p.steps, (double)g_astarSearches / p.steps, g_astarSearches ? (double)g_astarTiles / g_astarSearches : 0.0, g_astarSearches ? g_astarMs / g_astarSearches : 0.0,
+				(double)g_sightCalls / p.steps, (double)g_sightCandidates / p.steps, (double)g_sightInRange / p.steps);
+		g_astarSearches = g_astarTiles = g_sightCalls = g_sightCandidates = g_sightInRange = 0;
+		g_astarMs = 0.0;
 		extern uint64_t g_nnTiles, g_nnObjects;
 		extern double g_aiPlanMs, g_aiLuaMs, g_aiLuaMaxMs, g_aiWorkMs, g_aiCommissionMs;
 		if (p.lastPrint)
@@ -2705,6 +2717,23 @@ void Server::simulate()
 		g_pathfindingSearches = 0;
 		p = SimProfile();
 		p.lastPrint = SDL_GetTicks();
+	}
+	if (static const char* dumpDir = getenv("WKB_PATHDUMP"); dumpDir) {
+		static bool dumped = false;
+		static const float from = getenv("WKB_PATHDUMP_FROM") ? (float)atof(getenv("WKB_PATHDUMP_FROM")) : 0.0f;
+		if (!dumped && timeManager.currentTime >= from) {
+			dumped = true;
+			if (FILE* f = fopen((std::string(dumpDir) + "/viewers.txt").c_str(), "w")) {
+				for (auto& [id, cobj] : idmap) {
+					ServerGameObject* o = (ServerGameObject*)cobj;
+					const int cls = o->blueprint->bpClass;
+					if ((cls != Tags::GAMEOBJCLASS_CHARACTER && cls != Tags::GAMEOBJCLASS_BUILDING) || !o->getPlayer()) continue;
+					fprintf(f, "%u %u %d %.2f %.2f %.2f %.3f %d\n", id, o->getPlayer()->id, cls == Tags::GAMEOBJCLASS_BUILDING ? 1 : 0, o->position.x, o->position.y, o->position.z,
+						o->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE), o->blueprint->receiveSightRangeEvents ? 1 : 0);
+				}
+				fclose(f);
+			}
+		}
 	}
 	std::optional<SimTimer> seqTimer(std::in_place, g_simProfile.sequences);
 	auto it = delayedSequences.begin();
