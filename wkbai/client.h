@@ -66,6 +66,11 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// of the ones arriving
 	std::string hostRegions;
 	int hostRegionsSerial = 0;
+	// wkbai's day and night, seasons and weather, as the server last sent them (NETCLIMSG_ENVIRONMENT);
+	// environmentActive false: none (the map's own sun, no weather)
+	bool environmentActive = false;
+	EnvironmentSettings environmentSettings;
+	EnvironmentState environment;
 	std::map<int, std::string> hostDataParts;
 	// the host's mods for this game (NETCLIMSG_HOST_DATA 3): the session to mount, JSON; the
 	// folder its sent files went to

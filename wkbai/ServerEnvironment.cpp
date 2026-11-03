@@ -1,0 +1,534 @@
+// wkbai - the server's day and night, seasons and weather (see ServerEnvironment.h)
+// Licensed under the GNU General Public License 3
+
+#include "ServerEnvironment.h"
+#include "server.h"
+#include "network.h"
+#include "terrain.h"
+#include "tags.h"
+#include "util/SimRandom.h"
+#include "gameset/gameset.h"
+#include "gameset/GameObjBlueprint.h"
+#include "gameset/ScriptContext.h"
+#include "gameset/actions.h"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <sstream>
+
+namespace {
+	constexpr float PI = 3.14159265358979f;
+	float Rand01() { return SimRand() / (float)SIM_RAND_MAX; }
+	float Approach(float x, float target, float up, float down) {
+		return x < target ? std::min(target, x + up) : std::max(target, x - down);
+	}
+	float Quantize(float x, float step) { return std::round(x / step) * step; }
+	// gentle, normal, harsh: how far a season strays from the year's mean, and how its extreme
+	// weather comes
+	const float SEVERITY_SCALE[3] = { 0.6f, 1.0f, 1.45f };
+	bool IsHarshWeather(int w) {
+		return w == WEATHER_HEAVY_RAIN || w == WEATHER_THUNDERSTORM || w == WEATHER_BLIZZARD || w == WEATHER_HEATWAVE || w == WEATHER_DROUGHT;
+	}
+	// each season's weather, by weight (spring, summer, autumn, winter)
+	const float WEATHER_WEIGHTS[4][WEATHER_COUNT] = {
+		//  clear cloudy rain  heavy storm fog   snow  blizz heat  drought
+		{ 3.0f, 3.0f, 3.0f, 1.2f, 1.0f, 1.5f, 0.4f, 0.0f, 0.0f, 0.0f },
+		{ 4.0f, 2.0f, 1.0f, 0.5f, 2.0f, 0.3f, 0.0f, 0.0f, 1.5f, 0.8f },
+		{ 2.0f, 3.0f, 3.0f, 2.0f, 1.0f, 3.0f, 0.3f, 0.0f, 0.0f, 0.0f },
+		{ 2.0f, 3.0f, 0.6f, 0.0f, 0.0f, 2.0f, 4.0f, 1.2f, 0.0f, 0.0f },
+	};
+	// what each weather looks like: clouds, precipitation, fog
+	struct WeatherLook { float cloud, precip, fog; };
+	const WeatherLook WEATHER_LOOK[WEATHER_COUNT] = {
+		{ 0.05f, 0.0f, 0.0f }, { 0.6f, 0.0f, 0.0f }, { 0.85f, 0.5f, 0.0f }, { 0.95f, 1.0f, 0.1f }, { 1.0f, 0.9f, 0.0f },
+		{ 0.5f, 0.0f, 0.85f }, { 0.85f, 0.6f, 0.1f }, { 1.0f, 1.0f, 0.4f }, { 0.0f, 0.0f, 0.0f }, { 0.05f, 0.0f, 0.0f },
+	};
+	// the weather's pull on the temperature (degrees C)
+	const float WEATHER_TEMPERATURE[WEATHER_COUNT] = { 0.0f, -1.0f, -2.0f, -3.0f, -3.0f, -1.0f, -2.0f, -7.0f, 8.0f, 5.0f };
+	// the water's level, metres: floods in heavy rain, low water in drought
+	const float WEATHER_WATER[WEATHER_COUNT] = { 0.0f, 0.0f, 0.5f, 1.5f, 1.0f, 0.0f, 0.0f, 0.0f, -0.7f, -1.5f };
+
+	bool ContainsCI(const std::string& s, const char* what) {
+		std::string a = s;
+		for (char& c : a) c = (char)std::tolower((unsigned char)c);
+		return a.find(what) != std::string::npos;
+	}
+}
+
+uint8_t ServerEnvironment::kindOf(const GameObjBlueprint* bp)
+{
+	auto it = kinds.find(bp);
+	if (it != kinds.end())
+		return it->second;
+	uint8_t k = K_OTHER;
+	const std::string& n = bp->name;
+	if (bp->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+		if (n.size() >= 10 && n.compare(n.size() - 10, 10, "Foundation") == 0)
+			k = K_FOUNDATION;
+		else if (ContainsCI(n, "manor") || ContainsCI(n, "village") || ContainsCI(n, "keep") || ContainsCI(n, "castle") || ContainsCI(n, "palace"))
+			k = K_SHELTER;
+	}
+	else if (bp->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		static const char* machines[] = { "cart", "boat", "ram", "bombard", "trebuchet", "catapult", "cannon", "siege", "elemental",
+			"ship", "cog", "infernal", "mangonel", "ballista", "tower", "rocket", "organ", "engine" };
+		if (n.rfind("Dead ", 0) == 0)
+			k = K_OTHER;
+		else {
+			k = K_LIVING;
+			for (const char* m : machines)
+				if (ContainsCI(n, m))
+					k = K_MACHINE;
+		}
+	}
+	kinds[bp] = k;
+	return k;
+}
+
+float ServerEnvironment::speedFactorFor(const ServerGameObject* obj) const
+{
+	if (!enabled() || obj->blueprint->canWalkOnWater())
+		return 1.0f;
+	return state.speedFactor;
+}
+
+void ServerEnvironment::damage(Server& server, ServerGameObject* obj, float fraction)
+{
+	const GameSet& gs = *server.gameSet;
+	const bool building = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+	const int item = gs.items.names.getIndex(building ? "Structural Integrity" : "Hit Points");
+	const int cap = gs.items.names.getIndex(building ? "Structural Integrity Capacity" : "Hit Point Capacity");
+	if (item < 0)
+		return;
+	float capacity = cap >= 0 ? obj->getItem(cap) : 0.0f;
+	if (capacity <= 0.0f)
+		capacity = std::max(obj->getItem(item), 1.0f);
+	obj->setItem(item, obj->getItem(item) - capacity * fraction);
+	// as the scripts' own damage (Death.cpp: "Being Killed" on "Non Specific Attack")
+	const int evt = gs.events.names.getIndex("Non Specific Attack");
+	if (evt >= 0)
+		obj->sendEvent(evt);
+}
+
+void ServerEnvironment::pickWeather(Server& server, float now)
+{
+	const int season = state.season;
+	float weights[WEATHER_COUNT];
+	float total = 0.0f;
+	for (int w = 0; w < WEATHER_COUNT; w++) {
+		float wt = settings.seasons ? WEATHER_WEIGHTS[season][w] : (w == WEATHER_CLEAR ? 1.0f : 0.0f);
+		if (IsHarshWeather(w))
+			wt *= state.severity == 0 ? 0.25f : state.severity == 2 ? 2.0f : 1.0f;
+		// not the same storm twice running
+		if (w == state.weather && IsHarshWeather(w))
+			wt *= 0.3f;
+		weights[w] = wt;
+		total += wt;
+	}
+	float r = Rand01() * total;
+	int chosen = WEATHER_CLEAR;
+	for (int w = 0; w < WEATHER_COUNT; w++) {
+		if (r < weights[w] || w == WEATHER_COUNT - 1) {
+			chosen = w;
+			if (weights[w] > 0.0f)
+				break;
+		}
+		r -= weights[w];
+	}
+	if (weights[chosen] <= 0.0f)
+		chosen = WEATHER_CLEAR;
+	state.weather = chosen;
+	const float length = settings.seasonLengthS() * (0.10f + 0.25f * Rand01());
+	weatherEnds = now + std::clamp(length, 45.0f, 600.0f);
+	if (chosen == WEATHER_THUNDERSTORM)
+		nextLightning = now + 4.0f + 6.0f * Rand01();
+	if (trace)
+		printf("ENVIRONMENT t=%.0f weather %s until %.0f (%s, %.1f C)\n", now, WeatherName(chosen), weatherEnds, SeasonName(season), state.temperatureC);
+}
+
+void ServerEnvironment::strikeLightning(Server& server)
+{
+	// the candidates: every player's characters and buildings, in the tree's order
+	std::vector<ServerGameObject*> buildings, characters;
+	auto walk = [&](ServerGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* so = (ServerGameObject*)c;
+				if (so->deleted || (so->flags & CommonGameObject::fTerminated))
+					continue;
+				const uint8_t k = kindOf(so->blueprint);
+				if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && k != K_FOUNDATION)
+					buildings.push_back(so);
+				else if (k == K_LIVING || k == K_MACHINE)
+					characters.push_back(so);
+				self(so, self);
+			}
+	};
+	walk(server.getLevel(), walk);
+	const int r = SimRand() % 100;
+	ServerGameObject* target = nullptr;
+	if (r < 20 && !buildings.empty())
+		target = buildings[SimRand() % buildings.size()];
+	else if (r < 40 && !characters.empty())
+		target = characters[SimRand() % characters.size()];
+	state.lightningCount++;
+	if (target) {
+		state.lightningPos = target->position;
+		const bool isBuilding = target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+		(isBuilding ? stats.lightningBuildings : stats.lightningUnits)++;
+		// the Act of God's own strike (AOG Lightning.cpp): damage, the building set on fire, the
+		// characters around hurt, the effect
+		const int seq = server.gameSet->actionSequences.names.getIndex("Damage Done By Direct Lightning");
+		if (seq >= 0) {
+			SrvScriptContext ctx(&server, target);
+			auto _ = ctx.change(ctx.sequenceExecutor, target);
+			server.gameSet->actionSequences[seq].run(&ctx);
+		}
+		else
+			damage(server, target, isBuilding ? 0.3f : 1.0f);
+		if (trace)
+			printf("ENVIRONMENT t=%.0f lightning hits %s %u at (%.0f, %.0f)\n", state.time, target->blueprint->name.c_str(), target->id, target->position.x, target->position.z);
+	}
+	else {
+		const auto [w, h] = server.terrain->getPlayableArea();
+		const float x = Rand01() * w, z = Rand01() * h;
+		state.lightningPos = Vector3(x, server.terrain->getHeight(x, z), z);
+		stats.lightningGround++;
+	}
+	const float spacing = state.severity == 0 ? 1.8f : state.severity == 2 ? 0.6f : 1.0f;
+	nextLightning = state.time + (5.0f + 15.0f * Rand01()) * spacing;
+}
+
+void ServerEnvironment::applyExposure(Server& server)
+{
+	// the shelters (villages and manors, keep, castle, palace): their players and places
+	struct Shelter { CommonGameObject* player; Vector3 pos; };
+	std::vector<Shelter> shelters;
+	std::vector<ServerGameObject*> living;
+	auto walk = [&](ServerGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* so = (ServerGameObject*)c;
+				if (so->deleted || (so->flags & CommonGameObject::fTerminated))
+					continue;
+				const uint8_t k = kindOf(so->blueprint);
+				if (k == K_SHELTER)
+					shelters.push_back({ so->getPlayer(), so->position });
+				else if (k == K_LIVING)
+					living.push_back(so);
+				self(so, self);
+			}
+	};
+	walk(server.getLevel(), walk);
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	const float T = state.temperatureC;
+	const float coldFeel = T - (state.weather == WEATHER_BLIZZARD ? 6.0f : state.snowfall * 3.0f) - state.wetness * 2.0f;
+	const float heatFeel = T + (state.weather == WEATHER_DROUGHT ? 3.0f : 0.0f);
+	std::set<uint32_t> present;
+	for (ServerGameObject* unit : living) {
+		CommonGameObject* player = unit->getPlayer();
+		if (!player || player->blueprint->name == "Neutral Player")
+			continue;
+		bool sheltered = unit->parent && unit->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+		for (size_t i = 0; i < shelters.size() && !sheltered; i++) {
+			const Shelter& s = shelters[i];
+			if (s.player != player && (!s.player || server.getDiplomaticStatus(s.player, player) != 0))
+				continue;
+			if ((s.pos - unit->position).sqlen2xz() <= 45.0f * 45.0f)
+				sheltered = true;
+		}
+		const bool moving = unit->movement.isMoving();
+		auto it = exposure.find(unit->id);
+		Exposure e = it != exposure.end() ? it->second : Exposure();
+		if (sheltered) {
+			e.cold = std::max(0.0f, e.cold - 5.0f);
+			e.heat = std::max(0.0f, e.heat - 5.0f);
+		}
+		else {
+			if (coldFeel < 2.0f)
+				e.cold += (2.0f - coldFeel) / 6.0f * (moving ? 1.5f : 1.0f) * (1.0f + 0.5f * state.snowCover);
+			else
+				e.cold = std::max(0.0f, e.cold - 2.0f);
+			if (heatFeel > 30.0f)
+				e.heat += (heatFeel - 30.0f) / 4.0f * (moving ? 1.5f : 1.0f);
+			else
+				e.heat = std::max(0.0f, e.heat - 2.0f);
+			e.cold = std::min(e.cold, 200.0f);
+			e.heat = std::min(e.heat, 200.0f);
+		}
+		float frac = 0.0f;
+		bool cold = false;
+		if (!sheltered && e.cold > 100.0f && coldFeel < -4.0f) {
+			frac = 0.004f * (-4.0f - coldFeel) / 4.0f;
+			cold = true;
+		}
+		else if (!sheltered && e.heat > 100.0f && heatFeel > 34.0f)
+			frac = 0.003f * (heatFeel - 34.0f) / 3.0f;
+		if (e.cold > 0.0f || e.heat > 0.0f) {
+			exposure[unit->id] = e;
+			present.insert(unit->id);
+		}
+		else if (it != exposure.end())
+			exposure.erase(it);
+		if (frac > 0.0f && hp >= 0) {
+			const SrvGORef ref = unit;
+			const bool wasAlive = unit->getItem(hp) > 0.0f;
+			damage(server, unit, frac);
+			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
+				(cold ? stats.frozen : stats.thirst)++;
+				if (trace)
+					printf("ENVIRONMENT t=%.0f %s %u died of %s (%.1f C)\n", state.time, unit->blueprint->name.c_str(), ref.objid, cold ? "the cold" : "thirst", T);
+			}
+		}
+	}
+	// the units gone
+	for (auto it = exposure.begin(); it != exposure.end();)
+		if (!present.count(it->first))
+			it = exposure.erase(it);
+		else
+			++it;
+}
+
+void ServerEnvironment::prepareFloods(Server& server)
+{
+	floodPrepared = true;
+	floodTiles.clear();
+	Terrain* t = server.terrain;
+	if (!t)
+		return;
+	const auto [w, h] = t->getNumPlayableTiles();
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const TerrainTile* tile = t->getPlayableTile(x, z);
+			if (!tile || tile->fullOfWater)
+				continue;
+			float water = -1e9f;
+			for (int dz = -3; dz <= 3; dz++)
+				for (int dx = -3; dx <= 3; dx++)
+					if (const TerrainTile* n = t->getPlayableTile(x + dx, z + dz); n && n->fullOfWater)
+						water = std::max(water, n->waterLevel);
+			if (water < -1e8f)
+				continue;
+			const float ground = t->getHeight(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
+			if (ground - water < 3.0f)
+				floodTiles.push_back({ z * w + x, water, ground });
+		}
+}
+
+void ServerEnvironment::applyFloods(Server& server)
+{
+	if (!floodPrepared)
+		prepareFloods(server);
+	if (state.waterRise < 0.1f || !server.tiles)
+		return;
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	std::set<uint32_t> buildingsDone;
+	std::vector<std::pair<SrvGORef, float>> hits; // (object, fraction), applied after the walk
+	for (const FloodTile& ft : floodTiles) {
+		const float depth = ft.water + state.waterRise - ft.ground;
+		if (depth <= 0.1f)
+			continue;
+		auto& tile = server.tiles[ft.tile];
+		if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && buildingsDone.insert(b->id).second)
+			hits.emplace_back(b, 0.0015f * std::min(depth, 2.0f));
+		if (depth > 1.0f && state.ice < 0.6f)
+			for (const auto& ref : tile.objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE))
+					hits.emplace_back(o, 0.05f);
+	}
+	for (auto& [ref, frac] : hits)
+		if (ServerGameObject* o = ref.get()) {
+			const bool building = o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+			const bool wasAlive = building || (hp >= 0 && o->getItem(hp) > 0.0f);
+			damage(server, o, frac);
+			if (building) {
+				stats.floodedBuildings++;
+				stats.floodDamage += frac;
+			}
+			else if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f))
+				stats.drowned++;
+		}
+}
+
+void ServerEnvironment::update(Server& server)
+{
+	if (!enabled() || !server.getLevel() || !server.gameSet || !server.terrain)
+		return;
+	const float now = server.timeManager.currentTime;
+	if (started && now < nextUpdate)
+		return;
+	const float dt = started ? 1.0f : 0.0f;
+	nextUpdate = now + 1.0f;
+	state.time = now;
+	state.dayFraction = EnvDayFraction(settings, now);
+	state.yearFraction = EnvYearFraction(settings, now);
+
+	if (settings.seasons) {
+		const int absSeason = (int)std::floor(now / settings.seasonLengthS()) + settings.startSeason;
+		state.season = absSeason % 4;
+		if (absSeason / 4 != resolvedYear) {
+			resolvedYear = absSeason / 4;
+			for (int s = 0; s < 4; s++)
+				resolvedSeverity[s] = settings.severity[s] == 3 ? SimRand() % 3 : settings.severity[s];
+		}
+		state.severity = resolvedSeverity[state.season];
+	}
+	else {
+		state.season = 0;
+		state.severity = 1;
+	}
+
+	if (!started || now >= weatherEnds) {
+		if (settings.seasons)
+			pickWeather(server, now);
+		else {
+			state.weather = WEATHER_CLEAR;
+			weatherEnds = 1e30f;
+		}
+	}
+
+	// the temperature: the season's mean (a smooth curve through the seasons' middles), the day's
+	// swing, the weather's pull, eased towards over a minute and a half
+	const SunState sun = ComputeSun(state.dayFraction, state.yearFraction, settings.seasons, state.cloudCover);
+	{
+		static const float means[4] = { 12.0f, 24.0f, 11.0f, -3.0f };
+		static const float swing[4] = { 6.0f, 7.0f, 5.0f, 4.0f };
+		const float x = state.yearFraction * 4.0f - 0.5f;
+		const int i = (int)std::floor(x);
+		const float f = x - i;
+		const float a = means[(i % 4 + 4) % 4], b = means[((i + 1) % 4 + 4) % 4];
+		float target = a + (b - a) * (1.0f - std::cos(PI * f)) * 0.5f;
+		const float scale = SEVERITY_SCALE[std::clamp(state.severity, 0, 2)];
+		target = 11.0f + (target - 11.0f) * scale;
+		if (settings.dayNight)
+			target += swing[state.season] * (1.0f - 0.5f * state.cloudCover) * std::sin(2.0f * PI * (state.dayFraction - 0.375f));
+		target += WEATHER_TEMPERATURE[state.weather] * (WEATHER_TEMPERATURE[state.weather] > 0 ? scale : 1.0f);
+		temperatureTarget = target;
+		if (!started)
+			state.temperatureC = target;
+		else
+			state.temperatureC += (target - state.temperatureC) * (1.0f - std::exp(-dt / 90.0f));
+	}
+	const float T = state.temperatureC;
+
+	// what is drawn: clouds, rain or snow (by the temperature), fog
+	{
+		const WeatherLook& look = WEATHER_LOOK[state.weather];
+		const float snowShare = T < 0.5f ? 1.0f : T > 2.5f ? 0.0f : (2.5f - T) / 2.0f;
+		const float step = started ? 0.05f : 1.0f;
+		state.cloudCover = Approach(state.cloudCover, look.cloud, step, step);
+		state.rain = Approach(state.rain, look.precip * (1.0f - snowShare), step, step);
+		state.snowfall = Approach(state.snowfall, look.precip * snowShare, step, step);
+		state.fog = Approach(state.fog, look.fog, step * 0.5f, step * 0.5f);
+	}
+
+	// the ground and the water
+	if (settings.seasons && dt > 0.0f) {
+		float dry = std::max(0.0f, T + 5.0f) / 3000.0f * (0.5f + sun.daylight);
+		if (state.weather == WEATHER_HEATWAVE || state.weather == WEATHER_DROUGHT)
+			dry *= 3.0f;
+		state.wetness += state.rain / 90.0f - dry;
+		if (state.snowfall > 0.05f && T < 1.0f)
+			state.snowCover += state.snowfall / 200.0f * (state.weather == WEATHER_BLIZZARD ? 2.0f : 1.0f);
+		if (T > 1.0f) {
+			const float melt = std::min(state.snowCover, (T - 1.0f) / 400.0f + state.rain / 150.0f);
+			state.snowCover -= melt;
+			state.wetness += melt * 0.5f;
+		}
+		state.ice += T < 0.0f ? -T / 500.0f : -(T / 250.0f + 0.002f);
+		state.wetness = std::clamp(state.wetness, 0.0f, 1.0f);
+		state.snowCover = std::clamp(state.snowCover, 0.0f, 1.0f);
+		state.ice = std::clamp(state.ice, 0.0f, 1.0f);
+		float waterTarget = WEATHER_WATER[state.weather] * (state.severity == 0 ? 0.5f : state.severity == 2 ? 1.6f : 1.0f);
+		if (state.ice > 0.5f)
+			waterTarget = std::min(waterTarget, 0.0f);
+		state.waterRise = Approach(state.waterRise, waterTarget, 0.008f, 0.004f);
+	}
+
+	// sight and speed, in steps (each change restarts the moving units' walks)
+	{
+		const float night = settings.dayNight ? 0.45f + 0.55f * sun.daylight : 1.0f;
+		const float weather = (1.0f - 0.5f * state.fog) * (1.0f - 0.2f * state.rain) * (1.0f - 0.35f * state.snowfall);
+		state.sightFactor = std::clamp(Quantize(night * weather, 0.05f), 0.3f, 1.0f);
+		state.speedFactor = std::clamp(Quantize(1.0f - 0.25f * state.wetness - 0.35f * state.snowCover, 0.05f), 0.55f, 1.0f);
+	}
+
+	started = true;
+	if (settings.seasons && dt > 0.0f) {
+		if (state.weather == WEATHER_THUNDERSTORM && now >= nextLightning)
+			strikeLightning(server);
+		applyExposure(server);
+		applyFloods(server);
+	}
+
+	server.nightSight.factor = state.sightFactor;
+	if (server.nightSight.active())
+		server.nightSight.rebuild(&server);
+	else
+		server.nightSight.lit.clear(), server.nightSight.width = server.nightSight.height = 0;
+	send(server);
+}
+
+void ServerEnvironment::send(Server& server, NetLink* only)
+{
+	NetPacketWriter msg(NETCLIMSG_ENVIRONMENT);
+	msg.writeUint8((uint8_t)((settings.dayNight ? 1 : 0) | (settings.seasons ? 2 : 0)));
+	msg.writeUint16((uint16_t)settings.dayLengthMin);
+	msg.writeUint8((uint8_t)settings.startHour);
+	msg.writeUint16((uint16_t)settings.seasonLengthMin);
+	msg.writeUint8((uint8_t)settings.startSeason);
+	msg.writeUint8((uint8_t)settings.tempScale);
+	state.write(msg);
+	if (only)
+		only->send(msg);
+	else
+		for (NetLink* link : server.clientLinks)
+			link->send(msg);
+}
+
+std::string ServerEnvironment::saveText() const
+{
+	std::ostringstream o;
+	o.precision(9);
+	o << settings.text();
+	o << "state " << state.time << ' ' << state.season << ' ' << state.severity << ' ' << state.weather << ' ' << state.temperatureC << ' '
+		<< state.cloudCover << ' ' << state.rain << ' ' << state.snowfall << ' ' << state.fog << ' ' << state.wetness << ' ' << state.snowCover << ' '
+		<< state.ice << ' ' << state.waterRise << ' ' << state.sightFactor << ' ' << state.speedFactor << ' ' << state.lightningCount << '\n';
+	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
+		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
+	for (const auto& [id, e] : exposure)
+		o << "exposure " << id << ' ' << e.cold << ' ' << e.heat << '\n';
+	return o.str();
+}
+
+void ServerEnvironment::loadText(const std::string& text)
+{
+	reset();
+	std::istringstream in(text);
+	std::string line;
+	while (std::getline(in, line)) {
+		std::istringstream l(line);
+		const size_t eq = line.find('=');
+		if (eq != std::string::npos) {
+			settings.apply(line.substr(0, eq), (float)atof(line.c_str() + eq + 1));
+			continue;
+		}
+		std::string tag;
+		l >> tag;
+		if (tag == "state")
+			l >> state.time >> state.season >> state.severity >> state.weather >> state.temperatureC >> state.cloudCover >> state.rain >> state.snowfall
+				>> state.fog >> state.wetness >> state.snowCover >> state.ice >> state.waterRise >> state.sightFactor >> state.speedFactor >> state.lightningCount;
+		else if (tag == "timers") {
+			int s = 0;
+			l >> nextUpdate >> weatherEnds >> nextLightning >> resolvedYear >> resolvedSeverity[0] >> resolvedSeverity[1] >> resolvedSeverity[2] >> resolvedSeverity[3] >> s;
+			started = s != 0;
+		}
+		else if (tag == "exposure") {
+			uint32_t id = 0;
+			Exposure e;
+			l >> id >> e.cold >> e.heat;
+			exposure[id] = e;
+		}
+	}
+}

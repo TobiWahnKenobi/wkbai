@@ -20,6 +20,7 @@
 #include "Trajectory.h"
 #include "tags.h"
 #include "gameset/GameObjBlueprint.h"
+#include "Environment.h"
 
 struct GameObjBlueprint;
 struct Model;
@@ -156,6 +157,8 @@ struct CommonGameState {
 	};
 	std::unique_ptr<Tile[]> tiles;
 	Terrain* terrain = nullptr;
+	// the night's shorter sight (Environment.h): factor 1 unless wkbai's day and night is on
+	NightSight nightSight;
 
 	CommonGameObject* getLevel() const { return level; }
 	CommonGameObject* findObject(uint32_t id) { auto it = idmap.find(id); return (it != idmap.end()) ? it->second : nullptr; }

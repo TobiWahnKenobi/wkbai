@@ -822,7 +822,8 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 		if (vp != player && ctx->gameState->getDiplomaticStatus(vp, player) != 0)
 			continue;
 		// as WKB.exe's sighting (0x566D70): rounded to whole 5 m tiles, 3D distance
-		const float sight = std::floor(viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) + 0.5f) * 5.0f;
+		// (at night, wkbai's day and night: shorter unless the object is lit)
+		const float sight = ctx->gameState->nightSight.radiusFor(std::floor(viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) + 0.5f) * 5.0f, obj->position);
 		if ((viewer->position - obj->position).sqlen3() <= sight * sight)
 			return true;
 	}

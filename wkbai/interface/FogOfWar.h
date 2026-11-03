@@ -47,6 +47,7 @@ struct FogOfWar {
 
 private:
 	uint64_t lastUpdate = 0;
+	uint32_t nightRebuild = 0; // the night's lit blocks: built again every 4th update
 	// the level and player the memory is for; another game starts it afresh
 	const void* memoryLevel = nullptr;
 	const void* memoryPlayer = nullptr;

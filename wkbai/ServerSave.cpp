@@ -453,5 +453,19 @@ bool Server::saveGame(const char* filename)
 		else
 			std::filesystem::remove(side, ec);
 	}
+	// wkbai's day and night, seasons and weather (wkbai's own), beside it: <save>.env.txt
+	{
+		std::filesystem::path side = path;
+		side += ".env.txt";
+		if (environment.enabled() && !savingLevel) {
+			const std::string text = environment.saveText();
+			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
+				fwrite(text.data(), 1, text.size(), sf);
+				fclose(sf);
+			}
+		}
+		else
+			std::filesystem::remove(side, ec);
+	}
 	return ok;
 }

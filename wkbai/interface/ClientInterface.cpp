@@ -29,6 +29,7 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "EnvironmentView.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "../gfx/renderer_diligent.h"
@@ -3154,6 +3155,8 @@ void ClientInterface::iter()
 						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
 					list.push_back({ (at - client->camera.position).sqlen3(), l });
 				}
+				// at night (wkbai's day and night), the buildings' windows and torches, after the fires
+				AddNightLights(client, client->camera.position, list);
 				std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 				for (size_t i = 0; i < list.size() && i < (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS; i++)
 					lights.insert(lights.end(), list[i].second.begin(), list[i].second.end());
@@ -3403,6 +3406,8 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 			scene->sunColor = client->terrain->sunColor;
 		}
+		// wkbai's day and night, seasons and weather: the sun, fog and grade (none: the map's)
+		UpdateEnvironmentView(client, scene);
 		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 			dgfx->shadows.time = client->timeManager.currentTime;
 			dgfx->shadows.cloudShadows = g_renderSettings.cloudShadows;
@@ -3453,6 +3458,7 @@ void ClientInterface::iter()
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
+		DrawWeather(gfx, client, client->camera);
 	}
 
 	if (postGfx) {
@@ -3469,8 +3475,10 @@ void ClientInterface::iter()
 	}
 
 	drawLoadingScreen();
-	if (loadingDone)
+	if (loadingDone) {
 		drawChronicle();
+		DrawEnvironmentHud(client, (float)g_windowWidth);
+	}
 
 	{
 		ZoneScopedN("ImGui rendering");

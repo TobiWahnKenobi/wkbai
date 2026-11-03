@@ -95,6 +95,10 @@ enum NetClientMessages {
 	// <timestamp>\n" then its bytes; 3, after the files, the mods to mount in order, JSON
 	// { "customOrder", "mods": [ { "local": "<the guest's mod id>" } or { "sent": <index>,
 	// "name" } ] }: the guest mounts them and says hello again)
+	// wkbai's day and night, seasons and weather (Environment.h), once a game second: flags (1 day
+	// and night, 2 seasons), day length (16 bits, minutes), start hour, season length (16 bits),
+	// start season, temperature scale, then EnvironmentState::write
+	NETCLIMSG_ENVIRONMENT,
 };
 
 enum NetServerMessages {
