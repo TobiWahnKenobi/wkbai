@@ -2531,7 +2531,9 @@ void Test_AutoWall()
 	player->setItem(Tags::PDITEM_FOOD, 1e6f);
 	player->setItem(Tags::PDITEM_WOOD, 1e6f);
 	player->setItem(Tags::PDITEM_GOLD, 1e6f);
-	const Vector3 at[2] = { Vector3(300, 0, 300), Vector3(300, 0, 420) };
+	// both on one spot: (300, 300) is partly ground no building may stand on (the placement rules,
+	// as WKB.exe's), and the two plans are only looked at, not stamped down
+	const Vector3 at[2] = { Vector3(300, 0, 420), Vector3(300, 0, 420) };
 	const float turns[2] = { 0.0f, 1.5707963f };
 	for (int k = 0; k < 2; k++) {
 		const auto plan = StampdownPlan::getStampdownPlan(&server, player, manor, at[k], Vector3(0, turns[k], 0));
