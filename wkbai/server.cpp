@@ -40,14 +40,6 @@ Server::Server()
 	instance = this;
 	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
 	timeManager.stepMs = g_settings.value("simStepMs", 20u);
-	// the slope limit is for the human players: a player no client controls is an AI's
-	StampdownPlan::exemptFromSlopeLimit = [](CommonGameState* state, CommonGameObject* player) {
-		const Server* server = Server::instance;
-		if (state != (CommonGameState*)server || !player)
-			return false;
-		return std::none_of(server->clientPlayerObjects.begin(), server->clientPlayerObjects.end(),
-			[player](const SrvGORef& ref) { return ref.get() == (ServerGameObject*)player; });
-	};
 }
 
 void Server::loadSaveGame(const char * filename)
@@ -185,8 +177,10 @@ void Server::loadSaveGame(const char * filename)
 			b->removeBuiltUponUnderFootprint(true);
 	}
 
+	// a save with fewer human players than clients (none: one saved headless) leaves some empty
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
-		clientPlayerObjects[i]->clientIndex = i;
+		if (clientPlayerObjects[i])
+			clientPlayerObjects[i]->clientIndex = i;
 
 	timeManager.unlock();
 	timeManager.unpause();
@@ -296,10 +290,12 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 	return obj;
 }
 
-// As in the original, placing a building levels the ground a bit: the footprint's tiles say
-// DEFORM_TERRAIN FLATTEN unless LEAVE_AS_IS (Footprints.cpp; farms, walls and docks leave it).
-// Their corner vertices are set to their mean height, which MAX_FOUNDATION_HEIGHT_DIFFERENTIAL
-// keeps a small change; the building is set on the new ground.
+// Placing a building levels the ground as WKB.exe does (0x5149e7, 0x514a20): every footprint
+// tile that is FLATTEN (the default, 0x53f1f0: all but those saying DEFORM_TERRAIN LEAVE_AS_IS,
+// so farms are levelled too) has its four corners set to the building's own height, the ground
+// where it was placed (0x60f200); MAX_FOUNDATION_HEIGHT_DIFFERENTIAL keeps that a small change.
+// Then whatever stands on those tiles and their 8 neighbours, on tiles without a building, is
+// put back on the new ground (0x59c990 collects them, 0x51f8f0), and the building too.
 void Server::levelTerrainUnder(ServerGameObject* building)
 {
 	const Footprint* fp = building->blueprint->footprint;
@@ -309,6 +305,7 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 	const int ox = (int)((building->position.x - rotOrigin.first) / 5.0f), oz = (int)((building->position.z - rotOrigin.second) / 5.0f);
 	const int stride = terrain->width + 1;
 	std::set<int> vertices;
+	std::set<std::pair<int, int>> touched; // playable tiles
 	for (const auto& to : fp->tiles) {
 		if (!to.flatten)
 			continue;
@@ -319,53 +316,48 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 		for (int dz = 0; dz <= 1; dz++)
 			for (int dx = 0; dx <= 1; dx++)
 				vertices.insert((tz + dz) * stride + tx + dx);
+		for (int nz = -1; nz <= 1; nz++)
+			for (int nx = -1; nx <= 1; nx++)
+				touched.emplace(ox + rx + nx, oz + rz + nz);
 	}
 	if (vertices.empty())
 		return;
-	float mean = 0.0f;
-	for (int i : vertices)
-		mean += terrain->heightSteps(i);
-	mean /= (float)vertices.size();
+	const float target = building->position.y / terrain->scale;
 	std::vector<int> list(vertices.begin(), vertices.end());
-	// an AI's building may stand where the ground differs more than the footprint allows
-	// (AIs are exempt from the limit): no vertex moves more than half the limit, so no cliff
-	// is carved; those vertices are sent one by one
-	const float limitSteps = fp->maxHeightDifferential > 0.0f ? 0.5f * fp->maxHeightDifferential / terrain->scale : 1e9f;
-	std::vector<int> uneven;
-	for (int i : list) {
-		const float h = terrain->heightSteps(i);
-		if (std::abs(mean - h) > limitSteps) {
-			terrain->setHeightSteps(i, h + std::clamp(mean - h, -limitSteps, limitSteps));
-			uneven.push_back(i);
-		}
-		else
-			terrain->setHeightSteps(i, mean);
-	}
+	for (int i : list)
+		terrain->setHeightSteps(i, target);
 	levelledVertices.insert(list.begin(), list.end());
-	for (int i : uneven) {
-		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
-		packet.writeUint32(1);
-		packet.writeFloat(terrain->heightSteps(i));
-		packet.writeUint32((uint32_t)i);
-		sendToAll(packet);
+	{
+		const float steps = terrain->heightSteps(list[0]);
+		// in packets of up to 50 vertices (a packet holds 256 bytes)
+		for (size_t first = 0; first < list.size(); first += 50) {
+			const size_t n = std::min<size_t>(50, list.size() - first);
+			NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
+			packet.writeUint32((uint32_t)n);
+			packet.writeFloat(steps);
+			for (size_t k = 0; k < n; k++)
+				packet.writeUint32((uint32_t)list[first + k]);
+			sendToAll(packet);
+		}
+		if (getenv("WKB_TRACE_LEVEL"))
+			printf("LEVEL t=%.1f player %u %s at (%.0f,%.0f): %zu vertices to %.2f\n", timeManager.currentTime, building->getPlayer() ? building->getPlayer()->id : 0,
+				building->blueprint->name.c_str(), building->position.x, building->position.z, list.size(), steps * terrain->scale);
 	}
-	list.erase(std::remove_if(list.begin(), list.end(), [&](int i) { return std::find(uneven.begin(), uneven.end(), i) != uneven.end(); }), list.end());
-	if (list.empty())
-		return;
-	const float steps = terrain->heightSteps(list[0]);
-	// in packets of up to 50 vertices (a packet holds 256 bytes)
-	for (size_t first = 0; first < list.size(); first += 50) {
-		const size_t n = std::min<size_t>(50, list.size() - first);
-		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
-		packet.writeUint32((uint32_t)n);
-		packet.writeFloat(steps);
-		for (size_t k = 0; k < n; k++)
-			packet.writeUint32((uint32_t)list[first + k]);
-		sendToAll(packet);
+	if (tiles) {
+		const auto [tileWidth, tileHeight] = terrain->getNumPlayableTiles();
+		for (const auto& [px, pz] : touched) {
+			if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight)
+				continue;
+			const auto& tile = tiles[pz * tileWidth + px];
+			if (tile.building.getFrom<Server>())
+				continue;
+			// a copy: moving an object may change the tile's list
+			const std::vector<CmnGORef> objects = tile.objList;
+			for (const auto& ref : objects)
+				if (ServerGameObject* obj = ref.getFrom<Server>(); obj && obj != building)
+					obj->updatePosition(Vector3(obj->position.x, terrain->getHeight(obj->position.x, obj->position.z), obj->position.z));
+		}
 	}
-	if (getenv("WKB_TRACE_LEVEL"))
-		printf("LEVEL t=%.1f player %u %s at (%.0f,%.0f): %zu vertices to %.2f\n", timeManager.currentTime, building->getPlayer() ? building->getPlayer()->id : 0,
-			building->blueprint->name.c_str(), building->position.x, building->position.z, list.size(), steps * terrain->scale);
 	building->updatePosition(Vector3(building->position.x, terrain->getHeight(building->position.x, building->position.z), building->position.z));
 }
 

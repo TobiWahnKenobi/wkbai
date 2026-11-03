@@ -626,6 +626,59 @@ void ClientInterface::drawRangeBands()
 	}
 }
 
+// The footprint squares of the building being placed, as WKB.exe draws them: one per tile, a
+// little smaller than the tile so that they read as a grid, translucent red or green, lying on
+// the ground (split in 2 x 2 so that they follow the smoothed terrain). An untextured look: a
+// white texel tinted by the vertex colour, with the range bands' state.
+void ClientInterface::drawFootprintTiles()
+{
+	if (footprintTiles.empty() || !client->terrain)
+		return;
+	constexpr int SPLIT = 2;
+	constexpr float TILE = 5.0f, INSET = 0.3f;
+	static std::optional<texture> white;
+	if (!white) {
+		Bitmap bmp;
+		bmp.width = bmp.height = 1;
+		bmp.format = BMFORMAT_R8G8B8A8;
+		bmp.pixels.resize(4);
+		for (int i = 0; i < 4; i++)
+			bmp.pixels[i] = 255;
+		white = gfx->CreateTexture(bmp, 1);
+	}
+	if (!footprintBatch)
+		footprintBatch = gfx->CreateBatch(64 * SPLIT * SPLIT * 4, 64 * SPLIT * SPLIT * 6);
+	gfx->BeginParticles();
+	gfx->BeginBatchDrawing();
+	gfx->SetBlendColor(-1);
+	gfx->SetTexture(0, *white);
+	const Terrain* terrain = client->terrain;
+	footprintBatch->begin();
+	for (const FootprintTile& tile : footprintTiles) {
+		const uint32_t color = tile.ok ? 0x8000E040 : 0x90F02020;
+		const float x0 = tile.x * TILE + INSET, z0 = tile.z * TILE + INSET, step = (TILE - 2 * INSET) / SPLIT;
+		for (int sz = 0; sz < SPLIT; sz++)
+			for (int sx = 0; sx < SPLIT; sx++) {
+				batchVertex* v;
+				uint16_t* ix;
+				uint32_t first;
+				footprintBatch->next(4, 6, &v, &ix, &first);
+				const float corners[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+				for (int i = 0; i < 4; i++) {
+					v[i].x = x0 + (sx + corners[i][0]) * step;
+					v[i].z = z0 + (sz + corners[i][1]) * step;
+					v[i].y = terrain->getHeightEx(v[i].x, v[i].z, true) + 0.15f;
+					v[i].u = v[i].v = 0.5f;
+					v[i].color = color;
+				}
+				for (const int& c : { 0, 2, 1, 0, 3, 2 })
+					*(ix++) = (uint16_t)(first + c);
+			}
+	}
+	footprintBatch->flush();
+	footprintBatch->end();
+}
+
 // The camera stays between a little above the ground under it and a high ceiling (for an
 // overview of the map); the pitch limit is applied where the camera turns.
 void ClientInterface::applyCameraLimits()
@@ -3177,6 +3230,7 @@ void ClientInterface::iter()
 		// objects that DISPLAY_SPRITE_WHEN_SELECTED_FOR finds), and later of the building being
 		// placed: band textures on the ground, the value being the radius in metres
 		rangeBands.clear();
+		footprintTiles.clear();
 		auto addRangeBand = [this](const GameObjBlueprint::RangeSprite& band, const Vector3& centre, ScriptContext* ctx) {
 			if (!band.radius || !client->terrain)
 				return;
@@ -3212,7 +3266,26 @@ void ClientInterface::iter()
 		if (stampdownBlueprint && stampdownPlayer) {
 			//test.model = client->gameSet->modelCache.getModel("Warrior Kings Game Set\\Characters\\Peasant\\Male\\Peasant1.MESH3");
 			try {
-				test.model = stampdownBlueprint->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+				// The preview shows the building as it will be when finished, as WKB.exe's interface
+				// does (0x64df2b): the foundation's MAP_TYPE_TAG "Fully Built Version" (the type it is
+				// converted to when built); only the foundation itself is placed
+				static int fullyBuiltTag = -1;
+				static const GameSet* tagOf = nullptr;
+				if (tagOf != client->gameSet.get()) {
+					tagOf = client->gameSet.get();
+					fullyBuiltTag = tagOf->typeTags.names.getIndex("Fully Built Version");
+				}
+				auto finishedModel = [](const GameObjBlueprint* foundation) {
+					if (auto it = foundation->mappedTypeTags.find(fullyBuiltTag); it != foundation->mappedTypeTags.end() && it->second) {
+						try {
+							return it->second->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+						}
+						catch (const std::out_of_range&) {
+						}
+					}
+					return foundation->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+				};
+				test.model = finishedModel(stampdownBlueprint);
 				if (auto* fp = stampdownBlueprint->footprint) {
 					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + fp->originX;
 					peapos.z = std::floor(peapos.z / 5.0f) * 5.0f + 2.5f + fp->originZ;
@@ -3226,13 +3299,11 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, Vector3(0, 0, 0));
-				// where it can't stand (on another building), red; the server refuses it too
-				if (plan.status != StampdownPlan::Status::Valid)
-					test.flags |= SceneEntity::SEFLAG_BLOCKED;
-				// a field (its whole footprint passable) shows green where it can be placed
-				else if (const Footprint* fp = stampdownBlueprint->footprint; fp && !fp->tiles.empty()
-					&& std::all_of(fp->tiles.begin(), fp->tiles.end(), [](const auto& t) { return t.mode != 0; }))
-					test.flags |= SceneEntity::SEFLAG_PLACEABLE;
+				for (const auto& verdict : plan.tiles)
+					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
+				// red where it can't be placed (the server refuses it too), green where it can, as in
+				// the original
+				test.flags |= plan.status != StampdownPlan::Status::Valid ? SceneEntity::SEFLAG_BLOCKED : SceneEntity::SEFLAG_PLACEABLE;
 				// its range circles, the values those of the player ("run on player!" in the game set)
 				{
 					CliScriptContext ctx{ client, stampdownPlayer.get() };
@@ -3242,8 +3313,11 @@ void ClientInterface::iter()
 				// a farm's soil, as WKB.exe's interface shows it while a "Standard Farm Foundation" is
 				// placed (0x64d480): the "Fertility" of the terrain under it (Terrains.cpp: 0.5 to
 				// 1.5) gives TOOLTIP_ARID_FARM up to 0.5, TOOLTIP_FERTILE_FARM from 1.5, else
-				// TOOLTIP_FARM; here with the value as a percentage too
-				if (stampdownBlueprint->name == "Standard Farm Foundation" && client->terrain) {
+				// TOOLTIP_FARM; here with the value as a percentage too. Where it is refused, why,
+				// in WKB.exe's words (BUILDING_PLACEMENT_TOO_STEEP and the others)
+				if (const char* refusal = StampdownPlan::statusTextKey(plan.status))
+					ImGui::SetTooltip("%s", lang.getText(refusal).c_str());
+				else if (stampdownBlueprint->name == "Standard Farm Foundation" && client->terrain) {
 					static int fertilityItem = -1;
 					static const GameSet* itemsOf = nullptr;
 					if (itemsOf != client->gameSet.get()) {
@@ -3264,8 +3338,9 @@ void ClientInterface::iter()
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
 					entity.transform = Matrix::getRotationYMatrix(-creation.orientation.y) * Matrix::getTranslationMatrix(creation.position);
-					entity.model = creation.blueprint->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+					entity.model = finishedModel(creation.blueprint);
 					entity.color = stampdownPlayer->color;
+					entity.flags = test.flags & (SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 				}
 				for (auto& entity : planEntities) {
 					scene->add(&entity);
@@ -3367,8 +3442,10 @@ void ClientInterface::iter()
 	}
 	if (terrainSpriteContainer)
 		terrainSpriteContainer->clear();
-	if (showTerrain)
+	if (showTerrain) {
 		drawRangeBands();
+		drawFootprintTiles();
+	}
 
 	if (particleRenderer && particlesContainer) {
 		ZoneScopedN("Particles");

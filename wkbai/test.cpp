@@ -2567,6 +2567,192 @@ void Test_Levelling()
 	fflush(stdout);
 }
 
+// Placement rules (needs the game data), as WKB.exe's (StampdownPlan::getStampdownPlan), for a
+// human player on 4 Peaks: every tile of the map tried with a barracks (8 m limit) and a farm
+// (12 m, "Can Be Farmed On"). Prints "PLACE" lines: the count of each outcome, the steepest
+// accepted spot, the spots the old rule (levelled corners only, no terrain types) took that are
+// now refused, and the farm spots on hills or rock (none). Then a barracks is stamped down on
+// an uneven spot, and the spots touching it and one tile further are tried before and after.
+void Test_PlacementRules()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	if (!player || !server.terrain) {
+		printf("PLACE not set up\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_WOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_FOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_GOLD, 10000.0f);
+	const Terrain& t = *server.terrain;
+	const auto [tw, th] = t.getNumPlayableTiles();
+	using Status = StampdownPlan::Status;
+	const char* names[] = { "valid", "no explanation", "off the map", "not in city", "occupied", "terrain type", "too steep", "neighbour" };
+	auto spotAt = [](const Footprint* fp, int tx, int tz) {
+		return Vector3(tx * 5.0f + 2.5f + fp->originX, 0.0f, tz * 5.0f + 2.5f + fp->originZ);
+	};
+	// the corners' spread: over all the tiles, or (the old rule) over the levelled ones
+	auto spread = [&](const Footprint* fp, const Vector3& at, bool levelledOnly) {
+		const int ox = (int)((at.x - fp->originX) / 5.0f), oz = (int)((at.z - fp->originZ) / 5.0f);
+		float lo = 1e9f, hi = -1e9f;
+		for (const auto& to : fp->tiles) {
+			if (levelledOnly && !to.flatten)
+				continue;
+			for (int dz = 0; dz <= 1; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const int vx = std::clamp(ox + to.offsetX + t.edge + dx, 0, t.width), vz = std::clamp(oz + to.offsetZ + t.edge + dz, 0, t.height);
+					lo = std::min(lo, t.getVertex(vx, vz));
+					hi = std::max(hi, t.getVertex(vx, vz));
+				}
+		}
+		return hi - lo;
+	};
+	auto terrainName = [&](const Vector3& at) -> std::string {
+		const auto* tile = t.getPlayableTile((int)(at.x / 5.0f), (int)(at.z / 5.0f));
+		if (!tile || !tile->texture || !tile->texture->grp)
+			return "?";
+		auto it = server.gameSet->associatedTileTexGroups.find(tile->texture->grp->name);
+		return it == server.gameSet->associatedTileTexGroups.end() ? "none" : server.gameSet->terrains.getString(it->second);
+	};
+	// tiles whose texture group no terrain names: refused by every terrain list
+	{
+		std::map<std::string, int> unnamed;
+		const Footprint none;
+		for (int tz = 0; tz < th; tz++)
+			for (int tx = 0; tx < tw; tx++)
+				if (const std::string tn = terrainName(spotAt(&none, tx, tz)); tn == "none" || tn == "?")
+					unnamed[t.getPlayableTile(tx, tz)->texture ? t.getPlayableTile(tx, tz)->texture->grp->name : "?"]++;
+		printf("PLACE tiles of no terrain:");
+		for (const auto& [name, n] : unnamed)
+			printf(" %s %d,", name.c_str(), n);
+		printf("\n");
+	}
+	for (const char* bpName : { "Barracks Stone Foundation", "Standard Farm Foundation" }) {
+		const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, bpName);
+		if (!bp || !bp->footprint)
+			continue;
+		const Footprint* fp = bp->footprint;
+		int counts[8] = {};
+		int oldTook = 0, hillFarms = 0;
+		float steepest = 0.0f;
+		std::map<std::string, int> refusedTerrains;
+		for (int tz = 0; tz < th; tz++)
+			for (int tx = 0; tx < tw; tx++) {
+				const Vector3 at = spotAt(fp, tx, tz);
+				const Status s = StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status;
+				counts[std::clamp((int)s, 0, 7)]++;
+				if (s == Status::Valid) {
+					steepest = std::max(steepest, spread(fp, at, false));
+					const std::string tn = terrainName(at);
+					if (tn == "Hills" || tn == "Rock" || tn == "Mountains")
+						hillFarms++;
+				}
+				else if ((s == Status::InvalidTooSteep || s == Status::InvalidTerrainType || s == Status::InvalidNeighbour)
+					&& (fp->maxHeightDifferential <= 0.0f || spread(fp, at, true) <= fp->maxHeightDifferential)) {
+					oldTook++;
+					if (s == Status::InvalidTerrainType)
+						refusedTerrains[terrainName(at)]++;
+				}
+			}
+		printf("PLACE %s (limit %.0f m):", bpName, fp->maxHeightDifferential);
+		for (int i = 0; i < 8; i++)
+			if (counts[i])
+				printf(" %s %d,", names[i], counts[i]);
+		printf(" steepest accepted %.2f m over the footprint\n", steepest);
+		printf("PLACE   the old rule took %d of the refused spots; accepted on hills, rock or mountains: %d; refused terrains:", oldTook, hillFarms);
+		for (const auto& [name, n] : refusedTerrains)
+			printf(" %s %d,", name.c_str(), n);
+		printf("\n");
+	}
+	// a barracks on the most uneven spot near the start that takes it, then its neighbours
+	const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	const Footprint* fp = bp ? bp->footprint : nullptr;
+	if (fp) {
+		Vector3 best;
+		float bestSpread = -1.0f;
+		for (int tz = 12; tz <= 52; tz++)
+			for (int tx = 88; tx <= 128; tx++) {
+				const Vector3 at = spotAt(fp, tx, tz);
+				if (StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status == Status::Valid && spread(fp, at, false) > bestSpread) {
+					bestSpread = spread(fp, at, false);
+					best = at;
+				}
+			}
+		int minX = 0, maxX = 0, minZ = 0, maxZ = 0;
+		for (const auto& to : fp->tiles) {
+			minX = std::min(minX, to.offsetX); maxX = std::max(maxX, to.offsetX);
+			minZ = std::min(minZ, to.offsetZ); maxZ = std::max(maxZ, to.offsetZ);
+		}
+		const int w = maxX - minX + 1, d = maxZ - minZ + 1;
+		std::vector<Vector3> around;
+		for (int gap = 0; gap <= 1; gap++)
+			for (const auto [sx, sz] : { std::pair{ w + gap, 0 }, std::pair{ -(w + gap), 0 }, std::pair{ 0, d + gap }, std::pair{ 0, -(d + gap) } })
+				around.push_back(best + Vector3(sx * 5.0f, 0.0f, sz * 5.0f));
+		std::vector<Status> before;
+		for (const Vector3& at : around)
+			before.push_back(StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status);
+		best.y = t.getHeight(best.x, best.z);
+		ServerGameObject* obj = server.stampdownObject(bp, player, best, Vector3(0, 0, 0), true, true);
+		printf("PLACE barracks at (%.1f, %.1f), %.2f m uneven: %s, now %.2f m\n", best.x, best.z, bestSpread, obj ? "stamped down" : "refused", spread(fp, best, false));
+		for (size_t i = 0; i < around.size(); i++) {
+			const Status after = StampdownPlan::getStampdownPlan(&server, player, bp, around[i], Vector3(0, 0, 0)).status;
+			printf("PLACE   %s at (%.1f, %.1f): %.2f m uneven, %s -> %s\n", i < 4 ? "touching" : "a tile off", around[i].x, around[i].z,
+				spread(fp, around[i], false), names[std::clamp((int)before[i], 0, 7)], names[std::clamp((int)after, 0, 7)]);
+		}
+	}
+	// a farm placed in play on the most uneven spot near the start that takes it: levelled as any
+	// building (WKB.exe's footprint tiles flatten unless they say LEAVE_AS_IS, 0x53f1f0; the farm's
+	// say nothing)
+	if (const GameObjBlueprint* farm = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation"); farm && farm->footprint) {
+		const Footprint* ffp = farm->footprint;
+		Vector3 best;
+		float bestSpread = -1.0f;
+		for (int tz = 12; tz <= 52; tz++)
+			for (int tx = 88; tx <= 128; tx++) {
+				const Vector3 at = spotAt(ffp, tx, tz);
+				if (StampdownPlan::getStampdownPlan(&server, player, farm, at, Vector3(0, 0, 0)).status == Status::Valid && spread(ffp, at, false) > bestSpread) {
+					bestSpread = spread(ffp, at, false);
+					best = at;
+				}
+			}
+		best.y = t.getHeight(best.x, best.z);
+		ServerGameObject* obj = server.stampdownObject(farm, player, best, Vector3(0, 0, 0), true, true);
+		printf("PLACE farm at (%.1f, %.1f), %.2f m uneven: %s, now %.2f m\n", best.x, best.z, bestSpread, obj ? "stamped down" : "refused", spread(ffp, best, false));
+	}
+	// WKB_PLACE_SAVE=<name>: a Standard Farm set, unlevelled, on the most uneven free spot near
+	// the start (as a map's own farms or an AI's can stand), and the game saved as <name>.sav in
+	// the user folder: a save to look at how fields lie on a slope
+	if (const char* saveName = getenv("WKB_PLACE_SAVE")) {
+		const GameObjBlueprint* farm = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm");
+		const GameObjBlueprint* farmFoundation = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+		if (farm && farmFoundation && farmFoundation->footprint) {
+			const Footprint* ffp = farmFoundation->footprint;
+			Vector3 best;
+			float bestSpread = -1.0f;
+			for (int tz = 12; tz <= 52; tz++)
+				for (int tx = 88; tx <= 128; tx++) {
+					const Vector3 at = spotAt(ffp, tx, tz);
+					const Status s = StampdownPlan::getStampdownPlan(&server, player, farmFoundation, at, Vector3(0, 0, 0)).status;
+					if (s != Status::InvalidOccupied && s != Status::InvalidTerrain && s != Status::InvalidNeighbour && spread(ffp, at, false) > bestSpread) {
+						bestSpread = spread(ffp, at, false);
+						best = at;
+					}
+				}
+			best.y = t.getHeight(best.x, best.z);
+			ServerGameObject* obj = server.stampdownObject(farm, player, best, Vector3(0, 0, 0), false, false);
+			// the player as the save's human (CLIENT_STATE), so that it loads as a game to look at
+			server.clientPlayerObjects.clear();
+			server.clientPlayerObjects.emplace_back(player);
+			const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(std::string(saveName) + ".sav"));
+			printf("PLACE farm %s at (%.1f, %.1f, %.1f), %.2f m uneven, terrain %s; saved %d to %s\n", obj ? "set" : "not set", best.x, best.y, best.z, bestSpread,
+				terrainName(best).c_str(), (int)server.saveGame(path.c_str()), path.c_str());
+		}
+	}
+	fflush(stdout);
+}
+
 void Test_TerrainNormals()
 {
 	LoadBCP("data.bcp");
@@ -2792,6 +2978,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_TerrainNormals, "Terrain normals of 4 Peaks (a text file, for the lighting comparison)"},
 {Test_Levelling, "Levelling: a barracks stamped down flattens the ground under it"},
 {Test_WallRing, "Wall ring as a city grows (corners where rectangles meet)"},
+{Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 };
 
 void LaunchTest()

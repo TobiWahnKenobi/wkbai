@@ -235,6 +235,15 @@ private:
 	std::vector<RangeBand> rangeBands;
 	RBatch* rangeBandBatch = nullptr;
 	void drawRangeBands();
+	// This frame's footprint of the building being placed: each tile (playable tile coordinates)
+	// red where it can't be built on, green where it can, on the ground as in the original
+	struct FootprintTile {
+		int x, z;
+		bool ok;
+	};
+	std::vector<FootprintTile> footprintTiles;
+	RBatch* footprintBatch = nullptr;
+	void drawFootprintTiles();
 	uint64_t orderFlagStartTicks = 0; // SDL ticks (ms): a UI marker, independent of the game clock
 	bool orderFlagActive = false;
 	bool orderFlagRally = false;

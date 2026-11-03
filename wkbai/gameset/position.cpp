@@ -21,6 +21,7 @@
 #include "gameset.h"
 #include "KeywordStubs.h"
 #include "../util/SimRandom.h"
+#include "../StampdownPlan.h"
 #include <map>
 #include <numeric>
 
@@ -462,9 +463,13 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 				int px = tx + to.offsetX, pz = tz + to.offsetZ;
 				if (!isTileFree(server, px, pz))
 					return false;
+				// as the placement itself (StampdownPlan): no farm on a hill, no house on sand
+				if (!StampdownPlan::tileTerrainAllowed(server, to, px, pz))
+					return false;
 			}
 		}
-		return true;
+		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)
+		return StampdownPlan::groundAllows(server, objbp->footprint, tx, tz);
 	}
 	std::pair<int, int> findPos(CommonGameState* server, int ox, int oz) {
 		if (canBuildOn(server, ox, oz))

@@ -513,6 +513,23 @@ void GameSet::parseFile(const char * fn, int pass)
 				}
 				break;
 			}
+			case Tags::GAMESET_TERRAIN_BLUEPRINT_LIST: {
+				std::vector<bool>& allowed = terrainBlueprintLists[gsf.nextString(true)];
+				allowed.assign(terrains.size(), false);
+				gsf.advanceLine();
+				while (!gsf.eof) {
+					const std::string ltag = gsf.nextTag();
+					if (ltag == "END_TERRAIN_BLUEPRINT_LIST")
+						break;
+					if (ltag == "USE_TERRAIN_BLUEPRINT") {
+						const int t = terrains.names.getIndex(gsf.nextString(true));
+						if (t >= 0)
+							allowed[t] = true;
+					}
+					gsf.advanceLine();
+				}
+				break;
+			}
 			case Tags::GAMESET_DECLARE_ITEM: {
 				int x = items.names.getIndex(gsf.nextString(true));
 				//int side = 0;
