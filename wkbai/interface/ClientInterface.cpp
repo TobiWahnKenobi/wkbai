@@ -1377,18 +1377,12 @@ void ClientInterface::drawObject(ClientGameObject *obj)
 	// with the terrain tessellated, an object standing on the ground is drawn on its smooth
 	// surface: lifted or lowered by the difference to the game's height there (the game itself
 	// keeps its heights: placement, movement and multiplayer are unchanged)
-	// A field (a building whose footprint is passable throughout: the farms) lies on the ground
-	// as the walls do: a farm on a slope the placement didn't level (a map's own farms, an AI's
-	// capped levelling) was drawn flat, floating over the downhill side
-	const Footprint* fp = obj->blueprint->footprint;
-	const bool followsGround = obj->blueprint->shearModel || (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fp && !fp->tiles.empty()
-		&& std::all_of(fp->tiles.begin(), fp->tiles.end(), [](const auto& t) { return t.mode != 0; }));
-	if (g_terrainTessellationActive && client->terrain && !followsGround) {
+	if (g_terrainTessellationActive && client->terrain && !obj->blueprint->shearModel) {
 		const float ground = client->terrain->getHeight(obj->position.x, obj->position.z);
 		if (std::abs(obj->position.y - ground) < 0.25f)
 			obj->sceneEntity.transform._42 += client->terrain->getSmoothHeight(obj->position.x, obj->position.z) - ground;
 	}
-	if (followsGround && client->terrain)
+	if (obj->blueprint->shearModel && client->terrain)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
 	obj->sceneEntity.color = obj->getPlayer()->color;
 	if (obj->animSynchronizedTask != -1) {

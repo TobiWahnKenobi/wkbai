@@ -468,7 +468,8 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 					return false;
 			}
 		}
-		return true;
+		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)
+		return StampdownPlan::groundAllows(server, objbp->footprint, tx, tz);
 	}
 	std::pair<int, int> findPos(CommonGameState* server, int ox, int oz) {
 		if (canBuildOn(server, ox, oz))

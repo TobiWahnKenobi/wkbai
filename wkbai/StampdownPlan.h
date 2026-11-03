@@ -48,9 +48,9 @@ struct StampdownPlan {
 
 	static StampdownPlan getStampdownPlan(
 		CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation);
-	// players the slope limit (MAX_FOUNDATION_HEIGHT_DIFFERENTIAL) doesn't apply to: the server
-	// sets it to exempt its AI players (see Server::Server)
-	static bool (*exemptFromSlopeLimit)(CommonGameState* gameState, CommonGameObject* playerObj);
+	// the slope limit and the neighbour rule alone for the footprint, unturned, at playable tile
+	// (ox, oz), as WKB.exe's yes/no check (0x59b020) the searches for a site use
+	static bool groundAllows(CommonGameState* gameState, const Footprint* fp, int ox, int oz);
 	// whether the footprint tile may stand on playable tile (tx, tz) by its terrain
 	// (USE_TERRAIN_BLUEPRINT_LIST)
 	static bool tileTerrainAllowed(const CommonGameState* gameState, const Footprint::TileOffset& to, int tx, int tz);

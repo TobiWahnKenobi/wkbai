@@ -40,14 +40,6 @@ Server::Server()
 	instance = this;
 	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
 	timeManager.stepMs = g_settings.value("simStepMs", 20u);
-	// the slope limit is for the human players: a player no client controls is an AI's
-	StampdownPlan::exemptFromSlopeLimit = [](CommonGameState* state, CommonGameObject* player) {
-		const Server* server = Server::instance;
-		if (state != (CommonGameState*)server || !player)
-			return false;
-		return std::none_of(server->clientPlayerObjects.begin(), server->clientPlayerObjects.end(),
-			[player](const SrvGORef& ref) { return ref.get() == (ServerGameObject*)player; });
-	};
 }
 
 void Server::loadSaveGame(const char * filename)
@@ -332,32 +324,10 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 		return;
 	const float target = building->position.y / terrain->scale;
 	std::vector<int> list(vertices.begin(), vertices.end());
-	// an AI's building may stand where the ground differs more than the footprint allows
-	// (AIs are exempt from the limit, unlike in WKB.exe): no vertex moves more than half the
-	// limit, so no cliff is carved; those vertices are sent one by one. A human's is levelled
-	// fully, as in the original.
-	const bool exempt = StampdownPlan::exemptFromSlopeLimit && StampdownPlan::exemptFromSlopeLimit(this, building->getPlayer());
-	const float limitSteps = exempt && fp->maxHeightDifferential > 0.0f ? 0.5f * fp->maxHeightDifferential / terrain->scale : 1e9f;
-	std::vector<int> uneven;
-	for (int i : list) {
-		const float h = terrain->heightSteps(i);
-		if (std::abs(target - h) > limitSteps) {
-			terrain->setHeightSteps(i, h + std::clamp(target - h, -limitSteps, limitSteps));
-			uneven.push_back(i);
-		}
-		else
-			terrain->setHeightSteps(i, target);
-	}
+	for (int i : list)
+		terrain->setHeightSteps(i, target);
 	levelledVertices.insert(list.begin(), list.end());
-	for (int i : uneven) {
-		NetPacketWriter packet(NETCLIMSG_TERRAIN_HEIGHTS);
-		packet.writeUint32(1);
-		packet.writeFloat(terrain->heightSteps(i));
-		packet.writeUint32((uint32_t)i);
-		sendToAll(packet);
-	}
-	list.erase(std::remove_if(list.begin(), list.end(), [&](int i) { return std::find(uneven.begin(), uneven.end(), i) != uneven.end(); }), list.end());
-	if (!list.empty()) {
+	{
 		const float steps = terrain->heightSteps(list[0]);
 		// in packets of up to 50 vertices (a packet holds 256 bytes)
 		for (size_t first = 0; first < list.size(); first += 50) {

@@ -2420,9 +2420,6 @@ void Test_PlacementRules()
 		printf("PLACE not set up\n");
 		return;
 	}
-	// as a human player: no client here, so the server would take every player for an AI
-	const auto exempt = StampdownPlan::exemptFromSlopeLimit;
-	StampdownPlan::exemptFromSlopeLimit = nullptr;
 	player->setItem(Tags::PDITEM_WOOD, 10000.0f);
 	player->setItem(Tags::PDITEM_FOOD, 10000.0f);
 	player->setItem(Tags::PDITEM_GOLD, 10000.0f);
@@ -2590,7 +2587,6 @@ void Test_PlacementRules()
 				terrainName(best).c_str(), (int)server.saveGame(path.c_str()), path.c_str());
 		}
 	}
-	StampdownPlan::exemptFromSlopeLimit = exempt;
 	fflush(stdout);
 }
 

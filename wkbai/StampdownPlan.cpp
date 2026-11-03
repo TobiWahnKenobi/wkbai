@@ -10,7 +10,51 @@
 #include <map>
 #include <cmath>
 
-bool (*StampdownPlan::exemptFromSlopeLimit)(CommonGameState*, CommonGameObject*) = nullptr;
+// Walls don't count as neighbours (WKB.exe leaves out four building types, read here as the
+// wall pieces)
+static bool isWallPiece(int buildingType)
+{
+	return buildingType == Tags::BUILDINGTYPE_WALL || buildingType == Tags::BUILDINGTYPE_WALL_CORNER_IN
+		|| buildingType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || buildingType == Tags::BUILDINGTYPE_WALL_CROSSROADS;
+}
+
+bool StampdownPlan::groundAllows(CommonGameState* gameState, const Footprint* fp, int ox, int oz)
+{
+	const Terrain* trn = gameState->terrain;
+	if (!trn || !gameState->tiles)
+		return true;
+	const auto [tileWidth, tileHeight] = trn->getNumPlayableTiles();
+	std::vector<std::pair<int, int>> taken;
+	for (const auto& to : fp->tiles)
+		taken.emplace_back(ox + to.offsetX, oz + to.offsetZ);
+	float lowest = 1e30f, highest = -1e30f;
+	for (size_t t = 0; t < fp->tiles.size(); t++) {
+		const auto [px, pz] = taken[t];
+		if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight)
+			return false;
+		for (int dz = 0; dz <= 1; dz++)
+			for (int dx = 0; dx <= 1; dx++) {
+				const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
+				lowest = std::min(lowest, h);
+				highest = std::max(highest, h);
+			}
+		const float range = highest - lowest;
+		if (fp->maxHeightDifferential > 0.0f && range > fp->maxHeightDifferential)
+			return false;
+		if (range >= 2.5f && fp->tiles[t].flatten)
+			for (int nz = -1; nz <= 1; nz++)
+				for (int nx = -1; nx <= 1; nx++) {
+					const int qx = px + nx, qz = pz + nz;
+					if ((nx == 0 && nz == 0) || qx < 0 || qz < 0 || qx >= tileWidth || qz >= tileHeight
+						|| std::find(taken.begin(), taken.end(), std::make_pair(qx, qz)) != taken.end())
+						continue;
+					const CommonGameObject* neighbour = gameState->tiles[qz * tileWidth + qx].building.getFrom(gameState);
+					if (neighbour && !isWallPiece(neighbour->blueprint->buildingType))
+						return false;
+				}
+	}
+	return true;
+}
 
 // A tile's terrain is that of its texture's group (ASSOCIATE_TILE_TEXTURE_GROUP); a group no
 // terrain names is in no list
@@ -81,13 +125,9 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		//   BUILDING_PLACEMENT_OVERLAPS_NEIGHBOURING_BUILDING: levelling shares its edge's
 		//   corners with the neighbour, which would be left on a step. Walls don't count
 		//   (WKB.exe leaves out four building types, read here as the wall pieces).
-		// The slope and the neighbours are for human players only: an AI's starting village moved
-		// a tile by the limit left its cart with no way out (8 Player Continent, seed 1: no wood,
-		// no farm, 15 characters all game), so the AIs place as before and their levelling is
-		// capped instead (Server::levelTerrainUnder). The terrain types hold for them too, and
-		// their search for a site (NEAREST_VALID_STAMPDOWN_POS) looks for them.
+		// They hold for every player, the AIs too, as in WKB.exe; the AIs' search for a site
+		// (NEAREST_VALID_STAMPDOWN_POS) looks for them (groundAllows).
 		const Terrain* trn = gameState->terrain;
-		const bool slopeExempt = exemptFromSlopeLimit && exemptFromSlopeLimit(gameState, playerObj);
 		std::vector<std::pair<int, int>> taken;
 		for (const auto& to : fp->tiles) {
 			const auto [rx, rz] = to.rotate(orientation.y);
@@ -125,32 +165,30 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				refuse(Status::InvalidTerrainType);
 				ok = false;
 			}
-			if (!slopeExempt) {
-				for (int dz = 0; dz <= 1; dz++)
-					for (int dx = 0; dx <= 1; dx++) {
-						const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
-						lowest = std::min(lowest, h);
-						highest = std::max(highest, h);
-					}
-				const float range = highest - lowest;
-				if (ok && fp->maxHeightDifferential > 0.0f && range > fp->maxHeightDifferential) {
-					refuse(Status::InvalidTooSteep);
-					tooSteep = true;
+			for (int dz = 0; dz <= 1; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
+					lowest = std::min(lowest, h);
+					highest = std::max(highest, h);
 				}
-				if (ok && range >= 2.5f && to.flatten)
-					for (int nz = -1; nz <= 1 && ok; nz++)
-						for (int nx = -1; nx <= 1 && ok; nx++) {
-							const int qx = px + nx, qz = pz + nz;
-							if ((nx == 0 && nz == 0) || qx < 0 || qz < 0 || qx >= tileWidth || qz >= tileHeight
-								|| std::find(taken.begin(), taken.end(), std::make_pair(qx, qz)) != taken.end())
-								continue;
-							const CommonGameObject* neighbour = gameState->tiles[qz * tileWidth + qx].building.getFrom(gameState);
-							if (neighbour && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), neighbour->blueprint->buildingType) == std::end(wallBuildingTypes)) {
-								refuse(Status::InvalidNeighbour);
-								ok = false;
-							}
-						}
+			const float range = highest - lowest;
+			if (ok && fp->maxHeightDifferential > 0.0f && range > fp->maxHeightDifferential) {
+				refuse(Status::InvalidTooSteep);
+				tooSteep = true;
 			}
+			if (ok && range >= 2.5f && to.flatten)
+				for (int nz = -1; nz <= 1 && ok; nz++)
+					for (int nx = -1; nx <= 1 && ok; nx++) {
+						const int qx = px + nx, qz = pz + nz;
+						if ((nx == 0 && nz == 0) || qx < 0 || qz < 0 || qx >= tileWidth || qz >= tileHeight
+							|| std::find(taken.begin(), taken.end(), std::make_pair(qx, qz)) != taken.end())
+							continue;
+						const CommonGameObject* neighbour = gameState->tiles[qz * tileWidth + qx].building.getFrom(gameState);
+						if (neighbour && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), neighbour->blueprint->buildingType) == std::end(wallBuildingTypes)) {
+							refuse(Status::InvalidNeighbour);
+							ok = false;
+						}
+					}
 			plan.tiles.push_back({ px, pz, ok });
 		}
 		if (tooSteep)
