@@ -67,6 +67,12 @@ void DefaultSceneRenderer::render()
 						bver[i].color = 0xFFFFFFFF;
 					else
 						bver[i].color = (int)(std::max(160.0f, std::min(255.0f, (norms[tind.normal].transformNormal(ent->transform).normal().dot(sunNormal) + 1.0f) * 255 / 2))) * 0x010101 + 0xFF000000;
+					// the placement preview's red or green, as the enhanced renderer's (0xAARRGGBB)
+					if (ent->flags & (ent->SEFLAG_BLOCKED | ent->SEFLAG_PLACEABLE)) {
+						const uint32_t c = bver[i].color, l = c & 255;
+						const uint32_t dim = l * 64 / 255, keep = l;
+						bver[i].color = (c & 0xFF000000) | ((ent->flags & ent->SEFLAG_BLOCKED) ? (keep << 16 | dim << 8 | dim) : (dim * 3 / 2 << 16 | keep << 8 | dim * 3 / 2));
+					}
 					bver[i].u = mesh.uvLists[color][2 * tind.uv];
 					bver[i].v = mesh.uvLists[color][2 * tind.uv + 1];
 				}

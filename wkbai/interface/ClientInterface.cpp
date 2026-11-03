@@ -3214,7 +3214,26 @@ void ClientInterface::iter()
 		if (stampdownBlueprint && stampdownPlayer) {
 			//test.model = client->gameSet->modelCache.getModel("Warrior Kings Game Set\\Characters\\Peasant\\Male\\Peasant1.MESH3");
 			try {
-				test.model = stampdownBlueprint->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+				// The preview shows the building as it will be when finished, as WKB.exe's interface
+				// does (0x64df2b): the foundation's MAP_TYPE_TAG "Fully Built Version" (the type it is
+				// converted to when built); only the foundation itself is placed
+				static int fullyBuiltTag = -1;
+				static const GameSet* tagOf = nullptr;
+				if (tagOf != client->gameSet.get()) {
+					tagOf = client->gameSet.get();
+					fullyBuiltTag = tagOf->typeTags.names.getIndex("Fully Built Version");
+				}
+				auto finishedModel = [](const GameObjBlueprint* foundation) {
+					if (auto it = foundation->mappedTypeTags.find(fullyBuiltTag); it != foundation->mappedTypeTags.end() && it->second) {
+						try {
+							return it->second->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+						}
+						catch (const std::out_of_range&) {
+						}
+					}
+					return foundation->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+				};
+				test.model = finishedModel(stampdownBlueprint);
 				if (auto* fp = stampdownBlueprint->footprint) {
 					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + fp->originX;
 					peapos.z = std::floor(peapos.z / 5.0f) * 5.0f + 2.5f + fp->originZ;
@@ -3230,13 +3249,9 @@ void ClientInterface::iter()
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, Vector3(0, 0, 0));
 				for (const auto& verdict : plan.tiles)
 					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
-				// where it can't stand (on another building), red; the server refuses it too
-				if (plan.status != StampdownPlan::Status::Valid)
-					test.flags |= SceneEntity::SEFLAG_BLOCKED;
-				// a field (its whole footprint passable) shows green where it can be placed
-				else if (const Footprint* fp = stampdownBlueprint->footprint; fp && !fp->tiles.empty()
-					&& std::all_of(fp->tiles.begin(), fp->tiles.end(), [](const auto& t) { return t.mode != 0; }))
-					test.flags |= SceneEntity::SEFLAG_PLACEABLE;
+				// red where it can't be placed (the server refuses it too), green where it can, as in
+				// the original
+				test.flags |= plan.status != StampdownPlan::Status::Valid ? SceneEntity::SEFLAG_BLOCKED : SceneEntity::SEFLAG_PLACEABLE;
 				// its range circles, the values those of the player ("run on player!" in the game set)
 				{
 					CliScriptContext ctx{ client, stampdownPlayer.get() };
@@ -3271,8 +3286,9 @@ void ClientInterface::iter()
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
 					entity.transform = Matrix::getRotationYMatrix(-creation.orientation.y) * Matrix::getTranslationMatrix(creation.position);
-					entity.model = creation.blueprint->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
+					entity.model = finishedModel(creation.blueprint);
 					entity.color = stampdownPlayer->color;
+					entity.flags = test.flags & (SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 				}
 				for (auto& entity : planEntities) {
 					scene->add(&entity);
