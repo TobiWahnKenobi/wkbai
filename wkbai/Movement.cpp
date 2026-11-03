@@ -13,7 +13,7 @@ void Movement::startMovement(const Vector3 & source, const Vector3 & destination
 	m_speed = speed;
 	m_distance = (m_destPoint - m_srcPoint).len2xz();
 
-	m_started = m_distance > MIN_DISTANCE;
+	m_started = m_distance > MIN_DISTANCE && speed > 0.0f;
 }
 
 void Movement::stopMovement()

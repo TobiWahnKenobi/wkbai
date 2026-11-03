@@ -729,7 +729,10 @@ void MoveTask::onUpdate()
 }
 
 // Horizontal distance from a point to the nearest tile of a building's footprint (0 inside it);
-// -1 when the object isn't a building with a footprint
+// -1 when the object isn't a building with a footprint. Only the blocked tiles count, the
+// building itself: the passable ones are its yard (the manor's reach 15 m out in front, to just
+// inside its palisade's gate, and a cart delivering within 6.5 m of them unloaded at the gate).
+// A footprint that is all passable (a field) counts whole.
 static float FootprintDistance(const Vector3& point, const ServerGameObject* building)
 {
 	if (!building || building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !building->blueprint->footprint)
@@ -740,8 +743,11 @@ static float FootprintDistance(const Vector3& point, const ServerGameObject* bui
 	const auto rotOrigin = fp->rotateOrigin(building->orientation.y);
 	const int ox = (int)((building->position.x - rotOrigin.first) / 5.0f);
 	const int oz = (int)((building->position.z - rotOrigin.second) / 5.0f);
+	const bool anyBlocked = std::any_of(fp->tiles.begin(), fp->tiles.end(), [](const Footprint::TileOffset& to) { return !to.mode; });
 	float best = 1e30f;
 	for (const auto& to : fp->tiles) {
+		if (anyBlocked && to.mode)
+			continue;
 		const auto [rx, rz] = to.rotate(building->orientation.y);
 		const float x0 = (ox + rx) * 5.0f, z0 = (oz + rz) * 5.0f;
 		const float dx = std::max({ x0 - point.x, 0.0f, point.x - (x0 + 5.0f) });
@@ -749,6 +755,22 @@ static float FootprintDistance(const Vector3& point, const ServerGameObject* bui
 		best = std::min(best, dx * dx + dz * dz);
 	}
 	return std::sqrt(best);
+}
+
+// How near to a building's footprint a task's unit goes. A delivery (ATTACHMENT_PATH_CATEGORY
+// DELIVERY) to a building with a yard comes up to the building: the original walks it to a
+// delivery point on the model, the manor's 2 m out from its walls (wkbai leaves the points out,
+// they cut the AI's pace to a third: docs/engine/original-comparison.md), and with the task's
+// 6.5 m the cart stopped in the middle of the yard (play test 3)
+static float FootprintReach(const TaskBlueprint* task, float proximity, const ServerGameObject* building)
+{
+	constexpr float DELIVERY_REACH = 3.5f;
+	if (!task->deliveryPath || proximity <= DELIVERY_REACH || !building->blueprint->footprint)
+		return proximity;
+	const auto& tiles = building->blueprint->footprint->tiles;
+	const bool yard = std::any_of(tiles.begin(), tiles.end(), [](const Footprint::TileOffset& to) { return to.mode; })
+		&& std::any_of(tiles.begin(), tiles.end(), [](const Footprint::TileOffset& to) { return !to.mode; });
+	return yard ? DELIVERY_REACH : proximity;
 }
 
 void ObjectReferenceTask::onStart()
@@ -821,11 +843,12 @@ void ObjectReferenceTask::onUpdate()
 		// centre: builders, deliverers and attackers stand around it (the original sends them to
 		// its activity path) and a large building's centre can't be come near
 		const float edge = FootprintDistance(go->position, target.get());
+		const float reach = edge >= 0.0f ? FootprintReach(blueprint, this->proximity, target.get()) : this->proximity;
 		const bool measured = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
 			: (prox < 0.0f || (edge >= 0.0f
 				// within the proximity of the edge, or, when the path ends a little further out
 				// (its last tile next to the footprint was taken), within one tile more
-				? (edge < this->proximity || (!go->movementController.isMoving() && edge < this->proximity + 5.0f))
+				? (edge < reach || (!go->movementController.isMoving() && edge < reach + 5.0f))
 				: (go->position - destination).sqlen2xz() < prox * prox));
 		const bool arrived = loadedArrived || measured;
 		if (arrived) {
@@ -871,11 +894,17 @@ void ObjectReferenceTask::onUpdate()
 				this->stopTriggers();
 				if (!go->movementController.isMoving())
 					destination = go->movementController.startMovement(goal);
-				// If target slightly moves during the movement, restart the movement
+				// The target walked on: the path is found again once it is off where the path was
+				// found to by a tenth of the way still to go (at least a metre). A movement started in
+				// a step gets no further in it, and chasers walked in place (play test 3) when that
+				// came every step: with 0.1 m, which a cart goes every step, and with a target in a
+				// building, whose path ends at the nearest free tile, always that far off the target
 				if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-					if (go->movementController.isMoving())
-						if ((goal - go->movementController.getDestination()).sqlen2xz() > 0.01f)
+					if (go->movementController.isMoving()) {
+						const float retarget = std::max(1.0f, 0.1f * (goal - go->position).len2xz());
+						if ((goal - go->movementController.getRequestedDestination()).sqlen2xz() > retarget * retarget)
 							destination = go->movementController.startMovement(goal);
+					}
 				if (proximitySatisfied) {
 					proximitySatisfied = false;
 					if (getenv("WKB_TRACE_TASKS_ID")) {
