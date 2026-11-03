@@ -144,6 +144,7 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	//m_object->startMovement(destination);
 	//m_pathNodes = { destination };
 
+	m_requested = destination;
 	using namespace Pathfinding;
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();
@@ -199,13 +200,20 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 				realDestination = Vector3(nearest.x * 5.0f + 2.5f, destination.y, nearest.z * 5.0f + 2.5f);
 			}
 		}
+		// already about as near to it as the free ground goes: no walk. A formation member
+		// whose place was on blocked ground stood at its edge and went back and forth there in
+		// walks of 30 cm, each to the free point the line from its place had found that time
+		if ((m_object->position - destination).len2xz() < (realDestination - destination).len2xz() + 0.5f) {
+			m_pathNodes.clear();
+			walkToNextNode();
+			return realDestination;
+		}
 	}
 
 	auto rtres = SegmentTraversal(m_object->position.x / 5.0f, m_object->position.z / 5.0f, realDestination.x / 5.0f, realDestination.z / 5.0f, pred);
 	if (!rtres) {
 		m_pathNodes = { realDestination, m_object->position };
-		m_object->startMovement(m_pathNodes[0]);
-		m_started = true;
+		walkToNextNode();
 	}
 	else {
 		auto tileList = DoPathfinding(posStart, posEnd, pred, ManhattanDiagHeuristic, trnsize.first, trnsize.second);
@@ -223,12 +231,7 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 			for (PFPos& pfp : tileList) {
 				m_pathNodes.emplace_back(pfp.x * 5.0f + 2.5f, m_object->position.y, pfp.z * 5.0f + 2.5f);
 			}
-			if (m_pathNodes.size() >= 2) {
-				m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
-				m_started = true;
-			}
-			else
-				stopMovement(); // cut short without getting any nearer
+			walkToNextNode(); // (none when cut short without getting any nearer)
 		}
 		else
 			stopMovement();
@@ -243,16 +246,37 @@ void MovementController::stopMovement()
 	m_started = false;
 }
 
+// Starts the walk to the next path node, passing over the ones the unit already stands on. A
+// walk to where the unit stands doesn't start (Movement), and then the controller was moving
+// with no walk going on, which nothing ended (updateMovement runs for objects that walk): the
+// unit stood with its walking animation and its task waited for it to arrive. Already as near
+// as it can get to the destination, it stops.
+void MovementController::walkToNextNode()
+{
+	while (m_pathNodes.size() >= 2) {
+		if ((m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() >= 0.01f) {
+			m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
+			if (m_object->movement.isMoving()) {
+				m_started = true;
+				return;
+			}
+			break;
+		}
+		m_pathNodes.pop_back();
+	}
+	// (a unit that stands already is left as it is: its task asks again every step)
+	if (m_started || m_object->movement.isMoving())
+		stopMovement();
+	else
+		m_pathNodes.clear();
+}
+
 void MovementController::updateMovement()
 {
 	// check if Movement is done, if yes, go to next path node...
 	if (!m_started) return;
-	if ((m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() < 0.01f) {
+	if (!m_object->movement.isMoving() || (m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() < 0.01f) {
 		m_pathNodes.pop_back();
-		if (m_pathNodes.size() >= 2) {
-			m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
-		}
-		else
-			stopMovement();
+		walkToNextNode();
 	}
 }

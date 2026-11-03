@@ -42,6 +42,9 @@ struct TaskBlueprint {
 	ObjectFinder *taskTarget = nullptr;
 	bool usePreviousTaskTarget = false, terminateEntireOrderIfNoTarget = false, rejectTargetIfItIsTerminated = false;
 	bool identifyTargetEachCycle = false;
+	// ATTACHMENT_PATH_CATEGORY DELIVERY: the original walks the unit to a delivery point on the
+	// target's model (see FootprintReach in Order.cpp)
+	bool deliveryPath = false;
 	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
 	std::vector<TriggerBlueprint> triggers;
 	ActionSequence collisionTrigger, struckFloorTrigger;

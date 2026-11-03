@@ -139,6 +139,8 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 		}
 		else if (tag == "IDENTIFY_TARGET_EACH_CYCLE")
 			identifyTargetEachCycle = true;
+		else if (tag == "ATTACHMENT_PATH_CATEGORY")
+			deliveryPath = gsf.nextString() == "DELIVERY";
 		gsf.advanceLine();
 	}
 }

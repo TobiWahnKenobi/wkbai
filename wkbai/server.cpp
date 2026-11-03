@@ -1222,6 +1222,13 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 {
 	const bool wasMoving = movement.isMoving();
 	float speed = computeSpeed();
+	// nowhere to walk (already there, or no speed): no walk starts (Movement), so no walking
+	// animation either; a walk going on stops
+	if ((destination - position).len2xz() <= 0.01f || !(speed > 0.0f)) {
+		if (wasMoving)
+			stopMovement();
+		return;
+	}
 	movement.startMovement(position, destination, Server::instance->timeManager.currentTime, speed);
 	currentSpeed = speed;
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };

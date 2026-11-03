@@ -2105,6 +2105,77 @@ void Test_AIvsAI()
 	// ended before it began)
 	const float startTime = server.timeManager.currentTime;
 	float nextCensus = startTime + 60.0f;
+	// walking in place (play test 3: units with the walk animation that didn't move until given
+	// a new order): every second, a character playing one of its walk animations that hasn't
+	// moved half a metre in 5 s is reported once per stand
+	struct Stand { Vector3 pos; float since; bool shown; };
+	std::map<uint32_t, Stand> stands;
+	int walkingInPlace = 0;
+	float nextStandCheck = startTime + 1.0f;
+	const int moveAnim = server.gameSet->animations.names.getIndex("Move");
+	auto isWalkAnim = [&](ServerGameObject* o) {
+		if (o->animationIndex == moveAnim)
+			return true;
+		for (const auto& mb : o->blueprint->movementBands) {
+			if (o->animationIndex == mb.defaultAnim)
+				return true;
+			for (const auto& p : mb.onEquAnims)
+				if (o->animationIndex == p.second)
+					return true;
+		}
+		return false;
+	};
+	std::function<void(ServerGameObject*)> checkStands = [&](ServerGameObject* obj) {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* o = (ServerGameObject*)c;
+				if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER) {
+					checkStands(o);
+					continue;
+				}
+				const float now = server.timeManager.currentTime;
+				// a cart unloading at a manor (play test 3: it stopped at the palisade's gate): how
+				// far from the building's centre, once per delivery
+				if (o->blueprint->name.find("Cart") != std::string::npos) {
+					static std::map<uint32_t, bool> unloading;
+					Order* order = o->orderConfig.getCurrentOrder();
+					Task* task = order ? order->getCurrentTask() : nullptr;
+					const bool now_ = task && task->target && task->proximitySatisfied
+						&& server.gameSet->tasks.getString(task->blueprint->bpid).rfind("Deliver", 0) == 0;
+					if (now_ && !unloading[o->id])
+						printf("AITEST cart unloads t=%.0f cart %u at %s %u: %.1f m from its centre\n", now - startTime, o->id,
+							task->target->blueprint->name.c_str(), task->target->id, (task->target->position - o->position).len2xz());
+					unloading[o->id] = now_;
+				}
+				if (const char* tid = getenv("WKB_TRACE_STAND_ID"); tid && (uint32_t)atoi(tid) == o->id) {
+					const auto& m = o->movement;
+					printf("STAND t=%.1f at (%.2f,%.2f) moving %d from (%.2f,%.2f) to (%.2f,%.2f) start %.2f speed %.2f; controller %d nodes:", now, o->position.x, o->position.z,
+						(int)m.isMoving(), m.getSource().x, m.getSource().z, m.getDestination().x, m.getDestination().z, m.getStartTime(), m.getSpeed(), (int)o->movementController.isMoving());
+					for (const Vector3& n : o->movementController.m_pathNodes)
+						printf(" (%.1f,%.1f)", n.x, n.z);
+					printf("\n");
+				}
+				auto it = stands.try_emplace(o->id, Stand{ o->position, now, false }).first;
+				Stand& s = it->second;
+				if (!isWalkAnim(o) || (o->position - s.pos).sqlen2xz() > 0.25f) {
+					s = { o->position, now, false };
+					continue;
+				}
+				if (!s.shown && now - s.since >= 5.0f) {
+					s.shown = true;
+					walkingInPlace++;
+					Order* order = o->orderConfig.getCurrentOrder();
+					Task* task = order ? order->getCurrentTask() : nullptr;
+					printf("AITEST walking in place t=%.0f %s %u player %u at (%.1f,%.1f): order %s, task %s -> %s %u at (%.1f,%.1f), movement %d, controller %d (%zu nodes), speed %.2f\n",
+						now - startTime, o->blueprint->name.c_str(), o->id, o->getPlayer() ? o->getPlayer()->id : 0, o->position.x, o->position.z,
+						order ? server.gameSet->orders.getString(order->blueprint->bpid).c_str() : "-",
+						task ? server.gameSet->tasks.getString(task->blueprint->bpid).c_str() : "-",
+						task && task->target ? task->target->blueprint->name.c_str() : "-", task && task->target ? task->target->id : 0,
+						task && task->target ? task->target->position.x : 0.0f, task && task->target ? task->target->position.z : 0.0f,
+						(int)o->movement.isMoving(), (int)o->movementController.isMoving(), o->movementController.m_pathNodes.size(), o->computeSpeed());
+				}
+			}
+	};
 	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
 		if (server.replay) {
 			if (!server.replayEvent())
@@ -2114,6 +2185,11 @@ void Test_AIvsAI()
 			server.timeManager.pendingMs = server.timeManager.stepMs;
 			if (server.timeManager.step())
 				server.simulate();
+		}
+		if (server.timeManager.currentTime >= nextStandCheck) {
+			nextStandCheck += 1.0f;
+			if (ServerGameObject* lvl = server.getLevel())
+				checkStands(lvl);
 		}
 		if (server.timeManager.currentTime >= nextCensus) {
 			nextCensus += 60.0f;
@@ -2181,6 +2257,7 @@ void Test_AIvsAI()
 		list += " " + n;
 	printf("AITEST end after %.0f game s in %.1f real s (%.1fx real time); standing:%s\n", server.timeManager.currentTime, wall,
 		server.timeManager.currentTime / std::max(wall, 0.001), list.c_str());
+	printf("AITEST walking in place: %d stands\n", walkingInPlace);
 	// the players no longer at war with each other (diplomacy: offers and the AIs' answers)
 	std::string peace;
 	std::vector<CommonGameObject*> players;

@@ -116,7 +116,7 @@ void FormationController::update()
 					constexpr float ARRIVED = 0.6f, RETARGET = 1.5f;
 					const bool moving = srvCharacter->movementController.isMoving();
 					if ((srvCharacter->position - slot).sqlen2xz() > ARRIVED * ARRIVED) {
-						if (!moving || (srvCharacter->movementController.getDestination() - slot).sqlen2xz() > RETARGET * RETARGET)
+						if (!moving || (srvCharacter->movementController.getRequestedDestination() - slot).sqlen2xz() > RETARGET * RETARGET)
 							srvCharacter->movementController.startMovement(slot);
 					}
 					else if (!formation->movement.isMoving()) {
