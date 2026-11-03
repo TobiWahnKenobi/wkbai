@@ -411,6 +411,8 @@ std::string Server::aiSettingsText() const
 	text += "aiAdvanced=" + std::to_string(aiAdvanced) + "\n";
 	text += "aiLifeline=" + std::to_string((int)aiLifeline) + "\n";
 	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
+	text += "aiWar=" + std::to_string((int)aiWar) + "\n";
+	text += "aiHumanFocus=" + std::to_string(aiHumanFocus) + "\n";
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -442,6 +444,8 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
+		else if (name == "aiWar") aiWar = v != 0;
+		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
 		else if (name == "aiFocusAttacks") aiFocusAttacks = v != 0;
 		else if (name == "aiEarlyFarms") aiEarlyFarms = (int)v;
@@ -1315,6 +1319,21 @@ void ServerGameObject::associateObject(int category, ServerGameObject * associat
 	assert(this && associated);
 	this->associates[category].insert(associated);
 	associated->associators[category].insert(this);
+	// the AI tests: a missile's firer is registered after its target (Mechanics\fort attack.cpp,
+	// Fire Arrow.cpp): a building's shot counts for its player against the target's
+	if (Server::instance && associated->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE) {
+		static const GameSet* of = nullptr;
+		static int firer = -1, arrowTarget = -1;
+		if (of != Server::instance->gameSet.get()) {
+			of = Server::instance->gameSet.get();
+			firer = of->associations.names.getIndex("My Firer");
+			arrowTarget = of->associations.names.getIndex("Arrow Target");
+		}
+		if (category == firer && arrowTarget >= 0 && associates.count(arrowTarget))
+			for (const SrvGORef& t : associates.at(arrowTarget))
+				if (ServerGameObject* target = t.get(); target && target->getPlayer() && associated->getPlayer())
+					Server::instance->buildingShots[{ associated->getPlayer()->id, target->getPlayer()->id }]++;
+	}
 }
 
 void ServerGameObject::dissociateObject(int category, ServerGameObject * associated)

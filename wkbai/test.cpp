@@ -44,6 +44,7 @@
 #include <SDL3/SDL_timer.h>
 #include "SoundPlayer.h"
 #include "Pathfinding.h"
+#include "NNSearch.h"
 #include "ParticleSystem.h"
 #include "gfx/DefaultParticleRenderer.h"
 #include "ParticleContainer.h"
@@ -1793,6 +1794,11 @@ void Test_AIvsAI()
 		QuickSkirmishMenu::Slot slot;
 		slot.type = QuickSkirmishMenu::Slot::AI;
 		slot.general = g.get<std::string>();
+		// "human": a human player who does nothing (no AI); the census counts the AIs' attacks on it
+		if (slot.general == "human") {
+			slot.type = QuickSkirmishMenu::Slot::HUMAN;
+			slot.general.clear();
+		}
 		if (slots.size() < scripts.size() && scripts[slots.size()].is_string())
 			slot.aiScript = scripts[slots.size()].get<std::string>();
 		slots.push_back(slot);
@@ -2004,6 +2010,12 @@ void Test_AIvsAI()
 				// the advanced AI (AIAdvanced.cpp): whether this player has it, and what it did
 				printf("AITEST   advanced player %u: %s, lifelines %d, home guard %d; threats met %d (%d defenders), peasants sent home %d; waves held %d, recalled %d, retargeted %d, out %zu\n",
 					player->id, player->aiController.advancedState == 1 ? "on" : "off", player->aiController.lifelines, player->aiController.guardTrained, player->aiController.threatsMet, player->aiController.defendersSent, player->aiController.peasantsFled, player->aiController.wavesHeld, player->aiController.wavesRecalled, player->aiController.wavesRetargeted, player->aiController.advancedWaves.size());
+				{
+					const AIController& ai = player->aiController;
+					printf("AITEST   war player %u: fighters %d, surplus trained %d; threats %d (%d defenders), waves %d (%d units), struck back %d, retargets %d, retreats %d, engaged %d, breaches %d; out: %zu defences, %zu waves\n",
+						player->id, ai.fighters(), ai.surplusTrained, ai.warThreats, ai.warDefenders, ai.warWavesSent, ai.warWaveUnits, ai.warCounters, ai.warRetargets, ai.warRetreats, ai.warEngaged, ai.warBreaches,
+						ai.warDefences.size(), ai.warWaves.size());
+				}
 				printf("AITEST   losses player %u: %d buildings destroyed, building hit points lost %.0f (%.0f destroyed, %.0f standing)\n", player->id, server.buildingsDestroyed[player->id],
 					server.buildingHpDestroyed[player->id] + damage, server.buildingHpDestroyed[player->id], damage);
 				{
@@ -2027,6 +2039,17 @@ void Test_AIvsAI()
 						probe += std::string(" | ") + name + ": " + (fi >= 0 ? std::to_string(server.gameSet->objectFinderDefinitions[fi]->eval(&pctx).size()) : "?");
 					}
 					printf("AITEST   probe:%s\n", probe.c_str());
+					// who the scripts see at the door (Defensive Mode): "Enemies Within 250m of My
+					// Manor", by player and blueprint
+					if (const int fi = server.gameSet->objectFinderDefinitions.names.getIndex("Enemies Within 250m of My Manor"); fi >= 0) {
+						std::map<std::string, int> door;
+						for (ServerGameObject* o : server.gameSet->objectFinderDefinitions[fi]->eval(&pctx))
+							door[std::to_string(o->getPlayer() ? o->getPlayer()->id : 0) + ":" + o->blueprint->name]++;
+						std::string list;
+						for (const auto& [k, n] : door)
+							list += " " + k + "=" + std::to_string(n);
+						printf("AITEST   doorstep player %u:%s\n", player->id, list.c_str());
+					}
 				}
 				std::string works;
 				for (const auto& woi : player->aiController.workOrderInstances)
@@ -2097,6 +2120,124 @@ void Test_AIvsAI()
 				printf("AITEST   a woodcutter: %s; %s; %s\n", sample, villageStock, cartInfo);
 				if (characters + buildings > 0)
 					standing.push_back(player->blueprint->name);
+			}
+		// every player's forts (the buildings with a "Fort Army", Mechanics\fort attack.cpp): how
+		// many see enemy characters, and how many have them as targets, by the enemies' player
+		{
+			std::string shots;
+			for (const auto& [pair, n] : server.buildingShots)
+				shots += " " + std::to_string(pair.first) + "->" + std::to_string(pair.second) + "=" + std::to_string(n);
+			printf("AITEST building shots (shooter->target player):%s\n", shots.c_str());
+			const int myFort = server.gameSet->associations.names.getIndex("My Fort");
+			const int fortTargets = server.gameSet->associations.names.getIndex("My Fort Targets");
+			for (const auto& [type, children] : lvl->children)
+				for (CommonGameObject* c : children) {
+					ServerGameObject* player = (ServerGameObject*)c;
+					if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || myFort < 0 || fortTargets < 0)
+						continue;
+					int forts = 0;
+					std::map<uint32_t, int> seeing, targeting; // enemy player -> forts
+					for (const auto& [t, cs] : player->children)
+						for (CommonGameObject* a : cs) {
+							auto* army = (ServerGameObject*)a;
+							if (army->blueprint->name != "Fort Army" || !army->associates.count(myFort))
+								continue;
+							for (const SrvGORef& ref : army->associates.at(myFort)) {
+								ServerGameObject* fort = ref.get();
+								if (!fort || fort->deleted)
+									continue;
+								forts++;
+								const float sight = fort->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) * 5.0f;
+								std::set<uint32_t> seen;
+								NNSearch search;
+								search.start(&server, fort->position, sight);
+								while (CommonGameObject* o = search.next()) {
+									CommonGameObject* op = o->getPlayer();
+									if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && op && op != player && op->blueprint->name != "Neutral Player"
+										&& server.getDiplomaticStatus(op, player) == 2 && (o->position - fort->position).sqlen2xz() <= sight * sight)
+										seen.insert(op->id);
+								}
+								for (uint32_t p : seen)
+									seeing[p]++;
+								std::set<uint32_t> aimed;
+								if (fort->associates.count(fortTargets))
+									for (const SrvGORef& tr : fort->associates.at(fortTargets))
+										if (ServerGameObject* tg = tr.get(); tg && tg->getPlayer())
+											aimed.insert(tg->getPlayer()->id);
+								for (uint32_t p : aimed)
+									targeting[p]++;
+								// a fort that sees enemies: its archers inside ("Number Of Archers Inside"),
+								// Hold Fire, its Fort Army's order, the targets it holds
+								if (!seen.empty()) {
+									static const int archersEq = server.gameSet->equations.names.getIndex("Number Of Archers Inside");
+									static const int holdFire = server.gameSet->items.names.getIndex("Hold Fire");
+									SrvScriptContext fctx(&server, fort);
+									const Order* fo = army->orderConfig.getCurrentOrder();
+									std::string ids;
+									for (uint32_t p : seen)
+										ids += " " + std::to_string(p);
+									printf("AITEST     fort %s#%u of %u: archers inside %.1f, hold fire %.0f, army order %s, %zu targets; enemies of%s\n", fort->blueprint->name.c_str(), fort->id, player->id,
+										archersEq >= 0 ? server.gameSet->equations[archersEq]->eval(&fctx) : -1.0f, holdFire >= 0 ? fort->getItem(holdFire) : -1.0f,
+										fo ? server.gameSet->orders.getString(fo->blueprint).c_str() : "none",
+										fort->associates.count(fortTargets) ? fort->associates.at(fortTargets).size() : (size_t)0, ids.c_str());
+								}
+							}
+						}
+					if (!forts)
+						continue;
+					std::string list;
+					for (const auto& [p, n] : seeing)
+						list += " " + std::to_string(p) + ":" + std::to_string(n) + "/" + std::to_string(targeting.count(p) ? targeting[p] : 0);
+					printf("AITEST   forts player %u: %d; enemies in sight (player:forts seeing/targeting):%s\n", player->id, forts, list.c_str());
+				}
+		}
+		// the human players (no AI): what is left, what was lost, the enemy soldiers at their base
+		for (const auto& [type, children] : lvl->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* player = (ServerGameObject*)c;
+				if (player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || player->aiController.planBlueprint || player->blueprint->name == "Neutral Player")
+					continue;
+				int characters = 0, buildings = 0;
+				std::vector<ServerGameObject*> own;
+				auto count = [&](ServerGameObject* obj, auto& self) -> void {
+					for (const auto& [t, ch] : obj->children)
+						for (CommonGameObject* o : ch) {
+							if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+								characters++;
+							else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+								buildings++;
+								own.push_back((ServerGameObject*)o);
+							}
+							self((ServerGameObject*)o, self);
+						}
+				};
+				count(player, count);
+				// enemy soldiers within 100 m of any of its buildings, by player
+				std::map<uint32_t, std::set<uint32_t>> atBase;
+				for (ServerGameObject* b : own) {
+					NNSearch search;
+					search.start(&server, b->position, 100.0f);
+					while (CommonGameObject* o = search.next()) {
+						CommonGameObject* op = o->getPlayer();
+						if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && op && op != player && op->blueprint->name != "Neutral Player"
+							&& o->blueprint->name.find("Peasant") == std::string::npos && o->blueprint->name.find("Cart") == std::string::npos)
+							atBase[op->id].insert(o->id);
+					}
+				}
+				std::string list;
+				for (const auto& [p, s] : atBase)
+					list += " " + std::to_string(p) + "=" + std::to_string(s.size());
+				// hit points missing from its standing buildings (not foundations), as the AIs' losses
+				float damage = 0.0f;
+				{
+					static const int hp = server.gameSet->items.names.getIndex("Hit Points"), hpCap = server.gameSet->items.names.getIndex("Hit Point Capacity");
+					static const int isFoundation = server.gameSet->items.names.getIndex("Is a Foundation");
+					for (ServerGameObject* b : own)
+						if (hp >= 0 && hpCap >= 0 && !(isFoundation >= 0 && b->getItem(isFoundation) > 0.0f))
+							damage += std::max(0.0f, b->getItem(hpCap) - b->getItem(hp));
+				}
+				printf("AITEST %s t=%.0f human %u: %d characters, %d buildings; %d buildings destroyed, building hit points lost %.0f; enemy soldiers at its buildings:%s\n", when,
+					server.timeManager.currentTime, player->id, characters, buildings, server.buildingsDestroyed[player->id], server.buildingHpDestroyed[player->id] + damage, list.c_str());
 			}
 		return standing;
 	};
@@ -2179,8 +2320,21 @@ void Test_AIvsAI()
 	// the simulation's own speed over each game minute (the census, slow itself, left out): a
 	// game falls behind 1x where this drops under 1
 	double minuteSimMs = 0.0, minuteMaxStepMs = 0.0;
+	// "saveAt": [<game s>, "<name>"]: the game saved then as saved\Save_Games\<name>.sav, e.g. a
+	// skirmish's setup for the original to play on (RE repository, original-comparison.md)
+	float saveAt = -1.0f;
+	std::string saveName;
+	if (cfg.contains("saveAt") && cfg["saveAt"].is_array() && cfg["saveAt"].size() == 2) {
+		saveAt = startTime + cfg["saveAt"][0].get<float>();
+		saveName = cfg["saveAt"][1].get<std::string>();
+	}
 	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
 		const double stepStart = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency());
+		if (saveAt >= 0.0f && server.timeManager.currentTime >= saveAt) {
+			saveAt = -1.0f;
+			const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(saveName + ".sav"));
+			printf("AITEST saved %d to %s at t=%.2f\n", (int)server.saveGame(path.c_str()), path.c_str(), server.timeManager.currentTime);
+		}
 		if (server.replay) {
 			if (!server.replayEvent())
 				break;

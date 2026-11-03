@@ -1,7 +1,8 @@
 -- wkbai's advanced AI, steering a Kingmaker AI General (choose it for an AI position in the lobby).
 --
 -- The Kingmaker scripts still plan the economy, the buildings and which soldiers to train; this
--- script decides how they are used:
+-- script decides how they are used. By default (WAR, below) it hands defence and attacks to the
+-- game's war layer (ai.war) and trains surplus food into soldiers; with WAR false it does its own:
 -- - Defence of every settlement and of the peasants out working, from the start: enemy soldiers
 --   near a town (other than the palace's, which the scripts defend) or near a peasant are met by
 --   enough soldiers from home to outmatch them (1.5 times their strength), the nearest first.
@@ -335,8 +336,24 @@ local nextWaveManage = 0
 -- there the peasants without arms died instead (and the lifeline now gives food for new ones).
 local MILITIA_PEASANTS = 25
 
+-- The game's war layer (ai.war): soldiers defend every settlement and the palace, waves sized to
+-- the population limit go at the nearest enemy (humans counting as nearer) and fight what defends
+-- it, and the AI strikes back at whoever attacked it. In a game with a human and five AIs this
+-- script's own defence and attacks (below) sent no wave in 30 minutes: a home guard of 10 and a
+-- fifth plus 12 was rarely there under a population limit of 100-150, and the outmatch rule held
+-- the rest. Set WAR to false for this script's own.
+local WAR = true
+
 function think(ai)
 	local now = ai.time()
+	if WAR then
+		ai.war()
+		if now >= nextWaveManage then
+			nextWaveManage = now + 6
+			spendSurplus(ai)
+		end
+		return
+	end
 	local atTheDoor = ai.defensiveMode()
 	ai.setItem(ai.id, "Cannot Use Militia", (#ai.peasants() < MILITIA_PEASANTS and not atTheDoor) and 1 or 0)
 	local palace = ai.palace()
