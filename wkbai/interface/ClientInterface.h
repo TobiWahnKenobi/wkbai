@@ -245,7 +245,8 @@ private:
 	bool drawMinimapButtons(int panelX, int panelY);
 	uint8_t minimapHiddenCategories = 0; // GameObjBlueprint::MINIMAP_* toggled off
 
-	void drawObject(ClientGameObject* obj);
+	// remembered: a copy from FogOfWar::remembered, drawn as the building was last seen
+	void drawObject(ClientGameObject* obj, bool remembered = false);
 	// Loads every object's models and textures and creates their GPU resources once per level,
 	// so that the first look at a part of the map doesn't stutter.
 	void prewarmLevel();

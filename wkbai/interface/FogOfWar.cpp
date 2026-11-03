@@ -7,6 +7,9 @@
 #include "../terrain.h"
 #include "../tags.h"
 #include "../gameset/GameObjBlueprint.h"
+#include "../gameset/gameset.h"
+#include "../gameset/ScriptContext.h"
+#include "../Model.h"
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cmath>
@@ -63,10 +66,73 @@ void FogOfWar::update(Client* client)
 			}
 	};
 	walk(client->getLevel(), walk);
+	for (const auto& [pos, radius] : testViewers)
+		stamp(pos, radius / 5.0f);
 	if (next != tiles) {
 		tiles = std::move(next);
 		version++;
 	}
+	updateMemory(client);
+}
+
+bool FogOfWar::isRemembered(Client* client, CommonGameObject* obj) const
+{
+	if (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+		return false;
+	// the neutral player's buildings are part of the map, seen from the start
+	CommonGameObject* owner = obj->getPlayer();
+	if (!owner || owner->blueprint->name == "Neutral Player")
+		return false;
+	return !isFriendly(client, obj);
+}
+
+void FogOfWar::updateMemory(Client* client)
+{
+	if (memoryLevel != client->getLevel() || memoryPlayer != client->clientPlayer.get()) {
+		remembered.clear();
+		memoryLevel = client->getLevel();
+		memoryPlayer = client->clientPlayer.get();
+	}
+	// what was remembered where the player sees now: gone if it was destroyed or changed sides
+	for (auto it = remembered.begin(); it != remembered.end();) {
+		CommonGameObject* live = client->findObject(it->first);
+		if (isBuildingSeen(it->second->position) && (!live || (live->flags & CommonGameObject::fTerminated) || !isRemembered(client, live)))
+			it = remembered.erase(it);
+		else
+			++it;
+	}
+	// the enemy buildings in sight, as they look now
+	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				self(child, self);
+				if (!isRemembered(client, child) || (child->flags & CommonGameObject::fTerminated) || !isBuildingSeen(child->position))
+					continue;
+				auto& copy = remembered[child->id];
+				if (!copy || copy->blueprint != child->blueprint)
+					copy = std::make_unique<ClientGameObject>(child->id, child->blueprint);
+				copy->position = child->position;
+				copy->orientation = child->orientation;
+				copy->scale = child->scale;
+				copy->subtype = child->subtype;
+				copy->appearance = child->appearance;
+				copy->color = child->getPlayer()->color;
+				copy->animationIndex = child->animationIndex;
+				copy->animationVariant = child->animationVariant;
+				copy->animClamped = child->animClamped;
+				// the frame it had then, held (a building going up stays as far as it was)
+				uint32_t animTime = (uint32_t)((client->timeManager.currentTime - child->animStartTime) * child->animSpeed * 1000.0f);
+				if (child->animSynchronizedTask != -1) {
+					CliScriptContext ctx{ client, (ClientGameObject*)child };
+					const float frac = client->gameSet->tasks[child->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
+					Model* model = child->getModel();
+					animTime = model ? (uint32_t)(model->getDuration() * frac * 1000.0f) : 0;
+				}
+				copy->sceneEntity.animTime = animTime;
+				copy->flags = CommonGameObject::fRenderable;
+			}
+	};
+	walk(client->getLevel(), walk);
 }
 
 bool FogOfWar::isSeen(const Vector3& position) const
@@ -77,4 +143,16 @@ bool FogOfWar::isSeen(const Vector3& position) const
 	if (x < 0 || z < 0 || x >= (int)width || z >= (int)height)
 		return false;
 	return tiles[z * width + x] >= 128;
+}
+
+bool FogOfWar::isBuildingSeen(const Vector3& position) const
+{
+	if (tiles.empty())
+		return true;
+	const int cx = (int)(position.x / 5.0f), cz = (int)(position.z / 5.0f);
+	for (int z = std::max(0, cz - 1); z <= std::min((int)height - 1, cz + 1); z++)
+		for (int x = std::max(0, cx - 1); x <= std::min((int)width - 1, cx + 1); x++)
+			if (tiles[z * width + x] >= 128)
+				return true;
+	return false;
 }
