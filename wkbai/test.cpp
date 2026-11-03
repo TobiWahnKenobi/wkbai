@@ -2542,6 +2542,25 @@ void Test_PlacementRules()
 				spread(fp, around[i], false), names[std::clamp((int)before[i], 0, 7)], names[std::clamp((int)after, 0, 7)]);
 		}
 	}
+	// a farm placed in play on the most uneven spot near the start that takes it: levelled as any
+	// building (WKB.exe's footprint tiles flatten unless they say LEAVE_AS_IS, 0x53f1f0; the farm's
+	// say nothing)
+	if (const GameObjBlueprint* farm = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation"); farm && farm->footprint) {
+		const Footprint* ffp = farm->footprint;
+		Vector3 best;
+		float bestSpread = -1.0f;
+		for (int tz = 12; tz <= 52; tz++)
+			for (int tx = 88; tx <= 128; tx++) {
+				const Vector3 at = spotAt(ffp, tx, tz);
+				if (StampdownPlan::getStampdownPlan(&server, player, farm, at, Vector3(0, 0, 0)).status == Status::Valid && spread(ffp, at, false) > bestSpread) {
+					bestSpread = spread(ffp, at, false);
+					best = at;
+				}
+			}
+		best.y = t.getHeight(best.x, best.z);
+		ServerGameObject* obj = server.stampdownObject(farm, player, best, Vector3(0, 0, 0), true, true);
+		printf("PLACE farm at (%.1f, %.1f), %.2f m uneven: %s, now %.2f m\n", best.x, best.z, bestSpread, obj ? "stamped down" : "refused", spread(ffp, best, false));
+	}
 	// WKB_PLACE_SAVE=<name>: a Standard Farm set, unlevelled, on the most uneven free spot near
 	// the start (as a map's own farms or an AI's can stand), and the game saved as <name>.sav in
 	// the user folder: a save to look at how fields lie on a slope
