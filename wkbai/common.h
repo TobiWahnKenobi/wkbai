@@ -10,6 +10,7 @@
 #include <set>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -133,7 +134,10 @@ struct CommonGameState {
 	std::shared_ptr<const GameSet> gameSet = nullptr;
 
 	CommonGameObject* level = nullptr;
-	std::map<uint32_t, CommonGameObject*> idmap;
+	// a hash map: every object reference looks its object up here, and the ordered map's tree
+	// (with the trees and props, tens of thousands of objects) was a cost of its own. Nothing
+	// may depend on its order: what walks it sorts by id.
+	std::unordered_map<uint32_t, CommonGameObject*> idmap;
 
 	// ordered by object id: the scripts walk them, and a set ordered by its insertions walked
 	// differently after a save game was loaded (a replay played another game)

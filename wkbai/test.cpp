@@ -2176,7 +2176,11 @@ void Test_AIvsAI()
 				}
 			}
 	};
+	// the simulation's own speed over each game minute (the census, slow itself, left out): a
+	// game falls behind 1x where this drops under 1
+	double minuteSimMs = 0.0, minuteMaxStepMs = 0.0;
 	while (server.timeManager.currentTime < startTime + minutes * 60.0f) {
+		const double stepStart = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency());
 		if (server.replay) {
 			if (!server.replayEvent())
 				break;
@@ -2191,8 +2195,23 @@ void Test_AIvsAI()
 			if (ServerGameObject* lvl = server.getLevel())
 				checkStands(lvl);
 		}
+		const double stepMs = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency()) - stepStart;
+		minuteSimMs += stepMs;
+		// in a game the server catches up at most 10 steps (200 ms): a longer step loses time
+		minuteMaxStepMs = std::max(minuteMaxStepMs, stepMs);
 		if (server.timeManager.currentTime >= nextCensus) {
 			nextCensus += 60.0f;
+			size_t objects = 0;
+			auto countAll = [&](CommonGameObject* obj, auto& self) -> void {
+				objects++;
+				for (const auto& [type, children] : obj->children)
+					for (CommonGameObject* child : children)
+						self(child, self);
+			};
+			countAll(server.getLevel(), countAll);
+			printf("AITEST speed t=%.0f: %.2f game s per real s (%.2f ms per step, longest %.1f ms), %zu objects\n", server.timeManager.currentTime,
+				60000.0 / std::max(minuteSimMs, 0.001), minuteSimMs / 3000.0, minuteMaxStepMs, objects);
+			minuteSimMs = minuteMaxStepMs = 0.0;
 			census("at");
 		}
 	}
@@ -2207,6 +2226,9 @@ void Test_AIvsAI()
 	}
 	const std::vector<std::string> standing = census("end");
 	server.stopRecording();
+	// "save": "<path>.sav": the game at its end, e.g. a late game for the client's benchmark
+	if (const std::string save = cfg.value("save", std::string()); !save.empty())
+		printf("AITEST saved to %s: %d\n", save.c_str(), (int)server.saveGame(save.c_str()));
 	{
 		// every object's id, position, orientation and items (in any order), and the random state:
 		// a replay must end with the same

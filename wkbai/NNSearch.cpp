@@ -8,6 +8,9 @@
 #include "terrain.h"
 #include <cassert>
 
+// tiles and objects the searches went through (the simulation profile, "profileSim")
+uint64_t g_nnTiles = 0, g_nnObjects = 0;
+
 void NNSearch::start(CommonGameState* server, const Vector3 &center, float radius)
 {
 	this->gameState = server;
@@ -26,6 +29,7 @@ CommonGameObject* NNSearch::next()
 	while (true) {
 		const auto& vec = gameState->tiles[tz * gameState->terrain->getNumPlayableTiles().first + tx].objList;
 		if ((size_t)it < vec.size()) {
+			g_nnObjects++;
 			CommonGameObject* obj = vec[it++].getFrom(gameState);
 			if (obj)
 				return obj;
@@ -33,6 +37,7 @@ CommonGameObject* NNSearch::next()
 				continue;
 		}
 
+		g_nnTiles++;
 		tx += 1;
 		if (tx > maxX) { tz += 1; tx = minX; }
 		if (tz > maxZ) return nullptr;
