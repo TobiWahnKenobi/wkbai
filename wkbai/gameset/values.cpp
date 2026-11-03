@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <map>
 #include <set>
+#include <tuple>
 #include "../util/SimRandom.h"
 #include "../NNSearch.h"
 
@@ -1113,11 +1114,12 @@ struct ValueAggressionOverride : ValueDeterminer {
 	ValueDeterminer* original;
 	float limit;
 	bool asMinimum; // the result is at least limit (else at most)
-	ValueAggressionOverride(ValueDeterminer* original, float limit, bool asMinimum) : original(original), limit(limit), asMinimum(asMinimum) {}
+	bool notAtWar; // left to the scripts with the war layer (aiWar)
+	ValueAggressionOverride(ValueDeterminer* original, float limit, bool asMinimum, bool notAtWar = false) : original(original), limit(limit), asMinimum(asMinimum), notAtWar(notAtWar) {}
 	~ValueAggressionOverride() { delete original; }
 	virtual float eval(ScriptContext* ctx) override {
 		const float value = original->eval(ctx);
-		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI)
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI || (notAtWar && Server::instance->aiWar))
 			return value;
 		return asMinimum ? std::max(value, limit) : std::min(value, limit);
 	}
@@ -1307,6 +1309,13 @@ struct FinderFocusedEnemyPalaces : ObjectFinder {
 						}
 				};
 				walk(other, walk);
+				// a human enemy counts as nearer (aiHumanFocus percent of its distance): in a
+				// skirmish with 5 AIs and a human, the AIs' armies went for each other and none
+				// came near the human in 30 minutes (play test 5)
+				if (other->blueprint->name == "Human Player" && !((ServerGameObject*)other)->aiController.isAI()) {
+					const float f = std::clamp(Server::instance->aiHumanFocus, 10, 100) / 100.0f;
+					nearest *= f * f;
+				}
 				// the grudge's palaces count as the nearest
 				if (!palaces.empty() && other->id == grudge)
 					nearest = 0.0f;
@@ -1341,18 +1350,48 @@ struct ValueCartsNeeded : ValueDeterminer {
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
+// The aggressive AI's doorstep (not in WKB.exe). "Enemies Within 250m of My Manor" holds the
+// enemy characters and buildings near the palace, and "Large Enemy Army On My Doorstep" (more
+// than 10 of them) switches the Kingmaker to Defensive Mode: 10 peasants and 10 farms wanted, no
+// attacks. On Tribes Unite Ragnar's town stood within 250 m of Amarak's Manor, and its 33 stockade
+// pieces (wkbai gives AI towns walls, Server::stampdownObject) kept both AIs in Defensive Mode
+// from minute 14 to the end. Walls, gates and foundations are no army: they are left out.
+struct FinderDoorstep : ObjectFinder {
+	ObjectFinder* original;
+	explicit FinderDoorstep(ObjectFinder* original) : original(original) {}
+	~FinderDoorstep() { delete original; }
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		ObjectFinderResult found = original->eval(ctx);
+		if (!ctx->isServer() || !Server::instance || !Server::instance->aggressiveAI)
+			return found;
+		static const char* inert[] = { "Wall", "Stockade", "Palings", "Gatehouse", "Foundation" };
+		ObjectFinderResult kept;
+		for (CommonGameObject* o : found)
+			if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING
+				|| std::none_of(std::begin(inert), std::end(inert), [&](const char* w) { return o->blueprint->name.find(w) != std::string::npos; }))
+				kept.push_back(o);
+		return kept;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
 void InstallAIAggressionOverrides(GameSet& gs)
 {
+	if (const int door = gs.objectFinderDefinitions.names.getIndex("Enemies Within 250m of My Manor"); door >= 0)
+		gs.objectFinderDefinitions[door] = new FinderDoorstep(gs.objectFinderDefinitions[door]);
 	if (const int carts = gs.equations.names.getIndex("Carts I Need"); carts >= 0)
 		gs.equations[carts] = new ValueCartsNeeded(gs.equations[carts]);
-	const std::pair<const char*, std::pair<float, bool>> overrides[] = {
-		{ "Total Peasants Needed", { 80.0f, false } },
-		{ "I Have Enough Resources For Maximum Attack Of My Next Army Type Or I Have Become Impatient", { 1.0f, true } },
+	// (the second launched every affordable minimum army at once: the scripts sent each soldier
+	// out alone as soon as it was trained, 27 one-unit armies for one AI at 30 minutes, and none
+	// came home to form a wave; with the war layer the scripts wait for their maximum again)
+	const std::tuple<const char*, float, bool, bool> overrides[] = {
+		{ "Total Peasants Needed", 80.0f, false, false },
+		{ "I Have Enough Resources For Maximum Attack Of My Next Army Type Or I Have Become Impatient", 1.0f, true, true },
 	};
-	for (const auto& [name, how] : overrides) {
+	for (const auto& [name, limit, asMinimum, notAtWar] : overrides) {
 		const int eq = gs.equations.names.getIndex(name);
 		if (eq >= 0)
-			gs.equations[eq] = new ValueAggressionOverride(gs.equations[eq], how.first, how.second);
+			gs.equations[eq] = new ValueAggressionOverride(gs.equations[eq], limit, asMinimum, notAtWar);
 	}
 	// after the cap of 80: max(min(scripts, 80), floor)
 	if (const int peasants = gs.equations.names.getIndex("Total Peasants Needed"); peasants >= 0)

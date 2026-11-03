@@ -80,6 +80,18 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 	return army;
 }
 
+// Whether an AI runs this player, as WKB.exe's AI_CONTROLLED tests it (the player has an AI
+// controller: a plan, commissions or work orders), and no client controls it
+bool AIController::isAI() const
+{
+	if (!gameObj || gameObj->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+		return false;
+	const auto& clients = Server::instance->clientPlayerObjects;
+	if (std::any_of(clients.begin(), clients.end(), [this](const SrvGORef& ref) { return ref.get() == gameObj; }))
+		return false;
+	return planBlueprint || !commissionInstances.empty() || !workOrderInstances.empty();
+}
+
 // Whether the building offers "Spawn <type>" for a fighter (not a peasant, cart, merchant,
 // priest, scout or wagon): the Barracks and Stables, not the Manor or a Church
 static bool TrainsFighters(const GameObjBlueprint* building)
@@ -172,6 +184,12 @@ void AIController::update()
 			planState.nodeStates.clear();
 		}
 	}
+
+	// wkbai's layers below are for AI players only. They had run for the human player too: the
+	// home guard trained Barbarians at the human's Trading Post (the cheapest fighter it offers
+	// once a Maypole is laid), and the lifeline topped up the human's food (play test 5).
+	if (!isAI())
+		return;
 
 	// ---- Wounded attackers home (the aggressive AI's tactics, not in WKB.exe) ----
 	// The Kingmaker's attacking armies fight until each unit dies; only its defensive army sends
@@ -463,6 +481,10 @@ void AIController::update()
 		luaThink();
 	else if (gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && advanced())
 		advancedUpdate();
+	// the war layer (AIAdvanced.cpp) in place of the fixed waves below
+	const bool war = Server::instance->aggressiveAI && Server::instance->aiWar && !lua && !advanced();
+	if (war)
+		warUpdate();
 
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units
@@ -471,7 +493,7 @@ void AIController::update()
 	// 10 of them out as a new Kingmaker Attacking Army, each unit ordered to attack the palace the
 	// focused attacks go for (the nearest enemy's).
 	if (Server::instance->aggressiveAI && Server::instance->aiAttackWave > 0 && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
-		&& !lua && Server::instance->timeManager.currentTime >= nextWaveCheck) {
+		&& !lua && !war && Server::instance->timeManager.currentTime >= nextWaveCheck) {
 		nextWaveCheck = Server::instance->timeManager.currentTime + 30.0f;
 		const GameSet* gs = Server::instance->gameSet.get();
 		const int defensiveMode = gs->items.names.getIndex("Defensive Mode");

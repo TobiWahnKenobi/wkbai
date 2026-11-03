@@ -258,6 +258,14 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool aiLifeline = true;
 	// with it, an AI keeps a home guard growing to 10 soldiers from minute 2 (AIController::homeGuard)
 	bool aiHomeGuard = true;
+	// the war layer (AIAdvanced.cpp, AIController::warUpdate), in place of the fixed waves above:
+	// soldiers (not peasants) meet enemies at every settlement and the palace, waves sized to the
+	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
+	// target and go on to the next building, and the attacker is attacked back: "aiWar"
+	bool aiWar = true;
+	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
+	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone
+	int aiHumanFocus = 50;
 	// each AI player's Lua AI (LuaAI\<name>.lua), by player id; none: the scripts and the C++ AI
 	std::map<uint32_t, std::string> aiScripts;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
@@ -265,6 +273,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// and their hit point capacities summed (with the damage to standing buildings, a steadier
 	// measure of the attacks than the count)
 	std::map<uint32_t, float> buildingHpDestroyed;
+	// (shooting player, target's player) -> missiles buildings fired (ServerGameObject::associateObject)
+	std::map<std::pair<uint32_t, uint32_t>, int> buildingShots;
 	std::map<std::string, float> userProfileItems;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();

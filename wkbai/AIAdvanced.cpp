@@ -87,6 +87,22 @@ namespace {
 		return o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && Item(o, g_items.peasant) > 0.0f;
 	}
 
+	// a character that fights: a soldier, or an armed one without a class (Monks: a Celestial AI
+	// held 72 of them at home, idle, that no wave took), not a peasant, cart, merchant, scout,
+	// wagon or priest
+	bool IsFighter(const ServerGameObject* o)
+	{
+		if (IsSoldier(o))
+			return true;
+		if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || IsPeasant(o))
+			return false;
+		static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Scout", "Wagon", "Priest", "Bishop", "Inquisitor", "Spy" };
+		const std::string& n = o->blueprint->name;
+		if (std::any_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; }))
+			return false;
+		return Item(o, g_items.h2h) > 0.0f || Item(o, g_items.missile) > 0.0f;
+	}
+
 	bool IsEnemy(ServerGameObject* me, ServerGameObject* other)
 	{
 		ServerGameObject* owner = other->getPlayer();
@@ -258,6 +274,54 @@ namespace {
 		}
 		return best;
 	}
+
+	// a human player: one no AI runs
+	bool IsHuman(const ServerGameObject* player)
+	{
+		return player->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && player->blueprint->name == "Human Player" && !player->aiController.isAI();
+	}
+
+	// the palace ("Candidate is a Global Delivery Point", as the focused attacks') of a human enemy
+	// nearest to a place, or null
+	ServerGameObject* NearestHumanPalace(ServerGameObject* me, const Vector3& from)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int isPalace = gs->equations.names.getIndex("Candidate is a Global Delivery Point");
+		ServerGameObject* level = Server::instance->getLevel();
+		if (isPalace < 0 || !level)
+			return nullptr;
+		SrvScriptContext ctx{ Server::instance, me };
+		ServerGameObject* best = nullptr;
+		float bestD = 0.0f;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* c : children) {
+				auto* p = (ServerGameObject*)c;
+				if (p == me || p->deleted || !IsHuman(p) || g_items.enemyStatus < 0 || Server::instance->getDiplomaticStatus(p, me) != g_items.enemyStatus)
+					continue;
+				std::vector<ServerGameObject*> todo{ p };
+				while (!todo.empty()) {
+					ServerGameObject* o = todo.back();
+					todo.pop_back();
+					for (const auto& [t, objs] : o->children)
+						for (CommonGameObject* b : objs) {
+							auto* bo = (ServerGameObject*)b;
+							if (bo->deleted)
+								continue;
+							if (bo->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+								auto _ = ctx.change(ctx.candidate, bo);
+								const float d = (bo->position - from).sqlen2xz();
+								if (gs->equations[isPalace]->eval(&ctx) > 0.0f && (!best || d < bestD)) {
+									best = bo;
+									bestD = d;
+								}
+							}
+							else if (bo->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+								todo.push_back(bo);
+						}
+				}
+			}
+		return best;
+	}
 }
 
 bool AIController::advanced()
@@ -285,13 +349,19 @@ bool AIController::advanced()
 // user). From minute 2 the guard grows by one soldier each 45 s up to 10; while it is short, an
 // idle building that can train a fighter now trains the cheapest one it can pay for, commissioned
 // by the defensive army as the scripts' own are. Returns the soldiers ordered.
+// With the war layer (aiWar) the surplus goes into soldiers too: above 500 food every idle
+// building that can train a fighter trains one, the types in turn (the Lua AI's "surplus into
+// soldiers", which beat the scripts alone in 4 of 6 games on 4 Peaks). The scripts commission a
+// few soldiers at a time and let food pile up: one AI held 23 soldiers at 30 minutes.
 int AIController::homeGuard(float now)
 {
 	ServerGameObject* p = gameObj;
 	const GameSet* gs = Server::instance->gameSet.get();
 	g_items.update(gs);
 	const int target = std::clamp((int)((now - 120.0f) / 45.0f), 0, 10);
-	if (target == 0)
+	const float SURPLUS_FOOD = 500.0f;
+	auto surplus = [&]() { return Server::instance->aiWar && now > 120.0f && p->getItem(Tags::PDITEM_FOOD) > SURPLUS_FOOD; };
+	if (target == 0 && !surplus())
 		return 0;
 	int soldiers = 0;
 	std::vector<ServerGameObject*> buildings, todo{ p };
@@ -321,17 +391,19 @@ int AIController::homeGuard(float now)
 			if (name.rfind("Spawn ", 0) == 0 && isFighter(gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6))))
 				soldiers++;
 		}
-	if (soldiers >= target)
+	if (soldiers >= target && !surplus())
 		return 0;
 	std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 	int ordered = 0;
 	for (ServerGameObject* b : buildings) {
-		if (soldiers + ordered >= target)
+		const bool spending = soldiers + ordered >= target;
+		if (spending && !surplus())
 			break;
 		if (b->orderConfig.getCurrentOrder())
 			continue;
 		const GameObjBlueprint* cheapest = nullptr;
 		float cheapestCost = 0;
+		std::vector<const GameObjBlueprint*> affordable;
 		for (const Command* cmd : b->blueprint->offeredCommands) {
 			const std::string& name = gs->commands.getString(cmd);
 			if (name.rfind("Spawn ", 0) != 0 || gs->orders.names.getIndex(name) < 0)
@@ -348,6 +420,7 @@ int AIController::homeGuard(float now)
 				continue;
 			const float cost = type->getStartingItemValue(Tags::PDITEM_FOOD_COST) + type->getStartingItemValue(Tags::PDITEM_WOOD_COST)
 				+ type->getStartingItemValue(Tags::PDITEM_GOLD_COST);
+			affordable.push_back(type);
 			if (!cheapest || cost < cheapestCost) {
 				cheapest = type;
 				cheapestCost = cost;
@@ -355,6 +428,9 @@ int AIController::homeGuard(float now)
 		}
 		if (!cheapest)
 			continue;
+		// the surplus: the types in turn
+		if (spending)
+			cheapest = affordable[(size_t)surplusTrained++ % affordable.size()];
 		Order* order = b->orderConfig.addOrder(&gs->orders[gs->orders.names.getIndex("Spawn " + cheapest->name)], Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, { -1, -1, -1 }, false);
 		if (!order || order->tasks.empty())
 			continue;
@@ -616,6 +692,440 @@ ServerGameObject* AIController::advancedWaveTarget(const std::vector<ServerGameO
 		}
 	}
 	return best;
+}
+
+int AIController::fighters() const
+{
+	g_items.update(Server::instance->gameSet.get());
+	int n = 0;
+	std::vector<ServerGameObject*> todo{ gameObj };
+	while (!todo.empty()) {
+		ServerGameObject* o = todo.back();
+		todo.pop_back();
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				auto* u = (ServerGameObject*)c;
+				if (u->deleted)
+					continue;
+				if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					n += IsFighter(u) ? 1 : 0;
+				else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+					todo.push_back(u);
+			}
+	}
+	return n;
+}
+
+// ---- The war layer (the aggressive AI's operations, "aiWar"; not in WKB.exe) ----
+// Play test 5 (Tribes Unite, a human and 5 AIs, 30 minutes) and the same game headless: no AI
+// sent a wave (a defensive army of 50 was never reached under a population limit of 100-150),
+// no enemy soldier came near the human, Defensive Mode held the waves for 15 minutes on end, the
+// scripts' 1-unit attacking armies stood idle by the dozen, and an attacked AI sent peasants
+// (militia) instead of soldiers. Every 3 s:
+// - Defence: enemy soldiers at the palace (250 m), a town (150 m) or peasants (40 m) are met by
+//   soldiers from home and idle attackers, enough for 1.5 times their strength, the nearest first;
+//   at the palace by everyone. The defenders are an army of the AI's own, out of the scripts'
+//   hands (whose defensive army calls everyone back to its muster point every 4.2 s), and go home
+//   6 s after the last enemy left. With soldiers to defend, peasants aren't made militia.
+// - Striking back: an enemy that came with 5 or more soldiers is the next wave's target.
+// - Waves: home soldiers and idle attackers near home, but a fifth (at least 6), go when there
+//   are 15% of the population limit of them (12 to aiAttackWave), or half that 4 minutes after
+//   the last wave, or to strike back; not while enemies at the palace outnumber its defenders. Every other wave
+//   goes for the nearest human enemy's palace, the rest at the focused attacks' target (humans
+//   counting as nearer there too: aiHumanFocus).
+// - A wave fights the soldiers it meets (within 45 m) before buildings; a unit standing out of
+//   reach of its building (walled in) attacks the nearest enemy building within 60 m, a wall or
+//   gate; the wave goes on to the nearest enemy building within 250 m when its target falls (else
+//   the next palace), and comes home when it has lost 60% and is outmatched two to one.
+void AIController::warUpdate()
+{
+	Server* srv = Server::instance;
+	const GameSet* gs = srv->gameSet.get();
+	g_items.update(gs);
+	const float now = srv->timeManager.currentTime;
+	if (now < nextWarCheck || g_items.attackOrder < 0)
+		return;
+	nextWarCheck = now + 3.0f;
+	const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+	ServerGameObject* home = HomeArmy(gameObj);
+	if (!armyBp || !home)
+		return;
+	SrvScriptContext ctx{ srv, gameObj };
+	const int palaceFinder = gs->objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+	ServerGameObject* palace = palaceFinder >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[palaceFinder]->getFirst(&ctx) : nullptr;
+	const Vector3 base = palace ? palace->position : home->position;
+
+	auto unitsOf = [](ServerGameObject* army) {
+		std::vector<ServerGameObject*> units;
+		if (army && !army->deleted)
+			CollectUnits(army, units);
+		return units;
+	};
+	auto targetOf = [](ServerGameObject* u) -> ServerGameObject* {
+		Order* o = u->orderConfig.getCurrentOrder();
+		Task* t = o ? o->getCurrentTask() : nullptr;
+		ServerGameObject* tg = t ? t->target.get() : nullptr;
+		return tg && !tg->deleted ? tg : nullptr;
+	};
+	auto sendHome = [&](ServerGameObject* u) {
+		u->setParent(home);
+		if (g_items.moveHome >= 0)
+			gs->orderAssignments[g_items.moveHome].assignTo(u, &ctx, gameObj);
+	};
+	// the armies of this layer, so the pool leaves them alone
+	std::set<uint32_t> mine;
+	for (const WarDefence& d : warDefences)
+		mine.insert(d.army);
+	for (const WarWave& w : warWaves)
+		mine.insert(w.army);
+
+	// the pool: soldiers at home; the scripts' attackers still within 300 m of the palace and not
+	// fighting (the scripts sent each soldier out alone: at 20 minutes the AIs' homes were empty
+	// and the pool held 0-6), and their idle ones within 1 km; soldiers the scripts handed to the
+	// player likewise. Not the archers garrisoned in towers and forts (handed to the player too),
+	// nor those walking to a fort to garrison it (an army with a "My Fort").
+	std::vector<ServerGameObject*> pool;
+	{
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		for (ServerGameObject* a : armies) {
+			std::vector<ServerGameObject*> units;
+			if (a->blueprint->name == "Kingmaker Defensive Army")
+				CollectUnits(a, units);
+			else if (a->blueprint->name == "Kingmaker Co-ordinator")
+				for (const auto& [type, children] : a->children)
+					for (CommonGameObject* c : children)
+						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							units.push_back((ServerGameObject*)c);
+			for (ServerGameObject* u : units)
+				if (IsFighter(u) && u->isInteractable())
+					pool.push_back(u);
+		}
+	}
+	{
+		static const GameSet* of = nullptr;
+		static int myFort = -1;
+		if (of != gs) {
+			of = gs;
+			myFort = gs->associations.names.getIndex("My Fort");
+		}
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		std::vector<ServerGameObject*> loose;
+		for (ServerGameObject* a : armies)
+			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
+				CollectUnits(a, loose);
+		for (const auto& [type, children] : gameObj->children)
+			for (CommonGameObject* c : children)
+				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					loose.push_back((ServerGameObject*)c);
+		for (ServerGameObject* u : loose) {
+			if (!IsFighter(u) || !u->isInteractable())
+				continue;
+			const float d2 = (u->position - base).sqlen2xz();
+			const bool idle = !u->orderConfig.getCurrentOrder();
+			ServerGameObject* tg = idle ? nullptr : targetOf(u);
+			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
+			if ((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f))
+				pool.push_back(u);
+		}
+	}
+
+	// ---- Defence ----
+	std::vector<ServerGameObject*> towns;
+	CollectTowns(gameObj, towns);
+	struct Place { Vector3 at; float radius; bool palace; };
+	std::vector<Place> places;
+	if (palace)
+		places.push_back({ palace->position, 250.0f, true });
+	for (ServerGameObject* t : towns)
+		if (!palace || (t->position - palace->position).sqlen2xz() > 200.0f * 200.0f)
+			places.push_back({ t->position, 150.0f, false });
+	{
+		std::vector<ServerGameObject*> peasants;
+		for (const auto& [type, children] : gameObj->children)
+			for (CommonGameObject* c : children)
+				if (!((ServerGameObject*)c)->deleted && IsPeasant((ServerGameObject*)c))
+					peasants.push_back((ServerGameObject*)c);
+		for (size_t i = 0; i < peasants.size(); i += std::max<size_t>(1, peasants.size() / 30))
+			places.push_back({ peasants[i]->position, 40.0f, false });
+	}
+	std::set<ServerGameObject*> seen;
+	struct Threat { Place place; std::vector<ServerGameObject*> enemies; };
+	std::vector<Threat> threats;
+	for (const Place& p : places) {
+		std::vector<ServerGameObject*> enemies;
+		for (ServerGameObject* e : EnemiesNear(gameObj, p.at, p.radius, false))
+			if (seen.insert(e).second)
+				enemies.push_back(e);
+		if (!enemies.empty())
+			threats.push_back({ p, std::move(enemies) });
+	}
+	int atPalace = 0;
+	for (const Threat& t : threats)
+		if (t.place.palace)
+			atPalace += (int)t.enemies.size();
+
+	// the forces out: fight the nearest enemy there; home 6 s after the place was cleared
+	std::set<ServerGameObject*> busy;
+	for (auto it = warDefences.begin(); it != warDefences.end();) {
+		ServerGameObject* army = srv->findObject(it->army);
+		std::vector<ServerGameObject*> units = unitsOf(army);
+		const std::vector<ServerGameObject*> enemies = EnemiesNear(gameObj, it->at, it->radius + 50.0f, false);
+		if (!enemies.empty())
+			it->clearSince = -1.0f;
+		else if (it->clearSince < 0.0f)
+			it->clearSince = now;
+		if (units.empty() || (it->clearSince >= 0.0f && now - it->clearSince > 6.0f)) {
+			for (ServerGameObject* u : units)
+				sendHome(u);
+			if (army && !army->deleted && units.empty())
+				srv->deleteObject(army);
+			it = warDefences.erase(it);
+			continue;
+		}
+		for (ServerGameObject* u : units) {
+			busy.insert(u);
+			ServerGameObject* tg = targetOf(u);
+			if (!enemies.empty() && (!tg || !IsSoldier(tg)))
+				if (ServerGameObject* e = NearestEnemy(enemies, u->position))
+					u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+		}
+		++it;
+	}
+	std::vector<ServerGameObject*> available;
+	for (ServerGameObject* u : pool)
+		if (!busy.count(u) && std::find(available.begin(), available.end(), u) == available.end())
+			available.push_back(u);
+	// the palace first, then the biggest threats
+	std::sort(threats.begin(), threats.end(), [](const Threat& a, const Threat& b) {
+		return a.place.palace != b.place.palace ? a.place.palace : a.enemies.size() > b.enemies.size(); });
+	for (Threat& t : threats) {
+		std::vector<ServerGameObject*> meeting;
+		WarDefence* force = nullptr;
+		for (WarDefence& d : warDefences)
+			if ((d.at - t.place.at).sqlen2xz() < 100.0f * 100.0f) {
+				force = &d;
+				for (ServerGameObject* u : unitsOf(srv->findObject(d.army)))
+					meeting.push_back(u);
+			}
+		// who came: an enemy with 5 or more soldiers is struck back at
+		std::map<uint32_t, int> byOwner;
+		for (ServerGameObject* e : t.enemies)
+			if (ServerGameObject* o = e->getPlayer())
+				byOwner[o->id]++;
+		for (const auto& [owner, n] : byOwner)
+			if (n >= 5 && (owner != counterPlayer || now > counterUntil)) {
+				counterPlayer = owner;
+				counterUntil = now + 300.0f;
+			}
+		const float enemy = Strength(t.enemies, meeting);
+		if (Strength(meeting, t.enemies) >= 1.5f * enemy)
+			continue;
+		std::sort(available.begin(), available.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			return (a->position - t.place.at).sqlen2xz() < (b->position - t.place.at).sqlen2xz(); });
+		std::vector<ServerGameObject*> sent = meeting;
+		size_t used = 0;
+		while (used < available.size() && (t.place.palace || Strength(sent, t.enemies) < 1.5f * Strength(t.enemies, sent))) {
+			// away from the palace, only soldiers that can get there soon (500 m)
+			if (!t.place.palace && (available[used]->position - t.place.at).sqlen2xz() > 500.0f * 500.0f)
+				break;
+			sent.push_back(available[used++]);
+		}
+		if (!t.place.palace && Strength(sent, t.enemies) < 0.8f * Strength(t.enemies, sent)) {
+			// no help that would win: the peasants there walk home
+			for (const auto& [type, children] : gameObj->children)
+				for (CommonGameObject* c : children)
+					if (IsPeasant((ServerGameObject*)c) && (c->position - t.place.at).sqlen2xz() < 50.0f * 50.0f && g_items.moveHome >= 0) {
+						gs->orderAssignments[g_items.moveHome].assignTo((ServerGameObject*)c, &ctx, gameObj);
+						peasantsFled++;
+					}
+			continue;
+		}
+		if (!used)
+			continue;
+		ServerGameObject* army = force ? srv->findObject(force->army) : nullptr;
+		if (!army || army->deleted) {
+			army = srv->spawnObject(armyBp, gameObj, t.place.at, Vector3(0, 0, 0));
+			if (!army)
+				continue;
+			warDefences.push_back({ army->id, t.place.at, t.place.radius, -1.0f });
+		}
+		for (size_t i = 0; i < used; i++) {
+			ServerGameObject* u = available[i];
+			u->setParent(army);
+			if (ServerGameObject* e = NearestEnemy(t.enemies, u->position))
+				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+			busy.insert(u);
+		}
+		available.erase(available.begin(), available.begin() + used);
+		warThreats++;
+		warDefenders += (int)used;
+		if (getenv("WKB_TRACE_WAR"))
+			printf("WAR player %u t=%.0f: %zu enemies at (%.0f,%.0f)%s, %zu defenders sent\n", gameObj->id, now, t.enemies.size(), t.place.at.x, t.place.at.z,
+				t.place.palace ? " (palace)" : "", used);
+	}
+	// soldiers defend, not the peasants: no militia while there are soldiers to send
+	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0)
+		gameObj->setItem(noMilitia, (available.size() + busy.size() >= 5) ? 1.0f : 0.0f);
+
+	// ---- The waves out ----
+	for (auto it = warWaves.begin(); it != warWaves.end();) {
+		ServerGameObject* army = srv->findObject(it->army);
+		std::vector<ServerGameObject*> units = unitsOf(army);
+		if (units.empty()) {
+			if (army && !army->deleted)
+				srv->deleteObject(army);
+			it = warWaves.erase(it);
+			continue;
+		}
+		Vector3 centre;
+		for (ServerGameObject* u : units)
+			centre += u->position;
+		centre = centre / (float)units.size();
+		const std::vector<ServerGameObject*> around = EnemiesNear(gameObj, centre, 70.0f, true);
+		// losing: home
+		if (!around.empty() && units.size() < it->size * 0.4f && Strength(units, around) < 0.5f * Strength(around, units)) {
+			for (ServerGameObject* u : units)
+				sendHome(u);
+			warRetreats++;
+			it = warWaves.erase(it);
+			continue;
+		}
+		ServerGameObject* target = srv->findObject(it->target);
+		if (!target || target->deleted) {
+			// on to the nearest enemy building within 250 m, else the next palace
+			target = nullptr;
+			float best = 250.0f * 250.0f;
+			NNSearch search;
+			search.start(srv, centre, 250.0f);
+			while (ServerGameObject* o = (ServerGameObject*)search.next())
+				if (!o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && IsEnemy(gameObj, o)) {
+					const float d = (o->position - centre).sqlen2xz();
+					if (d < best) {
+						best = d;
+						target = o;
+					}
+				}
+			if (!target && palaceFinder >= 0) {
+				const int focus = gs->objectFinderDefinitions.names.getIndex("All Random Enemy Palaces");
+				SrvScriptContext hctx{ srv, home };
+				target = focus >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[focus]->getFirst(&hctx) : nullptr;
+			}
+			if (!target) {
+				for (ServerGameObject* u : units)
+					sendHome(u);
+				it = warWaves.erase(it);
+				continue;
+			}
+			it->target = target->id;
+			warRetargets++;
+		}
+		// the soldiers met first (formations march on by themselves)
+		std::vector<ServerGameObject*> soldiers;
+		for (ServerGameObject* e : EnemiesNear(gameObj, centre, 45.0f, false))
+			soldiers.push_back(e);
+		for (ServerGameObject* u : units) {
+			if (u->getParent() != army)
+				continue;
+			ServerGameObject* tg = targetOf(u);
+			if (!soldiers.empty() && (!tg || !IsSoldier(tg))) {
+				if (ServerGameObject* e = NearestEnemy(soldiers, u->position)) {
+					u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+					warEngaged++;
+				}
+			}
+			else if (soldiers.empty() && !tg)
+				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			else if (soldiers.empty() && tg && tg->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !u->movement.isMoving()) {
+				// standing out of reach of its building (a palace walled in: waves stood at the
+				// human's palisade for minutes and did no damage): the nearest enemy building
+				// within 60 m instead, a wall or gate in the way
+				const float reach = 25.0f + std::min(Item(u, g_items.range), 60.0f);
+				if ((tg->position - u->position).sqlen2xz() > reach * reach) {
+					ServerGameObject* nearest = nullptr;
+					float best = 60.0f * 60.0f;
+					NNSearch search;
+					search.start(srv, u->position, 60.0f);
+					while (ServerGameObject* o = (ServerGameObject*)search.next())
+						if (o != tg && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && IsEnemy(gameObj, o)) {
+							const float d = (o->position - u->position).sqlen2xz();
+							if (d < best) {
+								best = d;
+								nearest = o;
+							}
+						}
+					if (nearest) {
+						u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nearest);
+						warBreaches++;
+					}
+				}
+			}
+		}
+		++it;
+	}
+
+	// ---- A new wave ----
+	const int popItem = gs->items.names.getIndex("Total Population Count");
+	const float popLimit = popItem >= 0 ? gameObj->getItem(popItem) : 200.0f;
+	const int cap = srv->aiAttackWave > 0 ? srv->aiAttackWave : 50;
+	const int size = std::clamp((int)(popLimit * 0.15f), 12, std::max(12, cap));
+	const bool striking = counterPlayer && now <= counterUntil;
+	const bool overdue = lastWarWave >= 0.0f ? now - lastWarWave > 240.0f : now > 600.0f;
+	const size_t keep = std::max<size_t>(6, available.size() / 5);
+	if (getenv("WKB_TRACE_WAR") && (int)now % 60 < 3)
+		printf("WAR player %u t=%.0f: pool %zu, available %zu, busy %zu, keep %zu, wave size %d, at the palace %d%s%s\n", gameObj->id, now, pool.size(), available.size(), busy.size(),
+			keep, size, atPalace, overdue ? ", overdue" : "", striking ? ", striking back" : "");
+	// enemies at the palace: no wave while they outnumber its defenders (a neighbour's soldiers were
+	// at Saint Jane's palace for 15 minutes on end, 18 defenders on them and 71 more idle at home)
+	size_t defendingPalace = 0;
+	if (palace)
+		for (const WarDefence& d : warDefences)
+			if ((d.at - palace->position).sqlen2xz() < 100.0f * 100.0f)
+				defendingPalace += unitsOf(srv->findObject(d.army)).size();
+	if (atPalace >= 3 && (size_t)atPalace > defendingPalace)
+		return;
+	if (available.size() <= keep)
+		return;
+	const size_t going = available.size() - keep;
+	if (!((int)going >= size || ((overdue || striking) && (int)going >= std::max(8, size / 2))))
+		return;
+	// the target: the enemy who attacked (the grudge the focused attacks go for), or the focused one
+	if (striking) {
+		grudgePlayer = counterPlayer;
+		grudgeTime = now;
+	}
+	const int focus = gs->objectFinderDefinitions.names.getIndex("All Random Enemy Palaces");
+	SrvScriptContext hctx{ srv, home };
+	ServerGameObject* target = nullptr;
+	// every other wave goes for a human enemy's palace, the nearest (3 seeds on Tribes Unite: the
+	// nearest-enemy rule sent most waves at a neighbouring AI, and in 2 of 3 games a single wave
+	// reached the idle human in 30 minutes)
+	if (!striking && !lastWaveAtHuman)
+		target = NearestHumanPalace(gameObj, base);
+	if (!target)
+		target = focus >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[focus]->getFirst(&hctx) : nullptr;
+	if (!target)
+		return;
+	// the nearest to home stay
+	std::sort(available.begin(), available.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+		return (a->position - base).sqlen2xz() < (b->position - base).sqlen2xz(); });
+	std::vector<ServerGameObject*> members(available.begin() + keep, available.end());
+	if (ServerGameObject* army = launchWave(members, target, home)) {
+		ServerGameObject* owner = target->getPlayer();
+		warWaves.push_back({ army->id, target->id, owner ? owner->id : 0u, members.size() });
+		lastWarWave = now;
+		lastWaveAtHuman = owner && IsHuman(owner);
+		warWavesSent++;
+		warWaveUnits += (int)members.size();
+		if (striking) {
+			warCounters++;
+			counterPlayer = 0;
+		}
+		if (getenv("WKB_TRACE_WAR"))
+			printf("WAR player %u t=%.0f: wave of %zu at %s#%u of player %u%s\n", gameObj->id, now, members.size(), target->blueprint->name.c_str(), target->id,
+				owner ? owner->id : 0u, striking ? " (striking back)" : "");
+	}
 }
 
 // ---- Lua AIs ----
@@ -952,6 +1462,12 @@ void AIController::startLuaAI(const std::string& name)
 			u->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, Vector3(x, 0, z));
 		}
 		return army->id;
+	});
+	// the war layer (AIController::warUpdate): defence by soldiers everywhere, waves, striking
+	// back; at most every 3 s whatever the calls
+	ai.set_function("war", [player]() {
+		if (ServerGameObject* p = player())
+			p->aiController.warUpdate();
 	});
 	ai.set_function("launch", [player](sol::table units, uint32_t target) -> sol::optional<uint32_t> {
 		ServerGameObject* p = player();

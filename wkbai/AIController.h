@@ -105,11 +105,27 @@ struct AIController {
 	float nextLifelineCheck = 0.0f;
 	float nextGuardCheck = 0.0f;
 	int guardTrained = 0; // the home guard's soldiers ordered (homeGuard)
+	int surplusTrained = 0; // the surplus's soldiers ordered (homeGuard, with aiWar)
 	int homeGuard(float now);
 	int trained = 0; // soldiers ordered by a Lua AI's ai.train
 	int lifelines = 0; // the food given by the lifeline (AIController::update)
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
+	// the war layer (AIAdvanced.cpp, "aiWar"): its defence forces (an army of its own at a
+	// place, until no enemy has been there for 6 s), its waves (army, target, the enemy player,
+	// size at launch), the enemy to strike back at and until when, and counts for the census
+	struct WarDefence { uint32_t army; Vector3 at; float radius, clearSince; };
+	std::vector<WarDefence> warDefences;
+	struct WarWave { uint32_t army, target, enemy; size_t size; };
+	std::vector<WarWave> warWaves;
+	float nextWarCheck = 0.0f, lastWarWave = -1.0f;
+	bool lastWaveAtHuman = false; // every other wave goes for a human
+	uint32_t counterPlayer = 0;
+	float counterUntil = -1.0f;
+	int warThreats = 0, warDefenders = 0, warWavesSent = 0, warWaveUnits = 0, warCounters = 0, warRetargets = 0, warRetreats = 0, warEngaged = 0, warBreaches = 0;
+	void warUpdate();
+	// the characters under this player that fight (soldiers, armed ones without a class: Monks)
+	int fighters() const;
 	// a Lua AI (AIAdvanced.cpp, LuaAI\<name>.lua) steering this player: whether it has one (made
 	// the first time), its state, when it thinks next, its errors
 	std::shared_ptr<struct LuaAIState> luaAI;
@@ -127,6 +143,8 @@ struct AIController {
 	ServerGameObject* advancedWaveTarget(const std::vector<ServerGameObject*>& wave, const Vector3& home, bool anyway);
 	static float forceStrength(const std::vector<ServerGameObject*>& units, const std::vector<ServerGameObject*>& against);
 	
+	// whether an AI runs this player (a plan, commissions or work orders, and no client)
+	bool isAI() const;
 	AIController(ServerGameObject* obj) : gameObj(obj) {}
 	void parse(GSFileParser& gsf, const GameSet& gs);
 	void update();

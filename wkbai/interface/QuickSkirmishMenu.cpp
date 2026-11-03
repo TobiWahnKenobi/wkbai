@@ -155,6 +155,8 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiAdvanced") aiAdvanced = std::clamp(value, 0, 3);
 	else if (name == "aiLifeline") aiLifeline = value != 0;
 	else if (name == "aiHomeGuard") aiHomeGuard = value != 0;
+	else if (name == "aiWar") aiWar = value != 0;
+	else if (name == "aiHumanFocus") aiHumanFocus = std::clamp(value, 10, 100);
 	else if (name == "modPolicy") modPolicy = std::clamp(value, 0, 3);
 	else if (name == "allowSpectators") allowSpectators = value != 0;
 	else if (name == "maxSpectators") maxSpectators = std::max(0, value);
@@ -439,6 +441,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiAdvanced = aiAdvanced;
 	server.aiLifeline = aiLifeline;
 	server.aiHomeGuard = aiHomeGuard;
+	server.aiWar = aiWar;
+	server.aiHumanFocus = aiHumanFocus;
 	server.modPolicy = modPolicy;
 	server.allowSpectators = allowSpectators;
 	server.maxSpectators = maxSpectators;
