@@ -9,6 +9,9 @@
 
 #include "DiligentEnhancedSceneRenderer.h"
 #include "renderer_diligent.h"
+#include "DiligentClouds.h"
+#include "DiligentRayShadows.h"
+#include <unordered_set>
 #include "../Model.h"
 #include "../scene.h"
 #include "../file.h"
@@ -167,9 +170,19 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Norm = normalize(mul(float4(Normal * 2 - float3(1,1,1), 0), EntityTransform).xyz);
 		float lambert = max(dot(output.Norm, normalize(SunDirection)), 0);
 		float cloud = 1;
-		if (CloudParams.w != 0)
+		if (CloudSun.w > 0) // the dynamic clouds' (RenderSettings::dynamicClouds)
+			cloud = CloudShadow(EntityTransform[3].xyz);
+		else if (CloudParams.w != 0)
 			cloud = cloudTexture.SampleLevel(cloudSampler, EntityTransform[3].xz * CloudParams.z + CloudParams.xy, 0).r;
-		output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
+		if (SkyOccRegion.w != 0) {
+			// the sky light (RenderSettings::skyGI): the ambient from the sky as much as the vertex
+			// sees of it, the clouds only on the sun's light
+			float3 wp = mul(float4(Pos, 1), EntityTransform).xyz;
+			float vis = SkyVisibility(wp, true);
+			output.Color = float4(min(MeshLighting.x * 1.15 * vis * SkyAmbient(output.Norm) + cloud * MeshLighting.y * SunColour.rgb * lambert, 1), 1);
+		}
+		else
+			output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
 		output.Tint.a = cloud;
 	}
 	output.Tint.rgb = float3(1, 1, 1);
@@ -259,21 +272,34 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		ambientTint = SkyColour(n) / SkyHorizon.w;
 		skyReflected = SkyColour(reflect(-v, n));
 	}
-	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl, 1);
+	// the sky light (RenderSettings::skyGI): the ambient and the sky's reflection as much as the
+	// point sees of the sky, the sun's light bounced off the ground onto faces turned down, the
+	// clouds' shadow on the sun's light only
+	const bool gi = SkyOccRegion.w != 0;
+	float vis = 1, sunShade = 1, allShade = input.Tint.a;
+	float3 bounce = float3(0, 0, 0);
+	if (gi) {
+		vis = SkyVisibility(input.WorldPos, true);
+		sunShade = input.Tint.a;
+		allShade = 1;
+		bounce = SunColour.rgb * (saturate(l.y) * SkyOccLight.y * 0.35 * saturate(0.5 - 0.5 * n.y)) * float3(0.9, 0.85, 0.7);
+		ambientTint *= 1.15 * vis;
+	}
+	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl * sunShade + bounce * orm.r, 1);
 	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
 	float a = roughness * roughness, a2 = a * a;
 	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
 	float k = a / 2;
-	float vis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
+	float gvis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
 	float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
 	float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
-	float3 specular = SunColour.rgb * (d * vis * f * nl / 4) * MeshLighting.w;
+	float3 specular = SunColour.rgb * (d * gvis * f * nl / 4) * MeshLighting.w * sunShade;
 	// the sky's light reflected, by the Fresnel of the view and the surface's occlusion; rough
 	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
-	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness);
+	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness) * vis;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
-	return ((diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a + fire * albedo * (1 - metal)) * input.Tint.rgb;
+	return ((diffuse * albedo * (1 - metal) + specular + sky) * allShade + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -388,7 +414,7 @@ static RefCntAutoPtr<IBuffer> CreateStructuredBuffer(IRenderDevice* device, cons
 	BufferDesc desc;
 	desc.Name = name;
 	desc.Size = std::max<uint64_t>(size, 4);
-	desc.BindFlags = BIND_SHADER_RESOURCE;
+	desc.BindFlags = BIND_SHADER_RESOURCE | (g_rayTracingBuffers ? BIND_RAY_TRACING : BIND_NONE);
 	desc.Usage = USAGE_IMMUTABLE;
 	desc.Mode = BUFFER_MODE_STRUCTURED;
 	desc.ElementByteStride = 4;
@@ -407,6 +433,7 @@ struct DilMesh
 	std::vector<RefCntAutoPtr<IBuffer>> texcoords;
 	RefCntAutoPtr<IBuffer> indices;
 	uint32_t totVertices = 0, totIndices = 0;
+	std::vector<DiligentRayShadows::Group> rtGroups;
 	static DilMesh create(StaticModel* model, IRenderDevice* device) {
 		DilMesh enh;
 		model->prepare();
@@ -419,7 +446,8 @@ struct DilMesh
 		for (auto& mat : mesh.groupIndices)
 			for (auto& grp : mat)
 				pVertices.push_back(*(const Vector3*)(mesh.vertices.data() + 3 * grp.vertex));
-		enh.vertices = CreateImmutableBuffer(device, "Mesh positions", BIND_VERTEX_BUFFER, pVertices.data(), pVertices.size() * 12);
+		const BIND_FLAGS rt = g_rayTracingBuffers ? BIND_RAY_TRACING : BIND_NONE;
+		enh.vertices = CreateImmutableBuffer(device, "Mesh positions", BIND_VERTEX_BUFFER | rt, pVertices.data(), pVertices.size() * 12);
 
 		std::vector<uint32_t> pNormals;
 		pNormals.reserve(enh.totVertices);
@@ -446,7 +474,17 @@ struct DilMesh
 				pIndices.insert(pIndices.end(), tri.begin(), tri.end());
 			enh.totIndices += 3 * mat.tupleIndex.size();
 		}
-		enh.indices = CreateImmutableBuffer(device, "Mesh indices", BIND_INDEX_BUFFER, pIndices.data(), pIndices.size() * 2);
+		enh.indices = CreateImmutableBuffer(device, "Mesh indices", BIND_INDEX_BUFFER | rt, pIndices.data(), pIndices.size() * 2);
+		// the groups as the draws take them, for the ray-traced shadows' structures
+		uint32_t startIndex = 0, startVertex = 0;
+		const PolygonList& polylist = mesh.polyLists[0];
+		for (size_t g = 0; g < polylist.groups.size(); g++) {
+			const uint32_t numIndices = 3 * (uint32_t)polylist.groups[g].tupleIndex.size();
+			const uint32_t numVertices = (uint32_t)mesh.groupIndices[g].size();
+			enh.rtGroups.push_back({ startIndex, numIndices, startVertex, numVertices });
+			startIndex += numIndices;
+			startVertex += numVertices;
+		}
 		return enh;
 	}
 };
@@ -529,6 +567,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	texture deriveNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
+	ITextureView* occHeights = nullptr; // the terrain heights bound to the sky light's pass
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer, motionConstBuffer;
 	// the motion vectors' camera (unjittered view-projection) and the frame it was drawn in
 	Matrix motionViewProj;
@@ -600,10 +639,17 @@ void DiligentEnhancedSceneRenderer::init()
 
 	const PipelineResourceDesc envResources[] = {
 		{ SHADER_TYPE_VERTEX, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		// the dynamic clouds and the sky light (DiligentClouds)
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
-	const ImmutableSamplerDesc envSamplers[] = { { SHADER_TYPE_VERTEX, "cloudSampler", cloudSampler } };
+	SamplerDesc occSampler;
+	occSampler.AddressU = occSampler.AddressV = occSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+	const ImmutableSamplerDesc envSamplers[] = { { SHADER_TYPE_VERTEX, "cloudSampler", cloudSampler },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoiseSampler", cloudSampler }, { SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccSampler", occSampler } };
 	PipelineResourceSignatureDesc envSigDesc;
 	envSigDesc.Name = "Enhanced scene environment";
 	envSigDesc.Resources = envResources;
@@ -628,11 +674,12 @@ void DiligentEnhancedSceneRenderer::init()
 	if (!_impl->animSignature)
 		ferr("Diligent: could not create the enhanced scene animation signature.");
 
+	const std::string source = std::string(g_cloudShaderCode) + esShaderCode;
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
-		sci.Source = esShaderCode;
-		sci.SourceLength = sizeof(esShaderCode) - 1;
+		sci.Source = source.c_str();
+		sci.SourceLength = source.size();
 		sci.EntryPoint = entryPoint;
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
@@ -776,6 +823,7 @@ void DiligentEnhancedSceneRenderer::render()
 	gfx->BeginBatchDrawing();
 
 	auto& shadows = dgfx->shadows;
+	UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	memset(mapped, 0, 656);
@@ -820,6 +868,11 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->envSignature->CreateShaderResourceBinding(&_impl->envBinding, true);
 		_impl->envCloudMap = shadows.cloudMap.RawPtr();
 		_impl->envBinding->GetVariableByName(SHADER_TYPE_VERTEX, "cloudTexture")->Set(shadows.cloudMap ? shadows.cloudMap.RawPtr() : dgfx->GetTextureView(nullptr));
+		for (SHADER_TYPE stage : { SHADER_TYPE_VERTEX, SHADER_TYPE_PIXEL }) {
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "CloudBuffer")) v->Set(shadows.cloudBuffer);
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "cloudNoise")) v->Set(shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "skyOccTexture")) v->Set(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		}
 	}
 
 	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
@@ -876,10 +929,12 @@ void DiligentEnhancedSceneRenderer::render()
 	// motion vectors of the meshes that moved or animated since the last frame (FSR 3.1, into the
 	// bound motion vector target; the entities remember how they were drawn). Returns whether
 	// anything was drawn.
-	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION };
+	// DRAW_SKY: the static shadow casters only (not the units), for the sky light's map
+	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY };
 	const uint64_t frameIndex = dgfx->FrameIndex();
 	auto drawMeshes = [&](DrawMode mode) {
-		const bool shadowPass = mode == DRAW_SHADOWS, motionPass = mode == DRAW_MOTION;
+		const bool shadowPass = mode == DRAW_SHADOWS || mode == DRAW_SKY, motionPass = mode == DRAW_MOTION;
+		const uint32_t casterFlags = mode == DRAW_SKY ? SceneEntity::SEFLAG_STATIC_SHADOW : (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW);
 		bool drawn = false;
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
@@ -968,7 +1023,7 @@ void DiligentEnhancedSceneRenderer::render()
 
 			const bool animated = enhAnim && enhAnim->animTimes.size() >= 2;
 			for (SceneEntity* ent : it.second.list) {
-				if (shadowPass && !(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+				if (shadowPass && !(ent->flags & casterFlags))
 					continue;
 				if (motionPass) {
 					// the first of the entity's materials in this frame: what was drawn becomes the
@@ -1041,7 +1096,84 @@ void DiligentEnhancedSceneRenderer::render()
 		dgfx->RestoreRenderTargets();
 	}
 
+	// The sky light's map (RenderSettings::skyGI): the static casters from straight above over its
+	// square, then per texel the horizon over them and the terrain (DiligentClouds)
+	if (shadows.skyOccOn) {
+		using Env = DiligentGfx::ShadowEnvironment;
+		const float half = Env::SKY_OCC_RADIUS;
+		const Vector3 centre(shadows.skyOccOrigin[0] + half, 0, shadows.skyOccOrigin[1] + half);
+		Matrix view = Matrix::getLHLookAtViewMatrix(Vector3(centre.x, Env::SKY_OCC_TOP, centre.z), centre, Vector3(0, 0, 1));
+		Matrix ortho = Matrix::getZeroMatrix();
+		ortho._11 = ortho._22 = 1.0f / half;
+		ortho._33 = 1.0f / Env::SKY_OCC_RANGE;
+		ortho._44 = 1.0f;
+		const Matrix topDown = view * ortho;
+		ITextureView* dsv = shadows.skyDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
+		ctx->SetRenderTargets(0, nullptr, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		gfx->SetTransformMatrix(&topDown);
+		drawMeshes(DRAW_SKY);
+		gfx->SetTransformMatrix(&camera->sceneMatrix);
+		if (!shadows.skyOccBinding || _impl->occHeights != shadows.terrainHeights) {
+			shadows.skyOccBinding.Release();
+			shadows.skyOccSignature->CreateShaderResourceBinding(&shadows.skyOccBinding, true);
+			shadows.skyOccBinding->GetVariableByName(SHADER_TYPE_PIXEL, "heightTexture")->Set(shadows.terrainHeights);
+			_impl->occHeights = shadows.terrainHeights;
+		}
+		ITextureView* rtv = shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->SetPipelineState(shadows.skyOccPipeline);
+		ctx->CommitShaderResources(shadows.skyOccBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });
+		dgfx->RestoreRenderTargets();
+	}
+
 	drawMeshes(DRAW_SCENE);
+
+	// The ray-traced shadows' casters: every entity casting a shadow, with its mesh's structure
+	// (an animated one's at its current key frame), then the frame's top-level structure
+	if (shadows.rayShadowsOn) {
+		if (!shadows.rayShadows)
+			shadows.rayShadows = new DiligentRayShadows(device);
+		if (!shadows.rayShadows->usable())
+			shadows.rayShadowsSupported = false;
+		else {
+			DiligentRayShadows* rts = shadows.rayShadows;
+			rts->beginFrame();
+			std::unordered_set<SceneEntity*> added;
+			for (const auto& it : scene->matInsts) {
+				auto* model = it.first.second;
+				auto* staticModel = model->getStaticModel();
+				auto mt = _impl->meshMap.find(staticModel);
+				if (mt == _impl->meshMap.end())
+					continue;
+				const DilMesh& mesh = mt->second;
+				const DilAnim* anim = nullptr;
+				if (model != staticModel) {
+					auto at = _impl->animMap.find((AnimatedModel*)model);
+					if (at != _impl->animMap.end() && at->second.animTimes.size() >= 2)
+						anim = &at->second;
+				}
+				for (SceneEntity* ent : it.second.list) {
+					if (!(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)) || !added.insert(ent).second)
+						continue;
+					IBottomLevelAS* blas = nullptr;
+					if (anim) {
+						Instance inst;
+						keyFrames(inst, anim, (AnimatedModel*)model, ent->animTime);
+						const uint32_t frame = inst.frameStart / std::max(anim->frameVertices(), 1u);
+						blas = rts->blas(ctx, anim, frame, anim->animVertices, (uint64_t)frame * anim->frameVertexBytes, anim->frameVertices(), mesh.indices, mesh.rtGroups);
+					}
+					else
+						blas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
+					rts->add(blas, ent->transform);
+				}
+			}
+			rts->build(ctx);
+		}
+	}
 
 	// FSR 3.1: the motion vectors of what moved, seen by the camera without its jitter now and
 	// in the last frame (none after a frame without them: no last camera)

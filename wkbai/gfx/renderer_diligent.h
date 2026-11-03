@@ -12,6 +12,8 @@
 #include "RefCntAutoPtr.hpp"
 
 struct Camera;
+// buffers a ray-tracing structure is built from get BIND_RAY_TRACING (the device can)
+extern bool g_rayTracingBuffers;
 
 // The Diligent IRenderer, as seen by the renderers that draw with Diligent directly
 // (DiligentEnhancedSceneRenderer, DiligentEnhancedTerrainRenderer).
@@ -104,6 +106,33 @@ struct DiligentGfx : IRenderer
 		// the sky box's faces front (+z), right (+x), back, left and top (DiligentSkyRenderer),
 		// for the water's reflection; null without a sky
 		texture skyFaces[5] = {};
+
+		// Dynamic clouds and the sky light (DiligentClouds; RenderSettings::dynamicClouds, skyGI):
+		// the cloud noise, the cloud constant buffer (cbuffer CloudBuffer), this frame's mode
+		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudNoise;
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> cloudBuffer;
+		int clouds = 0;
+		bool cloudShadowsDrawn = false; // the enhanced scene renderer wrote the cloud buffer this frame
+		// the sky light's map (RGBA16F: the sky seen, the ground's height, the casters' top) over
+		// a square of 2 x SKY_OCC_RADIUS around the camera's target, from the terrain's heights
+		// and the static casters from above (skyDepth, drawn by the scene renderer)
+		static constexpr int SKY_OCC_SIZE = 512;
+		static constexpr float SKY_OCC_RADIUS = 200.0f, SKY_OCC_TOP = 600.0f, SKY_OCC_RANGE = 1000.0f;
+		Diligent::RefCntAutoPtr<Diligent::ITexture> skyOcc, skyDepth;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> skyOccSignature;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineState> skyOccPipeline;
+		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> skyOccBinding;
+		float skyOccOrigin[2] = {};
+		bool skyOccOn = false; // this frame
+		// the terrain's vertex heights (the terrain renderer's), its grid's vertices across and
+		// down and the map edge in tiles
+		Diligent::ITextureView* terrainHeights = nullptr;
+		int terrainGrid[3] = {};
+		// ray-traced shadows (DiligentRayShadows, RenderSettings::rtShadows): made at the first
+		// frame that wants them; on in this frame; the sun (towards it) for the mask
+		class DiligentRayShadows* rayShadows = nullptr;
+		bool rayShadowsSupported = false, rayShadowsOn = false;
+		Vector3 sunDirection = Vector3(0, 1, 0);
 	} shadows;
 };
 

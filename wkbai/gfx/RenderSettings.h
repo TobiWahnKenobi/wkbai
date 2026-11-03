@@ -114,6 +114,21 @@ struct RenderSettings {
 	float modelDetailNormals = 2.0f;
 	// with per-pixel lighting: the ambient and reflections take the sky box's colours
 	bool skyLight = true;
+	// global illumination from the sky (enhanced renderers on Diligent): the terrain and the
+	// models lit by the sky box's colours as much as they see of the sky (the terrain's and the
+	// buildings' horizon around the camera), plus the sun's light bounced off the ground where
+	// the sky is hidden; instead of the original's minimum light on slopes away from the sun
+	bool skyGI = true;
+	// dynamic clouds (enhanced renderers on Diligent): 0 the original's (sky_shadow_map.pcx
+	// scrolling over the ground), 1 a cloud field drifting with the wind whose shadows follow the
+	// sun, 2 with light shafts through the air between the shadows, 3 with the clouds themselves
+	// raymarched in the sky (lit through their depth, silver linings towards the sun)
+	int dynamicClouds = 3;
+	float cloudCover = 0.45f;        // 0 clear to 1 overcast
+	float lightShaftStrength = 1.0f; // the light shafts' brightness
+	// ray-traced sun shadows of the buildings, trees and units (enhanced renderers on Diligent,
+	// with a GPU that has inline ray tracing): instead of the static shadow map
+	bool rtShadows = false;
 
 	// Camera
 	float scrollSpeed = 1.0f;        // WASD/arrows, multiplier

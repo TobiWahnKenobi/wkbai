@@ -10,6 +10,7 @@
 #include <SDL3/SDL_timer.h>
 #include "EnhancedTerrainData.h"
 #include "renderer_diligent.h"
+#include "DiligentClouds.h"
 #include "TextureCache.h"
 #include "../terrain.h"
 #include "../Camera.h"
@@ -201,7 +202,9 @@ float4 PS_Blob(BLOB_OUTPUT input) : SV_Target
 float CloudLight(float3 pos)
 {
 	float light = 1;
-	if (CloudParams.w != 0)
+	if (CloudSun.w > 0) // the dynamic clouds (RenderSettings::dynamicClouds)
+		light = CloudShadow(pos);
+	else if (CloudParams.w != 0)
 		light = cloudTexture.Sample(cloudSampler, pos.xz * CloudParams.z + CloudParams.xy).r;
 	return light;
 }
@@ -1005,7 +1008,7 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	float specular = d * vis * f * nl / 4;
 	// the sky above as ambient (the sky box's colours with the water's detail on, else the fog)
 	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(n.y)) : FogColor.rgb;
-	float occlusion = lerp(0.35, 1.0, input.Up);
+	float occlusion = lerp(0.35, 1.0, input.Up) * SkyVisibility(input.World, false);
 	float3 c = albedo * ((wrapped * 0.75 + transmitted) * shadow + sky * 0.3 * occlusion) + specular * shadow
 		+ albedo * FireLight(input.World, n);
 	// never much darker than the ground under it: seen edge-on from low down, a blade's side away
@@ -1023,6 +1026,35 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, float3 bitangent)
 {
 	float lum = 0;
+
+	// The sky light (RenderSettings::skyGI, DiligentClouds): the sun's light with its shadows
+	// (the clouds' and static shadows only on it, deeper than the original's), the sky box's
+	// colours as much as the point sees of the sky (darker in the bump map's hollows), and the
+	// sun's light bounced off the ground around where the sky is hidden. Instead of the
+	// original's minimum light on slopes turned away from the sun.
+	if (SkyOccRegion.w != 0) {
+		float3 n = normalize(input.Norm);
+		float3 t = normalize(tangent - n * dot(tangent, n));
+		float3 b = normalize(bitangent - n * dot(bitangent, n) - t * dot(bitangent, t));
+		// the filtered normal as it is (rough bump maps darken in the distance, as the original's)
+		float3 wn = (BumpOn & 1) ? nrm.x * t + nrm.y * n + nrm.z * b : n;
+		float sunLight = saturate(dot(wn, SunDirection));
+		// the sky's light mostly from above and from the side away from the sun (the bright sky
+		// opposite the shadow): the bump map's relief shows in the shade too
+		float3 fillDir = normalize(float3(-SunDirection.x, 1.3, -SunDirection.z));
+		float fill = saturate(dot(wn, fillDir));
+		float vis = SkyVisibility(input.FragPos, false);
+		float stat = StaticShadowLight(input.FragPos);
+		float lit = ShadowParams.x != 0 ? saturate((stat - ShadowParams.y) / max(1 - ShadowParams.y, 1e-3)) : 1;
+		float blob = BlobLight(input.FragPos);
+		float3 sky = SkyAmbient(n) * vis * (0.25 + 0.85 * fill);
+		float3 bounce = tex.rgb * 1.4 * saturate(SunDirection.y) * (1 - vis) * SkyOccLight.y;
+		float share = SkyOccLight.x;
+		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob
+			+ share * sky * lerp(1, blob, 0.5) + bounce + FireLight(input.FragPos, n);
+		float4 gc = lerp(float4(l3, 1) * input.Color * tex, FogColor, input.Fog);
+		return float4(GradeColour(gc.rgb), gc.a);
+	}
 
 	// BumpOn & 2 (RenderSettings::terrainOriginalLight): the original's per-vertex Dot3 light
 	// vector. It is the sun in the slope's tangent frame, but its up component is at least 1/3
@@ -1264,6 +1296,10 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL | tessStages, "WaveBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "riverWidth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		// the dynamic clouds and the sky light (DiligentClouds)
+		{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1280,8 +1316,13 @@ void DiligentEnhancedTerrainRenderer::init()
 	shadowSampler.MinFilter = shadowSampler.MagFilter = shadowSampler.MipFilter = FILTER_TYPE_COMPARISON_POINT;
 	shadowSampler.ComparisonFunc = COMPARISON_FUNC_LESS_EQUAL;
 	shadowSampler.AddressU = shadowSampler.AddressV = shadowSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+	SamplerDesc noiseSampler; // the cloud noise tiles; the sky light's map is clamped
+	noiseSampler.AddressU = noiseSampler.AddressV = noiseSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+	SamplerDesc occSampler;
+	occSampler.AddressU = occSampler.AddressV = occSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
-		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler } };
+		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler },
+		{ SHADER_TYPE_PIXEL, "cloudNoiseSampler", noiseSampler }, { SHADER_TYPE_PIXEL, "skyOccSampler", occSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced terrain resources";
 	sigDesc.Resources = resources;
@@ -1296,6 +1337,9 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(dgfx->fogBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunBuffer);
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(dgfx->shadows.cloudBuffer);
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(dgfx->shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "skyOccTexture")->Set(dgfx->shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 
 	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
 	{
@@ -1317,6 +1361,11 @@ void DiligentEnhancedTerrainRenderer::init()
 		if (!_impl->heightMap)
 			ferr("Diligent: could not create the terrain height texture.");
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "heightTexture")->Set(_impl->heightMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		auto& env = dgfx->shadows; // the sky light's map (DiligentClouds) takes them too
+		env.terrainHeights = _impl->heightMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+		env.terrainGrid[0] = (int)hdesc.Width;
+		env.terrainGrid[1] = (int)hdesc.Height;
+		env.terrainGrid[2] = (int)terrain->edge;
 	}
 
 	// The water's flow, sea, wave region and river maps (again when the water changes)
@@ -1395,11 +1444,12 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->blobSignature->CreateShaderResourceBinding(&_impl->blobBinding, true);
 	_impl->blobBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(_impl->blobSprite));
 
+	const std::string source = std::string(g_cloudShaderCode) + tshaderCode;
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
-		sci.Source = tshaderCode;
-		sci.SourceLength = sizeof(tshaderCode) - 1;
+		sci.Source = source.c_str();
+		sci.SourceLength = source.size();
 		sci.EntryPoint = entryPoint;
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
@@ -1762,6 +1812,7 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 	if (_impl) {
 		auto& shadows = ((DiligentGfx*)gfx)->shadows;
 		shadows.cloudMap = nullptr;
+		shadows.terrainHeights = nullptr;
 		shadows.staticShadowDSV = shadows.staticShadowSRV = nullptr;
 		shadows.staticShadowValid = false;
 		if (_impl->cloudMap)

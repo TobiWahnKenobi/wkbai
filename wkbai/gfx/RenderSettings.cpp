@@ -58,6 +58,11 @@ void RenderSettings::load()
 	waterfalls = std::clamp(g_settings.value<int>("waterfalls", def.waterfalls), 0, 4);
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
+	skyGI = g_settings.value<bool>("skyGI", def.skyGI);
+	dynamicClouds = std::clamp(g_settings.value<int>("dynamicClouds", def.dynamicClouds), 0, 3);
+	cloudCover = std::clamp(g_settings.value<float>("cloudCover", def.cloudCover), 0.0f, 1.0f);
+	lightShaftStrength = std::clamp(g_settings.value<float>("lightShaftStrength", def.lightShaftStrength), 0.0f, 4.0f);
+	rtShadows = g_settings.value<bool>("rtShadows", def.rtShadows);
 	grass = g_settings.value<bool>("grass", def.grass);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
@@ -138,6 +143,11 @@ void RenderSettings::save()
 	g_settings.erase("waterDetail");
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
+	g_settings["skyGI"] = skyGI;
+	g_settings["dynamicClouds"] = dynamicClouds;
+	g_settings["cloudCover"] = cloudCover;
+	g_settings["lightShaftStrength"] = lightShaftStrength;
+	g_settings["rtShadows"] = rtShadows;
 	g_settings["grass"] = grass;
 	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["grassDensity"] = grassDensity;

@@ -156,6 +156,19 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
+		list.push_back(toggle("skyGI", "lighting", "Light from the sky", rs.skyGI));
+		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
+		{
+			MenuOption o;
+			o.id = "dynamicClouds"; o.page = "lighting"; o.label = "Clouds";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Original", "Moving shadows", "Light shafts", "Volumetric" };
+			o.get = [&rs]() { return (float)rs.dynamicClouds; };
+			o.set = [&rs](float v) { rs.dynamicClouds = std::clamp((int)v, 0, 3); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows; }));
+		}
+		list.push_back(withEnabled(slider("cloudCover", "lighting", "Cloud cover", rs.cloudCover, 0.0f, 1.0f, "%.2f"),
+			[&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
 		{
 			MenuOption o;
 			o.id = "terrainTessellation"; o.page = "lighting"; o.label = "Terrain tessellation";

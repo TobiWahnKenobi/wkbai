@@ -43,6 +43,14 @@ struct DiligentPostProcess {
 		float jitterPixels[2] = {};
 		float cameraNear = 1.0f, cameraFar = 1000.0f, fovY = 0.9f;
 		float frameTimeMs = 16.7f;
+		// the light shafts between the dynamic clouds' shadows (DiligentClouds): the view rays
+		// marched through the air at half resolution, added in the composite
+		bool lightShafts = false;
+		Diligent::IBuffer* cloudBuffer = nullptr;
+		Diligent::ITextureView* cloudNoise = nullptr;
+		// the ray-traced shadows' mask (DiligentRayShadows; 1 sunlit) and the light left in them
+		Diligent::ITextureView* rtShadowMask = nullptr;
+		float rtShadowLight = 0.5f;
 	};
 	// The object motion vectors' clear value: no moving object drawn there (the camera's
 	// motion is computed from the depth instead)

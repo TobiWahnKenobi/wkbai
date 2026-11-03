@@ -89,6 +89,7 @@ const char* BenchmarkSaveGame()
 }
 
 static int s_benchmarkFrame = 0; // frames since the map was loaded
+double g_gpuFrameMs = -1.0;
 
 bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 {
@@ -154,6 +155,9 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		return;
 	}
 	recorded.frameEnd();
+	static std::vector<float> gpuTimes;
+	if (g_gpuFrameMs >= 0.0)
+		gpuTimes.push_back((float)g_gpuFrameMs);
 	if ((int)recorded.frameTimes().size() < frames)
 		return;
 
@@ -184,6 +188,16 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		report["realSeconds"] = real;
 		report["gameSpeed"] = real > 0.0 ? (Server::instance->timeManager.currentTime - gameStart) / real : 0.0;
 		report["timeSpeed"] = Server::instance->timeManager.timeSpeed;
+	}
+	if (!gpuTimes.empty()) {
+		std::vector<float> g = gpuTimes;
+		std::sort(g.begin(), g.end());
+		double sum = 0;
+		for (float t : g) sum += t;
+		report["gpuAvgMs"] = sum / g.size();
+		report["gpuP50Ms"] = g[g.size() / 2];
+		report["gpuP95Ms"] = g[std::min(g.size() - 1, (size_t)(g.size() * 0.95))];
+		printf("Benchmark: GPU avg %.3f ms, p50 %.3f, p95 %.3f\n", sum / g.size(), g[g.size() / 2], g[std::min(g.size() - 1, (size_t)(g.size() * 0.95))]);
 	}
 	report["frameTimesMs"] = recorded.frameTimes();
 

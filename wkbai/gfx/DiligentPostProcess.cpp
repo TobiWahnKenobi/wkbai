@@ -35,6 +35,7 @@
 
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
+#include "DiligentClouds.h"
 #include <memory>
 #include <chrono>
 #include <future>
@@ -53,7 +54,7 @@ cbuffer PostBuffer
 {
 	float4 Proj;  // P11, P22, P33, P43
 	float4 Texel; // 1 / full width, 1 / full height, 1 / half width, 1 / half height
-	float4 Ao;    // radius, strength
+	float4 Ao;    // radius, strength, the ray-traced shadows on, the light left in them
 	float4 Bloom; // threshold, intensity, blur direction (texels)
 	float4 FogX;  // fog of war: world x of a view-space point (the inverse view's first column)
 	float4 FogZ;  // and its world z
@@ -79,6 +80,8 @@ Texture2D tObjectMotion; // FSR 3: the moving objects' motion vectors
 Texture2D tCopy;     // FSR 3's result, for the back buffer
 Texture2D tOpaque;   // FSR 3: the scene before its water
 Texture2D tWater;    // and before its other transparent parts
+Texture2D tShafts;   // the light shafts (half size)
+Texture2D tRtShadow; // the ray-traced shadows' mask (1 sunlit)
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -409,11 +412,14 @@ float4 PS_Rcas(VS_OUTPUT input) : SV_Target
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
+	if (Ao.z != 0)
+		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r);
 	float2 h = Texel.zw;
 	float ao = (tAo.SampleLevel(sLinear, input.Uv + float2(-h.x, -h.y), 0).r + tAo.SampleLevel(sLinear, input.Uv + float2(h.x, -h.y), 0).r
 		+ tAo.SampleLevel(sLinear, input.Uv + float2(-h.x, h.y), 0).r + tAo.SampleLevel(sLinear, input.Uv + float2(h.x, h.y), 0).r) * 0.25;
 	c *= lerp(1, ao, Ao.y);
 	c += tBloom.SampleLevel(sLinear, input.Uv, 0).rgb * Bloom.y;
+	c += tShafts.SampleLevel(sLinear, input.Uv, 0).rgb;
 	// fog of war: what none of the player's units sees is darker (not on the sky)
 	if (Fog.w > 0 && tDepth.SampleLevel(sPoint, input.Uv, 0).r < 0.99999) {
 		float4 p = float4(ViewPos(input.Uv), 1);
@@ -422,6 +428,32 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 		c *= lerp(Fog.z, 1, seen);
 	}
 	return float4(saturate(c), 1);
+}
+
+// The light shafts (RenderSettings::dynamicClouds 2 and up): the sunlight scattered towards the
+// camera along its ray through the air (up to 600 units, 16 jittered steps), as much as the
+// clouds let through at each step, mostly when looking towards the sun (Henyey-Greenstein,
+// g = 0.6): bright beams between the clouds' shadows
+float4 PS_Shafts(VS_OUTPUT input) : SV_Target
+{
+	float d = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
+	float3 cam = TaaInverseView[3].xyz;
+	float3 wp = mul(float4(ViewPosAt(input.Uv, min(d, 0.9999)), 1), TaaInverseView).xyz;
+	float3 dir = wp - cam;
+	float dist = length(dir);
+	dir /= max(dist, 1e-3);
+	dist = d >= 0.99999 ? 600 : min(dist, 600);
+	const int N = 16;
+	float jitter = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
+	float ds = dist / N, lit = 0;
+	[loop] for (int i = 0; i < N; i++)
+		lit += CloudShadow(cam + dir * ((i + jitter) * ds));
+	lit /= N;
+	float mu = dot(dir, normalize(CloudSun.xyz));
+	const float g = 0.6;
+	float phase = (1 - g * g) / pow(1 + g * g - 2 * g * mu, 1.5) * 0.25 + 0.05;
+	float air = 1 - exp(-dist * 0.0018);
+	return float4(CloudSunColour.rgb * (lit * phase * air * 0.18 * CloudScale.z), 1);
 }
 
 // FSR 3's motion vectors (UV, the last frame's position minus the current): a moving object's,
@@ -500,7 +532,12 @@ struct DiligentPostProcess::Impl {
 	uint32_t fogWidth = 0, fogHeight = 0, fogVersion = ~0u;
 	RefCntAutoPtr<IBuffer> buffer;
 	RefCntAutoPtr<IShader> vs;
-	Pass aoPass, brightPass, blurPass[2], compositePass, fxaaPass;
+	Pass aoPass, brightPass, blurPass[2], compositePass, fxaaPass, shaftsPass;
+	RefCntAutoPtr<ITexture> shafts;
+	RefCntAutoPtr<ITexture> rtShadow; // 1 x 1, while there is no mask
+	ITexture* rtShadowBound = nullptr;
+	IBuffer* shaftsBuffer = nullptr; // what shaftsPass's binding has
+	ITextureView* shaftsNoise = nullptr;
 	// TAA into history[i]; EASU from aaOut, history[0], history[1], resolved; RCAS from
 	// upscaled, history[0], history[1]
 	Pass taaPass[2], easuPass[4], rcasPass[3];
@@ -512,8 +549,9 @@ struct DiligentPostProcess::Impl {
 	{
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
-		sci.Source = postShaderCode;
-		sci.SourceLength = sizeof(postShaderCode) - 1;
+		static const std::string source = std::string(g_cloudShaderCode) + postShaderCode;
+		sci.Source = source.c_str();
+		sci.SourceLength = source.size();
 		sci.EntryPoint = entry;
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entry;
@@ -532,11 +570,17 @@ struct DiligentPostProcess::Impl {
 		std::vector<PipelineResourceDesc> resources = { { SHADER_TYPE_PIXEL, "PostBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC } };
 		for (const std::string& t : pass.textures)
 			resources.push_back({ SHADER_TYPE_PIXEL, t.c_str(), 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE });
+		const bool clouds = std::find(pass.textures.begin(), pass.textures.end(), "cloudNoise") != pass.textures.end();
+		if (clouds)
+			resources.push_back({ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE });
 		SamplerDesc linear;
 		linear.AddressU = linear.AddressV = linear.AddressW = TEXTURE_ADDRESS_CLAMP;
 		SamplerDesc point = linear;
 		point.MinFilter = point.MagFilter = point.MipFilter = FILTER_TYPE_POINT;
-		const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "sLinear", linear }, { SHADER_TYPE_PIXEL, "sPoint", point } };
+		SamplerDesc wrap;
+		wrap.AddressU = wrap.AddressV = wrap.AddressW = TEXTURE_ADDRESS_WRAP;
+		const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "sLinear", linear }, { SHADER_TYPE_PIXEL, "sPoint", point },
+			{ SHADER_TYPE_PIXEL, "cloudNoiseSampler", wrap }, { SHADER_TYPE_PIXEL, "skyOccSampler", linear } };
 		PipelineResourceSignatureDesc sigDesc;
 		sigDesc.Name = entry;
 		sigDesc.Resources = resources.data();
@@ -622,7 +666,9 @@ struct DiligentPostProcess::Impl {
 	{
 		if (!fog)
 			makeFog(0, 0, nullptr);
-		bind(compositePass, { color, ao, bloomA, depth, fog });
+		if (!rtShadow)
+			rtShadow = target("No ray-traced shadows", 1, 1, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
+		bind(compositePass, { color, ao, bloomA, depth, fog, shafts, rtShadowBound ? rtShadowBound : rtShadow.RawPtr() });
 	}
 
 	void run(IDeviceContext* ctx, Pass& pass, ITexture* into)
@@ -658,7 +704,8 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->makePass(_impl->brightPass, "PS_Bright", { "tColor" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
-	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog" }, colorFormat);
+	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog", "tShafts", "tRtShadow" }, colorFormat);
+	_impl->makePass(_impl->shaftsPass, "PS_Shafts", { "tDepth", "cloudNoise" }, TEX_FORMAT_RGBA16_FLOAT);
 	_impl->makePass(_impl->fxaaPass, "PS_Fxaa", { "tResolved" }, colorFormat);
 	for (Pass& pass : _impl->taaPass)
 		_impl->makePass(pass, "PS_Taa", { "tResolved", "tHistory", "tDepth" }, TEX_FORMAT_RGBA16_FLOAT);
@@ -691,6 +738,8 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height, uint32_t outpu
 	_impl->ao = _impl->target("Ambient occlusion", hw, hh, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
 	_impl->bloomA = _impl->target("Bloom A", hw, hh, TEX_FORMAT_RGBA8_UNORM, BIND_RENDER_TARGET);
 	_impl->bloomB = _impl->target("Bloom B", hw, hh, TEX_FORMAT_RGBA8_UNORM, BIND_RENDER_TARGET);
+	_impl->shafts = _impl->target("Light shafts", hw, hh, TEX_FORMAT_RGBA16_FLOAT, BIND_RENDER_TARGET);
+	_impl->shaftsBuffer = nullptr;
 	_impl->resolved = _impl->target("Scene before FXAA", width, height, _impl->colorFormat, BIND_RENDER_TARGET);
 	_impl->bind(_impl->aoPass, { _impl->depth });
 	_impl->bind(_impl->brightPass, { _impl->color });
@@ -808,6 +857,18 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		}
 		_impl->fogVersion = fog.version;
 	}
+	if (settings.rtShadowMask && settings.rtShadowMask->GetTexture() != _impl->rtShadowBound) {
+		_impl->rtShadowBound = settings.rtShadowMask->GetTexture();
+		_impl->bindComposite();
+	}
+	if (!_impl->rtShadow) {
+		const float one[4] = { 1, 1, 1, 1 };
+		_impl->rtShadow = _impl->target("No ray-traced shadows", 1, 1, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
+		ITextureView* v = _impl->rtShadow->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ctx->SetRenderTargets(1, &v, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->ClearRenderTarget(v, one, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		_impl->bindComposite();
+	}
 	const Matrix& iv = fog.inverseView;
 	const uint32_t w = _impl->width, h = _impl->height, ow = _impl->outputWidth, oh = _impl->outputHeight;
 	const bool fsr = ow != w || oh != h;
@@ -829,7 +890,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		const float data[44] = {
 			projection._11, projection._22, projection._33, projection._43,
 			1.0f / w, 1.0f / h, 1.0f / hw, 1.0f / hh,
-			settings.ssaoRadius, settings.ssao ? settings.ssaoStrength : 0.0f, 0, 0,
+			settings.ssaoRadius, settings.ssao ? settings.ssaoStrength : 0.0f, settings.rtShadowMask ? 1.0f : 0.0f, settings.rtShadowLight,
 			settings.bloomThreshold, settings.bloom ? settings.bloomIntensity : 0.0f, blurX, blurY,
 			iv._11, iv._21, iv._31, iv._41,
 			iv._13, iv._23, iv._33, iv._43,
@@ -866,6 +927,25 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		ITextureView* rtv = _impl->bloomA->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->ClearRenderTarget(rtv, black, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+	{
+		ITextureView* rtv = _impl->shafts->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		if (settings.lightShafts && settings.cloudBuffer && settings.cloudNoise) {
+			if (_impl->shaftsBuffer != settings.cloudBuffer || _impl->shaftsNoise != settings.cloudNoise || !_impl->shaftsPass.srb) {
+				_impl->shaftsPass.srb.Release();
+				_impl->shaftsPass.signature->CreateShaderResourceBinding(&_impl->shaftsPass.srb, true);
+				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(_impl->depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(settings.cloudNoise);
+				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(settings.cloudBuffer);
+				_impl->shaftsBuffer = settings.cloudBuffer;
+				_impl->shaftsNoise = settings.cloudNoise;
+			}
+			_impl->run(ctx, _impl->shaftsPass, _impl->shafts);
+		}
+		else {
+			ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->ClearRenderTarget(rtv, black, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		}
 	}
 	_impl->historyValid = taaOn;
 	_impl->prevViewProj = viewProj;

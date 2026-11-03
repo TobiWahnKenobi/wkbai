@@ -41,6 +41,10 @@ extern FrameStats g_frameStats;
 // stays at the save game's start, so every run renders the same frame (for comparing renderers).
 // "camera": [x, y, z, pitch, yaw] holds the camera there; "screenshot": "<file.bmp>" saves the
 // first recorded frame (after the warm-up).
+// the GPU's time for the last frame whose timestamps came back (ms; < 0 unknown), from the
+// Diligent renderer's timestamp queries: the benchmark report's gpu* values
+extern double g_gpuFrameMs;
+
 bool BenchmarkEnabled();
 bool BenchmarkCamera(Vector3& position, Vector3& orientation);
 const char* BenchmarkScreenshotDue();
