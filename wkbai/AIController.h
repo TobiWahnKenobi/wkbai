@@ -116,7 +116,7 @@ struct AIController {
 	// size at launch), the enemy to strike back at and until when, and counts for the census
 	struct WarDefence { uint32_t army; Vector3 at; float radius, clearSince; };
 	std::vector<WarDefence> warDefences;
-	struct WarWave { uint32_t army, target, enemy; size_t size; };
+	struct WarWave { uint32_t army, target, enemy; size_t size; std::vector<uint32_t> members; };
 	std::vector<WarWave> warWaves;
 	float nextWarCheck = 0.0f, lastWarWave = -1.0f;
 	bool lastWaveAtHuman = false; // every other wave goes for a human

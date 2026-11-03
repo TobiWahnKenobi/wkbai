@@ -733,7 +733,7 @@ int AIController::fighters() const
 //   the last wave, or to strike back; not while enemies at the palace outnumber its defenders. Every other wave
 //   goes for the nearest human enemy's palace, the rest at the focused attacks' target (humans
 //   counting as nearer there too: aiHumanFocus).
-// - A wave fights the soldiers it meets (within 45 m) before buildings; a unit standing out of
+// - A wave fights the soldiers it meets (within 30 m of a unit) before buildings; one standing out of
 //   reach of its building (walled in) attacks the nearest enemy building within 60 m, a wall or
 //   gate; the wave goes on to the nearest enemy building within 250 m when its target falls (else
 //   the next palace), and comes home when it has lost 60% and is outmatched two to one.
@@ -773,11 +773,13 @@ void AIController::warUpdate()
 			gs->orderAssignments[g_items.moveHome].assignTo(u, &ctx, gameObj);
 	};
 	// the armies of this layer, so the pool leaves them alone
-	std::set<uint32_t> mine;
+	std::set<uint32_t> mine, inWaves;
 	for (const WarDefence& d : warDefences)
 		mine.insert(d.army);
-	for (const WarWave& w : warWaves)
+	for (const WarWave& w : warWaves) {
 		mine.insert(w.army);
+		inWaves.insert(w.members.begin(), w.members.end());
+	}
 
 	// the pool: soldiers at home; the scripts' attackers still within 300 m of the palace and not
 	// fighting (the scripts sent each soldier out alone: at 20 minutes the AIs' homes were empty
@@ -826,7 +828,7 @@ void AIController::warUpdate()
 			const bool idle = !u->orderConfig.getCurrentOrder();
 			ServerGameObject* tg = idle ? nullptr : targetOf(u);
 			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
-			if ((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f))
+			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
 				pool.push_back(u);
 		}
 	}
@@ -970,9 +972,16 @@ void AIController::warUpdate()
 		gameObj->setItem(noMilitia, (available.size() + busy.size() >= 5) ? 1.0f : 0.0f);
 
 	// ---- The waves out ----
+	// (by its members: the scripts' "Remove if no Subordinates" removes a wave's army once its
+	// units are in formations, and the units end up straight under the player)
 	for (auto it = warWaves.begin(); it != warWaves.end();) {
 		ServerGameObject* army = srv->findObject(it->army);
-		std::vector<ServerGameObject*> units = unitsOf(army);
+		if (army && army->deleted)
+			army = nullptr;
+		std::vector<ServerGameObject*> units;
+		for (uint32_t id : it->members)
+			if (ServerGameObject* u = srv->findObject(id); u && !u->deleted && u->getParent() != home && !busy.count(u))
+				units.push_back(u);
 		if (units.empty()) {
 			if (army && !army->deleted)
 				srv->deleteObject(army);
@@ -984,6 +993,15 @@ void AIController::warUpdate()
 			centre += u->position;
 		centre = centre / (float)units.size();
 		const std::vector<ServerGameObject*> around = EnemiesNear(gameObj, centre, 70.0f, true);
+		if (getenv("WKB_TRACE_WAR") && (int)now % 30 < 3) {
+			size_t direct = 0, idle = 0;
+			for (ServerGameObject* u : units) {
+				direct += u->getParent() == army;
+				idle += !u->orderConfig.getCurrentOrder();
+			}
+			printf("WAR player %u t=%.0f: wave %u: %zu of %zu units (%zu direct, %zu idle), %zu enemies around, at (%.0f,%.0f)\n", gameObj->id, now, it->army, units.size(), it->size,
+				direct, idle, around.size(), centre.x, centre.z);
+		}
 		// losing: home
 		if (!around.empty() && units.size() < it->size * 0.4f && Strength(units, around) < 0.5f * Strength(around, units)) {
 			for (ServerGameObject* u : units)
@@ -1021,13 +1039,12 @@ void AIController::warUpdate()
 			it->target = target->id;
 			warRetargets++;
 		}
-		// the soldiers met first (formations march on by themselves)
-		std::vector<ServerGameObject*> soldiers;
-		for (ServerGameObject* e : EnemiesNear(gameObj, centre, 45.0f, false))
-			soldiers.push_back(e);
+		// the soldiers met first, within 30 m of each unit (formations march on by themselves; the
+		// wave's centre, with stragglers, was seldom near the enemies: no unit ever engaged)
 		for (ServerGameObject* u : units) {
-			if (u->getParent() != army)
+			if (u->getParent() && u->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
 				continue;
+			const std::vector<ServerGameObject*> soldiers = EnemiesNear(gameObj, u->position, 30.0f, false);
 			ServerGameObject* tg = targetOf(u);
 			if (!soldiers.empty() && (!tg || !IsSoldier(tg))) {
 				if (ServerGameObject* e = NearestEnemy(soldiers, u->position)) {
@@ -1113,7 +1130,10 @@ void AIController::warUpdate()
 	std::vector<ServerGameObject*> members(available.begin() + keep, available.end());
 	if (ServerGameObject* army = launchWave(members, target, home)) {
 		ServerGameObject* owner = target->getPlayer();
-		warWaves.push_back({ army->id, target->id, owner ? owner->id : 0u, members.size() });
+		std::vector<uint32_t> ids;
+		for (ServerGameObject* u : members)
+			ids.push_back(u->id);
+		warWaves.push_back({ army->id, target->id, owner ? owner->id : 0u, members.size(), std::move(ids) });
 		lastWarWave = now;
 		lastWaveAtHuman = owner && IsHuman(owner);
 		warWavesSent++;
