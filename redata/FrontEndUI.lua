@@ -919,7 +919,8 @@ local function playersTab()
 		local text, colour = slotText(slot)
 		rows[i] = { i .. "  " .. text, colour }
 	end
-	listBox(skirmish.slotList, rows, X(22), Y(110), L(404), L(130))
+	-- tall enough for all 8 positions without scrolling (8 rows of 16, the list's 8 of margin)
+	listBox(skirmish.slotList, rows, X(22), Y(110), L(404), L(140))
 	-- colour and team of each position: a click changes them
 	for r = 1, 8 do
 		local i = skirmish.slotList.scroll + r
