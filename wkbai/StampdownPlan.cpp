@@ -93,53 +93,72 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			const auto [rx, rz] = to.rotate(orientation.y);
 			taken.emplace_back(ox + rx, oz + rz);
 		}
+		// The first refusal is the plan's (and the text shown), as in WKB.exe; the other tiles are
+		// still looked at, so that the preview shows each in red or green as the original does: a
+		// tile is red for its own fault (another building, its terrain, a building beside it that
+		// levelling would leave on a step), all are red once the whole is too steep.
+		Status refusal = Status::Valid;
+		auto refuse = [&refusal](Status s) {
+			if (refusal == Status::Valid)
+				refusal = s;
+		};
+		bool tooSteep = false;
 		float lowest = 1e30f, highest = -1e30f;
 		for (size_t t = 0; t < fp->tiles.size(); t++) {
 			const auto& to = fp->tiles[t];
 			const auto [px, pz] = taken[t];
 			if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight) {
-				plan.status = Status::InvalidTerrain;
-				return plan;
+				refuse(Status::InvalidTerrain);
+				continue;
 			}
+			bool ok = true;
 			const auto& tile = gameState->tiles[pz * tileWidth + px];
 			if (const CommonGameObject* other = tile.building.getFrom(gameState)) {
 				const bool onWall = civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes);
 				const bool shared = to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType));
 				if (!onWall && !shared) {
-					plan.status = Status::InvalidOccupied;
-					return plan;
+					refuse(Status::InvalidOccupied);
+					ok = false;
 				}
 			}
-			if (!tileTerrainAllowed(gameState, to, px, pz)) {
-				plan.status = Status::InvalidTerrainType;
-				return plan;
+			if (ok && !tileTerrainAllowed(gameState, to, px, pz)) {
+				refuse(Status::InvalidTerrainType);
+				ok = false;
 			}
-			if (slopeExempt)
-				continue;
-			for (int dz = 0; dz <= 1; dz++)
-				for (int dx = 0; dx <= 1; dx++) {
-					const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
-					lowest = std::min(lowest, h);
-					highest = std::max(highest, h);
-				}
-			const float range = highest - lowest;
-			if (fp->maxHeightDifferential > 0.0f && range > fp->maxHeightDifferential) {
-				plan.status = Status::InvalidTooSteep;
-				return plan;
-			}
-			if (range >= 2.5f && to.flatten)
-				for (int nz = -1; nz <= 1; nz++)
-					for (int nx = -1; nx <= 1; nx++) {
-						const int qx = px + nx, qz = pz + nz;
-						if ((nx == 0 && nz == 0) || qx < 0 || qz < 0 || qx >= tileWidth || qz >= tileHeight
-							|| std::find(taken.begin(), taken.end(), std::make_pair(qx, qz)) != taken.end())
-							continue;
-						const CommonGameObject* neighbour = gameState->tiles[qz * tileWidth + qx].building.getFrom(gameState);
-						if (neighbour && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), neighbour->blueprint->buildingType) == std::end(wallBuildingTypes)) {
-							plan.status = Status::InvalidNeighbour;
-							return plan;
-						}
+			if (!slopeExempt) {
+				for (int dz = 0; dz <= 1; dz++)
+					for (int dx = 0; dx <= 1; dx++) {
+						const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
+						lowest = std::min(lowest, h);
+						highest = std::max(highest, h);
 					}
+				const float range = highest - lowest;
+				if (ok && fp->maxHeightDifferential > 0.0f && range > fp->maxHeightDifferential) {
+					refuse(Status::InvalidTooSteep);
+					tooSteep = true;
+				}
+				if (ok && range >= 2.5f && to.flatten)
+					for (int nz = -1; nz <= 1 && ok; nz++)
+						for (int nx = -1; nx <= 1 && ok; nx++) {
+							const int qx = px + nx, qz = pz + nz;
+							if ((nx == 0 && nz == 0) || qx < 0 || qz < 0 || qx >= tileWidth || qz >= tileHeight
+								|| std::find(taken.begin(), taken.end(), std::make_pair(qx, qz)) != taken.end())
+								continue;
+							const CommonGameObject* neighbour = gameState->tiles[qz * tileWidth + qx].building.getFrom(gameState);
+							if (neighbour && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), neighbour->blueprint->buildingType) == std::end(wallBuildingTypes)) {
+								refuse(Status::InvalidNeighbour);
+								ok = false;
+							}
+						}
+			}
+			plan.tiles.push_back({ px, pz, ok });
+		}
+		if (tooSteep)
+			for (auto& verdict : plan.tiles)
+				verdict.ok = false;
+		if (refusal != Status::Valid) {
+			plan.status = refusal;
+			return plan;
 		}
 	}
 

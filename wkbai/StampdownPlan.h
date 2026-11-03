@@ -30,7 +30,15 @@ struct StampdownPlan {
 		GameObjectRef object;
 	};
 
+	// a footprint tile (playable tile coordinates) and whether it may be built on, for the
+	// preview's red and green squares
+	struct TileVerdict {
+		int x, z;
+		bool ok;
+	};
+
 	Status status = Status::InvalidNoExplanation;
+	std::vector<TileVerdict> tiles;
 	std::vector<StampdownCreateAction> toCreate;
 	std::vector<StampdownRemoveAction> toRemove;
 

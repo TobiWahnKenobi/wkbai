@@ -617,6 +617,59 @@ void ClientInterface::drawRangeBands()
 	}
 }
 
+// The footprint squares of the building being placed, as WKB.exe draws them: one per tile, a
+// little smaller than the tile so that they read as a grid, translucent red or green, lying on
+// the ground (split in 2 x 2 so that they follow the smoothed terrain). An untextured look: a
+// white texel tinted by the vertex colour, with the range bands' state.
+void ClientInterface::drawFootprintTiles()
+{
+	if (footprintTiles.empty() || !client->terrain)
+		return;
+	constexpr int SPLIT = 2;
+	constexpr float TILE = 5.0f, INSET = 0.3f;
+	static std::optional<texture> white;
+	if (!white) {
+		Bitmap bmp;
+		bmp.width = bmp.height = 1;
+		bmp.format = BMFORMAT_R8G8B8A8;
+		bmp.pixels.resize(4);
+		for (int i = 0; i < 4; i++)
+			bmp.pixels[i] = 255;
+		white = gfx->CreateTexture(bmp, 1);
+	}
+	if (!footprintBatch)
+		footprintBatch = gfx->CreateBatch(64 * SPLIT * SPLIT * 4, 64 * SPLIT * SPLIT * 6);
+	gfx->BeginParticles();
+	gfx->BeginBatchDrawing();
+	gfx->SetBlendColor(-1);
+	gfx->SetTexture(0, *white);
+	const Terrain* terrain = client->terrain;
+	footprintBatch->begin();
+	for (const FootprintTile& tile : footprintTiles) {
+		const uint32_t color = tile.ok ? 0x8000E040 : 0x90F02020;
+		const float x0 = tile.x * TILE + INSET, z0 = tile.z * TILE + INSET, step = (TILE - 2 * INSET) / SPLIT;
+		for (int sz = 0; sz < SPLIT; sz++)
+			for (int sx = 0; sx < SPLIT; sx++) {
+				batchVertex* v;
+				uint16_t* ix;
+				uint32_t first;
+				footprintBatch->next(4, 6, &v, &ix, &first);
+				const float corners[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+				for (int i = 0; i < 4; i++) {
+					v[i].x = x0 + (sx + corners[i][0]) * step;
+					v[i].z = z0 + (sz + corners[i][1]) * step;
+					v[i].y = terrain->getHeightEx(v[i].x, v[i].z, true) + 0.15f;
+					v[i].u = v[i].v = 0.5f;
+					v[i].color = color;
+				}
+				for (const int& c : { 0, 2, 1, 0, 3, 2 })
+					*(ix++) = (uint16_t)(first + c);
+			}
+	}
+	footprintBatch->flush();
+	footprintBatch->end();
+}
+
 // The camera stays between a little above the ground under it and a high ceiling (for an
 // overview of the map); the pitch limit is applied where the camera turns.
 void ClientInterface::applyCameraLimits()
@@ -3125,6 +3178,7 @@ void ClientInterface::iter()
 		// objects that DISPLAY_SPRITE_WHEN_SELECTED_FOR finds), and later of the building being
 		// placed: band textures on the ground, the value being the radius in metres
 		rangeBands.clear();
+		footprintTiles.clear();
 		auto addRangeBand = [this](const GameObjBlueprint::RangeSprite& band, const Vector3& centre, ScriptContext* ctx) {
 			if (!band.radius || !client->terrain)
 				return;
@@ -3174,6 +3228,8 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, Vector3(0, 0, 0));
+				for (const auto& verdict : plan.tiles)
+					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
 				// where it can't stand (on another building), red; the server refuses it too
 				if (plan.status != StampdownPlan::Status::Valid)
 					test.flags |= SceneEntity::SEFLAG_BLOCKED;
@@ -3318,8 +3374,10 @@ void ClientInterface::iter()
 	}
 	if (terrainSpriteContainer)
 		terrainSpriteContainer->clear();
-	if (showTerrain)
+	if (showTerrain) {
 		drawRangeBands();
+		drawFootprintTiles();
+	}
 
 	if (particleRenderer && particlesContainer) {
 		ZoneScopedN("Particles");
