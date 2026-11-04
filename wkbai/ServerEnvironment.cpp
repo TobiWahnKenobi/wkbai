@@ -151,7 +151,7 @@ void ServerEnvironment::pickWeather(Server& server, float now)
 void ServerEnvironment::strikeLightning(Server& server)
 {
 	// the candidates: every player's characters and buildings, in the tree's order
-	std::vector<ServerGameObject*> buildings, characters;
+	std::vector<ServerGameObject*> buildings, walls, characters;
 	auto walk = [&](ServerGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
 			for (CommonGameObject* c : children) {
@@ -159,8 +159,12 @@ void ServerEnvironment::strikeLightning(Server& server)
 				if (so->deleted || (so->flags & CommonGameObject::fTerminated))
 					continue;
 				const uint8_t k = kindOf(so->blueprint);
-				if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && k != K_FOUNDATION)
-					buildings.push_back(so);
+				if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && k != K_FOUNDATION) {
+					// the walls, most of the buildings, apart: lightning goes for houses and towers
+					const std::string& n = so->blueprint->name;
+					const bool wall = ContainsCI(n, "stockade") || ContainsCI(n, "wall") || ContainsCI(n, "paling") || ContainsCI(n, "gate");
+					(wall ? walls : buildings).push_back(so);
+				}
 				else if (k == K_LIVING || k == K_MACHINE)
 					characters.push_back(so);
 				self(so, self);
@@ -171,7 +175,9 @@ void ServerEnvironment::strikeLightning(Server& server)
 	ServerGameObject* target = nullptr;
 	if (r < 20 && !buildings.empty())
 		target = buildings[SimRand() % buildings.size()];
-	else if (r < 40 && !characters.empty())
+	else if (r >= 20 && r < 24 && !walls.empty())
+		target = walls[SimRand() % walls.size()];
+	else if (r >= 24 && r < 44 && !characters.empty())
 		target = characters[SimRand() % characters.size()];
 	state.lightningCount++;
 	if (target) {
@@ -189,7 +195,7 @@ void ServerEnvironment::strikeLightning(Server& server)
 		else
 			damage(server, target, isBuilding ? 0.3f : 1.0f);
 		if (trace)
-			printf("ENVIRONMENT t=%.0f lightning hits %s %u at (%.0f, %.0f)\n", state.time, target->blueprint->name.c_str(), target->id, target->position.x, target->position.z);
+			printf("ENVIRONMENT t=%.0f lightning hits (%s) %s %u at (%.0f, %.0f)\n", state.time, seq >= 0 ? "the scripts' strike" : "own damage", target->blueprint->name.c_str(), target->id, target->position.x, target->position.z);
 	}
 	else {
 		const auto [w, h] = server.terrain->getPlayableArea();
