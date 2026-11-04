@@ -56,7 +56,7 @@ namespace {
 	}
 }
 
-uint8_t ServerEnvironment::kindOf(const GameObjBlueprint* bp)
+uint8_t ServerEnvironment::kindOf(const GameObjBlueprint* bp) const
 {
 	auto it = kinds.find(bp);
 	if (it != kinds.end())
@@ -74,6 +74,8 @@ uint8_t ServerEnvironment::kindOf(const GameObjBlueprint* bp)
 			"ship", "cog", "infernal", "mangonel", "ballista", "tower", "rocket", "organ", "engine" };
 		if (n.rfind("Dead ", 0) == 0)
 			k = K_OTHER;
+		else if (ContainsCI(n, "undead") || ContainsCI(n, "gibbering horde"))
+			k = K_UNDEAD;
 		else {
 			k = K_LIVING;
 			for (const char* m : machines)
@@ -89,7 +91,25 @@ float ServerEnvironment::speedFactorFor(const ServerGameObject* obj) const
 {
 	if (!enabled() || obj->blueprint->canWalkOnWater())
 		return 1.0f;
+	// the undead: the mud drags at them far more (to a quarter of their speed on soaked ground)
+	if (kindOf(obj->blueprint) == K_UNDEAD)
+		return std::clamp(Quantize(1.0f - 0.75f * state.wetness - 0.35f * state.snowCover, 0.05f), 0.25f, 1.0f);
 	return state.speedFactor;
+}
+
+float ServerEnvironment::winterAhead(float now, int* severity) const
+{
+	if (!settings.seasons)
+		return 0.0f;
+	const float length = settings.seasonLengthS();
+	const float into = now / length - std::floor(now / length); // the share of the season gone
+	const int season = ((int)std::floor(now / length) + settings.startSeason) % 4;
+	*severity = settings.severity[3] == 3 ? (resolvedYear >= 0 ? resolvedSeverity[3] : 1) : settings.severity[3];
+	if (season == 3)
+		return (1.0f - into) * length;
+	if (season == 2 && into >= 0.5f)
+		return length;
+	return 0.0f;
 }
 
 void ServerEnvironment::damage(Server& server, ServerGameObject* obj, float fraction)
@@ -165,7 +185,7 @@ void ServerEnvironment::strikeLightning(Server& server)
 					const bool wall = ContainsCI(n, "stockade") || ContainsCI(n, "wall") || ContainsCI(n, "paling") || ContainsCI(n, "gate");
 					(wall ? walls : buildings).push_back(so);
 				}
-				else if (k == K_LIVING || k == K_MACHINE)
+				else if (k == K_LIVING || k == K_MACHINE || k == K_UNDEAD)
 					characters.push_back(so);
 				self(so, self);
 			}
@@ -301,6 +321,7 @@ void ServerEnvironment::prepareFloods(Server& server)
 {
 	floodPrepared = true;
 	floodTiles.clear();
+	deepTiles.clear();
 	Terrain* t = server.terrain;
 	if (!t)
 		return;
@@ -308,19 +329,15 @@ void ServerEnvironment::prepareFloods(Server& server)
 	for (int z = 0; z < h; z++)
 		for (int x = 0; x < w; x++) {
 			const TerrainTile* tile = t->getPlayableTile(x, z);
-			if (!tile || tile->fullOfWater)
-				continue;
-			float water = -1e9f;
-			for (int dz = -10; dz <= 10; dz++)
-				for (int dx = -10; dx <= 10; dx++)
-					if (const TerrainTile* n = t->getPlayableTile(x + dx, z + dz); n && n->fullOfWater)
-						water = std::max(water, n->waterLevel);
-			if (water < -1e8f)
-				continue;
-			const float ground = t->getHeight(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
-			if (ground - water < 4.0f)
-				floodTiles.push_back({ z * w + x, water, ground });
+			if (tile && tile->fullOfWater) {
+				const float bed = std::min({ t->getVertex(t->edge + x, t->edge + z), t->getVertex(t->edge + x + 1, t->edge + z),
+					t->getVertex(t->edge + x, t->edge + z + 1), t->getVertex(t->edge + x + 1, t->edge + z + 1) });
+				if (tile->waterLevel - bed > 1.5f)
+					deepTiles.push_back(z * w + x);
+			}
 		}
+	for (const FloodLand& f : FindFloodLand(t))
+		floodTiles.push_back({ f.z * w + f.x, f.water, f.ground });
 }
 
 void ServerEnvironment::applyFloods(Server& server)
@@ -329,12 +346,33 @@ void ServerEnvironment::applyFloods(Server& server)
 		prepareFloods(server);
 	stats.floodTiles = floodTiles.size();
 	stats.floodedTiles = 0;
-	if (state.waterRise < 0.1f || !server.tiles)
+	if (!server.tiles)
 		return;
 	const int hp = server.gameSet->items.names.getIndex("Hit Points");
 	std::set<uint32_t> buildingsDone;
 	std::vector<std::pair<SrvGORef, float>> hits; // (object, fraction), applied after the walk
-	for (const FloodTile& ft : floodTiles) {
+	// the ice: walked on from ICE_WALKABLE; who is still out on deep water once it is thinner than
+	// ICE_BREAKS goes through it (a fifth of their health a second)
+	server.terrain->waterFrozen = state.ice >= ICE_WALKABLE;
+	if (server.terrain->waterFrozen) {
+		int onIce = 0;
+		for (int ti : deepTiles)
+			for (const auto& ref : server.tiles[ti].objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !o->blueprint->canWalkOnWater())
+					onIce++;
+		stats.onIceMost = std::max(stats.onIceMost, onIce);
+		stats.onIceSeconds += onIce;
+	}
+	if (state.ice > 0.0f && state.ice < ICE_BREAKS)
+		for (int ti : deepTiles)
+			for (const auto& ref : server.tiles[ti].objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE || kindOf(o->blueprint) == K_UNDEAD))
+					hits.emplace_back(o, kindOf(o->blueprint) == K_UNDEAD ? 0.4f : 0.2f);
+	if (state.waterRise < 0.1f && hits.empty())
+		return;
+	static const std::vector<FloodTile> none;
+	for (const FloodTile& ft : state.waterRise < 0.1f ? none : floodTiles) {
 		const float depth = ft.water + state.waterRise - ft.ground;
 		if (depth <= 0.1f)
 			continue;
@@ -342,11 +380,17 @@ void ServerEnvironment::applyFloods(Server& server)
 		auto& tile = server.tiles[ft.tile];
 		if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && buildingsDone.insert(b->id).second)
 			hits.emplace_back(b, 0.0015f * std::min(depth, 2.0f));
-		if (depth > 1.0f && state.ice < 0.6f)
+		// drowning: in more than 1 m of water, the undead in more than 0.5 m and twice as fast
+		if (depth > 0.5f && state.ice < 0.6f)
 			for (const auto& ref : tile.objList)
 				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
-					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE))
-					hits.emplace_back(o, 0.05f);
+					&& !o->blueprint->canWalkOnWater()) {
+					const uint8_t k = kindOf(o->blueprint);
+					if (k == K_UNDEAD)
+						hits.emplace_back(o, 0.1f);
+					else if (depth > 1.0f && (k == K_LIVING || k == K_MACHINE))
+						hits.emplace_back(o, 0.05f);
+				}
 	}
 	if (trace && simTraceCountdown-- <= 0) {
 		simTraceCountdown = 30;
@@ -425,6 +469,9 @@ void ServerEnvironment::update(Server& server)
 		if (settings.dayNight)
 			target += swing[state.season] * (1.0f - 0.5f * state.cloudCover) * std::sin(2.0f * PI * (state.dayFraction - 0.375f));
 		target += WEATHER_TEMPERATURE[state.weather] * (WEATHER_TEMPERATURE[state.weather] > 0 ? scale : 1.0f);
+		// no hotter than 40 degrees (a harsh summer's heatwave in the afternoon would reach 48):
+		// the game's lands are temperate
+		target = std::min(target, 40.0f);
 		temperatureTarget = target;
 		if (!started)
 			state.temperatureC = target;

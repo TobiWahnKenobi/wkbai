@@ -17,6 +17,7 @@
 struct NetPacketWriter;
 struct BinaryReader;
 struct CommonGameState;
+struct Terrain;
 
 // The skirmish settings ("dayNight", "dayLength", ... QuickSkirmishMenu::setSetting)
 struct EnvironmentSettings {
@@ -67,6 +68,20 @@ struct EnvironmentState {
 	void read(BinaryReader& r);
 };
 
+// The ice (EnvironmentState::ice): land units walk over the frozen rivers and lakes from
+// ICE_WALKABLE (boats are held fast); below it nobody sets out on it, and below ICE_BREAKS the
+// ones still out on deep water go through it and drown
+constexpr float ICE_WALKABLE = 0.85f, ICE_BREAKS = 0.5f;
+
+// The land that floods (the server's floods and the client's picture of them, the same tiles):
+// spread out from the shores, tile by tile (4 neighbours), up to 10 tiles from the water, over
+// the land less than 4 m above the water it spreads from and not more than 1.5 m below it (so not
+// down the cliff below a lake that ends in a waterfall); a tile reached from several waters takes
+// the highest. Playable tile coordinates, the water's level, the ground at the tile's middle and
+// at its lowest corner; in row order.
+struct FloodLand { int x, z; float water, ground, low; };
+std::vector<FloodLand> FindFloodLand(const Terrain* t);
+
 // The sun worked out from the clock: towards it, how strong, its colour, the sky's
 struct SunState {
 	Vector3 direction{ 0.5f, 1.0f, 0.3f }; // towards the sun (or the moon at night), unit
@@ -102,6 +117,15 @@ struct EnvironmentView {
 	float exposure = 1.0f, saturation = 1.0f, fogDistance = 1.0f;
 };
 extern EnvironmentView g_environment;
+// how much water the waterfalls carry (their look and their sound): 1 as the map has it (and
+// with the weather off), up to 2 in a flood with heavy rain, down to 0.1 in a drought
+inline float WaterfallFlow(const EnvironmentView& v)
+{
+	if (!v.active)
+		return 1.0f;
+	const float f = 1.0f + 0.6f * v.waterRise + 0.4f * v.rain;
+	return f < 0.1f ? 0.1f : f > 2.0f ? 2.0f : f;
+}
 
 // The night's shorter sight: away from light, sight ranges are cut to `factor` of themselves; a
 // target in a lit block (20 m, as Server::sightBlocks) is seen at the full range. Each game state

@@ -103,6 +103,9 @@ struct Terrain
 	// vertex heights (exact at the vertices), as the terrain renderer's SmoothHeight
 	float getSmoothHeight(float x, float z) const;
 	float getHeightEx(float x, float z, bool floatOnWater) const;
+	// the rivers and lakes frozen over hard enough to walk on (wkbai's weather): everything
+	// stands on the water's surface, as boats do (getHeightEx)
+	bool waterFrozen = false;
 
 	Vector3 getNormal(int x, int z) const;
 

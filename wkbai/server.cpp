@@ -1831,9 +1831,11 @@ static const std::pair<int, int> objectCostResourceItems[3] = {
 
 bool ServerGameObject::canAffordObject(const GameObjBlueprint* blueprint)
 {
+	// an AI player's food kept back for the winter (wkbai's seasons; 0 otherwise)
+	const float foodReserve = aiController.winterReserve;
 	for (auto [resItem, costItem] : objectCostResourceItems) {
 		float cost = blueprint->getStartingItemValue(costItem);
-		if (cost > 0.0f && this->getItem(resItem) < cost)
+		if (cost > 0.0f && this->getItem(resItem) < cost + (resItem == Tags::PDITEM_FOOD ? foodReserve : 0.0f))
 			return false;
 	}
 	return true;

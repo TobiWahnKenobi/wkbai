@@ -687,6 +687,8 @@ void Client::tick()
 				environment.read(br);
 				environmentActive = es.active();
 				nightSight.factor = environment.sightFactor;
+				if (terrain)
+					terrain->waterFrozen = environmentActive && environment.ice >= ICE_WALKABLE;
 				break;
 			}
 			case NETCLIMSG_HOST_DATA: {

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 
 namespace {
 	constexpr float PI = 3.14159265358979f;
@@ -115,13 +116,85 @@ float EnvYearFraction(const EnvironmentSettings& s, float time)
 	return Frac(s.startSeason * 0.25f + time / (4.0f * s.seasonLengthS()));
 }
 
+std::vector<FloodLand> FindFloodLand(const Terrain* t)
+{
+	std::vector<FloodLand> out;
+	if (!t)
+		return out;
+	const auto [w, h] = t->getNumPlayableTiles();
+	if (w <= 0 || h <= 0)
+		return out;
+	const size_t n = (size_t)w * h;
+	std::vector<float> ground(n), level(n, -1e30f);
+	std::vector<uint8_t> water(n), steps(n, 255);
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const TerrainTile* tile = t->getPlayableTile(x, z);
+			water[(size_t)z * w + x] = tile && tile->fullOfWater;
+			ground[(size_t)z * w + x] = t->getHeight(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
+		}
+	const int dx[4] = { 1, -1, 0, 0 }, dz[4] = { 0, 0, 1, -1 };
+	auto fits = [&](size_t i, float lvl) { return ground[i] - lvl < 4.0f && ground[i] - lvl > -1.5f; };
+	std::deque<int> queue;
+	// the shores: land beside water
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const size_t i = (size_t)z * w + x;
+			if (water[i])
+				continue;
+			for (int k = 0; k < 4; k++) {
+				const int ax = x + dx[k], az = z + dz[k];
+				if (ax < 0 || az < 0 || ax >= w || az >= h || !water[(size_t)az * w + ax])
+					continue;
+				const float lvl = t->getPlayableTile(ax, az)->waterLevel;
+				if (fits(i, lvl) && lvl > level[i]) {
+					level[i] = lvl;
+					steps[i] = 1;
+				}
+			}
+			if (steps[i] == 1)
+				queue.push_back((int)i);
+		}
+	// outwards (a tile reached again with higher water spreads again)
+	while (!queue.empty()) {
+		const int i = queue.front();
+		queue.pop_front();
+		if (steps[i] >= 10)
+			continue;
+		const int x = i % w, z = i / w;
+		for (int k = 0; k < 4; k++) {
+			const int ax = x + dx[k], az = z + dz[k];
+			if (ax < 0 || az < 0 || ax >= w || az >= h)
+				continue;
+			const size_t j = (size_t)az * w + ax;
+			if (water[j] || !fits(j, level[i]) || level[j] >= level[i])
+				continue;
+			level[j] = level[i];
+			steps[j] = (uint8_t)(steps[i] + 1);
+			queue.push_back((int)j);
+		}
+	}
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const size_t i = (size_t)z * w + x;
+			if (level[i] < -1e29f)
+				continue;
+			const float low = std::min({ t->getVertex(t->edge + x, t->edge + z), t->getVertex(t->edge + x + 1, t->edge + z),
+				t->getVertex(t->edge + x, t->edge + z + 1), t->getVertex(t->edge + x + 1, t->edge + z + 1) });
+			out.push_back({ x, z, level[i], ground[i], low });
+		}
+	return out;
+}
+
 SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover)
 {
 	SunState sun;
-	// at 47 degrees north; the sun's declination over the year (0 at the spring equinox, the
-	// highest a quarter year on), and a mild 10 degrees without seasons
+	// at 47 degrees north; the sun's declination over the year: the equinoxes in the middle of
+	// spring and autumn, the solstices in the middle of summer and winter (with the seasons'
+	// temperatures), so the noon sun stands 66 degrees high at midsummer and 20 at midwinter and
+	// the days last 15.7 and 8.3 hours of the day's length; a mild 10 degrees without seasons
 	const float lat = 47.0f * PI / 180.0f;
-	const float decl = (seasons ? 23.4f * std::sin(2.0f * PI * yearFraction) : 10.0f) * PI / 180.0f;
+	const float decl = (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f)) : 10.0f) * PI / 180.0f;
 	const float h = (dayFraction - 0.5f) * 2.0f * PI;
 	// in a frame of east, south, up
 	auto at = [&](float hourAngle) {

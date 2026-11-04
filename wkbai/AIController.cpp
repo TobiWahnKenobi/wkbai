@@ -290,6 +290,33 @@ void AIController::update()
 		}
 	}
 
+	// ---- The winter store (wkbai's seasons) ----
+	// In winter the fields give nothing and the farmers' support is cut (ServerEnvironment::
+	// supportScale): what the people eat beyond it comes out of the store, a tenth of the shortfall
+	// every 3.1 s (Economic Manager.cpp), and with the store empty the soldiers starve. From the
+	// middle of autumn the AI works out that shortfall for the winter still to come and keeps that
+	// much food (and a fifth more) back: nothing that costs food is bought below it.
+	if (gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && Server::instance->environment.settings.seasons
+		&& Server::instance->timeManager.currentTime >= nextWinterCheck) {
+		const float now = Server::instance->timeManager.currentTime;
+		nextWinterCheck = now + 5.0f;
+		int severity = 1;
+		const float ahead = Server::instance->environment.winterAhead(now, &severity);
+		winterReserve = 0.0f;
+		if (ahead > 0.0f) {
+			const GameSet* gs = Server::instance->gameSet.get();
+			const int consumptionItem = gs->items.names.getIndex("Food Consumption");
+			const int supportEq = gs->equations.names.getIndex("Support by Total Farmers by Player");
+			if (consumptionItem >= 0 && supportEq >= 0) {
+				SrvScriptContext ctx(Server::instance, gameObj);
+				// the support as it is (the equation itself, not scaled), then as winter leaves it
+				const float support = gs->equations[supportEq]->eval(&ctx) * ServerEnvironment::WinterSupport(severity);
+				const float shortfall = std::max(0.0f, gameObj->getItem(consumptionItem) - support);
+				winterReserve = shortfall * 0.1f / 3.1f * ahead * 1.2f;
+			}
+		}
+	}
+
 	// ---- The home guard (the aggressive AI, not in WKB.exe; AIController::homeGuard) ----
 	if (Server::instance->aggressiveAI && Server::instance->aiHomeGuard && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
 		&& Server::instance->timeManager.currentTime >= nextGuardCheck) {

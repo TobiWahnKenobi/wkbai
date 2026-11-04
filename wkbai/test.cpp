@@ -2377,8 +2377,19 @@ void Test_AIvsAI()
 					e.snowfall, e.fog, e.wetness, e.snowCover, e.ice, e.waterRise, e.sightFactor, e.speedFactor,
 					(size_t)std::count(server.nightSight.lit.begin(), server.nightSight.lit.end(), (uint8_t)1), server.nightSight.lit.size());
 				const auto& st = env.stats;
+				{
+					std::string reserves;
+					if (CommonGameObject* level = server.getLevel())
+						for (const auto& [type, children] : level->children)
+							for (CommonGameObject* c : children)
+								if (auto* pl = (ServerGameObject*)c; c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && pl->aiController.winterReserve > 0.0f)
+							reserves += " " + std::to_string(pl->id) + "=" + std::to_string((int)pl->aiController.winterReserve) + "/" + std::to_string((int)pl->getItem(Tags::PDITEM_FOOD));
+					if (!reserves.empty())
+						printf("AITEST environment AI winter stores (kept back/food):%s\n", reserves.c_str());
+				}
 				const int burningAlias = server.gameSet->aliases.names.getIndex("Burning Buildings");
-				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu\n", st.floodTiles, st.floodedTiles, burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0);
+				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu; on the ice: at most %d units, %d unit-seconds; harvests lost to fallow fields %d\n", st.floodTiles, st.floodedTiles,
+					burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0, st.onIceMost, st.onIceSeconds, st.fallowHarvests);
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
 			}

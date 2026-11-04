@@ -54,7 +54,7 @@ float Terrain::getSmoothHeight(float ipx, float ipz) const
 float Terrain::getHeightEx(float x, float z, bool floatOnWater) const
 {
 	float h = getHeight(x, z);
-	if (floatOnWater) {
+	if (floatOnWater || waterFrozen) {
 		int ix = (int)(edge + x / 5.0f);
 		int iz = (int)(edge + z / 5.0f);
 		if (ix >= 0 && ix < width && iz >= 0 && iz < height) {
