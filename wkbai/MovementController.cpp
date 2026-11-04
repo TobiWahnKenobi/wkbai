@@ -204,16 +204,19 @@ namespace {
 
 	// Every class's ground looked at on every tile (and with it the tiles' lazy terrainType), and
 	// its regions: nothing is written to the cache, the tiles or the server while the worker
-	// threads search
-	void fillGrids(Grids& g) {
+	// threads search. The rows are filled on the threads (forEach): a row's tiles are its own,
+	// terrainType included; one class after the other, as they share the tiles.
+	template<typename ForEach> void fillGrids(Grids& g, ForEach forEach) {
 		for (ClassGrid& c : g.classes) {
 			if (!c.complete) {
-				for (int tz = 0; tz < g.h; tz++)
+				forEach((size_t)g.h, [&](size_t row) {
+					const int tz = (int)row;
 					for (int tx = 0; tx < g.w; tx++) {
 						uint8_t& s = c.state[(size_t)tz * g.w + tx];
 						if (!s)
 							s = MovementController::isTerrainBlocked(c.sample, tx, tz) ? 2 : 1;
 					}
+				});
 				c.complete = true;
 			}
 			if (!c.regionValid)
@@ -852,12 +855,8 @@ void MovementController::runPathSearches()
 	// that look the ground up afresh)
 	const bool parallel = !g_noCache && !getenv("WKB_PATH_CHECKCACHE");
 	static WorkerPool* pool = nullptr;
-	if (parallel) {
-		fillGrids(g);
-		if (!pool && pathThreads() > 1)
-			pool = new WorkerPool(pathThreads()); // (left running to the end of the program)
-	}
-	lap(0);
+	if (parallel && !pool && pathThreads() > 1)
+		pool = new WorkerPool(pathThreads()); // (left running to the end of the program)
 	auto forEach = [&](size_t n, const std::function<void(size_t)>& f) {
 		// (fewer than 4 here: the threads' wake-up costs more; test runs: WKB_PATH_MINBATCH=1
 		// sends every batch to the threads)
@@ -870,7 +869,10 @@ void MovementController::runPathSearches()
 			for (size_t i = 0; i < n; i++)
 				f(i);
 	};
-	auto lazyPred = [&](int cls) { ClassGrid* c = &g.classes[cls]; return [c, server, w, h](PFPos p) { return tileBlocked(server, *c, w, h, p.x, p.z); }; };
+	if (parallel)
+		fillGrids(g, forEach);
+	lap(0);
+	auto lazyPred =[&](int cls) { ClassGrid* c = &g.classes[cls]; return [c, server, w, h](PFPos p) { return tileBlocked(server, *c, w, h, p.x, p.z); }; };
 	// the requests still wanted (not stopped or replaced since)
 	std::vector<PathRequest*> todo;
 	todo.reserve(g_pathQueue.size());
