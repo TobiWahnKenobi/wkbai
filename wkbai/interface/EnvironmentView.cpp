@@ -14,6 +14,7 @@
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -124,10 +125,18 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	const float since = (SDL_GetTicks() - g_flashStart) / 1000.0f;
 	v.lightningFlash = g_flashStart && since < 0.35f ? (since < 0.08f ? 1.0f : since < 0.16f ? 0.3f : since < 0.22f ? 0.8f : 1.0f - since / 0.35f) : 0.0f;
 	v.lightningPos = g_boltPos;
+	// tests (environment variable WKB_TEST_LIGHTNING): a bolt held 40 m in front of the camera
+	static const bool testBolt = getenv("WKB_TEST_LIGHTNING") != nullptr;
+	if (testBolt) {
+		const Vector3 ahead = client->camera.position + Vector3(client->camera.direction.x, 0, client->camera.direction.z).normal() * 75.0f;
+		v.lightningPos = Vector3(ahead.x, terrain->getHeight(ahead.x, ahead.z), ahead.z);
+		v.lightningFlash = 0.35f;
+		g_boltSeed = 12345;
+	}
 	// the grade: darker and paler at night and under heavy cloud, brighter in a flash
 	v.exposure = (0.42f + 0.58f * v.sun.daylight) * (1.0f - 0.18f * v.cloudCover) * (1.0f + 1.2f * v.lightningFlash);
 	v.saturation = (0.50f + 0.50f * v.sun.daylight) * (1.0f - 0.2f * v.fog);
-	v.fogDistance = std::clamp(1.0f - 0.8f * v.fog - 0.3f * std::max(v.rain, v.snowfall * 1.3f), 0.15f, 1.0f);
+	v.fogDistance = std::clamp(1.0f - 0.95f * v.fog - 0.35f * std::max(v.rain, v.snowfall * 1.3f), 0.08f, 1.0f);
 	if (scene) {
 		scene->sunDirection = terrain->sunVector;
 		scene->sunColor = terrain->sunColor;
@@ -218,7 +227,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		const uint32_t colour = (uint32_t)(70 + 60 * v.sun.daylight) << 24 | 0xB4BED2;
 		for (int i = 0; i < drops; i++) {
 			Vector3 p;
-			if (!place(i, 14.0f, 0.0f, p))
+			if (!place(i, 14.0f, 0.0f, p) || (p - camera.position).sqlen3() < 8.0f * 8.0f)
 				continue;
 			Vector3 across = along.cross(camera.direction);
 			across = across.sqlen3() > 1e-8f ? across.normal() * 0.025f : camside * 0.025f;
@@ -231,7 +240,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		const uint32_t colour = (uint32_t)(150 + 80 * v.sun.daylight) << 24 | 0xF2F4FA;
 		for (int i = 0; i < flakes; i++) {
 			Vector3 p;
-			if (!place(i + 50000, 1.4f, 0.6f, p))
+			if (!place(i + 50000, 1.4f, 0.6f, p) || (p - camera.position).sqlen3() < 15.0f * 15.0f)
 				continue;
 			const float s = 0.06f + 0.05f * Hash(i + 777);
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
@@ -245,10 +254,10 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			const float f = s / 14.0f;
 			Vector3 next = prev + (v.lightningPos - prev) * (1.0f / (15 - s));
 			if (s < 14)
-				next += Vector3((Hash(g_boltSeed + s * 2) - 0.5f) * 6.0f, 0.0f, (Hash(g_boltSeed + s * 2 + 1) - 0.5f) * 6.0f);
+				next += Vector3((Hash(g_boltSeed + s * 2) - 0.5f) * 14.0f, 0.0f, (Hash(g_boltSeed + s * 2 + 1) - 0.5f) * 14.0f);
 			Vector3 across = (next - prev).cross(camera.direction);
-			across = across.sqlen3() > 1e-8f ? across.normal() * (0.6f - 0.35f * f) : camside * 0.4f;
-			quad(prev + across, prev - across, next - across, next + across, colour);
+			across = across.sqlen3() > 1e-8f ? across.normal() * (1.3f - 0.8f * f) : camside * 0.8f;
+			quad(next + across, next - across, prev - across, prev + across, colour);
 			prev = next;
 		}
 	}

@@ -677,7 +677,7 @@ struct DiligentRenderer : DiligentGfx
 		}
 		// wkbai's weather: fog nearer (Environment.h; 1 without)
 		if (!g_renderSettings.fogOff && g_environment.fogDistance < 1.0f) {
-			cc[4] *= g_environment.fogDistance * g_environment.fogDistance;
+			cc[4] *= g_environment.fogDistance * g_environment.fogDistance * g_environment.fogDistance;
 			cc[5] *= g_environment.fogDistance;
 		}
 		cc[6] = cc[7] = 0.0f;

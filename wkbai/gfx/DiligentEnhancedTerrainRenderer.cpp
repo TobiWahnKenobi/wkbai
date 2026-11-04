@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 #include "bitmap.h"
 #include "RenderSettings.h"
+#include "../Environment.h"
 #include "DiligentWaterfalls.h"
 #include <algorithm>
 #include <cmath>
@@ -113,6 +114,7 @@ cbuffer SunBuffer
 	// (depth = A + B / view z), the ray's longest reach in world units
 	float4 ReflectParams;
 	float4 WaterMode; // refinement steps of a hit, x; y: Medium (High's look on the flat surface); z: the sky box is bound
+	float4 WeatherParams; // wkbai's weather (Environment.h): snow cover, wetness, water level change (m), ice; all 0 without
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -155,6 +157,51 @@ float3 FireLight(float3 pos, float3 n)
 		sum += FireLights[2 * i + 1].rgb * (fade * fade * wrap);
 	}
 	return sum;
+}
+
+// wkbai's weather on the ground (WeatherParams; nothing when all 0): snow lying on the flatter
+// ground in patches that close up as it deepens, wet ground darker and a little glossier-blue
+float WeatherNoise(float2 p)
+{
+	float2 i = floor(p), f = frac(p);
+	float2 u = f * f * (3 - 2 * f);
+	float a = frac(sin(dot(i, float2(127.1, 311.7))) * 43758.5);
+	float b = frac(sin(dot(i + float2(1, 0), float2(127.1, 311.7))) * 43758.5);
+	float c = frac(sin(dot(i + float2(0, 1), float2(127.1, 311.7))) * 43758.5);
+	float d = frac(sin(dot(i + float2(1, 1), float2(127.1, 311.7))) * 43758.5);
+	return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
+float SnowShare(float3 pos, float3 n)
+{
+	if (WeatherParams.x <= 0)
+		return 0;
+	float patches = WeatherNoise(pos.xz * 0.11) * 0.6 + WeatherNoise(pos.xz * 0.43) * 0.4;
+	float flat = saturate((n.y - 0.55) * 3);
+	return saturate((WeatherParams.x * 1.5 - patches) * 4) * flat;
+}
+
+float3 WeatherGround(float3 albedo, float3 pos, float3 n)
+{
+	if (WeatherParams.y > 0)
+		albedo *= lerp(float3(1, 1, 1), float3(0.62, 0.64, 0.70), WeatherParams.y * (1 - SnowShare(pos, n)));
+	return lerp(albedo, float3(1.30, 1.33, 1.40), SnowShare(pos, n));
+}
+
+// the water's level up (flood) or down (drought), and its ice
+float3 WaterLevelPos(float3 pos)
+{
+	return pos + float3(0, WeatherParams.z, 0);
+}
+
+float4 IceOver(float4 c, float3 world)
+{
+	if (WeatherParams.w <= 0)
+		return c;
+	float cracks = WeatherNoise(world.xz * 0.6) * 0.15;
+	float3 ice = float3(0.80, 0.87, 0.93) - cracks;
+	float share = saturate(WeatherParams.w * 1.4 - 0.2);
+	return float4(lerp(c.rgb, GradeColour(ice), share), lerp(c.a, 1, share));
 }
 
 
@@ -355,6 +402,8 @@ struct LAKE_OUTPUT
 LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 {
 	LAKE_OUTPUT output;
+	Pos = WaterLevelPos(Pos);
+	Depth += WeatherParams.z;
 	output.Pos = mul(float4(Pos, 1), Transform);
 	output.World = Pos;
 	output.Depth = Depth;
@@ -679,6 +728,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
 	if (WaterSkyUp.w != 0)
 		input.Depth = max(input.World.y - SmoothHeight(input.World.xz), 0);
+	if (WeatherParams.z < 0 && input.World.y < SmoothHeight(input.World.xz))
+		discard;
 	if (WaterParams.x == 0)
 		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
 	float2 uv = input.World.xz * WaterParams.y;
@@ -752,8 +803,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		alpha = max(alpha, share);
 	}
 	if (WaterSkyUp.w != 0)
-		return WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
-	return float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
+		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
+	return IceOver(float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
 }
 
 // The rivers' ripples at (s, d): s the distance to the mouth along the channel, d the distance
@@ -926,7 +977,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7);
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam);
-	return WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha);
+	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
 }
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
@@ -989,7 +1040,9 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 		n = -n; // both sides of the blade
 	float3 l = normalize(SunDirection);
 	float shadow = CloudLight(input.World) * StaticShadowLight(input.World) * BlobLight(input.World);
-	float3 albedo = input.Colour.rgb;
+	if (SnowShare(input.World, float3(0, 1, 0)) > 0.4)
+		discard;
+	float3 albedo = WeatherGround(input.Colour.rgb, input.World, float3(0, 1, 0));
 	float nl = saturate(dot(n, l)), nv = max(dot(n, v), 1e-3);
 	float wrapped = saturate((dot(n, l) + 0.25) / 1.25);
 	// light through the blade: about 30% of what falls on its other side, diffusely, and more
@@ -1023,6 +1076,8 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, float3 bitangent)
 {
 	float lum = 0;
+	// lying snow (wkbai's weather) hides the texture's bumps
+	nrm = lerp(nrm, float3(0, 1, 0), SnowShare(input.FragPos, normalize(input.Norm)));
 
 	// BumpOn & 2 (RenderSettings::terrainOriginalLight): the original's per-vertex Dot3 light
 	// vector. It is the sun in the slope's tangent frame, but its up component is at least 1/3
@@ -1054,6 +1109,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
+	tex.rgb = WeatherGround(tex.rgb, input.FragPos, normalize(vertexNormal));
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 c = lerp(float4(light, 1) * input.Color * tex, FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
@@ -1231,7 +1287,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 864;
+	cbDesc.Size = 880;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -2051,6 +2107,12 @@ void DiligentEnhancedTerrainRenderer::render()
 	reflect[1] = camera->projMatrix.m[2][2];
 	reflect[2] = camera->projMatrix.m[3][2];
 	reflect[3] = wq == 2 ? 45.0f : wq <= 4 ? 90.0f : 140.0f;
+	// wkbai's weather (Environment.h): 0 without
+	float* weather = (float*)(sbdata + 864);
+	weather[0] = g_environment.active ? g_environment.snowCover : 0.0f;
+	weather[1] = g_environment.active ? g_environment.wetness : 0.0f;
+	weather[2] = g_environment.active ? g_environment.waterRise : 0.0f;
+	weather[3] = g_environment.active ? g_environment.ice : 0.0f;
 	float* waterMode = (float*)(sbdata + 848);
 	waterMode[0] = wq == 2 ? 0.0f : wq <= 4 ? 4.0f : 6.0f;
 	const bool highOk = _impl->highWaterPipeline && _impl->waterTexture;
