@@ -2388,8 +2388,9 @@ void Test_AIvsAI()
 						printf("AITEST environment AI winter stores (kept back/food):%s\n", reserves.c_str());
 				}
 				const int burningAlias = server.gameSet->aliases.names.getIndex("Burning Buildings");
-				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu; on the ice: at most %d units, %d unit-seconds; harvests lost to fallow fields %d\n", st.floodTiles, st.floodedTiles,
-					burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0, st.onIceMost, st.onIceSeconds, st.fallowHarvests);
+				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu; on the ice: at most %d units, %d unit-seconds; harvests lost to fallow fields %d; wildfires %d (%d from missiles, %d from buildings, %d out of nowhere), %d patches (at most %d at once), %d buildings set alight, %d killed\n", st.floodTiles, st.floodedTiles,
+					burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0, st.onIceMost, st.onIceSeconds, st.fallowHarvests,
+					st.wildfires, st.fromMissiles, st.fromBuildings, st.spontaneous, st.fireCells, st.fireCellsMost, st.buildingsFired, st.fireDeaths);
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
 			}

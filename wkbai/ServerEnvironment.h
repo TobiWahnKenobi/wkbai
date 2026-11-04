@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "Environment.h"
+#include "GameObjectRef.h"
 
 struct Server;
 struct ServerGameObject;
@@ -38,6 +39,11 @@ struct ServerEnvironment {
 	// for the AI's winter store: the seconds of winter still to come once it is near (from the
 	// middle of autumn: all of it), and that winter's severity; 0 the rest of the year
 	float winterAhead(float now, int* severity) const;
+	// wildfires (heatwaves and droughts): how likely any fire is to spread to the land (0 the rest
+	// of the time); a flaming missile came down here (MissileTask: on a unit, a building or the
+	// ground): in the heat it may set the land alight, a large fire at once
+	float fireRisk() const;
+	void fireLanded(Server& server, const Vector3& pos, bool sure = false);
 
 	// a save game's side file (<save>.env.txt): the settings and the state, read back as is
 	std::string saveText() const;
@@ -46,13 +52,17 @@ struct ServerEnvironment {
 
 	// for the tests: what happened ("AITEST environment" lines)
 	struct Stats { int frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
-		size_t floodTiles = 0, floodedTiles = 0; int onIceMost = 0, onIceSeconds = 0, fallowHarvests = 0; } stats;
+		size_t floodTiles = 0, floodedTiles = 0; int onIceMost = 0, onIceSeconds = 0, fallowHarvests = 0;
+		int wildfires = 0, fireCells = 0, fireCellsMost = 0, fireDeaths = 0, buildingsFired = 0, fromMissiles = 0, fromBuildings = 0, spontaneous = 0; } stats;
 	// what happens: frozen units, strikes (for the tests' census)
 	bool trace = false;
 	// tests ("environmentForce": { "weather": <EnvWeather>, "waterRise": <m> }): that weather
 	// always, the water's level heading there; -1 / a NaN: none
 	int forceWeather = -1;
 	float forceWaterRise = -1000.0f;
+	// tests ("environmentForce": { "fireAt": [x, z, after s] }): a flaming missile comes down there
+	// once that many seconds in (the screenshots' fire)
+	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;
 
 private:
 	float nextUpdate = -1.0f;
@@ -79,6 +89,16 @@ private:
 	enum Kind : uint8_t { K_OTHER = 0, K_SHELTER = 1, K_LIVING = 2, K_MACHINE = 3, K_FOUNDATION = 4, K_UNDEAD = 5 };
 	uint8_t kindOf(const GameObjBlueprint* bp) const;
 
+	// the burning land: each patch a "Burning Object" (the Firestorm's flames and sound), spreading
+	// over dry ground, hurting who is in it, setting buildings alight
+	// gen: steps from where the fire started (it spreads no further than about 12 * the risk);
+	// burnt: the tiles that burned (they don't burn again until the heat is over)
+	struct Wildfire { Vector3 pos; float born = 0, life = 0; SrvGORef visual; int gen = 0; };
+	std::vector<Wildfire> fires;
+	std::set<int> burnt;
+	void updateFires(Server& server);
+	bool igniteAt(Server& server, const Vector3& pos, float life, int gen = 0);
+	float fuelAt(Server& server, const Vector3& pos);
 	void pickWeather(Server& server, float now);
 	void strikeLightning(Server& server);
 	void applyExposure(Server& server);

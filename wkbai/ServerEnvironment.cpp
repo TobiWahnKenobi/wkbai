@@ -5,6 +5,7 @@
 #include "server.h"
 #include "network.h"
 #include "terrain.h"
+#include "TrnTextureDb.h"
 #include "tags.h"
 #include "util/SimRandom.h"
 #include "gameset/gameset.h"
@@ -95,6 +96,200 @@ float ServerEnvironment::speedFactorFor(const ServerGameObject* obj) const
 	if (kindOf(obj->blueprint) == K_UNDEAD)
 		return std::clamp(Quantize(1.0f - 0.75f * state.wetness - 0.35f * state.snowCover, 0.05f), 0.25f, 1.0f);
 	return state.speedFactor;
+}
+
+float ServerEnvironment::fireRisk() const
+{
+	if (!settings.seasons || (state.weather != WEATHER_HEATWAVE && state.weather != WEATHER_DROUGHT))
+		return 0.0f;
+	const float base = state.weather == WEATHER_HEATWAVE ? 1.0f : 0.75f;
+	return std::clamp(base * SEVERITY_SCALE[std::clamp(state.severity, 0, 2)] - state.wetness - state.rain, 0.0f, 1.5f);
+}
+
+// how well the land burns: grass, fields, meadows and forest floor well, bare ground less, rock,
+// sand, snow, roads and water not; trees around it more
+float ServerEnvironment::fuelAt(Server& server, const Vector3& pos)
+{
+	Terrain* t = server.terrain;
+	const auto [w, h] = t->getNumPlayableTiles();
+	const int tx = (int)(pos.x / 5.0f), tz = (int)(pos.z / 5.0f);
+	if (tx < 0 || tz < 0 || tx >= w || tz >= h)
+		return 0.0f;
+	const TerrainTile* tile = t->getPlayableTile(tx, tz);
+	if (!tile || tile->fullOfWater || state.snowCover > 0.2f)
+		return 0.0f;
+	float fuel = 0.6f;
+	if (tile->texture && tile->texture->grp) {
+		const std::string& g = tile->texture->grp->name;
+		if (ContainsCI(g, "grass") || ContainsCI(g, "field") || ContainsCI(g, "meadow") || ContainsCI(g, "forest") || ContainsCI(g, "moss") || ContainsCI(g, "green"))
+			fuel = 1.0f;
+		else if (ContainsCI(g, "rock") || ContainsCI(g, "sand") || ContainsCI(g, "snow") || ContainsCI(g, "road") || ContainsCI(g, "river") || ContainsCI(g, "beach")
+			|| ContainsCI(g, "stone") || ContainsCI(g, "cliff") || ContainsCI(g, "water") || ContainsCI(g, "cobble") || ContainsCI(g, "path"))
+			fuel = 0.05f;
+	}
+	if (server.tiles)
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dx = -1; dx <= 1; dx++) {
+				if (tx + dx < 0 || tz + dz < 0 || tx + dx >= w || tz + dz >= h)
+					continue;
+				for (const auto& ref : server.tiles[(tz + dz) * w + tx + dx].objList)
+					if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && ContainsCI(o->blueprint->name, "tree"))
+						fuel += 0.25f;
+			}
+	return std::min(fuel, 2.0f);
+}
+
+bool ServerEnvironment::igniteAt(Server& server, const Vector3& at, float life, int gen)
+{
+	if (fires.size() >= 60)
+		return false;
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	const int tile = (int)(at.z / 5.0f) * tw + (int)(at.x / 5.0f);
+	if (at.x < 0 || at.z < 0 || at.x >= tw * 5.0f || at.z >= th * 5.0f || burnt.count(tile))
+		return false;
+	for (const Wildfire& f : fires)
+		if ((f.pos - at).sqlen2xz() < 4.0f * 4.0f)
+			return false;
+	if (fuelAt(server, at) < 0.3f)
+		return false;
+	Wildfire f;
+	f.pos = Vector3(at.x, server.terrain->getHeight(at.x, at.z), at.z);
+	f.born = state.time;
+	f.life = life;
+	f.gen = gen;
+	burnt.insert(tile);
+	static const GameObjBlueprint* burning = nullptr;
+	static const GameSet* of = nullptr;
+	if (of != server.gameSet.get()) {
+		of = server.gameSet.get();
+		burning = of->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Big Burning Object");
+		if (!burning)
+			burning = of->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Burning Object");
+	}
+	// owned by a player, as the Firestorm's flames are (the client draws them in its colour): the
+	// neutral player where the map has one, else the first
+	ServerGameObject* owner = nullptr;
+	if (ServerGameObject* level = server.getLevel())
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && !((ServerGameObject*)c)->deleted
+					&& (!owner || c->blueprint->name == "Neutral Player") && (!owner || owner->blueprint->name != "Neutral Player"))
+					owner = (ServerGameObject*)c;
+	if (burning && owner)
+		if (ServerGameObject* v = server.spawnObject(burning, owner, f.pos, Vector3(0, Rand01() * 6.28f, 0)))
+			f.visual = v;
+	fires.push_back(f);
+	stats.fireCells++;
+	return true;
+}
+
+void ServerEnvironment::fireLanded(Server& server, const Vector3& pos, bool sure)
+{
+	const float risk = fireRisk();
+	if (risk <= 0.0f || (!sure && Rand01() >= 0.35f * risk))
+		return;
+	// a large fire at once: the patch and a ring around it
+	bool any = igniteAt(server, pos, 40.0f + 20.0f * Rand01());
+	for (int i = 0; i < 4; i++) {
+		const float a = Rand01() * 6.28f, d = 5.0f + 3.0f * Rand01();
+		any |= igniteAt(server, pos + Vector3(std::cos(a) * d, 0, std::sin(a) * d), 30.0f + 20.0f * Rand01());
+	}
+	if (any) {
+		stats.wildfires++;
+		stats.fromMissiles++;
+		if (trace)
+			printf("ENVIRONMENT t=%.0f a flaming missile sets the land alight at (%.0f, %.0f)\n", state.time, pos.x, pos.z);
+	}
+}
+
+void ServerEnvironment::updateFires(Server& server)
+{
+	const float risk = fireRisk();
+	if (risk <= 0.0f && fires.empty()) {
+		burnt.clear(); // the land grows back once the heat is over
+		return;
+	}
+	const auto [aw, ah] = server.terrain->getPlayableArea();
+	// out of nowhere: once in about three minutes in a full heatwave, somewhere that burns
+	if (risk > 0.0f && Rand01() < 0.006f * risk) {
+		for (int tries = 0; tries < 12; tries++) {
+			const Vector3 at(Rand01() * aw, 0, Rand01() * ah);
+			if (fuelAt(server, at) >= 0.9f && igniteAt(server, at, 25.0f + 20.0f * Rand01())) {
+				stats.wildfires++;
+				stats.spontaneous++;
+				if (trace)
+					printf("ENVIRONMENT t=%.0f a wildfire breaks out at (%.0f, %.0f)\n", state.time, at.x, at.z);
+				break;
+			}
+		}
+	}
+	// from the burning buildings (whoever set them alight: torches, flaming arrows, lightning)
+	if (risk > 0.0f) {
+		const int alias = server.gameSet->aliases.names.getIndex("Burning Buildings");
+		if (alias >= 0)
+			for (const auto& ref : server.aliases[alias])
+				if (ServerGameObject* b = ref.getFrom<Server>(); b && !b->deleted && Rand01() < 0.04f * risk) {
+					const float a = Rand01() * 6.28f, d = 7.0f + 6.0f * Rand01();
+					if (igniteAt(server, b->position + Vector3(std::cos(a) * d, 0, std::sin(a) * d), 25.0f + 15.0f * Rand01())) {
+						stats.wildfires++;
+						stats.fromBuildings++;
+					}
+				}
+	}
+	// spreading, burning out, the harm done
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	const int setFire = server.gameSet->actionSequences.names.getIndex("Set Fire to Building if Fire Proofing fails");
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	std::vector<std::pair<Vector3, float>> spreadTo; // where, the generation
+	std::vector<std::pair<SrvGORef, float>> hurt;
+	std::set<uint32_t> buildingsDone;
+	for (size_t i = 0; i < fires.size();) {
+		Wildfire& f = fires[i];
+		const float age = state.time - f.born;
+		if (age > f.life * (state.rain > 0.3f ? 0.4f : 1.0f)) {
+			if (ServerGameObject* v = f.visual.get())
+				server.deleteObject(v);
+			fires.erase(fires.begin() + i);
+			continue;
+		}
+		// to the land around: much in the heat, a little once it is over
+		const float spread = 0.1f * std::max(risk, 0.15f);
+		if (f.gen < (int)(12.0f * std::max(risk, 0.3f)) && Rand01() < spread) {
+			const float a = Rand01() * 6.28f, d = 5.0f + 4.0f * Rand01();
+			spreadTo.push_back({ f.pos + Vector3(std::cos(a) * d, 0, std::sin(a) * d), (float)(f.gen + 1) });
+		}
+		// who is in it, what stands on it
+		const int tx = (int)(f.pos.x / 5.0f), tz = (int)(f.pos.z / 5.0f);
+		if (server.tiles)
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					if (tx + dx < 0 || tz + dz < 0 || tx + dx >= tw || tz + dz >= th)
+						continue;
+					auto& tile = server.tiles[(tz + dz) * tw + tx + dx];
+					if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && setFire >= 0
+						&& buildingsDone.insert(b->id).second && Rand01() < 0.05f) {
+						SrvScriptContext ctx(&server, b);
+						auto _ = ctx.change(ctx.sequenceExecutor, b);
+						server.gameSet->actionSequences[setFire].run(&ctx);
+						stats.buildingsFired++;
+					}
+					for (const auto& ref : tile.objList)
+						if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+							&& !o->blueprint->canWalkOnWater() && (o->position - f.pos).sqlen2xz() < 4.5f * 4.5f)
+							hurt.emplace_back(o, 0.04f);
+				}
+		i++;
+	}
+	for (const auto& [at, gen] : spreadTo)
+		igniteAt(server, at, 20.0f + 15.0f * Rand01(), (int)gen);
+	for (auto& [ref, frac] : hurt)
+		if (ServerGameObject* o = ref.get()) {
+			const bool wasAlive = hp >= 0 && o->getItem(hp) > 0.0f;
+			damage(server, o, frac);
+			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f))
+				stats.fireDeaths++;
+		}
+	stats.fireCellsMost = std::max(stats.fireCellsMost, (int)fires.size());
 }
 
 float ServerEnvironment::winterAhead(float now, int* severity) const
@@ -531,6 +726,11 @@ void ServerEnvironment::update(Server& server)
 			strikeLightning(server);
 		applyExposure(server);
 		applyFloods(server);
+		if (forceFireAt >= 0.0f && now >= forceFireAt) {
+			forceFireAt = -1.0f;
+			fireLanded(server, Vector3(forceFireX, 0, forceFireZ), true);
+		}
+		updateFires(server);
 	}
 
 	server.nightSight.factor = state.sightFactor;
@@ -566,6 +766,14 @@ std::string ServerEnvironment::saveText() const
 	o << "state " << state.time << ' ' << state.season << ' ' << state.severity << ' ' << state.weather << ' ' << state.temperatureC << ' '
 		<< state.cloudCover << ' ' << state.rain << ' ' << state.snowfall << ' ' << state.fog << ' ' << state.wetness << ' ' << state.snowCover << ' '
 		<< state.ice << ' ' << state.waterRise << ' ' << state.sightFactor << ' ' << state.speedFactor << ' ' << state.lightningCount << '\n';
+	for (const Wildfire& f : fires)
+		o << "fire " << f.pos.x << ' ' << f.pos.y << ' ' << f.pos.z << ' ' << f.born << ' ' << f.life << ' ' << f.visual.objid << ' ' << f.gen << '\n';
+	if (!burnt.empty()) {
+		o << "burnt";
+		for (int t : burnt)
+			o << ' ' << t;
+		o << '\n';
+	}
 	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
@@ -594,6 +802,18 @@ void ServerEnvironment::loadText(const std::string& text)
 			int s = 0;
 			l >> nextUpdate >> weatherEnds >> nextLightning >> resolvedYear >> resolvedSeverity[0] >> resolvedSeverity[1] >> resolvedSeverity[2] >> resolvedSeverity[3] >> s;
 			started = s != 0;
+		}
+		else if (tag == "fire") {
+			Wildfire f;
+			uint32_t id = 0;
+			l >> f.pos.x >> f.pos.y >> f.pos.z >> f.born >> f.life >> id >> f.gen;
+			f.visual = id;
+			fires.push_back(f);
+		}
+		else if (tag == "burnt") {
+			int t;
+			while (l >> t)
+				burnt.insert(t);
 		}
 		else if (tag == "exposure") {
 			uint32_t id = 0;
