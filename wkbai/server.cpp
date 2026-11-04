@@ -1302,13 +1302,20 @@ void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 	// Problem: reaction can be executed twice if it is in both intrinsics and individuals, but is it worth checking that?
 	SrvScriptContext ctx(Server::instance, this);
 	auto _ = ctx.change(ctx.packageSender, sender);
-	if (const char* traceId = getenv("WKB_TRACE_EVENTS_ID"); traceId && (uint32_t)atoi(traceId) == this->id)
+	// (getenv once: it takes a lock and walks the environment, and events go out by thousands)
+	static const char* const traceId = getenv("WKB_TRACE_EVENTS_ID");
+	if (traceId && (uint32_t)atoi(traceId) == this->id)
 		printf("EVENT t=%.2f to %u: %s from %s %u\n", Server::instance->timeManager.currentTime, this->id, Server::instance->gameSet->events.names.getString(evt).c_str(),
 			sender ? sender->blueprint->name.c_str() : "-", sender ? sender->id : 0);
-	const auto ircopy = individualReactions;
-	for (const Reaction* r : ircopy)
-		if (r->canBeTriggeredBy(evt, this, sender))
-			r->actions.run(&ctx);
+	// (a copy: a reaction may change the set. Most objects have none to copy, and copying the
+	// empty hash set allocated for every event. The copy's own order is kept: it can differ
+	// from the set's, and the reactions run in it.)
+	if (!individualReactions.empty()) {
+		const auto ircopy = individualReactions;
+		for (const Reaction* r : ircopy)
+			if (r->canBeTriggeredBy(evt, this, sender))
+				r->actions.run(&ctx);
+	}
 	for (const Reaction *r : blueprint->intrinsicReactions)
 		if (r->canBeTriggeredBy(evt, this, sender))
 			r->actions.run(&ctx);
@@ -1631,22 +1638,36 @@ void Server::updateSightBlock(ServerGameObject* obj, bool removed)
 		if (obj->position.x >= 0.0f && obj->position.z >= 0.0f && bx < sightBlocksWidth && bz < sightBlocksHeight)
 			block = bz * sightBlocksWidth + bx;
 	}
-	if (block == obj->sightBlock)
+	if (block == obj->sightBlock) {
+		if (block >= 0) {
+			SightEntry& e = sightBlocks[block][obj->sightSlot];
+			e.x = obj->position.x; e.y = obj->position.y; e.z = obj->position.z;
+		}
 		return;
+	}
 	if (obj->sightBlock >= 0) {
 		auto& list = sightBlocks[obj->sightBlock];
-		auto it = std::find(list.begin(), list.end(), obj->id);
-		if (it != list.end()) {
-			*it = list.back();
-			list.pop_back();
-		}
+		assert(obj->sightSlot >= 0 && obj->sightSlot < (int)list.size() && list[obj->sightSlot].obj == obj);
+		list[obj->sightSlot] = list.back();
+		list[obj->sightSlot].obj->sightSlot = obj->sightSlot;
+		list.pop_back();
 	}
 	obj->sightBlock = block;
-	if (block >= 0)
-		sightBlocks[block].push_back(obj->id);
+	obj->sightSlot = -1;
+	if (block >= 0) {
+		obj->sightSlot = (int)sightBlocks[block].size();
+		sightBlocks[block].push_back({ obj->position.x, obj->position.y, obj->position.z, obj->id, obj });
+	}
 }
 
-uint64_t g_sightCalls = 0, g_sightCandidates = 0, g_sightInRange = 0;
+uint64_t g_sightCalls = 0, g_sightCandidates = 0, g_sightInRange = 0, g_sightChanged = 0;
+double g_sightScanMs = 0, g_sightSortMs = 0, g_sightEventMs = 0;
+// (the clock with profileSim only)
+static double SightNow()
+{
+	static const bool profile = g_settings.value("profileSim", false);
+	return profile ? (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency() : 0.0;
+}
 
 void ServerGameObject::lookForSightRangeEvents()
 {
@@ -1665,36 +1686,78 @@ void ServerGameObject::lookForSightRangeEvents()
 	// the objects in range now, by id, against the ones before (both sorted): the new ones are
 	// seen, the ones gone stop being seen (a sorted list: hash sets per call were most of the
 	// simulation's time in large games)
-	static std::vector<std::pair<uint32_t, ServerGameObject*>> found;
+	// (ids only: the objects are looked up again for the events, which a few are)
+	static std::vector<uint32_t> found;
 	found.clear();
 	// as WKB.exe (0x566D70): the range rounded to whole 5 m tiles, and a sphere around the viewer
 	// (3D distance: no height bonus). The tile search alone took a square.
 	const float radius = std::floor(dist + 0.5f) * 5.0f;
+	const float radius2 = radius * radius;
 	g_sightCalls++;
 	// (the blocks of objects that generate the events, Server::sightBlocks)
 	Server* server = Server::instance;
 	const float blockSize = 5.0f * Server::SIGHT_BLOCK;
 	const int bx0 = std::max(0, (int)std::floor((position.x - radius) / blockSize)), bx1 = std::min(server->sightBlocksWidth - 1, (int)std::floor((position.x + radius) / blockSize));
 	const int bz0 = std::max(0, (int)std::floor((position.z - radius) / blockSize)), bz1 = std::min(server->sightBlocksHeight - 1, (int)std::floor((position.z + radius) / blockSize));
-	for (int bz = bz0; bz <= bz1; bz++)
-		for (int bx = bx0; bx <= bx1; bx++)
-			for (uint32_t id : server->sightBlocks[bz * server->sightBlocksWidth + bx])
-				if (ServerGameObject* nobj = (++g_sightCandidates, server->findObject(id)); nobj && (nobj->position - this->position).sqlen3() <= radius * radius)
-					found.emplace_back(id, nobj);
+	const float mx = position.x, my = position.y, mz = position.z;
+	// a fingerprint of the objects found, in any order: two sums of the ids, each mixed its own
+	// way (splitmix64). The same count and fingerprint as last time is taken for the same
+	// objects (a chance of 2^-128 to be wrong), and then the list isn't sorted: an army walking
+	// together sees the same hundreds of its own every time, and sorting them was most of the
+	// sight's time
+	uint64_t hashA = 0, hashB = 0;
+	auto mix = [](uint64_t z) { z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull; z = (z ^ (z >> 27)) * 0x94d049bb133111ebull; return z ^ (z >> 31); };
+	double t0 = SightNow();
+	size_t n = 0;
+	for (int bz = bz0; bz <= bz1; bz++) {
+		// (blocks wholly outside the circle left out)
+		const float cz = std::clamp(mz, bz * blockSize, (bz + 1) * blockSize) - mz;
+		for (int bx = bx0; bx <= bx1; bx++) {
+			const float cx = std::clamp(mx, bx * blockSize, (bx + 1) * blockSize) - mx;
+			if (cx * cx + cz * cz > radius2)
+				continue;
+			const auto& list = server->sightBlocks[bz * server->sightBlocksWidth + bx];
+			g_sightCandidates += list.size();
+			// (without branches: in range or not is a coin toss in an army)
+			if (found.size() < n + list.size())
+				found.resize(n + list.size() + 256);
+			uint32_t* out = found.data();
+			for (const Server::SightEntry& e : list) {
+				const float dx = e.x - mx, dy = e.y - my, dz = e.z - mz;
+				out[n] = e.id;
+				n += (dx * dx + dy * dy + dz * dz <= radius2) ? 1 : 0;
+			}
+		}
+	}
+	found.resize(n);
+	for (const uint32_t id : found) {
+		hashA += mix(id + 0x9e3779b97f4a7c15ull);
+		hashB += mix((uint64_t)id * 0x632be59bd9b4e019ull + 0x2545f4914f6cdd1dull);
+	}
 	g_sightInRange += found.size();
+	g_sightScanMs += SightNow() - t0;
+	const bool same = found.size() == seenObjects.size() && hashA == seenHashA && hashB == seenHashB;
+	seenHashA = hashA;
+	seenHashB = hashB;
+	if (same && !sightFromSave)
+		return;
+	double t1 = SightNow();
 	std::sort(found.begin(), found.end());
-	std::vector<uint32_t> before = std::move(seenObjects);
-	seenObjects.clear();
-	seenObjects.reserve(found.size());
-	for (const auto& [id, obj] : found)
-		seenObjects.push_back(id);
+	g_sightSortMs += SightNow() - t1;
 	if (sightFromSave) {
 		sightFromSave = false;
+		seenObjects.assign(found.begin(), found.end());
 		return;
 	}
+	g_sightChanged++;
+	struct EventTime { double s = SightNow(); ~EventTime() { g_sightEventMs += SightNow() - s; } } eventTime;
+	// (copies: an event's script may look again, and the lists change under it)
+	const std::vector<uint32_t> before = std::move(seenObjects);
+	seenObjects.assign(found.begin(), found.end());
+	const std::vector<uint32_t> now = seenObjects;
 	SrvGORef self = this;
 	size_t b = 0;
-	for (const auto& [id, obj] : found) {
+	for (const uint32_t id : now) {
 		while (b < before.size() && before[b] < id) {
 			if (ServerGameObject* gone = Server::instance->findObject(before[b]))
 				this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
@@ -2626,6 +2689,10 @@ void Server::updatePeasantActivity()
 namespace {
 	struct SimProfile {
 		double total = 0, sequences = 0, tree = 0, ai = 0, orders = 0, movement = 0, sight = 0;
+		// the movement's parts (walking objects): the new position and its height, updatePosition,
+		// the speed (and restarting the walk when it changed), the path's next node
+		double mvPosition = 0, mvUpdate = 0, mvSpeed = 0, mvController = 0;
+		uint64_t movers = 0;
 		std::map<std::string, double> byOrder; // orders time per order (with profileSim)
 		uint64_t steps = 0, lastPrint = 0, objects = 0;
 		static double now() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
@@ -2683,6 +2750,9 @@ void Server::simulate()
 			printf("SIMPROFILE t=%.0f steps %llu, per step ms: total %.2f, sequences %.2f, object tree %.2f (AI %.2f), orders %.2f, movement %.2f, sight %.2f; %llu objects processed per step\n",
 				timeManager.currentTime, (unsigned long long)p.steps, p.total / p.steps, p.sequences / p.steps, (p.tree - p.ai) / p.steps, p.ai / p.steps,
 				p.orders / p.steps, p.movement / p.steps, p.sight / p.steps, (unsigned long long)(p.objects / p.steps));
+		if (p.lastPrint)
+			printf("SIMPROFILE   movement %.0f walking per step, ms per step: position %.2f, updatePosition %.2f, speed %.2f, path nodes %.2f\n",
+				(double)p.movers / p.steps, p.mvPosition / p.steps, p.mvUpdate / p.steps, p.mvSpeed / p.steps, p.mvController / p.steps);
 		extern double g_pathfindingMs;
 		extern uint64_t g_pathfindingSearches;
 		if (p.lastPrint)
@@ -2698,17 +2768,21 @@ void Server::simulate()
 				line += " " + top[i].second + " " + std::to_string(top[i].first / p.steps).substr(0, 5);
 			printf("SIMPROFILE   orders, ms per step:%s\n", line.c_str());
 		}
-		extern uint64_t g_astarSearches, g_astarTiles, g_sightCalls, g_sightCandidates, g_sightInRange, g_fieldPaths, g_fieldBuilds, g_unreachableGoals;
+		extern uint64_t g_astarSearches, g_astarTiles, g_sightCalls, g_sightCandidates, g_sightInRange, g_sightChanged, g_fieldPaths, g_fieldBuilds, g_unreachableGoals;
 		if (p.lastPrint)
 			printf("SIMPROFILE   group fields %llu made, %llu paths from them; %llu goals no search could reach\n",
 				(unsigned long long)g_fieldBuilds, (unsigned long long)g_fieldPaths, (unsigned long long)g_unreachableGoals);
 		g_fieldPaths = g_fieldBuilds = g_unreachableGoals = 0;
 		extern double g_astarMs;
 		if (p.lastPrint)
-			printf("SIMPROFILE   astar %.2f ms per step, %.2f searches per step, %.0f tiles per search, %.3f ms per search; sight %.1f viewers, %.0f candidates, %.0f in range per step\n",
+			printf("SIMPROFILE   astar %.2f ms per step, %.2f searches per step, %.0f tiles per search, %.3f ms per search; sight %.1f viewers (%.1f saw a change), %.0f candidates, %.0f in range per step\n",
 				g_astarMs / p.steps, (double)g_astarSearches / p.steps, g_astarSearches ? (double)g_astarTiles / g_astarSearches : 0.0, g_astarSearches ? g_astarMs / g_astarSearches : 0.0,
-				(double)g_sightCalls / p.steps, (double)g_sightCandidates / p.steps, (double)g_sightInRange / p.steps);
-		g_astarSearches = g_astarTiles = g_sightCalls = g_sightCandidates = g_sightInRange = 0;
+				(double)g_sightCalls / p.steps, (double)g_sightChanged / p.steps, (double)g_sightCandidates / p.steps, (double)g_sightInRange / p.steps);
+		extern double g_sightScanMs, g_sightSortMs, g_sightEventMs;
+		if (p.lastPrint)
+			printf("SIMPROFILE   sight ms per step: scan %.2f, sort %.2f, events %.2f\n", g_sightScanMs / p.steps, g_sightSortMs / p.steps, g_sightEventMs / p.steps);
+		g_sightScanMs = g_sightSortMs = g_sightEventMs = 0.0;
+		g_astarSearches = g_astarTiles = g_sightCalls = g_sightCandidates = g_sightInRange = g_sightChanged = 0;
 		g_astarMs = 0.0;
 		extern uint64_t g_nnTiles, g_nnObjects;
 		extern double g_aiPlanMs, g_aiLuaMs, g_aiLuaMaxMs, g_aiWorkMs, g_aiCommissionMs;
@@ -2864,10 +2938,14 @@ void Server::simulate()
 		if (!ref) continue;
 		std::optional<SimTimer> moveTimer(std::in_place, g_simProfile.movement);
 		if (obj->movement.isMoving()) {
+			// (with profileSim, the parts' times: SIMPROFILE   movement)
+			double t0 = profile ? SimProfile::now() : 0.0, t1 = 0.0, t2 = 0.0, t3 = 0.0;
 			auto newpos = obj->movement.getNewPosition(timeManager.currentTime);
 			newpos.y = terrain->getHeightEx(obj->position.x, obj->position.z, obj->blueprint->canWalkOnWater());
+			if (profile) t1 = SimProfile::now();
 			obj->updatePosition(newpos, true);
 			if (!ref) continue;
+			if (profile) t2 = SimProfile::now();
 			Vector3 dir = obj->movement.getDirection();
 			obj->orientation.y = atan2f(dir.x, -dir.z);
 			// restart movement is speed changes
@@ -2875,8 +2953,17 @@ void Server::simulate()
 			if (speed != obj->currentSpeed) {
 				obj->startMovement(obj->movement.getDestination());
 			}
+			if (profile) t3 = SimProfile::now();
 			// pf
 			obj->movementController.updateMovement();
+			if (profile) {
+				const double t4 = SimProfile::now();
+				g_simProfile.mvPosition += t1 - t0;
+				g_simProfile.mvUpdate += t2 - t1;
+				g_simProfile.mvSpeed += t3 - t2;
+				g_simProfile.mvController += t4 - t3;
+				g_simProfile.movers++;
+			}
 		}
 		else if (obj->trajectory.isMoving()) {
 			obj->updatePosition(obj->trajectory.getPosition(timeManager.currentTime));

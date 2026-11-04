@@ -45,7 +45,11 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	std::map<int, std::set<SrvGORef>> associates, associators;
 	std::vector<SrvGORef> referencers;
 	std::vector<uint32_t> seenObjects; // ids of the objects in sight range, sorted
+	// a fingerprint of seenObjects (two sums of mixed ids): the same objects in range again are
+	// seen as such without sorting them (lookForSightRangeEvents)
+	uint64_t seenHashA = 0, seenHashB = 0;
 	int sightBlock = -1; // its block in Server::sightBlocks, if it generates sight range events
+	int sightSlot = -1; // its place in that block's list
 	// loaded from a save: the first sight update only notes what is in range, without events
 	// (WKB.exe's saves don't store what each object sees, and its units don't react to the
 	// objects already around them after loading; wkbre2's did: on the Marjoria's Keep save the
@@ -381,11 +385,16 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// simulate() calls so far (staggers the work that doesn't need every step)
 	uint64_t simStepIndex = 0;
 	// The objects that generate sight range events, by blocks of SIGHT_BLOCK x SIGHT_BLOCK tiles
-	// (ids, in no order). The sight updates search these: the tiles' own lists hold every tree
+	// (in no order). The sight updates search these: the tiles' own lists hold every tree
 	// and prop, and going through all of them, tile by tile, was a third of the simulation's
-	// time late in a 6-AI game.
+	// time late in a 6-AI game. The objects themselves, not their ids: looking each candidate
+	// up by id was most of a step with 1500 units walking together (RE repo docs/engine/fast-movement.md). An
+	// object leaves its block when it is destroyed (Server::destroyObject), as it leaves idmap.
+	// The block keeps each one's position too (updatePosition keeps it), so the search goes
+	// through one array.
 	static constexpr int SIGHT_BLOCK = 4;
-	std::vector<std::vector<uint32_t>> sightBlocks;
+	struct SightEntry { float x, y, z; uint32_t id; ServerGameObject* obj; };
+	std::vector<std::vector<SightEntry>> sightBlocks;
 	int sightBlocksWidth = 0, sightBlocksHeight = 0;
 	void updateSightBlock(ServerGameObject* obj, bool removed = false);
 	void network();

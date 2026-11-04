@@ -3258,7 +3258,8 @@ void Test_MassOrder()
 	for (SrvGORef& u : army)
 		if (u)
 			server.gameSet->commands[moveCommand].execute(u.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, goal);
-	double totalPath = 0, worst = 0;
+	double totalPath = 0, worst = 0, stepsMs = 0;
+	std::vector<double> sortedMs; // the steps after the order's
 	for (int i = 0; i < seconds * 50; i++) {
 		const double pathBefore = g_pathfindingMs;
 		const uint64_t t0 = SDL_GetPerformanceCounter();
@@ -3267,6 +3268,10 @@ void Test_MassOrder()
 		const double path = g_pathfindingMs - pathBefore;
 		totalPath += path;
 		worst = std::max(worst, ms);
+		if (i > 0) {
+			stepsMs += ms;
+			sortedMs.push_back(ms);
+		}
 		if (i < 5)
 			printf("MASSORDER step %d: %.2f ms, path finding %.2f ms\n", i, ms, path);
 		if ((i + 1) % 1000 == 0) {
@@ -3293,6 +3298,10 @@ void Test_MassOrder()
 				for (int k = 0; k < 4; k++) { hash ^= (b >> (k * 8)) & 0xFF; hash *= 1099511628211ull; }
 			}
 		}
+	std::sort(sortedMs.begin(), sortedMs.end());
+	if (!sortedMs.empty())
+		printf("MASSORDER steps after the order's: mean %.2f ms, median %.2f ms, 95th percentile %.2f ms\n", stepsMs / sortedMs.size(),
+			sortedMs[sortedMs.size() / 2], sortedMs[sortedMs.size() * 95 / 100]);
 	printf("MASSORDER end after %d s: path finding %.1f ms in all, longest step %.1f ms; %d of %d within 25 m of the goal; positions hash %016llx\n",
 		seconds, totalPath, worst, arrived, units, (unsigned long long)hash);
 	fflush(stdout);
