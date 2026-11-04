@@ -2377,6 +2377,8 @@ void Test_AIvsAI()
 					e.snowfall, e.fog, e.wetness, e.snowCover, e.ice, e.waterRise, e.sightFactor, e.speedFactor,
 					(size_t)std::count(server.nightSight.lit.begin(), server.nightSight.lit.end(), (uint8_t)1), server.nightSight.lit.size());
 				const auto& st = env.stats;
+				const int burningAlias = server.gameSet->aliases.names.getIndex("Burning Buildings");
+				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu\n", st.floodTiles, st.floodedTiles, burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0);
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
 			}

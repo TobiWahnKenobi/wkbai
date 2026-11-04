@@ -137,6 +137,8 @@ void ServerEnvironment::pickWeather(Server& server, float now)
 	}
 	if (weights[chosen] <= 0.0f)
 		chosen = WEATHER_CLEAR;
+	if (forceWeather >= 0 && forceWeather < WEATHER_COUNT)
+		chosen = forceWeather;
 	state.weather = chosen;
 	const float length = settings.seasonLengthS() * (0.10f + 0.25f * Rand01());
 	weatherEnds = now + std::clamp(length, 45.0f, 600.0f);
@@ -263,7 +265,7 @@ void ServerEnvironment::applyExposure(Server& server)
 			cold = true;
 		}
 		else if (!sheltered && e.heat > 100.0f && heatFeel > 34.0f)
-			frac = 0.003f * (heatFeel - 34.0f) / 3.0f;
+			frac = 0.004f * (heatFeel - 33.0f) / 3.0f;
 		if (e.cold > 0.0f || e.heat > 0.0f) {
 			exposure[unit->id] = e;
 			present.insert(unit->id);
@@ -303,14 +305,14 @@ void ServerEnvironment::prepareFloods(Server& server)
 			if (!tile || tile->fullOfWater)
 				continue;
 			float water = -1e9f;
-			for (int dz = -3; dz <= 3; dz++)
-				for (int dx = -3; dx <= 3; dx++)
+			for (int dz = -10; dz <= 10; dz++)
+				for (int dx = -10; dx <= 10; dx++)
 					if (const TerrainTile* n = t->getPlayableTile(x + dx, z + dz); n && n->fullOfWater)
 						water = std::max(water, n->waterLevel);
 			if (water < -1e8f)
 				continue;
 			const float ground = t->getHeight(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
-			if (ground - water < 3.0f)
+			if (ground - water < 4.0f)
 				floodTiles.push_back({ z * w + x, water, ground });
 		}
 }
@@ -319,6 +321,8 @@ void ServerEnvironment::applyFloods(Server& server)
 {
 	if (!floodPrepared)
 		prepareFloods(server);
+	stats.floodTiles = floodTiles.size();
+	stats.floodedTiles = 0;
 	if (state.waterRise < 0.1f || !server.tiles)
 		return;
 	const int hp = server.gameSet->items.names.getIndex("Hit Points");
@@ -328,6 +332,7 @@ void ServerEnvironment::applyFloods(Server& server)
 		const float depth = ft.water + state.waterRise - ft.ground;
 		if (depth <= 0.1f)
 			continue;
+		stats.floodedTiles++;
 		auto& tile = server.tiles[ft.tile];
 		if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && buildingsDone.insert(b->id).second)
 			hits.emplace_back(b, 0.0015f * std::min(depth, 2.0f));
@@ -336,6 +341,16 @@ void ServerEnvironment::applyFloods(Server& server)
 				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
 					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE))
 					hits.emplace_back(o, 0.05f);
+	}
+	if (trace && simTraceCountdown-- <= 0) {
+		simTraceCountdown = 30;
+		size_t withBuilding = 0, withObjects = 0;
+		for (const FloodTile& ft : floodTiles)
+			if (ft.water + state.waterRise - ft.ground > 0.1f) {
+				withBuilding += server.tiles[ft.tile].building.objid != 0;
+				withObjects += !server.tiles[ft.tile].objList.empty();
+			}
+		printf("ENVIRONMENT t=%.0f flood: %zu tiles under water, %zu with a building, %zu with objects; %zu hits\n", state.time, stats.floodedTiles, withBuilding, withObjects, hits.size());
 	}
 	for (auto& [ref, frac] : hits)
 		if (ServerGameObject* o = ref.get()) {
@@ -389,7 +404,7 @@ void ServerEnvironment::update(Server& server)
 	}
 
 	// the temperature: the season's mean (a smooth curve through the seasons' middles), the day's
-	// swing, the weather's pull, eased towards over a minute and a half
+	// swing, the weather's pull, eased towards
 	const SunState sun = ComputeSun(state.dayFraction, state.yearFraction, settings.seasons, state.cloudCover);
 	{
 		static const float means[4] = { 12.0f, 24.0f, 11.0f, -3.0f };
@@ -408,7 +423,8 @@ void ServerEnvironment::update(Server& server)
 		if (!started)
 			state.temperatureC = target;
 		else
-			state.temperatureC += (target - state.temperatureC) * (1.0f - std::exp(-dt / 90.0f));
+			// (quicker with short seasons: a twentieth of a season, 10 to 90 s)
+			state.temperatureC += (target - state.temperatureC) * (1.0f - std::exp(-dt / std::clamp(settings.seasonLengthS() / 20.0f, 10.0f, 90.0f)));
 	}
 	const float T = state.temperatureC;
 
@@ -443,6 +459,8 @@ void ServerEnvironment::update(Server& server)
 		float waterTarget = WEATHER_WATER[state.weather] * (state.severity == 0 ? 0.5f : state.severity == 2 ? 1.6f : 1.0f);
 		if (state.ice > 0.5f)
 			waterTarget = std::min(waterTarget, 0.0f);
+		if (forceWaterRise > -999.0f)
+			waterTarget = forceWaterRise;
 		state.waterRise = Approach(state.waterRise, waterTarget, 0.008f, 0.004f);
 	}
 

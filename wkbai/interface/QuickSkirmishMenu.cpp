@@ -463,6 +463,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.environment.reset();
 		server.environment.settings = environment;
 		server.environment.trace = g_settings.value("environmentTrace", false);
+		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
+			server.environment.forceWeather = force.value("weather", -1);
+			server.environment.forceWaterRise = force.value("waterRise", -1000.0f);
+		}
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or
 		// Veteran AI's population limit to a part of the human's, i.e. to 0: that AI then wants no

@@ -35,9 +35,14 @@ struct ServerEnvironment {
 	void reset() { *this = ServerEnvironment(); }
 
 	// for the tests: what happened ("AITEST environment" lines)
-	struct Stats { int frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0; } stats;
+	struct Stats { int frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
+		size_t floodTiles = 0, floodedTiles = 0; } stats;
 	// what happens: frozen units, strikes (for the tests' census)
 	bool trace = false;
+	// tests ("environmentForce": { "weather": <EnvWeather>, "waterRise": <m> }): that weather
+	// always, the water's level heading there; -1 / a NaN: none
+	int forceWeather = -1;
+	float forceWaterRise = -1000.0f;
 
 private:
 	float nextUpdate = -1.0f;
@@ -53,6 +58,7 @@ private:
 	struct FloodTile { int tile; float water, ground; };
 	std::vector<FloodTile> floodTiles;
 	bool floodPrepared = false;
+	int simTraceCountdown = 0;
 	// blueprints by kind, worked out once
 	std::map<const GameObjBlueprint*, uint8_t> kinds;
 	enum Kind : uint8_t { K_OTHER = 0, K_SHELTER = 1, K_LIVING = 2, K_MACHINE = 3, K_FOUNDATION = 4 };

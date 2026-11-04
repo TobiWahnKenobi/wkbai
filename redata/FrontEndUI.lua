@@ -1084,6 +1084,9 @@ local SETTINGS = {
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
+	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
+	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
+	weatherSpring = 1, weatherSummer = 1, weatherAutumn = 1, weatherWinter = 1,
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1249,6 +1252,71 @@ local function settingsTab()
 	end
 end
 
+-- wkbai's own: day and night, seasons and weather (Environment.h), each off by default
+local SEASON_NAMES = { "Spring", "Summer", "Autumn", "Winter" }
+local TEMPERATURE_SCALES = { "Celsius", "Fahrenheit", "Kelvin" }
+local SEVERITIES = { "Gentle", "Normal", "Harsh", "Random" }
+local function weatherTab()
+	local s = skirmish.settings
+	local function switch(name, label, x, y)
+		if roundButton(x, y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, x + L(64), y + L(18), label, s[name] ~= 0 and YELLOW or WHITE, S)
+	end
+	local function note(x, y, lines)
+		for i, line in ipairs(lines) do drawText(FONT_LIST, x, y + (i - 1) * L(22), line, GREY, S) end
+	end
+	panel(X(28), Y(100), L(930), L(940))
+	panel(X(968), Y(100), L(930), L(940))
+	-- the day: its length, the hour the game starts at
+	switch("dayNight", "Day and night", X(60), Y(124))
+	note(X(60), Y(186), { "The sun moves over the day; its shadows follow it.",
+		"At night sight ranges and the fog of war are shorter,",
+		"except near lit buildings and fires." })
+	if s.dayNight ~= 0 then
+		stepperRow("Day (min)", nil, "dayLength", 1, 2, 240, Y(266))
+		stepperRow("Start hour", nil, "startHour", 1, 0, 23, Y(342))
+	end
+	-- the seasons: their length (never shorter than a day), the first, the temperature's scale
+	switch("seasons", "Seasons and weather", X(60), Y(444))
+	note(X(60), Y(506), { "Temperature and weather by season: rain, storms, fog, snow,",
+		"heatwaves and droughts, with their effects on the game." })
+	if s.seasons ~= 0 then
+		local shortest = (s.dayNight ~= 0) and s.dayLength or 2
+		if s.seasonLength < shortest then s.seasonLength = shortest end
+		stepperRow("Season (min)", nil, "seasonLength", 1, shortest, 600, Y(566))
+		local lw = textWidth(FONT_LIST, "First season", S)
+		drawText(FONT_LIST, X(170) - lw, Y(658), "First season", WHITE, S)
+		if button(SEASON_NAMES[s.startSeason + 1], X(200), Y(646), L(744), L(38)) then s.startSeason = (s.startSeason + 1) % 4 end
+		lw = textWidth(FONT_LIST, "Temperature", S)
+		drawText(FONT_LIST, X(170) - lw, Y(724), "Temperature", WHITE, S)
+		if button(TEMPERATURE_SCALES[s.tempScale + 1], X(200), Y(712), L(744), L(38)) then s.tempScale = (s.tempScale + 1) % 3 end
+		if s.dayNight ~= 0 then
+			note(X(60), Y(780), { "A season lasts at least one day (" .. math.floor(s.dayLength) .. " min)." })
+		end
+	end
+	-- each season's weather
+	drawText(FONT_BUTTON, "Weather", X(1000), Y(130), s.seasons ~= 0 and WHITE or GREY, S)
+	local rows = { { "weatherWinter", "Winter", "snow, blizzards, frost; rivers freeze below 0" },
+		{ "weatherSpring", "Spring", "rain and storms; rivers rise" },
+		{ "weatherSummer", "Summer", "heatwaves, droughts, thunderstorms" },
+		{ "weatherAutumn", "Autumn", "rain, heavy rain, fog" } }
+	for i, row in ipairs(rows) do
+		local name, label, hint = row[1], row[2], row[3]
+		local y = Y(190) + (i - 1) * L(96)
+		drawText(FONT_LIST, X(1000), y + L(10), label, s.seasons ~= 0 and WHITE or GREY, S)
+		if button(SEVERITIES[s[name] + 1], X(1160), y, L(300), L(38), s.seasons ~= 0) then s[name] = (s[name] + 1) % 4 end
+		drawText(FONT_LIST, X(1000), y + L(48), hint, GREY, S)
+	end
+	note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
+		"summers, more storms, floods and droughts. Random: chosen every year.",
+		"",
+		"Units in the open freeze in the cold (worse marching in snow) and",
+		"can die of thirst in the heat; they are safe at their own or their",
+		"allies' villages and manors. Wet and snowy ground slows them down.",
+		"Lightning strikes units and sets buildings on fire. Floods damage",
+		"buildings and drown units in deep water." })
+end
+
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
 local function levelTitle(level)
 	local players, name = string.match(stripExtension(level or ""), "^(%d+) Player (.+)$")
@@ -1348,9 +1416,9 @@ end
 local function drawLobby(multiplayer)
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
-	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS") }, skirmish.tab, X(8), Y(50), L(30))
+	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
-	if skirmish.tab == 1 then playersTab() else settingsTab() end
+	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab() else settingsTab() end
 	local humans = 0
 	local canStart = skirmish.level ~= nil
 	for _, slot in ipairs(skirmish.slots) do
@@ -2377,7 +2445,7 @@ function FE_Open(name)
 	local screenName, tab = string.match(name, "^([^.]+)%.(.+)$")
 	if screenName == "skirmish" then
 		name = screenName
-		skirmish.tab = (tab == "settings") and 2 or 1
+		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or 1
 	end
 	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a
 	-- place or after 20 seconds alone
