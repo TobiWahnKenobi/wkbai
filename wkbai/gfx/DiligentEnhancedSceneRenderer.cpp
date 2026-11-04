@@ -434,6 +434,7 @@ struct DilMesh
 	RefCntAutoPtr<IBuffer> indices;
 	uint32_t totVertices = 0, totIndices = 0;
 	std::vector<DiligentRayShadows::Group> rtGroups;
+	bool rtAlphaResolved = false; // rtGroups' alpha-tested textures and UVs
 	static DilMesh create(StaticModel* model, IRenderDevice* device) {
 		DilMesh enh;
 		model->prepare();
@@ -1132,9 +1133,10 @@ void DiligentEnhancedSceneRenderer::render()
 
 	drawMeshes(DRAW_SCENE);
 
-	// The ray-traced shadows' casters: every entity casting a shadow, with its mesh's structure
+	// The ray-traced shadows' casters (and what the ray-traced reflections see): every entity
+	// casting a shadow, with its mesh's structure
 	// (an animated one's at its current key frame), then the frame's top-level structure
-	if (shadows.rayShadowsOn) {
+	if (shadows.rayShadowsOn || shadows.rayReflectionsOn) {
 		if (!shadows.rayShadows)
 			shadows.rayShadows = new DiligentRayShadows(device);
 		if (!shadows.rayShadows->usable())
@@ -1149,7 +1151,30 @@ void DiligentEnhancedSceneRenderer::render()
 				auto mt = _impl->meshMap.find(staticModel);
 				if (mt == _impl->meshMap.end())
 					continue;
-				const DilMesh& mesh = mt->second;
+				DilMesh& mesh = mt->second;
+				// the alpha-tested groups (leaves): their texture as drawn and per triangle its UVs
+				if (!mesh.rtAlphaResolved) {
+					mesh.rtAlphaResolved = true;
+					const Mesh& m = staticModel->mesh;
+					const PolygonList& pl = m.polyLists[0];
+					for (size_t g = 0; g < mesh.rtGroups.size() && g < pl.groups.size() && m.uvLists.size() > 0; g++) {
+						const Material& gm = scene->modelCache->getMaterial(staticModel->matIds[g]);
+						if (!gm.alphaTest)
+							continue;
+						texture tex = scene->texCache.getTexture(gm.textureFilename.c_str());
+						IShaderResourceBinding* tsrb = getBinding(tex, gm.textureFilename);
+						auto& grp = mesh.rtGroups[g];
+						grp.alphaTexture = (ITextureView*)tsrb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Get();
+						const auto& uvl = m.uvLists[0];
+						const auto& gi = m.groupIndices[g];
+						for (const auto& tri : pl.groups[g].tupleIndex)
+							for (int k = 0; k < 3; k++) {
+								const IndexTuple& v = gi[tri[k]];
+								grp.alphaUVs.push_back(uvl[2 * v.uv]);
+								grp.alphaUVs.push_back(uvl[2 * v.uv + 1]);
+							}
+					}
+				}
 				const DilAnim* anim = nullptr;
 				if (model != staticModel) {
 					auto at = _impl->animMap.find((AnimatedModel*)model);

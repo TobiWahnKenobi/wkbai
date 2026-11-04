@@ -59,7 +59,8 @@ cbuffer SkyBuffer
 	float4 CamUp;
 	float4 SkyFront;   // world direction of sky_front.tga
 	float4 SkyRight;   // world direction of sky_right.tga
-	float4 SkyFlags;   // x: the sky has all six faces, y: the dynamic clouds' layer (tClouds), z: the frame (its jitter)
+	float4 SkyFlags;   // x: the sky has all six faces, y: the dynamic clouds' layer (tClouds), z: the frame (its jitter),
+	                   // w: the clouds' quality (RenderSettings::cloudQuality, 0-3)
 };
 
 struct VS_OUTPUT
@@ -106,8 +107,9 @@ float HenyeyGreenstein(float mu, float g)
 	return (1 - g2) / (12.566371 * pow(1 + g2 - 2 * g * mu, 1.5));
 }
 
-// The view ray through the cloud layer, 64 steps (jittered per pixel; at most 1800 units of it),
-// each lit by the sun through 3 steps of cloud towards it (Beer's law with the powder term away from the sun) and
+// The view ray through the cloud layer, 48 to 128 steps by the quality (jittered per pixel; at most
+// 1800 units of it), each lit by the sun through 3 to 6 steps of cloud towards it over 108 units
+// (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
 // Returns the light scattered towards the camera and the sky's transmittance.
 float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
@@ -118,7 +120,12 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + 1800);
 	if (t1 <= t0 || t0 > 9000)
 		return float4(0, 0, 0, 1);
-	const int STEPS = 64;
+	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
+	const int q = (int)SkyFlags.w;
+	const int STEPS = q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128;
+	const int LIGHT_STEPS = q + 3;
+	const float lightStep = 108.0 / LIGHT_STEPS;
+	const float pixelScale = q <= 0 ? 1 : q == 1 ? 0.5 : 0.25; // of a quarter-size pixel
 	float dt = (t1 - t0) / STEPS;
 	// interleaved gradient noise, moved every frame: the temporal anti-aliasing (TAA, FSR 3.1)
 	// averages the steps' banding away
@@ -134,15 +141,15 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	[loop] for (int i = 0; i < STEPS && T > 0.02; i++) {
 		float t = t0 + (i + jitter) * dt;
 		float3 p = ro + rd * t;
-		// the noise's mip level by the quarter-size pixel's footprint there (the detail layer's
-		// texels per unit), so the distant clouds don't alias
-		float lod = log2(1 + t * 0.0035 * 256 * CloudScale.y);
+		// the noise's mip level by the pixel's footprint there (the detail layer's texels per
+		// unit), so the distant clouds don't alias
+		float lod = log2(1 + t * 0.0035 * pixelScale * 256 * CloudScale.y);
 		float dens = CloudDensity(p, lod);
 		if (dens <= 0.002)
 			continue;
 		float od = 0;
-		[unroll] for (int j = 0; j < 3; j++)
-			od += CloudDensity(p + sun * ((j + 0.5) * 36), lod + 0.5) * 36;
+		[loop] for (int j = 0; j < LIGHT_STEPS; j++)
+			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5) * lightStep;
 		float toSun = exp(-SIGMA * od);
 		float powder = 1 - exp(-2 * SIGMA * od - 0.15);
 		float energy = toSun * lerp(powder * 1.6, 1, towardSun);
@@ -186,12 +193,12 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		colour = lerp(tex, FogColor.rgb, fog);
 	}
 	// the dynamic clouds' layer (RenderSettings::dynamicClouds 3) in front of the sky box,
-	// marched at a quarter of the size (PS_Clouds)
+	// marched at a quarter, half or the full size (PS_Clouds)
 	if (SkyFlags.y != 0 && c > 0) {
 		float2 uv = float2(input.Ndc.x * 0.5 + 0.5, 0.5 - input.Ndc.y * 0.5);
 		float cw, ch;
 		tClouds.GetDimensions(cw, ch);
-		float2 o = 0.75 / float2(cw, ch); // a small blur over the march's jitter
+		float2 o = (SkyFlags.w >= 2 ? 0.5 : 0.75) / float2(cw, ch); // a small blur over the march's jitter
 		float4 cl = (tClouds.SampleLevel(skySampler, uv + float2(o.x, o.y), 0) + tClouds.SampleLevel(skySampler, uv + float2(-o.x, o.y), 0)
 			+ tClouds.SampleLevel(skySampler, uv + float2(o.x, -o.y), 0) + tClouds.SampleLevel(skySampler, uv - o, 0)) * 0.25;
 		colour = colour * cl.a + cl.rgb;
@@ -442,7 +449,9 @@ void DiligentSkyRenderer::render()
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->skyBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	float* f = (float*)mapped;
-	// the clouds' layer, a quarter of the scene's size
+	// the clouds' layer, a quarter, half or the full scene's size (RenderSettings::cloudQuality)
+	const int cloudQuality = std::clamp(g_renderSettings.cloudQuality, 0, 3);
+	const Uint32 cloudDivisor = cloudQuality == 0 ? 4 : cloudQuality == 1 ? 2 : 1;
 	const bool clouds = _impl->dgfx->shadows.cloudShadows && g_renderSettings.cloudShadows && g_renderSettings.dynamicClouds >= 3;
 	const float data[24] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
@@ -451,14 +460,14 @@ void DiligentSkyRenderer::render()
 		// sky_front.tga faces +z (north) and sky_right.tga +x, as seen in the original
 		0, 0, 1, 0,
 		1, 0, 0, 0,
-		_impl->sixFaces ? 1.0f : 0.0f, clouds ? 1.0f : 0.0f, (float)(_impl->dgfx->FrameIndex() % 64), 0,
+		_impl->sixFaces ? 1.0f : 0.0f, clouds ? 1.0f : 0.0f, (float)(_impl->dgfx->FrameIndex() % 64), (float)cloudQuality,
 	};
 	memcpy(f, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->skyBuffer, MAP_WRITE);
 
 	if (clouds) {
 		const TextureDesc& scene = _impl->dgfx->CurrentColorTarget()->GetTexture()->GetDesc();
-		const Uint32 w = std::max(1u, (scene.Width + 3) / 4), h = std::max(1u, (scene.Height + 3) / 4);
+		const Uint32 w = std::max(1u, (scene.Width + cloudDivisor - 1) / cloudDivisor), h = std::max(1u, (scene.Height + cloudDivisor - 1) / cloudDivisor);
 		if (!_impl->cloudTarget || _impl->cloudTarget->GetDesc().Width != w || _impl->cloudTarget->GetDesc().Height != h) {
 			TextureDesc td;
 			td.Name = "Sky clouds";

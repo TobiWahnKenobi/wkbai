@@ -24,7 +24,7 @@ cbuffer CloudBuffer
 	float4 CloudSun;        // the direction to the sun, w: mode (0 off, 1 shadows, 2 light shafts, 3 the clouds in the sky)
 	float4 CloudSunColour;  // the sun's colour, w: the share of the sunlight a full cloud takes
 	float4 CloudScale;      // UV per world unit of the base and the detail layer, light shaft strength, a clock (s)
-	float4 CloudSkyUp;      // the sky's colour above (the clouds' ambient light and the sky light)
+	float4 CloudSkyUp;      // the sky's colour above (the clouds' ambient light and the sky light); w: the ground's Fresnel
 	float4 CloudSkyHorizon; // and at the horizon; w: their mean brightness
 	float4 SkyOccRegion;    // the sky light's map: its corner x, z, 1 / its size, w: on
 	float4 SkyOccLight;     // the sky light's share of the light, the bounce's strength, the sun's light left in a static shadow, the top-down depth's range
@@ -357,7 +357,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
 		r, g, b, 0.62f,
 		BASE_SCALE, DETAIL_SCALE, rs.lightShaftStrength, time,
-		up[0], up[1], up[2], 1.0f,
+		up[0], up[1], up[2], std::clamp(rs.terrainFresnel, 0.0f, 1.0f),
 		horizon[0], horizon[1], horizon[2], horizonLum,
 		env.skyOccOrigin[0], env.skyOccOrigin[1], 1.0f / size, skyOn ? 1.0f : 0.0f,
 		0.4f, 0.5f, 0.3f, DiligentGfx::ShadowEnvironment::SKY_OCC_RANGE,

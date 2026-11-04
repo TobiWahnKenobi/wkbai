@@ -14,7 +14,14 @@
 // builds the frame's top-level structure. Before the post-processing, one ray per pixel from
 // the scene's depth towards the sun (jittered inside the sun's disc, so the temporal
 // anti-aliasing softens the edges) gives the shadow mask, which the composite applies.
-// Alpha-tested materials (leaves) count as solid.
+// Alpha-tested materials (leaves) are non-opaque geometry: a candidate hit on one counts only
+// where its texture's alpha passes the raster pass's test (0.94), from the triangle's UVs
+// (copied once per mesh) and the texture (one of up to MAX_ALPHA_TEXTURES).
+//
+// The same scene gives the water's ray-traced reflections (RenderSettings::rtReflections): the
+// terrain renderer draws its flat water surface once more through beginWaterReflections, one
+// mirror ray per pixel; what it hits takes its colour from the frame drawn before the water
+// where that point is on the screen (else a dark silhouette in the sky's colour).
 
 #include "RefCntAutoPtr.hpp"
 #include "RenderDevice.h"
@@ -32,7 +39,14 @@ public:
 	static bool Supported(Diligent::IRenderDevice* device);
 	DiligentRayShadows(Diligent::IRenderDevice* device);
 
-	struct Group { uint32_t firstIndex, indexCount, firstVertex, vertexCount; };
+	// a material group; alpha-tested ones also with their texture and per triangle its corners'
+	// UVs (6 floats), filled before the mesh's first structure is built
+	struct Group {
+		uint32_t firstIndex, indexCount, firstVertex, vertexCount;
+		Diligent::RefCntAutoPtr<Diligent::ITextureView> alphaTexture;
+		std::vector<float> alphaUVs;
+	};
+	static constexpr uint32_t MAX_ALPHA_TEXTURES = 128;
 	// a mesh's structure: key (the mesh, or the animation and key frame), its positions (float3,
 	// from the byte offset), 16-bit indices per group relative to the group's first vertex
 	Diligent::IBottomLevelAS* blas(Diligent::IDeviceContext* ctx, const void* key, uint32_t frame, Diligent::IBuffer* positions,
@@ -47,6 +61,15 @@ public:
 	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors)
 	Diligent::ITextureView* renderMask(Diligent::IDeviceContext* ctx, Diligent::ITexture* depth, const float projection[4],
 		const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex);
+	// starts the water's reflection pass: the target (RGBA16F, the frame's size, cleared) and the
+	// pipeline are set with the depth target; the caller draws its water surface (float3
+	// position, float depth per vertex) with transformBuffer's view-projection, then restores
+	// its targets. scene and sceneDepth: the frame before the water; projZ: the projection's
+	// m22 and m32. The reflections' view (rgb, a: how much they show), or null.
+	Diligent::ITextureView* beginWaterReflections(Diligent::IDeviceContext* ctx, Diligent::IBuffer* transformBuffer,
+		Diligent::ITexture* scene, Diligent::ITexture* sceneDepth, Diligent::ITextureView* dsv, const Vector3& camera,
+		float projZ22, float projZ32, const float fallback[3]);
+	bool reflectionsUsable() const { return reflectOk; }
 	bool valid() const { return built; }
 	bool usable() const { return ok; } // the mask's shader and pipeline were made
 	size_t blasCount() const { return blases.size(); }
@@ -58,7 +81,20 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> scratch, tlasScratch, instanceBuffer;
 	Diligent::RefCntAutoPtr<Diligent::ITopLevelAS> tlas;
 	uint32_t tlasCapacity = 0;
-	struct Instance { Diligent::IBottomLevelAS* blas; Matrix transform; };
+	struct Instance { Diligent::IBottomLevelAS* blas; Matrix transform; uint32_t geometryBase; };
+	// the alpha test's data: per structure's geometry (in order) its first UV and its texture + 1
+	// (0: opaque), the instances' CustomId being their structure's first geometry
+	std::map<const void*, uint32_t> geometryBases; // by the mesh's group list
+	std::map<Diligent::IBottomLevelAS*, uint32_t> blasGeometryBase;
+	std::vector<uint32_t> geometryRecords; // pairs
+	std::vector<float> alphaUVs;
+	std::vector<Diligent::RefCntAutoPtr<Diligent::ITextureView>> alphaTextures;
+	bool alphaDirty = true;
+	uint32_t alphaVersion = 0, maskAlphaVersion = ~0u, reflectAlphaVersion = ~0u;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> geometryBuffer, uvBuffer;
+	Diligent::RefCntAutoPtr<Diligent::ITexture> whiteTexture;
+	void uploadAlpha(Diligent::IDeviceContext* ctx);
+	void bindAlpha(Diligent::IShaderResourceBinding* srb);
 	std::vector<Instance> instances;
 	std::vector<std::string> names;
 	size_t lastInstanceCount = 0;
@@ -70,4 +106,15 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::ITexture> mask;
 	Diligent::ITexture* boundDepth = nullptr;
 	Diligent::ITopLevelAS* boundTlas = nullptr;
+	// the water's reflections
+	bool reflectOk = false, reflectTried = false;
+	Diligent::RefCntAutoPtr<Diligent::IShader> reflectVs, reflectPs;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> reflectSignature;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineState> reflectPipeline;
+	Diligent::TEXTURE_FORMAT reflectDsvFormat = Diligent::TEX_FORMAT_UNKNOWN;
+	Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> reflectSrb;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> reflectConstants;
+	Diligent::RefCntAutoPtr<Diligent::ITexture> reflections;
+	Diligent::ITexture* reflectBound[2] = {};
+	Diligent::ITopLevelAS* reflectBoundTlas = nullptr;
 };

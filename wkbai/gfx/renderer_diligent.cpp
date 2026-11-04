@@ -868,7 +868,7 @@ struct DiligentRenderer : DiligentGfx
 
 	void BeginDrawing() override
 	{
-		shadows.rayShadowsOn = false; // until the client interface asks for them this frame
+		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
 		if (gpuStart[0]) {
 			const int q = (int)(frame % GPU_QUERY_FRAMES);
 			// this slot's last frame: its time, if the GPU is done with it

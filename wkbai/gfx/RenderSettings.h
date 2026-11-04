@@ -124,11 +124,21 @@ struct RenderSettings {
 	// sun, 2 with light shafts through the air between the shadows, 3 with the clouds themselves
 	// raymarched in the sky (lit through their depth, silver linings towards the sun)
 	int dynamicClouds = 3;
+	// the volumetric clouds' quality: 0 Low (a quarter of the size, 48 steps), 1 Medium (half,
+	// 64), 2 High (the full size, 96), 3 Ultra (the full size, 128, finer light)
+	int cloudQuality = 1;
 	float cloudCover = 0.45f;        // 0 clear to 1 overcast
 	float lightShaftStrength = 1.0f; // the light shafts' brightness
 	// ray-traced sun shadows of the buildings, trees and units (enhanced renderers on Diligent,
 	// with a GPU that has inline ray tracing): instead of the static shadow map
 	bool rtShadows = false;
+	// ray-traced reflections of the buildings, trees and units in the water (the same; water Low
+	// or better), over the screen-space reflections, which still show the terrain
+	bool rtReflections = false;
+	// the ground's Fresnel (enhanced terrain renderer on Diligent): its reflection of the sky
+	// at grazing angles, as a rough dielectric's (Schlick, F0 0.04) times this; 0 off. The
+	// models' per-pixel lighting (modelLighting) has its own Fresnel, PBR packs or not.
+	float terrainFresnel = 0.35f;
 
 	// Camera
 	float scrollSpeed = 1.0f;        // WASD/arrows, multiplier

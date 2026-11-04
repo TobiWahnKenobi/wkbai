@@ -21,6 +21,7 @@
 #include "bitmap.h"
 #include "RenderSettings.h"
 #include "DiligentWaterfalls.h"
+#include "DiligentRayShadows.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -46,6 +47,7 @@ Texture2D riverTexture; // the rivers' coordinates, 4 texels per tile (BuildRive
 Texture2D<float> riverWidth; // and their half width
 Texture2D sceneTexture; // the frame behind the water, for its refraction and reflections (from Low)
 Texture2D<float> depthTexture; // its depth, for the reflections' rays
+Texture2D rtReflectTexture; // the ray-traced reflections of the flat water (WaterMode.w; DiligentRayShadows)
 Texture2D skyFront; // the sky box (ShadowEnvironment::skyFaces), reflected from Low
 Texture2D skyRight;
 Texture2D skyBack;
@@ -113,7 +115,8 @@ cbuffer SunBuffer
 	// the water's reflections (from Low): steps along the ray (0: none), the projection's z terms
 	// (depth = A + B / view z), the ray's longest reach in world units
 	float4 ReflectParams;
-	float4 WaterMode; // refinement steps of a hit, x; y: Medium (High's look on the flat surface); z: the sky box is bound
+	float4 WaterMode; // refinement steps of a hit, x; y: Medium (High's look on the flat surface); z: the sky box is bound;
+	                  // w: the ray-traced reflections are drawn (RenderSettings::rtReflections)
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -677,6 +680,23 @@ float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 	return float4(0, 0, 0, 0);
 }
 
+// What the water reflects along r: with the ray-traced reflections (RenderSettings::rtReflections)
+// the buildings, trees and units the flat water's mirror ray hit (rtReflectTexture, shifted by
+// how far the waves and ripples bend r from the flat mirror's), over the screen-space ray's
+// result (which still finds the terrain, not in the ray-tracing scene)
+float4 WaterReflection(float4 svpos, float3 world, float3 r)
+{
+	float4 seen = ScreenReflection(svpos, world, r);
+	if (WaterMode.w == 0)
+		return seen;
+	float3 v = normalize(world - FogCamera.xyz);
+	float2 bend = r.xz - v.xz;
+	float2 size;
+	rtReflectTexture.GetDimensions(size.x, size.y);
+	float4 rt = rtReflectTexture.SampleLevel(inpSampler, saturate(svpos.xy / size + bend * 0.04), 0);
+	return float4(lerp(seen.a > 0 ? seen.rgb : rt.rgb, rt.rgb, rt.a), max(seen.a, rt.a));
+}
+
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
@@ -749,7 +769,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
 	if (WaterSkyUp.w != 0) {
-		float4 seen = ScreenReflection(input.Pos, input.World, r);
+		float4 seen = WaterReflection(input.Pos, input.World, r);
 		float share = seen.a * max(fresnel * 0.6, 0.3) * (1 - foam);
 		c = lerp(c, seen.rgb, share);
 		alpha = max(alpha, share);
@@ -922,7 +942,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
-	float4 seen = ScreenReflection(input.Pos, input.World, rr);
+	float4 seen = WaterReflection(input.Pos, input.World, rr);
 	float mirror = fresnel * 0.8;
 	float3 reflected = lerp(sky, seen.rgb, seen.a);
 	mirror = lerp(mirror, max(mirror, 0.4), seen.a);
@@ -1019,6 +1039,21 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	return float4(GradeColour(c), 1);
 }
 
+// The ground's Fresnel (RenderSettings::terrainFresnel; the terrain's textures have no
+// material maps): a rough dielectric's reflection of the sky, Schlick's term with F0 0.04 times
+// the setting's strength (CloudSkyUp.w, 0: off), towards the sky's colour along the mirror
+// direction, as much as the point sees of the sky. Grazing slopes and the far ground take a
+// sheen of the sky; ground seen from above keeps its colour.
+float3 TerrainFresnel(float3 c, float3 pos, float3 n, float vis)
+{
+	if (CloudSkyUp.w == 0)
+		return c;
+	float3 v = normalize(FogCamera.xyz - pos);
+	float f = (0.04 + 0.96 * pow(1 - saturate(dot(n, v)), 5)) * CloudSkyUp.w;
+	float3 r = reflect(-v, n);
+	return lerp(c, lerp(CloudSkyHorizon.rgb, CloudSkyUp.rgb, saturate(r.y)) * vis, f);
+}
+
 // The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the
 // per-vertex light vector (the sun direction in tangent space, shortened by the cloud
 // shadows) dotted with the normal map, clamped, times the texture.
@@ -1052,7 +1087,9 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		float share = SkyOccLight.x;
 		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob
 			+ share * sky * lerp(1, blob, 0.5) + bounce + FireLight(input.FragPos, n);
-		float4 gc = lerp(float4(l3, 1) * input.Color * tex, FogColor, input.Fog);
+		float4 lc = float4(l3, 1) * input.Color * tex;
+		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
+		float4 gc = lerp(lc, FogColor, input.Fog);
 		return float4(GradeColour(gc.rgb), gc.a);
 	}
 
@@ -1087,7 +1124,9 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
-	float4 c = lerp(float4(light, 1) * input.Color * tex, FogColor, input.Fog);
+	float4 lc = float4(light, 1) * input.Color * tex;
+	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
+	float4 c = lerp(lc, FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -1129,6 +1168,8 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::waterQuality 4 and 5 (High, Ultra)
 	RefCntAutoPtr<IPipelineState> mediumWaterPipeline; // 3 (Medium): High's pixels on the flat surface
 	RefCntAutoPtr<ITexture> sceneCopy; // the frame before the water, for its refraction and reflections
+	bool rtReflections = false; // the ray-traced reflections are drawn this frame
+	ITextureView* boundReflections = nullptr;
 	RefCntAutoPtr<ITexture> depthCopy; // and its depth
 	static constexpr const char* SKY_NAMES[5] = { "skyFront", "skyRight", "skyBack", "skyLeft", "skyTop" };
 	texture boundSky[5] = {}; // ShadowEnvironment::skyFaces as bound to lakeBinding
@@ -1281,6 +1322,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "depthTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "rtReflectTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "skyFront", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "skyRight", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "skyBack", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1634,6 +1676,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(_impl->rippleTexture));
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(dgfx->GetTextureView(nullptr), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 	for (const char* name : Impl::SKY_NAMES)
 		_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, name)->Set(dgfx->GetTextureView(nullptr), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 
@@ -2117,7 +2160,11 @@ void DiligentEnhancedTerrainRenderer::render()
 		}
 	}
 	waterMode[2] = skyBox ? 1.0f : 0.0f;
-	waterMode[3] = 0.0f;
+	// the ray-traced reflections: over the frame copied before the water, with the frame's
+	// ray-tracing scene (built by the scene renderer, drawn before the terrain)
+	_impl->rtReflections = reflections && shadows.rayReflectionsOn && shadows.rayShadows && shadows.rayShadows->valid()
+		&& shadows.rayShadows->reflectionsUsable() && dgfx->CurrentDepthTarget();
+	waterMode[3] = _impl->rtReflections ? 1.0f : 0.0f;
 	float* fire = (float*)(sbdata + 224);
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -2228,6 +2275,7 @@ void DiligentEnhancedTerrainRenderer::render()
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(dgfx->GetTextureView(nullptr));
 			for (const char* name : Impl::SKY_NAMES)
 				srb->GetVariableByName(SHADER_TYPE_PIXEL, name)->Set(dgfx->GetTextureView(nullptr));
 		}
@@ -2266,6 +2314,22 @@ void DiligentEnhancedTerrainRenderer::render()
 				ctx->CopyTexture(dcopy);
 			}
 			dgfx->RestoreRenderTargets();
+		}
+		// the ray-traced reflections of the flat water, into the texture the water's pixels read
+		if (_impl->rtReflections) {
+			const float fallback[3] = { shadows.skyLight[1][0] * 0.4f, shadows.skyLight[1][1] * 0.4f, shadows.skyLight[1][2] * 0.4f };
+			ITextureView* refl = shadows.rayShadows->beginWaterReflections(ctx, dgfx->transformBuffer, _impl->sceneCopy, _impl->depthCopy,
+				dgfx->CurrentDepthTarget(), camera->position, camera->projMatrix.m[2][2], camera->projMatrix.m[3][2], fallback);
+			if (refl) {
+				IBuffer* rvb = _impl->lakeVertexBuffer;
+				ctx->SetVertexBuffers(0, 1, &rvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+				drawIndices(_impl->frameLakeIndices);
+				dgfx->RestoreRenderTargets();
+				if (_impl->boundReflections != refl) {
+					_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(refl, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+					_impl->boundReflections = refl;
+				}
+			}
 		}
 		// High and Ultra tessellated, Medium (or High without tessellation) flat with High's pixels
 		const int wq = g_renderSettings.waterQuality;

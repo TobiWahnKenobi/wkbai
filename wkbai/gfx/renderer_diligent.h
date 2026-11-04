@@ -129,9 +129,10 @@ struct DiligentGfx : IRenderer
 		Diligent::ITextureView* terrainHeights = nullptr;
 		int terrainGrid[3] = {};
 		// ray-traced shadows (DiligentRayShadows, RenderSettings::rtShadows): made at the first
-		// frame that wants them; on in this frame; the sun (towards it) for the mask
+		// frame that wants them; on in this frame; the sun (towards it) for the mask. The water's
+		// ray-traced reflections (RenderSettings::rtReflections) use the same scene.
 		class DiligentRayShadows* rayShadows = nullptr;
-		bool rayShadowsSupported = false, rayShadowsOn = false;
+		bool rayShadowsSupported = false, rayShadowsOn = false, rayReflectionsOn = false;
 		Vector3 sunDirection = Vector3(0, 1, 0);
 	} shadows;
 };
