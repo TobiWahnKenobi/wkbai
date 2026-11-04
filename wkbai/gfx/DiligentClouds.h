@@ -41,3 +41,10 @@ void CreateCloudResources(DiligentGfx* gfx);
 // (and where the sky light's map lies, around the point the camera looks at); by the scene
 // renderer, before it draws
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour);
+
+// A weather's clouds: the cover (0-1), the layer's base altitude and thickness, how flat (stratus
+// 0-1) and how stormy (towers, anvils, dark bases 0-1), the density, the share of the sunlight
+// their shadows take, the light on them (1 a fair day's)
+struct CloudPreset { float cover, base, thickness, stratus, storm, density, shadow, light; };
+constexpr int CLOUD_WEATHER_COUNT = 10; // as the seasons' weather kinds (EnvWeather)
+extern const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT];

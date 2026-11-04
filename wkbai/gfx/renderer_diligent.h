@@ -106,6 +106,9 @@ struct DiligentGfx : IRenderer
 		// the sky box's faces front (+z), right (+x), back, left and top (DiligentSkyRenderer),
 		// for the water's reflection; null without a sky
 		texture skyFaces[5] = {};
+		// the physical sky is drawn instead of the sky box (with the volumetric clouds): skyLight
+		// is its, and the water reflects its colours, not the box's faces
+		bool physicalSky = false;
 
 		// Dynamic clouds and the sky light (DiligentClouds; RenderSettings::dynamicClouds, skyGI):
 		// the cloud noise, the cloud constant buffer (cbuffer CloudBuffer), this frame's mode
@@ -126,6 +129,14 @@ struct DiligentGfx : IRenderer
 		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> skyOccBinding;
 		float skyOccOrigin[2] = {};
 		bool skyOccOn = false; // this frame
+		// the clouds' weather (DiligentClouds UpdateCloudBuffer): the preset now, blending towards
+		// the weather's; cloudWeatherKind: the seasons' weather kind when it drives the clouds (else
+		// -1: RenderSettings::cloudWeather); its lightning (cloudFlashOverride >= 0: the weather's
+		// flash strength and cloudFlash's position set by it, else the clouds' own flashes)
+		struct CloudPresetState { float cover = 0.45f, base = 230, thickness = 150, stratus = 0, storm = 0, density = 1, shadow = 0.62f, light = 1; } cloudPreset;
+		uint64_t cloudPresetTicks = 0;
+		int cloudWeatherKind = -1;
+		float cloudFlash[4] = {}, cloudFlashOverride = -1, cloudFlashStart = -100, cloudFlashNext = 0;
 		// the terrain's vertex heights (the terrain renderer's), its grid's vertices across and
 		// down and the map edge in tiles
 		Diligent::ITextureView* terrainHeights = nullptr;

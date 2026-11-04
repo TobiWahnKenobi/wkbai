@@ -750,6 +750,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Clouds", &s.dynamicClouds, cloudLevels, 4);
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
+			static const char* const cloudWeathers[] = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
+			ImGui::Combo("Cloud weather", &s.cloudWeather, cloudWeathers, 11);
 		}
 		ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
 		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");

@@ -2150,7 +2150,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	const bool highOk = _impl->highWaterPipeline && _impl->waterTexture;
 	waterMode[1] = (wq == 3 || (wq >= 4 && !highOk)) && _impl->mediumWaterPipeline && _impl->waterTexture ? 1.0f : 0.0f;
 	// the sky box for the reflections, bound again when it changed
-	bool skyBox = g_renderSettings.sky && wq >= 2;
+	bool skyBox = g_renderSettings.sky && wq >= 2 && !shadows.physicalSky;
 	for (int i = 0; i < 5; i++) {
 		skyBox = skyBox && shadows.skyFaces[i];
 		if (_impl->boundSky[i] != shadows.skyFaces[i]) {

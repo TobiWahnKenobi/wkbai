@@ -111,31 +111,34 @@ float Remap(float x, float a, float b, float c, float d)
 float CloudDensity(float3 p, float lod, float footprint, bool detail)
 {
 	float h = saturate((p.y - CloudShape.z) / CloudShape.w);
-	// the coverage: the cover's broad base layer, softly (its fine layer and sharp edge made thin
-	// columns as tall as the layer: the 3D shape gives the detail)
-	float b = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * CloudScale.x + CloudWind.xy, lod + 1).r;
-	float cover = saturate((b - (1 - CloudShape.x) + 0.22) / 0.55);
+	// the coverage (CloudCover, as the ground shadows'); a storm's anvils spread it out near the top
+	const float stratus = CloudWeather.x, storm = CloudWeather.y;
+	float cover = CloudCover(p.xz, lod + 1);
+	cover = saturate(cover + storm * smoothstep(0.7, 0.92, h) * 0.45 * saturate(cover * 4));
 	if (cover <= 0.002)
 		return 0;
+	// the tops: by region; a stratus sheet's level, a storm's towers to the layer's top
 	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
-	float profile = saturate(Remap(h, 0, 0.07, 0, 1)) * saturate(Remap(h, top * 0.45, top, 1, 0));
+	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
+	float profile = saturate(Remap(h, 0, lerp(0.07, 0.2, stratus), 0, 1)) * saturate(Remap(h, top * lerp(0.45, 0.7, stratus), top, 1, 0));
 	if (profile <= 0)
 		return 0;
 	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
 	float3 q = p - drift - float3(0, CloudShape.z, 0);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
 	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
-	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1)) * profile;
+	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1));
+	shape = lerp(shape, 0.45 + 0.55 * shape, stratus) * profile; // sheets: the billows flattened
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
 	if (!detail || c <= 0)
-		return c * 1.6;
+		return c * 1.6 * CloudWeather.z;
 	float detailLod = log2(footprint * 32 / DETAIL_PERIOD);
 	float3 d = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.3) / DETAIL_PERIOD, max(detailLod, 0)).rgb;
 	float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
 	hf = lerp(1 - hf, hf, saturate(h * 3));
-	float erosion = 0.4 * saturate(2 - detailLod * 0.5);
-	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6;
+	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus);
+	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6 * CloudWeather.z;
 }
 
 float HenyeyGreenstein(float mu, float g)
@@ -193,7 +196,17 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		float energy = toSun * lerp(powder * 1.6, 1, towardSun);
 		float h = saturate((p.y - base) / CloudShape.w);
 		float3 ambient = CloudSkyUp.rgb * (0.45 + 0.55 * h) + CloudSkyHorizon.rgb * 0.15;
-		float3 s = CloudSunColour.rgb * (energy * phase * 1.3) + ambient * 0.85;
+		// light scattered many times inside the cloud (the light that a single scattering misses
+		// in thick clouds: an overcast sheet is grey, not black), less absorbed and isotropic
+		energy += 0.35 * exp(-SIGMA * 0.2 * od);
+		ambient = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.4) * 1.3;
+		// the weather's light (storm and rain clouds darker, their bases most), and lightning
+		// lighting the cloud from inside
+		// (and the denser parts of a cloud darker than its thin ones: an overcast sheet's relief)
+		float shade = CloudWeather.w * lerp(1, 0.6 + 0.4 * h, CloudWeather.y)
+			* lerp(1.12, 0.72, saturate(dens / (1.6 * max(CloudWeather.z, 0.1))));
+		float3 flash = float3(0.75, 0.8, 1.0) * (CloudFlash.w * 9 * exp(-length(p - CloudFlash.xyz) / 260));
+		float3 s = (CloudSunColour.rgb * (energy * phase * 1.3) + ambient * 0.85) * shade + flash;
 		float dT = exp(-SIGMA * dens * dt);
 		light += T * (1 - dT) * s;
 		T *= dT;
@@ -201,6 +214,53 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// far clouds fade into the horizon's haze
 	float fade = exp(-t0 / 5000);
 	return float4(light * fade, lerp(1, T, fade));
+}
+
+// A physical sky (with the volumetric clouds, instead of the sky box, whose painted clouds
+// would show through and disagree with the real ones): single scattering in a planet's
+// atmosphere, Rayleigh and Mie with exponential densities (8 and 1.2 km scale heights), 8 steps
+// along the view and 4 towards the sun, tone-mapped to 0-1; the sun's disc through the air.
+// SkyLightFromPhysical (DiligentSkyRenderer.cpp) is the same on the CPU, for the sky light.
+static const float ATM_EARTH = 6360, ATM_TOP = 6420;
+static const float3 ATM_RAYLEIGH = float3(5.8e-3, 13.5e-3, 33.1e-3);
+static const float ATM_MIE = 21e-3;
+
+float AtmTop(float3 o, float3 d)
+{
+	float b = dot(o, d), c = dot(o, o) - ATM_TOP * ATM_TOP;
+	return -b + sqrt(max(b * b - c, 0));
+}
+
+float3 PhysicalSky(float3 rd, float3 sun)
+{
+	rd = normalize(float3(rd.x, max(rd.y, 0.0), rd.z));
+	float3 o = float3(0, ATM_EARTH + 0.3, 0);
+	float ds = AtmTop(o, rd) / 8;
+	float odR = 0, odM = 0;
+	float3 sumR = 0, sumM = 0;
+	[loop] for (int i = 0; i < 8; i++) {
+		float3 p = o + rd * ((i + 0.5) * ds);
+		float h = length(p) - ATM_EARTH;
+		float dR = exp(-h / 8) * ds, dM = exp(-h / 1.2) * ds;
+		odR += dR;
+		odM += dM;
+		float dl = AtmTop(p, sun) / 4, lR = 0, lM = 0;
+		[unroll] for (int j = 0; j < 4; j++) {
+			float hl = length(p + sun * ((j + 0.5) * dl)) - ATM_EARTH;
+			lR += exp(-hl / 8) * dl;
+			lM += exp(-hl / 1.2) * dl;
+		}
+		float3 att = exp(-(ATM_RAYLEIGH * (odR + lR) + ATM_MIE * 1.1 * (odM + lM)));
+		sumR += dR * att;
+		sumM += dM * att;
+	}
+	float mu = dot(rd, sun), g = 0.76;
+	float pR = 0.0596831 * (1 + mu * mu);
+	float pM = 0.1193662 * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
+	float3 c = 20 * (sumR * ATM_RAYLEIGH * pR + sumM * ATM_MIE * pM);
+	float3 trans = exp(-(ATM_RAYLEIGH * odR + ATM_MIE * 1.1 * odM));
+	c += trans * 30 * smoothstep(0.99985, 0.99996, mu);
+	return 1 - exp(-c * 1.2);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -216,7 +276,11 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float3 colour = FogColor.rgb;
 	if (fog < 1) {
 		float3 tex;
-		if (c >= max(abs(a), abs(b)))
+		if (SkyFlags.y != 0) { // the volumetric clouds: the physical sky
+			float3 sun = dot(CloudSun.xyz, CloudSun.xyz) > 0.01 ? normalize(CloudSun.xyz) : float3(0.5, 0.8, 0.3);
+			tex = PhysicalSky(normalize(d), sun);
+		}
+		else if (c >= max(abs(a), abs(b)))
 			tex = skyTop.SampleLevel(skySampler, float2(0.5 + 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
 		else if (-c >= max(abs(a), abs(b)))
 			tex = skyBottom.SampleLevel(skySampler, float2(0.5 - 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
@@ -251,8 +315,53 @@ float4 PS_Clouds(VS_OUTPUT input) : SV_Target
 }
 )---";
 
+// The physical sky's colour towards d (unit, y up) with the sun towards sun: PhysicalSky of the
+// sky shader on the CPU
+static void PhysicalSkyCpu(const Vector3& dIn, const Vector3& sun, float out[3])
+{
+	const float EARTH = 6360, TOP = 6420, RAY[3] = { 5.8e-3f, 13.5e-3f, 33.1e-3f }, MIE = 21e-3f;
+	const Vector3 d = Vector3(dIn.x, std::max(dIn.y, 0.0f), dIn.z).normal();
+	auto top = [&](const Vector3& o, const Vector3& v) {
+		const float b = o.dot(v), c = o.dot(o) - TOP * TOP;
+		return -b + std::sqrt(std::max(b * b - c, 0.0f));
+	};
+	const Vector3 o(0, EARTH + 0.3f, 0);
+	const float ds = top(o, d) / 8;
+	float odR = 0, odM = 0, sumR[3] = {}, sumM[3] = {};
+	for (int i = 0; i < 8; i++) {
+		const Vector3 p = o + d * ((i + 0.5f) * ds);
+		const float h = p.len3() - EARTH;
+		const float dR = std::exp(-h / 8) * ds, dM = std::exp(-h / 1.2f) * ds;
+		odR += dR;
+		odM += dM;
+		const float dl = top(p, sun) / 4;
+		float lR = 0, lM = 0;
+		for (int j = 0; j < 4; j++) {
+			const float hl = (p + sun * ((j + 0.5f) * dl)).len3() - EARTH;
+			lR += std::exp(-hl / 8) * dl;
+			lM += std::exp(-hl / 1.2f) * dl;
+		}
+		for (int c = 0; c < 3; c++) {
+			const float att = std::exp(-(RAY[c] * (odR + lR) + MIE * 1.1f * (odM + lM)));
+			sumR[c] += dR * att;
+			sumM[c] += dM * att;
+		}
+	}
+	const float mu = d.dot(sun), g = 0.76f;
+	const float pR = 0.0596831f * (1 + mu * mu);
+	const float pM = 0.1193662f * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * std::pow(1 + g * g - 2 * g * mu, 1.5f));
+	for (int c = 0; c < 3; c++)
+		out[c] = 1 - std::exp(-20 * (sumR[c] * RAY[c] * pR + sumM[c] * MIE * pM) * 1.2f);
+}
+
 struct DiligentSkyRenderer::Impl {
 	DiligentGfx* dgfx;
+	// the sky box's own light (ShadowEnvironment::skyLight), for when the physical sky is off
+	float boxLight[3][3] = {};
+	float boxLuminance = 1;
+	bool boxLightValid = false;
+	Vector3 physicalSun = Vector3(0, -2, 0); // the sun the physical sky light was worked out for
+	float physicalCover = -1; // and the cloud cover
 	const Camera* camera;
 	texture faces[6] = {};
 	bool sixFaces = false;
@@ -333,6 +442,9 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	auto lum = [](const float* c) { return 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2]; };
 	light.skyLightLuminance = std::max(0.05f, (lum(light.skyLight[0]) + 2 * lum(light.skyLight[1]) + lum(light.skyLight[2])) / 4);
 	light.skyLightValid = true;
+	memcpy(_impl->boxLight, light.skyLight, sizeof(_impl->boxLight));
+	_impl->boxLuminance = light.skyLightLuminance;
+	_impl->boxLightValid = true;
 	printf("Sky light: above %.2f %.2f %.2f, horizon %.2f %.2f %.2f, below %.2f %.2f %.2f\n", light.skyLight[0][0], light.skyLight[0][1], light.skyLight[0][2],
 		light.skyLight[1][0], light.skyLight[1][1], light.skyLight[1][2], light.skyLight[2][0], light.skyLight[2][1], light.skyLight[2][2]);
 
@@ -499,6 +611,53 @@ void DiligentSkyRenderer::render()
 	const int cloudQuality = std::clamp(g_renderSettings.cloudQuality, 0, 3);
 	const Uint32 cloudDivisor = cloudQuality == 0 ? 4 : cloudQuality == 1 ? 2 : 1;
 	const bool clouds = _impl->dgfx->shadows.cloudShadows && g_renderSettings.cloudShadows && g_renderSettings.dynamicClouds >= 3;
+	// with the volumetric clouds the physical sky, and the sky light from it (above: the mean of
+	// 30, 60 and 90 degrees up; the horizon: 4 degrees up; below: the horizon's, darker, as ground),
+	// worked out again when the sun moves; else the sky box's
+	auto& env = _impl->dgfx->shadows;
+	env.physicalSky = clouds;
+	if (clouds) {
+		Vector3 sun = env.sunDirection;
+		sun = sun.sqlen3() > 0.01f ? sun.normal() : Vector3(0.5f, 0.8f, 0.3f).normal();
+		const float cover = std::clamp(env.cloudPreset.cover, 0.0f, 1.0f);
+		if ((sun - _impl->physicalSun).sqlen3() > 1e-6f || std::abs(cover - _impl->physicalCover) > 0.01f) {
+			_impl->physicalSun = sun;
+			_impl->physicalCover = cover;
+			float up[3] = {}, horizon[3] = {}, c[3];
+			for (int k = 0; k < 8; k++) {
+				const float a = k * 0.785398f;
+				for (float e : { 0.5236f, 1.0472f, 1.5708f }) {
+					PhysicalSkyCpu(Vector3(std::cos(a) * std::cos(e), std::sin(e), std::sin(a) * std::cos(e)), sun, c);
+					for (int i = 0; i < 3; i++)
+						up[i] += c[i] / 24;
+				}
+				PhysicalSkyCpu(Vector3(std::cos(a) * 0.9976f, 0.0698f, std::sin(a) * 0.9976f), sun, c);
+				for (int i = 0; i < 3; i++)
+					horizon[i] += c[i] / 8;
+			}
+			// under the clouds the sky's light turns grey, the more the more cloud
+			auto toGrey = [&](float* v) {
+				const float l = 0.3f * v[0] + 0.59f * v[1] + 0.11f * v[2];
+				for (int i = 0; i < 3; i++)
+					v[i] += (l * 1.1f - v[i]) * 0.8f * cover * cover;
+			};
+			toGrey(up);
+			toGrey(horizon);
+			for (int i = 0; i < 3; i++) {
+				env.skyLight[0][i] = up[i];
+				env.skyLight[1][i] = horizon[i];
+				env.skyLight[2][i] = horizon[i] * 0.5f;
+			}
+			auto lum = [](const float* v) { return 0.299f * v[0] + 0.587f * v[1] + 0.114f * v[2]; };
+			env.skyLightLuminance = std::max(0.05f, (lum(env.skyLight[0]) + 2 * lum(env.skyLight[1]) + lum(env.skyLight[2])) / 4);
+			env.skyLightValid = true;
+		}
+	}
+	else if (_impl->boxLightValid && _impl->physicalSun.y > -1.5f) {
+		memcpy(env.skyLight, _impl->boxLight, sizeof(_impl->boxLight));
+		env.skyLightLuminance = _impl->boxLuminance;
+		_impl->physicalSun = Vector3(0, -2, 0);
+	}
 	const float data[24] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,

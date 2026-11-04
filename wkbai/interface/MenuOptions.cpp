@@ -178,6 +178,15 @@ namespace {
 			o.set = [&rs](float v) { rs.cloudQuality = std::clamp((int)v, 0, 3); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds >= 3; }));
 		}
+		{
+			MenuOption o;
+			o.id = "cloudWeather"; o.page = "lighting"; o.label = "Cloud weather";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "By cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
+			o.get = [&rs]() { return (float)rs.cloudWeather; };
+			o.set = [&rs](float v) { rs.cloudWeather = std::clamp((int)v, 0, 10); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
+		}
 		list.push_back(withEnabled(slider("cloudCover", "lighting", "Cloud cover", rs.cloudCover, 0.0f, 1.0f, "%.2f"),
 			[&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
 		{

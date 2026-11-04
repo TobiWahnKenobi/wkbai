@@ -33,21 +33,26 @@ cbuffer CloudBuffer
 	float4 SkyOccRegion;    // the sky light's map: its corner x, z, 1 / its size, w: on
 	float4 SkyOccLight;     // the sky light's share of the light, the bounce's strength, the sun's light left in a static shadow, the top-down depth's range
 	float4 SkyOccTerrain;   // the height grid's vertices across and down, the map edge in tiles, the top-down view's height
+	// the weather's cloud preset (UpdateCloudBuffer): x stratus (flat sheets), y storm (towers,
+	// anvils, dark bases), z density, w the light on the clouds
+	float4 CloudWeather;
+	float4 CloudFlash;      // lightning inside the clouds: its position, w its strength now
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
 Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges (tiling)
 Texture2D skyOccTexture; // r: how much of the sky the ground sees, g: the ground's height, b: the casters' top
 
-// How cloudy the sky is above a point of the map (0-1): two noise layers drifting with the wind,
-// cut at the cover
+// How cloudy the sky is above a point of the map (0-1): two noise layers drifting with the wind
+// (the broad one mostly), ramped softly around the cover. The volumetric clouds take it as their
+// coverage, the 3D shape giving the detail (a sharp, detailed cover made thin columns as tall as
+// the layer); the ground shadows and the light shafts take the same, so they match the clouds.
 float CloudCover(float2 xz, float lod)
 {
 	float b = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.x + CloudWind.xy, lod).r;
 	float d = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.y + CloudWind.zw, lod).g;
-	float n = b * 0.7 + d * 0.3;
-	float from = 1 - CloudShape.x;
-	return smoothstep(from, from + CloudShape.y, n);
+	float n = b * 0.85 + d * 0.15;
+	return saturate((n - (1 - CloudShape.x) + CloudShape.y) / (2.5 * CloudShape.y));
 }
 
 // The light the clouds leave at a point: the sun's ray through it crosses the cloud layer's
@@ -381,7 +386,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 160;
+	cb.Size = 192;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -471,6 +476,22 @@ void CreateCloudResources(DiligentGfx* gfx)
 		ferr("Diligent: could not create the sky light occlusion pipeline.");
 }
 
+// The cloud presets per weather (in the order of the seasons' weather, EnvWeather: clear,
+// cloudy, rain, heavy rain, thunderstorm, fog, snow, blizzard, heatwave, drought)
+const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
+	//  cover  base  thick  stratus storm density shadow light
+	{ 0.32f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f }, // clear: a few fair-weather cumulus
+	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f }, // cloudy: broken cumulus
+	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f }, // rain: low, grey, flatter
+	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.5f, 0.85f, 0.76f }, // heavy rain: nimbostratus
+	{ 0.58f, 190, 520, 0.05f, 1.0f, 1.8f, 0.86f, 0.75f }, // thunderstorm: towers with anvils, dark bases
+	{ 0.90f, 200, 70, 0.9f, 0.0f, 0.8f, 0.70f, 1.18f }, // fog: a low flat sheet
+	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f }, // snow: pale overcast
+	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.4f, 0.82f, 0.82f }, // blizzard
+	{ 0.16f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f }, // heatwave: nearly clear, high
+	{ 0.22f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f }, // drought
+};
+
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
 {
 	auto& env = gfx->shadows;
@@ -486,6 +507,48 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float r = ((sunColour >> 16) & 255) / 255.0f, g = ((sunColour >> 8) & 255) / 255.0f, b = (sunColour & 255) / 255.0f;
 	env.clouds = rs.dynamicClouds;
 	env.cloudShadowsDrawn = true;
+	// the weather's preset (RenderSettings::cloudWeather: 0 the cover slider's own cumulus, else
+	// a weather; with the seasons' weather, its current kind), approached over about 15 seconds
+	// of real time (at once on the first frame)
+	{
+		CloudPreset target = g_cloudPresets[1];
+		target.cover = rs.cloudCover;
+		const int kind = env.cloudWeatherKind >= 0 ? env.cloudWeatherKind : rs.cloudWeather - 1;
+		if (kind >= 0 && kind < CLOUD_WEATHER_COUNT)
+			target = g_cloudPresets[kind];
+		const uint64_t now = SDL_GetTicksNS();
+		float k = 1.0f;
+		if (env.cloudPresetTicks != 0)
+			k = 1.0f - std::exp(-std::min((now - env.cloudPresetTicks) / 1e9f, 1.0f) / 15.0f);
+		env.cloudPresetTicks = now;
+		float* cur = &env.cloudPreset.cover;
+		const float* to = &target.cover;
+		for (int i = 0; i < 8; i++)
+			cur[i] += (to[i] - cur[i]) * k;
+		// lightning inside the storm's clouds (with the seasons' weather, its strikes): flashes
+		// every 4 to 14 seconds, flickering out over a quarter of a second
+		const float stormNow = env.cloudPreset.storm;
+		if (env.cloudFlashOverride >= 0)
+			env.cloudFlash[3] = env.cloudFlashOverride;
+		else if (stormNow > 0.5f) {
+			const float t = now / 1e9f;
+			if (t >= env.cloudFlashNext) {
+				const uint32_t r = (uint32_t)(now >> 10) * 2654435761u;
+				const float a = (r & 1023) / 1023.0f * 6.2831853f, d = 150.0f + ((r >> 10) & 1023) / 1023.0f * 650.0f;
+				const Vector3 at = camera.position + camera.direction.normal() * 400.0f;
+				env.cloudFlash[0] = at.x + std::cos(a) * d;
+				env.cloudFlash[1] = env.cloudPreset.base + env.cloudPreset.thickness * 0.35f;
+				env.cloudFlash[2] = at.z + std::sin(a) * d;
+				env.cloudFlashStart = t;
+				env.cloudFlashNext = t + 4.0f + ((r >> 20) & 1023) / 1023.0f * 10.0f;
+			}
+			const float age = t - env.cloudFlashStart;
+			env.cloudFlash[3] = age < 0.25f ? (1 - age / 0.25f) * (0.6f + 0.4f * std::abs(std::sin(age * 60.0f))) * stormNow : 0.0f;
+		}
+		else
+			env.cloudFlash[3] = 0.0f;
+	}
+	const DiligentGfx::ShadowEnvironment::CloudPresetState& preset = env.cloudPreset;
 	// the sky light's map: around the point the camera looks at, snapped to its texels
 	const float size = 2.0f * DiligentGfx::ShadowEnvironment::SKY_OCC_RADIUS;
 	const float texel = size / DiligentGfx::ShadowEnvironment::SKY_OCC_SIZE;
@@ -498,17 +561,19 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
 	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
-	const float data[40] = {
+	const float data[48] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
-		std::clamp(rs.cloudCover, 0.0f, 1.0f), 0.22f, 230.0f, 140.0f,
+		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
-		r, g, b, 0.62f,
+		r, g, b, preset.shadow,
 		BASE_SCALE, DETAIL_SCALE, rs.lightShaftStrength, time,
 		up[0], up[1], up[2], std::clamp(rs.terrainFresnel, 0.0f, 1.0f),
 		horizon[0], horizon[1], horizon[2], horizonLum,
 		env.skyOccOrigin[0], env.skyOccOrigin[1], 1.0f / size, skyOn ? 1.0f : 0.0f,
 		0.4f, 0.5f, 0.3f, DiligentGfx::ShadowEnvironment::SKY_OCC_RANGE,
 		(float)env.terrainGrid[0], (float)env.terrainGrid[1], (float)env.terrainGrid[2], DiligentGfx::ShadowEnvironment::SKY_OCC_TOP,
+		preset.stratus, preset.storm, preset.density, preset.light,
+		env.cloudFlash[0], env.cloudFlash[1], env.cloudFlash[2], env.cloudFlash[3],
 	};
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;

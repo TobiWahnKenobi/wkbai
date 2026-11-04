@@ -127,6 +127,10 @@ struct RenderSettings {
 	// the volumetric clouds' quality: 0 Low (a quarter of the size, 48 steps), 1 Medium (half,
 	// 64), 2 High (the full size, 96), 3 Ultra (the full size, 128, finer light)
 	int cloudQuality = 1;
+	// the clouds' weather (enhanced renderers on Diligent): 0 cumulus by the cloud cover below,
+	// 1-10 a weather's clouds (clear, cloudy, rain, heavy rain, thunderstorm, fog, snow, blizzard,
+	// heatwave, drought); the seasons' weather, when on, sets it itself
+	int cloudWeather = 0;
 	float cloudCover = 0.45f;        // 0 clear to 1 overcast
 	float lightShaftStrength = 1.0f; // the light shafts' brightness
 	// ray-traced sun shadows of the buildings, trees and units (enhanced renderers on Diligent,
