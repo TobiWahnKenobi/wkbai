@@ -16,6 +16,14 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <atomic>
+#include <condition_variable>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include "settings.h"
+#include <nlohmann/json.hpp>
 
 // profiling: A* searches (not the straight walks), the tiles they visited, their time
 uint64_t g_astarSearches = 0, g_astarTiles = 0;
@@ -59,6 +67,7 @@ namespace {
 		std::vector<uint8_t> state; // per tile: 0 not looked at, 1 free, 2 blocked (the ground alone)
 		std::vector<int> region;    // terrainRegion, valid with regionValid
 		bool regionValid = false;
+		bool complete = false;      // every tile of state looked at (fillGrids)
 	};
 	struct Grids {
 		uint32_t terrainId = 0, revision = 0;
@@ -96,6 +105,7 @@ namespace {
 			for (ClassGrid& c : g.classes) {
 				c.state.assign((size_t)w * h, 0);
 				c.regionValid = false;
+				c.complete = false;
 			}
 			g.revision = trn->revision;
 			g.logged = trn->changedVertices.size();
@@ -191,6 +201,50 @@ namespace {
 		}
 		c.regionValid = true;
 	}
+
+	// Every class's ground looked at on every tile (and with it the tiles' lazy terrainType), and
+	// its regions: nothing is written to the cache, the tiles or the server while the worker
+	// threads search
+	void fillGrids(Grids& g) {
+		for (ClassGrid& c : g.classes) {
+			if (!c.complete) {
+				for (int tz = 0; tz < g.h; tz++)
+					for (int tx = 0; tx < g.w; tx++) {
+						uint8_t& s = c.state[(size_t)tz * g.w + tx];
+						if (!s)
+							s = MovementController::isTerrainBlocked(c.sample, tx, tz) ? 2 : 1;
+					}
+				c.complete = true;
+			}
+			if (!c.regionValid)
+				computeRegions(c, g.w, g.h);
+		}
+	}
+
+	// a filled class's terrain region (MovementController::terrainRegion without the updates)
+	struct FilledRegion {
+		const ClassGrid* c;
+		int w, h;
+		int operator()(Pathfinding::PFPos p) const {
+			return p.x >= 0 && p.x < w && p.z >= 0 && p.z < h ? c->region[(size_t)p.z * w + p.x] : -1;
+		}
+	};
+
+	// tileBlocked for a class whose cache is complete: reads only (the worker threads' test)
+	struct FilledPred {
+		const Server* server;
+		const ClassGrid* c;
+		int w, h;
+		bool operator()(Pathfinding::PFPos p) const {
+			if (!(p.x >= 0 && p.x < w && p.z >= 0 && p.z < h))
+				return true;
+			const size_t i = (size_t)p.z * w + p.x;
+			const auto& tile = server->tiles[i];
+			if (!tile.buildingPassable && tile.building.getFrom<Server>())
+				return true;
+			return c->state[i] == 2;
+		}
+	};
 }
 
 int MovementController::movementClass(const GameObjBlueprint* blueprint)
@@ -381,7 +435,8 @@ namespace {
 		uint32_t version;
 		std::vector<uint32_t> dist;
 	};
-	std::vector<GroupField> g_fields;
+	// (shared: a queued search keeps its field while a later one replaces it in the list)
+	std::vector<std::shared_ptr<GroupField>> g_fields;
 	struct GroupRequest { int cls; Pathfinding::PFPos goal; int count; };
 	std::vector<GroupRequest> g_requests;
 	uint64_t g_requestStep = ~0ull;
@@ -395,7 +450,7 @@ namespace {
 			for (int x = 0; x < w; x++)
 				blocked[(size_t)z * w + x] = pred(Pathfinding::PFPos{ x, z }) ? 1 : 0;
 		f.dist.assign((size_t)w * h, UNREACHED);
-		static std::vector<int> ring[142];
+		static thread_local std::vector<int> ring[142];
 		for (auto& b : ring) b.clear();
 		const int gi = f.origin.z * w + f.origin.x;
 		f.dist[gi] = 0;
@@ -456,9 +511,10 @@ namespace {
 		return path;
 	}
 
-	// A group field's path for the search, when there is one or this search makes one
-	template<typename Predicate> std::vector<Pathfinding::PFPos> groupPath(int cls, int w, int h, Pathfinding::PFPos start, Pathfinding::PFPos end,
-		const Vector3& destination, Predicate pred) {
+	// The group field the search walks down, when there is one or this search makes one (in the
+	// order the searches were asked for: which searches get a field, and when one is made, are
+	// the same whatever thread walks it)
+	template<typename Predicate> std::shared_ptr<const GroupField> groupField(int cls, int w, int h, Pathfinding::PFPos end, Predicate pred) {
 		const Server* server = Server::instance;
 		const uint64_t step = server->simStepIndex;
 		if (g_fieldsServer != server || g_requestStep > step + FIELD_STEPS) { // another game
@@ -466,14 +522,10 @@ namespace {
 			g_requests.clear();
 			g_fieldsServer = server;
 		}
-		std::erase_if(g_fields, [&](const GroupField& f) { return f.version != g_gridsVersion || step > f.step + FIELD_STEPS || f.step > step; });
-		for (const GroupField& f : g_fields)
-			if (f.cls == cls && chebyshev(f.origin, end) <= GROUP_RADIUS) {
-				auto path = walkField(f, w, h, start, end, destination, pred);
-				if (!path.empty())
-					g_fieldPaths++;
-				return path;
-			}
+		std::erase_if(g_fields, [&](const auto& f) { return f->version != g_gridsVersion || step > f->step + FIELD_STEPS || f->step > step; });
+		for (const auto& f : g_fields)
+			if (f->cls == cls && chebyshev(f->origin, end) <= GROUP_RADIUS)
+				return f;
 		if (g_requestStep != step) {
 			g_requests.clear();
 			g_requestStep = step;
@@ -483,23 +535,154 @@ namespace {
 			if (r.cls == cls && chebyshev(r.goal, end) <= GROUP_RADIUS) { req = &r; break; }
 		if (!req) {
 			g_requests.push_back({ cls, end, 1 });
-			return {};
+			return nullptr;
 		}
 		if (++req->count < GROUP_SEARCHES || pred(req->goal))
-			return {};
+			return nullptr;
 		if ((int)g_fields.size() >= MAX_FIELDS)
 			g_fields.erase(g_fields.begin());
-		GroupField& f = g_fields.emplace_back();
-		f.cls = cls;
-		f.origin = req->goal;
-		f.step = step;
-		f.version = g_gridsVersion;
-		buildField(f, w, h, pred);
+		auto f = std::make_shared<GroupField>();
+		f->cls = cls;
+		f->origin = req->goal;
+		f->step = step;
+		f->version = g_gridsVersion;
+		buildField(*f, w, h, pred);
 		g_fieldBuilds++;
-		auto path = walkField(f, w, h, start, end, destination, pred);
-		if (!path.empty())
-			g_fieldPaths++;
-		return path;
+		g_fields.push_back(f);
+		return f;
+	}
+
+	// A search waiting for the end of the step (MovementController::startMovement)
+	struct PathRequest {
+		SrvGORef object;
+		uint32_t ticket;
+		int cls;
+		Vector3 from;                             // the unit's position when asked
+		Pathfinding::PFPos start, end, searchEnd; // end: the destination's tile; searchEnd: where the A* goes
+		Vector3 destination;                      // realDestination
+		std::shared_ptr<const GroupField> field;
+		// the results
+		bool straight = false;    // the straight line is free: no search
+		bool unreachable = false; // the goal in another terrain region (searchEnd the nearest tile of the unit's)
+		std::vector<Pathfinding::PFPos> tiles;
+		bool fromField = false, cut = false;
+		int steps = 0;
+		double ms = 0.0;
+	};
+	std::vector<PathRequest> g_pathQueue;
+	// the game the queue is for (a test may leave searches queued outside a step, and the next
+	// Server can have the same address: the terrain's instance id tells them apart)
+	const Server* g_pathQueueServer = nullptr;
+	uint32_t g_pathQueueTerrain = 0;
+
+	// Before the search: whether the straight line is free (then no search), and a goal in another
+	// terrain region than the unit can't be reached: the search goes to the tile of the unit's
+	// region nearest to it instead (it searched up to 2 x 20000 tiles, the longest searches of a
+	// game, then went to the nearest tile it had seen, or stood). Reads only, on any thread.
+	template<typename Predicate, typename RegionOf> void prepareSearch(PathRequest& r, int w, int h, Predicate pred, RegionOf regionOf) {
+		r.straight = !Pathfinding::SegmentTraversal(r.from.x / 5.0f, r.from.z / 5.0f, r.destination.x / 5.0f, r.destination.z / 5.0f, pred);
+		if (r.straight)
+			return;
+		if (const int startRegion = regionOf(r.start); startRegion >= 0 && regionOf(r.end) != startRegion) {
+			const Pathfinding::PFPos nearest = findNearestUnblockedPos(r.end, [&](Pathfinding::PFPos p) { return regionOf(p) != startRegion; }, w + h);
+			if (nearest.x >= 0)
+				r.searchEnd = nearest;
+			r.unreachable = true;
+		}
+	}
+
+	// The search itself: reads only (the cache, the tiles, the field), on any thread
+	template<typename Predicate> void runSearch(PathRequest& r, int w, int h, Predicate pred) {
+		const uint64_t t0 = SDL_GetPerformanceCounter();
+		if (r.field) {
+			r.tiles = walkField(*r.field, w, h, r.start, r.end, r.destination, pred);
+			r.fromField = !r.tiles.empty();
+		}
+		if (!r.fromField) {
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h);
+			r.cut = Pathfinding::g_lastSearchCut;
+			r.steps = Pathfinding::g_lastSearchSteps;
+		}
+		r.ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+	}
+
+	// A small pool of worker threads: run(n, f) calls f(0..n-1), the calling thread taking part,
+	// and returns when all are done
+	class WorkerPool {
+	public:
+		explicit WorkerPool(int threads) {
+			for (int i = 1; i < threads; i++)
+				m_threads.emplace_back([this] { loop(); });
+		}
+		~WorkerPool() {
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				m_quit = true;
+			}
+			m_wake.notify_all();
+			for (std::thread& t : m_threads)
+				t.join();
+		}
+		int threads() const { return (int)m_threads.size() + 1; }
+		void run(size_t n, const std::function<void(size_t)>& f) {
+			{
+				std::lock_guard<std::mutex> lock(m_mutex);
+				m_job = &f;
+				m_count = n;
+				m_next = 0;
+				m_busy = (int)m_threads.size();
+				m_generation++;
+			}
+			m_wake.notify_all();
+			work();
+			std::unique_lock<std::mutex> lock(m_mutex);
+			m_done.wait(lock, [this] { return m_busy == 0; });
+			m_job = nullptr;
+		}
+	private:
+		void work() {
+			for (size_t i; (i = m_next.fetch_add(1)) < m_count;)
+				(*m_job)(i);
+		}
+		void loop() {
+			uint64_t seen = 0;
+			for (;;) {
+				{
+					std::unique_lock<std::mutex> lock(m_mutex);
+					m_wake.wait(lock, [&] { return m_quit || m_generation != seen; });
+					if (m_quit)
+						return;
+					seen = m_generation;
+				}
+				work();
+				{
+					std::lock_guard<std::mutex> lock(m_mutex);
+					m_busy--;
+				}
+				m_done.notify_one();
+			}
+		}
+		std::vector<std::thread> m_threads;
+		std::mutex m_mutex;
+		std::condition_variable m_wake, m_done;
+		const std::function<void(size_t)>* m_job = nullptr;
+		size_t m_count = 0;
+		std::atomic<size_t> m_next{ 0 };
+		int m_busy = 0;
+		uint64_t m_generation = 0;
+		bool m_quit = false;
+	};
+
+	int pathThreads() {
+		static const int n = [] {
+			int t = g_settings.value("pathThreads", 0);
+			if (const char* e = getenv("WKB_PATH_THREADS"))
+				t = atoi(e);
+			if (t <= 0)
+				t = (int)std::thread::hardware_concurrency();
+			return std::clamp(t, 1, 16);
+		}();
+		return n;
 	}
 }
 
@@ -521,6 +704,10 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	//m_pathNodes = { destination };
 
 	m_requested = destination;
+	// a search still pending is dropped (it is applied only with this ticket)
+	m_ticket++;
+	m_pending = false;
+	m_searchFailed = false;
 	using namespace Pathfinding;
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();
@@ -587,64 +774,181 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 		}
 	}
 
-	auto rtres = SegmentTraversal(m_object->position.x / 5.0f, m_object->position.z / 5.0f, realDestination.x / 5.0f, realDestination.z / 5.0f, pred);
-	if (!rtres) {
-		m_pathNodes = { realDestination, m_object->position };
-		walkToNextNode();
+	// the rest waits for the end of the step (runPathSearches): whether the straight line is free,
+	// the regions, the search. The unit goes on with what it was doing until then (standing, or a
+	// chaser on its old path); its walk starts at the same game time as when it was done here.
+	if (g_pathQueueServer != Server::instance || g_pathQueueTerrain != trn->instanceId) {
+		g_pathQueue.clear();
+		g_pathQueueServer = Server::instance;
+		g_pathQueueTerrain = trn->instanceId;
 	}
-	else {
-		// a goal in another terrain region than the unit can't be reached: the search goes to the
-		// tile of the unit's region nearest to it instead (it searched up to 2 x 20000 tiles, the
-		// longest searches of a game, then went to the nearest tile it had seen, or stood)
-		PFPos searchEnd = posEnd;
-		if (const int startRegion = g_noCache ? -1 : terrainRegion(cls, posStart.x, posStart.z); startRegion >= 0 && terrainRegion(cls, posEnd.x, posEnd.z) != startRegion) {
-			const int maxr = trnsize.first + trnsize.second;
-			const PFPos nearest = findNearestUnblockedPos(posEnd, [&](PFPos p) { return terrainRegion(cls, p.x, p.z) != startRegion; }, maxr);
-			if (nearest.x >= 0)
-				searchEnd = nearest;
-			g_unreachableGoals++;
-		}
-		const uint64_t astarStart = SDL_GetPerformanceCounter();
-		std::vector<PFPos> tileList;
-		bool fromField = false;
-		if (searchEnd == posEnd && !g_noFields) {
-			tileList = groupPath(cls, trnsize.first, trnsize.second, posStart, posEnd, realDestination, pred);
-			fromField = !tileList.empty();
-		}
-		if (!fromField)
-			tileList = DoPathfinding(posStart, searchEnd, pred, ManhattanDiagHeuristic, trnsize.first, trnsize.second);
-		const double astarMs = (double)(SDL_GetPerformanceCounter() - astarStart) * 1000.0 / (double)SDL_GetPerformanceFrequency();
-		if (!fromField) {
-			g_astarSearches++;
-			g_astarTiles += g_lastSearchSteps;
-		}
-		g_astarMs += astarMs;
-		if (!fromField)
-			dumpSearch(blueprint, posStart, searchEnd, trnsize.first, trnsize.second, astarMs, g_lastSearchSteps, g_lastSearchCut, tileList.size());
-		// test runs: WKB_TRACE_PATH prints the searches cut short and where they send the unit
-		if (!fromField && g_lastSearchCut && getenv("WKB_TRACE_PATH"))
-			printf("PATHCUT t=%.1f obj %u %s player %u from (%d,%d) to (%d,%d) goes to (%d,%d)\n", Server::instance->timeManager.currentTime,
-				m_object->id, m_object->blueprint->name.c_str(), m_object->getPlayer() ? m_object->getPlayer()->id : 0,
-				posStart.x, posStart.z, posEnd.x, posEnd.z, tileList.empty() ? -1 : tileList.front().x, tileList.empty() ? -1 : tileList.front().z);
-		if (tileList.size() >= 1) {
-			m_pathNodes.clear();
-			// a search cut short ends at the tile nearest to the destination: the unit goes there,
-			// not on in a straight line through what is in the way
-			// (a field's path ends where the straight line to the destination is free)
-			if (tileList.front() == posEnd || fromField)
-				m_pathNodes.emplace_back(realDestination);
-			for (PFPos& pfp : tileList) {
-				m_pathNodes.emplace_back(pfp.x * 5.0f + 2.5f, m_object->position.y, pfp.z * 5.0f + 2.5f);
-			}
-			walkToNextNode(); // (none when cut short without getting any nearer)
-		}
-		else
-			stopMovement();
-	}
+	PathRequest& r = g_pathQueue.emplace_back();
+	r.object = m_object;
+	r.ticket = m_ticket;
+	r.cls = cls;
+	r.from = m_object->position;
+	r.start = posStart;
+	r.end = posEnd;
+	r.searchEnd = posEnd;
+	r.destination = realDestination;
+	m_pending = true;
+	m_pendingDestination = realDestination;
 	return realDestination;
 }
 
+// The walk a request found, applied to its unit (as startMovement applied it at once before)
+struct PathSearchRunner {
+	static void apply(MovementController& mc, const PathRequest& r) {
+		using namespace Pathfinding;
+		mc.m_pending = false;
+		if (r.straight) {
+			mc.m_pathNodes = { r.destination, mc.m_object->position };
+			mc.walkToNextNode();
+		}
+		else if (r.tiles.size() >= 1) {
+			mc.m_pathNodes.clear();
+			// a search cut short ends at the tile nearest to the destination: the unit goes there,
+			// not on in a straight line through what is in the way
+			// (a field's path ends where the straight line to the destination is free)
+			if (r.tiles.front() == r.end || r.fromField)
+				mc.m_pathNodes.emplace_back(r.destination);
+			for (const PFPos& pfp : r.tiles)
+				mc.m_pathNodes.emplace_back(pfp.x * 5.0f + 2.5f, mc.m_object->position.y, pfp.z * 5.0f + 2.5f);
+			mc.walkToNextNode(); // (none when cut short without getting any nearer)
+		}
+		else
+			mc.endWalk();
+		mc.m_searchFailed = !mc.isMoving();
+	}
+};
+
+// profiling (test 41): the end-of-step batches' parts, wall ms: filling the caches, the straight
+// lines and regions (on the threads), choosing the fields (and making them), the searches (on the
+// threads), applying the walks; the requests, and the searches among them
+double g_pathBatchMs[5] = {};
+uint64_t g_pathBatchRequests = 0, g_pathBatchSearches = 0;
+// the batches' parts (lines, searches) that ran on the worker threads (4 requests or more)
+uint64_t g_pathPoolRuns = 0;
+
+void MovementController::runPathSearches()
+{
+	using namespace Pathfinding;
+	if (g_pathQueue.empty())
+		return;
+	const Server* server = Server::instance;
+	if (g_pathQueueServer != server || !server || !server->terrain || !server->tiles || g_pathQueueTerrain != server->terrain->instanceId) {
+		g_pathQueue.clear();
+		return;
+	}
+	const uint64_t profileStart = SDL_GetPerformanceCounter();
+	auto lap = [last = profileStart](int part) mutable {
+		const uint64_t now = SDL_GetPerformanceCounter();
+		g_pathBatchMs[part] += (double)(now - last) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		last = now;
+	};
+	Grids& g = grids();
+	const int w = g.w, h = g.h;
+	// on the worker threads with the caches filled first; else here, as before (the test switches
+	// that look the ground up afresh)
+	const bool parallel = !g_noCache && !getenv("WKB_PATH_CHECKCACHE");
+	static WorkerPool* pool = nullptr;
+	if (parallel) {
+		fillGrids(g);
+		if (!pool && pathThreads() > 1)
+			pool = new WorkerPool(pathThreads()); // (left running to the end of the program)
+	}
+	lap(0);
+	auto forEach = [&](size_t n, const std::function<void(size_t)>& f) {
+		// (fewer than 4 here: the threads' wake-up costs more; test runs: WKB_PATH_MINBATCH=1
+		// sends every batch to the threads)
+		static const size_t minBatch = getenv("WKB_PATH_MINBATCH") ? (size_t)std::max(1, atoi(getenv("WKB_PATH_MINBATCH"))) : 4;
+		if (pool && parallel && n >= minBatch) {
+			pool->run(n, f);
+			g_pathPoolRuns++;
+		}
+		else
+			for (size_t i = 0; i < n; i++)
+				f(i);
+	};
+	auto lazyPred = [&](int cls) { ClassGrid* c = &g.classes[cls]; return [c, server, w, h](PFPos p) { return tileBlocked(server, *c, w, h, p.x, p.z); }; };
+	// the requests still wanted (not stopped or replaced since)
+	std::vector<PathRequest*> todo;
+	todo.reserve(g_pathQueue.size());
+	for (PathRequest& r : g_pathQueue) {
+		ServerGameObject* obj = r.object.get();
+		if (obj && obj->movementController.m_ticket == r.ticket && obj->movementController.m_pending)
+			todo.push_back(&r);
+	}
+	g_pathBatchRequests += todo.size();
+	forEach(todo.size(), [&](size_t i) {
+		PathRequest& r = *todo[i];
+		const ClassGrid* c = &g.classes[r.cls];
+		if (parallel)
+			prepareSearch(r, w, h, FilledPred{ server, c, w, h }, FilledRegion{ c, w, h });
+		else
+			prepareSearch(r, w, h, lazyPred(r.cls), [&, cls = r.cls](PFPos p) { return g_noCache ? -1 : terrainRegion(cls, p.x, p.z); });
+	});
+	lap(1);
+	// the searches, their fields chosen in the order asked for
+	std::vector<PathRequest*> searches;
+	for (PathRequest* rp : todo) {
+		PathRequest& r = *rp;
+		if (r.straight)
+			continue;
+		if (r.unreachable)
+			g_unreachableGoals++;
+		if (r.searchEnd == r.end && !g_noFields) {
+			const ClassGrid* c = &g.classes[r.cls];
+			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));
+		}
+		searches.push_back(&r);
+	}
+	g_pathBatchSearches += searches.size();
+	lap(2);
+	forEach(searches.size(), [&](size_t i) {
+		PathRequest& r = *searches[i];
+		if (parallel)
+			runSearch(r, w, h, FilledPred{ server, &g.classes[r.cls], w, h });
+		else
+			runSearch(r, w, h, lazyPred(r.cls));
+	});
+	lap(3);
+	// applied in the order asked for
+	static const bool tracePath = getenv("WKB_TRACE_PATH") != nullptr;
+	for (PathRequest* rp : todo) {
+		const PathRequest& r = *rp;
+		ServerGameObject* obj = r.object.get();
+		if (!r.straight) {
+			if (!r.fromField) {
+				g_astarSearches++;
+				g_astarTiles += r.steps;
+				dumpSearch(obj->blueprint, r.start, r.searchEnd, w, h, r.ms, r.steps, r.cut, r.tiles.size());
+			}
+			else
+				g_fieldPaths++;
+			g_astarMs += r.ms;
+			// test runs: WKB_TRACE_PATH prints the searches cut short and where they send the unit
+			if (!r.fromField && r.cut && tracePath)
+				printf("PATHCUT t=%.1f obj %u %s player %u from (%d,%d) to (%d,%d) goes to (%d,%d)\n", server->timeManager.currentTime,
+					obj->id, obj->blueprint->name.c_str(), obj->getPlayer() ? obj->getPlayer()->id : 0,
+					r.start.x, r.start.z, r.end.x, r.end.z, r.tiles.empty() ? -1 : r.tiles.front().x, r.tiles.empty() ? -1 : r.tiles.front().z);
+		}
+		PathSearchRunner::apply(obj->movementController, r);
+	}
+	lap(4);
+	g_pathQueue.clear();
+	g_pathfindingMs += (double)(SDL_GetPerformanceCounter() - profileStart) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+}
+
 void MovementController::stopMovement()
+{
+	m_ticket++;
+	m_pending = false;
+	m_searchFailed = false;
+	endWalk();
+}
+
+void MovementController::endWalk()
 {
 	m_object->stopMovement();
 	m_pathNodes.clear();
@@ -671,7 +975,7 @@ void MovementController::walkToNextNode()
 	}
 	// (a unit that stands already is left as it is: its task asks again every step)
 	if (m_started || m_object->movement.isMoving())
-		stopMovement();
+		endWalk();
 	else
 		m_pathNodes.clear();
 }

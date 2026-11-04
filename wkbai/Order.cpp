@@ -724,7 +724,10 @@ void MoveTask::onUpdate()
 	if ((go->position - dest).sqlen2xz() < 0.1f) {
 		terminate();
 	}
-	// (a second between searches that found no way, as ObjectReferenceTask's)
+	// (a second between searches that found no way, as ObjectReferenceTask's; a search runs at
+	// the end of the step, and its unit is moving, pending, until then)
+	if (go->movementController.takeSearchFailed())
+		nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
 	if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 		destination = go->movementController.startMovement(dest);
 		if (!go->movementController.isMoving())
@@ -896,6 +899,8 @@ void ObjectReferenceTask::onUpdate()
 				// only then the proximity can be dissatisfied
 
 				this->stopTriggers();
+				if (go->movementController.takeSearchFailed())
+					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					destination = go->movementController.startMovement(goal);
 					if (!go->movementController.isMoving())
