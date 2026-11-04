@@ -47,6 +47,12 @@ struct Waterfall {
 // tiles, else onto the ground where it stops dropping steeply)
 std::vector<Waterfall> FindWaterfalls(const Terrain* terrain);
 
+// Where the waterfalls are heard (their feet, near ones merged): built with the waterfalls drawn
+// (DiligentWaterfalls), for the client's sounds (EnvironmentView: UpdateWaterfallSounds); how
+// loud by their size (1: a fall 5 m high and 5 m wide); cascade: a painted river's
+struct WaterfallSoundSpot { Vector3 pos; float strength; bool cascade; };
+extern std::vector<WaterfallSoundSpot> g_waterfallSoundSpots;
+
 // The waterfalls drawn after the water (DiligentEnhancedTerrainRenderer), by
 // RenderSettings::waterfalls (its own setting; the refraction needs the water's scene copy, from
 // the water's Low): none when off; Low a falling sheet of streaked water

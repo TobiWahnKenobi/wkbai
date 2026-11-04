@@ -18,6 +18,15 @@ struct IRenderer;
 void UpdateEnvironmentView(Client* client, Scene* scene);
 // the HUD's readout at the top of the screen (ImGui frame): time, season, weather, temperature
 void DrawEnvironmentHud(Client* client, float screenWidth);
+// on the ground, before the particles: the flood water spreading over the land beside the
+// rivers and lakes (as the server floods it), and the footprints in snow and mud (High and Ultra)
+void DrawGroundWeather(IRenderer* gfx, Client* client, const Camera& camera);
+// over the minimap's map rectangle (under the fog of war): the lying snow on the flatter land,
+// the ice on the water
+void DrawMinimapWeather(IRenderer* gfx, Client* client, void* drawList, float x0, float y0, float x1, float y1);
+// every frame: the waterfalls heard (the nearest few of g_waterfallSoundSpots, looping), as loud
+// and as deep as the water they carry (WaterfallFlow: a flood roars, a drought trickles)
+void UpdateWaterfallSounds(Client* client);
 // the rain, the snow and the lightning bolt, in the particles' pass
 void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera);
 // at night, a warm light at each built building near the camera (the fire lights' list: distance

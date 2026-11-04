@@ -10,6 +10,10 @@
 #include "../gameset/GameObjBlueprint.h"
 #include "../Camera.h"
 #include "../gfx/renderer.h"
+#include "../gfx/bitmap.h"
+#include "../gfx/RenderSettings.h"
+#include "../gfx/DiligentWaterfalls.h"
+#include "../SoundPlayer.h"
 #include "../imgui/imgui.h"
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
@@ -18,6 +22,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <unordered_map>
 
 namespace {
 	// the map's own sun and fog, put back when the environment goes
@@ -149,7 +154,7 @@ void DrawEnvironmentHud(Client* client, float screenWidth)
 		return;
 	const EnvironmentSettings& es = client->environmentSettings;
 	const EnvironmentState& st = client->environment;
-	char text[160];
+	char text[256];
 	int n = 0;
 	if (es.dayNight) {
 		const int minutes = (int)(g_environment.dayFraction * 1440.0f) % 1440;
@@ -165,6 +170,8 @@ void DrawEnvironmentHud(Client* client, float screenWidth)
 			n += snprintf(text + n, sizeof(text) - n, "   low water %.1f m", st.waterRise);
 		if (st.ice > 0.6f)
 			n += snprintf(text + n, sizeof(text) - n, "   frozen");
+		if (st.season == 3)
+			n += snprintf(text + n, sizeof(text) - n, "   fields fallow");
 	}
 	// under the top bar, centred; larger on larger screens
 	ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -220,8 +227,11 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		out.y = ground + height - fall;
 		return out.y > ground;
 	};
+	// how much of it, by the graphics setting (RenderSettings::weatherEffects)
+	static const float amount[4] = { 0.35f, 0.65f, 1.0f, 1.5f };
+	const float share = amount[std::clamp(g_renderSettings.weatherEffects, 0, 3)];
 	if (raining) {
-		const int drops = (int)(2600 * std::min(1.0f, v.rain));
+		const int drops = (int)(2600 * share * std::min(1.0f, v.rain));
 		const Vector3 vel = Vector3(v.wind.x, -14.0f, v.wind.z);
 		const Vector3 along = vel.normal() * 1.1f;
 		const uint32_t colour = (uint32_t)(70 + 60 * v.sun.daylight) << 24 | 0xB4BED2;
@@ -235,7 +245,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		}
 	}
 	if (snowing) {
-		const int flakes = (int)(2200 * std::min(1.0f, v.snowfall));
+		const int flakes = (int)(2200 * share * std::min(1.0f, v.snowfall));
 		const Vector3 up = camside.cross(camera.direction).normal();
 		const uint32_t colour = (uint32_t)(150 + 80 * v.sun.daylight) << 24 | 0xF2F4FA;
 		for (int i = 0; i < flakes; i++) {
@@ -262,6 +272,294 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		}
 	}
 	batch->flush();
+}
+
+namespace {
+	// The land that floods, as the server's (FindFloodLand)
+	struct FloodMap { const Terrain* terrain = nullptr; std::vector<FloodLand> tiles; };
+	FloodMap g_floodMap;
+
+	void PrepareFloodMap(const Terrain* t)
+	{
+		g_floodMap.terrain = t;
+		g_floodMap.tiles = FindFloodLand(t);
+	}
+
+	// footprints: where, which way, when, in snow (1) or mud (0)
+	struct Print { float x, z, dx, dz, born; uint8_t snow; };
+	std::vector<Print> g_prints;
+	size_t g_printNext = 0;
+	struct Walker { Vector3 last; bool left = false; float seen = 0; };
+	std::unordered_map<uint32_t, Walker> g_walkers;
+	const Terrain* g_printTerrain = nullptr;
+
+	// a boot's print: the sole and the heel, soft-edged (alpha), white (tinted by the vertex colour)
+	texture PrintTexture(IRenderer* gfx)
+	{
+		static texture tex = nullptr;
+		if (tex)
+			return tex;
+		Bitmap bmp;
+		bmp.width = 16; bmp.height = 32;
+		bmp.format = BMFORMAT_R8G8B8A8;
+		bmp.pixels.resize(16 * 32 * 4);
+		for (int y = 0; y < 32; y++)
+			for (int x = 0; x < 16; x++) {
+				const float u = (x + 0.5f) / 16.0f - 0.5f, v = (y + 0.5f) / 32.0f;
+				// the sole (front two thirds), the heel (the back quarter)
+				const float sole = 1.0f - std::hypot(u / 0.42f, (v - 0.36f) / 0.33f);
+				const float heel = 1.0f - std::hypot(u / 0.34f, (v - 0.84f) / 0.14f);
+				const float a = std::clamp(std::max(sole, heel) * 4.0f, 0.0f, 1.0f);
+				uint8_t* p = &bmp.pixels[(y * 16 + x) * 4];
+				p[0] = p[1] = p[2] = 255;
+				p[3] = (uint8_t)(a * 255.0f);
+			}
+		tex = gfx->CreateTexture(bmp, 1);
+		return tex;
+	}
+	texture WhiteTexture(IRenderer* gfx)
+	{
+		static texture tex = nullptr;
+		if (!tex) {
+			Bitmap bmp;
+			bmp.width = bmp.height = 1;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize(4);
+			for (int i = 0; i < 4; i++)
+				bmp.pixels[i] = 255;
+			tex = gfx->CreateTexture(bmp, 1);
+		}
+		return tex;
+	}
+}
+
+void DrawGroundWeather(IRenderer* gfx, Client* client, const Camera& camera)
+{
+	const EnvironmentView& v = g_environment;
+	const Terrain* terrain = client->terrain;
+	if (!v.active || !terrain)
+		return;
+	const int quality = std::clamp(g_renderSettings.weatherEffects, 0, 3);
+	const bool flooding = v.waterRise > 0.05f;
+	const bool printing = quality >= 2 && (v.snowCover > 0.12f || v.wetness > 0.35f);
+	if (!flooding && !printing && g_prints.empty())
+		return;
+	static std::unique_ptr<RBatch> batch;
+	if (!batch)
+		batch.reset(gfx->CreateBatch(4 * 1024, 6 * 1024));
+	gfx->BeginParticles();
+	gfx->BeginBatchDrawing();
+	gfx->SetBlendColor(-1);
+	gfx->SetTransformMatrix(&camera.sceneMatrix);
+	auto surface = [terrain](float x, float z) { return g_terrainTessellationActive ? terrain->getSmoothHeight(x, z) : terrain->getHeight(x, z); };
+	// where the camera looks
+	const Vector3 dir = camera.direction.normal();
+	const float reach = std::clamp(dir.y < -0.05f ? (camera.position.y - terrain->getHeight(camera.position.x, camera.position.z)) / -dir.y : 150.0f, 30.0f, 400.0f);
+	const Vector3 look = camera.position + dir * reach;
+	const float time = SDL_GetTicks() / 1000.0f;
+
+	// the flood: a sheet of muddy water at the risen level over the land that floods, hidden by
+	// the depth test where the ground stands higher; it meets the lakes' raised surface (the
+	// terrain renderer's WaterLevelPos) at the same height
+	if (flooding) {
+		if (g_floodMap.terrain != terrain)
+			PrepareFloodMap(terrain);
+		gfx->SetTexture(0, WhiteTexture(gfx));
+		batch->begin();
+		const float range = std::max(160.0f, reach * 1.4f);
+		const float light = 0.35f + 0.65f * v.sun.daylight;
+		for (const FloodLand& f : g_floodMap.tiles) {
+			const float level = f.water + v.waterRise;
+			if (level <= f.low + 0.02f)
+				continue;
+			const float cx = f.x * 5.0f + 2.5f, cz = f.z * 5.0f + 2.5f;
+			if (std::abs(cx - look.x) > range || std::abs(cz - look.z) > range)
+				continue;
+			batchVertex* verts; uint16_t* indices; uint32_t first;
+			batch->next(4, 6, &verts, &indices, &first);
+			const float corners[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+			for (int i = 0; i < 4; i++) {
+				const float x = (f.x + corners[i][0]) * 5.0f, z = (f.z + corners[i][1]) * 5.0f;
+				// a slow shimmer, the same at a shared corner
+				const float s = 0.9f + 0.1f * std::sin(time * 0.8f + x * 0.21f + z * 0.17f);
+				const int r = (int)(78 * light * s), g = (int)(92 * light * s), b = (int)(96 * light * s);
+				verts[i].x = x; verts[i].y = level; verts[i].z = z;
+				verts[i].u = verts[i].v = 0.5f;
+				verts[i].color = 0xD0000000u | (uint32_t)std::min(r, 255) << 16 | (uint32_t)std::min(g, 255) << 8 | (uint32_t)std::min(b, 255);
+			}
+			for (const int& c : { 0, 2, 1, 0, 3, 2 })
+				*(indices++) = (uint16_t)(first + c);
+		}
+		batch->flush();
+		batch->end();
+	}
+
+	// footprints (High and Ultra): every walking unit near the camera leaves one every 0.75 m,
+	// left and right of its path, in snow or in wet ground; they fade over their life and with
+	// the snow or the mud
+	const size_t maxPrints = quality >= 3 ? 8192 : 2048;
+	const float life = quality >= 3 ? 150.0f : 50.0f;
+	const float now = client->timeManager.currentTime;
+	if (g_printTerrain != terrain || quality < 2) {
+		g_prints.clear(); g_printNext = 0; g_walkers.clear();
+		g_printTerrain = terrain;
+	}
+	if (printing) {
+		const bool snow = v.snowCover > 0.12f;
+		const auto [tw, th] = terrain->getNumPlayableTiles();
+		for (const auto& [id, obj] : client->idmap) {
+			if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->canWalkOnWater()
+				|| (obj->flags & CommonGameObject::fTerminated))
+				continue;
+			const Vector3& p = obj->position;
+			if (std::abs(p.x - look.x) > 160.0f || std::abs(p.z - look.z) > 160.0f)
+				continue;
+			Walker& w = g_walkers[id];
+			w.seen = now;
+			const Vector3 d = p - w.last;
+			const float moved = std::sqrt(d.x * d.x + d.z * d.z);
+			if (moved > 6.0f || w.last.sqlen3() == 0) { w.last = p; continue; }
+			if (moved < 0.75f)
+				continue;
+			w.last = p;
+			// not on the water (frozen or not)
+			const Terrain::Tile* tile = terrain->getPlayableTile((int)(p.x / 5.0f), (int)(p.z / 5.0f));
+			if (!tile || tile->fullOfWater || p.x < 0 || p.z < 0 || p.x >= tw * 5.0f || p.z >= th * 5.0f)
+				continue;
+			const float fx = d.x / moved, fz = d.z / moved;
+			const float side = w.left ? 0.2f : -0.2f;
+			w.left = !w.left;
+			Print pr{ p.x - fz * side, p.z + fx * side, fx, fz, now, (uint8_t)(snow ? 1 : 0) };
+			if (g_prints.size() < maxPrints)
+				g_prints.push_back(pr);
+			else
+				g_prints[g_printNext++ % maxPrints] = pr;
+		}
+		// the units gone or far away for a while
+		if ((int)now % 10 == 0)
+			for (auto it = g_walkers.begin(); it != g_walkers.end();)
+				it = now - it->second.seen > 5.0f ? g_walkers.erase(it) : std::next(it);
+	}
+	if (!g_prints.empty()) {
+		gfx->SetTexture(0, PrintTexture(gfx));
+		batch->begin();
+		const float snowFade = std::clamp((v.snowCover - 0.05f) * 6.0f, 0.0f, 1.0f);
+		const float mudFade = std::clamp((v.wetness - 0.2f) * 4.0f, 0.0f, 1.0f);
+		size_t alive = 0;
+		for (const Print& pr : g_prints) {
+			const float age = now - pr.born;
+			if (age > life || age < 0)
+				continue;
+			alive++;
+			if (std::abs(pr.x - look.x) > 170.0f || std::abs(pr.z - look.z) > 170.0f)
+				continue;
+			const float fade = (1.0f - age / life) * (pr.snow ? snowFade : mudFade);
+			if (fade <= 0.01f)
+				continue;
+			// snow: blue-grey hollows; mud: dark brown
+			const uint32_t rgb = pr.snow ? 0x6A7488u : 0x2E2216u;
+			const uint32_t colour = (uint32_t)(fade * (pr.snow ? 200.0f : 190.0f)) << 24 | rgb;
+			batchVertex* verts; uint16_t* indices; uint32_t first;
+			batch->next(4, 6, &verts, &indices, &first);
+			// 0.2 m wide, 0.42 m long (a little larger than a boot, to read from the game's camera), heel behind
+			const float ax = pr.dx * 0.21f, az = pr.dz * 0.21f, sx = -pr.dz * 0.1f, sz = pr.dx * 0.1f;
+			const float px[4] = { pr.x + ax - sx, pr.x + ax + sx, pr.x - ax + sx, pr.x - ax - sx };
+			const float pz[4] = { pr.z + az - sz, pr.z + az + sz, pr.z - az + sz, pr.z - az - sz };
+			const float uv[4][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+			const float y = surface(pr.x, pr.z) + 0.07f;
+			for (int i = 0; i < 4; i++) {
+				verts[i].x = px[i]; verts[i].y = y; verts[i].z = pz[i];
+				verts[i].u = uv[i][0]; verts[i].v = uv[i][1];
+				verts[i].color = colour;
+			}
+			for (const int& c : { 0, 2, 1, 0, 3, 2 })
+				*(indices++) = (uint16_t)(first + c);
+		}
+		batch->flush();
+		batch->end();
+		if (alive == 0)
+			g_prints.clear(), g_printNext = 0;
+	}
+}
+
+void DrawMinimapWeather(IRenderer* gfx, Client* client, void* drawListPtr, float x0, float y0, float x1, float y1)
+{
+	const EnvironmentView& v = g_environment;
+	const Terrain* terrain = client->terrain;
+	if (!v.active || !terrain || (v.snowCover < 0.02f && v.ice < 0.05f))
+		return;
+	// the masks, once per map: the snow where the land is flat enough to hold it (as the terrain
+	// renderer's SnowShare, in patches), the water's tiles; row 0 is the north edge (largest z)
+	static const Terrain* maskTerrain = nullptr;
+	static texture snowMask = nullptr, iceMask = nullptr;
+	if (maskTerrain != terrain) {
+		if (snowMask) gfx->FreeTexture(snowMask);
+		if (iceMask) gfx->FreeTexture(iceMask);
+		snowMask = iceMask = nullptr;
+		maskTerrain = terrain;
+		const auto [w, h] = terrain->getNumPlayableTiles();
+		if (w > 0 && h > 0) {
+			Bitmap snow, ice;
+			for (Bitmap* b : { &snow, &ice }) {
+				b->width = w; b->height = h;
+				b->format = BMFORMAT_R8G8B8A8;
+				b->pixels.resize((size_t)w * h * 4);
+			}
+			for (int z = 0; z < h; z++)
+				for (int x = 0; x < w; x++) {
+					const Terrain::Tile* tile = terrain->getPlayableTile(x, z);
+					const size_t at = ((size_t)(h - 1 - z) * w + x) * 4;
+					const bool water = tile && tile->fullOfWater;
+					const Vector3 n = terrain->getNormal(x + terrain->edge, z + terrain->edge);
+					const float flat = std::clamp((n.y - 0.72f) / 0.2f, 0.0f, 1.0f) * (0.85f + 0.15f * Hash((uint32_t)(z * w + x)));
+					for (int c = 0; c < 3; c++)
+						snow.pixels[at + c] = ice.pixels[at + c] = 255;
+					snow.pixels[at + 3] = water ? 0 : (uint8_t)(flat * 255.0f);
+					ice.pixels[at + 3] = water ? 255 : 0;
+				}
+			snowMask = gfx->CreateTexture(snow, 1);
+			iceMask = gfx->CreateTexture(ice, 1);
+		}
+	}
+	ImDrawList* dl = (ImDrawList*)drawListPtr;
+	const ImVec2 a(x0, y0), b(x1, y1);
+	if (snowMask && v.snowCover >= 0.02f)
+		dl->AddImage(snowMask, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(242, 246, 252, (int)(std::min(1.0f, v.snowCover * 1.3f) * 235)));
+	if (iceMask && v.ice >= 0.05f)
+		dl->AddImage(iceMask, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(214, 230, 242, (int)(std::min(1.0f, v.ice) * 210)));
+}
+
+void UpdateWaterfallSounds(Client* client)
+{
+	SoundPlayer* player = SoundPlayer::getSoundPlayer();
+	if (!player)
+		return;
+	const Vector3 ear = client->camera.position;
+	// the nearest (by how loud they are there)
+	std::vector<std::pair<float, const WaterfallSoundSpot*>> heard;
+	for (const WaterfallSoundSpot& s : g_waterfallSoundSpots) {
+		const float d = std::sqrt((s.pos - ear).sqlen3());
+		if (d < 320.0f)
+			heard.push_back({ std::min(1.5f, s.strength) / (1.0f + d / 30.0f), &s });
+	}
+	std::sort(heard.begin(), heard.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+	const float flow = WaterfallFlow(g_environment);
+	for (int slot = 0; slot < SoundPlayer::MAX_LOOPS; slot++) {
+		if (slot >= (int)heard.size() || flow < 0.12f) {
+			player->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
+			continue;
+		}
+		const WaterfallSoundSpot& s = *heard[slot].second;
+		// falls: the river's rush, the deeper and louder the more water; cascades and trickles: the
+		// stream's
+		const bool small = s.cascade || flow < 0.5f || s.strength < 0.4f;
+		static const char* const river = "Warrior Kings Game Set\\Sounds\\Background Sounds\\ambient_river_1.wav";
+		static const char* const stream = "Warrior Kings Game Set\\Sounds\\Background Sounds\\ambient_stream_2.wav";
+		const float size = std::clamp(s.strength, 0.2f, 1.5f);
+		const float gain = std::clamp(0.35f + 0.45f * size, 0.3f, 1.0f) * std::clamp(flow, 0.15f, 1.6f) * 0.8f;
+		const float pitch = std::clamp(1.15f - 0.12f * flow - 0.05f * size, 0.8f, 1.2f);
+		player->setLoop(slot, small ? stream : river, s.pos, 8.0f + 10.0f * size * std::min(flow, 1.5f), gain, pitch);
+	}
 }
 
 void AddNightLights(Client* client, const Vector3& camera, std::vector<std::pair<float, std::array<float, 7>>>& list)

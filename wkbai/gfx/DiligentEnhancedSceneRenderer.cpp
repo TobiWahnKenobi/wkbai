@@ -18,6 +18,7 @@
 #include "../util/util.h"
 #include "../settings.h"
 #include "RenderSettings.h"
+#include "../Environment.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <cstring>
@@ -44,6 +45,10 @@ static const char esShaderCode[] = R"---(
 Texture2D inpTexture;
 Texture2D normalMap; // override packs: <texture>_normal (tangent space, +z out), else flat with alpha 0 (derive)
 Texture2D ormMap;    // override packs: <texture>_orm (occlusion, roughness, metalness), else 1, 0.65, 0
+// override packs: <texture>_emissive, the light the surface gives off (any model: buildings,
+// units, trees, props): rgb its colour and strength, alpha when: 0 always (embers, runes),
+// 1 only at night (windows, lanterns), between them both; else black
+Texture2D emissiveMap;
 SamplerState inpSampler;
 Texture2D cloudTexture;
 SamplerState cloudSampler;
@@ -96,7 +101,9 @@ cbuffer SunBuffer
 	float4 SkyHorizon;
 	float4 SkyDown;
 	// x: the strength of the normals derived from the albedo's brightness, for materials
-	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat)
+	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat);
+	// y: the snow lying on roofs and models, z: how wet they are, w: how dark the night is
+	// (wkbai's weather and day and night, 0 when off: the emissive maps' night lights)
 	float4 Material;
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
@@ -139,6 +146,7 @@ struct VS_OUTPUT
 	float Fog : FOG;
 	float3 WorldPos : TEXCOORD1;
 	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
+	float Fallow : TEXCOORD3; // 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil
 };
 
 // R10G10B10A2_UNORM
@@ -173,6 +181,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Tint.a = cloud;
 	}
 	output.Tint.rgb = float3(1, 1, 1);
+	output.Fallow = (EntityFlags & 64) ? 1 : 0;
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
 	if (EntityFlags & 16) // SEFLAG_PLACEABLE
@@ -276,10 +285,37 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	return ((diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 
+// wkbai's weather on a model: snow lying where the surface faces up (roofs, ledges, the tops of
+// trees and rocks), in patches; wet surfaces darker
+float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
+{
+	// a field in winter: the crops gone, furrowed soil (the texture's pattern kept as its light
+	// and dark)
+	if (input.Fallow > 0.5)
+		albedo = float3(0.34, 0.27, 0.2) * (0.5 + 0.9 * dot(albedo, float3(0.299, 0.587, 0.114)));
+	if (Material.y + Material.z <= 0 || dot(input.Norm, input.Norm) == 0)
+		return albedo;
+	float up = normalize(input.Norm).y;
+	float2 cell = floor(input.WorldPos.xz * 1.7);
+	float patch = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+	float snow = saturate((up - 0.2) / 0.35) * saturate(Material.y * 1.8 - patch * 0.45);
+	albedo *= 1 - 0.3 * Material.z * (1 - snow);
+	return lerp(albedo, float3(0.9, 0.92, 0.97), snow);
+}
+
+// the emissive map's light: the always-on part, the night part by the night's darkness; kept as
+// bright under the night's darker grade (divided by its exposure), so it blooms
+float3 Emission(VS_OUTPUT input)
+{
+	float4 e = emissiveMap.Sample(inpSampler, input.Texcoord);
+	return e.rgb * lerp(1, Material.w, e.a) / max(Grade.x, 0.35);
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
+	tex.rgb = WeatherAlbedo(input, tex.rgb);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -288,7 +324,8 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
-	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
+	tex.rgb = WeatherAlbedo(input, tex.rgb);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -526,7 +563,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
-	texture deriveNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
+	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer, motionConstBuffer;
@@ -573,6 +610,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "emissiveMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -805,6 +843,12 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 	float* material = (float*)mapped + 28;
 	material[0] = g_renderSettings.modelDetailNormals;
+	if (g_environment.active && g_renderSettings.weatherEffects >= 1) {
+		material[1] = g_environment.snowCover;
+		material[2] = g_environment.wetness;
+	}
+	if (g_environment.active)
+		material[3] = 1.0f - g_environment.sun.daylight;
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -823,8 +867,9 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 
 	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
-	// beside it (<texture>_albedo, _normal, _orm, .png, .tga, .dds or .ktx2) or defaults: the
-	// original texture, a flat normal marked (alpha 0) for deriving one from it, 1 / 0.65 / 0
+	// beside it (<texture>_albedo, _normal, _orm, _emissive, .png, .tga, .dds or .ktx2) or
+	// defaults: the original texture, a flat normal marked (alpha 0) for deriving one from it,
+	// 1 / 0.65 / 0, no light
 	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 		Bitmap bmp;
 		bmp.width = bmp.height = 1;
@@ -836,6 +881,7 @@ void DiligentEnhancedSceneRenderer::render()
 	if (!_impl->deriveNormal) {
 		_impl->deriveNormal = pixel(128, 128, 255, 0);
 		_impl->defaultOrm = pixel(255, 166, 0);
+		_impl->noEmission = pixel(0, 0, 0, 0);
 	}
 	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
@@ -850,7 +896,8 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 				return nullptr;
 			};
-			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm");
+			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm"), emissive = overrideMap("_emissive");
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(emissive ? emissive : _impl->noEmission));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));

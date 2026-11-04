@@ -158,6 +158,15 @@ namespace {
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		{
 			MenuOption o;
+			o.id = "weatherEffects"; o.page = "lighting"; o.label = "Weather and season effects";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High", "Ultra" };
+			o.get = [&rs]() { return (float)rs.weatherEffects; };
+			o.set = [&rs](float v) { rs.weatherEffects = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
 			o.id = "terrainTessellation"; o.page = "lighting"; o.label = "Terrain tessellation";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Low", "Medium", "High" };

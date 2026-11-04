@@ -23,6 +23,8 @@
 #include "../Camera.h"
 #include "../util/util.h"
 #include "../TrnTextureDb.h"
+#include "../Environment.h"
+#include "../SoundPlayer.h"
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cctype>
@@ -294,7 +296,7 @@ cbuffer FallBuffer
 	float4 CamRight; // the camera's right and up in the world, for the billboards
 	float4 CamUp;
 	float4 Screen;   // 1 / target width, 1 / height, the projection's P33 and P43
-	float4 Tint;     // the falling water's own colour
+	float4 Tint;     // the falling water's own colour; w: how much water (WaterfallFlow, 1 normal)
 };
 
 Texture2D sceneTexture;        // the frame behind the water (refraction, from High)
@@ -407,6 +409,12 @@ float4 PS_Fall(FALL_OUTPUT input) : SV_Target
 	// from High the falling water tears into strands lower down
 	if (q >= 4)
 		alpha *= lerp(1, saturate(fast * 2.4 - 0.1), saturate(aerated * 1.4 - 0.25) * (q >= 5 ? 0.5 : 0.3));
+	// the weather's flow: little water left falls as a few thin strands; a flood falls white
+	const float flow = Tint.w;
+	if (flow < 1)
+		alpha *= saturate((Fbm(float2(u * 2.7 + 9.1, (v - t * 4.0) * 0.05), 2) - 0.62 + flow * 0.62) * 4.0) * saturate(flow * 2.5);
+	foam = saturate(foam * (0.6 + 0.4 * flow) + saturate(flow - 1) * 0.5 * n);
+	alpha = alpha * (0.85 + 0.15 * flow) + foam * saturate(flow - 1) * 0.3;
 	float3 nn = normalize(input.Normal);
 	float3 view = normalize(FogCamera.xyz - input.World);
 	if (dot(nn, view) < 0)
@@ -454,8 +462,11 @@ float4 PS_Cascade(FALL_OUTPUT input) : SV_Target
 	float n = lerp(n1, n0, w0);
 	// blending two noises flattens them: stretch back around the middle
 	n = saturate((n - 0.5) * 1.6 + 0.5);
-	float foam = saturate((n - lerp(0.62, 0.28, fall)) * 3.0);
+	const float flow = Tint.w;
+	float foam = saturate((n - lerp(0.62, 0.28, fall) + (flow - 1) * 0.15) * 3.0);
 	float alpha = (0.3 + 0.25 * fall + foam * 0.55) * saturate(side / input.B.y + (n - 0.5) * 1.2 - 0.1);
+	// little water: a thin trickle down the middle of the channel; a flood: fuller
+	alpha *= flow < 1 ? saturate((n - 0.7 + flow * 0.7) * 3.0) * saturate(flow * 2.5) : 1 + (flow - 1) * 0.3;
 	float3 nn = normalize(input.Normal);
 	float3 view = normalize(FogCamera.xyz - input.World);
 	float3 water = Tint.rgb * (0.6 + 0.45 * saturate(dot(nn, Sun.xyz)));
@@ -491,6 +502,8 @@ float4 PS_Foam(FALL_OUTPUT input) : SV_Target
 		foam = max(foam, ring * (q >= 5 ? 0.85 : 0.5));
 	}
 	foam *= saturate((1 - r) * 3);
+	// the weather's flow: hardly any foam from a trickle, more from a flood
+	foam *= saturate(Tint.w * 1.2) * (1 + saturate(Tint.w - 1) * 0.5);
 	float3 c = lerp(FoamColour(float3(0, 1, 0)), FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), saturate(foam * 0.8));
 }
@@ -532,6 +545,9 @@ PART_OUTPUT VS_Particle(float4 Base : ATTRIB0, float4 Dir : ATTRIB1, uint id : S
 		size = (0.16 + r2 * 0.22) * (1 + age) * scale;
 		alpha = (1 - age) * 0.75;
 	}
+	// the weather's flow: less mist and spray from a trickle, more (and larger) from a flood
+	alpha *= clamp(Tint.w, 0.05, 1.8);
+	size *= 0.75 + 0.25 * clamp(Tint.w, 0.1, 2.0);
 	float2 c = float2((id & 1) ? 1 : -1, (id & 2) ? 1 : -1);
 	float3 world = pos + (CamRight.xyz * c.x + CamUp.xyz * c.y) * size;
 	PART_OUTPUT o;
@@ -595,9 +611,23 @@ struct DiligentWaterfalls::Impl {
 	void build();
 };
 
+std::vector<WaterfallSoundSpot> g_waterfallSoundSpots;
+
 void DiligentWaterfalls::Impl::build()
 {
 	falls = FindWaterfalls(terrain);
+	g_waterfallSoundSpots.clear();
+	// a spot per foot, merged with one within 25 units (a river's cascades run over many tiles)
+	auto addSound = [](const Vector3& at, float strength, bool cascade) {
+		for (WaterfallSoundSpot& s : g_waterfallSoundSpots)
+			if (s.cascade == cascade && (s.pos - at).sqlen3() < 25.0f * 25.0f) {
+				const float total = s.strength + strength;
+				s.pos = s.pos + (at - s.pos) * (strength / total);
+				s.strength = total;
+				return;
+			}
+		g_waterfallSoundSpots.push_back({ at, strength, cascade });
+	};
 	std::vector<FallVertex> verts;
 	std::vector<uint32_t> fallIndices, foamIndices, cascadeIndices;
 	std::vector<Particle> mist, spray;
@@ -722,6 +752,11 @@ void DiligentWaterfalls::Impl::build()
 			}
 
 		emitFoot(Vector3(w.x0, 0, w.z0), along, ddx, ddz, length, impactSum / (columns + 1), w.bottom, drop, w.intoWater);
+		{
+			const float impact = impactSum / (columns + 1);
+			addSound(Vector3(w.x0 + along.x * length * 0.5f + ddx * impact, w.bottom + drop * 0.3f, w.z0 + along.z * length * 0.5f + ddz * impact),
+				drop * length / 25.0f, false);
+		}
 		totalLength += length;
 	}
 
@@ -884,6 +919,7 @@ void DiligentWaterfalls::Impl::build()
 				const Vector3 along = dx != 0 ? Vector3(0, 0, 1) : Vector3(1, 0, 0);
 				const float footY = water ? n->waterLevel : bestH * 0.5f + 0.2f;
 				emitFoot(start, along, (float)dx, (float)dz, TILE, 0.5f, footY, tileDrop[z * W + x], water);
+				addSound(Vector3(start.x + along.x * TILE * 0.5f, footY, start.z + along.z * TILE * 0.5f), tileDrop[z * W + x] * TILE / 25.0f, true);
 				if (feet++ < 16)
 					printf("  cascade foot at %.0f, %.0f (%.1f high), falling (%d, %d) into %s\n", start.x, start.z, footY, dx, dz, water ? "water" : "river");
 			}
@@ -1054,6 +1090,11 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 
 DiligentWaterfalls::~DiligentWaterfalls()
 {
+	g_waterfallSoundSpots.clear();
+	// the waterfalls' sounds stop with them (the map left)
+	if (SoundPlayer::s_soundPlayer)
+		for (int slot = 0; slot < SoundPlayer::MAX_LOOPS; slot++)
+			SoundPlayer::s_soundPlayer->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 	delete _impl;
 }
 
@@ -1095,6 +1136,8 @@ void DiligentWaterfalls::render(const Camera* camera, ITextureView* scene, IText
 	const Vector3 sun = _impl->terrain->sunVector.normal();
 	ITexture* target = gfx->CurrentColorTarget()->GetTexture();
 	const float tint[3] = { 0.42f, 0.55f, 0.58f };
+	// wkbai's weather: floods swell the waterfalls, droughts nearly dry them up
+	const float flow = WaterfallFlow(g_environment);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->buffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	const float data[24] = {
@@ -1103,7 +1146,7 @@ void DiligentWaterfalls::render(const Camera* camera, ITextureView* scene, IText
 		view._11, view._21, view._31, 0,
 		view._12, view._22, view._32, 0,
 		1.0f / target->GetDesc().Width, 1.0f / target->GetDesc().Height, proj._33, proj._43,
-		tint[0], tint[1], tint[2], 1,
+		tint[0], tint[1], tint[2], flow,
 	};
 	memcpy(mapped, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
@@ -1137,7 +1180,7 @@ void DiligentWaterfalls::render(const Camera* camera, ITextureView* scene, IText
 	const float mistShare = quality >= 5 ? 1.0f : quality == 4 ? 0.6f : quality == 3 ? 0.3f : 0.0f;
 	const float sprayShare = quality >= 5 ? 1.0f : quality == 4 ? 0.35f : 0.0f;
 	const uint32_t mist = (uint32_t)(_impl->mistCount * mistShare), spray = (uint32_t)(_impl->sprayCount * sprayShare);
-	if (_impl->particles && (mist || spray)) {
+	if (_impl->particles && (mist || spray) && flow > 0.12f) {
 		ctx->SetPipelineState(_impl->particlePipeline);
 		IBuffer* pb = _impl->particles;
 		ctx->SetVertexBuffers(0, 1, &pb, &offset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);

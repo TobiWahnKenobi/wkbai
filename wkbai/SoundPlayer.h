@@ -20,6 +20,10 @@ struct SoundPlayer {
 	virtual bool isMusicPlaying() = 0;
 	// Applies the music and effects volumes of g_renderSettings to what is playing
 	virtual void applyVolumes() {}
+	// A looping sound in one of MAX_LOOPS slots (the waterfalls'), set every frame: that file at
+	// that place, its gain (times the effects volume; 0 stops it) and pitch
+	static constexpr int MAX_LOOPS = 6;
+	virtual void setLoop(int slot, const std::string& filePath, const Vector3& pos, float refDist, float gain, float pitch) {}
 
 	static std::unique_ptr<SoundPlayer> s_soundPlayer;
 	static SoundPlayer* getSoundPlayer();

@@ -225,6 +225,8 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
 
+	// wkbai's weather: the snow and the ice
+	DrawMinimapWeather(gfx, client, drawList, mapX, mapY, mapX + mapW, mapY + mapH);
 	// the fog of war, darker where the player's units don't see (as on the original's minimap)
 	const bool fogOn = fogOfWarOn() && !fogOfWar.tiles.empty();
 	if (fogOn && fogOfWar.version != minimapFogVersion) {
@@ -752,6 +754,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const weatherLevels[] = { "Low", "Medium (snow on roofs and models)", "High (footprints)", "Ultra" };
+			ImGui::Combo("Weather and season effects", &s.weatherEffects, weatherLevels, 4);
+		}
 		{
 			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
@@ -1424,6 +1430,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	};
 	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
+	// the fields in winter (wkbai's seasons; they give no food then): bare soil
+	if (client->environmentActive && client->environmentSettings.seasons && client->environment.season == 3
+		&& obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+		const std::string& name = obj->blueprint->name;
+		if (name.size() > 5 && name.compare(name.size() - 5, 5, " Farm") == 0)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_FALLOW;
+	}
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;
@@ -3408,6 +3421,7 @@ void ClientInterface::iter()
 		}
 		// wkbai's day and night, seasons and weather: the sun, fog and grade (none: the map's)
 		UpdateEnvironmentView(client, scene);
+		UpdateWaterfallSounds(client);
 		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 			dgfx->shadows.time = client->timeManager.currentTime;
 			dgfx->shadows.cloudShadows = g_renderSettings.cloudShadows;
@@ -3450,6 +3464,8 @@ void ClientInterface::iter()
 	if (showTerrain) {
 		drawRangeBands();
 		drawFootprintTiles();
+		// wkbai's weather: flood water over the land, footprints in snow and mud
+		DrawGroundWeather(gfx, client, client->camera);
 	}
 
 	if (particleRenderer && particlesContainer) {
