@@ -13,6 +13,10 @@
 #include <iterator>
 #include <string>
 #include <vector>
+#include <functional>
+#include <thread>
+#include <cstdio>
+#include <SDL3/SDL_timer.h>
 
 using namespace Diligent;
 
@@ -196,12 +200,155 @@ float Cells(float u, float v, int p, int seed)
 		}
 	return std::clamp(1.0f - std::sqrt(best), 0.0f, 1.0f);
 }
+
+// 3D tiling noise for the volumetric clouds' shape (Schneider, "The Real-time Volumetric
+// Cloudscapes of Horizon Zero Dawn", SIGGRAPH 2015): gradient noise and Worley cells of
+// period p lattice cells in each axis
+uint32_t Hash3(int x, int y, int z, int p, uint32_t seed)
+{
+	x = ((x % p) + p) % p;
+	y = ((y % p) + p) % p;
+	z = ((z % p) + p) % p;
+	uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)z * 3266489917u + seed * 2246822519u;
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return h ^ (h >> 16);
+}
+
+float Gradient3(float x, float y, float z, int p, uint32_t seed)
+{
+	static const float g[12][3] = { {1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},{1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},{0,1,1},{0,-1,1},{0,1,-1},{0,-1,-1} };
+	const int x0 = (int)std::floor(x), y0 = (int)std::floor(y), z0 = (int)std::floor(z);
+	const float fx = x - x0, fy = y - y0, fz = z - z0;
+	auto fade = [](float t) { return t * t * t * (t * (t * 6 - 15) + 10); };
+	const float u = fade(fx), v = fade(fy), w = fade(fz);
+	float c[2][2][2];
+	for (int k = 0; k < 2; k++)
+		for (int j = 0; j < 2; j++)
+			for (int i = 0; i < 2; i++) {
+				const float* gr = g[Hash3(x0 + i, y0 + j, z0 + k, p, seed) % 12];
+				c[k][j][i] = gr[0] * (fx - i) + gr[1] * (fy - j) + gr[2] * (fz - k);
+			}
+	auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+	const float a = lerp(lerp(c[0][0][0], c[0][0][1], u), lerp(c[0][1][0], c[0][1][1], u), v);
+	const float b = lerp(lerp(c[1][0][0], c[1][0][1], u), lerp(c[1][1][0], c[1][1][1], u), v);
+	return lerp(a, b, w); // about -1..1
+}
+
+// 1 - the distance to the nearest of one random point per cell, 0-1 (billows: high in a cell's middle)
+float Worley3(float x, float y, float z, int p, uint32_t seed)
+{
+	const int cx = (int)std::floor(x), cy = (int)std::floor(y), cz = (int)std::floor(z);
+	float best = 3.0f;
+	for (int k = -1; k <= 1; k++)
+		for (int j = -1; j <= 1; j++)
+			for (int i = -1; i <= 1; i++) {
+				const uint32_t h = Hash3(cx + i, cy + j, cz + k, p, seed);
+				const float px = cx + i + (h & 1023) / 1023.0f, py = cy + j + ((h >> 10) & 1023) / 1023.0f, pz = cz + k + ((h >> 20) & 1023) / 1023.0f;
+				best = std::min(best, (px - x) * (px - x) + (py - y) * (py - y) + (pz - z) * (pz - z));
+			}
+	return std::clamp(1.0f - std::sqrt(best), 0.0f, 1.0f);
+}
+
+// three octaves of Worley cells from f cells across, 0.625 / 0.25 / 0.125
+float WorleyFbm(float u, float v, float w, int f, uint32_t seed)
+{
+	return Worley3(u * f, v * f, w * f, f, seed) * 0.625f + Worley3(u * f * 2, v * f * 2, w * f * 2, f * 2, seed + 1) * 0.25f
+		+ Worley3(u * f * 4, v * f * 4, w * f * 4, f * 4, seed + 2) * 0.125f;
+}
+
+// a 3D RGBA8 texture of n^3 texels with its mip chain (box filtered), from texel(u, v, w, out[4]),
+// the slices made on all cores
+RefCntAutoPtr<ITexture> Make3D(DiligentGfx* gfx, const char* name, int n, const std::function<void(float, float, float, float*)>& texel)
+{
+	std::vector<uint8_t> level((size_t)n * n * n * 4);
+	const unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
+	std::vector<std::thread> pool;
+	for (unsigned t = 0; t < threads; t++)
+		pool.emplace_back([&, t]() {
+			for (int z = (int)t; z < n; z += (int)threads)
+				for (int y = 0; y < n; y++)
+					for (int x = 0; x < n; x++) {
+						float out[4];
+						texel((x + 0.5f) / n, (y + 0.5f) / n, (z + 0.5f) / n, out);
+						uint8_t* p = &level[(((size_t)z * n + y) * n + x) * 4];
+						for (int c = 0; c < 4; c++)
+							p[c] = (uint8_t)std::lround(std::clamp(out[c], 0.0f, 1.0f) * 255);
+					}
+		});
+	for (auto& th : pool)
+		th.join();
+	int mips = 1;
+	while ((n >> mips) >= 1)
+		mips++;
+	TextureDesc desc;
+	desc.Name = name;
+	desc.Type = RESOURCE_DIM_TEX_3D;
+	desc.Width = desc.Height = desc.Depth = n;
+	desc.MipLevels = mips;
+	desc.Format = TEX_FORMAT_RGBA8_UNORM;
+	desc.BindFlags = BIND_SHADER_RESOURCE;
+	desc.Usage = USAGE_IMMUTABLE;
+	std::vector<std::vector<uint8_t>> levels;
+	levels.push_back(std::move(level));
+	for (int m = 1, s = n / 2; m < mips; m++, s /= 2) {
+		const std::vector<uint8_t>& src = levels.back();
+		const int ss = s * 2;
+		std::vector<uint8_t> dst((size_t)s * s * s * 4);
+		for (int z = 0; z < s; z++)
+			for (int y = 0; y < s; y++)
+				for (int x = 0; x < s; x++)
+					for (int c = 0; c < 4; c++) {
+						int sum = 0;
+						for (int k = 0; k < 8; k++)
+							sum += src[((((size_t)(2 * z + (k >> 2))) * ss + (2 * y + ((k >> 1) & 1))) * ss + (2 * x + (k & 1))) * 4 + c];
+						dst[(((size_t)z * s + y) * s + x) * 4 + c] = (uint8_t)((sum + 4) / 8);
+					}
+		levels.push_back(std::move(dst));
+	}
+	std::vector<TextureSubResData> subs(mips);
+	for (int m = 0; m < mips; m++) {
+		const Uint64 s = std::max(1, n >> m);
+		subs[m] = TextureSubResData{ levels[m].data(), s * 4, s * s * 4 };
+	}
+	TextureData init{ subs.data(), (Uint32)mips };
+	RefCntAutoPtr<ITexture> tex;
+	gfx->device->CreateTexture(desc, &init, &tex);
+	if (!tex)
+		ferr("Diligent: could not create the %s.", name);
+	return tex;
+}
 }
 
 void CreateCloudResources(DiligentGfx* gfx)
 {
 	auto& env = gfx->shadows;
 	IRenderDevice* device = gfx->device;
+	// the volumetric clouds' 3D noise: the shape (r: Perlin-Worley, g/b/a: Worley at 4, 8, 16
+	// cells) and the erosion's detail (r/g/b: Worley at 4, 8, 16 cells)
+	{
+		const uint64_t start = SDL_GetTicksNS();
+		env.cloudShape = Make3D(gfx, "Cloud shape noise", 64, [](float u, float v, float w, float* out) {
+			float perlin = 0, amp = 0.5f, norm = 0;
+			for (int o = 0, p = 4; o < 4; o++, p *= 2, amp *= 0.5f) {
+				perlin += amp * Gradient3(u * p, v * p, w * p, p, 101 + o);
+				norm += amp;
+			}
+			perlin = std::clamp(0.5f + perlin / norm * 0.9f, 0.0f, 1.0f);
+			const float cells = WorleyFbm(u, v, w, 4, 7);
+			// Perlin-Worley: the Perlin noise remapped from (cells - 1, 1): billowy, connected
+			out[0] = std::clamp((perlin - (cells - 1)) / (2 - cells), 0.0f, 1.0f);
+			out[1] = cells;
+			out[2] = WorleyFbm(u, v, w, 8, 17);
+			out[3] = WorleyFbm(u, v, w, 16, 27);
+		});
+		env.cloudDetail = Make3D(gfx, "Cloud detail noise", 32, [](float u, float v, float w, float* out) {
+			out[0] = WorleyFbm(u, v, w, 2, 37);
+			out[1] = WorleyFbm(u, v, w, 4, 47);
+			out[2] = WorleyFbm(u, v, w, 8, 57);
+			out[3] = 1;
+		});
+		printf("Cloud 3D noise made in %.0f ms\n", (SDL_GetTicksNS() - start) / 1e6);
+	}
 	constexpr int N = 256;
 	std::vector<uint8_t> pixels((size_t)N * N * 4);
 	for (int y = 0; y < N; y++)

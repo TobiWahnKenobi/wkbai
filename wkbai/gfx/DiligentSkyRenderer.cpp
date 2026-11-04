@@ -89,16 +89,53 @@ float SkyFog(float t)
 	return 0;
 }
 
-// The cloud layer's density at a point: the cover there, its tops rising where it is denser
-// (flat bases), the edges worn by the noise's cells
-float CloudDensity(float3 p, float lod)
+Texture3D cloudShape;  // r: Perlin-Worley, g/b/a: Worley at 4, 8, 16 cells (tiling, 64^3)
+Texture3D cloudDetail; // r/g/b: Worley at 4, 8, 16 cells (tiling, 32^3)
+SamplerState cloud3DSampler;
+
+static const float SHAPE_PERIOD = 480, DETAIL_PERIOD = 120; // world units per tile
+
+float Remap(float x, float a, float b, float c, float d)
+{
+	return c + (x - a) / max(b - a, 1e-4) * (d - c);
+}
+
+// The cloud layer's density at a point (Schneider, "The Real-time Volumetric Cloudscapes of
+// Horizon Zero Dawn"): the 3D Perlin-Worley shape within a rounded height profile, cut by the
+// cover over the map (the same as the ground shadows'), its edges eroded by 3D Worley detail,
+// wispy towards the base and billowy towards the top. The cloud tops vary by region through
+// their own noise (not the cover: tops following the cover made a cone of every peak of it), and
+// the shape is 3D (a 2D shape stretched up the layer gave vertical streaks). footprint: the
+// pixel's size there in world units, for the noise's mip levels; detail: with the erosion (the
+// light's steps go without).
+float CloudDensity(float3 p, float lod, float footprint, bool detail)
 {
 	float h = saturate((p.y - CloudShape.z) / CloudShape.w);
-	float cover = CloudCover(p.xz, lod);
-	// rounded tops: denser cover reaches higher; a soft flat base
-	float d = smoothstep(0, 0.3, cover - h * h * 0.95) * smoothstep(0, 0.12, h);
-	float cells = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.y * 1.3) + CloudWind.zw * 1.3, lod).b;
-	return saturate(d - (1 - cells) * 0.35 * (1 - d)) * 1.4;
+	// the coverage: the cover's broad base layer, softly (its fine layer and sharp edge made thin
+	// columns as tall as the layer: the 3D shape gives the detail)
+	float b = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * CloudScale.x + CloudWind.xy, lod + 1).r;
+	float cover = saturate((b - (1 - CloudShape.x) + 0.22) / 0.55);
+	if (cover <= 0.002)
+		return 0;
+	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
+	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
+	float profile = saturate(Remap(h, 0, 0.07, 0, 1)) * saturate(Remap(h, top * 0.45, top, 1, 0));
+	if (profile <= 0)
+		return 0;
+	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
+	float3 q = p - drift - float3(0, CloudShape.z, 0);
+	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
+	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
+	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1)) * profile;
+	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
+	if (!detail || c <= 0)
+		return c * 1.6;
+	float detailLod = log2(footprint * 32 / DETAIL_PERIOD);
+	float3 d = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.3) / DETAIL_PERIOD, max(detailLod, 0)).rgb;
+	float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
+	hf = lerp(1 - hf, hf, saturate(h * 3));
+	float erosion = 0.4 * saturate(2 - detailLod * 0.5);
+	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6;
 }
 
 float HenyeyGreenstein(float mu, float g)
@@ -144,12 +181,13 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		// the noise's mip level by the pixel's footprint there (the detail layer's texels per
 		// unit), so the distant clouds don't alias
 		float lod = log2(1 + t * 0.0035 * pixelScale * 256 * CloudScale.y);
-		float dens = CloudDensity(p, lod);
+		float footprint = t * 0.0035 * pixelScale;
+		float dens = CloudDensity(p, lod, footprint, true);
 		if (dens <= 0.002)
 			continue;
 		float od = 0;
 		[loop] for (int j = 0; j < LIGHT_STEPS; j++)
-			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5) * lightStep;
+			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5, footprint + (j + 1) * lightStep * 0.15, false) * lightStep;
 		float toSun = exp(-SIGMA * od);
 		float powder = 1 - exp(-2 * SIGMA * od - 0.15);
 		float energy = toSun * lerp(powder * 1.6, 1, towardSun);
@@ -312,6 +350,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		{ SHADER_TYPE_PIXEL, "SkyBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "cloudShape", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "cloudDetail", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	for (const char* name : texNames)
 		resources.push_back({ SHADER_TYPE_PIXEL, name, 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC });
@@ -321,7 +361,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	SamplerDesc noiseSampler;
 	noiseSampler.AddressU = noiseSampler.AddressV = noiseSampler.AddressW = TEXTURE_ADDRESS_WRAP;
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "skySampler", sampler }, { SHADER_TYPE_PIXEL, "cloudNoiseSampler", noiseSampler },
-		{ SHADER_TYPE_PIXEL, "skyOccSampler", sampler } };
+		{ SHADER_TYPE_PIXEL, "skyOccSampler", sampler }, { SHADER_TYPE_PIXEL, "cloud3DSampler", noiseSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Sky resources";
 	sigDesc.Resources = resources.data();
@@ -335,6 +375,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SkyBuffer")->Set(_impl->skyBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(_impl->dgfx->shadows.cloudBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(_impl->dgfx->shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudShape")->Set(_impl->dgfx->shadows.cloudShape->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudDetail")->Set(_impl->dgfx->shadows.cloudDetail->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	for (int i = 0; i < 6; i++)
 		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, texNames[i])->Set(_impl->dgfx->GetTextureView(_impl->faces[i]));
 
@@ -362,6 +404,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 			{ SHADER_TYPE_PIXEL, "SkyBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "cloudShape", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "cloudDetail", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		};
 		PipelineResourceSignatureDesc cs;
 		cs.Name = "Sky clouds";
@@ -376,6 +420,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		_impl->cloudSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SkyBuffer")->Set(_impl->skyBuffer);
 		_impl->cloudSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(_impl->dgfx->shadows.cloudBuffer);
 		_impl->cloudSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(_impl->dgfx->shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		_impl->cloudSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudShape")->Set(_impl->dgfx->shadows.cloudShape->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		_impl->cloudSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudDetail")->Set(_impl->dgfx->shadows.cloudDetail->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		RefCntAutoPtr<IShader> cps = createShader(SHADER_TYPE_PIXEL, "PS_Clouds");
 		GraphicsPipelineStateCreateInfo cci;
 		cci.PSODesc.Name = "Sky clouds";

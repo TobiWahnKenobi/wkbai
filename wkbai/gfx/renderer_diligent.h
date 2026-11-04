@@ -110,6 +110,8 @@ struct DiligentGfx : IRenderer
 		// Dynamic clouds and the sky light (DiligentClouds; RenderSettings::dynamicClouds, skyGI):
 		// the cloud noise, the cloud constant buffer (cbuffer CloudBuffer), this frame's mode
 		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudNoise;
+		// the volumetric clouds' 3D noise (DiligentClouds): the shape and the erosion's detail
+		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudShape, cloudDetail;
 		Diligent::RefCntAutoPtr<Diligent::IBuffer> cloudBuffer;
 		int clouds = 0;
 		bool cloudShadowsDrawn = false; // the enhanced scene renderer wrote the cloud buffer this frame
