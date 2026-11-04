@@ -2698,7 +2698,11 @@ void Server::simulate()
 				line += " " + top[i].second + " " + std::to_string(top[i].first / p.steps).substr(0, 5);
 			printf("SIMPROFILE   orders, ms per step:%s\n", line.c_str());
 		}
-		extern uint64_t g_astarSearches, g_astarTiles, g_sightCalls, g_sightCandidates, g_sightInRange;
+		extern uint64_t g_astarSearches, g_astarTiles, g_sightCalls, g_sightCandidates, g_sightInRange, g_fieldPaths, g_fieldBuilds, g_unreachableGoals;
+		if (p.lastPrint)
+			printf("SIMPROFILE   group fields %llu made, %llu paths from them; %llu goals no search could reach\n",
+				(unsigned long long)g_fieldBuilds, (unsigned long long)g_fieldPaths, (unsigned long long)g_unreachableGoals);
+		g_fieldPaths = g_fieldBuilds = g_unreachableGoals = 0;
 		extern double g_astarMs;
 		if (p.lastPrint)
 			printf("SIMPROFILE   astar %.2f ms per step, %.2f searches per step, %.0f tiles per search, %.3f ms per search; sight %.1f viewers, %.0f candidates, %.0f in range per step\n",

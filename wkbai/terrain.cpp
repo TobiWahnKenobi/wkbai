@@ -360,6 +360,7 @@ bool Terrain::writeMapExtras(const std::filesystem::path& path) const
 
 void Terrain::setHeightSteps(int i, float steps)
 {
+	changedVertices.push_back(i);
 	steps = std::clamp(steps, 0.0f, 255.0f + 255.0f / 256.0f);
 	int whole = (int)std::floor(steps);
 	int frac = (int)std::lround((steps - whole) * 256.0f);
@@ -761,6 +762,7 @@ void Terrain::floodfillWater()
 
 void Terrain::refillWater()
 {
+	revision++;
 	for (int i = 0; i < width * height; i++) {
 		tiles[i].fullOfWater = false;
 		tiles[i].waterLevel = -1.0f;

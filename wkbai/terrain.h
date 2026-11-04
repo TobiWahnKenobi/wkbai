@@ -51,6 +51,8 @@ struct TerrainTile {
 // the lowest terrain vertex of the map last loaded (Terrain::readFromFile)
 extern float g_lowestTerrainHeight;
 
+inline uint32_t g_terrainInstances = 0;
+
 struct Terrain
 {
 	typedef TerrainTile Tile;
@@ -91,6 +93,12 @@ struct Terrain
 		return heightFraction.empty() ? (float)vertices[i] : vertices[i] + heightFraction[i] * (1.0f / 256.0f);
 	}
 	void setHeightSteps(int i, float steps);
+	// For the path finding's cached blocked tiles (MovementController): setHeightSteps logs each
+	// vertex it sets; a change the log doesn't follow (the map editor's heights, the water, the
+	// textures) bumps revision, and everything is looked at again. instanceId tells terrains apart.
+	std::vector<int> changedVertices;
+	uint32_t revision = 0;
+	uint32_t instanceId = ++g_terrainInstances;
 	// per vertex, the fraction of a step above `vertices` in 256ths; empty: none (as every BCM)
 	std::vector<uint8_t> heightFraction;
 	// <map>.wkbmap, what the BCM can't hold: finer heights, more than 63 lakes
