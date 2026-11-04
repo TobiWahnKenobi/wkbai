@@ -37,6 +37,7 @@ struct SceneEntity {
 		SEFLAG_PLACEABLE = 16, // a field to be placed where it can be: drawn green
 		SEFLAG_DYNAMIC_SHADOW = 32, // a unit drawn into the sun's shadow map (realCharacterShadows) instead of a blob
 		SEFLAG_FALLOW = 64, // a field in winter (wkbai's seasons): drawn as bare soil
+		SEFLAG_LEAVES = 128, // a broadleaf tree or bush (wkbai's seasons: autumn colours, dry in heat)
 	};
 };
 

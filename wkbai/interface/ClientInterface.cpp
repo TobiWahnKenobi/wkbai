@@ -1437,6 +1437,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		if (name.size() > 5 && name.compare(name.size() - 5, 5, " Farm") == 0)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_FALLOW;
 	}
+	// broadleaf trees and bushes (not the conifers, cedars and snowy trees): autumn colours
+	if (client->environmentActive && client->environmentSettings.seasons) {
+		const std::string& name = obj->blueprint->name;
+		if (name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos
+			|| name.find("City Tree") != std::string::npos || name.find("Bush") != std::string::npos)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_LEAVES;
+	}
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;

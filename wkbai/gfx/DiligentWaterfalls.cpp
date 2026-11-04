@@ -297,6 +297,7 @@ cbuffer FallBuffer
 	float4 CamUp;
 	float4 Screen;   // 1 / target width, 1 / height, the projection's P33 and P43
 	float4 Tint;     // the falling water's own colour; w: how much water (WaterfallFlow, 1 normal)
+	float4 Weather;  // wkbai's weather: x frozen 0..1 (an icefall), y a flood's mud 0..1
 };
 
 Texture2D sceneTexture;        // the frame behind the water (refraction, from High)
@@ -428,10 +429,19 @@ float4 PS_Fall(FALL_OUTPUT input) : SV_Target
 	// the sky (the fog's colour) mirrored in the glassy water, more at grazing angles
 	float fresnel = 0.25 + 0.6 * pow(1 - saturate(dot(nn, view)), 3);
 	water = lerp(water, FogColor.rgb, fresnel * (1 - aerated * 0.7));
-	float3 c = lerp(water, FoamColour(nn), foam);
+	water = lerp(water, float3(0.42, 0.38, 0.24) * (0.6 + 0.45 * saturate(dot(nn, Sun.xyz))), Weather.y * 0.85);
+	float3 c = lerp(water, FoamColour(nn) * lerp(1, float3(0.9, 0.85, 0.72), Weather.y), foam);
 	// the sun's glint on the glassy water near the rim
 	float3 h = normalize(view + Sun.xyz);
 	c += pow(saturate(dot(nn, h)), 48) * 0.45 * (1 - foam) * saturate(1 - fall * 2);
+	// an icefall: the frozen sheet pale blue-white, streaked (icicles), solid, a hard glint
+	if (Weather.x > 0) {
+		float icicle = Fbm(float2(u * 2.2, v * 0.12), 2);
+		float3 ice = float3(0.78, 0.88, 0.95) * (0.7 + 0.4 * saturate(dot(nn, Sun.xyz))) * (0.8 + 0.35 * icicle);
+		ice += pow(saturate(dot(nn, h)), 24) * 0.4;
+		c = lerp(c, ice, Weather.x);
+		alpha = lerp(alpha, saturate(0.75 + icicle * 0.25) * saturate(side / input.B.y + 0.3) * saturate((v - 0.2) / 2.0), Weather.x);
+	}
 	c = lerp(c, FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), saturate(alpha));
 }
@@ -474,9 +484,15 @@ float4 PS_Cascade(FALL_OUTPUT input) : SV_Target
 		float2 suv = input.Pos.xy * Screen.xy + (n - 0.5) * 0.008;
 		water = lerp(sceneTexture.Sample(sLinear, suv).rgb * Tint.rgb * 1.8, water, 0.5);
 	}
-	float3 c = lerp(water, FoamColour(nn), foam);
+	water = lerp(water, float3(0.42, 0.38, 0.24) * (0.6 + 0.45 * saturate(dot(nn, Sun.xyz))), Weather.y * 0.85);
+	float3 c = lerp(water, FoamColour(nn) * lerp(1, float3(0.9, 0.85, 0.72), Weather.y), foam);
 	float3 h = normalize(view + Sun.xyz);
 	c += pow(saturate(dot(nn, h)), 48) * 0.3 * (1 - foam);
+	if (Weather.x > 0) { // frozen over: ice on the rocks
+		float3 ice = float3(0.8, 0.88, 0.94) * (0.72 + 0.35 * saturate(dot(nn, Sun.xyz)) + 0.2 * n);
+		c = lerp(c, ice, Weather.x);
+		alpha = lerp(alpha, saturate(0.55 + n * 0.4) * saturate(side / input.B.y + 0.2), Weather.x);
+	}
 	c = lerp(c, FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), saturate(alpha));
 }
@@ -503,7 +519,7 @@ float4 PS_Foam(FALL_OUTPUT input) : SV_Target
 	}
 	foam *= saturate((1 - r) * 3);
 	// the weather's flow: hardly any foam from a trickle, more from a flood
-	foam *= saturate(Tint.w * 1.2) * (1 + saturate(Tint.w - 1) * 0.5);
+	foam *= saturate(Tint.w * 1.2) * (1 + saturate(Tint.w - 1) * 0.5) * (1 - Weather.x);
 	float3 c = lerp(FoamColour(float3(0, 1, 0)), FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), saturate(foam * 0.8));
 }
@@ -980,7 +996,7 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 
 	BufferDesc cb;
 	cb.Name = "Waterfalls";
-	cb.Size = 96;
+	cb.Size = 112;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DYNAMIC;
 	cb.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1140,13 +1156,16 @@ void DiligentWaterfalls::render(const Camera* camera, ITextureView* scene, IText
 	const float flow = WaterfallFlow(g_environment);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->buffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	const float data[24] = {
-		(float)std::fmod(SDL_GetTicks() / 1000.0, 3600.0), (float)quality, sceneView ? 1.0f : 0.0f, (depthView && !camera->orthoMode) ? 1.0f : 0.0f,
+	// the clock: the waterfalls' own with the weather on (it stops when they freeze)
+	const float clock = g_environment.active ? g_environment.fallClock : (float)std::fmod(SDL_GetTicks() / 1000.0, 3600.0);
+	const float data[28] = {
+		clock, (float)quality, sceneView ? 1.0f : 0.0f, (depthView && !camera->orthoMode) ? 1.0f : 0.0f,
 		sun.x, sun.y, sun.z, 0,
 		view._11, view._21, view._31, 0,
 		view._12, view._22, view._32, 0,
 		1.0f / target->GetDesc().Width, 1.0f / target->GetDesc().Height, proj._33, proj._43,
-		tint[0], tint[1], tint[2], flow,
+		tint[0], tint[1], tint[2], std::max(flow, 0.05f),
+		g_environment.active ? g_environment.fallsFrozen : 0.0f, g_environment.active ? g_environment.mud : 0.0f, 0, 0,
 	};
 	memcpy(mapped, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);

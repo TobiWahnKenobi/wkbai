@@ -142,6 +142,46 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	v.exposure = (0.42f + 0.58f * v.sun.daylight) * (1.0f - 0.18f * v.cloudCover) * (1.0f + 1.2f * v.lightningFlash);
 	v.saturation = (0.50f + 0.50f * v.sun.daylight) * (1.0f - 0.2f * v.fog);
 	v.fogDistance = std::clamp(1.0f - 0.95f * v.fog - 0.35f * std::max(v.rain, v.snowfall * 1.3f), 0.08f, 1.0f);
+	// the land's look by the season, the rivers in floods, the frozen falls: slow changes (a few
+	// seconds to a minute), by the real time between frames
+	{
+		static uint64_t lastTicks = 0;
+		const uint64_t ticks = SDL_GetTicks();
+		const float dt = lastTicks ? std::min(0.25f, (ticks - lastTicks) / 1000.0f) : 0.0f;
+		lastTicks = ticks;
+		// a new map or a loaded game: straight to the state (no slow change from nothing)
+		static const Terrain* settled = nullptr;
+		const bool snap = settled != terrain;
+		settled = terrain;
+		auto approach = [&](float& x, float target, float perSecond) {
+			x = snap ? target : x + std::clamp(target - x, -perSecond * dt, perSecond * dt);
+		};
+		const int season = es.seasons ? st.season : -1;
+		float dry = season == 1 ? 0.25f + 0.08f * st.severity : season == 0 || season == 2 ? 0.05f : 0.0f;
+		if (st.weather == WEATHER_HEATWAVE) dry = std::max(dry, 0.85f);
+		if (st.weather == WEATHER_DROUGHT) dry = std::max(dry, 0.7f);
+		dry = std::clamp(dry - 0.6f * st.wetness, 0.0f, 1.0f);
+		approach(v.dryness, dry, 0.02f);
+		// autumn: the leaves turn over the first third of autumn and stay, fading in early winter
+		float autumn = 0.0f;
+		if (es.seasons) {
+			const float into = v.yearFraction * 4.0f - std::floor(v.yearFraction * 4.0f);
+			const int s = (int)std::floor(v.yearFraction * 4.0f) % 4;
+			autumn = s == 2 ? std::clamp(into / 0.35f, 0.0f, 1.0f) : s == 3 ? std::clamp(1.0f - into / 0.25f, 0.0f, 1.0f) : 0.0f;
+		}
+		approach(v.autumn, autumn, 0.05f);
+		approach(v.mud, std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f + 0.1f * std::min(st.rain, 1.0f) * (st.waterRise > 0.2f ? 1.0f : 0.0f), 0.02f);
+		approach(v.flow, std::clamp(1.0f + 0.55f * std::max(st.waterRise, 0.0f) + 0.3f * st.rain - 0.3f * std::max(-st.waterRise, 0.0f), 0.4f, 2.0f), 0.05f);
+		// the falls freeze in a harsh winter's hard cold (below -5 degrees), and thaw above -1
+		const bool freezing = es.seasons && st.season == 3 && st.severity >= 2 && st.temperatureC < -5.0f;
+		const bool thawing = st.temperatureC > -1.0f || st.season != 3;
+		if (freezing)
+			approach(v.fallsFrozen, 1.0f, 0.03f);
+		else if (thawing || snap)
+			approach(v.fallsFrozen, 0.0f, 0.05f);
+		v.riverClock = std::fmod(v.riverClock + dt * v.flow, 3600.0f);
+		v.fallClock = std::fmod(v.fallClock + dt * (1.0f - v.fallsFrozen) * (0.7f + 0.3f * std::min(v.flow, 2.0f)), 3600.0f);
+	}
 	if (scene) {
 		scene->sunDirection = terrain->sunVector;
 		scene->sunColor = terrain->sunColor;

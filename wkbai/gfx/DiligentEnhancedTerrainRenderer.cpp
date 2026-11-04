@@ -115,6 +115,7 @@ cbuffer SunBuffer
 	float4 ReflectParams;
 	float4 WaterMode; // refinement steps of a hit, x; y: Medium (High's look on the flat surface); z: the sky box is bound
 	float4 WeatherParams; // wkbai's weather (Environment.h): snow cover, wetness, water level change (m), ice; all 0 without
+	float4 WeatherParams2; // dryness, the rivers' mud, their clock, their speed factor (0: none, the clock is GrassParams.z)
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -181,8 +182,28 @@ float SnowShare(float3 pos, float3 n)
 	return saturate((WeatherParams.x * 1.5 - patches) * 4) * flat;
 }
 
+// the rivers' current (wkbai's floods): how much faster, and the clock that runs with it
+float FloodFlow() { return WeatherParams2.w > 0 ? WeatherParams2.w : 1; }
+float FlowClock() { return WeatherParams2.w > 0 ? WeatherParams2.z : GrassParams.z; }
+
+// a flood's mud in the water: greenish brown, all of it on the rivers, three quarters on lakes and seas
+// (river 0..1 is the flow map's, smooth where they meet, so there is no edge)
+float3 MuddyWater(float3 c, float river)
+{
+	float m = WeatherParams2.y * lerp(0.75, 1, river);
+	float lum = dot(c, float3(0.299, 0.587, 0.114));
+	return lerp(c, float3(0.40, 0.37, 0.22) * (0.55 + lum * 1.1), m);
+}
+
 float3 WeatherGround(float3 albedo, float3 pos, float3 n)
 {
+	// summer, heatwave, drought: green grass and ground dried towards straw (the greener, the more)
+	if (WeatherParams2.x > 0) {
+		float green = saturate((albedo.g - max(albedo.r, albedo.b)) * 7 + 0.15) * saturate(albedo.g * 4);
+		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+		float3 straw = float3(1.32, 1.08, 0.5) * lum * (1.05 + 0.1 * WeatherParams2.x);
+		albedo = lerp(albedo, straw, WeatherParams2.x * green);
+	}
 	if (WeatherParams.y > 0)
 		albedo *= lerp(float3(1, 1, 1), float3(0.62, 0.64, 0.70), WeatherParams.y * (1 - SnowShare(pos, n)));
 	return lerp(albedo, float3(1.30, 1.33, 1.40), SnowShare(pos, n));
@@ -740,11 +761,11 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0) {
 		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
 		float2 fdir = f.xy * 2 - 1;
-		float2 flow = fdir * f.z * WaterFlowParams.y; // units per second
+		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow(); // units per second
 		river = f.a;
-		rush = f.z * saturate(length(fdir) * 1.5) * river;
+		rush = f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5);
 		const float cycle = 2.0;
-		float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
+		float p0 = frac(FlowClock() / cycle), p1 = frac(FlowClock() / cycle + 0.5);
 		float w0 = 1 - abs(2 * p0 - 1);
 		float2 off0 = -flow * (p0 * cycle) * WaterParams.z, off1 = -flow * (p1 * cycle) * WaterParams.z;
 		// the river look: finer, smaller ripples carried by the current. (Not turned along the
@@ -794,8 +815,10 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// open water darker and bluer farther out
 		tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10) * WaterFlowParams.x);
 	}
+	tex = MuddyWater(tex, river);
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
+	alpha = lerp(alpha, max(alpha, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
 	if (WaterSkyUp.w != 0) {
 		float4 seen = ScreenReflection(input.Pos, input.World, r);
 		float share = seen.a * max(fresnel * 0.6, 0.3) * (1 - foam);
@@ -843,9 +866,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float2 tuv = (base + BlobParams.w) * BlobParams.yz;
 	GerstnerWaves(base, depth, f, sea, waveRegions0.Sample(inpSampler, tuv), waveRegions1.Sample(inpSampler, tuv), WaterLod(input.World), offset, wn, crest);
 	// fine ripples on them, carried by the current on rivers: the sparkles and the rivers' look
-	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x * river;
+	float2 flow = fdir * f.z * WaterFlowParams.y * WaterFlowParams.x * river * FloodFlow();
 	const float cycle = 2.0;
-	float p0 = frac(GrassParams.z / cycle), p1 = frac(GrassParams.z / cycle + 0.5);
+	float p0 = frac(FlowClock() / cycle), p1 = frac(FlowClock() / cycle + 0.5);
 	float w0 = 1 - abs(2 * p0 - 1);
 	float2 ruv = base * WaterParams.z * 3.0;
 	float2 off0 = -flow * (p0 * cycle) * WaterParams.z * 3.0, off1 = -flow * (p1 * cycle) * WaterParams.z * 3.0;
@@ -860,10 +883,10 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// the current by the river's width: 3.5 units a second where it is 8 wide or less,
 	// slowing to 0.6 where it is 50 wide and more
 	float halfWidth = max(riverWidth.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz), 1.5);
-	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x; // units per second
+	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x * FloodFlow(); // units per second
 	float tight = saturate((17 - halfWidth) / 11); // 1 where it is 12 units wide or less, 0 from 34
 	const float rcycle = 3.0;
-	float q0 = frac(GrassParams.z / rcycle), q1 = frac(GrassParams.z / rcycle + 0.5);
+	float q0 = frac(FlowClock() / rcycle), q1 = frac(FlowClock() / rcycle + 0.5);
 	float v0 = 1 - abs(2 * q0 - 1);
 	float s0 = rf.x + current * q0 * rcycle, s1 = rf.x + current * q1 * rcycle + 7.3;
 	float2 rs = RiverSlope(s0, rf.y) * v0 + RiverSlope(s1, rf.y) * (1 - v0);
@@ -910,6 +933,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// light through the waves' faces: they glow turquoise as they rise, most against the sun
 	float through = crest * saturate(dot(-v, l) * 0.4 + 0.7);
 	body += float3(0.04, 0.32, 0.28) * through * 0.55 * cloud;
+	body = MuddyWater(body, river);
 	float3 rr = reflect(-v, normalize(wn + (n - wn) * 0.35));
 	float3 sky = SkyAlong(rr) * lerp(1, cloud, 0.5);
 	// the sun: a broad highlight off the waves, many small sparkles off the ripples
@@ -946,7 +970,8 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// angle and time, rising and fading over a random 0.8-1.6 s of a 2.5-5 s cycle. Two such
 	// layers, offset by half a cell.
 	float riverCrest = 0;
-	float sAdv = rf.x + current * GrassParams.z;
+	// (the flood's speed by its own clock: the current times the clock would jump as it changed)
+	float sAdv = rf.x + current / FloodFlow() * FlowClock();
 	[unroll] for (int layer = 0; layer < 2; layer++) {
 		float2 q = float2(sAdv / 2.4, rf.y / 1.8) + layer * float2(0.5, 0.37);
 		float2 cell = floor(q), fr = q - cell;
@@ -955,7 +980,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 			continue;
 		float period = 2.5 + 2.5 * h2.x;
 		float life = 0.8 + 0.8 * h2.y;
-		float at = frac(GrassParams.z / period + h1.y) * period;
+		float at = frac(FlowClock() / period + h1.y) * period;
 		float rise = saturate(at / (life * 0.3)) * saturate((life - at) / (life * 0.7));
 		float2 c = 0.25 + 0.5 * Hash2(cell + 7.7 + layer);
 		float2 dq = (fr - c) * float2(2.4, 1.8);
@@ -976,6 +1001,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	mirror = lerp(mirror, max(mirror, 0.4), seen.a);
 	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7);
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
+	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam);
 	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
 }
@@ -1287,7 +1313,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 880;
+	cbDesc.Size = 896;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -2113,6 +2139,11 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather[1] = g_environment.active ? g_environment.wetness : 0.0f;
 	weather[2] = g_environment.active ? g_environment.waterRise : 0.0f;
 	weather[3] = g_environment.active ? g_environment.ice : 0.0f;
+	float* weather2 = (float*)(sbdata + 880);
+	weather2[0] = g_environment.active ? g_environment.dryness : 0.0f;
+	weather2[1] = g_environment.active ? g_environment.mud : 0.0f;
+	weather2[2] = g_environment.active ? g_environment.riverClock : 0.0f;
+	weather2[3] = g_environment.active ? g_environment.flow : 0.0f;
 	float* waterMode = (float*)(sbdata + 848);
 	waterMode[0] = wq == 2 ? 0.0f : wq <= 4 ? 4.0f : 6.0f;
 	const bool highOk = _impl->highWaterPipeline && _impl->waterTexture;

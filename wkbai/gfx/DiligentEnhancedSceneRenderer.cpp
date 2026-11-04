@@ -107,6 +107,7 @@ cbuffer SunBuffer
 	float4 Material;
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
+	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -147,6 +148,7 @@ struct VS_OUTPUT
 	float3 WorldPos : TEXCOORD1;
 	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
 	float Fallow : TEXCOORD3; // 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil
+	float2 Leaves : TEXCOORD4; // x 1: broadleaf (SEFLAG_LEAVES); y: the tree's own seed (from where it stands)
 };
 
 // R10G10B10A2_UNORM
@@ -182,6 +184,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 	}
 	output.Tint.rgb = float3(1, 1, 1);
 	output.Fallow = (EntityFlags & 64) ? 1 : 0;
+	output.Leaves = float2((EntityFlags & 128) ? 1 : 0, frac(sin(dot(EntityTransform[3].xz, float2(12.9898, 78.233))) * 43758.5453));
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
 	if (EntityFlags & 16) // SEFLAG_PLACEABLE
@@ -293,6 +296,17 @@ float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 	// and dark)
 	if (input.Fallow > 0.5)
 		albedo = float3(0.34, 0.27, 0.2) * (0.5 + 0.9 * dot(albedo, float3(0.299, 0.587, 0.114)));
+	// a broadleaf tree's green leaves: in autumn yellow, orange, red and brown, each tree its own
+	// mix (and patches of it), the trunk and branches as they are; in heat a little dried
+	if (input.Leaves.x > 0.5 && Season.x + Season.y > 0) {
+		float green = saturate((albedo.g - max(albedo.r, albedo.b)) * 8 + 0.1) * saturate(albedo.g * 5);
+		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+		float pick = frac(input.Leaves.y + (frac(sin(dot(floor(input.Texcoord * 6), float2(39.3, 11.7))) * 917.31) - 0.5) * 0.35);
+		float3 gold = float3(0.95, 0.72, 0.16), orange = float3(0.95, 0.45, 0.1), red = float3(0.75, 0.16, 0.07), brown = float3(0.55, 0.36, 0.16);
+		float3 hue = pick < 0.35 ? lerp(gold, orange, pick / 0.35) : pick < 0.7 ? lerp(orange, red, (pick - 0.35) / 0.35) : lerp(red, brown, (pick - 0.7) / 0.3);
+		albedo = lerp(albedo, hue * lum * 2.3, Season.x * green);
+		albedo = lerp(albedo, float3(1.25, 1.05, 0.5) * lum, Season.y * 0.45 * green);
+	}
 	if (Material.y + Material.z <= 0 || dot(input.Norm, input.Norm) == 0)
 		return albedo;
 	float up = normalize(input.Norm).y;
@@ -594,7 +608,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 656;
+	cbDesc.Size = 672;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 	cbDesc.Name = "Scene motion";
 	cbDesc.Size = 128;
@@ -816,7 +830,7 @@ void DiligentEnhancedSceneRenderer::render()
 	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 656);
+	memset(mapped, 0, 672);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -849,6 +863,11 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 	if (g_environment.active)
 		material[3] = 1.0f - g_environment.sun.daylight;
+	float* season = (float*)mapped + 164;
+	if (g_environment.active) {
+		season[0] = g_environment.autumn;
+		season[1] = g_environment.dryness;
+	}
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);

@@ -115,6 +115,16 @@ struct EnvironmentView {
 	Vector3 wind{ 0.3f, 0.0f, 0.1f }; // metres per second of the falling rain and snow
 	// the 3D scene's grade: night darker and paler, fog nearer (the renderers' FogBuffer)
 	float exposure = 1.0f, saturation = 1.0f, fogDistance = 1.0f;
+	// the land's look by the season: dryness 0..1 (summer a little, heatwave and drought much:
+	// green grass and ground turn straw-yellow), autumn 0..1 (the broadleaf trees' colours)
+	float dryness = 0.0f, autumn = 0.0f;
+	// floods: mud 0..1 (the rivers greenish-brown), flow (how fast they run, 1 normal)
+	float mud = 0.0f, flow = 1.0f;
+	// a harsh winter's cold: the waterfalls frozen, 0..1
+	float fallsFrozen = 0.0f;
+	// clocks that run with the water (seconds, wrapped at 3600): the rivers' (faster in a flood)
+	// and the waterfalls' (stopped when frozen), so a change of speed never jumps the patterns
+	float riverClock = 0.0f, fallClock = 0.0f;
 };
 extern EnvironmentView g_environment;
 // how much water the waterfalls carry (their look and their sound): 1 as the map has it (and
@@ -123,8 +133,9 @@ inline float WaterfallFlow(const EnvironmentView& v)
 {
 	if (!v.active)
 		return 1.0f;
-	const float f = 1.0f + 0.6f * v.waterRise + 0.4f * v.rain;
-	return f < 0.1f ? 0.1f : f > 2.0f ? 2.0f : f;
+	float f = 1.0f + 0.6f * v.waterRise + 0.4f * v.rain;
+	f = f < 0.1f ? 0.1f : f > 2.0f ? 2.0f : f;
+	return f * (1.0f - v.fallsFrozen); // frozen: no water falls (and none is heard)
 }
 
 // The night's shorter sight: away from light, sight ranges are cut to `factor` of themselves; a
