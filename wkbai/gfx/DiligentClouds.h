@@ -44,7 +44,8 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 
 // A weather's clouds: the cover (0-1), the layer's base altitude and thickness, how flat (stratus
 // 0-1) and how stormy (towers, anvils, dark bases 0-1), the density, the share of the sunlight
-// their shadows take, the light on them (1 a fair day's)
-struct CloudPreset { float cover, base, thickness, stratus, storm, density, shadow, light; };
+// their shadows take, the light on them (1 a fair day's); the high clouds: cirrus and altocumulus
+// (0-1), and the altocumulus' form (0 floccus: scattered tufts, 1 stratiformis: a sheet of cells)
+struct CloudPreset { float cover, base, thickness, stratus, storm, density, shadow, light, cirrus, alto, altoSheet; };
 constexpr int CLOUD_WEATHER_COUNT = 10; // as the seasons' weather kinds (EnvWeather)
 extern const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT];

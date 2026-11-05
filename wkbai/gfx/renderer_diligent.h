@@ -133,7 +133,7 @@ struct DiligentGfx : IRenderer
 		// the weather's; cloudWeatherKind: the seasons' weather kind when it drives the clouds (else
 		// -1: RenderSettings::cloudWeather); its lightning (cloudFlashOverride >= 0: the weather's
 		// flash strength and cloudFlash's position set by it, else the clouds' own flashes)
-		struct CloudPresetState { float cover = 0.45f, base = 230, thickness = 150, stratus = 0, storm = 0, density = 1, shadow = 0.62f, light = 1; } cloudPreset;
+		struct CloudPresetState { float cover = 0.45f, base = 230, thickness = 150, stratus = 0, storm = 0, density = 1, shadow = 0.62f, light = 1, cirrus = 0, alto = 0, altoSheet = 0; } cloudPreset;
 		uint64_t cloudPresetTicks = 0;
 		int cloudWeatherKind = -1;
 		float cloudFlash[4] = {}, cloudFlashOverride = -1, cloudFlashStart = -100, cloudFlashNext = 0;

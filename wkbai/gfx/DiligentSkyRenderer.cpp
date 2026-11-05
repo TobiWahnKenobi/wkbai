@@ -111,17 +111,27 @@ float Remap(float x, float a, float b, float c, float d)
 float CloudDensity(float3 p, float lod, float footprint, bool detail)
 {
 	float h = saturate((p.y - CloudShape.z) / CloudShape.w);
-	// the coverage (CloudCover, as the ground shadows'); a storm's anvils spread it out near the top
+	// the coverage (CloudCover, as the ground shadows')
 	const float stratus = CloudWeather.x, storm = CloudWeather.y;
 	float cover = CloudCover(p.xz, lod + 1);
-	cover = saturate(cover + storm * smoothstep(0.7, 0.92, h) * 0.45 * saturate(cover * 4));
+	float stormCore = 0;
+	if (storm > 0) {
+		// cumulonimbus: towers on the storm cells' cores up to the layer's top, their anvils
+		// spreading out wide under it; the ordinary cover only in the lowest third and around the
+		// cells (the ragged clouds under them)
+		float2 cb = StormCells(p.xz, h, max(lod - 1, 0)); // their noise is broader: a finer mip
+		float anvil = cb.y * smoothstep(0.8, 0.9, h);
+		float low = cover * (1 - smoothstep(0.2, 0.36, h)) * saturate(StormCell(p.xz, max(lod - 1, 0)) * 8 - 4.4); // near the cells only
+		cover = lerp(cover, max(max(cb.x, anvil), low), storm);
+		stormCore = cb.x * storm;
+	}
 	if (cover <= 0.002)
 		return 0;
-	// the tops: by region; a stratus sheet's level, a storm's towers to the layer's top
+	// the tops: by region; a stratus sheet's level; a storm's flat, at the layer's top (the anvils)
 	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
 	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
-	float profile = saturate(Remap(h, 0, lerp(0.07, 0.2, stratus), 0, 1)) * saturate(Remap(h, top * lerp(0.45, 0.7, stratus), top, 1, 0));
+	float profile = saturate(Remap(h, 0, lerp(0.07, 0.2, stratus), 0, 1)) * saturate(Remap(h, lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm), top, 1, 0));
 	if (profile <= 0)
 		return 0;
 	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
@@ -129,7 +139,8 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
 	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1));
-	shape = lerp(shape, 0.45 + 0.55 * shape, stratus) * profile; // sheets: the billows flattened
+	shape = lerp(shape, 0.45 + 0.55 * shape, stratus); // sheets: the billows flattened
+	shape = lerp(shape, 0.3 + 0.7 * shape, stormCore * stormCore) * profile; // the towers' middles solid
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
 	if (!detail || c <= 0)
 		return c * 1.6 * CloudWeather.z;
@@ -157,7 +168,9 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float base = CloudShape.z, top = CloudShape.z + CloudShape.w;
 	if (ro.y > base || rd.y <= 0.002)
 		return float4(0, 0, 0, 1); // above the base (zoomed out): the shadows only
-	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + 1800);
+	// at most 1800 units of the ray in the layer; a storm's 6000, so that the cumulonimbus'
+	// towers show to their anvils towards the horizon
+	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, CloudWeather.y));
 	if (t1 <= t0 || t0 > 9000)
 		return float4(0, 0, 0, 1);
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
@@ -214,6 +227,57 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// far clouds fade into the horizon's haze
 	float fade = exp(-t0 / 5000);
 	return float4(light * fade, lerp(1, T, fade));
+}
+
+// The high clouds above the cumulus layer, as thin textured layers (cheap: a few samples a pixel
+// in the sky's own pass, at the full size): cirrus at 1600 units, fibres stretched along the wind
+// and curled by a slow warp; altocumulus at 800, small rounded tufts (floccus) or a sheet of
+// cells (stratiformis), lit brighter at their thin edges and towards the sun.
+// colour: the sky behind; ro, rd: the camera and the view (up).
+float3 HighClouds(float3 ro, float3 rd, float3 colour)
+{
+	if (rd.y <= 0.01 || CloudHigh.x + CloudHigh.y <= 0.001)
+		return colour;
+	float3 sun = normalize(CloudSun.xyz);
+	float forward = HenyeyGreenstein(dot(rd, sun), 0.6) * 12.566371; // 1: as much as to the side
+	float3 ambient = lerp(CloudSkyUp.rgb, CloudSkyHorizon.rgb, 0.3);
+	float3 sunLight = CloudSunColour.rgb * CloudWeather.w;
+	const float2 wind = float2(0.948683, 0.316228); // as the cumulus' drift (6, 2)
+	const float2 across = float2(-wind.y, wind.x);
+	float grazing = 1 / max(rd.y, 0.08); // the pixel's footprint stretched towards the horizon
+	if (CloudHigh.x > 0) {
+		float t = (1600 - ro.y) / rd.y;
+		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 9;
+		float fp = t * 0.0012 * grazing; // the pixel's size there
+		float mask = cloudNoise.SampleLevel(cloudNoiseSampler, p / 7000 + float2(0.31, 0.77), log2(max(fp * 256 / 7000, 1))).r;
+		float warp = cloudNoise.SampleLevel(cloudNoiseSampler, p / 9000 + float2(0.6, 0.1), log2(max(fp * 256 / 9000, 1))).g - 0.5;
+		float2 f = float2(dot(p, wind), dot(p, across) + warp * 400);
+		// the fibres: ridges of noise stretched along the wind (thin bright lines where it crosses
+		// its middle), a finer set over them
+		float n1 = cloudNoise.SampleLevel(cloudNoiseSampler, f / float2(9000, 500), log2(max(fp * 256 / 500, 1))).g;
+		float n2 = cloudNoise.SampleLevel(cloudNoiseSampler, f / float2(3500, 160) + 0.5, log2(max(fp * 256 / 160, 1))).g;
+		float fib = pow(saturate(1 - abs(n1 - 0.5) * 5), 2) * 0.7 + pow(saturate(1 - abs(n2 - 0.5) * 4), 3) * 0.45;
+		float d = saturate((mask - (0.72 - CloudHigh.x * 0.4)) * 6) * saturate(fib);
+		float a = d * 0.6 * saturate(rd.y * 8) * exp(-t / 14000);
+		colour = lerp(colour, sunLight * (0.7 + 0.45 * forward) + ambient * 0.55, a);
+	}
+	if (CloudHigh.y > 0) {
+		float t = (800 - ro.y) / rd.y;
+		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 7;
+		float fp = t * 0.0012 * grazing;
+		float sheet = CloudHigh.z;
+		// where: patches (floccus) or a broad sheet (stratiformis)
+		float cov = cloudNoise.SampleLevel(cloudNoiseSampler, p / 4200 + float2(0.13, 0.42), log2(max(fp * 256 / 4200, 1))).r;
+		float mask = saturate((cov - (0.72 - CloudHigh.y * 0.4)) * lerp(8, 5, sheet));
+		// the elements: Worley cells of the shape noise (about 80 units across), ragged by smaller ones
+		float4 s = cloudShape.SampleLevel(cloud3DSampler, float3(p / 640, 0.37), max(log2(fp * 64 / 640), 0));
+		float cell = s.b * 0.7 + s.a * 0.3;
+		float d = saturate((cell - lerp(0.5, 0.4, sheet) - 0.12 * (1 - mask)) * 4) * mask; // smaller towards the edges
+		float a = saturate(d * 1.4) * 0.9 * saturate(rd.y * 8) * exp(-t / 9000);
+		float3 c = sunLight * (0.5 + 0.5 * (1 - d) * forward) + ambient * lerp(0.75, 0.45, d);
+		colour = lerp(colour, c, a);
+	}
+	return colour;
 }
 
 // A physical sky (with the volumetric clouds, instead of the sky box, whose painted clouds
@@ -279,6 +343,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		if (SkyFlags.y != 0) { // the volumetric clouds: the physical sky
 			float3 sun = dot(CloudSun.xyz, CloudSun.xyz) > 0.01 ? normalize(CloudSun.xyz) : float3(0.5, 0.8, 0.3);
 			tex = PhysicalSky(normalize(d), sun);
+			tex = HighClouds(FogCamera.xyz, normalize(d), tex);
 		}
 		else if (c >= max(abs(a), abs(b)))
 			tex = skyTop.SampleLevel(skySampler, float2(0.5 + 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;

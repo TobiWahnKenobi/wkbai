@@ -37,6 +37,9 @@ cbuffer CloudBuffer
 	// anvils, dark bases), z density, w the light on the clouds
 	float4 CloudWeather;
 	float4 CloudFlash;      // lightning inside the clouds: its position, w its strength now
+	// the high clouds (the sky's pass, HighClouds): x cirrus, y altocumulus, z the altocumulus'
+	// form (0 floccus: scattered tufts, 1 stratiformis: a sheet of cells)
+	float4 CloudHigh;
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
@@ -52,7 +55,27 @@ float CloudCover(float2 xz, float lod)
 	float b = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.x + CloudWind.xy, lod).r;
 	float d = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.y + CloudWind.zw, lod).g;
 	float n = b * 0.85 + d * 0.15;
-	return saturate((n - (1 - CloudShape.x) + CloudShape.y) / (2.5 * CloudShape.y));
+	// no cover: none at all (the soft ramp would leave the noise's highest peaks)
+	return saturate((n - (1 - CloudShape.x) + CloudShape.y) / (2.5 * CloudShape.y)) * saturate(CloudShape.x * 12);
+}
+
+// A storm's cumulonimbus (CloudWeather.y): a few big cells of a broader noise of their own, a
+// handful per 4 km square; the noise's value there, 0.66 and over a tower's core
+float StormCell(float2 xz, float lod)
+{
+	return cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.3) + CloudWind.xy + float2(0.53, 0.19), lod).r;
+}
+
+// x: the towers (h: the height in the layer, 0-1; a little wider at the middle, narrower up,
+// their sides bulging by a noise that changes with the height: billows, not a cylinder), y: the
+// anvils' reach (wider than the towers, carried downwind with height)
+float2 StormCells(float2 xz, float h, float lod)
+{
+	float n = StormCell(xz, lod);
+	float bulge = cloudNoise.SampleLevel(cloudNoiseSampler, xz / 1600 + float2(h * 0.09, h * 0.05), lod).g - 0.5;
+	float tower = saturate((n - (0.65 + 0.015 * h - 0.02 * sin(saturate(h) * 3.14159) + bulge * 0.06)) / 0.12);
+	float a = StormCell(xz - float2(0.948683, 0.316228) * (saturate(h - 0.7) * 1200), lod);
+	return float2(tower, saturate((a - 0.625) / 0.05)); // only the strong cells' anvils
 }
 
 // The light the clouds leave at a point: the sun's ray through it crosses the cloud layer's
@@ -61,7 +84,13 @@ float CloudShadow(float3 p)
 {
 	float h = CloudShape.z + CloudShape.w * 0.35;
 	float t = max(h - p.y, 0) / max(CloudSun.y, 0.2);
-	return 1 - CloudSunColour.w * CloudCover(p.xz + CloudSun.xz * t, 1.5);
+	float2 xz = p.xz + CloudSun.xz * t;
+	float c = CloudCover(xz, 1.5);
+	if (CloudWeather.y > 0) { // the storm's towers and anvils, and the low clouds under them
+		float2 cb = StormCells(xz, 0.9, 1.5);
+		c = lerp(c, max(max(cb.x, cb.y * 0.75), c * 0.6), CloudWeather.y);
+	}
+	return 1 - CloudSunColour.w * c;
 }
 
 // How much of the sky a point sees (0-1). Ground: the map's value. Models (model true): from
@@ -386,7 +415,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 192;
+	cb.Size = 208;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -479,17 +508,19 @@ void CreateCloudResources(DiligentGfx* gfx)
 // The cloud presets per weather (in the order of the seasons' weather, EnvWeather: clear,
 // cloudy, rain, heavy rain, thunderstorm, fog, snow, blizzard, heatwave, drought)
 const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
-	//  cover  base  thick  stratus storm density shadow light
-	{ 0.32f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f }, // clear: a few fair-weather cumulus
-	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f }, // cloudy: broken cumulus
-	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f }, // rain: low, grey, flatter
-	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.5f, 0.85f, 0.76f }, // heavy rain: nimbostratus
-	{ 0.58f, 190, 520, 0.05f, 1.0f, 1.8f, 0.86f, 0.75f }, // thunderstorm: towers with anvils, dark bases
-	{ 0.90f, 200, 70, 0.9f, 0.0f, 0.8f, 0.70f, 1.18f }, // fog: a low flat sheet
-	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f }, // snow: pale overcast
-	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.4f, 0.82f, 0.82f }, // blizzard
-	{ 0.16f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f }, // heatwave: nearly clear, high
-	{ 0.22f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f }, // drought
+	//  cover  base  thick  stratus storm density shadow light  cirrus alto  alto's sheet
+	{ 0.00f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f, 0.0f, 0.0f, 0.0f }, // clear: none at all
+	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.0f, 0.0f, 0.0f }, // cloudy: broken cumulus
+	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f, 0.0f, 0.0f, 0.0f }, // rain: low, grey, flatter
+	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.5f, 0.85f, 0.76f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
+	// thunderstorm: cumulonimbus (StormCells: towers to the top, flat anvils spreading under it,
+	// dark bases) over ragged low clouds
+	{ 0.36f, 180, 650, 0.05f, 1.0f, 1.8f, 0.86f, 0.9f, 0.0f, 0.0f, 0.0f },
+	{ 0.90f, 200, 70, 0.9f, 0.0f, 0.8f, 0.70f, 1.18f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
+	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f, 0.0f, 0.0f, 0.0f }, // snow: pale overcast
+	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.4f, 0.82f, 0.82f, 0.0f, 0.0f, 0.0f }, // blizzard
+	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.40f, 0.35f, 0.0f }, // heatwave: cirrus, altocumulus floccus
+	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.30f, 0.60f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
 
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
@@ -523,7 +554,8 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		env.cloudPresetTicks = now;
 		float* cur = &env.cloudPreset.cover;
 		const float* to = &target.cover;
-		for (int i = 0; i < 8; i++)
+		static_assert(sizeof(CloudPreset) == 11 * sizeof(float) && sizeof(env.cloudPreset) == sizeof(CloudPreset), "the presets' fields");
+		for (int i = 0; i < 11; i++)
 			cur[i] += (to[i] - cur[i]) * k;
 		// lightning inside the storm's clouds (with the seasons' weather, its strikes): flashes
 		// every 4 to 14 seconds, flickering out over a quarter of a second
@@ -561,7 +593,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
 	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
-	const float data[48] = {
+	const float data[52] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -574,7 +606,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		(float)env.terrainGrid[0], (float)env.terrainGrid[1], (float)env.terrainGrid[2], DiligentGfx::ShadowEnvironment::SKY_OCC_TOP,
 		preset.stratus, preset.storm, preset.density, preset.light,
 		env.cloudFlash[0], env.cloudFlash[1], env.cloudFlash[2], env.cloudFlash[3],
+		preset.cirrus, preset.alto, preset.altoSheet, 0.0f,
 	};
+	static_assert(sizeof(data) <= 208, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }
