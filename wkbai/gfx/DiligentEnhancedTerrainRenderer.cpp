@@ -424,11 +424,22 @@ struct LAKE_OUTPUT
 	float3 Normal : NORMAL;  // High water: the waves' normal (else 0)
 	float Crest : TEXCOORD1; // High water: how near the top of a wave (0-1)
 	float2 Base : TEXCOORD2; // the point on the still water (High water's waves move it)
+	float Flood : TEXCOORD3; // 1 on the flooded land's water (Impl::addFloodWater), else 0
 };
+
+// wkbai's floods: the flooded land's water fades out over its last 0.5 units of depth (a soft
+// shore instead of the tiles' squares) and in as the water rises
+float FloodShore(float flood, float depth)
+{
+	return flood > 0.5 ? smoothstep(0, 0.5, depth) * saturate((WeatherParams.z - 0.05) * 4) : 1;
+}
 
 LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 {
 	LAKE_OUTPUT output;
+	// (the flooded land's quads carry their depth plus 1000)
+	output.Flood = Depth > 500 ? 1 : 0;
+	Depth -= output.Flood * 1000;
 	Pos = WaterLevelPos(Pos);
 	Depth += WeatherParams.z;
 	output.Pos = mul(float4(Pos, 1), Transform);
@@ -615,7 +626,8 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 	float4 r0, r1;
 	RegionsAtTexel(pos.xz, r0, r1);
 	GerstnerWaves(pos.xz, depth, FlowAtTexel(pos.xz), SeaAtTexel(pos.xz), r0, r1, WaterLod(pos), offset, n, crest);
-	pos += offset;
+	o.Flood = p[0].Flood;
+	pos += offset * (1 - 0.7 * o.Flood); // the shallow flood: hardly any waves
 	o.Pos = mul(float4(pos, 1), Transform);
 	o.World = pos;
 	o.Depth = depth;
@@ -770,12 +782,12 @@ float4 WaterReflection(float4 svpos, float3 world, float3 r)
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
-	if (WaterSkyUp.w != 0)
+	if (WaterSkyUp.w != 0 || input.Flood > 0.5)
 		input.Depth = max(input.World.y - SmoothHeight(input.World.xz), 0);
-	if (WeatherParams.z < 0 && input.World.y < SmoothHeight(input.World.xz))
+	if ((WeatherParams.z < 0 || input.Flood > 0.5) && input.World.y < SmoothHeight(input.World.xz))
 		discard;
 	if (WaterParams.x == 0)
-		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a);
+		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth));
 	float2 uv = input.World.xz * WaterParams.y;
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
@@ -835,6 +847,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		foam = max(foam, saturate((slope.x + slope.y - 2) * 3 - 0.6) * rush * rush * 0.35);
 		// the swell breaking: foam on its crests in the last 1.2 units of depth
 		foam = max(foam, saturate((sin(swellPhase) - 0.7) * 4) * saturate(1 - input.Depth / 0.8) * swell * 0.7);
+		foam *= 1 - 0.85 * input.Flood; // still water over the fields: no surf ring at its edge
 		// open water darker and bluer farther out
 		tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10) * WaterFlowParams.x);
 	}
@@ -848,6 +861,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		c = lerp(c, seen.rgb, share);
 		alpha = max(alpha, share);
 	}
+	alpha *= FloodShore(input.Flood, input.Depth);
 	if (WaterSkyUp.w != 0)
 		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
 	return IceOver(float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
@@ -876,8 +890,10 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 {
 	float2 base = input.Base;
 	float depth = input.Depth;
-	if (WaterMode.y != 0) // Medium: the flat surface's depth from the terrain's smooth surface
+	if (WaterMode.y != 0 || input.Flood > 0.5) // Medium (and the flood): the depth from the terrain's smooth surface
 		depth = max(input.World.y - SmoothHeight(base), 0);
+	if (input.Flood > 0.5 && input.World.y < SmoothHeight(base) - 0.05)
+		discard;
 	float4 f = flowTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
 	float2 fdir = f.xy * 2 - 1;
 	float river = f.a;
@@ -985,7 +1001,11 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float shoreFoam = max(surf * smoothstep(0.1, 0.7, noise), swash * smoothstep(0.0, 0.6, noise)) * (1 - 0.6 * river);
 	// the rivers' foam: a thin, broken edge along the banks, carried with the current
 	float bankNoise = RiverNoise(float2(s0, rf.y) * 0.3) * v0 + RiverNoise(float2(s1, rf.y) * 0.3 + 0.5) * (1 - v0);
-	float bankFoam = saturate(saturate(1 - rf.y / 1.2) * 1.4 - bankNoise * 1.2) * 0.55;
+	// (in a flood the river has risen over its banks: the river field's distance to them is the
+	// old bank's, so the foam keeps to the new waterline by the depth instead; it had drawn a pale
+	// band over the whole flooded strip)
+	float bankEdge = lerp(saturate(1 - rf.y / 1.2), saturate(1 - depth / 0.5), saturate(WeatherParams.z / 0.3));
+	float bankFoam = saturate(bankEdge * 1.4 - bankNoise * 1.2) * 0.55;
 	// small white crests on the ripples where the river runs tight, carried with them
 	// (the user: the ripple map's crests made "an ugly repeating pattern"). Each is its own: the
 	// river's (along, across) coordinates in cells of 2.4 x 1.8 units, carried with the current;
@@ -1015,7 +1035,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	}
 	riverCrest *= tight * saturate(rf.y / 0.8);
 	float riverFoam = max(bankFoam, riverCrest) * river;
-	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9;
+	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9 * (1 - 0.85 * input.Flood);
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
 	float4 seen = WaterReflection(input.Pos, input.World, rr);
@@ -1025,7 +1045,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7);
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
-	float alpha = saturate(clear + mirror * 0.25 + glint + foam);
+	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
 	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
 }
 
@@ -1061,7 +1081,11 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	// each blade ends at its own distance, from 55% of the grass distance to all of it, and
 	// shrinks over the last 40% of its reach: the meadow thins out instead of ending in a line
 	float reach = GrassParams.y * (0.55 + 0.45 * frac(sin(dot(Root.xz, float2(12.9898, 78.233))) * 43758.5453));
-	float grow = saturate((reach - dist) / (reach * 0.4)) * step(Colour.a, GrassLook.x);
+	// wkbai's snow: the blades thin out as the cover rises (none from 0.7 up, the ground fully
+	// white) and are buried where the snow lies (its patches, on the flatter ground)
+	float thin = saturate(1 - WeatherParams.x * 1.43);
+	float buried = SnowShare(Root, float3(0, 1, 0));
+	float grow = saturate((reach - dist) / (reach * 0.4)) * step(Colour.a, GrassLook.x * thin) * (thin > 0 ? 1 : 0) * saturate(1 - buried * 1.6);
 	float height = YawHeight.y * grow * GrassLook.y;
 	float2 dir = float2(cos(YawHeight.x), sin(YawHeight.x));
 	float2 side = float2(-dir.y, dir.x);
@@ -1142,6 +1166,9 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 	float lum = 0;
 	// lying snow (wkbai's weather) hides the texture's bumps
 	nrm = lerp(nrm, float3(0, 1, 0), SnowShare(input.FragPos, normalize(input.Norm)));
+	// the weather's ground colour (snow, wet, dry) before either light path: the sky light's
+	// branch below returns early
+	tex.rgb = WeatherGround(tex.rgb, input.FragPos, normalize(input.Norm));
 
 	// The sky light (RenderSettings::skyGI, DiligentClouds): the sun's light with its shadows
 	// (the clouds' and static shadows only on it, deeper than the original's), the sky box's
@@ -1204,7 +1231,6 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		lum = clamp(lum, 0, 1);
 	}
 	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
-	tex.rgb = WeatherGround(tex.rgb, input.FragPos, normalize(vertexNormal));
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 lc = float4(light, 1) * input.Color * tex;
 	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
@@ -1270,6 +1296,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 		uint32_t grassFirst = 0, grassCount = 0; // its blades in grassBuffer
 		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
 		std::vector<uint32_t> lakeIndices;
+		std::vector<uint32_t> floodIndices; // the water over its land that floods (drawn while wkbai's floods rise)
 	};
 	std::vector<Chunk> chunks;
 	std::vector<TexturePair> texturePairs;
@@ -1302,6 +1329,38 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 
 // Texels of the blob shadow texture per world unit (at most 4096 per side)
 static constexpr float BLOB_TEXELS_PER_UNIT = 2.0f;
+
+// wkbai's floods: a water quad at the normal water level over every tile of the land that floods
+// (FindFloodLand, as the server's), into its chunk's floodIndices. The vertex shader raises it
+// with the rivers' water (WaterLevelPos), so it spreads from them as their own surface, in their
+// shader; its depth carries +1000 to mark it (VS_Lake's Flood). The corners take the level of
+// the water next to them (WaterLevelAtCorner), so the flood meets the river without a step.
+template <class V, class C>
+static void AddFloodWater(const Terrain* terrain, std::vector<V>& vertices, std::vector<C>& chunks, int chunkSize)
+{
+	constexpr float tilesize = 5.0f;
+	const int chunksX = ((int)terrain->width + chunkSize - 1) / chunkSize;
+	for (C& chunk : chunks)
+		chunk.floodIndices.clear();
+	for (const FloodLand& f : FindFloodLand(terrain)) {
+		const int x = f.x + (int)terrain->edge, z = f.z + (int)terrain->edge;
+		const size_t c = (size_t)(z / chunkSize) * chunksX + (size_t)(x / chunkSize);
+		if (c >= chunks.size())
+			continue;
+		const float lx = f.x * tilesize, lz = f.z * tilesize;
+		const float w00 = WaterLevelAtCorner(terrain, x, z, f.water), w10 = WaterLevelAtCorner(terrain, x + 1, z, f.water);
+		const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, f.water), w01 = WaterLevelAtCorner(terrain, x, z + 1, f.water);
+		const uint32_t v0 = (uint32_t)vertices.size();
+		vertices.insert(vertices.end(), {
+			V{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) + 1000.0f },
+			V{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) + 1000.0f },
+			V{ Vector3(lx + tilesize, w11, lz + tilesize), w11 - terrain->getVertex(x + 1, z + 1) + 1000.0f },
+			V{ Vector3(lx, w01, lz + tilesize), w01 - terrain->getVertex(x, z + 1) + 1000.0f } });
+		for (const int& k : { 0,3,1,1,3,2 })
+			chunks[c].floodIndices.push_back(v0 + k);
+		chunks[c].high.y = std::max(chunks[c].high.y, std::max({ w00, w10, w11, w01 }) + 2.5f); // the highest flood
+	}
+}
 
 // A tileable map of ripple slopes for the water: smoothed random heights, their slope in x and
 // z in red and green (0.5 = flat). It stands in for the original's grid of random normals.
@@ -1816,6 +1875,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
 	_impl->buildGrass(device, terrain, TerrainGrassBuilder::BuildDensity(g_renderSettings.grassDensity));
+	AddFloodWater(terrain, lakeVertices, _impl->chunks, CHUNK);
 	if (!lakeVertices.empty()) {
 		BufferDesc lakeDesc;
 		lakeDesc.Name = "Terrain water vertices";
@@ -2056,6 +2116,7 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 					chunk.high.y = std::max({ chunk.high.y, wl, w00, w10, w11, w01 });
 				}
 		}
+	AddFloodWater(terrain, lakeVertices, _impl->chunks, CHUNK);
 	_impl->lakeVertexBuffer.Release();
 	if (!lakeVertices.empty()) {
 		BufferDesc lakeDesc;
@@ -2326,6 +2387,9 @@ void DiligentEnhancedTerrainRenderer::render()
 	for (auto& list : _impl->frameIndices)
 		list.clear();
 	_impl->frameLakeIndices.clear();
+	// wkbai's floods: the flooded land's water (AddFloodWater) instead of EnvironmentView's sheet
+	const bool flooding = g_environment.active && g_environment.waterRise > 0.05f;
+	g_terrainDrawsFlood = true;
 	std::vector<const Impl::Chunk*> grassChunks;
 	for (const Impl::Chunk& chunk : _impl->chunks) {
 		if (!visible(chunk.low, chunk.high))
@@ -2342,6 +2406,8 @@ void DiligentEnhancedTerrainRenderer::render()
 		for (const auto& [index, list] : chunk.indicesPerTexture)
 			_impl->frameIndices[index].insert(_impl->frameIndices[index].end(), list.begin(), list.end());
 		_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.lakeIndices.begin(), chunk.lakeIndices.end());
+		if (flooding)
+			_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.floodIndices.begin(), chunk.floodIndices.end());
 	}
 
 	// Draws in blocks that fit in the stream buffer

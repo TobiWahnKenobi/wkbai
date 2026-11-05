@@ -7,6 +7,9 @@
 // whether the terrain is drawn tessellated this frame (the setting is on and the GPU can):
 // the client draws objects on the smooth surface then (Terrain::getSmoothHeight)
 extern bool g_terrainTessellationActive;
+// the enhanced terrain renderer drew wkbai's flood water this frame in its water shader
+// (EnvironmentView's DrawGroundWeather then draws no flat sheet of its own; it clears this)
+extern bool g_terrainDrawsFlood;
 
 // Render and camera settings that can change while the game runs (the temporary settings
 // window, F10). Loaded from wkconfig.json at startup; the renderers read them every frame.
