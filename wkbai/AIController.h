@@ -84,8 +84,9 @@ struct AIController {
 	float grudgeTime = -1.0f;
 	float nextAdaptScan = 0.0f, nextAdaptMix = 0.0f;
 	int mixChanges = 0;
-	// waves walking to their rally point before they attack together
-	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
+	// waves walking to their rally point before they attack together; wait: the longest they wait
+	// for the slow ones (the walk of the farthest at 2 m/s, and 30 s)
+	struct GatheringWave { uint32_t army, target; Vector3 rally; float since, wait; };
 	std::vector<GatheringWave> gatheringWaves;
 	// waves' formations marching in Column to 50 m short of their target, then in Line (Wedge:
 	// heavy cavalry) before they charge; lined: the game time they were put in Line, else < 0
@@ -170,6 +171,9 @@ struct AIController {
 	// the Lua AI's name and its census() text (the AI test), empty without one
 	std::string luaCensus();
 	ServerGameObject* launchWave(const std::vector<ServerGameObject*>& members, ServerGameObject* target, ServerGameObject* home);
+	// walks the units to a point as the original's scripts do: the game set's "Move To" at a
+	// marker there; returns whether they were sent
+	static bool moveUnitsTo(const std::vector<ServerGameObject*>& units, ServerGameObject* player, const Vector3& point);
 	void advancedUpdate();
 	// the enemy settlement worth attacking most for what guards it, among those the wave would
 	// outmatch (1.4 times their strength; any, if anyway), as the building to attack; null: none

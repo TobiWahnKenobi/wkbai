@@ -176,7 +176,8 @@ void AIController::weatherHold(ServerGameObject* u, int why, float until, const 
 	h.until = until;
 	const GameSet* gs = Server::instance->gameSet.get();
 	if (moveTo && g_w.moveCommand >= 0) {
-		// (the player's "Move" command: the game set has no "Move To" order)
+		// (the player's "Move" command, to a point: the game set's "Move To" follows an object,
+		// and each unit here goes somewhere of its own)
 		gs->commands[g_w.moveCommand].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, *moveTo);
 		h.sent = Server::instance->timeManager.currentTime;
 	}

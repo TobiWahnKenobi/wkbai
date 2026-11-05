@@ -1477,19 +1477,28 @@ void AIController::startLuaAI(const std::string& name)
 		ServerGameObject* p = player();
 		const GameSet* gs = Server::instance->gameSet.get();
 		const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
-		const int moveOrder = gs->orders.names.getIndex("Move To");
-		if (!p || !armyBp || moveOrder < 0)
+		if (!p || !armyBp)
 			return sol::nullopt;
 		ServerGameObject* army = armyId ? Server::instance->findObject(*armyId) : nullptr;
 		if (!army || army->deleted || army->getPlayer() != p || army->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
 			army = Server::instance->spawnObject(armyBp, p, Vector3(x, 0, z), Vector3(0, 0, 0));
 		if (!army)
 			return sol::nullopt;
-		for (ServerGameObject* u : Objects(units)) {
+		const std::vector<ServerGameObject*> held = Objects(units);
+		if (getenv("WKB_TRACE_GATHER")) {
+			size_t in = 0, near = 0;
+			for (const auto& [type, children] : army->children)
+				for (CommonGameObject* c : children)
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+						in++;
+						near += (c->position - Vector3(x, 0, z)).sqlen2xz() < 40.0f * 40.0f;
+					}
+			printf("HOLD player %u army %u at (%.0f, %.0f): %zu of %zu held within 40 m, %zu more\n", p->id, army->id, x, z, near, in, held.size());
+		}
+		for (ServerGameObject* u : held)
 			if (u->getParent() != army)
 				u->setParent(army);
-			u->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, Vector3(x, 0, z));
-		}
+		AIController::moveUnitsTo(held, p, Vector3(x, 0, z));
 		return army->id;
 	});
 	// the war layer (AIController::warUpdate): defence by soldiers everywhere, waves, striking
