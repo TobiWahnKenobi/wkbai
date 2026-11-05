@@ -180,10 +180,10 @@ namespace Pathfinding {
     // Tiles each direction of the search may visit: a long or impossible path stopped there took
     // up to 0.4 s on the large maps; the unit then goes to the tile nearest to the end so far
     constexpr int MAX_SEARCH_STEPS = 20000;
-    // the last DoPathfinding stopped at MAX_SEARCH_STEPS (its path ends short of the end)
-    inline bool g_lastSearchCut = false;
-    // the tiles the last DoPathfinding took from its open lists (both directions; profiling)
-    inline int g_lastSearchSteps = 0;
+    // the last DoPathfinding of this thread stopped at MAX_SEARCH_STEPS (its path ends short of the end)
+    inline thread_local bool g_lastSearchCut = false;
+    // the tiles the last DoPathfinding of this thread took from its open lists (both directions; profiling)
+    inline thread_local int g_lastSearchSteps = 0;
 
     template<typename Predicate, typename Heuristic>
     std::vector<PFPos> DoPathfinding(PFPos start, PFPos end, Predicate pred, Heuristic heuristic, int width = 1024, int height = 1024) {
@@ -194,8 +194,9 @@ namespace Pathfinding {
 
         //return astar.get();
 
-        // kept between searches: their arrays are allocated once
-        static AStarPathfinder astar1, astar2;
+        // kept between searches: their arrays are allocated once per thread (the server's
+        // searches run on worker threads: MovementController::runPathSearches)
+        static thread_local AStarPathfinder astar1, astar2;
         astar1.begin(start, end, width, height);
         astar2.begin(end, start, width, height);
 

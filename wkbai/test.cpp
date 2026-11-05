@@ -3262,6 +3262,10 @@ void Test_MassOrder()
 	std::vector<double> sortedMs; // the steps after the order's
 	for (int i = 0; i < seconds * 50; i++) {
 		const double pathBefore = g_pathfindingMs;
+		extern double g_pathBatchMs[5];
+		extern uint64_t g_pathBatchRequests, g_pathBatchSearches;
+		const double batch[5] = { g_pathBatchMs[0], g_pathBatchMs[1], g_pathBatchMs[2], g_pathBatchMs[3], g_pathBatchMs[4] };
+		const uint64_t batchRequests = g_pathBatchRequests, batchSearches = g_pathBatchSearches;
 		const uint64_t t0 = SDL_GetPerformanceCounter();
 		step();
 		const double ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
@@ -3273,7 +3277,9 @@ void Test_MassOrder()
 			sortedMs.push_back(ms);
 		}
 		if (i < 5)
-			printf("MASSORDER step %d: %.2f ms, path finding %.2f ms\n", i, ms, path);
+			printf("MASSORDER step %d: %.2f ms, path finding %.2f ms (end of step: %llu requests, %llu searches; fill %.2f, lines %.2f, fields %.2f, search %.2f, apply %.2f ms)\n", i, ms, path,
+				(unsigned long long)(g_pathBatchRequests - batchRequests), (unsigned long long)(g_pathBatchSearches - batchSearches),
+				g_pathBatchMs[0] - batch[0], g_pathBatchMs[1] - batch[1], g_pathBatchMs[2] - batch[2], g_pathBatchMs[3] - batch[3], g_pathBatchMs[4] - batch[4]);
 		if ((i + 1) % 1000 == 0) {
 			int alive = 0, moving = 0;
 			float sum = 0, nearest = 1e9f;

@@ -2755,9 +2755,15 @@ void Server::simulate()
 				(double)p.movers / p.steps, p.mvPosition / p.steps, p.mvUpdate / p.steps, p.mvSpeed / p.steps, p.mvController / p.steps);
 		extern double g_pathfindingMs;
 		extern uint64_t g_pathfindingSearches;
+		extern uint64_t g_pathBatchRequests, g_pathBatchSearches, g_pathPoolRuns;
+		static uint64_t lastRequests = 0, lastSearches = 0, lastPoolRuns = 0;
 		if (p.lastPrint)
-			printf("SIMPROFILE   pathfinding %.2f ms per step, %llu searches, %.2f ms per search\n", g_pathfindingMs / p.steps,
-				(unsigned long long)g_pathfindingSearches, g_pathfindingSearches ? g_pathfindingMs / g_pathfindingSearches : 0.0);
+			printf("SIMPROFILE   pathfinding %.2f ms per step, %llu requests, %.2f ms per request; end of step: %llu requests, %llu searches, %llu parts on the threads\n", g_pathfindingMs / p.steps,
+				(unsigned long long)g_pathfindingSearches, g_pathfindingSearches ? g_pathfindingMs / g_pathfindingSearches : 0.0,
+				(unsigned long long)(g_pathBatchRequests - lastRequests), (unsigned long long)(g_pathBatchSearches - lastSearches), (unsigned long long)(g_pathPoolRuns - lastPoolRuns));
+		lastRequests = g_pathBatchRequests;
+		lastSearches = g_pathBatchSearches;
+		lastPoolRuns = g_pathPoolRuns;
 		if (p.lastPrint) {
 			std::vector<std::pair<double, std::string>> top;
 			for (const auto& [name, ms] : p.byOrder)
@@ -2978,6 +2984,11 @@ void Server::simulate()
 		}
 		if (obj->blueprint->removeWhenNotReferenced)
 			obj->removeIfNotReferenced();
+	}
+	// the step's path searches, on worker threads, their paths applied in the order asked for
+	{
+		SimTimer ordersTimer(g_simProfile.orders);
+		MovementController::runPathSearches();
 	}
 	freeDeletedObjects();
 }
