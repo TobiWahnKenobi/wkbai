@@ -59,11 +59,12 @@ float CloudCover(float2 xz, float lod)
 	return saturate((n - (1 - CloudShape.x) + CloudShape.y) / (2.5 * CloudShape.y)) * saturate(CloudShape.x * 12);
 }
 
-// A storm's cumulonimbus (CloudWeather.y): a few big cells of a broader noise of their own, a
-// handful per 4 km square; the noise's value there, 0.66 and over a tower's core
+// A storm's cumulonimbus (CloudWeather.y): a few huge cells of a much broader noise of their
+// own, about one per 3 km square, each about a kilometre across; the noise's value there, 0.65
+// and over a tower's core. lod: the cumulus cover's mip level (this noise is coarser).
 float StormCell(float2 xz, float lod)
 {
-	return cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.3) + CloudWind.xy + float2(0.53, 0.19), lod).r;
+	return cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.12) + CloudWind.xy + float2(0.53, 0.19), max(lod - 2, 0)).r;
 }
 
 // x: the towers (h: the height in the layer, 0-1; a little wider at the middle, narrower up,
@@ -72,9 +73,9 @@ float StormCell(float2 xz, float lod)
 float2 StormCells(float2 xz, float h, float lod)
 {
 	float n = StormCell(xz, lod);
-	float bulge = cloudNoise.SampleLevel(cloudNoiseSampler, xz / 1600 + float2(h * 0.09, h * 0.05), lod).g - 0.5;
+	float bulge = cloudNoise.SampleLevel(cloudNoiseSampler, xz / 3000 + float2(h * 0.09, h * 0.05), max(lod - 1, 0)).g - 0.5;
 	float tower = saturate((n - (0.65 + 0.015 * h - 0.02 * sin(saturate(h) * 3.14159) + bulge * 0.06)) / 0.12);
-	float a = StormCell(xz - float2(0.948683, 0.316228) * (saturate(h - 0.7) * 1200), lod);
+	float a = StormCell(xz - float2(0.948683, 0.316228) * (saturate(h - 0.7) * 2500), lod);
 	return float2(tower, saturate((a - 0.625) / 0.05)); // only the strong cells' anvils
 }
 
@@ -86,9 +87,9 @@ float CloudShadow(float3 p)
 	float t = max(h - p.y, 0) / max(CloudSun.y, 0.2);
 	float2 xz = p.xz + CloudSun.xz * t;
 	float c = CloudCover(xz, 1.5);
-	if (CloudWeather.y > 0) { // the storm's towers and anvils, and the low clouds under them
+	if (CloudWeather.y > 0) { // the storm's towers and anvils over its low deck
 		float2 cb = StormCells(xz, 0.9, 1.5);
-		c = lerp(c, max(max(cb.x, cb.y * 0.75), c * 0.6), CloudWeather.y);
+		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(c * 1.4)), CloudWeather.y); // the deck's thin parts shade too
 	}
 	return 1 - CloudSunColour.w * c;
 }
@@ -515,7 +516,7 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.5f, 0.85f, 0.76f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
 	// thunderstorm: cumulonimbus (StormCells: towers to the top, flat anvils spreading under it,
 	// dark bases) over ragged low clouds
-	{ 0.36f, 180, 650, 0.05f, 1.0f, 1.8f, 0.86f, 0.9f, 0.0f, 0.0f, 0.0f },
+	{ 0.60f, 170, 1300, 0.05f, 1.0f, 1.8f, 0.88f, 0.72f, 0.0f, 0.0f, 0.0f },
 	{ 0.90f, 200, 70, 0.9f, 0.0f, 0.8f, 0.70f, 1.18f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
 	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f, 0.0f, 0.0f, 0.0f }, // snow: pale overcast
 	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.4f, 0.82f, 0.82f, 0.0f, 0.0f, 0.0f }, // blizzard
@@ -569,7 +570,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 				const float a = (r & 1023) / 1023.0f * 6.2831853f, d = 150.0f + ((r >> 10) & 1023) / 1023.0f * 650.0f;
 				const Vector3 at = camera.position + camera.direction.normal() * 400.0f;
 				env.cloudFlash[0] = at.x + std::cos(a) * d;
-				env.cloudFlash[1] = env.cloudPreset.base + env.cloudPreset.thickness * 0.35f;
+				env.cloudFlash[1] = env.cloudPreset.base + std::min(env.cloudPreset.thickness * 0.35f, 150.0f); // in the low deck
 				env.cloudFlash[2] = at.z + std::sin(a) * d;
 				env.cloudFlashStart = t;
 				env.cloudFlashNext = t + 4.0f + ((r >> 20) & 1023) / 1023.0f * 10.0f;

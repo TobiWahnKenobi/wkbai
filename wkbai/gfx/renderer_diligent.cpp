@@ -698,6 +698,9 @@ struct DiligentRenderer : DiligentGfx
 		cc[1] = ((fogColor >> 8) & 255) / 255.0f;
 		cc[2] = (fogColor & 255) / 255.0f;
 		cc[3] = ((fogColor >> 24) & 255) / 255.0f;
+		if (shadows.hazeOn) // the physical sky's haze, following the weather (the last frame's)
+			for (int i = 0; i < 3; i++)
+				cc[i] = shadows.hazeColour[i];
 		// The original's fog (0x60A870): linear, ending at 0.95 x far clip - near clip (1),
 		// starting halfway there ("fogStart" changes that), so that geometry has faded out
 		// before it is clipped.

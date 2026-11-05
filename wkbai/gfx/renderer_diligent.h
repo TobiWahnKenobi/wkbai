@@ -109,6 +109,10 @@ struct DiligentGfx : IRenderer
 		// the physical sky is drawn instead of the sky box (with the volumetric clouds): skyLight
 		// is its, and the water reflects its colours, not the box's faces
 		bool physicalSky = false;
+		// the haze with the physical sky (DiligentSkyRenderer): the fog's colour instead of the
+		// map's, following the weather's clouds
+		bool hazeOn = false;
+		float hazeColour[3] = {};
 
 		// Dynamic clouds and the sky light (DiligentClouds; RenderSettings::dynamicClouds, skyGI):
 		// the cloud noise, the cloud constant buffer (cbuffer CloudBuffer), this frame's mode

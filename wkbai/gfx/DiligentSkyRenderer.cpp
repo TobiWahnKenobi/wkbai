@@ -114,16 +114,17 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	// the coverage (CloudCover, as the ground shadows')
 	const float stratus = CloudWeather.x, storm = CloudWeather.y;
 	float cover = CloudCover(p.xz, lod + 1);
-	float stormCore = 0;
+	float stormCore = 0, deck = 0;
 	if (storm > 0) {
 		// cumulonimbus: towers on the storm cells' cores up to the layer's top, their anvils
-		// spreading out wide under it; the ordinary cover only in the lowest third and around the
-		// cells (the ragged clouds under them)
-		float2 cb = StormCells(p.xz, h, max(lod - 1, 0)); // their noise is broader: a finer mip
+		// spreading out wide under it, over a dark low deck of the ordinary cover all around
+		// (the lowest sixth of the layer: a few hundred units, as a rain's)
+		float2 cb = StormCells(p.xz, h, lod);
 		float anvil = cb.y * smoothstep(0.8, 0.9, h);
-		float low = cover * (1 - smoothstep(0.2, 0.36, h)) * saturate(StormCell(p.xz, max(lod - 1, 0)) * 8 - 4.4); // near the cells only
+		float low = cover * (1 - smoothstep(0.1, 0.17, h));
 		cover = lerp(cover, max(max(cb.x, anvil), low), storm);
 		stormCore = cb.x * storm;
+		deck = storm * (1 - cb.x) * (1 - smoothstep(0.1, 0.2, h));
 	}
 	if (cover <= 0.002)
 		return 0;
@@ -131,7 +132,10 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
 	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
-	float profile = saturate(Remap(h, 0, lerp(0.07, 0.2, stratus), 0, 1)) * saturate(Remap(h, lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm), top, 1, 0));
+	// the base: a 10-40 unit ramp (not a share of the layer: a tall storm layer's base went soft),
+	// raised and lowered a little by region (a ragged base)
+	float baseH = (topVar - 0.5) * 30 / CloudShape.w;
+	float profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / CloudShape.w, 0, 1)) *saturate(Remap(h, lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm), top, 1, 0));
 	if (profile <= 0)
 		return 0;
 	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
@@ -139,7 +143,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
 	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1));
-	shape = lerp(shape, 0.45 + 0.55 * shape, stratus); // sheets: the billows flattened
+	shape = lerp(shape, 0.45 + 0.55 * shape, max(stratus, deck * 0.35)); // sheets (and a storm's deck): the billows flattened
 	shape = lerp(shape, 0.3 + 0.7 * shape, stormCore * stormCore) * profile; // the towers' middles solid
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
 	if (!detail || c <= 0)
@@ -177,7 +181,9 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	const int q = (int)SkyFlags.w;
 	const int STEPS = q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128;
 	const int LIGHT_STEPS = q + 3;
-	const float lightStep = 108.0 / LIGHT_STEPS;
+	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
+	// thickness: thin parts brighter, its relief)
+	const float lightStep = 108.0 * (1 + 2.5 * CloudShape.x * CloudShape.x) / LIGHT_STEPS;
 	const float pixelScale = q <= 0 ? 1 : q == 1 ? 0.5 : 0.25; // of a quarter-size pixel
 	float dt = (t1 - t0) / STEPS;
 	// interleaved gradient noise, moved every frame: the temporal anti-aliasing (TAA, FSR 3.1)
@@ -224,9 +230,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		light += T * (1 - dT) * s;
 		T *= dT;
 	}
-	// far clouds fade into the horizon's haze
+	// far clouds fade into the horizon's haze (FogColor, the weather's with the physical sky): as
+	// much of it as the sky is cloudy, so an overcast horizon is grey, not the clear sky behind
 	float fade = exp(-t0 / 5000);
-	return float4(light * fade, lerp(1, T, fade));
+	float far = (1 - fade) * saturate(CloudShape.x * 1.15);
+	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
 
 // The high clouds above the cumulus layer, as thin textured layers (cheap: a few samples a pixel
@@ -684,7 +692,7 @@ void DiligentSkyRenderer::render()
 	if (clouds) {
 		Vector3 sun = env.sunDirection;
 		sun = sun.sqlen3() > 0.01f ? sun.normal() : Vector3(0.5f, 0.8f, 0.3f).normal();
-		const float cover = std::clamp(env.cloudPreset.cover, 0.0f, 1.0f);
+		const float cover = std::clamp(std::max(env.cloudPreset.cover, env.cloudPreset.storm * 0.85f), 0.0f, 1.0f); // a storm: as dark as an overcast
 		if ((sun - _impl->physicalSun).sqlen3() > 1e-6f || std::abs(cover - _impl->physicalCover) > 0.01f) {
 			_impl->physicalSun = sun;
 			_impl->physicalCover = cover;
@@ -718,7 +726,27 @@ void DiligentSkyRenderer::render()
 			env.skyLightValid = true;
 		}
 	}
-	else if (_impl->boxLightValid && _impl->physicalSun.y > -1.5f) {
+	// the haze (the distance fog's colour, the horizon's, the far clouds'): the physical sky's
+	// horizon, greyer and darker the more cloud (a storm's dark, a fog's pale: the clouds' light)
+	// The user's own fog colour (RenderSettings::fogColourOverride) is the clear day's haze then,
+	// turned grey and darker by the clouds the same way.
+	env.hazeOn = clouds && env.skyLightValid;
+	if (env.hazeOn) {
+		const float cover = std::clamp(std::max(env.cloudPreset.cover, env.cloudPreset.storm * 0.85f), 0.0f, 1.0f); // a storm: as dark as an overcast
+		const float k = (1.0f - 0.5f * cover * cover) * (1.0f + (std::min(env.cloudPreset.light, 1.2f) - 1.0f) * cover);
+		float base[3];
+		if (g_renderSettings.fogColourOverride) {
+			memcpy(base, g_renderSettings.fogColour, sizeof(base));
+			const float l = 0.3f * base[0] + 0.59f * base[1] + 0.11f * base[2];
+			for (int i = 0; i < 3; i++)
+				base[i] += (l - base[i]) * 0.8f * cover * cover;
+		}
+		else
+			memcpy(base, env.skyLight[1], sizeof(base)); // already grey by the cover
+		for (int i = 0; i < 3; i++)
+			env.hazeColour[i] = std::clamp(base[i] * k, 0.0f, 1.0f);
+	}
+	if (!clouds && _impl->boxLightValid && _impl->physicalSun.y > -1.5f) {
 		memcpy(env.skyLight, _impl->boxLight, sizeof(_impl->boxLight));
 		env.skyLightLuminance = _impl->boxLuminance;
 		_impl->physicalSun = Vector3(0, -2, 0);
