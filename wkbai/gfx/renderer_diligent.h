@@ -12,6 +12,8 @@
 #include "RefCntAutoPtr.hpp"
 
 struct Camera;
+// buffers a ray-tracing structure is built from get BIND_RAY_TRACING (the device can)
+extern bool g_rayTracingBuffers;
 
 // The Diligent IRenderer, as seen by the renderers that draw with Diligent directly
 // (DiligentEnhancedSceneRenderer, DiligentEnhancedTerrainRenderer).
@@ -104,6 +106,57 @@ struct DiligentGfx : IRenderer
 		// the sky box's faces front (+z), right (+x), back, left and top (DiligentSkyRenderer),
 		// for the water's reflection; null without a sky
 		texture skyFaces[5] = {};
+		// the physical sky is drawn instead of the sky box (with the volumetric clouds): skyLight
+		// is its, and the water reflects its colours, not the box's faces
+		bool physicalSky = false;
+		// the haze with the physical sky (DiligentSkyRenderer): the fog's colour instead of the
+		// map's, following the weather's clouds
+		bool hazeOn = false;
+		float hazeColour[3] = {};
+
+		// Dynamic clouds and the sky light (DiligentClouds; RenderSettings::dynamicClouds, skyGI):
+		// the cloud noise, the cloud constant buffer (cbuffer CloudBuffer), this frame's mode
+		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudNoise;
+		// the volumetric clouds' 3D noise (DiligentClouds): the shape and the erosion's detail
+		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudShape, cloudDetail;
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> cloudBuffer;
+		int clouds = 0;
+		bool cloudShadowsDrawn = false; // the enhanced scene renderer wrote the cloud buffer this frame
+		// the sky light's map (RGBA16F: the sky seen, the ground's height, the casters' top) over
+		// a square of 2 x SKY_OCC_RADIUS around the camera's target, from the terrain's heights
+		// and the static casters from above (skyDepth, drawn by the scene renderer)
+		static constexpr int SKY_OCC_SIZE = 512;
+		static constexpr float SKY_OCC_RADIUS = 200.0f, SKY_OCC_TOP = 600.0f, SKY_OCC_RANGE = 1000.0f;
+		Diligent::RefCntAutoPtr<Diligent::ITexture> skyOcc, skyDepth;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> skyOccSignature;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineState> skyOccPipeline;
+		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> skyOccBinding;
+		float skyOccOrigin[2] = {};
+		bool skyOccOn = false; // this frame
+		// the clouds' weather (DiligentClouds UpdateCloudBuffer): the preset now, blending towards
+		// the weather's; cloudWeatherKind: the seasons' weather kind when it drives the clouds (else
+		// -1: RenderSettings::cloudWeather); its lightning (cloudFlashOverride >= 0: the weather's
+		// flash strength and cloudFlash's position set by it, else the clouds' own flashes)
+		struct CloudPresetState { float cover = 0.45f, base = 230, thickness = 150, stratus = 0, storm = 0, density = 1, shadow = 0.62f, light = 1, cirrus = 0, alto = 0, altoSheet = 0; } cloudPreset;
+		// cloudPreset is the weather at the camera; a weather front (UpdateCloudBuffer) between
+		// cloudFrom (ahead of it) and cloudTo (behind it), at frontPos along the wind
+		CloudPresetState cloudFrom, cloudTo;
+		int cloudKindNow = -2; // -2: no frame yet
+		bool frontActive = false;
+		float frontPos = 0, frontHalfWidth = 0;
+		uint64_t cloudPresetTicks = 0;
+		int cloudWeatherKind = -1;
+		float cloudFlash[4] = {}, cloudFlashOverride = -1, cloudFlashStart = -100, cloudFlashNext = 0;
+		// the terrain's vertex heights (the terrain renderer's), its grid's vertices across and
+		// down and the map edge in tiles
+		Diligent::ITextureView* terrainHeights = nullptr;
+		int terrainGrid[3] = {};
+		// ray-traced shadows (DiligentRayShadows, RenderSettings::rtShadows): made at the first
+		// frame that wants them; on in this frame; the sun (towards it) for the mask. The water's
+		// ray-traced reflections (RenderSettings::rtReflections) use the same scene.
+		class DiligentRayShadows* rayShadows = nullptr;
+		bool rayShadowsSupported = false, rayShadowsOn = false, rayReflectionsOn = false;
+		Vector3 sunDirection = Vector3(0, 1, 0);
 	} shadows;
 };
 

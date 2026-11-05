@@ -750,6 +750,20 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
 		{
+			static const char* const cloudLevels[] = { "Original (scrolling map)", "Moving cloud shadows", "+ light shafts", "+ volumetric clouds in the sky" };
+			ImGui::Combo("Clouds", &s.dynamicClouds, cloudLevels, 4);
+			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
+			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
+			static const char* const cloudWeathers[] = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
+			ImGui::Combo("Cloud weather", &s.cloudWeather, cloudWeathers, 11);
+		}
+		ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
+		ImGui::Checkbox("Light from the sky (sky occlusion, bounce)", &s.skyGI);
+		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
+		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
+		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
+		{
 			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "Medium", "High (tessellated waves)", "Ultra" };
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, 6);
 		}
@@ -3472,7 +3486,10 @@ void ClientInterface::iter()
 		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 			dgfx->shadows.time = client->timeManager.currentTime;
 			dgfx->shadows.cloudShadows = g_renderSettings.cloudShadows;
-			dgfx->shadows.staticShadows = g_renderSettings.staticShadows;
+			// ray-traced shadows instead of the shadow map, where the GPU can
+			dgfx->shadows.rayShadowsOn = g_renderSettings.staticShadows && g_renderSettings.rtShadows && dgfx->shadows.rayShadowsSupported;
+			dgfx->shadows.staticShadows = g_renderSettings.staticShadows && !dgfx->shadows.rayShadowsOn;
+			dgfx->shadows.rayReflectionsOn = g_renderSettings.rtReflections && g_renderSettings.waterQuality >= 2 && dgfx->shadows.rayShadowsSupported;
 		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))

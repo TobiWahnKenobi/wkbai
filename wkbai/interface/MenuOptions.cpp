@@ -156,6 +156,39 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
+		list.push_back(toggle("skyGI", "lighting", "Light from the sky", rs.skyGI));
+		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
+		list.push_back(withEnabled(toggle("rtReflections", "lighting", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= 2; }));
+		list.push_back(slider("terrainFresnel", "lighting", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
+		{
+			MenuOption o;
+			o.id = "dynamicClouds"; o.page = "lighting"; o.label = "Clouds";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Original", "Moving shadows", "Light shafts", "Volumetric" };
+			o.get = [&rs]() { return (float)rs.dynamicClouds; };
+			o.set = [&rs](float v) { rs.dynamicClouds = std::clamp((int)v, 0, 3); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows; }));
+		}
+		{
+			MenuOption o;
+			o.id = "cloudQuality"; o.page = "lighting"; o.label = "Volumetric cloud quality";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High", "Ultra" };
+			o.get = [&rs]() { return (float)rs.cloudQuality; };
+			o.set = [&rs](float v) { rs.cloudQuality = std::clamp((int)v, 0, 3); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds >= 3; }));
+		}
+		{
+			MenuOption o;
+			o.id = "cloudWeather"; o.page = "lighting"; o.label = "Cloud weather";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "By cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
+			o.get = [&rs]() { return (float)rs.cloudWeather; };
+			o.set = [&rs](float v) { rs.cloudWeather = std::clamp((int)v, 0, 10); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
+		}
+		list.push_back(withEnabled(slider("cloudCover", "lighting", "Cloud cover", rs.cloudCover, 0.0f, 1.0f, "%.2f"),
+			[&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
 		{
 			MenuOption o;
 			o.id = "weatherEffects"; o.page = "lighting"; o.label = "Weather and season effects";

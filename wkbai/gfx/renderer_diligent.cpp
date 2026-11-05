@@ -11,6 +11,10 @@
 #include "renderer_diligent.h"
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
+#include "DiligentClouds.h"
+#include "DiligentRayShadows.h"
+
+bool g_rayTracingBuffers = false;
 #include "bitmap.h"
 #include "../window.h"
 #include "../settings.h"
@@ -18,6 +22,7 @@
 #include "../Environment.h"
 #include "../util/util.h"
 #include "../Camera.h"
+#include "../util/FrameStats.h"
 
 #include <algorithm>
 #include <chrono>
@@ -327,6 +332,30 @@ struct DiligentRenderer : DiligentGfx
 	bool isVulkan = false;
 	uint64_t frame = 0; // presented frames, for buffers whose dynamic memory expires
 
+	// DXC for shader model 6 (the ray-traced shadows' ray queries): dxcompiler.dll beside the
+	// game, else the newest Windows SDK's
+	static std::string FindDxCompiler()
+	{
+		char exe[MAX_PATH] = {};
+		GetModuleFileNameA(nullptr, exe, MAX_PATH);
+		std::string dir = exe;
+		dir = dir.substr(0, dir.find_last_of("\\/") + 1);
+		if (GetFileAttributesA((dir + "dxcompiler.dll").c_str()) != INVALID_FILE_ATTRIBUTES)
+			return dir + "dxcompiler.dll";
+		const char* sdks[] = { "10.0.26100.0", "10.0.22621.0", "10.0.22000.0", "10.0.20348.0", "10.0.19041.0" };
+		for (const char* v : sdks) {
+			const std::string p = std::string("C:\\Program Files (x86)\\Windows Kits\\10\\bin\\") + v + "\\x64\\dxcompiler.dll";
+			if (GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES)
+				return p;
+		}
+		return std::string();
+	}
+	// the GPU's frame time (g_gpuFrameMs): a timestamp at the start and the end of each frame,
+	// read back GPU_QUERY_FRAMES later, without waiting
+	static constexpr int GPU_QUERY_FRAMES = 4;
+	RefCntAutoPtr<IQuery> gpuStart[GPU_QUERY_FRAMES], gpuEnd[GPU_QUERY_FRAMES];
+	bool gpuQueryIssued[GPU_QUERY_FRAMES] = {};
+
 	RefCntAutoPtr<IShader> createShader(SHADER_TYPE type, const char* entryPoint)
 	{
 		ShaderCreateInfo sci;
@@ -521,6 +550,17 @@ struct DiligentRenderer : DiligentGfx
 		}
 		s.fog = fog;
 		fog.tiles = nullptr;
+		// the light shafts (RenderSettings::dynamicClouds 2 and up), with the enhanced renderers
+		s.lightShafts = postEffects && shadows.clouds >= 2 && shadows.cloudShadows && shadows.cloudShadowsDrawn;
+		s.cloudBuffer = shadows.cloudBuffer;
+		s.cloudNoise = shadows.cloudNoise ? shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+		shadows.cloudShadowsDrawn = false;
+		// the ray-traced shadows' mask from the scene's depth
+		if (postEffects && shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid() && post->depthDSV()) {
+			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
+			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame);
+			s.rtShadowLight = 0.5f;
+		}
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();
 		ctx->SetViewports(1, nullptr, 0, 0);
@@ -659,6 +699,9 @@ struct DiligentRenderer : DiligentGfx
 		cc[1] = ((fogColor >> 8) & 255) / 255.0f;
 		cc[2] = (fogColor & 255) / 255.0f;
 		cc[3] = ((fogColor >> 24) & 255) / 255.0f;
+		if (shadows.hazeOn) // the physical sky's haze, following the weather (the last frame's)
+			for (int i = 0; i < 3; i++)
+				cc[i] = shadows.hazeColour[i];
 		// The original's fog (0x60A870): linear, ending at 0.95 x far clip - near clip (1),
 		// starting halfway there ("fogStart" changes that), so that geometry has faded out
 		// before it is clipped.
@@ -720,6 +763,11 @@ struct DiligentRenderer : DiligentGfx
 			EngineVkCreateInfo eci;
 			eci.EnableValidation = validation;
 			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
+			eci.Features.TimestampQueries = DEVICE_FEATURE_STATE_OPTIONAL; // the benchmark's GPU times
+			eci.Features.RayTracing = DEVICE_FEATURE_STATE_OPTIONAL; // the ray-traced shadows (DiligentRayShadows)
+			const std::string dxc = FindDxCompiler();
+			if (!dxc.empty())
+				eci.pDxCompilerPath = dxc.c_str();
 			eci.DynamicHeapSize = 64 << 20;
 			eci.AdapterId = (adapter >= 0) ? (Uint32)adapter : PickVulkanAdapter();
 			factory->CreateDeviceAndContextsVk(eci, &device, contexts);
@@ -736,6 +784,11 @@ struct DiligentRenderer : DiligentGfx
 			EngineD3D12CreateInfo eci;
 			eci.EnableValidation = validation;
 			eci.Features.Tessellation = DEVICE_FEATURE_STATE_OPTIONAL; // RenderSettings::terrainTessellation
+			eci.Features.TimestampQueries = DEVICE_FEATURE_STATE_OPTIONAL; // the benchmark's GPU times
+			eci.Features.RayTracing = DEVICE_FEATURE_STATE_OPTIONAL; // the ray-traced shadows (DiligentRayShadows)
+			const std::string dxc = FindDxCompiler();
+			if (!dxc.empty())
+				eci.pDxCompilerPath = dxc.c_str();
 			if (adapter >= 0) eci.AdapterId = (Uint32)adapter;
 			factory->CreateDeviceAndContextsD3D12(eci, &device, contexts);
 			ctx.Attach(contexts[0]);
@@ -746,6 +799,23 @@ struct DiligentRenderer : DiligentGfx
 		if (!swapChain)
 			ferr("Diligent: could not create the swap chain.");
 		printf("Diligent renderer: %s, adapter \"%s\"\n", isVulkan ? "Vulkan" : "Direct3D 12", device->GetAdapterInfo().Description);
+		{
+			const auto& info = device->GetDeviceInfo();
+			const auto& rt = device->GetAdapterInfo().RayTracing;
+			printf("Diligent: ray tracing %s (caps 0x%X, max recursion %u, primitives per BLAS up to %u), timestamp queries %s\n",
+				info.Features.RayTracing == DEVICE_FEATURE_STATE_ENABLED ? "available" : "not available",
+				(unsigned)rt.CapFlags, rt.MaxRecursionDepth, rt.MaxPrimitivesPerBLAS, info.Features.TimestampQueries == DEVICE_FEATURE_STATE_ENABLED ? "on" : "off");
+			if (info.Features.TimestampQueries == DEVICE_FEATURE_STATE_ENABLED && BenchmarkEnabled()) {
+				QueryDesc qd;
+				qd.Type = QUERY_TYPE_TIMESTAMP;
+				for (int i = 0; i < GPU_QUERY_FRAMES; i++) {
+					qd.Name = "GPU frame start";
+					device->CreateQuery(qd, &gpuStart[i]);
+					qd.Name = "GPU frame end";
+					device->CreateQuery(qd, &gpuEnd[i]);
+				}
+			}
+		}
 
 		// One resource signature for every pipeline: two constant buffers bound once, and the
 		// texture, which changes per draw (one shader resource binding per texture).
@@ -794,6 +864,9 @@ struct DiligentRenderer : DiligentGfx
 		whiteBmp.pixels.resize(4);
 		*(uint32_t*)whiteBmp.pixels.data() = 0xFFFFFFFF;
 		whiteTexture = CreateTexture(whiteBmp, 1);
+		CreateCloudResources(this);
+		shadows.rayShadowsSupported = DiligentRayShadows::Supported(device);
+		g_rayTracingBuffers = shadows.rayShadowsSupported;
 	}
 
 	void Reset() override
@@ -805,6 +878,17 @@ struct DiligentRenderer : DiligentGfx
 
 	void BeginDrawing() override
 	{
+		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
+		if (gpuStart[0]) {
+			const int q = (int)(frame % GPU_QUERY_FRAMES);
+			// this slot's last frame: its time, if the GPU is done with it
+			if (gpuQueryIssued[q]) {
+				QueryDataTimestamp a, b;
+				if (gpuStart[q]->GetData(&a, sizeof(a), false) && gpuEnd[q]->GetData(&b, sizeof(b), false) && a.Frequency)
+					g_gpuFrameMs = (double)(b.Counter - a.Counter) * 1000.0 / (double)a.Frequency;
+			}
+			ctx->EndQuery(gpuStart[q]);
+		}
 		setRenderTargets();
 		ctx->SetViewports(1, nullptr, 0, 0);
 		// Like D3D11's ClearState(); the constant buffers keep their values, but dynamic
@@ -818,6 +902,11 @@ struct DiligentRenderer : DiligentGfx
 
 	void EndDrawing() override
 	{
+		if (gpuStart[0]) {
+			const int q = (int)(frame % GPU_QUERY_FRAMES);
+			ctx->EndQuery(gpuEnd[q]);
+			gpuQueryIssued[q] = true;
+		}
 		swapChain->Present(g_renderSettings.vsync ? 1 : 0);
 		frame++;
 	}
