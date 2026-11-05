@@ -12,6 +12,38 @@
 #include <algorithm>
 #include <numeric>
 
+// "Move To" (Mechanics\Movement.cpp) is an OBJECT_REFERENCE task with
+// TERMINATE_ENTIRE_ORDER_IF_NO_TARGET: it follows an object to within 1 m, and without one it
+// ends at once. The original's scripts move armies to a point by a marker there (the
+// Kingmaker's "Muster Marker", "Commission Marker"). This one is Army Support's "Individual
+// Advance Marker": no script looks for it, and REMOVE_WHEN_NOT_REFERENCED removes it once no
+// unit's task targets it. Without either, the player's "Move" command.
+bool AIController::moveUnitsTo(const std::vector<ServerGameObject*>& units, ServerGameObject* player, const Vector3& point)
+{
+	if (units.empty() || !player)
+		return false;
+	const GameSet* gs = Server::instance->gameSet.get();
+	const int moveTo = gs->orders.names.getIndex("Move To");
+	const GameObjBlueprint* markerBp = gs->findBlueprint(Tags::GAMEOBJCLASS_MARKER, "Individual Advance Marker");
+	if (moveTo >= 0 && markerBp) {
+		ServerGameObject* marker = Server::instance->spawnObject(markerBp, player, point, Vector3(0, 0, 0));
+		if (marker) {
+			bool sent = false;
+			for (ServerGameObject* u : units)
+				sent |= u->orderConfig.addOrder(&gs->orders[moveTo], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, marker) != nullptr;
+			if (getenv("WKB_TRACE_GATHER"))
+				printf("GATHER marker %u at (%.0f, %.0f) for %zu units\n", marker->id, point.x, point.z, units.size());
+			return sent;
+		}
+	}
+	const int moveCommand = gs->commands.names.getIndex("Move");
+	if (moveCommand < 0)
+		return false;
+	for (ServerGameObject* u : units)
+		gs->commands[moveCommand].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, point);
+	return true;
+}
+
 // A wave sent from home at a target: a new Kingmaker Attacking Army under the player; each unit
 // type of 4 or more in a formation marching to 50 m short of the target (aiWaveFormations), or
 // all first to a rally point 120 m short (aiWaveGather), else each unit attacking. Returns the army.
@@ -32,10 +64,9 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 		return nullptr;
 	// gathering: first to a point 120 m short of the target on the home side, where
 	// they meet; streaming in one by one, the waves died at the walls
-	const int moveOrder = gs->orders.names.getIndex("Move To");
 	const Vector3 away = (defensive->position - target->position).normal2xz();
 	const Vector3 rally = target->position + away * 120.0f;
-	const bool gather = Server::instance->aiWaveGather && moveOrder >= 0 && (away.x != 0.0f || away.z != 0.0f);
+	const bool gather = Server::instance->aiWaveGather && (away.x != 0.0f || away.z != 0.0f);
 	// formations, as the original's Siege Armies: each unit type of 4 or more marches
 	// in Column to 50 m short of the target ("Formation Range"), forms a Line (heavy
 	// cavalry: a Wedge) facing it, then charges. The waves had walked there one by one.
@@ -66,17 +97,25 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 			formationsSent++;
 		}
 	}
+	std::vector<ServerGameObject*> gathering;
 	for (ServerGameObject* unit : members) {
 		if (unit->getParent() && unit->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
 			continue;
 		unit->setParent(army);
 		if (gather)
-			unit->orderConfig.addOrder(&gs->orders[moveOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, rally);
+			gathering.push_back(unit);
 		else
 			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 	}
-	if (gather)
-		gatheringWaves.push_back({ army->id, target->id, rally, Server::instance->timeManager.currentTime });
+	if (gather && moveUnitsTo(gathering, gameObj, rally)) {
+		float farthest = 0.0f;
+		for (ServerGameObject* unit : gathering)
+			farthest = std::max(farthest, (unit->position - rally).len2xz());
+		gatheringWaves.push_back({ army->id, target->id, rally, Server::instance->timeManager.currentTime, farthest / 2.0f + 30.0f });
+	}
+	else
+		for (ServerGameObject* unit : gathering)
+			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 	waves++;
 	waveUnits += (int)members.size();
 	return army;
@@ -316,6 +355,10 @@ void AIController::update()
 			}
 		}
 	}
+
+	// ---- The weather (wkbai's seasons and weather, AIWeather.cpp) ----
+	if (weatherActive())
+		weatherUpdate();
 
 	// ---- The home guard (the aggressive AI, not in WKB.exe; AIController::homeGuard) ----
 	if (Server::instance->aggressiveAI && Server::instance->aiHomeGuard && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
@@ -618,7 +661,7 @@ void AIController::update()
 	}
 
 	// gathered waves attack together: when 70% of the units are within 30 m of the rally point, or
-	// after 90 s
+	// once the farthest's walk is over (at 2 m/s, and 30 s more)
 	if (!gatheringWaves.empty()) {
 		const GameSet* gs = Server::instance->gameSet.get();
 		const int attackOrder = gs->orders.names.getIndex("Attack");
@@ -639,9 +682,12 @@ void AIController::update()
 				it = gatheringWaves.erase(it);
 				continue;
 			}
-			if (there >= units.size() * 0.7f || now - it->since > 90.0f) {
+			if (there >= units.size() * 0.7f || now - it->since > it->wait) {
+				if (getenv("WKB_TRACE_GATHER"))
+					printf("GATHER player %u army %u: %zu of %zu at the rally after %.0f s (waits up to %.0f s)\n", gameObj->id, it->army, there, units.size(), now - it->since, it->wait);
 				for (ServerGameObject* u : units)
-					u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+					if (!weatherHolds(u->id))
+						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 				it = gatheringWaves.erase(it);
 				continue;
 			}
@@ -743,7 +789,7 @@ void AIController::update()
 						if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 							centre += u->position;
 							members++;
-							if (u->getItem(missile) > 0.0f)
+							if (u->getItem(missile) > 0.0f && !weatherHolds(u->id))
 								shooters.push_back(u);
 						}
 						else if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
@@ -796,6 +842,9 @@ void AIController::update()
 			continue;
 		SrvScriptContext ctx{ Server::instance, woi.city };
 		unitLists[wi] = woi.unitFinder->eval(&ctx);
+		// the units the weather moved (AIWeather.cpp) work again once released
+		if (!weatherHeld.empty())
+			unitLists[wi].resize(std::remove_if(unitLists[wi].begin(), unitLists[wi].end(), [&](ServerGameObject* u) { return weatherHolds(u->id); }) - unitLists[wi].begin());
 		for (ServerGameObject* unit : unitLists[wi]) {
 			auto prev = unitWorkOrder.find(unit->id);
 			const bool kept = prev != unitWorkOrder.end() && prev->second == std::make_pair(woi.city->id, woi.workOrder);
@@ -1199,6 +1248,9 @@ void AIController::update()
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
 				// no site (the position's finder found nothing): no foundation this time
 				if (posori.position.x == 0.0f && posori.position.z == 0.0f)
+					break;
+				// nor on land a flood could cover (wkbai's weather, AIWeather.cpp)
+				if (weatherAvoidsSite(posori.position))
 					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);

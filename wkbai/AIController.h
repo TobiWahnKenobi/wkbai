@@ -13,6 +13,7 @@
 #include <vector>
 
 struct ServerGameObject;
+struct OrderBlueprint;
 struct GSFileParser;
 struct GameSet;
 struct WorkOrder;
@@ -83,8 +84,9 @@ struct AIController {
 	float grudgeTime = -1.0f;
 	float nextAdaptScan = 0.0f, nextAdaptMix = 0.0f;
 	int mixChanges = 0;
-	// waves walking to their rally point before they attack together
-	struct GatheringWave { uint32_t army, target; Vector3 rally; float since; };
+	// waves walking to their rally point before they attack together; wait: the longest they wait
+	// for the slow ones (the walk of the farthest at 2 m/s, and 30 s)
+	struct GatheringWave { uint32_t army, target; Vector3 rally; float since, wait; };
 	std::vector<GatheringWave> gatheringWaves;
 	// waves' formations marching in Column to 50 m short of their target, then in Line (Wedge:
 	// heavy cavalry) before they charge; lined: the game time they were put in Line, else < 0
@@ -111,6 +113,36 @@ struct AIController {
 	int lifelines = 0; // the food given by the lifeline (AIController::update)
 	// wkbai's seasons: the food kept back for the winter (no spending below it, canAffordObject)
 	float winterReserve = 0.0f, nextWinterCheck = 0.0f;
+	// wkbai's seasons and weather, the AI's answers (AIWeather.cpp, "aiWeather"): whether this
+	// player has them (-1: not decided yet); the units the weather moved, out of the work orders',
+	// the war layer's and focus fire's hands until released (the scripts' army or formation they
+	// were taken out of, why, until when, when last sent); the burning buildings whose garrison was
+	// let out; when a wave was first held; counts for the census
+	// (and the order it had, given back on release: the scripts' first builders have theirs from
+	// the scripts, not from a work order, and their opening waited for good when it was lost)
+	struct WeatherHold { float until = 0.0f, sent = 0.0f; uint32_t parent = 0, target = 0; const OrderBlueprint* order = nullptr; uint8_t why = 0; };
+	std::map<uint32_t, WeatherHold> weatherHeld;
+	std::map<uint32_t, float> weatherUngarrisoned;
+	int weatherState = -1;
+	float nextWeatherCheck = 0.0f, waveHeldSince = -1.0f;
+	int weatherSheltered = 0, weatherIceRetreats = 0, weatherFloodRetreats = 0, weatherFireRetreats = 0, weatherExtinguish = 0, weatherUngarrisons = 0;
+	int wavesHeldCold = 0, wavesHeldIce = 0, wavesHeldNight = 0, nightWaves = 0;
+	bool weatherActive();
+	void weatherUpdate();
+	bool weatherHolds(uint32_t id) const { return !weatherHeld.empty() && weatherHeld.count(id) != 0; }
+	// whether the war layer may take the unit: not held, or only kept home from the cold or heat
+	bool weatherPoolable(uint32_t id) const { auto it = weatherHeld.find(id); return it == weatherHeld.end() || it->second.why <= 2; }
+	void weatherWaveSent();
+	void weatherHold(ServerGameObject* u, int why, float until, const Vector3* moveTo, ServerGameObject* target = nullptr, int order = -1);
+	void weatherRelease(uint32_t id);
+	// a new wave from base at the target: whether the weather says wait (harmful cold or heat, the
+	// thaw, the coming night)
+	bool weatherHoldsWave(const Vector3& base, ServerGameObject* target, bool striking);
+	// the soldiers kept home: more at night
+	size_t weatherKeep(size_t available, size_t keep);
+	// no foundation where a flood could reach
+	bool weatherAvoidsSite(const Vector3& pos);
+	std::string weatherCensus() const;
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
 	// the war layer (AIAdvanced.cpp, "aiWar"): its defence forces (an army of its own at a
@@ -139,6 +171,9 @@ struct AIController {
 	// the Lua AI's name and its census() text (the AI test), empty without one
 	std::string luaCensus();
 	ServerGameObject* launchWave(const std::vector<ServerGameObject*>& members, ServerGameObject* target, ServerGameObject* home);
+	// walks the units to a point as the original's scripts do: the game set's "Move To" at a
+	// marker there; returns whether they were sent
+	static bool moveUnitsTo(const std::vector<ServerGameObject*>& units, ServerGameObject* player, const Vector3& point);
 	void advancedUpdate();
 	// the enemy settlement worth attacking most for what guards it, among those the wave would
 	// outmatch (1.4 times their strength; any, if anyway), as the building to attack; null: none

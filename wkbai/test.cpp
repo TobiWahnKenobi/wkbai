@@ -2393,6 +2393,19 @@ void Test_AIvsAI()
 					st.wildfires, st.fromMissiles, st.fromBuildings, st.spontaneous, st.fireCells, st.fireCellsMost, st.buildingsFired, st.fireDeaths, server.environment.charredCount());
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
+				// each player's: the weather's deaths, and the AI's answers (AIWeather.cpp)
+				if (CommonGameObject* level = server.getLevel())
+					for (const auto& [type, children] : level->children)
+						for (CommonGameObject* c : children) {
+							auto* pl = (ServerGameObject*)c;
+							if (c->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !pl->aiController.planBlueprint)
+								continue;
+							std::array<int, 5> d{};
+							if (auto it = st.deathsBy.find(pl->id); it != st.deathsBy.end())
+								d = it->second;
+							printf("AITEST weather player %u (%s): weather AI %s; deaths: frozen %d, thirst %d, drowned %d, fire %d, lightning %d; %s\n", pl->id,
+								pl->blueprint->name.c_str(), pl->aiController.weatherState == 1 ? "on" : "off", d[0], d[1], d[2], d[3], d[4], pl->aiController.weatherCensus().c_str());
+						}
 			}
 		}
 	}

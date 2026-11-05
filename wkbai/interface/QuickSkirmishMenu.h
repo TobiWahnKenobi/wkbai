@@ -78,6 +78,7 @@ private:
 	bool aiLifeline = true; // Server::aiLifeline
 	bool aiHomeGuard = true; // Server::aiHomeGuard
 	bool aiWar = true; // Server::aiWar
+	int aiWeather = 1; // Server::aiWeather
 	int aiHumanFocus = 50; // Server::aiHumanFocus
 	int modPolicy = 0; // Server::modPolicy
 	bool allowSpectators = false; int maxSpectators = 4; // Server::allowSpectators, maxSpectators
