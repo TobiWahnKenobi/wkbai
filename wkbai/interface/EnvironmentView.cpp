@@ -307,7 +307,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			indices[i] = (uint16_t)(first + order[i]);
 	};
 	auto wrap = [](float x, float origin, float size) { return origin + x - std::floor((x) / size) * size; };
-	auto place = [&](int i, float fallSpeed, float sway, Vector3& out) {
+	auto placeIn = [&](int i, float fallSpeed, float sway, const Vector3& centre, float box, float height, Vector3& out) {
 		const float hx = Hash(i * 3 + 1) * box, hz = Hash(i * 3 + 2) * box, hy = Hash(i * 3 + 3);
 		const float fall = std::fmod(hy * height + time * fallSpeed, height);
 		const float x = hx + v.wind.x * time - (centre.x - box * 0.5f);
@@ -318,6 +318,15 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		out.y = ground + height - fall;
 		return out.y > ground;
 	};
+	auto place = [&](int i, float fallSpeed, float sway, Vector3& out) { return placeIn(i, fallSpeed, sway, centre, box, height, out); };
+	// The far layer: over the ground the camera sees beyond the near box (from the RTS camera's
+	// height the near box is a small patch in the middle of the screen), sparser and larger so
+	// that it reads at that distance: about as many again for the whole view
+	const float farReach = std::clamp(dir.y < -0.05f ? (camera.position.y - client->terrain->getHeight(camera.position.x, camera.position.z)) / -dir.y : 150.0f, 30.0f, 400.0f);
+	const Vector3 farCentre = camera.position + dir * farReach;
+	const float farBox = std::clamp(farReach * 2.4f, 160.0f, 520.0f), farHeight = std::clamp(farReach * 0.5f, 40.0f, 120.0f);
+	auto inNear = [&](const Vector3& p) { return std::abs(p.x - centre.x) < box * 0.5f && std::abs(p.z - centre.z) < box * 0.5f; };
+	auto inFront = [&](const Vector3& p) { return (p - camera.position).dot(dir) > 0.0f; };
 	// how much of it, by the graphics setting (RenderSettings::weatherEffects)
 	static const float amount[4] = { 0.35f, 0.65f, 1.0f, 1.5f };
 	const float share = amount[std::clamp(g_renderSettings.weatherEffects, 0, 3)];
@@ -334,6 +343,18 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			across = across.sqlen3() > 1e-8f ? across.normal() * 0.025f : camside * 0.025f;
 			quad(p + across, p - across, p - along - across, p - along + across, colour);
 		}
+		// far: longer, fainter streaks
+		const int farDrops = (int)(1800 * share * std::min(1.0f, v.rain));
+		const Vector3 farAlong = along * 3.0f;
+		const uint32_t farColour = (uint32_t)(40 + 40 * v.sun.daylight) << 24 | 0xB4BED2;
+		for (int i = 0; i < farDrops; i++) {
+			Vector3 p;
+			if (!placeIn(i + 200000, 14.0f, 0.0f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
+				continue;
+			Vector3 across = farAlong.cross(camera.direction);
+			across = across.sqlen3() > 1e-8f ? across.normal() * 0.08f : camside * 0.08f;
+			quad(p + across, p - across, p - farAlong - across, p - farAlong + across, farColour);
+		}
 	}
 	if (snowing) {
 		const int flakes = (int)(2200 * share * std::min(1.0f, v.snowfall));
@@ -344,6 +365,15 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			if (!place(i + 50000, 1.4f, 0.6f, p) || (p - camera.position).sqlen3() < 15.0f * 15.0f)
 				continue;
 			const float s = 0.06f + 0.05f * Hash(i + 777);
+			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
+		}
+		// far: larger flakes (a pixel or two at that distance), as many again over the whole view
+		const int farFlakes = (int)(2400 * share * std::min(1.0f, v.snowfall));
+		for (int i = 0; i < farFlakes; i++) {
+			Vector3 p;
+			if (!placeIn(i + 300000, 1.4f, 1.2f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
+				continue;
+			const float s = (0.2f + 0.15f * Hash(i + 4321)) * std::clamp(std::sqrt((p - camera.position).sqlen3()) / 120.0f, 0.6f, 2.0f);
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
 	}
@@ -488,7 +518,9 @@ void DrawGroundWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	if (!v.active || !terrain)
 		return;
 	const int quality = std::clamp(g_renderSettings.weatherEffects, 0, 3);
-	const bool flooding = v.waterRise > 0.05f;
+	// (the enhanced terrain renderer draws the flood in its water shader)
+	const bool flooding = v.waterRise > 0.05f && !g_terrainDrawsFlood;
+	g_terrainDrawsFlood = false;
 	const bool printing = quality >= 2 && (v.snowCover > 0.12f || v.wetness > 0.35f);
 	if (!flooding && !printing && g_prints.empty())
 		return;

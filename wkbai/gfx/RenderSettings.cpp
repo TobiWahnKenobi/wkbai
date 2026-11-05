@@ -5,6 +5,7 @@
 #include "RenderSettings.h"
 
 bool g_terrainTessellationActive = false;
+bool g_terrainDrawsFlood = false;
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 
