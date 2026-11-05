@@ -138,6 +138,12 @@ struct DiligentGfx : IRenderer
 		// -1: RenderSettings::cloudWeather); its lightning (cloudFlashOverride >= 0: the weather's
 		// flash strength and cloudFlash's position set by it, else the clouds' own flashes)
 		struct CloudPresetState { float cover = 0.45f, base = 230, thickness = 150, stratus = 0, storm = 0, density = 1, shadow = 0.62f, light = 1, cirrus = 0, alto = 0, altoSheet = 0; } cloudPreset;
+		// cloudPreset is the weather at the camera; a weather front (UpdateCloudBuffer) between
+		// cloudFrom (ahead of it) and cloudTo (behind it), at frontPos along the wind
+		CloudPresetState cloudFrom, cloudTo;
+		int cloudKindNow = -2; // -2: no frame yet
+		bool frontActive = false;
+		float frontPos = 0, frontHalfWidth = 0;
 		uint64_t cloudPresetTicks = 0;
 		int cloudWeatherKind = -1;
 		float cloudFlash[4] = {}, cloudFlashOverride = -1, cloudFlashStart = -100, cloudFlashNext = 0;

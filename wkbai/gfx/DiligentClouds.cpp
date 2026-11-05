@@ -40,13 +40,53 @@ cbuffer CloudBuffer
 	// the high clouds (the sky's pass, HighClouds): x cirrus, y altocumulus, z the altocumulus'
 	// form (0 floccus: scattered tufts, 1 stratiformis: a sheet of cells)
 	float4 CloudHigh;
+	// A weather front (UpdateCloudBuffer): the old weather, still ahead of it (the fields above
+	// are the new one, behind it): its cover, base, thickness, shadow share; its stratus, storm,
+	// density, light; its cirrus, altocumulus, their form. CloudFront: the wind's direction (xy),
+	// the front's position along it (z: the new weather where dot(xz, wind) < z), the blend's
+	// half width (w; 0: no front).
+	float4 CloudFromShape;
+	float4 CloudFromWeather;
+	float4 CloudFromHigh;
+	float4 CloudFront;
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
 Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges (tiling)
 Texture2D skyOccTexture; // r: how much of the sky the ground sees, g: the ground's height, b: the casters' top
 
-// How cloudy the sky is above a point of the map (0-1): two noise layers drifting with the wind
+// The weather at a point (CloudAt): the new weather's behind a passing front, the old one's ahead
+// of it, blended over the front's width; its edge ragged by a broad noise (lobes up to ~600 units
+// ahead or behind), so the change doesn't come as a straight line. cShape, cWeather, cHigh and
+// cShadow are CloudShape, CloudWeather, CloudHigh and CloudSunColour.w there.
+static float4 cShape, cWeather, cHigh;
+static float cShadow;
+
+float CloudFrontBlend(float2 xz)
+{
+	float2 f = xz - CloudFront.xy * CloudFront.z; // (the edge's pattern travels with the front)
+	float n = cloudNoise.SampleLevel(cloudNoiseSampler, f * (CloudScale.x * 0.35) + float2(0.71, 0.29), 1).r
+		+ 0.5 * cloudNoise.SampleLevel(cloudNoiseSampler, f * (CloudScale.x * 1.3) + float2(0.13, 0.57), 1).g;
+	float d = CloudFront.z - dot(xz, CloudFront.xy) + (n - 0.76) * 1600;
+	return smoothstep(-CloudFront.w, CloudFront.w, d);
+}
+
+void CloudAt(float2 xz)
+{
+	cShape = CloudShape;
+	cWeather = CloudWeather;
+	cHigh = CloudHigh;
+	cShadow = CloudSunColour.w;
+	if (CloudFront.w > 0) {
+		float t = CloudFrontBlend(xz);
+		cShape = lerp(float4(CloudFromShape.x, CloudShape.y, CloudFromShape.yz), CloudShape, t);
+		cWeather = lerp(CloudFromWeather, CloudWeather, t);
+		cHigh = lerp(CloudFromHigh, CloudHigh, t);
+		cShadow = lerp(CloudFromShape.w, CloudSunColour.w, t);
+	}
+}
+
+// How cloudy the sky is above a point of the map (0-1; CloudAt(xz) first): two noise layers drifting with the wind
 // (the broad one mostly), ramped softly around the cover. The volumetric clouds take it as their
 // coverage, the 3D shape giving the detail (a sharp, detailed cover made thin columns as tall as
 // the layer); the ground shadows and the light shafts take the same, so they match the clouds.
@@ -59,10 +99,10 @@ float CloudCover(float2 xz, float lod)
 	// stays at 0.62's, and the cover beyond lifts a floor under it instead, so an overcast keeps
 	// thinner and thicker parts. No cover: none at all (the soft ramp would leave the noise's
 	// highest peaks).
-	float cover = min(CloudShape.x, 0.62);
-	float c = saturate((n - (1 - cover) + CloudShape.y) / (2.5 * CloudShape.y)) * saturate(CloudShape.x * 12);
+	float cover = min(cShape.x, 0.62);
+	float c = saturate((n - (1 - cover) + cShape.y) / (2.5 * cShape.y)) * saturate(cShape.x * 12);
 	// (a fog's sheet, stratus over 0.75, stays even)
-	return lerp(c, 1, saturate((CloudShape.x - 0.62) / 0.38) * lerp(0.45, 0.85, saturate((CloudWeather.x - 0.75) * 6.7)));
+	return lerp(c, 1, saturate((cShape.x - 0.62) / 0.38) * lerp(0.45, 0.85, saturate((cWeather.x - 0.75) * 6.7)));
 }
 
 // A storm's cumulonimbus (CloudWeather.y): a few huge cells of a much broader noise of their
@@ -92,17 +132,18 @@ float CloudShadow(float3 p)
 	float h = CloudShape.z + CloudShape.w * 0.35;
 	float t = max(h - p.y, 0) / max(CloudSun.y, 0.2);
 	float2 xz = p.xz + CloudSun.xz * t;
+	CloudAt(xz);
 	// the clouds form only where the cover is well over half (the 3D shape cuts the rest): as
 	// much shadow, so the sun reaches the ground between broken clouds (an overcast's cover is
 	// over 0.75 everywhere: shadow all over)
 	// (from a cover of 0.55 to 0.8 back to the plain cover: an overcast shades evenly)
 	float cc = CloudCover(xz, 1.5);
-	float c = lerp(smoothstep(0.35, 0.75, cc), cc, saturate((CloudShape.x - 0.55) / 0.25));
-	if (CloudWeather.y > 0) { // the storm's towers and anvils over its low deck
+	float c = lerp(smoothstep(0.35, 0.75, cc), cc, saturate((cShape.x - 0.55) / 0.25));
+	if (cWeather.y > 0) { // the storm's towers and anvils over its low deck
 		float2 cb = StormCells(xz, 0.9, 1.5);
-		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(cc * 1.4)), CloudWeather.y); // the deck's thin parts shade too
+		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(cc * 1.4)), cWeather.y); // the deck's thin parts shade too
 	}
-	return 1 - CloudSunColour.w * c;
+	return 1 - cShadow * c;
 }
 
 // How much of the sky a point sees (0-1). Ground: the map's value. Models (model true): from
@@ -427,7 +468,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 208;
+	cb.Size = 272;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -550,25 +591,79 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float r = ((sunColour >> 16) & 255) / 255.0f, g = ((sunColour >> 8) & 255) / 255.0f, b = (sunColour & 255) / 255.0f;
 	env.clouds = rs.dynamicClouds;
 	env.cloudShadowsDrawn = true;
-	// the weather's preset (RenderSettings::cloudWeather: 0 the cover slider's own cumulus, else
-	// a weather; with the seasons' weather, its current kind), approached over about 15 seconds
-	// of real time (at once on the first frame)
+	// The weather's preset (RenderSettings::cloudWeather: 0 the cover slider's own cumulus, else a
+	// weather; with the seasons' weather, its current kind). A change of the kind comes as a front
+	// moving in downwind: it starts FRONT_START units upwind of where the camera looks and moves at
+	// FRONT_SPEED units a second of real time; behind it the new weather (cloudTo), ahead of it the
+	// old (cloudFrom, the weather at the camera when the change came). Its edge is ragged by
+	// noise in the shaders (CloudFrontBlend). The weather at the camera (cloudPreset: the sky
+	// light, the haze, the lightning) follows the front's passing. Other changes (the cover
+	// slider) are approached over about 15 seconds everywhere.
+	// Test hook: WKBAI_CLOUD_FRONT="from,offset,speed" (from: a cloudWeather 1-10) starts a front
+	// from that weather to the setting's at the first frame, offset units downwind of the camera's
+	// point (negative: still upwind), moving at speed units a second (0: held there).
 	{
+		constexpr float FRONT_START = 3000, FRONT_HALF_WIDTH = 350;
+		static float frontSpeed = 25;
+		const Vector3 wind(0.948683f, 0, 0.316228f); // as the clouds' drift (6, 2)
+		const Vector3 look = camera.position + camera.direction.normal() * 400.0f;
+		const float lookAlong = look.dot(wind);
 		CloudPreset target = g_cloudPresets[1];
 		target.cover = rs.cloudCover;
 		const int kind = env.cloudWeatherKind >= 0 ? env.cloudWeatherKind : rs.cloudWeather - 1;
 		if (kind >= 0 && kind < CLOUD_WEATHER_COUNT)
 			target = g_cloudPresets[kind];
 		const uint64_t now = SDL_GetTicksNS();
-		float k = 1.0f;
-		if (env.cloudPresetTicks != 0)
-			k = 1.0f - std::exp(-std::min((now - env.cloudPresetTicks) / 1e9f, 1.0f) / 15.0f);
+		const float dt = env.cloudPresetTicks != 0 ? std::min((now - env.cloudPresetTicks) / 1e9f, 1.0f) : 0.0f;
 		env.cloudPresetTicks = now;
-		float* cur = &env.cloudPreset.cover;
-		const float* to = &target.cover;
 		static_assert(sizeof(CloudPreset) == 11 * sizeof(float) && sizeof(env.cloudPreset) == sizeof(CloudPreset), "the presets' fields");
+		float* to = &env.cloudTo.cover;
+		float* from = &env.cloudFrom.cover;
+		float* at = &env.cloudPreset.cover;
+		const float* tgt = &target.cover;
+		if (env.cloudKindNow == -2) { // the first frame: the weather at once
+			memcpy(to, tgt, sizeof(CloudPreset));
+			memcpy(from, tgt, sizeof(CloudPreset));
+			env.cloudKindNow = kind;
+			env.frontActive = false;
+			if (const char* test = getenv("WKBAI_CLOUD_FRONT")) {
+				int fromKind = 0;
+				float offset = 0, speed = 0;
+				if (sscanf(test, "%d,%f,%f", &fromKind, &offset, &speed) >= 1 && fromKind >= 1 && fromKind <= CLOUD_WEATHER_COUNT) {
+					memcpy(from, &g_cloudPresets[fromKind - 1], sizeof(CloudPreset));
+					env.frontActive = true;
+					env.frontPos = lookAlong + offset;
+					frontSpeed = speed;
+				}
+			}
+		}
+		else if (kind != env.cloudKindNow) { // a new weather: a front
+			memcpy(from, at, sizeof(CloudPreset));
+			memcpy(to, tgt, sizeof(CloudPreset));
+			env.cloudKindNow = kind;
+			env.frontActive = true;
+			env.frontPos = lookAlong - FRONT_START;
+		}
+		else {
+			const float k = 1.0f - std::exp(-dt / 15.0f);
+			for (int i = 0; i < 11; i++)
+				to[i] += (tgt[i] - to[i]) * k;
+		}
+		float tCam = 1;
+		if (env.frontActive) {
+			env.frontPos += frontSpeed * dt;
+			const float d = env.frontPos - lookAlong;
+			const float x = std::clamp((d + FRONT_HALF_WIDTH) / (2 * FRONT_HALF_WIDTH), 0.0f, 1.0f);
+			tCam = x * x * (3 - 2 * x);
+			if (d > FRONT_START) { // passed: the new weather everywhere
+				env.frontActive = false;
+				memcpy(from, to, sizeof(CloudPreset));
+				tCam = 1;
+			}
+		}
 		for (int i = 0; i < 11; i++)
-			cur[i] += (to[i] - cur[i]) * k;
+			at[i] = from[i] + (to[i] - from[i]) * tCam;
+		env.frontHalfWidth = env.frontActive ? FRONT_HALF_WIDTH : 0.0f;
 		// lightning inside the storm's clouds (with the seasons' weather, its strikes): flashes
 		// every 4 to 14 seconds, flickering out over a quarter of a second
 		const float stormNow = env.cloudPreset.storm;
@@ -592,7 +687,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		else
 			env.cloudFlash[3] = 0.0f;
 	}
-	const DiligentGfx::ShadowEnvironment::CloudPresetState& preset = env.cloudPreset;
+	// the buffer's weather: the new one (the old one in the front's fields)
+	const DiligentGfx::ShadowEnvironment::CloudPresetState& preset = env.cloudTo;
+	const DiligentGfx::ShadowEnvironment::CloudPresetState& old = env.cloudFrom;
 	// the sky light's map: around the point the camera looks at, snapped to its texels
 	const float size = 2.0f * DiligentGfx::ShadowEnvironment::SKY_OCC_RADIUS;
 	const float texel = size / DiligentGfx::ShadowEnvironment::SKY_OCC_SIZE;
@@ -605,7 +702,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
 	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
-	const float data[52] = {
+	const float data[68] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -619,8 +716,12 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		preset.stratus, preset.storm, preset.density, preset.light,
 		env.cloudFlash[0], env.cloudFlash[1], env.cloudFlash[2], env.cloudFlash[3],
 		preset.cirrus, preset.alto, preset.altoSheet, 0.0f,
+		std::clamp(old.cover, 0.0f, 1.0f), old.base, old.thickness, old.shadow,
+		old.stratus, old.storm, old.density, old.light,
+		old.cirrus, old.alto, old.altoSheet, 0.0f,
+		0.948683f, 0.316228f, env.frontPos, env.frontHalfWidth,
 	};
-	static_assert(sizeof(data) <= 208, "the cloud buffer's size (CreateCloudResources)");
+	static_assert(sizeof(data) <= 272, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }
