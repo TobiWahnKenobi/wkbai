@@ -4,7 +4,7 @@
 
 #pragma once
 
-// Ray-traced sun shadows of the buildings, trees and units (RenderSettings::rtShadows; RE
+// Ray-traced sun shadows of the buildings, trees, units and the terrain (RenderSettings::rtShadows; RE
 // repository docs/engine/gi-clouds.md), with hardware ray tracing through Diligent (inline ray
 // queries, DXR 1.1 / VK_KHR_ray_query): instead of the static shadow map.
 //
@@ -33,6 +33,8 @@
 #include <string>
 #include <vector>
 
+class Terrain;
+
 class DiligentRayShadows {
 public:
 	// whether the device can (inline ray tracing, DXC for the mask's shader)
@@ -52,15 +54,25 @@ public:
 	Diligent::IBottomLevelAS* blas(Diligent::IDeviceContext* ctx, const void* key, uint32_t frame, Diligent::IBuffer* positions,
 		uint64_t positionOffset, uint32_t vertexCount, Diligent::IBuffer* indices, const std::vector<Group>& groups);
 
+	// The terrain as a caster too (hills shading the valleys): its height grid, two triangles per
+	// tile, built again when version changes (the terrain renderer's heights). The terrain
+	// renderer draws a smooth (tessellated) surface through the same vertices, which lies under
+	// these flat triangles in hollows: the terrain's triangles are hit from their upper side only
+	// (back faces culled), so a ray starting a little under them goes through; the models stay
+	// two-sided. Only the shadow mask sees the terrain (instance mask), not the reflections.
+	// null: no terrain.
+	void setTerrain(Diligent::IDeviceContext* ctx, const Terrain* terrain, uint64_t version);
+
 	void beginFrame() { instances.clear(); }
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
 	// the frame's top-level structure from the casters added
 	void build(Diligent::IDeviceContext* ctx);
 	// the shadow mask (R8: 1 sunlit, 0 in shadow) of the scene's depth, for its size;
-	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors)
+	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors);
+	// fogBuffer: the renderers' FogBuffer (the shadows fade into the fog)
 	Diligent::ITextureView* renderMask(Diligent::IDeviceContext* ctx, Diligent::ITexture* depth, const float projection[4],
-		const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex);
+		const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, Diligent::IBuffer* fogBuffer);
 	// starts the water's reflection pass: the target (RGBA16F, the frame's size, cleared) and the
 	// pipeline are set with the depth target; the caller draws its water surface (float3
 	// position, float depth per vertex) with transformBuffer's view-projection, then restores
@@ -96,6 +108,11 @@ private:
 	void uploadAlpha(Diligent::IDeviceContext* ctx);
 	void bindAlpha(Diligent::IShaderResourceBinding* srb);
 	std::vector<Instance> instances;
+	// the terrain's structure (setTerrain), its positions and indices
+	Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS> terrainBlas;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> terrainVertices, terrainIndices;
+	const Terrain* terrainKey = nullptr;
+	uint64_t terrainVersion = ~0ull;
 	std::vector<std::string> names;
 	size_t lastInstanceCount = 0;
 	bool built = false, ok = false;
@@ -105,6 +122,7 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> constants;
 	Diligent::RefCntAutoPtr<Diligent::ITexture> mask;
 	Diligent::ITexture* boundDepth = nullptr;
+	Diligent::IBuffer* boundFog = nullptr;
 	Diligent::ITopLevelAS* boundTlas = nullptr;
 	// the water's reflections
 	bool reflectOk = false, reflectTried = false;

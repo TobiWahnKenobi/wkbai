@@ -1307,6 +1307,7 @@ void DiligentEnhancedSceneRenderer::render()
 					rts->add(blas, ent->transform);
 				}
 			}
+			rts->setTerrain(ctx, shadows.rayShadowsOn ? shadows.rtTerrain : nullptr, shadows.rtTerrainVersion);
 			rts->build(ctx);
 		}
 	}

@@ -1549,6 +1549,8 @@ void DiligentEnhancedTerrainRenderer::init()
 		env.terrainGrid[0] = (int)hdesc.Width;
 		env.terrainGrid[1] = (int)hdesc.Height;
 		env.terrainGrid[2] = (int)terrain->edge;
+		env.rtTerrain = terrain;
+		env.rtTerrainVersion++;
 	}
 
 	// The water's flow, sea, wave region and river maps (again when the water changes)
@@ -1703,13 +1705,15 @@ void DiligentEnhancedTerrainRenderer::init()
 		gp.RasterizerDesc.CullMode = CULL_MODE_BACK;
 	}
 
-	// Water: half transparent over the terrain, depth tested but not written
+	// Water: half transparent over the terrain, depth tested and written: what comes after it
+	// (the ray-traced shadows' mask, the fog, the temporal anti-aliasing) sees the water's or the
+	// ice's surface, not the bed under it
 	RefCntAutoPtr<IShader> lakeVs = createShader(SHADER_TYPE_VERTEX, "VS_Lake");
 	RefCntAutoPtr<IShader> lakePs = createShader(SHADER_TYPE_PIXEL, "PS_Lake");
 	static const LayoutElement lakeLayout[] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 0, 1, VT_FLOAT32, False} };
 	ci.PSODesc.Name = "Enhanced terrain water";
 	gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
-	gp.DepthStencilDesc.DepthWriteEnable = False;
+	gp.DepthStencilDesc.DepthWriteEnable = True;
 	auto& blend = gp.BlendDesc.RenderTargets[0];
 	blend.BlendEnable = True;
 	blend.SrcBlend = BLEND_FACTOR_SRC_ALPHA;
@@ -1998,6 +2002,8 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 		auto& shadows = ((DiligentGfx*)gfx)->shadows;
 		shadows.cloudMap = nullptr;
 		shadows.terrainHeights = nullptr;
+		shadows.rtTerrain = nullptr;
+		shadows.rtTerrainVersion++;
 		shadows.staticShadowDSV = shadows.staticShadowSRV = nullptr;
 		shadows.staticShadowValid = false;
 		if (_impl->cloudMap)
@@ -2038,6 +2044,7 @@ bool DiligentEnhancedTerrainRenderer::updateHeights()
 	}
 	if (_impl->waterfalls)
 		_impl->waterfalls->rebuild();
+	dgfx->shadows.rtTerrainVersion++; // the ray-traced shadows' terrain
 	return true;
 }
 
