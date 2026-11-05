@@ -151,6 +151,10 @@ struct DiligentGfx : IRenderer
 		// down and the map edge in tiles
 		Diligent::ITextureView* terrainHeights = nullptr;
 		int terrainGrid[3] = {};
+		// the terrain for the ray-traced shadows (the terrain renderer's while it lives) and its
+		// heights' version, raised whenever they change
+		const class Terrain* rtTerrain = nullptr;
+		uint64_t rtTerrainVersion = 0;
 		// ray-traced shadows (DiligentRayShadows, RenderSettings::rtShadows): made at the first
 		// frame that wants them; on in this frame; the sun (towards it) for the mask. The water's
 		// ray-traced reflections (RenderSettings::rtReflections) use the same scene.

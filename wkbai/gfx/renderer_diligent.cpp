@@ -558,7 +558,7 @@ struct DiligentRenderer : DiligentGfx
 		// the ray-traced shadows' mask from the scene's depth
 		if (postEffects && shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid() && post->depthDSV()) {
 			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
-			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame);
+			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer);
 			s.rtShadowLight = 0.5f;
 		}
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);

@@ -4,6 +4,7 @@
 
 #include "DiligentRayShadows.h"
 #include "../util/util.h"
+#include "../terrain.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -50,6 +51,26 @@ cbuffer RtBuffer
 	float4x4 InverseView; // view -> world (row vectors)
 };
 
+// the renderers' fog (renderer_diligent.cpp writeFogBuffer): the shadows fade with it, as the
+// composite darkens the fogged colour (the terrain far beyond the map's edge is all fog)
+cbuffer FogBuffer
+{
+	float4 FogColor;
+	float FogStartDist;
+	float FogEndDist;
+	float4 FogCamera;
+	float4 Grade;
+	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
+};
+
+float FogAmount(float3 worldPos, float distanceToCamera)
+{
+	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
+	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
+	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
+	return max(distanceFog, edgeFog);
+}
+
 struct VS_OUTPUT
 {
 	float4 Pos : SV_POSITION;
@@ -93,6 +114,9 @@ float PS(VS_OUTPUT input) : SV_Target
 	float3 l = normalize(SunDir.xyz);
 	if (dot(n, l) <= 0.01)
 		return 1; // turned away from the sun: its shading is dark already
+	float fog = FogAmount(p, distance(p, FogCamera.xyz));
+	if (fog >= 0.999)
+		return 1;
 	// a point of the sun's disc, moved every frame (interleaved gradient noise)
 	float2 q = input.Pos.xy + 5.588238 * fmod(Texel.z, 64);
 	float r1 = frac(52.9829189 * frac(dot(q, float2(0.06711056, 0.00583715))));
@@ -106,11 +130,12 @@ float PS(VS_OUTPUT input) : SV_Target
 	ray.Origin = p + n * (0.05 + dist * 0.0008);
 	ray.TMin = 0.01;
 	ray.Direction = dir;
-	ray.TMax = 500;
-	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
+	ray.TMax = 2000; // the terrain's long shadows at a low sun
+	// (back faces culled: only the terrain's, the models' instances turn the culling off)
+	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : 1;
+	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : 1;
 }
 )---";
 
@@ -162,7 +187,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	ray.Direction = r;
 	ray.TMax = Camera.w;
 	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
-	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
+	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
 )---" ALPHA_TEST_LOOP(rq) R"---(
 	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
 		return float4(0, 0, 0, 0);
@@ -218,6 +243,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_PIXEL, "RtBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -413,9 +439,10 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 {
 	lastInstanceCount = instances.size();
 	built = false;
-	if (instances.empty())
+	const bool withTerrain = terrainBlas != nullptr;
+	if (instances.empty() && !withTerrain)
 		return;
-	const Uint32 count = (Uint32)instances.size();
+	const Uint32 count = (Uint32)instances.size() + (withTerrain ? 1 : 0);
 	if (count > tlasCapacity) {
 		tlasCapacity = std::max<Uint32>(count * 2, 1024);
 		TopLevelASDesc td;
@@ -441,7 +468,7 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 	while (names.size() < count)
 		names.push_back("i" + std::to_string(names.size()));
 	std::vector<TLASBuildInstanceData> data(count);
-	for (Uint32 i = 0; i < count; i++) {
+	for (Uint32 i = 0; i < (Uint32)instances.size(); i++) {
 		TLASBuildInstanceData& d = data[i];
 		d.InstanceName = names[i].c_str();
 		d.pBLAS = instances[i].blas;
@@ -451,8 +478,19 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 				d.Transform.data[r][c] = m.m[c][r];
 			d.Transform.data[r][3] = m.m[3][r];
 		}
-		d.Mask = 0xFF;
+		d.Mask = 0x01;
 		d.CustomId = instances[i].geometryBase;
+		d.Flags = RAYTRACING_INSTANCE_TRIANGLE_FACING_CULL_DISABLE; // leaves and walls seen from either side
+	}
+	if (withTerrain) {
+		// in world space already; opaque, so its CustomId isn't read
+		TLASBuildInstanceData& d = data[count - 1];
+		d.InstanceName = names[count - 1].c_str();
+		d.pBLAS = terrainBlas;
+		d.Transform = InstanceMatrix{};
+		d.Mask = 0x02;
+		d.CustomId = 0;
+		d.Flags = RAYTRACING_INSTANCE_NONE;
 	}
 	BuildTLASAttribs ta;
 	ta.pTLAS = tlas;
@@ -468,6 +506,100 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 	ctx->BuildTLAS(ta);
 	uploadAlpha(ctx);
 	built = true;
+}
+
+void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain, uint64_t version)
+{
+	if (!terrain) {
+		terrainBlas.Release();
+		terrainKey = nullptr;
+		return;
+	}
+	if (terrain == terrainKey && version == terrainVersion && terrainBlas)
+		return;
+	terrainKey = terrain;
+	terrainVersion = version;
+	terrainBlas.Release();
+	// the vertices as the terrain renderer places them: (x - edge, z - edge) tiles of 5 units
+	const int w = terrain->width, h = terrain->height;
+	const uint32_t vertexCount = (uint32_t)(w + 1) * (h + 1);
+	std::vector<float> positions((size_t)vertexCount * 3);
+	for (int z = 0; z <= h; z++)
+		for (int x = 0; x <= w; x++) {
+			float* p = &positions[((size_t)z * (w + 1) + x) * 3];
+			p[0] = (x - terrain->edge) * 5.0f;
+			p[1] = terrain->getVertex(x, z);
+			p[2] = (z - terrain->edge) * 5.0f;
+		}
+	// per tile its corners 0 (x, z), 1 (x + 1, z), 2 (x + 1, z + 1), 3 (x, z + 1) as the terrain
+	// renderer's 0 3 1, 1 3 2: clockwise seen from above, so the upper side is the front
+	std::vector<uint32_t> indices;
+	indices.reserve((size_t)w * h * 6);
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const uint32_t c0 = z * (w + 1) + x, c1 = c0 + 1, c3 = c0 + (w + 1), c2 = c3 + 1;
+			for (uint32_t c : { c0, c3, c1, c1, c3, c2 })
+				indices.push_back(c);
+		}
+	auto make = [&](const char* name, const void* data, uint64_t bytes, RefCntAutoPtr<IBuffer>& buffer) {
+		BufferDesc bd;
+		bd.Name = name;
+		bd.Size = bytes;
+		bd.BindFlags = BIND_RAY_TRACING;
+		bd.Usage = USAGE_IMMUTABLE;
+		BufferData init{ data, bytes };
+		buffer.Release();
+		device->CreateBuffer(bd, &init, &buffer);
+	};
+	make("Ray tracing: terrain vertices", positions.data(), positions.size() * 4, terrainVertices);
+	make("Ray tracing: terrain indices", indices.data(), indices.size() * 4, terrainIndices);
+	if (!terrainVertices || !terrainIndices || indices.empty())
+		return;
+	BLASTriangleDesc d;
+	d.GeometryName = "terrain";
+	d.MaxVertexCount = vertexCount;
+	d.VertexValueType = VT_FLOAT32;
+	d.VertexComponentCount = 3;
+	d.MaxPrimitiveCount = (Uint32)(indices.size() / 3);
+	d.IndexType = VT_UINT32;
+	BottomLevelASDesc desc;
+	desc.Name = "Terrain shadow caster";
+	desc.pTriangles = &d;
+	desc.TriangleCount = 1;
+	desc.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE;
+	device->CreateBLAS(desc, &terrainBlas);
+	if (!terrainBlas)
+		return;
+	const Uint64 need = terrainBlas->GetScratchBufferSizes().Build;
+	if (!scratch || scratch->GetDesc().Size < need) {
+		BufferDesc sd;
+		sd.Name = "BLAS scratch";
+		sd.Size = std::max<Uint64>(need, 1 << 20);
+		sd.BindFlags = BIND_RAY_TRACING;
+		scratch.Release();
+		device->CreateBuffer(sd, nullptr, &scratch);
+	}
+	BLASBuildTriangleData b;
+	b.GeometryName = d.GeometryName;
+	b.pVertexBuffer = terrainVertices;
+	b.VertexStride = 12;
+	b.VertexCount = vertexCount;
+	b.VertexValueType = VT_FLOAT32;
+	b.VertexComponentCount = 3;
+	b.PrimitiveCount = d.MaxPrimitiveCount;
+	b.pIndexBuffer = terrainIndices;
+	b.IndexType = VT_UINT32;
+	b.Flags = RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+	BuildBLASAttribs ba;
+	ba.pBLAS = terrainBlas;
+	ba.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ba.GeometryTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ba.pTriangleData = &b;
+	ba.TriangleDataCount = 1;
+	ba.pScratchBuffer = scratch;
+	ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ctx->BuildBLAS(ba);
+	printf("Ray-traced shadows: terrain %d x %d tiles\n", w, h);
 }
 
 void DiligentRayShadows::uploadAlpha(IDeviceContext* ctx)
@@ -505,9 +637,9 @@ void DiligentRayShadows::bindAlpha(IShaderResourceBinding* b)
 }
 
 ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* depth, const float projection[4],
-	const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex)
+	const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, IBuffer* fogBuffer)
 {
-	if (!built || !depth)
+	if (!built || !depth || !fogBuffer)
 		return nullptr;
 	const TextureDesc& dd = depth->GetDesc();
 	if (!mask || mask->GetDesc().Width != dd.Width || mask->GetDesc().Height != dd.Height) {
@@ -521,9 +653,11 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		mask.Release();
 		device->CreateTexture(td, nullptr, &mask);
 	}
-	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion) {
+	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer) {
 		srb.Release();
 		signature->CreateShaderResourceBinding(&srb, true);
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(fogBuffer);
+		boundFog = fogBuffer;
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
 		bindAlpha(srb);
