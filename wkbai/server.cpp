@@ -428,8 +428,10 @@ std::string Server::aiSettingsText() const
 		if (!name.empty())
 			text += "aiScript." + std::to_string(id) + "=" + name + "\n";
 	// wkbai's day and night, seasons and weather (only when on: older builds read the same file)
-	if (environment.enabled())
+	if (environment.enabled()) {
 		text += environment.settings.text();
+		text += "aiWeather=" + std::to_string(aiWeather) + "\n";
+	}
 	return text;
 }
 
@@ -460,6 +462,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiWar") aiWar = v != 0;
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
+		else if (name == "aiWeather") aiWeather = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
 		else if (name == "aiFocusAttacks") aiFocusAttacks = v != 0;
 		else if (name == "aiEarlyFarms") aiEarlyFarms = (int)v;

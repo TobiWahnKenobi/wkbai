@@ -13,6 +13,7 @@
 #include <vector>
 
 struct ServerGameObject;
+struct OrderBlueprint;
 struct GSFileParser;
 struct GameSet;
 struct WorkOrder;
@@ -111,6 +112,36 @@ struct AIController {
 	int lifelines = 0; // the food given by the lifeline (AIController::update)
 	// wkbai's seasons: the food kept back for the winter (no spending below it, canAffordObject)
 	float winterReserve = 0.0f, nextWinterCheck = 0.0f;
+	// wkbai's seasons and weather, the AI's answers (AIWeather.cpp, "aiWeather"): whether this
+	// player has them (-1: not decided yet); the units the weather moved, out of the work orders',
+	// the war layer's and focus fire's hands until released (the scripts' army or formation they
+	// were taken out of, why, until when, when last sent); the burning buildings whose garrison was
+	// let out; when a wave was first held; counts for the census
+	// (and the order it had, given back on release: the scripts' first builders have theirs from
+	// the scripts, not from a work order, and their opening waited for good when it was lost)
+	struct WeatherHold { float until = 0.0f, sent = 0.0f; uint32_t parent = 0, target = 0; const OrderBlueprint* order = nullptr; uint8_t why = 0; };
+	std::map<uint32_t, WeatherHold> weatherHeld;
+	std::map<uint32_t, float> weatherUngarrisoned;
+	int weatherState = -1;
+	float nextWeatherCheck = 0.0f, waveHeldSince = -1.0f;
+	int weatherSheltered = 0, weatherIceRetreats = 0, weatherFloodRetreats = 0, weatherFireRetreats = 0, weatherExtinguish = 0, weatherUngarrisons = 0;
+	int wavesHeldCold = 0, wavesHeldIce = 0, wavesHeldNight = 0, nightWaves = 0;
+	bool weatherActive();
+	void weatherUpdate();
+	bool weatherHolds(uint32_t id) const { return !weatherHeld.empty() && weatherHeld.count(id) != 0; }
+	// whether the war layer may take the unit: not held, or only kept home from the cold or heat
+	bool weatherPoolable(uint32_t id) const { auto it = weatherHeld.find(id); return it == weatherHeld.end() || it->second.why <= 2; }
+	void weatherWaveSent();
+	void weatherHold(ServerGameObject* u, int why, float until, const Vector3* moveTo, ServerGameObject* target = nullptr, int order = -1);
+	void weatherRelease(uint32_t id);
+	// a new wave from base at the target: whether the weather says wait (harmful cold or heat, the
+	// thaw, the coming night)
+	bool weatherHoldsWave(const Vector3& base, ServerGameObject* target, bool striking);
+	// the soldiers kept home: more at night
+	size_t weatherKeep(size_t available, size_t keep);
+	// no foundation where a flood could reach
+	bool weatherAvoidsSite(const Vector3& pos);
+	std::string weatherCensus() const;
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
 	// the war layer (AIAdvanced.cpp, "aiWar"): its defence forces (an army of its own at a

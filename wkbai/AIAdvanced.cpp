@@ -800,7 +800,7 @@ void AIController::warUpdate()
 						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 							units.push_back((ServerGameObject*)c);
 			for (ServerGameObject* u : units)
-				if (IsFighter(u) && u->isInteractable())
+				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id))
 					pool.push_back(u);
 		}
 	}
@@ -822,7 +822,7 @@ void AIController::warUpdate()
 				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 					loose.push_back((ServerGameObject*)c);
 		for (ServerGameObject* u : loose) {
-			if (!IsFighter(u) || !u->isInteractable())
+			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
 				continue;
 			const float d2 = (u->position - base).sqlen2xz();
 			const bool idle = !u->orderConfig.getCurrentOrder();
@@ -888,6 +888,8 @@ void AIController::warUpdate()
 		}
 		for (ServerGameObject* u : units) {
 			busy.insert(u);
+			if (weatherHolds(u->id))
+				continue;
 			ServerGameObject* tg = targetOf(u);
 			if (!enemies.empty() && (!tg || !IsSoldier(tg)))
 				if (ServerGameObject* e = NearestEnemy(enemies, u->position))
@@ -955,6 +957,7 @@ void AIController::warUpdate()
 		}
 		for (size_t i = 0; i < used; i++) {
 			ServerGameObject* u = available[i];
+			weatherRelease(u->id);
 			u->setParent(army);
 			if (ServerGameObject* e = NearestEnemy(t.enemies, u->position))
 				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
@@ -1042,7 +1045,7 @@ void AIController::warUpdate()
 		// the soldiers met first, within 30 m of each unit (formations march on by themselves; the
 		// wave's centre, with stragglers, was seldom near the enemies: no unit ever engaged)
 		for (ServerGameObject* u : units) {
-			if (u->getParent() && u->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+			if ((u->getParent() && u->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) || weatherHolds(u->id))
 				continue;
 			const std::vector<ServerGameObject*> soldiers = EnemiesNear(gameObj, u->position, 30.0f, false);
 			ServerGameObject* tg = targetOf(u);
@@ -1089,7 +1092,7 @@ void AIController::warUpdate()
 	const int size = std::clamp((int)(popLimit * 0.15f), 12, std::max(12, cap));
 	const bool striking = counterPlayer && now <= counterUntil;
 	const bool overdue = lastWarWave >= 0.0f ? now - lastWarWave > 240.0f : now > 600.0f;
-	const size_t keep = std::max<size_t>(6, available.size() / 5);
+	const size_t keep = weatherKeep(available.size(), std::max<size_t>(6, available.size() / 5));
 	if (getenv("WKB_TRACE_WAR") && (int)now % 60 < 3)
 		printf("WAR player %u t=%.0f: pool %zu, available %zu, busy %zu, keep %zu, wave size %d, at the palace %d%s%s\n", gameObj->id, now, pool.size(), available.size(), busy.size(),
 			keep, size, atPalace, overdue ? ", overdue" : "", striking ? ", striking back" : "");
@@ -1124,11 +1127,17 @@ void AIController::warUpdate()
 		target = focus >= 0 ? (ServerGameObject*)gs->objectFinderDefinitions[focus]->getFirst(&hctx) : nullptr;
 	if (!target)
 		return;
+	// the weather may say wait: harmful cold or heat, the thaw, the coming night (AIWeather.cpp)
+	if (weatherHoldsWave(base, target, striking))
+		return;
 	// the nearest to home stay
 	std::sort(available.begin(), available.end(), [&](ServerGameObject* a, ServerGameObject* b) {
 		return (a->position - base).sqlen2xz() < (b->position - base).sqlen2xz(); });
 	std::vector<ServerGameObject*> members(available.begin() + keep, available.end());
+	for (ServerGameObject* u : members)
+		weatherRelease(u->id);
 	if (ServerGameObject* army = launchWave(members, target, home)) {
+		weatherWaveSent();
 		ServerGameObject* owner = target->getPlayer();
 		std::vector<uint32_t> ids;
 		for (ServerGameObject* u : members)

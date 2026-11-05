@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <map>
 #include <set>
 #include <string>
@@ -45,6 +46,32 @@ struct ServerEnvironment {
 	float fireRisk() const;
 	void fireLanded(Server& server, const Vector3& pos, bool sure = false);
 
+	// ---- for the AI (AIWeather.cpp): what the weather does, asked without random numbers ----
+	// the felt temperatures (the exposure's): below 2 C the cold exposure grows, below -4 C it
+	// harms; above 30 C the heat exposure grows, above 34 C it harms
+	float coldFeel() const;
+	float heatFeel() const;
+	// a unit's cold and heat exposure (0-200; over 100 it is harmed)
+	float coldExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.cold : 0.0f; }
+	float heatExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.heat : 0.0f; }
+	// the shelters (villages, manors, keeps, castles, palaces, fully built) as of the last update:
+	// their player's id and place; within SHELTER_RADIUS of one's own or an ally's no one freezes
+	static constexpr float SHELTER_RADIUS = 45.0f;
+	struct ShelterSpot { uint32_t player; Vector3 pos; };
+	const std::vector<ShelterSpot>& shelterSpots() const { return shelters; }
+	// whether the cold and the heat touch this blueprint (the living, not machines or the undead)
+	bool feelsWeather(const GameObjBlueprint* bp) const { return kindOf(bp) == K_LIVING; }
+	bool isUndead(const GameObjBlueprint* bp) const { return kindOf(bp) == K_UNDEAD; }
+	// water too deep to wade at a place (the ice over it breaks below ICE_BREAKS)
+	bool onDeepWater(const Vector3& p) const;
+	// how deep the flood water would stand at a place with the water risen by `rise` metres (0: no
+	// land that floods there)
+	float floodDepthAt(const Vector3& p, float rise) const;
+	// where the water's level heads now (the weather's, metres)
+	float waterTarget() const;
+	// the burning land's patches
+	std::vector<Vector3> firePositions() const;
+
 	// a save game's side file (<save>.env.txt): the settings and the state, read back as is
 	std::string saveText() const;
 	void loadText(const std::string& text);
@@ -53,7 +80,9 @@ struct ServerEnvironment {
 	// for the tests: what happened ("AITEST environment" lines)
 	struct Stats { int frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
 		size_t floodTiles = 0, floodedTiles = 0; int onIceMost = 0, onIceSeconds = 0, fallowHarvests = 0;
-		int wildfires = 0, fireCells = 0, fireCellsMost = 0, fireDeaths = 0, buildingsFired = 0, fromMissiles = 0, fromBuildings = 0, spontaneous = 0; } stats;
+		int wildfires = 0, fireCells = 0, fireCellsMost = 0, fireDeaths = 0, buildingsFired = 0, fromMissiles = 0, fromBuildings = 0, spontaneous = 0;
+		// the deaths by player id: 0 frozen, 1 thirst, 2 drowned (floods and the ice), 3 fire, 4 lightning
+		std::map<uint32_t, std::array<int, 5>> deathsBy; } stats;
 	// what happens: frozen units, strikes (for the tests' census)
 	bool trace = false;
 	// tests ("environmentForce": { "weather": <EnvWeather>, "waterRise": <m> }): that weather
@@ -86,6 +115,12 @@ private:
 	// the water too deep to wade (MovementController::isTerrainBlocked): who is on it when the
 	// ice breaks goes under
 	std::vector<int> deepTiles;
+	// the same as a grid (playable tiles, row order), and each tile's index in floodTiles (-1: none)
+	int gridW = 0, gridH = 0;
+	std::vector<uint8_t> deepGrid;
+	std::vector<int> floodIndex;
+	std::vector<ShelterSpot> shelters;
+	void countDeath(ServerGameObject* unit, int cause);
 	bool floodPrepared = false;
 	int simTraceCountdown = 0;
 	// blueprints by kind, worked out once

@@ -317,6 +317,10 @@ void AIController::update()
 		}
 	}
 
+	// ---- The weather (wkbai's seasons and weather, AIWeather.cpp) ----
+	if (weatherActive())
+		weatherUpdate();
+
 	// ---- The home guard (the aggressive AI, not in WKB.exe; AIController::homeGuard) ----
 	if (Server::instance->aggressiveAI && Server::instance->aiHomeGuard && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER
 		&& Server::instance->timeManager.currentTime >= nextGuardCheck) {
@@ -641,7 +645,8 @@ void AIController::update()
 			}
 			if (there >= units.size() * 0.7f || now - it->since > 90.0f) {
 				for (ServerGameObject* u : units)
-					u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+					if (!weatherHolds(u->id))
+						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 				it = gatheringWaves.erase(it);
 				continue;
 			}
@@ -743,7 +748,7 @@ void AIController::update()
 						if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 							centre += u->position;
 							members++;
-							if (u->getItem(missile) > 0.0f)
+							if (u->getItem(missile) > 0.0f && !weatherHolds(u->id))
 								shooters.push_back(u);
 						}
 						else if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
@@ -796,6 +801,9 @@ void AIController::update()
 			continue;
 		SrvScriptContext ctx{ Server::instance, woi.city };
 		unitLists[wi] = woi.unitFinder->eval(&ctx);
+		// the units the weather moved (AIWeather.cpp) work again once released
+		if (!weatherHeld.empty())
+			unitLists[wi].resize(std::remove_if(unitLists[wi].begin(), unitLists[wi].end(), [&](ServerGameObject* u) { return weatherHolds(u->id); }) - unitLists[wi].begin());
 		for (ServerGameObject* unit : unitLists[wi]) {
 			auto prev = unitWorkOrder.find(unit->id);
 			const bool kept = prev != unitWorkOrder.end() && prev->second == std::make_pair(woi.city->id, woi.workOrder);
@@ -1199,6 +1207,9 @@ void AIController::update()
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
 				// no site (the position's finder found nothing): no foundation this time
 				if (posori.position.x == 0.0f && posori.position.z == 0.0f)
+					break;
+				// nor on land a flood could cover (wkbai's weather, AIWeather.cpp)
+				if (weatherAvoidsSite(posori.position))
 					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);

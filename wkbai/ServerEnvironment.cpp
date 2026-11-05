@@ -307,8 +307,10 @@ void ServerEnvironment::updateFires(Server& server)
 		if (ServerGameObject* o = ref.get()) {
 			const bool wasAlive = hp >= 0 && o->getItem(hp) > 0.0f;
 			damage(server, o, frac);
-			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f))
+			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
 				stats.fireDeaths++;
+				countDeath(o, 3);
+			}
 		}
 	stats.fireCellsMost = std::max(stats.fireCellsMost, (int)fires.size());
 }
@@ -327,6 +329,55 @@ float ServerEnvironment::winterAhead(float now, int* severity) const
 	if (season == 2 && into >= 0.5f)
 		return length;
 	return 0.0f;
+}
+
+float ServerEnvironment::coldFeel() const
+{
+	return state.temperatureC - (state.weather == WEATHER_BLIZZARD ? 6.0f : state.snowfall * 3.0f) - state.wetness * 2.0f;
+}
+
+float ServerEnvironment::heatFeel() const
+{
+	return state.temperatureC + (state.weather == WEATHER_DROUGHT ? 3.0f : 0.0f);
+}
+
+float ServerEnvironment::waterTarget() const
+{
+	float target = WEATHER_WATER[state.weather] * (state.severity == 0 ? 0.5f : state.severity == 2 ? 1.6f : 1.0f);
+	if (state.ice > 0.5f)
+		target = std::min(target, 0.0f);
+	if (forceWaterRise > -999.0f)
+		target = forceWaterRise;
+	return target;
+}
+
+bool ServerEnvironment::onDeepWater(const Vector3& p) const
+{
+	const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+	return p.x >= 0 && p.z >= 0 && tx < gridW && tz < gridH && deepGrid[tz * gridW + tx];
+}
+
+float ServerEnvironment::floodDepthAt(const Vector3& p, float rise) const
+{
+	const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+	if (p.x < 0 || p.z < 0 || tx >= gridW || tz >= gridH)
+		return 0.0f;
+	const int i = floodIndex[tz * gridW + tx];
+	return i < 0 ? 0.0f : std::max(0.0f, floodTiles[i].water + rise - floodTiles[i].ground);
+}
+
+std::vector<Vector3> ServerEnvironment::firePositions() const
+{
+	std::vector<Vector3> list;
+	for (const Wildfire& f : fires)
+		list.push_back(f.pos);
+	return list;
+}
+
+void ServerEnvironment::countDeath(ServerGameObject* unit, int cause)
+{
+	if (ServerGameObject* player = unit ? unit->getPlayer() : nullptr)
+		stats.deathsBy[player->id][cause]++;
 }
 
 void ServerEnvironment::damage(Server& server, ServerGameObject* obj, float fraction)
@@ -424,6 +475,10 @@ void ServerEnvironment::strikeLightning(Server& server)
 		// the Act of God's own strike (AOG Lightning.cpp): damage, the building set on fire, the
 		// characters around hurt, the effect
 		const int seq = server.gameSet->actionSequences.names.getIndex("Damage Done By Direct Lightning");
+		const int hpItem = server.gameSet->items.names.getIndex("Hit Points");
+		const SrvGORef struck = target;
+		const bool struckAlive = !isBuilding && hpItem >= 0 && target->getItem(hpItem) > 0.0f;
+		ServerGameObject* struckPlayer = target->getPlayer();
 		if (seq >= 0) {
 			SrvScriptContext ctx(&server, target);
 			auto _ = ctx.change(ctx.sequenceExecutor, target);
@@ -431,6 +486,8 @@ void ServerEnvironment::strikeLightning(Server& server)
 		}
 		else
 			damage(server, target, isBuilding ? 0.3f : 1.0f);
+		if (ServerGameObject* u = struck.get(); struckAlive && struckPlayer && (!u || u->getItem(hpItem) <= 0.0f))
+			stats.deathsBy[struckPlayer->id][4]++;
 		if (trace)
 			printf("ENVIRONMENT t=%.0f lightning hits (%s) %s %u at (%.0f, %.0f)\n", state.time, seq >= 0 ? "the scripts' strike" : "own damage", target->blueprint->name.c_str(), target->id, target->position.x, target->position.z);
 	}
@@ -449,6 +506,7 @@ void ServerEnvironment::applyExposure(Server& server)
 	// the shelters (villages and manors, keep, castle, palace): their players and places
 	struct Shelter { CommonGameObject* player; Vector3 pos; };
 	std::vector<Shelter> shelters;
+	this->shelters.clear();
 	std::vector<ServerGameObject*> living;
 	auto walk = [&](ServerGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
@@ -457,8 +515,10 @@ void ServerEnvironment::applyExposure(Server& server)
 				if (so->deleted || (so->flags & CommonGameObject::fTerminated))
 					continue;
 				const uint8_t k = kindOf(so->blueprint);
-				if (k == K_SHELTER)
+				if (k == K_SHELTER) {
 					shelters.push_back({ so->getPlayer(), so->position });
+					this->shelters.push_back({ so->getPlayer() ? so->getPlayer()->id : 0u, so->position });
+				}
 				else if (k == K_LIVING)
 					living.push_back(so);
 				self(so, self);
@@ -467,8 +527,8 @@ void ServerEnvironment::applyExposure(Server& server)
 	walk(server.getLevel(), walk);
 	const int hp = server.gameSet->items.names.getIndex("Hit Points");
 	const float T = state.temperatureC;
-	const float coldFeel = T - (state.weather == WEATHER_BLIZZARD ? 6.0f : state.snowfall * 3.0f) - state.wetness * 2.0f;
-	const float heatFeel = T + (state.weather == WEATHER_DROUGHT ? 3.0f : 0.0f);
+	const float coldFeel = this->coldFeel();
+	const float heatFeel = this->heatFeel();
 	std::set<uint32_t> present;
 	for (ServerGameObject* unit : living) {
 		CommonGameObject* player = unit->getPlayer();
@@ -521,6 +581,7 @@ void ServerEnvironment::applyExposure(Server& server)
 			damage(server, unit, frac);
 			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
 				(cold ? stats.frozen : stats.thirst)++;
+				countDeath(unit, cold ? 0 : 1);
 				if (trace)
 					printf("ENVIRONMENT t=%.0f %s %u died of %s (%.1f C)\n", state.time, unit->blueprint->name.c_str(), ref.objid, cold ? "the cold" : "thirst", T);
 			}
@@ -543,18 +604,26 @@ void ServerEnvironment::prepareFloods(Server& server)
 	if (!t)
 		return;
 	const auto [w, h] = t->getNumPlayableTiles();
+	gridW = w;
+	gridH = h;
+	deepGrid.assign((size_t)w * h, 0);
+	floodIndex.assign((size_t)w * h, -1);
 	for (int z = 0; z < h; z++)
 		for (int x = 0; x < w; x++) {
 			const TerrainTile* tile = t->getPlayableTile(x, z);
 			if (tile && tile->fullOfWater) {
 				const float bed = std::min({ t->getVertex(t->edge + x, t->edge + z), t->getVertex(t->edge + x + 1, t->edge + z),
 					t->getVertex(t->edge + x, t->edge + z + 1), t->getVertex(t->edge + x + 1, t->edge + z + 1) });
-				if (tile->waterLevel - bed > 1.5f)
+				if (tile->waterLevel - bed > 1.5f) {
 					deepTiles.push_back(z * w + x);
+					deepGrid[z * w + x] = 1;
+				}
 			}
 		}
-	for (const FloodLand& f : FindFloodLand(t))
+	for (const FloodLand& f : FindFloodLand(t)) {
+		floodIndex[f.z * w + f.x] = (int)floodTiles.size();
 		floodTiles.push_back({ f.z * w + f.x, f.water, f.ground });
+	}
 }
 
 void ServerEnvironment::applyFloods(Server& server)
@@ -632,8 +701,10 @@ void ServerEnvironment::applyFloods(Server& server)
 				stats.floodedBuildings++;
 				stats.floodDamage += frac;
 			}
-			else if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f))
+			else if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
 				stats.drowned++;
+				countDeath(o, 2);
+			}
 		}
 }
 
@@ -739,12 +810,7 @@ void ServerEnvironment::update(Server& server)
 		state.wetness = std::clamp(state.wetness, 0.0f, 1.0f);
 		state.snowCover = std::clamp(state.snowCover, 0.0f, 1.0f);
 		state.ice = std::clamp(state.ice, 0.0f, 1.0f);
-		float waterTarget = WEATHER_WATER[state.weather] * (state.severity == 0 ? 0.5f : state.severity == 2 ? 1.6f : 1.0f);
-		if (state.ice > 0.5f)
-			waterTarget = std::min(waterTarget, 0.0f);
-		if (forceWaterRise > -999.0f)
-			waterTarget = forceWaterRise;
-		state.waterRise = Approach(state.waterRise, waterTarget, 0.008f, 0.004f);
+		state.waterRise = Approach(state.waterRise, waterTarget(), 0.008f, 0.004f);
 	}
 
 	// sight and speed, in steps (each change restarts the moving units' walks)

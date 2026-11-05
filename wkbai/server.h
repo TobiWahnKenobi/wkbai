@@ -272,6 +272,11 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone
 	int aiHumanFocus = 50;
+	// with the day and night, seasons and weather on, the AIs answer them (AIWeather.cpp): shelter
+	// from the cold and heat, off the ice before it thaws, out of floods and fires, fires put out,
+	// waves timed for the night: "aiWeather" 1 for every AI, 2 or 3 for every other one
+	// (comparisons), 0 off
+	int aiWeather = 1;
 	// each AI player's Lua AI (LuaAI\<name>.lua), by player id; none: the scripts and the C++ AI
 	std::map<uint32_t, std::string> aiScripts;
 	// per player, its buildings destroyed (removed with no hit points left): the AI tests
