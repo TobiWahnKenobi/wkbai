@@ -2367,6 +2367,33 @@ void Test_AIvsAI()
 				60000.0 / std::max(minuteSimMs, 0.001), minuteSimMs / 3000.0, minuteMaxStepMs, objects);
 			minuteSimMs = minuteMaxStepMs = 0.0;
 			census("at");
+			// wkbai's day and night, seasons and weather, when on
+			if (server.environment.enabled()) {
+				const ServerEnvironment& env = server.environment;
+				const EnvironmentState& e = env.state;
+				printf("AITEST environment t=%.0f: %02d:%02d %s (%s) %s %.1f C, clouds %.2f rain %.2f snow %.2f fog %.2f, wet %.2f snow cover %.2f ice %.2f water %+.2f m, sight %.2f speed %.2f, lit blocks %zu/%zu\n",
+					server.timeManager.currentTime, (int)(e.dayFraction * 24.0f), (int)(e.dayFraction * 1440.0f) % 60, SeasonName(e.season),
+					e.severity == 0 ? "gentle" : e.severity == 2 ? "harsh" : "normal", WeatherName(e.weather), e.temperatureC, e.cloudCover, e.rain,
+					e.snowfall, e.fog, e.wetness, e.snowCover, e.ice, e.waterRise, e.sightFactor, e.speedFactor,
+					(size_t)std::count(server.nightSight.lit.begin(), server.nightSight.lit.end(), (uint8_t)1), server.nightSight.lit.size());
+				const auto& st = env.stats;
+				{
+					std::string reserves;
+					if (CommonGameObject* level = server.getLevel())
+						for (const auto& [type, children] : level->children)
+							for (CommonGameObject* c : children)
+								if (auto* pl = (ServerGameObject*)c; c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && pl->aiController.winterReserve > 0.0f)
+							reserves += " " + std::to_string(pl->id) + "=" + std::to_string((int)pl->aiController.winterReserve) + "/" + std::to_string((int)pl->getItem(Tags::PDITEM_FOOD));
+					if (!reserves.empty())
+						printf("AITEST environment AI winter stores (kept back/food):%s\n", reserves.c_str());
+				}
+				const int burningAlias = server.gameSet->aliases.names.getIndex("Burning Buildings");
+				printf("AITEST environment flood tiles %zu, flooded now %zu; burning buildings: %zu; on the ice: at most %d units, %d unit-seconds; harvests lost to fallow fields %d; wildfires %d (%d from missiles, %d from buildings, %d out of nowhere), %d patches (at most %d at once), %d buildings set alight, %d killed, %zu trees charred\n", st.floodTiles, st.floodedTiles,
+					burningAlias >= 0 ? server.aliases[burningAlias].size() : (size_t)0, st.onIceMost, st.onIceSeconds, st.fallowHarvests,
+					st.wildfires, st.fromMissiles, st.fromBuildings, st.spontaneous, st.fireCells, st.fireCellsMost, st.buildingsFired, st.fireDeaths, server.environment.charredCount());
+				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
+					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
+			}
 		}
 	}
 	{

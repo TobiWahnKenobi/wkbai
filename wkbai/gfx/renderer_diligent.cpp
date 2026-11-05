@@ -15,6 +15,7 @@
 #include "../window.h"
 #include "../settings.h"
 #include "RenderSettings.h"
+#include "../Environment.h"
 #include "../util/util.h"
 #include "../Camera.h"
 
@@ -674,15 +675,21 @@ struct DiligentRenderer : DiligentGfx
 			cc[4] = 1e9f;
 			cc[5] = 2e9f;
 		}
+		// wkbai's weather: fog nearer (Environment.h; 1 without)
+		if (!g_renderSettings.fogOff && g_environment.fogDistance < 1.0f) {
+			cc[4] *= g_environment.fogDistance * g_environment.fogDistance * g_environment.fogDistance;
+			cc[5] *= g_environment.fogDistance;
+		}
 		cc[6] = cc[7] = 0.0f;
 		cc[8] = fogCamera.x;
 		cc[9] = fogCamera.y;
 		cc[10] = fogCamera.z;
 		cc[11] = 1.0f;
-		cc[12] = g_renderSettings.exposure;
+		// (wkbai's day and night: darker and paler at night, Environment.h; 1 without)
+		cc[12] = g_renderSettings.exposure * g_environment.exposure;
 		cc[13] = g_renderSettings.brightness;
 		cc[14] = g_renderSettings.contrast;
-		cc[15] = g_renderSettings.saturation;
+		cc[15] = g_renderSettings.saturation * g_environment.saturation;
 		cc[16] = fogEdge[0];
 		cc[17] = fogEdge[1];
 		cc[18] = fogEdge[2];

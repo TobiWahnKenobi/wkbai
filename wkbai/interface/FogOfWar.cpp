@@ -37,6 +37,10 @@ void FogOfWar::update(Client* client)
 	width = (uint32_t)w;
 	height = (uint32_t)h;
 	std::vector<uint8_t> next(width * height, 0);
+	// at night (wkbai's day and night) the sight is shorter, but for the lit ground (once a second)
+	NightSight& night = client->nightSight;
+	if (night.active() && (night.lit.empty() || ++nightRebuild % 4 == 0))
+		night.rebuild(client);
 
 	auto stamp = [&](const Vector3& pos, float sight) {
 		// as WKB.exe: whole tiles of 5 m; the last tile fades out
@@ -50,7 +54,8 @@ void FogOfWar::update(Client* client)
 			for (int x = x0; x <= x1; x++) {
 				const float dx = x * 5.0f + 2.5f - pos.x;
 				const float d = std::sqrt(dx * dx + dz * dz);
-				const float seen = std::clamp((radius - d) / 5.0f + 0.5f, 0.0f, 1.0f);
+				const float r = night.active() ? night.radiusFor(radius, Vector3(x * 5.0f + 2.5f, 0.0f, z * 5.0f + 2.5f)) : radius;
+				const float seen = std::clamp((r - d) / 5.0f + 0.5f, 0.0f, 1.0f);
 				uint8_t& t = next[z * width + x];
 				t = std::max(t, (uint8_t)(seen * 255.0f));
 			}

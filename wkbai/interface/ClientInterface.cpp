@@ -29,6 +29,8 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "EnvironmentView.h"
+#include "../TreeModels.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "../gfx/renderer_diligent.h"
@@ -224,6 +226,8 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
 
+	// wkbai's weather: the snow and the ice
+	DrawMinimapWeather(gfx, client, drawList, mapX, mapY, mapX + mapW, mapY + mapH);
 	// the fog of war, darker where the player's units don't see (as on the original's minimap)
 	const bool fogOn = fogOfWarOn() && !fogOfWar.tiles.empty();
 	if (fogOn && fogOfWar.version != minimapFogVersion) {
@@ -751,6 +755,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const weatherLevels[] = { "Low", "Medium (snow on roofs and models)", "High (footprints)", "Ultra" };
+			ImGui::Combo("Weather and season effects", &s.weatherEffects, weatherLevels, 4);
+		}
 		{
 			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
@@ -1361,6 +1369,19 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 				model = anim[obj->animationVariant < anim.size() ? obj->animationVariant : 0];
 		}
 	}
+	// a standing tree's default animation is its shake under the woodcutter's axe (the oaks' crowns
+	// bounce): only while someone works at it ("I'm Being Worked at"), still otherwise
+	if (model && obj->animationIndex == 0 && obj->blueprint->name.find("Tree") != std::string::npos
+		&& dynamic_cast<AnimatedModel*>(model)) {
+		static const GameSet* of = nullptr;
+		static int worked = -1;
+		if (of != client->gameSet.get()) {
+			of = client->gameSet.get();
+			worked = of->items.names.getIndex("I'm Being Worked at");
+		}
+		if (worked < 0 || obj->getItem(worked) <= 0.0f)
+			model = model->getStaticModel();
+	}
 	if (!model && devMode)
 		model = obj->blueprint->representAs;
 	if (!model)
@@ -1423,6 +1444,46 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	};
 	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
+	// the fields in winter (wkbai's seasons; they give no food then): bare soil
+	if (client->environmentActive && client->environmentSettings.seasons && client->environment.season == 3
+		&& obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+		const std::string& name = obj->blueprint->name;
+		if (name.size() > 5 && name.compare(name.size() - 5, 5, " Farm") == 0)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_FALLOW;
+	}
+	// broadleaf trees and bushes (not the conifers, cedars and snowy trees): autumn colours
+	if (client->environmentActive && client->environmentSettings.seasons) {
+		const std::string& name = obj->blueprint->name;
+		if (name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos
+			|| name.find("City Tree") != std::string::npos || name.find("Bush") != std::string::npos)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_LEAVES;
+	}
+	// bare trees (wkbai's seasons): the broadleaf trees in winter (not the bushes, firs and cedars),
+	// and every tree a wildfire burned (charred too). Drawn as the game set's own leafless tree
+	// (two of its models, by the tree's id; the oaks' bark is only their trunk, the branches are in
+	// the leaves); without it only the bark. A bush that burned is gone.
+	if (client->environmentActive) {
+		const std::string& name = obj->blueprint->name;
+		const bool charred = !client->charredTrees.empty() && client->charredTrees.count(obj->id) != 0;
+		const bool broadleaf = name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos;
+		const bool tree = name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos;
+		if ((charred && tree) || (broadleaf && TreeBareInWinter(client, obj->id))) {
+			// a leafless tree made in code (TreeModels.cpp; four of each, by the tree's id), as high
+			// as the tree it stands for
+			Model* m = LeaflessTreeModel(client->gameSet->modelCache, (int)(obj->id * 2654435761u >> 28), charred);
+			const auto box = model->interpolateBoundingBox(0);
+			const float k = std::clamp(box[1].y - std::max(box[0].y, 0.0f), 0.5f, 60.0f);
+			obj->sceneEntity.transform = Matrix::getScaleMatrix(Vector3(k, k, k)) * obj->sceneEntity.transform;
+			obj->sceneEntity.model = m;
+			obj->sceneEntity.flags &= ~SceneEntity::SEFLAG_LEAVES;
+		}
+		else if (charred)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
+		else if (broadleaf)
+			AddLeafTree(client, sphereCenter, sphereRadius, obj->id); // its leaves falling in autumn
+		if (charred)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_CHARRED;
+	}
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;
@@ -3154,6 +3215,8 @@ void ClientInterface::iter()
 						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
 					list.push_back({ (at - client->camera.position).sqlen3(), l });
 				}
+				// at night (wkbai's day and night), the buildings' windows and torches, after the fires
+				AddNightLights(client, client->camera.position, list);
 				std::sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 				for (size_t i = 0; i < list.size() && i < (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS; i++)
 					lights.insert(lights.end(), list[i].second.begin(), list[i].second.end());
@@ -3403,6 +3466,9 @@ void ClientInterface::iter()
 			scene->sunDirection = client->terrain->sunVector;
 			scene->sunColor = client->terrain->sunColor;
 		}
+		// wkbai's day and night, seasons and weather: the sun, fog and grade (none: the map's)
+		UpdateEnvironmentView(client, scene);
+		UpdateWaterfallSounds(client);
 		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
 			dgfx->shadows.time = client->timeManager.currentTime;
 			dgfx->shadows.cloudShadows = g_renderSettings.cloudShadows;
@@ -3445,6 +3511,8 @@ void ClientInterface::iter()
 	if (showTerrain) {
 		drawRangeBands();
 		drawFootprintTiles();
+		// wkbai's weather: flood water over the land, footprints in snow and mud
+		DrawGroundWeather(gfx, client, client->camera);
 	}
 
 	if (particleRenderer && particlesContainer) {
@@ -3453,6 +3521,7 @@ void ClientInterface::iter()
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
+		DrawWeather(gfx, client, client->camera);
 	}
 
 	if (postGfx) {
@@ -3469,8 +3538,10 @@ void ClientInterface::iter()
 	}
 
 	drawLoadingScreen();
-	if (loadingDone)
+	if (loadingDone) {
 		drawChronicle();
+		DrawEnvironmentHud(client, (float)g_windowWidth);
+	}
 
 	{
 		ZoneScopedN("ImGui rendering");

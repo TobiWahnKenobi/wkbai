@@ -9,6 +9,7 @@
 #include <utility>
 #include <cstdint>
 #include <array>
+#include <vector>
 #include "util/DynArray.h"
 
 struct AttachmentPointState
@@ -71,6 +72,12 @@ struct Mesh
 	bool saveGltf(const char* path) const;
 	// the Mesh3 file itself, without looking for a glTF override
 	void loadMesh3(const char* filename);
+	// a mesh made in code (gltf.cpp): positions (x y z each), their normals and UVs, and per
+	// material its triangles (vertex indices, the front where (b - a) x (c - a) points)
+	struct BuildGroup { Material mat; std::vector<uint32_t> triangles; };
+	void build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups);
+	// the nearest of s_normalTable's
+	static uint8_t nearestNormal(const Vector3& n);
 	const Vector3* decodeNormals();
 
 	Mesh() {}

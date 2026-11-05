@@ -39,6 +39,8 @@ struct OALSoundPlayer : SoundPlayer {
 	std::map<std::string, ALuint> sndBufCache;
 	std::array<ALuint, MAX_SOURCES> sources;
 	ALuint musicSource; ALuint musicBuffer = 0;
+	std::array<ALuint, MAX_LOOPS> loopSources;
+	std::array<std::string, MAX_LOOPS> loopFiles;
 
 	Vector3 listenerPosition{ 0.0f, 0.0f, 0.0f };
 
@@ -94,12 +96,16 @@ struct OALSoundPlayer : SoundPlayer {
 		alcMakeContextCurrent(context);
 		alGenSources(MAX_SOURCES, sources.data());
 		alGenSources(1, &musicSource);
+		alGenSources(MAX_LOOPS, loopSources.data());
 		initialised = true;
 	}
 	void deinit() override {
 		if (!initialised) return;
 		alDeleteSources(sources.size(), sources.data());
 		alDeleteSources(1, &musicSource);
+		alDeleteSources(MAX_LOOPS, loopSources.data());
+		for (auto& f : loopFiles)
+			f.clear();
 		for (auto& e : sndBufCache) {
 			alDeleteBuffers(1, &e.second);
 		}
@@ -180,6 +186,37 @@ struct OALSoundPlayer : SoundPlayer {
 				break;
 			}
 		}
+	}
+
+	void setLoop(int slot, const std::string& filePath, const Vector3& pos, float refDist, float gain, float pitch) override {
+		if (!initialised || slot < 0 || slot >= MAX_LOOPS)
+			return;
+		const ALuint src = loopSources[slot];
+		if (gain <= 0.0f || filePath.empty()) {
+			alSourceStop(src);
+			return;
+		}
+		if (loopFiles[slot] != filePath) {
+			const auto buf = getSoundBuf(filePath);
+			if (!buf)
+				return;
+			alSourceStop(src);
+			alSourcei(src, AL_BUFFER, *buf);
+			loopFiles[slot] = filePath;
+		}
+		alSourcei(src, AL_LOOPING, AL_TRUE);
+		alSourcei(src, AL_SOURCE_RELATIVE, AL_FALSE);
+		alSourcef(src, AL_MIN_GAIN, 0.0f);
+		alSourcef(src, AL_REFERENCE_DISTANCE, refDist);
+		alSourcef(src, AL_ROLLOFF_FACTOR, 1.5f);
+		alSourcef(src, AL_GAIN, gain * g_renderSettings.effectsVolume);
+		alSourcef(src, AL_PITCH, pitch);
+		Vector3 fpos = pos * Vector3(1, 1, -1);
+		alSourcefv(src, AL_POSITION, &fpos.x);
+		ALint state;
+		alGetSourcei(src, AL_SOURCE_STATE, &state);
+		if (state != AL_PLAYING)
+			alSourcePlay(src);
 	}
 
 	virtual void setListenerPosition(const Vector3& pos, const Vector3& at) override {

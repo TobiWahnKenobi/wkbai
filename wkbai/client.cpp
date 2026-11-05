@@ -146,6 +146,10 @@ void Client::tick()
 			case NETCLIMSG_GAME_SET:
 			{
 				std::string gsFileName = br.readStringZ();
+				// a new game: no day and night or weather until the server says so
+				environmentActive = false;
+				environment = EnvironmentState();
+				nightSight = NightSight();
 				int gsVersion = br.readUint8();
 				if (localServer) {
 					info("Client takes gameset from local server.\n");
@@ -668,6 +672,36 @@ void Client::tick()
 						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " stage " + std::to_string(r.stage) + "]";
 					printf("LOADING rows:%s\n", rows.c_str());
 				}
+				break;
+			}
+			case NETCLIMSG_ENVIRONMENT: {
+				const uint8_t flags = br.readUint8();
+				EnvironmentSettings& es = environmentSettings;
+				es.dayNight = (flags & 1) != 0;
+				es.seasons = (flags & 2) != 0;
+				es.dayLengthMin = br.readUint16();
+				es.startHour = br.readUint8();
+				es.seasonLengthMin = br.readUint16();
+				es.startSeason = br.readUint8();
+				es.tempScale = br.readUint8();
+				environment.read(br);
+				environmentActive = es.active();
+				nightSight.factor = environment.sightFactor;
+				if (terrain) {
+					const bool frozen = environmentActive && environment.ice >= ICE_WALKABLE;
+					if (frozen != terrain->waterFrozen) {
+						terrain->waterFrozen = frozen;
+						terrain->revision++;
+					}
+				}
+				break;
+			}
+			case NETCLIMSG_CHARRED_TREES: {
+				if (br.readUint8())
+					charredTrees.clear();
+				const uint8_t n = br.readUint8();
+				for (uint8_t i = 0; i < n; i++)
+					charredTrees.insert(br.readUint32());
 				break;
 			}
 			case NETCLIMSG_HOST_DATA: {

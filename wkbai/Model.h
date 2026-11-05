@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <map>
 #include <string>
 #include <memory>
@@ -46,6 +47,8 @@ struct StaticModel : Model {
 	DynArray<uint32_t> matIds;
 	std::string fileName;
 	bool ready = false;
+	// a model made in code (ModelCache::getGeneratedModel): fills the mesh instead of a file
+	std::function<void(Mesh&)> generator;
 
 	StaticModel(ModelCache *cache, const std::string &fileName) : Model(cache), fileName(fileName) {}
 
@@ -110,5 +113,7 @@ private:
 	IndexedStringList textureFilenames;
 public:
 	Model *getModel(const std::string &filename);
+	// a static model made in code, by a name of its own (never a file's): made when first drawn
+	Model *getGeneratedModel(const std::string &name, std::function<void(Mesh&)> generator);
 	const Material& getMaterial(int id);
 };

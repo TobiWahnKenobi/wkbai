@@ -126,14 +126,28 @@ struct ValueObjectClass : ValueDeterminer {
 struct ValueEquationResult : ValueDeterminer {
 	int equation;
 	std::unique_ptr<ObjectFinder> finder;
+	// the farmers' harvest (Farming.cpp: each turn of the hoe adds this much "Food"): nothing
+	// while the fields lie fallow (wkbai's seasons: winter); their food support (Economic
+	// Manager.cpp "Support by Total Farmers"): cut in winter (ServerEnvironment::supportScale)
+	bool farming = false, support = false;
 	virtual float eval(ScriptContext* ctx) override {
 		CommonGameObject *obj = finder->getFirst(ctx);
 		if (!obj) return 0.0f;
+		if (farming && ctx->gameState == Server::instance && Server::instance->environment.fieldsFallow()) {
+			Server::instance->environment.stats.fallowHarvests++;
+			return 0.0f;
+		}
 		auto _ = ctx->changeSelf(obj);
-		return ctx->gameState->gameSet->equations[equation]->eval(ctx);
+		const float v = ctx->gameState->gameSet->equations[equation]->eval(ctx);
+		if (support && ctx->gameState == Server::instance && Server::instance->environment.fieldsFallow())
+			return v * Server::instance->environment.supportScale();
+		return v;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 		equation = gs.equations.readIndex(gsf);
+		farming = equation != -1 && equation == gs.equations.names.getIndex("My Farming ability on this type of Terrain");
+		support = equation != -1 && (equation == gs.equations.names.getIndex("Support by Total Farmers by Player")
+			|| equation == gs.equations.names.getIndex("Support by Total Farmers"));
 		finder.reset(ReadFinder(gsf, gs));
 	}
 	//ValueEquationResult() {}
@@ -822,7 +836,8 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 		if (vp != player && ctx->gameState->getDiplomaticStatus(vp, player) != 0)
 			continue;
 		// as WKB.exe's sighting (0x566D70): rounded to whole 5 m tiles, 3D distance
-		const float sight = std::floor(viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) + 0.5f) * 5.0f;
+		// (at night, wkbai's day and night: shorter unless the object is lit)
+		const float sight = ctx->gameState->nightSight.radiusFor(std::floor(viewer->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE) + 0.5f) * 5.0f, obj->position);
 		if ((viewer->position - obj->position).sqlen3() <= sight * sight)
 			return true;
 	}

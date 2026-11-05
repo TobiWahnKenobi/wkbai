@@ -47,6 +47,12 @@ struct RenderSettings {
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;
+	// wkbai's day and night, seasons and weather, how much of it is drawn: 0 Low (a third of the
+	// rain and snow), 1 Medium (two thirds; snow on roofs and models, wet models darker), 2 High
+	// (all of it; footprints in snow and mud), 3 Ultra (half as much rain and snow again, more
+	// footprints that last longer). The flood water, the ground's snow and ice and the light of
+	// day and night are drawn at every level: they are part of the game.
+	int weatherEffects = 2;
 	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
 	// square unit (0 to TerrainGrassBuilder::MAX_DENSITY), their height (times 0.4-0.85 units)
 	// and how far from the camera they are drawn

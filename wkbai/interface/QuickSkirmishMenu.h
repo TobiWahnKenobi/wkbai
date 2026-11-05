@@ -4,6 +4,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include "../Environment.h"
 
 class Server;
 
@@ -89,6 +90,7 @@ private:
 	bool aiWaveSiege = false; // Server::aiWaveSiege
 	bool aiWaveFormations = true; // Server::aiWaveFormations
 	bool aiFocusFire = true; // Server::aiFocusFire
+	EnvironmentSettings environment; // Server::environment (wkbai's day and night, seasons, weather)
 
 	int resourcePoints = 2500;
 	int victoryPointLimit = 10000;

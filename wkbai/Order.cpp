@@ -4,6 +4,9 @@
 
 #include "Order.h"
 #include <set>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 #include "util/SimRandom.h"
 #include "tags.h"
 #include "gameset/OrderBlueprint.h"
@@ -674,6 +677,21 @@ static bool LineSegmentIntersectsSphere(const Vector3& lineStart, const Vector3&
 	return false;
 }
 
+// wkbai's wildfires: a flaming missile (flaming arrows, Greek fire, fire trebuchets) coming down
+// in a heatwave or drought may set the land alight (ServerEnvironment::fireLanded)
+static void FlamingMissileLanded(ServerGameObject* missile)
+{
+	Server* server = Server::instance;
+	if (!server->environment.enabled() || server->environment.fireRisk() <= 0.0f)
+		return;
+	const std::string& n = missile->blueprint->name;
+	auto has = [&](const char* s) {
+		return std::search(n.begin(), n.end(), s, s + strlen(s), [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); }) != n.end();
+	};
+	if (has("flaming") || has("fire") || has("napatha") || has("burning"))
+		server->environment.fireLanded(*server, missile->position);
+}
+
 void MissileTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
@@ -693,6 +711,7 @@ void MissileTask::onUpdate()
 					if (LineSegmentIntersectsSphere(prevPosition, go->position, sCenter, sRadius)) {
 						SrvScriptContext ctx(Server::instance, go);
 						auto _ = ctx.change(ctx.collisionSubject, col);
+						FlamingMissileLanded(go);
 						this->blueprint->collisionTrigger.run(&ctx);
 						return;
 					}
@@ -709,6 +728,7 @@ void MissileTask::onUpdate()
 		if (go->blueprint->strikeFloorSound != -1) {
 			go->playSoundAtObject(go->blueprint->strikeFloorSound, go);
 		}
+		FlamingMissileLanded(go);
 		this->blueprint->struckFloorTrigger.run(go);
 	}
 }

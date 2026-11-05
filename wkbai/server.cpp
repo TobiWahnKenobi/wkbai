@@ -53,6 +53,16 @@ void Server::loadSaveGame(const char * filename)
 		applyAiSettingsText(std::string(text, size), true);
 		free(text);
 	}
+	// wkbai's day and night, seasons and weather as saved (<save>.env.txt), else off
+	environment.reset();
+	nightSight = NightSight();
+	if (const std::string side = std::string(filename) + ".env.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		environment.loadText(std::string(text, size));
+		free(text);
+	}
 	char *filetext; int filesize;
 	LoadFile(filename, &filetext, &filesize, 1);
 	filetext[filesize] = 0;
@@ -417,6 +427,9 @@ std::string Server::aiSettingsText() const
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
 			text += "aiScript." + std::to_string(id) + "=" + name + "\n";
+	// wkbai's day and night, seasons and weather (only when on: older builds read the same file)
+	if (environment.enabled())
+		text += environment.settings.text();
 	return text;
 }
 
@@ -440,6 +453,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		}
 		if (scriptsOnly)
 			continue;
+		if (environment.settings.apply(name, v)) continue;
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
 		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiLifeline") aiLifeline = v != 0;
@@ -1719,6 +1733,19 @@ void ServerGameObject::lookForSightRangeEvents()
 			const auto& list = server->sightBlocks[bz * server->sightBlocksWidth + bx];
 			g_sightCandidates += list.size();
 			// (without branches: in range or not is a coin toss in an army)
+			// at night (wkbai's day and night) only lit targets are seen at the full range
+			if (server->nightSight.active()) {
+				for (const Server::SightEntry& e : list) {
+					const float dx = e.x - mx, dy = e.y - my, dz = e.z - mz;
+					const float d2 = dx * dx + dy * dy + dz * dz;
+					if (d2 > radius2)
+						continue;
+					const float r = server->nightSight.radiusFor(radius, Vector3(e.x, e.y, e.z));
+					if (d2 <= r * r)
+						found.resize(std::max(found.size(), n + 1)), found[n++] = e.id;
+				}
+				continue;
+			}
 			if (found.size() < n + list.size())
 				found.resize(n + list.size() + 256);
 			uint32_t* out = found.data();
@@ -1837,6 +1864,9 @@ float ServerGameObject::computeSpeed()
 		SrvScriptContext ctx{ Server::instance, this };
 		speed = Server::instance->gameSet->equations[blueprint->movementSpeedEquation]->eval(&ctx);
 	}
+	// wet or snowy ground (wkbai's weather; 1 when off)
+	if (Server::instance->environment.enabled())
+		speed *= Server::instance->environment.speedFactorFor(this);
 	// A formation goes a little slower than its slowest member: the members walk to their places
 	// in it (FormationController) and would otherwise trail behind
 	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
@@ -1874,9 +1904,11 @@ static const std::pair<int, int> objectCostResourceItems[3] = {
 
 bool ServerGameObject::canAffordObject(const GameObjBlueprint* blueprint)
 {
+	// an AI player's food kept back for the winter (wkbai's seasons; 0 otherwise)
+	const float foodReserve = aiController.winterReserve;
 	for (auto [resItem, costItem] : objectCostResourceItems) {
 		float cost = blueprint->getStartingItemValue(costItem);
-		if (cost > 0.0f && this->getItem(resItem) < cost)
+		if (cost > 0.0f && this->getItem(resItem) < cost + (resItem == Tags::PDITEM_FOOD ? foodReserve : 0.0f))
 			return false;
 	}
 	return true;
@@ -2573,6 +2605,8 @@ void Server::sendStateTo(NetLink* link)
 	}
 	if (!hostRegionsText.empty())
 		sendHostData(1, hostRegionsText, link);
+	if (environment.enabled())
+		environment.send(*this, link);
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;
@@ -2744,6 +2778,9 @@ void Server::simulate()
 		nextPeasantActivityUpdate = timeManager.currentTime + 1.0f;
 		updatePeasantActivity();
 	}
+	// wkbai's day and night, seasons and weather: once a game second, only when a setting is on
+	if (environment.enabled() && !timeManager.paused)
+		environment.update(*this);
 	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)

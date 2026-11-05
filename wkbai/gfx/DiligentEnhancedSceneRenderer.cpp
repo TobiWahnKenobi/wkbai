@@ -18,6 +18,7 @@
 #include "../util/util.h"
 #include "../settings.h"
 #include "RenderSettings.h"
+#include "../Environment.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <cstring>
@@ -44,6 +45,10 @@ static const char esShaderCode[] = R"---(
 Texture2D inpTexture;
 Texture2D normalMap; // override packs: <texture>_normal (tangent space, +z out), else flat with alpha 0 (derive)
 Texture2D ormMap;    // override packs: <texture>_orm (occlusion, roughness, metalness), else 1, 0.65, 0
+// override packs: <texture>_emissive, the light the surface gives off (any model: buildings,
+// units, trees, props): rgb its colour and strength, alpha when: 0 always (embers, runes),
+// 1 only at night (windows, lanterns), between them both; else black
+Texture2D emissiveMap;
 SamplerState inpSampler;
 Texture2D cloudTexture;
 SamplerState cloudSampler;
@@ -96,10 +101,13 @@ cbuffer SunBuffer
 	float4 SkyHorizon;
 	float4 SkyDown;
 	// x: the strength of the normals derived from the albedo's brightness, for materials
-	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat)
+	// without a <texture>_normal map (RenderSettings::modelDetailNormals; 0 = flat);
+	// y: the snow lying on roofs and models, z: how wet they are, w: how dark the night is
+	// (wkbai's weather and day and night, 0 when off: the emissive maps' night lights)
 	float4 Material;
 	float4 FireLightCount; // x: how many of FireLights are in use
 	float4 FireLights[32]; // per light: position and radius, colour
+	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -139,6 +147,8 @@ struct VS_OUTPUT
 	float Fog : FOG;
 	float3 WorldPos : TEXCOORD1;
 	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
+	float2 Fallow : TEXCOORD3; // x 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil; y 1: charred (SEFLAG_CHARRED)
+	float2 Leaves : TEXCOORD4; // x 1: broadleaf (SEFLAG_LEAVES); y: the tree's own seed (from where it stands)
 };
 
 // R10G10B10A2_UNORM
@@ -173,6 +183,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Tint.a = cloud;
 	}
 	output.Tint.rgb = float3(1, 1, 1);
+	output.Fallow = float2((EntityFlags & 64) ? 1 : 0, (EntityFlags & 256) ? 1 : 0);
+	output.Leaves = float2((EntityFlags & 128) ? 1 : 0, frac(sin(dot(EntityTransform[3].xz, float2(12.9898, 78.233))) * 43758.5453));
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
 	if (EntityFlags & 16) // SEFLAG_PLACEABLE
@@ -276,10 +288,55 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	return ((diffuse * albedo * (1 - metal) + specular + sky) * input.Tint.a + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 
+// wkbai's weather on a model: snow lying where the surface faces up (roofs, ledges, the tops of
+// trees and rocks), in patches; wet surfaces darker
+float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
+{
+	// a field in winter: the crops gone, furrowed soil (the texture's pattern kept as its light
+	// and dark)
+	if (input.Fallow.x > 0.5)
+		albedo = float3(0.34, 0.27, 0.2) * (0.5 + 0.9 * dot(albedo, float3(0.299, 0.587, 0.114)));
+	// burnt by a wildfire: charcoal, the bark's grain kept, ash-grey where it was light
+	if (input.Fallow.y > 0.5) {
+		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+		albedo = lerp(float3(0.035, 0.03, 0.028), float3(0.3, 0.29, 0.27), saturate(lum * lum * 2.5));
+	}
+	// a broadleaf tree's green leaves: in autumn yellow, orange, red and brown, each tree its own
+	// mix (and patches of it), the trunk and branches as they are; in heat a little dried
+	if (input.Leaves.x > 0.5 && Season.x + Season.y > 0) {
+		float green = saturate((albedo.g - max(albedo.r, albedo.b)) * 14 + 0.2) * saturate(albedo.g * 6);
+		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+		float pick = frac(input.Leaves.y + (frac(sin(dot(floor(input.Texcoord * 6), float2(39.3, 11.7))) * 917.31) - 0.5) * 0.35);
+		// vibrant: saturated hues, brightened (the leaves' texture is dark), the texture's light and
+		// dark kept; brown only for a few
+		float3 gold = float3(1.0, 0.78, 0.06), orange = float3(1.0, 0.45, 0.02), red = float3(0.9, 0.1, 0.03), brown = float3(0.6, 0.3, 0.08);
+		float3 hue = pick < 0.4 ? lerp(gold, orange, pick / 0.4) : pick < 0.85 ? lerp(orange, red, (pick - 0.4) / 0.45) : lerp(red, brown, (pick - 0.85) / 0.15);
+		albedo = lerp(albedo, hue * clamp(lum * 3.4, 0.45, 1.15), Season.x * green);
+		albedo = lerp(albedo, float3(1.25, 1.05, 0.5) * lum, Season.y * 0.45 * green);
+	}
+	if (Material.y + Material.z <= 0 || dot(input.Norm, input.Norm) == 0)
+		return albedo;
+	float up = normalize(input.Norm).y;
+	float2 cell = floor(input.WorldPos.xz * 1.7);
+	float patch = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+	float snow = saturate((up - 0.2) / 0.35) * saturate(Material.y * 1.8 - patch * 0.45);
+	albedo *= 1 - 0.3 * Material.z * (1 - snow);
+	return lerp(albedo, float3(0.9, 0.92, 0.97), snow);
+}
+
+// the emissive map's light: the always-on part, the night part by the night's darkness; kept as
+// bright under the night's darker grade (divided by its exposure), so it blooms
+float3 Emission(VS_OUTPUT input)
+{
+	float4 e = emissiveMap.Sample(inpSampler, input.Texcoord);
+	return e.rgb * lerp(1, Material.w, e.a) / max(Grade.x, 0.35);
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
+	tex.rgb = WeatherAlbedo(input, tex.rgb);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -288,7 +345,8 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
-	float4 c = lerp(float4(ModelLight(input, tex.rgb), input.Color.a * tex.a), FogColor, input.Fog);
+	tex.rgb = WeatherAlbedo(input, tex.rgb);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -520,13 +578,14 @@ static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
 
 struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
+	std::map<StaticModel*, bool> hasBark; // a tree's model with bark (SEFLAG_BARE draws only that)
 	std::map<AnimatedModel*, DilAnim> animMap;
 	// Textures (one binding per texture), and the frame's environment (the cloud map)
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
-	texture deriveNormal = nullptr, defaultOrm = nullptr; // the override maps' defaults
+	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	RefCntAutoPtr<IBuffer> sceneConstBuffer, sunConstBuffer, motionConstBuffer;
@@ -557,7 +616,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 656;
+	cbDesc.Size = 672;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 	cbDesc.Name = "Scene motion";
 	cbDesc.Size = 128;
@@ -573,6 +632,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "emissiveMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -778,7 +838,7 @@ void DiligentEnhancedSceneRenderer::render()
 	auto& shadows = dgfx->shadows;
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 656);
+	memset(mapped, 0, 672);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -805,6 +865,17 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 	float* material = (float*)mapped + 28;
 	material[0] = g_renderSettings.modelDetailNormals;
+	if (g_environment.active && g_renderSettings.weatherEffects >= 1) {
+		material[1] = g_environment.snowCover;
+		material[2] = g_environment.wetness;
+	}
+	if (g_environment.active)
+		material[3] = 1.0f - g_environment.sun.daylight;
+	float* season = (float*)mapped + 164;
+	if (g_environment.active) {
+		season[0] = g_environment.autumn;
+		season[1] = g_environment.dryness;
+	}
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -823,8 +894,9 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 
 	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
-	// beside it (<texture>_albedo, _normal, _orm, .png, .tga, .dds or .ktx2) or defaults: the
-	// original texture, a flat normal marked (alpha 0) for deriving one from it, 1 / 0.65 / 0
+	// beside it (<texture>_albedo, _normal, _orm, _emissive, .png, .tga, .dds or .ktx2) or
+	// defaults: the original texture, a flat normal marked (alpha 0) for deriving one from it,
+	// 1 / 0.65 / 0, no light
 	auto pixel = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 		Bitmap bmp;
 		bmp.width = bmp.height = 1;
@@ -836,6 +908,7 @@ void DiligentEnhancedSceneRenderer::render()
 	if (!_impl->deriveNormal) {
 		_impl->deriveNormal = pixel(128, 128, 255, 0);
 		_impl->defaultOrm = pixel(255, 166, 0);
+		_impl->noEmission = pixel(0, 0, 0, 0);
 	}
 	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
@@ -850,7 +923,8 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 				return nullptr;
 			};
-			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm");
+			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm"), emissive = overrideMap("_emissive");
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(emissive ? emissive : _impl->noEmission));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));
@@ -967,8 +1041,29 @@ void DiligentEnhancedSceneRenderer::render()
 			};
 
 			const bool animated = enhAnim && enhAnim->animTimes.size() >= 2;
+			// a tree bare of leaves (winter, burnt; wkbai's seasons): only its bark drawn; a model
+			// without bark (a bush) not at all once burnt, as it is in winter
+			auto isBark = [](const std::string& f) {
+				std::string l = f;
+				for (char& c : l) c = (char)tolower((unsigned char)c);
+				return l.find("bark") != std::string::npos;
+			};
+			const bool barkMaterial = isBark(mat.textureFilename);
+			bool modelHasBark = false;
+			if (!barkMaterial) {
+				auto bt = _impl->hasBark.find(staticModel);
+				if (bt == _impl->hasBark.end()) {
+					bool any = false;
+					for (uint32_t id : staticModel->matIds)
+						any |= isBark(scene->modelCache->getMaterial(id).textureFilename);
+					bt = _impl->hasBark.emplace(staticModel, any).first;
+				}
+				modelHasBark = bt->second;
+			}
 			for (SceneEntity* ent : it.second.list) {
 				if (shadowPass && !(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+					continue;
+				if ((ent->flags & SceneEntity::SEFLAG_BARE) && !barkMaterial && (modelHasBark || (ent->flags & SceneEntity::SEFLAG_CHARRED)))
 					continue;
 				if (motionPass) {
 					// the first of the entity's materials in this frame: what was drawn becomes the

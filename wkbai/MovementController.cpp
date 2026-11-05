@@ -376,6 +376,10 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 		const bool waterUnit = blueprint->canWalkOnWater() && blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION;
 		if (waterUnit && !trnTile->fullOfWater)
 			return true;
+		// frozen over (wkbai's weather, off by default): boats held fast, the others walk on it
+		// whatever the bed's texture, depth or slope
+		if (trn->waterFrozen && trnTile->fullOfWater && trnTile->waterLevel > *minH)
+			return waterUnit;
 
 		// the type's passability fields (USE_PASSABILITY_FIELDS, Passability_Fields.cpp; WKB.exe
 		// reads them, its pathfinder's use of them isn't traced): a land unit can't

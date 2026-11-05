@@ -58,6 +58,7 @@ void RenderSettings::load()
 	waterfalls = std::clamp(g_settings.value<int>("waterfalls", def.waterfalls), 0, 4);
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
+	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
 	grass = g_settings.value<bool>("grass", def.grass);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
@@ -138,6 +139,7 @@ void RenderSettings::save()
 	g_settings.erase("waterDetail");
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
+	g_settings["weatherEffects"] = weatherEffects;
 	g_settings["grass"] = grass;
 	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["grassDensity"] = grassDensity;

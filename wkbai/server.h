@@ -22,6 +22,7 @@
 #include "MovementController.h"
 #include "AIController.h"
 #include "FormationController.h"
+#include "ServerEnvironment.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -281,6 +282,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// (shooting player, target's player) -> missiles buildings fired (ServerGameObject::associateObject)
 	std::map<std::pair<uint32_t, uint32_t>, int> buildingShots;
 	std::map<std::string, float> userProfileItems;
+	// wkbai's day and night, seasons and weather (the skirmish settings "dayNight", "seasons", ...): off
+	ServerEnvironment environment;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);

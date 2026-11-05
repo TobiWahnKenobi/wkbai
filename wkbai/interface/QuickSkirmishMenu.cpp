@@ -129,6 +129,8 @@ bool QuickSkirmishMenu::readSetupJson(const std::string& text, std::string& leve
 void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 {
 	settingLog.emplace_back(name, value);
+	if (environment.apply(name, (float)value))
+		return;
 	// skirmish maps only: other levels keep the mode chosen for them
 	if (name == "mode") {
 		if (mode == StandardMode || mode == ValhallaMode)
@@ -457,6 +459,19 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	server.aiWaveFormations = aiWaveFormations;
 	server.aiFocusFire = aiFocusFire;
 	if (mode != DevMode) {
+		// a new game: the day and night, seasons and weather as set (a save game keeps its own)
+		server.environment.reset();
+		server.environment.settings = environment;
+		server.environment.trace = g_settings.value("environmentTrace", false);
+		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
+			server.environment.forceWeather = force.value("weather", -1);
+			server.environment.forceWaterRise = force.value("waterRise", -1000.0f);
+			if (force.contains("fireAt") && force["fireAt"].is_array() && force["fireAt"].size() == 3) {
+				server.environment.forceFireX = force["fireAt"][0].get<float>();
+				server.environment.forceFireZ = force["fireAt"][1].get<float>();
+				server.environment.forceFireAt = force["fireAt"][2].get<float>();
+			}
+		}
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or
 		// Veteran AI's population limit to a part of the human's, i.e. to 0: that AI then wants no

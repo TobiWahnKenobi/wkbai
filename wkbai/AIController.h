@@ -109,6 +109,8 @@ struct AIController {
 	int homeGuard(float now);
 	int trained = 0; // soldiers ordered by a Lua AI's ai.train
 	int lifelines = 0; // the food given by the lifeline (AIController::update)
+	// wkbai's seasons: the food kept back for the winter (no spending below it, canAffordObject)
+	float winterReserve = 0.0f, nextWinterCheck = 0.0f;
 	int threatsMet = 0, defendersSent = 0, peasantsFled = 0, wavesHeld = 0, wavesRecalled = 0, wavesRetargeted = 0;
 	bool advanced();
 	// the war layer (AIAdvanced.cpp, "aiWar"): its defence forces (an army of its own at a
