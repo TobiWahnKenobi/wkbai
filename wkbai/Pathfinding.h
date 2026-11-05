@@ -182,6 +182,8 @@ namespace Pathfinding {
     constexpr int MAX_SEARCH_STEPS = 20000;
     // the last DoPathfinding stopped at MAX_SEARCH_STEPS (its path ends short of the end)
     inline bool g_lastSearchCut = false;
+    // the tiles the last DoPathfinding took from its open lists (both directions; profiling)
+    inline int g_lastSearchSteps = 0;
 
     template<typename Predicate, typename Heuristic>
     std::vector<PFPos> DoPathfinding(PFPos start, PFPos end, Predicate pred, Heuristic heuristic, int width = 1024, int height = 1024) {
@@ -199,6 +201,7 @@ namespace Pathfinding {
 
         g_lastSearchCut = false;
         for (int steps = 0;; steps++) {
+            g_lastSearchSteps = steps * 2;
             if (steps >= MAX_SEARCH_STEPS) {
                 g_lastSearchCut = true;
                 return astar1.getTo(astar1.best);

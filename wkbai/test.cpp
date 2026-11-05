@@ -3047,8 +3047,11 @@ void Test_Passability()
 	for (int z = 0; z < area.second; z++)
 		for (int x = 0; x < area.first; x++) {
 			const bool a = MovementController::isTileBlocked(peasant, x, z);
-			peasant->passableTerrains = nullptr; // without the fields (resolved again below)
-			const bool b = MovementController::isTileBlocked(peasant, x, z);
+			// without the fields (resolved again below); the uncached ground test, as the path
+			// finding's cache keeps a type's class (MovementController::movementClass)
+			peasant->passableTerrains = nullptr;
+			const auto& tile = server.tiles[z * area.first + x];
+			const bool b = (tile.building.getFrom<Server>() && !tile.buildingPassable) || MovementController::isTerrainBlocked(peasant, x, z);
 			peasant->passableTerrains = fields;
 			const short t = server.tiles[z * area.first + x].terrainType;
 			auto& row = perTerrain[t >= 0 ? server.gameSet->terrains.names.getString(t) : std::string("(none)")];
@@ -3192,6 +3195,118 @@ void Test_DDS()
 	fflush(stdout);
 }
 
+// A mass order (needs the game data): "massOrder": { "level": "<.lvl>", "units": n, "seconds": s }
+// (default Tribes Unite, 200, 60). n characters of the first player's first character's type
+// stand in a block by it and are all sent with one Move to the far side of the map, as a human
+// right-clicking an army there. Prints "MASSORDER" lines: the order's step and the next ones
+// (ms, the path finding's part), then after s game seconds how many arrived within 25 m and a
+// hash of their positions. WKB_PATH_NOCACHE / WKB_PATH_NOFIELDS switch the path finding's
+// cache and group fields off (MovementController.cpp).
+void Test_MassOrder()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("massOrder", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("6 Player Tribes Unite.lvl"));
+	const int units = cfg.value("units", 200);
+	const int seconds = cfg.value("seconds", 60);
+	Server server;
+	server.loadSaveGame(("Save_Games\\" + level).c_str());
+	ServerGameObject* player = nullptr;
+	ServerGameObject* first = nullptr;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!first && child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					first = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	for (const auto& [type, children] : server.getLevel()->children)
+		for (CommonGameObject* p : children)
+			if (!first && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player") {
+				find(p, find);
+				if (first)
+					player = p->dyncast<ServerGameObject>();
+			}
+	const int moveCommand = server.gameSet->commands.names.getIndex("Move");
+	if (!player || !first || moveCommand < 0) {
+		printf("MASSORDER not set up\n");
+		return;
+	}
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	std::vector<SrvGORef> army;
+	const int side = (int)std::ceil(std::sqrt((float)units));
+	for (int i = 0; i < units; i++) {
+		Vector3 pos = first->position + Vector3((float)(i % side) * 2.0f - side, 0, (float)(i / side) * 2.0f + 4.0f);
+		pos = MovementController::nearestValidPosition(first->blueprint, pos);
+		army.push_back(server.spawnObject(first->blueprint, player, pos, Vector3(0, 0, 0)));
+	}
+	Vector3 goal(tw * 5.0f - first->position.x, 0, th * 5.0f - first->position.z);
+	goal = MovementController::nearestValidPosition(first->blueprint, goal);
+	printf("MASSORDER %d %s of player %u at (%.0f,%.0f) to (%.0f,%.0f), map %dx%d tiles\n", units, first->blueprint->name.c_str(), player->id,
+		first->position.x, first->position.z, goal.x, goal.z, tw, th);
+	extern double g_pathfindingMs;
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto step = [&]() {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+	};
+	for (int i = 0; i < 50; i++)
+		step();
+	for (SrvGORef& u : army)
+		if (u)
+			server.gameSet->commands[moveCommand].execute(u.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, goal);
+	double totalPath = 0, worst = 0, stepsMs = 0;
+	std::vector<double> sortedMs; // the steps after the order's
+	for (int i = 0; i < seconds * 50; i++) {
+		const double pathBefore = g_pathfindingMs;
+		const uint64_t t0 = SDL_GetPerformanceCounter();
+		step();
+		const double ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		const double path = g_pathfindingMs - pathBefore;
+		totalPath += path;
+		worst = std::max(worst, ms);
+		if (i > 0) {
+			stepsMs += ms;
+			sortedMs.push_back(ms);
+		}
+		if (i < 5)
+			printf("MASSORDER step %d: %.2f ms, path finding %.2f ms\n", i, ms, path);
+		if ((i + 1) % 1000 == 0) {
+			int alive = 0, moving = 0;
+			float sum = 0, nearest = 1e9f;
+			for (SrvGORef& u : army)
+				if (u) {
+					alive++;
+					moving += u->movementController.isMoving();
+					const float d = (u->position - goal).len2xz();
+					sum += d;
+					nearest = std::min(nearest, d);
+				}
+			printf("MASSORDER t=%d s: %d alive, %d moving, distance to the goal mean %.0f m, nearest %.0f m\n", (i + 1) / 50, alive, moving, alive ? sum / alive : 0.0f, nearest);
+		}
+	}
+	int arrived = 0;
+	uint64_t hash = 1469598103934665603ull;
+	for (SrvGORef& u : army)
+		if (u) {
+			arrived += (u->position - goal).len2xz() < 25.0f;
+			for (float f : { u->position.x, u->position.z }) {
+				uint32_t b; memcpy(&b, &f, 4);
+				for (int k = 0; k < 4; k++) { hash ^= (b >> (k * 8)) & 0xFF; hash *= 1099511628211ull; }
+			}
+		}
+	std::sort(sortedMs.begin(), sortedMs.end());
+	if (!sortedMs.empty())
+		printf("MASSORDER steps after the order's: mean %.2f ms, median %.2f ms, 95th percentile %.2f ms\n", stepsMs / sortedMs.size(),
+			sortedMs[sortedMs.size() / 2], sortedMs[sortedMs.size() * 95 / 100]);
+	printf("MASSORDER end after %d s: path finding %.1f ms in all, longest step %.1f ms; %d of %d within 25 m of the goal; positions hash %016llx\n",
+		seconds, totalPath, worst, arrived, units, (unsigned long long)hash);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3234,6 +3349,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Levelling, "Levelling: a barracks stamped down flattens the ground under it"},
 {Test_WallRing, "Wall ring as a city grows (corners where rectangles meet)"},
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
+{Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 };
 
 void LaunchTest()

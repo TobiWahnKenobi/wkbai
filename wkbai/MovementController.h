@@ -32,6 +32,16 @@ struct MovementController {
 	static bool isTileBlocked(const GameObjBlueprint* blueprint, int tx, int tz);
 	// the same without the buildings: whether the ground itself keeps the type off the tile
 	static bool isTerrainBlocked(const GameObjBlueprint* blueprint, int tx, int tz);
+	// The server's movement classes: the types whose ground test is alike (water or land, the same
+	// passability fields) share one, and its tiles' isTerrainBlocked is cached (one byte per tile,
+	// looked up once, again where the terrain changes). Server thread only.
+	static int movementClass(const GameObjBlueprint* blueprint);
+	// isTileBlocked for a class, with the cache
+	static bool isTileBlockedFast(int cls, int tx, int tz);
+	// the class's terrain region of a tile: the tiles the ground lets it stand on, 8-connected as
+	// the A*'s moves; -1 where it can't stand. Another region can't be reached (buildings only
+	// block more).
+	static int terrainRegion(int cls, int tx, int tz);
 	// The nearest tile centre around a position where the object can stand (searching up to
 	// maxRadius tiles out); the position itself when none is found
 	static Vector3 nearestValidPosition(const GameObjBlueprint* blueprint, const Vector3& position, int maxRadius = 32);

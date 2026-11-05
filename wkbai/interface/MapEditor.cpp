@@ -54,6 +54,7 @@ static void ResetTileTerrainTypes(Server& server)
 	const auto area = server.terrain->getNumPlayableTiles();
 	for (int i = 0; i < area.first * area.second; i++)
 		server.tiles[i].terrainType = -2;
+	server.terrain->revision++; // (the path finding's cached blocked tiles)
 }
 
 
@@ -693,6 +694,7 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 				if (server.terrain && server.terrain != trn && server.terrain->vertices.size() == trn->vertices.size()) {
 					for (const auto& [i, h] : changes)
 						server.terrain->vertices[i] = h;
+					server.terrain->revision++; // (the path finding's cached blocked tiles)
 					for (const auto& [i, h] : fineChanges)
 						server.terrain->setHeightSteps(i, h);
 				}
