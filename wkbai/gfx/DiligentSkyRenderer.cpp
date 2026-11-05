@@ -170,13 +170,19 @@ float HenyeyGreenstein(float mu, float g)
 float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 {
 	float base = CloudShape.z, top = CloudShape.z + CloudShape.w;
-	if (ro.y > base || rd.y <= 0.002)
+	if (ro.y > base)
 		return float4(0, 0, 0, 1); // above the base (zoomed out): the shadows only
+	// beyond the march (at the horizon): the haze the far clouds fade into, as much as the sky is
+	// cloudy (a storm as an overcast), so the clouds blend into the horizon without a line
+	const float hazeCover = saturate(max(CloudShape.x, CloudWeather.y * 0.85) * 1.15);
+	const float4 beyond = float4(FogColor.rgb * hazeCover, 1 - hazeCover);
+	if (rd.y <= 0.002)
+		return beyond;
 	// at most 1800 units of the ray in the layer; a storm's 6000, so that the cumulonimbus'
 	// towers show to their anvils towards the horizon
 	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, CloudWeather.y));
 	if (t1 <= t0 || t0 > 9000)
-		return float4(0, 0, 0, 1);
+		return beyond;
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
 	const int q = (int)SkyFlags.w;
 	const int STEPS = q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128;
@@ -233,7 +239,12 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// far clouds fade into the horizon's haze (FogColor, the weather's with the physical sky): as
 	// much of it as the sky is cloudy, so an overcast horizon is grey, not the clear sky behind
 	float fade = exp(-t0 / 5000);
-	float far = (1 - fade) * saturate(CloudShape.x * 1.15);
+	// (reaching beyond's at the march's end, 9000 units: fade over the last stretch to 0)
+	fade *= saturate((9000 - t0) / 2500);
+	// and by the elevation too, over the lowest 5 degrees: by the distance alone the change from
+	// the clouds to the haze took a fraction of a degree, a line along the horizon
+	fade = min(fade, smoothstep(0.004, 0.09, rd.y));
+	float far = (1 - fade) * hazeCover;
 	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
 
@@ -716,6 +727,25 @@ void DiligentSkyRenderer::render()
 			};
 			toGrey(up);
 			toGrey(horizon);
+			// and half as saturated in any weather: the physical sky's full blue as the ground's
+			// fill light made sunlit ground look cold and sunless next to the sky box's warm light
+			for (float* v : { up, horizon }) {
+				const float l = 0.3f * v[0] + 0.59f * v[1] + 0.11f * v[2];
+				for (int i = 0; i < 3; i++)
+					v[i] += (l - v[i]) * 0.5f;
+			}
+			// and above as bright as at the horizon (their colours kept): SkyAmbient divides by
+			// their mean, and the physical sky's dark zenith under its bright horizon gave level
+			// ground ~0.6 of the sky box's fill light (the box is about as bright above as around)
+			{
+				const float lu = std::max(0.3f * up[0] + 0.59f * up[1] + 0.11f * up[2], 1e-3f);
+				const float lh = std::max(0.3f * horizon[0] + 0.59f * horizon[1] + 0.11f * horizon[2], 1e-3f);
+				const float mean = (lu + lh) * 0.5f;
+				for (int i = 0; i < 3; i++) {
+					up[i] *= mean / lu;
+					horizon[i] *= mean / lh;
+				}
+			}
 			for (int i = 0; i < 3; i++) {
 				env.skyLight[0][i] = up[i];
 				env.skyLight[1][i] = horizon[i];

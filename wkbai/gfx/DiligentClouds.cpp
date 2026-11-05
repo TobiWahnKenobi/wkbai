@@ -55,8 +55,14 @@ float CloudCover(float2 xz, float lod)
 	float b = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.x + CloudWind.xy, lod).r;
 	float d = cloudNoise.SampleLevel(cloudNoiseSampler, xz * CloudScale.y + CloudWind.zw, lod).g;
 	float n = b * 0.85 + d * 0.15;
-	// no cover: none at all (the soft ramp would leave the noise's highest peaks)
-	return saturate((n - (1 - CloudShape.x) + CloudShape.y) / (2.5 * CloudShape.y)) * saturate(CloudShape.x * 12);
+	// Above a cover of 0.62 the ramp would be 1 everywhere (a uniform deck without relief): it
+	// stays at 0.62's, and the cover beyond lifts a floor under it instead, so an overcast keeps
+	// thinner and thicker parts. No cover: none at all (the soft ramp would leave the noise's
+	// highest peaks).
+	float cover = min(CloudShape.x, 0.62);
+	float c = saturate((n - (1 - cover) + CloudShape.y) / (2.5 * CloudShape.y)) * saturate(CloudShape.x * 12);
+	// (a fog's sheet, stratus over 0.75, stays even)
+	return lerp(c, 1, saturate((CloudShape.x - 0.62) / 0.38) * lerp(0.45, 0.85, saturate((CloudWeather.x - 0.75) * 6.7)));
 }
 
 // A storm's cumulonimbus (CloudWeather.y): a few huge cells of a much broader noise of their
@@ -86,10 +92,15 @@ float CloudShadow(float3 p)
 	float h = CloudShape.z + CloudShape.w * 0.35;
 	float t = max(h - p.y, 0) / max(CloudSun.y, 0.2);
 	float2 xz = p.xz + CloudSun.xz * t;
-	float c = CloudCover(xz, 1.5);
+	// the clouds form only where the cover is well over half (the 3D shape cuts the rest): as
+	// much shadow, so the sun reaches the ground between broken clouds (an overcast's cover is
+	// over 0.75 everywhere: shadow all over)
+	// (from a cover of 0.55 to 0.8 back to the plain cover: an overcast shades evenly)
+	float cc = CloudCover(xz, 1.5);
+	float c = lerp(smoothstep(0.35, 0.75, cc), cc, saturate((CloudShape.x - 0.55) / 0.25));
 	if (CloudWeather.y > 0) { // the storm's towers and anvils over its low deck
 		float2 cb = StormCells(xz, 0.9, 1.5);
-		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(c * 1.4)), CloudWeather.y); // the deck's thin parts shade too
+		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(cc * 1.4)), CloudWeather.y); // the deck's thin parts shade too
 	}
 	return 1 - CloudSunColour.w * c;
 }
@@ -513,13 +524,13 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.00f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f, 0.0f, 0.0f, 0.0f }, // clear: none at all
 	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.0f, 0.0f, 0.0f }, // cloudy: broken cumulus
 	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f, 0.0f, 0.0f, 0.0f }, // rain: low, grey, flatter
-	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.5f, 0.85f, 0.76f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
+	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.15f, 0.85f, 0.72f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
 	// thunderstorm: cumulonimbus (StormCells: towers to the top, flat anvils spreading under it,
 	// dark bases) over ragged low clouds
 	{ 0.60f, 170, 1300, 0.05f, 1.0f, 1.8f, 0.88f, 0.72f, 0.0f, 0.0f, 0.0f },
-	{ 0.90f, 200, 70, 0.9f, 0.0f, 0.8f, 0.70f, 1.18f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
+	{ 0.90f, 200, 70, 0.9f, 0.0f, 1.2f, 0.70f, 1.1f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
 	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f, 0.0f, 0.0f, 0.0f }, // snow: pale overcast
-	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.4f, 0.82f, 0.82f, 0.0f, 0.0f, 0.0f }, // blizzard
+	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.1f, 0.82f, 0.78f, 0.0f, 0.0f, 0.0f }, // blizzard
 	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.40f, 0.35f, 0.0f }, // heatwave: cirrus, altocumulus floccus
 	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.30f, 0.60f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
