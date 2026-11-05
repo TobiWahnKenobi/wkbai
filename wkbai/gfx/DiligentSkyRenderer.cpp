@@ -707,8 +707,17 @@ void DiligentSkyRenderer::render()
 		if ((sun - _impl->physicalSun).sqlen3() > 1e-6f || std::abs(cover - _impl->physicalCover) > 0.01f) {
 			_impl->physicalSun = sun;
 			_impl->physicalCover = cover;
-			float up[3] = {}, horizon[3] = {}, c[3];
-			for (int k = 0; k < 8; k++) {
+			float up[3] = {}, horizon[3] = {}, below[3] = {}, c[3];
+			// The light: the sky box's own (from its painted faces, as the original's lighting: a
+			// clear day's ground as in the original), only greyed by the clouds below; the physical
+			// sky's from the CPU model only without a sky box.
+			const bool box = _impl->boxLightValid;
+			if (box) {
+				memcpy(up, _impl->boxLight[0], sizeof(up));
+				memcpy(horizon, _impl->boxLight[1], sizeof(horizon));
+				memcpy(below, _impl->boxLight[2], sizeof(below));
+			}
+			else for (int k = 0; k < 8; k++) {
 				const float a = k * 0.785398f;
 				for (float e : { 0.5236f, 1.0472f, 1.5708f }) {
 					PhysicalSkyCpu(Vector3(std::cos(a) * std::cos(e), std::sin(e), std::sin(a) * std::cos(e)), sun, c);
@@ -727,9 +736,10 @@ void DiligentSkyRenderer::render()
 			};
 			toGrey(up);
 			toGrey(horizon);
-			// and half as saturated in any weather: the physical sky's full blue as the ground's
-			// fill light made sunlit ground look cold and sunless next to the sky box's warm light
-			for (float* v : { up, horizon }) {
+			toGrey(below);
+			// (the physical sky's: half as saturated in any weather: its full blue as the ground's
+			// fill light made sunlit ground look cold and sunless next to the sky box's warm light)
+			if (!box) for (float* v : { up, horizon }) {
 				const float l = 0.3f * v[0] + 0.59f * v[1] + 0.11f * v[2];
 				for (int i = 0; i < 3; i++)
 					v[i] += (l - v[i]) * 0.5f;
@@ -737,7 +747,7 @@ void DiligentSkyRenderer::render()
 			// and above as bright as at the horizon (their colours kept): SkyAmbient divides by
 			// their mean, and the physical sky's dark zenith under its bright horizon gave level
 			// ground ~0.6 of the sky box's fill light (the box is about as bright above as around)
-			{
+			if (!box) {
 				const float lu = std::max(0.3f * up[0] + 0.59f * up[1] + 0.11f * up[2], 1e-3f);
 				const float lh = std::max(0.3f * horizon[0] + 0.59f * horizon[1] + 0.11f * horizon[2], 1e-3f);
 				const float mean = (lu + lh) * 0.5f;
@@ -749,7 +759,7 @@ void DiligentSkyRenderer::render()
 			for (int i = 0; i < 3; i++) {
 				env.skyLight[0][i] = up[i];
 				env.skyLight[1][i] = horizon[i];
-				env.skyLight[2][i] = horizon[i] * 0.5f;
+				env.skyLight[2][i] = box ? below[i] : horizon[i] * 0.5f;
 			}
 			auto lum = [](const float* v) { return 0.299f * v[0] + 0.587f * v[1] + 0.114f * v[2]; };
 			env.skyLightLuminance = std::max(0.05f, (lum(env.skyLight[0]) + 2 * lum(env.skyLight[1]) + lum(env.skyLight[2])) / 4);
