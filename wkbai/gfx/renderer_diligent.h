@@ -157,6 +157,10 @@ struct DiligentGfx : IRenderer
 		class DiligentRayShadows* rayShadows = nullptr;
 		bool rayShadowsSupported = false, rayShadowsOn = false, rayReflectionsOn = false;
 		Vector3 sunDirection = Vector3(0, 1, 0);
+		// a small extra view (the selection window's unit portrait): the clouds' update, the sky
+		// light's map and the ray-traced passes belong to the world view and are left out (they
+		// set their own viewports and follow the camera)
+		bool portraitPass = false;
 	} shadows;
 };
 

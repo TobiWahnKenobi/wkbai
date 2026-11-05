@@ -897,7 +897,8 @@ void DiligentEnhancedSceneRenderer::render()
 		shadows.cloudWeatherKind = -1;
 		shadows.cloudFlashOverride = -1;
 	}
-	UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
+	if (!shadows.portraitPass)
+		UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 	memset(mapped, 0, 672);

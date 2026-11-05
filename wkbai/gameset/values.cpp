@@ -139,8 +139,10 @@ struct ValueEquationResult : ValueDeterminer {
 		}
 		auto _ = ctx->changeSelf(obj);
 		const float v = ctx->gameState->gameSet->equations[equation]->eval(ctx);
+		// (never quite 0: "Food, Less Penalty" divides the consumption by it, and a harsh winter's
+		// 0 gave Food 0 x infinity = NaN; this small a support takes all the food delivered)
 		if (support && ctx->gameState == Server::instance && Server::instance->environment.fieldsFallow())
-			return v * Server::instance->environment.supportScale();
+			return std::max(v * Server::instance->environment.supportScale(), 0.001f);
 		return v;
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {

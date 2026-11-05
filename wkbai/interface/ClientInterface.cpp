@@ -1438,10 +1438,19 @@ void ClientInterface::drawSelectionPortrait()
 	gfx->SetTransformMatrix(&cam.sceneMatrix);
 	// not the static shadow pass: it would draw the terrain's shadow map from the portrait alone
 	// (and reset the viewport)
-	const bool staticShadows = dgfx->shadows.staticShadows;
-	dgfx->shadows.staticShadows = false;
+	auto& sh = dgfx->shadows;
+	const bool staticShadows = sh.staticShadows, skyOcc = sh.skyOccOn, rayShadows = sh.rayShadowsOn, rayReflections = sh.rayReflectionsOn;
+	sh.staticShadows = false;
+	// nor the world view's sky light map and ray-traced passes (they reset the viewport to the
+	// whole screen: the figure filled it)
+	sh.skyOccOn = sh.rayShadowsOn = sh.rayReflectionsOn = false;
+	sh.portraitPass = true;
 	sceneRenderer->render();
-	dgfx->shadows.staticShadows = staticShadows;
+	sh.portraitPass = false;
+	sh.staticShadows = staticShadows;
+	sh.skyOccOn = skyOcc;
+	sh.rayShadowsOn = rayShadows;
+	sh.rayReflectionsOn = rayReflections;
 	dgfx->RestoreRenderTargets();
 	sceneRenderer->camera = mainCamera;
 	scene->clear();

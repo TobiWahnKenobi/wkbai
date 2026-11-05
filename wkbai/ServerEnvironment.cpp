@@ -646,6 +646,14 @@ void ServerEnvironment::update(Server& server)
 		return;
 	const float dt = started ? 1.0f : 0.0f;
 	nextUpdate = now + 1.0f;
+	// a new game starts at the start hour and in the start season, whatever the clock the map was
+	// saved with (some levels' game time is far from 0: a winter night instead of a spring morning)
+	if (!started && now > 0.0f) {
+		auto frac = [](float x) { return x - std::floor(x); };
+		// (a hair past: the floor of the seasons elapsed must not round to the season before)
+		settings.dayShift = frac(settings.dayShift - now / settings.dayLengthS() + 1e-5f);
+		settings.yearShift = frac(settings.yearShift - now / (4.0f * settings.seasonLengthS()) + 1e-5f);
+	}
 	state.time = now;
 	state.dayFraction = EnvDayFraction(settings, now);
 	state.yearFraction = EnvYearFraction(settings, now);
