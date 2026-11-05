@@ -82,6 +82,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	v.yearFraction = EnvYearFraction(es, t);
 	// the rest eased towards the server's state (it comes once a second)
 	auto ease = [](float& x, float target) { x += (target - x) * 0.05f; };
+	v.weather = st.weather;
 	if (!g_lightningKnown) {
 		v.cloudCover = st.cloudCover; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;

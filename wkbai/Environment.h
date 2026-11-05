@@ -30,8 +30,14 @@ struct EnvironmentSettings {
 	int tempScale = 0;         // the HUD's: 0 Celsius, 1 Fahrenheit, 2 Kelvin
 	// each season's weather: 0 gentle, 1 normal, 2 harsh, 3 random (chosen anew every year)
 	int severity[4] = { 1, 1, 1, 1 };
+	// the debug panel's (F9) moves of the clock: added to the day's fraction (startHour's) and to
+	// the year's (startSeason's), so the time of day and the season jump there and go on from it
+	float dayShift = 0.0f, yearShift = 0.0f;
 	bool active() const { return dayNight || seasons; }
 	float dayLengthS() const { return dayLengthMin * 60.0f; }
+	// the seasons since the game began (with the shift), as a count: its floor + startSeason is
+	// the season, counted on over the years
+	float seasonsElapsed(float time) const { return time / seasonLengthS() + yearShift * 4.0f; }
 	// a season never shorter than one day while days pass
 	float seasonLengthS() const;
 	// "name=value" lines, as Server::aiSettingsText (recordings); read by apply
@@ -108,6 +114,7 @@ struct EnvironmentView {
 	float dayFraction = 0.5f, yearFraction = 0.125f;
 	SunState sun;                 // also written into Terrain::sunVector/sunColor and the scene's sun
 	float temperatureC = 12.0f;
+	int weather = -1;             // EnvWeather now (-1: inactive): the dynamic clouds' preset
 	float cloudCover = 0.0f, rain = 0.0f, snowfall = 0.0f, fog = 0.0f;
 	float wetness = 0.0f, snowCover = 0.0f, ice = 0.0f, waterRise = 0.0f;
 	float lightningFlash = 0.0f;  // 0..1, this frame

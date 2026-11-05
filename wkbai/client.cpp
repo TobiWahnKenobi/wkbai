@@ -684,6 +684,14 @@ void Client::tick()
 				es.seasonLengthMin = br.readUint16();
 				es.startSeason = br.readUint8();
 				es.tempScale = br.readUint8();
+				es.dayShift = br.readFloat();
+				es.yearShift = br.readFloat();
+				{
+					const uint8_t held = br.readUint8();
+					environmentWeatherHeld = held == 255 ? -1 : held;
+				}
+				for (int s = 0; s < 4; s++)
+					es.severity[s] = br.readUint8();
 				environment.read(br);
 				environmentActive = es.active();
 				nightSight.factor = environment.sightFactor;
@@ -938,6 +946,14 @@ void Client::sendCancelCommand(ClientGameObject* obj, const Command* cmd)
 {
 	NetPacketWriter msg{ NETSRVMSG_CANCEL_COMMAND };
 	msg.writeValues(obj->id, cmd->id);
+	serverLink->send(msg);
+}
+
+void Client::sendEnvironmentDebug(const std::string& name, float value)
+{
+	NetPacketWriter msg{ NETSRVMSG_ENVIRONMENT_DEBUG };
+	msg.writeFloat(value);
+	msg.writeStringZ(name);
 	serverLink->send(msg);
 }
 

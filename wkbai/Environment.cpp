@@ -40,7 +40,13 @@ std::string EnvironmentSettings::text() const
 		"weatherSpring=%d\nweatherSummer=%d\nweatherAutumn=%d\nweatherWinter=%d\n",
 		(int)dayNight, dayLengthMin, startHour, (int)seasons, seasonLengthMin, startSeason, tempScale,
 		severity[0], severity[1], severity[2], severity[3]);
-	return buf;
+	std::string out = buf;
+	// (only once moved: the text of a game without them, a recording's, stays as it was)
+	if (dayShift != 0.0f || yearShift != 0.0f) {
+		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
+		out += buf;
+	}
+	return out;
 }
 
 bool EnvironmentSettings::apply(const std::string& name, float v)
@@ -57,6 +63,8 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "weatherSummer") severity[1] = std::clamp(i, 0, 3);
 	else if (name == "weatherAutumn") severity[2] = std::clamp(i, 0, 3);
 	else if (name == "weatherWinter") severity[3] = std::clamp(i, 0, 3);
+	else if (name == "dayShift") dayShift = v;
+	else if (name == "yearShift") yearShift = v;
 	else return false;
 	return true;
 }
@@ -106,14 +114,14 @@ float EnvDayFraction(const EnvironmentSettings& s, float time)
 {
 	if (!s.dayNight)
 		return 0.5f; // no clock: always noon (the sun as computed, with seasons)
-	return Frac(s.startHour / 24.0f + time / s.dayLengthS());
+	return Frac(s.startHour / 24.0f + s.dayShift + time / s.dayLengthS());
 }
 
 float EnvYearFraction(const EnvironmentSettings& s, float time)
 {
 	if (!s.seasons)
 		return 0.125f; // mid spring
-	return Frac(s.startSeason * 0.25f + time / (4.0f * s.seasonLengthS()));
+	return Frac(s.startSeason * 0.25f + s.yearShift + time / (4.0f * s.seasonLengthS()));
 }
 
 std::vector<FloodLand> FindFloodLand(const Terrain* t)

@@ -318,8 +318,9 @@ float ServerEnvironment::winterAhead(float now, int* severity) const
 	if (!settings.seasons)
 		return 0.0f;
 	const float length = settings.seasonLengthS();
-	const float into = now / length - std::floor(now / length); // the share of the season gone
-	const int season = ((int)std::floor(now / length) + settings.startSeason) % 4;
+	const float elapsed = settings.seasonsElapsed(now);
+	const float into = elapsed - std::floor(elapsed); // the share of the season gone
+	const int season = ((int)std::floor(elapsed) + settings.startSeason) % 4;
 	*severity = settings.severity[3] == 3 ? (resolvedYear >= 0 ? resolvedSeverity[3] : 1) : settings.severity[3];
 	if (season == 3)
 		return (1.0f - into) * length;
@@ -650,7 +651,7 @@ void ServerEnvironment::update(Server& server)
 	state.yearFraction = EnvYearFraction(settings, now);
 
 	if (settings.seasons) {
-		const int absSeason = (int)std::floor(now / settings.seasonLengthS()) + settings.startSeason;
+		const int absSeason = (int)std::floor(settings.seasonsElapsed(now)) + settings.startSeason;
 		state.season = absSeason % 4;
 		if (absSeason / 4 != resolvedYear) {
 			resolvedYear = absSeason / 4;
@@ -668,7 +669,8 @@ void ServerEnvironment::update(Server& server)
 		if (settings.seasons)
 			pickWeather(server, now);
 		else {
-			state.weather = WEATHER_CLEAR;
+			// (without seasons: clear, or the debug panel's weather)
+			state.weather = forceWeather >= 0 && forceWeather < WEATHER_COUNT ? forceWeather : WEATHER_CLEAR;
 			weatherEnds = 1e30f;
 		}
 	}
@@ -775,6 +777,12 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	msg.writeUint16((uint16_t)settings.seasonLengthMin);
 	msg.writeUint8((uint8_t)settings.startSeason);
 	msg.writeUint8((uint8_t)settings.tempScale);
+	// the debug panel's (F9): the clock's shifts, the weather held (255: none), the severities
+	msg.writeFloat(settings.dayShift);
+	msg.writeFloat(settings.yearShift);
+	msg.writeUint8(forceWeather >= 0 ? (uint8_t)forceWeather : 255);
+	for (int s = 0; s < 4; s++)
+		msg.writeUint8((uint8_t)settings.severity[s]);
 	state.write(msg);
 	if (only)
 		only->send(msg);
@@ -887,4 +895,38 @@ void ServerEnvironment::loadText(const std::string& text)
 			exposure[id] = e;
 		}
 	}
+}
+
+void ServerEnvironment::debugSet(Server& server, const std::string& name, float value)
+{
+	const float now = server.timeManager.currentTime;
+	auto frac = [](float x) { return x - std::floor(x); };
+	if (name == "hour") {
+		// the shift that puts the clock at that hour now
+		const float current = frac(settings.startHour / 24.0f + settings.dayShift + now / settings.dayLengthS());
+		settings.dayShift = frac(settings.dayShift + std::clamp(value, 0.0f, 24.0f) / 24.0f - current);
+	}
+	else if (name == "season") {
+		const float current = frac(settings.startSeason * 0.25f + settings.yearShift + now / (4.0f * settings.seasonLengthS()));
+		settings.yearShift = frac(settings.yearShift + std::clamp(value, 0.0f, 4.0f) / 4.0f - current);
+	}
+	else if (name == "weather") {
+		forceWeather = value >= 0.0f && value < WEATHER_COUNT ? (int)value : -1;
+		weatherEnds = 0.0f; // chosen again at the next update: the held one, or a new one
+	}
+	else if (!settings.apply(name, value))
+		return;
+	printf("ENVIRONMENT debug t=%.0f: %s = %g\n", now, name.c_str(), value);
+	if (!enabled()) {
+		// all off: the map's own look, open water, full sight
+		if (server.terrain && server.terrain->waterFrozen) {
+			server.terrain->waterFrozen = false;
+			server.terrain->revision++;
+		}
+		server.nightSight = NightSight();
+		send(server);
+		return;
+	}
+	nextUpdate = now; // worked out at the next step, and sent
+	send(server);
 }

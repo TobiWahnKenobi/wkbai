@@ -135,6 +135,9 @@ enum NetServerMessages {
 	// The guest's mods (ModManifest, JSON), before its NETSRVMSG_LOBBY_HELLO: part, parts (16 bits
 	// each), length (8 bits), the bytes
 	NETSRVMSG_MOD_MANIFEST,
+	// The environment's debug panel (F9, single player): a value (float), then its name (zero-ended)
+	// for ServerEnvironment::debugSet. As every message, recorded, so a replay does the same.
+	NETSRVMSG_ENVIRONMENT_DEBUG,
 };
 
 struct NetPacketWriter {

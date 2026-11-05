@@ -71,6 +71,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	bool environmentActive = false;
 	EnvironmentSettings environmentSettings;
 	EnvironmentState environment;
+	int environmentWeatherHeld = -1; // the debug panel's weather held on the server (-1: none)
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;
@@ -146,6 +147,8 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	void sendTerminateObject(ClientGameObject* obj);
 	void sendBuildLastStampdownedObject(ClientGameObject* obj, int assignmentMode);
 	void sendCancelCommand(ClientGameObject* obj, const Command* cmd);
+	// the environment's debug panel (F9): "name" = value (ServerEnvironment::debugSet)
+	void sendEnvironmentDebug(const std::string& name, float value);
 	void sendPutUnitIntoNewFormation(ClientGameObject* obj);
 	void sendCreateNewFormation();
 	void sendSetBuildingSpawnedUnitOrderToTarget(ClientGameObject* obj, int commandIndex, ClientGameObject* target);

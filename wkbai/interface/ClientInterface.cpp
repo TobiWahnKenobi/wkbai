@@ -1173,6 +1173,123 @@ void ClientInterface::drawChronicle()
 		}
 		ImGui::End();
 	}
+	drawEnvironmentDebug();
+}
+
+// The environment's debug panel (F9, single player): day and night, the seasons and the weather
+// set by hand. Each change goes to the server as a message (NETSRVMSG_ENVIRONMENT_DEBUG), so a
+// recording replays it; the panel shows what the server last sent.
+void ClientInterface::drawEnvironmentDebug()
+{
+	if (!environmentDebugOpen || !client || !client->getLevel())
+		return;
+	ImGui::SetNextWindowPos(ImVec2(40, 110), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Environment debug (F9)", &environmentDebugOpen)) {
+		ImGui::End();
+		return;
+	}
+	const EnvironmentSettings& es = client->environmentSettings;
+	const EnvironmentState& st = client->environment;
+	const bool on = client->environmentActive;
+	auto send = [&](const char* name, float value) { client->sendEnvironmentDebug(name, value); };
+
+	// the state now
+	if (on) {
+		const float hour = g_environment.dayFraction * 24.0f;
+		ImGui::Text("%02d:%02d  %s (%s)  %s  %s", (int)hour, (int)((hour - (int)hour) * 60.0f), SeasonName(st.season),
+			st.severity <= 0 ? "gentle" : st.severity == 1 ? "normal" : "harsh", WeatherName(st.weather), FormatTemperature(st.temperatureC, es.tempScale).c_str());
+		ImGui::Text("clouds %.2f  rain %.2f  snowfall %.2f  fog %.2f", st.cloudCover, st.rain, st.snowfall, st.fog);
+		ImGui::Text("wet %.2f  snow cover %.2f  ice %.2f%s  water %+.1f m", st.wetness, st.snowCover, st.ice, st.ice >= ICE_WALKABLE ? " (walkable)" : "", st.waterRise);
+		ImGui::Text("sight %.2f  ground speed %.2f  daylight %.2f", st.sightFactor, st.speedFactor, g_environment.sun.daylight);
+	}
+	else
+		ImGui::TextUnformatted("Day and night and the seasons are off: the map's own look.");
+	ImGui::Separator();
+
+	// day and night
+	bool dayNight = es.dayNight;
+	if (ImGui::Checkbox("Day and night", &dayNight))
+		send("dayNight", dayNight ? 1.0f : 0.0f);
+	static int dayLength = 20;
+	if (!ImGui::IsAnyItemActive())
+		dayLength = es.dayLengthMin;
+	ImGui::SetNextItemWidth(200);
+	ImGui::SliderInt("Day length (min)", &dayLength, 1, 240);
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		send("dayLength", (float)dayLength);
+	static float hour = 12.0f;
+	if (!ImGui::IsAnyItemActive())
+		hour = g_environment.active ? g_environment.dayFraction * 24.0f : 12.0f;
+	ImGui::BeginDisabled(!es.dayNight);
+	ImGui::SetNextItemWidth(200);
+	ImGui::SliderFloat("Time of day (h)", &hour, 0.0f, 24.0f, "%.2f");
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		send("hour", hour);
+	static const std::pair<const char*, float> hours[] = { { "Midnight", 0 }, { "Dawn", 6 }, { "Noon", 12 }, { "Dusk", 18.5f } };
+	for (size_t i = 0; i < std::size(hours); i++) {
+		if (i)
+			ImGui::SameLine();
+		if (ImGui::Button(hours[i].first))
+			send("hour", hours[i].second);
+	}
+	ImGui::EndDisabled();
+	ImGui::Separator();
+
+	// the seasons
+	bool seasons = es.seasons;
+	if (ImGui::Checkbox("Seasons and weather", &seasons))
+		send("seasons", seasons ? 1.0f : 0.0f);
+	static int seasonLength = 30;
+	if (!ImGui::IsAnyItemActive())
+		seasonLength = es.seasonLengthMin;
+	ImGui::SetNextItemWidth(200);
+	ImGui::SliderInt("Season length (min)", &seasonLength, 1, 240);
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		send("seasonLength", (float)seasonLength);
+	ImGui::BeginDisabled(!es.seasons);
+	static float season = 0.5f;
+	if (!ImGui::IsAnyItemActive())
+		season = g_environment.active ? g_environment.yearFraction * 4.0f : 0.5f;
+	ImGui::SetNextItemWidth(200);
+	ImGui::SliderFloat("Season (0 spring - 4)", &season, 0.0f, 3.999f, "%.2f");
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		send("season", season);
+	for (int s = 0; s < 4; s++) {
+		if (s)
+			ImGui::SameLine();
+		if (ImGui::Button(SeasonName(s)))
+			send("season", s + 0.05f); // the season's start
+	}
+	static const char* severities[] = { "gentle", "normal", "harsh", "random" };
+	static const char* severityNames[] = { "weatherSpring", "weatherSummer", "weatherAutumn", "weatherWinter" };
+	for (int s = 0; s < 4; s++) {
+		int v = std::clamp(es.severity[s], 0, 3);
+		ImGui::SetNextItemWidth(90);
+		if (s % 2)
+			ImGui::SameLine(190);
+		if (ImGui::Combo(SeasonName(s), &v, severities, 4))
+			send(severityNames[s], (float)v);
+	}
+	ImGui::EndDisabled();
+	ImGui::Separator();
+
+	// the weather: held (also without the seasons), or chosen as usual
+	int held = client->environmentWeatherHeld + 1;
+	std::vector<const char*> weathers = { "Auto (as the season brings it)" };
+	for (int w = 0; w < WEATHER_COUNT; w++)
+		weathers.push_back(WeatherName(w));
+	ImGui::BeginDisabled(!on);
+	ImGui::SetNextItemWidth(220);
+	if (ImGui::Combo("Weather", &held, weathers.data(), (int)weathers.size()))
+		send("weather", (float)(held - 1));
+	ImGui::EndDisabled();
+	int scale = es.tempScale;
+	ImGui::SetNextItemWidth(120);
+	if (ImGui::Combo("Temperature", &scale, "Celsius\0Fahrenheit\0Kelvin\0"))
+		send("tempScale", (float)scale);
+	ImGui::TextDisabled("Changes are recorded and replay the same.");
+	ImGui::End();
 }
 
 // The lower left panel's stained-glass window as glass (enhanced graphics): each pane bulges
@@ -2210,6 +2327,16 @@ void ClientInterface::iter()
 			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
 			statisticsOpen = bench.value("statistics", false);
 			timelineOpen = bench.value("timeline", false);
+			environmentDebugOpen = bench.value("environmentDebug", false);
+		}
+		// "environmentSet": [[name, value], ...]: the debug panel's changes, sent once the level runs
+		static bool envSent = false;
+		if (!envSent && client && client->getLevel() && withServer) {
+			envSent = true;
+			const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
+			for (const auto& e : bench.value("environmentSet", nlohmann::json::array()))
+				if (e.is_array() && e.size() == 2)
+					client->sendEnvironmentDebug(e[0].get<std::string>(), e[1].get<float>());
 		}
 	}
 	if (g_keyPressed[SDL_SCANCODE_F6] && !ImGui::GetIO().WantTextInput)
@@ -2218,6 +2345,10 @@ void ClientInterface::iter()
 		timelineOpen = !timelineOpen;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
+	if (g_keyPressed[SDL_SCANCODE_F9] && withServer && singlePlayer && !replayMode && !ImGui::GetIO().WantTextInput)
+		environmentDebugOpen = !environmentDebugOpen;
+	if (replayMode || !singlePlayer)
+		environmentDebugOpen = false;
 	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;
 		editorTestStep(peapos);

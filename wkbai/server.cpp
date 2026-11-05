@@ -3230,6 +3230,14 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				gameSet->commands[cmdid].execute(findObject(objid), findObject(targetid), mode, destination, faceTo);
 				break;
 			}
+			case NETSRVMSG_ENVIRONMENT_DEBUG: {
+				// the environment's debug panel (F9): the host's only
+				const float value = br.readFloat();
+				const std::string name = br.readStringZ();
+				if (clientIndex == 0 && getLevel())
+					environment.debugSet(*this, name, value);
+				break;
+			}
 			case NETSRVMSG_PAUSE: {
 				uint8_t newPaused = br.readUint8();
 				if (newPaused)

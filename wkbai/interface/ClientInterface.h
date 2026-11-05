@@ -163,6 +163,9 @@ private:
 	// the game's statistics (F6) and its timeline of events (F7)
 	GameChronicle chronicle;
 	bool statisticsOpen = false, timelineOpen = false;
+	// the environment's debug panel (F9, single player): day and night, seasons, weather by hand
+	bool environmentDebugOpen = false;
+	void drawEnvironmentDebug();
 	int statisticsShown = 0; // the graph: food, wood, gold, peasants, soldiers, buildings
 	void drawChronicle();
 	int selectPeasantsByActivity(int row);

@@ -884,6 +884,19 @@ void DiligentEnhancedSceneRenderer::render()
 	gfx->BeginBatchDrawing();
 
 	auto& shadows = dgfx->shadows;
+	// wkbai's seasons and weather, when on, drive the clouds: their preset (EnvWeather in the
+	// presets' order) and the flashes, at the strikes
+	if (g_environment.active && g_environment.weather >= 0) {
+		shadows.cloudWeatherKind = g_environment.weather;
+		shadows.cloudFlashOverride = g_environment.lightningFlash;
+		shadows.cloudFlash[0] = g_environment.lightningPos.x;
+		shadows.cloudFlash[1] = shadows.cloudPreset.base + std::min(shadows.cloudPreset.thickness * 0.35f, 150.0f); // in the low deck
+		shadows.cloudFlash[2] = g_environment.lightningPos.z;
+	}
+	else {
+		shadows.cloudWeatherKind = -1;
+		shadows.cloudFlashOverride = -1;
+	}
 	UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);

@@ -18,6 +18,7 @@
 #include "../Camera.h"
 #include "../file.h"
 #include "../util/util.h"
+#include "../Environment.h"
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -794,8 +795,11 @@ void DiligentSkyRenderer::render()
 		}
 		else
 			memcpy(base, env.skyLight[1], sizeof(base)); // already grey by the cover
+		// wkbai's day and night: as dark as the night's ambient (the map's fog is dimmed the same
+		// way, EnvironmentView); the sky box's light, the haze's base, doesn't change with the clock
+		const float* night = g_environment.active ? g_environment.sun.ambient : nullptr;
 		for (int i = 0; i < 3; i++)
-			env.hazeColour[i] = std::clamp(base[i] * k, 0.0f, 1.0f);
+			env.hazeColour[i] = std::clamp(base[i] * k * (night ? night[i] : 1.0f), 0.0f, 1.0f);
 	}
 	if (!clouds && _impl->boxLightValid && _impl->physicalSun.y > -1.5f) {
 		memcpy(env.skyLight, _impl->boxLight, sizeof(_impl->boxLight));

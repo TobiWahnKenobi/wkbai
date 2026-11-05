@@ -64,6 +64,11 @@ struct ServerEnvironment {
 	// once that many seconds in (the screenshots' fire)
 	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;
 	size_t charredCount() const { return charred.size(); }
+	// the debug panel (F9, NETSRVMSG_ENVIRONMENT_DEBUG): a setting (EnvironmentSettings::apply's
+	// names), or "hour" (0-24: the clock jumps there), "season" (0-4, spring 0: the year jumps
+	// there), "weather" (an EnvWeather held from now on, -1: chosen again as usual); the clients
+	// are told at once
+	void debugSet(Server& server, const std::string& name, float value);
 
 private:
 	float nextUpdate = -1.0f;

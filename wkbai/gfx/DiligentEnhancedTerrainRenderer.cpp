@@ -2177,8 +2177,11 @@ void DiligentEnhancedTerrainRenderer::render()
 		const bool skyOn = shadows.skyLightValid && g_renderSettings.sky;
 		for (int c = 0; c < 3; c++) {
 			const float fog = ((terrain->fogColor >> (16 - 8 * c)) & 255) / 255.0f;
-			waterSky[c] = skyOn ? shadows.skyLight[0][c] : fog;
-			waterSky[4 + c] = skyOn ? shadows.skyLight[1][c] : fog;
+			// (the sky light as dark as the night's ambient with wkbai's day and night; the fog
+			// colour is already, EnvironmentView)
+			const float night = g_environment.active ? g_environment.sun.ambient[c] : 1.0f;
+			waterSky[c] = skyOn ? shadows.skyLight[0][c] * night : fog;
+			waterSky[4 + c] = skyOn ? shadows.skyLight[1][c] * night : fog;
 		}
 		waterSky[3] = 1.0f;
 	}
