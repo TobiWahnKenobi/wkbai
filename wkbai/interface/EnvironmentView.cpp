@@ -103,6 +103,20 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	const Vector3 east(south.z, 0.0f, -south.x);
 	const Vector3& d = v.sun.direction; // (east, up, south)
 	terrain->sunVector = (east * d.x + Vector3(0, 1, 0) * d.y + south * d.z).normal();
+	auto toWorld = [&](const Vector3& e) { return (east * e.x + Vector3(0, 1, 0) * e.y + south * e.z).normal(); };
+	v.sunWorld = toWorld(v.sun.sunTrue);
+	v.moonWorld = toWorld(v.sun.moonTrue);
+	{
+		// the celestial pole: north, 47 degrees up (ComputeSun's latitude); the sky turns about it
+		// with the sun, once a day
+		const float lat = 47.0f * 3.14159265f / 180.0f;
+		const Vector3 pole = (south * -std::cos(lat) + Vector3(0, 1, 0) * std::sin(lat)).normal();
+		const Vector3 e1 = east, e2 = pole.cross(e1).normal();
+		const float a = v.dayFraction * 2.0f * 3.14159265f;
+		v.starX = e1 * std::cos(a) + e2 * std::sin(a);
+		v.starY = e2 * std::cos(a) - e1 * std::sin(a);
+		v.starZ = pole;
+	}
 	terrain->sunColor = Scale(g_mapLook.sunColor, v.sun.colour);
 	{
 		// the fog: the map's, in the sky's light, greyer in fog and under clouds

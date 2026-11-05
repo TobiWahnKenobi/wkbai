@@ -1238,6 +1238,8 @@ void DiligentEnhancedSceneRenderer::render()
 		ctx->CommitShaderResources(shadows.skyOccBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });
 		dgfx->RestoreRenderTargets();
+		// its means (SkyVisibility's fade towards the edge)
+		ctx->GenerateMips(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	drawMeshes(DRAW_SCENE);

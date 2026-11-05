@@ -427,6 +427,12 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 		float seen = tFog.SampleLevel(sLinear, fuv, 0).r;
 		c *= lerp(Fog.z, 1, seen);
 	}
+	// a dither of the 8-bit output (triangular, +-1 level): the darkening and the added light
+	// above would band the sky's and the haze's smooth gradients
+	// (interleaved gradient noise, twice)
+	float n1 = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
+	float n2 = frac(52.9829189 * frac(dot(input.Pos.xy + float2(47.3, 19.1), float2(0.00583715, 0.06711056))));
+	c += (n1 + n2 - 1) / 255;
 	return float4(saturate(c), 1);
 }
 

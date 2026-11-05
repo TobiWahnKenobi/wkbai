@@ -62,7 +62,35 @@ cbuffer SkyBuffer
 	float4 SkyRight;   // world direction of sky_right.tga
 	float4 SkyFlags;   // x: the sky has all six faces, y: the dynamic clouds' layer (tClouds), z: the frame (its jitter),
 	                   // w: the clouds' quality (RenderSettings::cloudQuality, 0-3)
+	// wkbai's day and night (g_environment; NightSky): the sun's own direction (below the horizon
+	// at night), w: how much night (0 by day or without the clock); the moon's direction, w: how
+	// much of it shows (its height, the night)
+	float4 SkySun;
+	float4 SkyMoon;
+	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation)
+	float4 SkyStarX;
+	float4 SkyStarY;
+	float4 SkyStarZ;
+	// the sky box under the weather's clouds (dynamicClouds below 3: no volumetric clouds over
+	// it): the overcast's colour, w how much (0: the box as it is)
+	float4 SkyOvercast;
 };
+
+// a hash of a 3D cell (0-1, three values)
+float3 Hash33(float3 p)
+{
+	p = frac(p * float3(0.1031, 0.1030, 0.0973));
+	p += dot(p, p.yxz + 33.33);
+	return frac((p.xxy + p.yxx) * p.zyx);
+}
+
+// a dither of the 8-bit output (triangular, +-1 level): no bands in the sky's smooth gradients
+float3 Dither(float2 pos)
+{
+	float3 a = Hash33(float3(pos, SkyFlags.z));
+	float3 b = Hash33(float3(pos + 37.7, SkyFlags.z + 11));
+	return (a + b - 1) / 255;
+}
 
 struct VS_OUTPUT
 {
@@ -250,9 +278,9 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float fade = exp(-t0 / 5000);
 	// (reaching beyond's at the march's end, 9000 units: fade over the last stretch to 0)
 	fade *= saturate((9000 - t0) / 2500);
-	// and by the elevation too, over the lowest 5 degrees: by the distance alone the change from
+	// and by the elevation too, over the lowest 9 degrees: by the distance alone the change from
 	// the clouds to the haze took a fraction of a degree, a line along the horizon
-	fade = min(fade, smoothstep(0.004, 0.09, rd.y));
+	fade = min(fade, smoothstep(0.004, 0.16, rd.y));
 	float far = (1 - fade) * hazeCover;
 	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
@@ -358,40 +386,140 @@ float3 PhysicalSky(float3 rd, float3 sun)
 	return 1 - exp(-c * 1.2);
 }
 
+// The night sky, added over the graded sky as much as the clouds let it through: the
+// moon's disc (its seas from the cloud noise, its limb darker) and the glow around it, and the
+// stars, a few thousand over the sky, turning about the pole with the clock, the faint ones
+// most numerous. Brightness on the screen (after the grade); px: a pixel's angle (radians).
+float3 NightSky(float3 rd, float px)
+{
+	float3 c = 0;
+	// the moon: 1.5 degrees across (three times the real one's, as games draw it)
+	float mu = dot(rd, SkyMoon.xyz);
+	float ang = acos(clamp(mu, -1, 1));
+	float radius = max(0.0130, px * 2.5);
+	if (SkyMoon.w > 0) {
+		const float3 moonCol = float3(0.93, 0.95, 1.0);
+		// the glow: a bright aureole close by, a broad faint halo
+		c = moonCol * (0.22 * exp(-max(ang - radius, 0) / 0.02) + 0.05 * exp(-ang / 0.25));
+		if (ang < radius * 1.5) {
+			// the disc's own frame: its seas, a fixed pattern of the noise
+			float3 mx = normalize(cross(SkyMoon.xyz, float3(0.001, 1, 0)));
+			float3 my = cross(mx, SkyMoon.xyz);
+			float2 q = float2(dot(rd, mx), dot(rd, my)) / radius; // -1..1 over the disc
+			float r = length(q);
+			float seas = cloudNoise.SampleLevel(cloudNoiseSampler, q * 0.2 + float2(0.37, 0.61), 0).r;
+			float albedo = lerp(1.0, 0.72, smoothstep(0.45, 0.65, seas));
+			float limb = sqrt(saturate(1 - r * r)) * 0.3 + 0.7;
+			float edge = saturate((1 - r) * radius / max(px, 1e-5) + 0.5); // antialiased
+			// (the disc in front of its glow; the sky behind it, outc, about 0.1)
+			c = lerp(c, moonCol * (albedo * limb * 1.02), edge);
+		}
+		c *= SkyMoon.w;
+	}
+	// the stars: a point in some cells of a 3D grid through the sphere, a pixel or two across,
+	// fainter towards the horizon (the air) and in the moon's glow
+	float3 sd = float3(dot(rd, SkyStarX.xyz), dot(rd, SkyStarY.xyz), dot(rd, SkyStarZ.xyz));
+	const float GRID = 110;
+	float3 g = sd * GRID;
+	float3 cell = floor(g);
+	float3 f = frac(g) - 0.5;
+	float3 side = abs(f.x) > abs(f.y) ? (abs(f.x) > abs(f.z) ? float3(sign(f.x), 0, 0) : float3(0, 0, sign(f.z)))
+		: (abs(f.y) > abs(f.z) ? float3(0, sign(f.y), 0) : float3(0, 0, sign(f.z)));
+	float stars = 0;
+	[unroll] for (int k = 0; k < 2; k++) { // the cell and its neighbour across its nearest face
+		float3 cc = cell + side * k;
+		float3 h = Hash33(cc);
+		float3 h2 = Hash33(cc + 17.3);
+		if (h2.x < 0.085) {
+			float3 sp = normalize((cc + 0.2 + 0.6 * h) / GRID);
+			float3 dv = sd - sp;
+			float d2 = dot(dv, dv);
+			float mag = pow(h2.y, 5); // most faint, a few bright
+			float size = px * (0.75 + 0.6 * mag);
+			float tw = 0.75 + 0.25 * sin(CloudScale.w * 3 + h2.z * 60); // a little twinkle
+			stars += exp(-d2 / (size * size)) * (0.16 + 1.25 * mag) * tw;
+		}
+	}
+	c += float3(0.86, 0.9, 1.0) * stars * saturate(rd.y * 5) * saturate(1 - SkyMoon.w * 0.7 * exp(-ang / 0.3));
+	return c * SkySun.w;
+}
+
+// The air's own colour at night, before the grade (dark blue, lighter towards the horizon and
+// around the moon: its light scattered)
+float3 NightAir(float3 rd)
+{
+	float mu = dot(rd, SkyMoon.xyz);
+	float h = saturate(rd.y);
+	float3 c = lerp(float3(0.070, 0.095, 0.17), float3(0.028, 0.045, 0.105), sqrt(h));
+	c += float3(0.06, 0.08, 0.12) * SkyMoon.w * (0.35 + 0.65 * saturate(mu) * saturate(mu)) * (0.6 + 0.4 * (1 - h));
+	return c;
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float3 d = CamForward.xyz + input.Ndc.x * CamForward.w * CamRight.xyz + input.Ndc.y * CamRight.w * CamUp.xyz;
 	float a = dot(d, SkyFront.xyz), b = dot(d, SkyRight.xyz), c = d.y;
 	float horizontal = sqrt(a * a + b * b);
+	float3 rd = normalize(d);
 	// The original's five-face sky always fades into the fog colour at the horizon and below,
 	// where it has no texture. Only a full six-face sky may drop the fade, when the fog is off
 	// (fog start beyond any distance).
 	bool sixFaces = SkyFlags.x != 0;
 	float fog = (sixFaces && FogStartDist > 1e8) ? 0 : (c < 0 ? 1 : SkyFog(c / max(horizontal, 1e-6)));
 	float3 colour = FogColor.rgb;
+	float night = SkySun.w;
+	float overcast = 0; // how much the weather's clouds over the sky box hide (the stars, the moon)
 	if (fog < 1) {
 		float3 tex;
 		if (SkyFlags.y != 0) { // the volumetric clouds: the physical sky
+			// lit by the sun itself (with the clock: below the horizon at night, the twilight
+			// after it; not by the moon, the night's light), the night's air under it
 			float3 sun = dot(CloudSun.xyz, CloudSun.xyz) > 0.01 ? normalize(CloudSun.xyz) : float3(0.5, 0.8, 0.3);
-			tex = PhysicalSky(normalize(d), sun);
-			tex = HighClouds(FogCamera.xyz, normalize(d), tex);
-		}
-		else if (c >= max(abs(a), abs(b)))
-			tex = skyTop.SampleLevel(skySampler, float2(0.5 + 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
-		else if (-c >= max(abs(a), abs(b)))
-			tex = skyBottom.SampleLevel(skySampler, float2(0.5 - 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
-		else if (abs(a) >= abs(b)) {
-			if (a > 0) tex = skyFront.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 - 0.5 * c / a), 0).rgb;
-			else       tex = skyBack.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 + 0.5 * c / a), 0).rgb;
+			if (night > 0)
+				sun = SkySun.xyz;
+			tex = sun.y > -0.25 ? PhysicalSky(rd, sun) : 0;
+			tex = max(tex, NightAir(rd) * night);
+			tex = HighClouds(FogCamera.xyz, rd, tex);
 		}
 		else {
-			if (b > 0) tex = skyRight.SampleLevel(skySampler, float2(0.5 - 0.5 * a / b, 0.5 - 0.5 * c / b), 0).rgb;
-			else       tex = skyLeft.SampleLevel(skySampler, float2(0.5 - 0.5 * a / b, 0.5 + 0.5 * c / b), 0).rgb;
+			if (c >= max(abs(a), abs(b)))
+				tex = skyTop.SampleLevel(skySampler, float2(0.5 + 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
+			else if (-c >= max(abs(a), abs(b)))
+				tex = skyBottom.SampleLevel(skySampler, float2(0.5 - 0.5 * b / c, 0.5 + 0.5 * a / c), 0).rgb;
+			else if (abs(a) >= abs(b)) {
+				if (a > 0) tex = skyFront.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 - 0.5 * c / a), 0).rgb;
+				else       tex = skyBack.SampleLevel(skySampler, float2(0.5 + 0.5 * b / a, 0.5 + 0.5 * c / a), 0).rgb;
+			}
+			else {
+				if (b > 0) tex = skyRight.SampleLevel(skySampler, float2(0.5 - 0.5 * a / b, 0.5 - 0.5 * c / b), 0).rgb;
+				else       tex = skyLeft.SampleLevel(skySampler, float2(0.5 - 0.5 * a / b, 0.5 + 0.5 * c / b), 0).rgb;
+			}
+			// the painted day sky gives way to the night's air
+			tex = lerp(tex, NightAir(rd), night * 0.9);
+			// the weather's clouds over the sky box (no volumetric ones): a grey deck with the
+			// ground shadows' cover (CloudCover at the layer's middle), its thicker parts darker,
+			// even towards the horizon
+			if (SkyOvercast.w > 0 && c > 0) {
+				float t = (CloudShape.z + CloudShape.w * 0.5 - FogCamera.y) / max(rd.y, 0.02);
+				float2 xz = FogCamera.xz + rd.xz * t;
+				CloudAt(xz);
+				float lod = log2(max(t * 0.0012 / max(rd.y, 0.05) * 256 * CloudScale.x, 1));
+				float cc = lerp(0.65, CloudCover(xz, lod), exp(-t / 7000));
+				// how much: by the weather's cover there (a storm's as an overcast); broken
+				// clouds in patches, an overcast all over with its relief
+				float amount = saturate((max(cShape.x, cWeather.y * 0.85) - 0.3) / 0.45) * 0.96;
+				float k = SkyOvercast.w * amount * lerp(smoothstep(0.25, 0.75, cc), lerp(0.75, 1.0, cc), amount);
+				float3 deck = SkyOvercast.rgb * lerp(1.12, 0.78, cc) * lerp(1.0, 1.15, saturate(1 - rd.y * 3));
+				deck = lerp(deck, FogColor.rgb, saturate(1 - rd.y * 5) * 0.7); // into the haze at the horizon
+				tex = lerp(tex, deck, k);
+				overcast = k;
+			}
 		}
 		colour = lerp(tex, FogColor.rgb, fog);
 	}
 	// the dynamic clouds' layer (RenderSettings::dynamicClouds 3) in front of the sky box,
 	// marched at a quarter, half or the full size (PS_Clouds)
+	float visible = 1 - overcast; // of the stars and the moon
 	if (SkyFlags.y != 0 && c > 0) {
 		float2 uv = float2(input.Ndc.x * 0.5 + 0.5, 0.5 - input.Ndc.y * 0.5);
 		float cw, ch;
@@ -400,8 +528,13 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		float4 cl = (tClouds.SampleLevel(skySampler, uv + float2(o.x, o.y), 0) + tClouds.SampleLevel(skySampler, uv + float2(-o.x, o.y), 0)
 			+ tClouds.SampleLevel(skySampler, uv + float2(o.x, -o.y), 0) + tClouds.SampleLevel(skySampler, uv - o, 0)) * 0.25;
 		colour = colour * cl.a + cl.rgb;
+		visible = cl.a;
 	}
-	return float4(GradeColour(colour), 1);
+	float3 outc = GradeColour(colour);
+	// the moon and the stars over the graded sky (the night's grade would dim them to grey)
+	if (night > 0 && c > 0 && fog < 1)
+		outc += NightSky(rd, CamRight.w * 2 / max(CamUp.w, 1)) * visible * (1 - fog);
+	return float4(outc + Dither(input.Pos.xy), 1);
 }
 
 float4 PS_Clouds(VS_OUTPUT input) : SV_Target
@@ -546,7 +679,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Sky camera";
-	cbDesc.Size = 96;
+	cbDesc.Size = 192;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -806,15 +939,51 @@ void DiligentSkyRenderer::render()
 		env.skyLightLuminance = _impl->boxLuminance;
 		_impl->physicalSun = Vector3(0, -2, 0);
 	}
-	const float data[24] = {
+	// wkbai's night (the moon, the stars) and the weather's overcast over the sky box
+	const EnvironmentView& ev = g_environment;
+	const float night = ev.active ? std::clamp(1.0f - ev.sun.daylight, 0.0f, 1.0f) : 0.0f;
+	auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+	const float moonShows = night * smooth(-0.03f, 0.06f, ev.moonWorld.y);
+	{
+		static bool told = false;
+		if (!told && moonShows > 0.5f) {
+			told = true;
+			printf("Night sky: the moon towards %.3f %.3f %.3f\n", ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z);
+		}
+	}
+	// the overcast: with the weather's clouds (the seasons' or the cloudWeather setting's), when
+	// there are no volumetric ones in the sky (dynamicClouds below 3; the shader takes how much
+	// from the cover over each point, so a front shows): a grey of the sky box's own light, darker
+	// the heavier the cloud (as the haze: the clouds' light), and at night
+	float overcast[4] = {};
+	if (!clouds && _impl->boxLightValid && (env.cloudWeatherKind >= 0 || g_renderSettings.cloudWeather > 0)) {
+		const auto& p = env.cloudPreset;
+		const float cover = std::clamp(std::max(p.cover, p.storm * 0.85f), 0.0f, 1.0f);
+		const float k = (1.0f - 0.45f * cover * cover) * (1.0f + (std::min(p.light, 1.2f) - 1.0f) * cover);
+		const float* bl = _impl->boxLight[0];
+		const float lum = 0.299f * bl[0] + 0.587f * bl[1] + 0.114f * bl[2];
+		const float tint[3] = { 0.97f, 1.0f, 1.04f };
+		for (int i = 0; i < 3; i++)
+			overcast[i] = std::clamp(lum * 1.05f * k * tint[i] * (ev.active ? ev.sun.ambient[i] : 1.0f), 0.0f, 1.0f);
+		overcast[3] = 1.0f;
+	}
+	const float screenHeight = (float)_impl->dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
+	const float data[48] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,
-		up.x, up.y, up.z, 0,
+		up.x, up.y, up.z, screenHeight,
 		// sky_front.tga faces +z (north) and sky_right.tga +x, as seen in the original
 		0, 0, 1, 0,
 		1, 0, 0, 0,
 		_impl->sixFaces ? 1.0f : 0.0f, clouds ? 1.0f : 0.0f, (float)(_impl->dgfx->FrameIndex() % 64), (float)cloudQuality,
+		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
+		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,
+		ev.starX.x, ev.starX.y, ev.starX.z, 0,
+		ev.starY.x, ev.starY.y, ev.starY.z, 0,
+		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
+		overcast[0], overcast[1], overcast[2], overcast[3],
 	};
+	static_assert(sizeof(data) == 192, "the sky buffer's size");
 	memcpy(f, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->skyBuffer, MAP_WRITE);
 

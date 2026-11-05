@@ -95,6 +95,9 @@ struct SunState {
 	float daylight = 1.0f;    // 0 night .. 1 full day
 	float colour[3] = { 1, 1, 1 }, ambient[3] = { 1, 1, 1 }; // multipliers of the map's own
 	float moon = 0.0f;
+	// the sun's and the moon's own directions (east, up, south; unit), even below the horizon:
+	// the night sky's (direction is the light's, the moon's at night, kept a little up)
+	Vector3 sunTrue{ 0.5f, 1.0f, 0.3f }, moonTrue{ -0.5f, -1.0f, -0.3f };
 };
 // dayFraction 0..1, yearFraction 0..1 (the sun higher in summer); clouds dim it
 SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover);
@@ -113,6 +116,10 @@ struct EnvironmentView {
 	bool active = false;
 	float dayFraction = 0.5f, yearFraction = 0.125f;
 	SunState sun;                 // also written into Terrain::sunVector/sunColor and the scene's sun
+	Vector3 sunWorld{ 0, -1, 0 }, moonWorld{ 0, 1, 0 }; // sun.sunTrue and .moonTrue in the world's frame
+	// the stars' frame (the night sky): a world direction's coordinates on the turning sky are
+	// its dot products with these (they turn about the pole once a day)
+	Vector3 starX{ 1, 0, 0 }, starY{ 0, 1, 0 }, starZ{ 0, 0, 1 };
 	float temperatureC = 12.0f;
 	int weather = -1;             // EnvWeather now (-1: inactive): the dynamic clouds' preset
 	float cloudCover = 0.0f, rain = 0.0f, snowfall = 0.0f, fog = 0.0f;

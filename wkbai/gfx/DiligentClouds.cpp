@@ -148,18 +148,27 @@ float CloudShadow(float3 p)
 
 // How much of the sky a point sees (0-1). Ground: the map's value. Models (model true): from
 // the ground's value at their foot up to all of the sky at the top of what stands there, or 8
-// units above the ground. Outside the map (beyond the camera's surroundings) a typical open value.
+// units above the ground. Towards the map's edge (beyond the camera's surroundings) its detail
+// fades over the outer 40% into the local mean (mip 5: about 35 units around), and beyond the
+// edge, over as far again, into the mean of the whole map (the last mip): no square around the
+// camera's target (a constant there made the open ground inside lighter than outside).
 float SkyVisibility(float3 p, bool model)
 {
 	if (SkyOccRegion.w == 0)
 		return 1;
 	float2 uv = (p.xz - SkyOccRegion.xy) * SkyOccRegion.z;
 	float4 s = skyOccTexture.SampleLevel(skyOccSampler, uv, 0);
-	float vis = s.r;
-	if (model)
-		vis = lerp(s.r, 1, saturate((p.y - s.g) / max(s.b - s.g, 8)));
-	float2 e = abs(uv - 0.5) * 2;
-	return lerp(vis, 0.9, saturate((max(e.x, e.y) - 0.8) / 0.2));
+	float2 e2 = abs(uv - 0.5) * 2;
+	float e = max(e2.x, e2.y);
+	float r = s.r;
+	if (e > 0.6) {
+		float local = skyOccTexture.SampleLevel(skyOccSampler, uv, 5).r;
+		float mean = skyOccTexture.SampleLevel(skyOccSampler, float2(0.5, 0.5), 9).r;
+		r = lerp(r, lerp(local, mean, smoothstep(1, 2, e)), smoothstep(0.6, 1, e));
+	}
+	if (model) // (the heights only inside the map)
+		r = lerp(r, 1, saturate((p.y - s.g) / max(s.b - s.g, 8)) * (1 - smoothstep(0.9, 1.1, e)));
+	return r;
 }
 
 // The sky's light on a surface facing n, of mean brightness 1: the colour above, at the
@@ -484,6 +493,8 @@ void CreateCloudResources(DiligentGfx* gfx)
 	occ.Width = occ.Height = DiligentGfx::ShadowEnvironment::SKY_OCC_SIZE;
 	occ.Format = TEX_FORMAT_RGBA16_FLOAT;
 	occ.BindFlags = BIND_SHADER_RESOURCE | BIND_RENDER_TARGET;
+	occ.MipLevels = 0; // the full chain (SkyVisibility's means towards the edge), made every frame
+	occ.MiscFlags = MISC_TEXTURE_FLAG_GENERATE_MIPS;
 	device->CreateTexture(occ, nullptr, &env.skyOcc);
 	TextureDesc dd;
 	dd.Name = "Sky light casters from above";
@@ -498,6 +509,8 @@ void CreateCloudResources(DiligentGfx* gfx)
 	ITextureView* rtv = env.skyOcc->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 	gfx->ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	gfx->ctx->ClearRenderTarget(rtv, white, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	gfx->ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+	gfx->ctx->GenerateMips(env.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
