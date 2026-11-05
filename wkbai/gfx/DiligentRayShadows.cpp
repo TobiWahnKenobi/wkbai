@@ -112,11 +112,16 @@ float PS(VS_OUTPUT input) : SV_Target
 	if (dot(n, camPos - p) < 0)
 		n = -n;
 	float3 l = normalize(SunDir.xyz);
-	if (dot(n, l) <= 0.01)
-		return 1; // turned away from the sun: its shading is dark already
 	float fog = FogAmount(p, distance(p, FogCamera.xyz));
 	if (fog >= 0.999)
 		return 1;
+	// turned away from the sun: in its own shadow, as deep as the shadows it casts (the terrain's
+	// sky light is brightest on the slopes away from the sun, which would otherwise stay lighter
+	// than the shadow falling from them); faded in over the last few degrees before the terminator
+	float nl = dot(n, l);
+	float self = lerp(fog, 1, smoothstep(-0.06, 0.15, nl));
+	if (nl <= -0.06)
+		return self;
 	// a point of the sun's disc, moved every frame (interleaved gradient noise)
 	float2 q = input.Pos.xy + 5.588238 * fmod(Texel.z, 64);
 	float r1 = frac(52.9829189 * frac(dot(q, float2(0.06711056, 0.00583715))));
@@ -135,7 +140,7 @@ float PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : 1;
+	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : self;
 }
 )---";
 
