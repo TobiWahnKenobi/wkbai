@@ -45,6 +45,7 @@ struct GameChronicle {
 		// gone within 100 m while it went on), by type
 		std::map<uint32_t, int> strength;
 		std::map<uint32_t, std::map<std::string, int>> lost;
+		Vector3 lastPosition; // a fight: where it was at the last scan (position: where it began)
 		std::string title() const; // "Battle of Ergor", "Village founded at Fangorn"
 	};
 	MapRegions regions;

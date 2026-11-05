@@ -178,11 +178,11 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 			buildingsLost[k.player]++;
 		else
 			unitsLost[k.player]++;
-		// a unit gone at a fight going on (within 100 m) was lost there
+		// a unit gone at a fight going on (within 100 m of where it last was) was lost there
 		if (!k.building)
 			for (Event& e : events)
 				if ((e.kind == Kind::Battle || e.kind == Kind::Siege || e.kind == Kind::Raid) && now - e.endTime <= 30.0f
-					&& (e.position - k.position).sqlen2xz() < 100.0f * 100.0f) {
+					&& (e.lastPosition - k.position).sqlen2xz() < 100.0f * 100.0f) {
 					e.lost[k.player][k.name]++;
 					e.players.insert(k.player);
 					break;
@@ -266,14 +266,17 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 		}
 		else
 			continue;
-		// an event still going on near here goes on (fights 30 s apart are one)
+		// a fight in the same map region (or within 100 m) less than 6 minutes after one there
+		// ended is the same one going on: one entry on the timeline, not one every few minutes
+		const std::string place = placeAt(centre);
 		Event* going = nullptr;
 		for (Event& e : events)
-			if ((e.kind == Kind::Battle || e.kind == Kind::Siege || e.kind == Kind::Raid) && now - e.endTime <= 30.0f
-				&& (e.position - centre).sqlen2xz() < 100.0f * 100.0f)
+			if ((e.kind == Kind::Battle || e.kind == Kind::Siege || e.kind == Kind::Raid) && now - e.endTime < 360.0f
+				&& ((!place.empty() && e.place == place) || (e.lastPosition - centre).sqlen2xz() < 100.0f * 100.0f))
 				going = &e;
 		if (going) {
 			going->endTime = now;
+			going->lastPosition = centre;
 			going->size = std::max(going->size, size);
 			for (const auto& [p, n] : strength)
 				going->strength[p] = std::max(going->strength[p], n);
@@ -284,7 +287,8 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 			going->seen = going->seen || seenAt(centre, going->players);
 		}
 		else {
-			Event e{ kind, now, now, centre, involved, size, std::string(), placeAt(centre) };
+			Event e{ kind, now, now, centre, involved, size, std::string(), place };
+			e.lastPosition = centre;
 			e.strength = strength;
 			e.seen = seenAt(centre, e.players);
 			events.push_back(std::move(e));
