@@ -126,7 +126,7 @@ struct DiligentGfx : IRenderer
 		// a square of 2 x SKY_OCC_RADIUS around the camera's target, from the terrain's heights
 		// and the static casters from above (skyDepth, drawn by the scene renderer)
 		static constexpr int SKY_OCC_SIZE = 512;
-		static constexpr float SKY_OCC_RADIUS = 200.0f, SKY_OCC_TOP = 600.0f, SKY_OCC_RANGE = 1000.0f;
+		static constexpr float SKY_OCC_RADIUS = 260.0f, SKY_OCC_TOP = 600.0f, SKY_OCC_RANGE = 1000.0f;
 		Diligent::RefCntAutoPtr<Diligent::ITexture> skyOcc, skyDepth;
 		Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> skyOccSignature;
 		Diligent::RefCntAutoPtr<Diligent::IPipelineState> skyOccPipeline;

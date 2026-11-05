@@ -213,6 +213,8 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	};
 	const Vector3 s = at(h);
 	sun.elevation = s.y;
+	sun.sunTrue = s.normal();
+	sun.moonTrue = at(h + PI).normal();
 	sun.daylight = Smoothstep(-0.10f, 0.20f, s.y);
 	// the moon: opposite the sun, at least a little up, for the night's shadows
 	Vector3 dir = s;
