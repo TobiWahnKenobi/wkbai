@@ -147,7 +147,7 @@ struct VS_OUTPUT
 	float Fog : FOG;
 	float3 WorldPos : TEXCOORD1;
 	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
-	float Fallow : TEXCOORD3; // 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil
+	float2 Fallow : TEXCOORD3; // x 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil; y 1: charred (SEFLAG_CHARRED)
 	float2 Leaves : TEXCOORD4; // x 1: broadleaf (SEFLAG_LEAVES); y: the tree's own seed (from where it stands)
 };
 
@@ -183,7 +183,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Tint.a = cloud;
 	}
 	output.Tint.rgb = float3(1, 1, 1);
-	output.Fallow = (EntityFlags & 64) ? 1 : 0;
+	output.Fallow = float2((EntityFlags & 64) ? 1 : 0, (EntityFlags & 256) ? 1 : 0);
 	output.Leaves = float2((EntityFlags & 128) ? 1 : 0, frac(sin(dot(EntityTransform[3].xz, float2(12.9898, 78.233))) * 43758.5453));
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
@@ -294,17 +294,24 @@ float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 {
 	// a field in winter: the crops gone, furrowed soil (the texture's pattern kept as its light
 	// and dark)
-	if (input.Fallow > 0.5)
+	if (input.Fallow.x > 0.5)
 		albedo = float3(0.34, 0.27, 0.2) * (0.5 + 0.9 * dot(albedo, float3(0.299, 0.587, 0.114)));
+	// burnt by a wildfire: charcoal, the bark's grain kept, ash-grey where it was light
+	if (input.Fallow.y > 0.5) {
+		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+		albedo = lerp(float3(0.035, 0.03, 0.028), float3(0.3, 0.29, 0.27), saturate(lum * lum * 2.5));
+	}
 	// a broadleaf tree's green leaves: in autumn yellow, orange, red and brown, each tree its own
 	// mix (and patches of it), the trunk and branches as they are; in heat a little dried
 	if (input.Leaves.x > 0.5 && Season.x + Season.y > 0) {
-		float green = saturate((albedo.g - max(albedo.r, albedo.b)) * 8 + 0.1) * saturate(albedo.g * 5);
+		float green = saturate((albedo.g - max(albedo.r, albedo.b)) * 14 + 0.2) * saturate(albedo.g * 6);
 		float lum = dot(albedo, float3(0.299, 0.587, 0.114));
 		float pick = frac(input.Leaves.y + (frac(sin(dot(floor(input.Texcoord * 6), float2(39.3, 11.7))) * 917.31) - 0.5) * 0.35);
-		float3 gold = float3(0.95, 0.72, 0.16), orange = float3(0.95, 0.45, 0.1), red = float3(0.75, 0.16, 0.07), brown = float3(0.55, 0.36, 0.16);
-		float3 hue = pick < 0.35 ? lerp(gold, orange, pick / 0.35) : pick < 0.7 ? lerp(orange, red, (pick - 0.35) / 0.35) : lerp(red, brown, (pick - 0.7) / 0.3);
-		albedo = lerp(albedo, hue * lum * 2.3, Season.x * green);
+		// vibrant: saturated hues, brightened (the leaves' texture is dark), the texture's light and
+		// dark kept; brown only for a few
+		float3 gold = float3(1.0, 0.78, 0.06), orange = float3(1.0, 0.45, 0.02), red = float3(0.9, 0.1, 0.03), brown = float3(0.6, 0.3, 0.08);
+		float3 hue = pick < 0.4 ? lerp(gold, orange, pick / 0.4) : pick < 0.85 ? lerp(orange, red, (pick - 0.4) / 0.45) : lerp(red, brown, (pick - 0.85) / 0.15);
+		albedo = lerp(albedo, hue * clamp(lum * 3.4, 0.45, 1.15), Season.x * green);
 		albedo = lerp(albedo, float3(1.25, 1.05, 0.5) * lum, Season.y * 0.45 * green);
 	}
 	if (Material.y + Material.z <= 0 || dot(input.Norm, input.Norm) == 0)
@@ -571,6 +578,7 @@ static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
 
 struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
+	std::map<StaticModel*, bool> hasBark; // a tree's model with bark (SEFLAG_BARE draws only that)
 	std::map<AnimatedModel*, DilAnim> animMap;
 	// Textures (one binding per texture), and the frame's environment (the cloud map)
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
@@ -1033,8 +1041,29 @@ void DiligentEnhancedSceneRenderer::render()
 			};
 
 			const bool animated = enhAnim && enhAnim->animTimes.size() >= 2;
+			// a tree bare of leaves (winter, burnt; wkbai's seasons): only its bark drawn; a model
+			// without bark (a bush) not at all once burnt, as it is in winter
+			auto isBark = [](const std::string& f) {
+				std::string l = f;
+				for (char& c : l) c = (char)tolower((unsigned char)c);
+				return l.find("bark") != std::string::npos;
+			};
+			const bool barkMaterial = isBark(mat.textureFilename);
+			bool modelHasBark = false;
+			if (!barkMaterial) {
+				auto bt = _impl->hasBark.find(staticModel);
+				if (bt == _impl->hasBark.end()) {
+					bool any = false;
+					for (uint32_t id : staticModel->matIds)
+						any |= isBark(scene->modelCache->getMaterial(id).textureFilename);
+					bt = _impl->hasBark.emplace(staticModel, any).first;
+				}
+				modelHasBark = bt->second;
+			}
 			for (SceneEntity* ent : it.second.list) {
 				if (shadowPass && !(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+					continue;
+				if ((ent->flags & SceneEntity::SEFLAG_BARE) && !barkMaterial && (modelHasBark || (ent->flags & SceneEntity::SEFLAG_CHARRED)))
 					continue;
 				if (motionPass) {
 					// the first of the entity's materials in this frame: what was drawn becomes the

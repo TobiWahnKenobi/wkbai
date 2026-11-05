@@ -38,6 +38,8 @@ struct SceneEntity {
 		SEFLAG_DYNAMIC_SHADOW = 32, // a unit drawn into the sun's shadow map (realCharacterShadows) instead of a blob
 		SEFLAG_FALLOW = 64, // a field in winter (wkbai's seasons): drawn as bare soil
 		SEFLAG_LEAVES = 128, // a broadleaf tree or bush (wkbai's seasons: autumn colours, dry in heat)
+		SEFLAG_CHARRED = 256, // a tree or bush a wildfire burned: drawn black (and bare)
+		SEFLAG_BARE = 512, // a tree without its leaves (winter, burnt): the materials other than its bark not drawn
 	};
 };
 

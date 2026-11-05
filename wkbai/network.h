@@ -99,6 +99,10 @@ enum NetClientMessages {
 	// and night, 2 seasons), day length (16 bits, minutes), start hour, season length (16 bits),
 	// start season, temperature scale, then EnvironmentState::write
 	NETCLIMSG_ENVIRONMENT,
+	// the trees a wildfire charred (wkbai's seasons; drawn black and bare): reset (1: the client
+	// drops the ones it has first), count (up to 60), the ids (32 bits each); the new ones after
+	// each NETCLIMSG_ENVIRONMENT, all of them to a client joining
+	NETCLIMSG_CHARRED_TREES,
 };
 
 enum NetServerMessages {

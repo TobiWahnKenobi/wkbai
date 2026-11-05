@@ -63,6 +63,7 @@ struct ServerEnvironment {
 	// tests ("environmentForce": { "fireAt": [x, z, after s] }): a flaming missile comes down there
 	// once that many seconds in (the screenshots' fire)
 	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;
+	size_t charredCount() const { return charred.size(); }
 
 private:
 	float nextUpdate = -1.0f;
@@ -96,6 +97,13 @@ private:
 	struct Wildfire { Vector3 pos; float born = 0, life = 0; SrvGORef visual; int gen = 0; };
 	std::vector<Wildfire> fires;
 	std::set<int> burnt;
+	// the trees and bushes a fire burned (by id; for good, saved): the client draws them charred,
+	// bare of leaves; charredSent: how many the clients were last sent
+	std::set<uint32_t> charred;
+	std::vector<uint32_t> charredOrder; // the same, in the order they burned
+	size_t charredSent = 0;
+	void sendCharred(Server& server, NetLink* only);
+	void charTrees(Server& server, const Vector3& at);
 	void updateFires(Server& server);
 	bool igniteAt(Server& server, const Vector3& pos, float life, int gen = 0);
 	float fuelAt(Server& server, const Vector3& pos);

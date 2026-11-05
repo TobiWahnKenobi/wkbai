@@ -691,6 +691,14 @@ void Client::tick()
 					terrain->waterFrozen = environmentActive && environment.ice >= ICE_WALKABLE;
 				break;
 			}
+			case NETCLIMSG_CHARRED_TREES: {
+				if (br.readUint8())
+					charredTrees.clear();
+				const uint8_t n = br.readUint8();
+				for (uint8_t i = 0; i < n; i++)
+					charredTrees.insert(br.readUint32());
+				break;
+			}
 			case NETCLIMSG_HOST_DATA: {
 				const uint8_t kind = br.readUint8();
 				const uint16_t part = br.readUint16(), parts = br.readUint16();

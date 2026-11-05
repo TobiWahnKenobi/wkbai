@@ -71,6 +71,8 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	bool environmentActive = false;
 	EnvironmentSettings environmentSettings;
 	EnvironmentState environment;
+	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
+	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;
 	// the host's mods for this game (NETCLIMSG_HOST_DATA 3): the session to mount, JSON; the
 	// folder its sent files went to

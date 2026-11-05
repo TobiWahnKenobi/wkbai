@@ -158,6 +158,7 @@ bool ServerEnvironment::igniteAt(Server& server, const Vector3& at, float life, 
 	f.life = life;
 	f.gen = gen;
 	burnt.insert(tile);
+	charTrees(server, f.pos);
 	static const GameObjBlueprint* burning = nullptr;
 	static const GameSet* of = nullptr;
 	if (of != server.gameSet.get()) {
@@ -181,6 +182,26 @@ bool ServerEnvironment::igniteAt(Server& server, const Vector3& at, float life, 
 	fires.push_back(f);
 	stats.fireCells++;
 	return true;
+}
+
+// the trees and bushes within 6 m of a burning patch are charred (only how they are drawn: no
+// random numbers, the wood they hold as it was)
+void ServerEnvironment::charTrees(Server& server, const Vector3& at)
+{
+	if (!server.tiles)
+		return;
+	const auto [w, h] = server.terrain->getNumPlayableTiles();
+	const int tx = (int)(at.x / 5.0f), tz = (int)(at.z / 5.0f);
+	for (int dz = -2; dz <= 2; dz++)
+		for (int dx = -2; dx <= 2; dx++) {
+			if (tx + dx < 0 || tz + dz < 0 || tx + dx >= w || tz + dz >= h)
+				continue;
+			for (const auto& ref : server.tiles[(tz + dz) * w + tx + dx].objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && (o->position - at).sqlen2xz() < 6.0f * 6.0f
+					&& (ContainsCI(o->blueprint->name, "tree") || ContainsCI(o->blueprint->name, "bush")) && !ContainsCI(o->blueprint->name, "bird"))
+					if (charred.insert(o->id).second)
+						charredOrder.push_back(o->id);
+		}
 }
 
 void ServerEnvironment::fireLanded(Server& server, const Vector3& pos, bool sure)
@@ -756,6 +777,34 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	else
 		for (NetLink* link : server.clientLinks)
 			link->send(msg);
+	sendCharred(server, only);
+}
+
+// the charred trees (NETCLIMSG_CHARRED_TREES): the new ones, or all of them to a client joining,
+// 60 to a packet
+void ServerEnvironment::sendCharred(Server& server, NetLink* only)
+{
+	size_t from = only ? 0 : charredSent;
+	if (!only)
+		charredSent = charredOrder.size();
+	bool reset = only != nullptr;
+	if (from >= charredOrder.size() && !reset)
+		return;
+	do {
+		const size_t n = std::min<size_t>(charredOrder.size() - from, 60);
+		NetPacketWriter msg(NETCLIMSG_CHARRED_TREES);
+		msg.writeUint8(reset ? 1 : 0);
+		msg.writeUint8((uint8_t)n);
+		for (size_t i = 0; i < n; i++)
+			msg.writeUint32(charredOrder[from + i]);
+		if (only)
+			only->send(msg);
+		else
+			for (NetLink* link : server.clientLinks)
+				link->send(msg);
+		from += n;
+		reset = false;
+	} while (from < charredOrder.size());
 }
 
 std::string ServerEnvironment::saveText() const
@@ -772,6 +821,12 @@ std::string ServerEnvironment::saveText() const
 		o << "burnt";
 		for (int t : burnt)
 			o << ' ' << t;
+		o << '\n';
+	}
+	if (!charred.empty()) {
+		o << "charred";
+		for (uint32_t id : charredOrder)
+			o << ' ' << id;
 		o << '\n';
 	}
 	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
@@ -814,6 +869,12 @@ void ServerEnvironment::loadText(const std::string& text)
 			int t;
 			while (l >> t)
 				burnt.insert(t);
+		}
+		else if (tag == "charred") {
+			uint32_t id;
+			while (l >> id)
+				if (charred.insert(id).second)
+					charredOrder.push_back(id);
 		}
 		else if (tag == "exposure") {
 			uint32_t id = 0;

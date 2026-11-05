@@ -1444,6 +1444,37 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			|| name.find("City Tree") != std::string::npos || name.find("Bush") != std::string::npos)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_LEAVES;
 	}
+	// bare trees (wkbai's seasons): the broadleaf trees in winter (not the bushes, firs and cedars),
+	// and every tree a wildfire burned (charred too). Drawn as the game set's own leafless tree
+	// (two of its models, by the tree's id; the oaks' bark is only their trunk, the branches are in
+	// the leaves); without it only the bark. A bush that burned is gone.
+	if (client->environmentActive) {
+		const std::string& name = obj->blueprint->name;
+		const bool charred = !client->charredTrees.empty() && client->charredTrees.count(obj->id) != 0;
+		const bool broadleaf = name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos;
+		const bool tree = name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos;
+		if ((charred && tree) || (broadleaf && client->environmentSettings.seasons && client->environment.season == 3)) {
+			static const GameSet* of = nullptr;
+			static Model* dead[2] = { nullptr, nullptr };
+			if (of != client->gameSet.get()) {
+				of = client->gameSet.get();
+				auto load = [&](const char* path) { return FileExists(path) ? of->modelCache.getModel(path) : nullptr; };
+				dead[0] = load("Warrior Kings Game Set\\Resources\\Trees\\Deciduous\\Dead01\\DEFAULT1.MESH3");
+				dead[1] = load("Warrior Kings Game Set\\Props\\Newtree_Deadtree1\\DEFAULT1.MESH3");
+				if (!dead[1]) dead[1] = dead[0];
+				if (!dead[0]) dead[0] = dead[1];
+			}
+			if (Model* m = dead[obj->id & 1])
+				obj->sceneEntity.model = m;
+			else
+				obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
+			obj->sceneEntity.flags &= ~SceneEntity::SEFLAG_LEAVES;
+		}
+		else if (charred)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
+		if (charred)
+			obj->sceneEntity.flags |= SceneEntity::SEFLAG_CHARRED;
+	}
 
 	// highlight selected object
 	bool highlighted = selection.count(obj) >= 1;
