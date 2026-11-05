@@ -113,18 +113,22 @@ namespace {
 		return r;
 	}
 
-	uint8_t NearestNormal(const Vector3& n)
-	{
-		int best = 0;
-		float bestDot = -2;
-		for (int i = 0; i < 256; i++) {
-			const Vector3& t = Mesh::s_normalTable[i];
-			const float d = t.x * n.x + t.y * n.y + t.z * n.z;
-			if (d > bestDot) { bestDot = d; best = i; }
-		}
-		return (uint8_t)best;
-	}
+	uint8_t NearestNormal(const Vector3& n) { return Mesh::nearestNormal(n); }
 }
+
+uint8_t Mesh::nearestNormal(const Vector3& n)
+{
+	int best = 0;
+	float bestDot = -2;
+	for (int i = 0; i < 256; i++) {
+		const Vector3& t = Mesh::s_normalTable[i];
+		const float d = t.x * n.x + t.y * n.y + t.z * n.z;
+		if (d > bestDot) { bestDot = d; best = i; }
+	}
+	return (uint8_t)best;
+}
+
+static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<float>& uvs, const std::vector<Mesh::BuildGroup>& groups);
 
 void Mesh::loadGltf(const char* filename)
 {
@@ -194,7 +198,7 @@ void Mesh::loadGltf(const char* filename)
 
 	std::vector<float> positions, uvs;
 	std::vector<uint8_t> normalIds;
-	struct Group { Material mat; std::vector<uint32_t> triangles; };
+	using Group = BuildGroup;
 	std::vector<Group> groups;
 
 	auto addPrimitive = [&](const nlohmann::json& prim, const Mat4& world) {
@@ -261,9 +265,26 @@ void Mesh::loadGltf(const char* filename)
 		for (const auto& prim : doc["meshes"][0]["primitives"])
 			addPrimitive(prim, Mat4());
 
-	const size_t numV = positions.size() / 3;
-	if (numV > 65535)
-		ferr("glTF model %s has %zu vertices; at most 65535 are supported.", filename, numV);
+	if (positions.size() / 3 > 65535)
+		ferr("glTF model %s has %zu vertices; at most 65535 are supported.", filename, positions.size() / 3);
+	buildIds(*this, positions, normalIds, uvs, groups);
+}
+
+void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups)
+{
+	std::vector<uint8_t> ids(normals.size());
+	for (size_t i = 0; i < normals.size(); i++)
+		ids[i] = nearestNormal(normals[i]);
+	buildIds(*this, positions, ids, uvs, groups);
+}
+
+static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<float>& uvs, const std::vector<Mesh::BuildGroup>& groups)
+{
+	auto& numVertices = m.numVertices; auto& numNormals = m.numNormals; auto& numUvs = m.numUvs; auto& numAttachPoints = m.numAttachPoints;
+	auto& attachPoints = m.attachPoints; auto& vertices = m.vertices; auto& vertexRemapper = m.vertexRemapper; auto& normalRemapper = m.normalRemapper;
+	auto& normals = m.normals; auto& uvLists = m.uvLists; auto& materials = m.materials; auto& groupIndices = m.groupIndices; auto& polyLists = m.polyLists;
+	auto& aabbLow = m.aabbLow; auto& aabbHigh = m.aabbHigh; auto& sphereCenter = m.sphereCenter; auto& sphereRadius = m.sphereRadius;
+	const size_t numV = std::min<size_t>(positions.size() / 3, 65535);
 
 	numVertices = numNormals = numUvs = (uint16_t)numV;
 	numAttachPoints = 0;

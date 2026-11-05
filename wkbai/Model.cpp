@@ -33,6 +33,18 @@ Model * ModelCache::getModel(const std::string & filename) {
 	}
 }
 
+Model* ModelCache::getGeneratedModel(const std::string& name, std::function<void(Mesh&)> generator)
+{
+	std::lock_guard<decltype(g_modelPreparationMutex)> lock(g_modelPreparationMutex);
+	auto it = models.find(name);
+	if (it != models.end())
+		return it->second.get();
+	StaticModel* m = new StaticModel(this, name);
+	m->generator = std::move(generator);
+	models[name].reset(m);
+	return m;
+}
+
 const Material& ModelCache::getMaterial(int id)
 {
 	std::lock_guard<decltype(g_modelPreparationMutex)> lock(g_modelPreparationMutex);
@@ -58,7 +70,10 @@ void StaticModel::prepare() {
 	if (ready) return;
 
 	//printf("Preparing mesh %s\n", fileName.c_str());
-	mesh.load(fileName.c_str());
+	if (generator)
+		generator(mesh);
+	else
+		mesh.load(fileName.c_str());
 
 	matIds.resize(mesh.materials.size());
 	for (size_t i = 0; i < matIds.size(); i++) {

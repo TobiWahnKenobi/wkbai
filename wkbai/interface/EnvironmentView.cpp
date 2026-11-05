@@ -167,7 +167,8 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		if (es.seasons) {
 			const float into = v.yearFraction * 4.0f - std::floor(v.yearFraction * 4.0f);
 			const int s = (int)std::floor(v.yearFraction * 4.0f) % 4;
-			autumn = s == 2 ? std::clamp(into / 0.35f, 0.0f, 1.0f) : s == 3 ? std::clamp(1.0f - into / 0.25f, 0.0f, 1.0f) : 0.0f;
+			// in winter the trees still in leaf keep their colours until they drop them (TreeBareInWinter)
+			autumn = s == 2 ? std::clamp(into / 0.35f, 0.0f, 1.0f) : s == 3 && into < 0.15f ? 1.0f : 0.0f;
 		}
 		approach(v.autumn, autumn, 0.05f);
 		approach(v.mud, std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f + 0.1f * std::min(st.rain, 1.0f) * (st.waterRise > 0.2f ? 1.0f : 0.0f), 0.02f);
@@ -223,13 +224,53 @@ void DrawEnvironmentHud(Client* client, float screenWidth)
 	dl->AddText(font, px, pos, IM_COL32(240, 232, 200, 255), text);
 }
 
+namespace {
+	// the season and how far into it (0..1), -1 without seasons
+	int SeasonNow(Client* client, float& into)
+	{
+		into = 0.0f;
+		if (!client->environmentActive || !client->environmentSettings.seasons || !g_environment.active)
+			return -1;
+		const float y = g_environment.yearFraction * 4.0f;
+		into = y - std::floor(y);
+		return (int)std::floor(y) % 4;
+	}
+	// how many leaves fall: through autumn, more as it goes on; heavy in early winter from the
+	// trees still in leaf
+	float LeafFall(Client* client)
+	{
+		float into;
+		const int s = SeasonNow(client, into);
+		return s == 2 ? 0.3f + 0.7f * into : s == 3 && into < 0.15f ? 1.6f : 0.0f;
+	}
+	struct LeafTree { Vector3 centre; float radius; uint32_t id; };
+	std::vector<LeafTree> g_leafTrees;
+}
+
+bool TreeBareInWinter(Client* client, uint32_t id)
+{
+	float into;
+	if (SeasonNow(client, into) != 3)
+		return false;
+	return into >= 0.005f + 0.115f * Hash(id * 2654435761u ^ 0x5EEDu);
+}
+
+void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t id)
+{
+	if (g_leafTrees.size() < 4096 && LeafFall(client) > 0.0f)
+		g_leafTrees.push_back({ centre, radius, id });
+}
+
 void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 {
 	const EnvironmentView& v = g_environment;
+	std::vector<LeafTree> trees;
+	trees.swap(g_leafTrees); // this frame's (the next frame adds its own)
 	if (!v.active || !client->terrain)
 		return;
 	const bool raining = v.rain > 0.02f, snowing = v.snowfall > 0.02f, bolt = v.lightningFlash > 0.0f;
-	if (!raining && !snowing && !bolt)
+	const float leafFall = trees.empty() ? 0.0f : LeafFall(client);
+	if (!raining && !snowing && !bolt && leafFall <= 0.0f)
 		return;
 	static std::unique_ptr<RBatch> batch;
 	if (!batch)
@@ -294,6 +335,63 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 				continue;
 			const float s = 0.06f + 0.05f * Hash(i + 777);
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
+		}
+	}
+	if (leafFall > 0.0f) {
+		// the falling leaves: from the crowns of the nearest trees in leaf, drifting with the wind,
+		// swaying and tumbling (each a small quad turning about), gold, orange, red and brown
+		static const int perTree[4] = { 4, 8, 14, 22 };
+		const int each = std::max(1, (int)std::lround(perTree[std::clamp(g_renderSettings.weatherEffects, 0, 3)] * leafFall));
+		const size_t nearest = std::min<size_t>(trees.size(), 48);
+		std::partial_sort(trees.begin(), trees.begin() + nearest, trees.end(), [&](const LeafTree& a, const LeafTree& b) {
+			return (a.centre - centre).sqlen2xz() < (b.centre - centre).sqlen2xz();
+		});
+		const Vector3 up = camside.cross(camera.direction).normal();
+		static const uint32_t palette[5] = { 0xF2C21A, 0xF07818, 0xD8461A, 0xB82A14, 0x9A6A26 };
+		const float light = 0.35f + 0.65f * v.sun.daylight;
+		for (size_t t = 0; t < nearest; t++) {
+			const LeafTree& tr = trees[t];
+			for (int k = 0; k < each; k++) {
+				const uint32_t seed = tr.id * 97u + (uint32_t)k * 7919u;
+				// from the crown's outer edge, below its middle (not inside the foliage), down at
+				// 0.5-0.9 m a second, swaying; then a few seconds lying on the ground, fading
+				const float around = Hash(seed + 3) * 6.2831853f, out = tr.radius * (0.45f + 0.35f * Hash(seed + 4));
+				const float x0 = tr.centre.x + std::cos(around) * out, z0 = tr.centre.z + std::sin(around) * out;
+				const float ground0 = client->terrain->getHeight(x0, z0);
+				const float startY = std::max(tr.centre.y - tr.radius * (0.05f + 0.3f * Hash(seed + 5)), ground0 + 2.0f);
+				const float speed = 0.5f + 0.4f * Hash(seed + 1);
+				const float fallTime = (startY - ground0) / speed, rest = 4.0f + 3.0f * Hash(seed + 9);
+				const float period = fallTime + rest;
+				const float tl = std::fmod(time + Hash(seed + 2) * period, period);
+				const float tf = std::min(tl, fallTime); // how long it has fallen
+				Vector3 p(x0 + v.wind.x * tf * 0.3f + std::sin(tf * 1.1f + seed * 0.013f) * 0.9f, 0.0f,
+					z0 + v.wind.z * tf * 0.3f + std::cos(tf * 0.9f + seed * 0.029f) * 0.9f);
+				const float ground = client->terrain->getHeight(p.x, p.z);
+				const bool landed = tl >= fallTime;
+				p.y = landed ? ground + 0.05f : std::max(startY - tf * speed, ground + 0.05f);
+				if ((p - camera.position).sqlen3() < 6.0f * 6.0f)
+					continue;
+				const float s = 0.25f + 0.15f * Hash(seed + 7); // larger than a leaf: seen from the RTS camera
+				Vector3 a, b;
+				if (landed) {
+					// lying flat on the ground
+					const float turnTo = seed * 0.37f;
+					a = Vector3(std::cos(turnTo), 0, std::sin(turnTo)) * s;
+					b = Vector3(-std::sin(turnTo), 0, std::cos(turnTo)) * (s * 0.7f);
+				}
+				else {
+					// tumbling: a slow spin, and turning edge-on now and then
+					const float spin = tf * (0.8f + 1.2f * Hash(seed + 6)) + seed * 0.01f;
+					const float flip = 0.25f + 0.75f * std::abs(std::cos(tf * 1.6f + seed * 0.11f));
+					a = (camside * std::cos(spin) + up * std::sin(spin)) * s;
+					b = (up * std::cos(spin) - camside * std::sin(spin)) * (s * flip);
+				}
+				const uint32_t rgb = palette[(int)(Hash(seed + 8) * 4.999f)];
+				const float shade = light * (landed ? 0.8f : 1.0f);
+				const uint32_t r = (uint32_t)(((rgb >> 16) & 255) * shade), g = (uint32_t)(((rgb >> 8) & 255) * shade), bl = (uint32_t)((rgb & 255) * shade);
+				const float fade = std::min(1.0f, tl * 2.0f) * std::min(1.0f, (period - tl) / 2.0f);
+				quad(p + a + b, p - a + b, p - a - b, p + a - b, (uint32_t)(235 * fade) << 24 | r << 16 | g << 8 | bl);
+			}
 		}
 	}
 	if (bolt) {

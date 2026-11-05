@@ -27,8 +27,14 @@ void DrawMinimapWeather(IRenderer* gfx, Client* client, void* drawList, float x0
 // every frame: the waterfalls heard (the nearest few of g_waterfallSoundSpots, looping), as loud
 // and as deep as the water they carry (WaterfallFlow: a flood roars, a drought trickles)
 void UpdateWaterfallSounds(Client* client);
-// the rain, the snow and the lightning bolt, in the particles' pass
+// the rain, the snow, the lightning bolt and the falling leaves, in the particles' pass
 void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera);
+// the broadleaf trees in winter: each loses its leaves at its own moment early in winter (in the
+// first 12% of it, by a hash of its id, so a replay looks the same), all bare after that
+bool TreeBareInWinter(Client* client, uint32_t id);
+// a broadleaf tree in leaf drawn this frame (its bounding sphere): its leaves fall around it in
+// autumn (DrawWeather, the nearest ones)
+void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t id);
 // at night, a warm light at each built building near the camera (the fire lights' list: distance
 // squared, then x y z radius r g b; ranked after every fire)
 void AddNightLights(Client* client, const Vector3& camera, std::vector<std::pair<float, std::array<float, 7>>>& list);

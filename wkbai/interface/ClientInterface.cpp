@@ -30,6 +30,7 @@
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
 #include "EnvironmentView.h"
+#include "../TreeModels.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "../gfx/renderer_diligent.h"
@@ -1368,6 +1369,19 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 				model = anim[obj->animationVariant < anim.size() ? obj->animationVariant : 0];
 		}
 	}
+	// a standing tree's default animation is its shake under the woodcutter's axe (the oaks' crowns
+	// bounce): only while someone works at it ("I'm Being Worked at"), still otherwise
+	if (model && obj->animationIndex == 0 && obj->blueprint->name.find("Tree") != std::string::npos
+		&& dynamic_cast<AnimatedModel*>(model)) {
+		static const GameSet* of = nullptr;
+		static int worked = -1;
+		if (of != client->gameSet.get()) {
+			of = client->gameSet.get();
+			worked = of->items.names.getIndex("I'm Being Worked at");
+		}
+		if (worked < 0 || obj->getItem(worked) <= 0.0f)
+			model = model->getStaticModel();
+	}
 	if (!model && devMode)
 		model = obj->blueprint->representAs;
 	if (!model)
@@ -1453,25 +1467,20 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		const bool charred = !client->charredTrees.empty() && client->charredTrees.count(obj->id) != 0;
 		const bool broadleaf = name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos;
 		const bool tree = name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos;
-		if ((charred && tree) || (broadleaf && client->environmentSettings.seasons && client->environment.season == 3)) {
-			static const GameSet* of = nullptr;
-			static Model* dead[2] = { nullptr, nullptr };
-			if (of != client->gameSet.get()) {
-				of = client->gameSet.get();
-				auto load = [&](const char* path) { return FileExists(path) ? of->modelCache.getModel(path) : nullptr; };
-				dead[0] = load("Warrior Kings Game Set\\Resources\\Trees\\Deciduous\\Dead01\\DEFAULT1.MESH3");
-				dead[1] = load("Warrior Kings Game Set\\Props\\Newtree_Deadtree1\\DEFAULT1.MESH3");
-				if (!dead[1]) dead[1] = dead[0];
-				if (!dead[0]) dead[0] = dead[1];
-			}
-			if (Model* m = dead[obj->id & 1])
-				obj->sceneEntity.model = m;
-			else
-				obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
+		if ((charred && tree) || (broadleaf && TreeBareInWinter(client, obj->id))) {
+			// a leafless tree made in code (TreeModels.cpp; four of each, by the tree's id), as high
+			// as the tree it stands for
+			Model* m = LeaflessTreeModel(client->gameSet->modelCache, (int)(obj->id * 2654435761u >> 28), charred);
+			const auto box = model->interpolateBoundingBox(0);
+			const float k = std::clamp(box[1].y - std::max(box[0].y, 0.0f), 0.5f, 60.0f);
+			obj->sceneEntity.transform = Matrix::getScaleMatrix(Vector3(k, k, k)) * obj->sceneEntity.transform;
+			obj->sceneEntity.model = m;
 			obj->sceneEntity.flags &= ~SceneEntity::SEFLAG_LEAVES;
 		}
 		else if (charred)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
+		else if (broadleaf)
+			AddLeafTree(client, sphereCenter, sphereRadius, obj->id); // its leaves falling in autumn
 		if (charred)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_CHARRED;
 	}
