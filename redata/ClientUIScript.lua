@@ -320,6 +320,10 @@ function CCUI_PerFrame()
 		drawText(tx(748), 42, foodText)
 	end
 
+	-- wkbai's day and night, seasons and weather: one line under the resources, as the speed's
+	local envLine = getEnvironmentLine()
+	if envLine ~= "" then drawText(getWindowWidth() - getTextWidth(envLine) - 12, 88, envLine) end
+
 
 	-- Selection
 

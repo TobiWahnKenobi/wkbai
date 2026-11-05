@@ -5,6 +5,7 @@
 
 #include "../Environment.h"
 #include <array>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -16,8 +17,9 @@ struct IRenderer;
 // every frame before the scene is drawn: g_environment from the server's state, the sun and fog
 // written into the terrain (the map's own put back when it is off) and the scene
 void UpdateEnvironmentView(Client* client, Scene* scene);
-// the HUD's readout at the top of the screen (ImGui frame): time, season, weather, temperature
-void DrawEnvironmentHud(Client* client, float screenWidth);
+// the HUD's readout (the HUD script draws it under the resources): time, season, weather,
+// temperature, flood, ice; "" when off
+std::string EnvironmentHudText(Client* client);
 // on the ground, before the particles: the flood water spreading over the land beside the
 // rivers and lakes (as the server floods it), and the footprints in snow and mud (High and Ultra)
 void DrawGroundWeather(IRenderer* gfx, Client* client, const Camera& camera);

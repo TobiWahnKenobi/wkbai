@@ -755,9 +755,12 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
 			static const char* const cloudWeathers[] = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
+			// (with the game's seasons and weather on, they set the clouds)
+			ImGui::BeginDisabled(g_environment.active);
 			ImGui::Combo("Cloud weather", &s.cloudWeather, cloudWeathers, 11);
 		}
 		ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
+		ImGui::EndDisabled();
 		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
 		ImGui::Checkbox("Light from the sky (sky occlusion, bounce)", &s.skyGI);
 		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
@@ -2843,6 +2846,9 @@ void ClientInterface::iter()
 		lua.set_function("getSystemTime", [this]() {return (float)SDL_GetTicks() / 1000.0f; });
 		lua.set_function("getGameSpeed", [this]() { return client->timeManager.timeSpeed; });
 		lua.set_function("isGamePaused", [this]() { return client->timeManager.paused; });
+		// wkbai's day and night, seasons and weather, one short line ("" when off), drawn by the
+		// HUD script under the resources
+		lua.set_function("getEnvironmentLine", [this]() { return EnvironmentHudText(client); });
 		// a recording played: no command panels (the server takes no orders), its own speed line
 		lua.set_function("isReplay", [this]() { return replayMode; });
 		// Game set
@@ -3205,9 +3211,24 @@ void ClientInterface::iter()
 	gfx->BeginDrawing();
 
 	Vector3 benchmarkPosition, benchmarkOrientation;
-	if (BenchmarkCamera(benchmarkPosition, benchmarkOrientation)) {
+	const bool benchmarkCamera = BenchmarkCamera(benchmarkPosition, benchmarkOrientation);
+	if (benchmarkCamera) {
 		client->camera.position = benchmarkPosition;
 		client->camera.orientation = benchmarkOrientation;
+	}
+	// the camera kept over the playable map: the point the middle of the view falls on (the
+	// ground below, looking level or up) inside it, the camera moved back by as much (not the
+	// benchmark's fixed views, nor the map editor's)
+	else if (client->terrain && client->getLevel() && !editorOn) {
+		Camera& cam = client->camera;
+		const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+		const float pitch = cam.orientation.x, yaw = cam.orientation.y;
+		const Vector3 dir(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch));
+		const float ground = client->terrain->getHeight(std::clamp(cam.position.x, 0.0f, areaWidth), std::clamp(cam.position.z, 0.0f, areaDepth));
+		const float dist = dir.y < -0.01f ? std::max((ground - cam.position.y) / dir.y, 0.0f) : 0.0f;
+		const float lx = cam.position.x + dir.x * dist, lz = cam.position.z + dir.z * dist;
+		cam.position.x += std::clamp(lx, 0.0f, areaWidth) - lx;
+		cam.position.z += std::clamp(lz, 0.0f, areaDepth) - lz;
 	}
 	// View distance (the original's far_clip, default 350, slider 280-1000; it also sets the
 	// fog) or the whole map, and the field of view, from the settings
@@ -3697,7 +3718,6 @@ void ClientInterface::iter()
 	drawLoadingScreen();
 	if (loadingDone) {
 		drawChronicle();
-		DrawEnvironmentHud(client, (float)g_windowWidth);
 	}
 
 	{

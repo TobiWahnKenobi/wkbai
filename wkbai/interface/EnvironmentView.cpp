@@ -190,39 +190,48 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	}
 }
 
-void DrawEnvironmentHud(Client* client, float screenWidth)
+std::string EnvironmentHudText(Client* client)
 {
-	if (!client->environmentActive || !g_environment.active)
-		return;
+	if (!client || !client->environmentActive || !g_environment.active)
+		return std::string();
 	const EnvironmentSettings& es = client->environmentSettings;
 	const EnvironmentState& st = client->environment;
-	char text[256];
-	int n = 0;
+	std::string out;
+	auto add = [&](const std::string& part) {
+		if (!out.empty())
+			out += "  ";
+		out += part;
+	};
+	char buf[64];
 	if (es.dayNight) {
 		const int minutes = (int)(g_environment.dayFraction * 1440.0f) % 1440;
-		n += snprintf(text + n, sizeof(text) - n, "%02d:%02d", minutes / 60, minutes % 60);
+		snprintf(buf, sizeof(buf), "%02d:%02d", minutes / 60, minutes % 60);
+		add(buf);
 	}
 	if (es.seasons) {
-		static const char* severity[3] = { "gentle", "normal", "harsh" };
-		n += snprintf(text + n, sizeof(text) - n, "%s%s (%s)   %s   %s", n ? "   " : "", SeasonName(st.season), severity[std::clamp(st.severity, 0, 2)],
-			WeatherName(st.weather), FormatTemperature(st.temperatureC, es.tempScale).c_str());
-		if (st.waterRise > 0.3f)
-			n += snprintf(text + n, sizeof(text) - n, "   flood %+.1f m", st.waterRise);
-		else if (st.waterRise < -0.3f)
-			n += snprintf(text + n, sizeof(text) - n, "   low water %.1f m", st.waterRise);
+		// the season, with its severity only when it isn't the normal one
+		std::string season = SeasonName(st.season);
+		if (st.severity <= 0)
+			season += " (gentle)";
+		else if (st.severity >= 2)
+			season += " (harsh)";
+		add(season);
+		add(WeatherName(st.weather));
+		add(FormatTemperature(st.temperatureC, es.tempScale));
+		if (st.waterRise > 0.3f) {
+			snprintf(buf, sizeof(buf), "Flood +%.1f m", st.waterRise);
+			add(buf);
+		}
+		else if (st.waterRise < -0.3f) {
+			snprintf(buf, sizeof(buf), "Low water %.1f m", st.waterRise);
+			add(buf);
+		}
 		if (st.ice > 0.6f)
-			n += snprintf(text + n, sizeof(text) - n, "   frozen");
+			add("Frozen");
 		if (st.season == 3)
-			n += snprintf(text + n, sizeof(text) - n, "   fields fallow");
+			add("Fields fallow");
 	}
-	// under the top bar, centred; larger on larger screens
-	ImDrawList* dl = ImGui::GetBackgroundDrawList();
-	ImFont* font = ImGui::GetFont();
-	const float px = std::max(16.0f, screenWidth / 1920.0f * 22.0f);
-	const ImVec2 size = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
-	const ImVec2 pos(screenWidth * 0.5f - size.x * 0.5f, screenWidth / 1920.0f * 40.0f);
-	dl->AddRectFilled(ImVec2(pos.x - 10, pos.y - 4), ImVec2(pos.x + size.x + 10, pos.y + size.y + 4), IM_COL32(0, 0, 0, 150), 5.0f);
-	dl->AddText(font, px, pos, IM_COL32(240, 232, 200, 255), text);
+	return out;
 }
 
 namespace {

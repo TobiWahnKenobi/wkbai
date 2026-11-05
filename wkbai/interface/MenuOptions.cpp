@@ -4,6 +4,7 @@
 
 #include "MenuOptions.h"
 #include "../gfx/RenderSettings.h"
+#include "../Environment.h"
 #include "../settings.h"
 #include "../SoundPlayer.h"
 #include "../matchmaking/Matchmaking.h"
@@ -185,10 +186,10 @@ namespace {
 			o.choices = { "By cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
 			o.get = [&rs]() { return (float)rs.cloudWeather; };
 			o.set = [&rs](float v) { rs.cloudWeather = std::clamp((int)v, 0, 10); };
-			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0 && !g_environment.active; })); // (the game's weather sets them)
 		}
 		list.push_back(withEnabled(slider("cloudCover", "lighting", "Cloud cover", rs.cloudCover, 0.0f, 1.0f, "%.2f"),
-			[&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0; }));
+			[&rs]() { return rs.cloudShadows && rs.dynamicClouds > 0 && !g_environment.active; }));
 		{
 			MenuOption o;
 			o.id = "weatherEffects"; o.page = "lighting"; o.label = "Weather and season effects";
