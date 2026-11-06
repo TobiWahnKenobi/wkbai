@@ -1312,7 +1312,9 @@ void ClientInterface::drawEnvironmentDebug()
 		ImGui::SetNextItemWidth(90);
 		if (s % 2)
 			ImGui::SameLine(190);
-		if (ImGui::Combo(SeasonName(s), &v, severities, 4))
+		// (an ID of its own: the season buttons above carry the same names)
+		const std::string label = std::string(SeasonName(s)) + "##severity";
+		if (ImGui::Combo(label.c_str(), &v, severities, 4))
 			send(severityNames[s], (float)v);
 	}
 	ImGui::EndDisabled();

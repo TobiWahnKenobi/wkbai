@@ -782,18 +782,24 @@ void ServerEnvironment::update(Server& server)
 		// the game's lands are temperate
 		target = std::min(target, 40.0f);
 		temperatureTarget = target;
-		if (!started)
+		// (at once also after the debug panel moved the clock or held a weather: a jump from
+		// summer to winter was 29 degrees and its blizzard rain for a minute and a half)
+		if (!started || snapTemperature)
 			state.temperatureC = target;
 		else
 			// (quicker with short seasons: a twentieth of a season, 10 to 90 s)
 			state.temperatureC += (target - state.temperatureC) * (1.0f - std::exp(-dt / std::clamp(settings.seasonLengthS() / 20.0f, 10.0f, 90.0f)));
 	}
+	snapTemperature = false;
 	const float T = state.temperatureC;
 
 	// what is drawn: clouds, rain or snow (by the temperature), fog
 	{
 		const WeatherLook& look = WEATHER_LOOK[state.weather];
-		const float snowShare = T < 0.5f ? 1.0f : T > 2.5f ? 0.0f : (2.5f - T) / 2.0f;
+		// (snow and blizzards fall as snow whatever the temperature: a held weather may come
+		// before the cold)
+		const float snowShare = state.weather == WEATHER_SNOW || state.weather == WEATHER_BLIZZARD ? 1.0f
+			: T < 0.5f ? 1.0f : T > 2.5f ? 0.0f : (2.5f - T) / 2.0f;
 		const float step = started ? 0.05f : 1.0f;
 		state.cloudCover = Approach(state.cloudCover, look.cloud, step, step);
 		state.rain = Approach(state.rain, look.precip * (1.0f - snowShare), step, step);
@@ -1012,5 +1018,7 @@ void ServerEnvironment::debugSet(Server& server, const std::string& name, float 
 		return;
 	}
 	nextUpdate = now; // worked out at the next step, and sent
+	if (name == "hour" || name == "season" || name == "weather")
+		snapTemperature = true;
 	send(server);
 }

@@ -107,6 +107,7 @@ private:
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
 	float temperatureTarget = 12.0f;
 	bool started = false;
+	bool snapTemperature = false; // the debug panel's jump: the temperature at its target at once
 	bool skySent = false; // (without day and night and the seasons: the clients sent the sky)
 	// each unit's cold and heat exposure (by id: in order, saved)
 	struct Exposure { float cold = 0.0f, heat = 0.0f; };
