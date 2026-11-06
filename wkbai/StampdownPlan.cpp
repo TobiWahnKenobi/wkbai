@@ -80,6 +80,12 @@ const char* StampdownPlan::statusTextKey(Status status)
 	case Status::InvalidTerrainType: return "BUILDING_PLACEMENT_INVALID_TERRAIN_TYPE";
 	case Status::InvalidTooSteep: return "BUILDING_PLACEMENT_TOO_STEEP";
 	case Status::InvalidNeighbour: return "BUILDING_PLACEMENT_OVERLAPS_NEIGHBOURING_BUILDING";
+	case Status::InvalidNotConnected: return "BUILDING_PLACEMENT_THIS_BUILDING_MUST_BE_CONNECTED_TO_A_CITY";
+	case Status::InvalidNotDetached: return "BUILDING_PLACEMENT_THIS_BUILDING_MUST_BE_DETACHED_FROM_ALL_CITIES";
+	case Status::InvalidGatehouseOverlap: return "BUILDING_PLACEMENT_A_WALL_IS_OVERLAPPING_A_GATEHOUSE";
+	case Status::InvalidTerrain:
+	case Status::InvalidNotInCity:
+	case Status::InvalidNoExplanation: return "BUILDING_PLACEMENT_CANNOT_BUILD_HERE";
 	default: return nullptr;
 	}
 }
@@ -97,6 +103,9 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 	};
 
 	const bool civic = blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC || blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE;
+	// the city rules' refusal (WKB.exe 0x510f90), given after the walls are laid out: the preview
+	// shows the ring and hides the walls it takes down, refused or not, as the original does
+	Status cityRefusal = Status::Valid;
 	// walls, towers and gatehouses: their passable tiles (a gateway, a wall walk) may share
 	auto isWallLike = [](int type) {
 		return type == Tags::BUILDINGTYPE_GATEHOUSE || (type >= Tags::BUILDINGTYPE_TOWER && type <= Tags::BUILDINGTYPE_WALL_CROSSROADS);
@@ -259,6 +268,42 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 
 			if (!city) {
 				plan.newOwnerBlueprint = gameSet->findBlueprint(Tags::GAMEOBJCLASS_CITY, "New City");
+			}
+
+			// WKB.exe walks the new rectangle's four sides (0x510e90, 0x5897a0) and counts its
+			// tiles: those inside one of the player's cities (0x5104a0), where the ring joins its
+			// walls, and those outside all of them, where new wall goes (none: the building
+			// stands inside a city, which is always fine). A civic building needs at least four
+			// tiles on a city, a civic centre (Manor, Keep, Castle, Palace) none.
+			{
+				const CityRectangle& r = plan.cityRectangle;
+				int onCity = 0, outside = 0;
+				auto count = [&](int tx, int tz) {
+					bool in = false;
+					for (const auto& [bpid, objlist] : playerObj->children)
+						for (auto* candidate : objlist)
+							if (!in && candidate->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY && cityContainsTile(candidate->cityRectangles, tx, tz))
+								in = true;
+					(in ? onCity : outside)++;
+				};
+				for (int tx = r.xStart; tx <= r.xEnd; tx++) {
+					count(tx, r.yStart);
+					if (r.yEnd != r.yStart)
+						count(tx, r.yEnd);
+				}
+				for (int tz = r.yStart + 1; tz < r.yEnd; tz++) {
+					count(r.xStart, tz);
+					if (r.xEnd != r.xStart)
+						count(r.xEnd, tz);
+				}
+				if (outside > 0) {
+					if (blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE) {
+						if (onCity > 0)
+							cityRefusal = Status::InvalidNotDetached;
+					}
+					else if (onCity < 4)
+						cityRefusal = Status::InvalidNotConnected;
+				}
 			}
 
 			cityRectangles.push_back(plan.cityRectangle);
@@ -494,6 +539,11 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		}
 	}
 
-	plan.status = Status::Valid; // temporary
+	// a new wall where a gatehouse stands (not along it): WKB.exe refuses it (0x51123c)
+	if (cityRefusal == Status::Valid)
+		for (const auto& removal : plan.toRemove)
+			if (const CommonGameObject* obj = removal.object.getFrom(gameState); obj && obj->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE)
+				cityRefusal = Status::InvalidGatehouseOverlap;
+	plan.status = cityRefusal;
 	return plan;
 }

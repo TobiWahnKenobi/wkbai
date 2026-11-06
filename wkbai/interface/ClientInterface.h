@@ -68,6 +68,12 @@ struct ClientInterface {
 		particleRenderer(nullptr), uiTexCache(gfx), terrainSpriteContainer(nullptr), terrainSpriteRenderer(nullptr) {}
 
 	const GameObjBlueprint *stampdownBlueprint = nullptr;
+	// the walls the building being placed would take down (its plan's toRemove, last frame's):
+	// not drawn while it is placed, as in WKB.exe
+	std::vector<uint32_t> stampdownHidden;
+	// the refusal shown at the cursor while placing (the original's red box), empty: none
+	std::string stampdownRefusal;
+	void drawStampdownRefusal();
 	CliGORef stampdownPlayer;
 	bool sendStampdownEvent = false;
 	bool stampdownFromCommand = false;

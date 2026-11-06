@@ -463,7 +463,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	if (mode != DevMode) {
 		// a new game: the day and night, seasons and weather as set (a save game keeps its own)
 		server.environment.reset();
-		server.environment.settings = environment;
+		// (none in the campaign: its levels play as the original's, whatever the skirmish set)
+		server.environment.settings = campaignProfile ? EnvironmentSettings() : environment;
 		server.environment.trace = g_settings.value("environmentTrace", false);
 		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
 			server.environment.forceWeather = force.value("weather", -1);

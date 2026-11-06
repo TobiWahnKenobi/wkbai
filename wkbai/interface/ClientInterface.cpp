@@ -39,6 +39,7 @@
 #include "../gfx/DiligentSkyRenderer.h"
 #include "../gfx/RenderSettings.h"
 #include "../StampdownPlan.h"
+#include "../gfx/BitmapFont.h"
 #include "../gfx/TerrainSpriteContainer.h"
 #include "../gfx/TerrainSpriteRenderer.h"
 #include "../gfx/bitmap.h"
@@ -651,7 +652,7 @@ void ClientInterface::drawFootprintTiles()
 		white = gfx->CreateTexture(bmp, 1);
 	}
 	if (!footprintBatch)
-		footprintBatch = gfx->CreateBatch(64 * SPLIT * SPLIT * 4, 64 * SPLIT * SPLIT * 6);
+		footprintBatch = gfx->CreateBatch(256 * SPLIT * SPLIT * 4, 256 * SPLIT * SPLIT * 6); // (a Manor's ring and footprint)
 	gfx->BeginParticles();
 	gfx->BeginBatchDrawing();
 	gfx->SetBlendColor(-1);
@@ -681,6 +682,44 @@ void ClientInterface::drawFootprintTiles()
 	}
 	footprintBatch->flush();
 	footprintBatch->end();
+}
+
+// The refusal while placing a building, as WKB.exe shows it: "Cannot build here : ..." in its
+// in-game font (Fonts\Drop_Shadow_White) on a dark red box with a lighter red edge, under the
+// cursor (the look from the user's screenshots of the original at 1920 x 1080)
+void ClientInterface::drawStampdownRefusal()
+{
+	if (stampdownRefusal.empty())
+		return;
+	static std::unique_ptr<BitmapFont> font;
+	static bool tried = false;
+	if (!tried) {
+		tried = true;
+		const char* dir = "Fonts\\Drop_Shadow_White";
+		std::unique_ptr<std::vector<std::string>> files(ListFiles(dir));
+		if (files)
+			for (const std::string& f : *files)
+				if (!font && f.size() > 5 && StrCICompare(std::string_view(f).substr(f.size() - 5), ".font") == 0) {
+					auto candidate = std::make_unique<BitmapFont>();
+					if (candidate->load(gfx, std::string(dir) + "\\" + f))
+						font = std::move(candidate);
+				}
+	}
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	const float s = g_uiScale;
+	const float textW = font ? font->measure(stampdownRefusal) * s : ImGui::CalcTextSize(stampdownRefusal.c_str()).x;
+	const float textH = font ? font->height * s : ImGui::GetFontSize();
+	const float padX = 3.0f * s, padY = 4.0f * s;
+	float x = g_mouseX + 4.0f * s, y = g_mouseY + 30.0f * s;
+	const float w = textW + 2 * padX, h = textH + 2 * padY;
+	x = std::clamp(x, 0.0f, std::max(0.0f, g_windowWidth - w));
+	y = std::clamp(y, 0.0f, std::max(0.0f, g_windowHeight - h));
+	dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(140, 8, 8, 255));
+	dl->AddRect(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(228, 96, 96, 255), 0.0f, 0, std::max(1.0f, std::round(s)));
+	if (font)
+		font->draw(dl, std::round(x + padX), std::round(y + padY), stampdownRefusal, 0xFFFFFFFF, s);
+	else
+		dl->AddText(ImVec2(x + padX, y + padY), IM_COL32(255, 255, 255, 255), stampdownRefusal.c_str());
 }
 
 // The camera stays between a little above the ground under it and a high ceiling (for an
@@ -1470,6 +1509,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 
 	if (!devMode && !(obj->flags & ClientGameObject::fRenderable))
+		return;
+	if (!stampdownHidden.empty() && std::find(stampdownHidden.begin(), stampdownHidden.end(), obj->id) != stampdownHidden.end())
 		return;
 	// the fog of war hides enemy characters no unit of the player's sees
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && fogOfWarOn() && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
@@ -3464,6 +3505,8 @@ void ClientInterface::iter()
 		// placed: band textures on the ground, the value being the radius in metres
 		rangeBands.clear();
 		footprintTiles.clear();
+		stampdownHidden.clear();
+		stampdownRefusal.clear();
 		auto addRangeBand = [this](const GameObjBlueprint::RangeSprite& band, const Vector3& centre, ScriptContext* ctx) {
 			if (!band.radius || !client->terrain)
 				return;
@@ -3548,8 +3591,15 @@ void ClientInterface::iter()
 				// 1.5) gives TOOLTIP_ARID_FARM up to 0.5, TOOLTIP_FERTILE_FARM from 1.5, else
 				// TOOLTIP_FARM; here with the value as a percentage too. Where it is refused, why,
 				// in WKB.exe's words (BUILDING_PLACEMENT_TOO_STEEP and the others)
-				if (const char* refusal = StampdownPlan::statusTextKey(plan.status))
-					ImGui::SetTooltip("%s", lang.getText(refusal).c_str());
+				for (const auto& removal : plan.toRemove)
+					stampdownHidden.push_back(removal.object.objid);
+				// the new ring's tiles green under its poles, as the original's
+				for (const auto& creation : plan.toCreate)
+					footprintTiles.push_back({ (int)(creation.position.x / 5.0f), (int)(creation.position.z / 5.0f), true });
+				if (const char* refusal = StampdownPlan::statusTextKey(plan.status)) {
+					stampdownRefusal = lang.getText(refusal);
+					drawStampdownRefusal();
+				}
 				else if (stampdownBlueprint->name == "Standard Farm Foundation" && client->terrain) {
 					static int fertilityItem = -1;
 					static const GameSet* itemsOf = nullptr;
@@ -3568,16 +3618,19 @@ void ClientInterface::iter()
 					}
 				}
 				planEntities.reserve(plan.toCreate.size());
+				// the ring's new pieces as the original shows them (the user's screenshots of WKB.exe):
+				// the banner poles of their foundations only, untinted, refused or not, over the
+				// ring's green tiles; the poles are the foundation model's attachments (a stockade's
+				// Stockade\Construction\Default.MESH3: Flags\CON_FLAP), the model itself (the wall's
+				// shape, which rises as it is built) is left out
 				for (auto& creation : plan.toCreate) {
 					auto& entity = planEntities.emplace_back();
 					entity.transform = Matrix::getRotationYMatrix(-creation.orientation.y) * Matrix::getTranslationMatrix(creation.position);
-					entity.model = finishedModel(creation.blueprint);
+					entity.model = creation.blueprint->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
 					entity.color = stampdownPlayer->color;
-					entity.flags = test.flags & (SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 				}
-				for (auto& entity : planEntities) {
-					scene->add(&entity);
-				}
+				for (auto& entity : planEntities)
+					drawAttachmentPoints(&entity);
 			}
 			catch (const std::out_of_range &) {
 				// nop

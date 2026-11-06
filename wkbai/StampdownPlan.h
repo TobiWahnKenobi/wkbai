@@ -19,7 +19,14 @@ struct StampdownPlan {
 		// _OVERLAPS_NEIGHBOURING_BUILDING (see getStampdownPlan)
 		InvalidTerrainType,
 		InvalidTooSteep,
-		InvalidNeighbour
+		InvalidNeighbour,
+		// WKB.exe's city rules (0x510f90): a civic building's ring of walls on at least four tiles
+		// of the player's cities (_MUST_BE_CONNECTED_TO_A_CITY), a civic centre's on none
+		// (_MUST_BE_DETACHED_FROM_ALL_CITIES), no new wall over a gatehouse
+		// (_A_WALL_IS_OVERLAPPING_A_GATEHOUSE)
+		InvalidNotConnected,
+		InvalidNotDetached,
+		InvalidGatehouseOverlap
 	};
 	struct StampdownCreateAction {
 		const GameObjBlueprint* blueprint;
