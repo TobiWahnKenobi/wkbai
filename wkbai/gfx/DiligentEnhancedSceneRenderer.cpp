@@ -512,7 +512,7 @@ struct DilMesh
 		pNormals.reserve(enh.totVertices);
 		for (auto& mat : mesh.groupIndices)
 			for (auto& grp : mat)
-				pNormals.push_back(NormalToR10G10B10A2(Mesh::s_normalTable[mesh.normals[grp.normal]].normal()));
+				pNormals.push_back(NormalToR10G10B10A2((grp.normal < mesh.exactNormals.size() ? mesh.exactNormals[grp.normal] : Mesh::s_normalTable[mesh.normals[grp.normal]]).normal()));
 		enh.normals = CreateImmutableBuffer(device, "Mesh normals", BIND_VERTEX_BUFFER, pNormals.data(), pNormals.size() * 4);
 
 		enh.texcoords.resize(mesh.uvLists.size());

@@ -198,6 +198,7 @@ void Mesh::loadGltf(const char* filename)
 
 	std::vector<float> positions, uvs;
 	std::vector<uint8_t> normalIds;
+	std::vector<Vector3> exact;
 	using Group = BuildGroup;
 	std::vector<Group> groups;
 
@@ -217,7 +218,9 @@ void Mesh::loadGltf(const char* filename)
 			Vector3 n = nrm.empty() ? Vector3(0, 1, 0) : world.dir(Vector3(nrm[i * 3], nrm[i * 3 + 1], nrm[i * 3 + 2]));
 			n.z = -n.z;
 			const float len = std::sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
-			normalIds.push_back(NearestNormal(len > 0 ? n * (1.0f / len) : Vector3(0, 1, 0)));
+			const Vector3 unit = len > 0 ? n * (1.0f / len) : Vector3(0, 1, 0);
+			normalIds.push_back(NearestNormal(unit));
+			exact.push_back(unit);
 			uvs.push_back(uv.empty() ? 0.0f : uv[i * 2]);
 			uvs.push_back(uv.empty() ? 0.0f : uv[i * 2 + 1]);
 		}
@@ -268,6 +271,8 @@ void Mesh::loadGltf(const char* filename)
 	if (positions.size() / 3 > 65535)
 		ferr("glTF model %s has %zu vertices; at most 65535 are supported.", filename, positions.size() / 3);
 	buildIds(*this, positions, normalIds, uvs, groups);
+	exact.resize(numNormals);
+	exactNormals = std::move(exact);
 }
 
 void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups)
@@ -276,6 +281,7 @@ void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>
 	for (size_t i = 0; i < normals.size(); i++)
 		ids[i] = nearestNormal(normals[i]);
 	buildIds(*this, positions, ids, uvs, groups);
+	exactNormals.assign(normals.begin(), normals.begin() + std::min(normals.size(), (size_t)numNormals));
 }
 
 static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<float>& uvs, const std::vector<Mesh::BuildGroup>& groups)
@@ -378,7 +384,7 @@ bool Mesh::saveGltf(const char* path) const
 			pos.insert(pos.end(), { p.x, p.y, p.z });
 			lo = Vector3(std::min(lo.x, p.x), std::min(lo.y, p.y), std::min(lo.z, p.z));
 			hi = Vector3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
-			const Vector3 n = s_normalTable[t.normal < normals.size() ? normals[t.normal] : 0];
+			const Vector3 n = t.normal < exactNormals.size() ? exactNormals[t.normal] : s_normalTable[t.normal < normals.size() ? normals[t.normal] : 0];
 			nrm.insert(nrm.end(), { n.x, n.y, -n.z });
 			uv.insert(uv.end(), { uvLists[0][t.uv * 2], uvLists[0][t.uv * 2 + 1] });
 		}
