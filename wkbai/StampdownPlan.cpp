@@ -83,6 +83,7 @@ const char* StampdownPlan::statusTextKey(Status status)
 	case Status::InvalidNotConnected: return "BUILDING_PLACEMENT_THIS_BUILDING_MUST_BE_CONNECTED_TO_A_CITY";
 	case Status::InvalidNotDetached: return "BUILDING_PLACEMENT_THIS_BUILDING_MUST_BE_DETACHED_FROM_ALL_CITIES";
 	case Status::InvalidGatehouseOverlap: return "BUILDING_PLACEMENT_A_WALL_IS_OVERLAPPING_A_GATEHOUSE";
+	case Status::InvalidRuralInside: return "BUILDING_PLACEMENT_THERE_IS_A_RURAL_BUILDING_INSIDE_THIS_PERIMETER";
 	case Status::InvalidTerrain:
 	case Status::InvalidNotInCity:
 	case Status::InvalidNoExplanation: return "BUILDING_PLACEMENT_CANNOT_BUILD_HERE";
@@ -304,6 +305,15 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 					else if (onCity < 4)
 						cityRefusal = Status::InvalidNotConnected;
 				}
+				// no farm or village inside the new perimeter (WKB.exe 0x5113c0, after the above)
+				if (cityRefusal == Status::Valid && gameState->tiles)
+					for (int tz = r.yStart; tz <= r.yEnd && cityRefusal == Status::Valid; tz++)
+						for (int tx = r.xStart; tx <= r.xEnd; tx++)
+							if (const CommonGameObject* b = gameState->tiles[tz * tileWidth + tx].building.getFrom(gameState);
+								b && (b->blueprint->buildingType == Tags::BUILDINGTYPE_RURAL || b->blueprint->buildingType == Tags::BUILDINGTYPE_RURAL_CENTRE)) {
+								cityRefusal = Status::InvalidRuralInside;
+								break;
+							}
 			}
 
 			cityRectangles.push_back(plan.cityRectangle);

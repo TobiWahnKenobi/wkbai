@@ -31,6 +31,14 @@ namespace {
 	uint32_t g_lightningSeen = 0;
 	bool g_lightningKnown = false;
 	uint64_t g_flashStart = 0;
+	// the share of the precipitation and lightning drawn: the front's arrival, while the cloud
+	// renderer sets it (else all of it)
+	float PrecipitationShown()
+	{
+		if (g_cloudFrontArrivalTicks == 0 || SDL_GetTicksNS() - g_cloudFrontArrivalTicks > 500000000ull)
+			return 1.0f;
+		return std::clamp(g_cloudFrontArrival, 0.0f, 1.0f);
+	}
 	Vector3 g_boltPos;
 	uint32_t g_boltSeed = 0;
 
@@ -97,6 +105,9 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	ease(v.cloudCover, st.cloudCover);
 	ease(v.rain, st.rain);
 	ease(v.snowfall, st.snowfall);
+	const float shown = PrecipitationShown();
+	v.rainShown = v.rain * shown;
+	v.snowShown = v.snowfall * shown;
 	ease(v.fog, st.fog);
 	ease(v.wetness, st.wetness);
 	ease(v.snowCover, st.snowCover);
@@ -128,7 +139,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	{
 		// the fog: the map's, in the sky's light, greyer in fog and under clouds
 		float grey[3] = { 0.62f, 0.64f, 0.68f };
-		const float toGrey = std::clamp(v.fog * 0.8f + v.cloudCover * 0.35f + std::max(v.rain, v.snowfall) * 0.3f, 0.0f, 1.0f);
+		const float toGrey = std::clamp(v.fog * 0.8f + v.cloudCover * 0.35f + std::max(v.rainShown, v.snowShown) * 0.3f, 0.0f, 1.0f);
 		uint32_t fog = 0;
 		for (int c = 0; c < 3; c++) {
 			const float map = ((g_mapLook.fogColor >> (16 - 8 * c)) & 255) / 255.0f;
@@ -151,6 +162,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	}
 	const float since = (SDL_GetTicks() - g_flashStart) / 1000.0f;
 	v.lightningFlash = g_flashStart && since < 0.35f ? (since < 0.08f ? 1.0f : since < 0.16f ? 0.3f : since < 0.22f ? 0.8f : 1.0f - since / 0.35f) : 0.0f;
+	v.lightningFlash *= shown; // (no strike before the storm's clouds)
 	v.lightningPos = g_boltPos;
 	// tests (environment variable WKB_TEST_LIGHTNING): a bolt held 40 m in front of the camera
 	static const bool testBolt = getenv("WKB_TEST_LIGHTNING") != nullptr;
@@ -163,7 +175,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	// the grade: darker and paler at night and under heavy cloud, brighter in a flash
 	v.exposure = (0.42f + 0.58f * v.sun.daylight) * (1.0f - 0.18f * v.cloudCover) * (1.0f + 1.2f * v.lightningFlash);
 	v.saturation = (0.50f + 0.50f * v.sun.daylight) * (1.0f - 0.2f * v.fog);
-	v.fogDistance = std::clamp(1.0f - 0.95f * v.fog - 0.35f * std::max(v.rain, v.snowfall * 1.3f), 0.08f, 1.0f);
+	v.fogDistance = std::clamp(1.0f - 0.95f * v.fog - 0.35f * std::max(v.rainShown, v.snowShown * 1.3f), 0.08f, 1.0f);
 	// the land's look by the season, the rivers in floods, the frozen falls: slow changes (a few
 	// seconds to a minute), by the real time between frames
 	{
@@ -299,7 +311,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	trees.swap(g_leafTrees); // this frame's (the next frame adds its own)
 	if (!v.active || !client->terrain)
 		return;
-	const bool raining = v.rain > 0.02f, snowing = v.snowfall > 0.02f, bolt = v.lightningFlash > 0.0f;
+	const bool raining = v.rainShown > 0.02f, snowing = v.snowShown > 0.02f, bolt = v.lightningFlash > 0.0f;
 	const float leafFall = trees.empty() ? 0.0f : LeafFall(client);
 	if (!raining && !snowing && !bolt && leafFall <= 0.0f)
 		return;
@@ -352,7 +364,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	static const float amount[4] = { 0.35f, 0.65f, 1.0f, 1.5f };
 	const float share = amount[std::clamp(g_renderSettings.weatherEffects, 0, 3)];
 	if (raining) {
-		const int drops = (int)(2600 * share * std::min(1.0f, v.rain));
+		const int drops = (int)(2600 * share * std::min(1.0f, v.rainShown));
 		const Vector3 vel = Vector3(v.wind.x, -14.0f, v.wind.z);
 		const Vector3 along = vel.normal() * 1.1f;
 		const uint32_t colour = (uint32_t)(70 + 60 * v.sun.daylight) << 24 | 0xB4BED2;
@@ -365,7 +377,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			quad(p + across, p - across, p - along - across, p - along + across, colour);
 		}
 		// far: longer, fainter streaks
-		const int farDrops = (int)(1800 * share * std::min(1.0f, v.rain));
+		const int farDrops = (int)(1800 * share * std::min(1.0f, v.rainShown));
 		const Vector3 farAlong = along * 3.0f;
 		const uint32_t farColour = (uint32_t)(40 + 40 * v.sun.daylight) << 24 | 0xB4BED2;
 		for (int i = 0; i < farDrops; i++) {
@@ -378,7 +390,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 		}
 	}
 	if (snowing) {
-		const int flakes = (int)(2200 * share * std::min(1.0f, v.snowfall));
+		const int flakes = (int)(2200 * share * std::min(1.0f, v.snowShown));
 		const Vector3 up = camside.cross(camera.direction).normal();
 		const uint32_t colour = (uint32_t)(150 + 80 * v.sun.daylight) << 24 | 0xF2F4FA;
 		for (int i = 0; i < flakes; i++) {
@@ -389,7 +401,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
 		// far: larger flakes (a pixel or two at that distance), as many again over the whole view
-		const int farFlakes = (int)(2400 * share * std::min(1.0f, v.snowfall));
+		const int farFlakes = (int)(2400 * share * std::min(1.0f, v.snowShown));
 		for (int i = 0; i < farFlakes; i++) {
 			Vector3 p;
 			if (!placeIn(i + 300000, 1.4f, 1.2f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))

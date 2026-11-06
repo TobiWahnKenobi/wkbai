@@ -209,6 +209,7 @@ void Task::start()
 			// missile range but only ends the task, which a cycling order restarts at once (the
 			// AI's ranged units went round 130-580 times in 30 s, 3,874 transfers in all).
 			// (a proximity of 0, as TASK "Follow" has, is no requirement here)
+			bool walkIntoRange = false;
 			if (this->blueprint->proximityRequirement && this->proximity > 0.0f) {
 				ServerGameObject* go = this->order->gameObject;
 				const float edge = FootprintDistance(go->position, target.get());
@@ -223,6 +224,16 @@ void Task::start()
 						printf("WARNING: task \"%s\" started again from its own proximity dissatisfied sequence (object %u); not run again\n",
 							Server::instance->gameSet->tasks.names.getString(this->blueprint->bpid).c_str(), go->id);
 				}
+				// A sequence that does nothing but end the order (TASK "Fire Trebuchet": a mangonel,
+				// trebuchet or ship told to fire at a target out of range) is for a target that
+				// moves out of range: at the start the unit walks into range first (the play test:
+				// it never moved, or, sent with "Attack", walked right up to the Manor, too close
+				// to fire)
+				else if (dist >= this->proximity && blueprint->proximityDissatisfiedEquation < 0
+					&& blueprint->proximityDissatisfiedSequence.actionList.size() == 1
+					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder()) {
+					walkIntoRange = true;
+				}
 				else if (dist >= this->proximity) {
 					running.insert(go);
 					RunProximityDissatisfied(this->blueprint, go);
@@ -233,6 +244,13 @@ void Task::start()
 			}
 			this->blueprint->startSequence.run(order->gameObject);
 			this->startSequenceExecuted = true;
+			// one that may not walk there (the trebuchet's start sequence ends the task for a
+			// target beyond its range): the dissatisfied sequence's end of the order after all, or
+			// the cycling order would start the task again at every step
+			if (walkIntoRange && !this->isWorking() && this->order->isWorking()) {
+				this->order->terminate();
+				return;
+			}
 		}
 	}
 	this->onStart();
@@ -398,6 +416,11 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 		break;
 	case Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE:
 		this->cancelAllOrders();
+		// and the walk that no order made: a formation member's to its place (FormationController).
+		// A member killed on the way got "Die" with no order to cancel, walked on and, made its
+		// corpse, slid after the formation.
+		if (gameobj->movementController.isMoving())
+			gameobj->movementController.stopMovement();
 		this->orders.emplace_front(this->nextOrderId++, orderBlueprint, gameobj);
 		neworder = &this->orders.front();
 		orderInFront = true;

@@ -1099,6 +1099,95 @@ void Test_Formation()
 	fflush(stdout);
 }
 
+// Siege (needs the game data): a Mangonel of player 1027 on 4 Peaks, 120 m from the other
+// player's Manor, told to attack it ("Fire Trebuchet", its DEFAULT_ATTACK_COMMAND). Prints
+// "SIEGE t=<s> distance=<m> order=<order> task=<task> proximity=<0|1> manor SI=<n>" every game
+// second for a minute, and "SIEGE fired=<0|1>" at the end (the Manor's structural integrity fell).
+void Test_Siege()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	ServerGameObject* manor = nullptr;
+	auto findManor = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!manor && child->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && child->blueprint->name.find("Manor") != std::string::npos)
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	if (enemy)
+		findManor(enemy, findManor);
+	const char* name = getenv("WKB_SIEGE_UNIT") ? getenv("WKB_SIEGE_UNIT") : "Mangonel";
+	const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
+	// WKB_SIEGE_COMMAND: the command given (default "Fire Trebuchet"; "Attack" is the right-click's)
+	const int fire = server.gameSet->commands.names.getIndex(getenv("WKB_SIEGE_COMMAND") ? getenv("WKB_SIEGE_COMMAND") : "Fire Trebuchet");
+	if (!own || !manor || !bp || fire < 0) {
+		printf("SIEGE not set up: player %p manor %p unit %p command %d\n", (void*)own, (void*)manor, (void*)bp, fire);
+		return;
+	}
+	// WKB_SIEGE_DISTANCE: how far from the Manor it starts (default 120 m)
+	const float distance = getenv("WKB_SIEGE_DISTANCE") ? (float)atof(getenv("WKB_SIEGE_DISTANCE")) : 120.0f;
+	Vector3 at = manor->position + Vector3(distance, 0, 0);
+	if (at.x > server.terrain->getPlayableArea().first - 10.0f)
+		at = manor->position - Vector3(distance, 0, 0);
+	at.y = server.terrain->getHeight(at.x, at.z);
+	ServerGameObject* unit = server.spawnObject(bp, own, at, Vector3(0, 0, 0));
+	SrvGORef ref = unit;
+	printf("SIEGE unit %u (%s) at (%.0f, %.0f), manor %u at (%.0f, %.0f)\n", unit->id, name, at.x, at.z, manor->id, manor->position.x, manor->position.z);
+	{
+		SrvScriptContext ctx(&server, unit);
+		auto _ = ctx.change(ctx.target, manor);
+		for (const char* eq : { "I'm out of missiles", "I Am Not A Manognel Of Some Description", "Out Of Trebuchet Range", "Sight Range Modified By Missile Range Multiplier in Metres", "Target Too Close" }) {
+			const int i = server.gameSet->equations.names.getIndex(eq);
+			printf("SIEGE equation \"%s\" = %.2f\n", eq, i >= 0 ? server.gameSet->equations[i]->eval(&ctx) : -999.0f);
+		}
+		// what a right-click on the Manor would offer: each command's cursor conditions, in the
+		// order the client looks at them (ClientInterface: the first whose cursor shows wins)
+		for (Command* cmd : bp->offeredCommands) {
+			std::string conds;
+			for (auto& [cond, cursor] : cmd->cursorAvailable)
+				conds += " [" + cond->hint + "=" + std::to_string((int)cond->test->eval(&ctx)) + (cursor ? "" : " no cursor") + "]";
+			bool all = true;
+			for (int eq : cmd->cursorConditions)
+				all = all && server.gameSet->equations[eq]->eval(&ctx) > 0.0f;
+			printf("SIEGE offers \"%s\":%s%s default cursor %d\n", server.gameSet->commands.getString(cmd).c_str(), conds.c_str(), all ? "" : " (cursor conditions fail)", cmd->cursor ? 1 : 0);
+		}
+	}
+	const int siItem = server.gameSet->items.names.getIndex("Structural Integrity");
+	const float siStart = manor->getItem(siItem);
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	server.gameSet->commands[fire].execute(unit, manor, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	int lastPrint = -1;
+	for (int step = 0; step * 20 < 60000 && ref; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		const int t = (step * 20) / 1000;
+		if (t == lastPrint)
+			continue;
+		lastPrint = t;
+		std::string order = "-", task = "-";
+		int proximity = -1;
+		if (Order* o = unit->orderConfig.getCurrentOrder()) {
+			order = server.gameSet->orders.getString(o->blueprint->bpid);
+			if (Task* tk = o->getCurrentTask()) {
+				task = server.gameSet->tasks.getString(tk->blueprint->bpid);
+				proximity = tk->proximitySatisfied ? 1 : 0;
+			}
+		}
+		static const int chargeItem = server.gameSet->items.names.getIndex("Charge Bar");
+		printf("SIEGE t=%d distance=%.1f order=%s task=%s proximity=%d sight=%.2f charge=%.0f manor SI=%.0f\n", t, (unit->position - manor->position).len2xz(),
+			order.c_str(), task.c_str(), proximity, unit->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE), unit->getItem(chargeItem), manor->getItem(siItem));
+	}
+	printf("SIEGE fired=%d (SI %.0f -> %.0f)\n", manor->getItem(siItem) < siStart ? 1 : 0, siStart, manor->getItem(siItem));
+	fflush(stdout);
+}
+
 // Guarding (needs the game data): a peasant guards another one, which then walks away; the
 // guard should follow at its offset, not walk into it. Prints "GUARD t=<s> distance=<m>".
 void Test_Guard()
@@ -3396,6 +3485,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_WallRing, "Wall ring as a city grows (corners where rectangles meet)"},
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
+{Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
 };
 
 void LaunchTest()

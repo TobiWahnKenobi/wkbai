@@ -26,7 +26,10 @@ struct StampdownPlan {
 		// (_A_WALL_IS_OVERLAPPING_A_GATEHOUSE)
 		InvalidNotConnected,
 		InvalidNotDetached,
-		InvalidGatehouseOverlap
+		InvalidGatehouseOverlap,
+		// a rural building (a farm, a village) inside the new rectangle (WKB.exe 0x5113c0,
+		// _THERE_IS_A_RURAL_BUILDING_INSIDE_THIS_PERIMETER)
+		InvalidRuralInside
 	};
 	struct StampdownCreateAction {
 		const GameObjBlueprint* blueprint;

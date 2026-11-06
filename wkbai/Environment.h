@@ -104,6 +104,12 @@ struct SunState {
 };
 // dayFraction 0..1, yearFraction 0..1 (the sun higher in summer); clouds dim it
 SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover);
+
+// how far the volumetric clouds' weather front has come over the camera (0: the old weather's
+// clouds overhead, 1: the new one's), set by the cloud renderer each frame (ticks: SDL_GetTicksNS
+// of that frame): the rain, snow and lightning drawn wait for their clouds
+extern float g_cloudFrontArrival;
+extern uint64_t g_cloudFrontArrivalTicks;
 // the day fraction / year fraction at a game time
 float EnvDayFraction(const EnvironmentSettings& s, float time);
 float EnvYearFraction(const EnvironmentSettings& s, float time);
@@ -130,6 +136,8 @@ struct EnvironmentView {
 	int skyWeather = -1;
 	float skyCover = 0.45f;
 	float cloudCover = 0.0f, rain = 0.0f, snowfall = 0.0f, fog = 0.0f;
+	// as drawn: rain and snowfall while their clouds are overhead (PrecipitationShown)
+	float rainShown = 0.0f, snowShown = 0.0f;
 	float wetness = 0.0f, snowCover = 0.0f, ice = 0.0f, waterRise = 0.0f;
 	float lightningFlash = 0.0f;  // 0..1, this frame
 	Vector3 lightningPos;

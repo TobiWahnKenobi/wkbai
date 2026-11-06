@@ -7,6 +7,7 @@
 #include "RenderSettings.h"
 #include "../Camera.h"
 #include "../util/util.h"
+#include "../Environment.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -616,8 +617,10 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	// from that weather to the setting's at the first frame, offset units downwind of the camera's
 	// point (negative: still upwind), moving at speed units a second (0: held there).
 	{
-		constexpr float FRONT_START = 3000, FRONT_HALF_WIDTH = 350;
-		static float frontSpeed = 25;
+		// (the user's play test: the rain came long before its clouds; a front now arrives in
+		// about 6 seconds and the rain, snow and lightning wait for it, g_cloudFrontArrival)
+		constexpr float FRONT_START = 1100, FRONT_HALF_WIDTH = 350;
+		static float frontSpeed = 120;
 		const Vector3 wind(0.948683f, 0, 0.316228f); // as the clouds' drift (6, 2)
 		const Vector3 look = camera.position + camera.direction.normal() * 400.0f;
 		const float lookAlong = look.dot(wind);
@@ -677,6 +680,8 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		}
 		for (int i = 0; i < 11; i++)
 			at[i] = from[i] + (to[i] - from[i]) * tCam;
+		g_cloudFrontArrival = tCam;
+		g_cloudFrontArrivalTicks = now;
 		env.frontHalfWidth = env.frontActive ? FRONT_HALF_WIDTH : 0.0f;
 		// lightning inside the storm's clouds (with the seasons' weather, its strikes): flashes
 		// every 4 to 14 seconds, flickering out over a quarter of a second

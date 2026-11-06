@@ -658,6 +658,8 @@ void ClientInterface::drawFootprintTiles()
 	gfx->SetBlendColor(-1);
 	gfx->SetTexture(0, *white);
 	const Terrain* terrain = client->terrain;
+	// over the grass's blades (0.4 to 0.85 m at height 1), else they cover the squares in patches
+	const float lift = 0.15f + (g_renderSettings.grass && UseEnhancedRenderers(gfx) ? 0.9f * std::max(0.0f, g_renderSettings.grassHeight) : 0.0f);
 	footprintBatch->begin();
 	for (const FootprintTile& tile : footprintTiles) {
 		const uint32_t color = tile.ok ? 0x8000E040 : 0x90F02020;
@@ -672,7 +674,7 @@ void ClientInterface::drawFootprintTiles()
 				for (int i = 0; i < 4; i++) {
 					v[i].x = x0 + (sx + corners[i][0]) * step;
 					v[i].z = z0 + (sz + corners[i][1]) * step;
-					v[i].y = terrain->getHeightEx(v[i].x, v[i].z, true) + 0.15f;
+					v[i].y = terrain->getHeightEx(v[i].x, v[i].z, true) + lift;
 					v[i].u = v[i].v = 0.5f;
 					v[i].color = color;
 				}

@@ -290,6 +290,7 @@ struct ActionTerminateThisTask : Action {
 };
 
 struct ActionTerminateThisOrder : Action {
+	bool endsOrder() const override { return true; }
 	virtual void run(SrvScriptContext* ctx) override {
 		if (Order *order = ctx->getSelf()->orderConfig.getCurrentOrder())
 			order->terminate();

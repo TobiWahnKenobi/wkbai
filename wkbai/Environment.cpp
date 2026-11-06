@@ -24,6 +24,8 @@ namespace {
 }
 
 EnvironmentView g_environment;
+float g_cloudFrontArrival = 1.0f;
+uint64_t g_cloudFrontArrivalTicks = 0;
 
 float EnvironmentSettings::seasonLengthS() const
 {

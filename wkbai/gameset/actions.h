@@ -16,6 +16,8 @@ struct Action {
 	virtual ~Action() {}
 	virtual void run(SrvScriptContext* ctx) = 0;
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) = 0;
+	// TERMINATE_THIS_ORDER (a task's start may skip a sequence that only ends its order)
+	virtual bool endsOrder() const { return false; }
 };
 
 struct ActionSequence {
