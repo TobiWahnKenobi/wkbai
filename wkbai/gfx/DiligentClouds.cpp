@@ -622,8 +622,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		const Vector3 look = camera.position + camera.direction.normal() * 400.0f;
 		const float lookAlong = look.dot(wind);
 		CloudPreset target = g_cloudPresets[1];
-		target.cover = rs.cloudCover;
-		const int kind = env.cloudWeatherKind >= 0 ? env.cloudWeatherKind : rs.cloudWeather - 1;
+		const bool gameSky = env.cloudGameWeather >= 0;
+		target.cover = gameSky ? env.cloudGameCover : rs.cloudCover;
+		const int kind = env.cloudWeatherKind >= 0 ? env.cloudWeatherKind : (gameSky ? env.cloudGameWeather : rs.cloudWeather) - 1;
 		if (kind >= 0 && kind < CLOUD_WEATHER_COUNT)
 			target = g_cloudPresets[kind];
 		const uint64_t now = SDL_GetTicksNS();

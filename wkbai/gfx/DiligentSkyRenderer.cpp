@@ -956,7 +956,7 @@ void DiligentSkyRenderer::render()
 	// from the cover over each point, so a front shows): a grey of the sky box's own light, darker
 	// the heavier the cloud (as the haze: the clouds' light), and at night
 	float overcast[4] = {};
-	if (!clouds && _impl->boxLightValid && (env.cloudWeatherKind >= 0 || g_renderSettings.cloudWeather > 0)) {
+	if (!clouds && _impl->boxLightValid && (env.cloudWeatherKind >= 0 || (env.cloudGameWeather >= 0 ? env.cloudGameWeather : g_renderSettings.cloudWeather) > 0)) {
 		const auto& p = env.cloudPreset;
 		const float cover = std::clamp(std::max(p.cover, p.storm * 0.85f), 0.0f, 1.0f);
 		const float k = (1.0f - 0.45f * cover * cover) * (1.0f + (std::min(p.light, 1.2f) - 1.0f) * cover);

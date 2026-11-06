@@ -2608,8 +2608,7 @@ void Server::sendStateTo(NetLink* link)
 	}
 	if (!hostRegionsText.empty())
 		sendHostData(1, hostRegionsText, link);
-	if (environment.enabled())
-		environment.send(*this, link);
+	environment.send(*this, link); // (without the seasons, for the game's sky)
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;
@@ -2782,7 +2781,8 @@ void Server::simulate()
 		updatePeasantActivity();
 	}
 	// wkbai's day and night, seasons and weather: once a game second, only when a setting is on
-	if (environment.enabled() && !timeManager.paused)
+	// (else once, for the game's sky)
+	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
 	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;

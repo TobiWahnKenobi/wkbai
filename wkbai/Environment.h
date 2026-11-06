@@ -33,6 +33,9 @@ struct EnvironmentSettings {
 	// the debug panel's (F9) moves of the clock: added to the day's fraction (startHour's) and to
 	// the year's (startSeason's), so the time of day and the season jump there and go on from it
 	float dayShift = 0.0f, yearShift = 0.0f;
+	// the sky without the seasons' weather (the game settings "cloudWeather": 0 by the cloud
+	// cover, 1-10 an EnvWeather + 1; "cloudCover" in percent); the clients draw it
+	int skyWeather = 0, skyCover = 45;
 	bool active() const { return dayNight || seasons; }
 	float dayLengthS() const { return dayLengthMin * 60.0f; }
 	// the seasons since the game began (with the shift), as a count: its floor + startSeason is
@@ -122,6 +125,10 @@ struct EnvironmentView {
 	Vector3 starX{ 1, 0, 0 }, starY{ 0, 1, 0 }, starZ{ 0, 0, 1 };
 	float temperatureC = 12.0f;
 	int weather = -1;             // EnvWeather now (-1: inactive): the dynamic clouds' preset
+	// the game's sky without the seasons (EnvironmentSettings::skyWeather, its cover 0..1): -1
+	// outside a game (the menus, the editor, a game from before): the lighting options' clouds
+	int skyWeather = -1;
+	float skyCover = 0.45f;
 	float cloudCover = 0.0f, rain = 0.0f, snowfall = 0.0f, fog = 0.0f;
 	float wetness = 0.0f, snowCover = 0.0f, ice = 0.0f, waterRise = 0.0f;
 	float lightningFlash = 0.0f;  // 0..1, this frame

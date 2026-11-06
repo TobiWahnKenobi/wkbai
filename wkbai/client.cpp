@@ -148,6 +148,7 @@ void Client::tick()
 				std::string gsFileName = br.readStringZ();
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
+				environmentSkyKnown = false;
 				environment = EnvironmentState();
 				nightSight = NightSight();
 				int gsVersion = br.readUint8();
@@ -692,6 +693,9 @@ void Client::tick()
 				}
 				for (int s = 0; s < 4; s++)
 					es.severity[s] = br.readUint8();
+				es.skyWeather = br.readUint8();
+				es.skyCover = br.readUint8();
+				environmentSkyKnown = true;
 				environment.read(br);
 				environmentActive = es.active();
 				nightSight.factor = environment.sightFactor;

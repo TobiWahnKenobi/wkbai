@@ -457,7 +457,8 @@ bool Server::saveGame(const char* filename)
 	{
 		std::filesystem::path side = path;
 		side += ".env.txt";
-		if (environment.enabled() && !savingLevel) {
+		const EnvironmentSettings& es = environment.settings; // (or only the game's sky)
+		if ((environment.enabled() || es.skyWeather != 0 || es.skyCover != 45) && !savingLevel) {
 			const std::string text = environment.saveText();
 			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
 				fwrite(text.data(), 1, text.size(), sf);

@@ -70,19 +70,26 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 			g_mapLook.changed = false;
 		}
 		g_environment = EnvironmentView();
+		if (client->environmentSkyKnown && terrain) {
+			g_environment.skyWeather = client->environmentSettings.skyWeather;
+			g_environment.skyCover = client->environmentSettings.skyCover / 100.0f;
+		}
 		return;
 	}
 	const EnvironmentSettings& es = client->environmentSettings;
 	const EnvironmentState& st = client->environment;
 	EnvironmentView& v = g_environment;
 	v.active = true;
+	// day and night without the seasons: the game's sky (the server's weather stays clear)
+	v.skyWeather = es.seasons ? -1 : es.skyWeather;
+	v.skyCover = es.skyCover / 100.0f;
 	// the clock from the client's own time (smooth between the server's updates)
 	const float t = client->timeManager.currentTime;
 	v.dayFraction = EnvDayFraction(es, t);
 	v.yearFraction = EnvYearFraction(es, t);
 	// the rest eased towards the server's state (it comes once a second)
 	auto ease = [](float& x, float target) { x += (target - x) * 0.05f; };
-	v.weather = st.weather;
+	v.weather = es.seasons ? st.weather : -1;
 	if (!g_lightningKnown) {
 		v.cloudCover = st.cloudCover; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;

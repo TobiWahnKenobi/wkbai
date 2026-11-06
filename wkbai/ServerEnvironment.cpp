@@ -710,8 +710,16 @@ void ServerEnvironment::applyFloods(Server& server)
 
 void ServerEnvironment::update(Server& server)
 {
-	if (!enabled() || !server.getLevel() || !server.gameSet || !server.terrain)
+	if (!server.getLevel() || !server.gameSet || !server.terrain)
 		return;
+	// without day and night and the seasons: only the game's sky, once, for the clients to draw
+	if (!enabled()) {
+		if (!skySent) {
+			skySent = true;
+			send(server);
+		}
+		return;
+	}
 	const float now = server.timeManager.currentTime;
 	if (started && now < nextUpdate)
 		return;
@@ -857,6 +865,8 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	msg.writeUint8(forceWeather >= 0 ? (uint8_t)forceWeather : 255);
 	for (int s = 0; s < 4; s++)
 		msg.writeUint8((uint8_t)settings.severity[s]);
+	msg.writeUint8((uint8_t)settings.skyWeather);
+	msg.writeUint8((uint8_t)settings.skyCover);
 	state.write(msg);
 	if (only)
 		only->send(msg);

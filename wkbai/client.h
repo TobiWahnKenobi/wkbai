@@ -69,6 +69,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// wkbai's day and night, seasons and weather, as the server last sent them (NETCLIMSG_ENVIRONMENT);
 	// environmentActive false: none (the map's own sun, no weather)
 	bool environmentActive = false;
+	bool environmentSkyKnown = false; // the game's sky (environmentSettings.skyWeather, skyCover) came
 	EnvironmentSettings environmentSettings;
 	EnvironmentState environment;
 	int environmentWeatherHeld = -1; // the debug panel's weather held on the server (-1: none)

@@ -897,6 +897,9 @@ void DiligentEnhancedSceneRenderer::render()
 		shadows.cloudWeatherKind = -1;
 		shadows.cloudFlashOverride = -1;
 	}
+	// without the seasons, in a game: its sky (the game settings' cloud weather and cover)
+	shadows.cloudGameWeather = g_environment.weather < 0 ? g_environment.skyWeather : -1;
+	shadows.cloudGameCover = g_environment.skyCover;
 	if (!shadows.portraitPass)
 		UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;

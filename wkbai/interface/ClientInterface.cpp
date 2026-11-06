@@ -755,8 +755,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
 			static const char* const cloudWeathers[] = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
-			// (with the game's seasons and weather on, they set the clouds)
-			ImGui::BeginDisabled(g_environment.active);
+			// (outside a game only: in one, its settings set the clouds)
+			ImGui::BeginDisabled(g_environment.active || g_environment.skyWeather >= 0);
 			ImGui::Combo("Cloud weather", &s.cloudWeather, cloudWeathers, 11);
 		}
 		ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
@@ -3216,19 +3216,14 @@ void ClientInterface::iter()
 		client->camera.position = benchmarkPosition;
 		client->camera.orientation = benchmarkOrientation;
 	}
-	// the camera kept over the playable map: the point the middle of the view falls on (the
-	// ground below, looking level or up) inside it, the camera moved back by as much (not the
-	// benchmark's fixed views, nor the map editor's)
+	// the camera's own position kept over the playable map, like a player's in a first-person
+	// view: turning, tilting or raising it never moves it (not the benchmark's fixed views, nor
+	// the map editor's)
 	else if (client->terrain && client->getLevel() && !editorOn) {
 		Camera& cam = client->camera;
 		const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
-		const float pitch = cam.orientation.x, yaw = cam.orientation.y;
-		const Vector3 dir(-std::sin(yaw) * std::cos(pitch), std::sin(pitch), std::cos(yaw) * std::cos(pitch));
-		const float ground = client->terrain->getHeight(std::clamp(cam.position.x, 0.0f, areaWidth), std::clamp(cam.position.z, 0.0f, areaDepth));
-		const float dist = dir.y < -0.01f ? std::max((ground - cam.position.y) / dir.y, 0.0f) : 0.0f;
-		const float lx = cam.position.x + dir.x * dist, lz = cam.position.z + dir.z * dist;
-		cam.position.x += std::clamp(lx, 0.0f, areaWidth) - lx;
-		cam.position.z += std::clamp(lz, 0.0f, areaDepth) - lz;
+		cam.position.x = std::clamp(cam.position.x, 0.0f, areaWidth);
+		cam.position.z = std::clamp(cam.position.z, 0.0f, areaDepth);
 	}
 	// View distance (the original's far_clip, default 350, slider 280-1000; it also sets the
 	// fog) or the whole map, and the field of view, from the settings

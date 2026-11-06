@@ -42,6 +42,10 @@ std::string EnvironmentSettings::text() const
 		severity[0], severity[1], severity[2], severity[3]);
 	std::string out = buf;
 	// (only once moved: the text of a game without them, a recording's, stays as it was)
+	if (skyWeather != 0 || skyCover != 45) {
+		snprintf(buf, sizeof(buf), "cloudWeather=%d\ncloudCover=%d\n", skyWeather, skyCover);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -63,6 +67,8 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "weatherSummer") severity[1] = std::clamp(i, 0, 3);
 	else if (name == "weatherAutumn") severity[2] = std::clamp(i, 0, 3);
 	else if (name == "weatherWinter") severity[3] = std::clamp(i, 0, 3);
+	else if (name == "cloudWeather") skyWeather = std::clamp(i, 0, (int)WEATHER_COUNT);
+	else if (name == "cloudCover") skyCover = std::clamp(i, 0, 100);
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;

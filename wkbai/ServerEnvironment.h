@@ -23,6 +23,7 @@ struct ServerEnvironment {
 	EnvironmentSettings settings;
 	EnvironmentState state;
 	bool enabled() const { return settings.active(); }
+	bool skyToSend() const { return !skySent; } // (with every setting off: the game's sky not sent yet)
 
 	// once a game second (and at once at the start)
 	void update(Server& server);
@@ -106,6 +107,7 @@ private:
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
 	float temperatureTarget = 12.0f;
 	bool started = false;
+	bool skySent = false; // (without day and night and the seasons: the clients sent the sky)
 	// each unit's cold and heat exposure (by id: in order, saved)
 	struct Exposure { float cold = 0.0f, heat = 0.0f; };
 	std::map<uint32_t, Exposure> exposure;

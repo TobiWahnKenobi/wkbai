@@ -146,6 +146,10 @@ struct DiligentGfx : IRenderer
 		float frontPos = 0, frontHalfWidth = 0;
 		uint64_t cloudPresetTicks = 0;
 		int cloudWeatherKind = -1;
+		// the game's sky without the seasons (-1: none, the lighting options' cloudWeather and
+		// cloudCover; 0 by cloudGameCover, 1-10 a weather)
+		int cloudGameWeather = -1;
+		float cloudGameCover = 0.45f;
 		float cloudFlash[4] = {}, cloudFlashOverride = -1, cloudFlashStart = -100, cloudFlashNext = 0;
 		// the terrain's vertex heights (the terrain renderer's), its grid's vertices across and
 		// down and the map edge in tiles

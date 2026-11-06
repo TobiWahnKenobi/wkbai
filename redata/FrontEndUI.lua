@@ -1087,6 +1087,7 @@ local SETTINGS = {
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 1, weatherSummer = 1, weatherAutumn = 1, weatherWinter = 1,
+	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1256,6 +1257,8 @@ end
 local SEASON_NAMES = { "Spring", "Summer", "Autumn", "Winter" }
 local TEMPERATURE_SCALES = { "Celsius", "Fahrenheit", "Kelvin" }
 local SEVERITIES = { "Gentle", "Normal", "Harsh", "Random" }
+local CLOUD_WEATHERS = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog",
+	"Snow", "Blizzard", "Heatwave", "Drought" }
 local function weatherTab()
 	local s = skirmish.settings
 	local function switch(name, label, x, y)
@@ -1293,6 +1296,17 @@ local function weatherTab()
 		if s.dayNight ~= 0 then
 			note(X(60), Y(780), { "A season lasts at least one day (" .. math.floor(s.dayLength) .. " min)." })
 		end
+	else
+		-- without the seasons' weather: the sky's clouds, as they stay all game
+		local lw = textWidth(FONT_LIST, "Clouds", S)
+		drawText(FONT_LIST, X(170) - lw, Y(578), "Clouds", WHITE, S)
+		if button(CLOUD_WEATHERS[s.cloudWeather + 1], X(200), Y(566), L(744), L(38)) then
+			s.cloudWeather = (s.cloudWeather + 1) % #CLOUD_WEATHERS
+		end
+		if s.cloudWeather == 0 then
+			stepperRow("Cover (%)", nil, "cloudCover", 5, 0, 100, Y(632))
+		end
+		note(X(60), Y(712), { "The look of the sky only; the weather's effects come with the seasons." })
 	end
 	-- each season's weather
 	drawText(FONT_BUTTON, "Weather", X(1000), Y(130), s.seasons ~= 0 and WHITE or GREY, S)
