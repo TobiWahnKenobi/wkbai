@@ -99,6 +99,7 @@ struct SunState {
 	float colour[3] = { 1, 1, 1 }, ambient[3] = { 1, 1, 1 }; // multipliers of the map's own
 	float moon = 0.0f;
 	float shadowFade = 1.0f; // 0 where the light jumps between the sun and the moon (dusk, dawn)
+	float sunrise = 6.0f, sunset = 18.0f; // the day's hours (by the season)
 	// the clouds' light: the true sun until it is 4 degrees below the horizon (the clouds stay lit
 	// after the ground; no shadow fade: theirs is the dusk's best light), then the moon; east, up,
 	// south, and its colour (DuskTint reddens it in the shaders)

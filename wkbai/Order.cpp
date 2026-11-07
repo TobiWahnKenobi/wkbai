@@ -807,6 +807,36 @@ static float FootprintDistance(const Vector3& point, const ServerGameObject* bui
 	return std::sqrt(best);
 }
 
+// Where a unit works a target that can be walked onto (a building whose footprint is all
+// passable: a field) along its activity path (ATTACHMENT_PATH_CATEGORY ACTIVITY_PATH, the Farm
+// task): a spot of its own inside it, in the middle two thirds (the play test: with the task's
+// 6.5 m from the footprint's edge, the farmers worked their fields from 6.5 m outside them).
+// Returns false for other targets.
+static bool FieldSpot(const TaskBlueprint* task, const ServerGameObject* unit, const ServerGameObject* target, Vector3& spot)
+{
+	if (!task->activityPath || !target || target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !target->blueprint->footprint)
+		return false;
+	const auto& tiles = target->blueprint->footprint->tiles;
+	if (tiles.empty() || !std::all_of(tiles.begin(), tiles.end(), [](const Footprint::TileOffset& to) { return to.mode != 0; }))
+		return false;
+	int x0 = tiles[0].offsetX, x1 = x0, z0 = tiles[0].offsetZ, z1 = z0;
+	for (const auto& to : tiles) {
+		x0 = std::min(x0, to.offsetX); x1 = std::max(x1, to.offsetX);
+		z0 = std::min(z0, to.offsetZ); z1 = std::max(z1, to.offsetZ);
+	}
+	const float halfX = (x1 - x0 + 1) * 2.5f, halfZ = (z1 - z0 + 1) * 2.5f;
+	// (by the unit's id: each its own spot, the same on every run)
+	uint32_t h = unit->id * 2654435761u ^ target->id * 40503u;
+	h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12;
+	const float u = ((h & 1023) / 1023.0f - 0.5f) * 1.33f, v = (((h >> 10) & 1023) / 1023.0f - 0.5f) * 1.33f;
+	const float yaw = target->orientation.y;
+	const float ox = u * halfX, oz = v * halfZ;
+	spot = target->position + Vector3(ox * std::cos(yaw) - oz * std::sin(yaw), 0.0f, ox * std::sin(yaw) + oz * std::cos(yaw));
+	if (Server::instance->terrain)
+		spot.y = Server::instance->terrain->getHeight(spot.x, spot.z);
+	return true;
+}
+
 // How near to a building's footprint a task's unit goes. A delivery (ATTACHMENT_PATH_CATEGORY
 // DELIVERY) to a building with a yard comes up to the building: the original walks it to a
 // delivery point on the model, the manor's 2 m out from its walls (wkbai leaves the points out,
@@ -884,6 +914,10 @@ void ObjectReferenceTask::onUpdate()
 					goal.y = Server::instance->terrain->getHeightEx(goal.x, goal.z, go->blueprint->canWalkOnWater());
 			}
 		}
+		Vector3 spot;
+		const bool inField = !following && FieldSpot(blueprint, go, target.get(), spot);
+		if (inField)
+			goal = spot;
 		float prox = this->proximity;
 		if (prox >= 0.0f) prox = std::max(prox - (destination - goal).len2xz(), 0.1f);
 		// a follower is there while it stands near the target's current goal (the last
@@ -894,7 +928,10 @@ void ObjectReferenceTask::onUpdate()
 		// its activity path) and a large building's centre can't be come near
 		const float edge = FootprintDistance(go->position, target.get());
 		const float reach = edge >= 0.0f ? FootprintReach(blueprint, this->proximity, target.get()) : this->proximity;
-		const bool measured = following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
+		// in a field: at its spot (or near it, when the path ended a little short)
+		const float spotDist2 = inField ? (go->position - goal).sqlen2xz() : 0.0f;
+		const bool measured = inField ? (spotDist2 < 1.0f || (!go->movementController.isMoving() && spotDist2 < 9.0f))
+			: following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
 			: (prox < 0.0f || (edge >= 0.0f
 				// within the proximity of the edge, or, when the path ends a little further out
 				// (its last tile next to the footprint was taken), within one tile more

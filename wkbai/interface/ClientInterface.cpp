@@ -2719,7 +2719,8 @@ void ClientInterface::iter()
 		char text[96];
 		snprintf(text, sizeof(text), "%d FPS  %.2f ms (p99 %.2f)", framesPerSecond, ft.avgMs, ft.p99Ms);
 		ImDrawList* fg = ImGui::GetForegroundDrawList();
-		const ImVec2 pos(12.0f, 92.0f); // below the top panel
+		// below the top panel, under the game speed's line (ClientUIScript.lua: at y 88)
+		const ImVec2 pos(12.0f, 88.0f + ImGui::GetFontSize() + 10.0f);
 		const ImVec2 size = ImGui::CalcTextSize(text);
 		fg->AddRectFilled(ImVec2(pos.x - 4, pos.y - 2), ImVec2(pos.x + size.x + 4, pos.y + size.y + 2), IM_COL32(0, 0, 0, 160));
 		fg->AddText(pos, IM_COL32(255, 255, 255, 255), text);

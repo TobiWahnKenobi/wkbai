@@ -45,6 +45,9 @@ struct TaskBlueprint {
 	// ATTACHMENT_PATH_CATEGORY DELIVERY: the original walks the unit to a delivery point on the
 	// target's model (see FootprintReach in Order.cpp)
 	bool deliveryPath = false;
+	// ATTACHMENT_PATH_CATEGORY ACTIVITY_PATH: the unit works along the target's activity path;
+	// on a target that can be walked onto (a field) that is inside it (Order.cpp, FieldSpot)
+	bool activityPath = false;
 	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
 	std::vector<TriggerBlueprint> triggers;
 	ActionSequence collisionTrigger, struckFloorTrigger;

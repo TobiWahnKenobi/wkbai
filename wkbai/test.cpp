@@ -1608,6 +1608,14 @@ void Test_Farm()
 			last = now;
 			printf("FARM t=%d %s\n", t, now.c_str());
 		}
+		// where the farmers work: their distance from the field's centre, every 10 s (a 3 x 3
+		// tile field reaches 7.5 m from it; they had stood 6.5 m outside its edge)
+		static int lastWhere = -10;
+		if (field && t >= lastWhere + 10) {
+			lastWhere = t;
+			printf("FARM t=%d where: A %.1f m, B %.1f m from the field's centre\n", t,
+				(a->position - field->position).len2xz(), (b->position - field->position).len2xz());
+		}
 		if (secondOrdered && t > awayAt + 40)
 			break;
 		SDL_Delay(16);

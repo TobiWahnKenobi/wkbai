@@ -227,9 +227,22 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	sun.sunTrue = s.normal();
 	sun.moonTrue = at(h + PI).normal();
 	sun.daylight = Smoothstep(-0.10f, 0.20f, s.y);
+	// Sunrise and sunset by the season (the hour angle where the sun crosses the horizon at this
+	// declination: in winter later and earlier, in summer earlier and later), in the day's hours.
+	// The shadows' light by the clock around them (the play test: they jumped at 6 in spring):
+	// the moon's fades out from 2 to 1 hours before sunrise, the sun's in from 1 hour before to
+	// sunrise; at dusk the sun's out from sunset to 1 hour after, the moon's in from 1 to 2 hours
+	// after. The light's direction changes from one to the other while both are faded out.
+	const float h0 = std::acos(std::clamp(-std::tan(lat) * std::tan(decl), -1.0f, 1.0f));
+	const float hour = dayFraction * 24.0f, rise = 12.0f - h0 * 12.0f / PI, set = 12.0f + h0 * 12.0f / PI;
+	auto around = [](float x) { x = std::fmod(x + 12.0f, 24.0f); if (x < 0) x += 24.0f; return x - 12.0f; }; // -12..12 hours
+	const float fromRise = around(hour - rise), fromSet = around(hour - set);
+	const bool sunLights = hour >= rise - 1.0f && hour <= set + 1.0f;
+	sun.sunrise = rise;
+	sun.sunset = set;
 	// the moon: opposite the sun, at least a little up, for the night's shadows
 	Vector3 dir = s;
-	if (sun.daylight < 0.5f) {
+	if (!sunLights) {
 		Vector3 m = at(h + PI);
 		m.y = std::max(m.y, 0.25f);
 		dir = m;
@@ -247,7 +260,8 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	// the light's direction jumps from the sun to the moon at daylight 0.5 (and back at dawn):
 	// the direct light, and with it every shadow (ray-traced, the shadow maps', the clouds'),
 	// fades out before the jump and in after it, the sky's light alone in between
-	sun.shadowFade = Smoothstep(0.0f, 0.2f, std::abs(sun.daylight - 0.5f));
+	sun.shadowFade = sunLights ? std::min(Smoothstep(-1.0f, 0.0f, fromRise), Smoothstep(1.0f, 0.0f, fromSet))
+		: std::min(Smoothstep(-1.0f, -2.0f, fromRise), Smoothstep(1.0f, 2.0f, fromSet));
 	for (int c = 0; c < 3; c++) {
 		sun.colour[c] = (moonCol[c] + (dayCol[c] - moonCol[c]) * sun.daylight) * sunDim * sun.shadowFade;
 		sun.ambient[c] = (ambNight[c] + (ambDay[c] - ambNight[c]) * sun.daylight) * ambDim;

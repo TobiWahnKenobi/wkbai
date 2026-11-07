@@ -259,7 +259,10 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float jitter = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
 	float3 sun = normalize(CloudLightDir.xyz); // (the clouds' own light: the sun lights them past the ground's dusk)
 	float mu = dot(rd, sun);
-	float phase = lerp(HenyeyGreenstein(mu, -0.2), HenyeyGreenstein(mu, 0.8), 0.55) * 12.566371;
+	// (g 0.8 at a 0.55 share peaked at 25 times the side's light towards the sun: the clouds near
+	// it blew out to flat white, the play test of 2026-11-07; now about 5 times, and the light
+	// rolled off below white at the end)
+	float phase = lerp(HenyeyGreenstein(mu, -0.2), HenyeyGreenstein(mu, 0.65), 0.4) * 12.566371;
 	// a sheet scatters the light many times over: the sun shows as a diffuse bright patch, not
 	// a cumulus' silver lining (a hot white blot overhead)
 	const float sheetiness = cWeather.x;
@@ -318,6 +321,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// the clouds to the haze took a fraction of a degree, a line along the horizon
 	fade = min(fade, smoothstep(0.004, 0.16, rd.y));
 	float far = (1 - fade) * hazeCover;
+	// a soft shoulder: the light above 0.6 rolled off towards 1 (the brightest parts keep their
+	// relief instead of clipping to one white)
+	float lum = max(light.r, max(light.g, light.b));
+	if (lum > 0.6)
+		light *= (0.6 + (lum - 0.6) / (1 + (lum - 0.6) / 0.38)) / lum;
 	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
 
