@@ -12,6 +12,7 @@
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
 #include "DiligentClouds.h"
+#include "DiligentGI.h"
 #include "DiligentRayShadows.h"
 
 bool g_rayTracingBuffers = false;
@@ -865,6 +866,7 @@ struct DiligentRenderer : DiligentGfx
 		*(uint32_t*)whiteBmp.pixels.data() = 0xFFFFFFFF;
 		whiteTexture = CreateTexture(whiteBmp, 1);
 		CreateCloudResources(this);
+		CreateGIResources(this);
 		shadows.rayShadowsSupported = DiligentRayShadows::Supported(device);
 		g_rayTracingBuffers = shadows.rayShadowsSupported;
 	}

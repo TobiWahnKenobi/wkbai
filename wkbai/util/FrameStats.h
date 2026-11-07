@@ -44,6 +44,8 @@ extern FrameStats g_frameStats;
 // the GPU's time for the last frame whose timestamps came back (ms; < 0 unknown), from the
 // Diligent renderer's timestamp queries: the benchmark report's gpu* values
 extern double g_gpuFrameMs;
+// the dynamic GI's passes in that frame (DiligentGI; < 0 unknown or off): the report's giGpu* values
+extern double g_giGpuMs;
 
 bool BenchmarkEnabled();
 bool BenchmarkCamera(Vector3& position, Vector3& orientation);

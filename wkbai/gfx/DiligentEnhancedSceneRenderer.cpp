@@ -10,6 +10,7 @@
 #include "DiligentEnhancedSceneRenderer.h"
 #include "renderer_diligent.h"
 #include "DiligentClouds.h"
+#include "DiligentGI.h"
 #include "DiligentRayShadows.h"
 #include <unordered_set>
 #include "../Model.h"
@@ -189,7 +190,9 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 			// sees of it, the clouds only on the sun's light
 			float3 wp = mul(float4(Pos, 1), EntityTransform).xyz;
 			float vis = SkyVisibility(wp, true);
-			output.Color = float4(min(MeshLighting.x * 1.15 * vis * SkyAmbient(output.Norm) + cloud * MeshLighting.y * SunColour.rgb * lambert, 1), 1);
+			// (and the light bounced off the ground and the roofs around, with the dynamic GI)
+			output.Color = float4(min(MeshLighting.x * 1.15 * vis * SkyAmbient(output.Norm) + cloud * MeshLighting.y * SunColour.rgb * lambert
+				+ BounceLight(wp, output.Norm, vis), 1), 1);
 		}
 		else
 			output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
@@ -294,7 +297,12 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		vis = SkyVisibility(input.WorldPos, true);
 		sunShade = input.Tint.a;
 		allShade = 1;
-		bounce = SunColour.rgb * (saturate(l.y) * SkyOccLight.y * 0.35 * saturate(0.5 - 0.5 * n.y)) * float3(0.9, 0.85, 0.7);
+		// the dynamic GI's (RenderSettings::dynamicGI): the light of the ground and roofs around,
+		// in their colours, instead of a warm guess
+		if (GIRegion.w != 0)
+			bounce = BounceLight(input.WorldPos, n, vis);
+		else
+			bounce = SunColour.rgb * (saturate(l.y) * SkyOccLight.y * 0.35 * saturate(0.5 - 0.5 * n.y)) * float3(0.9, 0.85, 0.7);
 		ambientTint *= 1.15 * vis;
 	}
 	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl * sunShade + bounce * orm.r, 1);
@@ -380,6 +388,25 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 void PS_ShadowAlpha(VS_OUTPUT input)
 {
 	if(inpTexture.Sample(inpSampler, input.Texcoord).a < ALPHA_REF) discard;
+}
+
+// The dynamic GI's models from above (DiligentGI): their albedo as drawn (the weather's, the
+// seasons'), and the sun's n.l, for the bounce map's light
+float4 PS_GI(VS_OUTPUT input) : SV_Target
+{
+	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
+	float3 albedo = WeatherAlbedo(input, tex.rgb);
+	float3 n = dot(input.Norm, input.Norm) > 0 ? normalize(input.Norm) : float3(0, 1, 0);
+	return float4(albedo, saturate(dot(n, normalize(SunDirection))));
+}
+
+float4 PS_GIAlpha(VS_OUTPUT input) : SV_Target
+{
+	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
+	if (tex.a < ALPHA_REF) discard;
+	float3 albedo = WeatherAlbedo(input, tex.rgb);
+	float3 n = dot(input.Norm, input.Norm) > 0 ? normalize(input.Norm) : float3(0, 1, 0);
+	return float4(albedo, saturate(dot(n, normalize(SunDirection))));
 }
 
 // FSR 3.1's motion vectors of what moved since the last frame: drawn over the scene's depth at the
@@ -623,6 +650,8 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
+	// the dynamic GI's models from above (DiligentGI): into ShadowEnvironment::giCapture
+	RefCntAutoPtr<IPipelineState> giPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
@@ -704,6 +733,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
@@ -808,6 +838,38 @@ void DiligentEnhancedSceneRenderer::init()
 					ferr("Diligent: could not create the enhanced scene pipeline.");
 			}
 		}
+	}
+
+	// The dynamic GI's capture (DiligentGI): the models from straight above into an RGBA16F
+	// target (albedo, n.l) over its depth; both faces (roofs, open meshes)
+	{
+		RefCntAutoPtr<IShader> giShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS_GI"), createShader(SHADER_TYPE_PIXEL, "PS_GIAlpha") };
+		for (int anim = 0; anim < 2; anim++)
+			for (int alpha = 0; alpha < 2; alpha++) {
+				GraphicsPipelineStateCreateInfo ci;
+				ci.PSODesc.Name = "Enhanced scene GI capture";
+				ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+				auto& gp = ci.GraphicsPipeline;
+				gp.NumRenderTargets = 1;
+				gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
+				gp.DSVFormat = TEX_FORMAT_D32_FLOAT;
+				gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+				gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+				gp.DepthStencilDesc.DepthEnable = True;
+				gp.DepthStencilDesc.DepthWriteEnable = True;
+				gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+				gp.BlendDesc.RenderTargets[0].BlendEnable = False;
+				gp.InputLayout.LayoutElements = layouts[anim].data();
+				gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
+				ci.pVS = vertexShaders[anim];
+				ci.pPS = giShaders[alpha];
+				IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
+				ci.ppResourceSignatures = signatures;
+				ci.ResourceSignaturesCount = anim ? 3 : 2;
+				device->CreateGraphicsPipelineState(ci, &_impl->giPipelines[anim][alpha]);
+				if (!_impl->giPipelines[anim][alpha])
+					ferr("Diligent: could not create the enhanced scene GI capture pipeline.");
+			}
 	}
 
 	// FSR 3.1's motion vectors (MotionInstance: an instance now, then in the last frame), into
@@ -961,6 +1023,7 @@ void DiligentEnhancedSceneRenderer::render()
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "CloudBuffer")) v->Set(shadows.cloudBuffer);
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "cloudNoise")) v->Set(shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "skyOccTexture")) v->Set(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giTexture")) v->Set(shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		}
 	}
 
@@ -1021,12 +1084,15 @@ void DiligentEnhancedSceneRenderer::render()
 	// motion vectors of the meshes that moved or animated since the last frame (FSR 3.1, into the
 	// bound motion vector target; the entities remember how they were drawn). Returns whether
 	// anything was drawn.
-	// DRAW_SKY: the static shadow casters only (not the units), for the sky light's map
-	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY };
+	// DRAW_SKY: the static shadow casters only (not the units), for the sky light's map;
+	// DRAW_GI: the dynamic GI's models from above (the static casters, with High the units too)
+	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI };
 	const uint64_t frameIndex = dgfx->FrameIndex();
 	auto drawMeshes = [&](DrawMode mode) {
-		const bool shadowPass = mode == DRAW_SHADOWS || mode == DRAW_SKY, motionPass = mode == DRAW_MOTION;
-		const uint32_t casterFlags = mode == DRAW_SKY ? SceneEntity::SEFLAG_STATIC_SHADOW : (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW);
+		const bool giPass = mode == DRAW_GI;
+		const bool shadowPass = mode == DRAW_SHADOWS || mode == DRAW_SKY || giPass, motionPass = mode == DRAW_MOTION;
+		const uint32_t casterFlags = (mode == DRAW_SKY || (giPass && shadows.giMode < 2)) ? SceneEntity::SEFLAG_STATIC_SHADOW
+			: (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW);
 		bool drawn = false;
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
@@ -1070,7 +1136,7 @@ void DiligentEnhancedSceneRenderer::render()
 					? dgfx->StreamVertexData(motionInstances.data(), count * sizeof(MotionInstance), instanceOffset)
 					: dgfx->StreamVertexData(instances.data(), count * sizeof(Instance), instanceOffset);
 
-				ctx->SetPipelineState((shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
+				ctx->SetPipelineState((giPass ? _impl->giPipelines : shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -1244,6 +1310,37 @@ void DiligentEnhancedSceneRenderer::render()
 		// its means (SkyVisibility's fade towards the edge)
 		ctx->GenerateMips(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
+
+	// The dynamic GI (RenderSettings::dynamicGI, DiligentGI): the models from straight above over
+	// the bounce map's square (as the sky light's casters: the same height and depth range), then
+	// the bounce map's light from them, the terrain and the sky light's map
+	if (shadows.skyOccOn && shadows.giMode > 0 && shadows.giRefresh && !shadows.portraitPass) {
+		using Env = DiligentGfx::ShadowEnvironment;
+		const float half = Env::GI_EXTENT * 0.5f;
+		const Vector3 centre(shadows.giOrigin[0] + half, 0, shadows.giOrigin[1] + half);
+		Matrix view = Matrix::getLHLookAtViewMatrix(Vector3(centre.x, Env::SKY_OCC_TOP, centre.z), centre, Vector3(0, 0, 1));
+		Matrix ortho = Matrix::getZeroMatrix();
+		ortho._11 = ortho._22 = 1.0f / half;
+		ortho._33 = 1.0f / Env::SKY_OCC_RANGE;
+		ortho._44 = 1.0f;
+		const Matrix topDown = view * ortho;
+		ITextureView* rtv = shadows.giCapture->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ITextureView* dsv = shadows.giCaptureDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
+		const float none[4] = { 0, 0, 0, -1 };
+		GITimerBegin(dgfx);
+		ctx->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->ClearRenderTarget(rtv, none, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		gfx->SetTransformMatrix(&topDown);
+		drawMeshes(DRAW_GI);
+		gfx->SetTransformMatrix(&camera->sceneMatrix);
+		dgfx->RestoreRenderTargets();
+		RenderGIRadiance(dgfx);
+		GITimerEnd(dgfx);
+	}
+	else if (shadows.giMode > 0)
+		GITimerSkip();
 
 	drawMeshes(DRAW_SCENE);
 

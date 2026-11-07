@@ -1191,7 +1191,10 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		float lit = ShadowParams.x != 0 ? saturate((stat - ShadowParams.y) / max(1 - ShadowParams.y, 1e-3)) : 1;
 		float blob = BlobLight(input.FragPos);
 		float3 sky = SkyAmbient(n) * vis * (0.25 + 0.85 * fill);
-		float3 bounce = tex.rgb * 1.4 * saturate(SunDirection.y) * (1 - vis) * SkyOccLight.y;
+		// the bounce: the dynamic GI's (RenderSettings::dynamicGI) light of the ground and the
+		// buildings around, in their colours; else the sun's off the ground's own colour
+		float3 bounce = GIRegion.w != 0 ? BounceLight(input.FragPos, n, vis)
+			: tex.rgb * 1.4 * saturate(SunDirection.y) * (1 - vis) * SkyOccLight.y;
 		float share = SkyOccLight.x;
 		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob
 			+ share * sky * lerp(1, blob, 0.5) + bounce + FireLight(input.FragPos, n);
@@ -1261,6 +1264,14 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
 	return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
 }
+
+// The dynamic GI's terrain albedo (DiligentGI): the whole map from straight above, the tiles'
+// colours at the coarse mip the bake's few texels per tile pick, times the vertex shade
+float4 PS_Albedo(VS_OUTPUT input) : SV_Target
+{
+	float4 tex = inpTexture.Sample(inpSampler, AtlasUV(input.Texcoord));
+	return float4(tex.rgb * input.Color.rgb, 1);
+}
 )---";
 
 struct DiligentEnhancedTerrainRenderer::Impl {
@@ -1325,7 +1336,105 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> blobMap;
 	texture blobSprite = nullptr;
 	std::unique_ptr<DiligentWaterfalls> waterfalls; // where the water drops (from Low water)
+	// the dynamic GI's terrain albedo (DiligentGI): ShadowEnvironment::giAlbedo, baked again
+	// after the tiles change (albedoDirty)
+	RefCntAutoPtr<IPipelineState> albedoPipeline;
+	RefCntAutoPtr<ITexture> albedoMap;
+	bool albedoDirty = true;
+	IShaderResourceBinding* binding(DiligentGfx* dgfx, size_t pairIndex);
+	void bakeAlbedo(DiligentGfx* dgfx, Terrain* terrain, Camera* camera);
 };
+
+// A texture pair's binding (made the first time)
+IShaderResourceBinding* DiligentEnhancedTerrainRenderer::Impl::binding(DiligentGfx* dgfx, size_t t)
+{
+	const TexturePair& pair = texturePairs[t];
+	auto& srb = bindings[pair];
+	if (!srb) {
+		signature->CreateShaderResourceBinding(&srb, true);
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pair.first));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(dgfx->GetTextureView(nullptr));
+		for (const char* name : SKY_NAMES)
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, name)->Set(dgfx->GetTextureView(nullptr));
+	}
+	return srb;
+}
+
+// The whole map's tiles from straight above, 2 texels per tile (at most 2048 per side), into
+// the dynamic GI's terrain albedo
+void DiligentEnhancedTerrainRenderer::Impl::bakeAlbedo(DiligentGfx* dgfx, Terrain* terrain, Camera* camera)
+{
+	albedoDirty = false;
+	if (!albedoPipeline)
+		return;
+	IRenderDevice* device = dgfx->device;
+	IDeviceContext* ctx = dgfx->ctx;
+	const int w = std::clamp((int)terrain->width * 2, 2, 2048), h = std::clamp((int)terrain->height * 2, 2, 2048);
+	if (!albedoMap || (int)albedoMap->GetDesc().Width != w || (int)albedoMap->GetDesc().Height != h) {
+		albedoMap.Release();
+		TextureDesc desc;
+		desc.Name = "Terrain albedo (dynamic GI)";
+		desc.Type = RESOURCE_DIM_TEX_2D;
+		desc.Width = w;
+		desc.Height = h;
+		desc.Format = TEX_FORMAT_RGBA8_UNORM;
+		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_RENDER_TARGET;
+		device->CreateTexture(desc, nullptr, &albedoMap);
+		if (!albedoMap)
+			return;
+	}
+	constexpr float tilesize = 5.0f;
+	const float x0 = -(float)terrain->edge * tilesize, z0 = -(float)terrain->edge * tilesize;
+	const float width = terrain->width * tilesize, depth = terrain->height * tilesize;
+	const Vector3 centre(x0 + width * 0.5f, 0, z0 + depth * 0.5f);
+	using Env = DiligentGfx::ShadowEnvironment;
+	Matrix view = Matrix::getLHLookAtViewMatrix(Vector3(centre.x, Env::SKY_OCC_TOP, centre.z), centre, Vector3(0, 0, 1));
+	Matrix ortho = Matrix::getZeroMatrix();
+	ortho._11 = 2.0f / width;
+	ortho._22 = 2.0f / depth;
+	ortho._33 = 1.0f / Env::SKY_OCC_RANGE;
+	ortho._44 = 1.0f;
+	const Matrix topDown = view * ortho;
+	ITextureView* rtv = albedoMap->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+	const float grey[4] = { 0.35f, 0.38f, 0.3f, 1 };
+	ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->SetViewports(1, nullptr, 0, 0);
+	ctx->ClearRenderTarget(rtv, grey, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	dgfx->SetTransformMatrix(&topDown);
+	IBuffer* vb = trnVertexBuffer;
+	const Uint64 vbOffset = 0;
+	ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+	ctx->SetPipelineState(albedoPipeline);
+	std::vector<std::vector<uint32_t>> perPair(texturePairs.size());
+	for (const Chunk& chunk : chunks)
+		for (const auto& [index, list] : chunk.indicesPerTexture)
+			perPair[index].insert(perPair[index].end(), list.begin(), list.end());
+	constexpr size_t maxIndicesPerDraw = 6 * 8192;
+	for (size_t t = 0; t < perPair.size(); t++) {
+		const auto& indices = perPair[t];
+		if (indices.empty())
+			continue;
+		ctx->CommitShaderResources(binding(dgfx, t), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		for (size_t first = 0; first < indices.size(); first += maxIndicesPerDraw) {
+			const size_t count = std::min(indices.size() - first, maxIndicesPerDraw);
+			uint64_t ibOffset = 0;
+			IBuffer* ib = dgfx->StreamIndexData(indices.data() + first, count * sizeof(uint32_t), ibOffset);
+			ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)count, VT_UINT32, DRAW_FLAG_VERIFY_ALL });
+		}
+	}
+	dgfx->SetTransformMatrix(&camera->sceneMatrix);
+	dgfx->RestoreRenderTargets();
+	auto& env = dgfx->shadows;
+	env.giAlbedo = albedoMap;
+	env.giAlbedoRegion[0] = x0;
+	env.giAlbedoRegion[1] = z0;
+	env.giAlbedoRegion[2] = 1.0f / width;
+	env.giAlbedoRegion[3] = 1.0f / depth;
+}
 
 // Texels of the blob shadow texture per world unit (at most 4096 per side)
 static constexpr float BLOB_TEXELS_PER_UNIT = 2.0f;
@@ -1483,6 +1592,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1523,6 +1633,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(dgfx->shadows.cloudBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(dgfx->shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "skyOccTexture")->Set(dgfx->shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giTexture")->Set(dgfx->shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 
 	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
 	{
@@ -1680,6 +1791,22 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
+	{
+		// the dynamic GI's albedo bake (bakeAlbedo): from above into RGBA8, no depth, both faces
+		GraphicsPipelineStateCreateInfo aci = ci;
+		aci.PSODesc.Name = "Enhanced terrain albedo";
+		RefCntAutoPtr<IShader> aps = createShader(SHADER_TYPE_PIXEL, "PS_Albedo");
+		aci.pPS = aps;
+		auto& agp = aci.GraphicsPipeline;
+		agp.RTVFormats[0] = TEX_FORMAT_RGBA8_UNORM;
+		agp.DSVFormat = TEX_FORMAT_UNKNOWN;
+		agp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+		agp.DepthStencilDesc.DepthEnable = False;
+		agp.DepthStencilDesc.DepthWriteEnable = False;
+		device->CreateGraphicsPipelineState(aci, &_impl->albedoPipeline);
+		if (!_impl->albedoPipeline)
+			printf("Diligent: no terrain albedo for the dynamic GI (pipeline failed)\n");
+	}
 	if (_impl->tessellation) {
 		// the same with the terrain tessellated: triangles as patches, both faces (the
 		// tessellator's winding isn't the index lists')
@@ -2083,6 +2210,7 @@ bool DiligentEnhancedTerrainRenderer::updateTiles()
 				chunk.indicesPerTexture.emplace_back(index, std::move(list));
 		}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
+	_impl->albedoDirty = true;
 	return true;
 }
 
@@ -2147,6 +2275,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	IDeviceContext* ctx = dgfx->ctx;
 
 	gfx->BeginMapDrawing();
+
+	// the dynamic GI's terrain albedo, when it is wanted and the tiles changed (DiligentGI)
+	if (_impl->albedoDirty && g_renderSettings.dynamicGI > 0 && g_renderSettings.skyGI)
+		_impl->bakeAlbedo(dgfx, terrain, camera);
 
 	constexpr float tilesize = 5.0f;
 	Vector3 sunNormal = terrain->sunVector.normal();
@@ -2436,19 +2568,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
 		if (_impl->frameIndices[t].empty())
 			continue;
-		const Impl::TexturePair& pair = _impl->texturePairs[t];
-		auto& srb = _impl->bindings[pair];
-		if (!srb) {
-			_impl->signature->CreateShaderResourceBinding(&srb, true);
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(pair.first));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(pair.second));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(dgfx->GetTextureView(nullptr));
-			for (const char* name : Impl::SKY_NAMES)
-				srb->GetVariableByName(SHADER_TYPE_PIXEL, name)->Set(dgfx->GetTextureView(nullptr));
-		}
-		ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->CommitShaderResources(_impl->binding(dgfx, t), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		drawIndices(_impl->frameIndices[t]);
 	}
 

@@ -158,6 +158,18 @@ namespace {
 		}
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
 		list.push_back(toggle("skyGI", "lighting", "Light from the sky", rs.skyGI));
+		{
+			// the dynamic GI (DiligentGI): needs the sky light
+			MenuOption o;
+			o.id = "dynamicGI"; o.page = "lighting"; o.label = "Bounced light (dynamic GI)";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Low", "High" };
+			o.get = [&rs]() { return (float)rs.dynamicGI; };
+			o.set = [&rs](float v) { rs.dynamicGI = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.skyGI; }));
+		}
+		list.push_back(withEnabled(slider("dynamicGIStrength", "lighting", "Bounced light strength", rs.dynamicGIStrength, 0.0f, 3.0f),
+			[&rs]() { return rs.skyGI && rs.dynamicGI > 0; }));
 		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
 		list.push_back(withEnabled(toggle("rtReflections", "lighting", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= 2; }));
 		list.push_back(slider("terrainFresnel", "lighting", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));

@@ -50,11 +50,18 @@ cbuffer CloudBuffer
 	float4 CloudFromWeather;
 	float4 CloudFromHigh;
 	float4 CloudFront;
+	// Dynamic global illumination (RenderSettings::dynamicGI, DiligentGI): the bounce map's
+	// corner x, z, 1 / its size, w: 0 off, 1 Low, 2 High; GIParams: x the bounce's strength
+	float4 GIRegion;
+	float4 GIParams;
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
 Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges (tiling)
 Texture2D skyOccTexture; // r: how much of the sky the ground sees, g: the ground's height, b: the casters' top
+// the bounce map (DiligentGI): rgb the light leaving the ground, the roofs and the units seen
+// from above (before the colour grade), a the height it leaves from; mips down to 1 x 1
+Texture2D giTexture;
 
 // The weather at a point (CloudAt): the new weather's behind a passing front, the old one's ahead
 // of it, blended over the front's width; its edge ragged by a broad noise (lobes up to ~600 units
@@ -178,6 +185,41 @@ float3 SkyAmbient(float3 n)
 {
 	float3 c = lerp(CloudSkyHorizon.rgb, CloudSkyUp.rgb, saturate(n.y * 0.5 + 0.5));
 	return c / max(CloudSkyHorizon.w, 0.05);
+}
+
+// The light bounced onto a point facing n (DiligentGI; 0 with the dynamic GI off): what the
+// surface sees of the ground and the roofs around it, from the bounce map. Its share of the
+// view: the half below its horizon ((1 - n.y) / 2, walls and the undersides) and of the half
+// above, the sky the terrain and the buildings hide (1 - vis: hollows, the foot of walls). The
+// map's light there is averaged over a footprint that grows with the height above what's below
+// (the mips) and shifted towards where the surface faces, so a wall takes the colour of the
+// meadow in front of it and the ground beside a sunlit wall its roof's. High adds a wider ring.
+// Towards the map's edge it fades into the mean of the whole map.
+float3 BounceLight(float3 p, float3 n, float vis)
+{
+	if (GIRegion.w == 0)
+		return float3(0, 0, 0);
+	float2 uv = (p.xz - GIRegion.xy) * GIRegion.z;
+	float2 e2 = abs(uv - 0.5) * 2;
+	float edge = smoothstep(0.8, 1.0, max(e2.x, e2.y));
+	float view = saturate(0.5 - 0.5 * n.y) + (1 - vis) * saturate(0.5 + 0.5 * n.y);
+	float3 mean = giTexture.SampleLevel(skyOccSampler, float2(0.5, 0.5), 8).rgb;
+	float3 b = mean;
+	if (edge < 1) {
+		float below = giTexture.SampleLevel(skyOccSampler, uv, 2).a;
+		float h = clamp(p.y - below, 0, 80);
+		float texels = 1 / (GIRegion.z * 256); // world units per texel (GI_SIZE)
+		float lod = clamp(log2((5 + h) / texels), 1, 6);
+		float2 shift = n.xz * ((3 + 0.7 * h) * GIRegion.z);
+		float3 nearL = giTexture.SampleLevel(skyOccSampler, uv + shift, lod).rgb;
+		b = nearL;
+		if (GIRegion.w > 1.5) {
+			float3 farL = giTexture.SampleLevel(skyOccSampler, uv + shift * 3, lod + 2).rgb;
+			b = lerp(nearL, farL, 0.35);
+		}
+		b = lerp(b, mean, edge);
+	}
+	return b * (view * GIParams.x);
 }
 )---";
 
@@ -478,7 +520,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 272;
+	cb.Size = 304;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -716,12 +758,33 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	env.skyOccOrigin[0] = std::round((target.x - size * 0.5f) / texel) * texel;
 	env.skyOccOrigin[1] = std::round((target.z - size * 0.5f) / texel) * texel;
 	const bool skyOn = rs.skyGI && env.skyOcc && env.terrainHeights;
+	// the bounce map (DiligentGI): around the same point, snapped to GI_SNAP so that its mips'
+	// texels stay put as the camera moves; with the sky light only
+	{
+		using Env = DiligentGfx::ShadowEnvironment;
+		env.giMode = (skyOn && env.giRadiance && env.giPipeline) ? std::clamp(rs.dynamicGI, 0, 2) : 0;
+		env.giOrigin[0] = std::round((target.x - Env::GI_EXTENT * 0.5f) / Env::GI_SNAP) * Env::GI_SNAP;
+		env.giOrigin[1] = std::round((target.z - Env::GI_EXTENT * 0.5f) / Env::GI_SNAP) * Env::GI_SNAP;
+		// drawn again every few frames, at once when the square moves or the mode changes; the
+		// shaders read the map where it was drawn
+		const int every = env.giMode >= 2 ? Env::GI_REFRESH_HIGH : Env::GI_REFRESH_LOW;
+		env.giRefresh = env.giMode > 0 && (env.giMode != env.giMapMode || env.giOrigin[0] != env.giMapOrigin[0]
+			|| env.giOrigin[1] != env.giMapOrigin[1] || ++env.giFrames >= every);
+		if (env.giRefresh) {
+			env.giFrames = 0;
+			env.giMapMode = env.giMode;
+			env.giMapOrigin[0] = env.giOrigin[0];
+			env.giMapOrigin[1] = env.giOrigin[1];
+		}
+		if (env.giMode == 0)
+			env.giMapMode = 0;
+	}
 	const float* up = env.skyLightValid ? env.skyLight[0] : nullptr;
 	const float* horizon = env.skyLightValid ? env.skyLight[1] : nullptr;
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
 	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
-	const float data[68] = {
+	const float data[76] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -739,8 +802,10 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		old.stratus, old.storm, old.density, old.light,
 		old.cirrus, old.alto, old.altoSheet, 0.0f,
 		0.948683f, 0.316228f, env.frontPos, env.frontHalfWidth,
+		env.giMapOrigin[0], env.giMapOrigin[1], 1.0f / DiligentGfx::ShadowEnvironment::GI_EXTENT, (float)env.giMode,
+		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), 0.0f, 0.0f, 0.0f,
 	};
-	static_assert(sizeof(data) <= 272, "the cloud buffer's size (CreateCloudResources)");
+	static_assert(sizeof(data) <= 304, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }

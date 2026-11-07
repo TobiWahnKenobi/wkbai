@@ -90,6 +90,7 @@ const char* BenchmarkSaveGame()
 
 static int s_benchmarkFrame = 0; // frames since the map was loaded
 double g_gpuFrameMs = -1.0;
+double g_giGpuMs = -1.0;
 
 bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 {
@@ -155,9 +156,11 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		return;
 	}
 	recorded.frameEnd();
-	static std::vector<float> gpuTimes;
+	static std::vector<float> gpuTimes, giTimes;
 	if (g_gpuFrameMs >= 0.0)
 		gpuTimes.push_back((float)g_gpuFrameMs);
+	if (g_giGpuMs >= 0.0)
+		giTimes.push_back((float)g_giGpuMs);
 	if ((int)recorded.frameTimes().size() < frames)
 		return;
 
@@ -188,6 +191,12 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		report["realSeconds"] = real;
 		report["gameSpeed"] = real > 0.0 ? (Server::instance->timeManager.currentTime - gameStart) / real : 0.0;
 		report["timeSpeed"] = Server::instance->timeManager.timeSpeed;
+	}
+	if (!giTimes.empty()) {
+		double sum = 0;
+		for (float t : giTimes) sum += t;
+		report["giGpuAvgMs"] = sum / giTimes.size();
+		printf("Benchmark: dynamic GI passes avg %.3f ms\n", sum / giTimes.size());
 	}
 	if (!gpuTimes.empty()) {
 		std::vector<float> g = gpuTimes;
