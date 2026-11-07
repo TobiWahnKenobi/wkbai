@@ -57,7 +57,7 @@ cbuffer CloudBuffer
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
-Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges (tiling)
+Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges, a: the high clouds' smooth noise (tiling)
 Texture2D skyOccTexture; // r: how much of the sky the ground sees, g: the ground's height, b: the casters' top
 // the bounce map (DiligentGI): rgb the light leaving the ground, the roofs and the units seen
 // from above (before the colour grade), a the height it leaves from; mips down to 1 x 1
@@ -520,11 +520,14 @@ void CreateCloudResources(DiligentGfx* gfx)
 			const float base = Fbm(u, v, 3, 5, 11) * 0.75f + Cells(u, v, 6, 5) * 0.25f;
 			const float detail = Fbm(u, v, 8, 4, 41);
 			const float cells = Cells(u, v, 8, 77) * 0.65f + Fbm(u, v, 16, 3, 91) * 0.35f;
+			// the high clouds' noise: smooth gradient noise of 6 octaves from 4 cells, its contrast
+			// stretched (a plain Fbm keeps to 0.35-0.65), for their regions, warps and streaks
+			const float high = std::clamp(0.5f + (Fbm(u, v, 4, 6, 123) - 0.5f) * 2.2f, 0.0f, 1.0f);
 			uint8_t* p = &pixels[((size_t)y * N + x) * 4];
 			p[0] = (uint8_t)std::lround(std::clamp(base, 0.0f, 1.0f) * 255);
 			p[1] = (uint8_t)std::lround(detail * 255);
 			p[2] = (uint8_t)std::lround(cells * 255);
-			p[3] = 255;
+			p[3] = (uint8_t)std::lround(high * 255);
 		}
 	TextureDesc desc;
 	desc.Name = "Cloud noise";
@@ -642,7 +645,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	//  cover  base  thick  stratus storm density shadow light  cirrus alto  alto's sheet
 	{ 0.00f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f, 0.0f, 0.0f, 0.0f }, // clear: none at all
-	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.0f, 0.0f, 0.0f }, // cloudy: broken cumulus
+	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.30f, 0.15f, 0.0f }, // cloudy: broken cumulus, some cirrus and altocumulus above
 	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f, 0.0f, 0.0f, 0.0f }, // rain: low, grey, flatter
 	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.15f, 0.85f, 0.72f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
 	// thunderstorm: cumulonimbus (StormCells: towers to the top, flat anvils spreading under it,
@@ -651,8 +654,8 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.90f, 200, 70, 0.9f, 0.0f, 1.2f, 0.70f, 1.1f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
 	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f, 0.0f, 0.0f, 0.0f }, // snow: pale overcast
 	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.1f, 0.82f, 0.78f, 0.0f, 0.0f, 0.0f }, // blizzard
-	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.40f, 0.35f, 0.0f }, // heatwave: cirrus, altocumulus floccus
-	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.30f, 0.60f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
+	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.62f, 0.28f, 0.0f }, // heatwave: cirrus, altocumulus floccus
+	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.45f, 0.70f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
 
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
