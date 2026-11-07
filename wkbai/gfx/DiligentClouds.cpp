@@ -62,6 +62,9 @@ Texture2D skyOccTexture; // r: how much of the sky the ground sees, g: the groun
 // the bounce map (DiligentGI): rgb the light leaving the ground, the roofs and the units seen
 // from above (before the colour grade), a the height it leaves from; mips down to 1 x 1
 Texture2D giTexture;
+// the light the models give off seen from above (DiligentGI: their emissive maps', lit windows
+// at night), over the bounce map's square; mips
+Texture2D giEmitTexture;
 
 // The weather at a point (CloudAt): the new weather's behind a passing front, the old one's ahead
 // of it, blended over the front's width; its edge ragged by a broad noise (lobes up to ~600 units
@@ -195,11 +198,31 @@ float3 SkyAmbient(float3 n)
 // (the mips) and shifted towards where the surface faces, so a wall takes the colour of the
 // meadow in front of it and the ground beside a sunlit wall its roof's. High adds a wider ring.
 // Towards the map's edge it fades into the mean of the whole map.
+// The light out of the lit windows around (giEmitTexture) onto a point facing n: it falls out
+// and down, a pool on the ground about a building, less on the walls and units (which way they
+// face from the windows is not known: half); averaged over about 8, 16 and 64 units around
+// (mips 2, 3 and 5), the nearer more: bright by the walls, a faint glow over the town. Its own
+// building's upper walls and roof little: it fades from 3 to 12 units over the ground (the sky
+// light's map's heights)
+float3 WindowLight(float3 p, float3 n, float2 uv)
+{
+	if (any(uv < 0) || any(uv > 1))
+		return float3(0, 0, 0);
+	float2 cuv = float2(uv.x, 1 - uv.y); // (drawn from above: v the other way round)
+	float3 e = giEmitTexture.SampleLevel(skyOccSampler, cuv, 2).rgb * 0.45 + giEmitTexture.SampleLevel(skyOccSampler, cuv, 3).rgb * 0.4
+		+ giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * 0.15;
+	float h = 0;
+	if (SkyOccRegion.w != 0)
+		h = p.y - skyOccTexture.SampleLevel(skyOccSampler, (p.xz - SkyOccRegion.xy) * SkyOccRegion.z, 0).g;
+	return e * ((0.5 + 0.5 * saturate(n.y)) * saturate(1 - (h - 3) / 9));
+}
+
 float3 BounceLight(float3 p, float3 n, float vis)
 {
 	if (GIRegion.w == 0)
 		return float3(0, 0, 0);
 	float2 uv = (p.xz - GIRegion.xy) * GIRegion.z;
+	float3 windows = WindowLight(p, n, uv) * GIParams.x;
 	float2 e2 = abs(uv - 0.5) * 2;
 	float edge = smoothstep(0.8, 1.0, max(e2.x, e2.y));
 	float view = saturate(0.5 - 0.5 * n.y) + (1 - vis) * saturate(0.5 + 0.5 * n.y);
@@ -219,7 +242,7 @@ float3 BounceLight(float3 p, float3 n, float vis)
 		}
 		b = lerp(b, mean, edge);
 	}
-	return b * (view * GIParams.x);
+	return b * (view * GIParams.x) + windows;
 }
 )---";
 

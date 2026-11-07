@@ -1593,6 +1593,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1634,6 +1635,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(dgfx->shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "skyOccTexture")->Set(dgfx->shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giTexture")->Set(dgfx->shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giEmitTexture")->Set(dgfx->shadows.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 
 	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
 	{

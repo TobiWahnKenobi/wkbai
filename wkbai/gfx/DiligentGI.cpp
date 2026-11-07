@@ -31,7 +31,8 @@ Texture2D<float> heightTexture; // the terrain's vertex heights
 Texture2D terrainAlbedo;        // the terrain's colour from above, the whole map (the terrain renderer's)
 Texture2D modelCapture;         // the models from above: albedo, the sun's n.l (alpha below 0: none)
 Texture2D<float> modelDepth;    // and their depth
-Texture2D giPrevTexture;        // the last frame's bounce map at mip 2
+Texture2D modelEmission;        // and the light they give off (their emissive maps', at this hour)
+Texture2D giPrevTexture;       // the last frame's bounce map at mip 2
 SamplerState heightSampler;     // clamped, linear
 SamplerState pointSampler;      // clamped, point
 
@@ -110,7 +111,9 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// a roof, a tree or a unit on it (their albedo with the weather, as drawn)
 	float2 cuv = float2(uv.x, 1 - uv.y);
 	float4 cap = modelCapture.SampleLevel(pointSampler, cuv, 0);
+	float3 emitted = float3(0, 0, 0);
 	if (cap.a >= 0) {
+		emitted = modelEmission.SampleLevel(pointSampler, cuv, 0).rgb;
 		float dep = modelDepth.SampleLevel(pointSampler, cuv, 0);
 		top = max(ground, SkyOccTerrain.w - dep * SkyOccLight.w);
 		albedo = cap.rgb;
@@ -132,7 +135,10 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		if (all(puv >= 0) && all(puv <= 1))
 			light += giPrevTexture.SampleLevel(heightSampler, puv, 0).rgb * ((1 - vis) * 0.8 + 0.1) * GIWeather.w;
 	}
-	return float4(albedo * light, top);
+	// the light it gives off (lit windows at night) on top of what it reflects: a quarter, for
+	// the light that comes back off the walls and the ground about it (the windows' own light
+	// on them is WindowLight's)
+	return float4(albedo * light + emitted * 0.25, top);
 }
 )---";
 
@@ -159,7 +165,9 @@ void CreateGIResources(DiligentGfx* gfx)
 	texture("bounce map", Env::GI_SIZE, TEX_FORMAT_RGBA16_FLOAT, BIND_SHADER_RESOURCE | BIND_RENDER_TARGET, true, env.giRadiance);
 	texture("last bounce map", Env::GI_PREV_SIZE, TEX_FORMAT_RGBA16_FLOAT, BIND_SHADER_RESOURCE, false, env.giPrev);
 	texture("models from above", Env::GI_SIZE, TEX_FORMAT_RGBA16_FLOAT, BIND_SHADER_RESOURCE | BIND_RENDER_TARGET, false, env.giCapture);
-	texture("models' depth from above", Env::GI_SIZE, TEX_FORMAT_D32_FLOAT, BIND_SHADER_RESOURCE | BIND_DEPTH_STENCIL, false, env.giCaptureDepth);
+	texture("models' light from above", Env::GI_SIZE, TEX_FORMAT_RGBA16_FLOAT, BIND_SHADER_RESOURCE | BIND_RENDER_TARGET, false, env.giCaptureEmission);
+	texture("models' light, mips", Env::GI_SIZE, TEX_FORMAT_RGBA16_FLOAT, BIND_SHADER_RESOURCE | BIND_RENDER_TARGET, true, env.giEmission);
+	texture("models' depth from above",Env::GI_SIZE, TEX_FORMAT_D32_FLOAT, BIND_SHADER_RESOURCE | BIND_DEPTH_STENCIL, false, env.giCaptureDepth);
 	{
 		// the terrain's albedo until the terrain renderer bakes it: a mid grey-green
 		const uint8_t px[4] = { 90, 100, 70, 255 };
@@ -173,14 +181,14 @@ void CreateGIResources(DiligentGfx* gfx)
 		TextureData data{ &sub, 1 };
 		device->CreateTexture(desc, &data, &env.giAlbedo);
 	}
-	// cleared: black, at the ground
-	{
+	// cleared: black, at the ground (the bounce map); no light given off
+	for (ITexture* t : { env.giRadiance.RawPtr(), env.giEmission.RawPtr() }) {
 		const float zero[4] = { 0, 0, 0, 0 };
-		ITextureView* rtv = env.giRadiance->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ITextureView* rtv = t->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		gfx->ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		gfx->ctx->ClearRenderTarget(rtv, zero, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		gfx->ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
-		gfx->ctx->GenerateMips(env.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		gfx->ctx->GenerateMips(t->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	BufferDesc cb;
@@ -200,6 +208,7 @@ void CreateGIResources(DiligentGfx* gfx)
 		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "modelCapture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "modelDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "modelEmission", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giPrevTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "terrainAlbedo", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -227,6 +236,7 @@ void CreateGIResources(DiligentGfx* gfx)
 	env.giSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "skyOccTexture")->Set(env.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	env.giSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "modelCapture")->Set(env.giCapture->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	env.giSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "modelDepth")->Set(env.giCaptureDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	env.giSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "modelEmission")->Set(env.giCaptureEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	env.giSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giPrevTexture")->Set(env.giPrev->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 
 	const std::string source = std::string(g_cloudShaderCode) + giShaderCode;
@@ -372,6 +382,11 @@ void RenderGIRadiance(DiligentGfx* gfx)
 	ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });
 	gfx->RestoreRenderTargets();
 	ctx->GenerateMips(env.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	// the light given off, with mips for WindowLight (a copy: the capture's target is in the
+	// scene's bindings while it is drawn)
+	CopyTextureAttribs copy{ env.giCaptureEmission, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, env.giEmission, RESOURCE_STATE_TRANSITION_MODE_TRANSITION };
+	ctx->CopyTexture(copy);
+	ctx->GenerateMips(env.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	env.giPrevOrigin[0] = env.giOrigin[0];
 	env.giPrevOrigin[1] = env.giOrigin[1];
 	env.giPrevValid = true;

@@ -359,11 +359,15 @@ float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 }
 
 // the emissive map's light: the always-on part, the night part by the night's darkness; kept as
-// bright under the night's darker grade (divided by its exposure), so it blooms
+// bright under the night's darker grade (divided by its exposure), so it blooms, and as
+// coloured under its paler one (its colour pushed out by as much as the grade takes away:
+// candle light stays orange)
 float3 Emission(VS_OUTPUT input)
 {
 	float4 e = emissiveMap.Sample(inpSampler, input.Texcoord);
-	return e.rgb * lerp(1, Material.w, e.a) / max(Grade.x, 0.35);
+	float3 c = e.rgb * lerp(1, Material.w, e.a) / max(Grade.x, 0.35);
+	float lum = dot(c, float3(0.299, 0.587, 0.114));
+	return max(lum + (c - lum) / max(Grade.w, 0.4), 0);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
@@ -392,21 +396,64 @@ void PS_ShadowAlpha(VS_OUTPUT input)
 
 // The dynamic GI's models from above (DiligentGI): their albedo as drawn (the weather's, the
 // seasons'), and the sun's n.l, for the bounce map's light
+float4 GICapture(VS_OUTPUT input, float3 albedo)
+{
+	float3 n = dot(input.Norm, input.Norm) > 0 ? normalize(input.Norm) : float3(0, 1, 0);
+	return float4(albedo, saturate(dot(n, normalize(SunDirection))));
+}
+
 float4 PS_GI(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	float3 albedo = WeatherAlbedo(input, tex.rgb);
-	float3 n = dot(input.Norm, input.Norm) > 0 ? normalize(input.Norm) : float3(0, 1, 0);
-	return float4(albedo, saturate(dot(n, normalize(SunDirection))));
+	return GICapture(input, WeatherAlbedo(input, tex.rgb));
 }
 
 float4 PS_GIAlpha(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if (tex.a < ALPHA_REF) discard;
-	float3 albedo = WeatherAlbedo(input, tex.rgb);
-	float3 n = dot(input.Norm, input.Norm) > 0 ? normalize(input.Norm) : float3(0, 1, 0);
-	return float4(albedo, saturate(dot(n, normalize(SunDirection))));
+	return GICapture(input, WeatherAlbedo(input, tex.rgb));
+}
+
+// And the light they give off (their emissive maps', now), for the light out of the windows
+// onto the ground, the walls and the units about them: drawn from above too, added up without
+// the depth test (the walls under their roofs, which are often another material), each face
+// as the material's mean over its whole map (8 x 8 bilinear taps of its last mip: each 2 x 2
+// texels of a 16 x 16 one) times how much more of it there is than shows from above (1 / |n.y|,
+// up to 10: a wall stands for its height), at the windows' strength all round (GI_EMISSION)
+static const float GI_EMISSION = 150;
+float3 MeanEmission()
+{
+	uint w, h, levels;
+	emissiveMap.GetDimensions(0, w, h, levels);
+	float lod = levels - 1;
+	float4 sum = float4(0, 0, 0, 0);
+	[unroll] for (int y = 0; y < 8; y++)
+		[unroll] for (int x = 0; x < 8; x++)
+			sum += emissiveMap.SampleLevel(inpSampler, (float2(x, y) + 0.5) / 8, lod);
+	sum /= 64;
+	// as Emission: the always-on part and the night part (the mean alpha, of the lit texels, a
+	// mix of them; the unlit texels' alpha does not matter)
+	float lit = max(sum.r, max(sum.g, sum.b));
+	float a = lit > 0 ? saturate(sum.a) : 0;
+	return sum.rgb * lerp(1, Material.w, a) * GI_EMISSION;
+}
+
+float4 GIEmission(VS_OUTPUT input)
+{
+	float ny = dot(input.Norm, input.Norm) > 0 ? abs(normalize(input.Norm).y) : 1;
+	return float4(MeanEmission() * min(1 / max(ny, 0.1), 10), 0);
+}
+
+float4 PS_GIEmit(VS_OUTPUT input) : SV_Target
+{
+	return GIEmission(input);
+}
+
+float4 PS_GIEmitAlpha(VS_OUTPUT input) : SV_Target
+{
+	if (inpTexture.Sample(inpSampler, input.Texcoord).a < ALPHA_REF) discard;
+	return GIEmission(input);
 }
 
 // FSR 3.1's motion vectors of what moved since the last frame: drawn over the scene's depth at the
@@ -652,6 +699,10 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
 	// the dynamic GI's models from above (DiligentGI): into ShadowEnvironment::giCapture
 	RefCntAutoPtr<IPipelineState> giPipelines[2][2];
+	// and the light they give off (added up, no depth), drawn only once a material has an
+	// emissive map (anyEmissive)
+	RefCntAutoPtr<IPipelineState> giEmitPipelines[2][2];
+	bool anyEmissive = false;
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
@@ -734,6 +785,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
@@ -841,35 +893,44 @@ void DiligentEnhancedSceneRenderer::init()
 	}
 
 	// The dynamic GI's capture (DiligentGI): the models from straight above into an RGBA16F
-	// target (albedo, n.l) over its depth; both faces (roofs, open meshes)
+	// target (albedo, n.l) over its depth; both faces (roofs, open meshes). And the light they
+	// give off: added up into another (no depth)
 	{
-		RefCntAutoPtr<IShader> giShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS_GI"), createShader(SHADER_TYPE_PIXEL, "PS_GIAlpha") };
-		for (int anim = 0; anim < 2; anim++)
-			for (int alpha = 0; alpha < 2; alpha++) {
-				GraphicsPipelineStateCreateInfo ci;
-				ci.PSODesc.Name = "Enhanced scene GI capture";
-				ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
-				auto& gp = ci.GraphicsPipeline;
-				gp.NumRenderTargets = 1;
-				gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
-				gp.DSVFormat = TEX_FORMAT_D32_FLOAT;
-				gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
-				gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-				gp.DepthStencilDesc.DepthEnable = True;
-				gp.DepthStencilDesc.DepthWriteEnable = True;
-				gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
-				gp.BlendDesc.RenderTargets[0].BlendEnable = False;
-				gp.InputLayout.LayoutElements = layouts[anim].data();
-				gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
-				ci.pVS = vertexShaders[anim];
-				ci.pPS = giShaders[alpha];
-				IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
-				ci.ppResourceSignatures = signatures;
-				ci.ResourceSignaturesCount = anim ? 3 : 2;
-				device->CreateGraphicsPipelineState(ci, &_impl->giPipelines[anim][alpha]);
-				if (!_impl->giPipelines[anim][alpha])
-					ferr("Diligent: could not create the enhanced scene GI capture pipeline.");
-			}
+		RefCntAutoPtr<IShader> giShaders[2][2] = {
+			{ createShader(SHADER_TYPE_PIXEL, "PS_GI"), createShader(SHADER_TYPE_PIXEL, "PS_GIAlpha") },
+			{ createShader(SHADER_TYPE_PIXEL, "PS_GIEmit"), createShader(SHADER_TYPE_PIXEL, "PS_GIEmitAlpha") } };
+		for (int emit = 0; emit < 2; emit++)
+			for (int anim = 0; anim < 2; anim++)
+				for (int alpha = 0; alpha < 2; alpha++) {
+					GraphicsPipelineStateCreateInfo ci;
+					ci.PSODesc.Name = emit ? "Enhanced scene GI emission" : "Enhanced scene GI capture";
+					ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+					auto& gp = ci.GraphicsPipeline;
+					gp.NumRenderTargets = 1;
+					gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
+					gp.DSVFormat = emit ? TEX_FORMAT_UNKNOWN : TEX_FORMAT_D32_FLOAT;
+					gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+					gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+					gp.DepthStencilDesc.DepthEnable = emit ? False : True;
+					gp.DepthStencilDesc.DepthWriteEnable = emit ? False : True;
+					gp.DepthStencilDesc.DepthFunc = COMPARISON_FUNC_LESS_EQUAL;
+					auto& blend = gp.BlendDesc.RenderTargets[0];
+					blend.BlendEnable = emit ? True : False;
+					blend.SrcBlend = blend.DestBlend = BLEND_FACTOR_ONE;
+					blend.SrcBlendAlpha = blend.DestBlendAlpha = BLEND_FACTOR_ONE;
+					blend.BlendOp = blend.BlendOpAlpha = BLEND_OPERATION_ADD;
+					gp.InputLayout.LayoutElements = layouts[anim].data();
+					gp.InputLayout.NumElements = (Uint32)layouts[anim].size();
+					ci.pVS = vertexShaders[anim];
+					ci.pPS = giShaders[emit][alpha];
+					IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
+					ci.ppResourceSignatures = signatures;
+					ci.ResourceSignaturesCount = anim ? 3 : 2;
+					auto& out = emit ? _impl->giEmitPipelines[anim][alpha] : _impl->giPipelines[anim][alpha];
+					device->CreateGraphicsPipelineState(ci, &out);
+					if (!out)
+						ferr("Diligent: could not create the enhanced scene GI capture pipeline.");
+				}
 	}
 
 	// FSR 3.1's motion vectors (MotionInstance: an instance now, then in the last frame), into
@@ -1024,6 +1085,7 @@ void DiligentEnhancedSceneRenderer::render()
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "cloudNoise")) v->Set(shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "skyOccTexture")) v->Set(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giTexture")) v->Set(shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giEmitTexture")) v->Set(shadows.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		}
 	}
 
@@ -1059,6 +1121,7 @@ void DiligentEnhancedSceneRenderer::render()
 			};
 			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm"), emissive = overrideMap("_emissive");
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(emissive ? emissive : _impl->noEmission));
+			_impl->anyEmissive |= emissive != nullptr;
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));
@@ -1085,11 +1148,12 @@ void DiligentEnhancedSceneRenderer::render()
 	// bound motion vector target; the entities remember how they were drawn). Returns whether
 	// anything was drawn.
 	// DRAW_SKY: the static shadow casters only (not the units), for the sky light's map;
-	// DRAW_GI: the dynamic GI's models from above (the static casters, with High the units too)
-	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI };
+	// DRAW_GI: the dynamic GI's models from above (the static casters, with High the units too);
+	// DRAW_GI_EMIT: the same, the light they give off
+	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI, DRAW_GI_EMIT };
 	const uint64_t frameIndex = dgfx->FrameIndex();
 	auto drawMeshes = [&](DrawMode mode) {
-		const bool giPass = mode == DRAW_GI;
+		const bool giPass = mode == DRAW_GI || mode == DRAW_GI_EMIT;
 		const bool shadowPass = mode == DRAW_SHADOWS || mode == DRAW_SKY || giPass, motionPass = mode == DRAW_MOTION;
 		const uint32_t casterFlags = (mode == DRAW_SKY || (giPass && shadows.giMode < 2)) ? SceneEntity::SEFLAG_STATIC_SHADOW
 			: (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW);
@@ -1136,7 +1200,7 @@ void DiligentEnhancedSceneRenderer::render()
 					? dgfx->StreamVertexData(motionInstances.data(), count * sizeof(MotionInstance), instanceOffset)
 					: dgfx->StreamVertexData(instances.data(), count * sizeof(Instance), instanceOffset);
 
-				ctx->SetPipelineState((giPass ? _impl->giPipelines : shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
+				ctx->SetPipelineState((mode == DRAW_GI_EMIT ? _impl->giEmitPipelines : giPass ? _impl->giPipelines : shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -1325,8 +1389,9 @@ void DiligentEnhancedSceneRenderer::render()
 		ortho._44 = 1.0f;
 		const Matrix topDown = view * ortho;
 		ITextureView* rtv = shadows.giCapture->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ITextureView* emitRtv = shadows.giCaptureEmission->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ITextureView* dsv = shadows.giCaptureDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
-		const float none[4] = { 0, 0, 0, -1 };
+		const float none[4] = { 0, 0, 0, -1 }, dark[4] = { 0, 0, 0, 0 };
 		GITimerBegin(dgfx);
 		ctx->SetRenderTargets(1, &rtv, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->SetViewports(1, nullptr, 0, 0);
@@ -1334,6 +1399,12 @@ void DiligentEnhancedSceneRenderer::render()
 		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		gfx->SetTransformMatrix(&topDown);
 		drawMeshes(DRAW_GI);
+		// the light they give off (none without emissive maps: only cleared)
+		ctx->SetRenderTargets(1, &emitRtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->ClearRenderTarget(emitRtv, dark, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		if (_impl->anyEmissive)
+			drawMeshes(DRAW_GI_EMIT);
 		gfx->SetTransformMatrix(&camera->sceneMatrix);
 		dgfx->RestoreRenderTargets();
 		RenderGIRadiance(dgfx);
