@@ -42,8 +42,22 @@ struct Model {
 	virtual void prepare() = 0;
 };
 
+// A glTF replacement (an HD model) of a mesh that Anim3 files animate: the original Mesh3, and
+// every new vertex and normal bound to the original triangle nearest to it, as its place in that
+// triangle's frame (two edges and the normal). Each key frame moves the original's triangles,
+// and the new mesh follows them, so new models of mills, flags and units move as the originals.
+struct ReplacementBinding {
+	struct Bind { uint32_t v[3]; float a, b, c; };
+	Mesh original;
+	std::vector<Bind> vertices, normals; // per new vertex, per new normal
+	bool usable = false;                 // the original was read and has triangles
+};
+
 struct StaticModel : Model {
 	Mesh mesh;
+	std::unique_ptr<ReplacementBinding> replacement; // for a glTF replacement that is animated
+	// the binding (made once, for every animation of the mesh); null for a Mesh3 itself
+	const ReplacementBinding* getReplacementBinding();
 	DynArray<uint32_t> matIds;
 	std::string fileName;
 	bool ready = false;
@@ -75,6 +89,10 @@ struct StaticModel : Model {
 struct AnimatedModel : Model {
 	Anim anim;
 	StaticModel *staticModel;
+	// an HD replacement's vertices and normals at the last time asked (see ReplacementBinding)
+	std::vector<float> reboundVertices;
+	std::vector<Vector3> reboundNormals;
+	uint32_t reboundVerticesTime = UINT32_MAX, reboundNormalsTime = UINT32_MAX;
 	std::string fileName;
 	bool ready = false;
 

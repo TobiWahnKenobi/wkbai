@@ -174,6 +174,14 @@ void Server::loadSaveGame(const char * filename)
 			player->aiController.registerWorkOrder(city, finder, workOrder);
 	postWorkOrders.clear();
 
+	// wkbai's own: an object saved below -1000 m is put on the ground (generated saves, such as the
+	// HD model showcase, need not know the terrain's heights). No saved game has such a height.
+	for (auto& [id, obj] : idmap)
+		if (obj && obj->position.y < -1000.0f) {
+			auto* so = (ServerGameObject*)obj;
+			so->updatePosition(Vector3(so->position.x, terrain->getHeight(so->position.x, so->position.z), so->position.z));
+		}
+
 	// what can be built upon (tree stumps) goes from under every building, as WKB.exe does on
 	// loading: its Marjoria's Keep save loaded and saved again at once had lost the 5 stumps
 	// under three Barren Farms and a farm foundation, and nothing else had changed. Props only:
@@ -753,6 +761,8 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		blueprint = predec[goid];
 	else
 		blueprint = gameSet->findBlueprint(cls, bpname);
+	if (!blueprint)
+		printf("Save: object %d \"%s\" (%s): no such blueprint in the game set\n", goid, bpname.c_str(), clsname.c_str());
 
 	ServerGameObject *obj = createObject(blueprint, goid);
 	obj->sightFromSave = true;

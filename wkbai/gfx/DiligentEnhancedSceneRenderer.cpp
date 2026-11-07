@@ -1076,7 +1076,10 @@ void DiligentEnhancedSceneRenderer::render()
 		if (!srb) {
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
 			auto overrideMap = [&](const char* suffix) -> texture {
-				const std::string base = filename.substr(0, filename.find_last_of('.'));
+				std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
+					float tint[3];
+					TextureCache::splitTint(filename, untinted, tint);
+					const std::string base = untinted.substr(0, untinted.find_last_of('.'));
 				for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
 					const std::string name = base + suffix + ext;
 					if (FileExists((scene->texCache.directory + name).c_str()))

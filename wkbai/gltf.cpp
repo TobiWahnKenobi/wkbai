@@ -161,8 +161,19 @@ void Mesh::loadGltf(const char* filename)
 			buffers.push_back(glbBin);
 		else if (uri.rfind("data:", 0) == 0)
 			buffers.push_back(Base64Decode(uri.substr(uri.find(',') + 1)));
-		else
-			buffers.push_back(ReadFile(dir + uri));
+		else {
+			// a relative URI is percent-encoded (Blender writes "A%20B.bin" for "A B.bin")
+			std::string path;
+			for (size_t i = 0; i < uri.size(); i++) {
+				if (uri[i] == '%' && i + 2 < uri.size() && isxdigit((unsigned char)uri[i + 1]) && isxdigit((unsigned char)uri[i + 2])) {
+					path += (char)std::stoi(uri.substr(i + 1, 2), nullptr, 16);
+					i += 2;
+				}
+				else
+					path += uri[i];
+			}
+			buffers.push_back(ReadFile(dir + path));
+		}
 	}
 
 	// an accessor's elements as floats (count × components)

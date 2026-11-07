@@ -94,6 +94,19 @@ double g_gpuFrameMs = -1.0;
 bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 {
 	const auto* bm = BenchmarkSettings();
+	// "cameras": [[x, y, z, pitch, yaw], ...], each held for "cameraHold" frames after the
+	// warm-up (one screenshot each, name_0.bmp, name_1.bmp, ...: the HD model showcase)
+	if (bm && bm->contains("cameras") && bm->at("cameras").is_array() && !bm->at("cameras").empty()) {
+		const auto& list = bm->at("cameras");
+		const int hold = std::max(1, bm->value("cameraHold", 30));
+		const int k = std::clamp((s_benchmarkFrame - bm->value("warmupFrames", 120)) / hold, 0, (int)list.size() - 1);
+		const auto& c = list[k];
+		if (!c.is_array() || c.size() != 5)
+			return false;
+		position = Vector3(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+		orientation = Vector3(c[3].get<float>(), c[4].get<float>(), 0.0f);
+		return true;
+	}
 	if (!bm || !bm->contains("camera"))
 		return false;
 	const auto& c = bm->at("camera");
@@ -121,8 +134,12 @@ const char* BenchmarkScreenshotDue()
 	static int taken = 0;
 	static std::string path;
 	const auto* bm = BenchmarkSettings();
-	const int count = bm ? bm->value("screenshotCount", 1) : 1;
-	if (taken >= count || !bm || !bm->contains("screenshot") || s_benchmarkFrame < bm->value("warmupFrames", 120))
+	const bool list = bm && bm->contains("cameras") && bm->at("cameras").is_array();
+	const int count = list ? (int)bm->at("cameras").size() : bm ? bm->value("screenshotCount", 1) : 1;
+	// with a camera list: the last frame each camera is held
+	const int due = !bm ? 0 : list ? bm->value("warmupFrames", 120) + (taken + 1) * std::max(1, bm->value("cameraHold", 30)) - 1
+	                              : bm->value("warmupFrames", 120);
+	if (taken >= count || !bm || !bm->contains("screenshot") || s_benchmarkFrame < due)
 		return nullptr;
 	path = bm->value("screenshot", "");
 	if (count > 1) {
