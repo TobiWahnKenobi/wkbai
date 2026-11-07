@@ -467,5 +467,10 @@ private:
 	void sendToAll(const NetPacketWriter &packet);
 	void sendTo(ServerGameObject* player, const NetPacketWriter& packet);
 
+	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
+	// (recorded, so a replay applies the panel's changes too)
+public:
+	bool cheatMode = false;
+
 	friend struct ServerGameObject;
 };

@@ -2402,9 +2402,11 @@ void ClientInterface::iter()
 		timelineOpen = !timelineOpen;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
-	if (g_keyPressed[SDL_SCANCODE_F9] && withServer && singlePlayer && !replayMode && !ImGui::GetIO().WantTextInput)
+	// the environment's debug panel: in a skirmish with cheat mode on only (the game setting)
+	const bool cheats = withServer && Server::instance && (Server::instance->cheatMode || BenchmarkEnabled());
+	if (g_keyPressed[SDL_SCANCODE_F9] && withServer && singlePlayer && !replayMode && cheats && !ImGui::GetIO().WantTextInput)
 		environmentDebugOpen = !environmentDebugOpen;
-	if (replayMode || !singlePlayer)
+	if (replayMode || !singlePlayer || !cheats)
 		environmentDebugOpen = false;
 	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;

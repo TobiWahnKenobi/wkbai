@@ -68,6 +68,7 @@ private:
 	bool teamReconnaissance = false;
 	bool barbarianTribes = false;
 	bool aggressiveAI = true; // Server::aggressiveAI
+	bool cheatMode = false;   // Server::cheatMode (a skirmish against the AI only)
 	bool aiGoldExpansion = false; // Server::aiGoldExpansion
 	bool aiFocusAttacks = true; // Server::aiFocusAttacks
 	int aiEarlyFarms = 0; // Server::aiEarlyFarms

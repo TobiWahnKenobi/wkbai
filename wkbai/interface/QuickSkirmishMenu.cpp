@@ -147,6 +147,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "teamReconnaissance") teamReconnaissance = value != 0;
 	else if (name == "barbarianTribes") barbarianTribes = value != 0;
 	else if (name == "aggressiveAI") aggressiveAI = value != 0;
+	else if (name == "cheatMode") cheatMode = value != 0;
 	else if (name == "aiGoldExpansion") aiGoldExpansion = value != 0;
 	else if (name == "aiFocusAttacks") aiFocusAttacks = value != 0;
 	else if (name == "aiEarlyFarms") aiEarlyFarms = value;
@@ -435,6 +436,9 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	}
 
 	server.aggressiveAI = aggressiveAI;
+	// cheat mode (the F9 panel): a skirmish against the AI only, not with guests, not the campaign
+	server.cheatMode = cheatMode && !campaignProfile
+		&& std::none_of(slots.begin(), slots.end(), [](const Slot& s) { return s.type == Slot::GUEST; });
 	server.aiGoldExpansion = aiGoldExpansion;
 	server.aiFocusAttacks = aiFocusAttacks;
 	server.aiEarlyFarms = aiEarlyFarms;

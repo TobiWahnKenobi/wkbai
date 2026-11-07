@@ -21,6 +21,7 @@
 #include "StampdownPlan.h"
 #include <tracy/Tracy.hpp>
 #include "util/SimRandom.h"
+#include "util/FrameStats.h"
 #include <SDL3/SDL_timer.h>
 #include <optional>
 #include <functional>
@@ -423,6 +424,8 @@ std::string Server::aiSettingsText() const
 	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
 	text += "aiWar=" + std::to_string((int)aiWar) + "\n";
 	text += "aiHumanFocus=" + std::to_string(aiHumanFocus) + "\n";
+	if (cheatMode) // (only when on: the text of other games stays as it was)
+		text += "cheatMode=1\n";
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -457,6 +460,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 			continue;
 		if (environment.settings.apply(name, v)) continue;
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
+		else if (name == "cheatMode") cheatMode = v != 0;
 		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
@@ -3237,7 +3241,9 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				// the environment's debug panel (F9): the host's only
 				const float value = br.readFloat();
 				const std::string name = br.readStringZ();
-				if (clientIndex == 0 && getLevel())
+				// (with cheat mode only; test runs' benchmarks use the panel's messages too, and a
+				// replay plays the recorded ones, also those of a recording from before the setting)
+				if (clientIndex == 0 && getLevel() && (cheatMode || BenchmarkEnabled() || replay))
 					environment.debugSet(*this, name, value);
 				break;
 			}

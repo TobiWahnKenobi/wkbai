@@ -1088,6 +1088,7 @@ local SETTINGS = {
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 1, weatherSummer = 1, weatherAutumn = 1, weatherWinter = 1,
 	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
+	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
 for k, v in pairs(SETTINGS) do skirmish.settings[k] = v end
@@ -1329,6 +1330,13 @@ local function weatherTab()
 		"allies' villages and manors. Wet and snowy ground slows them down.",
 		"Lightning strikes units and sets buildings on fire. Floods damage",
 		"buildings and drown units in deep water." })
+	-- cheat mode: the F9 panel (a skirmish against the AI only, never in multiplayer)
+	if skirmish.multiplayer then
+		s.cheatMode = 0
+	else
+		switch("cheatMode", "Cheat mode", X(1000), Y(900))
+		note(X(1000), Y(962), { "F9 in the game: set the time of day, the season and the weather." })
+	end
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
@@ -1339,6 +1347,7 @@ end
 
 local function openLobby(multiplayer)
 	skirmish.multiplayer = multiplayer
+	if multiplayer then skirmish.settings.cheatMode = 0 end
 	local levels = levelList()
 	local level = levels[levelState.selected]
 	if level then request("select_level", level) end
