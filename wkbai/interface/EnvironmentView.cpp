@@ -310,7 +310,7 @@ namespace {
 	{
 		static texture tex = nullptr;
 		if (!tex) {
-			constexpr int N = 16;
+			constexpr int N = 8;
 			Bitmap bmp;
 			bmp.width = bmp.height = N;
 			bmp.format = BMFORMAT_R8G8B8A8;
@@ -324,16 +324,16 @@ namespace {
 			const float c = (N - 1) * 0.5f;
 			for (int y = 0; y < N; y++)
 				for (int x = 0; x < N; x++) {
-					float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c)) - 1.2f; // the middle
+					float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c)) - 0.6f; // the middle
 					for (int k = 0; k < 6; k++) {
 						const float a = k * 1.0471976f, ca = std::cos(a), sa = std::sin(a);
-						d = std::min(d, segment((float)x, (float)y, c, c, c + ca * 7.0f, c + sa * 7.0f));
+						d = std::min(d, segment((float)x, (float)y, c, c, c + ca * 3.5f, c + sa * 3.5f));
 						// a branch off each side, two thirds out
-						const float bx = c + ca * 4.5f, by = c + sa * 4.5f;
+						const float bx = c + ca * 2.3f, by = c + sa * 2.3f;
 						for (const float side : { -0.7f, 0.7f })
-							d = std::min(d, segment((float)x, (float)y, bx, by, bx + std::cos(a + side) * 2.2f, by + std::sin(a + side) * 2.2f));
+							d = std::min(d, segment((float)x, (float)y, bx, by, bx + std::cos(a + side) * 1.1f, by + std::sin(a + side) * 1.1f));
 					}
-					const float alpha = std::clamp(1.3f - d / 0.75f, 0.0f, 1.0f);
+					const float alpha = std::clamp(1.2f - d / 0.6f, 0.0f, 1.0f);
 					uint8_t* p = &bmp.pixels[(y * N + x) * 4];
 					p[0] = p[1] = p[2] = 255;
 					p[3] = (uint8_t)std::lround(alpha * 255.0f);
@@ -363,7 +363,9 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	const float time = SDL_GetTicks() / 1000.0f;
 	// the box of falling drops: around the point the camera looks at, its grid fixed in the world
 	const Vector3 dir = camera.direction.normal();
-	const float reach = std::clamp(dir.y < -0.05f ? (camera.position.y - client->terrain->getHeight(camera.position.x, camera.position.z)) / -dir.y : 60.0f, 20.0f, 90.0f);
+	// (continuous in the pitch: with a step at a level view, a degree's turn moved the boxes)
+	const float aboveGround = std::max(camera.position.y - client->terrain->getHeight(camera.position.x, camera.position.z), 1.0f);
+	const float reach = std::clamp(aboveGround / std::max(-dir.y, 0.05f), 20.0f, 90.0f);
 	const Vector3 centre = camera.position + dir * (reach * 0.6f);
 	const float box = 70.0f, height = 40.0f;
 	const Vector3 camside = camera.direction.cross(Vector3(0, 1, 0)).normal();
@@ -395,9 +397,11 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	// The far layer: over the ground the camera sees beyond the near box (from the RTS camera's
 	// height the near box is a small patch in the middle of the screen), sparser and larger so
 	// that it reads at that distance: about as many again for the whole view
-	const float farReach = std::clamp(dir.y < -0.05f ? (camera.position.y - client->terrain->getHeight(camera.position.x, camera.position.z)) / -dir.y : 150.0f, 30.0f, 400.0f);
-	const Vector3 farCentre = camera.position + dir * farReach;
-	const float farBox = std::clamp(farReach * 2.4f, 160.0f, 520.0f), farHeight = std::clamp(farReach * 0.5f, 40.0f, 120.0f);
+	// around the camera itself, 900 units across, from the ground to well above the camera: a box
+	// around the point looked at ended in a line across the view, with no snow above it
+	const float farReach = std::clamp(aboveGround / std::max(-dir.y, 0.05f), 30.0f, 400.0f);
+	const Vector3 farCentre = camera.position;
+	const float farBox = 900.0f, farHeight = std::max(aboveGround + 80.0f, 120.0f);
 	auto inNear = [&](const Vector3& p) { return std::abs(p.x - centre.x) < box * 0.5f && std::abs(p.z - centre.z) < box * 0.5f; };
 	auto inFront = [&](const Vector3& p) { return (p - camera.position).dot(dir) > 0.0f; };
 	// how much of it, by the graphics setting (RenderSettings::weatherEffects)
@@ -405,7 +409,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	const float share = amount[std::clamp(g_renderSettings.weatherEffects, 0, 3)];
 	// from high up the far layer covers more ground: more of it (the play test: from higher up
 	// it did not seem to rain at all), and each drop and flake at least about 1.5 pixels across
-	const float farMore = std::clamp(farReach / 100.0f, 1.0f, 3.0f);
+	const float farMore = std::clamp(farHeight / 60.0f, 2.0f, 3.5f);
 	const float pixel = 2.0f * std::tan(std::max(camera.fovY, 0.2f) * 0.5f) / std::max(768.0f, 1.0f); // a pixel's size a unit away (at 768 lines)
 	if (raining) {
 		const int drops = (int)(2600 * share * std::min(1.0f, v.rainShown));
@@ -447,7 +451,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			Vector3 p;
 			if (!place(i + 50000, 1.4f, 0.6f, p) || (p - camera.position).sqlen3() < 15.0f * 15.0f)
 				continue;
-			const float s = (0.06f + 0.05f * Hash(i + 777)) * 1.8f; // (the sprite's arms fill about half of it)
+			const float s = (0.06f + 0.05f * Hash(i + 777)) * 0.9f;
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
 		// far: larger flakes (a pixel or two at that distance), as many again over the whole view
@@ -457,7 +461,7 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			if (!placeIn(i + 300000, 1.4f, 1.2f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
 				continue;
 			const float dist = std::sqrt((p - camera.position).sqlen3());
-			const float s = std::max((0.2f + 0.15f * Hash(i + 4321)) * std::clamp(dist / 120.0f, 0.6f, 2.0f) * 1.5f, dist * pixel * 1.6f);
+			const float s = std::max((0.2f + 0.15f * Hash(i + 4321)) * std::clamp(dist / 120.0f, 0.6f, 2.0f) * 0.75f, dist * pixel * 0.8f);
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
 		batch->flush();
