@@ -66,7 +66,7 @@ cbuffer PostBuffer
 	matrix TaaInverseView;  // view space -> world (row vectors)
 	matrix TaaPrevViewProj; // world -> the previous frame's clip space, unjittered
 	float4 Motion; // FSR 3: the jitter in UV, the object motion's "none" (NO_OBJECT_MOTION)
-	float4 Blur;   // camera motion blur: the shutter (0 off), the longest smear and a cut (pixels)
+	float4 Blur;   // camera motion blur: the shutter (0 off), the longest smear and a cut (pixels); tilt-shift radius
 };
 Texture2D tColor;
 Texture2D tDepth;
@@ -444,6 +444,23 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 					sum += SceneLit(input.Uv + v * ((i + jitter) / 8 - 0.5));
 				c = sum / 8;
 			}
+		}
+	}
+	// tilt-shift (RenderSettings::tiltShift): a sharp band across the screen a little below its
+	// middle, the scene ever more blurred above and below it (a disc, 16 taps in a spiral),
+	// so the map looks like a model; Blur.w is the largest radius in pixels
+	if (Blur.w > 0) {
+		float off = abs(input.Uv.y - 0.55) * 2;
+		float r = Blur.w * smoothstep(0.12, 0.95, off);
+		if (r > 0.5) {
+			float turn = 6.2831853 * frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
+			float3 sum = 0;
+			[unroll] for (int i = 0; i < 16; i++) {
+				float a = i * 2.3999632 + turn;
+				float2 o = float2(cos(a), sin(a)) * sqrt((i + 0.5) / 16) * r;
+				sum += SceneLit(input.Uv + o * Texel.xy);
+			}
+			c = sum / 16;
 		}
 	}
 	float2 h = Texel.zw;
@@ -946,7 +963,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		memcpy((float*)mapped + 76, motion, sizeof(motion));
 		// (the last frame's camera only when there was one at this size, not orthographic)
 		const bool blurOn = settings.motionBlur > 0.0f && _impl->prevValid && !settings.ortho;
-		const float blur[4] = { blurOn ? std::clamp(settings.motionBlur, 0.0f, 1.0f) : 0.0f, 48.0f * w / 1920.0f + 8.0f, 0.25f * w, 0 };
+		const float blur[4] = { blurOn ? std::clamp(settings.motionBlur, 0.0f, 1.0f) : 0.0f, 48.0f * w / 1920.0f + 8.0f, 0.25f * w, std::clamp(settings.tiltShift, 0.0f, 1.0f) * 14.0f * w / 1920.0f };
 		memcpy((float*)mapped + 80, blur, sizeof(blur));
 		ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
 	};

@@ -531,6 +531,7 @@ struct DiligentRenderer : DiligentGfx
 		s.antiAliasing = g_renderSettings.antiAliasing;
 		s.sharpness = g_renderSettings.sharpness;
 		s.motionBlur = g_renderSettings.motionBlur;
+		s.tiltShift = g_renderSettings.tiltShift;
 		s.view = camera.viewMatrix;
 		s.projection = camera.projMatrix;
 		s.jitter[0] = camera.orthoMode ? 0.0f : g_projectionJitter[0];
@@ -548,6 +549,7 @@ struct DiligentRenderer : DiligentGfx
 		if (!postEffects) {
 			s.ssao = s.bloom = false;
 			s.motionBlur = 0.0f;
+			s.tiltShift = 0.0f;
 			s.antiAliasing = 0;
 			s.fsr3 = false;
 		}

@@ -251,6 +251,8 @@ namespace {
 			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing >= 2; }));
 		// camera motion blur: 0 off, up to the whole frame's motion
 		list.push_back(slider("motionBlur", "lighting", "Camera motion blur", rs.motionBlur, 0.0f, 1.0f, "%.2f"));
+		// tilt-shift: 0 off, up to the strongest blur outside the sharp band
+		list.push_back(slider("tiltShift", "lighting", "Tilt-shift", rs.tiltShift, 0.0f, 1.0f, "%.2f"));
 		{
 			MenuOption o;
 			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";

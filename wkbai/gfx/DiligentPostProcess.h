@@ -53,6 +53,8 @@ struct DiligentPostProcess {
 		float rtShadowLight = 0.5f;
 		// camera motion blur: the shutter, 0 (off) to 1 (the whole frame's motion)
 		float motionBlur = 0.0f;
+		// tilt-shift: 0 (off) to 1 (the strongest blur above and below the sharp band)
+		float tiltShift = 0.0f;
 	};
 	// The object motion vectors' clear value: no moving object drawn there (the camera's
 	// motion is computed from the depth instead)

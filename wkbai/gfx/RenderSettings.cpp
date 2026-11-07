@@ -76,6 +76,7 @@ void RenderSettings::load()
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
 	motionBlur = std::clamp(g_settings.value<float>("motionBlur", def.motionBlur), 0.0f, 1.0f);
+	tiltShift = std::clamp(g_settings.value<float>("tiltShift", def.tiltShift), 0.0f, 1.0f);
 	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
@@ -169,6 +170,7 @@ void RenderSettings::save()
 	g_settings["grassDensity"] = grassDensity;
 	g_settings["grassHeight"] = grassHeight;
 	g_settings["motionBlur"] = motionBlur;
+	g_settings["tiltShift"] = tiltShift;
 	g_settings["grassDistance"] = grassDistance;
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["modelLighting"] = modelLighting;

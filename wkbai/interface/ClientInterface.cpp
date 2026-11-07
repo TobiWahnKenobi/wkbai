@@ -858,6 +858,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
 		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
 		ImGui::SliderFloat("Camera motion blur", &s.motionBlur, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Tilt-shift", &s.tiltShift, 0.0f, 1.0f, "%.2f");
 		{
 			static const char* const aaLevels[] = { "Off", "FXAA", "TAA", "FSR 3.1" };
 			ImGui::Combo("Anti-aliasing", &s.antiAliasing, aaLevels, 4);

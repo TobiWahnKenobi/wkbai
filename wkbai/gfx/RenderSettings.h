@@ -67,6 +67,8 @@ struct RenderSettings {
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)
 	float motionBlur = 0.0f;
+	// tilt-shift (post-processing): the map as a model, sharp across the middle, 0 off to 1
+	float tiltShift = 0.0f;
 	bool bumpMapping = true;         // the terrain's Dot3 bump mapping
 	// the terrain's light vector as the original's: in the slope's tangent frame, but at least
 	// 1/3 up, so slopes facing away from the sun stay lit
