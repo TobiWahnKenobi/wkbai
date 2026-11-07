@@ -52,6 +52,9 @@ Texture2D ormMap;    // override packs: <texture>_orm (occlusion, roughness, met
 // units, trees, props): rgb its colour and strength, alpha when: 0 always (embers, runes),
 // 1 only at night (windows, lanterns), between them both; else black
 Texture2D emissiveMap;
+// override packs: <texture>_height, the relief for parallax occlusion mapping: 1 is the surface,
+// 0 lies POM_RANGE (metres) below it; else a 1x1 default, which turns it off
+Texture2D heightMap;
 SamplerState inpSampler;
 Texture2D cloudTexture;
 SamplerState cloudSampler;
@@ -238,6 +241,88 @@ float3 SkyColour(float3 d)
 	return d.y >= 0 ? lerp(SkyHorizon.rgb, SkyUp.rgb, saturate(d.y)) : lerp(SkyHorizon.rgb, SkyDown.rgb, saturate(-d.y));
 }
 
+// The surface a pixel shows: its UV (moved by the parallax), the UV derivatives of the triangle
+// itself (for mip selection and the tangent frame, so the relief's steps make no seams), and
+// the relief's own shadow on the sun's light
+static float2 SurfUV;
+static float2 SurfDx;
+static float2 SurfDy;
+static float PomShadow;
+static const float POM_RANGE = 0.06;
+
+float PomDepth(float2 uv)
+{
+	return (1 - heightMap.SampleGrad(inpSampler, uv, SurfDx, SurfDy).r) * POM_RANGE;
+}
+
+// Parallax occlusion mapping with self-shadowing (with per-pixel lighting, for materials with a
+// height map). The relief is metric: the UV's world gradients come from the screen-space
+// derivatives, so a ray through the relief moves the UV by the material's own scale. The view
+// ray steps down until it meets the relief (8-24 steps, more at grazing angles), refined between
+// the last two; from there a ray towards the sun finds whether relief above it shades the point.
+// Skipped where the relief is under a third of a pixel deep, where the mips average it out.
+void PrepareSurface(VS_OUTPUT input)
+{
+	SurfUV = input.Texcoord;
+	SurfDx = ddx(input.Texcoord);
+	SurfDy = ddy(input.Texcoord);
+	PomShadow = 1;
+	if (MeshLighting.z == 0 || dot(input.Norm, input.Norm) == 0)
+		return;
+	float2 hsize;
+	heightMap.GetDimensions(hsize.x, hsize.y);
+	if (hsize.x < 2)
+		return;
+	float3 n = normalize(input.Norm);
+	float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
+	float footprint = max(length(dp1), length(dp2));
+	if (POM_RANGE < footprint * 0.33)
+		return;
+	float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
+	float det = dot(dp1, dp2perp);
+	if (abs(det) < 1e-14)
+		return;
+	float3 gu = (dp2perp * SurfDx.x + dp1perp * SurfDy.x) / det;   // du per metre, in world space
+	float3 gv = (dp2perp * SurfDx.y + dp1perp * SurfDy.y) / det;
+	float3 e = normalize(input.WorldPos - FogCamera.xyz);          // from the eye
+	float en = max(-dot(e, n), 0.15);
+	float3 lat = (e + n * en) / en;                                // sideways per metre of depth
+	float2 uvPerDepth = float2(dot(gu, lat), dot(gv, lat));
+	int steps = (int)lerp(24.0, 8.0, en);
+	float stepDepth = POM_RANGE / steps;
+	float2 uv = SurfUV;
+	float d = 0;
+	float gap = PomDepth(uv);                                      // > 0: the ray is above the relief
+	[loop] for (int i = 1; i <= steps && gap > 0; i++) {
+		float nd = stepDepth * i;
+		float2 nuv = SurfUV + uvPerDepth * nd;
+		float ngap = PomDepth(nuv) - nd;
+		if (ngap <= 0) {
+			float t = gap / (gap - ngap);
+			uv = lerp(uv, nuv, t);
+			d = lerp(d, nd, t);
+			gap = 0;
+			break;
+		}
+		uv = nuv; d = nd; gap = ngap;
+	}
+	SurfUV = uv;
+	float3 l = normalize(SunDirection);
+	float ln = dot(l, n);
+	if (ln > 0.02 && d > 1e-4) {
+		float3 latl = (l - n * ln) / ln;                           // sideways per metre of rise
+		float2 uvPerRise = float2(dot(gu, latl), dot(gv, latl));
+		const int sh = 10;
+		float occl = 0;
+		[loop] for (int j = 1; j <= sh; j++) {
+			float rise = d * j / sh;
+			float above = (d - rise) - PomDepth(uv + uvPerRise * rise);  // > 0: relief above the ray
+			occl = max(occl, saturate(above / POM_RANGE * 6 * (1 - (float)j / (sh + 1))));
+		}
+		PomShadow = 1 - occl;
+	}
+}
+
 float3 ModelLight(VS_OUTPUT input, float3 albedo)
 {
 	if (dot(input.Norm, input.Norm) == 0)
@@ -247,7 +332,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 n = normalize(input.Norm);
 	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
 	// no tangents)
-	float4 ns = normalMap.Sample(inpSampler, input.Texcoord);
+	float4 ns = normalMap.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	float3 tn = ns.xyz * 2 - 1;
 	// the legacy adapter's normals: without a normal map, the albedo's brightness as a height
 	// (bright = raised), its slope over one texel of the current mip level
@@ -264,14 +349,14 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	}
 	if (abs(tn.z - 1) > 1e-3) {
 		float3 dp1 = ddx(input.WorldPos), dp2 = ddy(input.WorldPos);
-		float2 duv1 = ddx(input.Texcoord), duv2 = ddy(input.Texcoord);
+		float2 duv1 = SurfDx, duv2 = SurfDy;
 		float3 dp2perp = cross(dp2, n), dp1perp = cross(n, dp1);
 		float3 t = dp2perp * duv1.x + dp1perp * duv2.x;
 		float3 b = dp2perp * duv1.y + dp1perp * duv2.y;
 		float invmax = rsqrt(max(max(dot(t, t), dot(b, b)), 1e-12));
 		n = normalize(t * invmax * tn.x + b * invmax * tn.y + n * tn.z);
 	}
-	float3 orm = ormMap.Sample(inpSampler, input.Texcoord).rgb;
+	float3 orm = ormMap.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy).rgb;
 	float3 l = normalize(SunDirection);
 	float3 v = normalize(FogCamera.xyz - input.WorldPos);
 	float3 h = normalize(l + v);
@@ -297,6 +382,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		bounce = SunColour.rgb * (saturate(l.y) * SkyOccLight.y * 0.35 * saturate(0.5 - 0.5 * n.y)) * float3(0.9, 0.85, 0.7);
 		ambientTint *= 1.15 * vis;
 	}
+	sunShade *= PomShadow;
 	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl * sunShade + bounce * orm.r, 1);
 	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
 	float a = roughness * roughness, a2 = a * a;
@@ -354,13 +440,14 @@ float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 // bright under the night's darker grade (divided by its exposure), so it blooms
 float3 Emission(VS_OUTPUT input)
 {
-	float4 e = emissiveMap.Sample(inpSampler, input.Texcoord);
+	float4 e = emissiveMap.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	return e.rgb * lerp(1, Material.w, e.a) / max(Grade.x, 0.35);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
 {
-	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
+	PrepareSurface(input);
+	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
 	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
@@ -369,7 +456,8 @@ float4 PS(VS_OUTPUT input) : SV_Target
 static const float ALPHA_REF = 0.94;
 float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 {
-	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
+	PrepareSurface(input);
+	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	if(tex.a < ALPHA_REF) discard;
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
 	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
@@ -624,7 +712,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
 	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
-	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr; // the override maps' defaults
+	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	ITextureView* occHeights = nullptr; // the terrain heights bound to the sky light's pass
@@ -673,6 +761,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "normalMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "emissiveMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "heightMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -980,6 +1069,7 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->deriveNormal = pixel(128, 128, 255, 0);
 		_impl->defaultOrm = pixel(255, 166, 0);
 		_impl->noEmission = pixel(0, 0, 0, 0);
+		_impl->noHeight = pixel(255, 255, 255);   // 1x1: no relief, the shader skips the parallax
 	}
 	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
 		auto& srb = _impl->textureBindings[tex];
@@ -995,6 +1085,8 @@ void DiligentEnhancedSceneRenderer::render()
 				return nullptr;
 			};
 			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm"), emissive = overrideMap("_emissive");
+			texture height = overrideMap("_height");
+			srb->GetVariableByName(SHADER_TYPE_PIXEL, "heightMap")->Set(dgfx->GetTextureView(height ? height : _impl->noHeight));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(emissive ? emissive : _impl->noEmission));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
 			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
