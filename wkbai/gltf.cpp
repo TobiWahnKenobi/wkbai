@@ -128,7 +128,7 @@ uint8_t Mesh::nearestNormal(const Vector3& n)
 	return (uint8_t)best;
 }
 
-static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<float>& uvs, const std::vector<Mesh::BuildGroup>& groups);
+static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<std::vector<float>>& uvSets, const std::vector<Mesh::BuildGroup>& groups);
 
 void Mesh::loadGltf(const char* filename)
 {
@@ -196,7 +196,16 @@ void Mesh::loadGltf(const char* filename)
 		return out;
 	};
 
-	std::vector<float> positions, uvs;
+	std::vector<float> positions;
+	// the UV sets: TEXCOORD_n is the game's UV list n, the team colour n (the original's meshes
+	// pick a strip of their atlas per player colour); a primitive without set n uses its set 0
+	int numSets = 1;
+	for (const auto& mesh : doc.value("meshes", nlohmann::json::array()))
+		for (const auto& prim : mesh.value("primitives", nlohmann::json::array()))
+			for (int k = 1; k < 16; k++)
+				if (prim.contains("attributes") && prim["attributes"].contains("TEXCOORD_" + std::to_string(k)))
+					numSets = std::max(numSets, k + 1);
+	std::vector<std::vector<float>> uvSets(numSets);
 	std::vector<uint8_t> normalIds;
 	std::vector<Vector3> exact;
 	using Group = BuildGroup;
@@ -208,9 +217,14 @@ void Mesh::loadGltf(const char* filename)
 		int comps;
 		const std::vector<float> pos = accessorFloats(prim["attributes"]["POSITION"], comps);
 		const size_t count = pos.size() / 3;
-		std::vector<float> nrm, uv;
+		std::vector<float> nrm;
+		std::vector<std::vector<float>> uv(numSets);
 		if (prim["attributes"].contains("NORMAL")) nrm = accessorFloats(prim["attributes"]["NORMAL"], comps);
-		if (prim["attributes"].contains("TEXCOORD_0")) uv = accessorFloats(prim["attributes"]["TEXCOORD_0"], comps);
+		for (int k = 0; k < numSets; k++) {
+			const std::string key = "TEXCOORD_" + std::to_string(k);
+			if (prim["attributes"].contains(key)) uv[k] = accessorFloats(prim["attributes"][key], comps);
+			else if (k > 0) uv[k] = uv[0];
+		}
 		const uint32_t first = (uint32_t)(positions.size() / 3);
 		for (size_t i = 0; i < count; i++) {
 			const Vector3 p = world.point(Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]));
@@ -221,8 +235,10 @@ void Mesh::loadGltf(const char* filename)
 			const Vector3 unit = len > 0 ? n * (1.0f / len) : Vector3(0, 1, 0);
 			normalIds.push_back(NearestNormal(unit));
 			exact.push_back(unit);
-			uvs.push_back(uv.empty() ? 0.0f : uv[i * 2]);
-			uvs.push_back(uv.empty() ? 0.0f : uv[i * 2 + 1]);
+			for (int k = 0; k < numSets; k++) {
+				uvSets[k].push_back(uv[k].size() > i * 2 + 1 ? uv[k][i * 2] : 0.0f);
+				uvSets[k].push_back(uv[k].size() > i * 2 + 1 ? uv[k][i * 2 + 1] : 0.0f);
+			}
 		}
 		Group g;
 		g.mat.alphaTest = false;
@@ -270,7 +286,7 @@ void Mesh::loadGltf(const char* filename)
 
 	if (positions.size() / 3 > 65535)
 		ferr("glTF model %s has %zu vertices; at most 65535 are supported.", filename, positions.size() / 3);
-	buildIds(*this, positions, normalIds, uvs, groups);
+	buildIds(*this, positions, normalIds, uvSets, groups);
 	exact.resize(numNormals);
 	exactNormals = std::move(exact);
 }
@@ -280,11 +296,11 @@ void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>
 	std::vector<uint8_t> ids(normals.size());
 	for (size_t i = 0; i < normals.size(); i++)
 		ids[i] = nearestNormal(normals[i]);
-	buildIds(*this, positions, ids, uvs, groups);
+	buildIds(*this, positions, ids, { uvs }, groups);
 	exactNormals.assign(normals.begin(), normals.begin() + std::min(normals.size(), (size_t)numNormals));
 }
 
-static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<float>& uvs, const std::vector<Mesh::BuildGroup>& groups)
+static void buildIds(Mesh& m, const std::vector<float>& positions, const std::vector<uint8_t>& normalIds, const std::vector<std::vector<float>>& uvSets, const std::vector<Mesh::BuildGroup>& groups)
 {
 	auto& numVertices = m.numVertices; auto& numNormals = m.numNormals; auto& numUvs = m.numUvs; auto& numAttachPoints = m.numAttachPoints;
 	auto& attachPoints = m.attachPoints; auto& vertices = m.vertices; auto& vertexRemapper = m.vertexRemapper; auto& normalRemapper = m.normalRemapper;
@@ -304,9 +320,11 @@ static void buildIds(Mesh& m, const std::vector<float>& positions, const std::ve
 		vertexRemapper[i] = normalRemapper[i] = (uint16_t)i;
 		normals[i] = normalIds[i];
 	}
-	uvLists.resize(1);
-	uvLists[0].resize(uvs.size());
-	std::copy(uvs.begin(), uvs.end(), uvLists[0].begin());
+	uvLists.resize(uvSets.size());
+	for (size_t k = 0; k < uvSets.size(); k++) {
+		uvLists[k].resize(uvSets[k].size());
+		std::copy(uvSets[k].begin(), uvSets[k].end(), uvLists[k].begin());
+	}
 	materials.resize(groups.size());
 	groupIndices.resize(groups.size());
 	polyLists.resize(1);
@@ -377,7 +395,8 @@ bool Mesh::saveGltf(const char* path) const
 	const PolygonList& pl = polyLists[0];
 	for (size_t g = 0; g < groupIndices.size() && g < pl.groups.size(); g++) {
 		const DynArray<IndexTuple>& tuples = groupIndices[g];
-		std::vector<float> pos, nrm, uv;
+		std::vector<float> pos, nrm;
+		std::vector<std::vector<float>> uv(uvLists.size());
 		Vector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
 		for (const IndexTuple& t : tuples) {
 			const Vector3 p(vertices[t.vertex * 3], vertices[t.vertex * 3 + 1], -vertices[t.vertex * 3 + 2]);
@@ -386,7 +405,8 @@ bool Mesh::saveGltf(const char* path) const
 			hi = Vector3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
 			const Vector3 n = t.normal < exactNormals.size() ? exactNormals[t.normal] : s_normalTable[t.normal < normals.size() ? normals[t.normal] : 0];
 			nrm.insert(nrm.end(), { n.x, n.y, -n.z });
-			uv.insert(uv.end(), { uvLists[0][t.uv * 2], uvLists[0][t.uv * 2 + 1] });
+			for (size_t k = 0; k < uvLists.size(); k++)
+				uv[k].insert(uv[k].end(), { uvLists[k][t.uv * 2], uvLists[k][t.uv * 2 + 1] });
 		}
 		std::vector<uint16_t> idx;
 		for (const auto& tri : pl.groups[g].tupleIndex)
@@ -395,23 +415,29 @@ bool Mesh::saveGltf(const char* path) const
 			continue;
 		const int pv = addView(append(pos.data(), pos.size() * 4), pos.size() * 4, 34962);
 		const int nv = addView(append(nrm.data(), nrm.size() * 4), nrm.size() * 4, 34962);
-		const int uvv = addView(append(uv.data(), uv.size() * 4), uv.size() * 4, 34962);
+		std::vector<int> uvv;
+		for (size_t k = 0; k < uv.size(); k++)
+			uvv.push_back(addView(append(uv[k].data(), uv[k].size() * 4), uv[k].size() * 4, 34962));
 		const int iv = addView(append(idx.data(), idx.size() * 2), idx.size() * 2, 34963);
 		const size_t n = tuples.size();
 		accessors.push_back({ { "bufferView", pv }, { "componentType", 5126 }, { "count", n }, { "type", "VEC3" },
 			{ "min", { lo.x, lo.y, lo.z } }, { "max", { hi.x, hi.y, hi.z } } });
 		accessors.push_back({ { "bufferView", nv }, { "componentType", 5126 }, { "count", n }, { "type", "VEC3" } });
-		accessors.push_back({ { "bufferView", uvv }, { "componentType", 5126 }, { "count", n }, { "type", "VEC2" } });
+		const int a = (int)accessors.size() - 2;
+		for (int view : uvv)
+			accessors.push_back({ { "bufferView", view }, { "componentType", 5126 }, { "count", n }, { "type", "VEC2" } });
 		accessors.push_back({ { "bufferView", iv }, { "componentType", 5123 }, { "count", idx.size() }, { "type", "SCALAR" } });
-		const int a = (int)accessors.size() - 4;
+		const int ia = (int)accessors.size() - 1;
 		const Material& m = materials[g];
 		nlohmann::json mat = { { "name", m.textureFilename }, { "extras", { { "wkTexture", m.textureFilename } } },
 			{ "pbrMetallicRoughness", { { "metallicFactor", 0.0 }, { "roughnessFactor", 1.0 } } } };
 		if (m.alphaTest)
 			mat["alphaMode"] = "MASK";
 		mats.push_back(mat);
-		primitives.push_back({ { "attributes", { { "POSITION", a }, { "NORMAL", a + 1 }, { "TEXCOORD_0", a + 2 } } }, { "indices", a + 3 },
-			{ "material", (int)mats.size() - 1 } });
+		nlohmann::json attrs = { { "POSITION", a }, { "NORMAL", a + 1 } };
+		for (size_t k = 0; k < uvv.size(); k++)
+			attrs["TEXCOORD_" + std::to_string(k)] = a + 2 + (int)k;
+		primitives.push_back({ { "attributes", attrs }, { "indices", ia }, { "material", (int)mats.size() - 1 } });
 	}
 	while (bin.size() % 4) bin.push_back(0);
 	doc["buffers"] = { { { "byteLength", bin.size() } } };
