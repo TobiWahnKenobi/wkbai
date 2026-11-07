@@ -804,6 +804,13 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::EndDisabled();
 		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
 		ImGui::Checkbox("Light from the sky (sky occlusion, bounce)", &s.skyGI);
+		{
+			static const char* const giLevels[] = { "Off", "Low (buildings, one bounce)", "High (units too, two bounces)" };
+			ImGui::BeginDisabled(!s.skyGI);
+			ImGui::Combo("Bounced light (dynamic GI)", &s.dynamicGI, giLevels, 3);
+			ImGui::SliderFloat("Bounced light strength", &s.dynamicGIStrength, 0.0f, 3.0f, "%.2f");
+			ImGui::EndDisabled();
+		}
 		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);

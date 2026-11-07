@@ -133,6 +133,35 @@ struct DiligentGfx : IRenderer
 		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> skyOccBinding;
 		float skyOccOrigin[2] = {};
 		bool skyOccOn = false; // this frame
+		// Dynamic global illumination (DiligentGI; RenderSettings::dynamicGI): the bounce map
+		// (RGBA16F with mips: the light leaving the ground, roofs and units, and its height) over
+		// a square of GI_EXTENT around the camera's target, snapped to GI_SNAP; the models seen
+		// from above for it (albedo, the sun's n.l; the light they give off, their emissive maps',
+		// and its copy with mips, giEmission, for the shaders: the capture is drawn with them bound;
+		// and their depth); the last frame's map at
+		// mip 2 for the second bounce (High); the terrain's albedo over the whole map (baked by
+		// the terrain renderer; giAlbedoRegion: its corner x, z and 1 / width, 1 / depth in world
+		// units)
+		static constexpr int GI_SIZE = 256, GI_PREV_SIZE = 64;
+		static constexpr float GI_EXTENT = 512.0f, GI_SNAP = 64.0f;
+		Diligent::RefCntAutoPtr<Diligent::ITexture> giRadiance, giPrev, giCapture, giCaptureEmission, giEmission, giCaptureDepth, giAlbedo;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> giSignature;
+		Diligent::RefCntAutoPtr<Diligent::IPipelineState> giPipeline;
+		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> giBinding;
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> giBuffer;
+		Diligent::ITextureView* giBoundHeights = nullptr;
+		Diligent::ITexture* giBoundAlbedo = nullptr;
+		float giAlbedoRegion[4] = {};
+		float giOrigin[2] = {}, giPrevOrigin[2] = {};
+		bool giPrevValid = false;
+		int giMode = 0; // this frame: 0 off, 1 Low, 2 High
+		// the map is drawn again every GI_REFRESH_LOW / _HIGH frames (the light changes slowly),
+		// and at once when its square moves or the mode changes (giRefresh: this frame);
+		// giMapOrigin: where the map in giRadiance lies (the shaders' GIRegion)
+		static constexpr int GI_REFRESH_LOW = 4, GI_REFRESH_HIGH = 2;
+		float giMapOrigin[2] = { 1e30f, 1e30f };
+		int giMapMode = 0, giFrames = 0;
+		bool giRefresh = false;
 		// the clouds' weather (DiligentClouds UpdateCloudBuffer): the preset now, blending towards
 		// the weather's; cloudWeatherKind: the seasons' weather kind when it drives the clouds (else
 		// -1: RenderSettings::cloudWeather); its lightning (cloudFlashOverride >= 0: the weather's

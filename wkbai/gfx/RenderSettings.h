@@ -130,6 +130,14 @@ struct RenderSettings {
 	// buildings' horizon around the camera), plus the sun's light bounced off the ground where
 	// the sky is hidden; instead of the original's minimum light on slopes away from the sun
 	bool skyGI = true;
+	// dynamic global illumination (enhanced renderers on Diligent, with skyGI; DiligentGI): the
+	// sun's, the moon's, the sky's and the fires' light bounced off the ground, the buildings
+	// and (High) the units onto what is around them, in the colour of what it bounced off: a
+	// radiosity map of the ground and the roofs seen from above, around the camera. 0 Off (the
+	// sky light's plain bounce), 1 Low (the buildings, one bounce), 2 High (the units too, a
+	// second bounce, a wider gather)
+	int dynamicGI = 0;
+	float dynamicGIStrength = 1.0f; // the bounce's strength (0-3)
 	// dynamic clouds (enhanced renderers on Diligent): 0 the original's (sky_shadow_map.pcx
 	// scrolling over the ground), 1 a cloud field drifting with the wind whose shadows follow the
 	// sun, 2 with light shafts through the air between the shadows, 3 with the clouds themselves
