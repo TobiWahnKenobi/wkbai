@@ -214,6 +214,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	bool userProfileUpdated = false;
 	// the aggressive AI (InstallAIAggressionOverrides): the skirmish setting "aggressiveAI"
 	bool aggressiveAI = true;
+	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
+	// (recorded, so a replay applies the panel's changes too)
+	bool cheatMode = false;
 	// with it, AIs found villages at gold (ValueGoldExpansion): the setting "aiGoldExpansion", off
 	// (25-minute tournament: 341 soldiers raised with it, 358 without; more gold, much less wood)
 	bool aiGoldExpansion = false;
@@ -466,11 +469,6 @@ private:
 	void sendToAll(const NetPacket &packet);
 	void sendToAll(const NetPacketWriter &packet);
 	void sendTo(ServerGameObject* player, const NetPacketWriter& packet);
-
-	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
-	// (recorded, so a replay applies the panel's changes too)
-public:
-	bool cheatMode = false;
 
 	friend struct ServerGameObject;
 };
