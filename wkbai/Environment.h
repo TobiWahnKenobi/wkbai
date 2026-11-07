@@ -98,6 +98,7 @@ struct SunState {
 	float daylight = 1.0f;    // 0 night .. 1 full day
 	float colour[3] = { 1, 1, 1 }, ambient[3] = { 1, 1, 1 }; // multipliers of the map's own
 	float moon = 0.0f;
+	float shadowFade = 1.0f; // 0 where the light jumps between the sun and the moon (dusk, dawn)
 	// the sun's and the moon's own directions (east, up, south; unit), even below the horizon:
 	// the night sky's (direction is the light's, the moon's at night, kept a little up)
 	Vector3 sunTrue{ 0.5f, 1.0f, 0.3f }, moonTrue{ -0.5f, -1.0f, -0.3f };

@@ -241,8 +241,12 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	const float ambNight[3] = { 0.30f, 0.35f, 0.50f };
 	sun.moon = 1.0f - sun.daylight;
 	const float sunDim = 1.0f - 0.6f * cloudCover, ambDim = 1.0f - 0.2f * cloudCover;
+	// the light's direction jumps from the sun to the moon at daylight 0.5 (and back at dawn):
+	// the direct light, and with it every shadow (ray-traced, the shadow maps', the clouds'),
+	// fades out before the jump and in after it, the sky's light alone in between
+	sun.shadowFade = Smoothstep(0.0f, 0.2f, std::abs(sun.daylight - 0.5f));
 	for (int c = 0; c < 3; c++) {
-		sun.colour[c] = (moonCol[c] + (dayCol[c] - moonCol[c]) * sun.daylight) * sunDim;
+		sun.colour[c] = (moonCol[c] + (dayCol[c] - moonCol[c]) * sun.daylight) * sunDim * sun.shadowFade;
 		sun.ambient[c] = (ambNight[c] + (ambDay[c] - ambNight[c]) * sun.daylight) * ambDim;
 	}
 	return sun;
