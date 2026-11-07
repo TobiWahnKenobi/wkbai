@@ -54,6 +54,11 @@ cbuffer CloudBuffer
 	// corner x, z, 1 / its size, w: 0 off, 1 Low, 2 High; GIParams: x the bounce's strength
 	float4 GIRegion;
 	float4 GIParams;
+	// the clouds' own light (SunState::cloudDirection: the true sun until it is 4 degrees below
+	// the horizon, then the moon): its direction (w: 1), its colour; the ground's cloud shadows
+	// keep CloudSun
+	float4 CloudLightDir;
+	float4 CloudLightColour;
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
@@ -546,7 +551,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 304;
+	cb.Size = 336;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -645,7 +650,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	//  cover  base  thick  stratus storm density shadow light  cirrus alto  alto's sheet
 	{ 0.00f, 245, 120, 0.0f, 0.0f, 1.0f, 0.55f, 1.00f, 0.0f, 0.0f, 0.0f }, // clear: none at all
-	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.30f, 0.15f, 0.0f }, // cloudy: broken cumulus, some cirrus and altocumulus above
+	{ 0.55f, 230, 150, 0.1f, 0.0f, 1.0f, 0.62f, 1.00f, 0.50f, 0.30f, 0.0f }, // cloudy: broken cumulus; cirrus and altocumulus above in some skies (highCirrus)
 	{ 0.80f, 205, 200, 0.45f, 0.15f, 1.3f, 0.78f, 0.88f, 0.0f, 0.0f, 0.0f }, // rain: low, grey, flatter
 	{ 0.90f, 195, 260, 0.55f, 0.35f, 1.15f, 0.85f, 0.72f, 0.0f, 0.0f, 0.0f }, // heavy rain: nimbostratus
 	// thunderstorm: cumulonimbus (StormCells: towers to the top, flat anvils spreading under it,
@@ -654,7 +659,7 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.90f, 200, 70, 0.9f, 0.0f, 1.2f, 0.70f, 1.1f, 0.0f, 0.0f, 0.0f }, // fog: a low flat sheet
 	{ 0.85f, 210, 180, 0.60f, 0.10f, 1.1f, 0.72f, 1.22f, 0.0f, 0.0f, 0.0f }, // snow: pale overcast
 	{ 0.93f, 190, 240, 0.70f, 0.30f, 1.1f, 0.82f, 0.78f, 0.0f, 0.0f, 0.0f }, // blizzard
-	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.62f, 0.28f, 0.0f }, // heatwave: cirrus, altocumulus floccus
+	{ 0.00f, 265, 100, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.48f, 0.28f, 0.0f }, // heatwave: cirrus, altocumulus floccus
 	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.45f, 0.70f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
 
@@ -810,7 +815,51 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
 	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
-	const float data[76] = {
+	// The high clouds come and go: the game's time in skies of 10 minutes (the change eased over
+	// the last 2), each with its own amount of cirrus and altocumulus and its own style (which of
+	// the cirrus types, HighTypes, are where). In cloudy weather (and the cover slider's cumulus)
+	// about half the skies have none; in the weathers made of high cloud (heatwave, drought) their
+	// amount varies. HIGH_CLOUD_SKY: a test hook, a sky's number instead of the time's.
+	float highCirrus = 1, highAlto = 1, highStyle = 0.5f;
+	{
+		auto hash01 = [](uint32_t x) {
+			x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+			return (x & 0xffffff) / 16777215.0f;
+		};
+		const bool variable = env.cloudKindNow == 1 || env.cloudKindNow < 0;
+		auto sky = [&](uint32_t s, float* c, float* a, float* st) {
+			if (variable) {
+				*c = hash01(s * 4 + 1) < 0.45f ? 0.0f : 0.55f + 0.65f * hash01(s * 4 + 2);
+				*a = hash01(s * 4 + 3) < 0.6f ? 0.0f : 0.5f + 0.7f * hash01(s * 4 + 4);
+			}
+			else {
+				*c = 0.6f + 0.55f * hash01(s * 4 + 1);
+				*a = 0.7f + 0.6f * hash01(s * 4 + 3);
+			}
+			*st = hash01(s * 4 + 5);
+		};
+		static const char* fixedSky = getenv("HIGH_CLOUD_SKY");
+		const float slots = fixedSky ? (float)atoi(fixedSky) : std::max(time, 0.0f) / 600.0f;
+		const uint32_t s0 = (uint32_t)std::floor(slots);
+		const float fr = slots - std::floor(slots);
+		const float w = fr < 0.8f ? 0.0f : (fr - 0.8f) / 0.2f;
+		const float e = w * w * (3 - 2 * w);
+		float c0, a0, st0, c1, a1, st1;
+		sky(s0, &c0, &a0, &st0);
+		sky(s0 + 1, &c1, &a1, &st1);
+		highCirrus = c0 + (c1 - c0) * e;
+		highAlto = a0 + (a1 - a0) * e;
+		highStyle = st0 + (st1 - st0) * e;
+	}
+	Vector3 lightDir = sun;
+	float lightCol[3] = { r, g, b };
+	if (g_cloudSunValid) {
+		lightDir = g_cloudSunDirection.normal();
+		for (int c = 0; c < 3; c++)
+			lightCol[c] = ((g_cloudSunColor >> (16 - 8 * c)) & 255) / 255.0f;
+		g_cloudSunValid = false; // (set again by the next frame's environment)
+	}
+	const float data[84] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -823,15 +872,17 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		(float)env.terrainGrid[0], (float)env.terrainGrid[1], (float)env.terrainGrid[2], DiligentGfx::ShadowEnvironment::SKY_OCC_TOP,
 		preset.stratus, preset.storm, preset.density, preset.light,
 		env.cloudFlash[0], env.cloudFlash[1], env.cloudFlash[2], env.cloudFlash[3],
-		preset.cirrus, preset.alto, preset.altoSheet, 0.0f,
+		std::min(preset.cirrus * highCirrus, 1.0f), std::min(preset.alto * highAlto, 1.0f), preset.altoSheet, highStyle,
 		std::clamp(old.cover, 0.0f, 1.0f), old.base, old.thickness, old.shadow,
 		old.stratus, old.storm, old.density, old.light,
-		old.cirrus, old.alto, old.altoSheet, 0.0f,
+		std::min(old.cirrus * highCirrus, 1.0f), std::min(old.alto * highAlto, 1.0f), old.altoSheet, highStyle,
 		0.948683f, 0.316228f, env.frontPos, env.frontHalfWidth,
 		env.giMapOrigin[0], env.giMapOrigin[1], 1.0f / DiligentGfx::ShadowEnvironment::GI_EXTENT, (float)env.giMode,
 		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), 0.0f, 0.0f, 0.0f,
+		lightDir.x, lightDir.y, lightDir.z, 1.0f,
+		lightCol[0], lightCol[1], lightCol[2], 0.0f,
 	};
-	static_assert(sizeof(data) <= 304, "the cloud buffer's size (CreateCloudResources)");
+	static_assert(sizeof(data) <= 336, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }

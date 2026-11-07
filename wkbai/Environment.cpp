@@ -25,6 +25,9 @@ namespace {
 
 EnvironmentView g_environment;
 float g_cloudFrontArrival = 1.0f;
+Vector3 g_cloudSunDirection(0, 1, 0);
+uint32_t g_cloudSunColor = 0xFFFFFFFF;
+bool g_cloudSunValid = false;
 uint64_t g_cloudFrontArrivalTicks = 0;
 
 float EnvironmentSettings::seasonLengthS() const
@@ -248,6 +251,20 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	for (int c = 0; c < 3; c++) {
 		sun.colour[c] = (moonCol[c] + (dayCol[c] - moonCol[c]) * sun.daylight) * sunDim * sun.shadowFade;
 		sun.ambient[c] = (ambNight[c] + (ambDay[c] - ambNight[c]) * sun.daylight) * ambDim;
+	}
+	if (s.y > -0.07f) {
+		sun.cloudDirection = s.normal();
+		const float up = Smoothstep(-0.07f, 0.0f, s.y);
+		for (int c = 0; c < 3; c++)
+			sun.cloudColour[c] = dayCol[c] * up; // (not dimmed by the cover: that is the ground's, under them)
+	}
+	else {
+		Vector3 m = at(h + PI);
+		m.y = std::max(m.y, 0.25f);
+		sun.cloudDirection = m.normal();
+		const float up = Smoothstep(-0.07f, -0.14f, s.y);
+		for (int c = 0; c < 3; c++)
+			sun.cloudColour[c] = moonCol[c] * sunDim * up;
 	}
 	return sun;
 }

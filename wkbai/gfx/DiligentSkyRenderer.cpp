@@ -176,7 +176,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1));
 	shape = lerp(shape, 0.45 + 0.55 * shape, max(stratus, deck * 0.35)); // sheets (and a storm's deck): the billows flattened
-	if (detail && stratus > 0.05) {
+	if (detail && stratus > 0.05 && SkyFlags.w >= 1) { // (not on Low)
 		// a sheet's underside mottled at three scales (about 180, 65 and 25 units: the lumps
 		// and rolls of a real stratus deck; the billows' shape alone left it a smooth blur);
 		// the view's steps only (the light's would cost three samples more each)
@@ -209,6 +209,19 @@ float HenyeyGreenstein(float mu, float g)
 // (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
 // Returns the light scattered towards the camera and the sky's transmittance.
+// Dawn and dusk: the colour the sunlight has on the clouds after its long way through the air
+// at the sun's height (its air mass, Rayleigh and Mie as PhysicalSky's), 1 by day: golden, then
+// orange and red; against the sky's blue light in the shade, pink and violet. lift: how far
+// below the horizon the sun still lights them (the higher clouds longer).
+float3 DuskTint(float3 sun, float lift)
+{
+	float air = min(1 / max(sun.y + lift, 0.025), 40);
+	float3 tr = exp(-(float3(5.8e-3, 13.5e-3, 33.1e-3) * 8 + 21e-3 * 1.2 * 1.1) * air);
+	float3 tint = tr / max(max(tr.r, tr.g), max(tr.b, 1e-4));
+	float dusk = smoothstep(0.55, 0.05, sun.y);
+	return lerp(float3(1, 1, 1), tint * 1.5, dusk);
+}
+
 float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 {
 	// (during a front the layer between both weathers' lowest base and highest top)
@@ -244,7 +257,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// averages the steps' banding away
 	pixel += 5.588238 * fmod(SkyFlags.z, 64);
 	float jitter = frac(52.9829189 * frac(dot(pixel, float2(0.06711056, 0.00583715))));
-	float3 sun = normalize(CloudSun.xyz);
+	float3 sun = normalize(CloudLightDir.xyz); // (the clouds' own light: the sun lights them past the ground's dusk)
 	float mu = dot(rd, sun);
 	float phase = lerp(HenyeyGreenstein(mu, -0.2), HenyeyGreenstein(mu, 0.8), 0.55) * 12.566371;
 	// a sheet scatters the light many times over: the sun shows as a diffuse bright patch, not
@@ -252,6 +265,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	const float sheetiness = cWeather.x;
 	phase = lerp(phase, 1, 0.75 * sheetiness);
 	float towardSun = saturate(mu * 0.5 + 0.5);
+	const float3 sunTint = CloudLightColour.rgb * DuskTint(sun, 0.012); // (at dawn and dusk)
+	// at dawn and dusk the sky's light is weak beside the sun's on the clouds: their lit sides glow,
+	// their shaded ones are blue-grey
+	const float duskK = smoothstep(0.55, 0.05, sun.y) * smoothstep(-0.08, -0.01, sun.y);
+	const float duskSun = lerp(1, 1.7, duskK), duskSky = lerp(1, 0.55, duskK);
 	float3 light = float3(0, 0, 0);
 	float T = 1;
 	const float SIGMA = 0.045;
@@ -286,7 +304,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		float shade = cWeather.w * lerp(1, 0.6 + 0.4 * h, cWeather.y)
 			* lerp(1.12, 0.72, saturate(dens / (1.6 * max(cWeather.z, 0.1))));
 		float3 flash = float3(0.75, 0.8, 1.0) * (CloudFlash.w * 9 * exp(-length(p - CloudFlash.xyz) / 260));
-		float3 s = (CloudSunColour.rgb * (energy * phase * 1.3) + ambient * 0.85) * shade + flash;
+		float3 s = (sunTint * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky)) * shade + flash;
 		float dT = exp(-SIGMA * dens * dt);
 		light += T * (1 - dT) * s;
 		T *= dT;
@@ -303,17 +321,27 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
 
-// The high clouds above the cumulus layer, as thin textured layers (cheap: a dozen samples a
-// pixel in the sky's own pass, at the full size). Both lie in wide organic regions (the smooth
-// noise in cloudNoise.a, domain-warped, at tens of kilometres), so they cover large parts of the
-// sky with ragged, thinning edges instead of patches:
-// - cirrus at 1600 units: a milky veil (cirrostratus) under streaks combed along the wind, the
-//   streaks bent by a two-scale warp across it, several octaves of them, so fibres run in
-//   bundles that fray at their ends;
-// - altocumulus at 800: rounded cells (the shape noise's Worley) with soft edges, smaller and
-//   thinner towards the region's edge, shaded by their own thickness (grey middles, bright thin
-//   rims, brighter towards the sun); the sheet (stratiformis) closes them into rows across the
-//   wind, the patches (floccus) leave them apart.
+// The high clouds above the cumulus layer, as thin textured layers (cheap: a few dozen samples
+// a pixel at most, in the sky's own pass at the full size). Both lie in wide organic regions (the
+// smooth noise in cloudNoise.a, domain-warped, at tens of kilometres), so they cover large parts
+// of the sky with ragged, thinning edges instead of patches.
+// - Cirrus at 1600 units, of four kinds mixed by region (HighTypes; the sky's style, CloudHigh.w,
+//   shifts which are where, so each sky differs):
+//   streaks (fibratus): fine fibres combed along the wind over a milky veil, bent by a two-scale
+//   warp, in bundles that fray along their length;
+//   mares' tails (uncinus): separate tufts with a hooked head and a long thinning tail, in lanes
+//   along the wind;
+//   bands (spissatus): broad, denser bands along the wind with feathered edges;
+//   ripples (cirrocumulus, undulatus, billows): waves across the wind broken into small cells
+//   along their crests.
+// - Altocumulus at 800: rounded cells (the shape noise's Worley) with soft edges, smaller and
+//   thinner towards the region's edge, shaded by their own thickness; the sheet (stratiformis)
+//   closes them into rows across the wind, the patches (floccus) leave them apart. Lenticular
+//   clouds now and then: smooth stacked lenses lying across the wind, standing still (they stand
+//   over the hills in the wind, the others drift).
+// - At dawn and dusk the sunlight on them is reddened by its long way through the air
+//   (Rayleigh and Mie, as PhysicalSky's): golden, then orange, red and, against the blue sky's
+//   light, pink.
 // colour: the sky behind; ro, rd: the camera and the view (up).
 float HighNoise(float2 p, float period, float fp)
 {
@@ -338,15 +366,38 @@ float HighCell(float2 q, float evolve, float fp)
 	return s.b * 0.62 + s.a * 0.26 + s.g * 0.12;
 }
 
+float HighHash(float2 c)
+{
+	return frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453);
+}
+
+// the cirrus kinds' weights at p: x mares' tails, y bands, z ripples (the rest streaks); style
+// 0-1 moves their regions
+float3 HighTypes(float2 p, float fp, float style)
+{
+	float a = HighNoise(p + float2(17000, 3000) + style * 41000, 46000, fp);
+	float b = HighNoise(p.yx + float2(9000, 21000) + style * 23000, 33000, fp);
+	float s1 = sin(style * 6.2831853), s2 = cos(style * 6.2831853);
+	float tails = smoothstep(0.56, 0.68, a + 0.12 * s1);
+	float ripples = smoothstep(0.44, 0.32, a - 0.12 * s2);
+	float bands = smoothstep(0.58, 0.7, b + 0.1 * s2) * (1 - ripples);
+	return float3(tails, bands, ripples);
+}
+
 float3 HighClouds(float3 ro, float3 rd, float3 colour)
 {
 	if (rd.y <= 0.01 || max(CloudHigh.x, CloudFromHigh.x * step(0.001, CloudFront.w)) + max(CloudHigh.y, CloudFromHigh.y * step(0.001, CloudFront.w)) <= 0.001)
 		return colour;
-	float3 sun = normalize(CloudSun.xyz);
+	float3 sun = normalize(CloudLightDir.xyz);
 	float forward = HenyeyGreenstein(dot(rd, sun), 0.6) * 12.566371; // 1: as much as to the side
 	float3 ambient = lerp(CloudSkyUp.rgb, CloudSkyHorizon.rgb, 0.3);
 	CloudAt(ro.xz);
-	float3 sunLight = CloudSunColour.rgb * cWeather.w;
+	float3 sunLight = CloudLightColour.rgb * cWeather.w * DuskTint(sun, 0.035);
+	{
+		float duskK = smoothstep(0.55, 0.05, sun.y) * smoothstep(-0.1, -0.02, sun.y);
+		sunLight *= lerp(1, 1.6, duskK);
+		ambient *= lerp(1, 0.6, duskK);
+	}
 	const float2 wind = float2(0.948683, 0.316228); // as the cumulus' drift (6, 2)
 	const float2 across = float2(-wind.y, wind.x);
 	float grazing = 1 / max(rd.y, 0.08); // the pixel's footprint stretched towards the horizon
@@ -357,33 +408,73 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		CloudAt(ro.xz + rd.xz * t);
 		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 9;
 		float fp = t * 0.0012 * grazing; // the pixel's size there
-		float regions = HighRegions(p, fp, cHigh.x, 1, float2(0.31, 0.77));
+		float2 styleShift = cHigh.w * float2(61000, 37000); // each sky its own regions
+		float regions = HighRegions(p + styleShift, fp, cHigh.x, 1, float2(0.31, 0.77));
 		if (regions > 0.001) {
-			// combed along the wind: the across coordinate bent at two scales
-			float bend = (HighNoise(p, 14000, fp) - 0.5) * 2600 + (HighNoise(p + 3100, 6000, fp) - 0.5) * 160;
-			float2 f = float2(dot(p, wind), dot(p, across) + bend);
-			// (stretched about 40:1: at 12:1 the noise's contours closed into loops, a marbling)
-			float s = HighNoise(f * float2(1.0 / 40000, 1.0 / 1000), 1, fp / 1000) * 0.5
-				+ HighNoise(f * float2(1.0 / 14000, 1.0 / 300) + 0.37, 1, fp / 300) * 0.32
-				+ HighNoise(f * float2(1.0 / 5000, 1.0 / 95) + 0.71, 1, fp / 95) * 0.18;
-			float streaks = saturate((s - 0.38) * 2.4);
-			streaks *= streaks;
-			// the fibres in bundles that fray out along their length (a round noise)
-			float fray = smoothstep(0.25, 0.75, HighNoise(p + 2300, 2600, fp)) * 0.7 + 0.3;
-			float d = regions * (0.16 + streaks * 0.84 * fray);
-			float a = saturate(d * 0.5 * edgeOn) * exp(-t / 16000);
+			const int q = (int)SkyFlags.w; // the clouds' quality: Low 0 to Ultra 3
+			float3 types = HighTypes(p, fp, cHigh.w);
+			if (q <= 0)
+				types = float3(0, types.y, 0); // Low: streaks and bands only
+			// the wind's direction turning slowly over the sky (the streaks' bend)
+			float ang = (HighNoise(p + styleShift, 16000, fp) - 0.5) * 1.8;
+			float2 dir = float2(wind.x * cos(ang) - wind.y * sin(ang), wind.x * sin(ang) + wind.y * cos(ang));
+			float2 perp = float2(-dir.y, dir.x);
+			// the smear's form by the kinds there: its length, how one-sided (a mares' tail: the
+			// head downwind, the tail trailing upwind), its hook, the tufts' size
+			float streakW = saturate(1 - types.x - types.y);
+			float L = lerp(lerp(700, 1000, types.x), 1500, types.y); // (a tuft 1-2 km at 8 km up: here 1600)
+			float asym = types.x;
+			float hookSide = HighHash(floor((p + styleShift) / 9000)) > 0.5 ? 1 : -1;
+			float hook = types.x * 0.3 * hookSide;
+			float tuftScale = lerp(1, 2.2, types.y);
+			const int N = q <= 0 ? 3 : q == 1 ? 5 : 8;
+			float sum = 0, wsum = 0;
+			[loop] for (int i = 0; i < N; i++) {
+				float s = (i + 0.5) / N;
+				float along = lerp(s - 0.5, -s, asym) * L;
+				float w = lerp(1, pow(1 - s, 1.5) * 2, asym);
+				float2 o = p + dir * along + perp * (hook * s * s * L * 0.3);
+				float n = HighNoise(o + 1300, 560 * tuftScale, fp) * 0.65 + HighNoise(o + 700, 200 * tuftScale, fp) * 0.35;
+				sum += w * smoothstep(0.48, 0.78, n);
+				wsum += w;
+			}
+			float smear = sum / wsum;
+			float d = smoothstep(0.04, lerp(0.85, 0.6, types.y), smear);
+			// the fine fibres in it, along the wind
+			float2 f = float2(dot(p, wind), dot(p, across) + (HighNoise(p, 14000, fp) - 0.5) * 2600);
+			float fine = HighNoise(f * float2(1.0 / 3000, 1.0 / 60) + 0.53, 1, fp / 60) * 0.6
+				+ HighNoise(f * float2(1.0 / 9000, 1.0 / 190) + 0.21, 1, fp / 190) * 0.4;
+			d *= lerp(0.3, 1.25, fine);
+			float opacity = lerp(lerp(0.55, 0.65, types.x), 0.8, types.y);
+			// ripples (cirrocumulus, undulatus, billows): waves across the wind (140-320 units
+			// apart, bent), broken along their crests into small cells
+			if (types.z > 0.01) {
+				float lambda = lerp(140, 320, HighNoise(p + 8100, 20000, fp));
+				float phase = f.x / lambda + (HighNoise(p + 500, 3000, fp) - 0.5) * 6;
+				float wave = 0.5 + 0.5 * sin(phase * 6.2831853);
+				float cell = HighCell(p * 1.3, 0.61 + CloudScale.w * 0.0006, fp * 1.3);
+				float rip = smoothstep(0.35, 0.95, wave * 0.5 + cell * 0.6) * lerp(0.7, 1, fine);
+				// (where the waves are only a few pixels apart, a soft sheet instead: no moirÃ©)
+				float resolved = saturate(1.5 - fp / (lambda * 0.035));
+				rip = lerp(0.3, rip, resolved);
+				d = lerp(d, rip * smoothstep(0.02, 0.3, smear + 0.15), types.z);
+				opacity = lerp(opacity, 0.7, types.z);
+			}
+			d = saturate(d + 0.08) * regions; // (with the veil)
+			float a = saturate(d * opacity * edgeOn) * exp(-t / 16000);
 			// thin ice: white, lit through towards the sun (a halo's glow), little shade
-			float3 c = sunLight * (0.72 + 0.55 * forward) * lerp(1, 0.9, d) + ambient * 0.6;
+			float3 c = sunLight * (0.66 + 0.4 * forward) * lerp(1, 0.9, d) + ambient * 0.6;
 			colour = lerp(colour, c, a);
 		}
 	}
 	{
 		float t = (800 - ro.y) / rd.y;
 		CloudAt(ro.xz + rd.xz * t);
-		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 7;
+		float2 still = ro.xz + rd.xz * t; // (where the lenticulars stand)
+		float2 p = still - wind * CloudScale.w * 7;
 		float fp = t * 0.0012 * grazing;
 		float sheet = cHigh.z;
-		float regions = HighRegions(p, fp, cHigh.y, lerp(0.55, 0.8, sheet), float2(0.13, 0.42));
+		float regions = HighRegions(p + cHigh.w * float2(43000, 71000), fp, cHigh.y, lerp(0.55, 0.8, sheet), float2(0.13, 0.42));
 		if (regions > 0.001) {
 			// the cells (about 80 units across, slowly changing), ragged by smaller ones; in a
 			// sheet set in rows across the wind
@@ -393,20 +484,55 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 			float rowsHere = smoothstep(0.35, 0.7, HighNoise(p + 4100, 3200, fp)); // rows in places, not everywhere
 			float cell = HighCell(p, evolve, fp) + (rows - 0.5) * 0.2 * sheet * rowsHere;
 			// ragged, cauliflower edges: eaten by the 3D detail noise (about 20 units)
-			float3 dn = cloudDetail.SampleLevel(cloud3DSampler, float3(p / 160, evolve * 3), max(log2(fp * 32 / 160), 0)).rgb;
-			cell -= (1 - (dn.r * 0.6 + dn.g * 0.4)) * 0.14;
+			if (SkyFlags.w >= 2) { // (High and Ultra)
+				float3 dn = cloudDetail.SampleLevel(cloud3DSampler, float3(p / 160, evolve * 3), max(log2(fp * 32 / 160), 0)).rgb;
+				cell -= (1 - (dn.r * 0.6 + dn.g * 0.4)) * 0.14;
+			}
+			else
+				cell -= 0.06;
 			// smaller and thinner towards the region's edge; a sheet's cells join
 			float th = lerp(0.6, 0.44, regions) - 0.08 * sheet;
 			float d = smoothstep(th, th + 0.3, cell) * regions;
 			// the cell's own shadow: as thick as it is towards the sun (its middle grey from below,
 			// its thin rims lit through)
-			float dSun = smoothstep(th, th + 0.3, HighCell(p + sun.xz / max(sun.y, 0.25) * 18, evolve, fp)) * regions;
+			float dSun = SkyFlags.w >= 1 ? smoothstep(th, th + 0.3, HighCell(p + sun.xz / max(sun.y, 0.25) * 18, evolve, fp)) * regions : d; // (Low: its own thickness)
 			float lit = 1 - saturate(smoothstep(0.3, 1, d) * 0.6 + dSun * 0.35);
 			float a = saturate(d * lerp(0.8, 1.15, sheet) * edgeOn) * 0.88 * exp(-t / 9000);
 			// the shaded parts are lit by the sky (blue-grey), the sunlit ones by the sun
 			float3 shadowed = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.5) * 1.05;
 			float3 sunlit = sunLight * (0.62 + 0.4 * (1 - d) * forward) + ambient * 0.45;
 			float3 c = lerp(shadowed, sunlit, lit);
+			colour = lerp(colour, c, a);
+		}
+	}
+	// lenticular: in some places of some skies, while there is high cloud at all; smooth lenses
+	// 1-2 km long lying across the wind, two or three stacked a little apart along it, their
+	// edges finely streaked
+	{
+		float amount = step(1, SkyFlags.w) * saturate(max(cHigh.x, cHigh.y) * 3) * smoothstep(0.62, 0.72, HighNoise(float2(cHigh.w * 37000, 5300), 52000, 0));
+		float t = (900 - ro.y) / rd.y;
+		float2 q = ro.xz + rd.xz * t;
+		float fp = t * 0.0012 * grazing;
+		float place = smoothstep(0.6, 0.75, HighNoise(q + 13000 + cHigh.w * 29000, 24000, fp)) * amount;
+		if (place > 0.001) {
+			float2 g = float2(dot(q, wind) / 1500, dot(q, across) / 2800);
+			float2 gi = floor(g), gf = frac(g) - 0.5;
+			float2 jit = float2(HighHash(gi), HighHash(gi + 9.7)) - 0.5;
+			float present = step(0.55, HighHash(gi + 4.3));
+			float stacks = 1 + floor(HighHash(gi + 2.1) * 3); // 1-3
+			float len = lerp(0.22, 0.34, HighHash(gi + 5.5)); // half its length, in cells across
+			float lens = 0;
+			[unroll] for (int k = 0; k < 3; k++) {
+				if (k >= stacks)
+					break;
+				float2 o = gf - jit * float2(0.2, 0.2) - float2((k - (stacks - 1) * 0.5) * 0.17, k * 0.025);
+				float2 e = o / float2(0.06 * (1 - 0.18 * k), len * (1 - 0.15 * k));
+				float r = dot(e, e);
+				lens = max(lens, smoothstep(1, 0.25, r) * lerp(0.55, 1, HighNoise(float2(dot(q, across), dot(q, wind) * 8) / 3000 + k * 0.3, 1, fp / 375)));
+			}
+			float d = lens * present * place;
+			float a = saturate(d * 0.85 * edgeOn) * exp(-t / 12000);
+			float3 c = sunLight * (0.7 + 0.45 * forward) * lerp(1.05, 0.85, d) + ambient * 0.55;
 			colour = lerp(colour, c, a);
 		}
 	}
@@ -543,6 +669,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float3 colour = FogColor.rgb;
 	float night = SkySun.w;
 	float overcast = 0; // how much the weather's clouds over the sky box hide (the stars, the moon)
+	float3 highAdded = 0; // what the high clouds changed of the sky (hidden behind the cumulus below)
 	if (fog < 1) {
 		float3 tex;
 		if (SkyFlags.y != 0) { // the volumetric clouds: the physical sky
@@ -553,7 +680,9 @@ float4 PS(VS_OUTPUT input) : SV_Target
 				sun = SkySun.xyz;
 			tex = sun.y > -0.25 ? PhysicalSky(rd, sun) : 0;
 			tex = max(tex, NightAir(rd) * night);
+			float3 bare = tex;
 			tex = HighClouds(FogCamera.xyz, rd, tex);
+			highAdded = (tex - bare) * (1 - fog);
 		}
 		else {
 			if (c >= max(abs(a), abs(b)))
@@ -601,6 +730,9 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		float2 o = (SkyFlags.w >= 2 ? 0.5 : 0.75) / float2(cw, ch); // a small blur over the march's jitter
 		float4 cl = (tClouds.SampleLevel(skySampler, uv + float2(o.x, o.y), 0) + tClouds.SampleLevel(skySampler, uv + float2(-o.x, o.y), 0)
 			+ tClouds.SampleLevel(skySampler, uv + float2(o.x, -o.y), 0) + tClouds.SampleLevel(skySampler, uv - o, 0)) * 0.25;
+		// the high clouds far behind a cumulus: hidden wherever it has some substance (its
+		// transmittance alone let them show through its thin parts, the play test of 2026-11-07)
+		colour -= highAdded * (1 - cl.a * cl.a * cl.a);
 		colour = colour * cl.a + cl.rgb;
 		visible = cl.a;
 	}

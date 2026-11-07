@@ -136,6 +136,9 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		v.starZ = pole;
 	}
 	terrain->sunColor = Scale(g_mapLook.sunColor, v.sun.colour);
+	g_cloudSunDirection = toWorld(v.sun.cloudDirection);
+	g_cloudSunColor = Scale(g_mapLook.sunColor, v.sun.cloudColour);
+	g_cloudSunValid = true;
 	{
 		// the fog: the map's, in the sky's light, greyer in fog and under clouds
 		float grey[3] = { 0.62f, 0.64f, 0.68f };

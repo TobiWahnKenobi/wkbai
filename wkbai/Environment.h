@@ -99,6 +99,11 @@ struct SunState {
 	float colour[3] = { 1, 1, 1 }, ambient[3] = { 1, 1, 1 }; // multipliers of the map's own
 	float moon = 0.0f;
 	float shadowFade = 1.0f; // 0 where the light jumps between the sun and the moon (dusk, dawn)
+	// the clouds' light: the true sun until it is 4 degrees below the horizon (the clouds stay lit
+	// after the ground; no shadow fade: theirs is the dusk's best light), then the moon; east, up,
+	// south, and its colour (DuskTint reddens it in the shaders)
+	Vector3 cloudDirection{ 0.5f, 1.0f, 0.3f };
+	float cloudColour[3] = { 1, 1, 1 };
 	// the sun's and the moon's own directions (east, up, south; unit), even below the horizon:
 	// the night sky's (direction is the light's, the moon's at night, kept a little up)
 	Vector3 sunTrue{ 0.5f, 1.0f, 0.3f }, moonTrue{ -0.5f, -1.0f, -0.3f };
@@ -110,6 +115,11 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 // clouds overhead, 1: the new one's), set by the cloud renderer each frame (ticks: SDL_GetTicksNS
 // of that frame): the rain, snow and lightning drawn wait for their clouds
 extern float g_cloudFrontArrival;
+// the clouds' light in the world's frame (SunState::cloudDirection, cloudColour times the map's
+// sun colour), set by the environment's view each frame; g_cloudSunValid false: the scene's sun
+extern Vector3 g_cloudSunDirection;
+extern uint32_t g_cloudSunColor;
+extern bool g_cloudSunValid;
 extern uint64_t g_cloudFrontArrivalTicks;
 // the day fraction / year fraction at a game time
 float EnvDayFraction(const EnvironmentSettings& s, float time);

@@ -184,7 +184,7 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "cloudQuality"; o.page = "lighting"; o.label = "Volumetric cloud quality";
+			o.id = "cloudQuality"; o.page = "lighting"; o.label = "Cloud quality"; // (the volumetric clouds' steps; the high clouds' kinds and samples, the stratus' texture)
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.cloudQuality; };
