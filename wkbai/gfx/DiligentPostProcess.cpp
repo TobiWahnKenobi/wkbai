@@ -419,8 +419,25 @@ float3 SceneLit(float2 uv)
 	return c;
 }
 
+// the fog of war's darkening at a point: what none of the player's units sees is darker (1 on
+// the sky and with the fog off)
+float FogDarkening(float2 uv)
+{
+	if (Fog.w <= 0)
+		return 1;
+	float d = tDepth.SampleLevel(sPoint, uv, 0).r;
+	if (d >= 0.99999)
+		return 1;
+	float z = Proj.w / (d - Proj.z);
+	float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2);
+	float4 p = float4(ndc.x * z / Proj.x, ndc.y * z / Proj.y, z, 1);
+	float2 fuv = float2(dot(p, FogX), dot(p, FogZ)) * Fog.xy;
+	return lerp(Fog.z, 1, tFog.SampleLevel(sLinear, fuv, 0).r);
+}
+
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
+	float fogged = -1; // the fog of war's darkening, when a blur has already averaged it
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
 	if (Ao.z != 0)
 		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r);
@@ -455,12 +472,17 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 		if (r > 0.5) {
 			float turn = 6.2831853 * frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
 			float3 sum = 0;
+			float fogSum = 0;
 			[unroll] for (int i = 0; i < 16; i++) {
 				float a = i * 2.3999632 + turn;
 				float2 o = float2(cos(a), sin(a)) * sqrt((i + 0.5) / 16) * r;
 				sum += SceneLit(input.Uv + o * Texel.xy);
+				// (the fog of war blurred with it: darkened at each pixel by its own depth it
+				// drew the unseen mountains' outlines sharp against the sky again)
+				fogSum += FogDarkening(input.Uv + o * Texel.xy);
 			}
 			c = sum / 16;
+			fogged = fogSum / 16;
 		}
 	}
 	float2 h = Texel.zw;
@@ -470,12 +492,7 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 	c += tBloom.SampleLevel(sLinear, input.Uv, 0).rgb * Bloom.y;
 	c += tShafts.SampleLevel(sLinear, input.Uv, 0).rgb;
 	// fog of war: what none of the player's units sees is darker (not on the sky)
-	if (Fog.w > 0 && tDepth.SampleLevel(sPoint, input.Uv, 0).r < 0.99999) {
-		float4 p = float4(ViewPos(input.Uv), 1);
-		float2 fuv = float2(dot(p, FogX), dot(p, FogZ)) * Fog.xy;
-		float seen = tFog.SampleLevel(sLinear, fuv, 0).r;
-		c *= lerp(Fog.z, 1, seen);
-	}
+	c *= fogged >= 0 ? fogged : FogDarkening(input.Uv);
 	// a dither of the 8-bit output (triangular, +-1 level): the darkening and the added light
 	// above would band the sky's and the haze's smooth gradients
 	// (interleaved gradient noise, twice)
