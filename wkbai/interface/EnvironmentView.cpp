@@ -304,6 +304,46 @@ void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t i
 		g_leafTrees.push_back({ centre, radius, id });
 }
 
+namespace {
+	// a snowflake: six arms with a short branch each, white, its shape in the alpha (16 x 16)
+	texture SnowflakeTexture(IRenderer* gfx)
+	{
+		static texture tex = nullptr;
+		if (!tex) {
+			constexpr int N = 16;
+			Bitmap bmp;
+			bmp.width = bmp.height = N;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize(N * N * 4);
+			auto segment = [](float px, float py, float ax, float ay, float bx, float by) {
+				const float dx = bx - ax, dy = by - ay;
+				const float t = std::clamp(((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy), 0.0f, 1.0f);
+				const float ex = px - (ax + dx * t), ey = py - (ay + dy * t);
+				return std::sqrt(ex * ex + ey * ey);
+			};
+			const float c = (N - 1) * 0.5f;
+			for (int y = 0; y < N; y++)
+				for (int x = 0; x < N; x++) {
+					float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c)) - 1.2f; // the middle
+					for (int k = 0; k < 6; k++) {
+						const float a = k * 1.0471976f, ca = std::cos(a), sa = std::sin(a);
+						d = std::min(d, segment((float)x, (float)y, c, c, c + ca * 7.0f, c + sa * 7.0f));
+						// a branch off each side, two thirds out
+						const float bx = c + ca * 4.5f, by = c + sa * 4.5f;
+						for (const float side : { -0.7f, 0.7f })
+							d = std::min(d, segment((float)x, (float)y, bx, by, bx + std::cos(a + side) * 2.2f, by + std::sin(a + side) * 2.2f));
+					}
+					const float alpha = std::clamp(1.3f - d / 0.75f, 0.0f, 1.0f);
+					uint8_t* p = &bmp.pixels[(y * N + x) * 4];
+					p[0] = p[1] = p[2] = 255;
+					p[3] = (uint8_t)std::lround(alpha * 255.0f);
+				}
+			tex = gfx->CreateTexture(bmp, 1);
+		}
+		return tex;
+	}
+}
+
 void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 {
 	const EnvironmentView& v = g_environment;
@@ -363,6 +403,10 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	// how much of it, by the graphics setting (RenderSettings::weatherEffects)
 	static const float amount[4] = { 0.35f, 0.65f, 1.0f, 1.5f };
 	const float share = amount[std::clamp(g_renderSettings.weatherEffects, 0, 3)];
+	// from high up the far layer covers more ground: more of it (the play test: from higher up
+	// it did not seem to rain at all), and each drop and flake at least about 1.5 pixels across
+	const float farMore = std::clamp(farReach / 100.0f, 1.0f, 3.0f);
+	const float pixel = 2.0f * std::tan(std::max(camera.fovY, 0.2f) * 0.5f) / std::max(768.0f, 1.0f); // a pixel's size a unit away (at 768 lines)
 	if (raining) {
 		const int drops = (int)(2600 * share * std::min(1.0f, v.rainShown));
 		const Vector3 vel = Vector3(v.wind.x, -14.0f, v.wind.z);
@@ -377,19 +421,25 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			quad(p + across, p - across, p - along - across, p - along + across, colour);
 		}
 		// far: longer, fainter streaks
-		const int farDrops = (int)(1800 * share * std::min(1.0f, v.rainShown));
+		const int farDrops = (int)(1800 * share * farMore * std::min(1.0f, v.rainShown));
 		const Vector3 farAlong = along * 3.0f;
 		const uint32_t farColour = (uint32_t)(40 + 40 * v.sun.daylight) << 24 | 0xB4BED2;
 		for (int i = 0; i < farDrops; i++) {
 			Vector3 p;
 			if (!placeIn(i + 200000, 14.0f, 0.0f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
 				continue;
-			Vector3 across = farAlong.cross(camera.direction);
-			across = across.sqlen3() > 1e-8f ? across.normal() * 0.08f : camside * 0.08f;
-			quad(p + across, p - across, p - farAlong - across, p - farAlong + across, farColour);
+			const float dist = std::sqrt((p - camera.position).sqlen3());
+			const float width = std::max(0.08f, dist * pixel * 0.75f);
+			const Vector3 streak = farAlong * std::max(1.0f, width / 0.08f * 0.35f);
+			Vector3 across = streak.cross(camera.direction);
+			across = across.sqlen3() > 1e-8f ? across.normal() * width : camside * width;
+			quad(p + across, p - across, p - streak - across, p - streak + across, farColour);
 		}
 	}
 	if (snowing) {
+		// snowflake sprites (the rain's quads are untextured): drawn apart, then the texture off
+		batch->flush();
+		gfx->SetTexture(0, SnowflakeTexture(gfx));
 		const int flakes = (int)(2200 * share * std::min(1.0f, v.snowShown));
 		const Vector3 up = camside.cross(camera.direction).normal();
 		const uint32_t colour = (uint32_t)(150 + 80 * v.sun.daylight) << 24 | 0xF2F4FA;
@@ -397,18 +447,21 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			Vector3 p;
 			if (!place(i + 50000, 1.4f, 0.6f, p) || (p - camera.position).sqlen3() < 15.0f * 15.0f)
 				continue;
-			const float s = 0.06f + 0.05f * Hash(i + 777);
+			const float s = (0.06f + 0.05f * Hash(i + 777)) * 1.8f; // (the sprite's arms fill about half of it)
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
 		// far: larger flakes (a pixel or two at that distance), as many again over the whole view
-		const int farFlakes = (int)(2400 * share * std::min(1.0f, v.snowShown));
+		const int farFlakes = (int)(2400 * share * farMore * std::min(1.0f, v.snowShown));
 		for (int i = 0; i < farFlakes; i++) {
 			Vector3 p;
 			if (!placeIn(i + 300000, 1.4f, 1.2f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
 				continue;
-			const float s = (0.2f + 0.15f * Hash(i + 4321)) * std::clamp(std::sqrt((p - camera.position).sqlen3()) / 120.0f, 0.6f, 2.0f);
+			const float dist = std::sqrt((p - camera.position).sqlen3());
+			const float s = std::max((0.2f + 0.15f * Hash(i + 4321)) * std::clamp(dist / 120.0f, 0.6f, 2.0f) * 1.5f, dist * pixel * 1.6f);
 			quad(p + (camside + up) * s, p + (camside - up) * s, p + (-camside - up) * s, p + (-camside + up) * s, colour);
 		}
+		batch->flush();
+		gfx->NoTexture(0);
 	}
 	if (leafFall > 0.0f) {
 		// the falling leaves: from the crowns of the nearest trees in leaf, drifting with the wind,

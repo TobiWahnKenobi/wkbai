@@ -530,10 +530,15 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		colour = colour * cl.a + cl.rgb;
 		visible = cl.a;
 	}
+	// at night the low sky goes into the fog's colour over its lowest 17 degrees or so, the stars
+	// with it (the haze near the horizon): the map edge's fog is that colour, and the mountains
+	// past it stood dark against the stars (the play test of 2026-11-07)
+	float lowHaze = night * (1 - smoothstep(0.0, 0.3, rd.y));
+	colour = lerp(colour, FogColor.rgb, lowHaze);
 	float3 outc = GradeColour(colour);
 	// the moon and the stars over the graded sky (the night's grade would dim them to grey)
 	if (night > 0 && c > 0 && fog < 1)
-		outc += NightSky(rd, CamRight.w * 2 / max(CamUp.w, 1)) * visible * (1 - fog);
+		outc += NightSky(rd, CamRight.w * 2 / max(CamUp.w, 1)) * visible * (1 - fog) * (1 - lowHaze);
 	return float4(outc + Dither(input.Pos.xy), 1);
 }
 
