@@ -151,7 +151,10 @@ struct VS_OUTPUT
 	float Fog : FOG;
 	float3 WorldPos : TEXCOORD1;
 	float4 Tint : TEXCOORD2; // rgb: the blocked/placeable tint, a: the cloud shadow
-	float2 Fallow : TEXCOORD3; // x 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil; y 1: charred (SEFLAG_CHARRED)
+	// x 1: a field in winter (SEFLAG_FALLOW), drawn as bare soil; y 1: charred (SEFLAG_CHARRED);
+	// z: how much the surface faces up (the world normal's y, for the snow: also on an unlit,
+	// highlighted model, whose Norm is 0)
+	float3 Fallow : TEXCOORD3;
 	float2 Leaves : TEXCOORD4; // x 1: broadleaf (SEFLAG_LEAVES); y: the tree's own seed (from where it stands)
 };
 
@@ -199,7 +202,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Tint.a = cloud;
 	}
 	output.Tint.rgb = float3(1, 1, 1);
-	output.Fallow = float2((EntityFlags & 64) ? 1 : 0, (EntityFlags & 256) ? 1 : 0);
+	output.Fallow = float3((EntityFlags & 64) ? 1 : 0, (EntityFlags & 256) ? 1 : 0,
+		normalize(mul(float4(Normal * 2 - float3(1,1,1), 0), EntityTransform).xyz).y);
 	output.Leaves = float2((EntityFlags & 128) ? 1 : 0, frac(sin(dot(EntityTransform[3].xz, float2(12.9898, 78.233))) * 43758.5453));
 	if (EntityFlags & 8) // SEFLAG_BLOCKED
 		output.Tint.rgb *= float3(1.0, 0.25, 0.25);
@@ -348,12 +352,13 @@ float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 		albedo = lerp(albedo, hue * clamp(lum * 3.4, 0.45, 1.15), Season.x * green);
 		albedo = lerp(albedo, float3(1.25, 1.05, 0.5) * lum, Season.y * 0.45 * green);
 	}
-	if (Material.y + Material.z <= 0 || dot(input.Norm, input.Norm) == 0)
+	if (Material.y + Material.z <= 0)
 		return albedo;
-	float up = normalize(input.Norm).y;
+	float up = input.Fallow.z;
 	float2 cell = floor(input.WorldPos.xz * 1.7);
 	float patch = frac(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
-	float snow = saturate((up - 0.2) / 0.35) * saturate(Material.y * 1.8 - patch * 0.45);
+	float snow = saturate((up - 0.14) / 0.3) * // (steep thatch holds some too)
+		 saturate(Material.y * 1.8 - patch * 0.45);
 	albedo *= 1 - 0.3 * Material.z * (1 - snow);
 	return lerp(albedo, float3(0.9, 0.92, 0.97), snow);
 }

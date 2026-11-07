@@ -111,6 +111,9 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	ease(v.fog, st.fog);
 	ease(v.wetness, st.wetness);
 	ease(v.snowCover, st.snowCover);
+	static const char* testSnow = getenv("WKB_TEST_SNOWCOVER"); // (a test hook: the snow lying, 0-1)
+	if (testSnow)
+		v.snowCover = (float)atof(testSnow);
 	ease(v.ice, st.ice);
 	ease(v.waterRise, st.waterRise);
 	v.temperatureC = st.temperatureC;
@@ -403,8 +406,18 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	// around the camera itself, 900 units across, from the ground to well above the camera: a box
 	// around the point looked at ended in a line across the view, with no snow above it
 	const float farReach = std::clamp(aboveGround / std::max(-dir.y, 0.05f), 30.0f, 400.0f);
-	const Vector3 farCentre = camera.position;
-	const float farBox = 900.0f, farHeight = std::max(aboveGround + 80.0f, 120.0f);
+	// (looking down, around the ground looked at and about as wide as the view there: around the
+	// camera most of it lay outside the view, a few drops on the screen)
+	const float lookDown = std::clamp((-dir.y - 0.35f) / 0.45f, 0.0f, 1.0f);
+	Vector3 farCentre = camera.position;
+	{
+		const Vector3 flat = Vector3(dir.x, 0.0f, dir.z);
+		const float ahead = aboveGround * std::sqrt(flat.sqlen3()) / std::max(-dir.y, 0.05f);
+		if (flat.sqlen3() > 1e-6f)
+			farCentre = farCentre + flat.normal() * (ahead * lookDown);
+	}
+	const float farBox = 900.0f + (std::max(aboveGround * 2.6f, 260.0f) - 900.0f) * lookDown;
+	const float farHeight = std::max(aboveGround + 80.0f, 120.0f);
 	auto inNear = [&](const Vector3& p) { return std::abs(p.x - centre.x) < box * 0.5f && std::abs(p.z - centre.z) < box * 0.5f; };
 	auto inFront = [&](const Vector3& p) { return (p - camera.position).dot(dir) > 0.0f; };
 	// how much of it, by the graphics setting (RenderSettings::weatherEffects)
@@ -414,8 +427,30 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	// it did not seem to rain at all), and each drop and flake at least about 1.5 pixels across
 	const float farMore = std::clamp(farHeight / 60.0f, 2.0f, 3.5f);
 	const float pixel = 2.0f * std::tan(std::max(camera.fovY, 0.2f) * 0.5f) / std::max(768.0f, 1.0f); // a pixel's size a unit away (at 768 lines)
+	// A drop's streak on the screen at least minPx long: seen from above a falling streak is
+	// foreshortened to a dot (the play test: looking down from high up, no rain at all; looking
+	// up, rain), so it is drawn out radially from the point below the camera as well, as rain
+	// looks from above
+	const float down = std::clamp((-dir.y - 0.3f) / 0.5f, 0.0f, 1.0f);
+	auto lengthen = [&](const Vector3& p, Vector3 streak, float minPx) {
+		Vector3 ray = p - camera.position;
+		const float dist = std::sqrt(ray.sqlen3());
+		if (dist < 1e-3f)
+			return streak;
+		ray = ray * (1.0f / dist);
+		const Vector3 onScreen = streak - ray * streak.dot(ray);
+		const float px = std::sqrt(onScreen.sqlen3()) / (dist * pixel);
+		if (px >= minPx)
+			return streak;
+		Vector3 radial = ray - dir * ray.dot(dir);
+		radial = radial.sqlen3() > 1e-8f ? radial.normal() : camside;
+		return streak + radial * ((minPx - px) * dist * pixel);
+	};
 	if (raining) {
-		const int drops = (int)(2600 * share * std::min(1.0f, v.rainShown));
+		// (the near box lies on the ground: from high up a dense patch around the point looked at,
+		// so thinner the higher the camera; the far layer fills the view)
+		const float nearShare = std::clamp(1.0f - (aboveGround - 60.0f) / 140.0f, 0.2f, 1.0f);
+		const int drops = (int)(2600 * share * nearShare * std::min(1.0f, v.rainShown));
 		const Vector3 vel = Vector3(v.wind.x, -14.0f, v.wind.z);
 		const Vector3 along = vel.normal() * 1.1f;
 		const uint32_t colour = (uint32_t)(70 + 60 * v.sun.daylight) << 24 | 0xB4BED2;
@@ -423,22 +458,23 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 			Vector3 p;
 			if (!place(i, 14.0f, 0.0f, p) || (p - camera.position).sqlen3() < 8.0f * 8.0f)
 				continue;
-			Vector3 across = along.cross(camera.direction);
+			const Vector3 streak = lengthen(p, along, 12.0f * down);
+			Vector3 across = streak.cross(p - camera.position);
 			across = across.sqlen3() > 1e-8f ? across.normal() * 0.025f : camside * 0.025f;
-			quad(p + across, p - across, p - along - across, p - along + across, colour);
+			quad(p + across, p - across, p - streak - across, p - streak + across, colour);
 		}
 		// far: longer, fainter streaks
 		const int farDrops = (int)(1800 * share * farMore * std::min(1.0f, v.rainShown));
 		const Vector3 farAlong = along * 3.0f;
-		const uint32_t farColour = (uint32_t)(40 + 40 * v.sun.daylight) << 24 | 0xB4BED2;
+		const uint32_t farColour = (uint32_t)(40 + 40 * v.sun.daylight + 35 * down) << 24 | 0xB4BED2;
 		for (int i = 0; i < farDrops; i++) {
 			Vector3 p;
 			if (!placeIn(i + 200000, 14.0f, 0.0f, farCentre, farBox, farHeight, p) || inNear(p) || !inFront(p))
 				continue;
 			const float dist = std::sqrt((p - camera.position).sqlen3());
 			const float width = std::max(0.08f, dist * pixel * 0.75f);
-			const Vector3 streak = farAlong * std::max(1.0f, width / 0.08f * 0.35f);
-			Vector3 across = streak.cross(camera.direction);
+			const Vector3 streak = lengthen(p, farAlong * std::max(1.0f, width / 0.08f * 0.35f), 9.0f * down);
+			Vector3 across = streak.cross(p - camera.position);
 			across = across.sqlen3() > 1e-8f ? across.normal() * width : camside * width;
 			quad(p + across, p - across, p - streak - across, p - streak + across, farColour);
 		}
