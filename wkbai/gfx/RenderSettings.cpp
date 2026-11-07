@@ -73,6 +73,7 @@ void RenderSettings::load()
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
+	motionBlur = std::clamp(g_settings.value<float>("motionBlur", def.motionBlur), 0.0f, 1.0f);
 	grassDistance = g_settings.value<float>("grassDistance", def.grassDistance);
 	bumpMapping = g_settings.value<bool>("bumpMapping", def.bumpMapping);
 	modelLighting = g_settings.value<bool>("modelLighting", def.modelLighting);
@@ -163,6 +164,7 @@ void RenderSettings::save()
 	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["grassDensity"] = grassDensity;
 	g_settings["grassHeight"] = grassHeight;
+	g_settings["motionBlur"] = motionBlur;
 	g_settings["grassDistance"] = grassDistance;
 	g_settings["bumpMapping"] = bumpMapping;
 	g_settings["modelLighting"] = modelLighting;

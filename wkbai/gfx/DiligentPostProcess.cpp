@@ -66,6 +66,7 @@ cbuffer PostBuffer
 	matrix TaaInverseView;  // view space -> world (row vectors)
 	matrix TaaPrevViewProj; // world -> the previous frame's clip space, unjittered
 	float4 Motion; // FSR 3: the jitter in UV, the object motion's "none" (NO_OBJECT_MOTION)
+	float4 Blur;   // camera motion blur: the shutter (0 off), the longest smear and a cut (pixels)
 };
 Texture2D tColor;
 Texture2D tDepth;
@@ -409,11 +410,42 @@ float4 PS_Rcas(VS_OUTPUT input) : SV_Target
 	return float4(saturate(c), 1);
 }
 
+// the scene with its ray-traced shadows at a point
+float3 SceneLit(float2 uv)
+{
+	float3 c = tColor.SampleLevel(sLinear, uv, 0).rgb;
+	if (Ao.z != 0)
+		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sLinear, uv, 0).r);
+	return c;
+}
+
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
 	if (Ao.z != 0)
 		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r);
+	// camera motion blur (RenderSettings::motionBlur): the scene averaged along the way the
+	// point moved on the screen since the last frame (from the depth and the last frame's
+	// camera), over the shutter's share of it; none where it hardly moved, nor at a cut (a jump
+	// across the map)
+	if (Blur.x > 0) {
+		float d = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
+		float3 world = mul(float4(ViewPosAt(input.Uv, d), 1), TaaInverseView).xyz;
+		float4 prev = mul(float4(world, 1), TaaPrevViewProj);
+		if (prev.w > 0) {
+			float2 puv = float2(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5);
+			float2 v = (input.Uv - puv) * Blur.x;
+			float px = length(v * Sizes.xy);
+			if (px > 0.5 && px < Blur.z) {
+				v *= min(1, Blur.y / px);
+				float jitter = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
+				float3 sum = 0;
+				[unroll] for (int i = 0; i < 8; i++)
+					sum += SceneLit(input.Uv + v * ((i + jitter) / 8 - 0.5));
+				c = sum / 8;
+			}
+		}
+	}
 	float2 h = Texel.zw;
 	float ao = (tAo.SampleLevel(sLinear, input.Uv + float2(-h.x, -h.y), 0).r + tAo.SampleLevel(sLinear, input.Uv + float2(h.x, -h.y), 0).r
 		+ tAo.SampleLevel(sLinear, input.Uv + float2(-h.x, h.y), 0).r + tAo.SampleLevel(sLinear, input.Uv + float2(h.x, h.y), 0).r) * 0.25;
@@ -525,6 +557,7 @@ struct DiligentPostProcess::Impl {
 	int historyCurrent = 0;
 	bool historyValid = false;
 	Matrix prevViewProj;
+	bool prevValid = false; // prevViewProj is a frame's (motion blur)
 	// FSR 3: the moving objects' motion vectors and all of them, the scene before its
 	// transparent parts and the reactive mask from it; whether this frame uses FSR 3, has the
 	// opaque copy, and whether the last frame used it (else its history is reset)
@@ -700,7 +733,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->depthFormat = depthFormat;
 	BufferDesc cb;
 	cb.Name = "Post-processing";
-	cb.Size = 320;
+	cb.Size = 336;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DYNAMIC;
 	cb.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -911,6 +944,10 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		memcpy((float*)mapped + 60, &prevViewProj, sizeof(Matrix));
 		const float motion[4] = { settings.jitterPixels[0] / w, settings.jitterPixels[1] / h, NO_OBJECT_MOTION, 0 };
 		memcpy((float*)mapped + 76, motion, sizeof(motion));
+		// (the last frame's camera only when there was one at this size, not orthographic)
+		const bool blurOn = settings.motionBlur > 0.0f && _impl->prevValid && !settings.ortho;
+		const float blur[4] = { blurOn ? std::clamp(settings.motionBlur, 0.0f, 1.0f) : 0.0f, 48.0f * w / 1920.0f + 8.0f, 0.25f * w, 0 };
+		memcpy((float*)mapped + 80, blur, sizeof(blur));
 		ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
 	};
 	write(0, 0, w, h);
@@ -955,6 +992,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 	}
 	_impl->historyValid = taaOn;
 	_impl->prevViewProj = viewProj;
+	_impl->prevValid = !settings.ortho;
 	// FSR 3.1: the composite with its motion vectors and reactive mask, anti-aliased and
 	// upscaled, copied into the back buffer
 	if (settings.fsr3 && !settings.ortho && _impl->fsr3Frame && _impl->fsr3) {

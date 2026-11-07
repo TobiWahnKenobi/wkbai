@@ -51,6 +51,8 @@ struct DiligentPostProcess {
 		// the ray-traced shadows' mask (DiligentRayShadows; 1 sunlit) and the light left in them
 		Diligent::ITextureView* rtShadowMask = nullptr;
 		float rtShadowLight = 0.5f;
+		// camera motion blur: the shutter, 0 (off) to 1 (the whole frame's motion)
+		float motionBlur = 0.0f;
 	};
 	// The object motion vectors' clear value: no moving object drawn there (the camera's
 	// motion is computed from the depth instead)

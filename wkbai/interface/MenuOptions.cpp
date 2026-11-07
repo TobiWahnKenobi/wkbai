@@ -237,6 +237,8 @@ namespace {
 		}
 		list.push_back(withEnabled(slider("sharpness", "lighting", "Sharpening", rs.sharpness, 0.0f, 1.0f),
 			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing >= 2; }));
+		// camera motion blur: 0 off, up to the whole frame's motion
+		list.push_back(slider("motionBlur", "lighting", "Camera motion blur", rs.motionBlur, 0.0f, 1.0f, "%.2f"));
 		{
 			MenuOption o;
 			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";
