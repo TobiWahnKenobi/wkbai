@@ -3840,6 +3840,9 @@ void Test_TurnedPlacement()
 		player->setItem(Tags::PDITEM_FOOD, 100000.0f);
 		player->setItem(Tags::PDITEM_GOLD, 100000.0f);
 		player->setItem(Tags::PDITEM_STONE, 100000.0f);
+		// (a second Manor needs the player's "Can Build Manor", which the Castle gives: the server
+		// refuses a build-menu stampdown its command doesn't allow)
+		player->setItem(server.gameSet->items.names.getIndex("Can Build Manor"), 1.0f);
 		const Footprint* fp = manor->footprint;
 		auto send = [&](const Vector3& at, const Vector3* orientation) -> ServerGameObject* {
 			NetPacketWriter msg(NETSRVMSG_STAMPDOWN);
@@ -3931,6 +3934,7 @@ void Test_TurnedPlacement()
 		server.addClient(&link);
 		player->setItem(Tags::PDITEM_WOOD, 100000.0f);
 		player->setItem(Tags::PDITEM_GOLD, 100000.0f);
+		player->setItem(server.gameSet->items.names.getIndex("Can Build Manor"), 1.0f);
 		ok &= server.startRecording(recording, std::string());
 		const Vector3 orientation(0.0f, 3 * quarter, 0.0f);
 		const auto [rx, rz] = turnF(manor->footprint->originX, manor->footprint->originZ, 3);

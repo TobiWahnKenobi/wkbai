@@ -1058,6 +1058,30 @@ static void ChooseAttachmentPath(Task* task)
 	task->pathPoints = std::move(paths[best].second);
 }
 
+void RestoreAttachmentPath(Task* task, uint32_t targetId, int pathNo, size_t step, bool tried)
+{
+	task->pathChosen = true;
+	task->pathTargetId = targetId;
+	task->pathNo = -1;
+	task->pathPoints.clear();
+	task->pathStep = 0;
+	task->pathStepTried = false;
+	ServerGameObject* target = task->target.get();
+	const char* prefix = AttachmentPathPrefix(task->blueprint);
+	if (pathNo < 0 || !target || !prefix || target->id != targetId)
+		return;
+	for (auto& [no, points] : AttachmentPaths(target, prefix))
+		if (no == pathNo && !points.empty()) {
+			task->pathNo = pathNo;
+			task->pathPoints = std::move(points);
+			task->pathStep = std::min(step, task->pathPoints.size() - 1);
+			// (not the walk asked for: a loaded unit stands, its movement isn't saved, and standing
+			// after an asked walk counts as the walk ended: it skipped the point, gave the last up)
+			(void)tried;
+			return;
+		}
+}
+
 void ObjectReferenceTask::onStart()
 {
 	this->pathChosen = false;

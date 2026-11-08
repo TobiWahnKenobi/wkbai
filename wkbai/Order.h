@@ -221,6 +221,12 @@ struct OrderConfiguration {
 	Order *getCurrentOrder() { return orders.empty() ? nullptr : &orders[0]; }
 };
 
+// A task's attachment path as a save keeps it (beside it, <save>.paths.txt: WKB.exe's saves have no
+// place for it): the path of its target's points, the point it walks to and whether that walk was
+// asked for. Without it a loaded worker took a path again from its first point (test 43: 2 of 14
+// workers carried on as in the saved run).
+void RestoreAttachmentPath(Task* task, uint32_t targetId, int pathNo, size_t step, bool tried);
+
 // The spot nearest to a place where a unit can stand clear of the other characters there or
 // walking there (a rally point's units gather around it)
 Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place);

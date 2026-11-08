@@ -171,6 +171,35 @@ void Server::loadSaveGame(const char * filename)
 	for (auto& [task, id] : postTaskTargets)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
+	// the workers' attachment paths as saved (<save>.paths.txt, wkbai's own)
+	if (const std::string side = std::string(filename) + ".paths.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		std::string all(text, size);
+		free(text);
+		size_t at = 0;
+		while (at < all.size()) {
+			size_t end = all.find('\n', at);
+			if (end == std::string::npos)
+				end = all.size();
+			const std::string line = all.substr(at, end - at);
+			at = end + 1;
+			unsigned objId = 0, targetId = 0;
+			int orderId = 0, taskId = 0, pathNo = -1, tried = 0;
+			size_t step = 0;
+			if (sscanf(line.c_str(), "%u %d %d %u %d %zu %d", &objId, &orderId, &taskId, &targetId, &pathNo, &step, &tried) != 7)
+				continue;
+			ServerGameObject* obj = findObject(objId);
+			if (!obj)
+				continue;
+			for (Order& order : obj->orderConfig.orders)
+				if (order.id == orderId)
+					for (auto& task : order.tasks)
+						if (task->id == taskId)
+							RestoreAttachmentPath(task.get(), targetId, pathNo, step, tried != 0);
+		}
+	}
 	// the work orders as saved, before any the scripts register again: their order decides which
 	// takes a unit listed by several (a replay played another game when they came in another)
 	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)

@@ -487,5 +487,34 @@ bool Server::saveGame(const char* filename)
 		else
 			std::filesystem::remove(side, ec);
 	}
+	// the workers' attachment paths (wkbai's own, RestoreAttachmentPath), beside it:
+	// <save>.paths.txt, a line "<object> <order id> <task id> <target> <path> <point> <tried>" each
+	{
+		std::string text;
+		if (!savingLevel)
+			for (const auto& [id, cobj] : idmap) {
+				const ServerGameObject* obj = (const ServerGameObject*)cobj;
+				if (obj->deleted)
+					continue;
+				for (const Order& order : obj->orderConfig.orders)
+					for (const auto& task : order.tasks)
+						if (task->pathChosen) {
+							char line[96];
+							snprintf(line, sizeof(line), "%u %d %d %u %d %zu %d\n", obj->id, order.id, task->id, task->pathTargetId,
+								task->pathNo, task->pathStep, (int)task->pathStepTried);
+							text += line;
+						}
+			}
+		std::filesystem::path side = path;
+		side += ".paths.txt";
+		if (!text.empty()) {
+			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
+				fwrite(text.data(), 1, text.size(), sf);
+				fclose(sf);
+			}
+		}
+		else
+			std::filesystem::remove(side, ec);
+	}
 	return ok;
 }
