@@ -117,11 +117,15 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	ease(v.ice, st.ice);
 	ease(v.waterRise, st.waterRise);
 	v.temperatureC = st.temperatureC;
-	v.sun = ComputeSun(v.dayFraction, v.yearFraction, es.seasons, v.cloudCover);
+	static const char* testMoon = getenv("WKB_TEST_MOONAGE"); // (a test hook: the moon's phase, 0-1)
+	const float moonAge = testMoon ? (float)atof(testMoon) : es.moonAge(t);
+	v.sun = ComputeSun(v.dayFraction, v.yearFraction, es.seasons, v.cloudCover, moonAge);
 	// the sun's frame: south is where the map's own sun stands (its art was lit from there)
 	Vector3 south = Vector3(g_mapLook.sun.x, 0.0f, g_mapLook.sun.z);
 	south = south.sqlen3() > 1e-6f ? south.normal() : Vector3(0, 0, 1);
-	const Vector3 east(south.z, 0.0f, -south.x);
+	// east: on the left facing south (the world's frame is left-handed, x right of z: (z, -x)
+	// put it on the right, a mirrored sky: the sun set on the left, a waxing moon lit on its left)
+	const Vector3 east(-south.z, 0.0f, south.x);
 	const Vector3& d = v.sun.direction; // (east, up, south)
 	terrain->sunVector = (east * d.x + Vector3(0, 1, 0) * d.y + south * d.z).normal();
 	auto toWorld = [&](const Vector3& e) { return (east * e.x + Vector3(0, 1, 0) * e.y + south * e.z).normal(); };

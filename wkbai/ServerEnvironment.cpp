@@ -898,6 +898,9 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	msg.writeUint8((uint8_t)settings.weatherMaxChange);
 	msg.writeUint16((uint16_t)settings.weatherTypes);
 	msg.writeFloat(weatherEnds);
+	// the moon's phase (every client draws the same one)
+	msg.writeUint8((uint8_t)settings.moonPhase);
+	msg.writeFloat(settings.moonStart);
 	state.write(msg);
 	if (only)
 		only->send(msg);

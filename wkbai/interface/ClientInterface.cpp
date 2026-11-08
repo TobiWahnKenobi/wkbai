@@ -1358,6 +1358,19 @@ void ClientInterface::drawEnvironmentDebug()
 		ImGui::Text("clouds %.2f  rain %.2f  snowfall %.2f  fog %.2f", st.cloudCover, st.rain, st.snowfall, st.fog);
 		ImGui::Text("wet %.2f  snow cover %.2f  ice %.2f%s  water %+.1f m", st.wetness, st.snowCover, st.ice, st.ice >= ICE_WALKABLE ? " (walkable)" : "", st.waterRise);
 		ImGui::Text("sight %.2f  ground speed %.2f  daylight %.2f", st.sightFactor, st.speedFactor, g_environment.sun.daylight);
+		{
+			// the moon: its phase (the setting's, or natural), how much is lit, its light now
+			const SunState& sun = g_environment.sun;
+			const int named = (int)std::floor(sun.moonAge * 8.0f + 0.5f) % 8 + 1;
+			ImGui::Text("moon: %s, day %.1f of 29.5, lit %.0f%%, light %.2f", MoonPhaseName(named), sun.moonAge * 29.53f, sun.moonLit * 100.0f, sun.moonLight);
+			int phase = es.moonPhase;
+			if (ImGui::BeginCombo("Moon phase", MoonPhaseName(phase))) {
+				for (int p = 0; p <= 8; p++)
+					if (ImGui::Selectable(MoonPhaseName(p), p == phase))
+						send("moonPhase", (float)p);
+				ImGui::EndCombo();
+			}
+		}
 		// how often the weather changes, and in how long it does next
 		std::string stability = WeatherStabilityName(es.weatherStability);
 		float lo, hi;

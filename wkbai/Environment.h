@@ -44,6 +44,16 @@ struct EnvironmentSettings {
 	int weatherStability = 3;
 	int weatherMinChange = 3, weatherMaxChange = 10;
 	int weatherTypes = 1023;
+	// the moon's phase ("moonPhase"): 0 natural (a 29.53-day month over the game's days, from
+	// moonStart, the phase the host's real calendar had when the game began), 1-8 fixed: new,
+	// waxing crescent, first quarter, waxing gibbous, full, waning gibbous, third quarter, waning
+	// crescent; moonStart 0..1 (0 new, 0.5 full), saved with the game ("moonStart"; "moonDay":
+	// the same in whole days of the month, 0-29, for the menu's integer settings and tests);
+	// below 0 not chosen yet: a new game takes the real calendar's (RealMoonAge), else full
+	int moonPhase = 0;
+	float moonStart = -1.0f;
+	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
+	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it
 	bool changeRange(float& lo, float& hi) const;
 	bool weatherAllowed(int w) const { return weatherStability != 4 || ((weatherTypes >> w) & 1) != 0; }
@@ -66,6 +76,11 @@ enum EnvWeather : uint8_t {
 const char* WeatherName(int weather);
 const char* SeasonName(int season);
 const char* WeatherStabilityName(int stability);
+const char* MoonPhaseName(int setting); // EnvironmentSettings::moonPhase's (0 "Natural")
+// the moon's phase on the host's real calendar now (0 new, 0.5 full): a new game's moonStart
+float RealMoonAge();
+// the lit part of the moon's disc (0 new .. 1 full) at a phase (moonAge)
+float MoonLitFraction(float age);
 
 // What the server simulates; the clients get it every game second
 struct EnvironmentState {
@@ -110,6 +125,9 @@ struct SunState {
 	float daylight = 1.0f;    // 0 night .. 1 full day
 	float colour[3] = { 1, 1, 1 }, ambient[3] = { 1, 1, 1 }; // multipliers of the map's own
 	float moon = 0.0f;
+	float moonAge = 0.5f;     // its phase (0 new, 0.5 full)
+	float moonLit = 1.0f;     // the lit part of its disc (MoonLitFraction)
+	float moonLight = 1.0f;   // its direct light: lit part times how far it is up (0 set)
 	float shadowFade = 1.0f; // 0 where the light jumps between the sun and the moon (dusk, dawn)
 	float sunrise = 6.0f, sunset = 18.0f; // the day's hours (by the season)
 	// the clouds' light: the true sun until it is 4 degrees below the horizon (the clouds stay lit
@@ -122,7 +140,9 @@ struct SunState {
 	Vector3 sunTrue{ 0.5f, 1.0f, 0.3f }, moonTrue{ -0.5f, -1.0f, -0.3f };
 };
 // dayFraction 0..1, yearFraction 0..1 (the sun higher in summer); clouds dim it
-SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover);
+// moonAge: the moon's phase (0 new, 0.5 full: opposite the sun, as without phases), its place
+// on the sky, its lit part and its light by it
+SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge = 0.5f);
 
 // how far the volumetric clouds' weather front has come over the camera (0: the old weather's
 // clouds overhead, 1: the new one's), set by the cloud renderer each frame (ticks: SDL_GetTicksNS

@@ -4,6 +4,7 @@
 
 #include "wkbre2.h"
 #include "platform.h"
+#include "Environment.h"
 
 #include <map>
 #include <functional>
@@ -5417,6 +5418,115 @@ void Test_BuildRequirements()
 	fflush(stdout);
 }
 
+// Moon phases (wkbai's day and night, no game data): each fixed phase's lit part, the side lit
+// (towards the sun: west when waxing, east when waning), the moon's place (its elongation from
+// the sun), its light and shadows by the lit part (none at new moon), the natural month over
+// the game's days, and the setting through the save game's / recording's text
+void Test_MoonPhases()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const char* what) {
+		if (!ok) failures++;
+		printf("MOONTEST %s: %s\n", ok ? "ok" : "FAILED", what);
+	};
+	const float expectLit[8] = { 0.0f, 0.1464f, 0.5f, 0.8536f, 1.0f, 0.8536f, 0.5f, 0.1464f };
+	auto lum = [](const SunState& s) { return s.colour[0] * 0.3f + s.colour[1] * 0.59f + s.colour[2] * 0.11f; };
+	float fullBest = 0.0f;
+	float best[9] = {};
+	for (int p = 1; p <= 8; p++) {
+		EnvironmentSettings es;
+		es.dayNight = true;
+		es.moonPhase = p;
+		const float age = es.moonAge(1234.0f);
+		const float lit = MoonLitFraction(age);
+		char what[160];
+		snprintf(what, sizeof(what), "%s: age %.3f lit %.3f (expected %.3f)", MoonPhaseName(p), age, lit, expectLit[p - 1]);
+		check(std::fabs(age - (p - 1) / 8.0f) < 1e-5f && std::fabs(lit - expectLit[p - 1]) < 0.002f, what);
+		// over the night (the sun 5 degrees or more down): the moon's best light, its height then,
+		// its lit side (the sun's direction across the disc: east component)
+		float bestLight = 0.0f, bestUp = -1.0f, sideEast = 0.0f, bestElong = 0.0f;
+		for (int m = 0; m < 24 * 60; m += 5) {
+			const SunState s = ComputeSun(m / (24.0f * 60.0f), 0.125f, false, 0.0f, age);
+			if (s.sunTrue.y > -0.09f)
+				continue;
+			if (lum(s) > bestLight || bestUp < -0.5f) {
+				bestLight = lum(s);
+				bestUp = s.moonTrue.y;
+				// the sky's east at the moon: where it was a minute before (the sky turns westwards)
+				const Vector3 across = s.sunTrue - s.moonTrue * s.sunTrue.dot(s.moonTrue);
+				const SunState before = ComputeSun((m - 1) / (24.0f * 60.0f), 0.125f, false, 0.0f, age);
+				sideEast = across.dot(before.moonTrue - s.moonTrue);
+				bestElong = std::acos(std::clamp(s.sunTrue.dot(s.moonTrue), -1.0f, 1.0f));
+			}
+		}
+		best[p] = bestLight;
+		if (p == 5)
+			fullBest = bestLight;
+		printf("MOONTEST %-16s best light %.4f (moon %.2f up), lit side %s, %.0f deg from the sun\n", MoonPhaseName(p), bestLight, bestUp,
+			p == 1 || p == 5 ? "-" : sideEast < 0 ? "west" : "east", bestElong * 180.0f / 3.14159265f);
+		if (p > 1 && p < 5) check(sideEast < 0.0f, "waxing: the side towards the sun is the west");
+		if (p > 5) check(sideEast > 0.0f, "waning: the side towards the sun is the east");
+		snprintf(what, sizeof(what), "%s: the moon %.0f degrees from the sun", MoonPhaseName(p), bestElong * 180.0f / 3.14159265f);
+		const float expectElong = (p - 1) / 8.0f * 360.0f, e = expectElong > 180.0f ? 360.0f - expectElong : expectElong;
+		check(std::fabs(bestElong * 180.0f / 3.14159265f - e) < 25.0f, what);
+	}
+	check(best[1] < 1e-4f, "new moon: no direct light (no shadows) all night");
+	for (int p = 2; p <= 8; p++) {
+		char what[160];
+		snprintf(what, sizeof(what), "%s: its best light %.3f of the full moon's, at most its lit part %.3f", MoonPhaseName(p), best[p] / fullBest, expectLit[p - 1]);
+		check(best[p] <= fullBest * expectLit[p - 1] + 0.002f && best[p] > 0.0f, what);
+	}
+	// the full moon's light as before the phases (opposite the sun, the old default)
+	{
+		const SunState s = ComputeSun(0.0f, 0.125f, false, 0.0f);
+		check(s.moonLight > 0.99f && s.moonTrue.y > 0.5f, "the default (no phase given): a full moon high at midnight");
+	}
+	// the natural month: on by 1/29.53 a game day, from moonStart
+	{
+		EnvironmentSettings es;
+		es.dayNight = true;
+		es.dayLengthMin = 20;
+		es.startHour = 0;
+		es.apply("moonDay", 7.0f);
+		const float a0 = es.moonAge(0.0f), a1 = es.moonAge(es.dayLengthS()), a30 = es.moonAge(es.dayLengthS() * 29.530589f);
+		char what[160];
+		snprintf(what, sizeof(what), "natural: day 0 %.4f, day 1 %.4f, a month later %.4f", a0, a1, a30);
+		check(std::fabs(a0 - 7.0f / 29.530589f) < 1e-4f && std::fabs(a1 - a0 - 1.0f / 29.530589f) < 1e-4f && std::fabs(a30 - a0) < 1e-3f, what);
+		EnvironmentSettings unset;
+		unset.dayNight = true;
+		check(unset.text().find("moon") == std::string::npos && std::fabs(unset.moonAge(0.0f) - 0.5f) < 0.02f,
+			"natural, not chosen (a game from before): no moon lines, a full moon");
+	}
+	// the save game's and the recording's text
+	for (int p = 0; p <= 8; p++) {
+		EnvironmentSettings es, back;
+		es.dayNight = back.dayNight = true;
+		es.moonPhase = p;
+		es.moonStart = 0.123456f;
+		const std::string text = es.text();
+		size_t start = 0;
+		while (start < text.size()) {
+			size_t end = text.find('\n', start);
+			if (end == std::string::npos) end = text.size();
+			const std::string line = text.substr(start, end - start);
+			start = end + 1;
+			const size_t eq = line.find('=');
+			if (eq != std::string::npos)
+				back.apply(line.substr(0, eq), (float)atof(line.c_str() + eq + 1));
+		}
+		bool same = back.moonPhase == es.moonPhase && back.moonStart == es.moonStart;
+		for (float t : { 0.0f, 600.0f, 98765.0f })
+			same = same && back.moonAge(t) == es.moonAge(t);
+		char what[160];
+		snprintf(what, sizeof(what), "%s through the saved text", MoonPhaseName(p));
+		check(same, what);
+	}
+	const float real = RealMoonAge();
+	printf("MOONTEST the real moon today: age %.3f (%.1f days), lit %.2f\n", real, real * 29.530589f, MoonLitFraction(real));
+	check(real >= 0.0f && real < 1.0f, "the real calendar's phase");
+	printf("MOONTEST %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -5470,6 +5580,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Train, "Training: six units at one Training Dummy (4 slots, a spot each)"},
 {Test_JobPositions, "Job positions: where each peasant job's worker stands at its building or target"},
 {Test_BuildRequirements, "Build requirements: the build menu's commands before and after the Fort's research"},
+{Test_MoonPhases, "Moon phases: lit part and side, the moon's light and shadows, the natural month, the saved setting"},
 };
 
 void LaunchTest()
