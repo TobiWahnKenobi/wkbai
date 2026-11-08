@@ -8,6 +8,9 @@
 // Diligent has no such vertex format.
 
 #include "DiligentEnhancedSceneRenderer.h"
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include "renderer_diligent.h"
 #include "DiligentClouds.h"
 #include "DiligentGI.h"
@@ -530,6 +533,38 @@ float2 PS_MotionAlpha(MOTION_OUTPUT input) : SV_Target
 }
 )---";
 
+// While prewarming (DiligentEnhancedSceneRenderer::prewarm of many models), the buffers are made
+// on several threads without their data, which goes up afterwards on this thread (UpdateBuffer):
+// on Direct3D 12 each buffer made with its data took about 2 ms, the game set's buildings 10 s.
+struct PendingUpload {
+	RefCntAutoPtr<IBuffer> buffer;
+	std::vector<uint8_t> data;
+};
+static std::atomic<bool> g_deferUploads = false;
+static std::mutex g_pendingMutex;
+static std::vector<PendingUpload> g_pendingUploads;
+
+static RefCntAutoPtr<IBuffer> CreateBufferWithData(IRenderDevice* device, BufferDesc desc, const void* data, uint64_t size)
+{
+	RefCntAutoPtr<IBuffer> buf;
+	if (g_deferUploads && size) {
+		desc.Usage = USAGE_DEFAULT;
+		device->CreateBuffer(desc, nullptr, &buf);
+		if (buf) {
+			PendingUpload up{ buf, std::vector<uint8_t>((const uint8_t*)data, (const uint8_t*)data + size) };
+			std::lock_guard<std::mutex> lock(g_pendingMutex);
+			g_pendingUploads.push_back(std::move(up));
+		}
+	}
+	else {
+		BufferData init{ data, size };
+		device->CreateBuffer(desc, size ? &init : nullptr, &buf);
+	}
+	if (!buf)
+		ferr("Diligent: could not create buffer \"%s\"", desc.Name);
+	return buf;
+}
+
 static RefCntAutoPtr<IBuffer> CreateImmutableBuffer(IRenderDevice* device, const char* name, BIND_FLAGS bind, const void* data, uint64_t size)
 {
 	BufferDesc desc;
@@ -537,12 +572,7 @@ static RefCntAutoPtr<IBuffer> CreateImmutableBuffer(IRenderDevice* device, const
 	desc.Size = std::max<uint64_t>(size, 4);
 	desc.BindFlags = bind;
 	desc.Usage = USAGE_IMMUTABLE;
-	BufferData init{ data, size };
-	RefCntAutoPtr<IBuffer> buf;
-	device->CreateBuffer(desc, size ? &init : nullptr, &buf);
-	if (!buf)
-		ferr("Diligent: could not create buffer \"%s\"", name);
-	return buf;
+	return CreateBufferWithData(device, desc, data, size);
 }
 
 // A buffer the vertex shader reads as a StructuredBuffer of 4-byte elements
@@ -555,12 +585,7 @@ static RefCntAutoPtr<IBuffer> CreateStructuredBuffer(IRenderDevice* device, cons
 	desc.Usage = USAGE_IMMUTABLE;
 	desc.Mode = BUFFER_MODE_STRUCTURED;
 	desc.ElementByteStride = 4;
-	BufferData init{ data, size };
-	RefCntAutoPtr<IBuffer> buf;
-	device->CreateBuffer(desc, size ? &init : nullptr, &buf);
-	if (!buf)
-		ferr("Diligent: could not create buffer \"%s\"", name);
-	return buf;
+	return CreateBufferWithData(device, desc, data, size);
 }
 
 struct DilMesh
@@ -638,8 +663,27 @@ struct DilAnim
 	RefCntAutoPtr<IShaderResourceBinding> binding; // the two buffers, made at the first draw
 	uint64_t frameVertexBytes = 0, frameNormalBytes = 0;
 	uint32_t frameVertices() const { return (uint32_t)(frameVertexBytes / 12); }
+	// the key frames worked out (CPU only; thread-safe for different models, once prepared)
+	struct Baked {
+		std::vector<uint32_t> animTimes;
+		std::vector<Vector3> vertices;
+		std::vector<uint32_t> normals;
+		size_t perFrame = 0;
+	};
 	static DilAnim create(AnimatedModel* model, IRenderDevice* device) {
+		return upload(bake(model), device);
+	}
+	static DilAnim upload(Baked&& b, IRenderDevice* device) {
 		DilAnim enh;
+		enh.animTimes = std::move(b.animTimes);
+		enh.frameVertexBytes = b.perFrame * 12;
+		enh.frameNormalBytes = b.perFrame * 4;
+		enh.animVertices = CreateStructuredBuffer(device, "Anim positions", b.vertices.data(), b.vertices.size() * 12);
+		enh.animNormals = CreateStructuredBuffer(device, "Anim normals", b.normals.data(), b.normals.size() * 4);
+		return enh;
+	}
+	static Baked bake(AnimatedModel* model) {
+		Baked enh;
 		model->prepare();
 		const auto& anim = model->anim;
 		const auto staticModel = model->getStaticModel();
@@ -650,8 +694,9 @@ struct DilAnim
 			animTimesSet.insert(anim.coords[c].frameTimes.begin(), anim.coords[c].frameTimes.end());
 		enh.animTimes.assign(animTimesSet.begin(), animTimesSet.end());
 		enh.animTimes.back() -= 1; // prevents last frame from becoming first frame
-		std::vector<Vector3> pVertices; std::vector<uint32_t> pNormals;
-		size_t perFrame = 0;
+		std::vector<Vector3>& pVertices = enh.vertices;
+		std::vector<uint32_t>& pNormals = enh.normals;
+		size_t& perFrame = enh.perFrame;
 		for (auto& mat : mesh.groupIndices)
 			perFrame += mat.size();
 		pVertices.reserve(perFrame * enh.animTimes.size());
@@ -666,10 +711,6 @@ struct DilAnim
 				}
 			}
 		}
-		enh.frameVertexBytes = perFrame * 12;
-		enh.frameNormalBytes = perFrame * 4;
-		enh.animVertices = CreateStructuredBuffer(device, "Anim positions", pVertices.data(), pVertices.size() * 12);
-		enh.animNormals = CreateStructuredBuffer(device, "Anim normals", pNormals.data(), pNormals.size() * 4);
 		return enh;
 	}
 };
@@ -998,6 +1039,69 @@ void DiligentEnhancedSceneRenderer::prewarm(Model* model)
 		if (_impl->animMap.find(animModel) == _impl->animMap.end())
 			_impl->animMap.emplace(animModel, DilAnim::create(animModel, device));
 	}
+}
+
+void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
+{
+	// the meshes and the animations' key frames (their buffers) made on all cores, the buffers'
+	// data put in here afterwards (CreateBufferWithData)
+	DiligentGfx* dgfx = (DiligentGfx*)gfx;
+	IRenderDevice* device = dgfx->device;
+	const auto c0 = std::chrono::steady_clock::now();
+	std::vector<StaticModel*> meshes;
+	std::vector<AnimatedModel*> anims;
+	std::set<Model*> seen;
+	for (Model* model : models) {
+		StaticModel* staticModel = model->getStaticModel();
+		if (_impl->meshMap.find(staticModel) == _impl->meshMap.end() && seen.insert(staticModel).second)
+			meshes.push_back(staticModel);
+		if (model != staticModel) {
+			auto* animModel = (AnimatedModel*)model;
+			if (_impl->animMap.find(animModel) == _impl->animMap.end() && seen.insert(animModel).second)
+				anims.push_back(animModel);
+		}
+	}
+	std::vector<DilMesh> madeMeshes(meshes.size());
+	std::vector<DilAnim> madeAnims(anims.size());
+	std::atomic<size_t> next = 0;
+	const size_t total = meshes.size() + anims.size();
+	auto work = [&]() {
+		for (size_t i; (i = next++) < total; ) {
+			if (i < meshes.size())
+				madeMeshes[i] = DilMesh::create(meshes[i], device);
+			else
+				madeAnims[i - meshes.size()] = DilAnim::create(anims[i - meshes.size()], device);
+		}
+	};
+	g_deferUploads = true;
+	const unsigned threads = std::clamp(std::thread::hardware_concurrency(), 1u, 16u);
+	std::vector<std::thread> pool;
+	for (unsigned t = 1; t < threads && t < total; t++)
+		pool.emplace_back(work);
+	work();
+	for (auto& t : pool)
+		t.join();
+	g_deferUploads = false;
+	const auto c1 = std::chrono::steady_clock::now();
+	for (size_t i = 0; i < meshes.size(); i++)
+		_impl->meshMap.emplace(meshes[i], std::move(madeMeshes[i]));
+	for (size_t i = 0; i < anims.size(); i++)
+		_impl->animMap.emplace(anims[i], std::move(madeAnims[i]));
+	size_t bytes = 0;
+	{
+		std::lock_guard<std::mutex> lock(g_pendingMutex);
+		for (PendingUpload& up : g_pendingUploads) {
+			dgfx->ctx->UpdateBuffer(up.buffer, 0, up.data.size(), up.data.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			bytes += up.data.size();
+		}
+		g_pendingUploads.clear();
+		g_pendingUploads.shrink_to_fit();
+	}
+	const auto c2 = std::chrono::steady_clock::now();
+	auto ms = [](auto a, auto b) { return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(b - a).count(); };
+	if (total)
+		printf("Prewarm: %zu meshes and %zu animations made in %lld ms on %u threads, %zu MB put in in %lld ms\n",
+			meshes.size(), anims.size(), ms(c0, c1), threads, bytes >> 20, ms(c1, c2));
 }
 
 void DiligentEnhancedSceneRenderer::render()

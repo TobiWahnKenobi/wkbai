@@ -15,6 +15,7 @@ struct DiligentEnhancedSceneRenderer : SceneRenderer
 	void init();
 	void render() override;
 	void prewarm(Model* model) override;
+	void prewarm(const std::vector<Model*>& models) override;
 private:
 	struct Impl;
 	Impl* _impl;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 struct IRenderer;
 struct Scene;
 struct Camera;
@@ -17,4 +19,6 @@ struct SceneRenderer {
 	virtual void render() = 0;
 	// Creates the model's GPU resources ahead of its first draw (e.g. at level start)
 	virtual void prewarm(Model* model) {}
+	// the same for many models at once (the work spread over threads where it can be)
+	virtual void prewarm(const std::vector<Model*>& models) { for (Model* m : models) prewarm(m); }
 };

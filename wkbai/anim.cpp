@@ -3,11 +3,13 @@
 // Licensed under the GNU General Public License 3
 
 #include "anim.h"
+#include <atomic>
 #include "util/BinaryReader.h"
 #include "file.h"
 #include "mesh.h"
 
-int g_diag_animHits = 0, g_diag_animMisses = 0;
+// (thread-safe: the renderer bakes animations on several threads, the buffers below are each thread's)
+std::atomic<int> g_diag_animHits = 0, g_diag_animMisses = 0;
 
 void Anim::load(const char *filename) {
 	char *fcnt; int fsize;
@@ -71,8 +73,8 @@ void Anim::load(const char *filename) {
 
 const Vector3* Anim::interpolateNormals(uint32_t animTime, const Mesh& mesh)
 {
-	static std::vector<Vector3> animnorms;
-	static std::pair<Anim*, uint32_t> prevcall = { nullptr, 0 };
+	thread_local std::vector<Vector3> animnorms;
+	thread_local std::pair<Anim*, uint32_t> prevcall = { nullptr, 0 };
 	auto curcall = std::make_pair(this, animTime);
 	if (curcall == prevcall)
 		return animnorms.data();
@@ -98,8 +100,8 @@ const Vector3* Anim::interpolateNormals(uint32_t animTime, const Mesh& mesh)
 
 const float* Anim::interpolate(uint32_t animTime, const Mesh& mesh)
 {
-	static std::vector<float> animverts;
-	static std::pair<Anim*, uint32_t> prevcall = { nullptr, 0 };
+	thread_local std::vector<float> animverts;
+	thread_local std::pair<Anim*, uint32_t> prevcall = { nullptr, 0 };
 	auto curcall = std::make_pair(this, animTime);
 	if (curcall == prevcall) {
 		g_diag_animHits++; return animverts.data();

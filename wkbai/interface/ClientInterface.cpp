@@ -1050,7 +1050,8 @@ static Matrix GetShearToGroundMatrix(const Terrain* terrain, Model* model, const
 void ClientInterface::prewarmLevel()
 {
 	ZoneScopedN("Prewarm level");
-	if (prewarmedLevel != client->getLevel())
+	const bool newLevel = prewarmedLevel != client->getLevel();
+	if (newLevel)
 		prewarmedModels.clear();
 	prewarmedLevel = client->getLevel();
 	prewarmCountdown = 60;
@@ -1076,12 +1077,63 @@ void ClientInterface::prewarmLevel()
 		}
 	};
 	collect(client->getLevel(), collect);
-	for (Model* model : models) {
-		scene->prewarm(model);
-		sceneRenderer->prewarm(model);
+	// When the game starts, besides: every building, character and missile the game set has, all
+	// their appearances and animations (a building placed, a unit trained, an arrow shot for the
+	// first time loaded its mesh and textures then, a stall in the game). Files missing (game-set
+	// entries no map uses) are left out: loading them stops the game.
+	const bool starting = newLevel && client->gameSet && g_settings.value<bool>("prewarmAllBlueprints", true);
+	size_t fromLevel = models.size();
+	if (starting) {
+		auto meshExists = [](const std::string& file) {
+			if (FileExists(file.c_str()))
+				return true;
+			const std::string base = file.substr(0, file.find_last_of('.'));
+			return FileExists((base + ".glb").c_str()) || FileExists((base + ".gltf").c_str());
+		};
+		auto loadable = [&](Model* m) {
+			if (auto* anim = dynamic_cast<AnimatedModel*>(m)) {
+				if (!anim->ready && !FileExists(anim->fileName.c_str()))
+					return false;
+				StaticModel* mesh = anim->getStaticModel();
+				return mesh && (mesh->ready || mesh->generator || meshExists(mesh->fileName));
+			}
+			auto* mesh = (StaticModel*)m;
+			return mesh->ready || mesh->generator || meshExists(mesh->fileName);
+		};
+		// ("prewarmClasses": which, a bit per GAMEOBJCLASS_; all three about 5 s on 12 cores and 0.7 GB of
+		// the GPU's memory with the game set's 2500 models, the buildings alone 2 s)
+		static const int classMask = g_settings.value<int>("prewarmClasses",
+			(1 << Tags::GAMEOBJCLASS_BUILDING) | (1 << Tags::GAMEOBJCLASS_CHARACTER) | (1 << Tags::GAMEOBJCLASS_MISSILE));
+		for (int cls : { Tags::GAMEOBJCLASS_BUILDING, Tags::GAMEOBJCLASS_CHARACTER, Tags::GAMEOBJCLASS_MISSILE })
+			if (classMask & (1 << cls))
+			for (size_t b = 0; b < client->gameSet->objBlueprints[cls].size(); b++) {
+				const GameObjBlueprint& bp = client->gameSet->objBlueprints[cls][b];
+				for (const auto& [subId, subtype] : bp.subtypes)
+					for (const auto& [appId, appear] : subtype.appearances)
+						for (const auto& [index, variants] : appear.animations)
+							for (Model* m : variants)
+								if (m && prewarmedModels.insert(m).second && loadable(m))
+									models.push_back(m);
+			}
 	}
+	// the files and textures here, then the GPU's buffers (the animations baked on all cores)
+	const uint64_t t0 = SDL_GetTicksNS();
+	for (Model* model : models) {
+		model->prepare();
+		if (StaticModel* sm = model->getStaticModel())
+			sm->prepare();
+	}
+	const uint64_t t1 = SDL_GetTicksNS();
+	for (Model* model : models)
+		scene->prewarm(model);
+	const uint64_t t2 = SDL_GetTicksNS();
+	sceneRenderer->prewarm(models);
+	const uint64_t t3 = SDL_GetTicksNS();
+	const uint64_t tFiles = t1 - t0, tTex = t2 - t1, tGpu = t3 - t2;
 	if (!models.empty())
-		printf("Prewarmed %zu models in %llu ms\n", models.size(), (unsigned long long)(SDL_GetTicks() - start));
+		printf("Prewarmed %zu models (%zu of the game set's besides the level's) in %llu ms (files %llu, textures %llu, GPU %llu)\n", models.size(),
+			models.size() - fromLevel, (unsigned long long)(SDL_GetTicks() - start),
+			(unsigned long long)(tFiles / 1000000), (unsigned long long)(tTex / 1000000), (unsigned long long)(tGpu / 1000000));
 }
 
 bool ClientInterface::fogOfWarOn() const

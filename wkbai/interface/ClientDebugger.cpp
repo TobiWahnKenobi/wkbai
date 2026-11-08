@@ -15,7 +15,7 @@
 #include <atomic>
 #include <SDL3/SDL_timer.h>
 
-extern int g_diag_animHits, g_diag_animMisses;
+extern std::atomic<int> g_diag_animHits, g_diag_animMisses;
 extern std::atomic_int g_diag_serverTicks;
 
 namespace {
@@ -181,8 +181,8 @@ void ClientDebugger::draw()
 	}
 
 	ImGui::Begin("Diagnostics");
-	ImGui::Text("animHits = %i", g_diag_animHits);
-	ImGui::Text("animMisses = %i", g_diag_animMisses);
+	ImGui::Text("animHits = %i", g_diag_animHits.load());
+	ImGui::Text("animMisses = %i", g_diag_animMisses.load());
 	static uint32_t diagLastCheck = SDL_GetTicks();
 	static int serverTicks = 0;
 	uint32_t sdlTime = SDL_GetTicks();
