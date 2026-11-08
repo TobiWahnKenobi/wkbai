@@ -787,6 +787,11 @@ void ClientInterface::drawFootprintTiles()
 // The refusal while placing a building, as WKB.exe shows it: "Cannot build here : ..." in its
 // in-game font (Fonts\Drop_Shadow_White) on a dark red box with a lighter red edge, under the
 // cursor (the look from the user's screenshots of the original at 1920 x 1080)
+Vector3 ClientInterface::stampdownOrientation() const
+{
+	return StampdownPlan::quarterTurn(Vector3(0.0f, stampdownQuarter * 1.5707964f, 0.0f));
+}
+
 void ClientInterface::drawStampdownRefusal()
 {
 	if (stampdownRefusal.empty())
@@ -2609,7 +2614,7 @@ void ClientInterface::iter()
 
 	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
 		if (stampdownBlueprint && stampdownPlayer) {
-			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand);
+			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand, stampdownOrientation());
 			if (stampdownFromCommand) {
 				const Command* cmd = &client->gameSet->commands[client->gameSet->commands.names.getIndex("Build")];
 				for (ClientGameObject* obj : selection) {
@@ -2752,6 +2757,20 @@ void ClientInterface::iter()
 			client->sendPauseRequest(true);
 			menuPausedGame = true;
 		}
+	}
+
+	// [ and ]: the building being placed turned by a quarter, as in WKB.exe (0x64ff22: the keys
+	// by their place on the keyboard, scan codes 0x1A and 0x1B, the two right of P; [ from 0 to
+	// pi/2, ] the other way). Back to unturned for another building.
+	if (stampdownBlueprint != stampdownTurnedFor) {
+		stampdownTurnedFor = stampdownBlueprint;
+		stampdownQuarter = 0;
+	}
+	if (stampdownBlueprint && !ImGui::GetIO().WantTextInput) {
+		if (g_keyPressed[SDL_SCANCODE_LEFTBRACKET])
+			stampdownQuarter = (stampdownQuarter + 1) % 4;
+		if (g_keyPressed[SDL_SCANCODE_RIGHTBRACKET])
+			stampdownQuarter = (stampdownQuarter + 3) % 4;
 	}
 
 	if (g_keyPressed[SDL_SCANCODE_E]) {
@@ -3210,6 +3229,7 @@ void ClientInterface::iter()
 			[this](const Command* cmd, int assignmentMode, int count) {
 				if (cmd->stampdownObject) {
 					stampdownBlueprint = cmd->stampdownObject;
+					stampdownQuarter = 0; // a new pick starts unturned, even the same building (0x6535da)
 					stampdownPlayer = (*selection.begin())->getPlayer();
 					stampdownFromCommand = true;
 				}
@@ -3712,19 +3732,23 @@ void ClientInterface::iter()
 					return foundation->subtypes.at(0).appearances.at(0).animations.at(0).at(0);
 				};
 				test.model = finishedModel(stampdownBlueprint);
+				// turned with [ and ]: the model, its footprint and its origin (WKB.exe 0x59a4d0 turns
+				// the origin as the tiles), the city rectangle (StampdownPlan)
+				const Vector3 orientation = stampdownOrientation();
 				if (auto* fp = stampdownBlueprint->footprint) {
-					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + fp->originX;
-					peapos.z = std::floor(peapos.z / 5.0f) * 5.0f + 2.5f + fp->originZ;
+					const auto rotOrigin = fp->rotateOrigin(orientation.y);
+					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + rotOrigin.first;
+					peapos.z = std::floor(peapos.z / 5.0f) * 5.0f + 2.5f + rotOrigin.second;
 					if (client->terrain)
 						peapos.y = client->terrain->getHeightEx(peapos.x, peapos.z, stampdownBlueprint->canWalkOnWater());
 				}
-				test.transform = Matrix::getTranslationMatrix(peapos);
+				test.transform = Matrix::getRotationYMatrix(-orientation.y) * Matrix::getTranslationMatrix(peapos);
 				test.color = stampdownPlayer->color;
 				scene->add(&test);
 
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
-				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, Vector3(0, 0, 0));
+				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, orientation);
 				for (const auto& verdict : plan.tiles)
 					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
 				// red where it can't be placed (the server refuses it too), green where it can, as in

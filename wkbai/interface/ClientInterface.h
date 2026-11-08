@@ -81,6 +81,12 @@ struct ClientInterface {
 	std::string stampdownRefusal;
 	void drawStampdownRefusal();
 	CliGORef stampdownPlayer;
+	// the building being placed turned by quarters (0 to 3), with [ and ] as in WKB.exe; back to
+	// 0 on every pick, the same building again too, as in WKB.exe (0x6535da); stampdownTurnedFor
+	// (the one it was turned for) also catches a pick made elsewhere
+	int stampdownQuarter = 0;
+	const GameObjBlueprint* stampdownTurnedFor = nullptr;
+	Vector3 stampdownOrientation() const;
 	bool sendStampdownEvent = false;
 	bool stampdownFromCommand = false;
 	std::unordered_set<CliGORef> selection;

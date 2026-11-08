@@ -91,6 +91,17 @@ const char* StampdownPlan::statusTextKey(Status status)
 	}
 }
 
+Vector3 StampdownPlan::quarterTurn(const Vector3& orientation)
+{
+	// the same floats as WKB.exe's (0x3fc90fdb, 0x40490fdb, 0x4096cbe4)
+	static const float quarters[4] = { 0.0f, 1.5707964f, 3.1415927f, 4.712389f };
+	const float y = orientation.y;
+	if (!std::isfinite(y))
+		return Vector3(0.0f, 0.0f, 0.0f);
+	const int q = (int)(((long long)std::llround(y / 1.5707964f) % 4 + 4) % 4);
+	return Vector3(0.0f, quarters[q], 0.0f);
+}
+
 StampdownPlan StampdownPlan::getStampdownPlan(
 	CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation)
 {
@@ -256,13 +267,20 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		if (bpWall && footprint) {
 			auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
 
-			// remove offset applied by building from position
-			position -= Vector3(footprint->originX, 0.0f, footprint->originZ);
+			// remove offset applied by building from position (turned with the building)
+			const auto rotOrigin = footprint->rotateOrigin(orientation.y);
+			position -= Vector3(rotOrigin.first, 0.0f, rotOrigin.second);
 
-			plan.cityRectangle.xStart = std::clamp(footprint->wallOriginDefaultMinX + static_cast<int>(position.x / 5.0f), 0, tileWidth - 1);
-			plan.cityRectangle.yStart = std::clamp(footprint->wallOriginDefaultMinY + static_cast<int>(position.z / 5.0f), 0, tileHeight - 1);
-			plan.cityRectangle.xEnd = std::clamp(footprint->wallOriginDefaultMaxX + static_cast<int>(position.x / 5.0f), 0, tileWidth - 1);
-			plan.cityRectangle.yEnd = std::clamp(footprint->wallOriginDefaultMaxY + static_cast<int>(position.z / 5.0f), 0, tileHeight - 1);
+			// The city rectangle turns with the building, as in WKB.exe (0x59a790): both corners of
+			// WALL_ORIGIN_DEFAULT turned as the footprint's tiles are (0x59a420), then the lower and
+			// the higher of each, on the building's tile
+			const auto [cornerX0, cornerZ0] = Footprint::TileOffset(footprint->wallOriginDefaultMinX, footprint->wallOriginDefaultMinY).rotate(orientation.y);
+			const auto [cornerX1, cornerZ1] = Footprint::TileOffset(footprint->wallOriginDefaultMaxX, footprint->wallOriginDefaultMaxY).rotate(orientation.y);
+			const int anchorX = static_cast<int>(position.x / 5.0f), anchorZ = static_cast<int>(position.z / 5.0f);
+			plan.cityRectangle.xStart = std::clamp(std::min(cornerX0, cornerX1) + anchorX, 0, tileWidth - 1);
+			plan.cityRectangle.yStart = std::clamp(std::min(cornerZ0, cornerZ1) + anchorZ, 0, tileHeight - 1);
+			plan.cityRectangle.xEnd = std::clamp(std::max(cornerX0, cornerX1) + anchorX, 0, tileWidth - 1);
+			plan.cityRectangle.yEnd = std::clamp(std::max(cornerZ0, cornerZ1) + anchorZ, 0, tileHeight - 1);
 
 			CommonGameObject* city = nullptr;
 			std::vector<CityRectangle> cityRectangles;
