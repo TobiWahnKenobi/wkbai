@@ -171,5 +171,5 @@ void OrderAssignmentBlueprint::assignTo(ServerGameObject* gameobj, SrvScriptCont
 	auto _1 = ctx->changeSelf(gameobj);
 	auto _2 = ctx->change(ctx->orderGiver, giver);
 	ServerGameObject *target = this->orderTarget ? this->orderTarget->getFirst(ctx) : nullptr;
-	gameobj->orderConfig.addOrder(this->orderToAssign, this->orderAssignmentMode, target);
+	gameobj->orderConfig.assignOrder(this->orderToAssign, this->orderAssignmentMode, target);
 }

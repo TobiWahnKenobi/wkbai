@@ -387,6 +387,13 @@ std::unique_ptr<Task> Task::create(int id, const TaskBlueprint* blueprint, Order
 
 Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	if (gameobj->flags & CommonGameObject::fTerminated)
+		return nullptr;
+	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
+}
+
+Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
+{
 	if (Order* currentOrder = getCurrentOrder()) {
 		if (currentOrder->blueprint->cannotInterruptOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST)
 			return nullptr;
