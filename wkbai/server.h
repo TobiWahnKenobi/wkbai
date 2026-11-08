@@ -223,6 +223,12 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
 	// (recorded, so a replay applies the panel's changes too)
 	bool cheatMode = false;
+	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, the map is not hidden
+	// before it is explored; off is not done yet) and "teamReconnaissance" (allies share their
+	// sight: applied as the players' Reconnaissance Upgrade Status), kept with the game settings
+	// (kept outside the struct: a member here moved the layout that a still unfound memory bug
+	// depends on, docs/engine/playtest-2026-11-07.md)
+	static bool clearFogOfWar, teamReconnaissance;
 	// with it, AIs found villages at gold (ValueGoldExpansion): the setting "aiGoldExpansion", off
 	// (25-minute tournament: 341 soldiers raised with it, 358 without; more gold, much less wood)
 	bool aiGoldExpansion = false;

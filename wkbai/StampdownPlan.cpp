@@ -236,10 +236,22 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			};
 
 		const GameSet* gameSet = gameState->gameSet.get();
-		const GameObjBlueprint* bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Foundation");
-		const GameObjBlueprint* bpWallCornerIn = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Corner In Foundation");
-		const GameObjBlueprint* bpWallCornerOut = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Corner Out Foundation");
-		const GameObjBlueprint* bpWallCrossPiece = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Cross Piece Foundation");
+		// the player's wall type: "Wall Index" (Walls.cpp: 0/1 stockade, 2/3 unaligned wall, 4/5
+		// technological, 6/7 celestial; the even ones the foundations the ring lays), set by the
+		// wall research ("Stockade to Wall" sets 2); the play test: a city grown after the research
+		// still got palisades. Falls back to the stockade when a set is missing.
+		static const char* const wallSets[4] = { "Stockade", "Unaligned Wall", "Technological Wall", "Celestial Wall" };
+		const int wallIndexItem = gameSet->items.names.getIndex("Wall Index");
+		const int wallSet = wallIndexItem >= 0 ? std::clamp((int)playerObj->getItem(wallIndexItem) / 2, 0, 3) : 0;
+		auto wallPiece = [&](const char* piece) {
+			const std::string name = std::string(wallSets[wallSet]) + piece;
+			const GameObjBlueprint* bp = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
+			return bp ? bp : gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, std::string("Stockade") + piece);
+		};
+		const GameObjBlueprint* bpWall = wallPiece(" Foundation");
+		const GameObjBlueprint* bpWallCornerIn = wallPiece(" Corner In Foundation");
+		const GameObjBlueprint* bpWallCornerOut = wallPiece(" Corner Out Foundation");
+		const GameObjBlueprint* bpWallCrossPiece = wallPiece(" Cross Piece Foundation");
 		Footprint* footprint = blueprint->footprint;
 		if (bpWall && footprint) {
 			auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
@@ -492,8 +504,17 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			lostGate = obj;
 	if (civic && (blueprint->createGatehouseWhenAutowalling || lostGate) && gameState->terrain && !plan.toCreate.empty()) {
 		const GameSet* gameSet = gameState->gameSet.get();
-		const GameObjBlueprint* bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Foundation");
-		const GameObjBlueprint* bpGate = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
+		// (the player's wall type, as the ring's: "Wall Index" / 2)
+		static const char* const wallSets[4] = { "Stockade", "Unaligned Wall", "Technological Wall", "Celestial Wall" };
+		static const char* const gateSets[4] = { "Stockade", "Unaligned", "Technological", "Celestial" };
+		const int wallIndexItem = gameSet->items.names.getIndex("Wall Index");
+		const int wallSet = wallIndexItem >= 0 ? std::clamp((int)playerObj->getItem(wallIndexItem) / 2, 0, 3) : 0;
+		const GameObjBlueprint* bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, std::string(wallSets[wallSet]) + " Foundation");
+		const GameObjBlueprint* bpGate = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, std::string(gateSets[wallSet]) + " Gatehouse Foundation");
+		if (!bpWall || !bpGate) {
+			bpWall = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Foundation");
+			bpGate = gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
+		}
 		const Vector3 door(std::sin(orientation.y), 0, std::cos(orientation.y));
 		// the new straight pieces by side (their angle and the line they stand on), then split
 		// into unbroken runs: where the city grew, a side's new pieces can be several runs

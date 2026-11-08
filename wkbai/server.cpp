@@ -45,13 +45,15 @@ Server::Server()
 
 void Server::loadSaveGame(const char * filename)
 {
-	// a save game's players' Lua AIs (<save>.ai.txt, wkbai's own)
+	// a save game's settings and players' Lua AIs (<save>.ai.txt, wkbai's own); cheat mode only
+	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
+	cheatMode = false;
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
 		LoadFile(side.c_str(), &text, &size);
-		applyAiSettingsText(std::string(text, size), true);
+		applyAiSettingsText(std::string(text, size), false);
 		free(text);
 	}
 	// wkbai's day and night, seasons and weather as saved (<save>.env.txt), else off
@@ -423,6 +425,8 @@ void Server::Recording::flushRun()
 	runCount = 0;
 }
 
+bool Server::clearFogOfWar = true, Server::teamReconnaissance = false;
+
 std::string Server::aiSettingsText() const
 {
 	char buf[512];
@@ -438,6 +442,15 @@ std::string Server::aiSettingsText() const
 	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
 	text += "aiWar=" + std::to_string((int)aiWar) + "\n";
 	text += "aiHumanFocus=" + std::to_string(aiHumanFocus) + "\n";
+	// (the rest of the lobby's that the save game itself doesn't hold: starting resources,
+	// population limit, king piece, diplomacy, barbarians are the players' and the level's items)
+	text += "aiWeather=" + std::to_string(aiWeather) + "\n";
+	text += "aiTakeOver=" + std::to_string((int)aiTakeOver) + "\n";
+	text += "modPolicy=" + std::to_string(modPolicy) + "\n";
+	text += "allowSpectators=" + std::to_string((int)allowSpectators) + "\n";
+	text += "maxSpectators=" + std::to_string(maxSpectators) + "\n";
+	text += "clearFogOfWar=" + std::to_string((int)clearFogOfWar) + "\n";
+	text += "teamReconnaissance=" + std::to_string((int)teamReconnaissance) + "\n";
 	if (cheatMode) // (only when on: the text of other games stays as it was)
 		text += "cheatMode=1\n";
 	// "aiScript.<player id>=<Lua AI>"
@@ -475,6 +488,12 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		if (environment.settings.apply(name, v)) continue;
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
 		else if (name == "cheatMode") cheatMode = v != 0;
+		else if (name == "aiTakeOver") aiTakeOver = v != 0;
+		else if (name == "modPolicy") modPolicy = (int)v;
+		else if (name == "allowSpectators") allowSpectators = v != 0;
+		else if (name == "maxSpectators") maxSpectators = (int)v;
+		else if (name == "clearFogOfWar") clearFogOfWar = v != 0;
+		else if (name == "teamReconnaissance") teamReconnaissance = v != 0;
 		else if (name == "aiAdvanced") aiAdvanced = (int)v;
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;

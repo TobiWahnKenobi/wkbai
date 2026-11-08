@@ -2685,6 +2685,22 @@ void Test_AutoWall()
 		printf("AUTOWALL turn %.2f: status %d, %d wall pieces, gatehouse at (%.0f, %.0f) from the Manor\n", turns[k], (int)plan.status, walls,
 			gate.x - at[k].x, gate.z - at[k].z);
 	}
+	// the player's wall type: after the stone wall research ("Wall Index" 2) the ring is of
+	// unaligned stone wall foundations and its gatehouse too, not palisades
+	for (const float wallIndex : { 0.0f, 2.0f, 4.0f, 6.0f }) {
+		const int item = server.gameSet->items.names.getIndex("Wall Index");
+		if (item < 0)
+			break;
+		player->setItem(item, wallIndex);
+		const auto plan = StampdownPlan::getStampdownPlan(&server, player, manor, at[0], Vector3(0, 0, 0));
+		std::map<std::string, int> kinds;
+		for (const auto& c : plan.toCreate)
+			kinds[c.blueprint->name]++;
+		printf("AUTOWALL wall index %.0f:", wallIndex);
+		for (const auto& [name, n] : kinds)
+			printf(" %d x %s,", n, name.c_str());
+		printf("\n");
+	}
 	fflush(stdout);
 }
 

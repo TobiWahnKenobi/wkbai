@@ -435,6 +435,16 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		}
 	}
 
+	// Team Reconnaissance: every player starts with the Shared Vision research done ("Reconnaissance
+	// Upgrade Status" 2, as Reconnaissance.cpp's research sets it), so allies see what each other
+	// sees (FogOfWar); the item is the players', kept by the save game
+	if (teamReconnaissance && isWKBattles && !campaignProfile)
+		for (auto& [objType, objList] : level->children)
+			for (auto* comObj : objList)
+				if (ServerGameObject* obj = comObj->dyncast<ServerGameObject>(); obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+					setItemByName(obj, "Reconnaissance Upgrade Status", 2.0f);
+	server.clearFogOfWar = clearFogOfWar;
+	server.teamReconnaissance = teamReconnaissance;
 	server.aggressiveAI = aggressiveAI;
 	// cheat mode (the F9 panel): a skirmish against the AI only, not with guests, not the campaign
 	server.cheatMode = cheatMode && !campaignProfile
