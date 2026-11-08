@@ -3450,6 +3450,97 @@ void Test_MassOrder()
 	fflush(stdout);
 }
 
+// Build requirements: every build command a peasant offers at the start of a skirmish, as the
+// build menu shows it (hidden by ICON_CONDITION, IMPOSSIBLE, WAIT, ENABLED) and whether the server
+// takes its stampdown; then with a Barracks built, before and after the Fort's research ("Can Build
+// Fort Wood", as Research Wooden Forts.cpp sets it): its command must be IMPOSSIBLE and refused
+// before, and not after. And the Gatehouse Battlements before and after the walls' research.
+bool StampdownAllowedByCommand(Server* server, const GameObjBlueprint* blueprint, ServerGameObject* player);
+void Test_BuildRequirements()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("buildRequirements", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("6 Player Tribes Unite.lvl"));
+	Server server;
+	server.loadSaveGame(("Save_Games\\" + level).c_str());
+	const GameSet& gs = *server.gameSet;
+	ServerGameObject* player = nullptr;
+	ServerGameObject* peasant = nullptr;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!peasant && child->blueprint->name == "Peasant")
+					peasant = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	for (const auto& [type, children] : server.getLevel()->children)
+		for (CommonGameObject* p : children)
+			if (!peasant && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player") {
+				find(p, find);
+				if (peasant)
+					player = p->dyncast<ServerGameObject>();
+			}
+	if (!peasant) {
+		printf("BUILDREQ no peasant\n");
+		return;
+	}
+	auto state = [&](const Command* cmd) -> std::string {
+		SrvScriptContext ctx(&server, peasant);
+		auto _ = ctx.selectedObject.change(peasant);
+		auto cond = [&](GSCondition* c) { return c->test->booleval(&ctx); };
+		for (int eq : cmd->iconConditions)
+			if (!gs.equations[eq]->booleval(&ctx))
+				return "hidden";
+		if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), cond))
+			return "IMPOSSIBLE";
+		if (!std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), cond))
+			return "WAIT";
+		return "ENABLED";
+	};
+	printf("BUILDREQ %s, player %u, peasant %u\n", level.c_str(), player->id, peasant->id);
+	for (const Command* cmd : peasant->blueprint->offeredCommands)
+		if (cmd->stampdownObject)
+			printf("BUILDREQ %-40s %-10s server %s\n", gs.commands.names.getString(cmd->id).c_str(), state(cmd).c_str(),
+				StampdownAllowedByCommand(&server, cmd->stampdownObject, player) ? "takes it" : "refuses it");
+	const int fortCmd = gs.commands.names.getIndex("Build Fort Wood");
+	const int fortItem = gs.items.names.getIndex("Can Build Fort Wood");
+	if (fortCmd < 0 || fortItem < 0) {
+		printf("BUILDREQ no Fort\n");
+		return;
+	}
+	const Command* fort = &gs.commands[fortCmd];
+	// the Fort's condition also tests "Can Build Watch Tower", which a finished Barracks gives
+	// (multi-player extensions.cpp: Barracks Stone Foundation's "Allow Watch Tower"): build one first
+	if (const int towerItem = gs.items.names.getIndex("Can Build Watch Tower"); towerItem >= 0)
+		player->setItem(towerItem, player->getItem(towerItem) + 1.0f);
+	const std::string before = state(fort);
+	const bool takenBefore = StampdownAllowedByCommand(&server, fort->stampdownObject, player);
+	player->setItem(fortItem, player->getItem(fortItem) + 1.0f); // the research's INCREASE_ITEM
+	const std::string after = state(fort);
+	const bool takenAfter = StampdownAllowedByCommand(&server, fort->stampdownObject, player);
+	bool ok = before == "IMPOSSIBLE" && !takenBefore && (after == "ENABLED" || after == "WAIT") && takenAfter;
+	printf("BUILDREQ Fort before the research: %s, server %s; after: %s, server %s -> %s\n", before.c_str(), takenBefore ? "takes it" : "refuses it",
+		after.c_str(), takenAfter ? "takes it" : "refuses it", ok ? "PASS" : "FAIL");
+	// the Gatehouse Battlements: none at the start (its STARTS_WITH_ITEM is in a /* */ block of
+	// multi-player extensions.cpp), offered after "Unaligned Wall to Technological Wall" (item 2)
+	const int gateCmd = gs.commands.names.getIndex("Build Technological Gatehouse Closed");
+	const int gateItem = gs.items.names.getIndex("Can Build Technological Gatehouse");
+	if (gateCmd >= 0 && gateItem >= 0) {
+		const Command* gate = &gs.commands[gateCmd];
+		const std::string gBefore = state(gate);
+		const bool gTakenBefore = StampdownAllowedByCommand(&server, gate->stampdownObject, player);
+		player->setItem(gateItem, 2.0f);
+		const std::string gAfter = state(gate);
+		const bool gOk = gBefore == "hidden" && !gTakenBefore && gAfter != "hidden" && gAfter != "IMPOSSIBLE";
+		printf("BUILDREQ Gatehouse Battlements before the research: %s, server %s; after: %s -> %s\n", gBefore.c_str(),
+			gTakenBefore ? "takes it" : "refuses it", gAfter.c_str(), gOk ? "PASS" : "FAIL");
+		ok = ok && gOk;
+	}
+	printf("BUILDREQ %s\n", ok ? "PASS" : "FAIL");
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3494,6 +3585,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_BuildRequirements, "Build requirements: the build menu's commands before and after the Fort's research"},
 };
 
 void LaunchTest()

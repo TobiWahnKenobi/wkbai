@@ -14,7 +14,7 @@ struct Language;
 struct ScriptContext;
 
 struct GSCondition {
-	ValueDeterminer* test;
+	ValueDeterminer* test = nullptr; // several TEST lines: all of them must hold
 	std::string hint;
 	std::vector<ValueDeterminer*> hintValues;
 

@@ -2037,13 +2037,15 @@ void ClientInterface::iter()
 	}
 	// Test runs: "benchmark": { ..., "script": [seconds, "<action>"] } runs a script action (on the
 	// server, through the script chat) once the game has run that long
+	// (or a list of such pairs)
 	if (BenchmarkEnabled() && client->getLevel()) {
-		static bool ran = false;
-		const nlohmann::json script = g_settings.value("benchmark", nlohmann::json::object()).value("script", nlohmann::json());
-		if (!ran && script.is_array() && script.size() == 2 && client->timeManager.currentTime > script[0].get<float>()) {
-			ran = true;
-			client->sendMessage("!" + script[1].get<std::string>());
-		}
+		static size_t ran = 0;
+		nlohmann::json script = g_settings.value("benchmark", nlohmann::json::object()).value("script", nlohmann::json());
+		if (script.is_array() && script.size() == 2 && script[0].is_number())
+			script = nlohmann::json::array({ script });
+		while (script.is_array() && ran < script.size() && script[ran].is_array() && script[ran].size() == 2
+			&& client->timeManager.currentTime > script[ran][0].get<float>())
+			client->sendMessage("!" + script[ran++][1].get<std::string>());
 	}
 	// the ground a building levelled, drawn anew
 	if (waterDesignChanged && terrainRenderer) {
@@ -3170,6 +3172,15 @@ void ClientInterface::iter()
 	}
 	if (uiScriptOn) {
 		try {
+			// Test runs: "benchmark": { ..., "buildTab": "MILITARY" } opens that tab of the build menu
+			if (BenchmarkEnabled()) {
+				static bool tabSet = false;
+				const std::string tab = g_settings.value("benchmark", nlohmann::json::object()).value("buildTab", std::string());
+				if (!tabSet && !tab.empty()) {
+					tabSet = true;
+					lua["buildTab"] = tab;
+				}
+			}
 			lua["CCUI_PerFrame"]();
 		}
 		catch (const sol::error& err) {

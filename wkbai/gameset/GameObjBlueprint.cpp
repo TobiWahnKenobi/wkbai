@@ -64,7 +64,10 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		endtag += "_EXTENSION";
 	while (!gsf.eof)
 	{
-		std::string strtag = gsf.nextString();
+		// nextTag skips /* ... */ as the original does: multi-player extensions.cpp has its
+		// gatehouses' STARTS_WITH_ITEM "Can Build ... Gatehouse" 1 commented out that way, read
+		// they unlocked the Gatehouse Battlements before the walls' research
+		std::string strtag = gsf.nextTag();
 		int tag = Tags::CBLUEPRINT_tagDict.getTagID(strtag.c_str());
 		if (strtag == endtag)
 			break;
