@@ -260,12 +260,14 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 {
 	ServerGameObject* parent = player;
 	std::vector<ServerGameObject*> walls;
+	// a quarter turn about y (WKB.exe turns footprints by quarters only, 0x59a420)
+	const Vector3 turned = StampdownPlan::quarterTurn(orientation);
 
 	if (inGameplay) {
 		if (!player->canAffordObject(blueprint))
 			return nullptr;
 
-		StampdownPlan plan = StampdownPlan::getStampdownPlan(this, player, blueprint, position, Vector3(0, 0, 0));
+		StampdownPlan plan = StampdownPlan::getStampdownPlan(this, player, blueprint, position, turned);
 		if (plan.status != StampdownPlan::Status::Valid)
 			return nullptr;
 
@@ -287,7 +289,7 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 			walls.push_back(spawnObject(creation.blueprint, parent, creation.position, creation.orientation));
 	}
 
-	ServerGameObject* obj = spawnObject(blueprint, parent, position, Vector3(0, 0, 0));
+	ServerGameObject* obj = spawnObject(blueprint, parent, position, turned);
 	if (inGameplay) {
 		player->payObjectCost(obj->blueprint);
 		levelTerrainUnder(obj);
@@ -763,6 +765,18 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 
 	gsf.advanceLine();
 	std::string endtag = "END_" + clsname;
+	// A building's POSITION waits for its ORIENTATION (the next line in saves), so that its
+	// footprint goes straight onto its turned tiles. Put down unturned first, a building could
+	// take another's shared (passable) tile and leave it empty as it turned: a turned Manor
+	// lost a tile to its gatehouse loaded after it.
+	const bool footprinted = blueprint && blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && blueprint->footprint;
+	std::optional<Vector3> pendingPosition;
+	auto placePending = [&]() {
+		if (pendingPosition) {
+			obj->setPosition(*pendingPosition);
+			pendingPosition.reset();
+		}
+	};
 	while (!gsf.eof) {
 		std::string strtag = gsf.nextTag();
 		// ANIMATION_STATE "<animation>" <variant> <start, ms> <rate> <0>: what the
@@ -803,13 +817,21 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 			float x = gsf.nextFloat();
 			float y = gsf.nextFloat();
 			float z = gsf.nextFloat();
-			obj->setPosition(Vector3(x, y, z));
+			if (footprinted)
+				pendingPosition = Vector3(x, y, z);
+			else
+				obj->setPosition(Vector3(x, y, z));
 			break;
 		}
 		case Tags::GAMEOBJ_ORIENTATION: {
 			float x = gsf.nextFloat();
 			float y = gsf.nextFloat();
 			float z = gsf.nextFloat();
+			if (pendingPosition) {
+				// turned where it is not yet (no tiles), then put down turned
+				obj->orientation = Vector3(x, y, z);
+				placePending();
+			}
 			obj->setOrientation(Vector3(x, y, z));
 			break;
 		}
@@ -1055,11 +1077,14 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 			break;
 		}
 		}
-		if (strtag == endtag)
+		if (strtag == endtag) {
+			placePending();
 			return obj;
+		}
 		gsf.advanceLine();
 	}
 
+	placePending();
 	return obj;
 }
 
@@ -3263,6 +3288,12 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				const uint8_t flags = br.readUint8();
 				const bool sendEvent = flags & 1;
 				const bool inGameplay = flags & 2;
+				// the building's orientation, turned a quarter at a time with [ and ] while it is
+				// placed (WKB.exe sends the preview's, 0x650ac0); absent from the messages of
+				// recordings made before, which were placed unturned
+				Vector3 orientation(0.0f, 0.0f, 0.0f);
+				if (data.size() >= (size_t)(br.pnt - data.c_str()) + 12)
+					orientation = br.readVector3();
 
 				clientInfos[clientIndex].lastStampdown = nullptr;
 
@@ -3271,7 +3302,7 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				if (!blueprint || !owningPlayer)
 					break;
 
-				ServerGameObject* obj = stampdownObject(blueprint, owningPlayer, pos, Vector3(0.0f, 0.0f, 0.0f), sendEvent, inGameplay);
+				ServerGameObject* obj = stampdownObject(blueprint, owningPlayer, pos, orientation, sendEvent, inGameplay);
 
 				clientInfos[clientIndex].lastStampdown = obj;
 				break;

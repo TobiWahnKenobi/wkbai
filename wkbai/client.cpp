@@ -891,7 +891,8 @@ void Client::sendPauseRequest(uint8_t pauseState)
 	serverLink->send(packet);
 }
 
-void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject * player, const Vector3 & position, bool sendEvent, bool inGameplay)
+void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject * player, const Vector3 & position, bool sendEvent, bool inGameplay,
+	const Vector3 & orientation)
 {
 	NetPacketWriter msg(NETSRVMSG_STAMPDOWN);
 	msg.writeUint32(blueprint->getFullId());
@@ -901,6 +902,8 @@ void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject 
 	flags |= sendEvent ? 1 : 0;
 	flags |= inGameplay ? 2 : 0;
 	msg.writeUint8(flags);
+	// last, so that recordings from before (without it) still read
+	msg.writeVector3(orientation);
 	serverLink->send(msg);
 }
 

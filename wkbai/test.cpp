@@ -3332,6 +3332,258 @@ void Test_DDS()
 	fflush(stdout);
 }
 
+// Turned placement (needs the game data): a building turned a quarter at a time before it is
+// placed, with [ and ] as in WKB.exe (0x64ff22). For each of the four turns:
+// - the plan of a Blacksmith (6 x 5 tiles, its origin and its city rectangle off centre) has the
+//   footprint's tiles and the city rectangle turned about the building's tile, as WKB.exe turns
+//   them (0x59a420: (x, z) to (-z, x) a quarter; 0x59a790 the rectangle's corners);
+// - a Manor (5 x 6) stamped down in play away from the cities, through the stampdown message
+//   with the orientation, faces that way and takes the turned tiles.
+// A message without the orientation (as in recordings from before) places it unturned. A save
+// and its reload keep the orientations and the tiles. Prints "TURN" lines, then "TURN all ok"
+// or "TURN FAILED".
+void Test_TurnedPlacement()
+{
+	LoadBCP("data.bcp");
+	bool ok = true;
+	auto turn = [](int x, int z, int q) {
+		for (int i = 0; i < q; i++) {
+			const int nx = -z;
+			z = x;
+			x = nx;
+		}
+		return std::pair<int, int>{ x, z };
+	};
+	auto turnF = [](float x, float z, int q) {
+		for (int i = 0; i < q; i++) {
+			const float nx = -z;
+			z = x;
+			x = nx;
+		}
+		return std::pair<float, float>{ x, z };
+	};
+	const float quarter = 1.5707964f;
+	// what a save keeps: object id, quarter, its tiles
+	struct Placed { uint32_t id; int q; std::set<std::pair<int, int>> tiles; };
+	std::vector<Placed> placed;
+	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8("Save_Games\\wkbai turned placement.sav"));
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		ServerGameObject* player = server.findObject(1027);
+		const GameObjBlueprint* smith = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Blacksmith Foundation");
+		const GameObjBlueprint* manor = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+		if (!player || !server.terrain || !smith || !smith->footprint || !manor || !manor->footprint) {
+			printf("TURN not set up\nTURN FAILED\n");
+			fflush(stdout);
+			return;
+		}
+		const auto [tw, th] = server.terrain->getNumPlayableTiles();
+		// the spot the preview gives for the cursor's tile (tx, tz), turned q quarters
+		auto spotAt = [&](const Footprint* fp, int tx, int tz, int q) {
+			const auto [rx, rz] = turnF(fp->originX, fp->originZ, q);
+			return Vector3(tx * 5.0f + 2.5f + rx, 0.0f, tz * 5.0f + 2.5f + rz);
+		};
+		auto expectedTiles = [&](const Footprint* fp, int tx, int tz, int q) {
+			std::set<std::pair<int, int>> tiles;
+			for (const auto& to : fp->tiles) {
+				const auto [rx, rz] = turn(to.offsetX, to.offsetZ, q);
+				tiles.insert({ tx + rx, tz + rz });
+			}
+			return tiles;
+		};
+		auto extent = [](const std::set<std::pair<int, int>>& tiles) {
+			int x0 = 1 << 30, x1 = -(1 << 30), z0 = 1 << 30, z1 = -(1 << 30);
+			for (const auto& [x, z] : tiles) {
+				x0 = std::min(x0, x); x1 = std::max(x1, x);
+				z0 = std::min(z0, z); z1 = std::max(z1, z);
+			}
+			return std::pair<int, int>{ x1 - x0 + 1, z1 - z0 + 1 };
+		};
+
+		// the Blacksmith's plan at one tile, turned
+		{
+			const Footprint* fp = smith->footprint;
+			const int tx = 110, tz = 30;
+			for (int q = 0; q < 4; q++) {
+				const Vector3 orientation(0.0f, q * quarter, 0.0f);
+				const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, smith, spotAt(fp, tx, tz, q), orientation);
+				std::set<std::pair<int, int>> got;
+				for (const auto& v : plan.tiles)
+					got.insert({ v.x, v.z });
+				const auto want = expectedTiles(fp, tx, tz, q);
+				const auto [w, d] = extent(got);
+				const auto [c0x, c0z] = turn(fp->wallOriginDefaultMinX, fp->wallOriginDefaultMinY, q);
+				const auto [c1x, c1z] = turn(fp->wallOriginDefaultMaxX, fp->wallOriginDefaultMaxY, q);
+				const CommonGameObject::CityRectangle r = plan.cityRectangle;
+				const bool rectOk = r.xStart == std::min(c0x, c1x) + tx && r.xEnd == std::max(c0x, c1x) + tx
+					&& r.yStart == std::min(c0z, c1z) + tz && r.yEnd == std::max(c0z, c1z) + tz;
+				const bool tilesOk = got == want && got.size() == fp->tiles.size();
+				printf("TURN Blacksmith plan, %d quarter(s): %zu tiles %d x %d, %s; city rectangle x %d..%d z %d..%d, %s\n", q, got.size(), w, d,
+					tilesOk ? "as turned" : "NOT as turned", r.xStart, r.xEnd, r.yStart, r.yEnd, rectOk ? "as turned" : "NOT as turned");
+				ok &= tilesOk && rectOk;
+			}
+		}
+
+		// Manors stamped down in play through the message, one for each turn, then one sent without
+		// the orientation
+		player->setItem(Tags::PDITEM_WOOD, 100000.0f);
+		player->setItem(Tags::PDITEM_FOOD, 100000.0f);
+		player->setItem(Tags::PDITEM_GOLD, 100000.0f);
+		player->setItem(Tags::PDITEM_STONE, 100000.0f);
+		const Footprint* fp = manor->footprint;
+		auto send = [&](const Vector3& at, const Vector3* orientation) -> ServerGameObject* {
+			NetPacketWriter msg(NETSRVMSG_STAMPDOWN);
+			msg.writeUint32(manor->getFullId());
+			msg.writeUint32(player->id);
+			msg.writeVector3(at);
+			msg.writeUint8(2); // in gameplay
+			if (orientation)
+				msg.writeVector3(*orientation);
+			server.handlePacket(0, std::string((const char*)msg.data, msg.size()));
+			return server.clientInfos.empty() ? nullptr : server.clientInfos[0].lastStampdown.get();
+		};
+		int startX = 20;
+		for (int q = 0; q <= 4; q++) {
+			const int turns = q % 4; // the fifth: without the orientation, unturned
+			const Vector3 orientation(0.0f, turns * quarter, 0.0f);
+			ServerGameObject* obj = nullptr;
+			int tx = 0, tz = 0;
+			// the first spot, along the map from the west, that takes it so turned
+			for (int z = 60; z < th - 20 && !obj; z += 3)
+				for (int x = startX; x < tw - 20 && !obj; x += 3) {
+					Vector3 at = spotAt(fp, x, z, turns);
+					if (StampdownPlan::getStampdownPlan(&server, player, manor, at, orientation).status != StampdownPlan::Status::Valid)
+						continue;
+					at.y = server.terrain->getHeight(at.x, at.z);
+					obj = send(at, q < 4 ? &orientation : nullptr);
+					tx = x;
+					tz = z;
+				}
+			if (!obj) {
+				printf("TURN Manor, %d quarter(s): no spot takes it\n", turns);
+				ok = false;
+				continue;
+			}
+			startX = tx + 12;
+			std::set<std::pair<int, int>> got;
+			for (int z = 0; z < th; z++)
+				for (int x = 0; x < tw; x++)
+					if (server.tiles[z * tw + x].building == obj->id)
+						got.insert({ x, z });
+			const auto want = expectedTiles(fp, tx, tz, turns);
+			const auto [w, d] = extent(got);
+			const int faces = (int)std::lround(obj->orientation.y / quarter);
+			const bool good = got == want && faces == turns;
+			printf("TURN Manor %u at tile (%d, %d), %d quarter(s)%s: faces %.4f (%d), %zu tiles %d x %d, %s\n", obj->id, tx, tz, turns,
+				q == 4 ? " (message without the orientation)" : "", obj->orientation.y, faces, got.size(), w, d, good ? "as turned" : "NOT as turned");
+			ok &= good;
+			placed.push_back({ obj->id, turns, got });
+		}
+		ok &= server.saveGame(savePath.c_str());
+	}
+	{
+		Server server;
+		server.loadSaveGame(savePath.c_str());
+		const auto [tw, th] = server.terrain->getNumPlayableTiles();
+		for (const Placed& p : placed) {
+			ServerGameObject* obj = server.findObject(p.id);
+			std::set<std::pair<int, int>> got;
+			if (obj)
+				for (int z = 0; z < th; z++)
+					for (int x = 0; x < tw; x++)
+						if (server.tiles[z * tw + x].building == obj->id)
+							got.insert({ x, z });
+			const bool good = obj && (int)std::lround(obj->orientation.y / quarter) == p.q && got == p.tiles;
+			int missing = 0;
+			for (const auto& t : p.tiles)
+				if (!got.count(t)) {
+					missing++;
+					const CommonGameObject* holder = server.tiles[t.second * tw + t.first].building.getFrom(&server);
+					printf("TURN   tile (%d, %d) held by %s\n", t.first, t.second, holder ? holder->blueprint->name.c_str() : "nothing");
+				}
+			printf("TURN reloaded Manor %u: %s (faces %.4f, %zu tiles, %d of the saved ones missing)\n", p.id, good ? "same orientation and tiles" : "DIFFERENT",
+				obj ? obj->orientation.y : -1.0f, got.size(), missing);
+			ok &= good;
+		}
+	}
+	// recorded and replayed: a turned Manor sent by a client over a link (Server::network records
+	// the message), then the recording played from its start: the same building, facing the same
+	// way, on the same tiles
+	const std::filesystem::path recording = g_userPath / "saved" / "Recordings" / "wkbai turned placement";
+	Placed recorded{ 0, 3, {} };
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		ServerGameObject* player = server.findObject(1027);
+		const GameObjBlueprint* manor = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+		NetLocalBuffer toServer, toClient;
+		NetLocalLink link(&toServer, &toClient);
+		server.addClient(&link);
+		player->setItem(Tags::PDITEM_WOOD, 100000.0f);
+		player->setItem(Tags::PDITEM_GOLD, 100000.0f);
+		ok &= server.startRecording(recording, std::string());
+		const Vector3 orientation(0.0f, 3 * quarter, 0.0f);
+		const auto [rx, rz] = turnF(manor->footprint->originX, manor->footprint->originZ, 3);
+		for (int z = 60; z < 200 && !recorded.id; z += 3)
+			for (int x = 30; x < 200 && !recorded.id; x += 3) {
+				Vector3 at(x * 5.0f + 2.5f + rx, 0.0f, z * 5.0f + 2.5f + rz);
+				if (StampdownPlan::getStampdownPlan(&server, player, manor, at, orientation).status != StampdownPlan::Status::Valid)
+					continue;
+				at.y = server.terrain->getHeight(at.x, at.z);
+				NetPacketWriter msg(NETSRVMSG_STAMPDOWN);
+				msg.writeUint32(manor->getFullId());
+				msg.writeUint32(player->id);
+				msg.writeVector3(at);
+				msg.writeUint8(2);
+				msg.writeVector3(orientation);
+				{
+					std::lock_guard<std::mutex> lock(toServer.mutex);
+					toServer.queue.push(NetPacket(msg.getString()));
+				}
+				server.network();
+				if (ServerGameObject* obj = server.clientInfos[0].lastStampdown.get()) {
+					recorded.id = obj->id;
+					const auto [tw, th] = server.terrain->getNumPlayableTiles();
+					for (int tz = 0; tz < th; tz++)
+						for (int tx = 0; tx < tw; tx++)
+							if (server.tiles[tz * tw + tx].building == obj->id)
+								recorded.tiles.insert({ tx, tz });
+					recorded.q = (int)std::lround(obj->orientation.y / quarter);
+				}
+			}
+		for (int i = 0; i < 30; i++) {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
+		server.stopRecording();
+		server.removeClient(&link);
+	}
+	{
+		Server server;
+		server.loadSaveGame(PathToUtf8(recording / "start.sav").c_str());
+		const bool started = server.startReplay(recording);
+		while (started && server.replayEvent()) {}
+		ServerGameObject* obj = recorded.id ? server.findObject(recorded.id) : nullptr;
+		std::set<std::pair<int, int>> got;
+		if (obj) {
+			const auto [tw, th] = server.terrain->getNumPlayableTiles();
+			for (int tz = 0; tz < th; tz++)
+				for (int tx = 0; tx < tw; tx++)
+					if (server.tiles[tz * tw + tx].building == obj->id)
+						got.insert({ tx, tz });
+		}
+		const bool good = started && obj && obj->blueprint == server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation")
+			&& recorded.q == 3 && (int)std::lround(obj->orientation.y / quarter) == 3 && got == recorded.tiles;
+		printf("TURN recorded Manor %u, %d quarter(s), %zu tiles; replayed: %s\n", recorded.id, recorded.q, recorded.tiles.size(),
+			good ? "the same" : "DIFFERENT");
+		ok &= good;
+	}
+	printf(ok ? "TURN all ok\n" : "TURN FAILED\n");
+	fflush(stdout);
+}
+
 // A mass order (needs the game data): "massOrder": { "level": "<.lvl>", "units": n, "seconds": s }
 // (default Tribes Unite, 200, 60). n characters of the first player's first character's type
 // stand in a block by it and are all sent with one Move to the far side of the map, as a human
@@ -3494,6 +3746,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_TurnedPlacement, "Turned placement: a building turned by quarters with [ and ] before it is placed"},
 };
 
 void LaunchTest()

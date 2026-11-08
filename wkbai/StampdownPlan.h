@@ -66,4 +66,9 @@ struct StampdownPlan {
 	static bool tileTerrainAllowed(const CommonGameState* gameState, const Footprint::TileOffset& to, int tx, int tz);
 	// WKB.exe's text key for a refused placement (BUILDING_PLACEMENT_...), null if none
 	static const char* statusTextKey(Status status);
+	// The orientation a building is placed with: a quarter turn about y (0, pi/2, pi, 3pi/2), the
+	// nearest to the given one. WKB.exe turns a footprint by quarters only (0x59a420: within half
+	// a radian of one, else unturned); its interface steps the stampdown's angle by a quarter
+	// with [ and ] (0x64ff22).
+	static Vector3 quarterTurn(const Vector3& orientation);
 };
