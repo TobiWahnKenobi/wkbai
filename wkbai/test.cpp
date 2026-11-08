@@ -1776,6 +1776,49 @@ void Test_Farm()
 		}
 		SDL_Delay(16);
 	}
+
+	// a third peasant told to farm the first field, which the second one farms: the Farm command's
+	// POST_ORDER_SEQUENCE ("I didn't get the farmer job") sends it to the nearest free farm, a
+	// third field put down for it (it had stood idle by the farmed one)
+	peasants.clear();
+	find(player, find);
+	ServerGameObject* c = nullptr;
+	for (ServerGameObject* p : peasants)
+		if (p != a && p != b && p != spawned && !p->orderConfig.getCurrentOrder()) {
+			c = p;
+			break;
+		}
+	ServerGameObject* field1 = fieldRef.get();
+	if (!c || !field1) {
+		printf("FARM third part not set up\n");
+		fflush(stdout);
+		return;
+	}
+	Vector3 spot3 = spot + Vector3(0, 0, -30);
+	for (int i = 0; i < 40; i++) {
+		const Vector3 tryAt = spot + Vector3(-20.0f + 5.0f * (i % 8), 0, -20.0f - 10.0f * (i / 8));
+		if (StampdownPlan::getStampdownPlan(&server, player, fieldType, tryAt, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid) {
+			spot3 = tryAt;
+			break;
+		}
+	}
+	ServerGameObject* field3 = server.spawnObject(fieldType, player, spot3, Vector3(0, 0, 0));
+	field3->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+	server.gameSet->commands[farm].execute(c, field1, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	printf("FARM third peasant %u told to farm field %u (worked at %d); free field 3 is %u\n", c->id, field1->id, (int)field1->getItem(worked), field3->id);
+	const uint64_t start3 = SDL_GetTicks();
+	last.clear();
+	while (SDL_GetTicks() - start3 < 40000) {
+		server.tick();
+		const int t = (int)((SDL_GetTicks() - start3) / 1000);
+		const std::string now = "third: " + describe(c) + " | field 1 worked at " + std::to_string((int)field1->getItem(worked)) +
+			", field 3 worked at " + std::to_string((int)field3->getItem(worked));
+		if (now != last) {
+			last = now;
+			printf("FARM third t=%d %s\n", t, now.c_str());
+		}
+		SDL_Delay(16);
+	}
 	fflush(stdout);
 }
 

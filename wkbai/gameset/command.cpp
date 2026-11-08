@@ -108,7 +108,7 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 					face->hasFaceTo = true;
 				}
 		// Give blueprint for spawn tasks
-		if (this->order->classType == Tags::ORDTSKTYPE_SPAWN) {
+		if (neworder && this->order->classType == Tags::ORDTSKTYPE_SPAWN) {
 			auto& gs = *ctx.server->gameSet;
 			auto name = gs.commands.getString(this);
 			if (name.substr(0, 6) == "Spawn ") {
@@ -119,12 +119,20 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 				}
 			}
 		}
+		// Started here, once set up (a Spawn task needs its blueprint first, a Face Towards task
+		// its point), as addOrder starts one in front: the post-order sequence below looks at
+		// what the order's start made of the unit. Farm's "I didn't get the farmer job" tests "I
+		// am a Farmer", set by ORDER "Farm"'s start sequence; with the order starting only at the
+		// unit's next update, a second peasant sent to a farmed field stood idle by it (its order
+		// refused at the next update) instead of going to the nearest free farm.
+		if (neworder && neworder == self->orderConfig.getCurrentOrder() && !neworder->isWorking() && !neworder->isDone()
+			&& (assignmentMode == Tags::ORDERASSIGNMODE_DO_FIRST || assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE))
+			neworder->start();
 	}
-	// The post-order sequence looks at what the order made of the unit (Train: "I am training
-	// real hard", set by the order's start). An order assigned by the start sequence has started
-	// by now; a USE_ORDER order starts at the next update, so its sequence (Farm's and Shop's
-	// "I didn't get the ... job", Siege Tower's docking) would see it not yet started and send
-	// the unit elsewhere: those are left out until the order starts at once.
-	if (!this->postOrderSequence.actionList.empty() && (!this->order || (neworder && neworder->isWorking())))
+	// The post-order sequence (Train's "I didn't get to Train", Farm's and Shop's "I didn't get
+	// the ... job", Siege Tower's docking) runs once the order has had its start, or was refused
+	// (its PRE_CONDITION: a farmed field, a full dummy; that is the case it is for); not for an
+	// order queued behind others (DO_LAST), which hasn't started yet
+	if (!this->postOrderSequence.actionList.empty() && (!this->order || !neworder || neworder->state != OTS_UNINITIALISED))
 		this->postOrderSequence.run(&ctx);
 }
