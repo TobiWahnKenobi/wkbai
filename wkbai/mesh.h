@@ -62,6 +62,10 @@ struct Mesh
 	DynArray<PolygonList> polyLists;
 	DynArray<uint8_t> normals;
 	DynArray<uint16_t> normalRemapper;
+	// a glTF model's own normals, indexed like "normals"; empty for a Mesh3. The renderers and
+	// decodeNormals use them instead of the 256-entry table, so smooth and bevelled surfaces of
+	// a new model shade as made (the ids in "normals" stay for code that only knows those)
+	std::vector<Vector3> exactNormals;
 
 	Vector3 aabbLow, aabbHigh;
 

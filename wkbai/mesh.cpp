@@ -61,6 +61,7 @@ void Mesh::loadMesh3(const char* filename)
 	char *fcnt; int fsize;
 	LoadFile(filename, &fcnt, &fsize);
 	BinaryReader br(fcnt);
+	exactNormals.clear();
 	std::string sign = br.readString(4);
 	if (sign != "Mesh")
 		return;
@@ -207,8 +208,11 @@ void Mesh::loadMesh3(const char* filename)
 
 const Vector3* Mesh::decodeNormals()
 {
-	static std::vector<Vector3> decodedNorms;
-	static Mesh* prevcall = nullptr;
+	// (each thread's: the renderer bakes animations on several threads)
+	thread_local std::vector<Vector3> decodedNorms;
+	thread_local Mesh* prevcall = nullptr;
+	if (!exactNormals.empty())
+		return exactNormals.data();
 	if (this == prevcall)
 		return decodedNorms.data();
 	prevcall = this;
