@@ -291,8 +291,12 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 		else if (plan.newOwnerBlueprint)
 			parent = spawnObject(plan.newOwnerBlueprint, player, Vector3(0, 0, 0), Vector3(0, 0, 0));
 
+		// sent to the clients too: wkbre2 kept the new rectangle on the server only, so a
+		// client's placement preview knew a city as its Manor's rectangle (and those of a
+		// loaded game) and refused a civic building far from the Manor, along walls it had
+		// grown since, as not "built near a Manor"
 		if (parent->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
-			parent->cityRectangles.push_back(plan.cityRectangle);
+			parent->addCityRectangle(plan.cityRectangle);
 
 		for (const auto& removal : plan.toRemove) {
 			destroyObject(removal.object.getFrom<Server>());

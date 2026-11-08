@@ -4567,6 +4567,152 @@ void Test_MoveArrival()
 	fflush(stdout);
 }
 
+// A city's area, as WKB.exe's (needs the game data): a Manor stamped down on 4 Peaks for player
+// 1027, then barracks one after another, each on the spot furthest from the Manor that still joins the city, so
+// that the city's walls reach far from the Manor. A local client takes the game over a
+// NetLocalLink. Then civic buildings are placed (looked at only) on a grid around the far end and
+// beyond: the client's preview must agree with the server on every spot (wkbre2 kept the grown
+// rectangles on the server only, so the client refused them as not "built near a Manor"), some
+// spots far from the Manor must be accepted, and the spots well outside the city refused as not
+// connected. Prints "CITYAREA" lines and "CITYAREA result: <ok|FAIL> ...".
+void Test_CityArea()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer toClient, toServer;
+	NetLocalLink srv2cli(&toClient, &toServer), cli2srv(&toServer, &toClient);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	auto pump = [&]() {
+		for (int i = 0; i < 1000 && cli2srv.available(); i++)
+			client.tick();
+	};
+	pump();
+	ServerGameObject* player = server.findObject(1027);
+	ClientGameObject* cliPlayer = client.findObject(1027);
+	const GameObjBlueprint* manor = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+	const GameObjBlueprint* barracks = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	if (!player || !cliPlayer || !manor || !barracks || !server.terrain || !server.tiles || !client.gameSet || !client.terrain) {
+		printf("CITYAREA not set up (player %d, client player %d)\n", player != nullptr, cliPlayer != nullptr);
+		return;
+	}
+	const GameObjBlueprint* cliBarracks = client.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone Foundation");
+	player->setItem(Tags::PDITEM_FOOD, 1e6f);
+	player->setItem(Tags::PDITEM_WOOD, 1e6f);
+	player->setItem(Tags::PDITEM_GOLD, 1e6f);
+	auto tileCentre = [](const GameObjBlueprint* bp, int tx, int tz) {
+		return Vector3(tx * 5.0f + 2.5f + bp->footprint->originX, 0.0f, tz * 5.0f + 2.5f + bp->footprint->originZ);
+	};
+	ServerGameObject* first = nullptr;
+	int mx = 0, mz = 0;
+	for (int tz = 50; tz <= 80 && !first; tz++)
+		for (int tx = 50; tx <= 80 && !first; tx++)
+			if ((first = server.stampdownObject(manor, player, tileCentre(manor, tx, tz), Vector3(0, 0, 0), true, true)))
+				mx = tx, mz = tz;
+	if (!first || !first->parent || first->parent->blueprint->bpClass != Tags::GAMEOBJCLASS_CITY) {
+		printf("CITYAREA no Manor stamped down\n");
+		return;
+	}
+	ServerGameObject* city = (ServerGameObject*)first->parent;
+	// barracks one after another, each on the spot that still joins the city and lies furthest
+	// from the Manor (in tiles, the larger of the two distances), up to 16 tiles from the last
+	using Status = StampdownPlan::Status;
+	auto reach = [&](int tx, int tz) { return std::max(std::abs(tx - mx), std::abs(tz - mz)); };
+	int lastX = mx, lastZ = mz, grown = 0;
+	for (int step = 0; step < 6; step++) {
+		int bx = 0, bz = 0, best = reach(lastX, lastZ);
+		for (int tz = lastZ - 16; tz <= lastZ + 16; tz++)
+			for (int tx = lastX - 16; tx <= lastX + 16; tx++)
+				if (reach(tx, tz) > best && StampdownPlan::getStampdownPlan(&server, player, barracks, tileCentre(barracks, tx, tz), Vector3(0, 0, 0)).status == Status::Valid)
+					best = reach(tx, tz), bx = tx, bz = tz;
+		if (best == reach(lastX, lastZ))
+			break;
+		ServerGameObject* b = server.stampdownObject(barracks, player, tileCentre(barracks, bx, bz), Vector3(0, 0, 0), true, true);
+		if (!b)
+			break;
+		lastX = bx, lastZ = bz;
+		grown++;
+		if (b->parent != city)
+			printf("CITYAREA barracks %d at (%.1f, %.1f) started a city of its own\n", step, b->position.x, b->position.z);
+	}
+	pump();
+	const ClientGameObject* cliCity = client.findObject(city->id);
+	int x0 = 1 << 30, z0 = 1 << 30, x1 = -1, z1 = -1;
+	for (const auto& r : city->cityRectangles) {
+		x0 = std::min(x0, r.xStart); z0 = std::min(z0, r.yStart);
+		x1 = std::max(x1, r.xEnd); z1 = std::max(z1, r.yEnd);
+	}
+	printf("CITYAREA Manor at tile (%d, %d), %d barracks, the last at tile (%d, %d), %d tiles from it; the city %d rectangles on the server, %d on the client, tiles x %d..%d z %d..%d\n",
+		mx, mz, grown, lastX, lastZ, reach(lastX, lastZ), (int)city->cityRectangles.size(), cliCity ? (int)cliCity->cityRectangles.size() : -1, x0, x1, z0, z1);
+
+	// a barracks placed on a grid around the city's far end and beyond
+	auto gap = [&](const CommonGameObject::CityRectangle& r) {
+		int g = 1 << 30;
+		for (const auto& c : city->cityRectangles)
+			g = std::min(g, std::max({ c.xStart - r.xEnd, r.xStart - c.xEnd, c.yStart - r.yEnd, r.yStart - c.yEnd }));
+		return g;
+	};
+	int compared = 0, differ = 0, farAccepted = 0, outsideRefused = 0, outsideTried = 0, outsideAccepted = 0;
+	for (int tz = lastZ - 24; tz <= lastZ + 24; tz++)
+		for (int tx = lastX - 24; tx <= lastX + 24; tx++) {
+			const Vector3 at = tileCentre(barracks, tx, tz);
+			const auto sp = StampdownPlan::getStampdownPlan(&server, player, barracks, at, Vector3(0, 0, 0));
+			const auto cp = StampdownPlan::getStampdownPlan(&client, cliPlayer, cliBarracks, at, Vector3(0, 0, 0));
+			compared++;
+			if (sp.status != cp.status) {
+				if (differ < 8)
+					printf("CITYAREA at tile (%d, %d) the server says %d, the client %d\n", tx, tz, (int)sp.status, (int)cp.status);
+				differ++;
+			}
+			// far from the Manor, along or in the city's far end
+			if (sp.status == Status::Valid && reach(tx, tz) >= 20 && gap(sp.cityRectangle) <= 0)
+				farAccepted++;
+			// well clear of the city (its rectangle 6 tiles or more from the city's)
+			if (gap(sp.cityRectangle) >= 6 && (sp.status == Status::Valid || sp.status == Status::InvalidNotConnected)) {
+				outsideTried++;
+				outsideRefused += sp.status == Status::InvalidNotConnected;
+				outsideAccepted += sp.status == Status::Valid;
+			}
+		}
+	printf("CITYAREA %d spots: %d differ between server and client; %d accepted 20 tiles or more from the Manor at the city's end; "
+		"well outside the city %d of %d refused as not connected, %d accepted\n",
+		compared, differ, farAccepted, outsideRefused, outsideTried, outsideAccepted);
+	const bool ok = grown >= 3 && differ == 0 && farAccepted > 0 && outsideTried > 0 && outsideAccepted == 0;
+	printf("CITYAREA result: %s\n", ok ? "ok" : "FAIL");
+
+	// for a look at it in game: the furthest accepted spot that builds into the city's walls,
+	// and the city with its foundations swapped for the finished buildings, saved as
+	// saved\Save_Games\CityArea.sav
+	Vector3 shown(-1, -1, -1);
+	int shownReach = -1;
+	for (int tz = lastZ - 24; tz <= lastZ + 24; tz++)
+		for (int tx = lastX - 24; tx <= lastX + 24; tx++) {
+			const Vector3 at = tileCentre(barracks, tx, tz);
+			const auto sp = StampdownPlan::getStampdownPlan(&server, player, barracks, at, Vector3(0, 0, 0));
+			if (sp.status == Status::Valid && !sp.toRemove.empty() && reach(tx, tz) > shownReach)
+				shownReach = reach(tx, tz), shown = at;
+		}
+	std::vector<ServerGameObject*> foundations;
+	for (const auto& [bpid, objlist] : city->children)
+		for (CommonGameObject* c : objlist)
+			if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation"))
+				foundations.push_back((ServerGameObject*)c);
+	for (ServerGameObject* o : foundations) {
+		const std::string built = o->blueprint->name.substr(0, o->blueprint->name.size() - 11);
+		if (const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, built)) {
+			const Vector3 at = o->position, turn = o->orientation;
+			server.destroyObject(o);
+			server.spawnObject(bp, city, at, turn);
+		}
+	}
+	const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / "CityArea.sav");
+	printf("CITYAREA saved %d to %s; a barracks into the walls accepted at (%.1f, %.1f), ground %.2f, %d tiles from the Manor\n",
+		(int)server.saveGame(path.c_str()), path.c_str(), shown.x, shown.z, server.terrain->getHeight(shown.x, shown.z), shownReach);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -4615,6 +4761,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Corpses, "Corpses: the fallen of a fight stay where they fell"},
 {Test_HoverCursor, "Hover cursors: the command and cursor of a unit over a building"},
 {Test_MoveArrival, "Move arrival (groups of 10, 50, 200, loose and in formation, with and without corpses)"},
+{Test_CityArea, "City area: civic buildings far from the Manor along a grown city, client and server"},
 };
 
 void LaunchTest()
