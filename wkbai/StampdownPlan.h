@@ -20,8 +20,9 @@ struct StampdownPlan {
 		InvalidTerrainType,
 		InvalidTooSteep,
 		InvalidNeighbour,
-		// WKB.exe's city rules (0x510f90): a civic building's ring of walls on at least four tiles
-		// of the player's cities (_MUST_BE_CONNECTED_TO_A_CITY), a civic centre's on none
+		// WKB.exe's city rules (0x510f90): a civic building's ring of walls on three tiles of a
+		// city's area or four counts of its walls (_MUST_BE_CONNECTED_TO_A_CITY), a civic centre's
+		// on none of its walls
 		// (_MUST_BE_DETACHED_FROM_ALL_CITIES), no new wall over a gatehouse
 		// (_A_WALL_IS_OVERLAPPING_A_GATEHOUSE)
 		InvalidNotConnected,

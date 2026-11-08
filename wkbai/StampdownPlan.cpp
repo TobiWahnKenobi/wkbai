@@ -271,38 +271,64 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				plan.newOwnerBlueprint = gameSet->findBlueprint(Tags::GAMEOBJCLASS_CITY, "New City");
 			}
 
-			// WKB.exe walks the new rectangle's four sides (0x510e90, 0x5897a0) and counts its
-			// tiles: those inside one of the player's cities (0x5104a0), where the ring joins its
-			// walls, and those outside all of them, where new wall goes (none: the building
-			// stands inside a city, which is always fine). A civic building needs at least four
-			// tiles on a city, a civic centre (Manor, Keep, Castle, Palace) none.
+			// WKB.exe walks the new rectangle's four sides (0x510e90, 0x5897a0), each from corner
+			// to corner, and its visitor (0x5180e0) sorts the tiles three ways:
+			// - outside all of the player's cities (0x5104a0 for each): new wall goes there
+			//   (0x8da210), and a corner that got its wall isn't visited again by the next side;
+			// - inside a city and strictly within one of the cities' rectangles, off its edge
+			//   (0x517e20, 0x5104f0): the city's area (0x8da20c);
+			// - inside a city, on its rectangles' edge: where its walls stand (0x8da214). A
+			//   corner there is counted twice, once by each side.
+			// No tile outside: the building stands inside a city, which is fine. Otherwise
+			// (0x510f90), three or more tiles of the city's area make it part of the city, however
+			// far from the Manor; with fewer, a civic building needs at least four counts on the
+			// city's walls (a corner of the new rectangle there counts twice) and a civic centre
+			// (Manor, Keep, Castle, Palace) none. "Near a Manor" in the refusal's words.
+			// wkbai counted every tile once, area and walls together.
 			{
 				const CityRectangle& r = plan.cityRectangle;
-				int onCity = 0, outside = 0;
+				int onWall = 0, inArea = 0, outside = 0;
+				std::vector<std::pair<int, int>> walled; // corners that got a new wall
 				auto count = [&](int tx, int tz) {
-					bool in = false;
+					if (std::find(walled.begin(), walled.end(), std::make_pair(tx, tz)) != walled.end())
+						return;
+					bool in = false, area = false;
 					for (const auto& [bpid, objlist] : playerObj->children)
 						for (auto* candidate : objlist)
-							if (!in && candidate->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY && cityContainsTile(candidate->cityRectangles, tx, tz))
-								in = true;
-					(in ? onCity : outside)++;
+							if (candidate->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+								for (const auto& cr : candidate->cityRectangles) {
+									in |= cr.xStart <= tx && tx <= cr.xEnd && cr.yStart <= tz && tz <= cr.yEnd;
+									area |= cr.xStart < tx && tx < cr.xEnd && cr.yStart < tz && tz < cr.yEnd;
+								}
+					if (!in) {
+						outside++;
+						walled.emplace_back(tx, tz);
+					}
+					else
+						(area ? inArea : onWall)++;
 				};
-				for (int tx = r.xStart; tx <= r.xEnd; tx++) {
-					count(tx, r.yStart);
-					if (r.yEnd != r.yStart)
-						count(tx, r.yEnd);
-				}
-				for (int tz = r.yStart + 1; tz < r.yEnd; tz++) {
-					count(r.xStart, tz);
-					if (r.xEnd != r.xStart)
-						count(r.xEnd, tz);
-				}
-				if (outside > 0) {
+				// the sides as 0x510e90 walks them: along +x, +z, -x, -z (0x5897a0 skips a side
+				// that starts where it ends)
+				auto side = [&](int x0, int z0, int x1, int z1) {
+					if (x0 == x1 && z0 == z1)
+						return;
+					const int sx = (x1 > x0) - (x1 < x0), sz = (z1 > z0) - (z1 < z0);
+					for (int tx = x0, tz = z0;; tx += sx, tz += sz) {
+						count(tx, tz);
+						if (tx == x1 && tz == z1)
+							break;
+					}
+				};
+				side(r.xStart, r.yStart, r.xEnd, r.yStart);
+				side(r.xEnd, r.yStart, r.xEnd, r.yEnd);
+				side(r.xEnd, r.yEnd, r.xStart, r.yEnd);
+				side(r.xStart, r.yEnd, r.xStart, r.yStart);
+				if (outside > 0 && inArea < 3) {
 					if (blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE) {
-						if (onCity > 0)
+						if (onWall > 0)
 							cityRefusal = Status::InvalidNotDetached;
 					}
-					else if (onCity < 4)
+					else if (onWall < 4)
 						cityRefusal = Status::InvalidNotConnected;
 				}
 				// no farm or village inside the new perimeter (WKB.exe 0x5113c0, after the above)
