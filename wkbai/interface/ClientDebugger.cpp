@@ -171,6 +171,7 @@ void ClientDebugger::draw()
 				const GameObjBlueprint &type = cls.blueprints[el.second];
 				if (ImGui::Selectable(type.getFullName().c_str())) {
 					cliUi->stampdownBlueprint = &type;
+					cliUi->stampdownQuarter = 0;
 					cliUi->stampdownFromCommand = false;
 				}
 			}
@@ -226,6 +227,7 @@ void ClientDebugger::draw()
 							if (ImGui::ImageButton(cmdname.c_str(), tex, ImVec2(48.0f, 48.0f))) {
 								if (cmd->stampdownObject) {
 									cliUi->stampdownBlueprint = cmd->stampdownObject;
+									cliUi->stampdownQuarter = 0;
 									cliUi->stampdownPlayer = sel->getPlayer();
 									cliUi->stampdownFromCommand = true;
 								}

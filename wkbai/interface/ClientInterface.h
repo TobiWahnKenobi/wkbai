@@ -76,7 +76,8 @@ struct ClientInterface {
 	void drawStampdownRefusal();
 	CliGORef stampdownPlayer;
 	// the building being placed turned by quarters (0 to 3), with [ and ] as in WKB.exe; back to
-	// 0 when another building is picked (stampdownTurnedFor: the one it was turned for)
+	// 0 on every pick, the same building again too, as in WKB.exe (0x6535da); stampdownTurnedFor
+	// (the one it was turned for) also catches a pick made elsewhere
 	int stampdownQuarter = 0;
 	const GameObjBlueprint* stampdownTurnedFor = nullptr;
 	Vector3 stampdownOrientation() const;

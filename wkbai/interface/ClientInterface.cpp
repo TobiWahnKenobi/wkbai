@@ -3133,6 +3133,7 @@ void ClientInterface::iter()
 			[this](const Command* cmd, int assignmentMode, int count) {
 				if (cmd->stampdownObject) {
 					stampdownBlueprint = cmd->stampdownObject;
+					stampdownQuarter = 0; // a new pick starts unturned, even the same building (0x6535da)
 					stampdownPlayer = (*selection.begin())->getPlayer();
 					stampdownFromCommand = true;
 				}
