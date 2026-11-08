@@ -273,6 +273,41 @@ ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerG
 	return obj;
 }
 
+// A player's stampdown from a build command (the client's build menu): allowed when one of the
+// player's objects offers a command that stamps this blueprint down, shows its button (the icon
+// conditions: the Gatehouse Battlements after the walls' research) and none of that command's
+// impossible conditions fails for it (the research, e.g. "Can Build Fort Wood"; the Observation
+// Point's Observatory charge bar, FINDER_SELECTED_OBJECT). The wait conditions (the cost) don't
+// count here: the client stamps down first and the foundation's build pays. A blueprint that no
+// command stamps down is allowed as before.
+bool StampdownAllowedByCommand(Server* server, const GameObjBlueprint* blueprint, ServerGameObject* player)
+{
+	std::vector<const Command*> commands;
+	for (const Command& cmd : server->gameSet->commands.blueprints)
+		if (cmd.stampdownObject == blueprint)
+			commands.push_back(&cmd);
+	if (commands.empty())
+		return true;
+	for (const auto& [id, cobj] : server->idmap) {
+		ServerGameObject* obj = (ServerGameObject*)cobj;
+		if (obj->deleted || obj->getPlayer() != player)
+			continue;
+		const auto& offered = obj->blueprint->offeredCommands;
+		for (const Command* cmd : commands) {
+			if (std::find(offered.begin(), offered.end(), cmd) == offered.end())
+				continue;
+			SrvScriptContext ctx(server, obj);
+			auto _ = ctx.selectedObject.change(obj);
+			if (std::all_of(cmd->iconConditions.begin(), cmd->iconConditions.end(),
+					[&](int eq) { return eq < 0 || server->gameSet->equations[eq]->booleval(&ctx); })
+				&& std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(),
+					[&](GSCondition* cond) { return cond->test->booleval(&ctx); }))
+				return true;
+		}
+	}
+	return false;
+}
+
 ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation, bool sendEvent, bool inGameplay)
 {
 	ServerGameObject* parent = player;
@@ -3405,6 +3440,9 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				const GameObjBlueprint* blueprint = gameSet->getBlueprint(bpid);
 				ServerGameObject* owningPlayer = findObject(playerid);
 				if (!blueprint || !owningPlayer)
+					break;
+				// a build menu stampdown the command doesn't allow yet (the Fort before its research)
+				if (inGameplay && !StampdownAllowedByCommand(this, blueprint, owningPlayer))
 					break;
 
 				ServerGameObject* obj = stampdownObject(blueprint, owningPlayer, pos, orientation, sendEvent, inGameplay);

@@ -24,13 +24,41 @@ void GSCondition::readHintValues(GSFileParser& gsf, const GameSet& gs, std::vect
 	}
 }
 
+namespace {
+// A CONDITION with several TEST lines holds when all of them hold, e.g. Fort.cpp's
+// "Can Build Fort Wood": TEST "Can Build Fort Wood" (the guildhall research) and TEST
+// "Can Build Watch Tower", with the hint "Arcanum_requires_Black_Mass_and_Observatory" for
+// Arcanum.cpp's two TESTs. Keeping only the last TEST let the Fort be built before its research.
+struct AllTestsDeterminer : ValueDeterminer {
+	std::vector<ValueDeterminer*> tests;
+	float eval(ScriptContext* ctx) override {
+		for (ValueDeterminer* t : tests)
+			if (!t->booleval(ctx))
+				return 0.0f;
+		return 1.0f;
+	}
+	void parse(GSFileParser&, const GameSet&) override {}
+};
+}
+
 void GSCondition::parse(GSFileParser & gsf, GameSet & gs)
 {
 	gsf.advanceLine();
+	AllTestsDeterminer* all = nullptr;
 	while (!gsf.eof) {
 		auto tag = gsf.nextTag();
 		if (tag == "TEST") {
-			test = ReadValueDeterminer(gsf, gs);
+			ValueDeterminer* next = ReadValueDeterminer(gsf, gs);
+			if (!test)
+				test = next;
+			else {
+				if (!all) {
+					all = new AllTestsDeterminer;
+					all->tests.push_back(test);
+					test = all;
+				}
+				all->tests.push_back(next);
+			}
 		}
 		else if (tag == "HINT") {
 			hint = gsf.nextString();
