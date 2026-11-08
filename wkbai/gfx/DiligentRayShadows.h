@@ -70,9 +70,11 @@ public:
 	void build(Diligent::IDeviceContext* ctx);
 	// the shadow mask (R8: 1 sunlit, 0 in shadow) of the scene's depth, for its size;
 	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors);
-	// fogBuffer: the renderers' FogBuffer (the shadows fade into the fog)
+	// fogBuffer: the renderers' FogBuffer (the shadows fade into the fog); heights: the terrain's
+	// vertex heights (R32F, (width + 1) x (height + 1); null: none) and its map edge in tiles
 	Diligent::ITextureView* renderMask(Diligent::IDeviceContext* ctx, Diligent::ITexture* depth, const float projection[4],
-		const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, Diligent::IBuffer* fogBuffer);
+		const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, Diligent::IBuffer* fogBuffer,
+		Diligent::ITextureView* heights, int terrainEdge);
 	// starts the water's reflection pass: the target (RGBA16F, the frame's size, cleared) and the
 	// pipeline are set with the depth target; the caller draws its water surface (float3
 	// position, float depth per vertex) with transformBuffer's view-projection, then restores
@@ -123,6 +125,7 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::ITexture> mask;
 	Diligent::ITexture* boundDepth = nullptr;
 	Diligent::IBuffer* boundFog = nullptr;
+	Diligent::ITextureView* boundHeights = nullptr;
 	Diligent::ITopLevelAS* boundTlas = nullptr;
 	// the water's reflections
 	bool reflectOk = false, reflectTried = false;

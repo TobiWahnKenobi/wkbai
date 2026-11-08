@@ -42,12 +42,13 @@ using namespace Diligent;
 static const char maskShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
 Texture2D<float> tDepth;
+Texture2D<float> tHeights; // the terrain's vertex heights
 
 cbuffer RtBuffer
 {
 	float4 Proj;         // P11, P22, P33, P43
 	float4 Texel;        // 1 / width, 1 / height, the frame (the jitter), the sun's angular radius
-	float4 SunDir;       // towards the sun
+	float4 SunDir;       // towards the sun, w: the map edge in tiles + 1 (0: no terrain heights)
 	float4x4 InverseView; // view -> world (row vectors)
 };
 
@@ -93,6 +94,20 @@ float3 WorldAt(float2 uv, float d)
 	return mul(float4(ndc.x * z / Proj.x, ndc.y * z / Proj.y, z, 1), InverseView).xyz;
 }
 
+// the terrain's height between its vertices (bilinear: the grass's ground, for its normal)
+float GroundHeight(float2 xz)
+{
+	uint w, h;
+	tHeights.GetDimensions(w, h);
+	float2 g = xz / 5 + (SunDir.w - 1);
+	int2 i = (int2)floor(g);
+	float2 f = g - i;
+	int2 top = int2(w, h) - 1;
+	float h00 = tHeights.Load(int3(clamp(i, 0, top), 0)), h10 = tHeights.Load(int3(clamp(i + int2(1, 0), 0, top), 0));
+	float h01 = tHeights.Load(int3(clamp(i + int2(0, 1), 0, top), 0)), h11 = tHeights.Load(int3(clamp(i + int2(1, 1), 0, top), 0));
+	return lerp(lerp(h00, h10, f.x), lerp(h01, h11, f.x), f.y);
+}
+
 float PS(VS_OUTPUT input) : SV_Target
 {
 	int2 px = int2(input.Pos.xy);
@@ -115,10 +130,32 @@ float PS(VS_OUTPUT input) : SV_Target
 	float fog = FogAmount(p, distance(p, FogCamera.xyz));
 	if (fog >= 0.999)
 		return 1;
+	float dist = length(p - camPos);
+	float off = 0.05 + dist * 0.0008;
 	// turned away from the sun: in its own shadow, as deep as the shadows it casts (the terrain's
 	// sky light is brightest on the slopes away from the sun, which would otherwise stay lighter
 	// than the shadow falling from them); faded in over the last few degrees before the terminator
 	float nl = dot(n, l);
+	if (nl < 0.15) {
+		// only on a surface the rays know (the terrain, the models): a short probe into it. The
+		// grass isn't in the structure, and its depth's normals (thin blades, each pixel another
+		// blade) face every way: its blades were half dark all over the meadow (the play test).
+		// There the ground under it decides, its normal from the terrain's heights.
+		RayDesc probe;
+		probe.Origin = p + n * off;
+		probe.TMin = 0;
+		probe.Direction = -n;
+		probe.TMax = off * 2.5;
+		RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> pq;
+		pq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, probe);
+)---" ALPHA_TEST_LOOP(pq) R"---(
+		if (pq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+			// no terrain heights: lit by its own light alone (as before the self shadow)
+			n = SunDir.w > 0 ? normalize(float3(GroundHeight(p.xz - float2(1.5, 0)) - GroundHeight(p.xz + float2(1.5, 0)), 3.0,
+				GroundHeight(p.xz - float2(0, 1.5)) - GroundHeight(p.xz + float2(0, 1.5)))) : l;
+			nl = dot(n, l);
+		}
+	}
 	float self = lerp(fog, 1, smoothstep(-0.06, 0.15, nl));
 	if (nl <= -0.06)
 		return self;
@@ -130,9 +167,8 @@ float PS(VS_OUTPUT input) : SV_Target
 	float3 b = cross(l, t);
 	float a = r1 * 6.2831853, rr = sqrt(r2) * Texel.w;
 	float3 dir = normalize(l + (t * cos(a) + b * sin(a)) * rr);
-	float dist = length(p - camPos);
 	RayDesc ray;
-	ray.Origin = p + n * (0.05 + dist * 0.0008);
+	ray.Origin = p + n * off;
 	ray.TMin = 0.01;
 	ray.Direction = dir;
 	ray.TMax = 2000; // the terrain's long shadows at a low sun
@@ -250,6 +286,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 		{ SHADER_TYPE_PIXEL, "RtBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "tHeights", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -642,7 +679,8 @@ void DiligentRayShadows::bindAlpha(IShaderResourceBinding* b)
 }
 
 ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* depth, const float projection[4],
-	const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, IBuffer* fogBuffer)
+	const Matrix& inverseView, const Vector3& sunDirection, uint64_t frameIndex, IBuffer* fogBuffer,
+	ITextureView* heights, int terrainEdge)
 {
 	if (!built || !depth || !fogBuffer)
 		return nullptr;
@@ -658,12 +696,16 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		mask.Release();
 		device->CreateTexture(td, nullptr, &mask);
 	}
-	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer) {
+	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer
+		|| boundHeights != heights) {
 		srb.Release();
 		signature->CreateShaderResourceBinding(&srb, true);
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(fogBuffer);
 		boundFog = fogBuffer;
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		// (without the terrain's heights the depth stands in, unread: SunDir.w is 0)
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tHeights")->Set(heights ? heights : depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		boundHeights = heights;
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
 		bindAlpha(srb);
 		maskAlphaVersion = alphaVersion;
@@ -677,7 +719,7 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 	const float head[12] = {
 		projection[0], projection[1], projection[2], projection[3],
 		1.0f / dd.Width, 1.0f / dd.Height, (float)(frameIndex % 64), 0.0093f, // the sun's disc: 0.53 degrees across
-		sun.x, sun.y, sun.z, 0,
+		sun.x, sun.y, sun.z, heights ? terrainEdge + 1.0f : 0.0f,
 	};
 	memcpy(f, head, sizeof(head));
 	const Matrix t = inverseView.getTranspose();
