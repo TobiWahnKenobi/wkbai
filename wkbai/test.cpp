@@ -1823,6 +1823,217 @@ void Test_Farm()
 	fflush(stdout);
 }
 
+// Job positions (needs the game data): on 4 Peaks, a peasant on each job beside the Manor (shop
+// keeping, farming, wood chopping with two on one tree, gold and stone mining, building with
+// two on one foundation, repairing, delivering) and the buildings they visit on the way (windmill,
+// sawmill, bank). 120 fixed game seconds; each time a worker starts working at its target
+// ("proximity satisfied") it prints where it stands: in the target's own frame (x right, z
+// forward), from its centre, and from the nearest attachment point of the task's category
+// (AC_ for ACTIVITY_PATH, DE_ for DELIVERY), which is where WKB.exe puts it: the end of one of
+// the target's paths. "JOBPOS summary" lines give each job's farthest distance from its point.
+void Test_JobPositions()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	g_settings["simSeed"] = 1;
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* peasant0 = nullptr, * manor = nullptr;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!peasant0 && child->blueprint->name == "Peasant")
+					peasant0 = child->dyncast<ServerGameObject>();
+				if (!manor && child->blueprint->name == "Manor")
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	if (!peasant0 || !manor) {
+		printf("JOBPOS not set up\n");
+		return;
+	}
+	server.startLevel();
+	// buildings in free spots around the Manor, each before the next is looked for
+	auto place = [&](const char* name, float minR) -> ServerGameObject* {
+		const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
+		if (!bp) {
+			printf("JOBPOS no building type \"%s\"\n", name);
+			return nullptr;
+		}
+		for (int r = (int)minR; r < 120; r += 5)
+			for (int a = 0; a < 16; a++) {
+				const float ang = a * 6.2831853f / 16.0f;
+				const Vector3 at = manor->position + Vector3(std::cos(ang) * r, 0, std::sin(ang) * r);
+				if (StampdownPlan::getStampdownPlan(&server, player, bp, at, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid) {
+					ServerGameObject* b = server.spawnObject(bp, player, at, Vector3(0, 0, 0));
+					b->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+					printf("JOBPOS placed %s #%u at (%.1f, %.1f), %.0f m from the Manor\n", name, b->id, b->position.x, b->position.z, (b->position - manor->position).len2xz());
+					return b;
+				}
+			}
+		printf("JOBPOS no spot for %s\n", name);
+		return nullptr;
+	};
+	ServerGameObject* shop = place("Shop Stone", 25);
+	ServerGameObject* farm = place("Standard Farm", 30);
+	ServerGameObject* foundation = place("Barracks Stone Foundation", 30);
+	ServerGameObject* damaged = place("Barracks Stone", 30);
+	place("Windmill", 30);
+	place("Sawmill", 30);
+	place("Bank", 30);
+	if (damaged) {
+		const int hp = server.gameSet->items.names.getIndex("Hit Points");
+		const int hpc = server.gameSet->items.names.getIndex("Hit Point Capacity");
+		if (hp >= 0 && hpc >= 0)
+			damaged->setItem(hp, damaged->getItem(hpc) * 0.3f);
+	}
+	// the nearest tree and outcroppings to the Manor
+	const int goldItem = server.gameSet->items.names.getIndex("Gold"), stoneItem = server.gameSet->items.names.getIndex("Stone");
+	ServerGameObject* tree = nullptr, * gold = nullptr, * stone = nullptr;
+	float dTree = 1e12f, dGold = 1e12f, dStone = 1e12f;
+	auto findRes = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* s = child->dyncast<ServerGameObject>();
+				const float d = (child->position - manor->position).sqlen2xz();
+				if (child->blueprint->name == "Coniferous Tree" && d < dTree) { dTree = d; tree = s; }
+				else if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && goldItem >= 0 && s->getItem(goldItem) > 0.0f && d < dGold) { dGold = d; gold = s; }
+				else if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && stoneItem >= 0 && s->getItem(stoneItem) > 0.0f && d < dStone) { dStone = d; stone = s; }
+				self(child, self);
+			}
+	};
+	findRes(server.getLevel(), findRes);
+
+	struct Job { const char* name; const char* command; ServerGameObject* target; int workers; };
+	const std::vector<Job> jobs = {
+		{ "shop keeping", "Shop", shop, 1 },
+		{ "farming", "Farm", farm, 1 }, // (one farmer a field: "Nearest local, unoccupied Farm")
+		{ "wood chopping", "Chop Tree", tree, 2 },
+		{ "gold mining", "Mine Gold", gold, 2 },
+		{ "stone mining", "Mine", stone, 1 },
+		{ "building", "Build", foundation, 2 },
+		{ "repairing", "Repair", damaged, 1 },
+	};
+	struct Worker { SrvGORef unit; std::string job; std::string lastTask; uint32_t lastTarget = 0; bool reported = true; };
+	std::vector<Worker> workers;
+	int n = 0;
+	for (const Job& job : jobs) {
+		const int cmd = server.gameSet->commands.names.getIndex(job.command);
+		if (!job.target || cmd < 0) {
+			printf("JOBPOS %s: not set up (%s)\n", job.name, job.target ? "no command" : "no target");
+			continue;
+		}
+		for (int i = 0; i < job.workers; i++, n++) {
+			// from around the Manor, 10 m out
+			const float ang = n * 0.7f;
+			ServerGameObject* w = server.spawnObject(peasant0->blueprint, player, manor->position + Vector3(std::cos(ang) * 12.0f, 0, std::sin(ang) * 12.0f), Vector3(0, 0, 0));
+			server.gameSet->commands[cmd].execute(w, job.target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			workers.push_back({ w, job.name });
+		}
+	}
+	// where a worker stands relative to its task's target
+	std::map<std::string, float> worst;
+	auto report = [&](Worker& wk, ServerGameObject* w, Task* task, ServerGameObject* target) {
+		const Vector3 d = w->position - target->position;
+		const float c = std::cos(target->orientation.y), s = std::sin(target->orientation.y);
+		const float lx = d.x * c + d.z * s, lz = -d.x * s + d.z * c;
+		const char* prefix = task->blueprint->activityPath ? "AC_" : task->blueprint->deliveryPath ? "DE_" : nullptr;
+		std::string nearestTag = "-";
+		float nearest = -1.0f;
+		if (prefix)
+			if (Model* model = target->blueprint->getModel(target->subtype, target->appearance, target->animationIndex, target->animationVariant)) {
+				// (as the server places them: the type's scale, not the random size variation)
+				const float c = std::cos(-target->orientation.y), sn = std::sin(-target->orientation.y);
+				const Vector3& sc = target->blueprint->scaleAppearance;
+				for (size_t i = 0; i < model->getNumAPs(); i++) {
+					const AttachmentPoint& ap = model->getAPInfo(i);
+					if (ap.tag.compare(0, 3, prefix) != 0)
+						continue;
+					const Vector3& p = ap.staticState.position;
+					const Vector3 at(p.x * sc.x * c + p.z * sc.z * sn + target->position.x, 0.0f, -p.x * sc.x * sn + p.z * sc.z * c + target->position.z);
+					const float dist = (at - w->position).len2xz();
+					if (nearest < 0.0f || dist < nearest) { nearest = dist; nearestTag = ap.tag; }
+				}
+			}
+		const std::string taskName = server.gameSet->tasks.getString(task->blueprint->bpid);
+		// from the end of the path it was given (WKB.exe's rule: it works there)
+		const float fromEnd = task->pathNo >= 0 && !task->pathPoints.empty() ? (task->pathPoints.back() - w->position).len2xz() : -1.0f;
+		char endText[64] = "";
+		if (fromEnd >= 0.0f)
+			snprintf(endText, sizeof(endText), ", path %d end %.2f m", task->pathNo, fromEnd);
+		printf("JOBPOS %-13s #%u %-42s -> %-30s local (%6.2f, %6.2f) centre %5.2f m, nearest %s point %s %s%s\n",
+			wk.job.c_str(), w->id, ("\"" + taskName + "\"").c_str(), (target->blueprint->name + " #" + std::to_string(target->id)).c_str(),
+			lx, lz, d.len2xz(), prefix ? prefix : "(none)", nearestTag.c_str(),
+			nearest >= 0.0f ? (std::to_string(nearest).substr(0, 4) + " m").c_str() : "", endText);
+		if (fromEnd >= 0.0f) {
+			float& wv = worst[wk.job + " / " + taskName + " (from its path's end)"];
+			wv = std::max(wv, fromEnd);
+		}
+		else if (nearest >= 0.0f) {
+			float& wv = worst[wk.job + " / " + taskName + " (no path; nearest point)"];
+			wv = std::max(wv, nearest);
+		}
+		else
+			worst.try_emplace(wk.job + " / " + taskName + " (no points; from the centre)", d.len2xz());
+	};
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	for (int step = 0; step < 6000; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		for (Worker& wk : workers) {
+			ServerGameObject* w = wk.unit.get();
+			if (!w) continue;
+			Order* o = w->orderConfig.getCurrentOrder();
+			Task* t = o ? o->getCurrentTask() : nullptr;
+			const std::string tname = t ? server.gameSet->tasks.getString(t->blueprint->bpid) : "-";
+			const uint32_t tid = t && t->target ? t->target->id : 0;
+			if (tname != wk.lastTask || tid != wk.lastTarget) {
+				wk.lastTask = tname;
+				wk.lastTarget = tid;
+				wk.reported = false;
+				continue; // (a cycled task's flags are the last cycle's until it has started)
+			}
+			if (t && t->target && t->isWorking() && t->proximitySatisfied && !wk.reported) {
+				wk.reported = true;
+				report(wk, w, t, t->target.get());
+			}
+		}
+		// WKB_JOBPOS_SAVE=<name>: the game saved as <name>.sav in the user folder once the shop
+		// keeper, the farmer and the stone miner all work at their targets (to look at them),
+		// with a benchmark camera for each
+		static const char* saveName = getenv("WKB_JOBPOS_SAVE");
+		static bool saved = false;
+		if (saveName && !saved) {
+			std::vector<std::pair<std::string, ServerGameObject*>> atWork;
+			for (Worker& wk : workers)
+				if (ServerGameObject* w = wk.unit.get(); w && (wk.job == "shop keeping" || wk.job == "farming" || wk.job == "stone mining")) {
+					Order* o = w->orderConfig.getCurrentOrder();
+					Task* t = o ? o->getCurrentTask() : nullptr;
+					const std::string tname = t ? server.gameSet->tasks.getString(t->blueprint->bpid) : "";
+					if (t && t->isWorking() && t->proximitySatisfied && (tname == "Collect Gold From Shop" || tname == "Wait For Gold" || tname == "Farm" || tname == "Mine"))
+						atWork.emplace_back(wk.job, w);
+				}
+			if (atWork.size() == 3) {
+				saved = true;
+				server.clientPlayerObjects.clear();
+				server.clientPlayerObjects.emplace_back(player);
+				const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(std::string(saveName) + ".sav"));
+				printf("JOBPOS saved %d to %s at t=%.1f\n", (int)server.saveGame(path.c_str()), path.c_str(), server.timeManager.currentTime);
+				for (const auto& [job, w] : atWork)
+					printf("JOBPOS camera for %s #%u: [%.1f, %.1f, %.1f, -0.75, 0]\n", job.c_str(), w->id, w->position.x, w->position.y + 11.0f, w->position.z - 12.0f);
+			}
+		}
+	}
+	for (const auto& [job, d] : worst)
+		printf("JOBPOS summary %-70s %5.2f m\n", job.c_str(), d);
+	fflush(stdout);
+}
+
 // Determinism (needs the game data): 4 Peaks with a fixed seed, every peasant chopping wood, 3000
 // fixed steps (60 s); a hash of every object's position, orientation and items. Twice with the
 // same seed must give the same hash. Prints "DETERMINISM seed <s> hash <h> objects <n>" and
@@ -5162,6 +5373,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_CityArea, "City area: civic buildings far from the Manor along a grown city, client and server"},
 {Test_TurnedPlacement, "Turned placement: a building turned by quarters with [ and ] before it is placed"},
 {Test_Train, "Training: six units at one Training Dummy (4 slots, a spot each)"},
+{Test_JobPositions, "Job positions: where each peasant job's worker stands at its building or target"},
 };
 
 void LaunchTest()
