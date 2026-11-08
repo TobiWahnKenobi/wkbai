@@ -61,11 +61,29 @@ void FogOfWar::update(Client* client)
 			}
 		}
 	};
+	// what sees: the player's own units, and an ally's when that ally shares its sight (the Shared
+	// Vision research done, "Reconnaissance Upgrade Status" 2, which Team Reconnaissance gives
+	// every player at the start); allies' units are drawn either way (isFriendly)
+	static const GameSet* itemsOf = nullptr;
+	static int reconItem = -1;
+	if (itemsOf != client->gameSet.get()) {
+		itemsOf = client->gameSet.get();
+		reconItem = itemsOf ? itemsOf->items.names.getIndex("Reconnaissance Upgrade Status") : -1;
+	}
+	CommonGameObject* me = client->clientPlayer.get();
+	auto sees = [&](CommonGameObject* obj) {
+		CommonGameObject* owner = obj->getPlayer();
+		if (!owner || !me)
+			return false;
+		if (owner == me)
+			return true;
+		return client->getDiplomaticStatus(owner, me) == 0 && reconItem >= 0 && owner->getItem(reconItem) >= 2.0f;
+	};
 	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
 		for (const auto& [type, children] : obj->children)
 			for (CommonGameObject* child : children) {
 				const int cls = child->blueprint->bpClass;
-				if ((cls == Tags::GAMEOBJCLASS_CHARACTER || cls == Tags::GAMEOBJCLASS_BUILDING) && isFriendly(client, child))
+				if ((cls == Tags::GAMEOBJCLASS_CHARACTER || cls == Tags::GAMEOBJCLASS_BUILDING) && sees(child))
 					stamp(child->position, child->getItem(Tags::PDITEM_ACTUAL_SIGHT_RANGE));
 				self(child, self);
 			}

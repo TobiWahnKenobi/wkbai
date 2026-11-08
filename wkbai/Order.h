@@ -150,6 +150,9 @@ struct Trigger {
 	Task *task;
 	const TriggerBlueprint *blueprint;
 	Trigger(Task *task, const TriggerBlueprint *blueprint) : task(task), blueprint(blueprint) {}
+	// (virtual: a task deletes its TimerTriggers through Trigger pointers; AddressSanitizer's
+	// new-delete-type-mismatch, 2026-11-07)
+	virtual ~Trigger() = default;
 	virtual void init() {}
 	virtual void update() {}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs);

@@ -436,12 +436,12 @@ bool Server::saveGame(const char* filename)
 	}
 	const bool ok = !ferror(f);
 	fclose(f);
-	// the players' Lua AIs (wkbai's own), beside it: <save>.ai.txt
+	// the game's settings (wkbai's own: the lobby's that the save game itself doesn't hold, the
+	// AI's options, cheat mode) and the players' Lua AIs, beside it: <save>.ai.txt; in single
+	// player and multiplayer alike (before 2026-11-07 the scripts only; the play test: a loaded
+	// game lost its cheat mode)
 	{
-		std::string scripts;
-		for (const auto& [id, name] : aiScripts)
-			if (!name.empty())
-				scripts += "aiScript." + std::to_string(id) + "=" + name + "\n";
+		const std::string scripts = savingLevel ? std::string() : aiSettingsText();
 		std::filesystem::path side = path;
 		side += ".ai.txt";
 		if (!scripts.empty()) {

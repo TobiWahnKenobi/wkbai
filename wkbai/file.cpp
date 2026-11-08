@@ -972,7 +972,19 @@ void LoadBCP(const char *fn)
 	InitFileSystem();
 }
 
+static void LoadFileUnterminated(const char *fn, char **out, int *outsize, int extraBytes);
+
+// The extra bytes after the file's contents are zeroed: callers ask for one as a text's
+// terminator (the particle systems' parser read past the end of a file without it,
+// AddressSanitizer's heap-buffer-overflow, 2026-11-07)
 void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
+{
+	LoadFileUnterminated(fn, out, outsize, extraBytes);
+	if (extraBytes > 0 && *out)
+		memset(*out + *outsize, 0, extraBytes);
+}
+
+static void LoadFileUnterminated(const char *fn, char **out, int *outsize, int extraBytes)
 {
 	if (FileSource* src = FindFileSource(fn))
 		if (src->load(fn, out, outsize, extraBytes))
@@ -1004,7 +1016,7 @@ void LoadFile(const char *fn, char **out, int *outsize, int extraBytes)
 	if (!sf && g_macFileNamesFallbackEnabled)
 		if (auto nfn = GetMacName(fn); !nfn.empty())
 		{
-			LoadFile(nfn.c_str(), out, outsize, extraBytes);
+			LoadFileUnterminated(nfn.c_str(), out, outsize, extraBytes);
 			return;
 		}
 	if(!sf)
