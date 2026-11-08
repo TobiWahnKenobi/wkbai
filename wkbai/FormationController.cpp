@@ -70,7 +70,7 @@ static std::vector<std::pair<float, float>> formationPlaces(FormationType type, 
 	return places;
 }
 
-void FormationController::update()
+static FormationType formationTypeOf(const ServerGameObject* formation)
 {
 	FormationType type = FormationType::Line;
 	if (formation->blueprint->name == "Line")
@@ -81,7 +81,32 @@ void FormationController::update()
 		type = FormationType::Wedge;
 	else if (formation->blueprint->name == "Orb")
 		type = FormationType::Orb;
+	return type;
+}
 
+bool FormationController::memberPlace(const ServerGameObject* formation, const ServerGameObject* member, Vector3& place)
+{
+	int numMembers = 0, index = -1;
+	const GameObjBlueprint* first = nullptr;
+	for (auto& [childType, childList] : formation->children)
+		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER)
+			for (CommonGameObject* c : childList) {
+				if (c == member)
+					index = numMembers;
+				numMembers++;
+				if (!first)
+					first = c->blueprint;
+			}
+	if (index < 0)
+		return false;
+	const auto places = formationPlaces(formationTypeOf(formation), numMembers, first->formationSeparationX, first->formationSeparationY);
+	place = Vector3(places[index].first, 0, places[index].second).transform(formation->getWorldMatrix());
+	return true;
+}
+
+void FormationController::update()
+{
+	const FormationType type = formationTypeOf(formation);
 	Server* server = Server::instance;
 	Matrix transformMatrix = formation->getWorldMatrix();
 
