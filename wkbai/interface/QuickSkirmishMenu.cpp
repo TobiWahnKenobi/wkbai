@@ -479,9 +479,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.environment.reset();
 		// (none in the campaign: its levels play as the original's, whatever the skirmish set)
 		server.environment.settings = campaignProfile ? EnvironmentSettings() : environment;
-		// the natural moon starts at the phase the real one has today (unless the settings gave one)
+		// the natural moon starts at the phase it had on the first day of the starting season in
+		// the year 1000 (unless the settings gave one), saved with the game
 		if (server.environment.settings.moonStart < 0.0f)
-			server.environment.settings.moonStart = RealMoonAge();
+			server.environment.settings.moonStart = HistoricMoonAge(server.environment.settings.startSeason);
 		server.environment.trace = g_settings.value("environmentTrace", false);
 		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
 			server.environment.forceWeather = force.value("weather", -1);

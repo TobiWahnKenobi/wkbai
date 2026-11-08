@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <ctime>
 #include <deque>
 
 namespace {
@@ -119,7 +118,7 @@ float EnvironmentSettings::moonAge(float time) const
 		return (moonPhase - 1) / 8.0f;
 	// the game's days so far (with the clock's own start and the debug panel's moves of it)
 	const float days = startHour / 24.0f + dayShift + time / std::max(dayLengthS(), 1.0f);
-	return Frac((moonStart < 0.0f ? 0.5f : moonStart) + days / 29.530589f);
+	return Frac((moonStart < 0.0f ? HistoricMoonAge(startSeason) : moonStart) + days / 29.530589f);
 }
 
 const char* MoonPhaseName(int p)
@@ -129,11 +128,16 @@ const char* MoonPhaseName(int p)
 	return (p >= 0 && p < 9) ? names[p] : "?";
 }
 
-float RealMoonAge()
+float HistoricMoonAge(int season)
 {
-	// a new moon on 6 January 2000, 18:14 UTC; the synodic month 29.530588853 days
-	const double days = ((double)std::time(nullptr) - 947182440.0) / 86400.0;
-	const double age = days / 29.530588853;
+	// the spring equinox of 2000 (20 March, 07:35 UTC, Julian day 2451623.816) a thousand mean
+	// tropical years back, the seasons a quarter year apart (14/15 March of the Julian calendar
+	// in the year 1000); the mean month from a new moon on 6 January 2000, 18:14 UTC (Julian day
+	// 2451550.26). The mean month, not the true new moons: a few hours off, as "roughly" asks.
+	// Spring 6.6 days old (near the first quarter), summer 9.3, autumn 12.1, winter 14.8 (full).
+	const double year = 365.24219;
+	const double jd = 2451623.816 - 1000.0 * year + std::clamp(season, 0, 3) * year / 4.0;
+	const double age = (std::floor(jd - 0.5) + 0.5 - 2451550.26) / 29.530588853; // its midnight
 	return (float)(age - std::floor(age));
 }
 

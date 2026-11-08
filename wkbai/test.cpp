@@ -5494,8 +5494,10 @@ void Test_MoonPhases()
 		check(std::fabs(a0 - 7.0f / 29.530589f) < 1e-4f && std::fabs(a1 - a0 - 1.0f / 29.530589f) < 1e-4f && std::fabs(a30 - a0) < 1e-3f, what);
 		EnvironmentSettings unset;
 		unset.dayNight = true;
-		check(unset.text().find("moon") == std::string::npos && std::fabs(unset.moonAge(0.0f) - 0.5f) < 0.02f,
-			"natural, not chosen (a game from before): no moon lines, a full moon");
+		unset.startSeason = 3;
+		unset.startHour = 0;
+		check(unset.text().find("moon") == std::string::npos && std::fabs(unset.moonAge(0.0f) - HistoricMoonAge(3)) < 1e-5f,
+			"natural, not chosen (a game from before): no moon lines, the year 1000's for the season");
 	}
 	// the save game's and the recording's text
 	for (int p = 0; p <= 8; p++) {
@@ -5521,9 +5523,17 @@ void Test_MoonPhases()
 		snprintf(what, sizeof(what), "%s through the saved text", MoonPhaseName(p));
 		check(same, what);
 	}
-	const float real = RealMoonAge();
-	printf("MOONTEST the real moon today: age %.3f (%.1f days), lit %.2f\n", real, real * 29.530589f, MoonLitFraction(real));
-	check(real >= 0.0f && real < 1.0f, "the real calendar's phase");
+	// the year 1000's moon on the first day of each season (the mean month: spring 6.6 days
+	// old, summer 9.3, autumn 12.1, winter 14.8, within the day the midnight takes)
+	const float expectDays[4] = { 6.6f, 9.3f, 12.1f, 14.8f };
+	for (int season = 0; season < 4; season++) {
+		const float a = HistoricMoonAge(season);
+		printf("MOONTEST the year 1000, first day of %s: age %.3f (%.1f days), lit %.2f\n", SeasonName(season), a,
+			a * 29.530589f, MoonLitFraction(a));
+		char what[160];
+		snprintf(what, sizeof(what), "the year 1000's %s moon %.1f days old", SeasonName(season), a * 29.530589f);
+		check(a * 29.530589f > expectDays[season] - 1.0f && a * 29.530589f <= expectDays[season] + 0.05f, what);
+	}
 	printf("MOONTEST %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
 }
 

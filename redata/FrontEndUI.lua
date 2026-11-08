@@ -1088,7 +1088,7 @@ local SETTINGS = {
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
 	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
-	moonPhase = 0, -- 0 Natural (from today's real moon, on over the game's days), 1-8 a fixed phase (MOON_PHASES)
+	moonPhase = 0, -- 0 Natural (the moon of the starting season's first day in AD 1000, on over the game's days), 1-8 a fixed phase (MOON_PHASES)
 	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
 	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])
 	weatherStability = 3, weatherMinChange = 3, weatherMaxChange = 10, weatherTypes = 1023,
@@ -1265,7 +1265,7 @@ local SEVERITIES = { "Gentle", "Normal", "Harsh", "Random" }
 local CLOUD_WEATHERS = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog",
 	"Snow", "Blizzard", "Heatwave", "Drought" }
 local STABILITIES = { "Frequent", "Normal", "Seldom", "Random", "Custom" }
-local MOON_PHASES = { "Natural (today's, then on by the days)", "New moon", "Waxing crescent", "First quarter",
+local MOON_PHASES = { "Natural (AD 1000's, on by the days)", "New moon", "Waxing crescent", "First quarter",
 	"Waxing gibbous", "Full moon", "Waning gibbous", "Third quarter", "Waning crescent" }
 local STABILITY_NOTES = { "A new weather every 1 to 4 minutes.", "A new weather every 3 to 10 minutes.",
 	"A new weather every 8 to 20 minutes.", "Each weather lasts 10-35% of a season's length (45 s - 10 min)." }

@@ -45,11 +45,11 @@ struct EnvironmentSettings {
 	int weatherMinChange = 3, weatherMaxChange = 10;
 	int weatherTypes = 1023;
 	// the moon's phase ("moonPhase"): 0 natural (a 29.53-day month over the game's days, from
-	// moonStart, the phase the host's real calendar had when the game began), 1-8 fixed: new,
-	// waxing crescent, first quarter, waxing gibbous, full, waning gibbous, third quarter, waning
-	// crescent; moonStart 0..1 (0 new, 0.5 full), saved with the game ("moonStart"; "moonDay":
-	// the same in whole days of the month, 0-29, for the menu's integer settings and tests);
-	// below 0 not chosen yet: a new game takes the real calendar's (RealMoonAge), else full
+	// moonStart, the moon's phase on the first day of startSeason in the year 1000), 1-8 fixed:
+	// new, waxing crescent, first quarter, waxing gibbous, full, waning gibbous, third quarter,
+	// waning crescent; moonStart 0..1 (0 new, 0.5 full), saved with the game ("moonStart";
+	// "moonDay": the same in whole days of the month, 0-29, for the menu's integer settings and
+	// tests); below 0 not chosen yet: the year 1000's for startSeason (HistoricMoonAge)
 	int moonPhase = 0;
 	float moonStart = -1.0f;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
@@ -77,8 +77,9 @@ const char* WeatherName(int weather);
 const char* SeasonName(int season);
 const char* WeatherStabilityName(int stability);
 const char* MoonPhaseName(int setting); // EnvironmentSettings::moonPhase's (0 "Natural")
-// the moon's phase on the host's real calendar now (0 new, 0.5 full): a new game's moonStart
-float RealMoonAge();
+// the moon's phase (0 new, 0.5 full) at midnight starting the first day of a season (0 spring ..
+// 3 winter, from its equinox or solstice) in the year 1000: the natural moon's start
+float HistoricMoonAge(int season);
 // the lit part of the moon's disc (0 new .. 1 full) at a phase (moonAge)
 float MoonLitFraction(float age);
 
