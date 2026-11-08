@@ -2363,6 +2363,35 @@ void Test_AIvsAI()
 		}
 		return false;
 	};
+	// "corpses": where each corpse was first seen; one that has since moved more than 0.05 m is
+	// printed ("AITEST corpse moved ..."), once a second while it moves
+	struct CorpseSeen { Vector3 pos; float since; float moved = 0.0f; std::string from; };
+	std::map<uint32_t, CorpseSeen> corpsesSeen;
+	int corpsesMoved = 0;
+	std::function<void(ServerGameObject*)> watchCorpses = [&](ServerGameObject* obj) {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* o = (ServerGameObject*)c;
+				if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->blueprint->name.rfind("Dead ", 0) == 0) {
+					auto it = corpsesSeen.find(o->id);
+					if (it == corpsesSeen.end())
+						corpsesSeen[o->id] = CorpseSeen{ o->position, server.timeManager.currentTime, 0.0f, Tags::GAMEOBJCLASS_tagDict.getStringFromID(obj->blueprint->bpClass) };
+					else {
+						const float d = (o->position - it->second.pos).len2xz();
+						if (d > it->second.moved + 0.05f) {
+							if (it->second.moved <= 0.05f)
+								corpsesMoved++;
+							it->second.moved = d;
+							Order* ord = o->orderConfig.getCurrentOrder();
+							printf("AITEST corpse moved t=%.0f %u %s %.2f m since t=%.0f, parent %s %u (first %s), moving=%d mc=%d order=%s\n", server.timeManager.currentTime, o->id,
+								o->blueprint->name.c_str(), d, it->second.since, Tags::GAMEOBJCLASS_tagDict.getStringFromID(obj->blueprint->bpClass), obj->id, it->second.from.c_str(),
+								(int)o->movement.isMoving(), (int)o->movementController.isMoving(), ord ? server.gameSet->orders.getString(ord->blueprint->bpid).c_str() : "-");
+						}
+					}
+				}
+				watchCorpses(o);
+			}
+	};
 	std::function<void(ServerGameObject*)> checkStands = [&](ServerGameObject* obj) {
 		for (const auto& [type, children] : obj->children)
 			for (CommonGameObject* c : children) {
@@ -2445,6 +2474,10 @@ void Test_AIvsAI()
 			nextStandCheck += 1.0f;
 			if (ServerGameObject* lvl = server.getLevel())
 				checkStands(lvl);
+			// "corpses": true: every corpse ("Dead ...") must stay where it became one
+			if (cfg.value("corpses", false))
+				if (ServerGameObject* lvl = server.getLevel())
+					watchCorpses(lvl);
 		}
 		const double stepMs = ((double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency()) - stepStart;
 		minuteSimMs += stepMs;
@@ -2571,6 +2604,8 @@ void Test_AIvsAI()
 	printf("AITEST end after %.0f game s in %.1f real s (%.1fx real time); standing:%s\n", server.timeManager.currentTime, wall,
 		server.timeManager.currentTime / std::max(wall, 0.001), list.c_str());
 	printf("AITEST walking in place: %d stands\n", walkingInPlace);
+	if (cfg.value("corpses", false))
+		printf("AITEST corpses %zu, moved %d\n", corpsesSeen.size(), corpsesMoved);
 	// the players no longer at war with each other (diplomacy: offers and the AIs' answers)
 	std::string peace;
 	std::vector<CommonGameObject*> players;
@@ -3450,6 +3485,128 @@ void Test_MassOrder()
 	fflush(stdout);
 }
 
+// Corpses (needs the game data): spearmen of player 1027, ten in a formation and six loose,
+// fight spearmen of 1030 on 4 Peaks; the survivors are then sent 60 m away. Each unit that
+// dies becomes its corpse ("Dead Spearman") in place; the corpse must not move after that. The
+// commands go to every unit the test set out with, the dead too, as the AI's lists did.
+// Prints "CORPSE t=<s> <id> <name> parent=<class> moved=<m> moving=<0|1>" every 5 game seconds
+// for each corpse, and "CORPSE corpses=<n> moved=<n> max=<m>" at the end (moved: > 0.05 m).
+void Test_Corpses()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_CORPSE_UNIT") ? getenv("WKB_CORPSE_UNIT") : "Spearman");
+	const int attack = server.gameSet->commands.names.getIndex("Attack");
+	const int move = server.gameSet->commands.names.getIndex("Move");
+	if (!own || !enemy || !bp || attack < 0 || move < 0 || server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+		printf("CORPSE not set up\n");
+		return;
+	}
+	// a flat-ish spot near the middle of the map
+	const auto area = server.terrain->getPlayableArea();
+	const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+	auto at = [&](float x, float z) { Vector3 p = centre + Vector3(x, 0, z); p.y = server.terrain->getHeight(p.x, p.z); return p; };
+	std::vector<SrvGORef> ownUnits, enemyUnits;
+	ServerGameObject* formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], own, {}, {});
+	Vector3 sum;
+	for (int i = 0; i < 10; i++) {
+		ServerGameObject* u = server.spawnObject(bp, own, at(-6.0f + (i % 5) * 3.0f, -4.0f + (i / 5) * 3.0f), Vector3(0, 0, 0));
+		sum += u->position;
+		u->setParent(formation);
+		ownUnits.emplace_back(u);
+	}
+	formation->setPosition(sum / 10.0f);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	for (int i = 0; i < 6; i++)
+		ownUnits.emplace_back(server.spawnObject(bp, own, at(-20.0f + i * 3.0f, 6.0f), Vector3(0, 0, 0)));
+	for (int i = 0; i < 16; i++)
+		enemyUnits.emplace_back(server.spawnObject(bp, enemy, at(-15.0f + (i % 8) * 3.0f, 14.0f + (i / 8) * 3.0f), Vector3(0, 3.14159f, 0)));
+	// the enemy is weakened so that it loses, and its dead lie amid the survivors
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	for (auto& r : enemyUnits)
+		r->setItem(hp, r->getItem(hp) * 0.5f);
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto nearest = [](ServerGameObject* from, std::vector<SrvGORef>& list) -> ServerGameObject* {
+		ServerGameObject* best = nullptr;
+		float bd = 1e30f;
+		for (auto& r : list)
+			if (r && r->blueprint->name.rfind("Dead ", 0) != 0) {
+				const float d = (r->position - from->position).sqlen2xz();
+				if (d < bd) { bd = d; best = r.get(); }
+			}
+		return best;
+	};
+	struct Corpse { SrvGORef ref; Vector3 pos; float since; float maxMoved = 0.0f; };
+	std::map<uint32_t, Corpse> corpses;
+	std::vector<SrvGORef> all = ownUnits;
+	all.insert(all.end(), enemyUnits.begin(), enemyUnits.end());
+	bool sentAway = false;
+	int lastPrint = -1;
+	for (int step = 0; step * 20 < 120000; step++) {
+		const float t = step * 0.02f;
+		// every 3 s, the living attack the nearest living enemy (the formation as a whole)
+		if (step % 150 == 0 && !sentAway) {
+			if (ServerGameObject* tg = nearest(formation, enemyUnits))
+				server.gameSet->commands[attack].execute(formation, tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			// to everyone it set out with, the dead too: the AI's lists kept a unit's id, which its
+			// corpse keeps (it is the unit converted in place); the corpses got "Attack" and walked
+			for (auto& r : all) {
+				if (!r || r->getParent() == formation)
+					continue;
+				if (ServerGameObject* tg = nearest(r.get(), r->getParent() == enemy ? ownUnits : enemyUnits))
+					server.gameSet->commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			}
+		}
+		// once the enemy is beaten (or after 60 s), the survivors walk 60 m away
+		if (!sentAway && (t > 60.0f || !nearest(formation, enemyUnits))) {
+			sentAway = true;
+			printf("CORPSE t=%.1f survivors sent away\n", t);
+			server.gameSet->commands[move].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position + Vector3(60, 0, 0));
+			for (auto& r : all)
+				if (r && r->getParent() != formation)
+					server.gameSet->commands[move].execute(r.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, r->position + Vector3(60, 0, 0));
+		}
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		for (auto& r : all) {
+			if (!r || r->blueprint->name.rfind("Dead ", 0) != 0)
+				continue;
+			auto it = corpses.find(r->id);
+			if (it == corpses.end())
+				corpses[r->id] = Corpse{ r, r->position, t };
+			else
+				it->second.maxMoved = std::max(it->second.maxMoved, (r->position - it->second.pos).len2xz());
+		}
+		if ((int)t / 5 != lastPrint) {
+			lastPrint = (int)t / 5;
+			for (auto& [id, c] : corpses) {
+				if (!c.ref)
+					continue;
+				ServerGameObject* o = c.ref.get();
+				ServerGameObject* p = o->getParent();
+				printf("CORPSE t=%.0f %u %s parent=%s moved=%.2f moving=%d mc=%d order=%s\n", t, id, o->blueprint->name.c_str(),
+					p ? Tags::GAMEOBJCLASS_tagDict.getStringFromID(p->blueprint->bpClass) : "-", (o->position - c.pos).len2xz(),
+					(int)o->movement.isMoving(), (int)o->movementController.isMoving(),
+					o->orderConfig.getCurrentOrder() ? server.gameSet->orders.getString(o->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-");
+			}
+		}
+	}
+	int moved = 0;
+	float maxMoved = 0.0f;
+	for (auto& [id, c] : corpses) {
+		if (c.maxMoved > 0.05f)
+			moved++;
+		maxMoved = std::max(maxMoved, c.maxMoved);
+	}
+	printf("CORPSE corpses=%zu moved=%d max=%.2f\n", corpses.size(), moved, maxMoved);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3494,6 +3651,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_Corpses, "Corpses: the fallen of a fight stay where they fell"},
 };
 
 void LaunchTest()

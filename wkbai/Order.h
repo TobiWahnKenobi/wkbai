@@ -187,7 +187,13 @@ struct OrderConfiguration {
 
 	OrderConfiguration(ServerGameObject *gameobj) : gameobj(gameobj) {}
 	void process();
+	// An order from the engine: a command (a player's, the AI's), wkbai's AI, the debugger. None
+	// for a terminated object: a corpse is the dead unit converted in place, with its id, and was
+	// still in the AI's lists ("Attack": it walked along with the living).
 	Order* addOrder(const OrderBlueprint *orderBlueprint, int assignMode = 0, ServerGameObject *target = nullptr, const Vector3 &destination = Vector3(-1.0f,-1.0f,-1.0f), bool startNow = true);
+	// An order from the game set's scripts (ORDER_ASSIGNMENT): also for a terminated object, as
+	// "Die" is given to the dying unit
+	Order* assignOrder(const OrderBlueprint *orderBlueprint, int assignMode = 0, ServerGameObject *target = nullptr, const Vector3 &destination = Vector3(-1.0f,-1.0f,-1.0f), bool startNow = true);
 	void cancelAllOrders();
 
 	Order *getCurrentOrder() { return orders.empty() ? nullptr : &orders[0]; }

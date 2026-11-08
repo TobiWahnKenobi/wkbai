@@ -89,9 +89,14 @@ void FormationController::update()
 	const GameObjBlueprint* first = nullptr;
 	for (auto& [childType, childList] : formation->children) {
 		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER) {
-			numMembers += childList.size();
-			if (!first && !childList.empty())
-				first = childList.front()->blueprint;
+			// a member killed (terminated: dying, or its corpse) holds no place; the death script
+			// hands it to the player, but until then, or if that fails, it must not walk
+			for (CommonGameObject* c : childList)
+				if (!(c->flags & CommonGameObject::fTerminated)) {
+					numMembers += 1;
+					if (!first)
+						first = c->blueprint;
+				}
 		}
 	}
 	if (!first)
@@ -104,6 +109,8 @@ void FormationController::update()
 		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER) {
 			for (CommonGameObject* character : childList) {
 				ServerGameObject* srvCharacter = character->dyncast<ServerGameObject>();
+				if (srvCharacter->flags & CommonGameObject::fTerminated)
+					continue;
 				if (srvCharacter->orderConfig.getCurrentOrder() == nullptr) {
 					auto [posX, posZ] = places[memberIndex];
 					Vector3 slot = Vector3(posX, 0, posZ).transform(transformMatrix);
