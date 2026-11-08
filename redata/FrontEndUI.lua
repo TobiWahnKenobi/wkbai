@@ -1077,10 +1077,10 @@ local function playersTab()
 end
 
 
--- The game settings (QuickSkirmishMenu::setSetting), with the original's defaults
+-- The game settings (QuickSkirmishMenu::setSetting), with the original's defaults (but Clear Fog Of War off)
 local SETTINGS = {
 	mode = 0, startFood = 500, startWood = 500, startGold = 200, populationLimit = 200,
-	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 1, allowDiplomacy = 0, teamReconnaissance = 0,
+	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 0, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,

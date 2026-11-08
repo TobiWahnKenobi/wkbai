@@ -266,7 +266,8 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
 			return;
 		// enemy characters in the fog of war aren't shown, and enemy buildings only as last seen
-		if (fogOn && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
+		if (fogOn && (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+			&& !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
 			return;
 		if (fogOn && !remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 			return;
@@ -1086,7 +1087,8 @@ void ClientInterface::prewarmLevel()
 bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
-	return g_renderSettings.fogOfWar && !editorOn && !replayMode && !client->spectator && client->clientPlayer && client->getLevel();
+	// only the game option decides it: the lobby's Clear Fog Of War on, none (Client::clearFogOfWar)
+	return !client->clearFogOfWar && !editorOn && !replayMode && !client->spectator && client->clientPlayer && client->getLevel();
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
@@ -1669,8 +1671,10 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 	if (!stampdownHidden.empty() && std::find(stampdownHidden.begin(), stampdownHidden.end(), obj->id) != stampdownHidden.end())
 		return;
-	// the fog of war hides enemy characters no unit of the player's sees
-	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && fogOfWarOn() && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
+	// the fog of war hides enemy characters no unit of the player's sees, and their missiles
+	// (arrows, bolts, a siege engine's shots: flying through the fog they showed what fired there)
+	if ((obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+		&& fogOfWarOn() && !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
 		return;
 	// and enemy buildings out of sight: drawn as last seen (FogOfWar::remembered) instead
 	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fogOfWarOn() && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))

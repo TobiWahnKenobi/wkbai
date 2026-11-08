@@ -555,6 +555,8 @@ struct DiligentRenderer : DiligentGfx
 		}
 		s.fog = fog;
 		fog.tiles = nullptr;
+		s.fogEdgeStart = fogEdge[2];
+		s.fogEdgeOpaque = fogEdge[3];
 		// the light shafts (RenderSettings::dynamicClouds 2 and up), with the enhanced renderers
 		s.lightShafts = postEffects && shadows.clouds >= 2 && shadows.cloudShadows && shadows.cloudShadowsDrawn;
 		s.cloudBuffer = shadows.cloudBuffer;

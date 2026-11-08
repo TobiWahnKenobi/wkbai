@@ -74,6 +74,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	EnvironmentState environment;
 	int environmentWeatherHeld = -1; // the debug panel's weather held on the server (-1: none)
 	float environmentWeatherEnds = 0.0f; // the game time the weather changes next (1e30: never)
+	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
+	// of war (everything on the map shown); off until the server says
+	bool clearFogOfWar = false;
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;

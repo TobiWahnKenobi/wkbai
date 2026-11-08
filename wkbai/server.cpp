@@ -49,6 +49,8 @@ void Server::loadSaveGame(const char * filename)
 	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
 	cheatMode = false;
+	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
+	clearFogOfWar = false;
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
@@ -496,7 +498,7 @@ void Server::Recording::flushRun()
 	runCount = 0;
 }
 
-bool Server::clearFogOfWar = true, Server::teamReconnaissance = false;
+bool Server::clearFogOfWar = false, Server::teamReconnaissance = false;
 
 std::string Server::aiSettingsText() const
 {

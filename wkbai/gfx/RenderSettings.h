@@ -81,8 +81,8 @@ struct RenderSettings {
 	// HAS_STATIC_SHADOW 0, so the original has none
 	bool wallShadows = true;
 	// post-processing of the 3D scene (enhanced graphics on Diligent): ambient occlusion and bloom
-	// fog of war: what none of the player's units sees is darker (the original's), by this much
-	bool fogOfWar = true;
+	// fog of war (the game option Clear Fog Of War off, not a graphics setting): what none of the
+	// player's units sees is darker (the original's), by this much
 	float fogOfWarBrightness = 0.55f;
 	// the lower left panel's stained-glass window as refracting glass (enhanced graphics)
 	bool stainedGlass = true;

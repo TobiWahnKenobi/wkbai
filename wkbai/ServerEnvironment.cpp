@@ -901,6 +901,8 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	// the moon's phase (every client draws the same one)
 	msg.writeUint8((uint8_t)settings.moonPhase);
 	msg.writeFloat(settings.moonStart);
+	// the lobby's Clear Fog Of War (on: the clients show everything, no fog of war)
+	msg.writeUint8(Server::clearFogOfWar ? 1 : 0);
 	state.write(msg);
 	if (only)
 		only->send(msg);

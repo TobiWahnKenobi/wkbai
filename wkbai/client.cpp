@@ -702,6 +702,7 @@ void Client::tick()
 				environmentWeatherEnds = br.readFloat();
 				es.moonPhase = br.readUint8();
 				es.moonStart = br.readFloat();
+				clearFogOfWar = br.readUint8() != 0;
 				environmentSkyKnown = true;
 				environment.read(br);
 				environmentActive = es.active();

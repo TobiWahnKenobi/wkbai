@@ -223,8 +223,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
 	// (recorded, so a replay applies the panel's changes too)
 	bool cheatMode = false;
-	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, the map is not hidden
-	// before it is explored; off is not done yet) and "teamReconnaissance" (allies share their
+	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, everything on the map is
+	// shown; off, the default, the fog of war: FogOfWar, the clients told with
+	// NETCLIMSG_ENVIRONMENT; the campaign always has it) and "teamReconnaissance" (allies share their
 	// sight: applied as the players' Reconnaissance Upgrade Status), kept with the game settings
 	// (kept outside the struct: a member here moved the layout that a still unfound memory bug
 	// depends on, docs/engine/playtest-2026-11-07.md)

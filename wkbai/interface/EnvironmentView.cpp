@@ -123,9 +123,9 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	// the sun's frame: south is where the map's own sun stands (its art was lit from there)
 	Vector3 south = Vector3(g_mapLook.sun.x, 0.0f, g_mapLook.sun.z);
 	south = south.sqlen3() > 1e-6f ? south.normal() : Vector3(0, 0, 1);
-	// east: on the left facing south (the world's frame is left-handed, x right of z: (z, -x)
-	// put it on the right, a mirrored sky: the sun set on the left, a waxing moon lit on its left)
-	const Vector3 east(-south.z, 0.0f, south.x);
+	// east: (z, -x) of south, as before the moon phases (turned around then, the sun set in the
+	// east seen from the map; the moon's lit side follows the sun either way)
+	const Vector3 east(south.z, 0.0f, -south.x);
 	const Vector3& d = v.sun.direction; // (east, up, south)
 	terrain->sunVector = (east * d.x + Vector3(0, 1, 0) * d.y + south * d.z).normal();
 	auto toWorld = [&](const Vector3& e) { return (east * e.x + Vector3(0, 1, 0) * e.y + south * e.z).normal(); };

@@ -1081,7 +1081,7 @@ void QuickStartMenu::lobbyTest()
 		printf("Lobby test: starting %s alone with slots %s\n", level.c_str(), slots.c_str());
 		// the settings as the menu's Start sends them (FrontEndUI.lua's SETTINGS defaults)
 		for (const char* setting : { "mode=0", "startFood=500", "startWood=500", "startGold=200", "populationLimit=200",
-			"randomiseResources=2", "kingPiece=0", "clearFogOfWar=1", "allowDiplomacy=0", "teamReconnaissance=0",
+			"randomiseResources=2", "kingPiece=0", "clearFogOfWar=0", "allowDiplomacy=0", "teamReconnaissance=0",
 			"barbarianTribes=0", "resourcePoints=2500", "victoryPointLimit=10000", "valhallaModeFood=20000",
 			"unitLives=0", "capturableFlags=4", "aggressiveAI=1", "recordGame=0" })
 			handleRequest({ "skirmish_setting", setting });

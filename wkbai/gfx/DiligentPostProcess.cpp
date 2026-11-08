@@ -62,7 +62,8 @@ cbuffer PostBuffer
 	float4 Easu;  // FSR: input size / output size, 0.5 x that - 0.5
 	float4 Sizes; // the scene's width and height, the output's
 	float4 Rcas;  // sharpening (FSR's exp2(-stops)), the sharpened image's width and height
-	float4 Taa;   // history valid, the current frame's weight
+	float4 Taa;   // history valid, the current frame's weight; the map-edge fog's start and
+	              // opaque distance outside the playable area (the scene's FogBuffer.EdgeFog.zw)
 	matrix TaaInverseView;  // view space -> world (row vectors)
 	matrix TaaPrevViewProj; // world -> the previous frame's clip space, unjittered
 	float4 Motion; // FSR 3: the jitter in UV, the object motion's "none" (NO_OBJECT_MOTION)
@@ -432,7 +433,12 @@ float FogDarkening(float2 uv)
 	float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2);
 	float4 p = float4(ndc.x * z / Proj.x, ndc.y * z / Proj.y, z, 1);
 	float2 fuv = float2(dot(p, FogX), dot(p, FogZ)) * Fog.xy;
-	return lerp(Fog.z, 1, tFog.SampleLevel(sLinear, fuv, 0).r);
+	float dark = lerp(Fog.z, 1, tFog.SampleLevel(sLinear, fuv, 0).r);
+	// none where the map-edge fog hides the ground: there it is the haze, as the sky over it
+	// (the land and water past the edge stood darker than the sky, a grey slab, a hard line)
+	float2 outside = max(-fuv, fuv - 1) / Fog.xy;
+	float edge = saturate((max(outside.x, outside.y) - Taa.z) / max(Taa.w - Taa.z, 1e-3));
+	return lerp(dark, 1, edge);
 }
 
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
@@ -971,7 +977,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 			(float)w / ow, (float)h / oh, 0.5f * w / ow - 0.5f, 0.5f * h / oh - 0.5f,
 			(float)w, (float)h, (float)ow, (float)oh,
 			std::exp2(-stops), (float)sharpenW, (float)sharpenH, 0,
-			historyValid ? 1.0f : 0.0f, 0.1f, 0, 0,
+			historyValid ? 1.0f : 0.0f, 0.1f, settings.fogEdgeStart, settings.fogEdgeOpaque,
 		};
 		memcpy(mapped, data, sizeof(data));
 		memcpy((float*)mapped + 44, &inverseView, sizeof(Matrix));

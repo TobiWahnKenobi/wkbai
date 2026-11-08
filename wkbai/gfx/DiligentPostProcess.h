@@ -26,6 +26,9 @@ struct DiligentPostProcess {
 	};
 	struct Settings {
 		FogOfWar fog;
+		// the map-edge fog's start and opaque distance outside the playable area (SetFogEdge):
+		// the fog of war's darkening fades out with it
+		float fogEdgeStart = 1e9f, fogEdgeOpaque = 2e9f;
 		bool ssao = true, bloom = true;
 		float ssaoRadius = 2.5f;    // world units
 		float ssaoStrength = 0.7f;  // 0: none, 1: fully dark where occluded
