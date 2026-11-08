@@ -1086,7 +1086,7 @@ local SETTINGS = {
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
-	weatherSpring = 1, weatherSummer = 1, weatherAutumn = 1, weatherWinter = 1,
+	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
 	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
 	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
 	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])

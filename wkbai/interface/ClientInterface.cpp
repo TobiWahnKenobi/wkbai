@@ -1364,7 +1364,7 @@ void ClientInterface::drawEnvironmentDebug()
 	int stabilityChoice = std::clamp(es.weatherStability, 0, 4);
 	ImGui::BeginDisabled(!es.seasons);
 	ImGui::SetNextItemWidth(120);
-	if (ImGui::Combo("Weather changes", &stabilityChoice, "Frequent Normal Seldom Random Custom "))
+	if (ImGui::Combo("Weather changes", &stabilityChoice, "Frequent\0Normal\0Seldom\0Random\0Custom\0"))
 		send("weatherStability", (float)stabilityChoice);
 	ImGui::EndDisabled();
 	int scale = es.tempScale;

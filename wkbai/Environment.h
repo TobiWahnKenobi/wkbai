@@ -29,7 +29,7 @@ struct EnvironmentSettings {
 	int startSeason = 0;       // 0 spring, 1 summer, 2 autumn, 3 winter
 	int tempScale = 0;         // the HUD's: 0 Celsius, 1 Fahrenheit, 2 Kelvin
 	// each season's weather: 0 gentle, 1 normal, 2 harsh, 3 random (chosen anew every year)
-	int severity[4] = { 1, 1, 1, 1 };
+	int severity[4] = { 3, 3, 3, 3 };
 	// the debug panel's (F9) moves of the clock: added to the day's fraction (startHour's) and to
 	// the year's (startSeason's), so the time of day and the season jump there and go on from it
 	float dayShift = 0.0f, yearShift = 0.0f;
