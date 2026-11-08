@@ -67,7 +67,8 @@ cbuffer SkyBuffer
 	// much of it shows (its height, the night)
 	float4 SkySun;
 	float4 SkyMoon;
-	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation)
+	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation);
+	// SkyStarX.w: the moon's lit part (0 new .. 1 full: its glow, its light on the air)
 	float4 SkyStarX;
 	float4 SkyStarY;
 	float4 SkyStarZ;
@@ -605,10 +606,12 @@ float3 NightSky(float3 rd, float px)
 	float mu = dot(rd, SkyMoon.xyz);
 	float ang = acos(clamp(mu, -1, 1));
 	float radius = max(0.0130, px * 2.5);
+	float disc = 0; // how much the disc covers (the stars behind it hidden)
 	if (SkyMoon.w > 0) {
 		const float3 moonCol = float3(0.93, 0.95, 1.0);
-		// the glow: a bright aureole close by, a broad faint halo
-		c = moonCol * (0.22 * exp(-max(ang - radius, 0) / 0.02) + 0.05 * exp(-ang / 0.25));
+		const float lit = SkyStarX.w;
+		// the glow: a bright aureole close by, a broad faint halo, as bright as its lit part
+		c = moonCol * (0.22 * exp(-max(ang - radius, 0) / 0.02) + 0.05 * exp(-ang / 0.25)) * lit;
 		if (ang < radius * 1.5) {
 			// the disc's own frame: its seas, a fixed pattern of the noise
 			float3 mx = normalize(cross(SkyMoon.xyz, float3(0.001, 1, 0)));
@@ -619,8 +622,15 @@ float3 NightSky(float3 rd, float px)
 			float albedo = lerp(1.0, 0.72, smoothstep(0.45, 0.65, seas));
 			float limb = sqrt(saturate(1 - r * r)) * 0.3 + 0.7;
 			float edge = saturate((1 - r) * radius / max(px, 1e-5) + 0.5); // antialiased
+			// the phase: the ball's side towards the sun lit (the sun's direction from the moon as
+			// from here), a soft terminator; the dark side faintly in the earth's light, most
+			// in a thin crescent (the earth near full as seen from it)
+			float3 n = mx * q.x + my * q.y - SkyMoon.xyz * sqrt(saturate(1 - r * r));
+			float sunSide = smoothstep(-0.04, 0.10, dot(n, SkySun.xyz));
+			float earthshine = 0.035 * (1 - lit) * (1 - lit);
 			// (the disc in front of its glow; the sky behind it, outc, about 0.1)
-			c = lerp(c, moonCol * (albedo * limb * 1.02), edge);
+			c = lerp(c, moonCol * (albedo * limb * 1.02) * max(sunSide, earthshine), edge);
+			disc = edge;
 		}
 		c *= SkyMoon.w;
 	}
@@ -648,7 +658,7 @@ float3 NightSky(float3 rd, float px)
 			stars += exp(-d2 / (size * size)) * (0.16 + 1.25 * mag) * tw;
 		}
 	}
-	c += float3(0.86, 0.9, 1.0) * stars * saturate(rd.y * 5) * saturate(1 - SkyMoon.w * 0.7 * exp(-ang / 0.3));
+	c += float3(0.86, 0.9, 1.0) * stars * saturate(rd.y * 5) * saturate(1 - SkyMoon.w * SkyStarX.w * 0.7 * exp(-ang / 0.3)) * (1 - disc * SkyMoon.w);
 	return c * SkySun.w;
 }
 
@@ -659,7 +669,7 @@ float3 NightAir(float3 rd)
 	float mu = dot(rd, SkyMoon.xyz);
 	float h = saturate(rd.y);
 	float3 c = lerp(float3(0.070, 0.095, 0.17), float3(0.028, 0.045, 0.105), sqrt(h));
-	c += float3(0.06, 0.08, 0.12) * SkyMoon.w * (0.35 + 0.65 * saturate(mu) * saturate(mu)) * (0.6 + 0.4 * (1 - h));
+	c += float3(0.06, 0.08, 0.12) * SkyMoon.w * SkyStarX.w * (0.35 + 0.65 * saturate(mu) * saturate(mu)) * (0.6 + 0.4 * (1 - h));
 	return c;
 }
 
@@ -1197,7 +1207,7 @@ void DiligentSkyRenderer::render()
 		_impl->sixFaces ? 1.0f : 0.0f, clouds ? 1.0f : 0.0f, (float)(_impl->dgfx->FrameIndex() % 64), (float)cloudQuality,
 		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
 		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,
-		ev.starX.x, ev.starX.y, ev.starX.z, 0,
+		ev.starX.x, ev.starX.y, ev.starX.z, ev.active ? ev.sun.moonLit : 1.0f,
 		ev.starY.x, ev.starY.y, ev.starY.z, 0,
 		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
 		overcast[0], overcast[1], overcast[2], overcast[3],

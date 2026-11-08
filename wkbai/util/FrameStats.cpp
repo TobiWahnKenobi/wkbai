@@ -7,9 +7,11 @@
 #include "../window.h"
 #include "../file.h"
 #include "../server.h"
+#include "../Environment.h"
 #include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -102,6 +104,12 @@ bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 		return false;
 	position = Vector3(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
 	orientation = Vector3(c[3].get<float>(), c[4].get<float>(), 0.0f);
+	// "cameraAtMoon": true: the pitch and yaw towards the moon (wkbai's day and night; the
+	// camera's own pitch and yaw added: the moon off the middle of the picture)
+	if (bm->value("cameraAtMoon", false) && g_environment.active) {
+		const Vector3& m = g_environment.moonWorld;
+		orientation += Vector3(std::asin(std::clamp(m.y, -1.0f, 1.0f)), std::atan2(-m.x, m.z), 0.0f);
+	}
 	// a camera moving by this much per frame (x, y, z, pitch, yaw): motion for the temporal
 	// anti-aliasing and upscaling
 	if (bm->contains("cameraMove")) {

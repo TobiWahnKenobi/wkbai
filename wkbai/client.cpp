@@ -700,6 +700,8 @@ void Client::tick()
 				es.weatherMaxChange = br.readUint8();
 				es.weatherTypes = br.readUint16();
 				environmentWeatherEnds = br.readFloat();
+				es.moonPhase = br.readUint8();
+				es.moonStart = br.readFloat();
 				environmentSkyKnown = true;
 				environment.read(br);
 				environmentActive = es.active();

@@ -1088,6 +1088,7 @@ local SETTINGS = {
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
 	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
+	moonPhase = 0, -- 0 Natural (the moon of the starting season's first day in AD 1000, on over the game's days), 1-8 a fixed phase (MOON_PHASES)
 	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
 	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])
 	weatherStability = 3, weatherMinChange = 3, weatherMaxChange = 10, weatherTypes = 1023,
@@ -1264,6 +1265,8 @@ local SEVERITIES = { "Gentle", "Normal", "Harsh", "Random" }
 local CLOUD_WEATHERS = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog",
 	"Snow", "Blizzard", "Heatwave", "Drought" }
 local STABILITIES = { "Frequent", "Normal", "Seldom", "Random", "Custom" }
+local MOON_PHASES = { "Natural (AD 1000's, on by the days)", "New moon", "Waxing crescent", "First quarter",
+	"Waxing gibbous", "Full moon", "Waning gibbous", "Third quarter", "Waning crescent" }
 local STABILITY_NOTES = { "A new weather every 1 to 4 minutes.", "A new weather every 3 to 10 minutes.",
 	"A new weather every 8 to 20 minutes.", "Each weather lasts 10-35% of a season's length (45 s - 10 min)." }
 -- the weathers each season can bring (ServerEnvironment.cpp WEATHER_WEIGHTS), by EnvWeather + 1
@@ -1293,6 +1296,12 @@ local function weatherTab()
 	if s.dayNight ~= 0 then
 		stepperRow("Day (min)", nil, "dayLength", 1, 2, 240, Y(266))
 		stepperRow("Start hour", nil, "startHour", 1, 0, 23, Y(342))
+		-- the moon's phase: its lit part, its light and its shadows at night
+		local lw = textWidth(FONT_LIST, "Moon", S)
+		drawText(FONT_LIST, X(170) - lw, Y(404), "Moon", WHITE, S)
+		if button(MOON_PHASES[s.moonPhase + 1], X(200), Y(394), L(744), L(36)) then
+			s.moonPhase = (s.moonPhase + 1) % #MOON_PHASES
+		end
 	end
 	-- the seasons: their length (never shorter than a day), the first, the temperature's scale
 	switch("seasons", "Seasons and weather", X(60), Y(444))

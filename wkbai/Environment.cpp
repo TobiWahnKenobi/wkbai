@@ -56,6 +56,10 @@ std::string EnvironmentSettings::text() const
 			weatherStability, weatherMinChange, weatherMaxChange, weatherTypes);
 		out += buf;
 	}
+	if (moonPhase != 0 || moonStart >= 0.0f) {
+		snprintf(buf, sizeof(buf), "moonPhase=%d\nmoonStart=%.9g\n", moonPhase, moonStart);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -83,6 +87,9 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "weatherMinChange") weatherMinChange = std::clamp(i, 1, 120);
 	else if (name == "weatherMaxChange") weatherMaxChange = std::clamp(i, 1, 120);
 	else if (name == "weatherTypes") weatherTypes = i & ((1 << WEATHER_COUNT) - 1);
+	else if (name == "moonPhase") moonPhase = std::clamp(i, 0, 8);
+	else if (name == "moonStart") moonStart = v < 0.0f ? -1.0f : Frac(v);
+	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;
@@ -103,6 +110,40 @@ bool EnvironmentSettings::changeRange(float& lo, float& hi) const
 		return true;
 	}
 	return false;
+}
+
+float EnvironmentSettings::moonAge(float time) const
+{
+	if (moonPhase >= 1 && moonPhase <= 8)
+		return (moonPhase - 1) / 8.0f;
+	// the game's days so far (with the clock's own start and the debug panel's moves of it)
+	const float days = startHour / 24.0f + dayShift + time / std::max(dayLengthS(), 1.0f);
+	return Frac((moonStart < 0.0f ? HistoricMoonAge(startSeason) : moonStart) + days / 29.530589f);
+}
+
+const char* MoonPhaseName(int p)
+{
+	static const char* names[9] = { "Natural", "New moon", "Waxing crescent", "First quarter", "Waxing gibbous",
+		"Full moon", "Waning gibbous", "Third quarter", "Waning crescent" };
+	return (p >= 0 && p < 9) ? names[p] : "?";
+}
+
+float HistoricMoonAge(int season)
+{
+	// the spring equinox of 2000 (20 March, 07:35 UTC, Julian day 2451623.816) a thousand mean
+	// tropical years back, the seasons a quarter year apart (14/15 March of the Julian calendar
+	// in the year 1000); the mean month from a new moon on 6 January 2000, 18:14 UTC (Julian day
+	// 2451550.26). The mean month, not the true new moons: a few hours off, as "roughly" asks.
+	// Spring 6.6 days old (near the first quarter), summer 9.3, autumn 12.1, winter 14.8 (full).
+	const double year = 365.24219;
+	const double jd = 2451623.816 - 1000.0 * year + std::clamp(season, 0, 3) * year / 4.0;
+	const double age = (std::floor(jd - 0.5) + 0.5 - 2451550.26) / 29.530588853; // its midnight
+	return (float)(age - std::floor(age));
+}
+
+float MoonLitFraction(float age)
+{
+	return 0.5f * (1.0f - std::cos(2.0f * PI * age));
 }
 
 const char* WeatherStabilityName(int s)
@@ -236,7 +277,7 @@ std::vector<FloodLand> FindFloodLand(const Terrain* t)
 	return out;
 }
 
-SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover)
+SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float cloudCover, float moonAge)
 {
 	SunState sun;
 	// at 47 degrees north; the sun's declination over the year: the equinoxes in the middle of
@@ -246,17 +287,32 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	const float lat = 47.0f * PI / 180.0f;
 	const float decl = (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f)) : 10.0f) * PI / 180.0f;
 	const float h = (dayFraction - 0.5f) * 2.0f * PI;
+	// the moon: its elongation, how far east of the sun it has moved along the ecliptic (0 new,
+	// half a turn full), so it rises and sets that much later; its declination the sun's at that
+	// place on the ecliptic (with the seasons: the full moon high in winter, low in summer). Its
+	// hour angle lags the sun's by the elongation.
+	const float elong = 2.0f * PI * moonAge;
+	// (without the seasons the sun's fixed 10 degrees as a point of the ecliptic: the full moon
+	// opposite it at -10, the whole disc lit)
+	const float moonDecl = (seasons ? 23.4f * std::sin(2.0f * PI * (yearFraction - 0.125f) + elong) : 10.0f * std::cos(elong)) * PI / 180.0f;
+	const float hm = h - elong;
 	// in a frame of east, south, up
-	auto at = [&](float hourAngle) {
+	auto atDecl = [&](float hourAngle, float decl) {
 		const float up = std::sin(lat) * std::sin(decl) + std::cos(lat) * std::cos(decl) * std::cos(hourAngle);
 		const float east = -std::cos(decl) * std::sin(hourAngle);
 		const float south = -(std::cos(lat) * std::sin(decl) - std::sin(lat) * std::cos(decl) * std::cos(hourAngle));
 		return Vector3(east, up, south);
 	};
+	auto at = [&](float hourAngle) { return atDecl(hourAngle, decl); };
 	const Vector3 s = at(h);
+	const Vector3 mTrue = atDecl(hm, moonDecl);
 	sun.elevation = s.y;
 	sun.sunTrue = s.normal();
-	sun.moonTrue = at(h + PI).normal();
+	sun.moonTrue = mTrue.normal();
+	// the moon's light: its lit part (none at new moon), and only while it is up
+	sun.moonAge = moonAge;
+	sun.moonLit = MoonLitFraction(moonAge);
+	sun.moonLight = sun.moonLit * Smoothstep(-0.03f, 0.12f, mTrue.y);
 	sun.daylight = Smoothstep(-0.10f, 0.20f, s.y);
 	// Sunrise and sunset by the season (the hour angle where the sun crosses the horizon at this
 	// declination: in winter later and earlier, in summer earlier and later), in the day's hours.
@@ -271,10 +327,10 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	const bool sunLights = hour >= rise - 1.0f && hour <= set + 1.0f;
 	sun.sunrise = rise;
 	sun.sunset = set;
-	// the moon: opposite the sun, at least a little up, for the night's shadows
+	// the moon (opposite the sun when full), at least a little up, for the night's shadows
 	Vector3 dir = s;
 	if (!sunLights) {
-		Vector3 m = at(h + PI);
+		Vector3 m = mTrue;
 		m.y = std::max(m.y, 0.25f);
 		dir = m;
 	}
@@ -283,9 +339,12 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	// colours: white high up, warm low down, a pale blue moon
 	const float warm = Smoothstep(0.0f, 0.45f, s.y);
 	const float dayCol[3] = { 1.0f, 0.62f + 0.38f * warm, 0.38f + 0.62f * warm };
-	const float moonCol[3] = { 0.20f, 0.25f, 0.38f };
+	// the moon's light by its phase and height (a full moon's as before; the sky a little darker
+	// on a moonless night)
+	const float moonCol[3] = { 0.20f * sun.moonLight, 0.25f * sun.moonLight, 0.38f * sun.moonLight };
+	const float skyMoon = 0.85f + 0.15f * sun.moonLight;
 	const float ambDay[3] = { 1.0f, 0.92f + 0.08f * warm, 0.85f + 0.15f * warm };
-	const float ambNight[3] = { 0.30f, 0.35f, 0.50f };
+	const float ambNight[3] = { 0.30f * skyMoon, 0.35f * skyMoon, 0.50f * skyMoon };
 	sun.moon = 1.0f - sun.daylight;
 	const float sunDim = 1.0f - 0.6f * cloudCover, ambDim = 1.0f - 0.2f * cloudCover;
 	// the light's direction jumps from the sun to the moon at daylight 0.5 (and back at dawn):
@@ -304,7 +363,7 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 			sun.cloudColour[c] = dayCol[c] * up; // (not dimmed by the cover: that is the ground's, under them)
 	}
 	else {
-		Vector3 m = at(h + PI);
+		Vector3 m = mTrue;
 		m.y = std::max(m.y, 0.25f);
 		sun.cloudDirection = m.normal();
 		const float up = Smoothstep(-0.07f, -0.14f, s.y);
