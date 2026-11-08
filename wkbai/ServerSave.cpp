@@ -120,6 +120,25 @@ namespace {
 		else
 			w.line("%s %u %s", cls, obj->id, inQuotes(obj->blueprint->name).c_str());
 		w.depth++;
+		// a building's order for the units it spawns (its rally point), first as in WKB.exe's saves:
+		// the command's name (under PARAM_ORDER_BLUEPRINT_NAME, as WKB.exe writes it: its "Train" is
+		// a command only) and the target's id or the place (not written before: a loaded game's new
+		// peasants stood idle)
+		if (obj->spawnedUnitCommand >= 0 && obj->spawnedUnitCommand < (int)w.gs.commands.size()) {
+			const uint32_t target = obj->spawnedUnitTarget.objid;
+			const bool hasTarget = target != 0 && target != 0xFFFFFFFFu;
+			if (hasTarget || obj->spawnedUnitDestination.x >= 0.0f) {
+				w.line("PARAM_BLOCK");
+				w.depth++;
+				w.line("PARAM_ORDER_BLUEPRINT_NAME %s", inQuotes(w.gs.commands.getString(obj->spawnedUnitCommand)).c_str());
+				if (hasTarget)
+					w.line("PARAM_OBJECT_ID %u", target);
+				else
+					w.line("PARAM_DESTINATION %.9g %.9g", obj->spawnedUnitDestination.x, obj->spawnedUnitDestination.z);
+				w.depth--;
+				w.line("END_OF_PARAM_BLOCK");
+			}
+		}
 		if (obj->blueprint->subtypeNames.size() > 0) {
 			const std::string& subtype = obj->blueprint->subtypeNames.getString(obj->subtype);
 			if (obj->appearance >= 0 && obj->appearance < (int)w.gs.appearances.names.size())

@@ -3450,6 +3450,368 @@ void Test_MassOrder()
 	fflush(stdout);
 }
 
+// Gatherers through a save (needs the game data): on 4 Peaks, player 1027's peasants chop wood,
+// more spawned beside them mine gold and stone, build a farm and farm a field. After
+// WKB_GSAVE_SECONDS game seconds (default 45) the game is saved, run on for WKB_GSAVE_AFTER more
+// (default 30) and its state noted; then the save is loaded into a new server and run as long.
+// Each worker's order, task, its state, target, proximity and triggers, animation, load and
+// place are printed before saving ("GSAVE before"), just after loading ("GSAVE loaded") and at
+// the end of both runs ("GSAVE end saved-run" / "GSAVE end loaded-run"), with the differences
+// and "GSAVE idle <n>" (workers without an order); the play test's woodcutters stood idle after
+// loading. Ends "GSAVE loaded-same <a>/<n> end-same <b>/<n> idle-after-load <c>".
+struct GatherSaveWorker { uint32_t id; std::string job; };
+
+static std::string GatherSaveState(Server& server, ServerGameObject* go, bool withPlace)
+{
+	if (!go)
+		return "gone";
+	const GameSet& gs = *server.gameSet;
+	char buf[512];
+	std::string order = "-", task = "-", target = "-";
+	int taskState = -1, prox = -1, trig = -1;
+	if (Order* o = go->orderConfig.getCurrentOrder()) {
+		order = gs.orders.getString(o->blueprint->bpid) + "(" + std::to_string(o->state) + ")";
+		if (Task* tk = o->getCurrentTask()) {
+			task = gs.tasks.getString(tk->blueprint->bpid);
+			taskState = tk->state;
+			prox = tk->proximitySatisfied;
+			trig = tk->triggersStarted;
+			if (tk->target)
+				target = std::to_string(tk->target->id);
+		}
+	}
+	std::string items;
+	for (const char* name : { "Wood", "Gold", "Stone", "Food" }) {
+		const int i = gs.items.names.getIndex(name);
+		if (i >= 0 && go->getItem(i) != 0.0f)
+			items += std::string(" ") + name + "=" + std::to_string((int)std::round(go->getItem(i)));
+	}
+	const std::string anim = go->animationIndex > 0 ? gs.animations.names.getString(go->animationIndex) : "-";
+	snprintf(buf, sizeof(buf), "%s / %s(%d) -> %s prox=%d trig=%d anim=%s moving=%d%s", order.c_str(), task.c_str(), taskState,
+		target.c_str(), prox, trig, anim.c_str(), (int)go->movementController.isMoving(), items.c_str());
+	std::string s = buf;
+	if (withPlace) {
+		snprintf(buf, sizeof(buf), " at (%.1f,%.1f)", go->position.x, go->position.z);
+		s += buf;
+	}
+	return s;
+}
+
+static void GatherSaveStep(Server& server, int seconds)
+{
+	for (int i = 0; i < seconds * 50; i++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs; // a step without the real clock
+		if (server.timeManager.step())
+			server.simulate();
+	}
+}
+
+// The rally part of test 43: player 1027's Manor sends its new peasants to chop a tree (the
+// building's "Chop Tree" for spawned units); the tree is felled and removed, a peasant trained;
+// then saved, loaded and another trained. Prints "GSAVE rally <step>: ..." and
+// "GSAVE rally felled-ok <0|1> loaded-kept <0|1> loaded-ok <0|1>".
+static std::string RallyWorker(Server& server, ServerGameObject* go)
+{
+	if (!go)
+		return "none";
+	Order* o = go->orderConfig.getCurrentOrder();
+	Task* tk = o ? o->getCurrentTask() : nullptr;
+	return std::to_string(go->id) + " " + (o ? server.gameSet->orders.getString(o->blueprint->bpid) : std::string("idle"))
+		+ (tk && tk->target ? " -> " + tk->target->blueprint->name + " #" + std::to_string(tk->target->id) : std::string());
+}
+
+static ServerGameObject* RallySpawn(Server& server, ServerGameObject* manor, ServerGameObject* player)
+{
+	const GameSet& gs = *server.gameSet;
+	std::set<uint32_t> before;
+	auto list = [&](CommonGameObject* obj, std::vector<ServerGameObject*>& out, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant")
+					out.push_back(child->dyncast<ServerGameObject>());
+				self(child, out, self);
+			}
+	};
+	std::vector<ServerGameObject*> peasants;
+	list(player, peasants, list);
+	for (ServerGameObject* p : peasants)
+		before.insert(p->id);
+	player->setItem(Tags::PDITEM_FOOD, 5000.0f);
+	player->setItem(Tags::PDITEM_WOOD, 5000.0f);
+	player->setItem(Tags::PDITEM_GOLD, 5000.0f);
+	gs.commands[gs.commands.names.getIndex("Spawn Peasant")].execute(manor, nullptr, Tags::ORDERASSIGNMODE_DO_LAST);
+	ServerGameObject* spawned = nullptr;
+	for (int s = 0; s < 60 && !spawned; s++) {
+		GatherSaveStep(server, 1);
+		peasants.clear();
+		list(player, peasants, list);
+		for (ServerGameObject* p : peasants)
+			if (!before.count(p->id))
+				spawned = p;
+	}
+	GatherSaveStep(server, 5); // its order given, its start sequence run
+	return spawned;
+}
+
+static void GatherSaveRally()
+{
+	const std::string name = "Save_Games\\wkbai rally save.sav";
+	const std::string path = PathToUtf8(g_userPath / "saved" / PathFromUtf8(name));
+	uint32_t manorId = 0, rallyId = 0;
+	bool felledOk = false;
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		g_settings["simSeed"] = 4243u;
+		server.timeManager.unpause();
+		server.startLevel();
+		server.timeManager.stepMs = 20;
+		const GameSet& gs = *server.gameSet;
+		ServerGameObject* player = server.findObject(1027);
+		ServerGameObject* manor = nullptr, * tree = nullptr;
+		float best = 1e12f;
+		auto find = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (!manor && child->blueprint->name == "Manor" && child->getPlayer() == player)
+						manor = child->dyncast<ServerGameObject>();
+					self(child, self);
+				}
+		};
+		find(server.getLevel(), find);
+		auto findTree = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (manor && child->blueprint->name == "Coniferous Tree")
+						if (float d = (child->position - manor->position).sqlen2xz(); d < best) { best = d; tree = child->dyncast<ServerGameObject>(); }
+					self(child, self);
+				}
+		};
+		findTree(server.getLevel(), findTree);
+		const int chop = gs.commands.names.getIndex("Chop Tree");
+		if (!player || !manor || !tree || chop < 0 || gs.commands.names.getIndex("Spawn Peasant") < 0) {
+			printf("GSAVE rally not set up\n");
+			return;
+		}
+		manorId = manor->id;
+		manor->setBuildingSpawnedUnitOrderToTarget(chop, tree);
+		const uint32_t felled = tree->id;
+		printf("GSAVE rally: Manor %u sends its peasants to tree %u (%.0f m), which is felled\n", manor->id, felled, std::sqrt(best));
+		tree->terminate();
+		tree->destroy();
+		ServerGameObject* first = RallySpawn(server, manor, player);
+		const std::string state = RallyWorker(server, first);
+		Order* o = first ? first->orderConfig.getCurrentOrder() : nullptr;
+		felledOk = o && gs.orders.getString(o->blueprint->bpid) == "Chop Tree";
+		rallyId = manor->spawnedUnitTarget.objid;
+		printf("GSAVE rally felled: spawned %s; the Manor's rally target now %u\n", state.c_str(), rallyId);
+		server.timeManager.pause();
+		printf("GSAVE rally saved %d\n", (int)server.saveGame(path.c_str()));
+	}
+	bool kept = false, loadedOk = false;
+	{
+		Server server;
+		server.loadSaveGame(name.c_str());
+		server.timeManager.stepMs = 20;
+		ServerGameObject* manor = server.findObject(manorId);
+		ServerGameObject* player = server.findObject(1027);
+		kept = manor && manor->spawnedUnitCommand == server.gameSet->commands.names.getIndex("Chop Tree") && manor->spawnedUnitTarget.objid == rallyId;
+		printf("GSAVE rally loaded: the Manor's spawned unit command %d, target %u\n", manor ? manor->spawnedUnitCommand : -1, manor ? manor->spawnedUnitTarget.objid : 0);
+		ServerGameObject* second = manor && player ? RallySpawn(server, manor, player) : nullptr;
+		Order* o = second ? second->orderConfig.getCurrentOrder() : nullptr;
+		loadedOk = o && server.gameSet->orders.getString(o->blueprint->bpid) == "Chop Tree";
+		printf("GSAVE rally after loading: spawned %s\n", RallyWorker(server, second).c_str());
+	}
+	printf("GSAVE rally felled-ok %d loaded-kept %d loaded-ok %d\n", (int)felledOk, (int)kept, (int)loadedOk);
+	fflush(stdout);
+}
+
+void Test_GatherSave()
+{
+	LoadBCP("data.bcp");
+	if (!getenv("WKB_GSAVE_FILE") && !getenv("WKB_GSAVE_NORALLY"))
+		GatherSaveRally();
+	const int seconds = getenv("WKB_GSAVE_SECONDS") ? atoi(getenv("WKB_GSAVE_SECONDS")) : 45;
+	const int after = getenv("WKB_GSAVE_AFTER") ? atoi(getenv("WKB_GSAVE_AFTER")) : 30;
+	const std::string name = "Save_Games\\wkbai gather save.sav";
+	const std::string path = PathToUtf8(g_userPath / "saved" / PathFromUtf8(name));
+	std::filesystem::create_directories(PathFromUtf8(path).parent_path());
+	std::vector<GatherSaveWorker> workers;
+	std::map<uint32_t, std::string> before, endSaved;
+	// WKB_GSAVE_FILE=<save in Save_Games>: that save loaded instead (a play test's), player 1027's
+	// gatherers and builders watched for WKB_GSAVE_AFTER seconds, each change printed
+	if (const char* file = getenv("WKB_GSAVE_FILE")) {
+		Server server;
+		server.loadSaveGame((std::string("Save_Games\\") + file).c_str());
+		server.timeManager.stepMs = 20;
+		ServerGameObject* player = server.findObject(1027);
+		std::map<uint32_t, std::string> last;
+		auto collect = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					ServerGameObject* so = child->dyncast<ServerGameObject>();
+					if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						if (Order* o = so->orderConfig.getCurrentOrder()) {
+							const std::string& n = server.gameSet->orders.getString(o->blueprint->bpid);
+							if (n == "Chop Tree" || n == "Farm" || n == "Mine" || n == "Mine Gold" || n == "Build")
+								workers.push_back({ so->id, n });
+						}
+					self(child, self);
+				}
+		};
+		if (player)
+			collect(player, collect);
+		for (const auto& w : workers) {
+			last[w.id] = GatherSaveState(server, server.findObject(w.id), true);
+			printf("GSAVE file t=0 %u %s: %s\n", w.id, w.job.c_str(), last[w.id].c_str());
+		}
+		int idle = 0;
+		for (int s = 1; s <= after; s++) {
+			GatherSaveStep(server, 1);
+			for (const auto& w : workers) {
+				ServerGameObject* go = server.findObject(w.id);
+				const std::string now = GatherSaveState(server, go, false);
+				std::string& prev = last[w.id];
+				if (now != prev) {
+					printf("GSAVE file t=%d %u %s: %s\n", s, w.id, w.job.c_str(), now.c_str());
+					prev = now;
+				}
+			}
+		}
+		for (const auto& w : workers)
+			if (ServerGameObject* go = server.findObject(w.id); go && !go->orderConfig.getCurrentOrder())
+				idle++;
+		printf("GSAVE file workers %zu idle-after-load %d\n", workers.size(), idle);
+		fflush(stdout);
+		return;
+	}
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		g_settings["simSeed"] = 4242u;
+		server.timeManager.unpause();
+		server.startLevel();
+		server.timeManager.stepMs = 20;
+		const GameSet& gs = *server.gameSet;
+		ServerGameObject* player = server.findObject(1027);
+		const GameObjBlueprint* peasantType = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+		std::vector<ServerGameObject*> peasants, trees, gold, stone;
+		ServerGameObject* manor = nullptr;
+		const int goldItem = gs.items.names.getIndex("Gold"), stoneItem = gs.items.names.getIndex("Stone");
+		auto find = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					ServerGameObject* so = child->dyncast<ServerGameObject>();
+					if (so->getPlayer() == player && child->blueprint->name == "Peasant")
+						peasants.push_back(so);
+					else if (so->getPlayer() == player && child->blueprint->name == "Manor" && !manor)
+						manor = so;
+					else if (child->blueprint->name == "Coniferous Tree")
+						trees.push_back(so);
+					else if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && goldItem >= 0 && so->getItem(goldItem) > 0.0f)
+						gold.push_back(so);
+					else if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && stoneItem >= 0 && so->getItem(stoneItem) > 0.0f)
+						stone.push_back(so);
+					self(child, self);
+				}
+		};
+		find(server.getLevel(), find);
+		if (!player || !peasantType || !manor || peasants.empty() || trees.empty()) {
+			printf("GSAVE not set up\n");
+			return;
+		}
+		auto nearest = [](std::vector<ServerGameObject*>& list, const Vector3& at) -> ServerGameObject* {
+			ServerGameObject* best = nullptr;
+			float bd = 1e12f;
+			for (ServerGameObject* o : list)
+				if (float d = (o->position - at).sqlen2xz(); d < bd) { bd = d; best = o; }
+			return best;
+		};
+		auto command = [&](const char* cmd, ServerGameObject* unit, ServerGameObject* target) {
+			const int c = gs.commands.names.getIndex(cmd);
+			if (c >= 0 && target)
+				gs.commands[c].execute(unit, target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		};
+		// the level's peasants and four more chop wood; two mine gold, two stone
+		for (int i = 0; i < 4; i++)
+			peasants.push_back(server.spawnObject(peasantType, player, manor->position + Vector3(12.0f + 2.0f * i, 0, 12.0f), Vector3(0, 0, 0)));
+		for (ServerGameObject* p : peasants) {
+			command("Chop Tree", p, nearest(trees, p->position));
+			workers.push_back({ p->id, "wood" });
+		}
+		for (int i = 0; i < 4; i++) {
+			const bool isGold = i < 2;
+			ServerGameObject* p = server.spawnObject(peasantType, player, manor->position + Vector3(-12.0f - 2.0f * i, 0, 12.0f), Vector3(0, 0, 0));
+			ServerGameObject* target = nearest(isGold ? gold : stone, p->position);
+			if (!target)
+				continue;
+			command(isGold ? "Mine Gold" : "Mine", p, target);
+			workers.push_back({ p->id, isGold ? "gold" : "stone" });
+		}
+		// a builder at a farm's foundation, and a farmer on a finished field
+		const GameObjBlueprint* foundationType = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+		const GameObjBlueprint* fieldType = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm");
+		std::vector<Vector3> spots;
+		for (int i = 0; i < 80 && spots.size() < 2; i++) {
+			const Vector3 at = manor->position + Vector3(-40.0f + 10.0f * (i % 9), 0, 25.0f + 10.0f * (i / 9));
+			bool clear = true;
+			for (const Vector3& s : spots)
+				clear = clear && (s - at).len2xz() > 20.0f;
+			if (clear && foundationType && StampdownPlan::getStampdownPlan(&server, player, foundationType, at, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid)
+				spots.push_back(at);
+		}
+		if (spots.size() == 2 && fieldType) {
+			ServerGameObject* foundation = server.spawnObject(foundationType, player, spots[0], Vector3(0, 0, 0));
+			ServerGameObject* builder = server.spawnObject(peasantType, player, manor->position + Vector3(0, 0, 20), Vector3(0, 0, 0));
+			command("Build", builder, foundation);
+			workers.push_back({ builder->id, "build" });
+			ServerGameObject* field = server.spawnObject(fieldType, player, spots[1], Vector3(0, 0, 0));
+			ServerGameObject* farmer = server.spawnObject(peasantType, player, manor->position + Vector3(4, 0, 20), Vector3(0, 0, 0));
+			command("Farm", farmer, field);
+			workers.push_back({ farmer->id, "farm" });
+		}
+		else
+			printf("GSAVE no room for the farm (%zu spots)\n", spots.size());
+		GatherSaveStep(server, seconds);
+		server.timeManager.pause();
+		for (const auto& w : workers) {
+			before[w.id] = GatherSaveState(server, server.findObject(w.id), true);
+			printf("GSAVE before %u %s: %s\n", w.id, w.job.c_str(), before[w.id].c_str());
+		}
+		printf("GSAVE saved %d\n", (int)server.saveGame(path.c_str()));
+		server.timeManager.unpause();
+		GatherSaveStep(server, after);
+		for (const auto& w : workers)
+			endSaved[w.id] = GatherSaveState(server, server.findObject(w.id), true);
+	}
+	int loadedSame = 0, endSame = 0, idle = 0;
+	{
+		Server server;
+		server.loadSaveGame(name.c_str());
+		server.timeManager.stepMs = 20;
+		for (const auto& w : workers) {
+			const std::string now = GatherSaveState(server, server.findObject(w.id), true);
+			const bool same = now == before[w.id];
+			loadedSame += same;
+			printf("GSAVE loaded %u %s: %s%s\n", w.id, w.job.c_str(), now.c_str(), same ? "" : "   <-- differs");
+		}
+		GatherSaveStep(server, after);
+		for (const auto& w : workers) {
+			ServerGameObject* go = server.findObject(w.id);
+			const std::string now = GatherSaveState(server, go, true);
+			const bool same = now == endSaved[w.id];
+			endSame += same;
+			if (go && !go->orderConfig.getCurrentOrder())
+				idle++;
+			printf("GSAVE end saved-run  %u %s: %s\n", w.id, w.job.c_str(), endSaved[w.id].c_str());
+			printf("GSAVE end loaded-run %u %s: %s%s\n", w.id, w.job.c_str(), now.c_str(), same ? "" : "   <-- differs");
+		}
+	}
+	printf("GSAVE idle %d\n", idle);
+	printf("GSAVE loaded-same %d/%zu end-same %d/%zu idle-after-load %d\n", loadedSame, workers.size(), endSame, workers.size(), idle);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3494,6 +3856,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_GatherSave, "Gatherers through a save (woodcutters, miners, builder, farmer carry on)"},
 };
 
 void LaunchTest()

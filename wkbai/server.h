@@ -109,6 +109,12 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void addCityRectangle(const CityRectangle& rectangle);
 	void setBuildingSpawnedUnitOrderToTarget(int orderIndex, ServerGameObject* target);
 	void setBuildingSpawnedUnitOrderToDestination(int orderIndex, Vector3 destination, Vector3 positionToFace = Vector3{ -1.0f, 0.0f, 0.0f });
+	// the client message of the building's order for its spawned units (its owner's)
+	void sendSpawnedUnitOrder(NetLink* link = nullptr) const; // to the owner, or to that link
+	// where the spawned units' target was last (a rally point on a tree): when it is gone (felled),
+	// the next spawned unit takes the nearest object there that the command accepts
+	// (x < 0: none)
+	Vector3 spawnedUnitTargetPlace = Vector3(-1.0f, 0.0f, 0.0f);
 
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();

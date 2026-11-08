@@ -2027,7 +2027,13 @@ void ClientInterface::iter()
 		}
 	}
 	// Test runs: "benchmark": { ..., "saveAs": "<name>" } saves the game once it has run 2 seconds
-	if (frontEnd && BenchmarkEnabled() && client->getLevel() && client->timeManager.currentTime > 2.0f) {
+	// ("saveAfter": <seconds> for another time; counted from the first frame's game time, so a
+	// loaded save runs that long too and isn't saved at once)
+	static float benchmarkStartTime = -1.0f;
+	if (BenchmarkEnabled() && client->getLevel() && benchmarkStartTime < 0.0f)
+		benchmarkStartTime = client->timeManager.currentTime;
+	if (frontEnd && BenchmarkEnabled() && client->getLevel() && client->timeManager.currentTime - benchmarkStartTime
+		> g_settings.value("benchmark", nlohmann::json::object()).value("saveAfter", 2.0f)) {
 		static bool saved = false;
 		const std::string name = g_settings.value("benchmark", nlohmann::json::object()).value("saveAs", std::string());
 		if (!saved && !name.empty()) {

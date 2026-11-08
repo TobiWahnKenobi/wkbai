@@ -193,6 +193,20 @@ void Server::loadSaveGame(const char * filename)
 	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
 		if (clientPlayerObjects[i])
 			clientPlayerObjects[i]->clientIndex = i;
+	// the buildings' orders for their spawned units (PARAM_BLOCK): their targets' places, and to
+	// their owners (the rally flag)
+	{
+		std::vector<ServerGameObject*> rallying;
+		for (auto& [id, obj] : idmap)
+			if (obj && obj->spawnedUnitCommand >= 0)
+				rallying.push_back((ServerGameObject*)obj);
+		std::sort(rallying.begin(), rallying.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+		for (ServerGameObject* b : rallying) {
+			if (ServerGameObject* target = b->spawnedUnitTarget.getFrom<Server>())
+				b->spawnedUnitTargetPlace = target->position;
+			b->sendSpawnedUnitOrder();
+		}
+	}
 
 	timeManager.unlock();
 	timeManager.unpause();
@@ -785,6 +799,58 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 				obj->animationVariant = std::max(0, variant);
 				obj->setAnimation(anim, false, -1, start, rate);
 			}
+			gsf.advanceLine();
+			continue;
+		}
+		// PARAM_BLOCK ... END_OF_PARAM_BLOCK: a building's order for the units it spawns (its rally
+		// point), as WKB.exe saves it: PARAM_ORDER_BLUEPRINT_NAME "<command>" and PARAM_OBJECT_ID
+		// <target> or PARAM_DESTINATION <x> <z>. Not read before: a loaded game's new peasants
+		// stood idle at their Manor instead of going to the tree or farm their rally point named.
+		if (strtag == "PARAM_BLOCK") {
+			gsf.advanceLine();
+			std::string orderName;
+			uint32_t targetId = 0;
+			bool hasDestination = false;
+			Vector3 destination(-1.0f, 0.0f, 0.0f);
+			while (!gsf.eof) {
+				const std::string ptag = gsf.nextTag();
+				if (ptag == "PARAM_ORDER_BLUEPRINT_NAME")
+					orderName = gsf.nextString(true);
+				else if (ptag == "PARAM_OBJECT_ID")
+					targetId = (uint32_t)gsf.nextInt();
+				else if (ptag == "PARAM_DESTINATION") {
+					destination.x = gsf.nextFloat();
+					destination.z = gsf.nextFloat();
+					hasDestination = true;
+				}
+				else if (ptag == "END_OF_PARAM_BLOCK")
+					break;
+				gsf.advanceLine();
+			}
+			// the command, by its name (despite the tag: WKB.exe's Marjoria's Keep save has "Train",
+			// a command with no order of that name); else the command giving that order, one for
+			// spawned units first
+			const int order = gameSet->orders.names.getIndex(orderName);
+			int command = gameSet->commands.names.getIndex(orderName);
+			for (size_t i = 0; command < 0 && order >= 0 && i < gameSet->commands.size(); i++)
+				if (gameSet->commands[i].order == &gameSet->orders[order] && gameSet->commands[i].canBeAssignedToSpawnedUnits)
+					command = (int)i;
+			if (command >= 0 && (targetId || hasDestination)) {
+				obj->spawnedUnitCommand = command;
+				obj->spawnedUnitFaceTo = Vector3(-1.0f, 0.0f, 0.0f);
+				if (targetId) {
+					obj->spawnedUnitTarget = targetId; // (by id: found when it is needed)
+					obj->spawnedUnitDestination = Vector3(-1.0f, 0.0f, 0.0f);
+				}
+				else {
+					obj->spawnedUnitTarget = nullptr;
+					if (terrain)
+						destination.y = terrain->getHeightEx(destination.x, destination.z, false);
+					obj->spawnedUnitDestination = destination;
+				}
+			}
+			else if (!orderName.empty())
+				printf("WARNING: object %u's spawned unit order \"%s\" not known\n", obj->id, orderName.c_str());
 			gsf.advanceLine();
 			continue;
 		}
@@ -1586,24 +1652,30 @@ void ServerGameObject::setBuildingSpawnedUnitOrderToTarget(int commandIndex, Ser
 {
 	this->spawnedUnitCommand = commandIndex;
 	this->spawnedUnitTarget = target->id;
+	this->spawnedUnitTargetPlace = target->position;
 	this->spawnedUnitDestination = Vector3(-1.0, 0.0, 0.0);
 	this->spawnedUnitFaceTo = Vector3(-1.0, 0.0, 0.0);
+	sendSpawnedUnitOrder();
+}
 
+void ServerGameObject::sendSpawnedUnitOrder(NetLink* link) const
+{
 	NetPacketWriter npw{ NETCLIMSG_BUILDING_SPAWNED_UNIT_ORDER_CHANGED };
 	npw.writeValues(this->id, this->spawnedUnitCommand, this->spawnedUnitTarget.objid, this->spawnedUnitDestination, this->spawnedUnitFaceTo);
-	Server::instance->sendTo(this->getPlayer(), npw);
+	if (link)
+		link->send(npw);
+	else
+		Server::instance->sendTo(const_cast<ServerGameObject*>(this)->getPlayer(), npw);
 }
 
 void ServerGameObject::setBuildingSpawnedUnitOrderToDestination(int commandIndex, Vector3 destination, Vector3 positionToFace)
 {
 	this->spawnedUnitCommand = commandIndex;
 	this->spawnedUnitTarget = nullptr;
+	this->spawnedUnitTargetPlace = Vector3(-1.0f, 0.0f, 0.0f);
 	this->spawnedUnitDestination = destination;
 	this->spawnedUnitFaceTo = positionToFace;
-
-	NetPacketWriter npw{ NETCLIMSG_BUILDING_SPAWNED_UNIT_ORDER_CHANGED };
-	npw.writeValues(this->id, this->spawnedUnitCommand, this->spawnedUnitTarget.objid, this->spawnedUnitDestination, this->spawnedUnitFaceTo);
-	Server::instance->sendTo(this->getPlayer(), npw);
+	sendSpawnedUnitOrder();
 }
 
 void ServerGameObject::updatePosition(const Vector3 & newposition, bool events)
@@ -2467,6 +2539,10 @@ void Server::sendStateTo(NetLink* link)
 		sendHostData(2, terrain->waterDesign ? terrain->waterDesign->toText() : std::string(), link);
 	}
 	// the objects, each after its parent, with what the clients were told of it
+	// the player of this link's client (its buildings' spawned unit orders are sent to it)
+	ServerGameObject* linkPlayer = nullptr;
+	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end() && (size_t)(it - clientLinks.begin()) < clientPlayerObjects.size())
+		linkPlayer = clientPlayerObjects[it - clientLinks.begin()].get();
 	std::function<void(ServerGameObject*)> sendObject = [&](ServerGameObject* obj) {
 		if (obj->deleted)
 			return;
@@ -2564,6 +2640,11 @@ void Server::sendStateTo(NetLink* link)
 			NetPacketWriter msg(NETCLIMSG_CITY_RECTANGLE_ADDED);
 			msg.writeValues(obj->id, r.xStart, r.yStart, r.xEnd, r.yEnd);
 			send(msg);
+		}
+		// a building's order for its spawned units, to its owner only (as when it is set)
+		if (obj->spawnedUnitCommand >= 0 && linkPlayer && obj->getPlayer() == linkPlayer) {
+			obj->sendSpawnedUnitOrder(link);
+			count++;
 		}
 		for (const auto& [type, children] : obj->children)
 			for (CommonGameObject* child : children)

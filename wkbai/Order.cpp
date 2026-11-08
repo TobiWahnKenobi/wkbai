@@ -1098,6 +1098,38 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 	return place;
 }
 
+// The object a building's spawned units take instead of their gone target: within 70 m of where
+// that was (the building, if not known), the nearest that the command's cursor conditions accept
+// for the new unit, as a right-click on it would (for "Chop Tree": a tree with wood and fewer than
+// 5 woodcutters). Nearest first, ties by id. None: null.
+static ServerGameObject* RallyTargetInstead(ServerGameObject* building, const Command* command, ServerGameObject* unit)
+{
+	if (command->cursorConditions.empty())
+		return nullptr; // nothing tells what fits
+	const Vector3 place = building->spawnedUnitTargetPlace.x >= 0.0f ? building->spawnedUnitTargetPlace : building->position;
+	constexpr float REACH = 70.0f; // as the game set's "Unoccupied Tree closest to Target"
+	std::vector<std::pair<float, ServerGameObject*>> near;
+	for (const auto& [id, o] : Server::instance->idmap) {
+		ServerGameObject* so = (ServerGameObject*)o;
+		if (!so || so == unit || so == building || so->deleted || (so->flags & ServerGameObject::fTerminated))
+			continue;
+		const float d = (so->position - place).sqlen2xz();
+		if (d < REACH * REACH)
+			near.emplace_back(d, so);
+	}
+	std::sort(near.begin(), near.end(), [](const auto& a, const auto& b) { return a.first != b.first ? a.first < b.first : a.second->id < b.second->id; });
+	const GameSet& gs = *Server::instance->gameSet;
+	for (const auto& [d, so] : near) {
+		SrvScriptContext ctx(Server::instance, unit);
+		auto _1 = ctx.target.change(so);
+		auto _2 = ctx.selectedObject.change(unit);
+		if (std::all_of(command->cursorConditions.begin(), command->cursorConditions.end(),
+			[&](int eq) { return eq < 0 || gs.equations[eq]->booleval(&ctx); }))
+			return so;
+	}
+	return nullptr;
+}
+
 void SpawnTask::onUpdate()
 {
 	this->startTriggers();
@@ -1116,6 +1148,19 @@ void SpawnTask::onUpdate()
 				const auto it = std::find(spawnedOfferedCommands.begin(), spawnedOfferedCommands.end(), command);
 				if (it != spawnedOfferedCommands.end()) {
 					ServerGameObject* target = obj->spawnedUnitTarget.getFrom<Server>();
+					if (target && (target->deleted || (target->flags & ServerGameObject::fTerminated)))
+						target = nullptr;
+					// a rally point on a tree that has been felled (or any target gone): the nearest
+					// one there that the command takes, which becomes the rally point (the play
+					// test: the Manor's new peasants stood idle once their tree was gone)
+					const uint32_t had = obj->spawnedUnitTarget.objid;
+					if (!target && had != 0 && had != 0xFFFFFFFFu) {
+						target = RallyTargetInstead(obj, command, spawned);
+						if (target)
+							obj->setBuildingSpawnedUnitOrderToTarget(obj->spawnedUnitCommand, target);
+					}
+					else if (target)
+						obj->spawnedUnitTargetPlace = target->position;
 					Vector3 destination = obj->spawnedUnitDestination;
 					// to a place (the rally point): each unit to a free spot next to it, not all on it
 					if (!target && destination.x >= 0.0f)

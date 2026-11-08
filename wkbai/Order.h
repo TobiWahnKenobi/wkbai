@@ -155,8 +155,10 @@ struct Trigger {
 	virtual void parse(GSFileParser &gsf, const GameSet &gs);
 };
 
+// (the times start at 0: a task saved before its triggers started wrote whatever the memory held,
+// "PERIOD 1.40129846e-45" in a play test's save)
 struct TimerTrigger : Trigger {
-	float period, referenceTime;
+	float period = 0.0f, referenceTime = 0.0f;
 	using Trigger::Trigger;
 	void init() override;
 	void update() override;
@@ -164,7 +166,7 @@ struct TimerTrigger : Trigger {
 };
 
 struct AnimationLoopTrigger : Trigger {
-	float referenceTime;
+	float referenceTime = 0.0f;
 	using Trigger::Trigger;
 	void init() override;
 	void update() override;
@@ -172,7 +174,7 @@ struct AnimationLoopTrigger : Trigger {
 };
 
 struct AttachmentPointTrigger : Trigger {
-	uint32_t referenceTime;
+	uint32_t referenceTime = 0;
 	using Trigger::Trigger;
 	void init() override;
 	void update() override;
