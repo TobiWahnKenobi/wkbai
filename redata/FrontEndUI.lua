@@ -1086,8 +1086,11 @@ local SETTINGS = {
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
-	weatherSpring = 1, weatherSummer = 1, weatherAutumn = 1, weatherWinter = 1,
+	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
 	cloudWeather = 0, cloudCover = 45, -- the sky without the seasons (cloud cover in percent)
+	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
+	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])
+	weatherStability = 3, weatherMinChange = 3, weatherMaxChange = 10, weatherTypes = 1023,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1260,6 +1263,17 @@ local TEMPERATURE_SCALES = { "Celsius", "Fahrenheit", "Kelvin" }
 local SEVERITIES = { "Gentle", "Normal", "Harsh", "Random" }
 local CLOUD_WEATHERS = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog",
 	"Snow", "Blizzard", "Heatwave", "Drought" }
+local STABILITIES = { "Frequent", "Normal", "Seldom", "Random", "Custom" }
+local STABILITY_NOTES = { "A new weather every 1 to 4 minutes.", "A new weather every 3 to 10 minutes.",
+	"A new weather every 8 to 20 minutes.", "Each weather lasts 10-35% of a season's length (45 s - 10 min)." }
+-- the weathers each season can bring (ServerEnvironment.cpp WEATHER_WEIGHTS), by EnvWeather + 1
+local SEASON_WEATHERS = {
+	{ true, true, true, true, true, true, true, false, false, false },   -- spring
+	{ true, true, true, true, true, true, false, false, true, true },    -- summer
+	{ true, true, true, true, true, true, true, false, false, false },   -- autumn
+	{ true, true, true, false, false, true, true, true, false, false },  -- winter
+}
+local function weatherAllowed(s, w) return math.floor(s.weatherTypes / 2 ^ (w - 1)) % 2 == 1 end
 local function weatherTab()
 	local s = skirmish.settings
 	local function switch(name, label, x, y)
@@ -1297,6 +1311,21 @@ local function weatherTab()
 		if s.dayNight ~= 0 then
 			note(X(60), Y(780), { "A season lasts at least one day (" .. math.floor(s.dayLength) .. " min)." })
 		end
+		-- how often the weather changes
+		lw = textWidth(FONT_LIST, "Weather changes", S)
+		drawText(FONT_LIST, X(170) - lw, Y(832), "Weather changes", WHITE, S)
+		if button(STABILITIES[s.weatherStability + 1], X(200), Y(820), L(744), L(38)) then
+			s.weatherStability = (s.weatherStability + 1) % #STABILITIES
+		end
+		if s.weatherStability == 4 then
+			-- the minutes between changes: the shortest never above the longest
+			stepperRow("Min. (min)", nil, "weatherMinChange", 1, 1, 120, Y(880))
+			if s.weatherMaxChange < s.weatherMinChange then s.weatherMaxChange = s.weatherMinChange end
+			stepperRow("Max. (min)", nil, "weatherMaxChange", 1, 1, 120, Y(950))
+			if s.weatherMinChange > s.weatherMaxChange then s.weatherMinChange = s.weatherMaxChange end
+		else
+			note(X(60), Y(880), { STABILITY_NOTES[s.weatherStability + 1] })
+		end
 	else
 		-- without the seasons' weather: the sky's clouds, as they stay all game
 		local lw = textWidth(FONT_LIST, "Clouds", S)
@@ -1310,7 +1339,7 @@ local function weatherTab()
 		note(X(60), Y(712), { "The look of the sky only; the weather's effects come with the seasons." })
 	end
 	-- each season's weather
-	drawText(FONT_BUTTON, "Weather", X(1000), Y(130), s.seasons ~= 0 and WHITE or GREY, S)
+	drawText(FONT_BUTTON, X(1000), Y(130), "Weather", s.seasons ~= 0 and WHITE or GREY, S)
 	local rows = { { "weatherWinter", "Winter", "snow, blizzards, frost; rivers freeze below 0" },
 		{ "weatherSpring", "Spring", "rain and storms; rivers rise" },
 		{ "weatherSummer", "Summer", "heatwaves, droughts, thunderstorms" },
@@ -1322,14 +1351,38 @@ local function weatherTab()
 		if button(SEVERITIES[s[name] + 1], X(1160), y, L(300), L(38), s.seasons ~= 0) then s[name] = (s[name] + 1) % 4 end
 		drawText(FONT_LIST, X(1000), y + L(48), hint, GREY, S)
 	end
-	note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
-		"summers, more storms, floods and droughts. Random: chosen every year.",
-		"",
-		"Units in the open freeze in the cold (worse marching in snow) and",
-		"can die of thirst in the heat; they are safe at their own or their",
-		"allies' villages and manors. Wet and snowy ground slows them down.",
-		"Lightning strikes units and sets buildings on fire. Floods damage",
-		"buildings and drown units in deep water." })
+	if s.seasons ~= 0 and s.weatherStability == 4 then
+		-- custom: the weathers that may come in this game (as far as each season has them)
+		drawText(FONT_LIST, X(1000), Y(596), "Weather that may come (the seasons still decide when):", WHITE, S)
+		for w = 1, 10 do
+			local x = X(1000) + ((w - 1) % 2) * L(440)
+			local y = Y(628) + math.floor((w - 1) / 2) * L(46)
+			local on = weatherAllowed(s, w)
+			if roundButton(x, y, L(40), on, true) then
+				s.weatherTypes = s.weatherTypes + (on and -1 or 1) * 2 ^ (w - 1)
+			end
+			drawText(FONT_LIST, x + L(50), y + L(12), CLOUD_WEATHERS[w + 1], on and YELLOW or WHITE, S)
+		end
+		-- a season none of them comes in stays clear
+		local none = {}
+		for season = 1, 4 do
+			local any = false
+			for w = 1, 10 do if SEASON_WEATHERS[season][w] and weatherAllowed(s, w) then any = true end end
+			if not any then none[#none + 1] = SEASON_NAMES[season] end
+		end
+		if #none > 0 then
+			note(X(1000), Y(864), { "None of them in " .. table.concat(none, ", ") .. ": clear weather then." })
+		end
+	else
+		note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
+			"summers, more storms, floods and droughts. Random: chosen every year.",
+			"",
+			"Units in the open freeze in the cold (worse marching in snow) and",
+			"can die of thirst in the heat; they are safe at their own or their",
+			"allies' villages and manors. Wet and snowy ground slows them down.",
+			"Lightning strikes units and sets buildings on fire. Floods damage",
+			"buildings and drown units in deep water." })
+	end
 	-- cheat mode: the F9 panel (a skirmish against the AI only, never in multiplayer)
 	if skirmish.multiplayer then
 		s.cheatMode = 0
@@ -2468,6 +2521,10 @@ function FE_Open(name)
 	local screenName, tab = string.match(name, "^([^.]+)%.(.+)$")
 	if screenName == "skirmish" then
 		name = screenName
+		-- "skirmish.weather:seasons=1,weatherStability=4" (tests): settings set first
+		local settings
+		tab, settings = string.match(tab, "^([^:]*):?(.*)$")
+		for k, v in string.gmatch(settings, "(%w+)=(%-?%d+)") do skirmish.settings[k] = tonumber(v) end
 		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or 1
 	end
 	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a

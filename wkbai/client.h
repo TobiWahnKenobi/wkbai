@@ -73,6 +73,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	EnvironmentSettings environmentSettings;
 	EnvironmentState environment;
 	int environmentWeatherHeld = -1; // the debug panel's weather held on the server (-1: none)
+	float environmentWeatherEnds = 0.0f; // the game time the weather changes next (1e30: never)
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;

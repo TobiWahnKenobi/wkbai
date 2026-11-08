@@ -29,13 +29,24 @@ struct EnvironmentSettings {
 	int startSeason = 0;       // 0 spring, 1 summer, 2 autumn, 3 winter
 	int tempScale = 0;         // the HUD's: 0 Celsius, 1 Fahrenheit, 2 Kelvin
 	// each season's weather: 0 gentle, 1 normal, 2 harsh, 3 random (chosen anew every year)
-	int severity[4] = { 1, 1, 1, 1 };
+	int severity[4] = { 3, 3, 3, 3 };
 	// the debug panel's (F9) moves of the clock: added to the day's fraction (startHour's) and to
 	// the year's (startSeason's), so the time of day and the season jump there and go on from it
 	float dayShift = 0.0f, yearShift = 0.0f;
 	// the sky without the seasons' weather (the game settings "cloudWeather": 0 by the cloud
 	// cover, 1-10 an EnvWeather + 1; "cloudCover" in percent); the clients draw it
 	int skyWeather = 0, skyCover = 45;
+	// how often the seasons' weather changes ("weatherStability"): 0 frequent (1-4 min between
+	// changes), 1 normal (3-10 min), 2 seldom (8-20 min), 3 random (the default: as before, 10-35%
+	// of a season, from 45 s to 10 min), 4 custom: between weatherMinChange and weatherMaxChange
+	// minutes, and only the weathers in weatherTypes (bit n: EnvWeather n) as far as the season
+	// has them (none of them in a season: clear then)
+	int weatherStability = 3;
+	int weatherMinChange = 3, weatherMaxChange = 10;
+	int weatherTypes = 1023;
+	// the time between changes in seconds (lo, hi); false: random, the season's length has it
+	bool changeRange(float& lo, float& hi) const;
+	bool weatherAllowed(int w) const { return weatherStability != 4 || ((weatherTypes >> w) & 1) != 0; }
 	bool active() const { return dayNight || seasons; }
 	float dayLengthS() const { return dayLengthMin * 60.0f; }
 	// the seasons since the game began (with the shift), as a count: its floor + startSeason is
@@ -54,6 +65,7 @@ enum EnvWeather : uint8_t {
 };
 const char* WeatherName(int weather);
 const char* SeasonName(int season);
+const char* WeatherStabilityName(int stability);
 
 // What the server simulates; the clients get it every game second
 struct EnvironmentState {
