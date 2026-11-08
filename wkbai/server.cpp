@@ -63,6 +63,7 @@ void Server::loadSaveGame(const char * filename)
 		LoadFile(side.c_str(), &text, &size);
 		environment.loadText(std::string(text, size));
 		free(text);
+		environment.trace = g_settings.value("environmentTrace", false); // (tests, as a new game's)
 	}
 	char *filetext; int filesize;
 	LoadFile(filename, &filetext, &filesize, 1);

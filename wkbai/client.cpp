@@ -695,6 +695,11 @@ void Client::tick()
 					es.severity[s] = br.readUint8();
 				es.skyWeather = br.readUint8();
 				es.skyCover = br.readUint8();
+				es.weatherStability = br.readUint8();
+				es.weatherMinChange = br.readUint8();
+				es.weatherMaxChange = br.readUint8();
+				es.weatherTypes = br.readUint16();
+				environmentWeatherEnds = br.readFloat();
 				environmentSkyKnown = true;
 				environment.read(br);
 				environmentActive = es.active();

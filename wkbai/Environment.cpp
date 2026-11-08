@@ -51,6 +51,11 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "cloudWeather=%d\ncloudCover=%d\n", skyWeather, skyCover);
 		out += buf;
 	}
+	if (weatherStability != 3 || weatherMinChange != 3 || weatherMaxChange != 10 || weatherTypes != 1023) {
+		snprintf(buf, sizeof(buf), "weatherStability=%d\nweatherMinChange=%d\nweatherMaxChange=%d\nweatherTypes=%d\n",
+			weatherStability, weatherMinChange, weatherMaxChange, weatherTypes);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -74,10 +79,36 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "weatherWinter") severity[3] = std::clamp(i, 0, 3);
 	else if (name == "cloudWeather") skyWeather = std::clamp(i, 0, (int)WEATHER_COUNT);
 	else if (name == "cloudCover") skyCover = std::clamp(i, 0, 100);
+	else if (name == "weatherStability") weatherStability = std::clamp(i, 0, 4);
+	else if (name == "weatherMinChange") weatherMinChange = std::clamp(i, 1, 120);
+	else if (name == "weatherMaxChange") weatherMaxChange = std::clamp(i, 1, 120);
+	else if (name == "weatherTypes") weatherTypes = i & ((1 << WEATHER_COUNT) - 1);
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;
 	return true;
+}
+
+bool EnvironmentSettings::changeRange(float& lo, float& hi) const
+{
+	static const float ranges[3][2] = { { 1, 4 }, { 3, 10 }, { 8, 20 } }; // minutes
+	if (weatherStability >= 0 && weatherStability < 3) {
+		lo = ranges[weatherStability][0] * 60.0f;
+		hi = ranges[weatherStability][1] * 60.0f;
+		return true;
+	}
+	if (weatherStability == 4) {
+		lo = std::min(weatherMinChange, weatherMaxChange) * 60.0f;
+		hi = std::max(weatherMinChange, weatherMaxChange) * 60.0f;
+		return true;
+	}
+	return false;
+}
+
+const char* WeatherStabilityName(int s)
+{
+	static const char* names[5] = { "Frequent", "Normal", "Seldom", "Random", "Custom" };
+	return (s >= 0 && s < 5) ? names[s] : "?";
 }
 
 const char* WeatherName(int w)

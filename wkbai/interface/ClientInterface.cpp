@@ -1255,6 +1255,27 @@ void ClientInterface::drawEnvironmentDebug()
 		ImGui::Text("clouds %.2f  rain %.2f  snowfall %.2f  fog %.2f", st.cloudCover, st.rain, st.snowfall, st.fog);
 		ImGui::Text("wet %.2f  snow cover %.2f  ice %.2f%s  water %+.1f m", st.wetness, st.snowCover, st.ice, st.ice >= ICE_WALKABLE ? " (walkable)" : "", st.waterRise);
 		ImGui::Text("sight %.2f  ground speed %.2f  daylight %.2f", st.sightFactor, st.speedFactor, g_environment.sun.daylight);
+		// how often the weather changes, and in how long it does next
+		std::string stability = WeatherStabilityName(es.weatherStability);
+		float lo, hi;
+		if (es.changeRange(lo, hi))
+			stability += " (" + std::to_string((int)(lo / 60)) + "-" + std::to_string((int)(hi / 60)) + " min)";
+		else
+			stability += " (by the season's length)";
+		const float left = client->environmentWeatherEnds - st.time;
+		if (!es.seasons || left > 1e20f || client->environmentWeatherHeld >= 0)
+			ImGui::Text("changes: %s  next: never (%s)", stability.c_str(), client->environmentWeatherHeld >= 0 ? "held" : "no seasons");
+		else {
+			const int sec = std::max(0, (int)(left + 0.999f));
+			ImGui::Text("changes: %s  next in %d:%02d", stability.c_str(), sec / 60, sec % 60);
+		}
+		if (es.weatherStability == 4) {
+			std::string types;
+			for (int w = 0; w < WEATHER_COUNT; w++)
+				if (es.weatherAllowed(w))
+					types += (types.empty() ? "" : ", ") + std::string(WeatherName(w));
+			ImGui::TextWrapped("allowed: %s", types.empty() ? "none (clear)" : types.c_str());
+		}
 	}
 	else
 		ImGui::TextUnformatted("Day and night and the seasons are off: the map's own look.");
@@ -1338,6 +1359,13 @@ void ClientInterface::drawEnvironmentDebug()
 	ImGui::SetNextItemWidth(220);
 	if (ImGui::Combo("Weather", &held, weathers.data(), (int)weathers.size()))
 		send("weather", (float)(held - 1));
+	ImGui::EndDisabled();
+	// how often it changes (custom's limits and weathers: the lobby's)
+	int stabilityChoice = std::clamp(es.weatherStability, 0, 4);
+	ImGui::BeginDisabled(!es.seasons);
+	ImGui::SetNextItemWidth(120);
+	if (ImGui::Combo("Weather changes", &stabilityChoice, "Frequent Normal Seldom Random Custom "))
+		send("weatherStability", (float)stabilityChoice);
 	ImGui::EndDisabled();
 	int scale = es.tempScale;
 	ImGui::SetNextItemWidth(120);

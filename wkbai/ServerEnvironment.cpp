@@ -405,6 +405,9 @@ void ServerEnvironment::pickWeather(Server& server, float now)
 	float total = 0.0f;
 	for (int w = 0; w < WEATHER_COUNT; w++) {
 		float wt = settings.seasons ? WEATHER_WEIGHTS[season][w] : (w == WEATHER_CLEAR ? 1.0f : 0.0f);
+		// (custom: only the weathers allowed in this game)
+		if (!settings.weatherAllowed(w))
+			wt = 0.0f;
 		if (IsHarshWeather(w))
 			wt *= state.severity == 0 ? 0.25f : state.severity == 2 ? 2.0f : 1.0f;
 		// not the same storm twice running
@@ -423,13 +426,22 @@ void ServerEnvironment::pickWeather(Server& server, float now)
 		}
 		r -= weights[w];
 	}
+	// (none possible: none of the allowed weathers comes in this season, custom; clear then)
+	const bool fallback = total <= 0.0f;
 	if (weights[chosen] <= 0.0f)
 		chosen = WEATHER_CLEAR;
 	if (forceWeather >= 0 && forceWeather < WEATHER_COUNT)
 		chosen = forceWeather;
 	state.weather = chosen;
-	const float length = settings.seasonLengthS() * (0.10f + 0.25f * Rand01());
-	weatherEnds = now + std::clamp(length, 45.0f, 600.0f);
+	float lo, hi;
+	if (settings.changeRange(lo, hi))
+		weatherEnds = now + lo + (hi - lo) * Rand01();
+	else {
+		const float length = settings.seasonLengthS() * (0.10f + 0.25f * Rand01());
+		weatherEnds = now + std::clamp(length, 45.0f, 600.0f);
+	}
+	if (trace && fallback)
+		printf("ENVIRONMENT t=%.0f no allowed weather in %s: clear\n", now, SeasonName(season));
 	if (chosen == WEATHER_THUNDERSTORM)
 		nextLightning = now + 4.0f + 6.0f * Rand01();
 	if (trace)
@@ -752,7 +764,14 @@ void ServerEnvironment::update(Server& server)
 		state.severity = 1;
 	}
 
-	if (!started || now >= weatherEnds) {
+	// with a set stability (not random), a weather the new season doesn't have (snow into summer)
+	// gives way at once
+	float lo, hi;
+	const bool outOfSeason = started && settings.seasons && settings.changeRange(lo, hi) && forceWeather < 0
+		&& state.weather >= 0 && state.weather < WEATHER_COUNT && WEATHER_WEIGHTS[state.season][state.weather] <= 0.0f;
+	if (outOfSeason && trace)
+		printf("ENVIRONMENT t=%.0f %s ends with the season (%s)\n", now, WeatherName(state.weather), SeasonName(state.season));
+	if (!started || now >= weatherEnds || outOfSeason) {
 		if (settings.seasons)
 			pickWeather(server, now);
 		else {
@@ -873,6 +892,12 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 		msg.writeUint8((uint8_t)settings.severity[s]);
 	msg.writeUint8((uint8_t)settings.skyWeather);
 	msg.writeUint8((uint8_t)settings.skyCover);
+	// how often the weather changes, and when it does next (the debug panel's)
+	msg.writeUint8((uint8_t)settings.weatherStability);
+	msg.writeUint8((uint8_t)settings.weatherMinChange);
+	msg.writeUint8((uint8_t)settings.weatherMaxChange);
+	msg.writeUint16((uint16_t)settings.weatherTypes);
+	msg.writeFloat(weatherEnds);
 	state.write(msg);
 	if (only)
 		only->send(msg);
