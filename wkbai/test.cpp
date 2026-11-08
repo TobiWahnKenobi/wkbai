@@ -50,6 +50,7 @@
 #include "ParticleContainer.h"
 #include "settings.h"
 #include "MovementController.h"
+#include "FormationController.h"
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
 #include "gameset/finder.h"
@@ -3450,6 +3451,362 @@ void Test_MassOrder()
 	fflush(stdout);
 }
 
+// Move arrival (needs the game data): "moveArrival": { "level": "<.lvl>", "sizes": [10, 50, 200],
+// "distance": m, "seconds": s, "corpses": n, "unit": "<type>" } (default Tribes Unite, 10/50/200,
+// 200 m, 150 s, 100, Pikeman). Groups of that type of the first player stand in a block by its
+// first character and are sent with one Move a distance towards the map's middle, loose (each to
+// its own spot, as a right-click spreads them: 3 m rings) and as a Line formation, each
+//  - on open ground,
+//  - with n corpses (every other one the next player's, killed with "Die") strewn over the middle
+//    of the way, and a tenth more of the group (of its formation) killed where it stands,
+//  - and that after a 20 s fight with half as many of the next player's (the ones left killed).
+// Prints per case how many arrived (within 3 m of their spot, or of their formation place with
+// the formation there; members the formation's army let go during the fight left out), how far
+// the others got and why they stand: the movement controller's state, the order they have, their
+// last path search; for a formation its own order and walk. WKB_MOVEARRIVAL_CASE=<n> runs only
+// case n (0-17: size, loose/formation, open/corpses/fight); WKB_MOVEARRIVAL_TRACE=1 prints the
+// formation's and its army's orders around the order; WKB_MOVEARRIVAL_PROGRESS=1 every 10 s.
+// "MOVEARRIVAL case ... arrived a/n" lines; "MOVEARRIVAL all arrived A/N" at the end.
+void Test_MoveArrival()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("moveArrival", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("6 Player Tribes Unite.lvl"));
+	const std::vector<int> sizes = cfg.value("sizes", std::vector<int>{ 10, 50, 200 });
+	const float distance = cfg.value("distance", 200.0f);
+	const int seconds = cfg.value("seconds", 150);
+	const int numCorpses = cfg.value("corpses", 100);
+	const std::string unitName = cfg.value("unit", std::string("Pikeman"));
+	const int onlyCase = getenv("WKB_MOVEARRIVAL_CASE") ? atoi(getenv("WKB_MOVEARRIVAL_CASE")) : -1;
+	extern bool g_recordSearches;
+	extern std::unordered_map<uint32_t, LastPathSearch> g_lastSearches;
+	g_recordSearches = true;
+	int allArrived = 0, allUnits = 0, caseIndex = -1;
+	for (int units : sizes)
+		for (int formed = 0; formed < 2; formed++)
+			for (int variant = 0; variant < 3; variant++) {
+				// 0 open ground, 1 corpses on the way, 2 that and a fight first
+				const bool withCorpses = variant >= 1, battle = variant == 2;
+				caseIndex++;
+				if (onlyCase >= 0 && onlyCase != caseIndex)
+					continue;
+				g_lastSearches.clear();
+				Server server;
+				server.loadSaveGame(("Save_Games\\" + level).c_str());
+				ServerGameObject* player = nullptr;
+				ServerGameObject* enemy = nullptr;
+				ServerGameObject* first = nullptr;
+				auto find = [&](CommonGameObject* obj, auto& self) -> void {
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* child : children) {
+							if (!first && child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+								first = child->dyncast<ServerGameObject>();
+							self(child, self);
+						}
+				};
+				for (const auto& [type, children] : server.getLevel()->children)
+					for (CommonGameObject* p : children)
+						if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player") {
+							if (!first) {
+								find(p, find);
+								if (first)
+									player = p->dyncast<ServerGameObject>();
+							}
+							else if (!enemy)
+								enemy = p->dyncast<ServerGameObject>();
+						}
+				const int moveCommand = server.gameSet->commands.names.getIndex("Move");
+				const int dieEvent = server.gameSet->events.names.getIndex("Die");
+				if (!player || !first || moveCommand < 0 || dieEvent < 0) {
+					printf("MOVEARRIVAL not set up\n");
+					return;
+				}
+				const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, unitName);
+				if (!bp)
+					bp = first->blueprint;
+				const auto [tw, th] = server.terrain->getNumPlayableTiles();
+				const Vector3 middle(tw * 2.5f, 0, th * 2.5f);
+				const Vector3 dir = (middle - first->position).normal2xz();
+				const Vector3 side(-dir.z, 0, dir.x);
+				const int columns = (int)std::ceil(std::sqrt((float)units));
+				// the block 10 m beyond the first character, towards the middle
+				const Vector3 blockCentre = first->position + dir * (10.0f + columns);
+				const Vector3 goal = MovementController::nearestValidPosition(bp, blockCentre + dir * distance);
+				server.timeManager.unpause();
+				server.timeManager.stepMs = 20;
+				auto step = [&]() {
+					server.timeManager.pendingMs = server.timeManager.stepMs;
+					if (server.timeManager.step())
+						server.simulate();
+				};
+				// the corpses first: spawned over the middle of the way, then killed
+				uint32_t rnd = 12345u + caseIndex;
+				auto random = [&]() { rnd = rnd * 1664525u + 1013904223u; return (float)(rnd >> 8) / 16777216.0f; };
+				std::vector<SrvGORef> corpses;
+				if (withCorpses) {
+					for (int i = 0; i < numCorpses; i++) {
+						const Vector3 at = blockCentre + dir * (distance * (0.25f + 0.5f * random())) + side * (40.0f * (random() - 0.5f));
+						// every other one the enemy's (the next player's), as on a battlefield
+						ServerGameObject* owner = (i & 1) && enemy ? enemy : player;
+						corpses.push_back(server.spawnObject(bp, owner, MovementController::nearestValidPosition(bp, at), Vector3(0, 0, 0)));
+					}
+					for (SrvGORef& c : corpses)
+						if (c)
+							c->sendEvent(dieEvent, c.get());
+				}
+				std::vector<SrvGORef> army;
+				for (int i = 0; i < units; i++) {
+					const Vector3 pos = blockCentre + side * ((i % columns - (columns - 1) * 0.5f) * 2.0f) - dir * ((float)(i / columns) * 2.0f);
+					army.push_back(server.spawnObject(bp, player, MovementController::nearestValidPosition(bp, pos), Vector3(0, 0, 0)));
+				}
+				// with corpses, a tenth more stood with the group and fell (in its formation, if any)
+				std::vector<SrvGORef> fallen;
+				for (int i = 0; withCorpses && i < std::max(1, units / 10); i++) {
+					const Vector3 pos = blockCentre + side * ((i % columns - (columns - 1) * 0.5f) * 2.0f) + dir * (2.0f + (float)(i / columns) * 2.0f);
+					fallen.push_back(server.spawnObject(bp, player, MovementController::nearestValidPosition(bp, pos), Vector3(0, 0, 0)));
+				}
+				SrvGORef formation;
+				if (formed) {
+					// as NETSRVMSG_CREATE_NEW_FORMATION
+					formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+					Vector3 sum;
+					for (SrvGORef& u : army) { sum += u->position; u->setParent(formation.get()); }
+					for (SrvGORef& u : fallen) { sum += u->position; u->setParent(formation.get()); }
+					formation->setPosition(sum / (float)(units + fallen.size()));
+					formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+				}
+				// (a second for the formation to take them in, then they fall)
+				for (int i = 0; i < 50; i++)
+					step();
+				for (SrvGORef& u : fallen)
+					if (u)
+						u->sendEvent(dieEvent, u.get());
+				// a fight first: half as many of the enemy's come at the group from the way
+				// ahead; after 20 s the ones left fall where they stand
+				int enemiesKilled = 0;
+				if (battle && enemy) {
+					std::vector<SrvGORef> foes;
+					const int numFoes = std::max(5, units / 2);
+					for (int i = 0; i < numFoes; i++) {
+						const Vector3 pos = blockCentre + side * ((i % columns - (columns - 1) * 0.5f) * 2.0f) + dir * (10.0f + (float)(i / columns) * 2.0f);
+						foes.push_back(server.spawnObject(bp, enemy, MovementController::nearestValidPosition(bp, pos), Vector3(0, 0, 0)));
+					}
+					for (int i = 0; i < 20 * 50; i++)
+						step();
+					for (SrvGORef& f : foes)
+						if (f && f->blueprint->name.rfind("Dead", 0) != 0) {
+							f->sendEvent(dieEvent, f.get());
+							enemiesKilled++;
+						}
+				}
+				// 5 s more: the corpses fall, the formation forms up
+				for (int i = 0; i < 250; i++)
+					step();
+				// (the dying are converted into their corpses, "Dead ...": counted by name on the way)
+				int corpsesLeft = 0;
+				{
+					NNSearch nns;
+					nns.start(&server, blockCentre + dir * (distance * 0.5f), distance * 0.5f + 40.0f);
+					std::set<const ServerGameObject*> ownersShown;
+					while (CommonGameObject* o = nns.next()) {
+						if (o->blueprint->name.rfind("Dead", 0) != 0)
+							continue;
+						corpsesLeft++;
+						// what a right-click on the corpse would give a unit of the army (the
+						// client's choice: the first offered command whose cursor shows)
+						ServerGameObject* corpse = o->dyncast<ServerGameObject>();
+						if (!ownersShown.insert(corpse->getPlayer()).second || army.empty() || !army[0])
+							continue;
+						SrvScriptContext ctx(&server, army[0].get());
+						auto _ = ctx.change(ctx.target, corpse);
+						std::string pick = "(none)";
+						for (Command* cmd : bp->offeredCommands) {
+							bool shows = cmd->cursor != nullptr;
+							for (auto& [cond, cursor] : cmd->cursorAvailable)
+								if (cond->test->eval(&ctx)) { shows = cursor != nullptr; break; }
+							bool all = true;
+							for (int eq : cmd->cursorConditions)
+								all = all && server.gameSet->equations[eq]->eval(&ctx) > 0.0f;
+							if (shows && all) { pick = server.gameSet->commands.getString(cmd); break; }
+						}
+						printf("MOVEARRIVAL   corpse %u %s of player %u: flags selectable %d targetable %d, interactable %d; a right-click on it: %s\n", corpse->id,
+							corpse->blueprint->name.c_str(), corpse->getPlayer() ? corpse->getPlayer()->id : 0, (corpse->flags & CommonGameObject::fSelectable) ? 1 : 0,
+							(corpse->flags & CommonGameObject::fTargetable) ? 1 : 0, (int)corpse->isInteractable(), pick.c_str());
+					}
+				}
+				// (in a fight the formation's army lets members too far from its centre go to the
+				// player: they aren't in the formation the order is for, and are left out)
+				int alive = 0, released = 0;
+				std::vector<bool> leftOut(units, false);
+				for (int i = 0; i < units; i++) {
+					SrvGORef& u = army[i];
+					if (!u || u->blueprint->name.rfind("Dead", 0) == 0)
+						continue;
+					if (formed && formation && u->getParent() != formation.get()) {
+						leftOut[i] = true;
+						released++;
+						continue;
+					}
+					alive++;
+				}
+				// the order, as a right-click (ClientInterface::sendRightClickCommand)
+				std::vector<Vector3> spots(units, goal);
+				std::vector<Vector3> starts(units);
+				std::vector<int> orderIds(units, -1);
+				for (int i = 0; i < units; i++)
+					if (army[i])
+						starts[i] = army[i]->position;
+				const float orderTime = server.timeManager.currentTime;
+				auto formationOrders = [&](const char* when) {
+					if (!getenv("WKB_MOVEARRIVAL_TRACE") || !formation)
+						return;
+					printf("MOVEARRIVAL   formation %u %s (controller %s %u, can be ordered %d):", formation->id, when,
+						formation->getParent() ? formation->getParent()->blueprint->name.c_str() : "-", formation->getParent() ? formation->getParent()->id : 0,
+						(int)server.gameSet->commands[moveCommand].canBeExecuted(formation.get(), nullptr));
+					for (Order& o : formation->orderConfig.orders)
+						printf(" [%s state %d]", server.gameSet->orders.getString(o.blueprint->bpid).c_str(), o.state);
+					if (ServerGameObject* army = formation->getParent(); army && army->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY) {
+						printf("; its army's:");
+						for (Order& o : army->orderConfig.orders) {
+							Task* t = o.getCurrentTask();
+							printf(" [%s state %d, task %s]", server.gameSet->orders.getString(o.blueprint->bpid).c_str(), o.state,
+								t ? server.gameSet->tasks.getString(t->blueprint->bpid).c_str() : "-");
+						}
+					}
+					printf("\n");
+				};
+				if (formed) {
+					formationOrders("before the order");
+					server.gameSet->commands[moveCommand].execute(formation.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, goal);
+					formationOrders("after the order");
+					step();
+					formationOrders("a step later");
+					for (int i = 0; i < 49; i++)
+						step();
+					formationOrders("a second later");
+				}
+				else {
+					Vector3 destPos = goal;
+					float nextPosDir = 0.0f, nextPosRadius = 3.0f;
+					for (int i = 0; i < units; i++) {
+						if (!army[i] || army[i]->blueprint->name.rfind("Dead", 0) == 0)
+							continue;
+						spots[i] = destPos;
+						server.gameSet->commands[moveCommand].execute(army[i].get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, destPos);
+						if (Order* o = army[i]->orderConfig.getCurrentOrder())
+							orderIds[i] = o->id;
+						destPos = goal + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
+						nextPosDir += 3.0f / nextPosRadius;
+						if (nextPosDir >= 2.0f * 3.1415f) { nextPosDir = 0.0f; nextPosRadius += 3.0f; }
+					}
+				}
+				auto distToSpot = [&](int i) -> float {
+					ServerGameObject* u = army[i].get();
+					Vector3 spot = spots[i];
+					if (formed && formation)
+						FormationController::memberPlace(formation.get(), u, spot);
+					return (u->position - spot).len2xz();
+				};
+				auto isDead = [&](int i) { return !army[i] || army[i]->blueprint->name.rfind("Dead", 0) == 0 || leftOut[i]; };
+				auto isArrived = [&](int i) {
+					if (isDead(i))
+						return false;
+					if (formed && (!formation || (formation->position - goal).len2xz() > 3.0f))
+						return false;
+					return distToSpot(i) < 3.0f;
+				};
+				int arrived = 0, arrivalSecond = -1;
+				for (int s = 0; s < seconds; s++) {
+					for (int k = 0; k < 50; k++)
+						step();
+					arrived = 0;
+					int moving = 0;
+					for (int i = 0; i < units; i++) {
+						arrived += isArrived(i);
+						moving += army[i] && army[i]->movement.isMoving();
+					}
+					if (s % 10 == 9 && getenv("WKB_MOVEARRIVAL_PROGRESS"))
+						printf("MOVEARRIVAL   t=%d s: %d arrived, %d walking\n", s + 1, arrived, moving);
+					if (arrived == alive) { arrivalSecond = s + 1; break; }
+				}
+				// why the others stand
+				std::map<std::string, int> reasons;
+				float progressSum = 0.0f;
+				int listed = 0;
+				for (int i = 0; i < units; i++) {
+					ServerGameObject* u = army[i].get();
+					if (isDead(i)) continue;
+					if (isArrived(i)) continue;
+					const float total = (spots[i] - starts[i]).len2xz();
+					const float left = distToSpot(i);
+					progressSum += total > 0 ? 1.0f - left / total : 1.0f;
+					const MovementController& mc = u->movementController;
+					Order* o = u->orderConfig.getCurrentOrder();
+					const std::string orderName = o ? server.gameSet->orders.getString(o->blueprint->bpid) : std::string("(none)");
+					Task* t = o ? o->getCurrentTask() : nullptr;
+					std::string why = mc.m_pending ? "pending" : mc.m_started ? (u->movement.isMoving() ? "walking" : "started, no walk") : "stands";
+					why += formed ? std::string(", formation ") + (formation && formation->movement.isMoving() ? "moving" : "standing") : ", order " + orderName + (o && o->id != orderIds[i] ? " (another)" : "");
+					reasons[why]++;
+					if (listed++ < 12) {
+						const auto it = g_lastSearches.find(u->id);
+						printf("MOVEARRIVAL   unit %u at (%.0f,%.0f): %.0f of %.0f m to go; %s; nodes %zu", u->id, u->position.x, u->position.z, left, total, why.c_str(), mc.m_pathNodes.size());
+						if (t)
+							printf(", task next try %.1f (now %.1f)", t->nextMoveAttempt, server.timeManager.currentTime);
+						if (it != g_lastSearches.end()) {
+							const LastPathSearch& ls = it->second;
+							printf("; %d searches, last %.1f s after the order: %s%s%s, %d tiles, %d steps, to (%.0f,%.0f) -> %s", ls.count, ls.time - orderTime,
+								ls.straight ? "straight" : ls.fromField ? "field" : "A*", ls.cut ? " cut" : "", ls.unreachable ? " unreachable" : "",
+								ls.tiles, ls.steps, ls.destination.x, ls.destination.z, ls.moving ? "moving" : "not moving");
+						}
+						else
+							printf("; no search");
+						printf("\n");
+					}
+				}
+				printf("MOVEARRIVAL case %d: %d %s %s, %d corpses (%d left at the order)%s, %.0f m from (%.0f,%.0f) to (%.0f,%.0f): arrived %d/%d", caseIndex, units, bp->name.c_str(),
+					formed ? "in formation" : "loose", withCorpses ? numCorpses : 0, corpsesLeft,
+					battle ? (", after a fight (" + std::to_string(units - alive - released) + " fell, " + std::to_string(released) + " let go by the formation's army, "
+						+ std::to_string(enemiesKilled) + " enemies left killed)").c_str() : "",
+					distance, blockCentre.x, blockCentre.z, goal.x, goal.z, arrived, alive);
+				if (arrivalSecond > 0)
+					printf(" in %d s", arrivalSecond);
+				if (arrived < alive) {
+					printf("; the others %.0f%% of the way on average:", 100.0f * progressSum / std::max(1, alive - arrived));
+					for (const auto& [why, n] : reasons)
+						printf(" [%s: %d]", why.c_str(), n);
+				}
+				if (formed && formation) {
+					int corpseMembers = 0;
+					for (const auto& [type, members] : formation->children)
+						for (CommonGameObject* m : members)
+							corpseMembers += m->blueprint->name.rfind("Dead", 0) == 0;
+					printf("; formation %.0f m from the goal (speed %.2f, %d corpses among its members)", (formation->position - goal).len2xz(), formation->computeSpeed(), corpseMembers);
+					// the formation's own order and walk
+					const MovementController& fmc = formation->movementController;
+					Order* fo = formation->orderConfig.getCurrentOrder();
+					Task* ft = fo ? fo->getCurrentTask() : nullptr;
+					printf("; its order %s (%zu orders), task %s, %s, controller %s %u", fo ? server.gameSet->orders.getString(fo->blueprint->bpid).c_str() : "(none)",
+						formation->orderConfig.orders.size(), ft ? server.gameSet->tasks.getString(ft->blueprint->bpid).c_str() : "-",
+						fmc.m_pending ? "pending" : fmc.m_started ? (formation->movement.isMoving() ? "walking" : "started, no walk") : "stands",
+						formation->getParent() ? formation->getParent()->blueprint->name.c_str() : "-", formation->getParent() ? formation->getParent()->id : 0);
+					const auto it = g_lastSearches.find(formation->id);
+					if (it != g_lastSearches.end())
+						printf("; %d searches, last %.1f s after the order: %s%s, %d tiles to (%.0f,%.0f) -> %s", it->second.count, it->second.time - orderTime,
+							it->second.straight ? "straight" : it->second.fromField ? "field" : "A*", it->second.cut ? " cut" : "", it->second.tiles,
+							it->second.destination.x, it->second.destination.z, it->second.moving ? "moving" : "not moving");
+					else
+						printf("; no search");
+				}
+				printf("\n");
+				fflush(stdout);
+				allArrived += arrived;
+				allUnits += alive;
+			}
+	g_recordSearches = false;
+	printf("MOVEARRIVAL all arrived %d/%d\n", allArrived, allUnits);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3494,6 +3851,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_MoveArrival, "Move arrival (groups of 10, 50, 200, loose and in formation, with and without corpses)"},
 };
 
 void LaunchTest()

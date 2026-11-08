@@ -11,6 +11,14 @@
 struct ServerGameObject;
 struct GameObjBlueprint;
 
+// test runs: a unit's last path search (MovementController.cpp's g_lastSearches, with g_recordSearches)
+struct LastPathSearch {
+	float time = 0.0f;
+	bool straight = false, fromField = false, cut = false, unreachable = false, moving = false;
+	int tiles = 0, steps = 0, count = 0;
+	Vector3 destination;
+};
+
 struct MovementController {
 	// Sends the unit towards destination; returns the nearest place it can stand to it (worked
 	// out at once). The rest is queued (pending): the straight line's test and the path search

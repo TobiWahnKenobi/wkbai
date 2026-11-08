@@ -407,6 +407,14 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 	bool orderInFront = false;
 	switch (assignMode) {
 	case Tags::ORDERASSIGNMODE_DO_FIRST:
+		// the same order again in front replaces it instead of piling up: a formation's army
+		// under attack inserts "Quick Formation Army Attack" at every hit, and had a dozen and
+		// more stacked; the Move command ends only the front one (TERMINATE_ORDER
+		// FINDER_CONTROLLER), the next resumed, and its timer ended the formation's move
+		// (TERMINATE_TASK "My Formation") every 2.5 s: the formation stood after a fight
+		// (cancelled, not removed: it may be running now; process() drops it once in front)
+		if (!this->orders.empty() && this->orders.front().blueprint == orderBlueprint && !this->orders.front().isDone())
+			this->orders.front().cancel();
 		if (!this->orders.empty()) {
 			this->orders.front().suspend();
 		}
@@ -1071,7 +1079,8 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 	nns.start(Server::instance, place, SPACING * RINGS + 40.0f);
 	while (CommonGameObject* o = nns.next()) {
 		ServerGameObject* other = o->dyncast<ServerGameObject>();
-		if (other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		// (corpses, "Dead ..." characters terminated where they fell, take no spot)
+		if (other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
 			continue;
 		if (other->movementController.isMoving())
 			taken.push_back(other->movementController.getDestination());

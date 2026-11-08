@@ -829,6 +829,10 @@ struct PathSearchRunner {
 	}
 };
 
+// test runs (test 43, move arrival): each unit's last search, by object id, when switched on
+bool g_recordSearches = false;
+std::unordered_map<uint32_t, LastPathSearch> g_lastSearches;
+
 // profiling (test 41): the end-of-step batches' parts, wall ms: filling the caches, the straight
 // lines and regions (on the threads), choosing the fields (and making them), the searches (on the
 // threads), applying the walks; the requests, and the searches among them
@@ -940,6 +944,16 @@ void MovementController::runPathSearches()
 					r.start.x, r.start.z, r.end.x, r.end.z, r.tiles.empty() ? -1 : r.tiles.front().x, r.tiles.empty() ? -1 : r.tiles.front().z);
 		}
 		PathSearchRunner::apply(obj->movementController, r);
+		if (g_recordSearches) {
+			LastPathSearch& ls = g_lastSearches[obj->id];
+			ls.time = server->timeManager.currentTime;
+			ls.straight = r.straight; ls.fromField = r.fromField; ls.cut = r.cut; ls.unreachable = r.unreachable;
+			ls.tiles = (int)r.tiles.size();
+			ls.steps = r.steps;
+			ls.moving = obj->movementController.isMoving();
+			ls.destination = r.destination;
+			ls.count++;
+		}
 	}
 	lap(4);
 	g_pathQueue.clear();

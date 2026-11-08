@@ -14,6 +14,8 @@ class FormationController
 public:
 	FormationController(ServerGameObject* formation) : formation(formation) {}
 	void update();
+	// a member's place in its formation now (false when it isn't a member)
+	static bool memberPlace(const ServerGameObject* formation, const ServerGameObject* member, struct Vector3& place);
 private:
 	ServerGameObject* formation;
 	//FormationType type = FormationType::Line;
