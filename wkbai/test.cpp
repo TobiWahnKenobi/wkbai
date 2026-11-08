@@ -3450,6 +3450,231 @@ void Test_MassOrder()
 	fflush(stdout);
 }
 
+// Hover cursors: a local server and client on 4 Peaks, the player's peasant, a soldier and
+// objects to point at (its farm, a foundation, the Manor, a damaged building, a watch tower, a
+// training dummy, the enemy's Manor and a peasant of the enemy's). For each pair prints
+// "HOVER <unit> over <object>: <command> <cursor file>" (the right-click's command and the
+// cursor shown) and the other commands offered there; "hoverCursor": { "verbose": true } in
+// wkconfig.json also prints each offered command's failing cursor conditions.
+void Test_HoverCursor()
+{
+	LoadBCP("data.bcp");
+	const bool verbose = g_settings.value("hoverCursor", nlohmann::json::object()).value("verbose", false);
+	Server server;
+	Client client(true);
+	NetLocalBuffer queue1, queue2;
+	NetLocalLink srv2cli(&queue1, &queue2), cli2srv(&queue2, &queue1);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemy = nullptr;
+	for (const auto& [type, children] : server.getLevel()->children)
+		for (CommonGameObject* p : children)
+			if (p != player && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && !enemy)
+				enemy = p->dyncast<ServerGameObject>();
+	auto findIn = [](ServerGameObject* owner, const char* name) -> ServerGameObject* {
+		ServerGameObject* found = nullptr;
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (!found && child->blueprint->name == name)
+						found = child->dyncast<ServerGameObject>();
+					self(child, self);
+				}
+		};
+		if (owner)
+			walk(owner, walk);
+		return found;
+	};
+	ServerGameObject* peasant = findIn(player, "Peasant");
+	ServerGameObject* manor = findIn(player, "Manor");
+	ServerGameObject* enemyManor = findIn(enemy, "Manor");
+	ServerGameObject* enemyPeasant = findIn(enemy, "Peasant");
+	if (!player || !enemy || !peasant || !manor) {
+		printf("HOVER not set up\n");
+		return;
+	}
+	server.timeManager.unpause();
+	server.startLevel();
+	auto spawn = [&](const char* name, ServerGameObject* owner, const Vector3& offset, int cls = Tags::GAMEOBJCLASS_BUILDING) -> ServerGameObject* {
+		const GameObjBlueprint* bp = server.gameSet->findBlueprint(cls, name);
+		if (!bp) {
+			printf("HOVER no blueprint %s\n", name);
+			return nullptr;
+		}
+		Vector3 at = manor->position + offset;
+		if (cls == Tags::GAMEOBJCLASS_CHARACTER)
+			at = MovementController::nearestValidPosition(bp, at);
+		ServerGameObject* obj = server.spawnObject(bp, owner, at, Vector3(0, 0, 0));
+		if (cls == Tags::GAMEOBJCLASS_BUILDING)
+			obj->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+		return obj;
+	};
+	ServerGameObject* farm = spawn("Standard Farm", player, Vector3(40, 0, 0));
+	ServerGameObject* foundation = spawn("Watch Tower Foundation", player, Vector3(-40, 0, 0));
+	ServerGameObject* tower = spawn("Watch Tower", player, Vector3(0, 0, 40));
+	ServerGameObject* damaged = spawn("Barracks Stone", player, Vector3(0, 0, -45));
+	ServerGameObject* dummy = spawn("Training Dummy", player, Vector3(40, 0, 40));
+	ServerGameObject* soldier = spawn("Spearman", player, Vector3(20, 0, 20), Tags::GAMEOBJCLASS_CHARACTER);
+	ServerGameObject* carrier = spawn("Peasant", player, Vector3(20, 0, -20), Tags::GAMEOBJCLASS_CHARACTER);
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(5);
+		}
+	};
+	step(60);
+	// the damaged building: half its integrity; the carrier: wood in its hands
+	if (damaged) {
+		const int si = server.gameSet->items.names.getIndex("Structural Integrity");
+		if (si >= 0)
+			damaged->setItem(si, damaged->getItem(si) * 0.5f);
+	}
+	if (carrier) {
+		const int wood = server.gameSet->items.names.getIndex("Wood");
+		if (wood >= 0)
+			carrier->setItem(wood, 10.0f);
+	}
+	step(60);
+	const GameSet* gs = client.gameSet.get();
+	if (!gs) {
+		printf("HOVER client has no game set\n");
+		return;
+	}
+	auto cli = [&](ServerGameObject* obj) { return obj ? client.findObject(obj->id) : nullptr; };
+	struct Pair { const char* unitLabel; ServerGameObject* unit; const char* targetLabel; ServerGameObject* target; };
+	const std::vector<Pair> pairs = {
+		{ "peasant", peasant, "own farm", farm },
+		{ "peasant", peasant, "own foundation", foundation },
+		{ "peasant", peasant, "own manor", manor },
+		{ "peasant with wood", carrier, "own manor", manor },
+		{ "peasant", peasant, "damaged barracks", damaged },
+		{ "peasant", peasant, "watch tower", tower },
+		{ "peasant", peasant, "training dummy", dummy },
+		{ "peasant", peasant, "enemy manor", enemyManor },
+		{ "peasant", peasant, "enemy peasant", enemyPeasant },
+		{ "peasant", peasant, "ground", nullptr },
+		{ "spearman", soldier, "training dummy", dummy },
+		{ "spearman", soldier, "own farm", farm },
+		{ "spearman", soldier, "own manor", manor },
+		{ "spearman", soldier, "watch tower", tower },
+		{ "spearman", soldier, "own foundation", foundation },
+		{ "spearman", soldier, "enemy manor", enemyManor },
+		{ "spearman", soldier, "enemy peasant", enemyPeasant },
+		{ "spearman", soldier, "ground", nullptr },
+	};
+	auto hover = [&](const Pair& p) -> std::vector<std::pair<WndCursor*, Command*>> {
+		ClientGameObject* unit = cli(p.unit);
+		ClientGameObject* target = cli(p.target);
+		if (!unit || (p.target && !target)) {
+			printf("HOVER %s over %s: (missing on the client)\n", p.unitLabel, p.targetLabel);
+			return {};
+		}
+		const auto found = FindCursorCommands(&client, { unit }, target);
+		std::string others;
+		for (size_t i = 1; i < found.size(); i++)
+			others += (i > 1 ? ", " : "") + gs->commands.getString(found[i].second);
+		printf("HOVER %s over %s: %s %s%s%s\n", p.unitLabel, p.targetLabel,
+			found.empty() ? "-" : gs->commands.getString(found[0].second).c_str(),
+			found.empty() ? "(arrow)" : WndCursorPath(found[0].first),
+			others.empty() ? "" : "  | also: ", others.c_str());
+		if (verbose) {
+			CliScriptContext ctx(&client, unit);
+			auto _ = ctx.change(ctx.target, target);
+			for (Command* cmd : unit->blueprint->offeredCommands) {
+				if (!cmd->cursor && cmd->cursorAvailable.empty())
+					continue;
+				std::string failing;
+				for (int eq : cmd->cursorConditions)
+					if (!(gs->equations[eq]->eval(&ctx) > 0.0f))
+						failing += " [" + gs->equations.getString(eq) + "]";
+				bool available = cmd->cursorAvailable.empty();
+				for (auto& [cond, cursor] : cmd->cursorAvailable)
+					available = available || cond->test->eval(&ctx) > 0.0f;
+				printf("    %-40s%s%s\n", gs->commands.getString(cmd).c_str(), failing.empty() && available ? " ok" : failing.c_str(), available ? "" : " [no CURSOR_AVAILABLE]");
+			}
+		}
+		return found;
+	};
+	for (const Pair& p : pairs)
+		hover(p);
+	// Live states: a field built by a peasant who then farms it, a second spearman training at the dummy
+	const int build = server.gameSet->commands.names.getIndex("Build");
+	const int train = server.gameSet->commands.names.getIndex("Train");
+	ServerGameObject* field = spawn("Standard Farm Foundation", player, Vector3(-40, 0, 40));
+	ServerGameObject* trainee = spawn("Spearman", player, Vector3(30, 0, 30), Tags::GAMEOBJCLASS_CHARACTER);
+	SrvGORef fieldRef = field;
+	if (field && build >= 0)
+		server.gameSet->commands[build].execute(carrier, field, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	if (trainee && dummy && train >= 0)
+		server.gameSet->commands[train].execute(trainee, dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	const int worked = server.gameSet->items.names.getIndex("I'm Being Worked at");
+	const uint64_t start = SDL_GetTicks();
+	// the field is replaced by the finished farm (a new object): found again by position
+	Vector3 fieldAt = field ? field->position : Vector3();
+	ServerGameObject* builtFarm = nullptr;
+	while (SDL_GetTicks() - start < 90000) {
+		step(10);
+		if (!builtFarm) {
+			auto look = [&](CommonGameObject* obj, auto& self) -> void {
+				for (const auto& [type, children] : obj->children)
+					for (CommonGameObject* c : children) {
+						if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.find("Farm") != std::string::npos
+							&& c->blueprint->name.find("Foundation") == std::string::npos && (c->position - fieldAt).sqlen2xz() < 9.0f)
+							builtFarm = c->dyncast<ServerGameObject>();
+						self(c, self);
+					}
+			};
+			look(player, look);
+		}
+		if (builtFarm && builtFarm->getItem(worked) > 0 && SDL_GetTicks() - start > 20000)
+			break;
+		static int lastPrint = -1;
+		if ((int)((SDL_GetTicks() - start) / 10000) != lastPrint) {
+			lastPrint = (int)((SDL_GetTicks() - start) / 10000);
+			std::string order = "-";
+			if (Order* o = carrier->orderConfig.getCurrentOrder())
+				order = server.gameSet->orders.getString(o->blueprint->bpid);
+			printf("HOVER   t=%ds field %s, farm %s, builder's order %s\n", lastPrint * 10, fieldRef ? fieldRef->blueprint->name.c_str() : "(gone)",
+				builtFarm ? builtFarm->blueprint->name.c_str() : "-", order.c_str());
+		}
+	}
+	auto workedAt = [&](ServerGameObject* b) {
+		ClientGameObject* c = cli(b);
+		printf("HOVER   %s: worked at %.0f (server) %.0f (client)\n", b ? b->blueprint->name.c_str() : "-", b ? b->getItem(worked) : -1.0f, c ? c->getItem(worked) : -1.0f);
+	};
+	workedAt(builtFarm);
+	workedAt(dummy);
+	hover({ "peasant", peasant, "farm being worked", builtFarm });
+	hover({ "spearman", soldier, "training dummy in use", dummy });
+	hover({ "trainee", trainee, "training dummy (training there)", dummy });
+	// a formation of spearmen (as NETSRVMSG_CREATE_NEW_FORMATION) and a peasant with a spearman
+	ServerGameObject* second = spawn("Spearman", player, Vector3(22, 0, 24), Tags::GAMEOBJCLASS_CHARACTER);
+	ServerGameObject* formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+	soldier->setParent(formation);
+	second->setParent(formation);
+	formation->setPosition((soldier->position + second->position) * 0.5f);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	step(60);
+	for (auto [label, target] : std::vector<std::pair<const char*, ServerGameObject*>>{ { "training dummy", dummy }, { "own farm", farm },
+		{ "own manor", manor }, { "watch tower", tower }, { "enemy manor", enemyManor }, { "ground", nullptr } })
+		hover({ "formation", formation, label, target });
+	for (auto [label, target] : std::vector<std::pair<const char*, ServerGameObject*>>{ { "training dummy", dummy }, { "own farm", farm }, { "enemy manor", enemyManor } }) {
+		const auto found = FindCursorCommands(&client, { cli(peasant), cli(trainee) }, cli(target));
+		printf("HOVER peasant+spearman over %s: %s %s\n", label, found.empty() ? "-" : gs->commands.getString(found[0].second).c_str(),
+			found.empty() ? "(arrow)" : WndCursorPath(found[0].first));
+	}
+	// the scene saved (the user folder's Save_Games): for a benchmark run that shows the cursors,
+	// "benchmark": { "saveGame": "Hover Cursors.sav", "select": ..., "hover": ..., "drawCursor": true }
+	const std::string save = PathToUtf8(g_userPath / "saved" / "Save_Games" / "Hover Cursors.sav");
+	std::error_code ec;
+	std::filesystem::create_directories(g_userPath / "saved" / "Save_Games", ec);
+	printf("HOVER saved to %s: %d\n", save.c_str(), (int)server.saveGame(save.c_str()));
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -3494,6 +3719,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_HoverCursor, "Hover cursors: the command and cursor of a unit over a building"},
 };
 
 void LaunchTest()

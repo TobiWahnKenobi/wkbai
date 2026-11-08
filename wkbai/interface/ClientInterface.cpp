@@ -486,6 +486,104 @@ bool ClientInterface::orderFlagDone(float age) const
 	return true;
 }
 
+// As WKB.exe: on a selection change it lists the selected objects' offered commands that have a
+// cursor, in the order offered, without the CURSOR_NOT_OFFERED_BY_DEFAULT ones and with "Move"
+// held back to the end (0x78ef40, the list at +0x408). Each frame the first of them whose cursor
+// shows is the cursor and the right-click (0x655aa3), Tab steps to the next (0x655bf0). A command's
+// cursor shows when one of the selected objects offering it passes its cursor conditions with the
+// hovered object as target (0x652f10, 0x4ffd60).
+std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, const std::vector<ClientGameObject*>& selection, ClientGameObject* target)
+{
+	const GameSet* gs = client->gameSet.get();
+	if (!gs || selection.empty())
+		return {};
+	// the commands each selected object offers (a building: also those its units are sent off with)
+	std::vector<std::vector<Command*>> offered(selection.size());
+	std::vector<Command*> list;
+	Command* move = nullptr;
+	if (const int m = gs->commands.names.getIndex("Move"); m >= 0)
+		move = const_cast<Command*>(&gs->commands[m]);
+	// the commands some character type offers
+	static const GameSet* characterCommandsOf = nullptr;
+	static std::unordered_set<const Command*> characterCommands;
+	if (characterCommandsOf != gs) {
+		characterCommandsOf = gs;
+		characterCommands.clear();
+		const auto& characters = gs->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER];
+		for (size_t i = 0; i < characters.size(); i++)
+			characterCommands.insert(characters[i].offeredCommands.begin(), characters[i].offeredCommands.end());
+	}
+	for (size_t s = 0; s < selection.size(); s++) {
+		const ClientGameObject* sel = selection[s];
+		std::vector<Command*>& cmds = offered[s];
+		for (Command* scmd : sel->blueprint->offeredCommands) {
+			// a formation offers a command only if one of its members does (Formations.cpp, as its
+			// buttons), except its own ones that no character offers ("Formation Army Attack")
+			if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && !scmd->alwaysOfferedByFormation
+				&& characterCommands.count(scmd)) {
+				bool byMember = false;
+				for (const auto& [type, members] : sel->children)
+					if (!members.empty()) {
+						const auto& memberCommands = members[0]->blueprint->offeredCommands;
+						byMember = byMember || std::find(memberCommands.begin(), memberCommands.end(), scmd) != memberCommands.end();
+					}
+				if (!byMember)
+					continue;
+			}
+			cmds.push_back(scmd);
+			// commands for auto ordering spawned characters from building
+			if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+				const std::string_view name = gs->commands.getString(scmd);
+				if (name.substr(0, 6) == "Spawn ") {
+					const int x = gs->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].names.getIndex(std::string(name.substr(6)));
+					if (x >= 0)
+						for (Command* cmd : gs->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][x].offeredCommands)
+							if (cmd->canBeAssignedToSpawnedUnits)
+								cmds.push_back(cmd);
+				}
+			}
+		}
+		for (Command* cmd : cmds)
+			if ((cmd->cursor || !cmd->cursorAvailable.empty()) && !cmd->cursorNotOfferedByDefault && cmd != move
+				&& std::find(list.begin(), list.end(), cmd) == list.end())
+				list.push_back(cmd);
+	}
+	if (move && std::any_of(offered.begin(), offered.end(), [&](const auto& cmds) { return std::find(cmds.begin(), cmds.end(), move) != cmds.end(); }))
+		list.push_back(move);
+
+	std::vector<std::pair<WndCursor*, Command*>> found;
+	for (Command* cmd : list) {
+		// nothing pointed at: only the commands with a button (or the over-landscape ones)
+		if (!target && !cmd->hasButton() && !cmd->evaluateConditionsOverLandscape)
+			continue;
+		for (size_t s = 0; s < selection.size(); s++) {
+			if (std::find(offered[s].begin(), offered[s].end(), cmd) == offered[s].end())
+				continue;
+			CliScriptContext ctx(client, selection[s]);
+			auto _ = ctx.change(ctx.target, target);
+			auto _sel = ctx.change(ctx.selectedObject, selection[s]);
+			// the unit's cursor test (0x4ffd60): with CURSOR_AVAILABLE, the first of those whose
+			// condition holds (none: no cursor); otherwise CURSOR, if all CURSOR_CONDITIONs hold
+			WndCursor* cmdCursor = nullptr;
+			if (!cmd->cursorAvailable.empty()) {
+				for (auto& avcond : cmd->cursorAvailable) {
+					if (avcond.first->test->eval(&ctx)) {
+						cmdCursor = avcond.second;
+						break;
+					}
+				}
+			}
+			else if (std::all_of(cmd->cursorConditions.begin(), cmd->cursorConditions.end(), [&](int eq) {return gs->equations[eq]->eval(&ctx) > 0.0f; }))
+				cmdCursor = cmd->cursor;
+			if (!cmdCursor)
+				continue;
+			found.emplace_back(cmdCursor, cmd);
+			break;
+		}
+	}
+	return found;
+}
+
 void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo)
 {
 	int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
@@ -2114,56 +2212,16 @@ void ClientInterface::iter()
 	Command *rightClickCommand = nullptr;
 	static std::vector<std::pair<WndCursor*, Command*>> availableCursorCommands;
 	availableCursorCommands.clear();
-	for (ClientGameObject *sel : selection) {
-		if (sel) {
-			CliScriptContext ctx(client, sel);
-			auto _ = ctx.change(ctx.target, nextSelectedObject);
-
-			static std::vector<Command*> availableCommands;
-			availableCommands.clear();
-
-			for (Command* scmd : sel->blueprint->offeredCommands) {
-				availableCommands.push_back(scmd);
-
-				// commands for auto ordering spawned characters from building
-				if (sel->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
-					const std::string_view name = client->gameSet->commands.getString(scmd);
-					if (name.substr(0, 6) == "Spawn ") {
-						auto unitName = std::string(name.substr(6));
-						int x = client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].names.getIndex(unitName);
-						if (x >= 0) {
-							const GameObjBlueprint* unitType = &client->gameSet->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][x];
-							for (Command* cmd : unitType->offeredCommands) {
-								if (cmd->canBeAssignedToSpawnedUnits) {
-									availableCommands.push_back(cmd);
-								}
-							}
-						}
-					}
-				}
-			}
-
-			for (Command* cmd : availableCommands) {
-				WndCursor* cmdCursor = nullptr;
-				for (auto& avcond : cmd->cursorAvailable) {
-					if (avcond.first->test->eval(&ctx)) {
-						cmdCursor = avcond.second;
-						break;
-					}
-				}
-				if (!cmdCursor)
-					cmdCursor = cmd->cursor;
-				if (cmdCursor) {
-					if (std::all_of(cmd->cursorConditions.begin(), cmd->cursorConditions.end(), [&](int eq) {return client->gameSet->equations[eq]->eval(&ctx) > 0.0f; })) {
-						if (!nextCursor) {
-							nextCursor = cmdCursor;
-							rightClickCommand = cmd;
-						}
-						if (std::find_if(availableCursorCommands.begin(), availableCursorCommands.end(), [&](auto& pair) {return pair.second == cmd; }) == availableCursorCommands.end())
-							availableCursorCommands.emplace_back(cmdCursor, cmd);
-					}
-				}
-			}
+	{
+		static std::vector<ClientGameObject*> selected;
+		selected.clear();
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				selected.push_back(sel);
+		availableCursorCommands = FindCursorCommands(client, selected, nextSelectedObject);
+		if (!availableCursorCommands.empty()) {
+			nextCursor = availableCursorCommands[0].first;
+			rightClickCommand = availableCursorCommands[0].second;
 		}
 	}
 	if (selectedCursorCommand) {
@@ -2180,6 +2238,10 @@ void ClientInterface::iter()
 		if (nextCursor != currentCursor) {
 			currentCursor = nextCursor;
 			WndSetCursor(currentCursor);
+			// test runs: the hover cursor's command, each time it changes
+			if (BenchmarkEnabled())
+				printf("CURSOR %s %s over %s\n", rightClickCommand ? client->gameSet->commands.getString(rightClickCommand).c_str() : "-",
+					WndCursorPath(currentCursor), nextSelectedObject ? nextSelectedObject->blueprint->name.c_str() : "the ground");
 		}
 	}
 
@@ -3331,6 +3393,44 @@ void ClientInterface::iter()
 			g_mouseX = mouse[0].get<int>();
 			g_mouseY = mouse[1].get<int>();
 		}
+		// "hover": "<blueprint>": the camera over the first such object (the player's own first),
+		// the mouse held on it
+		if (const std::string name = bench.value("hover", std::string()); !name.empty() && client->getLevel() && client->terrain) {
+			ClientGameObject* found = nullptr;
+			auto search = [&](ClientGameObject* obj, auto& self) -> void {
+				for (const auto& [type, children] : obj->children)
+					for (CommonGameObject* c : children) {
+						if (!found && c->blueprint->name == name)
+							found = c->dyncast<ClientGameObject>();
+						self(c->dyncast<ClientGameObject>(), self);
+					}
+			};
+			if (ClientGameObject* own = client->clientPlayer)
+				search(own, search);
+			if (!found)
+				search(client->getLevel(), search);
+			if (found) {
+				Camera& cam = client->camera;
+				// "hoverPitch": <radians> looks down that steeply (-1.5: from above, past trees)
+				if (bench.contains("hoverPitch"))
+					cam.orientation.x = bench.value("hoverPitch", -0.9f);
+				if (cam.direction.y < -0.01f) {
+					const float groundY = client->terrain->getHeight(cam.position.x, cam.position.z);
+					const Vector3 lookAt = cam.position + cam.direction * ((cam.position.y - groundY) / -cam.direction.y);
+					cam.position.x += found->position.x - lookAt.x;
+					cam.position.z += found->position.z - lookAt.z;
+				}
+				Vector3 centre = found->position;
+				if (found->sceneEntity.model)
+					centre = found->position + found->sceneEntity.model->getSphereCenter() * found->scale;
+				// "hoverOffset": [x, y, z] metres from the model's centre (a model with a gap there)
+				if (const nlohmann::json off = bench.value("hoverOffset", nlohmann::json()); off.is_array() && off.size() == 3)
+					centre += Vector3(off[0].get<float>(), off[1].get<float>(), off[2].get<float>());
+				const Vector3 ndc = centre.transformScreenCoords(cam.sceneMatrix);
+				g_mouseX = (int)((ndc.x + 1.0f) * g_windowWidth / 2.0f);
+				g_mouseY = (int)((-ndc.y + 1.0f) * g_windowHeight / 2.0f);
+			}
+		}
 		if (const std::string name = bench.value("stampdown", std::string()); !name.empty() && !stampdownBlueprint && client->clientPlayer) {
 			stampdownBlueprint = client->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
 			stampdownPlayer = client->clientPlayer;
@@ -3784,6 +3884,15 @@ void ClientInterface::iter()
 		drawChronicle();
 	}
 
+	// Test runs: "benchmark": { ..., "drawCursor": true } draws the cursor into the frame (the
+	// screenshots leave out the system's cursor)
+	if (BenchmarkEnabled() && currentCursor && g_settings.value("benchmark", nlohmann::json::object()).value("drawCursor", false)) {
+		int cw, ch;
+		WndCursorSize(currentCursor, cw, ch);
+		const ImVec2 at((float)UiMouseX(), (float)UiMouseY());
+		ImGui::GetForegroundDrawList()->AddImage(uiTexCache.getTexture(WndCursorPath(currentCursor), false), at,
+			ImVec2(at.x + cw / g_uiScale, at.y + ch / g_uiScale));
+	}
 	{
 		ZoneScopedN("ImGui rendering");
 		gfx->InitImGuiDrawing();

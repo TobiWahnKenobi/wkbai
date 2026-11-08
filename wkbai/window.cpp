@@ -5,6 +5,7 @@
 #include "window.h"
 #include <cstdio>
 #include <algorithm>
+#include <string>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -234,6 +235,7 @@ struct WndCursor
 {
 	SDL_Cursor *sdlCursor = nullptr;
 	int w = 0, h = 0;
+	std::string path;
 };
 
 WndCursor *WndCreateCursor(const char *path) {
@@ -242,11 +244,20 @@ WndCursor *WndCreateCursor(const char *path) {
 	SDL_Surface *surface = SDL_CreateSurfaceFrom(cvtbmp.width, cvtbmp.height, SDL_PIXELFORMAT_RGBA32, cvtbmp.pixels.data(), cvtbmp.width * 4);
 	SDL_Cursor *cursor = SDL_CreateColorCursor(surface, 0, 0);
 	SDL_DestroySurface(surface);
-	return new WndCursor { cursor, width, height };
+	return new WndCursor { cursor, width, height, path };
 }
 
 WndCursor *WndCreateSystemCursor(int id) {
 	return new WndCursor { SDL_CreateSystemCursor((SDL_SystemCursor)id), 24, 24 };
+}
+
+const char *WndCursorPath(const WndCursor *cursor) {
+	return cursor ? cursor->path.c_str() : "";
+}
+
+void WndCursorSize(const WndCursor *cursor, int &width, int &height) {
+	width = cursor ? cursor->w : 0;
+	height = cursor ? cursor->h : 0;
 }
 
 void WndSetCursor(WndCursor *cursor) {

@@ -39,3 +39,7 @@ struct WndCursor;
 WndCursor *WndCreateCursor(const char *path);
 WndCursor *WndCreateSystemCursor(int id);
 void WndSetCursor(WndCursor *cursor);
+// The file a cursor was made from ("" for a system cursor)
+const char *WndCursorPath(const WndCursor *cursor);
+// Its picture's size in pixels (its hot spot is the top left corner)
+void WndCursorSize(const WndCursor *cursor, int &width, int &height);
