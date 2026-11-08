@@ -563,8 +563,22 @@ struct DiligentRenderer : DiligentGfx
 		// the ray-traced shadows' mask from the scene's depth
 		if (postEffects && shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid() && post->depthDSV()) {
 			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
-			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer);
-			s.rtShadowLight = 0.5f;
+			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer,
+				shadows.rtTerrain ? shadows.terrainHeights : nullptr, shadows.terrainGrid[2]);
+			// the light left in them: the sky's share of the light. Half under a clear noon sun (the
+			// sky's light as strong as the sun's); with the sun dimmed (the clouds' cover, its fade
+			// around sunrise and sunset, the moon) the sky's share grows and the shadows pale, as
+			// the scene's own (the play test: crisp, half-dark shadows in the rain, darker grass)
+			float direct = 1.0f;
+			if (g_environment.active) {
+				const SunState& sun = g_environment.sun;
+				const float lum = sun.colour[0] * 0.3f + sun.colour[1] * 0.59f + sun.colour[2] * 0.11f;
+				const float amb = sun.ambient[0] * 0.3f + sun.ambient[1] * 0.59f + sun.ambient[2] * 0.11f;
+				direct = lum / std::max(amb, 0.05f);
+			}
+			if (shadows.clouds >= 1 && shadows.cloudShadows) // the clouds' shadows, on average
+				direct *= 1.0f - std::clamp(shadows.cloudPreset.cover, 0.0f, 1.0f) * shadows.cloudPreset.shadow;
+			s.rtShadowLight = 1.0f / (1.0f + std::clamp(direct, 0.0f, 1.0f));
 		}
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();
