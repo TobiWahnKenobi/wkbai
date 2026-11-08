@@ -48,6 +48,10 @@ struct TaskBlueprint {
 	// ATTACHMENT_PATH_CATEGORY ACTIVITY_PATH: the unit works along the target's activity path;
 	// on a target that can be walked onto (a field) that is inside it (Order.cpp, FieldSpot)
 	bool activityPath = false;
+	// ATTACHMENT_PATH_CATEGORY ATTACK: the original gives each unit one of the target model's
+	// attack paths (AT_<path>_<point>), the least used, the nearest of those; wkbai does so for a
+	// unit of the target's own player (training at a dummy: Order.cpp, AttackPathSpot)
+	bool attackPath = false;
 	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
 	std::vector<TriggerBlueprint> triggers;
 	ActionSequence collisionTrigger, struckFloorTrigger;

@@ -4,6 +4,7 @@
 
 #include "Order.h"
 #include <set>
+#include <map>
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -300,6 +301,7 @@ void Task::cancel()
 	if (go->movementController.isMoving())
 		go->movementController.stopMovement();
 	go->setAnimation(0);
+	this->releaseAttackPath();
 	this->blueprint->cancellationSequence.run(this->order->gameObject);
 }
 
@@ -313,6 +315,7 @@ void Task::terminate()
 	if (go->movementController.isMoving())
 		go->movementController.stopMovement();
 	go->setAnimation(0);
+	this->releaseAttackPath();
 	this->blueprint->terminationSequence.run(this->order->gameObject);
 	this->order->advanceToNextTask();
 }
@@ -347,6 +350,8 @@ void Task::setTarget(ServerGameObject* newtarget)
 	ServerGameObject* oldtarget = target.get();
 	if (oldtarget && oldtarget != newtarget) // (loading sets the saved target on an empty one)
 		loadedArrived = false;
+	if (attackPathOf && (!newtarget || newtarget->id != attackPathOf))
+		releaseAttackPath();
 	//if (oldtarget == newtarget)
 	//	return;
 	// potential problem: if oldtarget was on deleted obj, and newtarget is null, the equality above will also turn true, leaving oldtarget on deleted obj
@@ -404,6 +409,12 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		if (preConditionEquationIndex != -1) {
 			auto* equation = Server::instance->gameSet->equations[preConditionEquationIndex];
 			SrvScriptContext ctx(Server::instance, this->gameobj);
+			// FINDER_TARGET is the new order's target: without it the finder fell back to the
+			// unit's current task's target. Train's "No Target specified or Target Training Dummy
+			// has free slots" then passed for a fifth unit at a full dummy (its order started,
+			// its start sequence ended it, and the termination sequence freed a slot it never had:
+			// any number trained), and failed for one sent on to a free dummy from a full one.
+			auto _ = ctx.change(ctx.target, target);
 			if (!equation->booleval(&ctx)) {
 				return nullptr;
 			}
@@ -852,6 +863,95 @@ static bool FieldSpot(const TaskBlueprint* task, const ServerGameObject* unit, c
 	return true;
 }
 
+// Attack paths (ATTACHMENT_PATH_CATEGORY ATTACK). The target's model has its attack points as
+// attachment points "AT_<path>_<point>" (the Training Dummy: AT_1_1 .. AT_4_1, two in front of it
+// and two behind, 2.2 m out). WKB.exe (0x568370 with 0x6343e0, docs/engine/training-dummy.md)
+// gives a unit the path with the fewest units on it, of those the one whose point is nearest
+// to the unit, skipping points outside the playable area; the target keeps how many units are
+// on each of its paths, and a unit gives its path back when its task ends or changes target.
+// Several units on one path share it (the original lets them; Training.cpp caps a dummy's
+// trainees at 4, so each has a path of its own).
+// wkbai uses the paths for a unit of the target's own player (training) only: attackers of a
+// building still come at it from its footprint's edge (as deliverers do, see FootprintReach).
+// The count per target and path, by target id (the server's objects; not saved: a loaded unit
+// takes a path again)
+static std::map<uint32_t, std::map<int, int>> s_attackPathUsers;
+
+void Task::releaseAttackPath()
+{
+	if (!attackPathOf)
+		return;
+	auto it = s_attackPathUsers.find(attackPathOf);
+	if (it != s_attackPathUsers.end()) {
+		auto p = it->second.find(attackPath);
+		if (p != it->second.end() && --p->second <= 0)
+			it->second.erase(p);
+		if (it->second.empty())
+			s_attackPathUsers.erase(it);
+	}
+	attackPathOf = 0;
+	attackPath = -1;
+}
+
+// The attack path's point a task's unit goes to (its own path, taken at the first call), or false
+// where the task, target or unit has none.
+static bool AttackPathSpot(Task* task, ServerGameObject* unit, ServerGameObject* target, Vector3& spot)
+{
+	if (!task->blueprint->attackPath || !target || target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING
+		|| unit->getPlayer() != target->getPlayer())
+		return false;
+	Model* model = target->getModel();
+	if (!model)
+		return false;
+	// the paths' first points, by path number
+	std::map<int, Vector3> points;
+	const Matrix world = target->getWorldMatrix();
+	for (size_t i = 0; i < model->getNumAPs(); i++) {
+		const std::string& tag = model->getAPInfo(i).tag;
+		if (tag.size() < 4 || tag.compare(0, 3, "AT_") != 0)
+			continue;
+		const int path = atoi(tag.c_str() + 3);
+		const size_t sep = tag.find('_', 3);
+		const int point = sep == std::string::npos ? 0 : atoi(tag.c_str() + sep + 1);
+		if (point > 1 && points.count(path))
+			continue;
+		points[path] = model->getAPInfo(i).staticState.position.transform(world);
+	}
+	if (points.empty())
+		return false;
+	if (task->attackPathOf != target->id || !points.count(task->attackPath)) {
+		task->releaseAttackPath();
+		auto& users = s_attackPathUsers[target->id];
+		const auto area = Server::instance->terrain ? Server::instance->terrain->getPlayableArea() : std::make_pair(1e9f, 1e9f);
+		int best = -1, bestUsers = 0;
+		float bestDist = 0.0f;
+		for (const auto& [path, at] : points) {
+			if (at.x < 0.0f || at.z < 0.0f || at.x >= area.first || at.z >= area.second)
+				continue;
+			const auto u = users.find(path);
+			const int n = u == users.end() ? 0 : u->second;
+			const float d = (at - unit->position).sqlen2xz();
+			if (best < 0 || n < bestUsers || (n == bestUsers && d < bestDist)) {
+				best = path;
+				bestUsers = n;
+				bestDist = d;
+			}
+		}
+		if (best < 0) {
+			if (users.empty())
+				s_attackPathUsers.erase(target->id);
+			return false;
+		}
+		users[best]++;
+		task->attackPath = best;
+		task->attackPathOf = target->id;
+	}
+	spot = points[task->attackPath];
+	if (Server::instance->terrain)
+		spot.y = Server::instance->terrain->getHeight(spot.x, spot.z);
+	return true;
+}
+
 // How near to a building's footprint a task's unit goes. A delivery (ATTACHMENT_PATH_CATEGORY
 // DELIVERY) to a building with a yard comes up to the building: the original walks it to a
 // delivery point on the model, the manor's 2 m out from its walls (wkbai leaves the points out,
@@ -930,7 +1030,8 @@ void ObjectReferenceTask::onUpdate()
 			}
 		}
 		Vector3 spot;
-		const bool inField = !following && FieldSpot(blueprint, go, target.get(), spot);
+		const bool onPath = !following && AttackPathSpot(this, go, target.get(), spot);
+		const bool inField = onPath || (!following && FieldSpot(blueprint, go, target.get(), spot));
 		if (inField)
 			goal = spot;
 		float prox = this->proximity;
@@ -945,7 +1046,10 @@ void ObjectReferenceTask::onUpdate()
 		const float reach = edge >= 0.0f ? FootprintReach(blueprint, this->proximity, target.get()) : this->proximity;
 		// in a field: at its spot (or near it, when the path ended a little short)
 		const float spotDist2 = inField ? (go->position - goal).sqlen2xz() : 0.0f;
-		const bool measured = inField ? (spotDist2 < 1.0f || (!go->movementController.isMoving() && spotDist2 < 9.0f))
+		// (an attack path's point exactly: the trainees stand where the original puts them,
+		// 2.2 m from the dummy's centre; within a metre they swung at it from beside it)
+		const float spotReach2 = onPath ? 0.04f : 1.0f;
+		const bool measured = inField ? (spotDist2 < spotReach2 || (!go->movementController.isMoving() && spotDist2 < 9.0f))
 			: following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
 			: (prox < 0.0f || (edge >= 0.0f
 				// within the proximity of the edge, or, when the path ends a little further out
