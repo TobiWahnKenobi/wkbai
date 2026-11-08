@@ -36,6 +36,10 @@ struct EnvironmentSettings {
 	// the sky without the seasons' weather (the game settings "cloudWeather": 0 by the cloud
 	// cover, 1-10 an EnvWeather + 1; "cloudCover" in percent); the clients draw it
 	int skyWeather = 0, skyCover = 45;
+	// the seasons' weather's cloud cover ("weatherCover", the debug panel's, F9): below 0 random
+	// for each spell of weather around its kind's own (the clients draw it; WeatherCoverFor),
+	// 0-100 that cover in percent whatever the weather
+	int weatherCover = -1;
 	// how often the seasons' weather changes ("weatherStability"): 0 frequent (1-4 min between
 	// changes), 1 normal (3-10 min), 2 seldom (8-20 min), 3 random (the default: as before, 10-35%
 	// of a season, from 45 s to 10 min), 4 custom: between weatherMinChange and weatherMaxChange
@@ -74,6 +78,10 @@ enum EnvWeather : uint8_t {
 	WEATHER_SNOW, WEATHER_BLIZZARD, WEATHER_HEATWAVE, WEATHER_DROUGHT, WEATHER_COUNT
 };
 const char* WeatherName(int weather);
+// a spell of weather's cloud cover (0-1), random around its kind's within the kind's range (a
+// cloudy day from a few broken clouds to nearly overcast), the same on every client: from the
+// spell's seed (its end time, as the server sends it); centre: the middle of the kind's range
+float WeatherCoverFor(int weather, float spellSeed, float* centre = nullptr);
 const char* SeasonName(int season);
 const char* WeatherStabilityName(int stability);
 const char* MoonPhaseName(int setting); // EnvironmentSettings::moonPhase's (0 "Natural")
@@ -176,6 +184,13 @@ struct EnvironmentView {
 	Vector3 starX{ 1, 0, 0 }, starY{ 0, 1, 0 }, starZ{ 0, 0, 1 };
 	float temperatureC = 12.0f;
 	int weather = -1;             // EnvWeather now (-1: inactive): the dynamic clouds' preset
+	// its cloud cover (0-1; EnvironmentSettings::weatherCover or WeatherCoverFor): the dynamic
+	// clouds' instead of their preset's; below 0 the preset's
+	float weatherCover = -1.0f;
+	// the air's humidity (0-1) from the weather, the season, the time of day (dew in the
+	// morning) and the wet ground: the light shafts of the sun and the moon are stronger in moist
+	// air (1 without the seasons' weather: the plain strength)
+	float humidity = 0.5f;
 	// the game's sky without the seasons (EnvironmentSettings::skyWeather, its cover 0..1): -1
 	// outside a game (the menus, the editor, a game from before): the lighting options' clouds
 	int skyWeather = -1;

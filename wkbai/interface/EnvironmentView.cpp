@@ -98,11 +98,43 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	// the rest eased towards the server's state (it comes once a second)
 	auto ease = [](float& x, float target) { x += (target - x) * 0.05f; };
 	v.weather = es.seasons ? st.weather : -1;
+	// the spell's cloud cover; the sun dimmed by it (the server's cover the kind's, more or less
+	// as far as this one is from the middle of the kind's range)
+	float coverShift = 0.0f;
+	if (v.weather >= 0) {
+		float centre = 0.0f;
+		const float random = WeatherCoverFor(v.weather, client->environmentWeatherEnds, &centre);
+		v.weatherCover = es.weatherCover >= 0 ? es.weatherCover / 100.0f : random;
+		coverShift = v.weatherCover - centre;
+	}
+	else
+		v.weatherCover = -1.0f;
+	const float stCloud = std::clamp(st.cloudCover + coverShift, 0.0f, 1.0f);
+	// the air's humidity: the weather's, the season's shift, dew from night to mid-morning, the
+	// wet ground; eased like the rest
+	{
+		static const float byWeather[WEATHER_COUNT] = { 0.40f, 0.55f, 0.85f, 0.95f, 0.80f, 1.0f, 0.70f, 0.75f, 0.15f, 0.10f };
+		static const float bySeason[4] = { 0.05f, -0.10f, 0.10f, 0.0f }; // spring, summer, autumn, winter
+		float h = v.weather >= 0 ? byWeather[v.weather] : 0.45f;
+		if (es.seasons)
+			h += bySeason[std::clamp((int)st.season, 0, 3)];
+		const float hour = EnvDayFraction(es, client->timeManager.currentTime) * 24.0f;
+		h += 0.18f * (hour < 5.0f ? 0.6f : hour < 7.0f ? 0.6f + 0.4f * (hour - 5.0f) / 2.0f : 1.0f - std::clamp((hour - 7.0f) / 4.0f, 0.0f, 1.0f))
+			+ 0.08f * std::clamp((hour - 19.0f) / 3.0f, 0.0f, 1.0f); // dew: before dawn, the morning, the evening
+		h += 0.12f * st.wetness;
+		h = std::clamp(h, 0.0f, 1.0f);
+		static bool humidityKnown = false;
+		if (!humidityKnown || !g_lightningKnown)
+			v.humidity = h;
+		else
+			v.humidity += (h - v.humidity) * 0.01f;
+		humidityKnown = true;
+	}
 	if (!g_lightningKnown) {
-		v.cloudCover = st.cloudCover; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
+		v.cloudCover = stCloud; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;
 	}
-	ease(v.cloudCover, st.cloudCover);
+	ease(v.cloudCover, stCloud);
 	ease(v.rain, st.rain);
 	ease(v.snowfall, st.snowfall);
 	const float shown = PrecipitationShown();

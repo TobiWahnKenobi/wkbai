@@ -11,6 +11,7 @@
 #include "gameset/GameObjBlueprint.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <deque>
 
@@ -60,11 +61,42 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "moonPhase=%d\nmoonStart=%.9g\n", moonPhase, moonStart);
 		out += buf;
 	}
+	if (weatherCover >= 0) {
+		snprintf(buf, sizeof(buf), "weatherCover=%d\n", weatherCover);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
 	}
 	return out;
+}
+
+float WeatherCoverFor(int weather, float spellSeed, float* centre)
+{
+	// each kind's range: from the clouds' preset's (DiligentClouds g_cloudPresets) out to both sides
+	static const float range[WEATHER_COUNT][2] = {
+		{ 0.0f, 0.0f },   // clear
+		{ 0.30f, 0.85f }, // cloudy: a few cumulus to a nearly closed deck
+		{ 0.70f, 0.90f }, // rain
+		{ 0.84f, 0.96f }, // heavy rain
+		{ 0.50f, 0.72f }, // thunderstorm (its cells besides)
+		{ 0.84f, 0.95f }, // fog
+		{ 0.75f, 0.92f }, // snow
+		{ 0.88f, 0.97f }, // blizzard
+		{ 0.0f, 0.0f },   // heatwave
+		{ 0.0f, 0.0f },   // drought
+	};
+	if (weather < 0 || weather >= WEATHER_COUNT)
+		return 0.0f;
+	if (centre)
+		*centre = 0.5f * (range[weather][0] + range[weather][1]);
+	uint32_t h;
+	memcpy(&h, &spellSeed, 4);
+	h ^= (uint32_t)weather * 0x9E3779B9u;
+	h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+	const float r = (h & 0xFFFFFF) / 16777216.0f;
+	return range[weather][0] + (range[weather][1] - range[weather][0]) * r;
 }
 
 bool EnvironmentSettings::apply(const std::string& name, float v)
@@ -83,6 +115,7 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "weatherWinter") severity[3] = std::clamp(i, 0, 3);
 	else if (name == "cloudWeather") skyWeather = std::clamp(i, 0, (int)WEATHER_COUNT);
 	else if (name == "cloudCover") skyCover = std::clamp(i, 0, 100);
+	else if (name == "weatherCover") weatherCover = v < 0.0f ? -1 : std::clamp(i, 0, 100);
 	else if (name == "weatherStability") weatherStability = std::clamp(i, 0, 4);
 	else if (name == "weatherMinChange") weatherMinChange = std::clamp(i, 1, 120);
 	else if (name == "weatherMaxChange") weatherMaxChange = std::clamp(i, 1, 120);

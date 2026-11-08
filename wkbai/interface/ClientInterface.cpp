@@ -1409,7 +1409,8 @@ void ClientInterface::drawEnvironmentDebug()
 		const float hour = g_environment.dayFraction * 24.0f;
 		ImGui::Text("%02d:%02d  %s (%s)  %s  %s", (int)hour, (int)((hour - (int)hour) * 60.0f), SeasonName(st.season),
 			st.severity <= 0 ? "gentle" : st.severity == 1 ? "normal" : "harsh", WeatherName(st.weather), FormatTemperature(st.temperatureC, es.tempScale).c_str());
-		ImGui::Text("clouds %.2f  rain %.2f  snowfall %.2f  fog %.2f", st.cloudCover, st.rain, st.snowfall, st.fog);
+		ImGui::Text("clouds %.2f (drawn %.2f)  rain %.2f  snowfall %.2f  fog %.2f", st.cloudCover, g_environment.weatherCover, st.rain, st.snowfall, st.fog);
+		ImGui::Text("humidity %.0f%% (the light shafts' strength)", g_environment.humidity * 100.0f);
 		ImGui::Text("wet %.2f  snow cover %.2f  ice %.2f%s  water %+.1f m", st.wetness, st.snowCover, st.ice, st.ice >= ICE_WALKABLE ? " (walkable)" : "", st.waterRise);
 		ImGui::Text("sight %.2f  ground speed %.2f  daylight %.2f", st.sightFactor, st.speedFactor, g_environment.sun.daylight);
 		{
@@ -1529,6 +1530,22 @@ void ClientInterface::drawEnvironmentDebug()
 	ImGui::SetNextItemWidth(220);
 	if (ImGui::Combo("Weather", &held, weathers.data(), (int)weathers.size()))
 		send("weather", (float)(held - 1));
+	// the weather's cloud cover: random for each spell of weather (around its kind's), or held
+	// at the slider's (moving it holds it; Random lets it vary again). Saved with the game.
+	static int cover = 50;
+	if (!ImGui::IsAnyItemActive())
+		cover = (int)std::lround(std::max(g_environment.weatherCover, 0.0f) * 100.0f);
+	ImGui::BeginDisabled(!es.seasons);
+	ImGui::SetNextItemWidth(200);
+	ImGui::SliderInt(es.weatherCover < 0 ? "Cloud cover (random)###cover" : "Cloud cover (held)###cover", &cover, 0, 100, "%d%%");
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		send("weatherCover", (float)cover);
+	ImGui::SameLine();
+	ImGui::BeginDisabled(es.weatherCover < 0);
+	if (ImGui::Button("Random"))
+		send("weatherCover", -1.0f);
+	ImGui::EndDisabled();
+	ImGui::EndDisabled();
 	ImGui::EndDisabled();
 	// how often it changes (custom's limits and weathers: the lobby's)
 	int stabilityChoice = std::clamp(es.weatherStability, 0, 4);

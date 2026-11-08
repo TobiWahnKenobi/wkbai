@@ -557,8 +557,10 @@ struct DiligentRenderer : DiligentGfx
 		fog.tiles = nullptr;
 		s.fogEdgeStart = fogEdge[2];
 		s.fogEdgeOpaque = fogEdge[3];
-		// the light shafts (RenderSettings::dynamicClouds 2 and up), with the enhanced renderers
-		s.lightShafts = postEffects && shadows.clouds >= 2 && shadows.cloudShadows && shadows.cloudShadowsDrawn;
+		// the light shafts (RenderSettings::dynamicClouds 2 and up), with the enhanced renderers;
+		// the pass also runs with the shadows alone (1), for the clouds' shade on the ray-traced
+		// shadows (its alpha; the shader skips the shafts below 2)
+		s.lightShafts = postEffects && shadows.clouds >= 1 && shadows.cloudShadows && shadows.cloudShadowsDrawn;
 		s.cloudBuffer = shadows.cloudBuffer;
 		s.cloudNoise = shadows.cloudNoise ? shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
 		shadows.cloudShadowsDrawn = false;
@@ -578,9 +580,12 @@ struct DiligentRenderer : DiligentGfx
 				const float amb = sun.ambient[0] * 0.3f + sun.ambient[1] * 0.59f + sun.ambient[2] * 0.11f;
 				direct = lum / std::max(amb, 0.05f);
 			}
-			if (shadows.clouds >= 1 && shadows.cloudShadows) // the clouds' shadows, on average
-				direct *= 1.0f - std::clamp(shadows.cloudPreset.cover, 0.0f, 1.0f) * shadows.cloudPreset.shadow;
-			s.rtShadowLight = 1.0f / (1.0f + std::clamp(direct, 0.0f, 1.0f));
+			// (the clouds' shadows: where they fall, by the shafts pass's alpha in the composite;
+			// paled everywhere by the mean cover, the shadows vanished in the sunlit gaps under a
+			// high cover, the play test of 2026-11-08)
+			// (up to 1.5: a clear day's shadows keep 40% of the light, not half; they read too
+			// faint, the play test of 2026-11-08)
+			s.rtShadowLight = 1.0f / (1.0f + std::clamp(direct, 0.0f, 1.5f));
 		}
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();

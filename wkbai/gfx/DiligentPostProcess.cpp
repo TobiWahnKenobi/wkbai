@@ -416,7 +416,7 @@ float3 SceneLit(float2 uv)
 {
 	float3 c = tColor.SampleLevel(sLinear, uv, 0).rgb;
 	if (Ao.z != 0)
-		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sLinear, uv, 0).r);
+		c *= lerp(Ao.w, 1, lerp(1, tRtShadow.SampleLevel(sLinear, uv, 0).r, tShafts.SampleLevel(sLinear, uv, 0).a));
 	return c;
 }
 
@@ -446,7 +446,7 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 	float fogged = -1; // the fog of war's darkening, when a blur has already averaged it
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
 	if (Ao.z != 0)
-		c *= lerp(Ao.w, 1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r);
+		c *= lerp(Ao.w, 1, lerp(1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r, tShafts.SampleLevel(sLinear, input.Uv, 0).a));
 	// camera motion blur (RenderSettings::motionBlur): the scene averaged along the way the
 	// point moved on the screen since the last frame (from the depth and the last frame's
 	// camera), over the shutter's share of it; none where it hardly moved, nor at a cut (a jump
@@ -511,12 +511,19 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 // The light shafts (RenderSettings::dynamicClouds 2 and up): the sunlight scattered towards the
 // camera along its ray through the air (up to 600 units, 16 jittered steps), as much as the
 // clouds let through at each step, mostly when looking towards the sun (Henyey-Greenstein,
-// g = 0.6): bright beams between the clouds' shadows
+// g = 0.6): bright beams between the clouds' shadows. Only under a broken sky (none under a clear
+// one, where they were a plain haze, nor under an overcast's even shade). (At 0.18 of the light
+// over 0.0018 per unit they were too faint to see, the play test of 2026-11-08.)
+// Alpha: the clouds' sunlight left on the surface (CloudShadow, 1 on the sky), for the ray-traced
+// shadows (the composite): under a cloud's shadow there is no sun left to cast them.
 float4 PS_Shafts(VS_OUTPUT input) : SV_Target
 {
 	float d = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
 	float3 cam = TaaInverseView[3].xyz;
 	float3 wp = mul(float4(ViewPosAt(input.Uv, min(d, 0.9999)), 1), TaaInverseView).xyz;
+	float surfaceLit = d >= 0.99999 ? 1 : CloudShadow(wp);
+	if (CloudSun.w < 2)
+		return float4(0, 0, 0, surfaceLit);
 	float3 dir = wp - cam;
 	float dist = length(dir);
 	dir /= max(dist, 1e-3);
@@ -528,10 +535,18 @@ float4 PS_Shafts(VS_OUTPUT input) : SV_Target
 		lit += CloudShadow(cam + dir * ((i + jitter) * ds));
 	lit /= N;
 	float mu = dot(dir, normalize(CloudSun.xyz));
-	const float g = 0.6;
+	// (g 0.45: beams across the view, not a glare round the sun; over the sky a third, which
+	// is bright already)
+	const float g = 0.45;
 	float phase = (1 - g * g) / pow(1 + g * g - 2 * g * mu, 1.5) * 0.25 + 0.05;
-	float air = 1 - exp(-dist * 0.0018);
-	return float4(CloudSunColour.rgb * (lit * phase * air * 0.18 * CloudScale.z), 1);
+	// (the far ground fading into the sky's share: past the map's edge the hills stood whiter
+	// than the sky behind them)
+	float air = (1 - exp(-dist * 0.0035)) * (d >= 0.99999 ? 0.35 : lerp(1, 0.35, saturate((dist - 200) / 350)));
+	CloudAt(cam.xz);
+	float broken = smoothstep(0.08, 0.35, cShape.x) * (1 - smoothstep(0.8, 0.97, cShape.x));
+	// (the light above the horizon only: none from a sun set or behind the hills)
+	float up = smoothstep(-0.02, 0.06, CloudSun.y);
+	return float4(CloudSunColour.rgb * (lit * lit * phase * air * 0.55 * broken * up * CloudScale.z), surfaceLit);
 }
 
 // FSR 3's motion vectors (UV, the last frame's position minus the current): a moving object's,

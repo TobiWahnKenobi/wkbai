@@ -703,6 +703,10 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		const int kind = env.cloudWeatherKind >= 0 ? env.cloudWeatherKind : (gameSky ? env.cloudGameWeather : rs.cloudWeather) - 1;
 		if (kind >= 0 && kind < CLOUD_WEATHER_COUNT)
 			target = g_cloudPresets[kind];
+		// the seasons' weather: this spell's own cover (random around the kind's, or the debug
+		// panel's); eased in over 15 s like any change of the same weather
+		if (env.cloudWeatherKind >= 0 && g_environment.weatherCover >= 0.0f)
+			target.cover = g_environment.weatherCover;
 		const uint64_t now = SDL_GetTicksNS();
 		const float dt = env.cloudPresetTicks != 0 ? std::min((now - env.cloudPresetTicks) / 1e9f, 1.0f) : 0.0f;
 		env.cloudPresetTicks = now;
@@ -864,7 +868,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
 		r, g, b, preset.shadow,
-		BASE_SCALE, DETAIL_SCALE, rs.lightShaftStrength, time,
+		BASE_SCALE, DETAIL_SCALE, rs.lightShaftStrength * (g_environment.active ? 0.35f + 1.5f * g_environment.humidity : 1.0f), time, // (moist air: stronger)
 		up[0], up[1], up[2], std::clamp(rs.terrainFresnel, 0.0f, 1.0f),
 		horizon[0], horizon[1], horizon[2], horizonLum,
 		env.skyOccOrigin[0], env.skyOccOrigin[1], 1.0f / size, skyOn ? 1.0f : 0.0f,

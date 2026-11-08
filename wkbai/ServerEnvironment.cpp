@@ -903,6 +903,7 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	msg.writeFloat(settings.moonStart);
 	// the lobby's Clear Fog Of War (on: the clients show everything, no fog of war)
 	msg.writeUint8(Server::clearFogOfWar ? 1 : 0);
+	msg.writeUint8(settings.weatherCover < 0 ? 255 : (uint8_t)settings.weatherCover);
 	state.write(msg);
 	if (only)
 		only->send(msg);

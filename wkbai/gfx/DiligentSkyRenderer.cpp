@@ -263,7 +263,9 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// (g 0.8 at a 0.55 share peaked at 25 times the side's light towards the sun: the clouds near
 	// it blew out to flat white, the play test of 2026-11-07; now about 5 times, and the light
 	// rolled off below white at the end)
-	float phase = lerp(HenyeyGreenstein(mu, -0.2), HenyeyGreenstein(mu, 0.65), 0.4) * 12.566371;
+	// (and again too bright beside a clear sun under a high cover, the play test of 2026-11-08:
+	// now a quarter's share at g 0.6, about 3 times)
+	float phase = lerp(HenyeyGreenstein(mu, -0.2), HenyeyGreenstein(mu, 0.6), 0.25) * 12.566371;
 	// a sheet scatters the light many times over: the sun shows as a diffuse bright patch, not
 	// a cumulus' silver lining (a hot white blot overhead)
 	const float sheetiness = cWeather.x;
@@ -322,11 +324,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// the clouds to the haze took a fraction of a degree, a line along the horizon
 	fade = min(fade, smoothstep(0.004, 0.16, rd.y));
 	float far = (1 - fade) * hazeCover;
-	// a soft shoulder: the light above 0.6 rolled off towards 1 (the brightest parts keep their
-	// relief instead of clipping to one white)
+	// a soft shoulder: the light above 0.5 rolled off towards 0.82 (the brightest parts keep
+	// their relief instead of clipping to one white after the grade and the bloom)
 	float lum = max(light.r, max(light.g, light.b));
-	if (lum > 0.6)
-		light *= (0.6 + (lum - 0.6) / (1 + (lum - 0.6) / 0.38)) / lum;
+	if (lum > 0.5)
+		light *= (0.5 + (lum - 0.5) / (1 + (lum - 0.5) / 0.32)) / lum;
 	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
 }
 
@@ -586,9 +588,12 @@ float3 PhysicalSky(float3 rd, float3 sun)
 		sumR += dR * att;
 		sumM += dM * att;
 	}
-	float mu = dot(rd, sun), g = 0.76;
+	// (Mie at g 0.76 and its full weight lit a white aureole some 30 degrees across, which the
+	// grade and the bloom blew out over a quarter of the sky, the play test of 2026-11-08: now a
+	// narrower lobe at a third of the weight, the glow close round the sun)
+	float mu = dot(rd, sun), g = 0.83;
 	float pR = 0.0596831 * (1 + mu * mu);
-	float pM = 0.1193662 * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
+	float pM = 0.35 * 0.1193662 * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
 	float3 c = 20 * (sumR * ATM_RAYLEIGH * pR + sumM * ATM_MIE * pM);
 	float3 trans = exp(-(ATM_RAYLEIGH * odR + ATM_MIE * 1.1 * odM));
 	c += trans * 30 * smoothstep(0.99985, 0.99996, mu);
@@ -805,9 +810,9 @@ static void PhysicalSkyCpu(const Vector3& dIn, const Vector3& sun, float out[3])
 			sumM[c] += dM * att;
 		}
 	}
-	const float mu = d.dot(sun), g = 0.76f;
+	const float mu = d.dot(sun), g = 0.83f; // (as PhysicalSky's)
 	const float pR = 0.0596831f * (1 + mu * mu);
-	const float pM = 0.1193662f * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * std::pow(1 + g * g - 2 * g * mu, 1.5f));
+	const float pM = 0.35f * 0.1193662f * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * std::pow(1 + g * g - 2 * g * mu, 1.5f));
 	for (int c = 0; c < 3; c++)
 		out[c] = 1 - std::exp(-20 * (sumR[c] * RAY[c] * pR + sumM[c] * MIE * pM) * 1.2f);
 }

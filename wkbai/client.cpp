@@ -703,6 +703,10 @@ void Client::tick()
 				es.moonPhase = br.readUint8();
 				es.moonStart = br.readFloat();
 				clearFogOfWar = br.readUint8() != 0;
+				{
+					const uint8_t cover = br.readUint8();
+					es.weatherCover = cover == 255 ? -1 : cover;
+				}
 				environmentSkyKnown = true;
 				environment.read(br);
 				environmentActive = es.active();

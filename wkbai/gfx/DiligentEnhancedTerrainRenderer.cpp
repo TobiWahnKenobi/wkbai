@@ -110,7 +110,7 @@ cbuffer SunBuffer
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 GrassParams; // grass: on, distance, a steady clock in seconds (the waves', flow's and sway's)
 	float4 WaterFlowParams; // on, speed in units per second at full flow; High water: most pieces per tile edge, distance of full detail
-	float4 GrassLook; // grass: the share of the blades drawn (density / maximum), height factor
+	float4 GrassLook; // grass: the share of the blades drawn (density / maximum), height factor; High water: the target's pixels per half NDC height, pixels per piece
 	float4 TessParams; // terrain tessellation: on, most pieces per tile edge, distance of full detail, map edge in tiles
 	float4 TessGrid;   // the height grid's last indices (width, height)
 	// the water's reflections (from Low): steps along the ray (0: none), the projection's z terms
@@ -591,13 +591,26 @@ LAKE_OUTPUT VS_LakeTess(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 	return VS_Lake(Pos, Depth);
 }
 
+// an edge's pieces by its length on the screen (GrassLook.w pixels each): the distance's factors
+// alone cut the near water into pieces of a pixel or two, whose quads shaded the costly water's
+// pixels many times over (the play test of 2026-11-08: High and Ultra water too slow). Edges
+// behind the camera keep the distance's.
+float WaterEdgePieces(float3 a, float3 b)
+{
+	float4 ca = mul(float4(a, 1), Transform), cb = mul(float4(b, 1), Transform);
+	float2 d = (ca.xy / max(ca.w, 0.1) - cb.xy / max(cb.w, 0.1)) * GrassLook.z;
+	float pieces = length(d) / max(GrassLook.w, 0.5);
+	return (GrassLook.w <= 0 || ca.w <= 0.1 || cb.w <= 0.1) ? WaterFlowParams.z : pieces;
+}
+
 TESS_FACTORS HS_LakeConst(InputPatch<LAKE_OUTPUT, 3> p)
 {
 	TESS_FACTORS o;
 	float3 m[3] = { 0.5 * (p[1].World + p[2].World), 0.5 * (p[2].World + p[0].World), 0.5 * (p[0].World + p[1].World) };
-	[unroll] for (int i = 0; i < 3; i++) {
-		o.Edges[i] = clamp(WaterFlowParams.z * WaterLod(m[i]), 1, WaterFlowParams.z);
-	}
+	const float screen[3] = { WaterEdgePieces(p[1].World, p[2].World), WaterEdgePieces(p[2].World, p[0].World), WaterEdgePieces(p[0].World, p[1].World) };
+	o.Edges[0] = clamp(min(WaterFlowParams.z * WaterLod(m[0]), screen[0]), 1, WaterFlowParams.z);
+	o.Edges[1] = clamp(min(WaterFlowParams.z * WaterLod(m[1]), screen[1]), 1, WaterFlowParams.z);
+	o.Edges[2] = clamp(min(WaterFlowParams.z * WaterLod(m[2]), screen[2]), 1, WaterFlowParams.z);
 	o.Inside = max(o.Edges[0], max(o.Edges[1], o.Edges[2]));
 	return o;
 }
@@ -722,6 +735,9 @@ float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 	const float reach = ReflectParams.w;
 	float jitter = frac(52.9829189 * frac(dot(svpos.xy, float2(0.06711056, 0.00583715))));
 	float tPrev = 0;
+	// (three samples running on the sky: the ray climbs the screen into the sky, where nothing
+	// lies further on; the open sea's rays all went the whole way, the play test of 2026-11-08)
+	int skyRun = 0;
 	[loop] for (int i = 1; i <= steps; i++) {
 		float k = (i - 1 + jitter) / steps;
 		float t = 0.4 + reach * k * k;
@@ -736,6 +752,9 @@ float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 		if (any(uv < 0) || any(uv > 1))
 			break;
 		float d = depthTexture.Load(int3(uv * size, 0));
+		skyRun = d >= 1 ? skyRun + 1 : 0;
+		if (skyRun >= 3)
+			break;
 		float sceneZ = ReflectParams.z / (d - ReflectParams.y);
 		float behind = clip.w - sceneZ;
 		if (d < 1 && behind > 0 && behind < max(1.5, (t - tPrev) * 2)) {
@@ -2415,7 +2434,9 @@ void DiligentEnhancedTerrainRenderer::render()
 		_impl->buildGrass(dgfx->device, terrain, TerrainGrassBuilder::BuildDensity(g_renderSettings.grassDensity));
 	grassLook[0] = std::clamp(g_renderSettings.grassDensity / std::max(_impl->grassBuiltDensity, 1.0f), 0.0f, 1.0f);
 	grassLook[1] = std::max(0.0f, g_renderSettings.grassHeight);
-	grassLook[2] = grassLook[3] = 0.0f;
+	// High water's tessellation by the screen (HS_LakeConst): pieces of 7 pixels, Ultra's 4
+	grassLook[2] = 0.5f * (float)dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
+	grassLook[3] = g_renderSettings.waterQuality >= 5 ? 4.0f : 7.0f;
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 0.7f; // the ripples move at most 0.7 units a second (1.3 stretched them)
