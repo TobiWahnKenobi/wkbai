@@ -27,6 +27,12 @@ struct ClientGameObject;
 struct GameObjBlueprint;
 struct Command;
 struct ParticleContainer;
+struct WndCursor;
+
+// The commands the selected objects offer on a target (the hovered object, nullptr: the ground)
+// whose cursor shows, in the order they are offered, each with its cursor. The first is the
+// hover cursor's and the right-click's (Tab steps through the others).
+std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, const std::vector<ClientGameObject*>& selection, ClientGameObject* target);
 struct PSCache;
 struct ParticleRenderer;
 struct TerrainSpriteContainer;

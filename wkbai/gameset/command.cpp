@@ -65,6 +65,10 @@ void Command::parse(GSFileParser &gsf, GameSet &gs) {
 			}
 			else if (flagName == "ALWAYS_OFFERED_BY_FORMATION")
 				alwaysOfferedByFormation = true;
+			else if (flagName == "CURSOR_NOT_OFFERED_BY_DEFAULT")
+				cursorNotOfferedByDefault = true;
+			else if (flagName == "EVALUATE_CONDITIONS_OVER_LANDSCAPE")
+				evaluateConditionsOverLandscape = true;
 		}
 		else if (strtag == "END_COMMAND")
 			return;
