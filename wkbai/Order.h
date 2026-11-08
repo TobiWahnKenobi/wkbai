@@ -78,6 +78,18 @@ struct Task {
 	// and searching again every step for an unreachable target (woodcutters at a tree up a
 	// cliff) was most of the simulation's time 30 minutes into a 6-AI game
 	float nextMoveAttempt = 0.0f;
+	// The target's attachment path this task's unit walks (ATTACHMENT_PATH_CATEGORY ACTIVITY_PATH
+	// or DELIVERY: the target model's AC_<path>_<point> or DE_<path>_<point> points), as WKB.exe
+	// gives one out (0x568370, 0x6343e0): the path with the fewest units on it, the nearest first
+	// point among those. The unit walks its points in order and works at the last one.
+	// pathNo -1: none (the target has no such points); chosen again on each start.
+	bool pathChosen = false;
+	int pathNo = -1;
+	uint32_t pathTargetId = 0;
+	std::vector<Vector3> pathPoints;
+	size_t pathStep = 0;
+	// a walk to the current point was asked for (a stop near it then counts as there)
+	bool pathStepTried = false;
 	float AnimationSpeedToFit(ServerGameObject* go, int anim) const;
 
 	Task(int id, const TaskBlueprint* blueprint, Order* order);

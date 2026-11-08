@@ -20,6 +20,10 @@
 #include "gameset/Footprint.h"
 #include "gameset/GameObjBlueprint.h"
 #include "NNSearch.h"
+#include "util/StriCompare.h"
+#include "Model.h"
+#include <map>
+#include <cstdio>
 
 static float FootprintDistance(const Vector3& point, const ServerGameObject* building);
 
@@ -807,41 +811,11 @@ static float FootprintDistance(const Vector3& point, const ServerGameObject* bui
 	return std::sqrt(best);
 }
 
-// Where a unit works a target that can be walked onto (a building whose footprint is all
-// passable: a field) along its activity path (ATTACHMENT_PATH_CATEGORY ACTIVITY_PATH, the Farm
-// task): a spot of its own inside it, in the middle two thirds (the play test: with the task's
-// 6.5 m from the footprint's edge, the farmers worked their fields from 6.5 m outside them).
-// Returns false for other targets.
-static bool FieldSpot(const TaskBlueprint* task, const ServerGameObject* unit, const ServerGameObject* target, Vector3& spot)
-{
-	if (!task->activityPath || !target || target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !target->blueprint->footprint)
-		return false;
-	const auto& tiles = target->blueprint->footprint->tiles;
-	if (tiles.empty() || !std::all_of(tiles.begin(), tiles.end(), [](const Footprint::TileOffset& to) { return to.mode != 0; }))
-		return false;
-	int x0 = tiles[0].offsetX, x1 = x0, z0 = tiles[0].offsetZ, z1 = z0;
-	for (const auto& to : tiles) {
-		x0 = std::min(x0, to.offsetX); x1 = std::max(x1, to.offsetX);
-		z0 = std::min(z0, to.offsetZ); z1 = std::max(z1, to.offsetZ);
-	}
-	const float halfX = (x1 - x0 + 1) * 2.5f, halfZ = (z1 - z0 + 1) * 2.5f;
-	// (by the unit's id: each its own spot, the same on every run)
-	uint32_t h = unit->id * 2654435761u ^ target->id * 40503u;
-	h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12;
-	const float u = ((h & 1023) / 1023.0f - 0.5f) * 1.33f, v = (((h >> 10) & 1023) / 1023.0f - 0.5f) * 1.33f;
-	const float yaw = target->orientation.y;
-	const float ox = u * halfX, oz = v * halfZ;
-	spot = target->position + Vector3(ox * std::cos(yaw) - oz * std::sin(yaw), 0.0f, ox * std::sin(yaw) + oz * std::cos(yaw));
-	if (Server::instance->terrain)
-		spot.y = Server::instance->terrain->getHeight(spot.x, spot.z);
-	return true;
-}
-
-// How near to a building's footprint a task's unit goes. A delivery (ATTACHMENT_PATH_CATEGORY
-// DELIVERY) to a building with a yard comes up to the building: the original walks it to a
-// delivery point on the model, the manor's 2 m out from its walls (wkbai leaves the points out,
-// they cut the AI's pace to a third: docs/engine/original-comparison.md), and with the task's
-// 6.5 m the cart stopped in the middle of the yard (play test 3)
+// How near to a building's footprint a task's unit goes when it has no attachment path there
+// (ChooseAttachmentPath: a model without points of the task's category, or a last point it
+// couldn't reach). A delivery (ATTACHMENT_PATH_CATEGORY DELIVERY) to a building with a yard comes
+// up to the building, 3.5 m: with the task's 6.5 m the cart stopped in the middle of the yard
+// (play test 3)
 static float FootprintReach(const TaskBlueprint* task, float proximity, const ServerGameObject* building)
 {
 	constexpr float DELIVERY_REACH = 3.5f;
@@ -853,8 +827,129 @@ static float FootprintReach(const TaskBlueprint* task, float proximity, const Se
 	return yard ? DELIVERY_REACH : proximity;
 }
 
+// The attachment-point prefix of a task's ATTACHMENT_PATH_CATEGORY (WKB.exe's table at 0x5696a0:
+// EE_ entry/exit, DE_ delivery, AT_ attack, CR_, AC_ activity); null for the others
+static const char* AttachmentPathPrefix(const TaskBlueprint* task)
+{
+	return task->activityPath ? "AC_" : task->deliveryPath ? "DE_" : nullptr;
+}
+
+// A target's attachment paths of a prefix, in path-number order, each its points in order (WKB.exe
+// 0x568100 reads "AC_<path>_<point>" as path * 200 + point, so the points come in that order), in
+// world coordinates
+static std::vector<std::pair<int, std::vector<Vector3>>> AttachmentPaths(const ServerGameObject* target, const char* prefix)
+{
+	std::vector<std::pair<int, std::vector<Vector3>>> paths;
+	Model* model = target->blueprint->getModel(target->subtype, target->appearance, target->animationIndex, target->animationVariant);
+	if (!model)
+		return paths;
+	std::map<int, std::map<int, Vector3>> points;
+	// placed by the object's position and turn and its type's SCALE_APPEARANCE, as its matrix
+	// (getWorldMatrix) but without the random size variation: that is drawn when a level loads,
+	// before the game's seed (a tree's points came out 30% apart in two games of one process,
+	// test 27)
+	const float c = std::cos(-target->orientation.y), sn = std::sin(-target->orientation.y);
+	const Vector3& sc = target->blueprint->scaleAppearance;
+	auto place = [&](const Vector3& p) {
+		return Vector3(p.x * sc.x * c + p.z * sc.z * sn + target->position.x, p.y * sc.y + target->position.y,
+			-p.x * sc.x * sn + p.z * sc.z * c + target->position.z);
+	};
+	const size_t numAPs = model->getNumAPs();
+	for (size_t i = 0; i < numAPs; i++) {
+		const AttachmentPoint& ap = model->getAPInfo(i);
+		if (ap.tag.size() < 4 || StrCICompare(ap.tag.substr(0, 3), prefix) != 0)
+			continue;
+		int path = 0, point = 1;
+		if (sscanf(ap.tag.c_str() + 3, "%d_%d", &path, &point) < 1)
+			continue;
+		points[path][point] = place(ap.staticState.position);
+	}
+	for (auto& [path, byPoint] : points) {
+		paths.emplace_back(path, std::vector<Vector3>());
+		for (auto& [point, pos] : byPoint)
+			paths.back().second.push_back(pos);
+	}
+	return paths;
+}
+
+// Gives the task's unit one of its target's attachment paths, as WKB.exe's 0x6343e0: of the
+// paths whose first point the unit can stand on (on the map, ground it may walk), the one the
+// fewest other units are on (their current task holds it), and of those the one whose first
+// point is nearest the unit. None when the target has no points of the task's category.
+static void ChooseAttachmentPath(Task* task)
+{
+	task->pathChosen = true;
+	task->pathNo = -1;
+	task->pathPoints.clear();
+	task->pathStep = 0;
+	task->pathStepTried = false;
+	ServerGameObject* target = task->target.get();
+	const char* prefix = AttachmentPathPrefix(task->blueprint);
+	// WKB_NO_ATTACHMENT_PATHS=1: none (for an A/B of the AI's economy against the old rules)
+	// (=AC or =DE: only that category's)
+	static const char* noPaths = getenv("WKB_NO_ATTACHMENT_PATHS");
+	if (!target || !prefix || (noPaths && (!*noPaths || *noPaths == '1' || !strncmp(noPaths, prefix, 2))))
+		return;
+	// (not on a target that walks: its points are placed once, here)
+	if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || target->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		return;
+	task->pathTargetId = target->id;
+	ServerGameObject* unit = task->order->gameObject;
+	auto paths = AttachmentPaths(target, prefix);
+	if (paths.empty())
+		return;
+	// the other units' paths on this target (each unit once, by its current task)
+	std::map<int, int> users;
+	std::set<const ServerGameObject*> counted;
+	for (const SrvGORef& ref : target->referencers) {
+		ServerGameObject* other = ref.get();
+		if (!other || other == unit || !counted.insert(other).second)
+			continue;
+		Order* o = other->orderConfig.getCurrentOrder();
+		Task* t = o ? o->getCurrentTask() : nullptr;
+		if (t && t->target.get() == target && t->pathChosen && t->pathNo >= 0 && t->pathTargetId == target->id
+			&& AttachmentPathPrefix(t->blueprint) == prefix)
+			users[t->pathNo]++;
+	}
+	Terrain* trn = Server::instance->terrain;
+	const auto playable = trn ? trn->getNumPlayableTiles() : std::make_pair(0, 0);
+	int best = -1, bestUsers = 0;
+	float bestDist = 0.0f;
+	for (size_t i = 0; i < paths.size(); i++) {
+		const Vector3& first = paths[i].second.front();
+		if (trn) {
+			const int tx = (int)std::floor(first.x / 5.0f), tz = (int)std::floor(first.z / 5.0f);
+			if (tx < 0 || tz < 0 || tx >= playable.first || tz >= playable.second
+				|| MovementController::isTerrainBlocked(unit->blueprint, tx, tz))
+				continue;
+		}
+		const int n = users.count(paths[i].first) ? users[paths[i].first] : 0;
+		const float d = (first - unit->position).sqlen2xz();
+		if (best < 0 || n < bestUsers || (n == bestUsers && d < bestDist)) {
+			best = (int)i;
+			bestUsers = n;
+			bestDist = d;
+		}
+	}
+	if (best < 0)
+		return;
+	task->pathNo = paths[best].first;
+	static const bool trace = getenv("WKB_TRACE_PATHS") != nullptr;
+	if (trace)
+		printf("PATH t=%.2f %u (%.2f, %.2f) takes %s%d of %s #%u (%zu paths, %d on it), first point (%.2f, %.2f), last (%.2f, %.2f)\n",
+			Server::instance->timeManager.currentTime, unit->id, unit->position.x, unit->position.z, prefix, task->pathNo,
+			target->blueprint->name.c_str(), target->id, paths.size(), bestUsers,
+			paths[best].second.front().x, paths[best].second.front().z, paths[best].second.back().x, paths[best].second.back().z);
+	task->pathPoints = std::move(paths[best].second);
+}
+
 void ObjectReferenceTask::onStart()
 {
+	this->pathChosen = false;
+	this->pathNo = -1;
+	this->pathPoints.clear();
+	this->pathStep = 0;
+	this->pathStepTried = false;
 	this->proximitySatisfied = false; // might need to do this on resumption too
 	if (target)
 		this->destination = target->position;
@@ -914,10 +1009,40 @@ void ObjectReferenceTask::onUpdate()
 					goal.y = Server::instance->terrain->getHeightEx(goal.x, goal.z, go->blueprint->canWalkOnWater());
 			}
 		}
-		Vector3 spot;
-		const bool inField = !following && FieldSpot(blueprint, go, target.get(), spot);
-		if (inField)
-			goal = spot;
+		// An attachment-path task (ACTIVITY_PATH, DELIVERY) on a target with points of its category
+		// walks the unit along one of the target's paths, point by point, and works at its last
+		// point (WKB.exe 0x50d420 asks for the path, 0x6c83f0/0x568370; with it the distance test
+		// 0x50d9d0 doesn't count). The original's deliverers stand exactly on a DE point (0.0 m off
+		// in its saves); shop keepers at the end of a DE path along the shop's side, farmers at an
+		// AC path's end inside the field, woodcutters 1.7 m from the tree, miners 2-3.5 m from the
+		// outcropping's centre.
+		if (!following && AttachmentPathPrefix(blueprint) && (!pathChosen || pathTargetId != target->id))
+			ChooseAttachmentPath(this);
+		// a last point the walk can't get within 3 m of (walls or buildings round it, ground the
+		// unit can't stand on) is given up: the target is then reached by the task's proximity, as one
+		// without points
+		if (!following && pathChosen && pathNo >= 0 && !pathPoints.empty() && pathStep + 1 == pathPoints.size() && pathStepTried
+			&& !go->movementController.isMoving() && (go->position - pathPoints[pathStep]).sqlen2xz() >= 9.0f) {
+			static const bool trace = getenv("WKB_TRACE_PATHS") != nullptr;
+			if (trace)
+				printf("PATH %u gave up %s%d_%zu of %s #%u, %.1f m short\n", go->id, AttachmentPathPrefix(blueprint), pathNo, pathStep + 1,
+					target->blueprint->name.c_str(), target->id, (go->position - pathPoints[pathStep]).len2xz());
+			pathNo = -1;
+			pathPoints.clear();
+		}
+		const bool onPath = !following && pathChosen && pathNo >= 0 && !pathPoints.empty();
+		if (onPath) {
+			// on to the next point once at this one, or once the walk to it has ended (its tile
+			// taken by something: a field's outer point on a wall or a neighbour's footprint)
+			while (pathStep + 1 < pathPoints.size()) {
+				const float d2 = (go->position - pathPoints[pathStep]).sqlen2xz();
+				if (d2 < 1.0f || (!go->movementController.isMoving() && pathStepTried))
+					{ pathStep++; pathStepTried = false; }
+				else
+					break;
+			}
+			goal = pathPoints[pathStep];
+		}
 		float prox = this->proximity;
 		if (prox >= 0.0f) prox = std::max(prox - (destination - goal).len2xz(), 0.1f);
 		// a follower is there while it stands near the target's current goal (the last
@@ -928,9 +1053,11 @@ void ObjectReferenceTask::onUpdate()
 		// its activity path) and a large building's centre can't be come near
 		const float edge = FootprintDistance(go->position, target.get());
 		const float reach = edge >= 0.0f ? FootprintReach(blueprint, this->proximity, target.get()) : this->proximity;
-		// in a field: at its spot (or near it, when the path ended a little short)
-		const float spotDist2 = inField ? (go->position - goal).sqlen2xz() : 0.0f;
-		const bool measured = inField ? (spotDist2 < 1.0f || (!go->movementController.isMoving() && spotDist2 < 9.0f))
+		// on a path: at its last point, where the walk there ends (or near it, when the walk ended
+		// a little short: the point's tile taken)
+		const float spotDist2 = onPath ? (go->position - goal).sqlen2xz() : 0.0f;
+		const bool measured = onPath ? (pathStep + 1 == pathPoints.size()
+				&& (spotDist2 < 0.01f || (!go->movementController.isMoving() && pathStepTried && spotDist2 < 9.0f)))
 			: following ? (go->position - goal).sqlen2xz() < FOLLOW_TOLERANCE * FOLLOW_TOLERANCE
 			: (prox < 0.0f || (edge >= 0.0f
 				// within the proximity of the edge, or, when the path ends a little further out
@@ -983,6 +1110,7 @@ void ObjectReferenceTask::onUpdate()
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					destination = go->movementController.startMovement(goal);
+					pathStepTried = onPath;
 					if (!go->movementController.isMoving())
 						nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
 				}
