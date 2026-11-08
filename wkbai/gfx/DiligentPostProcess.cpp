@@ -530,10 +530,18 @@ float4 PS_Shafts(VS_OUTPUT input) : SV_Target
 	dist = d >= 0.99999 ? 600 : min(dist, 600);
 	const int N = 16;
 	float jitter = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
-	float ds = dist / N, lit = 0;
-	[loop] for (int i = 0; i < N; i++)
-		lit += CloudShadow(cam + dir * ((i + jitter) * ds));
+	// the sky broken or not where each step's sunlight comes through (CloudShadow leaves the
+	// clouds' fields there in cShape): along a weather front the cover crosses the broken
+	// range between both weathers, the beams' best moment (rain coming in or clearing), also
+	// with the camera still under the closed deck (judged at the camera, it showed none)
+	float ds = dist / N, lit = 0, litBroken = 0;
+	[loop] for (int i = 0; i < N; i++) {
+		float s = CloudShadow(cam + dir * ((i + jitter) * ds));
+		lit += s;
+		litBroken += s * smoothstep(0.08, 0.35, cShape.x) * (1 - smoothstep(0.8, 0.97, cShape.x));
+	}
 	lit /= N;
+	litBroken /= N;
 	float mu = dot(dir, normalize(CloudSun.xyz));
 	// (g 0.45: beams across the view, not a glare round the sun; over the sky a third, which
 	// is bright already)
@@ -542,11 +550,9 @@ float4 PS_Shafts(VS_OUTPUT input) : SV_Target
 	// (the far ground fading into the sky's share: past the map's edge the hills stood whiter
 	// than the sky behind them)
 	float air = (1 - exp(-dist * 0.0035)) * (d >= 0.99999 ? 0.35 : lerp(1, 0.35, saturate((dist - 200) / 350)));
-	CloudAt(cam.xz);
-	float broken = smoothstep(0.08, 0.35, cShape.x) * (1 - smoothstep(0.8, 0.97, cShape.x));
 	// (the light above the horizon only: none from a sun set or behind the hills)
 	float up = smoothstep(-0.02, 0.06, CloudSun.y);
-	return float4(CloudSunColour.rgb * (lit * lit * phase * air * 0.55 * broken * up * CloudScale.z), surfaceLit);
+	return float4(CloudSunColour.rgb * (lit * litBroken * phase * air * 0.55 * up * CloudScale.z), surfaceLit);
 }
 
 // FSR 3's motion vectors (UV, the last frame's position minus the current): a moving object's,

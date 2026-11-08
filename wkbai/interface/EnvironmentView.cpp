@@ -116,6 +116,17 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		static const float byWeather[WEATHER_COUNT] = { 0.40f, 0.55f, 0.85f, 0.95f, 0.80f, 1.0f, 0.70f, 0.75f, 0.15f, 0.10f };
 		static const float bySeason[4] = { 0.05f, -0.10f, 0.10f, 0.0f }; // spring, summer, autumn, winter
 		float h = v.weather >= 0 ? byWeather[v.weather] : 0.45f;
+		// while a weather front passes (the volumetric clouds' front, g_cloudFrontArrival below
+		// 1 at the camera) the more humid of both weathers: rain coming in or clearing leaves
+		// moist air under the broken clouds between them (the server's weather changes at once,
+		// the clouds come later)
+		static int weatherNow = -1, weatherBefore = -1;
+		if (v.weather != weatherNow) {
+			weatherBefore = weatherNow;
+			weatherNow = v.weather;
+		}
+		if (weatherBefore >= 0 && v.weather >= 0 && g_cloudFrontArrival < 0.999f)
+			h = std::max(h, byWeather[weatherBefore]);
 		if (es.seasons)
 			h += bySeason[std::clamp((int)st.season, 0, 3)];
 		const float hour = EnvDayFraction(es, client->timeManager.currentTime) * 24.0f;
