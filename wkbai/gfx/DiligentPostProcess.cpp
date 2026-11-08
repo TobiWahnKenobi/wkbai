@@ -552,7 +552,43 @@ float4 PS_Shafts(VS_OUTPUT input) : SV_Target
 	float air = (1 - exp(-dist * 0.0035)) * (d >= 0.99999 ? 0.35 : lerp(1, 0.35, saturate((dist - 200) / 350)));
 	// (the light above the horizon only: none from a sun set or behind the hills)
 	float up = smoothstep(-0.02, 0.06, CloudSun.y);
-	return float4(CloudSunColour.rgb * (lit * litBroken * phase * air * 0.55 * up * CloudScale.z), surfaceLit);
+	float3 shafts = CloudSunColour.rgb * (lit * litBroken * phase * air * 0.55 * up * CloudScale.z);
+	// Crepuscular rays (a screen-space radial blur, after GPU Gems 3's volumetric light
+	// scattering): the bright sky in the gaps between the clouds smeared towards each pixel from
+	// the sun's place on the screen, decaying with the distance: beams fanning out of the gaps
+	// over the darker air and land, as the photographs (the march above gives the haze, not
+	// separate beams). Under a broken sky only (none under a clear one: the sun's halo alone),
+	// as strong as the humid air makes the shafts (CloudScale.z), the sun's or the moon's.
+	float3 sunV = mul((float3x3)TaaInverseView, normalize(CloudSun.xyz));
+	if (sunV.z > 0.05 && up > 0) {
+		float2 sunUv = sunV.xy / sunV.z * float2(Proj.x, Proj.y) * float2(0.5, -0.5) + 0.5;
+		// (the sun up to about a screen beyond the edge still throws them in)
+		float onScreen = saturate(1.6 - 1.1 * length(sunUv - 0.5));
+		float3 towardsSun = normalize(float3(CloudSun.x, 0, CloudSun.z));
+		CloudAt(cam.xz + towardsSun.xz * 400);
+		float broken = smoothstep(0.12, 0.4, cShape.x) * (1 - smoothstep(0.82, 0.97, cShape.x));
+		if (onScreen * broken > 0) {
+			const int R = 32;
+			float2 stepUv = (sunUv - input.Uv) * (0.85 / R);
+			float2 uv = input.Uv + stepUv * jitter;
+			float illum = 1, acc = 0;
+			[loop] for (int i = 0; i < R; i++) {
+				uv += stepUv;
+				if (all(uv > 0) && all(uv < 1) && tDepth.SampleLevel(sPoint, uv, 0).r >= 0.99999) {
+					// the light sources: only the brightest sky, close to the sun (all of the lit
+					// cloud deck washed the view white instead of drawing beams)
+					float l = dot(tColor.SampleLevel(sLinear, uv, 0).rgb, float3(0.3, 0.59, 0.11));
+					float near = exp(-2.2 * length((uv - sunUv) * float2(Sizes.x / Sizes.y, 1)));
+					acc += saturate((l - 0.78) * 4.5) * near * illum;
+				}
+				illum *= 0.965;
+			}
+			float rays = acc / R * onScreen * broken;
+			// (the same over the sky and the land: less over the sky outlined the far hills white)
+			shafts += CloudSunColour.rgb * rays * 1.6 * up * CloudScale.z;
+		}
+	}
+	return float4(shafts, surfaceLit);
 }
 
 // FSR 3's motion vectors (UV, the last frame's position minus the current): a moving object's,
@@ -805,7 +841,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog", "tShafts", "tRtShadow" }, colorFormat);
-	_impl->makePass(_impl->shaftsPass, "PS_Shafts", { "tDepth", "cloudNoise" }, TEX_FORMAT_RGBA16_FLOAT);
+	_impl->makePass(_impl->shaftsPass, "PS_Shafts", { "tDepth", "tColor", "cloudNoise" }, TEX_FORMAT_RGBA16_FLOAT);
 	_impl->makePass(_impl->fxaaPass, "PS_Fxaa", { "tResolved" }, colorFormat);
 	for (Pass& pass : _impl->taaPass)
 		_impl->makePass(pass, "PS_Taa", { "tResolved", "tHistory", "tDepth" }, TEX_FORMAT_RGBA16_FLOAT);
@@ -1039,6 +1075,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 				_impl->shaftsPass.srb.Release();
 				_impl->shaftsPass.signature->CreateShaderResourceBinding(&_impl->shaftsPass.srb, true);
 				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(_impl->depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "tColor")->Set(_impl->color->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudNoise")->Set(settings.cloudNoise);
 				_impl->shaftsPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "CloudBuffer")->Set(settings.cloudBuffer);
 				_impl->shaftsBuffer = settings.cloudBuffer;
