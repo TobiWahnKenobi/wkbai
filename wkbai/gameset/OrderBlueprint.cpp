@@ -144,6 +144,7 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			const std::string path = gsf.nextString();
 			deliveryPath = path == "DELIVERY";
 			activityPath = path == "ACTIVITY_PATH";
+			attackPath = path == "ATTACK";
 		}
 		gsf.advanceLine();
 	}

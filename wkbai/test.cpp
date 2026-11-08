@@ -1188,6 +1188,109 @@ void Test_Siege()
 	fflush(stdout);
 }
 
+// Training (needs the game data): six Men at Arms ordered to train at one Training Dummy, a
+// second dummy 40 m away. The original lets 4 train at a dummy (Training.cpp's "CONSTANT 4"), each
+// at an attack point of its own (AT_1..AT_4 on the dummy's model, 2 on each side); the others
+// go to the next dummy with a free slot (the Train command's POST_ORDER_SEQUENCE). Prints
+// "TRAIN t=<s> unit <id>: <order>/<task> -> dummy <id> at (<x>, <z>) in the dummy's frame,
+// facing <deg>" every 5 s, and "TRAIN worked at" counts.
+void Test_Train()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* manor = nullptr;
+	auto findManor = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!manor && child->blueprint->name == "Manor")
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	if (own)
+		findManor(own, findManor);
+	const GameObjBlueprint* dummyType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Training Dummy");
+	const GameObjBlueprint* unitType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Man At Arms");
+	const int train = server.gameSet->commands.names.getIndex("Train");
+	const int worked = server.gameSet->items.names.getIndex("I'm Being Worked at");
+	if (!own || !manor || !dummyType || !unitType || train < 0 || worked < 0) {
+		printf("TRAIN not set up\n");
+		return;
+	}
+	g_settings["simSeed"] = 1;
+	server.startLevel();
+	// two free spots for dummies, 40 m apart, near the Manor
+	std::vector<ServerGameObject*> dummies;
+	for (int i = 0; i < 200 && dummies.size() < 2; i++) {
+		const Vector3 at = manor->position + Vector3(-40.0f + 5.0f * (i % 16), 0, 40.0f + 5.0f * (i / 16));
+		if (!dummies.empty() && (at - dummies[0]->position).len2xz() < 40.0f)
+			continue;
+		if (StampdownPlan::getStampdownPlan(&server, own, dummyType, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+			continue;
+		ServerGameObject* d = server.spawnObject(dummyType, own, at, Vector3(0, 0, 0));
+		d->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+		dummies.push_back(d);
+	}
+	if (dummies.size() < 2) {
+		printf("TRAIN no room for the dummies\n");
+		return;
+	}
+	ServerGameObject* dummy = dummies[0];
+	if (Model* model = dummy->getModel())
+		for (size_t i = 0; i < model->getNumAPs(); i++) {
+			const auto& ap = model->getAPInfo(i);
+			const Vector3 p = ap.staticState.position.transform(dummy->getWorldMatrix());
+			printf("TRAIN dummy %u point %s at (%.2f, %.2f) from its centre\n", dummy->id, ap.tag.c_str(), p.x - dummy->position.x, p.z - dummy->position.z);
+		}
+	printf("TRAIN dummy %u at (%.1f, %.1f), dummy %u at (%.1f, %.1f), %.0f m apart\n", dummies[0]->id, dummies[0]->position.x, dummies[0]->position.z,
+		dummies[1]->id, dummies[1]->position.x, dummies[1]->position.z, (dummies[1]->position - dummies[0]->position).len2xz());
+	std::vector<SrvGORef> units;
+	for (int i = 0; i < 6; i++) {
+		Vector3 at = dummy->position + Vector3(-6.0f + 2.5f * i, 0, -15.0f);
+		at.y = server.terrain->getHeight(at.x, at.z);
+		units.emplace_back(server.spawnObject(unitType, own, at, Vector3(0, 0, 0)));
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	// one after the other, as for a selection of single units
+	for (auto& u : units)
+		server.gameSet->commands[train].execute(u.get(), dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	for (int step = 0; step * 20 <= 40000; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		if (step % 250)
+			continue;
+		const int t = step * 20 / 1000;
+		printf("TRAIN t=%d worked at: dummy %u %d, dummy %u %d\n", t, dummies[0]->id, (int)dummies[0]->getItem(worked), dummies[1]->id, (int)dummies[1]->getItem(worked));
+		for (auto& ref : units) {
+			ServerGameObject* u = ref.get();
+			if (!u)
+				continue;
+			std::string order = "-", task = "-";
+			ServerGameObject* at = nullptr;
+			if (Order* o = u->orderConfig.getCurrentOrder()) {
+				order = server.gameSet->orders.getString(o->blueprint->bpid);
+				if (Task* tk = o->getCurrentTask()) {
+					task = server.gameSet->tasks.getString(tk->blueprint->bpid);
+					at = tk->target.get();
+				}
+			}
+			ServerGameObject* ref2 = at && at->blueprint == dummyType ? at : dummy;
+			// in the dummy's frame (it stands unrotated here)
+			const Vector3 rel = u->position - ref2->position;
+			Vector3 dir = (ref2->position - u->position).normal2xz();
+			const float faceErr = std::abs(std::remainder(u->orientation.y - std::atan2(dir.x, -dir.z), 6.2831853f)) * 57.29578f;
+			printf("TRAIN t=%d unit %u: %s / %s -> %s%u at (%.2f, %.2f), %.2f m, facing the dummy within %.0f deg, anim %s\n", t, u->id, order.c_str(), task.c_str(),
+				at ? "" : "(none) ", ref2->id, rel.x, rel.z, rel.len2xz(), faceErr,
+				u->animationIndex > 0 ? server.gameSet->animations.names.getString(u->animationIndex).c_str() : "-");
+		}
+	}
+	fflush(stdout);
+}
+
 // Guarding (needs the game data): a peasant guards another one, which then walks away; the
 // guard should follow at its offset, not walk into it. Prints "GUARD t=<s> distance=<m>".
 void Test_Guard()
@@ -3494,6 +3597,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_PlacementRules, "Placement rules: slope limit, terrain types and neighbours, as WKB.exe's"},
 {Test_MassOrder, "Mass order (an army of 200 sent across the map at once)"},
 {Test_Siege, "Siege: a Mangonel told to attack the enemy Manor"},
+{Test_Train, "Training: six units at one Training Dummy (4 slots, a spot each)"},
 };
 
 void LaunchTest()

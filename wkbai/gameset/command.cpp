@@ -17,6 +17,8 @@ void Command::parse(GSFileParser &gsf, GameSet &gs) {
 
 		if (strtag == "START_SEQUENCE")
 			startSequence.init(gsf, gs, "END_START_SEQUENCE");
+		else if (strtag == "POST_ORDER_SEQUENCE")
+			postOrderSequence.init(gsf, gs, "END_POST_ORDER_SEQUENCE");
 		else if (strtag == "USE_ORDER")
 			order = gs.orders.readPtr(gsf);
 		else if (strtag == "CURSOR") {
@@ -96,8 +98,9 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 	auto _ = ctx.change(ctx.target, target);
 	this->startSequence.run(&ctx);
 	// TODO: order (what to do first?)
+	Order* neworder = nullptr;
 	if (this->order) {
-		Order* neworder = self->orderConfig.addOrder(this->order, assignmentMode, target, destination, false);
+		neworder = self->orderConfig.addOrder(this->order, assignmentMode, target, destination, false);
 		if (neworder && faceTo.x >= 0.0f)
 			for (auto& task : neworder->tasks)
 				if (auto* face = dynamic_cast<FaceTowardsTask*>(task.get())) {
@@ -117,4 +120,11 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 			}
 		}
 	}
+	// The post-order sequence looks at what the order made of the unit (Train: "I am training
+	// real hard", set by the order's start). An order assigned by the start sequence has started
+	// by now; a USE_ORDER order starts at the next update, so its sequence (Farm's and Shop's
+	// "I didn't get the ... job", Siege Tower's docking) would see it not yet started and send
+	// the unit elsewhere: those are left out until the order starts at once.
+	if (!this->postOrderSequence.actionList.empty() && (!this->order || (neworder && neworder->isWorking())))
+		this->postOrderSequence.run(&ctx);
 }

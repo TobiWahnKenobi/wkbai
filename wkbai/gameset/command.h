@@ -20,6 +20,10 @@ struct Command {
 	int id;
 	OrderBlueprint *order = nullptr;
 	ActionSequence startSequence;
+	// POST_ORDER_SEQUENCE: run after the start sequence and the order, with the same target: the
+	// Train command's sends a unit that got no slot at the dummy clicked to the nearest one with
+	// a free slot ("Train near Selected Dummy")
+	ActionSequence postOrderSequence;
 	WndCursor *cursor = nullptr;
 	std::vector<int> cursorConditions, iconConditions;
 	std::vector<std::pair<GSCondition*, WndCursor*>> cursorAvailable;

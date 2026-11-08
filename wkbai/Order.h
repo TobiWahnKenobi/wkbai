@@ -78,6 +78,11 @@ struct Task {
 	// and searching again every step for an unreachable target (woodcutters at a tree up a
 	// cliff) was most of the simulation's time 30 minutes into a 6-AI game
 	float nextMoveAttempt = 0.0f;
+	// the attack path of its target this task holds (ATTACHMENT_PATH_CATEGORY ATTACK, Order.cpp
+	// AttackPathSpot): the path's number, and the target's id (0: none)
+	int attackPath = -1;
+	uint32_t attackPathOf = 0;
+	void releaseAttackPath();
 	float AnimationSpeedToFit(ServerGameObject* go, int anim) const;
 
 	Task(int id, const TaskBlueprint* blueprint, Order* order);
