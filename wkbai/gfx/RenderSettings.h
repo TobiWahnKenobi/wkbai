@@ -39,14 +39,17 @@ struct RenderSettings {
 	// Physical: the earth's shadow after sunset, ozone's deep blue, the horizon's haze in the
 	// sky's own colours (warm towards a low sun), a lower horizon band
 	int skyModel = 1;
-	// the water: 0 Off (a plain colour), 1 Original (the original's textured water with its sun
-	// glint off rippled normals), 2 Low (with the sky reflected, deeper water darker, cloud
-	// shadows, shore foam, separate river and sea looks, short screen-space reflections),
-	// 3 Medium (High's ocean look on the flat surface, longer reflections), 4 High (the surface
-	// tessellated on the GPU and moved by waves, foam on the crests and in the surf; Medium
-	// without a GPU that can tessellate), 5 Ultra (finer tessellation farther out, the longest
-	// reflections)
-	int waterQuality = 4;
+	// the water (WATER_*; saved as "waterSetting"): 0 Original (the original's two scrolling
+	// layers of the map's water texture and nothing else), 1 Off (a plain colour), 2 Very low (the
+	// texture with bump-mapped ripples and a sun glint), 3 Low (with the sky reflected, deeper
+	// water darker, cloud shadows, shore foam, separate river and sea looks, short screen-space
+	// reflections), 4 Medium (High's ocean look on the flat surface, longer reflections), 5 High
+	// (the surface tessellated on the GPU and moved by waves, foam on the crests and in the surf;
+	// Medium without a GPU that can tessellate), 6 Very high (between High and Ultra), 7 Ultra
+	// (finer tessellation farther out, the longest reflections). Original comes first, so
+	// "from Low up" is waterQuality >= WATER_LOW; only Off and Original are below Very low.
+	enum { WATER_ORIGINAL = 0, WATER_OFF, WATER_VERYLOW, WATER_LOW, WATER_MEDIUM, WATER_HIGH, WATER_VERYHIGH, WATER_ULTRA, WATER_LEVELS };
+	int waterQuality = WATER_HIGH;
 	// the waterfalls and the cascades of painted rivers (DiligentWaterfalls), apart from the
 	// water: 0 off, 1 Low, 2 Medium, 3 High, 4 Ultra (High's refraction needs the water from Low)
 	int waterfalls = 3;
