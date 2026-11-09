@@ -82,6 +82,7 @@ void RenderSettings::load()
 	terrainFresnel = g_settings.value<float>("terrainFresnel", def.terrainFresnel);
 	grass = g_settings.value<bool>("grass", def.grass);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
+	extendMap = std::clamp(g_settings.value<int>("extendMap", def.extendMap), 0, 1);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
 	motionBlur = std::clamp(g_settings.value<float>("motionBlur", def.motionBlur), 0.0f, 1.0f);
@@ -180,6 +181,7 @@ void RenderSettings::save()
 	g_settings["terrainFresnel"] = terrainFresnel;
 	g_settings["grass"] = grass;
 	g_settings["terrainTessellation"] = terrainTessellation;
+	g_settings["extendMap"] = extendMap;
 	g_settings["grassDensity"] = grassDensity;
 	g_settings["grassHeight"] = grassHeight;
 	g_settings["motionBlur"] = motionBlur;

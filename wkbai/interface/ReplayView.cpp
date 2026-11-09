@@ -15,6 +15,7 @@
 #include "../gfx/BitmapFont.h"
 #include "../util/FrameStats.h"
 #include "../util/StriCompare.h"
+#include "../util/SimRandom.h"
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_scancode.h>
 #include <nlohmann/json.hpp>
@@ -520,6 +521,35 @@ void ReplayView::drawControls(Client* client, Server* server, IRenderer* gfx)
 				else if (what == "play") setPaused(false);
 				else if (what == "speed") setSpeed(value);
 				else if (what == "seek") seekTo((uint32_t)(value * 1000.0f));
+				else if (what == "hash") {
+					// the game's state (paused first): every object's id, position (x, z), orientation and
+					// non-zero items, as the headless test's AITEST hash, and the random state; the
+					// same recording must give the same at the same time with any graphics settings
+					auto fnv = [](const void* data, size_t n, uint64_t h) {
+						for (size_t i = 0; i < n; i++) { h ^= ((const uint8_t*)data)[i]; h *= 1099511628211ull; }
+						return h;
+					};
+					uint64_t sum = 0;
+					size_t objects = 0;
+					auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+						objects++;
+						uint64_t h = fnv(&obj->id, sizeof(obj->id), 1469598103934665603ull);
+						h = fnv(&obj->position.x, sizeof(float), h);
+						h = fnv(&obj->position.z, sizeof(float), h);
+						h = fnv(&obj->orientation, sizeof(obj->orientation), h);
+						for (const auto& [item, v] : obj->items)
+							if (v != 0.0f)
+								h += fnv(&v, sizeof(v), fnv(&item, sizeof(item), 1469598103934665603ull));
+						sum += h;
+						for (const auto& [type, children] : obj->children)
+							for (CommonGameObject* child : children)
+								self(child, self);
+					};
+					if (server->getLevel())
+						walk(server->getLevel(), walk);
+					printf("REPLAY hash %016llx (%zu objects, random state %u) at %u ms\n", (unsigned long long)(sum ^ g_simRandom.state),
+						objects, g_simRandom.state, (uint32_t)server->replayPlayedMs);
+				}
 				printf("REPLAY control frame %d: %s %g\n", frame, what.c_str(), value);
 			}
 		if (frame % 60 == 0)

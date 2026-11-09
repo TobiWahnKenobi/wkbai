@@ -230,6 +230,16 @@ namespace {
 			o.set = [&rs](float v) { rs.terrainTessellation = std::clamp((int)v, 0, 3); };
 			list.push_back(o);
 		}
+		{
+			// the land continued beyond the map's edge (drawn only; ExtendMap.h)
+			MenuOption o;
+			o.id = "extendMap"; o.page = "terrain"; o.label = "Extend map";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Near" };
+			o.get = [&rs]() { return (float)rs.extendMap; };
+			o.set = [&rs](float v) { rs.extendMap = std::clamp((int)v, 0, 1); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));

@@ -1663,6 +1663,25 @@ static texture CreateRippleTexture(IRenderer* gfx)
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
 
 
+DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles)
+	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain)
+{
+	// Extend map: everything below draws the bigger copy (the same world coordinates)
+	if (terrain && extendTiles > 0) {
+		LoadingDetail("extending the map");
+		const uint32_t t0 = SDL_GetTicks();
+		extended = BuildExtendedTerrain(*terrain, extendTiles);
+		this->terrain = extended.get();
+		printf("Extend map: built in %u ms\n", (unsigned)(SDL_GetTicks() - t0));
+	}
+	init();
+}
+
+int DiligentEnhancedTerrainRenderer::extendedTiles() const
+{
+	return extended ? extended->extendedTiles : 0;
+}
+
 void DiligentEnhancedTerrainRenderer::init()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
@@ -2281,8 +2300,13 @@ void DiligentEnhancedTerrainRenderer::Impl::buildGrass(IRenderDevice* device, Te
 			Chunk& chunk = chunks.at(c++);
 			chunk.grassFirst = (uint32_t)grass.size();
 			for (int z = cz; z < std::min(cz + CHUNK, (int)terrain->height); z++)
-				for (int x = cx; x < std::min(cx + CHUNK, (int)terrain->width); x++)
+				for (int x = cx; x < std::min(cx + CHUNK, (int)terrain->width); x++) {
+					// Extend map: no grass beyond the map's own mesh (its time and memory grow with the tiles)
+					const int n = terrain->extendedTiles;
+					if (n > 0 && (x < n || z < n || x >= terrain->width - n || z >= terrain->height - n))
+						continue;
 					grassBuilder.addTile(terrain, x, z, density, grass);
+				}
 			chunk.grassCount = (uint32_t)grass.size() - chunk.grassFirst;
 		}
 	}
@@ -2327,6 +2351,8 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 bool DiligentEnhancedTerrainRenderer::updateHeights()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
+	if (extended)
+		SyncExtendedHeights(*mapTerrain, *extended);
 	const std::vector<EnhancedTerrainVertex> trnVertices = BuildEnhancedTerrainVertices(terrain);
 	const uint64_t size = trnVertices.size() * sizeof(EnhancedTerrainVertex);
 	if (size != _impl->trnVertexBuffer->GetDesc().Size)
@@ -2355,6 +2381,8 @@ bool DiligentEnhancedTerrainRenderer::updateHeights()
 bool DiligentEnhancedTerrainRenderer::updateTiles()
 {
 	// the texture coordinates (turns, flips, the texture's part of its page) are in the vertices
+	if (extended)
+		SyncExtendedTiles(*mapTerrain, *extended);
 	if (!updateHeights())
 		return false;
 	// each chunk's index lists per texture pair again, as init made them (16 × 16 tiles, in rows)
@@ -2393,6 +2421,8 @@ bool DiligentEnhancedTerrainRenderer::updateTiles()
 
 bool DiligentEnhancedTerrainRenderer::updateWater()
 {
+	if (extended)
+		SyncExtendedWater(*mapTerrain, *extended);
 	// the water quads of the flooded tiles and each chunk's list of them, as init made them
 	constexpr int CHUNK = 16;
 	constexpr float tilesize = 5.0f;

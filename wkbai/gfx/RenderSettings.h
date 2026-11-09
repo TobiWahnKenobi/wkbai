@@ -70,6 +70,9 @@ struct RenderSettings {
 	// 1-3: up to 4, 8, 16 pieces per tile edge near the camera); objects are drawn on that surface
 	// (the game's own heights don't change). Only with a GPU that can tessellate.
 	int terrainTessellation = 2;
+	// wkbai's Extend map (ExtendMap.h): the land continued beyond the map's edge, drawn only (the
+	// game never sees it). 0 off, 1 near (64 tiles beyond the mesh's edge); not in the map editor
+	int extendMap = 0;
 	bool grass = true;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)

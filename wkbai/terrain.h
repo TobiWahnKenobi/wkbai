@@ -69,6 +69,12 @@ struct Terrain
 	std::shared_ptr<WaterDesign> waterDesign;
 
 	TerrainTextureDatabase texDb;
+	// wkbai's Extend map (ExtendMap.h): this terrain is a client-only, bigger copy of a map for the
+	// terrain renderer, with extendedTiles more tiles on each side (0: a map itself) and the map's
+	// texture database (sharedTexDb: the copy has none of its own; textures() gives the one in use)
+	int extendedTiles = 0;
+	const TerrainTextureDatabase* sharedTexDb = nullptr;
+	const TerrainTextureDatabase& textures() const { return sharedTexDb ? *sharedTexDb : texDb; }
 	DynArray<uint8_t> vertices;
 	Tile *tiles;
 

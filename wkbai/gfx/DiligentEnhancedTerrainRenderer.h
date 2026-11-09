@@ -5,6 +5,7 @@
 #pragma once
 
 #include "TerrainRenderer.h"
+#include "../ExtendMap.h"
 
 struct TextureCache;
 namespace Diligent { struct ITextureView; }
@@ -12,7 +13,9 @@ namespace Diligent { struct ITextureView; }
 // Bump-mapped terrain with per-pixel sun light, and lakes, on Diligent (Direct3D 12 / Vulkan);
 // a port of the former D3D11EnhancedTerrainRenderer.
 struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
-	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera) : TerrainRenderer(gfx, terrain, camera) { init(); }
+	// extendTiles: wkbai's Extend map (ExtendMap.h): the renderer draws a bigger copy of the map
+	// with that many tiles more on each side (0: the map itself), kept in step with it
+	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles = 0);
 	~DiligentEnhancedTerrainRenderer();
 	void init();
 	void render() override;
@@ -27,10 +30,13 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	bool updateTiles() override;
 	bool updateWater() override;
 	bool* bumpMapping() override { return &m_bumpOn; }
+	int extendedTiles() const override;
 
 	bool m_bumpOn = true;
 private:
 	struct Impl;
 	Impl* _impl;
 	TextureCache* texcache;
+	Terrain* mapTerrain; // the map's own (the client's, maybe shared with a local server)
+	ExtendedTerrain extended; // its copy drawn, with Extend map (else null: terrain is the map's)
 };

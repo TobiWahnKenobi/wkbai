@@ -24,4 +24,6 @@ struct TerrainRenderer {
 	virtual bool updateTiles() { return true; }
 	// The water changed (lakes added, moved or removed), as updateHeights
 	virtual bool updateWater() { return true; }
+	// wkbai's Extend map: the tiles the drawn terrain adds on each side of the map (0: none)
+	virtual int extendedTiles() const { return 0; }
 };

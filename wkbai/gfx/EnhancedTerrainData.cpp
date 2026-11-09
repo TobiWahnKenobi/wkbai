@@ -38,8 +38,8 @@ void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::
 	// Load terrain color textures
 	LoadingDetail("tile textures");
 	size_t groupsDone = 0;
-	for (const auto &grp : terrain->texDb.groups) {
-		LoadingCount(groupsDone++, terrain->texDb.groups.size());
+	for (const auto &grp : terrain->textures().groups) {
+		LoadingCount(groupsDone++, terrain->textures().groups.size());
 		printf("%s\n", grp.first.c_str());
 		for (const auto &tex : grp.second->textures) {
 			EnhancedTerrainTexture ld;
@@ -183,8 +183,10 @@ std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain
 			uint32_t cmprBitangent = NormalToR10G10B10A2(bitangent.normal());
 
 			auto getPrecomputedNormal = [&](int x, int z) { return trnNormals[z * (terrain->width + 1) + x]; };
-			const uint32_t colorBits =
-				(x >= terrain->edge && z >= terrain->edge && x < terrain->width - terrain->edge && z < terrain->height - terrain->edge) ?
+			// (with Extend map, the band and the land beyond it at the full light: the band darker
+			// would be a dark frame between the map and the extension)
+			const uint32_t colorBits = (terrain->extendedTiles > 0
+				|| (x >= terrain->edge && z >= terrain->edge && x < terrain->width - terrain->edge && z < terrain->height - terrain->edge)) ?
 				0xC000'0000 : 0;
 
 			EnhancedTerrainVertex outvert[4];

@@ -22,6 +22,8 @@
 #include "../gfx/DefaultTerrainRenderer.h"
 #include "../gfx/DiligentEnhancedTerrainRenderer.h"
 #include "../gfx/EnhancedTerrainData.h"
+#include "../gfx/RenderSettings.h"
+#include "../util/FrameStats.h"
 #include "../settings.h"
 #include <nlohmann/json.hpp>
 #include "../imgui/imgui.h"
@@ -234,10 +236,49 @@ void ClientInterface::rebuildTerrainRenderer(bool tiles)
 	if (terrainRenderer && (tiles ? terrainRenderer->updateTiles() : terrainRenderer->updateHeights()))
 		return;
 	delete terrainRenderer;
-	if (UseEnhancedRenderers(gfx))
-		terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
-	else
-		terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
+	terrainRenderer = makeTerrainRenderer();
+}
+
+int ClientInterface::wantedExtendTiles() const
+{
+	return editorOn ? 0 : ExtendMapTiles(g_renderSettings.extendMap);
+}
+
+// test runs: a hash of the map's own terrain (heights, tiles, water, lakes), which Extend map
+// must never change (it is the simulation's, shared with a local server)
+static uint64_t MapTerrainHash(const Terrain* t)
+{
+	uint64_t h = 1469598103934665603ull;
+	auto add = [&](const void* data, size_t size) {
+		for (size_t i = 0; i < size; i++)
+			h = (h ^ ((const uint8_t*)data)[i]) * 1099511628211ull;
+	};
+	add(t->vertices.data(), t->vertices.size());
+	add(t->heightFraction.data(), t->heightFraction.size());
+	for (int i = 0; i < t->width * t->height; i++) {
+		const Terrain::Tile& tile = t->tiles[i];
+		const uintptr_t tex = (uintptr_t)tile.texture;
+		const uint32_t bits = tile.rot | (tile.xflip << 2) | (tile.zflip << 3) | (tile.fullOfWater << 4);
+		add(&tex, sizeof(tex));
+		add(&bits, sizeof(bits));
+		add(&tile.waterLevel, sizeof(tile.waterLevel));
+	}
+	add(t->lakes.data(), t->lakes.size() * sizeof(Vector3));
+	return h;
+}
+
+TerrainRenderer* ClientInterface::makeTerrainRenderer()
+{
+	if (UseEnhancedRenderers(gfx)) {
+		const bool check = BenchmarkEnabled() && client->terrain;
+		const uint64_t before = check ? MapTerrainHash(client->terrain) : 0;
+		TerrainRenderer* r = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera, wantedExtendTiles());
+		if (check)
+			printf("EXTENDMAP map terrain hash %016llx before, %016llx after the renderer (%d tiles added)\n",
+				(unsigned long long)before, (unsigned long long)MapTerrainHash(client->terrain), r->extendedTiles());
+		return r;
+	}
+	return new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
 }
 
 bool ClientInterface::editorInput(const Vector3& cursor)
