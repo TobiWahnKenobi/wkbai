@@ -249,7 +249,32 @@ cbuffer FogBuffer
 	float4 Grade;
 	float4 EdgeFog;
 	float4 LightMasks; // zw: a pixel's size
+	float4 FogSun;    // the haze's tint (DiligentSkyRenderer): the sun's horizontal direction (x, z), the glow's sharpness, its weight (0 off)
+	float4 FogToward; // the sky's colour along the horizon towards the sun (the physical sky's, the clouds' grey)
+	float4 FogAway;   // and away from it
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	float l = length(d.xz);
+	if (FogSun.w == 0 || l < 1e-5)
+		return FogColor.rgb;
+	float mu = dot(d.xz / l, FogSun.xy);
+	return mu > 0 ? lerp(FogColor.rgb, FogToward.rgb, pow(mu, FogSun.z) * FogSun.w) : lerp(FogColor.rgb, FogAway.rgb, -mu * FogSun.w);
+}
+float3 FogRatioDir(float3 d)
+{
+	return FogTintDir(d) / max(FogColor.rgb, 1e-3);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
 cbuffer DecalBuffer
 {
 	float4 DProj;   // the projection's m11, m22, m33, m43
@@ -323,7 +348,7 @@ float4 PS_Decal(DECAL_OUTPUT input) : SV_Target
 	}
 	else if (any(abs(d) > input.Shape.z))
 		discard;
-	c.rgb = lerp(c.rgb, FogColor.rgb, FogAmount(w, distance(w, FogCamera.xyz)));
+	c.rgb = lerp(c.rgb, FogTint(w), FogAmount(w, distance(w, FogCamera.xyz)));
 	return c;
 }
 )---";
@@ -1232,6 +1257,15 @@ struct DiligentRenderer : DiligentGfx
 		// strength, a pixel's size (the frame's)
 		for (int i = 0; i < 4; i++)
 			cc[20 + i] = lightMasks[i];
+		// the haze's tint along the horizon (the physical sky's), only with its haze
+		const bool tint = shadows.hazeOn && shadows.fogTint[3] != 0.0f;
+		for (int i = 0; i < 4; i++)
+			cc[24 + i] = tint ? shadows.fogTint[i] : 0.0f;
+		for (int i = 0; i < 3; i++) {
+			cc[28 + i] = tint ? shadows.fogToward[i] : 1.0f;
+			cc[32 + i] = tint ? shadows.fogAway[i] : 1.0f;
+		}
+		cc[31] = cc[35] = 0.0f;
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1361,7 +1395,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 96, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 144, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

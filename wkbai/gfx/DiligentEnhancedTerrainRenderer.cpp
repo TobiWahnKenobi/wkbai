@@ -70,7 +70,32 @@ cbuffer FogBuffer
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
 	float4 LightMasks; // the depth pre-pass's: ray-traced shadows on, ambient occlusion strength, a pixel's size
+	float4 FogSun;    // the haze's tint (DiligentSkyRenderer): the sun's horizontal direction (x, z), the glow's sharpness, its weight (0 off)
+	float4 FogToward; // the sky's colour along the horizon towards the sun (the physical sky's, the clouds' grey)
+	float4 FogAway;   // and away from it
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	float l = length(d.xz);
+	if (FogSun.w == 0 || l < 1e-5)
+		return FogColor.rgb;
+	float mu = dot(d.xz / l, FogSun.xy);
+	return mu > 0 ? lerp(FogColor.rgb, FogToward.rgb, pow(mu, FogSun.z) * FogSun.w) : lerp(FogColor.rgb, FogAway.rgb, -mu * FogSun.w);
+}
+float3 FogRatioDir(float3 d)
+{
+	return FogTintDir(d) / max(FogColor.rgb, 1e-3);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
 
 // The depth pre-pass's masks at a pixel (DiligentGfx::FinishLightingPrepass): the ray-traced
 // shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
@@ -721,7 +746,7 @@ float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, f
 float3 SkyAlong(float3 r)
 {
 	if (WaterMode.z == 0)
-		return WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(r.y)) : FogColor.rgb;
+		return WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb * FogRatioDir(r), WaterSkyUp.rgb, saturate(r.y)) : FogTintDir(r);
 	float a = r.z, b = r.x, c = max(r.y, 0);
 	float horizontal = sqrt(a * a + b * b);
 	float t = c / max(horizontal, 1e-6);
@@ -739,7 +764,7 @@ float3 SkyAlong(float3 r)
 		if (b > 0) tex = skyRight.SampleLevel(inpSampler, float2(0.5 - 0.5 * a / b, 0.5 - 0.5 * c / b), 0).rgb;
 		else       tex = skyLeft.SampleLevel(inpSampler, float2(0.5 - 0.5 * a / b, 0.5 + 0.5 * c / b), 0).rgb;
 	}
-	return lerp(tex, FogColor.rgb, fog);
+	return lerp(tex, FogTintDir(r), fog);
 }
 
 // Reflections (from Low): the frame behind the water seen along the reflected ray. The ray
@@ -828,7 +853,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	if ((WeatherParams.z < 0 || input.Flood > 0.5) && input.World.y < SmoothHeight(input.World.xz))
 		discard;
 	if (WaterParams.x == 0)
-		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth));
+		return float4(GradeColour(lerp(LakeColour.rgb, FogTint(input.World), input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth));
 	float2 uv = input.World.xz * WaterParams.y;
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
@@ -907,8 +932,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	}
 	alpha *= FloodShore(input.Flood, input.Depth);
 	if (WaterSkyUp.w != 0)
-		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
-	return IceOver(float4(GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
+		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
+	return IceOver(float4(GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
 }
 
 // The rivers' ripples at (s, d): s the distance to the mouth along the channel, d the distance
@@ -1091,7 +1116,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
-	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogColor.rgb, input.Fog)), alpha), input.World);
+	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
 }
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
@@ -1210,7 +1235,7 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	// shadows' light left), so they keep their light and dark (on the sun's terms alone the
 	// blades in a shadow took the floor above: one flat patch, or nearly black)
 	c *= lerp(ShadowParams.y, 1, rtSun);
-	c = lerp(c, FogColor.rgb, input.Fog);
+	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), 1);
 }
 
@@ -1274,7 +1299,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n);
 		float4 lc = float4(l3, 1) * input.Color * tex;
 		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
-		float4 gc = lerp(lc, FogColor, input.Fog);
+		float4 gc = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 		return float4(GradeColour(gc.rgb), gc.a);
 	}
 
@@ -1311,7 +1336,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 lc = float4(light, 1) * input.Color * tex;
 	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
-	float4 c = lerp(lc, FogColor, input.Fog);
+	float4 c = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 

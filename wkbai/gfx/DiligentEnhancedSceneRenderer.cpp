@@ -79,7 +79,32 @@ cbuffer FogBuffer
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
 	float4 LightMasks; // the depth pre-pass's: ray-traced shadows on, ambient occlusion strength, a pixel's size
+	float4 FogSun;    // the haze's tint (DiligentSkyRenderer): the sun's horizontal direction (x, z), the glow's sharpness, its weight (0 off)
+	float4 FogToward; // the sky's colour along the horizon towards the sun (the physical sky's, the clouds' grey)
+	float4 FogAway;   // and away from it
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	float l = length(d.xz);
+	if (FogSun.w == 0 || l < 1e-5)
+		return FogColor.rgb;
+	float mu = dot(d.xz / l, FogSun.xy);
+	return mu > 0 ? lerp(FogColor.rgb, FogToward.rgb, pow(mu, FogSun.z) * FogSun.w) : lerp(FogColor.rgb, FogAway.rgb, -mu * FogSun.w);
+}
+float3 FogRatioDir(float3 d)
+{
+	return FogTintDir(d) / max(FogColor.rgb, 1e-3);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
 
 // The depth pre-pass's masks at a pixel (DiligentGfx::FinishLightingPrepass): the ray-traced
 // shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
@@ -578,7 +603,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	PrepareSurface(input);
 	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), float4(FogTint(input.WorldPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -589,7 +614,7 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	if(tex.a < ALPHA_REF) discard;
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), float4(FogTint(input.WorldPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 

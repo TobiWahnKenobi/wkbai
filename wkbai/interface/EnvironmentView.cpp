@@ -225,9 +225,15 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		v.lightningFlash = 0.35f;
 		g_boltSeed = 12345;
 	}
-	// the grade: darker and paler at night and under heavy cloud, brighter in a flash
-	v.exposure = (0.42f + 0.58f * v.sun.daylight) * (1.0f - 0.18f * v.cloudCover) * (1.0f + 1.2f * v.lightningFlash);
-	v.saturation = (0.50f + 0.50f * v.sun.daylight) * (1.0f - 0.2f * v.fog);
+	// the grade: darker and paler at night and under heavy cloud, brighter in a flash. With the
+	// Physical sky model by the true sun: the day's grade until it reaches the horizon, the night's
+	// from 8 degrees under it (by the daylight, 0.38 with the sun on the horizon, a sunset was
+	// graded as the early night: dark and grey, the play test of 2026-11-09)
+	const bool physicalSky = g_renderSettings.skyModel >= 1 && g_renderSettings.sky && g_renderSettings.dynamicClouds >= 3;
+	const float gradeT = std::clamp((v.sun.sunTrue.y + 0.14f) / 0.16f, 0.0f, 1.0f);
+	const float gradeLight = physicalSky ? gradeT * gradeT * (3.0f - 2.0f * gradeT) : v.sun.daylight;
+	v.exposure = (0.42f + 0.58f * gradeLight) * (1.0f - 0.18f * v.cloudCover) * (1.0f + 1.2f * v.lightningFlash);
+	v.saturation = (0.50f + 0.50f * gradeLight) * (1.0f - 0.2f * v.fog);
 	v.fogDistance = std::clamp(1.0f - 0.95f * v.fog - 0.35f * std::max(v.rainShown, v.snowShown * 1.3f), 0.08f, 1.0f);
 	// the land's look by the season, the rivers in floods, the frozen falls: slow changes (a few
 	// seconds to a minute), by the real time between frames

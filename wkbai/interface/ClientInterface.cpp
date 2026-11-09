@@ -938,6 +938,12 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::EndDisabled();
 		ImGui::SliderFloat("Field of view (vertical)", &s.fovYDegrees, 20.0f, 100.0f, "%.1f deg");
 		ImGui::Checkbox("Sky", &s.sky);
+		{
+			static const char* const skyModels[] = { "Normal", "Physical (earth's shadow, ozone, sunset haze)" };
+			ImGui::BeginDisabled(!s.sky || s.dynamicClouds < 3);
+			ImGui::Combo("Sky model (volumetric clouds' sky)", &s.skyModel, skyModels, 2);
+			ImGui::EndDisabled();
+		}
 	}
 	if (ImGui::CollapsingHeader("Picture", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Exposure", &s.exposure, 0.25f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);

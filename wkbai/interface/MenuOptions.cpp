@@ -111,6 +111,16 @@ namespace {
 			[&rs]() { return rs.edgeFog; }));
 		list.push_back(slider("fieldOfView", "view", "Field of view", rs.fovYDegrees, 20.0f, 100.0f, "%.0f"));
 		list.push_back(toggle("sky", "view", "Sky", rs.sky));
+		{
+			// (the physical sky: with the volumetric clouds, instead of the sky box)
+			MenuOption o;
+			o.id = "skyModel"; o.page = "view"; o.label = "Sky model";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Normal", "Physical" };
+			o.get = [&rs]() { return (float)rs.skyModel; };
+			o.set = [&rs](float v) { rs.skyModel = std::clamp((int)v, 0, 1); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.sky && rs.dynamicClouds >= 3; }));
+		}
 
 		// Picture (the 3D scene, not the HUD)
 		list.push_back(logarithmic(slider("exposure", "picture", "Exposure", rs.exposure, 0.25f, 4.0f)));
