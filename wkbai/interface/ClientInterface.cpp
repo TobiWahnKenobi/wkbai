@@ -1125,10 +1125,12 @@ void ClientInterface::prewarmLevel()
 			sm->prepare();
 	}
 	const uint64_t t1 = SDL_GetTicksNS();
-	// (the level's own models' textures on the GPU at once, the game set's others into RAM, to
-	// the GPU when drawn or from the renderer's background queue: the GPU memory budget)
+	// (the level's own models' textures on the GPU at once when the game starts, the game set's
+	// others into RAM, to the GPU when drawn or from the renderer's background queue: the GPU
+	// memory budget; the objects that appear later (a building's new state) the same as those:
+	// uploaded at once there, they stalled the frame for up to a second and a half, the HD play test)
 	for (size_t i = 0; i < models.size(); i++)
-		scene->prewarm(models[i], i < fromLevel);
+		scene->prewarm(models[i], newLevel && i < fromLevel);
 	const uint64_t t2 = SDL_GetTicksNS();
 	sceneRenderer->prewarm(models);
 	const uint64_t t3 = SDL_GetTicksNS();
