@@ -1255,25 +1255,43 @@ void ClientInterface::drawLoadingScreen(bool countFrame)
 	else if (framesWithLevel < 10) stage = 7;
 	else stage = 8;
 	// the game frames with the level, the last step (LoadingProgress's "Starting the game")
-	if (countFrame && client->getLevel() && client->terrain) {
-		static constexpr int FIRST_FRAMES = 30;
+	// Then, in a multiplayer game, the loading screen stays until every player has loaded (the
+	// host's clock stands until then: Server::waitForLoads), this one at 100%
+	static constexpr int FIRST_FRAMES = 30;
+	const bool ownLoadDone = framesWithLevel >= FIRST_FRAMES;
+	if (countFrame && client->getLevel() && client->terrain && !ownLoadDone) {
 		if (++framesWithLevel >= FIRST_FRAMES) {
-			loadingDone = true;
 			LoadingFinish();
-			return;
+			client->sendLoadingStage(100);
+			loadingPercentSent = 100;
 		}
-		LoadingEnterStep(LOADING_FIRST_FRAMES);
-		if (framesWithLevel == 1)
-			LoadingDetail("first frames");
-		LoadingCount(framesWithLevel, FIRST_FRAMES);
+		else {
+			LoadingEnterStep(LOADING_FIRST_FRAMES);
+			if (framesWithLevel == 1)
+				LoadingDetail("first frames");
+			LoadingCount(framesWithLevel, FIRST_FRAMES);
+		}
+	}
+	const bool waitingForOthers = framesWithLevel >= FIRST_FRAMES && client->loadingRows.size() > 1 && client->loadingWaitForOthers;
+	if (framesWithLevel >= FIRST_FRAMES && !waitingForOthers) {
+		if (loadingWaitStarted)
+			printf("Loading: waited %llu ms for the other players\n", (unsigned long long)(SDL_GetTicks() - loadingWaitStarted));
+		loadingDone = true;
+		return;
+	}
+	if (waitingForOthers && !loadingWaitStarted) {
+		loadingWaitStarted = SDL_GetTicks();
+		printf("Loading: loaded, waiting for the other players\n");
 	}
 	// (the original's eight stages, for the test screenshot's moment)
 	loadingStage = stage;
 	// how far it is (LoadingProgress: what the load does and the last load's times), to the
-	// other players as a percentage
-	const LoadingView view = LoadingGet();
-	const float progress = view.step >= 0 ? view.progress : std::clamp((stage - 1) / 8.0f, 0.0f, 1.0f);
-	const int percent = std::clamp((int)(progress * 100.0f), 0, 100);
+	// other players as a percentage (100 once loaded)
+	LoadingView view = LoadingGet();
+	if (waitingForOthers)
+		view.label = "Waiting for the other players";
+	const float progress = waitingForOthers ? 1.0f : view.step >= 0 ? view.progress : std::clamp((stage - 1) / 8.0f, 0.0f, 1.0f);
+	const int percent = waitingForOthers ? 100 : std::clamp((int)(progress * 100.0f), 0, 99);
 	if (percent != loadingPercentSent) {
 		loadingPercentSent = percent;
 		client->sendLoadingStage(percent);
@@ -1306,22 +1324,25 @@ void ClientInterface::drawLoadingScreen(bool countFrame)
 		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 225, y + 16), IM_COL32(96, 0, 0, 255));
 		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 130 + 95 * rowProgress, y + 16), IM_COL32(210, 0, 0, 255));
 	};
-	// a multiplayer game: a row per human player, as the server reports them (this client's from
-	// its own progress, the others' as they reported it), 22 px apart; else this player's alone
-	float y = cy - 140;
-	if (client->loadingRows.size() > 1) {
-		for (const Client::LoadingRow& r : client->loadingRows) {
+	// a multiplayer game: a row per human player, as the server reports them, 22 px apart: this
+	// client's on top (its own progress), then the others' as they reported it; else this
+	// player's alone
+	// (more than six rows start higher, above the tip)
+	const int rowCount = std::max<int>(1, (int)client->loadingRows.size());
+	float y = cy - 140 - 22.0f * std::max(0, rowCount - 6);
+	int ownColour = colour;
+	if (!player)
+		for (const Client::LoadingRow& r : client->loadingRows)
 			if (r.own)
-				row(y, player ? colour : r.colour, name, percent, progress);
-			else
+				ownColour = r.colour; // (as the server knows it, before the client's player is in)
+	row(y, ownColour, name, percent, progress);
+	y += 22;
+	if (client->loadingRows.size() > 1)
+		for (const Client::LoadingRow& r : client->loadingRows)
+			if (!r.own) {
 				row(y, r.colour, r.name, std::clamp(r.stage, 0, 100), std::clamp(r.stage / 100.0f, 0.0f, 1.0f));
-			y += 22;
-		}
-	}
-	else {
-		row(y, colour, name, percent, progress);
-		y += 22;
-	}
+				y += 22;
+			}
 	// what this computer is doing (wkbai's): the step, its detail or count, under the rows
 	if (!view.label.empty()) {
 		dl->PushClipRect(ImVec2(cx - 230, y - 2), ImVec2(cx + 228, y + 20), true);
@@ -1348,6 +1369,8 @@ void ClientInterface::loadingFrame()
 		lang.load("Languages\\Language.txt");
 		languageLoaded = true;
 	}
+	// the other players' progress as it came, though this client reads no messages meanwhile
+	client->peekLoadingRows();
 	ImGuiImpl_NewFrame();
 	// (as a frame without a level: no post-processing)
 	if (auto* postGfx = dynamic_cast<DiligentGfx*>(gfx))
@@ -1373,6 +1396,14 @@ void ClientInterface::loadingScreenshots()
 		return;
 	const nlohmann::json& list = bench["loadingScreenshots"];
 	const std::string base = bench.value("loadingScreenshot", std::string());
+	// (and <path>_wait.bmp a second into the wait for the other players)
+	static bool waitShot = false;
+	if (!base.empty() && !waitShot && !loadingDone && loadingWaitStarted && SDL_GetTicks() - loadingWaitStarted > 1000) {
+		waitShot = true;
+		const size_t dot = base.rfind('.');
+		const std::string path = dot == std::string::npos ? base + "_wait" : base.substr(0, dot) + "_wait" + base.substr(dot);
+		printf("Loading screenshot %s (waiting for the other players): %s\n", path.c_str(), gfx->SaveScreenshot(path.c_str()) ? "saved" : "failed");
+	}
 	if (base.empty() || loadingShotsTaken >= list.size())
 		return;
 	const LoadingView view = LoadingGet();
@@ -1399,6 +1430,17 @@ void ClientInterface::prepareLevelBeforeFrame()
 		|| prewarmedLevel == client->getLevel())
 		return;
 	ZoneScopedN("Level preparation");
+	// Test runs: "benchmark": { ..., "loadingDelayMs": n } a slower computer (the other players
+	// wait for this one)
+	if (BenchmarkEnabled())
+		if (const int delay = g_settings["benchmark"].value("loadingDelayMs", 0); delay > 0) {
+			LoadingDetail("test delay");
+			const uint64_t until = SDL_GetTicks() + (uint64_t)delay;
+			while (SDL_GetTicks() < until) {
+				SDL_Delay(10);
+				LoadingTick();
+			}
+		}
 	LoadingEnterStep(LOADING_MODEL_SHADERS);
 	if (!scene)
 		scene = new Scene(gfx, &client->gameSet->modelCache);

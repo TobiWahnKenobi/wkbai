@@ -214,6 +214,7 @@ private:
 	int loadingScreenIndex = 0, loadingTip = 0, framesWithLevel = 0;
 	int loadingStage = 0;
 	int loadingPercentSent = -1; // (to the server, for the other players' loading screens)
+	uint64_t loadingWaitStarted = 0; // (SDL ticks: loaded, waiting for the other players)
 	bool loadingDone = false;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the

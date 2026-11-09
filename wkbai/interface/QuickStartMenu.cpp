@@ -488,14 +488,29 @@ void QuickStartMenu::launchGame()
 		if (fe)
 			fe->open("mpguest");
 		bool inLobby = true, leave = false;
-		// (its load starts when the game set comes: Client, LoadingBegin)
-		LoadingSetPump([&cliui]() { cliui.loadingFrame(); });
+		// (its load starts when the game set comes: Client, LoadingBegin); the loading frames also
+		// keep the connection served (this guest's progress out, the others' in), its events
+		// kept for the loop below
+		std::vector<GuestConnection::Event> heldEvents;
+		LoadingSetPump([&cliui, &connection, &heldEvents]() {
+			for (GuestConnection::Event e; connection && (e = connection->poll()) != GuestConnection::NONE;)
+				heldEvents.push_back(e);
+			cliui.loadingFrame();
+		});
+		auto nextEvent = [&]() {
+			if (!heldEvents.empty()) {
+				const GuestConnection::Event e = heldEvents.front();
+				heldEvents.erase(heldEvents.begin());
+				return e;
+			}
+			return connection->poll();
+		};
 
 		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
 
 			Matchmaking::get().tick();
-			for (GuestConnection::Event e; connection && (e = connection->poll()) != GuestConnection::NONE;) {
+			for (GuestConnection::Event e; connection && (e = nextEvent()) != GuestConnection::NONE;) {
 				if (e == GuestConnection::CONNECTED) {
 					printf("Connected (%s)\n", connection->describe().c_str());
 					client->serverLink = connection->link();
@@ -716,6 +731,9 @@ void QuickStartMenu::launchGame()
 			}
 			// the timeline's map regions as this computer has them, for every client
 			server->prepareHostData();
+			// with guests (not a replay): it starts when all the players have loaded it
+			if (modeChosen == MODE_MULTIPLAYER_HOST && replay.empty() && server->clientLinks.size() > 1)
+				server->waitForLoads();
 			// a save game doesn't start its level (startLevel), which puts the cameras: put each
 			// human's at its player's start
 			if (savfile.size() > 4 && StrCICompare(std::string_view(savfile).substr(savfile.size() - 4), ".sav") == 0)
@@ -778,8 +796,16 @@ void QuickStartMenu::launchGame()
 		bool onServerUi = false;
 		gameRunning = modeChosen == MODE_MULTIPLAYER_HOST;
 		listingTime = 0;
-		// the work that blocks this thread while the game loads draws loading frames
-		LoadingSetPump([&cliui]() { cliui.loadingFrame(); });
+		// the work that blocks this thread while the game loads draws loading frames, and serves
+		// the guests' connections (their progress in, the host's out; not while this thread
+		// holds the server's lock, as with the F1 server window)
+		LoadingSetPump([this, &cliui, &srvMutex]() {
+			if (srvMutex.try_lock()) {
+				netHandle();
+				srvMutex.unlock();
+			}
+			cliui.loadingFrame();
+		});
 
 		while (!g_windowQuit && !cliui.wantsToLeave()) {
 			// while the server's thread loads the game: the loading screen alone (the client has

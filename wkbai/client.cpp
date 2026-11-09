@@ -664,29 +664,7 @@ void Client::tick()
 				break;
 			}
 			case NETCLIMSG_LOADING_STAGES: {
-				const uint8_t count = br.readUint8();
-				loadingRows.clear();
-				for (uint8_t k = 0; k < count; k++) {
-					LoadingRow row;
-					row.stage = br.readUint8();
-					row.colour = br.readUint8();
-					row.own = br.readUint8() != 0;
-					row.name = br.readStringZ();
-					loadingRows.push_back(std::move(row));
-				}
-				{
-					// (each row's percentage: printed when one crosses a quarter, or the rows change)
-					std::string rows, quarters;
-					for (const LoadingRow& r : loadingRows) {
-						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " percent " + std::to_string(r.stage) + "]";
-						quarters += r.name + std::to_string(r.colour) + ":" + std::to_string(r.stage / 25) + ";";
-					}
-					static std::string printedQuarters;
-					if (quarters != printedQuarters) {
-						printedQuarters = quarters;
-						printf("LOADING rows:%s\n", rows.c_str());
-					}
-				}
+				readLoadingRows(br);
 				break;
 			}
 			case NETCLIMSG_ENVIRONMENT: {
@@ -899,6 +877,47 @@ void Client::sendCommand(ClientGameObject * obj, const Command * cmd, int assign
 	packet.writeVector3(destination);
 	packet.writeVector3(faceTo);
 	serverLink->send(packet);
+}
+
+// NETCLIMSG_LOADING_STAGES after its type: the count (its top bit: the host waits for the players'
+// loads), then each client's percentage, colour, whether it is this one, name
+void Client::readLoadingRows(BinaryReader& br)
+{
+	const uint8_t countByte = br.readUint8();
+	const uint8_t count = countByte & 0x7f;
+	loadingWaitForOthers = (countByte & 0x80) != 0;
+	loadingRows.clear();
+	for (uint8_t k = 0; k < count; k++) {
+		LoadingRow row;
+		row.stage = br.readUint8();
+		row.colour = br.readUint8();
+		row.own = br.readUint8() != 0;
+		row.name = br.readStringZ();
+		loadingRows.push_back(std::move(row));
+	}
+	// (each row's percentage: printed when one crosses a quarter, or the rows change)
+	std::string rows, quarters;
+	for (const LoadingRow& r : loadingRows) {
+		rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " percent " + std::to_string(r.stage) + "]";
+		quarters += r.name + std::to_string(r.colour) + ":" + std::to_string(r.stage / 25) + ";";
+	}
+	static std::string printedQuarters;
+	if (quarters != printedQuarters) {
+		printedQuarters = quarters;
+		printf("LOADING rows:%s\n", rows.c_str());
+	}
+}
+
+// The newest rows waiting in the queue, read now (the loading frames, while this client is busy
+// loading and doesn't read its messages); the queue keeps them, read again in order later
+void Client::peekLoadingRows()
+{
+	std::string data;
+	if (!serverLink || !serverLink->peekLast(NETCLIMSG_LOADING_STAGES, data))
+		return;
+	BinaryReader br(data.c_str());
+	br.readUint8(); // (the type)
+	readLoadingRows(br);
 }
 
 void Client::sendLoadingStage(int stage)

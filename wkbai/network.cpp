@@ -25,3 +25,14 @@ void NetLocalLink::send(const NetPacket & packet) {
 	outMessages->mutex.unlock();
 }
 
+bool NetLocalLink::peekLast(uint8_t type, std::string& data) {
+	struct Access : std::queue<NetPacket> { static const std::deque<NetPacket>& of(const std::queue<NetPacket>& q) { return q.*&Access::c; } };
+	std::lock_guard<std::mutex> lock(inMessages->mutex);
+	const auto& all = Access::of(inMessages->queue);
+	for (auto it = all.rbegin(); it != all.rend(); ++it)
+		if (!it->data.empty() && (uint8_t)it->data[0] == type) {
+			data = it->data;
+			return true;
+		}
+	return false;
+}
