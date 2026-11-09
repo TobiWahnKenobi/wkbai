@@ -4107,6 +4107,26 @@ void ClientInterface::iter()
 		static const bool prewarm = g_settings.value<bool>("prewarmModels", true);
 		if (prewarm && (prewarmedLevel != client->getLevel() || --prewarmCountdown <= 0))
 			prewarmLevel();
+		// the depth pre-pass (the ray-traced shadows or the ambient occlusion on): the models',
+		// the ground's and the water's surfaces' depth into the lighting depth, the masks from it;
+		// then the scene is drawn and shaded with them
+		if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx); dgfx && dgfx->LightingPrepassWanted()) {
+			auto* esr = dynamic_cast<DiligentEnhancedSceneRenderer*>(sceneRenderer);
+			auto* etr = showTerrain ? dynamic_cast<DiligentEnhancedTerrainRenderer*>(terrainRenderer) : nullptr;
+			if (esr) {
+				PROFILE_SCOPE("Depth pre-pass");
+				if (Diligent::ITextureView* dsv = dgfx->BeginLightingPrepass()) {
+					esr->renderDepth(dsv);
+					if (etr) {
+						if (bool* bump = etr->bumpMapping())
+							*bump = g_renderSettings.bumpMapping;
+						etr->renderDepth(dsv);
+						etr->renderWaterDepth();
+					}
+					dgfx->FinishLightingPrepass(client->camera);
+				}
+			}
+		}
 		{
 			ZoneScopedN("Scene rendering");
 			PROFILE_SCOPE("Scene");

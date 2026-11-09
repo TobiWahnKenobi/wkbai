@@ -69,7 +69,28 @@ cbuffer FogBuffer
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
+	float4 LightMasks; // the depth pre-pass's: ray-traced shadows on, ambient occlusion strength, a pixel's size
 };
+
+// The depth pre-pass's masks at a pixel (DiligentGfx::FinishLightingPrepass): the ray-traced
+// shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
+// size, four bilinear taps as the composite took them; 1 open)
+Texture2D<float> lightRtMask;
+Texture2D<float> lightAoMask;
+SamplerState lightMaskSampler;
+float RtSunMask(float4 pos)
+{
+	return LightMasks.x != 0 ? lightRtMask.Load(int3(pos.xy, 0)) : 1;
+}
+float AoMask(float4 pos)
+{
+	if (LightMasks.y <= 0)
+		return 1;
+	float2 uv = pos.xy * LightMasks.zw, h = LightMasks.zw * 2;
+	float ao = (lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, -h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, -h.y), 0)
+		+ lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, h.y), 0)) * 0.25;
+	return lerp(1, ao, LightMasks.y);
+}
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
 // fog follows the signed distance to the playable area's border (negative inside; the larger of x
@@ -848,13 +869,16 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float glint = pow(saturate(dot(r, SunDirection)), 64) * 0.7 + pow(saturate(dot(r, SunDirection)), 3) * 0.06;
 	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0)
 		glint += pow(saturate(dot(r, SunDirection)), 600) * 1.5;
+	// the ray-traced shadows on the sun's glint and its light on the water (a third left)
+	const float rtSun = RtSunMask(input.Pos);
+	glint *= rtSun;
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
 	float3 sky = FogColor.rgb;
 	float foam = 0;
 	if (WaterSkyUp.w != 0) {
 		sky = SkyAlong(r);
 		tex *= lerp(1.0, float3(0.55, 0.7, 0.8), saturate(input.Depth / 6));
-		float cloud = CloudLight(input.World);
+		float cloud = CloudLight(input.World) * lerp(0.35, 1, rtSun);
 		tex *= cloud;
 		sky *= lerp(1, cloud, 0.5);
 		// foam: a band where the water is shallower than 0.8 units, its edge moved by the ripples
@@ -981,7 +1005,8 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 l = normalize(SunDirection);
 	float3 r = reflect(-v, n);
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
-	float cloud = CloudLight(input.World);
+	// the sun's light: the clouds' shadow and the ray-traced one (a third left)
+	float cloud = CloudLight(input.World) * lerp(0.35, 1, RtSunMask(input.Pos));
 	// the water's own colour: turquoise in the shallows to a deep blue, a little of the map's
 	// water texture, lit by the sun through the surface
 	float2 uv = base * WaterParams.y;
@@ -1088,7 +1113,27 @@ struct GRASS_OUTPUT
 	float3 Normal : NORMAL;
 	float Up : TEXCOORD0; // 0 at the root, 1 at the tip
 	float Fog : FOG;
+	float Above : TEXCOORD1; // the height above the ground
 };
+
+// The ray-traced shadow on a blade: the depth pre-pass's mask (which has the ground, not the
+// blades) where the sun's ray through this point meets the ground: lit there, the ray to the
+// sun passes the blade, which is lit too. Each blade gets its own edge, as when the blades were
+// in the mask's depth (the ground's mask under the blade cut them in a straight line).
+float GrassRtSun(GRASS_OUTPUT input)
+{
+	if (LightMasks.x == 0)
+		return 1;
+	float3 l = normalize(SunDirection);
+	float3 g = input.World - l * (input.Above / max(l.y, 0.2));
+	float4 c = mul(float4(g, 1), Transform);
+	if (c.w <= 0)
+		return RtSunMask(input.Pos);
+	float2 uv = float2(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5);
+	if (any(uv < 0) || any(uv > 1))
+		return RtSunMask(input.Pos);
+	return lightRtMask.Load(int3(uv / LightMasks.zw, 0));
+}
 
 GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 YawHeight : ATTRIB2, uint VertexId : SV_VertexID)
 {
@@ -1120,6 +1165,7 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	output.Normal = float3(dir.x, 0, dir.y) + float3(0, 0.5 + 0.9 * s.y, 0) + float3(side.x, 0, side.y) * (s.x * 0.35);
 	output.Up = s.y;
 	output.Fog = FogAmount(p, dist);
+	output.Above = s.y * height;
 	return output;
 }
 
@@ -1132,6 +1178,8 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	if (dot(n, v) < 0)
 		n = -n; // both sides of the blade
 	float3 l = normalize(SunDirection);
+	// (the depth pre-pass's: the ground's along the sun's ray, GrassRtSun)
+	float rtSun = GrassRtSun(input);
 	float shadow = CloudLight(input.World) * StaticShadowLight(input.World) * BlobLight(input.World);
 	if (SnowShare(input.World, float3(0, 1, 0)) > 0.4)
 		discard;
@@ -1151,13 +1199,17 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	float specular = d * vis * f * nl / 4;
 	// the sky above as ambient (the sky box's colours with the water's detail on, else the fog)
 	float3 sky = WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb, WaterSkyUp.rgb, saturate(n.y)) : FogColor.rgb;
-	float occlusion = lerp(0.35, 1.0, input.Up) * SkyVisibility(input.World, false);
+	float occlusion = lerp(0.35, 1.0, input.Up) * SkyVisibility(input.World, false) * AoMask(input.Pos);
 	float3 c = albedo * ((wrapped * 0.75 + transmitted) * shadow + sky * 0.3 * occlusion) + specular * shadow
 		+ albedo * FireLight(input.World, n);
 	// never much darker than the ground under it: seen edge-on from low down, a blade's side away
 	// from the sun still gets the light bounced up from the sunlit meadow around it
 	float ground = max(SunDirection.y, 1.0 / 3.0) * shadow;
 	c = max(c, albedo * ground * lerp(0.7, 0.9, input.Up));
+	// the ray-traced shadow: the blades' own light dimmed as the ground's there (its static
+	// shadows' light left), so they keep their light and dark (on the sun's terms alone the
+	// blades in a shadow took the floor above: one flat patch, or nearly black)
+	c *= lerp(ShadowParams.y, 1, rtSun);
 	c = lerp(c, FogColor.rgb, input.Fog);
 	return float4(GradeColour(c), 1);
 }
@@ -1216,8 +1268,10 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		float3 bounce = GIRegion.w != 0 ? BounceLight(input.FragPos, n, vis)
 			: tex.rgb * 1.4 * saturate(SunDirection.y) * (1 - vis) * SkyOccLight.y;
 		float share = SkyOccLight.x;
-		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob
-			+ share * sky * lerp(1, blob, 0.5) + bounce + FireLight(input.FragPos, n);
+		// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on
+		// the sky's and the bounce
+		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob * RtSunMask(input.Pos)
+			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n);
 		float4 lc = float4(l3, 1) * input.Color * tex;
 		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
 		float4 gc = lerp(lc, FogColor, input.Fog);
@@ -1253,7 +1307,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		lum += clamp(dot(vertexNormal, SunDirection), 0, 1);
 		lum = clamp(lum, 0, 1);
 	}
-	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos);
+	lum *= CloudLight(input.FragPos) * StaticShadowLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * AoMask(input.Pos);
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 lc = float4(light, 1) * input.Color * tex;
 	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
@@ -1304,6 +1358,11 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline;
+	// the depth pre-pass's (renderDepth, renderWaterDepth); depthOnly while it draws; prepared
+	// after it, until the shading's render(); blobsOn: whether it drew the blob shadows' map
+	RefCntAutoPtr<IPipelineState> depthPipeline, tessDepthPipeline, lakeDepthPipeline;
+	bool depthOnly = false, prepared = false, blobsOn = false;
+	ITextureView* depthTarget = nullptr; // renderDepth's
 	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::waterQuality 4 and 5 (High, Ultra)
 	RefCntAutoPtr<IPipelineState> mediumWaterPipeline; // 3 (Medium): High's pixels on the flat surface
 	RefCntAutoPtr<ITexture> sceneCopy; // the frame before the water, for its refraction and reflections
@@ -1614,6 +1673,9 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		// the depth pre-pass's masks (DiligentGfx::FinishLightingPrepass), the frame's
+		{ SHADER_TYPE_PIXEL, "lightRtMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1636,7 +1698,8 @@ void DiligentEnhancedTerrainRenderer::init()
 	occSampler.AddressU = occSampler.AddressV = occSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler },
 		{ SHADER_TYPE_PIXEL, "cloudSampler", cloudSampler }, { SHADER_TYPE_PIXEL, "shadowSampler", shadowSampler },
-		{ SHADER_TYPE_PIXEL, "cloudNoiseSampler", noiseSampler }, { SHADER_TYPE_PIXEL, "skyOccSampler", occSampler } };
+		{ SHADER_TYPE_PIXEL, "cloudNoiseSampler", noiseSampler }, { SHADER_TYPE_PIXEL, "skyOccSampler", occSampler },
+		{ SHADER_TYPE_PIXEL, "lightMaskSampler", occSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced terrain resources";
 	sigDesc.Resources = resources;
@@ -1814,6 +1877,17 @@ void DiligentEnhancedTerrainRenderer::init()
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
 	{
+		// the depth pre-pass's (renderDepth): the untessellated ground into the lighting depth
+		GraphicsPipelineStateCreateInfo dci = ci;
+		dci.PSODesc.Name = "Enhanced terrain depth pre-pass";
+		dci.pPS = nullptr;
+		dci.GraphicsPipeline.NumRenderTargets = 0;
+		dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
+		device->CreateGraphicsPipelineState(dci, &_impl->depthPipeline);
+		if (!_impl->depthPipeline)
+			ferr("Diligent: could not create the enhanced terrain depth pre-pass pipeline.");
+	}
+	{
 		// the dynamic GI's albedo bake (bakeAlbedo): from above into RGBA8, no depth, both faces
 		GraphicsPipelineStateCreateInfo aci = ci;
 		aci.PSODesc.Name = "Enhanced terrain albedo";
@@ -1846,6 +1920,16 @@ void DiligentEnhancedTerrainRenderer::init()
 			printf("Diligent: no tessellated terrain (pipeline failed)\n");
 			_impl->tessellation = false;
 		}
+		else {
+			// the depth pre-pass's, tessellated (into the lighting depth alone)
+			GraphicsPipelineStateCreateInfo dci = ci;
+			dci.PSODesc.Name = "Enhanced terrain depth pre-pass, tessellated";
+			dci.pPS = nullptr;
+			dci.GraphicsPipeline.NumRenderTargets = 0;
+			dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
+			device->CreateGraphicsPipelineState(dci, &_impl->tessDepthPipeline);
+		}
+
 		ci.pHS = nullptr;
 		ci.pDS = nullptr;
 		ci.pVS = vs;
@@ -1876,6 +1960,19 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->lakePipeline);
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
+	{
+		// the water's surfaces into the depth pre-pass's lighting depth (renderWaterDepth): flat,
+		// depth only
+		GraphicsPipelineStateCreateInfo dci = ci;
+		dci.PSODesc.Name = "Enhanced terrain water depth";
+		dci.pPS = nullptr;
+		dci.GraphicsPipeline.NumRenderTargets = 0;
+		dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
+		dci.GraphicsPipeline.BlendDesc.RenderTargets[0].BlendEnable = False;
+		device->CreateGraphicsPipelineState(dci, &_impl->lakeDepthPipeline);
+		if (!_impl->lakeDepthPipeline)
+			ferr("Diligent: could not create the enhanced terrain water depth pipeline.");
+	}
 	if (_impl->tessellation) {
 		RefCntAutoPtr<IShader> lakeTessVs = createShader(SHADER_TYPE_VERTEX, "VS_LakeTess");
 		RefCntAutoPtr<IShader> lakeHs = createShader(SHADER_TYPE_HULL, "HS_Lake");
@@ -2291,10 +2388,44 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 	return true;
 }
 
+void DiligentEnhancedTerrainRenderer::renderDepth(ITextureView* dsv)
+{
+	_impl->depthTarget = dsv;
+	_impl->depthOnly = true;
+	render();
+	_impl->depthOnly = false;
+}
+
+void DiligentEnhancedTerrainRenderer::renderWaterDepth()
+{
+	if (!_impl->lakeVertexBuffer || _impl->frameLakeIndices.empty())
+		return;
+	DiligentGfx* dgfx = (DiligentGfx*)gfx;
+	IDeviceContext* ctx = dgfx->ctx;
+	PROFILE_SCOPE("Water depth");
+	ctx->SetPipelineState(_impl->lakeDepthPipeline);
+	IBuffer* lvb = _impl->lakeVertexBuffer;
+	const Uint64 vbOffset = 0;
+	ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+	ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	constexpr size_t maxIndicesPerDraw = 6 * 8192;
+	const std::vector<uint32_t>& indices = _impl->frameLakeIndices;
+	for (size_t first = 0; first < indices.size(); first += maxIndicesPerDraw) {
+		const size_t count = std::min(indices.size() - first, maxIndicesPerDraw);
+		uint64_t ibOffset = 0;
+		IBuffer* ib = dgfx->StreamIndexData(indices.data() + first, count * sizeof(uint32_t), ibOffset);
+		ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)count, VT_UINT32, DRAW_FLAG_VERIFY_ALL });
+	}
+}
+
 void DiligentEnhancedTerrainRenderer::render()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
 	IDeviceContext* ctx = dgfx->ctx;
+	// after the depth pre-pass (renderDepth): the frame prepared, the ground only shaded
+	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared && !depthOnly;
+	_impl->prepared = false;
 
 	gfx->BeginMapDrawing();
 
@@ -2388,7 +2519,9 @@ void DiligentEnhancedTerrainRenderer::render()
 		}
 	}
 	water[11] = _impl->refraction ? 1.0f : 0.0f;
-	const bool blobsOn = !shadows.blobs.empty();
+	// (after the depth pre-pass the blobs are in their map already)
+	const bool blobsOn = prepared ? _impl->blobsOn : !shadows.blobs.empty();
+	_impl->blobsOn = blobsOn;
 	float* blobParams = (float*)(sbdata + 176);
 	blobParams[0] = blobsOn ? 1.0f : 0.0f;
 	blobParams[1] = 1.0f / (terrain->width * tilesize);
@@ -2421,6 +2554,11 @@ void DiligentEnhancedTerrainRenderer::render()
 	float* tessParams = (float*)(sbdata + 800);
 	tessParams[0] = tessOn ? 1.0f : 0.0f;
 	tessParams[1] = (float)(2 << g_renderSettings.terrainTessellation); // 4, 8, 16
+	// the depth pre-pass's: coarser (its masks need less; "prepassTessDivide" in the settings
+	// file for comparisons)
+	static const float prepassDivide = std::max(1.0f, g_settings.value<float>("prepassTessDivide", 4.0f));
+	if (depthOnly)
+		tessParams[1] = std::max(2.0f, tessParams[1] / prepassDivide);
 	// the distance of full detail (to a quarter of it; none from 1.25 times it): longer with the level
 	static const float tessReach[4] = { 160.0f, 160.0f, 360.0f, 640.0f };
 	tessParams[2] = tessReach[std::clamp(g_renderSettings.terrainTessellation, 0, 3)];
@@ -2497,7 +2635,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	ctx->UnmapBuffer(_impl->sunBuffer, MAP_WRITE);
 
 	// Blob shadows into the blob shadow map, one instanced quad each
-	if (blobsOn) {
+	if (blobsOn && !prepared) {
 		ctx->MapBuffer(_impl->blobBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
 		float* scale = (float*)mapped;
 		scale[0] = blobParams[1];
@@ -2585,8 +2723,31 @@ void DiligentEnhancedTerrainRenderer::render()
 		}
 	};
 
+	// the depth pre-pass's masks of this frame, or white (unread: FogBuffer.LightMasks is 0)
+	auto withMasks = [&](IShaderResourceBinding* srb) {
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "lightRtMask")->Set(shadows.lightRtMask ? shadows.lightRtMask : dgfx->GetTextureView(nullptr));
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "lightAoMask")->Set(shadows.lightAo ? shadows.lightAo : dgfx->GetTextureView(nullptr));
+		return srb;
+	};
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
+	if (depthOnly) {
+		// the depth pre-pass: the ground's depth alone, into the lighting depth (which stays
+		// bound for renderWaterDepth)
+		PROFILE_SCOPE("Ground depth");
+		ctx->SetRenderTargets(0, nullptr, _impl->depthTarget, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->SetPipelineState(g_terrainTessellationActive && _impl->tessDepthPipeline ? _impl->tessDepthPipeline : _impl->depthPipeline);
+		for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
+			if (_impl->frameIndices[t].empty())
+				continue;
+			ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, t)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			drawIndices(_impl->frameIndices[t]);
+		}
+		_impl->prepared = true;
+		return;
+	}
 	{
 		PROFILE_SCOPE("Ground");
 		ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
@@ -2594,10 +2755,11 @@ void DiligentEnhancedTerrainRenderer::render()
 		for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
 			if (_impl->frameIndices[t].empty())
 				continue;
-			ctx->CommitShaderResources(_impl->binding(dgfx, t), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, t)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			drawIndices(_impl->frameIndices[t]);
 		}
 	}
+	withMasks(_impl->lakeBinding);
 
 	// ----- Grass -----
 	if (g_renderSettings.grass && _impl->grassBuffer && !grassChunks.empty()) {

@@ -497,6 +497,7 @@ struct DiligentRenderer : DiligentGfx
 	float fogFar = 250.0f;
 	Vector3 fogCamera;
 	float fogEdge[4] = { 1e9f, 1e9f, 1e9f, 2e9f }; // no edge fog until a map sets it
+	float lightMasks[4] = {}; // FogBuffer.LightMasks (FinishLightingPrepass)
 	bool fogEnabled = false;
 	bool isVulkan = false;
 	uint64_t frame = 0; // presented frames, for buffers whose dynamic memory expires
@@ -679,6 +680,46 @@ struct DiligentRenderer : DiligentGfx
 		postActive = true;
 	}
 
+	bool LightingPrepassWanted() override
+	{
+		// ("depthPrepass": false in the settings file, for comparisons: no ray-traced shadows
+		// then, the ambient occlusion over the whole picture as before)
+		static const bool allowed = g_settings.value<bool>("depthPrepass", true);
+		if (!allowed || !postActive || !postEffects || !post || shadows.portraitPass)
+			return false;
+		const bool rt = shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid();
+		return rt || g_renderSettings.ssao;
+	}
+
+	ITextureView* BeginLightingPrepass() override
+	{
+		return post ? post->beginLightingDepth(ctx) : nullptr;
+	}
+
+	void FinishLightingPrepass(const Camera& camera) override
+	{
+		shadows.lightRtMask = shadows.lightAo = nullptr;
+		if (shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid()) {
+			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
+			PROFILE_SCOPE("RT shadow mask");
+			shadows.lightRtMask = shadows.rayShadows->renderMask(ctx, post->lightingDepth(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer,
+				shadows.rtTerrain ? shadows.terrainHeights : nullptr, shadows.terrainGrid[2]);
+		}
+		if (g_renderSettings.ssao) {
+			PROFILE_SCOPE("Ambient occlusion");
+			shadows.lightAo = post->lightingAo(ctx, camera.projMatrix, g_renderSettings.ssaoRadius);
+		}
+		shadows.lightPrepass = true;
+		const TextureDesc& dd = post->lightingDepth()->GetDesc();
+		lightMasks[0] = shadows.lightRtMask ? 1.0f : 0.0f;
+		lightMasks[1] = shadows.lightAo ? std::clamp(g_renderSettings.ssaoStrength, 0.0f, 1.0f) : 0.0f;
+		lightMasks[2] = 1.0f / dd.Width;
+		lightMasks[3] = 1.0f / dd.Height;
+		writeFogBuffer();
+		setRenderTargets();
+		ctx->SetViewports(1, nullptr, 0, 0);
+	}
+
 	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) override
 	{
 		fog = { tiles, width, height, version, inverseView, unseenBrightness };
@@ -733,29 +774,14 @@ struct DiligentRenderer : DiligentGfx
 		s.cloudBuffer = shadows.cloudBuffer;
 		s.cloudNoise = shadows.cloudNoise ? shadows.cloudNoise->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
 		shadows.cloudShadowsDrawn = false;
-		// the ray-traced shadows' mask from the scene's depth
-		if (postEffects && shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid() && post->depthDSV()) {
-			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
-			PROFILE_SCOPE("RT shadow mask");
-			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer,
-				shadows.rtTerrain ? shadows.terrainHeights : nullptr, shadows.terrainGrid[2]);
-			// the light left in them: the sky's share of the light. Half under a clear noon sun (the
-			// sky's light as strong as the sun's); with the sun dimmed (the clouds' cover, its fade
-			// around sunrise and sunset, the moon) the sky's share grows and the shadows pale, as
-			// the scene's own (the play test: crisp, half-dark shadows in the rain, darker grass)
-			float direct = 1.0f;
-			if (g_environment.active) {
-				const SunState& sun = g_environment.sun;
-				const float lum = sun.colour[0] * 0.3f + sun.colour[1] * 0.59f + sun.colour[2] * 0.11f;
-				const float amb = sun.ambient[0] * 0.3f + sun.ambient[1] * 0.59f + sun.ambient[2] * 0.11f;
-				direct = lum / std::max(amb, 0.05f);
-			}
-			// (the clouds' shadows: where they fall, by the shafts pass's alpha in the composite;
-			// paled everywhere by the mean cover, the shadows vanished in the sunlit gaps under a
-			// high cover, the play test of 2026-11-08)
-			// (up to 1.5: a clear day's shadows keep 40% of the light, not half; they read too
-			// faint, the play test of 2026-11-08)
-			s.rtShadowLight = 1.0f / (1.0f + std::clamp(direct, 0.0f, 1.5f));
+		// the ray-traced shadows and the ambient occlusion: in the scene's shading, from the
+		// depth pre-pass (FinishLightingPrepass); the masks go out of use with the scene
+		s.aoInShading = shadows.lightPrepass && shadows.lightAo;
+		shadows.lightPrepass = false;
+		shadows.lightRtMask = shadows.lightAo = nullptr;
+		if (lightMasks[0] != 0.0f || lightMasks[1] != 0.0f) {
+			std::fill(lightMasks, lightMasks + 4, 0.0f);
+			writeFogBuffer();
 		}
 		post->apply(ctx, swapChain->GetCurrentBackBufferRTV(), projection, s);
 		setRenderTargets();
@@ -935,6 +961,10 @@ struct DiligentRenderer : DiligentGfx
 		cc[17] = fogEdge[1];
 		cc[18] = fogEdge[2];
 		cc[19] = fogEdge[3];
+		// the depth pre-pass's masks: the ray-traced shadows' on, the ambient occlusion's
+		// strength, a pixel's size (the frame's)
+		for (int i = 0; i < 4; i++)
+			cc[20 + i] = lightMasks[i];
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1064,7 +1094,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 80, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 96, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

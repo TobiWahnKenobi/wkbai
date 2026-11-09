@@ -6,6 +6,8 @@
 
 #include "SceneRenderer.h"
 
+namespace Diligent { struct ITextureView; }
+
 // Lit, instanced meshes on Diligent (Direct3D 12 / Vulkan); a port of the former
 // D3D11EnhancedSceneRenderer with the same look and batching.
 struct DiligentEnhancedSceneRenderer : SceneRenderer
@@ -14,6 +16,11 @@ struct DiligentEnhancedSceneRenderer : SceneRenderer
 	~DiligentEnhancedSceneRenderer();
 	void init();
 	void render() override;
+	// The depth pre-pass (DiligentGfx::LightingPrepassWanted): the frame's preparation (the shadow
+	// map, the sky light's map, the dynamic GI, the ray-tracing structures) and the models' depth
+	// alone, into the lighting depth (dsv); the next render() then draws them, without preparing
+	// again
+	void renderDepth(Diligent::ITextureView* dsv);
 	void prewarm(Model* model) override;
 	void prewarm(const std::vector<Model*>& models) override;
 private:

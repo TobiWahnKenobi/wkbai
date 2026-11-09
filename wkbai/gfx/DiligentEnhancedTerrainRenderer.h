@@ -7,6 +7,7 @@
 #include "TerrainRenderer.h"
 
 struct TextureCache;
+namespace Diligent { struct ITextureView; }
 
 // Bump-mapped terrain with per-pixel sun light, and lakes, on Diligent (Direct3D 12 / Vulkan);
 // a port of the former D3D11EnhancedTerrainRenderer.
@@ -15,6 +16,13 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	~DiligentEnhancedTerrainRenderer();
 	void init();
 	void render() override;
+	// The depth pre-pass (DiligentGfx::LightingPrepassWanted): the frame's preparation and the
+	// ground's depth alone into the lighting depth (dsv; tessellated more coarsely: the full
+	// tessellation a second time cost 1.75 ms, the flat ground lost the rocks' occlusion and
+	// shadowed itself where the relief rises above it), the next render() without preparing again;
+	// then the water's surfaces into it
+	void renderDepth(Diligent::ITextureView* dsv);
+	void renderWaterDepth();
 	bool updateHeights() override;
 	bool updateTiles() override;
 	bool updateWater() override;

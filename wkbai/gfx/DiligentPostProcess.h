@@ -51,9 +51,9 @@ struct DiligentPostProcess {
 		bool lightShafts = false;
 		Diligent::IBuffer* cloudBuffer = nullptr;
 		Diligent::ITextureView* cloudNoise = nullptr;
-		// the ray-traced shadows' mask (DiligentRayShadows; 1 sunlit) and the light left in them
-		Diligent::ITextureView* rtShadowMask = nullptr;
-		float rtShadowLight = 0.5f;
+		// the ambient occlusion already made by lightingAo (the depth pre-pass) and applied by the
+		// scene's shaders to their ambient light: not again in the composite
+		bool aoInShading = false;
 		// camera motion blur: the shutter, 0 (off) to 1 (the whole frame's motion)
 		float motionBlur = 0.0f;
 		// tilt-shift: 0 (off) to 1 (the strongest blur above and below the sharp band)
@@ -81,6 +81,13 @@ struct DiligentPostProcess {
 	Diligent::ITextureView* objectMotionRTV() const;
 	void copyOpaque(Diligent::IDeviceContext* ctx);
 	void copyAfterWater(Diligent::IDeviceContext* ctx);
+	// The depth pre-pass's lighting depth (the scene's size and format): cleared; the caller
+	// draws the opaque scene's depth and the water's surfaces into it (the returned target); the
+	// ray-traced shadows' mask and the ambient occlusion are made from it before the scene is
+	// shaded. lightingAo: the ambient occlusion from it (half size, R8; 1 open).
+	Diligent::ITextureView* beginLightingDepth(Diligent::IDeviceContext* ctx);
+	Diligent::ITexture* lightingDepth() const;
+	Diligent::ITextureView* lightingAo(Diligent::IDeviceContext* ctx, const Matrix& projection, float radius);
 	// projection: the camera's (row vectors, D3D style: z_clip = z P33 + P43, w = z)
 	void apply(Diligent::IDeviceContext* ctx, Diligent::ITextureView* backBufferRTV, const Matrix& projection, const Settings& settings);
 

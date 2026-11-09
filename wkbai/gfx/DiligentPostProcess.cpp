@@ -56,7 +56,7 @@ cbuffer PostBuffer
 {
 	float4 Proj;  // P11, P22, P33, P43
 	float4 Texel; // 1 / full width, 1 / full height, 1 / half width, 1 / half height
-	float4 Ao;    // radius, strength, the ray-traced shadows on, the light left in them
+	float4 Ao;    // radius, strength (0: none, or already in the scene's shading)
 	float4 Bloom; // threshold, intensity, blur direction (texels)
 	float4 FogX;  // fog of war: world x of a view-space point (the inverse view's first column)
 	float4 FogZ;  // and its world z
@@ -85,7 +85,6 @@ Texture2D tCopy;     // FSR 3's result, for the back buffer
 Texture2D tOpaque;   // FSR 3: the scene before its water
 Texture2D tWater;    // and before its other transparent parts
 Texture2D tShafts;   // the light shafts (half size)
-Texture2D tRtShadow; // the ray-traced shadows' mask (1 sunlit)
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -413,13 +412,10 @@ float4 PS_Rcas(VS_OUTPUT input) : SV_Target
 	return float4(saturate(c), 1);
 }
 
-// the scene with its ray-traced shadows at a point
+// the scene at a point (its ray-traced shadows are in its shading: the depth pre-pass)
 float3 SceneLit(float2 uv)
 {
-	float3 c = tColor.SampleLevel(sLinear, uv, 0).rgb;
-	if (Ao.z != 0)
-		c *= lerp(Ao.w, 1, lerp(1, tRtShadow.SampleLevel(sLinear, uv, 0).r, tShafts.SampleLevel(sLinear, uv, 0).a));
-	return c;
+	return tColor.SampleLevel(sLinear, uv, 0).rgb;
 }
 
 // the fog of war's darkening at a point: what none of the player's units sees is darker (1 on
@@ -447,8 +443,6 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
 	float fogged = -1; // the fog of war's darkening, when a blur has already averaged it
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
-	if (Ao.z != 0)
-		c *= lerp(Ao.w, 1, lerp(1, tRtShadow.SampleLevel(sPoint, input.Uv, 0).r, tShafts.SampleLevel(sLinear, input.Uv, 0).a));
 	// camera motion blur (RenderSettings::motionBlur): the scene averaged along the way the
 	// point moved on the screen since the last frame (from the depth and the last frame's
 	// camera), over the shutter's share of it; none where it hardly moved, nor at a cut (a jump
@@ -673,8 +667,10 @@ struct DiligentPostProcess::Impl {
 	RefCntAutoPtr<IShader> vs;
 	Pass aoPass, brightPass, blurPass[2], compositePass, fxaaPass, shaftsPass;
 	RefCntAutoPtr<ITexture> shafts;
-	RefCntAutoPtr<ITexture> rtShadow; // 1 x 1, while there is no mask
-	ITexture* rtShadowBound = nullptr;
+	// the depth pre-pass's lighting depth (the opaque scene and the water's surfaces) and the
+	// ambient occlusion from it
+	RefCntAutoPtr<ITexture> lightDepth;
+	Pass aoLightPass;
 	IBuffer* shaftsBuffer = nullptr; // what shaftsPass's binding has
 	ITextureView* shaftsNoise = nullptr;
 	// TAA into history[i]; EASU from aaOut, history[0], history[1], resolved; RCAS from
@@ -806,9 +802,7 @@ struct DiligentPostProcess::Impl {
 	{
 		if (!fog)
 			makeFog(0, 0, nullptr);
-		if (!rtShadow)
-			rtShadow = target("No ray-traced shadows", 1, 1, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
-		bind(compositePass, { color, ao, bloomA, depth, fog, shafts, rtShadowBound ? rtShadowBound : rtShadow.RawPtr() });
+		bind(compositePass, { color, ao, bloomA, depth, fog, shafts });
 	}
 
 	void run(IDeviceContext* ctx, Pass& pass, ITexture* into)
@@ -842,10 +836,11 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	device->CreateBuffer(cb, nullptr, &_impl->buffer);
 	_impl->vs = _impl->shader(SHADER_TYPE_VERTEX, "VS");
 	_impl->makePass(_impl->aoPass, "PS_Ao", { "tDepth" }, TEX_FORMAT_R8_UNORM);
+	_impl->makePass(_impl->aoLightPass, "PS_Ao", { "tDepth" }, TEX_FORMAT_R8_UNORM);
 	_impl->makePass(_impl->brightPass, "PS_Bright", { "tColor" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
-	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog", "tShafts", "tRtShadow" }, colorFormat);
+	_impl->makePass(_impl->compositePass, "PS_Composite", { "tColor", "tAo", "tBloom", "tDepth", "tFog", "tShafts" }, colorFormat);
 	_impl->makePass(_impl->shaftsPass, "PS_Shafts", { "tDepth", "tColor", "cloudNoise" }, TEX_FORMAT_RGBA16_FLOAT);
 	_impl->makePass(_impl->fxaaPass, "PS_Fxaa", { "tResolved" }, colorFormat);
 	for (Pass& pass : _impl->taaPass)
@@ -883,6 +878,8 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height, uint32_t outpu
 	_impl->shaftsBuffer = nullptr;
 	_impl->resolved = _impl->target("Scene before FXAA", width, height, _impl->colorFormat, BIND_RENDER_TARGET);
 	_impl->bind(_impl->aoPass, { _impl->depth });
+	_impl->lightDepth = _impl->target("Lighting depth", width, height, _impl->depthFormat, BIND_DEPTH_STENCIL);
+	_impl->bind(_impl->aoLightPass, { _impl->lightDepth });
 	_impl->bind(_impl->brightPass, { _impl->color });
 	_impl->bind(_impl->blurPass[0], { _impl->bloomA });
 	_impl->bind(_impl->blurPass[1], { _impl->bloomB });
@@ -978,6 +975,41 @@ ITextureView* DiligentPostProcess::depthDSV() const
 	return _impl->depth ? _impl->depth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL) : nullptr;
 }
 
+ITextureView* DiligentPostProcess::beginLightingDepth(IDeviceContext* ctx)
+{
+	if (!_impl->lightDepth || !_impl->depth)
+		return nullptr;
+	ITextureView* dsv = _impl->lightDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
+	ctx->SetRenderTargets(0, nullptr, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->SetViewports(1, nullptr, 0, 0);
+	ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	return dsv;
+}
+
+ITexture* DiligentPostProcess::lightingDepth() const
+{
+	return _impl->lightDepth;
+}
+
+ITextureView* DiligentPostProcess::lightingAo(IDeviceContext* ctx, const Matrix& projection, float radius)
+{
+	if (!_impl->lightDepth)
+		return nullptr;
+	const uint32_t w = _impl->width, h = _impl->height, hw = (w + 1) / 2, hh = (h + 1) / 2;
+	void* mapped = nullptr;
+	ctx->MapBuffer(_impl->buffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+	memset(mapped, 0, 336);
+	const float data[12] = {
+		projection._11, projection._22, projection._33, projection._43,
+		1.0f / w, 1.0f / h, 1.0f / hw, 1.0f / hh,
+		radius, 1.0f, 0.0f, 0.0f,
+	};
+	memcpy(mapped, data, sizeof(data));
+	ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
+	_impl->run(ctx, _impl->aoLightPass, _impl->ao);
+	return _impl->ao->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+}
+
 void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV, const Matrix& projection, const Settings& settings)
 {
 	const uint32_t hw = (_impl->width + 1) / 2, hh = (_impl->height + 1) / 2;
@@ -997,18 +1029,6 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 			ctx->UpdateTexture(_impl->fog, 0, 0, box, sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		}
 		_impl->fogVersion = fog.version;
-	}
-	if (settings.rtShadowMask && settings.rtShadowMask->GetTexture() != _impl->rtShadowBound) {
-		_impl->rtShadowBound = settings.rtShadowMask->GetTexture();
-		_impl->bindComposite();
-	}
-	if (!_impl->rtShadow) {
-		const float one[4] = { 1, 1, 1, 1 };
-		_impl->rtShadow = _impl->target("No ray-traced shadows", 1, 1, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
-		ITextureView* v = _impl->rtShadow->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
-		ctx->SetRenderTargets(1, &v, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		ctx->ClearRenderTarget(v, one, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		_impl->bindComposite();
 	}
 	const Matrix& iv = fog.inverseView;
 	const uint32_t w = _impl->width, h = _impl->height, ow = _impl->outputWidth, oh = _impl->outputHeight;
@@ -1031,7 +1051,7 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		const float data[44] = {
 			projection._11, projection._22, projection._33, projection._43,
 			1.0f / w, 1.0f / h, 1.0f / hw, 1.0f / hh,
-			settings.ssaoRadius, settings.ssao ? settings.ssaoStrength : 0.0f, settings.rtShadowMask ? 1.0f : 0.0f, settings.rtShadowLight,
+			settings.ssaoRadius, settings.ssao && !settings.aoInShading ? settings.ssaoStrength : 0.0f, 0.0f, 0.0f,
 			settings.bloomThreshold, settings.bloom ? settings.bloomIntensity : 0.0f, blurX, blurY,
 			iv._11, iv._21, iv._31, iv._41,
 			iv._13, iv._23, iv._33, iv._43,
@@ -1054,7 +1074,10 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 	};
 	write(0, 0, w, h);
 	const float white[4] = { 1, 1, 1, 1 }, black[4] = { 0, 0, 0, 1 };
-	if (settings.ssao)
+	if (settings.aoInShading) {
+		// (made before the scene was shaded, from the lighting depth)
+	}
+	else if (settings.ssao)
 		_impl->run(ctx, _impl->aoPass, _impl->ao);
 	else {
 		ITextureView* rtv = _impl->ao->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);

@@ -78,7 +78,28 @@ cbuffer FogBuffer
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
+	float4 LightMasks; // the depth pre-pass's: ray-traced shadows on, ambient occlusion strength, a pixel's size
 };
+
+// The depth pre-pass's masks at a pixel (DiligentGfx::FinishLightingPrepass): the ray-traced
+// shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
+// size, four bilinear taps as the composite took them; 1 open)
+Texture2D<float> lightRtMask;
+Texture2D<float> lightAoMask;
+SamplerState lightMaskSampler;
+float RtSunMask(float4 pos)
+{
+	return LightMasks.x != 0 ? lightRtMask.Load(int3(pos.xy, 0)) : 1;
+}
+float AoMask(float4 pos)
+{
+	if (LightMasks.y <= 0)
+		return 1;
+	float2 uv = pos.xy * LightMasks.zw, h = LightMasks.zw * 2;
+	float ao = (lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, -h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, -h.y), 0)
+		+ lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, h.y), 0)) * 0.25;
+	return lerp(1, ao, LightMasks.y);
+}
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
 // fog follows the signed distance to the playable area's border (negative inside; the larger of x
@@ -411,10 +432,13 @@ void PrepareSurface(VS_OUTPUT input)
 
 float3 ModelLight(VS_OUTPUT input, float3 albedo)
 {
+	// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on the
+	// ambient (the vertex-lit paths, sun and ambient in one colour: the shadow keeps 55%)
+	const float rtSun = RtSunMask(input.Pos), occ = AoMask(input.Pos);
 	if (dot(input.Norm, input.Norm) == 0)
-		return input.Color.rgb * albedo;
+		return input.Color.rgb * albedo * lerp(0.55, 1, rtSun) * occ;
 	if (MeshLighting.z == 0)
-		return (input.Color.rgb + FireLight(input.WorldPos, normalize(input.Norm)) * input.Tint.rgb) * albedo;
+		return (input.Color.rgb * lerp(0.55, 1, rtSun) * occ + FireLight(input.WorldPos, normalize(input.Norm)) * input.Tint.rgb) * albedo;
 	float3 n = normalize(input.Norm);
 	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
 	// no tangents)
@@ -475,8 +499,8 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 			bounce = SunColour.rgb * (saturate(l.y) * SkyOccLight.y * 0.35 * saturate(0.5 - 0.5 * n.y)) * float3(0.9, 0.85, 0.7);
 		ambientTint *= 1.15 * vis;
 	}
-	sunShade *= PomShadow;
-	float3 diffuse = min(MeshLighting.x * orm.r * ambientTint + MeshLighting.y * SunColour.rgb * nl * sunShade + bounce * orm.r, 1);
+	sunShade *= PomShadow * rtSun;
+	float3 diffuse = min((MeshLighting.x * orm.r * ambientTint + bounce * orm.r) * occ + MeshLighting.y * SunColour.rgb * nl * sunShade, 1);
 	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
 	float a = roughness * roughness, a2 = a * a;
 	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
@@ -488,7 +512,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	// the sky's light reflected, by the Fresnel of the view and the surface's occlusion; rough
 	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
-	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness) * vis;
+	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness) * vis * occ;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
 	return ((diffuse * albedo * (1 - metal) + specular + sky) * allShade + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
@@ -567,6 +591,14 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
 	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
+}
+
+// The depth pre-pass's alpha-tested materials: the same test on the same surface as PS_Alpha's
+// (its relief's UV), so that the shading covers exactly the depth
+void PS_DepthAlpha(VS_OUTPUT input)
+{
+	PrepareSurface(input);
+	if (inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy).a < ALPHA_REF) discard;
 }
 
 // Static shadow casters with alpha-tested materials
@@ -1078,6 +1110,11 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
 	RefCntAutoPtr<IPipelineState> pipelines[2][2], shadowPipelines[2][2], motionPipelines[2][2];
+	// the depth pre-pass's (renderDepth): depthOnly while it draws; prepared after it, until the
+	// shading's render()
+	RefCntAutoPtr<IPipelineState> depthPipelines[2][2];
+	bool depthOnly = false, prepared = false;
+	ITextureView* depthTarget = nullptr; // renderDepth's
 	// the dynamic GI's models from above (DiligentGI): into ShadowEnvironment::giCapture
 	RefCntAutoPtr<IPipelineState> giPipelines[2][2];
 	// and the light they give off (added up, no depth), drawn only once a material has an
@@ -1216,13 +1253,17 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		// the depth pre-pass's masks (DiligentGfx::FinishLightingPrepass), the frame's
+		{ SHADER_TYPE_PIXEL, "lightRtMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
 	SamplerDesc occSampler;
 	occSampler.AddressU = occSampler.AddressV = occSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	const ImmutableSamplerDesc envSamplers[] = { { SHADER_TYPE_VERTEX, "cloudSampler", cloudSampler },
-		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoiseSampler", cloudSampler }, { SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccSampler", occSampler } };
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "cloudNoiseSampler", cloudSampler }, { SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccSampler", occSampler },
+		{ SHADER_TYPE_PIXEL, "lightMaskSampler", occSampler } };
 	PipelineResourceSignatureDesc envSigDesc;
 	envSigDesc.Name = "Enhanced scene environment";
 	envSigDesc.Resources = envResources;
@@ -1274,6 +1315,7 @@ void DiligentEnhancedSceneRenderer::init()
 	RefCntAutoPtr<IShader> vertexShaders[2] = { createShader(SHADER_TYPE_VERTEX, "VS"), createShader(SHADER_TYPE_VERTEX, "VS_Anim") };
 	RefCntAutoPtr<IShader> pixelShaders[2] = { createShader(SHADER_TYPE_PIXEL, "PS"), createShader(SHADER_TYPE_PIXEL, "PS_Alpha") };
 	RefCntAutoPtr<IShader> shadowAlphaShader = createShader(SHADER_TYPE_PIXEL, "PS_ShadowAlpha");
+	RefCntAutoPtr<IShader> depthAlphaShader = createShader(SHADER_TYPE_PIXEL, "PS_DepthAlpha");
 
 	// Buffer slots: static mesh = positions, normals, UVs, instances; animated mesh = UVs,
 	// instances (its positions and normals come from the animation buffers). An instance is its
@@ -1326,6 +1368,17 @@ void DiligentEnhancedSceneRenderer::init()
 				device->CreateGraphicsPipelineState(ci, &pso);
 				if (!pso)
 					ferr("Diligent: could not create the enhanced scene pipeline.");
+				if (!shadow) {
+					// the depth pre-pass's: into the lighting depth alone, the same vertex shader and
+					// alpha test (the same depth as the shading's)
+					ci.PSODesc.Name = "Enhanced scene depth pre-pass";
+					gp.NumRenderTargets = 0;
+					gp.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
+					ci.pPS = alpha ? depthAlphaShader.RawPtr() : nullptr;
+					device->CreateGraphicsPipelineState(ci, &_impl->depthPipelines[anim][alpha]);
+					if (!_impl->depthPipelines[anim][alpha])
+						ferr("Diligent: could not create the enhanced scene depth pre-pass pipeline.");
+				}
 			}
 		}
 	}
@@ -1510,11 +1563,21 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 			meshes.size(), anims.size(), ms(c0, c1), threads, bytes >> 20, ms(c1, c2));
 }
 
+void DiligentEnhancedSceneRenderer::renderDepth(ITextureView* dsv)
+{
+	_impl->depthTarget = dsv;
+	_impl->depthOnly = true;
+	render();
+	_impl->depthOnly = false;
+}
+
 void DiligentEnhancedSceneRenderer::render()
 {
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
 	IRenderDevice* device = dgfx->device;
 	IDeviceContext* ctx = dgfx->ctx;
+	// after the depth pre-pass (renderDepth): the frame prepared, the models only shaded
+	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared && !depthOnly;
 
 	// Keeps the IRenderer's state the same as after the D3D11 renderer (lakes and particles
 	// are drawn through IRenderer afterwards).
@@ -1538,7 +1601,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// without the seasons, in a game: its sky (the game settings' cloud weather and cover)
 	shadows.cloudGameWeather = g_environment.weather < 0 ? g_environment.skyWeather : -1;
 	shadows.cloudGameCover = g_environment.skyCover;
-	if (!shadows.portraitPass)
+	if (!shadows.portraitPass && !prepared)
 		UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
@@ -1603,6 +1666,11 @@ void DiligentEnhancedSceneRenderer::render()
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giEmitTexture")) v->Set(shadows.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		}
 	}
+	// the depth pre-pass's masks of this frame, or white (unread: FogBuffer.LightMasks is 0)
+	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "lightRtMask"))
+		v->Set(shadows.lightRtMask ? shadows.lightRtMask : dgfx->GetTextureView(nullptr));
+	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "lightAoMask"))
+		v->Set(shadows.lightAo ? shadows.lightAo : dgfx->GetTextureView(nullptr));
 
 	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
 	// beside it (<texture>_albedo, _normal, _orm, _emissive, .png, .tga, .dds or .ktx2) or
@@ -1674,7 +1742,8 @@ void DiligentEnhancedSceneRenderer::render()
 	// DRAW_SKY: the static shadow casters only (not the units), for the sky light's map;
 	// DRAW_GI: the dynamic GI's models from above (the static casters, with High the units too);
 	// DRAW_GI_EMIT: the same, the light they give off
-	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI, DRAW_GI_EMIT };
+	// DRAW_DEPTH: the depth pre-pass's, the same meshes as DRAW_SCENE
+	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI, DRAW_GI_EMIT, DRAW_DEPTH };
 	const uint64_t frameIndex = dgfx->FrameIndex();
 	auto drawMeshes = [&](DrawMode mode) {
 		const bool giPass = mode == DRAW_GI || mode == DRAW_GI_EMIT;
@@ -1725,7 +1794,8 @@ void DiligentEnhancedSceneRenderer::render()
 					? dgfx->StreamVertexData(motionInstances.data(), count * sizeof(MotionInstance), instanceOffset)
 					: dgfx->StreamVertexData(instances.data(), count * sizeof(Instance), instanceOffset);
 
-				ctx->SetPipelineState((mode == DRAW_GI_EMIT ? _impl->giEmitPipelines : giPass ? _impl->giPipelines : shadowPass ? _impl->shadowPipelines : motionPass ? _impl->motionPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
+				ctx->SetPipelineState((mode == DRAW_GI_EMIT ? _impl->giEmitPipelines : giPass ? _impl->giPipelines : shadowPass ? _impl->shadowPipelines
+					: motionPass ? _impl->motionPipelines : mode == DRAW_DEPTH ? _impl->depthPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -1838,8 +1908,9 @@ void DiligentEnhancedSceneRenderer::render()
 
 	// Static shadows: the casters seen from the sun, orthographic over a square around the
 	// point the camera looks at, snapped to whole texels so that the edges don't shimmer.
-	shadows.staticShadowValid = false;
-	if (shadows.staticShadows && shadows.staticShadowDSV) {
+	if (!prepared)
+		shadows.staticShadowValid = false;
+	if (!prepared && shadows.staticShadows && shadows.staticShadowDSV) {
 		const Vector3 sun = scene->sunDirection.normal();
 		const Vector3 target = camera->position + camera->direction.normal() * STATIC_SHADOW_RADIUS * 0.75f;
 		const Vector3 up = std::abs(sun.y) > 0.99f ? Vector3(0, 0, 1) : Vector3(0, 1, 0);
@@ -1867,7 +1938,7 @@ void DiligentEnhancedSceneRenderer::render()
 
 	// The sky light's map (RenderSettings::skyGI): the static casters from straight above over its
 	// square, then per texel the horizon over them and the terrain (DiligentClouds)
-	if (shadows.skyOccOn) {
+	if (!prepared && shadows.skyOccOn) {
 		PROFILE_SCOPE("Sky light map");
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float half = Env::SKY_OCC_RADIUS;
@@ -1905,7 +1976,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// The dynamic GI (RenderSettings::dynamicGI, DiligentGI): the models from straight above over
 	// the bounce map's square (as the sky light's casters: the same height and depth range), then
 	// the bounce map's light from them, the terrain and the sky light's map
-	if (shadows.skyOccOn && shadows.giMode > 0 && shadows.giRefresh && !shadows.portraitPass) {
+	if (!prepared && shadows.skyOccOn && shadows.giMode > 0 && shadows.giRefresh && !shadows.portraitPass) {
 		PROFILE_SCOPE("Dynamic GI");
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float half = Env::GI_EXTENT * 0.5f;
@@ -1938,18 +2009,13 @@ void DiligentEnhancedSceneRenderer::render()
 		RenderGIRadiance(dgfx);
 		GITimerEnd(dgfx);
 	}
-	else if (shadows.giMode > 0)
+	else if (!prepared && shadows.giMode > 0)
 		GITimerSkip();
-
-	{
-		PROFILE_SCOPE("Models");
-		drawMeshes(DRAW_SCENE);
-	}
 
 	// The ray-traced shadows' casters (and what the ray-traced reflections see): every entity
 	// casting a shadow, with its mesh's structure
 	// (an animated one's at its current key frame), then the frame's top-level structure
-	if (shadows.rayShadowsOn || shadows.rayReflectionsOn) {
+	if (!prepared && (shadows.rayShadowsOn || shadows.rayReflectionsOn)) {
 		PROFILE_SCOPE("RT structures");
 		if (!shadows.rayShadows)
 			shadows.rayShadows = new DiligentRayShadows(device);
@@ -2052,6 +2118,22 @@ void DiligentEnhancedSceneRenderer::render()
 			rts->setTerrain(ctx, shadows.rayShadowsOn ? shadows.rtTerrain : nullptr, shadows.rtTerrainVersion);
 			rts->build(ctx);
 		}
+	}
+
+	// the depth pre-pass: the models' depth alone, into the lighting depth; the shading comes in
+	// the next render()
+	if (depthOnly) {
+		PROFILE_SCOPE("Models' depth");
+		ctx->SetRenderTargets(0, nullptr, _impl->depthTarget, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetViewports(1, nullptr, 0, 0);
+		drawMeshes(DRAW_DEPTH);
+		_impl->prepared = true;
+		return;
+	}
+	_impl->prepared = false;
+	{
+		PROFILE_SCOPE("Models");
+		drawMeshes(DRAW_SCENE);
 	}
 
 	// FSR 3.1: the motion vectors of what moved, seen by the camera without its jitter now and

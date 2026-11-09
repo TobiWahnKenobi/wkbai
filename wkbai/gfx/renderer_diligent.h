@@ -25,7 +25,8 @@ struct DiligentGfx : IRenderer
 
 	// Dynamic constant buffers kept up to date by SetTransformMatrix and SetFog:
 	// cbuffer TransformBuffer { matrix Transform; } and
-	// cbuffer FogBuffer { float4 FogColor; float FogStartDist; float FogEndDist; float4 FogCamera; float4 Grade; float4 EdgeFog; }
+	// cbuffer FogBuffer { float4 FogColor; float FogStartDist; float FogEndDist; float4 FogCamera; float4 Grade; float4 EdgeFog;
+	//   float4 LightMasks; } (LightMasks: the depth pre-pass's masks in this frame's shading, FinishLightingPrepass)
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> transformBuffer, fogBuffer;
 
 	// Shader resource view of a texture from CreateTexture (a white texture for nullptr).
@@ -75,6 +76,17 @@ struct DiligentGfx : IRenderer
 	virtual Diligent::ITextureView* MotionVectorTarget() = 0;
 	virtual void MarkOpaqueSceneDone() = 0;
 	virtual void MarkWaterDone() = 0;
+	// The depth pre-pass (the enhanced renderers, with the ray-traced shadows or the ambient
+	// occlusion on): the opaque scene's depth first, into a lighting depth of its own, the
+	// ray-traced shadows' mask and the ambient occlusion from it, then the scene drawn and shaded
+	// with them (the mask on the sun's light, the occlusion on the ambient: not over the whole
+	// picture afterwards). LightingPrepassWanted: whether it runs in this frame;
+	// BeginLightingPrepass: the lighting depth's target, cleared (the models, the ground and the
+	// water's surfaces are drawn into it), or null; FinishLightingPrepass: the masks
+	// (shadows.lightRtMask and lightAo, FogBuffer.LightMasks) and the scene's targets bound again
+	virtual bool LightingPrepassWanted() = 0;
+	virtual Diligent::ITextureView* BeginLightingPrepass() = 0;
+	virtual void FinishLightingPrepass(const Camera& camera) = 0;
 	// The frames presented so far: which drawing is in the same frame, or the next
 	virtual uint64_t FrameIndex() = 0;
 
@@ -198,6 +210,12 @@ struct DiligentGfx : IRenderer
 		// light's map and the ray-traced passes belong to the world view and are left out (they
 		// set their own viewports and follow the camera)
 		bool portraitPass = false;
+		// the depth pre-pass's masks in this frame (FinishLightingPrepass; null: none, a white
+		// texture stands in): the ray-traced shadows' (1 sunlit, the frame's size) and the
+		// ambient occlusion (1 open, half size)
+		Diligent::ITextureView* lightRtMask = nullptr;
+		Diligent::ITextureView* lightAo = nullptr;
+		bool lightPrepass = false;
 	} shadows;
 };
 
