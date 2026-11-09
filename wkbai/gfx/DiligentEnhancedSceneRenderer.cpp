@@ -1097,6 +1097,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	};
 	std::map<std::pair<texture, std::array<float, 3>>, TextureBinding> textureBindings;
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
+	texture standIn = nullptr, standInClear = nullptr;
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
 	ITextureView* occHeights = nullptr; // the terrain heights bound to the sky light's pass
@@ -1573,6 +1574,9 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->defaultOrm = pixel(255, 166, 0);
 		_impl->noEmission = pixel(0, 0, 0, 0);
 		_impl->noHeight = pixel(255, 255, 255);   // 1x1: no relief, the shader skips the parallax
+		// the stand-ins for an albedo not on the GPU yet: grey, or invisible (alpha-tested)
+		_impl->standIn = pixel(128, 128, 128, 255);
+		_impl->standInClear = pixel(128, 128, 128, 0);
 	}
 	// a material's binding: its textures (the albedo, or its _albedo override, and the override
 	// maps) and its colour. Model textures are lazy (the GPU memory budget): each frame a binding
@@ -1621,15 +1625,18 @@ void DiligentEnhancedSceneRenderer::render()
 				e.maps[4] = overrideMap("_height");
 				_impl->anyEmissive |= e.maps[3] != nullptr;
 			}
-			_impl->signature->CreateShaderResourceBinding(&e.srb, true);
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "MaterialBuffer")->Set(e.colour);
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(e.maps[0]));
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(e.maps[1] ? e.maps[1] : _impl->deriveNormal));
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(e.maps[2] ? e.maps[2] : _impl->defaultOrm));
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(e.maps[3] ? e.maps[3] : _impl->noEmission));
-			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "heightMap")->Set(dgfx->GetTextureView(e.maps[4] ? e.maps[4] : _impl->noHeight));
+			// (a texture not on the GPU yet, TouchTexture ~0: a stand-in until it is, then the binding
+			// is made again; the draw never waits for an upload)
 			for (int i = 0; i < 5; i++)
 				e.gens[i] = e.maps[i] ? dgfx->TouchTexture(e.maps[i]) : 0;
+			auto mapOr = [&](int i, texture standIn) { return e.maps[i] && e.gens[i] != ~0u ? e.maps[i] : standIn; };
+			_impl->signature->CreateShaderResourceBinding(&e.srb, true);
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "MaterialBuffer")->Set(e.colour);
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(mapOr(0, mat.alphaTest ? _impl->standInClear : _impl->standIn)));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(mapOr(1, _impl->deriveNormal)));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(mapOr(2, _impl->defaultOrm)));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(mapOr(3, _impl->noEmission)));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "heightMap")->Set(dgfx->GetTextureView(mapOr(4, _impl->noHeight)));
 			e.checked = now;
 		}
 		return e.srb;

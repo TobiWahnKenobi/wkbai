@@ -38,6 +38,10 @@ bool g_rayTracingBuffers = false;
 
 #include "EngineFactoryD3D12.h"
 #include <deque>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include "EngineFactoryVk.h"
 
 #define VK_NO_PROTOTYPES
@@ -225,7 +229,110 @@ struct DiligentTexture
 	int mipmaps = 0;
 	uint64_t lastUsed = 0, bytes = 0;
 	uint32_t generation = 0;
+	// an uncompressed one's RGBA levels (made on a worker thread: TexturePrep; prep 0 queued,
+	// 1 being made, 2 ready), whether a draw has asked for it (TouchTexture)
+	std::vector<Bitmap> levels;
+	std::atomic<int> prep{ 2 };
+	bool requested = false;
 };
+// An uncompressed texture's levels as the D3D11 renderer makes them: RGBA, halved down to above
+// 8 x 8 (no mipmaps of 8x8 or below: tiles merged in the terrain atlas), one level if mipmaps is 1
+static std::vector<Bitmap> MakeMipChain(const Bitmap& bm, int mipmaps)
+{
+	std::vector<Bitmap> levels;
+	levels.push_back(bm.format == BMFORMAT_R8G8B8A8 ? bm : bm.convertToR8G8B8A8());
+	if (mipmaps <= 0) {
+		const Bitmap& top = levels[0];
+		int mmwidth = top.width / 2, mmheight = top.height / 2;
+		while (mmwidth && mmheight) {
+			levels.push_back(levels[0].resize(mmwidth, mmheight));
+			mmwidth /= 2;
+			mmheight /= 2;
+			if (mmwidth <= 8 || mmheight <= 8)
+				break;
+		}
+	}
+	return levels;
+}
+
+// The lazy textures' preparation (their RGBA levels from the file's picture) on worker threads,
+// so that the draw that needs one only uploads it
+struct TexturePrep {
+	std::mutex m;
+	std::condition_variable cv;
+	std::deque<DiligentTexture*> queue;
+	bool started = false;
+
+	static void prepare(DiligentTexture* t)
+	{
+		t->levels = MakeMipChain(t->cpu, t->mipmaps);
+		t->cpu = Bitmap(); // (the levels hold it)
+	}
+	void push(DiligentTexture* t)
+	{
+		std::lock_guard<std::mutex> lock(m);
+		if (!started) {
+			started = true;
+			const unsigned n = std::clamp(std::thread::hardware_concurrency(), 3u, 8u) - 2;
+			for (unsigned i = 0; i < n; i++)
+				std::thread([this]() { loop(); }).detach();
+		}
+		t->prep = 0;
+		queue.push_back(t);
+		cv.notify_one();
+	}
+	void loop()
+	{
+		for (;;) {
+			DiligentTexture* t;
+			{
+				std::unique_lock<std::mutex> lock(m);
+				cv.wait(lock, [&]() { return !queue.empty(); });
+				t = queue.front();
+				queue.pop_front();
+				t->prep = 1;
+			}
+			prepare(t);
+			t->prep = 2;
+		}
+	}
+	// prepared now on this thread (taken from the queue), or waited for (a worker has it)
+	void finishNow(DiligentTexture* t)
+	{
+		bool mine = false;
+		{
+			std::lock_guard<std::mutex> lock(m);
+			auto it = std::find(queue.begin(), queue.end(), t);
+			if (it != queue.end()) {
+				queue.erase(it);
+				t->prep = 1;
+				mine = true;
+			}
+		}
+		if (mine) {
+			prepare(t);
+			t->prep = 2;
+			return;
+		}
+		while (t->prep != 2)
+			std::this_thread::yield();
+	}
+	// before it is deleted: out of the queue, or its preparation finished
+	void forget(DiligentTexture* t)
+	{
+		{
+			std::lock_guard<std::mutex> lock(m);
+			auto it = std::find(queue.begin(), queue.end(), t);
+			if (it != queue.end()) {
+				queue.erase(it);
+				return;
+			}
+		}
+		while (t->prep == 1)
+			std::this_thread::yield();
+	}
+};
+static TexturePrep g_texturePrep;
 
 // Vertex/index buffers (ImGui creates and fills them every frame). They are dynamic buffers,
 // which are cheap to create, but whose GPU memory only lives for one frame, so the contents are
@@ -373,12 +480,16 @@ struct DiligentRenderer : DiligentGfx
 	// adapter's budget (DXGI, Direct3D 12 only)
 	std::vector<DiligentTexture*> lazyTextures;
 	std::deque<DiligentTexture*> uploadQueue;
+	std::vector<DiligentTexture*> requests; // asked for by a draw (TouchTexture), not uploaded yet
+	uint64_t frameUploadBytes = 0;
 	uint64_t residentLazyBytes = 0;
 	IDXGIAdapter3* dxgiAdapter = nullptr;
 	struct {
 		bool queried = false;
 		uint64_t budget = 0, usage = 0, evictedSinceQuery = 0;
 		uint64_t uploads = 0, evictions = 0, evictedBytes = 0;
+		uint64_t unreachableSaid = 0;
+		bool finalSaid = false;
 	} vram;
 	State state;
 	Matrix transform = Matrix::getIdentity();
@@ -1108,37 +1219,60 @@ struct DiligentRenderer : DiligentGfx
 	{
 		DiligentTexture* t = new DiligentTexture;
 		t->lazy = true;
-		t->cpu = bm.compressed() || bm.format == BMFORMAT_R8G8B8A8 ? bm : bm.convertToR8G8B8A8();
+		t->cpu = bm;
 		t->mipmaps = mipmaps;
 		lazyTextures.push_back(t);
 		uploadQueue.push_back(t);
+		// an uncompressed one's RGBA and mip chain made on a worker thread (a 4096 x 4096 PNG's
+		// took seconds on the draw that needed it: the HD models' play test)
+		if (!bm.compressed())
+			g_texturePrep.push(t);
+		else
+			t->prep = 2;
 		return (texture)t;
 	}
 
 	void UploadTextureNow(texture t) override
 	{
 		if (t)
-			ensureResident((DiligentTexture*)t);
+			ensureResident((DiligentTexture*)t, true);
 	}
 
+	// non-blocking: ~0u while it isn't on the GPU (still being prepared, or over this frame's
+	// upload allowance: then asked for first in the next frames)
 	uint32_t TouchTexture(texture t) override
 	{
 		if (!t)
 			return 0;
 		DiligentTexture* dt = (DiligentTexture*)t;
-		ensureResident(dt);
-		return dt->generation;
+		return ensureResident(dt, false) ? dt->generation : ~0u;
 	}
 
-	void ensureResident(DiligentTexture* t)
+	// the texture on the GPU: block (GetTextureView, the legacy draws, the level's own) prepares
+	// and uploads it now whatever it costs; else only when prepared and within the frame's
+	// allowance (64 MB), or it is asked for (requests) and false returned
+	bool ensureResident(DiligentTexture* t, bool block = true)
 	{
 		t->lastUsed = frame;
 		if (t->tex || !t->lazy)
-			return;
+			return true;
+		if (!block && (t->prep != 2 || frameUploadBytes > (64ull << 20))) {
+			if (!t->requested) {
+				t->requested = true;
+				requests.push_back(t);
+			}
+			return false;
+		}
+		if (t->prep != 2)
+			g_texturePrep.finishNow(t);
 		makeGpuTexture(t, t->cpu, t->mipmaps);
 		t->generation++;
+		t->requested = false;
 		residentLazyBytes += t->bytes;
+		frameUploadBytes += t->bytes;
+		vram.usage += t->bytes;
 		vram.uploads++;
+		return true;
 	}
 
 	void evictTexture(DiligentTexture* t)
@@ -1156,10 +1290,23 @@ struct DiligentRenderer : DiligentGfx
 		vram.evictedBytes += t->bytes;
 	}
 
-	// Once a frame: the budget (DXGI's, every 30 frames), the evictions near it, the background
-	// uploads below it
+	void printVram(uint64_t used)
+	{
+		size_t residentCount = 0;
+		for (DiligentTexture* t : lazyTextures)
+			residentCount += t->tex ? 1 : 0;
+		printf("VRAM: %llu of %llu MB budget; model textures %zu of %zu on the GPU (%llu MB), %llu uploads, %llu evictions (%llu MB), %zu queued, %zu asked for\n",
+			(unsigned long long)(used >> 20), (unsigned long long)(vram.budget >> 20), residentCount, lazyTextures.size(),
+			(unsigned long long)(residentLazyBytes >> 20), (unsigned long long)vram.uploads, (unsigned long long)vram.evictions,
+			(unsigned long long)(vram.evictedBytes >> 20), uploadQueue.size(), requests.size());
+	}
+
+	// Once a frame: the budget (DXGI's, every 30 frames), the textures asked for (drawn with a
+	// stand-in until they are on the GPU), the evictions near the budget, the background uploads
+	// below it
 	void manageResidency()
 	{
+		frameUploadBytes = 0;
 		static const uint64_t testBudget = (uint64_t)std::max(0, g_settings.value<int>("vramBudgetMB", 0)) << 20;
 		if (frame % 30 == 0 || !vram.queried) {
 			vram.queried = true;
@@ -1179,10 +1326,26 @@ struct DiligentRenderer : DiligentGfx
 					vram.usage = residentLazyBytes;
 			}
 		}
+		// the textures asked for, the oldest first: those prepared, within the frame's allowance
+		for (size_t i = 0; i < requests.size() && frameUploadBytes < (96ull << 20); ) {
+			DiligentTexture* t = requests[i];
+			if (t->tex) {
+				t->requested = false;
+				requests.erase(requests.begin() + i);
+			}
+			else if (t->prep == 2) {
+				const uint64_t last = t->lastUsed;
+				ensureResident(t, true);
+				t->lastUsed = last;
+				requests.erase(requests.begin() + i);
+			}
+			else
+				i++;
+		}
 		if (!vram.budget)
 			return;
 		// what is in use now: the last reading, less what has been evicted since (freed a few
-		// frames later), plus what has been uploaded since (counted below)
+		// frames later), plus what has been uploaded since
 		const uint64_t used = vram.usage > vram.evictedSinceQuery ? vram.usage - vram.evictedSinceQuery : 0;
 		const uint64_t high = vram.budget / 100 * 90, low = vram.budget / 100 * 80, room = vram.budget / 100 * 75;
 		// (looked at every 10th frame: over the budget with little to evict, every frame sorted
@@ -1201,30 +1364,35 @@ struct DiligentRenderer : DiligentGfx
 				vram.evictedSinceQuery += t->bytes;
 				evictTexture(t);
 			}
+			// the budget below what the rest of the game takes (meshes, render targets, the
+			// terrain, the textures in view): said once a minute, the setting can't be met
+			if (now > high && (vram.unreachableSaid == 0 || frame >= vram.unreachableSaid + 3600)) {
+				vram.unreachableSaid = frame;
+				printf("VRAM: %llu MB in use stays over the %llu MB budget: the model textures out of view are all off the GPU, the rest can't be evicted\n",
+					(unsigned long long)(now >> 20), (unsigned long long)(vram.budget >> 20));
+			}
 		}
 		else if (used < room && !uploadQueue.empty()) {
-			// the background queue: up to 48 MB a frame
+			// the background queue: up to 48 MB a frame, the prepared ones
 			uint64_t sent = 0;
-			while (!uploadQueue.empty() && sent < (48ull << 20) && used + sent < room) {
+			for (size_t n = uploadQueue.size(); n > 0 && !uploadQueue.empty() && sent < (48ull << 20) && used + sent < room; n--) {
 				DiligentTexture* t = uploadQueue.front();
 				uploadQueue.pop_front();
 				if (t->tex)
 					continue;
+				if (t->prep != 2) {
+					uploadQueue.push_back(t); // (not ready yet: later)
+					continue;
+				}
 				const uint64_t last = t->lastUsed;
-				ensureResident(t);
+				ensureResident(t, true);
 				t->lastUsed = last; // (not drawn: the first to go again)
 				sent += t->bytes;
 			}
-			vram.usage += sent;
 		}
-		if (frame % 600 == 0 && (vram.uploads || vram.evictions)) {
-			size_t residentCount = 0;
-			for (DiligentTexture* t : lazyTextures)
-				residentCount += t->tex ? 1 : 0;
-			printf("VRAM: %llu of %llu MB budget; model textures %zu of %zu on the GPU (%llu MB), %llu uploads, %llu evictions (%llu MB), %zu queued\n",
-				(unsigned long long)(used >> 20), (unsigned long long)(vram.budget >> 20), residentCount, lazyTextures.size(),
-				(unsigned long long)(residentLazyBytes >> 20), (unsigned long long)vram.uploads, (unsigned long long)vram.evictions,
-				(unsigned long long)(vram.evictedBytes >> 20), uploadQueue.size());
+		if ((frame % 600 == 0 || g_windowQuit) && !vram.finalSaid && (vram.uploads || vram.evictions)) {
+			vram.finalSaid = g_windowQuit;
+			printVram(used);
 		}
 	}
 
@@ -1236,22 +1404,12 @@ struct DiligentRenderer : DiligentGfx
 			makeBCTexture(t, bm, mipmaps);
 			return;
 		}
-		Bitmap cvtbmp = bm.convertToR8G8B8A8();
-
-		// Same mipmap chain as the D3D11 renderer
-		std::vector<Bitmap> levels;
-		levels.push_back(cvtbmp);
-		if (mipmaps <= 0) {
-			int mmwidth = cvtbmp.width / 2, mmheight = cvtbmp.height / 2;
-			while (mmwidth && mmheight) {
-				levels.push_back(cvtbmp.resize(mmwidth, mmheight));
-				mmwidth /= 2;
-				mmheight /= 2;
-				// no mipmaps of 8x8 or below (to prevent tiles from being merged in the terrain atlas!)
-				if (mmwidth <= 8 || mmheight <= 8)
-					break;
-			}
-		}
+		// (a lazy texture's levels prepared on a worker thread)
+		std::vector<Bitmap> made;
+		if (!(t->lazy && !t->levels.empty()))
+			made = MakeMipChain(bm, mipmaps);
+		const std::vector<Bitmap>& levels = made.empty() ? t->levels : made;
+		const Bitmap& cvtbmp = levels[0];
 
 		TextureDesc desc;
 		desc.Type = RESOURCE_DIM_TEX_2D;
@@ -1320,6 +1478,8 @@ struct DiligentRenderer : DiligentGfx
 				currentTexture = nullptr;
 			DiligentTexture* dt = (DiligentTexture*)t;
 			if (dt->lazy) {
+				g_texturePrep.forget(dt);
+				requests.erase(std::remove(requests.begin(), requests.end(), dt), requests.end());
 				if (dt->tex)
 					residentLazyBytes -= dt->bytes;
 				lazyTextures.erase(std::remove(lazyTextures.begin(), lazyTextures.end(), dt), lazyTextures.end());
@@ -1333,7 +1493,14 @@ struct DiligentRenderer : DiligentGfx
 	{
 		DiligentTexture* dt = (DiligentTexture*)t;
 		if (dt->lazy) { // its pixels for its next upload, and on the GPU again now
-			dt->cpu = bmp.compressed() || bmp.format == BMFORMAT_R8G8B8A8 ? bmp : bmp.convertToR8G8B8A8();
+			g_texturePrep.forget(dt);
+			if (bmp.compressed()) {
+				dt->cpu = bmp;
+				dt->levels.clear();
+			}
+			else
+				dt->levels = MakeMipChain(bmp, dt->mipmaps);
+			dt->prep = 2;
 			if (dt->tex)
 				evictTexture(dt);
 			ensureResident(dt);
