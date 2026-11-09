@@ -1083,9 +1083,18 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// emissive map (anyEmissive)
 	RefCntAutoPtr<IPipelineState> giEmitPipelines[2][2];
 	bool anyEmissive = false;
-	// per texture and material colour (Material::colour, its MaterialBuffer in the binding)
-	std::map<std::pair<texture, std::array<float, 3>>, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
-	std::vector<RefCntAutoPtr<IBuffer>> materialBuffers;
+	// per texture and material colour (Material::colour, its MaterialBuffer in the binding): the
+	// binding, its textures (albedo, normal, ORM, emissive, height; null: the default) and their
+	// generations when it was made (TouchTexture), the frame they were last checked
+	struct TextureBinding {
+		RefCntAutoPtr<IShaderResourceBinding> srb;
+		RefCntAutoPtr<IBuffer> colour;
+		texture maps[5] = {};
+		uint32_t gens[5] = {};
+		bool mapsKnown = false;
+		uint64_t checked = ~0ull;
+	};
+	std::map<std::pair<texture, std::array<float, 3>>, TextureBinding> textureBindings;
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
@@ -1564,12 +1573,25 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->noEmission = pixel(0, 0, 0, 0);
 		_impl->noHeight = pixel(255, 255, 255);   // 1x1: no relief, the shader skips the parallax
 	}
+	// a material's binding: its textures (the albedo, or its _albedo override, and the override
+	// maps) and its colour. Model textures are lazy (the GPU memory budget): each frame a binding
+	// is used its textures are marked as drawn (and uploaded if they had been evicted); one that
+	// was made again since has a new view, and the binding is made again with it.
 	auto getBinding = [&](texture tex, const Material& mat) -> IShaderResourceBinding* {
 		const std::string& filename = mat.textureFilename;
-		auto& srb = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
-		if (!srb) {
-			_impl->signature->CreateShaderResourceBinding(&srb, true);
-			{
+		auto& e = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
+		const uint64_t now = dgfx->FrameIndex();
+		if (e.srb && e.checked != now) {
+			e.checked = now;
+			for (int i = 0; i < 5; i++)
+				if (e.maps[i] && dgfx->TouchTexture(e.maps[i]) != e.gens[i]) {
+					e.srb.Release();
+					break;
+				}
+		}
+		if (!e.srb) {
+			if (!e.mapsKnown) {
+				e.mapsKnown = true;
 				const float colour[4] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f };
 				BufferDesc bd;
 				bd.Name = "Material colour";
@@ -1577,33 +1599,39 @@ void DiligentEnhancedSceneRenderer::render()
 				bd.BindFlags = BIND_UNIFORM_BUFFER;
 				bd.Usage = USAGE_IMMUTABLE;
 				BufferData init{ colour, sizeof(colour) };
-				RefCntAutoPtr<IBuffer> buffer;
-				device->CreateBuffer(bd, &init, &buffer);
-				srb->GetVariableByName(SHADER_TYPE_PIXEL, "MaterialBuffer")->Set(buffer);
-				_impl->materialBuffers.push_back(buffer);
-			}
-			auto overrideMap = [&](const char* suffix) -> texture {
-				std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
+				device->CreateBuffer(bd, &init, &e.colour);
+				auto overrideMap = [&](const char* suffix) -> texture {
+					std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
 					float tint[3];
 					TextureCache::splitTint(filename, untinted, tint);
 					const std::string base = untinted.substr(0, untinted.find_last_of('.'));
-				for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
-					const std::string name = base + suffix + ext;
-					if (FileExists((scene->texCache.directory + name).c_str()))
-						return scene->texCache.getTexture(name.c_str());
-				}
-				return nullptr;
-			};
-			texture albedo = overrideMap("_albedo"), nrm = overrideMap("_normal"), orm = overrideMap("_orm"), emissive = overrideMap("_emissive");
-			texture height = overrideMap("_height");
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "heightMap")->Set(dgfx->GetTextureView(height ? height : _impl->noHeight));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(emissive ? emissive : _impl->noEmission));
-			_impl->anyEmissive |= emissive != nullptr;
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(albedo ? albedo : tex));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(nrm ? nrm : _impl->deriveNormal));
-			srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(orm ? orm : _impl->defaultOrm));
+					for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
+						const std::string name = base + suffix + ext;
+						if (FileExists((scene->texCache.directory + name).c_str()))
+							return scene->texCache.getTexture(name.c_str());
+					}
+					return nullptr;
+				};
+				texture albedo = overrideMap("_albedo");
+				e.maps[0] = albedo ? albedo : tex;
+				e.maps[1] = overrideMap("_normal");
+				e.maps[2] = overrideMap("_orm");
+				e.maps[3] = overrideMap("_emissive");
+				e.maps[4] = overrideMap("_height");
+				_impl->anyEmissive |= e.maps[3] != nullptr;
+			}
+			_impl->signature->CreateShaderResourceBinding(&e.srb, true);
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "MaterialBuffer")->Set(e.colour);
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(e.maps[0]));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "normalMap")->Set(dgfx->GetTextureView(e.maps[1] ? e.maps[1] : _impl->deriveNormal));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "ormMap")->Set(dgfx->GetTextureView(e.maps[2] ? e.maps[2] : _impl->defaultOrm));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "emissiveMap")->Set(dgfx->GetTextureView(e.maps[3] ? e.maps[3] : _impl->noEmission));
+			e.srb->GetVariableByName(SHADER_TYPE_PIXEL, "heightMap")->Set(dgfx->GetTextureView(e.maps[4] ? e.maps[4] : _impl->noHeight));
+			for (int i = 0; i < 5; i++)
+				e.gens[i] = e.maps[i] ? dgfx->TouchTexture(e.maps[i]) : 0;
+			e.checked = now;
 		}
-		return srb;
+		return e.srb;
 	};
 
 	std::vector<Instance> instances;

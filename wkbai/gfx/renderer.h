@@ -68,6 +68,15 @@ struct IRenderer
 	virtual texture CreateTexture(const Bitmap& bm, int mipmaps) = 0;
 	virtual void FreeTexture(texture t) = 0;
 	virtual void UpdateTexture(texture t, const Bitmap& bmp) = 0;
+	// The GPU memory budget (renderers that have one, the Diligent one): a lazy texture keeps its
+	// pixels in RAM and goes to the GPU when first drawn (or from a background queue while there
+	// is room), and may leave it again near the budget (the least recently drawn first), to come
+	// back when drawn. UploadTextureNow: to the GPU at once (the level's own models' textures).
+	// TouchTexture: on the GPU now and marked as drawn this frame; its generation, which changes
+	// whenever it is made again (bindings holding its view must then be made again too).
+	virtual texture CreateTextureLazy(const Bitmap& bm, int mipmaps) { return CreateTexture(bm, mipmaps); }
+	virtual void UploadTextureNow(texture t) {}
+	virtual uint32_t TouchTexture(texture t) { return 0; }
 
 	// State changes
 	virtual void SetTransformMatrix(const Matrix *m) = 0;

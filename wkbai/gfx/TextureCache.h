@@ -16,6 +16,9 @@ struct TextureCache
 	IRenderer *gfx;
 	std::map<std::string, texture> loadedTextures;
 	std::string directory;
+	// its textures made lazy (IRenderer::CreateTextureLazy: under the GPU memory budget, uploaded
+	// when drawn, evicted when unused): the scene's model textures
+	bool lazy = false;
 	// the file and its timestamp each texture was loaded from (hot reload)
 	std::map<std::string, std::pair<std::string, uint64_t>> loadedFrom;
 

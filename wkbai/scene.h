@@ -72,8 +72,10 @@ struct Scene {
 
 	void add(SceneEntity *ent);
 	// Loads the model and its materials' textures without drawing it
-	void prewarm(Model* model);
+	// a model's textures loaded (into RAM: the texture cache is lazy); upload: on the GPU at once
+	// too (the level's own models)
+	void prewarm(Model* model, bool upload = false);
 	void clear();
 
-	Scene(IRenderer *gfx, ModelCache *modelCache) : texCache(gfx, "Warrior Kings Game Set\\Textures\\"), modelCache(modelCache) {}
+	Scene(IRenderer *gfx, ModelCache *modelCache) : texCache(gfx, "Warrior Kings Game Set\\Textures\\"), modelCache(modelCache) { texCache.lazy = true; }
 };

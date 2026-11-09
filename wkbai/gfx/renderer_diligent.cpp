@@ -36,6 +36,7 @@ bool g_rayTracingBuffers = false;
 #include <nlohmann/json.hpp>
 
 #include "EngineFactoryD3D12.h"
+#include <deque>
 #include "EngineFactoryVk.h"
 
 #define VK_NO_PROTOTYPES
@@ -43,6 +44,8 @@ bool g_rayTracingBuffers = false;
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
+#include <dxgi1_4.h>
+#pragma comment(lib, "dxgi.lib")
 
 using namespace Diligent;
 
@@ -215,6 +218,12 @@ struct DiligentTexture
 	RefCntAutoPtr<ITexture> tex;
 	RefCntAutoPtr<ITextureView> view; // a swizzled view (BC4), else the default one
 	RefCntAutoPtr<IShaderResourceBinding> srb;
+	// the GPU memory budget (CreateTextureLazy): its pixels kept, the GPU texture made when drawn
+	bool lazy = false;
+	Bitmap cpu;
+	int mipmaps = 0;
+	uint64_t lastUsed = 0, bytes = 0;
+	uint32_t generation = 0;
 };
 
 // Vertex/index buffers (ImGui creates and fills them every frame). They are dynamic buffers,
@@ -324,6 +333,17 @@ struct DiligentRenderer : DiligentGfx
 	DiligentPostProcess::FogOfWar fog;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
+	// the GPU memory budget (manageResidency): the lazy textures, those not uploaded yet, the
+	// adapter's budget (DXGI, Direct3D 12 only)
+	std::vector<DiligentTexture*> lazyTextures;
+	std::deque<DiligentTexture*> uploadQueue;
+	uint64_t residentLazyBytes = 0;
+	IDXGIAdapter3* dxgiAdapter = nullptr;
+	struct {
+		bool queried = false;
+		uint64_t budget = 0, usage = 0, evictedSinceQuery = 0;
+		uint64_t uploads = 0, evictions = 0, evictedBytes = 0;
+	} vram;
 	State state;
 	Matrix transform = Matrix::getIdentity();
 	uint32_t fogColor = 0;
@@ -374,7 +394,7 @@ struct DiligentRenderer : DiligentGfx
 		return shader;
 	}
 
-	RefCntAutoPtr<IBuffer> createBuffer(const char* name, uint64_t size, BIND_FLAGS bind, USAGE usage)
+	RefCntAutoPtr<IBuffer> createBuffer(const char* name, uint64_t size, Diligent::BIND_FLAGS bind, USAGE usage)
 	{
 		BufferDesc desc;
 		desc.Name = name;
@@ -457,6 +477,7 @@ struct DiligentRenderer : DiligentGfx
 		st.topology = topology;
 		ctx->SetPipelineState(getPipeline(st));
 		DiligentTexture* t = (DiligentTexture*)(currentTexture ? currentTexture : whiteTexture);
+		ensureResident(t);
 		ctx->CommitShaderResources(t->srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	}
 
@@ -616,6 +637,7 @@ struct DiligentRenderer : DiligentGfx
 	ITextureView* GetTextureView(texture t) override
 	{
 		DiligentTexture* dt = (DiligentTexture*)(t ? t : whiteTexture);
+		ensureResident(dt);
 		return dt->view ? dt->view.RawPtr() : dt->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 	}
 
@@ -823,6 +845,27 @@ struct DiligentRenderer : DiligentGfx
 			if (!device)
 				ferr("Diligent: could not create the Direct3D 12 device.");
 			factory->CreateSwapChainD3D12(device, ctx, scDesc, FullScreenModeDesc{}, window, &swapChain);
+			// the adapter's memory budget (QueryVideoMemoryInfo): the DXGI adapter with the device's
+			// vendor and device IDs (the one with the most memory of those)
+			IDXGIFactory4* dxgiFactory = nullptr;
+			if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&dxgiFactory))) {
+				const auto& ai = device->GetAdapterInfo();
+				SIZE_T best = 0;
+				IDXGIAdapter1* a = nullptr;
+				for (UINT i = 0; dxgiFactory->EnumAdapters1(i, &a) != DXGI_ERROR_NOT_FOUND; i++) {
+					DXGI_ADAPTER_DESC1 d = {};
+					IDXGIAdapter3* a3 = nullptr;
+					if (SUCCEEDED(a->GetDesc1(&d)) && d.VendorId == ai.VendorId && d.DeviceId == ai.DeviceId && d.DedicatedVideoMemory >= best
+						&& SUCCEEDED(a->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&a3))) {
+						if (dxgiAdapter)
+							dxgiAdapter->Release();
+						dxgiAdapter = a3;
+						best = d.DedicatedVideoMemory;
+					}
+					a->Release();
+				}
+				dxgiFactory->Release();
+			}
 		}
 		if (!swapChain)
 			ferr("Diligent: could not create the swap chain.");
@@ -908,6 +951,7 @@ struct DiligentRenderer : DiligentGfx
 	void BeginDrawing() override
 	{
 		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
+		manageResidency();
 		if (gpuStart[0]) {
 			const int q = (int)(frame % GPU_QUERY_FRAMES);
 			// this slot's last frame: its time, if the GPU is done with it
@@ -1002,8 +1046,147 @@ struct DiligentRenderer : DiligentGfx
 
 	texture CreateTexture(const Bitmap& bm, int mipmaps) override
 	{
-		if (bm.compressed())
-			return createBCTexture(bm, mipmaps);
+		DiligentTexture* t = new DiligentTexture;
+		makeGpuTexture(t, bm, mipmaps);
+		return (texture)t;
+	}
+
+	// The GPU's memory budget (RenderSettings-independent, "vramBudgetMB" in the settings
+	// lowers it for tests): a lazy texture keeps its pixels in RAM and goes to the GPU when first
+	// drawn (or from the background queue while there is room); near the budget the least
+	// recently drawn ones leave the GPU again, to come back when drawn.
+	texture CreateTextureLazy(const Bitmap& bm, int mipmaps) override
+	{
+		DiligentTexture* t = new DiligentTexture;
+		t->lazy = true;
+		t->cpu = bm.compressed() || bm.format == BMFORMAT_R8G8B8A8 ? bm : bm.convertToR8G8B8A8();
+		t->mipmaps = mipmaps;
+		lazyTextures.push_back(t);
+		uploadQueue.push_back(t);
+		return (texture)t;
+	}
+
+	void UploadTextureNow(texture t) override
+	{
+		if (t)
+			ensureResident((DiligentTexture*)t);
+	}
+
+	uint32_t TouchTexture(texture t) override
+	{
+		if (!t)
+			return 0;
+		DiligentTexture* dt = (DiligentTexture*)t;
+		ensureResident(dt);
+		return dt->generation;
+	}
+
+	void ensureResident(DiligentTexture* t)
+	{
+		t->lastUsed = frame;
+		if (t->tex || !t->lazy)
+			return;
+		makeGpuTexture(t, t->cpu, t->mipmaps);
+		t->generation++;
+		residentLazyBytes += t->bytes;
+		vram.uploads++;
+	}
+
+	void evictTexture(DiligentTexture* t)
+	{
+		if (!t->tex)
+			return;
+		if (currentTexture == (texture)t)
+			currentTexture = nullptr;
+		t->srb.Release();
+		t->view.Release();
+		t->tex.Release();
+		t->generation++;
+		residentLazyBytes -= t->bytes;
+		vram.evictions++;
+		vram.evictedBytes += t->bytes;
+	}
+
+	// Once a frame: the budget (DXGI's, every 30 frames), the evictions near it, the background
+	// uploads below it
+	void manageResidency()
+	{
+		static const uint64_t testBudget = (uint64_t)std::max(0, g_settings.value<int>("vramBudgetMB", 0)) << 20;
+		if (frame % 30 == 0 || !vram.queried) {
+			vram.queried = true;
+			vram.budget = vram.usage = 0;
+			if (dxgiAdapter) {
+				DXGI_QUERY_VIDEO_MEMORY_INFO info = {};
+				if (SUCCEEDED(dxgiAdapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+					vram.budget = info.Budget;
+					vram.usage = info.CurrentUsage;
+				}
+			}
+			vram.evictedSinceQuery = 0;
+			if (testBudget) {
+				// (without DXGI: the lazy textures alone against it)
+				vram.budget = vram.budget ? std::min(vram.budget, testBudget) : testBudget;
+				if (!dxgiAdapter)
+					vram.usage = residentLazyBytes;
+			}
+		}
+		if (!vram.budget)
+			return;
+		// what is in use now: the last reading, less what has been evicted since (freed a few
+		// frames later), plus what has been uploaded since (counted below)
+		const uint64_t used = vram.usage > vram.evictedSinceQuery ? vram.usage - vram.evictedSinceQuery : 0;
+		const uint64_t high = vram.budget / 100 * 90, low = vram.budget / 100 * 80, room = vram.budget / 100 * 75;
+		// (looked at every 10th frame: over the budget with little to evict, every frame sorted
+		// the lazy textures for nothing)
+		if (used > high && frame % 10 == 0) {
+			std::vector<DiligentTexture*> resident;
+			for (DiligentTexture* t : lazyTextures)
+				if (t->tex && t->lastUsed + 3 < frame)
+					resident.push_back(t);
+			std::sort(resident.begin(), resident.end(), [](DiligentTexture* a, DiligentTexture* b) { return a->lastUsed < b->lastUsed; });
+			uint64_t now = used;
+			for (DiligentTexture* t : resident) {
+				if (now <= low)
+					break;
+				now -= std::min(now, t->bytes);
+				vram.evictedSinceQuery += t->bytes;
+				evictTexture(t);
+			}
+		}
+		else if (used < room && !uploadQueue.empty()) {
+			// the background queue: up to 48 MB a frame
+			uint64_t sent = 0;
+			while (!uploadQueue.empty() && sent < (48ull << 20) && used + sent < room) {
+				DiligentTexture* t = uploadQueue.front();
+				uploadQueue.pop_front();
+				if (t->tex)
+					continue;
+				const uint64_t last = t->lastUsed;
+				ensureResident(t);
+				t->lastUsed = last; // (not drawn: the first to go again)
+				sent += t->bytes;
+			}
+			vram.usage += sent;
+		}
+		if (frame % 600 == 0 && (vram.uploads || vram.evictions)) {
+			size_t residentCount = 0;
+			for (DiligentTexture* t : lazyTextures)
+				residentCount += t->tex ? 1 : 0;
+			printf("VRAM: %llu of %llu MB budget; model textures %zu of %zu on the GPU (%llu MB), %llu uploads, %llu evictions (%llu MB), %zu queued\n",
+				(unsigned long long)(used >> 20), (unsigned long long)(vram.budget >> 20), residentCount, lazyTextures.size(),
+				(unsigned long long)(residentLazyBytes >> 20), (unsigned long long)vram.uploads, (unsigned long long)vram.evictions,
+				(unsigned long long)(vram.evictedBytes >> 20), uploadQueue.size());
+		}
+	}
+
+	// The GPU texture (and its binding) from a bitmap: RGBA with the D3D11 renderer's mipmaps, or
+	// block-compressed as it is
+	void makeGpuTexture(DiligentTexture* t, const Bitmap& bm, int mipmaps)
+	{
+		if (bm.compressed()) {
+			makeBCTexture(t, bm, mipmaps);
+			return;
+		}
 		Bitmap cvtbmp = bm.convertToR8G8B8A8();
 
 		// Same mipmap chain as the D3D11 renderer
@@ -1030,24 +1213,24 @@ struct DiligentRenderer : DiligentGfx
 		desc.BindFlags = BIND_SHADER_RESOURCE;
 		desc.Usage = USAGE_DEFAULT;
 		std::vector<TextureSubResData> sub(levels.size());
+		t->bytes = 0;
 		for (size_t i = 0; i < levels.size(); i++) {
 			sub[i].pData = levels[i].pixels.data();
 			sub[i].Stride = levels[i].width * 4u;
+			t->bytes += (uint64_t)levels[i].width * levels[i].height * 4;
 		}
 		TextureData data{ sub.data(), (Uint32)sub.size() };
 
-		DiligentTexture* t = new DiligentTexture;
 		device->CreateTexture(desc, &data, &t->tex);
 		if (!t->tex)
 			ferr("Diligent: could not create a %ix%i texture.", cvtbmp.width, cvtbmp.height);
 		signature->CreateShaderResourceBinding(&t->srb, true);
 		t->srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(t->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		return (texture)t;
 	}
 
 	// BC1-BC5 and BC7 (DDS, KTX2) as they are, with the file's mip levels (one if mipmaps is 1);
 	// BC4's single channel read as grey (its view's swizzle)
-	texture createBCTexture(const Bitmap& bm, int mipmaps)
+	void makeBCTexture(DiligentTexture* t, const Bitmap& bm, int mipmaps)
 	{
 		const int bc = bm.bcKind();
 		const Uint64 blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
@@ -1057,6 +1240,7 @@ struct DiligentRenderer : DiligentGfx
 			sub[i].pData = bm.pixels.data() + bm.levels[i];
 			sub[i].Stride = (Uint64)std::max(1, (bm.width >> i) / 4) * blockBytes;
 		}
+		t->bytes = count < bm.levels.size() ? bm.levels[count] : bm.pixels.size();
 		TextureDesc desc;
 		desc.Type = RESOURCE_DIM_TEX_2D;
 		desc.Width = bm.width;
@@ -1067,7 +1251,6 @@ struct DiligentRenderer : DiligentGfx
 		desc.BindFlags = BIND_SHADER_RESOURCE;
 		desc.Usage = USAGE_DEFAULT;
 		TextureData data{ sub.data(), (Uint32)sub.size() };
-		DiligentTexture* t = new DiligentTexture;
 		device->CreateTexture(desc, &data, &t->tex);
 		if (!t->tex)
 			ferr("Diligent: could not create a %ix%i BC%d texture.", bm.width, bm.height, bc);
@@ -1079,7 +1262,6 @@ struct DiligentRenderer : DiligentGfx
 		}
 		signature->CreateShaderResourceBinding(&t->srb, true);
 		t->srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(t->view ? t->view.RawPtr() : t->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		return (texture)t;
 	}
 
 	void FreeTexture(texture t) override
@@ -1087,13 +1269,27 @@ struct DiligentRenderer : DiligentGfx
 		if (t && t != whiteTexture) {
 			if (currentTexture == t)
 				currentTexture = nullptr;
-			delete (DiligentTexture*)t;
+			DiligentTexture* dt = (DiligentTexture*)t;
+			if (dt->lazy) {
+				if (dt->tex)
+					residentLazyBytes -= dt->bytes;
+				lazyTextures.erase(std::remove(lazyTextures.begin(), lazyTextures.end(), dt), lazyTextures.end());
+				uploadQueue.erase(std::remove(uploadQueue.begin(), uploadQueue.end(), dt), uploadQueue.end());
+			}
+			delete dt;
 		}
 	}
 
 	void UpdateTexture(texture t, const Bitmap& bmp) override
 	{
 		DiligentTexture* dt = (DiligentTexture*)t;
+		if (dt->lazy) { // its pixels for its next upload, and on the GPU again now
+			dt->cpu = bmp.compressed() || bmp.format == BMFORMAT_R8G8B8A8 ? bmp : bmp.convertToR8G8B8A8();
+			if (dt->tex)
+				evictTexture(dt);
+			ensureResident(dt);
+			return;
+		}
 		const TextureDesc& desc = dt->tex->GetDesc();
 		if (bmp.compressed() || desc.Format != TEX_FORMAT_RGBA8_UNORM) {
 			printf("Hot reload: block-compressed textures are not reloaded (restart to see the change)\n");
@@ -1259,7 +1455,7 @@ struct DiligentRenderer : DiligentGfx
 
 	// Buffer drawing
 
-	template <typename T> void initStream(DiligentStreamBuffer<T>& stream, int count, const char* name, BIND_FLAGS bind)
+	template <typename T> void initStream(DiligentStreamBuffer<T>& stream, int count, const char* name, Diligent::BIND_FLAGS bind)
 	{
 		stream.ctx = ctx;
 		stream.currentFrame = &frame;

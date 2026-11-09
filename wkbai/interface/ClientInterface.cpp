@@ -1124,8 +1124,10 @@ void ClientInterface::prewarmLevel()
 			sm->prepare();
 	}
 	const uint64_t t1 = SDL_GetTicksNS();
-	for (Model* model : models)
-		scene->prewarm(model);
+	// (the level's own models' textures on the GPU at once, the game set's others into RAM, to
+	// the GPU when drawn or from the renderer's background queue: the GPU memory budget)
+	for (size_t i = 0; i < models.size(); i++)
+		scene->prewarm(models[i], i < fromLevel);
 	const uint64_t t2 = SDL_GetTicksNS();
 	sceneRenderer->prewarm(models);
 	const uint64_t t3 = SDL_GetTicksNS();

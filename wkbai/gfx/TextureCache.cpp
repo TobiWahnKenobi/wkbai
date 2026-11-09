@@ -17,7 +17,7 @@ texture TextureCache::loadTexture(const char * fn, int mipmaps)
 		bm = Bitmap::loadBitmap(fn);
 	else
 		return nullptr; //bm = LoadBitmap("netexfb.tga");
-	texture t = gfx->CreateTexture(bm, mipmaps);
+	texture t = lazy ? gfx->CreateTextureLazy(bm, mipmaps) : gfx->CreateTexture(bm, mipmaps);
 	return t;
 }
 

@@ -5,12 +5,15 @@
 #include "scene.h"
 #include "Model.h"
 
-void Scene::prewarm(Model* model)
+void Scene::prewarm(Model* model, bool upload)
 {
 	const uint32_t* mat = model->getMaterialIds();
 	const size_t numMats = model->getNumMaterials();
-	for (size_t i = 0; i < numMats; i++)
-		texCache.getTexture(modelCache->getMaterial(mat[i]).textureFilename.c_str());
+	for (size_t i = 0; i < numMats; i++) {
+		texture t = texCache.getTexture(modelCache->getMaterial(mat[i]).textureFilename.c_str());
+		if (upload)
+			texCache.gfx->UploadTextureNow(t);
+	}
 }
 
 void Scene::add(SceneEntity * ent)
