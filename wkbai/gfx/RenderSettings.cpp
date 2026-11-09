@@ -70,6 +70,7 @@ void RenderSettings::load()
 	skyGI = g_settings.value<bool>("skyGI", def.skyGI);
 	dynamicGI = std::clamp(g_settings.value<int>("dynamicGI", def.dynamicGI), 0, 3);
 	dynamicGIStrength = std::clamp(g_settings.value<float>("dynamicGIStrength", def.dynamicGIStrength), 0.0f, 3.0f);
+	emissiveLightStrength = std::clamp(g_settings.value<float>("emissiveLightStrength", def.emissiveLightStrength), 0.0f, 3.0f);
 	dynamicClouds = std::clamp(g_settings.value<int>("dynamicClouds", def.dynamicClouds), 0, 3);
 	cloudQuality = std::clamp(g_settings.value<int>("cloudQuality", def.cloudQuality), 0, 3);
 	cloudDetail = std::clamp(g_settings.value<int>("cloudDetail", def.cloudDetail), 0, 2);
@@ -168,6 +169,7 @@ void RenderSettings::save()
 	g_settings["skyGI"] = skyGI;
 	g_settings["dynamicGI"] = dynamicGI;
 	g_settings["dynamicGIStrength"] = dynamicGIStrength;
+	g_settings["emissiveLightStrength"] = emissiveLightStrength;
 	g_settings["dynamicClouds"] = dynamicClouds;
 	g_settings["cloudQuality"] = cloudQuality;
 	g_settings["cloudDetail"] = cloudDetail;

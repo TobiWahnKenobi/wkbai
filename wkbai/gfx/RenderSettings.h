@@ -149,6 +149,9 @@ struct RenderSettings {
 	// lamps are, facing as they face, in their colour; instead of the round pool per building)
 	int dynamicGI = 0;
 	float dynamicGIStrength = 1.0f; // the bounce's strength (0-3)
+	// Ultra's lights from the emissive maps (windows, fires, lamps): their strength (0-3), on top
+	// of dynamicGIStrength
+	float emissiveLightStrength = 1.0f;
 	// dynamic clouds (enhanced renderers on Diligent): 0 the original's (sky_shadow_map.pcx
 	// scrolling over the ground), 1 a cloud field drifting with the wind whose shadows follow the
 	// sun, 2 with light shafts through the air between the shadows, 3 with the clouds themselves

@@ -1219,15 +1219,20 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// (about one sample per 2 x 2 texels), gathered into lights by place and the way they face
 	// (cells of 1.5 units, wider until at most MAX_EMITTERS remain): a lit window becomes one
 	// light just in front of it, facing out, a fire one all round. Their light: the always-on
-	// part and the night part (the texels' alpha), their colour times their area.
+	// part and the night part (the texels' alpha). How bright a light is follows the emissive
+	// texture's brightness there (the mean of its glowing texels, times EMITTER_STRENGTH, at the
+	// source), how far it reaches the size of the glowing area (EMITTER_REACH x the square root
+	// of its area, 3-24 units): a small dim window lights the ground below it, a big bright
+	// forge a wide patch, both as bright near the source as their texels are.
 	struct Emitter {
 		Vector3 pos, facing; // the model's space
 		float directional = 0; // 1: all of it faces one way (a window), 0: all round
-		float always[3] = {}, night[3] = {};
-		float size2 = 1; // its area (the light's softening)
+		float always[3] = {}, night[3] = {}; // at the source
+		float radius = 3; // its reach (from its area)
+		float size2 = 1; // its core (softening): a third of the reach, squared
 	};
 	static constexpr size_t MAX_EMITTERS = 24;
-	static constexpr float EMITTER_STRENGTH = 120.0f; // by eye at night (4 Peaks town)
+	static constexpr float EMITTER_STRENGTH = 6.0f, EMITTER_REACH = 12.0f; // the user's pick at night (4 Peaks town)
 	// the emissive maps' texels (0-1 as the shaders take them, at most 256 x 256), by file
 	struct EmissiveTexels { int w = 0, h = 0; std::vector<float> rgba; };
 	std::map<std::string, EmissiveTexels> emissiveTexels;
@@ -1366,11 +1371,13 @@ struct DiligentEnhancedSceneRenderer::Impl {
 			e.directional = std::min(n.len3(), 1.0f);
 			e.facing = n.normal();
 			e.pos = a.p * (1.0f / a.lum) + e.facing * 0.3f; // just in front of the glowing surface
+			// the texels' mean brightness (the sums are over the area), at the source
+			e.radius = std::clamp(EMITTER_REACH * std::sqrt(a.area), 3.0f, 24.0f);
+			e.size2 = (e.radius / 3) * (e.radius / 3);
 			for (int c = 0; c < 3; c++) {
-				e.always[c] = a.always[c] * EMITTER_STRENGTH;
-				e.night[c] = a.night[c] * EMITTER_STRENGTH;
+				e.always[c] = a.always[c] / a.area * EMITTER_STRENGTH;
+				e.night[c] = a.night[c] / a.area * EMITTER_STRENGTH;
 			}
-			e.size2 = std::max(a.area, 1.5f); // (no hot spot on the wall below)
 			out.push_back(e);
 		}
 		return out;
@@ -1383,6 +1390,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	void placeEmitterLights(Scene* scene, DiligentGfx::ShadowEnvironment& shadows, IDeviceContext* ctx) {
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float night = g_environment.active ? 1.0f - g_environment.sun.daylight : 0.0f;
+		const float strength = std::clamp(g_renderSettings.emissiveLightStrength, 0.0f, 3.0f); // the window light setting
 		const float ox = shadows.giMapOrigin[0], oz = shadows.giMapOrigin[1], ext = Env::GI_EXTENT;
 		struct Light { float v[12]; float lum; };
 		std::vector<Light> lights;
@@ -1401,14 +1409,15 @@ struct DiligentEnhancedSceneRenderer::Impl {
 					Light l;
 					float lum = 0;
 					for (int c = 0; c < 3; c++) {
-						l.v[4 + c] = e.always[c] + e.night[c] * night;
+						// (times its core: the shaders divide by distance squared plus it)
+						l.v[4 + c] = (e.always[c] + e.night[c] * night) * e.size2 * strength;
 						lum += l.v[4 + c] * (c == 0 ? 0.299f : c == 1 ? 0.587f : 0.114f);
 					}
 					if (lum < 1e-3f)
 						continue;
 					const Vector3 p = e.pos.transform(m), f = e.facing.transformNormal(m).normal();
 					l.v[0] = p.x; l.v[1] = p.y; l.v[2] = p.z;
-					l.v[3] = std::clamp(std::sqrt(lum / 0.015f), 3.0f, 24.0f); // where it falls below ~1.5 %
+					l.v[3] = e.radius;
 					l.v[7] = e.size2;
 					l.v[8] = f.x; l.v[9] = f.y; l.v[10] = f.z; l.v[11] = e.directional;
 					l.lum = lum;

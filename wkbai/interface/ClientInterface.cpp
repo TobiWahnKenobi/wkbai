@@ -1007,6 +1007,9 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::BeginDisabled(!s.skyGI);
 			ImGui::Combo("Bounced light (dynamic GI)", &s.dynamicGI, giLevels, 4);
 			ImGui::SliderFloat("Bounced light strength", &s.dynamicGIStrength, 0.0f, 3.0f, "%.2f");
+			ImGui::BeginDisabled(s.dynamicGI < 3);
+			ImGui::SliderFloat("Window light strength (Ultra)", &s.emissiveLightStrength, 0.0f, 3.0f, "%.2f");
+			ImGui::EndDisabled();
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
