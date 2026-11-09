@@ -2130,12 +2130,26 @@ void DiligentEnhancedSceneRenderer::render()
 						continue;
 					IBottomLevelAS* blas = nullptr;
 					if (anim) {
-						// the key frame's structure, cached (DiligentRayShadows drops the ones unused
-						// for a while); a new one's pose worked out here, at most a few a frame
+						// the pose's structure, cached (DiligentRayShadows drops the ones unused for a
+						// while); a new one's pose worked out here, at most a few a frame. The poses
+						// at eighths of the way between key frames, the nearest one: the key frame's
+						// alone, while the drawn mesh blends towards the next, made a moving part's
+						// shadow copy a plane at another angle, which shadowed the drawn surface in
+						// a straight line where it lay above it (the HD Blacksmith's bellows board,
+						// reported by the HD-models session, 2026-11-09)
+						constexpr uint32_t SUBSTEPS = 8;
 						const uint32_t animtime = ((int32_t)ent->animTime < 0 ? 0u : ent->animTime) % anim->duration;
 						float t;
-						const uint32_t frame = DilAnim::keyAt(anim->animTimes, animtime, t);
-						blas = rts->cached(anim, frame);
+						uint32_t frame = DilAnim::keyAt(anim->animTimes, animtime, t);
+						uint32_t step = (uint32_t)std::lround(t * SUBSTEPS);
+						if (step >= SUBSTEPS) {
+							frame++; // (the next key frame itself: its own pose)
+							step = 0;
+						}
+						const uint32_t poseId = frame * SUBSTEPS + step;
+						const uint32_t t0 = anim->animTimes[frame];
+						const uint32_t poseTime = step == 0 ? t0 : t0 + (uint32_t)((uint64_t)(anim->animTimes[frame + 1] - t0) * step / SUBSTEPS);
+						blas = rts->cached(anim, poseId);
 						if (_impl->poseFrame != frameIndex) {
 							_impl->poseFrame = frameIndex;
 							_impl->posesBuilt = 0;
@@ -2143,7 +2157,7 @@ void DiligentEnhancedSceneRenderer::render()
 						if (!blas && _impl->posesBuilt < 24) {
 							_impl->posesBuilt++;
 							auto* animModel = (AnimatedModel*)model;
-							const Vector3* v = (const Vector3*)animModel->interpolate(anim->animTimes[frame]);
+							const Vector3* v = (const Vector3*)animModel->interpolate(poseTime);
 							std::vector<Vector3> pose;
 							pose.reserve(mesh.totVertices);
 							for (auto& grp : staticModel->mesh.groupIndices)
@@ -2158,7 +2172,7 @@ void DiligentEnhancedSceneRenderer::render()
 							RefCntAutoPtr<IBuffer> poseBuffer;
 							device->CreateBuffer(pd, &init, &poseBuffer);
 							if (poseBuffer)
-								blas = rts->blas(ctx, anim, frame, poseBuffer, 0, mesh.totVertices, mesh.indices, mesh.rtGroups, true);
+								blas = rts->blas(ctx, anim, poseId, poseBuffer, 0, mesh.totVertices, mesh.indices, mesh.rtGroups, true);
 						}
 						if (!blas)
 							continue;
