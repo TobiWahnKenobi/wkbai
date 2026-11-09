@@ -287,7 +287,44 @@ cbuffer FogBuffer
 	float4 FogCamera;
 	float4 Grade;
 	float4 EdgeFog;
+	float4 LightMasks;
+	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
+	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
+	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	if (FogSun.w == 0 || dot(d, d) < 1e-10)
+		return FogColor.rgb;
+	d = normalize(d);
+	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
+	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
+	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
+	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
+	// out of the sky (the band hid it high above the horizon, the play test of 2026-11-09)
+	float mu = dot(d, FogSun.xyz);
+	if (mu > 0.99 && d.y > -0.004) {
+		float disc = smoothstep(0.99985, 0.99996, mu);
+		float glow = pow(saturate(mu), 2500) * 0.5 + pow(saturate(mu), 300) * 0.04;
+		c += FogSunColour.rgb * (disc + glow * FogSunColour.w) * FogSun.w * saturate((d.y + 0.004) / 0.002);
+	}
+	return c;
+}
+float3 FogRatioDir(float3 d)
+{
+	return min(FogTintDir(d) / max(FogColor.rgb, 1e-3), 2.5);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
 
 cbuffer FallBuffer
 {
@@ -442,7 +479,7 @@ float4 PS_Fall(FALL_OUTPUT input) : SV_Target
 		c = lerp(c, ice, Weather.x);
 		alpha = lerp(alpha, saturate(0.75 + icicle * 0.25) * saturate(side / input.B.y + 0.3) * saturate((v - 0.2) / 2.0), Weather.x);
 	}
-	c = lerp(c, FogColor.rgb, input.Fog);
+	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), saturate(alpha));
 }
 
@@ -493,7 +530,7 @@ float4 PS_Cascade(FALL_OUTPUT input) : SV_Target
 		c = lerp(c, ice, Weather.x);
 		alpha = lerp(alpha, saturate(0.55 + n * 0.4) * saturate(side / input.B.y + 0.2), Weather.x);
 	}
-	c = lerp(c, FogColor.rgb, input.Fog);
+	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), saturate(alpha));
 }
 
@@ -520,7 +557,7 @@ float4 PS_Foam(FALL_OUTPUT input) : SV_Target
 	foam *= saturate((1 - r) * 3);
 	// the weather's flow: hardly any foam from a trickle, more from a flood
 	foam *= saturate(Tint.w * 1.2) * (1 + saturate(Tint.w - 1) * 0.5) * (1 - Weather.x);
-	float3 c = lerp(FoamColour(float3(0, 1, 0)), FogColor.rgb, input.Fog);
+	float3 c = lerp(FoamColour(float3(0, 1, 0)), FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), saturate(foam * 0.8));
 }
 
@@ -594,7 +631,7 @@ float4 PS_Particle(PART_OUTPUT input) : SV_Target
 	}
 	float light = 0.75 + 0.3 * saturate(Sun.y);
 	float3 c = (input.Look.y == 0 ? float3(0.86, 0.9, 0.93) : float3(0.95, 0.97, 1.0)) * light;
-	c = lerp(c, FogColor.rgb, input.Fog);
+	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), saturate(a));
 }
 )---";

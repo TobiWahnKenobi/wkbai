@@ -43,6 +43,7 @@ void RenderSettings::load()
 	contrast = g_settings.value<float>("contrast", def.contrast);
 	saturation = g_settings.value<float>("saturation", def.saturation);
 	sky = g_settings.value<bool>("sky", def.sky);
+	skyModel = std::clamp(g_settings.value<int>("skyModel", def.skyModel), 0, 1);
 	cloudShadows = g_settings.value<bool>("cloudShadows", def.cloudShadows);
 	// "waterLevel" (six levels), or from the older "waterQuality" (Off, Original, Low, High) and
 	// the switches "waterSurface" and "waterDetail" before it
@@ -146,6 +147,7 @@ void RenderSettings::save()
 	g_settings["contrast"] = contrast;
 	g_settings["saturation"] = saturation;
 	g_settings["sky"] = sky;
+	g_settings["skyModel"] = skyModel;
 	g_settings["cloudShadows"] = cloudShadows;
 	g_settings["waterLevel"] = waterQuality;
 	g_settings["waterfalls"] = waterfalls;

@@ -79,7 +79,44 @@ cbuffer FogBuffer
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
 	float4 LightMasks; // the depth pre-pass's: ray-traced shadows on, ambient occlusion strength, a pixel's size
+	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
+	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
+	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	if (FogSun.w == 0 || dot(d, d) < 1e-10)
+		return FogColor.rgb;
+	d = normalize(d);
+	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
+	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
+	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
+	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
+	// out of the sky (the band hid it high above the horizon, the play test of 2026-11-09)
+	float mu = dot(d, FogSun.xyz);
+	if (mu > 0.99 && d.y > -0.004) {
+		float disc = smoothstep(0.99985, 0.99996, mu);
+		float glow = pow(saturate(mu), 2500) * 0.5 + pow(saturate(mu), 300) * 0.04;
+		c += FogSunColour.rgb * (disc + glow * FogSunColour.w) * FogSun.w * saturate((d.y + 0.004) / 0.002);
+	}
+	return c;
+}
+float3 FogRatioDir(float3 d)
+{
+	return min(FogTintDir(d) / max(FogColor.rgb, 1e-3), 2.5);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
 
 // The depth pre-pass's masks at a pixel (DiligentGfx::FinishLightingPrepass): the ray-traced
 // shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
@@ -578,7 +615,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	PrepareSurface(input);
 	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), float4(FogTint(input.WorldPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 
@@ -589,7 +626,7 @@ float4 PS_Alpha(VS_OUTPUT input) : SV_Target
 	float4 tex = inpTexture.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	if(tex.a < ALPHA_REF) discard;
 	tex.rgb = WeatherAlbedo(input, tex.rgb);
-	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), FogColor, input.Fog);
+	float4 c = lerp(float4(ModelLight(input, tex.rgb) + Emission(input), input.Color.a * tex.a), float4(FogTint(input.WorldPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
 

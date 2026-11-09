@@ -44,7 +44,45 @@ cbuffer FogBuffer
 	float4 FogCamera;
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog;
+	float4 LightMasks;
+	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
+	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
+	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
+
+// The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
+// dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
+// dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
+// (the sun set in smog, the play test of 2026-11-09); FogColor by day
+float3 FogTintDir(float3 d)
+{
+	if (FogSun.w == 0 || dot(d, d) < 1e-10)
+		return FogColor.rgb;
+	d = normalize(d);
+	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
+	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
+	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
+	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
+	// out of the sky (the band hid it high above the horizon, the play test of 2026-11-09)
+	float mu = dot(d, FogSun.xyz);
+	if (mu > 0.99 && d.y > -0.004) {
+		float disc = smoothstep(0.99985, 0.99996, mu);
+		float glow = pow(saturate(mu), 2500) * 0.5 + pow(saturate(mu), 300) * 0.04;
+		c += FogSunColour.rgb * (disc + glow * FogSunColour.w) * FogSun.w * saturate((d.y + 0.004) / 0.002);
+	}
+	return c;
+}
+float3 FogRatioDir(float3 d)
+{
+	return min(FogTintDir(d) / max(FogColor.rgb, 1e-3), 2.5);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
 
 float3 GradeColour(float3 c)
 {
@@ -59,7 +97,7 @@ cbuffer SkyBuffer
 	float4 CamRight;   // w: tan(fov y / 2)
 	float4 CamUp;
 	float4 SkyFront;   // world direction of sky_front.tga
-	float4 SkyRight;   // world direction of sky_right.tga
+	float4 SkyRight;   // world direction of sky_right.tga; w: the physical sky model (RenderSettings::skyModel 1)
 	float4 SkyFlags;   // x: the sky has all six faces, y: the dynamic clouds' layer (tClouds), z: the frame (its jitter),
 	                   // w: the clouds' quality (RenderSettings::cloudQuality, 0-3)
 	// wkbai's day and night (g_environment; NightSky): the sun's own direction (below the horizon
@@ -220,6 +258,11 @@ float3 DuskTint(float3 sun, float lift)
 	float3 tr = exp(-(float3(5.8e-3, 13.5e-3, 33.1e-3) * 8 + 21e-3 * 1.2 * 1.1) * air);
 	float3 tint = tr / max(max(tr.r, tr.g), max(tr.b, 1e-4));
 	float dusk = smoothstep(0.55, 0.05, sun.y);
+	// the Physical sky model (SkyRight.w): orange, gold and pink rather than a deep red (the
+	// clouds' many scatterings and the sky's light soften it; under the day's grade at sunset the
+	// pure air-mass colour read as red paint, the play test of 2026-11-09)
+	if (SkyRight.w != 0)
+		return lerp(float3(1, 1, 1), pow(tint, 0.45) * 1.15, dusk);
 	return lerp(float3(1, 1, 1), tint * 1.5, dusk);
 }
 
@@ -237,7 +280,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// beyond the march (at the horizon): the haze the far clouds fade into, as much as the sky is
 	// cloudy (a storm as an overcast), so the clouds blend into the horizon without a line
 	const float hazeCover = saturate(max(cShape.x, cWeather.y * 0.85) * 1.15);
-	const float4 beyond = float4(FogColor.rgb * hazeCover, 1 - hazeCover);
+	const float4 beyond = float4(FogTintDir(rd) * hazeCover, 1 - hazeCover);
 	if (rd.y <= 0.002)
 		return beyond;
 	// at most 1800 units of the ray in the layer; a storm's 6000, so that the cumulonimbus'
@@ -275,7 +318,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// at dawn and dusk the sky's light is weak beside the sun's on the clouds: their lit sides glow,
 	// their shaded ones are blue-grey
 	const float duskK = smoothstep(0.55, 0.05, sun.y) * smoothstep(-0.08, -0.01, sun.y);
-	const float duskSun = lerp(1, 1.7, duskK), duskSky = lerp(1, 0.55, duskK);
+	float duskSun = lerp(1, SkyRight.w != 0 ? 1.25 : 1.7, duskK), duskSky = lerp(1, SkyRight.w != 0 ? 0.7 : 0.55, duskK);
+	// (the Physical model: at dusk the clouds towards the sun glow, those opposite it are darker,
+	// lit by the low sun's light from behind them)
+	if (SkyRight.w != 0)
+		duskSun *= lerp(1, lerp(0.45, 1.15, towardSun), duskK);
 	float3 light = float3(0, 0, 0);
 	float T = 1;
 	const float SIGMA = 0.045;
@@ -329,7 +376,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float lum = max(light.r, max(light.g, light.b));
 	if (lum > 0.5)
 		light *= (0.5 + (lum - 0.5) / (1 + (lum - 0.5) / 0.32)) / lum;
-	return float4(light * fade + FogColor.rgb * far, lerp(1, T, fade) * (1 - far));
+	return float4(light * fade + FogTintDir(rd) * far, lerp(1, T, fade) * (1 - far));
 }
 
 // The high clouds above the cumulus layer, as thin textured layers (cheap: a few dozen samples
@@ -558,6 +605,13 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 static const float ATM_EARTH = 6360, ATM_TOP = 6420;
 static const float3 ATM_RAYLEIGH = float3(5.8e-3, 13.5e-3, 33.1e-3);
 static const float ATM_MIE = 21e-3;
+// ozone's absorption (its Chappuis band: orange and red), in a layer round 25 km: the deep blue
+// overhead at sunset and in the twilight
+static const float3 ATM_OZONE = float3(0.65e-3, 1.881e-3, 0.085e-3);
+float OzoneDensity(float h)
+{
+	return max(0, 1 - abs(h - 25) / 15);
+}
 
 float AtmTop(float3 o, float3 d)
 {
@@ -569,22 +623,40 @@ float3 PhysicalSky(float3 rd, float3 sun)
 {
 	rd = normalize(float3(rd.x, max(rd.y, 0.0), rd.z));
 	float3 o = float3(0, ATM_EARTH + 0.3, 0);
-	float ds = AtmTop(o, rd) / 8;
-	float odR = 0, odM = 0;
+	float len = AtmTop(o, rd);
+	float odR = 0, odM = 0, odO = 0;
 	float3 sumR = 0, sumM = 0;
+	// RenderSettings::skyModel 1 (Physical): ozone, the earth's shadow, the samples denser near
+	// the eye; 0 (Normal) as before: evenly spaced, neither
+	const bool physical = SkyRight.w != 0;
 	[loop] for (int i = 0; i < 8; i++) {
-		float3 p = o + rd * ((i + 0.5) * ds);
+		// the samples denser near the eye (squared spacing): the low, dense air along the
+		// horizon's long path, where the sunset's colours come from
+		float u0 = i / 8.0, u1 = (i + 1) / 8.0;
+		if (!physical) {
+			u0 = sqrt(u0);
+			u1 = sqrt(u1);
+		}
+		float ds = len * (u1 * u1 - u0 * u0);
+		float3 p = o + rd * (len * (u0 * u0 + u1 * u1) * 0.5);
 		float h = length(p) - ATM_EARTH;
-		float dR = exp(-h / 8) * ds, dM = exp(-h / 1.2) * ds;
+		float dR = exp(-h / 8) * ds, dM = exp(-h / 1.2) * ds, dO = physical ? OzoneDensity(h) * ds : 0;
 		odR += dR;
 		odM += dM;
-		float dl = AtmTop(p, sun) / 4, lR = 0, lM = 0;
+		odO += dO;
+		// the earth's shadow: no sunlight where the ground stands between the air and the sun
+		// (after sunset the shadow rises opposite it, the pink band of the lit air above)
+		float b = dot(p, sun), cc = dot(p, p) - ATM_EARTH * ATM_EARTH;
+		if (physical && b < 0 && b * b > cc)
+			continue;
+		float dl = AtmTop(p, sun) / 4, lR = 0, lM = 0, lO = 0;
 		[unroll] for (int j = 0; j < 4; j++) {
 			float hl = length(p + sun * ((j + 0.5) * dl)) - ATM_EARTH;
 			lR += exp(-hl / 8) * dl;
 			lM += exp(-hl / 1.2) * dl;
+			lO += physical ? OzoneDensity(hl) * dl : 0;
 		}
-		float3 att = exp(-(ATM_RAYLEIGH * (odR + lR) + ATM_MIE * 1.1 * (odM + lM)));
+		float3 att = exp(-(ATM_RAYLEIGH * (odR + lR) + ATM_MIE * 1.1 * (odM + lM) + ATM_OZONE * (odO + lO)));
 		sumR += dR * att;
 		sumM += dM * att;
 	}
@@ -595,8 +667,27 @@ float3 PhysicalSky(float3 rd, float3 sun)
 	float pR = 0.0596831 * (1 + mu * mu);
 	float pM = 0.35 * 0.1193662 * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * pow(1 + g * g - 2 * g * mu, 1.5));
 	float3 c = 20 * (sumR * ATM_RAYLEIGH * pR + sumM * ATM_MIE * pM);
-	float3 trans = exp(-(ATM_RAYLEIGH * odR + ATM_MIE * 1.1 * odM));
+	float3 trans = exp(-(ATM_RAYLEIGH * odR + ATM_MIE * 1.1 * odM + ATM_OZONE * odO));
 	c += trans * 30 * smoothstep(0.99985, 0.99996, mu);
+	// the twilight's blue (the Physical model): the light scattered more than once, which the
+	// single scattering above leaves out (in the earth's shadow the sky went black at once, a night
+	// sky with the sun just under the horizon, the play test of 2026-11-09): azure on the sun's
+	// side, dimmer away from it, from the sun 6 degrees up until it is 11 under the horizon
+	if (physical) {
+		float tw = saturate((sun.y + 0.2) / 0.18) * (1 - smoothstep(-0.02, 0.05, sun.y));
+		float2 hd = rd.xz, hs = sun.xz;
+		float side = (dot(hd, hd) > 1e-8 && dot(hs, hs) > 1e-8) ? dot(normalize(hd), normalize(hs)) * 0.5 + 0.5 : 0.5;
+		// (towards the sun the low sky keeps its warm glow: the blue mostly higher up there; the
+		// grey-lavender sunrise, the play test of 2026-11-09)
+		float up = lerp(1, smoothstep(0.0, 0.45, rd.y), side * side);
+		c += float3(0.1, 0.24, 0.52) * tw * lerp(0.6, 1, side) * up * (1.2 - 0.4 * rd.y);
+		// dawn's and dusk's glow on the horizon round the sun's bearing: the lit high air beyond
+		// the earth's shadow, which the few samples miss (before sunrise the sky towards the sun
+		// stood dark navy, the SUNRISE save of 2026-11-09): from the sun 8 degrees under the
+		// horizon, gone by 7 up
+		float dawn = saturate((sun.y + 0.21) / 0.14) * (1 - smoothstep(0.03, 0.12, sun.y));
+		c += float3(0.9, 0.42, 0.12) * dawn * pow(side, 4) * exp(-rd.y * 9) * 1.1;
+	}
 	return 1 - exp(-c * 1.2);
 }
 
@@ -689,7 +780,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// (fog start beyond any distance).
 	bool sixFaces = SkyFlags.x != 0;
 	float fog = (sixFaces && FogStartDist > 1e8) ? 0 : (c < 0 ? 1 : SkyFog(c / max(horizontal, 1e-6)));
-	float3 colour = FogColor.rgb;
+	float3 colour = FogTintDir(rd);
 	float night = SkySun.w;
 	float overcast = 0; // how much the weather's clouds over the sky box hide (the stars, the moon)
 	float3 highAdded = 0; // what the high clouds changed of the sky (hidden behind the cumulus below)
@@ -702,6 +793,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 			if (night > 0)
 				sun = SkySun.xyz;
 			tex = sun.y > -0.25 ? PhysicalSky(rd, sun) : 0;
+
 			tex = max(tex, NightAir(rd) * night);
 			float3 bare = tex;
 			tex = HighClouds(FogCamera.xyz, rd, tex);
@@ -736,12 +828,12 @@ float4 PS(VS_OUTPUT input) : SV_Target
 				float amount = saturate((max(cShape.x, cWeather.y * 0.85) - 0.3) / 0.45) * 0.96;
 				float k = SkyOvercast.w * amount * lerp(smoothstep(0.25, 0.75, cc), lerp(0.75, 1.0, cc), amount);
 				float3 deck = SkyOvercast.rgb * lerp(1.12, 0.78, cc) * lerp(1.0, 1.15, saturate(1 - rd.y * 3));
-				deck = lerp(deck, FogColor.rgb, saturate(1 - rd.y * 5) * 0.7); // into the haze at the horizon
+				deck = lerp(deck, FogTintDir(rd), saturate(1 - rd.y * 5) * 0.7); // into the haze at the horizon
 				tex = lerp(tex, deck, k);
 				overcast = k;
 			}
 		}
-		colour = lerp(tex, FogColor.rgb, fog);
+		colour = lerp(tex, FogTintDir(rd), fog);
 	}
 	// the dynamic clouds' layer (RenderSettings::dynamicClouds 3) in front of the sky box,
 	// marched at a quarter, half or the full size (PS_Clouds)
@@ -762,12 +854,22 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// at night the low sky goes into the fog's colour over its lowest 17 degrees or so, the stars
 	// with it (the haze near the horizon): the map edge's fog is that colour, and the mountains
 	// past it stood dark against the stars (the play test of 2026-11-07)
-	float lowHaze = night * (1 - smoothstep(0.0, 0.3, rd.y));
-	colour = lerp(colour, FogColor.rgb, lowHaze);
+	// (the Physical sky model: only once the sun is 2 degrees under the horizon, all of it from
+	// 8, in the haze's colours along the horizon: with the night's darkness from the clock, 0.6
+	// with the sun on the horizon, the sunset stood behind a dark wall, the play test of 2026-11-09)
+	const float lowNight = SkyRight.w != 0 ? night * saturate((-SkySun.y - 0.035) / 0.1) : night;
+	float lowHaze = lowNight * (1 - smoothstep(0.0, 0.3, rd.y));
+	colour = lerp(colour, SkyRight.w != 0 ? FogTintDir(rd) : FogColor.rgb, lowHaze);
 	float3 outc = GradeColour(colour);
 	// the moon and the stars over the graded sky (the night's grade would dim them to grey)
 	if (night > 0 && c > 0 && fog < 1)
-		outc += NightSky(rd, CamRight.w * 2 / max(CamUp.w, 1)) * visible * (1 - fog) * (1 - lowHaze);
+	{
+		// (the Physical model: in the twilight the stars come out away from the sun first)
+		float starSide = 1;
+		if (SkyRight.w != 0 && dot(rd.xz, rd.xz) > 1e-8 && dot(SkySun.xz, SkySun.xz) > 1e-8)
+			starSide = lerp(saturate(0.5 - 0.5 * dot(normalize(rd.xz), normalize(SkySun.xz))), 1, night * night);
+		outc += NightSky(rd, CamRight.w * 2 / max(CamUp.w, 1)) * visible * (1 - fog) * (1 - lowHaze) * starSide;
+	}
 	return float4(outc + Dither(input.Pos.xy), 1);
 }
 
@@ -778,34 +880,64 @@ float4 PS_Clouds(VS_OUTPUT input) : SV_Target
 }
 )---";
 
+// The sun's light through the air from the eye towards it (the Physical model's: ozone too)
+static void SunTransmittanceCpu(const Vector3& sun, float out[3])
+{
+	const float EARTH = 6360, TOP = 6420, RAY[3] = { 5.8e-3f, 13.5e-3f, 33.1e-3f }, MIE = 21e-3f, OZONE[3] = { 0.65e-3f, 1.881e-3f, 0.085e-3f };
+	const Vector3 d = Vector3(sun.x, std::max(sun.y, 0.0f), sun.z).normal();
+	const Vector3 o(0, EARTH + 0.3f, 0);
+	const float b = o.dot(d), c = o.dot(o) - TOP * TOP;
+	const float len = -b + std::sqrt(std::max(b * b - c, 0.0f));
+	float odR = 0, odM = 0, odO = 0;
+	for (int i = 0; i < 16; i++) {
+		const float u0 = i / 16.0f, u1 = (i + 1) / 16.0f;
+		const float ds = len * (u1 * u1 - u0 * u0);
+		const float h = (o + d * (len * (u0 * u0 + u1 * u1) * 0.5f)).len3() - EARTH;
+		odR += std::exp(-h / 8) * ds;
+		odM += std::exp(-h / 1.2f) * ds;
+		odO += std::max(0.0f, 1 - std::abs(h - 25) / 15) * ds;
+	}
+	for (int i = 0; i < 3; i++)
+		out[i] = std::exp(-(RAY[i] * odR + MIE * 1.1f * odM + OZONE[i] * odO));
+}
+
 // The physical sky's colour towards d (unit, y up) with the sun towards sun: PhysicalSky of the
 // sky shader on the CPU
 static void PhysicalSkyCpu(const Vector3& dIn, const Vector3& sun, float out[3])
 {
-	const float EARTH = 6360, TOP = 6420, RAY[3] = { 5.8e-3f, 13.5e-3f, 33.1e-3f }, MIE = 21e-3f;
+	const bool physical = g_renderSettings.skyModel >= 1; // (as the shader's SkyRight.w)
+	const float EARTH = 6360, TOP = 6420, RAY[3] = { 5.8e-3f, 13.5e-3f, 33.1e-3f }, MIE = 21e-3f, OZONE[3] = { 0.65e-3f, 1.881e-3f, 0.085e-3f };
+	auto ozone = [](float h) { return std::max(0.0f, 1 - std::abs(h - 25) / 15); };
 	const Vector3 d = Vector3(dIn.x, std::max(dIn.y, 0.0f), dIn.z).normal();
 	auto top = [&](const Vector3& o, const Vector3& v) {
 		const float b = o.dot(v), c = o.dot(o) - TOP * TOP;
 		return -b + std::sqrt(std::max(b * b - c, 0.0f));
 	};
 	const Vector3 o(0, EARTH + 0.3f, 0);
-	const float ds = top(o, d) / 8;
-	float odR = 0, odM = 0, sumR[3] = {}, sumM[3] = {};
+	const float len = top(o, d);
+	float odR = 0, odM = 0, odO = 0, sumR[3] = {}, sumM[3] = {};
 	for (int i = 0; i < 8; i++) {
-		const Vector3 p = o + d * ((i + 0.5f) * ds);
+		const float u0 = physical ? i / 8.0f : std::sqrt(i / 8.0f), u1 = physical ? (i + 1) / 8.0f : std::sqrt((i + 1) / 8.0f);
+		const float ds = len * (u1 * u1 - u0 * u0);
+		const Vector3 p = o + d * (len * (u0 * u0 + u1 * u1) * 0.5f);
 		const float h = p.len3() - EARTH;
 		const float dR = std::exp(-h / 8) * ds, dM = std::exp(-h / 1.2f) * ds;
 		odR += dR;
 		odM += dM;
+		odO += physical ? ozone(h) * ds : 0.0f;
+		const float b = p.dot(sun), cc = p.dot(p) - EARTH * EARTH;
+		if (physical && b < 0 && b * b > cc)
+			continue; // in the earth's shadow
 		const float dl = top(p, sun) / 4;
-		float lR = 0, lM = 0;
+		float lR = 0, lM = 0, lO = 0;
 		for (int j = 0; j < 4; j++) {
 			const float hl = (p + sun * ((j + 0.5f) * dl)).len3() - EARTH;
 			lR += std::exp(-hl / 8) * dl;
 			lM += std::exp(-hl / 1.2f) * dl;
+			lO += physical ? ozone(hl) * dl : 0.0f;
 		}
 		for (int c = 0; c < 3; c++) {
-			const float att = std::exp(-(RAY[c] * (odR + lR) + MIE * 1.1f * (odM + lM)));
+			const float att = std::exp(-(RAY[c] * (odR + lR) + MIE * 1.1f * (odM + lM) + OZONE[c] * (odO + lO)));
 			sumR[c] += dR * att;
 			sumM[c] += dM * att;
 		}
@@ -813,8 +945,24 @@ static void PhysicalSkyCpu(const Vector3& dIn, const Vector3& sun, float out[3])
 	const float mu = d.dot(sun), g = 0.83f; // (as PhysicalSky's)
 	const float pR = 0.0596831f * (1 + mu * mu);
 	const float pM = 0.35f * 0.1193662f * ((1 - g * g) * (1 + mu * mu)) / ((2 + g * g) * std::pow(1 + g * g - 2 * g * mu, 1.5f));
+	// the twilight's blue (as the shader's)
+	float twilight[3] = {};
+	if (physical) {
+		const float rise = std::clamp((sun.y + 0.02f) / 0.07f, 0.0f, 1.0f);
+		const float tw = std::clamp((sun.y + 0.2f) / 0.18f, 0.0f, 1.0f) * (1 - rise * rise * (3 - 2 * rise));
+		const float hd = std::sqrt(d.x * d.x + d.z * d.z), hs = std::sqrt(sun.x * sun.x + sun.z * sun.z);
+		const float side = (hd > 1e-4f && hs > 1e-4f) ? (d.x * sun.x + d.z * sun.z) / (hd * hs) * 0.5f + 0.5f : 0.5f;
+		const float t = std::clamp(d.y / 0.45f, 0.0f, 1.0f), up = 1 + (t * t * (3 - 2 * t) - 1) * side * side;
+		const float k = tw * (0.6f + 0.4f * side) * up * (1.2f - 0.4f * d.y);
+		const float blue[3] = { 0.1f, 0.24f, 0.52f }, warm[3] = { 0.9f, 0.42f, 0.12f };
+		const float r = std::clamp((sun.y - 0.03f) / 0.09f, 0.0f, 1.0f);
+		const float dawn = std::clamp((sun.y + 0.21f) / 0.14f, 0.0f, 1.0f) * (1 - r * r * (3 - 2 * r));
+		const float g = dawn * side * side * side * side * std::exp(-d.y * 9) * 1.1f;
+		for (int c = 0; c < 3; c++)
+			twilight[c] = blue[c] * k + warm[c] * g;
+	}
 	for (int c = 0; c < 3; c++)
-		out[c] = 1 - std::exp(-20 * (sumR[c] * RAY[c] * pR + sumM[c] * MIE * pM) * 1.2f);
+		out[c] = 1 - std::exp(-(20 * (sumR[c] * RAY[c] * pR + sumM[c] * MIE * pM) + twilight[c]) * 1.2f);
 }
 
 struct DiligentSkyRenderer::Impl {
@@ -825,6 +973,10 @@ struct DiligentSkyRenderer::Impl {
 	bool boxLightValid = false;
 	Vector3 physicalSun = Vector3(0, -2, 0); // the sun the physical sky light was worked out for
 	float physicalCover = -1; // and the cloud cover
+	int physicalModel = -1; // and RenderSettings::skyModel
+	// the haze's tint (ShadowEnvironment::fogTint) as worked out for this true sun and cover
+	Vector3 tintSun = Vector3(0, -2, 0);
+	float tintCover = -1, horizon[32][4] = {}, sunColour[3] = {};
 	const Camera* camera;
 	texture faces[6] = {};
 	bool sixFaces = false;
@@ -1083,7 +1235,8 @@ void DiligentSkyRenderer::render()
 		Vector3 sun = env.sunDirection;
 		sun = sun.sqlen3() > 0.01f ? sun.normal() : Vector3(0.5f, 0.8f, 0.3f).normal();
 		const float cover = std::clamp(std::max(env.cloudPreset.cover, env.cloudPreset.storm * 0.85f), 0.0f, 1.0f); // a storm: as dark as an overcast
-		if ((sun - _impl->physicalSun).sqlen3() > 1e-6f || std::abs(cover - _impl->physicalCover) > 0.01f) {
+		if ((sun - _impl->physicalSun).sqlen3() > 1e-6f || std::abs(cover - _impl->physicalCover) > 0.01f || _impl->physicalModel != g_renderSettings.skyModel) {
+			_impl->physicalModel = g_renderSettings.skyModel;
 			_impl->physicalSun = sun;
 			_impl->physicalCover = cover;
 			float up[3] = {}, horizon[3] = {}, below[3] = {}, c[3];
@@ -1145,6 +1298,64 @@ void DiligentSkyRenderer::render()
 			env.skyLightValid = true;
 		}
 	}
+	// The haze's tint along the horizon (FogBuffer.FogSun, FogToward, FogAway): the physical sky
+	// 3 degrees up towards the true sun's bearing and away from it, over its mean all round; the
+	// clouds' cover greys it, the night (the sun far under) ends it
+	if (clouds && g_renderSettings.skyModel >= 1) {
+		const Vector3 sunTrue = g_environment.active ? g_environment.sunWorld : env.sunDirection.normal();
+		const float cover = std::clamp(std::max(env.cloudPreset.cover, env.cloudPreset.storm * 0.85f), 0.0f, 1.0f);
+		const float h = std::sqrt(sunTrue.x * sunTrue.x + sunTrue.z * sunTrue.z);
+		const float live = std::clamp((sunTrue.y + 0.2f) / 0.1f, 0.0f, 1.0f) * (1.0f - 0.2f * cover * cover);
+		if (h > 1e-3f && live > 0.0f && sunTrue.y < 0.21f) {
+			if ((sunTrue - _impl->tintSun).sqlen3() > 1e-7f || std::abs(cover - _impl->tintCover) > 0.01f) {
+				_impl->tintSun = sunTrue;
+				_impl->tintCover = cover;
+				// the sky 2 degrees up by bearing (the same model as the sky's), the clouds' grey
+				// over it as the sky light's
+				const float ce = 0.99939f, se = 0.0349f;
+				for (int k = 0; k < 32; k++) {
+					const float a = k * 6.2831853f / 32;
+					float* v = _impl->horizon[k];
+					PhysicalSkyCpu(Vector3(std::cos(a) * ce, se, std::sin(a) * ce), sunTrue, v);
+					// (greyed less than the sky light: the low sun lights the haze under the cloud
+					// deck, the horizon glows; at 0.8 of the cover's square it read as a grey band)
+					const float l = 0.3f * v[0] + 0.59f * v[1] + 0.11f * v[2];
+					for (int i = 0; i < 3; i++) {
+						v[i] += (l * 1.1f - v[i]) * 0.35f * cover * cover;
+						// a soft knee over 0.6 (at most about 0.85): the glow round the sun not white
+						if (v[i] > 0.6f)
+							v[i] = 0.6f + (v[i] - 0.6f) / (1.0f + (v[i] - 0.6f) / 0.25f);
+					}
+					v[3] = 0.0f;
+				}
+				// the sun's disc through the air towards it, in the sky's tone (its 30 times the
+				// transmittance, mapped as PhysicalSky maps it)
+				float trans[3];
+				SunTransmittanceCpu(sunTrue, trans);
+				for (int i = 0; i < 3; i++)
+					_impl->sunColour[i] = 1.0f - std::exp(-30.0f * trans[i] * 1.2f);
+			}
+			// at dawn and dusk (the sun under 12 degrees, all of it under 6): by day the haze's own
+			env.fogTint[0] = sunTrue.x;
+			env.fogTint[1] = sunTrue.y;
+			env.fogTint[2] = sunTrue.z;
+			// (all of it with the sun within 2 degrees of the horizon, none from 7 up: higher, the
+			// sky's bright glow round the sun spread over the whole fogged land and sea, a white
+			// sheet, the play test of 2026-11-09)
+			const float low = 1.0f - std::clamp((sunTrue.y - 0.03f) / 0.1f, 0.0f, 1.0f);
+			env.fogTint[3] = live * low;
+			// (the disc as bright as the clouds let it: an overcast hides it)
+			const float clear = 1.0f - 0.9f * cover * cover;
+			for (int i = 0; i < 3; i++)
+				env.fogSunColour[i] = _impl->sunColour[i] * clear;
+			env.fogSunColour[3] = 1.0f;
+			memcpy(env.fogHorizon, _impl->horizon, sizeof(env.fogHorizon));
+		}
+		else
+			env.fogTint[3] = 0.0f;
+	}
+	else
+		env.fogTint[3] = 0.0f;
 	// the haze (the distance fog's colour, the horizon's, the far clouds'): the physical sky's
 	// horizon, greyer and darker the more cloud (a storm's dark, a fog's pale: the clouds' light)
 	// The user's own fog colour (RenderSettings::fogColourOverride) is the clear day's haze then,
@@ -1175,8 +1386,13 @@ void DiligentSkyRenderer::render()
 	}
 	// wkbai's night (the moon, the stars) and the weather's overcast over the sky box
 	const EnvironmentView& ev = g_environment;
-	const float night = ev.active ? std::clamp(1.0f - ev.sun.daylight, 0.0f, 1.0f) : 0.0f;
 	auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+	// the night's sky (its air, the stars, the moon): with the Physical sky model by the true sun, 2
+	// to 9 degrees under the horizon (by the clock's daylight, 0.8 with the sun 1 degree under,
+	// the stars were out at sunset); else by the daylight
+	const bool physicalNight = clouds && g_renderSettings.skyModel >= 1;
+	const float night = !ev.active ? 0.0f : physicalNight ? smooth(-0.035f, -0.155f, ev.sunWorld.y)
+		: std::clamp(1.0f - ev.sun.daylight, 0.0f, 1.0f);
 	const float moonShows = night * smooth(-0.03f, 0.06f, ev.moonWorld.y);
 	{
 		static bool told = false;
@@ -1202,13 +1418,14 @@ void DiligentSkyRenderer::render()
 		overcast[3] = 1.0f;
 	}
 	const float screenHeight = (float)_impl->dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
+	const bool physicalModel = clouds && g_renderSettings.skyModel >= 1;
 	const float data[48] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,
 		up.x, up.y, up.z, screenHeight,
 		// sky_front.tga faces +z (north) and sky_right.tga +x, as seen in the original
 		0, 0, 1, 0,
-		1, 0, 0, 0,
+		1, 0, 0, physicalModel ? 1.0f : 0.0f,
 		_impl->sixFaces ? 1.0f : 0.0f, clouds ? 1.0f : 0.0f, (float)(_impl->dgfx->FrameIndex() % 64), (float)cloudQuality,
 		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
 		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,

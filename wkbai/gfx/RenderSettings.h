@@ -35,6 +35,10 @@ struct RenderSettings {
 
 	// The original's sky, shadows and model lighting
 	bool sky = true, cloudShadows = true, staticShadows = true;
+	// the sky without the original's sky box (the volumetric clouds' physical sky): 0 Normal; 1
+	// Physical: the earth's shadow after sunset, ozone's deep blue, the horizon's haze in the
+	// sky's own colours (warm towards a low sun), a lower horizon band
+	int skyModel = 1;
 	// the water: 0 Off (a plain colour), 1 Original (the original's textured water with its sun
 	// glint off rippled normals), 2 Low (with the sky reflected, deeper water darker, cloud
 	// shadows, shore foam, separate river and sea looks, short screen-space reflections),

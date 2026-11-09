@@ -811,7 +811,7 @@ struct FrontEnd::Impl {
 			sol::table pages = lua.create_table();
 			int i = 1;
 			for (const MenuPage& p : GetMenuPages())
-				pages[i++] = lua.create_table_with("id", p.id, "title", p.title);
+				pages[i++] = lua.create_table_with("id", p.id, "title", p.title, "group", p.group);
 			return pages;
 		});
 		lua.set_function("getOptions", [this](const std::string& page) {

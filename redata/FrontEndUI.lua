@@ -2319,7 +2319,7 @@ Screens.multiplayer = {
 -- wkbre2's own settings, a page per tab (pages and settings come from MenuOptions.cpp), drawn
 -- with the original's sliders and buttons.
 
-local optionsState = { page = 1, scroll = 0, texts = {} }
+local optionsState = { page = 1, scroll = 0, texts = {}, lastPage = {} }
 
 local function sliderPosition(o, v)
 	if o.logarithmic and o.min > 0 then
@@ -2349,13 +2349,42 @@ Screens.options = {
 	open = function() beginEditOptions(); optionsState.scroll = 0; optionsState.texts = {} end,
 	draw = function()
 		title(T("FRONT_END_OPTIONS_TITLE"))
+		-- the pages' groups as tabs (a page without one: a tab of its own), the group's pages as a
+		-- second row of tabs under it
 		local pages = getOptionPages()
-		local labels = {}
-		for i, p in ipairs(pages) do labels[i] = p.title end
+		local groups, groupOf = {}, {}
+		for i, p in ipairs(pages) do
+			local g = (p.group ~= nil and p.group ~= "") and p.group or p.title
+			if not groupOf[g] then
+				groups[#groups + 1] = { title = g, pages = {} }
+				groupOf[g] = #groups
+			end
+			table.insert(groups[groupOf[g]].pages, i)
+		end
 		local before = optionsState.page
-		optionsState.page = tabs(labels, optionsState.page, X(90), Y(70), L(30))
+		local current = pages[optionsState.page] or pages[1]
+		local gi = groupOf[(current.group ~= nil and current.group ~= "") and current.group or current.title]
+		local glabels = {}
+		for i, g in ipairs(groups) do glabels[i] = g.title end
+		local ng = tabs(glabels, gi, X(90), Y(70), L(30))
+		if ng ~= gi then
+			optionsState.page = optionsState.lastPage[ng] or groups[ng].pages[1]
+			gi = ng
+		end
+		local top = Y(100)
+		local group = groups[gi]
+		if #group.pages > 1 then
+			local slabels, si = {}, 1
+			for k, idx in ipairs(group.pages) do
+				slabels[k] = pages[idx].title
+				if idx == optionsState.page then si = k end
+			end
+			optionsState.page = group.pages[tabs(slabels, si, X(90), Y(104), L(28))]
+			top = Y(136)
+		end
+		optionsState.lastPage[gi] = optionsState.page
 		if optionsState.page ~= before then optionsState.scroll = 0 end
-		local px, py, pw, ph = X(90), Y(100), L(1740), L(900)
+		local px, py, pw, ph = X(90), top, L(1740), L(900) - (top - Y(100))
 		panel(px, py, pw, ph, true)
 
 		local page = pages[optionsState.page]

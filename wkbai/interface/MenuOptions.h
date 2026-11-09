@@ -10,7 +10,8 @@
 
 // The settings that the Options menu shows: wkbre2's own (render, camera and sound settings),
 // not the original's list. Pages show their options in the order registered here, and the menu
-// shows the pages in this order, so a new setting or page needs nothing but an entry here.
+// shows the pages in this order (those of one group together, under its tab), so a new setting
+// or page needs nothing but an entry here.
 struct MenuOption {
 	enum Type { TOGGLE, SLIDER, CHOICE, TEXT };
 	std::string id;      // stable name, for scripts
@@ -31,8 +32,10 @@ struct MenuOption {
 	bool needsRestart = false;                 // takes effect after restarting wkbre2
 };
 
+// group: the tab the page sits under (a row of tabs of its own: the graphics pages); empty: a
+// tab of its own
 struct MenuPage {
-	std::string id, title;
+	std::string id, title, group;
 };
 
 const std::vector<MenuPage>& GetMenuPages();

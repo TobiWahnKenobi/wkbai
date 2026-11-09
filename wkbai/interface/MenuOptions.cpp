@@ -110,7 +110,17 @@ namespace {
 		list.push_back(withEnabled(slider("edgeFogOpaque", "view", "Edge fog opaque at", rs.edgeFogOpaque, 0.0f, 0.95f),
 			[&rs]() { return rs.edgeFog; }));
 		list.push_back(slider("fieldOfView", "view", "Field of view", rs.fovYDegrees, 20.0f, 100.0f, "%.0f"));
-		list.push_back(toggle("sky", "view", "Sky", rs.sky));
+		list.push_back(toggle("sky", "sky", "Sky", rs.sky));
+		{
+			// (the physical sky: with the volumetric clouds, instead of the sky box)
+			MenuOption o;
+			o.id = "skyModel"; o.page = "sky"; o.label = "Sky model";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Normal", "Physical" };
+			o.get = [&rs]() { return (float)rs.skyModel; };
+			o.set = [&rs](float v) { rs.skyModel = std::clamp((int)v, 0, 1); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.sky && rs.dynamicClouds >= 3; }));
+		}
 
 		// Picture (the 3D scene, not the HUD)
 		list.push_back(logarithmic(slider("exposure", "picture", "Exposure", rs.exposure, 0.25f, 4.0f)));
@@ -119,7 +129,7 @@ namespace {
 		list.push_back(slider("saturation", "picture", "Saturation", rs.saturation, 0.0f, 2.0f));
 
 		// Lighting and shadows
-		list.push_back(toggle("cloudShadows", "lighting", "Cloud shadows", rs.cloudShadows));
+		list.push_back(toggle("cloudShadows", "sky", "Cloud shadows", rs.cloudShadows));
 		list.push_back(toggle("buildingShadows", "lighting", "Building shadows", rs.staticShadows));
 		list.push_back(withEnabled(slider("staticShadowLight", "lighting", "Light in building shadows", rs.staticShadowLight, 0.0f, 1.0f),
 			[&rs]() { return rs.staticShadows; }));
@@ -137,19 +147,21 @@ namespace {
 		list.push_back(toggle("characterShadows", "lighting", "Character shadows", rs.characterShadows));
 		list.push_back(withEnabled(toggle("realCharacterShadows", "lighting", "Real character shadows", rs.realCharacterShadows),
 			[&rs]() { return rs.characterShadows && rs.staticShadows; }));
+		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
+		list.push_back(toggle("contactShadows", "lighting", "Contact shadows", rs.contactShadows));
 		{
 			MenuOption o;
-			o.id = "waterQuality"; o.page = "lighting"; o.label = "Water";
+			o.id = "waterQuality"; o.page = "water"; o.label = "Water";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Original", "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.waterQuality; };
 			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, 5); };
 			list.push_back(o);
 		}
-		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
+		list.push_back(withEnabled(toggle("waterFlow", "water", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
 		{
 			MenuOption o;
-			o.id = "waterfalls"; o.page = "lighting"; o.label = "Waterfalls";
+			o.id = "waterfalls"; o.page = "water"; o.label = "Waterfalls";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.waterfalls; };
@@ -170,13 +182,11 @@ namespace {
 		}
 		list.push_back(withEnabled(slider("dynamicGIStrength", "lighting", "Bounced light strength", rs.dynamicGIStrength, 0.0f, 3.0f),
 			[&rs]() { return rs.skyGI && rs.dynamicGI > 0; }));
-		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
-		list.push_back(toggle("contactShadows", "lighting", "Contact shadows", rs.contactShadows));
-		list.push_back(withEnabled(toggle("rtReflections", "lighting", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= 2; }));
-		list.push_back(slider("terrainFresnel", "lighting", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
+		list.push_back(withEnabled(toggle("rtReflections", "water", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= 2; }));
+		list.push_back(slider("terrainFresnel", "terrain", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
 		{
 			MenuOption o;
-			o.id = "dynamicClouds"; o.page = "lighting"; o.label = "Clouds";
+			o.id = "dynamicClouds"; o.page = "sky"; o.label = "Clouds";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Original", "Moving shadows", "Light shafts", "Volumetric" };
 			o.get = [&rs]() { return (float)rs.dynamicClouds; };
@@ -185,7 +195,7 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "cloudQuality"; o.page = "lighting"; o.label = "Cloud quality"; // (the volumetric clouds' steps; the high clouds' kinds and samples, the stratus' texture)
+			o.id = "cloudQuality"; o.page = "sky"; o.label = "Cloud quality"; // (the volumetric clouds' steps; the high clouds' kinds and samples, the stratus' texture)
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.cloudQuality; };
@@ -195,7 +205,7 @@ namespace {
 		// (the cloud weather and cover: the game settings' now, in the lobby's Weather tab)
 		{
 			MenuOption o;
-			o.id = "weatherEffects"; o.page = "lighting"; o.label = "Weather and season effects";
+			o.id = "weatherEffects"; o.page = "sky"; o.label = "Weather and season effects";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Low", "Medium", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.weatherEffects; };
@@ -204,25 +214,25 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "terrainTessellation"; o.page = "lighting"; o.label = "Terrain tessellation";
+			o.id = "terrainTessellation"; o.page = "terrain"; o.label = "Terrain tessellation";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Low", "Medium", "High" };
 			o.get = [&rs]() { return (float)rs.terrainTessellation; };
 			o.set = [&rs](float v) { rs.terrainTessellation = std::clamp((int)v, 0, 3); };
 			list.push_back(o);
 		}
-		list.push_back(toggle("grass", "lighting", "Grass", rs.grass));
-		list.push_back(withEnabled(slider("grassDensity", "lighting", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
+		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
+		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
-		list.push_back(withEnabled(slider("grassHeight", "lighting", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
+		list.push_back(withEnabled(slider("grassHeight", "terrain", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
 			[&rs]() { return rs.grass; }));
-		list.push_back(withEnabled(slider("grassDistance", "lighting", "Grass distance", rs.grassDistance, 10.0f, 250.0f, "%.0f"),
+		list.push_back(withEnabled(slider("grassDistance", "terrain", "Grass distance", rs.grassDistance, 10.0f, 250.0f, "%.0f"),
 			[&rs]() { return rs.grass; }));
 		list.push_back(toggle("ssao", "lighting", "Ambient occlusion", rs.ssao));
-		list.push_back(toggle("bloom", "lighting", "Bloom", rs.bloom));
+		list.push_back(toggle("bloom", "effects", "Bloom", rs.bloom));
 		{
 			MenuOption o;
-			o.id = "antiAliasing"; o.page = "lighting"; o.label = "Anti-aliasing";
+			o.id = "antiAliasing"; o.page = "quality"; o.label = "Anti-aliasing";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "FXAA", "TAA", "AMD FSR 3.1" };
 			o.get = [&rs]() { return (float)rs.antiAliasing; };
@@ -232,7 +242,7 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "upscaling"; o.page = "lighting"; o.label = "Upscaling (AMD FSR)";
+			o.id = "upscaling"; o.page = "quality"; o.label = "Upscaling (AMD FSR)";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Ultra quality", "Quality", "Balanced", "Performance" };
 			o.get = [&rs]() { return (float)rs.upscaling; };
@@ -241,22 +251,22 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "upscaler"; o.page = "lighting"; o.label = "Upscaler";
+			o.id = "upscaler"; o.page = "quality"; o.label = "Upscaler";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "FSR 1", "FSR 3.1" };
 			o.get = [&rs]() { return (float)rs.upscaler; };
 			o.set = [&rs](float v) { rs.upscaler = std::clamp((int)v, 0, 1); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.upscaling > 0; }));
 		}
-		list.push_back(withEnabled(slider("sharpness", "lighting", "Sharpening", rs.sharpness, 0.0f, 1.0f),
+		list.push_back(withEnabled(slider("sharpness", "quality", "Sharpening", rs.sharpness, 0.0f, 1.0f),
 			[&rs]() { return rs.upscaling > 0 || rs.antiAliasing >= 2; }));
 		// camera motion blur: 0 off, up to the whole frame's motion
-		list.push_back(slider("motionBlur", "lighting", "Camera motion blur", rs.motionBlur, 0.0f, 1.0f, "%.2f"));
+		list.push_back(slider("motionBlur", "effects", "Camera motion blur", rs.motionBlur, 0.0f, 1.0f, "%.2f"));
 		// tilt-shift: 0 off, up to the strongest blur outside the sharp band
-		list.push_back(slider("tiltShift", "lighting", "Tilt-shift", rs.tiltShift, 0.0f, 1.0f, "%.2f"));
+		list.push_back(slider("tiltShift", "effects", "Tilt-shift", rs.tiltShift, 0.0f, 1.0f, "%.2f"));
 		{
 			MenuOption o;
-			o.id = "anisotropy"; o.page = "lighting"; o.label = "Anisotropic filtering";
+			o.id = "anisotropy"; o.page = "quality"; o.label = "Anisotropic filtering";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "2x", "4x", "8x", "16x" };
 			o.get = [&rs]() { int k = 0; while ((2 << k) <= rs.anisotropy && k < 4) k++; return (float)k; };
@@ -264,12 +274,12 @@ namespace {
 			o.needsRestart = true;
 			list.push_back(o);
 		}
-		list.push_back(toggle("bumpMapping", "lighting", "Terrain bump mapping", rs.bumpMapping));
-		list.push_back(toggle("modelLighting", "lighting", "Model highlights", rs.modelLighting));
-		list.push_back(withEnabled(slider("modelDetailNormals", "lighting", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
+		list.push_back(toggle("bumpMapping", "terrain", "Terrain bump mapping", rs.bumpMapping));
+		list.push_back(toggle("modelLighting", "models", "Model highlights", rs.modelLighting));
+		list.push_back(withEnabled(slider("modelDetailNormals", "models", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));
-		list.push_back(slider("meshAmbient", "lighting", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
-		list.push_back(slider("meshDiffuse", "lighting", "Model sunlight", rs.meshDiffuse, 0.0f, 1.5f));
+		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
+		list.push_back(slider("meshDiffuse", "models", "Model sunlight", rs.meshDiffuse, 0.0f, 1.5f));
 
 		// Camera and controls
 		list.push_back(slider("scrollSpeed", "camera", "Scroll speed", rs.scrollSpeed, 0.1f, 5.0f));
@@ -375,14 +385,21 @@ namespace {
 
 const std::vector<MenuPage>& GetMenuPages()
 {
+	// the graphics in pages of their own, a row of tabs under the Graphics tab
 	static const std::vector<MenuPage> pages = {
-		{ "view", "View and Fog" },
-		{ "picture", "Picture" },
-		{ "lighting", "Lighting and Shadows" },
-		{ "camera", "Camera" },
-		{ "sound", "Sound" },
-		{ "system", "System" },
-		{ "online", "Online" },
+		{ "view", "View and fog", "Graphics" },
+		{ "sky", "Sky and weather", "Graphics" },
+		{ "lighting", "Shadows and light", "Graphics" },
+		{ "water", "Water", "Graphics" },
+		{ "terrain", "Terrain and grass", "Graphics" },
+		{ "models", "Models", "Graphics" },
+		{ "picture", "Picture", "Graphics" },
+		{ "quality", "Anti-aliasing", "Graphics" },
+		{ "effects", "Effects", "Graphics" },
+		{ "camera", "Camera", "" },
+		{ "sound", "Sound", "" },
+		{ "system", "System", "" },
+		{ "online", "Online", "" },
 	};
 	return pages;
 }

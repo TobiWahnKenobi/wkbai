@@ -937,30 +937,60 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::ColorEdit3("Fog colour", s.fogColour);
 		ImGui::EndDisabled();
 		ImGui::SliderFloat("Field of view (vertical)", &s.fovYDegrees, 20.0f, 100.0f, "%.1f deg");
-		ImGui::Checkbox("Sky", &s.sky);
 	}
-	if (ImGui::CollapsingHeader("Picture", ImGuiTreeNodeFlags_DefaultOpen)) {
+	if (ImGui::CollapsingHeader("Picture")) {
 		ImGui::SliderFloat("Exposure", &s.exposure, 0.25f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
 		ImGui::SliderFloat("Brightness", &s.brightness, -0.5f, 0.5f, "%.2f");
 		ImGui::SliderFloat("Contrast", &s.contrast, 0.25f, 2.0f, "%.2f");
 		ImGui::SliderFloat("Saturation", &s.saturation, 0.0f, 2.0f, "%.2f");
 		ImGui::TextDisabled("Applies to the 3D scene, not the HUD");
 	}
-	if (ImGui::CollapsingHeader("Lighting and shadows", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
+	// (grouped as the Options menu's graphics pages, MenuOptions.cpp)
+	if (ImGui::CollapsingHeader("Sky and clouds")) {
+		ImGui::Checkbox("Sky", &s.sky);
 		{
 			static const char* const cloudLevels[] = { "Original (scrolling map)", "Moving cloud shadows", "+ light shafts", "+ volumetric clouds in the sky" };
 			ImGui::Combo("Clouds", &s.dynamicClouds, cloudLevels, 4);
+			static const char* const skyModels[] = { "Normal", "Physical (earth's shadow, ozone, sunset haze)" };
+			ImGui::BeginDisabled(!s.sky || s.dynamicClouds < 3);
+			ImGui::Combo("Sky model (volumetric clouds' sky)", &s.skyModel, skyModels, 2);
+			ImGui::EndDisabled();
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
+		}
+		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
+		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
+		{
 			static const char* const cloudWeathers[] = { "By the cloud cover", "Clear", "Cloudy", "Rain", "Heavy rain", "Thunderstorm", "Fog", "Snow", "Blizzard", "Heatwave", "Drought" };
 			// (outside a game only: in one, its settings set the clouds)
 			ImGui::BeginDisabled(g_environment.active || g_environment.skyWeather >= 0);
 			ImGui::Combo("Cloud weather", &s.cloudWeather, cloudWeathers, 11);
+			ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
+			ImGui::EndDisabled();
 		}
-		ImGui::SliderFloat("Cloud cover", &s.cloudCover, 0.0f, 1.0f, "%.2f");
+		{
+			static const char* const weatherLevels[] = { "Low", "Medium (snow on roofs and models)", "High (footprints)", "Ultra" };
+			ImGui::Combo("Weather and season effects", &s.weatherEffects, weatherLevels, 4);
+		}
+	}
+	if (ImGui::CollapsingHeader("Lights and shadows")) {
+		ImGui::SeparatorText("Shadows");
+		ImGui::Checkbox("Static shadows (buildings, trees)", &s.staticShadows);
+		ImGui::BeginDisabled(!s.staticShadows);
+		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
+		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
+		{
+			static const char* const levels[] = { "Original (4 x 4 per tile)", "High (8 x 8)", "Very high (16 x 16)" };
+			int level = s.shadowResolution == 4 ? 2 : s.shadowResolution == 2 ? 1 : 0;
+			if (ImGui::Combo("Static shadow detail", &level, levels, 3))
+				s.shadowResolution = level == 2 ? 4 : level == 1 ? 2 : 1;
+		}
+		ImGui::Checkbox("Wall shadows", &s.wallShadows);
 		ImGui::EndDisabled();
-		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
+		ImGui::Checkbox("Character shadows", &s.characterShadows);
+		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
+		ImGui::Checkbox("Contact shadows (where feet, fences and walls meet the ground)", &s.contactShadows);
+		ImGui::SeparatorText("Light");
 		ImGui::Checkbox("Light from the sky (sky occlusion, bounce)", &s.skyGI);
 		{
 			static const char* const giLevels[] = { "Off", "Low (buildings, one bounce)", "High (units too, two bounces)" };
@@ -969,60 +999,59 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::SliderFloat("Bounced light strength", &s.dynamicGIStrength, 0.0f, 3.0f, "%.2f");
 			ImGui::EndDisabled();
 		}
-		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
-		ImGui::Checkbox("Contact shadows (where feet, fences and walls meet the ground)", &s.contactShadows);
-		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
-		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
+		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		ImGui::Checkbox("Ambient occlusion", &s.ssao);
+		ImGui::BeginDisabled(!s.ssao);
+		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
+		ImGui::SliderFloat("AO strength", &s.ssaoStrength, 0.0f, 1.0f, "%.2f");
+		ImGui::EndDisabled();
+	}
+	if (ImGui::CollapsingHeader("Water")) {
 		{
 			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "Medium", "High (tessellated waves)", "Ultra" };
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, 6);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
-		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
-		{
-			static const char* const weatherLevels[] = { "Low", "Medium (snow on roofs and models)", "High (footprints)", "Ultra" };
-			ImGui::Combo("Weather and season effects", &s.weatherEffects, weatherLevels, 4);
-		}
+		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
+	}
+	if (ImGui::CollapsingHeader("Terrain and grass")) {
 		{
 			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
 		}
+		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
+		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
+		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
 		ImGui::Checkbox("Grass", &s.grass);
+		ImGui::BeginDisabled(!s.grass);
 		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 24.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Grass distance", &s.grassDistance, 10.0f, 250.0f, "%.0f");
-		ImGui::Checkbox("Static shadows", &s.staticShadows);
-		ImGui::SliderFloat("Light in static shadows", &s.staticShadowLight, 0.0f, 1.0f, "%.3f");
-		{
-			static const char* const levels[] = { "Original (4 x 4 per tile)", "High (8 x 8)", "Very high (16 x 16)" };
-			int level = s.shadowResolution == 4 ? 2 : s.shadowResolution == 2 ? 1 : 0;
-			if (ImGui::Combo("Static shadow detail", &level, levels, 3))
-				s.shadowResolution = level == 2 ? 4 : level == 1 ? 2 : 1;
-		}
-		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
-		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
-		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
+		ImGui::EndDisabled();
+	}
+	if (ImGui::CollapsingHeader("Models")) {
 		ImGui::Checkbox("Models lit per pixel, with highlights", &s.modelLighting);
+		ImGui::BeginDisabled(!s.modelLighting);
 		ImGui::SliderFloat("Model highlight strength", &s.modelSpecular, 0.0f, 3.0f, "%.2f");
 		ImGui::SliderFloat("Model detail from textures", &s.modelDetailNormals, 0.0f, 8.0f, "%.1f");
-		ImGui::Checkbox("Sky light on models (with per-pixel lighting)", &s.skyLight);
-		ImGui::Checkbox("Character shadows", &s.characterShadows);
-		ImGui::Checkbox("Real character shadows (shadow map)", &s.realCharacterShadows);
-		ImGui::Checkbox("Wall shadows", &s.wallShadows);
-		ImGui::Checkbox("Ambient occlusion", &s.ssao);
-		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
-		ImGui::SliderFloat("AO strength", &s.ssaoStrength, 0.0f, 1.0f, "%.2f");
-		ImGui::Checkbox("Bloom", &s.bloom);
-		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
-		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
-		ImGui::SliderFloat("Camera motion blur", &s.motionBlur, 0.0f, 1.0f, "%.2f");
-		ImGui::SliderFloat("Tilt-shift", &s.tiltShift, 0.0f, 1.0f, "%.2f");
+		ImGui::Checkbox("Sky light on models", &s.skyLight);
+		ImGui::EndDisabled();
+		ImGui::SliderFloat("Model ambient", &s.meshAmbient, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat("Model sun factor", &s.meshDiffuse, 0.0f, 1.5f, "%.3f");
+	}
+	if (ImGui::CollapsingHeader("Anti-aliasing and post effects")) {
 		{
 			static const char* const aaLevels[] = { "Off", "FXAA", "TAA", "FSR 3.1" };
 			ImGui::Combo("Anti-aliasing", &s.antiAliasing, aaLevels, 4);
 		}
 		ImGui::SliderInt("Anisotropic filtering (next map)", &s.anisotropy, 1, 16);
+		ImGui::Checkbox("Bloom", &s.bloom);
+		ImGui::BeginDisabled(!s.bloom);
+		ImGui::SliderFloat("Bloom threshold", &s.bloomThreshold, 0.3f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Bloom intensity", &s.bloomIntensity, 0.0f, 1.5f, "%.2f");
+		ImGui::EndDisabled();
+		ImGui::SliderFloat("Camera motion blur", &s.motionBlur, 0.0f, 1.0f, "%.2f");
+		ImGui::SliderFloat("Tilt-shift", &s.tiltShift, 0.0f, 1.0f, "%.2f");
 	}
 	if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat("Scroll speed", &s.scrollSpeed, 0.1f, 5.0f, "%.2f");

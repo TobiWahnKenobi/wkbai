@@ -26,7 +26,8 @@ struct DiligentGfx : IRenderer
 	// Dynamic constant buffers kept up to date by SetTransformMatrix and SetFog:
 	// cbuffer TransformBuffer { matrix Transform; } and
 	// cbuffer FogBuffer { float4 FogColor; float FogStartDist; float FogEndDist; float4 FogCamera; float4 Grade; float4 EdgeFog;
-	//   float4 LightMasks; } (LightMasks: the depth pre-pass's masks in this frame's shading, FinishLightingPrepass)
+	//   float4 LightMasks; float4 FogSun; float4 FogToward; float4 FogAway; } (LightMasks: the depth pre-pass's masks in
+	//   this frame's shading, FinishLightingPrepass; FogSun, FogToward, FogAway: the haze's tint, shadows.fogTint)
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> transformBuffer, fogBuffer;
 
 	// Shader resource view of a texture from CreateTexture (a white texture for nullptr).
@@ -236,6 +237,10 @@ struct DiligentGfx : IRenderer
 		Diligent::ITextureView* lightRtMask = nullptr;
 		Diligent::ITextureView* lightAo = nullptr;
 		bool lightPrepass = false;
+		// the haze's tint along the horizon (the physical sky's, DiligentSkyRenderer;
+		// FogBuffer.FogSun, FogSunColour, FogHorizon): towards the true sun and the tint's weight,
+		// the sun's disc through the air and its glow's strength, the sky 2 degrees up by bearing
+		float fogTint[4] = {}, fogSunColour[4] = {}, fogHorizon[32][4] = {};
 	} shadows;
 };
 
