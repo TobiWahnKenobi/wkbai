@@ -24,6 +24,7 @@ bool g_rayTracingBuffers = false;
 #include "../util/util.h"
 #include "../Camera.h"
 #include "../util/FrameStats.h"
+#include "GpuProfiler.h"
 
 #include <algorithm>
 #include <chrono>
@@ -333,6 +334,41 @@ struct DiligentRenderer : DiligentGfx
 	DiligentPostProcess::FogOfWar fog;
 	texture whiteTexture = nullptr;
 	texture currentTexture = nullptr;
+	// the per-pass timings' GPU timestamps (GpuProfiler): a list of queries per frame slot
+	struct Stamps : GpuTimestampSource {
+		IRenderDevice* device = nullptr;
+		IDeviceContext* ctx = nullptr;
+		uint32_t slot = 0;
+		std::vector<RefCntAutoPtr<IQuery>> queries[PROFILER_FRAMES];
+		void stamp(uint32_t index) override {
+			auto& q = queries[slot];
+			while (q.size() <= index) {
+				QueryDesc qd;
+				qd.Type = QUERY_TYPE_TIMESTAMP;
+				qd.Name = "Pass timestamp";
+				q.emplace_back();
+				device->CreateQuery(qd, &q.back());
+			}
+			if (q[index])
+				ctx->EndQuery(q[index]);
+		}
+		bool read(uint32_t frameSlot, uint32_t count, std::vector<double>& ms) override {
+			auto& q = queries[frameSlot];
+			if (count > q.size())
+				return false;
+			ms.assign(count, 0.0);
+			uint64_t first = 0, freq = 0;
+			for (uint32_t i = 0; i < count; i++) {
+				QueryDataTimestamp d;
+				if (!q[i] || !q[i]->GetData(&d, sizeof(d), false) || !d.Frequency)
+					return false;
+				if (i == 0) { first = d.Counter; freq = d.Frequency; }
+				ms[i] = (double)((int64_t)(d.Counter - first)) * 1000.0 / (double)freq;
+			}
+			return true;
+		}
+	} stamps;
+	std::chrono::steady_clock::time_point lastBegin;
 	// the GPU memory budget (manageResidency): the lazy textures, those not uploaded yet, the
 	// adapter's budget (DXGI, Direct3D 12 only)
 	std::vector<DiligentTexture*> lazyTextures;
@@ -589,6 +625,7 @@ struct DiligentRenderer : DiligentGfx
 		// the ray-traced shadows' mask from the scene's depth
 		if (postEffects && shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid() && post->depthDSV()) {
 			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
+			PROFILE_SCOPE("RT shadow mask");
 			s.rtShadowMask = shadows.rayShadows->renderMask(ctx, post->depthDSV()->GetTexture(), proj, camera.viewMatrix.getInverse4x3(), shadows.sunDirection, frame, fogBuffer,
 				shadows.rtTerrain ? shadows.terrainHeights : nullptr, shadows.terrainGrid[2]);
 			// the light left in them: the sky's share of the light. Half under a clear noon sun (the
@@ -876,7 +913,8 @@ struct DiligentRenderer : DiligentGfx
 			printf("Diligent: ray tracing %s (caps 0x%X, max recursion %u, primitives per BLAS up to %u), timestamp queries %s\n",
 				info.Features.RayTracing == DEVICE_FEATURE_STATE_ENABLED ? "available" : "not available",
 				(unsigned)rt.CapFlags, rt.MaxRecursionDepth, rt.MaxPrimitivesPerBLAS, info.Features.TimestampQueries == DEVICE_FEATURE_STATE_ENABLED ? "on" : "off");
-			if (info.Features.TimestampQueries == DEVICE_FEATURE_STATE_ENABLED && BenchmarkEnabled()) {
+			// (always: the frame-time window, Ctrl+F12, shows them too; a few queries a frame)
+			if (info.Features.TimestampQueries == DEVICE_FEATURE_STATE_ENABLED) {
 				QueryDesc qd;
 				qd.Type = QUERY_TYPE_TIMESTAMP;
 				for (int i = 0; i < GPU_QUERY_FRAMES; i++) {
@@ -885,6 +923,9 @@ struct DiligentRenderer : DiligentGfx
 					qd.Name = "GPU frame end";
 					device->CreateQuery(qd, &gpuEnd[i]);
 				}
+				stamps.device = device;
+				stamps.ctx = ctx;
+				ProfilerSetGpuSource(&stamps);
 			}
 		}
 
@@ -951,6 +992,14 @@ struct DiligentRenderer : DiligentGfx
 	void BeginDrawing() override
 	{
 		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
+		{
+			// the per-pass timings (GpuProfiler): the frames whose stamps are in, this frame's
+			const auto now = std::chrono::steady_clock::now();
+			const double cpuMs = lastBegin.time_since_epoch().count() ? std::chrono::duration<double, std::milli>(now - lastBegin).count() : 0.0;
+			lastBegin = now;
+			stamps.slot = (uint32_t)(frame % PROFILER_FRAMES);
+			ProfilerBeginFrame(frame, cpuMs);
+		}
 		manageResidency();
 		if (gpuStart[0]) {
 			const int q = (int)(frame % GPU_QUERY_FRAMES);

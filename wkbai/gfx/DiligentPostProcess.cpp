@@ -35,8 +35,10 @@
 
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
+#include "GpuProfiler.h"
 #include "DiligentClouds.h"
 #include <memory>
+#include <cstring>
 #include <chrono>
 #include <future>
 #include "../util/util.h"
@@ -639,6 +641,7 @@ namespace {
 		RefCntAutoPtr<IPipelineState> pipeline;
 		RefCntAutoPtr<IShaderResourceBinding> srb;
 		std::vector<std::string> textures;
+		std::string name; // the pixel shader's, for the per-pass timings
 	};
 }
 
@@ -703,6 +706,7 @@ struct DiligentPostProcess::Impl {
 	void makePass(Pass& pass, const char* entry, std::vector<std::string> textures, TEXTURE_FORMAT target)
 	{
 		pass.textures = std::move(textures);
+		pass.name = strncmp(entry, "PS_", 3) == 0 ? entry + 3 : entry;
 		std::vector<PipelineResourceDesc> resources = { { SHADER_TYPE_PIXEL, "PostBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC } };
 		for (const std::string& t : pass.textures)
 			resources.push_back({ SHADER_TYPE_PIXEL, t.c_str(), 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE });
@@ -814,6 +818,7 @@ struct DiligentPostProcess::Impl {
 
 	void runInto(IDeviceContext* ctx, Pass& pass, ITextureView* rtv)
 	{
+		PROFILE_SCOPE(pass.name.c_str());
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->SetViewports(1, nullptr, 0, 0);
 		ctx->SetPipelineState(pass.pipeline);
@@ -1118,7 +1123,11 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		f.frameTimeMs = settings.frameTimeMs;
 		f.sharpness = settings.sharpness;
 		f.reset = !_impl->fsr3LastFrame;
-		ITexture* out = _impl->fsr3->dispatch(ctx, f);
+		ITexture* out = nullptr;
+		{
+			PROFILE_SCOPE("FSR 3");
+			out = _impl->fsr3->dispatch(ctx, f);
+		}
 		if (out != _impl->copySource) {
 			_impl->bind(_impl->copyPass, { out });
 			_impl->copySource = out;

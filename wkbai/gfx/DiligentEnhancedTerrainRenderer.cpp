@@ -7,6 +7,7 @@
 // IRenderer. The packed normals/tangents are unpacked in the vertex shader.
 
 #include "DiligentEnhancedTerrainRenderer.h"
+#include "GpuProfiler.h"
 #include <SDL3/SDL_timer.h>
 #include "EnhancedTerrainData.h"
 #include "renderer_diligent.h"
@@ -2586,17 +2587,21 @@ void DiligentEnhancedTerrainRenderer::render()
 
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
-	ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-	ctx->SetPipelineState(g_terrainTessellationActive ? _impl->tessPipeline : _impl->pipeline);
-	for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
-		if (_impl->frameIndices[t].empty())
-			continue;
-		ctx->CommitShaderResources(_impl->binding(dgfx, t), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		drawIndices(_impl->frameIndices[t]);
+	{
+		PROFILE_SCOPE("Ground");
+		ctx->SetVertexBuffers(0, 1, &vb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->SetPipelineState(g_terrainTessellationActive ? _impl->tessPipeline : _impl->pipeline);
+		for (size_t t = 0; t < _impl->texturePairs.size(); t++) {
+			if (_impl->frameIndices[t].empty())
+				continue;
+			ctx->CommitShaderResources(_impl->binding(dgfx, t), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			drawIndices(_impl->frameIndices[t]);
+		}
 	}
 
 	// ----- Grass -----
 	if (g_renderSettings.grass && _impl->grassBuffer && !grassChunks.empty()) {
+		PROFILE_SCOPE("Grass");
 		ctx->SetPipelineState(_impl->grassPipeline);
 		IBuffer* gvb = _impl->grassBuffer;
 		ctx->SetVertexBuffers(0, 1, &gvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
@@ -2615,6 +2620,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	// (the opaque scene is done: FSR 3.1's reactive mask compares the rest against it)
 	dgfx->MarkOpaqueSceneDone();
 	if (_impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty()) {
+		PROFILE_SCOPE("Water");
 		if (_impl->refraction) {
 			ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
 			CopyTextureAttribs copy(dgfx->CurrentColorTarget()->GetTexture(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION,
@@ -2658,6 +2664,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	// mask takes them as moving transparency, like the particles)
 	dgfx->MarkWaterDone();
 	if (_impl->waterfalls) {
+		PROFILE_SCOPE("Waterfalls");
 		const bool copied = _impl->refraction && _impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty();
 		_impl->waterfalls->render(camera, copied ? _impl->sceneCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr,
 			copied && _impl->depthCopy ? _impl->depthCopy->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr);

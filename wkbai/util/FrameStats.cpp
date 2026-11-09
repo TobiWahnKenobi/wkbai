@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "FrameStats.h"
+#include "../gfx/GpuProfiler.h"
 #include "../settings.h"
 #include "../window.h"
 #include "../file.h"
@@ -174,6 +175,8 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	static float gameStart = 0.0f;
 	static uint64_t realStart = 0;
 	if (frame <= warmup) {
+		if (frame == warmup)
+			ProfilerResetTotals(); // the per-pass times over the recorded frames only
 		if (frame == warmup && Server::instance) {
 			gameStart = Server::instance->timeManager.currentTime;
 			realStart = SDL_GetTicks();
@@ -232,6 +235,18 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		report["gpuP50Ms"] = g[g.size() / 2];
 		report["gpuP95Ms"] = g[std::min(g.size() - 1, (size_t)(g.size() * 0.95))];
 		printf("Benchmark: GPU avg %.3f ms, p50 %.3f, p95 %.3f\n", sum / g.size(), g[g.size() / 2], g[std::min(g.size() - 1, (size_t)(g.size() * 0.95))]);
+	}
+	// per pass of the frame (GpuProfiler): the average over the recorded frames, GPU and CPU
+	{
+		nlohmann::json gpuPasses = nlohmann::json::object(), cpuPasses = nlohmann::json::object();
+		for (const ProfileEntry& e : ProfilerEntries()) {
+			if (e.gpuFrames > 0)
+				gpuPasses[e.name] = e.gpuTotal / e.gpuFrames;
+			if (e.frames > 0)
+				cpuPasses[e.name] = e.cpuTotal / e.frames;
+		}
+		report["gpuPassesMs"] = gpuPasses;
+		report["cpuPassesMs"] = cpuPasses;
 	}
 	report["frameTimesMs"] = recorded.frameTimes();
 

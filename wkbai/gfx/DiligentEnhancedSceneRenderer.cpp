@@ -16,6 +16,7 @@
 #include "DiligentClouds.h"
 #include "DiligentGI.h"
 #include "DiligentRayShadows.h"
+#include "GpuProfiler.h"
 #include <unordered_set>
 #include "../Model.h"
 #include "../scene.h"
@@ -1831,6 +1832,7 @@ void DiligentEnhancedSceneRenderer::render()
 		ctx->SetViewports(1, nullptr, 0, 0);
 		ctx->ClearDepthStencil(dsv, CLEAR_DEPTH_FLAG, 1.0f, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		gfx->SetTransformMatrix(&lightMatrix);
+		PROFILE_SCOPE("Shadow map");
 		shadows.staticShadowValid = drawMeshes(DRAW_SHADOWS);
 		shadows.staticShadowMatrix = lightMatrix;
 		gfx->SetTransformMatrix(&camera->sceneMatrix);
@@ -1840,6 +1842,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// The sky light's map (RenderSettings::skyGI): the static casters from straight above over its
 	// square, then per texel the horizon over them and the terrain (DiligentClouds)
 	if (shadows.skyOccOn) {
+		PROFILE_SCOPE("Sky light map");
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float half = Env::SKY_OCC_RADIUS;
 		const Vector3 centre(shadows.skyOccOrigin[0] + half, 0, shadows.skyOccOrigin[1] + half);
@@ -1877,6 +1880,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// the bounce map's square (as the sky light's casters: the same height and depth range), then
 	// the bounce map's light from them, the terrain and the sky light's map
 	if (shadows.skyOccOn && shadows.giMode > 0 && shadows.giRefresh && !shadows.portraitPass) {
+		PROFILE_SCOPE("Dynamic GI");
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float half = Env::GI_EXTENT * 0.5f;
 		const Vector3 centre(shadows.giOrigin[0] + half, 0, shadows.giOrigin[1] + half);
@@ -1911,12 +1915,16 @@ void DiligentEnhancedSceneRenderer::render()
 	else if (shadows.giMode > 0)
 		GITimerSkip();
 
-	drawMeshes(DRAW_SCENE);
+	{
+		PROFILE_SCOPE("Models");
+		drawMeshes(DRAW_SCENE);
+	}
 
 	// The ray-traced shadows' casters (and what the ray-traced reflections see): every entity
 	// casting a shadow, with its mesh's structure
 	// (an animated one's at its current key frame), then the frame's top-level structure
 	if (shadows.rayShadowsOn || shadows.rayReflectionsOn) {
+		PROFILE_SCOPE("RT structures");
 		if (!shadows.rayShadows)
 			shadows.rayShadows = new DiligentRayShadows(device);
 		if (!shadows.rayShadows->usable())
@@ -2026,6 +2034,7 @@ void DiligentEnhancedSceneRenderer::render()
 		memcpy(mapped, matrices, sizeof(matrices));
 		ctx->UnmapBuffer(_impl->motionConstBuffer, MAP_WRITE);
 		if (cameraValid) {
+			PROFILE_SCOPE("Motion vectors");
 			ctx->SetRenderTargets(1, &motion, dgfx->CurrentDepthTarget(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			drawMeshes(DRAW_MOTION);
 			dgfx->RestoreRenderTargets();

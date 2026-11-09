@@ -184,6 +184,8 @@ private:
 	// the environment's debug panel (F9, single player): day and night, seasons, weather by hand
 	bool environmentDebugOpen = false;
 	void drawEnvironmentDebug();
+	bool frameTimingsOpen = false; // the frame-time window (Ctrl+F12)
+	void drawFrameTimings();
 	int statisticsShown = 0; // the graph: food, wood, gold, peasants, soldiers, buildings
 	void drawChronicle();
 	int selectPeasantsByActivity(int row);

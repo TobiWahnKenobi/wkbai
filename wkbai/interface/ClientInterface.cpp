@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "ClientInterface.h"
+#include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
 #include "../gfx/DefaultTerrainRenderer.h"
 #include "../client.h"
@@ -1386,6 +1387,118 @@ void ClientInterface::drawChronicle()
 		ImGui::End();
 	}
 	drawEnvironmentDebug();
+	drawFrameTimings();
+}
+
+// The frame-time window (Ctrl+F12): the whole frame on the CPU and the GPU over the last
+// seconds, and per pass of the frame (GpuProfiler's scopes: their parts indented) the GPU's and
+// the CPU's time, smoothed, the last frame's and the GPU's peak, each pass's share of the GPU
+// frame as a bar. The GPU's times come from timestamp queries (the Diligent renderer).
+void ClientInterface::drawFrameTimings()
+{
+	if (!frameTimingsOpen)
+		return;
+	ImGui::SetNextWindowPos(ImVec2(40, 110), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(640, 720), ImGuiCond_FirstUseEver);
+	if (!ImGui::Begin("Frame timings (Ctrl+F12)", &frameTimingsOpen)) {
+		ImGui::End();
+		return;
+	}
+	const auto& cpu = ProfilerCpuHistory();
+	const auto& gpu = ProfilerGpuHistory();
+	auto stats = [](const std::vector<float>& v, float& avg, float& p99, float& mx) {
+		avg = p99 = mx = 0.0f;
+		if (v.empty())
+			return;
+		std::vector<float> sorted(v);
+		std::sort(sorted.begin(), sorted.end());
+		double sum = 0;
+		for (float f : v)
+			sum += f;
+		avg = (float)(sum / v.size());
+		p99 = sorted[std::min(sorted.size() - 1, (size_t)(sorted.size() * 0.99))];
+		mx = sorted.back();
+	};
+	float cAvg, cP99, cMax, gAvg, gP99, gMax;
+	stats(cpu, cAvg, cP99, cMax);
+	stats(gpu, gAvg, gP99, gMax);
+	ImGui::Text("Frame (CPU): %.2f ms avg (%.0f fps), p99 %.2f, max %.2f", cAvg, cAvg > 0 ? 1000.0f / cAvg : 0.0f, cP99, cMax);
+	if (gpu.empty())
+		ImGui::TextDisabled("GPU: no timestamp queries on this renderer");
+	else
+		ImGui::Text("GPU (the passes): %.2f ms avg, p99 %.2f, max %.2f; whole frame %.2f ms", gAvg, gP99, gMax, g_gpuFrameMs);
+	const float graphMax = std::max({ 1000.0f / 30.0f, cP99 * 1.2f, gP99 * 1.2f });
+	if (!cpu.empty())
+		ImGui::PlotLines("##cpu", cpu.data(), (int)cpu.size(), 0, "CPU frame", 0.0f, graphMax, ImVec2(-1, 60));
+	if (!gpu.empty())
+		ImGui::PlotLines("##gpu", gpu.data(), (int)gpu.size(), 0, "GPU passes", 0.0f, graphMax, ImVec2(-1, 60));
+	ImGui::TextDisabled("Graphs from 0 to %.1f ms (16.7 ms: 60 fps)", graphMax);
+	ImGui::Separator();
+	static bool showCpu = true, hideIdle = true;
+	ImGui::Checkbox("CPU times", &showCpu);
+	ImGui::SameLine();
+	ImGui::Checkbox("Hide passes not drawn", &hideIdle);
+	const auto& entries = ProfilerEntries();
+	uint64_t newest = 0;
+	for (const ProfileEntry& e : entries)
+		newest = std::max(newest, e.lastFrame);
+	const int columns = showCpu ? 6 : 4;
+	if (ImGui::BeginTable("passes", columns, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Pass", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+		ImGui::TableSetupColumn("GPU ms", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn("GPU peak", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+		ImGui::TableSetupColumn("Share", ImGuiTableColumnFlags_WidthStretch, 2.0f);
+		if (showCpu) {
+			ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+			ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_WidthStretch, 0.7f);
+		}
+		ImGui::TableHeadersRow();
+		// as a tree: each pass, then its parts (in the order first seen)
+		std::vector<const ProfileEntry*> order;
+		auto addChildren = [&](const std::string& parent, int depth, auto& self) -> void {
+			for (const ProfileEntry& c : entries)
+				if (c.depth == depth && (depth == 0 || (c.name.size() > parent.size() + 1 && c.name.compare(0, parent.size(), parent) == 0 && c.name[parent.size()] == '/'))) {
+					order.push_back(&c);
+					self(c.name, depth + 1, self);
+				}
+		};
+		addChildren(std::string(), 0, addChildren);
+		for (const ProfileEntry* ep : order) {
+			const ProfileEntry& e = *ep;
+			if (hideIdle && newest > e.lastFrame + 30)
+				continue;
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			const size_t slash = e.name.find_last_of('/');
+			ImGui::Indent(14.0f * e.depth + 0.001f);
+			ImGui::TextUnformatted(slash == std::string::npos ? e.name.c_str() : e.name.c_str() + slash + 1);
+			ImGui::Unindent(14.0f * e.depth + 0.001f);
+			ImGui::TableNextColumn();
+			if (gpu.empty())
+				ImGui::TextDisabled("-");
+			else
+				ImGui::Text("%.3f", e.gpuAvg);
+			ImGui::TableNextColumn();
+			if (!gpu.empty())
+				ImGui::Text("%.3f", e.gpuPeak);
+			ImGui::TableNextColumn();
+			if (gAvg > 0) {
+				const float share = (float)std::clamp(e.gpuAvg / gAvg, 0.0, 1.0);
+				char label[16];
+				snprintf(label, sizeof(label), "%.0f%%", share * 100.0f);
+				ImGui::ProgressBar(share, ImVec2(-1, 0), label);
+			}
+			if (showCpu) {
+				ImGui::TableNextColumn();
+				ImGui::Text("%.3f", e.cpuAvg);
+				ImGui::TableNextColumn();
+				ImGui::Text("%d", e.calls);
+			}
+		}
+		ImGui::EndTable();
+	}
+	ImGui::End();
 }
 
 // The environment's debug panel (F9, single player): day and night, the seasons and the weather
@@ -2600,6 +2713,12 @@ void ClientInterface::iter()
 		statisticsOpen = !statisticsOpen;
 	if (g_keyPressed[SDL_SCANCODE_F7] && !ImGui::GetIO().WantTextInput)
 		timelineOpen = !timelineOpen;
+	if (g_keyPressed[SDL_SCANCODE_F12] && (SDL_GetModState() & SDL_KMOD_CTRL) && !ImGui::GetIO().WantTextInput)
+		frameTimingsOpen = !frameTimingsOpen;
+	// test runs: "benchmark": { ..., "frameTimings": true } opens the frame-time window
+	static const bool benchTimings = BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("frameTimings", false);
+	if (benchTimings)
+		frameTimingsOpen = true;
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
 	// the environment's debug panel: in a skirmish with cheat mode on only (the game setting)
@@ -3535,8 +3654,10 @@ void ClientInterface::iter()
 		else
 			dgfx->SetFogEdge(1e9f, 1e9f, 1e9f, 2e9f);
 	}
-	if (skyRenderer)
+	if (skyRenderer) {
+		PROFILE_SCOPE("Sky and clouds");
 		skyRenderer->render();
+	}
 
 	// Test runs: "benchmark": { ..., "mouse": [x, y] } holds the cursor there (window pixels);
 	// "stampdown": "<blueprint>" places that building of the player's (its preview, tooltips)
@@ -3986,6 +4107,7 @@ void ClientInterface::iter()
 			prewarmLevel();
 		{
 			ZoneScopedN("Scene rendering");
+			PROFILE_SCOPE("Scene");
 			sceneRenderer->render();
 		}
 		scene->clear();
@@ -3996,6 +4118,7 @@ void ClientInterface::iter()
 
 	if (terrainRenderer && showTerrain) {
 		ZoneScopedN("Terrain rendering");
+		PROFILE_SCOPE("Terrain");
 		if (bool* bump = terrainRenderer->bumpMapping())
 			*bump = g_renderSettings.bumpMapping;
 		terrainRenderer->render();
@@ -4003,6 +4126,7 @@ void ClientInterface::iter()
 
 	if (terrainSpriteRenderer && showTerrain) {
 		ZoneScopedN("Terrain sprites");
+		PROFILE_SCOPE("Terrain sprites");
 		terrainSpriteRenderer->render();
 	}
 	if (terrainSpriteContainer)
@@ -4011,11 +4135,13 @@ void ClientInterface::iter()
 		drawRangeBands();
 		drawFootprintTiles();
 		// wkbai's weather: flood water over the land, footprints in snow and mud
+		PROFILE_SCOPE("Ground weather");
 		DrawGroundWeather(gfx, client, client->camera);
 	}
 
 	if (particleRenderer && particlesContainer) {
 		ZoneScopedN("Particles");
+		PROFILE_SCOPE("Particles and weather");
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
@@ -4027,6 +4153,7 @@ void ClientInterface::iter()
 		if (fogOn && !fogOfWar.tiles.empty())
 			postGfx->SetFogOfWar(fogOfWar.tiles.data(), fogOfWar.width, fogOfWar.height, fogOfWar.version,
 				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness);
+		PROFILE_SCOPE("Post-processing");
 		postGfx->ApplyPostProcessing(client->camera);
 	}
 
@@ -4052,10 +4179,14 @@ void ClientInterface::iter()
 	}
 	{
 		ZoneScopedN("ImGui rendering");
+		PROFILE_SCOPE("UI");
 		gfx->InitImGuiDrawing();
 		ImGuiImpl_Render(gfx);
 	}
-	drawSelectionPortrait();
+	{
+		PROFILE_SCOPE("Unit portrait");
+		drawSelectionPortrait();
+	}
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	// (a guest: once the host has sent the rows of the players)
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
