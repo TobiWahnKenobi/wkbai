@@ -1941,6 +1941,17 @@ void DiligentEnhancedSceneRenderer::render()
 				DilMesh& mesh = mt->second;
 				// the alpha-tested groups (leaves): their texture as drawn and per triangle its UVs
 				if (!mesh.rtAlphaResolved) {
+					// (only once their textures are on the GPU: the binding's stand-in would stay in
+					// the structures for good; asked for meanwhile, the mesh casts no shadow until then)
+					bool ready = true;
+					const Mesh& m0 = staticModel->mesh;
+					for (size_t g = 0; g < mesh.rtGroups.size() && g < m0.polyLists[0].groups.size(); g++) {
+						const Material& gm = scene->modelCache->getMaterial(staticModel->matIds[g]);
+						if (gm.alphaTest && dgfx->TouchTexture(scene->texCache.getTexture(gm.textureFilename.c_str())) == ~0u)
+							ready = false;
+					}
+					if (!ready)
+						continue;
 					mesh.rtAlphaResolved = true;
 					const Mesh& m = staticModel->mesh;
 					const PolygonList& pl = m.polyLists[0];
