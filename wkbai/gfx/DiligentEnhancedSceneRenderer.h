@@ -18,8 +18,8 @@ struct DiligentEnhancedSceneRenderer : SceneRenderer
 	void render() override;
 	// The depth pre-pass (DiligentGfx::LightingPrepassWanted): the frame's preparation (the shadow
 	// map, the sky light's map, the dynamic GI, the ray-tracing structures) and the models' depth
-	// alone, into the lighting depth (dsv); the next render() then draws them, without preparing
-	// again
+	// alone, into the lighting depth (dsv; null: the preparation alone, the depth in a second
+	// call); the next render() then draws them, without preparing again
 	void renderDepth(Diligent::ITextureView* dsv);
 	void prewarm(Model* model) override;
 	void prewarm(const std::vector<Model*>& models) override;

@@ -210,6 +210,122 @@ float4 PS_Lake(VS_OUTPUT input) : SV_Target
 {
 	return ApplyFog(input.Color, input.Fog);
 }
+
+// Soft particles (SetSoftParticles): faded out over the last metres in front of the depth
+// pre-pass's depth (the ground, the water, the models), instead of cut off in a hard line where
+// they meet them
+Texture2D<float> softDepth;
+cbuffer SoftBuffer
+{
+	float4 Soft; // the projection's m22 and m32, 1 / the fade's distance, on
+};
+float4 PS_Soft(VS_OUTPUT input) : SV_Target
+{
+	float4 c = PS(input);
+	if (Soft.w != 0) {
+		float d = softDepth.Load(int3(input.Pos.xy, 0));
+		float z = Soft.y / (d - Soft.x);
+		c.a *= saturate((z - input.Pos.w) * Soft.z);
+	}
+	return c;
+}
+)---";
+
+// The projected decals (DiligentGfx::DrawProjectedDecals): a box per decal (its far faces), each
+// pixel's point from the depth pre-pass's surface depth (the ground and the water), the decal
+// where it lies inside the ring or the square and nothing nearer stands in front (its lighting
+// depth: the models too)
+static const char decalShaderCode[] = R"---(
+cbuffer TransformBuffer
+{
+	matrix Transform;
+};
+cbuffer FogBuffer
+{
+	float4 FogColor;
+	float FogStartDist;
+	float FogEndDist;
+	float4 FogCamera;
+	float4 Grade;
+	float4 EdgeFog;
+	float4 LightMasks; // zw: a pixel's size
+};
+cbuffer DecalBuffer
+{
+	float4 DProj;   // the projection's m11, m22, m33, m43
+	float4 DJitter; // its m31, m32 (the jitter)
+	matrix DInvView;
+};
+Texture2D<float> surfaceDepth;
+Texture2D<float> sceneDepth;
+Texture2D bandTexture;
+SamplerState bandSampler;
+
+float FogAmount(float3 worldPos, float distanceToCamera)
+{
+	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
+	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
+	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
+	return max(distanceFog, edgeFog);
+}
+
+struct DECAL_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	nointerpolation float4 Shape : TEXCOORD0; // centre x, z, outer, inner
+	nointerpolation float4 Range : TEXCOORD1; // y from, to, tiles, square
+	nointerpolation float4 Colour : COLOR0;
+};
+
+static const uint BOX[36] = { 0,6,2,0,4,6, 1,3,7,1,7,5, 0,1,5,0,5,4, 2,7,3,2,6,7, 0,3,1,0,2,3, 4,5,7,4,7,6 };
+
+DECAL_OUTPUT VS_Decal(float4 Shape : ATTRIB0, float4 Range : ATTRIB1, float4 Colour : ATTRIB2, uint id : SV_VertexID)
+{
+	uint c = BOX[id];
+	float3 p = float3(Shape.x + ((c & 1) ? Shape.z : -Shape.z), ((c >> 1) & 1) ? Range.y : Range.x, Shape.y + ((c >> 2) & 1 ? Shape.z : -Shape.z));
+	DECAL_OUTPUT o;
+	o.Pos = mul(float4(p, 1), Transform);
+	o.Shape = Shape;
+	o.Range = Range;
+	o.Colour = Colour;
+	return o;
+}
+
+float ViewZ(float d)
+{
+	return DProj.w / (d - DProj.z);
+}
+
+float4 PS_Decal(DECAL_OUTPUT input) : SV_Target
+{
+	int3 px = int3(input.Pos.xy, 0);
+	float ds = surfaceDepth.Load(px);
+	if (ds >= 0.99999)
+		discard;
+	float z = ViewZ(ds);
+	// hidden by what stands in front of the surface (a building, a unit, a tree; not the grass)
+	if (ViewZ(sceneDepth.Load(px)) < z - 0.4 - z * 0.002)
+		discard;
+	float2 ndc = float2(input.Pos.x * LightMasks.z * 2 - 1, 1 - input.Pos.y * LightMasks.w * 2);
+	float3 v = float3((ndc.x - DJitter.x) * z / DProj.x, (ndc.y - DJitter.y) * z / DProj.y, z);
+	float3 w = mul(float4(v, 1), DInvView).xyz;
+	if (w.y < input.Range.x || w.y > input.Range.y)
+		discard;
+	float2 d = w.xz - input.Shape.xy;
+	float4 c = input.Colour;
+	if (input.Range.w < 0.5) {
+		float r = length(d);
+		if (r > input.Shape.z || r < input.Shape.w)
+			discard;
+		float across = (input.Shape.z - r) / max(input.Shape.z - input.Shape.w, 1e-3);
+		float along = frac(atan2(d.y, d.x) / 6.2831853 * input.Range.z);
+		c *= bandTexture.SampleLevel(bandSampler, float2(along, across), 0);
+	}
+	else if (any(abs(d) > input.Shape.z))
+		discard;
+	c.rgb = lerp(c.rgb, FogColor.rgb, FogAmount(w, distance(w, FogCamera.xyz)));
+	return c;
+}
 )---";
 
 static void DILIGENT_CALL_TYPE DiligentMessage(DEBUG_MESSAGE_SEVERITY severity, const Char* message, const Char* function, const Char* file, int line)
@@ -405,7 +521,7 @@ struct DiligentRenderer : DiligentGfx
 {
 	// Pipeline state selected by the IRenderer calls
 	enum VSKind : uint8_t { VS_PLAIN, VS_FOG };
-	enum PSKind : uint8_t { PS_PLAIN, PS_ALPHATEST, PS_MAP, PS_LAKE };
+	enum PSKind : uint8_t { PS_PLAIN, PS_ALPHATEST, PS_MAP, PS_LAKE, PS_SOFT };
 	enum DepthKind : uint8_t { DEPTH_DEFAULT, DEPTH_ON, DEPTH_OFF, DEPTH_TESTONLY };
 	enum TopologyKind : uint8_t { TOPO_TRIANGLES, TOPO_LINES };
 	struct State {
@@ -415,11 +531,21 @@ struct DiligentRenderer : DiligentGfx
 		DepthKind depth = DEPTH_DEFAULT;
 		bool scissor = false;
 		TopologyKind topology = TOPO_TRIANGLES;
-		uint32_t key() const { return vs | (ps << 1) | (alphaBlend << 3) | (depth << 4) | (scissor << 6) | (topology << 7); }
+		uint32_t key() const { return vs | (ps << 1) | (alphaBlend << 4) | (depth << 5) | (scissor << 7) | (topology << 8); }
 	};
 
 	RefCntAutoPtr<IPipelineResourceSignature> signature;
-	RefCntAutoPtr<IShader> vertexShaders[2], pixelShaders[4];
+	RefCntAutoPtr<IShader> vertexShaders[2], pixelShaders[5];
+	// the soft particles' (PS_SOFT: the depth pre-pass's depth, SoftBuffer) and the projected
+	// decals' resources (DrawProjectedDecals; made at the first use); the camera of the frame's
+	// pre-pass (FinishLightingPrepass), for both
+	RefCntAutoPtr<IPipelineResourceSignature> softSignature, decalSignature;
+	RefCntAutoPtr<IShaderResourceBinding> softSrb, decalSrb;
+	RefCntAutoPtr<IBuffer> softBuffer, decalBuffer;
+	RefCntAutoPtr<IPipelineState> decalPipeline;
+	bool softParticles = false, decalsFailed = false, prepassOrtho = false;
+	float prepassProj[6] = {};
+	Matrix prepassInvView;
 	std::map<uint32_t, RefCntAutoPtr<IPipelineState>> pipelines;
 
 	// Dynamic buffers that batches and shapes are appended to: the first write in a frame (or
@@ -526,12 +652,12 @@ struct DiligentRenderer : DiligentGfx
 	RefCntAutoPtr<IQuery> gpuStart[GPU_QUERY_FRAMES], gpuEnd[GPU_QUERY_FRAMES];
 	bool gpuQueryIssued[GPU_QUERY_FRAMES] = {};
 
-	RefCntAutoPtr<IShader> createShader(SHADER_TYPE type, const char* entryPoint)
+	RefCntAutoPtr<IShader> createShader(SHADER_TYPE type, const char* entryPoint, const char* source = diligentShaderCode, size_t length = sizeof(diligentShaderCode) - 1)
 	{
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
-		sci.Source = diligentShaderCode;
-		sci.SourceLength = sizeof(diligentShaderCode) - 1;
+		sci.Source = source;
+		sci.SourceLength = length;
 		sci.EntryPoint = entryPoint;
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
@@ -608,9 +734,9 @@ struct DiligentRenderer : DiligentGfx
 
 		ci.pVS = vertexShaders[st.vs];
 		ci.pPS = pixelShaders[st.ps];
-		IPipelineResourceSignature* signatures[] = { signature };
+		IPipelineResourceSignature* signatures[] = { signature, softSignature };
 		ci.ppResourceSignatures = signatures;
-		ci.ResourceSignaturesCount = 1;
+		ci.ResourceSignaturesCount = st.ps == PS_SOFT ? 2 : 1;
 
 		device->CreateGraphicsPipelineState(ci, &pso);
 		if (!pso)
@@ -627,6 +753,8 @@ struct DiligentRenderer : DiligentGfx
 		DiligentTexture* t = (DiligentTexture*)(currentTexture ? currentTexture : whiteTexture);
 		ensureResident(t);
 		ctx->CommitShaderResources(t->srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		if (st.ps == PS_SOFT)
+			ctx->CommitShaderResources(softSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	}
 
 	ITextureView* currentColorTarget() { return postActive ? post->colorRTV() : swapChain->GetCurrentBackBufferRTV(); }
@@ -684,11 +812,130 @@ struct DiligentRenderer : DiligentGfx
 	{
 		// ("depthPrepass": false in the settings file, for comparisons: no ray-traced shadows
 		// then, the ambient occlusion over the whole picture as before)
+		// (with the post-processing effects always: the projected decals, the soft particles and
+		// the contact shadows take its depth too)
 		static const bool allowed = g_settings.value<bool>("depthPrepass", true);
-		if (!allowed || !postActive || !postEffects || !post || shadows.portraitPass)
-			return false;
-		const bool rt = shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid();
-		return rt || g_renderSettings.ssao;
+		return allowed && postActive && postEffects && post && !shadows.portraitPass;
+	}
+
+	void SnapshotSurfaceDepth() override
+	{
+		if (post)
+			post->snapshotSurfaceDepth(ctx);
+	}
+
+	bool ProjectedDecalsAvailable() override
+	{
+		return shadows.lightPrepass && post && !decalsFailed && !prepassOrtho;
+	}
+
+	void makeDecalResources()
+	{
+		RefCntAutoPtr<IShader> vs = createShader(SHADER_TYPE_VERTEX, "VS_Decal", decalShaderCode, sizeof(decalShaderCode) - 1);
+		RefCntAutoPtr<IShader> ps = createShader(SHADER_TYPE_PIXEL, "PS_Decal", decalShaderCode, sizeof(decalShaderCode) - 1);
+		const PipelineResourceDesc resources[] = {
+			{ SHADER_TYPE_VERTEX, "TransformBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "DecalBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "surfaceDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+			{ SHADER_TYPE_PIXEL, "sceneDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+			{ SHADER_TYPE_PIXEL, "bandTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		};
+		SamplerDesc sampler; // as the batches': trilinear, clamped
+		sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+		const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "bandSampler", sampler } };
+		PipelineResourceSignatureDesc sig;
+		sig.Name = "Projected decals";
+		sig.Resources = resources;
+		sig.NumResources = (Uint32)std::size(resources);
+		sig.ImmutableSamplers = samplers;
+		sig.NumImmutableSamplers = (Uint32)std::size(samplers);
+		device->CreatePipelineResourceSignature(sig, &decalSignature);
+		if (!decalSignature) {
+			decalsFailed = true;
+			return;
+		}
+		decalBuffer = createBuffer("Projected decals", 96, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		decalSignature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "TransformBuffer")->Set(transformBuffer);
+		decalSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "FogBuffer")->Set(fogBuffer);
+		decalSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "DecalBuffer")->Set(decalBuffer);
+		decalSignature->CreateShaderResourceBinding(&decalSrb, true);
+		GraphicsPipelineStateCreateInfo ci;
+		ci.PSODesc.Name = "Projected decals";
+		ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+		auto& gp = ci.GraphicsPipeline;
+		gp.NumRenderTargets = 1;
+		gp.RTVFormats[0] = swapChain->GetDesc().ColorBufferFormat;
+		gp.DSVFormat = swapChain->GetDesc().DepthBufferFormat;
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		// the box's far faces (its triangles wound outwards): each pixel once, the camera inside too
+		gp.RasterizerDesc.CullMode = CULL_MODE_FRONT;
+		gp.DepthStencilDesc.DepthEnable = False;
+		gp.DepthStencilDesc.DepthWriteEnable = False;
+		auto& rt = gp.BlendDesc.RenderTargets[0];
+		rt.BlendEnable = True;
+		rt.SrcBlend = BLEND_FACTOR_SRC_ALPHA;
+		rt.DestBlend = BLEND_FACTOR_INV_SRC_ALPHA;
+		rt.SrcBlendAlpha = BLEND_FACTOR_SRC_ALPHA;
+		rt.DestBlendAlpha = BLEND_FACTOR_INV_SRC_ALPHA;
+		static const LayoutElement layout[] = {
+			LayoutElement{ 0, 0, 4, VT_FLOAT32, False, 0, 48, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+			LayoutElement{ 1, 0, 4, VT_FLOAT32, False, 16, 48, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+			LayoutElement{ 2, 0, 4, VT_FLOAT32, False, 32, 48, INPUT_ELEMENT_FREQUENCY_PER_INSTANCE, 1 },
+		};
+		gp.InputLayout.LayoutElements = layout;
+		gp.InputLayout.NumElements = (Uint32)std::size(layout);
+		ci.pVS = vs;
+		ci.pPS = ps;
+		IPipelineResourceSignature* signatures[] = { decalSignature };
+		ci.ppResourceSignatures = signatures;
+		ci.ResourceSignaturesCount = 1;
+		device->CreateGraphicsPipelineState(ci, &decalPipeline);
+		if (!decalPipeline)
+			decalsFailed = true;
+	}
+
+	void DrawProjectedDecals(texture tex, const ProjectedDecal* decals, size_t count) override
+	{
+		if (!count || !ProjectedDecalsAvailable())
+			return;
+		if (!decalPipeline)
+			makeDecalResources();
+		if (decalsFailed)
+			return;
+		void* mapped = nullptr;
+		ctx->MapBuffer(decalBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+		float* f = (float*)mapped;
+		std::copy_n(prepassProj, 6, f);
+		f[6] = f[7] = 0.0f;
+		const Matrix t = prepassInvView.getTranspose();
+		memcpy(f + 8, &t, sizeof(Matrix));
+		ctx->UnmapBuffer(decalBuffer, MAP_WRITE);
+		std::vector<float> data;
+		data.reserve(count * 12);
+		for (size_t i = 0; i < count; i++) {
+			const ProjectedDecal& d = decals[i];
+			const uint32_t c = d.colour;
+			const float v[12] = { d.centre[0], d.centre[1], d.outer, d.inner, d.yMin, d.yMax, d.tiles, d.square ? 1.0f : 0.0f,
+				((c >> 16) & 255) / 255.0f, ((c >> 8) & 255) / 255.0f, (c & 255) / 255.0f, ((c >> 24) & 255) / 255.0f };
+			data.insert(data.end(), v, v + 12);
+		}
+		uint64_t offset = 0;
+		IBuffer* vb = StreamVertexData(data.data(), data.size() * sizeof(float), offset);
+		decalSrb->GetVariableByName(SHADER_TYPE_PIXEL, "surfaceDepth")->Set(post->surfaceDepth()->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		decalSrb->GetVariableByName(SHADER_TYPE_PIXEL, "sceneDepth")->Set(post->lightingDepth()->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		decalSrb->GetVariableByName(SHADER_TYPE_PIXEL, "bandTexture")->Set(GetTextureView(tex));
+		ctx->SetPipelineState(decalPipeline);
+		ctx->CommitShaderResources(decalSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetVertexBuffers(0, 1, &vb, &offset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->Draw(DrawAttribs{ 36, DRAW_FLAG_VERIFY_ALL, (Uint32)count });
+	}
+
+	void SetSoftParticles(bool on) override
+	{
+		softParticles = on && shadows.lightPrepass && post;
+		if (softParticles)
+			softSrb->GetVariableByName(SHADER_TYPE_PIXEL, "softDepth")->Set(post->lightingDepth()->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	}
 
 	ITextureView* BeginLightingPrepass() override
@@ -709,7 +956,27 @@ struct DiligentRenderer : DiligentGfx
 			PROFILE_SCOPE("Ambient occlusion");
 			shadows.lightAo = post->lightingAo(ctx, camera.projMatrix, g_renderSettings.ssaoRadius);
 		}
+		// the contact shadows (RenderSettings::contactShadows): a short march towards the sun in the
+		// lighting depth, the small shadows the ray-traced ones miss or the shadow map can't
+		// resolve; into the sun's mask with the ray-traced shadows
+		if (g_renderSettings.contactShadows && !camera.orthoMode) {
+			PROFILE_SCOPE("Contact shadows");
+			if (ITextureView* m = post->contactShadows(ctx, camera.projMatrix, camera.viewMatrix, shadows.sunDirection, shadows.lightRtMask))
+				shadows.lightRtMask = m;
+		}
 		shadows.lightPrepass = true;
+		const Matrix& pm = camera.projMatrix;
+		const float proj[6] = { pm._11, pm._22, pm._33, pm._43, pm._31, pm._32 };
+		std::copy_n(proj, 6, prepassProj);
+		prepassInvView = camera.viewMatrix.getInverse4x3();
+		prepassOrtho = camera.orthoMode;
+		{
+			void* m = nullptr;
+			ctx->MapBuffer(softBuffer, MAP_WRITE, MAP_FLAG_DISCARD, m);
+			const float soft[4] = { pm._33, pm._43, 1.0f / 1.5f, camera.orthoMode ? 0.0f : 1.0f };
+			memcpy(m, soft, sizeof(soft));
+			ctx->UnmapBuffer(softBuffer, MAP_WRITE);
+		}
 		const TextureDesc& dd = post->lightingDepth()->GetDesc();
 		lightMasks[0] = shadows.lightRtMask ? 1.0f : 0.0f;
 		lightMasks[1] = shadows.lightAo ? std::clamp(g_renderSettings.ssaoStrength, 0.0f, 1.0f) : 0.0f;
@@ -1109,6 +1376,25 @@ struct DiligentRenderer : DiligentGfx
 		pixelShaders[PS_ALPHATEST] = createShader(SHADER_TYPE_PIXEL, "PS_AlphaTest");
 		pixelShaders[PS_MAP] = createShader(SHADER_TYPE_PIXEL, "PS_Map");
 		pixelShaders[PS_LAKE] = createShader(SHADER_TYPE_PIXEL, "PS_Lake");
+		pixelShaders[PS_SOFT] = createShader(SHADER_TYPE_PIXEL, "PS_Soft");
+		{
+			// the soft particles' depth (the frame's lighting depth) and its constants
+			const PipelineResourceDesc softResources[] = {
+				{ SHADER_TYPE_PIXEL, "softDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+				{ SHADER_TYPE_PIXEL, "SoftBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			};
+			PipelineResourceSignatureDesc softDesc;
+			softDesc.Name = "Soft particles";
+			softDesc.Resources = softResources;
+			softDesc.NumResources = (Uint32)std::size(softResources);
+			softDesc.BindingIndex = 1;
+			device->CreatePipelineResourceSignature(softDesc, &softSignature);
+			if (!softSignature)
+				ferr("Diligent: could not create the soft particles' signature.");
+			softBuffer = createBuffer("Soft particles", 16, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+			softSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SoftBuffer")->Set(softBuffer);
+			softSignature->CreateShaderResourceBinding(&softSrb, true);
+		}
 
 		Bitmap whiteBmp;
 		whiteBmp.width = 1;
@@ -1757,7 +2043,7 @@ struct DiligentRenderer : DiligentGfx
 	{
 		state.alphaBlend = true;
 		state.depth = DEPTH_TESTONLY;
-		state.ps = PS_PLAIN;
+		state.ps = softParticles ? PS_SOFT : PS_PLAIN;
 		state.vs = fogEnabled ? VS_FOG : VS_PLAIN;
 	}
 

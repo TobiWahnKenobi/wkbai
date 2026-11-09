@@ -684,6 +684,34 @@ void ClientInterface::drawRangeBands()
 	// one texture repeat along the circle per 5 band widths (6 m): the strips' narrow marks (three
 	// ovals or arrows per repeat) are stretched along the circle, as in the original
 	constexpr float TILE_LENGTH = 5.0f, BAND_WIDTH = 1.2f;
+	// with the depth pre-pass: projected onto the ground and the water (whole on slopes and the
+	// tessellated relief, over the grass; strips through the ground cut them)
+	auto* dgfx = dynamic_cast<DiligentGfx*>(gfx);
+	if (dgfx && dgfx->ProjectedDecalsAvailable()) {
+		const Terrain* terrain = client->terrain;
+		for (const RangeBand& band : rangeBands) {
+			const float width = std::min(BAND_WIDTH, band.radius);
+			DiligentGfx::ProjectedDecal d;
+			d.centre[0] = band.centre.x;
+			d.centre[1] = band.centre.z;
+			d.outer = band.radius;
+			d.inner = std::max(0.0f, band.radius - width);
+			d.tiles = (float)std::max(4, (int)std::round(2.0f * 3.14159265f * d.outer / (width * TILE_LENGTH)));
+			// the box's height: the ground (and water) around the ring, with room
+			float lo = 1e9f, hi = -1e9f;
+			for (int i = 0; i <= 32; i++) {
+				const float a = i * 2.0f * 3.14159265f / 32;
+				const float r = i == 32 ? 0.0f : d.outer;
+				const float y = terrain->getHeightEx(band.centre.x + std::cos(a) * r, band.centre.z + std::sin(a) * r, true);
+				lo = std::min(lo, y);
+				hi = std::max(hi, y);
+			}
+			d.yMin = lo - 3.0f;
+			d.yMax = hi + 3.0f;
+			dgfx->DrawProjectedDecals((texture)band.tex, &d, 1);
+		}
+		return;
+	}
 	if (!rangeBandBatch)
 		rangeBandBatch = gfx->CreateBatch(TILES_PER_BATCH * SEGMENTS_PER_TILE * 4, TILES_PER_BATCH * SEGMENTS_PER_TILE * 12);
 	gfx->BeginParticles();
@@ -750,6 +778,31 @@ void ClientInterface::drawFootprintTiles()
 		for (int i = 0; i < 4; i++)
 			bmp.pixels[i] = 255;
 		white = gfx->CreateTexture(bmp, 1);
+	}
+	// with the depth pre-pass: projected onto the ground (whole on slopes, over the grass)
+	auto* dgfx = dynamic_cast<DiligentGfx*>(gfx);
+	if (dgfx && dgfx->ProjectedDecalsAvailable()) {
+		std::vector<DiligentGfx::ProjectedDecal> squares;
+		squares.reserve(footprintTiles.size());
+		for (const FootprintTile& tile : footprintTiles) {
+			DiligentGfx::ProjectedDecal d;
+			d.centre[0] = tile.x * TILE + TILE * 0.5f;
+			d.centre[1] = tile.z * TILE + TILE * 0.5f;
+			d.outer = TILE * 0.5f - INSET;
+			d.square = true;
+			d.colour = tile.ok ? 0x8000E040 : 0x90F02020;
+			float lo = 1e9f, hi = -1e9f;
+			for (int i = 0; i < 9; i++) {
+				const float y = client->terrain->getHeightEx(tile.x * TILE + (i % 3) * TILE * 0.5f, tile.z * TILE + (i / 3) * TILE * 0.5f, true);
+				lo = std::min(lo, y);
+				hi = std::max(hi, y);
+			}
+			d.yMin = lo - 3.0f;
+			d.yMax = hi + 3.0f;
+			squares.push_back(d);
+		}
+		dgfx->DrawProjectedDecals(*white, squares.data(), squares.size());
+		return;
 	}
 	if (!footprintBatch)
 		footprintBatch = gfx->CreateBatch(256 * SPLIT * SPLIT * 4, 256 * SPLIT * SPLIT * 6); // (a Manor's ring and footprint)
@@ -917,6 +970,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Ray-traced shadows (buildings, trees, units; needs DXR 1.1)", &s.rtShadows);
+		ImGui::Checkbox("Contact shadows (where feet, fences and walls meet the ground)", &s.contactShadows);
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
 		{
@@ -3710,6 +3764,12 @@ void ClientInterface::iter()
 		if (const std::string name = bench.value("stampdown", std::string()); !name.empty() && !stampdownBlueprint && client->clientPlayer) {
 			stampdownBlueprint = client->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, name);
 			stampdownPlayer = client->clientPlayer;
+			static bool said = false;
+			if (!said) {
+				said = true;
+				printf("BENCH stampdown \"%s\": %s\n", name.c_str(), stampdownBlueprint ? "placing it" : "no such building blueprint");
+				fflush(stdout);
+			}
 		}
 	}
 	// Get ray
@@ -3992,6 +4052,14 @@ void ClientInterface::iter()
 				// the new ring's tiles green under its poles, as the original's
 				for (const auto& creation : plan.toCreate)
 					footprintTiles.push_back({ (int)(creation.position.x / 5.0f), (int)(creation.position.z / 5.0f), true });
+				// Test runs: "benchmark": { ..., "rangeBand": [radius, "<texture>"] } a range band around
+				// the building being placed (the projected decals' screenshots)
+				if (BenchmarkEnabled()) {
+					const nlohmann::json rb = g_settings.value("benchmark", nlohmann::json::object()).value("rangeBand", nlohmann::json());
+					if (rb.is_array() && rb.size() == 2)
+						if (texture tex = uiTexCache.getTexture(rb[1].get<std::string>().c_str(), false))
+							rangeBands.push_back({ tex, peapos, rb[0].get<float>() });
+				}
 				if (const char* refusal = StampdownPlan::statusTextKey(plan.status)) {
 					stampdownRefusal = lang.getText(refusal);
 					drawStampdownRefusal();
@@ -4116,13 +4184,18 @@ void ClientInterface::iter()
 			if (esr) {
 				PROFILE_SCOPE("Depth pre-pass");
 				if (Diligent::ITextureView* dsv = dgfx->BeginLightingPrepass()) {
-					esr->renderDepth(dsv);
+					// the models' frame prepared (shadow map, GI, ray-tracing structures), the ground's
+					// and the water's depth, kept as the surface depth (the projected decals'), then
+					// the models' depth
+					esr->renderDepth(nullptr);
 					if (etr) {
 						if (bool* bump = etr->bumpMapping())
 							*bump = g_renderSettings.bumpMapping;
 						etr->renderDepth(dsv);
 						etr->renderWaterDepth();
 					}
+					dgfx->SnapshotSurfaceDepth();
+					esr->renderDepth(dsv);
 					dgfx->FinishLightingPrepass(client->camera);
 				}
 			}
@@ -4164,11 +4237,19 @@ void ClientInterface::iter()
 	if (particleRenderer && particlesContainer) {
 		ZoneScopedN("Particles");
 		PROFILE_SCOPE("Particles and weather");
+		// soft: faded where they meet the ground, the water and the models (the depth pre-pass)
+		auto* dgfx = dynamic_cast<DiligentGfx*>(gfx);
+		if (dgfx)
+			dgfx->SetSoftParticles(true);
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
+		if (dgfx) {
+			dgfx->SetSoftParticles(false);
+			gfx->BeginParticles(); // (the state without them)
+		}
 	}
 
 	if (postGfx) {

@@ -88,6 +88,15 @@ struct DiligentPostProcess {
 	Diligent::ITextureView* beginLightingDepth(Diligent::IDeviceContext* ctx);
 	Diligent::ITexture* lightingDepth() const;
 	Diligent::ITextureView* lightingAo(Diligent::IDeviceContext* ctx, const Matrix& projection, float radius);
+	// the lighting depth kept as the surface depth (after the ground and the water, before the
+	// models: the projected decals lie on it); the lighting depth bound again afterwards
+	void snapshotSurfaceDepth(Diligent::IDeviceContext* ctx);
+	Diligent::ITexture* surfaceDepth() const;
+	// the contact shadows from the lighting depth (a short march towards the sun: sun, towards
+	// it, in the world; view: the camera's) times the ray-traced shadows' mask (null: none), into
+	// a mask of the frame's size (1 sunlit), or null
+	Diligent::ITextureView* contactShadows(Diligent::IDeviceContext* ctx, const Matrix& projection, const Matrix& view, const Vector3& sun,
+		Diligent::ITextureView* rtMask);
 	// projection: the camera's (row vectors, D3D style: z_clip = z P33 + P43, w = z)
 	void apply(Diligent::IDeviceContext* ctx, Diligent::ITextureView* backBufferRTV, const Matrix& projection, const Settings& settings);
 
