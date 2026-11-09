@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentClouds.h"
+#include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "RenderSettings.h"
 #include "../Camera.h"
@@ -618,6 +619,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = "Sky light occlusion";
 		RefCntAutoPtr<IShader> s;
+		LoadingCompilingShader(entry); // (the loading screen)
 		device->CreateShader(sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile the sky light occlusion shader %s", entry);

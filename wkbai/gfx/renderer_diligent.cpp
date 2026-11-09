@@ -9,6 +9,7 @@
 // shader resource binding that works with all of them.
 
 #include "renderer_diligent.h"
+#include "../util/LoadingProgress.h"
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
 #include "DiligentClouds.h"
@@ -735,6 +736,7 @@ struct DiligentRenderer : DiligentGfx
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
+		LoadingCompilingShader(entryPoint); // (the loading screen)
 		device->CreateShader(sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile shader %s", entryPoint);
@@ -879,6 +881,12 @@ struct DiligentRenderer : DiligentGfx
 			g_projectionJitter[1] = -(halton(i, 3) - 0.5f) * 2.0f / h;
 		}
 		postActive = true;
+	}
+
+	void PreparePostProcessing() override
+	{
+		if (!post)
+			post = std::make_unique<DiligentPostProcess>(device, swapChain->GetDesc().ColorBufferFormat, swapChain->GetDesc().DepthBufferFormat);
 	}
 
 	bool LightingPrepassWanted() override

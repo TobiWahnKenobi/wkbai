@@ -87,8 +87,10 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// this computer's mods (ModManifest), to the host before the hello
 	void sendModManifest();
 	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
-	struct LoadingRow { int stage, colour; bool own; std::string name; };
+	struct LoadingRow { int stage, colour; bool own; std::string name; }; // (stage: wkbai's loading percentage, 0-100)
 	std::vector<LoadingRow> loadingRows;
+	// the host waits for the players' loads (the game's clock stands): the loading screen stays
+	bool loadingWaitForOthers = false;
 	// The host's AI General files being received (NETCLIMSG_GAME_SET_FILE)
 	std::map<std::string, std::string> hostFiles;
 	std::set<std::string> hostFilesComplete;
@@ -144,6 +146,8 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	void sendCommand(ClientGameObject *obj, const Command *cmd, int assignmentMode, ClientGameObject *target = nullptr, const Vector3 & destination = Vector3(), const Vector3& faceTo = Vector3(-1,0,0));
 	void sendPauseRequest(uint8_t pauseState);
 	void sendLoadingStage(int stage);
+	void readLoadingRows(struct BinaryReader& br);
+	void peekLoadingRows();
 	void sendStampdown(const GameObjBlueprint *blueprint, ClientGameObject *player, const Vector3 &position, bool sendEvent = false, bool inGameplay = false,
 		const Vector3 &orientation = Vector3(0, 0, 0));
 	void sendStartLevelRequest();

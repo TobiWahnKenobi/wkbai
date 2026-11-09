@@ -17,6 +17,7 @@
 // the same foam and particles at their foot.
 
 #include "DiligentWaterfalls.h"
+#include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "RenderSettings.h"
 #include "../terrain.h"
@@ -1075,6 +1076,7 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entry;
 		RefCntAutoPtr<IShader> s;
+		LoadingCompilingShader(entry); // (the loading screen)
 		device->CreateShader(sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile waterfall shader %s", entry);

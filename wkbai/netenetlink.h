@@ -19,6 +19,7 @@ struct NetEnetLink : NetLink {
 	NetPacket receive() override;
 	void send(const NetPacket &packet) override;
 	void disconnect(bool afterSending) override;
+	bool peekLast(uint8_t type, std::string& data) override;
 
 	NetEnetLink(_ENetHost *host, _ENetPeer *peer) : host(host), peer(peer) {}
 };

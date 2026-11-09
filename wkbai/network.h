@@ -195,6 +195,9 @@ struct NetLink {
 	// Ends the connection (the other side sees it gone): at once, or once what was sent before
 	// has gone out. Links of no network (NetLocalLink) do nothing.
 	virtual void disconnect(bool afterSending) {}
+	// The newest packet of that type waiting to be read, left in the queue (the loading screen's
+	// rows while the client is busy loading); none: false
+	virtual bool peekLast(uint8_t type, std::string& data) { return false; }
 	virtual ~NetLink() = default;
 
 	//int beginRead() = 0;
@@ -207,6 +210,7 @@ struct NetLocalLink : NetLink {
 	bool available() override;
 	NetPacket receive() override;
 	void send(const NetPacket &packet) override;
+	bool peekLast(uint8_t type, std::string& data) override;
 
 	NetLocalLink(NetLocalBuffer *inMessages, NetLocalBuffer *outMessages) : inMessages(inMessages), outMessages(outMessages) {}
 };

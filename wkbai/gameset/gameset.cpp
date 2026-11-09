@@ -7,6 +7,8 @@
 #include "../util/GSFileParser.h"
 #include "../tags.h"
 #include "../util/util.h"
+#include "../util/LoadingProgress.h"
+#include "../util/StriCompare.h"
 #include <vector>
 #include <string>
 #include <set>
@@ -230,6 +232,14 @@ void GameSet::parseFile(const char * fn, int pass)
 	callcount++;
 	processedFiles.insert(fn);
 	//printf("Processing %s\n", fn);
+	// the loading screen: the file (without the game set's folder)
+	if (LoadingActive()) {
+		std::string shown(fn);
+		static const std::string folder = "Warrior Kings Game Set\\";
+		if (shown.size() > folder.size() && StrCICompare(std::string_view(shown).substr(0, folder.size()), folder) == 0)
+			shown.erase(0, folder.size());
+		LoadingDetail((pass ? "pass 2, " : "pass 1, ") + shown);
+	}
 
 	std::string directory;
 	if (const char *lastbs = strrchr(fn, '\\')) {

@@ -377,8 +377,17 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// a building stamped down in play levels the ground under the tiles of its footprint that
 	// flatten (DEFORM_TERRAIN), and the clients are told
 	void levelTerrainUnder(ServerGameObject* building);
-	// each client's loading stage, its player's colour and its name to every client
+	// each client's loading percentage, its player's colour and its name to every client (the
+	// count's top bit: still waiting for the players' loads)
 	void sendLoadingStages();
+	// A multiplayer game starts when every human player has loaded it (its NETSRVMSG_LOADING_STAGE
+	// at 100): until then the clock stands and the players' orders aren't taken, so that a faster
+	// computer gets no head start; after LOAD_WAIT_MS it starts anyway
+	bool waitingForLoads = false;
+	uint64_t waitingForLoadsSince = 0;
+	static constexpr uint64_t LOAD_WAIT_MS = 180000;
+	void waitForLoads();
+	void checkLoadsDone();
 	void setDiplomaticStatus(ServerGameObject *a, ServerGameObject *b, int status);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	void hideGameTextWindow(ServerGameObject* player, int gtwIndex);

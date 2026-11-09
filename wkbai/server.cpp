@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "server.h"
+#include "util/LoadingProgress.h"
 #include <set>
 #include "file.h"
 #include "util/GSFileParser.h"
@@ -86,9 +87,11 @@ void Server::loadSaveGame(const char * filename)
 			std::string gsFileName = gsf.nextString(true);
 			gameSetFile = gsFileName;
 			int version = g_settings.at("gameVersion").get<int>();
+			LoadingEnterStep(LOADING_GAME_SET);
 			auto loaded = std::make_shared<GameSet>(gsFileName.c_str(), version);
 			InstallAIAggressionOverrides(*loaded);
 			gameSet = loaded;
+			LoadingEnterStep(LOADING_LEVEL);
 			NetPacketWriter msg(NETCLIMSG_GAME_SET);
 			msg.writeStringZ(gsFileName);
 			msg.writeUint8((uint8_t)version);
@@ -477,7 +480,7 @@ void Server::sendLoadingStages()
 	for (size_t to = 0; to < clientLinks.size(); to++) {
 		NetPacketWriter packet(NETCLIMSG_LOADING_STAGES);
 		const size_t count = std::min<size_t>(clientLinks.size(), 8);
-		packet.writeUint8((uint8_t)count);
+		packet.writeUint8((uint8_t)count | (waitingForLoads ? 0x80 : 0));
 		for (size_t i = 0; i < count; i++) {
 			const ServerGameObject* player = i < clientPlayerObjects.size() ? clientPlayerObjects[i].get() : nullptr;
 			std::string name = i < clientInfos.size() ? clientInfos[i].name : std::string();
@@ -492,6 +495,39 @@ void Server::sendLoadingStages()
 		}
 		clientLinks[to]->send(packet);
 	}
+}
+
+void Server::waitForLoads()
+{
+	waitingForLoads = true;
+	waitingForLoadsSince = SDL_GetTicks();
+	timeManager.pause();
+	syncTime();
+	printf("Multiplayer: the game starts when every player has loaded it\n");
+}
+
+void Server::checkLoadsDone()
+{
+	if (!waitingForLoads)
+		return;
+	// the clients that play (a spectator's load isn't waited for)
+	std::string loading;
+	for (size_t i = 0; i < clientLinks.size(); i++)
+		if (clientLinks[i] && i < clientPlayerObjects.size() && clientPlayerObjects[i] && i < clientInfos.size()
+			&& !clientInfos[i].refused && clientInfos[i].loadingStage < 100)
+			loading += " " + std::to_string(i) + " (" + std::to_string(clientInfos[i].loadingStage) + "%)";
+	const bool timedOut = SDL_GetTicks() - waitingForLoadsSince > LOAD_WAIT_MS;
+	if (!loading.empty() && !timedOut)
+		return;
+	waitingForLoads = false;
+	if (timedOut && !loading.empty())
+		printf("Multiplayer: started after %llu s without the loads of client%s\n", (unsigned long long)(LOAD_WAIT_MS / 1000), loading.c_str());
+	else
+		printf("Multiplayer: every player has loaded the game after %llu ms: it starts\n", (unsigned long long)(SDL_GetTicks() - waitingForLoadsSince));
+	fflush(stdout);
+	timeManager.unpause();
+	syncTime();
+	sendLoadingStages();
 }
 
 void Server::Recording::flushRun()
@@ -1004,8 +1040,10 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		case Tags::GAMEOBJ_MAP: {
 			std::string mapfp = gsf.nextString(true);
 			mapFile = mapfp;
+			LoadingDetail("the map");
 			this->terrain = new Terrain();
 			this->terrain->readFromFile(mapfp.c_str());
+			LoadingDetail("the level's objects");
 			NetPacketWriter packet(NETCLIMSG_TERRAIN_SET);
 			packet.writeStringZ(mapfp);
 			sendToAll(packet);
@@ -2863,6 +2901,8 @@ void Server::tick()
 		network();
 		return;
 	}
+	// (a player that left or never reports: checked again, and the time-out)
+	checkLoadsDone();
 	timeManager.tick();
 	// the simulation in fixed steps ("simStepMs"), so that it goes the same at any frame rate;
 	// while paused (or without steps) once, without moving the clock
@@ -3282,6 +3322,11 @@ void Server::network()
 				continue;
 			if (clientIndex > 0 && clientInfos[clientIndex].refused)
 				continue;
+			// while the players load, nobody plays (the host neither): joining, talking and the loads
+			if (waitingForLoads && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
+				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
+				&& type != NETSRVMSG_MOD_MANIFEST)
+				continue;
 			// the messages that change the game are recorded (not the joining, the lobby, the
 			// loading stages)
 			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
@@ -3342,6 +3387,7 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 			case NETSRVMSG_LOADING_STAGE: {
 				clientInfos[clientIndex].loadingStage = br.readUint8();
 				sendLoadingStages();
+				checkLoadsDone();
 				break;
 			}
 			case NETSRVMSG_LOBBY_HELLO: {
