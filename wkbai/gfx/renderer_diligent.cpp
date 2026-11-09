@@ -1040,9 +1040,11 @@ struct DiligentRenderer : DiligentGfx
 		// the contact shadows (RenderSettings::contactShadows): a short march towards the sun in the
 		// lighting depth, the small shadows the ray-traced ones miss or the shadow map can't
 		// resolve; into the sun's mask with the ray-traced shadows
-		if (g_renderSettings.contactShadows && !camera.orthoMode) {
+		// (the pass also filters the ray-traced mask: with them on, it runs without contact shadows too)
+		if ((g_renderSettings.contactShadows || shadows.lightRtMask) && !camera.orthoMode) {
 			PROFILE_SCOPE("Contact shadows");
-			if (ITextureView* m = post->contactShadows(ctx, camera.projMatrix, camera.viewMatrix, shadows.sunDirection, shadows.lightRtMask))
+			if (ITextureView* m = post->contactShadows(ctx, camera.projMatrix, camera.viewMatrix, shadows.sunDirection, shadows.lightRtMask,
+				g_renderSettings.contactShadows ? 0.75f : 0.0f))
 				shadows.lightRtMask = m;
 		}
 		shadows.lightPrepass = true;

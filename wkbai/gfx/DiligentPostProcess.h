@@ -95,8 +95,9 @@ struct DiligentPostProcess {
 	// the contact shadows from the lighting depth (a short march towards the sun: sun, towards
 	// it, in the world; view: the camera's) times the ray-traced shadows' mask (null: none), into
 	// a mask of the frame's size (1 sunlit), or null
+	// (strength 0: no contact shadows, the ray-traced mask's filter alone)
 	Diligent::ITextureView* contactShadows(Diligent::IDeviceContext* ctx, const Matrix& projection, const Matrix& view, const Vector3& sun,
-		Diligent::ITextureView* rtMask);
+		Diligent::ITextureView* rtMask, float strength = 0.75f);
 	// projection: the camera's (row vectors, D3D style: z_clip = z P33 + P43, w = z)
 	void apply(Diligent::IDeviceContext* ctx, Diligent::ITextureView* backBufferRTV, const Matrix& projection, const Settings& settings);
 

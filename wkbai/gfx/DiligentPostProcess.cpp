@@ -159,11 +159,25 @@ float4 PS_Ao(VS_OUTPUT input) : SV_Target
 // one); faded out by Bloom.z. Times the ray-traced shadows' mask; Bloom.x: how dark.
 float4 PS_Contact(VS_OUTPUT input) : SV_Target
 {
-	float rt = tRtShadow.SampleLevel(sPoint, input.Uv, 0).r;
 	float d = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
-	if (d >= 0.99999 || rt <= 0)
-		return float4(rt, rt, rt, 1);
+	if (d >= 0.99999)
+		return float4(1, 1, 1, 1);
 	float3 p = ViewPosAt(input.Uv, d);
+	// the ray-traced mask filtered over 3 x 3 pixels of about the same depth (one jittered ray per
+	// pixel: on a moving object FSR keeps no history, and the raw noise showed as a crawling
+	// sawtooth along the shadow's edge, the HD Blacksmith's bellows of 2026-11-09)
+	float rt = 0, wsum = 0;
+	[unroll] for (int j = -1; j <= 1; j++)
+		[unroll] for (int i = -1; i <= 1; i++) {
+			float2 uv = input.Uv + float2(i, j) * Texel.xy;
+			float z = Proj.w / (tDepth.SampleLevel(sPoint, uv, 0).r - Proj.z);
+			float w = (i == 0 && j == 0 ? 2 : 1) * saturate(1 - abs(z - p.z) / (0.02 * p.z + 0.05));
+			rt += tRtShadow.SampleLevel(sPoint, uv, 0).r * w;
+			wsum += w;
+		}
+	rt /= max(wsum, 1e-4);
+	if (rt <= 0 || Bloom.x <= 0)
+		return float4(rt, rt, rt, 1);
 	if (p.z > Bloom.z)
 		return float4(rt, rt, rt, 1);
 	float noise = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
@@ -1055,7 +1069,7 @@ ITexture* DiligentPostProcess::surfaceDepth() const
 	return _impl->surfaceDepth;
 }
 
-ITextureView* DiligentPostProcess::contactShadows(IDeviceContext* ctx, const Matrix& projection, const Matrix& view, const Vector3& sun, ITextureView* rtMask)
+ITextureView* DiligentPostProcess::contactShadows(IDeviceContext* ctx, const Matrix& projection, const Matrix& view, const Vector3& sun, ITextureView* rtMask, float strength)
 {
 	if (!_impl->lightDepth || !_impl->contact)
 		return nullptr;
@@ -1087,7 +1101,7 @@ ITextureView* DiligentPostProcess::contactShadows(IDeviceContext* ctx, const Mat
 		projection._11, projection._22, projection._33, projection._43,
 		1.0f / w, 1.0f / h, 0.0f, 0.0f,
 		sx, sy, sz, 0.9f,     // towards the sun, 0.9 m
-		0.75f, 0.8f, 160.0f, 0.0f, // 75% dark, at most 0.8 m thick, out to 160 m
+		strength, 0.8f, 160.0f, 0.0f, // how dark (75%), at most 0.8 m thick, out to 160 m
 	};
 	memcpy(mapped, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
