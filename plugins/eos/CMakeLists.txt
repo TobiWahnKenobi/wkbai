@@ -6,6 +6,11 @@
 #   cmake -DEOS_SDK_DIR=C:/path/to/EOS-SDK/SDK ...
 # (the folder with Include/, Lib/ and Bin/ of Epic's "EOS SDK for C" download).
 # Built from wkbai's own CMakeLists (WKBAI_EOS_PLUGIN) or on its own.
+#
+# Licensing: wkbai is GPL-3 and contains AdrienTD's GPL-3 code, for which no exception for closed
+# libraries exists. A plugin loaded into wkbai's process may count as part of one combined work
+# with it, so a plugin built WITH the EOS SDK is for the builder's own use: don't distribute it
+# together with wkbai. Release packages (tools/package.py) leave the plugins folder out.
 
 cmake_minimum_required(VERSION 3.8)
 if(NOT DEFINED PROJECT_NAME)

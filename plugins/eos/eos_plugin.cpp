@@ -3,6 +3,7 @@
  * This file is under the MIT licence (like wkbai_mm_plugin.h, unlike the rest of wkbai), so
  * that it may be linked with Epic's closed EOS SDK:
  *
+ *   Copyright (c) 2026 the wkbai contributors.
  *   Permission is hereby granted, free of charge, to any person obtaining a copy of this file,
  *   to deal in it without restriction, including without limitation the rights to use, copy,
  *   modify, merge, publish, distribute, sublicense, and/or sell copies of it, and to permit

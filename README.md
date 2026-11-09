@@ -151,4 +151,10 @@ See [AdrienTD/wkbre2](https://github.com/AdrienTD/wkbre2) for the original proje
 
 ## License
 
-GPL-3.0, as upstream: see [LICENSE](LICENSE).
+GPL-3.0, as upstream: see [LICENSE](LICENSE). wkbai is a modified version of wkbre2, changed
+since 2026-10-25 (the git history has every change).
+
+Some parts are under other GPL-compatible licences (Dear ImGui, the AMD FidelityFX shaders, bcdec,
+a hash function and others), and the libraries wkbai is built with have their own:
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists each one, the files or binaries it covers
+and where its full text is.

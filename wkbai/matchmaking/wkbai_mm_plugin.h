@@ -3,6 +3,7 @@
  * This header alone is under the MIT licence (the rest of wkbai is GPL-3), so that a plugin
  * may be built with a closed SDK (Epic Online Services, a console's network library, ...):
  *
+ *   Copyright (c) 2026 the wkbai contributors.
  *   Permission is hereby granted, free of charge, to any person obtaining a copy of this file,
  *   to deal in it without restriction, including without limitation the rights to use, copy,
  *   modify, merge, publish, distribute, sublicense, and/or sell copies of it, and to permit
