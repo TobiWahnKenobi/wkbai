@@ -182,6 +182,13 @@ namespace {
 	}
 }
 
+bool ClientInterface::cheatKeysAllowed() const
+{
+	if (!withServer || !singlePlayer || replayMode || !Server::instance)
+		return false;
+	return Server::instance->cheatMode || editorAllowed || BenchmarkEnabled();
+}
+
 bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 {
 	const Terrain* terrain = client->terrain;
@@ -958,6 +965,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
+			static const char* const cloudDetails[] = { "Low (one density)", "Medium (varying density)", "High (+ billows, cumulonimbus)" };
+			ImGui::Combo("Cloud detail", &s.cloudDetail, cloudDetails, 3);
 		}
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
 		ImGui::SliderFloat("Light shafts", &s.lightShaftStrength, 0.0f, 4.0f, "%.2f");
@@ -2985,10 +2994,10 @@ void ClientInterface::iter()
 	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
 	// the environment's debug panel: in a skirmish with cheat mode on only (the game setting)
-	const bool cheats = withServer && Server::instance && (Server::instance->cheatMode || BenchmarkEnabled());
-	if (g_keyPressed[SDL_SCANCODE_F9] && withServer && singlePlayer && !replayMode && cheats && !ImGui::GetIO().WantTextInput)
+	const bool cheats = cheatKeysAllowed();
+	if (g_keyPressed[SDL_SCANCODE_F9] && cheats && !ImGui::GetIO().WantTextInput)
 		environmentDebugOpen = !environmentDebugOpen;
-	if (replayMode || !singlePlayer || !cheats)
+	if (!cheats)
 		environmentDebugOpen = false;
 	if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorTest", false)) {
 		editorOn = true;
@@ -3183,9 +3192,12 @@ void ClientInterface::iter()
 
 	static bool debuggerOn = false;
 	static bool uiScriptOn = true;
-	if (g_keyPressed[SDL_SCANCODE_F2]) {
+	// F2: the client's debugger (every object, the dev mode, the sun): a cheat key
+	if (g_keyPressed[SDL_SCANCODE_F2] && cheatKeysAllowed()) {
 		debuggerOn = !debuggerOn;
 	}
+	if (debuggerOn && !cheatKeysAllowed())
+		debuggerOn = false;
 	if (g_keyPressed[SDL_SCANCODE_F3]) {
 		uiScriptOn = !uiScriptOn;
 	}

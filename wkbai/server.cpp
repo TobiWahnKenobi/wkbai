@@ -50,13 +50,18 @@ void Server::loadSaveGame(const char * filename)
 	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
 	cheatMode = false;
+	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
 	clearFogOfWar = false;
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
 		LoadFile(side.c_str(), &text, &size);
-		applyAiSettingsText(std::string(text, size), false);
+		const std::string settings(text, size);
+		applyAiSettingsText(settings, false);
+		// the game's settings, not the Lua AIs only (aiSettingsText writes aggressiveAI first;
+		// before 2026-11-07 the file had the scripts only): the lobby's applySettings keeps them
+		settingsFromSave = settings.find("aggressiveAI=") != std::string::npos;
 		free(text);
 	}
 	// wkbai's day and night, seasons and weather as saved (<save>.env.txt), else off

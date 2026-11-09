@@ -72,6 +72,7 @@ void RenderSettings::load()
 	dynamicGIStrength = std::clamp(g_settings.value<float>("dynamicGIStrength", def.dynamicGIStrength), 0.0f, 3.0f);
 	dynamicClouds = std::clamp(g_settings.value<int>("dynamicClouds", def.dynamicClouds), 0, 3);
 	cloudQuality = std::clamp(g_settings.value<int>("cloudQuality", def.cloudQuality), 0, 3);
+	cloudDetail = std::clamp(g_settings.value<int>("cloudDetail", def.cloudDetail), 0, 2);
 	cloudWeather = std::clamp(g_settings.value<int>("cloudWeather", def.cloudWeather), 0, 10);
 	cloudCover = std::clamp(g_settings.value<float>("cloudCover", def.cloudCover), 0.0f, 1.0f);
 	lightShaftStrength = std::clamp(g_settings.value<float>("lightShaftStrength", def.lightShaftStrength), 0.0f, 4.0f);
@@ -169,6 +170,7 @@ void RenderSettings::save()
 	g_settings["dynamicGIStrength"] = dynamicGIStrength;
 	g_settings["dynamicClouds"] = dynamicClouds;
 	g_settings["cloudQuality"] = cloudQuality;
+	g_settings["cloudDetail"] = cloudDetail;
 	g_settings["cloudWeather"] = cloudWeather;
 	g_settings["cloudCover"] = cloudCover;
 	g_settings["lightShaftStrength"] = lightShaftStrength;

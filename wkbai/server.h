@@ -223,6 +223,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
 	// (recorded, so a replay applies the panel's changes too)
 	bool cheatMode = false;
+	// loadSaveGame read the game's settings from the save game (<save>.ai.txt): the lobby's
+	// applySettings then keeps them (all the game's settings go with its save game)
+	bool settingsFromSave = false;
 	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, everything on the map is
 	// shown; off, the default, the fog of war: FogOfWar, the clients told with
 	// NETCLIMSG_ENVIRONMENT; the campaign always has it) and "teamReconnaissance" (allies share their

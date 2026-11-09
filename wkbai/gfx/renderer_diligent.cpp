@@ -164,7 +164,14 @@ float FogAmount(float3 worldPos, float distanceToCamera)
 	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
 	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
 	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
-	return max(distanceFog, edgeFog);
+	// the haze thickening towards the horizon (the play test of 2026-11-09: with a long view the far
+	// sea and land went from the edge fog's full haze to hardly any within a few pixels, its ramp
+	// squeezed together at the grazing view, a line under the sky): what is fogged at all fogs
+	// faster the nearer its direction lies to the horizontal (within about 2 degrees); the views
+	// down onto the map keep their fog
+	float f = max(distanceFog, edgeFog);
+	float level = 1 - smoothstep(0, 0.035, abs(FogCamera.y - worldPos.y) / max(distanceToCamera, 1));
+	return 1 - pow(1 - f, 1 + 6 * level);
 }
 
 // Colour grading of the 3D scene (the settings window's exposure/brightness/contrast/saturation)
@@ -340,7 +347,14 @@ float FogAmount(float3 worldPos, float distanceToCamera)
 	float distanceFog = clamp((distanceToCamera - FogStartDist) / (FogEndDist - FogStartDist), 0, 1);
 	float2 outside = max(-worldPos.xz, worldPos.xz - EdgeFog.xy);
 	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
-	return max(distanceFog, edgeFog);
+	// the haze thickening towards the horizon (the play test of 2026-11-09: with a long view the far
+	// sea and land went from the edge fog's full haze to hardly any within a few pixels, its ramp
+	// squeezed together at the grazing view, a line under the sky): what is fogged at all fogs
+	// faster the nearer its direction lies to the horizontal (within about 2 degrees); the views
+	// down onto the map keep their fog
+	float f = max(distanceFog, edgeFog);
+	float level = 1 - smoothstep(0, 0.035, abs(FogCamera.y - worldPos.y) / max(distanceToCamera, 1));
+	return 1 - pow(1 - f, 1 + 6 * level);
 }
 
 struct DECAL_OUTPUT

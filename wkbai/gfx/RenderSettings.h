@@ -155,6 +155,12 @@ struct RenderSettings {
 	// the volumetric clouds' quality: 0 Low (a quarter of the size, 48 steps), 1 Medium (half,
 	// 64), 2 High (the full size, 96), 3 Ultra (the full size, 128, finer light)
 	int cloudQuality = 1;
+	// the volumetric clouds' detail (their shapes, beside the quality's resolution and steps): 0 Low
+	// (the layer's one density, as before 2026-11-09), 1 Medium (the density varying by region
+	// within the layer: thick and thin clouds, a deck with denser and thinner parts), 2 High (with
+	// finer billows on the tops, the sides bulging with the height, and the cumulonimbus as towers on
+	// a flat base under wide anvils); Medium and High round the tops (no spikes while clouds form)
+	int cloudDetail = 1;
 	// the clouds' weather (enhanced renderers on Diligent): 0 cumulus by the cloud cover below,
 	// 1-10 a weather's clouds (clear, cloudy, rain, heavy rain, thunderstorm, fog, snow, blizzard,
 	// heatwave, drought); the seasons' weather, when on, sets it itself

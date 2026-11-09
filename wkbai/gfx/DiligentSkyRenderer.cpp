@@ -109,7 +109,7 @@ cbuffer SkyBuffer
 	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation);
 	// SkyStarX.w: the moon's lit part (0 new .. 1 full: its glow, its light on the air)
 	float4 SkyStarX;
-	float4 SkyStarY;
+	float4 SkyStarY;   // w: the clouds' detail (RenderSettings::cloudDetail, 0-2)
 	float4 SkyStarZ;
 	// the sky box under the weather's clouds (dynamicClouds below 3: no volumetric clouds over
 	// it): the overcast's colour, w how much (0: the box as it is)
@@ -152,7 +152,9 @@ VS_OUTPUT VS(uint id : SV_VertexID)
 float SkyFog(float t)
 {
 	if (t <= 1.0 / 81) return 1;
-	if (t <= 4.0 / 81) return lerp(1, 1 - 40.0 / 255, (t - 1.0 / 81) / (3.0 / 81));
+	// (eased in: the haze's flat band under it and this ramp met in a kink, a faint line just over
+	// the horizon, the play test of 2026-11-09; at 4/81 the slopes now nearly meet the next ramp's)
+	if (t <= 4.0 / 81) { float x = (t - 1.0 / 81) / (3.0 / 81); return lerp(1, 1 - 40.0 / 255, x * x); }
 	if (t <= 9.0 / 81) return lerp(1 - 40.0 / 255, 1 - 180.0 / 255, (t - 4.0 / 81) / (5.0 / 81));
 	if (t <= 16.0 / 81) return lerp(1 - 180.0 / 255, 0, (t - 9.0 / 81) / (7.0 / 81));
 	return 0;
@@ -169,6 +171,35 @@ float Remap(float x, float a, float b, float c, float d)
 	return c + (x - a) / max(b - a, 1e-4) * (d - c);
 }
 
+// Cloud detail High (SkyStarY.w 2): the cumulonimbus as real ones are (the play test of
+// 2026-11-09: cones going up into the sky): straight towers on the deck's flat base, their sides
+// billowing out in lumps (a 3D noise of a few hundred units, changing up the tower), to an anvil
+// that spreads out from about three quarters of the layer, downwind and wider the higher (several
+// times the tower across), flat under the layer's top. x: the towers, y: the anvils.
+float2 StormCellsHigh(float3 p, float h, float lod)
+{
+	float n = StormCell(p.xz, lod);
+	float4 s = cloudShape.SampleLevel(cloud3DSampler, p / 1900 + float3(0.31, 0.17, 0.67), max(lod - 1, 0));
+	float billow = s.g * 0.55 + s.b * 0.3 + s.a * 0.15 - 0.5;
+	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09;
+	float tower = saturate((n - th) / 0.05);
+	float spread = smoothstep(0.72, 0.97, h);
+	float a = StormCell(p.xz - float2(0.948683, 0.316228) * (spread * 3200), lod);
+	float anvil = saturate((a - lerp(0.645, 0.56, spread) - billow * 0.04) / 0.05) * smoothstep(0.72, 0.8, h);
+	return float2(tower, anvil);
+}
+
+// Cloud detail Medium and High (SkyStarY.w 1 and 2): how dense the layer is by region (the play
+// test of 2026-11-09: one uniform deck): two octaves of the smooth noise (about 2.6 km and 900
+// units across), drifting with the wind; 0.35 to 1.5 times.
+float DensityRegions(float2 xz, float footprint)
+{
+	float2 dp = xz - float2(6, 2) * CloudScale.w;
+	float r = cloudNoise.SampleLevel(cloudNoiseSampler, dp / 2600 + float2(0.43, 0.17), max(log2(footprint * 256 / 2600), 0)).a * 0.65
+		+ cloudNoise.SampleLevel(cloudNoiseSampler, dp / 900 + float2(0.29, 0.61), max(log2(footprint * 256 / 900), 0)).a * 0.35;
+	return lerp(0.35, 1.5, smoothstep(0.3, 0.72, r));
+}
+
 // The cloud layer's density at a point (Schneider, "The Real-time Volumetric Cloudscapes of
 // Horizon Zero Dawn"): the 3D Perlin-Worley shape within a rounded height profile, cut by the
 // cover over the map (the same as the ground shadows'), its edges eroded by 3D Worley detail,
@@ -177,13 +208,35 @@ float Remap(float x, float a, float b, float c, float d)
 // the shape is 3D (a 2D shape stretched up the layer gave vertical streaks). footprint: the
 // pixel's size there in world units, for the noise's mip levels; detail: with the erosion (the
 // light's steps go without).
+// the density's regions at the view's step (DensityRegions, Medium and High; 1 on Low): the
+// march sets it once per step, the light's steps reuse it (sampling it again in each of them
+// cost half a millisecond at Ultra)
+static float cRegion = 1;
+// and the 2D fields' offset there (CloudWarp; its light steps reuse it, the noise is broad)
+static float2 cWarp = 0;
+
+// High: the offset's direction at a point (-0.5 to 0.5; changing with the height h)
+float2 CloudWarp(float2 xz, float h, float lod)
+{
+	return cloudNoise.SampleLevel(cloudNoiseSampler, xz / 1100 + float2(h * 0.43, h * 0.29) + float2(0.07, 0.53), max(lod - 1, 0)).rg - 0.5;
+}
+
 float CloudDensity(float3 p, float lod, float footprint, bool detail)
 {
 	CloudAt(p.xz);
+	const int detailLevel = (int)SkyStarY.w; // (the cloudDetail texture is the erosion's)
 	float h = saturate((p.y - cShape.z) / cShape.w);
 	// the coverage (CloudCover, as the ground shadows')
 	const float stratus = cWeather.x, storm = cWeather.y;
-	float cover = CloudCover(p.xz, lod + 1);
+	// High: the map's 2D fields (the cover, the storm cells, the tops) looked up a
+	// little aside, by an offset that changes with the height, more higher up: the 2D cover alone,
+	// the same all up the layer, made the clouds' sides straight walls, seen from below as
+	// streaks and spikes rising to the sky (the play test of 2026-11-09, most while they formed);
+	// now they bulge and lean (the base keeps its place, over the ground's shadows)
+	float2 xz = p.xz;
+	if (detailLevel >= 2)
+		xz += cWarp * (lerp(110, 260, storm) * smoothstep(0.05, 0.9, h));
+	float cover = CloudCover(xz, lod + 1);
 	// a sheet closes up: a stratus deck is one layer of varying thickness, not broken cloud
 	cover = lerp(cover, saturate(cover * 1.3 + 0.12), stratus * smoothstep(0.5, 0.8, cShape.x));
 	float stormCore = 0, deck = 0;
@@ -191,8 +244,8 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		// cumulonimbus: towers on the storm cells' cores up to the layer's top, their anvils
 		// spreading out wide under it, over a dark low deck of the ordinary cover all around
 		// (the lowest sixth of the layer: a few hundred units, as a rain's)
-		float2 cb = StormCells(p.xz, h, lod);
-		float anvil = cb.y * smoothstep(0.8, 0.9, h);
+		float2 cb = detailLevel >= 2 ? StormCellsHigh(float3(xz.x, p.y, xz.y), h, lod) : StormCells(xz, h, lod);
+		float anvil = detailLevel >= 2 ? cb.y : cb.y * smoothstep(0.8, 0.9, h);
 		float low = cover * (1 - smoothstep(0.1, 0.17, h));
 		cover = lerp(cover, max(max(cb.x, anvil), low), storm);
 		stormCore = cb.x * storm;
@@ -201,18 +254,29 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	if (cover <= 0.002)
 		return 0;
 	// the tops: by region; a stratus sheet's level; a storm's flat, at the layer's top (the anvils)
-	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, p.xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
+	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
 	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
 	// the base: a 10-40 unit ramp (not a share of the layer: a tall storm layer's base went soft),
 	// raised and lowered a little by region (a ragged base)
 	float baseH = (topVar - 0.5) * 30 / cShape.w;
-	float profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) *saturate(Remap(h, lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm), top, 1, 0));
+	const float topStart = lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm);
+	float profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) *saturate(Remap(h, topStart, top, 1, 0));
 	if (profile <= 0)
 		return 0;
 	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
 	float3 q = p - drift - float3(0, cShape.z, 0);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
+	if (detailLevel >= 1) {
+		// Medium and High: the tops rounded, a dome over the height profile's ramp instead of its
+		// straight line, and lowered a little by the 3D noise (the play test of 2026-11-09: with the
+		// cover low, as while clouds form, the profile before the coverage's cut narrowed every
+		// bump of the 2D cover to a point at the top: spikes going up into the sky)
+		float x = saturate(Remap(h, topStart, top - 0.08 * (top - topStart) * s.a, 0, 1));
+		profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) * sqrt(saturate(1 - x * x));
+		if (profile <= 0)
+			return 0;
+	}
 	float fbm = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
 	float shape = saturate(Remap(s.r, fbm - 1, 1, 0, 1));
 	shape = lerp(shape, 0.45 + 0.55 * shape, max(stratus, deck * 0.35)); // sheets (and a storm's deck): the billows flattened
@@ -228,13 +292,24 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	}
 	shape = lerp(shape, 0.3 + 0.7 * shape, stormCore * stormCore) * profile; // the towers' middles solid
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
+	// (Medium and High: thick and thin clouds by region; a storm's towers keep theirs)
+	if (detailLevel >= 1 && c > 0)
+		c *= lerp(cRegion, 1, stormCore);
 	if (!detail || c <= 0)
 		return c * 1.6 * cWeather.z;
 	float detailLod = log2(footprint * 32 / DETAIL_PERIOD);
 	float3 d = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.3) / DETAIL_PERIOD, max(detailLod, 0)).rgb;
 	float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
-	hf = lerp(1 - hf, hf, saturate(h * 3));
 	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus);
+	if (detailLevel >= 2 && detailLod < 3.5) {
+		// High: a finer octave of billows (about 40 units) on the cumulus' tops and a storm tower's
+		// sides, and the tops' cauliflower relief cut a little deeper
+		float3 d2 = cloudDetail.SampleLevel(cloud3DSampler, (q + drift * 0.2) / (DETAIL_PERIOD / 3), max(detailLod + 1.6, 0)).rgb;
+		float fine = d2.r * 0.5 + d2.g * 0.3 + d2.b * 0.2;
+		hf = lerp(hf, fine, 0.4 * saturate(h * 2 + stormCore));
+		erosion *= lerp(1, 1.3, saturate(h * 1.5) * (1 - stratus));
+	}
+	hf = lerp(1 - hf, hf, saturate(h * 3));
 	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6 * cWeather.z;
 }
 
@@ -267,7 +342,8 @@ float3 DuskTint(float3 sun, float lift)
 	return lerp(float3(1, 1, 1), tint * 1.5, dusk);
 }
 
-float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
+// skyThere: the physical sky's colour along the view (PS_Clouds; 0 without it)
+float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 {
 	// (during a front the layer between both weathers' lowest base and highest top)
 	float base = CloudShape.z, top = CloudShape.z + CloudShape.w;
@@ -324,6 +400,22 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// lit by the low sun's light from behind them)
 	if (SkyRight.w != 0)
 		duskSun *= lerp(1, lerp(0.45, 1.15, towardSun), duskK);
+	// Away from the sun at dawn and dusk the clouds take the sky's colour there (the play test of
+	// 2026-11-09: mostly a structureless grey): the sky's own colour along the view (skyThere) as
+	// their sky light's tint, of mean brightness 1, a little more saturated; the sunlight on them
+	// pinker (its red against the sky's blue), less of it scattered many times; the haze the far
+	// ones go into tinted the same (below)
+	const float away = SkyRight.w != 0 && FogSun.w > 0 ? duskK * smoothstep(0.62, 0.25, towardSun) : 0; // (the half of the sky away from it)
+	float3 awaySky = 1;
+	float3 sunTintAway = sunTint;
+	if (away > 0) {
+		// (the physical sky along the view: the belt's pink and the earth's shadow low, the
+		// twilight blue higher up; else the haze's horizon there towards the sky's colour above)
+		awaySky = dot(skyThere, 1) > 1e-5 ? skyThere : lerp(FogTintDir(float3(rd.x, 0, rd.z)), CloudSkyUp.rgb, saturate(rd.y * 2.5));
+		awaySky = clamp(awaySky / max(dot(awaySky, float3(0.3, 0.59, 0.11)), 1e-3), 0, 2.2);
+		awaySky = lerp(dot(awaySky, float3(0.3, 0.59, 0.11)).xxx, awaySky, 1.6); // (more saturated)
+		sunTintAway = lerp(sunTint, dot(sunTint, float3(0.3, 0.59, 0.11)) * float3(1.2, 0.66, 0.9), away * 0.85);
+	}
 	float3 light = float3(0, 0, 0);
 	float T = 1;
 	const float SIGMA = 0.045;
@@ -334,6 +426,14 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		// unit), so the distant clouds don't alias
 		float lod = log2(1 + t * 0.0035 * pixelScale * 256 * CloudScale.y);
 		float footprint = t * 0.0035 * pixelScale;
+		cRegion = 1;
+		cWarp = 0;
+		if (SkyStarY.w >= 1) {
+			CloudAt(p.xz);
+			cRegion = DensityRegions(p.xz, footprint);
+			if (SkyStarY.w >= 2)
+				cWarp = CloudWarp(p.xz, saturate((p.y - cShape.z) / cShape.w), lod);
+		}
 		float dens = CloudDensity(p, lod, footprint, true);
 		if (dens <= 0.002)
 			continue;
@@ -350,15 +450,20 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 		float3 ambient = CloudSkyUp.rgb * (0.45 + 0.55 * h) + CloudSkyHorizon.rgb * 0.15;
 		// light scattered many times inside the cloud (the light that a single scattering misses
 		// in thick clouds: an overcast sheet is grey, not black), less absorbed and isotropic
-		energy += 0.35 * exp(-SIGMA * 0.2 * od);
-		ambient = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.4) * 1.3;
+		// (away from the sun at dawn and dusk less of it: its orange against the sky's blue made grey)
+		energy += lerp(0.35, 0.18, away) * exp(-SIGMA * 0.2 * od);
+		ambient = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.4 * (1 - away)) * 1.3;
+		// (away from the sun at dawn and dusk: the sky's own colour there, its pink and violet
+		// belt low and its blue higher up, at the ambient's brightness; their bases darker, their
+		// tops lit: relief instead of one grey)
+		ambient = lerp(ambient, awaySky * dot(ambient, float3(0.3, 0.59, 0.11)) * lerp(0.6, 1.25, h), away);
 		// the weather's light (storm and rain clouds darker, their bases most), and lightning
 		// lighting the cloud from inside
 		// (and the denser parts of a cloud darker than its thin ones: an overcast sheet's relief)
 		float shade = cWeather.w * lerp(1, 0.6 + 0.4 * h, cWeather.y)
 			* lerp(1.12, 0.72, saturate(dens / (1.6 * max(cWeather.z, 0.1))));
 		float3 flash = float3(0.75, 0.8, 1.0) * (CloudFlash.w * 9 * exp(-length(p - CloudFlash.xyz) / 260));
-		float3 s = (sunTint * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky)) * shade + flash;
+		float3 s = (sunTintAway * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky)) * shade + flash;
 		float dT = exp(-SIGMA * dens * dt);
 		light += T * (1 - dT) * s;
 		T *= dT;
@@ -377,7 +482,16 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	float lum = max(light.r, max(light.g, light.b));
 	if (lum > 0.5)
 		light *= (0.5 + (lum - 0.5) / (1 + (lum - 0.5) / 0.32)) / lum;
-	return float4(light * fade + FogTintDir(rd) * far, lerp(1, T, fade) * (1 - far));
+	// (away from the sun at dawn and dusk the haze the far clouds go into takes the colour of the
+	// sky behind them, at its own brightness, higher up: the horizon's dim violet all the way up
+	// veiled their pink and blue in grey)
+	float3 haze = FogTintDir(rd);
+	if (away > 0 && dot(skyThere, 1) > 1e-5) {
+		const float3 L = float3(0.3, 0.59, 0.11);
+		float3 skyTint = clamp(skyThere / max(dot(skyThere, L), 1e-4), 0, 2.5);
+		haze = lerp(haze, dot(haze, L) * lerp(dot(skyTint, L).xxx, skyTint, 1.5), away * 0.85 * smoothstep(0.02, 0.2, rd.y));
+	}
+	return float4(light * fade + haze * far, lerp(1, T, fade) * (1 - far));
 }
 
 // The high clouds above the cumulus layer, as thin textured layers (cheap: a few dozen samples
@@ -877,7 +991,14 @@ float4 PS(VS_OUTPUT input) : SV_Target
 float4 PS_Clouds(VS_OUTPUT input) : SV_Target
 {
 	float3 d = CamForward.xyz + input.Ndc.x * CamForward.w * CamRight.xyz + input.Ndc.y * CamRight.w * CamUp.xyz;
-	return MarchClouds(FogCamera.xyz, normalize(d), input.Pos.xy);
+	float3 rd = normalize(d);
+	// the sky behind the clouds (their colour away from the sun at dawn and dusk; the Physical
+	// model only, the sun near the horizon: 8 x 4 steps of air once per pixel)
+	float3 skyThere = 0;
+	float3 sun = SkySun.w > 0 ? SkySun.xyz : (dot(CloudSun.xyz, CloudSun.xyz) > 0.01 ? normalize(CloudSun.xyz) : float3(0.5, 0.8, 0.3));
+	if (SkyRight.w != 0 && sun.y < 0.55 && sun.y > -0.1 && rd.y > 0.002 && dot(rd, sun) < 0.3) // (where MarchClouds' away is)
+		skyThere = PhysicalSky(rd, sun);
+	return MarchClouds(FogCamera.xyz, rd, input.Pos.xy, skyThere);
 }
 )---";
 
@@ -1432,7 +1553,7 @@ void DiligentSkyRenderer::render()
 		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
 		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,
 		ev.starX.x, ev.starX.y, ev.starX.z, ev.active ? ev.sun.moonLit : 1.0f,
-		ev.starY.x, ev.starY.y, ev.starY.z, 0,
+		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 2),
 		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
 		overcast[0], overcast[1], overcast[2], overcast[3],
 	};

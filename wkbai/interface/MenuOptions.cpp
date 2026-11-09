@@ -202,6 +202,15 @@ namespace {
 			o.set = [&rs](float v) { rs.cloudQuality = std::clamp((int)v, 0, 3); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds >= 3; }));
 		}
+		{
+			MenuOption o;
+			o.id = "cloudDetail"; o.page = "sky"; o.label = "Cloud detail"; // (the volumetric clouds' shapes: Low one density, Medium varying, High billows and cumulonimbus)
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.cloudDetail; };
+			o.set = [&rs](float v) { rs.cloudDetail = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.cloudShadows && rs.dynamicClouds >= 3; }));
+		}
 		// (the cloud weather and cover: the game settings' now, in the lobby's Weather tab)
 		{
 			MenuOption o;

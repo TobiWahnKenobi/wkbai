@@ -443,37 +443,43 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			for (auto* comObj : objList)
 				if (ServerGameObject* obj = comObj->dyncast<ServerGameObject>(); obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
 					setItemByName(obj, "Reconnaissance Upgrade Status", 2.0f);
-	server.clearFogOfWar = clearFogOfWar;
-	server.teamReconnaissance = teamReconnaissance;
-	server.aggressiveAI = aggressiveAI;
-	// cheat mode (the F9 panel): a skirmish against the AI only, not with guests, not the campaign
-	server.cheatMode = cheatMode && !campaignProfile
-		&& std::none_of(slots.begin(), slots.end(), [](const Slot& s) { return s.type == Slot::GUEST; });
-	server.aiGoldExpansion = aiGoldExpansion;
-	server.aiFocusAttacks = aiFocusAttacks;
-	server.aiEarlyFarms = aiEarlyFarms;
-	server.aiFirstBarracks = aiFirstBarracks;
-	server.aiAdapt = aiAdapt;
-	server.aiTakeOver = aiTakeOver;
-	server.aiAdvanced = aiAdvanced;
-	server.aiLifeline = aiLifeline;
-	server.aiHomeGuard = aiHomeGuard;
-	server.aiWar = aiWar;
-	server.aiWeather = aiWeather;
-	server.aiHumanFocus = aiHumanFocus;
-	server.modPolicy = modPolicy;
-	server.allowSpectators = allowSpectators;
-	server.maxSpectators = maxSpectators;
-	server.aiMinPeasants = aiMinPeasants;
-	server.aiSurplusBuildings = aiSurplusBuildings;
-	server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;
-	server.aiLendFarmers = aiLendFarmers;
-	server.aiRetreatHealth = aiRetreatHealth / 100.0f;
-	server.aiAttackWave = aiAttackWave;
-	server.aiWaveGather = aiWaveGather;
-	server.aiWaveSiege = aiWaveSiege;
-	server.aiWaveFormations = aiWaveFormations;
-	server.aiFocusFire = aiFocusFire;
+	// the game's settings: a save game keeps those it was saved with (Server::loadSaveGame,
+	// <save>.ai.txt; the play test: a loaded game lost its cheat mode, so F9 stopped working)
+	if (!server.settingsFromSave) {
+		server.clearFogOfWar = clearFogOfWar;
+		server.teamReconnaissance = teamReconnaissance;
+		server.aggressiveAI = aggressiveAI;
+		// cheat mode (the F9 panel): a skirmish against the AI only, not with guests, not the campaign
+		server.cheatMode = cheatMode && !campaignProfile
+			&& std::none_of(slots.begin(), slots.end(), [](const Slot& s) { return s.type == Slot::GUEST; });
+		server.aiGoldExpansion = aiGoldExpansion;
+		server.aiFocusAttacks = aiFocusAttacks;
+		server.aiEarlyFarms = aiEarlyFarms;
+		server.aiFirstBarracks = aiFirstBarracks;
+		server.aiAdapt = aiAdapt;
+		server.aiTakeOver = aiTakeOver;
+		server.aiAdvanced = aiAdvanced;
+		server.aiLifeline = aiLifeline;
+		server.aiHomeGuard = aiHomeGuard;
+		server.aiWar = aiWar;
+		server.aiWeather = aiWeather;
+		server.aiHumanFocus = aiHumanFocus;
+		server.modPolicy = modPolicy;
+		server.allowSpectators = allowSpectators;
+		server.maxSpectators = maxSpectators;
+		server.aiMinPeasants = aiMinPeasants;
+		server.aiSurplusBuildings = aiSurplusBuildings;
+		server.aiSurplusPerBuilding = (float)aiSurplusPerBuilding;
+		server.aiLendFarmers = aiLendFarmers;
+		server.aiRetreatHealth = aiRetreatHealth / 100.0f;
+		server.aiAttackWave = aiAttackWave;
+		server.aiWaveGather = aiWaveGather;
+		server.aiWaveSiege = aiWaveSiege;
+		server.aiWaveFormations = aiWaveFormations;
+		server.aiFocusFire = aiFocusFire;
+	}
+	else if (server.clientLinks.size() > 1)
+		server.cheatMode = false; // (never with guests)
 	if (mode != DevMode) {
 		// a new game: the day and night, seasons and weather as set (a save game keeps its own)
 		server.environment.reset();

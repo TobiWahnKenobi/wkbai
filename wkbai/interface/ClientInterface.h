@@ -113,6 +113,10 @@ struct ClientInterface {
 	// Runs code on the server while its thread is held (set by the game's owner; without it, e.g.
 	// as a multiplayer guest, there is no editor)
 	std::function<void(const std::function<void(Server&)>&)> withServer;
+	// The keys that amount to cheating (F1 the server's window, F2 the client's debugger, F9 the
+	// environment's panel): in single player with the game setting cheat mode on only (the lobby's,
+	// kept by the save game), in the map editor, or in a test run; never in a replay
+	bool cheatKeysAllowed() const;
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
