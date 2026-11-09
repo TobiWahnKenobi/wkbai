@@ -18,6 +18,11 @@
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_TGA // the TGAs loadTGA doesn't read (16-bit)
 #include <stb_image.h>
+// BC7 blocks decoded on the CPU (bcdec 0.985 by Sergii Kudlai, MIT / Unlicense,
+// github.com/iOrange/bcdec)
+#define BCDEC_STATIC
+#define BCDEC_IMPLEMENTATION
+#include "../util/bcdec.h"
 
 std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
 {
@@ -148,6 +153,9 @@ static void DecodeBlocks(const uint8_t* src, int width, int height, int bc, uint
 					texel[i][3] = 255;
 				}
 				break;
+			case 7:
+				bcdec_bc7(b, texel, 16);
+				break;
 			}
 			for (int i = 0; i < 16; i++) {
 				const int x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
@@ -163,13 +171,11 @@ static size_t BlockLevelBytes(int width, int height, size_t blockBytes)
 }
 
 // A BCn image (1-5, 7) kept compressed: the levels that are in the file (at most count), from
-// src; a size that isn't a multiple of 4 (the GPU's blocks), BC1-BC5 decoded instead
+// src; a size that isn't a multiple of 4 (the GPU's blocks), decoded instead
 static Bitmap KeepBC(const uint8_t* src, size_t available, int width, int height, int count, int bc, const char* what)
 {
 	const size_t blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
 	if (width % 4 || height % 4) {
-		if (bc == 7)
-			ferr("%s: a BC7 texture's size must be a multiple of 4 (%ix%i).", what, width, height);
 		if (BlockLevelBytes(width, height, blockBytes) > available)
 			ferr("%s: the file is too short.", what);
 		Bitmap bm;
@@ -339,8 +345,6 @@ Bitmap Bitmap::loadKTX2(const void* data, size_t length)
 		}
 		return bm;
 	}
-	if (bc == 7)
-		ferr("KTX2: a BC7 texture's size must be a multiple of 4 (%ix%i).", width, height);
 	if (bytes < BlockLevelBytes(width, height, (bc == 1 || bc == 4) ? 8 : 16))
 		ferr("KTX2: the file is too short.");
 	DecodeBlocks(src, width, height, bc, bm.pixels.data());
@@ -490,9 +494,7 @@ Bitmap Bitmap::loadPCX(const void* _data, size_t length)
 
 Bitmap Bitmap::convertToR8G8B8A8() const
 {
-	if (format == BMFORMAT_BC7)
-		ferr("A BC7 texture can only be used where it goes to the GPU as it is (model textures), not here.");
-	if (compressed()) { // BC1-BC5: the largest level decoded
+	if (compressed()) { // the largest level decoded
 		Bitmap bm;
 		bm.width = width;
 		bm.height = height;

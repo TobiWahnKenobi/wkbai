@@ -3709,6 +3709,20 @@ void Test_DDS()
 	Bitmap e = Bitmap::loadDDS(f.data(), f.size());
 	const bool bc7Ok = e.format == BMFORMAT_BC7 && e.levels.size() == 2 && e.levels[1] == 64 && e.pixels.size() == 80 && e.pixels[64] == 64;
 	printf("DDS BC7 %d (kept compressed, %zu levels)\n", bc7Ok, e.levels.size());
+	// BC7 decoded on the CPU: a mode 6 block with both endpoints at the maximum (and the p-bits
+	// set) is opaque white whatever its indices
+	{
+		Bitmap w;
+		w.width = w.height = 4;
+		w.format = BMFORMAT_BC7;
+		w.levels = { 0 };
+		w.pixels.resize(16);
+		w.pixels[0] = 0xC0;
+		for (int i = 1; i < 16; i++) w.pixels[i] = 0xFF;
+		const Bitmap d7 = w.convertToR8G8B8A8();
+		const bool white = d7.pixels[0] == 255 && d7.pixels[1] == 255 && d7.pixels[2] == 255 && d7.pixels[3] == 255 && d7.pixels[63] == 255;
+		printf("BC7 CPU decode %d (%d %d %d %d)\n", white, d7.pixels[0], d7.pixels[1], d7.pixels[2], d7.pixels[3]);
+	}
 	// KTX2: the header, then the level index (offset, length, uncompressed length per level)
 	auto ktx2 = [](uint32_t vkFormat, int w, int h, const std::vector<std::vector<uint8_t>>& levels) {
 		std::vector<uint8_t> k(80 + 24 * levels.size(), 0);
