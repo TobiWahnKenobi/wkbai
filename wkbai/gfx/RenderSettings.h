@@ -144,7 +144,9 @@ struct RenderSettings {
 	// and (High) the units onto what is around them, in the colour of what it bounced off: a
 	// radiosity map of the ground and the roofs seen from above, around the camera. 0 Off (the
 	// sky light's plain bounce), 1 Low (the buildings, one bounce), 2 High (the units too, a
-	// second bounce, a wider gather)
+	// second bounce, a wider gather), 3 Ultra (High, and the light of the emissive maps comes
+	// from the glowing texels themselves: small lights per model where its windows, fires and
+	// lamps are, facing as they face, in their colour; instead of the round pool per building)
 	int dynamicGI = 0;
 	float dynamicGIStrength = 1.0f; // the bounce's strength (0-3)
 	// dynamic clouds (enhanced renderers on Diligent): 0 the original's (sky_shadow_map.pcx

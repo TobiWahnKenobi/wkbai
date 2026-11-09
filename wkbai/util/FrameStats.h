@@ -46,6 +46,8 @@ extern FrameStats g_frameStats;
 extern double g_gpuFrameMs;
 // the dynamic GI's passes in that frame (DiligentGI; < 0 unknown or off): the report's giGpu* values
 extern double g_giGpuMs;
+// the Ultra GI's lights from the emissive maps in the last frame (DiligentEnhancedSceneRenderer)
+extern int g_giEmitterLights;
 
 bool BenchmarkEnabled();
 bool BenchmarkCamera(Vector3& position, Vector3& orientation);

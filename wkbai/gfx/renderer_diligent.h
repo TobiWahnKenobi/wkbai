@@ -190,7 +190,16 @@ struct DiligentGfx : IRenderer
 		float giAlbedoRegion[4] = {};
 		float giOrigin[2] = {}, giPrevOrigin[2] = {};
 		bool giPrevValid = false;
-		int giMode = 0; // this frame: 0 off, 1 Low, 2 High
+		int giMode = 0; // this frame: 0 off, 1 Low, 2 High, 3 Ultra
+		// Ultra's lights from the emissive maps (DiligentEnhancedSceneRenderer: worked out once
+		// per model and material from where its glowing texels sit, placed per frame): giLights,
+		// per light 3 float4s (position, radius; colour, softening; the way it faces, how much it
+		// faces one way), and giLightGrid over the bounce map's square (GIRegion), in
+		// GI_LIGHT_CELLS x GI_LIGHT_CELLS cells of GI_CELL_SLOTS uints: the count, then the lights
+		// reaching the cell (the brightest first)
+		static constexpr int MAX_GI_LIGHTS = 2048, GI_LIGHT_CELLS = 32, GI_CELL_SLOTS = 32;
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> giLights, giLightGrid;
+		int giLightCount = 0; // this frame's
 		// the map is drawn again every GI_REFRESH_LOW / _HIGH frames (the light changes slowly),
 		// and at once when its square moves or the mode changes (giRefresh: this frame);
 		// giMapOrigin: where the map in giRadiance lies (the shaders' GIRegion)

@@ -1728,6 +1728,8 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "giLights", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "giLightGrid", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		// the depth pre-pass's masks (DiligentGfx::FinishLightingPrepass), the frame's
 		{ SHADER_TYPE_PIXEL, "lightRtMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
@@ -1774,6 +1776,8 @@ void DiligentEnhancedTerrainRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "skyOccTexture")->Set(dgfx->shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giTexture")->Set(dgfx->shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giEmitTexture")->Set(dgfx->shadows.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giLights")->Set(dgfx->shadows.giLights->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "giLightGrid")->Set(dgfx->shadows.giLightGrid->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
 
 	// The vertex heights, for the tessellated terrain (updateHeights writes them again)
 	{

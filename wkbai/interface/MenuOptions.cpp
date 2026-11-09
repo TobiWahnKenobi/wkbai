@@ -175,9 +175,9 @@ namespace {
 			MenuOption o;
 			o.id = "dynamicGI"; o.page = "lighting"; o.label = "Bounced light (dynamic GI)";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "Low", "High" };
+			o.choices = { "Off", "Low", "High", "Ultra" };
 			o.get = [&rs]() { return (float)rs.dynamicGI; };
-			o.set = [&rs](float v) { rs.dynamicGI = std::clamp((int)v, 0, 2); };
+			o.set = [&rs](float v) { rs.dynamicGI = std::clamp((int)v, 0, 3); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.skyGI; }));
 		}
 		list.push_back(withEnabled(slider("dynamicGIStrength", "lighting", "Bounced light strength", rs.dynamicGIStrength, 0.0f, 3.0f),

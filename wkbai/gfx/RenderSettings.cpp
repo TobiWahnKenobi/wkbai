@@ -68,7 +68,7 @@ void RenderSettings::load()
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
 	skyGI = g_settings.value<bool>("skyGI", def.skyGI);
-	dynamicGI = std::clamp(g_settings.value<int>("dynamicGI", def.dynamicGI), 0, 2);
+	dynamicGI = std::clamp(g_settings.value<int>("dynamicGI", def.dynamicGI), 0, 3);
 	dynamicGIStrength = std::clamp(g_settings.value<float>("dynamicGIStrength", def.dynamicGIStrength), 0.0f, 3.0f);
 	dynamicClouds = std::clamp(g_settings.value<int>("dynamicClouds", def.dynamicClouds), 0, 3);
 	cloudQuality = std::clamp(g_settings.value<int>("cloudQuality", def.cloudQuality), 0, 3);

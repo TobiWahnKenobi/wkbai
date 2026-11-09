@@ -52,7 +52,7 @@ cbuffer CloudBuffer
 	float4 CloudFromHigh;
 	float4 CloudFront;
 	// Dynamic global illumination (RenderSettings::dynamicGI, DiligentGI): the bounce map's
-	// corner x, z, 1 / its size, w: 0 off, 1 Low, 2 High; GIParams: x the bounce's strength
+	// corner x, z, 1 / its size, w: 0 off, 1 Low, 2 High, 3 Ultra; GIParams: x the bounce's strength
 	float4 GIRegion;
 	float4 GIParams;
 	// the clouds' own light (SunState::cloudDirection: the true sun until it is 4 degrees below
@@ -71,6 +71,13 @@ Texture2D giTexture;
 // the light the models give off seen from above (DiligentGI: their emissive maps', lit windows
 // at night), over the bounce map's square; mips
 Texture2D giEmitTexture;
+// Ultra's lights of the emissive maps (ShadowEnvironment::giLights, giLightGrid): per light its
+// position and radius, its colour and softening (about its size squared), the way it faces and
+// how much it faces that way (0: all round, a fire; 1: a window); the grid over the bounce map's
+// square, per cell the count and the lights reaching it
+StructuredBuffer<float4> giLights;
+StructuredBuffer<uint> giLightGrid;
+static const int GI_LIGHT_CELLS = 32, GI_CELL_SLOTS = 32;
 
 // The weather at a point (CloudAt): the new weather's behind a passing front, the old one's ahead
 // of it, blended over the front's width; its edge ragged by a broad noise (lobes up to ~600 units
@@ -210,11 +217,45 @@ float3 SkyAmbient(float3 n)
 // (mips 2, 3 and 5), the nearer more: bright by the walls, a faint glow over the town. Its own
 // building's upper walls and roof little: it fades from 3 to 12 units over the ground (the sky
 // light's map's heights)
+// Ultra: from the lights where the glowing texels are (giLights): each falls off with the
+// square of the distance (softened by its size, faded out by its radius), out of the side its
+// texels face (a window into the street, not through its wall) and onto what faces it (a little
+// wrapped round), unshadowed
+float3 EmitterLight(float3 p, float3 n, float2 uv)
+{
+	int2 c = int2(floor(uv * GI_LIGHT_CELLS));
+	if (any(c < 0) || any(c >= GI_LIGHT_CELLS))
+		return float3(0, 0, 0);
+	uint base = (uint)(c.y * GI_LIGHT_CELLS + c.x) * GI_CELL_SLOTS;
+	uint count = min(giLightGrid[base], (uint)(GI_CELL_SLOTS - 1));
+	float3 sum = float3(0, 0, 0);
+	for (uint i = 0; i < count; i++) {
+		uint k = giLightGrid[base + 1 + i] * 3;
+		float4 at = giLights[k];
+		float3 d = at.xyz - p;
+		float d2 = dot(d, d);
+		float r2 = at.w * at.w;
+		if (d2 >= r2)
+			continue;
+		float4 colour = giLights[k + 1];
+		float4 facing = giLights[k + 2];
+		float3 l = d * rsqrt(max(d2, 1e-4));
+		float outward = lerp(1, saturate(0.1 - dot(l, facing.xyz) * 0.9), facing.w);
+		float onto = saturate(dot(n, l)) * 0.75 + 0.25;
+		float fade = 1 - d2 / r2;
+		sum += colour.rgb * (outward * onto * fade * fade / (d2 + colour.w));
+	}
+	return sum;
+}
+
 float3 WindowLight(float3 p, float3 n, float2 uv)
 {
 	if (any(uv < 0) || any(uv > 1))
 		return float3(0, 0, 0);
 	float2 cuv = float2(uv.x, 1 - uv.y); // (drawn from above: v the other way round)
+	// Ultra: the lights themselves, and of the pools only the faint glow over the town
+	if (GIRegion.w > 2.5)
+		return EmitterLight(p, n, uv) + giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * (0.15 * (0.5 + 0.5 * saturate(n.y)));
 	float3 e = giEmitTexture.SampleLevel(skyOccSampler, cuv, 2).rgb * 0.45 + giEmitTexture.SampleLevel(skyOccSampler, cuv, 3).rgb * 0.4
 		+ giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * 0.15;
 	float h = 0;
@@ -799,7 +840,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	// texels stay put as the camera moves; with the sky light only
 	{
 		using Env = DiligentGfx::ShadowEnvironment;
-		env.giMode = (skyOn && env.giRadiance && env.giPipeline) ? std::clamp(rs.dynamicGI, 0, 2) : 0;
+		env.giMode = (skyOn && env.giRadiance && env.giPipeline) ? std::clamp(rs.dynamicGI, 0, 3) : 0;
 		env.giOrigin[0] = std::round((target.x - Env::GI_EXTENT * 0.5f) / Env::GI_SNAP) * Env::GI_SNAP;
 		env.giOrigin[1] = std::round((target.z - Env::GI_EXTENT * 0.5f) / Env::GI_SNAP) * Env::GI_SNAP;
 		// drawn again every few frames, at once when the square moves or the mode changes; the

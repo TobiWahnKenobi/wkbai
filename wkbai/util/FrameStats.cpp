@@ -95,6 +95,7 @@ const char* BenchmarkSaveGame()
 static int s_benchmarkFrame = 0; // frames since the map was loaded
 double g_gpuFrameMs = -1.0;
 double g_giGpuMs = -1.0;
+int g_giEmitterLights = 0;
 
 bool BenchmarkCamera(Vector3& position, Vector3& orientation)
 {
@@ -233,6 +234,7 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		double sum = 0;
 		for (float t : giTimes) sum += t;
 		report["giGpuAvgMs"] = sum / giTimes.size();
+		report["giEmitterLights"] = g_giEmitterLights;
 		printf("Benchmark: dynamic GI passes avg %.3f ms\n", sum / giTimes.size());
 	}
 	if (!gpuTimes.empty()) {

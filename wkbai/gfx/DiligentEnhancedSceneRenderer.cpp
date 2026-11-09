@@ -9,6 +9,7 @@
 
 #include "DiligentEnhancedSceneRenderer.h"
 #include "../util/LoadingProgress.h"
+#include "../util/FrameStats.h"
 #include <thread>
 #include <array>
 #include <mutex>
@@ -1211,6 +1212,241 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		anyEmissive |= e.maps[3] != nullptr;
 	}
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
+
+	// Ultra GI (RenderSettings::dynamicGI 3): the light of the emissive maps from where their
+	// glowing texels sit on the mesh, instead of the round pool per building. Per model and
+	// material, worked out once (emittersOf): the glowing texels sampled over the triangles
+	// (about one sample per 2 x 2 texels), gathered into lights by place and the way they face
+	// (cells of 1.5 units, wider until at most MAX_EMITTERS remain): a lit window becomes one
+	// light just in front of it, facing out, a fire one all round. Their light: the always-on
+	// part and the night part (the texels' alpha), their colour times their area.
+	struct Emitter {
+		Vector3 pos, facing; // the model's space
+		float directional = 0; // 1: all of it faces one way (a window), 0: all round
+		float always[3] = {}, night[3] = {};
+		float size2 = 1; // its area (the light's softening)
+	};
+	static constexpr size_t MAX_EMITTERS = 24;
+	static constexpr float EMITTER_STRENGTH = 120.0f; // by eye at night (4 Peaks town)
+	// the emissive maps' texels (0-1 as the shaders take them, at most 256 x 256), by file
+	struct EmissiveTexels { int w = 0, h = 0; std::vector<float> rgba; };
+	std::map<std::string, EmissiveTexels> emissiveTexels;
+	std::map<std::pair<StaticModel*, uint32_t>, std::vector<Emitter>> emitters;
+	// the emissive map's file beside the material's texture (as resolveMaps finds it), or ""
+	static std::string emissivePath(const Material& mat, Scene* scene) {
+		const std::string& filename = mat.textureFilename;
+		const std::string base = filename.substr(0, filename.find_last_of('.'));
+		for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
+			const std::string path = scene->texCache.directory + base + "_emissive" + ext;
+			if (FileExists(path.c_str()))
+				return path;
+		}
+		return {};
+	}
+	const EmissiveTexels& texelsOf(const std::string& path) {
+		auto it = emissiveTexels.find(path);
+		if (it != emissiveTexels.end())
+			return it->second;
+		EmissiveTexels& t = emissiveTexels[path];
+		Bitmap bm = Bitmap::loadBitmap(path.c_str());
+		if (bm.format != BMFORMAT_R8G8B8A8)
+			bm = bm.convertToR8G8B8A8();
+		if (bm.width <= 0 || bm.height <= 0 || bm.format != BMFORMAT_R8G8B8A8)
+			return t;
+		// boxed down to at most 256 on a side
+		int step = 1;
+		while (bm.width / step > 256 || bm.height / step > 256)
+			step *= 2;
+		t.w = std::max(1, bm.width / step);
+		t.h = std::max(1, bm.height / step);
+		t.rgba.assign((size_t)t.w * t.h * 4, 0.0f);
+		const float norm = 1.0f / (255.0f * step * step);
+		for (int y = 0; y < t.h * step && y < bm.height; y++)
+			for (int x = 0; x < t.w * step && x < bm.width; x++) {
+				const uint8_t* px = bm.pixels.data() + ((size_t)y * bm.width + x) * 4;
+				float* out = &t.rgba[((size_t)(y / step) * t.w + x / step) * 4];
+				for (int c = 0; c < 4; c++)
+					out[c] += px[c] * norm;
+			}
+		return t;
+	}
+	const std::vector<Emitter>& emittersOf(StaticModel* model, uint32_t matId, const Material& mat, Scene* scene) {
+		const auto key = std::make_pair(model, matId);
+		auto found = emitters.find(key);
+		if (found != emitters.end())
+			return found->second;
+		std::vector<Emitter>& out = emitters[key];
+		const std::string path = emissivePath(mat, scene);
+		if (path.empty())
+			return out;
+		const EmissiveTexels& tx = texelsOf(path);
+		model->prepare();
+		const Mesh& mesh = model->mesh;
+		if (tx.w == 0 || mesh.uvLists.size() == 0 || mesh.polyLists.size() == 0)
+			return out;
+		struct Sample { Vector3 p, n; float always[3], night[3]; float area, lum; };
+		std::vector<Sample> samples;
+		const auto& uvs = mesh.uvLists[0];
+		const PolygonList& polylist = mesh.polyLists[0];
+		auto normalOf = [&](const IndexTuple& t) {
+			return t.normal < mesh.exactNormals.size() ? mesh.exactNormals[t.normal] : Mesh::s_normalTable[mesh.normals[t.normal]];
+		};
+		for (size_t g = 0; g < polylist.groups.size() && g < mesh.groupIndices.size(); g++) {
+			if (model->matIds[g] != matId)
+				continue;
+			const auto& tuples = mesh.groupIndices[g];
+			for (const auto& tri : polylist.groups[g].tupleIndex) {
+				Vector3 v[3], n(0, 0, 0);
+				float u[3], w[3];
+				for (int k = 0; k < 3; k++) {
+					const IndexTuple& t = tuples[tri[k]];
+					v[k] = *(const Vector3*)(mesh.vertices.data() + 3 * t.vertex);
+					n += normalOf(t);
+					u[k] = uvs[2 * t.uv];
+					w[k] = uvs[2 * t.uv + 1];
+				}
+				const float area = 0.5f * (v[1] - v[0]).cross(v[2] - v[0]).len3();
+				if (!(area > 1e-6f))
+					continue;
+				n = n.normal();
+				const float uvArea = 0.5f * std::abs((u[1] - u[0]) * (w[2] - w[0]) - (u[2] - u[0]) * (w[1] - w[0])) * tx.w * tx.h;
+				// a lattice inside the triangle: n (n + 1) / 2 points, about one per 2 x 2 texels
+				const int steps = std::clamp((int)std::ceil(std::sqrt(uvArea * 0.5f)), 1, 64);
+				const float each = area / (steps * (steps + 1) * 0.5f);
+				for (int i = 0; i < steps; i++)
+					for (int j = 0; j < steps - i; j++) {
+						const float b1 = (i + 1.0f / 3) / steps, b2 = (j + 1.0f / 3) / steps, b0 = 1 - b1 - b2;
+						const float su = b0 * u[0] + b1 * u[1] + b2 * u[2], sv = b0 * w[0] + b1 * w[1] + b2 * w[2];
+						int x = (int)std::floor((su - std::floor(su)) * tx.w), y = (int)std::floor((sv - std::floor(sv)) * tx.h);
+						x = std::clamp(x, 0, tx.w - 1);
+						y = std::clamp(y, 0, tx.h - 1);
+						const float* e = &tx.rgba[((size_t)y * tx.w + x) * 4];
+						const float lum = 0.299f * e[0] + 0.587f * e[1] + 0.114f * e[2];
+						if (lum < 0.03f)
+							continue;
+						Sample s;
+						s.p = v[0] * b0 + v[1] * b1 + v[2] * b2;
+						s.n = n;
+						for (int c = 0; c < 3; c++) {
+							s.always[c] = e[c] * (1 - e[3]) * each;
+							s.night[c] = e[c] * e[3] * each;
+						}
+						s.area = each;
+						s.lum = lum * each;
+						samples.push_back(s);
+					}
+			}
+		}
+		if (samples.empty())
+			return out;
+		// gathered into cells by place and by the axis they face most along
+		struct Acc { Vector3 p, n; float always[3] = {}, night[3] = {}; float area = 0, lum = 0; };
+		std::map<std::tuple<int, int, int, int>, Acc> cells;
+		for (float cell = 1.5f;; cell *= 1.6f) {
+			cells.clear();
+			for (const Sample& s : samples) {
+				const float ax = std::abs(s.n.x), ay = std::abs(s.n.y), az = std::abs(s.n.z);
+				const int facing = ax >= ay && ax >= az ? (s.n.x > 0 ? 0 : 1) : ay >= az ? (s.n.y > 0 ? 2 : 3) : (s.n.z > 0 ? 4 : 5);
+				Acc& a = cells[{ (int)std::floor(s.p.x / cell), (int)std::floor(s.p.y / cell), (int)std::floor(s.p.z / cell), facing }];
+				a.p += s.p * s.lum;
+				a.n += s.n * s.lum;
+				for (int c = 0; c < 3; c++) {
+					a.always[c] += s.always[c];
+					a.night[c] += s.night[c];
+				}
+				a.area += s.area;
+				a.lum += s.lum;
+			}
+			if (cells.size() <= MAX_EMITTERS || cell > 64)
+				break;
+		}
+		for (const auto& [k, a] : cells) {
+			Emitter e;
+			const Vector3 n = a.n * (1.0f / a.lum);
+			e.directional = std::min(n.len3(), 1.0f);
+			e.facing = n.normal();
+			e.pos = a.p * (1.0f / a.lum) + e.facing * 0.3f; // just in front of the glowing surface
+			for (int c = 0; c < 3; c++) {
+				e.always[c] = a.always[c] * EMITTER_STRENGTH;
+				e.night[c] = a.night[c] * EMITTER_STRENGTH;
+			}
+			e.size2 = std::max(a.area, 1.5f); // (no hot spot on the wall below)
+			out.push_back(e);
+		}
+		return out;
+	}
+	// This frame's lights of the emissive maps around (ShadowEnvironment::giLights): every
+	// drawn entity's emitters over the bounce map's square, the brightest first, binned into
+	// giLightGrid by the square their radius covers
+	std::vector<float> uploadedLights;
+	std::vector<uint32_t> uploadedGrid;
+	void placeEmitterLights(Scene* scene, DiligentGfx::ShadowEnvironment& shadows, IDeviceContext* ctx) {
+		using Env = DiligentGfx::ShadowEnvironment;
+		const float night = g_environment.active ? 1.0f - g_environment.sun.daylight : 0.0f;
+		const float ox = shadows.giMapOrigin[0], oz = shadows.giMapOrigin[1], ext = Env::GI_EXTENT;
+		struct Light { float v[12]; float lum; };
+		std::vector<Light> lights;
+		for (const auto& it : scene->matInsts) {
+			if (it.second.list.empty())
+				continue;
+			StaticModel* model = it.first.second->getStaticModel();
+			const std::vector<Emitter>& list = emittersOf(model, it.first.first, scene->modelCache->getMaterial(it.first.first), scene);
+			if (list.empty())
+				continue;
+			for (SceneEntity* ent : it.second.list) {
+				const Matrix& m = ent->transform;
+				if (m._41 < ox - 32 || m._41 > ox + ext + 32 || m._43 < oz - 32 || m._43 > oz + ext + 32)
+					continue;
+				for (const Emitter& e : list) {
+					Light l;
+					float lum = 0;
+					for (int c = 0; c < 3; c++) {
+						l.v[4 + c] = e.always[c] + e.night[c] * night;
+						lum += l.v[4 + c] * (c == 0 ? 0.299f : c == 1 ? 0.587f : 0.114f);
+					}
+					if (lum < 1e-3f)
+						continue;
+					const Vector3 p = e.pos.transform(m), f = e.facing.transformNormal(m).normal();
+					l.v[0] = p.x; l.v[1] = p.y; l.v[2] = p.z;
+					l.v[3] = std::clamp(std::sqrt(lum / 0.015f), 3.0f, 24.0f); // where it falls below ~1.5 %
+					l.v[7] = e.size2;
+					l.v[8] = f.x; l.v[9] = f.y; l.v[10] = f.z; l.v[11] = e.directional;
+					l.lum = lum;
+					lights.push_back(l);
+				}
+			}
+		}
+		std::sort(lights.begin(), lights.end(), [](const Light& a, const Light& b) { return a.lum > b.lum; });
+		if (lights.size() > (size_t)Env::MAX_GI_LIGHTS)
+			lights.resize(Env::MAX_GI_LIGHTS);
+		std::vector<float> data(lights.size() * 12);
+		std::vector<uint32_t> grid((size_t)Env::GI_LIGHT_CELLS * Env::GI_LIGHT_CELLS * Env::GI_CELL_SLOTS, 0);
+		const float cellSize = ext / Env::GI_LIGHT_CELLS;
+		for (size_t i = 0; i < lights.size(); i++) {
+			const Light& l = lights[i];
+			std::copy_n(l.v, 12, &data[i * 12]);
+			const int x0 = std::max(0, (int)std::floor((l.v[0] - l.v[3] - ox) / cellSize)), x1 = std::min(Env::GI_LIGHT_CELLS - 1, (int)std::floor((l.v[0] + l.v[3] - ox) / cellSize));
+			const int z0 = std::max(0, (int)std::floor((l.v[2] - l.v[3] - oz) / cellSize)), z1 = std::min(Env::GI_LIGHT_CELLS - 1, (int)std::floor((l.v[2] + l.v[3] - oz) / cellSize));
+			for (int z = z0; z <= z1; z++)
+				for (int x = x0; x <= x1; x++) {
+					uint32_t* cell = &grid[((size_t)z * Env::GI_LIGHT_CELLS + x) * Env::GI_CELL_SLOTS];
+					if (cell[0] < (uint32_t)Env::GI_CELL_SLOTS - 1)
+						cell[1 + cell[0]++] = (uint32_t)i;
+				}
+		}
+		// uploaded only when they changed (the buildings' lights stay put: most frames none)
+		if (data != uploadedLights) {
+			if (!data.empty())
+				ctx->UpdateBuffer(shadows.giLights, 0, data.size() * 4, data.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			uploadedLights = data;
+		}
+		if (grid != uploadedGrid) {
+			ctx->UpdateBuffer(shadows.giLightGrid, 0, grid.size() * 4, grid.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			uploadedGrid = std::move(grid);
+		}
+		shadows.giLightCount = (int)lights.size();
+		g_giEmitterLights = shadows.giLightCount;
+	}
 	texture standIn = nullptr, standInClear = nullptr;
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
@@ -1295,6 +1531,8 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "skyOccTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giEmitTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giLights", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giLightGrid", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		// the depth pre-pass's masks (DiligentGfx::FinishLightingPrepass), the frame's
 		{ SHADER_TYPE_PIXEL, "lightRtMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
@@ -1717,6 +1955,8 @@ void DiligentEnhancedSceneRenderer::render()
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "skyOccTexture")) v->Set(shadows.skyOcc->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giTexture")) v->Set(shadows.giRadiance->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giEmitTexture")) v->Set(shadows.giEmission->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giLights")) v->Set(shadows.giLights->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			if (auto* v = _impl->envBinding->GetVariableByName(stage, "giLightGrid")) v->Set(shadows.giLightGrid->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
 		}
 	}
 	// the depth pre-pass's masks of this frame, or white (unread: FogBuffer.LightMasks is 0)
@@ -2064,6 +2304,11 @@ void DiligentEnhancedSceneRenderer::render()
 	}
 	else if (!prepared && shadows.giMode > 0)
 		GITimerSkip();
+	// Ultra: the emissive maps' lights where their glowing texels are (every frame: units move)
+	if (!prepared && shadows.giMode >= 3 && !shadows.portraitPass && shadows.giLights) {
+		PROFILE_SCOPE("Emissive lights");
+		_impl->placeEmitterLights(scene, shadows, ctx);
+	}
 
 	// The ray-traced shadows' casters (and what the ray-traced reflections see): every entity
 	// casting a shadow, with its mesh's structure

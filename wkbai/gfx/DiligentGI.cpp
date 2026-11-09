@@ -201,6 +201,23 @@ void CreateGIResources(DiligentGfx* gfx)
 	device->CreateBuffer(cb, nullptr, &env.giBuffer);
 	if (!env.giBuffer)
 		ferr("Diligent: could not create the dynamic GI's buffer.");
+	// Ultra's lights of the emissive maps and their grid (empty: no light in any cell)
+	auto structured = [&](const char* name, Uint32 stride, Uint64 size, RefCntAutoPtr<IBuffer>& out) {
+		BufferDesc bd;
+		bd.Name = name;
+		bd.Size = size;
+		bd.BindFlags = BIND_SHADER_RESOURCE;
+		bd.Usage = USAGE_DEFAULT;
+		bd.Mode = BUFFER_MODE_STRUCTURED;
+		bd.ElementByteStride = stride;
+		std::vector<uint8_t> zero((size_t)size, 0);
+		BufferData init{ zero.data(), size };
+		device->CreateBuffer(bd, &init, &out);
+		if (!out)
+			ferr("Diligent: could not create the dynamic GI's %s.", name);
+	};
+	structured("emissive lights", 16, (Uint64)Env::MAX_GI_LIGHTS * 3 * 16, env.giLights);
+	structured("emissive light grid", 4, (Uint64)Env::GI_LIGHT_CELLS * Env::GI_LIGHT_CELLS * Env::GI_CELL_SLOTS * 4, env.giLightGrid);
 
 	const PipelineResourceDesc resources[] = {
 		{ SHADER_TYPE_PIXEL, "CloudBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },

@@ -1003,9 +1003,9 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::SeparatorText("Light");
 		ImGui::Checkbox("Light from the sky (sky occlusion, bounce)", &s.skyGI);
 		{
-			static const char* const giLevels[] = { "Off", "Low (buildings, one bounce)", "High (units too, two bounces)" };
+			static const char* const giLevels[] = { "Off", "Low (buildings, one bounce)", "High (units too, two bounces)", "Ultra (High, light from the glowing texels)" };
 			ImGui::BeginDisabled(!s.skyGI);
-			ImGui::Combo("Bounced light (dynamic GI)", &s.dynamicGI, giLevels, 3);
+			ImGui::Combo("Bounced light (dynamic GI)", &s.dynamicGI, giLevels, 4);
 			ImGui::SliderFloat("Bounced light strength", &s.dynamicGIStrength, 0.0f, 3.0f, "%.2f");
 			ImGui::EndDisabled();
 		}
