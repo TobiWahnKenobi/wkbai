@@ -9,6 +9,7 @@
 #include "../file.h"
 #include "../server.h"
 #include "../Environment.h"
+#include "../gfx/RenderSettings.h"
 #include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -170,6 +171,14 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	const int warmup = bm->value("warmupFrames", 120);
 	const int frames = bm->value("frames", 600);
 	++frame;
+	// "upscalingAt": [[frame, level], ...]: the upscaling setting changed live at those frames, as
+	// in the graphics settings (the scene's size changes under a running level)
+	if (bm->contains("upscalingAt") && bm->at("upscalingAt").is_array())
+		for (const auto& e : bm->at("upscalingAt"))
+			if (e.is_array() && e.size() == 2 && e[0].get<int>() == frame) {
+				g_renderSettings.upscaling = e[1].get<int>();
+				printf("Benchmark: upscaling %d at frame %d\n", g_renderSettings.upscaling, frame);
+			}
 	// the game clock over the recorded frames, against the real one: whether the simulation (on
 	// its own thread) keeps up with the game speed while this is drawn
 	static float gameStart = 0.0f;
