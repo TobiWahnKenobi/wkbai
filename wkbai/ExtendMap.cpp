@@ -625,6 +625,36 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	for (size_t i = 0; i < roughIn.size(); i++)
 		roughIn[i] = std::abs(heights0[i] - near5[i]);
 	const std::vector<float> rough = blur2D(roughIn, 8);
+	// The map's own small relief, by scale: how far its vertices stand from the mean of their
+	// neighbours (about 1, 3 and 8 tiles), over its dry land. The extension gets the same, or its
+	// ground looks smoothed out next to the map's.
+	const std::vector<float> b1 = blur2D(heights0, 1), b8 = blur2D(heights0, 8);
+	// (medians, not means of squares: the ordinary ground's, not its cliffs')
+	std::vector<float> d1, d3, d8;
+	for (int z = 0; z < VH; z++)
+		for (int x = 0; x < VW; x++) {
+			const size_t i = (size_t)z * VW + x;
+			if (wetV[i] > 0)
+				continue;
+			d1.push_back(std::abs(heights0[i] - b1[i]));
+			d3.push_back(std::abs(b1[i] - near5[i]));
+			d8.push_back(std::abs(near5[i] - b8[i]));
+		}
+	auto median = [](std::vector<float>& v, float fallback) {
+		if (v.empty())
+			return fallback;
+		std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+		return v[v.size() / 2] * 1.48f; // as a standard deviation
+	};
+	const float sigma1 = median(d1, 0.3f), sigma3 = median(d3, 0.5f), sigma8 = median(d8, 1.0f);
+	std::vector<float> fineIn((size_t)VW * VH);
+	for (size_t i = 0; i < fineIn.size(); i++)
+		fineIn[i] = std::abs(heights0[i] - b1[i]) + std::abs(b1[i] - near5[i]);
+	// near the seam the edge's own roughness right there; farther out each side's broader one
+	// (so a rough side stays rough and a smooth one smooth, blending where they meet)
+	const std::vector<float> fineLocal = blur2D(fineIn, 6);
+	const std::vector<float> fineSide = blur2D(blur2D(fineIn, 12), 12);
+	const float fineGlobal = std::max(0.05f, (sigma1 + sigma3) * 0.8f);
 	const std::vector<float> rockyB = blur2D(rocky, 8), wetB = blur2D(wetV, 6);
 	auto at = [&](const std::vector<float>& f, float x, float z) {
 		const int ix = std::clamp((int)std::lround(x), 0, w), iz = std::clamp((int)std::lround(z), 0, h);
@@ -660,6 +690,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// rough, worn hills elsewhere; positions warped so nothing lines up with the grid
 	std::vector<float> height((size_t)EW * EH);
 	std::vector<float> mountainAt((size_t)EW * EH, 0.0f);
+	// the small relief per scale (calibrated below), and where the ground is dry
+	std::vector<float> bump1((size_t)EW * EH, 0.0f), bump3((size_t)EW * EH, 0.0f), bump8((size_t)EW * EH, 0.0f);
+	std::vector<uint8_t> dryAt((size_t)EW * EH, 0);
 	for (int Z = 0; Z < EH; Z++)
 		for (int X = 0; X < EW; X++) {
 			const size_t i = (size_t)Z * EW + X;
@@ -692,12 +725,90 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const float hills = ErodedFbm(seed, qx, qz, 46.0f, 5, 60) * (0.09f * relief + 2.0f);
 			const float band = std::clamp(0.5f + 1.6f * Fbm(seed, qx, qz, 85.0f, 2, 71), 0.0f, 1.0f);
 			const float ridges = (Ridged(seed, qx, qz, 62.0f, 5, 70) * (0.35f + 0.65f * band) - 0.2f) * (0.65f * relief + 8.0f);
-			const float bumps = Fbm(seed, px, pz, 5.0f, 2, 75) * (0.006f * relief + 0.25f);
+			// the small relief, as rough as the map's own (its edge's near the seam), rougher and
+			// smoother in patches; its finest scale comes in at once, so the seam shows no change
+			const float patch = 0.6f + 0.6f * std::clamp(Fbm(seed, px, pz, 40.0f, 2, 76) + 0.5f, 0.0f, 1.0f);
+			const float near = std::clamp(d / 20.0f, 0.0f, 1.0f);
+			const float localScale = (at(fineLocal, bx, bz) * (1 - near) + at(fineSide, bx, bz) * near) * 0.8f / fineGlobal;
+			const float fineRamp = std::clamp(d / 3.0f, 0.0f, 1.0f);
+			const float amp = fineRamp * patch * std::clamp(localScale, 0.5f, 1.6f) * (1 - wet);
+			bump1[i] = amp * sigma1 * ValueNoise(seed, px / 1.6f, pz / 1.6f, 77);
+			bump3[i] = amp * sigma3 * ValueNoise(seed, px / 4.0f, pz / 4.0f, 78);
+			bump8[i] = amp * sigma8 * Fbm(seed, px, pz, 11.0f, 2, 79);
+			dryAt[i] = wet < 0.3f;
 			const float seaFloor = ErodedFbm(seed, qx, qz, 40.0f, 4, 80) * (0.03f * relief + 0.6f);
-			float detail = hills * (1 - mtn) + ridges * mtn + bumps;
+			float detail = hills * (1 - mtn) + ridges * mtn;
 			detail = detail * (1 - wet) + seaFloor * wet;
-			height[i] = base[i] + ramp2 * detail;
+			height[i] = base[i] + ramp2 * detail + bump1[i] + bump3[i] + bump8[i];
 		}
+	// The small relief calibrated: measured on the map's edge band and on the extension alike
+	// (medians of how far each vertex stands from its neighbours' mean at about 1, 3 and 8 tiles),
+	// each scale's detail is scaled until the extension is as rough as the band beside it
+	{
+		auto boxE = [&](const std::vector<float>& in, int R) {
+			std::vector<float> tmp(in.size()), out(in.size());
+			for (int Z = 0; Z < EH; Z++)
+				for (int X = 0; X < EW; X++) {
+					float s = 0;
+					for (int k = -R; k <= R; k++)
+						s += in[(size_t)Z * EW + std::clamp(X + k, 0, EW - 1)];
+					tmp[(size_t)Z * EW + X] = s / (2 * R + 1);
+				}
+			for (int Z = 0; Z < EH; Z++)
+				for (int X = 0; X < EW; X++) {
+					float s = 0;
+					for (int k = -R; k <= R; k++)
+						s += tmp[(size_t)std::clamp(Z + k, 0, EH - 1) * EW + X];
+					out[(size_t)Z * EW + X] = s / (2 * R + 1);
+				}
+			return out;
+		};
+		auto isBand = [&](int X, int Z) {
+			const int sx = X - n, sz = Z - n;
+			return inMapV(X, Z) && (sx < map.edge || sz < map.edge || sx > w - map.edge || sz > h - map.edge)
+				&& wetV[(size_t)sz * VW + sx] == 0;
+		};
+		auto isExt = [&](int X, int Z) {
+			return !inMapV(X, Z) && X >= 8 && Z >= 8 && X <= W - 8 && Z <= H - 8 && dryAt[(size_t)Z * EW + X];
+		};
+		auto measure = [&](bool band, float out[3]) {
+			const std::vector<float> c1 = boxE(height, 1), c3 = boxE(height, 3), c8 = boxE(height, 8);
+			std::vector<float> v[3];
+			for (int Z = 0; Z < EH; Z++)
+				for (int X = 0; X < EW; X++) {
+					if (band ? !isBand(X, Z) : !isExt(X, Z))
+						continue;
+					const size_t i = (size_t)Z * EW + X;
+					v[0].push_back(std::abs(height[i] - c1[i]));
+					v[1].push_back(std::abs(c1[i] - c3[i]));
+					v[2].push_back(std::abs(c3[i] - c8[i]));
+				}
+			for (int k = 0; k < 3; k++) {
+				if (v[k].empty()) { out[k] = 0; continue; }
+				std::nth_element(v[k].begin(), v[k].begin() + v[k].size() / 2, v[k].end());
+				out[k] = v[k][v[k].size() / 2] * 1.48f;
+			}
+		};
+		float target[3], got[3];
+		measure(true, target);
+		for (int iter = 0; iter < 3; iter++) {
+			measure(false, got);
+			float r[3];
+			for (int k = 0; k < 3; k++)
+				r[k] = got[k] > 1e-3f ? std::clamp(target[k] / got[k], 0.5f, 3.0f) : 1.0f;
+			// the coarser scales also carry part of the finer ones' measure: correct the finest first
+			std::vector<float>* parts[3] = { &bump1, &bump3, &bump8 };
+			for (int k = 0; k < 3; k++)
+				for (size_t i = 0; i < height.size(); i++) {
+					const float add = (r[k] - 1.0f) * (*parts[k])[i];
+					height[i] += add;
+					(*parts[k])[i] += add;
+				}
+		}
+		measure(false, got);
+		printf("Extend map: small relief, band %.2f / %.2f / %.2f, extension %.2f / %.2f / %.2f (1, 3, 8 tiles)\n",
+			target[0], target[1], target[2], got[0], got[1], got[2]);
+	}
 
 	// ---- Tiles: the map's own in the middle (water and textures chosen below for the rest)
 	e.tiles = new Terrain::Tile[(size_t)W * H];
@@ -1196,6 +1307,15 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			}
 		}
 
+	// test runs: "WKB_EXTEND_HEIGHTS=<file>": the copy's vertex heights, (W + 1) x (H + 1) floats
+	// after a header of 5 (W + 1, H + 1, n, w, h)
+	if (const char* dump = getenv("WKB_EXTEND_HEIGHTS"))
+		if (FILE* f = fopen(dump, "wb")) {
+			const float hdr[5] = { (float)EW, (float)EH, (float)n, (float)w, (float)h };
+			fwrite(hdr, sizeof(float), 5, f);
+			fwrite(height.data(), sizeof(float), height.size(), f);
+			fclose(f);
+		}
 	// test runs: "WKB_EXTEND_DUMP=<file.ppm>": the copy from above, a pixel per tile (material
 	// kinds' colours, hill-shaded; water blue; the map's mesh edge marked)
 	if (const char* dump = getenv("WKB_EXTEND_DUMP"))
@@ -1313,6 +1433,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	for (size_t i = 0; i < NV; i++)
 		SetSteps(e, i, height[i]);
 	SyncExtendedHeights(map, e); // the middle exactly as the map's
+	printf("Extend map: the map's small relief %.2f / %.2f / %.2f (1, 3, 8 tiles)\n", sigma1, sigma3, sigma8);
 	printf("Extend map: %d x %d tiles (+%d on each side), seed %016llx; %d materials, %zu transition pairs, %zu river exits, %d lakes, %d ponds, %zu trees, %d tiles without a fitting transition\n",
 		W, H, n, (unsigned long long)seed, M, mats.fits.size(), exits.size(), lakes, ponds, trees ? trees->size() : (size_t)0, unmatched);
 	return ext;
