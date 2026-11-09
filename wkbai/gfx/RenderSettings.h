@@ -157,6 +157,10 @@ struct RenderSettings {
 	// ray-traced sun shadows of the buildings, trees and units (enhanced renderers on Diligent,
 	// with a GPU that has inline ray tracing): instead of the static shadow map
 	bool rtShadows = false;
+	// contact shadows (enhanced renderers on Diligent, with the post-processing effects): a short
+	// march towards the sun in the depth pre-pass's depth, the small shadows where units' feet,
+	// fences and walls meet the ground (with or without the ray-traced shadows)
+	bool contactShadows = true;
 	// ray-traced reflections of the buildings, trees and units in the water (the same; water Low
 	// or better), over the screen-space reflections, which still show the terrain
 	bool rtReflections = false;

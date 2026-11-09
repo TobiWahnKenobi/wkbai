@@ -87,6 +87,26 @@ struct DiligentGfx : IRenderer
 	virtual bool LightingPrepassWanted() = 0;
 	virtual Diligent::ITextureView* BeginLightingPrepass() = 0;
 	virtual void FinishLightingPrepass(const Camera& camera) = 0;
+	// In the depth pre-pass, after the ground's and the water's depth and before the models': the
+	// surface depth kept (the projected decals lie on it)
+	virtual void SnapshotSurfaceDepth() = 0;
+	// Decals projected from the depth pre-pass onto the ground and the water (the selected
+	// objects' range bands, the footprint squares of a building being placed): each a box from
+	// yMin to yMax over a ring (outer and inner radius around the centre; tiles: the texture's
+	// repeats around it, its width along the ring, its height across, top outwards) or a square
+	// (outer: half its side), coloured (ARGB); drawn wherever the surface lies inside, over the
+	// grass, hidden by what stands in front (the pre-pass's models). Available when the pre-pass
+	// ran in this frame (else the caller draws them as before).
+	struct ProjectedDecal {
+		float centre[2] = {}, outer = 1, inner = 0, yMin = -1e4f, yMax = 1e4f, tiles = 1;
+		bool square = false;
+		uint32_t colour = 0xFFFFFFFF;
+	};
+	virtual bool ProjectedDecalsAvailable() = 0;
+	virtual void DrawProjectedDecals(texture tex, const ProjectedDecal* decals, size_t count) = 0;
+	// The particles between SetSoftParticles(true) and (false) fade out where they meet the
+	// ground, the water and the models (the depth pre-pass's depth; off without it)
+	virtual void SetSoftParticles(bool on) = 0;
 	// The frames presented so far: which drawing is in the same frame, or the next
 	virtual uint64_t FrameIndex() = 0;
 

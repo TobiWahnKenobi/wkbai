@@ -85,6 +85,7 @@ Texture2D tCopy;     // FSR 3's result, for the back buffer
 Texture2D tOpaque;   // FSR 3: the scene before its water
 Texture2D tWater;    // and before its other transparent parts
 Texture2D tShafts;   // the light shafts (half size)
+Texture2D tRtShadow; // the ray-traced shadows' mask (1 sunlit; the contact shadows')
 SamplerState sLinear;
 SamplerState sPoint;
 
@@ -149,6 +150,40 @@ float4 PS_Ao(VS_OUTPUT input) : SV_Target
 	float ao = saturate(1 - occlusion / SAMPLES * 1.6);
 	ao = lerp(ao, 1, saturate((p.z - 120) / 180));
 	return float4(ao, ao, ao, 1);
+}
+
+// The contact shadows (RenderSettings::contactShadows): from the lighting depth's point a short
+// march towards the sun (Ao.xyz in view space, Ao.w long); occluded where a sample lies behind
+// the depth there, but not by more than Bloom.y (a thin object in front, not the far side of
+// one); faded out by Bloom.z. Times the ray-traced shadows' mask; Bloom.x: how dark.
+float4 PS_Contact(VS_OUTPUT input) : SV_Target
+{
+	float rt = tRtShadow.SampleLevel(sPoint, input.Uv, 0).r;
+	float d = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
+	if (d >= 0.99999 || rt <= 0)
+		return float4(rt, rt, rt, 1);
+	float3 p = ViewPosAt(input.Uv, d);
+	if (p.z > Bloom.z)
+		return float4(rt, rt, rt, 1);
+	float noise = frac(52.9829189 * frac(dot(input.Pos.xy, float2(0.06711056, 0.00583715))));
+	float occluded = 0;
+	const int STEPS = 12;
+	[loop] for (int i = 0; i < STEPS; i++) {
+		float t = (i + noise) / STEPS * Ao.w;
+		float3 s = p + Ao.xyz * t;
+		float2 uv = float2(s.x * Proj.x / s.z * 0.5 + 0.5, 0.5 - s.y * Proj.y / s.z * 0.5);
+		if (any(uv < 0) || any(uv > 1) || s.z <= 0)
+			break;
+		float z = Proj.w / (tDepth.SampleLevel(sPoint, uv, 0).r - Proj.z);
+		float behind = s.z - z;
+		if (behind > 0.03 + s.z * 0.002 && behind < Bloom.y) {
+			occluded = 1;
+			break;
+		}
+	}
+	float fade = saturate((Bloom.z - p.z) / (Bloom.z * 0.3));
+	float c = rt * (1 - occluded * Bloom.x * fade);
+	return float4(c, c, c, 1);
 }
 
 float4 PS_Bright(VS_OUTPUT input) : SV_Target
@@ -671,6 +706,12 @@ struct DiligentPostProcess::Impl {
 	// ambient occlusion from it
 	RefCntAutoPtr<ITexture> lightDepth;
 	Pass aoLightPass;
+	// the surface depth (snapshotSurfaceDepth); the contact shadows' mask, its pass and the
+	// ray-traced mask its binding has
+	RefCntAutoPtr<ITexture> surfaceDepth, contact;
+	Pass contactPass;
+	ITextureView* contactRt = nullptr;
+	RefCntAutoPtr<ITexture> noRtShadow; // 1 x 1 white
 	IBuffer* shaftsBuffer = nullptr; // what shaftsPass's binding has
 	ITextureView* shaftsNoise = nullptr;
 	// TAA into history[i]; EASU from aaOut, history[0], history[1], resolved; RCAS from
@@ -837,6 +878,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->vs = _impl->shader(SHADER_TYPE_VERTEX, "VS");
 	_impl->makePass(_impl->aoPass, "PS_Ao", { "tDepth" }, TEX_FORMAT_R8_UNORM);
 	_impl->makePass(_impl->aoLightPass, "PS_Ao", { "tDepth" }, TEX_FORMAT_R8_UNORM);
+	_impl->makePass(_impl->contactPass, "PS_Contact", { "tDepth", "tRtShadow" }, TEX_FORMAT_R8_UNORM);
 	_impl->makePass(_impl->brightPass, "PS_Bright", { "tColor" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[0], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
 	_impl->makePass(_impl->blurPass[1], "PS_Blur", { "tBloom" }, TEX_FORMAT_RGBA8_UNORM);
@@ -880,6 +922,9 @@ void DiligentPostProcess::resize(uint32_t width, uint32_t height, uint32_t outpu
 	_impl->bind(_impl->aoPass, { _impl->depth });
 	_impl->lightDepth = _impl->target("Lighting depth", width, height, _impl->depthFormat, BIND_DEPTH_STENCIL);
 	_impl->bind(_impl->aoLightPass, { _impl->lightDepth });
+	_impl->surfaceDepth = _impl->target("Surface depth", width, height, _impl->depthFormat, BIND_DEPTH_STENCIL);
+	_impl->contact = _impl->target("Contact shadows", width, height, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
+	_impl->contactRt = nullptr;
 	_impl->bind(_impl->brightPass, { _impl->color });
 	_impl->bind(_impl->blurPass[0], { _impl->bloomA });
 	_impl->bind(_impl->blurPass[1], { _impl->bloomB });
@@ -989,6 +1034,63 @@ ITextureView* DiligentPostProcess::beginLightingDepth(IDeviceContext* ctx)
 ITexture* DiligentPostProcess::lightingDepth() const
 {
 	return _impl->lightDepth;
+}
+
+void DiligentPostProcess::snapshotSurfaceDepth(IDeviceContext* ctx)
+{
+	if (!_impl->lightDepth || !_impl->surfaceDepth)
+		return;
+	ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+	CopyTextureAttribs copy(_impl->lightDepth, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, _impl->surfaceDepth, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->CopyTexture(copy);
+	ITextureView* dsv = _impl->lightDepth->GetDefaultView(TEXTURE_VIEW_DEPTH_STENCIL);
+	ctx->SetRenderTargets(0, nullptr, dsv, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->SetViewports(1, nullptr, 0, 0);
+}
+
+ITexture* DiligentPostProcess::surfaceDepth() const
+{
+	return _impl->surfaceDepth;
+}
+
+ITextureView* DiligentPostProcess::contactShadows(IDeviceContext* ctx, const Matrix& projection, const Matrix& view, const Vector3& sun, ITextureView* rtMask)
+{
+	if (!_impl->lightDepth || !_impl->contact)
+		return nullptr;
+	if (!_impl->noRtShadow) {
+		const float one[4] = { 1, 1, 1, 1 };
+		_impl->noRtShadow = _impl->target("No ray-traced shadows", 1, 1, TEX_FORMAT_R8_UNORM, BIND_RENDER_TARGET);
+		ITextureView* v = _impl->noRtShadow->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+		ctx->SetRenderTargets(1, &v, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->ClearRenderTarget(v, one, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	}
+	ITextureView* rt = rtMask ? rtMask : _impl->noRtShadow->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+	if (rt != _impl->contactRt || !_impl->contactPass.srb) {
+		_impl->contactPass.srb.Release();
+		_impl->contactPass.signature->CreateShaderResourceBinding(&_impl->contactPass.srb, true);
+		_impl->contactPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(_impl->lightDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		_impl->contactPass.srb->GetVariableByName(SHADER_TYPE_PIXEL, "tRtShadow")->Set(rt);
+		_impl->contactRt = rt;
+	}
+	// the sun in view space (row vectors: the view's rotation)
+	const Vector3 s = sun.normal();
+	const float sx = s.x * view._11 + s.y * view._21 + s.z * view._31;
+	const float sy = s.x * view._12 + s.y * view._22 + s.z * view._32;
+	const float sz = s.x * view._13 + s.y * view._23 + s.z * view._33;
+	const uint32_t w = _impl->width, h = _impl->height;
+	void* mapped = nullptr;
+	ctx->MapBuffer(_impl->buffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+	memset(mapped, 0, 336);
+	const float data[16] = {
+		projection._11, projection._22, projection._33, projection._43,
+		1.0f / w, 1.0f / h, 0.0f, 0.0f,
+		sx, sy, sz, 0.9f,     // towards the sun, 0.9 m
+		0.75f, 0.8f, 160.0f, 0.0f, // 75% dark, at most 0.8 m thick, out to 160 m
+	};
+	memcpy(mapped, data, sizeof(data));
+	ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
+	_impl->run(ctx, _impl->contactPass, _impl->contact);
+	return _impl->contact->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 }
 
 ITextureView* DiligentPostProcess::lightingAo(IDeviceContext* ctx, const Matrix& projection, float radius)

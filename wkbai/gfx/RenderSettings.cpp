@@ -69,6 +69,7 @@ void RenderSettings::load()
 	cloudCover = std::clamp(g_settings.value<float>("cloudCover", def.cloudCover), 0.0f, 1.0f);
 	lightShaftStrength = std::clamp(g_settings.value<float>("lightShaftStrength", def.lightShaftStrength), 0.0f, 4.0f);
 	rtShadows = g_settings.value<bool>("rtShadows", def.rtShadows);
+	contactShadows = g_settings.value<bool>("contactShadows", def.contactShadows);
 	rtReflections = g_settings.value<bool>("rtReflections", def.rtReflections);
 	terrainFresnel = g_settings.value<float>("terrainFresnel", def.terrainFresnel);
 	grass = g_settings.value<bool>("grass", def.grass);
@@ -162,6 +163,7 @@ void RenderSettings::save()
 	g_settings["cloudCover"] = cloudCover;
 	g_settings["lightShaftStrength"] = lightShaftStrength;
 	g_settings["rtShadows"] = rtShadows;
+	g_settings["contactShadows"] = contactShadows;
 	g_settings["rtReflections"] = rtReflections;
 	g_settings["terrainFresnel"] = terrainFresnel;
 	g_settings["grass"] = grass;

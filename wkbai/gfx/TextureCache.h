@@ -27,8 +27,6 @@ struct TextureCache
 
 	texture getTexture(const char *filename, bool mipmaps = true);
 	texture getTextureIfCached(const char* filename) const;
-	// "name#rrggbb.ext" -> base "name.ext" and the tint (byte/128 per channel); false without one
-	static bool splitTint(const std::string& filename, std::string& base, float tint[3]);
 
 	// Hot reload: textures whose file changed since (a mod's or a loose file being edited) get the
 	// new picture, in place, so everything that holds them shows it. Same size only (else a

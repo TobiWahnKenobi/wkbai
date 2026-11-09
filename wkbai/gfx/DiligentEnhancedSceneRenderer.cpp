@@ -1149,10 +1149,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		BufferData init{ colour, sizeof(colour) };
 		device->CreateBuffer(bd, &init, &e.colour);
 		auto overrideMap = [&](const char* suffix) -> texture {
-			std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
-			float tint[3];
-			TextureCache::splitTint(filename, untinted, tint);
-			const std::string base = untinted.substr(0, untinted.find_last_of('.'));
+			const std::string base = filename.substr(0, filename.find_last_of('.'));
 			for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
 				const std::string name = base + suffix + ext;
 				if (FileExists((scene->texCache.directory + name).c_str()))
@@ -1577,7 +1574,7 @@ void DiligentEnhancedSceneRenderer::render()
 	IRenderDevice* device = dgfx->device;
 	IDeviceContext* ctx = dgfx->ctx;
 	// after the depth pre-pass (renderDepth): the frame prepared, the models only shaded
-	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared && !depthOnly;
+	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared;
 
 	// Keeps the IRenderer's state the same as after the D3D11 renderer (lakes and particles
 	// are drawn through IRenderer afterwards).
@@ -2123,10 +2120,12 @@ void DiligentEnhancedSceneRenderer::render()
 	// the depth pre-pass: the models' depth alone, into the lighting depth; the shading comes in
 	// the next render()
 	if (depthOnly) {
-		PROFILE_SCOPE("Models' depth");
-		ctx->SetRenderTargets(0, nullptr, _impl->depthTarget, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		ctx->SetViewports(1, nullptr, 0, 0);
-		drawMeshes(DRAW_DEPTH);
+		if (_impl->depthTarget) {
+			PROFILE_SCOPE("Models' depth");
+			ctx->SetRenderTargets(0, nullptr, _impl->depthTarget, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->SetViewports(1, nullptr, 0, 0);
+			drawMeshes(DRAW_DEPTH);
+		}
 		_impl->prepared = true;
 		return;
 	}
