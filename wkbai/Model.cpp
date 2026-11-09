@@ -82,14 +82,6 @@ void StaticModel::prepare() {
 	matIds.resize(mesh.materials.size());
 	for (size_t i = 0; i < matIds.size(); i++) {
 		Material &mat = mesh.materials[i];
-		// a tinted texture's name: the plain texture and the tint as the material's colour
-		std::string base;
-		float tint[3];
-		if (TextureCache::splitTint(mat.textureFilename, base, tint)) {
-			mat.textureFilename = base;
-			for (int c = 0; c < 3; c++)
-				mat.colour[c] *= tint[c];
-		}
 		cache->textureFilenames.insertString(mat.textureFilename);
 		int texid = cache->textureFilenames.getIndex(mat.textureFilename);
 		uint64_t colourKey = 0;
