@@ -163,12 +163,12 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	static const char* testMoon = getenv("WKB_TEST_MOONAGE"); // (a test hook: the moon's phase, 0-1)
 	const float moonAge = testMoon ? (float)atof(testMoon) : es.moonAge(t);
 	v.sun = ComputeSun(v.dayFraction, v.yearFraction, es.seasons, v.cloudCover, moonAge);
-	// the sun's frame: south is where the map's own sun stands (its art was lit from there)
-	Vector3 south = Vector3(g_mapLook.sun.x, 0.0f, g_mapLook.sun.z);
-	south = south.sqlen3() > 1e-6f ? south.normal() : Vector3(0, 0, 1);
-	// east: (z, -x) of south, as before the moon phases (turned around then, the sun set in the
-	// east seen from the map; the moon's lit side follows the sun either way)
-	const Vector3 east(south.z, 0.0f, -south.x);
+	// the sun's frame: the compass of the minimap (north up: +z, east to the right: +x), so the sun
+	// rises in the east, stands in the south at noon and sets in the west, at 47 degrees north
+	// as in central Europe (ComputeSun: north-east to south-east by the season). It had followed
+	// the map's own sun as south, a different compass on every map (on the continent map it rose
+	// in the south, the play test of 2026-11-09).
+	const Vector3 south(0.0f, 0.0f, -1.0f), east(1.0f, 0.0f, 0.0f);
 	const Vector3& d = v.sun.direction; // (east, up, south)
 	terrain->sunVector = (east * d.x + Vector3(0, 1, 0) * d.y + south * d.z).normal();
 	auto toWorld = [&](const Vector3& e) { return (east * e.x + Vector3(0, 1, 0) * e.y + south * e.z).normal(); };
@@ -188,6 +188,26 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	terrain->sunColor = Scale(g_mapLook.sunColor, v.sun.colour);
 	g_cloudSunDirection = toWorld(v.sun.cloudDirection);
 	g_cloudSunColor = Scale(g_mapLook.sunColor, v.sun.cloudColour);
+	// With the Physical sky model the clouds see a low sun from below: high above the ground they
+	// see it longer, and once it is under their own horizon its light comes up at their bases
+	// (lit from beneath at dawn and dusk, their tops in shade; the play test of 2026-11-09). The
+	// light about 2 degrees lower while the sun is low; its strength kept until the sun is 1 degree
+	// under the horizon, gone 6 under.
+	if (g_renderSettings.skyModel >= 1 && g_renderSettings.sky && g_renderSettings.dynamicClouds >= 3) {
+		const float y = v.sun.sunTrue.y;
+		if (y > -0.105f && y < 0.25f) {
+			Vector3 d = toWorld(v.sun.sunTrue);
+			const float low = 1.0f - std::clamp((y - 0.08f) / 0.17f, 0.0f, 1.0f);
+			d.y -= 0.035f * low;
+			g_cloudSunDirection = d.normal();
+			const float t = std::clamp((y + 0.105f) / 0.087f, 0.0f, 1.0f), up = t * t * (3.0f - 2.0f * t);
+			const float dayCol[3] = { 1.0f, 0.62f, 0.38f }; // (ComputeSun's daylight colour with the sun low)
+			float col[3];
+			for (int c = 0; c < 3; c++)
+				col[c] = std::max(v.sun.cloudColour[c], dayCol[c] * up);
+			g_cloudSunColor = Scale(g_mapLook.sunColor, col);
+		}
+	}
 	g_cloudSunValid = true;
 	{
 		// the fog: the map's, in the sky's light, greyer in fog and under clouds

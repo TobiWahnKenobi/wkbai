@@ -262,7 +262,7 @@ float3 DuskTint(float3 sun, float lift)
 	// clouds' many scatterings and the sky's light soften it; under the day's grade at sunset the
 	// pure air-mass colour read as red paint, the play test of 2026-11-09)
 	if (SkyRight.w != 0)
-		return lerp(float3(1, 1, 1), pow(tint, 0.75) * 1.3, dusk);
+		return lerp(float3(1, 1, 1), pow(tint, 0.45) * 1.15, dusk);
 	return lerp(float3(1, 1, 1), tint * 1.5, dusk);
 }
 
@@ -318,7 +318,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel)
 	// at dawn and dusk the sky's light is weak beside the sun's on the clouds: their lit sides glow,
 	// their shaded ones are blue-grey
 	const float duskK = smoothstep(0.55, 0.05, sun.y) * smoothstep(-0.08, -0.01, sun.y);
-	float duskSun = lerp(1, SkyRight.w != 0 ? 1.35 : 1.7, duskK), duskSky = lerp(1, SkyRight.w != 0 ? 0.7 : 0.55, duskK);
+	float duskSun = lerp(1, SkyRight.w != 0 ? 1.25 : 1.7, duskK), duskSky = lerp(1, SkyRight.w != 0 ? 0.7 : 0.55, duskK);
 	// (the Physical model: at dusk the clouds towards the sun glow, those opposite it are darker,
 	// lit by the low sun's light from behind them)
 	if (SkyRight.w != 0)
@@ -674,10 +674,19 @@ float3 PhysicalSky(float3 rd, float3 sun)
 	// sky with the sun just under the horizon, the play test of 2026-11-09): azure on the sun's
 	// side, dimmer away from it, from the sun 6 degrees up until it is 11 under the horizon
 	if (physical) {
-		float tw = saturate((sun.y + 0.2) / 0.2) * (1 - saturate(sun.y / 0.1));
+		float tw = saturate((sun.y + 0.2) / 0.18) * (1 - smoothstep(-0.02, 0.05, sun.y));
 		float2 hd = rd.xz, hs = sun.xz;
 		float side = (dot(hd, hd) > 1e-8 && dot(hs, hs) > 1e-8) ? dot(normalize(hd), normalize(hs)) * 0.5 + 0.5 : 0.5;
-		c += float3(0.1, 0.24, 0.52) * tw * lerp(0.6, 1, side) * (1.2 - 0.4 * rd.y);
+		// (towards the sun the low sky keeps its warm glow: the blue mostly higher up there; the
+		// grey-lavender sunrise, the play test of 2026-11-09)
+		float up = lerp(1, smoothstep(0.0, 0.45, rd.y), side * side);
+		c += float3(0.1, 0.24, 0.52) * tw * lerp(0.6, 1, side) * up * (1.2 - 0.4 * rd.y);
+		// dawn's and dusk's glow on the horizon round the sun's bearing: the lit high air beyond
+		// the earth's shadow, which the few samples miss (before sunrise the sky towards the sun
+		// stood dark navy, the SUNRISE save of 2026-11-09): from the sun 8 degrees under the
+		// horizon, gone by 7 up
+		float dawn = saturate((sun.y + 0.21) / 0.14) * (1 - smoothstep(0.03, 0.12, sun.y));
+		c += float3(0.9, 0.42, 0.12) * dawn * pow(side, 4) * exp(-rd.y * 9) * 1.1;
 	}
 	return 1 - exp(-c * 1.2);
 }
@@ -939,13 +948,18 @@ static void PhysicalSkyCpu(const Vector3& dIn, const Vector3& sun, float out[3])
 	// the twilight's blue (as the shader's)
 	float twilight[3] = {};
 	if (physical) {
-		const float tw = std::clamp((sun.y + 0.2f) / 0.2f, 0.0f, 1.0f) * (1 - std::clamp(sun.y / 0.1f, 0.0f, 1.0f));
+		const float rise = std::clamp((sun.y + 0.02f) / 0.07f, 0.0f, 1.0f);
+		const float tw = std::clamp((sun.y + 0.2f) / 0.18f, 0.0f, 1.0f) * (1 - rise * rise * (3 - 2 * rise));
 		const float hd = std::sqrt(d.x * d.x + d.z * d.z), hs = std::sqrt(sun.x * sun.x + sun.z * sun.z);
 		const float side = (hd > 1e-4f && hs > 1e-4f) ? (d.x * sun.x + d.z * sun.z) / (hd * hs) * 0.5f + 0.5f : 0.5f;
-		const float k = tw * (0.6f + 0.4f * side) * (1.2f - 0.4f * d.y);
-		const float blue[3] = { 0.1f, 0.24f, 0.52f };
+		const float t = std::clamp(d.y / 0.45f, 0.0f, 1.0f), up = 1 + (t * t * (3 - 2 * t) - 1) * side * side;
+		const float k = tw * (0.6f + 0.4f * side) * up * (1.2f - 0.4f * d.y);
+		const float blue[3] = { 0.1f, 0.24f, 0.52f }, warm[3] = { 0.9f, 0.42f, 0.12f };
+		const float r = std::clamp((sun.y - 0.03f) / 0.09f, 0.0f, 1.0f);
+		const float dawn = std::clamp((sun.y + 0.21f) / 0.14f, 0.0f, 1.0f) * (1 - r * r * (3 - 2 * r));
+		const float g = dawn * side * side * side * side * std::exp(-d.y * 9) * 1.1f;
 		for (int c = 0; c < 3; c++)
-			twilight[c] = blue[c] * k;
+			twilight[c] = blue[c] * k + warm[c] * g;
 	}
 	for (int c = 0; c < 3; c++)
 		out[c] = 1 - std::exp(-(20 * (sumR[c] * RAY[c] * pR + sumM[c] * MIE * pM) + twilight[c]) * 1.2f);

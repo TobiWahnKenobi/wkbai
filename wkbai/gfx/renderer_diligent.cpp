@@ -119,7 +119,40 @@ cbuffer FogBuffer
 	float4 FogCamera; // camera position: the fog grows with the distance to it, as in the original
 	float4 Grade; // exposure, brightness, contrast, saturation
 	float4 EdgeFog; // playable area width and depth, edge fog start and opaque distance outside it
+	float4 LightMasks;
+	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
+	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
+	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
+
+float3 FogTintDir(float3 d)
+{
+	if (FogSun.w == 0 || dot(d, d) < 1e-10)
+		return FogColor.rgb;
+	d = normalize(d);
+	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
+	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
+	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
+	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
+	// out of the sky (the band hid it high above the horizon, the play test of 2026-11-09)
+	float mu = dot(d, FogSun.xyz);
+	if (mu > 0.99 && d.y > -0.004) {
+		float disc = smoothstep(0.99985, 0.99996, mu);
+		float glow = pow(saturate(mu), 2500) * 0.5 + pow(saturate(mu), 300) * 0.04;
+		c += FogSunColour.rgb * (disc + glow * FogSunColour.w) * FogSun.w * saturate((d.y + 0.004) / 0.002);
+	}
+	return c;
+}
+float3 FogRatioDir(float3 d)
+{
+	return min(FogTintDir(d) / max(FogColor.rgb, 1e-3), 2.5);
+}
+float3 FogTint(float3 worldPos)
+{
+	return FogTintDir(worldPos - FogCamera.xyz);
+}
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
 // fog follows the signed distance to the playable area's border (negative inside; the larger of x
@@ -147,6 +180,7 @@ struct VS_OUTPUT
 	float4 Color : COLOR0;
 	float2 Texcoord : TEXCOORD0;
 	float Fog : FOG;
+	float3 Haze : COLOR1; // the fog's colour along the view (the haze's tint, FogTint: per vertex)
 };
 
 static const float ALPHA_REF = 0.94;
@@ -158,6 +192,7 @@ VS_OUTPUT VS(float3 Pos : ATTRIB0, float4 Color : ATTRIB1, float2 Texcoord : ATT
 	output.Color = Color.bgra;
 	output.Texcoord = Texcoord;
 	output.Fog = 0.0;
+	output.Haze = FogColor.rgb;
 	return output;
 }
 
@@ -168,25 +203,26 @@ VS_OUTPUT VS_Fog(float3 Pos : ATTRIB0, float4 Color : ATTRIB1, float2 Texcoord :
 	output.Color = Color.bgra;
 	output.Texcoord = Texcoord;
 	output.Fog = FogAmount(Pos, output.Pos.w);
+	output.Haze = FogTint(Pos);
 	return output;
 }
 
-float4 ApplyFog(float4 color, float fog)
+float4 ApplyFog(float4 color, float fog, float3 haze)
 {
-	return float4(lerp(color.rgb, FogColor.rgb, fog), color.a);
+	return float4(lerp(color.rgb, haze, fog), color.a);
 }
 
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
-	return ApplyFog(input.Color * tex, input.Fog);
+	return ApplyFog(input.Color * tex, input.Fog, input.Haze);
 }
 
 float4 PS_AlphaTest(VS_OUTPUT input) : SV_Target
 {
 	float4 tex = inpTexture.Sample(inpSampler, input.Texcoord);
 	if(tex.a < ALPHA_REF) discard;
-	return ApplyFog(input.Color * tex, input.Fog);
+	return ApplyFog(input.Color * tex, input.Fog, input.Haze);
 }
 
 float4 PS_Map(VS_OUTPUT input) : SV_Target
@@ -203,12 +239,12 @@ float4 PS_Map(VS_OUTPUT input) : SV_Target
 
 	float2 fuv = clamp(subuv, float2(ha,ha), float2(0.25-ha,0.25-ha)) + tile*0.25;
 	float4 tex = inpTexture.Sample(inpSampler, fuv);
-	return ApplyFog(input.Color * tex, input.Fog);
+	return ApplyFog(input.Color * tex, input.Fog, input.Haze);
 }
 
 float4 PS_Lake(VS_OUTPUT input) : SV_Target
 {
-	return ApplyFog(input.Color, input.Fog);
+	return ApplyFog(input.Color, input.Fog, input.Haze);
 }
 
 // Soft particles (SetSoftParticles): faded out over the last metres in front of the depth
