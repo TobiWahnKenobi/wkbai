@@ -1234,7 +1234,12 @@ void DiligentSkyRenderer::render()
 			td.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
 			_impl->cloudTarget.Release();
 			_impl->dgfx->device->CreateTexture(td, nullptr, &_impl->cloudTarget);
-			_impl->srb->GetVariableByName(SHADER_TYPE_PIXEL, "tClouds")->Set(_impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			// ALLOW_OVERWRITE: a mutable variable that already holds a texture ignores a new one
+			// without it (Diligent), and the sky kept compositing the old target, frozen on its
+			// last frame: the clouds stuck to the camera after the scene's size changed (the
+			// upscaling, the cloud quality, the window) until the level was loaded again
+			_impl->srb->GetVariableByName(SHADER_TYPE_PIXEL, "tClouds")->Set(_impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
+				SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 		}
 		ITextureView* rtv = _impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
@@ -1253,7 +1258,8 @@ void DiligentSkyRenderer::render()
 		td.Format = TEX_FORMAT_RGBA16_FLOAT;
 		td.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
 		_impl->dgfx->device->CreateTexture(td, nullptr, &_impl->cloudTarget);
-		_impl->srb->GetVariableByName(SHADER_TYPE_PIXEL, "tClouds")->Set(_impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		_impl->srb->GetVariableByName(SHADER_TYPE_PIXEL, "tClouds")->Set(_impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE),
+			SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 	}
 	ctx->SetPipelineState(_impl->pipeline);
 	ctx->CommitShaderResources(_impl->srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
