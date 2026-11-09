@@ -3683,7 +3683,8 @@ void Test_DDS()
 	header(f, 4, 4, 4, "DXT1", 0, 0, 0);
 	for (uint8_t v : { 0x00, 0xF8, 0x1F, 0x00, 0xE4, 0xE4, 0xE4, 0xE4 }) f.push_back(v);
 	Bitmap b = Bitmap::loadDDS(f.data(), f.size());
-	auto px = [](const Bitmap& bm, int i, int c) { return (int)bm.pixels[i * 4 + c]; };
+	// (block-compressed ones decoded as the CPU's users of the pixels see them)
+	auto px = [](const Bitmap& bm, int i, int c) { return bm.compressed() ? (int)bm.convertToR8G8B8A8().pixels[i * 4 + c] : (int)bm.pixels[i * 4 + c]; };
 	const bool bc1Ok = px(b, 0, 0) == 255 && px(b, 0, 2) == 0 && px(b, 1, 0) == 0 && px(b, 1, 2) == 255 && px(b, 2, 0) == 170 && px(b, 3, 0) == 85;
 	printf("DDS BC1 %d (texel 2: %d %d %d)\n", bc1Ok, px(b, 2, 0), px(b, 2, 1), px(b, 2, 2));
 	// BC3: alpha 255 to 0 over the eight indices (0, 1: the ends; 2-7 between), colour as above

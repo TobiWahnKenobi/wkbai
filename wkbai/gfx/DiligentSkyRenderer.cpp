@@ -879,7 +879,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 			break;
 		}
 		const Bitmap bmp = Bitmap::loadBitmap(path.c_str());
-		if (bmp.format != BMFORMAT_BC7)
+		if (!bmp.compressed())
 			meanColour(bmp, i == 4 ? 0 : bmp.height * 3 / 4, sums[i == 4 ? 0 : 1]);
 		_impl->faces[i] = gfx->CreateTexture(bmp, 1);
 	}
@@ -889,7 +889,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	bool hasBottom = false;
 	if (FileExists(bottomPath.c_str())) {
 		const Bitmap bmp = Bitmap::loadBitmap(bottomPath.c_str());
-		if (bmp.format != BMFORMAT_BC7) {
+		if (!bmp.compressed()) {
 			meanColour(bmp, 0, sums[2]);
 			hasBottom = true;
 		}

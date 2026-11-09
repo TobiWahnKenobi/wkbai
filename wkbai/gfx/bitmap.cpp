@@ -162,18 +162,31 @@ static size_t BlockLevelBytes(int width, int height, size_t blockBytes)
 	return (size_t)std::max(1, (width + 3) / 4) * std::max(1, (height + 3) / 4) * blockBytes;
 }
 
-// A BC7 image kept compressed: the levels that are in the file (at most count), from src
-static Bitmap KeepBC7(const uint8_t* src, size_t available, int width, int height, int count, const char* what)
+// A BCn image (1-5, 7) kept compressed: the levels that are in the file (at most count), from
+// src; a size that isn't a multiple of 4 (the GPU's blocks), BC1-BC5 decoded instead
+static Bitmap KeepBC(const uint8_t* src, size_t available, int width, int height, int count, int bc, const char* what)
 {
-	if (width % 4 || height % 4)
-		ferr("%s: a BC7 texture's size must be a multiple of 4 (%ix%i).", what, width, height);
+	const size_t blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
+	if (width % 4 || height % 4) {
+		if (bc == 7)
+			ferr("%s: a BC7 texture's size must be a multiple of 4 (%ix%i).", what, width, height);
+		if (BlockLevelBytes(width, height, blockBytes) > available)
+			ferr("%s: the file is too short.", what);
+		Bitmap bm;
+		bm.width = width;
+		bm.height = height;
+		bm.format = BMFORMAT_R8G8B8A8;
+		bm.pixels.resize((size_t)width * height * 4);
+		DecodeBlocks(src, width, height, bc, bm.pixels.data());
+		return bm;
+	}
 	Bitmap bm;
 	bm.width = width;
 	bm.height = height;
-	bm.format = BMFORMAT_BC7;
+	bm.format = Bitmap::bcFormat(bc);
 	size_t total = 0;
 	for (int l = 0, w = width, h = height; l < std::max(1, count) && w >= 4 && h >= 4; l++, w /= 2, h /= 2) {
-		const size_t bytes = BlockLevelBytes(w, h, 16);
+		const size_t bytes = BlockLevelBytes(w, h, blockBytes);
 		if (total + bytes > available)
 			break;
 		bm.levels.push_back(total);
@@ -227,8 +240,8 @@ Bitmap Bitmap::loadDDS(const void* data, size_t length)
 			ferr("DDS: only 32-bit uncompressed textures are supported.");
 		bgra = rMask == 0x00FF0000;
 	}
-	if (bc == 7)
-		return KeepBC7(p + off, length - off, width, height, (int)u32(28), "DDS");
+	if (bc != 0)
+		return KeepBC(p + off, length - off, width, height, (int)u32(28), bc, "DDS");
 	Bitmap bm;
 	bm.width = width;
 	bm.height = height;
@@ -285,18 +298,17 @@ Bitmap Bitmap::loadKTX2(const void* data, size_t length)
 	case 145: case 146: bc = 7; break;
 	default: ferr("KTX2: Vulkan format %u is not supported (8-bit RGBA/BGRA, BC1-BC5 and BC7 are).", vkFormat);
 	}
-	if (bc == 7) {
+	if (bc != 0 && width % 4 == 0 && height % 4 == 0) {
 		// the levels are stored smallest first, each with its own offset: copy them largest first
+		const size_t blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
 		Bitmap bm;
 		bm.width = width;
 		bm.height = height;
-		bm.format = BMFORMAT_BC7;
-		if (width % 4 || height % 4)
-			ferr("KTX2: a BC7 texture's size must be a multiple of 4 (%ix%i).", width, height);
+		bm.format = Bitmap::bcFormat(bc);
 		std::vector<std::pair<uint64_t, uint64_t>> parts;
 		for (int l = 0, w = width, h = height; l < levelCount && w >= 4 && h >= 4; l++, w /= 2, h /= 2) {
 			const uint64_t lo = u64(80 + 24 * l), lb = u64(88 + 24 * l);
-			if (lo + lb > length || lb != BlockLevelBytes(w, h, 16))
+			if (lo + lb > length || lb != BlockLevelBytes(w, h, blockBytes))
 				break;
 			parts.push_back({ lo, lb });
 		}
@@ -327,6 +339,8 @@ Bitmap Bitmap::loadKTX2(const void* data, size_t length)
 		}
 		return bm;
 	}
+	if (bc == 7)
+		ferr("KTX2: a BC7 texture's size must be a multiple of 4 (%ix%i).", width, height);
 	if (bytes < BlockLevelBytes(width, height, (bc == 1 || bc == 4) ? 8 : 16))
 		ferr("KTX2: the file is too short.");
 	DecodeBlocks(src, width, height, bc, bm.pixels.data());
@@ -478,6 +492,15 @@ Bitmap Bitmap::convertToR8G8B8A8() const
 {
 	if (format == BMFORMAT_BC7)
 		ferr("A BC7 texture can only be used where it goes to the GPU as it is (model textures), not here.");
+	if (compressed()) { // BC1-BC5: the largest level decoded
+		Bitmap bm;
+		bm.width = width;
+		bm.height = height;
+		bm.format = BMFORMAT_R8G8B8A8;
+		bm.pixels.resize((size_t)width * height * 4);
+		DecodeBlocks(pixels.data(), width, height, bcKind(), bm.pixels.data());
+		return bm;
+	}
 	Bitmap bm; const Bitmap* sb = this;
 	bm.width = sb->width; bm.height = sb->height;
 	bm.format = BMFORMAT_R8G8B8A8;
@@ -524,6 +547,8 @@ Bitmap Bitmap::convertToR8G8B8A8() const
 
 Bitmap Bitmap::convertToB8G8R8A8() const
 {
+	if (compressed())
+		return convertToR8G8B8A8().convertToB8G8R8A8();
 	Bitmap bm; const Bitmap* sb = this;
 	bm.width = sb->width; bm.height = sb->height;
 	bm.format = BMFORMAT_B8G8R8A8;

@@ -213,6 +213,7 @@ static void DILIGENT_CALL_TYPE DiligentMessage(DEBUG_MESSAGE_SEVERITY severity, 
 struct DiligentTexture
 {
 	RefCntAutoPtr<ITexture> tex;
+	RefCntAutoPtr<ITextureView> view; // a swizzled view (BC4), else the default one
 	RefCntAutoPtr<IShaderResourceBinding> srb;
 };
 
@@ -614,7 +615,8 @@ struct DiligentRenderer : DiligentGfx
 
 	ITextureView* GetTextureView(texture t) override
 	{
-		return ((DiligentTexture*)(t ? t : whiteTexture))->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+		DiligentTexture* dt = (DiligentTexture*)(t ? t : whiteTexture);
+		return dt->view ? dt->view.RawPtr() : dt->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 	}
 
 	IBuffer* StreamVertexData(const void* data, uint64_t size, uint64_t& offset) override
@@ -1000,8 +1002,8 @@ struct DiligentRenderer : DiligentGfx
 
 	texture CreateTexture(const Bitmap& bm, int mipmaps) override
 	{
-		if (bm.format == BMFORMAT_BC7)
-			return createBC7Texture(bm, mipmaps);
+		if (bm.compressed())
+			return createBCTexture(bm, mipmaps);
 		Bitmap cvtbmp = bm.convertToR8G8B8A8();
 
 		// Same mipmap chain as the D3D11 renderer
@@ -1043,30 +1045,40 @@ struct DiligentRenderer : DiligentGfx
 		return (texture)t;
 	}
 
-	// BC7 (DDS, KTX2) as it is, with the file's mip levels (one if mipmaps is 1)
-	texture createBC7Texture(const Bitmap& bm, int mipmaps)
+	// BC1-BC5 and BC7 (DDS, KTX2) as they are, with the file's mip levels (one if mipmaps is 1);
+	// BC4's single channel read as grey (its view's swizzle)
+	texture createBCTexture(const Bitmap& bm, int mipmaps)
 	{
+		const int bc = bm.bcKind();
+		const Uint64 blockBytes = (bc == 1 || bc == 4) ? 8 : 16;
 		const size_t count = mipmaps == 1 ? 1 : bm.levels.size();
 		std::vector<TextureSubResData> sub(count);
 		for (size_t i = 0; i < count; i++) {
 			sub[i].pData = bm.pixels.data() + bm.levels[i];
-			sub[i].Stride = (Uint64)std::max(1, (bm.width >> i) / 4) * 16;
+			sub[i].Stride = (Uint64)std::max(1, (bm.width >> i) / 4) * blockBytes;
 		}
 		TextureDesc desc;
 		desc.Type = RESOURCE_DIM_TEX_2D;
 		desc.Width = bm.width;
 		desc.Height = bm.height;
 		desc.MipLevels = (Uint32)count;
-		desc.Format = TEX_FORMAT_BC7_UNORM;
+		desc.Format = bc == 1 ? TEX_FORMAT_BC1_UNORM : bc == 2 ? TEX_FORMAT_BC2_UNORM : bc == 3 ? TEX_FORMAT_BC3_UNORM
+			: bc == 4 ? TEX_FORMAT_BC4_UNORM : bc == 5 ? TEX_FORMAT_BC5_UNORM : TEX_FORMAT_BC7_UNORM;
 		desc.BindFlags = BIND_SHADER_RESOURCE;
 		desc.Usage = USAGE_DEFAULT;
 		TextureData data{ sub.data(), (Uint32)sub.size() };
 		DiligentTexture* t = new DiligentTexture;
 		device->CreateTexture(desc, &data, &t->tex);
 		if (!t->tex)
-			ferr("Diligent: could not create a %ix%i BC7 texture.", bm.width, bm.height);
+			ferr("Diligent: could not create a %ix%i BC%d texture.", bm.width, bm.height, bc);
+		if (bc == 4) {
+			TextureViewDesc vd;
+			vd.ViewType = TEXTURE_VIEW_SHADER_RESOURCE;
+			vd.Swizzle = TextureComponentMapping{ TEXTURE_COMPONENT_SWIZZLE_R, TEXTURE_COMPONENT_SWIZZLE_R, TEXTURE_COMPONENT_SWIZZLE_R, TEXTURE_COMPONENT_SWIZZLE_ONE };
+			t->tex->CreateView(vd, &t->view);
+		}
 		signature->CreateShaderResourceBinding(&t->srb, true);
-		t->srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(t->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		t->srb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(t->view ? t->view.RawPtr() : t->tex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		return (texture)t;
 	}
 
@@ -1083,8 +1095,8 @@ struct DiligentRenderer : DiligentGfx
 	{
 		DiligentTexture* dt = (DiligentTexture*)t;
 		const TextureDesc& desc = dt->tex->GetDesc();
-		if (bmp.format == BMFORMAT_BC7 || desc.Format == TEX_FORMAT_BC7_UNORM) {
-			printf("Hot reload: BC7 textures are not reloaded (restart to see the change)\n");
+		if (bmp.compressed() || desc.Format != TEX_FORMAT_RGBA8_UNORM) {
+			printf("Hot reload: block-compressed textures are not reloaded (restart to see the change)\n");
 			return;
 		}
 		Bitmap cvtbmp = bmp.convertToR8G8B8A8();

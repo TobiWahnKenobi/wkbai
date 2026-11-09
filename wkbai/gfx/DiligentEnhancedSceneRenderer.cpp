@@ -419,6 +419,8 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	// no tangents)
 	float4 ns = normalMap.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
 	float3 tn = ns.xyz * 2 - 1;
+	// z from x and y (a BC5 normal map has only those; the same for a full one)
+	tn.z = sqrt(saturate(1 - dot(tn.xy, tn.xy)));
 	// the legacy adapter's normals: without a normal map, the albedo's brightness as a height
 	// (bright = raised), its slope over one texel of the current mip level
 	if (ns.a < 0.5 && Material.x > 0) {
