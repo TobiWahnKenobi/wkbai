@@ -2296,6 +2296,21 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 
 	scene->add(&obj->sceneEntity);
 	numObjectsDrawn++;
+	// Extend map: the level's tree models, to grow its trees with (a few of each kind seen)
+	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
+		const std::string& name = obj->blueprint->name;
+		if (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos
+			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))) {
+			bool known = false;
+			for (const ExtTreeModel& t : extTreeModels)
+				known = known || t.model == model;
+			if (!known) {
+				const Matrix& m = obj->sceneEntity.transform;
+				const float s = std::sqrt(m._11 * m._11 + m._12 * m._12 + m._13 * m._13);
+				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES });
+			}
+		}
+	}
 	// Attachment points
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
 
@@ -4039,6 +4054,7 @@ void ClientInterface::iter()
 		}
 		if (client->getLevel())
 			drawObject(client->getLevel());
+		drawExtendedTrees();
 		if (fogOfWarOn())
 			for (const auto& [id, copy] : fogOfWar.remembered)
 				if (!fogOfWar.isBuildingSeen(copy->position))
@@ -4650,6 +4666,49 @@ void ClientInterface::iter()
 		framesPerSecond = nextFps;
 		nextFps = 0;
 		lastfpscheck = tim;
+	}
+}
+
+// Extend map's trees: an entity per tree with one of the level's tree models (by the tree's
+// number), drawn within the view distance and roughly in front of the camera
+void ClientInterface::drawExtendedTrees()
+{
+	const std::vector<ExtendedTree>* trees = terrainRenderer ? terrainRenderer->extendedTrees() : nullptr;
+	if (!trees || trees->empty()) {
+		extTreeEntities.clear();
+		extTreesFor = nullptr;
+		if (!trees)
+			extTreeModels.clear();
+		return;
+	}
+	if (extTreeModels.empty())
+		return;
+	if (extTreesFor != trees || extTreesModels != extTreeModels.size()) {
+		extTreesFor = trees;
+		extTreesModels = extTreeModels.size();
+		extTreeEntities.clear();
+		extTreeEntities.reserve(trees->size());
+		for (const ExtendedTree& t : *trees) {
+			const ExtTreeModel& m = extTreeModels[t.variant % extTreeModels.size()];
+			SceneEntity e;
+			e.model = m.model;
+			const float s = m.scale * t.scale;
+			e.transform = Matrix::getScaleMatrix(Vector3(s, s, s)) * Matrix::getRotationYMatrix(t.yaw) * Matrix::getTranslationMatrix(Vector3(t.x, t.y, t.z));
+			e.flags = m.flags;
+			e.animTime = (uint32_t)(t.variant & 0xFFFF);
+			extTreeEntities.push_back(e);
+		}
+	}
+	const Vector3 cam = client->camera.position;
+	const Vector3 dir = client->camera.direction;
+	const float far2 = client->camera.farDist * client->camera.farDist;
+	for (SceneEntity& e : extTreeEntities) {
+		const Vector3 p(e.transform._41, e.transform._42, e.transform._43);
+		const Vector3 d = p - cam;
+		const float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
+		if (d2 > far2 || (d.x * dir.x + d.y * dir.y + d.z * dir.z) < -0.3f * std::sqrt(d2) - 20.0f)
+			continue;
+		scene->add(&e);
 	}
 }
 

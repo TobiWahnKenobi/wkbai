@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 struct Terrain;
 
@@ -24,8 +26,14 @@ int ExtendMapTiles(int setting);
 struct ExtendedTerrainDeleter { void operator()(Terrain* t) const; };
 using ExtendedTerrain = std::unique_ptr<Terrain, ExtendedTerrainDeleter>;
 
-// The copy of map with n tiles more on each side (deterministic: the same map, the same copy)
-ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n);
+// A tree of the extension (drawn by the client with one of the level's own tree models): its
+// root in world units, its turn, its size against the model's, a random number to pick the
+// model by, and whether it stands in a forest
+struct ExtendedTree { float x, y, z, yaw, scale; uint32_t variant; bool forest; };
+
+// The copy of map with n tiles more on each side (deterministic: the same map, the same copy),
+// and its trees (if wanted)
+ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr);
 
 // The map's changes at run time carried into the copy: its vertices (levelled building sites,
 // farms, the editor's heights), its tiles, and its water (lakes, the water design, ice)

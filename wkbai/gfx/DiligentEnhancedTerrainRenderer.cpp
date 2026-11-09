@@ -1670,7 +1670,7 @@ DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx,
 	if (terrain && extendTiles > 0) {
 		LoadingDetail("extending the map");
 		const uint32_t t0 = SDL_GetTicks();
-		extended = BuildExtendedTerrain(*terrain, extendTiles);
+		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees);
 		this->terrain = extended.get();
 		printf("Extend map: built in %u ms\n", (unsigned)(SDL_GetTicks() - t0));
 	}

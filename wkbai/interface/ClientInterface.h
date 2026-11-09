@@ -245,6 +245,14 @@ private:
 	float nextSelObjDistanceByMesh = 0.0f, nextSelObjDistanceBySphere = 0.0f;
 	Language lang;
 	std::deque<SceneEntity> attachSceneEntities;
+	// Extend map's trees (ExtendMap.h): the level's own tree models as seen (with their size and
+	// season flags), and an entity per tree, made once those are known
+	struct ExtTreeModel { Model* model; float scale; uint32_t flags; };
+	std::vector<ExtTreeModel> extTreeModels;
+	std::vector<SceneEntity> extTreeEntities;
+	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
+	size_t extTreesModels = 0;
+	void drawExtendedTrees();
 	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
 	std::vector<float>* gpuBlobShadows = nullptr; // this frame's blob shadows for the enhanced terrain renderer
 	bool selBoxOn = false;

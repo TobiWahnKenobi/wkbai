@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <vector>
+#include "../ExtendMap.h"
+
 struct IRenderer;
 struct Terrain;
 struct Camera;
@@ -26,4 +29,6 @@ struct TerrainRenderer {
 	virtual bool updateWater() { return true; }
 	// wkbai's Extend map: the tiles the drawn terrain adds on each side of the map (0: none)
 	virtual int extendedTiles() const { return 0; }
+	// and the trees it grows there (null: none)
+	virtual const std::vector<ExtendedTree>* extendedTrees() const { return nullptr; }
 };

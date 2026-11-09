@@ -31,6 +31,7 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	bool updateWater() override;
 	bool* bumpMapping() override { return &m_bumpOn; }
 	int extendedTiles() const override;
+	const std::vector<ExtendedTree>* extendedTrees() const override { return extended ? &trees : nullptr; }
 
 	bool m_bumpOn = true;
 private:
@@ -39,4 +40,5 @@ private:
 	TextureCache* texcache;
 	Terrain* mapTerrain; // the map's own (the client's, maybe shared with a local server)
 	ExtendedTerrain extended; // its copy drawn, with Extend map (else null: terrain is the map's)
+	std::vector<ExtendedTree> trees; // the copy's trees
 };
