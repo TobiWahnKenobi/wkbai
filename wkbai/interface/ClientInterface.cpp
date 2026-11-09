@@ -974,8 +974,9 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
 		{
-			static const char* const waterLevels[] = { "Off (plain colour)", "Original", "Low", "Medium", "High (tessellated waves)", "Ultra" };
-			ImGui::Combo("Water", &s.waterQuality, waterLevels, 6);
+			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (scrolling texture)", "Off (plain colour)",
+				"Very low (bump-mapped ripples)", "Low", "Medium", "High (tessellated waves)", "Very high", "Ultra" };
+			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
@@ -4162,7 +4163,7 @@ void ClientInterface::iter()
 			// ray-traced shadows instead of the shadow map, where the GPU can
 			dgfx->shadows.rayShadowsOn = g_renderSettings.staticShadows && g_renderSettings.rtShadows && dgfx->shadows.rayShadowsSupported;
 			dgfx->shadows.staticShadows = g_renderSettings.staticShadows && !dgfx->shadows.rayShadowsOn;
-			dgfx->shadows.rayReflectionsOn = g_renderSettings.rtReflections && g_renderSettings.waterQuality >= 2 && dgfx->shadows.rayShadowsSupported;
+			dgfx->shadows.rayReflectionsOn = g_renderSettings.rtReflections && g_renderSettings.waterQuality >= RenderSettings::WATER_LOW && dgfx->shadows.rayShadowsSupported;
 		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))

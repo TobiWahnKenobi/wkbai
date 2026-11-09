@@ -141,12 +141,12 @@ namespace {
 			MenuOption o;
 			o.id = "waterQuality"; o.page = "lighting"; o.label = "Water";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "Original", "Low", "Medium", "High", "Ultra" };
+			o.choices = { "Original", "Off", "Very low", "Low", "Medium", "High", "Very high", "Ultra" }; // RenderSettings::WATER_*
 			o.get = [&rs]() { return (float)rs.waterQuality; };
-			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, 5); };
+			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, (int)RenderSettings::WATER_LEVELS - 1); };
 			list.push_back(o);
 		}
-		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= 2; }));
+		list.push_back(withEnabled(toggle("waterFlow", "lighting", "Flowing rivers", rs.waterFlow), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
 		{
 			MenuOption o;
 			o.id = "waterfalls"; o.page = "lighting"; o.label = "Waterfalls";
@@ -172,7 +172,7 @@ namespace {
 			[&rs]() { return rs.skyGI && rs.dynamicGI > 0; }));
 		list.push_back(withEnabled(toggle("rtShadows", "lighting", "Ray-traced shadows", rs.rtShadows), [&rs]() { return rs.staticShadows; }));
 		list.push_back(toggle("contactShadows", "lighting", "Contact shadows", rs.contactShadows));
-		list.push_back(withEnabled(toggle("rtReflections", "lighting", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= 2; }));
+		list.push_back(withEnabled(toggle("rtReflections", "lighting", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
 		list.push_back(slider("terrainFresnel", "lighting", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
 		{
 			MenuOption o;

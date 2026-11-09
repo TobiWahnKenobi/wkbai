@@ -44,18 +44,24 @@ void RenderSettings::load()
 	saturation = g_settings.value<float>("saturation", def.saturation);
 	sky = g_settings.value<bool>("sky", def.sky);
 	cloudShadows = g_settings.value<bool>("cloudShadows", def.cloudShadows);
-	// "waterLevel" (six levels), or from the older "waterQuality" (Off, Original, Low, High) and
-	// the switches "waterSurface" and "waterDetail" before it
-	if (g_settings.contains("waterLevel"))
-		waterQuality = std::clamp(g_settings.value<int>("waterLevel", def.waterQuality), 0, 5);
-	else if (g_settings.contains("waterQuality")) {
-		static const int fromFour[4] = { 0, 1, 2, 4 };
-		waterQuality = fromFour[std::clamp(g_settings.value<int>("waterQuality", 3), 0, 3)];
+	// "waterSetting" (the eight levels, WATER_*), or migrated so that an older file keeps its look:
+	// "waterLevel" (six: Off, the textured water with ripples now called Very low, Low, Medium,
+	// High, Ultra), the older "waterQuality" (four: Off, that textured water, Low, High) and the
+	// switches "waterSurface" and "waterDetail" before it
+	if (g_settings.contains("waterSetting"))
+		waterQuality = std::clamp(g_settings.value<int>("waterSetting", def.waterQuality), 0, (int)WATER_LEVELS - 1);
+	else {
+		static const int fromSix[6] = { WATER_OFF, WATER_VERYLOW, WATER_LOW, WATER_MEDIUM, WATER_HIGH, WATER_ULTRA };
+		static const int fromFour[4] = { WATER_OFF, WATER_VERYLOW, WATER_LOW, WATER_HIGH };
+		if (g_settings.contains("waterLevel"))
+			waterQuality = fromSix[std::clamp(g_settings.value<int>("waterLevel", 4), 0, 5)];
+		else if (g_settings.contains("waterQuality"))
+			waterQuality = fromFour[std::clamp(g_settings.value<int>("waterQuality", 3), 0, 3)];
+		else if (g_settings.contains("waterSurface") || g_settings.contains("waterDetail"))
+			waterQuality = !g_settings.value<bool>("waterSurface", true) ? WATER_OFF : !g_settings.value<bool>("waterDetail", true) ? WATER_VERYLOW : def.waterQuality;
+		else
+			waterQuality = def.waterQuality;
 	}
-	else if (g_settings.contains("waterSurface") || g_settings.contains("waterDetail"))
-		waterQuality = !g_settings.value<bool>("waterSurface", true) ? 0 : !g_settings.value<bool>("waterDetail", true) ? 1 : def.waterQuality;
-	else
-		waterQuality = def.waterQuality;
 	waterfalls = std::clamp(g_settings.value<int>("waterfalls", def.waterfalls), 0, 4);
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
@@ -147,8 +153,10 @@ void RenderSettings::save()
 	g_settings["saturation"] = saturation;
 	g_settings["sky"] = sky;
 	g_settings["cloudShadows"] = cloudShadows;
-	g_settings["waterLevel"] = waterQuality;
+	g_settings["waterSetting"] = waterQuality;
 	g_settings["waterfalls"] = waterfalls;
+	g_settings.erase("waterLevel");
+	g_settings.erase("waterQuality");
 	g_settings.erase("waterSurface");
 	g_settings.erase("waterDetail");
 	g_settings["waterFlow"] = waterFlow;

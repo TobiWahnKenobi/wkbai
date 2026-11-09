@@ -122,9 +122,9 @@ cbuffer SunBuffer
 	float4 LakeColour; // water surface: the map's fog colour, half transparent (as in wkbre2 before)
 	float4 WaterLayers; // UV offsets of the two texture layers
 	float4 WaterRipples; // UV offsets of the two ripple layers
-	float4 WaterParams; // on, UV per world unit, ripple UV per world unit, refraction on
+	float4 WaterParams; // 0 plain colour, 1 textured, 2 the Original level; UV per world unit, ripple UV per world unit, refraction on
 	float4 BlobParams; // on, 1 / map width, 1 / map depth, map edge in world units
-	// from RenderSettings::waterQuality 2 (Low): the sky box's colour above (w: on) and at the horizon, for
+	// from RenderSettings::WATER_LOW: the sky box's colour above (w: on) and at the horizon, for
 	// the water's reflection (ShadowEnvironment::skyLight), else the fog colour
 	float4 WaterSkyUp;
 	float4 WaterSkyHorizon;
@@ -474,7 +474,7 @@ LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 	return output;
 }
 
-// High water (RenderSettings::waterQuality 4 and 5; Medium, 3, draws PS_LakeHigh on the flat
+// High water (RenderSettings::WATER_HIGH and up; Medium draws PS_LakeHigh on the flat
 // surface without the tessellation). The water's tiles are patches cut into up to
 // WaterFlowParams.z pieces per edge near the camera and moved by six gentle Gerstner waves
 // (27 to 2.6 units long): on seas and lakes they roll in towards the shore along the flow map
@@ -676,7 +676,7 @@ LAKE_OUTPUT DS_Lake(TESS_FACTORS factors, float3 b : SV_DomainLocation, const Ou
 // vectors and lights each tile corner with a sun glint off a scrolling field of normals. Here
 // per pixel: the map's Water_Surface.tga in two scrolling layers, two layers of a ripple normal
 // map, a sun glint, the sky (fog) colour reflected at grazing angles, and more transparency
-// where the water is shallow. From RenderSettings::waterQuality 2 (Low) also: the sky box's colours
+// where the water is shallow. From RenderSettings::WATER_LOW also: the sky box's colours
 // reflected along the view, a darker colour with depth, cloud shadows (on all but the glint)
 // and foam along the shore, broken up by the ripples. And with RenderSettings::waterFlow: the
 // ripples in three octaves, moving along the map's flow map (rivers downstream into their lake,
@@ -830,6 +830,16 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	if (WaterParams.x == 0)
 		return float4(GradeColour(lerp(LakeColour.rgb, FogColor.rgb, input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth));
 	float2 uv = input.World.xz * WaterParams.y;
+	if (WaterParams.x > 1.5) {
+		// the Original level (RE repository, docs/re/water.md; Two_textures_per_pass_water_surface,
+		// 0x5F4190): two layers of Water_Surface.tga, half the texture per tile, each scrolled along
+		// its wind with the surge, averaged, under the landscape's light at the tile corners (the
+		// flat ground's: the sun's height, at least a third) times the cloud value; half
+		// transparent, fogged. No ripples, glint, sky or depth.
+		float3 otex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
+		float olight = max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World);
+		return IceOver(float4(GradeColour(lerp(otex * olight, FogColor.rgb, input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth)), input.World);
+	}
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
 	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
@@ -1363,7 +1373,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> depthPipeline, tessDepthPipeline, lakeDepthPipeline;
 	bool depthOnly = false, prepared = false, blobsOn = false;
 	ITextureView* depthTarget = nullptr; // renderDepth's
-	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::waterQuality 4 and 5 (High, Ultra)
+	RefCntAutoPtr<IPipelineState> highWaterPipeline; // RenderSettings::WATER_HIGH and up (High, Very high, Ultra)
 	RefCntAutoPtr<IPipelineState> mediumWaterPipeline; // 3 (Medium): High's pixels on the flat surface
 	RefCntAutoPtr<ITexture> sceneCopy; // the frame before the water, for its refraction and reflections
 	bool rtReflections = false; // the ray-traced reflections are drawn this frame
@@ -2461,28 +2471,37 @@ void DiligentEnhancedTerrainRenderer::render()
 	lakeColour[2] = (terrain->fogColor & 255) / 255.0f;
 	lakeColour[3] = 0x80 / 255.0f;
 	// The texture scroll: the offset moves along the wind vector at the original's speed
-	// (0x5F3830: (ms >> 4) / 128 per millisecond), but steadily. The original adds a 4.1 s surge,
-	// ((sin + 0.8) * 0.3)^2, which made the water speed up, slow down and swing back, and wraps
-	// at 0.5, which jumped the texture by half a repeat; wrapping at 1.0 is seamless.
+	// (0x5F3830: (ms >> 4) / 128 per millisecond). The original adds a 4.1 s surge,
+	// w * ((sin(2 pi ((ms >> 2) & 1023) / 1024) + 0.8) * 0.3)^2, which makes the water speed
+	// up, slow down and swing back; the Original level has it, the others scroll steadily. The
+	// original wraps the offset at 0.5: seamless, as every Water_Surface.tga repeats exactly
+	// after half its width and height (its tiles each show half the texture, u to u + 0.5).
 	// a steady clock: the game time is nudged by the server's time sync, which made the water
 	// jump; the water flows on regardless of the game's speed
+	const int wq = g_renderSettings.waterQuality;
+	const bool originalWater = wq == RenderSettings::WATER_ORIGINAL;
 	const double seconds = SDL_GetTicks() / 1000.0;
-	auto scroll = [&](float wx, float wy, float* out) {
-		const double k = seconds * (1000.0 / 16.0 / 128.0);
-		out[0] = (float)std::fmod(wx * k, 1.0);
-		out[1] = (float)std::fmod(wy * k, 1.0);
+	const double surge = (std::sin(6.283185307179586 * std::fmod(seconds / 4.096, 1.0)) + 0.8) * 0.3;
+	auto scroll = [&](float wx, float wy, float* out, bool withSurge) {
+		const double k = seconds * (1000.0 / 16.0 / 128.0) + (withSurge ? surge * surge : 0.0);
+		// (the other levels wrap at 1: a replaced texture need not repeat after half)
+		const double wrap = withSurge ? 0.5 : 1.0;
+		out[0] = (float)std::fmod(wx * k, wrap);
+		out[1] = (float)std::fmod(wy * k, wrap);
 	};
 	float* water = (float*)(sbdata + 128);
-	scroll(0.088f, -0.052f, water + 0);
-	scroll(0.1f, 0.3f, water + 2);
-	scroll(0.9f * 0.25f, 0.34f * 0.25f, water + 4); // the original's normal field wind, slowed for the finer ripples
-	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6);
-	water[8] = (g_renderSettings.waterQuality >= 1 && _impl->waterTexture) ? 1.0f : 0.0f;
-	water[9] = 0.1f;  // one texture repeat per two tiles
+	// (0x5F42E4: the first layer on the wind at 0x901730, the second on 0x901728)
+	scroll(0.088f, -0.052f, water + 0, originalWater);
+	scroll(0.1f, 0.3f, water + 2, originalWater);
+	scroll(0.9f * 0.25f, 0.34f * 0.25f, water + 4, false); // the original's normal field wind, slowed for the finer ripples
+	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6, false);
+	// 0 the plain colour (Off, or no texture), 1 the textured water, 2 the Original level
+	water[8] = !_impl->waterTexture || wq == RenderSettings::WATER_OFF ? 0.0f : originalWater ? 2.0f : 1.0f;
+	water[9] = 0.1f;  // one texture repeat per two tiles, as the original's
 	water[10] = 0.04f;
 	// refraction from Low up: the scene target copied before the water (not with multisampling)
 	_impl->refraction = false;
-	if (g_renderSettings.waterQuality >= 2 && !_impl->frameLakeIndices.empty()) {
+	if (wq >= RenderSettings::WATER_LOW && !_impl->frameLakeIndices.empty()) {
 		ITexture* target = dgfx->CurrentColorTarget()->GetTexture();
 		const TextureDesc& td = target->GetDesc();
 		if (td.SampleCount == 1) {
@@ -2528,7 +2547,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	blobParams[2] = 1.0f / (terrain->height * tilesize);
 	blobParams[3] = terrain->edge * tilesize;
 	float* waterSky = (float*)(sbdata + 192);
-	if (g_renderSettings.waterQuality >= 2) {
+	if (wq >= RenderSettings::WATER_LOW) {
 		const bool skyOn = shadows.skyLightValid && g_renderSettings.sky;
 		for (int c = 0; c < 3; c++) {
 			const float fog = ((terrain->fogColor >> (16 - 8 * c)) & 255) / 255.0f;
@@ -2573,25 +2592,28 @@ void DiligentEnhancedTerrainRenderer::render()
 		_impl->buildGrass(dgfx->device, terrain, TerrainGrassBuilder::BuildDensity(g_renderSettings.grassDensity));
 	grassLook[0] = std::clamp(g_renderSettings.grassDensity / std::max(_impl->grassBuiltDensity, 1.0f), 0.0f, 1.0f);
 	grassLook[1] = std::max(0.0f, g_renderSettings.grassHeight);
-	// High water's tessellation by the screen (HS_LakeConst): pieces of 7 pixels, Ultra's 4
+	// High water's tessellation by the screen (HS_LakeConst): pieces of 7 pixels, Very high's 5,
+	// Ultra's 4
 	grassLook[2] = 0.5f * (float)dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
-	grassLook[3] = g_renderSettings.waterQuality >= 5 ? 4.0f : 7.0f;
+	grassLook[3] = wq >= RenderSettings::WATER_ULTRA ? 4.0f : wq == RenderSettings::WATER_VERYHIGH ? 5.0f : 7.0f;
 	float* flowParams = (float*)(sbdata + 768);
 	flowParams[0] = g_renderSettings.waterFlow ? 1.0f : 0.0f;
 	flowParams[1] = 0.7f; // the ripples move at most 0.7 units a second (1.3 stretched them)
 	// High water: most pieces per tile edge near the camera and the fade (full detail to a
-	// quarter of it, none from 1.25 times it). Ultra: the GPU's most, to 250 and 1250 units
-	const bool ultra = g_renderSettings.waterQuality >= 5;
-	flowParams[2] = ultra ? 64.0f : 40.0f;
-	flowParams[3] = ultra ? 1000.0f : 600.0f;
-	// the reflections: Low a short, coarse ray; Medium and High longer, refined; Ultra the finest
+	// quarter of it, none from 1.25 times it). Ultra: the GPU's most, to 250 and 1250 units;
+	// Very high between them
+	flowParams[2] = wq >= RenderSettings::WATER_ULTRA ? 64.0f : wq == RenderSettings::WATER_VERYHIGH ? 52.0f : 40.0f;
+	flowParams[3] = wq >= RenderSettings::WATER_ULTRA ? 1000.0f : wq == RenderSettings::WATER_VERYHIGH ? 800.0f : 600.0f;
+	// the reflections: Low a short, coarse ray; Medium and High longer, refined; Very high
+	// longer still; Ultra the finest
 	float* reflect = (float*)(sbdata + 832);
-	const int wq = g_renderSettings.waterQuality;
-	const bool reflections = wq >= 2 && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
-	reflect[0] = !reflections ? 0.0f : wq == 2 ? 12.0f : wq <= 4 ? 24.0f : 40.0f;
+	const bool reflections = wq >= RenderSettings::WATER_LOW && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
+	reflect[0] = !reflections ? 0.0f : wq == RenderSettings::WATER_LOW ? 12.0f : wq <= RenderSettings::WATER_HIGH ? 24.0f
+		: wq == RenderSettings::WATER_VERYHIGH ? 32.0f : 40.0f;
 	reflect[1] = camera->projMatrix.m[2][2];
 	reflect[2] = camera->projMatrix.m[3][2];
-	reflect[3] = wq == 2 ? 45.0f : wq <= 4 ? 90.0f : 140.0f;
+	reflect[3] = wq == RenderSettings::WATER_LOW ? 45.0f : wq <= RenderSettings::WATER_HIGH ? 90.0f
+		: wq == RenderSettings::WATER_VERYHIGH ? 115.0f : 140.0f;
 	// wkbai's weather (Environment.h): 0 without
 	float* weather = (float*)(sbdata + 864);
 	weather[0] = g_environment.active ? g_environment.snowCover : 0.0f;
@@ -2604,11 +2626,11 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather2[2] = g_environment.active ? g_environment.riverClock : 0.0f;
 	weather2[3] = g_environment.active ? g_environment.flow : 0.0f;
 	float* waterMode = (float*)(sbdata + 848);
-	waterMode[0] = wq == 2 ? 0.0f : wq <= 4 ? 4.0f : 6.0f;
+	waterMode[0] = wq <= RenderSettings::WATER_LOW ? 0.0f : wq <= RenderSettings::WATER_HIGH ? 4.0f : wq == RenderSettings::WATER_VERYHIGH ? 5.0f : 6.0f;
 	const bool highOk = _impl->highWaterPipeline && _impl->waterTexture;
-	waterMode[1] = (wq == 3 || (wq >= 4 && !highOk)) && _impl->mediumWaterPipeline && _impl->waterTexture ? 1.0f : 0.0f;
+	waterMode[1] = (wq == RenderSettings::WATER_MEDIUM || (wq >= RenderSettings::WATER_HIGH && !highOk)) && _impl->mediumWaterPipeline && _impl->waterTexture ? 1.0f : 0.0f;
 	// the sky box for the reflections, bound again when it changed
-	bool skyBox = g_renderSettings.sky && wq >= 2 && !shadows.physicalSky;
+	bool skyBox = g_renderSettings.sky && wq >= RenderSettings::WATER_LOW && !shadows.physicalSky;
 	for (int i = 0; i < 5; i++) {
 		skyBox = skyBox && shadows.skyFaces[i];
 		if (_impl->boundSky[i] != shadows.skyFaces[i]) {
@@ -2813,8 +2835,8 @@ void DiligentEnhancedTerrainRenderer::render()
 		}
 		// High and Ultra tessellated, Medium (or High without tessellation) flat with High's pixels
 		const int wq = g_renderSettings.waterQuality;
-		const bool high = wq >= 4 && _impl->highWaterPipeline && _impl->waterTexture;
-		const bool medium = !high && wq >= 3 && _impl->mediumWaterPipeline && _impl->waterTexture;
+		const bool high = wq >= RenderSettings::WATER_HIGH && _impl->highWaterPipeline && _impl->waterTexture;
+		const bool medium = !high && wq >= RenderSettings::WATER_MEDIUM && _impl->mediumWaterPipeline && _impl->waterTexture;
 		ctx->SetPipelineState(high ? _impl->highWaterPipeline : medium ? _impl->mediumWaterPipeline : _impl->lakePipeline);
 		IBuffer* lvb = _impl->lakeVertexBuffer;
 		ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
