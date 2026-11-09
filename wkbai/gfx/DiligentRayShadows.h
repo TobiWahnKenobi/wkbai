@@ -51,8 +51,11 @@ public:
 	static constexpr uint32_t MAX_ALPHA_TEXTURES = 128;
 	// a mesh's structure: key (the mesh, or the animation and key frame), its positions (float3,
 	// from the byte offset), 16-bit indices per group relative to the group's first vertex
+	// animated: an animation's key frame, dropped when unused for a while (evictAnimated)
 	Diligent::IBottomLevelAS* blas(Diligent::IDeviceContext* ctx, const void* key, uint32_t frame, Diligent::IBuffer* positions,
-		uint64_t positionOffset, uint32_t vertexCount, Diligent::IBuffer* indices, const std::vector<Group>& groups);
+		uint64_t positionOffset, uint32_t vertexCount, Diligent::IBuffer* indices, const std::vector<Group>& groups, bool animated = false);
+	// the structure if made already (an animated one marked as used now)
+	Diligent::IBottomLevelAS* cached(const void* key, uint32_t frame);
 
 	// The terrain as a caster too (hills shading the valleys): its height grid, two triangles per
 	// tile, built again when version changes (the terrain renderer's heights). The terrain
@@ -63,7 +66,9 @@ public:
 	// null: no terrain.
 	void setTerrain(Diligent::IDeviceContext* ctx, const Terrain* terrain, uint64_t version);
 
-	void beginFrame() { instances.clear(); }
+	// (and the animated structures unused for ANIMATED_KEEP frames dropped)
+	void beginFrame();
+	static constexpr uint64_t ANIMATED_KEEP = 600;
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
 	// the frame's top-level structure from the casters added
@@ -100,6 +105,8 @@ private:
 	// (0: opaque), the instances' CustomId being their structure's first geometry
 	std::map<const void*, uint32_t> geometryBases; // by the mesh's group list
 	std::map<Diligent::IBottomLevelAS*, uint32_t> blasGeometryBase;
+	std::map<std::pair<const void*, uint32_t>, uint64_t> animatedLastUse;
+	uint64_t frameCounter = 0;
 	std::vector<uint32_t> geometryRecords; // pairs
 	std::vector<float> alphaUVs;
 	std::vector<Diligent::RefCntAutoPtr<Diligent::ITextureView>> alphaTextures;

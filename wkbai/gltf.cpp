@@ -256,6 +256,12 @@ void Mesh::loadGltf(const char* filename)
 		if (prim.contains("material")) {
 			const auto& m = doc["materials"][(int)prim["material"]];
 			g.mat.alphaTest = m.value("alphaMode", std::string()) == "MASK";
+			// the base colour factor (linear, as glTF has it) into the shaders' gamma space
+			if (m.contains("pbrMetallicRoughness") && m["pbrMetallicRoughness"].contains("baseColorFactor")) {
+				const auto& f = m["pbrMetallicRoughness"]["baseColorFactor"];
+				for (int c = 0; c < 3 && c < (int)f.size(); c++)
+					g.mat.colour[c] = std::pow(std::max(f[c].get<float>(), 0.0f), 1.0f / 2.2f);
+			}
 			if (m.contains("extras") && m["extras"].contains("wkTexture"))
 				g.mat.textureFilename = m["extras"]["wkTexture"];
 			else if (m.contains("pbrMetallicRoughness") && m["pbrMetallicRoughness"].contains("baseColorTexture")) {

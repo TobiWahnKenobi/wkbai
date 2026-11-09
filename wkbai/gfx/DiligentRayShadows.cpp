@@ -375,9 +375,40 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 	printf("Ray-traced shadows: %s\n", ok ? "ready" : "could not create the pipeline: off");
 }
 
-IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, uint32_t frame, IBuffer* positions,
-	uint64_t positionOffset, uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups)
+void DiligentRayShadows::beginFrame()
 {
+	instances.clear();
+	frameCounter++;
+	for (auto it = animatedLastUse.begin(); it != animatedLastUse.end(); ) {
+		if (frameCounter - it->second > ANIMATED_KEEP) {
+			auto b = blases.find(it->first);
+			if (b != blases.end()) {
+				blasGeometryBase.erase(b->second.RawPtr());
+				blases.erase(b);
+			}
+			it = animatedLastUse.erase(it);
+		}
+		else
+			++it;
+	}
+}
+
+IBottomLevelAS* DiligentRayShadows::cached(const void* key, uint32_t frame)
+{
+	auto it = blases.find({ key, frame });
+	if (it == blases.end() || !it->second)
+		return nullptr;
+	auto used = animatedLastUse.find({ key, frame });
+	if (used != animatedLastUse.end())
+		used->second = frameCounter;
+	return it->second;
+}
+
+IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, uint32_t frame, IBuffer* positions,
+	uint64_t positionOffset, uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups, bool animated)
+{
+	if (animated)
+		animatedLastUse[{ key, frame }] = frameCounter;
 	auto& slot = blases[{ key, frame }];
 	if (slot)
 		return slot;

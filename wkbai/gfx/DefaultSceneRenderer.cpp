@@ -73,6 +73,14 @@ void DefaultSceneRenderer::render()
 						const uint32_t dim = l * 64 / 255, keep = l;
 						bver[i].color = (c & 0xFF000000) | ((ent->flags & ent->SEFLAG_BLOCKED) ? (keep << 16 | dim << 8 | dim) : (dim * 3 / 2 << 16 | keep << 8 | dim * 3 / 2));
 					}
+					// the material's colour (Material::colour), as far as a vertex colour goes (up to 1)
+					if (mat.colour[0] != 1.0f || mat.colour[1] != 1.0f || mat.colour[2] != 1.0f) {
+						const uint32_t c = bver[i].color;
+						const uint32_t r = (uint32_t)std::min(255.0f, ((c >> 16) & 255) * mat.colour[0]);
+						const uint32_t gr = (uint32_t)std::min(255.0f, ((c >> 8) & 255) * mat.colour[1]);
+						const uint32_t b = (uint32_t)std::min(255.0f, (c & 255) * mat.colour[2]);
+						bver[i].color = (c & 0xFF000000) | r << 16 | gr << 8 | b;
+					}
 					bver[i].u = mesh.uvLists[color][2 * tind.uv];
 					bver[i].v = mesh.uvLists[color][2 * tind.uv + 1];
 				}

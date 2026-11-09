@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Model.h"
+#include "gfx/TextureCache.h"
 #include "util/util.h"
 #include <mutex>
 #include <algorithm>
@@ -81,9 +82,21 @@ void StaticModel::prepare() {
 	matIds.resize(mesh.materials.size());
 	for (size_t i = 0; i < matIds.size(); i++) {
 		Material &mat = mesh.materials[i];
+		// a tinted texture's name: the plain texture and the tint as the material's colour
+		std::string base;
+		float tint[3];
+		if (TextureCache::splitTint(mat.textureFilename, base, tint)) {
+			mat.textureFilename = base;
+			for (int c = 0; c < 3; c++)
+				mat.colour[c] *= tint[c];
+		}
 		cache->textureFilenames.insertString(mat.textureFilename);
 		int texid = cache->textureFilenames.getIndex(mat.textureFilename);
-		uint32_t matid = (texid << 1) | (mat.alphaTest ? 1 : 0);
+		uint64_t colourKey = 0;
+		for (int c = 0; c < 3; c++)
+			colourKey = colourKey << 21 | (uint64_t)std::clamp((int)std::lround(mat.colour[c] * 65536.0f), 0, (1 << 21) - 1);
+		auto [mi, isNew] = cache->materialIndices.try_emplace({ texid, colourKey }, (uint32_t)cache->materialIndices.size());
+		uint32_t matid = (mi->second << 1) | (mat.alphaTest ? 1 : 0);
 		cache->materials[matid] = mat;
 		matIds[i] = matid;
 	}

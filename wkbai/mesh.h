@@ -31,6 +31,10 @@ struct Material
 {
 	std::string textureFilename;
 	bool alphaTest;
+	// the albedo times this (in the shaders' gamma space; 0-2): glTF's baseColorFactor, or a
+	// "name#rrggbb.ext" texture's tint (byte / 128), which StaticModel::prepare turns into the
+	// plain name and this colour (one texture on the GPU for every tint of it)
+	float colour[3] = { 1.0f, 1.0f, 1.0f };
 };
 
 struct IndexTuple

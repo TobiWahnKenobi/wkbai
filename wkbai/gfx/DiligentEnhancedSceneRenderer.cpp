@@ -9,6 +9,7 @@
 
 #include "DiligentEnhancedSceneRenderer.h"
 #include <thread>
+#include <array>
 #include <mutex>
 #include <atomic>
 #include "renderer_diligent.h"
@@ -143,10 +144,82 @@ cbuffer SceneBuffer
 	uint VertexBase; // animated meshes: the material group's first vertex in a frame
 };
 
-// Animated meshes: every key frame's positions (3 floats each) and packed normals, one frame
-// after the other (float arrays, as float3 arrays have a different stride on Vulkan)
-StructuredBuffer<float> AnimPositions;
-StructuredBuffer<uint> AnimNormals;
+// Animated meshes (DilAnim): the animation's packed key frames, the mesh's binding of its draw
+// vertices to the animation's vertices, and the original's table of 256 normals
+StructuredBuffer<uint> AnimKeys;
+StructuredBuffer<uint> AnimBind;
+StructuredBuffer<float> NormalTable;
+
+// one axis of an animated vertex at a key
+float AnimAxis(uint c, uint key, uint v)
+{
+	uint base = AnimKeys[1 + c] + key * AnimKeys[0];
+	uint w = AnimKeys[base + 2 + v / 3];
+	return asfloat(AnimKeys[base]) + asfloat(AnimKeys[base + 1]) * (((w >> (11 * (v % 3))) & 1023) / 1023.0);
+}
+
+// the instance's keys and blends (DilAnim::instanceWords)
+struct AnimState
+{
+	uint3 key;
+	float3 blend;
+	uint normalKey;
+	float normalBlend;
+};
+
+AnimState DecodeAnimState(uint4 anim)
+{
+	AnimState s;
+	s.key = anim.xyz & 1023;
+	s.blend = float3((anim.xyz >> 10) & 65535) / 65535.0;
+	s.normalKey = (anim.x >> 26) | (((anim.y >> 26) & 15) << 6);
+	s.normalBlend = (anim.z >> 26) / 63.0;
+	return s;
+}
+
+// an animated vertex of the file at the instance's time
+float3 AnimVertex(uint v, AnimState s)
+{
+	float3 p;
+	[unroll] for (uint c = 0; c < 3; c++) {
+		uint k2 = min(s.key[c] + 1, max(AnimKeys[4 + c], 1) - 1);
+		p[c] = lerp(AnimAxis(c, s.key[c], v), AnimAxis(c, k2, v), s.blend[c]);
+	}
+	return p;
+}
+
+float3 TableNormal(uint key, uint n)
+{
+	uint w = AnimKeys[AnimKeys[7] + key * AnimKeys[8] + n / 4];
+	uint i = (w >> (8 * (n % 4))) & 255;
+	return float3(NormalTable[3 * i], NormalTable[3 * i + 1], NormalTable[3 * i + 2]);
+}
+
+// a bound position or normal (AnimBind's three words from b): directly the animation's, or a
+// place in the frame of its triangle; rest when it has none (and when the model stands still)
+float3 BoundAnim(uint b, AnimState s, bool normal, float3 rest)
+{
+	uint w0 = AnimBind[b], w1 = AnimBind[b + 1], w2 = AnimBind[b + 2];
+	uint v0 = w0 & 0xFFFF, v1 = w0 >> 16, v2 = w1 & 0xFFFF;
+	if ((AnimKeys[10] & 1) != 0 || v0 == 0xFFFF)
+		return rest;
+	if (v1 == 0xFFFF) {
+		if (!normal)
+			return v0 < AnimKeys[11] ? AnimVertex(v0, s) : rest;
+		if (v0 >= AnimKeys[12] || AnimKeys[9] < 2)
+			return rest;
+		uint k2 = min(s.normalKey + 1, AnimKeys[9] - 1);
+		return normalize(lerp(TableNormal(s.normalKey, v0), TableNormal(k2, v0), s.normalBlend));
+	}
+	if (max(v0, max(v1, v2)) >= AnimKeys[11])
+		return rest;
+	float3 p0 = AnimVertex(v0, s), e1 = AnimVertex(v1, s) - p0, e2 = AnimVertex(v2, s) - p0;
+	float3 n = cross(e1, e2);
+	n = dot(n, n) > 1e-20 ? normalize(n) : float3(0, 1, 0);
+	float a = f16tof32(w1 >> 16), bb = f16tof32(w2 & 0xFFFF), c = f16tof32(w2 >> 16);
+	float3 r = e1 * a + e2 * bb + n * c;
+	return normal ? normalize(r) : p0 + r;
+}
 
 struct VS_OUTPUT
 {
@@ -231,14 +304,16 @@ VS_OUTPUT VS(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTR
 
 // Every instance at its own key frame: drawn with base vertex 0, the vertex id counts within the
 // material group (VertexBase is where the group starts in a frame)
-VS_OUTPUT VS_Anim(float2 Texcoord : ATTRIB0, float4 T0 : ATTRIB1, float4 T1 : ATTRIB2, float4 T2 : ATTRIB3, float4 T3 : ATTRIB4,
-	uint4 Anim : ATTRIB5, uint VertexId : SV_VertexID)
+// (the same inputs as a static mesh's: the rest pose's position and normal for the vertices the
+// animation doesn't move)
+VS_OUTPUT VS_Anim(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTRIB2,
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7, uint VertexId : SV_VertexID)
 {
-	uint v1 = Anim.x + VertexBase + VertexId, v2 = Anim.y + VertexBase + VertexId;
-	float3 pos1 = float3(AnimPositions[3 * v1], AnimPositions[3 * v1 + 1], AnimPositions[3 * v1 + 2]);
-	float3 pos2 = float3(AnimPositions[3 * v2], AnimPositions[3 * v2 + 1], AnimPositions[3 * v2 + 2]);
-	float t = asfloat(Anim.z);
-	return Shade(lerp(pos1, pos2, t), lerp(UnpackNormal(AnimNormals[v1]), UnpackNormal(AnimNormals[v2]), t), Texcoord, T0, T1, T2, T3, Anim.w);
+	AnimState s = DecodeAnimState(Anim);
+	uint b = (VertexBase + VertexId) * 6;
+	float3 pos = BoundAnim(b, s, false, Pos);
+	float3 nrm = BoundAnim(b + 3, s, true, UnpackNormal(Normal) * 2 - 1);
+	return Shade(pos, nrm * 0.5 + 0.5, Texcoord, T0, T1, T2, T3, Anim.w);
 }
 
 // The light on a model: the original's per vertex (Color), or with per-pixel lighting on
@@ -417,8 +492,15 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 
 // wkbai's weather on a model: snow lying where the surface faces up (roofs, ledges, the tops of
 // trees and rocks), in patches; wet surfaces darker
+// the material's colour (Material::colour: glTF's baseColorFactor, a texture name's tint)
+cbuffer MaterialBuffer
+{
+	float4 BaseColour;
+};
+
 float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 {
+	albedo = min(albedo * BaseColour.rgb, 1);
 	// a field in winter: the crops gone, furrowed soil (the texture's pattern kept as its light
 	// and dark)
 	if (input.Fallow.x > 0.5)
@@ -587,20 +669,17 @@ MOTION_OUTPUT VS_Motion(float3 Pos : ATTRIB0, float2 Texcoord : ATTRIB2,
 	return Motion(Pos, Pos, Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
 }
 
-float3 AnimPosition(uint4 anim, uint vertexId)
+float3 AnimPosition(uint4 anim, uint vertexId, float3 rest)
 {
-	uint v1 = anim.x + VertexBase + vertexId, v2 = anim.y + VertexBase + vertexId;
-	float3 pos1 = float3(AnimPositions[3 * v1], AnimPositions[3 * v1 + 1], AnimPositions[3 * v1 + 2]);
-	float3 pos2 = float3(AnimPositions[3 * v2], AnimPositions[3 * v2 + 1], AnimPositions[3 * v2 + 2]);
-	return lerp(pos1, pos2, asfloat(anim.z));
+	return BoundAnim((VertexBase + vertexId) * 6, DecodeAnimState(anim), false, rest);
 }
 
-MOTION_OUTPUT VS_AnimMotion(float2 Texcoord : ATTRIB0,
-	float4 T0 : ATTRIB1, float4 T1 : ATTRIB2, float4 T2 : ATTRIB3, float4 T3 : ATTRIB4, uint4 Anim : ATTRIB5,
-	float4 P0 : ATTRIB6, float4 P1 : ATTRIB7, float4 P2 : ATTRIB8, float4 P3 : ATTRIB9, uint4 PrevAnim : ATTRIB10,
+MOTION_OUTPUT VS_AnimMotion(float3 Pos : ATTRIB0, float2 Texcoord : ATTRIB2,
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7,
+	float4 P0 : ATTRIB8, float4 P1 : ATTRIB9, float4 P2 : ATTRIB10, float4 P3 : ATTRIB11, uint4 PrevAnim : ATTRIB12,
 	uint VertexId : SV_VertexID)
 {
-	return Motion(AnimPosition(Anim, VertexId), AnimPosition(PrevAnim, VertexId), Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
+	return Motion(AnimPosition(Anim, VertexId, Pos), AnimPosition(PrevAnim, VertexId, Pos), Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
 }
 
 // the last frame's position minus the current, in UV
@@ -740,23 +819,65 @@ struct DilMesh
 	}
 };
 
-// All keyframes of an animation in one position and one normal buffer, one frame after the
-// other: creating a buffer per keyframe made the first view of a model cost up to ~100 ms. The
-// vertex shader reads them (AnimPositions, AnimNormals), so that every instance of a draw can be
-// at its own key frame.
+// A float as a 16-bit half (round to nearest; the binding's frame coordinates)
+static uint16_t FloatToHalf(float f)
+{
+	uint32_t x;
+	memcpy(&x, &f, 4);
+	const uint32_t sign = (x >> 16) & 0x8000;
+	int32_t exp = (int32_t)((x >> 23) & 255) - 127 + 15;
+	uint32_t mant = x & 0x7FFFFF;
+	if (exp <= 0) {
+		if (exp < -10)
+			return (uint16_t)sign;
+		mant |= 0x800000;
+		const uint32_t shift = (uint32_t)(14 - exp);
+		uint32_t h = mant >> shift;
+		if ((mant >> (shift - 1)) & 1)
+			h++;
+		return (uint16_t)(sign | h);
+	}
+	if (exp >= 31)
+		return (uint16_t)(sign | 0x7C00);
+	uint32_t h = sign | ((uint32_t)exp << 10) | (mant >> 13);
+	if (mant & 0x1000)
+		h++;
+	return (uint16_t)h;
+}
+
+// GPU vertex animation (docs/formats/anim3.md "For the renderer"): an animation's key frames stay
+// packed as the file has them (per axis its own key frames, 10 bits per vertex and axis, three
+// vertices to a word) in one buffer, AnimKeys; the vertex shader decodes the two keys around each
+// instance's time on each axis and interpolates (instead of every key frame baked unpacked, 16
+// bytes per vertex, ~4 GB with the HD models). Header (words): 0 the words per axis key (2 +
+// ceil(vertices / 3)), 1-3 each axis' first key, 4-6 each axis' key count, 7 the normals' first
+// key, 8 the words per normal key (ceil(normals / 4), a byte each: an index into the normal
+// table), 9 the normal key count, 10 flags (1: the model stands still: an HD model whose
+// original doesn't fit the animation), 11 the animation's vertex count, 12 its normal count.
+// A key: the axis' add and mul (floats), then the packed words.
+//
+// Each draw vertex of the mesh has a binding (AnimBind, per mesh, DilAnimBind): its position and
+// its normal, each either an animated vertex (normal) of the file directly, or (HD models,
+// ReplacementBinding) a place in the frame of a triangle of three animated vertices; with
+// neither (a vertex no key frame moves) its rest position and normal from the mesh's own vertex
+// buffers. So every animated model, original or HD, takes the one path.
+static constexpr uint32_t ANIM_HEADER_WORDS = 13;
+static constexpr uint32_t ANIM_MAX_KEYS = 1023; // 10 bits in the instance
+
 struct DilAnim
 {
-	std::vector<uint32_t> animTimes;
-	RefCntAutoPtr<IBuffer> animVertices, animNormals;
-	RefCntAutoPtr<IShaderResourceBinding> binding; // the two buffers, made at the first draw
-	uint64_t frameVertexBytes = 0, frameNormalBytes = 0;
-	uint32_t frameVertices() const { return (uint32_t)(frameVertexBytes / 12); }
-	// the key frames worked out (CPU only; thread-safe for different models, once prepared)
+	std::vector<uint32_t> animTimes; // every axis' key frame times together (the RT poses)
+	std::array<std::vector<uint32_t>, 3> axisTimes;
+	std::vector<uint32_t> normalTimes;
+	uint32_t duration = 1;
+	RefCntAutoPtr<IBuffer> keys;
+	IBuffer* bind = nullptr; // the mesh's (Impl::animBinds)
+	RefCntAutoPtr<IShaderResourceBinding> binding; // the keys and the binding, made at the first draw
+	// the key frames packed (CPU only; thread-safe for different models, once prepared)
 	struct Baked {
-		std::vector<uint32_t> animTimes;
-		std::vector<Vector3> vertices;
-		std::vector<uint32_t> normals;
-		size_t perFrame = 0;
+		std::vector<uint32_t> animTimes, normalTimes, words;
+		std::array<std::vector<uint32_t>, 3> axisTimes;
+		uint32_t duration = 1;
 	};
 	static DilAnim create(AnimatedModel* model, IRenderDevice* device) {
 		return upload(bake(model), device);
@@ -764,51 +885,161 @@ struct DilAnim
 	static DilAnim upload(Baked&& b, IRenderDevice* device) {
 		DilAnim enh;
 		enh.animTimes = std::move(b.animTimes);
-		enh.frameVertexBytes = b.perFrame * 12;
-		enh.frameNormalBytes = b.perFrame * 4;
-		enh.animVertices = CreateStructuredBuffer(device, "Anim positions", b.vertices.data(), b.vertices.size() * 12);
-		enh.animNormals = CreateStructuredBuffer(device, "Anim normals", b.normals.data(), b.normals.size() * 4);
+		enh.axisTimes = std::move(b.axisTimes);
+		enh.normalTimes = std::move(b.normalTimes);
+		enh.duration = b.duration;
+		enh.keys = CreateStructuredBuffer(device, "Anim keys", b.words.data(), b.words.size() * 4);
 		return enh;
 	}
 	static Baked bake(AnimatedModel* model) {
 		Baked enh;
 		model->prepare();
-		const auto& anim = model->anim;
-		const auto staticModel = model->getStaticModel();
+		const Anim& anim = model->anim;
+		StaticModel* staticModel = model->getStaticModel();
 		staticModel->prepare();
-		const auto& mesh = staticModel->mesh;
+		enh.duration = std::max(anim.duration, 1u);
 		std::set<uint32_t> animTimesSet;
-		for (int c = 0; c < 3; ++c)
+		for (int c = 0; c < 3; ++c) {
 			animTimesSet.insert(anim.coords[c].frameTimes.begin(), anim.coords[c].frameTimes.end());
+			enh.axisTimes[c].assign(anim.coords[c].frameTimes.begin(), anim.coords[c].frameTimes.end());
+		}
 		enh.animTimes.assign(animTimesSet.begin(), animTimesSet.end());
-		enh.animTimes.back() -= 1; // prevents last frame from becoming first frame
-		std::vector<Vector3>& pVertices = enh.vertices;
-		std::vector<uint32_t>& pNormals = enh.normals;
-		size_t& perFrame = enh.perFrame;
-		for (auto& mat : mesh.groupIndices)
-			perFrame += mat.size();
-		pVertices.reserve(perFrame * enh.animTimes.size());
-		pNormals.reserve(perFrame * enh.animTimes.size());
-		for (size_t frame = 0; frame < enh.animTimes.size(); ++frame) {
-			const Vector3* intVertices = (const Vector3*)model->interpolate(enh.animTimes[frame]);
-			const Vector3* intNormals = model->interpolateNormals(enh.animTimes[frame]);
-			for (auto& mat : mesh.groupIndices) {
-				for (auto& grp : mat) {
-					pVertices.push_back(intVertices[grp.vertex]);
-					pNormals.push_back(NormalToR10G10B10A2(intNormals[grp.normal].normal()));
-				}
+		if (!enh.animTimes.empty())
+			enh.animTimes.back() -= 1; // prevents last frame from becoming first frame
+		const auto& nf = anim.normalFrames;
+		enh.normalTimes.assign(nf.frameTimes.begin(), nf.frameTimes.end());
+		const uint32_t nv = anim.numVertices, perKey = 2 + (nv + 2) / 3;
+		const uint32_t nn = nf.numFrames >= 2 ? nf.numNormals : 0, perNormalKey = (nn + 3) / 4;
+		std::vector<uint32_t>& w = enh.words;
+		w.assign(ANIM_HEADER_WORDS, 0);
+		w[0] = perKey;
+		for (int c = 0; c < 3; c++) {
+			const auto& ac = anim.coords[c];
+			w[1 + c] = (uint32_t)w.size();
+			w[4 + c] = std::min<uint32_t>(ac.numFrames, ANIM_MAX_KEYS);
+			for (uint32_t k = 0; k < w[4 + c]; k++) {
+				uint32_t add, mul;
+				memcpy(&add, &ac.vertadd[k], 4);
+				memcpy(&mul, &ac.vertmul[k], 4);
+				w.push_back(add);
+				w.push_back(mul);
+				const auto& packed = ac.verts[k];
+				for (uint32_t i = 0; i < perKey - 2; i++)
+					w.push_back(i < packed.size() ? packed[i] : 0);
 			}
 		}
+		w[7] = (uint32_t)w.size();
+		w[8] = perNormalKey;
+		w[9] = nn ? std::min<uint32_t>(nf.numFrames, ANIM_MAX_KEYS) : 0;
+		for (uint32_t k = 0; k < w[9]; k++)
+			for (uint32_t i = 0; i < perNormalKey; i++) {
+				uint32_t word = 0;
+				for (uint32_t j = 0; j < 4 && 4 * i + j < nn; j++)
+					word |= (uint32_t)nf.norms[k][4 * i + j] << (8 * j);
+				w.push_back(word);
+			}
+		// an HD model whose original Mesh3 doesn't fit the animation stands still (as before)
+		if (const ReplacementBinding* rb = staticModel->getReplacementBinding())
+			if (!rb->usable || rb->original.numVertices != anim.numVertices)
+				w[10] |= 1;
+		w[11] = nv;
+		w[12] = nn;
 		return enh;
 	}
+	// the packed key and blend of an instance at an animation time, as Anim::interpolate picks them
+	static uint32_t keyAt(const std::vector<uint32_t>& times, uint32_t animtime, float& blend) {
+		const size_t n = std::min<size_t>(times.size(), ANIM_MAX_KEYS);
+		blend = 0.0f;
+		if (n < 2)
+			return 0;
+		size_t frame = 0;
+		for (; frame < n - 1; frame++)
+			if (times[frame + 1] >= animtime)
+				break;
+		frame = std::min(frame, n - 2);
+		blend = std::clamp((float)((int64_t)animtime - times[frame]) / (float)std::max<int64_t>((int64_t)times[frame + 1] - times[frame], 1), 0.0f, 1.0f);
+		return (uint32_t)frame;
+	}
+	// the instance's three words: per axis its key (10 bits) and blend (16 bits); in their top 6
+	// bits the normals' key (6 + 4 bits) and blend (6 bits)
+	void instanceWords(uint32_t time, uint32_t out[3]) const {
+		const uint32_t animtime = ((int32_t)time < 0 ? 0u : time) % duration;
+		for (int c = 0; c < 3; c++) {
+			float t;
+			const uint32_t k = keyAt(axisTimes[c], animtime, t);
+			out[c] = k | (uint32_t)std::lround(t * 65535.0f) << 10;
+		}
+		float nt;
+		const uint32_t nk = keyAt(normalTimes, animtime, nt);
+		out[0] |= (nk & 63) << 26;
+		out[1] |= ((nk >> 6) & 15) << 26;
+		out[2] |= (uint32_t)std::lround(nt * 63.0f) << 26;
+	}
 };
+
+// A mesh's AnimBind (see DilAnim): per draw vertex 6 words, its position and its normal, each
+// [v0 | v1 << 16, v2 | half(a) << 16, half(b) | half(c) << 16]: v1 0xFFFF the animated vertex
+// (normal) v0 itself (v0 0xFFFF: none, the rest pose), else the triangle v0 v1 v2 and the place
+// a, b, c in its frame (the two edges from v0 and the normal). Indices into the animation's
+// vertices (normals), the files' order (the inverse of the mesh's remappers).
+static std::vector<uint32_t> BakeAnimBind(StaticModel* staticModel)
+{
+	staticModel->prepare();
+	const Mesh& mesh = staticModel->mesh;
+	const ReplacementBinding* rb = staticModel->getReplacementBinding();
+	auto inverse = [](const DynArray<uint16_t>& remap, size_t count) {
+		std::vector<uint32_t> inv(count, 0xFFFF);
+		for (size_t i = 0; i < remap.size(); i++)
+			if (remap[i] < count && i < 0xFFFF)
+				inv[remap[i]] = (uint32_t)i;
+		return inv;
+	};
+	std::vector<uint32_t> words;
+	auto direct = [&](uint32_t index) {
+		words.push_back((index & 0xFFFF) | 0xFFFF0000u);
+		words.push_back(0);
+		words.push_back(0);
+	};
+	auto triangle = [&](const ReplacementBinding::Bind& b, const std::vector<uint32_t>& inv) {
+		uint32_t v[3];
+		for (int j = 0; j < 3; j++) {
+			v[j] = b.v[j] < inv.size() ? inv[b.v[j]] : 0xFFFF;
+			if (v[j] == 0xFFFF) { direct(0xFFFF); return; }
+		}
+		words.push_back(v[0] | v[1] << 16);
+		words.push_back(v[2] | (uint32_t)FloatToHalf(b.a) << 16);
+		words.push_back(FloatToHalf(b.b) | (uint32_t)FloatToHalf(b.c) << 16);
+	};
+	if (rb && rb->usable) {
+		const Mesh& om = rb->original;
+		const std::vector<uint32_t> invV = inverse(om.vertexRemapper, om.vertices.size() / 3);
+		for (auto& grp : mesh.groupIndices)
+			for (auto& t : grp) {
+				if (t.vertex < rb->vertices.size()) triangle(rb->vertices[t.vertex], invV); else direct(0xFFFF);
+				if (t.normal < rb->normals.size()) triangle(rb->normals[t.normal], invV); else direct(0xFFFF);
+			}
+	}
+	else if (rb) { // an HD model that can't follow: the rest pose
+		for (auto& grp : mesh.groupIndices)
+			for (size_t i = 0; i < grp.size(); i++) { direct(0xFFFF); direct(0xFFFF); }
+	}
+	else {
+		const std::vector<uint32_t> invV = inverse(mesh.vertexRemapper, mesh.vertices.size() / 3);
+		const std::vector<uint32_t> invN = inverse(mesh.normalRemapper, mesh.normals.size());
+		for (auto& grp : mesh.groupIndices)
+			for (auto& t : grp) {
+				direct(t.vertex < invV.size() ? invV[t.vertex] : 0xFFFF);
+				direct(t.normal < invN.size() ? invN[t.normal] : 0xFFFF);
+			}
+	}
+	return words;
+}
 
 
 // One instance of a draw (the instance vertex buffer)
 struct Instance {
 	Matrix transform; // transposed: its columns
-	uint32_t frameStart = 0, nextFrameStart = 0; // the key frames' first vertex in the animation buffers
-	float blend = 0.0f;
+	uint32_t anim[3] = {}; // animated: its keys and blends (DilAnim::instanceWords)
 	uint32_t flags = 0;
 };
 static_assert(sizeof(Instance) == 80);
@@ -827,6 +1058,19 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
 	std::map<StaticModel*, bool> hasBark; // a tree's model with bark (SEFLAG_BARE draws only that)
 	std::map<AnimatedModel*, DilAnim> animMap;
+	std::map<StaticModel*, RefCntAutoPtr<IBuffer>> animBinds; // per animated mesh (BakeAnimBind)
+	RefCntAutoPtr<IBuffer> normalTable;
+	// the ray-traced shadows' animated poses built this frame (a few a frame, the rest later)
+	uint64_t poseFrame = ~0ull;
+	int posesBuilt = 0;
+	IBuffer* animBind(StaticModel* staticModel, IRenderDevice* device) {
+		auto& b = animBinds[staticModel];
+		if (!b) {
+			const std::vector<uint32_t> words = BakeAnimBind(staticModel);
+			b = CreateStructuredBuffer(device, "Anim binding", words.data(), words.size() * 4);
+		}
+		return b;
+	}
 	// Textures (one binding per texture), and the frame's environment (the cloud map)
 	RefCntAutoPtr<IPipelineResourceSignature> signature, envSignature, animSignature;
 	// [animated][alpha test]
@@ -837,7 +1081,9 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// emissive map (anyEmissive)
 	RefCntAutoPtr<IPipelineState> giEmitPipelines[2][2];
 	bool anyEmissive = false;
-	std::map<texture, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
+	// per texture and material colour (Material::colour, its MaterialBuffer in the binding)
+	std::map<std::pair<texture, std::array<float, 3>>, RefCntAutoPtr<IShaderResourceBinding>> textureBindings;
+	std::vector<RefCntAutoPtr<IBuffer>> materialBuffers;
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
 	ITextureView* envCloudMap = nullptr;
@@ -888,6 +1134,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "ormMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "emissiveMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "heightMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "MaterialBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -940,8 +1187,9 @@ void DiligentEnhancedSceneRenderer::init()
 		ferr("Diligent: could not create the enhanced scene environment signature.");
 
 	const PipelineResourceDesc animResources[] = {
-		{ SHADER_TYPE_VERTEX, "AnimPositions", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
-		{ SHADER_TYPE_VERTEX, "AnimNormals", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX, "AnimKeys", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX, "AnimBind", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_VERTEX, "NormalTable", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	PipelineResourceSignatureDesc animSigDesc;
 	animSigDesc.Name = "Enhanced scene animation";
@@ -951,6 +1199,14 @@ void DiligentEnhancedSceneRenderer::init()
 	device->CreatePipelineResourceSignature(animSigDesc, &_impl->animSignature);
 	if (!_impl->animSignature)
 		ferr("Diligent: could not create the enhanced scene animation signature.");
+	{
+		// the original's 256 normals, for the animations' normal key frames
+		std::vector<float> table;
+		for (const Vector3& n : Mesh::s_normalTable)
+			table.insert(table.end(), { n.x, n.y, n.z });
+		_impl->normalTable = CreateStructuredBuffer(device, "Normal table", table.data(), table.size() * 4);
+		_impl->animSignature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "NormalTable")->Set(_impl->normalTable->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+	}
 
 	const std::string source = std::string(g_cloudShaderCode) + esShaderCode;
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
@@ -982,8 +1238,7 @@ void DiligentEnhancedSceneRenderer::init()
 	std::vector<LayoutElement> layouts[2];
 	layouts[0] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False} };
 	instanceElements(layouts[0], 3, 3);
-	layouts[1] = { LayoutElement{0, 0, 2, VT_FLOAT32, False} };
-	instanceElements(layouts[1], 1, 1);
+	layouts[1] = layouts[0]; // animated: the same, the rest pose for what the animation doesn't move
 
 	for (int shadow = 0; shadow < 2; shadow++) {
 		for (int anim = 0; anim < 2; anim++) {
@@ -1084,8 +1339,7 @@ void DiligentEnhancedSceneRenderer::init()
 	std::vector<LayoutElement> motionLayouts[2];
 	motionLayouts[0] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False} };
 	motionElements(motionLayouts[0], 3, 3);
-	motionLayouts[1] = { LayoutElement{0, 0, 2, VT_FLOAT32, False} };
-	motionElements(motionLayouts[1], 1, 1);
+	motionLayouts[1] = motionLayouts[0];
 	for (int anim = 0; anim < 2; anim++) {
 		for (int alpha = 0; alpha < 2; alpha++) {
 			GraphicsPipelineStateCreateInfo ci;
@@ -1170,6 +1424,9 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 	work();
 	for (auto& t : pool)
 		t.join();
+	// the animated meshes' bindings (their HD models' bindings made on the cores above)
+	for (AnimatedModel* animModel : anims)
+		_impl->animBind(animModel->getStaticModel(), device);
 	g_deferUploads = false;
 	const auto c1 = std::chrono::steady_clock::now();
 	for (size_t i = 0; i < meshes.size(); i++)
@@ -1305,10 +1562,24 @@ void DiligentEnhancedSceneRenderer::render()
 		_impl->noEmission = pixel(0, 0, 0, 0);
 		_impl->noHeight = pixel(255, 255, 255);   // 1x1: no relief, the shader skips the parallax
 	}
-	auto getBinding = [&](texture tex, const std::string& filename) -> IShaderResourceBinding* {
-		auto& srb = _impl->textureBindings[tex];
+	auto getBinding = [&](texture tex, const Material& mat) -> IShaderResourceBinding* {
+		const std::string& filename = mat.textureFilename;
+		auto& srb = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
 		if (!srb) {
 			_impl->signature->CreateShaderResourceBinding(&srb, true);
+			{
+				const float colour[4] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f };
+				BufferDesc bd;
+				bd.Name = "Material colour";
+				bd.Size = sizeof(colour);
+				bd.BindFlags = BIND_UNIFORM_BUFFER;
+				bd.Usage = USAGE_IMMUTABLE;
+				BufferData init{ colour, sizeof(colour) };
+				RefCntAutoPtr<IBuffer> buffer;
+				device->CreateBuffer(bd, &init, &buffer);
+				srb->GetVariableByName(SHADER_TYPE_PIXEL, "MaterialBuffer")->Set(buffer);
+				_impl->materialBuffers.push_back(buffer);
+			}
 			auto overrideMap = [&](const char* suffix) -> texture {
 				std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
 					float tint[3];
@@ -1337,15 +1608,7 @@ void DiligentEnhancedSceneRenderer::render()
 	std::vector<MotionInstance> motionInstances;
 	// an instance's key frames and the blend between them at an animation time
 	auto keyFrames = [](Instance& inst, const DilAnim* enhAnim, AnimatedModel* animModel, uint32_t time) {
-		uint32_t animtime = time % animModel->anim.duration;
-		size_t frame = 0;
-		for (; frame < enhAnim->animTimes.size() - 1; frame++)
-			if (enhAnim->animTimes[frame + 1] >= animtime)
-				break;
-		frame = std::min(frame, enhAnim->animTimes.size() - 2);
-		inst.blend = std::clamp((float)((int64_t)animtime - enhAnim->animTimes[frame]) / (float)(enhAnim->animTimes[frame + 1] - enhAnim->animTimes[frame]), 0.0f, 1.0f);
-		inst.frameStart = (uint32_t)frame * enhAnim->frameVertices();
-		inst.nextFrameStart = (uint32_t)(frame + 1) * enhAnim->frameVertices();
+		enhAnim->instanceWords(time, inst.anim);
 	};
 	// Draws the scene's meshes, only the static shadow casters into the bound shadow map, or the
 	// motion vectors of the meshes that moved or animated since the last frame (FSR 3.1, into the
@@ -1365,7 +1628,7 @@ void DiligentEnhancedSceneRenderer::render()
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
 			const int alpha = mat.alphaTest ? 1 : 0;
-			IShaderResourceBinding* srb = getBinding(it.second.tex, mat.textureFilename);
+			IShaderResourceBinding* srb = getBinding(it.second.tex, mat);
 
 			auto* model = it.first.second;
 			auto* staticModel = model->getStaticModel();
@@ -1387,8 +1650,9 @@ void DiligentEnhancedSceneRenderer::render()
 			if (enhAnim && !enhAnim->binding) {
 				DilAnim* a = const_cast<DilAnim*>(enhAnim);
 				_impl->animSignature->CreateShaderResourceBinding(&a->binding, true);
-				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimPositions")->Set(a->animVertices->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
-				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimNormals")->Set(a->animNormals->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+				a->bind = _impl->animBind(staticModel, device);
+				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimKeys")->Set(a->keys->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+				a->binding->GetVariableByName(SHADER_TYPE_VERTEX, "AnimBind")->Set(a->bind->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
 			}
 
 			// one draw per team colour (the UV set): the instances keep their own key frame and flags
@@ -1431,9 +1695,9 @@ void DiligentEnhancedSceneRenderer::render()
 							memset(mapped, 0, 16);
 							*(uint32_t*)mapped = startVertex;
 							ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
-							IBuffer* buffers[2] = { enhMesh->texcoords[prevColor], instanceBuffer };
-							const Uint64 offsets[2] = { (Uint64)startVertex * 8, instanceOffset };
-							ctx->SetVertexBuffers(0, 2, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+							IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
+							const Uint64 offsets[4] = { (Uint64)startVertex * 12, (Uint64)startVertex * 4, (Uint64)startVertex * 8, instanceOffset };
+							ctx->SetVertexBuffers(0, 4, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)count, startIndex, 0 });
 						}
 						else
@@ -1648,7 +1912,7 @@ void DiligentEnhancedSceneRenderer::render()
 						if (!gm.alphaTest)
 							continue;
 						texture tex = scene->texCache.getTexture(gm.textureFilename.c_str());
-						IShaderResourceBinding* tsrb = getBinding(tex, gm.textureFilename);
+						IShaderResourceBinding* tsrb = getBinding(tex, gm);
 						auto& grp = mesh.rtGroups[g];
 						grp.alphaTexture = (ITextureView*)tsrb->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Get();
 						const auto& uvl = m.uvLists[0];
@@ -1664,7 +1928,7 @@ void DiligentEnhancedSceneRenderer::render()
 				const DilAnim* anim = nullptr;
 				if (model != staticModel) {
 					auto at = _impl->animMap.find((AnimatedModel*)model);
-					if (at != _impl->animMap.end() && at->second.animTimes.size() >= 2)
+					if (at != _impl->animMap.end() && at->second.animTimes.size() >= 2 && at->second.duration > 0)
 						anim = &at->second;
 				}
 				for (SceneEntity* ent : it.second.list) {
@@ -1672,10 +1936,38 @@ void DiligentEnhancedSceneRenderer::render()
 						continue;
 					IBottomLevelAS* blas = nullptr;
 					if (anim) {
-						Instance inst;
-						keyFrames(inst, anim, (AnimatedModel*)model, ent->animTime);
-						const uint32_t frame = inst.frameStart / std::max(anim->frameVertices(), 1u);
-						blas = rts->blas(ctx, anim, frame, anim->animVertices, (uint64_t)frame * anim->frameVertexBytes, anim->frameVertices(), mesh.indices, mesh.rtGroups);
+						// the key frame's structure, cached (DiligentRayShadows drops the ones unused
+						// for a while); a new one's pose worked out here, at most a few a frame
+						const uint32_t animtime = ((int32_t)ent->animTime < 0 ? 0u : ent->animTime) % anim->duration;
+						float t;
+						const uint32_t frame = DilAnim::keyAt(anim->animTimes, animtime, t);
+						blas = rts->cached(anim, frame);
+						if (_impl->poseFrame != frameIndex) {
+							_impl->poseFrame = frameIndex;
+							_impl->posesBuilt = 0;
+						}
+						if (!blas && _impl->posesBuilt < 24) {
+							_impl->posesBuilt++;
+							auto* animModel = (AnimatedModel*)model;
+							const Vector3* v = (const Vector3*)animModel->interpolate(anim->animTimes[frame]);
+							std::vector<Vector3> pose;
+							pose.reserve(mesh.totVertices);
+							for (auto& grp : staticModel->mesh.groupIndices)
+								for (auto& tup : grp)
+									pose.push_back(v[tup.vertex]);
+							BufferDesc pd;
+							pd.Name = "RT pose";
+							pd.Size = std::max<uint64_t>(pose.size() * 12, 12);
+							pd.BindFlags = BIND_RAY_TRACING;
+							pd.Usage = USAGE_IMMUTABLE;
+							BufferData init{ pose.data(), pose.size() * 12 };
+							RefCntAutoPtr<IBuffer> poseBuffer;
+							device->CreateBuffer(pd, &init, &poseBuffer);
+							if (poseBuffer)
+								blas = rts->blas(ctx, anim, frame, poseBuffer, 0, mesh.totVertices, mesh.indices, mesh.rtGroups, true);
+						}
+						if (!blas)
+							continue;
 					}
 					else
 						blas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
