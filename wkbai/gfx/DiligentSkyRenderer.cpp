@@ -10,6 +10,7 @@
 // the fog follows the rows' values, interpolated in between as the original's vertex fog is.
 
 #include "DiligentSkyRenderer.h"
+#include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "DiligentClouds.h"
 #include "bitmap.h"
@@ -965,6 +966,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
+		LoadingCompilingShader(entryPoint); // (the loading screen)
 		device->CreateShader(sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile sky shader %s", entryPoint);

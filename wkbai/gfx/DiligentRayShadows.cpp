@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentRayShadows.h"
+#include "../util/LoadingProgress.h"
 #include "../util/util.h"
 #include "../terrain.h"
 #include <algorithm>
@@ -317,6 +318,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = "Ray-traced shadows";
 		RefCntAutoPtr<IShader> s;
+		LoadingCompilingShader(entry); // (the loading screen)
 		device->CreateShader(sci, &s);
 		if (!s)
 			printf("Ray-traced shadows: could not compile %s (DXC, shader model 6.5): off\n", entry);
@@ -336,6 +338,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 			sci.Desc.ShaderType = type;
 			sci.Desc.Name = "Ray-traced water reflections";
 			RefCntAutoPtr<IShader> s;
+			LoadingCompilingShader(entry); // (the loading screen)
 			device->CreateShader(sci, &s);
 			if (!s)
 				printf("Ray-traced reflections: could not compile %s (DXC, shader model 6.5): off\n", entry);

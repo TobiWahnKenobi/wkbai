@@ -8,6 +8,7 @@
 // Diligent has no such vertex format.
 
 #include "DiligentEnhancedSceneRenderer.h"
+#include "../util/LoadingProgress.h"
 #include <thread>
 #include <array>
 #include <mutex>
@@ -1304,6 +1305,7 @@ void DiligentEnhancedSceneRenderer::init()
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
+		LoadingCompilingShader(entryPoint); // (the loading screen)
 		device->CreateShader(sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile enhanced scene shader %s", entryPoint);
@@ -1516,7 +1518,7 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 	}
 	std::vector<DilMesh> madeMeshes(meshes.size());
 	std::vector<DilAnim> madeAnims(anims.size());
-	std::atomic<size_t> next = 0;
+	std::atomic<size_t> next = 0, finished = 0;
 	const size_t total = meshes.size() + anims.size();
 	auto work = [&]() {
 		for (size_t i; (i = next++) < total; ) {
@@ -1524,14 +1526,24 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 				madeMeshes[i] = DilMesh::create(meshes[i], device);
 			else
 				madeAnims[i - meshes.size()] = DilAnim::create(anims[i - meshes.size()], device);
+			finished++;
 		}
 	};
 	g_deferUploads = true;
 	const unsigned threads = std::clamp(std::thread::hardware_concurrency(), 1u, 16u);
+	// while the game loads, the main thread draws the loading screen (its count) instead of
+	// working: the cores all work
+	const bool loading = LoadingActive();
 	std::vector<std::thread> pool;
-	for (unsigned t = 1; t < threads && t < total; t++)
+	for (unsigned t = loading ? 0 : 1; t < threads && t < total; t++)
 		pool.emplace_back(work);
-	work();
+	if (loading)
+		while (finished < total) {
+			LoadingCount(finished, total);
+			std::this_thread::sleep_for(std::chrono::milliseconds(4));
+		}
+	else
+		work();
 	for (auto& t : pool)
 		t.join();
 	// the animated meshes' bindings (their HD models' bindings made on the cores above)

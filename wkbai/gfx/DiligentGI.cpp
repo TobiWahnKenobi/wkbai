@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentGI.h"
+#include "../util/LoadingProgress.h"
 #include "DiligentClouds.h"
 #include "renderer_diligent.h"
 #include "RenderSettings.h"
@@ -249,6 +250,7 @@ void CreateGIResources(DiligentGfx* gfx)
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = "Dynamic GI";
 		RefCntAutoPtr<IShader> s;
+		LoadingCompilingShader(entry); // (the loading screen)
 		device->CreateShader(sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile the dynamic GI shader %s", entry);

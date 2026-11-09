@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "server.h"
+#include "util/LoadingProgress.h"
 #include <set>
 #include "file.h"
 #include "util/GSFileParser.h"
@@ -86,9 +87,11 @@ void Server::loadSaveGame(const char * filename)
 			std::string gsFileName = gsf.nextString(true);
 			gameSetFile = gsFileName;
 			int version = g_settings.at("gameVersion").get<int>();
+			LoadingEnterStep(LOADING_GAME_SET);
 			auto loaded = std::make_shared<GameSet>(gsFileName.c_str(), version);
 			InstallAIAggressionOverrides(*loaded);
 			gameSet = loaded;
+			LoadingEnterStep(LOADING_LEVEL);
 			NetPacketWriter msg(NETCLIMSG_GAME_SET);
 			msg.writeStringZ(gsFileName);
 			msg.writeUint8((uint8_t)version);
@@ -1004,8 +1007,10 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 		case Tags::GAMEOBJ_MAP: {
 			std::string mapfp = gsf.nextString(true);
 			mapFile = mapfp;
+			LoadingDetail("the map");
 			this->terrain = new Terrain();
 			this->terrain->readFromFile(mapfp.c_str());
+			LoadingDetail("the level's objects");
 			NetPacketWriter packet(NETCLIMSG_TERRAIN_SET);
 			packet.writeStringZ(mapfp);
 			sendToAll(packet);

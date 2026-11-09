@@ -34,6 +34,7 @@
 //     and upscales the composite, and a copy puts its result into the back buffer.
 
 #include "DiligentPostProcess.h"
+#include "../util/LoadingProgress.h"
 #include "DiligentFsr3.h"
 #include "GpuProfiler.h"
 #include "DiligentClouds.h"
@@ -732,6 +733,7 @@ struct DiligentPostProcess::Impl {
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entry;
 		RefCntAutoPtr<IShader> s;
+		LoadingCompilingShader(entry); // (the loading screen)
 		device->CreateShader(sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile post-processing shader %s", entry);

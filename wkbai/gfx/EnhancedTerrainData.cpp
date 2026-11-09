@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "EnhancedTerrainData.h"
+#include "../util/LoadingProgress.h"
 #include "../terrain.h"
 #include "TextureCache.h"
 #include "bitmap.h"
@@ -35,7 +36,10 @@ static constexpr float BUMP_NORMAL_UP = 0.05f;
 void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::map<TerrainTexture*, EnhancedTerrainTexture>& textures)
 {
 	// Load terrain color textures
+	LoadingDetail("tile textures");
+	size_t groupsDone = 0;
 	for (const auto &grp : terrain->texDb.groups) {
+		LoadingCount(groupsDone++, terrain->texDb.groups.size());
 		printf("%s\n", grp.first.c_str());
 		for (const auto &tex : grp.second->textures) {
 			EnhancedTerrainTexture ld;

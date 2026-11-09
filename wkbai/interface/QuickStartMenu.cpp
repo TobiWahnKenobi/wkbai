@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "QuickStartMenu.h"
+#include "../util/LoadingProgress.h"
 #include "../file.h"
 #include "../imgui/imgui.h"
 #include "../imguiimpl.h"
@@ -487,6 +488,8 @@ void QuickStartMenu::launchGame()
 		if (fe)
 			fe->open("mpguest");
 		bool inLobby = true, leave = false;
+		// (its load starts when the game set comes: Client, LoadingBegin)
+		LoadingSetPump([&cliui]() { cliui.loadingFrame(); });
 
 		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
@@ -601,6 +604,8 @@ void QuickStartMenu::launchGame()
 				cliui.iter();
 			runDiscordCallbacks();
 		}
+		LoadingSetPump(nullptr);
+		LoadingAbort();
 		if (leave)
 			leaveAction = "exit_to_menu";
 		else {
@@ -664,7 +669,11 @@ void QuickStartMenu::launchGame()
 		printf("Starting %s\n", savfile.c_str());
 		std::mutex srvMutex;
 		std::atomic<bool> stopServer = false;
-		std::thread srvThread([this, savfile, replay, recordName, replayLevel, replaySeed, replaySettings, replaySlots, &srvMutex, &stopServer]() {
+		// the loading screen's progress from here (the server's thread reads the game set, the
+		// map and the level; meanwhile this thread draws the loading screen)
+		LoadingBegin();
+		std::atomic<bool> serverLoading = true;
+		std::thread srvThread([this, savfile, replay, recordName, replayLevel, replaySeed, replaySettings, replaySlots, &srvMutex, &stopServer, &serverLoading]() {
 			tracy::SetThreadName("Server");
 			srvMutex.lock();
 			server->loadSaveGame(savfile.c_str());
@@ -722,6 +731,7 @@ void QuickStartMenu::launchGame()
 			if (!recordName.empty() && !server->startRecording(g_userPath / "saved" / "Recordings" / PathFromUtf8(recordName),
 				fromLevel ? skirmishMenu.setupJson(level, server->lastSeed) : std::string()))
 				printf("Can't record the game to %s\n", recordName.c_str());
+			serverLoading = false;
 			srvMutex.unlock();
 			while (!g_windowQuit && !stopServer) {
 				srvMutex.lock();
@@ -768,8 +778,17 @@ void QuickStartMenu::launchGame()
 		bool onServerUi = false;
 		gameRunning = modeChosen == MODE_MULTIPLAYER_HOST;
 		listingTime = 0;
+		// the work that blocks this thread while the game loads draws loading frames
+		LoadingSetPump([&cliui]() { cliui.loadingFrame(); });
 
 		while (!g_windowQuit && !cliui.wantsToLeave()) {
+			// while the server's thread loads the game: the loading screen alone (the client has
+			// nothing yet, and netHandle would wait for the server's lock)
+			if (serverLoading) {
+				Matchmaking::get().tick();
+				cliui.loadingFrame();
+				continue;
+			}
 			// Kingmaker campaign: the province is won (CONQUER_LEVEL)
 			if (server->levelConquered && !campaignProvince.empty())
 				cliui.leaveAction = "campaign_conquered";
@@ -822,6 +841,8 @@ void QuickStartMenu::launchGame()
 		}
 		if (onServerUi)
 			srvMutex.unlock();
+		LoadingSetPump(nullptr);
+		LoadingAbort(); // (left before it loaded)
 
 		stopServer = true;
 		srvThread.join();

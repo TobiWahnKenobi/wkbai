@@ -87,7 +87,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// this computer's mods (ModManifest), to the host before the hello
 	void sendModManifest();
 	// The loading screen's rows (NETCLIMSG_LOADING_STAGES): stage, colour index, this client's own
-	struct LoadingRow { int stage, colour; bool own; std::string name; };
+	struct LoadingRow { int stage, colour; bool own; std::string name; }; // (stage: wkbai's loading percentage, 0-100)
 	std::vector<LoadingRow> loadingRows;
 	// The host's AI General files being received (NETCLIMSG_GAME_SET_FILE)
 	std::map<std::string, std::string> hostFiles;

@@ -85,6 +85,9 @@ struct DiligentGfx : IRenderer
 	// water's surfaces are drawn into it), or null; FinishLightingPrepass: the masks
 	// (shadows.lightRtMask and lightAo, FogBuffer.LightMasks) and the scene's targets bound again
 	virtual bool LightingPrepassWanted() = 0;
+	// The post-processing's shaders and pipelines made now (else in the first frame that uses
+	// it): before a level's first frame, with the loading screen moving
+	virtual void PreparePostProcessing() = 0;
 	virtual Diligent::ITextureView* BeginLightingPrepass() = 0;
 	virtual void FinishLightingPrepass(const Camera& camera) = 0;
 	// In the depth pre-pass, after the ground's and the water's depth and before the models': the

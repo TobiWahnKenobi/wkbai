@@ -53,6 +53,9 @@ struct ClientInterface {
 	TerrainSpriteRenderer* terrainSpriteRenderer;
 
 	void iter();
+	// A frame with the loading screen alone (LoadingProgress's pump, and while the local server
+	// loads): drawn from the work that blocks the main thread, between frames
+	void loadingFrame();
 	void render();
 
 	void updateTerrain();
@@ -177,7 +180,15 @@ private:
 	// the original's loading screen over everything until the level has been drawn for a while:
 	// one of Loading Screen 1-9 (random, as WKB.exe 0x706300), the player's stage of 8 with its
 	// bar, and a tip ("Words of Wisdom")
-	void drawLoadingScreen();
+	// (countFrame: a game frame, counted toward the first frames; not a loadingFrame)
+	void drawLoadingScreen(bool countFrame = true);
+	// the loading screen's test screenshots ("benchmark": { "loadingScreenshots": [percent, ...] })
+	void loadingScreenshots();
+	size_t loadingShotsTaken = 0;
+	bool languageLoaded = false; // (the first frame's, or the first loading frame's)
+	// the level's models and their renderer made before the frame (with the loading screen
+	// moving): the model shaders, the game set's models, textures and GPU buffers
+	void prepareLevelBeforeFrame();
 	// the game's statistics (F6) and its timeline of events (F7)
 	GameChronicle chronicle;
 	bool statisticsOpen = false, timelineOpen = false;
@@ -202,7 +213,7 @@ private:
 	const void* loadingFor = nullptr; // the level it was shown for (nullptr: before any)
 	int loadingScreenIndex = 0, loadingTip = 0, framesWithLevel = 0;
 	int loadingStage = 0;
-	uint64_t loadingStageSince = 0;
+	int loadingPercentSent = -1; // (to the server, for the other players' loading screens)
 	bool loadingDone = false;
 	static constexpr float FORMATION_DRAG_MIN = 3.0f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the

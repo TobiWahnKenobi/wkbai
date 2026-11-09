@@ -7,6 +7,7 @@
 // IRenderer. The packed normals/tangents are unpacked in the vertex shader.
 
 #include "DiligentEnhancedTerrainRenderer.h"
+#include "../util/LoadingProgress.h"
 #include "GpuProfiler.h"
 #include <SDL3/SDL_timer.h>
 #include "EnhancedTerrainData.h"
@@ -1750,6 +1751,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	}
 
 	// The water's flow, sea, wave region and river maps (again when the water changes)
+	LoadingDetail("water maps");
 	_impl->buildWaterMaps(device, dgfx->ctx, terrain);
 
 	// Cloud shadows: sky_shadow_map.pcx in the map's sky directory; the original falls back to
@@ -1835,6 +1837,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		sci.Desc.ShaderType = type;
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
+		LoadingCompilingShader(entryPoint); // (the loading screen)
 		device->CreateShader(sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile enhanced terrain shader %s", entryPoint);
@@ -2124,6 +2127,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		}
 	}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
+	LoadingDetail("grass");
 	_impl->buildGrass(device, terrain, TerrainGrassBuilder::BuildDensity(g_renderSettings.grassDensity));
 	AddFloodWater(terrain, lakeVertices, _impl->chunks, CHUNK);
 	if (!lakeVertices.empty()) {

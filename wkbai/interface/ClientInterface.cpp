@@ -58,6 +58,7 @@
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
+#include "../util/LoadingProgress.h"
 
 // The players' colours by index, taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga
 static const ImU32 playerColors[9] = {
@@ -1173,19 +1174,31 @@ void ClientInterface::prewarmLevel()
 	}
 	// the files and textures here, then the GPU's buffers (the animations baked on all cores)
 	const uint64_t t0 = SDL_GetTicksNS();
-	for (Model* model : models) {
-		model->prepare();
-		if (StaticModel* sm = model->getStaticModel())
+	// (the loading screen: a step each, counted per model)
+	if (newLevel)
+		LoadingEnterStep(LOADING_MODELS);
+	for (size_t i = 0; i < models.size(); i++) {
+		models[i]->prepare();
+		if (StaticModel* sm = models[i]->getStaticModel())
 			sm->prepare();
+		if (newLevel)
+			LoadingCount(i + 1, models.size());
 	}
 	const uint64_t t1 = SDL_GetTicksNS();
+	if (newLevel)
+		LoadingEnterStep(LOADING_TEXTURES);
 	// (the level's own models' textures on the GPU at once when the game starts, the game set's
 	// others into RAM, to the GPU when drawn or from the renderer's background queue: the GPU
 	// memory budget; the objects that appear later (a building's new state) the same as those:
 	// uploaded at once there, they stalled the frame for up to a second and a half, the HD play test)
-	for (size_t i = 0; i < models.size(); i++)
+	for (size_t i = 0; i < models.size(); i++) {
 		scene->prewarm(models[i], newLevel && i < fromLevel);
+		if (newLevel)
+			LoadingCount(i + 1, models.size());
+	}
 	const uint64_t t2 = SDL_GetTicksNS();
+	if (newLevel)
+		LoadingEnterStep(LOADING_GPU_BUFFERS);
 	sceneRenderer->prewarm(models);
 	const uint64_t t3 = SDL_GetTicksNS();
 	const uint64_t tFiles = t1 - t0, tTex = t2 - t1, tGpu = t3 - t2;
@@ -1205,10 +1218,14 @@ bool ClientInterface::fogOfWarOn() const
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
 // player's row 138 above it, name at -227 (in the player's colour), "stage/8" at +73, the bar from +130 to +225 (14 high,
 // dark red, filling bright red); "Words of Wisdom" 38 below, over a dark box from -260 to +260,
-// 50 to 230 below, with one of the FRONT_END_TIP_n texts. The stages are what has arrived: the
-// local server's game set, map and level, then the client's, then the first frames drawn.
-void ClientInterface::drawLoadingScreen()
+// 50 to 230 below, with one of the FRONT_END_TIP_n texts. wkbai's bar is LoadingProgress's: the
+// percentage where the original has the stage, and under the rows what is being done (the step,
+// the shader or file, a count such as "Loading the models  812 / 2549").
+void ClientInterface::drawLoadingScreen(bool countFrame)
 {
+	// (the map editor shows none: no loading frames for it either)
+	if (editorOn)
+		LoadingAbort();
 	if (loadingDone || editorOn)
 		return;
 	if (loadingScreenIndex == 0) {
@@ -1222,9 +1239,14 @@ void ClientInterface::drawLoadingScreen()
 				loadingTip = n;
 		}
 	}
-	const Server* srv = client->localServer ? Server::instance : nullptr;
+	// (the local server's state not read while its thread loads the game: the loading frames
+	// are drawn meanwhile)
+	const int loadingStep = LoadingGet().step;
+	const bool serverLoading = client->localServer && loadingStep >= 0 && loadingStep < LOADING_TERRAIN;
+	const Server* srv = client->localServer && !serverLoading ? Server::instance : nullptr;
 	int stage = 1;
-	if (srv && !srv->gameSet) stage = 1;
+	if (serverLoading) stage = loadingStep == LOADING_GAME_SET ? 1 : 2;
+	else if (srv && !srv->gameSet) stage = 1;
 	else if (srv && !srv->terrain) stage = 2;
 	else if (srv && !srv->getLevel()) stage = 3;
 	else if (!client->gameSet) stage = 4;
@@ -1232,18 +1254,30 @@ void ClientInterface::drawLoadingScreen()
 	else if (!client->getLevel()) stage = 6;
 	else if (framesWithLevel < 10) stage = 7;
 	else stage = 8;
-	if (client->getLevel() && client->terrain && ++framesWithLevel >= 30) {
-		loadingDone = true;
-		return;
+	// the game frames with the level, the last step (LoadingProgress's "Starting the game")
+	if (countFrame && client->getLevel() && client->terrain) {
+		static constexpr int FIRST_FRAMES = 30;
+		if (++framesWithLevel >= FIRST_FRAMES) {
+			loadingDone = true;
+			LoadingFinish();
+			return;
+		}
+		LoadingEnterStep(LOADING_FIRST_FRAMES);
+		if (framesWithLevel == 1)
+			LoadingDetail("first frames");
+		LoadingCount(framesWithLevel, FIRST_FRAMES);
 	}
-	if (stage != loadingStage) {
-		loadingStage = stage;
-		loadingStageSince = SDL_GetTicks();
-		client->sendLoadingStage(stage);
+	// (the original's eight stages, for the test screenshot's moment)
+	loadingStage = stage;
+	// how far it is (LoadingProgress: what the load does and the last load's times), to the
+	// other players as a percentage
+	const LoadingView view = LoadingGet();
+	const float progress = view.step >= 0 ? view.progress : std::clamp((stage - 1) / 8.0f, 0.0f, 1.0f);
+	const int percent = std::clamp((int)(progress * 100.0f), 0, 100);
+	if (percent != loadingPercentSent) {
+		loadingPercentSent = percent;
+		client->sendLoadingStage(percent);
 	}
-	// within a stage the bar creeps on (none of them report how far they are), to 90% of it
-	const float within = 0.9f * (1.0f - std::exp(-(float)(SDL_GetTicks() - loadingStageSince) / 1500.0f));
-	const float progress = std::clamp((stage - 1 + within) / 8.0f, 0.0f, 1.0f);
 
 	ImDrawList* dl = ImGui::GetForegroundDrawList();
 	const ImVec2 size = ImGui::GetIO().DisplaySize;
@@ -1265,26 +1299,35 @@ void ClientInterface::drawLoadingScreen()
 		player = srv->clientPlayerObjects[0].get();
 	const std::string name = g_settings.value("playerName", lang.getText("DEFAULT_PLAYER_PROFILE"));
 	const int colour = player ? player->color : 1;
-	auto row = [&](float y, int rowColour, const std::string& rowName, int rowStage, float rowProgress) {
+	// (wkbai: the percentage where the original has "stage/8")
+	auto row = [&](float y, int rowColour, const std::string& rowName, int rowPercent, float rowProgress) {
 		outlined(ImVec2(cx - 227, y), playerColors[(rowColour >= 0 && rowColour < 9) ? rowColour : 1], rowName);
-		outlined(ImVec2(cx + 73, y), IM_COL32(232, 214, 176, 255), std::to_string(rowStage) + "/8");
+		outlined(ImVec2(cx + 73, y), IM_COL32(232, 214, 176, 255), std::to_string(rowPercent) + "%");
 		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 225, y + 16), IM_COL32(96, 0, 0, 255));
 		dl->AddRectFilled(ImVec2(cx + 130, y + 2), ImVec2(cx + 130 + 95 * rowProgress, y + 16), IM_COL32(210, 0, 0, 255));
 	};
 	// a multiplayer game: a row per human player, as the server reports them (this client's from
-	// its own stage, the others' at the start of theirs), 22 px apart; else this player's alone
+	// its own progress, the others' as they reported it), 22 px apart; else this player's alone
+	float y = cy - 140;
 	if (client->loadingRows.size() > 1) {
-		float y = cy - 140;
 		for (const Client::LoadingRow& r : client->loadingRows) {
 			if (r.own)
-				row(y, player ? colour : r.colour, name, stage, progress);
+				row(y, player ? colour : r.colour, name, percent, progress);
 			else
-				row(y, r.colour, r.name, std::max(r.stage, 1), std::clamp((r.stage - 1) / 8.0f, 0.0f, 1.0f));
+				row(y, r.colour, r.name, std::clamp(r.stage, 0, 100), std::clamp(r.stage / 100.0f, 0.0f, 1.0f));
 			y += 22;
 		}
 	}
-	else
-		row(cy - 140, colour, name, stage, progress);
+	else {
+		row(y, colour, name, percent, progress);
+		y += 22;
+	}
+	// what this computer is doing (wkbai's): the step, its detail or count, under the rows
+	if (!view.label.empty()) {
+		dl->PushClipRect(ImVec2(cx - 230, y - 2), ImVec2(cx + 228, y + 20), true);
+		outlined(ImVec2(cx - 227, y), IM_COL32(232, 214, 176, 255), view.label);
+		dl->PopClipRect();
+	}
 	// the tip
 	if (loadingTip) {
 		const std::string title = lang.getText("FRONT_END_TITLE_TIP_OF_THE_DAY");
@@ -1293,6 +1336,93 @@ void ClientInterface::drawLoadingScreen()
 		const std::string tip = lang.getText("FRONT_END_TIP_" + std::to_string(loadingTip));
 		dl->AddText(nullptr, 0.0f, ImVec2(cx - 254, cy + 56), IM_COL32(235, 235, 235, 255), tip.c_str(), nullptr, 508.0f);
 	}
+}
+
+// A frame with the loading screen alone, between the game's frames: LoadingProgress's pump (the
+// terrain renderer, the shaders and the models made on the main thread) and the frames while the
+// local server loads (QuickStartMenu)
+void ClientInterface::loadingFrame()
+{
+	ZoneScopedN("Loading frame");
+	if (!languageLoaded) {
+		lang.load("Languages\\Language.txt");
+		languageLoaded = true;
+	}
+	ImGuiImpl_NewFrame();
+	// (as a frame without a level: no post-processing)
+	if (auto* postGfx = dynamic_cast<DiligentGfx*>(gfx))
+		postGfx->BeginPostProcessing(false, UseEnhancedRenderers(gfx));
+	gfx->ClearFrame(true, true, 0);
+	gfx->BeginDrawing();
+	drawLoadingScreen(false);
+	gfx->InitImGuiDrawing();
+	ImGuiImpl_Render(gfx);
+	loadingScreenshots();
+	gfx->EndDrawing();
+	HandleWindow();
+}
+
+// Test runs: "benchmark": { ..., "loadingScreenshot": "<path>.bmp", "loadingScreenshots": [percent, ...] }
+// saves <path>_<percent>.bmp once the bar is past each of those percentages
+void ClientInterface::loadingScreenshots()
+{
+	if (!BenchmarkEnabled())
+		return;
+	const nlohmann::json& bench = g_settings["benchmark"];
+	if (!bench.is_object() || !bench.contains("loadingScreenshots") || !bench["loadingScreenshots"].is_array())
+		return;
+	const nlohmann::json& list = bench["loadingScreenshots"];
+	const std::string base = bench.value("loadingScreenshot", std::string());
+	if (base.empty() || loadingShotsTaken >= list.size())
+		return;
+	const LoadingView view = LoadingGet();
+	if (view.step < 0 || view.progress * 100.0f < list[loadingShotsTaken].get<float>())
+		return;
+	const int at = list[loadingShotsTaken].get<int>();
+	loadingShotsTaken++;
+	const size_t dot = base.rfind('.');
+	const std::string path = dot == std::string::npos ? base + "_" + std::to_string(at)
+		: base.substr(0, dot) + "_" + std::to_string(at) + base.substr(dot);
+	printf("Loading screenshot %s at %.1f%%, %.0f ms (%s): %s\n", path.c_str(), view.progress * 100.0f, view.elapsedMs,
+		view.label.c_str(), gfx->SaveScreenshot(path.c_str()) ? "saved" : "failed");
+	fflush(stdout);
+}
+
+// The level's models made before its first frame, with the loading screen moving (LoadingTick
+// draws loading frames between the pieces; in the frame it could draw none): the models'
+// renderer and its shaders, then the game set's models, their textures and GPU buffers
+// (prewarmLevel)
+void ClientInterface::prepareLevelBeforeFrame()
+{
+	static const bool prewarm = g_settings.value<bool>("prewarmModels", true);
+	if (!prewarm || loadingDone || editorOn || !client->getLevel() || !client->terrain || !client->gameSet
+		|| prewarmedLevel == client->getLevel())
+		return;
+	ZoneScopedN("Level preparation");
+	LoadingEnterStep(LOADING_MODEL_SHADERS);
+	if (!scene)
+		scene = new Scene(gfx, &client->gameSet->modelCache);
+	if (!sceneRenderer) {
+		if (UseEnhancedRenderers(gfx))
+			sceneRenderer = new DiligentEnhancedSceneRenderer(gfx, scene, &client->camera);
+		else
+			sceneRenderer = new DefaultSceneRenderer(gfx, scene, &client->camera);
+	}
+	prewarmLevel();
+	LoadingEnterStep(LOADING_FIRST_FRAMES);
+	// the post-processing's shaders, if the frames will use it (as in iter: the effects or the fog
+	// of war on)
+	if (auto* dgfx = dynamic_cast<DiligentGfx*>(gfx)) {
+		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom
+			|| g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
+		if (effects || fogOfWarOn()) {
+			LoadingDetail("post-processing");
+			dgfx->PreparePostProcessing();
+		}
+	}
+	// the first frame next: it sets up the ray tracing's shaders and buffers (in the frame: no
+	// loading frames meanwhile)
+	LoadingDetail("ray tracing and the first frame");
 }
 
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
@@ -2385,8 +2515,13 @@ void ClientInterface::iter()
 		arrowCursor = WndCreateCursor("Interface\\C_DEFAULT.TGA");
 		WndSetCursor(arrowCursor);
 		currentCursor = arrowCursor;
-		lang.load("Languages\\Language.txt");
+		if (!languageLoaded)
+			lang.load("Languages\\Language.txt");
+		languageLoaded = true;
 	}
+	prepareLevelBeforeFrame();
+	// (from here a frame is being built: LoadingTick draws none)
+	LoadingSetInFrame(true);
 
 	// The in-game menu (Esc): while it is open, it gets the frame's input and the game none
 	FrontEnd* frontEnd = FrontEnd::get();
@@ -4293,7 +4428,9 @@ void ClientInterface::iter()
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	// (a guest: once the host has sent the rows of the players)
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
-	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4 && rowsIn) {
+	loadingScreenshots();
+	if (BenchmarkEnabled() && !loadingDone && loadingStage >= 4 && rowsIn
+		&& !g_settings.value("benchmark", nlohmann::json::object()).contains("loadingScreenshots")) {
 		static bool shot = false;
 		const std::string path = g_settings.value("benchmark", nlohmann::json::object()).value("loadingScreenshot", std::string());
 		if (!shot && !path.empty()) {
@@ -4400,6 +4537,7 @@ void ClientInterface::iter()
 		}
 	}
 	BenchmarkFrameEnd(client->terrain && client->gameSet);
+	LoadingSetInFrame(false);
 	HandleWindow();
 
 	nextFps++;

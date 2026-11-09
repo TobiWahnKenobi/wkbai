@@ -4,6 +4,7 @@
 
 #define _USE_MATH_DEFINES
 #include "client.h"
+#include "util/LoadingProgress.h"
 #include "WaterDesign.h"
 #include <filesystem>
 #include <fstream>
@@ -158,7 +159,11 @@ void Client::tick()
 				}
 				else {
 					info("Loading game set: %s\n", gsFileName.c_str());
+					// a guest's load starts here (a host's before its server's thread)
+					LoadingBegin();
+					LoadingEnterStep(LOADING_GAME_SET);
 					gameSet = std::make_shared<GameSet>(gsFileName.c_str(), gsVersion);
+					LoadingEnterStep(LOADING_LEVEL);
 				}
 				break;
 			}
@@ -210,6 +215,8 @@ void Client::tick()
 			}
 			case NETCLIMSG_TERRAIN_SET: {
 				std::string mapfp = br.readStringZ();
+				LoadingEnterStep(LOADING_TERRAIN);
+				LoadingDetail("the map");
 				terrain = new Terrain;
 				terrain->readFromFile(mapfp.c_str());
 				if (cliInterface)
@@ -668,10 +675,17 @@ void Client::tick()
 					loadingRows.push_back(std::move(row));
 				}
 				{
-					std::string rows;
-					for (const LoadingRow& r : loadingRows)
-						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " stage " + std::to_string(r.stage) + "]";
-					printf("LOADING rows:%s\n", rows.c_str());
+					// (each row's percentage: printed when one crosses a quarter, or the rows change)
+					std::string rows, quarters;
+					for (const LoadingRow& r : loadingRows) {
+						rows += " [" + r.name + (r.own ? " (own)" : "") + " colour " + std::to_string(r.colour) + " percent " + std::to_string(r.stage) + "]";
+						quarters += r.name + std::to_string(r.colour) + ":" + std::to_string(r.stage / 25) + ";";
+					}
+					static std::string printedQuarters;
+					if (quarters != printedQuarters) {
+						printedQuarters = quarters;
+						printf("LOADING rows:%s\n", rows.c_str());
+					}
 				}
 				break;
 			}
