@@ -247,6 +247,15 @@ void BenchmarkFrameEnd(bool worldLoaded)
 		}
 		report["gpuPassesMs"] = gpuPasses;
 		report["cpuPassesMs"] = cpuPasses;
+		// the slowest frame's passes (a hitch's stage)
+		const ProfileFrame& slow = ProfilerSlowestFrame();
+		nlohmann::json slowCpu = nlohmann::json::object(), slowGpu = nlohmann::json::object();
+		for (const auto& [path, t] : slow.passes) {
+			slowCpu[path] = t.first;
+			if (t.second >= 0)
+				slowGpu[path] = t.second;
+		}
+		report["slowestFrame"] = { { "frame", slow.frame }, { "cpuMs", slow.cpuMs }, { "cpuPassesMs", slowCpu }, { "gpuPassesMs", slowGpu } };
 	}
 	report["frameTimesMs"] = recorded.frameTimes();
 

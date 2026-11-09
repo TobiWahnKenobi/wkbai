@@ -52,6 +52,14 @@ const std::vector<ProfileEntry>& ProfilerEntries();
 const std::vector<float>& ProfilerCpuHistory();
 const std::vector<float>& ProfilerGpuHistory();
 void ProfilerResetTotals();
+// the frame whose passes took the most CPU time since ProfilerResetTotals (the benchmark's
+// "slowestFrame"): per pass its CPU and GPU time (GPU -1: unknown)
+struct ProfileFrame {
+	uint64_t frame = 0;
+	double cpuMs = 0.0;
+	std::vector<std::pair<std::string, std::pair<double, double>>> passes; // path, (cpu, gpu)
+};
+const ProfileFrame& ProfilerSlowestFrame();
 
 struct ProfileScope {
 	explicit ProfileScope(const char* name) { ProfilerBegin(name); }

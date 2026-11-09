@@ -1096,6 +1096,41 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		uint64_t checked = ~0ull;
 	};
 	std::map<std::pair<texture, std::array<float, 3>>, TextureBinding> textureBindings;
+	// a material binding's maps (the override pack's beside its texture: <texture>_albedo,
+	// _normal, _orm, _emissive, _height; .png, .tga, .dds or .ktx2) and its colour buffer; the
+	// maps' files are loaded here (the preload does it for every material: at the first draw a
+	// HD model's four 4096 x 4096 maps were read and decoded then, a stall of up to 1.4 s)
+	void resolveMaps(TextureBinding& e, texture tex, const Material& mat, IRenderDevice* device, Scene* scene) {
+		e.mapsKnown = true;
+		const std::string& filename = mat.textureFilename;
+		const float colour[4] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f };
+		BufferDesc bd;
+		bd.Name = "Material colour";
+		bd.Size = sizeof(colour);
+		bd.BindFlags = BIND_UNIFORM_BUFFER;
+		bd.Usage = USAGE_IMMUTABLE;
+		BufferData init{ colour, sizeof(colour) };
+		device->CreateBuffer(bd, &init, &e.colour);
+		auto overrideMap = [&](const char* suffix) -> texture {
+			std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
+			float tint[3];
+			TextureCache::splitTint(filename, untinted, tint);
+			const std::string base = untinted.substr(0, untinted.find_last_of('.'));
+			for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
+				const std::string name = base + suffix + ext;
+				if (FileExists((scene->texCache.directory + name).c_str()))
+					return scene->texCache.getTexture(name.c_str());
+			}
+			return nullptr;
+		};
+		texture albedo = overrideMap("_albedo");
+		e.maps[0] = albedo ? albedo : tex;
+		e.maps[1] = overrideMap("_normal");
+		e.maps[2] = overrideMap("_orm");
+		e.maps[3] = overrideMap("_emissive");
+		e.maps[4] = overrideMap("_height");
+		anyEmissive |= e.maps[3] != nullptr;
+	}
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
 	texture standIn = nullptr, standInClear = nullptr;
 	RefCntAutoPtr<IShaderResourceBinding> envBinding;
@@ -1408,6 +1443,18 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 	std::vector<AnimatedModel*> anims;
 	std::set<Model*> seen;
 	for (Model* model : models) {
+		// the materials' override maps loaded now (into RAM, to the GPU when drawn), not at the
+		// first draw
+		{
+			const uint32_t* matIds = model->getMaterialIds();
+			for (size_t i = 0; i < model->getNumMaterials(); i++) {
+				const Material& mat = scene->modelCache->getMaterial(matIds[i]);
+				const texture tex = scene->texCache.getTexture(mat.textureFilename.c_str());
+				auto& e = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
+				if (!e.mapsKnown)
+					_impl->resolveMaps(e, tex, mat, device, scene);
+			}
+		}
 		StaticModel* staticModel = model->getStaticModel();
 		if (_impl->meshMap.find(staticModel) == _impl->meshMap.end() && seen.insert(staticModel).second)
 			meshes.push_back(staticModel);
@@ -1595,36 +1642,8 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 		}
 		if (!e.srb) {
-			if (!e.mapsKnown) {
-				e.mapsKnown = true;
-				const float colour[4] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f };
-				BufferDesc bd;
-				bd.Name = "Material colour";
-				bd.Size = sizeof(colour);
-				bd.BindFlags = BIND_UNIFORM_BUFFER;
-				bd.Usage = USAGE_IMMUTABLE;
-				BufferData init{ colour, sizeof(colour) };
-				device->CreateBuffer(bd, &init, &e.colour);
-				auto overrideMap = [&](const char* suffix) -> texture {
-					std::string untinted = filename; // a tinted library texture ("HD\stone#a08060.png") uses its base's maps
-					float tint[3];
-					TextureCache::splitTint(filename, untinted, tint);
-					const std::string base = untinted.substr(0, untinted.find_last_of('.'));
-					for (const char* ext : { ".png", ".tga", ".dds", ".ktx2" }) {
-						const std::string name = base + suffix + ext;
-						if (FileExists((scene->texCache.directory + name).c_str()))
-							return scene->texCache.getTexture(name.c_str());
-					}
-					return nullptr;
-				};
-				texture albedo = overrideMap("_albedo");
-				e.maps[0] = albedo ? albedo : tex;
-				e.maps[1] = overrideMap("_normal");
-				e.maps[2] = overrideMap("_orm");
-				e.maps[3] = overrideMap("_emissive");
-				e.maps[4] = overrideMap("_height");
-				_impl->anyEmissive |= e.maps[3] != nullptr;
-			}
+			if (!e.mapsKnown)
+				_impl->resolveMaps(e, tex, mat, device, scene);
 			// (a texture not on the GPU yet, TouchTexture ~0: a stand-in until it is, then the binding
 			// is made again; the draw never waits for an upload)
 			for (int i = 0; i < 5; i++)

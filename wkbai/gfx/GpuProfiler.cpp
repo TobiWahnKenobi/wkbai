@@ -35,6 +35,7 @@ namespace {
 	std::vector<ProfileEntry> g_entries;
 	std::map<std::string, size_t> g_index;
 	std::vector<float> g_cpuHistory, g_gpuHistory;
+	ProfileFrame g_slowest;
 	constexpr size_t HISTORY = 300;
 
 	ProfileEntry& entry(const std::string& path, int depth)
@@ -95,6 +96,18 @@ namespace {
 			e.lastFrame = f.frame;
 			if (e.depth == 0 && stamps)
 				gpuFrame += s.first;
+		}
+		// the slowest frame on the CPU, its passes
+		double cpuFrame = 0.0;
+		for (auto& [path, s] : sums)
+			if (depths[path] == 0)
+				cpuFrame += s.second;
+		if (cpuFrame > g_slowest.cpuMs) {
+			g_slowest.frame = f.frame;
+			g_slowest.cpuMs = cpuFrame;
+			g_slowest.passes.clear();
+			for (auto& [path, s] : sums)
+				g_slowest.passes.push_back({ path, { s.second, stamps ? s.first : -1.0 } });
 		}
 		// entries not in this frame: their last times stay, marked by lastFrame
 		if (stamps)
@@ -172,6 +185,7 @@ void ProfilerEnd()
 const std::vector<ProfileEntry>& ProfilerEntries() { return g_entries; }
 const std::vector<float>& ProfilerCpuHistory() { return g_cpuHistory; }
 const std::vector<float>& ProfilerGpuHistory() { return g_gpuHistory; }
+const ProfileFrame& ProfilerSlowestFrame() { return g_slowest; }
 
 void ProfilerResetTotals()
 {
@@ -179,4 +193,5 @@ void ProfilerResetTotals()
 		e.gpuTotal = e.cpuTotal = 0.0;
 		e.frames = e.gpuFrames = 0;
 	}
+	g_slowest = ProfileFrame();
 }
