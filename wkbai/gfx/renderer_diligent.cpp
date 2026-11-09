@@ -249,9 +249,9 @@ cbuffer FogBuffer
 	float4 Grade;
 	float4 EdgeFog;
 	float4 LightMasks; // zw: a pixel's size
-	float4 FogSun;    // the haze's tint (DiligentSkyRenderer): the sun's horizontal direction (x, z), the glow's sharpness, its weight (0 off)
-	float4 FogToward; // the sky's colour along the horizon towards the sun (the physical sky's, the clouds' grey)
-	float4 FogAway;   // and away from it
+	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
+	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
+	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -260,15 +260,27 @@ cbuffer FogBuffer
 // (the sun set in smog, the play test of 2026-11-09); FogColor by day
 float3 FogTintDir(float3 d)
 {
-	float l = length(d.xz);
-	if (FogSun.w == 0 || l < 1e-5)
+	if (FogSun.w == 0 || dot(d, d) < 1e-10)
 		return FogColor.rgb;
-	float mu = dot(d.xz / l, FogSun.xy);
-	return mu > 0 ? lerp(FogColor.rgb, FogToward.rgb, pow(mu, FogSun.z) * FogSun.w) : lerp(FogColor.rgb, FogAway.rgb, -mu * FogSun.w);
+	d = normalize(d);
+	// the sky's own horizon along the bearing (its band and the fogged land meet it without a seam)
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 32;
+	int i0 = (int)b % 32, i1 = (i0 + 1) % 32;
+	float3 horizon = lerp(FogHorizon[i0].rgb, FogHorizon[i1].rgb, frac(b));
+	float3 c = lerp(FogColor.rgb, horizon, FogSun.w);
+	// the sun over the haze, cut by the true horizon: it rises out of the fogged sea and land as
+	// out of the sky (the band hid it high above the horizon, the play test of 2026-11-09)
+	float mu = dot(d, FogSun.xyz);
+	if (mu > 0.99 && d.y > -0.004) {
+		float disc = smoothstep(0.99985, 0.99996, mu);
+		float glow = pow(saturate(mu), 2500) * 0.5 + pow(saturate(mu), 300) * 0.04;
+		c += FogSunColour.rgb * (disc + glow * FogSunColour.w) * FogSun.w * saturate((d.y + 0.004) / 0.002);
+	}
+	return c;
 }
 float3 FogRatioDir(float3 d)
 {
-	return FogTintDir(d) / max(FogColor.rgb, 1e-3);
+	return min(FogTintDir(d) / max(FogColor.rgb, 1e-3), 2.5);
 }
 float3 FogTint(float3 worldPos)
 {
@@ -1259,13 +1271,11 @@ struct DiligentRenderer : DiligentGfx
 			cc[20 + i] = lightMasks[i];
 		// the haze's tint along the horizon (the physical sky's), only with its haze
 		const bool tint = shadows.hazeOn && shadows.fogTint[3] != 0.0f;
-		for (int i = 0; i < 4; i++)
+		for (int i = 0; i < 4; i++) {
 			cc[24 + i] = tint ? shadows.fogTint[i] : 0.0f;
-		for (int i = 0; i < 3; i++) {
-			cc[28 + i] = tint ? shadows.fogToward[i] : 1.0f;
-			cc[32 + i] = tint ? shadows.fogAway[i] : 1.0f;
+			cc[28 + i] = shadows.fogSunColour[i];
 		}
-		cc[31] = cc[35] = 0.0f;
+		memcpy(cc + 32, shadows.fogHorizon, sizeof(shadows.fogHorizon));
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1395,7 +1405,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 144, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 656, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

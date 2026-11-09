@@ -237,10 +237,10 @@ struct DiligentGfx : IRenderer
 		Diligent::ITextureView* lightRtMask = nullptr;
 		Diligent::ITextureView* lightAo = nullptr;
 		bool lightPrepass = false;
-		// the haze's tint along the horizon (the physical sky's, DiligentSkyRenderer): the sun's
-		// horizontal direction (x, z), the glow's sharpness, on; the haze's colour towards the sun
-		// and away from it as multiples of hazeColour (FogBuffer.FogSun, FogToward, FogAway)
-		float fogTint[4] = {}, fogToward[3] = { 1, 1, 1 }, fogAway[3] = { 1, 1, 1 };
+		// the haze's tint along the horizon (the physical sky's, DiligentSkyRenderer;
+		// FogBuffer.FogSun, FogSunColour, FogHorizon): towards the true sun and the tint's weight,
+		// the sun's disc through the air and its glow's strength, the sky 2 degrees up by bearing
+		float fogTint[4] = {}, fogSunColour[4] = {}, fogHorizon[32][4] = {};
 	} shadows;
 };
 
