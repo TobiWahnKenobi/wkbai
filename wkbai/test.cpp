@@ -5552,6 +5552,191 @@ void Test_MoonPhases()
 	printf("MOONTEST %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+// Unit history (UnitHistory): on 4 Peaks, three fights in three places, and checks that every
+// death is credited to a unit of the other side: spearmen against weakened spearmen; archers
+// against weakened spearmen (the arrows' kills to the archers); two archers garrisoned in a
+// watch tower against weakened spearmen (the tower's arrows to the archers inside). Then a unit
+// that was hit but is terminated with hit points left (a removal) is no kill, and a save and
+// load keeps the counts. Prints "UNITTEST ok/FAILED ..." and "UNITTEST PASSED/FAILED".
+void Test_UnitHistory()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	std::map<uint32_t, std::pair<int, int>> savedCounts;
+	const std::string saveName = "Save_Games\\wkbai unit history";
+	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8(saveName + ".sav"));
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		server.unitHistory.trace = getenv("WKB_TRACE_KILLS") != nullptr;
+		ServerGameObject* own = server.findObject(1027);
+		ServerGameObject* enemy = server.findObject(1030);
+		const GameSet& gs = *server.gameSet;
+		const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+		const GameObjBlueprint* archer = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Archer");
+		const GameObjBlueprint* towerBp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Watch Tower");
+		const int attack = gs.commands.names.getIndex("Attack");
+		const int garrison = gs.commands.names.getIndex("Garrison");
+		const int hp = gs.items.names.getIndex("Hit Points");
+		if (!own || !enemy || !spear || !archer || attack < 0 || hp < 0) {
+			printf("UNITTEST not set up\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		auto at = [&](const Vector3& base, float x, float z) { Vector3 p = base + Vector3(x, 0, z); p.y = server.terrain->getHeight(p.x, p.z); return p; };
+		struct Fight { const char* name; std::vector<SrvGORef> own, enemy; };
+		std::vector<Fight> fights;
+		auto weaken = [&](std::vector<SrvGORef>& list, float f) { for (auto& r : list) r->setItem(hp, r->getItem(hp) * f); };
+		// 1: spearmen against weakened spearmen
+		{
+			Fight f{ "melee" };
+			const Vector3 b = centre + Vector3(-60, 0, -120);
+			for (int i = 0; i < 6; i++)
+				f.own.emplace_back(server.spawnObject(spear, own, at(b, -8.0f + i * 3.0f, 0.0f), Vector3(0, 0, 0)));
+			for (int i = 0; i < 6; i++)
+				f.enemy.emplace_back(server.spawnObject(spear, enemy, at(b, -8.0f + i * 3.0f, 10.0f), Vector3(0, 3.14159f, 0)));
+			weaken(f.enemy, 0.5f);
+			fights.push_back(std::move(f));
+		}
+		// 2: archers against weakened spearmen 35 m away
+		{
+			Fight f{ "archers" };
+			const Vector3 b = centre + Vector3(-60, 0, 120);
+			for (int i = 0; i < 5; i++)
+				f.own.emplace_back(server.spawnObject(archer, own, at(b, -6.0f + i * 3.0f, 0.0f), Vector3(0, 0, 0)));
+			for (int i = 0; i < 4; i++)
+				f.enemy.emplace_back(server.spawnObject(spear, enemy, at(b, -5.0f + i * 3.0f, 35.0f), Vector3(0, 3.14159f, 0)));
+			weaken(f.enemy, 0.25f);
+			fights.push_back(std::move(f));
+		}
+		// 3: two archers garrisoned in a watch tower
+		ServerGameObject* tower = nullptr;
+		std::vector<SrvGORef> garrisoned;
+		const Vector3 towerAt = centre + Vector3(140, 0, 0);
+		if (towerBp && garrison >= 0) {
+			tower = server.spawnObject(towerBp, own, at(towerAt, 0, 0), Vector3(0, 0, 0));
+			for (int i = 0; i < 2; i++) {
+				ServerGameObject* a = server.spawnObject(archer, own, at(towerAt, -4.0f + i * 8.0f, -10.0f), Vector3(0, 0, 0));
+				garrisoned.emplace_back(a);
+				gs.commands[garrison].execute(a, tower, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			}
+		}
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto run = [&](float seconds, const std::function<void(int)>& each) {
+			const int steps = (int)(seconds * 50.0f);
+			for (int step = 0; step < steps; step++) {
+				if (each)
+					each(step);
+				server.timeManager.pendingMs = server.timeManager.stepMs;
+				if (server.timeManager.step())
+					server.simulate();
+			}
+		};
+		// the archers go into the tower first
+		run(15.0f, nullptr);
+		int inside = 0;
+		if (tower) {
+			const int cat = gs.associations.names.getIndex("Garrison");
+			if (auto it = tower->associates.find(cat); cat >= 0 && it != tower->associates.end())
+				inside = (int)it->second.size();
+			Fight f{ "tower" };
+			for (int i = 0; i < 4; i++)
+				f.enemy.emplace_back(server.spawnObject(spear, enemy, at(towerAt, -5.0f + i * 3.0f, 30.0f), Vector3(0, 3.14159f, 0)));
+			weaken(f.enemy, 0.15f);
+			fights.push_back(std::move(f));
+		}
+		printf("UNITTEST %d archers in the tower\n", inside);
+		auto alive = [](ServerGameObject* o) { return o && !o->deleted && !(o->flags & ServerGameObject::fTerminated) && o->blueprint->name.rfind("Dead ", 0) != 0; };
+		auto nearest = [&](ServerGameObject* from, std::vector<SrvGORef>& list) -> ServerGameObject* {
+			ServerGameObject* best = nullptr;
+			float bd = 1e30f;
+			for (auto& r : list)
+				if (alive(r.get())) {
+					const float d = (r->position - from->position).sqlen2xz();
+					if (d < bd) { bd = d; best = r.get(); }
+				}
+			return best;
+		};
+		run(90.0f, [&](int step) {
+			if (step % 150)
+				return;
+			for (Fight& f : fights) {
+				for (auto& r : f.own)
+					if (alive(r.get()))
+						if (ServerGameObject* tg = nearest(r.get(), f.enemy))
+							gs.commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+				for (auto& r : f.enemy)
+					if (alive(r.get())) {
+						ServerGameObject* tg = f.own.empty() ? tower : nearest(r.get(), f.own);
+						if (tg)
+							gs.commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+					}
+			}
+		});
+		auto dead = [&](std::vector<SrvGORef>& list) { int n = 0; for (auto& r : list) if (!alive(r.get())) n++; return n; };
+		auto kills = [&](std::vector<SrvGORef>& list) { int n = 0; for (auto& r : list) if (r) n += r->kills; return n; };
+		int allEnemyDead = 0, allOwnDead = 0, allOwnKills = 0, allEnemyKills = 0;
+		for (Fight& f : fights) {
+			std::vector<SrvGORef>& ownSide = strcmp(f.name, "tower") == 0 ? garrisoned : f.own;
+			const int enemyDead = dead(f.enemy), ownDead = dead(f.own), ownKills = kills(ownSide), enemyKills = kills(f.enemy);
+			printf("UNITTEST %s: enemy dead %d, own dead %d; own kills %d, enemy kills %d\n", f.name, enemyDead, ownDead, ownKills, enemyKills);
+			for (auto& r : ownSide)
+				if (r)
+					printf("UNITTEST   %s %u %s kills %d\n", f.name, r->id, r->blueprint->name.c_str(), r->kills);
+			check(enemyDead > 0, std::string(f.name) + ": the enemy lost units");
+			check(ownKills > 0, std::string(f.name) + ": our side has kills");
+			allEnemyDead += enemyDead; allOwnDead += ownDead; allOwnKills += ownKills; allEnemyKills += enemyKills;
+		}
+		// (units of one fight may shoot into another: the totals must match)
+		check(allOwnKills == allEnemyDead, "every enemy death credited to our side (" + std::to_string(allOwnKills) + " of " + std::to_string(allEnemyDead) + ")");
+		check(allEnemyKills == allOwnDead, "every own death credited to the enemy (" + std::to_string(allEnemyKills) + " of " + std::to_string(allOwnDead) + ")");
+		if (tower) {
+			check(inside == 2, "two archers went into the tower");
+			check(tower->kills == 0, "the tower itself has no kills (" + std::to_string(tower->kills) + ")");
+			int shooters = 0;
+			for (auto& r : garrisoned)
+				if (r && r->kills > 0)
+					shooters++;
+			check(shooters >= 1, "the garrisoned archers got the tower's kills (" + std::to_string(shooters) + " of 2 with kills)");
+		}
+		// a unit hit lately but terminated with hit points left (a removal): no kill
+		{
+			ServerGameObject* by = fights[0].own[0].get();
+			ServerGameObject* victim = server.spawnObject(spear, enemy, at(centre, 0, 120), Vector3(0, 0, 0));
+			victim->lastHitBy = by->id;
+			victim->lastHitTime = server.timeManager.currentTime;
+			const int before = by->kills;
+			victim->terminate();
+			check(by->kills == before, "a removal with hit points left is no kill");
+		}
+		server.timeManager.pause();
+		for (const auto& [id, cobj] : server.idmap)
+			if (cobj->kills || cobj->buildingsDestroyed)
+				savedCounts[id] = { cobj->kills, cobj->buildingsDestroyed };
+		check(server.saveGame(savePath.c_str()), "saved");
+	}
+	{
+		Server server;
+		server.loadSaveGame((saveName + ".sav").c_str());
+		server.timeManager.pause();
+		int same = 0;
+		for (const auto& [id, counts] : savedCounts)
+			if (ServerGameObject* o = server.findObject(id); o && o->kills == counts.first && o->buildingsDestroyed == counts.second)
+				same++;
+		check(!savedCounts.empty() && same == (int)savedCounts.size(),
+			"the kills kept by the save (" + std::to_string(same) + " of " + std::to_string(savedCounts.size()) + " units)");
+	}
+	printf("UNITTEST %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -5606,6 +5791,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_JobPositions, "Job positions: where each peasant job's worker stands at its building or target"},
 {Test_BuildRequirements, "Build requirements: the build menu's commands before and after the Fort's research"},
 {Test_MoonPhases, "Moon phases: lit part and side, the moon's light and shadows, the natural month, the saved setting"},
+{Test_UnitHistory, "Unit history: kills credited (melee, archers, a garrisoned tower), no kill for a removal, kept by a save"},
 };
 
 void LaunchTest()

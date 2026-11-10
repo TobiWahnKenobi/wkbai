@@ -103,6 +103,9 @@ enum NetClientMessages {
 	// drops the ones it has first), count (up to 60), the ids (32 bits each); the new ones after
 	// each NETCLIMSG_ENVIRONMENT, all of them to a client joining
 	NETCLIMSG_CHARRED_TREES,
+	// wkbai's unit history: an object's kill counts (UnitHistory): its id, the victim's (0: no new
+	// kill, the counts only: a client joining, a game loaded), kills, buildings destroyed (32 bits each)
+	NETCLIMSG_UNIT_KILLS,
 };
 
 enum NetServerMessages {

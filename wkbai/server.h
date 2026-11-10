@@ -23,6 +23,7 @@
 #include "AIController.h"
 #include "FormationController.h"
 #include "ServerEnvironment.h"
+#include "UnitHistory.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -64,6 +65,12 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	AIController aiController{ this };
 	FormationController formationController{ this };
 	Vector3 playerStartCameraPosition, playerStartCameraOrientation;
+	// wkbai's unit history (UnitHistory; kills and buildingsDestroyed are CommonGameObject's):
+	// who made it (OBJECT_CREATION's creator; a missile: who fired it), the troop credited with a
+	// garrisoned building's missile, the unit that sent the last attack package and when, and a
+	// garrisoned building's last troop credited (its shooters take turns)
+	uint32_t creatorId = 0, creditId = 0, lastHitBy = 0, garrisonCredit = 0;
+	float lastHitTime = -1.0f;
 
 	ServerGameObject(uint32_t id, const GameObjBlueprint *blueprint) : SpecificGameObject<Server, ServerGameObject>(id, blueprint), orderConfig(this) {}
 
@@ -308,6 +315,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::map<std::string, float> userProfileItems;
 	// wkbai's day and night, seasons and weather (the skirmish settings "dayNight", "seasons", ...): off
 	ServerEnvironment environment;
+	// wkbai's unit history: who killed whom (UnitHistory.h)
+	UnitHistory unitHistory;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
@@ -496,4 +505,5 @@ private:
 	void sendTo(ServerGameObject* player, const NetPacketWriter& packet);
 
 	friend struct ServerGameObject;
+	friend struct UnitHistory;
 };

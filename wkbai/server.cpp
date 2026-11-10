@@ -210,6 +210,15 @@ void Server::loadSaveGame(const char * filename)
 							RestoreAttachmentPath(task.get(), targetId, pathNo, step, tried != 0);
 		}
 	}
+	// wkbai's unit history as saved (<save>.history.txt): kills, creators, the last hits
+	if (const std::string side = std::string(filename) + ".history.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		std::string all(text, size);
+		free(text);
+		UnitHistory::loadText(*this, all);
+	}
 	// the work orders as saved, before any the scripts register again: their order decides which
 	// takes a unit listed by several (a replay played another game when they came in another)
 	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)
@@ -1555,6 +1564,10 @@ void ServerGameObject::stopMovement()
 void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 {
 	// Problem: reaction can be executed twice if it is in both intrinsics and individuals, but is it worth checking that?
+	// wkbai's unit history: an attack package notes who sent it, before the reactions (the
+	// "Being Killed" one terminates this object)
+	if (sender)
+		Server::instance->unitHistory.onEvent(*Server::instance, this, evt, sender);
 	SrvScriptContext ctx(Server::instance, this);
 	auto _ = ctx.change(ctx.packageSender, sender);
 	// (getenv once: it takes a lock and walks the environment, and events go out by thousands)
@@ -1660,6 +1673,8 @@ void ServerGameObject::terminate()
 {
 	// Termination depends on the object class
 	if (deleted || (flags & fTerminated)) return;
+	// wkbai's unit history: a death with no hit points left is the last attacker's kill
+	Server::instance->unitHistory.terminated(*Server::instance, this);
 	flags |= fTerminated;
 	sendEvent(Tags::PDEVENT_ON_TERMINATION);
 	if (blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
@@ -2796,6 +2811,14 @@ void Server::sendStateTo(NetLink* link)
 		if (obj->trajectory.isMoving()) {
 			NetPacketWriter msg(NETCLIMSG_OBJECT_TRAJECTORY_STARTED);
 			msg.writeValues(obj->id, obj->trajectory.initialPosition(), obj->trajectory.initialVelocity(), obj->trajectory.startTime());
+			send(msg);
+		}
+		if (obj->kills || obj->buildingsDestroyed) {
+			NetPacketWriter msg(NETCLIMSG_UNIT_KILLS);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(0);
+			msg.writeUint32((uint32_t)obj->kills);
+			msg.writeUint32((uint32_t)obj->buildingsDestroyed);
 			send(msg);
 		}
 		if (obj->reportedCurrentOrder != -1) {

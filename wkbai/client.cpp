@@ -544,6 +544,17 @@ void Client::tick()
 					obj->name = br.readString(numChars);
 				break;
 			}
+			case NETCLIMSG_UNIT_KILLS: {
+				const uint32_t objid = br.readUint32();
+				br.readUint32(); // the victim (for the timeline, later)
+				const int kills = (int)br.readUint32();
+				const int buildings = (int)br.readUint32();
+				if (ClientGameObject* obj = findObject(objid)) {
+					obj->kills = kills;
+					obj->buildingsDestroyed = buildings;
+				}
+				break;
+			}
 			case NETCLIMSG_CURRENT_ORDER_REPORT: {
 				uint32_t objid = br.readUint32();
 				if (ClientGameObject* obj = findObject(objid))
