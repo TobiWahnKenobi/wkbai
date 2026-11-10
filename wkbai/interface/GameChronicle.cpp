@@ -101,6 +101,8 @@ std::string GameChronicle::Event::toText() const
 	for (const Mention& m : mentions)
 		t += " " + std::to_string(m.kind) + " " + std::to_string(m.unit) + " " + std::to_string(m.player) + " " + std::to_string(m.kills) + " "
 			+ (m.dead ? "1" : "0") + " " + Quoted(m.name) + " " + Quoted(m.extra);
+	if (weather >= 0)
+		t += " W " + std::to_string(weather) + " " + Num(temperature) + " " + Num(snowCover);
 	return t;
 }
 
@@ -146,6 +148,13 @@ bool GameChronicle::Event::fromText(const std::string& text)
 		m.kind = n(); m.unit = u(); m.player = u(); m.kills = n(); m.dead = n() != 0;
 		m.name = next(); m.extra = next();
 		mentions.push_back(std::move(m));
+	}
+	// (the weather: from 2026-11-10 on)
+	weather = -1;
+	if (i < w.size() && next() == "W") {
+		weather = n();
+		temperature = f();
+		snowCover = f();
 	}
 	return true;
 }

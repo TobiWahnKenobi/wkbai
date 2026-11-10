@@ -2,21 +2,90 @@
 
 #include "ChronicleNarrator.h"
 #include "../Environment.h"
+#include "../file.h"
 #include <algorithm>
 #include <cmath>
-#include <map>
+#include <cstring>
+#include <set>
 
 namespace {
 using Piece = ChronicleNarrator::Piece;
 using Pieces = std::vector<Piece>;
 using Vars = std::map<std::string, Pieces>;
+using GC = GameChronicle;
 
-// the wording: one of n, by the event and a slot (the same everywhere for the same event)
-int Pick(const GameChronicle::Event& e, uint32_t slot, int n)
+// ---- the words (redata/chronicle/english.txt)
+
+struct Book {
+	std::map<std::string, std::vector<std::string>> words, sentences;
+	bool tried = false, loaded = false;
+};
+Book g_book;
+
+std::string Trim(const std::string& s)
 {
-	uint32_t h = e.id * 2654435761u ^ (uint32_t)(e.time * 10.0f) * 40503u ^ slot * 2246822519u;
-	h ^= h >> 15; h *= 2654435761u; h ^= h >> 13;
-	return n > 0 ? (int)(h % (uint32_t)n) : 0;
+	const size_t a = s.find_first_not_of(" \t\r\n");
+	if (a == std::string::npos)
+		return std::string();
+	const size_t b = s.find_last_not_of(" \t\r\n");
+	return s.substr(a, b - a + 1);
+}
+
+void Parse(const std::string& text)
+{
+	g_book.words.clear();
+	g_book.sentences.clear();
+	std::string slot;
+	size_t at = 0;
+	while (at <= text.size()) {
+		size_t end = text.find('\n', at);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = Trim(text.substr(at, end - at));
+		at = end + 1;
+		if (line.empty() || line[0] == '#')
+			continue;
+		if (line[0] == '@') {
+			// @NAME = one | another
+			const size_t eq = line.find('=');
+			if (eq == std::string::npos)
+				continue;
+			const std::string name = Trim(line.substr(1, eq - 1));
+			auto& list = g_book.words[name];
+			size_t a = eq + 1;
+			while (a <= line.size()) {
+				size_t b = line.find('|', a);
+				if (b == std::string::npos)
+					b = line.size();
+				const std::string alt = Trim(line.substr(a, b - a));
+				if (!alt.empty())
+					list.push_back(alt);
+				a = b + 1;
+			}
+			slot.clear(); // (a word ends a sentence block)
+			continue;
+		}
+		if (line[0] == '[' && line.back() == ']') {
+			slot = Trim(line.substr(1, line.size() - 2));
+			continue;
+		}
+		if (!slot.empty())
+			g_book.sentences[slot].push_back(line);
+	}
+}
+
+void EnsureLoaded()
+{
+	if (!g_book.tried)
+		ChronicleNarrator::load();
+}
+
+uint32_t HashString(const std::string& s)
+{
+	uint32_t h = 2166136261u;
+	for (unsigned char ch : s)
+		h = (h ^ ch) * 16777619u;
+	return h;
 }
 
 std::string Number(int n)
@@ -35,6 +104,13 @@ std::string Ordinal(int n)
 	return std::to_string(n) + suffix;
 }
 
+std::string Capital(std::string s)
+{
+	if (!s.empty())
+		s[0] = (char)std::toupper((unsigned char)s[0]);
+	return s;
+}
+
 // "Spearman" -> "Spearmen", "Archer" -> "Archers", "Militia" stays
 std::string Plural(const std::string& type)
 {
@@ -47,46 +123,144 @@ std::string Plural(const std::string& type)
 	return type + "s";
 }
 
-std::string Article(const std::string& word)
+bool VowelSound(const char* w)
 {
-	return !word.empty() && std::string("AEIOUaeiou").find(word[0]) != std::string::npos ? "an " : "a ";
+	static const char* silentH[] = { "honou", "hour", "heir", "honest" };
+	for (const char* h : silentH)
+		if (_strnicmp(w, h, strlen(h)) == 0)
+			return true;
+	return w[0] && std::strchr("aeiouAEIOU", w[0]) && _strnicmp(w, "one", 3) != 0 && _strnicmp(w, "use", 3) != 0;
 }
 
-std::string Lower(std::string s)
+// the plain text tidied: "a" before a vowel sound becomes "an"; the comma after an opening
+// that ends in "when" or "that" goes; doubled commas and spaces go
+void Tidy(std::string& s)
 {
-	for (char& ch : s)
-		ch = (char)std::tolower((unsigned char)ch);
-	return s;
+	for (const auto& [from, to] : std::vector<std::pair<const char*, const char*>>{ { "when, ", "when " }, { "that, ", "that " },
+		{ ",, ", ", " }, { ",,", "," }, { " ,", "," }, { ",.", "." }, { "  ", " " } }) {
+		size_t at;
+		while ((at = s.find(from)) != std::string::npos)
+			s.replace(at, strlen(from), to);
+	}
+	for (size_t i = 0; i + 2 < s.size(); i++)
+		if ((s[i] == 'a' || s[i] == 'A') && s[i + 1] == ' ' && (i == 0 || s[i - 1] == ' ') && VowelSound(s.c_str() + i + 2))
+			s.insert(i + 1, "n");
 }
 
-// a template: "{D}, the hosts of {L} met at {P}." with the pieces put in
-void Emit(Pieces& out, const std::string& tpl, const Vars& vars)
+// ---- telling one event
+
+struct Teller {
+	const GC::Event& e;
+	std::vector<std::string> tags;
+	uint32_t counter = 0;
+	std::map<std::string, std::set<int>> used; // the alternatives used in this paragraph
+
+	explicit Teller(const GC::Event& ev) : e(ev) {}
+
+	int pick(const std::string& key, int n)
+	{
+		if (n <= 1)
+			return 0;
+		uint32_t h = e.id * 2654435761u ^ (uint32_t)(e.time * 10.0f) * 40503u ^ HashString(key) ^ (counter++) * 2246822519u;
+		h ^= h >> 15; h *= 2654435761u; h ^= h >> 13;
+		// not the same one twice in a paragraph while others are left
+		auto& u = used[key];
+		if ((int)u.size() >= n)
+			u.clear();
+		int i = (int)(h % (uint32_t)n);
+		while (u.count(i))
+			i = (i + 1) % n;
+		u.insert(i);
+		return i;
+	}
+
+	// a word or a slot by the event's tags: "NAME.tag" first, in the tags' order, then "NAME"
+	const std::vector<std::string>* find(const std::map<std::string, std::vector<std::string>>& in, const std::string& name, const std::vector<std::string>& extra) const
+	{
+		for (const auto* list : { &extra, &tags })
+			for (const std::string& t : *list)
+				if (auto it = in.find(name + "." + t); it != in.end() && !it->second.empty())
+					return &it->second;
+		auto it = in.find(name);
+		return it != in.end() && !it->second.empty() ? &it->second : nullptr;
+	}
+
+	void expand(Pieces& out, const std::string& tpl, const Vars& facts, const std::vector<std::string>& extra, int depth)
+	{
+		size_t i = 0;
+		while (i < tpl.size()) {
+			const size_t open = tpl.find('{', i);
+			if (open == std::string::npos) {
+				out.push_back({ tpl.substr(i) });
+				break;
+			}
+			if (open > i)
+				out.push_back({ tpl.substr(i, open - i) });
+			const size_t close = tpl.find('}', open);
+			if (close == std::string::npos)
+				break;
+			const std::string key = tpl.substr(open + 1, close - open - 1);
+			i = close + 1;
+			if (auto it = facts.find(key); it != facts.end())
+				out.insert(out.end(), it->second.begin(), it->second.end());
+			else if (const auto* alts = depth < 8 ? find(g_book.words, key, extra) : nullptr)
+				expand(out, (*alts)[pick("@" + key, (int)alts->size())], facts, extra, depth + 1);
+			// (an unknown word: left out)
+		}
+	}
+
+	// a slot's form, expanded, its plain pieces merged and tidied, the first letter a capital;
+	// empty if the slot has none
+	Pieces sentence(const std::string& slot, const Vars& facts, const std::vector<std::string>& extra = {}, bool capital = true)
+	{
+		Pieces out;
+		const auto* forms = find(g_book.sentences, slot, extra);
+		if (!forms)
+			return out;
+		expand(out, (*forms)[pick("[" + slot, (int)forms->size())], facts, extra, 0);
+		Pieces merged;
+		for (Piece& p : out) {
+			if (p.player == 0 && p.mention < 0 && !merged.empty() && merged.back().player == 0 && merged.back().mention < 0)
+				merged.back().text += p.text;
+			else
+				merged.push_back(std::move(p));
+		}
+		for (Piece& p : merged)
+			if (p.player == 0 && p.mention < 0)
+				Tidy(p.text);
+		// (a player's name begins it: "the Baron" -> "The Baron"; a unit's name stays as it is)
+		if (capital && !merged.empty() && merged[0].player != 0 && !merged[0].text.empty())
+			merged[0].text[0] = (char)std::toupper((unsigned char)merged[0].text[0]);
+		if (capital && !merged.empty() && merged[0].player == 0 && merged[0].mention < 0) {
+			std::string& s = merged[0].text;
+			const size_t first = s.find_first_not_of(' ');
+			if (first != std::string::npos) {
+				s.erase(0, first);
+				s[0] = (char)std::toupper((unsigned char)s[0]);
+			}
+		}
+		return merged;
+	}
+
+	// a word expanded to plain text
+	std::string word(const std::string& name, const Vars& facts = {}, const std::vector<std::string>& extra = {})
+	{
+		Pieces p;
+		expand(p, "{" + name + "}", facts, extra, 0);
+		std::string s;
+		for (const Piece& x : p)
+			s += x.text;
+		return s;
+	}
+};
+
+void Append(Pieces& out, Pieces sentence)
 {
+	if (sentence.empty())
+		return;
 	if (!out.empty())
 		out.push_back({ " " });
-	const size_t first = out.size();
-	size_t i = 0;
-	while (i < tpl.size()) {
-		const size_t open = tpl.find('{', i);
-		if (open == std::string::npos) {
-			out.push_back({ tpl.substr(i) });
-			break;
-		}
-		if (open > i)
-			out.push_back({ tpl.substr(i, open - i) });
-		const size_t close = tpl.find('}', open);
-		const std::string key = tpl.substr(open + 1, close - open - 1);
-		if (auto it = vars.find(key); it != vars.end())
-			out.insert(out.end(), it->second.begin(), it->second.end());
-		i = close + 1;
-	}
-	// a sentence begins with a capital
-	for (size_t j = first; j < out.size(); j++)
-		if (!out[j].text.empty()) {
-			if (out[j].player == 0 && out[j].mention < 0)
-				out[j].text[0] = (char)std::toupper((unsigned char)out[j].text[0]);
-			break;
-		}
+	out.insert(out.end(), sentence.begin(), sentence.end());
 }
 
 Pieces Text(const std::string& s) { return { Piece{ s } }; }
@@ -103,51 +277,21 @@ Pieces List(const std::vector<Pieces>& items)
 	return out;
 }
 
-// how one died, after a comma: "slain by Aelfred", "taken by the cold"; "" for no cause
-std::string Cause(const std::string& extra)
-{
-	static const std::map<std::string, std::string> causes = {
-		{ "froze to death", "taken by the cold" }, { "died of thirst", "overcome by heat and thirst" },
-		{ "drowned", "lost to the waters" }, { "went through the ice", "swallowed by the ice" },
-		{ "burned to death", "consumed by the flames" }, { "struck by lightning", "struck down by a bolt from heaven" },
-		{ "fell", "" } };
-	if (auto it = causes.find(extra); it != causes.end())
-		return it->second;
-	return extra; // "slain by ...", and any other
-}
-
-std::string KillsPhrase(int kills)
-{
-	return kills == 1 ? "one kill" : Number(kills) + " kills";
-}
-}
-
-void ChronicleNarrator::Context::fromSettings(const EnvironmentSettings& env, bool active)
-{
-	seasons = active && env.seasons && env.seasonLengthMin > 0;
-	dayNight = active && env.dayNight && env.dayLengthMin > 0;
-	seasonLengthS = seasons ? env.seasonLengthS() : 1800.0f;
-	dayLengthS = env.dayLengthS() > 0.0f ? env.dayLengthS() : 1200.0f;
-	yearShift = env.yearShift;
-	startSeason = env.startSeason;
-	startHour = env.startHour;
-}
-
-namespace {
 const char* StorySeason(int s)
 {
 	static const char* names[] = { "spring", "summer", "autumn", "winter" };
 	return names[((s % 4) + 4) % 4];
 }
 
-const char* TimeOfDay(float hour)
+// the time of day: the tag of its words, and the date line's word
+const char* TodTag(float hour)
 {
-	if (hour >= 5.0f && hour < 7.0f) return "at dawn";
-	if (hour >= 7.0f && hour < 11.0f) return "in the morning";
-	if (hour >= 11.0f && hour < 14.0f) return "about noon";
-	if (hour >= 14.0f && hour < 18.0f) return "in the afternoon";
-	if (hour >= 18.0f && hour < 21.0f) return "at dusk";
-	return "by night";
+	if (hour >= 5.0f && hour < 7.0f) return "dawn";
+	if (hour >= 7.0f && hour < 11.0f) return "morning";
+	if (hour >= 11.0f && hour < 14.0f) return "noon";
+	if (hour >= 14.0f && hour < 18.0f) return "afternoon";
+	if (hour >= 18.0f && hour < 21.0f) return "dusk";
+	return "night";
 }
 
 struct Calendar {
@@ -167,23 +311,55 @@ Calendar CalendarAt(float t, const ChronicleNarrator::Context& c)
 	return cal;
 }
 
-// the sentence's opening: "In the spring of the year 1000, at dusk"
-std::string Opener(float t, const ChronicleNarrator::Context& c)
+// a death's cause as a tag of the CAUSE word (and the killer's name, for "slain")
+std::string CauseTag(const std::string& extra, std::string& killer)
 {
-	const Calendar cal = CalendarAt(t, c);
-	if (c.seasons) {
-		std::string s = std::string("In the ") + StorySeason(cal.season) + " of the year " + std::to_string(cal.year);
-		if (c.dayNight)
-			s += std::string(", ") + TimeOfDay(cal.hour);
-		return s;
+	static const std::map<std::string, std::string> causes = {
+		{ "froze to death", "cold" }, { "died of thirst", "heat" }, { "drowned", "drowned" }, { "went through the ice", "ice" },
+		{ "burned to death", "fire" }, { "struck by lightning", "lightning" }, { "fell", "none" }, { "", "none" } };
+	if (auto it = causes.find(extra); it != causes.end())
+		return it->second;
+	if (extra.rfind("slain by ", 0) == 0) {
+		killer = extra.substr(9);
+		return "slain";
 	}
-	if (c.dayNight)
-		return "On the " + Ordinal(cal.day) + " day, " + TimeOfDay(cal.hour);
-	if (t < 120.0f) return "At the very outset of the war";
-	if (t < 600.0f) return "Early in the war";
-	if (t < 1800.0f) return "As the war went on";
-	return "Late in the long war";
+	return "other";
 }
+}
+
+bool ChronicleNarrator::load()
+{
+	g_book.tried = true;
+	const char* path = "chronicle/english.txt";
+	if (!FileExists(path))
+		return g_book.loaded = false;
+	char* text = nullptr;
+	int size = 0;
+	LoadFile(path, &text, &size);
+	Parse(std::string(text, size));
+	free(text);
+	return g_book.loaded = !g_book.sentences.empty();
+}
+
+void ChronicleNarrator::loadText(const std::string& text)
+{
+	g_book.tried = true;
+	Parse(text);
+	g_book.loaded = !g_book.sentences.empty();
+}
+
+const std::map<std::string, std::vector<std::string>>& ChronicleNarrator::words() { EnsureLoaded(); return g_book.words; }
+const std::map<std::string, std::vector<std::string>>& ChronicleNarrator::sentences() { EnsureLoaded(); return g_book.sentences; }
+
+void ChronicleNarrator::Context::fromSettings(const EnvironmentSettings& env, bool active)
+{
+	seasons = active && env.seasons && env.seasonLengthMin > 0;
+	dayNight = active && env.dayNight && env.dayLengthMin > 0;
+	seasonLengthS = seasons ? env.seasonLengthS() : 1800.0f;
+	dayLengthS = env.dayLengthS() > 0.0f ? env.dayLengthS() : 1200.0f;
+	yearShift = env.yearShift;
+	startSeason = env.startSeason;
+	startHour = env.startHour;
 }
 
 std::string ChronicleNarrator::dateLine(float time, const Context& c)
@@ -193,14 +369,12 @@ std::string ChronicleNarrator::dateLine(float time, const Context& c)
 	snprintf(clock, sizeof(clock), "%d:%02d", (int)time / 60, (int)time % 60);
 	std::string s;
 	if (c.seasons) {
-		s = StorySeason(cal.season);
-		s[0] = (char)std::toupper((unsigned char)s[0]);
-		s += ", the year " + std::to_string(cal.year);
+		s = Capital(StorySeason(cal.season)) + ", the year " + std::to_string(cal.year);
 		if (c.dayNight)
-			s += std::string(", ") + TimeOfDay(cal.hour);
+			s += std::string(", ") + TodTag(cal.hour);
 	}
 	else if (c.dayNight)
-		s = "Day " + std::to_string(cal.day) + ", " + TimeOfDay(cal.hour);
+		s = "Day " + std::to_string(cal.day) + ", " + TodTag(cal.hour);
 	return s.empty() ? std::string(clock) : s + "  (" + clock + ")";
 }
 
@@ -214,8 +388,41 @@ std::string ChronicleNarrator::plain(const std::vector<Piece>& pieces)
 
 std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChronicle::Event& e, const Context& c)
 {
-	using GC = GameChronicle;
+	EnsureLoaded();
 	Pieces out;
+	if (g_book.sentences.empty()) {
+		out.push_back({ e.title() + "." });
+		return out;
+	}
+	Teller t(e);
+	const Calendar cal = CalendarAt(e.time, c);
+	const bool weatherKnown = e.weather >= 0 && e.weather < WEATHER_COUNT;
+	// the event's tags, in the order its words are looked up by
+	const char* tod = c.dayNight ? TodTag(cal.hour) : nullptr;
+	const bool night = tod && std::strcmp(tod, "night") == 0;
+	if (weatherKnown) {
+		static const std::vector<std::vector<std::string>> byWeather = {
+			{ "clear" }, { "cloudy" }, { "rain" }, { "heavyrain", "rain" }, { "storm", "rain" }, { "fog" },
+			{ "snow" }, { "blizzard", "snow" }, { "heat" }, { "drought", "heat" } };
+		if (night && e.weather == WEATHER_CLEAR)
+			t.tags.push_back("clearnight");
+		if (night && (e.weather == WEATHER_HEATWAVE || e.weather == WEATHER_DROUGHT))
+			t.tags.push_back("hotnight");
+		for (const std::string& w : byWeather[e.weather])
+			t.tags.push_back(w);
+		if (e.temperature < -2.0f)
+			t.tags.push_back("cold");
+		if (e.snowCover > 0.3f)
+			t.tags.push_back("snowground");
+	}
+	if (tod)
+		t.tags.push_back(tod);
+	if (c.seasons)
+		t.tags.push_back(StorySeason(cal.season));
+	t.tags.push_back(e.time < 120.0f ? "outset" : e.time < 600.0f ? "early" : e.time < 1800.0f ? "mid" : "late");
+	const int n = e.size;
+	t.tags.push_back(n < 8 ? "skirmish" : n < 25 ? "battle" : n < 60 ? "great" : "huge");
+
 	auto player = [&](uint32_t id) { return Pieces{ Piece{ c.playerName ? c.playerName(id) : std::to_string(id), id } }; };
 	// (one piece: "'s" never wraps away from the name)
 	auto possessive = [&](uint32_t id) { Pieces p = player(id); p[0].text += "'s"; return p; };
@@ -225,11 +432,27 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 		p.mention = (int)i;
 		return Pieces{ p };
 	};
-	const std::string place = e.place.empty() ? std::string("a nameless place in the wilds") : e.place;
+
+	// the facts every sentence may use
 	Vars v;
-	v["D"] = Text(Opener(e.time, c));
-	v["P"] = Text(place);
+	v["PLACE"] = Text(e.place.empty() ? std::string("a nameless place in the wilds") : e.place);
+	v["YEAR"] = Text(std::to_string(cal.year));
+	v["DAY"] = Text(Ordinal(cal.day));
+	v["COUNT"] = Text(Number(n));
 	std::vector<uint32_t> sides(e.players.begin(), e.players.end());
+	{
+		std::vector<Pieces> names;
+		for (uint32_t p : sides)
+			names.push_back(player(p));
+		v["SIDES"] = names.empty() ? Text("the warring sides") : List(names);
+	}
+	// the opening, by the calendar known
+	{
+		const char* slot = c.seasons ? (c.dayNight ? (weatherKnown ? "date.season.tod.weather" : "date.season.tod") : (weatherKnown ? "date.season.weather" : "date.season"))
+			: c.dayNight ? (weatherKnown ? "date.day.tod.weather" : "date.day.tod") : (weatherKnown ? "date.weather" : "date.war");
+		Pieces d = t.sentence(slot, v, {}, false);
+		v["DATE"] = d.empty() ? Text("Once") : d;
+	}
 
 	// the units named, by kind
 	std::vector<size_t> top, present, fallen, razers;
@@ -243,118 +466,117 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 	auto fellHere = [&](uint32_t id) {
 		return std::any_of(fallen.begin(), fallen.end(), [&](size_t i) { return e.mentions[i].unit == id; });
 	};
+	// a unit's facts ({UNIT} {UNIT_S} {SIDE} {SIDE_S} {KILLS} ...), and its death's cause as a tag
+	auto unitFacts = [&](size_t i, bool late, std::vector<std::string>& extra) {
+		const GC::Mention& m = e.mentions[i];
+		Vars w = v;
+		w["UNIT"] = unit(i);
+		if (late)
+			w["UNIT"].insert(w["UNIT"].begin(), Piece{ "the late " });
+		w["UNIT_S"] = w["UNIT"];
+		w["UNIT_S"].push_back({ "'s" });
+		w["SIDE"] = player(m.player);
+		w["SIDE_S"] = possessive(m.player);
+		w["KILLS"] = Text(Number(m.kills));
+		w["KILLS_CAP"] = Text(Capital(Number(m.kills)));
+		w["KILLS_PHRASE"] = Text(m.kills == 1 ? "one kill" : Number(m.kills) + " kills");
+		w["KILLS_FOES"] = Text(m.kills == 1 ? std::string("the one foe slain") : "the " + Number(m.kills) + " foes slain");
+		w["N_FOES"] = Text(m.kills == 1 ? "one " + t.word("FOE") : Number(m.kills) + " " + t.word("FOES"));
+		w["KILLS_CLAUSE"] = Text(m.kills > 0 ? ", slayer of " + Number(m.kills) + "," : std::string());
+		std::string killer;
+		const std::string tag = CauseTag(m.extra, killer);
+		extra = { tag };
+		w["KILLER"] = Text(killer);
+		w["EXTRA"] = Text(m.extra);
+		w["CAUSE_CLAUSE"] = Text(tag == "none" ? std::string() : ", " + t.word("CAUSE", w, extra));
+		return w;
+	};
 
-	// who fought there and their deeds, the dead (a fight, and the fight around a settlement)
-	auto deeds = [&](uint32_t slot) {
-		for (size_t n = 0; n < top.size(); n++) {
-			const GC::Mention& m = e.mentions[top[n]];
-			Vars w = v;
-			w["N"] = unit(top[n]);
-			if (m.dead && !fellHere(m.unit))
-				w["N"].insert(w["N"].begin(), Piece{ "the late " });
-			w["A"] = possessive(m.player);
-			w["K"] = Text(Number(m.kills));
-			static const char* forms[] = {
-				"Of {A} warriors, none fought harder than {N}, who slew {K} that day.",
-				"{N} of {A} host slew {K} there, more than any other of them.",
-				"Foremost among {A} fighters was {N}, with {K} slain.",
-			};
-			Emit(out, m.kills == 1 && Pick(e, slot + (uint32_t)n, 3) == 0 ? "Of {A} warriors, {N} alone struck down a foe."
-				: forms[Pick(e, slot + (uint32_t)n, 3)], w);
+	// who fought there and their deeds, the dead
+	auto deeds = [&]() {
+		for (size_t i : top) {
+			const GC::Mention& m = e.mentions[i];
+			std::vector<std::string> extra;
+			Vars w = unitFacts(i, m.dead && !fellHere(m.unit), extra);
+			Append(out, t.sentence(m.kills == 1 ? "top.one" : "top", w));
 		}
-		// the heroes there who weren't named for their kills, nor among the dead
-		std::vector<Pieces> heroes;
-		std::vector<size_t> heroIndex;
+		// the heroes there not named for their kills nor among the dead
+		std::vector<size_t> heroes;
 		for (size_t i : present) {
 			const GC::Mention& m = e.mentions[i];
-			if (fellHere(m.unit) || std::any_of(top.begin(), top.end(), [&](size_t t) { return e.mentions[t].unit == m.unit; }))
+			if (fellHere(m.unit) || std::any_of(top.begin(), top.end(), [&](size_t k) { return e.mentions[k].unit == m.unit; }))
 				continue;
-			Pieces h = unit(i);
-			if (m.dead)
-				h.insert(h.begin(), Piece{ "the late " });
-			heroes.push_back(std::move(h));
-			heroIndex.push_back(i);
+			heroes.push_back(i);
 		}
 		if (heroes.size() == 1) {
-			const GC::Mention& m = e.mentions[heroIndex[0]];
-			Vars w = v;
-			w["H"] = unit(heroIndex[0]);
-			w["K"] = Text(m.kills > 0 ? ", slayer of " + Number(m.kills) + "," : std::string());
-			static const char* alive[] = { "The renowned {H}{K} fought there as well.", "{H}, a hero already sung of, was among them.", "Renown was there too: {H}." };
-			Emit(out, m.dead ? "{H}, who would not live to see the war's end, fought there as well." : alive[Pick(e, slot + 10, 3)], w);
+			std::vector<std::string> extra;
+			Vars w = unitFacts(heroes[0], false, extra);
+			Append(out, t.sentence(e.mentions[heroes[0]].dead ? "hero.one.dead" : "hero.one", w));
 		}
 		else if (heroes.size() > 1) {
+			std::vector<Pieces> list;
+			for (size_t i : heroes) {
+				Pieces h = unit(i);
+				if (e.mentions[i].dead)
+					h.insert(h.begin(), Piece{ "the late " });
+				list.push_back(h);
+			}
 			Vars w = v;
-			w["H"] = List(heroes);
-			static const char* forms[] = { "Heroes of renown stood in the lines: {H}.", "Many of renown fought there: {H}." };
-			Emit(out, forms[Pick(e, slot + 10, 2)], w);
+			w["HEROES"] = List(list);
+			Append(out, t.sentence("hero.many", w));
 		}
-		for (size_t n = 0; n < fallen.size(); n++) {
-			const GC::Mention& m = e.mentions[fallen[n]];
-			Vars w = v;
-			w["N"] = unit(fallen[n]);
-			w["A"] = player(m.player);
-			const std::string cause = Cause(m.extra);
-			w["C"] = Text(cause.empty() ? std::string() : ", " + cause);
-			w["K"] = Text(KillsPhrase(m.kills));
-			static const char* forms[] = {
-				"There fell {N}, a hero of {K}{C}.",
-				"{A} mourned {N} there, a hero of {K}{C}.",
-				"Among the dead was {N}, who had made {K}{C}.",
-			};
-			Emit(out, forms[Pick(e, slot + 20 + (uint32_t)n, 3)], w);
+		for (size_t i : fallen) {
+			std::vector<std::string> extra;
+			Vars w = unitFacts(i, false, extra);
+			Append(out, t.sentence("fallen.here", w, extra));
 		}
 	};
 
 	// the losses, and who held the field
-	auto outcome = [&](uint32_t slot) {
+	auto outcome = [&]() {
 		std::map<uint32_t, int> lost;
 		std::map<uint32_t, std::pair<std::string, int>> mostType;
 		int total = 0;
 		for (uint32_t p : sides) {
-			int n = 0;
+			int k = 0;
 			if (auto it = e.lost.find(p); it != e.lost.end())
-				for (const auto& [type, k] : it->second) {
-					n += k;
-					if (k > mostType[p].second)
-						mostType[p] = { type, k };
+				for (const auto& [type, x] : it->second) {
+					k += x;
+					if (x > mostType[p].second)
+						mostType[p] = { type, x };
 				}
-			lost[p] = n;
-			total += n;
+			lost[p] = k;
+			total += k;
 		}
 		if (sides.empty())
 			return;
 		if (total == 0) {
-			static const char* forms[] = { "No life of note was lost.", "When it was over, no one was counted among the dead." };
-			Emit(out, forms[Pick(e, slot, 2)], v);
-			return;
-		}
-		Vars w = v;
-		if (sides.size() == 1) {
-			w["A"] = player(sides[0]);
-			w["L"] = Text(Number(lost[sides[0]]));
-			Emit(out, "{A} lost {L} there.", w);
+			Append(out, t.sentence("outcome.none", v));
 			return;
 		}
 		auto byLoss = sides;
 		std::sort(byLoss.begin(), byLoss.end(), [&](uint32_t a, uint32_t b) { return lost[a] < lost[b] || (lost[a] == lost[b] && a < b); });
 		const uint32_t winner = byLoss.front(), loser = byLoss.back();
 		const int lo = lost[winner], hi = lost[loser];
-		w["W"] = player(winner);
-		w["B"] = player(loser);
-		w["H"] = Text(Number(hi));
-		w["O"] = Text(Number(lo));
-		// most of the dead of one type: "most of them Spearmen"
+		Vars w = v;
+		w["WINNER"] = player(winner);
+		w["LOSER"] = player(loser);
+		w["WINNER_S"] = possessive(winner);
+		w["LOSER_S"] = possessive(loser);
+		w["SIDE"] = player(loser);
+		w["SIDE_S"] = possessive(loser);
+		w["LOST_HI"] = Text(Number(hi));
+		w["LOST_LO"] = Text(Number(lo));
 		const auto& [type, k] = mostType[loser];
-		w["T"] = Text(!type.empty() && k * 10 >= hi * 7 && hi >= 3 ? (k == hi ? ", all of them " : ", most of them ") + Plural(type) : std::string());
-		if (hi >= 2 * lo + 2) {
-			static const char* forms[] = {
-				"{W} held the field; {B} left {H} dead behind{T}.",
-				"The day belonged to {W}: {B} lost {H}{T}, {W} only {O}.",
-				"It ended badly for {B}, who lost {H}{T} against {O} of {W}.",
-			};
-			Emit(out, lo == 0 ? "{W} held the field without loss; {B} left {H} dead behind{T}." : forms[Pick(e, slot, 3)], w);
+		Vars types = v;
+		types["TYPES"] = Text(Plural(type));
+		w["TYPE_CLAUSE"] = Text(!type.empty() && k * 10 >= hi * 7 && hi >= 3 ? ", " + t.word(k == hi ? "ALL_OF_THEM" : "MOST_OF_THEM", types) : std::string());
+		if (sides.size() == 1) {
+			Append(out, t.sentence("outcome.single", w));
+			return;
 		}
+		if (hi >= 2 * lo + 2)
+			Append(out, t.sentence(lo == 0 ? "outcome.win.noloss" : "outcome.win", w));
 		else {
 			std::vector<Pieces> each;
 			for (uint32_t p : sides) {
@@ -362,37 +584,19 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 				x.push_back({ " " + Number(lost[p]) });
 				each.push_back(x);
 			}
-			w["E"] = List(each);
-			static const char* forms[] = { "Neither side could claim the day; the dead were counted: {E}.", "It was a bitter, even fight. The losses: {E}." };
-			Emit(out, forms[Pick(e, slot, 2)], w);
+			w["LOSSES"] = List(each);
+			Append(out, t.sentence("outcome.even", w));
 		}
 	};
 
-	std::vector<Pieces> names;
-	for (uint32_t p : sides)
-		names.push_back(player(p));
 	switch (e.kind) {
 	case GC::Kind::Battle:
 	case GC::Kind::Siege:
 	case GC::Kind::Raid: {
-		v["L"] = List(names);
-		const int n = e.size;
-		v["S"] = Text(n < 8 ? "a skirmish" : n < 25 ? "battle" : n < 60 ? "a great battle" : "one of the great slaughters of the age");
-		if (e.kind == GC::Kind::Battle) {
-			static const char* forms[] = {
-				"{D}, the hosts of {L} met in {S} at {P}.",
-				"{D}, {L} came to blows at {P}.",
-				"{D}, steel rang out at {P}, where the warriors of {L} clashed.",
-			};
-			Emit(out, sides.size() == 1 ? "{D}, {L} fought at {P}." : forms[Pick(e, 1, 3)], v);
-		}
-		else if (e.kind == GC::Kind::Siege) {
-			static const char* forms[] = {
-				"{D}, the walls of {P} were assailed, and {L} fought beneath them.",
-				"{D}, {P} came under siege, as {L} contested its walls.",
-			};
-			Emit(out, forms[Pick(e, 1, 2)], v);
-		}
+		if (e.kind == GC::Kind::Battle)
+			Append(out, t.sentence(sides.size() == 1 ? "battle.open.one" : "battle.open", v));
+		else if (e.kind == GC::Kind::Siege)
+			Append(out, t.sentence("siege.open", v));
 		else {
 			// the raided: the side that lost the most there
 			uint32_t victim = 0;
@@ -405,55 +609,46 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 				if (k > most) { most = k; victim = p; }
 			}
 			Vars w = v;
-			w["V"] = victim ? player(victim) : Text("its people");
-			static const char* forms[] = {
-				"{D}, raiders struck at {P}, falling upon the fields and folk of {V}.",
-				"{D}, a raid fell upon {P}, and the people of {V} paid for it.",
-			};
-			Emit(out, most > 0 && sides.size() > 1 ? forms[Pick(e, 1, 2)] : "{D}, raiders struck at {P}.", w);
+			w["VICTIM"] = victim ? player(victim) : Text("its people");
+			Append(out, t.sentence(most > 0 && sides.size() > 1 ? "raid.open" : "raid.open.plain", w));
 		}
-		// its size and the sides' strength
 		if (n > 0) {
-			Vars w = v;
-			w["N"] = Text(Number(n));
-			const char* form = n < 8 ? "It was no more than a skirmish, of some {N} fighters."
-				: n < 25 ? (Pick(e, 2, 2) ? "Some {N} fighters were drawn into it." : "Some {N} fighters took the field.")
-				: n < 60 ? "It was a great battle: {N} fighters at its height."
-				: "Few had ever seen its like: {N} fighters locked in combat at its height.";
-			Emit(out, form, w);
+			Append(out, t.sentence("size", v));
 			if (sides.size() == 2) {
 				auto a = e.strength.find(sides[0]), b = e.strength.find(sides[1]);
 				if (a != e.strength.end() && b != e.strength.end() && a->second > 0 && b->second > 0 && (a->second * 2 <= b->second || b->second * 2 <= a->second)) {
 					const bool aMore = a->second > b->second;
-					Vars x = v;
-					x["M"] = player(aMore ? sides[0] : sides[1]);
-					x["F"] = player(aMore ? sides[1] : sides[0]);
-					x["X"] = Text(Number(std::max(a->second, b->second)));
-					x["Y"] = Text(Number(std::min(a->second, b->second)));
-					Emit(out, "{M} came in strength, {X} against the {Y} of {F}.", x);
+					Vars w = v;
+					w["MORE"] = player(aMore ? sides[0] : sides[1]);
+					w["FEWER"] = player(aMore ? sides[1] : sides[0]);
+					w["MORE_N"] = Text(Number(std::max(a->second, b->second)));
+					w["FEWER_N"] = Text(Number(std::min(a->second, b->second)));
+					Append(out, t.sentence("strength", w));
 				}
 			}
 		}
+		// the weather, often
+		if (weatherKnown && t.pick("weather?", 5) < 3)
+			Append(out, t.sentence("weather.fight", v));
 		const float d = e.endTime - e.time;
 		if (d < 20.0f)
-			Emit(out, "It was over almost as soon as it had begun.", v);
+			Append(out, t.sentence("duration.short", v));
 		else if (d > 240.0f)
-			Emit(out, Pick(e, 3, 2) ? "The fighting dragged on for a long time." : "It raged for a long while before it was decided.", v);
-		outcome(4);
-		deeds(100);
+			Append(out, t.sentence("duration.long", v));
+		outcome();
+		deeds();
 		break;
 	}
 	case GC::Kind::Founded: {
 		Vars w = v;
-		w["A"] = sides.empty() ? Text("settlers") : player(sides[0]);
-		w["S"] = Text(e.what.empty() ? std::string("settlement") : Lower(e.what));
-		w["a"] = Text(Article(e.what));
-		static const char* forms[] = {
-			"{D}, {A} raised {a}{S} at {P}.",
-			"{D}, settlers of {A} broke ground for {a}{S} at {P}.",
-			"{D}, {a}{S} of {A} rose at {P}.",
-		};
-		Emit(out, forms[Pick(e, 1, 3)], w);
+		std::string lower = e.what.empty() ? std::string("settlement") : e.what;
+		for (char& ch : lower)
+			ch = (char)std::tolower((unsigned char)ch);
+		w["SIDE"] = sides.empty() ? Text("settlers") : player(sides[0]);
+		w["SIDE_S"] = sides.empty() ? Text("the settlers'") : possessive(sides[0]);
+		w["SETTLEMENT"] = Text(lower);
+		w["A_SETTLEMENT"] = Text("a " + lower);
+		Append(out, t.sentence("founded", w));
 		break;
 	}
 	case GC::Kind::Destroyed: {
@@ -468,8 +663,13 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 				break;
 			}
 		Vars w = v;
-		w["S"] = Text(e.what.empty() ? std::string("settlement") : Lower(e.what));
-		w["O"] = owner ? possessive(owner) : Text("its people's");
+		std::string lower = e.what.empty() ? std::string("settlement") : e.what;
+		for (char& ch : lower)
+			ch = (char)std::tolower((unsigned char)ch);
+		w["SETTLEMENT"] = Text(lower);
+		w["A_SETTLEMENT"] = Text("a " + lower);
+		w["OWNER"] = owner ? player(owner) : Text("its people");
+		w["OWNER_S"] = owner ? possessive(owner) : Text("its people's");
 		std::vector<Pieces> by;
 		for (size_t i : razers) {
 			Pieces x = possessive(e.mentions[i].player);
@@ -478,47 +678,23 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 			x.insert(x.end(), u.begin(), u.end());
 			by.push_back(x);
 		}
-		w["R"] = by.empty() ? Text(std::string()) : Pieces{};
-		if (!by.empty()) {
-			Pieces r{ { by.size() == 1 ? ", by the hand of " : ", by the hands of " } };
-			Pieces l = List(by);
-			r.insert(r.end(), l.begin(), l.end());
-			w["R"] = r;
-		}
-		static const char* forms[] = {
-			"{D}, {O} {S} at {P} was put to the torch{R}.",
-			"{D}, {O} {S} at {P} was razed to the ground{R}.",
-			"{D}, {O} {S} at {P} fell to its enemies{R}.",
-		};
-		Emit(out, forms[Pick(e, 1, 3)], w);
+		w["RAZERS"] = List(by);
+		Append(out, t.sentence(by.empty() ? "destroyed" : "destroyed.by", w));
 		if (!top.empty() || !present.empty())
-			Emit(out, Pick(e, 2, 2) ? "Blood was spilled around it." : "It did not fall without a fight.", v);
-		deeds(200);
+			Append(out, t.sentence("destroyed.fight", v));
+		deeds();
 		break;
 	}
 	case GC::Kind::Fallen: {
-		for (size_t n = 0; n < fallen.size(); n++) {
-			const GC::Mention& m = e.mentions[fallen[n]];
-			Vars w = v;
-			w["N"] = unit(fallen[n]);
-			w["A"] = player(m.player);
-			w["K"] = Text(KillsPhrase(m.kills));
-			const std::string cause = Cause(m.extra);
-			w["C"] = Text(cause.empty() ? std::string() : ", " + cause);
-			static const char* forms[] = {
-				"{D}, far from any battle, death found {N}, a hero of {A}, at {P}{C}.",
-				"{D}, {A} lost {N}, a hero of {K}, at {P}{C}.",
-				"{D}, word came from {P} that {N} of {A} was dead{C}.",
-			};
-			Emit(out, forms[Pick(e, 1 + (uint32_t)n, 3)], w);
-			if (Pick(e, 50 + (uint32_t)n, 2) == 0 && m.kills > 0) {
-				Vars x = w;
-				x["K"] = Text(m.kills == 1 ? std::string("the one foe slain") : "the " + Number(m.kills) + " foes slain");
-				Emit(out, "The songs would remember {N} for {K}.", x);
-			}
+		for (size_t i : fallen) {
+			std::vector<std::string> extra;
+			Vars w = unitFacts(i, false, extra);
+			Append(out, t.sentence("fallen.away", w, extra));
+			if (e.mentions[i].kills > 0 && t.pick("songs?", 2) == 0)
+				Append(out, t.sentence("fallen.songs", w, extra));
 		}
 		if (fallen.empty())
-			Emit(out, "{D}, a hero fell at {P}.", v);
+			Append(out, t.sentence("fallen.unknown", v));
 		break;
 	}
 	}

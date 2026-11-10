@@ -62,6 +62,10 @@ struct GameChronicle {
 		Vector3 lastPosition; // a fight: where it was at the last scan (position: where it began)
 		uint32_t id = 0; // its number (from 1), the same on the server and the clients
 		std::vector<Mention> mentions; // from the server
+		// the weather when it began (the server's environment; -1: unknown, none): EnvWeather,
+		// the temperature in degrees, the snow on the ground 0..1
+		int weather = -1;
+		float temperature = 0.0f, snowCover = 0.0f;
 		std::string title() const; // "Battle of Ergor", "Village founded at Fangorn"
 		bool fight() const { return kind == Kind::Battle || kind == Kind::Siege || kind == Kind::Raid; }
 		// one line of text (the network, the save game) and back

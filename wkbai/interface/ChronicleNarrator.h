@@ -1,12 +1,18 @@
 // wkbai - the timeline told as a chronicle: each event as a paragraph a historian could have
-// written ("In the spring of the year 1000, the hosts of Saint Jane and Player 2 met at Nen
-// Hithoel. ..."), from the same facts as the statistics view (the RE repo's
-// docs/engine/unit-history.md, section 10)
+// written ("On a foggy morning in the spring of the year 1000, the warbands of Saint Jane and
+// the Baron clashed at Nen Hithoel. ..."), from the same facts as the statistics view (the RE
+// repo's docs/engine/unit-history.md, section 10).
+//
+// The words are in redata/chronicle/english.txt: sentence slots of ten and more forms each, and a
+// lexicon of words with their alternatives ({KILLED}: slew, cut down, struck down, ...), some by
+// the event's weather, time of day, season, size or a death's cause. The game puts the facts in
+// ({UNIT}, {PLACE}, {SIDES}, ...).
 
 #pragma once
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 #include "GameChronicle.h"
@@ -38,4 +44,12 @@ struct ChronicleNarrator {
 	static std::string dateLine(float time, const Context& c);
 	// the pieces as one string (tests, logs)
 	static std::string plain(const std::vector<Piece>& pieces);
+
+	// the words: read from redata/chronicle/english.txt at the first narration (false: not found);
+	// loadText reads them from a string instead (tests, mods). Lines: "@WORD = a | b",
+	// "[slot]" and its forms.
+	static bool load();
+	static void loadText(const std::string& text);
+	static const std::map<std::string, std::vector<std::string>>& words();
+	static const std::map<std::string, std::vector<std::string>>& sentences();
 };

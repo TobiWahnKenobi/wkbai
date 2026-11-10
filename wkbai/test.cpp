@@ -6324,9 +6324,10 @@ void Test_UnitSplashKills()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
-// wkbai's timeline told as a chronicle (interface/ChronicleNarrator): every kind of event as a
-// paragraph, every named unit a link in it, the players' names as theirs, nothing left of the
-// templates, the same words every time, the calendar of the seasons and of the days
+// wkbai's timeline told as a chronicle (interface/ChronicleNarrator, redata/chronicle/english.txt):
+// the word file whole (every slot ten forms or more, every placeholder a word or a fact), every
+// kind of event as a paragraph, every named unit a link in it, the players' names as theirs,
+// nothing left of the templates, the same words every time, the weather's words, the calendar
 void Test_ChronicleStory()
 {
 	int failures = 0;
@@ -6336,6 +6337,49 @@ void Test_ChronicleStory()
 		fflush(stdout);
 	};
 	using GC = GameChronicle;
+	check(ChronicleNarrator::load(), "redata/chronicle/english.txt read");
+	const auto& words = ChronicleNarrator::words();
+	const auto& sentences = ChronicleNarrator::sentences();
+	{
+		size_t forms = 0, alts = 0;
+		std::string few;
+		for (const auto& [slot, list] : sentences) {
+			forms += list.size();
+			if (list.size() < 10 && slot != "date.war")
+				few += " " + slot + "(" + std::to_string(list.size()) + ")";
+		}
+		for (const auto& [w, list] : words)
+			alts += list.size();
+		printf("UNITTEST   %zu sentence slots with %zu forms, %zu words with %zu alternatives\n", sentences.size(), forms, words.size(), alts);
+		check(few.empty(), "every sentence slot has ten forms or more" + (few.empty() ? std::string() : ":" + few));
+		// every {NAME}: a word (or a tagged one) or a fact the game puts in
+		static const std::set<std::string> facts = { "DATE", "PLACE", "SIDES", "SIDE", "SIDE_S", "YEAR", "DAY", "COUNT", "MORE", "FEWER", "MORE_N",
+			"FEWER_N", "WINNER", "LOSER", "WINNER_S", "LOSER_S", "LOST_HI", "LOST_LO", "TYPE_CLAUSE", "LOSSES", "UNIT", "UNIT_S", "KILLS",
+			"KILLS_CAP", "KILLS_PHRASE", "KILLS_FOES", "N_FOES", "KILLS_CLAUSE", "HEROES", "CAUSE_CLAUSE", "SETTLEMENT", "A_SETTLEMENT",
+			"OWNER", "OWNER_S", "RAZERS", "VICTIM", "KILLER", "EXTRA", "TYPES" };
+		std::set<std::string> bases;
+		for (const auto& [w, list] : words)
+			bases.insert(w.substr(0, w.find('.')));
+		std::set<std::string> unknown;
+		auto scan = [&](const std::string& s) {
+			for (size_t a = s.find('{'); a != std::string::npos; a = s.find('{', a + 1)) {
+				const size_t b = s.find('}', a);
+				const std::string name = s.substr(a + 1, b - a - 1);
+				if (!facts.count(name) && !bases.count(name))
+					unknown.insert(name);
+			}
+		};
+		for (const auto& [slot, list] : sentences)
+			for (const auto& s : list)
+				scan(s);
+		for (const auto& [w, list] : words)
+			for (const auto& s : list)
+				scan(s);
+		std::string list;
+		for (const auto& u : unknown)
+			list += " " + u;
+		check(unknown.empty(), "every placeholder a word or a fact" + (list.empty() ? std::string() : ":" + list));
+	}
 	auto mention = [](int kind, uint32_t unit, uint32_t player, int kills, bool dead, const std::string& name, const std::string& extra = std::string()) {
 		GC::Mention m;
 		m.kind = kind; m.unit = unit; m.player = player; m.kills = kills; m.dead = dead; m.name = name; m.extra = extra;
@@ -6345,6 +6389,8 @@ void Test_ChronicleStory()
 	{
 		GC::Event e{ GC::Kind::Battle, 300.0f, 420.0f, Vector3(), { 1027, 1030 }, 22, std::string(), "Nen Hithoel" };
 		e.id = 1;
+		e.weather = WEATHER_FOG;
+		e.temperature = 8.0f;
 		e.strength = { { 1027, 12 }, { 1030, 10 } };
 		e.lost[1027]["Spearman"] = 3;
 		e.lost[1030]["Spearman"] = 10;
@@ -6358,6 +6404,7 @@ void Test_ChronicleStory()
 	{
 		GC::Event e{ GC::Kind::Siege, 900.0f, 1300.0f, Vector3(), { 1027, 1030 }, 70, std::string(), "Duncraig" };
 		e.id = 2;
+		e.weather = WEATHER_THUNDERSTORM;
 		e.strength = { { 1027, 50 }, { 1030, 20 } };
 		e.lost[1027]["Archer"] = 6;
 		e.lost[1030]["Militia"] = 14;
@@ -6367,6 +6414,8 @@ void Test_ChronicleStory()
 	{
 		GC::Event e{ GC::Kind::Raid, 1000.0f, 1010.0f, Vector3(), { 1027, 1030 }, 6, std::string(), "Fangorn" };
 		e.id = 3;
+		e.weather = WEATHER_SNOW;
+		e.temperature = -6.0f;
 		e.lost[1030]["Peasant"] = 4;
 		events.push_back(e);
 	}
@@ -6378,6 +6427,7 @@ void Test_ChronicleStory()
 	{
 		GC::Event e{ GC::Kind::Destroyed, 1500.0f, 1500.0f, Vector3(), { 1027, 1030 }, 0, "Manor", "Nen Hithoel" };
 		e.id = 5;
+		e.weather = WEATHER_HEAVY_RAIN;
 		e.mentions = { mention(GC::MENTION_TOP_KILLER, 4136, 1027, 3, false, "Ralph the Wolf"),
 			mention(GC::MENTION_RAZED_BY, 4122, 1027, 1, false, "Olivier de Clermont") };
 		events.push_back(e);
@@ -6385,6 +6435,8 @@ void Test_ChronicleStory()
 	{
 		GC::Event e{ GC::Kind::Fallen, 1900.0f, 1900.0f, Vector3(), { 1027 }, 0, "Savaric le Redoutable", "Duncraig" };
 		e.id = 6;
+		e.weather = WEATHER_BLIZZARD;
+		e.temperature = -12.0f;
 		e.mentions = { mention(GC::MENTION_FALLEN, 4211, 1027, 2, true, "Savaric le Redoutable", "froze to death") };
 		events.push_back(e);
 	}
@@ -6402,12 +6454,17 @@ void Test_ChronicleStory()
 	ctx.dayLengthS = 300.0f;
 	ctx.startSeason = 0;
 	ctx.startHour = 8;
+	auto noTemplate = [](const std::string& text) {
+		return text.find('{') == std::string::npos && text.find('}') == std::string::npos && text.find("  ") == std::string::npos
+			&& text.find(" a a") == std::string::npos && text.find(" a e") == std::string::npos && text.find(" a o") == std::string::npos
+			&& text.find(" a i") == std::string::npos && text.find("..") == std::string::npos && text.find(",,") == std::string::npos
+			&& text.find(" the the ") == std::string::npos && text.find("when,") == std::string::npos;
+	};
 	for (const auto& e : events) {
 		const auto pieces = ChronicleNarrator::narrate(e, ctx);
 		const std::string text = ChronicleNarrator::plain(pieces);
 		printf("UNITTEST   [%s] %s\nUNITTEST     %s\n", ChronicleNarrator::dateLine(e.time, ctx).c_str(), e.title().c_str(), text.c_str());
-		check(text.size() > 40 && text.find('{') == std::string::npos && text.find('}') == std::string::npos && text.find("  ") == std::string::npos,
-			std::string(GC::kindName(e.kind)) + ": a paragraph, no template left");
+		check(text.size() > 40 && noTemplate(text), std::string(GC::kindName(e.kind)) + ": a paragraph, no template left");
 		check(text == ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx)), std::string(GC::kindName(e.kind)) + ": the same words again");
 		// every unit named as a link, the players' names as theirs
 		std::set<int> linked;
@@ -6426,25 +6483,61 @@ void Test_ChronicleStory()
 			allNamed &= linked.count((int)i) || elsewhere;
 		}
 		check(allNamed, std::string(GC::kindName(e.kind)) + ": every unit named, as a link (" + std::to_string(linked.size()) + ")");
-		check(players, std::string(GC::kindName(e.kind)) + ": the players named as theirs");
+		// (a hero's fall may name the hero alone)
+		check(players || e.kind == GC::Kind::Fallen, std::string(GC::kindName(e.kind)) + ": the players named as theirs");
 	}
-	// the causes and the outcome in words
+	auto any = [&](const std::string& text, const std::string& word) {
+		auto it = words.find(word);
+		if (it == words.end())
+			return false;
+		for (const auto& alt : it->second) {
+			const std::string a = alt.substr(0, alt.find('{'));
+			if (!a.empty() && text.find(a) != std::string::npos)
+				return true;
+		}
+		return false;
+	};
+	// the facts in the words
 	const std::string battle = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[0], ctx));
-	check(battle.find("Saint Jane") != std::string::npos && battle.find("ten") != std::string::npos, "the battle's losses told");
-	check(battle.find("slain by Aelfred of Bamburgh") != std::string::npos, "the fallen hero's slayer told");
+	check(battle.find("ten") != std::string::npos, "the battle's losses told");
+	check(battle.find("Aelfred of Bamburgh") != std::string::npos && any(battle, "CAUSE.slain"), "the fallen hero's slayer told");
+	check(any(battle, "WEATHER_ADJ.fog") || any(battle, "WEATHER_UNDER.fog") || battle.find("mist") != std::string::npos || battle.find("fog") != std::string::npos,
+		"a foggy battle told as foggy");
 	const std::string cold = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[5], ctx));
-	check(cold.find("taken by the cold") != std::string::npos, "a death by the cold told as such");
+	check(any(cold, "CAUSE.cold"), "a death by the cold told as such");
 	const std::string siege = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[1], ctx));
-	check(siege.find("Militia") != std::string::npos && siege.find("came in strength") != std::string::npos, "the siege: the losses by type, the stronger side");
-	// the wording changes from event to event
-	std::set<std::string> openings;
-	for (uint32_t id = 1; id <= 30; id++) {
-		GC::Event e = events[0];
-		e.id = id;
-		const std::string t = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx));
-		openings.insert(t.substr(0, t.find('.')));
+	check(siege.find("Militia") != std::string::npos && siege.find("fifty") == std::string::npos && siege.find("50") != std::string::npos,
+		"the siege: the dead by type, the stronger side's numbers");
+	// a clear night: no sun in it
+	{
+		int sunny = 0;
+		for (uint32_t id = 1; id <= 40; id++) {
+			GC::Event e = events[0];
+			e.id = id;
+			e.weather = WEATHER_CLEAR;
+			e.time = 300.0f * 4 + 300.0f * 0.6f; // 300 s days from 8 o'clock: 22:24
+			const std::string t = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx));
+			bool sun = false;
+			for (size_t at = t.find("sun"); at != std::string::npos; at = t.find("sun", at + 1))
+				sun |= (at == 0 || !std::isalpha((unsigned char)t[at - 1])) && (at + 3 >= t.size() || t[at + 3] != 'g');
+			if (sun || t.find("Sun") != std::string::npos)
+				sunny++, printf("UNITTEST   sunny night: %s\n", t.c_str());
+		}
+		check(sunny == 0, "a clear night's battles never mention the sun (" + std::to_string(sunny) + " of 40)");
 	}
-	check(openings.size() >= 3, "the battles' openings vary (" + std::to_string(openings.size()) + " of 3)");
+	// the wording changes from event to event
+	{
+		std::set<std::string> openings, wholes;
+		for (uint32_t id = 1; id <= 40; id++) {
+			GC::Event e = events[0];
+			e.id = id;
+			const std::string t = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx));
+			openings.insert(t.substr(0, t.find('.')));
+			wholes.insert(t);
+			check(noTemplate(t), "battle " + std::to_string(id) + ": no template left");
+		}
+		check(openings.size() >= 30 && wholes.size() == 40, "40 battles: " + std::to_string(openings.size()) + " different openings, " + std::to_string(wholes.size()) + " different paragraphs");
+	}
 	// the calendar: 600 s seasons from spring; 300 s days from 8 o'clock
 	check(ChronicleNarrator::dateLine(300.0f, ctx).rfind("Spring, the year 1000", 0) == 0, "300 s: " + ChronicleNarrator::dateLine(300.0f, ctx));
 	check(ChronicleNarrator::dateLine(1900.0f, ctx).rfind("Winter, the year 1000", 0) == 0, "1900 s: " + ChronicleNarrator::dateLine(1900.0f, ctx));
@@ -6455,7 +6548,11 @@ void Test_ChronicleStory()
 	ChronicleNarrator::Context none = ctx;
 	none.seasons = none.dayNight = false;
 	check(ChronicleNarrator::dateLine(65.0f, none) == "1:05", "no calendar: the clock (" + ChronicleNarrator::dateLine(65.0f, none) + ")");
-	check(ChronicleNarrator::plain(ChronicleNarrator::narrate(events[0], none)).rfind("Early in the war", 0) == 0, "no calendar: the war's progress opens it");
+	{
+		GC::Event e = events[0];
+		e.weather = -1;
+		check(any(ChronicleNarrator::plain(ChronicleNarrator::narrate(e, none)), "WAR_STAGE.early"), "no calendar, no weather: the war's progress opens it");
+	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 

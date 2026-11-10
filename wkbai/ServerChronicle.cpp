@@ -209,6 +209,11 @@ void ServerChronicle::heroFell(Server& server, uint32_t hero, const Vector3& at,
 	e.lastPosition = at;
 	e.seen = true;
 	e.id = chron.nextId++;
+	if (server.environment.enabled()) {
+		e.weather = server.environment.state.weather;
+		e.temperature = server.environment.state.temperatureC;
+		e.snowCover = server.environment.state.snowCover;
+	}
 	fallen[e.id].push_back(m);
 	if (killer)
 		if (ServerGameObject* k = server.findObject(killer))
@@ -274,8 +279,16 @@ void ServerChronicle::update(Server& server)
 				destroyedParticipants(server, chron.events[i], now);
 		razes.erase(std::remove_if(razes.begin(), razes.end(), [&](const KillNote& r) { return now - r.time > 60.0f; }), razes.end());
 		for (size_t i : chron.touched)
-			if (i < chron.events.size())
-				dirty.insert(chron.events[i].id);
+			if (i < chron.events.size()) {
+				// the weather when it began, for the chronicle's words
+				GameChronicle::Event& e = chron.events[i];
+				if (e.weather < 0 && server.environment.enabled()) {
+					e.weather = server.environment.state.weather;
+					e.temperature = server.environment.state.temperatureC;
+					e.snowCover = server.environment.state.snowCover;
+				}
+				dirty.insert(e.id);
+			}
 	}
 	// the events changed, to the clients
 	for (uint32_t id : dirty)
