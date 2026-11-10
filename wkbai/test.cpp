@@ -5504,7 +5504,7 @@ void Test_MoonPhases()
 		char what[200];
 		snprintf(what, sizeof(what), "sky light at midnight: full moon %.2f, new moon %.2f, noon %.2f; ambient %.2f / %.2f",
 			full.skyLightScale, none.skyLightScale, noon.skyLightScale, full.ambient[1], none.ambient[1]);
-		check(full.skyLightScale > 0.95f && none.skyLightScale < 0.6f && std::fabs(noon.skyLightScale - 1.0f) < 0.01f
+		check(full.skyLightScale > 0.88f && full.skyLightScale < 0.96f && none.skyLightScale < 0.6f && std::fabs(noon.skyLightScale - 1.0f) < 0.01f
 			&& none.ambient[1] < 0.6f * full.ambient[1], what);
 	}
 	// the natural month: on by 1/29.53 a game day, from moonStart

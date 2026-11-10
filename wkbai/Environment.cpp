@@ -374,10 +374,10 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	const float dayCol[3] = { 1.0f, 0.62f + 0.38f * warm, 0.38f + 0.62f * warm };
 	// The moon's light by its phase and height, and the night sky's with it: most of the night's
 	// ambient light is the moonlit sky, so a moonless night is about half as light and has no
-	// direct light, a full moon a little lighter than before (the play test of 2026-11-10: the
-	// sky's unchanged ambient, stronger than the moon's direct light, hid the phase)
-	const float moonCol[3] = { 0.26f * sun.moonLight, 0.31f * sun.moonLight, 0.46f * sun.moonLight };
-	const float skyMoon = 0.50f + 0.55f * sun.moonLight;
+	// direct light (the play test of 2026-11-10: the sky's unchanged ambient, stronger than the
+	// moon's direct light, hid the phase; then 12% down, a little too bright, 2026-11-11)
+	const float moonCol[3] = { 0.23f * sun.moonLight, 0.27f * sun.moonLight, 0.40f * sun.moonLight };
+	const float skyMoon = 0.50f + 0.42f * sun.moonLight;
 	const float ambDay[3] = { 1.0f, 0.92f + 0.08f * warm, 0.85f + 0.15f * warm };
 	const float ambNight[3] = { 0.30f * skyMoon, 0.35f * skyMoon, 0.50f * skyMoon };
 	sun.moon = 1.0f - sun.daylight;
