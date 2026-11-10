@@ -1619,12 +1619,31 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					R.hgt[gi] = edgeHeight(O, R.xs[i], R.zs[j]);
 				}
 		}
-		// and the copy's outer edge on ring 0's inner edge (the copy's water there takes ring 0's too)
+		// and the copy's outer edge on ring 0's inner edge (the copy's water there takes ring 0's too).
+		// Where ring 0 is water there, the copy keeps its own bed under it: lifted to the water's
+		// surface, its last tile was shallow water over a dark bed with the surf's foam, a dark line
+		// along the seam at dusk (the two surfaces meet at the same level and hide the step).
+		auto edgeWet = [](const Ring& R, float px, float pz) {
+			const int NX = R.nx();
+			auto idx = [](const std::vector<float>& ls, float p) {
+				int a = (int)(std::upper_bound(ls.begin(), ls.end(), p) - ls.begin()) - 1;
+				return std::clamp(a, 0, (int)ls.size() - 2);
+			};
+			const int a = idx(R.xs, px), c = idx(R.zs, pz);
+			const int i = (int)(std::lower_bound(R.xs.begin(), R.xs.end(), px - 1e-3f) - R.xs.begin());
+			const int j = (int)(std::lower_bound(R.zs.begin(), R.zs.end(), pz - 1e-3f) - R.zs.begin());
+			if (std::abs(px - R.ix0) < 1e-3f || std::abs(px - R.ix1) < 1e-3f)
+				return R.water[(size_t)c * NX + i] && R.water[(size_t)(c + 1) * NX + i];
+			return R.water[(size_t)j * NX + a] && R.water[(size_t)j * NX + a + 1];
+		};
 		for (int Z = 0; Z <= H; Z++)
 			for (int X = 0; X <= W; X++) {
 				if (!(X == 0 || Z == 0 || X == W || Z == H))
 					continue;
-				H_(X, Z) = edgeHeight(rings[0], (float)X, (float)Z);
+				const float h = edgeHeight(rings[0], (float)X, (float)Z);
+				if (edgeWet(rings[0], (float)X, (float)Z) && H_(X, Z) < h)
+					continue;
+				H_(X, Z) = h;
 			}
 
 		// the vertices: normals from the grid, colours by the zones; then the cells, by blocks

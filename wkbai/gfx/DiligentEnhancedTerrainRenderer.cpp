@@ -1423,17 +1423,43 @@ VS_OUTPUT VS_Far(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint Colour
 }
 float4 PS_Far(VS_OUTPUT input) : SV_Target
 {
-	if (input.Texcoord.x > 0.5) {
-		// the far sea: its deep colour under the sky's reflection, which grows at the grazing
-		// view (Schlick), lit by the sun's height; then the same fog and haze as the land
-		float3 v = normalize(FogCamera.xyz - input.FragPos);
-		float fres = 0.04 + 0.96 * pow(1 - saturate(v.y), 5);
-		float3 sky = FogTint(input.FragPos);
-		float3 c = lerp(input.Color.rgb * (0.45 + 0.55 * saturate(SunDirection.y * 1.5)), sky, saturate(0.05 + 0.6 * fres));
-		c = lerp(c, FogTint(input.FragPos), input.Fog);
-		return float4(GradeColour(c), 1);
-	}
+	// (the far sea is drawn by PS_FarSea, with the water's resources)
+	if (input.Texcoord.x > 0.5)
+		discard;
 	return ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
+}
+// The far sea: High water's open sea as it looks from afar, where its waves are smaller than a
+// pixel (PS_LakeHigh, deep and without the waves: their mean normal is the flat one): the deep
+// body with a little of the water texture, lit by the sun through the surface, under the sky
+// along the mirror ray by Fresnel (the waves tilt it towards the viewer, so the grazing view
+// reflects a little less than a flat mirror would), the sun's broad highlight, then the scene's
+// fog. With the water's binding: the water texture and the sky box. (It had been the vertex
+// colour under the fog colour: far lighter than the water at the seam with the near ring, a hard
+// line across the sea at dusk.)
+float4 PS_FarSea(VS_OUTPUT input) : SV_Target
+{
+	if (input.Texcoord.x <= 0.5)
+		discard;
+	float3 world = input.FragPos;
+	float3 v = normalize(FogCamera.xyz - world);
+	float3 l = normalize(SunDirection);
+	float3 n = float3(0, 1, 0);
+	float cloud = CloudLight(world);
+	float2 uv = world.xz * WaterParams.y;
+	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
+	float3 body = lerp(float3(0.015, 0.15, 0.26), tex * float3(0.55, 0.75, 0.85), 0.25);
+	body *= (0.6 + 0.4 * saturate(l.y)) * cloud;
+	// (the waves' tilt matters near the seam, where they still show; kilometres out, at the
+	// grazing view, the sea mirrors the sky wholly, as it does towards the horizon: there it meets
+	// the sky in the sky's own colours, dawn's and dusk's too. With the tilt everywhere the far sea
+	// stayed darker than the sky right to the horizon, a hard line on long views.)
+	float far = saturate((distance(world, FogCamera.xyz) - 1500) / 10000);
+	float fresnel = 0.02 + 0.98 * pow(1 - saturate(v.y + 0.06 * (1 - far)), 5);
+	float3 r = reflect(-v, n);
+	float3 sky = SkyAlong(r) * lerp(1, cloud, 0.5);
+	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud;
+	float3 c = lerp(body, sky, fresnel * lerp(0.8, 1.0, far)) + glint;
+	return float4(GradeColour(lerp(c, FogTint(world), input.Fog)), 1);
 }
 )---";
 
@@ -1487,7 +1513,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	// Extend map's far rings (FarTerrain): their mesh, blocks and pipelines
 	RefCntAutoPtr<IBuffer> farVertexBuffer, farIndexBuffer;
 	std::vector<FarBlock> farBlocks;
-	RefCntAutoPtr<IPipelineState> farPipeline, farDepthPipeline;
+	RefCntAutoPtr<IPipelineState> farPipeline, farDepthPipeline, farSeaPipeline;
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
@@ -2006,6 +2032,11 @@ void DiligentEnhancedTerrainRenderer::init()
 		fci.pVS = fvs;
 		fci.pPS = fps;
 		device->CreateGraphicsPipelineState(fci, &_impl->farPipeline);
+		GraphicsPipelineStateCreateInfo fsci = fci;
+		fsci.PSODesc.Name = "Extend map far sea";
+		RefCntAutoPtr<IShader> fsps = createShader(SHADER_TYPE_PIXEL, "PS_FarSea");
+		fsci.pPS = fsps;
+		device->CreateGraphicsPipelineState(fsci, &_impl->farSeaPipeline);
 		GraphicsPipelineStateCreateInfo fdci = fci;
 		fdci.PSODesc.Name = "Extend map far rings depth pre-pass";
 		fdci.pPS = nullptr;
@@ -2911,15 +2942,18 @@ void DiligentEnhancedTerrainRenderer::render()
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
 	// Extend map's far rings: their visible blocks, into the depth pre-pass or shaded
-	auto drawFar = [&](bool depth) {
-		IPipelineState* pso = depth ? _impl->farDepthPipeline.RawPtr() : _impl->farPipeline.RawPtr();
+	// (sea: the far sea with the water's binding, after the land)
+	auto drawFar = [&](bool depth, bool sea = false) {
+		IPipelineState* pso = depth ? _impl->farDepthPipeline.RawPtr() : sea ? _impl->farSeaPipeline.RawPtr() : _impl->farPipeline.RawPtr();
 		if (!pso || !_impl->farVertexBuffer || !_impl->farIndexBuffer || _impl->farBlocks.empty() || _impl->texturePairs.empty())
+			return;
+		if (sea && !_impl->lakeBinding)
 			return;
 		IBuffer* fvb = _impl->farVertexBuffer;
 		ctx->SetVertexBuffers(0, 1, &fvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->SetIndexBuffer(_impl->farIndexBuffer, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->SetPipelineState(pso);
-		ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, 0)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->CommitShaderResources(sea ? withMasks(_impl->lakeBinding) : withMasks(_impl->binding(dgfx, 0)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		for (const FarBlock& b : _impl->farBlocks) {
 			if (!visible(Vector3(b.lo[0], b.lo[1], b.lo[2]), Vector3(b.hi[0], b.hi[1], b.hi[2])))
 				continue;
@@ -2960,6 +2994,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	{
 		PROFILE_SCOPE("Far rings");
 		drawFar(false);
+		drawFar(false, true);
 	}
 	withMasks(_impl->lakeBinding);
 
