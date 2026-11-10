@@ -106,6 +106,15 @@ enum NetClientMessages {
 	// wkbai's unit history: an object's kill counts (UnitHistory): its id, the victim's (0: no new
 	// kill, the counts only: a client joining, a game loaded), kills, buildings destroyed (32 bits each)
 	NETCLIMSG_UNIT_KILLS,
+	// a tracked unit's history (UnitHistory::sendRecord): id, birth (float, game s), kind (8 bits:
+	// person, ship, no name, own name), flags (8 bits: hero, age unknown, just became a hero,
+	// dead, female), the name shown and the birth name (zero-ended)
+	NETCLIMSG_UNIT_HISTORY,
+	// a unit no longer tracked (a conscript back to the fields without a kill, a dead one that
+	// didn't count): its id
+	NETCLIMSG_UNIT_UNTRACKED,
+	// the kills to become a hero (32 bits)
+	NETCLIMSG_HERO_THRESHOLD,
 };
 
 enum NetServerMessages {

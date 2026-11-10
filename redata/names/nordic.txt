@@ -1,0 +1,255 @@
+# wkbai unit history: Nordic names (later medieval Danish, Swedish and Norwegian, with a few
+# Finnish). Written by hand for wkbai, GPL-3 like the rest of redata. The sections are
+# explained in english.txt.
+
+[male]
+Nils
+Lars
+Erik
+Torsten
+Väinö
+Aage
+Algot
+Amund
+Anders
+Arne
+Arvid
+Axel
+Bendt
+Bengt
+Birger
+Bjarne
+Bo
+Brynolf
+Christoffer
+Erland
+Esbern
+Esge
+Eskil
+Filip
+Folke
+Gregers
+Gunne
+Gustav
+Hans
+Hemming
+Henrik
+Holger
+Ingemar
+Ivar
+Jakob
+Jens
+Jep
+Jon
+Jöns
+Karl
+Kettil
+Klas
+Knut
+Lennart
+Magnus
+Mats
+Mattis
+Måns
+Mikael
+Mogens
+Morten
+Niels
+Olof
+Oluf
+Otte
+Palle
+Peder
+Per
+Poul
+Ragvald
+Roar
+Saxe
+Sigvard
+Staffan
+Sten
+Stig
+Sune
+Svante
+Sverker
+Tord
+Tore
+Tue
+Ture
+Tuve
+Tyge
+Uffe
+Ulf
+Valdemar
+Åke
+Östen
+Ahti
+Antti
+Eero
+Heikki
+Jaakko
+Juho
+Kalle
+Lauri
+Matti
+Mikko
+Niilo
+Olavi
+Paavo
+Pekka
+Tapio
+Tuomas
+Yrjö
+
+[female]
+Ingrid
+Kristin
+Märta
+Agnete
+Åsa
+Benedikta
+Birgitta
+Bodil
+Cecilia
+Dorotea
+Elin
+Elsebe
+Estrid
+Gertrud
+Gunhild
+Gunilla
+Gyrid
+Helena
+Inga
+Ingeborg
+Ingegerd
+Jutta
+Karen
+Karin
+Katarina
+Kerstin
+Kirsten
+Malin
+Margareta
+Merete
+Mette
+Ragnfrid
+Ragnhild
+Rikissa
+Sigrid
+Sissel
+Sofia
+Tora
+Tove
+Ulla
+Ulvhild
+Valborg
+Aino
+Anni
+Elina
+Helmi
+Kaisa
+Kyllikki
+Liisa
+Maija
+Marjatta
+Riitta
+Saara
+Vappu
+
+[byname-male]
+{father}sson
+{father}sson
+{father}sen
+{father}sen
+
+[byname-female]
+{father}sdotter
+{father}sdatter
+
+[byname]
+of Skåne
+of Uppland
+of Gotland
+of Själland
+of Fyn
+of Jylland
+of Småland
+of Värmland
+of Bergen
+of Ribe
+of Roskilde
+of Lund
+of Visby
+of Turku
+of Häme
+of Karelia
+of Viborg
+of Kalmar
+of Oslo
+Grip
+Bonde
+Skarpe
+Lange
+Stor
+Lille
+Rød
+Hvit
+Svart
+Brahe
+Ulfstand
+Tott
+
+[epithet]
+the Unshaken
+Iron-Shield
+the Stern
+Frost-Heart
+the Tireless
+Stone-Fist
+the Hardened
+Bear-Slayer
+Wolf-Bane
+the Relentless
+Pike-Wall
+the Unbending
+Storm-Shield
+the Watchful
+Spear-Breaker
+the Iron
+the Valiant
+the Hammer
+Oak-Heart
+Winter-Born
+the Bold
+the Defiant
+Snow-Wolf
+the Undefeated
+the Lion of the North
+
+[ship]
+Sankt Erik
+Sankt Olof
+Svanen
+Falken
+Örnen
+Draken
+Gripen
+Lejonet
+Havfrue
+Stormfågel
+Nordstjärnan
+Sankta Birgitta
+Marie
+Havörn
+Isbjörn
+Måsen
+Tranan
+Svalan
+Vargen
+Björnen
+Hjorten
+Delfinen
+Sankt Knud
+Havhest
+Nordvind

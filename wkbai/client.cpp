@@ -152,6 +152,9 @@ void Client::tick()
 				environmentSkyKnown = false;
 				environment = EnvironmentState();
 				nightSight = NightSight();
+				unitInfo.clear();
+				newHeroes.clear();
+				heroThreshold = 0;
 				int gsVersion = br.readUint8();
 				if (localServer) {
 					info("Client takes gameset from local server.\n");
@@ -553,6 +556,27 @@ void Client::tick()
 					obj->kills = kills;
 					obj->buildingsDestroyed = buildings;
 				}
+				break;
+			}
+			case NETCLIMSG_UNIT_HISTORY: {
+				const uint32_t objid = br.readUint32();
+				UnitInfo& info = unitInfo[objid];
+				info.birth = br.readFloat();
+				info.kind = br.readUint8();
+				const uint8_t flags = br.readUint8();
+				info.flags = flags & ~4; // F_NEW_HERO: an event, not a state
+				info.name = br.readStringZ();
+				info.birthName = br.readStringZ();
+				if (flags & 4)
+					newHeroes.push_back(objid);
+				break;
+			}
+			case NETCLIMSG_UNIT_UNTRACKED: {
+				unitInfo.erase(br.readUint32());
+				break;
+			}
+			case NETCLIMSG_HERO_THRESHOLD: {
+				heroThreshold = (int)br.readUint32();
 				break;
 			}
 			case NETCLIMSG_CURRENT_ORDER_REPORT: {

@@ -1,0 +1,255 @@
+# wkbai unit history: Norse names (Old Norse, the Viking age, in the usual anglicised
+# spellings). Written by hand for wkbai, GPL-3 like the rest of redata. The sections are
+# explained in english.txt. {father}s: the father's name in the genitive (Helgi: Helga).
+
+[male]
+Sigurd
+Thorfinn
+Ragnar
+Hallbjörn
+Arnbjörn
+Asbjörn
+Ásgeir
+Ari
+Atli
+Ásmund
+Bárd
+Bersi
+Björn
+Bolli
+Brand
+Egil
+Einar
+Eirík
+Eystein
+Eyvind
+Finnbogi
+Gaut
+Geir
+Gizur
+Glúm
+Grím
+Gudmund
+Gunnar
+Guthorm
+Hafgrim
+Hákon
+Hall
+Halldór
+Hallfred
+Hálfdan
+Hámund
+Harald
+Hastein
+Hauk
+Helgi
+Hjalti
+Hrafn
+Hrafnkel
+Hróald
+Hrói
+Hrolf
+Hrút
+Ingimund
+Ingólf
+Ivar
+Kálf
+Ketil
+Kjartan
+Knút
+Kol
+Kolbein
+Leif
+Ljót
+Már
+Njál
+Odd
+Ófeig
+Óláf
+Önund
+Orm
+Ragnvald
+Sæmund
+Sighvat
+Sigtrygg
+Skeggi
+Skúli
+Snorri
+Sölvi
+Starkad
+Steinar
+Styr
+Svein
+Thjodolf
+Thorbjörn
+Thord
+Thorgeir
+Thorgils
+Thorkel
+Thorleif
+Thormod
+Thorolf
+Thorstein
+Thorvald
+Thrand
+Torfi
+Ulf
+Úlfar
+Vali
+Vermund
+Vigfús
+
+[female]
+Gudrun
+Sigrid
+Thorgerd
+Ingibjörg
+Aud
+Ása
+Ásdís
+Ásgerd
+Ástrid
+Álfhild
+Alfdís
+Arnkatla
+Bera
+Bergthóra
+Brynhild
+Dís
+Freydís
+Geirrid
+Gróa
+Gudný
+Gunnhild
+Gyda
+Halldóra
+Hallgerd
+Hallveig
+Helga
+Herdís
+Hervör
+Hildigunn
+Hlíf
+Hrefna
+Ingunn
+Járngerd
+Jórunn
+Ketilrid
+Oddný
+Ólöf
+Ragna
+Ragnhild
+Rannveig
+Signý
+Steinunn
+Svanhild
+Thjodhild
+Thóra
+Thórdís
+Thórhild
+Thorbjörg
+Thurid
+Ulfhild
+Unn
+Valgerd
+Vigdís
+Yngvild
+
+[byname-male]
+{father}sson
+{father}sson
+{father}sson
+{father}sson
+
+[byname-female]
+{father}sdóttir
+{father}sdóttir
+
+[byname]
+Ironside
+Flatnose
+Broadshoulder
+Longbeard
+Redbeard
+Silkbeard
+Crow-Bone
+Hawk-Eye
+Wry-Neck
+Woodcarver
+Sea-Farer
+Stone-Arm
+Grey-Cloak
+Fair-Cheek
+the Icelander
+of Hladir
+of Jæren
+of Hördaland
+of Orkney
+of the Faroes
+of Borg
+of Vík
+of Hedeby
+of Birka
+of Uppsala
+of Nidaros
+of Sogn
+of Halogaland
+of Breidafjord
+
+[epithet]
+the Fearless
+Battle-Wolf
+Shield-Breaker
+the Unflinching
+Sword-Storm
+Raven-Feeder
+Bone-Crusher
+Helm-Splitter
+the Berserk
+Wolf-Heart
+Iron-Fist
+Storm-Bringer
+the Mighty
+the Stout
+the Grim
+the Strong
+Bear-Hand
+Axe-Bearer
+Byrnie-Breaker
+the Victorious
+the Unbroken
+the Tireless
+the Undaunted
+Doom-Bringer
+Oak-Shield
+Steel-Heart
+the Bold
+Spear-Storm
+
+[ship]
+Long Serpent
+Sea Stallion
+Wave Wolf
+Raven
+Crane
+Sea Bear
+Storm Wing
+Grey Goose
+Surf Strider
+Fjord Hart
+Whale Road
+Gold Mane
+Iron Beard
+Sea Eagle
+Ice Wolf
+Mist Rider
+Foam Biter
+Wind Steed
+Elk
+Black Swan
+Sea Snake
+Red Serpent
+Spray Hawk
+Oar Lord
+Skerry Wolf
+Tide Hound

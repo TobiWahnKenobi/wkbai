@@ -1,0 +1,7 @@
+# wkbai unit history: which cultures' names a faction's units get, with weights.
+# <faction> <culture> <weight> ...; a culture is a file in this folder (english.txt).
+# A unit's faction: its type's (units.txt), else its player's: Pagan or Celestial once the
+# player has more units of that faction's types than of the other's, else Imperial.
+imperial english 40 french 40 norse 10 nordic 10
+celestial french 40 english 40 norse 10 nordic 10
+pagan norse 40 nordic 40 english 10 french 10

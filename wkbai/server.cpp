@@ -219,6 +219,7 @@ void Server::loadSaveGame(const char * filename)
 		free(text);
 		UnitHistory::loadText(*this, all);
 	}
+	unitHistory.loaded(*this);
 	// the work orders as saved, before any the scripts register again: their order decides which
 	// takes a unit listed by several (a replay played another game when they came in another)
 	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)
@@ -318,6 +319,8 @@ ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerG
 	obj->setParent(parent);
 	obj->setPosition(initialPosition);
 	obj->setOrientation(initialOrientation);
+	// wkbai's unit history: a soldier made gets its name and its birth
+	unitHistory.spawned(*this, obj);
 
 	// TODO: "On Stampdown" event, etc.
 	if (blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
@@ -1381,6 +1384,8 @@ void ServerGameObject::setParent(ServerGameObject * newParent)
 	msg.writeUint32(this->id);
 	msg.writeUint32(newParent->id);
 	Server::instance->sendToAll(msg);
+	// wkbai's unit history: joining or leaving a formation, another player
+	Server::instance->unitHistory.parentChanged(*Server::instance, this, oldParent ? oldParent->dyncast<ServerGameObject>() : nullptr, newParent);
 	
 	if (oldParent) {
 		oldParent->dyncast<ServerGameObject>()->notifySubordinateRemoved();
@@ -1635,6 +1640,7 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	parent->children[postbp].push_back(this);
 	// backup of previous blueprint
 	const GameObjBlueprint* prevbp = blueprint;
+	const std::string prevSubtype = prevbp->subtypeNames.getString(this->subtype);
 	// now converted!
 	blueprint = postbp;
 	// a foundation become its building, and the like, may start or stop being seen
@@ -1658,6 +1664,8 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	removeBuiltUponUnderFootprint(true);
 	// reset flags
 	this->updateFlags((this->flags & ~(fRenderable | fSelectable | fTargetable)) | postbp->getStartingFlags());
+	// wkbai's unit history: conscripted, back to the fields, upgraded
+	Server::instance->unitHistory.converted(*Server::instance, this, prevbp, prevSubtype);
 }
 
 void ServerGameObject::setScale(const Vector3& scale)
@@ -2380,6 +2388,8 @@ void Server::startLevel()
 	// a new game: new random numbers, or the same ones every time with "simSeed" (tests)
 	lastSeed = g_settings.value("simSeed", (uint32_t)SDL_GetTicks() ^ (uint32_t)time(nullptr));
 	g_simRandom.seed(lastSeed);
+	// wkbai's unit history: the characters on the map get their names, born now
+	unitHistory.levelStarted(*this);
 
 	for (const auto& player : this->clientPlayerObjects) {
 		if (player) {
@@ -2885,6 +2895,7 @@ void Server::sendStateTo(NetLink* link)
 	if (!hostRegionsText.empty())
 		sendHostData(1, hostRegionsText, link);
 	environment.send(*this, link); // (without the seasons, for the game's sky)
+	unitHistory.sendAllTo(*this, link);
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;
@@ -3062,6 +3073,8 @@ void Server::simulate()
 	// (else once, for the game's sky)
 	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
+	// wkbai's unit history: the hero threshold once the game runs
+	unitHistory.update(*this);
 	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)

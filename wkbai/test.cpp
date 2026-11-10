@@ -5737,6 +5737,245 @@ void Test_UnitHistory()
 	fflush(stdout);
 }
 
+// wkbai's unit history, phases 2-4: names (by faction, unique, the same from the same seed),
+// conscripts, heroes at the threshold, the formation rules, a hero slain, and all of it
+// through a save (the RE repo's docs/engine/unit-history.md)
+void Test_UnitNames()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 4242;
+	const std::string saveName = "Save_Games\\wkbai unit names";
+	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8(saveName + ".sav"));
+	// the names of a fresh game, by unit id
+	auto gameNames = [&](std::map<uint32_t, std::string>& out) {
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		server.startLevel();
+		ServerGameObject* own = server.findObject(1027);
+		const GameObjBlueprint* spear = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+		const GameObjBlueprint* bow = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pagan Mounted Bowoman");
+		for (int i = 0; i < 20 && own && spear; i++)
+			server.spawnObject(i % 4 == 3 && bow ? bow : spear, own, own->position + Vector3(5.0f + i, 0, 5.0f), Vector3(0, 0, 0));
+		for (const auto& [id, rec] : server.unitHistory.records)
+			out[id] = rec.name;
+	};
+	std::map<uint32_t, std::string> first, second;
+	gameNames(first);
+	gameNames(second);
+	check(!first.empty() && first == second, "the same seed gives the same names (" + std::to_string(first.size()) + " units)");
+	{
+		int shown = 0;
+		for (const auto& [id, name] : first)
+			if (shown++ < 8)
+				printf("UNITTEST   %u \"%s\"\n", id, name.c_str());
+	}
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	server.unitHistory.trace = getenv("WKB_TRACE_KILLS") != nullptr;
+	UnitHistory& uh = server.unitHistory;
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* peasantBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const GameObjBlueprint* militiaBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Militia");
+	const GameObjBlueprint* cogBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cog");
+	const GameObjBlueprint* tbBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Trebuchet");
+	const int hp = gs.items.names.getIndex("Hit Points");
+	const GameObjBlueprint* formationBp = gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].getPointer(0);
+	if (!own || !enemy || !spear || !peasantBp || !militiaBp || hp < 0 || !formationBp) {
+		printf("UNITTEST not set up\n");
+		return;
+	}
+	// the name pools: 300 names for one player, none twice
+	for (int faction = 0; faction < 3; faction++) {
+		std::set<std::string> seen;
+		std::string samples;
+		for (int i = 0; i < 300; i++) {
+			const std::string n = uh.drawName(900 + faction, faction, i % 3 == 0, false);
+			seen.insert(n);
+			if (i < 6)
+				samples += "\"" + n + "\" ";
+		}
+		printf("UNITTEST   faction %d: %s\n", faction, samples.c_str());
+		check(seen.size() == 300, "faction " + std::to_string(faction) + ": 300 names, all different (" + std::to_string(seen.size()) + ")");
+	}
+	{
+		std::string ships;
+		for (int i = 0; i < 4; i++)
+			ships += "\"" + uh.drawName(950, 0, false, true) + "\" ";
+		printf("UNITTEST   ships: %s\n", ships.c_str());
+	}
+	// the units on the map at the start: every one tracked has a name, unique within its player
+	{
+		std::map<uint32_t, std::set<std::string>> byPlayer;
+		int named = 0, duplicate = 0, missing = 0;
+		for (const auto& [id, rec] : uh.records) {
+			if (rec.kind == UnitHistory::KIND_NONAME)
+				continue;
+			if (rec.name.empty()) { missing++; continue; }
+			named++;
+			if (!byPlayer[rec.player].insert(rec.name).second)
+				duplicate++;
+		}
+		// (4 Peaks starts with peasants only: none to name)
+		check(missing == 0 && duplicate == 0, "the map's units named: " + std::to_string(named) + ", none missing (" + std::to_string(missing)
+			+ "), none twice (" + std::to_string(duplicate) + ")");
+	}
+	const Vector3 base = own->position + Vector3(30.0f, 0, 30.0f);
+	auto spawn = [&](const GameObjBlueprint* bp, ServerGameObject* player, float x) {
+		Vector3 p = base + Vector3(x, 0, 0);
+		p.y = server.terrain->getHeight(p.x, p.z);
+		return server.spawnObject(bp, player, p, Vector3(0, 0, 0));
+	};
+	// a kill by the engine's own path: the victim's last hit, no hit points, terminated
+	float x = 0.0f;
+	auto killBy = [&](ServerGameObject* killer, int count) {
+		for (int i = 0; i < count; i++) {
+			ServerGameObject* v = spawn(spear, killer->getPlayer() == enemy ? own : enemy, 200.0f + (x += 1.0f));
+			v->setItem(hp, 0.0f);
+			v->lastHitBy = killer->id;
+			v->lastHitTime = server.timeManager.currentTime;
+			v->terminate();
+		}
+	};
+	const UnitHistory::Record* r = nullptr;
+	// boats and siege engines
+	if (cogBp) {
+		ServerGameObject* cog = spawn(cogBp, own, -20.0f);
+		r = uh.find(cog->id);
+		check(r && r->kind == UnitHistory::KIND_SHIP && !r->name.empty(), "a cog gets a ship's name (" + (r ? r->name : std::string("none")) + ")");
+	}
+	if (tbBp) {
+		ServerGameObject* tb = spawn(tbBp, own, -30.0f);
+		r = uh.find(tb->id);
+		check(r && r->kind == UnitHistory::KIND_NONAME && r->name.empty(), "a trebuchet is tracked without a name");
+	}
+	// conscripts
+	ServerGameObject* peasant = spawn(peasantBp, own, -10.0f);
+	check(!uh.tracked(peasant->id), "a peasant isn't tracked");
+	peasant->convertTo(militiaBp);
+	r = uh.find(peasant->id);
+	check(r && r->conscript && !r->name.empty(), "conscripted, it is tracked and named (" + (r ? r->name : std::string()) + ")");
+	peasant->convertTo(peasantBp);
+	check(!uh.tracked(peasant->id), "back to the fields without a kill: untracked");
+	peasant->convertTo(militiaBp);
+	r = uh.find(peasant->id);
+	const std::string conscriptName = r ? r->name : std::string();
+	killBy(peasant, 1);
+	peasant->convertTo(peasantBp);
+	r = uh.find(peasant->id);
+	check(r && r->name == conscriptName && peasant->kills == 1, "back to the fields with a kill: still tracked, its name kept (" + conscriptName + ")");
+	// heroes
+	uh.threshold = 3;
+	ServerGameObject* soldier = spawn(spear, own, 0.0f);
+	killBy(soldier, 2);
+	check(!uh.find(soldier->id)->hero, "2 kills: no hero yet");
+	killBy(soldier, 1);
+	r = uh.find(soldier->id);
+	check(r->hero && !r->epithet.empty() && r->displayName() == r->given + " " + r->epithet,
+		"3 kills: a hero, \"" + r->name + "\" is now \"" + r->displayName() + "\"");
+	// formations
+	ServerGameObject* formation = server.spawnObject(formationBp, own, base, Vector3(0, 0, 0));
+	ServerGameObject* a = spawn(spear, own, 2.0f), * b = spawn(spear, own, 3.0f), * c = spawn(spear, own, 4.0f), * d = spawn(spear, own, 5.0f);
+	// (one that stays: a formation without members is removed)
+	ServerGameObject* keeper = spawn(spear, own, 1.0f);
+	for (ServerGameObject* m : { keeper, a, b, c, d })
+		m->setParent(formation);
+	killBy(a, 3);
+	check(uh.find(a->id)->hero, "the first member at the threshold becomes the formation's hero");
+	killBy(b, 7);
+	check(!uh.find(b->id)->hero && uh.find(b->id)->heroPending, "a second member at 7 kills is no hero (one per formation)");
+	check(formation->kills == 10, "the formation's tally: 10 (" + std::to_string(formation->kills) + ")");
+	b->setParent(own);
+	check(b->kills == 4 && !uh.find(b->id)->hero && uh.find(b->id)->heroPending, "it leaves: 7 formation kills -> 4 kept, not a hero yet (" + std::to_string(b->kills) + ")");
+	ServerGameObject* foe = spawn(spear, enemy, 50.0f);
+	uh.hit(server, b, foe);
+	check(uh.find(b->id)->hero, "its next fight makes it a hero (" + uh.find(b->id)->displayName() + ")");
+	killBy(c, 2);
+	c->setParent(own);
+	check(c->kills == 1, "a member with 2 formation kills leaves with 1 (" + std::to_string(c->kills) + ")");
+	killBy(d, 2);
+	d->setItem(hp, 0.0f);
+	d->setParent(own);
+	check(d->kills == 2, "a dying member keeps all its kills (" + std::to_string(d->kills) + ")");
+	a->setParent(own);
+	check(a->kills == 3 && uh.find(a->id)->hero, "the hero leaves with all its kills, still a hero");
+	a->setParent(formation);
+	soldier->setParent(formation);
+	int heroes = 0;
+	for (const auto& [type, members] : formation->children)
+		for (CommonGameObject* m : members)
+			if (const auto* mr = uh.find(m->id); mr && mr->hero)
+				heroes++;
+	check(heroes == 2, "two heroes join a formation: it has two (" + std::to_string(heroes) + ")");
+	ServerGameObject* g = spawn(spear, own, 6.0f);
+	g->setParent(formation);
+	killBy(g, 4);
+	check(!uh.find(g->id)->hero, "a member that is no hero can't become one in a formation with a hero");
+	// a hero slain
+	ServerGameObject* slayer = spawn(spear, enemy, 60.0f);
+	const uint32_t aId = a->id;
+	const std::string aName = uh.find(aId)->displayName();
+	a->setItem(hp, 0.0f);
+	a->lastHitBy = slayer->id;
+	a->lastHitTime = server.timeManager.currentTime;
+	a->terminate();
+	r = uh.find(aId);
+	const UnitHistory::Record* sr = uh.find(slayer->id);
+	check(r && r->death >= 0.0f && r->slainBy == slayer->id && sr && std::count(sr->slew.begin(), sr->slew.end(), aId) == 1,
+		"a hero slain: its record kept, its slayer noted (" + aName + " slain by " + (r ? r->slainByText : std::string()) + ")");
+	// all of it through a save
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	for (int step = 0; step < 100; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+	}
+	const std::map<uint32_t, UnitHistory::Record> before = uh.records;
+	const uint64_t seed = uh.nameSeed;
+	check(server.saveGame(savePath.c_str()), "saved");
+	{
+		Server loaded;
+		loaded.loadSaveGame(savePath.c_str());
+		int same = 0, differ = 0;
+		for (const auto& [id, rb] : before) {
+			const UnitHistory::Record* rl = loaded.unitHistory.find(id);
+			ServerGameObject* ob = server.findObject(id);
+			ServerGameObject* ol = loaded.findObject(id);
+			const bool killsSame = (!ob && !ol) || (ob && ol && ob->kills == ol->kills) || (ob && !ol && rb.death >= 0.0f);
+			if (rl && rl->name == rb.name && rl->epithet == rb.epithet && rl->hero == rb.hero && rl->heroPending == rb.heroPending && rl->birth == rb.birth
+				&& rl->death == rb.death && rl->formation == rb.formation && rl->formationKills == rb.formationKills && rl->slew == rb.slew && killsSame)
+				same++;
+			else {
+				differ++;
+				if (differ < 5)
+					printf("UNITTEST   differs: %u \"%s\"\n", id, rb.name.c_str());
+			}
+		}
+		check(differ == 0 && same == (int)before.size(), "after loading: every record the same (" + std::to_string(same) + " of " + std::to_string(before.size()) + ")");
+		check(loaded.unitHistory.nameSeed == seed && loaded.unitHistory.threshold == uh.threshold, "the name stream and the threshold kept");
+		// a unit made after loading draws the next name in both
+		ServerGameObject* lo = loaded.findObject(1027);
+		Vector3 p = base + Vector3(-40.0f, 0, 0);
+		p.y = server.terrain->getHeight(p.x, p.z);
+		ServerGameObject* n1 = server.spawnObject(spear, own, p, Vector3(0, 0, 0));
+		ServerGameObject* n2 = lo ? loaded.spawnObject(spear, lo, p, Vector3(0, 0, 0)) : nullptr;
+		const UnitHistory::Record* r1 = uh.find(n1->id);
+		const UnitHistory::Record* r2 = n2 ? loaded.unitHistory.find(n2->id) : nullptr;
+		check(r1 && r2 && r1->name == r2->name, "the next unit gets the same name in the game and the loaded one (" + (r1 ? r1->name : std::string()) + ")");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -5792,6 +6031,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_BuildRequirements, "Build requirements: the build menu's commands before and after the Fort's research"},
 {Test_MoonPhases, "Moon phases: lit part and side, the moon's light and shadows, the natural month, the saved setting"},
 {Test_UnitHistory, "Unit history: kills credited (melee, archers, a garrisoned tower), no kill for a removal, kept by a save"},
+{Test_UnitNames, "Unit names: by faction, unique, from the seed; conscripts; heroes, formations, a hero slain; kept by a save"},
 };
 
 void LaunchTest()
