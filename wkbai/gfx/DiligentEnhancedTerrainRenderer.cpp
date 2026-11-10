@@ -1401,6 +1401,40 @@ float4 PS_Albedo(VS_OUTPUT input) : SV_Target
 	float4 tex = inpTexture.Sample(inpSampler, AtlasUV(input.Texcoord));
 	return float4(tex.rgb * input.Color.rgb, 1);
 }
+
+// Extend map's far rings (ExtendMap.h, FarTerrain): a colour and a normal per vertex, lit and
+// hazed by the terrain's own ShadeTerrain (a flat normal map: the vertex normal); the colour's
+// alpha is 0 on water (Texcoord.x 1: a flat surface). Only the scene's own fog (FogAmount, FogTint):
+// no haze of their own, so dawn, dusk and the sun over the haze look on them as on the map
+VS_OUTPUT VS_Far(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint ColourPacked : ATTRIB2)
+{
+	VS_OUTPUT o = (VS_OUTPUT)0;
+	o.Pos = mul(float4(Pos3, 1), Transform);
+	o.FragPos = Pos3;
+	float3 n = normalize(Unpack1010102(NormalPacked).xyz * 2 - 1);
+	o.Norm = n;
+	o.Color = float4(float3(ColourPacked & 255, (ColourPacked >> 8) & 255, (ColourPacked >> 16) & 255) / 255.0, 1);
+	o.Texcoord = float2((ColourPacked >> 24) < 128 ? 1 : 0, 0);
+	o.Fog = FogAmount(Pos3, distance(Pos3, FogCamera.xyz));
+	float3 t = normalize(cross(n, float3(0, 0, 1)));
+	o.Tangent = t;
+	o.Bitangent = cross(t, n);
+	return o;
+}
+float4 PS_Far(VS_OUTPUT input) : SV_Target
+{
+	if (input.Texcoord.x > 0.5) {
+		// the far sea: its deep colour under the sky's reflection, which grows at the grazing
+		// view (Schlick), lit by the sun's height; then the same fog and haze as the land
+		float3 v = normalize(FogCamera.xyz - input.FragPos);
+		float fres = 0.04 + 0.96 * pow(1 - saturate(v.y), 5);
+		float3 sky = FogTint(input.FragPos);
+		float3 c = lerp(input.Color.rgb * (0.45 + 0.55 * saturate(SunDirection.y * 1.5)), sky, saturate(0.05 + 0.6 * fres));
+		c = lerp(c, FogTint(input.FragPos), input.Fog);
+		return float4(GradeColour(c), 1);
+	}
+	return ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
+}
 )---";
 
 struct DiligentEnhancedTerrainRenderer::Impl {
@@ -1450,6 +1484,10 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> lakeVertexBuffer;
 	RefCntAutoPtr<IPipelineState> lakePipeline;
 	RefCntAutoPtr<IPipelineState> grassPipeline;
+	// Extend map's far rings (FarTerrain): their mesh, blocks and pipelines
+	RefCntAutoPtr<IBuffer> farVertexBuffer, farIndexBuffer;
+	std::vector<FarBlock> farBlocks;
+	RefCntAutoPtr<IPipelineState> farPipeline, farDepthPipeline;
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
@@ -1663,14 +1701,14 @@ static texture CreateRippleTexture(IRenderer* gfx)
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
 
 
-DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles)
-	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain)
+DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles, int farRings)
+	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain), farRingCount(farRings)
 {
 	// Extend map: everything below draws the bigger copy (the same world coordinates)
 	if (terrain && extendTiles > 0) {
 		LoadingDetail("extending the map");
 		const uint32_t t0 = SDL_GetTicks();
-		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees);
+		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees, farRings, &far);
 		this->terrain = extended.get();
 		printf("Extend map: built in %u ms\n", (unsigned)(SDL_GetTicks() - t0));
 	}
@@ -1952,6 +1990,47 @@ void DiligentEnhancedTerrainRenderer::init()
 	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
+	// Extend map's far rings: FarVertex (position, normal, colour), the same resources
+	if (!far.indices.empty()) {
+		static const LayoutElement farLayout[] = {
+			LayoutElement{0, 0, 3, VT_FLOAT32, False},
+			LayoutElement{1, 0, 1, VT_UINT32, False},
+			LayoutElement{2, 0, 1, VT_UINT32, False},
+		};
+		GraphicsPipelineStateCreateInfo fci = ci;
+		fci.PSODesc.Name = "Extend map far rings";
+		fci.GraphicsPipeline.InputLayout.LayoutElements = farLayout;
+		fci.GraphicsPipeline.InputLayout.NumElements = (Uint32)std::size(farLayout);
+		RefCntAutoPtr<IShader> fvs = createShader(SHADER_TYPE_VERTEX, "VS_Far");
+		RefCntAutoPtr<IShader> fps = createShader(SHADER_TYPE_PIXEL, "PS_Far");
+		fci.pVS = fvs;
+		fci.pPS = fps;
+		device->CreateGraphicsPipelineState(fci, &_impl->farPipeline);
+		GraphicsPipelineStateCreateInfo fdci = fci;
+		fdci.PSODesc.Name = "Extend map far rings depth pre-pass";
+		fdci.pPS = nullptr;
+		fdci.GraphicsPipeline.NumRenderTargets = 0;
+		fdci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
+		device->CreateGraphicsPipelineState(fdci, &_impl->farDepthPipeline);
+		BufferDesc fvb;
+		fvb.Name = "Extend map far ring vertices";
+		fvb.Size = far.vertices.size() * sizeof(FarVertex);
+		fvb.BindFlags = BIND_VERTEX_BUFFER;
+		fvb.Usage = USAGE_IMMUTABLE;
+		BufferData fvd{ far.vertices.data(), fvb.Size };
+		device->CreateBuffer(fvb, &fvd, &_impl->farVertexBuffer);
+		BufferDesc fib;
+		fib.Name = "Extend map far ring indices";
+		fib.Size = far.indices.size() * sizeof(uint32_t);
+		fib.BindFlags = BIND_INDEX_BUFFER;
+		fib.Usage = USAGE_IMMUTABLE;
+		BufferData fid{ far.indices.data(), fib.Size };
+		device->CreateBuffer(fib, &fid, &_impl->farIndexBuffer);
+		_impl->farBlocks = far.blocks;
+		// the CPU copy isn't needed any more (the blocks are kept)
+		far.vertices = {};
+		far.indices = {};
+	}
 	{
 		// the depth pre-pass's (renderDepth): the untessellated ground into the lighting depth
 		GraphicsPipelineStateCreateInfo dci = ci;
@@ -2831,6 +2910,24 @@ void DiligentEnhancedTerrainRenderer::render()
 	};
 	IBuffer* vb = _impl->trnVertexBuffer;
 	const Uint64 vbOffset = 0;
+	// Extend map's far rings: their visible blocks, into the depth pre-pass or shaded
+	auto drawFar = [&](bool depth) {
+		IPipelineState* pso = depth ? _impl->farDepthPipeline.RawPtr() : _impl->farPipeline.RawPtr();
+		if (!pso || !_impl->farVertexBuffer || !_impl->farIndexBuffer || _impl->farBlocks.empty() || _impl->texturePairs.empty())
+			return;
+		IBuffer* fvb = _impl->farVertexBuffer;
+		ctx->SetVertexBuffers(0, 1, &fvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+		ctx->SetIndexBuffer(_impl->farIndexBuffer, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		ctx->SetPipelineState(pso);
+		ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, 0)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		for (const FarBlock& b : _impl->farBlocks) {
+			if (!visible(Vector3(b.lo[0], b.lo[1], b.lo[2]), Vector3(b.hi[0], b.hi[1], b.hi[2])))
+				continue;
+			DrawIndexedAttribs da{ b.count, VT_UINT32, DRAW_FLAG_VERIFY_ALL };
+			da.FirstIndexLocation = b.first;
+			ctx->DrawIndexed(da);
+		}
+	};
 	if (depthOnly) {
 		// the depth pre-pass: the ground's depth alone, into the lighting depth (which stays
 		// bound for renderWaterDepth)
@@ -2845,6 +2942,7 @@ void DiligentEnhancedTerrainRenderer::render()
 			ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, t)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			drawIndices(_impl->frameIndices[t]);
 		}
+		drawFar(true);
 		_impl->prepared = true;
 		return;
 	}
@@ -2858,6 +2956,10 @@ void DiligentEnhancedTerrainRenderer::render()
 			ctx->CommitShaderResources(withMasks(_impl->binding(dgfx, t)), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			drawIndices(_impl->frameIndices[t]);
 		}
+	}
+	{
+		PROFILE_SCOPE("Far rings");
+		drawFar(false);
 	}
 	withMasks(_impl->lakeBinding);
 

@@ -235,9 +235,9 @@ namespace {
 			MenuOption o;
 			o.id = "extendMap"; o.page = "terrain"; o.label = "Extend map";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Off", "Near" };
+			o.choices = { "Off", "Near", "Far", "Horizon" };
 			o.get = [&rs]() { return (float)rs.extendMap; };
-			o.set = [&rs](float v) { rs.extendMap = std::clamp((int)v, 0, 1); };
+			o.set = [&rs](float v) { rs.extendMap = std::clamp((int)v, 0, 3); };
 			list.push_back(o);
 		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));

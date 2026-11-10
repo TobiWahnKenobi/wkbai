@@ -163,6 +163,7 @@ private:
 	// a new terrain renderer for client->terrain, with Extend map as set (not in the map editor)
 	TerrainRenderer* makeTerrainRenderer();
 	int wantedExtendTiles() const;
+	int wantedFarRings() const;
 	// the lakes set on the client and the server, their water filled again and shown (the map editor)
 	void setLakes(const std::vector<Vector3>& lakes, const std::vector<uint8_t>& bits);
 	// The menu's "save" request: saves (saveGame) and tells the menu

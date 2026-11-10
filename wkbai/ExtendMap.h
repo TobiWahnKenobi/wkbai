@@ -20,8 +20,24 @@ struct Terrain;
 // rivers) carries on at its level; the tiles repeat the edge's (a material's tiles turned and
 // varied at random, transitions as they are).
 
-// the tiles added on each side at RenderSettings::extendMap (0: off)
+// the tiles added on each side at RenderSettings::extendMap (0: off), and the far rings
+// beyond them (0: none; Far 4, out to about 3.6 km beyond the near ring; Horizon 7, about 30 km)
 int ExtendMapTiles(int setting);
+int ExtendMapFarRings(int setting);
+
+// The far rings: coarse land around the near ring, each ring twice as coarse as the one inside it
+// (10, 20, 40 ... units), stitched to it without cracks; drawn by the terrain renderer's far
+// pipeline (PS_Far: the terrain's light and haze on a colour per vertex, the map's materials'
+// mean colours). Vertices in world units; normal R10G10B10A2 (n * 0.5 + 0.5); colour RGBA8, A 0
+// on water. Blocks: index ranges with their bounding boxes, for culling.
+struct FarVertex { float x, y, z; uint32_t normal, colour; };
+struct FarBlock { uint32_t first, count; float lo[3], hi[3]; };
+struct FarTerrain {
+	std::vector<FarVertex> vertices;
+	std::vector<uint32_t> indices;
+	std::vector<FarBlock> blocks;
+	float reach = 0; // world units from the near ring's edge to the last ring's
+};
 
 struct ExtendedTerrainDeleter { void operator()(Terrain* t) const; };
 using ExtendedTerrain = std::unique_ptr<Terrain, ExtendedTerrainDeleter>;
@@ -33,7 +49,7 @@ struct ExtendedTree { float x, y, z, yaw, scale; uint32_t variant; bool forest; 
 
 // The copy of map with n tiles more on each side (deterministic: the same map, the same copy),
 // and its trees (if wanted)
-ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr);
+ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr, int farRings = 0, FarTerrain* far = nullptr);
 
 // The map's changes at run time carried into the copy: its vertices (levelled building sites,
 // farms, the editor's heights), its tiles, and its water (lakes, the water design, ice)

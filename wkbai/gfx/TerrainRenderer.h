@@ -31,4 +31,7 @@ struct TerrainRenderer {
 	virtual int extendedTiles() const { return 0; }
 	// and the trees it grows there (null: none)
 	virtual const std::vector<ExtendedTree>* extendedTrees() const { return nullptr; }
+	// the far rings beyond (ExtendMapFarRings), and how far they reach beyond it (world units)
+	virtual int extendedFarRings() const { return 0; }
+	virtual float extendedFarReach() const { return 0.0f; }
 };

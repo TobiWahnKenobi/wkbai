@@ -15,7 +15,7 @@ namespace Diligent { struct ITextureView; }
 struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	// extendTiles: wkbai's Extend map (ExtendMap.h): the renderer draws a bigger copy of the map
 	// with that many tiles more on each side (0: the map itself), kept in step with it
-	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles = 0);
+	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles = 0, int farRings = 0);
 	~DiligentEnhancedTerrainRenderer();
 	void init();
 	void render() override;
@@ -31,6 +31,8 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	bool updateWater() override;
 	bool* bumpMapping() override { return &m_bumpOn; }
 	int extendedTiles() const override;
+	int extendedFarRings() const override { return extended ? farRingCount : 0; }
+	float extendedFarReach() const override { return extended ? far.reach : 0.0f; }
 	const std::vector<ExtendedTree>* extendedTrees() const override { return extended ? &trees : nullptr; }
 
 	bool m_bumpOn = true;
@@ -41,4 +43,6 @@ private:
 	Terrain* mapTerrain; // the map's own (the client's, maybe shared with a local server)
 	ExtendedTerrain extended; // its copy drawn, with Extend map (else null: terrain is the map's)
 	std::vector<ExtendedTree> trees; // the copy's trees
+	int farRingCount = 0;
+	FarTerrain far; // the far rings (their mesh goes to the GPU; the reach and blocks stay)
 };

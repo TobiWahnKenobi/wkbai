@@ -1029,8 +1029,8 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		{
 			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
-			static const char* const extendLevels[] = { "Off", "Near (64 tiles beyond the edge)" };
-			ImGui::Combo("Extend map (not in the editor)", &s.extendMap, extendLevels, 2);
+			static const char* const extendLevels[] = { "Off", "Near (64 tiles beyond the edge)", "Far (to about 3.6 km)", "Horizon (to about 30 km)" };
+			ImGui::Combo("Extend map (not in the editor)", &s.extendMap, extendLevels, 4);
 		}
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
@@ -2681,7 +2681,8 @@ void ClientInterface::iter()
 	}
 	// Extend map switched on or off, or the map editor opened or closed (it has none): the
 	// terrain renderer made again
-	if (terrainRenderer && client->terrain && UseEnhancedRenderers(gfx) && terrainRenderer->extendedTiles() != wantedExtendTiles()) {
+	if (terrainRenderer && client->terrain && UseEnhancedRenderers(gfx)
+		&& (terrainRenderer->extendedTiles() != wantedExtendTiles() || terrainRenderer->extendedFarRings() != wantedFarRings())) {
 		delete terrainRenderer;
 		terrainRenderer = makeTerrainRenderer();
 	}
@@ -3919,7 +3920,8 @@ void ClientInterface::iter()
 	if (g_renderSettings.farClipWholeMap && client->terrain) {
 		// (with Extend map, its land too)
 		const int extra = terrainRenderer ? 2 * terrainRenderer->extendedTiles() : 0;
-		const float mapWidth = 5.0f * (client->terrain->width + extra), mapHeight = 5.0f * (client->terrain->height + extra);
+		const float farExtra = terrainRenderer ? 2.0f * terrainRenderer->extendedFarReach() : 0.0f;
+		const float mapWidth = 5.0f * (client->terrain->width + extra) + farExtra, mapHeight = 5.0f * (client->terrain->height + extra) + farExtra;
 		client->camera.farDist = std::sqrt(mapWidth * mapWidth + mapHeight * mapHeight) / 0.95f + 1.0f;
 	}
 	else
@@ -3953,7 +3955,7 @@ void ClientInterface::iter()
 			if (extended > 0) {
 				// Extend map: the edge fog only hides the end of the extension, fading in over its
 				// outer half (the distance fog and the horizon's haze do the rest)
-				const float reach = band + 5.0f * extended;
+				const float reach = band + 5.0f * extended + (terrainRenderer ? terrainRenderer->extendedFarReach() : 0.0f);
 				start = std::max(band * start, 0.5f * reach);
 				opaque = 0.95f * reach;
 				dgfx->SetFogEdge(areaWidth, areaDepth, start, opaque);
