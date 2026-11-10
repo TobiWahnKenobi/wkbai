@@ -86,6 +86,21 @@ cbuffer FogBuffer
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 };
 
+// Ultra's cast light from the lamps, fires and windows (DirectWindowLight) under the night's
+// grade: its colour pushed out by as much as the grade's saturation takes away (as Emission
+// does for the glowing texels), so a fire's pool stays orange at night instead of going grey with
+// the scene; half the grade's darkening made up (the square root of its exposure: all of it
+// overexposed the night), and a soft shoulder, so a strong lamp rolls off instead of clipping
+// flat yellow where it adds to the sun or to another lamp
+float3 CastLight(float3 c)
+{
+	float lum = dot(c, float3(0.299, 0.587, 0.114));
+	c /= 1 + lum * 0.3;
+	c /= sqrt(max(Grade.x, 0.35));
+	lum = dot(c, float3(0.299, 0.587, 0.114));
+	return max(lum + (c - lum) / max(Grade.w, 0.4), 0);
+}
+
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
 // dawn and dusk the physical sky's own horizon there, warm and bright towards the low sun,
 // dimmer away from it, instead of the haze's one grey all round, dimmed with the night's ambient
@@ -342,7 +357,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 			float vis = SkyVisibility(wp, true);
 			// (and the light bounced off the ground and the roofs around, with the dynamic GI)
 			output.Color = float4(min(MeshLighting.x * 1.15 * vis * SkyAmbient(output.Norm) + cloud * MeshLighting.y * SunColour.rgb * lambert
-				+ BounceLight(wp, output.Norm, vis) + DirectWindowLight(wp, output.Norm), 1), 1);
+				+ BounceLight(wp, output.Norm, vis) + CastLight(DirectWindowLight(wp, output.Norm)), 1), 1);
 		}
 		else
 			output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
@@ -562,7 +577,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
 	// Ultra's lamps and windows: direct light, without the occlusion (DirectWindowLight)
 	if (gi && GIRegion.w != 0)
-		fire += DirectWindowLight(input.WorldPos, n);
+		fire += CastLight(DirectWindowLight(input.WorldPos, n));
 	return ((diffuse * albedo * (1 - metal) + specular + sky) * allShade + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 
@@ -1235,6 +1250,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		float size2 = 1; // its core (softening): a third of the reach, squared
 	};
 	static constexpr size_t MAX_EMITTERS = 24;
+	static constexpr float EMITTER_DAY_SHARE = 0.3f;
 	static constexpr float EMITTER_STRENGTH = 6.0f, EMITTER_REACH = 12.0f; // the user's pick at night (4 Peaks town)
 	// the emissive maps' texels (0-1 as the shaders take them, at most 256 x 256), by file
 	struct EmissiveTexels { int w = 0, h = 0; std::vector<float> rgba; };
@@ -1390,10 +1406,26 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// giLightGrid by the square their radius covers
 	std::vector<float> uploadedLights;
 	std::vector<uint32_t> uploadedGrid;
+	IBuffer* uploadedTo = nullptr;
+	int uploadFrames = 0;
 	void placeEmitterLights(Scene* scene, DiligentGfx::ShadowEnvironment& shadows, IDeviceContext* ctx) {
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float night = g_environment.active ? 1.0f - g_environment.sun.daylight : 0.0f;
 		const float strength = std::clamp(g_renderSettings.emissiveLightStrength, 0.0f, 3.0f); // the window light setting
+		// the always-on lights (fires, forges, lamps) cast EMITTER_DAY_SHARE of their light in a
+		// clear day's full sun, more as the day darkens, all of it at night: a fire hardly shows
+		// against the sun (the HD session's furnace: clipped yellow pools on the sunlit grass by day,
+		// pale ones at night). How bright the day is: the daylight, dimmed by the weather as drawn
+		// (the clouds overhead, rain or snow falling, fog: an overcast or stormy day about a third
+		// less bright, so its fires show more; the user's point)
+		float overcast = 0.0f;
+		if (g_environment.active) {
+			overcast = std::max({ g_environment.cloudCover, g_environment.rainShown, g_environment.snowShown, g_environment.fog });
+			if (g_environment.skyWeather >= 0)
+				overcast = std::max(overcast, g_environment.skyCover);
+		}
+		const float dayBright = (1.0f - night) * (1.0f - 0.65f * std::clamp(overcast, 0.0f, 1.0f));
+		const float alwaysShare = EMITTER_DAY_SHARE + (1.0f - EMITTER_DAY_SHARE) * (1.0f - dayBright);
 		const float ox = shadows.giMapOrigin[0], oz = shadows.giMapOrigin[1], ext = Env::GI_EXTENT;
 		struct Light { float v[12]; float lum; };
 		std::vector<Light> lights;
@@ -1413,7 +1445,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 					float lum = 0;
 					for (int c = 0; c < 3; c++) {
 						// (times its core: the shaders divide by distance squared plus it)
-						l.v[4 + c] = (e.always[c] + e.night[c] * night) * e.size2 * strength;
+						l.v[4 + c] = (e.always[c] * alwaysShare + e.night[c] * night) * e.size2 * strength;
 						lum += l.v[4 + c] * (c == 0 ? 0.299f : c == 1 ? 0.587f : 0.114f);
 					}
 					if (lum < 1e-3f)
@@ -1446,13 +1478,21 @@ struct DiligentEnhancedSceneRenderer::Impl {
 						cell[1 + cell[0]++] = (uint32_t)i;
 				}
 		}
-		// uploaded only when they changed (the buildings' lights stay put: most frames none)
-		if (data != uploadedLights) {
+		// uploaded when they changed (the buildings' lights stay put: most frames not), when the
+		// buffers are new, and every 32nd frame regardless: a lost upload, or buffers made again,
+		// left a whole run without the lights (seen twice, not reproduced), since the same lights
+		// then never counted as changed
+		const bool refresh = ++uploadFrames >= 32 || uploadedTo != shadows.giLights.RawPtr();
+		if (refresh) {
+			uploadFrames = 0;
+			uploadedTo = shadows.giLights.RawPtr();
+		}
+		if (refresh || data != uploadedLights) {
 			if (!data.empty())
 				ctx->UpdateBuffer(shadows.giLights, 0, data.size() * 4, data.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			uploadedLights = data;
 		}
-		if (grid != uploadedGrid) {
+		if (refresh || grid != uploadedGrid) {
 			ctx->UpdateBuffer(shadows.giLightGrid, 0, grid.size() * 4, grid.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 			uploadedGrid = std::move(grid);
 		}
