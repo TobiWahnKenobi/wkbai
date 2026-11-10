@@ -84,6 +84,7 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -117,6 +118,30 @@ float3 FogRatioDir(float3 d)
 float3 FogTint(float3 worldPos)
 {
 	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
+// The live sky along a reflected ray (FogSky, DiligentSkyRenderer): the physical sky as drawn
+// (by the clock, the clouds' grey, the night's air), between its rings by the bearing and the
+// height; below the horizon into the ground's colour. Only with FogSky[48].w (else the callers
+// keep the sky box's light).
+float3 SkyRing(int ring, float b)
+{
+	int i0 = (int)b % 16, i1 = (i0 + 1) % 16;
+	return lerp(FogSky[ring * 16 + i0].rgb, FogSky[ring * 16 + i1].rgb, frac(b));
+}
+float3 SkyReflect(float3 d)
+{
+	d = normalize(d);
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 16;
+	float3 low = SkyRing(0, b);
+	if (d.y <= 0.0698) // (4 degrees)
+		return lerp(low, FogSky[49].rgb, saturate(-d.y * 3));
+	float e = asin(d.y) * 57.29578;
+	if (e < 22)
+		return lerp(low, SkyRing(1, b), (e - 4) / 18);
+	if (e < 50)
+		return lerp(SkyRing(1, b), SkyRing(2, b), (e - 22) / 28);
+	return lerp(SkyRing(2, b), FogSky[48].rgb, (e - 50) / 40);
 }
 
 
@@ -527,6 +552,10 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		ambientTint = SkyColour(n) / SkyHorizon.w;
 		skyReflected = SkyColour(reflect(-v, n));
 	}
+	// the reflections from the live sky (by the clock and the weather; the sky box's painted
+	// faces kept the reflected sky a fixed blue at dusk and at night)
+	if (FogSky[48].w != 0)
+		skyReflected = SkyReflect(reflect(-v, n));
 	// the sky light (RenderSettings::skyGI): the ambient and the sky's reflection as much as the
 	// point sees of the sky, the sun's light bounced off the ground onto faces turned down, the
 	// clouds' shadow on the sun's light only

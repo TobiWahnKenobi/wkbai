@@ -253,6 +253,11 @@ struct DiligentGfx : IRenderer
 		// FogBuffer.FogSun, FogSunColour, FogHorizon): towards the true sun and the tint's weight,
 		// the sun's disc through the air and its glow's strength, the sky 2 degrees up by bearing
 		float fogTint[4] = {}, fogSunColour[4] = {}, fogHorizon[32][4] = {};
+		// the live sky for reflections (FogBuffer.FogSky, DiligentSkyRenderer): the physical sky
+		// with the clouds' grey and the night's air, 16 bearings (atan2(z, x)) at 4, 22 and 50
+		// degrees up ([0..15], [16..31], [32..47]), the zenith ([48], w: 1 valid) and the ground
+		// below ([49]); w 0 with the sky box (the shaders keep the box's light)
+		float fogSky[50][4] = {};
 	} shadows;
 };
 

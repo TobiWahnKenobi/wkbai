@@ -10,6 +10,7 @@
 // the fog follows the rows' values, interpolated in between as the original's vertex fog is.
 
 #include "DiligentSkyRenderer.h"
+#include <chrono>
 #include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "DiligentClouds.h"
@@ -49,6 +50,7 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -1113,6 +1115,9 @@ struct DiligentSkyRenderer::Impl {
 	// the haze's tint (ShadowEnvironment::fogTint) as worked out for this true sun and cover
 	Vector3 tintSun = Vector3(0, -2, 0);
 	float tintCover = -1, horizon[32][4] = {}, sunColour[3] = {};
+	Vector3 reflSun = Vector3(0, -2, 0), reflMoon = Vector3(0, -2, 0);
+	float reflCover = -1, reflNight = -1, reflMoonShows = -1, reflSky[50][4] = {};
+	int reflModel = -1;
 	const Camera* camera;
 	texture faces[6] = {};
 	bool sixFaces = false;
@@ -1537,6 +1542,94 @@ void DiligentSkyRenderer::render()
 			told = true;
 			printf("Night sky: the moon towards %.3f %.3f %.3f\n", ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z);
 		}
+	}
+	// The live sky for reflections (ShadowEnvironment::fogSky, FogBuffer.FogSky; the shaders'
+	// SkyReflect): the physical sky as drawn, in 16 bearings at 4, 22 and 50 degrees up and at
+	// the zenith, greyed and darkened by the clouds as the haze is, with the night's air (and the
+	// moon's light in it). The Fresnel reflections of models, water and the ground had taken the
+	// sky box's painted faces (a fixed blue, also at dusk and at night). 49 directions of the CPU
+	// model, only when the sun, the moon, the clouds or the night changed (sky-fresnel,
+	// 2026-11-10): no cube map, no ray tracing.
+	env.fogSky[48][3] = 0.0f;
+	if (clouds) {
+		Vector3 sunTrue = ev.active ? ev.sunWorld : env.sunDirection;
+		sunTrue = sunTrue.sqlen3() > 0.01f ? sunTrue.normal() : Vector3(0.5f, 0.8f, 0.3f).normal();
+		const auto& p = env.cloudPreset;
+		const float cover = std::clamp(std::max(p.cover, p.storm * 0.85f), 0.0f, 1.0f);
+		const float moonLight = moonShows * (ev.active ? ev.sun.moonLit : 1.0f);
+		Impl& m = *_impl;
+		if ((sunTrue - m.reflSun).sqlen3() > 1e-6f || std::abs(cover - m.reflCover) > 0.01f || std::abs(night - m.reflNight) > 0.01f
+			|| std::abs(moonLight - m.reflMoonShows) > 0.02f || (moonLight > 0 && (ev.moonWorld - m.reflMoon).sqlen3() > 1e-4f)
+			|| m.reflModel != g_renderSettings.skyModel) {
+			const auto t0 = std::chrono::steady_clock::now();
+			m.reflSun = sunTrue;
+			m.reflCover = cover;
+			m.reflNight = night;
+			m.reflMoonShows = moonLight;
+			m.reflMoon = ev.moonWorld;
+			m.reflModel = g_renderSettings.skyModel;
+			const float k = (1.0f - 0.5f * cover * cover) * (1.0f + (std::min(p.light, 1.2f) - 1.0f) * cover);
+			// the clouds' own light: the sun's through the air (reddened at dawn and dusk; the
+			// clouds high up see it a little longer than the ground), brightest towards the sun,
+			// over a grey of the sky's light inside them. A deck lit orange from below at sunset
+			// is what the water mirrors then, not a grey.
+			float cloudSun[3];
+			{
+				Vector3 up = sunTrue;
+				up.y += 0.015f;
+				float trans[3];
+				SunTransmittanceCpu(up.normal(), trans);
+				const float lit = std::clamp((sunTrue.y + 0.09f) / 0.08f, 0.0f, 1.0f);
+				for (int i = 0; i < 3; i++)
+					// (mapped softer than the sun's disc: the deck salmon and red at sunset, not yellow)
+					cloudSun[i] = (1.0f - std::exp(-8.0f * trans[i])) * lit * (1.0f - 0.45f * cover * cover);
+			}
+			auto one = [&](const Vector3& d, float grey, float* v) {
+				PhysicalSkyCpu(d, sunTrue, v);
+				// (the sky's glow round the sun with the same soft knee as the haze's horizon)
+				for (int i = 0; i < 3; i++)
+					if (v[i] > 0.6f)
+						v[i] = 0.6f + (v[i] - 0.6f) / (1.0f + (v[i] - 0.6f) / 0.25f);
+				// the night's air (the sky shader's NightAir): blue, darker up, the moon's light
+				const float h = std::max(d.y, 0.0f), sh = std::sqrt(h), mu = std::max(d.dot(ev.moonWorld), 0.0f);
+				const float lo[3] = { 0.070f, 0.095f, 0.17f }, hi[3] = { 0.028f, 0.045f, 0.105f }, moon[3] = { 0.06f, 0.08f, 0.12f };
+				for (int i = 0; i < 3; i++) {
+					const float air = lo[i] + (hi[i] - lo[i]) * sh + moon[i] * moonLight * (0.35f + 0.65f * mu * mu) * (0.6f + 0.4f * (1 - h));
+					v[i] = std::max(v[i], air * night);
+				}
+				// the clouds over it (more of them seen higher up): their sunlit colour (forward
+				// scattering towards the sun) over the sky's grey inside them, darker the thicker
+				const float l = 0.3f * v[0] + 0.59f * v[1] + 0.11f * v[2];
+				// (the haze's darkening only half: the cloud shader's deck stays lit, a red and pink
+				// one away from the low sun too, multiply scattered)
+				const float sd = std::max(d.dot(sunTrue), 0.0f), fwd = 0.6f + 0.4f * sd * sd + 0.3f * std::pow(sd, 8.0f);
+				for (int i = 0; i < 3; i++) {
+					const float cloud = ((l + v[i]) * 0.45f + cloudSun[i] * fwd * 0.8f) * (0.5f + 0.5f * k);
+					v[i] = std::clamp(v[i] + (cloud - v[i]) * grey * cover, 0.0f, 1.0f);
+				}
+				v[3] = 0.0f;
+			};
+			const float ce[3] = { 0.99756f, 0.92718f, 0.64279f }, se[3] = { 0.06976f, 0.37461f, 0.76604f }, grey[3] = { 0.5f, 0.7f, 0.85f };
+			for (int r = 0; r < 3; r++)
+				for (int b = 0; b < 16; b++) {
+					const float a = b * 6.2831853f / 16;
+					one(Vector3(std::cos(a) * ce[r], se[r], std::sin(a) * ce[r]), grey[r], m.reflSky[r * 16 + b]);
+				}
+			one(Vector3(0, 1, 0), 0.8f, m.reflSky[48]);
+			static int told = 0;
+			if (told < 3) {
+				told++;
+				const float us = std::chrono::duration<float, std::micro>(std::chrono::steady_clock::now() - t0).count();
+				printf("Sky reflections: 49 directions in %.0f us; zenith %.2f %.2f %.2f, horizon %.2f %.2f %.2f (sun %.3f up, cover %.2f, night %.2f)\n",
+					us, m.reflSky[48][0], m.reflSky[48][1], m.reflSky[48][2], m.reflSky[0][0], m.reflSky[0][1], m.reflSky[0][2], sunTrue.y, cover, night);
+			}
+		}
+		memcpy(env.fogSky, m.reflSky, sizeof(m.reflSky));
+		// the ground below the horizon: the sky light's (the box's below or the horizon's half),
+		// as dark as the night's ambient
+		for (int i = 0; i < 3; i++)
+			env.fogSky[49][i] = env.skyLightValid ? env.skyLight[2][i] * (ev.active ? ev.sun.ambient[i] : 1.0f) : m.reflSky[0][i] * 0.5f;
+		env.fogSky[48][3] = 1.0f;
 	}
 	// the overcast: with the weather's clouds (the seasons' or the cloudWeather setting's), when
 	// there are no volumetric ones in the sky (dynamicClouds below 3; the shader takes how much
