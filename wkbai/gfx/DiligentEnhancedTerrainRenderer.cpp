@@ -74,6 +74,7 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -107,6 +108,30 @@ float3 FogRatioDir(float3 d)
 float3 FogTint(float3 worldPos)
 {
 	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
+// The live sky along a reflected ray (FogSky, DiligentSkyRenderer): the physical sky as drawn
+// (by the clock, the clouds' grey, the night's air), between its rings by the bearing and the
+// height; below the horizon into the ground's colour. Only with FogSky[48].w (else the callers
+// keep the sky box's light).
+float3 SkyRing(int ring, float b)
+{
+	int i0 = (int)b % 16, i1 = (i0 + 1) % 16;
+	return lerp(FogSky[ring * 16 + i0].rgb, FogSky[ring * 16 + i1].rgb, frac(b));
+}
+float3 SkyReflect(float3 d)
+{
+	d = normalize(d);
+	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 16;
+	float3 low = SkyRing(0, b);
+	if (d.y <= 0.0698) // (4 degrees)
+		return lerp(low, FogSky[49].rgb, saturate(-d.y * 3));
+	float e = asin(d.y) * 57.29578;
+	if (e < 22)
+		return lerp(low, SkyRing(1, b), (e - 4) / 18);
+	if (e < 50)
+		return lerp(SkyRing(1, b), SkyRing(2, b), (e - 22) / 28);
+	return lerp(SkyRing(2, b), FogSky[48].rgb, (e - 50) / 40);
 }
 
 
@@ -765,6 +790,9 @@ float4 WithRefraction(float4 svpos, float3 n, float depth, float3 waterGraded, f
 // lowest rows as the original's; without the sky box its mean colours above and at the horizon
 float3 SkyAlong(float3 r)
 {
+	// the physical sky: the live sky's colours (the sky box isn't what is drawn)
+	if (FogSky[48].w != 0)
+		return SkyReflect(r);
 	if (WaterMode.z == 0)
 		return WaterSkyUp.w != 0 ? lerp(WaterSkyHorizon.rgb * FogRatioDir(r), WaterSkyUp.rgb, saturate(r.y)) : FogTintDir(r);
 	float a = r.z, b = r.x, c = max(r.y, 0);
@@ -1284,7 +1312,8 @@ float3 TerrainFresnel(float3 c, float3 pos, float3 n, float vis)
 	float3 v = normalize(FogCamera.xyz - pos);
 	float f = (0.04 + 0.96 * pow(1 - saturate(dot(n, v)), 5)) * CloudSkyUp.w;
 	float3 r = reflect(-v, n);
-	return lerp(c, lerp(CloudSkyHorizon.rgb, CloudSkyUp.rgb, saturate(r.y)) * vis, f);
+	float3 sky = FogSky[48].w != 0 ? SkyReflect(r) : lerp(CloudSkyHorizon.rgb, CloudSkyUp.rgb, saturate(r.y));
+	return lerp(c, sky * vis, f);
 }
 
 // The original lights the terrain with a Dot3 bump-mapping pass and no ambient term: the

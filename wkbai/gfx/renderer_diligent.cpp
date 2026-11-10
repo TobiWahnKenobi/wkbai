@@ -124,6 +124,7 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
 };
 
 float3 FogTintDir(float3 d)
@@ -296,6 +297,7 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -1336,6 +1338,8 @@ struct DiligentRenderer : DiligentGfx
 			cc[28 + i] = shadows.fogSunColour[i];
 		}
 		memcpy(cc + 32, shadows.fogHorizon, sizeof(shadows.fogHorizon));
+		// the live sky for reflections (SkyReflect; FogSky[48].w 0: none)
+		memcpy(cc + 160, shadows.fogSky, sizeof(shadows.fogSky));
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1465,7 +1469,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 656, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 1440, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;
