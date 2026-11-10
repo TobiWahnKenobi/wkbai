@@ -211,6 +211,20 @@ void ReplayView::announce(std::vector<Part> parts, Icon icon, const Vector3& pos
 	markers.push_back({ icon, iconPath, position, colour, now, seconds, chronicleEvent });
 }
 
+void ReplayView::announceHero(Client* client, uint32_t id, const uint32_t* palette)
+{
+	auto it = client->unitInfo.find(id);
+	if (it == client->unitInfo.end())
+		return;
+	ClientGameObject* obj = client->findObject(id);
+	const CommonGameObject* player = obj ? obj->getPlayer() : nullptr;
+	const int c = player ? player->color : 0;
+	const uint32_t colour = palette[(c >= 0 && c < 9) ? c : 0];
+	std::vector<Part> parts{ { it->second.birthName, colour },
+		{ " has slain " + std::to_string(obj ? obj->kills : 0) + " enemies and is now ", TEXT }, { it->second.name, colour } };
+	announce(std::move(parts), Icon::Trained, obj ? obj->position : Vector3(), colour, "Interface\\InGame\\Info Panel\\Sword.tga", -1);
+}
+
 void ReplayView::update(Client* client, Server* srv, const GameChronicle& chron, const uint32_t* colours)
 {
 	server = srv;

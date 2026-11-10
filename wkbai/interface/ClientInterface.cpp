@@ -1506,6 +1506,96 @@ void ClientInterface::prepareLevelBeforeFrame()
 	LoadingDetail("ray tracing and the first frame");
 }
 
+// wkbai's unit history: a unit's age as the panel shows it (the user): with the seasons on,
+// 25 + the game years since its birth (a year: four seasons); with only the day and night, the
+// days; else m:ss (h:mm:ss past an hour). "" for an untracked unit.
+std::string UnitAgeText(Client* client, uint32_t id)
+{
+	auto it = client->unitInfo.find(id);
+	if (it == client->unitInfo.end())
+		return std::string();
+	const float age = std::max(0.0f, (float)client->timeManager.currentTime - it->second.birth);
+	const EnvironmentSettings& env = client->environmentSettings;
+	char text[64];
+	if (client->environmentActive && env.seasons && env.seasonLengthMin > 0) {
+		const int years = (int)(age / (4.0f * env.seasonLengthMin * 60.0f));
+		snprintf(text, sizeof(text), "Age %d", 25 + years);
+	}
+	else if (client->environmentActive && env.dayNight && env.dayLengthMin > 0) {
+		const int days = (int)(age / (env.dayLengthMin * 60.0f));
+		if (days == 0)
+			snprintf(text, sizeof(text), "less than a day");
+		else
+			snprintf(text, sizeof(text), days == 1 ? "%d day" : "%d days", days);
+	}
+	else {
+		const int s = (int)age;
+		if (s >= 3600)
+			snprintf(text, sizeof(text), "Age %d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60);
+		else
+			snprintf(text, sizeof(text), "Age %d:%02d", s / 60, s % 60);
+	}
+	std::string out = text;
+	// a save from before the history: its age counted from the load
+	if (it->second.flags & 2)
+		out += " (since loading)";
+	return out;
+}
+
+void ClientInterface::drawUnitHistoryOverlay()
+{
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	auto toScreen = [this](const Vector3& p, bool& inFront) {
+		const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
+		inFront = t.z > -1.0f && t.z < 1.0f;
+		return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+	};
+	// the heroes' names over their heads, in their player's colour, fading out from 120 to 220 m
+	if (g_settings.value("showHeroNames", true)) {
+		for (const HeroLabel& label : heroLabels) {
+			auto it = client->unitInfo.find(label.id);
+			ClientGameObject* obj = client->findObject(label.id);
+			if (it == client->unitInfo.end() || !obj)
+				continue;
+			const float dist = (label.top - client->camera.position).len3();
+			const float alpha = std::clamp((220.0f - dist) / 100.0f, 0.0f, 1.0f);
+			if (alpha <= 0.0f)
+				continue;
+			bool inFront = false;
+			const ImVec2 at = toScreen(label.top + Vector3(0.0f, 0.3f, 0.0f), inFront);
+			if (!inFront)
+				continue;
+			const CommonGameObject* player = obj->getPlayer();
+			const int c = player ? player->color : 0;
+			// the player's colour lightened a third towards white: dark blue was hard to read on grass
+			const ImU32 pc = playerColors[(c >= 0 && c < 9) ? c : 0];
+			auto lighten = [](ImU32 v) { return (v + (255 - v) / 3) & 255; };
+			const ImU32 colour = lighten(pc & 255) | (lighten((pc >> 8) & 255) << 8) | (lighten((pc >> 16) & 255) << 16) | ((ImU32)(alpha * 255.0f) << 24);
+			const std::string& name = it->second.name;
+			const ImVec2 size = ImGui::CalcTextSize(name.c_str());
+			const ImVec2 p(at.x - size.x * 0.5f, at.y - size.y);
+			for (const ImVec2 d : { ImVec2(-1, 0), ImVec2(1, 0), ImVec2(0, -1), ImVec2(0, 1) })
+				dl->AddText(ImVec2(p.x + d.x, p.y + d.y), IM_COL32(0, 0, 0, (int)(alpha * 200.0f)), name.c_str());
+			dl->AddText(p, colour, name.c_str());
+		}
+	}
+	heroLabels.clear();
+	// the unit under the mouse: "Guillaume le Hardi · Knight · 9 kills" (the setting
+	// "showUnitNamesOnHover")
+	if (g_settings.value("showUnitNamesOnHover", true) && !ImGui::GetIO().WantCaptureMouse) {
+		if (ClientGameObject* obj = nextSelectedObject.get()) {
+			auto it = client->unitInfo.find(obj->id);
+			const bool seen = !fogOfWarOn() || fogOfWar.isSeen(obj->position) || fogOfWar.isFriendly(client, obj);
+			if (it != client->unitInfo.end() && seen) {
+				std::string line = it->second.name.empty() ? obj->blueprint->name : it->second.name + " \xC2\xB7 " + obj->blueprint->name;
+				if (obj->kills > 0)
+					line += " \xC2\xB7 " + std::to_string(obj->kills) + (obj->kills == 1 ? " kill" : " kills");
+				ImGui::SetTooltip("%s", line.c_str());
+			}
+		}
+	}
+}
+
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
 // this player and its allies only, and the timeline what it saw; in a replay, everyone and
 // everything. A timeline entry clicked moves the camera there.
@@ -1523,8 +1613,21 @@ void ClientInterface::drawChronicle()
 			replayView.drawControls(client, replayServer, gfx);
 			replayView.drawLog(client, uiTexCache);
 		}
-		replayView.drawAnnouncements(uiTexCache, gfx);
 	}
+	// wkbai's unit history: the units that became heroes (a replay: all; a game: the player's
+	// own and its allies')
+	if (!client->newHeroes.empty()) {
+		CommonGameObject* me = client->clientPlayer.get();
+		for (uint32_t id : client->newHeroes) {
+			ClientGameObject* obj = client->findObject(id);
+			CommonGameObject* p = obj ? obj->getPlayer() : nullptr;
+			const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied))))
+				replayView.announceHero(client, id, playerColors);
+		}
+		client->newHeroes.clear();
+	}
+	replayView.drawAnnouncements(uiTexCache, gfx);
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
 	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
 	auto shownPlayer = [&](uint32_t id) {
@@ -2200,6 +2303,12 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	if (!onCam)
 		return;
+	// wkbai's unit history: a hero on screen gets its name over its head
+	if (obj->blueprint->bpClass == GAMEOBJCLASS_CHARACTER && !remembered && !client->unitInfo.empty()) {
+		auto hit = client->unitInfo.find(obj->id);
+		if (hit != client->unitInfo.end() && (hit->second.flags & 9) == 1 && !(obj->flags & ClientGameObject::fTerminated))
+			heroLabels.push_back({ obj->id, sphereCenter + Vector3(0.0f, sphereRadius * 0.7f, 0.0f) });
+	}
 
 	obj->sceneEntity.model = model;
 	obj->sceneEntity.transform = transformMatrix;
@@ -3455,6 +3564,62 @@ void ClientInterface::iter()
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
 			});
+		// wkbai's unit history (Client::unitInfo): the name shown ("" none), the birth name, a hero,
+		// tracked at all, the age as the panel shows it, the kills and the buildings destroyed,
+		// the kills to become a hero
+		lua.set_function("getUnitName", [this](uint32_t id) -> std::string {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() ? it->second.name : std::string(); });
+		lua.set_function("getUnitBirthName", [this](uint32_t id) -> std::string {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() ? it->second.birthName : std::string(); });
+		lua.set_function("isUnitHero", [this](uint32_t id) {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() && (it->second.flags & 1) != 0; });
+		lua.set_function("isUnitTracked", [this](uint32_t id) { return client->unitInfo.count(id) != 0; });
+		lua.set_function("getUnitAge", [this](uint32_t id) { return UnitAgeText(client, id); });
+		lua.set_function("getUnitKills", [this](uint32_t id) {
+			ClientGameObject* obj = client->findObject(id);
+			return obj ? obj->kills : 0; });
+		lua.set_function("getUnitBuildingsDestroyed", [this](uint32_t id) {
+			ClientGameObject* obj = client->findObject(id);
+			return obj ? obj->buildingsDestroyed : 0; });
+		lua.set_function("getHeroThreshold", [this]() { return client->heroThreshold; });
+		// a formation (or a member's formation): "Formation: 212 kills · heroes: Sigurd the
+		// Valiant" ("" for none)
+		lua.set_function("getFormationSummary", [this](uint32_t id) -> std::string {
+			ClientGameObject* obj = client->findObject(id);
+			if (obj && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+				obj = obj->getParent();
+			if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+				return std::string();
+			std::string heroes;
+			int count = 0;
+			for (const auto& [type, members] : obj->children)
+				for (CommonGameObject* m : members)
+					if (auto it = client->unitInfo.find(m->id); it != client->unitInfo.end() && (it->second.flags & 1)) {
+						heroes += (count++ ? ", " : "") + it->second.name;
+					}
+			std::string text = "Formation: " + std::to_string(obj->kills) + (obj->kills == 1 ? " kill" : " kills");
+			if (count)
+				text += std::string(count == 1 ? " \xC2\xB7 hero: " : " \xC2\xB7 heroes: ") + heroes;
+			return text;
+		});
+		// several selected: the one with the most kills ("Best: Sigurd the Valiant, 64 kills"; ""
+		// with one selected or none with a kill)
+		lua.set_function("getSelectionBest", [this]() -> std::string {
+			if (selection.size() < 2)
+				return std::string();
+			ClientGameObject* best = nullptr;
+			for (const auto& ref : selection)
+				if (ClientGameObject* o = ref.get(); o && o->kills > 0 && (!best || o->kills > best->kills))
+					best = o;
+			if (!best)
+				return std::string();
+			auto it = client->unitInfo.find(best->id);
+			const std::string name = it != client->unitInfo.end() && !it->second.name.empty() ? it->second.name : best->blueprint->name;
+			return "Best: " + name + ", " + std::to_string(best->kills) + (best->kills == 1 ? " kill" : " kills");
+		});
 		// part of an image: its rectangle u0,v0 - u1,v1 (0..1) drawn into x, y, width, height
 		lua.set_function("drawImagePart",
 			[](int x, int y, int width, int height, const std::string& path, float u0, float v0, float u1, float v1) {
@@ -3779,6 +3944,8 @@ void ClientInterface::iter()
 					lua["buildTab"] = tab;
 				}
 			}
+			// wkbai's unit history: the heroes' names, under the interface's panels
+			drawUnitHistoryOverlay();
 			lua["CCUI_PerFrame"]();
 		}
 		catch (const sol::error& err) {
@@ -3949,7 +4116,9 @@ void ClientInterface::iter()
 			auto search = [&](ClientGameObject* obj, auto& self) -> void {
 				for (const auto& [type, children] : obj->children)
 					for (CommonGameObject* c : children) {
-						if (!found && c->blueprint->name == name)
+						// ("hoverHero": true: a hero of that type, wkbai's unit history)
+						if (!found && c->blueprint->name == name && (!bench.value("hoverHero", false)
+							|| (client->unitInfo.count(c->id) && (client->unitInfo[c->id].flags & 9) == 1)))
 							found = c->dyncast<ClientGameObject>();
 						self(c->dyncast<ClientGameObject>(), self);
 					}

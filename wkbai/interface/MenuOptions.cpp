@@ -359,6 +359,18 @@ namespace {
 			o.needsRestart = true;
 			list.push_back(o);
 		}
+		// wkbai's unit history: the heroes' names over their heads, the name of the unit under
+		// the mouse in a tooltip (both on by default)
+		for (const auto& [key, label] : { std::pair<const char*, const char*>{ "showHeroNames", "Show hero names" },
+			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" } }) {
+			MenuOption o;
+			o.id = key; o.page = "interface"; o.label = label;
+			o.type = MenuOption::TOGGLE;
+			const std::string k = key;
+			o.get = [k]() { return g_settings.value(k, true) ? 1.0f : 0.0f; };
+			o.set = [k](float v) { g_settings[k] = v != 0.0f; };
+			list.push_back(o);
+		}
 		// Online games (matchmaking/NakamaService.cpp); a changed server takes effect when OK is
 		// pressed (Matchmaking::settingsChanged)
 		list.push_back(matchmakingText("nakamaServer", "Nakama server", { "nakama", "server" }, "none (e.g. https://games.example.org)"));
@@ -406,6 +418,7 @@ const std::vector<MenuPage>& GetMenuPages()
 		{ "quality", "Anti-aliasing", "Graphics" },
 		{ "effects", "Effects", "Graphics" },
 		{ "camera", "Camera", "" },
+		{ "interface", "Interface", "" },
 		{ "sound", "Sound", "" },
 		{ "system", "System", "" },
 		{ "online", "Online", "" },

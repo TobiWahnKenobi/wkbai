@@ -238,6 +238,12 @@ private:
 	time_t lastfpscheck = 0;
 	Vector3 rayDirection;
 	CliGORef nextSelectedObject;
+	// wkbai's unit history: the heroes drawn this frame, their names to be shown over their heads
+	// (the setting "showHeroNames"), and where (the top of the model)
+	struct HeroLabel { uint32_t id; Vector3 top; };
+	std::vector<HeroLabel> heroLabels;
+	// the names over the heroes' heads, the tooltip of the unit under the mouse
+	void drawUnitHistoryOverlay();
 	CliGORef nextSelectedObjectByMesh, nextSelectedObjectBySphere;
 	float nextSelObjDistanceByMesh = 0.0f, nextSelObjDistanceBySphere = 0.0f;
 	Language lang;
