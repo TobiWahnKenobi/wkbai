@@ -60,6 +60,7 @@
 #include "gameset/ScriptContext.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
+#include "interface/ChronicleNarrator.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -6323,6 +6324,141 @@ void Test_UnitSplashKills()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// wkbai's timeline told as a chronicle (interface/ChronicleNarrator): every kind of event as a
+// paragraph, every named unit a link in it, the players' names as theirs, nothing left of the
+// templates, the same words every time, the calendar of the seasons and of the days
+void Test_ChronicleStory()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	using GC = GameChronicle;
+	auto mention = [](int kind, uint32_t unit, uint32_t player, int kills, bool dead, const std::string& name, const std::string& extra = std::string()) {
+		GC::Mention m;
+		m.kind = kind; m.unit = unit; m.player = player; m.kills = kills; m.dead = dead; m.name = name; m.extra = extra;
+		return m;
+	};
+	std::vector<GC::Event> events;
+	{
+		GC::Event e{ GC::Kind::Battle, 300.0f, 420.0f, Vector3(), { 1027, 1030 }, 22, std::string(), "Nen Hithoel" };
+		e.id = 1;
+		e.strength = { { 1027, 12 }, { 1030, 10 } };
+		e.lost[1027]["Spearman"] = 3;
+		e.lost[1030]["Spearman"] = 10;
+		e.mentions = { mention(GC::MENTION_TOP_KILLER, 4136, 1027, 3, true, "Ralph the Wolf"),
+			mention(GC::MENTION_TOP_KILLER, 4127, 1030, 1, false, "Aelfred of Bamburgh"),
+			mention(GC::MENTION_PRESENT, 4128, 1027, 2, true, "Thorstein Iron-Fist"),
+			mention(GC::MENTION_PRESENT, 4140, 1027, 5, false, "Gaut Raven-Feeder"),
+			mention(GC::MENTION_FALLEN, 4128, 1027, 2, true, "Thorstein Iron-Fist", "slain by Aelfred of Bamburgh") };
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Siege, 900.0f, 1300.0f, Vector3(), { 1027, 1030 }, 70, std::string(), "Duncraig" };
+		e.id = 2;
+		e.strength = { { 1027, 50 }, { 1030, 20 } };
+		e.lost[1027]["Archer"] = 6;
+		e.lost[1030]["Militia"] = 14;
+		e.lost[1030]["Spearman"] = 2;
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Raid, 1000.0f, 1010.0f, Vector3(), { 1027, 1030 }, 6, std::string(), "Fangorn" };
+		e.id = 3;
+		e.lost[1030]["Peasant"] = 4;
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Founded, 1200.0f, 1200.0f, Vector3(), { 1030 }, 0, "Village", "Ergor" };
+		e.id = 4;
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Destroyed, 1500.0f, 1500.0f, Vector3(), { 1027, 1030 }, 0, "Manor", "Nen Hithoel" };
+		e.id = 5;
+		e.mentions = { mention(GC::MENTION_TOP_KILLER, 4136, 1027, 3, false, "Ralph the Wolf"),
+			mention(GC::MENTION_RAZED_BY, 4122, 1027, 1, false, "Olivier de Clermont") };
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Fallen, 1900.0f, 1900.0f, Vector3(), { 1027 }, 0, "Savaric le Redoutable", "Duncraig" };
+		e.id = 6;
+		e.mentions = { mention(GC::MENTION_FALLEN, 4211, 1027, 2, true, "Savaric le Redoutable", "froze to death") };
+		events.push_back(e);
+	}
+	{
+		GC::Event e{ GC::Kind::Fallen, 2100.0f, 2100.0f, Vector3(), { 1027, 1030 }, 0, "Hamund the Strong", std::string() };
+		e.id = 7;
+		e.mentions = { mention(GC::MENTION_FALLEN, 4207, 1027, 7, true, "Hamund the Strong", "slain by Ceolwulf Reeve") };
+		events.push_back(e);
+	}
+	ChronicleNarrator::Context ctx;
+	ctx.playerName = [](uint32_t id) { return id == 1027 ? std::string("Saint Jane") : std::string("the Baron"); };
+	ctx.seasons = true;
+	ctx.dayNight = true;
+	ctx.seasonLengthS = 600.0f;
+	ctx.dayLengthS = 300.0f;
+	ctx.startSeason = 0;
+	ctx.startHour = 8;
+	for (const auto& e : events) {
+		const auto pieces = ChronicleNarrator::narrate(e, ctx);
+		const std::string text = ChronicleNarrator::plain(pieces);
+		printf("UNITTEST   [%s] %s\nUNITTEST     %s\n", ChronicleNarrator::dateLine(e.time, ctx).c_str(), e.title().c_str(), text.c_str());
+		check(text.size() > 40 && text.find('{') == std::string::npos && text.find('}') == std::string::npos && text.find("  ") == std::string::npos,
+			std::string(GC::kindName(e.kind)) + ": a paragraph, no template left");
+		check(text == ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx)), std::string(GC::kindName(e.kind)) + ": the same words again");
+		// every unit named as a link, the players' names as theirs
+		std::set<int> linked;
+		bool players = false;
+		for (const auto& p : pieces) {
+			if (p.mention >= 0)
+				linked.insert(p.mention);
+			players |= p.player != 0;
+		}
+		bool allNamed = true;
+		for (size_t i = 0; i < e.mentions.size(); i++) {
+			// (a hero present who also fell there or led the kills is named once, by that)
+			bool elsewhere = false;
+			for (size_t j = 0; j < e.mentions.size(); j++)
+				elsewhere |= j != i && e.mentions[j].unit == e.mentions[i].unit && linked.count((int)j);
+			allNamed &= linked.count((int)i) || elsewhere;
+		}
+		check(allNamed, std::string(GC::kindName(e.kind)) + ": every unit named, as a link (" + std::to_string(linked.size()) + ")");
+		check(players, std::string(GC::kindName(e.kind)) + ": the players named as theirs");
+	}
+	// the causes and the outcome in words
+	const std::string battle = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[0], ctx));
+	check(battle.find("Saint Jane") != std::string::npos && battle.find("ten") != std::string::npos, "the battle's losses told");
+	check(battle.find("slain by Aelfred of Bamburgh") != std::string::npos, "the fallen hero's slayer told");
+	const std::string cold = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[5], ctx));
+	check(cold.find("taken by the cold") != std::string::npos, "a death by the cold told as such");
+	const std::string siege = ChronicleNarrator::plain(ChronicleNarrator::narrate(events[1], ctx));
+	check(siege.find("Militia") != std::string::npos && siege.find("came in strength") != std::string::npos, "the siege: the losses by type, the stronger side");
+	// the wording changes from event to event
+	std::set<std::string> openings;
+	for (uint32_t id = 1; id <= 30; id++) {
+		GC::Event e = events[0];
+		e.id = id;
+		const std::string t = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx));
+		openings.insert(t.substr(0, t.find('.')));
+	}
+	check(openings.size() >= 3, "the battles' openings vary (" + std::to_string(openings.size()) + " of 3)");
+	// the calendar: 600 s seasons from spring; 300 s days from 8 o'clock
+	check(ChronicleNarrator::dateLine(300.0f, ctx).rfind("Spring, the year 1000", 0) == 0, "300 s: " + ChronicleNarrator::dateLine(300.0f, ctx));
+	check(ChronicleNarrator::dateLine(1900.0f, ctx).rfind("Winter, the year 1000", 0) == 0, "1900 s: " + ChronicleNarrator::dateLine(1900.0f, ctx));
+	check(ChronicleNarrator::dateLine(2500.0f, ctx).rfind("Spring, the year 1001", 0) == 0, "2500 s: " + ChronicleNarrator::dateLine(2500.0f, ctx));
+	ChronicleNarrator::Context days = ctx;
+	days.seasons = false;
+	check(ChronicleNarrator::dateLine(700.0f, days).rfind("Day 3", 0) == 0, "days only, 700 s: " + ChronicleNarrator::dateLine(700.0f, days));
+	ChronicleNarrator::Context none = ctx;
+	none.seasons = none.dayNight = false;
+	check(ChronicleNarrator::dateLine(65.0f, none) == "1:05", "no calendar: the clock (" + ChronicleNarrator::dateLine(65.0f, none) + ")");
+	check(ChronicleNarrator::plain(ChronicleNarrator::narrate(events[0], none)).rfind("Early in the war", 0) == 0, "no calendar: the war's progress opens it");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -6381,6 +6517,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_UnitNames, "Unit names: by faction, unique, from the seed; conscripts; heroes, formations, a hero slain; kept by a save"},
 {Test_UnitTimeline, "Unit timeline: the server's events name top killers, heroes present and fallen; Fallen events; the same from the same seed; kept by a save"},
 {Test_UnitSplashKills, "Unit kills by splash (rockets at a cluster) and none for an Act of God (lightning)"},
+{Test_ChronicleStory, "Chronicle story: the timeline's events told as a historian's paragraphs, the same every time"},
 };
 
 void LaunchTest()

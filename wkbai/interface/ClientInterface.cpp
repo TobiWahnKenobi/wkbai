@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "ClientInterface.h"
+#include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
 #include "../gfx/DefaultTerrainRenderer.h"
@@ -1728,8 +1729,27 @@ void ClientInterface::drawChronicle()
 		ImGui::SetNextWindowPos(ImVec2(680, 110), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
 		if (ImGui::Begin("Timeline (F7)", &timelineOpen)) {
+			// two views of the same events: the chronicle (a historian's paragraphs, oldest first,
+			// like a journal) and the statistics (the numbers, newest first)
+			const bool story = g_settings.value("timelineChronicle", true);
+			if (ImGui::RadioButton("Chronicle", story) && !story) {
+				g_settings["timelineChronicle"] = true;
+				SaveSettings();
+			}
+			ImGui::SameLine();
+			if (ImGui::RadioButton("Statistics", !story) && story) {
+				g_settings["timelineChronicle"] = false;
+				SaveSettings();
+			}
+			ImGui::Separator();
+			ImGui::BeginChild("##entries");
+			ChronicleNarrator::Context storyContext;
+			storyContext.fromSettings(client->environmentSettings, client->environmentActive);
+			storyContext.playerName = nameOf;
 			int shownCount = 0;
-			for (size_t i = chronicle.events.size(); i-- > 0;) {
+			const size_t eventCount = chronicle.events.size();
+			for (size_t k = 0; k < eventCount; k++) {
+				const size_t i = story ? k : eventCount - 1 - k;
 				const GameChronicle::Event& e = chronicle.events[i];
 				if (!all && !e.seen)
 					continue;
@@ -1747,10 +1767,10 @@ void ClientInterface::drawChronicle()
 					cam.position.x = at.x - dir.x * reach;
 					cam.position.z = at.z - dir.z * reach;
 				};
-				if (ImGui::Selectable(text.c_str()))
+				if (!story && ImGui::Selectable(text.c_str()))
 					lookAt(e.position);
 				// each side: its name, how many it brought, what it lost
-				for (uint32_t p : e.players) {
+				for (uint32_t p : story ? std::set<uint32_t>() : e.players) {
 					std::string side = "    " + nameOf(p);
 					if (auto it = e.strength.find(p); it != e.strength.end())
 						side += ": " + std::to_string(it->second) + " fighting";
@@ -1833,14 +1853,79 @@ void ClientInterface::drawChronicle()
 					}
 					ImGui::Unindent(24.0f);
 				};
-				mentionLine(GameChronicle::MENTION_TOP_KILLER, "Most kills", ImVec4(0.92f, 0.92f, 0.92f, 1.0f));
-				mentionLine(GameChronicle::MENTION_RAZED_BY, "Razed by", ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
-				mentionLine(GameChronicle::MENTION_PRESENT, "Present", ImVec4(0.9f, 0.78f, 0.27f, 1.0f));
-				mentionLine(GameChronicle::MENTION_FALLEN, "Fallen", ImVec4(0.85f, 0.45f, 0.4f, 1.0f));
+				if (story) {
+					// the date, the title (a link to the place), the paragraph: word by word, wrapped
+					// to the window, the players in their colours, the units named as links
+					if (shownCount > 1)
+						ImGui::Spacing();
+					ImGui::TextDisabled("%s", ChronicleNarrator::dateLine(e.time, storyContext).c_str());
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.82f, 0.55f, 1.0f));
+					if (ImGui::Selectable(e.title().c_str()))
+						lookAt(e.position);
+					ImGui::PopStyleColor();
+					ImGui::Indent(10.0f);
+					bool lineStart = true;
+					int link = 0;
+					for (const ChronicleNarrator::Piece& piece : ChronicleNarrator::narrate(e, storyContext)) {
+						// the words of plain text (each with its space); a name is one piece
+						std::vector<std::string> tokens;
+						if (piece.mention >= 0 || piece.player)
+							tokens.push_back(piece.text);
+						else
+							for (size_t a = 0; a < piece.text.size();) {
+								size_t b = piece.text.find(' ', a);
+								b = b == std::string::npos ? piece.text.size() : piece.text.find_first_not_of(' ', b);
+								b = b == std::string::npos ? piece.text.size() : b;
+								tokens.push_back(piece.text.substr(a, b - a));
+								a = b;
+							}
+						for (const std::string& token : tokens) {
+							if (token.empty())
+								continue;
+							const bool blank = token.find_first_not_of(' ') == std::string::npos;
+							const float width = ImGui::CalcTextSize(token.c_str()).x;
+							if (!lineStart) {
+								ImGui::SameLine(0.0f, 0.0f);
+								if (ImGui::GetContentRegionAvail().x < width) {
+									if (blank)
+										continue; // no space at a line's start
+									ImGui::NewLine();
+								}
+							}
+							else if (blank)
+								continue;
+							lineStart = false;
+							if (piece.mention >= 0 && piece.mention < (int)e.mentions.size()) {
+								ImGui::PushID(link++);
+								if (ImGui::TextLink(token.c_str()))
+									mentionClicked(e.mentions[piece.mention]);
+								if (ImGui::IsItemHovered())
+									ImGui::SetTooltip(e.mentions[piece.mention].dead ? "Where it happened" : "Look at it");
+								ImGui::PopID();
+							}
+							else if (piece.player)
+								ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(piece.player)), "%s", token.c_str());
+							else
+								ImGui::TextUnformatted(token.c_str());
+						}
+					}
+					ImGui::Unindent(10.0f);
+				}
+				else {
+					mentionLine(GameChronicle::MENTION_TOP_KILLER, "Most kills", ImVec4(0.92f, 0.92f, 0.92f, 1.0f));
+					mentionLine(GameChronicle::MENTION_RAZED_BY, "Razed by", ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
+					mentionLine(GameChronicle::MENTION_PRESENT, "Present", ImVec4(0.9f, 0.78f, 0.27f, 1.0f));
+					mentionLine(GameChronicle::MENTION_FALLEN, "Fallen", ImVec4(0.85f, 0.45f, 0.4f, 1.0f));
+				}
 				ImGui::PopID();
 			}
 			if (!shownCount)
 				ImGui::TextUnformatted(all ? "Nothing has happened yet." : "Nothing seen yet.");
+			// the chronicle follows its newest entry while one reads at its end
+			if (story && shownCount != timelineShownCount && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40.0f)
+				ImGui::SetScrollHereY(1.0f);
+			timelineShownCount = shownCount;
+			ImGui::EndChild();
 		}
 		ImGui::End();
 	}

@@ -196,6 +196,7 @@ private:
 	// the game's statistics (F6) and its timeline of events (F7)
 	GameChronicle chronicle;
 	bool statisticsOpen = false, timelineOpen = false;
+	int timelineShownCount = 0; // the chronicle's entries last frame (it follows new ones)
 	// the environment's debug panel (F9, single player): day and night, seasons, weather by hand
 	bool environmentDebugOpen = false;
 	void drawEnvironmentDebug();

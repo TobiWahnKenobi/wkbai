@@ -362,7 +362,8 @@ namespace {
 		// wkbai's unit history: the heroes' names over their heads, the name of the unit under
 		// the mouse in a tooltip (both on by default)
 		for (const auto& [key, label] : { std::pair<const char*, const char*>{ "showHeroNames", "Show hero names" },
-			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" } }) {
+			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" },
+			std::pair<const char*, const char*>{ "timelineChronicle", "Timeline (F7) told as a chronicle" } }) {
 			MenuOption o;
 			o.id = key; o.page = "interface"; o.label = label;
 			o.type = MenuOption::TOGGLE;
