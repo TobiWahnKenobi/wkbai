@@ -1265,6 +1265,9 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	// shadows' light left), so they keep their light and dark (on the sun's terms alone the
 	// blades in a shadow took the floor above: one flat patch, or nearly black)
 	c *= lerp(ShadowParams.y, 1, rtSun);
+	// Ultra's lamps and windows (DirectWindowLight), not in the sun's shadow
+	if (GIRegion.w != 0)
+		c += albedo * DirectWindowLight(input.World, n);
 	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), 1);
 }
@@ -1326,7 +1329,8 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on
 		// the sky's and the bounce
 		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob * RtSunMask(input.Pos)
-			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n);
+			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n)
+			+ (GIRegion.w != 0 ? DirectWindowLight(input.FragPos, n) : float3(0, 0, 0));
 		float4 lc = float4(l3, 1) * input.Color * tex;
 		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
 		float4 gc = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);

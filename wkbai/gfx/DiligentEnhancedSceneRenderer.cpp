@@ -342,7 +342,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 			float vis = SkyVisibility(wp, true);
 			// (and the light bounced off the ground and the roofs around, with the dynamic GI)
 			output.Color = float4(min(MeshLighting.x * 1.15 * vis * SkyAmbient(output.Norm) + cloud * MeshLighting.y * SunColour.rgb * lambert
-				+ BounceLight(wp, output.Norm, vis), 1), 1);
+				+ BounceLight(wp, output.Norm, vis) + DirectWindowLight(wp, output.Norm), 1), 1);
 		}
 		else
 			output.Color = float4(cloud * min(MeshLighting.x + MeshLighting.y * SunColour.rgb * lambert, 1), 1);
@@ -560,6 +560,9 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
 	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness) * vis * occ;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
+	// Ultra's lamps and windows: direct light, without the occlusion (DirectWindowLight)
+	if (gi && GIRegion.w != 0)
+		fire += DirectWindowLight(input.WorldPos, n);
 	return ((diffuse * albedo * (1 - metal) + specular + sky) * allShade + fire * albedo * (1 - metal)) * input.Tint.rgb;
 }
 

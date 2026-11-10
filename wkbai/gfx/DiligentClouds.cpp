@@ -253,15 +253,26 @@ float3 WindowLight(float3 p, float3 n, float2 uv)
 	if (any(uv < 0) || any(uv > 1))
 		return float3(0, 0, 0);
 	float2 cuv = float2(uv.x, 1 - uv.y); // (drawn from above: v the other way round)
-	// Ultra: the lights themselves, and of the pools only the faint glow over the town
+	// Ultra: of the pools only the faint glow over the town (the lights themselves: DirectWindowLight)
 	if (GIRegion.w > 2.5)
-		return EmitterLight(p, n, uv) + giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * (0.15 * (0.5 + 0.5 * saturate(n.y)));
+		return giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * (0.15 * (0.5 + 0.5 * saturate(n.y)));
 	float3 e = giEmitTexture.SampleLevel(skyOccSampler, cuv, 2).rgb * 0.45 + giEmitTexture.SampleLevel(skyOccSampler, cuv, 3).rgb * 0.4
 		+ giEmitTexture.SampleLevel(skyOccSampler, cuv, 5).rgb * 0.15;
 	float h = 0;
 	if (SkyOccRegion.w != 0)
 		h = p.y - skyOccTexture.SampleLevel(skyOccSampler, (p.xz - SkyOccRegion.xy) * SkyOccRegion.z, 0).g;
 	return e * ((0.5 + 0.5 * saturate(n.y)) * saturate(1 - (h - 3) / 9));
+}
+
+// Ultra's lights where the glowing texels are (EmitterLight), times the bounce's strength; 0
+// below Ultra. Direct light from a lamp, a window, a fire, as the fire lights: the callers add it
+// after the ambient occlusion (the screen's and the material's), which is for the light from the
+// open sky and the surroundings; a lamp inside a smithy's bay lights the bay's dark floor
+float3 DirectWindowLight(float3 p, float3 n)
+{
+	if (GIRegion.w < 2.5)
+		return float3(0, 0, 0);
+	return EmitterLight(p, n, (p.xz - GIRegion.xy) * GIRegion.z) * GIParams.x;
 }
 
 float3 BounceLight(float3 p, float3 n, float vis)
