@@ -44,17 +44,18 @@
 @TOD_NOUN.noon = noon | midday | high noon
 @TOD_NOUN.afternoon = afternoon | late afternoon | early afternoon
 @TOD_NOUN.dusk = evening | dusk | twilight | nightfall | eventide
-@TOD_NOUN.night = night | midnight | night-time | dark night
+@TOD_NOUN.night = night | midnight
 @TOD_NOUN = day
 
 @TOD_WHEN.dawn = at dawn | at first light | as the sun rose | at daybreak | in the grey before sunrise | as the cocks crowed
 @TOD_WHEN.morning = in the morning | in the forenoon | as the morning wore on | in the early hours of the day | before the sun stood high
-@TOD_WHEN.noon = at noon | about midday | under the noon sun | as the sun stood highest | at the noon hour
+@TOD_WHEN.noon = at noon | about midday | at the height of the day | when the day stood at its middle | at the noon hour
 @TOD_WHEN.afternoon = in the afternoon | as the day waned | in the long afternoon | as the shadows lengthened | late in the day
 @TOD_WHEN.dusk = at dusk | at nightfall | as evening came on | in the failing light | as the sun went down | at twilight
-@TOD_WHEN.night = by night | in the dead of night | under cover of darkness | in the black of night | by moonlight | in the small hours
+@TOD_WHEN.night = by night | in the dead of night | under cover of darkness | in the black of night | in the night watches | in the small hours
 @TOD_WHEN = that day
 
+@WEATHER_ADJ.hotnight = sweltering | stifling | airless | close | breathless | heavy | sultry | oppressive
 @WEATHER_ADJ.clearnight = clear | starry | moonlit | still | cold-starred | quiet | star-bright | cloudless
 @WEATHER_ADJ.clear = clear | bright | fair | cloudless | sunlit | still | crisp | golden
 @WEATHER_ADJ.cloudy = grey | overcast | cloudy | dull | leaden | sullen | heavy-skied | sunless
@@ -68,8 +69,8 @@
 @WEATHER_ADJ.drought = parched | dust-dry | thirsting | barren | sun-cracked | dry | dusty | cracked
 @WEATHER_ADJ = quiet | ordinary | common | uncertain
 
-@WEATHER_UNDER.clearnight = under the stars | beneath a starry sky | under a bright moon | in the clear night air | under a cloudless night sky
-@WEATHER_UNDER.hotnight = in the sweltering night | in the close, hot dark | in the airless heat of the night | in the night's heavy warmth | under a hot, starless sky
+@WEATHER_UNDER.clearnight = under the stars | beneath a starry sky | under a bright moon | in the clear, cold air | under a cloudless sky
+@WEATHER_UNDER.hotnight = in the sweltering dark | in the close, hot dark | in the airless heat | in heavy, sultry air | under a hot, starless sky
 @WEATHER_UNDER.clear = under a clear sky | beneath a bright sun | in fair weather | under a cloudless sky | in the clear air
 @WEATHER_UNDER.cloudy = under a grey sky | beneath heavy clouds | under a leaden sky | beneath a sullen sky | under low cloud
 @WEATHER_UNDER.rain = in the rain | in a cold drizzle | under a weeping sky | in steady rain | as the rain fell
@@ -89,6 +90,9 @@
 
 # ---------------------------------------------------------------- fighting
 
+# a side without a player's name (the map's own villages and their folk)
+@UNKNOWN_SIDE = the free folk | the local folk | the villagers | the free villagers | the country folk | the common folk | the landsfolk | the hill folk
+
 @HOST = host | army | warband | forces | ranks | men | companies | levies | soldiery | array
 @WARRIORS = warriors | fighters | soldiers | men-at-arms | fighting men | swordsmen | spearmen | troops | champions | blades
 @FOE = foe | enemy | foeman | adversary | opponent | man
@@ -103,16 +107,16 @@
 @FOUGHT_HARD = fought harder | fought more fiercely | bore themselves more bravely | did more bloody work | struck harder | fought with greater fury | wrought more slaughter | spilled more blood
 @FOREMOST = Foremost | First | Greatest | Most deadly | Most feared | Fiercest | Boldest | Bloodiest | Most terrible | Mightiest
 @RENOWNED = renowned | famed | celebrated | storied | valiant | far-famed | honoured | lauded | glorious | illustrious | legendary
-@HERO = hero | champion | warrior of renown | hero of the songs | great fighter | famed warrior | paladin | captain of renown
-@FELL = fell | perished | died | was lost | met their end | breathed their last | was slain | went to the grave | did not rise again | gave their life
+@HERO = hero | champion | paladin | warrior | veteran | stalwart | war-hero | swordsman
+@FELL = fell | perished | died | was lost | met their end | breathed their last | went to the grave | did not rise again | gave their life | passed from the world
 @MOURNED = mourned | grieved for | lamented | wept for | buried | sorrowed for | keened over | honoured in death
-@DEAD = dead | slain | fallen | lost | killed | dead men
+@DEAD = dead | slain | fallen | dead men
 @WON = held the field | carried the day | won the day | was victorious | prevailed | triumphed | had the better of it | stood victorious | took the field | came away the victor
 @VICTORY = victory | the day | the field | triumph | the honours of the day | the glory of the day
 @VICTORY_NOUN = victory | triumph | win | rout | success | conquest
 @ROUTED = left | abandoned | fled, leaving | withdrew, leaving | fell back and left | was driven off, leaving | broke and left | retreated and left
 @BROKEN = broken | beaten | routed | humbled | shattered | thrown back | bloodied | driven off
-@LONG_TIME = for a long time | for long hours | for hour upon hour | from one hour to the next and beyond | long and hard | for an age, it seemed | without pause for a great while | until the fighters could barely stand
+@LONG_TIME = for a long time | for long hours | for hour upon hour | long and hard | for what seemed an age | without pause for a great while | for the better part of the day | through hour after weary hour
 @SUDDENLY = almost as soon as it had begun | in moments | in a few heartbeats | before many had drawn their blades | swiftly | in the blink of an eye | quicker than a prayer | as soon as it had started
 
 # ---------------------------------------------------------------- settlements and raids
@@ -123,7 +127,7 @@
 @RAISED = raised | built | founded | established | set up | broke ground for | planted | laid the foundations of | put up | erected
 @SETTLERS = settlers | colonists | pioneers | builders | labourers | families | newcomers | homesteaders | peasants | masons
 @RAZED = put to the torch | razed to the ground | burned | laid waste | levelled | brought down in flames | reduced to ashes | cast down | torn down | destroyed | given to the flames
-@WALLS = walls | defences | ramparts | gates | palisades | fortifications | battlements | stockade
+@WALLS = walls | defences | ramparts | gates | palisades | fortifications | battlements | earthworks
 
 # ---------------------------------------------------------------- the dead
 
@@ -238,13 +242,13 @@ In the {TOD_NOUN} of the {DAY} day
 # ---- battles, sieges, raids
 
 [battle.open]
-{DATE}, the {HOST} of {SIDES} {MET} in {BATTLE} at {PLACE}.
+{DATE}, the {HOST} of {SIDES} met in {BATTLE} at {PLACE}.
 {DATE}, {SIDES} {CLASHED} at {PLACE}.
 {DATE}, steel rang out at {PLACE}, where the {WARRIORS} of {SIDES} {CLASHED}.
 {DATE}, {PLACE} saw {BATTLE} between {SIDES}.
 {DATE}, the {HOST} of {SIDES} {CLASHED} on the field of {PLACE}.
 {DATE}, war came to {PLACE}: {SIDES} {CLASHED} there.
-{DATE}, at {PLACE}, the {WARRIORS} of {SIDES} {MET} in {BATTLE}.
+{DATE}, at {PLACE}, the {WARRIORS} of {SIDES} met in {BATTLE}.
 {DATE}, blood was spilled at {PLACE}, where {SIDES} {CLASHED}.
 {DATE}, {SIDES} sought each other out at {PLACE}, and {CLASHED}.
 {DATE}, the ground at {PLACE} shook as the {HOST} of {SIDES} {MET}.
@@ -410,7 +414,7 @@ The stars shone through a haze of heat and dust.
 A grey sky hung low over the {FIGHTING}.
 The clouds hung heavy, as if mourning in advance.
 Under the leaden sky, the {FIGHTING} was grim.
-No sun broke through to see it.
+The heavy clouds never lifted.
 The grey light made friend and foe hard to tell apart.
 The clouds pressed down on the field all the while.
 A dull light lay over the {DEAD}.
@@ -543,7 +547,7 @@ The {FIGHTING} dragged on {LONG_TIME}.
 It raged {LONG_TIME} before it was decided.
 They fought {LONG_TIME}.
 The {FIGHT} went on {LONG_TIME}.
-Neither side gave way {LONG_TIME}.
+Neither side would give way, and they fought {LONG_TIME}.
 The {FIGHTING} lasted {LONG_TIME}, and wore out both sides.
 It was a long and {FIERCE} {FIGHT}.
 The {FIGHT} swayed back and forth {LONG_TIME}.
@@ -555,12 +559,12 @@ It went on {LONG_TIME}, and the end was long in doubt.
 [outcome.win]
 {WINNER} {WON}; {LOSER} {ROUTED} {LOST_HI} {DEAD} behind{TYPE_CLAUSE}.
 The day belonged to {WINNER}: {LOSER} lost {LOST_HI}{TYPE_CLAUSE}, {WINNER} only {LOST_LO}.
-It ended badly for {LOSER}, who lost {LOST_HI}{TYPE_CLAUSE} against {LOST_LO} of {WINNER}.
+It ended badly for {LOSER}, who lost {LOST_HI}{TYPE_CLAUSE}, against {LOST_LO} of {WINNER}.
 {WINNER} {WON}, losing {LOST_LO}; {LOSER} lost {LOST_HI}{TYPE_CLAUSE}.
 {LOSER} was {BROKEN}, with {LOST_HI} {DEAD}{TYPE_CLAUSE}; {WINNER} mourned {LOST_LO}.
 {VICTORY} went to {WINNER}. {LOSER} counted {LOST_HI} {DEAD}{TYPE_CLAUSE}, {WINNER} {LOST_LO}.
 When it was done, {LOSER} had lost {LOST_HI}{TYPE_CLAUSE}, and {WINNER} {LOST_LO}; {WINNER} {WON}.
-{WINNER} paid {LOST_LO} lives for {VICTORY}; {LOSER} paid {LOST_HI}{TYPE_CLAUSE} for nothing.
+{WINNER} paid {LOST_LO} lives for {VICTORY}; {LOSER} paid {LOST_HI} for nothing{TYPE_CLAUSE}.
 {LOSER} {ROUTED} {LOST_HI} {DEAD} on the field{TYPE_CLAUSE}, and {WINNER} {WON} at the cost of {LOST_LO}.
 It was a {VICTORY_KIND} for {WINNER}: {LOST_HI} of {LOSER} {DEAD}{TYPE_CLAUSE}, against {LOST_LO}.
 
@@ -612,7 +616,7 @@ It cost {SIDE} {LOST_HI} lives.
 {SIDE} lost {LOST_HI}{TYPE_CLAUSE}.
 The {DEAD} of {SIDE} numbered {LOST_HI}.
 {LOST_HI} fell on {SIDE_S} side.
-{SIDE} {MOURNED} {LOST_HI} {WARRIORS}.
+{SIDE} {MOURNED} {LOST_HI} of their own.
 
 # ---- the deeds
 
@@ -651,7 +655,7 @@ Renown was there too: {UNIT}.
 Among the {WARRIORS} stood the {RENOWNED} {UNIT}.
 {UNIT}, a {RENOWNED} {HERO}, fought in the ranks that day.
 The {RENOWNED} {UNIT} was seen in the thick of it.
-{UNIT}{KILLS_CLAUSE} was there, a {HERO} of the songs.
+{UNIT}{KILLS_CLAUSE} was there, a {HERO} whose name was already in the songs.
 {UNIT} also fought there, and lived to fight again.
 There too was {UNIT}, a {HERO} {RENOWNED} far and wide.
 The {RENOWNED} {UNIT} lent their blade to the {FIGHT}.

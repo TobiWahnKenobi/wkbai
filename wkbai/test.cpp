@@ -2981,6 +2981,22 @@ void Test_AIvsAI()
 				peace += " " + std::to_string(players[i]->id) + "-" + std::to_string(players[j]->id) + ":" + server.gameSet->diplomaticStatuses.names.getString(st);
 		}
 	printf("AITEST end diplomacy:%s\n", peace.empty() ? " all at war" : peace.c_str());
+	// the game's timeline told as the chronicle tells it ("chronicle": true), with the weather each
+	// event began in, for the RE repo's checker (STORY lines like test 58's)
+	if (cfg.value("chronicle", false)) {
+		auto& chron = server.unitHistory.chronicle.chron;
+		ChronicleNarrator::Context ctx;
+		ctx.fromSettings(server.environment.settings, server.environment.enabled());
+		ctx.playerName = [&](uint32_t id) { auto it = chron.playerNames.find(id); return it != chron.playerNames.end() ? it->second : std::to_string(id); };
+		for (auto& e : chron.events) {
+			// (the mentions, as the clients get them)
+			const std::string text = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, ctx));
+			static const char* seasons[] = { "spring", "summer", "autumn", "winter" };
+			const float el = e.time / std::max(ctx.seasonLengthS, 1.0f) + ctx.yearShift * 4.0f + ctx.startSeason;
+			printf("STORY %s|%s|-|%s|%s\n", ctx.seasons ? seasons[(int)el % 4] : "-", e.weather >= 0 ? WeatherName(e.weather) : "-", GameChronicle::kindName(e.kind), text.c_str());
+			printf("AITEST chronicle %s  %s\n", ChronicleNarrator::dateLine(e.time, ctx).c_str(), e.toText().c_str());
+		}
+	}
 	fflush(stdout);
 }
 
@@ -6556,6 +6572,190 @@ void Test_ChronicleStory()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// wkbai's chronicle over every season, the weathers each can have, the six times of day, every
+// kind of event, sizes, outcomes and causes; also without a calendar and with days only. Every
+// paragraph is printed ("STORY season|weather|time|kind|text") for the RE repo's checker, and the
+// plain rules are checked here: no template left, a capital after each full stop, no "a" before
+// a vowel, a full stop at the end
+void Test_ChronicleSweep()
+{
+	int failures = 0, bad = 0, total = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	using GC = GameChronicle;
+	check(ChronicleNarrator::load(), "redata/chronicle/english.txt read");
+	auto mention = [](int kind, uint32_t unit, uint32_t player, int kills, bool dead, const std::string& name, const std::string& extra = std::string()) {
+		GC::Mention m;
+		m.kind = kind; m.unit = unit; m.player = player; m.kills = kills; m.dead = dead; m.name = name; m.extra = extra;
+		return m;
+	};
+	// the weathers each season can have (ServerEnvironment's WEATHER_WEIGHTS above 0)
+	const std::vector<std::vector<int>> seasonWeathers = {
+		{ WEATHER_CLEAR, WEATHER_CLOUDY, WEATHER_RAIN, WEATHER_HEAVY_RAIN, WEATHER_THUNDERSTORM, WEATHER_FOG, WEATHER_SNOW },
+		{ WEATHER_CLEAR, WEATHER_CLOUDY, WEATHER_RAIN, WEATHER_HEAVY_RAIN, WEATHER_THUNDERSTORM, WEATHER_FOG, WEATHER_HEATWAVE, WEATHER_DROUGHT },
+		{ WEATHER_CLEAR, WEATHER_CLOUDY, WEATHER_RAIN, WEATHER_HEAVY_RAIN, WEATHER_THUNDERSTORM, WEATHER_FOG, WEATHER_SNOW },
+		{ WEATHER_CLEAR, WEATHER_CLOUDY, WEATHER_RAIN, WEATHER_FOG, WEATHER_SNOW, WEATHER_BLIZZARD } };
+	const float seasonTemps[4] = { 10.0f, 24.0f, 9.0f, -4.0f };
+	static const char* seasonNames[] = { "spring", "summer", "autumn", "winter" };
+	const float hours[6] = { 6.0f, 9.0f, 12.5f, 16.0f, 19.5f, 1.0f };
+	static const char* hourNames[] = { "dawn", "morning", "noon", "afternoon", "dusk", "night" };
+	static const char* causes[] = { "slain by Ceolwulf Reeve", "froze to death", "died of thirst", "drowned", "went through the ice", "burned to death",
+		"struck by lightning", "fell", "slain by the Baron's Trebuchet" };
+	ChronicleNarrator::Context ctx;
+	// (1040 the barbarians' player, 1026 a player without a name: the map's own villages)
+	ctx.playerName = [](uint32_t id) { return id == 1027 ? std::string("Saint Jane") : id == 1030 ? std::string("the Baron") : id == 1040 ? std::string("Baresark Player") : std::string(); };
+	ctx.seasons = ctx.dayNight = true;
+	ctx.seasonLengthS = 3000.0f;
+	ctx.dayLengthS = 300.0f;
+	ctx.startHour = 8;
+	// an event of the kind k (0..10) with sizes, losses and mentions by the index i
+	uint32_t nextId = 1;
+	auto make = [&](int k, int i, float time) {
+		GC::Event e{ GC::Kind::Battle, time, time + (i % 3 == 0 ? 10.0f : i % 3 == 1 ? 120.0f : 400.0f), Vector3(), { 1027, 1030 }, 0, std::string(), (i % 7 == 0) ? std::string() : "Nen Hithoel" };
+		e.id = nextId++;
+		const int sizes[] = { 5, 15, 40, 90 };
+		const int size = sizes[i % 4];
+		auto losses = [&](int a, int b) {
+			if (a) e.lost[1027][i % 2 ? "Spearman" : "Archer"] = a;
+			if (b) { e.lost[1030]["Militia"] = b; if (i % 5 == 0) e.lost[1030]["Peasant"] = 1; }
+		};
+		switch (k) {
+		case 0: case 1: case 2: // battles: a win, without loss, even; none lost
+			e.size = size;
+			e.strength = { { 1027, size * (i % 2 ? 3 : 1) / 2 + 1 }, { 1030, size / 2 + 1 } };
+			if (k == 0) losses(2, 9 + i % 5);
+			if (k == 1) losses(0, 4 + i % 3);
+			if (k == 2 && i % 2) losses(5, 6);
+			if (k == 2 && i % 4 == 0) losses(0, 1); // (one side lost one, the other none)
+			e.mentions = { mention(GC::MENTION_TOP_KILLER, 10, 1027, 1 + i % 4, i % 3 == 0, "Ralph the Wolf"),
+				mention(GC::MENTION_PRESENT, 11, 1027, 3 + i % 2, false, "Gaut Raven-Feeder") };
+			if (i % 2)
+				e.mentions.push_back(mention(GC::MENTION_PRESENT, 12, 1030, 7, true, "Ulrich von Hagen"));
+			if (i % 3 == 1)
+				e.mentions.push_back(mention(GC::MENTION_FALLEN, 13, 1030, 4, true, "Bertrand le Hardi", causes[i % 9]));
+			break;
+		case 3: // a battle of three sides
+			e.players = { 1027, 1030, 1040 };
+			e.size = size;
+			e.lost[1040]["Knight"] = 3;
+			losses(1, 2);
+			break;
+		case 4: // a battle of one side (against the wild)
+			e.players = { 1027 };
+			e.size = size;
+			if (i % 2) losses(2, 0);
+			break;
+		case 5: // a siege
+			e.kind = GC::Kind::Siege;
+			e.size = size;
+			losses(3, 12);
+			e.mentions = { mention(GC::MENTION_TOP_KILLER, 10, 1030, 5, false, "Ulrich von Hagen") };
+			// (a unit known by its type only, as the server names one: "unnamed")
+			if (i % 2)
+				e.mentions.push_back(mention(GC::MENTION_TOP_KILLER, 14, 1027, 1 + i % 3, i % 4 == 1, "Gibbering Horde", "unnamed"));
+			if (i % 3 == 0)
+				e.mentions.push_back(mention(GC::MENTION_PRESENT, 15, 1027, 2, true, "Trebuchet", "unnamed"));
+			break;
+		case 6: // a raid, with and without a victim
+			e.kind = GC::Kind::Raid;
+			e.size = 1 + i % 8;
+			if (i % 2)
+				e.lost[1030]["Peasant"] = 3 + i % 3;
+			break;
+		case 7:
+			e.kind = GC::Kind::Founded;
+			e.players = { 1030 };
+			e.what = i % 3 == 0 ? "Village Wood" : i % 3 == 1 ? "Village Stone" : "Abbey";
+			break;
+		case 8: // destroyed, with and without razers and a fight
+			e.kind = GC::Kind::Destroyed;
+			e.what = i % 2 ? "Manor" : "Village Wood";
+			if (i % 4 == 0)
+				e.players = { 1026, 1027 };
+			if (i % 3)
+				e.mentions.push_back(mention(GC::MENTION_RAZED_BY, 20, 1027, 2, false, i % 2 ? "Olivier de Clermont" : "Trebuchet"));
+			if (i % 3 == 2)
+				e.mentions.push_back(mention(GC::MENTION_RAZED_BY, 21, 1027, 1, false, "Eadric Shieldbreaker"));
+			if (i % 2)
+				e.mentions.push_back(mention(GC::MENTION_TOP_KILLER, 10, 1027, 3, false, "Ralph the Wolf"));
+			break;
+		case 9: // a hero's fall away from battle, every cause
+			e.kind = GC::Kind::Fallen;
+			e.players = { 1027 };
+			e.what = "Savaric le Redoutable";
+			e.mentions = { mention(GC::MENTION_FALLEN, 30, 1027, i % 4 == 0 ? 1 : 2 + i % 6, true, "Savaric le Redoutable", causes[i % 9]) };
+			break;
+		case 10: // a fall with no mention
+			e.kind = GC::Kind::Fallen;
+			e.players = { 1027 };
+			break;
+		}
+		return e;
+	};
+	auto rules = [&](const std::string& text, std::string& why) {
+		if (text.find('{') != std::string::npos || text.find('}') != std::string::npos) why += " template";
+		if (text.find("  ") != std::string::npos) why += " double-space";
+		if (text.find(",,") != std::string::npos || text.find(" ,") != std::string::npos || text.find(",.") != std::string::npos || text.find("..") != std::string::npos) why += " punctuation";
+		if (text.empty() || (text.back() != '.' && text.back() != '!')) why += " no-full-stop";
+		if (!text.empty() && std::islower((unsigned char)text[0])) why += " lower-start";
+		for (size_t at = text.find(". "); at != std::string::npos; at = text.find(". ", at + 1))
+			if (at + 2 < text.size() && std::islower((unsigned char)text[at + 2]))
+				why += " lower-after-stop";
+		for (size_t at = 0; (at = text.find(" a ", at)) != std::string::npos; at++)
+			if (at + 3 < text.size() && std::strchr("aeiouAEIOU", text[at + 3]) && text.compare(at + 3, 3, "one") && text.compare(at + 3, 2, "us") && text.compare(at + 3, 3, "uni"))
+				why += " a-vowel";
+		if (text.find("when,") != std::string::npos || text.find("that,") != std::string::npos) why += " when-comma";
+	};
+	auto tell = [&](const GC::Event& e, const ChronicleNarrator::Context& c, const std::string& label) {
+		const std::string text = ChronicleNarrator::plain(ChronicleNarrator::narrate(e, c));
+		std::string why;
+		rules(text, why);
+		total++;
+		if (!why.empty()) {
+			bad++;
+			printf("UNITTEST   BAD%s: %s\n", why.c_str(), text.c_str());
+		}
+		printf("STORY %s|%s|%s\n", label.c_str(), GC::kindName(e.kind), text.c_str());
+	};
+	for (int s = 0; s < 4; s++)
+		for (int w : seasonWeathers[s])
+			for (int h = 0; h < 6; h++)
+				for (int k = 0; k <= 10; k++) {
+					const int i = (int)nextId;
+					// in season s of the second year, day 3, at the hour
+					const float time = (4 + s) * ctx.seasonLengthS + 2 * ctx.dayLengthS + std::fmod(hours[h] - 8.0f + 24.0f, 24.0f) / 24.0f * ctx.dayLengthS;
+					GC::Event e = make(k, i, time);
+					e.weather = w;
+					e.temperature = w == WEATHER_BLIZZARD ? -12.0f : w == WEATHER_HEATWAVE ? 36.0f : seasonTemps[s] + (i % 3 - 1) * 3.0f;
+					e.snowCover = s == 3 || w == WEATHER_SNOW ? 0.6f : 0.0f;
+					tell(e, ctx, std::string(seasonNames[s]) + "|" + WeatherName(w) + "|" + hourNames[h]);
+				}
+	// no weather known; days only; no calendar at all (each stage of the war)
+	ChronicleNarrator::Context daysOnly = ctx, none = ctx;
+	daysOnly.seasons = false;
+	none.seasons = none.dayNight = false;
+	for (int k = 0; k <= 10; k++)
+		for (float time : { 30.0f, 400.0f, 1200.0f, 4000.0f }) {
+			GC::Event e = make(k, (int)nextId, time);
+			tell(e, ctx, "season-no-weather|-|-");
+			e = make(k, (int)nextId, time);
+			tell(e, daysOnly, "days|-|-");
+			e = make(k, (int)nextId, time);
+			e.weather = WEATHER_FOG;
+			tell(e, daysOnly, "days|fog|-");
+			e = make(k, (int)nextId, time);
+			tell(e, none, "none|-|-");
+			e = make(k, (int)nextId, time);
+			e.weather = WEATHER_RAIN;
+			tell(e, none, "none|rain|-");
+		}
+	check(bad == 0, std::to_string(total) + " paragraphs, " + std::to_string(bad) + " breaking the plain rules");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -6615,6 +6815,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_UnitTimeline, "Unit timeline: the server's events name top killers, heroes present and fallen; Fallen events; the same from the same seed; kept by a save"},
 {Test_UnitSplashKills, "Unit kills by splash (rockets at a cluster) and none for an Act of God (lightning)"},
 {Test_ChronicleStory, "Chronicle story: the timeline's events told as a historian's paragraphs, the same every time"},
+{Test_ChronicleSweep, "Chronicle sweep: every season, weather, time of day and kind of event told, the plain rules checked"},
 };
 
 void LaunchTest()

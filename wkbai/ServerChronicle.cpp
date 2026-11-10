@@ -63,6 +63,9 @@ std::string ServerChronicle::label(Server& server, uint32_t unit, bool withPlaye
 	uint32_t player = rec ? rec->player : 0;
 	if (ServerGameObject* obj = server.findObject(unit)) {
 		type = obj->blueprint->name;
+		// (a corpse: the unit's own type)
+		if (type.rfind("Dead ", 0) == 0 && type.size() > 5)
+			type = type.substr(5);
 		if (ServerGameObject* p = obj->getPlayer())
 			player = p->id;
 	}
@@ -141,6 +144,8 @@ void ServerChronicle::makeMentions(Server& server, GameChronicle::Event& e)
 			const UnitHistory::Record* rec = server.unitHistory.find(t.first);
 			m.dead = rec && rec->death >= 0.0f;
 			m.name = label(server, t.first, false); // (the timeline puts the player's name before it)
+			if (!rec || rec->displayName().empty())
+				m.extra = "unnamed"; // (a type, not a name: the chronicle says "a Trebuchet")
 			e.mentions.push_back(std::move(m));
 		}
 		// a settlement destroyed: who razed buildings there
@@ -156,6 +161,8 @@ void ServerChronicle::makeMentions(Server& server, GameChronicle::Event& e)
 			m.kills = rec && (rec->death >= 0.0f || !obj) ? rec->buildings : obj ? obj->buildingsDestroyed : 0; // buildings in all
 			m.dead = rec && rec->death >= 0.0f;
 			m.name = label(server, unit, false);
+			if (!rec || rec->displayName().empty())
+				m.extra = "unnamed";
 			e.mentions.push_back(std::move(m));
 		}
 		// the heroes who fought here, with their kills now (heroes since too)

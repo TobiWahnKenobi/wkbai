@@ -345,7 +345,8 @@ void GameChronicle::sample(CommonGameState* state, float now)
 			std::string general = p->blueprint->name;
 			if (general.size() > 10 && general.compare(general.size() - 10, 10, " Kingmaker") == 0)
 				general.resize(general.size() - 10);
-			if (name.empty() || (name.rfind("Player ", 0) == 0 && general != "Human Player"))
+			// ("player 1" too: some levels name them in lower case)
+			if (name.empty() || (_strnicmp(name.c_str(), "Player ", 7) == 0 && general != "Human Player"))
 				name = general;
 			playerNames[p->id] = name;
 			playerColours[p->id] = p->color;

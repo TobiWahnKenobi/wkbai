@@ -137,7 +137,7 @@ bool VowelSound(const char* w)
 void Tidy(std::string& s)
 {
 	for (const auto& [from, to] : std::vector<std::pair<const char*, const char*>>{ { "when, ", "when " }, { "that, ", "that " },
-		{ ",, ", ", " }, { ",,", "," }, { " ,", "," }, { ",.", "." }, { "  ", " " } }) {
+		{ ",, ", ", " }, { ",,", "," }, { " ,", "," }, { ",.", "." }, { "  ", " " }, { " on on ", " on " }, { " in in ", " in " }, { " at at ", " at " } }) {
 		size_t at;
 		while ((at = s.find(from)) != std::string::npos)
 			s.replace(at, strlen(from), to);
@@ -228,9 +228,15 @@ struct Teller {
 		for (Piece& p : merged)
 			if (p.player == 0 && p.mention < 0)
 				Tidy(p.text);
-		// (a player's name begins it: "the Baron" -> "The Baron"; a unit's name stays as it is)
-		if (capital && !merged.empty() && merged[0].player != 0 && !merged[0].text.empty())
-			merged[0].text[0] = (char)std::toupper((unsigned char)merged[0].text[0]);
+		// (a player's name begins it, or a sentence within it: "the Baron" -> "The Baron"; a unit's
+		// name stays as it is)
+		for (size_t j = 0; j < merged.size(); j++)
+			if (merged[j].player != 0 && !merged[j].text.empty()) {
+				const bool starts = j == 0 ? capital : merged[j - 1].mention < 0 && merged[j - 1].player == 0
+					&& merged[j - 1].text.size() >= 2 && merged[j - 1].text.compare(merged[j - 1].text.size() - 2, 2, ". ") == 0;
+				if (starts)
+					merged[j].text[0] = (char)std::toupper((unsigned char)merged[j].text[0]);
+			}
 		if (capital && !merged.empty() && merged[0].player == 0 && merged[0].mention < 0) {
 			std::string& s = merged[0].text;
 			const size_t first = s.find_first_not_of(' ');
@@ -309,6 +315,20 @@ Calendar CalendarAt(float t, const ChronicleNarrator::Context& c)
 	cal.day = 1 + (int)std::floor(days);
 	cal.hour = (days - std::floor(days)) * 24.0f;
 	return cal;
+}
+
+// a settlement's blueprint as a word: "Village Wood" -> "village", "Manor" -> "manor"
+std::string SettlementWord(const std::string& what)
+{
+	std::string s = what.empty() ? std::string("settlement") : what;
+	for (const char* material : { " Wood", " Stone", " Brick", " Timber" }) {
+		const size_t n = strlen(material);
+		if (s.size() > n && s.compare(s.size() - n, n, material) == 0)
+			s.resize(s.size() - n);
+	}
+	for (char& ch : s)
+		ch = (char)std::tolower((unsigned char)ch);
+	return s;
 }
 
 // a death's cause as a tag of the CAUSE word (and the killer's name, for "slain")
@@ -423,12 +443,42 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 	const int n = e.size;
 	t.tags.push_back(n < 8 ? "skirmish" : n < 25 ? "battle" : n < 60 ? "great" : "huge");
 
-	auto player = [&](uint32_t id) { return Pieces{ Piece{ c.playerName ? c.playerName(id) : std::to_string(id), id } }; };
+	// a player's name: an unnamed one (the map's own villages) as the people of the land, the
+	// barbarians' "Baresark Player" as "the Baresarks"; the same words for it all through
+	std::map<uint32_t, std::string> sideNames;
+	auto player = [&](uint32_t id) {
+		auto it = sideNames.find(id);
+		if (it == sideNames.end()) {
+			std::string name = c.playerName ? c.playerName(id) : std::string();
+			if (name.empty() || name.find_first_not_of("0123456789") == std::string::npos)
+				name = t.word("UNKNOWN_SIDE");
+			else if (name.size() > 7 && name.compare(name.size() - 7, 7, " Player") == 0)
+				name = "the " + name.substr(0, name.size() - 7) + "s";
+			if (name.empty())
+				name = "the people of the land";
+			it = sideNames.emplace(id, name).first;
+		}
+		return Pieces{ Piece{ it->second, id } };
+	};
 	// (one piece: "'s" never wraps away from the name)
-	auto possessive = [&](uint32_t id) { Pieces p = player(id); p[0].text += "'s"; return p; };
+	auto possessive = [&](uint32_t id) { Pieces p = player(id); p[0].text += !p[0].text.empty() && p[0].text.back() == 's' ? "'" : "'s"; return p; };
+	// a unit with a name ("Sigurd the Valiant"), or one known by its type only ("unnamed", the
+	// server's: "a Trebuchet")
+	auto unnamed = [&](size_t i) { return e.mentions[i].extra == "unnamed" || e.mentions[i].name.empty(); };
 	auto unit = [&](size_t i) {
 		const GC::Mention& m = e.mentions[i];
-		Piece p{ m.name.empty() ? std::string("one unnamed") : m.name };
+		Pieces out;
+		if (unnamed(i))
+			out.push_back({ m.name.empty() ? std::string("a warrior whose name is lost") : std::string(VowelSound(m.name.c_str()) ? "an " : "a ") });
+		Piece p{ m.name.empty() ? std::string() : m.name };
+		p.mention = (int)i;
+		if (!p.text.empty())
+			out.push_back(p);
+		return out;
+	};
+	// the type alone, for "Saint Jane's Trebuchet"
+	auto unitBare = [&](size_t i) {
+		Piece p{ e.mentions[i].name.empty() ? std::string("warrior") : e.mentions[i].name };
 		p.mention = (int)i;
 		return Pieces{ p };
 	};
@@ -471,7 +521,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 		const GC::Mention& m = e.mentions[i];
 		Vars w = v;
 		w["UNIT"] = unit(i);
-		if (late)
+		if (late && !unnamed(i))
 			w["UNIT"].insert(w["UNIT"].begin(), Piece{ "the late " });
 		w["UNIT_S"] = w["UNIT"];
 		w["UNIT_S"].push_back({ "'s" });
@@ -504,7 +554,8 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 		std::vector<size_t> heroes;
 		for (size_t i : present) {
 			const GC::Mention& m = e.mentions[i];
-			if (fellHere(m.unit) || std::any_of(top.begin(), top.end(), [&](size_t k) { return e.mentions[k].unit == m.unit; }))
+			// (a hero has a name: one known by its type only is no hero to tell of)
+			if (unnamed(i) || fellHere(m.unit) || std::any_of(top.begin(), top.end(), [&](size_t k) { return e.mentions[k].unit == m.unit; }))
 				continue;
 			heroes.push_back(i);
 		}
@@ -517,7 +568,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 			std::vector<Pieces> list;
 			for (size_t i : heroes) {
 				Pieces h = unit(i);
-				if (e.mentions[i].dead)
+				if (e.mentions[i].dead && !unnamed(i))
 					h.insert(h.begin(), Piece{ "the late " });
 				list.push_back(h);
 			}
@@ -575,7 +626,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 			Append(out, t.sentence("outcome.single", w));
 			return;
 		}
-		if (hi >= 2 * lo + 2)
+		if (hi >= 2 * lo + 2 || (lo == 0 && hi > 0))
 			Append(out, t.sentence(lo == 0 ? "outcome.win.noloss" : "outcome.win", w));
 		else {
 			std::vector<Pieces> each;
@@ -612,7 +663,8 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 			w["VICTIM"] = victim ? player(victim) : Text("its people");
 			Append(out, t.sentence(most > 0 && sides.size() > 1 ? "raid.open" : "raid.open.plain", w));
 		}
-		if (n > 0) {
+		// (one or two: no count worth telling)
+		if (n >= 3) {
 			Append(out, t.sentence("size", v));
 			if (sides.size() == 2) {
 				auto a = e.strength.find(sides[0]), b = e.strength.find(sides[1]);
@@ -641,9 +693,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 	}
 	case GC::Kind::Founded: {
 		Vars w = v;
-		std::string lower = e.what.empty() ? std::string("settlement") : e.what;
-		for (char& ch : lower)
-			ch = (char)std::tolower((unsigned char)ch);
+		std::string lower = SettlementWord(e.what);
 		w["SIDE"] = sides.empty() ? Text("settlers") : player(sides[0]);
 		w["SIDE_S"] = sides.empty() ? Text("the settlers'") : possessive(sides[0]);
 		w["SETTLEMENT"] = Text(lower);
@@ -663,9 +713,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 				break;
 			}
 		Vars w = v;
-		std::string lower = e.what.empty() ? std::string("settlement") : e.what;
-		for (char& ch : lower)
-			ch = (char)std::tolower((unsigned char)ch);
+		std::string lower = SettlementWord(e.what);
 		w["SETTLEMENT"] = Text(lower);
 		w["A_SETTLEMENT"] = Text("a " + lower);
 		w["OWNER"] = owner ? player(owner) : Text("its people");
@@ -674,7 +722,7 @@ std::vector<ChronicleNarrator::Piece> ChronicleNarrator::narrate(const GameChron
 		for (size_t i : razers) {
 			Pieces x = possessive(e.mentions[i].player);
 			x.push_back({ " " });
-			Pieces u = unit(i);
+			Pieces u = unitBare(i);
 			x.insert(x.end(), u.begin(), u.end());
 			by.push_back(x);
 		}
