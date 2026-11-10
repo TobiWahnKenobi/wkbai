@@ -872,7 +872,12 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 	const float* horizon = env.skyLightValid ? env.skyLight[1] : nullptr;
 	const float grey[3] = { 0.62f, 0.68f, 0.75f }, greyH[3] = { 0.7f, 0.74f, 0.78f };
 	if (!up) { up = grey; horizon = greyH; }
-	const float horizonLum = 0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f;
+	// (SkyAmbient's divisor: the sky light's mean brightness, and with wkbai's day and night the
+	// moon's share of the night sky's light, SunState::skyLightScale: a moonless night's sky light
+	// on the ground, the models and the bounce about half a full moon's; the grade alone had
+	// darkened the night, the same whatever the phase, the play test of 2026-11-10)
+	const float skyScale = g_environment.active ? std::clamp(g_environment.sun.skyLightScale, 0.2f, 2.0f) : 1.0f;
+	const float horizonLum = (0.299f * (up[0] + horizon[0]) * 0.5f + 0.587f * (up[1] + horizon[1]) * 0.5f + 0.114f * (up[2] + horizon[2]) * 0.5f) / skyScale;
 	// The high clouds come and go: the game's time in skies of 10 minutes (the change eased over
 	// the last 2), each with its own amount of cirrus and altocumulus and its own style (which of
 	// the cirrus types, HighTypes, are where). In cloudy weather (and the cover slider's cumulus)
