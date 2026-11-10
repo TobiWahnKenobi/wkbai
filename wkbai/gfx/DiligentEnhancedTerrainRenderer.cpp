@@ -164,21 +164,23 @@ float FarGroundShare(float3 world)
 Texture2D<float> lightRtMask;
 Texture2D<float> lightAoMask;
 SamplerState lightMaskSampler;
-// (0 in Extend map's far rings: they are not in the ray-traced scene, and the masks rebuilt from
-// the depth kilometres out shadowed the low sun's land in bands, the play test of 2026-11-10)
+// How much of the masks applies (0 in Extend map's far rings: they are not in the ray-traced
+// scene, and the masks rebuilt from the depth kilometres out shadowed the low sun's land in bands;
+// the near ring's last part goes over to none, so near and far meet under the same light, the
+// play tests of 2026-11-10)
 static float ScreenMasks = 1;
 float RtSunMask(float4 pos)
 {
-	return LightMasks.x != 0 && ScreenMasks != 0 ? lightRtMask.Load(int3(pos.xy, 0)) : 1;
+	return LightMasks.x != 0 && ScreenMasks > 0 ? lerp(1, lightRtMask.Load(int3(pos.xy, 0)), ScreenMasks) : 1;
 }
 float AoMask(float4 pos)
 {
-	if (LightMasks.y <= 0 || ScreenMasks == 0)
+	if (LightMasks.y <= 0 || ScreenMasks <= 0)
 		return 1;
 	float2 uv = pos.xy * LightMasks.zw, h = LightMasks.zw * 2;
 	float ao = (lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, -h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, -h.y), 0)
 		+ lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, h.y), 0)) * 0.25;
-	return lerp(1, ao, LightMasks.y);
+	return lerp(1, ao, LightMasks.y * ScreenMasks);
 }
 
 // Fog of a world position: the distance fog, or the map-edge fog where that is stronger. The edge
@@ -1507,6 +1509,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 		float3 mean = inpTexture.SampleLevel(inpSampler, (min(tile, 3) + 0.5) * 0.25, max((float)levels - 3, 0)).rgb;
 		tex.rgb = lerp(tex.rgb, mean, k);
 		nrm = normalize(lerp(nrm, float3(0, 1, 0), k));
+		ScreenMasks = 1 - k;
 	}
 	return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
 }

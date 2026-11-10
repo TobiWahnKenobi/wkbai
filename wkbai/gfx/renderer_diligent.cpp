@@ -1206,7 +1206,7 @@ struct DiligentRenderer : DiligentGfx
 	}
 	// the air's length over the ground beyond (world units): how far it takes to go two thirds of
 	// the way into the horizon's colour (real air, on the ground beyond the extension only)
-	static constexpr float FAR_AIR = 25000.0f;
+	static constexpr float FAR_AIR = 9000.0f; // (25000 left a dark band under the horizon without the edge fog)
 
 	void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) override
 	{

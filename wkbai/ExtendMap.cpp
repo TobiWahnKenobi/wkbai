@@ -164,7 +164,11 @@ float Ridged(uint64_t seed, float x, float z, float cell, int octaves, int salt,
 	for (int o = 0; o < octaves; o++) {
 		const float k = OctaveShare(l, foot);
 		// (an octave left out counts at its mean, a third of its weight: the ranges keep their height)
-		float n = k > 0 ? 1.0f - std::abs(ValueNoise(seed, qx + o * 5.3f, qz + o * 23.1f, salt + o)) : 0.0f;
+		// (a soft crest, the softer the coarser the samples: |v| as sqrt(v² + e); the sharp
+		// crest drew spiky mountains far out, the play test of 2026-11-10)
+		const float e = 0.004f + 0.03f * std::min(foot / 16.0f, 1.0f);
+		const float nv = k > 0 ? ValueNoise(seed, qx + o * 5.3f, qz + o * 23.1f, salt + o) : 0.0f;
+		float n = k > 0 ? 1.0f - std::sqrt(nv * nv + e) + std::sqrt(e) : 0.0f;
 		n = (n * n * k + (1.0f - k) / 3.0f) * w;
 		w = std::clamp(n * 1.8f, 0.0f, 1.0f);
 		s += a * n;
@@ -812,6 +816,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		return L;
 	};
 
+	// ring 0's grid spacing (tiles) by the detail (Low 20 units, Medium 10, High 5, Ultra 2.5)
+	const float farFoot0 = std::array<float, 4>{ 4.0f, 2.0f, 1.0f, 0.5f }[std::clamp(detail, 0, 3)];
+
 	// ---- The macro surface: a membrane from the map's own vertices out to the far boundary,
 	// where it is the edge's wide mean (sea floor off the sea), with slow undulations
 	std::vector<float> base((size_t)EW * EH, 0.0f);
@@ -845,7 +852,13 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				continue;
 			}
 			const float px = (float)X, pz = (float)Z;
-			const Land L = landAt(px, pz);
+			// Over the near ring's outer part its land loses the detail the first far ring hasn't
+			// (the octaves finer than that ring's grid, the small relief), so the two meet without a
+			// step in the detail (the play test of 2026-11-10: a hard border)
+			const float cheb = (float)std::max({ n - X, X - (n + w), n - Z, Z - (n + h), 0 });
+			const float toFar = farRings > 0 ? std::clamp((cheb / n - 0.4f) / 0.6f, 0.0f, 1.0f) : 0.0f;
+			const float toFar2 = toFar * toFar * (3 - 2 * toFar);
+			const Land L = landAt(px, pz, toFar2 * farFoot0);
 			const float d = L.d, wet = L.wet, bx = L.bx, bz = L.bz;
 			mountainAt[i] = L.mtn;
 			const float ramp = std::clamp(d / 14.0f, 0.0f, 1.0f);
@@ -856,7 +869,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const float near = std::clamp(d / 20.0f, 0.0f, 1.0f);
 			const float localScale = (at(fineLocal, bx, bz) * (1 - near) + at(fineSide, bx, bz) * near) * 0.8f / fineGlobal;
 			const float fineRamp = std::clamp(d / 3.0f, 0.0f, 1.0f);
-			const float amp = fineRamp * patch * std::clamp(localScale, 0.5f, 1.6f) * (1 - wet);
+			const float amp = fineRamp * patch * std::clamp(localScale, 0.5f, 1.6f) * (1 - wet) * (1 - toFar2);
 			bump1[i] = amp * sigma1 * ValueNoise(seed, px / 1.6f, pz / 1.6f, 77);
 			bump3[i] = amp * sigma3 * ValueNoise(seed, px / 4.0f, pz / 4.0f, 78);
 			bump8[i] = amp * sigma8 * Fbm(seed, px, pz, 11.0f, 2, 79);
@@ -890,8 +903,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			return inMapV(X, Z) && (sx < map.edge || sz < map.edge || sx > w - map.edge || sz > h - map.edge)
 				&& wetV[(size_t)sz * VW + sx] == 0;
 		};
+		// (the inner part of the near ring only: its outer part fades towards the far rings)
 		auto isExt = [&](int X, int Z) {
-			return !inMapV(X, Z) && X >= 8 && Z >= 8 && X <= W - 8 && Z <= H - 8 && dryAt[(size_t)Z * EW + X];
+			const int cheb = std::max({ n - X, X - (n + w), n - Z, Z - (n + h), 0 });
+			return !inMapV(X, Z) && X >= 8 && Z >= 8 && X <= W - 8 && Z <= H - 8 && dryAt[(size_t)Z * EW + X]
+				&& (farRings <= 0 || cheb < 0.4f * n);
 		};
 		auto measure = [&](bool band, float out[3]) {
 			const std::vector<float> c1 = boxE(height, 1), c3 = boxE(height, 3), c8 = boxE(height, 8);
@@ -1054,8 +1070,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				continue;
 			const float u = riverU[vi], level = riverL[vi], half = riverHalf[vi];
 			float& v = H_(X, Z);
-			if (u <= 0)
-				v = std::min(v, level - 2.2f - 1.6f * std::min(-u / half, 1.0f));
+			if (u <= 0) // (down from the bank's height without a step: the step drew lines in the water)
+				v = std::min(v, std::max(level + 0.35f + 2.0f * u, level - 2.2f - 1.6f * std::min(-u / half, 1.0f)));
 			else {
 				v = std::min(v, level + 0.35f + VALLEY_SLOPE_W * u * (0.4f + 0.06f * u));
 				if (u < 1.5f)
@@ -1099,6 +1115,24 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			}
 		}
 	}
+
+	// Inside the water (all four tiles round a vertex under it) the land stays under it: a river's
+	// banks where a sea spread over them drew jagged lines of sand in the water (the play test of
+	// 2026-11-10)
+	for (int Z = 1; Z < H; Z++)
+		for (int X = 1; X < W; X++) {
+			if (inMapV(X, Z))
+				continue;
+			float lvl = 1e30f;
+			bool all = true;
+			for (int c = 0; c < 4; c++) {
+				const Terrain::Tile& t = e.tiles[(size_t)(Z - 1 + (c >> 1)) * W + X - 1 + (c & 1)];
+				all = all && t.fullOfWater;
+				lvl = std::min(lvl, t.waterLevel);
+			}
+			if (all)
+				H_(X, Z) = std::min(H_(X, Z), lvl - 0.6f);
+		}
 
 	// ---- Lakes and ponds where the land holds water: a priority flood from the copy's outer
 	// edge and the map (where water drains away) fills every hollow to its spill height; the
@@ -1307,8 +1341,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const float sRock = rockAt(v, rise, jitter) * (1 - sSnow);
 			if (!wetHere && !nearWater) {
 				const int b = std::clamp((int)std::lround(mountainAt[i] * 10.0f), 0, 10);
-				rockBinSum[b] += std::max(sRock, sSnow);
-				rockBinN[b] += 1;
+				(void)b;
 			}
 			struct Zone { float s; const std::vector<int>* c; };
 			const Zone zones[4] = { { sBed, &bedChain }, { sSand, &sandChain }, { sRock, &rockChain }, { sSnow, &snowChain } };
@@ -1370,6 +1403,23 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			}
 		mat.swap(out);
 	}
+	// the near ring's rock by its mountain share, from the materials it shows (rock and snow
+	// whole, the steps of the chain towards rock half): the far rings take it for their land (the
+	// zones' strengths gave far more rock than the near ring shows, a beige far ring against a
+	// green near one, the play test of 2026-11-10)
+	for (int Z = 0; Z < EH; Z++)
+		for (int X = 0; X < EW; X++) {
+			const size_t i = (size_t)Z * EW + X;
+			if (matFixed[i] || !dryAt[i] || mat[i] < 0 || mat[i] >= M)
+				continue;
+			const Kind kd = mats.kinds[mat[i]];
+			float r = kd == K_ROCK || kd == K_SNOW ? 1.0f : 0.0f;
+			if (r == 0 && rockChain.size() > 2 && std::find(rockChain.begin() + 1, rockChain.end() - 1, mat[i]) != rockChain.end() - 1)
+				r = 0.5f;
+			const int b = std::clamp((int)std::lround(mountainAt[i] * 10.0f), 0, 10);
+			rockBinSum[b] += r;
+			rockBinN[b] += 1;
+		}
 	// Every tile must have a picture: one material, or two that a transition of the map's joins
 	// in that pattern. A tile that has none goes back to the ground (or to its seam corner's
 	// material, by the map's edge), and its neighbours are looked at again.
@@ -1434,6 +1484,28 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			break;
 	}
 	int unmatched = 0;
+	// A material's pictures as the map uses them: each by how often its tiles show it, picked in
+	// patches about 6 tiles across (a smooth noise), turned and flipped at random. (Picked at
+	// random per tile, pictures of different brightness checkered the hills, the play test of
+	// 2026-11-10.)
+	std::map<const TerrainTexture*, int> pictureUse;
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++)
+			pictureUse[map.getTile(x, z)->texture]++;
+	auto pickPicture = [&](int m, int X, int Z) -> TerrainTexture* {
+		const auto& group = mats.groups[m]->textures;
+		double total = 0;
+		for (const auto& [k, tex] : group)
+			total += pictureUse[tex.get()] + 0.02;
+		const float u = std::clamp(0.5f + 0.9f * Fbm(seed, (float)X, (float)Z, 6.0f, 2, 170 + m), 0.0f, 0.9999f);
+		double acc = 0;
+		for (const auto& [k, tex] : group) {
+			acc += (pictureUse[tex.get()] + 0.02) / total;
+			if (u < acc)
+				return tex.get();
+		}
+		return group.rbegin()->second.get();
+	};
 	for (int Z = 0; Z < H; Z++)
 		for (int X = 0; X < W; X++) {
 			if (inMapT(X, Z))
@@ -1484,10 +1556,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				}
 			}
 			if (!done && a >= 0 && a < M) {
-				const auto& group = mats.groups[a]->textures;
-				auto it = group.begin();
-				std::advance(it, (size_t)((r >> 3) % group.size()));
-				t.texture = it->second.get();
+				t.texture = pickPicture(a, X, Z);
 				t.rot = (r >> 8) & 3;
 				t.xflip = (r >> 10) & 1;
 				t.zflip = (r >> 11) & 1;
@@ -1623,8 +1692,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		far->vertices.clear();
 		far->indices.clear();
 		far->blocks.clear();
-		// ring 0's spacing, tiles, by the detail (Low 20 units, Medium 10, High 5, Ultra 2.5)
-		const float S0 = std::array<float, 4>{ 4.0f, 2.0f, 1.0f, 0.5f }[std::clamp(detail, 0, 3)];
+		const float S0 = farFoot0; // ring 0's spacing, tiles
 		constexpr float B0 = 48.0f;  // ring 0's width, tiles; each ring twice the one before
 		// the river points in buckets of 32 tiles, for the nearest one to a place
 		constexpr float RB = 32.0f;
@@ -1688,8 +1756,18 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		};
 		std::vector<Ring> rings(farRings);
 		float x0 = 0, z0 = 0, x1 = (float)W, z1 = (float)H;
-		// the height of the land alone (no rivers) at a ring's grid spacing: for the normals
-		auto landHeight = [&](float px, float pz, float s) { return farBase(px, pz, s) + landAt(px, pz, s).detail; };
+		// the detail's cut-off at a place of a ring: its spacing at its inner edge, the next ring's
+		// at its outer edge
+		auto footAt = [](const auto& R, float px, float pz) {
+			const float bw = std::max(R.ix0 - R.xs.front(), 1.0f);
+			const float f = std::clamp(std::max({ R.ix0 - px, px - R.ix1, R.iz0 - pz, pz - R.iz1 }) / bw, 0.0f, 1.0f);
+			return R.s * (1.0f + f * f * (3 - 2 * f));
+		};
+		// the height of the land alone (no rivers) at a place of a ring: for the normals
+		auto landHeight = [&](const auto& R, float px, float pz) {
+			const float foot = footAt(R, px, pz);
+			return farBase(px, pz, foot) + landAt(px, pz, foot).detail;
+		};
 		for (int k = 0; k < farRings; k++) {
 			Ring& R = rings[k];
 			const float s = S0 * (float)(1 << k), b = B0 * (float)(1 << k);
@@ -1723,25 +1801,29 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					if (!R.used[gi])
 						continue;
 					const float px = R.xs[i], pz = R.zs[j];
-					// (the noise without the octaves finer than the grid: they aliased into spikes)
-					const Land L = landAt(px, pz, s);
-					float v = farBase(px, pz, s) + L.detail;
+					// (the noise without the octaves finer than the grid, which aliased into spikes; the
+					// cut-off growing across the ring to the next ring's, so the detail falls off
+					// smoothly instead of halving at each ring's edge)
+					const float foot = footAt(R, px, pz);
+					const Land L = landAt(px, pz, foot);
+					float v = farBase(px, pz, foot) + L.detail;
 					R.mtn[gi] = L.mtn;
 					float lvl = -1e30f;
-					// rivers: their bed under their level (a grid point within about a third of the
-					// spacing of the channel: a river narrower than the grid still shows), their
-					// valleys opening up from it
+					// rivers: the water's level along a corridor (a river narrower than the grid
+					// still shows), the bed sloping down through it from the banks without a step
+					// (the step and the banks held over the water drew terraces and holes in the
+					// rivers, the play test of 2026-11-10)
 					float u, level = 0, half = 1;
 					nearestRiver(px, pz, u, level, half);
 					const float u2 = u - 0.35f * s;
-					if (u2 <= 0) {
+					if (u2 < 2.5f * s)
 						lvl = level;
-						v = std::min(v, level - 1.2f - 1.2f * std::min(-u2 / std::max(half, 1.0f), 1.0f));
-					}
+					if (u2 <= 0)
+						v = std::min(v, std::max(level + 0.35f + 0.9f * u2, level - 2.5f));
 					else if (u2 < 20.0f + s)
 						v = std::min(v, level + 0.35f + 1.1f * u2 * (0.4f + 0.06f * u2));
 					// the sea's level over the land near the map's seas
-					if (seaLevel > -1e29f && L.wet > 0.12f)
+					if (seaLevel > -1e29f && L.wet > 0.02f)
 						lvl = std::max(lvl, seaLevel);
 					R.hgt[gi] = v;
 					R.lvl[gi] = lvl;
@@ -1887,30 +1969,6 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				H_(X, Z) = h;
 			}
 
-		// The banks: a dry grid point on a cell with water stands a little over the water's level
-		// there (the cell's water covers it whole; a dry corner lower than a river's level drew a
-		// square of water out of its channel). The rings' edges stay as stitched.
-		for (Ring& R : rings) {
-			const int NX = R.nx(), NZ = R.nz();
-			std::vector<float> lift = R.hgt;
-			for (int j = 0; j + 1 < NZ; j++)
-				for (int i = 0; i + 1 < NX; i++) {
-					const size_t g[4] = { (size_t)j * NX + i, (size_t)j * NX + i + 1, (size_t)(j + 1) * NX + i, (size_t)(j + 1) * NX + i + 1 };
-					float wl = -1e30f;
-					for (size_t q : g)
-						if (R.used[q] && R.water[q])
-							wl = std::max(wl, R.lvl[q]);
-					if (wl < -1e29f)
-						continue;
-					for (int c = 0; c < 4; c++) {
-						const int ii = i + (c & 1), jj = j + (c >> 1);
-						if (ii == 0 || jj == 0 || ii == NX - 1 || jj == NZ - 1 || R.water[g[c]])
-							continue;
-						lift[g[c]] = std::max(lift[g[c]], wl + 1.2f); // (the shore about halfway along the cell: 0.3 drew squares)
-					}
-				}
-			R.hgt.swap(lift);
-		}
 
 		// The vertices: normals from the grid's central differences (as the mesh stands), at the
 		// rings' edges, where a neighbour is missing, from the land's own height function at the
@@ -1939,8 +1997,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 						gz = (R.hgt[gi + NX] - R.hgt[gi - NX]) / (5.0f * (R.zs[j + 1] - R.zs[j - 1]));
 					}
 					else {
-						gx = (landHeight(px + d, pz, s) - landHeight(px - d, pz, s)) / (10.0f * d);
-						gz = (landHeight(px, pz + d, s) - landHeight(px, pz - d, s)) / (10.0f * d);
+						gx = (landHeight(R, px + d, pz) - landHeight(R, px - d, pz)) / (10.0f * d);
+						gz = (landHeight(R, px, pz + d) - landHeight(R, px, pz - d)) / (10.0f * d);
 					}
 					const float keep = 1.0f - R.flat[gi];
 					grad[gi] = { gx * keep, gz * keep, std::sqrt(gx * gx + gz * gz) * keep };
@@ -1968,9 +2026,17 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					const float fp = Fbm(seed, px, pz, 38.0f, 4, 140);
 					c = mix3(c, cForest, std::clamp((fp - 0.14f) * 8.0f, 0.0f, 1.0f) * (rise < 0.45f ? 1.0f : 0.0f));
 					const float jitter = Fbm(seed, px, pz, 9.0f, 3, 33);
-					// sand along the water (the sea's and the rivers' shores)
+					// sand along the water (the sea's and the rivers' shores): only where this point or
+					// a neighbour is under water (low land anywhere near the sea's level had turned
+					// beige far from any water, the play test of 2026-11-10)
 					const float wl = R.lvl[gi] > -1e29f ? R.lvl[gi] : seaLevel;
-					if (wl > -1e29f)
+					bool shore = R.water[gi];
+					for (const auto& [di, dj] : { std::pair{ 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) {
+						const int ii = i + di, jj = j + dj;
+						if (ii >= 0 && jj >= 0 && ii < NX && jj < NZ && R.water[(size_t)jj * NX + ii])
+							shore = true;
+					}
+					if (wl > -1e29f && shore)
 						c = mix3(c, cSand, std::clamp(1.0f - (v - wl) / 2.0f, 0.0f, 1.0f) * std::clamp(1.0f - (rise - 0.3f) / 0.2f, 0.0f, 1.0f));
 					// (the land's rock: by its height and slope, or the near ring's share for its kind)
 					const float mb = std::clamp(R.mtn[gi] * 10.0f, 0.0f, 10.0f);
@@ -1979,7 +2045,34 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					c = mix3(c, cRock, std::max(rockAt(v, rise, jitter), share) * (1.0f - R.flat[gi]));
 					if (snowLine < 1e29f)
 						c = mix3(c, cSnow, std::clamp((v - snowLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f));
-					const float shade = 1.0f + 0.08f * Fbm(seed, px, pz, 5.0f, 2, 141);
+					// near the near ring, the colours of its own edge (its materials along the nearest
+					// stretch of its border), going over to the far rings' own over 30 tiles: the two
+					// meet in the same colours
+					if (k == 0 && M > 0) {
+						const float dout = std::max({ -px, px - (float)W, -pz, pz - (float)H, 0.0f });
+						const float t = 1.0f - std::clamp(dout / 30.0f, 0.0f, 1.0f);
+						if (t > 0) {
+							const int ex = std::clamp((int)std::lround(px), 0, W), ez = std::clamp((int)std::lround(pz), 0, H);
+							std::array<float, 3> edge = { 0, 0, 0 };
+							int cnt = 0;
+							for (int dz = -3; dz <= 3; dz++)
+								for (int dx = -3; dx <= 3; dx++) {
+									const int X2 = std::clamp(ex + dx, 0, W), Z2 = std::clamp(ez + dz, 0, H);
+									if (!(X2 <= 1 || Z2 <= 1 || X2 >= W - 1 || Z2 >= H - 1))
+										continue;
+									const std::array<float, 3> mc = colourOf(mat[(size_t)Z2 * EW + X2]);
+									for (int q = 0; q < 3; q++)
+										edge[q] += mc[q];
+									cnt++;
+								}
+							if (cnt > 0) {
+								for (int q = 0; q < 3; q++)
+									edge[q] /= cnt;
+								c = mix3(c, edge, t * t * (3 - 2 * t));
+							}
+						}
+					}
+					const float shade = 1.0f + 0.08f * Fbm(seed, px, pz, 5.0f, 2, 141) * (k == 0 ? 0.5f : 1.0f);
 					if (k == farRings - 1 && !R.water[gi]) {
 						for (int q = 0; q < 3; q++)
 							outerSum[q] += c[q];
