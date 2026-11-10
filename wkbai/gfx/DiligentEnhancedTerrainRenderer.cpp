@@ -137,7 +137,7 @@ float3 FarGroundColour(float3 rd, float t)
 		c = lerp(body, hz, fresnel) + glint;
 	}
 	else
-		c = FarLand.rgb * (hz * 0.85 + saturate(l.y) * 0.75 * saturate(l.y * 6));
+		c = FarLand.rgb * (hz * 0.45 + saturate(l.y) * 0.55 * saturate(l.y * 6)); // (as dark as the rings' land under ShadeTerrain)
 	return lerp(c, hz, 1 - exp(-t / max(FarLand.w, 1)));
 }
 // how far into the ground beyond a world position is, 0 to 1: the last ring's outer part, and
@@ -148,7 +148,10 @@ float FarGroundShare(float3 world)
 	if (FarGround.w == 0)
 		return 0;
 	float2 outside = max(-world.xz, world.xz - FarArea.xy);
-	float k = smoothstep(0.9, 0.995, max(outside.x, outside.y) / max(FarGround.y, 1));
+	// (from halfway out: seen at a grazing angle the last tenth of the reach was two or three
+	// pixels, a line under the ground beyond)
+	float r = max(outside.x, outside.y) / max(FarGround.y, 1);
+	float k = smoothstep(0.55, 0.99, r) * smoothstep(0.55, 0.99, r);
 	if (FarArea.w > 0)
 		k = max(k, smoothstep(0.8, 0.97, distance(world, FogCamera.xyz) / FarArea.w));
 	return k;

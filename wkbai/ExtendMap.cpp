@@ -654,7 +654,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// a place's rock (0 to 1): steeper than the map's rock slope, or above its rock line
 	auto rockAt = [&](float v, float rise, float jitter) {
 		const float bySlope = std::clamp((rise - rockSlope - 0.1f * jitter) / 0.3f, 0.0f, 1.0f);
-		const float byHeight = rockLine < 1e29f ? std::clamp((v - rockLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f) : 0.0f;
+		// (high ground only where it slopes too: the high flats along a river had turned white
+		// with the transition towards rock, 4 Peaks in the play test of 2026-11-10)
+		const float sloped = std::clamp((rise - 0.25f * rockSlope) / (0.35f * rockSlope), 0.0f, 1.0f);
+		const float byHeight = rockLine < 1e29f ? std::clamp((v - rockLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f) * sloped : 0.0f;
 		return std::max(bySlope, byHeight);
 	};
 	int matBed = -1;
@@ -1167,8 +1170,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		pairsOf[key.first].push_back(key.second);
 		pairsOf[key.second].push_back(key.first);
 	}
-	// the shortest chain of materials from a to b (each step a transition pair), at most 4 long
-	auto chain = [&](int a, int b) {
+	// the shortest chain of materials from a to b (each step a transition pair), at most 4 long,
+	// through no material of the kind `avoid` on the way
+	auto chain = [&](int a, int b, int avoid = -1) {
 		std::vector<int> path;
 		if (a < 0 || b < 0)
 			return path;
@@ -1181,7 +1185,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const int c = q.front();
 			q.pop_front();
 			for (int nb : pairsOf[c])
-				if (prev[nb] == -2) {
+				if (prev[nb] == -2 && (nb == b || (int)mats.kinds[nb] != avoid)) {
 					prev[nb] = c;
 					q.push_back(nb);
 				}
@@ -1196,13 +1200,16 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		return path;
 	};
 	// a zone's material: the most used of its kind that a chain reaches from the ground
+	// (rock not by way of snow: half-strength rock came out as snow along the shores, the
+	// play test of 2026-11-10; else any)
 	auto zoneChain = [&](Kind k, int preferred) {
-		std::vector<int> best = chain(matGrass, preferred);
+		const int avoid = k == K_ROCK ? (int)K_SNOW : -1;
+		std::vector<int> best = chain(matGrass, preferred, avoid);
 		if (!best.empty())
 			return best;
 		for (int i = 0; i < M; i++)
 			if (mats.kinds[i] == k && matCount[i] > 0) {
-				std::vector<int> c = chain(matGrass, i);
+				std::vector<int> c = chain(matGrass, i, avoid);
 				if (!c.empty() && (best.empty() || c.size() < best.size() || (c.size() == best.size() && matCount[i] > matCount[best.back()])))
 					best = c;
 			}
@@ -1211,6 +1218,12 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	const std::vector<int> bedChain = zoneChain(K_SAND, matBed), sandChain = zoneChain(K_SAND, matSand);
 	const std::vector<int> rockChain = zoneChain(K_ROCK, matRock), snowChain = zoneChain(K_SNOW, matSnow);
 	printf("Extend map: zone chains from the ground: bed %zu, sand %zu, rock %zu, snow %zu materials\n", bedChain.size(), sandChain.size(), rockChain.size(), snowChain.size());
+	for (const auto* zc : { &bedChain, &sandChain, &rockChain, &snowChain }) {
+		std::string names;
+		for (int m : *zc)
+			names += " " + mats.groups[m]->name;
+		printf("Extend map:  chain%s\n", names.c_str());
+	}
 	std::vector<int> mat((size_t)EW * EH, matGrass);
 	std::vector<uint8_t> matFixed((size_t)EW * EH, 0);
 	// the near ring's rock by its mountain share (tenths): the far rings' grids are too coarse
