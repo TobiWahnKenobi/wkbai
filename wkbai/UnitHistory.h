@@ -78,6 +78,9 @@ struct UnitHistory {
 	void parentChanged(Server& server, ServerGameObject* obj, ServerGameObject* oldParent, ServerGameObject* newParent);
 	// obj is being terminated
 	void terminated(Server& server, ServerGameObject* obj);
+	// obj is being deleted (Server::deleteObject; a removal need not terminate it first): a living
+	// record keeps its kills as they are
+	void deleted(ServerGameObject* obj);
 	// a game starts (Server::startLevel): the characters on the map are tracked, born at 0
 	void levelStarted(Server& server);
 	// a save game was loaded: one without the history (WKB.exe's, older) names its units now,
@@ -85,6 +88,13 @@ struct UnitHistory {
 	void loaded(Server& server);
 	// once a simulation step: the threshold once the game runs
 	void update(Server& server);
+	// a unit dealt or took a hit inside a fight's area (ServerChronicle's scan): one waiting to
+	// become a hero (it left a formation, its formation's hero went) becomes one now
+	void reachedFight(Server& server, uint32_t id);
+	// what harms the unit now without a killer (the weather: "froze to death", "drowned",
+	// "struck by lightning", ...): its death soon after, unless a unit is credited, has that cause
+	void noteCause(uint32_t id, const char* cause, float now);
+	static constexpr float causeWindow = 5.0f; // s
 	// the character or building credited with a package from sender (0: none): a missile's (or
 	// a fire's, a mine's) creator, a garrisoned building's missile its troop
 	uint32_t resolve(Server& server, ServerGameObject* sender) const;
@@ -145,6 +155,8 @@ private:
 	void ensureSeed(Server& server);
 	void trackAll(Server& server, bool ageUnknown);
 	bool pendingLoad = false, startedLevel = false, historyLoaded = false;
+	// the causes noted (noteCause): the cause and when, by unit id (not saved: seconds long)
+	std::map<uint32_t, std::pair<const char*, float>> causes;
 	// the record becomes a hero if it may (the threshold, its formation's hero)
 	void tryHero(Server& server, ServerGameObject* obj, Record& rec);
 	void makeHero(Server& server, ServerGameObject* obj, Record& rec);

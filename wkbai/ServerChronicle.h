@@ -30,6 +30,8 @@ struct ServerChronicle {
 	void noteHit(uint32_t attacker, uint32_t victim, const Vector3& at);
 	// a kill by killer of a unit at that place
 	void noteKill(uint32_t killer, const Vector3& at);
+	// a building razed by that unit at that place (a settlement destroyed names who razed it)
+	void noteRaze(uint32_t by, const Vector3& at, float now);
 	// a hero died there (killer: its killer, 0 none)
 	void heroFell(Server& server, uint32_t hero, const Vector3& at, uint32_t killer);
 	// a unit became a hero, or a hero died: the events it fought in are sent again
@@ -45,7 +47,7 @@ struct ServerChronicle {
 	std::string label(Server& server, uint32_t unit, bool withPlayer = true);
 
 private:
-	struct Participant { uint32_t player = 0; int kills = 0; uint8_t flags = 0; float reached = 0.0f; }; // flags: 1 dealt, 2 took
+	struct Participant { uint32_t player = 0; int kills = 0; uint8_t flags = 0; float reached = 0.0f; }; // flags: 1 dealt, 2 took, 4 razed
 	std::map<uint32_t, std::map<uint32_t, Participant>> participants; // by event id, by unit
 	std::map<uint32_t, std::set<uint32_t>> eventsOfUnit;
 	std::map<uint32_t, std::vector<GameChronicle::Mention>> fallen; // by event id
@@ -53,6 +55,9 @@ private:
 	std::vector<Hit> hits; // since the last scan
 	struct KillNote { uint32_t killer; Vector3 at; float time; };
 	std::vector<KillNote> kills;
+	std::vector<KillNote> razes; // the last minute's
+	// a settlement destroyed: the fight around it (its fighters) and who razed it there
+	void destroyedParticipants(Server& server, GameChronicle::Event& e, float now);
 	std::set<uint32_t> dirty; // events to send
 	std::map<uint32_t, size_t> samplesSent; // by player
 	bool started = false;

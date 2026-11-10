@@ -35,15 +35,16 @@ struct GameChronicle {
 	// Fallen: a hero slain outside any fight (wkbai's unit history)
 	enum class Kind { Battle, Siege, Raid, Founded, Destroyed, Fallen };
 	// what the server names in an event (wkbai's unit history): each side's unit with the most
-	// kills there, the heroes who fought there, the heroes who fell there
-	enum MentionKind { MENTION_TOP_KILLER = 0, MENTION_PRESENT = 1, MENTION_FALLEN = 2 };
+	// kills there, the heroes who fought there, the heroes who fell there; a settlement destroyed:
+	// the units who razed buildings there
+	enum MentionKind { MENTION_TOP_KILLER = 0, MENTION_PRESENT = 1, MENTION_FALLEN = 2, MENTION_RAZED_BY = 3 };
 	struct Mention {
 		int kind = 0;
 		uint32_t unit = 0, player = 0;
 		int kills = 0; // in the event (top killer); in all (present, fallen)
 		bool dead = false; // since (present: "the late ...")
 		std::string name; // as named: "Sigurd the Valiant", "Saint Jane's Trebuchet"
-		std::string extra; // fallen: "slain by Guillaume le Hardi", "fell"
+		std::string extra; // fallen: "slain by Guillaume le Hardi", "froze to death", "fell"
 	};
 	struct Event {
 		Kind kind;

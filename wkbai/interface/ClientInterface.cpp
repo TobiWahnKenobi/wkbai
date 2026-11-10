@@ -1738,15 +1738,17 @@ void ClientInterface::drawChronicle()
 				if (e.size)
 					text += " (" + std::to_string(e.size) + " fighters, " + clock(e.endTime - e.time) + ")";
 				ImGui::PushID((int)i);
-				if (ImGui::Selectable(text.c_str())) {
-					// the camera looks at it from where it is now, as high up
+				// the camera looks at a place from where it is now, as high up
+				auto lookAt = [&](const Vector3& at) {
 					Camera& cam = client->camera;
 					const Vector3 dir = cam.direction;
 					const float down = std::max(-dir.y, 0.2f);
-					const float reach = (cam.position.y - e.position.y) / down;
-					cam.position.x = e.position.x - dir.x * reach;
-					cam.position.z = e.position.z - dir.z * reach;
-				}
+					const float reach = (cam.position.y - at.y) / down;
+					cam.position.x = at.x - dir.x * reach;
+					cam.position.z = at.z - dir.z * reach;
+				};
+				if (ImGui::Selectable(text.c_str()))
+					lookAt(e.position);
 				// each side: its name, how many it brought, what it lost
 				for (uint32_t p : e.players) {
 					std::string side = "    " + nameOf(p);
@@ -1764,28 +1766,77 @@ void ClientInterface::drawChronicle()
 					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(p)), "%s", side.c_str());
 				}
 				// wkbai's unit history: each side's top killer here, the heroes who fought here,
-				// the heroes who fell here
-				std::string most, present, fell;
-				for (const GameChronicle::Mention& m : e.mentions) {
-					const std::string kills = std::to_string(m.kills) + (m.kills == 1 ? " kill" : " kills");
-					if (m.kind == GameChronicle::MENTION_TOP_KILLER)
-						most += (most.empty() ? "" : ", ") + nameOf(m.player) + "'s " + m.name + " (" + std::to_string(m.kills) + ")";
-					else if (m.kind == GameChronicle::MENTION_PRESENT)
-						present += (present.empty() ? "" : ", ") + (m.dead ? "the late " : std::string()) + m.name + " (" + kills + ")";
-					else if (m.kind == GameChronicle::MENTION_FALLEN)
-						fell += (fell.empty() ? "" : "; ") + m.name + " (" + kills + ")" + (m.extra.empty() ? std::string() : ", " + m.extra);
-				}
-				if (!most.empty())
-					ImGui::TextWrapped("    Most kills: %s", most.c_str());
-				auto wrapped = [](const ImVec4& colour, const char* label, const std::string& text) {
-					ImGui::PushStyleColor(ImGuiCol_Text, colour);
-					ImGui::TextWrapped("    %s: %s", label, text.c_str());
-					ImGui::PopStyleColor();
+				// the heroes who fell here, who razed the settlement. A name is a link: one's own
+				// unit alive is selected and looked at; another's alive and in sight is looked at;
+				// else the event's place.
+				auto mentionClicked = [&](const GameChronicle::Mention& m) {
+					ClientGameObject* o = m.dead ? nullptr : (ClientGameObject*)client->findObject(m.unit);
+					if (o && (o->flags & ClientGameObject::fTerminated))
+						o = nullptr;
+					const bool own = o && client->clientPlayer && o->getPlayer() == client->clientPlayer;
+					const bool inSight = o && (own || !fogOfWarOn() || fogOfWar.tiles.empty() || fogOfWar.isSeen(o->position) || fogOfWar.isFriendly(client, o));
+					if (own) {
+						selection.clear();
+						selection.insert(o);
+					}
+					lookAt(inSight ? o->position : e.position);
 				};
-				if (!present.empty())
-					wrapped(ImVec4(0.9f, 0.78f, 0.27f, 1.0f), "Present", present);
-				if (!fell.empty())
-					wrapped(ImVec4(0.85f, 0.45f, 0.4f, 1.0f), "Fallen", fell);
+				auto mentionLine = [&](int kind, const char* label, const ImVec4& colour) {
+					std::vector<size_t> list;
+					for (size_t j = 0; j < e.mentions.size(); j++)
+						if (e.mentions[j].kind == kind)
+							list.push_back(j);
+					if (list.empty())
+						return;
+					ImGui::Indent(24.0f);
+					ImGui::TextColored(colour, "%s:", label);
+					for (size_t n = 0; n < list.size(); n++) {
+						const GameChronicle::Mention& m = e.mentions[list[n]];
+						const std::string kills = std::to_string(m.kills) + (m.kills == 1 ? " kill" : " kills");
+						std::string before, after;
+						if (kind == GameChronicle::MENTION_TOP_KILLER) {
+							before = nameOf(m.player) + "'s ";
+							after = " (" + std::to_string(m.kills) + ")";
+						}
+						else if (kind == GameChronicle::MENTION_PRESENT) {
+							before = m.dead ? "the late " : "";
+							after = " (" + kills + ")";
+						}
+						else if (kind == GameChronicle::MENTION_FALLEN)
+							after = " (" + kills + ")" + (m.extra.empty() ? std::string() : ", " + m.extra);
+						else if (kind == GameChronicle::MENTION_RAZED_BY) {
+							before = nameOf(m.player) + "'s ";
+							if (m.dead)
+								before = "the late " + before;
+						}
+						if (n + 1 < list.size())
+							after += kind == GameChronicle::MENTION_FALLEN ? ";" : ",";
+						// on this line if it fits, else the next
+						const float width = ImGui::CalcTextSize((before + m.name + after).c_str()).x;
+						ImGui::SameLine();
+						if (ImGui::GetContentRegionAvail().x < width)
+							ImGui::NewLine();
+						if (!before.empty()) {
+							ImGui::TextColored(colour, "%s", before.c_str());
+							ImGui::SameLine(0.0f, 0.0f);
+						}
+						ImGui::PushID((int)list[n]);
+						if (ImGui::TextLink(m.name.empty() ? "?" : m.name.c_str()))
+							mentionClicked(m);
+						if (ImGui::IsItemHovered())
+							ImGui::SetTooltip(m.dead ? "Where it happened" : "Look at it");
+						ImGui::PopID();
+						if (!after.empty()) {
+							ImGui::SameLine(0.0f, 0.0f);
+							ImGui::TextColored(colour, "%s", after.c_str());
+						}
+					}
+					ImGui::Unindent(24.0f);
+				};
+				mentionLine(GameChronicle::MENTION_TOP_KILLER, "Most kills", ImVec4(0.92f, 0.92f, 0.92f, 1.0f));
+				mentionLine(GameChronicle::MENTION_RAZED_BY, "Razed by", ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
+				mentionLine(GameChronicle::MENTION_PRESENT, "Present", ImVec4(0.9f, 0.78f, 0.27f, 1.0f));
+				mentionLine(GameChronicle::MENTION_FALLEN, "Fallen", ImVec4(0.85f, 0.45f, 0.4f, 1.0f));
 				ImGui::PopID();
 			}
 			if (!shownCount)

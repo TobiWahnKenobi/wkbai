@@ -5898,6 +5898,8 @@ void Test_UnitNames()
 	check(b->kills == 4 && !uh.find(b->id)->hero && uh.find(b->id)->heroPending, "it leaves: 7 formation kills -> 4 kept, not a hero yet (" + std::to_string(b->kills) + ")");
 	ServerGameObject* foe = spawn(spear, enemy, 50.0f);
 	uh.hit(server, b, foe);
+	check(!uh.find(b->id)->hero && uh.find(b->id)->heroPending, "a hit outside any fight's area: still waiting");
+	uh.reachedFight(server, b->id);
 	check(uh.find(b->id)->hero, "its next fight makes it a hero (" + uh.find(b->id)->displayName() + ")");
 	killBy(c, 2);
 	c->setParent(own);
@@ -5993,6 +5995,7 @@ void Test_UnitTimeline()
 	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8("Save_Games\\wkbai unit timeline.sav"));
 	// one game: a battle of 12 against 12, then a lone hero slain awayA away and one that falls
 	// without a killer. Returns the events' texts.
+	uint32_t razerId = 0;
 	auto game = [&](bool keep, std::vector<std::string>& texts) {
 		auto server = std::make_unique<Server>();
 		Server& srv = *server;
@@ -6006,6 +6009,7 @@ void Test_UnitTimeline()
 		const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
 		const int attack = gs.commands.names.getIndex("Attack");
 		const int hp = gs.items.names.getIndex("Hit Points");
+		const int si = gs.items.names.getIndex("Structural Integrity");
 		if (!own || !enemy || !spear || attack < 0 || hp < 0)
 			return std::unique_ptr<Server>();
 		const auto area = srv.terrain->getPlayableArea();
@@ -6019,6 +6023,12 @@ void Test_UnitTimeline()
 		}
 		for (auto& r : theirs)
 			r->setItem(hp, r->getItem(hp) * 0.6f);
+		// an enemy settlement by the battlefield, razed by one of ours while the battle goes on:
+		// its Destroyed event names the razer and the battle's fighters
+		const GameObjBlueprint* manor = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor");
+		SrvGORef village;
+		if (manor && si >= 0)
+			village = srv.spawnObject(manor, enemy, at(b, 0.0f, 40.0f), Vector3(0, 0, 0));
 		srv.timeManager.unpause();
 		srv.timeManager.stepMs = 20;
 		auto alive = [](ServerGameObject* o) { return o && !o->deleted && !(o->flags & ServerGameObject::fTerminated); };
@@ -6033,6 +6043,17 @@ void Test_UnitTimeline()
 			return best;
 		};
 		for (int step = 0; step < 50 * 70; step++) {
+			if (step == 50 * 12)
+				if (ServerGameObject* v = village.get())
+					for (auto& r : ours)
+						if (alive(r.get())) {
+							razerId = r->id;
+							v->setItem(si, 0.0f);
+							v->lastHitBy = r->id;
+							v->lastHitTime = srv.timeManager.currentTime;
+							v->terminate();
+							break;
+						}
 			if (step % 150 == 0)
 				for (auto* side : { &ours, &theirs })
 					for (auto& r : *side)
@@ -6081,13 +6102,18 @@ void Test_UnitTimeline()
 			v->lastHitTime = srv.timeManager.currentTime;
 			v->terminate();
 		}
+		// (the weather's harm: ServerEnvironment::damage notes the cause)
+		srv.unitHistory.noteCause(frozen->id, "froze to death", (float)srv.timeManager.currentTime);
 		frozen->setItem(hp, 0.0f);
 		frozen->terminate();
-		for (int step = 0; step < 50 * 6; step++) {
-			srv.timeManager.pendingMs = srv.timeManager.stepMs;
-			if (srv.timeManager.step())
-				srv.simulate();
-		}
+		auto runFor = [&](float seconds) {
+			for (int step = 0; step < (int)(50 * seconds); step++) {
+				srv.timeManager.pendingMs = srv.timeManager.stepMs;
+				if (srv.timeManager.step())
+					srv.simulate();
+			}
+		};
+		runFor(6.0f);
 		for (const auto& e : srv.unitHistory.chronicle.chron.events)
 			texts.push_back(e.toText());
 		if (!keep)
@@ -6125,7 +6151,8 @@ void Test_UnitTimeline()
 				ServerGameObject* u = srv.findObject(m.unit);
 				const UnitHistory::Record* r = srv.unitHistory.find(m.unit);
 				const int total = u && !(r && r->death >= 0.0f) ? u->kills : r ? r->kills : -1;
-				check(m.kills >= 1 && m.kills <= total, "top killer " + m.name + ": " + std::to_string(m.kills) + " here, " + std::to_string(total) + " in all");
+				check(m.kills >= 1 && m.kills <= total, "top killer " + m.name + ": " + std::to_string(m.kills) + " here, " + std::to_string(total) + " in all"
+					+ " (" + (u ? u->blueprint->name + " kills " + std::to_string(u->kills) : std::string("gone")) + ", record death " + (r ? std::to_string(r->death) + " kills " + std::to_string(r->kills) : std::string("none")) + ")");
 			}
 		check(present >= 1, "heroes present named (" + std::to_string(present) + ")");
 		check(fallenHere >= 1, "heroes fallen in the fight named (" + std::to_string(fallenHere) + ")");
@@ -6138,11 +6165,27 @@ void Test_UnitTimeline()
 			for (const auto& m : e.mentions)
 				if (m.kind == GameChronicle::MENTION_FALLEN) {
 					slainBy |= m.extra.rfind("slain by ", 0) == 0;
-					fell |= m.extra == "fell";
+					fell |= m.extra == "froze to death";
 				}
 			check(e.title().rfind("The fall of ", 0) == 0, "its title: " + e.title());
 		}
-	check(ownFallen == 2 && slainBy && fell, "the two heroes slain away from the fight: events of their own, one slain, one fell (" + std::to_string(ownFallen) + ")");
+	check(ownFallen == 2 && slainBy && fell, "the two heroes slain away from the fight: events of their own, one slain, one froze to death (" + std::to_string(ownFallen) + ")");
+	// the settlement destroyed: who razed it, who fought there
+	{
+		const GameChronicle::Event* destroyed = nullptr;
+		for (const auto& e : events)
+			if (e.kind == GameChronicle::Kind::Destroyed)
+				destroyed = &e;
+		bool razedBy = false;
+		int fighters = 0;
+		if (destroyed)
+			for (const auto& m : destroyed->mentions) {
+				razedBy |= m.kind == GameChronicle::MENTION_RAZED_BY && m.unit == razerId && m.kills >= 1;
+				fighters += m.kind == GameChronicle::MENTION_TOP_KILLER || m.kind == GameChronicle::MENTION_PRESENT;
+			}
+		check(destroyed && razedBy, "the settlement destroyed names who razed it");
+		check(fighters >= 1, "and who fought there (" + std::to_string(fighters) + ")");
+	}
 	// the text form
 	{
 		int same = 0;

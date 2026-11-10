@@ -48,6 +48,12 @@ void ServerChronicle::noteKill(uint32_t killer, const Vector3& at)
 		kills.push_back({ killer, at, 0.0f });
 }
 
+void ServerChronicle::noteRaze(uint32_t by, const Vector3& at, float now)
+{
+	if (razes.size() < 5000)
+		razes.push_back({ by, at, now });
+}
+
 std::string ServerChronicle::label(Server& server, uint32_t unit, bool withPlayer)
 {
 	const UnitHistory::Record* rec = server.unitHistory.find(unit);
@@ -89,6 +95,29 @@ void ServerChronicle::addParticipant(Server& server, GameChronicle::Event& e, ui
 	dirty.insert(e.id);
 }
 
+void ServerChronicle::destroyedParticipants(Server& server, GameChronicle::Event& e, float now)
+{
+	// the fight there (going on, or ended in the last minute): its fighters fought for it too
+	if (GameChronicle::Event* f = fightAt(e.position, now, 60.0f))
+		if (auto fit = participants.find(f->id); fit != participants.end()) {
+			auto& mine = participants[e.id];
+			for (const auto& [unit, p] : fit->second) {
+				mine[unit] = p;
+				eventsOfUnit[unit].insert(e.id);
+			}
+			e.players.insert(f->players.begin(), f->players.end());
+		}
+	// who razed buildings there in the last half minute (the settlement itself the last)
+	for (const KillNote& r : razes)
+		if (now - r.time <= 30.0f && (r.at - e.position).sqlen2xz() < 60.0f * 60.0f) {
+			addParticipant(server, e, r.killer, 4, 0, now);
+			if (ServerGameObject* o = server.findObject(r.killer))
+				if (ServerGameObject* p = o->getPlayer())
+					e.players.insert(p->id);
+		}
+	dirty.insert(e.id);
+}
+
 void ServerChronicle::makeMentions(Server& server, GameChronicle::Event& e)
 {
 	e.mentions.clear();
@@ -112,6 +141,21 @@ void ServerChronicle::makeMentions(Server& server, GameChronicle::Event& e)
 			const UnitHistory::Record* rec = server.unitHistory.find(t.first);
 			m.dead = rec && rec->death >= 0.0f;
 			m.name = label(server, t.first, false); // (the timeline puts the player's name before it)
+			e.mentions.push_back(std::move(m));
+		}
+		// a settlement destroyed: who razed buildings there
+		for (const auto& [unit, p] : pit->second) {
+			if (!(p.flags & 4))
+				continue;
+			GameChronicle::Mention m;
+			m.kind = GameChronicle::MENTION_RAZED_BY;
+			m.unit = unit;
+			m.player = p.player;
+			const UnitHistory::Record* rec = server.unitHistory.find(unit);
+			ServerGameObject* obj = server.findObject(unit);
+			m.kills = rec && (rec->death >= 0.0f || !obj) ? rec->buildings : obj ? obj->buildingsDestroyed : 0; // buildings in all
+			m.dead = rec && rec->death >= 0.0f;
+			m.name = label(server, unit, false);
 			e.mentions.push_back(std::move(m));
 		}
 		// the heroes who fought here, with their kills now (heroes since too)
@@ -150,7 +194,7 @@ void ServerChronicle::heroFell(Server& server, uint32_t hero, const Vector3& at,
 	if (killer)
 		m.extra = "slain by " + label(server, killer);
 	else
-		m.extra = rec->cause.empty() ? std::string("fell") : "died of " + rec->cause;
+		m.extra = rec->cause.empty() ? std::string("fell") : rec->cause;
 	// in a fight going on there (or ended less than 30 s ago): noted in it
 	if (GameChronicle::Event* e = fightAt(at, now, 30.0f)) {
 		fallen[e->id].push_back(m);
@@ -215,12 +259,20 @@ void ServerChronicle::update(Server& server)
 				continue;
 			addParticipant(server, *e, h.attacker, 1, 0, now);
 			addParticipant(server, *e, h.victim, 2, 0, now);
+			// one waiting to become a hero: it is in a fight now
+			server.unitHistory.reachedFight(server, h.attacker);
+			server.unitHistory.reachedFight(server, h.victim);
 		}
 		hits.clear();
 		for (const KillNote& k : kills)
 			if (GameChronicle::Event* e = fightAt(k.at, now, 30.0f))
 				addParticipant(server, *e, k.killer, 1, 1, now);
 		kills.clear();
+		// a settlement destroyed in this scan: who fought around it, who razed it
+		for (size_t i : chron.touched)
+			if (i < chron.events.size() && chron.events[i].kind == GameChronicle::Kind::Destroyed && !participants.count(chron.events[i].id))
+				destroyedParticipants(server, chron.events[i], now);
+		razes.erase(std::remove_if(razes.begin(), razes.end(), [&](const KillNote& r) { return now - r.time > 60.0f; }), razes.end());
 		for (size_t i : chron.touched)
 			if (i < chron.events.size())
 				dirty.insert(chron.events[i].id);

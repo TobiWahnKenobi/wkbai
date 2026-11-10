@@ -524,14 +524,28 @@ void UnitHistory::hit(Server& server, ServerGameObject* victim, ServerGameObject
 	if (trace)
 		printf("UNITHISTORY t=%.2f hit %u %s by %u (sent by %u %s)\n", server.timeManager.currentTime, victim->id, victim->blueprint->name.c_str(),
 			by, sender->id, sender->blueprint->name.c_str());
-	// a unit waiting to become a hero (it left a formation, or its formation's hero went) becomes
-	// one at its next fight
-	for (uint32_t id : { by, victim->id }) {
-		auto it = records.find(id);
-		if (it != records.end() && it->second.heroPending && it->second.death < 0.0f)
-			if (ServerGameObject* obj = server.findObject(id))
-				tryHero(server, obj, it->second);
-	}
+	// (a unit waiting to become a hero becomes one when this hit turns out to be in a fight's
+	// area: reachedFight, at the timeline's next scan)
+}
+
+void UnitHistory::reachedFight(Server& server, uint32_t id)
+{
+	auto it = records.find(id);
+	if (it == records.end() || !it->second.heroPending || it->second.death >= 0.0f)
+		return;
+	if (ServerGameObject* obj = server.findObject(id); obj && !obj->deleted && !(obj->flags & ServerGameObject::fTerminated))
+		tryHero(server, obj, it->second);
+}
+
+void UnitHistory::noteCause(uint32_t id, const char* cause, float now)
+{
+	if (!records.count(id))
+		return;
+	causes[id] = { cause, now };
+	// the old ones gone (a unit that lived through it)
+	if (causes.size() > 256)
+		for (auto it = causes.begin(); it != causes.end();)
+			it = now - it->second.second > causeWindow ? causes.erase(it) : std::next(it);
 }
 
 uint32_t UnitHistory::garrisonShooter(Server& server, ServerGameObject* building, ServerGameObject* missile) const
@@ -778,6 +792,7 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 	const bool foundation = cls == Tags::GAMEOBJCLASS_BUILDING && name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
 	ServerGameObject* killer = nullptr;
 	Record* killerRec = nullptr;
+	uint32_t deadKiller = 0; // credited, but dead since its last blow
 	if (credited && !foundation) {
 		const uint32_t victimId = obj->id;
 		const uint32_t killerId = obj->lastHitBy;
@@ -785,7 +800,9 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 		killer = server.findObject(killerId);
 		auto kit = records.find(killerId);
 		killerRec = kit != records.end() ? &kit->second : nullptr;
-		if (killer && !killer->deleted && isEnemy(server, killer, obj)) {
+		// (a killer dead since its last blow, its corpse still there: the kill goes to its record)
+		const bool killerDead = killerRec && killerRec->death >= 0.0f;
+		if (killer && !killer->deleted && !killerDead && isEnemy(server, killer, obj)) {
 			// a peasant that was never a conscript (untracked) gets no kill
 			const bool counts = killer->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || killerRec || trackable(killer->blueprint);
 			if (counts) {
@@ -815,18 +832,24 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 						killerRec->slew.push_back(obj->id);
 					tryHero(server, killer, *killerRec);
 				}
+				// a building razed: who did it, for a settlement destroyed there
+				else if (killerRec)
+					chronicle.noteRaze(killer->id, obj->position, now);
 			}
 			else
 				killer = nullptr;
 		}
-		else if (!killer && killerRec && killerRec->death >= 0.0f && cls == Tags::GAMEOBJCLASS_CHARACTER) {
+		else if (killerDead && cls == Tags::GAMEOBJCLASS_CHARACTER) {
 			// a firer dead since its missile left: the kill is still its own
 			ServerGameObject* kp = server.findObject(killerRec->player);
 			ServerGameObject* vp = obj->getPlayer();
 			if (kp && vp && kp != vp && vp->blueprint->name != "Neutral Player" && server.getDiplomaticStatus(kp, vp) >= 2) {
 				killerRec->kills++;
+				deadKiller = killerRec->id;
+				chronicle.noteKill(killerRec->id, obj->position);
 				if (victimRec && victimRec->hero)
 					killerRec->slew.push_back(obj->id);
+				chronicle.unitChanged(killerRec->id);
 			}
 			killer = nullptr;
 		}
@@ -835,6 +858,13 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 	}
 	else
 		obj->lastHitBy = 0;
+	// (removed, not dead: its kills kept in its record as they are now)
+	if (victimRec && !died) {
+		victimRec->kills = obj->kills;
+		victimRec->buildings = obj->buildingsDestroyed;
+		if (trace)
+			printf("UNITHISTORY t=%.2f removed %u %s (%d kills)\n", now, obj->id, name.c_str(), obj->kills);
+	}
 	// the record of a tracked unit that died
 	if (victimRec && died && cls == Tags::GAMEOBJCLASS_CHARACTER) {
 		victimRec->death = now;
@@ -848,12 +878,20 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 			auto kit = records.find(killer->id);
 			victimRec->slainByText = kit != records.end() && !kit->second.displayName().empty() ? kit->second.displayName() : killer->blueprint->name;
 		}
+		else if (deadKiller) {
+			victimRec->slainBy = deadKiller;
+			victimRec->slainByText = records[deadKiller].displayName().empty() ? records[deadKiller].type : records[deadKiller].displayName();
+		}
+		// no killer: what harmed it last, if lately (the weather's)
+		else if (auto cit = causes.find(obj->id); cit != causes.end() && now - cit->second.second <= causeWindow)
+			victimRec->cause = cit->second.first;
+		causes.erase(obj->id);
 		if (trace && victimRec->hero)
 			printf("UNITHISTORY t=%.2f hero fallen %u \"%s\" (%d kills), slain by %u\n", now, obj->id, victimRec->displayName().c_str(),
 				victimRec->kills, victimRec->slainBy);
 		// a hero slain: in the timeline (its fight's, or an event of its own)
 		if (victimRec->hero) {
-			chronicle.heroFell(server, obj->id, obj->position, killer ? killer->id : 0);
+			chronicle.heroFell(server, obj->id, obj->position, killer ? killer->id : deadKiller);
 			chronicle.unitChanged(obj->id);
 		}
 		// the dead are kept for the timeline when they count: kills, a hero, a fight in an event
@@ -862,6 +900,15 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 		else
 			sendRecord(server, *victimRec);
 	}
+}
+
+void UnitHistory::deleted(ServerGameObject* obj)
+{
+	auto it = records.find(obj->id);
+	if (it == records.end() || it->second.death >= 0.0f)
+		return;
+	it->second.kills = obj->kills;
+	it->second.buildings = obj->buildingsDestroyed;
 }
 
 void UnitHistory::trackAll(Server& server, bool ageUnknown)

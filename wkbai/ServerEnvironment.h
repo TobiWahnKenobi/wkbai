@@ -155,5 +155,5 @@ private:
 	void applyExposure(Server& server);
 	void applyFloods(Server& server);
 	void prepareFloods(Server& server);
-	void damage(Server& server, ServerGameObject* obj, float fraction);
+	void damage(Server& server, ServerGameObject* obj, float fraction, const char* cause = nullptr);
 };

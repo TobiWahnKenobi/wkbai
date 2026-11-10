@@ -839,6 +839,8 @@ void Server::deleteObject(ServerGameObject * obj)
 {
 	if (obj->deleted) return;
 	obj->deleted = true;
+	// (the unit history: a tracked unit's kills kept in its record)
+	unitHistory.deleted(obj);
 	// a building removed with no hit points left was destroyed (upgrades and finished foundations
 	// are removed with theirs): counted for its player, for the AI tests
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && gameSet) {
