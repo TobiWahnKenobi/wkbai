@@ -210,6 +210,16 @@ void Server::loadSaveGame(const char * filename)
 							RestoreAttachmentPath(task.get(), targetId, pathNo, step, tried != 0);
 		}
 	}
+	// wkbai's unit history as saved (<save>.history.txt): kills, creators, the last hits
+	if (const std::string side = std::string(filename) + ".history.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		std::string all(text, size);
+		free(text);
+		UnitHistory::loadText(*this, all);
+	}
+	unitHistory.loaded(*this);
 	// the work orders as saved, before any the scripts register again: their order decides which
 	// takes a unit listed by several (a replay played another game when they came in another)
 	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)
@@ -309,6 +319,8 @@ ServerGameObject* Server::spawnObject(const GameObjBlueprint* blueprint, ServerG
 	obj->setParent(parent);
 	obj->setPosition(initialPosition);
 	obj->setOrientation(initialOrientation);
+	// wkbai's unit history: a soldier made gets its name and its birth
+	unitHistory.spawned(*this, obj);
 
 	// TODO: "On Stampdown" event, etc.
 	if (blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
@@ -827,6 +839,8 @@ void Server::deleteObject(ServerGameObject * obj)
 {
 	if (obj->deleted) return;
 	obj->deleted = true;
+	// (the unit history: a tracked unit's kills kept in its record)
+	unitHistory.deleted(obj);
 	// a building removed with no hit points left was destroyed (upgrades and finished foundations
 	// are removed with theirs): counted for its player, for the AI tests
 	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && gameSet) {
@@ -1372,6 +1386,8 @@ void ServerGameObject::setParent(ServerGameObject * newParent)
 	msg.writeUint32(this->id);
 	msg.writeUint32(newParent->id);
 	Server::instance->sendToAll(msg);
+	// wkbai's unit history: joining or leaving a formation, another player
+	Server::instance->unitHistory.parentChanged(*Server::instance, this, oldParent ? oldParent->dyncast<ServerGameObject>() : nullptr, newParent);
 	
 	if (oldParent) {
 		oldParent->dyncast<ServerGameObject>()->notifySubordinateRemoved();
@@ -1555,6 +1571,10 @@ void ServerGameObject::stopMovement()
 void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 {
 	// Problem: reaction can be executed twice if it is in both intrinsics and individuals, but is it worth checking that?
+	// wkbai's unit history: an attack package notes who sent it, before the reactions (the
+	// "Being Killed" one terminates this object)
+	if (sender)
+		Server::instance->unitHistory.onEvent(*Server::instance, this, evt, sender);
 	SrvScriptContext ctx(Server::instance, this);
 	auto _ = ctx.change(ctx.packageSender, sender);
 	// (getenv once: it takes a lock and walks the environment, and events go out by thousands)
@@ -1622,6 +1642,7 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	parent->children[postbp].push_back(this);
 	// backup of previous blueprint
 	const GameObjBlueprint* prevbp = blueprint;
+	const std::string prevSubtype = prevbp->subtypeNames.getString(this->subtype);
 	// now converted!
 	blueprint = postbp;
 	// a foundation become its building, and the like, may start or stop being seen
@@ -1645,6 +1666,8 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	removeBuiltUponUnderFootprint(true);
 	// reset flags
 	this->updateFlags((this->flags & ~(fRenderable | fSelectable | fTargetable)) | postbp->getStartingFlags());
+	// wkbai's unit history: conscripted, back to the fields, upgraded
+	Server::instance->unitHistory.converted(*Server::instance, this, prevbp, prevSubtype);
 }
 
 void ServerGameObject::setScale(const Vector3& scale)
@@ -1660,6 +1683,8 @@ void ServerGameObject::terminate()
 {
 	// Termination depends on the object class
 	if (deleted || (flags & fTerminated)) return;
+	// wkbai's unit history: a death with no hit points left is the last attacker's kill
+	Server::instance->unitHistory.terminated(*Server::instance, this);
 	flags |= fTerminated;
 	sendEvent(Tags::PDEVENT_ON_TERMINATION);
 	if (blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
@@ -2365,6 +2390,8 @@ void Server::startLevel()
 	// a new game: new random numbers, or the same ones every time with "simSeed" (tests)
 	lastSeed = g_settings.value("simSeed", (uint32_t)SDL_GetTicks() ^ (uint32_t)time(nullptr));
 	g_simRandom.seed(lastSeed);
+	// wkbai's unit history: the characters on the map get their names, born now
+	unitHistory.levelStarted(*this);
 
 	for (const auto& player : this->clientPlayerObjects) {
 		if (player) {
@@ -2798,6 +2825,14 @@ void Server::sendStateTo(NetLink* link)
 			msg.writeValues(obj->id, obj->trajectory.initialPosition(), obj->trajectory.initialVelocity(), obj->trajectory.startTime());
 			send(msg);
 		}
+		if (obj->kills || obj->buildingsDestroyed) {
+			NetPacketWriter msg(NETCLIMSG_UNIT_KILLS);
+			msg.writeUint32(obj->id);
+			msg.writeUint32(0);
+			msg.writeUint32((uint32_t)obj->kills);
+			msg.writeUint32((uint32_t)obj->buildingsDestroyed);
+			send(msg);
+		}
 		if (obj->reportedCurrentOrder != -1) {
 			NetPacketWriter msg(NETCLIMSG_CURRENT_ORDER_REPORT);
 			msg.writeUint32(obj->id);
@@ -2862,6 +2897,7 @@ void Server::sendStateTo(NetLink* link)
 	if (!hostRegionsText.empty())
 		sendHostData(1, hostRegionsText, link);
 	environment.send(*this, link); // (without the seasons, for the game's sky)
+	unitHistory.sendAllTo(*this, link);
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;
@@ -3039,6 +3075,8 @@ void Server::simulate()
 	// (else once, for the game's sky)
 	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
+	// wkbai's unit history: the hero threshold once the game runs
+	unitHistory.update(*this);
 	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)

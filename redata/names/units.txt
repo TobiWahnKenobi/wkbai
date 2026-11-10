@@ -1,0 +1,115 @@
+# wkbai unit history: unit types by what the history does with them (character blueprint
+# names of the WKB game set; a type not listed is a soldier: tracked, named, may become a hero).
+# [untracked]: no record, no name (peasants, animals, helpers, dying forms)
+# [peasant]: peasants, untracked, except a conscript who killed (stays tracked when back)
+# [conscript]: what a peasant is conscripted into: tracked from then on
+# [female]: female given names
+# [ship]: a ship's name, never a hero
+# [noname]: tracked (age, kills), shown by its type, never a hero (siege engines, carts)
+# [ownname]: named by its type (Michael, the campaign heroes), may become a hero
+# [pagan], [celestial]: the faction of the type (names, factions.txt); others are the player's
+# Names ending with * match every type that starts so ("Dead *").
+
+[untracked]
+Dead *
+Spawning *
+* - Awakening Animation
+Horse
+Still Horse
+Camel
+Sheep
+Chicken
+Sea Creature Creator
+Fuse
+Greek Fire Sub-Missile Firer
+Michael Statue Junk
+Rider Dying
+Captive
+Merchant
+Shipwrecked Cog
+
+[peasant]
+Peasant
+Peasant Farmer
+Pos Peasant
+Possessed Peasant
+
+[conscript]
+Militia
+
+[female]
+Pagan Spearwoman
+Pagan Mounted Bowoman
+High Priestess
+Succubus
+
+[ship]
+Cog
+Arrow Boat
+Bombard Boat
+Mangonel Boat
+Fire Boat
+
+[noname]
+Bombard
+Mangonel
+Battering Ram
+Infernal Engine
+Rock Thrower
+Rocket Launcher
+Rocket Launcher Limbered
+Siege Tower
+Siege Tower Open
+Trebuchet
+Trebuchet Limbered
+Trebuchet Constructing
+Multiplayer Trebuchet
+Explosive Cart
+Cart
+Cart sans Rider
+Resource Wagon
+Supply Wagon
+Gibbering Horde
+Horde Spewer
+Undead Legion
+Risen Undead Legion
+Wood Elemental
+Gold Elemental Large
+Stone Elemental Large
+Behemoth
+War Elephant
+
+[ownname]
+Michael
+Abaddon
+Vandavar
+Artos
+Artos Young
+Celestial Hero
+Hero Pagan
+Hero Technological
+Arch Druid
+
+[pagan]
+Pagan Spearwoman
+Pagan Mounted Bowoman
+Pagan Archer
+Pagan Archer Upgrade
+Pagan Pikeman
+High Priestess
+Succubus
+Javelineer
+Barbarian
+Hero Pagan
+Pagan King Piece
+
+[celestial]
+Celestial Archer
+Celestial Knight
+Monastic Knight
+Inquisitor
+Bishop
+Priest
+Monk
+Celestial Hero
+Celestial King Piece

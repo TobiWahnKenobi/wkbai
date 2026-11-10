@@ -516,5 +516,19 @@ bool Server::saveGame(const char* filename)
 		else
 			std::filesystem::remove(side, ec);
 	}
+	// wkbai's unit history (UnitHistory), beside it: <save>.history.txt
+	{
+		const std::string text = savingLevel ? std::string() : UnitHistory::saveText(*this);
+		std::filesystem::path side = path;
+		side += ".history.txt";
+		if (!text.empty()) {
+			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
+				fwrite(text.data(), 1, text.size(), sf);
+				fclose(sf);
+			}
+		}
+		else
+			std::filesystem::remove(side, ec);
+	}
 	return ok;
 }

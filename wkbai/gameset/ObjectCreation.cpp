@@ -73,6 +73,8 @@ void ObjectCreation::run(ServerGameObject * creator, SrvScriptContext* ctx) cons
 	}
 	OrientedPosition opos = createAt ? createAt->eval(ctx) : OrientedPosition({ creator->position, creator->orientation });
 	ServerGameObject* created = Server::instance->spawnObject(type, ctrl, opos.position, opos.rotation);
+	// wkbai's unit history: who made it (a missile: who fired it, or the troop in a building)
+	Server::instance->unitHistory.created(*Server::instance, created, creator);
 	if (subordinates) {
 		for (ServerGameObject* sub : subordinates->eval(ctx))
 			sub->setParent(created);

@@ -1,0 +1,800 @@
+# wkbai - the chronicle's words (interface/ChronicleNarrator). Written for wkbai, GPL-3 like the
+# rest of the project. Edit freely: the game reads this file when it starts.
+#
+# Two kinds of entries.
+#
+# WORDS, one per line:   @NAME = one | another | a third
+#   A word may have versions for a situation, tried first: @NAME.tag = ...
+#   The tags of an event, in the order they are tried: its weather (clear, cloudy, rain,
+#   heavyrain, storm, fog, snow, blizzard, heat, drought; heavyrain also tries rain, storm rain,
+#   blizzard snow, drought heat), "cold" (below -2 degrees), "snowground" (snow lying), the time of
+#   day (dawn, morning, noon, afternoon, dusk, night), the season (spring, summer, autumn, winter),
+#   the war's stage (outset, early, mid, late), the size of a fight (skirmish, battle, great, huge),
+#   and for a death its cause (cold, heat, drowned, ice, fire, lightning, slain, none).
+#   An alternative may hold other words and facts in braces.
+#
+# SENTENCES, a block per slot:   [slot]   then one form per line until the next [slot]
+#   A slot may have versions by tag too: [size.great] is used for a great battle.
+#
+# FACTS the game puts in (in braces, like words):
+#   {DATE} the sentence's opening (from the date.* slots)   {PLACE} the place's name
+#   {SIDES} the players in it ("Saint Jane and the Baron")  {SIDE} one player, {SIDE_S} with 's
+#   {YEAR} {DAY} (an ordinal: "third")   {COUNT} fighters at its height (in words)
+#   {MORE} {FEWER} the stronger and weaker side, {MORE_N} {FEWER_N} their numbers
+#   {WINNER} {LOSER} {WINNER_S} {LOSER_S}   {LOST_HI} {LOST_LO} their dead (in words)
+#   {TYPE_CLAUSE} ", most of them Spearmen" or nothing   {LOSSES} "Saint Jane three and the Baron ten"
+#   {UNIT} a unit named (a link)   {KILLS} its kills in words   {KILLS_PHRASE} "three kills"
+#   {HEROES} several heroes   {CAUSE_CLAUSE} ", taken by the cold" or nothing
+#   {TYPES} the dead's type (in ALL_OF_THEM, MOST_OF_THEM)
+#   {SETTLEMENT} "manor"   {A_SETTLEMENT} "a manor"   {OWNER_S} "the Baron's"   {RAZERS} who razed it
+#   {VICTIM} the raided side   {KILLER} who slew a hero (in CAUSE.slain)
+#
+# "a" before a vowel becomes "an" by itself.
+
+# ---------------------------------------------------------------- the calendar
+
+@SEASON.spring = spring | springtime | early spring | late spring
+@SEASON.summer = summer | high summer | summertime | midsummer
+@SEASON.autumn = autumn | harvest-time | late autumn | early autumn
+@SEASON.winter = winter | deep winter | midwinter | wintertime
+@SEASON = year
+
+@TOD_NOUN.dawn = dawn | daybreak | sunrise | early dawn
+@TOD_NOUN.morning = morning | forenoon | early day
+@TOD_NOUN.noon = noon | midday | high noon
+@TOD_NOUN.afternoon = afternoon | late afternoon | early afternoon
+@TOD_NOUN.dusk = evening | dusk | twilight | nightfall | eventide
+@TOD_NOUN.night = night | midnight
+@TOD_NOUN = day
+
+@TOD_WHEN.dawn = at dawn | at first light | as the sun rose | at daybreak | in the grey before sunrise | as the cocks crowed
+@TOD_WHEN.morning = in the morning | in the forenoon | as the morning wore on | in the early hours of the day | before the sun stood high
+@TOD_WHEN.noon = at noon | about midday | at the height of the day | when the day stood at its middle | at the noon hour
+@TOD_WHEN.afternoon = in the afternoon | as the day waned | in the long afternoon | as the shadows lengthened | late in the day
+@TOD_WHEN.dusk = at dusk | at nightfall | as evening came on | in the failing light | as the sun went down | at twilight
+@TOD_WHEN.night = by night | in the dead of night | under cover of darkness | in the black of night | in the night watches | in the small hours
+@TOD_WHEN = that day
+
+@WEATHER_ADJ.hotnight = sweltering | stifling | airless | close | breathless | heavy | sultry | oppressive
+@WEATHER_ADJ.clearnight = clear | starry | moonlit | still | cold-starred | quiet | star-bright | cloudless
+@WEATHER_ADJ.clear = clear | bright | fair | cloudless | sunlit | still | crisp | golden
+@WEATHER_ADJ.cloudy = grey | overcast | cloudy | dull | leaden | sullen | heavy-skied | sunless
+@WEATHER_ADJ.rain = rainy | wet | drizzling | dripping | sodden | rain-soaked | damp | showery
+@WEATHER_ADJ.heavyrain = rain-lashed | streaming | drenched | rain-swept | pouring | waterlogged | storm-wet | deluged
+@WEATHER_ADJ.storm = stormy | thunderous | tempestuous | storm-wracked | wild | thunder-loud | lightning-split | furious
+@WEATHER_ADJ.fog = foggy | misty | mist-shrouded | murky | fog-bound | hazy | blind | grey-veiled
+@WEATHER_ADJ.snow = snowy | snow-bound | white | wintry | snow-laden | frosted | snow-hushed | flurrying
+@WEATHER_ADJ.blizzard = blizzard-blind | howling | storm-white | snow-lashed | bitter | freezing | murderous | blinding
+@WEATHER_ADJ.heat = sweltering | scorching | burning | stifling | blazing | sun-scorched | airless | oppressive
+@WEATHER_ADJ.drought = parched | dust-dry | thirsting | barren | sun-cracked | dry | dusty | cracked
+@WEATHER_ADJ = quiet | ordinary | common | uncertain
+
+@WEATHER_UNDER.clearnight = under the stars | beneath a starry sky | under a bright moon | in the clear, cold air | under a cloudless sky
+@WEATHER_UNDER.hotnight = in the sweltering dark | in the close, hot dark | in the airless heat | in heavy, sultry air | under a hot, starless sky
+@WEATHER_UNDER.clear = under a clear sky | beneath a bright sun | in fair weather | under a cloudless sky | in the clear air
+@WEATHER_UNDER.cloudy = under a grey sky | beneath heavy clouds | under a leaden sky | beneath a sullen sky | under low cloud
+@WEATHER_UNDER.rain = in the rain | in a cold drizzle | under a weeping sky | in steady rain | as the rain fell
+@WEATHER_UNDER.heavyrain = in driving rain | in a downpour | as the rain came down in sheets | under lashing rain | in a deluge
+@WEATHER_UNDER.storm = as thunder rolled overhead | in the teeth of a storm | under a sky split by lightning | as the storm raged | amid thunder and lightning
+@WEATHER_UNDER.fog = in thick fog | through the mist | in a fog so dense a man could not see his neighbour | under a grey shroud of mist | in the murk
+@WEATHER_UNDER.snow = as snow fell | in falling snow | among the drifting flakes | in the snow | under a white sky
+@WEATHER_UNDER.blizzard = in a howling blizzard | in the teeth of a blizzard | as the snowstorm screamed | in blinding snow | in a white fury of wind and snow
+@WEATHER_UNDER.heat = in the scorching heat | under a merciless sun | in the stifling heat | under a burning sky | in the heat of the day
+@WEATHER_UNDER.drought = on parched ground | in the dust of the drought | under a pitiless sun | on cracked and thirsty earth | in the dry heat
+@WEATHER_UNDER = under an indifferent sky
+
+@WAR_STAGE.outset = At the very outset of the war | In the first days of the war | When the war was yet young | Before the war had well begun | In the war's first hours | As the war began | At the war's beginning | When the first blades were drawn | Scarcely had the war begun when | In the opening days of the struggle
+@WAR_STAGE.early = Early in the war | In the early days of the war | While the war was still young | In the first season of strife | Not long into the war | When the war had barely found its stride | Early in the struggle | In the war's early days | Before the war had grown old | In the youth of the war
+@WAR_STAGE.mid = As the war went on | In the middle years of the war | As the struggle wore on | When the war was at its height | In the thick of the war | As the war dragged on | Midway through the long struggle | When the war had grown bitter | While the war raged on | In the heart of the war
+@WAR_STAGE.late = Late in the long war | In the war's later days | As the long war drew on | When the war had grown old | Late in the struggle | In the last days of the war | As the war neared its end | Long into the war | When all were weary of the war | In the twilight of the war
+
+# ---------------------------------------------------------------- fighting
+
+# a side without a player's name (the map's own villages and their folk)
+@UNKNOWN_SIDE = the free folk | the local folk | the villagers | the free villagers | the country folk | the common folk | the landsfolk | the hill folk
+
+@HOST = host | army | warband | forces | ranks | men | companies | levies | soldiery | array
+@WARRIORS = warriors | fighters | soldiers | men-at-arms | fighting men | swordsmen | spearmen | troops | champions | blades
+@FOE = foe | enemy | foeman | adversary | opponent | man
+@FOES = foes | enemies | foemen | adversaries | men | opponents | of the enemy | of their enemies
+@CLASHED = clashed | came to blows | crossed swords | joined battle | fought | locked shields | met in arms | fell upon one another | crossed blades | grappled
+@MET = met | collided | came together | met in arms | faced one another | collided in arms | closed with one another | crashed together
+@FIERCE = fierce | bitter | bloody | savage | grim | hard-fought | desperate | furious | brutal | merciless | cruel | relentless
+@FIGHT = fight | struggle | battle | clash | combat | fray | contest | encounter | slaughter | bloodletting
+@FIGHTING = fighting | bloodshed | slaughter | hard fighting | killing | bitter fighting | close fighting | bloody work | sword-work | butchery
+@KILLED = slew | cut down | struck down | felled | killed | laid low | dispatched | brought down | slaughtered | butchered | put down | murdered
+@SLAIN = slain | cut down | struck down | felled | killed | laid low | brought down | sent to the grave | put to the sword | slaughtered
+@FOUGHT_HARD = fought harder | fought more fiercely | bore themselves more bravely | did more bloody work | struck harder | fought with greater fury | wrought more slaughter | spilled more blood
+@FOREMOST = Foremost | First | Greatest | Most deadly | Most feared | Fiercest | Boldest | Bloodiest | Most terrible | Mightiest
+@RENOWNED = renowned | famed | celebrated | storied | valiant | far-famed | honoured | lauded | glorious | illustrious | legendary
+@HERO = hero | champion | paladin | warrior | veteran | stalwart | war-hero | swordsman
+@FELL = fell | perished | died | was lost | met their end | breathed their last | went to the grave | did not rise again | gave their life | passed from the world
+@MOURNED = mourned | grieved for | lamented | wept for | buried | sorrowed for | keened over | honoured in death
+@DEAD = dead | slain | fallen | dead men
+@WON = held the field | carried the day | won the day | was victorious | prevailed | triumphed | had the better of it | stood victorious | took the field | came away the victor
+@VICTORY = victory | the day | the field | triumph | the honours of the day | the glory of the day
+@VICTORY_NOUN = victory | triumph | win | rout | success | conquest
+@ROUTED = left | abandoned | fled, leaving | withdrew, leaving | fell back and left | was driven off, leaving | broke and left | retreated and left
+@BROKEN = broken | beaten | routed | humbled | shattered | thrown back | bloodied | driven off
+@LONG_TIME = for a long time | for long hours | for hour upon hour | long and hard | for what seemed an age | without pause for a great while | for the better part of the day | through hour after weary hour
+@SUDDENLY = almost as soon as it had begun | in moments | in a few heartbeats | before many had drawn their blades | swiftly | in the blink of an eye | quicker than a prayer | as soon as it had started
+
+# ---------------------------------------------------------------- settlements and raids
+
+@RAIDERS = raiders | marauders | reavers | plunderers | brigands | a raiding party | riders | pillagers | looters | outriders
+@STRUCK_AT = struck at | fell upon | descended on | swept down on | burst upon | ravaged | harried | swept through | came down upon | rode against
+@FOLK = folk | people | peasants | villagers | farmers | common folk | labourers | serfs | field-workers | households
+@RAISED = raised | built | founded | established | set up | broke ground for | planted | laid the foundations of | put up | erected
+@SETTLERS = settlers | colonists | pioneers | builders | labourers | families | newcomers | homesteaders | peasants | masons
+@RAZED = put to the torch | razed to the ground | burned | laid waste | levelled | brought down in flames | reduced to ashes | cast down | torn down | destroyed | given to the flames
+@WALLS = walls | defences | ramparts | gates | palisades | fortifications | battlements | earthworks
+
+# ---------------------------------------------------------------- the dead
+
+@SONGS = the songs | the bards | the skalds | the minstrels | later tales | the chroniclers | the ballads of later years | the old stories | the singers | those who tell such tales
+@REMEMBER = would remember | remember | still recall | sang long of | did not forget | kept the memory of | honour | tell of
+@WORD_CAME = word came | the news came | tidings came | a messenger brought word | it was told | a rider brought the tidings | the report came | the sad news came
+
+@CAUSE.cold = taken by the cold | claimed by the frost | frozen where they stood | lost to the bitter cold | killed by the winter | slain by the frost | overcome by the freezing cold | found frozen | given to the cold | carried off by the frost
+@CAUSE.heat = overcome by heat and thirst | killed by the heat | struck down by the sun | lost to thirst | felled by the burning sun | dead of thirst | slain by the heat | wilted under the merciless sun | claimed by the drought | parched to death
+@CAUSE.drowned = lost to the waters | drowned | swallowed by the flood | taken by the rising water | claimed by the river | carried off by the flood | drowned in the risen waters | pulled under by the current | lost beneath the waves | given to the deep
+@CAUSE.ice = swallowed by the ice | lost through the ice | taken by the breaking ice | gone through the thin ice | drowned beneath the ice | dragged down when the ice broke | lost when the ice gave way | claimed by the frozen water | swallowed by the black water under the ice | taken when the ice cracked
+@CAUSE.fire = consumed by the flames | burned to death | lost to the fire | taken by the blaze | caught in the fire | killed by the flames | swallowed by the burning grass | given to the fire | burned in the wildfire | claimed by the flames
+@CAUSE.lightning = struck down by a bolt from heaven | killed by lightning | struck by the lightning | slain by the wrath of the sky | felled by a thunderbolt | taken by the storm's fire | struck down from the sky | burned by the lightning | slain by heaven's fire | killed where the bolt fell
+@CAUSE.slain = slain by {KILLER} | cut down by {KILLER} | struck down by {KILLER} | felled by {KILLER} | laid low by {KILLER} | killed by the hand of {KILLER} | brought down by {KILLER} | slain at the hands of {KILLER} | run through by {KILLER} | sent to the grave by {KILLER}
+@CAUSE.other = {EXTRA}
+
+@ALL_OF_THEM = all of them {TYPES} | every one of them {TYPES} | {TYPES} to a man | {TYPES} all | all {TYPES} | {TYPES} every one | none but {TYPES} | {TYPES}, every last one | {TYPES} without exception | {TYPES}, each and every one
+@MOST_OF_THEM = most of them {TYPES} | the greater part of them {TYPES} | chiefly {TYPES} | {TYPES} for the most part | mostly {TYPES} | the bulk of them {TYPES} | {TYPES} in the main | {TYPES} for the greater part | above all {TYPES}
+
+# ================================================================ sentences
+
+# ---- the opening of a sentence ({DATE}); the game picks the slot by the calendar it knows
+
+[date.season.tod.weather]
+On a {WEATHER_ADJ} {TOD_NOUN} in the {SEASON} of the year {YEAR}
+In the {SEASON} of the year {YEAR}, {TOD_WHEN}, {WEATHER_UNDER}
+{TOD_WHEN}, in the {WEATHER_ADJ} {SEASON} of {YEAR}
+On a {WEATHER_ADJ} {TOD_NOUN} of the year {YEAR}, in its {SEASON}
+In the year {YEAR}, on a {WEATHER_ADJ} {SEASON} {TOD_NOUN}
+In the {SEASON} of {YEAR}, {WEATHER_UNDER} and {TOD_WHEN}
+It was a {WEATHER_ADJ} {TOD_NOUN} in the {SEASON} of the year {YEAR} when
+In the year {YEAR}, {TOD_WHEN}, {WEATHER_UNDER}
+One {WEATHER_ADJ} {TOD_NOUN} in the {SEASON} of {YEAR}
+{WEATHER_UNDER}, {TOD_WHEN}, in the {SEASON} of the year {YEAR}
+On a {WEATHER_ADJ} {SEASON} {TOD_NOUN} of the year {YEAR}
+
+[date.season.tod]
+In the {SEASON} of the year {YEAR}, {TOD_WHEN}
+{TOD_WHEN} in the {SEASON} of {YEAR}
+In the year {YEAR}, {TOD_WHEN}, in its {SEASON}
+On a {SEASON} {TOD_NOUN} of the year {YEAR}
+One {TOD_NOUN} in the {SEASON} of the year {YEAR}
+In the {SEASON} of {YEAR}, {TOD_WHEN}
+It was {TOD_NOUN} in the {SEASON} of the year {YEAR} when
+In the year {YEAR}, on a {SEASON} {TOD_NOUN}
+During the {SEASON} of {YEAR}, {TOD_WHEN}
+{TOD_WHEN}, in the {SEASON} of the year {YEAR}
+
+[date.season.weather]
+In the {SEASON} of the year {YEAR}, {WEATHER_UNDER}
+On a {WEATHER_ADJ} day in the {SEASON} of {YEAR}
+In the year {YEAR}, on a {WEATHER_ADJ} {SEASON} day
+{WEATHER_UNDER}, in the {SEASON} of the year {YEAR}
+One {WEATHER_ADJ} day in the {SEASON} of {YEAR}
+In the {SEASON} of {YEAR}, on a {WEATHER_ADJ} day
+It was a {WEATHER_ADJ} day in the {SEASON} of the year {YEAR} when
+During the {SEASON} of {YEAR}, {WEATHER_UNDER}
+In the year {YEAR}, {WEATHER_UNDER}
+On a {WEATHER_ADJ} {SEASON} day of the year {YEAR}
+
+[date.season]
+In the {SEASON} of the year {YEAR}
+In the year {YEAR}, in its {SEASON}
+During the {SEASON} of {YEAR}
+In the {SEASON} of {YEAR}
+One day in the {SEASON} of the year {YEAR}
+It was the {SEASON} of the year {YEAR} when
+In the year {YEAR}, as {SEASON} came
+When it was {SEASON} in the year {YEAR}
+In {YEAR}, in the {SEASON}
+That {SEASON}, in the year {YEAR},
+
+[date.day.tod.weather]
+On the {DAY} day, {TOD_WHEN}, {WEATHER_UNDER}
+On a {WEATHER_ADJ} {TOD_NOUN}, the {DAY} of the war
+{TOD_WHEN} on the {DAY} day, {WEATHER_UNDER}
+On the {DAY} day of the war, a {WEATHER_ADJ} {TOD_NOUN}
+It was a {WEATHER_ADJ} {TOD_NOUN} on the {DAY} day when
+On the {DAY} day, on a {WEATHER_ADJ} {TOD_NOUN}
+{WEATHER_UNDER}, {TOD_WHEN} on the {DAY} day
+On the {WEATHER_ADJ} {TOD_NOUN} of the {DAY} day
+The {DAY} day of the war dawned {WEATHER_ADJ}, and {TOD_WHEN}
+On the {DAY} day, as a {WEATHER_ADJ} {TOD_NOUN} came
+
+[date.day.tod]
+On the {DAY} day, {TOD_WHEN}
+{TOD_WHEN} on the {DAY} day of the war
+On the {DAY} day of the war, {TOD_WHEN}
+It was {TOD_NOUN} on the {DAY} day when
+On the {TOD_NOUN} of the {DAY} day
+On the {DAY} day, as {TOD_NOUN} came
+{TOD_WHEN}, on the {DAY} day
+On the {DAY} day, {TOD_WHEN}, by the reckoning of the chroniclers
+The {DAY} day of the war: {TOD_WHEN},
+In the {TOD_NOUN} of the {DAY} day
+
+[date.weather]
+{WAR_STAGE}, {WEATHER_UNDER}
+{WAR_STAGE}, on a {WEATHER_ADJ} day
+{WAR_STAGE}, one {WEATHER_ADJ} day
+{WAR_STAGE}, {WEATHER_UNDER}, it happened that
+{WAR_STAGE}, when the day was {WEATHER_ADJ}
+{WAR_STAGE}, on a {WEATHER_ADJ} day like many others
+{WAR_STAGE}, {WEATHER_UNDER},
+{WAR_STAGE}, under {WEATHER_ADJ} skies
+{WAR_STAGE}, one {WEATHER_ADJ} day it came to pass that
+{WAR_STAGE}, in {WEATHER_ADJ} weather
+
+[date.war]
+{WAR_STAGE}
+
+# ---- battles, sieges, raids
+
+[battle.open]
+{DATE}, the {HOST} of {SIDES} met in {BATTLE} at {PLACE}.
+{DATE}, {SIDES} {CLASHED} at {PLACE}.
+{DATE}, steel rang out at {PLACE}, where the {WARRIORS} of {SIDES} {CLASHED}.
+{DATE}, {PLACE} saw {BATTLE} between {SIDES}.
+{DATE}, the {HOST} of {SIDES} {CLASHED} on the field of {PLACE}.
+{DATE}, war came to {PLACE}: {SIDES} {CLASHED} there.
+{DATE}, at {PLACE}, the {WARRIORS} of {SIDES} met in {BATTLE}.
+{DATE}, blood was spilled at {PLACE}, where {SIDES} {CLASHED}.
+{DATE}, {SIDES} sought each other out at {PLACE}, and {CLASHED}.
+{DATE}, the ground at {PLACE} shook as the {HOST} of {SIDES} {MET}.
+{DATE}, {PLACE} became a field of {FIGHTING} for {SIDES}.
+{DATE}, {SIDES} brought their quarrel to {PLACE}, and there {CLASHED}.
+
+[battle.open.one]
+{DATE}, {SIDES} fought at {PLACE}.
+{DATE}, the {HOST} of {SIDES} gave battle at {PLACE}.
+{DATE}, {SIDES} was drawn into a {FIGHT} at {PLACE}.
+{DATE}, the {WARRIORS} of {SIDES} drew their blades at {PLACE}.
+{DATE}, there was {FIGHTING} at {PLACE}, and {SIDES} was in the thick of it.
+{DATE}, {PLACE} rang with the {FIGHTING} of {SIDES}.
+{DATE}, {SIDES} met resistance at {PLACE}.
+{DATE}, at {PLACE}, the {HOST} of {SIDES} fought hard.
+{DATE}, the {WARRIORS} of {SIDES} found {FIGHTING} at {PLACE}.
+{DATE}, {SIDES} took up arms at {PLACE}.
+
+[siege.open]
+{DATE}, the {WALLS} of {PLACE} were assailed, and {SIDES} fought beneath them.
+{DATE}, {PLACE} came under siege, as {SIDES} contested its {WALLS}.
+{DATE}, war came to the {WALLS} of {PLACE}, where {SIDES} {CLASHED}.
+{DATE}, {SIDES} {CLASHED} around the {WALLS} of {PLACE}.
+{DATE}, the {WALLS} of {PLACE} echoed with the {FIGHTING} of {SIDES}.
+{DATE}, {PLACE} was besieged, and the {HOST} of {SIDES} {MET} at its {WALLS}.
+{DATE}, the {WARRIORS} of {SIDES} stormed and held the {WALLS} of {PLACE} in turn.
+{DATE}, the houses of {PLACE} became a battlefield for {SIDES}.
+{DATE}, a siege was laid at {PLACE}, and {SIDES} fought over its {WALLS}.
+{DATE}, the {WALLS} of {PLACE} were tested as {SIDES} {CLASHED}.
+{DATE}, {PLACE} held its breath as {SIDES} fought among its buildings.
+
+[raid.open]
+{DATE}, {RAIDERS} {STRUCK_AT} {PLACE}, falling upon the fields and {FOLK} of {VICTIM}.
+{DATE}, a raid fell upon {PLACE}, and the {FOLK} of {VICTIM} paid for it.
+{DATE}, {RAIDERS} {STRUCK_AT} the {FOLK} of {VICTIM} at {PLACE}.
+{DATE}, the fields of {VICTIM} at {PLACE} were set upon by {RAIDERS}.
+{DATE}, {RAIDERS} {STRUCK_AT} {PLACE}, and the {FOLK} of {VICTIM} fled before them.
+{DATE}, terror came to {PLACE}, where {RAIDERS} {STRUCK_AT} the {FOLK} of {VICTIM}.
+{DATE}, the {FOLK} of {VICTIM} at {PLACE} were caught unawares by {RAIDERS}.
+{DATE}, {PLACE} burned as {RAIDERS} {STRUCK_AT} the holdings of {VICTIM}.
+{DATE}, {VICTIM} suffered a raid at {PLACE}.
+{DATE}, {RAIDERS} came for the {FOLK} of {VICTIM} at {PLACE}.
+
+[raid.open.plain]
+{DATE}, {RAIDERS} {STRUCK_AT} {PLACE}.
+{DATE}, a raid fell upon {PLACE}.
+{DATE}, {PLACE} was raided.
+{DATE}, {RAIDERS} came to {PLACE}.
+{DATE}, the fields of {PLACE} were harried by {RAIDERS}.
+{DATE}, {RAIDERS} were seen at {PLACE}.
+{DATE}, the peace of {PLACE} was broken by {RAIDERS}.
+{DATE}, {RAIDERS} {STRUCK_AT} the {FOLK} of {PLACE}.
+{DATE}, there was a raid at {PLACE}.
+{DATE}, {PLACE} knew the fear of {RAIDERS}.
+
+# ---- how great it was ({BATTLE} in the openings is one of these words)
+
+@BATTLE.skirmish = a skirmish | a brief clash | a scuffle | a small fight | a brush of arms | a running fight | a bloody little fight | an affray
+@BATTLE.battle = battle | open battle | a hard fight | a pitched fight | a {FIERCE} clash | a {FIERCE} {FIGHT} | a sharp battle | combat
+@BATTLE.great = a great battle | a mighty battle | a {FIERCE} battle | a great clash of arms | a battle of note | a battle long remembered | a terrible battle | a great slaughter
+@BATTLE.huge = one of the great slaughters of the age | the greatest battle of those days | a battle such as few had seen | a vast and terrible battle | a slaughter beyond counting | a battle of legend | a clash that shook the land | the bloodiest battle of the war
+@BATTLE = battle
+
+[size.skirmish]
+It was no more than a skirmish, of some {COUNT} {WARRIORS}.
+Only some {COUNT} {WARRIORS} took part.
+It was a small affair: some {COUNT} {WARRIORS} in all.
+Not many fought there; some {COUNT} at the most.
+A mere {COUNT} {WARRIORS} were drawn into it.
+Some {COUNT} {WARRIORS} crossed blades, no more.
+It was a little {FIGHT} of {COUNT} {WARRIORS}.
+The chroniclers count no more than {COUNT} {WARRIORS} in it.
+Some {COUNT} {WARRIORS} were there, a handful only.
+It was a {FIGHT} of few: some {COUNT} {WARRIORS}.
+
+[size.battle]
+Some {COUNT} {WARRIORS} took the field.
+Some {COUNT} {WARRIORS} were drawn into it.
+At its height some {COUNT} {WARRIORS} were fighting.
+It drew in some {COUNT} {WARRIORS}.
+Some {COUNT} {WARRIORS} fought there.
+The {FIGHT} drew some {COUNT} {WARRIORS} into it.
+It was a {FIERCE} {FIGHT} of some {COUNT} {WARRIORS}.
+Some {COUNT} {WARRIORS} stood in the lines.
+It was fought by some {COUNT} {WARRIORS}.
+By the chroniclers' count, {COUNT} {WARRIORS} fought there.
+
+[size.great]
+It was a great battle: {COUNT} {WARRIORS} at its height.
+{COUNT} {WARRIORS} fought there at its height.
+It was a great {FIGHT}; {COUNT} {WARRIORS} were in it at once.
+A great host was gathered there: {COUNT} {WARRIORS}.
+The field was crowded with {COUNT} {WARRIORS}.
+{COUNT} {WARRIORS} filled the field from end to end.
+It was no small affair: {COUNT} {WARRIORS} fought at once.
+The {FIGHT} swelled until {COUNT} {WARRIORS} were in it.
+{COUNT} {WARRIORS} were locked in the {FIGHT} at its height.
+Few battles of that time were greater: {COUNT} {WARRIORS} in it.
+
+[size.huge]
+Few had ever seen its like: {COUNT} {WARRIORS} locked in combat at its height.
+It was a vast {FIGHT}: {COUNT} {WARRIORS} at once.
+{COUNT} {WARRIORS} fought there, more than any could remember.
+The land had seldom seen such a host: {COUNT} {WARRIORS}.
+At its height, {COUNT} {WARRIORS} were locked in the {FIGHT}.
+It was a battle of legend: {COUNT} {WARRIORS} in the field.
+{COUNT} {WARRIORS} fought there, and the earth shook beneath them.
+Never before had so many met: {COUNT} {WARRIORS}.
+The {FIGHT} swallowed {COUNT} {WARRIORS} at its height.
+It was the greatest {FIGHT} of the age: {COUNT} {WARRIORS}.
+
+[strength]
+{MORE} came in strength, {MORE_N} against the {FEWER_N} of {FEWER}.
+{MORE} brought {MORE_N} to the field; {FEWER} only {FEWER_N}.
+{FEWER} was outnumbered, {FEWER_N} against {MORE_N}.
+{MORE} had the numbers: {MORE_N} to the {FEWER_N} of {FEWER}.
+{FEWER} stood with {FEWER_N} against the {MORE_N} of {MORE}.
+The odds favoured {MORE}, with {MORE_N} against {FEWER_N}.
+{MORE_N} of {MORE} faced a mere {FEWER_N} of {FEWER}.
+{FEWER} was badly outnumbered: {FEWER_N} to {MORE_N}.
+{MORE} came on in force, {MORE_N} strong; {FEWER} had {FEWER_N}.
+{MORE} far outnumbered {FEWER}: {MORE_N} against {FEWER_N}.
+
+# ---- the weather in a fight (one of these, sometimes)
+
+[weather.fight.clear]
+The sun shone on the {FIGHTING} as if nothing were amiss.
+The sky stayed clear and bright over the {DEAD}.
+It was fair weather for such grim work.
+The sun glinted on helm and blade.
+In the clear air, the cries carried far.
+No cloud hid the {FIGHTING} from heaven's eye.
+The light was good, and no blow went astray for want of it.
+Bright sunlight showed every cruel stroke.
+It was a fine day to die, the old {WARRIORS} said.
+The day was fair, and the {FIGHTING} foul.
+
+[weather.fight.clearnight]
+The stars looked down on the {FIGHTING}.
+By moonlight, blades flashed silver and then dark.
+The night was clear, and every shadow could hide a foe.
+Under the stars, the cries carried far across the land.
+The moon showed the {DEAD} pale upon the ground.
+In the clear night, torches marked where the {FIGHTING} was thickest.
+The cold stars were the only witnesses.
+Moonlight lay on helm and spear.
+The night was still but for the din of battle.
+It was a beautiful night for such ugly work.
+
+[weather.fight.hotnight]
+Even by night the heat gave no relief.
+The warm dark was thick with dust and the smell of blood.
+No cool wind came with the night.
+The {WARRIORS} sweated in the dark as if it were noon.
+Thirst plagued them through the night.
+The night air hung heavy and hot over the field.
+The heat of the day lingered on the stones.
+In the close dark, men gasped for breath between the blows.
+The night was as cruel as the day had been.
+The stars shone through a haze of heat and dust.
+
+[weather.fight.cloudy]
+A grey sky hung low over the {FIGHTING}.
+The clouds hung heavy, as if mourning in advance.
+Under the leaden sky, the {FIGHTING} was grim.
+The heavy clouds never lifted.
+The grey light made friend and foe hard to tell apart.
+The clouds pressed down on the field all the while.
+A dull light lay over the {DEAD}.
+The heavens stayed grey and silent.
+Under the low clouds, the din seemed louder still.
+It was a grey day, and a grey deed.
+
+[weather.fight.rain]
+The rain turned the field to mud beneath their feet.
+Rain ran down helms and mingled with the blood.
+The ground grew slick, and many slipped to their deaths.
+Bowstrings grew wet and slack in the rain.
+The rain washed the blood into the furrows.
+Wet to the skin, they fought on.
+The mud sucked at every step.
+The rain never ceased while they fought.
+Shields grew heavy with the wet.
+The rain fell on the living and the dead alike.
+
+[weather.fight.heavyrain]
+The rain came down so hard that the {FIGHTING} was half blind.
+Torrents of rain swept the field.
+The field became a swamp under the downpour.
+The rain drowned out the cries of the wounded.
+Men fought knee-deep in mud as the sky emptied itself.
+The downpour made every footing treacherous.
+Water stood in every hoofprint and every wound.
+The streams rose even as they fought.
+In the deluge, banners hung like rags.
+The rain lashed both sides without favour.
+
+[weather.fight.storm]
+Thunder drowned the clash of steel.
+Lightning lit the {FIGHTING} in flashes white as bone.
+The storm raged as if heaven itself were at war.
+Each flash of lightning showed new horrors.
+The thunder made the horses wild with fear.
+Rain and thunder beat down on the {WARRIORS}.
+Some said the storm was an omen; none agreed of what.
+The wind tore at banners and cloaks alike.
+Lightning struck near, and both sides faltered for a moment.
+The heavens roared over the {FIGHTING}.
+
+[weather.fight.fog]
+In the fog, friend and foe could hardly be told apart.
+Shapes loomed out of the mist and struck.
+The fog swallowed the cries of the dying.
+Many blows fell blind in the murk.
+Archers loosed at shadows in the mist.
+The mist hid the field from all who watched.
+No one could see the whole of it in the fog.
+Lost in the mist, small bands fought their own battles.
+The fog clung to the field long after.
+Out of the grey came the enemy, and into the grey went the dead.
+
+[weather.fight.snow]
+Snow fell on the {FIGHTING}, and the white ground turned red.
+Their breath smoked in the cold air.
+The snow muffled the clash of arms.
+Footprints and blood marked the white field.
+Snow settled on the {DEAD} before they were cold.
+The {WARRIORS} fought with numb hands.
+The flakes fell softly on a cruel scene.
+In the snow, every fallen body was plain to see.
+The white field told the tale in red.
+The cold bit as deep as the steel.
+
+[weather.fight.blizzard]
+The blizzard blinded both sides.
+The wind howled louder than the {WARRIORS}.
+Snow drove into their faces as they fought.
+Some who fell were buried by the snow before the {FIGHTING} ended.
+In the white fury, no one knew who was winning.
+The storm was as deadly as any foe.
+Frozen hands could barely grip the spear.
+The blizzard swallowed whole ranks from sight.
+Men fought the cold as hard as each other.
+It was madness to fight in such a storm, yet they did.
+
+[weather.fight.heat]
+The heat was terrible, and many fainted in their armour.
+The sun beat down without mercy.
+Sweat blinded the {WARRIORS} as they fought.
+Thirst tormented both sides.
+The air shimmered over the field.
+Armour burned to the touch.
+Men gasped in the heat between the blows.
+The sun was the cruellest foe of all that day.
+Dust and heat choked the living.
+Not a breath of wind cooled the field.
+
+[weather.fight.drought]
+Dust rose in clouds from the parched ground.
+The earth was cracked and dry beneath their feet.
+The dust hid much of the {FIGHTING} from sight.
+No water was to be had for the wounded.
+The dry ground drank the blood at once.
+The drought had made them desperate, and it showed.
+Every footstep raised dust.
+The field was as dry as bone, and the dust settled on the dead.
+Thirst drove them as hard as hatred.
+The parched land seemed to welcome the dead.
+
+[weather.fight.cold]
+The bitter cold numbed their hands.
+Their breath hung like smoke in the frozen air.
+The ground was iron-hard with frost.
+The cold took the wounded quickly.
+The frost made every fall a hard one.
+Men fought to keep warm as much as to win.
+The cold was as cruel as any blade.
+The frozen ground rang under their feet.
+Ice crusted on beards and helms.
+The dead stiffened quickly in the cold.
+
+[duration.short]
+It was over {SUDDENLY}.
+It ended {SUDDENLY}.
+The {FIGHT} was over {SUDDENLY}.
+All was decided {SUDDENLY}.
+It lasted no time at all.
+It was short and sharp.
+Scarcely had it begun when it was over.
+Few blows were needed; it ended {SUDDENLY}.
+It was finished {SUDDENLY}.
+The {FIGHT} burned out {SUDDENLY}.
+
+[duration.long]
+The {FIGHTING} dragged on {LONG_TIME}.
+It raged {LONG_TIME} before it was decided.
+They fought {LONG_TIME}.
+The {FIGHT} went on {LONG_TIME}.
+Neither side would give way, and they fought {LONG_TIME}.
+The {FIGHTING} lasted {LONG_TIME}, and wore out both sides.
+It was a long and {FIERCE} {FIGHT}.
+The {FIGHT} swayed back and forth {LONG_TIME}.
+They fought on {LONG_TIME}, until the field was strewn with the {DEAD}.
+It went on {LONG_TIME}, and the end was long in doubt.
+
+# ---- who held the field
+
+[outcome.win]
+{WINNER} {WON}; {LOSER} {ROUTED} {LOST_HI} {DEAD} behind{TYPE_CLAUSE}.
+The day belonged to {WINNER}: {LOSER} lost {LOST_HI}{TYPE_CLAUSE}, {WINNER} only {LOST_LO}.
+It ended badly for {LOSER}, who lost {LOST_HI}{TYPE_CLAUSE}, against {LOST_LO} of {WINNER}.
+{WINNER} {WON}, losing {LOST_LO}; {LOSER} lost {LOST_HI}{TYPE_CLAUSE}.
+{LOSER} was {BROKEN}, with {LOST_HI} {DEAD}{TYPE_CLAUSE}; {WINNER} mourned {LOST_LO}.
+{VICTORY} went to {WINNER}. {LOSER} counted {LOST_HI} {DEAD}{TYPE_CLAUSE}, {WINNER} {LOST_LO}.
+When it was done, {LOSER} had lost {LOST_HI}{TYPE_CLAUSE}, and {WINNER} {LOST_LO}; {WINNER} {WON}.
+{WINNER} paid {LOST_LO} lives for {VICTORY}; {LOSER} paid {LOST_HI} for nothing{TYPE_CLAUSE}.
+{LOSER} {ROUTED} {LOST_HI} {DEAD} on the field{TYPE_CLAUSE}, and {WINNER} {WON} at the cost of {LOST_LO}.
+It was a {VICTORY_KIND} for {WINNER}: {LOST_HI} of {LOSER} {DEAD}{TYPE_CLAUSE}, against {LOST_LO}.
+
+@VICTORY_KIND = clear victory | hard-won victory | bloody victory | costly triumph | telling victory | decisive day | proud day | grim victory
+
+[outcome.win.noloss]
+{WINNER} {WON} without loss; {LOSER} {ROUTED} {LOST_HI} {DEAD} behind{TYPE_CLAUSE}.
+{WINNER} lost no one, while {LOSER} lost {LOST_HI}{TYPE_CLAUSE}.
+Not one of {WINNER_S} {WARRIORS} fell; {LOSER} lost {LOST_HI}{TYPE_CLAUSE}.
+It was a perfect {VICTORY_NOUN} for {WINNER}: {LOST_HI} of {LOSER} {DEAD}{TYPE_CLAUSE}, none of their own.
+{LOSER} lost {LOST_HI}{TYPE_CLAUSE}, and {WINNER} not a single one.
+{WINNER} {WON} and counted no {DEAD}; {LOSER} counted {LOST_HI}{TYPE_CLAUSE}.
+{LOSER} was {BROKEN}, losing {LOST_HI}{TYPE_CLAUSE}, without taking a single life of {WINNER_S}.
+For {LOSER} it was a disaster: {LOST_HI} {DEAD}{TYPE_CLAUSE}, and {WINNER} untouched.
+{WINNER} came away unscathed; {LOSER} {ROUTED} {LOST_HI} {DEAD} behind{TYPE_CLAUSE}.
+All {LOST_HI} of the {DEAD} were {LOSER_S}{TYPE_CLAUSE}.
+
+[outcome.even]
+Neither side could claim the day; the {DEAD} were counted: {LOSSES}.
+It was a {FIERCE}, even {FIGHT}. The losses: {LOSSES}.
+No one {WON}; both sides lost dearly: {LOSSES}.
+The {FIGHT} ended with no victor. The {DEAD}: {LOSSES}.
+Both sides bled alike: {LOSSES}.
+When it was over, neither could call it a {VICTORY_NOUN}: {LOSSES}.
+It was a draw, paid for in blood: {LOSSES}.
+The honours were shared, and so were the graves: {LOSSES}.
+Neither yielded, and the {DEAD} were many on both sides: {LOSSES}.
+Each side claimed {VICTORY}, and each had lost: {LOSSES}.
+
+[outcome.none]
+No life of note was lost.
+When it was over, no one was counted among the {DEAD}.
+By some mercy, no one died.
+Both sides drew back without a death.
+For all the noise, no one fell.
+It cost no lives, for once.
+The {FIGHT} ended without a death.
+Heaven spared them all that day.
+No graves were dug after it.
+All who went in came out alive.
+
+[outcome.single]
+{SIDE} lost {LOST_HI} there.
+{SIDE} counted {LOST_HI} {DEAD} afterwards.
+It cost {SIDE} {LOST_HI} lives.
+{LOST_HI} of {SIDE_S} {WARRIORS} did not come back.
+{SIDE} buried {LOST_HI} after it.
+{SIDE} paid with {LOST_HI} lives.
+{SIDE} lost {LOST_HI}{TYPE_CLAUSE}.
+The {DEAD} of {SIDE} numbered {LOST_HI}.
+{LOST_HI} fell on {SIDE_S} side.
+{SIDE} {MOURNED} {LOST_HI} of their own.
+
+# ---- the deeds
+
+[top]
+Of {SIDE_S} {WARRIORS}, none {FOUGHT_HARD} than {UNIT}, who {KILLED} {KILLS} that day.
+{UNIT} of {SIDE_S} {HOST} {KILLED} {KILLS} there, more than any other of them.
+{FOREMOST} among {SIDE_S} {WARRIORS} was {UNIT}, with {KILLS} {SLAIN}.
+{UNIT} {KILLED} {KILLS} {FOES} for {SIDE}, the most of any.
+None of {SIDE_S} {HOST} did more than {UNIT}, who {KILLED} {KILLS}.
+{SIDE_S} {FOREMOST_LOWER} {WARRIOR} that day was {UNIT}, with {KILLS} {SLAIN}.
+{UNIT} stood out among {SIDE_S} {WARRIORS}, with {KILLS} {SLAIN}.
+{KILLS_CAP} {FOES} fell to {UNIT} of {SIDE_S} {HOST}, more than to any other.
+For {SIDE}, {UNIT} led the slaughter, with {KILLS} {SLAIN}.
+{UNIT} was the terror of the field for {SIDE}: {KILLS} {SLAIN}.
+{UNIT} {KILLED} {KILLS} of the foe; no one of {SIDE_S} did more.
+
+@FOREMOST_LOWER = foremost | greatest | deadliest | fiercest | boldest | most feared | bloodiest | mightiest
+@WARRIOR = warrior | fighter | champion | blade | soldier | man-at-arms | spear | sword
+
+[top.one]
+Of {SIDE_S} {WARRIORS}, {UNIT} alone struck down a foe.
+{UNIT} {KILLED} one foe for {SIDE}, the only kill of their side.
+{SIDE} could boast of a single kill, by {UNIT}.
+Only {UNIT} drew blood for {SIDE}, slaying one.
+{UNIT} took the one life that {SIDE} took that day.
+For {SIDE}, {UNIT} {KILLED} a single foe, and that was all.
+{SIDE_S} one kill was {UNIT_S}.
+{UNIT} alone of {SIDE_S} {HOST} {KILLED} a foe.
+One foe fell for {SIDE}, {SLAIN} by {UNIT}.
+{UNIT} {KILLED} one, the sole kill of {SIDE}.
+
+[hero.one]
+The {RENOWNED} {UNIT}{KILLS_CLAUSE} fought there as well.
+{UNIT}, a {HERO} already sung of, was among them.
+Renown was there too: {UNIT}.
+Among the {WARRIORS} stood the {RENOWNED} {UNIT}.
+{UNIT}, a {RENOWNED} {HERO}, fought in the ranks that day.
+The {RENOWNED} {UNIT} was seen in the thick of it.
+{UNIT}{KILLS_CLAUSE} was there, a {HERO} whose name was already in the songs.
+{UNIT} also fought there, and lived to fight again.
+There too was {UNIT}, a {HERO} {RENOWNED} far and wide.
+The {RENOWNED} {UNIT} lent their blade to the {FIGHT}.
+
+[hero.one.dead]
+{UNIT}, who would not live to see the war's end, fought there as well.
+{UNIT} fought there too; their own death was still to come.
+Among them was {UNIT}, whom death would find another day.
+{UNIT} was there, a {HERO} who would not survive the war.
+{UNIT} fought there, not knowing how little time was left.
+There too was {UNIT}, later to fall.
+{UNIT}, since gone to the grave, was among them.
+The late {UNIT} fought there, in the days of their glory.
+{UNIT} stood in the lines, a {HERO} whose end lay ahead.
+{UNIT}, whose death came later, was among the {WARRIORS}.
+
+[hero.many]
+{HERO_PLURAL_CAP} stood in the lines: {HEROES}.
+Many of renown fought there: {HEROES}.
+The {RENOWNED} were there: {HEROES}.
+Among them were {HEROES}, all {RENOWNED}.
+{HEROES} fought there, {HERO_PLURAL} every one.
+The field saw many {HERO_PLURAL}: {HEROES}.
+{HEROES} were all in the {FIGHTING}.
+There fought {HEROES}, names the songs remember.
+{HERO_PLURAL_CAP} of both sides were there: {HEROES}.
+Not a few {HERO_PLURAL} were present: {HEROES}.
+
+@HERO_PLURAL = heroes | champions | warriors of renown | famed warriors | the great of the war | men of renown | captains of renown | the storied
+@HERO_PLURAL_CAP = Heroes of renown | Champions | Warriors of renown | Famed warriors | The great of the war | Captains of renown | The storied of the war | Heroes of the songs
+
+[fallen.here]
+There fell {UNIT}, a {HERO} of {KILLS_PHRASE}{CAUSE_CLAUSE}.
+{SIDE} {MOURNED} {UNIT} there, a {HERO} of {KILLS_PHRASE}{CAUSE_CLAUSE}.
+Among the {DEAD} was {UNIT}, who had made {KILLS_PHRASE}{CAUSE_CLAUSE}.
+{UNIT} {FELL} there{CAUSE_CLAUSE}.
+The {RENOWNED} {UNIT} {FELL} that day{CAUSE_CLAUSE}, with {KILLS_PHRASE} to their name.
+Here {UNIT} {FELL}{CAUSE_CLAUSE}, a {HERO} of {SIDE}.
+{SIDE} lost {UNIT} there, a {HERO} of {KILLS_PHRASE}{CAUSE_CLAUSE}.
+{UNIT}, a {HERO} of {KILLS_PHRASE}, {FELL} in that {FIGHT}{CAUSE_CLAUSE}.
+It was there that {UNIT} {FELL}{CAUSE_CLAUSE}.
+The {FIGHT} claimed {UNIT}, a {HERO} of {SIDE}{CAUSE_CLAUSE}.
+{UNIT} did not leave the field alive{CAUSE_CLAUSE}.
+
+# ---- settlements
+
+[founded]
+{DATE}, {SIDE} {RAISED} {A_SETTLEMENT} at {PLACE}.
+{DATE}, {SETTLERS} of {SIDE} {RAISED} {A_SETTLEMENT} at {PLACE}.
+{DATE}, {A_SETTLEMENT} of {SIDE} rose at {PLACE}.
+{DATE}, {PLACE} saw {SETTLERS} of {SIDE} raise {A_SETTLEMENT}.
+{DATE}, {SIDE} claimed {PLACE} and {RAISED} {A_SETTLEMENT} there.
+{DATE}, {SIDE_S} {SETTLERS} came to {PLACE} and {RAISED} {A_SETTLEMENT}.
+{DATE}, {A_SETTLEMENT} was {RAISED_PART} at {PLACE} by {SIDE}.
+{DATE}, the first stones of {SIDE_S} {SETTLEMENT} at {PLACE} were laid.
+{DATE}, {SIDE} put down roots at {PLACE}, with {A_SETTLEMENT}.
+{DATE}, {PLACE} became home to {A_SETTLEMENT} of {SIDE}.
+
+@RAISED_PART = raised | built | founded | established | set up | erected | planted | put up
+
+[destroyed]
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} was {RAZED}.
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} fell to its enemies.
+{DATE}, the {SETTLEMENT} of {OWNER} at {PLACE} was {RAZED}.
+{DATE}, {PLACE} lost its {SETTLEMENT}: {OWNER_S}, now {RAZED}.
+{DATE}, {OWNER} lost the {SETTLEMENT} at {PLACE}; it was {RAZED}.
+{DATE}, smoke rose over {PLACE}, where {OWNER_S} {SETTLEMENT} was {RAZED}.
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} was no more.
+{DATE}, the {SETTLEMENT} at {PLACE} was {RAZED}, to the sorrow of {OWNER}.
+{DATE}, {PLACE} burned, and {OWNER_S} {SETTLEMENT} with it.
+{DATE}, {OWNER_S} hold on {PLACE} was broken: its {SETTLEMENT} was {RAZED}.
+
+[destroyed.by]
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} was {RAZED}, by the {HANDS} of {RAZERS}.
+{DATE}, {RAZERS} brought down {OWNER_S} {SETTLEMENT} at {PLACE}.
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} fell to {RAZERS}.
+{DATE}, the {SETTLEMENT} of {OWNER} at {PLACE} was {RAZED} by {RAZERS}.
+{DATE}, {RAZERS} laid {OWNER_S} {SETTLEMENT} at {PLACE} low.
+{DATE}, smoke rose over {PLACE}: {RAZERS} had {RAZED_PART2} {OWNER_S} {SETTLEMENT}.
+{DATE}, {OWNER} lost the {SETTLEMENT} at {PLACE} to {RAZERS}.
+{DATE}, {RAZERS} {RAZED_VERB} {OWNER_S} {SETTLEMENT} at {PLACE}.
+{DATE}, it was {RAZERS} who {RAZED_VERB} {OWNER_S} {SETTLEMENT} at {PLACE}.
+{DATE}, {OWNER_S} {SETTLEMENT} at {PLACE} was {RAZED}; the deed was done by {RAZERS}.
+
+@HANDS = hand | hands | blades | torches | fury | work
+@RAZED_PART2 = burned | levelled | razed | torched | destroyed | thrown down | laid waste to | torn down
+@RAZED_VERB = burned | levelled | razed | torched | destroyed | threw down | laid waste to | tore down | put to the torch | brought down
+
+[destroyed.fight]
+It did not fall without a fight.
+Blood was spilled around it.
+Its defenders did not give it up easily.
+It was fought over to the last.
+Many fought and died around it.
+It was won only after hard {FIGHTING}.
+There was {FIGHTING} in its streets before the end.
+Its fall was paid for in blood.
+The {FIGHT} for it was {FIERCE}.
+It fell only after a {FIERCE} {FIGHT}.
+
+# ---- a hero's fall, away from any battle
+
+[fallen.away]
+{DATE}, far from any battle, death found {UNIT}, a {HERO} of {SIDE}, at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, {SIDE} lost {UNIT}, a {HERO} of {KILLS_PHRASE}, at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, {WORD_CAME} from {PLACE} that {UNIT} of {SIDE} was dead{CAUSE_CLAUSE}.
+{DATE}, {UNIT}, a {HERO} of {SIDE}, {FELL} at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, the {RENOWNED} {UNIT} {FELL} at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, at {PLACE}, {SIDE} lost the {RENOWNED} {UNIT}{CAUSE_CLAUSE}.
+{DATE}, {UNIT} {FELL} alone at {PLACE}, far from the {HOST} of {SIDE}{CAUSE_CLAUSE}.
+{DATE}, {SIDE} {MOURNED} {UNIT}, who {FELL} at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, {UNIT}, {SIDE_S} {HERO} of {KILLS_PHRASE}, came to their end at {PLACE}{CAUSE_CLAUSE}.
+{DATE}, at {PLACE}, the life of {UNIT} ended{CAUSE_CLAUSE}.
+{DATE}, {WORD_CAME} to {SIDE}: {UNIT} had {FELL_PART} at {PLACE}{CAUSE_CLAUSE}.
+
+@FELL_PART = fallen | perished | died | been lost | met their end | breathed their last | gone to the grave | been slain
+
+[fallen.songs]
+{SONGS} {REMEMBER} {UNIT} for {KILLS_FOES}.
+{UNIT} was remembered for {KILLS_FOES}.
+{SONGS} {REMEMBER} {UNIT}, and {KILLS_FOES}.
+{SIDE} would not forget {UNIT} and {KILLS_FOES}.
+{UNIT} left behind a name, and {N_FOES} in the ground.
+{SONGS} {REMEMBER} the deeds of {UNIT}: {KILLS_FOES}.
+{N_FOES} were laid to the account of {UNIT}.
+{UNIT} had sent {N_FOES} before them into the dark.
+{SONGS} {REMEMBER} {UNIT} long after.
+The name of {UNIT} lived on in {SIDE_S} {SONG_HALLS}.
+
+@SONG_HALLS = halls | songs | hearths | tales | memory | chronicles | ballads | prayers
+
+[fallen.unknown]
+{DATE}, a {HERO} {FELL} at {PLACE}.
+{DATE}, a {HERO} of the war was lost at {PLACE}.
+{DATE}, {PLACE} saw the death of a {HERO}.
+{DATE}, death came for a {HERO} at {PLACE}.
+{DATE}, a {RENOWNED} {HERO} {FELL} at {PLACE}.
+{DATE}, at {PLACE}, a {HERO} {FELL}.
+{DATE}, {WORD_CAME} of a {HERO} lost at {PLACE}.
+{DATE}, a {HERO}'s life ended at {PLACE}.
+{DATE}, {PLACE} became a {HERO}'s grave.
+{DATE}, the war took a {HERO} at {PLACE}.

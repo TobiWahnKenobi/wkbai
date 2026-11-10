@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "ClientInterface.h"
+#include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
 #include "../gfx/DefaultTerrainRenderer.h"
@@ -1509,6 +1510,96 @@ void ClientInterface::prepareLevelBeforeFrame()
 	LoadingDetail("ray tracing and the first frame");
 }
 
+// wkbai's unit history: a unit's age as the panel shows it (the user): with the seasons on,
+// 25 + the game years since its birth (a year: four seasons); with only the day and night, the
+// days; else m:ss (h:mm:ss past an hour). "" for an untracked unit.
+std::string UnitAgeText(Client* client, uint32_t id)
+{
+	auto it = client->unitInfo.find(id);
+	if (it == client->unitInfo.end())
+		return std::string();
+	const float age = std::max(0.0f, (float)client->timeManager.currentTime - it->second.birth);
+	const EnvironmentSettings& env = client->environmentSettings;
+	char text[64];
+	if (client->environmentActive && env.seasons && env.seasonLengthMin > 0) {
+		const int years = (int)(age / (4.0f * env.seasonLengthMin * 60.0f));
+		snprintf(text, sizeof(text), "Age %d", 25 + years);
+	}
+	else if (client->environmentActive && env.dayNight && env.dayLengthMin > 0) {
+		const int days = (int)(age / (env.dayLengthMin * 60.0f));
+		if (days == 0)
+			snprintf(text, sizeof(text), "less than a day");
+		else
+			snprintf(text, sizeof(text), days == 1 ? "%d day" : "%d days", days);
+	}
+	else {
+		const int s = (int)age;
+		if (s >= 3600)
+			snprintf(text, sizeof(text), "Age %d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60);
+		else
+			snprintf(text, sizeof(text), "Age %d:%02d", s / 60, s % 60);
+	}
+	std::string out = text;
+	// a save from before the history: its age counted from the load
+	if (it->second.flags & 2)
+		out += " (since loading)";
+	return out;
+}
+
+void ClientInterface::drawUnitHistoryOverlay()
+{
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	auto toScreen = [this](const Vector3& p, bool& inFront) {
+		const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
+		inFront = t.z > -1.0f && t.z < 1.0f;
+		return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
+	};
+	// the heroes' names over their heads, in their player's colour, fading out from 120 to 220 m
+	if (g_settings.value("showHeroNames", true)) {
+		for (const HeroLabel& label : heroLabels) {
+			auto it = client->unitInfo.find(label.id);
+			ClientGameObject* obj = client->findObject(label.id);
+			if (it == client->unitInfo.end() || !obj)
+				continue;
+			const float dist = (label.top - client->camera.position).len3();
+			const float alpha = std::clamp((220.0f - dist) / 100.0f, 0.0f, 1.0f);
+			if (alpha <= 0.0f)
+				continue;
+			bool inFront = false;
+			const ImVec2 at = toScreen(label.top + Vector3(0.0f, 0.3f, 0.0f), inFront);
+			if (!inFront)
+				continue;
+			const CommonGameObject* player = obj->getPlayer();
+			const int c = player ? player->color : 0;
+			// the player's colour lightened a third towards white: dark blue was hard to read on grass
+			const ImU32 pc = playerColors[(c >= 0 && c < 9) ? c : 0];
+			auto lighten = [](ImU32 v) { return (v + (255 - v) / 3) & 255; };
+			const ImU32 colour = lighten(pc & 255) | (lighten((pc >> 8) & 255) << 8) | (lighten((pc >> 16) & 255) << 16) | ((ImU32)(alpha * 255.0f) << 24);
+			const std::string& name = it->second.name;
+			const ImVec2 size = ImGui::CalcTextSize(name.c_str());
+			const ImVec2 p(at.x - size.x * 0.5f, at.y - size.y);
+			for (const ImVec2 d : { ImVec2(-1, 0), ImVec2(1, 0), ImVec2(0, -1), ImVec2(0, 1) })
+				dl->AddText(ImVec2(p.x + d.x, p.y + d.y), IM_COL32(0, 0, 0, (int)(alpha * 200.0f)), name.c_str());
+			dl->AddText(p, colour, name.c_str());
+		}
+	}
+	heroLabels.clear();
+	// the unit under the mouse: "Guillaume le Hardi · Knight · 9 kills" (the setting
+	// "showUnitNamesOnHover")
+	if (g_settings.value("showUnitNamesOnHover", true) && !ImGui::GetIO().WantCaptureMouse) {
+		if (ClientGameObject* obj = nextSelectedObject.get()) {
+			auto it = client->unitInfo.find(obj->id);
+			const bool seen = !fogOfWarOn() || fogOfWar.isSeen(obj->position) || fogOfWar.isFriendly(client, obj);
+			if (it != client->unitInfo.end() && seen) {
+				std::string line = it->second.name.empty() ? obj->blueprint->name : it->second.name + " \xC2\xB7 " + obj->blueprint->name;
+				if (obj->kills > 0)
+					line += " \xC2\xB7 " + std::to_string(obj->kills) + (obj->kills == 1 ? " kill" : " kills");
+				ImGui::SetTooltip("%s", line.c_str());
+			}
+		}
+	}
+}
+
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
 // this player and its allies only, and the timeline what it saw; in a replay, everyone and
 // everything. A timeline entry clicked moves the camera there.
@@ -1526,8 +1617,35 @@ void ClientInterface::drawChronicle()
 			replayView.drawControls(client, replayServer, gfx);
 			replayView.drawLog(client, uiTexCache);
 		}
-		replayView.drawAnnouncements(uiTexCache, gfx);
 	}
+	// wkbai's unit history: the units that became heroes (a replay: all; a game: the player's
+	// own and its allies')
+	if (!client->newHeroes.empty()) {
+		CommonGameObject* me = client->clientPlayer.get();
+		for (uint32_t id : client->newHeroes) {
+			ClientGameObject* obj = client->findObject(id);
+			CommonGameObject* p = obj ? obj->getPlayer() : nullptr;
+			const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied))))
+				replayView.announceHero(client, id, playerColors);
+		}
+		client->newHeroes.clear();
+	}
+	// heroes fallen (a replay: all; a game: the player's own and its allies')
+	if (!chronicle.fallenAnnouncements.empty()) {
+		CommonGameObject* me = client->clientPlayer.get();
+		const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+		for (const auto& [player, text] : chronicle.fallenAnnouncements) {
+			CommonGameObject* p = client->findObject(player);
+			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied)))) {
+				auto it = chronicle.playerColours.find(player);
+				const int c = it != chronicle.playerColours.end() ? it->second : (p ? p->color : 0);
+				replayView.announceFallen(text, playerColors[(c >= 0 && c < 9) ? c : 0], Vector3());
+			}
+		}
+		chronicle.fallenAnnouncements.clear();
+	}
+	replayView.drawAnnouncements(uiTexCache, gfx);
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
 	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
 	auto shownPlayer = [&](uint32_t id) {
@@ -1614,8 +1732,27 @@ void ClientInterface::drawChronicle()
 		ImGui::SetNextWindowPos(ImVec2(680, 110), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
 		if (ImGui::Begin("Timeline (F7)", &timelineOpen)) {
+			// two views of the same events: the chronicle (a historian's paragraphs, oldest first,
+			// like a journal) and the statistics (the numbers, newest first)
+			const bool story = g_settings.value("timelineChronicle", true);
+			if (ImGui::RadioButton("Chronicle", story) && !story) {
+				g_settings["timelineChronicle"] = true;
+				SaveSettings();
+			}
+			ImGui::SameLine();
+			if (ImGui::RadioButton("Statistics", !story) && story) {
+				g_settings["timelineChronicle"] = false;
+				SaveSettings();
+			}
+			ImGui::Separator();
+			ImGui::BeginChild("##entries");
+			ChronicleNarrator::Context storyContext;
+			storyContext.fromSettings(client->environmentSettings, client->environmentActive);
+			storyContext.playerName = nameOf;
 			int shownCount = 0;
-			for (size_t i = chronicle.events.size(); i-- > 0;) {
+			const size_t eventCount = chronicle.events.size();
+			for (size_t k = 0; k < eventCount; k++) {
+				const size_t i = story ? k : eventCount - 1 - k;
 				const GameChronicle::Event& e = chronicle.events[i];
 				if (!all && !e.seen)
 					continue;
@@ -1624,17 +1761,19 @@ void ClientInterface::drawChronicle()
 				if (e.size)
 					text += " (" + std::to_string(e.size) + " fighters, " + clock(e.endTime - e.time) + ")";
 				ImGui::PushID((int)i);
-				if (ImGui::Selectable(text.c_str())) {
-					// the camera looks at it from where it is now, as high up
+				// the camera looks at a place from where it is now, as high up
+				auto lookAt = [&](const Vector3& at) {
 					Camera& cam = client->camera;
 					const Vector3 dir = cam.direction;
 					const float down = std::max(-dir.y, 0.2f);
-					const float reach = (cam.position.y - e.position.y) / down;
-					cam.position.x = e.position.x - dir.x * reach;
-					cam.position.z = e.position.z - dir.z * reach;
-				}
+					const float reach = (cam.position.y - at.y) / down;
+					cam.position.x = at.x - dir.x * reach;
+					cam.position.z = at.z - dir.z * reach;
+				};
+				if (!story && ImGui::Selectable(text.c_str()))
+					lookAt(e.position);
 				// each side: its name, how many it brought, what it lost
-				for (uint32_t p : e.players) {
+				for (uint32_t p : story ? std::set<uint32_t>() : e.players) {
 					std::string side = "    " + nameOf(p);
 					if (auto it = e.strength.find(p); it != e.strength.end())
 						side += ": " + std::to_string(it->second) + " fighting";
@@ -1649,10 +1788,147 @@ void ClientInterface::drawChronicle()
 					}
 					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(p)), "%s", side.c_str());
 				}
+				// wkbai's unit history: each side's top killer here, the heroes who fought here,
+				// the heroes who fell here, who razed the settlement. A name is a link: one's own
+				// unit alive is selected and looked at; another's alive and in sight is looked at;
+				// else the event's place.
+				auto mentionClicked = [&](const GameChronicle::Mention& m) {
+					ClientGameObject* o = m.dead ? nullptr : (ClientGameObject*)client->findObject(m.unit);
+					if (o && (o->flags & ClientGameObject::fTerminated))
+						o = nullptr;
+					const bool own = o && client->clientPlayer && o->getPlayer() == client->clientPlayer;
+					const bool inSight = o && (own || !fogOfWarOn() || fogOfWar.tiles.empty() || fogOfWar.isSeen(o->position) || fogOfWar.isFriendly(client, o));
+					if (own) {
+						selection.clear();
+						selection.insert(o);
+					}
+					lookAt(inSight ? o->position : e.position);
+				};
+				auto mentionLine = [&](int kind, const char* label, const ImVec4& colour) {
+					std::vector<size_t> list;
+					for (size_t j = 0; j < e.mentions.size(); j++)
+						if (e.mentions[j].kind == kind)
+							list.push_back(j);
+					if (list.empty())
+						return;
+					ImGui::Indent(24.0f);
+					ImGui::TextColored(colour, "%s:", label);
+					for (size_t n = 0; n < list.size(); n++) {
+						const GameChronicle::Mention& m = e.mentions[list[n]];
+						const std::string kills = std::to_string(m.kills) + (m.kills == 1 ? " kill" : " kills");
+						std::string before, after;
+						if (kind == GameChronicle::MENTION_TOP_KILLER) {
+							before = nameOf(m.player) + "'s ";
+							after = " (" + std::to_string(m.kills) + ")";
+						}
+						else if (kind == GameChronicle::MENTION_PRESENT) {
+							before = m.dead ? "the late " : "";
+							after = " (" + kills + ")";
+						}
+						else if (kind == GameChronicle::MENTION_FALLEN)
+							after = " (" + kills + ")" + (m.extra.empty() ? std::string() : ", " + m.extra);
+						else if (kind == GameChronicle::MENTION_RAZED_BY) {
+							before = nameOf(m.player) + "'s ";
+							if (m.dead)
+								before = "the late " + before;
+						}
+						if (n + 1 < list.size())
+							after += kind == GameChronicle::MENTION_FALLEN ? ";" : ",";
+						// on this line if it fits, else the next
+						const float width = ImGui::CalcTextSize((before + m.name + after).c_str()).x;
+						ImGui::SameLine();
+						if (ImGui::GetContentRegionAvail().x < width)
+							ImGui::NewLine();
+						if (!before.empty()) {
+							ImGui::TextColored(colour, "%s", before.c_str());
+							ImGui::SameLine(0.0f, 0.0f);
+						}
+						ImGui::PushID((int)list[n]);
+						if (ImGui::TextLink(m.name.empty() ? "?" : m.name.c_str()))
+							mentionClicked(m);
+						if (ImGui::IsItemHovered())
+							ImGui::SetTooltip(m.dead ? "Where it happened" : "Look at it");
+						ImGui::PopID();
+						if (!after.empty()) {
+							ImGui::SameLine(0.0f, 0.0f);
+							ImGui::TextColored(colour, "%s", after.c_str());
+						}
+					}
+					ImGui::Unindent(24.0f);
+				};
+				if (story) {
+					// the date, the title (a link to the place), the paragraph: word by word, wrapped
+					// to the window, the players in their colours, the units named as links
+					if (shownCount > 1)
+						ImGui::Spacing();
+					ImGui::TextDisabled("%s", ChronicleNarrator::dateLine(e.time, storyContext).c_str());
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.93f, 0.82f, 0.55f, 1.0f));
+					if (ImGui::Selectable(e.title().c_str()))
+						lookAt(e.position);
+					ImGui::PopStyleColor();
+					ImGui::Indent(10.0f);
+					bool lineStart = true;
+					int link = 0;
+					for (const ChronicleNarrator::Piece& piece : ChronicleNarrator::narrate(e, storyContext)) {
+						// the words of plain text (each with its space); a name is one piece
+						std::vector<std::string> tokens;
+						if (piece.mention >= 0 || piece.player)
+							tokens.push_back(piece.text);
+						else
+							for (size_t a = 0; a < piece.text.size();) {
+								size_t b = piece.text.find(' ', a);
+								b = b == std::string::npos ? piece.text.size() : piece.text.find_first_not_of(' ', b);
+								b = b == std::string::npos ? piece.text.size() : b;
+								tokens.push_back(piece.text.substr(a, b - a));
+								a = b;
+							}
+						for (const std::string& token : tokens) {
+							if (token.empty())
+								continue;
+							const bool blank = token.find_first_not_of(' ') == std::string::npos;
+							const float width = ImGui::CalcTextSize(token.c_str()).x;
+							if (!lineStart) {
+								ImGui::SameLine(0.0f, 0.0f);
+								if (ImGui::GetContentRegionAvail().x < width) {
+									if (blank)
+										continue; // no space at a line's start
+									ImGui::NewLine();
+								}
+							}
+							else if (blank)
+								continue;
+							lineStart = false;
+							if (piece.mention >= 0 && piece.mention < (int)e.mentions.size()) {
+								ImGui::PushID(link++);
+								if (ImGui::TextLink(token.c_str()))
+									mentionClicked(e.mentions[piece.mention]);
+								if (ImGui::IsItemHovered())
+									ImGui::SetTooltip(e.mentions[piece.mention].dead ? "Where it happened" : "Look at it");
+								ImGui::PopID();
+							}
+							else if (piece.player)
+								ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(piece.player)), "%s", token.c_str());
+							else
+								ImGui::TextUnformatted(token.c_str());
+						}
+					}
+					ImGui::Unindent(10.0f);
+				}
+				else {
+					mentionLine(GameChronicle::MENTION_TOP_KILLER, "Most kills", ImVec4(0.92f, 0.92f, 0.92f, 1.0f));
+					mentionLine(GameChronicle::MENTION_RAZED_BY, "Razed by", ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
+					mentionLine(GameChronicle::MENTION_PRESENT, "Present", ImVec4(0.9f, 0.78f, 0.27f, 1.0f));
+					mentionLine(GameChronicle::MENTION_FALLEN, "Fallen", ImVec4(0.85f, 0.45f, 0.4f, 1.0f));
+				}
 				ImGui::PopID();
 			}
 			if (!shownCount)
 				ImGui::TextUnformatted(all ? "Nothing has happened yet." : "Nothing seen yet.");
+			// the chronicle follows its newest entry while one reads at its end
+			if (story && shownCount != timelineShownCount && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 40.0f)
+				ImGui::SetScrollHereY(1.0f);
+			timelineShownCount = shownCount;
+			ImGui::EndChild();
 		}
 		ImGui::End();
 	}
@@ -2203,6 +2479,12 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	if (!onCam)
 		return;
+	// wkbai's unit history: a hero on screen gets its name over its head
+	if (obj->blueprint->bpClass == GAMEOBJCLASS_CHARACTER && !remembered && !client->unitInfo.empty()) {
+		auto hit = client->unitInfo.find(obj->id);
+		if (hit != client->unitInfo.end() && (hit->second.flags & 9) == 1 && !(obj->flags & ClientGameObject::fTerminated))
+			heroLabels.push_back({ obj->id, sphereCenter + Vector3(0.0f, sphereRadius * 0.7f, 0.0f) });
+	}
 
 	obj->sceneEntity.model = model;
 	obj->sceneEntity.transform = transformMatrix;
@@ -3458,6 +3740,62 @@ void ClientInterface::iter()
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
 			});
+		// wkbai's unit history (Client::unitInfo): the name shown ("" none), the birth name, a hero,
+		// tracked at all, the age as the panel shows it, the kills and the buildings destroyed,
+		// the kills to become a hero
+		lua.set_function("getUnitName", [this](uint32_t id) -> std::string {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() ? it->second.name : std::string(); });
+		lua.set_function("getUnitBirthName", [this](uint32_t id) -> std::string {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() ? it->second.birthName : std::string(); });
+		lua.set_function("isUnitHero", [this](uint32_t id) {
+			auto it = client->unitInfo.find(id);
+			return it != client->unitInfo.end() && (it->second.flags & 1) != 0; });
+		lua.set_function("isUnitTracked", [this](uint32_t id) { return client->unitInfo.count(id) != 0; });
+		lua.set_function("getUnitAge", [this](uint32_t id) { return UnitAgeText(client, id); });
+		lua.set_function("getUnitKills", [this](uint32_t id) {
+			ClientGameObject* obj = client->findObject(id);
+			return obj ? obj->kills : 0; });
+		lua.set_function("getUnitBuildingsDestroyed", [this](uint32_t id) {
+			ClientGameObject* obj = client->findObject(id);
+			return obj ? obj->buildingsDestroyed : 0; });
+		lua.set_function("getHeroThreshold", [this]() { return client->heroThreshold; });
+		// a formation (or a member's formation): "Formation: 212 kills · heroes: Sigurd the
+		// Valiant" ("" for none)
+		lua.set_function("getFormationSummary", [this](uint32_t id) -> std::string {
+			ClientGameObject* obj = client->findObject(id);
+			if (obj && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+				obj = obj->getParent();
+			if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+				return std::string();
+			std::string heroes;
+			int count = 0;
+			for (const auto& [type, members] : obj->children)
+				for (CommonGameObject* m : members)
+					if (auto it = client->unitInfo.find(m->id); it != client->unitInfo.end() && (it->second.flags & 1)) {
+						heroes += (count++ ? ", " : "") + it->second.name;
+					}
+			std::string text = "Formation: " + std::to_string(obj->kills) + (obj->kills == 1 ? " kill" : " kills");
+			if (count)
+				text += std::string(count == 1 ? " \xC2\xB7 hero: " : " \xC2\xB7 heroes: ") + heroes;
+			return text;
+		});
+		// several selected: the one with the most kills ("Best: Sigurd the Valiant, 64 kills"; ""
+		// with one selected or none with a kill)
+		lua.set_function("getSelectionBest", [this]() -> std::string {
+			if (selection.size() < 2)
+				return std::string();
+			ClientGameObject* best = nullptr;
+			for (const auto& ref : selection)
+				if (ClientGameObject* o = ref.get(); o && o->kills > 0 && (!best || o->kills > best->kills))
+					best = o;
+			if (!best)
+				return std::string();
+			auto it = client->unitInfo.find(best->id);
+			const std::string name = it != client->unitInfo.end() && !it->second.name.empty() ? it->second.name : best->blueprint->name;
+			return "Best: " + name + ", " + std::to_string(best->kills) + (best->kills == 1 ? " kill" : " kills");
+		});
 		// part of an image: its rectangle u0,v0 - u1,v1 (0..1) drawn into x, y, width, height
 		lua.set_function("drawImagePart",
 			[](int x, int y, int width, int height, const std::string& path, float u0, float v0, float u1, float v1) {
@@ -3782,6 +4120,8 @@ void ClientInterface::iter()
 					lua["buildTab"] = tab;
 				}
 			}
+			// wkbai's unit history: the heroes' names, under the interface's panels
+			drawUnitHistoryOverlay();
 			lua["CCUI_PerFrame"]();
 		}
 		catch (const sol::error& err) {
@@ -3952,7 +4292,9 @@ void ClientInterface::iter()
 			auto search = [&](ClientGameObject* obj, auto& self) -> void {
 				for (const auto& [type, children] : obj->children)
 					for (CommonGameObject* c : children) {
-						if (!found && c->blueprint->name == name)
+						// ("hoverHero": true: a hero of that type, wkbai's unit history)
+						if (!found && c->blueprint->name == name && (!bench.value("hoverHero", false)
+							|| (client->unitInfo.count(c->id) && (client->unitInfo[c->id].flags & 9) == 1)))
 							found = c->dyncast<ClientGameObject>();
 						self(c->dyncast<ClientGameObject>(), self);
 					}

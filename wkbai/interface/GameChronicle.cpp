@@ -17,6 +17,7 @@ const char* GameChronicle::kindName(Kind kind)
 	case Kind::Raid: return "Raid";
 	case Kind::Founded: return "Founded";
 	case Kind::Destroyed: return "Destroyed";
+	case Kind::Fallen: return "Fallen";
 	}
 	return "?";
 }
@@ -30,8 +31,233 @@ std::string GameChronicle::Event::title() const
 	case Kind::Raid: return "Raid on " + at;
 	case Kind::Founded: return what + " founded at " + at;
 	case Kind::Destroyed: return what + " destroyed at " + at;
+	case Kind::Fallen: return "The fall of " + what + " at " + at;
 	}
 	return at;
+}
+
+namespace {
+std::string Quoted(const std::string& s)
+{
+	std::string out = "\"";
+	for (char c : s)
+		if (c != '"' && c != '\n' && c != '\r')
+			out += c;
+	return out + "\"";
+}
+
+// the line's words, "quoted" ones whole
+std::vector<std::string> SplitWords(const std::string& line)
+{
+	std::vector<std::string> words;
+	size_t i = 0;
+	while (i < line.size()) {
+		while (i < line.size() && line[i] == ' ')
+			i++;
+		if (i >= line.size())
+			break;
+		if (line[i] == '"') {
+			const size_t end = line.find('"', i + 1);
+			words.push_back(line.substr(i + 1, (end == std::string::npos ? line.size() : end) - i - 1));
+			i = end == std::string::npos ? line.size() : end + 1;
+		}
+		else {
+			size_t end = line.find(' ', i);
+			if (end == std::string::npos)
+				end = line.size();
+			words.push_back(line.substr(i, end - i));
+			i = end;
+		}
+	}
+	return words;
+}
+
+std::string Num(float f)
+{
+	char b[32];
+	snprintf(b, sizeof(b), "%.9g", f);
+	return b;
+}
+}
+
+std::string GameChronicle::Event::toText() const
+{
+	std::string t = "EVENT " + std::to_string(id) + " " + std::to_string((int)kind) + " " + Num(time) + " " + Num(endTime) + " "
+		+ Num(position.x) + " " + Num(position.y) + " " + Num(position.z) + " " + Num(lastPosition.x) + " " + Num(lastPosition.y) + " "
+		+ Num(lastPosition.z) + " " + std::to_string(size) + " " + Quoted(what) + " " + Quoted(place);
+	t += " P " + std::to_string(players.size());
+	for (uint32_t p : players) {
+		auto it = strength.find(p);
+		t += " " + std::to_string(p) + " " + std::to_string(it != strength.end() ? it->second : -1);
+	}
+	size_t lostCount = 0;
+	for (const auto& [p, types] : lost)
+		lostCount += types.size();
+	t += " L " + std::to_string(lostCount);
+	for (const auto& [p, types] : lost)
+		for (const auto& [type, n] : types)
+			t += " " + std::to_string(p) + " " + Quoted(type) + " " + std::to_string(n);
+	t += " M " + std::to_string(mentions.size());
+	for (const Mention& m : mentions)
+		t += " " + std::to_string(m.kind) + " " + std::to_string(m.unit) + " " + std::to_string(m.player) + " " + std::to_string(m.kills) + " "
+			+ (m.dead ? "1" : "0") + " " + Quoted(m.name) + " " + Quoted(m.extra);
+	if (weather >= 0)
+		t += " W " + std::to_string(weather) + " " + Num(temperature) + " " + Num(snowCover);
+	return t;
+}
+
+bool GameChronicle::Event::fromText(const std::string& text)
+{
+	const std::vector<std::string> w = SplitWords(text);
+	if (w.size() < 14 || w[0] != "EVENT")
+		return false;
+	size_t i = 1;
+	auto next = [&]() -> const std::string& { static const std::string none; return i < w.size() ? w[i++] : none; };
+	auto u = [&]() { return (uint32_t)strtoul(next().c_str(), nullptr, 10); };
+	auto f = [&]() { return (float)atof(next().c_str()); };
+	auto n = [&]() { return atoi(next().c_str()); };
+	id = u();
+	kind = (Kind)std::clamp(n(), 0, (int)Kind::Fallen);
+	time = f(); endTime = f();
+	position.x = f(); position.y = f(); position.z = f();
+	lastPosition.x = f(); lastPosition.y = f(); lastPosition.z = f();
+	size = n();
+	what = next();
+	place = next();
+	players.clear(); strength.clear(); lost.clear(); mentions.clear();
+	if (next() != "P")
+		return false;
+	for (int k = n(); k > 0 && i < w.size(); k--) {
+		const uint32_t p = u();
+		const int s = n();
+		players.insert(p);
+		if (s >= 0)
+			strength[p] = s;
+	}
+	if (next() != "L")
+		return false;
+	for (int k = n(); k > 0 && i < w.size(); k--) {
+		const uint32_t p = u();
+		const std::string type = next();
+		lost[p][type] = n();
+	}
+	if (next() != "M")
+		return false;
+	for (int k = n(); k > 0 && i < w.size(); k--) {
+		Mention m;
+		m.kind = n(); m.unit = u(); m.player = u(); m.kills = n(); m.dead = n() != 0;
+		m.name = next(); m.extra = next();
+		mentions.push_back(std::move(m));
+	}
+	// (the weather: from 2026-11-10 on)
+	weather = -1;
+	if (i < w.size() && next() == "W") {
+		weather = n();
+		temperature = f();
+		snowCover = f();
+	}
+	return true;
+}
+
+std::string GameChronicle::sampleText(uint32_t player, const Sample& s) const
+{
+	auto nit = playerNames.find(player);
+	auto cit = playerColours.find(player);
+	return "SAMPLE " + std::to_string(player) + " " + Num(s.time) + " " + Num(s.food) + " " + Num(s.wood) + " " + Num(s.gold) + " "
+		+ std::to_string(s.peasants) + " " + std::to_string(s.soldiers) + " " + std::to_string(s.buildings) + " " + std::to_string(s.unitsLost)
+		+ " " + std::to_string(s.buildingsLost) + " " + std::to_string(cit != playerColours.end() ? cit->second : 0) + " "
+		+ Quoted(nit != playerNames.end() ? nit->second : std::string());
+}
+
+bool GameChronicle::sampleFromText(const std::string& text)
+{
+	const std::vector<std::string> w = SplitWords(text);
+	if (w.size() < 13 || w[0] != "SAMPLE")
+		return false;
+	const uint32_t player = (uint32_t)strtoul(w[1].c_str(), nullptr, 10);
+	Sample s{ (float)atof(w[2].c_str()), (float)atof(w[3].c_str()), (float)atof(w[4].c_str()), (float)atof(w[5].c_str()),
+		atoi(w[6].c_str()), atoi(w[7].c_str()), atoi(w[8].c_str()), atoi(w[9].c_str()), atoi(w[10].c_str()) };
+	samples[player].push_back(s);
+	playerColours[player] = atoi(w[11].c_str());
+	playerNames[player] = w[12];
+	return true;
+}
+
+std::string GameChronicle::stateText() const
+{
+	std::string t = "STATE " + std::to_string(nextId) + " " + Num(nextSample) + " " + Num(nextScan) + " " + (first ? "1" : "0") + " " + std::to_string(unitsLost.size());
+	for (const auto& [p, n] : unitsLost)
+		t += " " + std::to_string(p) + " " + std::to_string(n);
+	t += " " + std::to_string(buildingsLost.size());
+	for (const auto& [p, n] : buildingsLost)
+		t += " " + std::to_string(p) + " " + std::to_string(n);
+	return t;
+}
+
+bool GameChronicle::stateFromText(const std::string& text)
+{
+	const std::vector<std::string> w = SplitWords(text);
+	if (w.size() < 6 || w[0] != "STATE")
+		return false;
+	nextId = (uint32_t)strtoul(w[1].c_str(), nullptr, 10);
+	nextSample = (float)atof(w[2].c_str());
+	nextScan = (float)atof(w[3].c_str());
+	first = true; // what was there at the save isn't known: the first scan only notes it
+	size_t i = 5;
+	int count = atoi(w[i++].c_str());
+	for (; count > 0 && i + 1 < w.size(); count--, i += 2)
+		unitsLost[(uint32_t)strtoul(w[i].c_str(), nullptr, 10)] = atoi(w[i + 1].c_str());
+	if (i < w.size()) {
+		count = atoi(w[i++].c_str());
+		for (; count > 0 && i + 1 < w.size(); count--, i += 2)
+			buildingsLost[(uint32_t)strtoul(w[i].c_str(), nullptr, 10)] = atoi(w[i + 1].c_str());
+	}
+	return true;
+}
+
+void GameChronicle::receive(Client* client, const FogOfWar* fog, const std::string& line)
+{
+	const uint32_t ownId = client->clientPlayer ? client->clientPlayer->id : 0;
+	if (line.compare(0, 5, "RESET") == 0) {
+		events.clear();
+		samples.clear();
+		playerNames.clear();
+		playerColours.clear();
+		serverDriven = true;
+		return;
+	}
+	if (line.compare(0, 6, "SAMPLE") == 0) {
+		sampleFromText(line);
+		return;
+	}
+	Event e;
+	if (!e.fromText(line))
+		return;
+	// which this client's player saw: its own in it, or its place in sight (its own fog of war)
+	auto seenNow = [&](const Event& ev) {
+		if (!fog || ev.players.count(ownId))
+			return true;
+		return fog->isSeen(ev.fight() ? ev.lastPosition : ev.position);
+	};
+	auto it = std::find_if(events.begin(), events.end(), [&](const Event& o) { return o.id == e.id; });
+	int fallenBefore = 0;
+	if (it != events.end()) {
+		for (const Mention& m : it->mentions)
+			fallenBefore += m.kind == MENTION_FALLEN;
+		e.seen = it->seen || seenNow(e);
+		*it = std::move(e);
+	}
+	else {
+		e.seen = seenNow(e);
+		events.push_back(std::move(e));
+		it = events.end() - 1;
+	}
+	// heroes fallen since: announced
+	int fallen = 0;
+	for (const Mention& m : it->mentions)
+		if (m.kind == MENTION_FALLEN && ++fallen > fallenBefore)
+			fallenAnnouncements.push_back({ m.player, m.name + (m.kills ? " (" + std::to_string(m.kills) + " kills)" : std::string()) + " has fallen"
+				+ (it->place.empty() ? std::string() : " at " + it->place) + (m.extra.empty() ? std::string() : ", " + m.extra) });
 }
 
 void GameChronicle::update(Client* client, const FogOfWar* fog)
@@ -42,10 +268,16 @@ void GameChronicle::update(Client* client, const FogOfWar* fog)
 	// a game loaded again or a new one (another level, or the clock a minute back): start over.
 	// Not on a few seconds back: a replay's clock runs ahead of a slow simulation and the time
 	// sync puts it back, which wiped the timeline.
-	if (client->getLevel() != level || now + 60.0f < nextSample - 10.0f) {
+	if (client->getLevel() != level || (!serverDriven && now + 60.0f < nextSample - 10.0f)) {
 		*this = GameChronicle();
 		level = client->getLevel();
 	}
+	// the server's events and samples (NETCLIMSG_CHRONICLE)
+	for (const std::string& line : client->chronicleIn)
+		receive(client, fog, line);
+	client->chronicleIn.clear();
+	if (serverDriven)
+		return;
 	// the host's regions (every client the same names); without them (a host that sends none)
 	// the client's own, once the game has run a while
 	if (client->hostRegionsSerial != hostRegionsSerial) {
@@ -58,22 +290,31 @@ void GameChronicle::update(Client* client, const FogOfWar* fog)
 	}
 	if (!regions.ready() && now > 5.0f)
 		regions.build(client);
+	step(client, client->clientPlayer ? client->clientPlayer->id : 0, fog, now);
+}
+
+bool GameChronicle::step(CommonGameState* state, uint32_t ownId, const FogOfWar* fog, float now)
+{
+	bool scanned = false;
+	touched.clear();
 	if (now >= nextScan) {
 		nextScan = now + 5.0f;
-		scan(client, fog, now);
+		scan(state, ownId, fog, now);
+		scanned = true;
 	}
 	if (now >= nextSample) {
 		nextSample = now + 10.0f;
-		sample(client, now);
+		sample(state, now);
 	}
+	return scanned;
 }
 
-void GameChronicle::sample(Client* client, float now)
+void GameChronicle::sample(CommonGameState* state, float now)
 {
-	const GameSet& gs = *client->gameSet;
+	const GameSet& gs = *state->gameSet;
 	const int peasantItem = gs.items.names.getIndex("I Am A Peasant");
 	const int militaryItem = gs.items.names.getIndex("I'm A Military Unit");
-	for (const auto& [type, children] : client->getLevel()->children)
+	for (const auto& [type, children] : state->getLevel()->children)
 		for (CommonGameObject* p : children) {
 			if (p->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || p->blueprint->name == "Neutral Player")
 				continue;
@@ -104,21 +345,20 @@ void GameChronicle::sample(Client* client, float now)
 			std::string general = p->blueprint->name;
 			if (general.size() > 10 && general.compare(general.size() - 10, 10, " Kingmaker") == 0)
 				general.resize(general.size() - 10);
-			if (name.empty() || (name.rfind("Player ", 0) == 0 && general != "Human Player"))
+			// ("player 1" too: some levels name them in lower case)
+			if (name.empty() || (_strnicmp(name.c_str(), "Player ", 7) == 0 && general != "Human Player"))
 				name = general;
 			playerNames[p->id] = name;
 			playerColours[p->id] = p->color;
 		}
 }
 
-void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
+void GameChronicle::scan(CommonGameState* state, uint32_t ownId, const FogOfWar* fog, float now)
 {
-	const GameSet& gs = *client->gameSet;
+	const GameSet& gs = *state->gameSet;
 	const int peasantItem = gs.items.names.getIndex("I Am A Peasant");
 	const int militaryItem = gs.items.names.getIndex("I'm A Military Unit");
 	const int attackCategory = gs.orderCategories.names.getIndex("Order Attack");
-	CommonGameObject* own = client->clientPlayer.get();
-	const uint32_t ownId = own ? own->id : 0;
 	auto placeAt = [&](const Vector3& pos) {
 		const MapRegions::Region* r = regions.at(pos);
 		return r ? r->name : std::string();
@@ -157,7 +397,7 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 						else if (peasantItem >= 0 && o->getItem(peasantItem) > 0.0f)
 							targets.push_back({ o->position, owner });
 						else if (militaryItem >= 0 && o->getItem(militaryItem) > 0.0f && attackCategory >= 0) {
-							const int order = ((ClientGameObject*)o)->reportedCurrentOrder;
+							const int order = o->reportedCurrentOrder;
 							if (order >= 0 && order < (int)gs.orders.size() && gs.orders[order].category == attackCategory)
 								fighters.push_back({ o->position, owner });
 						}
@@ -166,7 +406,7 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 				self(o, owner, self);
 			}
 	};
-	walk(client->getLevel(), 0, walk);
+	walk(state->getLevel(), 0, walk);
 
 	// losses: what was there and is gone (or another player's now); settlements destroyed, and
 	// founded (a new foundation, or a settlement where there was none)
@@ -185,6 +425,7 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 					&& (e.lastPosition - k.position).sqlen2xz() < 100.0f * 100.0f) {
 					e.lost[k.player][k.name]++;
 					e.players.insert(k.player);
+					touched.push_back(&e - events.data());
 					break;
 				}
 		if (k.settlement && !first) {
@@ -194,6 +435,8 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 			if (!finished) {
 				Event e{ Kind::Destroyed, now, now, k.position, { k.player }, 0, k.name, placeAt(k.position) };
 				e.seen = seenAt(k.position, e.players);
+				e.id = nextId++;
+				touched.push_back(events.size());
 				events.push_back(std::move(e));
 			}
 		}
@@ -208,6 +451,8 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 				continue;
 			Event e{ Kind::Founded, now, now, c.position, { c.player }, 0, c.name, placeAt(c.position) };
 			e.seen = seenAt(c.position, e.players);
+			e.id = nextId++;
+			touched.push_back(events.size());
 			events.push_back(std::move(e));
 		}
 	known = std::move(current);
@@ -285,12 +530,15 @@ void GameChronicle::scan(Client* client, const FogOfWar* fog, float now)
 			if (kind == Kind::Siege || (kind == Kind::Battle && going->kind == Kind::Raid))
 				going->kind = kind;
 			going->seen = going->seen || seenAt(centre, going->players);
+			touched.push_back(going - events.data());
 		}
 		else {
 			Event e{ kind, now, now, centre, involved, size, std::string(), place };
 			e.lastPosition = centre;
 			e.strength = strength;
 			e.seen = seenAt(centre, e.players);
+			e.id = nextId++;
+			touched.push_back(events.size());
 			events.push_back(std::move(e));
 		}
 	}

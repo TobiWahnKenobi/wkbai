@@ -12,6 +12,7 @@
 
 struct Client;
 struct FogOfWar;
+struct CommonGameState;
 
 // Kept by the client interface from the objects the client has (all of them: the fog of war is
 // the client's own), so it works the same in single player, for a multiplayer guest and in a
@@ -31,7 +32,20 @@ struct GameChronicle {
 	std::map<uint32_t, std::string> playerNames;
 	std::map<uint32_t, int> playerColours;
 
-	enum class Kind { Battle, Siege, Raid, Founded, Destroyed };
+	// Fallen: a hero slain outside any fight (wkbai's unit history)
+	enum class Kind { Battle, Siege, Raid, Founded, Destroyed, Fallen };
+	// what the server names in an event (wkbai's unit history): each side's unit with the most
+	// kills there, the heroes who fought there, the heroes who fell there; a settlement destroyed:
+	// the units who razed buildings there
+	enum MentionKind { MENTION_TOP_KILLER = 0, MENTION_PRESENT = 1, MENTION_FALLEN = 2, MENTION_RAZED_BY = 3 };
+	struct Mention {
+		int kind = 0;
+		uint32_t unit = 0, player = 0;
+		int kills = 0; // in the event (top killer); in all (present, fallen)
+		bool dead = false; // since (present: "the late ...")
+		std::string name; // as named: "Sigurd the Valiant", "Saint Jane's Trebuchet"
+		std::string extra; // fallen: "slain by Guillaume le Hardi", "froze to death", "fell"
+	};
 	struct Event {
 		Kind kind;
 		float time, endTime;
@@ -46,16 +60,44 @@ struct GameChronicle {
 		std::map<uint32_t, int> strength;
 		std::map<uint32_t, std::map<std::string, int>> lost;
 		Vector3 lastPosition; // a fight: where it was at the last scan (position: where it began)
+		uint32_t id = 0; // its number (from 1), the same on the server and the clients
+		std::vector<Mention> mentions; // from the server
+		// the weather when it began (the server's environment; -1: unknown, none): EnvWeather,
+		// the temperature in degrees, the snow on the ground 0..1
+		int weather = -1;
+		float temperature = 0.0f, snowCover = 0.0f;
 		std::string title() const; // "Battle of Ergor", "Village founded at Fangorn"
+		bool fight() const { return kind == Kind::Battle || kind == Kind::Siege || kind == Kind::Raid; }
+		// one line of text (the network, the save game) and back
+		std::string toText() const;
+		bool fromText(const std::string& text);
 	};
 	MapRegions regions;
 	int hostRegionsSerial = 0; // the host's regions taken (Client::hostRegionsSerial)
 	std::vector<Event> events;
 
 	// once a frame; the scans themselves run every few game seconds. fog: this client's, or
-	// nullptr when everything is seen (no fog of war, a replay)
+	// nullptr when everything is seen (no fog of war, a replay). With a server that keeps the
+	// chronicle (wkbai's unit history: NETCLIMSG_CHRONICLE), the client takes its events and
+	// samples instead, and only works out which events it saw.
 	void update(Client* client, const FogOfWar* fog);
 	static const char* kindName(Kind kind);
+
+	// the scans and samples on their clocks, for any game state (the server's: ServerChronicle);
+	// true when it scanned now (the events it made or went on with: touched)
+	bool step(CommonGameState* state, uint32_t ownId, const FogOfWar* fog, float now);
+	std::vector<size_t> touched;
+	uint32_t nextId = 1;
+	// the server's: kept by it, the client only receives (NETCLIMSG_CHRONICLE)
+	bool serverDriven = false;
+	// a sample as one line of text and back ("SAMPLE <player> <time> ... <colour> "<name>"")
+	std::string sampleText(uint32_t player, const Sample& s) const;
+	bool sampleFromText(const std::string& text);
+	// the clock, the losses so far (the save game's side file)
+	std::string stateText() const;
+	bool stateFromText(const std::string& text);
+	// new heroes fallen (a client: announced), their texts
+	std::vector<std::pair<uint32_t, std::string>> fallenAnnouncements;
 
 private:
 	float nextSample = 0.0f, nextScan = 0.0f;
@@ -64,6 +106,8 @@ private:
 	struct Known { uint32_t player; bool building, settlement, foundation; Vector3 position; std::string name; bool fighter = false; };
 	std::map<uint32_t, Known> known; // the objects at the last scan
 	std::map<uint32_t, int> unitsLost, buildingsLost;
-	void scan(Client* client, const FogOfWar* fog, float now);
-	void sample(Client* client, float now);
+	void scan(CommonGameState* state, uint32_t ownId, const FogOfWar* fog, float now);
+	void sample(CommonGameState* state, float now);
+	// a line from the server (EVENT, SAMPLE, RESET)
+	void receive(Client* client, const FogOfWar* fog, const std::string& line);
 };

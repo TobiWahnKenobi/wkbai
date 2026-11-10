@@ -82,6 +82,34 @@ function drawSelectionInformation(obj)
 		local text = whole(hp) .. "/" .. whole(cap)
 		drawText(px + 129 - getTextWidth(text) / 2, py + 105, text)
 	end
+
+	-- wkbai's unit history: the name over the window (a hero's in gold, its birth name under
+	-- it), the age and the kills under the hit points; a formation's tally and heroes, and the
+	-- best of several selected, over the panel
+	local cx = px + 129
+	local name = getUnitName(obj)
+	if name ~= "" then
+		if isUnitHero(obj) then
+			drawTextColor(cx - getTextWidth(name) / 2, py + 52, name, 0xFF46C8E6)
+			local born = "born " .. getUnitBirthName(obj)
+			drawTextColor(cx - getTextWidth(born) / 2, py + 68, born, 0xFFC8C8C8)
+		else
+			drawText(cx - getTextWidth(name) / 2, py + 62, name)
+		end
+	end
+	local kills, razed = getUnitKills(obj), getUnitBuildingsDestroyed(obj)
+	local line = getUnitAge(obj)
+	if kills > 0 or razed > 0 then
+		local k = kills .. (kills == 1 and " kill" or " kills")
+		if razed > 0 then k = k .. " +" .. razed end
+		if line ~= "" then line = line .. ", " .. k else line = k end
+	end
+	if line ~= "" then drawText(cx - getTextWidth(line) / 2, py + 121, line) end
+	local over = getFormationSummary(obj)
+	local best = getSelectionBest()
+	if best ~= "" then over = (over ~= "" and (over .. "    ") or "") .. best end
+	if over ~= "" then drawText(px + 12, py - 20, over) end
+
 	if not isCharacter then return end
 
 	-- the rows on the left: an icon and its value

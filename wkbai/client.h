@@ -77,6 +77,17 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
 	// of war (everything on the map shown); off until the server says
 	bool clearFogOfWar = false;
+	// wkbai's unit history (NETCLIMSG_UNIT_HISTORY): the tracked units' names, births, kinds
+	// (UnitHistory::Kind) and flags (UnitHistory::Flags), by id; the kills to become a hero; the
+	// heroes made since the interface last looked (their ids)
+	struct UnitInfo { std::string name, birthName; float birth = 0.0f; uint8_t kind = 0, flags = 0; };
+	std::unordered_map<uint32_t, UnitInfo> unitInfo;
+	int heroThreshold = 0;
+	std::vector<uint32_t> newHeroes;
+	// the server's timeline lines (NETCLIMSG_CHRONICLE), for the interface's GameChronicle, and
+	// the parts of the one arriving
+	std::vector<std::string> chronicleIn;
+	std::string chronicleParts;
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;

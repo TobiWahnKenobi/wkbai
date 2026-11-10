@@ -1,0 +1,268 @@
+# wkbai unit history: French names (Old French and Norman). Written by hand for wkbai,
+# GPL-3 like the rest of redata. The sections are explained in english.txt.
+
+[male]
+Guillaume
+Thibaut
+Enguerrand
+Baudouin
+Hugues
+Raoul
+Gautier
+Geoffroi
+Godefroi
+Robert
+Richard
+Roger
+Renaud
+Raymond
+Bertrand
+Bernard
+Aymeri
+Amaury
+Arnaud
+Anselme
+Aubry
+Bérenger
+Charles
+Clément
+Drogon
+Étienne
+Eudes
+Eustache
+Foulques
+Gaucher
+Gérard
+Gilbert
+Girard
+Gui
+Guérin
+Hamon
+Henri
+Herbert
+Hervé
+Hélie
+Josselin
+Jourdain
+Lambert
+Landry
+Louis
+Mathieu
+Milon
+Nicolas
+Odon
+Olivier
+Onfroi
+Osmond
+Philippe
+Pierre
+Pons
+Raimbaud
+Rainier
+Savaric
+Simon
+Thierry
+Thomas
+Yves
+Yvain
+Achard
+Adhémar
+Alard
+Amédée
+Ancel
+Arnoul
+Aubert
+Barthélemy
+Bouchard
+Conon
+Dreux
+Ebles
+Erard
+Ernaut
+Garin
+Gaston
+Gervais
+Gilles
+Gosselin
+Hardouin
+Hubert
+Isembard
+Lancelin
+Manassès
+Martin
+Mathurin
+Nivelon
+Turold
+Waleran
+
+[female]
+Aliénor
+Mahaut
+Adèle
+Adélaïde
+Agnès
+Alix
+Aude
+Aveline
+Béatrice
+Berthe
+Blanche
+Brunissende
+Cécile
+Clémence
+Constance
+Ermengarde
+Ermessende
+Esclarmonde
+Emma
+Ermentrude
+Gisèle
+Guillemette
+Héloïse
+Helvide
+Hersende
+Isabeau
+Isabelle
+Jeanne
+Julienne
+Laure
+Marguerite
+Marie
+Mathilde
+Mélisende
+Odile
+Pernelle
+Pétronille
+Philippa
+Richilde
+Sibylle
+Yolande
+Ide
+Alpais
+Amicie
+Aénor
+Bertrade
+Douce
+Fressende
+Gerberge
+Hodierne
+Jacquette
+Marsilie
+Oda
+Perrine
+Rixende
+Sancie
+Tiphaine
+
+[byname-male]
+fils de {father}
+
+[byname-female]
+fille de {father}
+
+[byname]
+de Rouen
+de Caen
+de Bayeux
+de Lisieux
+d'Évreux
+de Chartres
+de Blois
+de Troyes
+de Reims
+de Laon
+de Senlis
+de Beauvais
+d'Amiens
+de Poitiers
+de Tours
+d'Angers
+du Mans
+de Bourges
+de Nevers
+d'Auxerre
+de Mortagne
+de Montfort
+de Coucy
+de Clermont
+de Beaumont
+du Bois
+de la Roche
+de la Mare
+du Pont
+de Vire
+d'Avranches
+de Coutances
+de Falaise
+Coeur-de-Fer
+Brise-Lance
+Tête-Dure
+Fort-Bras
+Tranchefer
+Malherbe
+Bonnefoy
+Fierabras
+Pied-Léger
+
+[epithet]
+le Vaillant|la Vaillante
+le Hardi|la Hardie
+le Brave|la Brave
+le Preux|la Preuse
+Sans-Peur
+le Fort|la Forte
+le Fier|la Fière
+l'Intrépide
+le Loyal|la Loyale
+le Juste|la Juste
+le Sage|la Sage
+le Redoutable|la Redoutable
+l'Indomptable
+le Victorieux|la Victorieuse
+le Valeureux|la Valeureuse
+le Farouche|la Farouche
+le Rouge|la Rouge
+le Lion|la Lionne
+le Loup|la Louve
+Fer-de-Lance
+Coeur-Hardi
+Brise-Écu
+l'Implacable
+le Terrible|la Terrible
+le Ferme|la Ferme
+le Fidèle|la Fidèle
+le Glorieux|la Glorieuse
+le Téméraire|la Téméraire
+Main-de-Fer
+l'Invaincu|l'Invaincue
+le Résolu|la Résolue
+
+[ship]
+Sainte-Marie
+Saint-Nicolas
+Hirondelle
+Faucon
+Mouette
+Licorne
+Belle-Étoile
+Bonne-Aventure
+Saint-Michel
+Notre-Dame
+Sainte-Catherine
+Dauphine
+Fleur-de-Mer
+Vent-Vif
+Saint-Pierre
+Colombe
+Cygne
+Épervier
+Sirène
+Espérance
+Fortune
+Cormoran
+Grâce-de-Dieu
+Saint-Georges
+Lion-d'Or
+Étoile-du-Nord
+Sainte-Anne
+Saint-Malo

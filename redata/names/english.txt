@@ -1,0 +1,293 @@
+# wkbai unit history: English names (Old and Middle English, with the Norman names the
+# English took up). Written by hand for wkbai, GPL-3 like the rest of redata.
+# Sections: [male] [female] given names; [byname] for both, [byname-male], [byname-female]
+# ({father} is a male given name of this list); [epithet] for heroes ("male|female" where
+# the forms differ); [ship] ships' names.
+
+[male]
+Aelfric
+Aelfred
+Aelfwine
+Aethelbert
+Aethelred
+Aethelstan
+Aethelwulf
+Aldred
+Aldwin
+Alric
+Alwin
+Aylwin
+Beorn
+Beornoth
+Beorhtric
+Brihtnoth
+Byrhtferth
+Ceolwulf
+Cenric
+Cuthbert
+Cuthred
+Cynric
+Dunstan
+Eadgar
+Eadmund
+Eadred
+Eadric
+Eadwig
+Eadwine
+Ealdred
+Ealdwulf
+Eardwulf
+Ecgbert
+Ecgfrith
+Edgar
+Edmund
+Edric
+Edwin
+Elfric
+Godric
+Godwin
+Guthlac
+Harding
+Hereward
+Leofric
+Leofwine
+Leofstan
+Oswald
+Osmund
+Osric
+Oswine
+Osbert
+Ordgar
+Ordric
+Raedwald
+Sigeberht
+Sigeric
+Swithun
+Wigmund
+Wigstan
+Wilfrid
+Wulfgar
+Wulfhere
+Wulfnoth
+Wulfric
+Wulfsige
+Wulfstan
+Wystan
+Adam
+Alan
+Baldwin
+Bartholomew
+Brian
+Geoffrey
+Gilbert
+Hamo
+Henry
+Herbert
+Hubert
+Hugh
+Humphrey
+Ivo
+Jocelin
+John
+Lambert
+Martin
+Nicholas
+Osbern
+Payne
+Piers
+Ralph
+Ranulf
+Reginald
+Richard
+Robert
+Roger
+Simon
+Stephen
+Thomas
+Walter
+Warin
+William
+
+[female]
+Aelfgifu
+Aelfflaed
+Aelfthryth
+Aethelflaed
+Aethelburh
+Aethelthryth
+Alditha
+Cyneburh
+Cynethryth
+Eadburh
+Eadgyth
+Eadgifu
+Ealdgyth
+Ealhswith
+Edith
+Elfleda
+Godgifu
+Gytha
+Hild
+Hilda
+Leofrun
+Leofgifu
+Mildred
+Mildthryth
+Osthryth
+Seaxburh
+Wulfrun
+Wulfwynn
+Wynflaed
+Agnes
+Alice
+Amice
+Annora
+Avice
+Beatrice
+Cecily
+Christina
+Constance
+Denise
+Eleanor
+Ellen
+Emma
+Eve
+Hawise
+Idonea
+Isabel
+Joan
+Juliana
+Katherine
+Lettice
+Mabel
+Margaret
+Margery
+Matilda
+Maud
+Petronilla
+Rohesia
+Rose
+Sybil
+
+[byname-male]
+{father}son
+{father}son
+{father}son
+
+[byname-female]
+daughter of {father}
+
+[byname]
+of Mercia
+of Wessex
+of Kent
+of York
+of Lincoln
+of Winchester
+of Durham
+of Ely
+of Sussex
+of Northumbria
+of Chester
+of Wareham
+of Dorchester
+of Hereford
+of Bamburgh
+atte Wood
+atte Brook
+atte Hill
+atte Well
+atte Ford
+Smith
+Fletcher
+Bowyer
+Archer
+Ward
+Fowler
+Hunter
+Mason
+Carter
+Thatcher
+Reeve
+Miller
+Baker
+Turner
+Wainwright
+Underwood
+Blackwood
+Strongarm
+Whitehead
+Crookback
+Grey
+Brown
+White
+Little
+Long
+Strong
+Swift
+
+[epithet]
+the Valiant
+the Bold
+the Brave
+the Steadfast
+the Unbowed
+the Fearless
+the Stalwart
+the Hardy
+the Doughty
+the Unyielding
+the Dauntless
+the Grim
+the Red
+the Strong
+the Swift
+the Wise
+the Just
+the Proud
+the Iron-Handed
+the Shieldbearer
+the Wolf
+the Hammer
+the Avenger
+the Victorious
+the Undaunted
+the Resolute
+the Stout
+the Keen
+the Stern
+the Indomitable
+Oakheart
+Ironhand
+
+[ship]
+Sea Hawk
+Wavecutter
+Gull
+Swan
+Saint Edmund
+Mary
+Saint George
+Falcon
+Swallow
+Rose
+Unicorn
+Lion
+Lady of Kent
+Merlin
+Kestrel
+Seahorse
+Tern
+Cormorant
+Heron
+Saint Cuthbert
+Saint Nicholas
+Trinity
+Good Hope
+Fortune
+Thunderer
+Godspeed
+Seaflower
+Whitewing
+Storm Petrel
+Saint Michael

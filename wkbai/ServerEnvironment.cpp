@@ -306,7 +306,7 @@ void ServerEnvironment::updateFires(Server& server)
 	for (auto& [ref, frac] : hurt)
 		if (ServerGameObject* o = ref.get()) {
 			const bool wasAlive = hp >= 0 && o->getItem(hp) > 0.0f;
-			damage(server, o, frac);
+			damage(server, o, frac, "burned to death");
 			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
 				stats.fireDeaths++;
 				countDeath(o, 3);
@@ -380,8 +380,11 @@ void ServerEnvironment::countDeath(ServerGameObject* unit, int cause)
 		stats.deathsBy[player->id][cause]++;
 }
 
-void ServerEnvironment::damage(Server& server, ServerGameObject* obj, float fraction)
+void ServerEnvironment::damage(Server& server, ServerGameObject* obj, float fraction, const char* cause)
 {
+	// (the unit history: a death soon after, without a killer, has this cause)
+	if (cause)
+		server.unitHistory.noteCause(obj->id, cause, (float)server.timeManager.currentTime);
 	const GameSet& gs = *server.gameSet;
 	const bool building = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
 	const int item = gs.items.names.getIndex(building ? "Structural Integrity" : "Hit Points");
@@ -491,13 +494,19 @@ void ServerEnvironment::strikeLightning(Server& server)
 		const SrvGORef struck = target;
 		const bool struckAlive = !isBuilding && hpItem >= 0 && target->getItem(hpItem) > 0.0f;
 		ServerGameObject* struckPlayer = target->getPlayer();
+		// (the unit history: the struck and those around it hurt by the strike)
+		if (!isBuilding)
+			server.unitHistory.noteCause(target->id, "struck by lightning", (float)server.timeManager.currentTime);
+		for (ServerGameObject* c : characters)
+			if ((c->position - target->position).sqlen2xz() < 15.0f * 15.0f)
+				server.unitHistory.noteCause(c->id, "struck by lightning", (float)server.timeManager.currentTime);
 		if (seq >= 0) {
 			SrvScriptContext ctx(&server, target);
 			auto _ = ctx.change(ctx.sequenceExecutor, target);
 			server.gameSet->actionSequences[seq].run(&ctx);
 		}
 		else
-			damage(server, target, isBuilding ? 0.3f : 1.0f);
+			damage(server, target, isBuilding ? 0.3f : 1.0f, "struck by lightning");
 		if (ServerGameObject* u = struck.get(); struckAlive && struckPlayer && (!u || u->getItem(hpItem) <= 0.0f))
 			stats.deathsBy[struckPlayer->id][4]++;
 		if (trace)
@@ -590,7 +599,7 @@ void ServerEnvironment::applyExposure(Server& server)
 		if (frac > 0.0f && hp >= 0) {
 			const SrvGORef ref = unit;
 			const bool wasAlive = unit->getItem(hp) > 0.0f;
-			damage(server, unit, frac);
+			damage(server, unit, frac, cold ? "froze to death" : "died of thirst");
 			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
 				(cold ? stats.frozen : stats.thirst)++;
 				countDeath(unit, cold ? 0 : 1);
@@ -648,7 +657,8 @@ void ServerEnvironment::applyFloods(Server& server)
 		return;
 	const int hp = server.gameSet->items.names.getIndex("Hit Points");
 	std::set<uint32_t> buildingsDone;
-	std::vector<std::pair<SrvGORef, float>> hits; // (object, fraction), applied after the walk
+	struct FloodHit { SrvGORef obj; float frac; const char* cause; };
+	std::vector<FloodHit> hits; // applied after the walk
 	// the ice: walked on from ICE_WALKABLE; who is still out on deep water once it is thinner than
 	// ICE_BREAKS goes through it (a fifth of their health a second)
 	// (frozen or thawed: the path finding's cached blocked tiles are looked at again)
@@ -670,7 +680,7 @@ void ServerEnvironment::applyFloods(Server& server)
 			for (const auto& ref : server.tiles[ti].objList)
 				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
 					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE || kindOf(o->blueprint) == K_UNDEAD))
-					hits.emplace_back(o, kindOf(o->blueprint) == K_UNDEAD ? 0.4f : 0.2f);
+					hits.push_back({ o, kindOf(o->blueprint) == K_UNDEAD ? 0.4f : 0.2f, "went through the ice" });
 	if (state.waterRise < 0.1f && hits.empty())
 		return;
 	static const std::vector<FloodTile> none;
@@ -681,7 +691,7 @@ void ServerEnvironment::applyFloods(Server& server)
 		stats.floodedTiles++;
 		auto& tile = server.tiles[ft.tile];
 		if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && buildingsDone.insert(b->id).second)
-			hits.emplace_back(b, 0.0015f * std::min(depth, 2.0f));
+			hits.push_back({ b, 0.0015f * std::min(depth, 2.0f), nullptr });
 		// drowning: in more than 1 m of water, the undead in more than 0.5 m and twice as fast
 		if (depth > 0.5f && state.ice < 0.6f)
 			for (const auto& ref : tile.objList)
@@ -689,9 +699,9 @@ void ServerEnvironment::applyFloods(Server& server)
 					&& !o->blueprint->canWalkOnWater()) {
 					const uint8_t k = kindOf(o->blueprint);
 					if (k == K_UNDEAD)
-						hits.emplace_back(o, 0.1f);
+						hits.push_back({ o, 0.1f, "drowned" });
 					else if (depth > 1.0f && (k == K_LIVING || k == K_MACHINE))
-						hits.emplace_back(o, 0.05f);
+						hits.push_back({ o, 0.05f, "drowned" });
 				}
 	}
 	if (trace && simTraceCountdown-- <= 0) {
@@ -704,11 +714,11 @@ void ServerEnvironment::applyFloods(Server& server)
 			}
 		printf("ENVIRONMENT t=%.0f flood: %zu tiles under water, %zu with a building, %zu with objects; %zu hits\n", state.time, stats.floodedTiles, withBuilding, withObjects, hits.size());
 	}
-	for (auto& [ref, frac] : hits)
+	for (auto& [ref, frac, cause] : hits)
 		if (ServerGameObject* o = ref.get()) {
 			const bool building = o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
 			const bool wasAlive = building || (hp >= 0 && o->getItem(hp) > 0.0f);
-			damage(server, o, frac);
+			damage(server, o, frac, cause);
 			if (building) {
 				stats.floodedBuildings++;
 				stats.floodDamage += frac;

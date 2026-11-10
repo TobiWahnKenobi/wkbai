@@ -68,6 +68,10 @@ struct CommonGameObject {
 
 	std::string name;
 
+	// wkbai's unit history: the enemy characters it killed and the enemy buildings it destroyed
+	// (worked out by the server's UnitHistory, sent to the clients)
+	int kills = 0, buildingsDestroyed = 0;
+
 	int reportedCurrentOrder = -1;
 
 	int tileIndex = -1;
