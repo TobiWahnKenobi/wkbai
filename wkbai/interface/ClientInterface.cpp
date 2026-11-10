@@ -1627,6 +1627,20 @@ void ClientInterface::drawChronicle()
 		}
 		client->newHeroes.clear();
 	}
+	// heroes fallen (a replay: all; a game: the player's own and its allies')
+	if (!chronicle.fallenAnnouncements.empty()) {
+		CommonGameObject* me = client->clientPlayer.get();
+		const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
+		for (const auto& [player, text] : chronicle.fallenAnnouncements) {
+			CommonGameObject* p = client->findObject(player);
+			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied)))) {
+				auto it = chronicle.playerColours.find(player);
+				const int c = it != chronicle.playerColours.end() ? it->second : (p ? p->color : 0);
+				replayView.announceFallen(text, playerColors[(c >= 0 && c < 9) ? c : 0], Vector3());
+			}
+		}
+		chronicle.fallenAnnouncements.clear();
+	}
 	replayView.drawAnnouncements(uiTexCache, gfx);
 	const uint32_t own = client->clientPlayer ? client->clientPlayer->id : 0;
 	const int alliedStatus = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
@@ -1749,6 +1763,29 @@ void ClientInterface::drawChronicle()
 					}
 					ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(colourOf(p)), "%s", side.c_str());
 				}
+				// wkbai's unit history: each side's top killer here, the heroes who fought here,
+				// the heroes who fell here
+				std::string most, present, fell;
+				for (const GameChronicle::Mention& m : e.mentions) {
+					const std::string kills = std::to_string(m.kills) + (m.kills == 1 ? " kill" : " kills");
+					if (m.kind == GameChronicle::MENTION_TOP_KILLER)
+						most += (most.empty() ? "" : ", ") + nameOf(m.player) + "'s " + m.name + " (" + std::to_string(m.kills) + ")";
+					else if (m.kind == GameChronicle::MENTION_PRESENT)
+						present += (present.empty() ? "" : ", ") + (m.dead ? "the late " : std::string()) + m.name + " (" + kills + ")";
+					else if (m.kind == GameChronicle::MENTION_FALLEN)
+						fell += (fell.empty() ? "" : "; ") + m.name + " (" + kills + ")" + (m.extra.empty() ? std::string() : ", " + m.extra);
+				}
+				if (!most.empty())
+					ImGui::TextWrapped("    Most kills: %s", most.c_str());
+				auto wrapped = [](const ImVec4& colour, const char* label, const std::string& text) {
+					ImGui::PushStyleColor(ImGuiCol_Text, colour);
+					ImGui::TextWrapped("    %s: %s", label, text.c_str());
+					ImGui::PopStyleColor();
+				};
+				if (!present.empty())
+					wrapped(ImVec4(0.9f, 0.78f, 0.27f, 1.0f), "Present", present);
+				if (!fell.empty())
+					wrapped(ImVec4(0.85f, 0.45f, 0.4f, 1.0f), "Fallen", fell);
 				ImGui::PopID();
 			}
 			if (!shownCount)

@@ -84,6 +84,10 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::unordered_map<uint32_t, UnitInfo> unitInfo;
 	int heroThreshold = 0;
 	std::vector<uint32_t> newHeroes;
+	// the server's timeline lines (NETCLIMSG_CHRONICLE), for the interface's GameChronicle, and
+	// the parts of the one arriving
+	std::vector<std::string> chronicleIn;
+	std::string chronicleParts;
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
 	std::map<int, std::string> hostDataParts;

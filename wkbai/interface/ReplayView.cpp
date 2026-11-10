@@ -225,6 +225,11 @@ void ReplayView::announceHero(Client* client, uint32_t id, const uint32_t* palet
 	announce(std::move(parts), Icon::Trained, obj ? obj->position : Vector3(), colour, "Interface\\InGame\\Info Panel\\Sword.tga", -1);
 }
 
+void ReplayView::announceFallen(const std::string& text, uint32_t colour, const Vector3& position)
+{
+	announce({ { text, colour } }, Icon::Defeated, position, colour, std::string(), -1);
+}
+
 void ReplayView::update(Client* client, Server* srv, const GameChronicle& chron, const uint32_t* colours)
 {
 	server = srv;
@@ -259,6 +264,9 @@ void ReplayView::update(Client* client, Server* srv, const GameChronicle& chron,
 		SeenEvent& seen = seenEvents[i];
 		if (seen.kind != (int)e.kind) {
 			seen.kind = (int)e.kind;
+			// (a hero fallen is announced from the chronicle's fallen list)
+			if (e.kind == Kind::Fallen)
+				continue;
 			std::vector<Part> parts;
 			Icon icon = Icon::Battle;
 			std::string iconPath;

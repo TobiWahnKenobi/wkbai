@@ -115,6 +115,9 @@ enum NetClientMessages {
 	NETCLIMSG_UNIT_UNTRACKED,
 	// the kills to become a hero (32 bits)
 	NETCLIMSG_HERO_THRESHOLD,
+	// the server's timeline and statistics (ServerChronicle): a line of text ("RESET", "EVENT ...",
+	// "SAMPLE ...") in parts: part, parts (16 bits each), length (8 bits), the bytes
+	NETCLIMSG_CHRONICLE,
 };
 
 enum NetServerMessages {

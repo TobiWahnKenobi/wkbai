@@ -154,6 +154,8 @@ void Client::tick()
 				nightSight = NightSight();
 				unitInfo.clear();
 				newHeroes.clear();
+				chronicleIn.clear();
+				chronicleParts.clear();
 				heroThreshold = 0;
 				int gsVersion = br.readUint8();
 				if (localServer) {
@@ -577,6 +579,18 @@ void Client::tick()
 			}
 			case NETCLIMSG_HERO_THRESHOLD: {
 				heroThreshold = (int)br.readUint32();
+				break;
+			}
+			case NETCLIMSG_CHRONICLE: {
+				const uint16_t part = br.readUint16(), parts = br.readUint16();
+				const uint8_t length = br.readUint8();
+				if (part == 0)
+					chronicleParts.clear();
+				chronicleParts += br.readString(length);
+				if (part + 1 == parts) {
+					chronicleIn.push_back(std::move(chronicleParts));
+					chronicleParts.clear();
+				}
 				break;
 			}
 			case NETCLIMSG_CURRENT_ORDER_REPORT: {

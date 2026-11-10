@@ -506,4 +506,5 @@ private:
 
 	friend struct ServerGameObject;
 	friend struct UnitHistory;
+	friend struct ServerChronicle;
 };

@@ -5976,6 +5976,310 @@ void Test_UnitNames()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// wkbai's unit history, phases 6-7: the timeline on the server. A battle names each side's top
+// killer, the heroes present and those who fell in it; a hero slain far from any fight, and one
+// dying without a killer, get an event of their own; the same seed gives the same events; the
+// events survive their text form and a save (the RE repo's docs/engine/unit-history.md)
+void Test_UnitTimeline()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 777;
+	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8("Save_Games\\wkbai unit timeline.sav"));
+	// one game: a battle of 12 against 12, then a lone hero slain awayA away and one that falls
+	// without a killer. Returns the events' texts.
+	auto game = [&](bool keep, std::vector<std::string>& texts) {
+		auto server = std::make_unique<Server>();
+		Server& srv = *server;
+		srv.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		srv.startLevel();
+		srv.unitHistory.trace = getenv("WKB_TRACE_KILLS") != nullptr;
+		srv.unitHistory.threshold = 2;
+		ServerGameObject* own = srv.findObject(1027);
+		ServerGameObject* enemy = srv.findObject(1030);
+		const GameSet& gs = *srv.gameSet;
+		const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+		const int attack = gs.commands.names.getIndex("Attack");
+		const int hp = gs.items.names.getIndex("Hit Points");
+		if (!own || !enemy || !spear || attack < 0 || hp < 0)
+			return std::unique_ptr<Server>();
+		const auto area = srv.terrain->getPlayableArea();
+		const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		auto at = [&](const Vector3& base, float x, float z) { Vector3 p = base + Vector3(x, 0, z); p.y = srv.terrain->getHeight(p.x, p.z); return p; };
+		const Vector3 b = centre + Vector3(-60, 0, -120);
+		std::vector<SrvGORef> ours, theirs;
+		for (int i = 0; i < 12; i++) {
+			ours.emplace_back(srv.spawnObject(spear, own, at(b, -16.0f + i * 3.0f, 0.0f), Vector3(0, 0, 0)));
+			theirs.emplace_back(srv.spawnObject(spear, enemy, at(b, -16.0f + i * 3.0f, 10.0f), Vector3(0, 3.14159f, 0)));
+		}
+		for (auto& r : theirs)
+			r->setItem(hp, r->getItem(hp) * 0.6f);
+		srv.timeManager.unpause();
+		srv.timeManager.stepMs = 20;
+		auto alive = [](ServerGameObject* o) { return o && !o->deleted && !(o->flags & ServerGameObject::fTerminated); };
+		auto nearest = [&](ServerGameObject* from, std::vector<SrvGORef>& list) -> ServerGameObject* {
+			ServerGameObject* best = nullptr;
+			float bd = 1e30f;
+			for (auto& r : list)
+				if (alive(r.get())) {
+					const float d = (r->position - from->position).sqlen2xz();
+					if (d < bd) { bd = d; best = r.get(); }
+				}
+			return best;
+		};
+		for (int step = 0; step < 50 * 70; step++) {
+			if (step % 150 == 0)
+				for (auto* side : { &ours, &theirs })
+					for (auto& r : *side)
+						if (alive(r.get()))
+							if (ServerGameObject* tg = nearest(r.get(), side == &ours ? theirs : ours))
+								gs.commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			// at 40 s, one of our heroes falls in the fight, to the nearest enemy
+			if (step == 50 * 40)
+				for (auto& r : ours)
+					if (const UnitHistory::Record* rec = srv.unitHistory.find(r.objid); rec && rec->hero && alive(r.get())) {
+						ServerGameObject* foe = nearest(r.get(), theirs);
+						if (!foe)
+							foe = srv.spawnObject(spear, enemy, r->position + Vector3(2, 0, 0), Vector3(0, 0, 0));
+						r->setItem(hp, 0.0f);
+						r->lastHitBy = foe->id;
+						r->lastHitTime = srv.timeManager.currentTime;
+						r->terminate();
+						break;
+					}
+			srv.timeManager.pendingMs = srv.timeManager.stepMs;
+			if (srv.timeManager.step())
+				srv.simulate();
+		}
+		// a hero far from the fight, slain by an enemy there
+		const Vector3 awayA = centre + Vector3(150, 0, 150);
+		ServerGameObject* lone = srv.spawnObject(spear, own, at(awayA, 0, 0), Vector3(0, 0, 0));
+		ServerGameObject* slayer = srv.spawnObject(spear, enemy, at(awayA, 3, 0), Vector3(0, 0, 0));
+		for (int i = 0; i < 2; i++) {
+			ServerGameObject* v = srv.spawnObject(spear, enemy, at(awayA, 6.0f + i, 6.0f), Vector3(0, 0, 0));
+			v->setItem(hp, 0.0f);
+			v->lastHitBy = lone->id;
+			v->lastHitTime = srv.timeManager.currentTime;
+			v->terminate();
+		}
+		lone->setItem(hp, 0.0f);
+		lone->lastHitBy = slayer->id;
+		lone->lastHitTime = srv.timeManager.currentTime;
+		lone->terminate();
+		// one more, no killer: it falls (the cold, an Act of God)
+		const Vector3 awayB = centre + Vector3(-150, 0, 150);
+		ServerGameObject* frozen = srv.spawnObject(spear, own, at(awayB, 0, 0), Vector3(0, 0, 0));
+		for (int i = 0; i < 2; i++) {
+			ServerGameObject* v = srv.spawnObject(spear, enemy, at(awayB, 6.0f + i, 6.0f), Vector3(0, 0, 0));
+			v->setItem(hp, 0.0f);
+			v->lastHitBy = frozen->id;
+			v->lastHitTime = srv.timeManager.currentTime;
+			v->terminate();
+		}
+		frozen->setItem(hp, 0.0f);
+		frozen->terminate();
+		for (int step = 0; step < 50 * 6; step++) {
+			srv.timeManager.pendingMs = srv.timeManager.stepMs;
+			if (srv.timeManager.step())
+				srv.simulate();
+		}
+		for (const auto& e : srv.unitHistory.chronicle.chron.events)
+			texts.push_back(e.toText());
+		if (!keep)
+			server.reset();
+		return server;
+	};
+	std::vector<std::string> first, second;
+	game(false, second);
+	auto server = game(true, first);
+	if (!server) {
+		printf("UNITTEST not set up\n");
+		return;
+	}
+	Server& srv = *server;
+	check(!first.empty() && first == second, "the same seed gives the same events (" + std::to_string(first.size()) + ")");
+	const auto& events = srv.unitHistory.chronicle.chron.events;
+	const GameChronicle::Event* battle = nullptr;
+	for (const auto& e : events) {
+		printf("UNITTEST   %s\n", e.toText().c_str());
+		if (e.fight() && !battle)
+			battle = &e;
+	}
+	check(battle != nullptr, "a fight on the timeline");
+	if (battle) {
+		int top = 0, present = 0, fallenHere = 0;
+		for (const auto& m : battle->mentions) {
+			top += m.kind == GameChronicle::MENTION_TOP_KILLER;
+			present += m.kind == GameChronicle::MENTION_PRESENT;
+			fallenHere += m.kind == GameChronicle::MENTION_FALLEN;
+		}
+		check(top >= 1, "the fight names a top killer per side (" + std::to_string(top) + ")");
+		// its top killers have the most kills of their side's units in it
+		for (const auto& m : battle->mentions)
+			if (m.kind == GameChronicle::MENTION_TOP_KILLER) {
+				ServerGameObject* u = srv.findObject(m.unit);
+				const UnitHistory::Record* r = srv.unitHistory.find(m.unit);
+				const int total = u && !(r && r->death >= 0.0f) ? u->kills : r ? r->kills : -1;
+				check(m.kills >= 1 && m.kills <= total, "top killer " + m.name + ": " + std::to_string(m.kills) + " here, " + std::to_string(total) + " in all");
+			}
+		check(present >= 1, "heroes present named (" + std::to_string(present) + ")");
+		check(fallenHere >= 1, "heroes fallen in the fight named (" + std::to_string(fallenHere) + ")");
+	}
+	int ownFallen = 0;
+	bool slainBy = false, fell = false;
+	for (const auto& e : events)
+		if (e.kind == GameChronicle::Kind::Fallen) {
+			ownFallen++;
+			for (const auto& m : e.mentions)
+				if (m.kind == GameChronicle::MENTION_FALLEN) {
+					slainBy |= m.extra.rfind("slain by ", 0) == 0;
+					fell |= m.extra == "fell";
+				}
+			check(e.title().rfind("The fall of ", 0) == 0, "its title: " + e.title());
+		}
+	check(ownFallen == 2 && slainBy && fell, "the two heroes slain away from the fight: events of their own, one slain, one fell (" + std::to_string(ownFallen) + ")");
+	// the text form
+	{
+		int same = 0;
+		for (const auto& e : events) {
+			GameChronicle::Event back;
+			if (back.fromText(e.toText()) && back.toText() == e.toText())
+				same++;
+		}
+		check(same == (int)events.size(), "every event the same through its text (" + std::to_string(same) + ")");
+	}
+	// a save
+	check(srv.saveGame(savePath.c_str()), "saved");
+	std::vector<std::string> before;
+	for (auto& e : srv.unitHistory.chronicle.chron.events)
+		before.push_back(e.toText());
+	{
+		Server loaded;
+		loaded.loadSaveGame(savePath.c_str());
+		std::vector<std::string> after;
+		for (auto& e : loaded.unitHistory.chronicle.chron.events)
+			after.push_back(e.toText());
+		check(after == before, "the timeline kept by the save (" + std::to_string(after.size()) + " events)");
+		size_t samples = 0, samplesBefore = 0;
+		for (auto& [p, l] : loaded.unitHistory.chronicle.chron.samples) samples += l.size();
+		for (auto& [p, l] : srv.unitHistory.chronicle.chron.samples) samplesBefore += l.size();
+		check(samples == samplesBefore && samples > 0, "the statistics kept by the save (" + std::to_string(samples) + " samples)");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// wkbai's unit history: splash kills (a rocket launcher at a cluster: every kill its own) and an
+// Act of God (the lightning's own damage sequence: the victims send the attack to themselves, no
+// unit is credited) (the RE repo's docs/engine/unit-history.md, section 2)
+void Test_UnitSplashKills()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 99;
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	server.unitHistory.trace = getenv("WKB_TRACE_KILLS") != nullptr;
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* rocketBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Rocket Launcher");
+	const int attack = gs.commands.names.getIndex("Fire Rocket") >= 0 ? gs.commands.names.getIndex("Fire Rocket") : gs.commands.names.getIndex("Attack");
+	const int hp = gs.items.names.getIndex("Hit Points");
+	const int lightning = gs.actionSequences.names.getIndex("Damage Done By Lightning");
+	if (!own || !enemy || !spear || !rocketBp || attack < 0 || hp < 0) {
+		printf("UNITTEST not set up\n");
+		return;
+	}
+	const auto area = server.terrain->getPlayableArea();
+	const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+	auto at = [&](const Vector3& base, float x, float z) { Vector3 p = base + Vector3(x, 0, z); p.y = server.terrain->getHeight(p.x, p.z); return p; };
+	auto alive = [](ServerGameObject* o) { return o && !o->deleted && !(o->flags & ServerGameObject::fTerminated) && o->blueprint->name.rfind("Dead ", 0) != 0; };
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto run = [&](float seconds, const std::function<void(int)>& each) {
+		for (int step = 0; step < (int)(seconds * 50.0f); step++) {
+			if (each)
+				each(step);
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
+	};
+	// a rocket launcher 45 m from 9 weakened spearmen standing close together
+	const Vector3 b = centre + Vector3(-60, 0, -120);
+	ServerGameObject* launcher = server.spawnObject(rocketBp, own, at(b, 0, 0), Vector3(0, 0, 0));
+	std::vector<SrvGORef> cluster;
+	for (int i = 0; i < 9; i++) {
+		ServerGameObject* s = server.spawnObject(spear, enemy, at(b, -3.0f + (i % 3) * 3.0f, 45.0f + (i / 3) * 3.0f), Vector3(0, 3.14159f, 0));
+		s->setItem(hp, 1.0f);
+		cluster.emplace_back(s);
+	}
+	run(90.0f, [&](int step) {
+		// once: given again, the launcher starts its aim over
+		if (step != 0 || !alive(launcher))
+			return;
+		for (auto& r : cluster)
+			if (alive(r.get())) {
+				gs.commands[attack].execute(launcher, r.get(), Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+				break;
+			}
+	});
+	int dead = 0;
+	for (auto& r : cluster)
+		dead += !alive(r.get());
+	printf("UNITTEST rockets: %d of 9 dead, the launcher has %d kills\n", dead, launcher->kills);
+	check(dead >= 2, "the rockets killed several (" + std::to_string(dead) + ")");
+	check(launcher->kills == dead, "every one the launcher's kill (" + std::to_string(launcher->kills) + " of " + std::to_string(dead) + ")");
+	// an Act of God: lightning's damage on 4 soldiers with 1 hit point, none hit before
+	if (lightning >= 0) {
+		const Vector3 c = centre + Vector3(140, 0, 0);
+		std::vector<SrvGORef> struck;
+		int creditedBefore = 0;
+		for (auto* side : { own, enemy })
+			for (const auto& [type, list] : side->children)
+				for (CommonGameObject* o : list)
+					creditedBefore += o->kills;
+		for (int i = 0; i < 4; i++) {
+			ServerGameObject* s = server.spawnObject(spear, enemy, at(c, i * 2.0f, 0.0f), Vector3(0, 0, 0));
+			s->setItem(hp, 1.0f);
+			struck.emplace_back(s);
+			// (the strike where it stands: the damage is by the distance to the sequence's executor)
+			SrvScriptContext ctx(&server, s);
+			auto _e = ctx.change(ctx.sequenceExecutor, s);
+			gs.actionSequences[lightning].run(&ctx);
+		}
+		for (auto& r : struck)
+			if (r)
+				printf("UNITTEST   struck %u: %.1f hit points\n", r->id, r->getItem(hp));
+		run(5.0f, nullptr);
+		int struckDead = 0, credited = 0;
+		for (auto& r : struck)
+			struckDead += !alive(r.get());
+		for (auto* side : { own, enemy })
+			for (const auto& [type, list] : side->children)
+				for (CommonGameObject* o : list)
+					credited += o->kills;
+		printf("UNITTEST lightning: %d of 4 dead, kills credited %d -> %d\n", struckDead, creditedBefore, credited);
+		check(struckDead >= 1, "the lightning killed (" + std::to_string(struckDead) + ")");
+		check(credited == creditedBefore, "nobody credited with the Act of God's kills");
+	}
+	else
+		printf("UNITTEST no lightning sequence in this game set\n");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -6032,6 +6336,8 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MoonPhases, "Moon phases: lit part and side, the moon's light and shadows, the natural month, the saved setting"},
 {Test_UnitHistory, "Unit history: kills credited (melee, archers, a garrisoned tower), no kill for a removal, kept by a save"},
 {Test_UnitNames, "Unit names: by faction, unique, from the seed; conscripts; heroes, formations, a hero slain; kept by a save"},
+{Test_UnitTimeline, "Unit timeline: the server's events name top killers, heroes present and fallen; Fallen events; the same from the same seed; kept by a save"},
+{Test_UnitSplashKills, "Unit kills by splash (rockets at a cluster) and none for an Act of God (lightning)"},
 };
 
 void LaunchTest()

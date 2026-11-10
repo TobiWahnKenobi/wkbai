@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "ServerChronicle.h"
 
 struct Server;
 struct ServerGameObject;
@@ -119,6 +120,8 @@ struct UnitHistory {
 	std::map<uint32_t, PlayerNames> players;
 	// kills to become a hero (0: not worked out yet)
 	int threshold = 0;
+	// the timeline and the statistics, on the server
+	ServerChronicle chronicle;
 
 	// a unit type's place in redata/names/units.txt (bits: U_*)
 	enum UnitBits { U_UNTRACKED = 1, U_PEASANT = 2, U_CONSCRIPT = 4, U_FEMALE = 8, U_SHIP = 16, U_NONAME = 32, U_OWNNAME = 64, U_PAGAN = 128, U_CELESTIAL = 256 };

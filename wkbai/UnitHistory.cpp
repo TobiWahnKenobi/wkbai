@@ -451,6 +451,7 @@ void UnitHistory::sendAllTo(Server& server, NetLink* link) const
 	for (const auto& [id, rec] : records)
 		if (rec.death < 0.0f)
 			sendRecord(server, rec, false, link);
+	const_cast<ServerChronicle&>(chronicle).sendAll(server, link);
 }
 
 // ---- the game's events ----
@@ -517,6 +518,9 @@ void UnitHistory::hit(Server& server, ServerGameObject* victim, ServerGameObject
 		return;
 	victim->lastHitBy = by;
 	victim->lastHitTime = server.timeManager.currentTime;
+	// for the timeline: who fought where
+	if (records.count(by) || records.count(victim->id))
+		chronicle.noteHit(by, victim->id, victim->position);
 	if (trace)
 		printf("UNITHISTORY t=%.2f hit %u %s by %u (sent by %u %s)\n", server.timeManager.currentTime, victim->id, victim->blueprint->name.c_str(),
 			by, sender->id, sender->blueprint->name.c_str());
@@ -736,6 +740,8 @@ void UnitHistory::makeHero(Server& server, ServerGameObject* obj, Record& rec)
 		rec.player = player->id;
 	rec.epithet = drawEpithet(rec);
 	sendRecord(server, rec, true);
+	// the fights it was in name it among the heroes present
+	chronicle.unitChanged(rec.id);
 	if (trace)
 		printf("UNITHISTORY t=%.2f hero %u: \"%s\" is now \"%s\" (%d kills)\n", (float)server.timeManager.currentTime, obj->id, rec.name.c_str(),
 			rec.displayName().c_str(), obj->kills);
@@ -796,6 +802,7 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 						killer->kills, killer->buildingsDestroyed);
 				sendKills(server, killer, victimId);
 				if (killerRec && cls == Tags::GAMEOBJCLASS_CHARACTER) {
+					chronicle.noteKill(killer->id, obj->position);
 					if (killerRec->formation) {
 						killerRec->formationKills++;
 						// the formation's tally: every kill made in it
@@ -844,6 +851,11 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 		if (trace && victimRec->hero)
 			printf("UNITHISTORY t=%.2f hero fallen %u \"%s\" (%d kills), slain by %u\n", now, obj->id, victimRec->displayName().c_str(),
 				victimRec->kills, victimRec->slainBy);
+		// a hero slain: in the timeline (its fight's, or an event of its own)
+		if (victimRec->hero) {
+			chronicle.heroFell(server, obj->id, obj->position, killer ? killer->id : 0);
+			chronicle.unitChanged(obj->id);
+		}
 		// the dead are kept for the timeline when they count: kills, a hero, a fight in an event
 		if (!victimRec->hero && victimRec->kills == 0 && victimRec->buildings == 0 && !victimRec->participated && victimRec->slew.empty())
 			untrack(server, obj->id);
@@ -888,6 +900,7 @@ void UnitHistory::loaded(Server& server)
 
 void UnitHistory::update(Server& server)
 {
+	chronicle.update(server);
 	if (pendingLoad && server.gameSet && server.getLevel()) {
 		pendingLoad = false;
 		setup(server.gameSet.get());
@@ -960,6 +973,7 @@ std::string UnitHistory::saveText(Server& server)
 		for (uint32_t v : r.slew)
 			text += "SLEW " + std::to_string(r.id) + " " + std::to_string(v) + "\n";
 	}
+	text += h.chronicle.saveText(server);
 	return text;
 }
 
@@ -967,6 +981,7 @@ void UnitHistory::loadText(Server& server, const std::string& all)
 {
 	UnitHistory& h = server.unitHistory;
 	h.setup(server.gameSet.get());
+	bool hadChronicle = false;
 	size_t at = 0;
 	while (at < all.size()) {
 		size_t end = all.find('\n', at);
@@ -993,6 +1008,11 @@ void UnitHistory::loadText(Server& server, const std::string& all)
 				if (kills || buildings)
 					sendKills(server, obj, 0);
 			}
+			continue;
+		}
+		if (line.compare(0, 10, "CHRONICLE ") == 0) {
+			h.chronicle.loadLine(server, line.substr(10));
+			hadChronicle = true;
 			continue;
 		}
 		const std::vector<std::string> w = Words(line);
@@ -1055,6 +1075,9 @@ void UnitHistory::loadText(Server& server, const std::string& all)
 	}
 	for (const auto& [id, rec] : h.records)
 		h.sendRecord(server, rec);
+	// the timeline as saved, to the clients
+	if (hadChronicle)
+		h.chronicle.sendAll(server);
 }
 
 void UnitHistory::sendKills(Server& server, ServerGameObject* killer, uint32_t victim)

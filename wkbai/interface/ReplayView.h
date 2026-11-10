@@ -43,6 +43,8 @@ struct ReplayView {
 	// wkbai's unit history: a unit became a hero ("Sigurd Ironside has slain 50 enemies and is
 	// now Sigurd the Valiant", the names in its player's colour), in a replay and in a game
 	void announceHero(Client* client, uint32_t id, const uint32_t* palette);
+	// a hero fallen ("Sigurd the Valiant (172 kills) has fallen at Ergor, slain by ...")
+	void announceFallen(const std::string& text, uint32_t colour, const Vector3& position);
 	// the event log's window, while open
 	void drawLog(Client* client, TextureCache& textures);
 	bool logOpen = true;
