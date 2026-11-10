@@ -711,6 +711,7 @@ struct DiligentRenderer : DiligentGfx
 	float fogFar = 250.0f;
 	Vector3 fogCamera;
 	float fogEdge[4] = { 1e9f, 1e9f, 1e9f, 2e9f }; // no edge fog until a map sets it
+	float farGround[12] = {}; // FogBuffer.FarGround, FarLand, FarArea (SetFarGround)
 	float lightMasks[4] = {}; // FogBuffer.LightMasks (FinishLightingPrepass)
 	bool fogEnabled = false;
 	bool isVulkan = false;
@@ -1195,6 +1196,18 @@ struct DiligentRenderer : DiligentGfx
 		writeFogBuffer();
 	}
 
+	void SetFarGround(float level, float reach, bool sea, const float colour[3], float areaWidth, float areaDepth, float nearEnd, float farClip) override
+	{
+		const float g[12] = { level, reach, sea ? 1.0f : 0.0f, reach > 0 ? 1.0f : 0.0f, colour[0], colour[1], colour[2], FAR_AIR, areaWidth, areaDepth, nearEnd, farClip };
+		if (std::equal(g, g + 12, farGround))
+			return;
+		std::copy_n(g, 12, farGround);
+		writeFogBuffer();
+	}
+	// the air's length over the ground beyond (world units): how far it takes to go two thirds of
+	// the way into the horizon's colour (real air, on the ground beyond the extension only)
+	static constexpr float FAR_AIR = 25000.0f;
+
 	void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) override
 	{
 		fogEdge[0] = playableWidth;
@@ -1334,6 +1347,13 @@ struct DiligentRenderer : DiligentGfx
 			cc[28 + i] = shadows.fogSunColour[i];
 		}
 		memcpy(cc + 32, shadows.fogHorizon, sizeof(shadows.fogHorizon));
+		// Extend map's ground beyond (FarGround, FarLand), the sun's direction (FarSun)
+		std::copy_n(farGround, 12, cc + 160);
+		const Vector3 sun = shadows.sunDirection.sqlen3() > 1e-6f ? shadows.sunDirection.normal() : Vector3(0, 1, 0);
+		cc[172] = sun.x;
+		cc[173] = sun.y;
+		cc[174] = sun.z;
+		cc[175] = 0.0f;
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1463,7 +1483,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 656, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 704, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

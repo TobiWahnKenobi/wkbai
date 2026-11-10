@@ -3965,6 +3965,17 @@ void ClientInterface::iter()
 		}
 		else
 			dgfx->SetFogEdge(1e9f, 1e9f, 1e9f, 2e9f);
+		// Extend map's ground beyond its far rings, to the true horizon (drawn by the sky)
+		const FarTerrain* far = terrainRenderer ? terrainRenderer->extendedFar() : nullptr;
+		if (client->terrain && far) {
+			const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+			const float nearEnd = 5.0f * (client->terrain->edge + terrainRenderer->extendedTiles());
+			dgfx->SetFarGround(far->outerLevel, nearEnd + far->reach, far->outerSea, far->outerColour, areaWidth, areaDepth, nearEnd, client->camera.farDist);
+		}
+		else {
+			const float none[3] = {};
+			dgfx->SetFarGround(0, 0, false, none, 0, 0, 0, 0);
+		}
 	}
 	if (skyRenderer) {
 		PROFILE_SCOPE("Sky and clouds");

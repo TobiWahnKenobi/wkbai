@@ -33,6 +33,7 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	int extendedTiles() const override;
 	int extendedFarRings() const override { return extended ? farRingCount : 0; }
 	float extendedFarReach() const override { return extended ? far.reach : 0.0f; }
+	const FarTerrain* extendedFar() const override { return extended && farRingCount > 0 && far.reach > 0 ? &far : nullptr; }
 	const std::vector<ExtendedTree>* extendedTrees() const override { return extended ? &trees : nullptr; }
 
 	bool m_bumpOn = true;

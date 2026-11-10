@@ -44,6 +44,11 @@ struct DiligentGfx : IRenderer
 	// Map-edge fog: the playable area's size, and the distances outside it where the edge fog
 	// starts and becomes opaque (FogBuffer.EdgeFog).
 	virtual void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) = 0;
+	// Extend map's ground beyond its last ring, to the true horizon (FogBuffer.FarGround, FarLand,
+	// FarArea; drawn by the sky under the horizon): its level, how far outside the playable area
+	// the last ring ends, sea or land, the land's colour (0-1), the playable area's size, how far
+	// outside it the near ring ends, the camera's far clip; reach 0: none
+	virtual void SetFarGround(float level, float reach, bool sea, const float colour[3], float areaWidth, float areaDepth, float nearEnd, float farClip) = 0;
 
 	// Binds the swap chain's targets and the full viewport again after drawing offscreen (the
 	// post-processing scene targets instead while those are on).

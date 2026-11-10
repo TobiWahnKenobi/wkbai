@@ -87,16 +87,27 @@ float ValueNoise(uint64_t seed, float x, float z, int salt) { return ValueNoiseD
 constexpr float OCT_C = 0.8525f, OCT_S = 0.5227f; // cos, sin of 0.55 rad
 inline void Turn(float& x, float& z) { const float t = OCT_C * x - OCT_S * z; z = OCT_S * x + OCT_C * z; x = t; }
 
-// fBm, -1 to 1 (about), the first octave's cells `cell` tiles wide
-float Fbm(uint64_t seed, float x, float z, float cell, int octaves, int salt)
+// An octave's share at a sample spacing `foot` (tiles): all of it while its cells are at least
+// twice the spacing, none at the spacing (the far rings' coarse grids: their octaves finer than the
+// grid aliased into spikes, the play test of 2026-11-10); 0 keeps every octave
+inline float OctaveShare(float wavelength, float foot)
 {
-	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell;
+	return foot <= 0 ? 1.0f : std::clamp(wavelength / foot - 1.0f, 0.0f, 1.0f);
+}
+
+// fBm, -1 to 1 (about), the first octave's cells `cell` tiles wide
+float Fbm(uint64_t seed, float x, float z, float cell, int octaves, int salt, float foot = 0)
+{
+	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell, l = cell;
 	for (int o = 0; o < octaves; o++) {
-		s += a * ValueNoise(seed, qx + o * 17.3f, qz - o * 9.1f, salt + o);
+		const float k = OctaveShare(l, foot);
+		if (k > 0)
+			s += k * a * ValueNoise(seed, qx + o * 17.3f, qz - o * 9.1f, salt + o);
 		t += a;
 		a *= 0.5f;
 		qx *= 2.03f;
 		qz *= 2.03f;
+		l /= 2.03f;
 		Turn(qx, qz);
 	}
 	return s / t;
@@ -104,19 +115,21 @@ float Fbm(uint64_t seed, float x, float z, float cell, int octaves, int salt)
 
 // Hills that look worn: each octave damped where the octaves before it are steep, so slopes
 // stay smooth and the detail gathers in the valleys and on the tops (as erosion leaves them)
-float ErodedFbm(uint64_t seed, float x, float z, float cell, int octaves, int salt)
+float ErodedFbm(uint64_t seed, float x, float z, float cell, int octaves, int salt, float foot = 0)
 {
-	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell, gx = 0, gz = 0;
+	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell, gx = 0, gz = 0, l = cell;
 	float rc = 1, rs = 0; // the octave's turn so far, to bring its slope back to the first's frame
 	for (int o = 0; o < octaves; o++) {
 		const Noise n = ValueNoiseD(seed, qx + o * 31.7f, qz + o * 11.9f, salt + o);
-		gx += rc * n.dx + rs * n.dz;
-		gz += -rs * n.dx + rc * n.dz;
-		s += a * n.v / (1.0f + 0.6f * (gx * gx + gz * gz));
+		const float k = OctaveShare(l, foot);
+		gx += k * (rc * n.dx + rs * n.dz);
+		gz += k * (-rs * n.dx + rc * n.dz);
+		s += k * a * n.v / (1.0f + 0.6f * (gx * gx + gz * gz));
 		t += a;
 		a *= 0.5f;
 		qx *= 2.0f;
 		qz *= 2.0f;
+		l *= 0.5f;
 		Turn(qx, qz);
 		const float nc = rc * OCT_C - rs * OCT_S;
 		rs = rs * OCT_C + rc * OCT_S;
@@ -127,19 +140,21 @@ float ErodedFbm(uint64_t seed, float x, float z, float cell, int octaves, int sa
 
 // Mountain ranges: ridged multifractal, 0 (valleys) to about 1 (crests); each octave weighted
 // by the one before, so the ridges branch and sharpen at the top
-float Ridged(uint64_t seed, float x, float z, float cell, int octaves, int salt)
+float Ridged(uint64_t seed, float x, float z, float cell, int octaves, int salt, float foot = 0)
 {
-	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell, w = 1;
+	float s = 0, a = 1, t = 0, qx = x / cell, qz = z / cell, w = 1, l = cell;
 	for (int o = 0; o < octaves; o++) {
-		float n = 1.0f - std::abs(ValueNoise(seed, qx + o * 5.3f, qz + o * 23.1f, salt + o));
-		n *= n;
-		n *= w;
+		const float k = OctaveShare(l, foot);
+		// (an octave left out counts at its mean, a third of its weight: the ranges keep their height)
+		float n = k > 0 ? 1.0f - std::abs(ValueNoise(seed, qx + o * 5.3f, qz + o * 23.1f, salt + o)) : 0.0f;
+		n = (n * n * k + (1.0f - k) / 3.0f) * w;
 		w = std::clamp(n * 1.8f, 0.0f, 1.0f);
 		s += a * n;
 		t += a;
 		a *= 0.5f;
 		qx *= 2.1f;
 		qz *= 2.1f;
+		l /= 2.1f;
 		Turn(qx, qz);
 	}
 	return s / t;
@@ -597,6 +612,51 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			landMats.insert(landMats.begin(), matGrass);
 		}
 	}
+	// Where the map puts its rock (its rock and snow corners): by height and by slope. Over its dry
+	// vertices, the lowest height above which much of the land is rock (the rock line: its high
+	// hills brown, the play test of 2026-11-10 found the extension's green to the top), and the
+	// lowest slope above which much is. Without a clear one, the extension's own defaults.
+	float rockLine = 1e30f, rockSlope = 0.34f;
+	{
+		struct S { float h, s, r; };
+		std::vector<S> pts;
+		for (int z = 0; z < VH; z++)
+			for (int x = 0; x < VW; x++) {
+				const size_t i = (size_t)z * VW + x;
+				if (wetV[i] > 0)
+					continue;
+				const float v = mapV(x, z);
+				const float s = std::max({ std::abs(mapV(x + 1, z) - v), std::abs(mapV(x - 1, z) - v), std::abs(mapV(x, z + 1) - v), std::abs(mapV(x, z - 1) - v) }) / 5.0f;
+				pts.push_back({ v, s, std::min(rocky[i], 1.0f) });
+			}
+		// the lowest threshold with at least 40% rock above it, over at least 1% of the land
+		auto threshold = [&](auto key, float fallback) {
+			std::sort(pts.begin(), pts.end(), [&](const S& a, const S& b) { return key(a) > key(b); });
+			double sum = 0;
+			float best = fallback;
+			for (size_t k = 0; k < pts.size(); k++) {
+				sum += pts[k].r;
+				if ((k + 1) * 100 >= pts.size() && sum >= 0.4 * (k + 1))
+					best = key(pts[k]);
+			}
+			return best;
+		};
+		double total = 0;
+		for (const S& p : pts)
+			total += p.r;
+		if (!pts.empty() && total >= 0.01 * pts.size()) {
+			rockLine = threshold([](const S& p) { return p.h; }, 1e30f);
+			rockSlope = std::clamp(threshold([](const S& p) { return p.s; }, rockSlope), 0.12f, 0.45f);
+		}
+		printf("Extend map: rock above %.1f (heights %.1f to %.1f), or steeper than %.2f; snow above %.1f; %.0f%% of the dry land rocky\n",
+			rockLine < 1e29f ? rockLine : -1.0f, lo, hi, rockSlope, snowLine < 1e29f ? snowLine : -1.0f, pts.empty() ? 0.0 : 100.0 * total / pts.size());
+	}
+	// a place's rock (0 to 1): steeper than the map's rock slope, or above its rock line
+	auto rockAt = [&](float v, float rise, float jitter) {
+		const float bySlope = std::clamp((rise - rockSlope - 0.1f * jitter) / 0.3f, 0.0f, 1.0f);
+		const float byHeight = rockLine < 1e29f ? std::clamp((v - rockLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f) : 0.0f;
+		return std::max(bySlope, byHeight);
+	};
 	int matBed = -1;
 	// the ground under the map's water (its sand, its river bed), never its grass
 	for (int i = 0; i < M; i++)
@@ -676,7 +736,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// nearest point on the map's border (a rim rising to the mesh edge keeps its own), the sea
 	// floor off the sea, slow undulations; farther out than the near ring, broad rises and lows
 	// of the land itself. The membrane ends on it, and the far rings stand on it.
-	auto farBase = [&](float px, float pz) {
+	auto farBase = [&](float px, float pz, float foot = 0.0f) {
 		const float sx = px - n, sz = pz - n;
 		float bx, bz;
 		NearestOnBorder(sx, sz, (float)w, (float)h, bx, bz);
@@ -685,7 +745,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float d = std::sqrt(dx * dx + dz * dz);
 		const float far = std::clamp((d - n) / 300.0f, 0.0f, 1.0f);
 		const float land = std::max(at(wide, bx, bz), 0.85f * at(near5, bx, bz) + 0.15f * at(wide, bx, bz))
-			+ 0.2f * relief * Fbm(seed, px, pz, 60.0f, 2, 40) + far * 0.45f * relief * Fbm(seed, px, pz, 420.0f, 3, 41);
+			+ 0.2f * relief * Fbm(seed, px, pz, 60.0f, 2, 40, foot) + far * 0.45f * relief * Fbm(seed, px, pz, 420.0f, 3, 41, foot);
 		const float sea = seaBed - 0.12f * relief - far * 0.1f * relief;
 		return land + (sea - land) * wet;
 	};
@@ -694,13 +754,13 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// elsewhere; the sea floor off the sea. Also the place's mountain and sea shares and the
 	// border point it was sampled at.
 	struct Land { float detail, mtn, wet, bx, bz, d; };
-	auto landAt = [&](float px, float pz) {
+	auto landAt = [&](float px, float pz, float foot = 0.0f) {
 		Land L;
 		const float sx = px - n, sz = pz - n;
 		const float dx = std::max({ -sx, sx - w, 0.0f }), dz = std::max({ -sz, sz - h, 0.0f });
 		L.d = std::sqrt(dx * dx + dz * dz);
 		const float warp = 6.0f + 0.7f * std::min(L.d, 200.0f);
-		const float wx = sx + warp * Fbm(seed, px, pz, 22.0f, 3, 10), wz = sz + warp * Fbm(seed, px, pz, 22.0f, 3, 11);
+		const float wx = sx + warp * Fbm(seed, px, pz, 22.0f, 3, 10, foot), wz = sz + warp * Fbm(seed, px, pz, 22.0f, 3, 11, foot);
 		NearestOnBorder(wx, wz, (float)w, (float)h, L.bx, L.bz);
 		const float rockiness = std::clamp(at(rockyB, L.bx, L.bz) * 1.5f, 0.0f, 1.0f);
 		const float roughness = at(rough, L.bx, L.bz);
@@ -708,17 +768,17 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		// the edge's own character fades out far away, where the land goes its own way
 		const float own = 1.0f - std::clamp((L.d - 2.0f * n) / 400.0f, 0.0f, 0.7f);
 		float mtn = own * std::clamp(std::max(rockiness, roughness / (0.04f * relief + 0.5f) - 0.6f), 0.0f, 1.0f);
-		mtn = std::max(mtn, std::clamp((Fbm(seed, px, pz, 90.0f + 0.15f * std::min(L.d, 1500.0f), 2, 50) - 0.25f) * 3.0f, 0.0f, 1.0f)
+		mtn = std::max(mtn, std::clamp((Fbm(seed, px, pz, 90.0f + 0.15f * std::min(L.d, 1500.0f), 2, 50, foot) - 0.25f) * 3.0f, 0.0f, 1.0f)
 			* std::clamp(L.d / 40.0f, 0.0f, 1.0f) * (1 - L.wet));
 		L.mtn = mtn;
 		// a broad warp first (the ranges curve), then the forms: ranges as bands of ridges with
 		// valleys between them, worn hills
-		const float qx = px + 22.0f * Fbm(seed, px, pz, 70.0f, 2, 20) + 5.0f * Fbm(seed, px, pz, 18.0f, 2, 22);
-		const float qz = pz + 22.0f * Fbm(seed, px, pz, 70.0f, 2, 21) + 5.0f * Fbm(seed, px, pz, 18.0f, 2, 23);
-		const float hills = ErodedFbm(seed, qx, qz, 46.0f, 5, 60) * (0.09f * relief + 2.0f);
-		const float band = std::clamp(0.5f + 1.6f * Fbm(seed, qx, qz, 85.0f, 2, 71), 0.0f, 1.0f);
-		const float ridges = (Ridged(seed, qx, qz, 62.0f, 5, 70) * (0.35f + 0.65f * band) - 0.2f) * (0.65f * relief + 8.0f);
-		const float seaFloor = ErodedFbm(seed, qx, qz, 40.0f, 4, 80) * (0.03f * relief + 0.6f);
+		const float qx = px + 22.0f * Fbm(seed, px, pz, 70.0f, 2, 20, foot) + 5.0f * Fbm(seed, px, pz, 18.0f, 2, 22, foot);
+		const float qz = pz + 22.0f * Fbm(seed, px, pz, 70.0f, 2, 21, foot) + 5.0f * Fbm(seed, px, pz, 18.0f, 2, 23, foot);
+		const float hills = ErodedFbm(seed, qx, qz, 46.0f, 5, 60, foot) * (0.09f * relief + 2.0f);
+		const float band = std::clamp(0.5f + 1.6f * Fbm(seed, qx, qz, 85.0f, 2, 71, foot), 0.0f, 1.0f);
+		const float ridges = (Ridged(seed, qx, qz, 62.0f, 5, 70, foot) * (0.35f + 0.65f * band) - 0.2f) * (0.65f * relief + 8.0f);
+		const float seaFloor = ErodedFbm(seed, qx, qz, 40.0f, 4, 80, foot) * (0.03f * relief + 0.6f);
 		const float detail = hills * (1 - mtn) + ridges * mtn;
 		L.detail = detail * (1 - L.wet) + seaFloor * L.wet;
 		return L;
@@ -1150,8 +1210,12 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	};
 	const std::vector<int> bedChain = zoneChain(K_SAND, matBed), sandChain = zoneChain(K_SAND, matSand);
 	const std::vector<int> rockChain = zoneChain(K_ROCK, matRock), snowChain = zoneChain(K_SNOW, matSnow);
+	printf("Extend map: zone chains from the ground: bed %zu, sand %zu, rock %zu, snow %zu materials\n", bedChain.size(), sandChain.size(), rockChain.size(), snowChain.size());
 	std::vector<int> mat((size_t)EW * EH, matGrass);
 	std::vector<uint8_t> matFixed((size_t)EW * EH, 0);
+	// the near ring's rock by its mountain share (tenths): the far rings' grids are too coarse
+	// for their slopes, they take the share of rock the near ring's ground of their kind has
+	std::array<double, 11> rockBinSum{}, rockBinN{};
 	// the forest floor, if the map has one that joins its ground
 	int matForestZone = mats.find(K_FOREST, matCount);
 	if (matForestZone >= 0 && (matCount[matForestZone] == 0 || !mats.hasPair(matForestZone, matGrass)))
@@ -1191,8 +1255,13 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			// each zone's strength, 0 to 1
 			const float sBed = wetHere ? std::clamp((level - v) / 1.5f, 0.0f, 1.0f) : 0.0f;
 			const float sSand = nearWater && !wetHere ? std::clamp(1.0f - (v - level) / (1.8f + jitter), 0.0f, 1.0f) * std::clamp(1.0f - (rise - 0.3f) / 0.2f, 0.0f, 1.0f) : 0.0f;
-			const float sRock = std::clamp((rise - 0.34f - 0.1f * jitter) / 0.3f, 0.0f, 1.0f);
 			const float sSnow = snowLine < 1e29f ? std::clamp((v - snowLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f) : 0.0f;
+			const float sRock = rockAt(v, rise, jitter) * (1 - sSnow);
+			if (!wetHere && !nearWater) {
+				const int b = std::clamp((int)std::lround(mountainAt[i] * 10.0f), 0, 10);
+				rockBinSum[b] += std::max(sRock, sSnow);
+				rockBinN[b] += 1;
+			}
 			struct Zone { float s; const std::vector<int>* c; };
 			const Zone zones[4] = { { sBed, &bedChain }, { sSand, &sandChain }, { sRock, &rockChain }, { sSnow, &snowChain } };
 			int m = matGrass;
@@ -1502,6 +1571,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				}
 		};
 		auto colourOf = [&](int m) { return m >= 0 && m < M ? mats.colour[m] : std::array<float, 3>{ 90, 110, 60 }; };
+		std::array<float, 11> rockShare{};
+		for (int b = 0; b <= 10; b++)
+			rockShare[b] = rockBinN[b] >= 20 ? (float)(rockBinSum[b] / rockBinN[b]) : (b > 0 ? rockShare[b - 1] : 0.0f);
+		printf("Extend map: rock share by mountain share: %.2f %.2f %.2f %.2f %.2f %.2f\n", rockShare[0], rockShare[2], rockShare[4], rockShare[6], rockShare[8], rockShare[10]);
 		const std::array<float, 3> cGrass = colourOf(matGrass), cRock = colourOf(matRock >= 0 ? matRock : matGrass);
 		const std::array<float, 3> cSnow = matSnow >= 0 ? colourOf(matSnow) : std::array<float, 3>{ 235, 238, 242 };
 		const std::array<float, 3> cSand = colourOf(matSand >= 0 ? matSand : matGrass);
@@ -1522,6 +1595,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			std::vector<float> hgt;      // per grid point
 			std::vector<uint8_t> water;  // per grid point
 			std::vector<uint8_t> used;   // per grid point: on a drawn cell
+			std::vector<float> mtn;      // per grid point: the land's mountain share
 			int nx() const { return (int)xs.size(); }
 			int nz() const { return (int)zs.size(); }
 		};
@@ -1549,6 +1623,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			R.hgt.assign((size_t)NX * NZ, 0.0f);
 			R.water.assign((size_t)NX * NZ, 0);
 			R.used.assign((size_t)NX * NZ, 0);
+			R.mtn.assign((size_t)NX * NZ, 0.0f);
 			for (int j = 0; j + 1 < NZ; j++)
 				for (int i = 0; i + 1 < NX; i++) {
 					const float cx = 0.5f * (R.xs[i] + R.xs[i + 1]), cz = 0.5f * (R.zs[j] + R.zs[j + 1]);
@@ -1563,8 +1638,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					if (!R.used[gi])
 						continue;
 					const float px = R.xs[i], pz = R.zs[j];
-					const Land L = landAt(px, pz);
-					float v = farBase(px, pz) + L.detail;
+					// (the noise without the octaves finer than the grid: they aliased into spikes)
+					const Land L = landAt(px, pz, s);
+					float v = farBase(px, pz, s) + L.detail;
+					R.mtn[gi] = L.mtn;
 					// rivers: their water, and their valleys opening up from it
 					float u, level = 0, half = 1;
 					nearestRiver(px, pz, u, level, half);
@@ -1605,6 +1682,83 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			(void)NZ;
 			return R.hgt[(size_t)j * NX + a] * (1 - t) + R.hgt[(size_t)j * NX + a + 1] * t;
 		};
+		// The ground beyond the last ring (to the horizon, drawn by the sky): the sea if most of the
+		// last ring's outer edge is, at its level; else land at the edge's mean height. Over the
+		// last ring's outer 28% its land settles to that level (the sea's shores rise out of it).
+		{
+			Ring& R = rings.back();
+			const int NX = R.nx(), NZ = R.nz();
+			double wetN = 0, all = 0, hsum = 0;
+			for (int j = 0; j < NZ; j++)
+				for (int i = 0; i < NX; i++) {
+					if (!(i == 0 || j == 0 || i == NX - 1 || j == NZ - 1))
+						continue;
+					const size_t gi = (size_t)j * NX + i;
+					all += 1;
+					wetN += R.water[gi];
+					if (!R.water[gi])
+						hsum += R.hgt[gi];
+				}
+			far->outerSea = seaLevel > -1e29f && wetN > 0.5 * all;
+			far->outerLevel = far->outerSea ? seaLevel : (all > wetN ? (float)(hsum / (all - wetN)) : seaLevel);
+			const float bw = std::max(R.ix0 - R.xs.front(), 1.0f);
+			for (int j = 0; j < NZ; j++)
+				for (int i = 0; i < NX; i++) {
+					const size_t gi = (size_t)j * NX + i;
+					if (!R.used[gi])
+						continue;
+					const float px = R.xs[i], pz = R.zs[j];
+					const float f = std::clamp(std::max({ R.ix0 - px, px - R.ix1, R.iz0 - pz, pz - R.iz1 }) / bw, 0.0f, 1.0f);
+					const float k = std::clamp((f - 0.72f) / 0.28f, 0.0f, 1.0f);
+					const float wgt = k * k * (3 - 2 * k);
+					if (far->outerSea) {
+						if (R.water[gi])
+							continue;
+						// the land sinks under the sea towards the end
+						R.hgt[gi] += (far->outerLevel - 1.5f - R.hgt[gi]) * wgt;
+						if (R.hgt[gi] < far->outerLevel) {
+							R.hgt[gi] = far->outerLevel;
+							R.water[gi] = 1;
+						}
+					}
+					else {
+						// the land settles to the level; the water (rivers, sea) under it ends
+						R.hgt[gi] += (far->outerLevel - R.hgt[gi]) * wgt;
+						if (wgt > 0.5f)
+							R.water[gi] = 0;
+					}
+				}
+		}
+		// Detail falling off gradually: over the outer part of each ring its land is smoothed
+		// towards the next ring's coarser grid (the step from one ring to the next was abrupt, the
+		// play test of 2026-11-10); the water stays level
+		for (Ring& R : rings) {
+			const int NX = R.nx(), NZ = R.nz();
+			const float bw = std::max(R.ix0 - R.xs.front(), 1.0f);
+			for (int pass = 0; pass < 2; pass++) {
+				std::vector<float> out = R.hgt;
+				for (int j = 1; j + 1 < NZ; j++)
+					for (int i = 1; i + 1 < NX; i++) {
+						const size_t gi = (size_t)j * NX + i;
+						if (!R.used[gi] || R.water[gi])
+							continue;
+						const float px = R.xs[i], pz = R.zs[j];
+						const float out_ = std::max({ R.ix0 - px, px - R.ix1, R.iz0 - pz, pz - R.iz1 }); // into the ring
+						const float f = std::clamp(out_ / bw, 0.0f, 1.0f);
+						const float wgt = std::clamp((f - 0.35f) / 0.65f, 0.0f, 1.0f);
+						if (wgt <= 0)
+							continue;
+						float sum = 0, cnt = 0;
+						for (const auto& [di, dj] : { std::pair{ 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) {
+							const size_t g = (size_t)(j + dj) * NX + i + di;
+							if (R.used[g]) { sum += R.hgt[g]; cnt += 1; }
+						}
+						if (cnt > 0)
+							out[gi] = R.hgt[gi] + (sum / cnt - R.hgt[gi]) * 0.5f * wgt * wgt * (3 - 2 * wgt);
+					}
+				R.hgt.swap(out);
+			}
+		}
 		// Stitching: ring k's outer edge on ring k + 1's inner edge (from the outside in, so each
 		// ring's edge takes the next one's as that one already stands)
 		for (int k = farRings - 2; k >= 0; k--) {
@@ -1647,6 +1801,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			}
 
 		// the vertices: normals from the grid, colours by the zones; then the cells, by blocks
+		double outerSum[3] = {}, outerN = 0;
 		for (int k = 0; k < farRings; k++) {
 			const Ring& R = rings[k];
 			const int NX = R.nx(), NZ = R.nz();
@@ -1684,12 +1839,21 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					const float jitter = Fbm(seed, px, pz, 9.0f, 3, 33);
 					if (seaLevel > -1e29f)
 						c = mix3(c, cSand, std::clamp(1.0f - (v - seaLevel) / 2.0f, 0.0f, 1.0f) * std::clamp(1.0f - (rise - 0.3f) / 0.2f, 0.0f, 1.0f));
-					c = mix3(c, cRock, std::clamp((rise - 0.34f - 0.1f * jitter) / 0.3f, 0.0f, 1.0f));
+					// (the land's rock: by its height and grid slope, or the near ring's share for its kind)
+					const float mb = std::clamp(R.mtn[gi] * 10.0f, 0.0f, 10.0f);
+					const int m0 = std::min((int)mb, 9);
+					const float share = rockShare[m0] + (rockShare[m0 + 1] - rockShare[m0]) * (mb - m0);
+					c = mix3(c, cRock, std::max(rockAt(v, rise, jitter), share));
 					if (snowLine < 1e29f)
 						c = mix3(c, cSnow, std::clamp((v - snowLine - 0.06f * relief * jitter) / (0.05f * relief + 1.0f), 0.0f, 1.0f));
 					const float shade = 1.0f + 0.08f * Fbm(seed, px, pz, 5.0f, 2, 141);
 					if (R.water[gi])
 						c = cWater;
+					else if (k == farRings - 1) {
+						for (int q = 0; q < 3; q++)
+							outerSum[q] += c[q];
+						outerN += 1;
+					}
 					FarVertex fv;
 					fv.x = (px - e.edge) * 5.0f;
 					fv.z = (pz - e.edge) * 5.0f;
@@ -1736,6 +1900,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				}
 		}
 		far->reach = 5.0f * B0 * (float)((1 << farRings) - 1);
+		// the land beyond: the last ring's mean colour (0-1, as PS_Far takes the vertex colours)
+		for (int q = 0; q < 3; q++)
+			far->outerColour[q] = std::clamp((outerN > 0 ? (float)(outerSum[q] / outerN) : cGrass[q]) / 255.0f, 0.0f, 1.0f);
+		printf("Extend map: beyond the last ring %s at %.1f\n", far->outerSea ? "the sea" : "land", far->outerLevel);
 		printf("Extend map: %d far rings to %.0f units beyond the near ring: %zu vertices, %zu triangles, %zu blocks\n",
 			farRings, far->reach, far->vertices.size(), far->indices.size() / 3, far->blocks.size());
 	}

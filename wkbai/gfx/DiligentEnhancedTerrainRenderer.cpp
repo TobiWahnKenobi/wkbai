@@ -74,6 +74,10 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FarGround; // Extend map's ground beyond its last ring: its level, the last ring's end outside the playable area, 1 sea, on
+	float4 FarLand;   // its land's colour (0-1), the air's length over it (world units)
+	float4 FarArea;   // the playable area's width and depth, how far outside it the near ring ends, the far clip
+	float4 FarSun;    // the sun's direction (unit)
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -107,6 +111,47 @@ float3 FogRatioDir(float3 d)
 float3 FogTint(float3 worldPos)
 {
 	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
+// Extend map's ground beyond its last ring, out to the true horizon (FarGround): flat at its
+// level, the sea or land; drawn by the sky under the horizon (DiligentSkyRenderer), and the last
+// ring's outer part goes over into it (PS_Far, PS_FarSea: the same function there), so the land
+// and the sea reach the horizon at eye level from any height and the sun stays where it is above
+// them (the far rings had ended a few kilometres out: from higher up a band of the sky's colour
+// opened under the horizon, the play test of 2026-11-10). rd: the unit ray from the camera, t
+// the distance along it. The sea: its deep body under the horizon's colour by Fresnel, the
+// sun's glint along the mirror ray; the land: its colour in the sun and the horizon's light.
+// Both go into the horizon's colour with the real air's depth over them (FarLand.w: two thirds
+// of the way over that length; at the horizon all of it, so they meet the sky without a line).
+// Ungraded and unfogged.
+float3 FarGroundColour(float3 rd, float t)
+{
+	float3 hz = FogTintDir(rd);
+	float3 l = FarSun.xyz;
+	float3 c;
+	if (FarGround.z > 0.5) {
+		float fresnel = 0.02 + 0.98 * pow(1 - saturate(-rd.y), 5);
+		float3 body = float3(0.015, 0.15, 0.26) * (0.6 + 0.4 * saturate(l.y)) * saturate(dot(hz, float3(0.3, 0.59, 0.11)) * 2);
+		float3 r = float3(rd.x, -rd.y, rd.z);
+		float glint = pow(saturate(dot(r, l)), 160) * 0.45 * saturate(l.y * 20 + 0.3);
+		c = lerp(body, hz, fresnel) + glint;
+	}
+	else
+		c = FarLand.rgb * (hz * 0.85 + saturate(l.y) * 0.75 * saturate(l.y * 6));
+	return lerp(c, hz, 1 - exp(-t / max(FarLand.w, 1)));
+}
+// how far into the ground beyond a world position is, 0 to 1: the last ring's outer part, and
+// whatever lies near the camera's far clip (cut off there, the rings ended in a line under the
+// ground beyond, the sea's darker than its mirror of the sky)
+float FarGroundShare(float3 world)
+{
+	if (FarGround.w == 0)
+		return 0;
+	float2 outside = max(-world.xz, world.xz - FarArea.xy);
+	float k = smoothstep(0.9, 0.995, max(outside.x, outside.y) / max(FarGround.y, 1));
+	if (FarArea.w > 0)
+		k = max(k, smoothstep(0.8, 0.97, distance(world, FogCamera.xyz) / FarArea.w));
+	return k;
 }
 
 
@@ -865,6 +910,47 @@ float4 WaterReflection(float4 svpos, float3 world, float3 r)
 	return float4(lerp(seen.a > 0 ? seen.rgb : rt.rgb, rt.rgb, rt.a), max(seen.a, rt.a));
 }
 
+// The far sea: High water's open sea as it looks from afar (PS_LakeHigh, deep, its waves smaller
+// than a pixel): the deep body with a little of the water texture, lit by the sun through the
+// surface, under the sky along the mirror ray by Fresnel, the sun's highlight. Its normal: a few
+// broad ripples (the ripple map at a third of its scale, two layers), fading out with the
+// distance (a flat blue surface, the play test of 2026-11-10). Far out it mirrors the sky wholly
+// at the grazing view, as the sea does towards the horizon, so it meets the sky in the sky's own
+// colours, dawn's and dusk's too. Ungraded, unfogged. With the water's binding: the water
+// texture, the ripple map and the sky box (PS_FarSea, and the near water at the near ring's end).
+float3 FarSeaColour(float3 world)
+{
+	float3 v = normalize(FogCamera.xyz - world);
+	float3 l = normalize(SunDirection);
+	float far = saturate((distance(world, FogCamera.xyz) - 1500) / 10000);
+	float2 ruv = world.xz * WaterParams.z * 0.33;
+	float2 slope = (normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy - 0.5)
+		+ (normalTexture.Sample(cloudSampler, ruv * 2.1 + WaterRipples.zw).yx - 0.5) * 0.6;
+	slope *= 0.4 * (1 - far);
+	float3 n = normalize(float3(slope.x, 1, slope.y));
+	float cloud = CloudLight(world);
+	float2 uv = world.xz * WaterParams.y;
+	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
+	float3 body = lerp(float3(0.015, 0.15, 0.26), tex * float3(0.55, 0.75, 0.85), 0.25);
+	body *= (0.6 + 0.4 * saturate(l.y)) * cloud * (0.9 + 0.25 * (slope.x + slope.y));
+	// (the waves' tilt towards the viewer near the seam, where they still show; none far out)
+	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v) + 0.06 * (1 - far)), 5);
+	float3 r = reflect(-v, n);
+	r.y = abs(r.y);
+	float3 sky = SkyAlong(r) * lerp(1, cloud, 0.5);
+	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud;
+	return lerp(body, sky, fresnel * lerp(0.8, 1.0, far)) + glint;
+}
+// Extend map: how far into the near ring's last part a world position is (its water goes over
+// into the far sea's look there, its ground into the far rings' plain colours, so they meet
+// without a line), 0 to 1
+float NearToFarSea(float3 world)
+{
+	if (FarGround.w == 0 || FarArea.z <= 0)
+		return 0;
+	float2 outside = max(-world.xz, world.xz - FarArea.xy);
+	return smoothstep(0.45, 0.97, max(outside.x, outside.y) / FarArea.z);
+}
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
@@ -961,6 +1047,12 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		alpha = max(alpha, share);
 	}
 	alpha *= FloodShore(input.Flood, input.Depth);
+	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
+	float toFar = NearToFarSea(input.World);
+	if (toFar > 0) {
+		c = lerp(c, FarSeaColour(input.World), toFar);
+		alpha = lerp(alpha, 1, toFar);
+	}
 	if (WaterSkyUp.w != 0)
 		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
 	return IceOver(float4(GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
@@ -1146,6 +1238,12 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
+	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
+	float toFar = NearToFarSea(input.World);
+	if (toFar > 0) {
+		c = lerp(c, FarSeaColour(input.World), toFar);
+		alpha = lerp(alpha, 1, toFar);
+	}
 	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
 }
 
@@ -1391,6 +1489,19 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	float2 fuv = AtlasUV(input.Texcoord);
 	float4 tex = inpTexture.Sample(inpSampler, fuv);
 	float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
+	// Extend map: over the near ring's last part its tiles' pictures give way to their mean
+	// colours (the atlas' 4 x 4 mip, a texel per tile) and flat normals, as the far rings beyond
+	// show them (the textured ground had stopped short against the plain one, the play test of
+	// 2026-11-10)
+	float k = NearToFarSea(input.FragPos);
+	if (k > 0) {
+		uint aw, ah, levels;
+		inpTexture.GetDimensions(0, aw, ah, levels);
+		float2 tile = floor(saturate(fuv) * 4);
+		float3 mean = inpTexture.SampleLevel(inpSampler, (min(tile, 3) + 0.5) * 0.25, max((float)levels - 3, 0)).rgb;
+		tex.rgb = lerp(tex.rgb, mean, k);
+		nrm = normalize(lerp(nrm, float3(0, 1, 0), k));
+	}
 	return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
 }
 
@@ -1426,39 +1537,29 @@ float4 PS_Far(VS_OUTPUT input) : SV_Target
 	// (the far sea is drawn by PS_FarSea, with the water's resources)
 	if (input.Texcoord.x > 0.5)
 		discard;
-	return ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
+	float4 c = ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
+	// the last ring's outer part going over into the ground beyond (to the horizon)
+	float k = FarGroundShare(input.FragPos);
+	if (k > 0) {
+		float3 d = input.FragPos - FogCamera.xyz;
+		float t = max(length(d), 1e-3);
+		c.rgb = lerp(c.rgb, GradeColour(lerp(FarGroundColour(d / t, t), FogTint(input.FragPos), input.Fog)), k);
+	}
+	return c;
 }
-// The far sea: High water's open sea as it looks from afar, where its waves are smaller than a
-// pixel (PS_LakeHigh, deep and without the waves: their mean normal is the flat one): the deep
-// body with a little of the water texture, lit by the sun through the surface, under the sky
-// along the mirror ray by Fresnel (the waves tilt it towards the viewer, so the grazing view
-// reflects a little less than a flat mirror would), the sun's broad highlight, then the scene's
-// fog. With the water's binding: the water texture and the sky box. (It had been the vertex
-// colour under the fog colour: far lighter than the water at the seam with the near ring, a hard
-// line across the sea at dusk.)
 float4 PS_FarSea(VS_OUTPUT input) : SV_Target
 {
 	if (input.Texcoord.x <= 0.5)
 		discard;
 	float3 world = input.FragPos;
-	float3 v = normalize(FogCamera.xyz - world);
-	float3 l = normalize(SunDirection);
-	float3 n = float3(0, 1, 0);
-	float cloud = CloudLight(world);
-	float2 uv = world.xz * WaterParams.y;
-	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
-	float3 body = lerp(float3(0.015, 0.15, 0.26), tex * float3(0.55, 0.75, 0.85), 0.25);
-	body *= (0.6 + 0.4 * saturate(l.y)) * cloud;
-	// (the waves' tilt matters near the seam, where they still show; kilometres out, at the
-	// grazing view, the sea mirrors the sky wholly, as it does towards the horizon: there it meets
-	// the sky in the sky's own colours, dawn's and dusk's too. With the tilt everywhere the far sea
-	// stayed darker than the sky right to the horizon, a hard line on long views.)
-	float far = saturate((distance(world, FogCamera.xyz) - 1500) / 10000);
-	float fresnel = 0.02 + 0.98 * pow(1 - saturate(v.y + 0.06 * (1 - far)), 5);
-	float3 r = reflect(-v, n);
-	float3 sky = SkyAlong(r) * lerp(1, cloud, 0.5);
-	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud;
-	float3 c = lerp(body, sky, fresnel * lerp(0.8, 1.0, far)) + glint;
+	float3 c = FarSeaColour(world);
+	// the last ring's outer part going over into the ground beyond (to the horizon)
+	float k = FarGroundShare(world);
+	if (k > 0) {
+		float3 d = world - FogCamera.xyz;
+		float t = max(length(d), 1e-3);
+		c = lerp(c, FarGroundColour(d / t, t), k);
+	}
 	return float4(GradeColour(lerp(c, FogTint(world), input.Fog)), 1);
 }
 )---";

@@ -49,6 +49,10 @@ cbuffer FogBuffer
 	float4 FogSun;        // the haze's tint (DiligentSkyRenderer): towards the true sun (unit), its weight (0 off)
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
+	float4 FarGround; // Extend map's ground beyond its last ring: its level, the last ring's end outside the playable area, 1 sea, on
+	float4 FarLand;   // its land's colour (0-1), the air's length over it (world units)
+	float4 FarArea;   // the playable area's width and depth, how far outside it the near ring ends, the far clip
+	float4 FarSun;    // the sun's direction (unit)
 };
 
 // The haze's colour along a direction (the distance and edge fog's, the sky's horizon band): at
@@ -82,6 +86,47 @@ float3 FogRatioDir(float3 d)
 float3 FogTint(float3 worldPos)
 {
 	return FogTintDir(worldPos - FogCamera.xyz);
+}
+
+// Extend map's ground beyond its last ring, out to the true horizon (FarGround): flat at its
+// level, the sea or land; drawn by the sky under the horizon (DiligentSkyRenderer), and the last
+// ring's outer part goes over into it (PS_Far, PS_FarSea: the same function there), so the land
+// and the sea reach the horizon at eye level from any height and the sun stays where it is above
+// them (the far rings had ended a few kilometres out: from higher up a band of the sky's colour
+// opened under the horizon, the play test of 2026-11-10). rd: the unit ray from the camera, t
+// the distance along it. The sea: its deep body under the horizon's colour by Fresnel, the
+// sun's glint along the mirror ray; the land: its colour in the sun and the horizon's light.
+// Both go into the horizon's colour with the real air's depth over them (FarLand.w: two thirds
+// of the way over that length; at the horizon all of it, so they meet the sky without a line).
+// Ungraded and unfogged.
+float3 FarGroundColour(float3 rd, float t)
+{
+	float3 hz = FogTintDir(rd);
+	float3 l = FarSun.xyz;
+	float3 c;
+	if (FarGround.z > 0.5) {
+		float fresnel = 0.02 + 0.98 * pow(1 - saturate(-rd.y), 5);
+		float3 body = float3(0.015, 0.15, 0.26) * (0.6 + 0.4 * saturate(l.y)) * saturate(dot(hz, float3(0.3, 0.59, 0.11)) * 2);
+		float3 r = float3(rd.x, -rd.y, rd.z);
+		float glint = pow(saturate(dot(r, l)), 160) * 0.45 * saturate(l.y * 20 + 0.3);
+		c = lerp(body, hz, fresnel) + glint;
+	}
+	else
+		c = FarLand.rgb * (hz * 0.85 + saturate(l.y) * 0.75 * saturate(l.y * 6));
+	return lerp(c, hz, 1 - exp(-t / max(FarLand.w, 1)));
+}
+// how far into the ground beyond a world position is, 0 to 1: the last ring's outer part, and
+// whatever lies near the camera's far clip (cut off there, the rings ended in a line under the
+// ground beyond, the sea's darker than its mirror of the sky)
+float FarGroundShare(float3 world)
+{
+	if (FarGround.w == 0)
+		return 0;
+	float2 outside = max(-world.xz, world.xz - FarArea.xy);
+	float k = smoothstep(0.9, 0.995, max(outside.x, outside.y) / max(FarGround.y, 1));
+	if (FarArea.w > 0)
+		k = max(k, smoothstep(0.8, 0.97, distance(world, FogCamera.xyz) / FarArea.w));
+	return k;
 }
 
 
@@ -884,6 +929,18 @@ float3 NightAir(float3 rd)
 	return c;
 }
 
+// The scene's fog on the ground beyond at t along rd (as the terrain's FogAmount)
+float GroundFog(float3 rd, float t)
+{
+	float3 p = FogCamera.xyz + rd * min(t, 1e7);
+	float distanceFog = saturate((t - FogStartDist) / (FogEndDist - FogStartDist));
+	float2 outside = max(-p.xz, p.xz - EdgeFog.xy);
+	float edgeFog = saturate((max(outside.x, outside.y) - EdgeFog.z) / max(EdgeFog.w - EdgeFog.z, 1e-3));
+	float f = max(distanceFog, edgeFog);
+	float level = 1 - smoothstep(0, 0.035, abs(FogCamera.y - p.y) / max(t, 1));
+	return 1 - pow(1 - f, 1 + 6 * level);
+}
+
 float4 PS(VS_OUTPUT input) : SV_Target
 {
 	float3 d = CamForward.xyz + input.Ndc.x * CamForward.w * CamRight.xyz + input.Ndc.y * CamRight.w * CamUp.xyz;
@@ -896,6 +953,13 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	bool sixFaces = SkyFlags.x != 0;
 	float fog = (sixFaces && FogStartDist > 1e8) ? 0 : (c < 0 ? 1 : SkyFog(c / max(horizontal, 1e-6)));
 	float3 colour = FogTintDir(rd);
+	// Extend map's ground beyond its last ring, under the horizon (only where nothing else is
+	// drawn): to the true horizon at eye level, under the scene's fog there
+	const bool ground = c < 0 && FarGround.w != 0;
+	if (ground) {
+		float t = FogCamera.y > FarGround.x ? (FogCamera.y - FarGround.x) / max(-rd.y, 1e-6) : 1e9;
+		colour = lerp(FarGroundColour(rd, t), FogTintDir(rd), GroundFog(rd, t));
+	}
 	float night = SkySun.w;
 	float overcast = 0; // how much the weather's clouds over the sky box hide (the stars, the moon)
 	float3 highAdded = 0; // what the high clouds changed of the sky (hidden behind the cumulus below)
@@ -973,7 +1037,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// 8, in the haze's colours along the horizon: with the night's darkness from the clock, 0.6
 	// with the sun on the horizon, the sunset stood behind a dark wall, the play test of 2026-11-09)
 	const float lowNight = SkyRight.w != 0 ? night * saturate((-SkySun.y - 0.035) / 0.1) : night;
-	float lowHaze = lowNight * (1 - smoothstep(0.0, 0.3, rd.y));
+	float lowHaze = ground ? 0 : lowNight * (1 - smoothstep(0.0, 0.3, rd.y));
 	colour = lerp(colour, SkyRight.w != 0 ? FogTintDir(rd) : FogColor.rgb, lowHaze);
 	float3 outc = GradeColour(colour);
 	// the moon and the stars over the graded sky (the night's grade would dim them to grey)

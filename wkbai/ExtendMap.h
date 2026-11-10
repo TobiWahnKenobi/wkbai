@@ -37,6 +37,12 @@ struct FarTerrain {
 	std::vector<uint32_t> indices;
 	std::vector<FarBlock> blocks;
 	float reach = 0; // world units from the near ring's edge to the last ring's
+	// The ground beyond the last ring, out to the true horizon (drawn by the sky under the horizon,
+	// DiligentSkyRenderer; the last ring's outer part goes over into it): flat at outerLevel, sea
+	// (outerSea) or land of outerColour (0-1, as the vertex colours)
+	float outerLevel = 0;
+	bool outerSea = false;
+	float outerColour[3] = { 0.3f, 0.35f, 0.2f };
 };
 
 struct ExtendedTerrainDeleter { void operator()(Terrain* t) const; };
