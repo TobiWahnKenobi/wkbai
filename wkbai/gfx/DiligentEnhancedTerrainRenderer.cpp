@@ -164,13 +164,16 @@ float FarGroundShare(float3 world)
 Texture2D<float> lightRtMask;
 Texture2D<float> lightAoMask;
 SamplerState lightMaskSampler;
+// (0 in Extend map's far rings: they are not in the ray-traced scene, and the masks rebuilt from
+// the depth kilometres out shadowed the low sun's land in bands, the play test of 2026-11-10)
+static float ScreenMasks = 1;
 float RtSunMask(float4 pos)
 {
-	return LightMasks.x != 0 ? lightRtMask.Load(int3(pos.xy, 0)) : 1;
+	return LightMasks.x != 0 && ScreenMasks != 0 ? lightRtMask.Load(int3(pos.xy, 0)) : 1;
 }
 float AoMask(float4 pos)
 {
-	if (LightMasks.y <= 0)
+	if (LightMasks.y <= 0 || ScreenMasks == 0)
 		return 1;
 	float2 uv = pos.xy * LightMasks.zw, h = LightMasks.zw * 2;
 	float ao = (lightAoMask.SampleLevel(lightMaskSampler, uv + float2(-h.x, -h.y), 0) + lightAoMask.SampleLevel(lightMaskSampler, uv + float2(h.x, -h.y), 0)
@@ -1540,6 +1543,7 @@ float4 PS_Far(VS_OUTPUT input) : SV_Target
 	// (the far sea is drawn by PS_FarSea, with the water's resources)
 	if (input.Texcoord.x > 0.5)
 		discard;
+	ScreenMasks = 0;
 	float4 c = ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
 	// the last ring's outer part going over into the ground beyond (to the horizon)
 	float k = FarGroundShare(input.FragPos);
@@ -1831,14 +1835,14 @@ static texture CreateRippleTexture(IRenderer* gfx)
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
 
 
-DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles, int farRings)
-	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain), farRingCount(farRings)
+DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles, int farRings, int extendDetail)
+	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain), farRingCount(farRings), farDetail(extendDetail)
 {
 	// Extend map: everything below draws the bigger copy (the same world coordinates)
 	if (terrain && extendTiles > 0) {
 		LoadingDetail("extending the map");
 		const uint32_t t0 = SDL_GetTicks();
-		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees, farRings, &far);
+		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees, farRings, &far, extendDetail);
 		this->terrain = extended.get();
 		printf("Extend map: built in %u ms\n", (unsigned)(SDL_GetTicks() - t0));
 	}

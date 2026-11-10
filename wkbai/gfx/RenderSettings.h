@@ -74,6 +74,9 @@ struct RenderSettings {
 	// game never sees it). 0 off, 1 near (64 tiles beyond the mesh's edge), 2 far (and coarser
 	// rings to about 3.6 km beyond), 3 horizon (to about 30 km); not in the map editor
 	int extendMap = 0;
+	// its detail (Low, Medium, High, Ultra): the first far ring's grid 20, 10, 5 or 2.5 units
+	// (each ring twice as coarse as the one inside it); Ultra takes longer to build
+	int extendMapDetail = 1;
 	bool grass = true;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)

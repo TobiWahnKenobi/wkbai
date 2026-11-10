@@ -55,7 +55,8 @@ struct ExtendedTree { float x, y, z, yaw, scale; uint32_t variant; bool forest; 
 
 // The copy of map with n tiles more on each side (deterministic: the same map, the same copy),
 // and its trees (if wanted)
-ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr, int farRings = 0, FarTerrain* far = nullptr);
+// detail: the far rings' (RenderSettings::extendMapDetail, 0-3: ring 0's grid 4, 2, 1 or 0.5 tiles)
+ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr, int farRings = 0, FarTerrain* far = nullptr, int detail = 1);
 
 // The map's changes at run time carried into the copy: its vertices (levelled building sites,
 // farms, the editor's heights), its tiles, and its water (lakes, the water design, ice)

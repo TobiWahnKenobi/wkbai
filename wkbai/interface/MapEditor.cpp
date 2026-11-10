@@ -277,7 +277,7 @@ TerrainRenderer* ClientInterface::makeTerrainRenderer()
 	if (UseEnhancedRenderers(gfx)) {
 		const bool check = BenchmarkEnabled() && client->terrain;
 		const uint64_t before = check ? MapTerrainHash(client->terrain) : 0;
-		TerrainRenderer* r = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera, wantedExtendTiles(), wantedFarRings());
+		TerrainRenderer* r = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera, wantedExtendTiles(), wantedFarRings(), g_renderSettings.extendMapDetail);
 		if (check)
 			printf("EXTENDMAP map terrain hash %016llx before, %016llx after the renderer (%d tiles added)\n",
 				(unsigned long long)before, (unsigned long long)MapTerrainHash(client->terrain), r->extendedTiles());

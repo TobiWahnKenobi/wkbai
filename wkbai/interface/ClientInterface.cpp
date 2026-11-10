@@ -1031,6 +1031,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
 			static const char* const extendLevels[] = { "Off", "Near (64 tiles beyond the edge)", "Far (to about 3.6 km)", "Horizon (to about 30 km)" };
 			ImGui::Combo("Extend map (not in the editor)", &s.extendMap, extendLevels, 4);
+			static const char* const extendDetails[] = { "Low", "Medium", "High", "Ultra (slower to build)" };
+			ImGui::BeginDisabled(s.extendMap < 2);
+			ImGui::Combo("Extend map detail (far land)", &s.extendMapDetail, extendDetails, 4);
+			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
@@ -2682,7 +2686,8 @@ void ClientInterface::iter()
 	// Extend map switched on or off, or the map editor opened or closed (it has none): the
 	// terrain renderer made again
 	if (terrainRenderer && client->terrain && UseEnhancedRenderers(gfx)
-		&& (terrainRenderer->extendedTiles() != wantedExtendTiles() || terrainRenderer->extendedFarRings() != wantedFarRings())) {
+		&& (terrainRenderer->extendedTiles() != wantedExtendTiles() || terrainRenderer->extendedFarRings() != wantedFarRings()
+			|| (wantedFarRings() > 0 && terrainRenderer->extendedDetail() != g_renderSettings.extendMapDetail))) {
 		delete terrainRenderer;
 		terrainRenderer = makeTerrainRenderer();
 	}

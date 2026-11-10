@@ -240,6 +240,16 @@ namespace {
 			o.set = [&rs](float v) { rs.extendMap = std::clamp((int)v, 0, 3); };
 			list.push_back(o);
 		}
+		{
+			// its far land's detail (the first far ring's grid; Ultra builds slower)
+			MenuOption o;
+			o.id = "extendMapDetail"; o.page = "terrain"; o.label = "Extend map detail";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High", "Ultra" };
+			o.get = [&rs]() { return (float)rs.extendMapDetail; };
+			o.set = [&rs](float v) { rs.extendMapDetail = std::clamp((int)v, 0, 3); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
