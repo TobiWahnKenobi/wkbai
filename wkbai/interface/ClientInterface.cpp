@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "ClientInterface.h"
+#include "../AgentInput.h"
 #include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
@@ -4864,12 +4865,16 @@ void ClientInterface::iter()
 
 	// Test runs: "benchmark": { ..., "drawCursor": true } draws the cursor into the frame (the
 	// screenshots leave out the system's cursor)
-	if (BenchmarkEnabled() && currentCursor && g_settings.value("benchmark", nlohmann::json::object()).value("drawCursor", false)) {
+	// The agent's cursor too, while it has the input (AgentInput): the system's cursor stays with
+	// the person's mouse
+	if (currentCursor && (AgentInput::HasInput()
+		|| (BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("drawCursor", false)))) {
 		int cw, ch;
 		WndCursorSize(currentCursor, cw, ch);
 		const ImVec2 at((float)UiMouseX(), (float)UiMouseY());
 		ImGui::GetForegroundDrawList()->AddImage(uiTexCache.getTexture(WndCursorPath(currentCursor), false), at,
 			ImVec2(at.x + cw / g_uiScale, at.y + ch / g_uiScale));
+		AgentInput::MarkCursorDrawn();
 	}
 	{
 		ZoneScopedN("ImGui rendering");

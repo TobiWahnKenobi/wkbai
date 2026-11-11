@@ -25,6 +25,8 @@ enum class KeyAction {
 	GroupSelect1, GroupSelect2, GroupSelect3, GroupSelect4, GroupSelect5, GroupSelect6, GroupSelect7, GroupSelect8, GroupSelect9, GroupSelect0,
 	// the game
 	OpenMenu, OpenOptions, Chat, Pause, SpeedUp, SlowDown,
+	// agent control: the input to the person at the keyboard and back (window.cpp, AgentInput)
+	AgentTakeOver,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
 	// the map editor

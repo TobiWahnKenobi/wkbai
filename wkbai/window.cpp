@@ -4,6 +4,7 @@
 
 #include "window.h"
 #include "interface/KeyBindings.h"
+#include "AgentInput.h"
 #include <cstdio>
 #include <algorithm>
 #include <string>
@@ -148,6 +149,105 @@ static void ApplyDisplayMode(int mode)
 	printf("Display mode: %s, %i x %i\n", names[mode], w, h);
 }
 
+// The game's input state from one event: the operating system's and the agent's (AgentInput)
+// alike, so the interface can't tell them apart
+static void ProcessInputEvent(const SDL_Event& event, bool imguion, bool igWantsMouse)
+{
+	if (imguion)
+		HandleImGui(event);
+	switch (event.type) {
+	case SDL_EVENT_QUIT:
+		g_windowQuit = true;
+		break;
+	case SDL_EVENT_KEY_DOWN:
+		g_keyDown[event.key.scancode] = true;
+		g_keyPressed[event.key.scancode] = true;
+		break;
+	case SDL_EVENT_KEY_UP:
+		g_keyDown[event.key.scancode] = false; break;
+	case SDL_EVENT_WINDOW_RESIZED:
+		g_windowWidth = event.window.data1;
+		g_windowHeight = event.window.data2;
+		printf("Resized! %i %i\n", g_windowWidth, g_windowHeight);
+		if (g_gfxRenderer)
+			g_gfxRenderer->Reset();
+		break;
+	case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		if (!igWantsMouse) {
+			g_mouseDown[event.button.button] = true;
+			g_mousePressed[event.button.button] = true;
+			if (event.button.clicks == 2)
+				g_mouseDoubleClicked = event.button.button;
+		}
+		break;
+	case SDL_EVENT_MOUSE_BUTTON_UP:
+		if (!igWantsMouse) {
+			g_mouseDown[event.button.button] = false;
+			g_mouseReleased[event.button.button] = true;
+		}
+		break;
+	case SDL_EVENT_MOUSE_MOTION:
+		g_mouseX = (int)event.motion.x;
+		g_mouseY = (int)event.motion.y;
+		break;
+	case SDL_EVENT_TEXT_INPUT:
+		g_textTyped += event.text.text;
+		break;
+	case SDL_EVENT_MOUSE_WHEEL:
+		if(!igWantsMouse)
+			g_mouseWheel += event.wheel.integer_y;
+		//printf("mouse wheel %i\n", g_mouseWheel);
+		break;
+	}
+}
+
+// a person's (or the agent's) hand on the mouse or keyboard
+static bool IsInputEvent(const SDL_Event& event)
+{
+	switch (event.type) {
+	case SDL_EVENT_KEY_DOWN: case SDL_EVENT_KEY_UP: case SDL_EVENT_TEXT_INPUT: case SDL_EVENT_TEXT_EDITING:
+	case SDL_EVENT_MOUSE_MOTION: case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: case SDL_EVENT_MOUSE_WHEEL:
+		return true;
+	default:
+		return false;
+	}
+}
+
+// the take-over key (KeyAction::AgentTakeOver), from the operating system's keyboard
+static bool IsTakeOverKey(const SDL_Event& event)
+{
+	if (event.type != SDL_EVENT_KEY_DOWN || event.key.repeat)
+		return false;
+	const int mods = ((event.key.mod & SDL_KMOD_CTRL) ? KeyChord::CTRL : 0) | ((event.key.mod & SDL_KMOD_SHIFT) ? KeyChord::SHIFT : 0)
+		| ((event.key.mod & SDL_KMOD_ALT) ? KeyChord::ALT : 0);
+	for (int slot = 0; slot < KEY_SLOTS; slot++) {
+		const KeyChord c = GetKeyBinding(KeyAction::AgentTakeOver, slot);
+		if (!c.empty() && c.key == (int)event.key.scancode && c.mods == mods)
+			return true;
+	}
+	return false;
+}
+
+// the input changes hands: nothing held stays held (a button down when the agent took over
+// would otherwise never come up)
+static void LetGoOfInput(bool imguion)
+{
+	std::fill(std::begin(g_keyDown), std::end(g_keyDown), false);
+	std::fill(std::begin(g_mouseDown), std::end(g_mouseDown), false);
+	if (imguion) {
+		ImGuiIO& io = ImGui::GetIO();
+		io.MouseDown[0] = false;
+		io.AddKeyEvent(ImGuiKey_ModCtrl, false);
+		io.AddKeyEvent(ImGuiKey_ModShift, false);
+		io.AddKeyEvent(ImGuiKey_ModAlt, false);
+	}
+}
+
+int InputModState()
+{
+	return AgentInput::HasInput() ? AgentInput::Mods() : (int)SDL_GetModState();
+}
+
 void HandleWindow()
 {
 	FrameMark;
@@ -173,59 +273,29 @@ void HandleWindow()
 		igWantsMouse = io.WantCaptureMouse;
 	}
 
-	SDL_Keymod kmod = SDL_GetModState();
+	while (SDL_PollEvent(&event)) {
+		if (AgentInput::Enabled() && IsTakeOverKey(event)) {
+			AgentInput::SetTakenOver(!AgentInput::TakenOver());
+			LetGoOfInput(imguion);
+			printf("Agent control: %s\n", AgentInput::TakenOver() ? "the input taken over at the keyboard" : "the input given back to the agent");
+			fflush(stdout);
+			continue;
+		}
+		// the agent has the input: the operating system's mouse and keyboard don't add to it
+		if (AgentInput::HasInput() && IsInputEvent(event))
+			continue;
+		ProcessInputEvent(event, imguion, igWantsMouse);
+	}
+	// the agent's frame, through the same function
+	static std::vector<SDL_Event> agentEvents;
+	if (AgentInput::TakeFrame(agentEvents))
+		for (const SDL_Event& e : agentEvents)
+			ProcessInputEvent(e, imguion, igWantsMouse);
+
+	const int kmod = InputModState();
 	g_modCtrl = kmod & SDL_KMOD_CTRL;
 	g_modShift = kmod & SDL_KMOD_SHIFT;
 	g_modAlt = kmod & SDL_KMOD_ALT;
-
-	while (SDL_PollEvent(&event)) {
-		if (imguion)
-			HandleImGui(event);
-		switch (event.type) {
-		case SDL_EVENT_QUIT:
-			g_windowQuit = true;
-			break;
-		case SDL_EVENT_KEY_DOWN:
-			g_keyDown[event.key.scancode] = true;
-			g_keyPressed[event.key.scancode] = true;
-			break;
-		case SDL_EVENT_KEY_UP:
-			g_keyDown[event.key.scancode] = false; break;
-		case SDL_EVENT_WINDOW_RESIZED:
-			g_windowWidth = event.window.data1;
-			g_windowHeight = event.window.data2;
-			printf("Resized! %i %i\n", g_windowWidth, g_windowHeight);
-			if (g_gfxRenderer)
-				g_gfxRenderer->Reset();
-			break;
-		case SDL_EVENT_MOUSE_BUTTON_DOWN:
-			if (!igWantsMouse) {
-				g_mouseDown[event.button.button] = true;
-				g_mousePressed[event.button.button] = true;
-				if (event.button.clicks == 2)
-					g_mouseDoubleClicked = event.button.button;
-			}
-			break;
-		case SDL_EVENT_MOUSE_BUTTON_UP:
-			if (!igWantsMouse) {
-				g_mouseDown[event.button.button] = false;
-				g_mouseReleased[event.button.button] = true;
-			}
-			break;
-		case SDL_EVENT_MOUSE_MOTION:
-			g_mouseX = (int)event.motion.x;
-			g_mouseY = (int)event.motion.y;
-			break;
-		case SDL_EVENT_TEXT_INPUT:
-			g_textTyped += event.text.text;
-			break;
-		case SDL_EVENT_MOUSE_WHEEL:
-			if(!igWantsMouse)
-				g_mouseWheel += event.wheel.integer_y;
-			//printf("mouse wheel %i\n", g_mouseWheel);
-			break;
-		}
-	}
 }
 
 void SetRenderer(IRenderer *gfx)
