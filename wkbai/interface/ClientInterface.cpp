@@ -4459,8 +4459,10 @@ void ClientInterface::iter()
 		}
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
 
-		// highlight hovered object
-		if (nextSelectedObject) {
+		// highlight hovered object; not in test runs ("benchmark"): they start detached but still read
+		// the real cursor, and a building under it was drawn unshaded (SEFLAG_NOLIGHTING), so test
+		// shots came out at random without its light (GI Ultra's lamps, 2026-11-11)
+		if (nextSelectedObject && !BenchmarkEnabled()) {
 			highlightedObjects.insert(nextSelectedObject);
 			if (nextSelectedObject->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
 				&& nextSelectedObject->parent && nextSelectedObject->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
