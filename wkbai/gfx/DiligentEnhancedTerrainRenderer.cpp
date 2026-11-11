@@ -158,18 +158,32 @@ float3 GradeColour(float3 c)
 }
 
 // Ultra's cast light from the lamps, fires and windows (DirectWindowLight) under the night's
-// grade: its colour pushed out by as much as the grade's saturation takes away (as Emission
-// does for the glowing texels), so a fire's pool stays orange at night instead of going grey with
-// the scene; half the grade's darkening made up (the square root of its exposure: all of it
-// overexposed the night), and a soft shoulder, so a strong lamp rolls off instead of clipping
-// flat yellow where it adds to the sun or to another lamp
-float3 CastLight(float3 c)
+// grade. CastLightOn: a surface's share of it (its colour times the light, the light with a soft
+// shoulder, so a strong lamp rolls off instead of clipping flat yellow where it adds to the sun or
+// to another lamp), made up for the grade: half its darkening (the square root of the exposure:
+// all of it overexposed the night) and all of its desaturation, the colour pushed out about its
+// brightness. The push may go below 0 in a channel (an orange fire's blue): the grade is linear
+// and takes it back to what it was; clamped there, a fire at night came out pale, its blue raised
+// towards grey (the user's furnace shots). On the surface's colour times the light, not on the
+// light alone: the grade desaturates the product. CastLight: the light alone, for the vertex-lit
+// models (their colour is multiplied in later).
+float3 CastShoulder(float3 c)
 {
-	float lum = dot(c, float3(0.299, 0.587, 0.114));
-	c /= 1 + lum * 0.3;
+	return c / (1 + dot(c, float3(0.299, 0.587, 0.114)) * 0.3);
+}
+float3 Ungraded(float3 c)
+{
 	c /= sqrt(max(Grade.x, 0.35));
-	lum = dot(c, float3(0.299, 0.587, 0.114));
-	return max(lum + (c - lum) / max(Grade.w, 0.4), 0);
+	float lum = dot(c, float3(0.299, 0.587, 0.114));
+	return lum + (c - lum) / max(Grade.w, 0.4);
+}
+float3 CastLightOn(float3 surface, float3 light)
+{
+	return Ungraded(surface * CastShoulder(light));
+}
+float3 CastLight(float3 light)
+{
+	return Ungraded(CastShoulder(light));
 }
 
 cbuffer SunBuffer
@@ -1282,7 +1296,7 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 	c *= lerp(ShadowParams.y, 1, rtSun);
 	// Ultra's lamps and windows (DirectWindowLight), not in the sun's shadow
 	if (GIRegion.w != 0)
-		c += albedo * CastLight(DirectWindowLight(input.World, n));
+		c += CastLightOn(albedo, DirectWindowLight(input.World, n));
 	c = lerp(c, FogTint(input.World), input.Fog);
 	return float4(GradeColour(c), 1);
 }
@@ -1344,9 +1358,11 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on
 		// the sky's and the bounce
 		float3 l3 = (1 - share) * 1.05 * sunLight * CloudLight(input.FragPos) * lerp(SkyOccLight.z, 1, lit) * blob * RtSunMask(input.Pos)
-			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n)
-			+ (GIRegion.w != 0 ? CastLight(DirectWindowLight(input.FragPos, n)) : float3(0, 0, 0));
+			+ (share * sky * lerp(1, blob, 0.5) + bounce) * AoMask(input.Pos) + FireLight(input.FragPos, n);
 		float4 lc = float4(l3, 1) * input.Color * tex;
+		// Ultra's lamps and windows (DirectWindowLight): direct light, past the occlusion
+		if (GIRegion.w != 0)
+			lc.rgb += CastLightOn(input.Color.rgb * tex.rgb, DirectWindowLight(input.FragPos, n));
 		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
 		float4 gc = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 		return float4(GradeColour(gc.rgb), gc.a);
