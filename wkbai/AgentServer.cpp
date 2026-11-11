@@ -3,6 +3,7 @@
 
 #include "AgentServer.h"
 #include "AgentInput.h"
+#include "AgentUi.h"
 #include "BuildIdentity.h"
 #include "window.h"
 #include "file.h"
@@ -13,7 +14,9 @@
 #include <SDL3/SDL.h>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
 #include <deque>
+#include <functional>
 #include <fstream>
 #include <random>
 #include <string>
@@ -45,6 +48,8 @@ namespace {
 		uint64_t serial;
 		bool fromScript;
 		int line;
+		// an aimed action's next step, once these frames have run (instead of the reply)
+		std::function<void()> then;
 	};
 	std::deque<Waiting> waiting;
 	// a screenshot asked for: its file, and the request waiting for it
@@ -96,6 +101,95 @@ namespace {
 		if (b == "x1") return SDL_BUTTON_X1;
 		if (b == "x2") return SDL_BUTTON_X2;
 		return 0;
+	}
+
+	// Aimed actions (layer 2): where to click is worked out from what the screen shows (AgentUi),
+	// then the click is ordinary input. A world click first moves the cursor there; once the game
+	// has run that frame, its hover pick must have the aimed object under the cursor (for the
+	// ground: nothing), or the click isn't made. A point off the screen first moves the camera by
+	// a click on the minimap, as a person would.
+	struct Aim {
+		nlohmann::json out;
+		bool fromScript;
+		int line;
+		std::function<bool(int&, int&, std::string&)> point; // the screen point now
+		bool hasWorld = false;
+		float wx = 0, wz = 0;   // where it is on the map (for the camera)
+		uint32_t expect = 0;    // the object to be under the cursor; 0: none (the ground)
+		bool ground = false;
+		int button = SDL_BUTTON_LEFT;
+		bool add = false;       // Shift held (add to the selection, queue the order)
+		bool cameraMoved = false;
+	};
+
+	void queueThen(const Aim& a, std::function<void()> then)
+	{
+		waiting.push_back({ a.out["id"], AgentInput::QueuedFrames(), a.fromScript, a.line, std::move(then) });
+	}
+
+	void aimFail(const Aim& a, const std::string& why, nlohmann::json extra = nlohmann::json::object())
+	{
+		nlohmann::json out = a.out;
+		out["ok"] = false;
+		out["error"] = why;
+		for (auto& [k, v] : extra.items())
+			out[k] = v;
+		reply(out, a.fromScript, a.line);
+	}
+
+	// a click on the minimap at a map point (the camera then looks there)
+	bool minimapPoint(float wx, float wz, int& x, int& y)
+	{
+		const AgentUi::Minimap& m = AgentUi::GetMinimap();
+		if (!m.valid || m.areaWidth <= 0 || m.areaDepth <= 0)
+			return false;
+		x = (int)((m.x + std::clamp(wx / m.areaWidth, 0.0f, 1.0f) * m.w) * g_uiScale);
+		y = (int)((m.y + (1.0f - std::clamp(wz / m.areaDepth, 0.0f, 1.0f)) * m.h) * g_uiScale);
+		return true;
+	}
+
+	void aimStep(Aim a)
+	{
+		int x, y;
+		std::string why;
+		if (!a.point(x, y, why)) {
+			int mx, my;
+			if (!a.cameraMoved && a.hasWorld && minimapPoint(a.wx, a.wz, mx, my)) {
+				a.cameraMoved = true;
+				AgentInput::Click(mx, my);
+				AgentInput::Wait(2);
+				queueThen(a, [a]() { aimStep(a); });
+				return;
+			}
+			aimFail(a, why + (a.cameraMoved ? " (after moving the camera by the minimap)" : ""));
+			return;
+		}
+		if (const AgentUi::Element* e = AgentUi::At(x, y)) {
+			aimFail(a, "the interface is in the way: " + e->id, { { "at", { x, y } } });
+			return;
+		}
+		AgentInput::Move(x, y);
+		queueThen(a, [a, x, y]() {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			const uint32_t under = w && w->hovered ? w->hovered() : 0;
+			if (a.ground ? under != 0 : under != a.expect) {
+				aimFail(a, a.ground ? "an object is under the cursor there" : "another object is under the cursor",
+					{ { "at", { x, y } }, { "underCursor", under } });
+				return;
+			}
+			if (a.add) AgentInput::Key(SDL_SCANCODE_LSHIFT, true);
+			AgentInput::Button(a.button, true);
+			AgentInput::Button(a.button, false);
+			if (a.add) AgentInput::Key(SDL_SCANCODE_LSHIFT, false);
+			queueThen(a, [a, x, y, under]() {
+				nlohmann::json out = a.out;
+				out["ok"] = true;
+				out["clicked"] = { x, y };
+				out["underCursor"] = under;
+				out["frame"] = AgentInput::DeliveredFrames();
+				reply(out, a.fromScript, a.line);
+			});
+		});
 	}
 
 	// a request: its input queued (the reply waits for it), or answered at once
@@ -156,6 +250,105 @@ namespace {
 			shotPath = (dir / (name + ".bmp")).string();
 			shotTaken = false;
 			shotRequest = { out["id"], 0, fromScript, line };
+			return;
+		}
+		// layer 2: what the screen shows, and aimed actions
+		if (op == "ui") {
+			nlohmann::json list = nlohmann::json::array();
+			for (const AgentUi::Element& e : AgentUi::Elements())
+				list.push_back({ { "id", e.id }, { "label", e.label }, { "rect", { e.x, e.y, e.w, e.h } }, { "enabled", e.enabled } });
+			out["ok"] = true;
+			out["elements"] = list;
+			if (const AgentUi::World* w = AgentUi::GetWorld()) {
+				out["hovered"] = w->hovered ? w->hovered() : 0;
+				out["selection"] = w->selection ? w->selection() : std::vector<uint32_t>();
+			}
+			reply(out, fromScript, line);
+			return;
+		}
+		if (op == "objects") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->ownOnScreen) { fail("no game on the screen"); return; }
+			nlohmann::json list = nlohmann::json::array();
+			for (const auto& s : w->ownOnScreen()) {
+				nlohmann::json o = { { "id", s.id }, { "type", s.type }, { "kind", s.character ? "character" : "building" } };
+				if (s.onScreen)
+					o["screen"] = { s.x, s.y };
+				float px, pz;
+				if (w->objectPosition && w->objectPosition(s.id, px, pz))
+					o["position"] = { px, pz };
+				list.push_back(o);
+			}
+			out["ok"] = true;
+			out["player"] = w->player ? w->player() : 0;
+			out["objects"] = list;
+			reply(out, fromScript, line);
+			return;
+		}
+		if (op == "clickui") {
+			const AgentUi::Element* e = AgentUi::Find(req.value("element", std::string()));
+			if (!e) { fail("no such element on the screen: " + req.value("element", std::string())); return; }
+			if (!e->enabled) { fail("the element is disabled: " + e->id); return; }
+			const int b = buttonOf(req);
+			if (!b) { fail("button is left, middle, right, x1 or x2"); return; }
+			const int x = e->x + e->w / 2, y = e->y + e->h / 2;
+			AgentInput::Click(x, y, b);
+			Aim a{ out, fromScript, line };
+			queueThen(a, [a, x, y]() {
+				nlohmann::json o = a.out;
+				o["ok"] = true;
+				o["clicked"] = { x, y };
+				o["frame"] = AgentInput::DeliveredFrames();
+				reply(o, a.fromScript, a.line);
+			});
+			return;
+		}
+		if (op == "clickobject" || op == "rightclickobject" || op == "clickground" || op == "rightclickground") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->objectPoint) { fail("no game on the screen"); return; }
+			Aim a{ out, fromScript, line };
+			a.button = op[0] == 'r' ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
+			a.add = req.value("add", false);
+			if (op.find("object") != std::string::npos) {
+				const uint32_t id = req.value("object", 0u);
+				a.expect = id;
+				a.point = [id](int& x, int& y, std::string& why) {
+					const AgentUi::World* w = AgentUi::GetWorld();
+					return w && w->objectPoint && w->objectPoint(id, x, y, why);
+				};
+				if (w->objectPosition)
+					a.hasWorld = w->objectPosition(id, a.wx, a.wz);
+			}
+			else {
+				if (!req.contains("x") || !req.contains("z")) { fail(op + " needs x and z (metres)"); return; }
+				const float gx = req.value("x", 0.0f), gz = req.value("z", 0.0f);
+				a.ground = true;
+				a.hasWorld = true;
+				a.wx = gx; a.wz = gz;
+				a.point = [gx, gz](int& x, int& y, std::string& why) {
+					const AgentUi::World* w = AgentUi::GetWorld();
+					return w && w->groundPoint && w->groundPoint(gx, gz, x, y, why);
+				};
+			}
+			aimStep(a);
+			return;
+		}
+		if (op == "camera") {
+			int mx, my;
+			if (!minimapPoint(req.value("x", 0.0f), req.value("z", 0.0f), mx, my)) { fail("no minimap on the screen"); return; }
+			AgentInput::Click(mx, my);
+			AgentInput::Wait(2);
+			waiting.push_back({ out["id"], AgentInput::QueuedFrames(), fromScript, line });
+			return;
+		}
+		if (op == "keyaction") {
+			const KeyActionInfo* info = FindKeyAction(req.value("action", std::string()));
+			if (!info) { fail("no such key action: " + req.value("action", std::string())); return; }
+			const KeyChord c = GetKeyBinding(info->action, 0).empty() ? GetKeyBinding(info->action, 1) : GetKeyBinding(info->action, 0);
+			if (c.empty()) { fail(std::string("no key bound to ") + info->id); return; }
+			AgentInput::Tap(c.key, c.mods);
+			out["key"] = c.text();
+			waiting.push_back({ out["id"], AgentInput::QueuedFrames(), fromScript, line });
 			return;
 		}
 		auto xy = [&](const char* key) -> std::pair<int, int> {
@@ -331,7 +524,10 @@ void Poll()
 	while (!waiting.empty() && AgentInput::DeliveredFrames() >= waiting.front().serial) {
 		const Waiting w = waiting.front();
 		waiting.pop_front();
-		reply({ { "id", w.id }, { "ok", true }, { "frame", AgentInput::DeliveredFrames() }, { "mouse", { g_mouseX, g_mouseY } } }, w.fromScript, w.line);
+		if (w.then)
+			w.then();
+		else
+			reply({ { "id", w.id }, { "ok", true }, { "frame", AgentInput::DeliveredFrames() }, { "mouse", { g_mouseX, g_mouseY } } }, w.fromScript, w.line);
 	}
 	// the screenshot, taken in the frame before
 	if (!shotPath.empty() && shotTaken) {

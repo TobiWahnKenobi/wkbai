@@ -196,6 +196,7 @@ function drawPeasantActivity()
 		drawTextColor(x0 + 30, y + 18, text, 0xFFF2E12A)
 		drawImage(x0 + 258, y + 4, 44, 44, row[1])
 		-- the icon selects those peasants (shift: adds them); the click doesn't reach the map
+		uiElement("activity:" .. i, row[4], x0 + 258, y + 4, 44, 44, true)
 		local mx, my = getMouseX(), getMouseY()
 		if x0 + 258 <= mx and mx < x0 + 302 and y + 4 <= my and my < y + 48 then
 			setTooltip(row[4])
@@ -258,6 +259,7 @@ function drawTopButtons()
 	for _, b in ipairs(topButtons) do
 		local x, y, bw, bh = topPanelX(b[2]), 20 * s, 56 * s, 14 * s
 		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
+		uiElement("top:" .. b[1], b[1], x, y, bw, bh, b[3] and true or false)
 		local mx, my = getMouseX(), getMouseY()
 		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
 		if not b[3] then
@@ -372,6 +374,7 @@ function CCUI_PerFrame()
 		buildTab = buildTab or "ECONOMIC"
 
 		local commandButton = function (x, y, w, h, cs, assignMode, count)
+			uiElement("cmd:" .. commandName(cs.command), commandName(cs.command), x, y, w, h, cs.info == CSInfo.ENABLED)
 			local mx = getMouseX()
 			local my = getMouseY()
 			local tex = cs.texpath
@@ -442,6 +445,7 @@ function CCUI_PerFrame()
 				drawImage(px, py, 150 * k, 56 * k, art .. "Panel with Building Tabs.tga")
 				for _, tab in ipairs(tabs) do
 					local tx, ty, ts = px + tab[3] * k, py + 12 * k, 31 * k
+					uiElement("tab:" .. tab[1], tab[1], tx, ty, ts, ts, true)
 					local mx, my = getMouseX(), getMouseY()
 					local over = tx <= mx and mx < tx + ts and ty <= my and my < ty + ts
 					if over then
@@ -519,6 +523,7 @@ function CCUI_PerFrame()
 				local mx = getMouseX()
 				local my = getMouseY()
 				local tex = ""
+				uiElement("formation:" .. formationNames[i], formationNames[i], x, y, w, h, true)
 				if bp.name == formationNames[i] then
 					tex = "Interface/Icons/I_Formation_" .. formationNames[i] .. "_Dep.tga"
 				else

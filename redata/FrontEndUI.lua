@@ -95,6 +95,7 @@ end
 -- A menu button; returns true when clicked
 local function button(text, x, y, w, h, enabled, selected)
 	if enabled == nil then enabled = true end
+	uiElement("button:" .. text, text, x, y, w, h, enabled) -- agent control's registry
 	local hot = enabled and hovered(x, y, w, h)
 	local suffix = ""
 	if selected or (hot and mouse.down) then suffix = "_Dep" elseif hot then suffix = "_High" end
@@ -135,6 +136,7 @@ local function tabs(labels, selected, x, y, h, enabledList)
 		local w = textWidth(FONT_BUTTON, label, S) + L(56)
 		local enabled = not enabledList or enabledList[i] ~= false
 		local hot = enabled and hovered(cx, y, w, h)
+		uiElement("tab:" .. label, label, cx, y, w, h, enabled)
 		local suffix = (i == selected) and "_Dep" or (hot and "_High" or "")
 		threeSlice(ART.tab, suffix, TAB_RIM, cx, y, w, h)
 		centredText(FONT_BUTTON, label, cx, y, w, h, (i == selected) and WHITE or (enabled and GREY or DARK_GREY))
@@ -1114,6 +1116,7 @@ end
 -- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked
 local function roundButton(x, y, size, on, enabled)
 	local hot = enabled and hovered(x, y, size, size)
+	uiElement(on and "switch:on" or "switch:off", "", x, y, size, size, enabled)
 	local art = "Interface\\FrontEnd\\Check_Box_" .. (not enabled and "Grey" or (on and "On" or (hot and "Blank_High" or "Blank"))) .. ".tga"
 	drawImage(art, x, y, size, size)
 	return hot and mouse.released
@@ -1124,6 +1127,7 @@ end
 local stepperHold = {} -- the button held: its key, when the press began, when it steps next
 local function stepperButton(kind, key, x, y, size)
 	local hot = hovered(x, y, size, size)
+	uiElement("stepper:" .. key, kind, x, y, size, size, true)
 	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
 	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
 	local t = getTime()

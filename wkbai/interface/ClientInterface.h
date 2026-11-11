@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "../AgentUi.h"
 #include "ClientDebugger.h"
 #include "../scene.h"
 #include <ctime>
@@ -240,6 +241,9 @@ private:
 	time_t lastfpscheck = 0;
 	Vector3 rayDirection;
 	CliGORef nextSelectedObject;
+	// agent control's view of this game (AgentUi::World), set up at the first frame
+	AgentUi::World agentWorld;
+	void setUpAgentWorld();
 	// wkbai's unit history: the heroes drawn this frame, their names to be shown over their heads
 	// (the setting "showHeroNames"), and where (the top of the model)
 	struct HeroLabel { uint32_t id; Vector3 top; };

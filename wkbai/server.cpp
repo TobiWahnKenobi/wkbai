@@ -3469,6 +3469,23 @@ void Server::network()
 				fwrite(&length, 2, 1, recording->file);
 				fwrite(packet.data.data(), 1, length, recording->file);
 			}
+			// test runs: "commandLog": "<file>" writes every message that gives orders or changes the
+			// game (as recorded, but not the agent state, chat, pause or speed), one hex line each, to
+			// compare the commands of two runs (a person's clicks against the agent's aimed actions)
+			if (static const std::string logPath = g_settings.value("commandLog", std::string()); !logPath.empty()
+				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER && type != NETSRVMSG_AGENT_STATE && type != NETSRVMSG_TEST
+				&& type != NETSRVMSG_PAUSE && type != NETSRVMSG_CHANGE_GAME_SPEED
+				&& type != NETSRVMSG_MUSIC_COMPLETED && type != NETSRVMSG_CAMERA_PATH_ENDED) { // (timing, not input)
+				static FILE* log = fopen(logPath.c_str(), "w");
+				if (log) {
+					fprintf(log, "client %d type %d:", clientIndex, (int)type);
+					for (unsigned char c : packet.data)
+						fprintf(log, " %02x", c);
+					fputc('\n', log);
+					fflush(log);
+				}
+			}
 			handlePacket(clientIndex, packet.data);
 		}
 	}

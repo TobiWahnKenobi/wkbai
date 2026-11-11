@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "AgentUi.h"
 #include "imguiimpl.h"
 #include "imgui/imgui.h"
 #include "gfx/renderer.h"
@@ -125,4 +126,5 @@ void ImGuiImpl_Render(IRenderer *gfx)
 	ImGui::Render();
 	ImGuiImpl_RenderDrawLists(ImGui::GetDrawData(), gfx);
 	AgentServer::TakeScreenshotIfAsked(gfx); // the frame as the player sees it, if the agent asked
+	AgentUi::EndFrame(); // this frame's buttons and items: what the agent can aim at
 }

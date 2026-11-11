@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../AgentUi.h"
 #include "ClientInterface.h"
 #include "../AgentInput.h"
 #include "ChronicleNarrator.h"
@@ -188,6 +189,76 @@ namespace {
 ClientInterface::~ClientInterface()
 {
 	SetKeyCheatGate(nullptr);
+	if (AgentUi::GetWorld() == &agentWorld)
+		AgentUi::SetWorld(nullptr);
+}
+
+// Agent control's eyes in the game (AgentUi::World): where objects and ground points are on the
+// screen, what the hover pick has under the cursor, the player's own objects in view
+void ClientInterface::setUpAgentWorld()
+{
+	if (AgentUi::GetWorld() == &agentWorld)
+		return;
+	auto project = [this](const Vector3& p, int& sx, int& sy, std::string& why) {
+		const Camera& cam = client->camera;
+		if ((p - cam.position).dot(cam.direction) <= 0.1f) { why = "behind the camera"; return false; }
+		const Vector3 ndc = p.transformScreenCoords(cam.sceneMatrix);
+		sx = (int)((ndc.x + 1.0f) * g_windowWidth / 2.0f);
+		sy = (int)((-ndc.y + 1.0f) * g_windowHeight / 2.0f);
+		if (sx < 0 || sy < 0 || sx >= g_windowWidth || sy >= g_windowHeight) { why = "off the screen"; return false; }
+		return true;
+	};
+	auto centreOf = [](ClientGameObject* obj) {
+		Vector3 c = obj->position;
+		if (obj->sceneEntity.model)
+			c = obj->position + obj->sceneEntity.model->getSphereCenter() * obj->scale;
+		return c;
+	};
+	agentWorld.objectPoint = [this, project, centreOf](uint32_t id, int& x, int& y, std::string& why) {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj) { why = "no such object"; return false; }
+		return project(centreOf(obj), x, y, why);
+	};
+	agentWorld.objectPosition = [this](uint32_t id, float& x, float& z) {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj) return false;
+		x = obj->position.x; z = obj->position.z;
+		return true;
+	};
+	agentWorld.groundPoint = [this, project](float x, float z, int& sx, int& sy, std::string& why) {
+		if (!client->terrain) { why = "no map"; return false; }
+		return project(Vector3(x, client->terrain->getHeight(x, z), z), sx, sy, why);
+	};
+	agentWorld.hovered = [this]() -> uint32_t { ClientGameObject* o = nextSelectedObject; return o ? o->id : 0; };
+	agentWorld.selection = [this]() {
+		std::vector<uint32_t> ids;
+		for (const CliGORef& ref : selection)
+			if (ClientGameObject* o = ref)
+				ids.push_back(o->id);
+		return ids;
+	};
+	agentWorld.player = [this]() -> uint32_t { ClientGameObject* p = client->clientPlayer; return p ? p->id : 0; };
+	agentWorld.ownOnScreen = [this, project, centreOf]() {
+		std::vector<AgentUi::World::Seen> list;
+		ClientGameObject* own = client->clientPlayer;
+		if (!own)
+			return list;
+		auto walk = [&](ClientGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* c : children) {
+					ClientGameObject* o = c->dyncast<ClientGameObject>();
+					int x = -1, y = -1;
+					std::string why;
+					const bool seen = o->sceneEntity.model && project(centreOf(o), x, y, why);
+					if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						list.push_back({ o->id, o->blueprint->name, x, y, seen, o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER });
+					self(o, self);
+				}
+		};
+		walk(own, walk);
+		return list;
+	};
+	AgentUi::SetWorld(&agentWorld);
 }
 
 bool ClientInterface::cheatKeysAllowed() const
@@ -240,6 +311,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		mapH = h * areaDepth / areaWidth;
 		mapY = y + (h - mapH) * 0.5f;
 	}
+	// agent control: the map part, for moving the camera by a click on it
+	AgentUi::AddPixels("minimap", "Minimap", (int)(mapX * g_uiScale), (int)(mapY * g_uiScale), (int)(mapW * g_uiScale), (int)(mapH * g_uiScale), true);
+	AgentUi::SetMinimap({ true, mapX, mapY, mapW, mapH, areaWidth, areaDepth });
 	auto toMinimap = [&](float px, float pz) {
 		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
@@ -2876,6 +2950,7 @@ void ClientInterface::controlGroupKeys()
 
 void ClientInterface::iter()
 {
+	setUpAgentWorld();
 	ZoneScoped;
 	static uint32_t oldCliTime = SDL_GetTicks();
 	uint32_t cliTime = SDL_GetTicks();
@@ -4053,6 +4128,11 @@ void ClientInterface::iter()
 		lua.set_function("isAltHeld", []() {return g_modAlt; });
 		// ImGui
 		lua.set_function("setTooltip",[](const std::string& str) { ImGui::SetTooltip("%s", str.c_str()); });
+		// agent control: an interactive element drawn this frame (AgentUi's registry; nothing while it is off)
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		});
+		lua.set_function("commandName", [this](const Command* cmd) { return cmd ? client->gameSet->commands.getString(cmd) : std::string(); });
 		// Button
 		// Minimap; a click on it is UI input, not a click into the world
 		lua.set_function("drawMinimap",
