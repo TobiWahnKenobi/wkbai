@@ -34,6 +34,12 @@ struct Material
 	// the albedo times this (in the shaders' gamma space; 0-2): glTF's baseColorFactor (the HD
 	// models' tints of their shared textures: one texture on the GPU for every tint of it)
 	float colour[3] = { 1.0f, 1.0f, 1.0f };
+	// HD models' team colour (docs/engine/gltf.md "Team colours of HD models"), instead of the
+	// original's UV list per colour: team, glTF's "extras": { "wkTeam": true }: the albedo times
+	// the owner's colour (TeamColours); emblem, "wkEmblem": true: the owner's emblem
+	// (TeamEmblems) laid over the albedo where the mesh's emblemUvs fall in 0..1
+	bool team = false;
+	bool emblem = false;
 };
 
 struct IndexTuple
@@ -69,6 +75,9 @@ struct Mesh
 	// decodeNormals use them instead of the 256-entry table, so smooth and bevelled surfaces of
 	// a new model shade as made (the ids in "normals" stay for code that only knows those)
 	std::vector<Vector3> exactNormals;
+	// a glTF model's emblem UVs (its wkEmblem materials' TEXCOORD_1), indexed like a UV list;
+	// -1 (no emblem) on the other materials' vertices. Empty without an emblem material.
+	std::vector<float> emblemUvs;
 
 	Vector3 aabbLow, aabbHigh;
 

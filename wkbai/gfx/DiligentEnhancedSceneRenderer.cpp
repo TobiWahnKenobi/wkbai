@@ -29,6 +29,7 @@
 #include "../util/util.h"
 #include "../settings.h"
 #include "RenderSettings.h"
+#include "TeamEmblems.h"
 #include "../Environment.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
@@ -357,6 +358,10 @@ struct VS_OUTPUT
 	// highlighted model, whose Norm is 0)
 	float3 Fallow : TEXCOORD3;
 	float2 Leaves : TEXCOORD4; // x 1: broadleaf (SEFLAG_LEAVES); y: the tree's own seed (from where it stands)
+	// the owner's team colour (TeamColours: the instance flags' bits 24-26) and the emblem's UVs
+	// (Mesh::emblemUvs; outside 0..1 none), for the HD models' team materials (MaterialBuffer)
+	nointerpolation uint Team : TEXCOORD5;
+	float2 EmblemUV : TEXCOORD6;
 };
 
 // R10G10B10A2_UNORM
@@ -368,7 +373,7 @@ float3 UnpackNormal(uint p)
 // The instance transform comes in as its four columns (the D3D11 input layout had a
 // float4x4 TRANSFORM input, which column-major packing fills by columns). Anim: the instance's
 // first vertex in its key frame and in the next one, the blend between them, and its flags.
-VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1, float4 T2, float4 T3, uint EntityFlags)
+VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float2 EmblemUV, float4 T0, float4 T1, float4 T2, float4 T3, uint EntityFlags)
 {
 	float4x4 EntityTransform = transpose(float4x4(T0, T1, T2, T3));
 	VS_OUTPUT output = (VS_OUTPUT)0;
@@ -412,6 +417,8 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 		output.Tint.rgb *= float3(0.35, 1.0, 0.35);
 	output.Color.rgb *= output.Tint.rgb;
 	output.Texcoord = Texcoord;
+	output.Team = (EntityFlags >> 24) & 7;
+	output.EmblemUV = EmblemUV;
 	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
 	output.WorldPos = worldPos;
 	output.Fog = FogAmount(worldPos, distance(worldPos, FogCamera.xyz));
@@ -419,9 +426,9 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float4 T0, float4 T1
 }
 
 VS_OUTPUT VS(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTRIB2,
-	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7)
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7, float2 EmblemUV : ATTRIB8)
 {
-	return Shade(Pos, UnpackNormal(Normal), Texcoord, T0, T1, T2, T3, Anim.w);
+	return Shade(Pos, UnpackNormal(Normal), Texcoord, EmblemUV, T0, T1, T2, T3, Anim.w);
 }
 
 // Every instance at its own key frame: drawn with base vertex 0, the vertex id counts within the
@@ -429,13 +436,13 @@ VS_OUTPUT VS(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTR
 // (the same inputs as a static mesh's: the rest pose's position and normal for the vertices the
 // animation doesn't move)
 VS_OUTPUT VS_Anim(float3 Pos : ATTRIB0, uint Normal : ATTRIB1, float2 Texcoord : ATTRIB2,
-	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7, uint VertexId : SV_VertexID)
+	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7, float2 EmblemUV : ATTRIB8, uint VertexId : SV_VertexID)
 {
 	AnimState s = DecodeAnimState(Anim);
 	uint b = (VertexBase + VertexId) * 6;
 	float3 pos = BoundAnim(b, s, false, Pos);
 	float3 nrm = BoundAnim(b + 3, s, true, UnpackNormal(Normal) * 2 - 1);
-	return Shade(pos, nrm * 0.5 + 0.5, Texcoord, T0, T1, T2, T3, Anim.w);
+	return Shade(pos, nrm * 0.5 + 0.5, Texcoord, EmblemUV, T0, T1, T2, T3, Anim.w);
 }
 
 // The light on a model: the original's per vertex (Color), or with per-pixel lighting on
@@ -628,14 +635,32 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 // wkbai's weather on a model: snow lying where the surface faces up (roofs, ledges, the tops of
 // trees and rocks), in patches; wet surfaces darker
 // the material's colour (Material::colour: glTF's baseColorFactor, a texture name's tint)
+// TeamMaterial (the HD models' team colour, docs/engine/gltf.md): x 1: the albedo times the owner's
+// colour (wkTeam), y 1: the owner's emblem over it (wkEmblem)
 cbuffer MaterialBuffer
 {
 	float4 BaseColour;
+	float4 TeamMaterial;
 };
+// the 8 emblem slots (TeamEmblems), a slice each; TeamColours[8] comes before this source
+Texture2DArray teamEmblems;
+SamplerState emblemSampler;
+
+float3 TeamAlbedo(VS_OUTPUT input, float3 albedo)
+{
+	if (TeamMaterial.x > 0)
+		albedo *= TeamColours[input.Team];
+	if (TeamMaterial.y > 0) {
+		float4 e = teamEmblems.Sample(emblemSampler, float3(input.EmblemUV, input.Team));
+		bool inside = all(input.EmblemUV >= 0) && all(input.EmblemUV <= 1);
+		albedo = lerp(albedo, e.rgb, inside ? e.a : 0);
+	}
+	return albedo;
+}
 
 float3 WeatherAlbedo(VS_OUTPUT input, float3 albedo)
 {
-	albedo = min(albedo * BaseColour.rgb, 1);
+	albedo = TeamAlbedo(input, min(albedo * BaseColour.rgb, 1));
 	// a field in winter: the crops gone, furrowed soil (the texture's pattern kept as its light
 	// and dark)
 	if (input.Fallow.x > 0.5)
@@ -904,6 +929,9 @@ struct DilMesh
 	RefCntAutoPtr<IBuffer> vertices;
 	RefCntAutoPtr<IBuffer> normals;
 	std::vector<RefCntAutoPtr<IBuffer>> texcoords;
+	// the emblem UVs (Mesh::emblemUvs), slot 4; without them the first UV list stands in
+	RefCntAutoPtr<IBuffer> emblemUvs;
+	IBuffer* emblemSlot() const { return emblemUvs ? emblemUvs.RawPtr() : texcoords[0].RawPtr(); }
 	RefCntAutoPtr<IBuffer> indices;
 	uint32_t totVertices = 0, totIndices = 0;
 	std::vector<DiligentRayShadows::Group> rtGroups;
@@ -940,6 +968,13 @@ struct DilMesh
 				for (auto& grp : mat)
 					pUvs.insert(pUvs.end(), { uvlist[2 * grp.uv], uvlist[2 * grp.uv + 1] });
 			enh.texcoords[i] = CreateImmutableBuffer(device, "Mesh UVs", BIND_VERTEX_BUFFER, pUvs.data(), pUvs.size() * 4);
+		}
+		if (!mesh.emblemUvs.empty()) {
+			pUvs.clear();
+			for (auto& mat : mesh.groupIndices)
+				for (auto& grp : mat)
+					pUvs.insert(pUvs.end(), { mesh.emblemUvs[2 * grp.uv], mesh.emblemUvs[2 * grp.uv + 1] });
+			enh.emblemUvs = CreateImmutableBuffer(device, "Mesh emblem UVs", BIND_VERTEX_BUFFER, pUvs.data(), pUvs.size() * 4);
 		}
 
 		std::vector<uint16_t> pIndices;
@@ -1241,7 +1276,16 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		bool mapsKnown = false;
 		uint64_t checked = ~0ull;
 	};
-	std::map<std::pair<texture, std::array<float, 3>>, TextureBinding> textureBindings;
+	// (key: the texture, the colour, the team flags: Material::team, Material::emblem)
+	std::map<std::pair<texture, std::array<float, 5>>, TextureBinding> textureBindings;
+	static std::pair<texture, std::array<float, 5>> bindingKey(texture tex, const Material& mat) {
+		return { tex, { mat.colour[0], mat.colour[1], mat.colour[2], mat.team ? 1.0f : 0.0f, mat.emblem ? 1.0f : 0.0f } };
+	}
+	// the emblem slots' texture array (TeamEmblems), a slice per slot with its mips, and each
+	// slot's generation on the GPU (uploadEmblems)
+	RefCntAutoPtr<ITexture> emblems;
+	std::array<uint32_t, TeamEmblems::SLOTS> emblemGens = {};
+	void uploadEmblems(IDeviceContext* ctx);
 	// a material binding's maps (the override pack's beside its texture: <texture>_albedo,
 	// _normal, _orm, _emissive, _height; .png, .tga, .dds or .ktx2) and its colour buffer; the
 	// maps' files are loaded here (the preload does it for every material: at the first draw a
@@ -1249,7 +1293,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	void resolveMaps(TextureBinding& e, texture tex, const Material& mat, IRenderDevice* device, Scene* scene) {
 		e.mapsKnown = true;
 		const std::string& filename = mat.textureFilename;
-		const float colour[4] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f };
+		const float colour[8] = { mat.colour[0], mat.colour[1], mat.colour[2], 1.0f, mat.team ? 1.0f : 0.0f, mat.emblem ? 1.0f : 0.0f, 0, 0 };
 		BufferDesc bd;
 		bd.Name = "Material colour";
 		bd.Size = sizeof(colour);
@@ -1551,6 +1595,50 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	static constexpr size_t MAX_INSTANCES = 1024;
 };
 
+// The emblem slots that changed since they went up (TeamEmblems' generations: the defaults at
+// the first frame, a player's own emblem whenever it is set), each slice with its mips (a box
+// filter, the colours weighted by their alpha so that the transparent texels don't darken the edge)
+void DiligentEnhancedSceneRenderer::Impl::uploadEmblems(IDeviceContext* ctx)
+{
+	TeamEmblems& te = TeamEmblems::get();
+	te.loadDefaults();
+	const int levels = (int)emblems->GetDesc().MipLevels;
+	for (int slot = 0; slot < TeamEmblems::SLOTS; slot++) {
+		if (emblemGens[slot] == te.generation(slot))
+			continue;
+		emblemGens[slot] = te.generation(slot);
+		int size = TeamEmblems::SIZE;
+		std::vector<uint8_t> level(te.pixels(slot), te.pixels(slot) + (size_t)size * size * 4), next;
+		for (int mip = 0; mip < levels && size >= 1; mip++) {
+			TextureSubResData sub;
+			sub.pData = level.data();
+			sub.Stride = (Uint64)size * 4;
+			ctx->UpdateTexture(emblems, mip, slot, Box(0, size, 0, size), sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			if (size == 1)
+				break;
+			const int half = size / 2;
+			next.assign((size_t)half * half * 4, 0);
+			for (int y = 0; y < half; y++)
+				for (int x = 0; x < half; x++) {
+					float acc[4] = {};
+					for (int dy = 0; dy < 2; dy++)
+						for (int dx = 0; dx < 2; dx++) {
+							const uint8_t* q = &level[((size_t)(y * 2 + dy) * size + x * 2 + dx) * 4];
+							for (int c = 0; c < 3; c++)
+								acc[c] += q[c] * (float)q[3];
+							acc[3] += q[3];
+						}
+					uint8_t* o = &next[((size_t)y * half + x) * 4];
+					for (int c = 0; c < 3; c++)
+						o[c] = (uint8_t)(acc[3] > 0 ? std::min(255.0f, acc[c] / acc[3] + 0.5f) : 0);
+					o[3] = (uint8_t)(acc[3] / 4 + 0.5f);
+				}
+			level.swap(next);
+			size = half;
+		}
+	}
+}
+
 DiligentEnhancedSceneRenderer::~DiligentEnhancedSceneRenderer()
 {
 	delete _impl;
@@ -1589,6 +1677,7 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "emissiveMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "heightMap", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "MaterialBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "teamEmblems", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 	};
 	SamplerDesc sampler; // D3D11's default sampler: trilinear, clamped
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
@@ -1596,7 +1685,9 @@ void DiligentEnhancedSceneRenderer::init()
 		sampler.MinFilter = sampler.MagFilter = sampler.MipFilter = FILTER_TYPE_ANISOTROPIC;
 		sampler.MaxAnisotropy = std::clamp(g_renderSettings.anisotropy, 1, 16);
 	}
-	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler } };
+	SamplerDesc emblemSampler; // trilinear, clamped (outside 0..1 the shader shows none)
+	emblemSampler.AddressU = emblemSampler.AddressV = emblemSampler.AddressW = TEXTURE_ADDRESS_CLAMP;
+	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "inpSampler", sampler }, { SHADER_TYPE_PIXEL, "emblemSampler", emblemSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Enhanced scene resources";
 	sigDesc.Resources = resources;
@@ -1613,6 +1704,22 @@ void DiligentEnhancedSceneRenderer::init()
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "SunBuffer")->Set(_impl->sunConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "SceneBuffer")->Set(_impl->sceneConstBuffer);
 	_impl->signature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "MotionBuffer")->Set(_impl->motionConstBuffer);
+	{
+		// the emblem slots, filled at the first frame (uploadEmblems)
+		TextureDesc td;
+		td.Name = "Team emblems";
+		td.Type = RESOURCE_DIM_TEX_2D_ARRAY;
+		td.Width = td.Height = TeamEmblems::SIZE;
+		td.ArraySize = TeamEmblems::SLOTS;
+		td.MipLevels = 0; // the whole chain
+		td.Format = TEX_FORMAT_RGBA8_UNORM;
+		td.BindFlags = BIND_SHADER_RESOURCE;
+		td.Usage = USAGE_DEFAULT;
+		device->CreateTexture(td, nullptr, &_impl->emblems);
+		if (!_impl->emblems)
+			ferr("Diligent: could not create the team emblem texture.");
+		_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "teamEmblems")->Set(_impl->emblems->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+	}
 
 	const PipelineResourceDesc envResources[] = {
 		{ SHADER_TYPE_VERTEX, "cloudTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1668,7 +1775,15 @@ void DiligentEnhancedSceneRenderer::init()
 		_impl->animSignature->GetStaticVariableByName(SHADER_TYPE_VERTEX, "NormalTable")->Set(_impl->normalTable->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
 	}
 
-	const std::string source = std::string(g_cloudShaderCode) + esShaderCode;
+	// the team colours (TeamColours::table) as the shader's TeamColours[8]
+	std::string teamColours = "static const float3 TeamColours[8] = {";
+	for (int k = 0; k < TeamColours::COUNT; k++) {
+		char c[96];
+		snprintf(c, sizeof(c), "%s float3(%.6f, %.6f, %.6f)", k ? "," : "", TeamColours::table[k][0] / 255.0, TeamColours::table[k][1] / 255.0, TeamColours::table[k][2] / 255.0);
+		teamColours += c;
+	}
+	teamColours += " };\n";
+	const std::string source = std::string(g_cloudShaderCode) + teamColours + esShaderCode;
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
@@ -1700,6 +1815,7 @@ void DiligentEnhancedSceneRenderer::init()
 	std::vector<LayoutElement> layouts[2];
 	layouts[0] = { LayoutElement{0, 0, 3, VT_FLOAT32, False}, LayoutElement{1, 1, 1, VT_UINT32, False}, LayoutElement{2, 2, 2, VT_FLOAT32, False} };
 	instanceElements(layouts[0], 3, 3);
+	layouts[0].push_back(LayoutElement{ 8, 4, 2, VT_FLOAT32, False }); // the emblem UVs (DilMesh::emblemSlot)
 	layouts[1] = layouts[0]; // animated: the same, the rest pose for what the animation doesn't move
 
 	for (int shadow = 0; shadow < 2; shadow++) {
@@ -1875,7 +1991,7 @@ void DiligentEnhancedSceneRenderer::prewarm(const std::vector<Model*>& models)
 			for (size_t i = 0; i < model->getNumMaterials(); i++) {
 				const Material& mat = scene->modelCache->getMaterial(matIds[i]);
 				const texture tex = scene->texCache.getTexture(mat.textureFilename.c_str());
-				auto& e = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
+				auto& e = _impl->textureBindings[Impl::bindingKey(tex, mat)];
 				if (!e.mapsKnown)
 					_impl->resolveMaps(e, tex, mat, device, scene);
 			}
@@ -1960,6 +2076,7 @@ void DiligentEnhancedSceneRenderer::render()
 	IDeviceContext* ctx = dgfx->ctx;
 	// after the depth pre-pass (renderDepth): the frame prepared, the models only shaded
 	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared;
+	_impl->uploadEmblems(ctx);
 
 	// Keeps the IRenderer's state the same as after the D3D11 renderer (lakes and particles
 	// are drawn through IRenderer afterwards).
@@ -2083,7 +2200,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// was made again since has a new view, and the binding is made again with it.
 	auto getBinding = [&](texture tex, const Material& mat) -> IShaderResourceBinding* {
 		const std::string& filename = mat.textureFilename;
-		auto& e = _impl->textureBindings[{ tex, { mat.colour[0], mat.colour[1], mat.colour[2] } }];
+		auto& e = _impl->textureBindings[Impl::bindingKey(tex, mat)];
 		const uint64_t now = dgfx->FrameIndex();
 		if (e.srb && e.checked != now) {
 			e.checked = now;
@@ -2186,9 +2303,9 @@ void DiligentEnhancedSceneRenderer::render()
 				if (enhAnim)
 					ctx->CommitShaderResources(enhAnim->binding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				else {
-					IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
-					const Uint64 offsets[4] = { 0, 0, 0, instanceOffset };
-					ctx->SetVertexBuffers(0, 4, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+					IBuffer* buffers[5] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer, enhMesh->emblemSlot() };
+					const Uint64 offsets[5] = { 0, 0, 0, instanceOffset, 0 };
+					ctx->SetVertexBuffers(0, motionPass ? 4 : 5, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 				}
 				ctx->SetIndexBuffer(enhMesh->indices, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 
@@ -2206,9 +2323,9 @@ void DiligentEnhancedSceneRenderer::render()
 							memset(mapped, 0, 16);
 							*(uint32_t*)mapped = startVertex;
 							ctx->UnmapBuffer(_impl->sceneConstBuffer, MAP_WRITE);
-							IBuffer* buffers[4] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer };
-							const Uint64 offsets[4] = { (Uint64)startVertex * 12, (Uint64)startVertex * 4, (Uint64)startVertex * 8, instanceOffset };
-							ctx->SetVertexBuffers(0, 4, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+							IBuffer* buffers[5] = { enhMesh->vertices, enhMesh->normals, enhMesh->texcoords[prevColor], instanceBuffer, enhMesh->emblemSlot() };
+							const Uint64 offsets[5] = { (Uint64)startVertex * 12, (Uint64)startVertex * 4, (Uint64)startVertex * 8, instanceOffset, (Uint64)startVertex * 8 };
+							ctx->SetVertexBuffers(0, motionPass ? 4 : 5, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 							ctx->DrawIndexed(DrawIndexedAttribs{ numIndices, VT_UINT16, DRAW_FLAG_VERIFY_ALL, (Uint32)count, startIndex, 0 });
 						}
 						else
@@ -2266,7 +2383,8 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 				Instance inst;
 				inst.transform = ent->transform.getTranspose();
-				inst.flags = ent->flags;
+				// (bits 24-26: the owner's team colour, TeamColours, for the HD models' team materials)
+				inst.flags = (ent->flags & 0xFFFFFF) | (uint32_t)TeamColours::index(ent->color) << 24;
 				if (animated)
 					keyFrames(inst, enhAnim, (AnimatedModel*)model, ent->animTime);
 				const int actualColor = ent->color % enhMesh->texcoords.size();

@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <tuple>
 
 #include <array>
 #include <functional>
@@ -129,9 +130,9 @@ private:
 	int numCalls = 0, numHits = 0;
 	std::map<uint32_t, Material> materials;
 	IndexedStringList textureFilenames;
-	// (the texture's index and the colour, packed) -> the material's index: a material id is
-	// that index << 1 | alpha test
-	std::map<std::pair<int, uint64_t>, uint32_t> materialIndices;
+	// (the texture's index, the colour packed, the team flags: 1 team, 2 emblem) -> the
+	// material's index: a material id is that index << 1 | alpha test
+	std::map<std::tuple<int, uint64_t, int>, uint32_t> materialIndices;
 public:
 	Model *getModel(const std::string &filename);
 	// a static model made in code, by a name of its own (never a file's): made when first drawn
