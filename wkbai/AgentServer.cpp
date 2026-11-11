@@ -270,7 +270,7 @@ namespace {
 			const AgentUi::World* w = AgentUi::GetWorld();
 			if (!w || !w->observe) { fail("no game on the screen"); return; }
 			out["ok"] = true;
-			const nlohmann::json seen = w->observe(); // (kept: items() of a temporary would dangle)
+			const nlohmann::json seen = w->observe(req); // (kept: items() of a temporary would dangle)
 			for (const auto& [k, v] : seen.items())
 				out[k] = v;
 			reply(out, fromScript, line);

@@ -65,7 +65,8 @@ struct World {
 	std::function<uint32_t()> player;
 	// Layer 3: what the player sees, as JSON (AgentServer's "observe"): no more than the screen
 	// and the HUD show, the fog of war as the player has it
-	std::function<nlohmann::json()> observe;
+	// ({ "scenery": true }: trees and other objects on the screen too)
+	std::function<nlohmann::json(const nlohmann::json& request)> observe;
 	// Test probes (AgentServer's "probe"): what a person can't see (paths, orders, the game's hash,
 	// every object regardless of fog); only where cheat keys work (single player in cheat mode) or
 	// in a replay, else an error

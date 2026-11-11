@@ -262,7 +262,8 @@ void ClientInterface::setUpAgentWorld()
 	};
 	// what the player sees: the HUD's numbers, the selection, every object the screen or the
 	// minimap could show under this player's fog of war (enemy buildings as last seen)
-	agentWorld.observe = [this, project, centreOf]() {
+	agentWorld.observe = [this, project, centreOf](const nlohmann::json& req) {
+		const bool scenery = req.value("scenery", false);
 		nlohmann::json j;
 		const GameSet* gs = client->gameSet.get();
 		auto item = [gs](ClientGameObject* o, const char* name) -> float {
@@ -327,8 +328,17 @@ void ClientInterface::setUpAgentWorld()
 					ClientGameObject* o = c->dyncast<ClientGameObject>();
 					self(o, self);
 					const int cls = o->blueprint->bpClass;
-					if ((cls != Tags::GAMEOBJCLASS_CHARACTER && cls != Tags::GAMEOBJCLASS_BUILDING) || (o->flags & ClientGameObject::fTerminated))
+					if (o->flags & ClientGameObject::fTerminated)
 						continue;
+					if (cls != Tags::GAMEOBJCLASS_CHARACTER && cls != Tags::GAMEOBJCLASS_BUILDING) {
+						// scenery (trees, resources) only on the screen and where the player sees
+						int sx, sy;
+						std::string why;
+						if (scenery && o->sceneEntity.model && o->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE
+							&& (!fogOn || fogOfWar.isSeen(o->position)) && project(centreOf(o), sx, sy, why))
+							add(o, false);
+						continue;
+					}
 					// the same rules as the drawing and the minimap (drawObject, drawMinimap)
 					if (fogOn && cls == Tags::GAMEOBJCLASS_CHARACTER && !fogOfWar.isSeen(o->position) && !fogOfWar.isFriendly(client, o))
 						continue;
@@ -631,6 +641,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 		uint8_t category;
 		Bitmap mask; // alpha of the image, for hit tests on the arc
 		texture tex = nullptr;
+		int cx = 0, cy = 0; // a point inside the arc (agent control's registry)
 	};
 	static MinimapButton buttons[] = {
 		{ "Interface\\InGame\\Military Mini Map Button Depressed.tga", 7, 67, GameObjBlueprint::MINIMAP_MILITARY },
@@ -646,6 +657,28 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 				continue;
 			button.mask = Bitmap::loadBitmap(button.image).convertToR8G8B8A8();
 			button.tex = gfx->CreateTexture(button.mask, 1);
+			// the opaque pixel nearest the opaque pixels' mean
+			double sx = 0, sy = 0; int n = 0;
+			for (int y = 0; y < (int)button.mask.height; y++)
+				for (int x = 0; x < (int)button.mask.width; x++)
+					if (button.mask.pixels[4 * (y * button.mask.width + x) + 3] >= 128) { sx += x; sy += y; n++; }
+			if (n) {
+				const double mx = sx / n, my = sy / n;
+				double best = 1e18;
+				for (int y = 0; y < (int)button.mask.height; y++)
+					for (int x = 0; x < (int)button.mask.width; x++)
+						if (button.mask.pixels[4 * (y * button.mask.width + x) + 3] >= 128) {
+							const double d = (x - mx) * (x - mx) + (y - my) * (y - my);
+							if (d < best) { best = d; button.cx = x; button.cy = y; }
+						}
+			}
+		}
+		// agent control: a small box inside the arc (the click is hit-tested on the image)
+		{
+			static const char* const names[] = { "military", "economic", "resource", "activity" };
+			static const char* const labels[] = { "Military units on the minimap", "Civilian units on the minimap", "Resources on the minimap", "Display Peasant Activity Interface" };
+			const int bi = (int)(&button - buttons);
+			AgentUi::Add(std::string("minimapButton:") + names[bi], labels[bi], (float)(panelX + button.x + button.cx - 1), (float)(panelY + button.y + button.cy - 1), 3.0f, 3.0f, true);
 		}
 		const int lx = UiMouseX() - (panelX + button.x), ly = UiMouseY() - (panelY + button.y);
 		const bool hovered = lx >= 0 && ly >= 0 && lx < button.mask.width && ly < button.mask.height
