@@ -111,7 +111,7 @@ cbuffer SkyBuffer
 	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation);
 	// SkyStarX.w: the moon's lit part (0 new .. 1 full: its glow, its light on the air)
 	float4 SkyStarX;
-	float4 SkyStarY;   // w: the clouds' detail (RenderSettings::cloudDetail, 0-2)
+	float4 SkyStarY;   // w: the clouds' detail (RenderSettings::cloudDetail, 0-4)
 	float4 SkyStarZ;
 	// the sky box under the weather's clouds (dynamicClouds below 3: no volumetric clouds over
 	// it): the overcast's colour, w how much (0: the box as it is)
@@ -324,6 +324,11 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		float fine = d2.r * 0.5 + d2.g * 0.3 + d2.b * 0.2;
 		hf = lerp(hf, fine, 0.4 * saturate(h * 2 + stormCore));
 		erosion *= lerp(1, 1.3, saturate(h * 1.5) * (1 - stratus));
+		if (detailLevel >= 4 && detailLod < 2.5) {
+			// Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
+			float3 d3 = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.1) / (DETAIL_PERIOD / 8), max(detailLod + 3, 0)).rgb;
+			hf = lerp(hf, d3.r * 0.5 + d3.g * 0.3 + d3.b * 0.2, 0.25 * saturate(2.5 - detailLod) * saturate(h * 2 + stormCore));
+		}
 	}
 	hf = lerp(1 - hf, hf, saturate(h * 3));
 	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6 * cWeather.z;
@@ -335,7 +340,7 @@ float HenyeyGreenstein(float mu, float g)
 	return (1 - g2) / (12.566371 * pow(1 + g2 - 2 * g * mu, 1.5));
 }
 
-// The view ray through the cloud layer, 48 to 128 steps by the quality (jittered per pixel; at most
+// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Ultra detail (jittered per pixel; at most
 // 1800 units of it), each lit by the sun through 3 to 6 steps of cloud towards it over 108 units
 // (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
@@ -383,7 +388,13 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		return beyond;
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
 	const int q = (int)SkyFlags.w;
-	const int STEPS = q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128;
+	// the detail (Low 0 to Ultra 4): Very High and Ultra light their steps through the eroded shape
+	// (the billows shade each other: relief within a cloud, not only between clouds), with a far
+	// step for the shadows of the clouds around and the sky's light occluded from above (darker
+	// bases, lit tops); Ultra a quarter more view steps and a third octave
+	// (all six light steps eroded and half again as many view steps cost twice High's pass for little more)
+	const int dl = (int)SkyStarY.w;
+	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 4 ? 5 : 4) / 4;
 	const int LIGHT_STEPS = q + 3;
 	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
 	// thickness: thin parts brighter, its relief)
@@ -455,7 +466,16 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 			continue;
 		float od = 0;
 		[loop] for (int j = 0; j < LIGHT_STEPS; j++)
-			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5, footprint + (j + 1) * lightStep * 0.15, false) * lightStep;
+			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5, footprint + (j + 1) * lightStep * 0.15, dl >= 3 && j < 2) * lightStep;
+		float skyOcc = 1;
+		if (dl >= 3) {
+			// the far step (about three times the light's reach, standing for the way beyond it)
+			float farStep = lightStep * LIGHT_STEPS;
+			od += CloudDensity(p + sun * (farStep * 2.5), lod + 1.5, footprint + farStep * 0.4, false) * farStep * 0.75;
+			// the cloud over the point: the sky's light from above dimmed through it
+			float up = CloudDensity(p + float3(0, 70, 0), lod + 1, footprint + 10, false);
+			skyOcc = lerp(0.55, 1, exp(-SIGMA * up * 70));
+		}
 		float toSun = exp(-SIGMA * od);
 		float powder = 1 - exp(-2 * SIGMA * od - 0.15);
 		// (a sheet's direct light dimmed by the deck around it: the light steps leave a thin sheet
@@ -473,6 +493,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// belt low and its blue higher up, at the ambient's brightness; their bases darker, their
 		// tops lit: relief instead of one grey)
 		ambient = lerp(ambient, awaySky * dot(ambient, float3(0.3, 0.59, 0.11)) * lerp(0.6, 1.25, h), away);
+		ambient *= skyOcc;
 		// the weather's light (storm and rain clouds darker, their bases most), and lightning
 		// lighting the cloud from inside
 		// (and the denser parts of a cloud darker than its thin ones: an overcast sheet's relief)
@@ -1664,7 +1685,7 @@ void DiligentSkyRenderer::render()
 		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
 		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,
 		ev.starX.x, ev.starX.y, ev.starX.z, ev.active ? ev.sun.moonLit : 1.0f,
-		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 2),
+		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 4),
 		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
 		overcast[0], overcast[1], overcast[2], overcast[3],
 	};

@@ -73,7 +73,7 @@ void RenderSettings::load()
 	emissiveLightStrength = std::clamp(g_settings.value<float>("emissiveLightStrength", def.emissiveLightStrength), 0.0f, 3.0f);
 	dynamicClouds = std::clamp(g_settings.value<int>("dynamicClouds", def.dynamicClouds), 0, 3);
 	cloudQuality = std::clamp(g_settings.value<int>("cloudQuality", def.cloudQuality), 0, 3);
-	cloudDetail = std::clamp(g_settings.value<int>("cloudDetail", def.cloudDetail), 0, 2);
+	cloudDetail = std::clamp(g_settings.value<int>("cloudDetail", def.cloudDetail), 0, 4);
 	cloudWeather = std::clamp(g_settings.value<int>("cloudWeather", def.cloudWeather), 0, 10);
 	cloudCover = std::clamp(g_settings.value<float>("cloudCover", def.cloudCover), 0.0f, 1.0f);
 	lightShaftStrength = std::clamp(g_settings.value<float>("lightShaftStrength", def.lightShaftStrength), 0.0f, 4.0f);
