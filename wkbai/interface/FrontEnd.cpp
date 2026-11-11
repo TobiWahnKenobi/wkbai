@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../client.h"
 #include "FrontEnd.h"
 #include "../terrain.h"
 #include "LuaScripts.h"
@@ -648,6 +649,13 @@ struct FrontEnd::Impl {
 		});
 		lua.set_function("getChat", [this]() { return sol::as_table(chat); });
 		lua.set_function("getLobbyState", [this]() { return lobbyState; });
+		// agent control: the players an agent plays (the host's list, Client::agentPlayers)
+		lua.set_function("getAgentPlayers", []() {
+			std::vector<std::string> names;
+			if (Client::instance)
+				names = Client::instance->agentPlayers;
+			return sol::as_table(names);
+		});
 		lua.set_function("getLobbyStatus", [this]() { return lobbyStatus; });
 		lua.set_function("getPlayerName", []() { return g_settings.value("playerName", std::string("Player")); });
 		lua.set_function("getJoinAddress", []() { return g_settings.value("joinAddress", std::string("localhost")); });

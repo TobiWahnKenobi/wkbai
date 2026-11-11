@@ -54,6 +54,11 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::string> chatMessages;
 	// Multiplayer guests: the lobby as the host shows it (NETCLIMSG_LOBBY_STATE), and its parts so far
 	std::string lobbyState, lobbyStateParts;
+	// Agent control: the players an agent plays, by name (NETCLIMSG_AGENT_PLAYERS); and what this
+	// client told its server last (NETSRVMSG_AGENT_STATE; -1: not yet, on this link)
+	std::vector<std::string> agentPlayers;
+	int agentStateSent = -1;
+	NetLink* agentStateLink = nullptr;
 	// a running game's places for this guest (NETCLIMSG_SEATS), as lobbyState; awaitingSeat until
 	// it takes one or watches
 	std::string seats, seatsParts;

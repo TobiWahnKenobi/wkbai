@@ -7315,6 +7315,23 @@ void Test_BuildIdentity()
 	check(!Compare(SAME_NETWORK, host, nlohmann::json(), true).empty(), "an older wkbai that doesn't say its build: turned away: " + Compare(SAME_NETWORK, host, nlohmann::json(), true));
 	const nlohmann::json manifest = nlohmann::json::parse(ModManifest(), nullptr, false);
 	check(manifest.is_object() && manifest.value("build", nlohmann::json()) == host, "the mod manifest a guest sends carries its build");
+
+	// agent control in saves: the players an agent played, through the save's settings text
+	{
+		Server a;
+		a.agentPlayersEver[1027] = "Aldric";
+		a.agentPlayersEver[1030] = "Guest Two";
+		a.allowAgents = false;
+		const std::string text = a.aiSettingsText();
+		Server b;
+		b.applyAiSettingsText(text);
+		check(b.agentPlayersEver == a.agentPlayersEver, "a save keeps the players an agent played (" + std::to_string(b.agentPlayersEver.size()) + ", names with spaces)");
+		Server c;
+		check(c.allowAgents && c.agentPlayersEver.empty(), "a new game: agent players allowed, none yet");
+		c.clientInfos.resize(3);
+		c.clientInfos[1].name = "Bob";
+		check(c.clientDisplayName(1) == "Bob" && c.clientDisplayName(2) == "Player 3", "agent announcements name the player as the lobby did, else by place");
+	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 

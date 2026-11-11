@@ -4862,6 +4862,18 @@ void ClientInterface::iter()
 	if (loadingDone) {
 		drawChronicle();
 	}
+	// agent control: every player and spectator sees who has it on (the host's list), all game long
+	if (!client->agentPlayers.empty()) {
+		std::string text = "[AGENT] Agent control on for: ";
+		for (size_t i = 0; i < client->agentPlayers.size(); i++)
+			text += (i ? ", " : "") + client->agentPlayers[i];
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+		const ImVec2 p((ImGui::GetIO().DisplaySize.x - size.x) * 0.5f, 28.0f);
+		dl->AddRectFilled(ImVec2(p.x - 8, p.y - 2), ImVec2(p.x + size.x + 8, p.y + size.y + 2), IM_COL32(40, 25, 0, 220), 4.0f);
+		dl->AddRect(ImVec2(p.x - 8, p.y - 2), ImVec2(p.x + size.x + 8, p.y + size.y + 2), IM_COL32(230, 150, 20, 255), 4.0f, 0, 1.5f);
+		dl->AddText(p, IM_COL32(255, 190, 60, 255), text.c_str());
+	}
 
 	// Test runs: "benchmark": { ..., "drawCursor": true } draws the cursor into the frame (the
 	// screenshots leave out the system's cursor)

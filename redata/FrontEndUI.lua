@@ -1091,7 +1091,7 @@ local SETTINGS = {
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 0, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
-	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1,
+	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1, allowAgents = 1,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1261,6 +1261,11 @@ local function settingsTab()
 		if button(BUILD_POLICIES[s.buildPolicy + 1], X(960), Y(900), L(420), L(34)) then
 			s.buildPolicy = (s.buildPolicy + 1) % 3
 			request("skirmish_setting", "buildPolicy=" .. s.buildPolicy)
+		end
+		-- agent control: guests whose game a program plays (Options > Agent control) may join or not
+		if button(s.allowAgents ~= 0 and "Agent players: allowed" or "Agent players: not allowed", X(960), Y(944), L(420), L(34)) then
+			s.allowAgents = (s.allowAgents ~= 0) and 0 or 1
+			request("skirmish_setting", "allowAgents=" .. s.allowAgents)
 		end
 		if s.allowSpectators ~= 0 then
 			drawText(FONT_LIST, X(520), Y(988), "at most", WHITE, S)
@@ -1519,6 +1524,13 @@ local function drawLobby(multiplayer)
 	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
 	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab() else settingsTab() end
+	-- agent control: who has it on, on every tab, in every lobby (the host's list)
+	if multiplayer then
+		local agents = getAgentPlayers()
+		if #agents > 0 then
+			drawText(FONT_LIST, X(24), Y(1040), "[AGENT] Agent control on for: " .. table.concat(agents, ", "), YELLOW, S)
+		end
+	end
 	local humans = 0
 	local canStart = skirmish.level ~= nil
 	for _, slot in ipairs(skirmish.slots) do
@@ -1565,6 +1577,7 @@ Screens.mphost = {
 		-- the host checks joining guests' mods with this while the lobby is open
 		request("skirmish_setting", "modPolicy=" .. skirmish.settings.modPolicy)
 		request("skirmish_setting", "buildPolicy=" .. skirmish.settings.buildPolicy)
+		request("skirmish_setting", "allowAgents=" .. skirmish.settings.allowAgents)
 	end,
 	draw = function() drawLobby(true) end,
 	onEscape = function() request("stop_hosting"); pop() end,
@@ -1589,6 +1602,11 @@ Screens.mpguest = {
 		local lines = {}
 		for line in string.gmatch(state .. "\n", "(.-)\n") do lines[#lines + 1] = line end
 		panel(X(20), Y(130), L(930), L(870))
+		-- agent control: who has it on (the host's list)
+		local agents = getAgentPlayers()
+		if #agents > 0 then
+			drawText(FONT_LIST, X(28), Y(1010), "[AGENT] Agent control on for: " .. table.concat(agents, ", "), YELLOW, S)
+		end
 		if status == "seats" then
 			-- the game is running: a place an AI plays or whose human left, or watching
 			drawText(FONT_TEXT, X(32), Y(140), lines[1] or "", YELLOW, S)
@@ -1626,7 +1644,8 @@ Screens.mpguest = {
 				local kind, name, colour, team, ready = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)|?(%d*)$")
 				if kind then
 					local ry = Y(200) + (i - 2) * L(22)
-					local mine = kind == "G" and name == me
+					-- (an agent-controlled guest's name carries " [AGENT]")
+					local mine = kind == "G" and (name == me or name == me .. " [AGENT]")
 					local free = kind == "A" or kind == "E"
 					if mine then mpGuestReady = ready == "1" end
 					if free and hovered(X(28), ry, L(600), L(22)) then

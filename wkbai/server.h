@@ -189,6 +189,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		// until the answer came (buildPolicy IDENTICAL)
 		std::string buildChallenge, buildAnswer, pendingHello;
 		bool buildAnswered = false;
+		bool agent = false; // agent control on at this client (NETSRVMSG_AGENT_STATE)
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -357,6 +358,16 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::string checkGuestBuild(int clientIndex);
 	// NETSRVMSG_LOBBY_HELLO (again when a held hello's build answer comes)
 	void lobbyHello(int clientIndex, const std::string& data);
+	// Agent control ("allowAgents", on by default): guests whose game an agent plays may join;
+	// off, a guest that says so is turned away. Everyone is told who has it on
+	// (NETCLIMSG_AGENT_PLAYERS, a chat line when it changes)
+	bool allowAgents = true;
+	// every player an agent played at some time in this game (player id: name), kept by saves
+	// ("agentPlayer.<id>=<name>"), for telling agent games from people's
+	std::map<uint32_t, std::string> agentPlayersEver;
+	std::string clientDisplayName(int clientIndex);
+	void sendAgentPlayers();
+	void noteAgentPlayer(int clientIndex);
 	// a guest's mods checked at its hello: "" when it may join; a reason to turn it away; or
 	// "sent" when the host sent it its mods (it says hello again with them mounted)
 	std::string checkGuestMods(int clientIndex);

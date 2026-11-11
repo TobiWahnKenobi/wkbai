@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #define _USE_MATH_DEFINES
+#include "AgentInput.h"
 #include "BuildIdentity.h"
 #include "client.h"
 #include "util/LoadingProgress.h"
@@ -30,6 +31,21 @@ void Client::loadFromServerObject(Server & server)
 
 void Client::tick()
 {
+	// agent control: our server is told whether it is on, after the hello and when it changes
+	// (a new connection is told again)
+	if (serverLink) {
+		if (serverLink != agentStateLink) {
+			agentStateLink = serverLink;
+			agentStateSent = -1;
+		}
+		const int on = AgentInput::Enabled() ? 1 : 0;
+		if (on != agentStateSent) {
+			NetPacketWriter packet(NETSRVMSG_AGENT_STATE);
+			packet.writeUint8((uint8_t)on);
+			serverLink->send(packet);
+			agentStateSent = on;
+		}
+	}
 	ZoneScoped;
 	timeManager.tick();
 
@@ -824,6 +840,13 @@ void Client::tick()
 					}
 				}
 				hostDataParts.erase(kind);
+				break;
+			}
+			case NETCLIMSG_AGENT_PLAYERS: {
+				const std::string text = br.readStringZ();
+				agentPlayers.clear();
+				for (size_t at = 0, nl; (nl = text.find('\n', at)) != std::string::npos; at = nl + 1)
+					agentPlayers.push_back(text.substr(at, nl - at));
 				break;
 			}
 			case NETCLIMSG_BUILD_CHALLENGE: {

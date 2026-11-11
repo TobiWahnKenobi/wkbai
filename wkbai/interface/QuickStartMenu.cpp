@@ -276,6 +276,8 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 				server->modPolicy = atoi(request.arg.c_str() + eq + 1);
 			if (request.arg.substr(0, eq) == "buildPolicy")
 				server->buildPolicy = std::clamp(atoi(request.arg.c_str() + eq + 1), 0, 2);
+			if (request.arg.substr(0, eq) == "allowAgents")
+				server->allowAgents = atoi(request.arg.c_str() + eq + 1) != 0;
 		}
 	}
 	else if (request.action == "skirmish_settings")
@@ -1009,6 +1011,9 @@ void QuickStartMenu::updateLobby()
 		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); ci != server->clientLinks.end()) {
 			auto& info = server->clientInfos[ci - server->clientLinks.begin()];
 			name = info.name;
+			// agent control: marked wherever the lobby shows the name (the guests' lobbies too)
+			if (info.agent && !name.empty())
+				name += " [AGENT]";
 			requests = std::move(info.lobbyRequests);
 			info.lobbyRequests.clear();
 		}

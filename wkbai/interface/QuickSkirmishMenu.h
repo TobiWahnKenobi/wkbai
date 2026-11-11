@@ -83,6 +83,7 @@ private:
 	int aiHumanFocus = 50; // Server::aiHumanFocus
 	int modPolicy = 0; // Server::modPolicy
 	int buildPolicy = 1; // Server::buildPolicy
+	bool allowAgents = true; // Server::allowAgents
 	bool allowSpectators = false; int maxSpectators = 4; // Server::allowSpectators, maxSpectators
 	int aiMinPeasants = 40; // Server::aiMinPeasants
 	int aiSurplusBuildings = 3, aiSurplusPerBuilding = 800; // Server::aiSurplusBuildings, aiSurplusPerBuilding

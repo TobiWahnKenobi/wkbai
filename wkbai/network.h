@@ -93,6 +93,9 @@ enum NetClientMessages {
 	// The host's build check (BuildIdentity): a random challenge (zero-ended text) the guest
 	// answers with NETSRVMSG_BUILD_ANSWER
 	NETCLIMSG_BUILD_CHALLENGE,
+	// Agent control: the players an agent plays (AgentInput), their names a line each (zero-ended,
+	// empty: none), to everyone whenever it changes and to each guest who joins
+	NETCLIMSG_AGENT_PLAYERS,
 	// (NETCLIMSG_HOST_DATA kinds 3 and 4: a joining guest's mods for this game, when the host
 	// sends its mods: 4 is one logic file of a mod the guest lacks, "<mod index>\n<game path>\n
 	// <timestamp>\n" then its bytes; 3, after the files, the mods to mount in order, JSON
@@ -158,6 +161,9 @@ enum NetServerMessages {
 	NETSRVMSG_ENVIRONMENT_DEBUG,
 	// The answer to NETCLIMSG_BUILD_CHALLENGE: BuildIdentity::ChallengeAnswer (hex, zero-ended)
 	NETSRVMSG_BUILD_ANSWER,
+	// Agent control on (1) or off (0) at this client, sent after its hello and whenever it changes;
+	// recorded, so a replay shows it too
+	NETSRVMSG_AGENT_STATE,
 };
 
 struct NetPacketWriter {
