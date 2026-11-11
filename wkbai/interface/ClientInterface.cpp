@@ -2738,6 +2738,18 @@ namespace {
 			g_mouseWheel = mouseWheel;
 			g_mouseDoubleClicked = mouseDoubleClicked;
 		}
+		// the mouse only (a game text window under the cursor, or a modal one): the keys stay
+		// with the game
+		void takeMouse() {
+			move(mouseDown, g_mouseDown); move(mousePressed, g_mousePressed); move(mouseReleased, g_mouseReleased);
+			mouseWheel = std::exchange(g_mouseWheel, 0);
+			mouseDoubleClicked = std::exchange(g_mouseDoubleClicked, 0);
+		}
+		void giveMouse() {
+			move(g_mouseDown, mouseDown); move(g_mousePressed, mousePressed); move(g_mouseReleased, mouseReleased);
+			g_mouseWheel = mouseWheel;
+			g_mouseDoubleClicked = mouseDoubleClicked;
+		}
 	};
 }
 
@@ -3027,8 +3039,13 @@ void ClientInterface::iter()
 	}
 	const bool menuOpen = frontEnd && frontEnd->isOpen();
 	static MenuInput menuInput;
+	// a game text window (or the objectives) under the mouse, or a modal one: it gets the
+	// mouse, the game none
+	const bool windowsTakeMouse = !menuOpen && frontEnd && frontEnd->gameWindowsWantMouse(UiMouseX(), UiMouseY());
 	if (menuOpen)
 		menuInput.take();
+	else if (windowsTakeMouse)
+		menuInput.takeMouse();
 
 	//----- Command cursors -----//
 	TracyCZoneN(zoneInput, "Input and commands", 1);
@@ -3488,6 +3505,9 @@ void ClientInterface::iter()
 		}
 	}
 	// (a replay's controls have their own keys)
+	// O: the mission objectives window (the original's key, Hot Keys.cpp)
+	if (KeyPressed(KeyAction::Objectives) && client->missionObjectives >= 0)
+		toggleObjectivesRequested = true;
 	if (KeyPressed(KeyAction::Pause) && !replayMode) {
 		static bool pauseState = false;
 		pauseState = !pauseState;
@@ -3667,51 +3687,7 @@ void ClientInterface::iter()
 		ImGui::End();
 	}
 
-	for (auto& activeGtw : client->gtwStates) {
-		if (activeGtw.second == -1) continue;
-		auto& gtw = client->gameSet->gameTextWindows[activeGtw.first];
-		auto& page = gtw.pages[activeGtw.second];
-		std::string title = "[GTW] " + client->gameSet->gameTextWindows.names[activeGtw.first];
-		ImGui::SetNextWindowPos(ImVec2(g_windowWidth / 2 / g_uiScale, g_windowHeight / 2 / g_uiScale), 0, ImVec2(0.5f, 0.5f));
-		ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoSavedSettings);
-		auto loctext = lang.getText(page.textBody);
-		std::string ptext;
-		for (size_t i = 0; i < loctext.size(); i++) {
-			if (loctext[i] == '\\') {
-				char c = loctext[i + 1];
-				if (c == 'n')
-					ptext.push_back('\n');
-				else if (c == 0)
-					break;
-				i++;
-			}
-			else
-				ptext.push_back(loctext[i]);
-		}
-		ImGui::PushTextWrapPos(560.0f);
-		ImGui::TextUnformatted(ptext.c_str());
-		ImGui::PopTextWrapPos();
-		for (size_t i = 0; i < gtw.buttons.size(); i++) {
-			auto& button = gtw.buttons[i];
-			if (ImGui::Button(lang.getText(button.text).c_str())) {
-				switch (button.onClickWindowAction) {
-				case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-					activeGtw.second = -1; break;
-				case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_FIRST_PAGE:
-					activeGtw.second = 0; break;
-				case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_NEXT_PAGE:
-					if (activeGtw.second < (int)gtw.pages.size() - 1) activeGtw.second++; break;
-				case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_PREVIOUS_PAGE:
-					if (activeGtw.second > 0) activeGtw.second--; break;
-				}
-				if(!button.onClickSequence.actionList.empty())
-					client->sendGameTextWindowButtonClicked(activeGtw.first, i);
-			}
-			ImGui::SameLine();
-		}
-		ImGui::NewLine();
-		ImGui::End();
-	}
+	// (the game text windows: updateGameWindows, drawn by the menu script)
 
 	//----- Scriptable UI -----//
 	static bool luaInitialized = false;
@@ -3840,6 +3816,11 @@ void ClientInterface::iter()
 				ImGui::GetBackgroundDrawList()->AddImage(tex, ImVec2((float)x, (float)y), ImVec2((float)(x + width), (float)(y + height)), ImVec2(u0, v0), ImVec2(u1, v1));
 			});
 		lua.set_function("openInGameMenu", [this]() { openMenuRequested = true; });
+		// the mission objectives (the top bar's button): whether the level has some, whether
+		// there is news not seen yet (the button flashes), and the window opened or closed
+		lua.set_function("hasObjectives", [this]() { return client->missionObjectives >= 0; });
+		lua.set_function("objectivesNews", []() { FrontEnd* fe = FrontEnd::get(); return fe && fe->objectivesNews(); });
+		lua.set_function("toggleObjectives", [this]() { toggleObjectivesRequested = true; });
 		// the lower left panel, its window as glass with enhanced graphics
 		lua.set_function("drawStainedGlassPanel", [this](int x, int y, int w, int h) { drawStainedGlassPanel(x, y, w, h); });
 		// text in a colour (0xAABBGGRR, as drawRect)
@@ -4175,6 +4156,9 @@ void ClientInterface::iter()
 	if (frontEnd) {
 		if (menuOpen)
 			menuInput.give();
+		else if (windowsTakeMouse)
+			menuInput.giveMouse();
+		updateGameWindows(frontEnd);
 		frontEnd->frame(FrontEnd::Place::IN_GAME);
 		for (const FrontEnd::Request& r : frontEnd->takeRequests()) {
 			if (r.action == "quit")
@@ -4185,6 +4169,11 @@ void ClientInterface::iter()
 			}
 			else if (r.action == "save")
 				saveRequested(r.arg);
+			else if (r.action == "gtw_button") {
+				const size_t comma = r.arg.find(',');
+				if (comma != std::string::npos)
+					gameWindowButton(atoi(r.arg.c_str()), atoi(r.arg.c_str() + comma + 1));
+			}
 		}
 		if (menuPausedGame && !frontEnd->isOpen()) {
 			client->sendPauseRequest(false);
@@ -5034,6 +5023,131 @@ void ClientInterface::updateTerrain() {
 		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
 	this->terrainSpriteContainer = new TerrainSpriteContainer;
 	this->terrainSpriteRenderer = new TerrainSpriteRenderer(gfx, client->terrain, this->terrainSpriteContainer);
+}
+
+namespace {
+	// A game text: "\n" a new line, "\c" (the advisor's lines) dropped, other escapes as the
+	// character after the backslash
+	std::string GameText(const std::string& text)
+	{
+		std::string out;
+		out.reserve(text.size());
+		for (size_t i = 0; i < text.size(); i++) {
+			if (text[i] != '\\') {
+				out.push_back(text[i]);
+				continue;
+			}
+			if (i + 1 >= text.size())
+				break;
+			const char c = text[++i];
+			if (c == 'n')
+				out.push_back('\n');
+			else if (c != 'c')
+				out.push_back(c);
+		}
+		return out;
+	}
+}
+
+void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
+{
+	std::vector<std::pair<uint32_t, FrontEnd::GameWindow>> shown;
+	for (const auto& [index, page] : client->gtwStates) {
+		if (page < 0 || index < 0 || index >= (int)client->gameSet->gameTextWindows.size())
+			continue;
+		const GameTextWindow& gtw = client->gameSet->gameTextWindows[index];
+		if (page >= (int)gtw.pages.size())
+			continue;
+		FrontEnd::GameWindow w;
+		w.id = index;
+		w.text = GameText(lang.getText(gtw.pages[page].textBody));
+		w.page = page;
+		w.pages = (int)gtw.pages.size();
+		w.x = gtw.x;
+		w.y = gtw.y;
+		w.width = gtw.width;
+		w.atBottom = gtw.atBottom;
+		w.modal = gtw.modal;
+		const bool lastPage = page + 1 >= (int)gtw.pages.size();
+		for (const GameTextWindow::Button& b : gtw.buttons) {
+			FrontEnd::GameWindow::Button button;
+			button.text = GameText(lang.getText(b.text));
+			button.x = b.x;
+			button.y = b.y;
+			button.width = b.width;
+			button.height = b.height;
+			// greyed where it would do nothing: Back on the first page, Next on the last, and
+			// with FORCE_READ_ALL_PAGES closing before the last page has been reached
+			switch (b.onClickWindowAction) {
+			case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_PREVIOUS_PAGE:
+			case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_FIRST_PAGE:
+				button.enabled = page > 0 || !b.onClickSequence.actionList.empty();
+				break;
+			case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_NEXT_PAGE:
+				button.enabled = !lastPage || !b.onClickSequence.actionList.empty();
+				break;
+			case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
+				button.enabled = !gtw.forceReadAllPages || lastPage;
+				break;
+			}
+			w.buttons.push_back(std::move(button));
+		}
+		const auto order = client->gtwOrder.find(index);
+		shown.emplace_back(order != client->gtwOrder.end() ? order->second : 0, std::move(w));
+	}
+	std::stable_sort(shown.begin(), shown.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	std::vector<FrontEnd::GameWindow> windows;
+	for (auto& [order, w] : shown)
+		windows.push_back(std::move(w));
+	frontEnd->setGameWindows(std::move(windows));
+
+	FrontEnd::Objectives objectives;
+	if (client->missionObjectives >= 0 && client->missionObjectives < (int)client->gameSet->missionObjectives.size()) {
+		const MissionObjectives& mo = client->gameSet->missionObjectives[client->missionObjectives];
+		objectives.title = GameText(lang.getText(mo.missionName.empty() ? client->gameSet->missionObjectives.getString(client->missionObjectives) : mo.missionName));
+		for (const auto& [key, state] : client->objectiveEntries)
+			if (state != MissionObjectives::HIDDEN)
+				objectives.entries.push_back({ GameText(lang.getText(key)), state == MissionObjectives::INACTIVE });
+		objectives.changed = client->objectivesChanged;
+	}
+	frontEnd->setObjectives(std::move(objectives));
+	if (toggleObjectivesRequested) {
+		toggleObjectivesRequested = false;
+		frontEnd->toggleObjectives();
+	}
+}
+
+void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
+{
+	auto it = client->gtwStates.find(gtwIndex);
+	if (it == client->gtwStates.end() || it->second < 0 || gtwIndex >= (int)client->gameSet->gameTextWindows.size())
+		return;
+	const GameTextWindow& gtw = client->gameSet->gameTextWindows[gtwIndex];
+	if (buttonIndex < 0 || buttonIndex >= (int)gtw.buttons.size())
+		return;
+	const GameTextWindow::Button& button = gtw.buttons[buttonIndex];
+	const int page = it->second, pages = (int)gtw.pages.size();
+	switch (button.onClickWindowAction) {
+	case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
+		if (gtw.forceReadAllPages && page + 1 < pages)
+			return;
+		it->second = -1;
+		break;
+	case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_FIRST_PAGE:
+		if (page != 0)
+			client->setGameTextWindowPage(gtwIndex, 0);
+		break;
+	case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_NEXT_PAGE:
+		if (page + 1 < pages)
+			client->setGameTextWindowPage(gtwIndex, page + 1);
+		break;
+	case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_PREVIOUS_PAGE:
+		if (page > 0)
+			client->setGameTextWindowPage(gtwIndex, page - 1);
+		break;
+	}
+	if (!button.onClickSequence.actionList.empty())
+		client->sendGameTextWindowButtonClicked(gtwIndex, buttonIndex);
 }
 
 void ClientInterface::saveRequested(const std::string& name)

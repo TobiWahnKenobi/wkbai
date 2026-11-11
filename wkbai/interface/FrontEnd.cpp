@@ -237,6 +237,13 @@ struct FrontEnd::Impl {
 	ImDrawList* drawList = nullptr;
 	std::vector<General> generals;
 	bool generalsLoaded = false;
+	// in game: the game text windows and objectives to draw, and the screen areas the windows
+	// covered (last frame), for gameWindowsWantMouse
+	std::vector<GameWindow> gameWindows;
+	Objectives objectives;
+	struct Area { float x, y, w, h; };
+	std::vector<Area> windowAreas, nextWindowAreas;
+	bool modalWindow = false, nextModalWindow = false;
 
 	explicit Impl(IRenderer* gfx) : gfx(gfx) {}
 
@@ -492,6 +499,35 @@ struct FrontEnd::Impl {
 			requests.push_back({ action, arg ? *arg : std::string() });
 		});
 		lua.set_function("getPlace", [this]() { return place == Place::IN_GAME ? "game" : "menu"; });
+		// the game text windows showing (oldest first): { id, text, page, pages, x, y, width,
+		// atBottom, modal, buttons = { { text, x, y, width, height, enabled }, ... } }
+		lua.set_function("getGameWindows", [this]() {
+			sol::table list = lua.create_table();
+			for (const GameWindow& w : gameWindows) {
+				sol::table buttons = lua.create_table();
+				for (const GameWindow::Button& b : w.buttons)
+					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled));
+				list.add(lua.create_table_with("id", w.id, "text", w.text, "page", w.page + 1, "pages", w.pages,
+					"x", w.x, "y", w.y, "width", w.width, "atBottom", w.atBottom, "modal", w.modal, "buttons", buttons));
+			}
+			return list;
+		});
+		// a screen area a game window covers this frame (the game gets no clicks there), and
+		// whether it is modal (the game gets none at all)
+		lua.set_function("reportGameWindowArea", [this](float x, float y, float w, float h, sol::optional<bool> modal) {
+			nextWindowAreas.push_back({ x, y, w, h });
+			if (modal && *modal)
+				nextModalWindow = true;
+		});
+		// the mission objectives: { title, changed, entries = { { text, inactive }, ... } }, or nil
+		lua.set_function("getObjectives", [this]() -> sol::object {
+			if (objectives.title.empty())
+				return sol::lua_nil;
+			sol::table entries = lua.create_table();
+			for (const Objectives::Entry& e : objectives.entries)
+				entries.add(lua.create_table_with("text", e.text, "inactive", e.inactive));
+			return sol::make_object(lua, lua.create_table_with("title", objectives.title, "changed", objectives.changed, "entries", entries));
+		});
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
 		// the game recordings (folders in saved\Recordings with a start.sav), newest first (by
@@ -1000,7 +1036,45 @@ void FrontEnd::frame(Place place)
 	impl->place = place;
 	// The main menu is the background; the in-game menu covers the game and its HUD
 	impl->drawList = place == Place::MAIN_MENU ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+	impl->nextWindowAreas.clear();
+	impl->nextModalWindow = false;
 	impl->call("FE_Frame", place == Place::IN_GAME ? "game" : "menu");
+	impl->windowAreas = std::move(impl->nextWindowAreas);
+	impl->modalWindow = impl->nextModalWindow;
+	if (place != Place::IN_GAME) {
+		impl->windowAreas.clear();
+		impl->modalWindow = false;
+	}
+}
+
+void FrontEnd::setGameWindows(std::vector<GameWindow> windows) { impl->gameWindows = std::move(windows); }
+void FrontEnd::setObjectives(Objectives objectives) { impl->objectives = std::move(objectives); }
+void FrontEnd::toggleObjectives() { impl->call("FE_ToggleObjectives"); }
+
+bool FrontEnd::objectivesNews() const
+{
+	if (!impl->scriptOk)
+		return false;
+	try {
+		sol::protected_function f = impl->lua["FE_ObjectivesNews"];
+		if (!f.valid())
+			return false;
+		sol::protected_function_result r = f();
+		return r.valid() && r.get<bool>();
+	}
+	catch (const sol::error&) {
+		return false;
+	}
+}
+
+bool FrontEnd::gameWindowsWantMouse(float x, float y) const
+{
+	if (impl->modalWindow)
+		return true;
+	for (const Impl::Area& a : impl->windowAreas)
+		if (x >= a.x && x < a.x + a.w && y >= a.y && y < a.y + a.h)
+			return true;
+	return false;
 }
 
 bool FrontEnd::isOpen() const

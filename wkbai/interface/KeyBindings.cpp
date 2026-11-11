@@ -65,6 +65,7 @@ namespace {
 				{ A::Pause, "pause", "Pause", GAME, P::GAME, false, false, { key(SDL_SCANCODE_P), none() } },
 				{ A::SpeedUp, "speedUp", "Game faster", GAME, P::GAME, false, false, { key(SDL_SCANCODE_KP_PLUS), none() } },
 				{ A::SlowDown, "slowDown", "Game slower", GAME, P::GAME, false, false, { key(SDL_SCANCODE_KP_MINUS), none() } },
+				{ A::Objectives, "objectives", "Mission objectives (the original's O)", GAME, P::GAME, false, false, { key(SDL_SCANCODE_O), none() } },
 
 				{ A::HideInterface, "hideInterface", "Show or hide the interface", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F3), none() } },
 				{ A::Statistics, "statistics", "Statistics", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F6), none() } },

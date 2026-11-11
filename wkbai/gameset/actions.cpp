@@ -13,6 +13,8 @@
 #include "../settings.h"
 
 #include <cassert>
+#include <functional>
+#include <set>
 #include <string_view>
 #include <nlohmann/json.hpp>
 #include "../util/SimRandom.h"
@@ -808,6 +810,45 @@ struct ActionDisplayGameTextWindow : Action {
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		gtwIndex = gs.gameTextWindows.readIndex(gsf);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// The mission objectives (WKB.exe's Set_Active_Mission_Objectives_Blueprint and the
+// Show/Hide_Mission_Objectives_Entry ones): the finder's players (or the players of the objects
+// found) get the set or the entry's new state on their objectives window
+static void ForEachObjectivesPlayer(SrvScriptContext* ctx, ObjectFinder* finder, const std::function<void(ServerGameObject*)>& f)
+{
+	std::set<ServerGameObject*> players;
+	for (ServerGameObject* obj : finder->eval(ctx)) {
+		ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer();
+		if (player && player->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && players.insert(player).second)
+			f(player);
+	}
+}
+
+struct ActionSetActiveMissionObjectives : Action {
+	int index = -1;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		ForEachObjectivesPlayer(ctx, finder.get(), [&](ServerGameObject* player) { ctx->server->setMissionObjectives(player, index); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		index = gs.missionObjectives.readIndex(gsf);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+struct ActionMissionObjectivesEntry : Action {
+	int state;
+	std::string key;
+	std::unique_ptr<ObjectFinder> finder;
+	explicit ActionMissionObjectivesEntry(int state) : state(state) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		ForEachObjectivesPlayer(ctx, finder.get(), [&](ServerGameObject* player) { ctx->server->setMissionObjectivesEntry(player, key, state); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		key = gsf.nextString(true);
 		finder.reset(ReadFinder(gsf, gs));
 	}
 };
@@ -1811,10 +1852,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP:
 	case Tags::ACTION_ENABLE_GAME_INTERFACE:
 	case Tags::ACTION_DISABLE_GAME_INTERFACE:
-	case Tags::ACTION_SET_ACTIVE_MISSION_OBJECTIVES:
-	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY_INACTIVE:
-	case Tags::ACTION_HIDE_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
@@ -1841,6 +1878,10 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_REGISTER_VICTOR:
 		action = new ActionNop; break;
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
+	case Tags::ACTION_SET_ACTIVE_MISSION_OBJECTIVES: action = new ActionSetActiveMissionObjectives; break;
+	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY: action = new ActionMissionObjectivesEntry(MissionObjectives::SHOWN); break;
+	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY_INACTIVE: action = new ActionMissionObjectivesEntry(MissionObjectives::INACTIVE); break;
+	case Tags::ACTION_HIDE_MISSION_OBJECTIVES_ENTRY: action = new ActionMissionObjectivesEntry(MissionObjectives::HIDDEN); break;
 	case Tags::ACTION_CONQUER_LEVEL: action = new ActionConquerLevel; break;
 	case Tags::ACTION_EXIT_TO_MAIN_MENU: action = new ActionExitToMainMenu; break;
 	case Tags::ACTION_REMOVE_MULTIPLAYER_PLAYER: action = new ActionRemoveMultiplayerPlayer; break;

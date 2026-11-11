@@ -7456,6 +7456,123 @@ void Test_GameOverView()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Kingmaker provinces in skirmish, and the game windows (the text windows and the mission
+// objectives, drawn by FrontEndUI.lua instead of ImGui boxes)
+void Test_GameWindows()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	// a province from the skirmish menu: a skirmish map ("Skirmish Campaign Level" stays 0, so its
+	// script's intro, campaign resources and conquest don't run); from the campaign map: campaign
+	{
+		QuickSkirmishMenu menu;
+		menu.changeSettingsForLevel("CH2_Angland.lvl");
+		check(!menu.isCampaignMode(), "CH2_Angland.lvl from the skirmish menu: not campaign mode");
+		menu.changeSettingsForLevel("CH2_Angland_Multi.lvl");
+		check(!menu.isCampaignMode(), "CH2_Angland_Multi.lvl: not campaign mode");
+		menu.campaignProfile = true;
+		menu.changeSettingsForLevel("CH2_Angland.lvl");
+		check(menu.isCampaignMode(), "CH2_Angland.lvl from the campaign map: campaign mode");
+		menu.campaignProfile = false;
+		menu.changeSettingsForLevel("Interactive Tutorial.lvl");
+		check(menu.isCampaignMode(), "the Interactive Tutorial: campaign mode (its scripts)");
+		menu.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+		check(!menu.isCampaignMode(), "a skirmish map: not campaign mode");
+	}
+
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\Interactive Tutorial.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	if (!player) {
+		printf("UNITTEST FAILED (no player 1027)\n");
+		return;
+	}
+	server.setClientPlayerControl(0, 1027);
+	ClientInterface ui(&client, nullptr);
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(2);
+		}
+	};
+	auto run = [&](const char* line) {
+		SrvScriptContext ctx(&server, player);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, *server.gameSet));
+		act->run(&ctx);
+	};
+	step(10);
+
+	// the objectives: MISSION_OBJECTIVES "Tutorial" (14 entries, all hidden at first)
+	const int tutorial = server.gameSet->missionObjectives.names.getIndex("Tutorial");
+	check(tutorial >= 0 && server.gameSet->missionObjectives[tutorial].entries.size() == 14
+		&& server.gameSet->missionObjectives[tutorial].missionName == "TUTORIAL", "MISSION_OBJECTIVES \"Tutorial\" read: TUTORIAL, 14 entries");
+	run("SET_ACTIVE_MISSION_OBJECTIVES \"Tutorial\" FINDER_SELF");
+	run("SHOW_MISSION_OBJECTIVES_ENTRY SELECT_UNITS FINDER_SELF");
+	run("SHOW_MISSION_OBJECTIVES_ENTRY SPAWN_A_PEASANT FINDER_SELF");
+	step(5);
+	auto entryState = [&](const std::string& key) {
+		for (const auto& [k, s] : client.objectiveEntries)
+			if (k == key) return (int)s;
+		return -1;
+	};
+	check(client.missionObjectives == tutorial, "the client has the Tutorial objectives");
+	check(entryState("SELECT_UNITS") == MissionObjectives::SHOWN && entryState("SPAWN_A_PEASANT") == MissionObjectives::SHOWN
+		&& entryState("BUILD_A_VILLAGE") == MissionObjectives::HIDDEN, "two entries shown, the others hidden");
+	const uint32_t changed = client.objectivesChanged;
+	run("HIDE_MISSION_OBJECTIVES_ENTRY SELECT_UNITS FINDER_SELF");
+	run("SHOW_MISSION_OBJECTIVES_ENTRY_INACTIVE SPAWN_A_PEASANT FINDER_SELF");
+	step(5);
+	check(entryState("SELECT_UNITS") == MissionObjectives::HIDDEN && entryState("SPAWN_A_PEASANT") == MissionObjectives::INACTIVE,
+		"an entry hidden, one inactive");
+	check(client.objectivesChanged == changed + 1, "news counted for the inactive entry, not for the hidden one");
+
+	// a text window: its layout read, its pages turned by its buttons, closed by OK
+	const int camera = server.gameSet->gameTextWindows.names.getIndex("Tutorial 1 Camera");
+	if (camera < 0) {
+		printf("UNITTEST FAILED (no \"Tutorial 1 Camera\")\n");
+		return;
+	}
+	const GameTextWindow& gtw = server.gameSet->gameTextWindows[camera];
+	check(std::abs(gtw.x - 0.2f) < 1e-4f && std::abs(gtw.y - 0.8f) < 1e-4f && gtw.width == 550 && gtw.atBottom && gtw.pages.size() == 7,
+		"\"Tutorial 1 Camera\": at 0.2, 0.8, 550 wide, at the bottom, 7 pages");
+	auto buttonFor = [&](int action) {
+		for (size_t i = 0; i < gtw.buttons.size(); i++)
+			if (gtw.buttons[i].onClickWindowAction == action) return (int)i;
+		return -1;
+	};
+	const int next = buttonFor(Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_NEXT_PAGE), back = buttonFor(Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_PREVIOUS_PAGE),
+		close = buttonFor(Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW);
+	check(next >= 0 && back >= 0 && close >= 0 && gtw.buttons[back].x == 250 && gtw.buttons[back].width == 75,
+		"its buttons: next, back (at 250, 75 wide) and close");
+	run("DISPLAY_GAME_TEXT_WINDOW \"Tutorial 1 Camera\" FINDER_SELF");
+	step(5);
+	check(client.gtwStates.count(camera) && client.gtwStates[camera] == 0 && client.gtwOrder.count(camera), "shown at its first page, in the order");
+	if (next >= 0 && back >= 0 && close >= 0) {
+		ui.gameWindowButton(camera, back);
+		check(client.gtwStates[camera] == 0, "back on the first page: still the first");
+		ui.gameWindowButton(camera, next);
+		ui.gameWindowButton(camera, next);
+		check(client.gtwStates[camera] == 2, "next twice: the third page");
+		ui.gameWindowButton(camera, back);
+		check(client.gtwStates[camera] == 1, "back: the second page");
+		ui.gameWindowButton(camera, close);
+		check(client.gtwStates[camera] == -1, "OK: closed");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -7520,6 +7637,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_LightningBuildings, "Lightning on buildings: a scratch (5-10%) and set alight, a soldier as before, nobody credited"},
 {Test_GameOverView, "Game over view: after a loss or a win, no fog of war and every player's statistics; a player still fighting keeps both; kept by a save"},
 {Test_TeamColours, "Team colours of HD models: wkTeam, wkEmblem and its TEXCOORD_1, the emblem slots, the materials apart"},
+{Test_GameWindows, "Game windows: a province plays as a skirmish map unless from the campaign; mission objectives reach the client; text window layout and buttons"},
 };
 
 void LaunchTest()

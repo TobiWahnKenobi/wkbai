@@ -413,6 +413,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void checkLoadsDone();
 	void setDiplomaticStatus(ServerGameObject *a, ServerGameObject *b, int status);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
+	// The mission objectives on a player's screen (its client's objectives window)
+	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);
+	void setMissionObjectivesEntry(ServerGameObject* player, const std::string& key, int state);
 	void hideGameTextWindow(ServerGameObject* player, int gtwIndex);
 	void hideCurrentGameTextWindow(ServerGameObject* player);
 	void snapCameraPosition(ServerGameObject* player, const Vector3& position, const Vector3& orientation);
