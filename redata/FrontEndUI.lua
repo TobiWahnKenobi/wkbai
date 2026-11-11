@@ -392,9 +392,12 @@ local function drawDialog()
 		end
 	end
 	if line ~= "" then lines[#lines + 1] = line end
+	-- centred up and down in the space between the frame and the button row
 	local lh = fontHeight(FONT_TEXT, S)
+	local top, bottom = y + L(20), y + h - L(80)
+	local ty = top + math.max(0, (bottom - top - #lines * lh) / 2)
 	for i, l in ipairs(lines) do
-		centredText(FONT_TEXT, l, x, y + L(40) + (i - 1) * lh, w, lh, 0xFF9CE6F0)
+		centredText(FONT_TEXT, l, x, ty + (i - 1) * lh, w, lh, 0xFF9CE6F0)
 	end
 	-- (the row centred: a wider dialog for its text spreads the buttons no further apart)
 	local bx = x + (w - n * bw - (n - 1) * between) / 2
