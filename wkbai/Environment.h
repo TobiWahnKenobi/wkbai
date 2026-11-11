@@ -138,7 +138,7 @@ struct SunState {
 	float moonLit = 1.0f;     // the lit part of its disc (MoonLitFraction)
 	float moonLight = 1.0f;   // its direct light: lit part times how far it is up (0 set)
 	// the sky light's brightness on the scene (SkyAmbient) against the day's: 1 by day, at night
-	// by the moon (0.5 moonless .. 0.92 a full moon high up)
+	// by the moon (0.36 moonless .. 0.92 a full moon high up)
 	float skyLightScale = 1.0f;
 	float shadowFade = 1.0f; // 0 where the light jumps between the sun and the moon (dusk, dawn)
 	float sunrise = 6.0f, sunset = 18.0f; // the day's hours (by the season)
