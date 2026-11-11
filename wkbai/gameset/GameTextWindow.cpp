@@ -19,6 +19,18 @@ void GameTextWindow::parse(GSFileParser& gsf, GameSet& gs)
 			buttons.emplace_back();
 			buttons.back().parse(gsf, gs);
 		}
+		else if (tag == "BOTTOMLEFT_X")
+			x = gsf.nextFloat();
+		else if (tag == "BOTTOMLEFT_Y")
+			y = gsf.nextFloat();
+		else if (tag == "PIXEL_WIDTH")
+			width = gsf.nextFloat();
+		else if (tag == "PUT_AT_BOTTOM_OF_SCREEN")
+			atBottom = true;
+		else if (tag == "MODAL")
+			modal = true;
+		else if (tag == "FORCE_READ_ALL_PAGES")
+			forceReadAllPages = true;
 		else if (tag == "GAME_TEXT_WINDOW_END")
 			break;
 		gsf.advanceLine();
@@ -54,7 +66,33 @@ void GameTextWindow::Button::parse(GSFileParser& gsf, GameSet& gs)
 		else if (tag == "ON_CLICK_SEQUENCE") {
 			onClickSequence.init(gsf, gs, "END_ON_CLICK_SEQUENCE");
 		}
+		else if (tag == "BOTTOMLEFT_X")
+			x = gsf.nextFloat();
+		else if (tag == "BOTTOMLEFT_Y")
+			y = gsf.nextFloat();
+		else if (tag == "PIXEL_WIDTH")
+			width = gsf.nextFloat();
+		else if (tag == "PIXEL_HEIGHT")
+			height = gsf.nextFloat();
 		else if (tag == "BUTTON_END")
+			break;
+		gsf.advanceLine();
+	}
+}
+
+void MissionObjectives::parse(GSFileParser& gsf, GameSet& gs)
+{
+	gsf.advanceLine();
+	while (!gsf.eof) {
+		auto tag = gsf.nextTag();
+		if (tag == "MISSION_NAME")
+			missionName = gsf.nextString();
+		else if (tag == "MISSION_OBJECTIVE") {
+			std::string key = gsf.nextString();
+			const std::string state = gsf.nextString();
+			entries.emplace_back(std::move(key), state == "SHOW" ? SHOWN : (state == "SHOW_INACTIVE" || state == "INACTIVE") ? INACTIVE : HIDDEN);
+		}
+		else if (tag == "END_MISSION_OBJECTIVES")
 			break;
 		gsf.advanceLine();
 	}

@@ -13,6 +13,7 @@
 #include "network.h"
 #include "gameset/gameset.h"
 #include <cassert>
+#include <algorithm>
 #include "terrain.h"
 #include "interface/ClientInterface.h"
 #include <SDL3/SDL_timer.h>
@@ -369,10 +370,8 @@ void Client::tick()
 			}
 			case NETCLIMSG_SHOW_GAME_TEXT_WINDOW: {
 				int gtwIndex = br.readUint32();
-				gtwStates[gtwIndex] = 0;
-				const auto& snd = gameSet->gameTextWindows[gtwIndex].pages[0].activationSound;
-				if(!snd.empty())
-					SoundPlayer::getSoundPlayer()->playSound(snd);
+				gtwOrder[gtwIndex] = ++gtwSerial;
+				setGameTextWindowPage(gtwIndex, 0);
 				break;
 			}
 			case NETCLIMSG_OBJECT_SCALE_SET: {
@@ -385,10 +384,36 @@ void Client::tick()
 			case NETCLIMSG_HIDE_GAME_TEXT_WINDOW: {
 				const int gtwIndex = br.readUint32();
 				gtwStates.erase(gtwIndex);
+				gtwOrder.erase(gtwIndex);
+				break;
+			}
+			case NETCLIMSG_MISSION_OBJECTIVES_SET: {
+				const int index = (int)br.readUint32();
+				objectiveEntries.clear();
+				missionObjectives = (index >= 0 && index < (int)gameSet->missionObjectives.size()) ? index : -1;
+				if (missionObjectives >= 0)
+					for (const auto& [key, state] : gameSet->missionObjectives[missionObjectives].entries)
+						objectiveEntries.emplace_back(key, (uint8_t)state);
+				objectivesChanged++;
+				break;
+			}
+			case NETCLIMSG_MISSION_OBJECTIVES_ENTRY: {
+				const std::string key = br.readStringZ();
+				const uint8_t state = br.readUint8();
+				auto it = std::find_if(objectiveEntries.begin(), objectiveEntries.end(), [&](const auto& e) { return e.first == key; });
+				if (it == objectiveEntries.end()) {
+					objectiveEntries.emplace_back(key, MissionObjectives::HIDDEN);
+					it = objectiveEntries.end() - 1;
+				}
+				// news: an entry shown (or turned inactive), not one hidden
+				if (it->second != state && state != MissionObjectives::HIDDEN)
+					objectivesChanged++;
+				it->second = state;
 				break;
 			}
 			case NETCLIMSG_HIDE_CURRENT_GAME_TEXT_WINDOW: {
 				gtwStates.clear();
+				gtwOrder.clear();
 				break;
 			}
 			case NETCLIMSG_OBJECT_FLAGS_SET: {
@@ -1025,6 +1050,19 @@ void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject 
 void Client::sendStartLevelRequest()
 {
 	serverLink->send(NetPacketWriter(NETSRVMSG_START_LEVEL));
+}
+
+void Client::setGameTextWindowPage(int gtwIndex, int page)
+{
+	const auto& pages = gameSet->gameTextWindows[gtwIndex].pages;
+	if (page < 0 || page >= (int)pages.size()) {
+		gtwStates[gtwIndex] = -1;
+		return;
+	}
+	gtwStates[gtwIndex] = page;
+	const auto& snd = pages[page].activationSound;
+	if (!snd.empty())
+		SoundPlayer::getSoundPlayer()->playSound(snd);
 }
 
 void Client::sendGameTextWindowButtonClicked(int gtwIndex, int buttonIndex)

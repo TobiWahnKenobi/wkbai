@@ -127,7 +127,18 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	bool localServer;
 	CliGORef clientPlayer;
 
+	// The game text windows showing: window index -> its page (-1: closed by its button);
+	// gtwOrder: when each was shown (a serial number, the newest on top)
 	std::map<int, int> gtwStates;
+	std::map<int, uint32_t> gtwOrder;
+	uint32_t gtwSerial = 0;
+	// The player's mission objectives (NETCLIMSG_MISSION_OBJECTIVES_*): the active set (-1: none),
+	// its entries' keys and states (MissionObjectives::State), a counter of the entries shown
+	std::vector<std::pair<std::string, uint8_t>> objectiveEntries;
+	int missionObjectives = -1;
+	uint32_t objectivesChanged = 0;
+	// Sets a showing window's page and plays that page's ACTIVATION_SOUND
+	void setGameTextWindowPage(int gtwIndex, int page);
 	bool isMusicPlaying = false;
 
 	struct SpecialEffect {

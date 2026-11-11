@@ -244,32 +244,39 @@ function drawTopPanel()
 end
 
 -- The five buttons in the left part (WKB.exe 0x790300: their rectangles as fractions of the
--- panel). Settings opens the in-game menu; the others are grey, as in a skirmish.
+-- panel). Settings opens the in-game menu; Mission Objectives the objectives window when the
+-- level has objectives (the tutorials), flashing on news; the others are grey, as in a
+-- skirmish. Tooltips: Language.txt's INGAME_* texts, as the original's.
 local topButtons = {
-	{ "Settings", 218, true },
-	{ "Mission Objectives", 278, false },
-	{ "Global Diplomacy", 337, false },
-	{ "Diplomacy", 395, false },
-	{ "Tributes", 455, false },
+	{ "Settings", 218, function() return true end, "INGAME_SETTINGS" },
+	{ "Mission Objectives", 278, function() return hasObjectives() end, "INGAME_MISSION_OBJECTIVES", "INGAME_MISSION_OBJECTIVES_UNAVAILABLE_SINGLE" },
+	{ "Global Diplomacy", 337, function() return false end, "INGAME_DIPLOMATIC_REPORT", "INGAME_DIPLOMATIC_REPORT_UNAVAILABLE_SINGLE" },
+	{ "Diplomacy", 395, function() return false end, "INGAME_DIPLOMACY", "INGAME_DIPLOMACY_UNAVAILABLE_SINGLE" },
+	{ "Tributes", 455, function() return false end, "INGAME_TRIBUTES", "INGAME_TRIBUTES_UNAVAILABLE_SINGLE" },
 }
 
 function drawTopButtons()
 	local s = topPanelScale()
-	for _, b in ipairs(topButtons) do
+	for i, b in ipairs(topButtons) do
 		local x, y, bw, bh = topPanelX(b[2]), 20 * s, 56 * s, 14 * s
 		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
 		local mx, my = getMouseX(), getMouseY()
 		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
-		if not b[3] then
+		local enabled = b[3]()
+		-- the objectives' news: the button flashes until the window is opened
+		local flashing = i == 2 and enabled and objectivesNews() and (math.floor(getSystemTime() * 2) % 2 == 0)
+		if not enabled then
 			image = image .. " Grey"
-		elseif hovered then
+		elseif hovered or flashing then
 			image = image .. " Highlighted"
 		end
 		if hovered then
-			setTooltip(b[1])
+			setTooltip(getText((not enabled and b[5]) and b[5] or b[4]))
 			-- grey ones take the click too (it doesn't go through to the map)
 			local clicked = handleButton()
-			if b[3] and clicked == 1 then openInGameMenu() end
+			if enabled and clicked == 1 then
+				if i == 1 then openInGameMenu() elseif i == 2 then toggleObjectives() end
+			end
 		end
 		drawImage(x, y, bw, bh, image .. ".tga")
 	end

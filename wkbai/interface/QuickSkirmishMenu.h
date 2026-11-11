@@ -44,6 +44,8 @@ public:
 		std::vector<std::pair<std::string, int>>& settings, std::vector<Slot>& slots);
 	bool replaySetup = false;
 	std::vector<std::pair<std::string, int>> settingLog; // setSetting's calls, in order
+	// the level chosen plays in campaign mode (a tutorial, a province from the campaign map)
+	bool isCampaignMode() const { return mode == CampaignMode; }
 private:
 	enum GameMode {
 		DevMode,

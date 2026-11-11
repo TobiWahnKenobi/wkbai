@@ -2272,6 +2272,21 @@ void Server::showGameTextWindow(ServerGameObject* player, int gtwIndex)
 	sendTo(player, msg);
 }
 
+void Server::setMissionObjectives(ServerGameObject* player, int objectivesIndex)
+{
+	NetPacketWriter msg{ NETCLIMSG_MISSION_OBJECTIVES_SET };
+	msg.writeUint32((uint32_t)objectivesIndex);
+	sendTo(player, msg);
+}
+
+void Server::setMissionObjectivesEntry(ServerGameObject* player, const std::string& key, int state)
+{
+	NetPacketWriter msg{ NETCLIMSG_MISSION_OBJECTIVES_ENTRY };
+	msg.writeStringZ(key);
+	msg.writeUint8((uint8_t)state);
+	sendTo(player, msg);
+}
+
 void Server::hideGameTextWindow(ServerGameObject* player, int gtwIndex)
 {
 	NetPacketWriter msg{ NETCLIMSG_HIDE_GAME_TEXT_WINDOW };

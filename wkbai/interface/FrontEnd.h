@@ -59,6 +59,44 @@ struct FrontEnd {
 	static std::vector<SaveGameHuman> ReadSaveGameHumans(const std::string& path);
 	void setLobby(std::vector<Guest> guests, const std::vector<std::string>& chat, const std::string& state, const std::string& status);
 
+	// In game: the game text windows showing (the level scripts' briefings, tutorial and quest
+	// texts: GAME_TEXT_WINDOW), oldest first, drawn by the menu script in the original's frame.
+	// A button pressed comes back as the request "gtw_button" "<id>,<button index>".
+	struct GameWindow {
+		struct Button {
+			std::string text;
+			float x = 0, y = 0, width = 75, height = 25; // pixels from the window's bottom left
+			bool enabled = true;
+		};
+		int id = 0;
+		std::string text;            // the page's text, translated, "\n" as new lines
+		int page = 0, pages = 1;
+		float x = 0.2f, y = 0.4f;    // bottom-left corner, fractions of the screen (y from the top)
+		float width = 550;           // pixels
+		bool atBottom = false, modal = false;
+		std::vector<Button> buttons;
+	};
+	void setGameWindows(std::vector<GameWindow> windows);
+	// The mission objectives (MISSION_OBJECTIVES): the active set's title and its shown entries
+	// (inactive: shown greyed, SHOW_MISSION_OBJECTIVES_ENTRY_INACTIVE); empty title: none
+	struct Objectives {
+		struct Entry {
+			std::string text;
+			bool inactive = false;
+		};
+		std::string title;
+		std::vector<Entry> entries;
+		uint32_t changed = 0;        // grows when an entry is shown or hidden (the button flashes)
+	};
+	void setObjectives(Objectives objectives);
+	// The objectives window opened or closed (the top bar's button, the Objectives key), and
+	// whether it has news not seen yet
+	void toggleObjectives();
+	bool objectivesNews() const;
+	// Whether the game windows want the mouse at this point (one covered it last frame, or one
+	// is modal): the game gets no mouse input then
+	bool gameWindowsWantMouse(float x, float y) const;
+
 	// The one front end of the program, or null (tests)
 	static FrontEnd* get();
 

@@ -122,6 +122,11 @@ enum NetClientMessages {
 	// bits), the outcome (8 bits: 1 won, 2 lost); id 0: the list starts over (a game loaded, a
 	// guest joining; the players follow). Its client then sees the whole map and everyone's statistics.
 	NETCLIMSG_PLAYER_FINISHED,
+	// the player's mission objectives (MISSION_OBJECTIVES): SET, the active set's index (32 bits,
+	// -1: none), its entries at their start states; ENTRY, an entry's key (string) and state
+	// (8 bits: MissionObjectives::State)
+	NETCLIMSG_MISSION_OBJECTIVES_SET,
+	NETCLIMSG_MISSION_OBJECTIVES_ENTRY,
 };
 
 enum NetServerMessages {

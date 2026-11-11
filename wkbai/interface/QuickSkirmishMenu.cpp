@@ -215,15 +215,15 @@ void QuickSkirmishMenu::changeSettingsForLevel(std::string_view levelName)
 		return;
 	}
 
-	// Battles Campaign level
-	// They can generally be used in Standard, Valhalla and Campaign mode.
-	// But prefer Campaign mode for now.
-	if (StrCICompare(levelName.substr(0, 4), "CH2_") == 0) {
-		const bool isMulti = StrCICompare(levelName.substr(std::max(0, (int)dotPosition - 6), 6), "_Multi") == 0;
-		if (!isMulti) {
-			mode = CampaignMode;
-			return;
-		}
+	// Battles Campaign level (a Kingmaker province, CH2_<Province>.lvl and its _Multi variant):
+	// Campaign mode only when it is played from the campaign map. The original plays the same
+	// levels as skirmish and multiplayer maps (WKB.exe unlocks a conquered province's map for
+	// them, 0x6f0d20), and then the level item "Skirmish Campaign Level" stays 0, so the
+	// province script's campaign parts (the intro, the campaign resources, the conquest
+	// ending) don't run. In Campaign mode wkbai sets it to 1.
+	if (StrCICompare(levelName.substr(0, 4), "CH2_") == 0 && campaignProfile) {
+		mode = CampaignMode;
+		return;
 	}
 
 	// Otherwise it is a regular skirmish map level

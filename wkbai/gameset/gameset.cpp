@@ -335,6 +335,14 @@ void GameSet::parseFile(const char * fn, int pass)
 				linkedFiles.insert(linkedFiles.end(), found.begin(), found.end());
 			}
 		}
+		else if (pass == 0 && strtag == "MISSION_OBJECTIVES") {
+			// (no tag of its own: matched by name, as the tutorials use it)
+			missionObjectives.names.insertString(gsf.nextString(true));
+			ignoreBlueprintEx(gsf, "END_MISSION_OBJECTIVES");
+		}
+		else if (pass == 1 && strtag == "MISSION_OBJECTIVES") {
+			missionObjectives.readRef(gsf).parse(gsf, *this);
+		}
 		else if (pass == 0) {
 			switch (tag) {
 			case Tags::GAMESET_DECLARE_ITEM:
@@ -852,6 +860,7 @@ void GameSet::load(const char * fn)
 	diplomaticStatuses.pass();
 	conditions.pass();
 	gameTextWindows.pass();
+	missionObjectives.pass();
 	taskCategories.pass();
 	orderCategories.pass();
 	packages.pass();

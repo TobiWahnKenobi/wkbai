@@ -24,7 +24,7 @@ enum class KeyAction {
 	GroupStore1, GroupStore2, GroupStore3, GroupStore4, GroupStore5, GroupStore6, GroupStore7, GroupStore8, GroupStore9, GroupStore0,
 	GroupSelect1, GroupSelect2, GroupSelect3, GroupSelect4, GroupSelect5, GroupSelect6, GroupSelect7, GroupSelect8, GroupSelect9, GroupSelect0,
 	// the game
-	OpenMenu, OpenOptions, Chat, Pause, SpeedUp, SlowDown,
+	OpenMenu, OpenOptions, Chat, Pause, SpeedUp, SlowDown, Objectives,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
 	// the map editor

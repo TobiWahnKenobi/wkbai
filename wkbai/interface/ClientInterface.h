@@ -123,6 +123,10 @@ struct ClientInterface {
 	// the statistics (F6) and the timeline (F7) show every player and every event: a replay, a
 	// spectator, and a player whose game is over (won or lost, still in the game)
 	bool showsEveryone() const;
+	// The game text windows showing and the mission objectives, given to the menu script that
+	// draws them (FrontEnd::setGameWindows/setObjectives); a button of a window pressed there
+	void updateGameWindows(struct FrontEnd* frontEnd);
+	void gameWindowButton(int gtwIndex, int buttonIndex);
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
@@ -170,6 +174,7 @@ private:
 	void setLakes(const std::vector<Vector3>& lakes, const std::vector<uint8_t>& bits);
 	// The menu's "save" request: saves (saveGame) and tells the menu
 	void saveRequested(const std::string& name);
+	bool toggleObjectivesRequested = false; // the objectives button or key, for updateGameWindows
 	// A right-click command to the selection (units spread around the place, buildings' rally
 	// points); faceTo: where the units face at the end (x < 0: nowhere)
 	void sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo);

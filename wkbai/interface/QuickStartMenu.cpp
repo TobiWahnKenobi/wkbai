@@ -179,11 +179,10 @@ void QuickStartMenu::selectSaveGame(const std::string& name)
 	auto it = std::find(savegames.begin(), savegames.end(), name);
 	if (it == savegames.end())
 		return;
-	const size_t index = it - savegames.begin();
-	if (index != savselected) {
-		savselected = index;
-		skirmishMenu.changeSettingsForLevel(name);
-	}
+	savselected = it - savegames.begin();
+	// every time, also for the level already selected: the same province from the skirmish
+	// menu (Standard mode) and then from the campaign map (Campaign mode)
+	skirmishMenu.changeSettingsForLevel(name);
 }
 
 void QuickStartMenu::handleRequest(const FrontEnd::Request& request)

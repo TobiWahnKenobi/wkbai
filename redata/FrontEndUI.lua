@@ -796,20 +796,71 @@ end
 -- Skirmish -----------------------------------------------------------------------------
 
 local levelState = { selected = 1, scroll = 0 }
+-- Levels that are no skirmish maps: the tutorials and Warrior Kings' story campaign (their
+-- scripts run in campaign mode only, from the Tutorial and Campaign screens)
+local function isStoryLevel(level)
+	local base = string.lower(stripExtension(level))
+	return base == "interactive tutorial" or base == "basic economy" or base == "advanced economy"
+		or base == "basic military" or base == "advanced military" or base == "prologue"
+		or string.match(base, "^level %d+ %- ") ~= nil
+end
+
+-- A level as the skirmish list names it: "2 Player 4 Peaks.lvl" -> "4 Peaks (2)",
+-- "CH2_Angland_Multi.lvl" -> "Angland (3)" (FRONT_END_CAMPAIGN_MAP_Angland), others as they are
+local function levelDisplayName(level)
+	local base = stripExtension(level or "")
+	local players, name = string.match(base, "^(%d+) Player (.+)$")
+	if players then return name .. " (" .. players .. ")" end
+	local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
+	if province then
+		local key = "FRONT_END_CAMPAIGN_MAP_" .. province
+		local shown = T(key)
+		if shown ~= key and shown ~= "" then return shown end
+		return province
+	end
+	return base
+end
+
 -- The skirmish maps ("2 Player 4 Peaks.lvl"), shown as the original does: "4 Peaks (2)";
--- filter: only the maps for that many players (0: all). Levels named otherwise (the map
--- editor's) come last, under their own name, when not filtered.
+-- filter: only the maps for that many players (0: all). The Kingmaker provinces follow under
+-- the original's skirmish names (FRONT_END_CAMPAIGN_MAP_<Province>: "Akaia (5)"), as their
+-- _Multi level where there is one (CH2_Angland_Multi.lvl, as WKB.exe unlocks them,
+-- 0x6f0d20). Levels named otherwise (the map editor's) come last, under their own name, when
+-- not filtered.
 local function levelList(filter)
 	local levels, names = {}, {}
-	local others = {}
-	for _, l in ipairs(savesOfType(".lvl")) do
-		local players, name = string.match(stripExtension(l), "^(%d+) Player (.+)$")
-		if players and (not filter or filter == 0 or tonumber(players) == filter) then
-			levels[#levels + 1] = l
-			names[#names + 1] = name .. " (" .. players .. ")"
-		elseif not players and (not filter or filter == 0) then
+	local provinces, others = {}, {}
+	local all = savesOfType(".lvl")
+	local have = {}
+	for _, l in ipairs(all) do have[string.lower(l)] = true end
+	local function wanted(players) return not filter or filter == 0 or tonumber(players) == filter end
+	for _, l in ipairs(all) do
+		local base = stripExtension(l)
+		local players, name = string.match(base, "^(%d+) Player (.+)$")
+		local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
+		if players then
+			if wanted(players) then
+				levels[#levels + 1] = l
+				names[#names + 1] = name .. " (" .. players .. ")"
+			end
+		elseif province then
+			local isMulti = string.match(base, "_[Mm]ulti$") ~= nil
+			-- the plain province level only when it has no _Multi variant
+			if isMulti or not have[string.lower("CH2_" .. province .. "_Multi.lvl")] then
+				local shown = levelDisplayName(l)
+				local count = string.match(shown, "%((%d+)%)%s*$")
+				if not count or wanted(count) then
+					provinces[#provinces + 1] = { level = l, name = shown }
+				end
+			end
+		elseif not isStoryLevel(l) and (not filter or filter == 0) then
 			others[#others + 1] = l
 		end
+	end
+	table.sort(provinces, function(a, b) return a.name < b.name end)
+	for _, p in ipairs(provinces) do
+		levels[#levels + 1] = p.level
+		names[#names + 1] = p.name
 	end
 	for _, l in ipairs(others) do
 		levels[#levels + 1] = l
@@ -1169,7 +1220,7 @@ local function settingsTab()
 	panel(X(106), Y(123), L(742), L(364))
 	-- the map's image, square and centred (the original letterboxes it the same way)
 	if skirmish.level and not drawLevelPreview(skirmish.level, X(106) + (L(742) - L(364)) / 2, Y(123), L(364), L(364)) then
-		local name = string.gsub(string.gsub(skirmish.level, "%.lvl$", ""), "^(%d+) Player (.+)$", "%2 (%1)")
+		local name = levelDisplayName(skirmish.level)
 		centredText(FONT_BUTTON, name, X(106), Y(123), L(742), L(364), WHITE)
 	end
 	if button(T("FRONT_END_SETTINGS_MAP_ALL"), X(965), Y(127), L(680), L(30), true, skirmish.playerFilter == 0) then
@@ -1411,8 +1462,7 @@ end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
 local function levelTitle(level)
-	local players, name = string.match(stripExtension(level or ""), "^(%d+) Player (.+)$")
-	return players and (name .. " (" .. players .. ")") or stripExtension(level or "")
+	return levelDisplayName(level)
 end
 
 local function openLobby(multiplayer)
@@ -2644,6 +2694,173 @@ Screens.ingame = {
 	end,
 }
 
+---------------------------------------------------------------------------- Game windows
+-- In game, under the in-game menu: the level scripts' text windows (GAME_TEXT_WINDOW: the
+-- campaign briefings, the tutorials' steps, quest texts) and the mission objectives. WKB.exe's
+-- CGameTextWindow and Mission_Objectives_Window are both its framed in-game dialog (the gold
+-- frame of Interface\InGame\Menus\Backgrounds, base class 0x76b5c0); the text window writes in
+-- the font "Text Box - 15" (0x77e490).
+
+local FONT_GAME_TEXT = "Text_Box 15"
+local GAME_TEXT_COLOUR = 0xFFFFFFFF
+-- The windows draw at a whole-number scale of the original's pixels (1 up to a window 1.7
+-- times 1080 high, then 2, ...): the bitmap fonts stay sharp instead of being resampled at
+-- 0.71 or 1.33. Inside them S (and so L) is that scale.
+local function gameWindowScale(s) return math.max(1, math.floor(s + 0.3)) end
+-- The frame: the in-game dialog's pieces (50 x 50) carry a soft black drop shadow outside the
+-- gold rim, 24 of their pixels; over the bright landscape that reads as a black border, so the
+-- game windows leave it out (a few pixels of it stay, as an edge)
+local FRAME_CROP = 24
+local function gameFrame(x, y, w, h)
+	local c = L(50 - FRAME_CROP)
+	local k = FRAME_CROP / 50
+	local f = ART.frame
+	tiled(f .. "Middle.tga", x + L(12), y + L(12), w - L(24), h - L(24), L(50))
+	drawImageUV(f .. "Top.tga", x + c, y, w - 2 * c, c, 0, k, 1, 1)
+	drawImageUV(f .. "Bottom.tga", x + c, y + h - c, w - 2 * c, c, 0, 0, 1, 1 - k)
+	drawImageUV(f .. "Left.tga", x, y + c, c, h - 2 * c, k, 0, 1, 1)
+	drawImageUV(f .. "Right.tga", x + w - c, y + c, c, h - 2 * c, 0, 0, 1 - k, 1)
+	drawImageUV(f .. "Top_Left.tga", x, y, c, c, k, k, 1, 1)
+	drawImageUV(f .. "Top_Right.tga", x + w - c, y, c, c, 0, k, 1 - k, 1)
+	drawImageUV(f .. "Bottom_Left.tga", x, y + h - c, c, c, k, 0, 1, 1 - k)
+	drawImageUV(f .. "Bottom_Right.tga", x + w - c, y + h - c, c, c, 0, 0, 1 - k, 1 - k)
+end
+-- the rim's inner edge lies 20 pixels in from the cropped frame's edge: the text and the
+-- buttons keep this far in
+local GAME_WINDOW_PAD_X, GAME_WINDOW_PAD_Y = 40, 32
+-- the HUD's bottom panels (ClientUIScript.lua, in unscaled pixels): the selection panel at the
+-- left (330 x 326), the minimap's at the right (345 x 343). A window at the bottom of the
+-- screen stays between them, or above them where there is no room.
+local HUD_LEFT_W, HUD_LEFT_H, HUD_RIGHT_W, HUD_RIGHT_H = 330, 326, 345, 343
+
+-- The text windows, oldest first, so the newest is drawn on top and takes a click first
+local function drawGameTextWindows(blocked)
+	local windows = getGameWindows()
+	local layout = {}
+	for i, win in ipairs(windows) do
+		local w = math.min(L(win.width), W - L(20))
+		local px, py = L(GAME_WINDOW_PAD_X), L(GAME_WINDOW_PAD_Y)
+		local lines = wrapText(FONT_GAME_TEXT, win.text, w - 2 * px)
+		local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
+		-- the buttons' row: as high as the highest button's top (the scripts place them up
+		-- from the window's bottom, mostly 5 pixels)
+		local buttonsTop = 0
+		for _, b in ipairs(win.buttons) do buttonsTop = math.max(buttonsTop, b.y + math.max(b.height, 25)) end
+		local h = 2 * py + #lines * lineH + (buttonsTop > 0 and (L(buttonsTop) + L(6)) or 0)
+		local x = math.floor(math.max(L(10), math.min(W * win.x, W - w - L(10))))
+		local bottom = win.atBottom and (H - L(6)) or (H * win.y)
+		if bottom > H - math.max(HUD_LEFT_H, HUD_RIGHT_H) then
+			local left, right = HUD_LEFT_W + L(8), W - HUD_RIGHT_W - L(8)
+			if right - left >= w then
+				x = math.max(left, math.min(x, right - w))
+			else
+				bottom = H - math.max(HUD_LEFT_H, HUD_RIGHT_H)
+			end
+		end
+		local y = math.floor(math.max(L(10), math.min(bottom - h, H - h - L(6))))
+		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px, py = py }
+		reportGameWindowArea(x, y, w, h, win.modal)
+	end
+	-- the topmost window under the mouse (or a modal one) gets the clicks
+	local top = nil
+	for i = #windows, 1, -1 do
+		local l = layout[i]
+		if inside(l.x, l.y, l.w, l.h) or windows[i].modal then top = i break end
+	end
+	for i, win in ipairs(windows) do
+		local l = layout[i]
+		gameFrame(l.x, l.y, l.w, l.h)
+		local ty = l.y + l.py
+		for _, line in ipairs(l.lines) do
+			drawText(FONT_GAME_TEXT, l.x + l.px, ty, line, GAME_TEXT_COLOUR, S)
+			ty = ty + l.lineH
+		end
+		local innerBottom = l.y + l.h - l.py
+		-- the page, when there are several
+		if win.pages > 1 then
+			local p = win.page .. "/" .. win.pages
+			drawText(FONT_LIST, l.x + l.w - l.px - textWidth(FONT_LIST, p, S), innerBottom - fontHeight(FONT_LIST, S), p, GREY, S)
+		end
+		local saved = mouse.blocked
+		mouse.blocked = blocked or (top ~= i)
+		for bi, b in ipairs(win.buttons) do
+			-- x from the window's left edge (the scripts' OK at 275 of 550 is centred), y up from
+			-- the inner bottom
+			local bw, bh = L(b.width), L(math.max(b.height, 25))
+			local bx = l.x + L(b.x)
+			local by = innerBottom - L(b.y) - bh
+			if b.text ~= "" and button(b.text, bx, by, bw, bh, b.enabled) then
+				request("gtw_button", win.id .. "," .. (bi - 1))
+			end
+		end
+		mouse.blocked = saved
+	end
+end
+
+-- The mission objectives (MISSION_OBJECTIVES): opened with the top bar's button or O. Each
+-- shown entry with the original's bullet (Interface\InGame\Bullet point.tga; an inactive one,
+-- done or failed, greyed with Inactive Bullet point.tga)
+local objectivesOpen = false
+local objectivesSeen = 0
+function FE_ToggleObjectives()
+	if getObjectives() then objectivesOpen = not objectivesOpen end
+end
+-- whether there is news the player hasn't looked at (the top bar's button flashes)
+function FE_ObjectivesNews()
+	local o = getObjectives()
+	return o ~= nil and o.changed ~= objectivesSeen and not objectivesOpen
+end
+
+local function drawObjectives(blocked)
+	local o = getObjectives()
+	if not o then objectivesOpen = false return end
+	if not objectivesOpen then return end
+	objectivesSeen = o.changed
+	local w = L(520)
+	local textW = w - 2 * L(GAME_WINDOW_PAD_X) - L(28)
+	local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
+	local rows = {}
+	for _, e in ipairs(o.entries) do
+		local lines = wrapText(FONT_GAME_TEXT, e.text, textW)
+		rows[#rows + 1] = { lines = lines, inactive = e.inactive }
+	end
+	local count = 0
+	for _, r in ipairs(rows) do count = count + #r.lines end
+	local titleH = L(34)
+	local h = 2 * L(GAME_WINDOW_PAD_Y) + titleH + math.max(1, count) * lineH + #rows * L(6) + L(40)
+	local x, y = math.floor(W - w - L(20)), math.floor(math.max(90, L(90)))
+	reportGameWindowArea(x, y, w, h, false)
+	gameFrame(x, y, w, h)
+	centredText(FONT_BUTTON, o.title, x, y + L(GAME_WINDOW_PAD_Y) - L(6), w, titleH, 0xFF9CE6F0)
+	local ty = y + L(GAME_WINDOW_PAD_Y) + titleH
+	for _, r in ipairs(rows) do
+		local bullet = r.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
+		drawImage(bullet, x + L(GAME_WINDOW_PAD_X), ty + (lineH - L(12)) / 2, L(12), L(12))
+		for _, line in ipairs(r.lines) do
+			drawText(FONT_GAME_TEXT, x + L(GAME_WINDOW_PAD_X) + L(28), ty, line, r.inactive and GREY or GAME_TEXT_COLOUR, S)
+			ty = ty + lineH
+		end
+		ty = ty + L(6)
+	end
+	local saved = mouse.blocked
+	mouse.blocked = blocked
+	if button(T("BUTTON_OK"), x + (w - L(100)) / 2, y + h - L(GAME_WINDOW_PAD_Y) - L(30), L(100), L(28)) then
+		objectivesOpen = false
+	end
+	mouse.blocked = saved
+end
+
+local function drawGameWindows()
+	-- under the in-game menu they get no clicks
+	local blocked = mouse.blocked or #stack > 0
+	-- at a whole-number scale (S, and so L and the fonts, for these windows only)
+	local menuScale = S
+	S = gameWindowScale(menuScale)
+	drawGameTextWindows(blocked)
+	drawObjectives(blocked)
+	S = menuScale
+end
+
 ---------------------------------------------------------------------------- Entry points
 
 -- Called by the program every frame; place is "menu" (main menu) or "game"
@@ -2656,6 +2873,7 @@ function FE_Frame(place)
 	mouse.wheel = getMouseWheel()
 	mouse.blocked = isMouseOverOtherUi()
 
+	if place == "game" then drawGameWindows() end
 	if place == "menu" and #stack == 0 then push("main") end
 	if #stack == 0 then return end
 

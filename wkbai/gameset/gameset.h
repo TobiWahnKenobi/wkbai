@@ -98,6 +98,7 @@ struct GameSet
 	GSBlueprintList<void> diplomaticStatuses;
 	GSBlueprintList<GSCondition> conditions;
 	GSBlueprintList<GameTextWindow> gameTextWindows;
+	GSBlueprintList<MissionObjectives> missionObjectives;
 	GSBlueprintList<void> taskCategories;
 	GSBlueprintList<void> orderCategories;
 	GSBlueprintList<GSPackage> packages;
