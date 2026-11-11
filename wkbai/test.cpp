@@ -25,6 +25,8 @@
 #include "imgui/imgui.h"
 #include "imguiimpl.h"
 #include "gfx/TextureCache.h"
+#include "gfx/TeamEmblems.h"
+#include "Model.h"
 #include "TrnTextureDb.h"
 #include "terrain.h"
 #include "gfx/bitmap.h"
@@ -3062,6 +3064,179 @@ void Test_GltfRoundTrip()
 	}
 	std::filesystem::remove(saved);
 	printf("GLTF meshes %zu identical %d, worst position error %g\n", meshes.size(), identical, worst);
+	fflush(stdout);
+}
+
+// Team colours of HD models (docs/engine/gltf.md): a hand-made glTF of three quads, A "wkTeam",
+// B "wkEmblem" with its TEXCOORD_1 the emblem quad, C plain with a TEXCOORD_1 of its own (UV list
+// 1, the original's way); read, written as .glb and read back; the emblem slots cut and fit; team
+// materials apart from plain ones of the same texture. Prints "TEAM <check> <0/1>" lines and
+// "TEAM all <0/1>". No game files needed.
+void Test_TeamColours()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("TEAM %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the buffer: per quad its positions, normals, UV 0, UV 1 (B and C), indices
+	std::vector<uint8_t> bin;
+	auto put = [&](const void* p, size_t n) { const size_t at = bin.size(); bin.insert(bin.end(), (const uint8_t*)p, (const uint8_t*)p + n); while (bin.size() % 4) bin.push_back(0); return at; };
+	nlohmann::json views = nlohmann::json::array(), accessors = nlohmann::json::array(), prims = nlohmann::json::array();
+	auto accessor = [&](size_t at, size_t len, int ctype, size_t count, const char* type) {
+		views.push_back({ { "buffer", 0 }, { "byteOffset", at }, { "byteLength", len } });
+		accessors.push_back({ { "bufferView", (int)views.size() - 1 }, { "componentType", ctype }, { "count", count }, { "type", type } });
+		return (int)accessors.size() - 1;
+	};
+	for (int q = 0; q < 3; q++) {
+		const float x = q * 2.0f;
+		const float pos[12] = { x, 0, 0, x + 1, 0, 0, x + 1, 1, 0, x, 1, 0 };
+		const float nrm[12] = { 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 };
+		const float uv0[8] = { 0.25f, 0.25f, 0.5f, 0.25f, 0.5f, 0.5f, 0.25f, 0.5f };
+		const float uv1[8] = { 0, 1, 1, 1, 1, 0, 0, 0 };
+		const uint16_t idx[6] = { 0, 1, 2, 0, 2, 3 };
+		nlohmann::json attrs = { { "POSITION", accessor(put(pos, 48), 48, 5126, 4, "VEC3") }, { "NORMAL", accessor(put(nrm, 48), 48, 5126, 4, "VEC3") },
+			{ "TEXCOORD_0", accessor(put(uv0, 32), 32, 5126, 4, "VEC2") } };
+		if (q > 0)
+			attrs["TEXCOORD_1"] = accessor(put(uv1, 32), 32, 5126, 4, "VEC2");
+		prims.push_back({ { "attributes", attrs }, { "indices", accessor(put(idx, 12), 12, 5123, 6, "SCALAR") }, { "material", q } });
+	}
+	std::string b64;
+	{
+		static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		for (size_t i = 0; i < bin.size(); i += 3) {
+			uint32_t v = (uint32_t)bin[i] << 16;
+			int n = 1;
+			if (i + 1 < bin.size()) { v |= (uint32_t)bin[i + 1] << 8; n++; }
+			if (i + 2 < bin.size()) { v |= bin[i + 2]; n++; }
+			for (int k = 0; k < 4; k++)
+				b64 += k <= n ? t[(v >> (18 - 6 * k)) & 63] : '=';
+		}
+	}
+	nlohmann::json mat = { { "pbrMetallicRoughness", { { "baseColorFactor", { 1, 1, 1, 1 } } } } };
+	nlohmann::json matA = mat, matB = mat, matC = mat;
+	matA["extras"] = { { "wkTexture", "TeamTest.tga" }, { "wkTeam", true } };
+	matB["extras"] = { { "wkTexture", "TeamTest.tga" }, { "wkEmblem", true } };
+	matC["extras"] = { { "wkTexture", "TeamTest.tga" } };
+	nlohmann::json doc = { { "asset", { { "version", "2.0" } } }, { "buffers", { { { "byteLength", bin.size() }, { "uri", "data:application/octet-stream;base64," + b64 } } } },
+		{ "bufferViews", views }, { "accessors", accessors }, { "materials", { matA, matB, matC } },
+		{ "meshes", { { { "primitives", prims } } } }, { "nodes", { { { "mesh", 0 } } } }, { "scenes", { { { "nodes", { 0 } } } } }, { "scene", 0 } };
+	const std::filesystem::path dir = std::filesystem::temp_directory_path();
+	const std::filesystem::path gltf = dir / "wkbai-team-test.gltf", glb = dir / "wkbai-team-test.glb";
+	{ std::ofstream f(gltf, std::ios::binary); f << doc.dump(); }
+
+	auto verify = [&](const char* pass, Mesh& m) {
+		char n[64];
+		auto name = [&](const char* what) { snprintf(n, sizeof(n), "%s %s", pass, what); return n; };
+		check(name("materials"), m.materials.size() == 3 && m.materials[0].team && !m.materials[0].emblem
+			&& !m.materials[1].team && m.materials[1].emblem && !m.materials[2].team && !m.materials[2].emblem);
+		// B's TEXCOORD_1 is its emblem, not UV list 1; C's is list 1 (B's list 1 is its list 0)
+		bool lists = m.uvLists.size() == 2, emblem = m.emblemUvs.size() == (size_t)m.numUvs * 2;
+		for (int g = 0; g < 3 && lists && emblem; g++)
+			for (const IndexTuple& t : m.groupIndices[g]) {
+				const float u0 = m.uvLists[0][t.uv * 2], u1 = m.uvLists[1][t.uv * 2], e = m.emblemUvs[t.uv * 2], ev = m.emblemUvs[t.uv * 2 + 1];
+				if (g == 0) emblem &= e == -1.0f && ev == -1.0f, lists &= u1 == u0;
+				if (g == 1) emblem &= (e == 0.0f || e == 1.0f) && (ev == 0.0f || ev == 1.0f), lists &= u1 == u0;
+				if (g == 2) emblem &= e == -1.0f, lists &= (u1 == 0.0f || u1 == 1.0f) && u0 != u1;
+			}
+		check(name("uv lists"), lists);
+		check(name("emblem uvs"), emblem);
+	};
+	Mesh a;
+	a.loadGltf(gltf.string().c_str());
+	verify("gltf", a);
+	// written and read back (the .glb keeps the flags; the emblem's UVs only with one UV list:
+	// here C's list 1 is kept and B's emblem UVs aren't)
+	const bool saved = a.saveGltf(glb.string().c_str());
+	Mesh back;
+	back.loadGltf(glb.string().c_str());
+	check("glb flags", saved && back.materials.size() == 3 && back.materials[0].team && back.materials[1].emblem && !back.materials[2].team);
+	{
+		// one UV list: a mesh of A and B only, round trip with the emblem's UVs
+		nlohmann::json d2 = doc;
+		d2["meshes"][0]["primitives"].erase(2);
+		d2["materials"].erase(2);
+		const std::filesystem::path g2 = dir / "wkbai-team-test2.gltf", b2 = dir / "wkbai-team-test2.glb";
+		{ std::ofstream f(g2, std::ios::binary); f << d2.dump(); }
+		Mesh m2, m2back;
+		m2.loadGltf(g2.string().c_str());
+		const bool ok = m2.uvLists.size() == 1 && m2.saveGltf(b2.string().c_str());
+		m2back.loadGltf(b2.string().c_str());
+		bool same = ok && m2back.emblemUvs.size() == m2back.numUvs * 2 && m2back.uvLists.size() == 1 && m2back.materials.size() == 2 && m2back.materials[1].emblem;
+		for (size_t g = 0; same && g < 2; g++)
+			for (size_t i = 0; same && i < m2.groupIndices[g].size(); i++)
+				same = m2.emblemUvs[m2.groupIndices[g][i].uv * 2] == m2back.emblemUvs[m2back.groupIndices[g][i].uv * 2]
+					&& m2.emblemUvs[m2.groupIndices[g][i].uv * 2 + 1] == m2back.emblemUvs[m2back.groupIndices[g][i].uv * 2 + 1];
+		check("glb emblem uvs", same);
+		std::filesystem::remove(g2);
+		std::filesystem::remove(b2);
+	}
+	std::filesystem::remove(gltf);
+	std::filesystem::remove(glb);
+
+	// colours: 8 of them, player 8 and Gaia on list 0 as the UV lists have it
+	check("colour index", TeamColours::index(0) == 0 && TeamColours::index(3) == 3 && TeamColours::index(8) == 0 && TeamColours::index(-1) == 7);
+
+	// emblems: a 2 x 4 opaque image fit centred (128 wide, transparent at the sides)
+	{
+		std::vector<uint8_t> img(2 * 4 * 4, 0);
+		for (int i = 0; i < 8; i++) { img[i * 4] = 200; img[i * 4 + 3] = 255; }
+		const std::vector<uint8_t> f = TeamEmblems::fit(img.data(), 2, 4);
+		const int S = TeamEmblems::SIZE;
+		auto px = [&](int x, int y, int c) { return (int)f[((size_t)y * S + x) * 4 + c]; };
+		check("fit", f.size() == (size_t)S * S * 4 && px(S / 2, S / 2, 3) == 255 && px(S / 2, S / 2, 0) == 200
+			&& px(10, S / 2, 3) == 0 && px(S - 10, S / 2, 3) == 0 && px(S / 4 + 2, 0, 3) == 255);
+	}
+	// a banner texture with column k's emblem area of value 10k + 5: slot k gets it
+	{
+		std::vector<uint8_t> banner(256 * 256 * 4, 0);
+		for (int y = 0; y < 256; y++)
+			for (int x = 0; x < 256; x++) {
+				uint8_t* p = &banner[((size_t)y * 256 + x) * 4];
+				p[0] = (uint8_t)(10 * (x / 32) + 5); p[1] = (uint8_t)y; p[3] = 255;
+			}
+		bool ok = true;
+		for (int k = 0; k < 8; k++) {
+			const std::vector<uint8_t> e = TeamEmblems::cutBanner(banner.data(), 256, 256, k);
+			const int S = TeamEmblems::SIZE;
+			const uint8_t* mid = &e[((size_t)(S / 2) * S + S / 2) * 4];
+			const uint8_t* top = &e[((size_t)1 * S + S / 2) * 4];
+			ok &= mid[0] == 10 * k + 5 && mid[3] == 255 && top[1] >= 22 && top[1] <= 23 && e[3] == 0;
+		}
+		check("banner cut", ok);
+	}
+	// a player's own emblem (the run-time entry point): the slot's generation moves on
+	{
+		TeamEmblems& te = TeamEmblems::get();
+		const uint32_t g0 = te.generation(3);
+		Bitmap own;
+		own.width = own.height = 4;
+		own.format = BMFORMAT_R8G8B8A8;
+		own.pixels.resize(64);
+		for (int i = 0; i < 16; i++) { own.pixels[i * 4 + 1] = 255; own.pixels[i * 4 + 3] = 255; }
+		const bool set = te.setEmblem(3, own);
+		const bool changed = te.generation(3) != g0 && te.pixels(3)[((size_t)128 * TeamEmblems::SIZE + 128) * 4 + 1] == 255;
+		const bool bad = !te.setEmblem(8, own) && !te.setEmblem(-1, own);
+		te.resetEmblem(3);
+		check("set emblem", set && changed && bad && te.generation(3) != g0 + 1);
+	}
+	// a team material is not the plain one of the same texture and colour
+	{
+		ModelCache cache;
+		auto build = [](bool team) {
+			return [team](Mesh& m) {
+				Mesh::BuildGroup g;
+				g.mat.textureFilename = "TeamTest.tga";
+				g.mat.alphaTest = false;
+				g.mat.team = team;
+				g.triangles = { 0, 1, 2 };
+				m.build({ 0, 0, 0, 1, 0, 0, 0, 1, 0 }, { Vector3(0, 0, 1), Vector3(0, 0, 1), Vector3(0, 0, 1) }, { 0, 0, 1, 0, 0, 1 }, { g });
+			};
+		};
+		Model* plain = cache.getGeneratedModel("team test plain", build(false));
+		Model* team = cache.getGeneratedModel("team test team", build(true));
+		const uint32_t ip = plain->getMaterialIds()[0], it = team->getMaterialIds()[0];
+		check("material ids", ip != it && !cache.getMaterial(ip).team && cache.getMaterial(it).team);
+	}
+	printf("TEAM all %d\n", all ? 1 : 0);
 	fflush(stdout);
 }
 
@@ -7344,6 +7519,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_KeyBindings, "Key bindings: a key rebound fires its action and the old one not, kept through wkconfig.json, cheat keys gated"},
 {Test_LightningBuildings, "Lightning on buildings: a scratch (5-10%) and set alight, a soldier as before, nobody credited"},
 {Test_GameOverView, "Game over view: after a loss or a win, no fog of war and every player's statistics; a player still fighting keeps both; kept by a save"},
+{Test_TeamColours, "Team colours of HD models: wkTeam, wkEmblem and its TEXCOORD_1, the emblem slots, the materials apart"},
 };
 
 void LaunchTest()

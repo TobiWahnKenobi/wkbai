@@ -87,7 +87,9 @@ void StaticModel::prepare() {
 		uint64_t colourKey = 0;
 		for (int c = 0; c < 3; c++)
 			colourKey = colourKey << 21 | (uint64_t)std::clamp((int)std::lround(mat.colour[c] * 65536.0f), 0, (1 << 21) - 1);
-		auto [mi, isNew] = cache->materialIndices.try_emplace({ texid, colourKey }, (uint32_t)cache->materialIndices.size());
+		// (and the team colour's flags: a team material isn't the plain one of the same texture)
+		const int teamKey = (mat.team ? 1 : 0) | (mat.emblem ? 2 : 0);
+		auto [mi, isNew] = cache->materialIndices.try_emplace({ texid, colourKey, teamKey }, (uint32_t)cache->materialIndices.size());
 		uint32_t matid = (mi->second << 1) | (mat.alphaTest ? 1 : 0);
 		cache->materials[matid] = mat;
 		matIds[i] = matid;

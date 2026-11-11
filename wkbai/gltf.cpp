@@ -10,6 +10,9 @@
 //    game set's Textures directory, so an image beside the model becomes "..\..\<its path>". A
 //    material's "extras": { "wkTexture": "<name>" } names the game texture directly (the exporter
 //    writes it); "alphaMode": "MASK" is the game's alpha test.
+//  - Team colours of HD models (docs/engine/gltf.md): "wkTeam": true, the albedo times the
+//    owner's colour; "wkEmblem": true, the owner's emblem over it through TEXCOORD_1 (on such a
+//    material TEXCOORD_1 is the emblem's UVs, not UV list 1).
 //  - Animations and skins are not read (the game's are per-vertex, Anim3).
 
 #include "mesh.h"
@@ -210,12 +213,24 @@ void Mesh::loadGltf(const char* filename)
 	std::vector<float> positions;
 	// the UV sets: TEXCOORD_n is the game's UV list n, the team colour n (the original's meshes
 	// pick a strip of their atlas per player colour); a primitive without set n uses its set 0
+	// (an emblem material's TEXCOORD_1 is its emblem's UVs instead: Mesh::emblemUvs)
+	auto materialFlag = [&](const nlohmann::json& prim, const char* name) {
+		if (!prim.contains("material") || !doc.contains("materials"))
+			return false;
+		const auto& m = doc["materials"][(int)prim["material"]];
+		return m.contains("extras") && m["extras"].is_object() && m["extras"].value(name, false);
+	};
 	int numSets = 1;
+	bool anyEmblem = false;
 	for (const auto& mesh : doc.value("meshes", nlohmann::json::array()))
-		for (const auto& prim : mesh.value("primitives", nlohmann::json::array()))
+		for (const auto& prim : mesh.value("primitives", nlohmann::json::array())) {
+			const bool emblem = materialFlag(prim, "wkEmblem");
+			anyEmblem |= emblem;
 			for (int k = 1; k < 16; k++)
-				if (prim.contains("attributes") && prim["attributes"].contains("TEXCOORD_" + std::to_string(k)))
+				if (prim.contains("attributes") && prim["attributes"].contains("TEXCOORD_" + std::to_string(k)) && !(emblem && k == 1))
 					numSets = std::max(numSets, k + 1);
+		}
+	std::vector<float> embUvs;
 	std::vector<std::vector<float>> uvSets(numSets);
 	std::vector<uint8_t> normalIds;
 	std::vector<Vector3> exact;
@@ -231,11 +246,15 @@ void Mesh::loadGltf(const char* filename)
 		std::vector<float> nrm;
 		std::vector<std::vector<float>> uv(numSets);
 		if (prim["attributes"].contains("NORMAL")) nrm = accessorFloats(prim["attributes"]["NORMAL"], comps);
+		const bool emblem = materialFlag(prim, "wkEmblem");
 		for (int k = 0; k < numSets; k++) {
 			const std::string key = "TEXCOORD_" + std::to_string(k);
-			if (prim["attributes"].contains(key)) uv[k] = accessorFloats(prim["attributes"][key], comps);
+			if (prim["attributes"].contains(key) && !(emblem && k == 1)) uv[k] = accessorFloats(prim["attributes"][key], comps);
 			else if (k > 0) uv[k] = uv[0];
 		}
+		std::vector<float> emb;
+		if (emblem && prim["attributes"].contains("TEXCOORD_1"))
+			emb = accessorFloats(prim["attributes"]["TEXCOORD_1"], comps);
 		const uint32_t first = (uint32_t)(positions.size() / 3);
 		for (size_t i = 0; i < count; i++) {
 			const Vector3 p = world.point(Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]));
@@ -250,6 +269,10 @@ void Mesh::loadGltf(const char* filename)
 				uvSets[k].push_back(uv[k].size() > i * 2 + 1 ? uv[k][i * 2] : 0.0f);
 				uvSets[k].push_back(uv[k].size() > i * 2 + 1 ? uv[k][i * 2 + 1] : 0.0f);
 			}
+			if (anyEmblem) {
+				embUvs.push_back(emb.size() > i * 2 + 1 ? emb[i * 2] : -1.0f);
+				embUvs.push_back(emb.size() > i * 2 + 1 ? emb[i * 2 + 1] : -1.0f);
+			}
 		}
 		Group g;
 		g.mat.alphaTest = false;
@@ -262,6 +285,8 @@ void Mesh::loadGltf(const char* filename)
 				for (int c = 0; c < 3 && c < (int)f.size(); c++)
 					g.mat.colour[c] = std::pow(std::max(f[c].get<float>(), 0.0f), 1.0f / 2.2f);
 			}
+			g.mat.team = materialFlag(prim, "wkTeam");
+			g.mat.emblem = materialFlag(prim, "wkEmblem");
 			if (m.contains("extras") && m["extras"].contains("wkTexture"))
 				g.mat.textureFilename = m["extras"]["wkTexture"];
 			else if (m.contains("pbrMetallicRoughness") && m["pbrMetallicRoughness"].contains("baseColorTexture")) {
@@ -306,6 +331,8 @@ void Mesh::loadGltf(const char* filename)
 	buildIds(*this, positions, normalIds, uvSets, groups);
 	exact.resize(numNormals);
 	exactNormals = std::move(exact);
+	embUvs.resize(anyEmblem ? (size_t)numUvs * 2 : 0);
+	emblemUvs = std::move(embUvs);
 }
 
 void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups)
@@ -314,6 +341,7 @@ void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>
 	for (size_t i = 0; i < normals.size(); i++)
 		ids[i] = nearestNormal(normals[i]);
 	buildIds(*this, positions, ids, { uvs }, groups);
+	emblemUvs.clear();
 	exactNormals.assign(normals.begin(), normals.begin() + std::min(normals.size(), (size_t)numNormals));
 }
 
@@ -413,7 +441,9 @@ bool Mesh::saveGltf(const char* path) const
 	for (size_t g = 0; g < groupIndices.size() && g < pl.groups.size(); g++) {
 		const DynArray<IndexTuple>& tuples = groupIndices[g];
 		std::vector<float> pos, nrm;
-		std::vector<std::vector<float>> uv(uvLists.size());
+		// an emblem material's emblem UVs as its TEXCOORD_1 (with one UV list; else not kept)
+		const bool emblemSet = materials[g].emblem && uvLists.size() == 1 && emblemUvs.size() >= (size_t)numUvs * 2;
+		std::vector<std::vector<float>> uv(uvLists.size() + (emblemSet ? 1 : 0));
 		Vector3 lo(1e30f, 1e30f, 1e30f), hi(-1e30f, -1e30f, -1e30f);
 		for (const IndexTuple& t : tuples) {
 			const Vector3 p(vertices[t.vertex * 3], vertices[t.vertex * 3 + 1], -vertices[t.vertex * 3 + 2]);
@@ -424,6 +454,8 @@ bool Mesh::saveGltf(const char* path) const
 			nrm.insert(nrm.end(), { n.x, n.y, -n.z });
 			for (size_t k = 0; k < uvLists.size(); k++)
 				uv[k].insert(uv[k].end(), { uvLists[k][t.uv * 2], uvLists[k][t.uv * 2 + 1] });
+			if (emblemSet)
+				uv[1].insert(uv[1].end(), { emblemUvs[t.uv * 2], emblemUvs[t.uv * 2 + 1] });
 		}
 		std::vector<uint16_t> idx;
 		for (const auto& tri : pl.groups[g].tupleIndex)
@@ -450,6 +482,10 @@ bool Mesh::saveGltf(const char* path) const
 			{ "pbrMetallicRoughness", { { "metallicFactor", 0.0 }, { "roughnessFactor", 1.0 } } } };
 		if (m.alphaTest)
 			mat["alphaMode"] = "MASK";
+		if (m.team)
+			mat["extras"]["wkTeam"] = true;
+		if (m.emblem)
+			mat["extras"]["wkEmblem"] = true;
 		mats.push_back(mat);
 		nlohmann::json attrs = { { "POSITION", a }, { "NORMAL", a + 1 } };
 		for (size_t k = 0; k < uvv.size(); k++)

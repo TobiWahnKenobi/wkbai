@@ -7,6 +7,7 @@
 #include "../scene.h"
 #include "../mesh.h"
 #include "../Model.h"
+#include "TeamEmblems.h"
 
 void DefaultSceneRenderer::render()
 {
@@ -45,6 +46,14 @@ void DefaultSceneRenderer::render()
 			Mesh &mesh = model->mesh;
 			PolygonList &polylist = mesh.polyLists[0];
 			int color = ent->color % mesh.uvLists.size();
+			// an HD model's team material (Material::team): its colour times the owner's, as far as
+			// a vertex colour goes (the emblem layer, Material::emblem, only in the enhanced renderer)
+			float colour[3] = { mat.colour[0], mat.colour[1], mat.colour[2] };
+			if (mat.team) {
+				const uint8_t* tc = TeamColours::table[TeamColours::index(ent->color)];
+				for (int c = 0; c < 3; c++)
+					colour[c] *= tc[c] / 255.0f;
+			}
 
 			const float* verts = ent->model->interpolate(ent->animTime);
 			const Vector3* norms = ent->model->interpolateNormals(ent->animTime);
@@ -74,11 +83,11 @@ void DefaultSceneRenderer::render()
 						bver[i].color = (c & 0xFF000000) | ((ent->flags & ent->SEFLAG_BLOCKED) ? (keep << 16 | dim << 8 | dim) : (dim * 3 / 2 << 16 | keep << 8 | dim * 3 / 2));
 					}
 					// the material's colour (Material::colour), as far as a vertex colour goes (up to 1)
-					if (mat.colour[0] != 1.0f || mat.colour[1] != 1.0f || mat.colour[2] != 1.0f) {
+					if (colour[0] != 1.0f || colour[1] != 1.0f || colour[2] != 1.0f) {
 						const uint32_t c = bver[i].color;
-						const uint32_t r = (uint32_t)std::min(255.0f, ((c >> 16) & 255) * mat.colour[0]);
-						const uint32_t gr = (uint32_t)std::min(255.0f, ((c >> 8) & 255) * mat.colour[1]);
-						const uint32_t b = (uint32_t)std::min(255.0f, (c & 255) * mat.colour[2]);
+						const uint32_t r = (uint32_t)std::min(255.0f, ((c >> 16) & 255) * colour[0]);
+						const uint32_t gr = (uint32_t)std::min(255.0f, ((c >> 8) & 255) * colour[1]);
+						const uint32_t b = (uint32_t)std::min(255.0f, (c & 255) * colour[2]);
 						bver[i].color = (c & 0xFF000000) | r << 16 | gr << 8 | b;
 					}
 					bver[i].u = mesh.uvLists[color][2 * tind.uv];
