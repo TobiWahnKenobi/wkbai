@@ -2204,6 +2204,28 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		ttpp = sphereEnd.transformScreenCoords(client->camera.sceneMatrix);
 		onCam = !(ttpp.x < -1 || ttpp.x > 1 || ttpp.y < -1 || ttpp.y > 1 || ttpp.z < -1 || ttpp.z > 1);
 	}
+	// With the ray-traced shadows, an object off the view whose shadow reaches into it: its
+	// shadow on the ground along the sun, at a third, two thirds and its end, tested as the
+	// object itself (at a low sun the trees just off the screen cast no shadow, theirs ended at
+	// the screen's edge, the play test of 2026-11-11)
+	if (!onCam) {
+		auto* dg = dynamic_cast<DiligentGfx*>(gfx);
+		const Vector3 sun = dg ? dg->shadows.sunDirection : Vector3();
+		const float flat = std::sqrt(sun.x * sun.x + sun.z * sun.z);
+		if (dg && dg->shadows.rayShadowsOn && sun.y > 0.02f && flat > 1e-3f) {
+			const float len = std::min(2.0f * sphereRadius * flat / sun.y, 600.0f);
+			const Vector3 away(-sun.x / flat, 0, -sun.z / flat);
+			for (float f : { 0.33f, 0.66f, 1.0f }) {
+				const Vector3 p = sphereCenter + away * (len * f);
+				const Vector3 sp = p.transformScreenCoords(client->camera.sceneMatrix);
+				const float m = 1.0f + sphereRadius / std::max((p - client->camera.position).len3(), 1.0f);
+				if (sp.x >= -m && sp.x <= m && sp.y >= -m && sp.y <= m && sp.z >= -1 && sp.z <= 1) {
+					onCam = true;
+					break;
+				}
+			}
+		}
+	}
 	if (!onCam)
 		return;
 

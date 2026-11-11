@@ -1025,7 +1025,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			// the level follows the land down (never up), so the river runs downhill
 			const float ground = inCopy ? base[(size_t)std::clamp((int)pz, 0, H) * EW + std::clamp((int)px, 0, W)]
 				: farBase(px, pz) + landAt(px, pz).detail;
-			level = std::min(level, std::max(ground - 0.6f, seaLevel > -1e29f ? seaLevel : -1e30f));
+			// (at most 0.12 a step: a big drop at once left the bed bare between the two levels, a
+			// hole in the river, the play test of 2026-11-11)
+			level = std::max(std::min(level, std::max(ground - 0.6f, seaLevel > -1e29f ? seaLevel : -1e30f)), level - 0.12f);
 			riverPts.push_back({ px, pz, level, half });
 			if (!inCopy)
 				continue;
@@ -1065,19 +1067,38 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// the channels and their valleys, each vertex by its nearest river point: the bed under
 	// the water, banks that hold it, and the valley's sides opening up from them
 	constexpr float VALLEY_W = 20.0f, VALLEY_SLOPE_W = 1.1f;
+	std::vector<float> bankFrom((size_t)EW * EH, 1e30f); // a bank's height before it was raised
 	for (int Z = 0; Z <= H; Z++)
 		for (int X = 0; X <= W; X++) {
 			const size_t vi = (size_t)Z * EW + X;
 			if (riverU[vi] > VALLEY_W || inMapV(X, Z))
 				continue;
-			const float u = riverU[vi], level = riverL[vi], half = riverHalf[vi];
+			const float u = riverU[vi], half = riverHalf[vi];
+			// the bed under the lowest level near (no bare bed where the level steps down)
+			float level = riverL[vi];
+			if (u <= 1.0f)
+				for (int dz = -2; dz <= 2; dz++)
+					for (int dx = -2; dx <= 2; dx++) {
+						const int X2 = X + dx, Z2 = Z + dz;
+						if (X2 < 0 || Z2 < 0 || X2 > W || Z2 > H)
+							continue;
+						const size_t v2 = (size_t)Z2 * EW + X2;
+						if (riverU[v2] <= 1.0f)
+							level = std::min(level, riverL[v2]);
+					}
 			float& v = H_(X, Z);
 			if (u <= 0) // (down from the bank's height without a step: the step drew lines in the water)
 				v = std::min(v, std::max(level + 0.35f + 2.0f * u, level - 2.2f - 1.6f * std::min(-u / half, 1.0f)));
 			else {
 				v = std::min(v, level + 0.35f + VALLEY_SLOPE_W * u * (0.4f + 0.06f * u));
 				if (u < 1.5f)
-					v = std::max(v, level + 0.25f); // the bank itself holds the water
+				{
+					// the bank itself holds the water (the land's own height kept: another water at
+					// a lower level spreads over it, so no sand levee stands between the two, the
+					// play test of 2026-11-11)
+					bankFrom[vi] = std::min(bankFrom[vi], v);
+					v = std::max(v, level + 0.25f);
+				}
 			}
 		}
 
@@ -1109,7 +1130,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				Terrain::Tile& t = e.tiles[(size_t)q[1] * W + q[0]];
 				if (t.fullOfWater && t.waterLevel >= lvl)
 					continue;
-				if (std::min(H_(q[2], q[3]), H_(q[4], q[5])) >= lvl)
+				auto own = [&](int vx, int vz) { return std::min(H_(vx, vz), bankFrom[(size_t)vz * EW + vx]); };
+				if (std::min(own(q[2], q[3]), own(q[4], q[5])) >= lvl)
 					continue;
 				t.fullOfWater = true;
 				t.waterLevel = lvl;
