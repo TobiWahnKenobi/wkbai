@@ -3981,6 +3981,15 @@ void ClientInterface::iter()
 	// Near plane: the original's near_clip of 1, pushed out for very long view distances to keep
 	// the depth precision
 	client->camera.nearDist = std::max(1.0f, client->camera.farDist / 10000.0f);
+	// ... but never beyond a third of the camera's height over the ground (a low camera with the
+	// Extend map's long view had its near plane at some 9 units and cut the ground off in front of
+	// it, the play test of 2026-11-11); a low camera hides the far land anyway
+	if (client->terrain && client->getLevel()) {
+		const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+		const float gx = std::clamp(client->camera.position.x, 0.0f, areaWidth), gz = std::clamp(client->camera.position.z, 0.0f, areaDepth);
+		const float above = client->camera.position.y - client->terrain->getHeight(gx, gz);
+		client->camera.nearDist = std::max(0.5f, std::min(client->camera.nearDist, 0.33f * above));
+	}
 	client->camera.fovY = g_renderSettings.fovY();
 	client->camera.updateMatrix();
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);

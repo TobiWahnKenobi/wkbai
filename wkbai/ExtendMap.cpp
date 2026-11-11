@@ -895,12 +895,15 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		// a cliff they fade out
 		{
 			const float cuesta = wild * std::clamp((Fbm(seed, px, pz, 300.0f, 2, 330, foot) - 0.12f) * 3.0f, 0.0f, 1.0f)
-				* (1 - L.wet) * (1 - mtn) * std::clamp(1.0f - (foot - 4.0f) / 8.0f, 0.0f, 1.0f);
+				* (1 - L.wet) * (1 - mtn) * std::clamp(1.0f - (foot - 2.0f) / 4.0f, 0.0f, 1.0f);
 			if (cuesta > 0) {
 				const float ang = 3.14159265f * Fbm(seed, px, pz, 500.0f, 2, 331);
 				const float u = (px * std::cos(ang) + pz * std::sin(ang)) / 55.0f + 0.7f * Fbm(seed, px, pz, 90.0f, 2, 332, foot);
 				const float t = u - std::floor(u);
-				const float drop = std::clamp((t - 0.86f) / 0.14f, 0.0f, 1.0f);
+				// (the drop at least 3 grid steps wide: sampled coarser, the cliffs' edges had
+				// broken into rows of spikes, the play test of 2026-11-11)
+				const float dw = std::clamp(3.0f * foot / 55.0f, 0.14f, 0.45f);
+				const float drop = std::clamp((t - (1.0f - dw)) / dw, 0.0f, 1.0f);
 				const float profile = t * (1.0f - drop * drop * (3 - 2 * drop));
 				detail += cuesta * (0.22f * reliefW + 4.0f) * (profile - 0.45f);
 			}
