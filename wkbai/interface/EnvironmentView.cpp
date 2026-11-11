@@ -201,7 +201,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 			d.y -= 0.035f * low;
 			g_cloudSunDirection = d.normal();
 			const float t = std::clamp((y + 0.105f) / 0.087f, 0.0f, 1.0f), up = t * t * (3.0f - 2.0f * t);
-			const float dayCol[3] = { 1.0f, 0.62f, 0.38f }; // (ComputeSun's daylight colour with the sun low)
+			const float dayCol[3] = { 0.71f, 0.71f, 0.71f }; // (ComputeSun's cloud light with the sun low: neutral, DuskTint reddens it)
 			float col[3];
 			for (int c = 0; c < 3; c++)
 				col[c] = std::max(v.sun.cloudColour[c], dayCol[c] * up);

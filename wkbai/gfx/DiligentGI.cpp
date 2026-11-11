@@ -181,6 +181,13 @@ void CreateGIResources(DiligentGfx* gfx)
 		TextureSubResData sub{ px, 4 };
 		TextureData data{ &sub, 1 };
 		device->CreateTexture(desc, &data, &env.giAlbedo);
+		// and no water until then
+		const uint8_t dry = 0;
+		desc.Name = "Water per tile placeholder";
+		desc.Format = TEX_FORMAT_R8_UNORM;
+		TextureSubResData wsub{ &dry, 1 };
+		TextureData wdata{ &wsub, 1 };
+		device->CreateTexture(desc, &wdata, &env.cloudWater);
 	}
 	// cleared: black, at the ground (the bounce map); no light given off
 	for (ITexture* t : { env.giRadiance.RawPtr(), env.giEmission.RawPtr() }) {

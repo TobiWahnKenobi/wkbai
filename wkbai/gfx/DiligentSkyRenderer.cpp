@@ -116,7 +116,13 @@ cbuffer SkyBuffer
 	// the sky box under the weather's clouds (dynamicClouds below 3: no volumetric clouds over
 	// it): the overcast's colour, w how much (0: the box as it is)
 	float4 SkyOvercast;
+	// the clouds' view of the ground (Cloud detail Very high and Ultra): the terrain's albedo map
+	// and the water per tile over the map (ShadowEnvironment::giAlbedo, cloudWater): their corner
+	// x, z, 1 / width, 1 / depth in world units
+	float4 SkyGround;
 };
+Texture2D cloudGround;        // the terrain's colour from above, mips (the GI's albedo map)
+Texture2D<float> cloudWaterTex; // how much of a tile is under water, mips
 
 // a hash of a 3D cell (0-1, three values): David Hoskins' "Hash without Sine" (hash33), under
 // its MIT licence, not the GPL:
@@ -494,13 +500,36 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// tops lit: relief instead of one grey)
 		ambient = lerp(ambient, awaySky * dot(ambient, float3(0.3, 0.59, 0.11)) * lerp(0.6, 1.25, h), away);
 		ambient *= skyOcc;
+		// Very high and Ultra: the light coming up from below onto the bases. The ground's: its
+		// colour (a wide patch of it, a coarse mip) in the sun's and the sky's light, dark over
+		// open water (about 6% of it comes back: the bases over the sea darker and bluer than
+		// over the land); and the sea's mirror of a low sun (Fresnel: 2% with the sun high, a
+		// third or more near the horizon, waves softening it), from the water towards the sun
+		// that the mirrored ray left (the play test of 2026-11-11)
+		float3 fromBelow = 0;
+		if (dl >= 3 && h < 0.6 && SkyGround.z > 0) {
+			float baseW = 1 - h / 0.6;
+			baseW *= baseW;
+			float2 guv = (p.xz - SkyGround.xy) * SkyGround.zw;
+			float3 alb = cloudGround.SampleLevel(skyOccSampler, guv, 5).rgb;
+			float wet = cloudWaterTex.SampleLevel(skyOccSampler, guv, 4);
+			float3 refl = lerp(alb * 0.45, float3(0.04, 0.06, 0.08), wet);
+			float sunUp = smoothstep(-0.01, 0.04, sun.y);
+			float3 onGround = sunTint * (saturate(sun.y) * (1 - 0.6 * cShape.x)) + CloudSkyUp.rgb * 0.9;
+			fromBelow = refl * onGround * baseW;
+			float lowSun = max(sun.y, 0.03);
+			float2 quv = (p.xz + sun.xz / lowSun * max(p.y, 0) - SkyGround.xy) * SkyGround.zw;
+			float sea = cloudWaterTex.SampleLevel(skyOccSampler, quv, 4);
+			float fres = 0.02 + 0.98 * pow(1 - saturate(sun.y), 5);
+			fromBelow += sunTint * (fres * 0.55 * sea * sunUp * baseW * (1 - 0.7 * cShape.x));
+		}
 		// the weather's light (storm and rain clouds darker, their bases most), and lightning
 		// lighting the cloud from inside
 		// (and the denser parts of a cloud darker than its thin ones: an overcast sheet's relief)
 		float shade = cWeather.w * lerp(1, 0.6 + 0.4 * h, cWeather.y)
 			* lerp(1.12, 0.72, saturate(dens / (1.6 * max(cWeather.z, 0.1))));
 		float3 flash = float3(0.75, 0.8, 1.0) * (CloudFlash.w * 9 * exp(-length(p - CloudFlash.xyz) / 260));
-		float3 s = (sunTintAway * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky)) * shade + flash;
+		float3 s = (sunTintAway * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky) + fromBelow) * shade + flash;
 		float dT = exp(-SIGMA * dens * dt);
 		light += T * (1 - dT) * s;
 		T *= dT;
@@ -1153,6 +1182,8 @@ struct DiligentSkyRenderer::Impl {
 	// the dynamic clouds at a quarter of the scene's size (RenderSettings::dynamicClouds 3)
 	RefCntAutoPtr<IPipelineResourceSignature> cloudSignature;
 	RefCntAutoPtr<IPipelineState> cloudPipeline;
+	ITexture* boundGround = nullptr; // (ShadowEnvironment::giAlbedo and cloudWater, as bound)
+	ITexture* boundWater = nullptr;
 	RefCntAutoPtr<IShaderResourceBinding> cloudSrb;
 	RefCntAutoPtr<ITexture> cloudTarget;
 	bool loaded = false;
@@ -1231,7 +1262,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Sky camera";
-	cbDesc.Size = 192;
+	cbDesc.Size = 208;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1300,6 +1331,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 			{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "cloudShape", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "cloudDetail", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "cloudGround", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "cloudWaterTex", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		};
 		PipelineResourceSignatureDesc cs;
 		cs.Name = "Sky clouds";
@@ -1674,7 +1707,7 @@ void DiligentSkyRenderer::render()
 	}
 	const float screenHeight = (float)_impl->dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
 	const bool physicalModel = clouds && g_renderSettings.skyModel >= 1;
-	const float data[48] = {
+	const float data[52] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,
 		up.x, up.y, up.z, screenHeight,
@@ -1688,8 +1721,9 @@ void DiligentSkyRenderer::render()
 		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 4),
 		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
 		overcast[0], overcast[1], overcast[2], overcast[3],
+		env.giAlbedoRegion[0], env.giAlbedoRegion[1], env.giAlbedoRegion[2], env.giAlbedoRegion[3],
 	};
-	static_assert(sizeof(data) == 192, "the sky buffer's size");
+	static_assert(sizeof(data) == 208, "the sky buffer's size");
 	memcpy(f, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->skyBuffer, MAP_WRITE);
 
@@ -1716,6 +1750,13 @@ void DiligentSkyRenderer::render()
 		ITextureView* rtv = _impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->SetViewports(1, nullptr, 0, 0);
+		// the ground's maps (baked again when the tiles change: bound again when they are new)
+		if (_impl->boundGround != env.giAlbedo.RawPtr() || _impl->boundWater != env.cloudWater.RawPtr()) {
+			_impl->cloudSrb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudGround")->Set(env.giAlbedo->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			_impl->cloudSrb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudWaterTex")->Set(env.cloudWater->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			_impl->boundGround = env.giAlbedo.RawPtr();
+			_impl->boundWater = env.cloudWater.RawPtr();
+		}
 		ctx->SetPipelineState(_impl->cloudPipeline);
 		ctx->CommitShaderResources(_impl->cloudSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });

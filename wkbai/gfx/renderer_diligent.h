@@ -188,6 +188,10 @@ struct DiligentGfx : IRenderer
 		Diligent::ITextureView* giBoundHeights = nullptr;
 		Diligent::ITexture* giBoundAlbedo = nullptr;
 		float giAlbedoRegion[4] = {};
+		// the clouds' view of the ground (Cloud detail Very high and Ultra, DiligentSkyRenderer):
+		// the water over the same region as giAlbedo, per tile (R8 with mips: how much of the
+		// tile is under water); giAlbedo has mips for them too
+		Diligent::RefCntAutoPtr<Diligent::ITexture> cloudWater;
 		float giOrigin[2] = {}, giPrevOrigin[2] = {};
 		bool giPrevValid = false;
 		int giMode = 0; // this frame: 0 off, 1 Low, 2 High, 3 Ultra
