@@ -77,6 +77,11 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
 	// of war (everything on the map shown); off until the server says
 	bool clearFogOfWar = false;
+	// the players whose game is over (NETCLIMSG_PLAYER_FINISHED, Server::finishedPlayers): 1 won,
+	// 2 lost, by id. The client's own in it: no fog of war, every player's statistics.
+	std::map<uint32_t, uint8_t> finishedPlayers;
+	// the client's player's outcome: 0 still playing, 1 won, 2 lost
+	int ownOutcome() const;
 	// wkbai's unit history (NETCLIMSG_UNIT_HISTORY): the tracked units' names, births, kinds
 	// (UnitHistory::Kind) and flags (UnitHistory::Flags), by id; the kills to become a hero; the
 	// heroes made since the interface last looked (their ids)

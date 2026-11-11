@@ -118,6 +118,11 @@ struct ClientInterface {
 	// environment's panel): in single player with the game setting cheat mode on only (the lobby's,
 	// kept by the save game), in the map editor, or in a test run; never in a replay
 	bool cheatKeysAllowed() const;
+	// the fog of war is drawn: a game with a player, not Clear Fog Of War, the player's game not over
+	bool fogOfWarOn() const;
+	// the statistics (F6) and the timeline (F7) show every player and every event: a replay, a
+	// spectator, and a player whose game is over (won or lost, still in the game)
+	bool showsEveryone() const;
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
@@ -181,7 +186,6 @@ private:
 	int peasantActivityMode = -1;
 	// the top bar's Settings button asked for the in-game menu (opened the next frame)
 	bool openMenuRequested = false;
-	bool fogOfWarOn() const;
 	// the original's loading screen over everything until the level has been drawn for a while:
 	// one of Loading Screen 1-9 (random, as WKB.exe 0x706300), the player's stage of 8 with its
 	// bar, and a tip ("Words of Wisdom")

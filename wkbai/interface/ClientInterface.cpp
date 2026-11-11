@@ -1257,11 +1257,19 @@ void ClientInterface::prewarmLevel()
 			(unsigned long long)(tFiles / 1000000), (unsigned long long)(tTex / 1000000), (unsigned long long)(tGpu / 1000000));
 }
 
+bool ClientInterface::showsEveryone() const
+{
+	return replayMode || client->spectator || client->ownOutcome() != 0;
+}
+
 bool ClientInterface::fogOfWarOn() const
 {
 	// not in the map editor, nor for an observer without a player
 	// only the game option decides it: the lobby's Clear Fog Of War on, none (Client::clearFogOfWar)
-	return !client->clearFogOfWar && !editorOn && !replayMode && !client->spectator && client->clientPlayer && client->getLevel();
+	// and once the player's game is over (won or lost, still in the game: it watches, everything
+	// shown; Client::finishedPlayers)
+	return !client->clearFogOfWar && !editorOn && !replayMode && !client->spectator && client->clientPlayer && client->getLevel()
+		&& !client->ownOutcome();
 }
 
 // The loading screen, measured on the original (1920 x 1080, from the screen's centre): the
@@ -1612,8 +1620,10 @@ void ClientInterface::drawUnitHistoryOverlay()
 void ClientInterface::drawChronicle()
 {
 	// a replay shows everyone and everything; a game the player's own statistics and its allies',
-	// and the events it saw (with fog of war; without, all events)
-	const bool all = replayMode || client->spectator;
+	// and the events it saw (with fog of war; without, all events); once the player has won or
+	// lost (still in the game), everyone and everything too
+	const int outcome = client->ownOutcome();
+	const bool all = showsEveryone();
 	chronicle.update(client, (all || !fogOfWarOn()) ? nullptr : &fogOfWar);
 	// a replay: its controls (not over the in-game menu), and its events
 	if (replayMode) {
@@ -1632,7 +1642,7 @@ void ClientInterface::drawChronicle()
 			ClientGameObject* obj = client->findObject(id);
 			CommonGameObject* p = obj ? obj->getPlayer() : nullptr;
 			const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
-			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied))))
+			if (all || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied))))
 				replayView.announceHero(client, id, playerColors);
 		}
 		client->newHeroes.clear();
@@ -1643,7 +1653,7 @@ void ClientInterface::drawChronicle()
 		const int allied = client->gameSet ? client->gameSet->diplomaticStatuses.names.getIndex("Allied") : -1;
 		for (const auto& [player, text] : chronicle.fallenAnnouncements) {
 			CommonGameObject* p = client->findObject(player);
-			if (replayMode || client->spectator || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied)))) {
+			if (all || (p && me && (p == me || (allied >= 0 && client->getDiplomaticStatus(me, p) == allied)))) {
 				auto it = chronicle.playerColours.find(player);
 				const int c = it != chronicle.playerColours.end() ? it->second : (p ? p->color : 0);
 				replayView.announceFallen(text, playerColors[(c >= 0 && c < 9) ? c : 0], Vector3());
@@ -1679,6 +1689,8 @@ void ClientInterface::drawChronicle()
 		ImGui::SetNextWindowPos(ImVec2(20, 110), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowSize(ImVec2(640, 400), ImGuiCond_FirstUseEver);
 		if (ImGui::Begin("Statistics (F6)", &statisticsOpen)) {
+			if (outcome != 0 && !replayMode)
+				ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f), "%s: every player shown", outcome == 1 ? "You have won" : "You have been defeated");
 			if (ImGui::BeginTable("stats", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 				for (const char* h : { "Player", "Food", "Wood", "Gold", "Peasants", "Soldiers", "Buildings", "Units lost", "Buildings lost" })
 					ImGui::TableSetupColumn(h);

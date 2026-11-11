@@ -118,6 +118,10 @@ enum NetClientMessages {
 	// the server's timeline and statistics (ServerChronicle): a line of text ("RESET", "EVENT ...",
 	// "SAMPLE ...") in parts: part, parts (16 bits each), length (8 bits), the bytes
 	NETCLIMSG_CHRONICLE,
+	// a player's game is over (REMOVE_MULTIPLAYER_PLAYER, Server::finishedPlayers): its id (32
+	// bits), the outcome (8 bits: 1 won, 2 lost); id 0: the list starts over (a game loaded, a
+	// guest joining; the players follow). Its client then sees the whole map and everyone's statistics.
+	NETCLIMSG_PLAYER_FINISHED,
 };
 
 enum NetServerMessages {

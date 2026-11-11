@@ -27,6 +27,16 @@ void Client::loadFromServerObject(Server & server)
 {
 }
 
+int Client::ownOutcome() const
+{
+	const CommonGameObject* own = clientPlayer.get();
+	if (!own)
+		return 0;
+	if (auto it = finishedPlayers.find(own->id); it != finishedPlayers.end())
+		return it->second;
+	return 0;
+}
+
 void Client::tick()
 {
 	ZoneScoped;
@@ -147,6 +157,8 @@ void Client::tick()
 			case NETCLIMSG_GAME_SET:
 			{
 				std::string gsFileName = br.readStringZ();
+				// a new game: nobody's game over yet
+				finishedPlayers.clear();
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
 				environmentSkyKnown = false;
@@ -575,6 +587,15 @@ void Client::tick()
 			}
 			case NETCLIMSG_UNIT_UNTRACKED: {
 				unitInfo.erase(br.readUint32());
+				break;
+			}
+			case NETCLIMSG_PLAYER_FINISHED: {
+				const uint32_t id = br.readUint32();
+				const uint8_t outcome = br.readUint8();
+				if (id == 0)
+					finishedPlayers.clear();
+				else
+					finishedPlayers[id] = outcome;
 				break;
 			}
 			case NETCLIMSG_HERO_THRESHOLD: {

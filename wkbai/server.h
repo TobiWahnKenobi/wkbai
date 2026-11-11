@@ -317,6 +317,17 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	ServerEnvironment environment;
 	// wkbai's unit history: who killed whom (UnitHistory.h)
 	UnitHistory unitHistory;
+	// the players whose game is over, by id: 1 won, 2 lost. The game set's REMOVE_MULTIPLAYER_PLAYER
+	// (Game Endings.cpp: the beaten one after "Alive Multiplayer Player" 0, the winners while still
+	// alive). The view's state only (that client lifts its fog of war and shows every player's
+	// statistics); the simulation never reads it. Saved in <save>.ai.txt ("finished.<id>=<outcome>").
+	std::map<uint32_t, uint8_t> finishedPlayers;
+	void playerFinished(ServerGameObject* player);
+	// to every client, or to one link (a guest joining): id 0 first (the list starts over), then each
+	void sendFinishedPlayers(NetLink* link = nullptr);
+	// the client's player is finished while a player of another client still plays: it only
+	// watches, and what it says goes to the other watchers only
+	bool watchesOnly(int clientIndex) const;
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);

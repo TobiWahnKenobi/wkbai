@@ -59,6 +59,8 @@
 #include "gameset/Commission.h"
 #include "AIController.h"
 #include "gameset/ScriptContext.h"
+#include "gameset/actions.h"
+#include "util/GSFileParser.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include "interface/ChronicleNarrator.h"
@@ -7045,6 +7047,153 @@ void Test_KeyBindings()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Game over view (Server::finishedPlayers, REMOVE_MULTIPLAYER_PLAYER): 4 Peaks with two clients
+// over local links, one for each player. Player A's game set loss (Alive Multiplayer Player 0,
+// REMOVE_MULTIPLAYER_PLAYER) while B still fights: A's client has no fog of war and shows
+// everyone in its statistics and timeline, B's keeps both; what A says reaches no one still
+// playing. Then the game set's own ending: A's Manor destroyed ("End Game On Destruction"), A
+// lost, B the last one alive and won ("A Player Has Won the Multiplayer Game"). A save keeps it.
+void Test_GameOverView()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 7;
+	const uint32_t idA = 1027, idB = 1030;
+	const std::string saveName = "Save_Games\\wkbai game over view.sav";
+	const std::string savePath = PathToUtf8(g_userPath / "saved" / PathFromUtf8(saveName));
+	{
+		Server server;
+		Server::clearFogOfWar = false;
+		Client clientA(true), clientB(true);
+		NetLocalBuffer a1, a2, b1, b2;
+		NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+		server.addClient(&srvA);
+		server.addClient(&srvB);
+		clientA.serverLink = &cliA;
+		clientB.serverLink = &cliB;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		server.setClientPlayerControl(0, idA);
+		server.setClientPlayerControl(1, idB);
+		ServerGameObject* playerA = server.findObject(idA);
+		ServerGameObject* playerB = server.findObject(idB);
+		const int alive = server.gameSet->items.names.getIndex("Alive Multiplayer Player");
+		const int palace = server.gameSet->items.names.getIndex("Palace Building");
+		if (!playerA || !playerB || alive < 0 || palace < 0) {
+			printf("UNITTEST not set up\n");
+			printf("UNITTEST FAILED (1)\n");
+			return;
+		}
+		ClientInterface uiA(&clientA, nullptr), uiB(&clientB, nullptr);
+		server.timeManager.unpause();
+		server.startLevel();
+		auto step = [&](int frames) {
+			for (int i = 0; i < frames; i++) {
+				server.tick();
+				clientA.tick();
+				clientB.tick();
+				SDL_Delay(5);
+			}
+		};
+		step(60);
+		printf("UNITTEST alive items: A %.0f, B %.0f; client players A %u, B %u\n", playerA->getItem(alive), playerB->getItem(alive),
+			clientA.clientPlayer ? clientA.clientPlayer->id : 0, clientB.clientPlayer ? clientB.clientPlayer->id : 0);
+		check(uiA.fogOfWarOn() && uiB.fogOfWarOn(), "at the start both clients have the fog of war");
+		check(!uiA.showsEveryone() && !uiB.showsEveryone(), "at the start both show their own side's statistics only");
+
+		// A beaten as the game set does it, B still fighting (no win event sent)
+		{
+			SrvScriptContext ctx(&server, playerA);
+			for (const char* line : { "SET_ITEM \"Alive Multiplayer Player\" FINDER_SELF CONSTANT 0", "REMOVE_MULTIPLAYER_PLAYER FINDER_SELF" }) {
+				GSFileParser gsf(line);
+				std::unique_ptr<Action> act(ReadAction(gsf, *server.gameSet));
+				act->run(&ctx);
+			}
+		}
+		step(20);
+		check(server.finishedPlayers.count(idA) && server.finishedPlayers[idA] == 2, "the server notes A as lost");
+		check(clientA.ownOutcome() == 2 && clientB.ownOutcome() == 0, "client A knows it lost, client B still plays");
+		check(!uiA.fogOfWarOn(), "A, beaten and still in the game: no fog of war");
+		check(uiA.showsEveryone(), "A: every player's statistics and every event");
+		check(uiB.fogOfWarOn(), "B, still fighting: keeps its fog of war");
+		check(!uiB.showsEveryone(), "B: still its own side's statistics only");
+		check(server.watchesOnly(0) && !server.watchesOnly(1), "A only watches while B plays");
+		// A's chat: to A only (B still plays)
+		clientA.chatMessages.clear();
+		clientB.chatMessages.clear();
+		clientA.sendMessage("I see your army");
+		clientB.sendMessage("still here");
+		step(20);
+		auto heard = [](Client& c, const char* text) { return std::find(c.chatMessages.begin(), c.chatMessages.end(), text) != c.chatMessages.end(); };
+		check(heard(clientA, "I see your army") && !heard(clientB, "I see your army"), "what the beaten A says doesn't reach B, still playing");
+		check(heard(clientA, "still here") && heard(clientB, "still here"), "what B says reaches both");
+
+		// a save made now keeps it
+		server.timeManager.pause();
+		check(server.saveGame(savePath.c_str()), "saved after the loss");
+		server.timeManager.unpause();
+
+		// the game set's own ending: A's Manor destroyed; B the last one alive wins
+		server.finishedPlayers.clear();
+		server.sendFinishedPlayers();
+		playerA->setItem(alive, 1.0f);
+		step(10);
+		check(clientA.ownOutcome() == 0 && uiA.fogOfWarOn(), "the list cleared: A has its fog again");
+		ServerGameObject* manor = nullptr;
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (!manor && child->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && child->getItem(palace) > 0.0f)
+						manor = child->dyncast<ServerGameObject>();
+					self(child, self);
+				}
+		};
+		walk(playerA, walk);
+		check(manor != nullptr, "A has a Palace Building (its Manor)");
+		if (manor) {
+			printf("UNITTEST destroying A's %s %u\n", manor->blueprint->name.c_str(), manor->id);
+			manor->terminate();
+		}
+		step(60);
+		printf("UNITTEST after the Manor: A %d, B %d (server), alive items A %.0f B %.0f\n", server.finishedPlayers.count(idA) ? server.finishedPlayers[idA] : 0,
+			server.finishedPlayers.count(idB) ? server.finishedPlayers[idB] : 0, playerA->getItem(alive), playerB->getItem(alive));
+		check(clientA.ownOutcome() == 2, "the Manor destroyed: A lost (Game Endings.cpp)");
+		check(clientB.ownOutcome() == 1, "B, the last one alive: won");
+		check(!uiA.fogOfWarOn() && !uiB.fogOfWarOn(), "both, the game over: no fog of war");
+		check(uiA.showsEveryone() && uiB.showsEveryone(), "both show every player's statistics");
+		check(!server.watchesOnly(0) && !server.watchesOnly(1), "nobody plays on: nobody's chat held back");
+	}
+	// the save from after A's loss: loaded with a client for A
+	{
+		Server server;
+		Client client(true);
+		NetLocalBuffer q1, q2;
+		NetLocalLink srv(&q1, &q2), cli(&q2, &q1);
+		server.addClient(&srv);
+		client.serverLink = &cli;
+		server.loadSaveGame(saveName.c_str());
+		server.setClientPlayerControl(0, idA);
+		ClientInterface ui(&client, nullptr);
+		for (int i = 0; i < 40; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(5);
+		}
+		check(server.finishedPlayers.count(idA) && server.finishedPlayers[idA] == 2 && !server.finishedPlayers.count(idB), "the save keeps A lost, B playing");
+		check(client.ownOutcome() == 2 && !ui.fogOfWarOn() && ui.showsEveryone(), "loaded: A's client without fog, every player shown");
+	}
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		check(server.finishedPlayers.empty(), "a new game: nobody finished");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -7107,6 +7256,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ChronicleSweep, "Chronicle sweep: every season, weather, time of day and kind of event told, the plain rules checked"},
 {Test_KeyBindings, "Key bindings: a key rebound fires its action and the old one not, kept through wkconfig.json, cheat keys gated"},
 {Test_LightningBuildings, "Lightning on buildings: a scratch (5-10%) and set alight, a soldier as before, nobody credited"},
+{Test_GameOverView, "Game over view: after a loss or a win, no fog of war and every player's statistics; a player still fighting keeps both; kept by a save"},
 };
 
 void LaunchTest()

@@ -53,6 +53,8 @@ void Server::loadSaveGame(const char * filename)
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
 	clearFogOfWar = false;
+	// nobody's game over, unless the save says so (<save>.ai.txt "finished.<id>")
+	finishedPlayers.clear();
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
@@ -220,6 +222,10 @@ void Server::loadSaveGame(const char * filename)
 		UnitHistory::loadText(*this, all);
 	}
 	unitHistory.loaded(*this);
+	// the players whose game was over at the save (the clients had the game set's message: their
+	// lists are empty)
+	if (!finishedPlayers.empty())
+		sendFinishedPlayers();
 	// the work orders as saved, before any the scripts register again: their order decides which
 	// takes a unit listed by several (a replay played another game when they came in another)
 	for (auto& [player, cityId, finder, workOrder] : postWorkOrders)
@@ -587,6 +593,9 @@ std::string Server::aiSettingsText() const
 	text += "teamReconnaissance=" + std::to_string((int)teamReconnaissance) + "\n";
 	if (cheatMode) // (only when on: the text of other games stays as it was)
 		text += "cheatMode=1\n";
+	// the players whose game is over (only when there are: the text of other games stays as it was)
+	for (const auto& [id, outcome] : finishedPlayers)
+		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -619,6 +628,11 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		}
 		if (scriptsOnly)
 			continue;
+		if (name.rfind("finished.", 0) == 0) {
+			if (const uint32_t id = (uint32_t)strtoul(name.c_str() + 9, nullptr, 10); id && (v == 1 || v == 2))
+				finishedPlayers[id] = (uint8_t)v;
+			continue;
+		}
 		if (environment.settings.apply(name, v)) continue;
 		if (name == "aggressiveAI") aggressiveAI = v != 0;
 		else if (name == "cheatMode") cheatMode = v != 0;
@@ -2642,6 +2656,52 @@ std::vector<ServerGameObject*> Server::freeSeats()
 	return seats;
 }
 
+void Server::playerFinished(ServerGameObject* player)
+{
+	if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || finishedPlayers.count(player->id))
+		return;
+	// Game Endings.cpp sets "Alive Multiplayer Player" 0 on the beaten one first; the winners keep it
+	const int alive = gameSet ? gameSet->items.names.getIndex("Alive Multiplayer Player") : -1;
+	const uint8_t outcome = (alive >= 0 && player->getItem(alive) > 0.0f && !(player->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated))) ? 1 : 2;
+	finishedPlayers[player->id] = outcome;
+	printf("FINISHED t=%.2f player %u %s\n", (float)timeManager.currentTime, player->id, outcome == 1 ? "won" : "lost");
+	NetPacketWriter msg(NETCLIMSG_PLAYER_FINISHED);
+	msg.writeUint32(player->id);
+	msg.writeUint8(outcome);
+	sendToAll(msg);
+}
+
+void Server::sendFinishedPlayers(NetLink* link)
+{
+	auto send = [&](uint32_t id, uint8_t outcome) {
+		NetPacketWriter msg(NETCLIMSG_PLAYER_FINISHED);
+		msg.writeUint32(id);
+		msg.writeUint8(outcome);
+		if (link)
+			link->send(msg);
+		else
+			sendToAll(msg);
+	};
+	send(0, 0);
+	for (const auto& [id, outcome] : finishedPlayers)
+		send(id, outcome);
+}
+
+bool Server::watchesOnly(int clientIndex) const
+{
+	if (clientIndex < 0 || (size_t)clientIndex >= clientPlayerObjects.size())
+		return false;
+	const ServerGameObject* own = clientPlayerObjects[clientIndex].get();
+	if (!own || !finishedPlayers.count(own->id))
+		return false;
+	// a client whose player still plays
+	for (size_t i = 0; i < clientPlayerObjects.size(); i++)
+		if ((int)i != clientIndex && !(i < clientInfos.size() && clientInfos[i].spectator))
+			if (const ServerGameObject* p = clientPlayerObjects[i].get(); p && !finishedPlayers.count(p->id))
+				return true;
+	return false;
+}
+
 int Server::spectatorCount() const
 {
 	return (int)std::count_if(clientInfos.begin(), clientInfos.end(), [](const ClientInfo& i) { return i.spectator; });
@@ -2898,6 +2958,7 @@ void Server::sendStateTo(NetLink* link)
 		sendHostData(1, hostRegionsText, link);
 	environment.send(*this, link); // (without the seasons, for the game's sky)
 	unitHistory.sendAllTo(*this, link);
+	sendFinishedPlayers(link);
 	printf("Multiplayer: sent the running game's state to a guest (%zu messages)\n", count);
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
 		clientInfos[it - clientLinks.begin()].awaitingState = false;
@@ -3424,7 +3485,16 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 
 				NetPacketWriter echo(NETCLIMSG_TEST);
 				echo.writeStringZ(msg);
-				sendToAll(echo);
+				// one whose game is over while others still play: to the other watchers only (the
+				// spectators, the finished), so that it tells the players nothing it sees now
+				if (watchesOnly(clientIndex)) {
+					for (size_t i = 0; i < clientLinks.size(); i++)
+						if ((int)i == clientIndex || (i < clientInfos.size() && clientInfos[i].spectator)
+							|| (i < clientPlayerObjects.size() && !clientPlayerObjects[i]) || watchesOnly((int)i))
+							sendToClient((int)i, echo);
+				}
+				else
+					sendToAll(echo);
 				break;
 			}
 			case NETSRVMSG_LOADING_STAGE: {

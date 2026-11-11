@@ -600,6 +600,19 @@ struct ActionExitToMainMenu : Action {
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
+// A player's game is over (Game Endings.cpp: lost, or won): wkbai notes it for the view
+// (Server::finishedPlayers: that client sees the whole map and every player's statistics). The
+// player stays in the game otherwise, as the game set's text box offers "Return to Game".
+struct ActionRemoveMultiplayerPlayer : Action {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+				ctx->server->playerFinished(obj);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { finder.reset(ReadFinder(gsf, gs)); }
+};
+
 // The game ends and the level (from Save_Games) starts: the tutorials' next lesson or a repeat
 struct ActionBootLevel : Action {
 	std::string level;
@@ -1823,7 +1836,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_ENABLE_TRIBUTES_WINDOW:
 	case Tags::ACTION_DISABLE_TRIBUTES_WINDOW:
 	case Tags::ACTION_SET_RECONNAISSANCE:
-	case Tags::ACTION_REMOVE_MULTIPLAYER_PLAYER:
 	case Tags::ACTION_RESERVE_TILE_FOR_CONSTRUCTION:
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:
 	case Tags::ACTION_REGISTER_VICTOR:
@@ -1831,6 +1843,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
 	case Tags::ACTION_CONQUER_LEVEL: action = new ActionConquerLevel; break;
 	case Tags::ACTION_EXIT_TO_MAIN_MENU: action = new ActionExitToMainMenu; break;
+	case Tags::ACTION_REMOVE_MULTIPLAYER_PLAYER: action = new ActionRemoveMultiplayerPlayer; break;
 	case Tags::ACTION_BOOT_LEVEL: action = new ActionBootLevel; break;
 	case Tags::ACTION_UPDATE_USER_PROFILE: action = new ActionUpdateUserProfile; break;
 		//
