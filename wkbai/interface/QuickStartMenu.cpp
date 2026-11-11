@@ -119,6 +119,13 @@ QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 			const std::string slots = g_settings.value("benchmark", nlohmann::json::object()).value("slots", std::string());
 			if (!slots.empty())
 				handleRequest({ "slots", slots });
+			// test runs: "benchmark": { ..., "skirmishSettings": { "<name>": <value>, ... } } as set in
+			// the lobby (the day and night, seasons and weather: "seasons": 1, ...)
+			const nlohmann::json lobby = g_settings.value("benchmark", nlohmann::json::object()).value("skirmishSettings", nlohmann::json::object());
+			if (lobby.is_object())
+				for (const auto& [name, value] : lobby.items())
+					if (value.is_number())
+						skirmishMenu.setSetting(name, value.get<int>());
 		}
 		else
 			printf("Benchmark: save game \"%s\" not found in Save_Games\n", BenchmarkSaveGame());

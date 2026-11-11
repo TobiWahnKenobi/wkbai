@@ -12,6 +12,8 @@
 #include <vector>
 #include <string>
 #include <set>
+#include <filesystem>
+#include <algorithm>
 #include "finder.h"
 
 void ignoreBlueprintEx(GSFileParser &gsf, const std::string &endtag)
@@ -211,6 +213,44 @@ namespace {
 }
 
 std::map<std::string, std::map<std::string, std::string, StrCICompareClass>, StrCICompareClass> g_gameSetFolderOverrides;
+
+// wkbai's patches to the game set (redata\Warrior Kings Game Set\wkbai patches\*.cpp, a mod's
+// copy of one replacing redata's, a mod's own added): parsed after the game set in both passes,
+// each definition in them replacing the game set's of that name (an equation, a defined value,
+// an action sequence) or adding a new one. So far: Lightning.cpp (a bolt only scratches a
+// building and sets it alight).
+static bool g_parsingPatch = false;
+static const char* const PATCH_FOLDER = "Warrior Kings Game Set\\wkbai patches";
+
+static std::vector<std::string> GameSetPatches()
+{
+	std::vector<std::string> names;
+	if (std::unique_ptr<std::vector<std::string>> files(ListFiles(PATCH_FOLDER)); files)
+		names = *files;
+	std::error_code ec;
+	for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::path("redata") / "Warrior Kings Game Set" / "wkbai patches", ec))
+		if (entry.is_regular_file(ec))
+			names.push_back(PathToUtf8(entry.path().filename()));
+	std::vector<std::string> found;
+	for (const std::string& f : names)
+		if (f.size() > 4 && StrCICompare(std::string_view(f).substr(f.size() - 4), ".cpp") == 0)
+			found.push_back(f);
+	std::sort(found.begin(), found.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) < 0; });
+	found.erase(std::unique(found.begin(), found.end(), [](const std::string& a, const std::string& b) { return StrCICompare(a, b) == 0; }), found.end());
+	return found;
+}
+
+void GameSet::parsePatches(int pass)
+{
+	for (const std::string& f : GameSetPatches()) {
+		const std::string path = std::string(PATCH_FOLDER) + "\\" + f;
+		if (pass == 0)
+			printf("Game set patch %s\n", path.c_str());
+		g_parsingPatch = true;
+		parseFile(path.c_str(), pass);
+		g_parsingPatch = false;
+	}
+}
 
 // The text of a file in an overridden folder, or null
 static const std::string* OverriddenFile(const std::string& path)
@@ -591,6 +631,11 @@ void GameSet::parseFile(const char * fn, int pass)
 			}
 			case Tags::GAMESET_ACTION_SEQUENCE: {
 				int x = actionSequences.readIndex(gsf);
+				// (a wkbai patch replaces the game set's sequence of that name, not adds to it)
+				if (g_parsingPatch) {
+					actionSequences[x].actionList.clear();
+					actionSequences[x].debugInfo.reset();
+				}
 				actionSequences[x].init(gsf, *this, "END_ACTION_SEQUENCE");
 				break;
 			}
@@ -774,6 +819,7 @@ void GameSet::load(const char * fn)
 
 	printf("Gameset pass 1...\n");
 	parseFile(fn, 0);
+	parsePatches(0);
 
 	for (auto &objbp : objBlueprints)
 		objbp.pass();
@@ -817,6 +863,7 @@ void GameSet::load(const char * fn)
 
 	printf("Gameset pass 2...\n");
 	parseFile(fn, 1);
+	parsePatches(1);
 	printf("Gameset loaded!\n");
 
 	if (!missingLinkedFiles.empty()) {

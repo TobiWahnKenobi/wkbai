@@ -143,6 +143,8 @@ struct GameSet
 	std::vector<std::string> missingLinkedFiles;
 
 	void parseFile(const char *fn, int pass);
+	// wkbai's game set patches (gameset.cpp), after the game set in that pass
+	void parsePatches(int pass);
 	void load(const char *fn);
 
 	const GameObjBlueprint* findBlueprint(int cls, const std::string& name) const
