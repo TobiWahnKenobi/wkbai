@@ -34,6 +34,7 @@ struct TerrainRenderer {
 	// the far rings beyond (ExtendMapFarRings), and how far they reach beyond it (world units)
 	virtual int extendedFarRings() const { return 0; }
 	virtual int extendedDetail() const { return 0; }
+	virtual bool extendedShadows() const { return false; }
 	virtual float extendedFarReach() const { return 0.0f; }
 	// and the far rings themselves (their reach and the ground beyond them; null: none)
 	virtual const FarTerrain* extendedFar() const { return nullptr; }

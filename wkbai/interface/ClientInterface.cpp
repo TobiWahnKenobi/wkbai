@@ -1034,6 +1034,14 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			static const char* const extendDetails[] = { "Low", "Medium", "High", "Ultra (slower to build)" };
 			ImGui::BeginDisabled(s.extendMap < 2);
 			ImGui::Combo("Extend map detail (far land)", &s.extendMapDetail, extendDetails, 4);
+			ImGui::Checkbox("Far land shadows (soft terrain shadows, a little longer to build)", &s.extendMapShadows);
+			ImGui::EndDisabled();
+			// (built anew only on Apply: it takes seconds)
+			const bool pending = s.extendMap != s.appliedExtendMap || s.extendMapDetail != s.appliedExtendMapDetail
+				|| s.extendMapShadows != s.appliedExtendMapShadows;
+			ImGui::BeginDisabled(!pending);
+			if (ImGui::Button("Apply Extend map"))
+				s.applyExtendMap();
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
@@ -2141,9 +2149,16 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	// (with the ray-traced shadows at a low sun an object off the view may cast its shadow into
 	// it: the rough tests here widen by the longest such shadow, of an object 15 units high; the
 	// sphere test further down decides. Without, the trees just off the screen still cast none.)
+	// (the settings, not shadows.rayShadowsOn: the renderer clears that each frame until it is set
+	// again after the objects are drawn, so here it was always off and the trees just off the
+	// screen cast no shadow, the play test of 2026-11-11; the sun the scene's, as last set)
+	auto* rtGfx = dynamic_cast<DiligentGfx*>(gfx);
+	const bool rtCasters = rtGfx && g_renderSettings.staticShadows && g_renderSettings.rtShadows && rtGfx->shadows.rayShadowsSupported
+		&& scene && scene->sunDirection.sqlen3() > 1e-6f;
+	const Vector3 rtSun = rtCasters ? scene->sunDirection.normal() : Vector3(0, 1, 0);
 	float shadowReach = 0.0f;
-	if (auto* dg = dynamic_cast<DiligentGfx*>(gfx); dg && dg->shadows.rayShadowsOn) {
-		const Vector3 sn = dg->shadows.sunDirection;
+	if (rtCasters) {
+		const Vector3 sn = rtSun;
 		const float fl = std::sqrt(sn.x * sn.x + sn.z * sn.z);
 		if (sn.y > 0.02f && fl > 1e-3f)
 			shadowReach = std::min(30.0f * fl / sn.y, 600.0f);
@@ -2219,10 +2234,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	// object itself (at a low sun the trees just off the screen cast no shadow, theirs ended at
 	// the screen's edge, the play test of 2026-11-11)
 	if (!onCam) {
-		auto* dg = dynamic_cast<DiligentGfx*>(gfx);
-		const Vector3 sun = dg ? dg->shadows.sunDirection : Vector3();
+		const Vector3 sun = rtSun;
 		const float flat = std::sqrt(sun.x * sun.x + sun.z * sun.z);
-		if (dg && dg->shadows.rayShadowsOn && sun.y > 0.02f && flat > 1e-3f) {
+		if (rtCasters && sun.y > 0.02f && flat > 1e-3f) {
 			const float len = std::min(2.0f * sphereRadius * flat / sun.y, 600.0f);
 			const Vector3 away(-sun.x / flat, 0, -sun.z / flat);
 			for (float f : { 0.33f, 0.66f, 1.0f }) {
@@ -2719,7 +2733,8 @@ void ClientInterface::iter()
 	// terrain renderer made again
 	if (terrainRenderer && client->terrain && UseEnhancedRenderers(gfx)
 		&& (terrainRenderer->extendedTiles() != wantedExtendTiles() || terrainRenderer->extendedFarRings() != wantedFarRings()
-			|| (wantedFarRings() > 0 && terrainRenderer->extendedDetail() != g_renderSettings.extendMapDetail))) {
+			|| (wantedFarRings() > 0 && (terrainRenderer->extendedDetail() != g_renderSettings.appliedExtendMapDetail
+				|| terrainRenderer->extendedShadows() != g_renderSettings.appliedExtendMapShadows)))) {
 		delete terrainRenderer;
 		terrainRenderer = makeTerrainRenderer();
 	}

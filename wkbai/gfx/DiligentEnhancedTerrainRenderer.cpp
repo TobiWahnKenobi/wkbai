@@ -169,9 +169,11 @@ SamplerState lightMaskSampler;
 // the near ring's last part goes over to none, so near and far meet under the same light, the
 // play tests of 2026-11-10)
 static float ScreenMasks = 1;
+// the far rings' own terrain shadow (VS_Far: the sun against the vertex's horizon; 1 lit)
+static float FarShadow = 1;
 float RtSunMask(float4 pos)
 {
-	return LightMasks.x != 0 && ScreenMasks > 0 ? lerp(1, lightRtMask.Load(int3(pos.xy, 0)), ScreenMasks) : 1;
+	return (LightMasks.x != 0 && ScreenMasks > 0 ? lerp(1, lightRtMask.Load(int3(pos.xy, 0)), ScreenMasks) : 1) * FarShadow;
 }
 float AoMask(float4 pos)
 {
@@ -244,6 +246,47 @@ cbuffer SunBuffer
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
 Texture2D nearColourTexture; // Extend map: the copy's vertices' material colours, smoothed (FarTerrain::nearColour; else 1 x 1)
+// and their horizons over the land 8 tiles out and farther (FarTerrain::nearHorizon: directions 0-3, 4-7; else 1 x 1 of 255: none)
+Texture2D nearHorizonA;
+Texture2D nearHorizonB;
+float SunOverHorizon(float b0, float b1, float t)
+{
+	float horizon = lerp(b0, b1, t) / 254.0 * 1.5707963;
+	float sun = asin(clamp(FarSun.y, -1, 1));
+	return smoothstep(horizon - 0.035, horizon + 0.035, sun);
+}
+void SunCompass(out uint i0, out uint i1, out float t)
+{
+	float a = atan2(FarSun.z, FarSun.x) / 0.78539816; // 0 along +x, a step per 45 degrees
+	a = a < 0 ? a + 8 : a;
+	i0 = (uint)floor(a) & 7;
+	i1 = (i0 + 1) & 7;
+	t = frac(a);
+}
+float FarSunLight(uint h0, uint h1)
+{
+	if (h0 == 0xffffffffu && h1 == 0xffffffffu)
+		return 1;
+	uint i0, i1;
+	float t;
+	SunCompass(i0, i1, t);
+	uint b0 = ((i0 < 4 ? h0 : h1) >> ((i0 & 3) * 8)) & 255, b1 = ((i1 < 4 ? h0 : h1) >> ((i1 & 3) * 8)) & 255;
+	return SunOverHorizon((float)b0, (float)b1, t);
+}
+// the same over the copy (the map, the near ring): its vertices' horizons, interpolated
+float NearFarShadow(float3 world)
+{
+	float2 g = world.xz / 5 + TessParams.w;
+	float2 uv = (g + 0.5) / (TessGrid.xy + 1);
+	float4 a = nearHorizonA.SampleLevel(inpSampler, uv, 0) * 255, b = nearHorizonB.SampleLevel(inpSampler, uv, 0) * 255;
+	if (a.x > 254.5)
+		return 1; // (none worked out)
+	uint i0, i1;
+	float t;
+	SunCompass(i0, i1, t);
+	float h[8] = { a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w };
+	return SunOverHorizon(h[i0], h[i1], t);
+}
 
 // The tessellated terrain's surface: a Catmull-Rom spline through the vertex heights in both
 // directions (exact at the vertices); Terrain::getSmoothHeight is the same on the CPU
@@ -960,6 +1003,15 @@ float NearToFarSea(float3 world)
 	float2 outside = max(-world.xz, world.xz - FarArea.xy);
 	return smoothstep(0.45, 0.97, max(outside.x, outside.y) / FarArea.z);
 }
+// the textures' fade towards the far rings' colours: over nearly the whole near ring (its last
+// 55% had looked abrupt, the play test of 2026-11-11)
+float NearTexFade(float3 world)
+{
+	if (FarGround.w == 0 || FarArea.z <= 0)
+		return 0;
+	float2 outside = max(-world.xz, world.xz - FarArea.xy);
+	return smoothstep(0.08, 0.97, max(outside.x, outside.y) / FarArea.z);
+}
 float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 {
 	// from Low up, the depth from the terrain's smooth surface (not bent at the triangles' edges)
@@ -1335,6 +1387,7 @@ float4 PS_Grass(GRASS_OUTPUT input) : SV_Target
 {
 	// the blade's normal, bent towards the ground's (up): seen from above, a meadow's blades
 	// face the sky more than their shape alone says
+	FarShadow = NearFarShadow(input.World);
 	float3 n = normalize(lerp(normalize(input.Normal), float3(0, 1, 0), 0.55));
 	float3 v = normalize(FogCamera.xyz - input.World);
 	if (dot(n, v) < 0)
@@ -1495,6 +1548,7 @@ float2 AtlasUV(float2 texcoord)
 
 float4 PS(VS_OUTPUT input) : SV_Target
 {
+	FarShadow = NearFarShadow(input.FragPos);
 	float2 fuv = AtlasUV(input.Texcoord);
 	float4 tex = inpTexture.Sample(inpSampler, fuv);
 	float3 nrm = normalTexture.Sample(inpSampler, fuv).xyz * 2 - 1;
@@ -1505,20 +1559,20 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// (in two steps: first the picture's own coarser mips, at most 4 texels per tile, then the
 	// smooth field of the materials' colours the far rings show: the tiles' own mean colours had
 	// drawn blocks, the play test of 2026-11-11)
-	float k = NearToFarSea(input.FragPos);
-	if (k > 0) {
+	float k = NearToFarSea(input.FragPos), kt = NearTexFade(input.FragPos);
+	if (kt > 0) {
 		uint aw, ah, levels;
 		inpTexture.GetDimensions(0, aw, ah, levels);
-		float lod = min(inpTexture.CalculateLevelOfDetail(inpSampler, input.Texcoord) + 4 * smoothstep(0, 0.6, k), max((float)levels - 5, 0));
+		float lod = min(inpTexture.CalculateLevelOfDetail(inpSampler, input.Texcoord) + 4 * smoothstep(0, 0.7, kt), max((float)levels - 5, 0));
 		float ha = 0.5 / max(aw >> (int)ceil(lod), 1u);
 		float2 stc = clamp(input.Texcoord, ha, 1 - ha);
 		float2 tile = floor(stc / 0.25);
 		float2 cuv = clamp(fmod(stc, 0.25), ha, 0.25 - ha) + tile * 0.25;
-		tex.rgb = lerp(tex.rgb, inpTexture.SampleLevel(inpSampler, cuv, lod).rgb, smoothstep(0, 0.4, k));
+		tex.rgb = lerp(tex.rgb, inpTexture.SampleLevel(inpSampler, cuv, lod).rgb, smoothstep(0, 0.5, kt));
 		float2 g = input.FragPos.xz / 5 + TessParams.w;
 		float3 field = nearColourTexture.SampleLevel(inpSampler, (g + 0.5) / (TessGrid.xy + 1), 0).rgb;
-		tex.rgb = lerp(tex.rgb, field, smoothstep(0.3, 1, k));
-		nrm = normalize(lerp(nrm, float3(0, 1, 0), k));
+		tex.rgb = lerp(tex.rgb, field, smoothstep(0.35, 1, kt));
+		nrm = normalize(lerp(nrm, float3(0, 1, 0), kt));
 		ScreenMasks = 1 - k;
 	}
 	return ShadeTerrain(input, tex, nrm, input.Tangent, input.Bitangent);
@@ -1536,7 +1590,11 @@ float4 PS_Albedo(VS_OUTPUT input) : SV_Target
 // hazed by the terrain's own ShadeTerrain (a flat normal map: the vertex normal); the colour's
 // alpha is 0 on water (Texcoord.x 1: a flat surface). Only the scene's own fog (FogAmount, FogTint):
 // no haze of their own, so dawn, dusk and the sun over the haze look on them as on the map
-VS_OUTPUT VS_Far(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint ColourPacked : ATTRIB2)
+// The far land's terrain shadow at a vertex: its horizon's height (an angle, a byte per 45
+// degrees of the compass, FarVertex::horizon; all 255: none worked out) towards the sun, the sun's
+// height against it over a few degrees, so the shadows' edges stay soft at the rings' coarse grid
+
+VS_OUTPUT VS_Far(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint ColourPacked : ATTRIB2, uint Horizon0 : ATTRIB3, uint Horizon1 : ATTRIB4)
 {
 	VS_OUTPUT o = (VS_OUTPUT)0;
 	o.Pos = mul(float4(Pos3, 1), Transform);
@@ -1544,7 +1602,7 @@ VS_OUTPUT VS_Far(float3 Pos3 : ATTRIB0, uint NormalPacked : ATTRIB1, uint Colour
 	float3 n = normalize(Unpack1010102(NormalPacked).xyz * 2 - 1);
 	o.Norm = n;
 	o.Color = float4(float3(ColourPacked & 255, (ColourPacked >> 8) & 255, (ColourPacked >> 16) & 255) / 255.0, 1);
-	o.Texcoord = float2((ColourPacked >> 24) < 128 ? 1 : 0, 0);
+	o.Texcoord = float2((ColourPacked >> 24) < 128 ? 1 : 0, FarSunLight(Horizon0, Horizon1));
 	o.Fog = FogAmount(Pos3, distance(Pos3, FogCamera.xyz));
 	float3 t = normalize(cross(n, float3(0, 0, 1)));
 	o.Tangent = t;
@@ -1557,6 +1615,7 @@ float4 PS_Far(VS_OUTPUT input) : SV_Target
 	if (input.Texcoord.x > 0.5)
 		discard;
 	ScreenMasks = 0;
+	FarShadow = saturate(input.Texcoord.y);
 	float4 c = ShadeTerrain(input, float4(1, 1, 1, 1), float3(0, 1, 0), input.Tangent, input.Bitangent);
 	// the last ring's outer part going over into the ground beyond (to the horizon)
 	float k = FarGroundShare(input.FragPos);
@@ -1593,6 +1652,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	RefCntAutoPtr<ITexture> nearColourMap; // Extend map's colour field (FarTerrain::nearColour)
+	RefCntAutoPtr<ITexture> nearHorizonMap[2]; // and the copy's horizons (FarTerrain::nearHorizon)
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline;
 	// the depth pre-pass's (renderDepth, renderWaterDepth); depthOnly while it draws; prepared
@@ -1849,14 +1909,14 @@ static texture CreateRippleTexture(IRenderer* gfx)
 static constexpr Uint32 STATIC_SHADOW_MAP_SIZE = 2048;
 
 
-DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles, int farRings, int extendDetail)
-	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain), farRingCount(farRings), farDetail(extendDetail)
+DiligentEnhancedTerrainRenderer::DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles, int farRings, int extendDetail, bool extendShadows)
+	: TerrainRenderer(gfx, terrain, camera), mapTerrain(terrain), farRingCount(farRings), farDetail(extendDetail), farShadows(extendShadows)
 {
 	// Extend map: everything below draws the bigger copy (the same world coordinates)
 	if (terrain && extendTiles > 0) {
 		LoadingDetail("extending the map");
 		const uint32_t t0 = SDL_GetTicks();
-		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees, farRings, &far, extendDetail);
+		extended = BuildExtendedTerrain(*terrain, extendTiles, &trees, farRings, &far, extendDetail, extendShadows);
 		this->terrain = extended.get();
 		printf("Extend map: built in %u ms\n", (unsigned)(SDL_GetTicks() - t0));
 	}
@@ -1908,6 +1968,8 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_VS_PS | tessStages, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "nearColourTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "nearHorizonA", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "nearHorizonB", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -2028,6 +2090,21 @@ void DiligentEnhancedTerrainRenderer::init()
 		if (_impl->nearColourMap)
 			_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "nearColourTexture")->Set(_impl->nearColourMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		far.nearColour = {};
+		// the horizons the same way (255: none)
+		for (int k = 0; k < 2; k++) {
+			const bool haveH = far.nearHorizon[k].size() == n;
+			const uint32_t none = 0xffffffffu;
+			TextureDesc hdesc = cdesc;
+			hdesc.Name = k ? "Extend map horizons 4-7" : "Extend map horizons 0-3";
+			hdesc.Width = haveH ? terrain->width + 1 : 1;
+			hdesc.Height = haveH ? terrain->height + 1 : 1;
+			TextureSubResData hsub{ haveH ? (const void*)far.nearHorizon[k].data() : (const void*)&none, (Uint64)hdesc.Width * 4 };
+			TextureData hdata{ &hsub, 1 };
+			device->CreateTexture(hdesc, &hdata, &_impl->nearHorizonMap[k]);
+			if (_impl->nearHorizonMap[k])
+				_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, k ? "nearHorizonB" : "nearHorizonA")->Set(_impl->nearHorizonMap[k]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+			far.nearHorizon[k] = {};
+		}
 	}
 
 	// The water's flow, sea, wave region and river maps (again when the water changes)
@@ -2165,6 +2242,8 @@ void DiligentEnhancedTerrainRenderer::init()
 			LayoutElement{0, 0, 3, VT_FLOAT32, False},
 			LayoutElement{1, 0, 1, VT_UINT32, False},
 			LayoutElement{2, 0, 1, VT_UINT32, False},
+			LayoutElement{3, 0, 1, VT_UINT32, False},
+			LayoutElement{4, 0, 1, VT_UINT32, False},
 		};
 		GraphicsPipelineStateCreateInfo fci = ci;
 		fci.PSODesc.Name = "Extend map far rings";

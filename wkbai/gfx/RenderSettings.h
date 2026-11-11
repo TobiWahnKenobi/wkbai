@@ -77,6 +77,15 @@ struct RenderSettings {
 	// its detail (Low, Medium, High, Ultra): the first far ring's grid 20, 10, 5 or 2.5 units
 	// (each ring twice as coarse as the one inside it); Ultra takes longer to build
 	int extendMapDetail = 1;
+	// the two as the terrain is built with them: changed only by OK in the Options menu, Apply in
+	// the F10 panel and loading (building takes seconds, and switching through the choices rebuilt
+	// it at each one, the play test of 2026-11-11)
+	// the far land's terrain shadows: each far vertex's horizon in 8 directions, worked out as the
+	// far land is built (a little longer to build), the sun against it soft-edged as drawn
+	bool extendMapShadows = true;
+	int appliedExtendMap = 0, appliedExtendMapDetail = 1;
+	bool appliedExtendMapShadows = true;
+	void applyExtendMap() { appliedExtendMap = extendMap; appliedExtendMapDetail = extendMapDetail; appliedExtendMapShadows = extendMapShadows; }
 	bool grass = true;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)

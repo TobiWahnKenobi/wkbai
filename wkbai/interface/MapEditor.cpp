@@ -241,12 +241,12 @@ void ClientInterface::rebuildTerrainRenderer(bool tiles)
 
 int ClientInterface::wantedExtendTiles() const
 {
-	return editorOn ? 0 : ExtendMapTiles(g_renderSettings.extendMap);
+	return editorOn ? 0 : ExtendMapTiles(g_renderSettings.appliedExtendMap);
 }
 
 int ClientInterface::wantedFarRings() const
 {
-	return editorOn ? 0 : ExtendMapFarRings(g_renderSettings.extendMap);
+	return editorOn ? 0 : ExtendMapFarRings(g_renderSettings.appliedExtendMap);
 }
 
 // test runs: a hash of the map's own terrain (heights, tiles, water, lakes), which Extend map
@@ -277,7 +277,7 @@ TerrainRenderer* ClientInterface::makeTerrainRenderer()
 	if (UseEnhancedRenderers(gfx)) {
 		const bool check = BenchmarkEnabled() && client->terrain;
 		const uint64_t before = check ? MapTerrainHash(client->terrain) : 0;
-		TerrainRenderer* r = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera, wantedExtendTiles(), wantedFarRings(), g_renderSettings.extendMapDetail);
+		TerrainRenderer* r = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera, wantedExtendTiles(), wantedFarRings(), g_renderSettings.appliedExtendMapDetail, g_renderSettings.appliedExtendMapShadows);
 		if (check)
 			printf("EXTENDMAP map terrain hash %016llx before, %016llx after the renderer (%d tiles added)\n",
 				(unsigned long long)before, (unsigned long long)MapTerrainHash(client->terrain), r->extendedTiles());

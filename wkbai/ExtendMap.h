@@ -30,7 +30,9 @@ int ExtendMapFarRings(int setting);
 // pipeline (PS_Far: the terrain's light and haze on a colour per vertex, the map's materials'
 // mean colours). Vertices in world units; normal R10G10B10A2 (n * 0.5 + 0.5); colour RGBA8, A 0
 // on water. Blocks: index ranges with their bounding boxes, for culling.
-struct FarVertex { float x, y, z; uint32_t normal, colour; };
+// horizon: the land's height round the vertex seen from it, an angle per 45 degrees of the compass
+// (from +x towards +z; a byte, 254 straight up), 4 to a word; all 255: none worked out
+struct FarVertex { float x, y, z; uint32_t normal, colour; uint32_t horizon[2] = { ~0u, ~0u }; };
 struct FarBlock { uint32_t first, count; float lo[3], hi[3]; };
 struct FarTerrain {
 	std::vector<FarVertex> vertices;
@@ -46,6 +48,10 @@ struct FarTerrain {
 	// per vertex of the copy ((width + 1) x (height + 1)), RGBA8: its materials' mean colours,
 	// smoothed (the near ring's pictures fade into them towards the far rings, which show the same)
 	std::vector<uint32_t> nearColour;
+	// per vertex of the copy, as nearColour, with the far land's shadows: its horizon over the land
+	// from 8 tiles out (the nearer land's shadows are ray-traced), two RGBA8 words of 4 directions
+	// each (FarVertex::horizon); empty: none
+	std::vector<uint32_t> nearHorizon[2];
 };
 
 struct ExtendedTerrainDeleter { void operator()(Terrain* t) const; };
@@ -59,7 +65,7 @@ struct ExtendedTree { float x, y, z, yaw, scale; uint32_t variant; bool forest; 
 // The copy of map with n tiles more on each side (deterministic: the same map, the same copy),
 // and its trees (if wanted)
 // detail: the far rings' (RenderSettings::extendMapDetail, 0-3: ring 0's grid 4, 2, 1 or 0.5 tiles)
-ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr, int farRings = 0, FarTerrain* far = nullptr, int detail = 1);
+ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<ExtendedTree>* trees = nullptr, int farRings = 0, FarTerrain* far = nullptr, int detail = 1, bool shadows = false);
 
 // The map's changes at run time carried into the copy: its vertices (levelled building sites,
 // farms, the editor's heights), its tiles, and its water (lakes, the water design, ice)

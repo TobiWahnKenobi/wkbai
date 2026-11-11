@@ -84,6 +84,7 @@ void RenderSettings::load()
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	extendMap = std::clamp(g_settings.value<int>("extendMap", def.extendMap), 0, 3);
 	extendMapDetail = std::clamp(g_settings.value<int>("extendMapDetail", def.extendMapDetail), 0, 3);
+	extendMapShadows = g_settings.value<bool>("extendMapShadows", def.extendMapShadows);
 	grassDensity = g_settings.value<float>("grassDensity", def.grassDensity);
 	grassHeight = g_settings.value<float>("grassHeight", def.grassHeight);
 	motionBlur = std::clamp(g_settings.value<float>("motionBlur", def.motionBlur), 0.0f, 1.0f);
@@ -133,6 +134,7 @@ void RenderSettings::load()
 	musicVolume = g_settings.value<float>("musicVolume", def.musicVolume);
 	effectsVolume = g_settings.value<float>("effectsVolume", def.effectsVolume);
 	showFps = g_settings.value<bool>("showFps", def.showFps);
+	applyExtendMap();
 }
 
 void RenderSettings::save()
@@ -184,6 +186,7 @@ void RenderSettings::save()
 	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["extendMap"] = extendMap;
 	g_settings["extendMapDetail"] = extendMapDetail;
+	g_settings["extendMapShadows"] = extendMapShadows;
 	g_settings["grassDensity"] = grassDensity;
 	g_settings["grassHeight"] = grassHeight;
 	g_settings["motionBlur"] = motionBlur;

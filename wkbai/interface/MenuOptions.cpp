@@ -250,6 +250,15 @@ namespace {
 			o.set = [&rs](float v) { rs.extendMapDetail = std::clamp((int)v, 0, 3); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
 		}
+		{
+			// the far land's soft terrain shadows (a little longer to build)
+			MenuOption o;
+			o.id = "extendMapShadows"; o.page = "terrain"; o.label = "Far land shadows";
+			o.type = MenuOption::TOGGLE;
+			o.get = [&rs]() { return rs.extendMapShadows ? 1.0f : 0.0f; };
+			o.set = [&rs](float v) { rs.extendMapShadows = v != 0.0f; };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
@@ -450,6 +459,7 @@ const MenuOption* FindMenuOption(const std::string& id)
 void SaveMenuOptions()
 {
 	g_renderSettings.save();
+	g_renderSettings.applyExtendMap(); // (the Extend map rebuilt now, if it changed)
 	SoundPlayer::getSoundPlayer()->applyVolumes();
 	Matchmaking::get().settingsChanged();
 }
