@@ -167,7 +167,8 @@ float Ridged(uint64_t seed, float x, float z, float cell, int octaves, int salt,
 		// (an octave left out counts at its mean, a third of its weight: the ranges keep their height)
 		// (a soft crest, the softer the coarser the samples: |v| as sqrt(v² + e); the sharp
 		// crest drew spiky mountains far out, the play test of 2026-11-10)
-		const float e = 0.02f + 0.06f * std::min(foot / 16.0f, 1.0f);
+		// (rounder still: rows of thin spikes, the play test of 2026-11-11)
+		const float e = 0.05f + 0.06f * std::min(foot / 16.0f, 1.0f);
 		const float nv = k > 0 ? ValueNoise(seed, qx + o * 5.3f, qz + o * 23.1f, salt + o) : 0.0f;
 		float n = k > 0 ? 1.0f - std::sqrt(nv * nv + e) + std::sqrt(e) : 0.0f;
 		n = (n * n * k + (1.0f - k) / 3.0f) * w;
@@ -808,7 +809,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float k = std::clamp((d - 0.25f * n) / wildSpan, 0.0f, 1.0f);
 		return k * k * (3 - 2 * k);
 	};
-	const float wildRelief = std::max(0.0f, 110.0f - relief);
+	// (70, not 110: the far land's own hills and ranges had stood too high and spiky, the play
+	// test of 2026-11-11)
+	const float wildRelief = std::max(0.0f, 70.0f - relief);
 	const float massifHeight = std::max(220.0f, 3.0f * relief); // the great massifs far out (landAt)
 	// the mean of the map's border (where the land far out settles round, instead of each place
 	// keeping its nearest border point's height)
@@ -884,9 +887,24 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float band = std::clamp(0.5f + 1.6f * Fbm(seed, qx, qz, 85.0f, 2, 71, foot), 0.0f, 1.0f);
 		// (a little lower than at first: a row of tall narrow peaks read as spikes, the play test
 		// of 2026-11-11)
-		const float ridges = (Ridged(seed, qx, qz, 62.0f, 5, 70, foot) * (0.35f + 0.65f * band) - 0.2f) * (0.55f * reliefW + 8.0f);
+		const float ridges = (Ridged(seed, qx, qz, 62.0f, 5, 70, foot) * (0.35f + 0.65f * band) - 0.2f) * (0.45f * reliefW + 6.0f);
 		const float seaFloor = ErodedFbm(seed, qx, qz, 40.0f, 4, 80, foot) * (0.03f * relief + 0.6f);
 		float detail = hills * (1 - mtn) + ridges * mtn;
+		// Far out, here and there cliffs: tilted layers, each rising gently to its edge and
+		// dropping steeply there (a cuesta), the edges wandering; where the grid is too coarse for
+		// a cliff they fade out
+		{
+			const float cuesta = wild * std::clamp((Fbm(seed, px, pz, 300.0f, 2, 330, foot) - 0.12f) * 3.0f, 0.0f, 1.0f)
+				* (1 - L.wet) * (1 - mtn) * std::clamp(1.0f - (foot - 4.0f) / 8.0f, 0.0f, 1.0f);
+			if (cuesta > 0) {
+				const float ang = 3.14159265f * Fbm(seed, px, pz, 500.0f, 2, 331);
+				const float u = (px * std::cos(ang) + pz * std::sin(ang)) / 55.0f + 0.7f * Fbm(seed, px, pz, 90.0f, 2, 332, foot);
+				const float t = u - std::floor(u);
+				const float drop = std::clamp((t - 0.86f) / 0.14f, 0.0f, 1.0f);
+				const float profile = t * (1.0f - drop * drop * (3 - 2 * drop));
+				detail += cuesta * (0.22f * reliefW + 4.0f) * (profile - 0.45f);
+			}
+		}
 		// Far out, here and there a great massif (several times the map's relief, at least 220
 		// units: the far land had shown no mountain big enough to stand out at that distance, the
 		// play test of 2026-11-11), its rock and snow the map's own as for any high ground

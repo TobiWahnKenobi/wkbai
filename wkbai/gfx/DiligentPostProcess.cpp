@@ -472,6 +472,10 @@ float FogDarkening(float2 uv)
 	// (the land and water past the edge stood darker than the sky, a grey slab, a hard line)
 	float2 outside = max(-fuv, fuv - 1) / Fog.xy;
 	float edge = saturate((max(outside.x, outside.y) - Taa.z) / max(Taa.w - Taa.z, 1e-3));
+	// and none beyond the map (Extend map's land): it has no units, and its texture's edge,
+	// clamped, had stretched the border's tiles out to the horizon in bands of light and dark
+	// (the play test of 2026-11-11); gone over 8 tiles past the border
+	edge = max(edge, smoothstep(0, 40, max(outside.x, outside.y)));
 	return lerp(dark, 1, edge);
 }
 
