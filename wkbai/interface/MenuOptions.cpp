@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "MenuOptions.h"
+#include "KeyBindings.h"
 #include "../gfx/RenderSettings.h"
 #include "../Environment.h"
 #include "../settings.h"
@@ -292,13 +293,15 @@ namespace {
 		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
 		list.push_back(slider("meshDiffuse", "models", "Model sunlight", rs.meshDiffuse, 0.0f, 1.5f));
 
-		// Camera and controls
+		// Controls: the keyboard page is the key bindings' own (KeyBindings.h, drawn by the
+		// FrontEndUI), the mouse and the camera
+		list.push_back(slider("cameraRotationSpeed", "mouse", "Camera rotation speed (middle button)", rs.mouseLookSensitivity, 0.001f, 0.05f, "%.3f"));
+		list.push_back(toggle("invertMouseWheel", "mouse", "Invert mouse wheel", rs.invertMouseWheel));
+		list.push_back(toggle("edgeScroll", "mouse", "Scroll at the window's edge", rs.edgeScroll));
 		list.push_back(slider("scrollSpeed", "camera", "Scroll speed", rs.scrollSpeed, 0.1f, 5.0f));
-		list.push_back(slider("shiftScrollFactor", "camera", "Scroll speed with Shift", rs.shiftScrollFactor, 1.0f, 10.0f, "%.1f"));
-		list.push_back(slider("cameraRotationSpeed", "camera", "Camera rotation speed", rs.mouseLookSensitivity, 0.001f, 0.05f, "%.3f"));
+		list.push_back(slider("shiftScrollFactor", "camera", "Scroll speed held faster (Shift)", rs.shiftScrollFactor, 1.0f, 10.0f, "%.1f"));
 		list.push_back(slider("minHeight", "camera", "Lowest height above ground", rs.minHeightAboveGround, 0.5f, 50.0f, "%.1f"));
 		list.push_back(slider("maxHeight", "camera", "Highest camera height", rs.maxHeight, 100.0f, 3000.0f, "%.0f"));
-		list.push_back(toggle("invertMouseWheel", "camera", "Invert mouse wheel", rs.invertMouseWheel));
 		list.push_back(toggle("fixedCamera", "camera", "Fixed camera (no free look)", rs.fixedCamera));
 
 		// Sound
@@ -420,7 +423,9 @@ const std::vector<MenuPage>& GetMenuPages()
 		{ "picture", "Picture", "Graphics" },
 		{ "quality", "Anti-aliasing", "Graphics" },
 		{ "effects", "Effects", "Graphics" },
-		{ "camera", "Camera", "" },
+		{ "keyboard", "Keyboard", "Controls" },
+		{ "mouse", "Mouse", "Controls" },
+		{ "camera", "Camera", "Controls" },
 		{ "interface", "Interface", "" },
 		{ "sound", "Sound", "" },
 		{ "system", "System", "" },
@@ -445,6 +450,7 @@ const MenuOption* FindMenuOption(const std::string& id)
 
 void SaveMenuOptions()
 {
+	SaveKeyBindings(); // (into g_settings, written to wkconfig.json with the rest)
 	g_renderSettings.save();
 	SoundPlayer::getSoundPlayer()->applyVolumes();
 	Matchmaking::get().settingsChanged();
@@ -464,5 +470,6 @@ void RevertMenuOptions()
 	if (!g_optionsSnapshot.is_null())
 		g_settings = g_optionsSnapshot;
 	g_renderSettings.load();
+	LoadKeyBindings();
 	SoundPlayer::getSoundPlayer()->applyVolumes();
 }

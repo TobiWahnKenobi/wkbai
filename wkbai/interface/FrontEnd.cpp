@@ -6,6 +6,7 @@
 #include "../terrain.h"
 #include "LuaScripts.h"
 #include "MenuOptions.h"
+#include "KeyBindings.h"
 #include "CampaignProfile.h"
 #include "../gfx/BitmapFont.h"
 #include "../gfx/bitmap.h"
@@ -856,6 +857,62 @@ struct FrontEnd::Impl {
 		lua.set_function("isOptionEnabled", [](const std::string& id) {
 			const MenuOption* o = FindMenuOption(id);
 			return o && (!o->enabled || o->enabled());
+		});
+		// The key bindings (KeyBindings.h), for the Keyboard page; slots 1 and 2, keys as text
+		// ("Ctrl+F12"; "" none)
+		lua.set_function("getKeyActions", [this]() {
+			sol::table list = lua.create_table();
+			int i = 1;
+			for (const KeyActionInfo& info : GetKeyActions()) {
+				sol::table t = lua.create_table();
+				t["id"] = info.id;
+				t["name"] = info.name;
+				t["group"] = info.group;
+				t["cheat"] = info.cheat;
+				list[i++] = t;
+			}
+			return list;
+		});
+		lua.set_function("getKeyBinding", [](const std::string& id, int slot) {
+			const KeyActionInfo* info = FindKeyAction(id);
+			return info ? GetKeyBinding(info->action, slot - 1).text() : std::string();
+		});
+		lua.set_function("getDefaultKeyBinding", [](const std::string& id, int slot) {
+			const KeyActionInfo* info = FindKeyAction(id);
+			return info && slot >= 1 && slot <= KEY_SLOTS ? info->defaults[slot - 1].text() : std::string();
+		});
+		lua.set_function("isKeyBindingDefault", [](const std::string& id) {
+			const KeyActionInfo* info = FindKeyAction(id);
+			return !info || KeyBindingIsDefault(info->action);
+		});
+		lua.set_function("setKeyBinding", [](const std::string& id, int slot, const std::string& key) {
+			if (const KeyActionInfo* info = FindKeyAction(id))
+				SetKeyBinding(info->action, slot - 1, KeyChord::parse(key));
+		});
+		lua.set_function("resetKeyBinding", [](const std::string& id) {
+			if (const KeyActionInfo* info = FindKeyAction(id))
+				ResetKeyBinding(info->action);
+		});
+		lua.set_function("resetAllKeyBindings", []() { ResetAllKeyBindings(); });
+		// the other actions' slots that this key would clash with: { { id, slot, name }, ... }
+		lua.set_function("getKeyConflicts", [this](const std::string& id, int slot, const std::string& key) {
+			sol::table list = lua.create_table();
+			if (const KeyActionInfo* info = FindKeyAction(id)) {
+				int i = 1;
+				for (const KeyConflict& c : FindKeyConflicts(info->action, slot - 1, KeyChord::parse(key)))
+					list[i++] = lua.create_table_with("id", KeyActionOf(c.action).id, "slot", c.slot + 1, "name", KeyActionOf(c.action).name);
+			}
+			return list;
+		});
+		lua.set_function("beginKeyCapture", []() { BeginKeyCapture(); });
+		// "waiting", "done" (and the key's text) or "cancelled"
+		lua.set_function("pollKeyCapture", []() {
+			KeyChord c;
+			switch (PollKeyCapture(c)) {
+			case KeyCaptureResult::DONE: return std::make_tuple(std::string("done"), c.text());
+			case KeyCaptureResult::WAITING: return std::make_tuple(std::string("waiting"), std::string());
+			default: return std::make_tuple(std::string("cancelled"), std::string());
+			}
 		});
 		lua.set_function("beginEditOptions", []() { BeginEditMenuOptions(); });
 		lua.set_function("saveOptions", []() { SaveMenuOptions(); });

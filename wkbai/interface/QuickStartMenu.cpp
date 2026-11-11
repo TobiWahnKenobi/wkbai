@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "QuickStartMenu.h"
+#include "KeyBindings.h"
 #include "../util/LoadingProgress.h"
 #include "../file.h"
 #include "../imgui/imgui.h"
@@ -845,7 +846,7 @@ void QuickStartMenu::launchGame()
 			Matchmaking::get().tick();
 			// F1: the server's window (the whole game's state, editable): a cheat key, as F2 and F9
 			// (closing it always works)
-			if (g_keyPressed[SDL_SCANCODE_F1] && (onServerUi || cliui.cheatKeysAllowed())) {
+			if (onServerUi ? KeyPressedUngated(KeyAction::ServerWindow) : (KeyPressed(KeyAction::ServerWindow) && cliui.cheatKeysAllowed())) {
 				onServerUi = !onServerUi;
 				if (onServerUi)
 					srvMutex.lock();

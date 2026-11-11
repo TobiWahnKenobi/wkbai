@@ -51,6 +51,7 @@
 #define SOL_NO_CHECK_NUMBER_PRECISION 1
 #include <sol/sol.hpp>
 #include "FrontEnd.h"
+#include "KeyBindings.h"
 #include "LuaScripts.h"
 #include "../gameset/finder.h"
 #include "../gameset/Footprint.h"
@@ -181,6 +182,11 @@ namespace {
 		else
 			return std::nullopt;
 	}
+}
+
+ClientInterface::~ClientInterface()
+{
+	SetKeyCheatGate(nullptr);
 }
 
 bool ClientInterface::cheatKeysAllowed() const
@@ -2742,6 +2748,7 @@ void ClientInterface::chatFrame()
 			client->sendMessage(g_settings.value("playerName", std::string("Player")) + ": " + text);
 	}
 
+	// (while typing, Enter sends and Esc closes, whatever the chat key is)
 	const bool enter = g_keyPressed[SDL_SCANCODE_RETURN] || g_keyPressed[SDL_SCANCODE_KP_ENTER];
 	if (chatOpen) {
 		if (g_keyPressed[SDL_SCANCODE_ESCAPE])
@@ -2755,10 +2762,12 @@ void ClientInterface::chatFrame()
 		std::fill(std::begin(g_keyDown), std::end(g_keyDown), false);
 		std::fill(std::begin(g_keyPressed), std::end(g_keyPressed), false);
 	}
-	else if (enter && !ImGui::GetIO().WantTextInput) {
+	else if (KeyPressed(KeyAction::Chat) && !ImGui::GetIO().WantTextInput) {
 		chatOpen = chatFocus = true;
 		chatInput[0] = 0;
-		g_keyPressed[SDL_SCANCODE_RETURN] = g_keyPressed[SDL_SCANCODE_KP_ENTER] = false;
+		for (int s = 0; s < KEY_SLOTS; s++)
+			if (const KeyChord c = GetKeyBinding(KeyAction::Chat, s); !c.empty() && c.key < (int)std::size(g_keyPressed))
+				g_keyPressed[c.key] = false;
 	}
 
 }
@@ -2808,11 +2817,14 @@ void ClientInterface::controlGroupKeys()
 {
 	if (chatOpen || ImGui::GetIO().WantTextInput)
 		return;
+	// (the key bindings' groups 1-9 then 0; group numbers here 0-9 as the digits)
 	int group = -1;
-	for (int i = 0; i < 10 && group == -1; i++) {
-		const int top = i == 0 ? SDL_SCANCODE_0 : SDL_SCANCODE_1 + i - 1;
-		if (g_keyPressed[top] || (i > 0 && g_keyPressed[SDL_SCANCODE_KP_1 + i - 1]))
-			group = i;
+	bool store = false;
+	for (int k = 0; k < 10 && group == -1; k++) {
+		if (KeyPressed((KeyAction)((int)KeyAction::GroupStore1 + k)))
+			group = (k + 1) % 10, store = true;
+		else if (KeyPressed((KeyAction)((int)KeyAction::GroupSelect1 + k)))
+			group = (k + 1) % 10;
 	}
 	if (group == -1)
 		return;
@@ -2823,7 +2835,7 @@ void ClientInterface::controlGroupKeys()
 	};
 	for (auto it = stored.begin(); it != stored.end();)
 		it = usable(it->get()) ? std::next(it) : stored.erase(it);
-	if (g_modCtrl) {
+	if (store) {
 		stored.clear();
 		for (const CliGORef& ref : selection)
 			if (usable(ref.get()))
@@ -2885,6 +2897,9 @@ void ClientInterface::iter()
 			lang.load("Languages\\Language.txt");
 		languageLoaded = true;
 	}
+	// the cheat keys of the key bindings (F1, F2, F9 by default) work as this says, whatever key
+	// they are bound to
+	SetKeyCheatGate([this]() { return cheatKeysAllowed(); });
 	prepareLevelBeforeFrame();
 	// (from here a frame is being built: LoadingTick draws none)
 	LoadingSetInFrame(true);
@@ -2896,7 +2911,7 @@ void ClientInterface::iter()
 	// Esc, or the top bar's Settings button (openInGameMenu from the HUD script, the frame before)
 	const bool menuRequested = openMenuRequested;
 	openMenuRequested = false;
-	if (frontEnd && !frontEnd->isOpen() && (g_keyPressed[SDL_SCANCODE_ESCAPE] || menuRequested) && client->getLevel()) {
+	if (frontEnd && !frontEnd->isOpen() && (KeyPressed(KeyAction::OpenMenu) || menuRequested) && client->getLevel()) {
 		frontEnd->setSinglePlayer(singlePlayer);
 		frontEnd->setCanSave((bool)saveGame);
 		frontEnd->open("ingame");
@@ -3049,18 +3064,28 @@ void ClientInterface::iter()
 	Vector3 forward = client->camera.direction.normal2xz();
 	Vector3 strafe = forward.cross(Vector3(0, 1, 0));
 	// Shift scrolls faster
-	const float camSpeed = g_renderSettings.scrollSpeed * (g_modShift ? g_renderSettings.shiftScrollFactor : 1.0f) * 2.0f * cliDeltaTime / (1000.0f / 60.0f);
+	const float camSpeed = g_renderSettings.scrollSpeed * (KeyDown(KeyAction::CameraFast) ? g_renderSettings.shiftScrollFactor : 1.0f) * 2.0f * cliDeltaTime / (1000.0f / 60.0f);
 	forward *= camSpeed;
 	strafe *= camSpeed;
 
-	if (g_keyDown[SDL_SCANCODE_UP] || g_keyDown[SDL_SCANCODE_W])
+	if (KeyDown(KeyAction::CameraForward))
 		client->camera.position += forward;
-	if (g_keyDown[SDL_SCANCODE_DOWN] || g_keyDown[SDL_SCANCODE_S])
+	if (KeyDown(KeyAction::CameraBack))
 		client->camera.position -= forward;
-	if (g_keyDown[SDL_SCANCODE_RIGHT] || g_keyDown[SDL_SCANCODE_D])
+	if (KeyDown(KeyAction::CameraRight))
 		client->camera.position -= strafe;
-	if (g_keyDown[SDL_SCANCODE_LEFT] || g_keyDown[SDL_SCANCODE_A])
+	if (KeyDown(KeyAction::CameraLeft))
 		client->camera.position += strafe;
+	// the mouse at the window's edge (the Mouse page's option): not in test runs, which would
+	// read the real mouse, nor over the menu or an ImGui window
+	if (g_renderSettings.edgeScroll && !BenchmarkEnabled() && SDL_GetMouseFocus() && !ImGui::GetIO().WantCaptureMouse
+		&& !(frontEnd && frontEnd->isOpen())) {
+		constexpr int edge = 3;
+		if (g_mouseY < edge) client->camera.position += forward;
+		if (g_mouseY >= g_windowHeight - edge) client->camera.position -= forward;
+		if (g_mouseX >= g_windowWidth - edge) client->camera.position -= strafe;
+		if (g_mouseX < edge) client->camera.position += strafe;
+	}
 
 	// moves the camera over the ground, at its height and angle, so that the middle of the view
 	// falls on target (looking level or up: straight over it)
@@ -3077,7 +3102,7 @@ void ClientInterface::iter()
 	// "formation": true, "presses": k }, ... ] } selects the player's first n of that type that
 	// are in no formation (put into a new one first if asked), presses Space k times, 10 frames
 	// apart, and prints where each press took the camera
-	bool spaceTestPrint = false;
+	bool spaceTestPrint = false, spaceTestPress = false;
 	if (BenchmarkEnabled() && client->getLevel() && client->clientPlayer) {
 		static const nlohmann::json steps = g_settings.value("benchmark", nlohmann::json::object()).value("spaceTest", nlohmann::json::array());
 		static size_t step = 0;
@@ -3121,7 +3146,7 @@ void ClientInterface::iter()
 				wait = 5;
 			}
 			else if (press < s.value("presses", 1)) {
-				g_keyPressed[SDL_SCANCODE_SPACE] = true;
+				spaceTestPress = true;
 				spaceTestPrint = true;
 				press++;
 				wait = 10;
@@ -3150,7 +3175,7 @@ void ClientInterface::iter()
 	std::optional<Vector3> cameraJump;
 	size_t spaceStopCount = 0;
 	ClientGameObject* spaceStop = nullptr;
-	if (g_keyPressed[SDL_SCANCODE_SPACE] && !ImGui::GetIO().WantTextInput) {
+	if ((KeyPressed(KeyAction::CameraToSelection) || spaceTestPress) && !ImGui::GetIO().WantTextInput) {
 		std::map<uint32_t, ClientGameObject*> stops;
 		for (ClientGameObject* sel : selection) {
 			if (!sel)
@@ -3213,7 +3238,7 @@ void ClientInterface::iter()
 			}
 		}
 		if (getenv("WKB_TRACE_CAMERA")) printf("CAMERA pos (%.1f,%.1f,%.1f) pitch %.2f ground %.1f zoom %.2f\n", cp.x, cp.y, cp.z, client->camera.orientation.x, ground, fixedZoom);
-		if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+		if (KeyDown(KeyAction::CameraRotate) || g_mouseDown[SDL_BUTTON_MIDDLE]) {
 			if (!camroton) {
 				camrotoffx = g_mouseX;
 				camrotoriy = client->camera.orientation.y;
@@ -3224,7 +3249,7 @@ void ClientInterface::iter()
 		else
 			camroton = false;
 	}
-	else if (g_keyDown[SDL_SCANCODE_KP_0] || g_mouseDown[SDL_BUTTON_MIDDLE]) {
+	else if (KeyDown(KeyAction::CameraRotate) || g_mouseDown[SDL_BUTTON_MIDDLE]) {
 		if (!camroton) {
 			camrotoffx = g_mouseX;
 			camrotoffy = g_mouseY;
@@ -3266,21 +3291,21 @@ void ClientInterface::iter()
 					client->sendEnvironmentDebug(e[0].get<std::string>(), e[1].get<float>());
 		}
 	}
-	if (g_keyPressed[SDL_SCANCODE_F6] && !ImGui::GetIO().WantTextInput)
+	if (KeyPressed(KeyAction::Statistics) && !ImGui::GetIO().WantTextInput)
 		statisticsOpen = !statisticsOpen;
-	if (g_keyPressed[SDL_SCANCODE_F7] && !ImGui::GetIO().WantTextInput)
+	if (KeyPressed(KeyAction::Timeline) && !ImGui::GetIO().WantTextInput)
 		timelineOpen = !timelineOpen;
-	if (g_keyPressed[SDL_SCANCODE_F12] && (SDL_GetModState() & SDL_KMOD_CTRL) && !ImGui::GetIO().WantTextInput)
+	if (KeyPressed(KeyAction::FrameTimings) && !ImGui::GetIO().WantTextInput)
 		frameTimingsOpen = !frameTimingsOpen;
 	// test runs: "benchmark": { ..., "frameTimings": true } opens the frame-time window
 	static const bool benchTimings = BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("frameTimings", false);
 	if (benchTimings)
 		frameTimingsOpen = true;
-	if (g_keyPressed[SDL_SCANCODE_F8] && withServer && singlePlayer && editorAllowed && !replayMode)
+	if (KeyPressed(KeyAction::MapEditor) && withServer && singlePlayer && editorAllowed && !replayMode)
 		editorOn = !editorOn;
 	// the environment's debug panel: in a skirmish with cheat mode on only (the game setting)
 	const bool cheats = cheatKeysAllowed();
-	if (g_keyPressed[SDL_SCANCODE_F9] && cheats && !ImGui::GetIO().WantTextInput)
+	if (KeyPressed(KeyAction::EnvironmentPanel) && cheats && !ImGui::GetIO().WantTextInput)
 		environmentDebugOpen = !environmentDebugOpen;
 	if (!cheats)
 		environmentDebugOpen = false;
@@ -3451,18 +3476,18 @@ void ClientInterface::iter()
 		}
 	}
 	// (a replay's controls have their own keys)
-	if (g_keyPressed[SDL_SCANCODE_P] && !replayMode) {
+	if (KeyPressed(KeyAction::Pause) && !replayMode) {
 		static bool pauseState = false;
 		pauseState = !pauseState;
 		client->sendPauseRequest(pauseState);
 	}
-	if (g_keyPressed[SDL_SCANCODE_KP_PLUS] && !replayMode) {
+	if (KeyPressed(KeyAction::SpeedUp) && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed * 2.0f);
 	}
-	if (g_keyPressed[SDL_SCANCODE_KP_MINUS] && !replayMode) {
+	if (KeyPressed(KeyAction::SlowDown) && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed / 2.0f);
 	}
-	if (g_keyPressed[SDL_SCANCODE_DELETE]) {
+	if (KeyPressed(KeyAction::DeleteSelected) && !ImGui::GetIO().WantTextInput) {
 		// in the map editor, removed so that undo can place them again
 		if (editorOn && withServer)
 			editorDeleteSelection();
@@ -3478,12 +3503,12 @@ void ClientInterface::iter()
 	static bool debuggerOn = false;
 	static bool uiScriptOn = true;
 	// F2: the client's debugger (every object, the dev mode, the sun): a cheat key
-	if (g_keyPressed[SDL_SCANCODE_F2] && cheatKeysAllowed()) {
+	if (KeyPressed(KeyAction::Debugger) && cheatKeysAllowed()) {
 		debuggerOn = !debuggerOn;
 	}
 	if (debuggerOn && !cheatKeysAllowed())
 		debuggerOn = false;
-	if (g_keyPressed[SDL_SCANCODE_F3]) {
+	if (KeyPressed(KeyAction::HideInterface) && !ImGui::GetIO().WantTextInput) {
 		uiScriptOn = !uiScriptOn;
 	}
 
@@ -3517,7 +3542,7 @@ void ClientInterface::iter()
 	// F10: the Options screen (the in-game menu's, over the game; Back goes to the in-game menu),
 	// pausing a single-player game as Esc does
 	static bool settingsOn = false;
-	if (g_keyPressed[SDL_SCANCODE_F10] && frontEnd && !frontEnd->isOpen() && client->getLevel()) {
+	if (KeyPressed(KeyAction::OpenOptions) && frontEnd && !frontEnd->isOpen() && client->getLevel()) {
 		frontEnd->setSinglePlayer(singlePlayer);
 		frontEnd->setCanSave((bool)saveGame);
 		frontEnd->open("ingame");
@@ -3536,13 +3561,13 @@ void ClientInterface::iter()
 		stampdownQuarter = 0;
 	}
 	if (stampdownBlueprint && !ImGui::GetIO().WantTextInput) {
-		if (g_keyPressed[SDL_SCANCODE_LEFTBRACKET])
+		if (KeyPressed(KeyAction::TurnBuildingLeft))
 			stampdownQuarter = (stampdownQuarter + 1) % 4;
-		if (g_keyPressed[SDL_SCANCODE_RIGHTBRACKET])
+		if (KeyPressed(KeyAction::TurnBuildingRight))
 			stampdownQuarter = (stampdownQuarter + 3) % 4;
 	}
 
-	if (g_keyPressed[SDL_SCANCODE_E]) {
+	if (KeyPressed(KeyAction::NextCommand) && !ImGui::GetIO().WantTextInput) {
 		// select available cursor command next to the one currently shown
 		auto it = std::find_if(availableCursorCommands.begin(), availableCursorCommands.end(), [&](auto& pair) { return pair.second == rightClickCommand; });
 		if (it != availableCursorCommands.end()) {

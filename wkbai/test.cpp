@@ -41,6 +41,7 @@
 #include "Camera.h"
 #include "gfx/DefaultTerrainRenderer.h"
 #include "interface/ClientInterface.h"
+#include "interface/KeyBindings.h"
 #include "scene.h"
 #include <SDL3/SDL_timer.h>
 #include "SoundPlayer.h"
@@ -6767,6 +6768,159 @@ void Test_ChronicleSweep()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// The key bindings (interface/KeyBindings.cpp): a key given to another action fires it and the
+// old key no longer does; Ctrl+digit and the digit alone are two actions; held keys ignore extra
+// modifiers; conflicts only where both actions work; the bindings through wkconfig.json and
+// back; the cheat keys only with the cheat gate open, whatever key they have, and that gate
+// being ClientInterface::cheatKeysAllowed
+void Test_KeyBindings()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	using A = KeyAction;
+	auto clearKeys = []() {
+		std::fill(std::begin(g_keyDown), std::end(g_keyDown), false);
+		std::fill(std::begin(g_keyPressed), std::end(g_keyPressed), false);
+		g_modCtrl = g_modShift = g_modAlt = false;
+	};
+	auto press = [&](SDL_Scancode sc, bool ctrl = false, bool shift = false) {
+		clearKeys();
+		g_keyPressed[sc] = g_keyDown[sc] = true;
+		g_modCtrl = ctrl;
+		g_modShift = shift;
+	};
+	ResetAllKeyBindings();
+
+	// every default key as text and back
+	bool roundTrip = true;
+	std::set<std::string> ids;
+	for (const KeyActionInfo& info : GetKeyActions())
+		for (int s = 0; s < KEY_SLOTS; s++) {
+			ids.insert(info.id);
+			const KeyChord c = info.defaults[s];
+			if (KeyChord::parse(c.text()) != c) {
+				roundTrip = false;
+				printf("  %s slot %d: \"%s\" read back differently\n", info.id, s, c.text().c_str());
+			}
+		}
+	check(roundTrip, "every default key written as text and read back the same (" + std::to_string(GetKeyActions().size()) + " actions)");
+	check(ids.size() == GetKeyActions().size() && GetKeyActions().size() == (size_t)A::COUNT, "every action in the table once, with an id of its own");
+	check(KeyChord::parse("Ctrl+F12") == KeyChord{ SDL_SCANCODE_F12, KeyChord::CTRL } && KeyChord::parse("Keypad 0").key == SDL_SCANCODE_KP_0
+		&& KeyChord::parse("nonsense").empty(), "\"Ctrl+F12\", \"Keypad 0\" read; an unknown name gives no key");
+
+	// rebinding: Pause from P to K
+	press(SDL_SCANCODE_P);
+	check(KeyPressed(A::Pause), "P pauses by default");
+	SetKeyBinding(A::Pause, 0, KeyChord{ SDL_SCANCODE_K, 0 });
+	press(SDL_SCANCODE_K);
+	check(KeyPressed(A::Pause), "Pause bound to K: K pauses");
+	press(SDL_SCANCODE_P);
+	check(!KeyPressed(A::Pause), "Pause bound to K: P no longer does");
+	check(KeyPressed(A::ReplayPause), "P still pauses a replay (its own action)");
+	press(SDL_SCANCODE_K, true);
+	check(!KeyPressed(A::Pause), "Ctrl+K isn't K");
+	// a held key: Scroll forward moved from W/Up to I
+	SetKeyBinding(A::CameraForward, 1, KeyChord{ SDL_SCANCODE_I, 0 });
+	press(SDL_SCANCODE_I, false, true);
+	check(KeyDown(A::CameraForward), "Scroll forward on I: held with Shift (faster) it still scrolls");
+	press(SDL_SCANCODE_W);
+	check(!KeyDown(A::CameraForward), "Scroll forward on I: W no longer scrolls");
+	press(SDL_SCANCODE_LSHIFT);
+	check(KeyDown(A::CameraFast), "Left Shift alone held: scroll faster");
+
+	// control groups: Ctrl+3 stores, 3 selects; keypad 3 the same
+	press(SDL_SCANCODE_3, true);
+	check(KeyPressed(A::GroupStore3) && !KeyPressed(A::GroupSelect3), "Ctrl+3 stores group 3, doesn't select it");
+	press(SDL_SCANCODE_3);
+	check(KeyPressed(A::GroupSelect3) && !KeyPressed(A::GroupStore3), "3 selects group 3");
+	press(SDL_SCANCODE_KP_3, true);
+	check(KeyPressed(A::GroupStore3), "Ctrl+keypad 3 stores group 3");
+	press(SDL_SCANCODE_0);
+	check(KeyPressed(A::GroupSelect0) && !KeyPressed(A::CameraRotate), "0 selects group 0 (keypad 0 turns the camera)");
+
+	// conflicts: only where both work
+	auto conflictsWith = [](A a, int slot, KeyChord c, A other) {
+		for (const KeyConflict& k : FindKeyConflicts(a, slot, c))
+			if (k.action == other) return true;
+		return false;
+	};
+	check(conflictsWith(A::Pause, 0, KeyChord{ SDL_SCANCODE_SPACE, 0 }, A::CameraToSelection), "Space for Pause clashes with Jump to the selection");
+	check(!conflictsWith(A::Pause, 0, KeyChord{ SDL_SCANCODE_L, 0 }, A::ReplayLog), "L for Pause doesn't clash with the replay's L (not in a game)");
+	check(conflictsWith(A::EditorGrab, 0, KeyChord{ SDL_SCANCODE_E, 0 }, A::NextCommand), "E for the editor's Move clashes with Next command (the editor is in a game)");
+	check(FindKeyConflicts(A::Pause, 0, KeyChord{ SDL_SCANCODE_K, 0 }).empty(), "K for Pause clashes with nothing");
+	check(!conflictsWith(A::GroupSelect3, 0, KeyChord{ SDL_SCANCODE_3, KeyChord::CTRL }, A::GroupSelect3) && conflictsWith(A::GroupSelect3, 0, KeyChord{ SDL_SCANCODE_3, KeyChord::CTRL }, A::GroupStore3),
+		"Ctrl+3 for Select group 3 clashes with Store group 3");
+
+	// through wkconfig.json: only the changed actions written; read back as they were
+	SaveKeyBindings();
+	const nlohmann::json written = g_settings.value("keyBindings", nlohmann::json::object());
+	check(written.size() == 2 && written.contains("pause") && written.contains("cameraForward"), "keyBindings holds the two changed actions only: " + written.dump());
+	SaveSettings();
+	ResetAllKeyBindings();
+	check(GetKeyBinding(A::Pause, 0).key == SDL_SCANCODE_P, "reset to defaults: Pause on P again");
+	LoadSettings();
+	LoadKeyBindings();
+	check(GetKeyBinding(A::Pause, 0) == KeyChord{ SDL_SCANCODE_K, 0 } && GetKeyBinding(A::Pause, 1).empty(), "after saving and loading wkconfig.json: Pause on K");
+	check(GetKeyBinding(A::CameraForward, 0).key == SDL_SCANCODE_UP && GetKeyBinding(A::CameraForward, 1).key == SDL_SCANCODE_I, "after saving and loading: Scroll forward on Up and I");
+	check(KeyBindingIsDefault(A::Chat) && GetKeyBinding(A::FrameTimings, 0) == KeyChord{ SDL_SCANCODE_F12, KeyChord::CTRL }, "after saving and loading: the others as they were");
+	press(SDL_SCANCODE_K);
+	check(KeyPressed(A::Pause), "after loading: K pauses");
+	press(SDL_SCANCODE_P);
+	check(!KeyPressed(A::Pause), "after loading: P doesn't");
+
+	// the cheat keys: shut without a gate whatever key they are on
+	SetKeyBinding(A::Debugger, 0, KeyChord{ SDL_SCANCODE_J, 0 });
+	SetKeyCheatGate(nullptr);
+	press(SDL_SCANCODE_J);
+	check(!KeyPressed(A::Debugger) && KeyPressedUngated(A::Debugger), "Debugger on J: no cheats, J does nothing (closing works: ungated)");
+	press(SDL_SCANCODE_F2);
+	check(!KeyPressed(A::Debugger), "Debugger on J: F2 does nothing either");
+	bool gateOpen = false;
+	SetKeyCheatGate([&]() { return gateOpen; });
+	press(SDL_SCANCODE_J);
+	check(!KeyPressed(A::Debugger), "cheat gate shut: J does nothing");
+	gateOpen = true;
+	check(KeyPressed(A::Debugger), "cheat gate open: J opens the debugger");
+	SetKeyBinding(A::ServerWindow, 0, KeyChord{ SDL_SCANCODE_LALT, 0 });
+	press(SDL_SCANCODE_LALT);
+	check(KeyPressed(A::ServerWindow), "cheat gate open: the server window on Left Alt alone");
+
+	// the gate in a game: ClientInterface::cheatKeysAllowed (single player, a skirmish's cheat mode)
+	{
+		LoadBCP("data.bcp");
+		Server server;
+		Client client(true);
+		ClientInterface cliui(&client, nullptr);
+		cliui.withServer = [&](const std::function<void(Server&)>& f) { f(server); };
+		cliui.singlePlayer = true;
+		SetKeyCheatGate([&]() { return cliui.cheatKeysAllowed(); });
+		press(SDL_SCANCODE_J);
+		server.cheatMode = false;
+		check(!KeyPressed(A::Debugger), "single player without cheat mode: the debugger's key (J) does nothing");
+		server.cheatMode = true;
+		check(KeyPressed(A::Debugger), "single player with cheat mode: J opens the debugger");
+		cliui.singlePlayer = false;
+		check(!KeyPressed(A::Debugger), "multiplayer, cheat mode or not: J does nothing");
+		press(SDL_SCANCODE_F9);
+		cliui.singlePlayer = true;
+		server.cheatMode = false;
+		check(!KeyPressed(A::EnvironmentPanel), "F9 (the environment panel) without cheat mode: nothing");
+	}
+	check(!KeyCheatsAllowed(), "the ClientInterface gone: its gate let go, no cheats");
+
+	// back to the defaults, in wkconfig.json too
+	ResetAllKeyBindings();
+	SaveKeyBindings();
+	check(!g_settings.contains("keyBindings"), "all defaults: no keyBindings in wkconfig.json");
+	SaveSettings();
+	clearKeys();
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -6827,6 +6981,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_UnitSplashKills, "Unit kills by splash (rockets at a cluster) and none for an Act of God (lightning)"},
 {Test_ChronicleStory, "Chronicle story: the timeline's events told as a historian's paragraphs, the same every time"},
 {Test_ChronicleSweep, "Chronicle sweep: every season, weather, time of day and kind of event told, the plain rules checked"},
+{Test_KeyBindings, "Key bindings: a key rebound fires its action and the old one not, kept through wkconfig.json, cheat keys gated"},
 };
 
 void LaunchTest()
