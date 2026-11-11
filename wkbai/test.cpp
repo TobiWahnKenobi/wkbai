@@ -7191,6 +7191,93 @@ void Test_GameOverView()
 		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
 		check(server.finishedPlayers.empty(), "a new game: nobody finished");
 	}
+	// King of the Hill (Valhalla's Victory Point Limit, Valhalla Win Condition.cpp): the winner's
+	// Victory Timer task, run on one of its buildings, as the game set does when its Victory Time
+	// reaches the limit. Once with each player winning (the game set's finder takes them in id
+	// order, so both orders are covered): the winner won, without the defeat box or a second win
+	// box; the other lost, with the defeat box.
+	// (winner 0: Valhalla's other ending, A's last unit dead, "I am the Last Unit to Die": the
+	// patched reactions as before, B the last one alive with the armies' win box)
+	for (const uint32_t winnerId : { idB, idA, 0u }) {
+		const bool armies = winnerId == 0;
+		const uint32_t loserId = armies ? idA : winnerId == idA ? idB : idA;
+		Server server;
+		Client clientA(true), clientB(true);
+		NetLocalBuffer a1, a2, b1, b2;
+		NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+		server.addClient(&srvA);
+		server.addClient(&srvB);
+		clientA.serverLink = &cliA;
+		clientB.serverLink = &cliB;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		server.setClientPlayerControl(0, idA);
+		server.setClientPlayerControl(1, idB);
+		const GameSet& gs = *server.gameSet;
+		ServerGameObject* winner = server.findObject(armies ? idB : winnerId);
+		ServerGameObject* loser = server.findObject(loserId);
+		const int limit = gs.items.names.getIndex("Victory Time Limit"), time = gs.items.names.getIndex("Victory Time");
+		ServerGameObject* hill = nullptr;
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (!hill && child->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						hill = child->dyncast<ServerGameObject>();
+					self(child, self);
+				}
+		};
+		walk(winner, walk);
+		if (!winner || !loser || limit < 0 || time < 0 || !hill) {
+			check(false, "King of the Hill: set up");
+			continue;
+		}
+		for (ServerGameObject* p : { winner, loser })
+			p->setItem(limit, 1000.0f);
+		winner->setItem(time, armies ? 300.0f : 1000.0f);
+		loser->setItem(time, 300.0f);
+		server.timeManager.unpause();
+		server.startLevel();
+		auto step = [&](int frames) {
+			for (int i = 0; i < frames; i++) {
+				server.tick();
+				clientA.tick();
+				clientB.tick();
+				SDL_Delay(5);
+			}
+		};
+		step(30);
+		if (armies) {
+			SrvScriptContext ctx(&server, loser);
+			GSFileParser gsf("SEND_EVENT \"I am the Last Unit to Die\" FINDER_SELF\n");
+			std::unique_ptr<Action> act(ReadAction(gsf, gs));
+			act->run(&ctx);
+		}
+		else {
+			SrvScriptContext ctx(&server, hill);
+			// the block as the task has it (UPON_CONDITION reads up to its END_UPON_CONDITION)
+			GSFileParser gsf("UPON_CONDITION EQUATION_RESULT \"Player Has Won the Game\" FINDER_SELF\n"
+				"ACTION SET_ITEM \"Alive Multiplayer Player\" FINDER_PLAYER CONSTANT 1\n"
+				"ACTION SEND_EVENT \"You have lost the Valhalla Game\" FINDER_RESULTS \"Alive Multiplayer Players\"\n"
+				"ACTION DISPLAY_GAME_TEXT_WINDOW \"VALHALLA_WIN\" FINDER_PLAYER\n"
+				"END_UPON_CONDITION\n");
+			std::unique_ptr<Action> act(ReadAction(gsf, gs));
+			act->run(&ctx);
+		}
+		step(30);
+		Client& wc = winner->id == idA ? clientA : clientB;
+		Client& lc = winner->id == idA ? clientB : clientA;
+		auto shown = [&](Client& c, const char* name) { const int x = gs.gameTextWindows.names.getIndex(name); return x >= 0 && c.gtwStates.count(x) > 0; };
+		const std::string who = armies ? std::string("Valhalla, A's armies destroyed: ") : "King of the Hill, player " + std::to_string(winnerId) + " winning: ";
+		printf("UNITTEST %swinner %d, loser %d; winner's boxes: win %d, armies win %d, defeat %d; loser's defeat box %d\n", who.c_str(), wc.ownOutcome(), lc.ownOutcome(),
+			(int)shown(wc, "VALHALLA_WIN"), (int)shown(wc, "VALHALLA_ARMIES_WIN"), (int)shown(wc, "VALHALLA_ARMIES_DESTROYED_TEXT"), (int)shown(lc, "VALHALLA_ARMIES_DESTROYED_TEXT"));
+		check(wc.ownOutcome() == 1, who + "the winner won");
+		check(lc.ownOutcome() == 2, who + "the other lost");
+		if (armies)
+			check(shown(wc, "VALHALLA_ARMIES_WIN") && !shown(wc, "VALHALLA_WIN") && !shown(wc, "VALHALLA_ARMIES_DESTROYED_TEXT"), who + "the winner sees the armies' win box, no defeat box");
+		else
+			check(shown(wc, "VALHALLA_WIN") && !shown(wc, "VALHALLA_ARMIES_WIN") && !shown(wc, "VALHALLA_ARMIES_DESTROYED_TEXT"), who + "the winner sees one win box, no defeat box");
+		check(shown(lc, "VALHALLA_ARMIES_DESTROYED_TEXT"), who + "the other sees its defeat box");
+		check(!(lc.gtwStates.count(gs.gameTextWindows.names.getIndex("VALHALLA_ARMIES_WIN"))), who + "the other no win box");
+	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 

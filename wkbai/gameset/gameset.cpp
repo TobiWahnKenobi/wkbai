@@ -664,6 +664,14 @@ void GameSet::parseFile(const char * fn, int pass)
 			}
 			case Tags::GAMESET_REACTION: {
 				Reaction &r = reactions.readRef(gsf);
+				// (a wkbai patch replaces the game set's reaction of that name: its triggers and
+				// actions, not adds to them; the blueprints that have it keep it)
+				if (g_parsingPatch) {
+					r.events.clear();
+					r.prTriggers.clear();
+					r.actions.actionList.clear();
+					r.actions.debugInfo.reset();
+				}
 				r.parse(gsf, *this);
 				break;
 			}
