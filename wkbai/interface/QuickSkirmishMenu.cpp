@@ -498,6 +498,11 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				server.environment.forceFireZ = force["fireAt"][1].get<float>();
 				server.environment.forceFireAt = force["fireAt"][2].get<float>();
 			}
+			if (force.contains("lightningAt") && force["lightningAt"].is_array() && force["lightningAt"].size() == 3) {
+				server.environment.forceLightningX = force["lightningAt"][0].get<float>();
+				server.environment.forceLightningZ = force["lightningAt"][1].get<float>();
+				server.environment.forceLightningAt = force["lightningAt"][2].get<float>();
+			}
 		}
 		server.startLevel();
 		// Without a human player, "Set AI Difficulty Level" (On Level Start) sets a Conscript or

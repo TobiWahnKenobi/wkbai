@@ -6340,6 +6340,130 @@ void Test_UnitSplashKills()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Lightning on buildings (redata's "wkbai patches\Lightning.cpp", the game set's own fire): two
+// enemy barracks struck by "Damage Done By Direct Lightning" as the Act of God and a thunderstorm
+// (ServerEnvironment::strikeLightning) run it, one with the caster's player as the fire's possible
+// source (the Act of God's task), one with none (a storm). Each loses only 5-10% of its Structural
+// Integrity, is set alight (Fire Strength, "Burning Buildings") and burns on; a soldier struck is
+// hurt as before (400 Hit Points); no unit is credited with what the fires destroy.
+void Test_LightningBuildings()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 99;
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	ServerGameObject* own = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* barracks = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone");
+	const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const int strike = gs.actionSequences.names.getIndex("Damage Done By Direct Lightning");
+	const int si = gs.items.names.getIndex("Structural Integrity");
+	const int siCap = gs.items.names.getIndex("Structural Integrity Capacity");
+	const int fire = gs.items.names.getIndex("Fire Strength (SI)");
+	const int hp = gs.items.names.getIndex("Hit Points");
+	const int burning = gs.aliases.names.getIndex("Burning Buildings");
+	const int source = gs.associations.names.getIndex("Possible Source Of Fire");
+	if (!own || !enemy || !barracks || !spear || strike < 0 || si < 0 || siCap < 0 || fire < 0 || hp < 0 || burning < 0 || source < 0) {
+		printf("UNITTEST not set up\n");
+		printf("UNITTEST FAILED (1)\n");
+		return;
+	}
+	const auto area = server.terrain->getPlayableArea();
+	const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+	auto at = [&](const Vector3& base, float x, float z) { Vector3 p = base + Vector3(x, 0, z); p.y = server.terrain->getHeight(p.x, p.z); return p; };
+	auto alive = [](ServerGameObject* o) { return o && !o->deleted && !(o->flags & ServerGameObject::fTerminated) && o->blueprint->name.rfind("Dead ", 0) != 0; };
+	auto credits = [&]() {
+		int n = 0;
+		for (auto* side : { own, enemy })
+			for (const auto& [type, list] : side->children)
+				for (CommonGameObject* o : list)
+					n += o->kills + o->buildingsDestroyed;
+		return n;
+	};
+	auto inAlias = [&](ServerGameObject* b) {
+		for (const auto& ref : server.aliases[burning])
+			if (ref.getFrom<Server>() == b)
+				return true;
+		return false;
+	};
+	auto strikeOn = [&](ServerGameObject* o) {
+		SrvScriptContext ctx(&server, o);
+		auto _ = ctx.change(ctx.sequenceExecutor, o);
+		gs.actionSequences[strike].run(&ctx);
+	};
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto run = [&](float seconds) {
+		for (int step = 0; step < (int)(seconds * 50.0f); step++) {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
+	};
+	const int creditedBefore = credits();
+	// two barracks of the enemy's, far from everything, 40 m apart (a fire spreads 25 m at most)
+	const Vector3 c = centre + Vector3(140, 0, 40);
+	SrvGORef struck[2] = { server.spawnObject(barracks, enemy, at(c, 0, 0), Vector3(0, 0, 0)),
+		server.spawnObject(barracks, enemy, at(c, 40, 0), Vector3(0, 0, 0)) };
+	float before[2], cap[2];
+	for (int i = 0; i < 2; i++) {
+		ServerGameObject* b = struck[i].get();
+		const std::string who = i == 0 ? "Act of God" : "storm";
+		before[i] = b->getItem(si);
+		cap[i] = b->getItem(siCap);
+		// the Act of God's task: the caster's player the fire's possible source; a storm: none
+		b->clearAssociates(source);
+		if (i == 0)
+			b->associateObject(source, own);
+		strikeOn(b);
+		const float lost = before[i] - b->getItem(si);
+		const float share = lost / std::max(cap[i], 1.0f);
+		printf("UNITTEST barracks %u (%s): %.0f of %.0f structural integrity -> %.0f (lost %.0f, %.1f%%), fire strength %.1f\n", b->id,
+			who.c_str(), before[i], cap[i], b->getItem(si), lost, share * 100.0f, b->getItem(fire));
+		check(share >= 0.05f && share <= 0.10f, who + ": only slight damage (" + std::to_string(share * 100.0f) + "%)");
+		check(b->getItem(fire) > 0.0f, who + ": the building is on fire");
+		check(inAlias(b), who + ": among the Burning Buildings");
+	}
+	// a soldier struck: as before
+	ServerGameObject* soldier = server.spawnObject(spear, enemy, at(c, 20, 60), Vector3(0, 0, 0));
+	const float soldierHp = soldier->getItem(hp);
+	strikeOn(soldier);
+	printf("UNITTEST soldier: %.0f -> %.0f hit points\n", soldierHp, soldier->getItem(hp));
+	// (400 taken, or all it had: the hit points stop at 0)
+	check(soldier->getItem(hp) <= std::max(0.0f, soldierHp - 399.0f), "a soldier struck loses 400 hit points, as before");
+	// the fires burn on (Father.cpp's "Process Fire" every 2.9 s)
+	float afterStrike[2];
+	for (int i = 0; i < 2; i++)
+		afterStrike[i] = struck[i]->getItem(si);
+	run(20.0f);
+	for (int i = 0; i < 2; i++) {
+		ServerGameObject* b = struck[i].get();
+		const bool standing = alive(b);
+		printf("UNITTEST barracks %d after 20 s: %.0f structural integrity, fire strength %.1f\n", i, standing ? b->getItem(si) : 0.0f, standing ? b->getItem(fire) : 0.0f);
+		check(standing && b->getItem(si) < afterStrike[i] && b->getItem(fire) > 0.0f, "the fire burns on (" + std::to_string(i) + ")");
+	}
+	// both brought close to their end (as a long fire would): they burn down; nobody credited
+	for (auto& r : struck)
+		if (alive(r.get()))
+			r->setItem(si, 20.0f);
+	run(60.0f);
+	int destroyed = 0;
+	for (auto& r : struck)
+		destroyed += !alive(r.get());
+	printf("UNITTEST after 80 s: %d of 2 barracks burnt down, credits %d -> %d\n", destroyed, creditedBefore, credits());
+	check(destroyed == 2, "both burnt down (" + std::to_string(destroyed) + ")");
+	check(credits() == creditedBefore, "nobody credited with what the lightning's fires did");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // wkbai's timeline told as a chronicle (interface/ChronicleNarrator, redata/chronicle/english.txt):
 // the word file whole (every slot ten forms or more, every placeholder a word or a fact), every
 // kind of event as a paragraph, every named unit a link in it, the players' names as theirs,
@@ -6816,6 +6940,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_UnitSplashKills, "Unit kills by splash (rockets at a cluster) and none for an Act of God (lightning)"},
 {Test_ChronicleStory, "Chronicle story: the timeline's events told as a historian's paragraphs, the same every time"},
 {Test_ChronicleSweep, "Chronicle sweep: every season, weather, time of day and kind of event told, the plain rules checked"},
+{Test_LightningBuildings, "Lightning on buildings: a scratch (5-10%) and set alight, a soldier as before, nobody credited"},
 };
 
 void LaunchTest()

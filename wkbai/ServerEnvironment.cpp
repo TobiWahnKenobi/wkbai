@@ -451,7 +451,7 @@ void ServerEnvironment::pickWeather(Server& server, float now)
 		printf("ENVIRONMENT t=%.0f weather %s until %.0f (%s, %.1f C)\n", now, WeatherName(chosen), weatherEnds, SeasonName(season), state.temperatureC);
 }
 
-void ServerEnvironment::strikeLightning(Server& server)
+void ServerEnvironment::strikeLightning(Server& server, const Vector3* near)
 {
 	// the candidates: every player's characters and buildings, in the tree's order
 	std::vector<ServerGameObject*> buildings, walls, characters;
@@ -474,9 +474,19 @@ void ServerEnvironment::strikeLightning(Server& server)
 			}
 	};
 	walk(server.getLevel(), walk);
-	const int r = SimRand() % 100;
 	ServerGameObject* target = nullptr;
-	if (r < 20 && !buildings.empty())
+	const int r = near ? -1 : SimRand() % 100;
+	if (near) {
+		// (the tests' hook: no random numbers drawn)
+		float best = 1e30f;
+		for (auto* list : { &buildings, &walls })
+			for (ServerGameObject* b : *list)
+				if (const float d = (b->position - *near).sqlen2xz(); d < best) {
+					best = d;
+					target = b;
+				}
+	}
+	else if (r < 20 && !buildings.empty())
 		target = buildings[SimRand() % buildings.size()];
 	else if (r >= 20 && r < 24 && !walls.empty())
 		target = walls[SimRand() % walls.size()];
@@ -500,13 +510,25 @@ void ServerEnvironment::strikeLightning(Server& server)
 		for (ServerGameObject* c : characters)
 			if ((c->position - target->position).sqlen2xz() < 15.0f * 15.0f)
 				server.unitHistory.noteCause(c->id, "struck by lightning", (float)server.timeManager.currentTime);
+		// (a storm's fire is nobody's: not the player of an earlier Act of God, arson or fire
+		// trebuchet left as its possible source, who would be credited with the building burnt down)
+		if (const int src = server.gameSet->associations.names.getIndex("Possible Source Of Fire"); isBuilding && src >= 0)
+			target->clearAssociates(src);
+		// (a building: a scratch and set alight, redata's "wkbai patches\Lightning.cpp")
 		if (seq >= 0) {
 			SrvScriptContext ctx(&server, target);
 			auto _ = ctx.change(ctx.sequenceExecutor, target);
 			server.gameSet->actionSequences[seq].run(&ctx);
 		}
-		else
-			damage(server, target, isBuilding ? 0.3f : 1.0f, "struck by lightning");
+		else {
+			damage(server, target, isBuilding ? 0.06f : 1.0f, "struck by lightning");
+			if (const int fire = server.gameSet->actionSequences.names.getIndex("Set Fire to Building"); isBuilding && fire >= 0)
+				if (ServerGameObject* b = struck.get(); b && !b->deleted) {
+					SrvScriptContext ctx(&server, b);
+					auto _ = ctx.change(ctx.sequenceExecutor, b);
+					server.gameSet->actionSequences[fire].run(&ctx);
+				}
+		}
 		if (ServerGameObject* u = struck.get(); struckAlive && struckPlayer && (!u || u->getItem(hpItem) <= 0.0f))
 			stats.deathsBy[struckPlayer->id][4]++;
 		if (trace)
@@ -873,6 +895,11 @@ void ServerEnvironment::update(Server& server)
 		if (forceFireAt >= 0.0f && now >= forceFireAt) {
 			forceFireAt = -1.0f;
 			fireLanded(server, Vector3(forceFireX, 0, forceFireZ), true);
+		}
+		if (forceLightningAt >= 0.0f && now >= forceLightningAt) {
+			forceLightningAt = -1.0f;
+			const Vector3 near(forceLightningX, 0, forceLightningZ);
+			strikeLightning(server, &near);
 		}
 		updateFires(server);
 	}

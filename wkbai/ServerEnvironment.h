@@ -93,6 +93,9 @@ struct ServerEnvironment {
 	// tests ("environmentForce": { "fireAt": [x, z, after s] }): a flaming missile comes down there
 	// once that many seconds in (the screenshots' fire)
 	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;
+	// tests ("environmentForce": { "lightningAt": [x, z, after s] }): a bolt strikes the building
+	// nearest there once that many seconds in (the screenshot of a building struck)
+	float forceLightningX = -1, forceLightningZ = -1, forceLightningAt = -1;
 	size_t charredCount() const { return charred.size(); }
 	// the debug panel (F9, NETSRVMSG_ENVIRONMENT_DEBUG): a setting (EnvironmentSettings::apply's
 	// names), or "hour" (0-24: the clock jumps there), "season" (0-4, spring 0: the year jumps
@@ -151,7 +154,8 @@ private:
 	bool igniteAt(Server& server, const Vector3& pos, float life, int gen = 0);
 	float fuelAt(Server& server, const Vector3& pos);
 	void pickWeather(Server& server, float now);
-	void strikeLightning(Server& server);
+	// a thunderstorm's strike (near: the building nearest that spot, the tests' hook)
+	void strikeLightning(Server& server, const Vector3* near = nullptr);
 	void applyExposure(Server& server);
 	void applyFloods(Server& server);
 	void prepareFloods(Server& server);
