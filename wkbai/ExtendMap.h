@@ -22,7 +22,7 @@ struct Terrain;
 
 // the tiles added on each side at RenderSettings::extendMap (0: off), and the far rings
 // beyond them (0: none; Far 4, out to about 3.6 km beyond the near ring; Horizon 7, about 30 km)
-int ExtendMapTiles(int setting);
+int ExtendMapTiles(int setting, int detail = 1);
 int ExtendMapFarRings(int setting);
 
 // The far rings: coarse land around the near ring, each ring twice as coarse as the one inside it

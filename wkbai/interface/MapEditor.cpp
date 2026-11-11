@@ -241,7 +241,7 @@ void ClientInterface::rebuildTerrainRenderer(bool tiles)
 
 int ClientInterface::wantedExtendTiles() const
 {
-	return editorOn ? 0 : ExtendMapTiles(g_renderSettings.appliedExtendMap);
+	return editorOn ? 0 : ExtendMapTiles(g_renderSettings.appliedExtendMap, g_renderSettings.appliedExtendMapDetail);
 }
 
 int ClientInterface::wantedFarRings() const
