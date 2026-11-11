@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <SDL3/SDL_events.h>
@@ -49,6 +50,10 @@ struct Frame {
 void QueueFrame(Frame frame);
 size_t PendingFrames();
 void ClearQueue();
+// frames ever queued and ever delivered (AgentServer: a request's reply waits until its last
+// frame is delivered)
+uint64_t QueuedFrames();
+uint64_t DeliveredFrames();
 
 // builders, in window pixels (g_mouseX/Y): each adds the frames a person's hand would take
 // button: 1 left, 2 middle, 3 right, 4 x1, 5 x2 (SDL_BUTTON_*); key: an SDL_Scancode
@@ -74,7 +79,7 @@ int Mods();
 
 // the drawn cursor (the OS cursor stays where the person's mouse is): ClientInterface draws the
 // game cursor's picture and marks it drawn; ImGuiImpl_Render draws an arrow otherwise, and the
-// "AGENT" tag beside either
+// "AGENT" tag beside either; while agent control is on, a banner at the top of the screen says so
 void MarkCursorDrawn();
 void DrawCursorOverlay();
 

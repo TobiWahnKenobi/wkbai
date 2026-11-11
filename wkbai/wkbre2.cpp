@@ -5,6 +5,7 @@
 // wkbre2.cpp : définit le point d'entrée de l'application.
 //
 
+#include "AgentServer.h"
 #include "wkbre2.h"
 #include <cstdio>
 #include <filesystem>
@@ -184,6 +185,7 @@ static void ExportGltfModels(const nlohmann::json& list)
 void LaunchQSM() {
 	LoadBCP("data.bcp");
 	InitWindow();
+	AgentServer::ApplySettings(); // agent control, if the option is on (off by default)
 	ImGuiImpl_Init();
 	IRenderer* gfx = CreateRenderer();
 	gfx->Init();

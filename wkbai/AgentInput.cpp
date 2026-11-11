@@ -21,6 +21,7 @@ namespace {
 	bool cursorDrawn = false;
 	// the frame being delivered: its text events point into it until the next TakeFrame
 	Frame delivering;
+	uint64_t queuedTotal = 0, deliveredTotal = 0;
 
 	SDL_Event blank(SDL_EventType type)
 	{
@@ -59,7 +60,7 @@ void SetEnabled(bool on)
 	enabled = on;
 	takenOver = false;
 	mods = SDL_KMOD_NONE;
-	queue.clear();
+	ClearQueue();
 }
 
 bool Enabled() { return enabled; }
@@ -77,9 +78,12 @@ void SetTakenOver(bool taken)
 bool TakenOver() { return takenOver; }
 int HandOverCount() { return handOvers; }
 
-void QueueFrame(Frame frame) { queue.push_back(std::move(frame)); }
+void QueueFrame(Frame frame) { queue.push_back(std::move(frame)); queuedTotal++; }
 size_t PendingFrames() { return queue.size(); }
-void ClearQueue() { queue.clear(); }
+// (the dropped frames count as delivered: nothing waits for them)
+void ClearQueue() { deliveredTotal += queue.size(); queue.clear(); }
+uint64_t QueuedFrames() { return queuedTotal; }
+uint64_t DeliveredFrames() { return deliveredTotal; }
 
 void Move(int x, int y)
 {
@@ -179,6 +183,7 @@ bool TakeFrame(std::vector<SDL_Event>& out)
 		return false;
 	delivering = std::move(queue.front());
 	queue.pop_front();
+	deliveredTotal++;
 	for (Frame::Item& item : delivering.items) {
 		SDL_Event& e = item.event;
 		switch (e.type) {
@@ -222,9 +227,24 @@ void DrawCursorOverlay()
 {
 	const bool drawn = cursorDrawn;
 	cursorDrawn = false;
-	if (!HasInput() || !ImGui::GetCurrentContext())
+	if (!Enabled() || !ImGui::GetCurrentContext())
 		return;
 	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	// the banner: whoever sees this screen (or a screenshot of it) knows an agent may play
+	{
+		const char* text = takenOver ? "AGENT CONTROL ON - the input is yours (Ctrl+Alt+F12: back to the agent)"
+			: "AGENT CONTROL ON - an agent plays this screen (Ctrl+Alt+F12: take over)";
+		const ImVec2 size = ImGui::CalcTextSize(text);
+		const float w = ImGui::GetIO().DisplaySize.x;
+		const ImVec2 p((w - size.x) * 0.5f, 4.0f);
+		dl->AddRectFilled(ImVec2(p.x - 10, p.y - 3), ImVec2(p.x + size.x + 10, p.y + size.y + 3), IM_COL32(230, 150, 20, 235), 4.0f);
+		dl->AddRect(ImVec2(p.x - 10, p.y - 3), ImVec2(p.x + size.x + 10, p.y + size.y + 3), IM_COL32(0, 0, 0, 255), 4.0f, 0, 1.5f);
+		dl->AddText(p, IM_COL32(0, 0, 0, 255), text);
+		// a frame around the screen in the same colour
+		dl->AddRect(ImVec2(1, 1), ImVec2(w - 1, ImGui::GetIO().DisplaySize.y - 1), IM_COL32(230, 150, 20, 200), 0.0f, 0, 3.0f);
+	}
+	if (!HasInput())
+		return;
 	const ImVec2 at((float)UiMouseX(), (float)UiMouseY());
 	if (!drawn) {
 		// an arrow (the front end, the loading screens: no game cursor there)

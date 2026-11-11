@@ -5,6 +5,7 @@
 #include "window.h"
 #include "interface/KeyBindings.h"
 #include "AgentInput.h"
+#include "AgentServer.h"
 #include <cstdio>
 #include <algorithm>
 #include <string>
@@ -286,7 +287,9 @@ void HandleWindow()
 			continue;
 		ProcessInputEvent(event, imguion, igWantsMouse);
 	}
-	// the agent's frame, through the same function
+	// the agent's connection (replies for the frames run, new requests), then its frame, through
+	// the same function
+	AgentServer::Poll();
 	static std::vector<SDL_Event> agentEvents;
 	if (AgentInput::TakeFrame(agentEvents))
 		for (const SDL_Event& e : agentEvents)

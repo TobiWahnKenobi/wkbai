@@ -8,6 +8,7 @@
 #include "gfx/bitmap.h"
 #include "window.h"
 #include "AgentInput.h"
+#include "AgentServer.h"
 #include <algorithm>
 #include <cstdint>
 #include <SDL3/SDL.h>
@@ -123,4 +124,5 @@ void ImGuiImpl_Render(IRenderer *gfx)
 	AgentInput::DrawCursorOverlay(); // the agent's cursor and its tag, while it has the input
 	ImGui::Render();
 	ImGuiImpl_RenderDrawLists(ImGui::GetDrawData(), gfx);
+	AgentServer::TakeScreenshotIfAsked(gfx); // the frame as the player sees it, if the agent asked
 }

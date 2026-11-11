@@ -9,6 +9,7 @@
 #include "../settings.h"
 #include "../SoundPlayer.h"
 #include "../matchmaking/Matchmaking.h"
+#include "../AgentServer.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
@@ -406,6 +407,39 @@ namespace {
 		}
 		list.push_back(matchmakingText("stunServer", "STUN server (public address)", { "stun" },
 			std::string(DEFAULT_STUN_SERVER) + " (none: off)"));
+
+		// Agent control (AgentServer.h): a program on this computer plays through the mouse and
+		// keyboard's path; off by default, and everyone sees when it is on
+		auto agentCfg = []() -> nlohmann::json& {
+			if (!g_settings["agentControl"].is_object())
+				g_settings["agentControl"] = nlohmann::json::object();
+			return g_settings["agentControl"];
+		};
+		{
+			MenuOption o;
+			o.id = "agentControl"; o.page = "agent"; o.label = "Agent control (a program on this computer plays as you)";
+			o.type = MenuOption::TOGGLE;
+			o.get = []() { const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object()); return c.is_object() && c.value("enabled", false) ? 1.0f : 0.0f; };
+			o.set = [agentCfg](float v) { agentCfg()["enabled"] = v != 0.0f; };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "agentPort"; o.page = "agent"; o.label = "Its port (127.0.0.1 only)";
+			o.type = MenuOption::TEXT;
+			o.hint = "7790";
+			o.maxLength = 5;
+			o.getText = []() {
+				const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object());
+				return c.is_object() && c.contains("port") ? std::to_string(c.value("port", 7790)) : std::string();
+			};
+			o.setText = [agentCfg](const std::string& text) {
+				const int p = atoi(text.c_str());
+				if (p >= 1024 && p <= 65535) agentCfg()["port"] = p; else agentCfg().erase("port");
+			};
+			o.enabled = []() { const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object()); return c.is_object() && c.value("enabled", false); };
+			list.push_back(o);
+		}
 		return list;
 	}
 }
@@ -430,6 +464,7 @@ const std::vector<MenuPage>& GetMenuPages()
 		{ "sound", "Sound", "" },
 		{ "system", "System", "" },
 		{ "online", "Online", "" },
+		{ "agent", "Agent control", "" },
 	};
 	return pages;
 }
@@ -454,6 +489,7 @@ void SaveMenuOptions()
 	g_renderSettings.save();
 	SoundPlayer::getSoundPlayer()->applyVolumes();
 	Matchmaking::get().settingsChanged();
+	AgentServer::ApplySettings();
 }
 
 namespace {
