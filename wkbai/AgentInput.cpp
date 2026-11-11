@@ -22,6 +22,22 @@ namespace {
 	// the frame being delivered: its text events point into it until the next TakeFrame
 	Frame delivering;
 	uint64_t queuedTotal = 0, deliveredTotal = 0;
+	int apmLimit = 0, reactionDelay = 0;
+	uint64_t lastActionMs = 0;
+	bool isAction(const Frame& f)
+	{
+		for (const Frame::Item& item : f.items) {
+			if (item.event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+				return true;
+			if (item.event.type == SDL_EVENT_KEY_DOWN) {
+				const SDL_Scancode sc = item.event.key.scancode;
+				if (sc != SDL_SCANCODE_LCTRL && sc != SDL_SCANCODE_RCTRL && sc != SDL_SCANCODE_LSHIFT && sc != SDL_SCANCODE_RSHIFT
+					&& sc != SDL_SCANCODE_LALT && sc != SDL_SCANCODE_RALT)
+					return true;
+			}
+		}
+		return false;
+	}
 
 	SDL_Event blank(SDL_EventType type)
 	{
@@ -78,7 +94,18 @@ void SetTakenOver(bool taken)
 bool TakenOver() { return takenOver; }
 int HandOverCount() { return handOvers; }
 
-void QueueFrame(Frame frame) { queue.push_back(std::move(frame)); queuedTotal++; }
+void QueueFrame(Frame frame) { frame.serial = ++queuedTotal; queue.push_back(std::move(frame)); }
+
+void SetLimits(int apm, int reactionMs) { apmLimit = std::max(apm, 0); reactionDelay = std::max(reactionMs, 0); }
+int Apm() { return apmLimit; }
+int ReactionMs() { return reactionDelay; }
+
+void HoldFrom(uint64_t serial, uint64_t untilMs)
+{
+	for (Frame& f : queue)
+		if (f.serial >= serial)
+			f.notBefore = std::max(f.notBefore, untilMs);
+}
 size_t PendingFrames() { return queue.size(); }
 // (the dropped frames count as delivered: nothing waits for them)
 void ClearQueue() { deliveredTotal += queue.size(); queue.clear(); }
@@ -181,6 +208,15 @@ bool TakeFrame(std::vector<SDL_Event>& out)
 	out.clear();
 	if (!HasInput() || queue.empty())
 		return false;
+	// the human limits: the reaction delay, and the actions a minute
+	const uint64_t now = SDL_GetTicks();
+	if (queue.front().notBefore > now)
+		return false;
+	const bool action = isAction(queue.front());
+	if (action && apmLimit > 0 && lastActionMs && now - lastActionMs < (uint64_t)(60000 / apmLimit))
+		return false;
+	if (action)
+		lastActionMs = now;
 	delivering = std::move(queue.front());
 	queue.pop_front();
 	deliveredTotal++;

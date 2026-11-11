@@ -285,6 +285,10 @@ void ClientInterface::setUpAgentWorld()
 		j["paused"] = client->timeManager.paused;
 		j["window"] = { g_windowWidth, g_windowHeight };
 		j["camera"] = { client->camera.position.x, client->camera.position.y, client->camera.position.z };
+		if (client->terrain) {
+			const auto [areaW, areaD] = client->terrain->getPlayableArea();
+			j["map"] = { areaW, areaD }; // the playable area in metres (as the minimap shows it)
+		}
 		ClientGameObject* player = client->clientPlayer;
 		j["player"] = player ? player->id : 0;
 		if (player) {
@@ -302,6 +306,9 @@ void ClientInterface::setUpAgentWorld()
 		j["selection"] = sel;
 		ClientGameObject* hov = nextSelectedObject;
 		j["hovered"] = hov ? hov->id : 0;
+		// a building being placed: what, its turn (quarters), and the refusal box's text if shown
+		if (stampdownBlueprint)
+			j["placing"] = { { "type", stampdownBlueprint->name }, { "turn", stampdownQuarter }, { "refusal", stampdownRefusal } };
 		j["cursor"] = WndCursorPath(shownCursor);
 		// the objects: characters and buildings (trees and other scenery left out), as the fog shows them
 		const bool fogOn = fogOfWarOn();
@@ -364,6 +371,49 @@ void ClientInterface::setUpAgentWorld()
 		j["chat"] = chat;
 		return j;
 	};
+	// the harness: lockstep and made units, where cheats are allowed
+	agentWorld.harness = [this](const nlohmann::json& req) -> nlohmann::json {
+		if (!cheatKeysAllowed() || !withServer)
+			return { { "ok", false }, { "error", "harness controls work in single player with cheat mode on (or test runs)" } };
+		nlohmann::json out = { { "ok", true } };
+		const std::string what = req.value("what", std::string());
+		withServer([&](Server& server) {
+			if (what == "lockstep") {
+				server.lockstep = req.value("on", true);
+				server.lockstepSteps = 0;
+				out["lockstep"] = server.lockstep;
+				out["done"] = server.lockstepDone;
+			}
+			else if (what == "advance") {
+				if (!server.lockstep) { out = { { "ok", false }, { "error", "harness.lockstep first" } }; return; }
+				const uint32_t steps = (uint32_t)std::clamp(req.value("steps", 1), 1, 100000);
+				server.lockstepSteps += steps;
+				out["until"] = server.lockstepDone + server.lockstepSteps;
+				out["stepMs"] = server.timeManager.stepMs;
+			}
+			else if (what == "done")
+				out["done"] = server.lockstepDone;
+			else if (what == "spawn") {
+				const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, req.value("type", std::string("Peasant")));
+				ClientGameObject* me = client->clientPlayer;
+				ServerGameObject* player = me && server.findObject(me->id) ? server.findObject(me->id)->dyncast<ServerGameObject>() : nullptr;
+				if (!bp || !player) { out = { { "ok", false }, { "error", bp ? "no player" : "no such character type" } }; return; }
+				const int count = std::clamp(req.value("count", 1), 1, 2000);
+				const float x = req.value("x", 0.0f), z = req.value("z", 0.0f), spacing = req.value("spacing", 2.5f);
+				const int side = (int)std::ceil(std::sqrt((float)count));
+				nlohmann::json ids = nlohmann::json::array();
+				for (int i = 0; i < count; i++) {
+					const Vector3 at(x + (i % side - side / 2) * spacing, 0, z + (i / side - side / 2) * spacing);
+					if (ServerGameObject* u = server.spawnObject(bp, player, at, Vector3(0, 0, 0)))
+						ids.push_back(u->id);
+				}
+				out["spawned"] = ids;
+			}
+			else
+				out = { { "ok", false }, { "error", "harness: lockstep, advance or spawn" } };
+		});
+		return out;
+	};
 	// the test probes: the server's own state, where cheats are allowed (or in a replay)
 	agentWorld.probe = [this](const nlohmann::json& req) -> nlohmann::json {
 		if (!(cheatKeysAllowed() || replayMode) || !withServer)
@@ -402,6 +452,7 @@ void ClientInterface::setUpAgentWorld()
 				if (!obj) { out = { { "ok", false }, { "error", "no such object" } }; return; }
 				out["type"] = obj->blueprint->name;
 				out["position"] = { obj->position.x, obj->position.y, obj->position.z };
+				out["orientation"] = obj->orientation.y; // (radians about the vertical)
 				nlohmann::json orders = nlohmann::json::array();
 				for (Order& o : obj->orderConfig.orders) {
 					nlohmann::json tasks = nlohmann::json::array();

@@ -351,6 +351,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_NONE = 2, // no mods at all, of any kind
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
+	// agent control's harness: the simulation steps only when told ("harness.advance")
+	bool lockstep = false;
+	uint32_t lockstepSteps = 0;  // steps still to run
+	uint64_t lockstepDone = 0;   // steps run in lockstep so far
 	// Which wkbai guests must run ("buildPolicy", BuildIdentity::Policy): 0 the same network
 	// version, 1 the same version (the default), 2 an identical build (its code proved by a challenge)
 	int buildPolicy = 1;

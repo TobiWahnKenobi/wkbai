@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace {
 	MenuOption toggle(std::string id, std::string page, std::string label, bool& value)
@@ -436,6 +437,27 @@ namespace {
 			o.setText = [agentCfg](const std::string& text) {
 				const int p = atoi(text.c_str());
 				if (p >= 1024 && p <= 65535) agentCfg()["port"] = p; else agentCfg().erase("port");
+			};
+			o.enabled = []() { const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object()); return c.is_object() && c.value("enabled", false); };
+			list.push_back(o);
+		}
+		// human limits for fair games (AgentInput::SetLimits): actions a minute, reaction delay
+		for (const auto& [key, label, hint, maxValue] : { std::tuple<const char*, const char*, const char*, int>{ "apm", "Human limit: actions per minute (empty: none)", "e.g. 300", 2000 },
+			std::tuple<const char*, const char*, const char*, int>{ "reactionMs", "Human limit: reaction delay in ms (empty: none)", "e.g. 200", 5000 } }) {
+			MenuOption o;
+			o.id = std::string("agent_") + key; o.page = "agent"; o.label = label;
+			o.type = MenuOption::TEXT;
+			o.hint = hint;
+			o.maxLength = 5;
+			const std::string k = key;
+			const int maxV = maxValue;
+			o.getText = [k]() {
+				const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object());
+				return c.is_object() && c.value(k, 0) > 0 ? std::to_string(c.value(k, 0)) : std::string();
+			};
+			o.setText = [agentCfg, k, maxV](const std::string& text) {
+				const int v = atoi(text.c_str());
+				if (v > 0 && v <= maxV) agentCfg()[k] = v; else agentCfg().erase(k);
 			};
 			o.enabled = []() { const nlohmann::json c = g_settings.value("agentControl", nlohmann::json::object()); return c.is_object() && c.value("enabled", false); };
 			list.push_back(o);

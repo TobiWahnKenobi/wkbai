@@ -105,6 +105,12 @@ class Agent:
     def click_ground(self, x, z, add=False): return self.ask("clickground", x=x, z=z, add=add)
     def right_click_ground(self, x, z, add=False): return self.ask("rightclickground", x=x, z=z, add=add)
     def camera(self, x, z): return self.ask("camera", x=x, z=z)
+    def point(self, x, z): return self.ask("point", x=x, z=z)["screen"]
+
+    # -- test harness (single player with cheats, test runs)
+    def lockstep(self, on=True): return self.ask("harness.lockstep", on=on)
+    def advance(self, steps): return self.ask("harness.advance", steps=steps)
+    def spawn(self, type_, count, x, z, spacing=2.5): return self.ask("harness.spawn", type=type_, count=count, x=x, z=z, spacing=spacing)["spawned"]
     def key_action(self, action): return self.ask("keyaction", action=action)
 
     # -- layer 3: what the player sees, and the test probes
@@ -194,7 +200,7 @@ class Game:
     def __exit__(self, *exc):
         self.stop()
 
-    def start(self, skirmish=None, slots="H|A|E", save=None, cheat=False, host_solo=None, config=None, log_name="game"):
+    def start(self, skirmish=None, slots="H|A|E", save=None, cheat=False, host_solo=None, config=None, log_name="game", settings=None):
         """Starts the game: skirmish="<level>" (single player, slots as the skirmish menu's, e.g.
         "H|A|E"; probes allowed, as in every benchmark run), save="<save game>", host_solo=
         "<level>" (a hosted game alone: no cheats, no probes), or none of them (the main menu)."""
@@ -212,8 +218,12 @@ class Game:
             bench = {"saveGame": skirmish or save, "warmupFrames": 10 ** 9, "frames": 10}
             if skirmish and slots:
                 bench["slots"] = slots
+            # the lobby's settings ({"startWood": 2000, ...}), as a player chooses them
+            lobby = dict(settings or {})
             if cheat:
-                bench["skirmishSettings"] = {"cheatMode": 1}
+                lobby["cheatMode"] = 1
+            if lobby:
+                bench["skirmishSettings"] = lobby
             cfg["benchmark"] = bench
         elif host_solo:
             cfg["lobbyTest"] = {"host": host_solo, "solo": True}

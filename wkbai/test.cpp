@@ -7248,6 +7248,42 @@ void Test_AgentInput()
 	check(g_keyDown[SDL_SCANCODE_F12] && g_mouseX == 0 && !AgentInput::TakenOver(), "off: Ctrl+Alt+F12 reaches the game as a key; no agent click happens");
 	AgentInput::ClearQueue();
 	resetInput();
+
+	// the human limits: 120 actions a minute (one each 500 ms), a reaction delay of 300 ms
+	AgentInput::SetEnabled(true);
+	AgentInput::SetLimits(120, 0);
+	AgentInput::Click(10, 10);
+	AgentInput::Click(20, 20);
+	AgentInput::Tap(SDL_SCANCODE_P, KeyChord::CTRL);
+	std::vector<uint64_t> downs;
+	const uint64_t begin = SDL_GetTicks();
+	while (AgentInput::PendingFrames() && SDL_GetTicks() - begin < 5000) {
+		std::vector<SDL_Event> evs;
+		if (AgentInput::TakeFrame(evs))
+			for (const SDL_Event& e : evs)
+				if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_P))
+					downs.push_back(SDL_GetTicks());
+		SDL_Delay(5);
+	}
+	check(downs.size() == 3 && downs[1] - downs[0] >= 495 && downs[2] - downs[1] >= 495,
+		"120 actions a minute: two clicks and Ctrl+P at least 500 ms apart (" + std::to_string(downs.size() > 2 ? downs[1] - downs[0] : 0) + ", "
+		+ std::to_string(downs.size() > 2 ? downs[2] - downs[1] : 0) + " ms; Ctrl itself no action)");
+	AgentInput::SetLimits(0, 300);
+	const uint64_t asked = SDL_GetTicks();
+	const uint64_t firstSerial = AgentInput::QueuedFrames() + 1;
+	AgentInput::Click(30, 30);
+	AgentInput::HoldFrom(firstSerial, asked + AgentInput::ReactionMs());
+	uint64_t moved = 0;
+	while (AgentInput::PendingFrames() && SDL_GetTicks() - asked < 3000) {
+		std::vector<SDL_Event> evs;
+		if (AgentInput::TakeFrame(evs) && !moved)
+			moved = SDL_GetTicks();
+		SDL_Delay(5);
+	}
+	check(moved && moved - asked >= 295 && moved - asked < 400, "a reaction delay of 300 ms: the request's first frame " + std::to_string(moved - asked) + " ms later");
+	AgentInput::SetLimits(0, 0);
+	AgentInput::SetEnabled(false);
+	resetInput();
 	SDL_QuitSubSystem(SDL_INIT_EVENTS);
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }

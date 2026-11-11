@@ -3032,6 +3032,22 @@ void Server::tick()
 	// (a player that left or never reports: checked again, and the time-out)
 	checkLoadsDone();
 	timeManager.tick();
+	// agent control's lockstep: only the steps asked for, whatever the clock
+	if (lockstep && timeManager.stepMs) {
+		timeManager.pendingMs = 0;
+		while (lockstepSteps > 0) {
+			timeManager.pendingMs = timeManager.stepMs;
+			const bool wasPaused = timeManager.paused;
+			timeManager.paused = false;
+			timeManager.step();
+			timeManager.paused = wasPaused;
+			simulate();
+			lockstepSteps--;
+			lockstepDone++;
+		}
+		network();
+		return;
+	}
 	// the simulation in fixed steps ("simStepMs"), so that it goes the same at any frame rate;
 	// while paused (or without steps) once, without moving the clock
 	if (timeManager.stepMs == 0 || timeManager.paused)

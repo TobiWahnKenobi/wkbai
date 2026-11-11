@@ -71,6 +71,10 @@ struct World {
 	// every object regardless of fog); only where cheat keys work (single player in cheat mode) or
 	// in a replay, else an error
 	std::function<nlohmann::json(const nlohmann::json& request)> probe;
+	// Harness controls (single player with cheats, test runs): "lockstep" (on), "advance" (steps:
+	// the reply's "until"), "done" (the steps run so far), "spawn" (type, count, x, z: the
+	// player's units in a grid there)
+	std::function<nlohmann::json(const nlohmann::json& request)> harness;
 	// the selection's ids
 	std::function<std::vector<uint32_t>()> selection;
 };

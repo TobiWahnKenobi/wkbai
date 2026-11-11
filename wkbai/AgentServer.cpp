@@ -52,6 +52,12 @@ namespace {
 		std::function<void()> then;
 	};
 	std::deque<Waiting> waiting;
+	// a reply that waits for a condition (harness.advance: the steps run)
+	struct Condition {
+		std::function<bool()> done;
+		std::function<void()> then;
+	};
+	std::vector<Condition> conditions;
 	// a screenshot asked for: its file, and the request waiting for it
 	std::string shotPath;
 	bool shotTaken = false;
@@ -192,8 +198,26 @@ namespace {
 		});
 	}
 
-	// a request: its input queued (the reply waits for it), or answered at once
+	void handleRequest(const nlohmann::json& req, bool fromScript, int line);
+	// a request: its input queued (the reply waits for it), or answered at once; the reaction
+	// delay holds its first frame
 	void handle(const nlohmann::json& req, bool fromScript, int line)
+	{
+		const uint64_t first = AgentInput::QueuedFrames() + 1, received = SDL_GetTicks();
+		// a malformed request (a field of the wrong type: null for a text, a text for a number) is
+		// refused; it never ends the game
+		try {
+			handleRequest(req, fromScript, line);
+		}
+		catch (const std::exception& e) {
+			reply({ { "id", req.is_object() ? req.value("id", nlohmann::json()) : nlohmann::json() }, { "ok", false },
+				{ "error", std::string("bad request: ") + e.what() } }, fromScript, line);
+		}
+		if (AgentInput::ReactionMs() > 0 && AgentInput::QueuedFrames() >= first)
+			AgentInput::HoldFrom(first, received + AgentInput::ReactionMs());
+	}
+
+	void handleRequest(const nlohmann::json& req, bool fromScript, int line)
 	{
 		nlohmann::json out = { { "id", req.value("id", nlohmann::json()) } };
 		auto fail = [&](const std::string& why) {
@@ -211,6 +235,7 @@ namespace {
 			out["build"] = BuildIdentity::Describe();
 			out["window"] = { g_windowWidth, g_windowHeight };
 			out["uiScale"] = g_uiScale;
+			out["limits"] = { { "apm", AgentInput::Apm() }, { "reactionMs", AgentInput::ReactionMs() } };
 			reply(out, fromScript, line);
 			return;
 		}
@@ -229,6 +254,29 @@ namespace {
 			scriptResume = std::chrono::steady_clock::now() + std::chrono::milliseconds(req.value("ms", 0));
 			out["ok"] = true;
 			reply(out, fromScript, line);
+			return;
+		}
+		// test harness controls (single player with cheats, test runs): the simulation in
+		// lockstep, units made for a test
+		if (op == "harness.lockstep" || op == "harness.advance" || op == "harness.spawn") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->harness) { fail("no game on the screen"); return; }
+			nlohmann::json h = req;
+			h["what"] = op.substr(8);
+			nlohmann::json r = w->harness(h);
+			if (!r.value("ok", false)) { r["id"] = out["id"]; reply(r, fromScript, line); return; }
+			r["id"] = out["id"];
+			r["harness"] = true;
+			if (op == "harness.advance") {
+				const uint64_t until = r.value("until", 0ull);
+				const AgentUi::World* world = w;
+				conditions.push_back({ [world, until]() {
+					nlohmann::json q = { { "what", "done" } };
+					return world->harness && world->harness(q).value("done", 0ull) >= until;
+				}, [r, fromScript, line]() { reply(r, fromScript, line); } });
+				return;
+			}
+			reply(r, fromScript, line);
 			return;
 		}
 		if (fromScript && op == "harness.quit") {
@@ -349,6 +397,18 @@ namespace {
 				};
 			}
 			aimStep(a);
+			return;
+		}
+		// where a map point is on the screen now (the eye, no click): pixels, or why not
+		if (op == "point") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->groundPoint) { fail("no game on the screen"); return; }
+			int sx, sy;
+			std::string why;
+			if (!w->groundPoint(req.value("x", 0.0f), req.value("z", 0.0f), sx, sy, why)) { fail(why); return; }
+			out["ok"] = true;
+			out["screen"] = { sx, sy };
+			reply(out, fromScript, line);
 			return;
 		}
 		if (op == "camera") {
@@ -487,6 +547,7 @@ void ApplySettings()
 	const bool on = cfg.is_object() && cfg.value("enabled", false);
 	const int wantPort = cfg.is_object() ? cfg.value("port", 7790) : 7790;
 	AgentInput::SetEnabled(on);
+	AgentInput::SetLimits(cfg.is_object() ? cfg.value("apm", 0) : 0, cfg.is_object() ? cfg.value("reactionMs", 0) : 0);
 	if (!on) {
 		if (Listening())
 			printf("Agent control: off\n");
@@ -553,6 +614,15 @@ void Poll()
 		shotPath.clear();
 		shotTaken = false;
 	}
+	// conditions met
+	for (size_t i = 0; i < conditions.size();)
+		if (conditions[i].done()) {
+			const Condition c = conditions[i];
+			conditions.erase(conditions.begin() + i);
+			c.then();
+		}
+		else
+			i++;
 	// the input changed hands
 	if (AgentInput::HandOverCount() != lastHandOvers) {
 		lastHandOvers = AgentInput::HandOverCount();

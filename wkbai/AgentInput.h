@@ -43,6 +43,8 @@ struct Frame {
 		std::string text; // a text event's text (its pointer is set when delivered)
 	};
 	std::vector<Item> items;
+	uint64_t serial = 0;    // its number among all frames queued (QueuedFrames when it was queued)
+	uint64_t notBefore = 0; // held until then (SDL_GetTicks ms): the reaction delay
 };
 
 // The queue. Builders add frames at the end; HandleWindow takes one per frame while the agent has
@@ -54,6 +56,16 @@ void ClearQueue();
 // frame is delivered)
 uint64_t QueuedFrames();
 uint64_t DeliveredFrames();
+
+// Human limits ("agentControl": "apm", "reactionMs"; 0: none), for fair games against people or
+// the AI: at most apm actions a minute (an action: a mouse button or a key going down, a
+// modifier key not counted), a frame with one held until its time; and a request's input starts
+// reactionMs after the request came (HoldFrom). Held frames wait, the game goes on.
+void SetLimits(int apm, int reactionMs);
+int Apm();
+int ReactionMs();
+// the frames from this serial on wait until then (ms, SDL_GetTicks)
+void HoldFrom(uint64_t serial, uint64_t untilMs);
 
 // builders, in window pixels (g_mouseX/Y): each adds the frames a person's hand would take
 // button: 1 left, 2 middle, 3 right, 4 x1, 5 x2 (SDL_BUTTON_*); key: an SDL_Scancode

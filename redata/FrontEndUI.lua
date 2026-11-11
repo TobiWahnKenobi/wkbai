@@ -209,6 +209,7 @@ local function listBox(state, items, x, y, w, h)
 		end
 		local text, colour = item, YELLOW
 		if type(item) == "table" then text, colour = item[1], item[2] or YELLOW end
+		uiElement("item:" .. tostring(text), tostring(text), x, ry, w, rowH, true) -- (agent control: a row by its text)
 		drawText(FONT_LIST, x + L(8), ry, text, colour, S)
 		-- more columns: { text, x from the row's left, colour }
 		if type(item) == "table" and item.columns then
@@ -2483,6 +2484,7 @@ local function keyboardPage(px, py, pw, ph)
 				local waiting = keyState.capture and keyState.capture.id == row.id and keyState.capture.slot == slot
 				local key = getKeyBinding(row.id, slot)
 				local label = waiting and "Press a key..." or (key ~= "" and keyLabel(key) or "(none)")
+				uiElement("key:" .. row.id .. ":" .. slot, label, bx, by, kw, kh, true) -- (agent control: the cell by its action)
 				if button(label, bx, by, kw, kh, true, waiting) then startKeyCapture(row.id, slot) end
 				-- a key that another action uses where this one works
 				if key ~= "" and #getKeyConflicts(row.id, slot, key) > 0 then
