@@ -43,6 +43,9 @@ struct FarTerrain {
 	float outerLevel = 0;
 	bool outerSea = false;
 	float outerColour[3] = { 0.3f, 0.35f, 0.2f };
+	// per vertex of the copy ((width + 1) x (height + 1)), RGBA8: its materials' mean colours,
+	// smoothed (the near ring's pictures fade into them towards the far rings, which show the same)
+	std::vector<uint32_t> nearColour;
 };
 
 struct ExtendedTerrainDeleter { void operator()(Terrain* t) const; };

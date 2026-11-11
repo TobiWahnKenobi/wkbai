@@ -243,6 +243,7 @@ cbuffer SunBuffer
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
+Texture2D nearColourTexture; // Extend map: the copy's vertices' material colours, smoothed (FarTerrain::nearColour; else 1 x 1)
 
 // The tessellated terrain's surface: a Catmull-Rom spline through the vertex heights in both
 // directions (exact at the vertices); Terrain::getSmoothHeight is the same on the CPU
@@ -1501,13 +1502,22 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	// colours (the atlas' 4 x 4 mip, a texel per tile) and flat normals, as the far rings beyond
 	// show them (the textured ground had stopped short against the plain one, the play test of
 	// 2026-11-10)
+	// (in two steps: first the picture's own coarser mips, at most 4 texels per tile, then the
+	// smooth field of the materials' colours the far rings show: the tiles' own mean colours had
+	// drawn blocks, the play test of 2026-11-11)
 	float k = NearToFarSea(input.FragPos);
 	if (k > 0) {
 		uint aw, ah, levels;
 		inpTexture.GetDimensions(0, aw, ah, levels);
-		float2 tile = floor(saturate(fuv) * 4);
-		float3 mean = inpTexture.SampleLevel(inpSampler, (min(tile, 3) + 0.5) * 0.25, max((float)levels - 3, 0)).rgb;
-		tex.rgb = lerp(tex.rgb, mean, k);
+		float lod = min(inpTexture.CalculateLevelOfDetail(inpSampler, input.Texcoord) + 4 * smoothstep(0, 0.6, k), max((float)levels - 5, 0));
+		float ha = 0.5 / max(aw >> (int)ceil(lod), 1u);
+		float2 stc = clamp(input.Texcoord, ha, 1 - ha);
+		float2 tile = floor(stc / 0.25);
+		float2 cuv = clamp(fmod(stc, 0.25), ha, 0.25 - ha) + tile * 0.25;
+		tex.rgb = lerp(tex.rgb, inpTexture.SampleLevel(inpSampler, cuv, lod).rgb, smoothstep(0, 0.4, k));
+		float2 g = input.FragPos.xz / 5 + TessParams.w;
+		float3 field = nearColourTexture.SampleLevel(inpSampler, (g + 0.5) / (TessGrid.xy + 1), 0).rgb;
+		tex.rgb = lerp(tex.rgb, field, smoothstep(0.3, 1, k));
 		nrm = normalize(lerp(nrm, float3(0, 1, 0), k));
 		ScreenMasks = 1 - k;
 	}
@@ -1582,6 +1592,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
+	RefCntAutoPtr<ITexture> nearColourMap; // Extend map's colour field (FarTerrain::nearColour)
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline;
 	// the depth pre-pass's (renderDepth, renderWaterDepth); depthOnly while it draws; prepared
@@ -1896,6 +1907,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "FogBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VS_PS | tessStages, "SunBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL | tessStages, "heightTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "nearColourTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "inpTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "normalTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "sceneTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1996,6 +2008,26 @@ void DiligentEnhancedTerrainRenderer::init()
 		env.terrainGrid[2] = (int)terrain->edge;
 		env.rtTerrain = terrain;
 		env.rtTerrainVersion++;
+	}
+	// Extend map's colour field of the copy's vertices (PS: the near ring's pictures fade into it)
+	{
+		const size_t n = (size_t)(terrain->width + 1) * (terrain->height + 1);
+		const bool have = far.nearColour.size() == n;
+		const uint32_t white = 0xffffffffu;
+		TextureDesc cdesc;
+		cdesc.Name = "Extend map colour field";
+		cdesc.Type = RESOURCE_DIM_TEX_2D;
+		cdesc.Width = have ? terrain->width + 1 : 1;
+		cdesc.Height = have ? terrain->height + 1 : 1;
+		cdesc.Format = TEX_FORMAT_RGBA8_UNORM;
+		cdesc.BindFlags = BIND_SHADER_RESOURCE;
+		cdesc.Usage = USAGE_IMMUTABLE;
+		TextureSubResData csub{ have ? (const void*)far.nearColour.data() : (const void*)&white, (Uint64)cdesc.Width * 4 };
+		TextureData cdata{ &csub, 1 };
+		device->CreateTexture(cdesc, &cdata, &_impl->nearColourMap);
+		if (_impl->nearColourMap)
+			_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "nearColourTexture")->Set(_impl->nearColourMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		far.nearColour = {};
 	}
 
 	// The water's flow, sea, wave region and river maps (again when the water changes)
