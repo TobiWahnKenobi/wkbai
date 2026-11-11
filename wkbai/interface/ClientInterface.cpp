@@ -2138,8 +2138,18 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 
 	static const float tolerance = 25.0f;
+	// (with the ray-traced shadows at a low sun an object off the view may cast its shadow into
+	// it: the rough tests here widen by the longest such shadow, of an object 15 units high; the
+	// sphere test further down decides. Without, the trees just off the screen still cast none.)
+	float shadowReach = 0.0f;
+	if (auto* dg = dynamic_cast<DiligentGfx*>(gfx); dg && dg->shadows.rayShadowsOn) {
+		const Vector3 sn = dg->shadows.sunDirection;
+		const float fl = std::sqrt(sn.x * sn.x + sn.z * sn.z);
+		if (sn.y > 0.02f && fl > 1e-3f)
+			shadowReach = std::min(30.0f * fl / sn.y, 600.0f);
+	}
 	const float dirDist = client->camera.direction.dot(obj->position - client->camera.position);
-	const float nearBound = client->camera.nearDist - tolerance;
+	const float nearBound = client->camera.nearDist - tolerance - shadowReach;
 	const float farBound = client->camera.farDist + tolerance;
 	if (dirDist < nearBound || dirDist > farBound)
 		return;
@@ -2154,7 +2164,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		cosFov = std::cos(fovX / 2.0f);
 	}
 	const float sideDist = std::abs(side.dot(obj->position - client->camera.position));
-	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov;
+	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov + shadowReach;
 	if (sideDist > sideBound)
 		return;
 
