@@ -370,8 +370,12 @@ end
 
 local function drawDialog()
 	local n = #dialog.buttons
+	-- buttons as wide as their labels need; the dialog wide enough for 40 between them and 70 at
+	-- its sides (the buttons' rims stand out of their box, and the gold frame is thick)
 	local bw, bh = L(170), L(36)
-	local w, h = math.max(L(440), n * bw + (n + 1) * L(24)), L(240)
+	for _, b in ipairs(dialog.buttons) do bw = math.max(bw, textWidth(FONT_BUTTON, b[1], S) + L(44)) end
+	local between, side = L(40), L(70)
+	local w, h = math.max(L(440), n * bw + (n - 1) * between + 2 * side), L(240)
 	local x, y = (W - w) / 2, (H - h) / 2
 	drawRect(0, 0, W, H, 0x66000000)
 	goldFrame(x, y, w, h)
@@ -380,7 +384,7 @@ local function drawDialog()
 	for word in string.gmatch(dialog.text, "%S+") do words[#words + 1] = word end
 	for _, word in ipairs(words) do
 		local try = (line == "") and word or (line .. " " .. word)
-		if textWidth(FONT_TEXT, try, S) > w - L(80) and line ~= "" then
+		if textWidth(FONT_TEXT, try, S) > w - L(120) and line ~= "" then
 			lines[#lines + 1] = line
 			line = word
 		else
@@ -392,9 +396,10 @@ local function drawDialog()
 	for i, l in ipairs(lines) do
 		centredText(FONT_TEXT, l, x, y + L(40) + (i - 1) * lh, w, lh, 0xFF9CE6F0)
 	end
-	local gap = (w - n * bw) / (n + 1)
+	-- (the row centred: a wider dialog for its text spreads the buttons no further apart)
+	local bx = x + (w - n * bw - (n - 1) * between) / 2
 	for i, b in ipairs(dialog.buttons) do
-		if button(b[1], x + gap + (i - 1) * (bw + gap), y + h - L(80), bw, bh) then
+		if button(b[1], bx + (i - 1) * (bw + between), y + h - L(80), bw, bh) then
 			b[2]()
 			return
 		end
