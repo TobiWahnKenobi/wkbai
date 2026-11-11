@@ -195,6 +195,9 @@ struct RenderSettings {
 	float maxHeight = 1000.0f;
 
 	bool invertMouseWheel = false;
+	// the view scrolls while the mouse is at the window's edge (at the scroll speed); off by
+	// default: wkbai's camera had none before
+	bool edgeScroll = false;
 	// The original's two cameras (WKB.exe's "enable_mouse_free_look", off by default): the fixed
 	// one keeps its height above the ground and a pitch set by the zoom, the middle mouse button
 	// turning it only round; the free one (false) looks anywhere

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <filesystem>
 #include "settings.h"
+#include "interface/KeyBindings.h"
 #include "file.h"
 #include "util/util.h"
 #include <exception>
@@ -327,6 +328,7 @@ int main()
 	if (g_settings.contains("lobbyTest"))
 		setvbuf(stdout, nullptr, _IONBF, 0);
 	g_renderSettings.load();
+	LoadKeyBindings();
 	g_gamePath = PathFromUtf8(g_settings.value<std::string>("gamePath", "."));
 	if (g_settings.contains("userPath"))
 		g_userPath = PathFromUtf8(g_settings.at("userPath").get<std::string>());

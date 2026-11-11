@@ -8,6 +8,7 @@
 // skirmish menu finds it. F8 switches it on and off in single player.
 
 #include "ClientInterface.h"
+#include "KeyBindings.h"
 #include "../MovementController.h"
 #include "../client.h"
 #include "../server.h"
@@ -250,17 +251,19 @@ bool ClientInterface::editorInput(const Vector3& cursor)
 		return false;
 	const bool overUi = ImGui::GetIO().WantCaptureMouse;
 	const uint32_t now = SDL_GetTicks();
-	if (g_modCtrl && g_keyPressed[SDL_SCANCODE_Z] && !ImGui::GetIO().WantTextInput)
-		g_modShift ? editorRedo() : editorUndo();
-	if (g_modCtrl && g_keyPressed[SDL_SCANCODE_Y] && !ImGui::GetIO().WantTextInput)
+	if (KeyPressed(KeyAction::EditorUndo) && !ImGui::GetIO().WantTextInput)
+		editorUndo();
+	else if (KeyPressed(KeyAction::EditorRedo) && !ImGui::GetIO().WantTextInput)
 		editorRedo();
 
 	if (ed.mode == EditorState::OBJECTS && ed.objectTool == EditorState::SELECT) {
-		const bool keys = !ImGui::GetIO().WantTextInput && !g_modCtrl;
-		if (!ed.grabbing && keys && g_keyPressed[SDL_SCANCODE_G])
+		const bool keys = !ImGui::GetIO().WantTextInput;
+		if (!ed.grabbing && keys && KeyPressed(KeyAction::EditorGrab))
 			editorGrab();
-		if (!ed.grabbing && keys && g_keyPressed[SDL_SCANCODE_R])
-			editorTurn(g_modShift ? -15.0f : 15.0f);
+		if (!ed.grabbing && keys && KeyPressed(KeyAction::EditorTurn))
+			editorTurn(15.0f);
+		if (!ed.grabbing && keys && KeyPressed(KeyAction::EditorTurnBack))
+			editorTurn(-15.0f);
 		if (!ed.grabbing)
 			return false; // the game's clicks select
 		// the selection follows the cursor, each object keeping its offset from where the grab began

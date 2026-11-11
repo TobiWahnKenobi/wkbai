@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "window.h"
+#include "interface/KeyBindings.h"
 #include <cstdio>
 #include <algorithm>
 #include <string>
@@ -157,6 +158,7 @@ void HandleWindow()
 	bool imguion = ImGui::GetCurrentContext() != nullptr;
 	for (int i = 0; i < SDL_SCANCODE_COUNT; i++)
 		g_keyPressed[i] = false;
+	KeyBindingsNewFrame();
 	for (bool& b : g_mousePressed)
 		b = false;
 	for (bool& b : g_mouseReleased)

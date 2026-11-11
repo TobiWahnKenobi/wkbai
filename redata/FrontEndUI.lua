@@ -369,7 +369,9 @@ local function confirm(text, onYes)
 end
 
 local function drawDialog()
-	local w, h = L(440), L(240)
+	local n = #dialog.buttons
+	local bw, bh = L(170), L(36)
+	local w, h = math.max(L(440), n * bw + (n + 1) * L(24)), L(240)
 	local x, y = (W - w) / 2, (H - h) / 2
 	drawRect(0, 0, W, H, 0x66000000)
 	goldFrame(x, y, w, h)
@@ -390,8 +392,6 @@ local function drawDialog()
 	for i, l in ipairs(lines) do
 		centredText(FONT_TEXT, l, x, y + L(40) + (i - 1) * lh, w, lh, 0xFF9CE6F0)
 	end
-	local n = #dialog.buttons
-	local bw, bh = L(170), L(36)
 	local gap = (w - n * bw) / (n + 1)
 	for i, b in ipairs(dialog.buttons) do
 		if button(b[1], x + gap + (i - 1) * (bw + gap), y + h - L(80), bw, bh) then
@@ -2344,9 +2344,138 @@ local function formatValue(o, v)
 	return string.format(o.format, v)
 end
 
+
+-- The Keyboard page (Controls): every key action of the game (interface/KeyBindings.cpp) under
+-- its group's heading, two keys each. A key button clicked waits for a key or combination (Esc:
+-- left as it was); a key that another action uses where this one works asks whether to swap the
+-- two or clear the other's. Default puts an action's own keys back, Reset all every action's.
+local RED = 0xFF3030E0
+local keyState = { scroll = 0, capture = nil }
+
+-- a key's name as shown: punctuation in words (the bitmap fonts have no brackets, and their thin
+-- "-" can vanish when scaled)
+local KEY_WORDS = { ["-"] = "Minus", ["+"] = "Plus", ["="] = "Equals", ["["] = "Left bracket", ["]"] = "Right bracket",
+	[";"] = "Semicolon", ["'"] = "Apostrophe", ["\\"] = "Backslash", ["/"] = "Slash", ["`"] = "Grave", [","] = "Comma", ["."] = "Period" }
+local function keyLabel(key)
+	-- the modifiers up to the last "+" that isn't the key itself
+	local cut = 0
+	for i = 1, #key - 1 do if string.sub(key, i, i) == "+" then cut = i end end
+	local mods, name = string.sub(key, 1, cut), string.sub(key, cut + 1)
+	local pad = string.match(name, "^Keypad (.)$")
+	if pad and KEY_WORDS[pad] then return mods .. "Keypad " .. KEY_WORDS[pad] end
+	return mods .. (KEY_WORDS[name] or name)
+end
+
+local function applyKeyBinding(id, slot, key)
+	local conflicts = getKeyConflicts(id, slot, key)
+	if #conflicts == 0 then
+		setKeyBinding(id, slot, key)
+		return
+	end
+	local old = getKeyBinding(id, slot)
+	local names = {}
+	for _, c in ipairs(conflicts) do names[#names + 1] = c.name end
+	dialog = { text = keyLabel(key) .. " is already used for: " .. table.concat(names, ", ") .. ".", buttons = {
+		-- the other action gets this one's old key (none if it had none)
+		{ "Swap", function()
+			dialog = nil
+			for _, c in ipairs(conflicts) do setKeyBinding(c.id, c.slot, "") end
+			setKeyBinding(conflicts[1].id, conflicts[1].slot, old)
+			setKeyBinding(id, slot, key)
+		end },
+		{ "Clear the other", function()
+			dialog = nil
+			for _, c in ipairs(conflicts) do setKeyBinding(c.id, c.slot, "") end
+			setKeyBinding(id, slot, key)
+		end },
+		{ T("FRONT_END_BUTTON_CANCEL"), function() dialog = nil end },
+	} }
+end
+
+local function startKeyCapture(id, slot)
+	keyState.capture = { id = id, slot = slot }
+	beginKeyCapture()
+end
+
+local function keyboardPage(px, py, pw, ph)
+	-- the key being waited for (before Options' own Esc: Esc here only stops the waiting)
+	if keyState.capture and not dialog then
+		local state, key = pollKeyCapture()
+		if state == "done" then
+			local c = keyState.capture
+			keyState.capture = nil
+			applyKeyBinding(c.id, c.slot, key)
+		elseif state == "cancelled" then
+			keyState.capture = nil
+		end
+	end
+	-- the rows: a heading for each group, then its actions
+	local rowsList, lastGroup = {}, nil
+	for _, a in ipairs(getKeyActions()) do
+		if a.group ~= lastGroup then
+			rowsList[#rowsList + 1] = { heading = a.group }
+			lastGroup = a.group
+		end
+		rowsList[#rowsList + 1] = a
+	end
+	local rowH = L(42)
+	local top, bottom = py + L(16), py + ph - L(64)
+	local rows = math.floor((bottom - top) / rowH)
+	if hovered(px, py, pw, ph) and mouse.wheel ~= 0 then keyState.scroll = keyState.scroll - mouse.wheel * 3 end
+	keyState.scroll = math.max(0, math.min(keyState.scroll, math.max(0, #rowsList - rows)))
+	local nameX, k1X, k2X, defX = px + L(60), X(1000), X(1270), X(1560)
+	local kw, kh = L(250), L(32)
+	pushClip(px, py, pw, ph)
+	for r = 1, rows do
+		local row = rowsList[keyState.scroll + r]
+		if not row then break end
+		local ry = top + (r - 1) * rowH
+		if row.heading then
+			drawText(FONT_BUTTON, px + L(30), ry + L(8), row.heading, YELLOW, S)
+			if r == 1 then
+				drawText(FONT_LIST, k1X + L(8), ry + L(16), "Key", GREY, S)
+				drawText(FONT_LIST, k2X + L(8), ry + L(16), "Second key", GREY, S)
+			end
+		else
+			drawText(FONT_TEXT, nameX, ry + (rowH - fontHeight(FONT_TEXT, S)) / 2 - L(2), row.name, row.cheat and 0xFFB4B4B4 or WHITE, S)
+			for slot = 1, 2 do
+				local bx = slot == 1 and k1X or k2X
+				local by = ry + (rowH - kh) / 2
+				local waiting = keyState.capture and keyState.capture.id == row.id and keyState.capture.slot == slot
+				local key = getKeyBinding(row.id, slot)
+				local label = waiting and "Press a key..." or (key ~= "" and keyLabel(key) or "(none)")
+				if button(label, bx, by, kw, kh, true, waiting) then startKeyCapture(row.id, slot) end
+				-- a key that another action uses where this one works
+				if key ~= "" and #getKeyConflicts(row.id, slot, key) > 0 then
+					drawFrame(bx - L(3), by - L(3), kw + L(6), kh + L(6), RED, L(2))
+				end
+			end
+			if keyState.capture and keyState.capture.id == row.id then
+				-- (no key at all in the slot waited for)
+				if button("Clear", defX, ry + (rowH - kh) / 2, L(150), kh) then
+					setKeyBinding(row.id, keyState.capture.slot, "")
+					keyState.capture = nil
+				end
+			elseif button("Default", defX, ry + (rowH - kh) / 2, L(150), kh, not isKeyBindingDefault(row.id)) then
+				resetKeyBinding(row.id)
+			end
+		end
+	end
+	popClip()
+	local hint = keyState.capture and "Press the key or combination (with Ctrl, Shift or Alt held). Esc: leave it as it was."
+		or "Click a key to change it. A red frame: another action uses that key too."
+	drawText(FONT_LIST, px + L(30), py + ph - L(44), hint, GREY, S)
+	if #rowsList > rows then
+		drawText(FONT_LIST, px + L(30), py + ph - L(24), "Scroll for more keys", GREY, S)
+	end
+	if button("Reset all to defaults", px + pw - L(330), py + ph - L(52), L(300), L(30)) then
+		confirm("Put every key back to its default?", function() resetAllKeyBindings(); keyState.capture = nil end)
+	end
+end
+
 Screens.options = {
 	background = sunsetBackground,
-	open = function() beginEditOptions(); optionsState.scroll = 0; optionsState.texts = {} end,
+	open = function() beginEditOptions(); optionsState.scroll = 0; optionsState.texts = {}; keyState.capture = nil end,
 	draw = function()
 		title(T("FRONT_END_OPTIONS_TITLE"))
 		-- the pages' groups as tabs (a page without one: a tab of its own), the group's pages as a
@@ -2383,11 +2512,14 @@ Screens.options = {
 			top = Y(136)
 		end
 		optionsState.lastPage[gi] = optionsState.page
-		if optionsState.page ~= before then optionsState.scroll = 0 end
+		if optionsState.page ~= before then optionsState.scroll = 0; keyState.capture = nil end
 		local px, py, pw, ph = X(90), top, L(1740), L(900) - (top - Y(100))
 		panel(px, py, pw, ph, true)
 
 		local page = pages[optionsState.page]
+		if page and page.id == "keyboard" then
+			keyboardPage(px, py, pw, ph)
+		else
 		local options = page and getOptions(page.id) or {}
 		local rowH = L(64)
 		local rows = math.floor((ph - L(20)) / rowH)
@@ -2453,7 +2585,11 @@ Screens.options = {
 		if #options > rows then
 			drawText(FONT_LIST, px + pw - L(260), py + ph - L(22), "Scroll for more settings", GREY, S)
 		end
-		if button(T("FRONT_END_BUTTON_OK"), X(735), Y(1022), L(210), L(26)) then
+		end
+		if dialog then
+			-- (Esc closes the question, not the Options screen)
+			if isKeyPressed("Escape") then dialog = nil end
+		elseif button(T("FRONT_END_BUTTON_OK"), X(735), Y(1022), L(210), L(26)) then
 			saveOptions()
 			pop()
 		elseif button(T("FRONT_END_BUTTON_CANCEL"), X(975), Y(1022), L(210), L(26)) or isKeyPressed("Escape") then
@@ -2606,6 +2742,25 @@ function FE_Open(name)
 			return
 		elseif tab == "save" then
 			saveOptions()
+			return
+		end
+		-- "options.bind=<action id>=<slot>=<key>" (tests): a key given to an action as if pressed on
+		-- the Keyboard page (asking when it clashes); "options.capture=<action id>=<slot>": waiting
+		-- for one
+		local bindId, bindSlot, bindKey = string.match(tab, "^bind=([^=]+)=(%d)=(.*)$")
+		if bindId then
+			applyKeyBinding(bindId, tonumber(bindSlot), bindKey)
+			return
+		end
+		-- "options.keyscroll=<rows>" (tests): the Keyboard page scrolled down
+		local keyScroll = string.match(tab, "^keyscroll=(%d+)$")
+		if keyScroll then
+			keyState.scroll = tonumber(keyScroll)
+			return
+		end
+		local capId, capSlot = string.match(tab, "^capture=([^=]+)=(%d)$")
+		if capId then
+			startKeyCapture(capId, tonumber(capSlot))
 			return
 		end
 		for i, p in ipairs(getOptionPages()) do

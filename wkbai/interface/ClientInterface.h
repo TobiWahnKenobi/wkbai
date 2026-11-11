@@ -75,6 +75,7 @@ struct ClientInterface {
 	ClientInterface(Client *client, IRenderer *gfx) : client(client), gfx(gfx), terrainRenderer(nullptr),
 		sceneRenderer(nullptr), debugger(client, this), scene(nullptr), particlesContainer(nullptr), psCache(nullptr),
 		particleRenderer(nullptr), uiTexCache(gfx), terrainSpriteContainer(nullptr), terrainSpriteRenderer(nullptr) {}
+	~ClientInterface(); // (the key bindings' cheat gate let go)
 
 	const GameObjBlueprint *stampdownBlueprint = nullptr;
 	// the walls the building being placed would take down (its plan's toRemove, last frame's):

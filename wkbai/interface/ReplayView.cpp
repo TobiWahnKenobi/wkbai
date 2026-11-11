@@ -2,6 +2,7 @@
 // screen and marked on the minimap for a while
 
 #include "ReplayView.h"
+#include "KeyBindings.h"
 #include "GameChronicle.h"
 #include "../client.h"
 #include "../Camera.h"
@@ -513,19 +514,19 @@ void ReplayView::drawControls(Client* client, Server* server, IRenderer* gfx)
 		measuredFromMs = played;
 	}
 
-	// the keys: P pauses, keypad + and - change the speed (no text being typed)
+	// the keys (KeyBindings: P pauses, L the log, keypad + and - change the speed) (no text being typed)
 	if (!ImGui::GetIO().WantTextInput) {
-		if (g_keyPressed[SDL_SCANCODE_P])
+		if (KeyPressed(KeyAction::ReplayPause))
 			setPaused(!paused);
-		if (g_keyPressed[SDL_SCANCODE_L])
+		if (KeyPressed(KeyAction::ReplayLog))
 			logOpen = !logOpen;
 		size_t cur = 0;
 		for (size_t i = 0; i < std::size(SPEEDS); i++)
 			if (std::fabs(SPEEDS[i] - speed) < std::fabs(SPEEDS[cur] - speed))
 				cur = i;
-		if (g_keyPressed[SDL_SCANCODE_KP_PLUS] && cur + 1 < std::size(SPEEDS))
+		if (KeyPressed(KeyAction::ReplayFaster) && cur + 1 < std::size(SPEEDS))
 			setSpeed(SPEEDS[cur + 1]);
-		if (g_keyPressed[SDL_SCANCODE_KP_MINUS] && cur > 0)
+		if (KeyPressed(KeyAction::ReplaySlower) && cur > 0)
 			setSpeed(SPEEDS[cur - 1]);
 	}
 	// test runs: "benchmark": { ..., "replayControls": [[frame, "pause" | "play" | "speed" | "seek",
