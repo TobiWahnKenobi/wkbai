@@ -855,8 +855,12 @@ float3 NightSky(float3 rd, float px)
 			float3 n = mx * q.x + my * q.y - SkyMoon.xyz * sqrt(saturate(1 - r * r));
 			float sunSide = smoothstep(-0.04, 0.10, dot(n, SkySun.xyz));
 			float earthshine = 0.035 * (1 - lit) * (1 - lit);
-			// (the disc in front of its glow; the sky behind it, outc, about 0.1)
-			c = lerp(c, moonCol * (albedo * limb * 1.02) * max(sunSide, earthshine), edge);
+			// The dark side as the sky around it: the moonlit air in front of the disc (its glow,
+			// c) stays over it, the sky behind (outc) shows through, the earthshine a touch over
+			// that; the lit side as before (the play test of 2026-11-10: the dark side stood black
+			// against the glow around it)
+			const float3 litSide = moonCol * (albedo * limb * 1.02) * sunSide;
+			c = lerp(c, max(c + moonCol * earthshine * albedo, litSide), edge);
 			disc = edge;
 		}
 		c *= SkyMoon.w;

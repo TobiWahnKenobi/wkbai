@@ -372,13 +372,18 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	// colours: white high up, warm low down, a pale blue moon
 	const float warm = Smoothstep(0.0f, 0.45f, s.y);
 	const float dayCol[3] = { 1.0f, 0.62f + 0.38f * warm, 0.38f + 0.62f * warm };
-	// the moon's light by its phase and height (a full moon's as before; the sky a little darker
-	// on a moonless night)
-	const float moonCol[3] = { 0.20f * sun.moonLight, 0.25f * sun.moonLight, 0.38f * sun.moonLight };
-	const float skyMoon = 0.85f + 0.15f * sun.moonLight;
+	// The moon's light by its phase and height, and the night sky's with it: most of the night's
+	// ambient light is the moonlit sky, so a moonless night is about half as light and has no
+	// direct light (the play test of 2026-11-10: the sky's unchanged ambient, stronger than the
+	// moon's direct light, hid the phase; then 12% down, a little too bright, 2026-11-11; the
+	// moonless night darker, 0.36 of the day's sky light instead of 0.5, the phases between by
+	// their light, the full moon's kept)
+	const float moonCol[3] = { 0.23f * sun.moonLight, 0.27f * sun.moonLight, 0.40f * sun.moonLight };
+	const float skyMoon = 0.36f + 0.56f * sun.moonLight;
 	const float ambDay[3] = { 1.0f, 0.92f + 0.08f * warm, 0.85f + 0.15f * warm };
 	const float ambNight[3] = { 0.30f * skyMoon, 0.35f * skyMoon, 0.50f * skyMoon };
 	sun.moon = 1.0f - sun.daylight;
+	sun.skyLightScale = 1.0f + (skyMoon - 1.0f) * sun.moon;
 	const float sunDim = 1.0f - 0.6f * cloudCover, ambDim = 1.0f - 0.2f * cloudCover;
 	// the light's direction jumps from the sun to the moon at daylight 0.5 (and back at dawn):
 	// the direct light, and with it every shadow (ray-traced, the shadow maps', the clouds'),
