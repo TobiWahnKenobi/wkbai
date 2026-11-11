@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 // Agent control's eyes for aiming (docs/engine/agent-control.md in the RE repo). Nothing here
 // acts: it says where things are drawn, so that AgentServer can move the agent's cursor there
@@ -62,6 +63,13 @@ struct World {
 	std::function<std::vector<Seen>()> ownOnScreen;
 	// the player this screen plays (0: none, it watches)
 	std::function<uint32_t()> player;
+	// Layer 3: what the player sees, as JSON (AgentServer's "observe"): no more than the screen
+	// and the HUD show, the fog of war as the player has it
+	std::function<nlohmann::json()> observe;
+	// Test probes (AgentServer's "probe"): what a person can't see (paths, orders, the game's hash,
+	// every object regardless of fog); only where cheat keys work (single player in cheat mode) or
+	// in a replay, else an error
+	std::function<nlohmann::json(const nlohmann::json& request)> probe;
 	// the selection's ids
 	std::function<std::vector<uint32_t>()> selection;
 };

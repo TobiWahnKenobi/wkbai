@@ -266,6 +266,24 @@ namespace {
 			reply(out, fromScript, line);
 			return;
 		}
+		if (op == "observe") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->observe) { fail("no game on the screen"); return; }
+			out["ok"] = true;
+			const nlohmann::json seen = w->observe(); // (kept: items() of a temporary would dangle)
+			for (const auto& [k, v] : seen.items())
+				out[k] = v;
+			reply(out, fromScript, line);
+			return;
+		}
+		if (op == "probe") {
+			const AgentUi::World* w = AgentUi::GetWorld();
+			if (!w || !w->probe) { fail("no game on the screen"); return; }
+			nlohmann::json r = w->probe(req);
+			r["id"] = out["id"];
+			reply(r, fromScript, line);
+			return;
+		}
 		if (op == "objects") {
 			const AgentUi::World* w = AgentUi::GetWorld();
 			if (!w || !w->ownOnScreen) { fail("no game on the screen"); return; }

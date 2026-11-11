@@ -243,6 +243,7 @@ private:
 	CliGORef nextSelectedObject;
 	// agent control's view of this game (AgentUi::World), set up at the first frame
 	AgentUi::World agentWorld;
+	struct WndCursor* shownCursor = nullptr; // the cursor shown last
 	void setUpAgentWorld();
 	// wkbai's unit history: the heroes drawn this frame, their names to be shown over their heads
 	// (the setting "showHeroNames"), and where (the top of the model)
