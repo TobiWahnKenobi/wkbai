@@ -828,6 +828,19 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		L.detail = detail * (1 - L.wet) + seaFloor * L.wet;
 		return L;
 	};
+	// Out on the sea (its share over a half) the land stays under it, deeper the farther out: the
+	// sea floor's relief had stood out of the water in sandbanks, holes in the sea (the play test
+	// of 2026-11-11)
+	auto seaCap = [&](float v, float wet) {
+		if (seaLevel < -1e29f)
+			return v;
+		const float k = std::clamp((wet - 0.5f) / 0.3f, 0.0f, 1.0f);
+		const float sm = k * k * (3 - 2 * k);
+		v += (std::min(v, seaLevel - 0.6f - 2.4f * sm) - v) * sm;
+		// (no lift inland: where the map's fjords carry on its sea reaches far in with a small
+		// share, and lifted it had become land laced with water)
+		return v;
+	};
 
 	// ring 0's grid spacing (tiles) by the detail (Low 20 units, Medium 10, High 5, Ultra 2.5)
 	const float farFoot0 = std::array<float, 4>{ 4.0f, 2.0f, 1.0f, 0.5f }[std::clamp(detail, 0, 3)];
@@ -889,7 +902,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			bump8[i] = amp * sigma8 * Fbm(seed, px, pz, 11.0f, 2, 79);
 			dryAt[i] = wet < 0.3f;
 			wetAt[i] = wet;
-			height[i] = base[i] + ramp2 * L.detail + bump1[i] + bump3[i] + bump8[i];
+			{
+				// (fading in from the map's edge like the land forms, so the seam shows no step)
+				const float h0 = base[i] + ramp2 * L.detail + bump1[i] + bump3[i] + bump8[i];
+				height[i] = h0 + (seaCap(h0, wet) - h0) * ramp2;
+			}
 		}
 	// The small relief calibrated: measured on the map's edge band and on the extension alike
 	// (medians of how far each vertex stands from its neighbours' mean at about 1, 3 and 8 tiles),
@@ -1161,6 +1178,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 
 	// ---- Seas and lakes at the edge spread out over the land below their level (their shores
 	// follow the land's shape); the rivers' channels take their own levels
+	std::vector<uint8_t> waterSrc((size_t)W * H, 0); // (the dump's: 1 river, 2 spread, 3 sea rule, 4 lake)
 	for (int Z = 0; Z < H; Z++)
 		for (int X = 0; X < W; X++) {
 			if (inMapT(X, Z) || riverLevel[(size_t)Z * W + X] < -1e29f)
@@ -1168,6 +1186,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			Terrain::Tile& t = e.tiles[(size_t)Z * W + X];
 			t.fullOfWater = true;
 			t.waterLevel = riverLevel[(size_t)Z * W + X];
+			waterSrc[(size_t)Z * W + X] = 1;
 		}
 	{
 		std::deque<std::pair<int, int>> queue;
@@ -1205,6 +1224,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					continue;
 				t.fullOfWater = true;
 				t.waterLevel = lvl;
+				waterSrc[(size_t)q[1] * W + q[0]] = 2;
 				queue.push_back({ q[0], q[1] });
 			}
 		}
@@ -1224,11 +1244,43 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					wetMax = std::max(wetMax, wetAt[vi]);
 					lowest = std::min(lowest, height[vi]);
 				}
-				if (wetMax > 0.02f && lowest < seaLevel) {
+				if (wetMax > 0.3f && lowest < seaLevel) {
 					t.fullOfWater = true;
 					t.waterLevel = seaLevel;
+					waterSrc[(size_t)Z * W + X] = 3;
 				}
 			}
+	// ... and from every tile of the sea on over the land it reaches below its level (none left
+	// dry under it beside the sea, holes in it), not over a river's water
+	if (seaLevel > -1e29f) {
+		std::deque<std::pair<int, int>> queue;
+		for (int Z = 0; Z < H; Z++)
+			for (int X = 0; X < W; X++) {
+				const Terrain::Tile& t = e.tiles[(size_t)Z * W + X];
+				if (!inMapT(X, Z) && t.fullOfWater && t.waterLevel <= seaLevel + 0.01f && waterSrc[(size_t)Z * W + X] != 1)
+					queue.push_back({ X, Z });
+			}
+		while (!queue.empty()) {
+			const auto [x, z] = queue.front();
+			queue.pop_front();
+			const int nb[4][2] = { { x + 1, z }, { x - 1, z }, { x, z + 1 }, { x, z - 1 } };
+			for (const auto& q : nb) {
+				if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H || inMapT(q[0], q[1]))
+					continue;
+				Terrain::Tile& t = e.tiles[(size_t)q[1] * W + q[0]];
+				if (t.fullOfWater)
+					continue;
+				// (the land's own height under a river's bank: the sea goes over it)
+				auto own = [&](int vx, int vz) { return std::min(H_(vx, vz), bankFrom[(size_t)vz * EW + vx]); };
+				if (std::min({ own(q[0], q[1]), own(q[0] + 1, q[1]), own(q[0], q[1] + 1), own(q[0] + 1, q[1] + 1) }) >= seaLevel)
+					continue;
+				t.fullOfWater = true;
+				t.waterLevel = seaLevel;
+				waterSrc[(size_t)q[1] * W + q[0]] = 3;
+				queue.push_back({ q[0], q[1] });
+			}
+		}
+	}
 	// Inside the water (all four tiles round a vertex under it) the land stays under it: a river's
 	// banks where a sea spread over them drew jagged lines of sand in the water (the play test of
 	// 2026-11-10)
@@ -1326,7 +1378,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		// not every hollow holds water: the biggest (with a random lean), a few per area of land
 		std::sort(basins.begin(), basins.end(), [](const Basin& a, const Basin& b) { return a.rank > b.rank; });
 		const int outside = W * H - w * h;
-		const int maxLakes = std::max(2, outside / 9000), maxPonds = std::max(3, outside / 5000);
+		// (none any more: the hollows' water stood in blocks beside the rivers and coasts, the
+		// splotches of the play tests of 2026-11-11)
+		const int maxLakes = 0 * std::max(2, outside / 9000), maxPonds = 0 * std::max(3, outside / 5000);
 		for (const Basin& b : basins) {
 			if (b.lake ? lakes >= maxLakes : ponds >= maxPonds)
 				continue;
@@ -1337,6 +1391,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				Terrain::Tile& t = e.tiles[(size_t)z * W + x];
 				t.fullOfWater = true;
 				t.waterLevel = level;
+				waterSrc[(size_t)z * W + x] = 4;
 			}
 			(b.lake ? lakes : ponds)++;
 		}
@@ -1733,6 +1788,16 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					if (t.fullOfWater) {
 						const float depth = std::clamp((t.waterLevel - v) / 8.0f, 0.0f, 1.0f);
 						px[0] = (uint8_t)(40 - 20 * depth); px[1] = (uint8_t)(110 - 50 * depth); px[2] = (uint8_t)(210 - 60 * depth);
+						if (getenv("WKB_EXTEND_DUMP_SRC")) {
+							static const uint8_t SC[5][3] = { { 0, 0, 0 }, { 0, 220, 255 }, { 30, 60, 200 }, { 230, 0, 230 }, { 255, 80, 0 } };
+							const uint8_t sc = waterSrc[(size_t)Z * W + X];
+							if (sc)
+								for (int c = 0; c < 3; c++)
+									px[c] = SC[sc][c];
+						}
+					}
+					else if (getenv("WKB_EXTEND_DUMP_SRC") && seaLevel > -1e29f && std::min({ v, H_(X + 1, Z), H_(X, Z + 1), H_(X + 1, Z + 1) }) < seaLevel) {
+						px[0] = 255; px[1] = 0; px[2] = 0; // dry but below the sea
 					}
 					const bool edgeLine = ((X == n - 1 || X == n + w) && Z >= n - 1 && Z <= n + h) || ((Z == n - 1 || Z == n + h) && X >= n - 1 && X <= n + w);
 					if (edgeLine) { px[0] = 255; px[1] = 220; px[2] = 0; }
@@ -1974,7 +2039,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					// smoothly instead of halving at each ring's edge)
 					const float foot = footAt(R, px, pz);
 					const Land L = landAt(px, pz, foot);
-					float v = farBase(px, pz, foot) + L.detail;
+					float v = seaCap(farBase(px, pz, foot) + L.detail, L.wet);
 					R.mtn[gi] = L.mtn;
 					float lvl = -1e30f;
 					// rivers: the water's level along a corridor (a river narrower than the grid
@@ -1992,11 +2057,15 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 						v = std::min(v, level + 0.35f + 1.1f * u2 * (0.4f + 0.06f * u2));
 						// (over the river's level along its corridor: hollows beside it under its
 						// level showed as splotches of water)
-						if (u2 < 2.5f * s)
+						// (not where it runs at the sea's level into the sea: a strip of land had
+						// stood between the two)
+						if (u2 < 2.5f * s && (seaLevel < -1e29f || (level > seaLevel + 0.3f && L.wet <= 0.3f)))
 							v = std::max(v, level + 0.3f);
 					}
 					// the sea's level over the land near the map's seas
-					if (seaLevel > -1e29f && L.wet > 0.02f)
+					// (over 0.3: a little of it put the sea over the low land along the rivers, in
+					// blocks of water beside them, the play test of 2026-11-11)
+					if (seaLevel > -1e29f && L.wet > 0.3f)
 						lvl = std::max(lvl, seaLevel);
 					R.hgt[gi] = v;
 					R.lvl[gi] = lvl;
@@ -2051,6 +2120,32 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		for (Ring& R : rings)
 			for (size_t gi = 0; gi < R.hgt.size(); gi++)
 				R.water[gi] = R.used[gi] && R.lvl[gi] > R.hgt[gi];
+		// The water on over every point it reaches below its level (a sea's, a river's): a point
+		// under it beside the water but outside its rule had drawn the cell between them dry, sand
+		// in stair steps along the shores and holes in the sea (the play test of 2026-11-11)
+		for (Ring& R : rings) {
+			const int NX = R.nx(), NZ = R.nz();
+			std::deque<size_t> queue;
+			for (size_t gi = 0; gi < R.hgt.size(); gi++)
+				if (R.water[gi])
+					queue.push_back(gi);
+			while (!queue.empty()) {
+				const size_t gi = queue.front();
+				queue.pop_front();
+				const int i = (int)(gi % NX), j = (int)(gi / NX);
+				for (const auto& [di, dj] : { std::pair{ 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) {
+					const int i2 = i + di, j2 = j + dj;
+					if (i2 < 0 || j2 < 0 || i2 >= NX || j2 >= NZ)
+						continue;
+					const size_t g = (size_t)j2 * NX + i2;
+					if (!R.used[g] || R.water[g] || R.hgt[g] >= R.lvl[gi])
+						continue;
+					R.lvl[g] = std::max(R.lvl[g], R.lvl[gi]);
+					R.water[g] = 1;
+					queue.push_back(g);
+				}
+			}
+		}
 		// Detail falling off gradually: over the outer part of each ring its land is smoothed
 		// towards the next ring's coarser grid (the step from one ring to the next was abrupt, the
 		// play test of 2026-11-10)
