@@ -193,6 +193,9 @@ struct RenderSettings {
 	// ray-traced reflections of the buildings, trees and units in the water (the same; water Low
 	// or better), over the screen-space reflections, which still show the terrain
 	bool rtReflections = false;
+	// the water's screen-space reflections (water Low or better): the frame behind the water seen
+	// along the mirror ray; off, the water mirrors the sky alone (and the ray-traced reflections)
+	bool ssReflections = true;
 	// the ground's Fresnel (enhanced terrain renderer on Diligent): its reflection of the sky
 	// at grazing angles, as a rough dielectric's (Schlick, F0 0.04) times this; 0 off. The
 	// models' per-pixel lighting (modelLighting) has its own Fresnel, PBR packs or not.

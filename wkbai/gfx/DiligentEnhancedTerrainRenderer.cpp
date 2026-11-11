@@ -3017,7 +3017,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	// the reflections: Low a short, coarse ray; Medium and High longer, refined; Very high
 	// longer still; Ultra the finest
 	float* reflect = (float*)(sbdata + 832);
-	const bool reflections = wq >= RenderSettings::WATER_LOW && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
+	const bool reflections = g_renderSettings.ssReflections && wq >= RenderSettings::WATER_LOW && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
 	reflect[0] = !reflections ? 0.0f : wq == RenderSettings::WATER_LOW ? 12.0f : wq <= RenderSettings::WATER_HIGH ? 24.0f
 		: wq == RenderSettings::WATER_VERYHIGH ? 32.0f : 40.0f;
 	reflect[1] = camera->projMatrix.m[2][2];

@@ -25,6 +25,11 @@ struct FogOfWar {
 	uint32_t width = 0, height = 0;
 	// changes with the tiles (for the texture)
 	uint32_t version = 0;
+	// as drawn: the same with drawPad tiles more on each side (Extend map's land: the sight
+	// circles reach over the border, the land beyond unseen; the game itself only knows tiles)
+	std::vector<uint8_t> drawTiles;
+	uint32_t drawWidth = 0, drawHeight = 0;
+	int drawPad = 0; // set by the client interface
 
 	// worked out again every 250 ms (real time)
 	void update(Client* client);

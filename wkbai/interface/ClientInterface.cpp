@@ -1023,6 +1023,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
+		ImGui::Checkbox("Screen-space water reflections (water Low or better)", &s.ssReflections);
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
 	}
 	if (ImGui::CollapsingHeader("Terrain and grass")) {
@@ -3944,6 +3945,9 @@ void ClientInterface::iter()
 		}
 	}
 	if (fogOn)
+		// (with Extend map, drawn 40 tiles on over its land: further than any sight reaches past
+		// the border, so the land beyond is unseen alike)
+		fogOfWar.drawPad = terrainRenderer && terrainRenderer->extendedTiles() > 0 ? 40 : 0;
 		fogOfWar.update(client);
 	if (postGfx) {
 		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
@@ -4582,9 +4586,9 @@ void ClientInterface::iter()
 	}
 
 	if (postGfx) {
-		if (fogOn && !fogOfWar.tiles.empty())
-			postGfx->SetFogOfWar(fogOfWar.tiles.data(), fogOfWar.width, fogOfWar.height, fogOfWar.version,
-				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness);
+		if (fogOn && !fogOfWar.drawTiles.empty())
+			postGfx->SetFogOfWar(fogOfWar.drawTiles.data(), fogOfWar.drawWidth, fogOfWar.drawHeight, fogOfWar.version,
+				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness, (uint32_t)fogOfWar.drawPad);
 		PROFILE_SCOPE("Post-processing");
 		postGfx->ApplyPostProcessing(client->camera);
 	}

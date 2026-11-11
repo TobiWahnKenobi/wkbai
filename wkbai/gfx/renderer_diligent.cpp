@@ -1083,9 +1083,9 @@ struct DiligentRenderer : DiligentGfx
 		ctx->SetViewports(1, nullptr, 0, 0);
 	}
 
-	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) override
+	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness, uint32_t pad) override
 	{
-		fog = { tiles, width, height, version, inverseView, unseenBrightness };
+		fog = { tiles, width, height, version, inverseView, unseenBrightness, pad };
 	}
 
 	void ApplyPostProcessing(const Camera& camera) override

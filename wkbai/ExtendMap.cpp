@@ -897,8 +897,12 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const float cuesta = wild * std::clamp((Fbm(seed, px, pz, 300.0f, 2, 330, foot) - 0.12f) * 3.0f, 0.0f, 1.0f)
 				* (1 - L.wet) * (1 - mtn) * std::clamp(1.0f - (foot - 2.0f) / 4.0f, 0.0f, 1.0f);
 			if (cuesta > 0) {
-				const float ang = 3.14159265f * Fbm(seed, px, pz, 500.0f, 2, 331);
-				const float u = (px * std::cos(ang) + pz * std::sin(ang)) / 55.0f + 0.7f * Fbm(seed, px, pz, 90.0f, 2, 332, foot);
+				// (one direction for the map's extension, bent by a broad warp: an angle that varied
+				// with the place, times the place's far coordinates, had packed the cliffs into rows
+				// of spikes, the play test of 2026-11-11)
+				const float ang = 3.14159265f * Unit(HashAt(seed, 0, 0, 331));
+				const float u = (px * std::cos(ang) + pz * std::sin(ang)) / 55.0f
+					+ 1.6f * Fbm(seed, px, pz, 220.0f, 2, 333, foot) + 0.5f * Fbm(seed, px, pz, 70.0f, 2, 332, foot);
 				const float t = u - std::floor(u);
 				// (the drop at least 3 grid steps wide: sampled coarser, the cliffs' edges had
 				// broken into rows of spikes, the play test of 2026-11-11)
@@ -2026,7 +2030,17 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					}
 				}
 		};
-		auto colourOf = [&](int m) { return m >= 0 && m < M ? mats.colour[m] : std::array<float, 3>{ 90, 110, 60 }; };
+		// (more saturated and a little darker than the pictures' means: averaged, a picture's
+		// colour is paler than the picture looks, and without its relief and the screen's
+		// occlusion the far land had stood too bright and grey beside the map, at dawn and dusk
+		// most, the play test of 2026-11-11)
+		auto colourOf = [&](int m) {
+			std::array<float, 3> c = m >= 0 && m < M ? mats.colour[m] : std::array<float, 3>{ 90, 110, 60 };
+			const float lum = 0.299f * c[0] + 0.587f * c[1] + 0.114f * c[2];
+			for (int q = 0; q < 3; q++)
+				c[q] = std::clamp((lum + (c[q] - lum) * 1.35f) * 0.86f, 0.0f, 255.0f);
+			return c;
+		};
 		std::array<float, 11> rockShare{};
 		for (int b = 0; b <= 10; b++)
 			rockShare[b] = rockBinN[b] >= 20 ? (float)(rockBinSum[b] / rockBinN[b]) : (b > 0 ? rockShare[b - 1] : 0.0f);
