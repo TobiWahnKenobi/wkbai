@@ -1091,7 +1091,7 @@ local SETTINGS = {
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 0, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
-	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
+	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1254,6 +1254,13 @@ local function settingsTab()
 		if button(MOD_POLICIES[s.modPolicy + 1], X(520), Y(900), L(424), L(34)) then
 			s.modPolicy = (s.modPolicy + 1) % 4
 			request("skirmish_setting", "modPolicy=" .. s.modPolicy)
+		end
+		-- which wkbai guests must run (BuildIdentity): the same network version at least; the same
+		-- version (commit, unmodified) by default; an identical build, its code proved by a challenge
+		local BUILD_POLICIES = { "Builds: any of this network version", "Builds: the host's version", "Builds: identical to the host's" }
+		if button(BUILD_POLICIES[s.buildPolicy + 1], X(960), Y(900), L(420), L(34)) then
+			s.buildPolicy = (s.buildPolicy + 1) % 3
+			request("skirmish_setting", "buildPolicy=" .. s.buildPolicy)
 		end
 		if s.allowSpectators ~= 0 then
 			drawText(FONT_LIST, X(520), Y(988), "at most", WHITE, S)
@@ -1557,6 +1564,7 @@ Screens.mphost = {
 		openLobby(true); lastLobbyText = nil
 		-- the host checks joining guests' mods with this while the lobby is open
 		request("skirmish_setting", "modPolicy=" .. skirmish.settings.modPolicy)
+		request("skirmish_setting", "buildPolicy=" .. skirmish.settings.buildPolicy)
 	end,
 	draw = function() drawLobby(true) end,
 	onEscape = function() request("stop_hosting"); pop() end,

@@ -274,6 +274,8 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			skirmishMenu.setSetting(request.arg.substr(0, eq), atoi(request.arg.c_str() + eq + 1));
 			if (request.arg.substr(0, eq) == "modPolicy")
 				server->modPolicy = atoi(request.arg.c_str() + eq + 1);
+			if (request.arg.substr(0, eq) == "buildPolicy")
+				server->buildPolicy = std::clamp(atoi(request.arg.c_str() + eq + 1), 0, 2);
 		}
 	}
 	else if (request.action == "skirmish_settings")
@@ -1123,6 +1125,15 @@ void QuickStartMenu::lobbyTest()
 		if (!offer.empty())
 			handleRequest({ "host_offer", offer });
 		return;
+	}
+	// "settings": ["buildPolicy=2", ...] for the hosted lobby, once it is open (after the lobby
+	// screen sent its own)
+	static bool settingsApplied = false;
+	if (!settingsApplied) {
+		settingsApplied = true;
+		for (const auto& s : test.value("settings", nlohmann::json::array()))
+			if (s.is_string())
+				handleRequest({ "skirmish_setting", s.get<std::string>() });
 	}
 	// { "host": "<level>", "solo": true }: starts at once with no guest, the host alone (the other
 	// positions empty)

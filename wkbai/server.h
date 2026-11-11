@@ -185,6 +185,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool joinedRunning = false; // it joined the running game: sent its state and the places
 		bool awaitingState = false; // it joined the running game: no broadcasts before its state
 		std::string modManifest, modManifestParts; // its mods (NETSRVMSG_MOD_MANIFEST)
+		// the build check: the challenge sent, the answer (NETSRVMSG_BUILD_ANSWER), a hello held
+		// until the answer came (buildPolicy IDENTICAL)
+		std::string buildChallenge, buildAnswer, pendingHello;
+		bool buildAnswered = false;
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -346,6 +350,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_NONE = 2, // no mods at all, of any kind
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
+	// Which wkbai guests must run ("buildPolicy", BuildIdentity::Policy): 0 the same network
+	// version, 1 the same version (the default), 2 an identical build (its code proved by a challenge)
+	int buildPolicy = 1;
+	// a guest's build against the policy ("" fits)
+	std::string checkGuestBuild(int clientIndex);
+	// NETSRVMSG_LOBBY_HELLO (again when a held hello's build answer comes)
+	void lobbyHello(int clientIndex, const std::string& data);
 	// a guest's mods checked at its hello: "" when it may join; a reason to turn it away; or
 	// "sent" when the host sent it its mods (it says hello again with them mounted)
 	std::string checkGuestMods(int clientIndex);

@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #define _USE_MATH_DEFINES
+#include "BuildIdentity.h"
 #include "client.h"
 #include "util/LoadingProgress.h"
 #include "WaterDesign.h"
@@ -823,6 +824,16 @@ void Client::tick()
 					}
 				}
 				hostDataParts.erase(kind);
+				break;
+			}
+			case NETCLIMSG_BUILD_CHALLENGE: {
+				// the host's build check: our code in memory now, with its challenge (BuildIdentity)
+				const std::string challenge = br.readStringZ();
+				NetPacketWriter answer(NETSRVMSG_BUILD_ANSWER);
+				answer.writeStringZ(BuildIdentity::ChallengeAnswer(challenge.substr(0, 64)));
+				if (serverLink)
+					serverLink->send(answer);
+				printf("Client: the host's build check answered (we are %s)\n", BuildIdentity::Describe().c_str());
 				break;
 			}
 			case NETCLIMSG_JOIN_REFUSED: {

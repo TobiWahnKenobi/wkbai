@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "BuildIdentity.h"
+#include <random>
 #include "server.h"
 #include "util/LoadingProgress.h"
 #include <set>
@@ -581,6 +583,7 @@ std::string Server::aiSettingsText() const
 	text += "aiWeather=" + std::to_string(aiWeather) + "\n";
 	text += "aiTakeOver=" + std::to_string((int)aiTakeOver) + "\n";
 	text += "modPolicy=" + std::to_string(modPolicy) + "\n";
+	text += "buildPolicy=" + std::to_string(buildPolicy) + "\n";
 	text += "allowSpectators=" + std::to_string((int)allowSpectators) + "\n";
 	text += "maxSpectators=" + std::to_string(maxSpectators) + "\n";
 	text += "clearFogOfWar=" + std::to_string((int)clearFogOfWar) + "\n";
@@ -624,6 +627,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "cheatMode") cheatMode = v != 0;
 		else if (name == "aiTakeOver") aiTakeOver = v != 0;
 		else if (name == "modPolicy") modPolicy = (int)v;
+		else if (name == "buildPolicy") buildPolicy = (int)v;
 		else if (name == "allowSpectators") allowSpectators = v != 0;
 		else if (name == "maxSpectators") maxSpectators = (int)v;
 		else if (name == "clearFogOfWar") clearFogOfWar = v != 0;
@@ -2425,6 +2429,16 @@ void Server::addClient(NetLink* link)
 	clientInfos.emplace_back();
 	// the game runs: it gets nothing of it until sendStateTo
 	clientInfos.back().awaitingState = gameSet && getLevel() && !replay;
+	// the build check's challenge, to every guest: random, never the same twice
+	if (clientLinks.size() > 1) {
+		std::random_device rd;
+		char hex[33];
+		snprintf(hex, sizeof(hex), "%08x%08x%08x%08x", rd(), rd(), rd(), rd());
+		clientInfos.back().buildChallenge = hex;
+		NetPacketWriter msg(NETCLIMSG_BUILD_CHALLENGE);
+		msg.writeStringZ(hex);
+		link->send(msg);
+	}
 }
 
 void Server::removeClient(NetLink* link)
@@ -2547,6 +2561,16 @@ std::string Server::checkGuestMods(int clientIndex)
 		}
 	}
 	return "Your mods differ from the host's: " + why;
+}
+
+std::string Server::checkGuestBuild(int clientIndex)
+{
+	ClientInfo& info = clientInfos[clientIndex];
+	const nlohmann::json guest = nlohmann::json::parse(info.modManifest, nullptr, false);
+	const bool answerOk = info.buildAnswered && !info.buildChallenge.empty()
+		&& info.buildAnswer == BuildIdentity::ChallengeAnswer(info.buildChallenge) && !info.buildAnswer.empty();
+	return BuildIdentity::Compare(buildPolicy, BuildIdentity::Json(),
+		guest.is_object() ? guest.value("build", nlohmann::json()) : nlohmann::json(), answerOk);
 }
 
 void Server::sendModsTo(int clientIndex)
@@ -3361,19 +3385,19 @@ void Server::network()
 			if (clientIndex > 0 && gameSet && getLevel() && !clientPlayerObjects[clientIndex]
 				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
 				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
-				&& type != NETSRVMSG_MOD_MANIFEST)
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER)
 				continue;
 			if (clientIndex > 0 && clientInfos[clientIndex].refused)
 				continue;
 			// while the players load, nobody plays (the host neither): joining, talking and the loads
 			if (waitingForLoads && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
 				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
-				&& type != NETSRVMSG_MOD_MANIFEST)
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER)
 				continue;
 			// the messages that change the game are recorded (not the joining, the lobby, the
 			// loading stages)
 			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
-				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_MOD_MANIFEST) {
+				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER) {
 				recording->flushRun();
 				fputc('M', recording->file);
 				const uint8_t client = (uint8_t)clientIndex;
@@ -3389,6 +3413,50 @@ void Server::network()
 	freeDeletedObjects();
 
 	++g_diag_serverTicks;
+}
+
+// A guest's hello: the password, its mods, its build (BuildIdentity), then it is in the lobby
+void Server::lobbyHello(int clientIndex, const std::string& data)
+{
+	BinaryReader br(data.c_str() + 1);
+	// the name, then the password (a guest without one sends only its name)
+	const std::string name = br.readStringZ();
+	const size_t at = 2 + name.size();
+	const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
+	if (clientIndex > 0 && !password.empty() && given != password) {
+		refuseClient(clientIndex, "Wrong password");
+		return;
+	}
+	// its mods: the host's game logic, and what the host's mod policy allows
+	if (clientIndex > 0) {
+		const std::string why = checkGuestMods(clientIndex);
+		if (why == "sent")
+			return;
+		if (!why.empty()) {
+			refuseClient(clientIndex, why);
+			return;
+		}
+	}
+	// its build: the host's network version always, and what the host's build policy asks
+	if (clientIndex > 0) {
+		ClientInfo& info = clientInfos[clientIndex];
+		// an identical build: the hello waits for the challenge's answer
+		if (buildPolicy >= BuildIdentity::IDENTICAL && !info.buildAnswered) {
+			info.pendingHello = data;
+			return;
+		}
+		const std::string why = checkGuestBuild(clientIndex);
+		if (!why.empty()) {
+			refuseClient(clientIndex, why);
+			return;
+		}
+	}
+	clientInfos[clientIndex].name = name;
+	printf("Lobby: %s joined\n", name.c_str());
+	// a running game: the host sends it the game's state and its places
+	// (QuickStartMenu::joinRunningGame)
+	if (clientIndex > 0 && gameSet && getLevel() && !replay)
+		clientInfos[clientIndex].joinedRunning = true;
 }
 
 void Server::handlePacket(int clientIndex, const std::string& data)
@@ -3433,31 +3501,21 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				checkLoadsDone();
 				break;
 			}
-			case NETSRVMSG_LOBBY_HELLO: {
-				// the name, then the password (a guest without one sends only its name)
-				const std::string name = br.readStringZ();
-				const size_t at = 2 + name.size();
-				const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
-				if (clientIndex > 0 && !password.empty() && given != password) {
-					refuseClient(clientIndex, "Wrong password");
+			case NETSRVMSG_LOBBY_HELLO:
+				lobbyHello(clientIndex, data);
+				break;
+			case NETSRVMSG_BUILD_ANSWER: {
+				ClientInfo& info = clientInfos[clientIndex];
+				if (info.buildAnswered)
 					break;
+				info.buildAnswer = br.readStringZ();
+				info.buildAnswered = true;
+				// a hello waiting for it
+				if (!info.pendingHello.empty()) {
+					const std::string hello = std::move(info.pendingHello);
+					info.pendingHello.clear();
+					lobbyHello(clientIndex, hello);
 				}
-				// its mods: the host's game logic, and what the host's mod policy allows
-				if (clientIndex > 0) {
-					const std::string why = checkGuestMods(clientIndex);
-					if (why == "sent")
-						break;
-					if (!why.empty()) {
-						refuseClient(clientIndex, why);
-						break;
-					}
-				}
-				clientInfos[clientIndex].name = name;
-				printf("Lobby: %s joined\n", name.c_str());
-				// a running game: the host sends it the game's state and its places
-				// (QuickStartMenu::joinRunningGame)
-				if (clientIndex > 0 && gameSet && getLevel() && !replay)
-					clientInfos[clientIndex].joinedRunning = true;
 				break;
 			}
 			case NETSRVMSG_MOD_MANIFEST: {

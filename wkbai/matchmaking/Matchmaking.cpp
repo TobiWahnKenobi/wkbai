@@ -22,7 +22,8 @@
 
 // the lobby and game messages (network.h, the lobby's text) of this build: raised when a change
 // keeps older builds from playing with it
-const char* MatchmakingGameVersion() { return "wkbai-net-1"; }
+// 2: the build check (NETCLIMSG_BUILD_CHALLENGE)
+const char* MatchmakingGameVersion() { return "wkbai-net-2"; }
 
 nlohmann::json GameListing::toJson() const
 {

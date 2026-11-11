@@ -90,6 +90,9 @@ enum NetClientMessages {
 	// design, WaterDesign's JSON, empty: none), part, parts (16 bits each), length (8 bits),
 	// the bytes
 	NETCLIMSG_HOST_DATA,
+	// The host's build check (BuildIdentity): a random challenge (zero-ended text) the guest
+	// answers with NETSRVMSG_BUILD_ANSWER
+	NETCLIMSG_BUILD_CHALLENGE,
 	// (NETCLIMSG_HOST_DATA kinds 3 and 4: a joining guest's mods for this game, when the host
 	// sends its mods: 4 is one logic file of a mod the guest lacks, "<mod index>\n<game path>\n
 	// <timestamp>\n" then its bytes; 3, after the files, the mods to mount in order, JSON
@@ -153,6 +156,8 @@ enum NetServerMessages {
 	// The environment's debug panel (F9, single player): a value (float), then its name (zero-ended)
 	// for ServerEnvironment::debugSet. As every message, recorded, so a replay does the same.
 	NETSRVMSG_ENVIRONMENT_DEBUG,
+	// The answer to NETCLIMSG_BUILD_CHALLENGE: BuildIdentity::ChallengeAnswer (hex, zero-ended)
+	NETSRVMSG_BUILD_ANSWER,
 };
 
 struct NetPacketWriter {
