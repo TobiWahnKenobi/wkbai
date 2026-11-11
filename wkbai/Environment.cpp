@@ -397,8 +397,13 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	if (s.y > -0.07f) {
 		sun.cloudDirection = s.normal();
 		const float up = Smoothstep(-0.07f, 0.0f, s.y);
+		// (not dimmed by the cover: that is the ground's, under them) and not warm: the cloud
+		// shaders redden it themselves by the air it passes (DuskTint); the warm day colour on top
+		// of that reddened the dawn and dusk clouds twice, to a deep red (the play test of
+		// 2026-11-11), so a neutral light of the warm colour's brightness
+		const float grey = 0.3f * dayCol[0] + 0.59f * dayCol[1] + 0.11f * dayCol[2];
 		for (int c = 0; c < 3; c++)
-			sun.cloudColour[c] = dayCol[c] * up; // (not dimmed by the cover: that is the ground's, under them)
+			sun.cloudColour[c] = grey * up;
 	}
 	else {
 		Vector3 m = mTrue;

@@ -111,12 +111,18 @@ cbuffer SkyBuffer
 	// the stars' turn: the world's direction to a star's place on the sky (rows of a rotation);
 	// SkyStarX.w: the moon's lit part (0 new .. 1 full: its glow, its light on the air)
 	float4 SkyStarX;
-	float4 SkyStarY;   // w: the clouds' detail (RenderSettings::cloudDetail, 0-2)
+	float4 SkyStarY;   // w: the clouds' detail (RenderSettings::cloudDetail, 0-4)
 	float4 SkyStarZ;
 	// the sky box under the weather's clouds (dynamicClouds below 3: no volumetric clouds over
 	// it): the overcast's colour, w how much (0: the box as it is)
 	float4 SkyOvercast;
+	// the clouds' view of the ground (Cloud detail Very high and Ultra): the terrain's albedo map
+	// and the water per tile over the map (ShadowEnvironment::giAlbedo, cloudWater): their corner
+	// x, z, 1 / width, 1 / depth in world units
+	float4 SkyGround;
 };
+Texture2D cloudGround;        // the terrain's colour from above, mips (the GI's albedo map)
+Texture2D<float> cloudWaterTex; // how much of a tile is under water, mips
 
 // a hash of a 3D cell (0-1, three values): David Hoskins' "Hash without Sine" (hash33), under
 // its MIT licence, not the GPL:
@@ -324,6 +330,11 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		float fine = d2.r * 0.5 + d2.g * 0.3 + d2.b * 0.2;
 		hf = lerp(hf, fine, 0.4 * saturate(h * 2 + stormCore));
 		erosion *= lerp(1, 1.3, saturate(h * 1.5) * (1 - stratus));
+		if (detailLevel >= 4 && detailLod < 2.5) {
+			// Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
+			float3 d3 = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.1) / (DETAIL_PERIOD / 8), max(detailLod + 3, 0)).rgb;
+			hf = lerp(hf, d3.r * 0.5 + d3.g * 0.3 + d3.b * 0.2, 0.25 * saturate(2.5 - detailLod) * saturate(h * 2 + stormCore));
+		}
 	}
 	hf = lerp(1 - hf, hf, saturate(h * 3));
 	return saturate(Remap(c, hf * erosion, 1, 0, 1)) * 1.6 * cWeather.z;
@@ -335,7 +346,7 @@ float HenyeyGreenstein(float mu, float g)
 	return (1 - g2) / (12.566371 * pow(1 + g2 - 2 * g * mu, 1.5));
 }
 
-// The view ray through the cloud layer, 48 to 128 steps by the quality (jittered per pixel; at most
+// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Ultra detail (jittered per pixel; at most
 // 1800 units of it), each lit by the sun through 3 to 6 steps of cloud towards it over 108 units
 // (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
@@ -383,7 +394,13 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		return beyond;
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
 	const int q = (int)SkyFlags.w;
-	const int STEPS = q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128;
+	// the detail (Low 0 to Ultra 4): Very High and Ultra light their steps through the eroded shape
+	// (the billows shade each other: relief within a cloud, not only between clouds), with a far
+	// step for the shadows of the clouds around and the sky's light occluded from above (darker
+	// bases, lit tops); Ultra a quarter more view steps and a third octave
+	// (all six light steps eroded and half again as many view steps cost twice High's pass for little more)
+	const int dl = (int)SkyStarY.w;
+	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 4 ? 5 : 4) / 4;
 	const int LIGHT_STEPS = q + 3;
 	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
 	// thickness: thin parts brighter, its relief)
@@ -455,7 +472,16 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 			continue;
 		float od = 0;
 		[loop] for (int j = 0; j < LIGHT_STEPS; j++)
-			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5, footprint + (j + 1) * lightStep * 0.15, false) * lightStep;
+			od += CloudDensity(p + sun * ((j + 0.5) * lightStep), lod + 0.5, footprint + (j + 1) * lightStep * 0.15, dl >= 3 && j < 2) * lightStep;
+		float skyOcc = 1;
+		if (dl >= 3) {
+			// the far step (about three times the light's reach, standing for the way beyond it)
+			float farStep = lightStep * LIGHT_STEPS;
+			od += CloudDensity(p + sun * (farStep * 2.5), lod + 1.5, footprint + farStep * 0.4, false) * farStep * 0.75;
+			// the cloud over the point: the sky's light from above dimmed through it
+			float up = CloudDensity(p + float3(0, 70, 0), lod + 1, footprint + 10, false);
+			skyOcc = lerp(0.55, 1, exp(-SIGMA * up * 70));
+		}
 		float toSun = exp(-SIGMA * od);
 		float powder = 1 - exp(-2 * SIGMA * od - 0.15);
 		// (a sheet's direct light dimmed by the deck around it: the light steps leave a thin sheet
@@ -473,13 +499,37 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// belt low and its blue higher up, at the ambient's brightness; their bases darker, their
 		// tops lit: relief instead of one grey)
 		ambient = lerp(ambient, awaySky * dot(ambient, float3(0.3, 0.59, 0.11)) * lerp(0.6, 1.25, h), away);
+		ambient *= skyOcc;
+		// Very high and Ultra: the light coming up from below onto the bases. The ground's: its
+		// colour (a wide patch of it, a coarse mip) in the sun's and the sky's light, dark over
+		// open water (about 6% of it comes back: the bases over the sea darker and bluer than
+		// over the land); and the sea's mirror of a low sun (Fresnel: 2% with the sun high, a
+		// third or more near the horizon, waves softening it), from the water towards the sun
+		// that the mirrored ray left (the play test of 2026-11-11)
+		float3 fromBelow = 0;
+		if (dl >= 3 && h < 0.6 && SkyGround.z > 0) {
+			float baseW = 1 - h / 0.6;
+			baseW *= baseW;
+			float2 guv = (p.xz - SkyGround.xy) * SkyGround.zw;
+			float3 alb = cloudGround.SampleLevel(skyOccSampler, guv, 5).rgb;
+			float wet = cloudWaterTex.SampleLevel(skyOccSampler, guv, 4);
+			float3 refl = lerp(alb * 0.45, float3(0.04, 0.06, 0.08), wet);
+			float sunUp = smoothstep(-0.01, 0.04, sun.y);
+			float3 onGround = sunTint * (saturate(sun.y) * (1 - 0.6 * cShape.x)) + CloudSkyUp.rgb * 0.9;
+			fromBelow = refl * onGround * baseW;
+			float lowSun = max(sun.y, 0.03);
+			float2 quv = (p.xz + sun.xz / lowSun * max(p.y, 0) - SkyGround.xy) * SkyGround.zw;
+			float sea = cloudWaterTex.SampleLevel(skyOccSampler, quv, 4);
+			float fres = 0.02 + 0.98 * pow(1 - saturate(sun.y), 5);
+			fromBelow += sunTint * (fres * 0.55 * sea * sunUp * baseW * (1 - 0.7 * cShape.x));
+		}
 		// the weather's light (storm and rain clouds darker, their bases most), and lightning
 		// lighting the cloud from inside
 		// (and the denser parts of a cloud darker than its thin ones: an overcast sheet's relief)
 		float shade = cWeather.w * lerp(1, 0.6 + 0.4 * h, cWeather.y)
 			* lerp(1.12, 0.72, saturate(dens / (1.6 * max(cWeather.z, 0.1))));
 		float3 flash = float3(0.75, 0.8, 1.0) * (CloudFlash.w * 9 * exp(-length(p - CloudFlash.xyz) / 260));
-		float3 s = (sunTintAway * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky)) * shade + flash;
+		float3 s = (sunTintAway * (energy * phase * 1.3 * duskSun) + ambient * (0.85 * duskSky) + fromBelow) * shade + flash;
 		float dT = exp(-SIGMA * dens * dt);
 		light += T * (1 - dT) * s;
 		T *= dT;
@@ -1132,6 +1182,8 @@ struct DiligentSkyRenderer::Impl {
 	// the dynamic clouds at a quarter of the scene's size (RenderSettings::dynamicClouds 3)
 	RefCntAutoPtr<IPipelineResourceSignature> cloudSignature;
 	RefCntAutoPtr<IPipelineState> cloudPipeline;
+	ITexture* boundGround = nullptr; // (ShadowEnvironment::giAlbedo and cloudWater, as bound)
+	ITexture* boundWater = nullptr;
 	RefCntAutoPtr<IShaderResourceBinding> cloudSrb;
 	RefCntAutoPtr<ITexture> cloudTarget;
 	bool loaded = false;
@@ -1210,7 +1262,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Sky camera";
-	cbDesc.Size = 192;
+	cbDesc.Size = 208;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1279,6 +1331,8 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 			{ SHADER_TYPE_PIXEL, "cloudNoise", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "cloudShape", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 			{ SHADER_TYPE_PIXEL, "cloudDetail", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "cloudGround", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "cloudWaterTex", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		};
 		PipelineResourceSignatureDesc cs;
 		cs.Name = "Sky clouds";
@@ -1653,7 +1707,7 @@ void DiligentSkyRenderer::render()
 	}
 	const float screenHeight = (float)_impl->dgfx->CurrentColorTarget()->GetTexture()->GetDesc().Height;
 	const bool physicalModel = clouds && g_renderSettings.skyModel >= 1;
-	const float data[48] = {
+	const float data[52] = {
 		forward.x, forward.y, forward.z, tanY * cam.aspect,
 		right.x, right.y, right.z, tanY,
 		up.x, up.y, up.z, screenHeight,
@@ -1664,11 +1718,12 @@ void DiligentSkyRenderer::render()
 		ev.sunWorld.x, ev.sunWorld.y, ev.sunWorld.z, night,
 		ev.moonWorld.x, ev.moonWorld.y, ev.moonWorld.z, moonShows,
 		ev.starX.x, ev.starX.y, ev.starX.z, ev.active ? ev.sun.moonLit : 1.0f,
-		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 2),
+		ev.starY.x, ev.starY.y, ev.starY.z, (float)std::clamp(g_renderSettings.cloudDetail, 0, 4),
 		ev.starZ.x, ev.starZ.y, ev.starZ.z, 0,
 		overcast[0], overcast[1], overcast[2], overcast[3],
+		env.giAlbedoRegion[0], env.giAlbedoRegion[1], env.giAlbedoRegion[2], env.giAlbedoRegion[3],
 	};
-	static_assert(sizeof(data) == 192, "the sky buffer's size");
+	static_assert(sizeof(data) == 208, "the sky buffer's size");
 	memcpy(f, data, sizeof(data));
 	ctx->UnmapBuffer(_impl->skyBuffer, MAP_WRITE);
 
@@ -1695,6 +1750,13 @@ void DiligentSkyRenderer::render()
 		ITextureView* rtv = _impl->cloudTarget->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
 		ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->SetViewports(1, nullptr, 0, 0);
+		// the ground's maps (baked again when the tiles change: bound again when they are new)
+		if (_impl->boundGround != env.giAlbedo.RawPtr() || _impl->boundWater != env.cloudWater.RawPtr()) {
+			_impl->cloudSrb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudGround")->Set(env.giAlbedo->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			_impl->cloudSrb->GetVariableByName(SHADER_TYPE_PIXEL, "cloudWaterTex")->Set(env.cloudWater->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE), SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			_impl->boundGround = env.giAlbedo.RawPtr();
+			_impl->boundWater = env.cloudWater.RawPtr();
+		}
 		ctx->SetPipelineState(_impl->cloudPipeline);
 		ctx->CommitShaderResources(_impl->cloudSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });

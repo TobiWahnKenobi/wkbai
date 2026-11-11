@@ -1580,6 +1580,8 @@ void DiligentEnhancedTerrainRenderer::Impl::bakeAlbedo(DiligentGfx* dgfx, Terrai
 		desc.Height = h;
 		desc.Format = TEX_FORMAT_RGBA8_UNORM;
 		desc.BindFlags = BIND_SHADER_RESOURCE | BIND_RENDER_TARGET;
+		desc.MipLevels = 0; // (the clouds see the ground blurred, DiligentSkyRenderer)
+		desc.MiscFlags = MISC_TEXTURE_FLAG_GENERATE_MIPS;
 		device->CreateTexture(desc, nullptr, &albedoMap);
 		if (!albedoMap)
 			return;
@@ -1626,8 +1628,60 @@ void DiligentEnhancedTerrainRenderer::Impl::bakeAlbedo(DiligentGfx* dgfx, Terrai
 	}
 	dgfx->SetTransformMatrix(&camera->sceneMatrix);
 	dgfx->RestoreRenderTargets();
+	ctx->GenerateMips(albedoMap->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 	auto& env = dgfx->shadows;
 	env.giAlbedo = albedoMap;
+	{
+		// the water per tile, for the clouds over it (their bases lit by the sea's reflection of a
+		// low sun, darker over open water than over land): a tile's share of its corners under
+		// its water level; mips by a box filter
+		const int tw = (int)terrain->width, th = (int)terrain->height;
+		std::vector<std::vector<uint8_t>> levels(1, std::vector<uint8_t>((size_t)tw * th, 0));
+		for (int z = 0; z < th; z++)
+			for (int x = 0; x < tw; x++) {
+				const Terrain::Tile& tile = terrain->tiles[z * tw + x];
+				int under = 0;
+				if (tile.fullOfWater)
+					under = 4;
+				else if (tile.waterLevel >= 0)
+					for (int c = 0; c < 4; c++)
+						under += terrain->getVertex(x + (c & 1), z + (c >> 1)) < tile.waterLevel;
+				levels[0][(size_t)z * tw + x] = (uint8_t)(under * 255 / 4);
+			}
+		std::vector<int> lw(1, tw), lh(1, th);
+		while (lw.back() > 1 || lh.back() > 1) {
+			const int pw = lw.back(), ph = lh.back(), nw = std::max(pw / 2, 1), nh = std::max(ph / 2, 1);
+			const std::vector<uint8_t>& p = levels.back();
+			std::vector<uint8_t> n((size_t)nw * nh);
+			for (int z = 0; z < nh; z++)
+				for (int x = 0; x < nw; x++) {
+					int sum = 0;
+					for (int c = 0; c < 4; c++)
+						sum += p[(size_t)std::min(z * 2 + (c >> 1), ph - 1) * pw + std::min(x * 2 + (c & 1), pw - 1)];
+					n[(size_t)z * nw + x] = (uint8_t)(sum / 4);
+				}
+			levels.push_back(std::move(n));
+			lw.push_back(nw);
+			lh.push_back(nh);
+		}
+		TextureDesc wd;
+		wd.Name = "Water per tile (clouds)";
+		wd.Type = RESOURCE_DIM_TEX_2D;
+		wd.Width = tw;
+		wd.Height = th;
+		wd.MipLevels = (Uint32)levels.size();
+		wd.Format = TEX_FORMAT_R8_UNORM;
+		wd.BindFlags = BIND_SHADER_RESOURCE;
+		wd.Usage = USAGE_IMMUTABLE;
+		std::vector<TextureSubResData> subs(levels.size());
+		for (size_t i = 0; i < levels.size(); i++)
+			subs[i] = TextureSubResData{ levels[i].data(), (Uint64)lw[i] };
+		TextureData wdata{ subs.data(), (Uint32)subs.size() };
+		RefCntAutoPtr<ITexture> water;
+		device->CreateTexture(wd, &wdata, &water);
+		if (water)
+			env.cloudWater = water;
+	}
 	env.giAlbedoRegion[0] = x0;
 	env.giAlbedoRegion[1] = z0;
 	env.giAlbedoRegion[2] = 1.0f / width;
@@ -2556,7 +2610,9 @@ void DiligentEnhancedTerrainRenderer::render()
 	gfx->BeginMapDrawing();
 
 	// the dynamic GI's terrain albedo, when it is wanted and the tiles changed (DiligentGI)
-	if (_impl->albedoDirty && g_renderSettings.dynamicGI > 0 && g_renderSettings.skyGI)
+	// (and for the clouds' view of the ground: Cloud detail Very high and Ultra)
+	if (_impl->albedoDirty && ((g_renderSettings.dynamicGI > 0 && g_renderSettings.skyGI)
+		|| (g_renderSettings.cloudDetail >= 3 && g_renderSettings.dynamicClouds >= 3)))
 		_impl->bakeAlbedo(dgfx, terrain, camera);
 
 	constexpr float tilesize = 5.0f;
