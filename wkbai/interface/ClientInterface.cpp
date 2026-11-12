@@ -293,6 +293,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			return;
 		CommonGameObject* player = obj->getPlayer();
 		int color = remembered ? obj->color : player ? player->color : 0;
+		// a disguised enemy: a dot of this player's colour, as its own peasants
+		if (!remembered && client->clientPlayer && client->disguiseFor(obj))
+			color = client->clientPlayer->color;
 		ImU32 dotColor = playerColors[(color >= 0 && color < 9) ? color : 0];
 		if (color == 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER)
 			dotColor = treeColor; // neutral resources such as trees
@@ -2462,7 +2465,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 
 	Model* model = nullptr;
-	if (const auto* appear = obj->blueprint->getAppearance(obj->subtype, obj->appearance)) {
+	// a disguised enemy (ADOPT_APPEARANCE_FOR): drawn as what it pretends to be, in this player's
+	// colour (a spy among the player's own peasants)
+	const Client::Disguise* disguise = remembered ? nullptr : client->disguiseFor(obj);
+	const auto* appear = disguise ? disguise->blueprint->getAppearance(disguise->subtype, disguise->appearance) : nullptr;
+	if (!appear)
+		appear = obj->blueprint->getAppearance(obj->subtype, obj->appearance);
+	if (appear) {
 		const auto& ap = *appear;
 		auto it = ap.animations.find(obj->animationIndex);
 		if (it == ap.animations.end())
@@ -2530,6 +2539,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
 	// a remembered building has no parent: its colour and frame are those it had when last seen
 	obj->sceneEntity.color = remembered ? obj->color : obj->getPlayer()->color;
+	if (disguise && client->clientPlayer)
+		obj->sceneEntity.color = client->clientPlayer->color;
 	if (obj->animSynchronizedTask != -1 && !remembered) {
 		CliScriptContext ctx{ client, obj };
 		float frac = client->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
@@ -3829,6 +3840,12 @@ void ClientInterface::iter()
 			[this]() -> uint32_t {
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
+			});
+		// a disguised enemy (ADOPT_APPEARANCE_FOR) to this player: its panel would give it away
+		lua.set_function("isDisguised",
+			[this](uint32_t id) -> bool {
+				ClientGameObject* obj = client->findObject(id);
+				return obj && client->disguiseFor(obj) != nullptr;
 			});
 		// wkbai's unit history (Client::unitInfo): the name shown ("" none), the birth name, a hero,
 		// tracked at all, the age as the panel shows it, the kills and the buildings destroyed,

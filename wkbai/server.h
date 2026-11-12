@@ -435,6 +435,25 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::map<std::pair<uint32_t, int>, std::pair<bool, std::string>> diplomacyWindows; // (player, window)
 	// the diplomacy state for a client that joins or loads: offers and window switches
 	void sendDiplomacyState(int clientIndex);
+	// Disguises (ADOPT_APPEARANCE_FOR): an object drawn to its player's enemies as another
+	// blueprint's subtype and appearance (a spy as a peasant), except to the players it has been
+	// unmasked for (ADOPT_DEFAULT_APPEARANCE_FOR); by object id (ServerDiplomacy.cpp)
+	struct Disguise {
+		uint32_t blueprint = 0; // full id
+		int subtype = 0, appearance = 0;
+		std::set<uint32_t> unmaskedFor; // player ids; 0: for everyone (the disguise dropped)
+	};
+	std::map<uint32_t, Disguise> disguises;
+	void setDisguise(ServerGameObject* obj, const GameObjBlueprint* bp, int subtype, int appearance);
+	// players: unmasked for these; the object's own player among them drops the disguise
+	void unmaskDisguise(ServerGameObject* obj, const std::vector<ServerGameObject*>& players);
+	// REVEAL_FOG_OF_WAR: the object seen by that player for `duration` seconds (0: for good)
+	// within `radius` tiles (5 m) around it, wherever it goes
+	void revealFogOfWar(ServerGameObject* obj, ServerGameObject* player, float duration, float radius);
+	struct FogReveal { uint32_t object, player; float until, radius; }; // until < 0: for good
+	std::vector<FogReveal> fogReveals;
+	// a joining or loading client's disguises and reveals
+	void sendDisguiseState(int clientIndex);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	// The mission objectives on a player's screen (its client's objectives window)
 	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);

@@ -142,6 +142,20 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// bar's Diplomacy, Global Diplomacy and Tributes buttons, the AI Generals' messages to show
 	// one after another, and the notices (Language keys, with the player in whose colour)
 	std::map<std::pair<uint32_t, uint32_t>, int> diplomaticOffers;
+	// Disguises (NETCLIMSG_DISGUISE, _UNMASK): by object id, the look the player's enemies see,
+	// unless unmasked for this client's player; disguiseFor: the one this client sees (none for
+	// its own and its allies' objects)
+	struct Disguise {
+		const GameObjBlueprint* blueprint = nullptr;
+		int subtype = 0, appearance = 0;
+		bool unmasked = false;
+	};
+	std::map<uint32_t, Disguise> disguises;
+	const Disguise* disguiseFor(CommonGameObject* obj);
+	// REVEAL_FOG_OF_WAR for this client's player (NETCLIMSG_FOG_REVEAL): the object seen around
+	// it until the game time `until` (< 0: for good), radius in 5 m tiles
+	struct FogReveal { uint32_t object; float until, radius; };
+	std::vector<FogReveal> fogReveals;
 	struct DiplomacyButton {
 		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
 		std::string tooltip;

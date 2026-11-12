@@ -60,6 +60,9 @@ void Server::loadSaveGame(const char * filename)
 	diplomaticOffers.clear();
 	chatPersonalities.clear();
 	diplomacyWindows.clear();
+	// the disguises and fog reveals (<save>.ai.txt "disguise.<id>", "fogReveal.<n>")
+	disguises.clear();
+	fogReveals.clear();
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
@@ -607,6 +610,21 @@ std::string Server::aiSettingsText() const
 		text += "chatPersonality." + std::to_string(id) + "=" + personality + "\n";
 	for (const auto& [key, state] : diplomacyWindows)
 		text += "diplomacyWindow." + std::to_string(key.first) + "." + std::to_string(key.second) + "=" + (state.first ? "1 " : "0 ") + state.second + "\n";
+	// the disguises: "disguise.<object id>=<blueprint full id> <subtype> <appearance> <unmasked for ids...>"
+	for (const auto& [id, d] : disguises) {
+		text += "disguise." + std::to_string(id) + "=" + std::to_string(d.blueprint) + " " + std::to_string(d.subtype) + " " + std::to_string(d.appearance);
+		for (uint32_t p : d.unmaskedFor)
+			text += " " + std::to_string(p);
+		text += "\n";
+	}
+	// the fog reveals still going: "fogReveal.<n>=<object> <player> <seconds left, -1 for good> <radius>"
+	{
+		int n = 0;
+		for (const FogReveal& r : fogReveals)
+			if (r.until < 0.0f || r.until > timeManager.currentTime)
+				text += "fogReveal." + std::to_string(n++) + "=" + std::to_string(r.object) + " " + std::to_string(r.player) + " "
+					+ std::to_string(r.until < 0.0f ? -1.0f : r.until - timeManager.currentTime) + " " + std::to_string(r.radius) + "\n";
+	}
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -641,6 +659,34 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 			continue;
 		if (name.rfind("chatPersonality.", 0) == 0) {
 			chatPersonalities[(uint32_t)strtoul(name.c_str() + 16, nullptr, 10)] = line.substr(eq + 1);
+			continue;
+		}
+		if (name.rfind("disguise.", 0) == 0) {
+			Disguise d;
+			const uint32_t id = (uint32_t)strtoul(name.c_str() + 9, nullptr, 10);
+			const char* c = line.c_str() + eq + 1;
+			char* e = nullptr;
+			d.blueprint = (uint32_t)strtoul(c, &e, 10); c = e;
+			d.subtype = (int)strtol(c, &e, 10); c = e;
+			d.appearance = (int)strtol(c, &e, 10); c = e;
+			for (;;) {
+				const uint32_t p = (uint32_t)strtoul(c, &e, 10);
+				if (e == c)
+					break;
+				d.unmaskedFor.insert(p);
+				c = e;
+			}
+			if (id && d.blueprint)
+				disguises[id] = std::move(d);
+			continue;
+		}
+		if (name.rfind("fogReveal.", 0) == 0) {
+			FogReveal r{};
+			float left = 0.0f;
+			if (sscanf(line.c_str() + eq + 1, "%u %u %f %f", &r.object, &r.player, &left, &r.radius) == 4) {
+				r.until = left < 0.0f ? -1.0f : timeManager.currentTime + left;
+				fogReveals.push_back(r);
+			}
 			continue;
 		}
 		if (name.rfind("diplomacyWindow.", 0) == 0) {
@@ -2957,7 +3003,10 @@ void Server::sendStateTo(NetLink* link)
 	}
 	// the offers, and this client's diplomacy buttons
 	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
+	{
 		sendDiplomacyState((int)(it - clientLinks.begin()));
+		sendDisguiseState((int)(it - clientLinks.begin()));
+	}
 	for (const auto& [alias, objects] : aliases)
 		for (const auto& ref : objects) {
 			NetPacketWriter msg(NETCLIMSG_ALIAS_ASSIGNED);

@@ -160,6 +160,8 @@ void Client::tick()
 				std::string gsFileName = br.readStringZ();
 				// a new game: nobody's game over yet
 				finishedPlayers.clear();
+				disguises.clear();
+				fogReveals.clear();
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
 				environmentSkyKnown = false;
@@ -409,6 +411,37 @@ void Client::tick()
 				for (int i = 0; i < count; i++)
 					chat.values.push_back(br.readFloat());
 				chatDisplays.push_back(std::move(chat));
+				break;
+			}
+			case NETCLIMSG_DISGUISE: {
+				const uint32_t objid = br.readUint32();
+				const uint32_t bpid = br.readUint32();
+				const int subtype = (int)br.readUint32(), appear = (int)br.readUint32();
+				if (const GameObjBlueprint* bp = bpid ? gameSet->getBlueprint(bpid) : nullptr)
+					disguises[objid] = { bp, subtype, appear, false };
+				else
+					disguises.erase(objid);
+				break;
+			}
+			case NETCLIMSG_UNMASK: {
+				const uint32_t objid = br.readUint32();
+				if (auto it = disguises.find(objid); it != disguises.end())
+					it->second.unmasked = true;
+				break;
+			}
+			case NETCLIMSG_FOG_REVEAL: {
+				const uint32_t objid = br.readUint32();
+				const float duration = br.readFloat(), radius = br.readFloat();
+				const float until = duration > 0.0f ? timeManager.currentTime + duration : -1.0f;
+				bool found = false;
+				for (FogReveal& r : fogReveals)
+					if (r.object == objid) {
+						r.until = (r.until < 0.0f || until < 0.0f) ? -1.0f : std::max(r.until, until);
+						r.radius = std::max(r.radius, radius);
+						found = true;
+					}
+				if (!found)
+					fogReveals.push_back({ objid, until, radius });
 				break;
 			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {
@@ -1115,6 +1148,21 @@ void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject 
 void Client::sendStartLevelRequest()
 {
 	serverLink->send(NetPacketWriter(NETSRVMSG_START_LEVEL));
+}
+
+const Client::Disguise* Client::disguiseFor(CommonGameObject* obj)
+{
+	if (disguises.empty() || !obj)
+		return nullptr;
+	auto it = disguises.find(obj->id);
+	if (it == disguises.end() || it->second.unmasked)
+		return nullptr;
+	CommonGameObject* me = clientPlayer.get();
+	CommonGameObject* owner = obj->getPlayer();
+	// spectators and the object's own side see it as it is
+	if (!me || !owner || owner == me || getDiplomaticStatus(owner, me) == 0)
+		return nullptr;
+	return &it->second;
 }
 
 void Client::addNotice(const std::string& key, uint32_t player)

@@ -66,6 +66,7 @@
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include "interface/ChronicleNarrator.h"
+#include "interface/FogOfWar.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -7542,6 +7543,112 @@ void Test_HotKeys()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Disguises and fog reveals (ServerDiplomacy.cpp): a unit of B (1030) on 4 Peaks disguised as a
+// peasant to A (1027), unmasked for A, dropped; revealed to A through the fog for a time
+void Test_Disguises()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(10);
+	ServerGameObject* B = server.findObject(1030);
+	std::vector<ServerGameObject*> units;
+	auto findUnits = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					units.push_back(c->dyncast<ServerGameObject>());
+				self(c, self);
+			}
+	};
+	if (B)
+		findUnits(B, findUnits);
+	if (units.size() < 2 || !clientA.clientPlayer || !clientB.clientPlayer) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	ServerGameObject* u = units[0];
+	ServerGameObject* u2 = units[1];
+	printf("UNITTEST B's unit: %s %u\n", u->blueprint->name.c_str(), u->id);
+	auto seenBy = [&](Client& c) { return c.disguiseFor(c.findObject(u->id)); };
+
+	// Spell Possess.cpp's: a shopper peasant
+	run(u, "ADOPT_APPEARANCE_FOR CHARACTER \"Peasant\" \"Female\" \"Shopper\" FINDER_SELF");
+	step(3);
+	const Client::Disguise* d = seenBy(clientA);
+	check(d && d->blueprint->name == "Peasant" && d->blueprint->getAppearance(d->subtype, d->appearance),
+		"A (the enemy) sees a peasant (Female, Shopper)");
+	check(!seenBy(clientB), "B (its own player) sees it as it is");
+	// Counter Espionage.cpp's "Succubus Discovered": unmasked for the player who saw through it
+	run(u, "ADOPT_DEFAULT_APPEARANCE_FOR FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	step(3);
+	check(!seenBy(clientA), "unmasked for A: A sees it as it is");
+	// and "On Stop Seeing Object": disguised again
+	run(u, "ADOPT_APPEARANCE_FOR CHARACTER \"Peasant\" \"Male\" \"Disguised Peasant\" FINDER_SELF");
+	step(3);
+	check(seenBy(clientA) != nullptr, "disguised again (Male, Disguised Peasant)");
+	// a save keeps it
+	const std::string text = server.aiSettingsText();
+	check(text.find("disguise." + std::to_string(u->id) + "=") != std::string::npos, "the save's .ai.txt holds the disguise");
+	// "Spy Discovered": for its own player, the disguise dropped
+	run(u, "ADOPT_DEFAULT_APPEARANCE_FOR FINDER_SELF FINDER_PLAYER");
+	step(3);
+	check(!seenBy(clientA) && clientA.disguises.empty() && server.disguises.empty(), "for its own player: dropped for everyone");
+	server.applyAiSettingsText(text);
+	check(server.disguises.count(u->id) == 1, "read back from the .ai.txt");
+
+	// REVEAL_FOG_OF_WAR: u for 10 s, u2 for 1 s, 3 tiles, to A
+	FogOfWar fog;
+	fog.update(&clientA);
+	const bool hidden = !fog.isSeen(u->position) && !fog.isSeen(u2->position);
+	printf("UNITTEST before the reveal: B's units %s to A\n", hidden ? "hidden" : "seen");
+	run(u, "REVEAL_FOG_OF_WAR FINDER_SELF CONSTANT 10 CONSTANT 3 FINDER_SPECIFIC_ID 1027");
+	run(u2, "REVEAL_FOG_OF_WAR FINDER_SELF CONSTANT 1 CONSTANT 3 FINDER_SPECIFIC_ID 1027");
+	step(15); // (300 ms: the fog's next update)
+	check(clientA.fogReveals.size() == 2 && clientB.fogReveals.empty(), "A got both reveals, B none");
+	fog.update(&clientA);
+	check(fog.isSeen(u->position) && fog.isSeen(u2->position), "both seen by A through the fog");
+	step(60); // 1.2 s
+	fog.update(&clientA);
+	check(clientA.fogReveals.size() == 1 && clientA.fogReveals[0].object == u->id, "the 1 s reveal over, the 10 s one still on");
+	check(fog.isSeen(u->position), "u still seen");
+	if (hidden)
+		check(!fog.isSeen(u2->position) || (u2->position - u->position).len2xz() < 20.0f, "u2 hidden again");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Valhalla's Army Enlistment: the companies read; a human's enlisted army (the lobby's ";v")
 // mustered at its Manor on level start (Valhalla Mode.cpp)
 void Test_ValhallaArmy()
@@ -7913,6 +8020,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Diplomacy, "Diplomacy: offers, accepting, status items and events, tributes, the AI Generals' messages, Disallow Diplomacy"},
 {Test_ValhallaArmy, "Valhalla army: the companies read, an enlisted army mustered at the start"},
 {Test_HotKeys, "The original's keys: a selection key picks the nearest of its kind; a patrol there and back"},
+{Test_Disguises, "Disguises and fog reveals: an enemy unit seen as a peasant, unmasked, dropped; revealed through the fog for a time"},
 };
 
 void LaunchTest()

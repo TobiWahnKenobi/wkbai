@@ -138,6 +138,14 @@ enum NetClientMessages {
 	// a top bar diplomacy button on this client's player's screen: the window (8 bits:
 	// Server::DiplomacyWindow), enabled (8 bits), the tooltip's Language key (zero-ended)
 	NETCLIMSG_DIPLOMACY_WINDOW,
+	// a disguise (ADOPT_APPEARANCE_FOR, Server::Disguise): the object id (32 bits), the blueprint's
+	// full id (32 bits, 0: none), subtype and appearance (32 bits each); seen by every enemy again
+	NETCLIMSG_DISGUISE,
+	// the disguise unmasked for this client's player (ADOPT_DEFAULT_APPEARANCE_FOR): the object id
+	NETCLIMSG_UNMASK,
+	// REVEAL_FOG_OF_WAR for this client's player: the object id (32 bits), the seconds (float, 0:
+	// for good), the radius in 5 m tiles (float)
+	NETCLIMSG_FOG_REVEAL,
 };
 
 enum NetServerMessages {

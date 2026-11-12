@@ -1437,6 +1437,69 @@ struct ActionSendChatMessage : Action {
 	}
 };
 
+// ADOPT_APPEARANCE_FOR <class> "<blueprint>" "<subtype>" "<appearance>" <finder>: the objects look
+// like that to their players' enemies (Espionage.cpp: a spy as a peasant), until unmasked
+struct ActionAdoptAppearanceFor : Action {
+	const GameObjBlueprint* bp = nullptr;
+	int subtype = 0, appearance = 0;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (!bp)
+			return;
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->setDisguise(obj, bp, subtype, appearance);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		bp = gs.readObjBlueprintPtr(gsf);
+		const std::string sub = gsf.nextString(true), app = gsf.nextString(true);
+		if (bp)
+			subtype = std::max(0, bp->subtypeNames.getIndex(sub));
+		appearance = std::max(0, gs.appearances.names.getIndex(app));
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ADOPT_DEFAULT_APPEARANCE_FOR <objects> <players>: the disguise seen through by those players
+// (Counter Espionage.cpp); the object's own player among them drops it for everyone
+struct ActionAdoptDefaultAppearanceFor : Action {
+	std::unique_ptr<ObjectFinder> fObjects, fPlayers;
+	virtual void run(SrvScriptContext* ctx) override {
+		std::vector<ServerGameObject*> players;
+		for (ServerGameObject* p : fPlayers->eval(ctx))
+			players.push_back(p);
+		for (ServerGameObject* obj : fObjects->eval(ctx))
+			ctx->server->unmaskDisguise(obj, players);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fObjects.reset(ReadFinder(gsf, gs));
+		fPlayers.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// REVEAL_FOG_OF_WAR <objects> <seconds, 0: for good> <radius in 5 m tiles> <players>: the objects
+// seen by those players (an Act of God's bishop by its victim, an artillery piece by its target's
+// player, Espionage Military's units)
+struct ActionRevealFogOfWar : Action {
+	std::unique_ptr<ObjectFinder> fObjects, fPlayers;
+	std::unique_ptr<ValueDeterminer> vDuration, vRadius;
+	virtual void run(SrvScriptContext* ctx) override {
+		const float duration = vDuration->eval(ctx), radius = vRadius->eval(ctx);
+		auto players = fPlayers->eval(ctx);
+		for (ServerGameObject* obj : fObjects->eval(ctx))
+			for (ServerGameObject* p : players) {
+				ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer();
+				if (player && player != obj->getPlayer())
+					ctx->server->revealFogOfWar(obj, player, duration, radius);
+			}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fObjects.reset(ReadFinder(gsf, gs));
+		vDuration.reset(ReadValueDeterminer(gsf, gs));
+		vRadius.reset(ReadValueDeterminer(gsf, gs));
+		fPlayers.reset(ReadFinder(gsf, gs));
+	}
+};
+
 // SET_CHAT_PERSONALITY "<personality>" <finder> (0x494f70)
 struct ActionSetChatPersonality : Action {
 	std::string personality;
@@ -1931,7 +1994,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
 		// Below are ignored actions (that should not affect gameplay very much)
 	case Tags::ACTION_STOP_SOUND:
-	case Tags::ACTION_REVEAL_FOG_OF_WAR:
 	case Tags::ACTION_COLLAPSING_CIRCLE_ON_MINIMAP:
 	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP:
 	case Tags::ACTION_ENABLE_GAME_INTERFACE:
@@ -1939,8 +2001,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_ADOPT_APPEARANCE_FOR:
-	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR:
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
 	case Tags::ACTION_FADE_STOP_MUSIC:
 	case Tags::ACTION_UNLOCK_LEVEL:
@@ -1955,6 +2015,9 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
 	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER: action = new ActionAnswerDiplomaticOffer(false); break;
 	case Tags::ACTION_SEND_CHAT_MESSAGE: action = new ActionSendChatMessage; break;
+	case Tags::ACTION_ADOPT_APPEARANCE_FOR: action = new ActionAdoptAppearanceFor; break;
+	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR: action = new ActionAdoptDefaultAppearanceFor; break;
+	case Tags::ACTION_REVEAL_FOG_OF_WAR: action = new ActionRevealFogOfWar; break;
 	case Tags::ACTION_SET_CHAT_PERSONALITY: action = new ActionSetChatPersonality; break;
 	case Tags::ACTION_ENABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, true); break;
 	case Tags::ACTION_DISABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, false); break;
