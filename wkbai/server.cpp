@@ -63,6 +63,10 @@ void Server::loadSaveGame(const char * filename)
 	// the disguises and fog reveals (<save>.ai.txt "disguise.<id>", "fogReveal.<n>")
 	disguises.clear();
 	fogReveals.clear();
+	// the interface switches and the objectives' markers (not saved: a loaded game starts with
+	// the interface on, whatever window would have switched it on again)
+	interfaceDisabled.clear();
+	objectiveMarkers.clear();
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
@@ -2449,6 +2453,43 @@ void Server::playMusic(ServerGameObject* player, int musicTag)
 	msg.writeValues(musicTag);
 	sendTo(player, msg);
 	player->isMusicPlaying = true;
+}
+
+void Server::setGameInterface(ServerGameObject* player, bool enabled)
+{
+	if (!player)
+		return;
+	if (enabled)
+		interfaceDisabled.erase(player->id);
+	else
+		interfaceDisabled.insert(player->id);
+	NetPacketWriter msg{ NETCLIMSG_GAME_INTERFACE };
+	msg.writeUint8(enabled ? 1 : 0);
+	sendTo(player, msg);
+}
+
+void Server::setObjectiveMarker(ServerGameObject* player, const std::string& key, const ObjectiveMarker& marker)
+{
+	if (!player)
+		return;
+	if (marker.kind)
+		objectiveMarkers[{ player->id, key }] = marker;
+	else
+		objectiveMarkers.erase({ player->id, key });
+	NetPacketWriter msg{ NETCLIMSG_OBJECTIVE_MARKER };
+	msg.writeStringZ(key);
+	msg.writeUint8(marker.kind);
+	msg.writeFloat(marker.x);
+	msg.writeFloat(marker.z);
+	msg.writeUint32(marker.object);
+	sendTo(player, msg);
+}
+
+void Server::unlockLevel(const std::string& level)
+{
+	NetPacketWriter msg{ NETCLIMSG_LEVEL_UNLOCKED };
+	msg.writeStringZ(level);
+	sendToAll(msg);
 }
 
 void Server::stopMusic(ServerGameObject* player, bool fade)

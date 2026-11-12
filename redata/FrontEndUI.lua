@@ -2146,6 +2146,35 @@ local function campaignDefinition()
 end
 
 local campaign = { profile = nil, data = nil, selected = nil, list = { selected = 0, scroll = 0 }, name = { text = "" } }
+-- a new campaign's start options (the original's Starting Resources and Advances, at most 3 each)
+local CAMPAIGN_START = { food = 500, wood = 500, gold = 200, pagan = 0, imperial = 0, renaissance = 0 }
+campaign.start = {}
+for k, v in pairs(CAMPAIGN_START) do campaign.start[k] = v end
+
+-- the start options' panel: a row per option with its stepper
+local function campaignStartOptions(x, y, w)
+	panel(x, y, w, L(470))
+	drawText(FONT_TEXT, x + L(16), y + L(12), T("FRONT_END_CAMPAIGN_STARTING_RESOURCES"), YELLOW, S)
+	local rows = {
+		{ "food", "FRONT_END_CAMPAIGN_STARTING_FOOD", 100, 0, 10000 },
+		{ "wood", "FRONT_END_CAMPAIGN_STARTING_WOOD", 100, 0, 10000 },
+		{ "gold", "FRONT_END_CAMPAIGN_STARTING_GOLD", 50, 0, 10000 },
+		{ "pagan", "FRONT_END_CAMPAIGN_PAGAN_ADVANCE", 1, 0, 3 },
+		{ "imperial", "FRONT_END_CAMPAIGN_IMPERIAL_ADVANCE", 1, 0, 3 },
+		{ "renaissance", "FRONT_END_CAMPAIGN_RENAISSANCE_ADVANCE", 1, 0, 3 },
+	}
+	local s = campaign.start
+	for i, r in ipairs(rows) do
+		local ry = y + L(56) + (i - 1) * L(66)
+		drawText(FONT_LIST, x + L(16), ry + L(14), T(r[2]), WHITE, S)
+		local bx = x + w - L(230)
+		local down = stepperButton("Minus", "campaign_" .. r[1] .. "-", bx, ry, L(44))
+		if down > 0 then s[r[1]] = math.max(r[4], s[r[1]] - r[3] * down) end
+		centredText(FONT_LIST, tostring(math.floor(s[r[1]])), bx + L(48), ry, L(130), L(44), WHITE)
+		local up = stepperButton("Plus", "campaign_" .. r[1] .. "+", bx + L(182), ry, L(44))
+		if up > 0 then s[r[1]] = math.min(r[5], s[r[1]] + r[3] * up) end
+	end
+end
 
 -- The provinces that can be attacked: the first one, then the neighbours of the conquered ones
 local function campaignState()
@@ -2198,9 +2227,13 @@ Screens.campaign = {
 		local chosen = profiles[campaign.list.selected]
 		drawText(FONT_TEXT, x, Y(710), T("FRONT_END_CAMPAIGN_ENTER_CAMPAIGN_NAME"), WHITE, S)
 		local entered = textField(campaign.name, x, Y(740), w, L(32), FILE_NAME_REFUSED, 40)
+		-- a new campaign's start options (the original's), left of the list
+		campaignStartOptions(X(20), Y(90), L(520))
+		local start = { population = skirmish.settings.populationLimit }
+		for k, v in pairs(campaign.start) do start[k] = v end
 		local name = string.match(campaign.name.text, "^%s*(.-)%s*$")
 		if (button(T("FRONT_END_CAMPAIGN_NEW"), x, Y(800), L(250), L(30), name ~= "") or entered) and name ~= "" then
-			if createCampaignProfile(name) then
+			if createCampaignProfile(name, start) then
 				campaign.profile = name
 				push("campaignmap")
 			else
@@ -2208,7 +2241,7 @@ Screens.campaign = {
 					{ T("FRONT_END_DIALOG_BUTTON_YES"), function()
 						dialog = nil
 						deleteCampaignProfile(name)
-						createCampaignProfile(name)
+						createCampaignProfile(name, start)
 						campaign.profile = name
 						push("campaignmap")
 					end },

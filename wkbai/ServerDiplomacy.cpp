@@ -283,6 +283,22 @@ void Server::sendDisguiseState(int clientIndex)
 	}
 	if (!player)
 		return;
+	if (interfaceDisabled.count(player->id)) {
+		NetPacketWriter msg{ NETCLIMSG_GAME_INTERFACE };
+		msg.writeUint8(0);
+		sendToClient(clientIndex, msg);
+	}
+	for (const auto& [key, m] : objectiveMarkers) {
+		if (key.first != player->id)
+			continue;
+		NetPacketWriter msg{ NETCLIMSG_OBJECTIVE_MARKER };
+		msg.writeStringZ(key.second);
+		msg.writeUint8(m.kind);
+		msg.writeFloat(m.x);
+		msg.writeFloat(m.z);
+		msg.writeUint32(m.object);
+		sendToClient(clientIndex, msg);
+	}
 	// the reveals still going (the ended ones are dropped here and when saving)
 	fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(), [this](const FogReveal& r) {
 		return r.until >= 0.0f && r.until <= timeManager.currentTime; }), fogReveals.end());

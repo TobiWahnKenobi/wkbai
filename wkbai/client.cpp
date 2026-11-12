@@ -170,6 +170,8 @@ void Client::tick()
 				fogReveals.clear();
 				minimapAlerts.clear();
 				warningPlaces.clear();
+				gameInterfaceEnabled = true;
+				objectiveMarkers.clear();
 				warningCycle = 0;
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
@@ -473,6 +475,43 @@ void Client::tick()
 				if (warningPlaces.size() > 4)
 					warningPlaces.resize(4);
 				warningCycle = 0;
+				break;
+			}
+			case NETCLIMSG_GAME_INTERFACE:
+				gameInterfaceEnabled = br.readUint8() != 0;
+				break;
+			case NETCLIMSG_OBJECTIVE_MARKER: {
+				const std::string key = br.readStringZ();
+				ObjectiveMarker m;
+				m.kind = br.readUint8();
+				m.x = br.readFloat();
+				m.z = br.readFloat();
+				m.object = br.readUint32();
+				if (m.kind)
+					objectiveMarkers[key] = m;
+				else
+					objectiveMarkers.erase(key);
+				break;
+			}
+			case NETCLIMSG_LEVEL_UNLOCKED: {
+				// noted in the user folder (saved\Unlocked Levels.txt, one name a line), as the
+				// original's Global.usr keeps them; wkbai lists every map anyway
+				const std::string level = br.readStringZ();
+				if (!level.empty() && level.find_first_of("\r\n") == std::string::npos && !g_userPath.empty()) {
+					const std::filesystem::path file = g_userPath / "saved" / "Unlocked Levels.txt";
+					bool known = false;
+					{
+						std::ifstream in(file);
+						for (std::string line; std::getline(in, line);)
+							if (line == level)
+								known = true;
+					}
+					if (!known) {
+						std::ofstream out(file, std::ios::app);
+						out << level << "\n";
+					}
+					unlockedLevels.insert(level);
+				}
 				break;
 			}
 			case NETCLIMSG_MUSIC_STOP: {

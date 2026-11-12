@@ -154,6 +154,13 @@ enum NetClientMessages {
 	NETCLIMSG_STOP_SOUND,
 	// STOP_MUSIC / FADE_STOP_MUSIC for this client's player: fade (8 bits, 1: over 2 s)
 	NETCLIMSG_MUSIC_STOP,
+	// ENABLE_/DISABLE_GAME_INTERFACE for this client's player: enabled (8 bits)
+	NETCLIMSG_GAME_INTERFACE,
+	// a mission objectives entry's position marker for this client's player: the entry's key
+	// (zero-ended), kind (8 bits: 0 none, 1 a place, 2 an object), x and z (floats), object id (32 bits)
+	NETCLIMSG_OBJECTIVE_MARKER,
+	// UNLOCK_LEVEL: the level's name (zero-ended)
+	NETCLIMSG_LEVEL_UNLOCKED,
 };
 
 enum NetServerMessages {

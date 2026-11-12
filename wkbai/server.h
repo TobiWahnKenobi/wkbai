@@ -481,6 +481,17 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void playMusic(ServerGameObject* player, int musicTag);
 	// STOP_MUSIC, FADE_STOP_MUSIC: the player's music stops (fading out over 2 s)
 	void stopMusic(ServerGameObject* player, bool fade);
+	// ENABLE_/DISABLE_GAME_INTERFACE: the players whose interface is off (a campaign intro, the
+	// end of a level): no HUD, no orders, only the game's windows and the menu
+	std::set<uint32_t> interfaceDisabled;
+	void setGameInterface(ServerGameObject* player, bool enabled);
+	// INDICATE_POSITION_OF_ / TRACK_OBJECT_POSITION_FROM_ / STOP_INDICATING_POSITION_OF_
+	// MISSION_OBJECTIVES_ENTRY: a marker for an entry on a player's minimap, by (player, key)
+	struct ObjectiveMarker { uint8_t kind = 0; float x = 0, z = 0; uint32_t object = 0; };
+	std::map<std::pair<uint32_t, std::string>, ObjectiveMarker> objectiveMarkers;
+	void setObjectiveMarker(ServerGameObject* player, const std::string& key, const ObjectiveMarker& marker);
+	// UNLOCK_LEVEL: the clients note the level as unlocked
+	void unlockLevel(const std::string& level);
 	void assignAlias(int aliasIndex, ServerGameObject* object);
 	void unassignAlias(int aliasIndex, ServerGameObject* object);
 	void clearAlias(int aliasIndex);

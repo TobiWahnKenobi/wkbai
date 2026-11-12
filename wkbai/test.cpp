@@ -7868,6 +7868,86 @@ void Test_LobbyItems()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// The campaign's and tutorials' script actions: DISABLE_/ENABLE_GAME_INTERFACE, the mission
+// objectives' position markers (a place, an object followed, stopped), UNLOCK_LEVEL
+void Test_CampaignInterface()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(10);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(5);
+	ServerGameObject* me = server.findObject(1027);
+	if (!me) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	check(client.gameInterfaceEnabled, "at the start: the interface is on");
+	run(me, "DISABLE_GAME_INTERFACE FINDER_SELF");
+	step(3);
+	check(!client.gameInterfaceEnabled, "DISABLE_GAME_INTERFACE: off on the player's client");
+	run(me, "ENABLE_GAME_INTERFACE FINDER_SELF");
+	step(3);
+	check(client.gameInterfaceEnabled && server.interfaceDisabled.empty(), "ENABLE_GAME_INTERFACE: on again");
+
+	// Feature Tests.cpp's: a place, then a unit followed
+	run(me, "INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_2 ABSOLUTE_POSITION 50 0 50 0 0 FINDER_SELF");
+	ServerGameObject* unit = nullptr;
+	auto findUnit = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (!unit && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					unit = c->dyncast<ServerGameObject>();
+				self(c, self);
+			}
+	};
+	findUnit(me, findUnit);
+	if (unit) {
+		const std::string line = "TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_3 FINDER_SPECIFIC_ID " + std::to_string(unit->id) + " FINDER_SELF";
+		run(me, line.c_str());
+	}
+	step(3);
+	auto m2 = client.objectiveMarkers.find("TEST_MISSION_OBJECTIVE_2");
+	auto m3 = client.objectiveMarkers.find("TEST_MISSION_OBJECTIVE_3");
+	check(m2 != client.objectiveMarkers.end() && m2->second.kind == 1 && m2->second.x == 50.0f && m2->second.z == 50.0f, "a marker at (50, 50)");
+	check(unit && m3 != client.objectiveMarkers.end() && m3->second.kind == 2 && m3->second.object == unit->id, "a marker following the unit");
+	run(me, "STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_2 FINDER_SELF");
+	step(3);
+	check(client.objectiveMarkers.count("TEST_MISSION_OBJECTIVE_2") == 0 && client.objectiveMarkers.size() == 1, "STOP_INDICATING: that marker gone, the other kept");
+
+	run(me, "UNLOCK_LEVEL \"New_Game.sav\"");
+	step(3);
+	check(client.unlockedLevels.count("New_Game.sav") == 1, "UNLOCK_LEVEL: noted on the client");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Minimap alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP) on 4 Peaks: only the
 // players listed get them, with their colour, seconds and circles; they end on time
 void Test_MinimapAlerts()
@@ -8331,6 +8411,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinimapAlerts, "Minimap alerts: blinking dots and collapsing circles to the players listed, with colour and time"},
 {Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
 {Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
+{Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
 };
 
 void LaunchTest()

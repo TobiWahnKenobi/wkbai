@@ -854,6 +854,65 @@ struct ActionMissionObjectivesEntry : Action {
 	}
 };
 
+// ENABLE_GAME_INTERFACE / DISABLE_GAME_INTERFACE <players>: their HUD and orders on or off
+// (Level Intros and Outros.cpp: off for a campaign level's intro and its end)
+struct ActionGameInterface : Action {
+	bool enable;
+	std::unique_ptr<ObjectFinder> finder;
+	explicit ActionGameInterface(bool enable) : enable(enable) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		ForEachObjectivesPlayer(ctx, finder.get(), [&](ServerGameObject* player) { ctx->server->setGameInterface(player, enable); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY <entry> <position> <players>,
+// TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY <entry> <objects> <players>,
+// STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY <entry> <players>: the entry's marker
+// on those players' minimaps (a place, the first object found, or none)
+struct ActionObjectiveMarker : Action {
+	int kind; // 0 stop, 1 a place, 2 an object
+	std::string key;
+	std::unique_ptr<PositionDeterminer> position;
+	std::unique_ptr<ObjectFinder> objects, players;
+	explicit ActionObjectiveMarker(int kind) : kind(kind) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		Server::ObjectiveMarker m;
+		m.kind = (uint8_t)kind;
+		if (kind == 1) {
+			const Vector3 p = position->eval(ctx).position;
+			m.x = p.x;
+			m.z = p.z;
+		}
+		else if (kind == 2) {
+			ServerGameObject* obj = objects->getFirst(ctx);
+			if (!obj)
+				return;
+			m.object = obj->id;
+			m.x = obj->position.x;
+			m.z = obj->position.z;
+		}
+		ForEachObjectivesPlayer(ctx, players.get(), [&](ServerGameObject* player) { ctx->server->setObjectiveMarker(player, key, m); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		key = gsf.nextString(true);
+		if (kind == 1)
+			position.reset(PositionDeterminer::createFrom(gsf, gs));
+		else if (kind == 2)
+			objects.reset(ReadFinder(gsf, gs));
+		players.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// UNLOCK_LEVEL "<level>": the level noted as unlocked on the players' machines
+struct ActionUnlockLevel : Action {
+	std::string level;
+	virtual void run(SrvScriptContext* ctx) override { ctx->server->unlockLevel(level); }
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { level = gsf.nextString(true); }
+};
+
 struct ActionSetScale : Action {
 	std::unique_ptr<ObjectFinder> finder;
 	std::unique_ptr<ValueDeterminer> vdx;
@@ -2074,14 +2133,14 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
 	case Tags::ACTION_STOP_SOUND: action = new ActionStopSound; break;
 	case Tags::ACTION_FADE_STOP_MUSIC: action = new ActionStopMusic(true); break;
+	case Tags::ACTION_ENABLE_GAME_INTERFACE: action = new ActionGameInterface(true); break;
+	case Tags::ACTION_DISABLE_GAME_INTERFACE: action = new ActionGameInterface(false); break;
+	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(1); break;
+	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(2); break;
+	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(0); break;
+	case Tags::ACTION_UNLOCK_LEVEL: action = new ActionUnlockLevel; break;
 		// Below are ignored actions (that should not affect gameplay very much)
-	case Tags::ACTION_ENABLE_GAME_INTERFACE:
-	case Tags::ACTION_DISABLE_GAME_INTERFACE:
-	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
-	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:

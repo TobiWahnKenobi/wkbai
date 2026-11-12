@@ -359,6 +359,28 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		}
 		drawList->PopClipRect();
 	}
+	// the mission objectives' position markers (INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY,
+	// TRACK_OBJECT_POSITION_FROM_...): a gold ring breathing round the place, or round the object
+	// it follows, wherever it goes
+	if (!client->objectiveMarkers.empty()) {
+		const float scale = std::max(1.0f, std::min(w, h) / 200.0f);
+		const float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() / 250.0f);
+		drawList->PushClipRect(p0, p1, true);
+		for (const auto& [key, m] : client->objectiveMarkers) {
+			float x = m.x, z = m.z;
+			if (m.kind == 2) {
+				ClientGameObject* obj = client->findObject(m.object);
+				if (!obj || (obj->flags & ClientGameObject::fTerminated))
+					continue;
+				x = obj->position.x;
+				z = obj->position.z;
+			}
+			const ImVec2 c = toMinimap(x, z);
+			drawList->AddCircle(c, (5.0f + 3.0f * pulse) * scale, IM_COL32(255, 215, 64, 255), 20, 2.0f * scale);
+			drawList->AddCircleFilled(c, 1.5f * scale, IM_COL32(255, 215, 64, 255));
+		}
+		drawList->PopClipRect();
+	}
 	// a replay's events, marked for a while
 	if (replayMode) {
 		drawList->PushClipRect(p0, p1, true);
@@ -3097,8 +3119,16 @@ void ClientInterface::iter()
 	// a game text window (or the objectives) under the mouse, or a modal one: it gets the
 	// mouse, the game none
 	const bool windowsTakeMouse = !menuOpen && frontEnd && frontEnd->gameWindowsWantMouse(UiMouseX(), UiMouseY());
+	// DISABLE_GAME_INTERFACE (a campaign level's intro, its end): the game gets no keys and no
+	// mouse, only Esc for the menu; the game's windows still get them (given back below)
+	const bool interfaceLocked = !menuOpen && !replayMode && !client->gameInterfaceEnabled;
 	if (menuOpen)
 		menuInput.take();
+	else if (interfaceLocked) {
+		menuInput.take();
+		std::swap(g_keyPressed[SDL_SCANCODE_ESCAPE], menuInput.keyPressed[SDL_SCANCODE_ESCAPE]);
+		std::swap(g_keyDown[SDL_SCANCODE_ESCAPE], menuInput.keyDown[SDL_SCANCODE_ESCAPE]);
+	}
 	else if (windowsTakeMouse)
 		menuInput.takeMouse();
 
@@ -4277,7 +4307,9 @@ void ClientInterface::iter()
 			}
 			// wkbai's unit history: the heroes' names, under the interface's panels
 			drawUnitHistoryOverlay();
-			lua["CCUI_PerFrame"]();
+			// (no HUD while the scripts have the interface off)
+			if (client->gameInterfaceEnabled || replayMode)
+				lua["CCUI_PerFrame"]();
 		}
 		catch (const sol::error& err) {
 			printf("Sol error:\n%s\n", err.what());
@@ -4291,7 +4323,7 @@ void ClientInterface::iter()
 	}
 
 	if (frontEnd) {
-		if (menuOpen)
+		if (menuOpen || interfaceLocked)
 			menuInput.give();
 		else if (windowsTakeMouse)
 			menuInput.giveMouse();

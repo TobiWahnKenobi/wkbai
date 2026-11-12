@@ -783,11 +783,21 @@ struct FrontEnd::Impl {
 			t["items"] = items;
 			return t;
 		});
-		lua.set_function("createCampaignProfile", [](const std::string& name) {
+		// a new campaign; start: the original's start options (Starting Food/Materials/Gold, the
+		// Pagan/Imperial/Renaissance Advance), kept as the USER object's first items
+		lua.set_function("createCampaignProfile", [](const std::string& name, sol::optional<sol::table> start) {
 			CampaignProfile p;
 			if (CampaignProfile::load(name, p))
 				return false; // exists
 			p.name = name;
+			if (start) {
+				static const std::pair<const char*, const char*> fields[] = {
+					{ "food", "Food" }, { "wood", "Wood" }, { "gold", "Gold" }, { "population", "Total Population Count" },
+					{ "pagan", "Pagan Tech Level" }, { "imperial", "Imperial Tech Level" }, { "renaissance", "Renaissance Tech Level" } };
+				for (const auto& [field, item] : fields)
+					if (sol::optional<float> v = (*start)[field])
+						p.items[item] = *v;
+			}
 			return p.save();
 		});
 		lua.set_function("deleteCampaignProfile", [](const std::string& name) { return CampaignProfile::remove(name); });

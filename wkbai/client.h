@@ -170,6 +170,14 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the last four warnings' places (x, z), the latest first (one per place: a new alert within
 	// 25 m of a kept one moves it to the front), for Home; warningCycle: Home's next pick
 	std::vector<std::pair<float, float>> warningPlaces;
+	// DISABLE_GAME_INTERFACE: no HUD and no orders for this player (NETCLIMSG_GAME_INTERFACE)
+	bool gameInterfaceEnabled = true;
+	// UNLOCK_LEVEL this session (also noted in saved\Unlocked Levels.txt)
+	std::set<std::string> unlockedLevels;
+	// the mission objectives entries' position markers, by entry key (kind 1: a place, 2: an
+	// object, followed)
+	struct ObjectiveMarker { int kind = 0; float x = 0, z = 0; uint32_t object = 0; };
+	std::map<std::string, ObjectiveMarker> objectiveMarkers;
 	size_t warningCycle = 0;
 	struct DiplomacyButton {
 		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
