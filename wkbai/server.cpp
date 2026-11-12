@@ -2451,6 +2451,14 @@ void Server::playMusic(ServerGameObject* player, int musicTag)
 	player->isMusicPlaying = true;
 }
 
+void Server::stopMusic(ServerGameObject* player, bool fade)
+{
+	NetPacketWriter msg{ NETCLIMSG_MUSIC_STOP };
+	msg.writeUint8(fade ? 1 : 0);
+	sendTo(player, msg);
+	player->isMusicPlaying = false;
+}
+
 void Server::assignAlias(int aliasIndex, ServerGameObject* object)
 {
 	aliases[aliasIndex].insert(object->id);

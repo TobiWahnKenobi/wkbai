@@ -6,6 +6,7 @@
 
 #include "AL/al.h"
 #include "AL/alc.h"
+#include <SDL3/SDL_timer.h>
 
 #include <cassert>
 #include <map>
@@ -14,6 +15,7 @@
 #include <array>
 #include <thread>
 #include <atomic>
+#include <algorithm>
 #include <optional>
 #include <chrono>
 #include <unordered_map>
@@ -310,6 +312,7 @@ struct OALSoundPlayer : SoundPlayer {
 		if (musicLoadingThread.joinable())
 			musicLoadingThread.join();
 		isMusicLoading = true;
+		fadeStart = fadeEnd = 0; // (a fade-out still going: the new music plays at its volume)
 		musicLoadingThread = std::thread([this,filePath]() {
 			playMusicImp(filePath);
 			isMusicLoading = false;
@@ -322,6 +325,108 @@ struct OALSoundPlayer : SoundPlayer {
 		alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume);
 		for (auto src : sources)
 			alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
+	}
+
+	// the music's fade-out (stopMusic): from its volume to nothing between these SDL ticks
+	uint32_t fadeStart = 0, fadeEnd = 0;
+	virtual void stopMusic(float fadeSeconds) override {
+		if (!initialised)
+			return;
+		if (musicLoadingThread.joinable())
+			musicLoadingThread.join();
+		if (fadeSeconds <= 0.0f) {
+			alSourceStop(musicSource);
+			fadeStart = fadeEnd = 0;
+			return;
+		}
+		fadeStart = SDL_GetTicks();
+		fadeEnd = fadeStart + (uint32_t)(fadeSeconds * 1000.0f);
+	}
+	virtual void update() override {
+		if (!initialised || !fadeEnd)
+			return;
+		const uint32_t now = SDL_GetTicks();
+		if (now >= fadeEnd) {
+			alSourceStop(musicSource);
+			alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume);
+			fadeStart = fadeEnd = 0;
+			return;
+		}
+		const float left = (float)(fadeEnd - now) / (float)(fadeEnd - fadeStart);
+		alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume * left);
+	}
+
+	// the PCM stream (streamBegin): its own source, a buffer per block, deleted once played
+	ALuint streamSource = 0;
+	int streamRate = 0, streamChannels = 0;
+	double streamSeconds = 0.0; // queued and not yet played
+	std::vector<std::pair<ALuint, double>> streamBuffers; // in the order queued, with their seconds
+	void streamUnqueue() {
+		ALint processed = 0;
+		alGetSourcei(streamSource, AL_BUFFERS_PROCESSED, &processed);
+		while (processed-- > 0 && !streamBuffers.empty()) {
+			ALuint buf = 0;
+			alSourceUnqueueBuffers(streamSource, 1, &buf);
+			for (auto it = streamBuffers.begin(); it != streamBuffers.end(); ++it)
+				if (it->first == buf) {
+					streamSeconds -= it->second;
+					streamBuffers.erase(it);
+					break;
+				}
+			alDeleteBuffers(1, &buf);
+		}
+	}
+	virtual bool streamBegin(int rate, int channels) override {
+		if (!initialised || rate <= 0 || (channels != 1 && channels != 2))
+			return false;
+		streamEnd();
+		alGenSources(1, &streamSource);
+		alSourcei(streamSource, AL_SOURCE_RELATIVE, AL_TRUE);
+		alSource3f(streamSource, AL_POSITION, 0.0f, 0.0f, 0.0f);
+		// (a video's sound: at the music's volume)
+		alSourcef(streamSource, AL_GAIN, std::max(g_renderSettings.musicVolume, g_renderSettings.effectsVolume));
+		streamRate = rate;
+		streamChannels = channels;
+		streamSeconds = 0.0;
+		return true;
+	}
+	virtual void streamQueue(const void* data, size_t bytes) override {
+		if (!streamSource || !bytes)
+			return;
+		streamUnqueue();
+		ALuint buf = 0;
+		alGenBuffers(1, &buf);
+		alBufferData(buf, streamChannels == 2 ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16, data, (ALsizei)bytes, streamRate);
+		alSourceQueueBuffers(streamSource, 1, &buf);
+		const double seconds = (double)bytes / (2.0 * streamChannels * streamRate);
+		streamBuffers.emplace_back(buf, seconds);
+		streamSeconds += seconds;
+		ALint state = 0;
+		alGetSourcei(streamSource, AL_SOURCE_STATE, &state);
+		if (state != AL_PLAYING)
+			alSourcePlay(streamSource);
+	}
+	virtual double streamQueuedSeconds() override {
+		if (!streamSource)
+			return 0.0;
+		streamUnqueue();
+		return streamSeconds;
+	}
+	virtual void streamEnd() override {
+		if (!streamSource)
+			return;
+		alSourceStop(streamSource);
+		ALint queued = 0;
+		alGetSourcei(streamSource, AL_BUFFERS_QUEUED, &queued);
+		while (queued-- > 0) {
+			ALuint buf = 0;
+			alSourceUnqueueBuffers(streamSource, 1, &buf);
+			alDeleteBuffers(1, &buf);
+		}
+		alDeleteSources(1, &streamSource);
+		streamSource = 0;
+		streamBuffers.clear();
+		streamSeconds = 0.0;
 	}
 
 	virtual bool isMusicPlaying() override {

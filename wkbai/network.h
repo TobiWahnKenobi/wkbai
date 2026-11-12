@@ -152,6 +152,8 @@ enum NetClientMessages {
 	NETCLIMSG_MINIMAP_ALERT,
 	// STOP_SOUND: the sounds the object (id, 32 bits) played on this client stopped
 	NETCLIMSG_STOP_SOUND,
+	// STOP_MUSIC / FADE_STOP_MUSIC for this client's player: fade (8 bits, 1: over 2 s)
+	NETCLIMSG_MUSIC_STOP,
 };
 
 enum NetServerMessages {

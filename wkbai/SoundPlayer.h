@@ -18,6 +18,15 @@ struct SoundPlayer {
 	virtual void setListenerPosition(const Vector3& pos, const Vector3& at) = 0;
 	virtual void playMusic(const std::string& filePath) = 0;
 	virtual bool isMusicPlaying() = 0;
+	// the music stopped, at once or fading out over `fadeSeconds`; update() carries the fade on
+	virtual void stopMusic(float fadeSeconds = 0.0f) {}
+	virtual void update() {}
+	// A stream of 16-bit PCM (the intro video's sound): begun with its rate and channels, fed
+	// with blocks, the seconds still queued, ended
+	virtual bool streamBegin(int rate, int channels) { return false; }
+	virtual void streamQueue(const void* data, size_t bytes) {}
+	virtual double streamQueuedSeconds() { return 0.0; }
+	virtual void streamEnd() {}
 	// STOP_SOUND: the sounds an object played stopped. soundOwner: the object id the next
 	// playSound/playSound3D calls belong to (0: none, set back after them)
 	uint32_t soundOwner = 0;

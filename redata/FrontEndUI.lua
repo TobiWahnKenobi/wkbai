@@ -440,7 +440,8 @@ MainMenuItems = {
 	{ text = "Map Editor", action = function() push("editlevels") end },
 	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
 	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
-	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() request("quit") end },
+	-- (the original asks first)
+	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() confirm(T("FRONT_END_EXIT_ARE_YOU_SURE"), function() request("quit") end) end },
 }
 
 Screens.main = {
@@ -712,7 +713,14 @@ Screens.load = {
 			loadState.selected, loadState.renaming = 1, saves[1]
 			renameState.text = loadState.testRename[1]
 		end
-		button(T("DIALOG_BUTTON_DELETE"), X(890), Y(1022), L(141), L(24), false)
+		-- Delete: only the player's own saves (saved\Save_Games), after the original's question
+		if button(T("DIALOG_BUTTON_DELETE"), X(890), Y(1022), L(141), L(24), not replays and chosen ~= nil and isUserSave(chosen)) then
+			local name = chosen
+			confirm(string.format(T("FRONT_END_DELETE_ARE_YOU_SURE"), stripExtension(name)), function()
+				request("delete_save", name)
+				loadState.selected = 0
+			end)
+		end
 		if button(T("FRONT_END_BUTTON_BACK"), X(1045), Y(1022), L(141), L(24)) then pop() end
 		mouse.blocked = blocked
 

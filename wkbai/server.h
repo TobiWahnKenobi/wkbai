@@ -479,6 +479,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void interpolateCameraToStoredPosition(ServerGameObject* player, float duration);
 	void setGameSpeed(float nextSpeed);
 	void playMusic(ServerGameObject* player, int musicTag);
+	// STOP_MUSIC, FADE_STOP_MUSIC: the player's music stops (fading out over 2 s)
+	void stopMusic(ServerGameObject* player, bool fade);
 	void assignAlias(int aliasIndex, ServerGameObject* object);
 	void unassignAlias(int aliasIndex, ServerGameObject* object);
 	void clearAlias(int aliasIndex);

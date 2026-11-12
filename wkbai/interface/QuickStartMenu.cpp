@@ -97,7 +97,6 @@ namespace {
 QuickStartMenu::QuickStartMenu(IRenderer* gfx) : gfx(gfx)
 {
 	refreshSaveGames();
-	//SoundPlayer::getSoundPlayer()->playMusic("Warrior Kings Game Set\\Sounds\\Music\\title_version_2.mp2");
 	
 	newSession();
 
@@ -390,6 +389,24 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 		modMenu.open();
 	else if (request.action == "quit")
 		g_windowQuit = true;
+	else if (request.action == "delete_save") {
+		// Load Game's Delete (confirmed): one of the player's own saves in saved\Save_Games and its
+		// side files ("<name>.ai.txt" and any other "<name>.*"); never the game's own
+		const std::string& name = request.arg;
+		if (!name.empty() && name.find_first_of("\\/:") == std::string::npos) {
+			const std::filesystem::path dir = g_userPath / "saved" / "Save_Games";
+			std::error_code ec;
+			if (std::filesystem::is_regular_file(dir / PathFromUtf8(name), ec)) {
+				std::filesystem::remove(dir / PathFromUtf8(name), ec);
+				const std::string prefix = name + ".";
+				for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+					if (entry.is_regular_file() && PathToUtf8(entry.path().filename()).rfind(prefix, 0) == 0)
+						std::filesystem::remove(entry.path(), ec);
+				printf("Deleted the save game %s\n", name.c_str());
+				refreshSaveGames(false);
+			}
+		}
+	}
 }
 
 void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string& leaveArg)
@@ -453,6 +470,20 @@ void QuickStartMenu::draw()
 		ImGui::End();
 	}
 
+	// The menus' music, as WKB.exe's front end (0x6380f0): whenever none plays, one of four
+	// tracks at random (picked by the clock: the game's random numbers stay untouched)
+	if (SoundPlayer* sp = SoundPlayer::getSoundPlayer()) {
+		sp->update();
+		static uint32_t lastTry = 0;
+		const uint32_t now = (uint32_t)SDL_GetTicks();
+		if (now - lastTry > 1000 && !sp->isMusicPlaying()) {
+			lastTry = now;
+			static const char* const tracks[4] = { "wk_title.mp2", "title_version_2.mp2", "end_pagan_0.mp2", "action_1.mp2" };
+			sp->playMusic(std::string("Warrior Kings Game Set\\Sounds\\Music\\") + tracks[(now / 7) % 4]);
+			menuMusic = true;
+		}
+	}
+
 	// the network is up while the multiplayer lobby is open
 	if (!hosting) {
 		netDeinit();
@@ -481,6 +512,11 @@ void QuickStartMenu::launchGame()
 {
 	if (modeChosen == MODE_UNDEFINED)
 		return;
+	// the menus' music ends with them (the level's own starts with its scripts)
+	if (menuMusic) {
+		SoundPlayer::getSoundPlayer()->stopMusic(0.0f);
+		menuMusic = false;
+	}
 
 	// What the player chose in the in-game menu when the game ended
 	std::string leaveAction, leaveArg;

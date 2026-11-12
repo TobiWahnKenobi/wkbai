@@ -72,6 +72,8 @@ private:
 	std::set<NetLink*> joinsSent, refusedSent;
 	// the password the host asks for (empty: none), the one the guest gives
 	std::string hostPassword, joinPassword;
+	// the menus' music is playing (draw), stopped when a game starts
+	bool menuMusic = false;
 	void sendGameSetFiles(NetLink* link);
 	// Guest: the host to join ("address[:port]"), or a game from the list (matchmaking)
 	std::string joinTarget;

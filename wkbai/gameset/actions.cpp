@@ -1347,6 +1347,22 @@ struct ActionPlayMusic : Action {
 	}
 };
 
+// STOP_MUSIC <players> and FADE_STOP_MUSIC <players> (the tutorials' last page, before
+// BOOT_LEVEL or EXIT_TO_MAIN_MENU): their music stops, at once or fading out
+struct ActionStopMusic : Action {
+	bool fade;
+	ActionStopMusic(bool fade) : fade(fade) {}
+	std::unique_ptr<ObjectFinder> fPlayer;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : fPlayer->eval(ctx))
+			if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer())
+				ctx->server->stopMusic(player, fade);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fPlayer.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ActionTeleport : Action {
 	std::unique_ptr<ObjectFinder> finder;
 	std::unique_ptr<PositionDeterminer> pos;
@@ -2057,6 +2073,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_DISBAND_FORMATION: action = new ActionDisbandFormation; break;
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
 	case Tags::ACTION_STOP_SOUND: action = new ActionStopSound; break;
+	case Tags::ACTION_FADE_STOP_MUSIC: action = new ActionStopMusic(true); break;
 		// Below are ignored actions (that should not affect gameplay very much)
 	case Tags::ACTION_ENABLE_GAME_INTERFACE:
 	case Tags::ACTION_DISABLE_GAME_INTERFACE:
@@ -2064,7 +2081,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
-	case Tags::ACTION_FADE_STOP_MUSIC:
 	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
@@ -2110,7 +2126,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 		if (name == "PAUSE_GAME") { action = new ActionPauseGame(true); break; }
 		if (name == "RESUME_GAME") { action = new ActionPauseGame(false); break; }
 		if (name == "RECALCULATE_SIGHT_RANGE") { action = new ActionRecalculateSightRange; break; }
-		if (name == "STOP_MUSIC") { action = new ActionNop; break; } // as FADE_STOP_MUSIC
+		if (name == "STOP_MUSIC") { action = new ActionStopMusic(false); break; }
 		action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}
 	action->parse(gsf, gs);

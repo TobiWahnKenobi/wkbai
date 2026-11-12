@@ -120,6 +120,7 @@ void Client::tick()
 	// Sound & music
 	SoundPlayer* soundPlayer = SoundPlayer::getSoundPlayer();
 	soundPlayer->setListenerPosition(camera.position, camera.direction.normal());
+	soundPlayer->update();
 	if (isMusicPlaying) {
 		if (!soundPlayer->isMusicPlaying()) {
 			isMusicPlaying = false;
@@ -472,6 +473,13 @@ void Client::tick()
 				if (warningPlaces.size() > 4)
 					warningPlaces.resize(4);
 				warningCycle = 0;
+				break;
+			}
+			case NETCLIMSG_MUSIC_STOP: {
+				const bool fade = br.readUint8() != 0;
+				// stopped by the script: not "completed" (the server picks no next track)
+				isMusicPlaying = false;
+				SoundPlayer::getSoundPlayer()->stopMusic(fade ? 2.0f : 0.0f);
 				break;
 			}
 			case NETCLIMSG_STOP_SOUND: {
