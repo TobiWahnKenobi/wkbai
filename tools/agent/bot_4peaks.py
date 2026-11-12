@@ -169,21 +169,7 @@ class Bot:
         if not sel:
             return 0
         c = sel[0]["position"]
-        every = a.observe(scenery=True)["objects"]
-        near = sorted([x for x in every if "Tree" in x["type"]], key=lambda x: dist(x["position"], c))
-        if not near:
-            return 0
-        self.look(near[0]["position"], 5)
-        every = a.observe(scenery=True)["objects"]
-        units = {x["id"] for x in every if x["kind"] != "other"}
-        trees = [x for x in every if "Tree" in x["type"] and "screen" in x and safe(*x["screen"])]
-        for t in sorted(trees, key=lambda x: dist(x["position"], c))[:6]:
-            r = a.request("rightclickobject", object=t["id"])
-            if not r.get("ok") and r.get("underCursor") and r["underCursor"] not in units:
-                r = a.request("rightclickobject", object=r["underCursor"])
-            if r.get("ok"):
-                return len(sel)
-        return 0
+        return len(sel) if self.right_click_tree_near(c) else 0
 
     def select_group(self, units):
         """These units selected (clicks, Shift for the rest; the camera to each in turn)"""
@@ -194,6 +180,64 @@ class Bot:
             if a.request("clickobject", object=u["id"], add=not first).get("ok"):
                 first = False
         return not first
+
+    def find_trees(self, around):
+        """Where trees are near a point: the camera panned round it (scenery is only what is on
+        the screen), as a player looks for a forest; remembered"""
+        a = self.a
+        known = getattr(self, "trees", {})
+        if not any(dist(p, around) < 120 for p in known.values()):
+            for r in (0, 55, 100):
+                for ang in (range(0, 360, 60) if r else [0]):
+                    self.look([around[0] + r * math.cos(math.radians(ang)), around[1] + r * math.sin(math.radians(ang))], 4)
+                    for x in a.observe(scenery=True)["objects"]:
+                        if "Tree" in x["type"]:
+                            known[x["id"]] = x["position"]
+                if any(dist(p, around) < 120 for p in known.values()):
+                    break
+        self.trees = known
+        return sorted(known.items(), key=lambda kv: dist(kv[1], around))
+
+    def right_click_tree_near(self, around):
+        """A right-click on a tree near the point (the selection's order, or a rally point)"""
+        a = self.a
+        found = self.find_trees(around)
+        if not found:
+            return False
+        self.look(found[0][1], 5)
+        every = a.observe(scenery=True)["objects"]
+        units = {x["id"] for x in every if x["kind"] != "other"}
+        trees = [x for x in every if "Tree" in x["type"] and "screen" in x and safe(*x["screen"])]
+        for t in sorted(trees, key=lambda x: dist(x["position"], around))[:6]:
+            r = a.request("rightclickobject", object=t["id"])
+            if not r.get("ok") and r.get("underCursor") and r["underCursor"] not in units:
+                r = a.request("rightclickobject", object=r["underCursor"])
+            if r.get("ok"):
+                return True
+        # (gone: a tree remembered there no more)
+        self.trees.pop(found[0][0], None)
+        return False
+
+    def rally_to_tree(self, building):
+        """The building's new units go to the nearest tree (selected, a right-click on a tree:
+        new peasants then chop it), as a player sets a rally point"""
+        a = self.a
+        self.find_trees(building["position"])  # (first: the panning would lose nothing then)
+        self.look(building["position"], 5)
+        if not self.select(building):
+            return False
+        return self.right_click_tree_near(building["position"])
+
+    def rally_to(self, building, point):
+        """The building's new units gather at a map point (selected, a right-click there)"""
+        a = self.a
+        self.look(building["position"], 5)
+        if not self.select(building):
+            return False
+        for dx, dz in ((0, 0), (6, 0), (0, 6), (-6, 0), (0, -6), (10, 10)):
+            if a.request("rightclickground", x=point[0] + dx, z=point[1] + dz).get("ok"):
+                return True
+        return False
 
     def convert(self, peasants):
         """These peasants to militia (clicks, Shift for the rest; the command)"""
@@ -260,7 +304,7 @@ class Bot:
         a = self.a
         a.key_action("groupSelect1"); a.wait(3)
         had = len(a.observe()["selection"])
-        self.look(home, 6)
+        self.look(getattr(self, "gather", home), 6)
         sol = [x for x in self.own(a.observe(), "character") if is_soldier(x) and "screen" in x and safe(*x["screen"])]
         if sol:
             self.box([s["screen"] for s in sol], add=had > 0)
@@ -280,7 +324,8 @@ class Bot:
         foe_ids = {x["id"] for x in foes}
         def rank(x):
             wall = any(w in x["type"] for w in WALLS)
-            order = 0 if is_soldier(x) else 1 if x["kind"] == "character" else 2 if x["type"] == "Manor" else 5 if wall else 3
+            maker = x["kind"] == "building" and any(k in x["type"] for k in ("Village", "Manor", "Keep", "Castle", "Palace", "Barracks", "Town", "Hall"))
+            order = 0 if is_soldier(x) else 1 if maker else 2 if x["kind"] == "character" else 5 if wall else 3
             return (order, dist(x["position"], centre))
         for f in sorted([x for x in foes if dist(x["position"], centre) < 150], key=rank)[:6]:
             r = a.request("rightclickobject", object=f["id"])
@@ -332,7 +377,7 @@ def main():
     ap.add_argument("--game-path", default=os.environ.get("WKB_GAME_PATH"))
     ap.add_argument("--work", default=r"C:\Dev\wkbai-agent\bot")
     ap.add_argument("--minutes", type=float, default=40)
-    ap.add_argument("--speed", type=int, default=3)
+    ap.add_argument("--speed", type=int, default=1, help="speed-up key presses (1: 2x)")
     ap.add_argument("--attack-at", type=int, default=25)
     ap.add_argument("--pop", type=int, default=200, help="the lobby's population limit (200 by default)")
     ap.add_argument("--port", type=int, default=7790)
@@ -372,9 +417,12 @@ def main():
         village = bot.place("ECONOMIC", "Build Village Wood", bot.rural_spots(towards, home, gate, 0, 40, away=75))
         say("village:", village and (village["type"], [round(v) for v in village["position"]]))
         state = {"farms": 0, "barracks": None, "attacking": False, "lastFarm": -999, "lastBarracksTry": -999}
+        # (the village's builders are held while it goes up, as every placement's)
+        state["busy"] = {p["id"]: 150 for p in peasants} if village else {}  # (the village's builders)
         records = []
         last_record = -60
         # the Manor's first food: peasants for wood (2), the rest kept for farmers and soldiers
+        say("Manor's rally point on a tree:", bot.rally_to_tree(manor))
         bot.spawn(manor, "Spawn Peasant", 2)
         while True:
             o = a.observe()
@@ -405,9 +453,13 @@ def main():
             want_wood = 100 if (not farms or barracks_any) else 300  # (the barracks' 200 first, after one farm)
             if vil and res["Wood"] >= want_wood and len(farms) < 1 + farmers // 4 and t - state["lastFarm"] > 30:
                 state["lastFarm"] = t
-                if bot.peasants_box(vil["position"]):
+                builders = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t][:4]
+                if builders and bot.select_group(builders):
                     f = bot.place("ECONOMIC", "Build Farm Wood", bot.rural_spots(vil["position"], home, gate, 22, 46, away=75))
                     say("t=%4.0fs farm:" % t, f and [round(v) for v in f["position"]])
+                    if f:
+                        for b2 in builders:
+                            state["busy"][b2["id"]] = t + 100
             # farmers from the village (food for them first)
             if vil and farms and farmers < 5 * len(farms) and res["Food"] >= 60:
                 n = bot.spawn(vil, "Spawn Peasant Farmer", min(2, int(res["Food"] // 60)))
@@ -415,9 +467,9 @@ def main():
                     say("t=%4.0fs %d farmers" % (t, n))
                 o = a.observe(); res = o["resources"]
             # the Barracks: joined to the city, on the side away from the gate
-            if not state["barracks"] and res["Wood"] >= 200 and t - state["lastBarracksTry"] > 40:
+            if not state["barracks"] and farms and res["Wood"] >= 200 and t - state["lastBarracksTry"] > 40:
                 state["lastBarracksTry"] = t
-                builders = [x for x in bot.own(o, "character", "Peasant")][:6]
+                builders = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t][:6]
                 if builders and bot.select_group(builders):
                     ring = []
                     for r in (32, 38, 44):
@@ -429,17 +481,27 @@ def main():
                         ring.sort(key=lambda p: -dist(p, gate))
                     b = bot.place("MILITARY", "Build Barracks Stone", ring)
                     say("t=%4.0fs barracks:" % t, b and (b["type"], [round(v) for v in b["position"]]))
+                    if b:
+                        for b2 in builders:
+                            state["busy"][b2["id"]] = t + 160
                     if any(x["type"].startswith("Barracks Stone") for x in bot.own(a.observe())):
                         state["barracks"] = True
             barracks = next((x for x in bot.own(o) if x["type"] == "Barracks Stone"), None)
+            gather = [home[0] + (cx - home[0]) * 0.18, home[1] + (cz - home[1]) * 0.18]
+            if barracks and not state.get("barracksRally"):
+                state["barracksRally"] = bot.rally_to(barracks, gather)
+                say("t=%4.0fs Barracks' rally point at" % t, [round(v) for v in gather], state["barracksRally"])
+            bot.gather = gather
             # soldiers: spearmen and archers, keeping food for the next farmers
             keep = 60 if farms and farmers < 5 * len(farms) else 0
             if barracks and res["Food"] - keep >= 60:
                 n = int((res["Food"] - keep) // 60)
                 k = 0
-                for i in range(n if res["Food"] > 600 else max(1, n // 2)):
-                    cmd = "Spawn Archer" if (i % 2 and res["Wood"] >= 20) else "Spawn Spearman"
-                    k += bot.spawn(barracks, cmd, 1)
+                count = n if res["Food"] > 600 else max(1, n // 2)
+                archers = count // 2 if res["Wood"] >= 20 * (count // 2) else 0
+                k += bot.spawn(barracks, "Spawn Spearman", count - archers)
+                if archers:
+                    k += bot.spawn(barracks, "Spawn Archer", archers)
                 if k:
                     say("t=%4.0fs %d soldiers ordered" % (t, k))
             # wood (not while a foundation of ours waits: its builders count as idle on the way)
@@ -448,8 +510,8 @@ def main():
             if w:
                 say("t=%4.0fs %d idle peasants to the trees" % (t, w))
             # (builders stay: peasants near a foundation of ours, a wall's apart)
-            sites = [x["position"] for x in bot.own(o) if "Foundation" in x["type"] and not any(wl in x["type"] for wl in WALLS)]
-            plain = [x for x in bot.own(o, "character", "Peasant") if not any(dist(x["position"], s2) < 30 for s2 in sites)]
+            # (a finished farm keeps "Foundation" in its type: only unfinished ones, below full health)
+            plain = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t]
             if not foundations and t - state.get("lastWood", -999) > 40 and plain:
                 state["lastWood"] = t
                 n = bot.to_wood(plain[:10])
