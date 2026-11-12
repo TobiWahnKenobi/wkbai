@@ -1413,6 +1413,41 @@ static ServerGameObject* RallyTargetInstead(ServerGameObject* building, const Co
 	return nullptr;
 }
 
+// Where a building puts the unit it has trained. WKB.exe's Task_Spawn (0x50eef0) asks for a path
+// of the building's category 4, the model's attachment points "CR_<path>_<point>" (0x568370 with
+// no unit, from the building's centre; 0x6343e0 skips paths whose first point is off the playable
+// area and takes the nearest), and creates the unit at that path's last point, with the ground's
+// height (0x60f460). Only a building with no such path puts it on its own centre. A building's
+// spawn order starts with no command (0x544340: the null at 0x92ecf0), so with no rally point
+// the unit stays there. The Manor's CR_1_2 and CR_2_2 are one point at its door, 8.8 m from its
+// centre and off its footprint (CR_x_1 2.4 m further out): wkbai used the centre, so a peasant
+// trained with no rally point stood inside the Manor, where a click selects the Manor (test 72).
+Vector3 SpawnSpot(const ServerGameObject* building)
+{
+	const auto area = Server::instance->terrain ? Server::instance->terrain->getPlayableArea() : std::make_pair(1e9f, 1e9f);
+	const std::vector<Vector3>* best = nullptr;
+	float bestDist = 0.0f;
+	const auto paths = AttachmentPaths(building, "CR_");
+	for (const auto& [no, points] : paths) {
+		if (points.empty())
+			continue;
+		const Vector3& first = points.front();
+		if (first.x < 0.0f || first.z < 0.0f || first.x >= area.first || first.z >= area.second)
+			continue;
+		const float d = (first - building->position).sqlen2xz();
+		if (!best || d < bestDist) {
+			best = &points;
+			bestDist = d;
+		}
+	}
+	if (!best)
+		return building->position;
+	Vector3 spot = best->back();
+	if (Server::instance->terrain)
+		spot.y = Server::instance->terrain->getHeight(spot.x, spot.z);
+	return spot;
+}
+
 void SpawnTask::onUpdate()
 {
 	this->startTriggers();
@@ -1423,7 +1458,7 @@ void SpawnTask::onUpdate()
 	if (this->isDone()) {
 		ServerGameObject* obj = order->gameObject;
 		if (obj->getItem(Tags::PDITEM_HIT_POINTS_OF_OBJECT_BEING_SPAWNED) >= obj->getItem(Tags::PDITEM_HIT_POINT_CAPACITY_OF_OBJECT_BEING_SPAWNED)) {
-			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), obj->position, Vector3(0,0,0));
+			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), SpawnSpot(obj), Vector3(0,0,0));
 			this->isSpawned = true;
 			if (obj->spawnedUnitCommand >= 0) {
 				const Command* command = &Server::instance->gameSet->commands[obj->spawnedUnitCommand];

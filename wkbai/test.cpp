@@ -8339,6 +8339,77 @@ void Test_GameWindows()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Spawn point (needs the game data): player 1027's Manor on 4 Peaks trains two peasants with no
+// rally point. As in WKB.exe's Task_Spawn, each comes out at the last point of the Manor's
+// nearest CR_ path, outside its footprint, where a click finds the peasant and not the Manor,
+// and stays there with no order. Prints "SPAWNPOINT ..." and "SPAWNPOINT PASSED/FAILED".
+void Test_SpawnPoint()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	g_settings["simSeed"] = 4243u;
+	server.timeManager.unpause();
+	server.startLevel();
+	server.timeManager.stepMs = 20;
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* manor = nullptr;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!manor && child->blueprint->name == "Manor" && child->getPlayer() == player)
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	find(server.getLevel(), find);
+	if (!player || !manor) {
+		printf("SPAWNPOINT not set up\nSPAWNPOINT FAILED\n");
+		return;
+	}
+	manor->spawnedUnitCommand = -1; // no rally point
+	manor->spawnedUnitTarget = -1;
+	manor->spawnedUnitDestination = Vector3(-1, -1, -1);
+	if (Model* model = manor->getModel())
+		for (size_t i = 0; i < model->getNumAPs(); i++)
+			if (model->getAPInfo(i).tag.compare(0, 3, "CR_") == 0) {
+				const Vector3 p = model->getAPInfo(i).staticState.position.transform(manor->getWorldMatrix());
+				printf("SPAWNPOINT %s at (%.1f,%.1f)\n", model->getAPInfo(i).tag.c_str(), p.x, p.z);
+			}
+	const Vector3 spot = SpawnSpot(manor);
+	printf("SPAWNPOINT Manor %u at (%.1f,%.1f), spawn spot (%.1f,%.1f), %.1f m out\n", manor->id, manor->position.x,
+		manor->position.z, spot.x, spot.z, (spot - manor->position).len2xz());
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	auto onManor = [&](const Vector3& p) {
+		const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+		if (tx < 0 || tz < 0 || tx >= tw || tz >= th)
+			return false;
+		const auto& tile = server.tiles[(size_t)tz * tw + tx];
+		return tile.building.getFrom<Server>() == manor && !tile.buildingPassable;
+	};
+	int failures = 0;
+	for (int n = 0; n < 2; n++) {
+		ServerGameObject* unit = RallySpawn(server, manor, player);
+		if (!unit) {
+			printf("SPAWNPOINT peasant %d not trained\n", n);
+			failures++;
+			continue;
+		}
+		const Vector3 at = unit->position;
+		GatherSaveStep(server, 30);
+		Order* o = unit->orderConfig.getCurrentOrder();
+		const bool inside = onManor(unit->position);
+		const float out = (unit->position - manor->position).len2xz();
+		printf("SPAWNPOINT peasant %u came out at (%.1f,%.1f); 30 s later at (%.1f,%.1f), %.1f m from the Manor's centre, on its footprint %d, selectable %d, order %s\n",
+			unit->id, at.x, at.z, unit->position.x, unit->position.z, out, (int)inside, (int)((unit->flags & CommonGameObject::fSelectable) != 0),
+			o ? server.gameSet->orders.getString(o->blueprint->bpid).c_str() : "none");
+		if (inside || out < 1.0f || !(unit->flags & CommonGameObject::fSelectable) || (at - spot).len2xz() > 0.5f)
+			failures++;
+	}
+	printf(failures ? "SPAWNPOINT FAILED (%d)\n" : "SPAWNPOINT PASSED\n", failures);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -8412,6 +8483,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
 {Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
 {Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
+{Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
 };
 
 void LaunchTest()
