@@ -253,6 +253,11 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			for (size_t f = 1; f < fields.size(); f++) {
 				if (fields[f].size() < 2)
 					continue;
+				// ";n<name>": the name the lobby gave the player (Rename)
+				if (fields[f][0] == 'n') {
+					slot.name = fields[f].substr(1);
+					continue;
+				}
 				// ";s<name>": an AI's Lua AI
 				if (fields[f][0] == 's') {
 					slot.aiScript = fields[f].substr(1);
@@ -280,6 +285,9 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			skirmishMenu.setSetting(request.arg.substr(0, eq), atoi(request.arg.c_str() + eq + 1));
 			if (request.arg.substr(0, eq) == "modPolicy")
 				server->modPolicy = atoi(request.arg.c_str() + eq + 1);
+			// the lobby's Lock Server: no more guests join
+			if (request.arg.substr(0, eq) == "lockServer")
+				server->lockServer = atoi(request.arg.c_str() + eq + 1) != 0;
 		}
 	}
 	else if (request.action == "skirmish_settings")
@@ -289,6 +297,7 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 		netInit();
 		hosting = true;
 		server->password = hostPassword;
+		server->lockServer = false;
 	}
 	else if (request.action == "host_password")
 		hostPassword = request.arg;

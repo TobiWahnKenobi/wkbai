@@ -2518,6 +2518,8 @@ void Server::addClient(NetLink* link)
 	clientInfos.emplace_back();
 	// the game runs: it gets nothing of it until sendStateTo
 	clientInfos.back().awaitingState = gameSet && getLevel() && !replay;
+	// the lobby's Lock Server: no new guests (the host itself is client 0)
+	clientInfos.back().cameWhileLocked = lockServer && clientLinks.size() > 1;
 }
 
 void Server::removeClient(NetLink* link)
@@ -3594,6 +3596,10 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				const std::string name = br.readStringZ();
 				const size_t at = 2 + name.size();
 				const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
+				if (clientIndex > 0 && clientInfos[clientIndex].cameWhileLocked) {
+					refuseClient(clientIndex, "The server is locked");
+					break;
+				}
 				if (clientIndex > 0 && !password.empty() && given != password) {
 					refuseClient(clientIndex, "Wrong password");
 					break;

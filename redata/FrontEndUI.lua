@@ -935,10 +935,24 @@ local function guestById(id)
 	return nil
 end
 
+-- the portraits a human can choose in the lobby (the original's Select Portrait)
+local function lobbyPortraits()
+	local list = {}
+	for _, f in ipairs(listDataFiles("Interface\\FrontEnd\\Portraits")) do
+		local lower = string.lower(f)
+		if string.sub(lower, -4) == ".tga" and lower ~= "locked general.tga" and lower ~= "random general.tga" then
+			list[#list + 1] = "Interface\\FrontEnd\\Portraits\\" .. f
+		end
+	end
+	return list
+end
+
 local function slotText(slot)
 	if slot.type == "human" then
+		if slot.name and slot.name ~= "" then return slot.name, 0xFFFFC070 end
 		return skirmish.multiplayer and getPlayerName() or T("FRONT_END_CHAT_PLAYER_NAME"), 0xFFFFC070
 	end
+	if slot.type == "ai" and slot.name and slot.name ~= "" then return slot.name, YELLOW end
 	if slot.type == "guest" then
 		local g = guestById(slot.guest)
 		return g and g.name or "-", g and 0xFF80FF80 or GREY
@@ -963,6 +977,10 @@ local function slotsRequest()
 		if skirmish.settings.mode == 1 then
 			if slot.type == "human" then parts[i] = parts[i] .. (skirmish.armyField or "")
 			elseif slot.type == "guest" and slot.army and #slot.army > 0 then parts[i] = parts[i] .. ";v" .. table.concat(slot.army, ",") end
+		end
+		-- the name it was given (Rename): ";n<name>"
+		if (slot.type == "human" or slot.type == "ai") and slot.name and slot.name ~= "" then
+			parts[i] = parts[i] .. ";n" .. string.gsub(slot.name, "[|;]", "")
 		end
 		-- an AI's Lua AI (LuaAI\<name>.lua)
 		if slot.type == "ai" and slot.aiScript and slot.aiScript ~= "" then parts[i] = parts[i] .. ";s" .. slot.aiScript end
@@ -1143,6 +1161,27 @@ local function playersTab()
 	elseif hoveredRow == 1 then
 		drawText(FONT_LIST, X(192), Y(300), T("FRONT_END_CHAT_RANDOM_GENERAL"), YELLOW, S)
 	end
+	-- the original's Rename (a human's or an AI General's position) and Select Portrait (the
+	-- human's own, shown here)
+	if sel and (sel.type == "human" or sel.type == "ai") and not skirmish.renaming then
+		if button(T("FRONT_END_CHAT_RENAME"), X(30), Y(966), L(150), L(24)) then
+			skirmish.renaming = skirmish.slotList.selected
+			skirmish.renameField = { text = sel.name or "" }
+			focusedField = skirmish.renameField
+		end
+	end
+	if sel and sel.type == "human" then
+		local portraits = lobbyPortraits()
+		if button(T("FRONT_END_CHAT_PORTRAIT"), X(190), Y(966), L(150), L(24), #portraits > 0 and not skirmish.renaming) then
+			local current = 0
+			for i, p in ipairs(portraits) do if p == skirmish.humanPortrait then current = i end end
+			skirmish.humanPortrait = portraits[current % #portraits + 1]
+		end
+		if not shown and skirmish.humanPortrait then
+			drawImage(skirmish.humanPortrait, X(30), Y(298), L(150), L(200))
+			drawText(FONT_LIST, X(192), Y(300), (slotText(sel)), 0xFFFFC070, S)
+		end
+	end
 end
 
 
@@ -1150,7 +1189,7 @@ end
 local SETTINGS = {
 	mode = 0, startFood = 500, startWood = 500, startGold = 200, populationLimit = 200,
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 0, allowDiplomacy = 0, teamReconnaissance = 0,
-	barbarianTribes = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
+	barbarianTribes = 0, teamPlacement = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
@@ -1208,7 +1247,8 @@ end
 
 -- A value with - and + buttons, as the original's Start Food etc. Shift makes each step ten
 -- times as large (population: 100 instead of 10).
-local function stepperRow(label, icon, name, step, min, max, y)
+-- zeroText: shown for 0 (the Unit Lives' "Infinite")
+local function stepperRow(label, icon, name, step, min, max, y, zeroText)
 	local s = skirmish.settings
 	local lw = textWidth(FONT_LIST, label, S)
 	drawText(FONT_LIST, X(170) - lw, y + L(18), label, WHITE, S)
@@ -1216,7 +1256,8 @@ local function stepperRow(label, icon, name, step, min, max, y)
 	local big = (isShiftHeld and isShiftHeld()) and step * 10 or step
 	local down = stepperButton("Minus", name .. "-", X(200), y, L(52))
 	if down > 0 then s[name] = math.max(min, s[name] - big * down) end
-	centredText(FONT_LIST, tostring(math.floor(s[name])), X(260), y, L(620), L(52), WHITE)
+	local shown = (zeroText and math.floor(s[name]) == 0) and zeroText or tostring(math.floor(s[name]))
+	centredText(FONT_LIST, shown, X(260), y, L(620), L(52), WHITE)
 	local up = stepperButton("Plus", name .. "+", X(892), y, L(52))
 	if up > 0 then s[name] = math.min(max, s[name] + big * up) end
 end
@@ -1273,7 +1314,7 @@ local function settingsTab()
 		stepperRow(T("FRONT_END_SETTINGS_RESOURCE_POINTS"), nil, "resourcePoints", 250, 0, 100000, Y(514))
 		stepperRow(T("FRONT_END_SETTINGS_VICTORY_TIME"), nil, "victoryPointLimit", 1000, 1000, 1000000, Y(590))
 		stepperRow(T("FRONT_END_SETTINGS_VALHALLA_MODE_FOOD"), nil, "valhallaModeFood", 1000, 0, 1000000, Y(666))
-		stepperRow(T("FRONT_END_SETTINGS_UNIT_LIVES"), nil, "unitLives", 1, 0, 100, Y(742))
+		stepperRow(T("FRONT_END_SETTINGS_UNIT_LIVES"), nil, "unitLives", 1, 0, 100, Y(742), T("FRONT_END_SETTINGS_UNIT_LIVES_INFINITE"))
 		stepperRow(T("FRONT_END_SETTINGS_CAPTURABLE_FLAGS"), nil, "capturableFlags", 1, 0, 20, Y(818))
 	end
 
@@ -1282,6 +1323,17 @@ local function settingsTab()
 	drawText(FONT_LIST, X(1022), Y(532), T("FRONT_END_SETTINGS_GAME_TYPE_STANDARD_MODE"), s.mode == 0 and YELLOW or WHITE, S)
 	if roundButton(X(958), Y(590), L(52), s.mode == 1, true) then s.mode = 1 end
 	drawText(FONT_LIST, X(1022), Y(608), T("FRONT_END_SETTINGS_GAME_TYPE_VALHALLA_MODE"), s.mode == 1 and YELLOW or WHITE, S)
+	-- Team Placement (WKB.exe's Settings - CheckBox - Team Placement): a team's members start side by side
+	if roundButton(X(958), Y(666), L(52), (s.teamPlacement or 0) ~= 0, true) then s.teamPlacement = ((s.teamPlacement or 0) ~= 0) and 0 or 1 end
+	drawText(FONT_LIST, X(1022), Y(684), T("FRONT_END_SETTINGS_TEAM_PLACEMENT"), WHITE, S)
+	-- multiplayer: Lock Server (WKB.exe's Chat - CheckBox - Lock Server): no more guests join
+	if skirmish.multiplayer then
+		if roundButton(X(958), Y(742), L(52), skirmish.lockServer == true, true) then
+			skirmish.lockServer = not skirmish.lockServer
+			request("skirmish_setting", "lockServer=" .. (skirmish.lockServer and 1 or 0))
+		end
+		drawText(FONT_LIST, X(1022), Y(760), T("FRONT_END_CHAT_LOCK_SERVER"), WHITE, S)
+	end
 	local switches = {
 		{ "clearFogOfWar", "FRONT_END_SETTINGS_FOG_OF_WAR", Y(590) },
 		{ "allowDiplomacy", "FRONT_END_SETTINGS_ALLOW_DIPLOMACY", Y(666) },
@@ -1477,6 +1529,7 @@ end
 
 local function openLobby(multiplayer)
 	skirmish.multiplayer = multiplayer
+	skirmish.lockServer = false
 	if multiplayer then skirmish.settings.cheatMode = 0 end
 	local levels = levelList()
 	local level = levels[levelState.selected]
@@ -1761,7 +1814,73 @@ local function armyReady(army)
 	return army ~= nil and (army.alignment == "Random" or #army.list > 0)
 end
 
+-- The lobby's start checks (WKB.exe 0x75e390): the players at the positions, whether they all
+-- share one team, and what stops the start (nil: nothing)
+function lobbyPlayerCount()
+	local n = 0
+	for _, slot in ipairs(skirmish.slots) do if slot.type ~= "empty" then n = n + 1 end end
+	return n
+end
+function lobbyAllOnOneTeam()
+	local team = nil
+	for _, slot in ipairs(skirmish.slots) do
+		if slot.type ~= "empty" then
+			local t = slot.team or 0
+			if t == 0 then return false end -- no team: on its own
+			if team and t ~= team then return false end
+			team = t
+		end
+	end
+	return team ~= nil and lobbyPlayerCount() > 1
+end
+-- the island maps the AI Generals can't play (the exe's two names)
+local NO_AI_MAPS = { ["3 player 3 isles.lvl"] = true, ["4 player four islands.lvl"] = true }
+function lobbyStartProblem()
+	if not skirmish.level then return T("FRONT_END_SETTINGS_MUST_SELECT_MAP") end
+	local file = string.lower(string.match(skirmish.level, "([^\\/]+)$") or skirmish.level)
+	if NO_AI_MAPS[file] then
+		for _, slot in ipairs(skirmish.slots) do
+			if slot.type == "ai" then return T("FRONT_END_CHAT_AI_NOT_SUPPORTED") end
+		end
+	end
+	local seen = {}
+	for _, slot in ipairs(skirmish.slots) do
+		if slot.type ~= "empty" and slot.colour then
+			if seen[slot.colour] then return T("FRONT_END_CHAT_DUPLICATE_COLOURS") end
+			seen[slot.colour] = true
+		end
+	end
+	return nil
+end
+
+-- the lobby's rename dialog (over everything, the lobby under it blocked)
+function lobbyRenameDialog()
+	local slots = skirmish.slots
+	if skirmish.renaming then
+		local saved = mouse.blocked
+		mouse.blocked = skirmish.mouseWasBlocked
+		local slot = slots[skirmish.renaming]
+		local w, h = L(720), L(270)
+		local x, y = X(960) - w / 2, (H - h) / 2
+		drawRect(0, 0, W, H, DIM)
+		goldFrame(x, y, w, h)
+		centredText(FONT_BUTTON, T("FRONT_END_CHAT_RENAME_LABEL"), x, y + L(44), w, L(30), WHITE)
+		local entered = textField(skirmish.renameField, x + L(50), y + L(100), w - L(100), L(32), nil, 40)
+		local name = string.match(skirmish.renameField.text, "^%s*(.-)%s*$")
+		if button(T("FRONT_END_BUTTON_OK"), X(960) - L(150), y + h - L(70), L(141), L(26)) or entered then
+			-- (an empty name: the player's own again)
+			if slot then slot.name = name ~= "" and name or nil end
+			skirmish.renaming = nil
+		elseif button(T("FRONT_END_BUTTON_CANCEL"), X(960) + L(9), y + h - L(70), L(141), L(26)) then
+			skirmish.renaming = nil
+		end
+		mouse.blocked = saved
+	end
+end
+
 local function drawLobby(multiplayer)
+	skirmish.mouseWasBlocked = mouse.blocked
+	if skirmish.renaming then mouse.blocked = true end
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
 	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }
@@ -1793,28 +1912,46 @@ local function drawLobby(multiplayer)
 			drawText(FONT_LIST, X(1170), Y(1036), T("FRONT_END_CHAT_ARMIES_NOT_ENLISTED"), 0xFF5050FF, S)
 		end
 	end
+	-- every guest needs a position, or watches (spectators allowed, up to their number); the
+	-- others are too many: the original asks to start and kick them
+	local excess = {}
 	if multiplayer then
-		-- every guest needs a position, or watches (spectators allowed, up to their number)
-		local unplaced = 0
+		local unplaced = {}
 		for _, g in ipairs(getLobbyGuests()) do
 			local placed = false
 			for _, slot in ipairs(skirmish.slots) do if slot.type == "guest" and slot.guest == g.id then placed = true end end
-			if not placed then unplaced = unplaced + 1 end
+			if not placed then unplaced[#unplaced + 1] = g.id end
 		end
 		local s = skirmish.settings
-		if unplaced > 0 and not (s.allowSpectators ~= 0 and unplaced <= s.maxSpectators) then canStart = false end
+		local watching = s.allowSpectators ~= 0 and s.maxSpectators or 0
+		for i = watching + 1, #unplaced do excess[#excess + 1] = unplaced[i] end
 		sendLobbyState()
 		offerRow(X(28), Y(1033))
 	end
+	-- WKB.exe's start checks (0x75e390), in its order: the ones that stop the start are shown
+	-- here; the last three are asked when Start is pressed
+	local problem = lobbyStartProblem()
+	if problem then
+		canStart = false
+		drawText(FONT_LIST, X(1170), Y(1036), problem, 0xFF5050FF, S)
+	end
 	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
-		settingsRequests()
-		skirmish.armyField = valhalla and armySlotField(skirmish.army, skirmish.settings.resourcePoints) or ""
-		slotsRequest()
-		request(multiplayer and "start_multiplayer" or "start", skirmish.level)
+		local function go()
+			for _, id in ipairs(excess) do request("kick_guest", tostring(id)) end
+			settingsRequests()
+			skirmish.armyField = valhalla and armySlotField(skirmish.army, skirmish.settings.resourcePoints) or ""
+			slotsRequest()
+			request(multiplayer and "start_multiplayer" or "start", skirmish.level)
+		end
+		local function tooMany() if #excess > 0 then confirm(T("FRONT_END_CHAT_TOO_MANY_PLAYERS"), go) else go() end end
+		local function sameTeam() if lobbyAllOnOneTeam() then confirm(T("FRONT_END_CHAT_ALL_ON_SAME_TEAM"), tooMany) else tooMany() end end
+		if lobbyPlayerCount() == 1 then confirm(T("FRONT_END_CHAT_SINGLE_PLAYER_GAME"), sameTeam) else sameTeam() end
 	end
 	if button(T("FRONT_END_BUTTON_BACK"), X(970), Y(1032), L(182), L(24)) then
 		Screens[multiplayer and "mphost" or "skirmish"].onEscape()
 	end
+	mouse.blocked = skirmish.mouseWasBlocked
+	lobbyRenameDialog()
 end
 
 Screens.skirmish = {

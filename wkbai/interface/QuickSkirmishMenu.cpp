@@ -6,6 +6,8 @@
 #include "../util/StriCompare.h"
 
 #include "../settings.h"
+#include "../terrain.h"
+#include <cmath>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -150,6 +152,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "allowDiplomacy") allowDiplomacy = value != 0;
 	else if (name == "teamReconnaissance") teamReconnaissance = value != 0;
 	else if (name == "barbarianTribes") barbarianTribes = value != 0;
+	else if (name == "teamPlacement") teamPlacement = value != 0;
 	else if (name == "aggressiveAI") aggressiveAI = value != 0;
 	else if (name == "cheatMode") cheatMode = value != 0;
 	else if (name == "aiGoldExpansion") aiGoldExpansion = value != 0;
@@ -287,7 +290,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 					setItemByName(obj, "Valhalla Resource Points", resourcePoints);
 					setItemByName(obj, "Victory Time Limit", victoryPointLimit);
 					setItemByName(obj, "Food", valhallaModeFood);
-					setItemByName(obj, "No. Of Lives Left", unitLives);
+					// 0 is "Infinite": -1, the scripts' "lives option not chosen" (WKB.exe 0x7a5ce0)
+					setItemByName(obj, "No. Of Lives Left", unitLives > 0 ? (float)unitLives : -1.0f);
 
 				}
 			}
@@ -342,6 +346,56 @@ void QuickSkirmishMenu::applySettings(Server& server)
 				generals.push_back(&playerTypes[i]);
 		}
 
+		// Team Placement (the lobby's switch): the members of a team start at neighbouring
+		// positions. The positions go round the map's centre (by where each player's buildings
+		// stand); the players take them in that order, team by team (no team: last, each alone).
+		// A replay's slots were placed so already.
+		if (teamPlacement && !replaySetup && players.size() > 1) {
+			const bool anyTeam = std::any_of(slots.begin(), slots.end(), [](const Slot& s) { return s.type != Slot::EMPTY && s.team > 0; });
+			if (anyTeam) {
+				const auto area = server.terrain ? server.terrain->getPlayableArea() : std::make_pair(0.0f, 0.0f);
+				const Vector3 centre(area.first * 0.5f, 0.0f, area.second * 0.5f);
+				std::vector<std::pair<float, size_t>> ring; // angle round the centre, position index
+				for (size_t i = 0; i < players.size(); i++) {
+					// its buildings' middle, else its units' (a map that starts without buildings)
+					Vector3 buildings, units;
+					int nb = 0, nu = 0;
+					// (the units may be in armies or formations)
+					auto walk = [&](CommonGameObject* o, auto& self) -> void {
+						for (const auto& [type, children] : o->children)
+							for (CommonGameObject* c : children) {
+								if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) { buildings += c->position; nb++; }
+								else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) { units += c->position; nu++; }
+								self(c, self);
+							}
+					};
+					walk(players[i], walk);
+					const Vector3 at = nb ? buildings / (float)nb : nu ? units / (float)nu : centre;
+					ring.emplace_back(std::atan2(at.x - centre.x, at.z - centre.z), i);
+				}
+				std::stable_sort(ring.begin(), ring.end());
+				std::vector<Slot> playing;
+				for (size_t r = 0; r < ring.size(); r++)
+					if (ring[r].second < slots.size() && slots[ring[r].second].type != Slot::EMPTY)
+						playing.push_back(slots[ring[r].second]);
+				std::stable_sort(playing.begin(), playing.end(), [](const Slot& a, const Slot& b) {
+					const int ta = a.team > 0 ? a.team : 1000, tb = b.team > 0 ? b.team : 1000;
+					return ta < tb; });
+				std::vector<Slot> placed(std::max(slots.size(), players.size()));
+				for (Slot& s : placed)
+					s.type = Slot::EMPTY;
+				for (size_t r = 0; r < ring.size() && r < playing.size(); r++)
+					placed[ring[r].second] = playing[r];
+				for (size_t i = 0; i < placed.size(); i++)
+					if (placed[i].type == Slot::EMPTY && i < slots.size())
+						placed[i].colour = slots[i].colour;
+				placed.resize(slots.size());
+				slots = std::move(placed);
+				for (size_t i = 0; i < slots.size(); i++)
+					printf("Team Placement: position %zu: type %d team %d\n", i + 1, (int)slots[i].type, slots[i].team);
+			}
+		}
+
 		// no guest keeps the player the level gave it by its order (one with no position would
 		// control an AI's player): the slots say who plays where
 		for (size_t i = 1; i < server.clientPlayerObjects.size(); i++)
@@ -386,6 +440,9 @@ void QuickSkirmishMenu::applySettings(Server& server)
 					player->convertTo(general);
 					printf("Skirmish: position %zu (player %u): %s\n", i + 1, player->id, general->name.c_str());
 				}
+				// renamed in the lobby (Rename)
+				if (!slot.name.empty())
+					player->setName(slot.name);
 			}
 			if (slot.colour > 0)
 				player->setColor(slot.colour);

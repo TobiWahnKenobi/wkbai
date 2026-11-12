@@ -184,6 +184,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool refused = false; // turned away (NETCLIMSG_JOIN_REFUSED): the host disconnects it
 		bool joinedRunning = false; // it joined the running game: sent its state and the places
 		bool awaitingState = false; // it joined the running game: no broadcasts before its state
+		bool cameWhileLocked = false; // connected while the lobby's Lock Server was on: refused
 		std::string modManifest, modManifestParts; // its mods (NETSRVMSG_MOD_MANIFEST)
 	};
 	std::vector<ClientInfo> clientInfos;
@@ -350,6 +351,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	int maxSpectators = 4;
 	// the password a guest has to give (NETSRVMSG_LOBBY_HELLO); empty: none
 	std::string password;
+	// the lobby's Lock Server: guests who aren't in yet are refused
+	bool lockServer = false;
 	// Which mods guests may have ("modPolicy"): every one must have the host's game logic (the
 	// same mods with logic files: ModManifest, CompareModLogic), and
 	enum ModPolicy { MODS_MATCH = 0, // that is all (mods that only change looks are free)

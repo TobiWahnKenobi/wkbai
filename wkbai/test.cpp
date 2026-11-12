@@ -7729,6 +7729,145 @@ void Test_FormationFacing()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// The original's lobby items: Team Placement on 8 Player Continent (a team's members start side
+// by side), a renamed AI General, Unit Lives "Infinite" (-1) and a number, Lock Server
+void Test_LobbyItems()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	using Slot = QuickSkirmishMenu::Slot;
+	// where each player of a level starts: its buildings' middle
+	auto startOf = [](ServerGameObject* player) {
+		Vector3 sum;
+		int n = 0;
+		auto walk = [&](CommonGameObject* o, auto& self) -> void {
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING || c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+						sum += c->position;
+						n++;
+					}
+					self(c, self);
+				}
+		};
+		walk(player, walk);
+		return n ? sum / (float)n : player->position;
+	};
+	// teams 1, 2, 1, 2 at the first four positions: the average distance between team-mates and
+	// between enemies, with and without Team Placement
+	auto distances = [&](bool placement, float& mates, float& foes) {
+		Server server;
+		server.loadSaveGame("Save_Games\\8 Player Continent.lvl");
+		std::map<uint32_t, Vector3> starts;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+					starts[c->id] = startOf(c->dyncast<ServerGameObject>());
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("8 Player Continent.lvl");
+		skirmish.setSetting("teamPlacement", placement ? 1 : 0);
+		std::vector<Slot> slots(8);
+		for (Slot& s : slots) s.type = Slot::EMPTY;
+		slots[0].type = Slot::HUMAN; slots[0].team = 1;
+		slots[1].type = Slot::AI; slots[1].team = 2; slots[1].name = "Sir Testalot";
+		slots[2].type = Slot::AI; slots[2].team = 1;
+		slots[3].type = Slot::AI; slots[3].team = 2;
+		skirmish.setSlots(slots);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		skirmish.applySettings(server);
+		std::vector<std::pair<Vector3, int>> at; // the players left, with their teams
+		bool renamed = false;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && starts.count(c->id)) {
+					ServerGameObject* p = c->dyncast<ServerGameObject>();
+					if (p->name == "Sir Testalot") renamed = true;
+					at.push_back({ starts[c->id], 0 });
+				}
+		// the teams from the diplomacy: allied pairs
+		mates = foes = 0.0f;
+		int nm = 0, nf = 0;
+		std::vector<ServerGameObject*> ps;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && starts.count(c->id) && c->blueprint->name != "Neutral Player" && c->blueprint->name != "Baresark Player" && !c->dyncast<ServerGameObject>()->deleted)
+				{
+					ps.push_back(c->dyncast<ServerGameObject>());
+					printf("UNITTEST player %u %s \"%s\" starts at (%.0f, %.0f)\n", c->id, c->blueprint->name.c_str(), c->dyncast<ServerGameObject>()->name.c_str(), starts[c->id].x, starts[c->id].z);
+				}
+		const int allied = server.gameSet->diplomaticStatuses.names.getIndex("Allied");
+		for (size_t a = 0; a < ps.size(); a++)
+			for (size_t b = a + 1; b < ps.size(); b++) {
+				const float d = (starts[ps[a]->id] - starts[ps[b]->id]).len2xz();
+				if (server.getDiplomaticStatus(ps[a], ps[b]) == allied) { mates += d; nm++; }
+				else { foes += d; nf++; }
+			}
+		if (nm) mates /= nm;
+		if (nf) foes /= nf;
+		printf("UNITTEST Team Placement %s: %zu players, team-mates %.0f m apart, enemies %.0f m\n", placement ? "on" : "off", ps.size(), mates, foes);
+		return renamed && ps.size() == 4 && nm == 2;
+	};
+	float mates0 = 0, foes0 = 0, mates1 = 0, foes1 = 0;
+	const bool setUp0 = distances(false, mates0, foes0);
+	const bool setUp1 = distances(true, mates1, foes1);
+	check(setUp0 && setUp1, "four players, two teams of two; the AI General renamed \"Sir Testalot\"");
+	check(mates1 < foes1, "Team Placement: team-mates start nearer each other than enemies");
+	check(mates1 <= mates0 + 0.1f, "and no farther apart than without it");
+
+	// Unit Lives (Valhalla): 0 is "Infinite" (-1), else the number
+	for (int lives : { 0, 3 }) {
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+		skirmish.setSetting("mode", 1);
+		skirmish.setSetting("unitLives", lives);
+		std::vector<Slot> slots(2);
+		slots[0].type = Slot::HUMAN;
+		slots[1].type = Slot::EMPTY;
+		skirmish.setSlots(slots);
+		server.timeManager.unpause();
+		skirmish.applySettings(server);
+		ServerGameObject* human = server.findObject(1027);
+		const int item = server.gameSet->items.names.getIndex("No. of Lives Left");
+		const float v = human && item >= 0 ? human->getItem(item) : -999.0f;
+		check(v == (lives == 0 ? -1.0f : (float)lives), "Unit Lives " + std::to_string(lives) + ": \"No. of Lives Left\" " + std::to_string((int)v));
+	}
+
+	// Lock Server: a guest joining a locked server is refused, one already in stays
+	{
+		Server server;
+		Client host(true), guest(true), late(true);
+		NetLocalBuffer h1, h2, g1, g2, l1, l2;
+		NetLocalLink srvH(&h1, &h2), cliH(&h2, &h1), srvG(&g1, &g2), cliG(&g2, &g1), srvL(&l1, &l2), cliL(&l2, &l1);
+		server.addClient(&srvH);
+		server.addClient(&srvG);
+		host.serverLink = &cliH;
+		guest.serverLink = &cliG;
+		// (as a joining guest does: its mods first, which the host compares)
+		guest.sendModManifest();
+		guest.sendLobbyHello("Early");
+		for (int i = 0; i < 10; i++) { server.tick(); host.tick(); guest.tick(); }
+		server.lockServer = true;
+		server.addClient(&srvL);
+		late.serverLink = &cliL;
+		late.sendModManifest();
+		late.sendLobbyHello("Late");
+		for (int i = 0; i < 10; i++) { server.tick(); host.tick(); guest.tick(); late.tick(); }
+		printf("UNITTEST guests: \"%s\" refused %d, \"%s\" refused %d\n", server.clientInfos[1].name.c_str(), (int)server.clientInfos[1].refused,
+			server.clientInfos.size() > 2 ? server.clientInfos[2].name.c_str() : "-", server.clientInfos.size() > 2 ? (int)server.clientInfos[2].refused : -1);
+		check(server.clientInfos.size() == 3 && !server.clientInfos[1].refused, "the guest already in stays");
+		check(server.clientInfos.size() == 3 && server.clientInfos[2].refused, "the late guest is refused: the server is locked");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Minimap alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP) on 4 Peaks: only the
 // players listed get them, with their colour, seconds and circles; they end on time
 void Test_MinimapAlerts()
@@ -8191,6 +8330,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Disguises, "Disguises and fog reveals: an enemy unit seen as a peasant, unmasked, dropped; revealed through the fog for a time"},
 {Test_MinimapAlerts, "Minimap alerts: blinking dots and collapsing circles to the players listed, with colour and time"},
 {Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
+{Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
 };
 
 void LaunchTest()
