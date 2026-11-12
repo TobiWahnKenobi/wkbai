@@ -2148,6 +2148,17 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const float foot = footAt(R, px, pz);
 			return farBase(px, pz, foot) + landAt(px, pz, foot).detail;
 		};
+		// The extension's end is round: the distance from the playable area (copy tiles) out to
+		// where the ground beyond takes over, the same as the shaders' FarGroundShare; the rings'
+		// cells beyond it are not made (its square corners had shown as a quad on the horizon,
+		// the play test of 2026-11-13; and they cost polygons)
+		const float playX0 = (float)e.edge, playX1 = (float)(e.edge + map.width - 2 * map.edge);
+		const float playZ0 = (float)e.edge, playZ1 = (float)(e.edge + map.height - 2 * map.edge);
+		const float roundEnd = (float)e.edge + B0 * (float)((1 << farRings) - 1);
+		auto outOfPlay = [&](float px, float pz) {
+			const float ox = std::max({ playX0 - px, px - playX1, 0.0f }), oz = std::max({ playZ0 - pz, pz - playZ1, 0.0f });
+			return std::sqrt(ox * ox + oz * oz);
+		};
 		for (int k = 0; k < farRings; k++) {
 			Ring& R = rings[k];
 			const float s = S0 * (float)(1 << k), b = B0 * (float)(1 << k);
@@ -2170,6 +2181,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					const float cx = 0.5f * (R.xs[i] + R.xs[i + 1]), cz = 0.5f * (R.zs[j] + R.zs[j + 1]);
 					if (cx > R.ix0 && cx < R.ix1 && cz > R.iz0 && cz < R.iz1)
 						continue; // the hole
+					if (outOfPlay(cx, cz) > roundEnd + 0.75f * s)
+						continue; // beyond the round end
 					for (int c = 0; c < 4; c++)
 						R.used[(size_t)(j + (c >> 1)) * NX + i + (c & 1)] = 1;
 				}
@@ -2262,9 +2275,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			double wetN = 0, all = 0, hsum = 0;
 			for (int j = 0; j < NZ; j++)
 				for (int i = 0; i < NX; i++) {
-					if (!(i == 0 || j == 0 || i == NX - 1 || j == NZ - 1))
-						continue;
+					// (its round end: the points of its last cells)
 					const size_t gi = (size_t)j * NX + i;
+					if (!R.used[gi] || outOfPlay(R.xs[i], R.zs[j]) < roundEnd - 1.5f * R.s)
+						continue;
 					all += 1;
 					const bool wet = R.lvl[gi] > R.hgt[gi];
 					wetN += wet;
@@ -2282,7 +2296,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					if (!R.used[gi])
 						continue;
 					const float px = R.xs[i], pz = R.zs[j];
-					const float f = std::clamp(std::max({ R.ix0 - px, px - R.ix1, R.iz0 - pz, pz - R.iz1 }) / bw, 0.0f, 1.0f)
+					// (round, as the end: by the distance from the playable area, all of it settled a
+					// little before the end)
+					const float f = std::clamp((outOfPlay(px, pz) - (roundEnd - bw)) / (0.85f * bw), 0.0f, 1.2f)
 						+ 0.12f * Fbm(seed, px, pz, 90.0f, 3, 160, R.s);
 					const float k = std::clamp((f - 0.7f) / 0.3f, 0.0f, 1.0f);
 					const float wgt = k * k * (3 - 2 * k);

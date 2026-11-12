@@ -175,7 +175,9 @@ float FarGroundShare(float3 world)
 	float2 outside = max(-world.xz, world.xz - FarArea.xy);
 	// (from halfway out: seen at a grazing angle the last tenth of the reach was two or three
 	// pixels, a line under the ground beyond)
-	float r = max(outside.x, outside.y) / max(FarGround.y, 1);
+	// (round: by the distance from the playable area, as the rings end; their square had shown
+	// as a quad on the horizon, the play test of 2026-11-13)
+	float r = length(max(outside, 0)) / max(FarGround.y, 1);
 	float k = smoothstep(0.55, 0.99, r) * smoothstep(0.55, 0.99, r);
 	if (FarArea.w > 0)
 		k = max(k, smoothstep(0.8, 0.97, distance(world, FogCamera.xyz) / FarArea.w));
