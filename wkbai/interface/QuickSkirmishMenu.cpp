@@ -402,6 +402,16 @@ void QuickSkirmishMenu::applySettings(Server& server)
 					server.setDiplomaticStatus(playing[a].first, playing[b].first, sameTeam ? allied : enemy);
 					printf("Skirmish: players %u and %u %s\n", playing[a].first->id, playing[b].first->id, sameTeam ? "allied" : "enemies");
 				}
+		// Diplomacy as WKB.exe's lobby sets it (0x7a5f54): with Allow Diplomacy and no teams the
+		// players may change their relations ("Disallow Diplomacy" 0, everyone's "Diplomacy
+		// Enabled" 1); otherwise not, and with teams "Teams Selected" (tributes between team mates)
+		if (isWKBattles) {
+			const bool open = allowDiplomacy && !anyTeam;
+			setItemByName(level, "Disallow Diplomacy", open ? 0.0f : 1.0f);
+			setItemByName(level, "Teams Selected", anyTeam ? 1.0f : 0.0f);
+			for (const auto& [player, team] : playing)
+				setItemByName(player, "Diplomacy Enabled", open ? 1.0f : 0.0f);
+		}
 	}
 	else if (mode != DevMode && isWKBattles) {
 		auto* humanPlayer = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Human Player");

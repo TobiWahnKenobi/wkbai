@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include "FrontEnd.h"
 
 #include "ClientDebugger.h"
 #include "../scene.h"
@@ -127,6 +128,11 @@ struct ClientInterface {
 	// draws them (FrontEnd::setGameWindows/setObjectives); a button of a window pressed there
 	void updateGameWindows(struct FrontEnd* frontEnd);
 	void gameWindowButton(int gtwIndex, int buttonIndex);
+	// the diplomacy windows (diplomacyView, the windows' requests) and an AI General's message
+	// text with its values
+	FrontEnd::Diplomacy diplomacyView();
+	void diplomacyRequest(const std::string& action, const std::string& arg);
+	std::string chatDisplayText(const std::string& key, const std::vector<float>& values);
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
@@ -179,6 +185,7 @@ private:
 	// The menu's "save" request: saves (saveGame) and tells the menu
 	void saveRequested(const std::string& name);
 	bool toggleObjectivesRequested = false; // the objectives button or key, for updateGameWindows
+	int toggleDiplomacyRequested = -1;      // a diplomacy window's top-bar button (0-2)
 	// A right-click command to the selection (units spread around the place, buildings' rally
 	// points); faceTo: where the units face at the end (x < 0: nowhere)
 	void sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo);

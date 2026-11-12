@@ -127,6 +127,17 @@ enum NetClientMessages {
 	// (8 bits: MissionObjectives::State)
 	NETCLIMSG_MISSION_OBJECTIVES_SET,
 	NETCLIMSG_MISSION_OBJECTIVES_ENTRY,
+	// diplomacy (ServerDiplomacy.cpp): an offer from a player to another, from and to ids (32 bits
+	// each), the status offered (8 bits signed, -1: withdrawn)
+	NETCLIMSG_DIPLOMATIC_OFFER,
+	// an AI General's message (SEND_CHAT_MESSAGE) to this client's player: the sender's id (32
+	// bits), the Language key (zero-ended), the number of values (8 bits), the values (floats)
+	NETCLIMSG_CHAT_DISPLAY,
+	// a tribute to this client's player: the giver's id (32 bits), the item (16 bits), the amount (float)
+	NETCLIMSG_TRIBUTE_RECEIVED,
+	// a top bar diplomacy button on this client's player's screen: the window (8 bits:
+	// Server::DiplomacyWindow), enabled (8 bits), the tooltip's Language key (zero-ended)
+	NETCLIMSG_DIPLOMACY_WINDOW,
 };
 
 enum NetServerMessages {
@@ -162,6 +173,14 @@ enum NetServerMessages {
 	// The environment's debug panel (F9, single player): a value (float), then its name (zero-ended)
 	// for ServerEnvironment::debugSet. As every message, recorded, so a replay does the same.
 	NETSRVMSG_ENVIRONMENT_DEBUG,
+	// The Diplomacy window's Send (WKB.exe's 0x1a and 0xb7): a status set directly with a player
+	// (declaring war, accepting an offer), the other player's id (32 bits), the status (8 bits);
+	// and an offer to a player, its id (32 bits), the status (8 bits signed, -1: withdrawn)
+	NETSRVMSG_DIPLOMATIC_STATUS,
+	NETSRVMSG_DIPLOMATIC_OFFER,
+	// The Tributes window's Send (WKB.exe's 0xa9): the receiver's id (32 bits), the item (16
+	// bits), the amount (float)
+	NETSRVMSG_TRIBUTE,
 };
 
 struct NetPacketWriter {

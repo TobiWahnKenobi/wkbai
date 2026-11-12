@@ -3582,6 +3582,14 @@ void ClientInterface::iter()
 		}
 	}
 	// (a replay's controls have their own keys)
+	// Test runs: "benchmark": { ..., "diplomacyWindow": [frame, window 1-3] } opens that diplomacy
+	// window once, that many frames after the level is there
+	if (BenchmarkEnabled() && client->getLevel()) {
+		static int diplomacyFrame = 0;
+		const nlohmann::json open = g_settings.value("benchmark", nlohmann::json::object()).value("diplomacyWindow", nlohmann::json());
+		if (open.is_array() && open.size() == 2 && ++diplomacyFrame == open[0].get<int>())
+			toggleDiplomacyRequested = std::clamp(open[1].get<int>() - 1, 0, 2);
+	}
 	// O: the mission objectives window (the original's key, Hot Keys.cpp)
 	if (KeyPressed(KeyAction::Objectives) && client->missionObjectives >= 0)
 		toggleObjectivesRequested = true;
@@ -3898,6 +3906,14 @@ void ClientInterface::iter()
 		lua.set_function("hasObjectives", [this]() { return client->missionObjectives >= 0; });
 		lua.set_function("objectivesNews", []() { FrontEnd* fe = FrontEnd::get(); return fe && fe->objectivesNews(); });
 		lua.set_function("toggleObjectives", [this]() { toggleObjectivesRequested = true; });
+		// the top bar's Diplomacy (1), Global Diplomacy (2) and Tributes (3) buttons: enabled, news
+		// (it flashes), its tooltip; and its window opened or closed
+		lua.set_function("diplomacyButton", [this](int i) {
+			FrontEnd::Diplomacy d = diplomacyView();
+			const int k = std::clamp(i - 1, 0, 2);
+			return std::make_tuple(d.enabled[k], d.news[k], d.tooltips[k]);
+		});
+		lua.set_function("toggleDiplomacyWindow", [this](int i) { toggleDiplomacyRequested = std::clamp(i - 1, 0, 2); });
 		// the lower left panel, its window as glass with enhanced graphics
 		lua.set_function("drawStainedGlassPanel", [this](int x, int y, int w, int h) { drawStainedGlassPanel(x, y, w, h); });
 		// text in a colour (0xAABBGGRR, as drawRect)
@@ -4246,6 +4262,8 @@ void ClientInterface::iter()
 			}
 			else if (r.action == "save")
 				saveRequested(r.arg);
+			else if (r.action == "diplomacy_status" || r.action == "diplomacy_offer" || r.action == "tribute" || r.action == "diplomacy_seen")
+				diplomacyRequest(r.action, r.arg);
 			else if (r.action == "gtw_button") {
 				const size_t comma = r.arg.find(',');
 				if (comma != std::string::npos)
@@ -5203,8 +5221,70 @@ namespace {
 	}
 }
 
+namespace {
+	// a player as the windows name it: an AI General by its blueprint ("Saint Jane Kingmaker" ->
+	// "Saint Jane"), a human by its name
+	std::string DiplomacyPlayerName(const CommonGameObject* p)
+	{
+		const std::string& general = p->blueprint->name;
+		const bool isGeneral = general.size() > 10 && general.compare(general.size() - 10, 10, " Kingmaker") == 0;
+		if (isGeneral)
+			return general.substr(0, general.size() - 10);
+		if (!p->name.empty())
+			return p->name;
+		return "Player " + std::to_string(p->id);
+	}
+}
+
+// An AI General's message (MAP_CHAT_MESSAGE's text): %d an amount, %r a resource (1 Food, 2
+// Materials, 3 Gold: WKB.exe 0x6afbc0), each taking the next value; an unknown one, or one past
+// the values, gives nothing (the original hung there)
+std::string ClientInterface::chatDisplayText(const std::string& key, const std::vector<float>& values)
+{
+	if (!languageLoaded) {
+		lang.load("Languages\\Language.txt");
+		languageLoaded = true;
+	}
+	const std::string text = lang.getText(key);
+	std::string out;
+	size_t next = 0;
+	for (size_t i = 0; i < text.size(); i++) {
+		if (text[i] != '%' || i + 1 >= text.size()) {
+			out.push_back(text[i]);
+			continue;
+		}
+		const char c = text[++i];
+		const bool have = next < values.size();
+		const float v = have ? values[next] : 0.0f;
+		next++;
+		if (!have)
+			continue;
+		if (c == 'd')
+			out += std::to_string((int)v);
+		else if (c == 'r') {
+			static const char* const keys[] = { "RESOURCE_FOOD", "RESOURCE_WOOD", "RESOURCE_GOLD" };
+			const int r = (int)v;
+			if (r >= 1 && r <= 3)
+				out += lang.getText(keys[r - 1]);
+		}
+	}
+	return out;
+}
+
 void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 {
+	// the AI Generals' messages, one at a time, in the game set's "AI General Chat Window"
+	// (WKB.exe 0x531134: the sender's name as the title, then the text)
+	const int chatWindow = client->gameSet->gameTextWindows.names.getIndex("AI General Chat Window");
+	if (chatWindow < 0)
+		client->chatDisplays.clear();
+	else if (!client->chatDisplays.empty()) {
+		auto st = client->gtwStates.find(chatWindow);
+		if (st == client->gtwStates.end() || st->second < 0) {
+			client->gtwOrder[chatWindow] = ++client->gtwSerial;
+			client->gtwStates[chatWindow] = 0;
+		}
+	}
 	std::vector<std::pair<uint32_t, FrontEnd::GameWindow>> shown;
 	for (const auto& [index, page] : client->gtwStates) {
 		if (page < 0 || index < 0 || index >= (int)client->gameSet->gameTextWindows.size())
@@ -5222,6 +5302,15 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 		w.width = gtw.width;
 		w.atBottom = gtw.atBottom;
 		w.modal = gtw.modal;
+		if (index == chatWindow && !client->chatDisplays.empty()) {
+			const Client::ChatDisplay& chat = client->chatDisplays.front();
+			w.text = GameText(chatDisplayText(chat.key, chat.values));
+			if (CommonGameObject* from = client->findObject(chat.from)) {
+				w.title = DiplomacyPlayerName(from);
+				w.titleColour = from->color;
+				w.general = from->blueprint->name;
+			}
+		}
 		const bool lastPage = page + 1 >= (int)gtw.pages.size();
 		for (const GameTextWindow::Button& b : gtw.buttons) {
 			FrontEnd::GameWindow::Button button;
@@ -5269,6 +5358,113 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 		toggleObjectivesRequested = false;
 		frontEnd->toggleObjectives();
 	}
+	frontEnd->setDiplomacy(diplomacyView());
+	if (toggleDiplomacyRequested >= 0) {
+		frontEnd->toggleDiplomacyWindow(toggleDiplomacyRequested);
+		toggleDiplomacyRequested = -1;
+	}
+}
+
+// What the top bar's Diplomacy, Global Diplomacy and Tributes windows show (FrontEnd::Diplomacy)
+FrontEnd::Diplomacy ClientInterface::diplomacyView()
+{
+	FrontEnd::Diplomacy d;
+	const GameSet* gs = client->gameSet.get();
+	CommonGameObject* me = client->clientPlayer.get();
+	CommonGameObject* level = client->getLevel();
+	if (!gs || !me || !level)
+		return d;
+	for (size_t i = 0; i < gs->diplomaticStatuses.names.size(); i++)
+		d.statuses.push_back(gs->diplomaticStatuses.names.getString((int)i));
+	// the players still playing, this client's first (not the map's neutral and Baresark players)
+	std::vector<CommonGameObject*> players{ me };
+	for (const auto& [type, children] : level->children)
+		for (CommonGameObject* p : children) {
+			if (p == me || p->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || p->blueprint->name == "Neutral Player"
+				|| p->blueprint->name == "Baresark Player" || (p->flags & ClientGameObject::fTerminated) || client->finishedPlayers.count(p->id))
+				continue;
+			players.push_back(p);
+		}
+	std::sort(players.begin() + 1, players.end(), [](auto* a, auto* b) { return a->id < b->id; });
+	auto offer = [&](CommonGameObject* from, CommonGameObject* to) {
+		auto it = client->diplomaticOffers.find({ from->id, to->id });
+		return it != client->diplomaticOffers.end() ? it->second : -1;
+	};
+	for (CommonGameObject* p : players) {
+		FrontEnd::Diplomacy::Player row;
+		row.id = p->id;
+		row.name = DiplomacyPlayerName(p);
+		row.general = p->blueprint->name;
+		row.colour = p->color;
+		if (p != me) {
+			row.status = client->getDiplomaticStatus(me, p);
+			row.myOffer = offer(me, p);
+			row.theirOffer = offer(p, me);
+		}
+		d.players.push_back(std::move(row));
+	}
+	const size_t n = players.size();
+	d.relations.assign(n * n, -1);
+	for (size_t i = 0; i < n; i++)
+		for (size_t j = 0; j < n; j++)
+			if (i != j)
+				d.relations[i * n + j] = client->getDiplomaticStatus(players[i], players[j]);
+	for (int item : gs->tributeItems)
+		d.tributes.push_back({ item, gs->items.names.getString(item), me->getItem(item) });
+	auto itemOf = [&](CommonGameObject* obj, const char* name) {
+		const int item = gs->items.names.getIndex(name);
+		return item >= 0 ? obj->getItem(item) : 0.0f;
+	};
+	const bool diplomacyOn = itemOf(me, "Diplomacy Enabled") != 0.0f;
+	d.canChange = itemOf(level, "Disallow Diplomacy") == 0.0f;
+	// the Diplomacy button: with the lobby's Allow Diplomacy (or as a script sets it); Global
+	// Diplomacy: a Tavern's script; Tributes: a Trading Post's, between players who may change
+	// their relations or team mates (WKB.exe's client 0xb5)
+	static const char* const tooltipOn[3] = { "INGAME_DIPLOMACY", "INGAME_DIPLOMATIC_REPORT", "INGAME_TRIBUTES" };
+	static const char* const tooltipOff[3] = { "INGAME_DIPLOMACY_UNAVAILABLE_SINGLE", "INGAME_DIPLOMATIC_REPORT_UNAVAILABLE_SINGLE", "INGAME_TRIBUTES_UNAVAILABLE_SINGLE" };
+	for (int i = 0; i < 3; i++) {
+		const Client::DiplomacyButton& b = client->diplomacyButtons[i];
+		bool on = b.set ? b.enabled : (i == 0 && diplomacyOn);
+		if (i == 2)
+			on = on && (diplomacyOn || itemOf(level, "Teams Selected") != 0.0f);
+		d.enabled[i] = on && n > 1;
+		d.news[i] = b.news && d.enabled[i];
+		d.tooltips[i] = GameText(lang.getText(!b.tooltip.empty() ? b.tooltip : (d.enabled[i] ? tooltipOn[i] : tooltipOff[i])));
+	}
+	// the notices, 10 seconds each
+	const uint32_t now = (uint32_t)SDL_GetTicks();
+	auto& notices = client->notices;
+	notices.erase(std::remove_if(notices.begin(), notices.end(), [now](const Client::Notice& x) { return now - x.time > 10000; }), notices.end());
+	for (const Client::Notice& x : notices) {
+		CommonGameObject* p = client->findObject(x.player);
+		d.notices.push_back({ GameText(lang.getText(x.key)), p ? p->color : 0, (now - x.time) / 1000.0f });
+	}
+	return d;
+}
+
+// The diplomacy windows' requests (FrontEndUI.lua): "<player id>,<status>" and
+// "<player id>,<item>,<amount>"; "diplomacy_seen" "<window>" (0-2)
+void ClientInterface::diplomacyRequest(const std::string& action, const std::string& arg)
+{
+	if (action == "diplomacy_seen") {
+		const int window = atoi(arg.c_str());
+		if (window >= 0 && window < 3)
+			client->diplomacyButtons[window].news = false;
+		return;
+	}
+	const uint32_t player = (uint32_t)strtoul(arg.c_str(), nullptr, 10);
+	const size_t comma = arg.find(',');
+	if (!player || comma == std::string::npos)
+		return;
+	if (action == "diplomacy_status")
+		client->sendDiplomaticStatus(player, atoi(arg.c_str() + comma + 1));
+	else if (action == "diplomacy_offer")
+		client->sendDiplomaticOffer(player, atoi(arg.c_str() + comma + 1));
+	else if (action == "tribute") {
+		const size_t comma2 = arg.find(',', comma + 1);
+		if (comma2 != std::string::npos)
+			client->sendTribute(player, atoi(arg.c_str() + comma + 1), (float)atof(arg.c_str() + comma2 + 1));
+	}
 }
 
 void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
@@ -5286,6 +5482,9 @@ void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
 		if (gtw.forceReadAllPages && page + 1 < pages)
 			return;
 		it->second = -1;
+		// the AI General's message read: the next one, if any, shows
+		if (gtwIndex == client->gameSet->gameTextWindows.names.getIndex("AI General Chat Window") && !client->chatDisplays.empty())
+			client->chatDisplays.pop_front();
 		break;
 	case Tags::GTW_BUTTON_WINDOW_ACTION_MOVE_FIRST_PAGE:
 		if (page != 0)

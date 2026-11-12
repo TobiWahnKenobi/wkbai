@@ -2728,6 +2728,23 @@ end
 -- the rim's inner edge lies 20 pixels in from the cropped frame's edge: the text and the
 -- buttons keep this far in
 local GAME_WINDOW_PAD_X, GAME_WINDOW_PAD_Y = 40, 32
+
+-- The players' colours by colour index (the HUD's Top Panel/Player<n>.tga, as the in-game texts
+-- draw them; 0xAABBGGRR)
+local PLAYER_COLOURS = { [0] = 0xFFC8C8C8, 0xFFBB6172, 0xFF4AC6D4, 0xFF3732E2, 0xFF399B5D, 0xFFAD5BD4, 0xFF3763CC, 0xFFB6A067, 0xFF204AB4 }
+function playerColour(i) return PLAYER_COLOURS[i] or WHITE end
+
+-- An AI General's portrait by its PLAYER blueprint (GENERAL_PORTRAIT), or nil
+local portraitByGeneral = nil
+function generalPortrait(blueprint)
+	if not portraitByGeneral then
+		portraitByGeneral = {}
+		for _, g in ipairs(getGenerals()) do
+			if g.portrait and g.portrait ~= "" then portraitByGeneral[g.blueprint] = g.portrait end
+		end
+	end
+	return portraitByGeneral[blueprint]
+end
 -- the HUD's bottom panels (ClientUIScript.lua, in unscaled pixels): the selection panel at the
 -- left (330 x 326), the minimap's at the right (345 x 343). A window at the bottom of the
 -- screen stays between them, or above them where there is no room.
@@ -2740,13 +2757,19 @@ local function drawGameTextWindows(blocked)
 	for i, win in ipairs(windows) do
 		local w = math.min(L(win.width), W - L(20))
 		local px, py = L(GAME_WINDOW_PAD_X), L(GAME_WINDOW_PAD_Y)
-		local lines = wrapText(FONT_GAME_TEXT, win.text, w - 2 * px)
+		-- an AI General's message: its portrait at the left, its name as the title (WKB.exe's
+		-- "|<colour><name>|" first line)
+		local portrait = win.general ~= "" and generalPortrait(win.general) or nil
+		local textX = portrait and (L(64) + L(12)) or 0
+		local titleH = win.title ~= "" and (fontHeight(FONT_BUTTON, S) + L(6)) or 0
+		local lines = wrapText(FONT_GAME_TEXT, win.text, w - 2 * px - textX)
 		local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
 		-- the buttons' row: as high as the highest button's top (the scripts place them up
 		-- from the window's bottom, mostly 5 pixels)
 		local buttonsTop = 0
 		for _, b in ipairs(win.buttons) do buttonsTop = math.max(buttonsTop, b.y + math.max(b.height, 25)) end
-		local h = 2 * py + #lines * lineH + (buttonsTop > 0 and (L(buttonsTop) + L(6)) or 0)
+		local textH = math.max(titleH + #lines * lineH, portrait and L(80) or 0)
+		local h = 2 * py + textH + (buttonsTop > 0 and (L(buttonsTop) + L(6)) or 0)
 		local x = math.floor(math.max(L(10), math.min(W * win.x, W - w - L(10))))
 		local bottom = win.atBottom and (H - L(6)) or (H * win.y)
 		if bottom > H - math.max(HUD_LEFT_H, HUD_RIGHT_H) then
@@ -2758,7 +2781,8 @@ local function drawGameTextWindows(blocked)
 			end
 		end
 		local y = math.floor(math.max(L(10), math.min(bottom - h, H - h - L(6))))
-		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px, py = py }
+		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px, py = py,
+			portrait = portrait, textX = textX, titleH = titleH }
 		reportGameWindowArea(x, y, w, h, win.modal)
 	end
 	-- the topmost window under the mouse (or a modal one) gets the clicks
@@ -2771,8 +2795,15 @@ local function drawGameTextWindows(blocked)
 		local l = layout[i]
 		gameFrame(l.x, l.y, l.w, l.h)
 		local ty = l.y + l.py
+		if l.portrait then
+			drawImage(l.portrait, l.x + l.px, ty, L(64), L(80))
+		end
+		if win.title ~= "" then
+			drawText(FONT_BUTTON, l.x + l.px + l.textX, ty, win.title, playerColour(win.titleColour), S)
+			ty = ty + l.titleH
+		end
 		for _, line in ipairs(l.lines) do
-			drawText(FONT_GAME_TEXT, l.x + l.px, ty, line, GAME_TEXT_COLOUR, S)
+			drawText(FONT_GAME_TEXT, l.x + l.px + l.textX, ty, line, GAME_TEXT_COLOUR, S)
 			ty = ty + l.lineH
 		end
 		local innerBottom = l.y + l.h - l.py
@@ -2850,12 +2881,262 @@ local function drawObjectives(blocked)
 	mouse.blocked = saved
 end
 
+---------------------------------------------------------------------------- Diplomacy
+-- The top bar's Diplomacy, Global Diplomacy and Tributes windows (WKB.exe's CDiplomacyWnd,
+-- CDiplomaticReportWnd and TributesWnd, docs/engine/diplomacy.md), in the game windows' frame.
+local DIPLO = "Interface\\InGame\\Diplomacy\\"
+diplomacyTooltip = nil
+
+-- A tooltip at the mouse: the text on a dark box
+local function drawTooltip(text)
+	local tw, th = textWidth(FONT_LIST, text, S), fontHeight(FONT_LIST, S)
+	local x = math.min(mouse.x + L(16), W - tw - L(12))
+	local y = math.min(mouse.y + L(20), H - th - L(8))
+	drawRect(x - L(5), y - L(3), tw + L(10), th + L(6), 0xE0101010)
+	drawFrame(x - L(5), y - L(3), tw + L(10), th + L(6), 0xFF5A7A8C, 1)
+	drawText(FONT_LIST, x, y, text, 0xFF9CE6F0, S)
+end
+local diplomacyOpen = 0          -- 0 none, 1 Diplomacy, 2 Global Diplomacy, 3 Tributes
+local pending = {}               -- Diplomacy: player id -> { status = i, offer = i or -1 } not sent yet
+local tributeAmounts = {}        -- Tributes: player id -> item -> amount
+
+function FE_ToggleDiplomacyWindow(window)
+	local n = window + 1
+	diplomacyOpen = (diplomacyOpen == n) and 0 or n
+	pending, tributeAmounts = {}, {}
+	if diplomacyOpen ~= 0 then request("diplomacy_seen", tostring(window)) end
+end
+
+local function playerFlag(p, x, y)
+	drawImage(DIPLO .. "Player Flag " .. (p.colour or 0) .. ".tga", x, y, L(36), L(18))
+end
+
+-- A window in the middle of the screen, with its title; returns its inner box
+local function diplomacyFrame(title, w, h)
+	local x, y = math.floor((W - w) / 2), math.floor(math.max(L(100), (H - h) / 2 - L(60)))
+	reportGameWindowArea(x, y, w, h, false)
+	gameFrame(x, y, w, h)
+	centredText("Morpheus 30", title, x, y + L(GAME_WINDOW_PAD_Y) - L(4), w, L(34), 0xFF9CE6F0)
+	return x + L(GAME_WINDOW_PAD_X), y + L(GAME_WINDOW_PAD_Y) + L(40), w - 2 * L(GAME_WINDOW_PAD_X), y + h - L(GAME_WINDOW_PAD_Y)
+end
+
+-- A status button of the Diplomacy window: 32 x 32, the status's image (_Depressed when it is
+-- the present status, _Disabled when it can't be clicked); an offer's overlay (Accept Offer,
+-- Cancel Offer) blinking. Returns whether it was clicked.
+local function statusButton(status, x, y, mode, enabled, tooltip)
+	local s = L(32)
+	local hot = enabled and hovered(x, y, s, s)
+	local suffix = ""
+	if mode == "Current" then suffix = "_Depressed" elseif not enabled then suffix = "_Disabled" end
+	drawImage(DIPLO .. status .. suffix .. ".tga", x, y, s, s)
+	local blink = math.floor(getTime() / 0.9) % 2 == 0
+	if mode == "Accept" and blink then drawImage(DIPLO .. "Accept Offer.tga", x, y, s, s) end
+	if mode == "Cancel" and blink then drawImage(DIPLO .. "Cancel Offer.tga", x, y, s, s) end
+	if hot then
+		drawFrame(x, y, s, s, 0xFF9CE6F0, 1)
+		diplomacyTooltip = getText(mode .. "_" .. status)
+	end
+	return hot and mouse.released
+end
+
+-- The Diplomacy window: a row per other player (its flag, name and a button per status). The
+-- buttons' meanings (WKB.exe 0x775e48): the present status (Current); a worse one (Change: war
+-- or ending an alliance, set at once on Send); the status offered to it (Cancel); the status it
+-- offers (Accept); another better one (Offer). Send sends the changes, Cancel closes, Reset
+-- forgets them.
+local function drawDiplomacyWindow(d, blocked)
+	local others = {}
+	for i = 2, #d.players do others[#others + 1] = d.players[i] end
+	local n = #d.statuses
+	local rowH = L(36)
+	local w = L(40) + L(44) + L(250) + n * L(40) + 2 * L(GAME_WINDOW_PAD_X)
+	local h = L(GAME_WINDOW_PAD_Y) * 2 + L(40) + #others * rowH + L(50)
+	local ix, iy, iw, ibottom = diplomacyFrame(T("INGAME_DIPLOMACY"), w, h)
+	local saved = mouse.blocked
+	mouse.blocked = blocked
+	diplomacyTooltip = nil
+	local changed = false
+	for r, p in ipairs(others) do
+		local y = iy + (r - 1) * rowH
+		local pend = pending[p.id] or {}
+		local cur = pend.status or p.status
+		local mine = pend.offer
+		if mine == nil then mine = p.myOffer end
+		playerFlag(p, ix, y + L(7))
+		drawText(FONT_LIST, ix + L(44), y + L(8), p.name, playerColour(p.colour), S)
+		for i = 0, n - 1 do
+			local mode
+			if i == cur then mode = "Current"
+			elseif i > cur then mode = "Change"
+			elseif i == mine then mode = "Cancel"
+			elseif i == p.theirOffer then mode = "Accept"
+			else mode = "Offer" end
+			local bx = ix + L(44) + L(250) + i * L(40)
+			if statusButton(d.statuses[i + 1], bx, y, mode, d.canChange and mode ~= "Current", nil) then
+				local e = pending[p.id] or {}
+				if mode == "Offer" then e.offer = i
+				elseif mode == "Cancel" then e.offer = -1
+				elseif mode == "Accept" or mode == "Change" then e.status = i; if e.offer and e.offer >= i then e.offer = -1 end end
+				pending[p.id] = e
+			end
+		end
+		local e = pending[p.id]
+		if e and ((e.status ~= nil and e.status ~= p.status) or (e.offer ~= nil and e.offer ~= p.myOffer)) then changed = true end
+	end
+	if #others == 0 then centredText(FONT_LIST, T("FRONT_END_CHAT_SINGLE_PLAYER_GAME"), ix, iy, iw, rowH, GREY) end
+	-- Send (OK while nothing changed), Cancel, Reset Changes
+	-- three buttons in a row, as wide as the window allows
+	local bw, bh, by = math.min(L(150), (iw - L(20)) / 3), L(28), ibottom - L(30)
+	local cx, gap = ix + iw / 2, math.min(L(150), (iw - L(20)) / 3) + L(10)
+	if button(T(changed and "BUTTON_SEND" or "BUTTON_OK"), cx - gap - bw / 2, by, bw, bh) then
+		for id, e in pairs(pending) do
+			for _, p in ipairs(others) do
+				if p.id == id then
+					if e.status ~= nil and e.status ~= p.status then request("diplomacy_status", id .. "," .. e.status) end
+					if e.offer ~= nil and e.offer ~= p.myOffer then request("diplomacy_offer", id .. "," .. e.offer) end
+				end
+			end
+		end
+		pending = {}
+		diplomacyOpen = 0
+	end
+	if button(T("BUTTON_CANCEL"), cx - bw / 2, by, bw, bh) then pending = {}; diplomacyOpen = 0 end
+	if button(T("BUTTON_RESET_CHANGES"), cx + gap - bw / 2, by, bw, bh, changed) then pending = {} end
+	mouse.blocked = saved
+	if diplomacyTooltip then drawTooltip(diplomacyTooltip) end
+end
+
+-- Global Diplomacy (a Tavern): every pair of players once, as the status's image (WKB.exe
+-- 0x779ef0: a row per player, a cell for each player after it)
+local function drawReportWindow(d, blocked)
+	local players = d.players
+	local np = #players
+	local rowH = L(36)
+	local w = L(44) + L(250) + math.max(1, np - 1) * L(40) + 2 * L(GAME_WINDOW_PAD_X)
+	local h = L(GAME_WINDOW_PAD_Y) * 2 + L(40) + L(26) + np * rowH + L(50)
+	local ix, iy, iw, ibottom = diplomacyFrame(T("INGAME_DIPLOMATIC_REPORT"), w, h)
+	local saved = mouse.blocked
+	mouse.blocked = blocked
+	diplomacyTooltip = nil
+	-- the columns' flags
+	for j = 2, np do playerFlag(players[j], ix + L(44) + L(250) + (j - 2) * L(40) - L(2), iy) end
+	iy = iy + L(26)
+	for i, p in ipairs(players) do
+		local y = iy + (i - 1) * rowH
+		playerFlag(p, ix, y + L(7))
+		drawText(FONT_LIST, ix + L(44), y + L(8), p.name, playerColour(p.colour), S)
+		for j = i + 1, np do
+			local status = d.relations[(i - 1) * np + j]
+			if status and status >= 0 then
+				local cx = ix + L(44) + L(250) + (j - 2) * L(40)
+				drawImage(DIPLO .. d.statuses[status + 1] .. ".tga", cx, y, L(32), L(32))
+				if hovered(cx, y, L(32), L(32)) then diplomacyTooltip = d.statuses[status + 1] end
+			end
+		end
+	end
+	if button(T("BUTTON_OK"), ix + (iw - L(150)) / 2, ibottom - L(30), L(150), L(28)) then diplomacyOpen = 0 end
+	mouse.blocked = saved
+	if diplomacyTooltip then drawTooltip(diplomacyTooltip) end
+end
+
+-- Tributes (a Trading Post): a row per other player, a column per TRIBUTE_ITEM (its icon,
+-- Interface\InGame\Tributes\<item>.tga); a left click on a cell gives 10 more (50 with Shift), a
+-- right click 10 less, never more than one has (WKB.exe 0x793450). Send gives them all.
+local function drawTributesWindow(d, blocked)
+	local others = {}
+	for i = 2, #d.players do others[#others + 1] = d.players[i] end
+	local items = d.tributes
+	local rowH, cellW = L(36), L(90)
+	local w = L(44) + L(220) + #items * cellW + 2 * L(GAME_WINDOW_PAD_X)
+	local h = L(GAME_WINDOW_PAD_Y) * 2 + L(40) + L(46) + #others * rowH + L(50)
+	local ix, iy, iw, ibottom = diplomacyFrame(T("INGAME_TRIBUTES"), w, h)
+	local saved = mouse.blocked
+	mouse.blocked = blocked
+	-- what is left to give of each
+	local left = {}
+	for _, t in ipairs(items) do
+		local given = 0
+		for _, a in pairs(tributeAmounts) do given = given + (a[t.item] or 0) end
+		left[t.item] = math.max(0, math.floor(t.have) - given)
+	end
+	for k, t in ipairs(items) do
+		local cx = ix + L(44) + L(220) + (k - 1) * cellW
+		drawImage("Interface\\InGame\\Tributes\\" .. t.name .. ".tga", cx + (cellW - L(32)) / 2, iy, L(32), L(32))
+		centredText(FONT_LIST, tostring(left[t.item]), cx, iy + L(32), cellW, L(14), GREY)
+	end
+	iy = iy + L(46)
+	local any = false
+	for r, p in ipairs(others) do
+		local y = iy + (r - 1) * rowH
+		playerFlag(p, ix, y + L(7))
+		drawText(FONT_LIST, ix + L(44), y + L(8), p.name, playerColour(p.colour), S)
+		tributeAmounts[p.id] = tributeAmounts[p.id] or {}
+		local a = tributeAmounts[p.id]
+		for k, t in ipairs(items) do
+			local cx = ix + L(44) + L(220) + (k - 1) * cellW + L(5)
+			local amount = a[t.item] or 0
+			if amount > 0 then any = true end
+			local hot = not mouse.blocked and inside(cx, y + L(2), cellW - L(10), L(28))
+			threeSlice(ART.button, hot and "_High" or "", BUTTON_RIM, cx, y + L(2), cellW - L(10), L(28))
+			centredText(FONT_LIST, tostring(amount), cx, y + L(2), cellW - L(10), L(28), amount > 0 and WHITE or GREY)
+			if hot and mouse.released then
+				local step = isShiftHeld() and 50 or 10
+				a[t.item] = amount + math.min(step - amount % step, left[t.item])
+			elseif hot and isMouseReleased(3) then
+				a[t.item] = math.max(0, amount - 10)
+			end
+		end
+	end
+	-- three buttons in a row, as wide as the window allows
+	local bw, bh, by = math.min(L(150), (iw - L(20)) / 3), L(28), ibottom - L(30)
+	local cx, gap = ix + iw / 2, math.min(L(150), (iw - L(20)) / 3) + L(10)
+	if button(T("BUTTON_SEND"), cx - gap - bw / 2, by, bw, bh, any) then
+		for id, a in pairs(tributeAmounts) do
+			for item, amount in pairs(a) do
+				if amount > 0 then request("tribute", id .. "," .. item .. "," .. amount) end
+			end
+		end
+		tributeAmounts = {}
+		diplomacyOpen = 0
+	end
+	if button(T("BUTTON_CLEAR_TRIBUTES"), cx - bw / 2, by, bw, bh, any) then tributeAmounts = {} end
+	if button(T("BUTTON_CANCEL"), cx + gap - bw / 2, by, bw, bh) then tributeAmounts = {}; diplomacyOpen = 0 end
+	mouse.blocked = saved
+end
+
+-- The notices (WKB.exe's message log: an offer, a change, a tribute), in the colour of the
+-- player concerned, fading after a few seconds, under the top bar
+local function drawNotices(d)
+	local y = math.max(96, L(96))
+	for _, n in ipairs(d.notices) do
+		local alpha = n.age < 8 and 255 or math.max(0, math.floor(255 * (10 - n.age) / 2))
+		if alpha > 0 then
+			local colour = (playerColour(n.colour) & 0x00FFFFFF) | (alpha << 24)
+			local tw = textWidth(FONT_BUTTON, n.text, S)
+			drawText(FONT_BUTTON, math.floor((W - tw) / 2) + 1, y + 1, n.text, (alpha << 24), S)
+			drawText(FONT_BUTTON, math.floor((W - tw) / 2), y, n.text, colour, S)
+			y = y + fontHeight(FONT_BUTTON, S) + L(4)
+		end
+	end
+end
+
+local function drawDiplomacyWindows(blocked)
+	local d = getDiplomacy()
+	drawNotices(d)
+	if diplomacyOpen == 0 then return end
+	if not d.enabled[diplomacyOpen] then diplomacyOpen = 0 return end
+	if diplomacyOpen == 1 then drawDiplomacyWindow(d, blocked)
+	elseif diplomacyOpen == 2 then drawReportWindow(d, blocked)
+	else drawTributesWindow(d, blocked) end
+end
+
 local function drawGameWindows()
 	-- under the in-game menu they get no clicks
 	local blocked = mouse.blocked or #stack > 0
 	-- at a whole-number scale (S, and so L and the fonts, for these windows only)
 	local menuScale = S
 	S = gameWindowScale(menuScale)
+	drawDiplomacyWindows(blocked)
 	drawGameTextWindows(blocked)
 	drawObjectives(blocked)
 	S = menuScale

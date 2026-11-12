@@ -340,6 +340,20 @@ void GameSet::parseFile(const char * fn, int pass)
 			missionObjectives.names.insertString(gsf.nextString(true));
 			ignoreBlueprintEx(gsf, "END_MISSION_OBJECTIVES");
 		}
+		else if (pass == 1 && strtag == "TRIBUTES") {
+			// TRIBUTES / TRIBUTE_ITEM "<item>" / END_TRIBUTES: the resources one player can give
+			// another (the Tributes window; Miscellaneous.cpp: Food, Wood, Gold)
+			gsf.advanceLine();
+			while (!gsf.eof) {
+				const std::string t = gsf.nextTag();
+				if (t == "END_TRIBUTES")
+					break;
+				if (t == "TRIBUTE_ITEM")
+					if (const int item = items.names.getIndex(gsf.nextString(true)); item >= 0)
+						tributeItems.push_back(item);
+				gsf.advanceLine();
+			}
+		}
 		else if (pass == 1 && strtag == "MISSION_OBJECTIVES") {
 			missionObjectives.readRef(gsf).parse(gsf, *this);
 		}

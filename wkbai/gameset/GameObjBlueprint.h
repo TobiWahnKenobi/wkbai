@@ -7,6 +7,7 @@
 #include "../util/GSFileParser.h"
 //#include "gameset.h"
 #include <map>
+#include <memory>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -57,6 +58,13 @@ struct GameObjBlueprint {
 	std::string modelPath;
 
 	std::vector<Command*> offeredCommands;
+	// PLAYER: MAP_CHAT_MESSAGE's texts by chat personality, then chat display: the Language.txt
+	// key and the values for its %d and %r (evaluated with the sender as self)
+	struct ChatMessage {
+		std::string key;
+		std::vector<std::shared_ptr<struct ValueDeterminer>> values;
+	};
+	std::map<std::string, std::map<std::string, std::vector<ChatMessage>>> chatMessages;
 
 	std::vector<Reaction*> intrinsicReactions;
 

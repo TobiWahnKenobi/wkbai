@@ -99,6 +99,7 @@ struct GameSet
 	GSBlueprintList<GSCondition> conditions;
 	GSBlueprintList<GameTextWindow> gameTextWindows;
 	GSBlueprintList<MissionObjectives> missionObjectives;
+	std::vector<int> tributeItems; // TRIBUTES: the items (resources) players can give each other
 	GSBlueprintList<void> taskCategories;
 	GSBlueprintList<void> orderCategories;
 	GSBlueprintList<GSPackage> packages;

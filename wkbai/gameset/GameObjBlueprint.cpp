@@ -4,6 +4,7 @@
 
 #include "GameObjBlueprint.h"
 #include "gameset.h"
+#include "values.h"
 #include "../tags.h"
 #include <string>
 #include "../file.h"
@@ -73,6 +74,30 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			break;
 		if (strtag == "CAN_BE_BUILT_UPON") {
 			canBeBuiltUpon = gsf.nextInt() != 0;
+			gsf.advanceLine();
+			continue;
+		}
+		// MAP_CHAT_MESSAGE "<chat personality>" "<chat display>" <Language.txt key>: the texts an AI
+		// General's SEND_CHAT_MESSAGE picks from (AI_Personalities.gsf, 4 to 10 per display)
+		if (strtag == "MAP_CHAT_MESSAGE") {
+			std::string personality = gsf.nextString(true);
+			std::string display = gsf.nextString(true);
+			ChatMessage msg;
+			msg.key = gsf.nextString(true);
+			// the values up to the end of the line (or a // comment)
+			for (;;) {
+				const char* c = gsf.cursor;
+				while (*c == ' ' || *c == '\t')
+					c++;
+				if (*c == 0 || *c == '\n' || *c == '\r' || (c[0] == '/' && c[1] == '/'))
+					break;
+				ValueDeterminer* vd = ReadValueDeterminer(gsf, *gameSet);
+				if (!vd)
+					break;
+				msg.values.emplace_back(vd);
+			}
+			if (!msg.key.empty())
+				chatMessages[personality][display].push_back(std::move(msg));
 			gsf.advanceLine();
 			continue;
 		}

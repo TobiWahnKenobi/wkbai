@@ -241,6 +241,7 @@ struct FrontEnd::Impl {
 	// covered (last frame), for gameWindowsWantMouse
 	std::vector<GameWindow> gameWindows;
 	Objectives objectives;
+	Diplomacy diplomacy;
 	struct Area { float x, y, w, h; };
 	std::vector<Area> windowAreas, nextWindowAreas;
 	bool modalWindow = false, nextModalWindow = false;
@@ -508,7 +509,8 @@ struct FrontEnd::Impl {
 				for (const GameWindow::Button& b : w.buttons)
 					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled));
 				list.add(lua.create_table_with("id", w.id, "text", w.text, "page", w.page + 1, "pages", w.pages,
-					"x", w.x, "y", w.y, "width", w.width, "atBottom", w.atBottom, "modal", w.modal, "buttons", buttons));
+					"x", w.x, "y", w.y, "width", w.width, "atBottom", w.atBottom, "modal", w.modal, "buttons", buttons,
+					"title", w.title, "general", w.general, "titleColour", w.titleColour));
 			}
 			return list;
 		});
@@ -518,6 +520,37 @@ struct FrontEnd::Impl {
 			nextWindowAreas.push_back({ x, y, w, h });
 			if (modal && *modal)
 				nextModalWindow = true;
+		});
+		// diplomacy: { statuses, players = { { id, name, general, colour, status, myOffer,
+		// theirOffer }, ... } (this client's player first), relation(i, j), tributes = { { item,
+		// name, have } }, enabled, news, tooltips (by window 1-3), canChange, notices = { { text,
+		// colour, age } } }; statuses are 0-based ladder indices, -1 none
+		lua.set_function("getDiplomacy", [this]() {
+			const Diplomacy& d = diplomacy;
+			sol::table statuses = lua.create_table();
+			for (const std::string& s : d.statuses)
+				statuses.add(s);
+			sol::table players = lua.create_table();
+			for (const Diplomacy::Player& p : d.players)
+				players.add(lua.create_table_with("id", p.id, "name", p.name, "general", p.general, "colour", p.colour,
+					"status", p.status, "myOffer", p.myOffer, "theirOffer", p.theirOffer));
+			sol::table relations = lua.create_table();
+			for (int r : d.relations)
+				relations.add(r);
+			sol::table tributes = lua.create_table();
+			for (const Diplomacy::Tribute& tr : d.tributes)
+				tributes.add(lua.create_table_with("item", tr.item, "name", tr.name, "have", tr.have));
+			sol::table enabled = lua.create_table(), news = lua.create_table(), tooltips = lua.create_table();
+			for (int i = 0; i < 3; i++) {
+				enabled.add(d.enabled[i]);
+				news.add(d.news[i]);
+				tooltips.add(d.tooltips[i]);
+			}
+			sol::table notices = lua.create_table();
+			for (const Diplomacy::Notice& n : d.notices)
+				notices.add(lua.create_table_with("text", n.text, "colour", n.colour, "age", n.age));
+			return lua.create_table_with("statuses", statuses, "players", players, "relations", relations, "tributes", tributes,
+				"enabled", enabled, "news", news, "tooltips", tooltips, "canChange", d.canChange, "notices", notices);
 		});
 		// the mission objectives: { title, changed, entries = { { text, inactive }, ... } }, or nil
 		lua.set_function("getObjectives", [this]() -> sol::object {
@@ -1050,6 +1083,8 @@ void FrontEnd::frame(Place place)
 void FrontEnd::setGameWindows(std::vector<GameWindow> windows) { impl->gameWindows = std::move(windows); }
 void FrontEnd::setObjectives(Objectives objectives) { impl->objectives = std::move(objectives); }
 void FrontEnd::toggleObjectives() { impl->call("FE_ToggleObjectives"); }
+void FrontEnd::setDiplomacy(Diplomacy diplomacy) { impl->diplomacy = std::move(diplomacy); }
+void FrontEnd::toggleDiplomacyWindow(int window) { impl->call("FE_ToggleDiplomacyWindow", window); }
 
 bool FrontEnd::objectivesNews() const
 {
