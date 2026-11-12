@@ -2,6 +2,7 @@
 #include "../server.h"
 #include "../imgui/imgui.h"
 #include "../gameset/gameset.h"
+#include "../gameset/ScriptContext.h"
 #include "../util/StriCompare.h"
 
 #include "../settings.h"
@@ -94,7 +95,7 @@ std::string QuickSkirmishMenu::setupJson(const std::string& level, uint32_t seed
 	j["settings"] = settings;
 	nlohmann::json list = nlohmann::json::array();
 	for (const Slot& s : slots)
-		list.push_back({ { "type", (int)s.type }, { "general", s.general }, { "client", s.client }, { "name", s.name }, { "colour", s.colour }, { "team", s.team }, { "aiScript", s.aiScript } });
+		list.push_back({ { "type", (int)s.type }, { "general", s.general }, { "client", s.client }, { "name", s.name }, { "colour", s.colour }, { "team", s.team }, { "aiScript", s.aiScript }, { "army", s.army } });
 	j["slots"] = list;
 	return j.dump(1);
 }
@@ -121,6 +122,9 @@ bool QuickSkirmishMenu::readSetupJson(const std::string& text, std::string& leve
 		slot.name = s.value("name", std::string());
 		slot.colour = s.value("colour", 0);
 		slot.team = s.value("team", 0);
+		for (const auto& company : s.value("army", nlohmann::json::array()))
+			if (company.is_string())
+				slot.army.push_back(company.get<std::string>());
 		slots.push_back(std::move(slot));
 	}
 	return !level.empty();
@@ -385,6 +389,20 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			}
 			if (slot.colour > 0)
 				player->setColor(slot.colour);
+			// Valhalla: the companies the player enlisted, each one's PLAYER_START_SEQUENCE run on
+			// it (raising "<company> Spawn": Valhalla Mode.cpp musters them at its Manor on level
+			// start), as WKB.exe's lobby does
+			if (mode == ValhallaMode && (slot.type == Slot::HUMAN || slot.type == Slot::GUEST))
+				for (const std::string& name : slot.army) {
+					const int c = server.gameSet->companies.names.getIndex(name);
+					if (c < 0) {
+						printf("Valhalla: no company \"%s\"\n", name.c_str());
+						continue;
+					}
+					SrvScriptContext ctx(&server, player);
+					server.gameSet->companies[c].playerStartSequence.run(&ctx);
+					printf("Valhalla: player %u enlisted %s\n", player->id, name.c_str());
+				}
 			playing.emplace_back(player, slot.team);
 		}
 		if (humanPlaced || guestPlaced)

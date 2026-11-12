@@ -7456,6 +7456,63 @@ void Test_GameOverView()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Valhalla's Army Enlistment: the companies read; a human's enlisted army (the lobby's ";v")
+// mustered at its Manor on level start (Valhalla Mode.cpp)
+void Test_ValhallaArmy()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	const GameSet& gs = *server.gameSet;
+	const int league = gs.companies.names.getIndex("The League Of Knights");
+	check(gs.companies.size() >= 40, "the companies read (" + std::to_string(gs.companies.size()) + ")");
+	check(league >= 0 && gs.companies[league].cost == 100 && gs.companies[league].weaponPlatform == "Heavy Cavalry"
+		&& gs.companies[league].alignments.size() == 5 && !gs.companies[league].playerStartSequence.actionList.empty(),
+		"The League Of Knights: 100 points, heavy cavalry, five alignments, a start sequence");
+	QuickSkirmishMenu skirmish;
+	skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+	skirmish.setSetting("mode", 1);
+	std::vector<QuickSkirmishMenu::Slot> slots(2);
+	slots[0].type = QuickSkirmishMenu::Slot::HUMAN;
+	slots[0].army = { "The League Of Knights", "The League Of Knights" };
+	slots[1].type = QuickSkirmishMenu::Slot::EMPTY;
+	skirmish.setSlots(slots);
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	skirmish.applySettings(server);
+	ServerGameObject* human = server.findObject(1027);
+	const int spawn = gs.items.names.getIndex("League Of Knights Spawn");
+	check(human && spawn >= 0 && human->getItem(spawn) == 2, "the human's \"League Of Knights Spawn\" is 2 (two enlistments)");
+	auto characters = [&]() {
+		int n = 0;
+		auto count = [&](CommonGameObject* o, auto& self) -> void {
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) n++;
+					self(c, self);
+				}
+		};
+		if (human) count(human, count);
+		return n;
+	};
+	const int before = characters();
+	// (the game time follows the clock: a step every 20 ms)
+	for (int i = 0; i < 50 * 20; i++) {
+		server.tick();
+		SDL_Delay(20);
+	}
+	const int after = characters();
+	printf("UNITTEST characters of the human: %d at the start, %d after 20 s (game time %.1f)\n", before, after, server.timeManager.currentTime);
+	check(after >= before + 40, "the two companies mustered (40 or more new characters)");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Diplomacy as WKB.exe's (ServerDiplomacy.cpp): two players on 4 Peaks, A (1027) and B (1030)
 void Test_Diplomacy()
 {
@@ -7768,6 +7825,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_TeamColours, "Team colours of HD models: wkTeam, wkEmblem and its TEXCOORD_1, the emblem slots, the materials apart"},
 {Test_GameWindows, "Game windows: a province plays as a skirmish map unless from the campaign; mission objectives reach the client; text window layout and buttons"},
 {Test_Diplomacy, "Diplomacy: offers, accepting, status items and events, tributes, the AI Generals' messages, Disallow Diplomacy"},
+{Test_ValhallaArmy, "Valhalla army: the companies read, an enlisted army mustered at the start"},
 };
 
 void LaunchTest()

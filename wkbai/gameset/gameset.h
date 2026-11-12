@@ -99,6 +99,7 @@ struct GameSet
 	GSBlueprintList<GSCondition> conditions;
 	GSBlueprintList<GameTextWindow> gameTextWindows;
 	GSBlueprintList<MissionObjectives> missionObjectives;
+	GSBlueprintList<GSCompany> companies; // COMPANY (Valhalla's Army Enlistment)
 	std::vector<int> tributeItems; // TRIBUTES: the items (resources) players can give each other
 	GSBlueprintList<void> taskCategories;
 	GSBlueprintList<void> orderCategories;

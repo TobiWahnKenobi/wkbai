@@ -125,6 +125,81 @@ namespace {
 		return generals;
 	}
 
+	// Valhalla's companies (Companies.cpp: COMPANY blocks) and the tags they use, for the lobby's
+	// Army Enlistment (the menu has no game set loaded; read as the generals are)
+	struct Company {
+		std::string name, nameTag, descriptionTag, unitTypeTag, platform, thumbnail;
+		std::vector<std::string> alignments;
+		int cost = 0;
+	};
+	struct Companies {
+		std::vector<Company> list;
+		std::vector<std::string> alignments, platforms; // DECLARE_ALIGNMENT_TAG, DECLARE_WEAPON_PLATFORM_TAG
+	};
+	Companies LoadCompanies()
+	{
+		Companies c;
+		const char* path = "Warrior Kings Game Set\\Companies.cpp";
+		if (!FileExists(path))
+			return c;
+		char* data = nullptr;
+		int size = 0;
+		LoadFile(path, &data, &size, 1);
+		std::istringstream in(std::string(data, size));
+		free(data);
+		auto quoted = [](const std::string& line) {
+			const size_t a = line.find('"'), b = line.find('"', a == std::string::npos ? 0 : a + 1);
+			return (a != std::string::npos && b != std::string::npos && b > a) ? line.substr(a + 1, b - a - 1) : std::string();
+		};
+		std::string line;
+		bool inComment = false;
+		Company* current = nullptr;
+		while (std::getline(in, line)) {
+			if (!line.empty() && line.back() == '\r')
+				line.pop_back();
+			if (inComment) {
+				if (line.find("*/") != std::string::npos)
+					inComment = false;
+				continue;
+			}
+			if (const size_t c2 = line.find("//"); c2 != std::string::npos)
+				line.resize(c2);
+			if (line.find("/*") != std::string::npos) {
+				inComment = line.find("*/") == std::string::npos;
+				continue;
+			}
+			std::istringstream ls(line);
+			std::string key, value;
+			ls >> key;
+			if (key == "DECLARE_ALIGNMENT_TAG")
+				c.alignments.push_back(quoted(line));
+			else if (key == "DECLARE_WEAPON_PLATFORM_TAG")
+				c.platforms.push_back(quoted(line));
+			else if (key == "COMPANY") {
+				c.list.push_back({ quoted(line) });
+				current = &c.list.back();
+			}
+			else if (key == "END_COMPANY")
+				current = nullptr;
+			else if (current) {
+				if (key == "NAME_TAG") ls >> current->nameTag;
+				else if (key == "DESCRIPTION_TAG") ls >> current->descriptionTag;
+				else if (key == "UNIT_TYPE_TAG") ls >> current->unitTypeTag;
+				else if (key == "AVAILABLE_TO_ALIGNMENT") current->alignments.push_back(quoted(line));
+				else if (key == "WEAPON_PLATFORM") current->platform = quoted(line);
+				else if (key == "THUMBNAIL_BITMAP") current->thumbnail = quoted(line);
+				else if (key == "RESOURCE_POINT_COST") ls >> current->cost;
+			}
+		}
+		return c;
+	}
+
+	// Saved Valhalla armies (the lobby's Save Army / Load Army), in the user folder
+	std::filesystem::path ArmyFile(const std::string& name)
+	{
+		return g_userPath / "saved" / "Armies" / PathFromUtf8(name + ".army");
+	}
+
 	// The file of a general made in the editor, in the user folder (never the game folder)
 	std::filesystem::path CustomGeneralFile(const std::string& name)
 	{
@@ -237,6 +312,8 @@ struct FrontEnd::Impl {
 	ImDrawList* drawList = nullptr;
 	std::vector<General> generals;
 	bool generalsLoaded = false;
+	Companies companies;
+	bool companiesLoaded = false;
 	// in game: the game text windows and objectives to draw, and the screen areas the windows
 	// covered (last frame), for gameWindowsWantMouse
 	std::vector<GameWindow> gameWindows;
@@ -815,6 +892,66 @@ struct FrontEnd::Impl {
 			return list;
 		});
 		// The original's AI Generals: { blueprint, name, category ("CONSCRIPT", "VETERAN", "ELITE"), portrait, biography }
+		// Valhalla: the companies { name, title, description, unitType, alignments, platform,
+		// thumbnail, cost }, the alignments and the weapon platforms (Companies.cpp)
+		lua.set_function("getCompanies", [this]() {
+			if (!companiesLoaded) {
+				companies = LoadCompanies();
+				companiesLoaded = true;
+			}
+			auto text = [this](const std::string& key) {
+				std::string s = key.empty() ? std::string() : lang.getText(key);
+				size_t pos;
+				while ((pos = s.find("\\n")) != std::string::npos)
+					s.replace(pos, 2, "\n");
+				// a description's "|Title|" first line (the title is shown above it)
+				if (!s.empty() && s[0] == '|')
+					if (const size_t end = s.find('|', 1); end != std::string::npos)
+						s = s.substr(s.find_first_not_of(" \n", end + 1) == std::string::npos ? s.size() : s.find_first_not_of(" \n", end + 1));
+				return s;
+			};
+			sol::table list = lua.create_table();
+			for (const Company& c : companies.list) {
+				sol::table alignments = lua.create_table();
+				for (const std::string& a : c.alignments)
+					alignments.add(a);
+				list.add(lua.create_table_with("name", c.name, "title", c.nameTag.empty() ? c.name : text(c.nameTag),
+					"description", text(c.descriptionTag), "unitType", text(c.unitTypeTag), "alignments", alignments,
+					"platform", c.platform, "thumbnail", c.thumbnail, "cost", c.cost));
+			}
+			sol::table alignments = lua.create_table(), platforms = lua.create_table();
+			for (const std::string& a : companies.alignments)
+				alignments.add(a);
+			for (const std::string& p : companies.platforms)
+				platforms.add(p);
+			return std::make_tuple(list, alignments, platforms);
+		});
+		// Save Army / Load Army: "<alignment>\n<company>\n<company>..." under a name
+		lua.set_function("saveArmy", [](const std::string& name, const std::string& text) {
+			if (name.empty() || name.find_first_of("\\/:*?\"<>|") != std::string::npos)
+				return false;
+			std::error_code ec;
+			std::filesystem::create_directories(ArmyFile(name).parent_path(), ec);
+			FILE* f = _wfopen(ArmyFile(name).wstring().c_str(), L"wb");
+			if (!f)
+				return false;
+			fwrite(text.data(), 1, text.size(), f);
+			fclose(f);
+			return true;
+		});
+		lua.set_function("loadArmy", [](const std::string& name) { return ReadSmallFile(ArmyFile(name), 65536); });
+		lua.set_function("listArmies", [this]() {
+			sol::table list = lua.create_table();
+			std::error_code ec;
+			std::vector<std::string> names;
+			for (const auto& e : std::filesystem::directory_iterator(g_userPath / "saved" / "Armies", ec))
+				if (e.path().extension() == ".army")
+					names.push_back(PathToUtf8(e.path().stem()));
+			std::sort(names.begin(), names.end());
+			for (const std::string& n : names)
+				list.add(n);
+			return list;
+		});
 		lua.set_function("getGenerals", [this]() {
 			if (!generalsLoaded) {
 				generals = LoadGenerals();

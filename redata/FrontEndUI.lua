@@ -959,6 +959,11 @@ local function slotsRequest()
 		elseif slot.type == "empty" then parts[i] = "E"
 		else parts[i] = "A:" .. (slot.general or "") end
 		parts[i] = parts[i] .. ";c" .. (slot.colour or 0) .. ";t" .. (slot.team or 0)
+		-- Valhalla: the army enlisted (the human's from the Army Enlistment tab, a guest's as it sent it)
+		if skirmish.settings.mode == 1 then
+			if slot.type == "human" then parts[i] = parts[i] .. (skirmish.armyField or "")
+			elseif slot.type == "guest" and slot.army and #slot.army > 0 then parts[i] = parts[i] .. ";v" .. table.concat(slot.army, ",") end
+		end
 		-- an AI's Lua AI (LuaAI\<name>.lua)
 		if slot.type == "ai" and slot.aiScript and slot.aiScript ~= "" then parts[i] = parts[i] .. ";s" .. slot.aiScript end
 	end
@@ -976,6 +981,11 @@ local function playersTab()
 	local rows = {}
 	for i, slot in ipairs(slots) do
 		local text, colour = slotText(slot)
+		-- Valhalla: the points of the army each human enlisted (the original's Points column)
+		if skirmish.settings.mode == 1 and (slot.type == "human" or slot.type == "guest") then
+			local army = slot.type == "human" and skirmish.army or { alignment = "", list = slot.army or {} }
+			text = text .. "  [" .. T("FRONT_END_CHAT_POINTS") .. " " .. (army.alignment == "Random" and "?" or tostring(skirmishArmyCost(army.list))) .. "]"
+		end
 		rows[i] = { i .. "  " .. text, colour }
 	end
 	-- tall enough for all 8 positions without scrolling (8 rows of 16, the list's 8 of margin)
@@ -1487,7 +1497,14 @@ local function handleGuestRequests()
 		for _, r in ipairs(g.requests or {}) do
 			local what, value = string.match(r, "^(%a+) (%d+)$")
 			value = tonumber(value)
-			if what == "slot" then
+			local armyText = string.match(r, "^army ?(.*)$")
+			if armyText then
+				local army = {}
+				for name in string.gmatch(armyText, "[^,]+") do army[#army + 1] = name end
+				for _, slot in ipairs(skirmish.slots) do
+					if slot.type == "guest" and slot.guest == g.id then slot.army = army end
+				end
+			elseif what == "slot" then
 				local target = skirmish.slots[value]
 				if target and (target.type == "ai" or target.type == "empty") then
 					for _, other in ipairs(skirmish.slots) do
@@ -1514,9 +1531,14 @@ end
 -- Multiplayer host: the lobby as text for the guests ("level\nH|name|colour|team|ready\n...")
 local lastLobbyText = nil
 local function sendLobbyState()
-	local lines = { levelTitle(skirmish.level) }
+	local valhalla = skirmish.settings.mode == 1
+	local lines = { levelTitle(skirmish.level) .. (valhalla and ("\tV" .. skirmish.settings.resourcePoints) or "") }
 	for _, slot in ipairs(skirmish.slots) do
 		local text = slotText(slot)
+		if valhalla and (slot.type == "human" or slot.type == "guest") then
+			local army = slot.type == "human" and skirmish.army or { alignment = "", list = slot.army or {} }
+			text = text .. " [" .. (army.alignment == "Random" and "?" or tostring(skirmishArmyCost(army.list))) .. "]"
+		end
 		local kind = ({ human = "H", guest = "G", ai = "A", empty = "E" })[slot.type] or "E"
 		local ready = (slot.type == "guest" and skirmish.ready[slot.guest]) and 1 or 0
 		lines[#lines + 1] = kind .. "|" .. string.gsub(text, "[|\n]", " ") .. "|" .. (slot.colour or 0) .. "|" .. (slot.team or 0) .. "|" .. ready
@@ -1556,12 +1578,201 @@ local function offerRow(x, y)
 	end
 end
 
+---------------------------------------------------------------------------- Valhalla armies
+-- The lobby's Army Enlistment (WKB.exe's Armies tab): an alignment (the five and Random), the
+-- companies it may enlist (Companies.cpp), filtered by weapon platform, enlisted against the
+-- Resource Points (each one's RESOURCE_POINT_COST; a company may be enlisted more than once).
+-- At the start each enlisted company's PLAYER_START_SEQUENCE runs on the player (";v" in the
+-- slots). Random: an alignment and an army picked at random within the points, at the start.
+local ALIGNMENT_KEYS = { ["Pagan"] = "PAGAN", ["Pagan Renaissance"] = "PAGAN_RENAISSANCE", ["Renaissance"] = "RENAISSANCE",
+	["Imperial Renaissance"] = "IMPERIAL_RENAISSANCE", ["Imperial"] = "IMPERIAL", ["Random"] = "RANDOM" }
+local PLATFORM_FILTERS = { { "ALL", nil }, { "HI", "Heavy Infantry" }, { "LI", "Light Infantry" },
+	{ "HC", "Heavy Cavalry" }, { "LC", "Light Cavalry" }, { "MISC", "Miscellaneous" } }
+local companyList, companyAlignments = nil, nil
+local function companies()
+	if not companyList then
+		companyList, companyAlignments = getCompanies()
+	end
+	return companyList, companyAlignments
+end
+local function companyByName(name)
+	for i, c in ipairs(companies()) do if c.name == name then return c, i end end
+end
+local function availableTo(c, alignment)
+	for _, a in ipairs(c.alignments) do if a == alignment then return true end end
+	return false
+end
+local function armyCost(list)
+	local total = 0
+	for _, name in ipairs(list) do local c = companyByName(name); total = total + (c and c.cost or 0) end
+	return total
+end
+-- the army a "Random" alignment gets: a random one of the five, then random companies of it
+-- while the points last
+local function randomArmy(budget)
+	local list, aligns = companies()
+	local choices = {}
+	for _, a in ipairs(aligns) do if a ~= "Random" then choices[#choices + 1] = a end end
+	if #choices == 0 then return {} end
+	local alignment = choices[math.random(#choices)]
+	local army, left = {}, budget
+	for _ = 1, 200 do
+		local affordable = {}
+		for _, c in ipairs(list) do if availableTo(c, alignment) and c.cost > 0 and c.cost <= left then affordable[#affordable + 1] = c end end
+		if #affordable == 0 then break end
+		local c = affordable[math.random(#affordable)]
+		army[#army + 1] = c.name
+		left = left - c.cost
+	end
+	return army
+end
+
+skirmish.army = { alignment = "Pagan", list = {} }
+local armyState = { companies = { selected = 1, scroll = 0 }, chosen = { selected = 1, scroll = 0 },
+	platform = 1, saveName = { text = "" }, saved = { selected = 1, scroll = 0 } }
+
+-- army: { alignment, list }; budget: the Resource Points; returns whether the army changed
+local function armyPanel(army, budget)
+	local list, aligns = companies()
+	local changed = false
+	local spent = armyCost(army.list)
+	-- the alignments
+	panel(X(20), Y(88), L(408), L(260))
+	for i, a in ipairs(aligns) do
+		local key = "FRONT_END_ARMIES_ALIGNMENT_" .. (ALIGNMENT_KEYS[a] or "RANDOM")
+		if button(T(key), X(28), Y(96) + (i - 1) * L(40), L(392), L(34), true, army.alignment == a) and army.alignment ~= a then
+			army.alignment = a
+			-- the companies the new alignment can't have go
+			local kept = {}
+			for _, name in ipairs(army.list) do
+				local c = companyByName(name)
+				if c and availableTo(c, a) then kept[#kept + 1] = name end
+			end
+			army.list = kept
+			changed = true
+		end
+	end
+	-- the weapon platforms
+	panel(X(20), Y(356), L(408), L(260))
+	for i, f in ipairs(PLATFORM_FILTERS) do
+		if button(T("FRONT_END_ARMIES_WEAPON_PLATFORM_" .. f[1]), X(28), Y(364) + (i - 1) * L(40), L(392), L(34), true, armyState.platform == i) then
+			armyState.platform = i
+		end
+	end
+	-- the points left
+	panel(X(20), Y(624), L(408), L(60))
+	local left = budget - spent
+	local pointsText = string.gsub(T("FRONT_END_ARMIES_RESOURCE_POINTS"), "%%d", tostring(left))
+	centredText(FONT_BUTTON, pointsText, X(20), Y(624), L(408), L(60), left < 0 and 0xFF5050FF or YELLOW)
+	-- the companies of the alignment and platform
+	local shown, rows = {}, {}
+	local isRandom = army.alignment == "Random"
+	for _, c in ipairs(list) do
+		local platform = PLATFORM_FILTERS[armyState.platform][2]
+		if not isRandom and availableTo(c, army.alignment) and (platform == nil or c.platform == platform) then
+			shown[#shown + 1] = c
+			rows[#rows + 1] = { c.title .. "  (" .. c.cost .. ")", c.cost <= left and WHITE or GREY }
+		end
+	end
+	drawText(FONT_BUTTON, X(440), Y(90), T("FRONT_END_ARMIES_COMPANIES"), WHITE, S)
+	panel(X(436), Y(118), L(560), L(500))
+	local activated = listBox(armyState.companies, rows, X(438), Y(120), L(556), L(496))
+	local sel = shown[armyState.companies.selected]
+	if isRandom then
+		centredText(FONT_LIST, T("FRONT_END_ARMIES_ALIGNMENT_RANDOM"), X(436), Y(330), L(560), L(30), GREY)
+	end
+	-- the chosen units
+	drawText(FONT_BUTTON, X(1008), Y(90), T("FRONT_END_ARMIES_CHOSEN_UNITS"), WHITE, S)
+	panel(X(1004), Y(118), L(460), L(500))
+	local chosenRows = {}
+	for _, name in ipairs(army.list) do
+		local c = companyByName(name)
+		chosenRows[#chosenRows + 1] = (c and c.title or name) .. "  (" .. (c and c.cost or 0) .. ")"
+	end
+	local disbandNow = listBox(armyState.chosen, chosenRows, X(1006), Y(120), L(456), L(496))
+	-- Enlist (or a double click on a company), Disband (or a double click on a chosen one)
+	local canEnlist = sel ~= nil and sel.cost <= left
+	if (button(T("FRONT_END_ARMIES_ENLIST"), X(436), Y(626), L(272), L(30), canEnlist) or activated) and canEnlist then
+		army.list[#army.list + 1] = sel.name
+		changed = true
+	end
+	if (button(T("FRONT_END_ARMIES_DISBAND"), X(1004), Y(626), L(272), L(30), #army.list > 0) or disbandNow) and army.list[armyState.chosen.selected] then
+		table.remove(army.list, armyState.chosen.selected)
+		armyState.chosen.selected = math.max(1, math.min(armyState.chosen.selected, #army.list))
+		changed = true
+	end
+	-- the selected company: its picture, unit type, cost and description
+	panel(X(1476), Y(88), L(430), L(596))
+	if sel then
+		if sel.thumbnail ~= "" then drawImage(sel.thumbnail, X(1491), Y(98), L(128), L(128)) end
+		local ty = Y(100)
+		for _, line in ipairs(wrapText(FONT_BUTTON, sel.title, L(260))) do
+			drawText(FONT_BUTTON, X(1630), ty, line, YELLOW, S)
+			ty = ty + L(24)
+		end
+		drawText(FONT_LIST, X(1630), ty + L(4), (string.gsub(T("FRONT_END_ARMIES_UNIT_TYPE"), "%%s", sel.unitType)), WHITE, S)
+		drawText(FONT_LIST, X(1630), ty + L(24), string.gsub(T("FRONT_END_ARMIES_RESOURCE_POINTS"), "%%d", tostring(sel.cost)), WHITE, S)
+		ty = Y(240)
+		for _, line in ipairs(wrapText(FONT_LIST, sel.description, L(400))) do
+			drawText(FONT_LIST, X(1491), ty, line, WHITE, S)
+			ty = ty + L(18)
+		end
+	end
+	-- Save Army (under the name typed) and Load Army (from the list of saved ones)
+	panel(X(20), Y(692), L(1886), L(300))
+	drawText(FONT_LIST, X(30), Y(700), T("FRONT_END_SAVE_GAME_FILENAME"), WHITE, S)
+	textField(armyState.saveName, X(30), Y(720), L(400), L(28), "\\/:*?\"<>|", 40)
+	if button(T("FRONT_END_ARMIES_SAVE_ARMY"), X(440), Y(720), L(200), L(28), armyState.saveName.text ~= "" and (#army.list > 0 or isRandom)) then
+		saveArmy(armyState.saveName.text, army.alignment .. "\n" .. table.concat(army.list, "\n"))
+	end
+	local saved = listArmies()
+	panel(X(660), Y(700), L(600), L(284))
+	local load = listBox(armyState.saved, saved, X(662), Y(702), L(596), L(280))
+	if (button(T("FRONT_END_ARMIES_LOAD_ARMY"), X(1270), Y(720), L(200), L(28), #saved > 0) or load) and saved[armyState.saved.selected] then
+		local text = loadArmy(saved[armyState.saved.selected])
+		local lines = {}
+		for line in string.gmatch(text .. "\n", "(.-)\n") do if line ~= "" then lines[#lines + 1] = line end end
+		if #lines > 0 then
+			army.alignment = lines[1]
+			army.list = {}
+			for i = 2, #lines do if companyByName(lines[i]) then army.list[#army.list + 1] = lines[i] end end
+			armyState.saveName.text = saved[armyState.saved.selected]
+			changed = true
+		end
+	end
+	return changed
+end
+
+function skirmishArmyCost(list) return armyCost(list) end
+
+-- An army as the slots carry it: ";v<company>,<company>,..." (Random: picked now)
+local function armySlotField(army, budget)
+	local list = army.list
+	if army.alignment == "Random" then list = randomArmy(budget) end
+	if #list == 0 then return "" end
+	return ";v" .. table.concat(list, ",")
+end
+-- the companies of an army (Random: picked now)
+function armySlotList(army, budget)
+	if army.alignment == "Random" then return randomArmy(budget) end
+	return army.list
+end
+local function armyReady(army)
+	return army ~= nil and (army.alignment == "Random" or #army.list > 0)
+end
+
 local function drawLobby(multiplayer)
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
-	skirmish.tab = tabs({ T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }, skirmish.tab, X(8), Y(50), L(30))
+	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }
+	-- Valhalla: the Army Enlistment tab
+	local valhalla = skirmish.settings.mode == 1
+	if valhalla then labels[4] = T("FRONT_END_LOBBY_ARMIES") elseif skirmish.tab == 4 then skirmish.tab = 1 end
+	skirmish.tab = tabs(labels, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
-	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab() else settingsTab() end
+	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab()
+	elseif skirmish.tab == 4 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
+	else settingsTab() end
 	local humans = 0
 	local canStart = skirmish.level ~= nil
 	for _, slot in ipairs(skirmish.slots) do
@@ -1570,6 +1781,18 @@ local function drawLobby(multiplayer)
 		if slot.type == "guest" and not (guestById(slot.guest) and skirmish.ready[slot.guest]) then canStart = false end
 	end
 	canStart = canStart and humans == 1
+	-- Valhalla: every human player has an army (WKB.exe's "All players must enlist armies")
+	if valhalla then
+		local enlisted = true
+		for _, slot in ipairs(skirmish.slots) do
+			if slot.type == "human" and not armyReady(skirmish.army) then enlisted = false end
+			if slot.type == "guest" and not (slot.army and #slot.army > 0) then enlisted = false end
+		end
+		if not enlisted then
+			canStart = false
+			drawText(FONT_LIST, X(1170), Y(1036), T("FRONT_END_CHAT_ARMIES_NOT_ENLISTED"), 0xFF5050FF, S)
+		end
+	end
 	if multiplayer then
 		-- every guest needs a position, or watches (spectators allowed, up to their number)
 		local unplaced = 0
@@ -1585,6 +1808,7 @@ local function drawLobby(multiplayer)
 	end
 	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
 		settingsRequests()
+		skirmish.armyField = valhalla and armySlotField(skirmish.army, skirmish.settings.resourcePoints) or ""
 		slotsRequest()
 		request(multiplayer and "start_multiplayer" or "start", skirmish.level)
 	end
@@ -1630,6 +1854,10 @@ Screens.mpguest = {
 		local state = getLobbyState()
 		local lines = {}
 		for line in string.gmatch(state .. "\n", "(.-)\n") do lines[#lines + 1] = line end
+		-- a Valhalla game: the host's Resource Points after the title ("<map>\tV<points>")
+		local valhallaPoints = lines[1] and tonumber(string.match(lines[1], "\tV(%d+)$"))
+		if lines[1] then lines[1] = string.gsub(lines[1], "\t.*$", "") end
+		if not valhallaPoints then mpGuestArmyOpen = false end
 		panel(X(20), Y(130), L(930), L(870))
 		if status == "seats" then
 			-- the game is running: a place an AI plays or whose human left, or watching
@@ -1697,7 +1925,21 @@ Screens.mpguest = {
 		elseif status == "connected" then
 			drawText(FONT_LIST, X(32), Y(140), "Waiting for the host ...", GREY, S)
 		end
-		chatPanel(X(960), Y(130), L(942), L(870))
+		-- Valhalla: the guest's own army (Army Enlistment), sent to the host as it changes
+		if mpGuestArmyOpen and valhallaPoints then
+			panel(X(8), Y(80), L(1907), L(940), true)
+			if armyPanel(skirmish.army, valhallaPoints) or not mpGuestArmySent then
+				local list = skirmish.army.alignment == "Random" and armySlotList(skirmish.army, valhallaPoints) or skirmish.army.list
+				request("lobby_request", "army " .. table.concat(list, ","))
+				mpGuestArmySent = true
+			end
+		else
+			chatPanel(X(960), Y(130), L(942), L(870))
+		end
+		if valhallaPoints and button(T("FRONT_END_LOBBY_ARMIES"), X(469), Y(1032), L(182), L(24)) then
+			mpGuestArmyOpen = not mpGuestArmyOpen
+			mpGuestArmySent = false
+		end
 		-- Ready: the host starts once every guest is
 		if button(mpGuestReady and "Not ready" or "Ready", X(669), Y(1032), L(182), L(24), status == "connected" and state ~= "") then
 			request("lobby_request", "ready " .. (mpGuestReady and 0 or 1))
@@ -3206,7 +3448,7 @@ function FE_Open(name)
 		local settings
 		tab, settings = string.match(tab, "^([^:]*):?(.*)$")
 		for k, v in string.gmatch(settings, "(%w+)=(%-?%d+)") do skirmish.settings[k] = tonumber(v) end
-		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or 1
+		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or (tab == "army") and 4 or 1
 	end
 	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a
 	-- place or after 20 seconds alone
