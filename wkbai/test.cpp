@@ -7649,6 +7649,77 @@ void Test_Disguises()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Minimap alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP) on 4 Peaks: only the
+// players listed get them, with their colour, seconds and circles; they end on time
+void Test_MinimapAlerts()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(10);
+	ServerGameObject* A = server.findObject(1027);
+	ServerGameObject* B = server.findObject(1030);
+	if (!A || !B) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	// Attacking and Death.cpp's: a red dot for 8 s on the player's own minimap
+	run(A, "SHOW_BLINKING_DOT_ON_MINIMAP LOCATION_OF FINDER_SELF COLOUR_RED CONSTANT 8 FINDER_PLAYER");
+	// Charm of Madness's false alarm: B's colour, to A
+	run(B, "SHOW_BLINKING_DOT_ON_MINIMAP LOCATION_OF FINDER_SELF PLAYER_COLOUR FINDER_SELF CONSTANT 1 FINDER_SPECIFIC_ID 1027");
+	// Fire.cpp-like: orange circles, 1 s, 3 of them, to B
+	run(B, "COLLAPSING_CIRCLE_ON_MINIMAP LOCATION_OF FINDER_SELF COLOUR_ORANGE CONSTANT 1 CONSTANT 3 FINDER_PLAYER");
+	step(3);
+	const auto& alertsA = clientA.minimapAlerts;
+	const auto& alertsB = clientB.minimapAlerts;
+	printf("UNITTEST alerts: A %zu, B %zu\n", alertsA.size(), alertsB.size());
+	check(alertsA.size() == 2 && alertsB.size() == 1, "A got its two dots, B its circles");
+	if (alertsA.size() == 2) {
+		check(!alertsA[0].circle && alertsA[0].colour == 0xFF2020 && alertsA[0].seconds == 8.0f
+			&& std::abs(alertsA[0].x - A->position.x) < 0.01f, "the red dot: 8 s, at A's position");
+		check(alertsA[1].colour == (Server::ALERT_PLAYER_COLOUR | (uint32_t)B->color), "the false alarm in B's colour");
+	}
+	if (alertsB.size() == 1)
+		check(alertsB[0].circle && alertsB[0].circles == 3 && alertsB[0].colour == 0xFF9010 && alertsB[0].seconds == 1.0f,
+			"the orange circles: 3 in 1 s");
+	// they end on time (1.5 s on: the 1 s ones gone, the 8 s one left)
+	step(75);
+	check(alertsA.size() == 1 && alertsA[0].seconds == 8.0f && alertsB.empty(), "after 1.5 s only the 8 s dot is left");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Valhalla's Army Enlistment: the companies read; a human's enlisted army (the lobby's ";v")
 // mustered at its Manor on level start (Valhalla Mode.cpp)
 void Test_ValhallaArmy()
@@ -8021,6 +8092,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ValhallaArmy, "Valhalla army: the companies read, an enlisted army mustered at the start"},
 {Test_HotKeys, "The original's keys: a selection key picks the nearest of its kind; a patrol there and back"},
 {Test_Disguises, "Disguises and fog reveals: an enemy unit seen as a peasant, unmasked, dropped; revealed through the fog for a time"},
+{Test_MinimapAlerts, "Minimap alerts: blinking dots and collapsing circles to the players listed, with colour and time"},
 };
 
 void LaunchTest()

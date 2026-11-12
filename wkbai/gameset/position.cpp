@@ -98,7 +98,10 @@ struct PDCentreOfMap : PositionDeterminer {
 	virtual OrientedPosition eval(ScriptContext* ctx) override {
 		Vector3 pos;
 		std::tie(pos.x, pos.z) = Server::instance->terrain->getPlayableArea();
-		pos.y = Server::instance->terrain->getHeight(pos.x, pos.z);
+		// the middle of the playable area (it was its far corner, off the map)
+		pos.x *= 0.5f;
+		pos.z *= 0.5f;
+		pos.y =Server::instance->terrain->getHeight(pos.x, pos.z);
 		return { pos };
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {

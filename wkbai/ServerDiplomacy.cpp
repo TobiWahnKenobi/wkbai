@@ -296,3 +296,17 @@ void Server::sendDisguiseState(int clientIndex)
 		sendToClient(clientIndex, msg);
 	}
 }
+
+void Server::sendMinimapAlert(ServerGameObject* player, bool circle, const Vector3& position, uint32_t colour, float seconds, int circles)
+{
+	if (!player || player->clientIndex < 0)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_MINIMAP_ALERT };
+	msg.writeUint8(circle ? 1 : 0);
+	msg.writeFloat(position.x);
+	msg.writeFloat(position.z);
+	msg.writeUint32(colour);
+	msg.writeFloat(seconds);
+	msg.writeUint8((uint8_t)std::clamp(circles, 1, 20));
+	sendTo(player, msg);
+}

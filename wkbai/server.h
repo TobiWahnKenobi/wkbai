@@ -454,6 +454,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::vector<FogReveal> fogReveals;
 	// a joining or loading client's disguises and reveals
 	void sendDisguiseState(int clientIndex);
+	// SHOW_BLINKING_DOT_ON_MINIMAP / COLLAPSING_CIRCLE_ON_MINIMAP on that player's minimap (only
+	// the moment: not saved). colour: 0xRRGGBB, or ALERT_PLAYER_COLOUR | the player colour index
+	static constexpr uint32_t ALERT_PLAYER_COLOUR = 0xFF000000;
+	void sendMinimapAlert(ServerGameObject* player, bool circle, const Vector3& position, uint32_t colour, float seconds, int circles);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	// The mission objectives on a player's screen (its client's objectives window)
 	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);

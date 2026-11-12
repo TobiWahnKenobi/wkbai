@@ -146,6 +146,10 @@ enum NetClientMessages {
 	// REVEAL_FOG_OF_WAR for this client's player: the object id (32 bits), the seconds (float, 0:
 	// for good), the radius in 5 m tiles (float)
 	NETCLIMSG_FOG_REVEAL,
+	// a minimap alert for this client's player (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP):
+	// circle (8 bits), x and z (floats), the colour (32 bits, Server::sendMinimapAlert), the seconds
+	// (float), the circles (8 bits)
+	NETCLIMSG_MINIMAP_ALERT,
 };
 
 enum NetServerMessages {

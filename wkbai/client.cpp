@@ -42,6 +42,11 @@ void Client::tick()
 {
 	ZoneScoped;
 	timeManager.tick();
+	// the minimap alerts whose time is up
+	if (!minimapAlerts.empty()) {
+		const uint32_t now = (uint32_t)SDL_GetTicks();
+		std::erase_if(minimapAlerts, [now](const MinimapAlert& a) { return now - a.start > (uint32_t)(a.seconds * 1000.0f); });
+	}
 
 	const auto walkObj = [this](ClientGameObject *obj, auto &rec) -> void {
 		if (obj->movement.isMoving()) {
@@ -162,6 +167,7 @@ void Client::tick()
 				finishedPlayers.clear();
 				disguises.clear();
 				fogReveals.clear();
+				minimapAlerts.clear();
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
 				environmentSkyKnown = false;
@@ -442,6 +448,21 @@ void Client::tick()
 					}
 				if (!found)
 					fogReveals.push_back({ objid, until, radius });
+				break;
+			}
+			case NETCLIMSG_MINIMAP_ALERT: {
+				MinimapAlert a;
+				a.circle = br.readUint8() != 0;
+				a.x = br.readFloat();
+				a.z = br.readFloat();
+				a.colour = br.readUint32();
+				a.seconds = br.readFloat();
+				a.circles = br.readUint8();
+				a.start = (uint32_t)SDL_GetTicks();
+				if (!(a.seconds > 0.0f) || a.seconds > 120.0f)
+					a.seconds = a.circle ? 2.0f : 8.0f;
+				if (minimapAlerts.size() < 64)
+					minimapAlerts.push_back(a);
 				break;
 			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {

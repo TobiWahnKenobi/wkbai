@@ -156,6 +156,17 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// it until the game time `until` (< 0: for good), radius in 5 m tiles
 	struct FogReveal { uint32_t object; float until, radius; };
 	std::vector<FogReveal> fogReveals;
+	// the minimap alerts going (NETCLIMSG_MINIMAP_ALERT): a blinking dot or collapsing circles at
+	// (x, z), colour 0xRRGGBB or 0xFF0000nn (player colour nn), from SDL tick `start`
+	struct MinimapAlert {
+		bool circle = false;
+		float x = 0, z = 0;
+		uint32_t colour = 0xFFFFFF;
+		float seconds = 1;
+		int circles = 1;
+		uint32_t start = 0;
+	};
+	std::vector<MinimapAlert> minimapAlerts;
 	struct DiplomacyButton {
 		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
 		std::string tooltip;

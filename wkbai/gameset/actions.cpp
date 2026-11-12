@@ -1437,6 +1437,56 @@ struct ActionSendChatMessage : Action {
 	}
 };
 
+// SHOW_BLINKING_DOT_ON_MINIMAP <position> <colour> <seconds> <players> (WKB.exe 0x497740, message
+// 0x7b) and COLLAPSING_CIRCLE_ON_MINIMAP <position> <colour> <seconds> <circles> <players>
+// (0x4773f0, 0xc9: the circles' count rounded to a whole number): a fight, a fire, Charm of
+// Madness's false alarms, Valhalla's flags on those players' minimaps.
+// The colour: COLOUR_<name> or PLAYER_COLOUR <finder> (the first object's player's colour).
+struct ActionMinimapAlert : Action {
+	bool circle;
+	ActionMinimapAlert(bool circle) : circle(circle) {}
+	std::unique_ptr<PositionDeterminer> position;
+	uint32_t colour = 0xFFFFFF;
+	std::unique_ptr<ObjectFinder> colourOf, players;
+	std::unique_ptr<ValueDeterminer> seconds, count;
+	virtual void run(SrvScriptContext* ctx) override {
+		const Vector3 pos = position->eval(ctx).position;
+		uint32_t c = colour;
+		if (colourOf) {
+			c = Server::ALERT_PLAYER_COLOUR; // the player colour index in the low byte
+			for (ServerGameObject* obj : colourOf->eval(ctx))
+				if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer()) {
+					c |= (uint32_t)player->color & 0xFF;
+					break;
+				}
+		}
+		const float s = seconds->eval(ctx);
+		const int n = circle && count ? (int)count->eval(ctx) : 1;
+		for (ServerGameObject* p : players->eval(ctx))
+			if (ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer())
+				ctx->server->sendMinimapAlert(player, circle, pos, c, s, n);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		position.reset(PositionDeterminer::createFrom(gsf, gs));
+		const std::string word = gsf.nextString();
+		static const std::pair<const char*, uint32_t> named[] = {
+			{ "COLOUR_BLACK", 0x000000 }, { "COLOUR_BLUE", 0x2060FF }, { "COLOUR_BROWN", 0x8B5A2B },
+			{ "COLOUR_CYAN", 0x00FFFF }, { "COLOUR_GREEN", 0x20E020 }, { "COLOUR_GREY", 0x909090 },
+			{ "COLOUR_MAGENTA", 0xFF00FF }, { "COLOUR_ORANGE", 0xFF9010 }, { "COLOUR_PURPLE", 0x9030D0 },
+			{ "COLOUR_RED", 0xFF2020 }, { "COLOUR_WHITE", 0xFFFFFF }, { "COLOUR_YELLOW", 0xFFFF20 } };
+		if (word == "PLAYER_COLOUR")
+			colourOf.reset(ReadFinder(gsf, gs));
+		else
+			for (const auto& [name, rgb] : named)
+				if (word == name)
+					colour = rgb;
+		seconds.reset(ReadValueDeterminer(gsf, gs));
+		if (circle)
+			count.reset(ReadValueDeterminer(gsf, gs));
+		players.reset(ReadFinder(gsf, gs));
+	}
+};
+
 // ADOPT_APPEARANCE_FOR <class> "<blueprint>" "<subtype>" "<appearance>" <finder>: the objects look
 // like that to their players' enemies (Espionage.cpp: a spy as a peasant), until unmasked
 struct ActionAdoptAppearanceFor : Action {
@@ -1994,8 +2044,6 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
 		// Below are ignored actions (that should not affect gameplay very much)
 	case Tags::ACTION_STOP_SOUND:
-	case Tags::ACTION_COLLAPSING_CIRCLE_ON_MINIMAP:
-	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP:
 	case Tags::ACTION_ENABLE_GAME_INTERFACE:
 	case Tags::ACTION_DISABLE_GAME_INTERFACE:
 	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:
@@ -2016,6 +2064,8 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER: action = new ActionAnswerDiplomaticOffer(false); break;
 	case Tags::ACTION_SEND_CHAT_MESSAGE: action = new ActionSendChatMessage; break;
 	case Tags::ACTION_ADOPT_APPEARANCE_FOR: action = new ActionAdoptAppearanceFor; break;
+	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP: action = new ActionMinimapAlert(false); break;
+	case Tags::ACTION_COLLAPSING_CIRCLE_ON_MINIMAP: action = new ActionMinimapAlert(true); break;
 	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR: action = new ActionAdoptDefaultAppearanceFor; break;
 	case Tags::ACTION_REVEAL_FOG_OF_WAR: action = new ActionRevealFogOfWar; break;
 	case Tags::ACTION_SET_CHAT_PERSONALITY: action = new ActionSetChatPersonality; break;

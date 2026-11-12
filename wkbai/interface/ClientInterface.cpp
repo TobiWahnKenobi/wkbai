@@ -327,6 +327,38 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		}
 		drawList->PopClipRect();
 	}
+	// the scripts' alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP): a dot
+	// blinking twice a second for its seconds; circles shrinking onto the place one after another
+	// within its seconds
+	if (!client->minimapAlerts.empty()) {
+		const uint32_t now = SDL_GetTicks();
+		std::erase_if(client->minimapAlerts, [now](const Client::MinimapAlert& a) { return now - a.start > (uint32_t)(a.seconds * 1000.0f); });
+		drawList->PushClipRect(p0, p1, true);
+		const float scale = std::max(1.0f, std::min(w, h) / 200.0f);
+		for (const Client::MinimapAlert& a : client->minimapAlerts) {
+			uint32_t rgb = a.colour & 0xFFFFFF;
+			if ((a.colour & 0xFF000000) == 0xFF000000) {
+				const ImU32 pc = playerColors[(a.colour & 0xFF) < 9 ? (a.colour & 0xFF) : 0];
+				rgb = (pc & 0xFF) << 16 | (pc >> 8 & 0xFF) << 8 | (pc >> 16 & 0xFF);
+			}
+			const ImU32 col = IM_COL32(rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF, 255);
+			const float t = (now - a.start) / 1000.0f;
+			const ImVec2 c = toMinimap(a.x, a.z);
+			if (!a.circle) {
+				if (std::fmod(t, 0.5f) < 0.3f) {
+					const float r = 2.5f * scale;
+					drawList->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), col);
+					drawList->AddRect(ImVec2(c.x - r - 1, c.y - r - 1), ImVec2(c.x + r + 1, c.y + r + 1), IM_COL32(0, 0, 0, 160));
+				}
+			}
+			else {
+				const float each = a.seconds / std::max(1, a.circles);
+				const float f = std::fmod(t, each) / each; // 0..1 within this circle
+				drawList->AddCircle(c, (2.0f + 16.0f * (1.0f - f)) * scale, (col & 0x00FFFFFF) | (ImU32)(255 * std::min(1.0f, 1.5f - f)) << 24, 24, 1.5f * scale);
+			}
+		}
+		drawList->PopClipRect();
+	}
 	// a replay's events, marked for a while
 	if (replayMode) {
 		drawList->PushClipRect(p0, p1, true);
