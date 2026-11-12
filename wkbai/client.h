@@ -164,6 +164,7 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	void sendDiplomaticStatus(uint32_t player, int status);
 	void sendDiplomaticOffer(uint32_t player, int status);
 	void sendTribute(uint32_t player, int item, float amount);
+	void sendPatrol(CommonGameObject* obj, bool more, const Vector3& point);
 	// Sets a showing window's page and plays that page's ACTIVATION_SOUND
 	void setGameTextWindowPage(int gtwIndex, int page);
 	bool isMusicPlaying = false;

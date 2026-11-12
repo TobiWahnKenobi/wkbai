@@ -25,6 +25,12 @@ enum class KeyAction {
 	GroupSelect1, GroupSelect2, GroupSelect3, GroupSelect4, GroupSelect5, GroupSelect6, GroupSelect7, GroupSelect8, GroupSelect9, GroupSelect0,
 	// the game
 	OpenMenu, OpenOptions, Chat, Pause, SpeedUp, SlowDown, Objectives,
+	// the original's keys (the game set's Hot Keys.cpp): selecting by kind, the nearest first
+	SelectVillages, SelectIdlePeasants, SelectSpecialUnits, SelectBarracks, SelectStables, SelectEconomicBuildings,
+	SelectPalace, SelectBurningBuildings, SelectScouts, SelectSupplyWagons, SelectTradingPosts, SelectTowers,
+	SelectDocks, SelectPlacesOfInterest,
+	// held with a right-click: Follow, Guard, Patrol (Shift: one more point); Halt at once
+	Follow, Guard, Halt, Patrol,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
 	// the map editor

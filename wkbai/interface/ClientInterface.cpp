@@ -312,6 +312,18 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		for (const auto& [id, copy] : fogOfWar.remembered)
 			if (!fogOfWar.isBuildingSeen(copy->position))
 				drawDot(copy.get(), true);
+	// the selection keys' pings: a ring shrinking onto the object for a second and a half
+	{
+		const uint32_t now = SDL_GetTicks();
+		std::erase_if(minimapPings, [now](const auto& p) { return now - p.second > 1500; });
+		drawList->PushClipRect(p0, p1, true);
+		for (const auto& [pos, time] : minimapPings) {
+			const float t = (now - time) / 1500.0f;
+			const ImVec2 c = toMinimap(pos.x, pos.z);
+			drawList->AddCircle(c, 4.0f + 18.0f * (1.0f - t), IM_COL32(255, 255, 255, (int)(255 * (1.0f - t))), 24, 2.0f);
+		}
+		drawList->PopClipRect();
+	}
 	// a replay's events, marked for a while
 	if (replayMode) {
 		drawList->PushClipRect(p0, p1, true);
@@ -3075,6 +3087,24 @@ void ClientInterface::iter()
 			rightClickCommand = it->second;
 		}
 	}
+	// F or G held (WKB.exe's Hot Keys.cpp): the right-click follows or guards where it can
+	for (const auto& [held, name] : { std::pair(KeyAction::Follow, "Follow"), std::pair(KeyAction::Guard, "Guard") })
+		if (KeyDown(held) && !ImGui::GetIO().WantTextInput) {
+			auto it = std::find_if(availableCursorCommands.begin(), availableCursorCommands.end(),
+				[&](auto& pair) { return pair.second && client->gameSet->commands.getString(pair.second) == name; });
+			if (it != availableCursorCommands.end()) {
+				nextCursor = it->first;
+				rightClickCommand = it->second;
+			}
+		}
+	// R held: the patrol cursor (Shift: the waypoint one)
+	const bool patrolHeld = KeyDown(KeyAction::Patrol) && !ImGui::GetIO().WantTextInput && !selection.empty() && !stampdownBlueprint;
+	if (patrolHeld) {
+		static WndCursor* patrolCursor = WndCreateCursor("interface\\C_Patrol.tga");
+		static WndCursor* waypointCursor = WndCreateCursor("interface\\C_Waypoint.tga");
+		if (WndCursor* c = g_modShift ? waypointCursor : patrolCursor)
+			nextCursor = c;
+	}
 	if (!nextCursor)
 		nextCursor = arrowCursor;
 	if (nextCursor) {
@@ -3202,6 +3232,12 @@ void ClientInterface::iter()
 	if (selectionGrew || selection.size() != spaceSelection.size())
 		spaceSelection = selection;
 	std::optional<Vector3> cameraJump;
+	// a selection key's pick (hotKeySelect, the frame before): the camera goes there
+	if (hotKeyCameraTarget) {
+		cameraJump = *hotKeyCameraTarget;
+		centreCameraOn(*hotKeyCameraTarget);
+		hotKeyCameraTarget.reset();
+	}
 	size_t spaceStopCount = 0;
 	ClientGameObject* spaceStop = nullptr;
 	if ((KeyPressed(KeyAction::CameraToSelection) || spaceTestPress) && !ImGui::GetIO().WantTextInput) {
@@ -3432,7 +3468,16 @@ void ClientInterface::iter()
 		}
 	}
 
-	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
+	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT] && patrolHeld) {
+		// R held: a patrol between where each unit stands and the point (Shift: one more point
+		// of the patrol it walks), as the original's R; the order's flag at the point
+		for (ClientGameObject* obj : selection)
+			if (obj && (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+				&& obj->getPlayer() == client->clientPlayer.get())
+				client->sendPatrol(obj, g_modShift, peapos);
+		showOrderFlag(peapos, false);
+	}
+	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
 		if (stampdownBlueprint && stampdownPlayer) {
 			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand, stampdownOrientation());
 			if (stampdownFromCommand) {
@@ -3513,6 +3558,30 @@ void ClientInterface::iter()
 		if (open.is_array() && open.size() == 2 && ++diplomacyFrame == open[0].get<int>())
 			toggleDiplomacyRequested = std::clamp(open[1].get<int>() - 1, 0, 2);
 	}
+	// H: Halt for the selection (the game set's "Halt" command, as its knuckle button)
+	if (KeyPressed(KeyAction::Halt) && !ImGui::GetIO().WantTextInput)
+		if (const int halt = client->gameSet->commands.names.getIndex("Halt"); halt >= 0) {
+			const Command* cmd = &client->gameSet->commands[halt];
+			for (ClientGameObject* obj : selection)
+				if (obj && std::find(obj->blueprint->offeredCommands.begin(), obj->blueprint->offeredCommands.end(), cmd) != obj->blueprint->offeredCommands.end())
+					client->sendCommand(obj, cmd, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		}
+	// The selection keys (Hot Keys.cpp: "keys are bound to objects based on the names given in this
+	// file"): the finder "Hot Key - '<key>'" of this player; the first press selects the nearest to
+	// the camera and pings it on the minimap, the next ones go on to the next nearest
+	static const std::pair<KeyAction, const char*> hotKeys[] = {
+		{ KeyAction::SelectVillages, "Hot Key - 'V'" }, { KeyAction::SelectIdlePeasants, "Hot Key - 'I'" },
+		{ KeyAction::SelectSpecialUnits, "Hot Key - 'X'" }, { KeyAction::SelectBarracks, "Hot Key - 'B'" },
+		{ KeyAction::SelectStables, "Hot Key - 'L'" }, { KeyAction::SelectEconomicBuildings, "Hot Key - 'K'" },
+		{ KeyAction::SelectPalace, "Hot Key - 'M'" }, { KeyAction::SelectBurningBuildings, "Hot Key - 'Z'" },
+		{ KeyAction::SelectScouts, "Hot Key - 'N'" }, { KeyAction::SelectSupplyWagons, "Hot Key - 'C'" },
+		{ KeyAction::SelectTradingPosts, "Hot Key - 'T'" }, { KeyAction::SelectTowers, "Hot Key - 'Y'" },
+		{ KeyAction::SelectDocks, "Hot Key - 'U'" }, { KeyAction::SelectPlacesOfInterest, "Hot Key - 'J'" },
+	};
+	if (!ImGui::GetIO().WantTextInput && client->clientPlayer)
+		for (const auto& [action, finderName] : hotKeys)
+			if (KeyPressed(action))
+				hotKeySelect(finderName);
 	// O: the mission objectives window (the original's key, Hot Keys.cpp)
 	if (KeyPressed(KeyAction::Objectives) && client->missionObjectives >= 0)
 		toggleObjectivesRequested = true;
@@ -5347,6 +5416,52 @@ void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
 	}
 	if (!button.onClickSequence.actionList.empty())
 		client->sendGameTextWindowButtonClicked(gtwIndex, buttonIndex);
+}
+
+// A selection key: the objects of this player's finder "Hot Key - '<key>'", nearest to the camera
+// first; pressed again while its last pick is still the selection, the next one (WKB.exe's
+// Hot Keys.cpp: "Repeated keypresses will cycle through all buildings, then loop back to the
+// closest one. Pressing any keys inbetween will reset the cycle back to the beginning.")
+void ClientInterface::hotKeySelect(const char* finderName)
+{
+	const int idx = client->gameSet->objectFinderDefinitions.names.getIndex(finderName);
+	if (idx < 0)
+		return;
+	CliScriptContext ctx(client, client->clientPlayer.get());
+	ObjectFinder* finder = client->gameSet->objectFinderDefinitions[idx];
+	if (!finder)
+		return;
+	std::vector<ClientGameObject*> found;
+	for (CommonGameObject* obj : finder->eval(&ctx))
+		if (obj && !(obj->flags & ClientGameObject::fTerminated))
+			found.push_back((ClientGameObject*)obj);
+	if (found.empty())
+		return;
+	const Vector3 from = client->camera.position;
+	std::sort(found.begin(), found.end(), [&](auto* a, auto* b) {
+		const float da = (a->position - from).sqlen2xz(), db = (b->position - from).sqlen2xz();
+		return da != db ? da < db : a->id < b->id;
+	});
+	static std::string lastFinder;
+	static uint32_t lastPick = 0;
+	static size_t lastIndex = 0;
+	size_t index = 0;
+	const bool again = lastFinder == finderName && selection.size() == 1 && *selection.begin() && (*selection.begin())->id == lastPick;
+	if (again) {
+		// on from the last pick (the order by distance changes as the camera follows)
+		auto it = std::find_if(found.begin(), found.end(), [&](auto* o) { return o->id == lastPick; });
+		index = it == found.end() ? 0 : ((it - found.begin()) + 1) % found.size();
+	}
+	ClientGameObject* pick = found[index];
+	lastFinder = finderName;
+	lastPick = pick->id;
+	lastIndex = index;
+	selection.clear();
+	// (a place of interest is only shown, not selected)
+	if (pick->blueprint->bpClass != Tags::GAMEOBJCLASS_CONTAINER)
+		selection.insert(pick);
+	hotKeyCameraTarget = pick->position;
+	minimapPings.emplace_back(pick->position, (uint32_t)SDL_GetTicks());
 }
 
 void ClientInterface::saveRequested(const std::string& name)

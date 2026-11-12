@@ -34,6 +34,10 @@ enum OrderTaskState {
 };
 
 struct Order {
+	// a patrol (WKB.exe's R, the game set's ORDER "Patrol", a cycling move): the points walked in
+	// turn, the unit's own place first; patrolNext: the one it heads for
+	std::vector<Vector3> patrolPoints;
+	size_t patrolNext = 0;
 	ServerGameObject *gameObject;
 	int id, state = OTS_UNINITIALISED;
 	const OrderBlueprint *blueprint;

@@ -7456,6 +7456,92 @@ void Test_GameOverView()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// The original's keys (Hot Keys.cpp) and the patrol: on 4 Peaks, the selection key M picks the
+// player's Manor; a peasant sent on patrol 25 m away walks there and back again
+void Test_HotKeys()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	server.startLevel();
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(20);
+		}
+	};
+	step(10);
+	ClientInterface ui(&client, nullptr);
+	// M: the Manor (Palace Building) of this player
+	ui.hotKeySelect("Hot Key - 'M'");
+	ClientGameObject* picked = ui.selection.empty() ? nullptr : ui.selection.begin()->get();
+	const int palace = client.gameSet->items.names.getIndex("Palace Building");
+	check(picked && picked->getPlayer() == client.clientPlayer.get() && palace >= 0 && picked->getItem(palace) > 0,
+		"M: the player's Manor selected");
+	check(!ui.minimapPings.empty(), "M: a ping on the minimap");
+	// a peasant on patrol
+	ServerGameObject* me = server.findObject(1027);
+	ServerGameObject* peasant = nullptr;
+	auto findUnit = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (!peasant && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					peasant = c->dyncast<ServerGameObject>();
+				self(c, self);
+			}
+	};
+	findUnit(me, findUnit);
+	if (peasant)
+		printf("UNITTEST the unit sent on patrol: %s %u\n", peasant->blueprint->name.c_str(), peasant->id);
+	if (!peasant) {
+		printf("UNITTEST FAILED (no peasant)\n");
+		return;
+	}
+	const Vector3 start = peasant->position;
+	Vector3 point = start + Vector3(25.0f, 0.0f, 0.0f);
+	point.y = server.terrain ? server.terrain->getHeight(point.x, point.z) : start.y;
+	client.sendPatrol(client.findObject(peasant->id), false, point);
+	float nearPoint = 1e9f, backNearStart = 1e9f;
+	bool reached = false;
+	for (int s = 0; s < 50 * 40; s++) {
+		step(1);
+		const float dp = (peasant->position - point).len2xz(), ds = (peasant->position - start).len2xz();
+		nearPoint = std::min(nearPoint, dp);
+		if (dp < 3.0f)
+			reached = true;
+		if (reached)
+			backNearStart = std::min(backNearStart, ds);
+		if (reached && ds < 3.0f)
+			break;
+	}
+	Order* order = peasant->orderConfig.getCurrentOrder();
+	printf("UNITTEST patrol: nearest to the point %.1f m, back to the start %.1f m, order %s\n", nearPoint, backNearStart,
+		order ? server.gameSet->orders.getString(order->blueprint).c_str() : "-");
+	check(reached, "the patrolling peasant reached the point");
+	check(backNearStart < 3.0f, "and walked back to where it started");
+	check(order && order->patrolPoints.size() == 2, "still patrolling, two points");
+	// Shift+R: one more point
+	client.sendPatrol(client.findObject(peasant->id), true, start + Vector3(0.0f, 0.0f, 20.0f));
+	step(5);
+	order = peasant->orderConfig.getCurrentOrder();
+	check(order && order->patrolPoints.size() == 3, "Shift+R: a third point");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Valhalla's Army Enlistment: the companies read; a human's enlisted army (the lobby's ";v")
 // mustered at its Manor on level start (Valhalla Mode.cpp)
 void Test_ValhallaArmy()
@@ -7826,6 +7912,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameWindows, "Game windows: a province plays as a skirmish map unless from the campaign; mission objectives reach the client; text window layout and buttons"},
 {Test_Diplomacy, "Diplomacy: offers, accepting, status items and events, tributes, the AI Generals' messages, Disallow Diplomacy"},
 {Test_ValhallaArmy, "Valhalla army: the companies read, an enlisted army mustered at the start"},
+{Test_HotKeys, "The original's keys: a selection key picks the nearest of its kind; a patrol there and back"},
 };
 
 void LaunchTest()

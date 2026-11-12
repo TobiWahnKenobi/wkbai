@@ -1140,6 +1140,15 @@ void Client::sendDiplomaticOffer(uint32_t player, int status)
 	serverLink->send(msg);
 }
 
+void Client::sendPatrol(CommonGameObject* obj, bool more, const Vector3& point)
+{
+	NetPacketWriter msg(NETSRVMSG_PATROL);
+	msg.writeUint32(obj->id);
+	msg.writeUint8(more ? 1 : 0);
+	msg.writeVector3(point);
+	serverLink->send(msg);
+}
+
 void Client::sendTribute(uint32_t player, int item, float amount)
 {
 	NetPacketWriter msg(NETSRVMSG_TRIBUTE);

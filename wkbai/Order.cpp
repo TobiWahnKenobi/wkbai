@@ -114,7 +114,14 @@ Task * Order::getCurrentTask()
 void Order::advanceToNextTask()
 {
 	currentTask = (currentTask + 1) % tasks.size();
-	if (currentTask == 0 && !blueprint->cycleOrder) {
+	// a patrol: round again, to its next point
+	if (currentTask == 0 && patrolPoints.size() >= 2) {
+		patrolNext = (patrolNext + 1) % patrolPoints.size();
+		for (auto& task : tasks)
+			task->destination = patrolPoints[patrolNext];
+	}
+	// (a patrol cycles whatever order carries it)
+	if (currentTask == 0 && !blueprint->cycleOrder && patrolPoints.size() < 2) {
 		terminate();
 	}
 }
