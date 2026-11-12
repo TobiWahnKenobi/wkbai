@@ -267,6 +267,9 @@ private:
 	// (the setting "showHeroNames"), and where (the top of the model)
 	struct HeroLabel { uint32_t id; Vector3 top; };
 	std::vector<HeroLabel> heroLabels;
+	// a minimap click without Camera Snapping: the camera's way still to go, the last step's tick
+	Vector3 minimapGlide;
+	uint32_t minimapGlideTick = 0;
 	// the names over the heroes' heads, the tooltip of the unit under the mouse
 	void drawUnitHistoryOverlay();
 	CliGORef nextSelectedObjectByMesh, nextSelectedObjectBySphere;

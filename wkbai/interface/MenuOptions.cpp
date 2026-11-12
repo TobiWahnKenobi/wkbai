@@ -304,6 +304,23 @@ namespace {
 		list.push_back(slider("maxHeight", "camera", "Highest camera height", rs.maxHeight, 100.0f, 3000.0f, "%.0f"));
 		list.push_back(toggle("fixedCamera", "camera", "Fixed camera (no free look)", rs.fixedCamera));
 
+		// the original's switches kept in the settings (on or off by their default)
+		auto settingToggle = [&list](const char* key, const char* page, const char* label, bool byDefault) {
+			MenuOption o;
+			o.id = key; o.page = page; o.label = label;
+			o.type = MenuOption::TOGGLE;
+			const std::string k = key;
+			o.get = [k, byDefault]() { return g_settings.value(k, byDefault) ? 1.0f : 0.0f; };
+			o.set = [k](float v) { g_settings[k] = v != 0.0f; };
+			list.push_back(o);
+		};
+		// WKB.exe's "minimap_camera_snapping" (off by default): a click on the minimap puts the
+		// camera there at once; off, it glides there
+		settingToggle("cameraSnapping", "camera", "Camera Snapping (minimap)", false);
+		// "single_click_selects_all_military_units": off, a single click selects one unit and a
+		// double click all of its type nearby, for every unit
+		settingToggle("singleClickSelectsAll", "mouse", "Single click selects all units", true);
+
 		// Sound
 		{
 			MenuOption o;
@@ -314,6 +331,9 @@ namespace {
 		}
 		list.push_back(slider("musicVolume", "sound", "Music volume", rs.musicVolume, 0.0f, 1.0f, "%.0f%%"));
 		list.push_back(slider("effectsVolume", "sound", "Effects volume", rs.effectsVolume, 0.0f, 1.0f, "%.0f%%"));
+		// the original's 3D Sound: off, the sounds of the world play without direction (louder
+		// nearer, as before)
+		settingToggle("sound3D", "sound", "3D Sound", true);
 
 		// System
 		{
@@ -368,7 +388,8 @@ namespace {
 		// the mouse in a tooltip (both on by default)
 		for (const auto& [key, label] : { std::pair<const char*, const char*>{ "showHeroNames", "Show hero names" },
 			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" },
-			std::pair<const char*, const char*>{ "timelineChronicle", "Timeline (F7) told as a chronicle" } }) {
+			std::pair<const char*, const char*>{ "timelineChronicle", "Timeline (F7) told as a chronicle" },
+			std::pair<const char*, const char*>{ "buildingHealthBars", "Building health bars" } }) {
 			MenuOption o;
 			o.id = key; o.page = "interface"; o.label = label;
 			o.type = MenuOption::TOGGLE;

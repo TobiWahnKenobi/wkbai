@@ -430,12 +430,38 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	// Click or drag on the minimap: move the camera so it looks at that point
 	const int mx = UiMouseX(), my = UiMouseY(); // the minimap is in points
 	const bool hovered = mx >= x && mx < x + w && my >= y && my < y + h;
+	// Camera Snapping (the options, off by default as WKB.exe's "minimap_camera_snapping"): a
+	// click puts the camera there at once; off, it glides there in a third of a second. Dragging
+	// follows the mouse either way.
+	const uint32_t now = SDL_GetTicks();
 	if (hovered && g_mouseDown[SDL_BUTTON_LEFT]) {
 		// in the map part; a click on the bars goes to the nearest map edge
 		float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
 		float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
-		client->camera.position.x += targetX - lookAt.x;
-		client->camera.position.z += targetZ - lookAt.z;
+		if (g_mousePressed[SDL_BUTTON_LEFT] && !g_settings.value("cameraSnapping", false)) {
+			minimapGlide = Vector3(targetX - lookAt.x, 0.0f, targetZ - lookAt.z);
+			minimapGlideTick = now;
+		}
+		else {
+			minimapGlide = Vector3();
+			client->camera.position.x += targetX - lookAt.x;
+			client->camera.position.z += targetZ - lookAt.z;
+		}
+	}
+	else if (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f) {
+		// most of the way in a third of a second, the rest when it is under half a metre
+		const float dt = std::min(0.1f, (now - minimapGlideTick) / 1000.0f);
+		minimapGlideTick = now;
+		const float k = 1.0f - std::exp(-dt * 12.0f);
+		Vector3 move = minimapGlide * k;
+		if (minimapGlide.len2xz() < 0.5f)
+			move = minimapGlide;
+		client->camera.position.x += move.x;
+		client->camera.position.z += move.z;
+		minimapGlide.x -= move.x;
+		minimapGlide.z -= move.z;
+		if (minimapGlide.len2xz() < 1e-4f)
+			minimapGlide = Vector3();
 	}
 	return hovered;
 }
@@ -1667,6 +1693,47 @@ void ClientInterface::drawUnitHistoryOverlay()
 		}
 	}
 	heroLabels.clear();
+	// health bars above the buildings selected or under the mouse (WK1's manual; the setting
+	// "buildingHealthBars"): green to red with the hit points, over a dark frame
+	if (g_settings.value("buildingHealthBars", true)) {
+		std::vector<ClientGameObject*> shown;
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				shown.push_back(sel);
+		if (ClientGameObject* hov = nextSelectedObject.get(); hov && std::find(shown.begin(), shown.end(), hov) == shown.end())
+			shown.push_back(hov);
+		// (a building's are its "Structural Integrity" items, as the selection panel shows them)
+		static const GameSet* itemsOf = nullptr;
+		static int integrity = -1, integrityCapacity = -1;
+		if (itemsOf != client->gameSet.get()) {
+			itemsOf = client->gameSet.get();
+			integrity = itemsOf ? itemsOf->items.names.getIndex("Structural Integrity") : -1;
+			integrityCapacity = itemsOf ? itemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
+		}
+		for (ClientGameObject* obj : shown) {
+			if (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || (obj->flags & ClientGameObject::fTerminated) || integrity < 0 || integrityCapacity < 0)
+				continue;
+			const float capacity = obj->getItem(integrityCapacity);
+			if (!(capacity > 0.0f))
+				continue;
+			const float f = std::clamp(obj->getItem(integrity) / capacity, 0.0f, 1.0f);
+			Model* model = obj->getModel();
+			if (!model)
+				continue;
+			const Matrix world = obj->getWorldMatrix();
+			const Vector3 centre = model->getSphereCenter().transform(world);
+			const float radius = model->getSphereRadius() * std::max({ obj->scale.x, obj->scale.y, obj->scale.z });
+			bool inFront = false;
+			const ImVec2 at = toScreen(centre + Vector3(0.0f, radius * 0.9f, 0.0f), inFront);
+			if (!inFront)
+				continue;
+			const float w = 64.0f, h = 7.0f;
+			const ImVec2 p0(at.x - w * 0.5f, at.y - h), p1(at.x + w * 0.5f, at.y);
+			dl->AddRectFilled(ImVec2(p0.x - 1, p0.y - 1), ImVec2(p1.x + 1, p1.y + 1), IM_COL32(0, 0, 0, 200));
+			const int r = (int)(255.0f * std::min(1.0f, 2.0f * (1.0f - f))), g = (int)(255.0f * std::min(1.0f, 2.0f * f));
+			dl->AddRectFilled(p0, ImVec2(p0.x + w * f, p1.y), IM_COL32(r, g, 40, 255));
+		}
+	}
 	// the unit under the mouse: "Guillaume le Hardi · Knight · 9 kills" (the setting
 	// "showUnitNamesOnHover")
 	if (g_settings.value("showUnitNamesOnHover", true) && !ImGui::GetIO().WantCaptureMouse) {
@@ -3503,7 +3570,9 @@ void ClientInterface::iter()
 			selection.insert(nextSelectedObject);
 			const bool doubleClick = g_mouseDoubleClicked == SDL_BUTTON_LEFT;
 			const int singleClickSelectAllItem = client->gameSet->items.names.getIndex("Single Click Selects All Units Of This Type");
-			const bool selectAllOnSingleClick = singleClickSelectAllItem >= 0 && nextSelectedObject->getItem(singleClickSelectAllItem) > 0.0f;
+			// (the options' "Single click selects all units" off: one unit for every type)
+			const bool selectAllOnSingleClick = singleClickSelectAllItem >= 0 && nextSelectedObject->getItem(singleClickSelectAllItem) > 0.0f
+				&& g_settings.value("singleClickSelectsAll", true);
 			if (doubleClick ^ selectAllOnSingleClick) {
 				// select nearby units of same type
 				auto walkObj = [&](ClientGameObject* obj, const auto& rec) -> void {

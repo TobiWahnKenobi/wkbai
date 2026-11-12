@@ -192,6 +192,18 @@ struct OALSoundPlayer : SoundPlayer {
 				alSourcef(src, AL_MIN_GAIN, 0.0f);
 				alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
 				alSourcei(src, AL_SOURCE_RELATIVE, AL_FALSE);
+				// the options' 3D Sound off: at the listener, as loud as the distance makes it
+				if (!g_settings.value("sound3D", true)) {
+					const float d = std::sqrt((pos - listenerPosition).sqlen3());
+					const float nearDist = std::max(refDist, 1.0f);
+					const float gain = d <= nearDist ? 1.0f : std::clamp(nearDist / d, 0.0f, 1.0f);
+					alSourcei(src, AL_SOURCE_RELATIVE, AL_TRUE);
+					alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
+					alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume * gain);
+					sourceOwners[i] = soundOwner;
+					alSourcePlay(src);
+					break;
+				}
 				alSourcef(src, AL_REFERENCE_DISTANCE, refDist);
 				//alSourcef(src, AL_MAX_DISTANCE, maxDist);
 				Vector3 fpos = pos * Vector3(1, 1, -1);
