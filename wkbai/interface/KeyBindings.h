@@ -33,6 +33,8 @@ enum class KeyAction {
 	Follow, Guard, Halt, Patrol,
 	// Home: the last four warnings' places in turn (the minimap alerts)
 	LastWarning,
+	// agent control: the input to the person at the keyboard and back (window.cpp, AgentInput)
+	AgentTakeOver,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
 	// the map editor

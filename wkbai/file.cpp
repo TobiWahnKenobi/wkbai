@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "BuildIdentity.h"
 #include "wkbre2.h"
 #include "file.h"
 #include <functional>
@@ -825,6 +826,8 @@ std::string ModManifest()
 		if (m.enabled)
 			list.push_back({ { "id", m.id }, { "modId", m.modId }, { "name", m.name }, { "version", m.version }, { "logic", m.logicHash }, { "files", m.logicFiles } });
 	j["mods"] = list;
+	// which wkbai this is (the host's build check, Server::buildPolicy)
+	j["build"] = BuildIdentity::Json();
 	return j.dump();
 }
 

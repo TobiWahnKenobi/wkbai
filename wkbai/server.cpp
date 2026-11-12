@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "BuildIdentity.h"
+#include <random>
 #include "server.h"
 #include "util/LoadingProgress.h"
 #include <set>
@@ -590,6 +592,9 @@ std::string Server::aiSettingsText() const
 		(int)aiWaveGather, (int)aiWaveSiege, (int)aiWaveFormations, (int)aiFocusFire);
 	std::string text = buf;
 	text += "aiAdvanced=" + std::to_string(aiAdvanced) + "\n";
+	// agent control: the players an agent played (they stay agent games after loading)
+	for (const auto& [id, who] : agentPlayersEver)
+		text += "agentPlayer." + std::to_string(id) + "=" + who + "\n";
 	text += "aiLifeline=" + std::to_string((int)aiLifeline) + "\n";
 	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
 	text += "aiWar=" + std::to_string((int)aiWar) + "\n";
@@ -599,6 +604,8 @@ std::string Server::aiSettingsText() const
 	text += "aiWeather=" + std::to_string(aiWeather) + "\n";
 	text += "aiTakeOver=" + std::to_string((int)aiTakeOver) + "\n";
 	text += "modPolicy=" + std::to_string(modPolicy) + "\n";
+	text += "buildPolicy=" + std::to_string(buildPolicy) + "\n";
+	text += "allowAgents=" + std::to_string((int)allowAgents) + "\n";
 	text += "allowSpectators=" + std::to_string((int)allowSpectators) + "\n";
 	text += "maxSpectators=" + std::to_string(maxSpectators) + "\n";
 	text += "clearFogOfWar=" + std::to_string((int)clearFogOfWar) + "\n";
@@ -655,6 +662,10 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 			continue;
 		const std::string name = line.substr(0, eq);
 		const float v = (float)atof(line.c_str() + eq + 1);
+		if (name.rfind("agentPlayer.", 0) == 0) {
+			agentPlayersEver[(uint32_t)atoi(name.c_str() + 12)] = line.substr(eq + 1);
+			continue;
+		}
 		if (name.rfind("aiScript.", 0) == 0) {
 			aiScripts[(uint32_t)atoi(name.c_str() + 9)] = line.substr(eq + 1);
 			continue;
@@ -711,6 +722,8 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "cheatMode") cheatMode = v != 0;
 		else if (name == "aiTakeOver") aiTakeOver = v != 0;
 		else if (name == "modPolicy") modPolicy = (int)v;
+		else if (name == "buildPolicy") buildPolicy = (int)v;
+		else if (name == "allowAgents") allowAgents = v != 0;
 		else if (name == "allowSpectators") allowSpectators = v != 0;
 		else if (name == "maxSpectators") maxSpectators = (int)v;
 		else if (name == "clearFogOfWar") clearFogOfWar = v != 0;
@@ -784,6 +797,19 @@ bool Server::startRecording(const std::filesystem::path& folder, const std::stri
 		const uint32_t id = ref ? ref->id : 0;
 		fwrite(&id, 4, 1, f);
 	}
+	// agent control: whoever has it on as the game starts, as recorded messages (they told the
+	// server in the lobby, before the recording), so a replay shows it from the first step
+	for (size_t i = 0; i < clientInfos.size(); i++)
+		if (clientInfos[i].agent) {
+			fputc('M', f);
+			const uint8_t client = (uint8_t)i;
+			const uint8_t msg[2] = { (uint8_t)NETSRVMSG_AGENT_STATE, 1 };
+			const uint16_t length = 2;
+			fwrite(&client, 1, 1, f);
+			fwrite(&length, 2, 1, f);
+			fwrite(msg, 1, 2, f);
+		}
+	fflush(f);
 	printf("Recording the game to %s\n", PathToUtf8(folder).c_str());
 	return true;
 }
@@ -868,6 +894,10 @@ bool Server::startReplay(const std::filesystem::path& folder)
 	replayPlayedMs = 0;
 	replaySeekMs = 0;
 	replay = std::move(r);
+	// agent control: the recorded players' states only (the viewer's own isn't the game's)
+	for (ClientInfo& info : clientInfos)
+		info.agent = false;
+	sendAgentPlayers();
 	printf("Replaying %s: %zu events\n", PathToUtf8(folder).c_str(), replay->events.size());
 	return true;
 }
@@ -2440,6 +2470,7 @@ void Server::setClientPlayerControl(int clientIndex, uint32_t playerObjId)
 	if (ServerGameObject* old = clientPlayerObjects[clientIndex])
 		old->clientIndex = -1;
 	clientPlayerObjects[clientIndex] = playerObjId;
+	noteAgentPlayer(clientIndex);
 	if (ServerGameObject* player = clientPlayerObjects[clientIndex])
 		player->clientIndex = clientIndex;
 	NetPacketWriter msg{ NETCLIMSG_CONTROL_PLAYER };
@@ -2569,6 +2600,16 @@ void Server::addClient(NetLink* link)
 	clientInfos.back().awaitingState = gameSet && getLevel() && !replay;
 	// the lobby's Lock Server: no new guests (the host itself is client 0)
 	clientInfos.back().cameWhileLocked = lockServer && clientLinks.size() > 1;
+	// the build check's challenge, to every guest: random, never the same twice
+	if (clientLinks.size() > 1) {
+		std::random_device rd;
+		char hex[33];
+		snprintf(hex, sizeof(hex), "%08x%08x%08x%08x", rd(), rd(), rd(), rd());
+		clientInfos.back().buildChallenge = hex;
+		NetPacketWriter msg(NETCLIMSG_BUILD_CHALLENGE);
+		msg.writeStringZ(hex);
+		link->send(msg);
+	}
 }
 
 void Server::removeClient(NetLink* link)
@@ -2582,6 +2623,42 @@ void Server::removeClient(NetLink* link)
 	const bool takeOver = inGame && aiTakeOver && !clientInfos[clientIndex].spectator;
 	clientLinks.erase(it);
 	clientLeftGame(clientIndex, takeOver);
+	sendAgentPlayers(); // (one who left plays no more)
+}
+
+std::string Server::clientDisplayName(int clientIndex)
+{
+	if (clientIndex < 0 || (size_t)clientIndex >= clientInfos.size())
+		return "?";
+	if (!clientInfos[clientIndex].name.empty())
+		return clientInfos[clientIndex].name;
+	if ((size_t)clientIndex < clientPlayerObjects.size())
+		if (ServerGameObject* player = clientPlayerObjects[clientIndex]; player && !player->name.empty())
+			return player->name;
+	if (clientIndex == 0 && !replay)
+		return g_settings.value("playerName", std::string("Host"));
+	return "Player " + std::to_string(clientIndex + 1);
+}
+
+void Server::noteAgentPlayer(int clientIndex)
+{
+	if (clientIndex < 0 || (size_t)clientIndex >= clientInfos.size() || !clientInfos[clientIndex].agent)
+		return;
+	if ((size_t)clientIndex < clientPlayerObjects.size())
+		if (ServerGameObject* player = clientPlayerObjects[clientIndex])
+			agentPlayersEver[player->id] = clientDisplayName(clientIndex);
+}
+
+void Server::sendAgentPlayers()
+{
+	std::string text;
+	// (a replay's recorded players have no connection here)
+	for (size_t i = 0; i < clientInfos.size() && (replay || i < clientLinks.size()); i++)
+		if (clientInfos[i].agent && !clientInfos[i].refused)
+			text += clientDisplayName((int)i).substr(0, 40) + "\n";
+	NetPacketWriter msg(NETCLIMSG_AGENT_PLAYERS);
+	msg.writeStringZ(text.substr(0, 240));
+	sendToAll(msg);
 }
 
 void Server::clientLeftGame(size_t clientIndex, bool takeOver)
@@ -2691,6 +2768,16 @@ std::string Server::checkGuestMods(int clientIndex)
 		}
 	}
 	return "Your mods differ from the host's: " + why;
+}
+
+std::string Server::checkGuestBuild(int clientIndex)
+{
+	ClientInfo& info = clientInfos[clientIndex];
+	const nlohmann::json guest = nlohmann::json::parse(info.modManifest, nullptr, false);
+	const bool answerOk = info.buildAnswered && !info.buildChallenge.empty()
+		&& info.buildAnswer == BuildIdentity::ChallengeAnswer(info.buildChallenge) && !info.buildAnswer.empty();
+	return BuildIdentity::Compare(buildPolicy, BuildIdentity::Json(),
+		guest.is_object() ? guest.value("build", nlohmann::json()) : nlohmann::json(), answerOk);
 }
 
 void Server::sendModsTo(int clientIndex)
@@ -3143,6 +3230,22 @@ void Server::tick()
 	// (a player that left or never reports: checked again, and the time-out)
 	checkLoadsDone();
 	timeManager.tick();
+	// agent control's lockstep: only the steps asked for, whatever the clock
+	if (lockstep && timeManager.stepMs) {
+		timeManager.pendingMs = 0;
+		while (lockstepSteps > 0) {
+			timeManager.pendingMs = timeManager.stepMs;
+			const bool wasPaused = timeManager.paused;
+			timeManager.paused = false;
+			timeManager.step();
+			timeManager.paused = wasPaused;
+			simulate();
+			lockstepSteps--;
+			lockstepDone++;
+		}
+		network();
+		return;
+	}
 	// the simulation in fixed steps ("simStepMs"), so that it goes the same at any frame rate;
 	// while paused (or without steps) once, without moving the clock
 	if (timeManager.stepMs == 0 || timeManager.paused)
@@ -3559,19 +3662,19 @@ void Server::network()
 			if (clientIndex > 0 && gameSet && getLevel() && !clientPlayerObjects[clientIndex]
 				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
 				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
-				&& type != NETSRVMSG_MOD_MANIFEST)
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER && type != NETSRVMSG_AGENT_STATE)
 				continue;
 			if (clientIndex > 0 && clientInfos[clientIndex].refused)
 				continue;
 			// while the players load, nobody plays (the host neither): joining, talking and the loads
 			if (waitingForLoads && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST
 				&& type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_TEST && type != NETSRVMSG_TAKE_SEAT
-				&& type != NETSRVMSG_MOD_MANIFEST)
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER && type != NETSRVMSG_AGENT_STATE)
 				continue;
 			// the messages that change the game are recorded (not the joining, the lobby, the
 			// loading stages)
 			if (recording && recording->file && type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO
-				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_MOD_MANIFEST) {
+				&& type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE && type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER) {
 				recording->flushRun();
 				fputc('M', recording->file);
 				const uint8_t client = (uint8_t)clientIndex;
@@ -3580,6 +3683,23 @@ void Server::network()
 				fwrite(&length, 2, 1, recording->file);
 				fwrite(packet.data.data(), 1, length, recording->file);
 			}
+			// test runs: "commandLog": "<file>" writes every message that gives orders or changes the
+			// game (as recorded, but not the agent state, chat, pause or speed), one hex line each, to
+			// compare the commands of two runs (a person's clicks against the agent's aimed actions)
+			if (static const std::string logPath = g_settings.value("commandLog", std::string()); !logPath.empty()
+				&& type != NETSRVMSG_HELLO && type != NETSRVMSG_LOBBY_HELLO && type != NETSRVMSG_LOBBY_REQUEST && type != NETSRVMSG_LOADING_STAGE
+				&& type != NETSRVMSG_MOD_MANIFEST && type != NETSRVMSG_BUILD_ANSWER && type != NETSRVMSG_AGENT_STATE && type != NETSRVMSG_TEST
+				&& type != NETSRVMSG_PAUSE && type != NETSRVMSG_CHANGE_GAME_SPEED
+				&& type != NETSRVMSG_MUSIC_COMPLETED && type != NETSRVMSG_CAMERA_PATH_ENDED) { // (timing, not input)
+				static FILE* log = fopen(logPath.c_str(), "w");
+				if (log) {
+					fprintf(log, "client %d type %d:", clientIndex, (int)type);
+					for (unsigned char c : packet.data)
+						fprintf(log, " %02x", c);
+					fputc('\n', log);
+					fflush(log);
+				}
+			}
 			handlePacket(clientIndex, packet.data);
 		}
 	}
@@ -3587,6 +3707,60 @@ void Server::network()
 	freeDeletedObjects();
 
 	++g_diag_serverTicks;
+}
+
+// A guest's hello: the password, its mods, its build (BuildIdentity), then it is in the lobby
+void Server::lobbyHello(int clientIndex, const std::string& data)
+{
+	BinaryReader br(data.c_str() + 1);
+	// the name, then the password (a guest without one sends only its name)
+	const std::string name = br.readStringZ();
+	const size_t at = 2 + name.size();
+	const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
+	if (clientIndex > 0 && clientInfos[clientIndex].cameWhileLocked) {
+		refuseClient(clientIndex, "The server is locked");
+		return;
+	}
+	if (clientIndex > 0 && !password.empty() && given != password) {
+		refuseClient(clientIndex, "Wrong password");
+		return;
+	}
+	// its mods: the host's game logic, and what the host's mod policy allows
+	if (clientIndex > 0) {
+		const std::string why = checkGuestMods(clientIndex);
+		if (why == "sent")
+			return;
+		if (!why.empty()) {
+			refuseClient(clientIndex, why);
+			return;
+		}
+	}
+	// its build: the host's network version always, and what the host's build policy asks
+	if (clientIndex > 0) {
+		ClientInfo& info = clientInfos[clientIndex];
+		// an identical build: the hello waits for the challenge's answer
+		if (buildPolicy >= BuildIdentity::IDENTICAL && !info.buildAnswered) {
+			info.pendingHello = data;
+			return;
+		}
+		const std::string why = checkGuestBuild(clientIndex);
+		if (!why.empty()) {
+			refuseClient(clientIndex, why);
+			return;
+		}
+	}
+	clientInfos[clientIndex].name = name;
+	printf("Lobby: %s joined\n", name.c_str());
+	if (clientInfos[clientIndex].agent) {
+		NetPacketWriter chat(NETCLIMSG_TEST);
+		chat.writeStringZ(("[AGENT] " + clientDisplayName(clientIndex)).substr(0, 150) + ": agent control ON");
+		sendToAll(chat);
+	}
+	sendAgentPlayers();
+	// a running game: the host sends it the game's state and its places
+	// (QuickStartMenu::joinRunningGame)
+	if (clientIndex > 0 && gameSet && getLevel() && !replay)
+		clientInfos[clientIndex].joinedRunning = true;
 }
 
 void Server::handlePacket(int clientIndex, const std::string& data)
@@ -3640,35 +3814,42 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				checkLoadsDone();
 				break;
 			}
-			case NETSRVMSG_LOBBY_HELLO: {
-				// the name, then the password (a guest without one sends only its name)
-				const std::string name = br.readStringZ();
-				const size_t at = 2 + name.size();
-				const std::string given = data.size() > at ? std::string(data.c_str() + at) : std::string();
-				if (clientIndex > 0 && clientInfos[clientIndex].cameWhileLocked) {
-					refuseClient(clientIndex, "The server is locked");
+			case NETSRVMSG_LOBBY_HELLO:
+				lobbyHello(clientIndex, data);
+				break;
+			case NETSRVMSG_AGENT_STATE: {
+				ClientInfo& info = clientInfos[clientIndex];
+				const bool on = br.readUint8() != 0;
+				if (on && clientIndex > 0 && !allowAgents && !replay) {
+					refuseClient(clientIndex, "This game allows no agent-controlled players; turn Options > Agent control off to join");
 					break;
 				}
-				if (clientIndex > 0 && !password.empty() && given != password) {
-					refuseClient(clientIndex, "Wrong password");
+				if (info.agent == on)
 					break;
+				info.agent = on;
+				noteAgentPlayer(clientIndex);
+				// told now if it is known who it is (a guest after its hello), else at its hello
+				if (clientIndex == 0 || !info.name.empty() || replay || clientPlayerObjects[clientIndex]) {
+					NetPacketWriter chat(NETCLIMSG_TEST);
+					chat.writeStringZ(("[AGENT] " + clientDisplayName(clientIndex)).substr(0, 150) + ": agent control " + (on ? "ON" : "OFF"));
+					sendToAll(chat);
 				}
-				// its mods: the host's game logic, and what the host's mod policy allows
-				if (clientIndex > 0) {
-					const std::string why = checkGuestMods(clientIndex);
-					if (why == "sent")
-						break;
-					if (!why.empty()) {
-						refuseClient(clientIndex, why);
-						break;
-					}
+				printf("Agent control: %s turned it %s\n", clientDisplayName(clientIndex).c_str(), on ? "on" : "off");
+				sendAgentPlayers();
+				break;
+			}
+			case NETSRVMSG_BUILD_ANSWER: {
+				ClientInfo& info = clientInfos[clientIndex];
+				if (info.buildAnswered)
+					break;
+				info.buildAnswer = br.readStringZ();
+				info.buildAnswered = true;
+				// a hello waiting for it
+				if (!info.pendingHello.empty()) {
+					const std::string hello = std::move(info.pendingHello);
+					info.pendingHello.clear();
+					lobbyHello(clientIndex, hello);
 				}
-				clientInfos[clientIndex].name = name;
-				printf("Lobby: %s joined\n", name.c_str());
-				// a running game: the host sends it the game's state and its places
-				// (QuickStartMenu::joinRunningGame)
-				if (clientIndex > 0 && gameSet && getLevel() && !replay)
-					clientInfos[clientIndex].joinedRunning = true;
 				break;
 			}
 			case NETSRVMSG_MOD_MANIFEST: {

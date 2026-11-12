@@ -186,6 +186,11 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool awaitingState = false; // it joined the running game: no broadcasts before its state
 		bool cameWhileLocked = false; // connected while the lobby's Lock Server was on: refused
 		std::string modManifest, modManifestParts; // its mods (NETSRVMSG_MOD_MANIFEST)
+		// the build check: the challenge sent, the answer (NETSRVMSG_BUILD_ANSWER), a hello held
+		// until the answer came (buildPolicy IDENTICAL)
+		std::string buildChallenge, buildAnswer, pendingHello;
+		bool buildAnswered = false;
+		bool agent = false; // agent control on at this client (NETSRVMSG_AGENT_STATE)
 	};
 	std::vector<ClientInfo> clientInfos;
 
@@ -360,6 +365,27 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_NONE = 2, // no mods at all, of any kind
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
+	// agent control's harness: the simulation steps only when told ("harness.advance")
+	bool lockstep = false;
+	uint32_t lockstepSteps = 0;  // steps still to run
+	uint64_t lockstepDone = 0;   // steps run in lockstep so far
+	// Which wkbai guests must run ("buildPolicy", BuildIdentity::Policy): 0 the same network
+	// version, 1 the same version (the default), 2 an identical build (its code proved by a challenge)
+	int buildPolicy = 1;
+	// a guest's build against the policy ("" fits)
+	std::string checkGuestBuild(int clientIndex);
+	// NETSRVMSG_LOBBY_HELLO (again when a held hello's build answer comes)
+	void lobbyHello(int clientIndex, const std::string& data);
+	// Agent control ("allowAgents", on by default): guests whose game an agent plays may join;
+	// off, a guest that says so is turned away. Everyone is told who has it on
+	// (NETCLIMSG_AGENT_PLAYERS, a chat line when it changes)
+	bool allowAgents = true;
+	// every player an agent played at some time in this game (player id: name), kept by saves
+	// ("agentPlayer.<id>=<name>"), for telling agent games from people's
+	std::map<uint32_t, std::string> agentPlayersEver;
+	std::string clientDisplayName(int clientIndex);
+	void sendAgentPlayers();
+	void noteAgentPlayer(int clientIndex);
 	// a guest's mods checked at its hello: "" when it may join; a reason to turn it away; or
 	// "sent" when the host sent it its mods (it says hello again with them mounted)
 	std::string checkGuestMods(int clientIndex);

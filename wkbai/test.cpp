@@ -65,6 +65,10 @@
 #include "util/GSFileParser.h"
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
+#include "matchmaking/Matchmaking.h"
+#include <SDL3/SDL.h>
+#include "BuildIdentity.h"
+#include "AgentInput.h"
 #include "interface/ChronicleNarrator.h"
 #include "interface/FogOfWar.h"
 #include <nlohmann/json.hpp>
@@ -8410,6 +8414,328 @@ void Test_SpawnPoint()
 	fflush(stdout);
 }
 
+// Agent control's input path (AgentInput, docs/engine/agent-control.md): the agent's frames give
+// the same input state as the same events from the operating system, frame by frame; Ctrl from
+// the agent's own keys; the operating system's input dropped while the agent has it; the
+// take-over key; nothing changes with agent control off
+void Test_AgentInput()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	SDL_Init(SDL_INIT_EVENTS);
+	ResetAllKeyBindings();
+	auto resetInput = []() {
+		std::fill(std::begin(g_keyDown), std::end(g_keyDown), false);
+		std::fill(std::begin(g_mouseDown), std::end(g_mouseDown), false);
+		g_mouseX = g_mouseY = 0;
+		SDL_FlushEvents(SDL_EVENT_FIRST, SDL_EVENT_LAST);
+	};
+	// the input state after a frame (the modifiers apart: the operating system's come from its
+	// keyboard state, which pushed events don't change)
+	struct State {
+		int x, y, wheel, dbl;
+		std::string text;
+		std::vector<bool> keyDown, keyPressed, mouseDown, mousePressed, mouseReleased;
+		bool operator==(const State&) const = default;
+	};
+	auto snapshot = []() {
+		State s{ g_mouseX, g_mouseY, g_mouseWheel, g_mouseDoubleClicked, g_textTyped };
+		s.keyDown.assign(std::begin(g_keyDown), std::end(g_keyDown));
+		s.keyPressed.assign(std::begin(g_keyPressed), std::end(g_keyPressed));
+		s.mouseDown.assign(std::begin(g_mouseDown), std::end(g_mouseDown));
+		s.mousePressed.assign(std::begin(g_mousePressed), std::end(g_mousePressed));
+		s.mouseReleased.assign(std::begin(g_mouseReleased), std::end(g_mouseReleased));
+		return s;
+	};
+	auto describe = [](const State& s) {
+		std::string d = "mouse " + std::to_string(s.x) + "," + std::to_string(s.y);
+		for (int b = 1; b < 6; b++)
+			d += std::string(" b") + std::to_string(b) + (s.mouseDown[b] ? "D" : "") + (s.mousePressed[b] ? "P" : "") + (s.mouseReleased[b] ? "R" : "");
+		return d + " wheel " + std::to_string(s.wheel) + " dbl " + std::to_string(s.dbl) + " text \"" + s.text + "\"";
+	};
+	// a person's scene: a click, a double click, a box drag, a right-drag, a wheel, keys, text
+	auto scene = []() {
+		AgentInput::Click(400, 300);
+		AgentInput::Wait(2);
+		AgentInput::DoubleClick(410, 305);
+		AgentInput::Drag(100, 100, 300, 250);
+		AgentInput::Drag(500, 400, 560, 380, SDL_BUTTON_RIGHT, 4);
+		AgentInput::Wheel(-2);
+		AgentInput::Key(SDL_SCANCODE_W, true);
+		AgentInput::Wait(3);
+		AgentInput::Key(SDL_SCANCODE_W, false);
+		AgentInput::Tap(SDL_SCANCODE_P);
+		AgentInput::Text("gg wp \xc3\xa4");
+	};
+
+	// the scene's events, filled in as the agent delivers them
+	AgentInput::SetEnabled(true);
+	scene();
+	const size_t frames = AgentInput::PendingFrames();
+	std::vector<std::vector<SDL_Event>> events;
+	std::vector<std::vector<std::string>> texts;
+	std::vector<SDL_Event> f;
+	while (AgentInput::TakeFrame(f)) {
+		events.push_back(f);
+		texts.emplace_back();
+		for (const SDL_Event& e : f)
+			texts.back().push_back(e.type == SDL_EVENT_TEXT_INPUT ? e.text.text : "");
+	}
+	AgentInput::SetEnabled(false);
+	check(frames == events.size() && frames == 3 + 2 + 5 + 9 + 7 + 1 + 1 + 3 + 1 + 2 + 7,
+		"the scene in frames as a hand takes them: " + std::to_string(frames));
+
+	// (A) through the operating system's queue, agent control off
+	resetInput();
+	std::vector<State> viaSystem;
+	for (size_t i = 0; i < events.size(); i++) {
+		for (size_t j = 0; j < events[i].size(); j++) {
+			SDL_Event e = events[i][j];
+			if (e.type == SDL_EVENT_TEXT_INPUT)
+				e.text.text = texts[i][j].c_str();
+			SDL_PushEvent(&e);
+		}
+		HandleWindow();
+		viaSystem.push_back(snapshot());
+	}
+	// (B) the same scene from the agent
+	resetInput();
+	AgentInput::SetEnabled(true);
+	scene();
+	std::vector<State> viaAgent;
+	for (size_t i = 0; i < events.size(); i++) {
+		HandleWindow();
+		viaAgent.push_back(snapshot());
+	}
+	size_t firstDiff = viaSystem.size();
+	for (size_t i = 0; i < viaSystem.size() && i < viaAgent.size(); i++)
+		if (!(viaSystem[i] == viaAgent[i])) { firstDiff = i; break; }
+	check(viaSystem.size() == viaAgent.size() && firstDiff == viaSystem.size(), "the agent's scene gives the same input state as the system's, every one of "
+		+ std::to_string(viaSystem.size()) + " frames" + (firstDiff < viaSystem.size() ? " (frame " + std::to_string(firstDiff) + ": system "
+			+ describe(viaSystem[firstDiff]) + ", agent " + describe(viaAgent[firstDiff]) + ")" : ""));
+	check(viaAgent[1].mousePressed[SDL_BUTTON_LEFT] && viaAgent[2].mouseReleased[SDL_BUTTON_LEFT] && viaAgent[0].x == 400 && !viaAgent[0].mousePressed[SDL_BUTTON_LEFT],
+		"a click: the cursor there first, pressed the frame after, released the one after that");
+	check(viaAgent[8].dbl == SDL_BUTTON_LEFT, "the double click's second press is a double click");
+	check(viaAgent[11].mouseDown[SDL_BUTTON_LEFT] && viaAgent[17].mouseDown[SDL_BUTTON_LEFT] && viaAgent[18].mouseReleased[SDL_BUTTON_LEFT]
+		&& viaAgent[18].x == 300 && viaAgent[18].y == 250, "the box drag: held over the moves, released at its end");
+	std::string typed;
+	for (const State& s : viaAgent)
+		typed += s.text;
+	check(typed == "gg wp \xc3\xa4", "the text typed, a character a frame (a two-byte one whole): \"" + typed + "\"");
+	check(AgentInput::PendingFrames() == 0, "every frame delivered");
+
+	// Ctrl from the agent's own keys: Ctrl+3 stores control group 3, a Shift+click
+	resetInput();
+	AgentInput::Tap(SDL_SCANCODE_3, KeyChord::CTRL);
+	HandleWindow();
+	check(g_modCtrl && (InputModState() & SDL_KMOD_LCTRL), "the agent holds Left Ctrl: Ctrl is held for the game and ImGui");
+	HandleWindow();
+	check(g_modCtrl && KeyPressed(KeyAction::GroupStore3) && !KeyPressed(KeyAction::GroupSelect3), "the agent's Ctrl+3 stores control group 3");
+	HandleWindow();
+	HandleWindow();
+	check(!g_modCtrl && !g_keyDown[SDL_SCANCODE_LCTRL], "Ctrl let go after the chord");
+	AgentInput::Key(SDL_SCANCODE_LSHIFT, true);
+	AgentInput::Click(50, 60);
+	AgentInput::Key(SDL_SCANCODE_LSHIFT, false);
+	bool shiftClick = false;
+	for (int i = 0; i < 5; i++) {
+		HandleWindow();
+		shiftClick |= g_mousePressed[SDL_BUTTON_LEFT] && g_modShift;
+	}
+	check(shiftClick && !g_modShift, "a Shift+click: Shift held while the button goes down, let go after");
+
+	// the operating system's input dropped while the agent has it
+	resetInput();
+	AgentInput::Move(10, 20);
+	HandleWindow();
+	auto pushSystem = [](SDL_EventType type, int a = 0, int mods = 0) {
+		SDL_Event e{};
+		e.type = type;
+		if (type == SDL_EVENT_MOUSE_MOTION) { e.motion.x = 700; e.motion.y = 500; }
+		if (type == SDL_EVENT_MOUSE_BUTTON_DOWN || type == SDL_EVENT_MOUSE_BUTTON_UP) { e.button.button = (Uint8)a; e.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN; e.button.clicks = 1; }
+		if (type == SDL_EVENT_KEY_DOWN || type == SDL_EVENT_KEY_UP) { e.key.scancode = (SDL_Scancode)a; e.key.mod = (SDL_Keymod)mods; e.key.down = type == SDL_EVENT_KEY_DOWN; }
+		SDL_PushEvent(&e);
+	};
+	pushSystem(SDL_EVENT_MOUSE_MOTION);
+	pushSystem(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_BUTTON_LEFT);
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_DELETE);
+	HandleWindow();
+	check(g_mouseX == 10 && g_mouseY == 20 && !g_mousePressed[SDL_BUTTON_LEFT] && !g_keyPressed[SDL_SCANCODE_DELETE],
+		"the agent has the input: the system's mouse move, click and Delete are dropped (the cursor stays at the agent's 10,20)");
+
+	// the take-over key: the person at the keyboard takes the input, the agent's queue waits
+	AgentInput::Button(SDL_BUTTON_LEFT, true);
+	HandleWindow();
+	check(g_mouseDown[SDL_BUTTON_LEFT], "the agent holds the left button down");
+	AgentInput::Click(80, 90);
+	const size_t waiting = AgentInput::PendingFrames();
+	const int handOvers = AgentInput::HandOverCount();
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_F12, SDL_KMOD_LCTRL | SDL_KMOD_LALT);
+	HandleWindow();
+	check(AgentInput::TakenOver() && !AgentInput::HasInput() && AgentInput::HandOverCount() == handOvers + 1, "Ctrl+Alt+F12 from the keyboard: the person takes the input over");
+	check(!g_mouseDown[SDL_BUTTON_LEFT] && !g_keyPressed[SDL_SCANCODE_F12] && !KeyPressed(KeyAction::FrameTimings),
+		"the agent's held button let go; the take-over key reaches nothing else (not Ctrl+F12's frame timings)");
+	pushSystem(SDL_EVENT_MOUSE_MOTION);
+	pushSystem(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_BUTTON_LEFT);
+	HandleWindow();
+	check(g_mouseX == 700 && g_mousePressed[SDL_BUTTON_LEFT] && AgentInput::PendingFrames() == waiting,
+		"taken over: the system's mouse works, the agent's " + std::to_string(waiting) + " frames wait");
+	pushSystem(SDL_EVENT_MOUSE_BUTTON_UP, SDL_BUTTON_LEFT);
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_F12, SDL_KMOD_LCTRL | SDL_KMOD_LALT);
+	HandleWindow();
+	check(AgentInput::HasInput() && AgentInput::PendingFrames() == waiting - 1, "the key again: the input back to the agent, its queue going on");
+	HandleWindow();
+	HandleWindow();
+	check(g_mouseReleased[SDL_BUTTON_LEFT] && g_mouseX == 80, "the agent's waiting click done at 80,90");
+	// rebound: the take-over follows the binding
+	SetKeyBinding(KeyAction::AgentTakeOver, 0, KeyChord{ SDL_SCANCODE_PAUSE, KeyChord::SHIFT });
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_F12, SDL_KMOD_LCTRL | SDL_KMOD_LALT);
+	HandleWindow();
+	check(AgentInput::HasInput(), "rebound to Shift+Pause: Ctrl+Alt+F12 is dropped like any key");
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_PAUSE, SDL_KMOD_RSHIFT);
+	HandleWindow();
+	check(AgentInput::TakenOver(), "rebound to Shift+Pause: Shift+Pause takes over");
+	ResetKeyBinding(KeyAction::AgentTakeOver);
+
+	// off: the queue gone, the system's keys as ever (Ctrl+Alt+F12 an ordinary key)
+	AgentInput::SetEnabled(false);
+	AgentInput::Click(1, 1);
+	resetInput();
+	check(!AgentInput::HasInput(), "agent control off: the agent hasn't the input");
+	pushSystem(SDL_EVENT_KEY_DOWN, SDL_SCANCODE_F12, SDL_KMOD_LCTRL | SDL_KMOD_LALT);
+	HandleWindow();
+	HandleWindow();
+	HandleWindow();
+	check(g_keyDown[SDL_SCANCODE_F12] && g_mouseX == 0 && !AgentInput::TakenOver(), "off: Ctrl+Alt+F12 reaches the game as a key; no agent click happens");
+	AgentInput::ClearQueue();
+	resetInput();
+
+	// the human limits: 120 actions a minute (one each 500 ms), a reaction delay of 300 ms
+	AgentInput::SetEnabled(true);
+	AgentInput::SetLimits(120, 0);
+	AgentInput::Click(10, 10);
+	AgentInput::Click(20, 20);
+	AgentInput::Tap(SDL_SCANCODE_P, KeyChord::CTRL);
+	std::vector<uint64_t> downs;
+	const uint64_t begin = SDL_GetTicks();
+	while (AgentInput::PendingFrames() && SDL_GetTicks() - begin < 5000) {
+		std::vector<SDL_Event> evs;
+		if (AgentInput::TakeFrame(evs))
+			for (const SDL_Event& e : evs)
+				if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_P))
+					downs.push_back(SDL_GetTicks());
+		SDL_Delay(5);
+	}
+	check(downs.size() == 3 && downs[1] - downs[0] >= 495 && downs[2] - downs[1] >= 495,
+		"120 actions a minute: two clicks and Ctrl+P at least 500 ms apart (" + std::to_string(downs.size() > 2 ? downs[1] - downs[0] : 0) + ", "
+		+ std::to_string(downs.size() > 2 ? downs[2] - downs[1] : 0) + " ms; Ctrl itself no action)");
+	AgentInput::SetLimits(0, 300);
+	const uint64_t asked = SDL_GetTicks();
+	const uint64_t firstSerial = AgentInput::QueuedFrames() + 1;
+	AgentInput::Click(30, 30);
+	AgentInput::HoldFrom(firstSerial, asked + AgentInput::ReactionMs());
+	uint64_t moved = 0;
+	while (AgentInput::PendingFrames() && SDL_GetTicks() - asked < 3000) {
+		std::vector<SDL_Event> evs;
+		if (AgentInput::TakeFrame(evs) && !moved)
+			moved = SDL_GetTicks();
+		SDL_Delay(5);
+	}
+	check(moved && moved - asked >= 295 && moved - asked < 400, "a reaction delay of 300 ms: the request's first frame " + std::to_string(moved - asked) + " ms later");
+	AgentInput::SetLimits(0, 0);
+	AgentInput::SetEnabled(false);
+	resetInput();
+	SDL_QuitSubSystem(SDL_INIT_EVENTS);
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// a function only the build identity test changes in memory (its first byte, then put back)
+#ifdef _MSC_VER
+__declspec(noinline)
+#endif
+int BuildIdentityTestTarget(int a) { return a * 7 + 3; }
+
+// The build check (BuildIdentity, Server::buildPolicy): the code hash, the challenge answers, a
+// code byte changed in memory, the policies' verdicts
+void Test_BuildIdentity()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	using namespace BuildIdentity;
+	printf("This build: %s, code %s, network %s\n", Describe().c_str(), CodeHash().c_str(), MatchmakingGameVersion());
+	check(CodeHash().size() == 64 && CodeHash().find_first_not_of("0123456789abcdef") == std::string::npos, "the code hash is a SHA-256 in hex");
+	check(std::string(Commit()) != "unknown" && strlen(Commit()) == 12, std::string("the commit from git: ") + Commit());
+	const std::string a1 = ChallengeAnswer("1234"), a2 = ChallengeAnswer("1234"), b = ChallengeAnswer("1235");
+	check(a1 == a2 && a1 != b && a1 != CodeHash() && a1.size() == 64, "the same challenge, the same answer; another challenge, another answer");
+	check(ChallengeAnswer("").empty(), "no challenge, no answer");
+#ifdef _WIN32
+	// a copy changed in memory: one byte of a function's code
+	uint8_t* code = (uint8_t*)&BuildIdentityTestTarget;
+	DWORD old = 0;
+	if (VirtualProtect(code, 1, PAGE_EXECUTE_READWRITE, &old)) {
+		const uint8_t was = code[0];
+		code[0] ^= 0x5a;
+		const std::string changed = ChallengeAnswer("1234");
+		code[0] = was;
+		VirtualProtect(code, 1, old, &old);
+		check(changed != a1 && !changed.empty(), "one byte of the code changed in memory: another answer to the same challenge");
+		check(ChallengeAnswer("1234") == a1, "the byte put back: the first answer again");
+	}
+	else
+		check(false, "VirtualProtect on the test function");
+	check(BuildIdentityTestTarget(2) == 17, "the test function still works");
+#endif
+
+	// the verdicts
+	const nlohmann::json host = Json();
+	nlohmann::json guest = host;
+	check(Compare(SAME_VERSION, host, guest, false).empty(), "the same build: fits the default policy (no answer needed)");
+	check(Compare(IDENTICAL, host, guest, true).empty(), "identical with the right answer: fits");
+	check(!Compare(IDENTICAL, host, guest, false).empty(), "identical policy, a wrong answer: turned away: " + Compare(IDENTICAL, host, guest, false));
+	guest["commit"] = "0123456789ab";
+	check(!Compare(SAME_VERSION, host, guest, false).empty() && Compare(SAME_NETWORK, host, guest, false).empty(),
+		"another commit: turned away by the default policy, fits 'any of this network version': " + Compare(SAME_VERSION, host, guest, false));
+	guest = host;
+	guest["modified"] = true;
+	guest["code"] = std::string(64, 'f');
+	check(!Compare(SAME_VERSION, host, guest, false).empty(), "the same commit, modified, other code: turned away by the default policy");
+	nlohmann::json hostModified = host, guestModified = host;
+	hostModified["modified"] = guestModified["modified"] = true;
+	check(Compare(SAME_VERSION, hostModified, guestModified, false).empty(), "both modified with the very same code (a developer's two copies): fit");
+	guest = host;
+	guest["net"] = "wkbai-net-1";
+	check(!Compare(SAME_NETWORK, host, guest, true).empty(), "another network version: turned away under every policy: " + Compare(SAME_NETWORK, host, guest, true));
+	check(!Compare(SAME_NETWORK, host, nlohmann::json(), true).empty(), "an older wkbai that doesn't say its build: turned away: " + Compare(SAME_NETWORK, host, nlohmann::json(), true));
+	const nlohmann::json manifest = nlohmann::json::parse(ModManifest(), nullptr, false);
+	check(manifest.is_object() && manifest.value("build", nlohmann::json()) == host, "the mod manifest a guest sends carries its build");
+
+	// agent control in saves: the players an agent played, through the save's settings text
+	{
+		Server a;
+		a.agentPlayersEver[1027] = "Aldric";
+		a.agentPlayersEver[1030] = "Guest Two";
+		a.allowAgents = false;
+		const std::string text = a.aiSettingsText();
+		Server b;
+		b.applyAiSettingsText(text);
+		check(b.agentPlayersEver == a.agentPlayersEver, "a save keeps the players an agent played (" + std::to_string(b.agentPlayersEver.size()) + ", names with spaces)");
+		Server c;
+		check(c.allowAgents && c.agentPlayersEver.empty(), "a new game: agent players allowed, none yet");
+		c.clientInfos.resize(3);
+		c.clientInfos[1].name = "Bob";
+		check(c.clientDisplayName(1) == "Bob" && c.clientDisplayName(2) == "Player 3", "agent announcements name the player as the lobby did, else by place");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -8484,6 +8810,8 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
 {Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
 {Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
+{Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
+{Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 };
 
 void LaunchTest()

@@ -2,11 +2,14 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "AgentUi.h"
 #include "imguiimpl.h"
 #include "imgui/imgui.h"
 #include "gfx/renderer.h"
 #include "gfx/bitmap.h"
 #include "window.h"
+#include "AgentInput.h"
+#include "AgentServer.h"
 #include <algorithm>
 #include <cstdint>
 #include <SDL3/SDL.h>
@@ -108,7 +111,7 @@ void ImGuiImpl_NewFrame()
 	io.DeltaTime = std::max((newtime - iglasttime) / 1000.f, 0.001f);
 	iglasttime = newtime;
 
-	SDL_Keymod kmod = SDL_GetModState();
+	const int kmod = InputModState();
 	io.KeyCtrl = kmod & SDL_KMOD_CTRL;
 	io.KeyShift = kmod & SDL_KMOD_SHIFT;
 	io.KeyAlt = kmod & SDL_KMOD_ALT;
@@ -119,6 +122,9 @@ void ImGuiImpl_NewFrame()
 
 void ImGuiImpl_Render(IRenderer *gfx)
 {
+	AgentInput::DrawCursorOverlay(); // the agent's cursor and its tag, while it has the input
 	ImGui::Render();
 	ImGuiImpl_RenderDrawLists(ImGui::GetDrawData(), gfx);
+	AgentServer::TakeScreenshotIfAsked(gfx); // the frame as the player sees it, if the agent asked
+	AgentUi::EndFrame(); // this frame's buttons and items: what the agent can aim at
 }

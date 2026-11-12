@@ -95,6 +95,7 @@ end
 -- A menu button; returns true when clicked
 local function button(text, x, y, w, h, enabled, selected)
 	if enabled == nil then enabled = true end
+	uiElement("button:" .. text, text, x, y, w, h, enabled) -- agent control's registry
 	local hot = enabled and hovered(x, y, w, h)
 	local suffix = ""
 	if selected or (hot and mouse.down) then suffix = "_Dep" elseif hot then suffix = "_High" end
@@ -135,6 +136,7 @@ local function tabs(labels, selected, x, y, h, enabledList)
 		local w = textWidth(FONT_BUTTON, label, S) + L(56)
 		local enabled = not enabledList or enabledList[i] ~= false
 		local hot = enabled and hovered(cx, y, w, h)
+		uiElement("tab:" .. label, label, cx, y, w, h, enabled)
 		local suffix = (i == selected) and "_Dep" or (hot and "_High" or "")
 		threeSlice(ART.tab, suffix, TAB_RIM, cx, y, w, h)
 		centredText(FONT_BUTTON, label, cx, y, w, h, (i == selected) and WHITE or (enabled and GREY or DARK_GREY))
@@ -207,6 +209,7 @@ local function listBox(state, items, x, y, w, h)
 		end
 		local text, colour = item, YELLOW
 		if type(item) == "table" then text, colour = item[1], item[2] or YELLOW end
+		uiElement("item:" .. tostring(text), tostring(text), x, ry, w, rowH, true) -- (agent control: a row by its text)
 		drawText(FONT_LIST, x + L(8), ry, text, colour, S)
 		-- more columns: { text, x from the row's left, colour }
 		if type(item) == "table" and item.columns then
@@ -1199,7 +1202,7 @@ local SETTINGS = {
 	randomiseResources = 2, kingPiece = 0, clearFogOfWar = 0, allowDiplomacy = 0, teamReconnaissance = 0,
 	barbarianTribes = 0, teamPlacement = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
-	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
+	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1, allowAgents = 1,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1222,6 +1225,7 @@ end
 -- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked
 local function roundButton(x, y, size, on, enabled)
 	local hot = enabled and hovered(x, y, size, size)
+	uiElement(on and "switch:on" or "switch:off", "", x, y, size, size, enabled)
 	local art = "Interface\\FrontEnd\\Check_Box_" .. (not enabled and "Grey" or (on and "On" or (hot and "Blank_High" or "Blank"))) .. ".tga"
 	drawImage(art, x, y, size, size)
 	return hot and mouse.released
@@ -1232,6 +1236,7 @@ end
 local stepperHold = {} -- the button held: its key, when the press began, when it steps next
 local function stepperButton(kind, key, x, y, size)
 	local hot = hovered(x, y, size, size)
+	uiElement("stepper:" .. key, kind, x, y, size, size, true)
 	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
 	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
 	local t = getTime()
@@ -1375,6 +1380,18 @@ local function settingsTab()
 		if button(MOD_POLICIES[s.modPolicy + 1], X(520), Y(900), L(424), L(34)) then
 			s.modPolicy = (s.modPolicy + 1) % 4
 			request("skirmish_setting", "modPolicy=" .. s.modPolicy)
+		end
+		-- which wkbai guests must run (BuildIdentity): the same network version at least; the same
+		-- version (commit, unmodified) by default; an identical build, its code proved by a challenge
+		local BUILD_POLICIES = { "Builds: any of this network version", "Builds: the host's version", "Builds: identical to the host's" }
+		if button(BUILD_POLICIES[s.buildPolicy + 1], X(960), Y(900), L(420), L(34)) then
+			s.buildPolicy = (s.buildPolicy + 1) % 3
+			request("skirmish_setting", "buildPolicy=" .. s.buildPolicy)
+		end
+		-- agent control: guests whose game a program plays (Options > Agent control) may join or not
+		if button(s.allowAgents ~= 0 and "Agent players: allowed" or "Agent players: not allowed", X(960), Y(944), L(420), L(34)) then
+			s.allowAgents = (s.allowAgents ~= 0) and 0 or 1
+			request("skirmish_setting", "allowAgents=" .. s.allowAgents)
 		end
 		if s.allowSpectators ~= 0 then
 			drawText(FONT_LIST, X(520), Y(988), "at most", WHITE, S)
@@ -1900,6 +1917,13 @@ local function drawLobby(multiplayer)
 	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab()
 	elseif skirmish.tab == 4 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
 	else settingsTab() end
+	-- agent control: who has it on, on every tab, in every lobby (the host's list)
+	if multiplayer then
+		local agents = getAgentPlayers()
+		if #agents > 0 then
+			drawText(FONT_LIST, X(24), Y(1040), "[AGENT] Agent control on for: " .. table.concat(agents, ", "), YELLOW, S)
+		end
+	end
 	local humans = 0
 	local canStart = skirmish.level ~= nil
 	for _, slot in ipairs(skirmish.slots) do
@@ -1976,6 +2000,8 @@ Screens.mphost = {
 		openLobby(true); lastLobbyText = nil
 		-- the host checks joining guests' mods with this while the lobby is open
 		request("skirmish_setting", "modPolicy=" .. skirmish.settings.modPolicy)
+		request("skirmish_setting", "buildPolicy=" .. skirmish.settings.buildPolicy)
+		request("skirmish_setting", "allowAgents=" .. skirmish.settings.allowAgents)
 	end,
 	draw = function() drawLobby(true) end,
 	onEscape = function() request("stop_hosting"); pop() end,
@@ -2004,6 +2030,11 @@ Screens.mpguest = {
 		if lines[1] then lines[1] = string.gsub(lines[1], "\t.*$", "") end
 		if not valhallaPoints then mpGuestArmyOpen = false end
 		panel(X(20), Y(130), L(930), L(870))
+		-- agent control: who has it on (the host's list)
+		local agents = getAgentPlayers()
+		if #agents > 0 then
+			drawText(FONT_LIST, X(28), Y(1010), "[AGENT] Agent control on for: " .. table.concat(agents, ", "), YELLOW, S)
+		end
 		if status == "seats" then
 			-- the game is running: a place an AI plays or whose human left, or watching
 			drawText(FONT_TEXT, X(32), Y(140), lines[1] or "", YELLOW, S)
@@ -2041,7 +2072,8 @@ Screens.mpguest = {
 				local kind, name, colour, team, ready = string.match(lines[i], "^(%a)|(.-)|(%d+)|(%d+)|?(%d*)$")
 				if kind then
 					local ry = Y(200) + (i - 2) * L(22)
-					local mine = kind == "G" and name == me
+					-- (an agent-controlled guest's name carries " [AGENT]")
+					local mine = kind == "G" and (name == me or name == me .. " [AGENT]")
 					local free = kind == "A" or kind == "E"
 					if mine then mpGuestReady = ready == "1" end
 					if free and hovered(X(28), ry, L(600), L(22)) then
@@ -2922,6 +2954,7 @@ local function keyboardPage(px, py, pw, ph)
 				local waiting = keyState.capture and keyState.capture.id == row.id and keyState.capture.slot == slot
 				local key = getKeyBinding(row.id, slot)
 				local label = waiting and "Press a key..." or (key ~= "" and keyLabel(key) or "(none)")
+				uiElement("key:" .. row.id .. ":" .. slot, label, bx, by, kw, kh, true) -- (agent control: the cell by its action)
 				if button(label, bx, by, kw, kh, true, waiting) then startKeyCapture(row.id, slot) end
 				-- a key that another action uses where this one works
 				if key ~= "" and #getKeyConflicts(row.id, slot, key) > 0 then

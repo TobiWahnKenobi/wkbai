@@ -2,7 +2,11 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../Order.h"
+#include "../MovementController.h"
+#include "../AgentUi.h"
 #include "ClientInterface.h"
+#include "../AgentInput.h"
 #include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
@@ -187,6 +191,328 @@ namespace {
 ClientInterface::~ClientInterface()
 {
 	SetKeyCheatGate(nullptr);
+	if (AgentUi::GetWorld() == &agentWorld)
+		AgentUi::SetWorld(nullptr);
+}
+
+// Agent control's eyes in the game (AgentUi::World): where objects and ground points are on the
+// screen, what the hover pick has under the cursor, the player's own objects in view
+void ClientInterface::setUpAgentWorld()
+{
+	if (AgentUi::GetWorld() == &agentWorld)
+		return;
+	auto project = [this](const Vector3& p, int& sx, int& sy, std::string& why) {
+		const Camera& cam = client->camera;
+		if ((p - cam.position).dot(cam.direction) <= 0.1f) { why = "behind the camera"; return false; }
+		const Vector3 ndc = p.transformScreenCoords(cam.sceneMatrix);
+		sx = (int)((ndc.x + 1.0f) * g_windowWidth / 2.0f);
+		sy = (int)((-ndc.y + 1.0f) * g_windowHeight / 2.0f);
+		if (sx < 0 || sy < 0 || sx >= g_windowWidth || sy >= g_windowHeight) { why = "off the screen"; return false; }
+		return true;
+	};
+	auto centreOf = [](ClientGameObject* obj) {
+		Vector3 c = obj->position;
+		if (obj->sceneEntity.model)
+			c = obj->position + obj->sceneEntity.model->getSphereCenter() * obj->scale;
+		return c;
+	};
+	agentWorld.objectPoint = [this, project, centreOf](uint32_t id, int& x, int& y, std::string& why) {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj) { why = "no such object"; return false; }
+		return project(centreOf(obj), x, y, why);
+	};
+	agentWorld.objectScreenRadius = [this, project, centreOf](uint32_t id) -> int {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj || !obj->sceneEntity.model)
+			return 0;
+		const Vector3 c = centreOf(obj);
+		const float r = obj->sceneEntity.model->getSphereRadius() * obj->scale.x;
+		const Vector3 side = client->camera.direction.cross(Vector3(0, 1, 0)).normal();
+		int x0, y0, x1, y1;
+		std::string why;
+		if (!project(c, x0, y0, why) || !project(c + side * r, x1, y1, why))
+			return 0;
+		return (int)std::hypot((float)(x1 - x0), (float)(y1 - y0));
+	};
+	agentWorld.objectPosition = [this](uint32_t id, float& x, float& z) {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj) return false;
+		x = obj->position.x; z = obj->position.z;
+		return true;
+	};
+	agentWorld.groundPoint = [this, project](float x, float z, int& sx, int& sy, std::string& why) {
+		if (!client->terrain) { why = "no map"; return false; }
+		return project(Vector3(x, client->terrain->getHeight(x, z), z), sx, sy, why);
+	};
+	agentWorld.hovered = [this]() -> uint32_t { ClientGameObject* o = nextSelectedObject; return o ? o->id : 0; };
+	agentWorld.selection = [this]() {
+		std::vector<uint32_t> ids;
+		for (const CliGORef& ref : selection)
+			if (ClientGameObject* o = ref)
+				ids.push_back(o->id);
+		return ids;
+	};
+	agentWorld.player = [this]() -> uint32_t { ClientGameObject* p = client->clientPlayer; return p ? p->id : 0; };
+	agentWorld.ownOnScreen = [this, project, centreOf]() {
+		std::vector<AgentUi::World::Seen> list;
+		ClientGameObject* own = client->clientPlayer;
+		if (!own)
+			return list;
+		auto walk = [&](ClientGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* c : children) {
+					ClientGameObject* o = c->dyncast<ClientGameObject>();
+					int x = -1, y = -1;
+					std::string why;
+					const bool seen = o->sceneEntity.model && project(centreOf(o), x, y, why);
+					if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						list.push_back({ o->id, o->blueprint->name, x, y, seen, o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER });
+					self(o, self);
+				}
+		};
+		walk(own, walk);
+		return list;
+	};
+	// what the player sees: the HUD's numbers, the selection, every object the screen or the
+	// minimap could show under this player's fog of war (enemy buildings as last seen)
+	agentWorld.observe = [this, project, centreOf](const nlohmann::json& req) {
+		const bool scenery = req.value("scenery", false);
+		nlohmann::json j;
+		const GameSet* gs = client->gameSet.get();
+		auto item = [gs](ClientGameObject* o, const char* name) -> float {
+			const int id = gs ? gs->items.names.getIndex(name) : -1;
+			return (o && id >= 0) ? o->getItem(id) : 0.0f;
+		};
+		auto health = [&](ClientGameObject* o) -> nlohmann::json {
+			const bool building = o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+			const float hp = item(o, building ? "Structural Integrity" : "Hit Points");
+			const float cap = item(o, building ? "Structural Integrity Capacity" : "Hit Point Capacity");
+			return cap > 0 ? nlohmann::json{ hp, cap } : nlohmann::json();
+		};
+		const char* kinds[] = { "other", "character", "building" };
+		auto kindOf = [&](ClientGameObject* o) {
+			return o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER ? kinds[1] : o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING ? kinds[2] : kinds[0];
+		};
+		j["time"] = client->timeManager.currentTime;
+		j["speed"] = client->timeManager.timeSpeed;
+		j["paused"] = client->timeManager.paused;
+		j["window"] = { g_windowWidth, g_windowHeight };
+		j["camera"] = { client->camera.position.x, client->camera.position.y, client->camera.position.z };
+		if (client->terrain) {
+			const auto [areaW, areaD] = client->terrain->getPlayableArea();
+			j["map"] = { areaW, areaD }; // the playable area in metres (as the minimap shows it)
+		}
+		ClientGameObject* player = client->clientPlayer;
+		j["player"] = player ? player->id : 0;
+		if (player) {
+			nlohmann::json res;
+			for (const char* r : { "Food", "Wood", "Gold", "Stone" })
+				res[r] = item(player, r);
+			j["resources"] = res;
+			j["population"] = { item(player, "Population Count"), item(player, "Total Population Count") };
+		}
+		nlohmann::json sel = nlohmann::json::array();
+		for (const CliGORef& ref : selection)
+			if (ClientGameObject* o = ref)
+				sel.push_back({ { "id", o->id }, { "type", o->blueprint->name }, { "kind", kindOf(o) }, { "health", health(o) },
+					{ "position", { o->position.x, o->position.z } } });
+		j["selection"] = sel;
+		ClientGameObject* hov = nextSelectedObject;
+		j["hovered"] = hov ? hov->id : 0;
+		// a building being placed: what, its turn (quarters), and the refusal box's text if shown
+		if (stampdownBlueprint)
+			j["placing"] = { { "type", stampdownBlueprint->name }, { "turn", stampdownQuarter }, { "refusal", stampdownRefusal } };
+		j["cursor"] = WndCursorPath(shownCursor);
+		// the objects: characters and buildings (trees and other scenery left out), as the fog shows them
+		const bool fogOn = fogOfWarOn();
+		nlohmann::json objs = nlohmann::json::array();
+		auto add = [&](ClientGameObject* o, bool remembered) {
+			nlohmann::json e = { { "id", o->id }, { "type", o->blueprint->name }, { "kind", kindOf(o) },
+				{ "position", { o->position.x, o->position.z } } };
+			CommonGameObject* owner = o->getPlayer();
+			e["player"] = owner ? owner->id : 0;
+			e["own"] = owner && player && owner == (CommonGameObject*)player;
+			if (remembered)
+				e["remembered"] = true; // as last seen
+			else
+				e["health"] = health(o);
+			int x, y;
+			std::string why;
+			if (o->sceneEntity.model && project(centreOf(o), x, y, why))
+				e["screen"] = { x, y };
+			objs.push_back(e);
+		};
+		auto walk = [&](ClientGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* c : children) {
+					ClientGameObject* o = c->dyncast<ClientGameObject>();
+					self(o, self);
+					const int cls = o->blueprint->bpClass;
+					if (o->flags & ClientGameObject::fTerminated)
+						continue;
+					if (cls != Tags::GAMEOBJCLASS_CHARACTER && cls != Tags::GAMEOBJCLASS_BUILDING) {
+						// scenery (trees, resources) only on the screen and where the player sees
+						int sx, sy;
+						std::string why;
+						if (scenery && o->sceneEntity.model && o->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE
+							&& (!fogOn || fogOfWar.isSeen(o->position)) && project(centreOf(o), sx, sy, why))
+							add(o, false);
+						continue;
+					}
+					// the same rules as the drawing and the minimap (drawObject, drawMinimap)
+					if (fogOn && cls == Tags::GAMEOBJCLASS_CHARACTER && !fogOfWar.isSeen(o->position) && !fogOfWar.isFriendly(client, o))
+						continue;
+					if (fogOn && cls == Tags::GAMEOBJCLASS_BUILDING && !fogOfWar.isBuildingSeen(o->position) && fogOfWar.isRemembered(client, o))
+						continue;
+					add(o, false);
+				}
+		};
+		if (client->getLevel())
+			walk(client->getLevel(), walk);
+		if (fogOn)
+			for (const auto& [id, copy] : fogOfWar.remembered)
+				if (copy && !fogOfWar.isBuildingSeen(copy->position))
+					add(copy.get(), true);
+		j["objects"] = objs;
+		j["fogOfWar"] = fogOn;
+		j["fogReady"] = !fogOfWar.tiles.empty(); // (before its first update everything counts as seen, as drawn)
+		// the chat and the game's messages, the last 10
+		nlohmann::json chat = nlohmann::json::array();
+		const auto& msgs = client->chatMessages;
+		for (size_t i = msgs.size() > 10 ? msgs.size() - 10 : 0; i < msgs.size(); i++)
+			chat.push_back(msgs[i]);
+		j["chat"] = chat;
+		return j;
+	};
+	// the harness: lockstep and made units, where cheats are allowed
+	agentWorld.harness = [this](const nlohmann::json& req) -> nlohmann::json {
+		if (!cheatKeysAllowed() || !withServer)
+			return { { "ok", false }, { "error", "harness controls work in single player with cheat mode on (or test runs)" } };
+		nlohmann::json out = { { "ok", true } };
+		const std::string what = req.value("what", std::string());
+		withServer([&](Server& server) {
+			if (what == "lockstep") {
+				server.lockstep = req.value("on", true);
+				server.lockstepSteps = 0;
+				out["lockstep"] = server.lockstep;
+				out["done"] = server.lockstepDone;
+			}
+			else if (what == "advance") {
+				if (!server.lockstep) { out = { { "ok", false }, { "error", "harness.lockstep first" } }; return; }
+				const uint32_t steps = (uint32_t)std::clamp(req.value("steps", 1), 1, 100000);
+				server.lockstepSteps += steps;
+				out["until"] = server.lockstepDone + server.lockstepSteps;
+				out["stepMs"] = server.timeManager.stepMs;
+			}
+			else if (what == "done")
+				out["done"] = server.lockstepDone;
+			else if (what == "spawn") {
+				const GameObjBlueprint* bp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, req.value("type", std::string("Peasant")));
+				ClientGameObject* me = client->clientPlayer;
+				ServerGameObject* player = me && server.findObject(me->id) ? server.findObject(me->id)->dyncast<ServerGameObject>() : nullptr;
+				if (!bp || !player) { out = { { "ok", false }, { "error", bp ? "no player" : "no such character type" } }; return; }
+				const int count = std::clamp(req.value("count", 1), 1, 2000);
+				const float x = req.value("x", 0.0f), z = req.value("z", 0.0f), spacing = req.value("spacing", 2.5f);
+				const int side = (int)std::ceil(std::sqrt((float)count));
+				nlohmann::json ids = nlohmann::json::array();
+				for (int i = 0; i < count; i++) {
+					const Vector3 at(x + (i % side - side / 2) * spacing, 0, z + (i / side - side / 2) * spacing);
+					if (ServerGameObject* u = server.spawnObject(bp, player, at, Vector3(0, 0, 0)))
+						ids.push_back(u->id);
+				}
+				out["spawned"] = ids;
+			}
+			else
+				out = { { "ok", false }, { "error", "harness: lockstep, advance or spawn" } };
+		});
+		return out;
+	};
+	// the test probes: the server's own state, where cheats are allowed (or in a replay)
+	agentWorld.probe = [this](const nlohmann::json& req) -> nlohmann::json {
+		if (!(cheatKeysAllowed() || replayMode) || !withServer)
+			return { { "ok", false }, { "error", "probes work in single player with cheat mode on, or in a replay" } };
+		nlohmann::json out = { { "ok", true }, { "probe", true } };
+		const std::string what = req.value("what", std::string("hash"));
+		withServer([&](Server& server) {
+			const GameSet* gs = server.gameSet.get();
+			if (!gs || !server.getLevel()) { out = { { "ok", false }, { "error", "no game" } }; return; }
+			if (what == "hash") {
+				// the game's state (Test_Determinism's hash: ids, positions, orientations, items)
+				uint64_t hash = 1469598103934665603ull;
+				auto mix = [&](const void* data, size_t n) {
+					for (size_t i = 0; i < n; i++) { hash ^= ((const uint8_t*)data)[i]; hash *= 1099511628211ull; }
+				};
+				size_t objects = 0;
+				auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+					objects++;
+					mix(&obj->id, sizeof(obj->id));
+					mix(&obj->position, sizeof(obj->position));
+					mix(&obj->orientation, sizeof(obj->orientation));
+					for (const auto& [item, value] : obj->items) { mix(&item, sizeof(item)); mix(&value, sizeof(value)); }
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* child : children)
+							self(child, self);
+				};
+				walk(server.getLevel(), walk);
+				char hex[17];
+				snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)hash);
+				out["hash"] = hex;
+				out["objects"] = objects;
+				out["time"] = server.timeManager.currentTime;
+			}
+			else if (what == "unit") {
+				ServerGameObject* obj = server.findObject(req.value("object", 0u)) ? server.findObject(req.value("object", 0u))->dyncast<ServerGameObject>() : nullptr;
+				if (!obj) { out = { { "ok", false }, { "error", "no such object" } }; return; }
+				out["type"] = obj->blueprint->name;
+				out["position"] = { obj->position.x, obj->position.y, obj->position.z };
+				out["orientation"] = obj->orientation.y; // (radians about the vertical)
+				// its items by name ("items": a village's food and wood stock, a unit's hit points)
+				if (req.value("items", false)) {
+					nlohmann::json items = nlohmann::json::object();
+					for (const auto& [item, value] : obj->items)
+						if (item >= 0 && (size_t)item < gs->items.names.size())
+							items[gs->items.names.getString(item)] = value;
+					out["items"] = items;
+				}
+				nlohmann::json orders = nlohmann::json::array();
+				for (Order& o : obj->orderConfig.orders) {
+					nlohmann::json tasks = nlohmann::json::array();
+					for (size_t t = 0; t < o.tasks.size(); t++)
+						tasks.push_back({ { "task", gs->tasks.getString(o.tasks[t]->blueprint) }, { "state", o.tasks[t]->state }, { "current", (int)t == o.currentTask } });
+					orders.push_back({ { "order", gs->orders.getString(o.blueprint) }, { "state", o.state }, { "tasks", tasks } });
+				}
+				out["orders"] = orders;
+				const MovementController& mc = obj->movementController;
+				nlohmann::json path = nlohmann::json::array();
+				// m_pathNodes: the destination first, the next point last
+				for (auto it = mc.m_pathNodes.rbegin(); it != mc.m_pathNodes.rend(); ++it)
+					path.push_back({ it->x, it->z });
+				out["movement"] = { { "moving", mc.isMoving() }, { "searching", mc.isPending() }, { "searchFailed", mc.m_searchFailed },
+					{ "destination", { mc.getDestination().x, mc.getDestination().z } }, { "path", path } };
+			}
+			else if (what == "objects") {
+				// every character and building, whatever the fog
+				nlohmann::json list = nlohmann::json::array();
+				auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+					for (const auto& [type, children] : obj->children)
+						for (CommonGameObject* c : children) {
+							if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+								CommonGameObject* owner = c->getPlayer();
+								list.push_back({ { "id", c->id }, { "type", c->blueprint->name }, { "player", owner ? owner->id : 0 },
+									{ "position", { c->position.x, c->position.z } } });
+							}
+							self(c, self);
+						}
+				};
+				walk(server.getLevel(), walk);
+				out["objects"] = list;
+			}
+			else
+				out = { { "ok", false }, { "error", "probe what: hash, unit or objects" } };
+		});
+		return out;
+	};
+	AgentUi::SetWorld(&agentWorld);
 }
 
 bool ClientInterface::cheatKeysAllowed() const
@@ -239,6 +565,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 		mapH = h * areaDepth / areaWidth;
 		mapY = y + (h - mapH) * 0.5f;
 	}
+	// agent control: the map part, for moving the camera by a click on it
+	AgentUi::AddPixels("minimap", "Minimap", (int)(mapX * g_uiScale), (int)(mapY * g_uiScale), (int)(mapW * g_uiScale), (int)(mapH * g_uiScale), true);
+	AgentUi::SetMinimap({ true, mapX, mapY, mapW, mapH, areaWidth, areaDepth });
 	auto toMinimap = [&](float px, float pz) {
 		return ImVec2(mapX + std::clamp(px / areaWidth, 0.0f, 1.0f) * mapW, mapY + std::clamp(1.0f - pz / areaDepth, 0.0f, 1.0f) * mapH);
 	};
@@ -479,6 +808,7 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 		uint8_t category;
 		Bitmap mask; // alpha of the image, for hit tests on the arc
 		texture tex = nullptr;
+		int cx = 0, cy = 0; // a point inside the arc (agent control's registry)
 	};
 	static MinimapButton buttons[] = {
 		{ "Interface\\InGame\\Military Mini Map Button Depressed.tga", 7, 67, GameObjBlueprint::MINIMAP_MILITARY },
@@ -494,6 +824,28 @@ bool ClientInterface::drawMinimapButtons(int panelX, int panelY)
 				continue;
 			button.mask = Bitmap::loadBitmap(button.image).convertToR8G8B8A8();
 			button.tex = gfx->CreateTexture(button.mask, 1);
+			// the opaque pixel nearest the opaque pixels' mean
+			double sx = 0, sy = 0; int n = 0;
+			for (int y = 0; y < (int)button.mask.height; y++)
+				for (int x = 0; x < (int)button.mask.width; x++)
+					if (button.mask.pixels[4 * (y * button.mask.width + x) + 3] >= 128) { sx += x; sy += y; n++; }
+			if (n) {
+				const double mx = sx / n, my = sy / n;
+				double best = 1e18;
+				for (int y = 0; y < (int)button.mask.height; y++)
+					for (int x = 0; x < (int)button.mask.width; x++)
+						if (button.mask.pixels[4 * (y * button.mask.width + x) + 3] >= 128) {
+							const double d = (x - mx) * (x - mx) + (y - my) * (y - my);
+							if (d < best) { best = d; button.cx = x; button.cy = y; }
+						}
+			}
+		}
+		// agent control: a small box inside the arc (the click is hit-tested on the image)
+		{
+			static const char* const names[] = { "military", "economic", "resource", "activity" };
+			static const char* const labels[] = { "Military units on the minimap", "Civilian units on the minimap", "Resources on the minimap", "Display Peasant Activity Interface" };
+			const int bi = (int)(&button - buttons);
+			AgentUi::Add(std::string("minimapButton:") + names[bi], labels[bi], (float)(panelX + button.x + button.cx - 1), (float)(panelY + button.y + button.cy - 1), 3.0f, 3.0f, true);
 		}
 		const int lx = UiMouseX() - (panelX + button.x), ly = UiMouseY() - (panelY + button.y);
 		const bool hovered = lx >= 0 && ly >= 0 && lx < button.mask.width && ly < button.mask.height
@@ -3111,6 +3463,7 @@ void ClientInterface::controlGroupKeys()
 
 void ClientInterface::iter()
 {
+	setUpAgentWorld();
 	ZoneScoped;
 	static uint32_t oldCliTime = SDL_GetTicks();
 	uint32_t cliTime = SDL_GetTicks();
@@ -3328,6 +3681,7 @@ void ClientInterface::iter()
 		if (nextCursor != currentCursor) {
 			currentCursor = nextCursor;
 			WndSetCursor(currentCursor);
+			shownCursor = currentCursor; // (agent control's "observe")
 			// test runs: the hover cursor's command, each time it changes
 			if (BenchmarkEnabled())
 				printf("CURSOR %s %s over %s\n", rightClickCommand ? client->gameSet->commands.getString(rightClickCommand).c_str() : "-",
@@ -4358,6 +4712,11 @@ void ClientInterface::iter()
 		lua.set_function("isAltHeld", []() {return g_modAlt; });
 		// ImGui
 		lua.set_function("setTooltip",[](const std::string& str) { ImGui::SetTooltip("%s", str.c_str()); });
+		// agent control: an interactive element drawn this frame (AgentUi's registry; nothing while it is off)
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		});
+		lua.set_function("commandName", [this](const Command* cmd) { return cmd ? client->gameSet->commands.getString(cmd) : std::string(); });
 		// Button
 		// Minimap; a click on it is UI input, not a click into the world
 		lua.set_function("drawMinimap",
@@ -5216,15 +5575,31 @@ void ClientInterface::iter()
 	if (loadingDone) {
 		drawChronicle();
 	}
+	// agent control: every player and spectator sees who has it on (the host's list), all game long
+	if (!client->agentPlayers.empty()) {
+		std::string text = "[AGENT] Agent control on for: ";
+		for (size_t i = 0; i < client->agentPlayers.size(); i++)
+			text += (i ? ", " : "") + client->agentPlayers[i];
+		ImDrawList* dl = ImGui::GetForegroundDrawList();
+		const ImVec2 size = ImGui::CalcTextSize(text.c_str());
+		const ImVec2 p((ImGui::GetIO().DisplaySize.x - size.x) * 0.5f, 28.0f);
+		dl->AddRectFilled(ImVec2(p.x - 8, p.y - 2), ImVec2(p.x + size.x + 8, p.y + size.y + 2), IM_COL32(40, 25, 0, 220), 4.0f);
+		dl->AddRect(ImVec2(p.x - 8, p.y - 2), ImVec2(p.x + size.x + 8, p.y + size.y + 2), IM_COL32(230, 150, 20, 255), 4.0f, 0, 1.5f);
+		dl->AddText(p, IM_COL32(255, 190, 60, 255), text.c_str());
+	}
 
 	// Test runs: "benchmark": { ..., "drawCursor": true } draws the cursor into the frame (the
 	// screenshots leave out the system's cursor)
-	if (BenchmarkEnabled() && currentCursor && g_settings.value("benchmark", nlohmann::json::object()).value("drawCursor", false)) {
+	// The agent's cursor too, while it has the input (AgentInput): the system's cursor stays with
+	// the person's mouse
+	if (currentCursor && (AgentInput::HasInput()
+		|| (BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("drawCursor", false)))) {
 		int cw, ch;
 		WndCursorSize(currentCursor, cw, ch);
 		const ImVec2 at((float)UiMouseX(), (float)UiMouseY());
 		ImGui::GetForegroundDrawList()->AddImage(uiTexCache.getTexture(WndCursorPath(currentCursor), false), at,
 			ImVec2(at.x + cw / g_uiScale, at.y + ch / g_uiScale));
+		AgentInput::MarkCursorDrawn();
 	}
 	{
 		ZoneScopedN("ImGui rendering");

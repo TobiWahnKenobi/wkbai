@@ -30,6 +30,9 @@ extern std::string g_textTyped;
 
 void InitWindow();
 void HandleWindow();
+// Ctrl, Shift and Alt as an SDL_Keymod: the agent's while it has the input (AgentInput), else
+// the keyboard's
+int InputModState();
 void SetRenderer(IRenderer *gfx);
 // Native handle of the game window (HWND on Windows, nullptr elsewhere)
 void *WndGetNativeWindowHandle();

@@ -287,6 +287,10 @@ void QuickStartMenu::handleRequest(const FrontEnd::Request& request)
 			// the lobby's Lock Server: no more guests join
 			if (request.arg.substr(0, eq) == "lockServer")
 				server->lockServer = atoi(request.arg.c_str() + eq + 1) != 0;
+			if (request.arg.substr(0, eq) == "buildPolicy")
+				server->buildPolicy = std::clamp(atoi(request.arg.c_str() + eq + 1), 0, 2);
+			if (request.arg.substr(0, eq) == "allowAgents")
+				server->allowAgents = atoi(request.arg.c_str() + eq + 1) != 0;
 		}
 	}
 	else if (request.action == "skirmish_settings")
@@ -1058,6 +1062,9 @@ void QuickStartMenu::updateLobby()
 		if (auto ci = std::find(server->clientLinks.begin(), server->clientLinks.end(), (NetLink*)link); ci != server->clientLinks.end()) {
 			auto& info = server->clientInfos[ci - server->clientLinks.begin()];
 			name = info.name;
+			// agent control: marked wherever the lobby shows the name (the guests' lobbies too)
+			if (info.agent && !name.empty())
+				name += " [AGENT]";
 			requests = std::move(info.lobbyRequests);
 			info.lobbyRequests.clear();
 		}
@@ -1174,6 +1181,15 @@ void QuickStartMenu::lobbyTest()
 		if (!offer.empty())
 			handleRequest({ "host_offer", offer });
 		return;
+	}
+	// "settings": ["buildPolicy=2", ...] for the hosted lobby, once it is open (after the lobby
+	// screen sent its own)
+	static bool settingsApplied = false;
+	if (!settingsApplied) {
+		settingsApplied = true;
+		for (const auto& s : test.value("settings", nlohmann::json::array()))
+			if (s.is_string())
+				handleRequest({ "skirmish_setting", s.get<std::string>() });
 	}
 	// { "host": "<level>", "solo": true }: starts at once with no guest, the host alone (the other
 	// positions empty)

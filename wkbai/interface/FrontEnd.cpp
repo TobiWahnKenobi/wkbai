@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../AgentUi.h"
+#include "../client.h"
 #include "FrontEnd.h"
 #include "../terrain.h"
 #include "LuaScripts.h"
@@ -534,6 +536,10 @@ struct FrontEnd::Impl {
 		});
 		lua.set_function("pushClip", [this](float x, float y, float w, float h) { drawList->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true); });
 		lua.set_function("popClip", [this]() { drawList->PopClipRect(); });
+		// agent control: an interactive element drawn this frame (AgentUi's registry)
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		});
 		lua.set_function("drawText", [this](const std::string& fontName, float x, float y, const std::string& text, sol::optional<uint32_t> colour, sol::optional<float> scale) {
 			if (const BitmapFont* f = font(fontName))
 				f->draw(drawList, x, y, text, colourArg(colour), scale ? *scale : 1.0f);
@@ -812,6 +818,13 @@ struct FrontEnd::Impl {
 		});
 		lua.set_function("getChat", [this]() { return sol::as_table(chat); });
 		lua.set_function("getLobbyState", [this]() { return lobbyState; });
+		// agent control: the players an agent plays (the host's list, Client::agentPlayers)
+		lua.set_function("getAgentPlayers", []() {
+			std::vector<std::string> names;
+			if (Client::instance)
+				names = Client::instance->agentPlayers;
+			return sol::as_table(names);
+		});
 		lua.set_function("getLobbyStatus", [this]() { return lobbyStatus; });
 		lua.set_function("getPlayerName", []() { return g_settings.value("playerName", std::string("Player")); });
 		lua.set_function("getJoinAddress", []() { return g_settings.value("joinAddress", std::string("localhost")); });
