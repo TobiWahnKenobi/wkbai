@@ -9,6 +9,7 @@
 // shader resource binding that works with all of them.
 
 #include "renderer_diligent.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "DiligentPostProcess.h"
 #include "DiligentFsr3.h"
@@ -754,7 +755,7 @@ struct DiligentRenderer : DiligentGfx
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
 		LoadingCompilingShader(entryPoint); // (the loading screen)
-		device->CreateShader(sci, &shader);
+		ShaderCache::CreateShader(device, sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile shader %s", entryPoint);
 		return shader;
@@ -830,7 +831,7 @@ struct DiligentRenderer : DiligentGfx
 		ci.ppResourceSignatures = signatures;
 		ci.ResourceSignaturesCount = st.ps == PS_SOFT ? 2 : 1;
 
-		device->CreateGraphicsPipelineState(ci, &pso);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &pso);
 		if (!pso)
 			ferr("Diligent: failed to create pipeline state %u", st.key());
 		return pso;
@@ -988,7 +989,7 @@ struct DiligentRenderer : DiligentGfx
 		IPipelineResourceSignature* signatures[] = { decalSignature };
 		ci.ppResourceSignatures = signatures;
 		ci.ResourceSignaturesCount = 1;
-		device->CreateGraphicsPipelineState(ci, &decalPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &decalPipeline);
 		if (!decalPipeline)
 			decalsFailed = true;
 	}
@@ -1397,6 +1398,7 @@ struct DiligentRenderer : DiligentGfx
 			ctx.Attach(contexts[0]);
 			if (!device)
 				ferr("Diligent: could not create the Vulkan device.");
+			ShaderCache::Init(device, dxc); // (the compiled shaders kept in the user folder)
 			factory->CreateSwapChainVk(device, ctx, scDesc, window, &swapChain);
 		}
 		else {
@@ -1417,6 +1419,7 @@ struct DiligentRenderer : DiligentGfx
 			ctx.Attach(contexts[0]);
 			if (!device)
 				ferr("Diligent: could not create the Direct3D 12 device.");
+			ShaderCache::Init(device, dxc); // (the compiled shaders kept in the user folder)
 			factory->CreateSwapChainD3D12(device, ctx, scDesc, FullScreenModeDesc{}, window, &swapChain);
 			// the adapter's memory budget (QueryVideoMemoryInfo): the DXGI adapter with the device's
 			// vendor and device IDs (the one with the most memory of those)
@@ -1585,6 +1588,7 @@ struct DiligentRenderer : DiligentGfx
 			gpuQueryIssued[q] = true;
 		}
 		swapChain->Present(g_renderSettings.vsync ? 1 : 0);
+		ShaderCache::OnFrame(); // (a line after each burst of compiling; the pipeline cache saved)
 		frame++;
 	}
 

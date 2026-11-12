@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentGI.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "DiligentClouds.h"
 #include "renderer_diligent.h"
@@ -275,7 +276,7 @@ void CreateGIResources(DiligentGfx* gfx)
 		sci.Desc.Name = "Dynamic GI";
 		RefCntAutoPtr<IShader> s;
 		LoadingCompilingShader(entry); // (the loading screen)
-		device->CreateShader(sci, &s);
+		ShaderCache::CreateShader(device, sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile the dynamic GI shader %s", entry);
 		return s;
@@ -297,7 +298,7 @@ void CreateGIResources(DiligentGfx* gfx)
 	IPipelineResourceSignature* sigs[] = { env.giSignature };
 	ci.ppResourceSignatures = sigs;
 	ci.ResourceSignaturesCount = 1;
-	device->CreateGraphicsPipelineState(ci, &env.giPipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &env.giPipeline);
 	if (!env.giPipeline)
 		ferr("Diligent: could not create the dynamic GI pipeline.");
 }

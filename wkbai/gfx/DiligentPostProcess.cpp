@@ -34,6 +34,7 @@
 //     and upscales the composite, and a copy puts its result into the back buffer.
 
 #include "DiligentPostProcess.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "DiligentFsr3.h"
 #include "GpuProfiler.h"
@@ -767,7 +768,7 @@ struct DiligentPostProcess::Impl {
 		sci.Desc.Name = entry;
 		RefCntAutoPtr<IShader> s;
 		LoadingCompilingShader(entry); // (the loading screen)
-		device->CreateShader(sci, &s);
+		ShaderCache::CreateShader(device, sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile post-processing shader %s", entry);
 		return s;
@@ -821,7 +822,7 @@ struct DiligentPostProcess::Impl {
 		IPipelineResourceSignature* signatures[] = { pass.signature };
 		ci.ppResourceSignatures = signatures;
 		ci.ResourceSignaturesCount = 1;
-		device->CreateGraphicsPipelineState(ci, &pass.pipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &pass.pipeline);
 		if (!pass.pipeline)
 			ferr("Diligent: could not create the %s pipeline.", entry);
 	}

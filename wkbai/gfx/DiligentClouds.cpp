@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentClouds.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "RenderSettings.h"
@@ -672,7 +673,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 		sci.Desc.Name = "Sky light occlusion";
 		RefCntAutoPtr<IShader> s;
 		LoadingCompilingShader(entry); // (the loading screen)
-		device->CreateShader(sci, &s);
+		ShaderCache::CreateShader(device, sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile the sky light occlusion shader %s", entry);
 		return s;
@@ -694,7 +695,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 	IPipelineResourceSignature* sigs[] = { env.skyOccSignature };
 	ci.ppResourceSignatures = sigs;
 	ci.ResourceSignaturesCount = 1;
-	device->CreateGraphicsPipelineState(ci, &env.skyOccPipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &env.skyOccPipeline);
 	if (!env.skyOccPipeline)
 		ferr("Diligent: could not create the sky light occlusion pipeline.");
 }

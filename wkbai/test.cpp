@@ -8339,6 +8339,8 @@ void Test_GameWindows()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -8412,6 +8414,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
 {Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
 {Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
+{Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
 };
 
 void LaunchTest()
