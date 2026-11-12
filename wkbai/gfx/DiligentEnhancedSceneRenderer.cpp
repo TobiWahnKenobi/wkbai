@@ -239,7 +239,7 @@ cbuffer SunBuffer
 	// y: the snow lying on roofs and models, z: how wet they are, w: how dark the night is
 	// (wkbai's weather and day and night, 0 when off: the emissive maps' night lights)
 	float4 Material;
-	float4 FireLightCount; // x: how many of FireLights are in use
+	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
 };
@@ -783,7 +783,8 @@ float3 MeanEmission()
 	// mix of them; the unlit texels' alpha does not matter)
 	float lit = max(sum.r, max(sum.g, sum.b));
 	float a = lit > 0 ? saturate(sum.a) : 0;
-	return sum.rgb * lerp(1, Material.w, a) * GI_EMISSION;
+	// (the night part at FireLightCount.y, NightCastShare: as at midnight through the dawn)
+	return sum.rgb * lerp(1, FireLightCount.y, a) * GI_EMISSION;
 }
 
 float4 GIEmission(VS_OUTPUT input)
@@ -1233,6 +1234,24 @@ static_assert(sizeof(MotionInstance) == 160);
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
 static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
 
+// The night's share of the windows' cast light: 1 - daylight, and no brighter than at midnight
+// through the dawn and the dusk. With the Physical sky the grade lifts to the day's from 8 degrees
+// under the horizon, while the night's lights only fade once the sun is 11 degrees up. So at
+// sunrise they shone at nearly full strength under a nearly full grade: twice as bright and more
+// saturated than at midnight (the user's Manor, 2026-11-12). Taken down by how much more the grade
+// lets through now than at night (the clouds' and the flash's part out of both): ungraded (Ultra's
+// emitter lights, CastLightOn makes up half the grade's darkening) by the square root of the
+// night's grade over the grade now, graded (High's emission map in BounceLight) by the ratio itself
+static float NightCastShare(bool ungraded)
+{
+	if (!g_environment.active)
+		return 0.0f;
+	const float night = 1.0f - g_environment.sun.daylight;
+	const float base = g_environment.exposure / ((1.0f - 0.18f * g_environment.cloudCover) * (1.0f + 1.2f * g_environment.lightningFlash));
+	const float r = 0.42f / std::max(base, 0.42f);
+	return night * (ungraded ? std::sqrt(r) : r);
+}
+
 struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
 	std::map<StaticModel*, bool> hasBark; // a tree's model with bark (SEFLAG_BARE draws only that)
@@ -1499,6 +1518,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	void placeEmitterLights(Scene* scene, DiligentGfx::ShadowEnvironment& shadows, IDeviceContext* ctx) {
 		using Env = DiligentGfx::ShadowEnvironment;
 		const float night = g_environment.active ? 1.0f - g_environment.sun.daylight : 0.0f;
+		const float nightShare = NightCastShare(true);
 		const float strength = std::clamp(g_renderSettings.emissiveLightStrength, 0.0f, 3.0f); // the window light setting
 		// the always-on lights (fires, forges, lamps) cast EMITTER_DAY_SHARE of their light in a
 		// clear day's full sun, more as the day darkens, all of it at night: a fire hardly shows
@@ -1533,7 +1553,7 @@ struct DiligentEnhancedSceneRenderer::Impl {
 					float lum = 0;
 					for (int c = 0; c < 3; c++) {
 						// (times its core: the shaders divide by distance squared plus it)
-						l.v[4 + c] = (e.always[c] * alwaysShare + e.night[c] * night) * e.size2 * strength;
+						l.v[4 + c] = (e.always[c] * alwaysShare + e.night[c] * nightShare) * e.size2 * strength;
 						lum += l.v[4 + c] * (c == 0 ? 0.299f : c == 1 ? 0.587f : 0.114f);
 					}
 					if (lum < 1e-3f)
@@ -2146,6 +2166,7 @@ void DiligentEnhancedSceneRenderer::render()
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
 	fire[0] = (float)numFires;
+	fire[1] = NightCastShare(false);   // the windows' cast light at night (MeanEmission)
 	for (int i = 0; i < numFires; i++) {
 		std::copy_n(&fireLights[i * 7], 4, fire + 4 + i * 8);
 		std::copy_n(&fireLights[i * 7 + 4], 3, fire + 8 + i * 8);
