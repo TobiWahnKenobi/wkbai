@@ -234,3 +234,4 @@ void RestoreAttachmentPath(Task* task, uint32_t targetId, int pathNo, size_t ste
 // The spot nearest to a place where a unit can stand clear of the other characters there or
 // walking there (a rally point's units gather around it)
 Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place);
+Vector3 SpawnSpot(const ServerGameObject* building); // where a building puts the unit it has trained (its CR_ path)
