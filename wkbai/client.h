@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <deque>
 #include <vector>
 #include <map>
 #include <set>
@@ -137,6 +138,32 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::pair<std::string, uint8_t>> objectiveEntries;
 	int missionObjectives = -1;
 	uint32_t objectivesChanged = 0;
+	// Diplomacy (ServerDiplomacy.cpp): the offers between players ((from, to) -> status), the top
+	// bar's Diplomacy, Global Diplomacy and Tributes buttons, the AI Generals' messages to show
+	// one after another, and the notices (Language keys, with the player in whose colour)
+	std::map<std::pair<uint32_t, uint32_t>, int> diplomaticOffers;
+	struct DiplomacyButton {
+		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
+		std::string tooltip;
+		bool news = false;                  // flashes until its window is opened
+	};
+	DiplomacyButton diplomacyButtons[3];
+	struct ChatDisplay {
+		uint32_t from = 0;
+		std::string key;
+		std::vector<float> values;
+	};
+	std::deque<ChatDisplay> chatDisplays;
+	struct Notice {
+		std::string key;
+		uint32_t player = 0;
+		uint32_t time = 0; // SDL ticks
+	};
+	std::vector<Notice> notices;
+	void addNotice(const std::string& key, uint32_t player);
+	void sendDiplomaticStatus(uint32_t player, int status);
+	void sendDiplomaticOffer(uint32_t player, int status);
+	void sendTribute(uint32_t player, int item, float amount);
 	// Sets a showing window's page and plays that page's ACTIVATION_SOUND
 	void setGameTextWindowPage(int gtwIndex, int page);
 	bool isMusicPlaying = false;

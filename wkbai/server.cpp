@@ -55,6 +55,11 @@ void Server::loadSaveGame(const char * filename)
 	clearFogOfWar = false;
 	// nobody's game over, unless the save says so (<save>.ai.txt "finished.<id>")
 	finishedPlayers.clear();
+	// diplomacy: the offers (DIPLOMATIC_OFFER in the save), the chat personalities and the
+	// diplomacy buttons (<save>.ai.txt "chatPersonality.<id>", "diplomacyWindow.<id>.<window>")
+	diplomaticOffers.clear();
+	chatPersonalities.clear();
+	diplomacyWindows.clear();
 	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
 		char* text = nullptr;
 		int size = 0;
@@ -596,6 +601,12 @@ std::string Server::aiSettingsText() const
 	// the players whose game is over (only when there are: the text of other games stays as it was)
 	for (const auto& [id, outcome] : finishedPlayers)
 		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
+	// diplomacy the save game itself doesn't hold: the chat personalities (SET_CHAT_PERSONALITY)
+	// and the diplomacy buttons (ENABLE_/DISABLE_..._WINDOW: on or off, then the tooltip key)
+	for (const auto& [id, personality] : chatPersonalities)
+		text += "chatPersonality." + std::to_string(id) + "=" + personality + "\n";
+	for (const auto& [key, state] : diplomacyWindows)
+		text += "diplomacyWindow." + std::to_string(key.first) + "." + std::to_string(key.second) + "=" + (state.first ? "1 " : "0 ") + state.second + "\n";
 	// "aiScript.<player id>=<Lua AI>"
 	for (const auto& [id, name] : aiScripts)
 		if (!name.empty())
@@ -628,6 +639,18 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		}
 		if (scriptsOnly)
 			continue;
+		if (name.rfind("chatPersonality.", 0) == 0) {
+			chatPersonalities[(uint32_t)strtoul(name.c_str() + 16, nullptr, 10)] = line.substr(eq + 1);
+			continue;
+		}
+		if (name.rfind("diplomacyWindow.", 0) == 0) {
+			const uint32_t id = (uint32_t)strtoul(name.c_str() + 16, nullptr, 10);
+			const size_t dot = name.find('.', 16);
+			const std::string value = line.substr(eq + 1);
+			if (dot != std::string::npos && !value.empty())
+				diplomacyWindows[{ id, atoi(name.c_str() + dot + 1) }] = { value[0] == '1', value.size() > 2 ? value.substr(2) : std::string() };
+			continue;
+		}
 		if (name.rfind("finished.", 0) == 0) {
 			if (const uint32_t id = (uint32_t)strtoul(name.c_str() + 9, nullptr, 10); id && (v == 1 || v == 2))
 				finishedPlayers[id] = (uint8_t)v;
@@ -1219,11 +1242,19 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 				//obj->associateObject(category, findObject(gsf.nextInt()));
 			break;
 		}
+		case Tags::GAMEOBJ_DIPLOMATIC_OFFER: {
+			const uint32_t from = (uint32_t)gsf.nextInt();
+			const uint32_t to = (uint32_t)gsf.nextInt();
+			const int status = gameSet->diplomaticStatuses.readIndex(gsf);
+			if (status >= 0)
+				diplomaticOffers[{ from, to }] = status;
+			break;
+		}
 		case Tags::GAMEOBJ_DIPLOMATIC_STATUS_BETWEEN: {
 			int id1 = gsf.nextInt();
 			int id2 = gsf.nextInt();
 			int status = gameSet->diplomaticStatuses.readIndex(gsf);
-			setDiplomaticStatus(findObject(id1), findObject(id2), status);
+			setDiplomaticStatus(findObject(id1), findObject(id2), status, nullptr, false);
 			break;
 		}
 		case Tags::GAMEOBJ_NEXT_UNIQUE_ID: {
@@ -2252,19 +2283,6 @@ void Server::syncTime()
 	sendToAll(msg);
 }
 
-void Server::setDiplomaticStatus(ServerGameObject * a, ServerGameObject * b, int status)
-{
-	if (getDiplomaticStatus(a, b) != status) {
-		int &ref = (a->id <= b->id) ? diplomaticStatuses[{ a->id, b->id }] : diplomaticStatuses[{ b->id, a->id }];
-		ref = status;
-		NetPacketWriter msg{ NETCLIMSG_DIPLOMATIC_STATUS_SET };
-		msg.writeUint32(a->id);
-		msg.writeUint32(b->id);
-		msg.writeUint8(status);
-		sendToAll(msg);
-	}
-}
-
 void Server::showGameTextWindow(ServerGameObject* player, int gtwIndex)
 {
 	NetPacketWriter msg{ NETCLIMSG_SHOW_GAME_TEXT_WINDOW };
@@ -2934,8 +2952,12 @@ void Server::sendStateTo(NetLink* link)
 		msg.writeUint32(pair.first);
 		msg.writeUint32(pair.second);
 		msg.writeUint8((uint8_t)status);
+		msg.writeUint32(0);
 		send(msg);
 	}
+	// the offers, and this client's diplomacy buttons
+	if (auto it = std::find(clientLinks.begin(), clientLinks.end(), link); it != clientLinks.end())
+		sendDiplomacyState((int)(it - clientLinks.begin()));
 	for (const auto& [alias, objects] : aliases)
 		for (const auto& ref : objects) {
 			NetPacketWriter msg(NETCLIMSG_ALIAS_ASSIGNED);
@@ -3691,6 +3713,32 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 			}
 			case NETSRVMSG_MUSIC_COMPLETED: {
 				player->isMusicPlaying = false;
+				break;
+			}
+			// the Diplomacy and Tributes windows (the sender's player; not where "Disallow
+			// Diplomacy" is set, as WKB.exe's SetStatus)
+			case NETSRVMSG_DIPLOMATIC_STATUS:
+			case NETSRVMSG_DIPLOMATIC_OFFER:
+			case NETSRVMSG_TRIBUTE: {
+				ServerGameObject* me = (size_t)clientIndex < clientPlayerObjects.size() ? clientPlayerObjects[clientIndex].get() : nullptr;
+				ServerGameObject* other = findObject(br.readUint32());
+				if (!me || !other || other == me || other->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || finishedPlayers.count(me->id))
+					break;
+				if (type == NETSRVMSG_TRIBUTE) {
+					const int item = br.readUint16();
+					giveTribute(me, other, item, br.readFloat());
+					break;
+				}
+				const int disallow = gameSet->items.names.getIndex("Disallow Diplomacy");
+				if (disallow >= 0 && getLevel() && getLevel()->getItem(disallow) != 0.0f)
+					break;
+				const int status = (int)(int8_t)br.readUint8();
+				if (type == NETSRVMSG_DIPLOMATIC_STATUS) {
+					if (status >= 0 && status < (int)gameSet->diplomaticStatuses.names.size())
+						setDiplomaticStatus(me, other, status, me);
+				}
+				else if (status < (int)gameSet->diplomaticStatuses.names.size())
+					makeDiplomaticOffer(me, other, status);
 				break;
 			}
 			case NETSRVMSG_TERMINATE_OBJECT: {

@@ -75,6 +75,10 @@ struct FrontEnd {
 		float width = 550;           // pixels
 		bool atBottom = false, modal = false;
 		std::vector<Button> buttons;
+		// an AI General's message (the "AI General Chat Window"): its name as the title, in its
+		// colour, and its blueprint (the portrait)
+		std::string title, general;
+		int titleColour = -1;
 	};
 	void setGameWindows(std::vector<GameWindow> windows);
 	// The mission objectives (MISSION_OBJECTIVES): the active set's title and its shown entries
@@ -93,6 +97,40 @@ struct FrontEnd {
 	// whether it has news not seen yet
 	void toggleObjectives();
 	bool objectivesNews() const;
+	// Diplomacy (the top bar's Diplomacy, Global Diplomacy and Tributes windows, as WKB.exe's
+	// CDiplomacyWnd, CDiplomaticReportWnd and TributesWnd): the players and their relations, the
+	// resources one can give, the buttons' state and the notices. The windows' Send comes back as
+	// the requests "diplomacy_status" and "diplomacy_offer" "<player id>,<status>" (-1: offer
+	// withdrawn) and "tribute" "<player id>,<item>,<amount>"; a window opened, "diplomacy_seen"
+	// "<window>".
+	struct Diplomacy {
+		struct Player {
+			uint32_t id = 0;
+			std::string name, general; // general: the AI General's blueprint, for its portrait
+			int colour = 0;
+			int status = -1, myOffer = -1, theirOffer = -1;
+		};
+		std::vector<std::string> statuses; // the ladder: Allied, Neutral, Enemy
+		std::vector<Player> players;       // everyone still playing, this client's player first
+		std::vector<int> relations;        // status between players i and j at i * n + j
+		struct Tribute {
+			int item = -1;
+			std::string name; // the item's name (its icon: Interface\InGame\Tributes\<name>.tga)
+			float have = 0;
+		};
+		std::vector<Tribute> tributes;
+		bool enabled[3] = {}, news[3] = {};
+		std::string tooltips[3];
+		bool canChange = false;            // not "Disallow Diplomacy"
+		struct Notice {
+			std::string text;
+			int colour = 0;
+			float age = 0;                 // seconds
+		};
+		std::vector<Notice> notices;
+	};
+	void setDiplomacy(Diplomacy diplomacy);
+	void toggleDiplomacyWindow(int window);
 	// Whether the game windows want the mouse at this point (one covered it last frame, or one
 	// is modal): the game gets no mouse input then
 	bool gameWindowsWantMouse(float x, float y) const;

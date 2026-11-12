@@ -245,14 +245,22 @@ end
 
 -- The five buttons in the left part (WKB.exe 0x790300: their rectangles as fractions of the
 -- panel). Settings opens the in-game menu; Mission Objectives the objectives window when the
--- level has objectives (the tutorials), flashing on news; the others are grey, as in a
--- skirmish. Tooltips: Language.txt's INGAME_* texts, as the original's.
+-- level has objectives (the tutorials), flashing on news; Global Diplomacy (a Tavern),
+-- Diplomacy (the lobby's Allow Diplomacy) and Tributes (a Trading Post) their windows, flashing
+-- on news (an offer, a change, a building's new window). Tooltips: Language.txt's INGAME_*
+-- texts, or the game set's (ENABLE_/DISABLE_..._WINDOW), as the original's.
+local function diplomacyState(n)
+	return function() return diplomacyButton(n) end
+end
 local topButtons = {
-	{ "Settings", 218, function() return true end, "INGAME_SETTINGS" },
-	{ "Mission Objectives", 278, function() return hasObjectives() end, "INGAME_MISSION_OBJECTIVES", "INGAME_MISSION_OBJECTIVES_UNAVAILABLE_SINGLE" },
-	{ "Global Diplomacy", 337, function() return false end, "INGAME_DIPLOMATIC_REPORT", "INGAME_DIPLOMATIC_REPORT_UNAVAILABLE_SINGLE" },
-	{ "Diplomacy", 395, function() return false end, "INGAME_DIPLOMACY", "INGAME_DIPLOMACY_UNAVAILABLE_SINGLE" },
-	{ "Tributes", 455, function() return false end, "INGAME_TRIBUTES", "INGAME_TRIBUTES_UNAVAILABLE_SINGLE" },
+	{ "Settings", 218, function() return true, false, getText("INGAME_SETTINGS") end },
+	{ "Mission Objectives", 278, function()
+		local on = hasObjectives()
+		return on, on and objectivesNews(), getText(on and "INGAME_MISSION_OBJECTIVES" or "INGAME_MISSION_OBJECTIVES_UNAVAILABLE_SINGLE")
+	end, toggleObjectives },
+	{ "Global Diplomacy", 337, diplomacyState(2), function() toggleDiplomacyWindow(2) end },
+	{ "Diplomacy", 395, diplomacyState(1), function() toggleDiplomacyWindow(1) end },
+	{ "Tributes", 455, diplomacyState(3), function() toggleDiplomacyWindow(3) end },
 }
 
 function drawTopButtons()
@@ -262,20 +270,20 @@ function drawTopButtons()
 		local image = "Interface/InGame/Top Panel/" .. b[1] .. " Button"
 		local mx, my = getMouseX(), getMouseY()
 		local hovered = x <= mx and mx < x + bw and y <= my and my < y + bh
-		local enabled = b[3]()
-		-- the objectives' news: the button flashes until the window is opened
-		local flashing = i == 2 and enabled and objectivesNews() and (math.floor(getSystemTime() * 2) % 2 == 0)
+		local enabled, news, tooltip = b[3]()
+		-- news: the button flashes until its window is opened
+		local flashing = enabled and news and (math.floor(getSystemTime() * 2) % 2 == 0)
 		if not enabled then
 			image = image .. " Grey"
 		elseif hovered or flashing then
 			image = image .. " Highlighted"
 		end
 		if hovered then
-			setTooltip(getText((not enabled and b[5]) and b[5] or b[4]))
+			setTooltip(tooltip or b[1])
 			-- grey ones take the click too (it doesn't go through to the map)
 			local clicked = handleButton()
 			if enabled and clicked == 1 then
-				if i == 1 then openInGameMenu() elseif i == 2 then toggleObjectives() end
+				if i == 1 then openInGameMenu() elseif b[4] then b[4]() end
 			end
 		end
 		drawImage(x, y, bw, bh, image .. ".tga")

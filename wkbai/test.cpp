@@ -7456,6 +7456,135 @@ void Test_GameOverView()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Diplomacy as WKB.exe's (ServerDiplomacy.cpp): two players on 4 Peaks, A (1027) and B (1030)
+void Test_Diplomacy()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	const uint32_t idA = 1027, idB = 1030;
+	server.setClientPlayerControl(0, idA);
+	server.setClientPlayerControl(1, idB);
+	ServerGameObject* A = server.findObject(idA);
+	ServerGameObject* B = server.findObject(idB);
+	const GameSet& gs = *server.gameSet;
+	const int allied = gs.diplomaticStatuses.names.getIndex("Allied"), neutral = gs.diplomaticStatuses.names.getIndex("Neutral"),
+		enemy = gs.diplomaticStatuses.names.getIndex("Enemy");
+	if (!A || !B || allied < 0 || neutral < 0 || enemy < 0) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(2);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	auto item = [&](ServerGameObject* o, const char* name) { const int i = gs.items.names.getIndex(name); return i >= 0 ? o->getItem(i) : -999.0f; };
+	auto noticeFor = [](Client& c, const std::string& key) {
+		for (const auto& n : c.notices) if (n.key == key) return true;
+		return false;
+	};
+	step(10);
+	check(server.getDiplomaticStatus(A, B) == enemy, "at the start: enemies");
+
+	// B (the script's player) offers A an alliance; A sees it and its notice
+	run(B, "MAKE_DIPLOMATIC_OFFER \"Allied\" FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	step(5);
+	check(server.getDiplomaticOffer(B, A) == allied, "the server keeps B's offer");
+	check(clientA.diplomaticOffers.count({ idB, idA }) && clientA.diplomaticOffers[{ idB, idA }] == allied, "A's client knows the offer");
+	check(noticeFor(clientA, "Diplomatic_Offer_Received_Allied") && clientA.diplomacyButtons[0].news, "A: \"An Alliance has been offered!\", the button flashing");
+	// an offer of no better status withdraws it
+	run(B, "MAKE_DIPLOMATIC_OFFER \"Enemy\" FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	step(5);
+	check(server.getDiplomaticOffer(B, A) == -1 && !clientA.diplomaticOffers.count({ idB, idA }), "an offer of Enemy withdraws it");
+	check(noticeFor(clientA, "Diplomatic_Offer_Cancelled"), "A: \"Diplomatic offer retracted!\"");
+	run(B, "MAKE_DIPLOMATIC_OFFER \"Allied\" FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	step(5);
+
+	// A accepts in its Diplomacy window: the status set directly, symmetric, the offer gone, the
+	// items on both, B told
+	clientA.sendDiplomaticStatus(idB, allied);
+	step(5);
+	check(server.getDiplomaticStatus(A, B) == allied && server.getDiplomaticStatus(B, A) == allied, "accepted: allied both ways");
+	check(server.getDiplomaticOffer(B, A) == -1 && !clientB.diplomaticOffers.count({ idB, idA }), "the offer is gone");
+	check(item(A, "Diplomatic Status Player ID") == idB && item(A, "Diplomatic Status Old") == enemy && item(A, "Diplomatic Status New") == allied,
+		"A's items: player B, Enemy to Allied");
+	check(item(B, "Diplomatic Status Player ID") == idA && item(B, "Diplomatic Status New") == allied, "B's items: player A, Allied");
+	check(noticeFor(clientB, "Diplomatic_Change_Received_Allied"), "B: \"Our alliance is forged!\"");
+	check(clientA.getDiplomaticStatus(clientA.findObject(idA), clientA.findObject(idB)) == allied, "A's client: allied");
+	// A declares war: no offer needed
+	clientA.sendDiplomaticStatus(idB, enemy);
+	step(5);
+	check(server.getDiplomaticStatus(A, B) == enemy, "war declared at once");
+	// ACCEPT_DIPLOMATIC_OFFER (the scripts'): B offers peace, A's script accepts
+	run(B, "MAKE_DIPLOMATIC_OFFER \"Neutral\" FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	run(A, "ACCEPT_DIPLOMATIC_OFFER FINDER_SELF FINDER_SPECIFIC_ID 1030");
+	step(5);
+	check(server.getDiplomaticStatus(A, B) == neutral, "ACCEPT_DIPLOMATIC_OFFER: neutral");
+	run(A, "ACCEPT_DIPLOMATIC_OFFER FINDER_SELF FINDER_SPECIFIC_ID 1030");
+	check(server.getDiplomaticStatus(A, B) == neutral, "accepting without an offer changes nothing");
+
+	// a tribute: moved at once, no more than A has, the items and event on B, B's notice
+	const int food = gs.items.names.getIndex("Food");
+	A->setItem(food, 300);
+	B->setItem(food, 50);
+	clientA.sendTribute(idB, food, 100);
+	step(5);
+	check(A->getItem(food) == 200 && B->getItem(food) == 150, "100 Food from A to B");
+	printf("UNITTEST tribute items on B: player %g, amount %g, type %g\n", item(B, "Tribute Received Player ID"), item(B, "Tribute Received Amount"), item(B, "Tribute Received Type"));
+	check(item(B, "Tribute Received Player ID") == idA && item(B, "Tribute Received Amount") == 100 && item(B, "Tribute Received Type") == 2,
+		"B's items: from A, 100, type 2 (Food)");
+	check(noticeFor(clientB, "Tribute_Received"), "B: \"You have received some tribute!\"");
+	clientA.sendTribute(idB, food, 1000);
+	step(5);
+	check(A->getItem(food) == 0 && B->getItem(food) == 350, "a tribute larger than A has: all of it");
+
+	// Disallow Diplomacy: the players' changes refused
+	const int disallow = gs.items.names.getIndex("Disallow Diplomacy");
+	server.getLevel()->setItem(disallow, 1);
+	clientA.sendDiplomaticStatus(idB, enemy);
+	step(5);
+	check(server.getDiplomaticStatus(A, B) == neutral, "Disallow Diplomacy: A can't declare war");
+	server.getLevel()->setItem(disallow, 0);
+
+	// the AI Generals' messages: MAP_CHAT_MESSAGE read with its values, %d and %r filled
+	const GameObjBlueprint* kang = gs.findBlueprint(Tags::GAMEOBJCLASS_PLAYER, "Kang The Merciless Kingmaker");
+	bool values = false;
+	if (kang)
+		if (auto p = kang->chatMessages.find("Arrogant"); p != kang->chatMessages.end())
+			if (auto d = p->second.find("Request resource for Alliance"); d != p->second.end())
+				values = !d->second.empty() && d->second[0].values.size() == 2;
+	check(values, "Kang's \"Request resource for Alliance\" texts, each with 2 values");
+	ClientInterface ui(&clientA, nullptr);
+	const std::string text = ui.chatDisplayText("Diplomatic_Statement_Request_Demand_Tribute_Neutral_1", { 250, 3 });
+	printf("UNITTEST message: %s\n", text.c_str());
+	check(text == "250 Gold as tribute.  Now.  Or it's war", "%d and %r: \"250 Gold as tribute...\"");
+	check(ui.chatDisplayText("Diplomatic_Statement_Request_Demand_Tribute_Neutral_1", {}).find('%') == std::string::npos, "missing values: no % left, no hang");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Kingmaker provinces in skirmish, and the game windows (the text windows and the mission
 // objectives, drawn by FrontEndUI.lua instead of ImGui boxes)
 void Test_GameWindows()
@@ -7638,6 +7767,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameOverView, "Game over view: after a loss or a win, no fog of war and every player's statistics; a player still fighting keeps both; kept by a save"},
 {Test_TeamColours, "Team colours of HD models: wkTeam, wkEmblem and its TEXCOORD_1, the emblem slots, the materials apart"},
 {Test_GameWindows, "Game windows: a province plays as a skirmish map unless from the campaign; mission objectives reach the client; text window layout and buttons"},
+{Test_Diplomacy, "Diplomacy: offers, accepting, status items and events, tributes, the AI Generals' messages, Disallow Diplomacy"},
 };
 
 void LaunchTest()

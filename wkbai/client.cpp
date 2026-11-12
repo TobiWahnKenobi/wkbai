@@ -361,10 +361,75 @@ void Client::tick()
 				uint32_t id1 = br.readUint32();
 				uint32_t id2 = br.readUint32();
 				uint8_t status = br.readUint8();
+				const uint32_t initiator = br.readUint32();
 				ClientGameObject *a = findObject(id1), *b = findObject(id2);
 				if (a && b) {
 					int &ref = (a->id <= b->id) ? diplomaticStatuses[{ a->id, b->id }] : diplomaticStatuses[{ b->id, a->id }];
 					ref = status;
+					// the notices (WKB.exe's client 0x52fde0): to the other of the two "Received",
+					// to everyone else "Global" when its Global Diplomacy button is on (a Tavern)
+					const uint32_t me = clientPlayer ? clientPlayer->id : 0;
+					const std::string name = status < gameSet->diplomaticStatuses.names.size() ? gameSet->diplomaticStatuses.names.getString(status) : std::string();
+					if (initiator && me && initiator != me && !name.empty()) {
+						if (me == a->id || me == b->id) {
+							addNotice("Diplomatic_Change_Received_" + name, initiator);
+							diplomacyButtons[0].news = true;
+						}
+						else if (diplomacyButtons[1].enabled) {
+							addNotice("Diplomatic_Change_Global_" + name, initiator);
+							diplomacyButtons[1].news = true;
+						}
+					}
+				}
+				break;
+			}
+			case NETCLIMSG_DIPLOMATIC_OFFER: {
+				const uint32_t from = br.readUint32(), to = br.readUint32();
+				const int status = (int)(int8_t)br.readUint8();
+				const bool had = diplomaticOffers.count({ from, to }) > 0;
+				if (status >= 0)
+					diplomaticOffers[{ from, to }] = status;
+				else
+					diplomaticOffers.erase({ from, to });
+				// to this client's player: an offer, or one withdrawn (WKB.exe 0x5301e3, 0x53043e)
+				if (clientPlayer && to == clientPlayer->id && getLevel()) {
+					if (status >= 0 && status < (int)gameSet->diplomaticStatuses.names.size())
+						addNotice("Diplomatic_Offer_Received_" + gameSet->diplomaticStatuses.names.getString(status), from);
+					else if (had)
+						addNotice("Diplomatic_Offer_Cancelled", from);
+					diplomacyButtons[0].news = true;
+				}
+				break;
+			}
+			case NETCLIMSG_CHAT_DISPLAY: {
+				ChatDisplay chat;
+				chat.from = br.readUint32();
+				chat.key = br.readStringZ();
+				const int count = br.readUint8();
+				for (int i = 0; i < count; i++)
+					chat.values.push_back(br.readFloat());
+				chatDisplays.push_back(std::move(chat));
+				break;
+			}
+			case NETCLIMSG_TRIBUTE_RECEIVED: {
+				const uint32_t from = br.readUint32();
+				br.readUint16();
+				br.readFloat();
+				addNotice("Tribute_Received", from);
+				break;
+			}
+			case NETCLIMSG_DIPLOMACY_WINDOW: {
+				const int window = br.readUint8();
+				const bool enabled = br.readUint8() != 0;
+				std::string tooltip = br.readStringZ();
+				if (window >= 0 && window < 3) {
+					DiplomacyButton& button = diplomacyButtons[window];
+					// newly on: it flashes (WKB.exe 0xb3, 0xb5)
+					if (enabled && !button.enabled && window != 0)
+						button.news = true;
+					button.enabled = enabled;
+					button.set = true;
+					button.tooltip = std::move(tooltip);
 				}
 				break;
 			}
@@ -1050,6 +1115,38 @@ void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject 
 void Client::sendStartLevelRequest()
 {
 	serverLink->send(NetPacketWriter(NETSRVMSG_START_LEVEL));
+}
+
+void Client::addNotice(const std::string& key, uint32_t player)
+{
+	notices.push_back({ key, player, (uint32_t)SDL_GetTicks() });
+	if (notices.size() > 6)
+		notices.erase(notices.begin());
+}
+
+void Client::sendDiplomaticStatus(uint32_t player, int status)
+{
+	NetPacketWriter msg(NETSRVMSG_DIPLOMATIC_STATUS);
+	msg.writeUint32(player);
+	msg.writeUint8((uint8_t)(int8_t)status);
+	serverLink->send(msg);
+}
+
+void Client::sendDiplomaticOffer(uint32_t player, int status)
+{
+	NetPacketWriter msg(NETSRVMSG_DIPLOMATIC_OFFER);
+	msg.writeUint32(player);
+	msg.writeUint8((uint8_t)(int8_t)status);
+	serverLink->send(msg);
+}
+
+void Client::sendTribute(uint32_t player, int item, float amount)
+{
+	NetPacketWriter msg(NETSRVMSG_TRIBUTE);
+	msg.writeUint32(player);
+	msg.writeUint16((uint16_t)item);
+	msg.writeFloat(amount);
+	serverLink->send(msg);
 }
 
 void Client::setGameTextWindowPage(int gtwIndex, int page)

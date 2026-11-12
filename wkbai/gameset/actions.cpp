@@ -1367,24 +1367,107 @@ struct ActionTeleport : Action {
 // "Diplomatic Offer - <status>" with the offering player as its package sender. The AI players'
 // reactions to it (AI\Diplomacy\Diplomacy.cpp) weigh the offer and change the status themselves.
 // Human players get no offer window yet.
+// MAKE_DIPLOMATIC_OFFER "<status>" <from> <to> (WKB.exe 0x489320): from's offer to each of to
+// (Server::makeDiplomaticOffer; a status no better than the present one withdraws the offer)
 struct ActionMakeDiplomaticOffer : Action {
-	int event = -1;
+	int status = -1;
 	std::unique_ptr<ObjectFinder> fFrom, fTo;
 	virtual void run(SrvScriptContext* ctx) override {
-		if (event < 0)
-			return;
 		ServerGameObject* from = fFrom->getFirst(ctx);
 		if (!from)
 			return;
 		for (ServerGameObject* to : fTo->eval(ctx))
-			if (to != from)
-				to->sendEvent(event, from);
+			if (to != from && ctx->server->getDiplomaticOffer(from, to) != status)
+				ctx->server->makeDiplomaticOffer(from, to, status);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
-		const std::string status = gsf.nextString(true);
-		event = gs.events.names.getIndex("Diplomatic Offer - " + status);
+		status = gs.diplomaticStatuses.names.getIndex(gsf.nextString(true));
 		fFrom.reset(ReadFinder(gsf, gs));
 		fTo.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ACCEPT_DIPLOMATIC_OFFER <acceptor> <offerer> (0x46f580): the offerer's offer to the acceptor
+// becomes their status (the original wrote an invalid status without an offer: skipped here)
+// DECLINE_DIPLOMATIC_OFFER <decliner> <offerer> (0x47a800): the offerer's offer withdrawn
+struct ActionAnswerDiplomaticOffer : Action {
+	bool accept;
+	std::unique_ptr<ObjectFinder> fMe, fOfferer;
+	explicit ActionAnswerDiplomaticOffer(bool accept) : accept(accept) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		auto offerers = fOfferer->eval(ctx);
+		for (ServerGameObject* me : fMe->eval(ctx))
+			for (ServerGameObject* offerer : offerers) {
+				if (me == offerer)
+					continue;
+				const int offer = ctx->server->getDiplomaticOffer(offerer, me);
+				if (offer < 0)
+					continue;
+				if (accept)
+					ctx->server->setDiplomaticStatus(me, offerer, offer, me);
+				else
+					ctx->server->makeDiplomaticOffer(offerer, me, -1);
+			}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fMe.reset(ReadFinder(gsf, gs));
+		fOfferer.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SEND_CHAT_MESSAGE "<chat display>" <from> <to> (0x493220): an AI General's message
+struct ActionSendChatMessage : Action {
+	std::string display;
+	std::unique_ptr<ObjectFinder> fFrom, fTo;
+	virtual void run(SrvScriptContext* ctx) override {
+		auto receivers = fTo->eval(ctx);
+		for (ServerGameObject* from : fFrom->eval(ctx)) {
+			ServerGameObject* fromPlayer = from->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? from : from->getPlayer();
+			for (ServerGameObject* to : receivers) {
+				ServerGameObject* toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? to : to->getPlayer();
+				if (fromPlayer && toPlayer && fromPlayer != toPlayer)
+					ctx->server->sendChatDisplay(fromPlayer, toPlayer, display);
+			}
+		}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		display = gsf.nextString(true);
+		fFrom.reset(ReadFinder(gsf, gs));
+		fTo.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SET_CHAT_PERSONALITY "<personality>" <finder> (0x494f70)
+struct ActionSetChatPersonality : Action {
+	std::string personality;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer())
+				ctx->server->chatPersonalities[player->id] = personality;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		personality = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ENABLE_/DISABLE_DIPLOMACY_WINDOW, _DIPLOMATIC_REPORT_WINDOW, _TRIBUTES_WINDOW <tooltip key>
+// <players> (0x480450): the top bar's button on those players' screens
+struct ActionDiplomacyWindow : Action {
+	int window;
+	bool enable;
+	std::string tooltip;
+	std::unique_ptr<ObjectFinder> finder;
+	ActionDiplomacyWindow(int window, bool enable) : window(window), enable(enable) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer())
+				ctx->server->setDiplomacyWindow(player, window, enable, tooltip);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		tooltip = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
 	}
 };
 
@@ -1393,11 +1476,12 @@ struct ActionChangeDiplomaticStatus : Action {
 	std::unique_ptr<ObjectFinder> fPlayer2;
 	int nextStatus;
 	virtual void run(SrvScriptContext* ctx) override {
-		ServerGameObject* player1 = fPlayer1->getFirst(ctx);
-		ServerGameObject* player2 = fPlayer2->getFirst(ctx);
-		if (player1 && player2) {
-			Server::instance->setDiplomaticStatus(player1, player2, nextStatus);
-		}
+		// (WKB.exe 0x476560: every pair; the first finder's player is the one changing it)
+		auto others = fPlayer2->eval(ctx);
+		for (ServerGameObject* player1 : fPlayer1->eval(ctx))
+			for (ServerGameObject* player2 : others)
+				if (player1 != player2)
+					Server::instance->setDiplomaticStatus(player2, player1, nextStatus, player1);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		fPlayer1.reset(ReadFinder(gsf, gs));
@@ -1859,25 +1943,25 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR:
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
 	case Tags::ACTION_FADE_STOP_MUSIC:
-	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER:
-	case Tags::ACTION_SEND_CHAT_MESSAGE:
-	case Tags::ACTION_SET_CHAT_PERSONALITY:
 	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:
-	case Tags::ACTION_ENABLE_DIPLOMATIC_REPORT_WINDOW:
-	case Tags::ACTION_DISABLE_DIPLOMATIC_REPORT_WINDOW:
-	case Tags::ACTION_ENABLE_DIPLOMACY_WINDOW:
-	case Tags::ACTION_DISABLE_DIPLOMACY_WINDOW:
-	case Tags::ACTION_ENABLE_TRIBUTES_WINDOW:
-	case Tags::ACTION_DISABLE_TRIBUTES_WINDOW:
 	case Tags::ACTION_SET_RECONNAISSANCE:
 	case Tags::ACTION_RESERVE_TILE_FOR_CONSTRUCTION:
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:
 	case Tags::ACTION_REGISTER_VICTOR:
 		action = new ActionNop; break;
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
+	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER: action = new ActionAnswerDiplomaticOffer(false); break;
+	case Tags::ACTION_SEND_CHAT_MESSAGE: action = new ActionSendChatMessage; break;
+	case Tags::ACTION_SET_CHAT_PERSONALITY: action = new ActionSetChatPersonality; break;
+	case Tags::ACTION_ENABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, true); break;
+	case Tags::ACTION_DISABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, false); break;
+	case Tags::ACTION_ENABLE_DIPLOMATIC_REPORT_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_REPORT, true); break;
+	case Tags::ACTION_DISABLE_DIPLOMATIC_REPORT_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_REPORT, false); break;
+	case Tags::ACTION_ENABLE_TRIBUTES_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_TRIBUTES, true); break;
+	case Tags::ACTION_DISABLE_TRIBUTES_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_TRIBUTES, false); break;
 	case Tags::ACTION_SET_ACTIVE_MISSION_OBJECTIVES: action = new ActionSetActiveMissionObjectives; break;
 	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY: action = new ActionMissionObjectivesEntry(MissionObjectives::SHOWN); break;
 	case Tags::ACTION_SHOW_MISSION_OBJECTIVES_ENTRY_INACTIVE: action = new ActionMissionObjectivesEntry(MissionObjectives::INACTIVE); break;
@@ -1891,6 +1975,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	default:
 		// keywords of the original without a tag in wkbre2's list
 		if (name == "SWITCH_LOWEST") { action = new ActionSwitchLowest; break; }
+		if (name == "ACCEPT_DIPLOMATIC_OFFER") { action = new ActionAnswerDiplomaticOffer(true); break; }
 		// the *_STAT traces read as the plain ones (debug output; extra words on the line are skipped)
 		if (name == "TRACE_STAT") { action = new ActionTrace; break; }
 		if (name == "TRACE_VALUE_STAT") { action = new ActionTraceValue; break; }

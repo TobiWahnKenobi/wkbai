@@ -411,7 +411,30 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	static constexpr uint64_t LOAD_WAIT_MS = 180000;
 	void waitForLoads();
 	void checkLoadsDone();
-	void setDiplomaticStatus(ServerGameObject *a, ServerGameObject *b, int status);
+	// Diplomacy as WKB.exe's players have it (ServerDiplomacy.cpp, docs/engine/diplomacy.md).
+	// A status change is symmetric; it drops the offers it makes pointless, sets the items
+	// "Diplomatic Status Player ID/Old/New" on both and sends them "On Diplomatic Status Changed"
+	// (events: false while a save is read). initiator: who changed it (the clients' notices).
+	void setDiplomaticStatus(ServerGameObject *a, ServerGameObject *b, int status, ServerGameObject* initiator = nullptr, bool events = true);
+	// from's offer of a better status to `to` (-1: none, cancelled): sends "Diplomatic Offer -
+	// <status>" to `to` with from as the sender
+	void makeDiplomaticOffer(ServerGameObject* from, ServerGameObject* to, int status);
+	int getDiplomaticOffer(const ServerGameObject* from, const ServerGameObject* to) const;
+	std::map<std::pair<uint32_t, uint32_t>, int> diplomaticOffers; // (from, to) -> status offered
+	// SEND_CHAT_MESSAGE: one of the sender blueprint's MAP_CHAT_MESSAGE texts for its chat
+	// personality and that display, its values evaluated, to the receiver's client
+	void sendChatDisplay(ServerGameObject* from, ServerGameObject* to, const std::string& display);
+	std::map<uint32_t, std::string> chatPersonalities; // SET_CHAT_PERSONALITY, by player id
+	// A tribute: up to `amount` of the sender's item `item` (a TRIBUTE_ITEM) to the receiver,
+	// "Tribute Received Player ID/Amount/Type" set on it and "On Tribute Received" sent
+	void giveTribute(ServerGameObject* from, ServerGameObject* to, int item, float amount);
+	// ENABLE_/DISABLE_DIPLOMACY_WINDOW, _DIPLOMATIC_REPORT_WINDOW, _TRIBUTES_WINDOW: the top
+	// bar's buttons on that player's screen (window 0, 1, 2), with a tooltip (Language key)
+	enum DiplomacyWindow : uint8_t { WINDOW_DIPLOMACY = 0, WINDOW_REPORT = 1, WINDOW_TRIBUTES = 2 };
+	void setDiplomacyWindow(ServerGameObject* player, int window, bool enabled, const std::string& tooltip);
+	std::map<std::pair<uint32_t, int>, std::pair<bool, std::string>> diplomacyWindows; // (player, window)
+	// the diplomacy state for a client that joins or loads: offers and window switches
+	void sendDiplomacyState(int clientIndex);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	// The mission objectives on a player's screen (its client's objectives window)
 	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);

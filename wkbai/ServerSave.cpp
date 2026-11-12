@@ -298,6 +298,10 @@ namespace {
 					const int status = server.getDiplomaticStatus((CommonGameObject*)players[i], (CommonGameObject*)players[j]);
 					w.line("DIPLOMATIC_STATUS_BETWEEN %u %u %s", players[i]->id, players[j]->id, inQuotes(w.gs.diplomaticStatuses.names.getString(status)).c_str());
 				}
+			// the offers standing (WKB.exe's keyword; from, to, the status offered)
+			for (const auto& [pair, status] : server.diplomaticOffers)
+				if (status >= 0 && status < (int)w.gs.diplomaticStatuses.names.size())
+					w.line("DIPLOMATIC_OFFER %u %u %s", pair.first, pair.second, inQuotes(w.gs.diplomaticStatuses.names.getString(status)).c_str());
 		}
 		w.depth--;
 		if (isLevel) // as the original: with its id
