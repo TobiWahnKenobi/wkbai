@@ -50,3 +50,14 @@ struct MissionObjectives {
 	std::vector<std::pair<std::string, State>> entries;
 	void parse(GSFileParser& gsf, GameSet& gs);
 };
+
+// COMPANY "<name>" (Companies.cpp): a company a player can enlist for a Valhalla game against its
+// Resource Points (the lobby's Army Enlistment). Its PLAYER_START_SEQUENCE runs on the player at
+// the start, once per enlistment (it raises "<company> Spawn"; Valhalla Mode.cpp musters it).
+struct GSCompany {
+	std::string name, nameTag, descriptionTag, unitTypeTag, weaponPlatform, thumbnail;
+	std::vector<std::string> alignments;
+	int cost = 0;
+	ActionSequence playerStartSequence;
+	void parse(GSFileParser& gsf, GameSet& gs);
+};

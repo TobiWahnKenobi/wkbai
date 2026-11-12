@@ -80,6 +80,33 @@ void GameTextWindow::Button::parse(GSFileParser& gsf, GameSet& gs)
 	}
 }
 
+void GSCompany::parse(GSFileParser& gsf, GameSet& gs)
+{
+	gsf.advanceLine();
+	while (!gsf.eof) {
+		auto tag = gsf.nextTag();
+		if (tag == "NAME_TAG")
+			nameTag = gsf.nextString();
+		else if (tag == "DESCRIPTION_TAG")
+			descriptionTag = gsf.nextString();
+		else if (tag == "UNIT_TYPE_TAG")
+			unitTypeTag = gsf.nextString();
+		else if (tag == "AVAILABLE_TO_ALIGNMENT")
+			alignments.push_back(gsf.nextString(true));
+		else if (tag == "WEAPON_PLATFORM")
+			weaponPlatform = gsf.nextString(true);
+		else if (tag == "THUMBNAIL_BITMAP")
+			thumbnail = gsf.nextString(true);
+		else if (tag == "RESOURCE_POINT_COST")
+			cost = gsf.nextInt();
+		else if (tag == "PLAYER_START_SEQUENCE")
+			playerStartSequence.init(gsf, gs, "END_PLAYER_START_SEQUENCE");
+		else if (tag == "END_COMPANY")
+			break;
+		gsf.advanceLine();
+	}
+}
+
 void MissionObjectives::parse(GSFileParser& gsf, GameSet& gs)
 {
 	gsf.advanceLine();

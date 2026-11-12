@@ -27,6 +27,8 @@ public:
 		int colour = 0;      // player colour index (1 blue ... 8 brown); 0: the map's
 		int team = 0;        // 0: no team
 		std::string aiScript; // AI: its Lua AI (LuaAI\<name>.lua); empty: none
+		// HUMAN, GUEST in Valhalla: the companies enlisted (COMPANY names, one per enlistment)
+		std::vector<std::string> army;
 	};
 	void setSlots(std::vector<Slot> newSlots) { slots = std::move(newSlots); }
 	// Kingmaker campaign: the USER object's items from the player's profile (none: a new one)

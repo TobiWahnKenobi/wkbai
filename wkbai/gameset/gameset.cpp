@@ -357,6 +357,15 @@ void GameSet::parseFile(const char * fn, int pass)
 		else if (pass == 1 && strtag == "MISSION_OBJECTIVES") {
 			missionObjectives.readRef(gsf).parse(gsf, *this);
 		}
+		else if (pass == 0 && strtag == "COMPANY") {
+			companies.names.insertString(gsf.nextString(true));
+			ignoreBlueprintEx(gsf, "END_COMPANY");
+		}
+		else if (pass == 1 && strtag == "COMPANY") {
+			GSCompany& company = companies.readRef(gsf);
+			company.name = companies.names.getString(companies.getIndex(&company));
+			company.parse(gsf, *this);
+		}
 		else if (pass == 0) {
 			switch (tag) {
 			case Tags::GAMESET_DECLARE_ITEM:
@@ -875,6 +884,7 @@ void GameSet::load(const char * fn)
 	conditions.pass();
 	gameTextWindows.pass();
 	missionObjectives.pass();
+	companies.pass();
 	taskCategories.pass();
 	orderCategories.pass();
 	packages.pass();
