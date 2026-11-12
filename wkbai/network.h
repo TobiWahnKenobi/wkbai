@@ -181,6 +181,9 @@ enum NetServerMessages {
 	// The Tributes window's Send (WKB.exe's 0xa9): the receiver's id (32 bits), the item (16
 	// bits), the amount (float)
 	NETSRVMSG_TRIBUTE,
+	// R held with a right-click (WKB.exe's patrol): the object (32 bits), whether the point is one
+	// more of its patrol (8 bits: Shift), the point (3 floats)
+	NETSRVMSG_PATROL,
 };
 
 struct NetPacketWriter {

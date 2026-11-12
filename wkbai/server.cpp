@@ -3741,6 +3741,36 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 					makeDiplomaticOffer(me, other, status);
 				break;
 			}
+			case NETSRVMSG_PATROL: {
+				ServerGameObject* obj = findObject(br.readUint32());
+				const bool more = br.readUint8() != 0;
+				const Vector3 point = br.readVector3();
+				// the game set's ORDER "Patrol" is a stub without a task (WKB.exe walks patrols
+				// itself): its tasks when it has some, else the plain "Move" order's, cycled by the patrol points
+				int patrol = gameSet->orders.names.getIndex("Patrol");
+				if (patrol < 0 || gameSet->orders[patrol].tasks.empty())
+					patrol = gameSet->orders.names.getIndex("Move");
+				ServerGameObject* me = (size_t)clientIndex < clientPlayerObjects.size() ? clientPlayerObjects[clientIndex].get() : nullptr;
+				if (getenv("WKB_TRACE_PATROL")) printf("PATROL obj %p patrol %d me %p owner ok %d\n", (void*)obj, patrol, (void*)me, obj && me ? obj->getPlayer() == me : -1);
+				if (!obj || patrol < 0 || !me || obj->getPlayer() != me)
+					break;
+				const OrderBlueprint* bp = &gameSet->orders[patrol];
+				// one more point of the patrol it walks, or a new patrol between where it stands and there
+				Order* current = obj->orderConfig.getCurrentOrder();
+				if (more && current && current->blueprint == bp && !current->patrolPoints.empty()) {
+					current->patrolPoints.push_back(point);
+					break;
+				}
+				Order* order = obj->orderConfig.addOrder(bp, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nullptr, point, false);
+				if (getenv("WKB_TRACE_PATROL")) printf("PATROL %u: order %s %s\n", obj->id, gameSet->orders.getString(bp).c_str(), order ? "made" : "refused");
+				if (order) {
+					order->patrolPoints = { obj->position, point };
+					order->patrolNext = 1;
+					if (order == obj->orderConfig.getCurrentOrder() && !order->isWorking() && !order->isDone())
+						order->start();
+				}
+				break;
+			}
 			case NETSRVMSG_TERMINATE_OBJECT: {
 				if (ServerGameObject* obj = findObject(br.readUint32())) {
 					// As the original's Delete key: send the game set's "Die" event, which runs

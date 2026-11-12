@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <optional>
 #include "FrontEnd.h"
 
 #include "ClientDebugger.h"
@@ -133,6 +134,10 @@ struct ClientInterface {
 	FrontEnd::Diplomacy diplomacyView();
 	void diplomacyRequest(const std::string& action, const std::string& arg);
 	std::string chatDisplayText(const std::string& key, const std::vector<float>& values);
+	// the selection keys (Hot Keys.cpp) and their pings on the minimap (where, SDL ticks)
+	void hotKeySelect(const char* finderName);
+	std::vector<std::pair<Vector3, uint32_t>> minimapPings;
+	std::optional<Vector3> hotKeyCameraTarget;
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
