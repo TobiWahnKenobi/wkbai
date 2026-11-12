@@ -7157,7 +7157,8 @@ void Test_KeyBindings()
 	check(conflictsWith(A::Pause, 0, KeyChord{ SDL_SCANCODE_SPACE, 0 }, A::CameraToSelection), "Space for Pause clashes with Jump to the selection");
 	check(!conflictsWith(A::Pause, 0, KeyChord{ SDL_SCANCODE_L, 0 }, A::ReplayLog), "L for Pause doesn't clash with the replay's L (not in a game)");
 	check(conflictsWith(A::EditorGrab, 0, KeyChord{ SDL_SCANCODE_E, 0 }, A::NextCommand), "E for the editor's Move clashes with Next command (the editor is in a game)");
-	check(FindKeyConflicts(A::Pause, 0, KeyChord{ SDL_SCANCODE_K, 0 }).empty(), "K for Pause clashes with nothing");
+	// (K selects economic buildings since the original's hot keys: Q is the free letter)
+	check(FindKeyConflicts(A::Pause, 0, KeyChord{ SDL_SCANCODE_Q, 0 }).empty(), "Q for Pause clashes with nothing");
 	check(!conflictsWith(A::GroupSelect3, 0, KeyChord{ SDL_SCANCODE_3, KeyChord::CTRL }, A::GroupSelect3) && conflictsWith(A::GroupSelect3, 0, KeyChord{ SDL_SCANCODE_3, KeyChord::CTRL }, A::GroupStore3),
 		"Ctrl+3 for Select group 3 clashes with Store group 3");
 
