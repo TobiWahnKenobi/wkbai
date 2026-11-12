@@ -896,7 +896,9 @@ float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 	float2 size;
 	sceneTexture.GetDimensions(size.x, size.y);
 	const int steps = (int)ReflectParams.x;
-	const float reach = ReflectParams.w;
+	// (at least as far as the water is from the camera: far water had reached only 140 units,
+	// short of the far land's mountains it should mirror, the play test of 2026-11-12)
+	const float reach = max(ReflectParams.w, distance(world, FogCamera.xyz));
 	float jitter = frac(52.9829189 * frac(dot(svpos.xy, float2(0.06711056, 0.00583715))));
 	float tPrev = 0;
 	// (three samples running on the sky: the ray climbs the screen into the sky, where nothing
@@ -954,11 +956,17 @@ float4 WaterReflection(float4 svpos, float3 world, float3 r)
 	float4 seen = ScreenReflection(svpos, world, r);
 	if (WaterMode.w == 0)
 		return seen;
+	// (the shift on the screen between where the flat mirror's ray and the waves' ray reach,
+	// some way out: the world's xz bend added to the screen's uv, a hundredth of it, had left
+	// the mirror image still on rippled water, the play test of 2026-11-12)
 	float3 v = normalize(world - FogCamera.xyz);
-	float2 bend = r.xz - v.xz;
+	float3 r0 = float3(v.x, -v.y, v.z);
+	float reachOut = clamp(0.3 * distance(world, FogCamera.xyz), 4, 40);
+	float4 c1 = mul(float4(world + r * reachOut, 1), Transform), c0 = mul(float4(world + r0 * reachOut, 1), Transform);
+	float2 shift = c1.w > 0.05 && c0.w > 0.05 ? (c1.xy / c1.w - c0.xy / c0.w) * float2(0.5, -0.5) : float2(0, 0);
 	float2 size;
 	rtReflectTexture.GetDimensions(size.x, size.y);
-	float4 rt = rtReflectTexture.SampleLevel(inpSampler, saturate(svpos.xy / size + bend * 0.04), 0);
+	float4 rt = rtReflectTexture.SampleLevel(inpSampler, saturate(svpos.xy / size + clamp(shift, -0.08, 0.08)), 0);
 	return float4(lerp(seen.a > 0 ? seen.rgb : rt.rgb, rt.rgb, rt.a), max(seen.a, rt.a));
 }
 
@@ -970,7 +978,9 @@ float4 WaterReflection(float4 svpos, float3 world, float3 r)
 // at the grazing view, as the sea does towards the horizon, so it meets the sky in the sky's own
 // colours, dawn's and dusk's too. Ungraded, unfogged. With the water's binding: the water
 // texture, the ripple map and the sky box (PS_FarSea, and the near water at the near ring's end).
-float3 FarSeaColour(float3 world)
+// What it mirrors of the frame: traced here (PS_FarSea, drawn after the frame's copy) or the near
+// water's own (seenIn).
+float3 FarSeaColour(float3 world, float4 svpos, bool trace, float4 seenIn)
 {
 	float3 v = normalize(FogCamera.xyz - world);
 	float3 l = normalize(SunDirection);
@@ -990,7 +1000,11 @@ float3 FarSeaColour(float3 world)
 	float3 r = reflect(-v, n);
 	r.y = abs(r.y);
 	float3 sky = SkyAlong(r) * lerp(1, cloud, 0.5);
-	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud;
+	// (the far land's mountains mirrored in it: it had mirrored the sky alone, the play test of
+	// 2026-11-12)
+	float4 seen = trace ? ScreenReflection(svpos, world, r) : seenIn;
+	sky = lerp(sky, seen.rgb, seen.a);
+	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud * (1 - seen.a * 0.7);
 	return lerp(body, sky, fresnel * lerp(0.8, 1.0, far)) + glint;
 }
 // Extend map: how far into the near ring's last part a world position is (its water goes over
@@ -1101,8 +1115,9 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
 	alpha = lerp(alpha, max(alpha, 0.92), WeatherParams2.y * lerp(0.75, 1, river)); // muddy water is opaque
+	float4 seen = float4(0, 0, 0, 0);
 	if (WaterSkyUp.w != 0) {
-		float4 seen = WaterReflection(input.Pos, input.World, r);
+		seen = WaterReflection(input.Pos, input.World, r);
 		float share = seen.a * max(fresnel * 0.6, 0.3) * (1 - foam);
 		c = lerp(c, seen.rgb, share);
 		alpha = max(alpha, share);
@@ -1111,7 +1126,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
 	float toFar = NearToFarSea(input.World);
 	if (toFar > 0) {
-		c = lerp(c, FarSeaColour(input.World), toFar);
+		c = lerp(c, FarSeaColour(input.World, input.Pos, false, seen), toFar);
 		alpha = lerp(alpha, 1, toFar);
 	}
 	if (WaterSkyUp.w != 0)
@@ -1291,7 +1306,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9 * (1 - 0.85 * input.Flood);
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
-	float4 seen = WaterReflection(input.Pos, input.World, rr);
+	// (the mirror image bent by the ripples nearly fully, the sky's colour less: it had shown the
+	// trees as in a still pond on rippled water, the play test of 2026-11-12)
+	float4 seen = WaterReflection(input.Pos, input.World, reflect(-v, normalize(wn + (n - wn) * 0.8)));
 	float mirror = fresnel * 0.8;
 	float3 reflected = lerp(sky, seen.rgb, seen.a);
 	mirror = lerp(mirror, max(mirror, 0.4), seen.a);
@@ -1302,7 +1319,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
 	float toFar = NearToFarSea(input.World);
 	if (toFar > 0) {
-		c = lerp(c, FarSeaColour(input.World), toFar);
+		c = lerp(c, FarSeaColour(input.World, input.Pos, false, seen), toFar);
 		alpha = lerp(alpha, 1, toFar);
 	}
 	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World);
@@ -1631,7 +1648,7 @@ float4 PS_FarSea(VS_OUTPUT input) : SV_Target
 	if (input.Texcoord.x <= 0.5)
 		discard;
 	float3 world = input.FragPos;
-	float3 c = FarSeaColour(world);
+	float3 c = FarSeaColour(world, input.Pos, true, float4(0, 0, 0, 0));
 	// the last ring's outer part going over into the ground beyond (to the horizon)
 	float k = FarGroundShare(world);
 	if (k > 0) {
@@ -3017,8 +3034,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	// the reflections: Low a short, coarse ray; Medium and High longer, refined; Very high
 	// longer still; Ultra the finest
 	float* reflect = (float*)(sbdata + 832);
-	const bool reflections = g_renderSettings.ssReflections && wq >= RenderSettings::WATER_LOW && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
-	reflect[0] = !reflections ? 0.0f : wq == RenderSettings::WATER_LOW ? 12.0f : wq <= RenderSettings::WATER_HIGH ? 24.0f
+	// (the frame's copy is there: both kinds of reflection need it; the screen-space ones by
+	// their own switch: it had switched the ray-traced ones off too, the play test of 2026-11-12)
+	const bool reflections = wq >= RenderSettings::WATER_LOW && _impl->refraction && _impl->depthCopy && !camera->orthoMode;
+	reflect[0] = !reflections || !g_renderSettings.ssReflections ? 0.0f : wq == RenderSettings::WATER_LOW ? 12.0f : wq <= RenderSettings::WATER_HIGH ? 24.0f
 		: wq == RenderSettings::WATER_VERYHIGH ? 32.0f : 40.0f;
 	reflect[1] = camera->projMatrix.m[2][2];
 	reflect[2] = camera->projMatrix.m[3][2];
@@ -3216,7 +3235,6 @@ void DiligentEnhancedTerrainRenderer::render()
 	{
 		PROFILE_SCOPE("Far rings");
 		drawFar(false);
-		drawFar(false, true);
 	}
 	withMasks(_impl->lakeBinding);
 
@@ -3240,7 +3258,10 @@ void DiligentEnhancedTerrainRenderer::render()
 	// ----- Water -----
 	// (the opaque scene is done: FSR 3.1's reactive mask compares the rest against it)
 	dgfx->MarkOpaqueSceneDone();
-	if (_impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty()) {
+	// (the far sea after the frame's copy: it mirrors the far land in it)
+	const bool nearWater = _impl->lakeVertexBuffer && !_impl->frameLakeIndices.empty();
+	const bool farSea = _impl->farSeaPipeline && _impl->lakeBinding && !_impl->farBlocks.empty();
+	if (nearWater || farSea) {
 		PROFILE_SCOPE("Water");
 		if (_impl->refraction) {
 			ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
@@ -3254,6 +3275,10 @@ void DiligentEnhancedTerrainRenderer::render()
 			}
 			dgfx->RestoreRenderTargets();
 		}
+		if (farSea)
+			drawFar(false, true);
+	}
+	if (nearWater) {
 		// the ray-traced reflections of the flat water, into the texture the water's pixels read
 		if (_impl->rtReflections) {
 			const float fallback[3] = { shadows.skyLight[1][0] * 0.4f, shadows.skyLight[1][1] * 0.4f, shadows.skyLight[1][2] * 0.4f };

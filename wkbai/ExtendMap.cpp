@@ -901,15 +901,24 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				// with the place, times the place's far coordinates, had packed the cliffs into rows
 				// of spikes, the play test of 2026-11-11)
 				const float ang = 3.14159265f * Unit(HashAt(seed, 0, 0, 331));
-				const float u = (px * std::cos(ang) + pz * std::sin(ang)) / 55.0f
-					+ 1.6f * Fbm(seed, px, pz, 220.0f, 2, 333, foot) + 0.5f * Fbm(seed, px, pz, 70.0f, 2, 332, foot);
+				const float ca = std::cos(ang), sa = std::sin(ang);
+				auto uAt = [&](float x, float z) {
+					return (x * ca + z * sa) / 55.0f + 1.6f * Fbm(seed, x, z, 220.0f, 2, 333, foot) + 0.3f * Fbm(seed, x, z, 70.0f, 2, 332, foot);
+				};
+				const float u = uAt(px, pz);
 				const float t = u - std::floor(u);
-				// (the drop at least 3 grid steps wide: sampled coarser, the cliffs' edges had
-				// broken into rows of spikes, the play test of 2026-11-11)
-				const float dw = std::clamp(3.0f * foot / 55.0f, 0.14f, 0.45f);
+				// (the drop at least 3 grid steps wide, measured along the bent layers: where the
+				// warps squeezed them, a drop sized by the straight layers' spacing had been a single
+				// grid step, a row of teeth along the cliff, the play tests of 2026-11-11 and -12;
+				// where the grid can't hold a cliff at all, none)
+				const float g = std::max(foot, 1.0f);
+				const float gu = std::hypot(uAt(px + g, pz) - u, uAt(px, pz + g) - u) / g;
+				const float need = 3.0f * g * gu;
+				const float dw = std::clamp(need, 0.14f, 0.6f);
+				const float hold = std::clamp((0.75f - need) / 0.2f, 0.0f, 1.0f);
 				const float drop = std::clamp((t - (1.0f - dw)) / dw, 0.0f, 1.0f);
 				const float profile = t * (1.0f - drop * drop * (3 - 2 * drop));
-				detail += cuesta * (0.22f * reliefW + 4.0f) * (profile - 0.45f);
+				detail += cuesta * hold * (0.22f * reliefW + 4.0f) * (profile - 0.45f);
 			}
 		}
 		// Far out, here and there a great massif (several times the map's relief, at least 220
