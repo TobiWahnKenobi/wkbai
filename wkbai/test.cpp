@@ -7649,6 +7649,86 @@ void Test_Disguises()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// A standing formation turns to face an attack from its flank or rear (FormationController::
+// faceAttackers), not one from the front, and not again within 4 s
+void Test_FormationFacing()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	std::vector<ServerGameObject*> members, enemies;
+	auto collect = [&](CommonGameObject* obj, std::vector<ServerGameObject*>& into, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					into.push_back(child->dyncast<ServerGameObject>());
+				else
+					self(child, into, self);
+			}
+	};
+	if (player && enemyPlayer) {
+		collect(player, members, collect);
+		collect(enemyPlayer, enemies, collect);
+	}
+	if (members.size() < 2 || enemies.empty() || server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	ServerGameObject* formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+	Vector3 sum;
+	for (ServerGameObject* m : members) {
+		sum += m->position;
+		m->setParent(formation);
+	}
+	formation->setPosition(sum / (float)members.size());
+	formation->setOrientation(Vector3(0, 0, 0)); // its front to the north (-z)
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	server.timeManager.unpause();
+	auto run = [&](float seconds) {
+		const uint64_t start = SDL_GetTicks();
+		while (SDL_GetTicks() - start < (uint64_t)(seconds * 1000.0f)) {
+			server.tick();
+			SDL_Delay(10);
+		}
+	};
+	run(2.0f);
+	ServerGameObject* enemy = enemies[0];
+	auto hitFrom = [&](const Vector3& offset) {
+		enemy->setPosition(formation->position + offset);
+		members[0]->lastHitBy = enemy->id;
+		members[0]->lastHitTime = server.timeManager.currentTime;
+	};
+	printf("UNITTEST formation of %zu at (%.0f, %.0f), its order %s\n", members.size(), formation->position.x, formation->position.z,
+		formation->orderConfig.getCurrentOrder() ? "some" : "none");
+	// from the front (north, 20° off): it stays
+	hitFrom(Vector3(std::sin(0.35f) * 30.0f, 0, -std::cos(0.35f) * 30.0f));
+	run(0.5f);
+	check(std::abs(formation->orientation.y) < 0.01f, "an attack from the front: no turn");
+	// from the right flank (east): it turns east (pi/2)
+	hitFrom(Vector3(30, 0, 0));
+	run(0.5f);
+	printf("UNITTEST facing after the flank attack: %.2f\n", formation->orientation.y);
+	check(std::abs(formation->orientation.y - 1.5708f) < 0.05f, "an attack on the flank: it turns to face it");
+	// from the rear right away: not within 4 s; then it turns
+	hitFrom(Vector3(-30, 0, 0));
+	run(0.5f);
+	check(std::abs(formation->orientation.y - 1.5708f) < 0.05f, "a rear attack within 4 s: no turn yet");
+	run(3.8f);
+	hitFrom(Vector3(-30, 0, 0));
+	run(0.5f);
+	printf("UNITTEST facing after the rear attack: %.2f\n", formation->orientation.y);
+	check(std::abs(std::abs(formation->orientation.y) - 1.5708f) < 0.05f && formation->orientation.y < 0.0f, "then it turns to face the rear attack (west)");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Minimap alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP) on 4 Peaks: only the
 // players listed get them, with their colour, seconds and circles; they end on time
 void Test_MinimapAlerts()
@@ -8110,6 +8190,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_HotKeys, "The original's keys: a selection key picks the nearest of its kind; a patrol there and back"},
 {Test_Disguises, "Disguises and fog reveals: an enemy unit seen as a peasant, unmasked, dropped; revealed through the fog for a time"},
 {Test_MinimapAlerts, "Minimap alerts: blinking dots and collapsing circles to the players listed, with colour and time"},
+{Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
 };
 
 void LaunchTest()

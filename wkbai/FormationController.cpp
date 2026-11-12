@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 #include <algorithm>
+#include <map>
 
 #include "server.h"
 #include "gameset/GameObjBlueprint.h"
@@ -104,6 +105,55 @@ bool FormationController::memberPlace(const ServerGameObject* formation, const S
 	return true;
 }
 
+// A formation standing without an order turns to face an attack from its flank or rear (WK1's
+// manual: "a formation will turn to face an attack"): the members hit in the last 2 s, by enemies
+// within 80 m, give the attackers' middle; more than 50° off its front, the formation turns there
+// (at most every 4 s, so that it doesn't swing between two attacks). The members then walk to
+// their places on the new front; those already fighting keep fighting.
+void FormationController::faceAttackers()
+{
+	Server* server = Server::instance;
+	if (!server || formation->movement.isMoving() || formation->orderConfig.getCurrentOrder())
+		return;
+	const float now = server->timeManager.currentTime;
+	static std::map<uint32_t, float> lastTurn;
+	if (auto it = lastTurn.find(formation->id); it != lastTurn.end() && now >= it->second && now - it->second < 4.0f)
+		return;
+	ServerGameObject* own = formation->getPlayer();
+	Vector3 sum;
+	int count = 0;
+	for (auto& [childType, childList] : formation->children) {
+		if (childType.bpClass() != Tags::GAMEOBJCLASS_CHARACTER)
+			continue;
+		for (CommonGameObject* c : childList) {
+			ServerGameObject* member = c->dyncast<ServerGameObject>();
+			if ((member->flags & CommonGameObject::fTerminated) || !member->lastHitBy || member->lastHitTime < 0.0f
+				|| now - member->lastHitTime > 2.0f || now < member->lastHitTime)
+				continue;
+			ServerGameObject* attacker = server->findObject(member->lastHitBy);
+			if (!attacker || (attacker->flags & CommonGameObject::fTerminated) || attacker->getPlayer() == own)
+				continue;
+			if ((attacker->position - formation->position).sqlen2xz() > 80.0f * 80.0f)
+				continue;
+			sum += attacker->position;
+			count++;
+		}
+	}
+	if (!count)
+		return;
+	const Vector3 dir = sum / (float)count - formation->position;
+	if (dir.sqlen2xz() < 1.0f)
+		return;
+	const float want = std::atan2(dir.x, -dir.z);
+	float off = std::fmod(want - formation->orientation.y, 6.2831855f);
+	if (off > 3.14159265f) off -= 6.2831855f;
+	if (off < -3.14159265f) off += 6.2831855f;
+	if (std::abs(off) < 50.0f * 3.14159265f / 180.0f)
+		return;
+	formation->setOrientation(Vector3(0.0f, want, 0.0f));
+	lastTurn[formation->id] = now;
+}
+
 void FormationController::update()
 {
 	const FormationType type = formationTypeOf(formation);
@@ -126,6 +176,7 @@ void FormationController::update()
 	}
 	if (!first)
 		return;
+	faceAttackers();
 	// as the original, the separations of one member's type
 	const auto places = formationPlaces(type, numMembers, first->formationSeparationX, first->formationSeparationY);
 
