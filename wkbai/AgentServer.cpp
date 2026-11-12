@@ -126,7 +126,24 @@ namespace {
 		int button = SDL_BUTTON_LEFT;
 		bool add = false;       // Shift held (add to the selection, queue the order)
 		bool cameraMoved = false;
+		// an object whose centre the pick misses (a hollow building, a courtyard; something in
+		// front): the cursor tries points across it, as a hand moves onto a wall
+		int attempt = 0;
+		int baseX = 0, baseY = 0, radius = 0;
 	};
+
+	// the attempt'th point across an object of that screen radius (0: the centre)
+	std::pair<int, int> aimOffset(int attempt, int radius)
+	{
+		static const float rings[] = { 0.35f, 0.6f, 0.85f };
+		if (attempt <= 0 || radius <= 0)
+			return { 0, 0 };
+		const int i = attempt - 1;
+		const float r = rings[(i / 8) % 3] * radius;
+		const float ang = (i % 8) * 0.785398f + (i / 8) * 0.39f;
+		return { (int)(r * std::cos(ang)), (int)(r * std::sin(ang) * 0.8f) };
+	}
+	const int AIM_ATTEMPTS = 24;
 
 	void queueThen(const Aim& a, std::function<void()> then)
 	{
@@ -170,8 +187,24 @@ namespace {
 			aimFail(a, why + (a.cameraMoved ? " (after moving the camera by the minimap)" : ""));
 			return;
 		}
-		if (const AgentUi::Element* e = AgentUi::At(x, y)) {
-			aimFail(a, "the interface is in the way: " + e->id, { { "at", { x, y } } });
+		if (a.attempt == 0) {
+			a.baseX = x; a.baseY = y;
+			if (!a.ground && a.expect) {
+				const AgentUi::World* w = AgentUi::GetWorld();
+				a.radius = w && w->objectScreenRadius ? w->objectScreenRadius(a.expect) : 0;
+			}
+		}
+		const auto [ox, oy] = aimOffset(a.attempt, a.radius);
+		x = a.baseX + ox; y = a.baseY + oy;
+		if (x < 0 || y < 0 || x >= g_windowWidth || y >= g_windowHeight || AgentUi::At(x, y)) {
+			// that point is off the screen or under the interface: the next one, else refused
+			if (!a.ground && a.expect && a.radius > 0 && a.attempt < AIM_ATTEMPTS) {
+				a.attempt++;
+				aimStep(a);
+				return;
+			}
+			const AgentUi::Element* e = AgentUi::At(x, y);
+			aimFail(a, e ? "the interface is in the way: " + e->id : std::string("off the screen"), { { "at", { x, y } } });
 			return;
 		}
 		AgentInput::Move(x, y);
@@ -179,8 +212,14 @@ namespace {
 			const AgentUi::World* w = AgentUi::GetWorld();
 			const uint32_t under = w && w->hovered ? w->hovered() : 0;
 			if (a.ground ? under != 0 : under != a.expect) {
+				if (!a.ground && a.expect && a.radius > 0 && a.attempt < AIM_ATTEMPTS) {
+					Aim next = a;
+					next.attempt++;
+					aimStep(next);
+					return;
+				}
 				aimFail(a, a.ground ? "an object is under the cursor there" : "another object is under the cursor",
-					{ { "at", { x, y } }, { "underCursor", under } });
+					{ { "at", { x, y } }, { "underCursor", under }, { "tried", a.attempt + 1 } });
 				return;
 			}
 			if (a.add) AgentInput::Key(SDL_SCANCODE_LSHIFT, true);

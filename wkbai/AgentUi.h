@@ -52,6 +52,8 @@ struct World {
 	// an object's screen point (window pixels), false with the reason (unknown, off the screen,
 	// behind the camera)
 	std::function<bool(uint32_t id, int& x, int& y, std::string& why)> objectPoint;
+	// how big an object looks: its bounding sphere's radius on the screen (pixels), 0 unknown
+	std::function<int(uint32_t id)> objectScreenRadius;
 	// where an object is on the map (x, z in metres)
 	std::function<bool(uint32_t id, float& x, float& z)> objectPosition;
 	// a point on the ground (x, z in metres) on the screen

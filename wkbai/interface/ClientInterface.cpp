@@ -221,6 +221,19 @@ void ClientInterface::setUpAgentWorld()
 		if (!obj) { why = "no such object"; return false; }
 		return project(centreOf(obj), x, y, why);
 	};
+	agentWorld.objectScreenRadius = [this, project, centreOf](uint32_t id) -> int {
+		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
+		if (!obj || !obj->sceneEntity.model)
+			return 0;
+		const Vector3 c = centreOf(obj);
+		const float r = obj->sceneEntity.model->getSphereRadius() * obj->scale.x;
+		const Vector3 side = client->camera.direction.cross(Vector3(0, 1, 0)).normal();
+		int x0, y0, x1, y1;
+		std::string why;
+		if (!project(c, x0, y0, why) || !project(c + side * r, x1, y1, why))
+			return 0;
+		return (int)std::hypot((float)(x1 - x0), (float)(y1 - y0));
+	};
 	agentWorld.objectPosition = [this](uint32_t id, float& x, float& z) {
 		ClientGameObject* obj = client->findObject(id) ? client->findObject(id)->dyncast<ClientGameObject>() : nullptr;
 		if (!obj) return false;
