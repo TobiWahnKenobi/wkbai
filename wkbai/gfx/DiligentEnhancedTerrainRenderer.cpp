@@ -2869,6 +2869,9 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	const uint64_t buildStart = SDL_GetTicksNS();
 	std::vector<uint8_t> sea;
 	const std::vector<uint8_t> flow = BuildWaterFlow(terrain, &sea);
+	const std::vector<uint8_t> coast = BuildCoastDistance(terrain);
+	// (a sea only with open water some way from its shores: a wide river is none)
+	KeepOpenSea(terrain, sea, coast);
 	const std::vector<uint8_t> regions = BuildWaveRegions(terrain, sea);
 	const uint64_t flowDone = SDL_GetTicksNS();
 	std::vector<float> halfWidth;
@@ -2907,7 +2910,6 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	const uint32_t W = terrain->width, H = terrain->height;
 	put(flowMap, "water flow map", "flowTexture", W, H, TEX_FORMAT_RGBA8_UNORM, 4, flow.data());
 	put(seaMap, "open sea map", "seaTexture", W, H, TEX_FORMAT_R8_UNORM, 1, sea.data());
-	const std::vector<uint8_t> coast = BuildCoastDistance(terrain);
 	put(coastMap, "coast distance map", "coastTexture", W, H, TEX_FORMAT_R8_UNORM, 1, coast.data());
 	put(waveRegions[0], "wave regions (1-4)", "waveRegions0", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[0].data());
 	put(waveRegions[1], "wave regions (5-8)", "waveRegions1", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[1].data());

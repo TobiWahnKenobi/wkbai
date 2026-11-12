@@ -313,15 +313,63 @@ std::vector<uint8_t> BuildCoastDistance(const Terrain* t)
 	return out;
 }
 
+void KeepOpenSea(const Terrain* t, std::vector<uint8_t>& sea, const std::vector<uint8_t>& coast)
+{
+	const int W = (int)t->width, H = (int)t->height;
+	if (sea.size() != (size_t)W * H || coast.size() != sea.size())
+		return;
+	std::vector<int> piece((size_t)W * H, -1);
+	std::vector<int> stack;
+	for (int start = 0; start < W * H; start++) {
+		if (!sea[start] || piece[start] >= 0)
+			continue;
+		std::vector<int> tiles;
+		stack.push_back(start);
+		piece[start] = start;
+		int widest = 0, border = 0;
+		while (!stack.empty()) {
+			const int i = stack.back();
+			stack.pop_back();
+			tiles.push_back(i);
+			widest = std::max(widest, (int)coast[i]);
+			const int x = i % W, z = i / W;
+			if (x == 0 || z == 0 || x == W - 1 || z == H - 1)
+				border++;
+			const int nb[4][2] = { { x + 1, z }, { x - 1, z }, { x, z + 1 }, { x, z - 1 } };
+			for (const auto& q : nb) {
+				if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H)
+					continue;
+				const int j = q[1] * W + q[0];
+				if (sea[j] && piece[j] < 0) {
+					piece[j] = start;
+					stack.push_back(j);
+				}
+			}
+		}
+		// (a sea along a good stretch of the edge; a river crosses it only over its width)
+		const bool isSea = widest >= 8 * 4 && border >= std::max(40, (2 * W + 2 * H) * 12 / 100);
+		printf("Open sea: a piece of %zu tiles, %.1f tiles from the shore at most, %d along the edge: %s\n", tiles.size(), widest / 4.0f, border, isSea ? "a sea" : "not a sea");
+		if (!isSea)
+			for (int i : tiles)
+				sea[i] = 0;
+	}
+}
+
+std::vector<uint8_t> OpenSeaTiles(Terrain* t)
+{
+	std::vector<uint8_t> sea;
+	BuildWaterFlow(t, &sea);
+	KeepOpenSea(t, sea, BuildCoastDistance(t));
+	for (uint8_t& s : sea)
+		s = s ? 1 : 0;
+	return sea;
+}
+
 void PrepareSeaIce(Terrain* t)
 {
 	if (!t || t->seaTiles.size() == (size_t)t->width * t->height)
 		return;
-	std::vector<uint8_t> sea;
-	BuildWaterFlow(t, &sea);
-	for (uint8_t& s : sea)
-		s = s ? 1 : 0;
-	t->seaTiles = std::move(sea);
+	t->seaTiles = OpenSeaTiles(t);
 	t->coastTiles = BuildCoastDistance(t);
 }
 

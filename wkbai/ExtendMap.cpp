@@ -4,6 +4,7 @@
 #include "ExtendMap.h"
 #include "terrain.h"
 #include "WaterDesign.h"
+#include "Environment.h"
 #include "gfx/bitmap.h"
 
 #include <algorithm>
@@ -572,7 +573,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	const float relief = std::max(hi - lo, 4.0f);
 	// per map vertex, fractions of its tiles around (blurred later): rocky or snowy, wet
 	std::vector<int> matCount(M, 0);
-	std::vector<float> rocky((size_t)VW * VH, 0), wetV((size_t)VW * VH, 0);
+	std::vector<float> rocky((size_t)VW * VH, 0), wetV((size_t)VW * VH, 0), seaV((size_t)VW * VH, 0);
+	// the map's water as the sea or not (a river's, a lake's: KeepOpenSea), for the far water it
+	// carries on as
+	const std::vector<uint8_t> mapSea = OpenSeaTiles(const_cast<Terrain*>(&map));
 	std::vector<int> seamMat((size_t)VW * VH, -1); // the outer tiles' corner materials, on the border
 	float snowLine = 1e30f, bedSum = 0, levelSum = 0;
 	int bedN = 0;
@@ -600,8 +604,12 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					seamMat[vi] = cm[k];
 			}
 			if (t->fullOfWater) {
-				for (int k = 0; k < 4; k++)
+				const bool seaTile = mapSea.size() == (size_t)w * h && mapSea[(size_t)z * w + x];
+				for (int k = 0; k < 4; k++) {
 					wetV[(size_t)cz[k] * VW + cx[k]] += 0.25f;
+					if (seaTile)
+						seaV[(size_t)cz[k] * VW + cx[k]] += 0.25f;
+				}
 				if (x < 4 || z < 4 || x >= w - 4 || z >= h - 4) {
 					bedSum += map.getVertex(x, z);
 					levelSum += t->waterLevel;
@@ -774,7 +782,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	const std::vector<float> fineLocal = blur2D(fineIn, 6);
 	const std::vector<float> fineSide = blur2D(blur2D(fineIn, 12), 12);
 	const float fineGlobal = std::max(0.05f, (sigma1 + sigma3) * 0.8f);
-	const std::vector<float> rockyB = blur2D(rocky, 8), wetB = blur2D(wetV, 6);
+	const std::vector<float> rockyB = blur2D(rocky, 8), wetB = blur2D(wetV, 6), seaB = blur2D(seaV, 6);
 	auto at = [&](const std::vector<float>& f, float x, float z) {
 		const int ix = std::clamp((int)std::lround(x), 0, w), iz = std::clamp((int)std::lround(z), 0, h);
 		return f[(size_t)iz * VW + ix];
@@ -853,7 +861,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// with the distance) is rocky or rough, and here and there farther out; worn hills
 	// elsewhere; the sea floor off the sea. Also the place's mountain and sea shares and the
 	// border point it was sampled at.
-	struct Land { float detail, mtn, wet, bx, bz, d, lake; };
+	// (seaFrac: of the edge's water there, the sea's share; the rest a river's or a lake's)
+	struct Land { float detail, mtn, wet, bx, bz, d, lake, seaFrac; };
 	auto landAt = [&](float px, float pz, float foot = 0.0f) {
 		Land L;
 		const float sx = px - n, sz = pz - n;
@@ -866,6 +875,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float rockiness = std::clamp(at(rockyB, L.bx, L.bz) * 1.5f, 0.0f, 1.0f);
 		const float roughness = at(rough, L.bx, L.bz);
 		L.wet = coastal(std::clamp(at(wetB, L.bx, L.bz) * 1.6f, 0.0f, 1.0f), px, pz, foot);
+		L.seaFrac = at(seaB, L.bx, L.bz) / std::max(at(wetB, L.bx, L.bz), 1e-3f);
 		// the edge's own character fades out far away, where the land goes its own way
 		const float own = 1.0f - std::clamp((L.d - 2.0f * n) / 400.0f, 0.0f, 0.7f);
 		float mtn = own * std::clamp(std::max(rockiness, roughness / (0.04f * relief + 0.5f) - 0.6f), 0.0f, 1.0f);
@@ -2236,7 +2246,9 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					// (fresh where the river or the lake is, unless the sea's rule holds there: rivers in
 					// the fjords run at the sea's level, and by the level alone they had counted as
 					// the sea, blue in a flood, the play test of 2026-11-12)
-					R.fresh[gi] = (R.lake[gi] || riverHere) && !(seaLevel > -1e29f && L.wet > 0.3f);
+					// (where the edge's water carries on: the kind it is on the map, a wide river
+					// running out as a river)
+					R.fresh[gi] = seaLevel > -1e29f && L.wet > 0.3f ? L.seaFrac < 0.5f : (R.lake[gi] || riverHere);
 				}
 			});
 		}

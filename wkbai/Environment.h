@@ -130,6 +130,15 @@ float SeaIceEdge(float wx, float wz, float reach);    // the edge's wander at a 
 std::vector<uint8_t> BuildCoastDistance(const Terrain* t);
 // the terrain's open sea and coast distances (Terrain::seaTiles, coastTiles), once
 void PrepareSeaIce(Terrain* t);
+// The open sea (BuildWaterFlow's: wide water reaching the edge) kept only where it is a sea: some
+// of its water at least 8 tiles from any shore, and along a good stretch of the edge (at least 40
+// tiles and an eighth of it); a river, however wide, crosses the edge only over its width (the
+// Great River had counted as a sea: blue in a flood, the play test of 2026-11-12). sea: per tile,
+// nonzero in the open sea (BuildWaterFlow's), cleared in the pieces that are rivers; coast:
+// BuildCoastDistance's
+void KeepOpenSea(const Terrain* t, std::vector<uint8_t>& sea, const std::vector<uint8_t>& coast);
+// the open sea of a terrain as kept (per tile 1 sea, 0 not)
+std::vector<uint8_t> OpenSeaTiles(Terrain* t);
 
 // The land that floods (the server's floods and the client's picture of them, the same tiles):
 // spread out from the shores, tile by tile (4 neighbours), up to 10 tiles from the water, over
