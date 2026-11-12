@@ -17,6 +17,7 @@
 // the same foam and particles at their foot.
 
 #include "DiligentWaterfalls.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
 #include "RenderSettings.h"
@@ -1111,7 +1112,7 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 		sci.Desc.Name = entry;
 		RefCntAutoPtr<IShader> s;
 		LoadingCompilingShader(entry); // (the loading screen)
-		device->CreateShader(sci, &s);
+		ShaderCache::CreateShader(device, sci, &s);
 		if (!s)
 			ferr("Diligent: failed to compile waterfall shader %s", entry);
 		return s;
@@ -1148,16 +1149,16 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 	ci.PSODesc.Name = "Waterfall sheet";
 	ci.pVS = fallVs;
 	ci.pPS = fallPs;
-	device->CreateGraphicsPipelineState(ci, &_impl->fallPipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->fallPipeline);
 	RefCntAutoPtr<IShader> foamVs = shader(SHADER_TYPE_VERTEX, "VS_Foam"), foamPs = shader(SHADER_TYPE_PIXEL, "PS_Foam");
 	ci.PSODesc.Name = "Waterfall foam";
 	ci.pVS = foamVs;
 	ci.pPS = foamPs;
-	device->CreateGraphicsPipelineState(ci, &_impl->foamPipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->foamPipeline);
 	RefCntAutoPtr<IShader> cascadePs = shader(SHADER_TYPE_PIXEL, "PS_Cascade");
 	ci.PSODesc.Name = "Waterfall cascades";
 	ci.pPS = cascadePs;
-	device->CreateGraphicsPipelineState(ci, &_impl->cascadePipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->cascadePipeline);
 
 	const Uint32 pstride = sizeof(Particle);
 	const LayoutElement particleLayout[] = {
@@ -1170,7 +1171,7 @@ DiligentWaterfalls::DiligentWaterfalls(DiligentGfx* gfx, const Terrain* terrain)
 	ci.PSODesc.Name = "Waterfall mist and spray";
 	ci.pVS = partVs;
 	ci.pPS = partPs;
-	device->CreateGraphicsPipelineState(ci, &_impl->particlePipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->particlePipeline);
 	if (!_impl->fallPipeline || !_impl->foamPipeline || !_impl->cascadePipeline || !_impl->particlePipeline)
 		ferr("Diligent: could not create the waterfall pipelines.");
 

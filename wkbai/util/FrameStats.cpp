@@ -4,6 +4,7 @@
 
 #include "FrameStats.h"
 #include "../gfx/GpuProfiler.h"
+#include "../gfx/ShaderCache.h"
 #include "../settings.h"
 #include "../window.h"
 #include "../file.h"
@@ -213,6 +214,13 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	report["windowWidth"] = g_windowWidth;
 	report["windowHeight"] = g_windowHeight;
 	report["warmupFrames"] = warmup;
+	{
+		// the shaders of the start and the map load: from the cache or compiled, and the time
+		const ShaderCache::Stats sc = ShaderCache::GetStats();
+		report["shaderCache"] = { { "requests", sc.requests }, { "loaded", sc.loaded }, { "compiled", sc.compiled },
+			{ "corrupt", sc.corrupt }, { "failed", sc.failed }, { "compileMs", sc.compileMs }, { "loadMs", sc.loadMs },
+			{ "pipelines", sc.pipelines }, { "pipelineMs", sc.pipelineMs }, { "rebuilt", sc.rebuilt }, { "reason", sc.reason } };
+	}
 	report["frames"] = s.frames;
 	report["avgMs"] = s.avgMs;
 	report["p50Ms"] = s.p50Ms;

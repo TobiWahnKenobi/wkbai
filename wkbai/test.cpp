@@ -8736,6 +8736,7 @@ void Test_BuildIdentity()
 	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
+void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -8813,6 +8814,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
+{Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
 };
 
 void LaunchTest()

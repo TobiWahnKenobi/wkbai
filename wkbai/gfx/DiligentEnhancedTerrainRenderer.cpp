@@ -7,6 +7,7 @@
 // IRenderer. The packed normals/tangents are unpacked in the vertex shader.
 
 #include "DiligentEnhancedTerrainRenderer.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "GpuProfiler.h"
 #include <SDL3/SDL_timer.h>
@@ -2333,7 +2334,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
 		LoadingCompilingShader(entryPoint); // (the loading screen)
-		device->CreateShader(sci, &shader);
+		ShaderCache::CreateShader(device, sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile enhanced terrain shader %s", entryPoint);
 		return shader;
@@ -2371,7 +2372,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	IPipelineResourceSignature* signatures[] = { _impl->signature };
 	ci.ppResourceSignatures = signatures;
 	ci.ResourceSignaturesCount = 1;
-	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the enhanced terrain pipeline.");
 	// Extend map's far rings: FarVertex (position, normal, colour), the same resources
@@ -2391,18 +2392,18 @@ void DiligentEnhancedTerrainRenderer::init()
 		RefCntAutoPtr<IShader> fps = createShader(SHADER_TYPE_PIXEL, "PS_Far");
 		fci.pVS = fvs;
 		fci.pPS = fps;
-		device->CreateGraphicsPipelineState(fci, &_impl->farPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, fci, &_impl->farPipeline);
 		GraphicsPipelineStateCreateInfo fsci = fci;
 		fsci.PSODesc.Name = "Extend map far sea";
 		RefCntAutoPtr<IShader> fsps = createShader(SHADER_TYPE_PIXEL, "PS_FarSea");
 		fsci.pPS = fsps;
-		device->CreateGraphicsPipelineState(fsci, &_impl->farSeaPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, fsci, &_impl->farSeaPipeline);
 		GraphicsPipelineStateCreateInfo fdci = fci;
 		fdci.PSODesc.Name = "Extend map far rings depth pre-pass";
 		fdci.pPS = nullptr;
 		fdci.GraphicsPipeline.NumRenderTargets = 0;
 		fdci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
-		device->CreateGraphicsPipelineState(fdci, &_impl->farDepthPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, fdci, &_impl->farDepthPipeline);
 		BufferDesc fvb;
 		fvb.Name = "Extend map far ring vertices";
 		fvb.Size = far.vertices.size() * sizeof(FarVertex);
@@ -2429,7 +2430,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		dci.pPS = nullptr;
 		dci.GraphicsPipeline.NumRenderTargets = 0;
 		dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
-		device->CreateGraphicsPipelineState(dci, &_impl->depthPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, dci, &_impl->depthPipeline);
 		if (!_impl->depthPipeline)
 			ferr("Diligent: could not create the enhanced terrain depth pre-pass pipeline.");
 	}
@@ -2445,7 +2446,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		agp.RasterizerDesc.CullMode = CULL_MODE_NONE;
 		agp.DepthStencilDesc.DepthEnable = False;
 		agp.DepthStencilDesc.DepthWriteEnable = False;
-		device->CreateGraphicsPipelineState(aci, &_impl->albedoPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, aci, &_impl->albedoPipeline);
 		if (!_impl->albedoPipeline)
 			printf("Diligent: no terrain albedo for the dynamic GI (pipeline failed)\n");
 	}
@@ -2461,7 +2462,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		ci.pHS = hs;
 		ci.pDS = ds;
 		ci.PSODesc.Name = "Enhanced terrain, tessellated";
-		device->CreateGraphicsPipelineState(ci, &_impl->tessPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->tessPipeline);
 		if (!_impl->tessPipeline) {
 			printf("Diligent: no tessellated terrain (pipeline failed)\n");
 			_impl->tessellation = false;
@@ -2473,7 +2474,7 @@ void DiligentEnhancedTerrainRenderer::init()
 			dci.pPS = nullptr;
 			dci.GraphicsPipeline.NumRenderTargets = 0;
 			dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
-			device->CreateGraphicsPipelineState(dci, &_impl->tessDepthPipeline);
+			ShaderCache::CreateGraphicsPipeline(device, dci, &_impl->tessDepthPipeline);
 		}
 
 		ci.pHS = nullptr;
@@ -2503,7 +2504,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	gp.InputLayout.NumElements = (Uint32)std::size(lakeLayout);
 	ci.pVS = lakeVs;
 	ci.pPS = lakePs;
-	device->CreateGraphicsPipelineState(ci, &_impl->lakePipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->lakePipeline);
 	if (!_impl->lakePipeline)
 		ferr("Diligent: could not create the enhanced terrain water pipeline.");
 	{
@@ -2515,7 +2516,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		dci.GraphicsPipeline.NumRenderTargets = 0;
 		dci.GraphicsPipeline.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
 		dci.GraphicsPipeline.BlendDesc.RenderTargets[0].BlendEnable = False;
-		device->CreateGraphicsPipelineState(dci, &_impl->lakeDepthPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, dci, &_impl->lakeDepthPipeline);
 		if (!_impl->lakeDepthPipeline)
 			ferr("Diligent: could not create the enhanced terrain water depth pipeline.");
 	}
@@ -2530,7 +2531,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		ci.pHS = lakeHs;
 		ci.pDS = lakeDs;
 		ci.pPS = lakeHighPs;
-		device->CreateGraphicsPipelineState(ci, &_impl->highWaterPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->highWaterPipeline);
 		if (!_impl->highWaterPipeline)
 			printf("Diligent: no high water (pipeline failed)\n");
 		ci.pHS = nullptr;
@@ -2543,7 +2544,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		RefCntAutoPtr<IShader> lakeHighPs = createShader(SHADER_TYPE_PIXEL, "PS_LakeHigh");
 		ci.PSODesc.Name = "Enhanced terrain water, medium";
 		ci.pPS = lakeHighPs;
-		device->CreateGraphicsPipelineState(ci, &_impl->mediumWaterPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->mediumWaterPipeline);
 		if (!_impl->mediumWaterPipeline)
 			printf("Diligent: no medium water (pipeline failed)\n");
 		ci.pPS = lakePs;
@@ -2564,7 +2565,7 @@ void DiligentEnhancedTerrainRenderer::init()
 	gp.InputLayout.NumElements = (Uint32)std::size(grassLayout);
 	ci.pVS = grassVs;
 	ci.pPS = grassPs;
-	device->CreateGraphicsPipelineState(ci, &_impl->grassPipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->grassPipeline);
 	if (!_impl->grassPipeline)
 		ferr("Diligent: could not create the enhanced terrain grass pipeline.");
 
@@ -2600,7 +2601,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		IPipelineResourceSignature* blobSignatures[] = { _impl->blobSignature };
 		bci.ppResourceSignatures = blobSignatures;
 		bci.ResourceSignaturesCount = 1;
-		device->CreateGraphicsPipelineState(bci, &_impl->blobPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, bci, &_impl->blobPipeline);
 		if (!_impl->blobPipeline)
 			ferr("Diligent: could not create the blob shadow pipeline.");
 	}

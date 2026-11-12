@@ -10,6 +10,7 @@
 // the fog follows the rows' values, interpolated in between as the original's vertex fog is.
 
 #include "DiligentSkyRenderer.h"
+#include "ShaderCache.h"
 #include <chrono>
 #include "../util/LoadingProgress.h"
 #include "renderer_diligent.h"
@@ -1382,7 +1383,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
 		LoadingCompilingShader(entryPoint); // (the loading screen)
-		device->CreateShader(sci, &shader);
+		ShaderCache::CreateShader(device, sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile sky shader %s", entryPoint);
 		return shader;
@@ -1433,7 +1434,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 		IPipelineResourceSignature* csigs[] = { _impl->cloudSignature };
 		cci.ppResourceSignatures = csigs;
 		cci.ResourceSignaturesCount = 1;
-		device->CreateGraphicsPipelineState(cci, &_impl->cloudPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, cci, &_impl->cloudPipeline);
 		if (!_impl->cloudPipeline)
 			ferr("Diligent: could not create the sky clouds pipeline.");
 		_impl->cloudSignature->CreateShaderResourceBinding(&_impl->cloudSrb, true);
@@ -1457,7 +1458,7 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	IPipelineResourceSignature* signatures[] = { _impl->signature };
 	ci.ppResourceSignatures = signatures;
 	ci.ResourceSignaturesCount = 1;
-	device->CreateGraphicsPipelineState(ci, &_impl->pipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->pipeline);
 	if (!_impl->pipeline)
 		ferr("Diligent: could not create the sky pipeline.");
 	_impl->signature->CreateShaderResourceBinding(&_impl->srb, true);

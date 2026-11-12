@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentRayShadows.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "../util/util.h"
 #include "../terrain.h"
@@ -326,7 +327,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 		sci.Desc.Name = "Ray-traced shadows";
 		RefCntAutoPtr<IShader> s;
 		LoadingCompilingShader(entry); // (the loading screen)
-		device->CreateShader(sci, &s);
+		ShaderCache::CreateShader(device, sci, &s);
 		if (!s)
 			printf("Ray-traced shadows: could not compile %s (DXC, shader model 6.5): off\n", entry);
 		return s;
@@ -346,7 +347,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 			sci.Desc.Name = "Ray-traced water reflections";
 			RefCntAutoPtr<IShader> s;
 			LoadingCompilingShader(entry); // (the loading screen)
-			device->CreateShader(sci, &s);
+			ShaderCache::CreateShader(device, sci, &s);
 			if (!s)
 				printf("Ray-traced reflections: could not compile %s (DXC, shader model 6.5): off\n", entry);
 			return s;
@@ -380,7 +381,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 	IPipelineResourceSignature* sigs[] = { signature };
 	ci.ppResourceSignatures = sigs;
 	ci.ResourceSignaturesCount = 1;
-	device->CreateGraphicsPipelineState(ci, &pipeline);
+	ShaderCache::CreateGraphicsPipeline(device, ci, &pipeline);
 	ok = pipeline != nullptr;
 	printf("Ray-traced shadows: %s\n", ok ? "ready" : "could not create the pipeline: off");
 }
@@ -835,7 +836,7 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 		ci.ppResourceSignatures = sigs;
 		ci.ResourceSignaturesCount = 1;
 		reflectPipeline.Release();
-		device->CreateGraphicsPipelineState(ci, &reflectPipeline);
+		ShaderCache::CreateGraphicsPipeline(device, ci, &reflectPipeline);
 		reflectDsvFormat = dsvFormat;
 		if (!reflectPipeline) {
 			printf("Ray-traced reflections: could not create the pipeline: off\n");

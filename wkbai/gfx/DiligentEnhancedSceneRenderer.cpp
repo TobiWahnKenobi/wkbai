@@ -8,6 +8,7 @@
 // Diligent has no such vertex format.
 
 #include "DiligentEnhancedSceneRenderer.h"
+#include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "../util/FrameStats.h"
 #include <thread>
@@ -1814,7 +1815,7 @@ void DiligentEnhancedSceneRenderer::init()
 		sci.Desc.Name = entryPoint;
 		RefCntAutoPtr<IShader> shader;
 		LoadingCompilingShader(entryPoint); // (the loading screen)
-		device->CreateShader(sci, &shader);
+		ShaderCache::CreateShader(device, sci, &shader);
 		if (!shader)
 			ferr("Diligent: failed to compile enhanced scene shader %s", entryPoint);
 		return shader;
@@ -1873,7 +1874,7 @@ void DiligentEnhancedSceneRenderer::init()
 				ci.ppResourceSignatures = signatures;
 				ci.ResourceSignaturesCount = anim ? 3 : 2;
 				auto& pso = shadow ? _impl->shadowPipelines[anim][alpha] : _impl->pipelines[anim][alpha];
-				device->CreateGraphicsPipelineState(ci, &pso);
+				ShaderCache::CreateGraphicsPipeline(device, ci, &pso);
 				if (!pso)
 					ferr("Diligent: could not create the enhanced scene pipeline.");
 				if (!shadow) {
@@ -1883,7 +1884,7 @@ void DiligentEnhancedSceneRenderer::init()
 					gp.NumRenderTargets = 0;
 					gp.RTVFormats[0] = TEX_FORMAT_UNKNOWN;
 					ci.pPS = alpha ? depthAlphaShader.RawPtr() : nullptr;
-					device->CreateGraphicsPipelineState(ci, &_impl->depthPipelines[anim][alpha]);
+					ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->depthPipelines[anim][alpha]);
 					if (!_impl->depthPipelines[anim][alpha])
 						ferr("Diligent: could not create the enhanced scene depth pre-pass pipeline.");
 				}
@@ -1926,7 +1927,7 @@ void DiligentEnhancedSceneRenderer::init()
 					ci.ppResourceSignatures = signatures;
 					ci.ResourceSignaturesCount = anim ? 3 : 2;
 					auto& out = emit ? _impl->giEmitPipelines[anim][alpha] : _impl->giPipelines[anim][alpha];
-					device->CreateGraphicsPipelineState(ci, &out);
+					ShaderCache::CreateGraphicsPipeline(device, ci, &out);
 					if (!out)
 						ferr("Diligent: could not create the enhanced scene GI capture pipeline.");
 				}
@@ -1973,7 +1974,7 @@ void DiligentEnhancedSceneRenderer::init()
 			IPipelineResourceSignature* signatures[] = { _impl->signature, _impl->envSignature, _impl->animSignature };
 			ci.ppResourceSignatures = signatures;
 			ci.ResourceSignaturesCount = anim ? 3 : 2;
-			device->CreateGraphicsPipelineState(ci, &_impl->motionPipelines[anim][alpha]);
+			ShaderCache::CreateGraphicsPipeline(device, ci, &_impl->motionPipelines[anim][alpha]);
 			if (!_impl->motionPipelines[anim][alpha])
 				ferr("Diligent: could not create the enhanced scene motion vector pipeline.");
 		}
