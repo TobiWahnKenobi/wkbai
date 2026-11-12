@@ -185,6 +185,16 @@ class Bot:
                 return len(sel)
         return 0
 
+    def select_group(self, units):
+        """These units selected (clicks, Shift for the rest; the camera to each in turn)"""
+        a = self.a
+        first = True
+        for u in units:
+            self.look(u["position"], 3)
+            if a.request("clickobject", object=u["id"], add=not first).get("ok"):
+                first = False
+        return not first
+
     def convert(self, peasants):
         """These peasants to militia (clicks, Shift for the rest; the command)"""
         a = self.a
@@ -323,7 +333,9 @@ def main():
     ap.add_argument("--work", default=r"C:\Dev\wkbai-agent\bot")
     ap.add_argument("--minutes", type=float, default=40)
     ap.add_argument("--speed", type=int, default=3)
-    ap.add_argument("--attack-at", type=int, default=18)
+    ap.add_argument("--attack-at", type=int, default=25)
+    ap.add_argument("--pop", type=int, default=200, help="the lobby's population limit (200 by default)")
+    ap.add_argument("--port", type=int, default=7790)
     args = ap.parse_args()
     log = []
     def say(*x):
@@ -331,8 +343,10 @@ def main():
         print(line, flush=True)
         log.append(line)
     result = {"log": log}
-    with Game(game_path=args.game_path, work=args.work) as game:
-        game.start(skirmish="2 Player 4 Peaks.lvl", slots="H|A|E", settings={"recordGame": 1})
+    with Game(game_path=args.game_path, work=args.work, process_name="wkbai-agent-pop%d" % args.pop) as game:
+        game.port = args.port
+        game.start(skirmish="2 Player 4 Peaks.lvl", slots="H|A|E", settings={"recordGame": 1, "populationLimit": args.pop})
+        result["populationLimit"] = args.pop
         a = game.agent()
         bot = Bot(a, say)
         o = a.wait_for_game()
@@ -387,7 +401,9 @@ def main():
             farms = [x for x in bot.own(o) if "Farm" in x["type"] and x["kind"] == "building"]
             farmers = len([x for x in bot.own(o, "character") if "Farmer" in x["type"]])
             # farms beside the village (one, then more as farmers grow), away from the city
-            if vil and res["Wood"] >= 100 and len(farms) < 1 + farmers // 5 and len(farms) < 4 and t - state["lastFarm"] > 30:
+            barracks_any = any(x["type"].startswith("Barracks Stone") for x in bot.own(o))
+            want_wood = 100 if (not farms or barracks_any) else 300  # (the barracks' 200 first, after one farm)
+            if vil and res["Wood"] >= want_wood and len(farms) < 1 + farmers // 4 and t - state["lastFarm"] > 30:
                 state["lastFarm"] = t
                 if bot.peasants_box(vil["position"]):
                     f = bot.place("ECONOMIC", "Build Farm Wood", bot.rural_spots(vil["position"], home, gate, 22, 46, away=75))
@@ -401,7 +417,8 @@ def main():
             # the Barracks: joined to the city, on the side away from the gate
             if not state["barracks"] and res["Wood"] >= 200 and t - state["lastBarracksTry"] > 40:
                 state["lastBarracksTry"] = t
-                if bot.peasants_box(home):
+                builders = [x for x in bot.own(o, "character", "Peasant")][:6]
+                if builders and bot.select_group(builders):
                     ring = []
                     for r in (32, 38, 44):
                         for ang in range(0, 360, 15):
@@ -412,15 +429,15 @@ def main():
                         ring.sort(key=lambda p: -dist(p, gate))
                     b = bot.place("MILITARY", "Build Barracks Stone", ring)
                     say("t=%4.0fs barracks:" % t, b and (b["type"], [round(v) for v in b["position"]]))
-                    if b:
-                        state["barracks"] = b["id"]
+                    if any(x["type"].startswith("Barracks Stone") for x in bot.own(a.observe())):
+                        state["barracks"] = True
             barracks = next((x for x in bot.own(o) if x["type"] == "Barracks Stone"), None)
             # soldiers: spearmen and archers, keeping food for the next farmers
             keep = 60 if farms and farmers < 5 * len(farms) else 0
             if barracks and res["Food"] - keep >= 60:
                 n = int((res["Food"] - keep) // 60)
                 k = 0
-                for i in range(min(n, 4)):
+                for i in range(n if res["Food"] > 600 else max(1, n // 2)):
                     cmd = "Spawn Archer" if (i % 2 and res["Wood"] >= 20) else "Spawn Spearman"
                     k += bot.spawn(barracks, cmd, 1)
                 if k:
@@ -440,11 +457,11 @@ def main():
                     say("t=%4.0fs %d peasants to the trees" % (t, n))
             # more peasants from the Manor while food allows (wood, and militia from the surplus)
             o = a.observe(); res = o["resources"]
-            if res["Food"] >= 250 and len(plain) < 24:
+            if res["Food"] >= 250 and (not barracks or res["Food"] >= 400):
                 k = bot.spawn(manor, "Spawn Peasant", min(3, int((res["Food"] - 150) // 50)))
                 if k:
                     say("t=%4.0fs %d peasants from the Manor" % (t, k))
-            if not barracks and res["Food"] >= 500 and len(plain) > 12:
+            if not barracks and res["Food"] >= 500 and len(plain) > 12 and t > 600:
                 c = bot.convert(plain[10:])
                 if c:
                     say("t=%4.0fs %d peasants to militia (no barracks yet)" % (t, c))
