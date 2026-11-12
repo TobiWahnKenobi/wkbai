@@ -422,7 +422,8 @@ def main():
         records = []
         last_record = -60
         # the Manor's first food: peasants for wood (2), the rest kept for farmers and soldiers
-        say("Manor's rally point on a tree:", bot.rally_to_tree(manor))
+        state_rally = bot.rally_to_tree(manor)
+        say("Manor's rally point on a tree:", state_rally)
         bot.spawn(manor, "Spawn Peasant", 2)
         while True:
             o = a.observe()
@@ -434,6 +435,14 @@ def main():
                 r = record(a, me)
                 records.append({"time": round(t), **r, "resources": o["resources"]})
                 say("t=%4.0fs" % t, json.dumps(r), {k: round(v) for k, v in o["resources"].items()})
+                # (the record only: what our peasants are ordered to do, by the probe)
+                tally = {}
+                for x in bot.own(o, "character"):
+                    if "Peasant" in x["type"]:
+                        orders = a.probe("unit", object=x["id"])["orders"]
+                        k = x["type"] + ":" + (orders[0]["order"] if orders else "idle")
+                        tally[k] = tally.get(k, 0) + 1
+                say("t=%4.0fs   peasants:" % t, json.dumps(tally))
                 ai = r.get("ai")
                 if not ai or ai["soldiers"] + ai["peasants"] + ai["buildings"] == 0:
                     say("the AI has nothing left: won")
@@ -444,33 +453,65 @@ def main():
                     say("nothing of ours left: lost")
                     result["won"] = False
                     break
+            # the Manor's rally point until it takes (new peasants stay inside without one)
+            if not state_rally and t - state.get("lastRally", -999) > 30:
+                state["lastRally"] = t
+                state_rally = bot.rally_to_tree(manor)
+                say("t=%4.0fs Manor's rally point on a tree:" % t, state_rally)
+            # a game text window (the game set's "An Opponent has been Defeated"): its buttons
+            texts = [e for e in a.ui()["elements"] if e["id"].startswith("imgui:")]
+            if texts and not state.get("textSeen"):
+                state["textSeen"] = True
+                say("t=%4.0fs a game window:" % t, [e["label"] for e in texts])
+                result.setdefault("windows", []).append({"time": round(t), "buttons": [e["label"] for e in texts],
+                                                          "shot": bmp_to_png(a.screenshot("window-%d" % int(t)))})
+            elif not texts:
+                state["textSeen"] = False
             res = o["resources"]
+            if not [x for x in bot.own(o) if "Foundation" in x["type"] and x.get("health") and x["health"][0] < x["health"][1]]:
+                state["busy"] = {}  # (nothing left to build: every builder is free)
             vil = next((x for x in bot.own(o) if x["type"] == "Village Wood"), None)
-            farms = [x for x in bot.own(o) if "Farm" in x["type"] and x["kind"] == "building"]
-            farmers = len([x for x in bot.own(o, "character") if "Farmer" in x["type"]])
-            # farms beside the village (one, then more as farmers grow), away from the city
+            # the farms this bot placed (one farm is several "Standard Farm" objects: its fields)
+            owned = {x["id"] for x in bot.own(o)}
+            state["farmIds"] = [i for i in state.get("farmIds", []) if i in owned or i in state.get("farmConverted", set())]
+            farms = state["farmIds"]
+            # ("Spawn Peasant Farmer" makes an ordinary Peasant with a Farm order, and costs 50 food
+            # and 50 wood: the farmers are the ones this bot trained, 5 a farm)
+            farmers = state.get("farmersTrained", 0)
+            # farms beside the village: one, the Barracks next, then one more whenever the farms
+            # are full and there is wood beyond the Barracks' soldiers' needs
             barracks_any = any(x["type"].startswith("Barracks Stone") for x in bot.own(o))
-            want_wood = 100 if (not farms or barracks_any) else 300  # (the barracks' 200 first, after one farm)
-            if vil and res["Wood"] >= want_wood and len(farms) < 1 + farmers // 4 and t - state["lastFarm"] > 30:
+            want_farms = 1 if not barracks_any else 1 + (farmers // 5 if farmers >= 5 * len(farms) else len(farms) - 1)
+            if vil and res["Wood"] >= 100 and len(farms) < want_farms and t - state["lastFarm"] > 30:
                 state["lastFarm"] = t
-                builders = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t][:4]
-                if builders and bot.select_group(builders):
+                free = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t]
+                builders = sorted(free, key=lambda x: dist(x["position"], vil["position"]))[:4]
+                if not builders or not bot.select_group(builders):
+                    say("t=%4.0fs farm: no builders could be selected (%d free)" % (t, len(free)))
+                else:
                     f = bot.place("ECONOMIC", "Build Farm Wood", bot.rural_spots(vil["position"], home, gate, 22, 46, away=75))
                     say("t=%4.0fs farm:" % t, f and [round(v) for v in f["position"]])
                     if f:
+                        state.setdefault("farmIds", []).append(f["id"])
+                        state.setdefault("farmConverted", set()).add(f["id"])  # (its foundation's id may go when built)
                         for b2 in builders:
                             state["busy"][b2["id"]] = t + 100
             # farmers from the village (food for them first)
-            if vil and farms and farmers < 5 * len(farms) and res["Food"] >= 60:
-                n = bot.spawn(vil, "Spawn Peasant Farmer", min(2, int(res["Food"] // 60)))
+            # (the first two farmers at once; more only with wood beyond the Barracks' 200 until it stands)
+            if vil and farms and farmers < 5 * len(farms) and res["Food"] >= 60 and (farmers < 2 or barracks_any or res["Wood"] >= 250):
+                n = bot.spawn(vil, "Spawn Peasant Farmer", min(2, 5 * len(farms) - farmers, int(res["Food"] // 60)))
+                state["farmersTrained"] = farmers + n
                 if n:
                     say("t=%4.0fs %d farmers" % (t, n))
                 o = a.observe(); res = o["resources"]
             # the Barracks: joined to the city, on the side away from the gate
             if not state["barracks"] and farms and res["Wood"] >= 200 and t - state["lastBarracksTry"] > 40:
                 state["lastBarracksTry"] = t
-                builders = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t][:6]
-                if builders and bot.select_group(builders):
+                free = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t]
+                builders = sorted(free, key=lambda x: dist(x["position"], home))[:6]
+                if not builders or not bot.select_group(builders):
+                    say("t=%4.0fs barracks: no builders could be selected (%d free)" % (t, len(free)))
+                else:
                     ring = []
                     for r in (32, 38, 44):
                         for ang in range(0, 360, 15):
@@ -505,15 +546,36 @@ def main():
                 if k:
                     say("t=%4.0fs %d soldiers ordered" % (t, k))
             # wood (not while a foundation of ours waits: its builders count as idle on the way)
-            foundations = [x for x in bot.own(o) if x["type"] == "Barracks Stone Foundation"]
+            # (seen now, after this loop's placements: the view from before them is stale)
+            o = a.observe()
+            foundations = [x for x in bot.own(o) if "Foundation" in x["type"] and not any(wl in x["type"] for wl in WALLS)
+                           and x.get("health") and x["health"][0] < x["health"][1]]
+            # an unfinished foundation that isn't growing gets builders: the free peasants nearest
+            # it, a right-click on it (as a player sends peasants to build)
+            growth = state.setdefault("growth", {})
+            for fd in foundations:
+                last = growth.get(fd["id"])
+                if last is None or fd["health"][0] > last[0]:
+                    growth[fd["id"]] = (fd["health"][0], t)
+                elif t - last[1] > 30 and t - state.setdefault("lastHelp", {}).get(fd["id"], -999) > 30:
+                    state["lastHelp"][fd["id"]] = t
+                    free = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t]
+                    helpers = sorted(free, key=lambda x: dist(x["position"], fd["position"]))[:4]
+                    if helpers and bot.select_group(helpers):
+                        ok = a.request("rightclickobject", object=fd["id"]).get("ok")
+                        say("t=%4.0fs %s not growing: %d builders sent (%s)" % (t, fd["type"], len(helpers), ok))
+                        for h in helpers:
+                            state["busy"][h["id"]] = t + 90
             w = 0 if foundations else bot.idle_to_wood()
             if w:
                 say("t=%4.0fs %d idle peasants to the trees" % (t, w))
             # (builders stay: peasants near a foundation of ours, a wall's apart)
             # (a finished farm keeps "Foundation" in its type: only unfinished ones, below full health)
             plain = [x for x in bot.own(o, "character", "Peasant") if state["busy"].get(x["id"], -1) < t]
-            if not foundations and t - state.get("lastWood", -999) > 40 and plain:
-                state["lastWood"] = t
+            # (once only, at the start: re-ordering working peasants restarts their chopping trip
+            # before the wood is delivered, and pulls builders off; later only the idle bar's)
+            if not foundations and not state.get("woodOnce") and plain:
+                state["woodOnce"] = True
                 n = bot.to_wood(plain[:10])
                 if n:
                     say("t=%4.0fs %d peasants to the trees" % (t, n))

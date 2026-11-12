@@ -466,6 +466,14 @@ void ClientInterface::setUpAgentWorld()
 				out["type"] = obj->blueprint->name;
 				out["position"] = { obj->position.x, obj->position.y, obj->position.z };
 				out["orientation"] = obj->orientation.y; // (radians about the vertical)
+				// its items by name ("items": a village's food and wood stock, a unit's hit points)
+				if (req.value("items", false)) {
+					nlohmann::json items = nlohmann::json::object();
+					for (const auto& [item, value] : obj->items)
+						if (item >= 0 && (size_t)item < gs->items.names.size())
+							items[gs->items.names.getString(item)] = value;
+					out["items"] = items;
+				}
 				nlohmann::json orders = nlohmann::json::array();
 				for (Order& o : obj->orderConfig.orders) {
 					nlohmann::json tasks = nlohmann::json::array();
