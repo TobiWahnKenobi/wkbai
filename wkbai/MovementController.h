@@ -29,6 +29,8 @@ struct MovementController {
 	// stops the walk, and drops a pending search
 	void stopMovement();
 	void updateMovement();
+	// a boat in frozen water (the sea's ice, Terrain::frozenAt): it can't move
+	bool boatHeldFast() const;
 	void walkToNextNode();
 	//Vector3 getPosition(float time) const;
 	// walking, or waiting for its path (a pending search counts as moving)

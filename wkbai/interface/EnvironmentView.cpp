@@ -144,6 +144,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	if (!g_lightningKnown) {
 		v.cloudCover = stCloud; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;
+		v.severity = st.severity;
 	}
 	ease(v.cloudCover, stCloud);
 	ease(v.rain, st.rain);

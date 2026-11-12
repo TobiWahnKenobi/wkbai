@@ -71,6 +71,8 @@ cbuffer PostBuffer
 	matrix TaaPrevViewProj; // world -> the previous frame's clip space, unjittered
 	float4 Motion; // FSR 3: the jitter in UV, the object motion's "none" (NO_OBJECT_MOTION)
 	float4 Blur;   // camera motion blur: the shutter (0 off), the longest smear and a cut (pixels); tilt-shift radius
+	float4 Heat;   // a heatwave's shimmer: strength (0 off), a clock in seconds
+	float4 Rainbow; // the point opposite the sun (a world direction), the bow's strength (0 none)
 };
 Texture2D tColor;
 Texture2D tDepth;
@@ -508,10 +510,54 @@ float FogDarkening(float2 uv)
 	return lerp(dark, 1, edge);
 }
 
+// A rainbow (RenderSettings::rainbows): the sunlight bent back by the raindrops in a ring round
+// the point opposite the sun, the primary bow red outside at 42 degrees to violet at 40.6, the
+// secondary fainter with its colours the other way round at 50.4 to 53.4, the sky between them a
+// little darker (Alexander's band) and inside the primary a little lighter. Over the sky and the
+// land at least some way off (the rain is out there), brighter in some stretches of the arc than
+// others, as the rain is patchy. Added light.
+float3 RainbowAt(float2 uv, float d)
+{
+	float3 cam = TaaInverseView[3].xyz;
+	float3 wp = mul(float4(ViewPosAt(uv, min(d, 0.9999)), 1), TaaInverseView).xyz;
+	float3 dir = normalize(wp - cam);
+	float far = d >= 1 ? 1 : smoothstep(60, 400, distance(wp, cam));
+	float3 anti = normalize(Rainbow.xyz);
+	float th = degrees(acos(clamp(dot(dir, anti), -1, 1)));
+	// stretches of the arc: by the angle round the point opposite the sun
+	float3 bx = normalize(cross(anti, float3(0, 1, 0)) + float3(1e-4, 0, 0)), by = cross(bx, anti);
+	float phi = atan2(dot(dir, bx), dot(dir, by));
+	float patchy = 0.55 + 0.45 * sin(phi * 2.3 + 1.1) * sin(phi * 0.9 + 0.4);
+	float3 add = 0;
+	float t = (th - 40.6) / 1.8;
+	float w = smoothstep(-0.35, 0.2, t) * smoothstep(1.35, 0.8, t);
+	float h = (1 - saturate(t)) * 0.78; // red (0) outside to violet (0.78) inside
+	float3 col = saturate(abs(frac(h + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6 - 3) - 1);
+	add += col * w * 0.16;
+	float t2 = (th - 50.4) / 3.0;
+	float w2 = smoothstep(-0.3, 0.2, t2) * smoothstep(1.3, 0.8, t2);
+	float h2 = saturate(t2) * 0.78; // the other way round
+	add += saturate(abs(frac(h2 + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6 - 3) - 1) * w2 * 0.05;
+	add += (1 - smoothstep(25, 40.6, th)) * float3(0.03, 0.03, 0.03); // inside the bow
+	return add * Rainbow.w * far * patchy;
+}
+
 float4 PS_Composite(VS_OUTPUT input) : SV_Target
 {
 	float fogged = -1; // the fog of war's darkening, when a blur has already averaged it
 	float3 c = tColor.SampleLevel(sPoint, input.Uv, 0).rgb;
+	// a heatwave's shimmer (RenderSettings::heatShimmer): the image wavering a little, slowly
+	// swirling and rising, more the farther off (none close by, where the air is short)
+	if (Heat.x > 0) {
+		float d0 = tDepth.SampleLevel(sPoint, input.Uv, 0).r;
+		float dist = d0 >= 1 ? 2000 : length(ViewPosAt(input.Uv, d0));
+		float far = smoothstep(25, 300, dist) * (d0 >= 1 ? 0.35 : 1);
+		float tm = Heat.y;
+		float2 p = input.Uv * float2(Sizes.x / Sizes.y, 1) * 70;
+		float2 o = float2(sin(p.y * 1.3 + tm * 3.1 + sin(p.x * 0.7 - tm * 1.3) * 2.0),
+			cos(p.x * 1.1 - tm * 2.6 + sin(p.y * 0.9 + tm * 1.7) * 2.0));
+		c = tColor.SampleLevel(sLinear, input.Uv + o * Heat.x * 0.0008 * far, 0).rgb;
+	}
 	// camera motion blur (RenderSettings::motionBlur): the scene averaged along the way the
 	// point moved on the screen since the last frame (from the depth and the last frame's
 	// camera), over the shutter's share of it; none where it hardly moved, nor at a cut (a jump
@@ -562,6 +608,8 @@ float4 PS_Composite(VS_OUTPUT input) : SV_Target
 	c *= lerp(1, ao, Ao.y);
 	c += tBloom.SampleLevel(sLinear, input.Uv, 0).rgb * Bloom.y;
 	c += tShafts.SampleLevel(sLinear, input.Uv, 0).rgb;
+	if (Rainbow.w > 0)
+		c += RainbowAt(input.Uv, tDepth.SampleLevel(sPoint, input.Uv, 0).r);
 	// fog of war: what none of the player's units sees is darker (not on the sky)
 	c *= fogged >= 0 ? fogged : FogDarkening(input.Uv);
 	// a dither of the 8-bit output (triangular, +-1 level): the darkening and the added light
@@ -905,7 +953,7 @@ DiligentPostProcess::DiligentPostProcess(IRenderDevice* device, TEXTURE_FORMAT c
 	_impl->depthFormat = depthFormat;
 	BufferDesc cb;
 	cb.Name = "Post-processing";
-	cb.Size = 336;
+	cb.Size = 368;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DYNAMIC;
 	cb.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -1207,6 +1255,9 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 		const bool blurOn = settings.motionBlur > 0.0f && _impl->prevValid && !settings.ortho;
 		const float blur[4] = { blurOn ? std::clamp(settings.motionBlur, 0.0f, 1.0f) : 0.0f, 48.0f * w / 1920.0f + 8.0f, 0.25f * w, std::clamp(settings.tiltShift, 0.0f, 1.0f) * 14.0f * w / 1920.0f };
 		memcpy((float*)mapped + 80, blur, sizeof(blur));
+		const float heat[8] = { settings.heatShimmer, settings.clockSeconds, 0, 0,
+			settings.rainbow[0], settings.rainbow[1], settings.rainbow[2], settings.ortho ? 0.0f : settings.rainbow[3] };
+		memcpy((float*)mapped + 84, heat, sizeof(heat));
 		ctx->UnmapBuffer(_impl->buffer, MAP_WRITE);
 	};
 	write(0, 0, w, h);

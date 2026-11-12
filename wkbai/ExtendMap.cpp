@@ -2107,6 +2107,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			std::vector<uint8_t> water;  // per grid point: under water (lvl over hgt)
 			std::vector<uint8_t> used;   // per grid point: on a drawn cell
 			std::vector<uint8_t> lake;   // per grid point: its water a lake's (spreads no further)
+			std::vector<uint8_t> fresh;  // per grid point: its water a river's or a lake's (not the sea's)
 			std::vector<float> mtn;      // per grid point: the land's mountain share
 			std::vector<float> flat;     // per grid point: how far the last ring has settled to its level
 			int nx() const { return (int)xs.size(); }
@@ -2150,6 +2151,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			R.lvl.assign((size_t)NX * NZ, -1e30f);
 			R.water.assign((size_t)NX * NZ, 0);
 			R.lake.assign((size_t)NX * NZ, 0);
+			R.fresh.assign((size_t)NX * NZ, 0);
 			R.used.assign((size_t)NX * NZ, 0);
 			R.mtn.assign((size_t)NX * NZ, 0.0f);
 			R.flat.assign((size_t)NX * NZ, 0.0f);
@@ -2207,8 +2209,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					float u, level = 0, half = 1;
 					nearestRiver(px, pz, u, level, half);
 					const float u2 = u - 0.35f * s;
-					if (u2 < 2.5f * s)
+					bool riverHere = false;
+					if (u2 < 2.5f * s) {
 						lvl = level;
+						riverHere = true;
+					}
 					if (u2 <= 0)
 						v = std::min(v, std::max(level + 0.35f + 0.9f * u2, level - 2.5f));
 					else if (u2 < 20.0f + s) {
@@ -2228,6 +2233,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					R.hgt[gi] = v;
 					R.lvl[gi] = lvl;
 					R.lake[gi] = lakeHere && lvl == lakeAt; // (not where a river's or the sea's took over)
+					// (fresh where the river or the lake is, unless the sea's rule holds there: rivers in
+					// the fjords run at the sea's level, and by the level alone they had counted as
+					// the sea, blue in a flood, the play test of 2026-11-12)
+					R.fresh[gi] = (R.lake[gi] || riverHere) && !(seaLevel > -1e29f && L.wet > 0.3f);
 				}
 			});
 		}
@@ -2269,8 +2278,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					if (far->outerSea) {
 						// the land sinks under the sea towards the end
 						R.hgt[gi] += (far->outerLevel - 3.0f - R.hgt[gi]) * wgt;
-						if (wgt > 0)
+						if (wgt > 0) {
 							R.lvl[gi] = std::max(R.lvl[gi], far->outerLevel);
+							R.fresh[gi] = 0;
+						}
 					}
 					else // the land settles to the level, the sea's floor rises out of it
 						R.hgt[gi] += (far->outerLevel - R.hgt[gi]) * wgt;
@@ -2301,6 +2312,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 						continue;
 					R.lvl[g] = std::max(R.lvl[g], R.lvl[gi]);
 					R.water[g] = 1;
+					R.fresh[g] = R.fresh[gi];
 					queue.push_back(g);
 				}
 			}
@@ -2525,6 +2537,41 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			const Ring& R = rings[k];
 			const int NX = R.nx(), NZ = R.nz();
 			const float s = R.s, d = 0.5f * s;
+			// each water point's distance to the land (tiles; the sea's ice reaches out from the
+			// coasts, SeaIceReach): a chamfer over the ring's grid
+			std::vector<float> coast((size_t)NX * NZ, 0.0f);
+			{
+				for (size_t gi = 0; gi < coast.size(); gi++)
+					coast[gi] = R.water[gi] || !R.used[gi] ? 1e9f : 0.0f;
+				const float a = s, b = 1.41421356f * s;
+				for (int j = 0; j < NZ; j++)
+					for (int i = 0; i < NX; i++) {
+						float& c = coast[(size_t)j * NX + i];
+						if (i > 0) c = std::min(c, coast[(size_t)j * NX + i - 1] + a);
+						if (j > 0) {
+							c = std::min(c, coast[(size_t)(j - 1) * NX + i] + a);
+							if (i > 0) c = std::min(c, coast[(size_t)(j - 1) * NX + i - 1] + b);
+							if (i + 1 < NX) c = std::min(c, coast[(size_t)(j - 1) * NX + i + 1] + b);
+						}
+					}
+				for (int j = NZ - 1; j >= 0; j--)
+					for (int i = NX - 1; i >= 0; i--) {
+						float& c = coast[(size_t)j * NX + i];
+						if (i + 1 < NX) c = std::min(c, coast[(size_t)j * NX + i + 1] + a);
+						if (j + 1 < NZ) {
+							c = std::min(c, coast[(size_t)(j + 1) * NX + i] + a);
+							if (i + 1 < NX) c = std::min(c, coast[(size_t)(j + 1) * NX + i + 1] + b);
+							if (i > 0) c = std::min(c, coast[(size_t)(j + 1) * NX + i - 1] + b);
+						}
+					}
+			}
+			// fresh water (a river's, a lake's) where its level is over the sea's; the sea at it
+			// (the two meet over a cell, without a line)
+			auto waterWord = [&](size_t g, float level, bool cellFresh) {
+				const bool fresh = seaLevel < -1e29f || cellFresh || level > seaLevel + 0.05f;
+				const uint32_t cq = (uint32_t)std::clamp((int)std::lround(std::min(coast[g], 16000.0f) * 4.0f), 0, 65535);
+				return (fresh ? 255u : 0u) | (cq << 16);
+			};
 			std::vector<std::array<float, 3>> grad((size_t)NX * NZ); // gx, gz, rise
 			ParallelFor(NZ, [&](int j) {
 				for (int i = 0; i < NX; i++) {
@@ -2693,11 +2740,15 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 							for (size_t g : { g0, g1, g2, g3 })
 								if (R.water[g])
 									low = std::min(low, R.lvl[g]);
+							bool cellFresh = false; // (a land corner takes its water's kind)
+							for (size_t g : { g0, g1, g2, g3 })
+								cellFresh = cellFresh || (R.water[g] && R.fresh[g]);
 							for (size_t g : { g0, g1, g2, g3 }) {
 								FarVertex fv = far->vertices[index[g]];
 								fv.y = std::min(R.lvl[g] > -1e29f ? R.lvl[g] : wl, low + 1.0f);
 								fv.normal = upNormal;
 								fv.colour = 0; // alpha 0: water (PS_FarSea)
+								fv.water = waterWord(g, R.lvl[g] > -1e29f ? R.lvl[g] : wl, cellFresh);
 								far->vertices.push_back(fv);
 								grow(fv);
 							}

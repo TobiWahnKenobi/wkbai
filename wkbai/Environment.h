@@ -118,6 +118,19 @@ struct EnvironmentState {
 // ones still out on deep water go through it and drown
 constexpr float ICE_WALKABLE = 0.85f, ICE_BREAKS = 0.5f;
 
+// The sea's ice: the rivers and lakes freeze over whole, the open sea only from its coasts out, as
+// far as the winter is hard (a gentle one: none; a normal one: about 6 tiles; a harsh one: about
+// 16), growing with the ice. Never the whole sea; its edge follows the coast (each tile's
+// distance to the nearest land), wandering by SeaIceEdge, so it is no straight line. The
+// terrain shader draws the same edge (SeaIceEdge there), the path finding holds boats in it.
+float SeaIceReach(int severity, float ice);           // tiles from the coast
+float SeaIceEdge(float wx, float wz, float reach);    // the edge's wander at a world position, tiles
+// per tile of a terrain (row order, width x height): each water tile's distance to the nearest
+// land in quarter tiles (land 0, at most 255)
+std::vector<uint8_t> BuildCoastDistance(const Terrain* t);
+// the terrain's open sea and coast distances (Terrain::seaTiles, coastTiles), once
+void PrepareSeaIce(Terrain* t);
+
 // The land that floods (the server's floods and the client's picture of them, the same tiles):
 // spread out from the shores, tile by tile (4 neighbours), up to 10 tiles from the water, over
 // the land less than 4 m above the water it spreads from and not more than 1.5 m below it (so not
@@ -202,6 +215,7 @@ struct EnvironmentView {
 	// as drawn: rain and snowfall while their clouds are overhead (PrecipitationShown)
 	float rainShown = 0.0f, snowShown = 0.0f;
 	float wetness = 0.0f, snowCover = 0.0f, ice = 0.0f, waterRise = 0.0f;
+	int severity = 1; // the season's: 0 gentle, 1 normal, 2 harsh (the sea's ice: SeaIceReach)
 	float lightningFlash = 0.0f;  // 0..1, this frame
 	Vector3 lightningPos;
 	Vector3 wind{ 0.3f, 0.0f, 0.1f }; // metres per second of the falling rain and snow

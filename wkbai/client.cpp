@@ -983,8 +983,12 @@ void Client::tick()
 				nightSight.factor = environment.sightFactor;
 				if (terrain) {
 					const bool frozen = environmentActive && environment.ice >= ICE_WALKABLE;
-					if (frozen != terrain->waterFrozen) {
+					const float reach = frozen ? SeaIceReach(environment.severity, environment.ice) : 0.0f;
+					if (frozen != terrain->waterFrozen || reach != terrain->seaIceReach) {
+						if (frozen)
+							PrepareSeaIce(terrain);
 						terrain->waterFrozen = frozen;
+						terrain->seaIceReach = reach;
 						terrain->revision++;
 					}
 				}

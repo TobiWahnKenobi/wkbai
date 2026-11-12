@@ -2798,14 +2798,18 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
 		const std::string& name = obj->blueprint->name;
 		if (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos
-			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))) {
+			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))
+			&& obj->sceneEntity.model == model) { // (not a tree drawn bare: its transform has the leafless one's size)
 			bool known = false;
 			for (const ExtTreeModel& t : extTreeModels)
 				known = known || t.model == model;
 			if (!known) {
 				const Matrix& m = obj->sceneEntity.transform;
 				const float s = std::sqrt(m._11 * m._11 + m._12 * m._12 + m._13 * m._13);
-				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES });
+				const bool broadleaf = name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos;
+				const auto box = model->interpolateBoundingBox(0);
+				const float height = std::clamp(box[1].y - std::max(box[0].y, 0.0f), 0.5f, 60.0f);
+				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES, broadleaf, height });
 			}
 		}
 	}
@@ -5379,6 +5383,8 @@ void ClientInterface::drawExtendedTrees()
 		extTreesModels = extTreeModels.size();
 		extTreeEntities.clear();
 		extTreeEntities.reserve(trees->size());
+		extTreeLooks.clear();
+		extTreeLooks.reserve(trees->size());
 		for (const ExtendedTree& t : *trees) {
 			const ExtTreeModel& m = extTreeModels[t.variant % extTreeModels.size()];
 			SceneEntity e;
@@ -5387,8 +5393,25 @@ void ClientInterface::drawExtendedTrees()
 			e.transform = Matrix::getScaleMatrix(Vector3(s, s, s)) * Matrix::getRotationYMatrix(t.yaw) * Matrix::getTranslationMatrix(Vector3(t.x, t.y, t.z));
 			e.flags = m.flags;
 			e.animTime = (uint32_t)(t.variant & 0xFFFF);
+			// a broadleaf tree's bare look: the leafless tree made in code, as the map's own get in
+			// winter (they had kept their leaves, the play test of 2026-11-12)
+			ExtTreeLook look{ e.model, e.transform, nullptr, e.transform, e.flags, 0x9E000000u + (uint32_t)extTreeLooks.size() };
+			if (m.broadleaf && client->gameSet) {
+				look.bare = LeaflessTreeModel(client->gameSet->modelCache, (int)(look.id * 2654435761u >> 28), false);
+				look.bareTransform = Matrix::getScaleMatrix(Vector3(m.height, m.height, m.height)) * e.transform;
+			}
 			extTreeEntities.push_back(e);
+			extTreeLooks.push_back(look);
 		}
+	}
+	const bool winterLooks = client->environmentActive && client->environmentSettings.seasons;
+	for (size_t i = 0; i < extTreeEntities.size() && i < extTreeLooks.size(); i++) {
+		SceneEntity& e = extTreeEntities[i];
+		const ExtTreeLook& l = extTreeLooks[i];
+		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
+		e.model = bare ? l.bare : l.leafy;
+		e.transform = bare ? l.bareTransform : l.leafyTransform;
+		e.flags = bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags;
 	}
 	const Vector3 cam = client->camera.position;
 	const Vector3 dir = client->camera.direction;

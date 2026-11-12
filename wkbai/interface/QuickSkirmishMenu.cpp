@@ -578,6 +578,9 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
 			server.environment.forceWeather = force.value("weather", -1);
 			server.environment.forceWaterRise = force.value("waterRise", -1000.0f);
+			server.environment.forceWaterRiseNow = force.value("waterRiseNow", false);
+			server.environment.forceSnowCover = force.value("snowCover", -1.0f);
+			server.environment.forceIce = force.value("ice", -1.0f);
 			if (force.contains("fireAt") && force["fireAt"].is_array() && force["fireAt"].size() == 3) {
 				server.environment.forceFireX = force["fireAt"][0].get<float>();
 				server.environment.forceFireZ = force["fireAt"][1].get<float>();

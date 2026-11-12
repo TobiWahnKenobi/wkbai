@@ -684,8 +684,13 @@ void ServerEnvironment::applyFloods(Server& server)
 	// the ice: walked on from ICE_WALKABLE; who is still out on deep water once it is thinner than
 	// ICE_BREAKS goes through it (a fifth of their health a second)
 	// (frozen or thawed: the path finding's cached blocked tiles are looked at again)
-	if (const bool frozen = state.ice >= ICE_WALKABLE; frozen != server.terrain->waterFrozen) {
+	// (the sea only out from its coasts, as far as the winter is hard)
+	if (const bool frozen = state.ice >= ICE_WALKABLE; frozen != server.terrain->waterFrozen
+		|| (frozen && SeaIceReach(state.severity, state.ice) != server.terrain->seaIceReach)) {
+		if (frozen)
+			PrepareSeaIce(server.terrain);
 		server.terrain->waterFrozen = frozen;
+		server.terrain->seaIceReach = frozen ? SeaIceReach(state.severity, state.ice) : 0.0f;
 		server.terrain->revision++;
 	}
 	if (server.terrain->waterFrozen) {
@@ -876,6 +881,15 @@ void ServerEnvironment::update(Server& server)
 		state.snowCover = std::clamp(state.snowCover, 0.0f, 1.0f);
 		state.ice = std::clamp(state.ice, 0.0f, 1.0f);
 		state.waterRise = Approach(state.waterRise, waterTarget(), 0.008f, 0.004f);
+		// (test runs: held as forced, a flood's level at once)
+		if (forceSnowCover >= 0.0f)
+			state.snowCover = forceSnowCover;
+		if (forceIce >= 0.0f)
+			state.ice = forceIce;
+		if (forceWaterRise > -999.0f && forceWaterRiseNow) {
+			state.waterRise = forceWaterRise;
+			forceWaterRiseNow = false;
+		}
 	}
 
 	// sight and speed, in steps (each change restarts the moving units' walks)
