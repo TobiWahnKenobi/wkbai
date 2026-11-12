@@ -44,6 +44,11 @@ struct DiligentGfx : IRenderer
 	// Map-edge fog: the playable area's size, and the distances outside it where the edge fog
 	// starts and becomes opaque (FogBuffer.EdgeFog).
 	virtual void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) = 0;
+	// Extend map's ground beyond its last ring, to the true horizon (FogBuffer.FarGround, FarLand,
+	// FarArea; drawn by the sky under the horizon): its level, how far outside the playable area
+	// the last ring ends, sea or land, the land's colour (0-1), the playable area's size, how far
+	// outside it the near ring ends, the camera's far clip; reach 0: none
+	virtual void SetFarGround(float level, float reach, bool sea, const float colour[3], float areaWidth, float areaDepth, float nearEnd, float farClip) = 0;
 
 	// Binds the swap chain's targets and the full viewport again after drawing offscreen (the
 	// post-processing scene targets instead while those are on).
@@ -68,7 +73,7 @@ struct DiligentGfx : IRenderer
 	// The fog of war for the next ApplyPostProcessing: per 5 m tile of the playable area (row z,
 	// column x), 255 where the player's units see; tiles nullptr: none. The data must stay valid
 	// until then; version changes with it.
-	virtual void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) = 0;
+	virtual void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness, uint32_t pad = 0) = 0;
 	// FSR 3.1 in this frame (RenderSettings::fsr3): the target the scene renderer draws its
 	// moving objects' motion vectors into, with the scene's depth (RG16F, UV: where the pixel
 	// was in the last frame minus where it is), else null; and the points where the opaque

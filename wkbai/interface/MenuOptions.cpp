@@ -185,6 +185,7 @@ namespace {
 			[&rs]() { return rs.skyGI && rs.dynamicGI > 0; }));
 		list.push_back(withEnabled(slider("emissiveLightStrength", "lighting", "Window light strength (Ultra)", rs.emissiveLightStrength, 0.0f, 3.0f),
 			[&rs]() { return rs.skyGI && rs.dynamicGI >= 3; }));
+		list.push_back(withEnabled(toggle("ssReflections", "water", "Screen-space water reflections", rs.ssReflections), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
 		list.push_back(withEnabled(toggle("rtReflections", "water", "Ray-traced water reflections", rs.rtReflections), [&rs]() { return rs.waterQuality >= RenderSettings::WATER_LOW; }));
 		list.push_back(slider("terrainFresnel", "terrain", "Ground Fresnel (sky sheen)", rs.terrainFresnel, 0.0f, 1.0f));
 		{
@@ -232,6 +233,35 @@ namespace {
 			o.get = [&rs]() { return (float)rs.terrainTessellation; };
 			o.set = [&rs](float v) { rs.terrainTessellation = std::clamp((int)v, 0, 3); };
 			list.push_back(o);
+		}
+		{
+			// the land continued beyond the map's edge (drawn only; ExtendMap.h)
+			MenuOption o;
+			o.id = "extendMap"; o.page = "terrain"; o.label = "Extend map";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Near", "Far", "Horizon" };
+			o.get = [&rs]() { return (float)rs.extendMap; };
+			o.set = [&rs](float v) { rs.extendMap = std::clamp((int)v, 0, 3); };
+			list.push_back(o);
+		}
+		{
+			// its far land's detail (the first far ring's grid; Ultra builds slower)
+			MenuOption o;
+			o.id = "extendMapDetail"; o.page = "terrain"; o.label = "Extend map detail";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High", "Ultra" };
+			o.get = [&rs]() { return (float)rs.extendMapDetail; };
+			o.set = [&rs](float v) { rs.extendMapDetail = std::clamp((int)v, 0, 3); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
+		}
+		{
+			// the far land's soft terrain shadows (a little longer to build)
+			MenuOption o;
+			o.id = "extendMapShadows"; o.page = "terrain"; o.label = "Far land shadows";
+			o.type = MenuOption::TOGGLE;
+			o.get = [&rs]() { return rs.extendMapShadows ? 1.0f : 0.0f; };
+			o.set = [&rs](float v) { rs.extendMapShadows = v != 0.0f; };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
 		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
@@ -452,6 +482,7 @@ void SaveMenuOptions()
 {
 	SaveKeyBindings(); // (into g_settings, written to wkconfig.json with the rest)
 	g_renderSettings.save();
+	g_renderSettings.applyExtendMap(); // (the Extend map rebuilt now, if it changed)
 	SoundPlayer::getSoundPlayer()->applyVolumes();
 	Matchmaking::get().settingsChanged();
 }

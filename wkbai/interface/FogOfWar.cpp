@@ -37,6 +37,9 @@ void FogOfWar::update(Client* client)
 	width = (uint32_t)w;
 	height = (uint32_t)h;
 	std::vector<uint8_t> next(width * height, 0);
+	const int P = std::max(drawPad, 0);
+	const int DW = w + 2 * P, DH = h + 2 * P;
+	std::vector<uint8_t> drawNext((size_t)DW * DH, 0);
 	// at night (wkbai's day and night) the sight is shorter, but for the lit ground (once a second)
 	NightSight& night = client->nightSight;
 	if (night.active() && (night.lit.empty() || ++nightRebuild % 4 == 0))
@@ -47,8 +50,9 @@ void FogOfWar::update(Client* client)
 		const float radius = std::floor(sight + 0.5f) * 5.0f;
 		if (radius <= 0.0f)
 			return;
-		const int x0 = std::max(0, (int)((pos.x - radius) / 5.0f)), x1 = std::min(w - 1, (int)((pos.x + radius) / 5.0f));
-		const int z0 = std::max(0, (int)((pos.z - radius) / 5.0f)), z1 = std::min(h - 1, (int)((pos.z + radius) / 5.0f));
+		// (over the drawn tiles, which reach beyond the map by P; the game's are those on the map)
+		const int x0 = std::max(-P, (int)std::floor((pos.x - radius) / 5.0f)), x1 = std::min(w - 1 + P, (int)((pos.x + radius) / 5.0f));
+		const int z0 = std::max(-P, (int)std::floor((pos.z - radius) / 5.0f)), z1 = std::min(h - 1 + P, (int)((pos.z + radius) / 5.0f));
 		for (int z = z0; z <= z1; z++) {
 			const float dz = z * 5.0f + 2.5f - pos.z;
 			for (int x = x0; x <= x1; x++) {
@@ -56,8 +60,13 @@ void FogOfWar::update(Client* client)
 				const float d = std::sqrt(dx * dx + dz * dz);
 				const float r = night.active() ? night.radiusFor(radius, Vector3(x * 5.0f + 2.5f, 0.0f, z * 5.0f + 2.5f)) : radius;
 				const float seen = std::clamp((r - d) / 5.0f + 0.5f, 0.0f, 1.0f);
-				uint8_t& t = next[z * width + x];
-				t = std::max(t, (uint8_t)(seen * 255.0f));
+				const uint8_t v = (uint8_t)(seen * 255.0f);
+				if (x >= 0 && z >= 0 && x < w && z < h) {
+					uint8_t& t = next[z * width + x];
+					t = std::max(t, v);
+				}
+				uint8_t& dt = drawNext[(size_t)(z + P) * DW + x + P];
+				dt = std::max(dt, v);
 			}
 		}
 	};
@@ -91,8 +100,11 @@ void FogOfWar::update(Client* client)
 	walk(client->getLevel(), walk);
 	for (const auto& [pos, radius] : testViewers)
 		stamp(pos, radius / 5.0f);
-	if (next != tiles) {
+	if (next != tiles || drawNext != drawTiles) {
 		tiles = std::move(next);
+		drawTiles = std::move(drawNext);
+		drawWidth = (uint32_t)DW;
+		drawHeight = (uint32_t)DH;
 		version++;
 	}
 	updateMemory(client);

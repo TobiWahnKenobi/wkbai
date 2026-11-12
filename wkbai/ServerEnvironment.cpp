@@ -1059,6 +1059,15 @@ void ServerEnvironment::debugSet(Server& server, const std::string& name, float 
 {
 	const float now = server.timeManager.currentTime;
 	auto frac = [](float x) { return x - std::floor(x); };
+	if (name == "sunrise" || name == "sunset") {
+		// hours after this season's sunrise or sunset (before it when negative): test runs reach
+		// dawn and dusk on any day of the year, where a fixed hour can land in the night
+		const SunState sun = ComputeSun(EnvDayFraction(settings, now), EnvYearFraction(settings, now), settings.seasons, state.cloudCover);
+		const float h = (name == "sunrise" ? sun.sunrise : sun.sunset) + value;
+		printf("ENVIRONMENT debug t=%.0f: %s %+g h (sunrise %.2f, sunset %.2f)\n", now, name.c_str(), value, sun.sunrise, sun.sunset);
+		debugSet(server, "hour", h - 24.0f * std::floor(h / 24.0f));
+		return;
+	}
 	if (name == "hour") {
 		// the shift that puts the clock at that hour now
 		const float current = frac(settings.startHour / 24.0f + settings.dayShift + now / settings.dayLengthS());

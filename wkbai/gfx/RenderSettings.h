@@ -70,6 +70,22 @@ struct RenderSettings {
 	// 1-3: up to 4, 8, 16 pieces per tile edge near the camera); objects are drawn on that surface
 	// (the game's own heights don't change). Only with a GPU that can tessellate.
 	int terrainTessellation = 2;
+	// wkbai's Extend map (ExtendMap.h): the land continued beyond the map's edge, drawn only (the
+	// game never sees it). 0 off, 1 near (64 tiles beyond the mesh's edge), 2 far (and coarser
+	// rings to about 3.6 km beyond), 3 horizon (to about 30 km); not in the map editor
+	int extendMap = 0;
+	// its detail (Low, Medium, High, Ultra): the first far ring's grid 20, 10, 5 or 2.5 units
+	// (each ring twice as coarse as the one inside it); Ultra takes longer to build
+	int extendMapDetail = 1;
+	// the two as the terrain is built with them: changed only by OK in the Options menu, Apply in
+	// the F10 panel and loading (building takes seconds, and switching through the choices rebuilt
+	// it at each one, the play test of 2026-11-11)
+	// the far land's terrain shadows: each far vertex's horizon in 8 directions, worked out as the
+	// far land is built (a little longer to build), the sun against it soft-edged as drawn
+	bool extendMapShadows = true;
+	int appliedExtendMap = 0, appliedExtendMapDetail = 1;
+	bool appliedExtendMapShadows = true;
+	void applyExtendMap() { appliedExtendMap = extendMap; appliedExtendMapDetail = extendMapDetail; appliedExtendMapShadows = extendMapShadows; }
 	bool grass = true;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)
@@ -182,6 +198,9 @@ struct RenderSettings {
 	// ray-traced reflections of the buildings, trees and units in the water (the same; water Low
 	// or better), over the screen-space reflections, which still show the terrain
 	bool rtReflections = false;
+	// the water's screen-space reflections (water Low or better): the frame behind the water seen
+	// along the mirror ray; off, the water mirrors the sky alone (and the ray-traced reflections)
+	bool ssReflections = true;
 	// the ground's Fresnel (enhanced terrain renderer on Diligent): its reflection of the sky
 	// at grazing angles, as a rough dielectric's (Schlick, F0 0.04) times this; 0 off. The
 	// models' per-pixel lighting (modelLighting) has its own Fresnel, PBR packs or not.

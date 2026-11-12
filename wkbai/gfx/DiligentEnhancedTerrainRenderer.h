@@ -5,6 +5,7 @@
 #pragma once
 
 #include "TerrainRenderer.h"
+#include "../ExtendMap.h"
 
 struct TextureCache;
 namespace Diligent { struct ITextureView; }
@@ -12,7 +13,9 @@ namespace Diligent { struct ITextureView; }
 // Bump-mapped terrain with per-pixel sun light, and lakes, on Diligent (Direct3D 12 / Vulkan);
 // a port of the former D3D11EnhancedTerrainRenderer.
 struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
-	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera) : TerrainRenderer(gfx, terrain, camera) { init(); }
+	// extendTiles: wkbai's Extend map (ExtendMap.h): the renderer draws a bigger copy of the map
+	// with that many tiles more on each side (0: the map itself), kept in step with it
+	DiligentEnhancedTerrainRenderer(IRenderer* gfx, Terrain* terrain, Camera* camera, int extendTiles = 0, int farRings = 0, int extendDetail = 1, bool extendShadows = false);
 	~DiligentEnhancedTerrainRenderer();
 	void init();
 	void render() override;
@@ -27,10 +30,24 @@ struct DiligentEnhancedTerrainRenderer : TerrainRenderer {
 	bool updateTiles() override;
 	bool updateWater() override;
 	bool* bumpMapping() override { return &m_bumpOn; }
+	int extendedTiles() const override;
+	int extendedFarRings() const override { return extended ? farRingCount : 0; }
+	int extendedDetail() const override { return farDetail; }
+	bool extendedShadows() const override { return farShadows; }
+	float extendedFarReach() const override { return extended ? far.reach : 0.0f; }
+	const FarTerrain* extendedFar() const override { return extended && farRingCount > 0 && far.reach > 0 ? &far : nullptr; }
+	const std::vector<ExtendedTree>* extendedTrees() const override { return extended ? &trees : nullptr; }
 
 	bool m_bumpOn = true;
 private:
 	struct Impl;
 	Impl* _impl;
 	TextureCache* texcache;
+	Terrain* mapTerrain; // the map's own (the client's, maybe shared with a local server)
+	ExtendedTerrain extended; // its copy drawn, with Extend map (else null: terrain is the map's)
+	std::vector<ExtendedTree> trees; // the copy's trees
+	int farRingCount = 0;
+	int farDetail = 1; // RenderSettings::extendMapDetail it was built with
+	bool farShadows = false; // and RenderSettings::extendMapShadows
+	FarTerrain far; // the far rings (their mesh goes to the GPU; the reach and blocks stay)
 };

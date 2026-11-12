@@ -1033,12 +1033,27 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
+		ImGui::Checkbox("Screen-space water reflections (water Low or better)", &s.ssReflections);
 		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
 	}
 	if (ImGui::CollapsingHeader("Terrain and grass")) {
 		{
 			static const char* const tessLevels[] = { "Off", "Low (4 per tile edge)", "Medium (8)", "High (16)" };
 			ImGui::Combo("Terrain tessellation", &s.terrainTessellation, tessLevels, 4);
+			static const char* const extendLevels[] = { "Off", "Near (64 tiles beyond the edge)", "Far (to about 3.6 km)", "Horizon (to about 30 km)" };
+			ImGui::Combo("Extend map (not in the editor)", &s.extendMap, extendLevels, 4);
+			static const char* const extendDetails[] = { "Low", "Medium", "High", "Ultra (slower to build)" };
+			ImGui::BeginDisabled(s.extendMap < 2);
+			ImGui::Combo("Extend map detail (far land)", &s.extendMapDetail, extendDetails, 4);
+			ImGui::Checkbox("Far land shadows (soft terrain shadows, a little longer to build)", &s.extendMapShadows);
+			ImGui::EndDisabled();
+			// (built anew only on Apply: it takes seconds)
+			const bool pending = s.extendMap != s.appliedExtendMap || s.extendMapDetail != s.appliedExtendMapDetail
+				|| s.extendMapShadows != s.appliedExtendMapShadows;
+			ImGui::BeginDisabled(!pending);
+			if (ImGui::Button("Apply Extend map"))
+				s.applyExtendMap();
+			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
@@ -2429,8 +2444,25 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 
 	static const float tolerance = 25.0f;
+	// (with the ray-traced shadows at a low sun an object off the view may cast its shadow into
+	// it: the rough tests here widen by the longest such shadow, of an object 15 units high; the
+	// sphere test further down decides. Without, the trees just off the screen still cast none.)
+	// (the settings, not shadows.rayShadowsOn: the renderer clears that each frame until it is set
+	// again after the objects are drawn, so here it was always off and the trees just off the
+	// screen cast no shadow, the play test of 2026-11-11; the sun the scene's, as last set)
+	auto* rtGfx = dynamic_cast<DiligentGfx*>(gfx);
+	const bool rtCasters = rtGfx && g_renderSettings.staticShadows && g_renderSettings.rtShadows && rtGfx->shadows.rayShadowsSupported
+		&& scene && scene->sunDirection.sqlen3() > 1e-6f;
+	const Vector3 rtSun = rtCasters ? scene->sunDirection.normal() : Vector3(0, 1, 0);
+	float shadowReach = 0.0f;
+	if (rtCasters) {
+		const Vector3 sn = rtSun;
+		const float fl = std::sqrt(sn.x * sn.x + sn.z * sn.z);
+		if (sn.y > 0.02f && fl > 1e-3f)
+			shadowReach = std::min(30.0f * fl / sn.y, 600.0f);
+	}
 	const float dirDist = client->camera.direction.dot(obj->position - client->camera.position);
-	const float nearBound = client->camera.nearDist - tolerance;
+	const float nearBound = client->camera.nearDist - tolerance - shadowReach;
 	const float farBound = client->camera.farDist + tolerance;
 	if (dirDist < nearBound || dirDist > farBound)
 		return;
@@ -2445,7 +2477,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		cosFov = std::cos(fovX / 2.0f);
 	}
 	const float sideDist = std::abs(side.dot(obj->position - client->camera.position));
-	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov;
+	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov + shadowReach;
 	if (sideDist > sideBound)
 		return;
 
@@ -2494,6 +2526,27 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		Vector3 sphereEnd = sphereCenter + (H - sphereCenter).normal() * sphereRadius;
 		ttpp = sphereEnd.transformScreenCoords(client->camera.sceneMatrix);
 		onCam = !(ttpp.x < -1 || ttpp.x > 1 || ttpp.y < -1 || ttpp.y > 1 || ttpp.z < -1 || ttpp.z > 1);
+	}
+	// With the ray-traced shadows, an object off the view whose shadow reaches into it: its
+	// shadow on the ground along the sun, at a third, two thirds and its end, tested as the
+	// object itself (at a low sun the trees just off the screen cast no shadow, theirs ended at
+	// the screen's edge, the play test of 2026-11-11)
+	if (!onCam) {
+		const Vector3 sun = rtSun;
+		const float flat = std::sqrt(sun.x * sun.x + sun.z * sun.z);
+		if (rtCasters && sun.y > 0.02f && flat > 1e-3f) {
+			const float len = std::min(2.0f * sphereRadius * flat / sun.y, 600.0f);
+			const Vector3 away(-sun.x / flat, 0, -sun.z / flat);
+			for (float f : { 0.33f, 0.66f, 1.0f }) {
+				const Vector3 p = sphereCenter + away * (len * f);
+				const Vector3 sp = p.transformScreenCoords(client->camera.sceneMatrix);
+				const float m = 1.0f + sphereRadius / std::max((p - client->camera.position).len3(), 1.0f);
+				if (sp.x >= -m && sp.x <= m && sp.y >= -m && sp.y <= m && sp.z >= -1 && sp.z <= 1) {
+					onCam = true;
+					break;
+				}
+			}
+		}
 	}
 	if (!onCam)
 		return;
@@ -2597,6 +2650,21 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 
 	scene->add(&obj->sceneEntity);
 	numObjectsDrawn++;
+	// Extend map: the level's tree models, to grow its trees with (a few of each kind seen)
+	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
+		const std::string& name = obj->blueprint->name;
+		if (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos
+			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))) {
+			bool known = false;
+			for (const ExtTreeModel& t : extTreeModels)
+				known = known || t.model == model;
+			if (!known) {
+				const Matrix& m = obj->sceneEntity.transform;
+				const float s = std::sqrt(m._11 * m._11 + m._12 * m._12 + m._13 * m._13);
+				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES });
+			}
+		}
+	}
 	// Attachment points
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
 
@@ -2985,6 +3053,15 @@ void ClientInterface::iter()
 	if (waterDesignChanged && terrainRenderer) {
 		waterDesignChanged = false;
 		applyWaterDesign();
+	}
+	// Extend map switched on or off, or the map editor opened or closed (it has none): the
+	// terrain renderer made again
+	if (terrainRenderer && client->terrain && UseEnhancedRenderers(gfx)
+		&& (terrainRenderer->extendedTiles() != wantedExtendTiles() || terrainRenderer->extendedFarRings() != wantedFarRings()
+			|| (wantedFarRings() > 0 && (terrainRenderer->extendedDetail() != g_renderSettings.appliedExtendMapDetail
+				|| terrainRenderer->extendedShadows() != g_renderSettings.appliedExtendMapShadows)))) {
+		delete terrainRenderer;
+		terrainRenderer = makeTerrainRenderer();
 	}
 	if (terrainHeightsChanged && terrainRenderer && SDL_GetTicks() - terrainHeightsRefreshed >= 250) {
 		terrainHeightsChanged = false;
@@ -4237,6 +4314,9 @@ void ClientInterface::iter()
 		}
 	}
 	if (fogOn)
+		// (with Extend map, drawn 40 tiles on over its land: further than any sight reaches past
+		// the border, so the land beyond is unseen alike)
+		fogOfWar.drawPad = terrainRenderer && terrainRenderer->extendedTiles() > 0 ? 40 : 0;
 		fogOfWar.update(client);
 	if (postGfx) {
 		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
@@ -4263,7 +4343,10 @@ void ClientInterface::iter()
 	// View distance (the original's far_clip, default 350, slider 280-1000; it also sets the
 	// fog) or the whole map, and the field of view, from the settings
 	if (g_renderSettings.farClipWholeMap && client->terrain) {
-		const float mapWidth = 5.0f * client->terrain->width, mapHeight = 5.0f * client->terrain->height;
+		// (with Extend map, its land too)
+		const int extra = terrainRenderer ? 2 * terrainRenderer->extendedTiles() : 0;
+		const float farExtra = terrainRenderer ? 2.0f * terrainRenderer->extendedFarReach() : 0.0f;
+		const float mapWidth = 5.0f * (client->terrain->width + extra) + farExtra, mapHeight = 5.0f * (client->terrain->height + extra) + farExtra;
 		client->camera.farDist = std::sqrt(mapWidth * mapWidth + mapHeight * mapHeight) / 0.95f + 1.0f;
 	}
 	else
@@ -4271,6 +4354,15 @@ void ClientInterface::iter()
 	// Near plane: the original's near_clip of 1, pushed out for very long view distances to keep
 	// the depth precision
 	client->camera.nearDist = std::max(1.0f, client->camera.farDist / 10000.0f);
+	// ... but never beyond a third of the camera's height over the ground (a low camera with the
+	// Extend map's long view had its near plane at some 9 units and cut the ground off in front of
+	// it, the play test of 2026-11-11); a low camera hides the far land anyway
+	if (client->terrain && client->getLevel()) {
+		const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+		const float gx = std::clamp(client->camera.position.x, 0.0f, areaWidth), gz = std::clamp(client->camera.position.z, 0.0f, areaDepth);
+		const float above = client->camera.position.y - client->terrain->getHeight(gx, gz);
+		client->camera.nearDist = std::max(0.5f, std::min(client->camera.nearDist, 0.33f * above));
+	}
 	client->camera.fovY = g_renderSettings.fovY();
 	client->camera.updateMatrix();
 	gfx->SetTransformMatrix(&client->camera.sceneMatrix);
@@ -4282,6 +4374,7 @@ void ClientInterface::iter()
 		if (client->terrain && g_renderSettings.edgeFog) {
 			const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
 			const float band = 5.0f * client->terrain->edge;
+			const int extended = terrainRenderer ? terrainRenderer->extendedTiles() : 0;
 			// With the original's fog and view distance the distance fog hides the far terrain, and
 			// the edge band keeps the original's distant mountains: a gentle edge fog. Longer views
 			// (fog off, own fog distances, whole map, a view distance well beyond the original's)
@@ -4293,10 +4386,30 @@ void ClientInterface::iter()
 				opaque = std::clamp(rs.edgeFogOpaque, 0.0f, 0.95f);
 				start = std::min(std::clamp(rs.edgeFogStart, -1.0f, 0.95f), opaque - 0.001f);
 			}
-			dgfx->SetFogEdge(areaWidth, areaDepth, band * start, band * opaque);
+			if (extended > 0) {
+				// Extend map: the edge fog only hides the end of the extension, fading in over its
+				// outer half (the distance fog and the horizon's haze do the rest)
+				const float reach = band + 5.0f * extended + (terrainRenderer ? terrainRenderer->extendedFarReach() : 0.0f);
+				start = std::max(band * start, 0.5f * reach);
+				opaque = 0.95f * reach;
+				dgfx->SetFogEdge(areaWidth, areaDepth, start, opaque);
+			}
+			else
+				dgfx->SetFogEdge(areaWidth, areaDepth, band * start, band * opaque);
 		}
 		else
 			dgfx->SetFogEdge(1e9f, 1e9f, 1e9f, 2e9f);
+		// Extend map's ground beyond its far rings, to the true horizon (drawn by the sky)
+		const FarTerrain* far = terrainRenderer ? terrainRenderer->extendedFar() : nullptr;
+		if (client->terrain && far) {
+			const auto [areaWidth, areaDepth] = client->terrain->getPlayableArea();
+			const float nearEnd = 5.0f * (client->terrain->edge + terrainRenderer->extendedTiles());
+			dgfx->SetFarGround(far->outerLevel, nearEnd + far->reach, far->outerSea, far->outerColour, areaWidth, areaDepth, nearEnd, client->camera.farDist);
+		}
+		else {
+			const float none[3] = {};
+			dgfx->SetFarGround(0, 0, false, none, 0, 0, 0, 0);
+		}
 	}
 	if (skyRenderer) {
 		PROFILE_SCOPE("Sky and clouds");
@@ -4390,6 +4503,7 @@ void ClientInterface::iter()
 		}
 		if (client->getLevel())
 			drawObject(client->getLevel());
+		drawExtendedTrees();
 		if (fogOfWarOn())
 			for (const auto& [id, copy] : fogOfWar.remembered)
 				if (!fogOfWar.isBuildingSeen(copy->position))
@@ -4845,9 +4959,9 @@ void ClientInterface::iter()
 	}
 
 	if (postGfx) {
-		if (fogOn && !fogOfWar.tiles.empty())
-			postGfx->SetFogOfWar(fogOfWar.tiles.data(), fogOfWar.width, fogOfWar.height, fogOfWar.version,
-				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness);
+		if (fogOn && !fogOfWar.drawTiles.empty())
+			postGfx->SetFogOfWar(fogOfWar.drawTiles.data(), fogOfWar.drawWidth, fogOfWar.drawHeight, fogOfWar.version,
+				client->camera.viewMatrix.getInverse4x3(), g_renderSettings.fogOfWarBrightness, (uint32_t)fogOfWar.drawPad);
 		PROFILE_SCOPE("Post-processing");
 		postGfx->ApplyPostProcessing(client->camera);
 	}
@@ -5006,6 +5120,49 @@ void ClientInterface::iter()
 	}
 }
 
+// Extend map's trees: an entity per tree with one of the level's tree models (by the tree's
+// number), drawn within the view distance and roughly in front of the camera
+void ClientInterface::drawExtendedTrees()
+{
+	const std::vector<ExtendedTree>* trees = terrainRenderer ? terrainRenderer->extendedTrees() : nullptr;
+	if (!trees || trees->empty()) {
+		extTreeEntities.clear();
+		extTreesFor = nullptr;
+		if (!trees)
+			extTreeModels.clear();
+		return;
+	}
+	if (extTreeModels.empty())
+		return;
+	if (extTreesFor != trees || extTreesModels != extTreeModels.size()) {
+		extTreesFor = trees;
+		extTreesModels = extTreeModels.size();
+		extTreeEntities.clear();
+		extTreeEntities.reserve(trees->size());
+		for (const ExtendedTree& t : *trees) {
+			const ExtTreeModel& m = extTreeModels[t.variant % extTreeModels.size()];
+			SceneEntity e;
+			e.model = m.model;
+			const float s = m.scale * t.scale;
+			e.transform = Matrix::getScaleMatrix(Vector3(s, s, s)) * Matrix::getRotationYMatrix(t.yaw) * Matrix::getTranslationMatrix(Vector3(t.x, t.y, t.z));
+			e.flags = m.flags;
+			e.animTime = (uint32_t)(t.variant & 0xFFFF);
+			extTreeEntities.push_back(e);
+		}
+	}
+	const Vector3 cam = client->camera.position;
+	const Vector3 dir = client->camera.direction;
+	const float far2 = client->camera.farDist * client->camera.farDist;
+	for (SceneEntity& e : extTreeEntities) {
+		const Vector3 p(e.transform._41, e.transform._42, e.transform._43);
+		const Vector3 d = p - cam;
+		const float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
+		if (d2 > far2 || (d.x * dir.x + d.y * dir.y + d.z * dir.z) < -0.3f * std::sqrt(d2) - 20.0f)
+			continue;
+		scene->add(&e);
+	}
+}
+
 void ClientInterface::render()
 {
 	if(this->terrainRenderer)
@@ -5017,10 +5174,7 @@ void ClientInterface::updateTerrain() {
 	skyRenderer = nullptr;
 	if (UseEnhancedRenderers(gfx))
 		skyRenderer = new DiligentSkyRenderer(gfx, client->terrain, &client->camera);
-	if (UseEnhancedRenderers(gfx))
-		this->terrainRenderer = new DiligentEnhancedTerrainRenderer(gfx, client->terrain, &client->camera);
-	else
-		this->terrainRenderer = new DefaultTerrainRenderer(gfx, client->terrain, &client->camera);
+	this->terrainRenderer = makeTerrainRenderer();
 	this->terrainSpriteContainer = new TerrainSpriteContainer;
 	this->terrainSpriteRenderer = new TerrainSpriteRenderer(gfx, client->terrain, this->terrainSpriteContainer);
 }

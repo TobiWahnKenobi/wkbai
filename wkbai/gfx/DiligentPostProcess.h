@@ -23,6 +23,7 @@ struct DiligentPostProcess {
 		uint32_t width = 0, height = 0, version = 0;
 		Matrix inverseView;
 		float unseenBrightness = 0.55f;
+		uint32_t pad = 0; // tiles beyond the playable area on each side (Extend map)
 	};
 	struct Settings {
 		FogOfWar fog;

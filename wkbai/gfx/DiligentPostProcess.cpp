@@ -502,6 +502,9 @@ float FogDarkening(float2 uv)
 	// (the land and water past the edge stood darker than the sky, a grey slab, a hard line)
 	float2 outside = max(-fuv, fuv - 1) / Fog.xy;
 	float edge = saturate((max(outside.x, outside.y) - Taa.z) / max(Taa.w - Taa.z, 1e-3));
+	// (beyond the map, with Extend map, the texture reaches on over its land, the sight circles
+	// over the border, the rest unseen: clamped, the map's own border tiles had stretched out to
+	// the horizon in bands, the play test of 2026-11-11)
 	return lerp(dark, 1, edge);
 }
 
@@ -1187,8 +1190,8 @@ void DiligentPostProcess::apply(IDeviceContext* ctx, ITextureView* backBufferRTV
 			1.0f / w, 1.0f / h, 1.0f / hw, 1.0f / hh,
 			settings.ssaoRadius, settings.ssao && !settings.aoInShading ? settings.ssaoStrength : 0.0f, 0.0f, 0.0f,
 			settings.bloomThreshold, settings.bloom ? settings.bloomIntensity : 0.0f, blurX, blurY,
-			iv._11, iv._21, iv._31, iv._41,
-			iv._13, iv._23, iv._33, iv._43,
+			iv._11, iv._21, iv._31, iv._41 + 5.0f * fog.pad,
+			iv._13, iv._23, iv._33, iv._43 + 5.0f * fog.pad,
 			fogOn ? 1.0f / (5.0f * fog.width) : 0.0f, fogOn ? 1.0f / (5.0f * fog.height) : 0.0f, fog.unseenBrightness, fogOn ? 1.0f : 0.0f,
 			(float)w / ow, (float)h / oh, 0.5f * w / ow - 0.5f, 0.5f * h / oh - 0.5f,
 			(float)w, (float)h, (float)ow, (float)oh,

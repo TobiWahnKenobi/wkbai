@@ -713,6 +713,7 @@ struct DiligentRenderer : DiligentGfx
 	float fogFar = 250.0f;
 	Vector3 fogCamera;
 	float fogEdge[4] = { 1e9f, 1e9f, 1e9f, 2e9f }; // no edge fog until a map sets it
+	float farGround[12] = {}; // FogBuffer.FarGround, FarLand, FarArea (SetFarGround)
 	float lightMasks[4] = {}; // FogBuffer.LightMasks (FinishLightingPrepass)
 	bool fogEnabled = false;
 	bool isVulkan = false;
@@ -1086,9 +1087,9 @@ struct DiligentRenderer : DiligentGfx
 		ctx->SetViewports(1, nullptr, 0, 0);
 	}
 
-	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness) override
+	void SetFogOfWar(const uint8_t* tiles, uint32_t width, uint32_t height, uint32_t version, const Matrix& inverseView, float unseenBrightness, uint32_t pad) override
 	{
-		fog = { tiles, width, height, version, inverseView, unseenBrightness };
+		fog = { tiles, width, height, version, inverseView, unseenBrightness, pad };
 	}
 
 	void ApplyPostProcessing(const Camera& camera) override
@@ -1198,6 +1199,18 @@ struct DiligentRenderer : DiligentGfx
 		fogCamera = position;
 		writeFogBuffer();
 	}
+
+	void SetFarGround(float level, float reach, bool sea, const float colour[3], float areaWidth, float areaDepth, float nearEnd, float farClip) override
+	{
+		const float g[12] = { level, reach, sea ? 1.0f : 0.0f, reach > 0 ? 1.0f : 0.0f, colour[0], colour[1], colour[2], FAR_AIR, areaWidth, areaDepth, nearEnd, farClip };
+		if (std::equal(g, g + 12, farGround))
+			return;
+		std::copy_n(g, 12, farGround);
+		writeFogBuffer();
+	}
+	// the air's length over the ground beyond (world units): how far it takes to go two thirds of
+	// the way into the horizon's colour (real air, on the ground beyond the extension only)
+	static constexpr float FAR_AIR = 9000.0f; // (25000 left a dark band under the horizon without the edge fog)
 
 	void SetFogEdge(float playableWidth, float playableDepth, float start, float opaque) override
 	{
@@ -1340,6 +1353,13 @@ struct DiligentRenderer : DiligentGfx
 		memcpy(cc + 32, shadows.fogHorizon, sizeof(shadows.fogHorizon));
 		// the live sky for reflections (SkyReflect; FogSky[48].w 0: none)
 		memcpy(cc + 160, shadows.fogSky, sizeof(shadows.fogSky));
+		// Extend map's ground beyond (FarGround, FarLand), the sun's direction (FarSun)
+		std::copy_n(farGround, 12, cc + 360);
+		const Vector3 sun = shadows.sunDirection.sqlen3() > 1e-6f ? shadows.sunDirection.normal() : Vector3(0, 1, 0);
+		cc[372] = sun.x;
+		cc[373] = sun.y;
+		cc[374] = sun.z;
+		cc[375] = 0.0f;
 		ctx->UnmapBuffer(fogBuffer, MAP_WRITE);
 	}
 
@@ -1469,7 +1489,7 @@ struct DiligentRenderer : DiligentGfx
 			ferr("Diligent: could not create the resource signature.");
 
 		transformBuffer = createBuffer("Transform", 64, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
-		fogBuffer = createBuffer("Fog", 1440, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
+		fogBuffer = createBuffer("Fog", 1504, BIND_UNIFORM_BUFFER, USAGE_DYNAMIC);
 		vertexRing.capacity = 2 << 20;
 		vertexRing.buf = createBuffer("Vertex stream", vertexRing.capacity, BIND_VERTEX_BUFFER, USAGE_DYNAMIC);
 		indexRing.capacity = 512 << 10;

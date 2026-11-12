@@ -170,6 +170,10 @@ private:
 	bool editorNewMap(const std::string& name, int width, int height);
 	// the terrain renderer updated after an edit of the heights (or of the tiles), or made again
 	void rebuildTerrainRenderer(bool tiles = false);
+	// a new terrain renderer for client->terrain, with Extend map as set (not in the map editor)
+	TerrainRenderer* makeTerrainRenderer();
+	int wantedExtendTiles() const;
+	int wantedFarRings() const;
 	// the lakes set on the client and the server, their water filled again and shown (the map editor)
 	void setLakes(const std::vector<Vector3>& lakes, const std::vector<uint8_t>& bits);
 	// The menu's "save" request: saves (saveGame) and tells the menu
@@ -259,6 +263,14 @@ private:
 	float nextSelObjDistanceByMesh = 0.0f, nextSelObjDistanceBySphere = 0.0f;
 	Language lang;
 	std::deque<SceneEntity> attachSceneEntities;
+	// Extend map's trees (ExtendMap.h): the level's own tree models as seen (with their size and
+	// season flags), and an entity per tree, made once those are known
+	struct ExtTreeModel { Model* model; float scale; uint32_t flags; };
+	std::vector<ExtTreeModel> extTreeModels;
+	std::vector<SceneEntity> extTreeEntities;
+	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
+	size_t extTreesModels = 0;
+	void drawExtendedTrees();
 	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
 	std::vector<float>* gpuBlobShadows = nullptr; // this frame's blob shadows for the enhanced terrain renderer
 	bool selBoxOn = false;
