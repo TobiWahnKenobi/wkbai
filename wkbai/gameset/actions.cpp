@@ -8,6 +8,7 @@
 #include "gameset.h"
 #include "../util/util.h"
 #include "../server.h"
+#include "../network.h"
 #include "ScriptContext.h"
 #include "../BreakpointManager.h"
 #include "../settings.h"
@@ -1437,6 +1438,19 @@ struct ActionSendChatMessage : Action {
 	}
 };
 
+// STOP_SOUND <objects>: the sounds those objects play stopped (a warning's marker before the next,
+// the battle sound markers, the player's own announcements)
+struct ActionStopSound : Action {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->stopSound(obj);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
 // SHOW_BLINKING_DOT_ON_MINIMAP <position> <colour> <seconds> <players> (WKB.exe 0x497740, message
 // 0x7b) and COLLAPSING_CIRCLE_ON_MINIMAP <position> <colour> <seconds> <circles> <players>
 // (0x4773f0, 0xc9: the circles' count rounded to a whole number): a fight, a fire, Charm of
@@ -2042,8 +2056,8 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_INTERPOLATE_CAMERA_TO_STORED_POSITION: action = new ActionInterpolateCameraToStoredPosition; break;
 	case Tags::ACTION_DISBAND_FORMATION: action = new ActionDisbandFormation; break;
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
+	case Tags::ACTION_STOP_SOUND: action = new ActionStopSound; break;
 		// Below are ignored actions (that should not affect gameplay very much)
-	case Tags::ACTION_STOP_SOUND:
 	case Tags::ACTION_ENABLE_GAME_INTERFACE:
 	case Tags::ACTION_DISABLE_GAME_INTERFACE:
 	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:

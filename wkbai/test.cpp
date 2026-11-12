@@ -7717,6 +7717,23 @@ void Test_MinimapAlerts()
 	// they end on time (1.5 s on: the 1 s ones gone, the 8 s one left)
 	step(75);
 	check(alertsA.size() == 1 && alertsA[0].seconds == 8.0f && alertsB.empty(), "after 1.5 s only the 8 s dot is left");
+	// Home: the warnings' places, the latest first, then the one before
+	run(A, "COLLAPSING_CIRCLE_ON_MINIMAP CENTRE_OF_MAP COLOUR_RED CONSTANT 1 CONSTANT 1 FINDER_PLAYER");
+	step(3);
+	const auto area = server.terrain->getPlayableArea();
+	printf("UNITTEST A's warning places: %zu\n", clientA.warningPlaces.size());
+	check(clientA.warningPlaces.size() >= 2 && std::abs(clientA.warningPlaces[0].first - area.first * 0.5f) < 0.1f
+		&& std::abs(clientA.warningPlaces[0].second - area.second * 0.5f) < 0.1f, "the centre (CENTRE_OF_MAP) is the latest warning place");
+	ClientInterface uiA(&clientA, nullptr);
+	uiA.lastWarning();
+	check(uiA.hotKeyCameraTarget && std::abs(uiA.hotKeyCameraTarget->x - area.first * 0.5f) < 0.1f && !uiA.minimapPings.empty(),
+		"Home: the camera to the latest, pinged");
+	uiA.lastWarning();
+	check(uiA.hotKeyCameraTarget && std::abs(uiA.hotKeyCameraTarget->x - clientA.warningPlaces[1].first) < 0.1f,
+		"Home again: the one before");
+	// STOP_SOUND reaches the clients (no sound device here: nothing to hear)
+	run(A, "STOP_SOUND FINDER_PLAYER");
+	step(2);
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 

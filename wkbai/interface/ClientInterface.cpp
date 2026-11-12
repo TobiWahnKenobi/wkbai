@@ -3639,6 +3639,9 @@ void ClientInterface::iter()
 	if (KeyPressed(KeyAction::SlowDown) && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed / 2.0f);
 	}
+	// Home: the last four warnings' places in turn (Hot Keys.cpp), the latest first
+	if (KeyPressed(KeyAction::LastWarning) && !ImGui::GetIO().WantTextInput)
+		lastWarning();
 	if (KeyPressed(KeyAction::DeleteSelected) && !ImGui::GetIO().WantTextInput) {
 		// in the map editor, removed so that undo can place them again
 		if (editorOn && withServer)
@@ -5511,6 +5514,17 @@ void ClientInterface::hotKeySelect(const char* finderName)
 		selection.insert(pick);
 	hotKeyCameraTarget = pick->position;
 	minimapPings.emplace_back(pick->position, (uint32_t)SDL_GetTicks());
+}
+
+void ClientInterface::lastWarning()
+{
+	if (client->warningPlaces.empty())
+		return;
+	const auto [x, z] = client->warningPlaces[client->warningCycle % client->warningPlaces.size()];
+	client->warningCycle++;
+	const Vector3 pos(x, client->terrain ? client->terrain->getHeight(x, z) : 0.0f, z);
+	hotKeyCameraTarget = pos;
+	minimapPings.emplace_back(pos, (uint32_t)SDL_GetTicks());
 }
 
 void ClientInterface::saveRequested(const std::string& name)

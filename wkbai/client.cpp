@@ -168,6 +168,8 @@ void Client::tick()
 				disguises.clear();
 				fogReveals.clear();
 				minimapAlerts.clear();
+				warningPlaces.clear();
+				warningCycle = 0;
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
 				environmentSkyKnown = false;
@@ -463,6 +465,17 @@ void Client::tick()
 					a.seconds = a.circle ? 2.0f : 8.0f;
 				if (minimapAlerts.size() < 64)
 					minimapAlerts.push_back(a);
+				// Home's places: this one first
+				std::erase_if(warningPlaces, [&](const auto& p) {
+					return (p.first - a.x) * (p.first - a.x) + (p.second - a.z) * (p.second - a.z) < 25.0f * 25.0f; });
+				warningPlaces.insert(warningPlaces.begin(), { a.x, a.z });
+				if (warningPlaces.size() > 4)
+					warningPlaces.resize(4);
+				warningCycle = 0;
+				break;
+			}
+			case NETCLIMSG_STOP_SOUND: {
+				SoundPlayer::getSoundPlayer()->stopSoundsOf(br.readUint32());
 				break;
 			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {
@@ -610,12 +623,14 @@ void Client::tick()
 						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
 						if (!path.empty()) {
 							std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
+							SoundPlayer::getSoundPlayer()->soundOwner = objid;
 							if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
 								SoundPlayer::getSoundPlayer()->playSound(gfspath);
 							else {
 								//float rolloff = (refDist / 0.1f - refDist) / (maxDist - refDist);
 								SoundPlayer::getSoundPlayer()->playSound3D(gfspath, to->position, refDist, maxDist);
 							}
+							SoundPlayer::getSoundPlayer()->soundOwner = 0;
 						}
 					}
 				}
@@ -629,7 +644,9 @@ void Client::tick()
 					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
 					if (!path.empty()) {
 						std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
+						SoundPlayer::getSoundPlayer()->soundOwner = objid;
 						SoundPlayer::getSoundPlayer()->playSound3D(gfspath, targetPos, refDist, maxDist);
+						SoundPlayer::getSoundPlayer()->soundOwner = 0;
 					}
 				}
 				break;

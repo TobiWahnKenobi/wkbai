@@ -150,6 +150,8 @@ enum NetClientMessages {
 	// circle (8 bits), x and z (floats), the colour (32 bits, Server::sendMinimapAlert), the seconds
 	// (float), the circles (8 bits)
 	NETCLIMSG_MINIMAP_ALERT,
+	// STOP_SOUND: the sounds the object (id, 32 bits) played on this client stopped
+	NETCLIMSG_STOP_SOUND,
 };
 
 enum NetServerMessages {

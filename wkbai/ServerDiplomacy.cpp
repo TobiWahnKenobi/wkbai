@@ -310,3 +310,12 @@ void Server::sendMinimapAlert(ServerGameObject* player, bool circle, const Vecto
 	msg.writeUint8((uint8_t)std::clamp(circles, 1, 20));
 	sendTo(player, msg);
 }
+
+void Server::stopSound(ServerGameObject* obj)
+{
+	if (!obj)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_STOP_SOUND };
+	msg.writeUint32(obj->id);
+	sendToAll(msg);
+}

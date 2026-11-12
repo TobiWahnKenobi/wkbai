@@ -167,6 +167,10 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 		uint32_t start = 0;
 	};
 	std::vector<MinimapAlert> minimapAlerts;
+	// the last four warnings' places (x, z), the latest first (one per place: a new alert within
+	// 25 m of a kept one moves it to the front), for Home; warningCycle: Home's next pick
+	std::vector<std::pair<float, float>> warningPlaces;
+	size_t warningCycle = 0;
 	struct DiplomacyButton {
 		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
 		std::string tooltip;

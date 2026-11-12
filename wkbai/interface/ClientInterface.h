@@ -136,6 +136,8 @@ struct ClientInterface {
 	std::string chatDisplayText(const std::string& key, const std::vector<float>& values);
 	// the selection keys (Hot Keys.cpp) and their pings on the minimap (where, SDL ticks)
 	void hotKeySelect(const char* finderName);
+	// Home: the camera to the next of the last four warnings' places (Client::warningPlaces)
+	void lastWarning();
 	std::vector<std::pair<Vector3, uint32_t>> minimapPings;
 	std::optional<Vector3> hotKeyCameraTarget;
 private:

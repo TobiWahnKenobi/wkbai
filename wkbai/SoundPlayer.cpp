@@ -38,6 +38,7 @@ struct OALSoundPlayer : SoundPlayer {
 
 	std::map<std::string, ALuint> sndBufCache;
 	std::array<ALuint, MAX_SOURCES> sources;
+	std::array<uint32_t, MAX_SOURCES> sourceOwners{}; // the object each played for (STOP_SOUND)
 	ALuint musicSource; ALuint musicBuffer = 0;
 	std::array<ALuint, MAX_LOOPS> loopSources;
 	std::array<std::string, MAX_LOOPS> loopFiles;
@@ -150,9 +151,20 @@ struct OALSoundPlayer : SoundPlayer {
 				alSourcei(src, AL_SOURCE_RELATIVE, AL_TRUE);
 				alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
 				alSourcePlay(src);
+				sourceOwners[i] = soundOwner;
 				break;
 			}
 		}
+	}
+
+	void stopSoundsOf(uint32_t owner) override {
+		if (!owner)
+			return;
+		for (size_t i = 0; i < MAX_SOURCES; i++)
+			if (sourceOwners[i] == owner) {
+				alSourceStop(sources[i]);
+				sourceOwners[i] = 0;
+			}
 	}
 
 	void playSound3D(const std::string& filePath, const Vector3& pos, float refDist, float maxDist) override {
@@ -183,6 +195,7 @@ struct OALSoundPlayer : SoundPlayer {
 				Vector3 fpos = pos * Vector3(1, 1, -1);
 				alSourcefv(src, AL_POSITION, &fpos.x);
 				alSourcePlay(src);
+				sourceOwners[i] = soundOwner;
 				break;
 			}
 		}

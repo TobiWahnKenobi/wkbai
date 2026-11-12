@@ -31,6 +31,8 @@ enum class KeyAction {
 	SelectDocks, SelectPlacesOfInterest,
 	// held with a right-click: Follow, Guard, Patrol (Shift: one more point); Halt at once
 	Follow, Guard, Halt, Patrol,
+	// Home: the last four warnings' places in turn (the minimap alerts)
+	LastWarning,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
 	// the map editor

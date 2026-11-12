@@ -84,6 +84,7 @@ namespace {
 				{ A::Guard, "guard", "Guard (hold, right-click a unit or building)", ORDERS, P::GAME, true, false, { key(SDL_SCANCODE_G), none() } },
 				{ A::Halt, "halt", "Halt", ORDERS, P::GAME, false, false, { key(SDL_SCANCODE_H), none() } },
 				{ A::Patrol, "patrol", "Patrol (hold, right-click; with Shift: one more point)", ORDERS, P::GAME, true, false, { key(SDL_SCANCODE_R), none() } },
+				{ A::LastWarning, "lastWarning", "To the last warning (again: the one before)", ORDERS, P::GAME, false, false, { key(SDL_SCANCODE_HOME), none() } },
 
 				{ A::HideInterface, "hideInterface", "Show or hide the interface", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F3), none() } },
 				{ A::Statistics, "statistics", "Statistics", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F6), none() } },

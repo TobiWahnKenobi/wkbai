@@ -458,6 +458,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the moment: not saved). colour: 0xRRGGBB, or ALERT_PLAYER_COLOUR | the player colour index
 	static constexpr uint32_t ALERT_PLAYER_COLOUR = 0xFF000000;
 	void sendMinimapAlert(ServerGameObject* player, bool circle, const Vector3& position, uint32_t colour, float seconds, int circles);
+	// STOP_SOUND: the sounds the object plays stopped on every client
+	void stopSound(ServerGameObject* obj);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	// The mission objectives on a player's screen (its client's objectives window)
 	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);
