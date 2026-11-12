@@ -61,7 +61,7 @@ namespace {
 			const std::vector<KeyActionInfo> rest = {
 				{ A::OpenMenu, "openMenu", "Game menu", GAME, P::ALWAYS, false, false, { key(SDL_SCANCODE_ESCAPE), none() } },
 				{ A::OpenOptions, "openOptions", "Options", GAME, P::ALWAYS, false, false, { key(SDL_SCANCODE_F10), none() } },
-				{ A::Chat, "chat", "Chat (multiplayer)", GAME, P::ALWAYS, false, false, { key(SDL_SCANCODE_RETURN), key(SDL_SCANCODE_KP_ENTER) } },
+				{ A::Chat, "chat", "Chat (multiplayer)", GAME, P::ALWAYS, false, false, { key(SDL_SCANCODE_TAB), key(SDL_SCANCODE_RETURN) } },
 				{ A::Pause, "pause", "Pause", GAME, P::GAME, false, false, { key(SDL_SCANCODE_P), none() } },
 				{ A::SpeedUp, "speedUp", "Game faster", GAME, P::GAME, false, false, { key(SDL_SCANCODE_KP_PLUS), none() } },
 				{ A::SlowDown, "slowDown", "Game slower", GAME, P::GAME, false, false, { key(SDL_SCANCODE_KP_MINUS), none() } },
@@ -84,6 +84,7 @@ namespace {
 				{ A::Guard, "guard", "Guard (hold, right-click a unit or building)", ORDERS, P::GAME, true, false, { key(SDL_SCANCODE_G), none() } },
 				{ A::Halt, "halt", "Halt", ORDERS, P::GAME, false, false, { key(SDL_SCANCODE_H), none() } },
 				{ A::Patrol, "patrol", "Patrol (hold, right-click; with Shift: one more point)", ORDERS, P::GAME, true, false, { key(SDL_SCANCODE_R), none() } },
+				{ A::LastWarning, "lastWarning", "To the last warning (again: the one before)", ORDERS, P::GAME, false, false, { key(SDL_SCANCODE_HOME), none() } },
 
 				{ A::HideInterface, "hideInterface", "Show or hide the interface", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F3), none() } },
 				{ A::Statistics, "statistics", "Statistics", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F6), none() } },

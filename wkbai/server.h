@@ -184,6 +184,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		bool refused = false; // turned away (NETCLIMSG_JOIN_REFUSED): the host disconnects it
 		bool joinedRunning = false; // it joined the running game: sent its state and the places
 		bool awaitingState = false; // it joined the running game: no broadcasts before its state
+		bool cameWhileLocked = false; // connected while the lobby's Lock Server was on: refused
 		std::string modManifest, modManifestParts; // its mods (NETSRVMSG_MOD_MANIFEST)
 	};
 	std::vector<ClientInfo> clientInfos;
@@ -350,6 +351,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	int maxSpectators = 4;
 	// the password a guest has to give (NETSRVMSG_LOBBY_HELLO); empty: none
 	std::string password;
+	// the lobby's Lock Server: guests who aren't in yet are refused
+	bool lockServer = false;
 	// Which mods guests may have ("modPolicy"): every one must have the host's game logic (the
 	// same mods with logic files: ModManifest, CompareModLogic), and
 	enum ModPolicy { MODS_MATCH = 0, // that is all (mods that only change looks are free)
@@ -435,6 +438,31 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	std::map<std::pair<uint32_t, int>, std::pair<bool, std::string>> diplomacyWindows; // (player, window)
 	// the diplomacy state for a client that joins or loads: offers and window switches
 	void sendDiplomacyState(int clientIndex);
+	// Disguises (ADOPT_APPEARANCE_FOR): an object drawn to its player's enemies as another
+	// blueprint's subtype and appearance (a spy as a peasant), except to the players it has been
+	// unmasked for (ADOPT_DEFAULT_APPEARANCE_FOR); by object id (ServerDiplomacy.cpp)
+	struct Disguise {
+		uint32_t blueprint = 0; // full id
+		int subtype = 0, appearance = 0;
+		std::set<uint32_t> unmaskedFor; // player ids; 0: for everyone (the disguise dropped)
+	};
+	std::map<uint32_t, Disguise> disguises;
+	void setDisguise(ServerGameObject* obj, const GameObjBlueprint* bp, int subtype, int appearance);
+	// players: unmasked for these; the object's own player among them drops the disguise
+	void unmaskDisguise(ServerGameObject* obj, const std::vector<ServerGameObject*>& players);
+	// REVEAL_FOG_OF_WAR: the object seen by that player for `duration` seconds (0: for good)
+	// within `radius` tiles (5 m) around it, wherever it goes
+	void revealFogOfWar(ServerGameObject* obj, ServerGameObject* player, float duration, float radius);
+	struct FogReveal { uint32_t object, player; float until, radius; }; // until < 0: for good
+	std::vector<FogReveal> fogReveals;
+	// a joining or loading client's disguises and reveals
+	void sendDisguiseState(int clientIndex);
+	// SHOW_BLINKING_DOT_ON_MINIMAP / COLLAPSING_CIRCLE_ON_MINIMAP on that player's minimap (only
+	// the moment: not saved). colour: 0xRRGGBB, or ALERT_PLAYER_COLOUR | the player colour index
+	static constexpr uint32_t ALERT_PLAYER_COLOUR = 0xFF000000;
+	void sendMinimapAlert(ServerGameObject* player, bool circle, const Vector3& position, uint32_t colour, float seconds, int circles);
+	// STOP_SOUND: the sounds the object plays stopped on every client
+	void stopSound(ServerGameObject* obj);
 	void showGameTextWindow(ServerGameObject* player, int gtwIndex);
 	// The mission objectives on a player's screen (its client's objectives window)
 	void setMissionObjectives(ServerGameObject* player, int objectivesIndex);
@@ -451,6 +479,19 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void interpolateCameraToStoredPosition(ServerGameObject* player, float duration);
 	void setGameSpeed(float nextSpeed);
 	void playMusic(ServerGameObject* player, int musicTag);
+	// STOP_MUSIC, FADE_STOP_MUSIC: the player's music stops (fading out over 2 s)
+	void stopMusic(ServerGameObject* player, bool fade);
+	// ENABLE_/DISABLE_GAME_INTERFACE: the players whose interface is off (a campaign intro, the
+	// end of a level): no HUD, no orders, only the game's windows and the menu
+	std::set<uint32_t> interfaceDisabled;
+	void setGameInterface(ServerGameObject* player, bool enabled);
+	// INDICATE_POSITION_OF_ / TRACK_OBJECT_POSITION_FROM_ / STOP_INDICATING_POSITION_OF_
+	// MISSION_OBJECTIVES_ENTRY: a marker for an entry on a player's minimap, by (player, key)
+	struct ObjectiveMarker { uint8_t kind = 0; float x = 0, z = 0; uint32_t object = 0; };
+	std::map<std::pair<uint32_t, std::string>, ObjectiveMarker> objectiveMarkers;
+	void setObjectiveMarker(ServerGameObject* player, const std::string& key, const ObjectiveMarker& marker);
+	// UNLOCK_LEVEL: the clients note the level as unlocked
+	void unlockLevel(const std::string& level);
 	void assignAlias(int aliasIndex, ServerGameObject* object);
 	void unassignAlias(int aliasIndex, ServerGameObject* object);
 	void clearAlias(int aliasIndex);

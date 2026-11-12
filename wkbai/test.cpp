@@ -66,6 +66,7 @@
 #include "util/SimRandom.h"
 #include "StampdownPlan.h"
 #include "interface/ChronicleNarrator.h"
+#include "interface/FogOfWar.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -7542,6 +7543,499 @@ void Test_HotKeys()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Disguises and fog reveals (ServerDiplomacy.cpp): a unit of B (1030) on 4 Peaks disguised as a
+// peasant to A (1027), unmasked for A, dropped; revealed to A through the fog for a time
+void Test_Disguises()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(10);
+	ServerGameObject* B = server.findObject(1030);
+	std::vector<ServerGameObject*> units;
+	auto findUnits = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					units.push_back(c->dyncast<ServerGameObject>());
+				self(c, self);
+			}
+	};
+	if (B)
+		findUnits(B, findUnits);
+	if (units.size() < 2 || !clientA.clientPlayer || !clientB.clientPlayer) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	ServerGameObject* u = units[0];
+	ServerGameObject* u2 = units[1];
+	printf("UNITTEST B's unit: %s %u\n", u->blueprint->name.c_str(), u->id);
+	auto seenBy = [&](Client& c) { return c.disguiseFor(c.findObject(u->id)); };
+
+	// Spell Possess.cpp's: a shopper peasant
+	run(u, "ADOPT_APPEARANCE_FOR CHARACTER \"Peasant\" \"Female\" \"Shopper\" FINDER_SELF");
+	step(3);
+	const Client::Disguise* d = seenBy(clientA);
+	check(d && d->blueprint->name == "Peasant" && d->blueprint->getAppearance(d->subtype, d->appearance),
+		"A (the enemy) sees a peasant (Female, Shopper)");
+	check(!seenBy(clientB), "B (its own player) sees it as it is");
+	// Counter Espionage.cpp's "Succubus Discovered": unmasked for the player who saw through it
+	run(u, "ADOPT_DEFAULT_APPEARANCE_FOR FINDER_SELF FINDER_SPECIFIC_ID 1027");
+	step(3);
+	check(!seenBy(clientA), "unmasked for A: A sees it as it is");
+	// and "On Stop Seeing Object": disguised again
+	run(u, "ADOPT_APPEARANCE_FOR CHARACTER \"Peasant\" \"Male\" \"Disguised Peasant\" FINDER_SELF");
+	step(3);
+	check(seenBy(clientA) != nullptr, "disguised again (Male, Disguised Peasant)");
+	// a save keeps it
+	const std::string text = server.aiSettingsText();
+	check(text.find("disguise." + std::to_string(u->id) + "=") != std::string::npos, "the save's .ai.txt holds the disguise");
+	// "Spy Discovered": for its own player, the disguise dropped
+	run(u, "ADOPT_DEFAULT_APPEARANCE_FOR FINDER_SELF FINDER_PLAYER");
+	step(3);
+	check(!seenBy(clientA) && clientA.disguises.empty() && server.disguises.empty(), "for its own player: dropped for everyone");
+	server.applyAiSettingsText(text);
+	check(server.disguises.count(u->id) == 1, "read back from the .ai.txt");
+
+	// REVEAL_FOG_OF_WAR: u for 10 s, u2 for 1 s, 3 tiles, to A
+	FogOfWar fog;
+	fog.update(&clientA);
+	const bool hidden = !fog.isSeen(u->position) && !fog.isSeen(u2->position);
+	printf("UNITTEST before the reveal: B's units %s to A\n", hidden ? "hidden" : "seen");
+	run(u, "REVEAL_FOG_OF_WAR FINDER_SELF CONSTANT 10 CONSTANT 3 FINDER_SPECIFIC_ID 1027");
+	run(u2, "REVEAL_FOG_OF_WAR FINDER_SELF CONSTANT 1 CONSTANT 3 FINDER_SPECIFIC_ID 1027");
+	step(15); // (300 ms: the fog's next update)
+	check(clientA.fogReveals.size() == 2 && clientB.fogReveals.empty(), "A got both reveals, B none");
+	fog.update(&clientA);
+	check(fog.isSeen(u->position) && fog.isSeen(u2->position), "both seen by A through the fog");
+	step(60); // 1.2 s
+	fog.update(&clientA);
+	check(clientA.fogReveals.size() == 1 && clientA.fogReveals[0].object == u->id, "the 1 s reveal over, the 10 s one still on");
+	check(fog.isSeen(u->position), "u still seen");
+	if (hidden)
+		check(!fog.isSeen(u2->position) || (u2->position - u->position).len2xz() < 20.0f, "u2 hidden again");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// A standing formation turns to face an attack from its flank or rear (FormationController::
+// faceAttackers), not one from the front, and not again within 4 s
+void Test_FormationFacing()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	std::vector<ServerGameObject*> members, enemies;
+	auto collect = [&](CommonGameObject* obj, std::vector<ServerGameObject*>& into, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					into.push_back(child->dyncast<ServerGameObject>());
+				else
+					self(child, into, self);
+			}
+	};
+	if (player && enemyPlayer) {
+		collect(player, members, collect);
+		collect(enemyPlayer, enemies, collect);
+	}
+	if (members.size() < 2 || enemies.empty() || server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	ServerGameObject* formation = server.spawnObject(&server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+	Vector3 sum;
+	for (ServerGameObject* m : members) {
+		sum += m->position;
+		m->setParent(formation);
+	}
+	formation->setPosition(sum / (float)members.size());
+	formation->setOrientation(Vector3(0, 0, 0)); // its front to the north (-z)
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	server.timeManager.unpause();
+	auto run = [&](float seconds) {
+		const uint64_t start = SDL_GetTicks();
+		while (SDL_GetTicks() - start < (uint64_t)(seconds * 1000.0f)) {
+			server.tick();
+			SDL_Delay(10);
+		}
+	};
+	run(2.0f);
+	ServerGameObject* enemy = enemies[0];
+	auto hitFrom = [&](const Vector3& offset) {
+		enemy->setPosition(formation->position + offset);
+		members[0]->lastHitBy = enemy->id;
+		members[0]->lastHitTime = server.timeManager.currentTime;
+	};
+	printf("UNITTEST formation of %zu at (%.0f, %.0f), its order %s\n", members.size(), formation->position.x, formation->position.z,
+		formation->orderConfig.getCurrentOrder() ? "some" : "none");
+	// from the front (north, 20° off): it stays
+	hitFrom(Vector3(std::sin(0.35f) * 30.0f, 0, -std::cos(0.35f) * 30.0f));
+	run(0.5f);
+	check(std::abs(formation->orientation.y) < 0.01f, "an attack from the front: no turn");
+	// from the right flank (east): it turns east (pi/2)
+	hitFrom(Vector3(30, 0, 0));
+	run(0.5f);
+	printf("UNITTEST facing after the flank attack: %.2f\n", formation->orientation.y);
+	check(std::abs(formation->orientation.y - 1.5708f) < 0.05f, "an attack on the flank: it turns to face it");
+	// from the rear right away: not within 4 s; then it turns
+	hitFrom(Vector3(-30, 0, 0));
+	run(0.5f);
+	check(std::abs(formation->orientation.y - 1.5708f) < 0.05f, "a rear attack within 4 s: no turn yet");
+	run(3.8f);
+	hitFrom(Vector3(-30, 0, 0));
+	run(0.5f);
+	printf("UNITTEST facing after the rear attack: %.2f\n", formation->orientation.y);
+	check(std::abs(std::abs(formation->orientation.y) - 1.5708f) < 0.05f && formation->orientation.y < 0.0f, "then it turns to face the rear attack (west)");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// The original's lobby items: Team Placement on 8 Player Continent (a team's members start side
+// by side), a renamed AI General, Unit Lives "Infinite" (-1) and a number, Lock Server
+void Test_LobbyItems()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	using Slot = QuickSkirmishMenu::Slot;
+	// where each player of a level starts: its buildings' middle
+	auto startOf = [](ServerGameObject* player) {
+		Vector3 sum;
+		int n = 0;
+		auto walk = [&](CommonGameObject* o, auto& self) -> void {
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING || c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+						sum += c->position;
+						n++;
+					}
+					self(c, self);
+				}
+		};
+		walk(player, walk);
+		return n ? sum / (float)n : player->position;
+	};
+	// teams 1, 2, 1, 2 at the first four positions: the average distance between team-mates and
+	// between enemies, with and without Team Placement
+	auto distances = [&](bool placement, float& mates, float& foes) {
+		Server server;
+		server.loadSaveGame("Save_Games\\8 Player Continent.lvl");
+		std::map<uint32_t, Vector3> starts;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+					starts[c->id] = startOf(c->dyncast<ServerGameObject>());
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("8 Player Continent.lvl");
+		skirmish.setSetting("teamPlacement", placement ? 1 : 0);
+		std::vector<Slot> slots(8);
+		for (Slot& s : slots) s.type = Slot::EMPTY;
+		slots[0].type = Slot::HUMAN; slots[0].team = 1;
+		slots[1].type = Slot::AI; slots[1].team = 2; slots[1].name = "Sir Testalot";
+		slots[2].type = Slot::AI; slots[2].team = 1;
+		slots[3].type = Slot::AI; slots[3].team = 2;
+		skirmish.setSlots(slots);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		skirmish.applySettings(server);
+		std::vector<std::pair<Vector3, int>> at; // the players left, with their teams
+		bool renamed = false;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && starts.count(c->id)) {
+					ServerGameObject* p = c->dyncast<ServerGameObject>();
+					if (p->name == "Sir Testalot") renamed = true;
+					at.push_back({ starts[c->id], 0 });
+				}
+		// the teams from the diplomacy: allied pairs
+		mates = foes = 0.0f;
+		int nm = 0, nf = 0;
+		std::vector<ServerGameObject*> ps;
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && starts.count(c->id) && c->blueprint->name != "Neutral Player" && c->blueprint->name != "Baresark Player" && !c->dyncast<ServerGameObject>()->deleted)
+				{
+					ps.push_back(c->dyncast<ServerGameObject>());
+					printf("UNITTEST player %u %s \"%s\" starts at (%.0f, %.0f)\n", c->id, c->blueprint->name.c_str(), c->dyncast<ServerGameObject>()->name.c_str(), starts[c->id].x, starts[c->id].z);
+				}
+		const int allied = server.gameSet->diplomaticStatuses.names.getIndex("Allied");
+		for (size_t a = 0; a < ps.size(); a++)
+			for (size_t b = a + 1; b < ps.size(); b++) {
+				const float d = (starts[ps[a]->id] - starts[ps[b]->id]).len2xz();
+				if (server.getDiplomaticStatus(ps[a], ps[b]) == allied) { mates += d; nm++; }
+				else { foes += d; nf++; }
+			}
+		if (nm) mates /= nm;
+		if (nf) foes /= nf;
+		printf("UNITTEST Team Placement %s: %zu players, team-mates %.0f m apart, enemies %.0f m\n", placement ? "on" : "off", ps.size(), mates, foes);
+		return renamed && ps.size() == 4 && nm == 2;
+	};
+	float mates0 = 0, foes0 = 0, mates1 = 0, foes1 = 0;
+	const bool setUp0 = distances(false, mates0, foes0);
+	const bool setUp1 = distances(true, mates1, foes1);
+	check(setUp0 && setUp1, "four players, two teams of two; the AI General renamed \"Sir Testalot\"");
+	check(mates1 < foes1, "Team Placement: team-mates start nearer each other than enemies");
+	check(mates1 <= mates0 + 0.1f, "and no farther apart than without it");
+
+	// Unit Lives (Valhalla): 0 is "Infinite" (-1), else the number
+	for (int lives : { 0, 3 }) {
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+		skirmish.setSetting("mode", 1);
+		skirmish.setSetting("unitLives", lives);
+		std::vector<Slot> slots(2);
+		slots[0].type = Slot::HUMAN;
+		slots[1].type = Slot::EMPTY;
+		skirmish.setSlots(slots);
+		server.timeManager.unpause();
+		skirmish.applySettings(server);
+		ServerGameObject* human = server.findObject(1027);
+		const int item = server.gameSet->items.names.getIndex("No. of Lives Left");
+		const float v = human && item >= 0 ? human->getItem(item) : -999.0f;
+		check(v == (lives == 0 ? -1.0f : (float)lives), "Unit Lives " + std::to_string(lives) + ": \"No. of Lives Left\" " + std::to_string((int)v));
+	}
+
+	// Lock Server: a guest joining a locked server is refused, one already in stays
+	{
+		Server server;
+		Client host(true), guest(true), late(true);
+		NetLocalBuffer h1, h2, g1, g2, l1, l2;
+		NetLocalLink srvH(&h1, &h2), cliH(&h2, &h1), srvG(&g1, &g2), cliG(&g2, &g1), srvL(&l1, &l2), cliL(&l2, &l1);
+		server.addClient(&srvH);
+		server.addClient(&srvG);
+		host.serverLink = &cliH;
+		guest.serverLink = &cliG;
+		// (as a joining guest does: its mods first, which the host compares)
+		guest.sendModManifest();
+		guest.sendLobbyHello("Early");
+		for (int i = 0; i < 10; i++) { server.tick(); host.tick(); guest.tick(); }
+		server.lockServer = true;
+		server.addClient(&srvL);
+		late.serverLink = &cliL;
+		late.sendModManifest();
+		late.sendLobbyHello("Late");
+		for (int i = 0; i < 10; i++) { server.tick(); host.tick(); guest.tick(); late.tick(); }
+		printf("UNITTEST guests: \"%s\" refused %d, \"%s\" refused %d\n", server.clientInfos[1].name.c_str(), (int)server.clientInfos[1].refused,
+			server.clientInfos.size() > 2 ? server.clientInfos[2].name.c_str() : "-", server.clientInfos.size() > 2 ? (int)server.clientInfos[2].refused : -1);
+		check(server.clientInfos.size() == 3 && !server.clientInfos[1].refused, "the guest already in stays");
+		check(server.clientInfos.size() == 3 && server.clientInfos[2].refused, "the late guest is refused: the server is locked");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// The campaign's and tutorials' script actions: DISABLE_/ENABLE_GAME_INTERFACE, the mission
+// objectives' position markers (a place, an object followed, stopped), UNLOCK_LEVEL
+void Test_CampaignInterface()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(10);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(5);
+	ServerGameObject* me = server.findObject(1027);
+	if (!me) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	check(client.gameInterfaceEnabled, "at the start: the interface is on");
+	run(me, "DISABLE_GAME_INTERFACE FINDER_SELF");
+	step(3);
+	check(!client.gameInterfaceEnabled, "DISABLE_GAME_INTERFACE: off on the player's client");
+	run(me, "ENABLE_GAME_INTERFACE FINDER_SELF");
+	step(3);
+	check(client.gameInterfaceEnabled && server.interfaceDisabled.empty(), "ENABLE_GAME_INTERFACE: on again");
+
+	// Feature Tests.cpp's: a place, then a unit followed
+	run(me, "INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_2 ABSOLUTE_POSITION 50 0 50 0 0 FINDER_SELF");
+	ServerGameObject* unit = nullptr;
+	auto findUnit = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (!unit && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					unit = c->dyncast<ServerGameObject>();
+				self(c, self);
+			}
+	};
+	findUnit(me, findUnit);
+	if (unit) {
+		const std::string line = "TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_3 FINDER_SPECIFIC_ID " + std::to_string(unit->id) + " FINDER_SELF";
+		run(me, line.c_str());
+	}
+	step(3);
+	auto m2 = client.objectiveMarkers.find("TEST_MISSION_OBJECTIVE_2");
+	auto m3 = client.objectiveMarkers.find("TEST_MISSION_OBJECTIVE_3");
+	check(m2 != client.objectiveMarkers.end() && m2->second.kind == 1 && m2->second.x == 50.0f && m2->second.z == 50.0f, "a marker at (50, 50)");
+	check(unit && m3 != client.objectiveMarkers.end() && m3->second.kind == 2 && m3->second.object == unit->id, "a marker following the unit");
+	run(me, "STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY TEST_MISSION_OBJECTIVE_2 FINDER_SELF");
+	step(3);
+	check(client.objectiveMarkers.count("TEST_MISSION_OBJECTIVE_2") == 0 && client.objectiveMarkers.size() == 1, "STOP_INDICATING: that marker gone, the other kept");
+
+	run(me, "UNLOCK_LEVEL \"New_Game.sav\"");
+	step(3);
+	check(client.unlockedLevels.count("New_Game.sav") == 1, "UNLOCK_LEVEL: noted on the client");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+// Minimap alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP) on 4 Peaks: only the
+// players listed get them, with their colour, seconds and circles; they end on time
+void Test_MinimapAlerts()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	auto run = [&](ServerGameObject* self, const char* line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line);
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+	step(10);
+	ServerGameObject* A = server.findObject(1027);
+	ServerGameObject* B = server.findObject(1030);
+	if (!A || !B) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	// Attacking and Death.cpp's: a red dot for 8 s on the player's own minimap
+	run(A, "SHOW_BLINKING_DOT_ON_MINIMAP LOCATION_OF FINDER_SELF COLOUR_RED CONSTANT 8 FINDER_PLAYER");
+	// Charm of Madness's false alarm: B's colour, to A
+	run(B, "SHOW_BLINKING_DOT_ON_MINIMAP LOCATION_OF FINDER_SELF PLAYER_COLOUR FINDER_SELF CONSTANT 1 FINDER_SPECIFIC_ID 1027");
+	// Fire.cpp-like: orange circles, 1 s, 3 of them, to B
+	run(B, "COLLAPSING_CIRCLE_ON_MINIMAP LOCATION_OF FINDER_SELF COLOUR_ORANGE CONSTANT 1 CONSTANT 3 FINDER_PLAYER");
+	step(3);
+	const auto& alertsA = clientA.minimapAlerts;
+	const auto& alertsB = clientB.minimapAlerts;
+	printf("UNITTEST alerts: A %zu, B %zu\n", alertsA.size(), alertsB.size());
+	check(alertsA.size() == 2 && alertsB.size() == 1, "A got its two dots, B its circles");
+	if (alertsA.size() == 2) {
+		check(!alertsA[0].circle && alertsA[0].colour == 0xFF2020 && alertsA[0].seconds == 8.0f
+			&& std::abs(alertsA[0].x - A->position.x) < 0.01f, "the red dot: 8 s, at A's position");
+		check(alertsA[1].colour == (Server::ALERT_PLAYER_COLOUR | (uint32_t)B->color), "the false alarm in B's colour");
+	}
+	if (alertsB.size() == 1)
+		check(alertsB[0].circle && alertsB[0].circles == 3 && alertsB[0].colour == 0xFF9010 && alertsB[0].seconds == 1.0f,
+			"the orange circles: 3 in 1 s");
+	// they end on time (1.5 s on: the 1 s ones gone, the 8 s one left)
+	step(75);
+	check(alertsA.size() == 1 && alertsA[0].seconds == 8.0f && alertsB.empty(), "after 1.5 s only the 8 s dot is left");
+	// Home: the warnings' places, the latest first, then the one before
+	run(A, "COLLAPSING_CIRCLE_ON_MINIMAP CENTRE_OF_MAP COLOUR_RED CONSTANT 1 CONSTANT 1 FINDER_PLAYER");
+	step(3);
+	const auto area = server.terrain->getPlayableArea();
+	printf("UNITTEST A's warning places: %zu\n", clientA.warningPlaces.size());
+	check(clientA.warningPlaces.size() >= 2 && std::abs(clientA.warningPlaces[0].first - area.first * 0.5f) < 0.1f
+		&& std::abs(clientA.warningPlaces[0].second - area.second * 0.5f) < 0.1f, "the centre (CENTRE_OF_MAP) is the latest warning place");
+	ClientInterface uiA(&clientA, nullptr);
+	uiA.lastWarning();
+	check(uiA.hotKeyCameraTarget && std::abs(uiA.hotKeyCameraTarget->x - area.first * 0.5f) < 0.1f && !uiA.minimapPings.empty(),
+		"Home: the camera to the latest, pinged");
+	uiA.lastWarning();
+	check(uiA.hotKeyCameraTarget && std::abs(uiA.hotKeyCameraTarget->x - clientA.warningPlaces[1].first) < 0.1f,
+		"Home again: the one before");
+	// STOP_SOUND reaches the clients (no sound device here: nothing to hear)
+	run(A, "STOP_SOUND FINDER_PLAYER");
+	step(2);
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Valhalla's Army Enlistment: the companies read; a human's enlisted army (the lobby's ";v")
 // mustered at its Manor on level start (Valhalla Mode.cpp)
 void Test_ValhallaArmy()
@@ -7913,6 +8407,11 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_Diplomacy, "Diplomacy: offers, accepting, status items and events, tributes, the AI Generals' messages, Disallow Diplomacy"},
 {Test_ValhallaArmy, "Valhalla army: the companies read, an enlisted army mustered at the start"},
 {Test_HotKeys, "The original's keys: a selection key picks the nearest of its kind; a patrol there and back"},
+{Test_Disguises, "Disguises and fog reveals: an enemy unit seen as a peasant, unmasked, dropped; revealed through the fog for a time"},
+{Test_MinimapAlerts, "Minimap alerts: blinking dots and collapsing circles to the players listed, with colour and time"},
+{Test_FormationFacing, "A standing formation turns to face an attack from the flank or rear"},
+{Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
+{Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
 };
 
 void LaunchTest()

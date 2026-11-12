@@ -640,6 +640,14 @@ struct FrontEnd::Impl {
 		});
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
+		// whether a save game is the player's own (saved\Save_Games), the ones Delete may remove;
+		// the game's own levels and saves are never deleted
+		lua.set_function("isUserSave", [](const std::string& name) {
+			if (name.empty() || name.find_first_of("\\/:") != std::string::npos)
+				return false;
+			std::error_code ec;
+			return std::filesystem::is_regular_file(g_userPath / "saved" / "Save_Games" / PathFromUtf8(name), ec);
+		});
 		// the game recordings (folders in saved\Recordings with a start.sav), newest first (by
 		// their start.sav: a rename doesn't move one up): { folder, name (name.txt, else the
 		// folder's), map, date, length (seconds of game time) }
@@ -775,11 +783,21 @@ struct FrontEnd::Impl {
 			t["items"] = items;
 			return t;
 		});
-		lua.set_function("createCampaignProfile", [](const std::string& name) {
+		// a new campaign; start: the original's start options (Starting Food/Materials/Gold, the
+		// Pagan/Imperial/Renaissance Advance), kept as the USER object's first items
+		lua.set_function("createCampaignProfile", [](const std::string& name, sol::optional<sol::table> start) {
 			CampaignProfile p;
 			if (CampaignProfile::load(name, p))
 				return false; // exists
 			p.name = name;
+			if (start) {
+				static const std::pair<const char*, const char*> fields[] = {
+					{ "food", "Food" }, { "wood", "Wood" }, { "gold", "Gold" }, { "population", "Total Population Count" },
+					{ "pagan", "Pagan Tech Level" }, { "imperial", "Imperial Tech Level" }, { "renaissance", "Renaissance Tech Level" } };
+				for (const auto& [field, item] : fields)
+					if (sol::optional<float> v = (*start)[field])
+						p.items[item] = *v;
+			}
 			return p.save();
 		});
 		lua.set_function("deleteCampaignProfile", [](const std::string& name) { return CampaignProfile::remove(name); });

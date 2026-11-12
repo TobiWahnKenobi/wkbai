@@ -42,6 +42,11 @@ void Client::tick()
 {
 	ZoneScoped;
 	timeManager.tick();
+	// the minimap alerts whose time is up
+	if (!minimapAlerts.empty()) {
+		const uint32_t now = (uint32_t)SDL_GetTicks();
+		std::erase_if(minimapAlerts, [now](const MinimapAlert& a) { return now - a.start > (uint32_t)(a.seconds * 1000.0f); });
+	}
 
 	const auto walkObj = [this](ClientGameObject *obj, auto &rec) -> void {
 		if (obj->movement.isMoving()) {
@@ -115,6 +120,7 @@ void Client::tick()
 	// Sound & music
 	SoundPlayer* soundPlayer = SoundPlayer::getSoundPlayer();
 	soundPlayer->setListenerPosition(camera.position, camera.direction.normal());
+	soundPlayer->update();
 	if (isMusicPlaying) {
 		if (!soundPlayer->isMusicPlaying()) {
 			isMusicPlaying = false;
@@ -160,6 +166,13 @@ void Client::tick()
 				std::string gsFileName = br.readStringZ();
 				// a new game: nobody's game over yet
 				finishedPlayers.clear();
+				disguises.clear();
+				fogReveals.clear();
+				minimapAlerts.clear();
+				warningPlaces.clear();
+				gameInterfaceEnabled = true;
+				objectiveMarkers.clear();
+				warningCycle = 0;
 				// a new game: no day and night or weather until the server says so
 				environmentActive = false;
 				environmentSkyKnown = false;
@@ -411,6 +424,107 @@ void Client::tick()
 				chatDisplays.push_back(std::move(chat));
 				break;
 			}
+			case NETCLIMSG_DISGUISE: {
+				const uint32_t objid = br.readUint32();
+				const uint32_t bpid = br.readUint32();
+				const int subtype = (int)br.readUint32(), appear = (int)br.readUint32();
+				if (const GameObjBlueprint* bp = bpid ? gameSet->getBlueprint(bpid) : nullptr)
+					disguises[objid] = { bp, subtype, appear, false };
+				else
+					disguises.erase(objid);
+				break;
+			}
+			case NETCLIMSG_UNMASK: {
+				const uint32_t objid = br.readUint32();
+				if (auto it = disguises.find(objid); it != disguises.end())
+					it->second.unmasked = true;
+				break;
+			}
+			case NETCLIMSG_FOG_REVEAL: {
+				const uint32_t objid = br.readUint32();
+				const float duration = br.readFloat(), radius = br.readFloat();
+				const float until = duration > 0.0f ? timeManager.currentTime + duration : -1.0f;
+				bool found = false;
+				for (FogReveal& r : fogReveals)
+					if (r.object == objid) {
+						r.until = (r.until < 0.0f || until < 0.0f) ? -1.0f : std::max(r.until, until);
+						r.radius = std::max(r.radius, radius);
+						found = true;
+					}
+				if (!found)
+					fogReveals.push_back({ objid, until, radius });
+				break;
+			}
+			case NETCLIMSG_MINIMAP_ALERT: {
+				MinimapAlert a;
+				a.circle = br.readUint8() != 0;
+				a.x = br.readFloat();
+				a.z = br.readFloat();
+				a.colour = br.readUint32();
+				a.seconds = br.readFloat();
+				a.circles = br.readUint8();
+				a.start = (uint32_t)SDL_GetTicks();
+				if (!(a.seconds > 0.0f) || a.seconds > 120.0f)
+					a.seconds = a.circle ? 2.0f : 8.0f;
+				if (minimapAlerts.size() < 64)
+					minimapAlerts.push_back(a);
+				// Home's places: this one first
+				std::erase_if(warningPlaces, [&](const auto& p) {
+					return (p.first - a.x) * (p.first - a.x) + (p.second - a.z) * (p.second - a.z) < 25.0f * 25.0f; });
+				warningPlaces.insert(warningPlaces.begin(), { a.x, a.z });
+				if (warningPlaces.size() > 4)
+					warningPlaces.resize(4);
+				warningCycle = 0;
+				break;
+			}
+			case NETCLIMSG_GAME_INTERFACE:
+				gameInterfaceEnabled = br.readUint8() != 0;
+				break;
+			case NETCLIMSG_OBJECTIVE_MARKER: {
+				const std::string key = br.readStringZ();
+				ObjectiveMarker m;
+				m.kind = br.readUint8();
+				m.x = br.readFloat();
+				m.z = br.readFloat();
+				m.object = br.readUint32();
+				if (m.kind)
+					objectiveMarkers[key] = m;
+				else
+					objectiveMarkers.erase(key);
+				break;
+			}
+			case NETCLIMSG_LEVEL_UNLOCKED: {
+				// noted in the user folder (saved\Unlocked Levels.txt, one name a line), as the
+				// original's Global.usr keeps them; wkbai lists every map anyway
+				const std::string level = br.readStringZ();
+				if (!level.empty() && level.find_first_of("\r\n") == std::string::npos && !g_userPath.empty()) {
+					const std::filesystem::path file = g_userPath / "saved" / "Unlocked Levels.txt";
+					bool known = false;
+					{
+						std::ifstream in(file);
+						for (std::string line; std::getline(in, line);)
+							if (line == level)
+								known = true;
+					}
+					if (!known) {
+						std::ofstream out(file, std::ios::app);
+						out << level << "\n";
+					}
+					unlockedLevels.insert(level);
+				}
+				break;
+			}
+			case NETCLIMSG_MUSIC_STOP: {
+				const bool fade = br.readUint8() != 0;
+				// stopped by the script: not "completed" (the server picks no next track)
+				isMusicPlaying = false;
+				SoundPlayer::getSoundPlayer()->stopMusic(fade ? 2.0f : 0.0f);
+				break;
+			}
+			case NETCLIMSG_STOP_SOUND: {
+				SoundPlayer::getSoundPlayer()->stopSoundsOf(br.readUint32());
+				break;
+			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {
 				const uint32_t from = br.readUint32();
 				br.readUint16();
@@ -556,12 +670,14 @@ void Client::tick()
 						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
 						if (!path.empty()) {
 							std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
+							SoundPlayer::getSoundPlayer()->soundOwner = objid;
 							if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
 								SoundPlayer::getSoundPlayer()->playSound(gfspath);
 							else {
 								//float rolloff = (refDist / 0.1f - refDist) / (maxDist - refDist);
 								SoundPlayer::getSoundPlayer()->playSound3D(gfspath, to->position, refDist, maxDist);
 							}
+							SoundPlayer::getSoundPlayer()->soundOwner = 0;
 						}
 					}
 				}
@@ -575,7 +691,9 @@ void Client::tick()
 					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
 					if (!path.empty()) {
 						std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
+						SoundPlayer::getSoundPlayer()->soundOwner = objid;
 						SoundPlayer::getSoundPlayer()->playSound3D(gfspath, targetPos, refDist, maxDist);
+						SoundPlayer::getSoundPlayer()->soundOwner = 0;
 					}
 				}
 				break;
@@ -1115,6 +1233,21 @@ void Client::sendStampdown(const GameObjBlueprint * blueprint, ClientGameObject 
 void Client::sendStartLevelRequest()
 {
 	serverLink->send(NetPacketWriter(NETSRVMSG_START_LEVEL));
+}
+
+const Client::Disguise* Client::disguiseFor(CommonGameObject* obj)
+{
+	if (disguises.empty() || !obj)
+		return nullptr;
+	auto it = disguises.find(obj->id);
+	if (it == disguises.end() || it->second.unmasked)
+		return nullptr;
+	CommonGameObject* me = clientPlayer.get();
+	CommonGameObject* owner = obj->getPlayer();
+	// spectators and the object's own side see it as it is
+	if (!me || !owner || owner == me || getDiplomaticStatus(owner, me) == 0)
+		return nullptr;
+	return &it->second;
 }
 
 void Client::addNotice(const std::string& key, uint32_t player)

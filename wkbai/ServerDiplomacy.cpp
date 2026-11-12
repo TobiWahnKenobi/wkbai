@@ -192,3 +192,146 @@ void Server::sendDiplomacyState(int clientIndex)
 		sendToClient(clientIndex, msg);
 	}
 }
+
+// Disguises and fog reveals (docs/engine/disguises.md)
+
+void Server::setDisguise(ServerGameObject* obj, const GameObjBlueprint* bp, int subtype, int appearance)
+{
+	if (!obj || !bp)
+		return;
+	Disguise& d = disguises[obj->id];
+	d.blueprint = bp->getFullId();
+	d.subtype = std::max(0, subtype);
+	d.appearance = std::max(0, appearance);
+	d.unmaskedFor.clear();
+	NetPacketWriter msg{ NETCLIMSG_DISGUISE };
+	msg.writeUint32(obj->id);
+	msg.writeUint32(d.blueprint);
+	msg.writeUint32((uint32_t)d.subtype);
+	msg.writeUint32((uint32_t)d.appearance);
+	sendToAll(msg);
+}
+
+void Server::unmaskDisguise(ServerGameObject* obj, const std::vector<ServerGameObject*>& players)
+{
+	if (!obj)
+		return;
+	auto it = disguises.find(obj->id);
+	if (it == disguises.end())
+		return;
+	ServerGameObject* own = obj->getPlayer();
+	// for its own player (Counter Espionage.cpp's "Discovered" reaction): dropped for everyone
+	if (std::find(players.begin(), players.end(), own) != players.end()) {
+		disguises.erase(it);
+		NetPacketWriter msg{ NETCLIMSG_DISGUISE };
+		msg.writeUint32(obj->id);
+		msg.writeUint32(0);
+		msg.writeUint32(0);
+		msg.writeUint32(0);
+		sendToAll(msg);
+		return;
+	}
+	for (ServerGameObject* p : players) {
+		if (!p)
+			continue;
+		ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer();
+		if (!player || !it->second.unmaskedFor.insert(player->id).second)
+			continue;
+		NetPacketWriter msg{ NETCLIMSG_UNMASK };
+		msg.writeUint32(obj->id);
+		sendTo(player, msg);
+	}
+}
+
+void Server::revealFogOfWar(ServerGameObject* obj, ServerGameObject* player, float duration, float radius)
+{
+	if (!obj || !player || !(radius > 0.0f))
+		return;
+	const float until = duration > 0.0f ? timeManager.currentTime + duration : -1.0f;
+	// the same object revealed again to the same player: the later end, the larger circle
+	bool found = false;
+	for (FogReveal& r : fogReveals)
+		if (r.object == obj->id && r.player == player->id) {
+			r.until = (r.until < 0.0f || until < 0.0f) ? -1.0f : std::max(r.until, until);
+			r.radius = std::max(r.radius, radius);
+			found = true;
+		}
+	if (!found)
+		fogReveals.push_back({ obj->id, player->id, until, radius });
+	NetPacketWriter msg{ NETCLIMSG_FOG_REVEAL };
+	msg.writeUint32(obj->id);
+	msg.writeFloat(duration > 0.0f ? duration : 0.0f);
+	msg.writeFloat(radius);
+	sendTo(player, msg);
+}
+
+void Server::sendDisguiseState(int clientIndex)
+{
+	const ServerGameObject* player = clientIndex >= 0 && (size_t)clientIndex < clientPlayerObjects.size() ? clientPlayerObjects[clientIndex].get() : nullptr;
+	for (const auto& [id, d] : disguises) {
+		NetPacketWriter msg{ NETCLIMSG_DISGUISE };
+		msg.writeUint32(id);
+		msg.writeUint32(d.blueprint);
+		msg.writeUint32((uint32_t)d.subtype);
+		msg.writeUint32((uint32_t)d.appearance);
+		sendToClient(clientIndex, msg);
+		if (player && d.unmaskedFor.count(player->id)) {
+			NetPacketWriter un{ NETCLIMSG_UNMASK };
+			un.writeUint32(id);
+			sendToClient(clientIndex, un);
+		}
+	}
+	if (!player)
+		return;
+	if (interfaceDisabled.count(player->id)) {
+		NetPacketWriter msg{ NETCLIMSG_GAME_INTERFACE };
+		msg.writeUint8(0);
+		sendToClient(clientIndex, msg);
+	}
+	for (const auto& [key, m] : objectiveMarkers) {
+		if (key.first != player->id)
+			continue;
+		NetPacketWriter msg{ NETCLIMSG_OBJECTIVE_MARKER };
+		msg.writeStringZ(key.second);
+		msg.writeUint8(m.kind);
+		msg.writeFloat(m.x);
+		msg.writeFloat(m.z);
+		msg.writeUint32(m.object);
+		sendToClient(clientIndex, msg);
+	}
+	// the reveals still going (the ended ones are dropped here and when saving)
+	fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(), [this](const FogReveal& r) {
+		return r.until >= 0.0f && r.until <= timeManager.currentTime; }), fogReveals.end());
+	for (const FogReveal& r : fogReveals) {
+		if (r.player != player->id)
+			continue;
+		NetPacketWriter msg{ NETCLIMSG_FOG_REVEAL };
+		msg.writeUint32(r.object);
+		msg.writeFloat(r.until < 0.0f ? 0.0f : r.until - timeManager.currentTime);
+		msg.writeFloat(r.radius);
+		sendToClient(clientIndex, msg);
+	}
+}
+
+void Server::sendMinimapAlert(ServerGameObject* player, bool circle, const Vector3& position, uint32_t colour, float seconds, int circles)
+{
+	if (!player || player->clientIndex < 0)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_MINIMAP_ALERT };
+	msg.writeUint8(circle ? 1 : 0);
+	msg.writeFloat(position.x);
+	msg.writeFloat(position.z);
+	msg.writeUint32(colour);
+	msg.writeFloat(seconds);
+	msg.writeUint8((uint8_t)std::clamp(circles, 1, 20));
+	sendTo(player, msg);
+}
+
+void Server::stopSound(ServerGameObject* obj)
+{
+	if (!obj)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_STOP_SOUND };
+	msg.writeUint32(obj->id);
+	sendToAll(msg);
+}

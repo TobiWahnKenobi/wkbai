@@ -71,6 +71,8 @@ private:
 	bool allowDiplomacy = false;
 	bool teamReconnaissance = false;
 	bool barbarianTribes = false;
+	// the members of a team start at neighbouring positions (applySettings)
+	bool teamPlacement = false;
 	bool aggressiveAI = true; // Server::aggressiveAI
 	bool cheatMode = false;   // Server::cheatMode (a skirmish against the AI only)
 	bool aiGoldExpansion = false; // Server::aiGoldExpansion

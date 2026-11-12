@@ -138,6 +138,29 @@ enum NetClientMessages {
 	// a top bar diplomacy button on this client's player's screen: the window (8 bits:
 	// Server::DiplomacyWindow), enabled (8 bits), the tooltip's Language key (zero-ended)
 	NETCLIMSG_DIPLOMACY_WINDOW,
+	// a disguise (ADOPT_APPEARANCE_FOR, Server::Disguise): the object id (32 bits), the blueprint's
+	// full id (32 bits, 0: none), subtype and appearance (32 bits each); seen by every enemy again
+	NETCLIMSG_DISGUISE,
+	// the disguise unmasked for this client's player (ADOPT_DEFAULT_APPEARANCE_FOR): the object id
+	NETCLIMSG_UNMASK,
+	// REVEAL_FOG_OF_WAR for this client's player: the object id (32 bits), the seconds (float, 0:
+	// for good), the radius in 5 m tiles (float)
+	NETCLIMSG_FOG_REVEAL,
+	// a minimap alert for this client's player (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP):
+	// circle (8 bits), x and z (floats), the colour (32 bits, Server::sendMinimapAlert), the seconds
+	// (float), the circles (8 bits)
+	NETCLIMSG_MINIMAP_ALERT,
+	// STOP_SOUND: the sounds the object (id, 32 bits) played on this client stopped
+	NETCLIMSG_STOP_SOUND,
+	// STOP_MUSIC / FADE_STOP_MUSIC for this client's player: fade (8 bits, 1: over 2 s)
+	NETCLIMSG_MUSIC_STOP,
+	// ENABLE_/DISABLE_GAME_INTERFACE for this client's player: enabled (8 bits)
+	NETCLIMSG_GAME_INTERFACE,
+	// a mission objectives entry's position marker for this client's player: the entry's key
+	// (zero-ended), kind (8 bits: 0 none, 1 a place, 2 an object), x and z (floats), object id (32 bits)
+	NETCLIMSG_OBJECTIVE_MARKER,
+	// UNLOCK_LEVEL: the level's name (zero-ended)
+	NETCLIMSG_LEVEL_UNLOCKED,
 };
 
 enum NetServerMessages {

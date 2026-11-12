@@ -142,6 +142,43 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// bar's Diplomacy, Global Diplomacy and Tributes buttons, the AI Generals' messages to show
 	// one after another, and the notices (Language keys, with the player in whose colour)
 	std::map<std::pair<uint32_t, uint32_t>, int> diplomaticOffers;
+	// Disguises (NETCLIMSG_DISGUISE, _UNMASK): by object id, the look the player's enemies see,
+	// unless unmasked for this client's player; disguiseFor: the one this client sees (none for
+	// its own and its allies' objects)
+	struct Disguise {
+		const GameObjBlueprint* blueprint = nullptr;
+		int subtype = 0, appearance = 0;
+		bool unmasked = false;
+	};
+	std::map<uint32_t, Disguise> disguises;
+	const Disguise* disguiseFor(CommonGameObject* obj);
+	// REVEAL_FOG_OF_WAR for this client's player (NETCLIMSG_FOG_REVEAL): the object seen around
+	// it until the game time `until` (< 0: for good), radius in 5 m tiles
+	struct FogReveal { uint32_t object; float until, radius; };
+	std::vector<FogReveal> fogReveals;
+	// the minimap alerts going (NETCLIMSG_MINIMAP_ALERT): a blinking dot or collapsing circles at
+	// (x, z), colour 0xRRGGBB or 0xFF0000nn (player colour nn), from SDL tick `start`
+	struct MinimapAlert {
+		bool circle = false;
+		float x = 0, z = 0;
+		uint32_t colour = 0xFFFFFF;
+		float seconds = 1;
+		int circles = 1;
+		uint32_t start = 0;
+	};
+	std::vector<MinimapAlert> minimapAlerts;
+	// the last four warnings' places (x, z), the latest first (one per place: a new alert within
+	// 25 m of a kept one moves it to the front), for Home; warningCycle: Home's next pick
+	std::vector<std::pair<float, float>> warningPlaces;
+	// DISABLE_GAME_INTERFACE: no HUD and no orders for this player (NETCLIMSG_GAME_INTERFACE)
+	bool gameInterfaceEnabled = true;
+	// UNLOCK_LEVEL this session (also noted in saved\Unlocked Levels.txt)
+	std::set<std::string> unlockedLevels;
+	// the mission objectives entries' position markers, by entry key (kind 1: a place, 2: an
+	// object, followed)
+	struct ObjectiveMarker { int kind = 0; float x = 0, z = 0; uint32_t object = 0; };
+	std::map<std::string, ObjectiveMarker> objectiveMarkers;
+	size_t warningCycle = 0;
 	struct DiplomacyButton {
 		bool enabled = false, set = false; // set: by ENABLE_/DISABLE_..._WINDOW (else the default)
 		std::string tooltip;

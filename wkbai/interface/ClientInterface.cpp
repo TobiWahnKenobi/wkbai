@@ -293,6 +293,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			return;
 		CommonGameObject* player = obj->getPlayer();
 		int color = remembered ? obj->color : player ? player->color : 0;
+		// a disguised enemy: a dot of this player's colour, as its own peasants
+		if (!remembered && client->clientPlayer && client->disguiseFor(obj))
+			color = client->clientPlayer->color;
 		ImU32 dotColor = playerColors[(color >= 0 && color < 9) ? color : 0];
 		if (color == 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER)
 			dotColor = treeColor; // neutral resources such as trees
@@ -321,6 +324,60 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			const float t = (now - time) / 1500.0f;
 			const ImVec2 c = toMinimap(pos.x, pos.z);
 			drawList->AddCircle(c, 4.0f + 18.0f * (1.0f - t), IM_COL32(255, 255, 255, (int)(255 * (1.0f - t))), 24, 2.0f);
+		}
+		drawList->PopClipRect();
+	}
+	// the scripts' alerts (SHOW_BLINKING_DOT_ON_MINIMAP, COLLAPSING_CIRCLE_ON_MINIMAP): a dot
+	// blinking twice a second for its seconds; circles shrinking onto the place one after another
+	// within its seconds
+	if (!client->minimapAlerts.empty()) {
+		const uint32_t now = SDL_GetTicks();
+		std::erase_if(client->minimapAlerts, [now](const Client::MinimapAlert& a) { return now - a.start > (uint32_t)(a.seconds * 1000.0f); });
+		drawList->PushClipRect(p0, p1, true);
+		const float scale = std::max(1.0f, std::min(w, h) / 200.0f);
+		for (const Client::MinimapAlert& a : client->minimapAlerts) {
+			uint32_t rgb = a.colour & 0xFFFFFF;
+			if ((a.colour & 0xFF000000) == 0xFF000000) {
+				const ImU32 pc = playerColors[(a.colour & 0xFF) < 9 ? (a.colour & 0xFF) : 0];
+				rgb = (pc & 0xFF) << 16 | (pc >> 8 & 0xFF) << 8 | (pc >> 16 & 0xFF);
+			}
+			const ImU32 col = IM_COL32(rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF, 255);
+			const float t = (now - a.start) / 1000.0f;
+			const ImVec2 c = toMinimap(a.x, a.z);
+			if (!a.circle) {
+				if (std::fmod(t, 0.5f) < 0.3f) {
+					const float r = 2.5f * scale;
+					drawList->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), col);
+					drawList->AddRect(ImVec2(c.x - r - 1, c.y - r - 1), ImVec2(c.x + r + 1, c.y + r + 1), IM_COL32(0, 0, 0, 160));
+				}
+			}
+			else {
+				const float each = a.seconds / std::max(1, a.circles);
+				const float f = std::fmod(t, each) / each; // 0..1 within this circle
+				drawList->AddCircle(c, (2.0f + 16.0f * (1.0f - f)) * scale, (col & 0x00FFFFFF) | (ImU32)(255 * std::min(1.0f, 1.5f - f)) << 24, 24, 1.5f * scale);
+			}
+		}
+		drawList->PopClipRect();
+	}
+	// the mission objectives' position markers (INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY,
+	// TRACK_OBJECT_POSITION_FROM_...): a gold ring breathing round the place, or round the object
+	// it follows, wherever it goes
+	if (!client->objectiveMarkers.empty()) {
+		const float scale = std::max(1.0f, std::min(w, h) / 200.0f);
+		const float pulse = 0.5f + 0.5f * std::sin(SDL_GetTicks() / 250.0f);
+		drawList->PushClipRect(p0, p1, true);
+		for (const auto& [key, m] : client->objectiveMarkers) {
+			float x = m.x, z = m.z;
+			if (m.kind == 2) {
+				ClientGameObject* obj = client->findObject(m.object);
+				if (!obj || (obj->flags & ClientGameObject::fTerminated))
+					continue;
+				x = obj->position.x;
+				z = obj->position.z;
+			}
+			const ImVec2 c = toMinimap(x, z);
+			drawList->AddCircle(c, (5.0f + 3.0f * pulse) * scale, IM_COL32(255, 215, 64, 255), 20, 2.0f * scale);
+			drawList->AddCircleFilled(c, 1.5f * scale, IM_COL32(255, 215, 64, 255));
 		}
 		drawList->PopClipRect();
 	}
@@ -373,12 +430,38 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	// Click or drag on the minimap: move the camera so it looks at that point
 	const int mx = UiMouseX(), my = UiMouseY(); // the minimap is in points
 	const bool hovered = mx >= x && mx < x + w && my >= y && my < y + h;
+	// Camera Snapping (the options, off by default as WKB.exe's "minimap_camera_snapping"): a
+	// click puts the camera there at once; off, it glides there in a third of a second. Dragging
+	// follows the mouse either way.
+	const uint32_t now = SDL_GetTicks();
 	if (hovered && g_mouseDown[SDL_BUTTON_LEFT]) {
 		// in the map part; a click on the bars goes to the nearest map edge
 		float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
 		float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
-		client->camera.position.x += targetX - lookAt.x;
-		client->camera.position.z += targetZ - lookAt.z;
+		if (g_mousePressed[SDL_BUTTON_LEFT] && !g_settings.value("cameraSnapping", false)) {
+			minimapGlide = Vector3(targetX - lookAt.x, 0.0f, targetZ - lookAt.z);
+			minimapGlideTick = now;
+		}
+		else {
+			minimapGlide = Vector3();
+			client->camera.position.x += targetX - lookAt.x;
+			client->camera.position.z += targetZ - lookAt.z;
+		}
+	}
+	else if (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f) {
+		// most of the way in a third of a second, the rest when it is under half a metre
+		const float dt = std::min(0.1f, (now - minimapGlideTick) / 1000.0f);
+		minimapGlideTick = now;
+		const float k = 1.0f - std::exp(-dt * 12.0f);
+		Vector3 move = minimapGlide * k;
+		if (minimapGlide.len2xz() < 0.5f)
+			move = minimapGlide;
+		client->camera.position.x += move.x;
+		client->camera.position.z += move.z;
+		minimapGlide.x -= move.x;
+		minimapGlide.z -= move.z;
+		if (minimapGlide.len2xz() < 1e-4f)
+			minimapGlide = Vector3();
 	}
 	return hovered;
 }
@@ -1625,6 +1708,47 @@ void ClientInterface::drawUnitHistoryOverlay()
 		}
 	}
 	heroLabels.clear();
+	// health bars above the buildings selected or under the mouse (WK1's manual; the setting
+	// "buildingHealthBars"): green to red with the hit points, over a dark frame
+	if (g_settings.value("buildingHealthBars", true)) {
+		std::vector<ClientGameObject*> shown;
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				shown.push_back(sel);
+		if (ClientGameObject* hov = nextSelectedObject.get(); hov && std::find(shown.begin(), shown.end(), hov) == shown.end())
+			shown.push_back(hov);
+		// (a building's are its "Structural Integrity" items, as the selection panel shows them)
+		static const GameSet* itemsOf = nullptr;
+		static int integrity = -1, integrityCapacity = -1;
+		if (itemsOf != client->gameSet.get()) {
+			itemsOf = client->gameSet.get();
+			integrity = itemsOf ? itemsOf->items.names.getIndex("Structural Integrity") : -1;
+			integrityCapacity = itemsOf ? itemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
+		}
+		for (ClientGameObject* obj : shown) {
+			if (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || (obj->flags & ClientGameObject::fTerminated) || integrity < 0 || integrityCapacity < 0)
+				continue;
+			const float capacity = obj->getItem(integrityCapacity);
+			if (!(capacity > 0.0f))
+				continue;
+			const float f = std::clamp(obj->getItem(integrity) / capacity, 0.0f, 1.0f);
+			Model* model = obj->getModel();
+			if (!model)
+				continue;
+			const Matrix world = obj->getWorldMatrix();
+			const Vector3 centre = model->getSphereCenter().transform(world);
+			const float radius = model->getSphereRadius() * std::max({ obj->scale.x, obj->scale.y, obj->scale.z });
+			bool inFront = false;
+			const ImVec2 at = toScreen(centre + Vector3(0.0f, radius * 0.9f, 0.0f), inFront);
+			if (!inFront)
+				continue;
+			const float w = 64.0f, h = 7.0f;
+			const ImVec2 p0(at.x - w * 0.5f, at.y - h), p1(at.x + w * 0.5f, at.y);
+			dl->AddRectFilled(ImVec2(p0.x - 1, p0.y - 1), ImVec2(p1.x + 1, p1.y + 1), IM_COL32(0, 0, 0, 200));
+			const int r = (int)(255.0f * std::min(1.0f, 2.0f * (1.0f - f))), g = (int)(255.0f * std::min(1.0f, 2.0f * f));
+			dl->AddRectFilled(p0, ImVec2(p0.x + w * f, p1.y), IM_COL32(r, g, 40, 255));
+		}
+	}
 	// the unit under the mouse: "Guillaume le Hardi · Knight · 9 kills" (the setting
 	// "showUnitNamesOnHover")
 	if (g_settings.value("showUnitNamesOnHover", true) && !ImGui::GetIO().WantCaptureMouse) {
@@ -2494,7 +2618,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 
 	Model* model = nullptr;
-	if (const auto* appear = obj->blueprint->getAppearance(obj->subtype, obj->appearance)) {
+	// a disguised enemy (ADOPT_APPEARANCE_FOR): drawn as what it pretends to be, in this player's
+	// colour (a spy among the player's own peasants)
+	const Client::Disguise* disguise = remembered ? nullptr : client->disguiseFor(obj);
+	const auto* appear = disguise ? disguise->blueprint->getAppearance(disguise->subtype, disguise->appearance) : nullptr;
+	if (!appear)
+		appear = obj->blueprint->getAppearance(obj->subtype, obj->appearance);
+	if (appear) {
 		const auto& ap = *appear;
 		auto it = ap.animations.find(obj->animationIndex);
 		if (it == ap.animations.end())
@@ -2583,6 +2713,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
 	// a remembered building has no parent: its colour and frame are those it had when last seen
 	obj->sceneEntity.color = remembered ? obj->color : obj->getPlayer()->color;
+	if (disguise && client->clientPlayer)
+		obj->sceneEntity.color = client->clientPlayer->color;
 	if (obj->animSynchronizedTask != -1 && !remembered) {
 		CliScriptContext ctx{ client, obj };
 		float frac = client->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
@@ -3131,8 +3263,16 @@ void ClientInterface::iter()
 	// a game text window (or the objectives) under the mouse, or a modal one: it gets the
 	// mouse, the game none
 	const bool windowsTakeMouse = !menuOpen && frontEnd && frontEnd->gameWindowsWantMouse(UiMouseX(), UiMouseY());
+	// DISABLE_GAME_INTERFACE (a campaign level's intro, its end): the game gets no keys and no
+	// mouse, only Esc for the menu; the game's windows still get them (given back below)
+	const bool interfaceLocked = !menuOpen && !replayMode && !client->gameInterfaceEnabled;
 	if (menuOpen)
 		menuInput.take();
+	else if (interfaceLocked) {
+		menuInput.take();
+		std::swap(g_keyPressed[SDL_SCANCODE_ESCAPE], menuInput.keyPressed[SDL_SCANCODE_ESCAPE]);
+		std::swap(g_keyDown[SDL_SCANCODE_ESCAPE], menuInput.keyDown[SDL_SCANCODE_ESCAPE]);
+	}
 	else if (windowsTakeMouse)
 		menuInput.takeMouse();
 
@@ -3507,7 +3647,9 @@ void ClientInterface::iter()
 			selection.insert(nextSelectedObject);
 			const bool doubleClick = g_mouseDoubleClicked == SDL_BUTTON_LEFT;
 			const int singleClickSelectAllItem = client->gameSet->items.names.getIndex("Single Click Selects All Units Of This Type");
-			const bool selectAllOnSingleClick = singleClickSelectAllItem >= 0 && nextSelectedObject->getItem(singleClickSelectAllItem) > 0.0f;
+			// (the options' "Single click selects all units" off: one unit for every type)
+			const bool selectAllOnSingleClick = singleClickSelectAllItem >= 0 && nextSelectedObject->getItem(singleClickSelectAllItem) > 0.0f
+				&& g_settings.value("singleClickSelectsAll", true);
 			if (doubleClick ^ selectAllOnSingleClick) {
 				// select nearby units of same type
 				auto walkObj = [&](ClientGameObject* obj, const auto& rec) -> void {
@@ -3673,6 +3815,9 @@ void ClientInterface::iter()
 	if (KeyPressed(KeyAction::SlowDown) && !replayMode) {
 		client->sendGameSpeedChange(client->timeManager.timeSpeed / 2.0f);
 	}
+	// Home: the last four warnings' places in turn (Hot Keys.cpp), the latest first
+	if (KeyPressed(KeyAction::LastWarning) && !ImGui::GetIO().WantTextInput)
+		lastWarning();
 	if (KeyPressed(KeyAction::DeleteSelected) && !ImGui::GetIO().WantTextInput) {
 		// in the map editor, removed so that undo can place them again
 		if (editorOn && withServer)
@@ -3906,6 +4051,12 @@ void ClientInterface::iter()
 			[this]() -> uint32_t {
 				ClientGameObject* obj = nextSelectedObject.get();
 				return obj ? obj->id : 0u;
+			});
+		// a disguised enemy (ADOPT_APPEARANCE_FOR) to this player: its panel would give it away
+		lua.set_function("isDisguised",
+			[this](uint32_t id) -> bool {
+				ClientGameObject* obj = client->findObject(id);
+				return obj && client->disguiseFor(obj) != nullptr;
 			});
 		// wkbai's unit history (Client::unitInfo): the name shown ("" none), the birth name, a hero,
 		// tracked at all, the age as the panel shows it, the kills and the buildings destroyed,
@@ -4302,7 +4453,9 @@ void ClientInterface::iter()
 			}
 			// wkbai's unit history: the heroes' names, under the interface's panels
 			drawUnitHistoryOverlay();
-			lua["CCUI_PerFrame"]();
+			// (no HUD while the scripts have the interface off)
+			if (client->gameInterfaceEnabled || replayMode)
+				lua["CCUI_PerFrame"]();
 		}
 		catch (const sol::error& err) {
 			printf("Sol error:\n%s\n", err.what());
@@ -4316,7 +4469,7 @@ void ClientInterface::iter()
 	}
 
 	if (frontEnd) {
-		if (menuOpen)
+		if (menuOpen || interfaceLocked)
 			menuInput.give();
 		else if (windowsTakeMouse)
 			menuInput.giveMouse();
@@ -5616,6 +5769,17 @@ void ClientInterface::hotKeySelect(const char* finderName)
 		selection.insert(pick);
 	hotKeyCameraTarget = pick->position;
 	minimapPings.emplace_back(pick->position, (uint32_t)SDL_GetTicks());
+}
+
+void ClientInterface::lastWarning()
+{
+	if (client->warningPlaces.empty())
+		return;
+	const auto [x, z] = client->warningPlaces[client->warningCycle % client->warningPlaces.size()];
+	client->warningCycle++;
+	const Vector3 pos(x, client->terrain ? client->terrain->getHeight(x, z) : 0.0f, z);
+	hotKeyCameraTarget = pos;
+	minimapPings.emplace_back(pos, (uint32_t)SDL_GetTicks());
 }
 
 void ClientInterface::saveRequested(const std::string& name)

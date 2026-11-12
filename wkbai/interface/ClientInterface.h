@@ -136,6 +136,8 @@ struct ClientInterface {
 	std::string chatDisplayText(const std::string& key, const std::vector<float>& values);
 	// the selection keys (Hot Keys.cpp) and their pings on the minimap (where, SDL ticks)
 	void hotKeySelect(const char* finderName);
+	// Home: the camera to the next of the last four warnings' places (Client::warningPlaces)
+	void lastWarning();
 	std::vector<std::pair<Vector3, uint32_t>> minimapPings;
 	std::optional<Vector3> hotKeyCameraTarget;
 private:
@@ -269,6 +271,9 @@ private:
 	// (the setting "showHeroNames"), and where (the top of the model)
 	struct HeroLabel { uint32_t id; Vector3 top; };
 	std::vector<HeroLabel> heroLabels;
+	// a minimap click without Camera Snapping: the camera's way still to go, the last step's tick
+	Vector3 minimapGlide;
+	uint32_t minimapGlideTick = 0;
 	// the names over the heroes' heads, the tooltip of the unit under the mouse
 	void drawUnitHistoryOverlay();
 	CliGORef nextSelectedObjectByMesh, nextSelectedObjectBySphere;

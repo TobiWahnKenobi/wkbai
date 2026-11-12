@@ -375,7 +375,8 @@ function CCUI_PerFrame()
 	-- CSelectionInformationPanel (WKB.exe 0x78D4F0); with nothing selected, the object under the mouse
 	local info = sel
 	if info == 0 then info = getHoveredObject() end
-	if info ~= 0 then drawSelectionInformation(info) end
+	-- (a disguised enemy shows nothing: the panel would give it away)
+	if info ~= 0 and not isDisguised(info) then drawSelectionInformation(info) end
 	-- a replay takes no orders: no command panels, only what is selected
 	if sel ~= 0 and not isReplay() then
 		local bp = getBlueprint(sel)

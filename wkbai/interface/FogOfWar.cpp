@@ -100,6 +100,18 @@ void FogOfWar::update(Client* client)
 	walk(client->getLevel(), walk);
 	for (const auto& [pos, radius] : testViewers)
 		stamp(pos, radius / 5.0f);
+	// REVEAL_FOG_OF_WAR: the revealed objects seen around them, wherever they go, until their time
+	// is up (an Act of God's bishop, the artillery firing at the player)
+	if (!client->fogReveals.empty()) {
+		const float now = client->timeManager.currentTime;
+		std::erase_if(client->fogReveals, [&](const Client::FogReveal& r) {
+			CommonGameObject* obj = client->findObject(r.object);
+			return (r.until >= 0.0f && r.until <= now) || !obj || (obj->flags & CommonGameObject::fTerminated);
+		});
+		for (const Client::FogReveal& r : client->fogReveals)
+			if (CommonGameObject* obj = client->findObject(r.object))
+				stamp(obj->position, r.radius);
+	}
 	if (next != tiles || drawNext != drawTiles) {
 		tiles = std::move(next);
 		drawTiles = std::move(drawNext);

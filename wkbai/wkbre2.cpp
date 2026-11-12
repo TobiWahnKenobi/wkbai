@@ -19,6 +19,7 @@
 
 #include "interface/QuickStartMenu.h"
 #include "interface/FrontEnd.h"
+#include "interface/IntroVideo.h"
 #include "gfx/renderer.h"
 #include "window.h"
 #include <SDL3/SDL_mouse.h>
@@ -193,6 +194,10 @@ void LaunchQSM() {
 	// The menus (redata/FrontEndUI.lua), with the game's cursor
 	FrontEnd frontEnd{ gfx };
 	WndSetCursor(WndCreateCursor("Interface\\C_DEFAULT.TGA"));
+
+	// the original's intro video, before the menus (and their music); "introVideoFile" plays
+	// another file instead (test runs)
+	PlayIntroVideo(gfx, PathFromUtf8(g_settings.value("introVideoFile", std::string())));
 
 	QuickStartMenu qsm{ gfx };
 

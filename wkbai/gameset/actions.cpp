@@ -8,6 +8,7 @@
 #include "gameset.h"
 #include "../util/util.h"
 #include "../server.h"
+#include "../network.h"
 #include "ScriptContext.h"
 #include "../BreakpointManager.h"
 #include "../settings.h"
@@ -853,6 +854,65 @@ struct ActionMissionObjectivesEntry : Action {
 	}
 };
 
+// ENABLE_GAME_INTERFACE / DISABLE_GAME_INTERFACE <players>: their HUD and orders on or off
+// (Level Intros and Outros.cpp: off for a campaign level's intro and its end)
+struct ActionGameInterface : Action {
+	bool enable;
+	std::unique_ptr<ObjectFinder> finder;
+	explicit ActionGameInterface(bool enable) : enable(enable) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		ForEachObjectivesPlayer(ctx, finder.get(), [&](ServerGameObject* player) { ctx->server->setGameInterface(player, enable); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY <entry> <position> <players>,
+// TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY <entry> <objects> <players>,
+// STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY <entry> <players>: the entry's marker
+// on those players' minimaps (a place, the first object found, or none)
+struct ActionObjectiveMarker : Action {
+	int kind; // 0 stop, 1 a place, 2 an object
+	std::string key;
+	std::unique_ptr<PositionDeterminer> position;
+	std::unique_ptr<ObjectFinder> objects, players;
+	explicit ActionObjectiveMarker(int kind) : kind(kind) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		Server::ObjectiveMarker m;
+		m.kind = (uint8_t)kind;
+		if (kind == 1) {
+			const Vector3 p = position->eval(ctx).position;
+			m.x = p.x;
+			m.z = p.z;
+		}
+		else if (kind == 2) {
+			ServerGameObject* obj = objects->getFirst(ctx);
+			if (!obj)
+				return;
+			m.object = obj->id;
+			m.x = obj->position.x;
+			m.z = obj->position.z;
+		}
+		ForEachObjectivesPlayer(ctx, players.get(), [&](ServerGameObject* player) { ctx->server->setObjectiveMarker(player, key, m); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		key = gsf.nextString(true);
+		if (kind == 1)
+			position.reset(PositionDeterminer::createFrom(gsf, gs));
+		else if (kind == 2)
+			objects.reset(ReadFinder(gsf, gs));
+		players.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// UNLOCK_LEVEL "<level>": the level noted as unlocked on the players' machines
+struct ActionUnlockLevel : Action {
+	std::string level;
+	virtual void run(SrvScriptContext* ctx) override { ctx->server->unlockLevel(level); }
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { level = gsf.nextString(true); }
+};
+
 struct ActionSetScale : Action {
 	std::unique_ptr<ObjectFinder> finder;
 	std::unique_ptr<ValueDeterminer> vdx;
@@ -1346,6 +1406,22 @@ struct ActionPlayMusic : Action {
 	}
 };
 
+// STOP_MUSIC <players> and FADE_STOP_MUSIC <players> (the tutorials' last page, before
+// BOOT_LEVEL or EXIT_TO_MAIN_MENU): their music stops, at once or fading out
+struct ActionStopMusic : Action {
+	bool fade;
+	ActionStopMusic(bool fade) : fade(fade) {}
+	std::unique_ptr<ObjectFinder> fPlayer;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : fPlayer->eval(ctx))
+			if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer())
+				ctx->server->stopMusic(player, fade);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fPlayer.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ActionTeleport : Action {
 	std::unique_ptr<ObjectFinder> finder;
 	std::unique_ptr<PositionDeterminer> pos;
@@ -1434,6 +1510,132 @@ struct ActionSendChatMessage : Action {
 		display = gsf.nextString(true);
 		fFrom.reset(ReadFinder(gsf, gs));
 		fTo.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// STOP_SOUND <objects>: the sounds those objects play stopped (a warning's marker before the next,
+// the battle sound markers, the player's own announcements)
+struct ActionStopSound : Action {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->stopSound(obj);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SHOW_BLINKING_DOT_ON_MINIMAP <position> <colour> <seconds> <players> (WKB.exe 0x497740, message
+// 0x7b) and COLLAPSING_CIRCLE_ON_MINIMAP <position> <colour> <seconds> <circles> <players>
+// (0x4773f0, 0xc9: the circles' count rounded to a whole number): a fight, a fire, Charm of
+// Madness's false alarms, Valhalla's flags on those players' minimaps.
+// The colour: COLOUR_<name> or PLAYER_COLOUR <finder> (the first object's player's colour).
+struct ActionMinimapAlert : Action {
+	bool circle;
+	ActionMinimapAlert(bool circle) : circle(circle) {}
+	std::unique_ptr<PositionDeterminer> position;
+	uint32_t colour = 0xFFFFFF;
+	std::unique_ptr<ObjectFinder> colourOf, players;
+	std::unique_ptr<ValueDeterminer> seconds, count;
+	virtual void run(SrvScriptContext* ctx) override {
+		const Vector3 pos = position->eval(ctx).position;
+		uint32_t c = colour;
+		if (colourOf) {
+			c = Server::ALERT_PLAYER_COLOUR; // the player colour index in the low byte
+			for (ServerGameObject* obj : colourOf->eval(ctx))
+				if (ServerGameObject* player = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? obj : obj->getPlayer()) {
+					c |= (uint32_t)player->color & 0xFF;
+					break;
+				}
+		}
+		const float s = seconds->eval(ctx);
+		const int n = circle && count ? (int)count->eval(ctx) : 1;
+		for (ServerGameObject* p : players->eval(ctx))
+			if (ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer())
+				ctx->server->sendMinimapAlert(player, circle, pos, c, s, n);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		position.reset(PositionDeterminer::createFrom(gsf, gs));
+		const std::string word = gsf.nextString();
+		static const std::pair<const char*, uint32_t> named[] = {
+			{ "COLOUR_BLACK", 0x000000 }, { "COLOUR_BLUE", 0x2060FF }, { "COLOUR_BROWN", 0x8B5A2B },
+			{ "COLOUR_CYAN", 0x00FFFF }, { "COLOUR_GREEN", 0x20E020 }, { "COLOUR_GREY", 0x909090 },
+			{ "COLOUR_MAGENTA", 0xFF00FF }, { "COLOUR_ORANGE", 0xFF9010 }, { "COLOUR_PURPLE", 0x9030D0 },
+			{ "COLOUR_RED", 0xFF2020 }, { "COLOUR_WHITE", 0xFFFFFF }, { "COLOUR_YELLOW", 0xFFFF20 } };
+		if (word == "PLAYER_COLOUR")
+			colourOf.reset(ReadFinder(gsf, gs));
+		else
+			for (const auto& [name, rgb] : named)
+				if (word == name)
+					colour = rgb;
+		seconds.reset(ReadValueDeterminer(gsf, gs));
+		if (circle)
+			count.reset(ReadValueDeterminer(gsf, gs));
+		players.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ADOPT_APPEARANCE_FOR <class> "<blueprint>" "<subtype>" "<appearance>" <finder>: the objects look
+// like that to their players' enemies (Espionage.cpp: a spy as a peasant), until unmasked
+struct ActionAdoptAppearanceFor : Action {
+	const GameObjBlueprint* bp = nullptr;
+	int subtype = 0, appearance = 0;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (!bp)
+			return;
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->setDisguise(obj, bp, subtype, appearance);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		bp = gs.readObjBlueprintPtr(gsf);
+		const std::string sub = gsf.nextString(true), app = gsf.nextString(true);
+		if (bp)
+			subtype = std::max(0, bp->subtypeNames.getIndex(sub));
+		appearance = std::max(0, gs.appearances.names.getIndex(app));
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ADOPT_DEFAULT_APPEARANCE_FOR <objects> <players>: the disguise seen through by those players
+// (Counter Espionage.cpp); the object's own player among them drops it for everyone
+struct ActionAdoptDefaultAppearanceFor : Action {
+	std::unique_ptr<ObjectFinder> fObjects, fPlayers;
+	virtual void run(SrvScriptContext* ctx) override {
+		std::vector<ServerGameObject*> players;
+		for (ServerGameObject* p : fPlayers->eval(ctx))
+			players.push_back(p);
+		for (ServerGameObject* obj : fObjects->eval(ctx))
+			ctx->server->unmaskDisguise(obj, players);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fObjects.reset(ReadFinder(gsf, gs));
+		fPlayers.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// REVEAL_FOG_OF_WAR <objects> <seconds, 0: for good> <radius in 5 m tiles> <players>: the objects
+// seen by those players (an Act of God's bishop by its victim, an artillery piece by its target's
+// player, Espionage Military's units)
+struct ActionRevealFogOfWar : Action {
+	std::unique_ptr<ObjectFinder> fObjects, fPlayers;
+	std::unique_ptr<ValueDeterminer> vDuration, vRadius;
+	virtual void run(SrvScriptContext* ctx) override {
+		const float duration = vDuration->eval(ctx), radius = vRadius->eval(ctx);
+		auto players = fPlayers->eval(ctx);
+		for (ServerGameObject* obj : fObjects->eval(ctx))
+			for (ServerGameObject* p : players) {
+				ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer();
+				if (player && player != obj->getPlayer())
+					ctx->server->revealFogOfWar(obj, player, duration, radius);
+			}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fObjects.reset(ReadFinder(gsf, gs));
+		vDuration.reset(ReadValueDeterminer(gsf, gs));
+		vRadius.reset(ReadValueDeterminer(gsf, gs));
+		fPlayers.reset(ReadFinder(gsf, gs));
 	}
 };
 
@@ -1929,21 +2131,16 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_INTERPOLATE_CAMERA_TO_STORED_POSITION: action = new ActionInterpolateCameraToStoredPosition; break;
 	case Tags::ACTION_DISBAND_FORMATION: action = new ActionDisbandFormation; break;
 	case Tags::ACTION_LEAVE_FORMATION: action = new ActionLeaveFormation; break;
+	case Tags::ACTION_STOP_SOUND: action = new ActionStopSound; break;
+	case Tags::ACTION_FADE_STOP_MUSIC: action = new ActionStopMusic(true); break;
+	case Tags::ACTION_ENABLE_GAME_INTERFACE: action = new ActionGameInterface(true); break;
+	case Tags::ACTION_DISABLE_GAME_INTERFACE: action = new ActionGameInterface(false); break;
+	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(1); break;
+	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(2); break;
+	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(0); break;
+	case Tags::ACTION_UNLOCK_LEVEL: action = new ActionUnlockLevel; break;
 		// Below are ignored actions (that should not affect gameplay very much)
-	case Tags::ACTION_STOP_SOUND:
-	case Tags::ACTION_REVEAL_FOG_OF_WAR:
-	case Tags::ACTION_COLLAPSING_CIRCLE_ON_MINIMAP:
-	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP:
-	case Tags::ACTION_ENABLE_GAME_INTERFACE:
-	case Tags::ACTION_DISABLE_GAME_INTERFACE:
-	case Tags::ACTION_TRACK_OBJECT_POSITION_FROM_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_INDICATE_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY:
-	case Tags::ACTION_ADOPT_APPEARANCE_FOR:
-	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR:
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
-	case Tags::ACTION_FADE_STOP_MUSIC:
-	case Tags::ACTION_UNLOCK_LEVEL:
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:
@@ -1955,6 +2152,11 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_MAKE_DIPLOMATIC_OFFER: action = new ActionMakeDiplomaticOffer; break;
 	case Tags::ACTION_DECLINE_DIPLOMATIC_OFFER: action = new ActionAnswerDiplomaticOffer(false); break;
 	case Tags::ACTION_SEND_CHAT_MESSAGE: action = new ActionSendChatMessage; break;
+	case Tags::ACTION_ADOPT_APPEARANCE_FOR: action = new ActionAdoptAppearanceFor; break;
+	case Tags::ACTION_SHOW_BLINKING_DOT_ON_MINIMAP: action = new ActionMinimapAlert(false); break;
+	case Tags::ACTION_COLLAPSING_CIRCLE_ON_MINIMAP: action = new ActionMinimapAlert(true); break;
+	case Tags::ACTION_ADOPT_DEFAULT_APPEARANCE_FOR: action = new ActionAdoptDefaultAppearanceFor; break;
+	case Tags::ACTION_REVEAL_FOG_OF_WAR: action = new ActionRevealFogOfWar; break;
 	case Tags::ACTION_SET_CHAT_PERSONALITY: action = new ActionSetChatPersonality; break;
 	case Tags::ACTION_ENABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, true); break;
 	case Tags::ACTION_DISABLE_DIPLOMACY_WINDOW: action = new ActionDiplomacyWindow(Server::WINDOW_DIPLOMACY, false); break;
@@ -1983,7 +2185,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 		if (name == "PAUSE_GAME") { action = new ActionPauseGame(true); break; }
 		if (name == "RESUME_GAME") { action = new ActionPauseGame(false); break; }
 		if (name == "RECALCULATE_SIGHT_RANGE") { action = new ActionRecalculateSightRange; break; }
-		if (name == "STOP_MUSIC") { action = new ActionNop; break; } // as FADE_STOP_MUSIC
+		if (name == "STOP_MUSIC") { action = new ActionStopMusic(false); break; }
 		action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}
 	action->parse(gsf, gs);
