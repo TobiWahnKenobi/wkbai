@@ -250,7 +250,8 @@ private:
 	int loadingPercentSent = -1; // (to the server, for the other players' loading screens)
 	uint64_t loadingWaitStarted = 0; // (SDL ticks: loaded, waiting for the other players)
 	bool loadingDone = false;
-	static constexpr float FORMATION_DRAG_MIN = 3.0f;
+	// a right-drag faces the units once the mouse is this far from the press (WKB.exe 0x64db18: 2.5 m)
+	static constexpr float FORMATION_DRAG_MIN = 2.5f;
 	// Multiplayer chat: Enter opens a line to type, Enter sends it to everyone, Esc closes it; the
 	// messages show for a while at the top left
 	void chatFrame(); // the keys and the messages
@@ -315,6 +316,7 @@ private:
 	void showOrderFlag(const Vector3& position, bool rallyPoint);
 	bool orderFlagDone(float age) const;
 	SceneEntity orderFlagEntity;
+	SceneEntity dragLineEntity; // a right-drag's Schematics\White_Line, from the flag towards the mouse
 	std::deque<SceneEntity> rallyFlagEntities; // of the selected buildings, this frame
 	// This frame's range circles: a band texture repeated around a circle on the ground
 	struct RangeBand {

@@ -2254,26 +2254,54 @@ void ServerGameObject::removeIfNotReferenced()
 	}
 }
 
-float ServerGameObject::computeSpeed()
+float ServerGameObject::baseSpeed()
 {
 	float speed = 5.0f;
-	if (blueprint->movementSpeedEquation != -1) {
+	int equation = blueprint->movementSpeedEquation;
+	// In a formation, a character's speed is the game set's "Formation " + its movement equation's
+	// name when there is one (WKB.exe's blueprint loader, 0x594e0b: "Formation Standard Footman
+	// Speed Equation" scales by the formation's "Subordinate Footman Movement Scale Factor")
+	if (equation != -1 && blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && parent
+		&& parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		static const GameSet* of = nullptr;
+		static std::map<int, int> formationEquation;
+		if (of != Server::instance->gameSet.get()) {
+			of = Server::instance->gameSet.get();
+			formationEquation.clear();
+		}
+		auto it = formationEquation.find(equation);
+		if (it == formationEquation.end())
+			it = formationEquation.emplace(equation, of->equations.names.getIndex("Formation " + of->equations.getString(equation))).first;
+		if (it->second != -1)
+			equation = it->second;
+	}
+	if (equation != -1) {
 		SrvScriptContext ctx{ Server::instance, this };
-		speed = Server::instance->gameSet->equations[blueprint->movementSpeedEquation]->eval(&ctx);
+		speed = Server::instance->gameSet->equations[equation]->eval(&ctx);
 	}
 	// wet or snowy ground (wkbai's weather; 1 when off)
 	if (Server::instance->environment.enabled())
 		speed *= Server::instance->environment.speedFactorFor(this);
-	// A formation goes a little slower than its slowest member: the members walk to their places
-	// in it (FormationController) and would otherwise trail behind
+	return speed;
+}
+
+float ServerGameObject::computeSpeed()
+{
+	// A formation marches at "Lead Unit Relative Speed" of its slowest member (FormationController)
 	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
-		float slowest = speed;
+		float slowest = -1.0f;
 		for (const auto& [type, members] : children)
 			if (type.bpClass() == Tags::GAMEOBJCLASS_CHARACTER)
 				for (CommonGameObject* member : members)
-					slowest = std::min(slowest, member->dyncast<ServerGameObject>()->computeSpeed());
-		speed = std::min(speed, slowest * 0.9f);
+					if (!(member->flags & fTerminated)) {
+						const float s = member->dyncast<ServerGameObject>()->baseSpeed();
+						slowest = slowest < 0.0f ? s : std::min(slowest, s);
+					}
+		return formationController.marchSpeed(slowest < 0.0f ? baseSpeed() : slowest);
 	}
+	float speed = baseSpeed();
+	if (formationPace != 1.0f && parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		speed *= formationPace;
 	return speed;
 }
 
@@ -3558,6 +3586,8 @@ void Server::simulate()
 		SimTimer treeTimer(g_simProfile.tree);
 		processObjOrders(getLevel(), processObjOrders);
 	}
+	// formations left with too few members, disbanded now that the tree isn't being walked
+	FormationController::flushDisbands();
 	g_simProfile.objects += toprocess.size();
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
@@ -3577,7 +3607,15 @@ void Server::simulate()
 		}
 		if (!ref) continue;
 		std::optional<SimTimer> moveTimer(std::in_place, g_simProfile.movement);
-		if (obj->movement.isMoving()) {
+		const bool isFormation = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (obj->movement.isMoving() && isFormation && obj->formationController.steer(obj->movement.getDirection(), timeManager.elapsedTime)) {
+			// a formation setting off the other way waits where it is while its members form up
+			// facing along its path: its walk starts again from here every step
+			obj->movement.startMovement(obj->position, obj->movement.getDestination(), timeManager.currentTime, obj->currentSpeed);
+		}
+		else if (obj->movement.isMoving()) {
+			if (isFormation && obj->formationController.takeReleased())
+				obj->startMovement(obj->movement.getDestination());
 			// (with profileSim, the parts' times: SIMPROFILE   movement)
 			double t0 = profile ? SimProfile::now() : 0.0, t1 = 0.0, t2 = 0.0, t3 = 0.0;
 			auto newpos = obj->movement.getNewPosition(timeManager.currentTime);
@@ -3586,8 +3624,11 @@ void Server::simulate()
 			obj->updatePosition(newpos, true);
 			if (!ref) continue;
 			if (profile) t2 = SimProfile::now();
-			Vector3 dir = obj->movement.getDirection();
-			obj->orientation.y = atan2f(dir.x, -dir.z);
+			// facing the way it walks; a formation turns there at its own rate (steer, above)
+			if (!isFormation) {
+				Vector3 dir = obj->movement.getDirection();
+				obj->orientation.y = atan2f(dir.x, -dir.z);
+			}
 			// restart movement is speed changes
 			float speed = obj->computeSpeed();
 			if (speed != obj->currentSpeed) {
@@ -4107,6 +4148,7 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 					sub->setParent(formation);
 				}
 				formation->setPosition(positionSum / numUnits);
+				FormationController::faceMembersWay(formation);
 				formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
 				clientInfos[clientIndex].unitsForNewFormation.clear();
 				break;

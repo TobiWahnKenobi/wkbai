@@ -61,6 +61,9 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	int clientIndex = -1;
 	bool isMusicPlaying = false;
 	float currentSpeed = 0.0f;
+	// a formation member's share of its speed, set by its FormationController (forming up so that
+	// everyone arrives at once, keeping pace while marching); only while it is in a formation
+	float formationPace = 1.0f;
 	MovementController movementController{ this };
 	AIController aiController{ this };
 	FormationController formationController{ this };
@@ -132,6 +135,9 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);
 	void removeIfNotReferenced();
 	float computeSpeed();
+	// the speed of its own: its movement equation (in a formation, the game set's "Formation ..."
+	// one) and the weather, without a formation's pace
+	float baseSpeed();
 	void notifySubordinateRemoved();
 
 	bool canAffordObject(const GameObjBlueprint* blueprint);

@@ -4088,16 +4088,6 @@ void ClientInterface::iter()
 
 	clickedScriptedUi = false;
 
-	// a right-drag: the original's thin white line from the destination (its flag) to where the
-	// units will face
-	if (formationDrag.active && (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN) {
-		auto toScreen = [this](const Vector3& p) {
-			const Vector3 t = p.transformScreenCoords(client->camera.sceneMatrix);
-			return ImVec2((t.x + 1) * 0.5f * g_windowWidth / g_uiScale, (1 - t.y) * 0.5f * g_windowHeight / g_uiScale);
-		};
-		ImGui::GetBackgroundDrawList()->AddLine(toScreen(formationDrag.start), toScreen(peapos), IM_COL32(255, 255, 255, 235), 2.0f);
-	}
-
 	// Test runs: "benchmark": { ..., "keys": [[frame, "<key>"], ...] } presses each key (an SDL
 	// name, "Ctrl+" in front for Ctrl held; "Deselect" empties the selection) that many frames
 	// after the level is there
@@ -5423,6 +5413,33 @@ void ClientInterface::iter()
 			}
 			else
 				orderFlagActive = false;
+		}
+		// A right-drag's line, as WKB.exe (0x64db18): Schematics\White_Line (a thin prism 1 m long
+		// down -z) stretched from the flag towards the point under the mouse, raised 0.5 m there and
+		// at most 5 m long, so it shows the facing, not the distance; none within 2.5 m
+		static const char* dragLinePath = "Warrior Kings Game Set\\Schematics\\White_Line.MESH3";
+		if (formationDrag.active && client->terrain && client->gameSet && FileExists(dragLinePath)
+			&& (peapos - formationDrag.start).sqlen2xz() > FORMATION_DRAG_MIN * FORMATION_DRAG_MIN) {
+			const Vector3 start(formationDrag.start.x, client->terrain->getHeightEx(formationDrag.start.x, formationDrag.start.z, true), formationDrag.start.z);
+			const Vector3 end(peapos.x, client->terrain->getHeightEx(peapos.x, peapos.z, true) + 0.5f, peapos.z);
+			const Vector3 dir = (end - start).normal();
+			const float shown = std::min((end - start).len3(), 5.0f);
+			// (across and up: perpendicular to the line, 4 times the prism's 3 cm, as wide as the
+			// original's line looks on screen)
+			Vector3 across = Vector3(0, 1, 0).cross(dir);
+			across = (across.sqlen3() < 1e-6f ? Vector3(1, 0, 0) : across.normal()) * 4.0f;
+			const Vector3 up = dir.cross(across).normal() * 4.0f;
+			Matrix m = Matrix::getIdentity();
+			m._11 = across.x; m._12 = across.y; m._13 = across.z;
+			m._21 = up.x; m._22 = up.y; m._23 = up.z;
+			m._31 = -dir.x * shown; m._32 = -dir.y * shown; m._33 = -dir.z * shown;
+			m._41 = start.x; m._42 = start.y; m._43 = start.z;
+			dragLineEntity.model = client->gameSet->modelCache.getModel(dragLinePath);
+			dragLineEntity.transform = m;
+			dragLineEntity.color = 0;
+			dragLineEntity.flags = SceneEntity::SEFLAG_NOLIGHTING;
+			if (dragLineEntity.model)
+				scene->add(&dragLineEntity);
 		}
 		// The rally points of the selected buildings (where their new units go), with the
 		// original's rally flag

@@ -1293,6 +1293,7 @@ struct ActionCreateFormation : Action {
 		}
 		center /= numUnits;
 		formation->setPosition(center);
+		FormationController::faceMembersWay(formation);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		formationType = gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].readPtr(gsf);
@@ -2004,18 +2005,8 @@ struct ActionInterpolateCameraToStoredPosition : Action {
 struct ActionDisbandFormation : Action {
 	std::unique_ptr<ObjectFinder> finder;
 	virtual void run(SrvScriptContext* ctx) override {
-		for (ServerGameObject* formation : finder->eval(ctx)) {
-			if (formation->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
-				ServerGameObject* parent = formation->getParent();
-				for (auto& [_, subType] : formation->children) {
-					auto subTypeCopy = subType;
-					for (auto* sub : subTypeCopy) {
-						((ServerGameObject*)sub)->setParent(parent);
-					}
-				}
-				formation->sendEvent(Tags::PDEVENT_ON_FORMATION_DISBAND);
-			}
-		}
+		for (ServerGameObject* formation : finder->eval(ctx))
+			FormationController::disband(formation);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		finder.reset(ReadFinder(gsf, gs));
