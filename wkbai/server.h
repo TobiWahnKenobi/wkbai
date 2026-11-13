@@ -24,6 +24,7 @@
 #include "FormationController.h"
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
+#include "Ministries.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -215,7 +216,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement;
+		std::string world, settings, environment, paths, history, movement, ai;
 	};
 	static SaveParts ReadSaveParts(const char* filename);
 	// the walks going on, as a save keeps them (the movement section), and back
@@ -312,6 +313,10 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
 	// target and go on to the next building, and the attacker is attacked back: "aiWar"
 	bool aiWar = true;
+	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
+	// while it is being built (Phase 16): "aiMinistries"
+	bool aiMinistries = false;
+	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone
 	int aiHumanFocus = 50;

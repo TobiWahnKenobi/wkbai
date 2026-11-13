@@ -2373,6 +2373,140 @@ void Test_SaveFormat()
 	fflush(stdout);
 }
 
+// The ministry AI's framework (needs the game data). The blackboard on its own: requests shared
+// out (emergencies first, then value x urgency x weight), a request asked again replaced, workers
+// held for their minimum time. Then 4 Peaks with two AI Generals and "aiMinistries": a government
+// per AI player, each department thinking at its rate (every 2 s: 30 times a minute), staggered;
+// reports from the game; nothing in the game changed by them (the same state as without); the
+// "ai" section through a save (the same text loaded and written again; the schedule going on).
+// Prints "MINISTRY <check> <0|1>" and "MINISTRY all <0|1>".
+static void MinistryGame(Server& server, bool ministries, uint32_t seed)
+{
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	g_settings["simSeed"] = seed;
+	QuickSkirmishMenu skirmish;
+	skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+	// two Elite Generals by name: an empty slot draws a random one with the menus' rand(), which
+	// differs from game to game
+	std::vector<QuickSkirmishMenu::Slot> slots(2);
+	const char* generals[2] = { "Belisar The Hammer Kingmaker", "Lady Elinor Kingmaker" };
+	for (int i = 0; i < 2; i++) { slots[i].type = QuickSkirmishMenu::Slot::AI; slots[i].general = generals[i]; }
+	skirmish.setSlots(slots);
+	skirmish.setSetting("aiMinistries", ministries ? 1 : 0);
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	skirmish.applySettings(server);
+}
+
+void Test_MinistryFramework()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("MINISTRY %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	{
+		Blackboard b;
+		b.weights[WAR] = 2.0f;
+		b.ask(ECONOMY, "peasants", 5, 10, 1, false, 0);     // priority 10
+		b.ask(WAR, "peasants", 4, 4, 2, false, 0);          // 16 (weight 2)
+		b.ask(BUILDERS, "peasants", 3, 1, 1, true, 0);      // an emergency
+		b.ask(RESEARCH, "peasants", 2, 10, 1, false, 0);    // 10, ties Economy: Economy first
+		const std::vector<Grant> g = b.allocate("peasants", 10);
+		check("allocate order", g.size() == 3 && g[0].to == BUILDERS && g[1].to == WAR && g[2].to == ECONOMY);
+		check("allocate amounts", g.size() == 3 && g[0].amount == 3 && g[1].amount == 4 && g[2].amount == 3);
+		const uint32_t id = b.find(WAR, "peasants")->id;
+		b.ask(WAR, "peasants", 1, 1, 1, false, 5);
+		check("ask again replaces", b.requests.size() == 4 && b.find(WAR, "peasants")->id == id && b.find(WAR, "peasants")->amount == 1);
+		b.withdraw(WAR, "peasants");
+		check("withdraw", b.requests.size() == 3 && !b.find(WAR, "peasants"));
+		check("assign", b.assign(100, ECONOMY, 10, 30, false) && b.assignedTo(100) == ECONOMY);
+		check("held for its time", !b.assign(100, WAR, 20, 30, false) && b.assignedTo(100) == ECONOMY);
+		check("taken in an emergency", b.assign(100, WAR, 21, 30, true) && b.assignedTo(100) == WAR);
+		check("free after its time", b.assign(100, ECONOMY, 52, 30, false) && b.assignedTo(100) == ECONOMY);
+	}
+
+	// the same game without and with the ministries: the same state (they only report so far)
+	std::map<uint32_t, std::string> without;
+	{
+		Server server;
+		MinistryGame(server, false, 99);
+		StepServer(server, 3000);
+		without = WorldState(server);
+		check("off: no governments", server.ministries.governments.empty());
+	}
+	{
+		// (the control: the same game twice without them)
+		Server server;
+		MinistryGame(server, false, 99);
+		StepServer(server, 3000);
+		const std::map<uint32_t, std::string> again = WorldState(server);
+		int differ = 0;
+		for (const auto& [id, s] : without)
+			if (!again.count(id) || again.at(id) != s)
+				differ++;
+		printf("MINISTRY control, the game twice without them: %d of %zu objects differ\n", differ, without.size());
+		check("control", differ == 0 && again.size() == without.size());
+	}
+	const auto dir = g_userPath / "saved" / "Save_Games";
+	const std::string file = PathToUtf8(dir / "wkbai ministry test.sav");
+	std::string savedAi;
+	std::map<uint32_t, uint64_t> thinksAt60;
+	{
+		Server server;
+		g_settings["aiTrace"] = 1;
+		MinistryGame(server, true, 99);
+		for (int i = 0; i < DEPT_COUNT; i++) { g_deptMs[i] = 0; g_deptThinks[i] = 0; }
+		StepServer(server, 1500);
+		check("saved", server.saveGame(file.c_str()));
+		savedAi = server.ministries.saveText();
+		StepServer(server, 1500);
+		printf("MINISTRY profile over 3000 steps: %s\n", Ministry::Ministries::profileText(3000).c_str());
+		check("governments", server.ministries.governments.size() == 2);
+		std::vector<float> firsts;
+		for (const auto& [id, g] : server.ministries.governments) {
+			for (const auto& d : g->departments) {
+				printf("MINISTRY player %u %s: %llu thinks, next at %.2f\n", id, DeptName(d->id()), (unsigned long long)d->thinks, d->nextAt);
+				check("thinks at its rate", d->thinks >= 29 && d->thinks <= 31);
+				thinksAt60[id * 16 + d->id()] = d->thinks;
+				firsts.push_back(std::fmod(d->nextAt, d->period()));
+			}
+			printf("MINISTRY player %u reports: peasants %.0f (%.0f without work), soldiers %.0f, buildings %.0f; food %.0f (%+.0f a minute), wood %.0f (%+.0f)\n", id,
+				g->board.get("labour.peasants"), g->board.get("labour.idle"), g->board.get("labour.soldiers"), g->board.get("labour.buildings"),
+				g->board.get("economy.food"), g->board.get("economy.food.income"), g->board.get("economy.wood"), g->board.get("economy.wood.income"));
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && g->board.reports.size() == 13);
+		}
+		std::sort(firsts.begin(), firsts.end());
+		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
+		const std::map<uint32_t, std::string> with = WorldState(server);
+		int differ = 0;
+		for (const auto& [id, s] : without)
+			if (!with.count(id) || with.at(id) != s)
+				differ++;
+		printf("MINISTRY the game with them: %d of %zu objects differ\n", differ, without.size());
+		check("the game unchanged", differ == 0 && with.size() == without.size());
+	}
+	g_settings["aiTrace"] = 0;
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\wkbai ministry test.sav");
+		check("loaded on", server.aiMinistries);
+		check("ai section loaded", server.ministries.saveText() == savedAi && !savedAi.empty());
+		StepServer(server, 1500);
+		bool same = true;
+		for (const auto& [id, g] : server.ministries.governments)
+			for (const auto& d : g->departments)
+				same &= thinksAt60[id * 16 + d->id()] == d->thinks;
+		check("schedule goes on", same && server.ministries.governments.size() == 2);
+	}
+	const std::string text = [&] { std::ifstream f(PathFromUtf8(file), std::ios::binary); return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()); }();
+	check("ai section in the file", text.find("\nSECTION ai 1 ") != std::string::npos && text.find("\nGOVERNMENT ") != std::string::npos);
+	printf("MINISTRY all %d\n", (int)all);
+	fflush(stdout);
+}
+
 void Test_Determinism()
 {
 	LoadBCP("data.bcp");
@@ -8748,6 +8882,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
 {Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
 {Test_SaveFormat, "Save format: wkbai's save file with sections, the original format, unknown sections, play on after loading"},
+{Test_MinistryFramework, "Ministry AI framework: the blackboard, departments at their rates and staggered, reports, nothing changed in the game, the ai section through a save"},
 };
 
 void LaunchTest()

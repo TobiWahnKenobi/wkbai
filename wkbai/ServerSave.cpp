@@ -94,7 +94,7 @@ namespace {
 	}
 
 	// The side files of an original-format save, or of an older wkbai save
-	const char* const SIDE_FILES[5] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt" };
+	const char* const SIDE_FILES[6] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -522,9 +522,10 @@ bool Server::saveGame(const char* filename)
 	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
 	//   id> <target> <path> <point> <tried>" each;
 	// - the unit history (UnitHistory).
-	std::string settings, environmentText, paths, history, movements;
+	std::string settings, environmentText, paths, history, movements, government;
 	if (!savingLevel) {
 		movements = movementSaveText();
+		government = ministries.saveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
 		if (environment.enabled() || es.skyWeather != 0 || es.skyCover != 45)
@@ -549,10 +550,10 @@ bool Server::saveGame(const char* filename)
 	const bool original = savingLevel || saveOriginalFormat || g_settings.value("saveFormat", std::string()) == "original";
 	if (original) {
 		// the original's format (text mode: its line breaks), with wkbai's state beside it in
-		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt and .movement.txt (none for a level)
+		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt and .ministries.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
-		const std::string* sides[5] = { &settings, &environmentText, &paths, &history, &movements };
-		for (int i = 0; i < 5; i++) {
+		const std::string* sides[6] = { &settings, &environmentText, &paths, &history, &movements, &government };
+		for (int i = 0; i < 6; i++) {
 			if (!sides[i]->empty())
 				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
 			else
@@ -582,6 +583,7 @@ bool Server::saveGame(const char* filename)
 	file.add("paths", 1, std::move(paths));
 	file.add("history", 1, std::move(history));
 	file.add("movement", 1, std::move(movements));
+	file.add("ai", 1, std::move(government));
 	const bool ok = writeFile(path, file.write(), false);
 	// an older save's side files of the same name would be stale: everything is in the file now
 	if (ok)
@@ -601,8 +603,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	if (!SaveFile::IsSaveFile(all)) {
 		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
 		parts.world = std::move(all);
-		std::string* sides[5] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement };
-		for (int i = 0; i < 5; i++)
+		std::string* sides[6] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai };
+		for (int i = 0; i < 6; i++)
 			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
 		return parts;
 	}
@@ -615,7 +617,7 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	struct Known { const char* name; std::string* text; };
 	const Known known[] = { { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
-		{ "movement", &parts.movement } };
+		{ "movement", &parts.movement }, { "ai", &parts.ai } };
 	for (const SaveSection& s : file.sections) {
 		const Known* k = nullptr;
 		for (const Known& candidate : known)

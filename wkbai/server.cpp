@@ -50,6 +50,9 @@ void Server::loadSaveGame(const char * filename)
 	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
 	cheatMode = false;
+	// the ministry AI as saved (its "ai" section), else none; on only when the save had it on
+	aiMinistries = false;
+	ministries.clear();
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
 	clearFogOfWar = false;
@@ -212,6 +215,9 @@ void Server::loadSaveGame(const char * filename)
 	// the walks going on as saved (after the attachment paths, which may start one)
 	if (!parts.movement.empty())
 		restoreMovements(parts.movement);
+	// the ministry AI's governments as saved
+	if (!parts.ai.empty())
+		ministries.loadText(*this, parts.ai);
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);
@@ -587,6 +593,8 @@ std::string Server::aiSettingsText() const
 	text += "teamReconnaissance=" + std::to_string((int)teamReconnaissance) + "\n";
 	if (cheatMode) // (only when on: the text of other games stays as it was)
 		text += "cheatMode=1\n";
+	if (aiMinistries) // (the same)
+		text += "aiMinistries=1\n";
 	// the players whose game is over (only when there are: the text of other games stays as it was)
 	for (const auto& [id, outcome] : finishedPlayers)
 		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
@@ -701,6 +709,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiWar") aiWar = v != 0;
+		else if (name == "aiMinistries") aiMinistries = v != 0;
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
@@ -3309,6 +3318,8 @@ void Server::simulate()
 			printf("SIMPROFILE   AI plans %.2f ms, Lua AIs %.2f ms (longest think %.1f ms), work orders %.2f ms, commissions %.2f ms per step; searches %.0f tiles, %.0f objects per step\n",
 				g_aiPlanMs / p.steps, g_aiLuaMs / p.steps, g_aiLuaMaxMs, g_aiWorkMs / p.steps, g_aiCommissionMs / p.steps, (double)g_nnTiles / p.steps, (double)g_nnObjects / p.steps);
 		g_nnTiles = g_nnObjects = 0;
+		if (p.lastPrint && aiMinistries)
+			printf("SIMPROFILE   ministries %s\n", Ministry::Ministries::profileText(p.steps).c_str());
 		g_aiPlanMs = g_aiLuaMs = g_aiLuaMaxMs = g_aiWorkMs = g_aiCommissionMs = 0.0;
 		g_pathfindingMs = 0.0;
 		g_pathfindingSearches = 0;
@@ -3436,6 +3447,12 @@ void Server::simulate()
 	if (getLevel()) {
 		SimTimer treeTimer(g_simProfile.tree);
 		processObjOrders(getLevel(), processObjOrders);
+	}
+	// the ministry AI: its departments due at this step, the players by id (not in the object
+	// tree's order, which a loaded game has in the save's order)
+	if (aiMinistries && getLevel()) {
+		SimTimer aiTimer(g_simProfile.ai);
+		ministries.update(*this);
 	}
 	g_simProfile.objects += toprocess.size();
 	for (const SrvGORef& ref : toprocess) {
