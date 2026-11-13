@@ -29,6 +29,8 @@ namespace AIUtil {
 	std::vector<ServerGameObject*> EnemiesNear(ServerGameObject* me, const Vector3& centre, float radius, bool towers);
 	// enemy buildings within the radius, nearest first
 	std::vector<ServerGameObject*> EnemyBuildingsNear(ServerGameObject* me, const Vector3& centre, float radius);
+	// enemy peasants within the radius, nearest first
+	std::vector<ServerGameObject*> EnemyPeasantsNear(ServerGameObject* me, const Vector3& centre, float radius);
 
 	void CollectUnits(ServerGameObject* o, std::vector<ServerGameObject*>& units);
 	void CollectArmies(ServerGameObject* player, std::vector<ServerGameObject*>& armies);

@@ -142,8 +142,11 @@ namespace {
 	void MakeDepartments(Government& g)
 	{
 		// (in Dept order)
+		g.departments.push_back(MakeStrategist());
 		g.departments.push_back(MakeEconomy());
 		g.departments.push_back(MakeLabour());
+		g.departments.push_back(MakeWar());
+		g.departments.push_back(MakeGenerals());
 		g.departments.push_back(MakeIntelligence());
 	}
 
@@ -363,6 +366,18 @@ std::string Ministries::saveText() const
 				+ Num(r.urgency) + " " + (r.emergency ? "1" : "0") + " " + Num(r.since) + "\n";
 		for (const auto& [worker, a] : b.assignments)
 			out += "ASSIGN " + std::to_string(worker) + " " + DeptName(a.dept) + " " + Num(a.since) + "\n";
+		// the missions: "MISSION <id> <kind> <state> <enemy> <target> <x> <z> <want> <goal> <progress>
+		// <max loss> <duration> <since> <state since> <start units> <kills then> <reinforced> <n> <unit ids...>"
+		out += "NEXT_MISSION " + std::to_string(g->nextMission) + "\n";
+		for (const Mission& m : g->missions) {
+			out += "MISSION " + std::to_string(m.id) + " " + Mission::KindName(m.kind) + " " + std::to_string(m.state) + " " + std::to_string(m.enemy) + " "
+				+ std::to_string(m.target) + " " + Num(m.tx) + " " + Num(m.tz) + " " + std::to_string(m.want) + " " + std::to_string(m.goal) + " "
+				+ std::to_string(m.progress) + " " + Num(m.maxLoss) + " " + Num(m.duration) + " " + Num(m.since) + " " + Num(m.stateSince) + " "
+				+ std::to_string(m.startUnits) + " " + std::to_string(m.kills0) + " " + (m.reinforced ? "1" : "0") + " " + std::to_string(m.units.size());
+			for (uint32_t u : m.units)
+				out += " " + std::to_string(u);
+			out += "\n";
+		}
 		for (const auto& d : g->departments) {
 			out += "DEPT " + std::string(DeptName(d->id())) + " " + Num(d->nextAt) + " " + std::to_string(d->thinks) + "\n";
 			std::vector<std::string> lines;
@@ -457,7 +472,39 @@ void Ministries::loadText(Server& server, const std::string& text)
 			if (Department* d = dept >= 0 ? g->department((uint8_t)dept) : nullptr)
 				d->load(*g, rest.substr(std::min(p + 1, rest.size())));
 		}
+		else if (tag == "NEXT_MISSION")
+			g->nextMission = (uint32_t)strtoul(rest.c_str(), nullptr, 10);
+		else if (tag == "MISSION") {
+			Mission m;
+			auto u32 = [&]() { return (uint32_t)strtoul(word(rest, p).c_str(), nullptr, 10); };
+			auto f32 = [&]() { return (float)atof(word(rest, p).c_str()); };
+			m.id = u32();
+			const std::string kind = word(rest, p);
+			for (int k = 0; k < Mission::KIND_COUNT; k++)
+				if (kind == Mission::KindName(k))
+					m.kind = (uint8_t)k;
+			m.state = (uint8_t)u32();
+			m.enemy = u32();
+			m.target = u32();
+			m.tx = f32(); m.tz = f32();
+			m.want = (int)u32(); m.goal = (int)u32(); m.progress = (int)u32();
+			m.maxLoss = f32(); m.duration = f32(); m.since = f32(); m.stateSince = f32();
+			m.startUnits = (int)u32(); m.kills0 = (int)u32();
+			m.reinforced = word(rest, p) == "1";
+			const uint32_t n = u32();
+			for (uint32_t i = 0; i < n && i < 10000; i++)
+				m.units.push_back(u32());
+			g->missions.push_back(std::move(m));
+		}
 	}
+	// the war layer leaves the missions' units alone from the first step
+	for (auto& [id, gov] : governments)
+		if (ServerGameObject* p = gov->player()) {
+			p->aiController.ministryWaves = true;
+			p->aiController.ministryUnits.clear();
+			for (const Mission& m : gov->missions)
+				p->aiController.ministryUnits.insert(m.units.begin(), m.units.end());
+		}
 }
 
 std::string Ministries::profileText(uint64_t steps)

@@ -2429,27 +2429,14 @@ void Test_MinistryFramework()
 		check("free after its time", b.assign(100, ECONOMY, 52, 30, false) && b.assignedTo(100) == ECONOMY);
 	}
 
-	// the same game without and with the ministries: the same state (they only report so far)
-	std::map<uint32_t, std::string> without;
+	// without them: no governments; with them, the same game twice (they act since step 5, so the
+	// game with them is another; it must be the same every time)
+	std::map<uint32_t, std::string> without; // (the reference: the first game with them)
 	{
 		Server server;
-		MinistryGame(server, false, 99);
+		MinistryGame(server, true, 99);
 		StepServer(server, 3000);
 		without = WorldState(server);
-		check("off: no governments", server.ministries.governments.empty());
-	}
-	{
-		// (the control: the same game twice without them)
-		Server server;
-		MinistryGame(server, false, 99);
-		StepServer(server, 3000);
-		const std::map<uint32_t, std::string> again = WorldState(server);
-		int differ = 0;
-		for (const auto& [id, s] : without)
-			if (!again.count(id) || again.at(id) != s)
-				differ++;
-		printf("MINISTRY control, the game twice without them: %d of %zu objects differ\n", differ, without.size());
-		check("control", differ == 0 && again.size() == without.size());
 	}
 	const auto dir = g_userPath / "saved" / "Save_Games";
 	const std::string file = PathToUtf8(dir / "wkbai ministry test.sav");
@@ -2470,9 +2457,10 @@ void Test_MinistryFramework()
 		for (const auto& [id, g] : server.ministries.governments) {
 			for (const auto& d : g->departments) {
 				printf("MINISTRY player %u %s: %llu thinks, next at %.2f\n", id, DeptName(d->id()), (unsigned long long)d->thinks, d->nextAt);
-				check("thinks at its rate", d->thinks >= 29 && d->thinks <= 31);
+				const int expected = (int)std::lround(60.0f / d->period());
+				check("thinks at its rate", (int)d->thinks >= expected - 1 && (int)d->thinks <= expected + 1);
 				thinksAt60[id * 16 + d->id()] = d->thinks;
-				firsts.push_back(std::fmod(d->nextAt, d->period()));
+				firsts.push_back(d->period() * 1000.0f + std::fmod(d->nextAt, d->period()));
 			}
 			printf("MINISTRY player %u reports: peasants %.0f (%.0f without work), soldiers %.0f, buildings %.0f; food %.0f (%+.0f a minute), wood %.0f (%+.0f)\n", id,
 				g->board.get("labour.peasants"), g->board.get("labour.idle"), g->board.get("labour.soldiers"), g->board.get("labour.buildings"),
@@ -2489,10 +2477,15 @@ void Test_MinistryFramework()
 		const std::map<uint32_t, std::string> with = WorldState(server);
 		int differ = 0;
 		for (const auto& [id, s] : without)
-			if (!with.count(id) || with.at(id) != s)
-				differ++;
-		printf("MINISTRY the game with them: %d of %zu objects differ\n", differ, without.size());
-		check("the game unchanged", differ == 0 && with.size() == without.size());
+			if (!with.count(id) || with.at(id) != s) {
+				if (++differ <= 5) {
+					ServerGameObject* o = server.findObject(id);
+					printf("MINISTRY differs %u %s:\n  first  %s\n  second %s\n", id, o ? o->blueprint->name.c_str() : "?", s.c_str(),
+						with.count(id) ? with.at(id).c_str() : "(none)");
+				}
+			}
+		printf("MINISTRY the same game twice with them: %d of %zu objects differ\n", differ, without.size());
+		check("the same game twice", differ == 0 && with.size() == without.size());
 	}
 	g_settings["aiTrace"] = 0;
 	{
@@ -2506,6 +2499,14 @@ void Test_MinistryFramework()
 			for (const auto& d : g->departments)
 				same &= thinksAt60[id * 16 + d->id()] == d->thinks;
 		check("schedule goes on", same && server.ministries.governments.size() == 2);
+	}
+	{
+		// (after the two compared games: a game before them leaves state behind that moved one
+		// peasant 1.5 cm in the game after the next, the RE repo's docs/engine/ministry-ai.md)
+		Server server;
+		MinistryGame(server, false, 99);
+		StepServer(server, 100);
+		check("off: no governments", server.ministries.governments.empty());
 	}
 	const std::string text = [&] { std::ifstream f(PathFromUtf8(file), std::ios::binary); return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()); }();
 	check("ai section in the file", text.find("\nSECTION ai 1 ") != std::string::npos && text.find("\nGOVERNMENT ") != std::string::npos);
@@ -2620,15 +2621,15 @@ void Test_MinistryIntelligence()
 		printf("INTEL the threat one think after the save: straight %.3f, loaded %.3f\n", threatStraight, threatAfterLoad);
 		check("threat map after loading", threatAfterLoad == threatStraight);
 	}
-	// the game the same with the ministries' Intelligence as without (it only reads)
+	// the same game twice with the ministries (Intelligence's threat map on a worker thread)
 	{
 		// (one server at a time: Server::instance)
 		std::map<uint32_t, std::string> a, b;
 		{
-			Server off;
-			MinistryGame(off, false, 5);
-			StepServer(off, 2000);
-			a = WorldState(off);
+			Server first;
+			MinistryGame(first, true, 5);
+			StepServer(first, 2000);
+			a = WorldState(first);
 		}
 		for (int i = 0; i < DEPT_COUNT; i++) { g_deptMs[i] = 0; g_deptThinks[i] = 0; }
 		{
@@ -2642,10 +2643,95 @@ void Test_MinistryIntelligence()
 			if (!b.count(id) || b.at(id) != s)
 				differ++;
 		printf("INTEL the game with Intelligence: %d of %zu objects differ\n", differ, a.size());
-		check("the game unchanged", differ == 0 && a.size() == b.size());
+		check("the same game twice", differ == 0 && a.size() == b.size());
 		printf("INTEL profile: %s\n", Ministry::Ministries::profileText(2000).c_str());
 	}
 	printf("INTEL all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The ministry AI's Strategist, War and Generals (needs the game data): 4 Peaks, Belisar the Hammer
+// against Lady Elinor, both with the ministries, 25 minutes. A scout goes out first; attacks are
+// given as missions; the war layer sends no waves of its own; missions end. Saved at 12 minutes
+// and loaded: the missions go on. Prints the missions every 2 minutes, "WAR <check> <0|1>" and
+// "WAR all <0|1>".
+void Test_MinistryWar()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("WAR %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	const int minutes = getenv("WKB_WAR_MINUTES") ? atoi(getenv("WKB_WAR_MINUTES")) : 25;
+	const std::string file = PathToUtf8(g_userPath / "saved" / "Save_Games" / "wkbai war test.sav");
+	std::map<uint32_t, size_t> missionsAtSave;
+	std::set<std::string> kindsGiven;
+	double given = 0, done = 0, failed = 0;
+	int warLayerWaves = 0;
+	g_settings["aiTrace"] = 1;
+	{
+		Server server;
+		MinistryGame(server, true, 99);
+		for (int m = 1; m <= minutes; m++) {
+			StepServer(server, 3000);
+			for (const auto& [id, g] : server.ministries.governments) {
+				for (const Mission& mi : g->missions)
+					kindsGiven.insert(Mission::KindName(mi.kind));
+				if (m % 2 == 0 || m == minutes) {
+					std::string list;
+					for (Mission& mi : g->missions)
+						list += " " + std::string(Mission::KindName(mi.kind)) + "#" + std::to_string(mi.id) + (mi.state == Mission::ASSEMBLING ? "(assembling " : "(out ")
+							+ std::to_string(g->alive(mi).size()) + "/" + std::to_string(mi.want) + ")";
+					printf("WAR t=%d min player %u: home %.0f (guard %.0f, %.0f free, power %.0f), in missions %.0f; given %.0f; enemy buildings known %.0f;%s\n", m, id,
+						g->board.get("war.home"), g->board.get("war.guard"), g->board.get("war.available"), g->board.get("war.availablePower"),
+						g->board.get("war.inMissions"), g->board.get("missions.given"), g->board.get("intel." + std::to_string(id == 1027 ? 1030 : 1027) + ".buildings"), list.c_str());
+				}
+			}
+			if (m == 12) {
+				check("saved", server.saveGame(file.c_str()));
+				for (const auto& [id, g] : server.ministries.governments)
+					missionsAtSave[id] = g->missions.size();
+			}
+		}
+		for (const auto& [id, g] : server.ministries.governments) {
+			given += g->board.get("missions.given");
+			for (const auto& [key, v] : g->board.reports) {
+				if (key.rfind("missions.", 0) == 0 && key.size() > 5 && key.compare(key.size() - 5, 5, ".done") == 0)
+					done += v;
+				if (key.rfind("missions.", 0) == 0 && key.size() > 7 && key.compare(key.size() - 7, 7, ".failed") == 0)
+					failed += v;
+			}
+			ServerGameObject* p = server.findObject(id);
+			warLayerWaves += p ? p->aiController.warWavesSent : 0;
+			printf("WAR player %u at the end: %d characters' kills by its missions; reports:", id, 0);
+			for (const auto& [key, v] : g->board.reports)
+				if (key.rfind("missions.", 0) == 0)
+					printf(" %s=%.0f", key.c_str(), v);
+			printf("\n");
+		}
+	}
+	std::string kinds;
+	for (const std::string& k : kindsGiven)
+		kinds += " " + k;
+	printf("WAR missions given %.0f (kinds:%s), done %.0f, failed %.0f; the war layer's own waves %d\n", given, kinds.c_str(), done, failed, warLayerWaves);
+	check("a scout first", kindsGiven.count("scout") != 0);
+	check("attacks given", kindsGiven.count("raze") || kindsGiven.count("palace") || kindsGiven.count("raid"));
+	check("missions end", done + failed > 0);
+	check("no waves from the war layer", warLayerWaves == 0);
+	g_settings["aiTrace"] = 0;
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\wkbai war test.sav");
+		bool same = server.ministries.governments.size() == missionsAtSave.size();
+		for (const auto& [id, g] : server.ministries.governments)
+			same &= missionsAtSave[id] == g->missions.size();
+		check("missions through a save", same);
+		StepServer(server, 6000);
+		check("going on after loading", server.ministries.governments.size() == 2);
+	}
+	printf("WAR all %d\n", (int)all);
 	fflush(stdout);
 }
 
@@ -9026,6 +9112,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SaveFormat, "Save format: wkbai's save file with sections, the original format, unknown sections, play on after loading"},
 {Test_MinistryFramework, "Ministry AI framework: the blackboard, departments at their rates and staggered, reports, nothing changed in the game, the ai section through a save"},
 {Test_MinistryIntelligence, "Ministry AI Intelligence: only what was seen (aiVision), the threat map, remembered and forgotten, through a save"},
+{Test_MinistryWar, "Ministry AI war: a scout first, attacks as missions, no waves from the war layer, missions through a save"},
 };
 
 void LaunchTest()

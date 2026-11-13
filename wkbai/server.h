@@ -319,6 +319,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// what the ministry AI knows of the others: 0 only what its units and buildings saw (the
 	// default), 1 everything (a difficulty setting): "aiVision"
 	int aiVision = 0;
+	// the most missions (Generals) a ministry AI runs at once: "aiGenerals"
+	int aiGenerals = 4;
 	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone

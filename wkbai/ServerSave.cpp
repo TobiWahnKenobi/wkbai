@@ -420,6 +420,8 @@ bool Server::saveGame(const char* filename)
 	w.depth--;
 	w.line("END_TIME_MANAGER_STATE");
 	w.line("");
+	// (the landscape's id is given when the game is loaded, Server::loadSaveGame: given here, the first
+	// save took an id, and every object made after it had another id than in the same game unsaved)
 	if (!landscapeId)
 		landscapeId = nextUniqueId++;
 	w.line("NEXT_UNIQUE_ID %u", nextUniqueId);

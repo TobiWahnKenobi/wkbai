@@ -361,6 +361,20 @@ namespace AIUtil {
 			return da != db ? da < db : a->id < b->id; });
 		return list;
 	}
+	std::vector<ServerGameObject*> EnemyPeasantsNear(ServerGameObject* me, const Vector3& centre, float radius)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		std::vector<ServerGameObject*> list;
+		NNSearch search;
+		search.start(Server::instance, centre, radius);
+		while (ServerGameObject* o = (ServerGameObject*)search.next())
+			if (me && !o->deleted && ::IsPeasant(o) && ::IsEnemy(me, o) && o->isInteractable() && (o->position - centre).sqlen2xz() <= radius * radius)
+				list.push_back(o);
+		std::sort(list.begin(), list.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			const float da = (a->position - centre).sqlen2xz(), db = (b->position - centre).sqlen2xz();
+			return da != db ? da < db : a->id < b->id; });
+		return list;
+	}
 	void CollectUnits(ServerGameObject* o, std::vector<ServerGameObject*>& units) { ::CollectUnits(o, units); }
 	void CollectArmies(ServerGameObject* player, std::vector<ServerGameObject*>& armies) { ::CollectArmies(player, armies); }
 	void CollectTowns(ServerGameObject* player, std::vector<ServerGameObject*>& towns) { ::CollectTowns(player, towns); }
@@ -926,6 +940,83 @@ int AIController::fighters() const
 //   reach of its building (walled in) attacks the nearest enemy building within 60 m, a wall or
 //   gate; the wave goes on to the nearest enemy building within 250 m when its target falls (else
 //   the next palace), and comes home when it has lost 60% and is outmatched two to one.
+// The war layer's pool (and the ministry AI War department's): the fighters at home and the
+// scripts' idle or not-fighting attackers near the base (see warUpdate); not those in `mine`'s
+// armies nor in `inWaves`
+std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves)
+{
+	Server* srv = Server::instance;
+	const GameSet* gs = srv->gameSet.get();
+	g_items.update(gs);
+	const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+	auto targetOf = [](ServerGameObject* u) -> ServerGameObject* {
+		Order* o = u->orderConfig.getCurrentOrder();
+		Task* t = o ? o->getCurrentTask() : nullptr;
+		ServerGameObject* tg = t ? t->target.get() : nullptr;
+		return tg && !tg->deleted ? tg : nullptr;
+	};
+	std::vector<ServerGameObject*> pool;
+	{
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		for (ServerGameObject* a : armies) {
+			std::vector<ServerGameObject*> units;
+			if (a->blueprint->name == "Kingmaker Defensive Army")
+				CollectUnits(a, units);
+			else if (a->blueprint->name == "Kingmaker Co-ordinator")
+				for (const auto& [type, children] : a->children)
+					for (CommonGameObject* c : children)
+						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							units.push_back((ServerGameObject*)c);
+			for (ServerGameObject* u : units)
+				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id) && !inWaves.count(u->id))
+					pool.push_back(u);
+		}
+	}
+	{
+		static const GameSet* of = nullptr;
+		static int myFort = -1;
+		if (of != gs) {
+			of = gs;
+			myFort = gs->associations.names.getIndex("My Fort");
+		}
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		std::vector<ServerGameObject*> loose;
+		for (ServerGameObject* a : armies)
+			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
+				CollectUnits(a, loose);
+		for (const auto& [type, children] : gameObj->children)
+			for (CommonGameObject* c : children)
+				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					loose.push_back((ServerGameObject*)c);
+		for (ServerGameObject* u : loose) {
+			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
+				continue;
+			const float d2 = (u->position - base).sqlen2xz();
+			const bool idle = !u->orderConfig.getCurrentOrder();
+			ServerGameObject* tg = idle ? nullptr : targetOf(u);
+			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
+			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
+				pool.push_back(u);
+		}
+	}
+	return pool;
+}
+
+std::vector<ServerGameObject*> AIController::freeFighters(const Vector3& base)
+{
+	std::set<uint32_t> mine, inWaves(ministryUnits.begin(), ministryUnits.end());
+	for (const WarDefence& d : warDefences)
+		mine.insert(d.army);
+	for (const WarWave& w : warWaves) {
+		mine.insert(w.army);
+		inWaves.insert(w.members.begin(), w.members.end());
+	}
+	mine.insert(ministryArmies.begin(), ministryArmies.end());
+	return warPool(base, mine, inWaves);
+}
+
 void AIController::warUpdate()
 {
 	Server* srv = Server::instance;
@@ -969,58 +1060,16 @@ void AIController::warUpdate()
 		mine.insert(w.army);
 		inWaves.insert(w.members.begin(), w.members.end());
 	}
+	// and the ministry AI's missions (their armies and units are the Generals')
+	mine.insert(ministryArmies.begin(), ministryArmies.end());
+	inWaves.insert(ministryUnits.begin(), ministryUnits.end());
 
 	// the pool: soldiers at home; the scripts' attackers still within 300 m of the palace and not
 	// fighting (the scripts sent each soldier out alone: at 20 minutes the AIs' homes were empty
 	// and the pool held 0-6), and their idle ones within 1 km; soldiers the scripts handed to the
 	// player likewise. Not the archers garrisoned in towers and forts (handed to the player too),
 	// nor those walking to a fort to garrison it (an army with a "My Fort").
-	std::vector<ServerGameObject*> pool;
-	{
-		std::vector<ServerGameObject*> armies;
-		CollectArmies(gameObj, armies);
-		for (ServerGameObject* a : armies) {
-			std::vector<ServerGameObject*> units;
-			if (a->blueprint->name == "Kingmaker Defensive Army")
-				CollectUnits(a, units);
-			else if (a->blueprint->name == "Kingmaker Co-ordinator")
-				for (const auto& [type, children] : a->children)
-					for (CommonGameObject* c : children)
-						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-							units.push_back((ServerGameObject*)c);
-			for (ServerGameObject* u : units)
-				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id))
-					pool.push_back(u);
-		}
-	}
-	{
-		static const GameSet* of = nullptr;
-		static int myFort = -1;
-		if (of != gs) {
-			of = gs;
-			myFort = gs->associations.names.getIndex("My Fort");
-		}
-		std::vector<ServerGameObject*> armies;
-		CollectArmies(gameObj, armies);
-		std::vector<ServerGameObject*> loose;
-		for (ServerGameObject* a : armies)
-			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
-				CollectUnits(a, loose);
-		for (const auto& [type, children] : gameObj->children)
-			for (CommonGameObject* c : children)
-				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-					loose.push_back((ServerGameObject*)c);
-		for (ServerGameObject* u : loose) {
-			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
-				continue;
-			const float d2 = (u->position - base).sqlen2xz();
-			const bool idle = !u->orderConfig.getCurrentOrder();
-			ServerGameObject* tg = idle ? nullptr : targetOf(u);
-			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
-			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
-				pool.push_back(u);
-		}
-	}
+	std::vector<ServerGameObject*> pool = warPool(base, mine, inWaves);
 
 	// ---- Defence ----
 	std::vector<ServerGameObject*> towns;
@@ -1275,6 +1324,9 @@ void AIController::warUpdate()
 	}
 
 	// ---- A new wave ----
+	// (not with the ministry AI: its strategist and Generals send the attacks, as missions)
+	if (ministryWaves)
+		return;
 	const int popItem = gs->items.names.getIndex("Total Population Count");
 	const float popLimit = popItem >= 0 ? gameObj->getItem(popItem) : 200.0f;
 	const int cap = srv->aiAttackWave > 0 ? srv->aiAttackWave : 50;

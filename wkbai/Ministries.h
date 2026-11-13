@@ -101,6 +101,36 @@ namespace Ministry {
 		std::vector<const Sighting*> of(uint32_t player) const;
 	};
 
+	// The AI General's character (the strategist's), each 0..1: from the Kingmaker personality's
+	// items ("Aggression", "Treachery", ...), or an editor-made General's 14 stats
+	struct Personality {
+		float aggression = 0.5f, impatience = 0.5f, treachery = 0.5f, sneakiness = 0.5f;
+		float raiding = 0.5f, siege = 0.5f, combined = 0.5f;
+		float pride = 0.5f, greed = 0.5f, friendliness = 0.5f;
+		bool read = false;
+	};
+
+	// A military mission (the strategist gives it, a General carries it out): a goal, a budget, an
+	// abort condition
+	struct Mission {
+		enum Kind : uint8_t { SCOUT, RAZE, PALACE, RAID, KILL, DECOY, KIND_COUNT };
+		enum State : uint8_t { ASSEMBLING, OUT, RETURNING };
+		static const char* KindName(int k);
+		uint32_t id = 0;
+		uint8_t kind = RAZE, state = ASSEMBLING;
+		uint32_t enemy = 0, target = 0; // the enemy player, the object aimed at (0: a place)
+		float tx = 0.0f, tz = 0.0f; // where
+		int want = 0; // units asked for
+		int goal = 0; // buildings to raze, peasants or units to kill
+		int progress = 0; // buildings razed so far
+		float maxLoss = 0.6f; // the losses (share of the units) at which it may give up
+		float duration = 0.0f; // a decoy's time out there
+		float since = 0.0f, stateSince = 0.0f;
+		int startUnits = 0, kills0 = 0;
+		bool reinforced = false;
+		std::vector<uint32_t> units; // its units, the dead too (their kills count to its goal)
+	};
+
 	struct Government;
 
 	struct Department {
@@ -121,6 +151,11 @@ namespace Ministry {
 		uint32_t playerId = 0;
 		Blackboard board;
 		Picture picture;
+		Personality personality;
+		std::vector<Mission> missions;
+		uint32_t nextMission = 1;
+		// the mission's units alive now
+		std::vector<ServerGameObject*> alive(Mission& m) const;
 		std::vector<std::unique_ptr<Department>> departments; // in Dept order
 		bool trace = false;
 
