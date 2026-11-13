@@ -298,7 +298,8 @@ cbuffer SunBuffer
 	                  // w: the ray-traced reflections are drawn (RenderSettings::rtReflections)
 	float4 WeatherParams; // wkbai's weather (Environment.h): snow cover, wetness, water level change (m), ice; all 0 without
 	float4 WeatherParams2; // dryness, the rivers' mud, their clock, their speed factor (0: none, the clock is GrassParams.z)
-	float4 WeatherParams3; // the sea's ice: how far out from the coasts, tiles (SeaIceReach; 0: none); the snow's and the ice's quality (0 Low, 1 Medium, 2 High)
+	float4 WeatherParams3; // the sea's ice: how far out from the coasts, tiles (SeaIceReach; 0: none); the snow's and the ice's quality (0 Low, 1 Medium, 2 High); the glints' light (GlintLight)
+	float4 WeatherParams4; // the glints' colour (the sun's by its height, warm low down; the moon's cool), at most 1; w: set
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -429,9 +430,16 @@ float3 SnowColour(float3 pos, float share)
 {
 	if (WeatherParams3.y < 0.5)
 		return float3(1.30, 1.33, 1.40);
+	// (a little less bright than Low's, so the sun's sheen and glints show on it: a white at its
+	// brightest left them nothing to add, the play test of 2026-11-13)
 	float drift = WeatherNoise(pos.xz * 0.05 + 11.3);
-	return lerp(float3(1.12, 1.20, 1.36), float3(1.34, 1.36, 1.40), saturate(share * 0.7 + drift * 0.5));
+	return lerp(float3(1.00, 1.06, 1.18), float3(1.15, 1.17, 1.21), saturate(share * 0.7 + drift * 0.5));
 }
+
+// how strong the light that glints is: the sun's by day, the moon's at night, as much as it is lit
+// and up (a new moon: none, a full moon high: all); 1 without the weather
+float GlintLight() { return WeatherParams3.w; }
+float3 GlintTint() { return WeatherParams4.w > 0 ? WeatherParams4.rgb : float3(1, 1, 1); }
 
 // the rivers' current (wkbai's floods): how much faster, and the clock that runs with it
 float FloodFlow() { return WeatherParams2.w > 0 ? WeatherParams2.w : 1; }
@@ -488,25 +496,36 @@ float IceValue(float2 p)
 	float c = IceHash(i + int2(0, 1)) / 4294967295.0, d = IceHash(i + int2(1, 1)) / 4294967295.0;
 	return lerp(lerp(a, b, t.x), lerp(c, d, t.x), t.y);
 }
-// High: the snow's glints, the sun caught by single crystals: a facet per cell of the snow
-// (the cells grow with the distance in steps of two, so a glint never shrinks under a pixel and
-// they stay put as the camera moves), one in about twelve turned to mirror the sun
+// The sun on the snow (Medium and High): a broad sheen, brighter looking towards the sun and
+// along its mirror direction, a little darker looking away from it (snow scatters forwards); High
+// also glints, the sun caught by single crystals: a facet per cell of a twentieth of a unit (the
+// cells grow with the distance in steps of two, never under about half a pixel, and stay put as
+// the camera moves), one in five, turned only a little from the snow's slope, so the glints
+// gather where the sun's mirror lies (turned anyhow, they had lit up the same everywhere, the
+// play test of 2026-11-13). Light added (or taken) on the lit ground, times the sun's light there.
 float SnowGlint(float3 pos, float3 n)
 {
-	if (WeatherParams3.y < 1.5 || WeatherParams.x <= 0)
+	if (WeatherParams3.y < 0.5 || WeatherParams.x <= 0)
 		return 0;
 	float s = SnowShare(pos, n);
-	if (s <= 0.2)
+	if (s <= 0.05)
 		return 0;
-	float dist = distance(pos, FogCamera.xyz);
-	float size = 0.1 * exp2(ceil(log2(max(dist * 0.0012 / 0.1, 1))));
-	uint h = IceHash((int2)floor(pos.xz / size)) ;
-	if ((h >> 24) < 236)
-		return 0;
-	float3 facet = normalize(n + (float3(h & 255, (h >> 8) & 255, (h >> 16) & 255) / 255.0 - 0.5) * 1.4);
+	float3 l = normalize(SunDirection);
 	float3 v = normalize(FogCamera.xyz - pos);
-	float sp = pow(saturate(dot(facet, normalize(v + SunDirection))), 300);
-	return sp * s * 5 * saturate(SunDirection.y * 4) * saturate(1 - dist / 700);
+	float up = saturate(l.y * 4) * GlintLight();
+	float3 r = reflect(-v, n);
+	float sheen = (pow(saturate(dot(r, l)), 6) * 0.22 + pow(saturate(dot(-v, l)), 4) * 0.12 - 0.06) * s;
+	if (WeatherParams3.y < 1.5)
+		return sheen * up;
+	float dist = distance(pos, FogCamera.xyz);
+	float size = 0.05 * exp2(ceil(log2(max(dist * 0.0006 / 0.05, 1))));
+	uint h = IceHash((int2)floor(pos.xz / size));
+	float glint = 0;
+	if ((h >> 24) >= 204) {
+		float3 facet = normalize(n + (float3(h & 255, (h >> 8) & 255, (h >> 16) & 255) / 255.0 - 0.5) * 0.6);
+		glint = pow(saturate(dot(facet, normalize(v + l))), 120) * 4 * saturate(1 - dist / 900);
+	}
+	return (sheen + glint * s) * up;
 }
 float SeaIceEdge(float2 xz, float reach)
 {
@@ -1052,64 +1071,6 @@ float3 SkyAlong(float3 r)
 // projected; it hits where it passes behind the depth in the frame (by less than its step).
 // Medium and up refine a hit by halving the last step. rgb: what is seen, a: how sure (fading
 // towards the screen's edges and the ray's end, none for the sky or off the screen).
-// The ice over the water (share of it: IceShare). Near the shore (coast: the distance to the land,
-// tiles) and in drifts the snow lies on it, so the frozen water goes over into the snowy land
-// without a line (the play test of 2026-11-12). Its look by RenderSettings::iceQuality
-// (WeatherParams3.z): Low a plain grey-blue with faint cracks, as at first; Medium lit by the sun
-// and the sky, mirroring the sky a little, with darker cracks; High also a glossy highlight of
-// the sun, frost glittering on it, bubbles frozen in.
-float4 IceOver(float4 c, float3 world, float share, float coast)
-{
-	if (share <= 0)
-		return c;
-	float q = WeatherParams3.z;
-	// the snow on it: along the shore (over its first tile or so, a wandering edge) and in drifts
-	float edge = coast + (WeatherNoise(world.xz * 0.21) - 0.5) * 1.2;
-	float onIce = WeatherParams.x * max(smoothstep(1.5, 0.3, edge), saturate((WeatherNoise(world.xz * 0.06 + 7.1) - 0.58) * 3) * 0.7);
-	float3 ice;
-	if (q < 0.5) {
-		float cracks = WeatherNoise(world.xz * 0.6) * 0.15;
-		ice = lerp(float3(0.80, 0.87, 0.93) - cracks, float3(1.0, 1.02, 1.06), onIce);
-		return float4(lerp(c.rgb, GradeColour(ice), share), lerp(c.a, 1, share));
-	}
-	float3 v = normalize(FogCamera.xyz - world);
-	float dist = distance(world, FogCamera.xyz);
-	// cracks: thin dark lines where a noise crosses its middle (fading out with the distance)
-	float cn = WeatherNoise(world.xz * 0.35) * 0.6 + WeatherNoise(world.xz * 1.1 + 3.3) * 0.4;
-	float crack = (1 - smoothstep(0.0, 0.035, abs(cn - 0.5))) * saturate(1 - dist / 300);
-	float3 albedo = lerp(float3(0.58, 0.70, 0.80), float3(0.72, 0.82, 0.90), WeatherNoise(world.xz * 0.09));
-	albedo *= 1 - 0.35 * crack;
-	float3 n = float3(0, 1, 0);
-	if (q > 1.5) {
-		// bubbles frozen in: pale specks
-		float b = WeatherNoise(world.xz * 2.7 + 1.9);
-		albedo = lerp(albedo, float3(0.86, 0.92, 0.97), smoothstep(0.82, 0.9, b) * 0.6 * saturate(1 - dist / 120));
-		// a gentle unevenness for the highlight
-		n = normalize(float3((WeatherNoise(world.xz * 0.5) - 0.5) * 0.12, 1, (WeatherNoise(world.xz * 0.5 + 5.1) - 0.5) * 0.12));
-	}
-	float3 snow = SnowColour(world, onIce);
-	albedo = lerp(albedo, snow, onIce);
-	float cloud = CloudLight(world);
-	float3 l = normalize(SunDirection);
-	float sun = saturate(l.y) * cloud;
-	float3 lit = albedo * (0.42 + 0.75 * sun);
-	// the sky in it (smooth ice mirrors; snow does not)
-	float3 r = reflect(-v, n);
-	float fresnel = (0.03 + 0.97 * pow(1 - saturate(dot(n, v)), 5)) * (1 - onIce);
-	lit = lerp(lit, SkyAlong(r) * lerp(1, cloud, 0.5), fresnel * 0.6);
-	if (q > 1.5) {
-		lit += pow(saturate(dot(r, l)), 220) * 1.2 * cloud * (1 - onIce);
-		// frost glittering: a facet per small cell, as the snow's glints
-		float size = 0.12 * exp2(ceil(log2(max(dist * 0.0012 / 0.12, 1))));
-		uint h = IceHash((int2)floor(world.xz / size) + int2(911, 37));
-		if ((h >> 24) > 238) {
-			float3 facet = normalize(float3(((h & 255) / 255.0 - 0.5) * 1.2, 1, (((h >> 8) & 255) / 255.0 - 0.5) * 1.2));
-			lit += pow(saturate(dot(facet, normalize(v + l))), 260) * 3 * cloud * saturate(l.y * 4) * saturate(1 - dist / 500);
-		}
-	}
-	return float4(lerp(c.rgb, GradeColour(lit), share), lerp(c.a, 1, share));
-}
-
 float4 ScreenReflection(float4 svpos, float3 world, float3 r)
 {
 	if (ReflectParams.x == 0 || WaterParams.w == 0 || r.y < -0.2)
@@ -1191,6 +1152,76 @@ float4 WaterReflection(float4 svpos, float3 world, float3 r)
 	return float4(lerp(seen.a > 0 ? seen.rgb : rt.rgb, rt.rgb, rt.a), max(seen.a, rt.a));
 }
 
+// The ice over the water (share of it: IceShare). Near the shore (coast: the distance to the land,
+// tiles) and in drifts the snow lies on it, so the frozen water goes over into the snowy land
+// without a line (the play test of 2026-11-12). Its look by RenderSettings::iceQuality
+// (WeatherParams3.z): Low a plain grey-blue with faint cracks, as at first; Medium lit by the sun
+// and the sky, mirroring the sky, its surface uneven (the ripple map, frozen) with darker cracks;
+// High also the cracks and bubbles inside it, a little under the surface (shifted with the view,
+// a parallax), the frame mirrored in it (the water's screen-space ray), a glossy highlight of the
+// sun and frost glittering. (Medium and High: a flat surface had looked painted on, the play test
+// of 2026-11-13.)
+float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
+{
+	if (share <= 0)
+		return c;
+	float q = WeatherParams3.z;
+	// the snow on it: along the shore (over its first tile or so, a wandering edge) and in drifts
+	float edge = coast + (WeatherNoise(world.xz * 0.21) - 0.5) * 1.2;
+	float onIce = WeatherParams.x * max(smoothstep(1.5, 0.3, edge), saturate((WeatherNoise(world.xz * 0.06 + 7.1) - 0.58) * 3) * 0.7);
+	if (q < 0.5) {
+		float cracks = WeatherNoise(world.xz * 0.6) * 0.15;
+		float3 ice = lerp(float3(0.80, 0.87, 0.93) - cracks, float3(1.0, 1.02, 1.06), onIce);
+		return float4(lerp(c.rgb, GradeColour(ice), share), lerp(c.a, 1, share));
+	}
+	float3 v = normalize(FogCamera.xyz - world);
+	float dist = distance(world, FogCamera.xyz);
+	float near = saturate(1 - dist / 400);
+	// the surface: the ripple map frozen, at two sizes, gentle
+	float2 s1 = normalTexture.Sample(cloudSampler, world.xz * 0.045).xy - 0.5;
+	float2 s2 = normalTexture.Sample(cloudSampler, world.xz * 0.17 + 0.37).yx - 0.5;
+	float2 slope = (s1 * 0.35 + s2 * 0.18) * near;
+	float3 n = normalize(float3(slope.x, 1, slope.y));
+	// what lies in it: cracks and (High) bubbles, a little under the surface
+	float2 inner = world.xz;
+	if (q > 1.5)
+		inner -= v.xz / max(v.y, 0.15) * 0.3;
+	float cn = WeatherNoise(inner * 0.35) * 0.6 + WeatherNoise(inner * 1.1 + 3.3) * 0.4;
+	float crack = (1 - smoothstep(0.0, 0.035, abs(cn - 0.5))) * saturate(1 - dist / 300);
+	float3 albedo = lerp(float3(0.52, 0.64, 0.76), float3(0.70, 0.80, 0.89), WeatherNoise(world.xz * 0.09));
+	albedo *= 1 - 0.35 * crack;
+	if (q > 1.5) {
+		float b = WeatherNoise(inner * 2.7 + 1.9);
+		albedo = lerp(albedo, float3(0.86, 0.92, 0.97), smoothstep(0.82, 0.9, b) * 0.6 * saturate(1 - dist / 120));
+	}
+	albedo = lerp(albedo, SnowColour(world, onIce), onIce);
+	float cloud = CloudLight(world);
+	float3 l = normalize(SunDirection);
+	float sun = saturate(dot(n, l)) * cloud;
+	float3 lit = albedo * (0.42 + 0.75 * sun);
+	// the sky in it and (High) the frame along the mirror ray (smooth ice mirrors; snow does not)
+	float3 r = reflect(-v, n);
+	float fresnel = (0.03 + 0.97 * pow(1 - saturate(dot(n, v)), 5)) * (1 - onIce);
+	float3 mirror = SkyAlong(r) * lerp(1, cloud, 0.5);
+	if (q > 1.5) {
+		float4 seen = ScreenReflection(svpos, world, r);
+		mirror = lerp(mirror, seen.rgb, seen.a);
+		fresnel = max(fresnel, 0.12 * seen.a * (1 - onIce));
+	}
+	lit = lerp(lit, mirror, saturate(fresnel * 0.7));
+	if (q > 1.5) {
+		lit += pow(saturate(dot(r, l)), 220) * 1.2 * cloud * (1 - onIce) * GlintLight() * GlintTint();
+		// frost glittering: a facet per small cell, as the snow's glints
+		float size = 0.06 * exp2(ceil(log2(max(dist * 0.0006 / 0.06, 1))));
+		uint h = IceHash((int2)floor(world.xz / size) + int2(911, 37));
+		if ((h >> 24) > 220) {
+			float3 facet = normalize(n + float3(((h & 255) / 255.0 - 0.5) * 0.6, 0, (((h >> 8) & 255) / 255.0 - 0.5) * 0.6));
+			lit += pow(saturate(dot(facet, normalize(v + l))), 160) * 3 * cloud * saturate(l.y * 4) * saturate(1 - dist / 600) * GlintLight() * GlintTint();
+		}
+	}
+	return float4(lerp(c.rgb, GradeColour(lit), share), lerp(c.a, 1, share));
+}
+
 // The far sea: High water's open sea as it looks from afar (PS_LakeHigh, deep, its waves smaller
 // than a pixel): the deep body with a little of the water texture, lit by the sun through the
 // surface, under the sky along the mirror ray by Fresnel, the sun's highlight. Its normal: a few
@@ -1225,10 +1256,10 @@ float3 FarSeaColour(float3 world, float4 svpos, bool trace, float4 seenIn, float
 	// 2026-11-12)
 	float4 seen = trace ? ScreenReflection(svpos, world, r) : seenIn;
 	sky = lerp(sky, seen.rgb, seen.a);
-	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud * (1 - seen.a * 0.7);
+	float glint = pow(saturate(dot(r, l)), 160) * 0.45 * cloud * (1 - seen.a * 0.7) * GlintLight();
 	// (a flood's mud on the rivers out there too: they had stayed blue, the play test of 2026-11-12)
 	body = MuddyWater(body, fresh);
-	return lerp(body, sky, fresnel * lerp(0.8, 1.0, far) * (1 - 0.6 * WeatherParams2.y * fresh)) + glint;
+	return lerp(body, sky, fresnel * lerp(0.8, 1.0, far) * (1 - 0.6 * WeatherParams2.y * fresh)) + glint * GlintTint();
 }
 // Extend map: how far into the near ring's last part a world position is (its water goes over
 // into the far sea's look there, its ground into the far rings' plain colours, so they meet
@@ -1267,7 +1298,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// transparent, fogged. No ripples, glint, sky or depth.
 		float3 otex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 		float olight = max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World);
-		return IceOver(float4(GradeColour(lerp(otex * olight, FogTint(input.World), input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth)), input.World, MapIceShare(input.World), MapCoast(input.World));
+		return IceOver(float4(GradeColour(lerp(otex * olight, FogTint(input.World), input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth)), input.World, MapIceShare(input.World), MapCoast(input.World), input.Pos);
 	}
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
@@ -1310,7 +1341,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		glint += pow(saturate(dot(r, SunDirection)), 600) * 1.5;
 	// the ray-traced shadows on the sun's glint and its light on the water (a third left)
 	const float rtSun = RtSunMask(input.Pos);
-	glint *= rtSun;
+	glint *= rtSun * GlintLight();
 	float fresnel = 0.02 + 0.98 * pow(1 - saturate(dot(n, v)), 5);
 	float3 sky = FogColor.rgb;
 	float foam = 0;
@@ -1335,7 +1366,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		tex *= lerp(float3(1, 1, 1), float3(0.8, 0.9, 1.0), (1 - river) * saturate(input.Depth / 10) * WaterFlowParams.x);
 	}
 	tex = MuddyWater(tex, FreshShare(river, input.World));
-	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint;
+	float3 c = lerp(lerp(tex, sky, fresnel * 0.6), float3(0.92, 0.95, 0.96), foam) + glint * GlintTint();
 	float alpha = saturate(lerp(0.3, 0.8, saturate(input.Depth / 3)) + fresnel * 0.3 + glint + foam);
 	alpha = lerp(alpha, max(alpha, 0.92), WeatherParams2.y * FreshShare(river, input.World)); // muddy water is opaque
 	float4 seen = float4(0, 0, 0, 0);
@@ -1353,8 +1384,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		alpha = lerp(alpha, 1, toFar);
 	}
 	if (WaterSkyUp.w != 0)
-		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World));
-	return IceOver(float4(GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World));
+		return IceOver(WithRefraction(input.Pos, n, input.Depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World), input.Pos);
+	return IceOver(float4(GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World), input.Pos);
 }
 
 // The rivers' ripples at (s, d): s the distance to the mouth along the channel, d the distance
@@ -1468,7 +1499,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float3 sky = SkyAlong(rr) * lerp(1, cloud, 0.5);
 	// the sun: a broad highlight off the waves, many small sparkles off the ripples
 	float sw = saturate(dot(reflect(-v, wn), l)), sr = saturate(dot(r, l));
-	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * lerp(2.2, 0.5, river)) * cloud;
+	float glint = (pow(sw, 160) * 0.45 + pow(sr, 1400) * lerp(2.2, 0.5, river)) * cloud * GlintLight();
 	// foam: streaks on the highest crests, broken up by value noise in three octaves, its
 	// coordinates warped by a slower noise and drifting with the wind: nothing repeats (the
 	// ripple map had, every 24 units, and its shapes showed again and again over a wide sea)
@@ -1535,7 +1566,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float mirror = fresnel * 0.8;
 	float3 reflected = lerp(sky, seen.rgb, seen.a);
 	mirror = lerp(mirror, max(mirror, 0.4), seen.a);
-	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7);
+	float3 c = lerp(lerp(body, reflected, mirror), float3(0.9, 0.95, 0.96) * lerp(1, cloud, 0.5), foam) + glint * (1 - foam) * (1 - seen.a * 0.7) * GlintTint();
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * FreshShare(river, input.World)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
@@ -1545,7 +1576,7 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 		c = lerp(c, FarSeaColour(input.World, input.Pos, false, seen, FreshShare(river, input.World)), toFar);
 		alpha = lerp(alpha, 1, toFar);
 	}
-	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World));
+	return IceOver(WithRefraction(input.Pos, n, depth, GradeColour(lerp(c, FogTint(input.World), input.Fog)), alpha), input.World, MapIceShare(input.World), MapCoast(input.World), input.Pos);
 }
 
 // Grass (RenderSettings::grass): one instance per blade, three triangles from SV_VertexID (a
@@ -1736,7 +1767,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 		if (GIRegion.w != 0)
 			lc.rgb += CastLightOn(input.Color.rgb * tex.rgb, DirectWindowLight(input.FragPos, n));
 		lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(wn), vis);
-		lc.rgb += SnowGlint(input.FragPos, n) * CloudLight(input.FragPos) * RtSunMask(input.Pos) * lerp(SkyOccLight.z, 1, lit) * FarShadow;
+		lc.rgb += SnowGlint(input.FragPos, n) * GlintTint() * CloudLight(input.FragPos) * RtSunMask(input.Pos) * lerp(SkyOccLight.z, 1, lit) * FarShadow;
 		float4 gc = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 		return float4(GradeColour(gc.rgb), gc.a);
 	}
@@ -1774,7 +1805,7 @@ float4 ShadeTerrain(VS_OUTPUT input, float4 tex, float3 nrm, float3 tangent, flo
 	float3 light = (lum * BlobLight(input.FragPos)).xxx + FireLight(input.FragPos, normalize(input.Norm));
 	float4 lc = float4(light, 1) * input.Color * tex;
 	lc.rgb = TerrainFresnel(lc.rgb, input.FragPos, normalize(input.Norm), 1);
-	lc.rgb += SnowGlint(input.FragPos, normalize(input.Norm)) * CloudLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * FarShadow;
+	lc.rgb += SnowGlint(input.FragPos, normalize(input.Norm)) * GlintTint() * CloudLight(input.FragPos) * lerp(ShadowParams.y, 1, RtSunMask(input.Pos)) * FarShadow;
 	float4 c = lerp(lc, float4(FogTint(input.FragPos), FogColor.a), input.Fog);
 	return float4(GradeColour(c.rgb), c.a);
 }
@@ -1897,7 +1928,7 @@ float4 PS_FarSea(VS_OUTPUT input) : SV_Target
 	}
 	float4 o = float4(GradeColour(lerp(c, FogTint(world), input.Fog)), 1);
 	// its ice: the rivers' and lakes' whole, the sea's out from the coasts
-	return IceOver(o, world, IceShare(world, 1 - fresh, input.Tangent.y) * (1 - k), input.Tangent.y);
+	return IceOver(o, world, IceShare(world, 1 - fresh, input.Tangent.y) * (1 - k), input.Tangent.y, input.Pos);
 }
 )---";
 
@@ -1912,6 +1943,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<ITexture> heightMap; // the vertex heights, for the tessellated terrain's surface
 	RefCntAutoPtr<ITexture> nearColourMap; // Extend map's colour field (FarTerrain::nearColour)
 	RefCntAutoPtr<ITexture> nearHorizonMap[2]; // and the copy's horizons (FarTerrain::nearHorizon)
+	bool nearHorizonReal = false; // (not the 1 x 1 stand-in)
 	bool tessellation = false; // the GPU can tessellate
 	RefCntAutoPtr<IPipelineState> tessPipeline;
 	// the depth pre-pass's (renderDepth, renderWaterDepth); depthOnly while it draws; prepared
@@ -2266,7 +2298,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 912;
+	cbDesc.Size = 928;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -2419,6 +2451,7 @@ void DiligentEnhancedTerrainRenderer::init()
 			TextureSubResData hsub{ haveH ? (const void*)far.nearHorizon[k].data() : (const void*)&none, (Uint64)hdesc.Width * 4 };
 			TextureData hdata{ &hsub, 1 };
 			device->CreateTexture(hdesc, &hdata, &_impl->nearHorizonMap[k]);
+			_impl->nearHorizonReal = haveH;
 			if (_impl->nearHorizonMap[k])
 				_impl->signature->GetStaticVariableByName(SHADER_TYPE_PIXEL, k ? "nearHorizonB" : "nearHorizonA")->Set(_impl->nearHorizonMap[k]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 			far.nearHorizon[k] = {};
@@ -3169,6 +3202,19 @@ void DiligentEnhancedTerrainRenderer::render()
 	// after the depth pre-pass (renderDepth): the frame prepared, the ground only shaded
 	const bool depthOnly = _impl->depthOnly, prepared = _impl->prepared && !depthOnly;
 	_impl->prepared = false;
+	// Extend map: the copy drawn follows the map's sun and fog by the clock, and its ice (copied
+	// once when it was built, the sun's glints on the water and snow had come from where the sun
+	// stood then, the play test of 2026-11-13)
+	// (and its terrain shadows for the objects: DiligentEnhancedSceneRenderer)
+	for (int k = 0; k < 2; k++)
+		dgfx->shadows.farHorizon[k] = extended && _impl->nearHorizonReal && _impl->nearHorizonMap[k]
+			? _impl->nearHorizonMap[k]->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE) : nullptr;
+	if (extended && mapTerrain && terrain != mapTerrain) {
+		terrain->sunVector = mapTerrain->sunVector;
+		terrain->sunColor = mapTerrain->sunColor;
+		terrain->fogColor = mapTerrain->fogColor;
+		terrain->waterFrozen = mapTerrain->waterFrozen;
+	}
 
 	gfx->BeginMapDrawing();
 
@@ -3361,7 +3407,24 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[0] = g_environment.active ? SeaIceReach(g_environment.severity, g_environment.ice) : 0.0f;
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
-	weather3[3] = 0.0f;
+	// (the moon's direct light at night: its lit part, how high it is; a new moon none)
+	{
+		// the glints' colour: the sun's light colour (warmer low down), the moon's cool white at night
+		float* weather4 = (float*)(sbdata + 912);
+		float sunCol[3] = { 1, 1, 1 };
+		if (g_environment.active) {
+			const float m = std::max({ g_environment.sun.colour[0], g_environment.sun.colour[1], g_environment.sun.colour[2], 1e-3f });
+			const float day = std::clamp(g_environment.sun.daylight, 0.0f, 1.0f);
+			const float moon[3] = { 0.78f, 0.86f, 1.0f };
+			for (int i = 0; i < 3; i++)
+				sunCol[i] = moon[i] + (g_environment.sun.colour[i] / m - moon[i]) * day;
+		}
+		weather4[0] = sunCol[0];
+		weather4[1] = sunCol[1];
+		weather4[2] = sunCol[2];
+		weather4[3] = 1.0f;
+	}
+	weather3[3] = g_environment.active ? std::clamp(std::max(g_environment.sun.daylight, g_environment.sun.moonLight), 0.0f, 1.0f) : 1.0f;
 	float* weather2 = (float*)(sbdata + 880);
 	weather2[0] = g_environment.active ? g_environment.dryness : 0.0f;
 	weather2[1] = g_environment.active ? g_environment.mud : 0.0f;

@@ -102,7 +102,9 @@ namespace {
 		return 0;
 	}
 	
-	Vector3 CalcStampdownPos(const Vector3 &raystart, const Vector3 &raydir, const Terrain &terrain)
+	// onWater: the ray stops on the water's surface (a click on water aims where it is seen, for
+	// boats and on ice; the play test of 2026-11-13); else on the ground under it (the editor's)
+	Vector3 CalcStampdownPos(const Vector3 &raystart, const Vector3 &raydir, const Terrain &terrain, bool onWater = true)
 	{
 		float lv = 4;
 
@@ -111,12 +113,13 @@ namespace {
 		float h;
 		const float farzvalue = 250.0f;
 		int nlp = static_cast<int>(farzvalue * 1.5f / lv);
-		int m = (ptt.y < terrain.getHeight(ptt.x, ptt.z)) ? 0 : 1;
+		// (on the water's surface or the ice: a click on it had aimed at the bed under it)
+		int m = (ptt.y < terrain.getHeightEx(ptt.x, ptt.z, onWater)) ? 0 : 1;
 
 		for (int i = 0; i < nlp; i++) {
 			ptt += vta;
 			if (!InMap(ptt, terrain)) continue;
-			h = terrain.getHeight(ptt.x, ptt.z);
+			h = terrain.getHeightEx(ptt.x, ptt.z, onWater);
 
 			if (ptt.y == h)
 				break;
@@ -4939,7 +4942,7 @@ void ClientInterface::iter()
 		//Vector3 peapos = client->camera.position + getRay(client->camera).normal() * 16;
 		peapos = Vector3(0, 0, 0);
 		if(client->terrain)
-			peapos = CalcStampdownPos(client->camera.position, rayDirection, *client->terrain);
+			peapos = CalcStampdownPos(client->camera.position, rayDirection, *client->terrain, !editorOn);
 		SceneEntity test;
 		if (stampdownBlueprint && stampdownPlayer) {
 			//test.model = client->gameSet->modelCache.getModel("Warrior Kings Game Set\\Characters\\Peasant\\Male\\Peasant1.MESH3");

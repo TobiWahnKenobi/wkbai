@@ -86,6 +86,10 @@ cbuffer FogBuffer
 	float4 FogSunColour;  // the sun's disc through the air (rgb, the sky's tone), its glow's strength
 	float4 FogHorizon[32]; // the sky's colour 2 degrees up, by the bearing (atan2(z, x), 32 steps from 0)
 	float4 FogSky[50];     // the live sky for reflections (SkyReflect): 16 bearings at 4, 22, 50 degrees up, the zenith (w: 1 on), the ground below
+	float4 FarGround; // Extend map's ground beyond its last ring (w: on)
+	float4 FarLand;
+	float4 FarArea;   // the playable area's width and depth, how far outside it the near ring ends, the far clip
+	float4 FarSun;    // the sun's direction (unit)
 };
 
 // Ultra's cast light from the lamps, fires and windows (DirectWindowLight) under the night's
@@ -179,6 +183,30 @@ float3 SkyReflect(float3 d)
 // shadows' (on the sun's light; 1 sunlit) and the ambient occlusion (on the ambient light; half
 // size, four bilinear taps as the composite took them; 1 open)
 Texture2D<float> lightRtMask;
+// Extend map's terrain shadows (the terrain renderer's horizons over the copy's vertices; white:
+// none): the objects stand in the far land's shadows as the ground does (a tree had stayed in
+// the low sun while the ground round it lay in a hill's shadow, the play test of 2026-11-13)
+Texture2D farHorizonA;
+Texture2D farHorizonB;
+float TerrainHorizonShadow(float3 world)
+{
+	if (FarGround.w == 0 || FarArea.z <= 0)
+		return 1;
+	float e = FarArea.z / 5;
+	float2 g = world.xz / 5 + e;
+	float2 uv = (g + 0.5) / (FarArea.xy / 5 + 2 * e + 1);
+	float4 a = farHorizonA.SampleLevel(inpSampler, uv, 0) * 255, b = farHorizonB.SampleLevel(inpSampler, uv, 0) * 255;
+	if (a.x > 254.5)
+		return 1;
+	float az = atan2(FarSun.z, FarSun.x) / 0.78539816;
+	az = az < 0 ? az + 8 : az;
+	uint i0 = (uint)floor(az) & 7, i1 = (i0 + 1) & 7;
+	float t = frac(az);
+	float h[8] = { a.x, a.y, a.z, a.w, b.x, b.y, b.z, b.w };
+	float horizon = lerp(h[i0], h[i1], t) / 254.0 * 1.5707963;
+	float sun = asin(clamp(FarSun.y, -1, 1));
+	return smoothstep(horizon - 0.035, horizon + 0.035, sun);
+}
 Texture2D<float> lightAoMask;
 SamplerState lightMaskSampler;
 float RtSunMask(float4 pos)
@@ -541,7 +569,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 {
 	// the depth pre-pass's masks: the ray-traced shadow on the sun's light, the occlusion on the
 	// ambient (the vertex-lit paths, sun and ambient in one colour: the shadow keeps 55%)
-	const float rtSun = RtSunMask(input.Pos), occ = AoMask(input.Pos);
+	const float rtSun = RtSunMask(input.Pos) * TerrainHorizonShadow(input.WorldPos), occ = AoMask(input.Pos);
 	if (dot(input.Norm, input.Norm) == 0)
 		return input.Color.rgb * albedo * lerp(0.55, 1, rtSun) * occ;
 	if (MeshLighting.z == 0)
@@ -1753,6 +1781,8 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "giLightGrid", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		// the depth pre-pass's masks (DiligentGfx::FinishLightingPrepass), the frame's
 		{ SHADER_TYPE_PIXEL, "lightRtMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "farHorizonA", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "farHorizonB", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
@@ -2191,6 +2221,9 @@ void DiligentEnhancedSceneRenderer::render()
 	// the depth pre-pass's masks of this frame, or white (unread: FogBuffer.LightMasks is 0)
 	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "lightRtMask"))
 		v->Set(shadows.lightRtMask ? shadows.lightRtMask : dgfx->GetTextureView(nullptr));
+	for (int k = 0; k < 2; k++)
+		if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, k ? "farHorizonB" : "farHorizonA"))
+			v->Set(shadows.farHorizon[k] ? shadows.farHorizon[k] : dgfx->GetTextureView(nullptr));
 	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "lightAoMask"))
 		v->Set(shadows.lightAo ? shadows.lightAo : dgfx->GetTextureView(nullptr));
 
