@@ -2,10 +2,12 @@
 
 #include <cstdint>
 #include <map>
+#include <vector>
+
+#include "util/vecmat.h"
 
 struct ServerGameObject;
 struct Server;
-struct Vector3;
 
 enum class FormationType {
 	Line,
@@ -45,11 +47,22 @@ public:
 	static void flushDisbands();
 	// a new formation faces the way its members face (their mean heading), not the map's north
 	static void faceMembersWay(ServerGameObject* formation);
+	// form up again where it stands (CREATE_FORMATION of a formation: "Reform Yourself", the Halt
+	// command's)
+	void requestFormUp() { reformWanted = true; }
 private:
 	// standing without an order: turn to face an attack from the flank or rear
 	void faceAttackers();
 	// give every member the nearest free place of the layout at the formation's position and heading
 	void formUp();
+	// The formation's own track (WKB.exe keeps one path, F+0x300, that every member travels at its
+	// row's distance behind the leader): the point s metres along it from the front row's centre,
+	// ahead on the path still to walk (s > 0) or back along where it has been (s < 0)
+	Vector3 trackPoint(float s) const;
+	// a straight track behind the formation along its heading, as long as `length` (a march starts)
+	void seedTrail(float length);
+	// note where the front row's centre is now (marching), keeping `length` metres of the track
+	void recordTrail(float length);
 	ServerGameObject* formation;
 	std::map<uint32_t, int> slotOf; // member id -> place index
 	int slotCount = 0; // places in the layout (more than members after deaths)
@@ -60,4 +73,10 @@ private:
 	bool wasMarching = false;
 	bool released = false;
 	const void* layoutOf = nullptr; // the formation type (blueprint) the places were given for
+	std::vector<Vector3> trail; // where the front row's centre was, oldest first, 1 m apart
+	bool trailActive = false; // the trail belongs to the march going on
+	bool reformWanted = false;
+	bool distorted = false; // members fight out of place, the others make room (WKB.exe F+0x2ee)
+	bool wheelingIn = false; // the last stretch: turning into the order's end facing
+	float wheelHeading = 0.0f;
 };
