@@ -103,6 +103,7 @@ void Test_FarLandCache()
 	FarLandCache::ResetStats();
 	const Built cold = build(0);
 	FarLandCache::Stats s = stats("cold");
+	const double coldBuildMs = s.buildMs;
 	check(s.misses == 1 && s.hits == 0 && s.stored == 1, "a cold load misses and stores");
 	check(CountEntries(dir) == 1, "one entry in the folder");
 	check(Same(cold, ref), "the cold load's far land is the reference's, byte for byte");
@@ -114,7 +115,8 @@ void Test_FarLandCache()
 	check(s.hits == 1 && s.misses == 0 && s.stored == 0, "a warm load hits and makes nothing");
 	check(Same(warm, ref), "the warm load's far land is the reference's, byte for byte");
 	printf("  times: reference %.0f ms, cold %.0f ms, warm %.0f ms\n", ref.ms, cold.ms, warm.ms);
-	check(warm.ms < cold.ms, "the warm load is quicker");
+	// (the far part's own times: the whole build's are mostly the near ring's on a small map)
+	check(s.loadMs < coldBuildMs * 0.5, "loading the far land is quicker than making it (" + std::to_string((int)s.loadMs) + " ms against " + std::to_string((int)coldBuildMs) + " ms)");
 
 	// another quality setting: its own entry, both kept
 	FarLandCache::ResetStats();
