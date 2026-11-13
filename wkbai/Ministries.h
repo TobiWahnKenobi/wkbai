@@ -131,6 +131,16 @@ namespace Ministry {
 		std::vector<uint32_t> units; // its units, the dead too (their kills count to its goal)
 	};
 
+	// What another player did to this one and for it (Diplomacy's grudges and gratitude): the value
+	// lost to it (units and buildings at their cost, peasants weighing more) and received from it
+	// (tributes), both fading (a half-life of about 10 game minutes, shorter for a friendly General)
+	struct Ledger {
+		double lost = 0.0, received = 0.0;
+		float at = 0.0f; // the game time the values are for
+		int betrayals = 0; // losses while it was trusted
+		int kills = 0; // units and buildings lost to it
+	};
+
 	struct Government;
 
 	struct Department {
@@ -154,6 +164,10 @@ namespace Ministry {
 		Personality personality;
 		std::vector<Mission> missions;
 		uint32_t nextMission = 1;
+		std::map<uint32_t, Ledger> ledger; // by the other player's id
+		// the ledger faded to now; the trust in the other player (below 0: a grudge)
+		Ledger& ledgerOf(uint32_t other);
+		float trust(uint32_t other);
 		// the mission's units alive now
 		std::vector<ServerGameObject*> alive(Mission& m) const;
 		std::vector<std::unique_ptr<Department>> departments; // in Dept order
@@ -181,6 +195,10 @@ namespace Ministry {
 		// not yet having one, then the departments due, the players by id
 		void update(Server& server);
 		void clear() { governments.clear(); }
+		// the ledgers: a unit or building of victimPlayer's killed by killerPlayer's
+		// (UnitHistory::terminated), a tribute (Server::giveTribute)
+		void onLoss(ServerGameObject* victimPlayer, ServerGameObject* killerPlayer, const ServerGameObject* victim);
+		void onGift(ServerGameObject* from, ServerGameObject* to, float amount);
 		// the save's "ai" section, and back (after the world: the players exist)
 		std::string saveText() const;
 		void loadText(Server& server, const std::string& text);

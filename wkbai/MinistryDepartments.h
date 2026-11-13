@@ -11,6 +11,7 @@ namespace Ministry {
 	std::unique_ptr<Department> MakeStrategist();     // MinistryWar.cpp
 	std::unique_ptr<Department> MakeWar();
 	std::unique_ptr<Department> MakeGenerals();
+	std::unique_ptr<Department> MakeDiplomacy();      // MinistryDiplomacy.cpp
 	// the General's character from its items (MinistryWar.cpp)
 	void ReadPersonality(Government& g);
 	// MinistryTactics.cpp: the units' abilities by the rule table (cooldowns: unit id << 8 | rule ->

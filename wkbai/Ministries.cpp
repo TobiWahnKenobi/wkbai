@@ -148,6 +148,7 @@ namespace {
 		g.departments.push_back(MakeWar());
 		g.departments.push_back(MakeGenerals());
 		g.departments.push_back(MakeIntelligence());
+		g.departments.push_back(MakeDiplomacy());
 	}
 
 	// "aiTrace" / WKB_TRACE_AI: 0 off, 1 every AI, else a player's id

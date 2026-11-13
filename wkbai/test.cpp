@@ -2382,7 +2382,7 @@ void Test_SaveFormat()
 // reports from the game; nothing in the game changed by them (the same state as without); the
 // "ai" section through a save (the same text loaded and written again; the schedule going on).
 // Prints "MINISTRY <check> <0|1>" and "MINISTRY all <0|1>".
-static void MinistryGame(Server& server, bool ministries, uint32_t seed)
+static void MinistryGame(Server& server, bool ministries, uint32_t seed, bool diplomacy = false)
 {
 	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
 	g_settings["simSeed"] = seed;
@@ -2395,6 +2395,8 @@ static void MinistryGame(Server& server, bool ministries, uint32_t seed)
 	for (int i = 0; i < 2; i++) { slots[i].type = QuickSkirmishMenu::Slot::AI; slots[i].general = generals[i]; }
 	skirmish.setSlots(slots);
 	skirmish.setSetting("aiMinistries", ministries ? 1 : 0);
+	if (diplomacy)
+		skirmish.setSetting("allowDiplomacy", 1);
 	server.timeManager.unpause();
 	server.timeManager.stepMs = 20;
 	skirmish.applySettings(server);
@@ -2892,6 +2894,99 @@ void Test_MinistryTactics()
 	}
 	g_settings["aiTrace"] = 0;
 	printf("TACTICS all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The ministry AI's Diplomacy (needs the game data): 4 Peaks, Belisar (1027) and Lady Elinor
+// (1030), diplomacy allowed. A tribute of 2000 food from Belisar: Elinor's gratitude, and her
+// trust fades by half in its half-life; she offers him peace. Neutral, then units of hers lost to
+// him: a grudge (counting double while she trusted him), and she declares war. A real kill: a
+// Pikeman of his kills a peasant of hers: in her ledger. The ledger through a save.
+// Prints "DIPLO <check> <0|1>" and "DIPLO all <0|1>".
+void Test_MinistryDiplomacy()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("DIPLO %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	g_settings["aiTrace"] = 1030;
+	Server server;
+	MinistryGame(server, true, 99, true);
+	StepServer(server, 500);
+	ServerGameObject* belisar = server.findObject(1027), * elinor = server.findObject(1030);
+	Government* g = server.ministries.governments.count(1030) ? server.ministries.governments[1030].get() : nullptr;
+	const GameSet* gs = server.gameSet.get();
+	const int allied = gs->diplomaticStatuses.names.getIndex("Allied"), neutral = gs->diplomaticStatuses.names.getIndex("Neutral"),
+		enemy = gs->diplomaticStatuses.names.getIndex("Enemy");
+	check("set up", belisar && elinor && g && neutral >= 0 && enemy >= 0);
+	if (!belisar || !elinor || !g) { printf("DIPLO all 0\n"); return; }
+	const int disallow = gs->items.names.getIndex("Disallow Diplomacy");
+	printf("DIPLO Disallow Diplomacy %.0f; the status between them %s\n", disallow >= 0 ? server.getLevel()->getItem(disallow) : -1.0f,
+		gs->diplomaticStatuses.names.getString(server.getDiplomaticStatus(belisar, elinor)).c_str());
+	// gratitude
+	const int food = gs->items.names.getIndex("Food");
+	belisar->setItem(food, 5000);
+	server.giveTribute(belisar, elinor, food, 2000);
+	const float t0 = g->trust(1027);
+	printf("DIPLO after a tribute of 2000: trust %.0f\n", t0);
+	check("gratitude", t0 > 1000.0f);
+	StepServer(server, 700); // 14 s: a Diplomacy think or more
+	const int offer = server.getDiplomaticOffer(elinor, belisar);
+	const int status1 = server.getDiplomaticStatus(belisar, elinor);
+	printf("DIPLO 14 s later: her offer %d, the status %s\n", offer, gs->diplomaticStatuses.names.getString(status1).c_str());
+	check("offers peace", offer == neutral || status1 == neutral || status1 == allied);
+	// the fading on its own: a ledger of a player that doesn't exist (no fighting changes it)
+	const float halfLife = 600.0f * (1.5f - g->personality.friendliness);
+	g->ledgerOf(99999).received = 1000.0;
+	const float before = g->trust(99999);
+	StepServer(server, (int)(halfLife * 50.0f));
+	const float after = g->trust(99999);
+	printf("DIPLO trust %.0f, one half-life (%.0f s) later %.0f\n", before, halfLife, after);
+	check("fades by half", std::abs(after - before * 0.5f) < before * 0.05f);
+	// a grudge
+	server.setDiplomaticStatus(elinor, belisar, neutral, elinor);
+	const GameObjBlueprint* peasantBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const GameObjBlueprint* pikeBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
+	ServerGameObject* palace = AIUtil::Palace(elinor);
+	ServerGameObject* victim = server.spawnObject(peasantBp, elinor, palace->position + Vector3(30, 0, 0), Vector3(0, 0, 0));
+	for (int i = 0; i < 40; i++)
+		server.ministries.onLoss(elinor, belisar, victim);
+	const Ledger& l = g->ledgerOf(1027);
+	printf("DIPLO 40 peasants lost to him: trust %.0f, grudge %.0f, %d betrayals\n", g->trust(1027), l.lost, l.betrayals);
+	check("a grudge", g->trust(1027) < 0.0f);
+	check("betrayal while trusted", l.betrayals >= 1);
+	StepServer(server, 3600); // 72 s: past her last act's minute and a think
+	const int status2 = server.getDiplomaticStatus(belisar, elinor);
+	printf("DIPLO then the status %s\n", gs->diplomaticStatuses.names.getString(status2).c_str());
+	check("declares war", status2 == enemy);
+	check("the Strategist sees the grudge", g->board.get("trust.1027") < 0.0);
+	// a real kill
+	const int killsBefore = g->ledgerOf(1027).kills;
+	ServerGameObject* pike = server.spawnObject(pikeBp, belisar, victim->position + Vector3(3, 0, 0), Vector3(0, 0, 0));
+	if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+		victim->setItem(hp, 1.0f); // (one blow)
+	victim->disableCount++; // (it stays: no running away)
+	AIUtil::Attack({ pike }, victim);
+	for (int i = 0; i < 60 && server.findObject(victim->id) && !server.findObject(victim->id)->deleted; i++)
+		StepServer(server, 50);
+	printf("DIPLO the Pikeman's kill: victim gone %d, kills in her ledger %d -> %d\n", (int)!server.findObject(victim->id), killsBefore, g->ledgerOf(1027).kills);
+	check("a real kill in the ledger", g->ledgerOf(1027).kills > killsBefore);
+	// through a save
+	const std::string file = PathToUtf8(g_userPath / "saved" / "Save_Games" / "wkbai diplomacy test.sav");
+	check("saved", server.saveGame(file.c_str()));
+	const double lost = g->ledgerOf(1027).lost;
+	g_settings["aiTrace"] = 0;
+	{
+		Server again;
+		again.loadSaveGame("Save_Games\\wkbai diplomacy test.sav");
+		Government* h = again.ministries.governments.count(1030) ? again.ministries.governments[1030].get() : nullptr;
+		check("the ledger through a save", h && std::abs(h->ledgerOf(1027).lost - lost) < 0.01);
+	}
+	(void)allied;
+	printf("DIPLO all %d\n", (int)all);
 	fflush(stdout);
 }
 
@@ -9274,6 +9369,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryIntelligence, "Ministry AI Intelligence: only what was seen (aiVision), the threat map, remembered and forgotten, through a save"},
 {Test_MinistryWar, "Ministry AI war: a scout first, attacks as missions, no waves from the war layer, missions through a save"},
 {Test_MinistryTactics, "Ministry AI tactics: training by counters, abilities (heal, curse) by the rule table"},
+{Test_MinistryDiplomacy, "Ministry AI diplomacy: gratitude for a tribute, peace, a grudge and war, a real kill in the ledger, through a save"},
 };
 
 void LaunchTest()
