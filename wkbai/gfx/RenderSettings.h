@@ -67,6 +67,11 @@ struct RenderSettings {
 	// that keep their cover out over the near and far land, bluer where thin), 2 High (and the
 	// sun glinting in its crystals)
 	int snowQuality = 1;
+	// Extend map's far land kept on disk (FarLandCache.h; the user folder's farlandcache): made
+	// again only when the map, the generator or a setting that changes it changed; at most this
+	// many MB (every quality setting of the maps played, least recently used dropped first)
+	bool farLandCache = true;
+	int farLandCacheMB = 4096;
 	// the ice's look: 0 Low (a plain grey-blue), 1 Medium (lit, mirroring the sky, cracks),
 	// 2 High (and a glossy highlight, frost glittering, bubbles frozen in)
 	int iceQuality = 1;

@@ -68,6 +68,8 @@ void RenderSettings::load()
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
 	snowQuality = std::clamp(g_settings.value<int>("snowQuality", def.snowQuality), 0, 2);
+	farLandCache = g_settings.value<bool>("farLandCache", def.farLandCache);
+	farLandCacheMB = std::clamp(g_settings.value<int>("farLandCacheMB", def.farLandCacheMB), 64, 65536);
 	iceQuality = std::clamp(g_settings.value<int>("iceQuality", def.iceQuality), 0, 2);
 	rainbows = g_settings.value<bool>("rainbows", def.rainbows);
 	heatShimmer = g_settings.value<bool>("heatShimmer", def.heatShimmer);
@@ -177,6 +179,8 @@ void RenderSettings::save()
 	g_settings["fireLights"] = fireLights;
 	g_settings["weatherEffects"] = weatherEffects;
 	g_settings["snowQuality"] = snowQuality;
+	g_settings["farLandCache"] = farLandCache;
+	g_settings["farLandCacheMB"] = farLandCacheMB;
 	g_settings["iceQuality"] = iceQuality;
 	g_settings["rainbows"] = rainbows;
 	g_settings["heatShimmer"] = heatShimmer;

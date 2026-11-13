@@ -5,6 +5,7 @@
 #include "terrain.h"
 #include "WaterDesign.h"
 #include "Environment.h"
+#include "FarLandCache.h"
 #include "gfx/bitmap.h"
 
 #include <algorithm>
@@ -67,6 +68,10 @@ uint64_t Mix(uint64_t x)
 	x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
 	return x ^ (x >> 31);
 }
+// The generator's version: raised with every change to what BuildExtendedTerrain's far part makes
+// (FarLandCache: entries of another version are misses)
+constexpr uint32_t EXTEND_MAP_ALGORITHM = 1;
+
 uint64_t HashAt(uint64_t seed, int x, int z, int salt)
 {
 	return Mix(seed ^ Mix(((uint64_t)(uint32_t)x << 32) ^ (uint32_t)z ^ ((uint64_t)salt << 56)));
@@ -2023,7 +2028,55 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	// rivers carry on as water along their courses, the sea is its flat surface; colours from the
 	// map's materials by the same zones. Each ring's outer edge follows the next ring's inner edge,
 	// and the copy's outer edge ring 0's, so no crack opens between them.
-	if (far && farRings > 0) {
+	// The far part from the cache when it was made before for the same map, generator and settings
+	// (FarLandCache.h): its key, everything it depends on
+	FarLandCache::Key farKey;
+	bool farCached = false;
+	const auto farStart = std::chrono::steady_clock::now();
+	if (far && farRings > 0 && FarLandCache::Enabled()) {
+		FarLandCache::Hasher k;
+		k.value(FarLandCache::FORMAT_VERSION);
+		k.value(EXTEND_MAP_ALGORITHM);
+		k.text(__DATE__ " " __TIME__); // (any rebuild of this file: a change of the generator)
+		k.value(FarLandCache::Salt());
+		k.value(n);
+		k.value(farRings);
+		k.value(detail);
+		k.value(shadows);
+		k.value(seed);
+		k.value(map.width);
+		k.value(map.height);
+		k.value(map.edge);
+		k.array(map.vertices);
+		k.array(map.heightFraction);
+		for (int z = 0; z < (int)map.height; z++)
+			for (int x = 0; x < (int)map.width; x++) {
+				const Terrain::Tile* t = map.getTile(x, z);
+				const int tex = t && t->texture ? t->texture->id : -1;
+				k.value(tex);
+				k.value((uint8_t)(t ? t->rot | (t->xflip << 2) | (t->zflip << 3) | (t->fullOfWater << 4) : 0));
+				k.value(t ? t->waterLevel : 0.0f);
+				if (map.waterDesign)
+					k.value(map.waterDesign->at(x, z));
+			}
+		for (const Vector3& l : map.lakes)
+			k.value(l);
+		k.value(M);
+		for (int i = 0; i < M; i++) {
+			k.value(mats.colour[i]);
+			k.value(mats.kinds[i]);
+		}
+		k.array(height);
+		farKey = { k.a, k.b };
+		farCached = FarLandCache::Load(farKey, *far, height);
+		if (farCached) {
+			const FarLandCache::Stats st = FarLandCache::GetStats();
+			printf("Extend map: far land from the cache (%016llx): %.0f ms, %.0f ms saved so far\n",
+				(unsigned long long)farKey.a, st.loadMs, st.savedMs);
+			lap("far land from the cache");
+		}
+	}
+	if (far && farRings > 0 && !farCached) {
 		far->vertices.clear();
 		far->indices.clear();
 		far->blocks.clear();
@@ -2801,6 +2854,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		lap("far vertices");
 		printf("Extend map: %d far rings to %.0f units beyond the near ring: %zu vertices, %zu triangles, %zu blocks\n",
 			farRings, far->reach, far->vertices.size(), far->indices.size() / 3, far->blocks.size());
+		if (FarLandCache::Enabled()) {
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - farStart).count();
+			FarLandCache::Store(farKey, *far, height, ms);
+			printf("Extend map: far land not in the cache (%016llx): made in %.0f ms and kept\n", (unsigned long long)farKey.a, ms);
+		}
 	}
 
 	const size_t NV = (size_t)EW * EH;
