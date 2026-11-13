@@ -131,6 +131,7 @@ namespace {
 		float lastAttack = -1000.0f;
 
 		void think(Government& g) override {
+			if (MinOff() & 64) return;
 			ServerGameObject* me = g.player();
 			if (!me)
 				return;
@@ -301,10 +302,11 @@ namespace {
 			if (!me)
 				return;
 			AIController& ai = me->aiController;
-			ai.ministryWaves = true;
-			ai.ministryTraining = true;
+			ai.ministryWaves = !(MinOff() & 128);
+			ai.ministryTraining = !(MinOff() & 32);
 			// the surplus into fighters, by counters
-			TrainByCounters(g);
+			if (!(MinOff() & 16))
+				TrainByCounters(g);
 			// the missions' units, for the war layer to leave alone
 			ai.ministryUnits.clear();
 			for (Mission& m : g.missions)

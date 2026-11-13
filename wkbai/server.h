@@ -216,7 +216,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai;
+		std::string world, settings, environment, paths, history, movement, ai, discovered;
 	};
 	static SaveParts ReadSaveParts(const char* filename);
 	// the walks going on, as a save keeps them (the movement section), and back

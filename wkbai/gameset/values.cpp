@@ -848,16 +848,23 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 
 struct ValueIsDiscovered : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fObjects, fPlayer;
-	// once seen, discovered for good (per player and object), for this server
+	// once seen, discovered for good (per player and object), for this game: by the game set's
+	// serial (by the server's address before 2026-11-13: the next game's server could be at the
+	// same address, and it began with everything the last game had discovered, the same ids:
+	// a Kingmaker's defence then saw enemies at its manor from the first minute); saved
 	static inline std::set<std::pair<uint32_t, uint32_t>> discovered;
-	static inline const void* forServer = nullptr;
+	static inline uint64_t forGame = 0;
+	static void sameGame() {
+		const uint64_t serial = Server::instance && Server::instance->gameSet ? Server::instance->gameSet->serial : 0;
+		if (forGame != serial) {
+			discovered.clear();
+			forGame = serial;
+		}
+	}
 	virtual float eval(ScriptContext* ctx) override {
 		if (!ctx->isServer())
 			return 1.0f;
-		if (forServer != Server::instance) {
-			discovered.clear();
-			forServer = Server::instance;
-		}
+		sameGame();
 		CommonGameObject* obj = fObjects->getFirst(ctx);
 		CommonGameObject* pl = fPlayer->getFirst(ctx);
 		if (!obj || !pl)
@@ -997,6 +1004,46 @@ struct ValueAverageEquationResult : ValueDeterminer {
 // type allowed): it has the "Spawn <type>" order, and the command of that name, if any, has no
 // impossible condition (tech level, alignment; the wait conditions, such as the cost now, don't
 // count). Counting locked rungs made every BEST_QUALITY army unaffordable: the AI never attacked.
+// IS_DISCOVERED's memory in the save ("discovered" section): "<player> <object ids...>" a line each
+std::string DiscoveredSaveText()
+{
+	ValueIsDiscovered::sameGame();
+	std::string text;
+	uint32_t player = 0;
+	for (const auto& [p, o] : ValueIsDiscovered::discovered) {
+		if (p != player || text.empty()) {
+			if (!text.empty())
+				text += "\n";
+			text += std::to_string(p);
+			player = p;
+		}
+		text += " " + std::to_string(o);
+	}
+	return text.empty() ? text : text + "\n";
+}
+
+void DiscoveredLoadText(const std::string& text)
+{
+	ValueIsDiscovered::sameGame(); // (this game's, cleared)
+	ValueIsDiscovered::discovered.clear();
+	size_t at = 0;
+	while (at < text.size()) {
+		size_t end = text.find('\n', at);
+		if (end == std::string::npos)
+			end = text.size();
+		const char* c = text.c_str() + at;
+		char* e = nullptr;
+		const uint32_t player = (uint32_t)strtoul(c, &e, 10);
+		for (c = e; ; c = e) {
+			const uint32_t obj = (uint32_t)strtoul(c, &e, 10);
+			if (e == c || e > text.c_str() + end)
+				break;
+			ValueIsDiscovered::discovered.insert({ player, obj });
+		}
+		at = end + 1;
+	}
+}
+
 bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildings)
 {
 	const GameSet* gs = Server::instance->gameSet.get();
@@ -1005,6 +1052,17 @@ bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildin
 		return false;
 	const int cmdid = gs->commands.names.getIndex(spawnName);
 	const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
+	// the ministry AI's Labour & Population: no more peasants than its cap (room for soldiers)
+	{
+		static const GameSet* of = nullptr;
+		static int peasantItem = -1;
+		if (of != gs) { of = gs; peasantItem = gs->items.names.getIndex("I Am A Peasant"); }
+		if (peasantItem >= 0 && type->startItemValues.count(peasantItem) && type->startItemValues.at(peasantItem) > 0.0f)
+			for (ServerGameObject* building : buildings)
+				if (ServerGameObject* owner = building->getPlayer(); owner && owner->aiController.ministryPeasantCap >= 0
+					&& owner->aiController.ministryPeasants >= owner->aiController.ministryPeasantCap)
+					return false;
+	}
 	for (ServerGameObject* building : buildings) {
 		if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 			continue;

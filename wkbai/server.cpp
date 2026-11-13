@@ -225,6 +225,8 @@ void Server::loadSaveGame(const char * filename)
 	// the ministry AI's governments as saved
 	if (!parts.ai.empty())
 		ministries.loadText(*this, parts.ai);
+	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
+	DiscoveredLoadText(parts.discovered);
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);
@@ -606,6 +608,10 @@ std::string Server::aiSettingsText() const
 		text += "aiVision=" + std::to_string(aiVision) + "\n";
 	if (aiGenerals != 4) // (the same)
 		text += "aiGenerals=" + std::to_string(aiGenerals) + "\n";
+	// the simulation's step count: each player's AI and each viewer's sight run on their own steps
+	// of 10 and 4 (by step and id), so a loaded game goes on with them on the same steps
+	if (simStepIndex)
+		text += "simStepIndex=" + std::to_string(simStepIndex) + "\n";
 	// the players whose game is over (only when there are: the text of other games stays as it was)
 	for (const auto& [id, outcome] : finishedPlayers)
 		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
@@ -723,6 +729,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiMinistries") aiMinistries = v != 0;
 		else if (name == "aiVision") aiVision = (int)v;
 		else if (name == "aiGenerals") aiGenerals = (int)v;
+		else if (name == "simStepIndex") simStepIndex = (uint64_t)atoll(line.c_str() + eq + 1);
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;

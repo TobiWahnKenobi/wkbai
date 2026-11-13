@@ -68,6 +68,7 @@ namespace {
 				g.board.report(std::string("economy.") + RESOURCE_KEYS[r] + ".income", income[r]);
 			}
 			lastTime = now;
+			EconomyNeeds(g);
 			if (thinks % 15 == 0) // (every 30 s)
 				g.log(ECONOMY, "stock food %.0f wood %.0f gold %.0f stone %.0f; per minute %+.0f %+.0f %+.0f %+.0f",
 					last[0], last[1], last[2], last[3], income[0], income[1], income[2], income[3]);
@@ -130,12 +131,25 @@ namespace {
 			lastPeasants = peasants;
 			lastIdle = idle;
 			lastSoldiers = soldiers;
+			// the cap, the idle, the gold miners Economy asks for (MinistryEconomy.cpp)
+			LabourActs(g, goldMiners);
 		}
+		std::map<uint32_t, float> goldMiners; // peasant id -> since when
 		void save(const Government&, std::vector<std::string>& lines) const override {
 			lines.push_back("last " + std::to_string(lastPeasants) + " " + std::to_string(lastIdle) + " " + std::to_string(lastSoldiers));
+			for (const auto& [id, since] : goldMiners)
+				lines.push_back("gold " + std::to_string(id) + " " + Num(since));
 		}
-		void load(Government&, const std::string& line) override {
-			sscanf(line.c_str(), "last %d %d %d", &lastPeasants, &lastIdle, &lastSoldiers);
+		void load(Government& g, const std::string& line) override {
+			unsigned id = 0;
+			float since = 0.0f;
+			if (sscanf(line.c_str(), "gold %u %f", &id, &since) == 2) {
+				goldMiners[id] = since;
+				if (ServerGameObject* p = g.player())
+					p->aiController.ministryHeld.insert(id);
+			}
+			else
+				sscanf(line.c_str(), "last %d %d %d", &lastPeasants, &lastIdle, &lastSoldiers);
 		}
 	};
 
@@ -145,6 +159,8 @@ namespace {
 		g.departments.push_back(MakeStrategist());
 		g.departments.push_back(MakeEconomy());
 		g.departments.push_back(MakeLabour());
+		g.departments.push_back(MakeBuilders());
+		g.departments.push_back(MakeResearch());
 		g.departments.push_back(MakeWar());
 		g.departments.push_back(MakeGenerals());
 		g.departments.push_back(MakeIntelligence());

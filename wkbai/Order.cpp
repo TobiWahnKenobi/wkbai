@@ -857,18 +857,29 @@ static float FootprintDistance(const Vector3& point, const ServerGameObject* bui
 // The count per target and path, by target id (the server's objects; not saved: a loaded unit
 // takes a path again)
 static std::map<uint32_t, std::map<int, int>> s_attackPathUsers;
+static uint64_t s_attackPathGame = 0;
+// (kept for this game only: by object id, and a game ended with tasks running left its counts)
+static std::map<uint32_t, std::map<int, int>>& AttackPathUsers()
+{
+	const uint64_t serial = Server::instance && Server::instance->gameSet ? Server::instance->gameSet->serial : 0;
+	if (s_attackPathGame != serial) {
+		s_attackPathGame = serial;
+		s_attackPathUsers.clear();
+	}
+	return s_attackPathUsers;
+}
 
 void Task::releaseAttackPath()
 {
 	if (!attackPathOf)
 		return;
-	auto it = s_attackPathUsers.find(attackPathOf);
-	if (it != s_attackPathUsers.end()) {
+	auto it = AttackPathUsers().find(attackPathOf);
+	if (it != AttackPathUsers().end()) {
 		auto p = it->second.find(attackPath);
 		if (p != it->second.end() && --p->second <= 0)
 			it->second.erase(p);
 		if (it->second.empty())
-			s_attackPathUsers.erase(it);
+			AttackPathUsers().erase(it);
 	}
 	attackPathOf = 0;
 	attackPath = -1;
@@ -902,7 +913,7 @@ static bool AttackPathSpot(Task* task, ServerGameObject* unit, ServerGameObject*
 		return false;
 	if (task->attackPathOf != target->id || !points.count(task->attackPath)) {
 		task->releaseAttackPath();
-		auto& users = s_attackPathUsers[target->id];
+		auto& users = AttackPathUsers()[target->id];
 		const auto area = Server::instance->terrain ? Server::instance->terrain->getPlayableArea() : std::make_pair(1e9f, 1e9f);
 		int best = -1, bestUsers = 0;
 		float bestDist = 0.0f;
@@ -920,7 +931,7 @@ static bool AttackPathSpot(Task* task, ServerGameObject* unit, ServerGameObject*
 		}
 		if (best < 0) {
 			if (users.empty())
-				s_attackPathUsers.erase(target->id);
+				AttackPathUsers().erase(target->id);
 			return false;
 		}
 		users[best]++;

@@ -4,7 +4,10 @@
 #include <memory>
 #include "Ministries.h"
 
+#include <cstdlib>
 namespace Ministry {
+	// (experiments: parts switched off by WKB_MINOFF bits)
+	inline int MinOff() { static const int v = getenv("WKB_MINOFF") ? atoi(getenv("WKB_MINOFF")) : 0; return v; }
 	std::unique_ptr<Department> MakeEconomy();
 	std::unique_ptr<Department> MakeLabour();
 	std::unique_ptr<Department> MakeIntelligence();   // MinistryIntelligence.cpp
@@ -12,6 +15,12 @@ namespace Ministry {
 	std::unique_ptr<Department> MakeWar();
 	std::unique_ptr<Department> MakeGenerals();
 	std::unique_ptr<Department> MakeDiplomacy();      // MinistryDiplomacy.cpp
+	std::unique_ptr<Department> MakeBuilders();       // MinistryEconomy.cpp
+	std::unique_ptr<Department> MakeResearch();
+	// Economy's asks (from Economy::think) and Labour & Population's acts (from Labour::think; its
+	// gold miners: peasant id -> since when)
+	void EconomyNeeds(Government& g);
+	void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners);
 	// the General's character from its items (MinistryWar.cpp)
 	void ReadPersonality(Government& g);
 	// MinistryTactics.cpp: the units' abilities by the rule table (cooldowns: unit id << 8 | rule ->

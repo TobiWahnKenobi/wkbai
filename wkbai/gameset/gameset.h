@@ -76,6 +76,11 @@ extern std::map<std::string, std::map<std::string, std::string, StrCICompareClas
 
 struct GameSet
 {
+	// a number of its own for each game set loaded: a cache that keeps pointers into a game set
+	// compares this, not the game set's address (the next game's game set can be made at the
+	// address of the last one, and the cache then kept pointers to the old one's blueprints)
+	static inline uint64_t nextSerial = 0;
+	const uint64_t serial = ++nextSerial;
 	GSBlueprintList<GameObjBlueprint> objBlueprints[Tags::GAMEOBJCLASS_COUNT];
 	GSBlueprintList<int> items;
 	GSBlueprintList<ValueDeterminer*> equations;

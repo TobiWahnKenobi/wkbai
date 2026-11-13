@@ -38,14 +38,16 @@ namespace {
 	constexpr int RULE_COUNT = (int)(sizeof(RULES) / sizeof(RULES[0]));
 
 	struct Lookup {
-		const GameSet* of = nullptr;
+		const GameSet* gs = nullptr;
+		uint64_t of = 0; // (the game set's serial: the blueprints' addresses can be the last game's)
 		int command[RULE_COUNT];
 		int hp = -1, hpCap = -1;
 		std::map<const GameObjBlueprint*, std::vector<int>> offered; // the rules a type offers
-		void update(const GameSet* gs) {
-			if (of == gs)
+		void update(const GameSet* set) {
+			gs = set;
+			if (of == set->serial)
 				return;
-			of = gs;
+			of = set->serial;
 			for (int i = 0; i < RULE_COUNT; i++)
 				command[i] = gs->commands.names.getIndex(RULES[i].command);
 			hp = gs->items.names.getIndex("Hit Points");
@@ -60,7 +62,7 @@ namespace {
 			for (int i = 0; i < RULE_COUNT; i++)
 				if (command[i] >= 0)
 					for (const Command* c : bp->offeredCommands)
-						if (c == &of->commands[command[i]]) { list.push_back(i); break; }
+						if (c == &gs->commands[command[i]]) { list.push_back(i); break; }
 			return offered[bp] = list;
 		}
 	} g_lookup;

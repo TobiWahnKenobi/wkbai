@@ -163,6 +163,11 @@ struct AIController {
 	// no waves, and leaves the missions' armies and units alone (set by its War department)
 	bool ministryWaves = false, ministryTraining = false;
 	std::set<uint32_t> ministryArmies, ministryUnits;
+	// the ministry AI's Labour: the peasants it gave work of its own (the work orders leave them
+	// alone), the most peasants it wants (-1: no cap) and how many there are (AISpawnAllowed
+	// refuses peasants at the cap)
+	std::set<uint32_t> ministryHeld;
+	int ministryPeasantCap = -1, ministryPeasants = 0;
 	// the war layer's pool: the fighters at home, and the scripts' idle or not-fighting attackers
 	// near the base; not those in the armies `mine` nor the units `inWaves`
 	std::vector<ServerGameObject*> warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves);
@@ -203,6 +208,10 @@ struct AIController {
 	void deactivateCommission(const GSCommission* commission, ServerGameObject* handler);
 };
 
+// IS_DISCOVERED's memory (which objects each player has discovered), for the save's "discovered"
+// section, and back (gameset/values.cpp)
+std::string DiscoveredSaveText();
+void DiscoveredLoadText(const std::string& text);
 // Whether one of the buildings may spawn the type now (gameset/values.cpp)
 bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<ServerGameObject>& buildings);
 // How many characters each character requirement of the commission needs, evaluated for its

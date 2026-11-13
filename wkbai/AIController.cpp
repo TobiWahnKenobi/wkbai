@@ -138,10 +138,17 @@ bool AIController::isAI() const
 static bool TrainsFighters(const GameObjBlueprint* building)
 {
 	static std::map<const GameObjBlueprint*, bool> known;
+	const GameSet* gs = Server::instance->gameSet.get();
+	// (kept for this game set only: the next game's blueprints can be at the old ones' addresses,
+	// and a building then got another's answer; a second game in one process played differently)
+	static uint64_t of = 0;
+	if (of != gs->serial) {
+		of = gs->serial;
+		known.clear();
+	}
 	if (auto it = known.find(building); it != known.end())
 		return it->second;
 	static const char* civilians[] = { "Peasant", "Cart", "Merchant", "Priest", "Bishop", "Inquisitor", "Scout", "Wagon" };
-	const GameSet* gs = Server::instance->gameSet.get();
 	bool fighters = false;
 	for (const Command* cmd : building->offeredCommands) {
 		const std::string& name = gs->commands.getString(cmd);
@@ -845,6 +852,9 @@ void AIController::update()
 		// the units the weather moved (AIWeather.cpp) work again once released
 		if (!weatherHeld.empty())
 			unitLists[wi].resize(std::remove_if(unitLists[wi].begin(), unitLists[wi].end(), [&](ServerGameObject* u) { return weatherHolds(u->id); }) - unitLists[wi].begin());
+		// and those the ministry AI's Labour gave work of its own (gold, repairs), until it lets them go
+		if (!ministryHeld.empty())
+			unitLists[wi].resize(std::remove_if(unitLists[wi].begin(), unitLists[wi].end(), [&](ServerGameObject* u) { return ministryHeld.count(u->id) != 0; }) - unitLists[wi].begin());
 		for (ServerGameObject* unit : unitLists[wi]) {
 			auto prev = unitWorkOrder.find(unit->id);
 			const bool kept = prev != unitWorkOrder.end() && prev->second == std::make_pair(woi.city->id, woi.workOrder);
