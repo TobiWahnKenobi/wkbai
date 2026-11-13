@@ -104,6 +104,9 @@ struct ServerEnvironment {
 	// there), "weather" (an EnvWeather held from now on, -1: chosen again as usual); the clients
 	// are told at once
 	void debugSet(Server& server, const std::string& name, float value);
+	// a new game's clock put at the start hour and season, whatever the map's game time: once,
+	// by the first update or by a debug jump of the clock before it
+	void startClock(float now);
 
 private:
 	float nextUpdate = -1.0f;
@@ -112,6 +115,8 @@ private:
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
 	float temperatureTarget = 12.0f;
 	bool started = false;
+	// startClock done (not saved: a saved game has started)
+	bool clockStarted = false;
 	bool snapTemperature = false; // the debug panel's jump: the temperature at its target at once
 	bool skySent = false; // (without day and night and the seasons: the clients sent the sky)
 	// each unit's cold and heat exposure (by id: in order, saved)
