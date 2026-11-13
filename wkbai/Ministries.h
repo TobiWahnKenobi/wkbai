@@ -75,6 +75,32 @@ namespace Ministry {
 		int assignedTo(uint32_t worker) const; // -1: none
 	};
 
+	// What the AI knows of the others (Intelligence): only what its units and buildings saw (or all,
+	// with "aiVision" 1), with when; and the threat map drawn from it
+	struct Sighting {
+		uint32_t id = 0, player = 0;
+		bool building = false, peasant = false, fighter = false, palace = false, tower = false;
+		uint8_t cls = 0; // the soldier's class (AIUtil::ClassOf)
+		float power = 0.0f; // AIUtil::UnitPower when seen
+		float x = 0.0f, z = 0.0f;
+		float seen = 0.0f; // the game time it was last seen
+		std::string type; // the blueprint's name
+	};
+	struct Picture {
+		std::map<uint32_t, Sighting> sightings; // by object id
+		// the threat map: per cell of CELL metres, the enemy fighters' and towers' power there and
+		// in the cells around, fading with the sighting's age (a sighting a minute and a half old
+		// counts a third); worked out from the sightings of the last think (on a worker thread)
+		static constexpr float CELL = 40.0f;
+		int width = 0, height = 0;
+		std::vector<float> threat;
+		float threatAt(float x, float z) const;
+		// the most threat within the radius
+		float threatNear(float x, float z, float radius) const;
+		// the sightings of a player, of a kind
+		std::vector<const Sighting*> of(uint32_t player) const;
+	};
+
 	struct Government;
 
 	struct Department {
@@ -84,8 +110,8 @@ namespace Ministry {
 		virtual float period() const = 0;
 		virtual void think(Government& g) = 0;
 		// the department's own state, as "<key> <value...>" lines (no line breaks in a value)
-		virtual void save(std::vector<std::string>& lines) const {}
-		virtual void load(const std::string& line) {}
+		virtual void save(const Government& g, std::vector<std::string>& lines) const {}
+		virtual void load(Government& g, const std::string& line) {}
 		float nextAt = -1.0f; // the game time of its next think (-1: not scheduled yet)
 		uint64_t thinks = 0;
 	};
@@ -94,6 +120,7 @@ namespace Ministry {
 		Server& server;
 		uint32_t playerId = 0;
 		Blackboard board;
+		Picture picture;
 		std::vector<std::unique_ptr<Department>> departments; // in Dept order
 		bool trace = false;
 

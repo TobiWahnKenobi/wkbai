@@ -86,6 +86,7 @@ private:
 	bool aiHomeGuard = true; // Server::aiHomeGuard
 	bool aiWar = true; // Server::aiWar
 	bool aiMinistries = false; // Server::aiMinistries
+	int aiVision = 0; // Server::aiVision
 	int aiWeather = 1; // Server::aiWeather
 	int aiHumanFocus = 50; // Server::aiHumanFocus
 	int modPolicy = 0; // Server::modPolicy

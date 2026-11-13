@@ -57,6 +57,7 @@
 #include "FormationController.h"
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
+#include "AIUtil.h"
 #include "gameset/finder.h"
 #include "gameset/Commission.h"
 #include "AIController.h"
@@ -2476,7 +2477,12 @@ void Test_MinistryFramework()
 			printf("MINISTRY player %u reports: peasants %.0f (%.0f without work), soldiers %.0f, buildings %.0f; food %.0f (%+.0f a minute), wood %.0f (%+.0f)\n", id,
 				g->board.get("labour.peasants"), g->board.get("labour.idle"), g->board.get("labour.soldiers"), g->board.get("labour.buildings"),
 				g->board.get("economy.food"), g->board.get("economy.food.income"), g->board.get("economy.wood"), g->board.get("economy.wood.income"));
-			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && g->board.reports.size() == 13);
+			int economyReports = 0, labourReports = 0;
+			for (const auto& [key, v] : g->board.reports) {
+				economyReports += key.rfind("economy.", 0) == 0;
+				labourReports += key.rfind("labour.", 0) == 0;
+			}
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports == 8 && labourReports == 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
 		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
@@ -2504,6 +2510,142 @@ void Test_MinistryFramework()
 	const std::string text = [&] { std::ifstream f(PathFromUtf8(file), std::ios::binary); return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()); }();
 	check("ai section in the file", text.find("\nSECTION ai 1 ") != std::string::npos && text.find("\nGOVERNMENT ") != std::string::npos);
 	printf("MINISTRY all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The ministry AI's Intelligence (needs the game data): 4 Peaks, two Elite Generals, the
+// ministries on. Only what was seen: at the start neither knows the other's palace (with
+// "aiVision" 1 both do). An enemy Pikeman put next to player A's palace is seen at the next think,
+// with its power; the threat map has it at the think after (it is worked out meanwhile); moved
+// far away it is still remembered where it was seen; gone from a place in sight, it is forgotten.
+// The game the same with Intelligence as without; its picture through a save.
+// Prints "INTEL <check> <0|1>" and "INTEL all <0|1>".
+void Test_MinistryIntelligence()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("INTEL %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	auto knownPalace = [](Server& server, uint32_t me, uint32_t of) {
+		Government* g = server.ministries.governments.count(me) ? server.ministries.governments[me].get() : nullptr;
+		return g && g->board.get("intel." + std::to_string(of) + ".palace") > 0;
+	};
+	{
+		Server server;
+		MinistryGame(server, true, 99);
+		StepServer(server, 500); // 10 s
+		check("governments", server.ministries.governments.size() == 2);
+		check("fair: the other palace not known", !knownPalace(server, 1027, 1030) && !knownPalace(server, 1030, 1027));
+		printf("INTEL fair vision at 10 s: %.0f and %.0f sightings\n", server.ministries.governments[1027]->board.get("intel.sightings"),
+			server.ministries.governments[1030]->board.get("intel.sightings"));
+	}
+	{
+		Server server;
+		MinistryGame(server, true, 99);
+		server.aiVision = 1;
+		StepServer(server, 500);
+		check("aiVision 1: the palaces known", knownPalace(server, 1027, 1030) && knownPalace(server, 1030, 1027));
+		printf("INTEL full vision at 10 s: %.0f and %.0f sightings\n", server.ministries.governments[1027]->board.get("intel.sightings"),
+			server.ministries.governments[1030]->board.get("intel.sightings"));
+	}
+
+	// the probe: a Pikeman of player B next to A's palace
+	const auto dir = g_userPath / "saved" / "Save_Games";
+	const std::string file = PathToUtf8(dir / "wkbai intel test.sav");
+	std::map<uint32_t, std::string> withIntel;
+	float threatAfterLoad = -1.0f, threatStraight = -2.0f;
+	size_t sightingsSaved = 0;
+	{
+		Server server;
+		MinistryGame(server, true, 99);
+		StepServer(server, 250);
+		Government* a = server.ministries.governments[1027].get();
+		ServerGameObject* palace = AIUtil::Palace(server.findObject(1027));
+		const GameObjBlueprint* pike = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
+		check("probe set up", a && palace && pike);
+		if (!a || !palace || !pike) { printf("INTEL all 0\n"); return; }
+		ServerGameObject* probe = server.spawnObject(pike, server.findObject(1030), palace->position + Vector3(25, 0, 0), Vector3(0, 0, 0));
+		const uint32_t probeId = probe->id;
+		StepServer(server, 105); // a think (every 2 s) and a bit
+		const bool seen = a->picture.sightings.count(probeId) != 0;
+		check("seen", seen && a->picture.sightings[probeId].fighter && a->picture.sightings[probeId].power > 0);
+		StepServer(server, 105);
+		const float threat = a->picture.threatNear(palace->position.x, palace->position.z, 100.0f);
+		printf("INTEL the threat at A's palace with the Pikeman: %.1f (its power %.1f)\n", threat, seen ? a->picture.sightings[probeId].power : 0.0f);
+		check("on the threat map", threat > 0.0f && a->board.get("intel.threat.home") > 0.0f);
+		// gone from a place in sight: forgotten (A sees the place empty)
+		server.deleteObject(probe);
+		StepServer(server, 105);
+		check("forgotten when gone from sight", !a->picture.sightings.count(probeId));
+		// out in the field: a viewer of A's next to a Pikeman of B's (both standing still), far from
+		// both palaces; the viewer goes home: the Pikeman is remembered where it was seen
+		const Vector3 field = palace->position + Vector3(-120, 0, 120);
+		auto still = [&](ServerGameObject* o) { o->stopMovement(); o->disableCount++; return o; };
+		ServerGameObject* viewer = still(server.spawnObject(pike, server.findObject(1027), field, Vector3(0, 0, 0)));
+		ServerGameObject* distant = still(server.spawnObject(pike, server.findObject(1030), field + Vector3(10, 0, 0), Vector3(0, 0, 0)));
+		const uint32_t farId = distant->id;
+		StepServer(server, 105);
+		check("seen in the field", a->picture.sightings.count(farId) != 0);
+		const float seenX = a->picture.sightings.count(farId) ? a->picture.sightings[farId].x : -1.0f;
+		viewer->updatePosition(palace->position + Vector3(20, 0, 0));
+		StepServer(server, 105);
+		check("remembered out of sight", a->picture.sightings.count(farId) && a->picture.sightings[farId].x == seenX);
+		const float threatField = a->picture.threatNear(field.x, field.z, 40.0f);
+		printf("INTEL the threat in the field, out of sight: %.1f\n", threatField);
+		check("its threat remembered", threatField > 0.0f);
+		check("saved", server.saveGame(file.c_str()));
+		sightingsSaved = a->picture.sightings.size();
+		StepServer(server, 105);
+		threatStraight = a->picture.threatNear(field.x, field.z, 40.0f);
+		// it leaves unseen; the viewer comes back: forgotten
+		server.deleteObject(distant);
+		StepServer(server, 105);
+		check("still remembered, unseen", a->picture.sightings.count(farId) != 0);
+		viewer->updatePosition(field);
+		StepServer(server, 105);
+		check("forgotten when its place is seen again", !a->picture.sightings.count(farId));
+	}
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\wkbai intel test.sav");
+		Government* a = server.ministries.governments.count(1027) ? server.ministries.governments[1027].get() : nullptr;
+		check("picture loaded", a && a->picture.sightings.size() == sightingsSaved);
+		StepServer(server, 105);
+		ServerGameObject* palace = AIUtil::Palace(server.findObject(1027));
+		const Vector3 field = palace ? palace->position + Vector3(-120, 0, 120) : Vector3();
+		threatAfterLoad = a && palace ? a->picture.threatNear(field.x, field.z, 40.0f) : -1.0f;
+		printf("INTEL the threat one think after the save: straight %.3f, loaded %.3f\n", threatStraight, threatAfterLoad);
+		check("threat map after loading", threatAfterLoad == threatStraight);
+	}
+	// the game the same with the ministries' Intelligence as without (it only reads)
+	{
+		// (one server at a time: Server::instance)
+		std::map<uint32_t, std::string> a, b;
+		{
+			Server off;
+			MinistryGame(off, false, 5);
+			StepServer(off, 2000);
+			a = WorldState(off);
+		}
+		for (int i = 0; i < DEPT_COUNT; i++) { g_deptMs[i] = 0; g_deptThinks[i] = 0; }
+		{
+			Server on;
+			MinistryGame(on, true, 5);
+			StepServer(on, 2000);
+			b = WorldState(on);
+		}
+		int differ = 0;
+		for (const auto& [id, s] : a)
+			if (!b.count(id) || b.at(id) != s)
+				differ++;
+		printf("INTEL the game with Intelligence: %d of %zu objects differ\n", differ, a.size());
+		check("the game unchanged", differ == 0 && a.size() == b.size());
+		printf("INTEL profile: %s\n", Ministry::Ministries::profileText(2000).c_str());
+	}
+	printf("INTEL all %d\n", (int)all);
 	fflush(stdout);
 }
 
@@ -8883,6 +9025,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
 {Test_SaveFormat, "Save format: wkbai's save file with sections, the original format, unknown sections, play on after loading"},
 {Test_MinistryFramework, "Ministry AI framework: the blackboard, departments at their rates and staggered, reports, nothing changed in the game, the ai section through a save"},
+{Test_MinistryIntelligence, "Ministry AI Intelligence: only what was seen (aiVision), the threat map, remembered and forgotten, through a save"},
 };
 
 void LaunchTest()

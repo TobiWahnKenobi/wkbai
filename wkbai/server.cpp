@@ -52,6 +52,7 @@ void Server::loadSaveGame(const char * filename)
 	cheatMode = false;
 	// the ministry AI as saved (its "ai" section), else none; on only when the save had it on
 	aiMinistries = false;
+	aiVision = 0;
 	ministries.clear();
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
@@ -595,6 +596,8 @@ std::string Server::aiSettingsText() const
 		text += "cheatMode=1\n";
 	if (aiMinistries) // (the same)
 		text += "aiMinistries=1\n";
+	if (aiVision) // (the same)
+		text += "aiVision=" + std::to_string(aiVision) + "\n";
 	// the players whose game is over (only when there are: the text of other games stays as it was)
 	for (const auto& [id, outcome] : finishedPlayers)
 		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
@@ -710,6 +713,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiWar") aiWar = v != 0;
 		else if (name == "aiMinistries") aiMinistries = v != 0;
+		else if (name == "aiVision") aiVision = (int)v;
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;

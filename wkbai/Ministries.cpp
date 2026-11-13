@@ -1,6 +1,7 @@
 // wkbai - the ministry AI's framework (Ministries.h)
 
 #include "Ministries.h"
+#include "MinistryDepartments.h"
 #include "server.h"
 #include "gameset/gameset.h"
 #include "settings.h"
@@ -71,13 +72,13 @@ namespace {
 				g.log(ECONOMY, "stock food %.0f wood %.0f gold %.0f stone %.0f; per minute %+.0f %+.0f %+.0f %+.0f",
 					last[0], last[1], last[2], last[3], income[0], income[1], income[2], income[3]);
 		}
-		void save(std::vector<std::string>& lines) const override {
+		void save(const Government&, std::vector<std::string>& lines) const override {
 			std::string s = "samples " + Num(lastTime);
 			for (int r = 0; r < 4; r++)
 				s += " " + Num(last[r]) + " " + Num(income[r]);
 			lines.push_back(s);
 		}
-		void load(const std::string& line) override {
+		void load(Government&, const std::string& line) override {
 			float v[9];
 			if (sscanf(line.c_str(), "samples %f %f %f %f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8]) == 9) {
 				lastTime = v[0];
@@ -130,18 +131,20 @@ namespace {
 			lastIdle = idle;
 			lastSoldiers = soldiers;
 		}
-		void save(std::vector<std::string>& lines) const override {
+		void save(const Government&, std::vector<std::string>& lines) const override {
 			lines.push_back("last " + std::to_string(lastPeasants) + " " + std::to_string(lastIdle) + " " + std::to_string(lastSoldiers));
 		}
-		void load(const std::string& line) override {
+		void load(Government&, const std::string& line) override {
 			sscanf(line.c_str(), "last %d %d %d", &lastPeasants, &lastIdle, &lastSoldiers);
 		}
 	};
 
 	void MakeDepartments(Government& g)
 	{
-		g.departments.push_back(std::make_unique<Economy>());
-		g.departments.push_back(std::make_unique<Labour>());
+		// (in Dept order)
+		g.departments.push_back(MakeEconomy());
+		g.departments.push_back(MakeLabour());
+		g.departments.push_back(MakeIntelligence());
 	}
 
 	// "aiTrace" / WKB_TRACE_AI: 0 off, 1 every AI, else a player's id
@@ -152,6 +155,9 @@ namespace {
 		return g_settings.value("aiTrace", 0u);
 	}
 }
+
+std::unique_ptr<Department> MakeEconomy() { return std::make_unique<Economy>(); }
+std::unique_ptr<Department> MakeLabour() { return std::make_unique<Labour>(); }
 
 const char* DeptName(int dept) { return dept >= 0 && dept < DEPT_COUNT ? NAMES[dept] : "?"; }
 
@@ -360,7 +366,7 @@ std::string Ministries::saveText() const
 		for (const auto& d : g->departments) {
 			out += "DEPT " + std::string(DeptName(d->id())) + " " + Num(d->nextAt) + " " + std::to_string(d->thinks) + "\n";
 			std::vector<std::string> lines;
-			d->save(lines);
+			d->save(*g, lines);
 			for (const std::string& l : lines)
 				out += "STATE " + std::string(DeptName(d->id())) + " " + l + "\n";
 		}
@@ -449,7 +455,7 @@ void Ministries::loadText(Server& server, const std::string& text)
 		else if (tag == "STATE") {
 			const int dept = DeptFromName(word(rest, p));
 			if (Department* d = dept >= 0 ? g->department((uint8_t)dept) : nullptr)
-				d->load(rest.substr(std::min(p + 1, rest.size())));
+				d->load(*g, rest.substr(std::min(p + 1, rest.size())));
 		}
 	}
 }

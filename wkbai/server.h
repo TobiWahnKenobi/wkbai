@@ -316,6 +316,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
 	// while it is being built (Phase 16): "aiMinistries"
 	bool aiMinistries = false;
+	// what the ministry AI knows of the others: 0 only what its units and buildings saw (the
+	// default), 1 everything (a difficulty setting): "aiVision"
+	int aiVision = 0;
 	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone

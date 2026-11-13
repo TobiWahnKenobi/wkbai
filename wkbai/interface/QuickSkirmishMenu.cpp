@@ -167,6 +167,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiHomeGuard") aiHomeGuard = value != 0;
 	else if (name == "aiWar") aiWar = value != 0;
 	else if (name == "aiMinistries") aiMinistries = value != 0;
+	else if (name == "aiVision") aiVision = std::clamp(value, 0, 1);
 	else if (name == "aiWeather") aiWeather = std::clamp(value, 0, 3);
 	else if (name == "aiHumanFocus") aiHumanFocus = std::clamp(value, 10, 100);
 	else if (name == "modPolicy") modPolicy = std::clamp(value, 0, 3);
@@ -549,6 +550,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.aiHomeGuard = aiHomeGuard;
 		server.aiWar = aiWar;
 		server.aiMinistries = aiMinistries;
+		server.aiVision = aiVision;
 		server.aiWeather = aiWeather;
 		server.aiHumanFocus = aiHumanFocus;
 		server.modPolicy = modPolicy;
