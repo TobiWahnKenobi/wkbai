@@ -1447,6 +1447,16 @@ struct DiligentRenderer : DiligentGfx
 			if (!dxc.empty())
 				eci.pDxCompilerPath = dxc.c_str();
 			if (adapter >= 0) eci.AdapterId = (Uint32)adapter;
+			// The shader-visible CBV/SRV/UAV heap, 8 times Diligent's defaults (16384 static, 8192
+			// dynamic): every commit of a binding with DYNAMIC variables takes fresh descriptors,
+			// for every frame in flight. Extend map's terrain shadows (farHorizonA/B) in the
+			// environment binding and an animated HD model drawn group by group (the Blacksmith's
+			// bellows, a constant buffer mapped between the groups) used up the 8192 within a
+			// frame; the allocation then came back empty and CopyDescriptorsSimple read address 0
+			// in CommitRootTables (2026-11-14). 131072 descriptors take about 4 MB; D3D12 allows a
+			// million. (The sampler heap stays: static + dynamic must not pass 2048.)
+			eci.GPUDescriptorHeapSize[0] = 65536;
+			eci.GPUDescriptorHeapDynamicSize[0] = 65536;
 			factory->CreateDeviceAndContextsD3D12(eci, &device, contexts);
 			ctx.Attach(contexts[0]);
 			if (!device)
