@@ -512,7 +512,7 @@ float SnowGlint(float3 pos, float3 n)
 		return 0;
 	float3 l = normalize(SunDirection);
 	float3 v = normalize(FogCamera.xyz - pos);
-	float up = saturate(l.y * 4) * GlintLight();
+	float up = saturate(l.y * 20 + 0.2) * GlintLight(); // (from the horizon up: GlintLight fades the sun in)
 	float3 r = reflect(-v, n);
 	float sheen = (pow(saturate(dot(r, l)), 6) * 0.22 + pow(saturate(dot(-v, l)), 4) * 0.12 - 0.06) * s;
 	if (WeatherParams3.y < 1.5)
@@ -1216,7 +1216,7 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 		uint h = IceHash((int2)floor(world.xz / size) + int2(911, 37));
 		if ((h >> 24) > 220) {
 			float3 facet = normalize(n + float3(((h & 255) / 255.0 - 0.5) * 0.6, 0, (((h >> 8) & 255) / 255.0 - 0.5) * 0.6));
-			lit += pow(saturate(dot(facet, normalize(v + l))), 160) * 3 * cloud * saturate(l.y * 4) * saturate(1 - dist / 600) * GlintLight() * GlintTint();
+			lit += pow(saturate(dot(facet, normalize(v + l))), 160) * 3 * cloud * saturate(l.y * 20 + 0.2) * saturate(1 - dist / 600) * GlintLight() * GlintTint();
 		}
 	}
 	return float4(lerp(c.rgb, GradeColour(lit), share), lerp(c.a, 1, share));
@@ -3407,24 +3407,30 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[0] = g_environment.active ? SeaIceReach(g_environment.severity, g_environment.ice) : 0.0f;
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
-	// (the moon's direct light at night: its lit part, how high it is; a new moon none)
 	{
-		// the glints' colour: the sun's light colour (warmer low down), the moon's cool white at night
+		// The glints' light: the sun's from the moment it rises (a few degrees up: all of it), in its
+		// colour (warm low down); else the moon's, by its lit part and height, cool. (By the
+		// daylight, which reaches 1 only at about 14 degrees, they had come two hours after a
+		// summer sunrise, the play test of 2026-11-13.)
 		float* weather4 = (float*)(sbdata + 912);
-		float sunCol[3] = { 1, 1, 1 };
+		float tint[3] = { 1, 1, 1 }, strength = 1.0f;
 		if (g_environment.active) {
-			const float m = std::max({ g_environment.sun.colour[0], g_environment.sun.colour[1], g_environment.sun.colour[2], 1e-3f });
-			const float day = std::clamp(g_environment.sun.daylight, 0.0f, 1.0f);
+			const SunState& sun = g_environment.sun;
+			const float t = std::clamp((sun.elevation + 0.01f) / 0.06f, 0.0f, 1.0f);
+			const float sunGlint = t * t * (3 - 2 * t);
+			const float moonGlint = std::clamp(sun.moonLight, 0.0f, 1.0f) * (1.0f - sunGlint);
+			strength = std::max(sunGlint, moonGlint);
+			const float m = std::max({ sun.colour[0], sun.colour[1], sun.colour[2], 1e-3f });
 			const float moon[3] = { 0.78f, 0.86f, 1.0f };
 			for (int i = 0; i < 3; i++)
-				sunCol[i] = moon[i] + (g_environment.sun.colour[i] / m - moon[i]) * day;
+				tint[i] = moon[i] + (sun.colour[i] / m - moon[i]) * sunGlint;
 		}
-		weather4[0] = sunCol[0];
-		weather4[1] = sunCol[1];
-		weather4[2] = sunCol[2];
+		weather4[0] = tint[0];
+		weather4[1] = tint[1];
+		weather4[2] = tint[2];
 		weather4[3] = 1.0f;
+		weather3[3] = strength;
 	}
-	weather3[3] = g_environment.active ? std::clamp(std::max(g_environment.sun.daylight, g_environment.sun.moonLight), 0.0f, 1.0f) : 1.0f;
 	float* weather2 = (float*)(sbdata + 880);
 	weather2[0] = g_environment.active ? g_environment.dryness : 0.0f;
 	weather2[1] = g_environment.active ? g_environment.mud : 0.0f;
