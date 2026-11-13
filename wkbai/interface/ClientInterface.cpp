@@ -35,6 +35,7 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "../gfx/ChimneySmoke.h"
 #include "EnvironmentView.h"
 #include "../TreeModels.h"
 #include "../settings.h"
@@ -3163,6 +3164,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	// Attachment points
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
+	// chimney smoke (drawn in the particle pass)
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+		ChimneySmoke::Add(obj->sceneEntity.model, obj->sceneEntity.transform, obj->id);
 
 	// shadow
 	bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
@@ -3255,7 +3259,10 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 		const AttachmentPoint& ap = model->getAPInfo(i);
 		auto state = model->getAPState(i, sceneEntity->animTime);
 		if (state.on) {
-			if (StrCICompare(ap.tag, "PS_Trail") == 0) {
+			// the chimneys' smoke is ChimneySmoke's (by its rules: night and winter, always, by day)
+			if (StrCICompare(ap.tag, "PS_Chimney") == 0) {
+			}
+			else if (StrCICompare(ap.tag, "PS_Trail") == 0) {
 				particlesContainer->generateTrail(state.position.transform(sceneEntity->transform), objid, client->timeManager.previousTime, client->timeManager.currentTime);
 			}
 			else if (std::string_view(ap.tag).substr(0, 3) == "PS_") {
@@ -5550,6 +5557,7 @@ void ClientInterface::iter()
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
+		ChimneySmoke::Draw(gfx, client->camera, client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
 		if (dgfx) {
 			dgfx->SetSoftParticles(false);

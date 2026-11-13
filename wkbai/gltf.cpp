@@ -13,6 +13,8 @@
 //  - Team colours of HD models (docs/engine/gltf.md): "wkTeam": true, the albedo times the
 //    owner's colour; "wkEmblem": true, the owner's emblem over it through TEXCOORD_1 (on such a
 //    material TEXCOORD_1 is the emblem's UVs, not UV list 1).
+//  - Chimney smoke (docs/engine/gltf.md "Chimney smoke"): a node's "extras": { "wkSmoke": ... }
+//    is a smoke emitter at the node's origin (Mesh::smokeEmitters).
 //  - Animations and skins are not read (the game's are per-vertex, Anim3).
 
 #include "mesh.h"
@@ -21,6 +23,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -308,9 +311,30 @@ void Mesh::loadGltf(const char* filename)
 				g.triangles.insert(g.triangles.end(), { first + i, first + i + 2, first + i + 1 });
 		groups.push_back(std::move(g));
 	};
+	std::vector<SmokeEmitter> smoke;
+	bool smokeNodes = false;
 	auto addNode = [&](int index, const Mat4& parent, auto& self) -> void {
 		const auto& node = doc["nodes"][index];
 		const Mat4 world = NodeMatrix(node) * parent;
+		// a chimney's smoke (docs/engine/gltf.md "Chimney smoke"): the node's origin, "wkSmoke":
+		// true (the defaults), false (no smoke on this model) or { "when", "rate", "size" }
+		if (node.contains("extras") && node["extras"].is_object() && node["extras"].contains("wkSmoke")) {
+			const auto& ws = node["extras"]["wkSmoke"];
+			smokeNodes = true;
+			if (!(ws.is_boolean() && !ws.get<bool>())) {
+				SmokeEmitter e;
+				const Vector3 p = world.point(Vector3(0, 0, 0));
+				e.position = Vector3(p.x, p.y, -p.z);
+				if (ws.is_object()) {
+					if (ws.contains("when") && ws["when"].is_string() && !SmokeEmitter::parseWhen(ws["when"].get<std::string>(), e.when))
+						printf("glTF %s: node %d's wkSmoke \"when\" \"%s\" is not night_winter, always or day; night_winter taken\n",
+							filename, index, ws["when"].get<std::string>().c_str());
+					if (ws.contains("rate") && ws["rate"].is_number()) e.rate = std::clamp(ws["rate"].get<float>(), 0.1f, 10.0f);
+					if (ws.contains("size") && ws["size"].is_number()) e.size = std::clamp(ws["size"].get<float>(), 0.1f, 10.0f);
+				}
+				smoke.push_back(e);
+			}
+		}
 		if (node.contains("mesh"))
 			for (const auto& prim : doc["meshes"][(int)node["mesh"]]["primitives"])
 				addPrimitive(prim, world);
@@ -333,6 +357,22 @@ void Mesh::loadGltf(const char* filename)
 	exactNormals = std::move(exact);
 	embUvs.resize(anyEmblem ? (size_t)numUvs * 2 : 0);
 	emblemUvs = std::move(embUvs);
+	smokeEmitters = std::move(smoke);
+	smokeDeclared = smokeNodes;
+}
+
+bool SmokeEmitter::parseWhen(const std::string& text, When& out)
+{
+	if (text == "night_winter") out = NIGHT_WINTER;
+	else if (text == "always") out = ALWAYS;
+	else if (text == "day") out = DAY;
+	else { out = NIGHT_WINTER; return false; }
+	return true;
+}
+
+const char* SmokeEmitter::whenName(When w)
+{
+	return w == ALWAYS ? "always" : w == DAY ? "day" : "night_winter";
 }
 
 void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups)

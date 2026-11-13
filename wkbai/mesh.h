@@ -42,6 +42,21 @@ struct Material
 	bool emblem = false;
 };
 
+// A chimney's smoke (gfx/ChimneySmoke.cpp; docs/engine/gltf.md "Chimney smoke"): where it comes
+// out, in the model's space, and when. From a glTF's "wkSmoke" nodes, the Mesh3's PS_Chimney
+// attachment points (their when from the building type), or ChimneySmoke's table of models
+// without either (the houses).
+struct SmokeEmitter
+{
+	enum When : uint8_t { NIGHT_WINTER, ALWAYS, DAY };
+	Vector3 position;
+	float rate = 1.0f;   // puffs per second (the default about 1.3 puffs a second), 0.1-10
+	float size = 1.0f;   // the puffs' size, 1 the default's (0.8 m at the chimney, about 5 m at the end)
+	When when = NIGHT_WINTER;
+	static bool parseWhen(const std::string& text, When& out);
+	static const char* whenName(When w);
+};
+
 struct IndexTuple
 {
 	uint16_t vertex, normal, uv;
@@ -78,6 +93,10 @@ struct Mesh
 	// a glTF model's emblem UVs (its wkEmblem materials' TEXCOORD_1), indexed like a UV list;
 	// -1 (no emblem) on the other materials' vertices. Empty without an emblem material.
 	std::vector<float> emblemUvs;
+	// a glTF model's smoke emitters (its nodes with "wkSmoke"); smokeDeclared: it has at least one
+	// such node ("wkSmoke": false declares no smoke), and they replace the Mesh3's PS_Chimney points
+	std::vector<SmokeEmitter> smokeEmitters;
+	bool smokeDeclared = false;
 
 	Vector3 aabbLow, aabbHigh;
 
