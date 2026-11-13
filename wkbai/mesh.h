@@ -51,7 +51,7 @@ struct SmokeEmitter
 	enum When : uint8_t { NIGHT_WINTER, ALWAYS, DAY };
 	Vector3 position;
 	float rate = 1.0f;   // puffs per second (the default about 1.3 puffs a second), 0.1-10
-	float size = 1.0f;   // the puffs' size, 1 the default's (0.8 m at the chimney, about 5 m at the end)
+	float size = 1.0f;   // the puffs' size, 1 the default's (1 m at the chimney, about 6 m at the end)
 	When when = NIGHT_WINTER;
 	static bool parseWhen(const std::string& text, When& out);
 	static const char* whenName(When w);
