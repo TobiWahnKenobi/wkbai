@@ -329,6 +329,19 @@ namespace {
 
 namespace AIUtil {
 	int ClassOf(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::ClassOf(o); }
+	int TypeClass(const GameObjBlueprint* type)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		if (!type || g_items.military < 0 || !type->startItemValues.count(g_items.military))
+			return 0;
+		const int c = (int)type->startItemValues.at(g_items.military);
+		return c >= 1 && c <= 4 ? c : 0;
+	}
+	float TypeCost(const GameObjBlueprint* type)
+	{
+		return type ? type->getStartingItemValue(Tags::PDITEM_FOOD_COST) + type->getStartingItemValue(Tags::PDITEM_WOOD_COST)
+			+ type->getStartingItemValue(Tags::PDITEM_GOLD_COST) : 0.0f;
+	}
 	bool IsSoldier(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsSoldier(o); }
 	bool IsPeasant(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsPeasant(o); }
 	bool IsFighter(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsFighter(o); }
@@ -472,7 +485,9 @@ namespace AIUtil {
 						continue;
 					if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
 						buildings.push_back(b);
-					else if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER || b->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+					// (through cities and towns too, where the barracks stand: the Lua AI's ai.trainers
+					// looked under the player and its armies only, and saw none of them)
+					else if (b->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
 						todo.push_back(b);
 				}
 		}
@@ -563,7 +578,8 @@ int AIController::homeGuard(float now)
 	g_items.update(gs);
 	const int target = std::clamp((int)((now - 120.0f) / 45.0f), 0, 10);
 	const float SURPLUS_FOOD = 500.0f;
-	auto surplus = [&]() { return Server::instance->aiWar && now > 120.0f && p->getItem(Tags::PDITEM_FOOD) > SURPLUS_FOOD; };
+	// (with the ministry AI its War department trains the surplus, by counters: ministryTraining)
+	auto surplus = [&]() { return Server::instance->aiWar && !ministryTraining && now > 120.0f && p->getItem(Tags::PDITEM_FOOD) > SURPLUS_FOOD; };
 	if (target == 0 && !surplus())
 		return 0;
 	int soldiers = 0;

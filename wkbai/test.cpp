@@ -58,6 +58,7 @@
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
 #include "AIUtil.h"
+#include "MinistryDepartments.h"
 #include "gameset/finder.h"
 #include "gameset/Commission.h"
 #include "AIController.h"
@@ -2732,6 +2733,165 @@ void Test_MinistryWar()
 		check("going on after loading", server.ministries.governments.size() == 2);
 	}
 	printf("WAR all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The ministry AI's tactics (needs the game data): 4 Peaks, the two Elite Generals with the
+// ministries, 12 minutes. Then for Lady Elinor (1030), with resources to spend: Intelligence told
+// of 12 Knights of Belisar's, War trains by counters (heavy infantry against heavy cavalry);
+// told of 12 Archers, what it trains then. A Monastic Knight beside a wounded Knight of its own
+// heals it; a High Priestess beside an enemy Pikeman curses or entangles it (if their conditions
+// let them). Prints "TACTICS <check> <0|1>" and "TACTICS all <0|1>".
+void Test_MinistryTactics()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("TACTICS %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	g_settings["aiTrace"] = 1;
+	Server server;
+	MinistryGame(server, true, 99);
+	StepServer(server, 36000);
+	Government* g = server.ministries.governments.count(1030) ? server.ministries.governments[1030].get() : nullptr;
+	ServerGameObject* me = server.findObject(1030);
+	ServerGameObject* palace = me ? AIUtil::Palace(me) : nullptr;
+	check("set up", g && me && palace);
+	if (!g || !me || !palace) { printf("TACTICS all 0\n"); return; }
+	const GameSet* gs = server.gameSet.get();
+	// resources to spend, and room under the population limit (at 12 minutes the scripts' peasants
+	// fill it: "Have not reached Population Limit" refuses every Spawn)
+	const int popLimit = gs->items.names.getIndex("Total Population Count"), popCount = gs->items.names.getIndex("Population Count");
+	auto rich = [&]() {
+		me->setItem(Tags::PDITEM_FOOD, 5000);
+		me->setItem(Tags::PDITEM_WOOD, 5000);
+		me->setItem(Tags::PDITEM_GOLD, 5000);
+		if (popLimit >= 0 && popCount >= 0)
+			me->setItem(popLimit, me->getItem(popCount) + 50);
+	};
+	printf("TACTICS population %.0f of %.0f at 12 min\n", popCount >= 0 ? me->getItem(popCount) : -1.0f, popLimit >= 0 ? me->getItem(popLimit) : -1.0f);
+	// what the buildings were ordered to train: their Spawn orders' types
+	auto buildingsOf = [&]() {
+		std::vector<ServerGameObject*> list, todo{ me };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [t, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* b = (ServerGameObject*)c;
+					if (b->deleted) continue;
+					todo.push_back(b);
+					if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						list.push_back(b);
+				}
+		}
+		return list;
+	};
+	auto training = [&]() {
+		std::map<int, int> byClass;
+		std::string list;
+		for (ServerGameObject* b : buildingsOf())
+			for (Order& order : b->orderConfig.orders)
+				for (auto& task : order.tasks)
+					if (auto* spawn = dynamic_cast<SpawnTask*>(task.get()); spawn && spawn->toSpawn) {
+						byClass[AIUtil::TypeClass(spawn->toSpawn)]++;
+						list += " " + spawn->toSpawn->name;
+					}
+		return std::make_pair(byClass, list);
+	};
+	auto clearTraining = [&]() {
+		for (ServerGameObject* b : buildingsOf())
+			b->orderConfig.cancelAllOrders();
+		StepServer(server, 1); // (the cancelled orders go at the next step)
+	};
+	auto pretend = [&](int cls, const char* type) {
+		g->picture.sightings.clear();
+		for (int i = 0; i < 12; i++) {
+			Sighting s;
+			s.id = 900000 + i; s.player = 1027; s.fighter = true; s.cls = (uint8_t)cls; s.power = 100; s.x = 300; s.z = 300; s.seen = g->now(); s.type = type;
+			g->picture.sightings[s.id] = s;
+		}
+	};
+	clearTraining();
+	rich();
+	pretend(3, "Knight");
+	{
+		int buildings = 0, spawners = 0;
+		for (ServerGameObject* b : buildingsOf()) {
+			buildings++;
+			for (const Command* cmd : b->blueprint->offeredCommands)
+				if (gs->commands.getString(cmd).rfind("Spawn ", 0) == 0) {
+					spawners++;
+					printf("TACTICS %s %u offers %s (busy %d, can %d)\n", b->blueprint->name.c_str(), b->id, gs->commands.getString(cmd).c_str(),
+						(int)(b->orderConfig.getCurrentOrder() != nullptr), (int)cmd->canBeExecuted(b));
+					break;
+				}
+		}
+		const auto trainers = AIUtil::Trainers(me, false);
+		printf("TACTICS %d buildings, %d offer a Spawn; trainers now %zu; food %.0f, time %.0f\n", buildings, spawners, trainers.size(), me->getItem(Tags::PDITEM_FOOD), g->now());
+		for (const auto& [b, names] : trainers) {
+			std::string n;
+			for (const auto& s : names) n += " " + s;
+			printf("TACTICS trainer %s:%s\n", b->blueprint->name.c_str(), n.c_str());
+		}
+	}
+	const int against = TrainByCounters(*g);
+	auto [knightsMix, knightsList] = training();
+	printf("TACTICS against 12 Knights: %d ordered:%s\n", against, knightsList.c_str());
+	int heavyInfantry = knightsMix[1], others = 0;
+	for (const auto& [cls, n] : knightsMix)
+		if (cls != 1) others += n;
+	check("trains by counters", against > 0);
+	check("heavy infantry against heavy cavalry", heavyInfantry > 0 && heavyInfantry >= others);
+	clearTraining();
+	rich();
+	pretend(2, "Archer");
+	const int against2 = TrainByCounters(*g);
+	auto [archersMix, archersList] = training();
+	printf("TACTICS against 12 Archers: %d ordered:%s\n", against2, archersList.c_str());
+	check("trains against archers too", against2 > 0);
+	clearTraining();
+
+	// abilities
+	const GameObjBlueprint* monk = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Monastic Knight");
+	const GameObjBlueprint* knight = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Knight");
+	const GameObjBlueprint* priestess = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "High Priestess");
+	const GameObjBlueprint* pike = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
+	check("ability types found", monk && knight && priestess && pike);
+	if (monk && knight && priestess && pike) {
+		const Vector3 at = palace->position + Vector3(30, 0, 30);
+		ServerGameObject* healer = server.spawnObject(monk, me, at, Vector3(0, 0, 0));
+		ServerGameObject* hurt = server.spawnObject(knight, me, at + Vector3(4, 0, 0), Vector3(0, 0, 0));
+		const int hp = gs->items.names.getIndex("Hit Points"), cap = gs->items.names.getIndex("Hit Point Capacity");
+		if (hp >= 0 && cap >= 0)
+			hurt->setItem(hp, hurt->getItem(cap) * 0.3f);
+		// (a caster's Charge Bar fills over time: a new one has none, and "Have Enough Charge" waits)
+		const int charge = gs->items.names.getIndex("Charge Bar");
+		if (charge >= 0)
+			healer->setItem(charge, 1000);
+		std::map<uint64_t, float> ready;
+		const int healed = UseAbilities(*g, { healer, hurt }, ready);
+		Order* o = healer->orderConfig.getCurrentOrder();
+		printf("TACTICS the Monastic Knight beside a Knight at 30%%: %d abilities used, its order now %s\n", healed,
+			o ? gs->orders.getString(o->blueprint->bpid).c_str() : "none");
+		check("heals a wounded friend", healed > 0);
+		check("not again within 8 s", UseAbilities(*g, { healer, hurt }, ready) == 0);
+		const Vector3 at2 = palace->position + Vector3(-30, 0, 30);
+		ServerGameObject* caster = server.spawnObject(priestess, me, at2, Vector3(0, 0, 0));
+		if (charge >= 0)
+			caster->setItem(charge, 1000);
+		server.spawnObject(pike, server.findObject(1027), at2 + Vector3(8, 0, 0), Vector3(0, 0, 0));
+		std::map<uint64_t, float> ready2;
+		const int cast = UseAbilities(*g, { caster }, ready2);
+		Order* o2 = caster->orderConfig.getCurrentOrder();
+		printf("TACTICS the High Priestess beside an enemy Pikeman: %d abilities used, its order now %s\n", cast,
+			o2 ? gs->orders.getString(o2->blueprint->bpid).c_str() : "none");
+		check("casts at an enemy", cast > 0);
+	}
+	g_settings["aiTrace"] = 0;
+	printf("TACTICS all %d\n", (int)all);
 	fflush(stdout);
 }
 
@@ -9113,6 +9273,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryFramework, "Ministry AI framework: the blackboard, departments at their rates and staggered, reports, nothing changed in the game, the ai section through a save"},
 {Test_MinistryIntelligence, "Ministry AI Intelligence: only what was seen (aiVision), the threat map, remembered and forgotten, through a save"},
 {Test_MinistryWar, "Ministry AI war: a scout first, attacks as missions, no waves from the war layer, missions through a save"},
+{Test_MinistryTactics, "Ministry AI tactics: training by counters, abilities (heal, curse) by the rule table"},
 };
 
 void LaunchTest()

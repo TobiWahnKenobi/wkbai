@@ -161,7 +161,7 @@ struct AIController {
 	void warUpdate();
 	// the ministry AI (Ministries.h) commands this player's attacks: the war layer defends but sends
 	// no waves, and leaves the missions' armies and units alone (set by its War department)
-	bool ministryWaves = false;
+	bool ministryWaves = false, ministryTraining = false;
 	std::set<uint32_t> ministryArmies, ministryUnits;
 	// the war layer's pool: the fighters at home, and the scripts' idle or not-fighting attackers
 	// near the base; not those in the armies `mine` nor the units `inWaves`

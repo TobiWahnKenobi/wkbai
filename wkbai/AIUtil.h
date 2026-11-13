@@ -8,10 +8,15 @@
 #include "util/vecmat.h"
 
 struct ServerGameObject;
+struct GameObjBlueprint;
 
 namespace AIUtil {
 	// "I'm A Military Unit": 1 heavy infantry, 2 light infantry (archers), 3 heavy cavalry, 4 light cavalry, 0 none
 	int ClassOf(const ServerGameObject* o);
+	// the same for a type (its starting item)
+	int TypeClass(const GameObjBlueprint* type);
+	// a type's cost (food + wood + gold)
+	float TypeCost(const GameObjBlueprint* type);
 	bool IsSoldier(const ServerGameObject* o);
 	bool IsPeasant(const ServerGameObject* o);
 	// a character that fights (soldiers, and armed ones without a class: Monks)

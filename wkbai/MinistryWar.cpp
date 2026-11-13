@@ -281,6 +281,20 @@ namespace {
 	struct War : Department {
 		uint8_t id() const override { return WAR; }
 		float period() const override { return 3.0f; }
+		std::map<uint64_t, float> ready; // the abilities' cooldowns
+		void save(const Government&, std::vector<std::string>& lines) const override {
+			for (const auto& [key, until] : ready) {
+				char buf[64];
+				snprintf(buf, sizeof(buf), "ready %llu %.9g", (unsigned long long)key, until);
+				lines.push_back(buf);
+			}
+		}
+		void load(Government&, const std::string& line) override {
+			unsigned long long key = 0;
+			float until = 0.0f;
+			if (sscanf(line.c_str(), "ready %llu %f", &key, &until) == 2)
+				ready[key] = until;
+		}
 
 		void think(Government& g) override {
 			ServerGameObject* me = g.player();
@@ -288,6 +302,9 @@ namespace {
 				return;
 			AIController& ai = me->aiController;
 			ai.ministryWaves = true;
+			ai.ministryTraining = true;
+			// the surplus into fighters, by counters
+			TrainByCounters(g);
 			// the missions' units, for the war layer to leave alone
 			ai.ministryUnits.clear();
 			for (Mission& m : g.missions)
@@ -312,6 +329,9 @@ namespace {
 			g.board.report("war.available", available);
 			g.board.report("war.availablePower", power);
 			g.board.report("war.inMissions", (double)ai.ministryUnits.size());
+			// abilities at home, with enemies there
+			if (threat > 0.0f)
+				UseAbilities(g, home, ready);
 			if (available <= 0)
 				return;
 			// the soldiers that may go: the guard stays (the first, by id: the oldest)
@@ -372,6 +392,20 @@ namespace {
 	struct Generals : Department {
 		uint8_t id() const override { return GENERALS; }
 		float period() const override { return 1.0f; }
+		std::map<uint64_t, float> ready; // the abilities' cooldowns
+		void save(const Government&, std::vector<std::string>& lines) const override {
+			for (const auto& [key, until] : ready) {
+				char buf[64];
+				snprintf(buf, sizeof(buf), "ready %llu %.9g", (unsigned long long)key, until);
+				lines.push_back(buf);
+			}
+		}
+		void load(Government&, const std::string& line) override {
+			unsigned long long key = 0;
+			float until = 0.0f;
+			if (sscanf(line.c_str(), "ready %llu %f", &key, &until) == 2)
+				ready[key] = until;
+		}
 
 		void think(Government& g) override {
 			ServerGameObject* me = g.player();
@@ -430,6 +464,8 @@ namespace {
 			}
 			if (units.empty())
 				return "lost";
+			// the units' abilities, where there is something to use them on
+			UseAbilities(g, units, ready);
 			const Vector3 at = Centre(units);
 			const int kills = KillsOf(srv, m) - m.kills0;
 			const float losses = m.startUnits > 0 ? 1.0f - (float)units.size() / m.startUnits : 0.0f;

@@ -13,4 +13,8 @@ namespace Ministry {
 	std::unique_ptr<Department> MakeGenerals();
 	// the General's character from its items (MinistryWar.cpp)
 	void ReadPersonality(Government& g);
+	// MinistryTactics.cpp: the units' abilities by the rule table (cooldowns: unit id << 8 | rule ->
+	// the game time it may again), how many used; fighters trained by counters, how many ordered
+	int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std::map<uint64_t, float>& ready);
+	int TrainByCounters(Government& g);
 }
