@@ -285,6 +285,18 @@ namespace {
 			o.set = [&rs](float v) { rs.extendMapShadows = v != 0.0f; };
 			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
 		}
+		// the far land kept on disk (FarLandCache.h), and its folder's size
+		list.push_back(withEnabled(toggle("farLandCache", "terrain", "Keep the far land on disk", rs.farLandCache), [&rs]() { return rs.extendMap >= 2; }));
+		{
+			MenuOption o;
+			o.id = "farLandCacheMB"; o.page = "terrain"; o.label = "Far land cache size (MB)";
+			o.type = MenuOption::SLIDER;
+			o.min = 256.0f; o.max = 32768.0f;
+			o.format = "%.0f";
+			o.get = [&rs]() { return (float)rs.farLandCacheMB; };
+			o.set = [&rs](float v) { rs.farLandCacheMB = std::clamp((int)std::lround(v / 256.0f) * 256, 256, 32768); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2 && rs.farLandCache; }));
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));

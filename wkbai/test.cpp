@@ -8940,6 +8940,7 @@ void Test_BuildIdentity()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
+void Test_FarLandCache(); // FarLandCacheTest.cpp
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -9019,6 +9020,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
 {Test_ChimneySmoke, "Chimney smoke: wkSmoke nodes, PS_Chimney points and their rule, the houses' table, night/winter/always/day, the puffs"},
+{Test_FarLandCache, "Far land cache: a cold load fills it with the same bytes, a warm one makes nothing, a changed map, generator or quality makes its own, damaged entries, the size cap"},
 };
 
 void LaunchTest()
