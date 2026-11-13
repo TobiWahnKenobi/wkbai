@@ -4139,10 +4139,19 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				break;
 			}
 			case NETSRVMSG_CREATE_NEW_FORMATION: {
+				// a formation needs more than 7 characters (WKB.exe 0x54f0d0); fewer stay as they are
+				std::vector<ServerGameObject*> subs;
+				for (ServerGameObject* sub : clientInfos[clientIndex].unitsForNewFormation)
+					if (sub && !(sub->flags & CommonGameObject::fTerminated) && sub->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+						&& std::find(subs.begin(), subs.end(), sub) == subs.end())
+						subs.push_back(sub);
+				clientInfos[clientIndex].unitsForNewFormation.clear();
+				if (subs.size() < 8)
+					break;
 				const GameObjBlueprint* blueprint = &gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0];
 				ServerGameObject* formation = spawnObject(blueprint, player, {}, {});
 				Vector3 positionSum; int numUnits = 0;
-				for (ServerGameObject* sub : clientInfos[clientIndex].unitsForNewFormation) {
+				for (ServerGameObject* sub : subs) {
 					positionSum += sub->position;
 					numUnits += 1;
 					sub->setParent(formation);
@@ -4150,7 +4159,6 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				formation->setPosition(positionSum / numUnits);
 				FormationController::faceMembersWay(formation);
 				formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
-				clientInfos[clientIndex].unitsForNewFormation.clear();
 				break;
 			}
 			case NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_TARGET: {

@@ -1235,6 +1235,8 @@ struct ActionCreateFormation : Action {
 			return;
 		if (objList.size() == 1 && objList[0]->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
 			objList[0]->convertTo(formationType);
+			// (the same type too: "Reform Yourself", as the Halt command sends it, forms up again)
+			objList[0]->formationController.requestFormUp();
 			return;
 		}
 
