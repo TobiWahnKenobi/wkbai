@@ -292,8 +292,9 @@ private:
 	struct ExtTreeModel { Model* model; float scale; uint32_t flags; bool broadleaf; float height; };
 	std::vector<ExtTreeModel> extTreeModels;
 	std::vector<SceneEntity> extTreeEntities;
-	// per entity: its leafy and its bare look (a broadleaf tree's), its id for when it drops its leaves
-	struct ExtTreeLook { Model* leafy; Matrix leafyTransform; Model* bare; Matrix bareTransform; uint32_t flags; uint32_t id; };
+	// per entity: its leafy and its bare look (a broadleaf tree's), its id for when it drops its
+	// leaves, and its snowy look (the fir Pine04's, SnowyFirModel; null for the others)
+	struct ExtTreeLook { Model* leafy; Matrix leafyTransform; Model* bare; Matrix bareTransform; uint32_t flags; uint32_t id; Model* snowy = nullptr; };
 	std::vector<ExtTreeLook> extTreeLooks;
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
