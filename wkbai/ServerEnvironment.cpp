@@ -757,6 +757,21 @@ void ServerEnvironment::applyFloods(Server& server)
 		}
 }
 
+void ServerEnvironment::startClock(float now)
+{
+	// a new game starts at the start hour and in the start season, whatever the clock the map was
+	// saved with (some levels' game time is far from 0: a winter night instead of a spring morning)
+	if (clockStarted)
+		return;
+	clockStarted = true;
+	if (now > 0.0f) {
+		auto frac = [](float x) { return x - std::floor(x); };
+		// (a hair past: the floor of the seasons elapsed must not round to the season before)
+		settings.dayShift = frac(settings.dayShift - now / settings.dayLengthS() + 1e-5f);
+		settings.yearShift = frac(settings.yearShift - now / (4.0f * settings.seasonLengthS()) + 1e-5f);
+	}
+}
+
 void ServerEnvironment::update(Server& server)
 {
 	if (!server.getLevel() || !server.gameSet || !server.terrain)
@@ -774,14 +789,8 @@ void ServerEnvironment::update(Server& server)
 		return;
 	const float dt = started ? 1.0f : 0.0f;
 	nextUpdate = now + 1.0f;
-	// a new game starts at the start hour and in the start season, whatever the clock the map was
-	// saved with (some levels' game time is far from 0: a winter night instead of a spring morning)
-	if (!started && now > 0.0f) {
-		auto frac = [](float x) { return x - std::floor(x); };
-		// (a hair past: the floor of the seasons elapsed must not round to the season before)
-		settings.dayShift = frac(settings.dayShift - now / settings.dayLengthS() + 1e-5f);
-		settings.yearShift = frac(settings.yearShift - now / (4.0f * settings.seasonLengthS()) + 1e-5f);
-	}
+	if (!started)
+		startClock(now);
 	state.time = now;
 	state.dayFraction = EnvDayFraction(settings, now);
 	state.yearFraction = EnvYearFraction(settings, now);
@@ -1073,6 +1082,11 @@ void ServerEnvironment::debugSet(Server& server, const std::string& name, float 
 {
 	const float now = server.timeManager.currentTime;
 	auto frac = [](float x) { return x - std::floor(x); };
+	// a jump of the clock before the game's first update (a save without day and night or the
+	// seasons, switched on in the same batch): the clock put at its start first, as that update
+	// would, so the jump is measured from the clock the game goes on with, not moved again after
+	if (!started && (name == "sunrise" || name == "sunset" || name == "hour" || name == "season"))
+		startClock(now);
 	if (name == "sunrise" || name == "sunset") {
 		// hours after this season's sunrise or sunset (before it when negative): test runs reach
 		// dawn and dusk on any day of the year, where a fixed hour can land in the night

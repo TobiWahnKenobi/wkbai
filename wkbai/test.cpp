@@ -5763,6 +5763,60 @@ void Test_MoonPhases()
 	printf("MOONTEST %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+// The environment debug's clock jumps (ServerEnvironment::debugSet, F9 and "environmentSet")
+// on a game whose environment has not started: an original's save without day and night, the
+// game time far from 0, switched on in the same batch as the jump. The hour and the season asked
+// for must be what the clock shows after the game's first update puts the clock at its start
+// (no game data: the first update's startClock called as it would be)
+void Test_EnvironmentClock()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const char* what) {
+		if (!ok) failures++;
+		printf("ENVCLOCK %s: %s\n", ok ? "ok" : "FAILED", what);
+	};
+	struct Case { float time; std::vector<std::pair<const char*, float>> set; float hour, season; };
+	const Case cases[] = {
+		{ 54321.0f, { { "dayNight", 1 }, { "seasons", 1 }, { "season", 1.5f }, { "hour", 12 } }, 12.0f, 1.5f },
+		{ 54321.0f, { { "dayNight", 1 }, { "seasons", 1 }, { "season", 3.5f }, { "hour", 0.5f } }, 0.5f, 3.5f },
+		{ 7777.0f, { { "dayNight", 1 }, { "seasons", 1 }, { "season", 0.5f }, { "hour", 18 } }, 18.0f, 0.5f },
+		{ 0.0f, { { "dayNight", 1 }, { "seasons", 1 }, { "season", 2.5f }, { "hour", 6 } }, 6.0f, 2.5f },
+		{ 123456.0f, { { "dayNight", 1 }, { "hour", 9 }, { "seasons", 1 }, { "season", 2.25f } }, 9.0f, 2.25f },
+	};
+	for (const Case& c : cases) {
+		Server server;
+		server.timeManager.currentTime = c.time;
+		ServerEnvironment& env = server.environment;
+		for (const auto& [name, value] : c.set)
+			env.debugSet(server, name, value);
+		env.startClock(c.time); // the first update's
+		const float hour = EnvDayFraction(env.settings, c.time) * 24.0f;
+		const float season = EnvYearFraction(env.settings, c.time) * 4.0f;
+		auto within = [](float a, float b, float range) { float d = std::fabs(a - b); return std::min(d, range - d) < 0.01f; };
+		char what[200];
+		snprintf(what, sizeof(what), "t=%.0f: asked %05.2f h, season %.2f; shows %05.2f h, season %.2f (%s)", c.time, c.hour, c.season, hour,
+			season, SeasonName((int)std::floor(season) % 4));
+		check(within(hour, c.hour, 24.0f) && within(season, c.season, 4.0f), what);
+	}
+	// sunset: hours after this season's sunset, measured on the clock the game goes on with
+	{
+		Server server;
+		server.timeManager.currentTime = 54321.0f;
+		ServerEnvironment& env = server.environment;
+		env.debugSet(server, "dayNight", 1);
+		env.debugSet(server, "seasons", 1);
+		env.debugSet(server, "season", 1.5f);
+		env.debugSet(server, "sunset", 0.6f);
+		env.startClock(54321.0f);
+		const float df = EnvDayFraction(env.settings, 54321.0f), yf = EnvYearFraction(env.settings, 54321.0f);
+		const SunState sun = ComputeSun(df, yf, true, 0.0f);
+		char what[200];
+		snprintf(what, sizeof(what), "sunset +0.6 h in summer: shows %05.2f h, the sunset at %05.2f h", df * 24.0f, sun.sunset);
+		check(std::fabs(df * 24.0f - (sun.sunset + 0.6f)) < 0.02f && df * 24.0f > 12.0f, what);
+	}
+	printf("ENVCLOCK %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 // Unit history (UnitHistory): on 4 Peaks, three fights in three places, and checks that every
 // death is credited to a unit of the other side: spearmen against weakened spearmen; archers
 // against weakened spearmen (the arrows' kills to the archers); two archers garrisoned in a
@@ -8815,6 +8869,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
+{Test_EnvironmentClock, "Environment clock: the debug's hour, season and sunset on a game whose environment has not started (an original's save)"},
 };
 
 void LaunchTest()
