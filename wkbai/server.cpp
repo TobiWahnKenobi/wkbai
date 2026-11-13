@@ -46,14 +46,14 @@ Server::Server()
 
 void Server::loadSaveGame(const char * filename)
 {
-	// a save game's settings and players' Lua AIs (<save>.ai.txt, wkbai's own); cheat mode only
+	// a save game's settings and players' Lua AIs (its settings sections, wkbai's own); cheat mode only
 	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
 	cheatMode = false;
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
 	clearFogOfWar = false;
-	// nobody's game over, unless the save says so (<save>.ai.txt "finished.<id>")
+	// nobody's game over, unless the save says so ("finished.<id>")
 	finishedPlayers.clear();
 	// diplomacy: the offers (DIPLOMATIC_OFFER in the save), the chat personalities and the
 	// diplomacy buttons (<save>.ai.txt "chatPersonality.<id>", "diplomacyWindow.<id>.<window>")
@@ -67,32 +67,23 @@ void Server::loadSaveGame(const char * filename)
 	// the interface on, whatever window would have switched it on again)
 	interfaceDisabled.clear();
 	objectiveMarkers.clear();
-	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		const std::string settings(text, size);
-		applyAiSettingsText(settings, false);
+	// the save's parts: a wkbai save file's sections, or an original save game or level (and an
+	// older wkbai save's side files)
+	const SaveParts parts = ReadSaveParts(filename);
+	if (!parts.settings.empty()) {
+		applyAiSettingsText(parts.settings, false);
 		// the game's settings, not the Lua AIs only (aiSettingsText writes aggressiveAI first;
 		// before 2026-11-07 the file had the scripts only): the lobby's applySettings keeps them
-		settingsFromSave = settings.find("aggressiveAI=") != std::string::npos;
-		free(text);
+		settingsFromSave = parts.settings.find("aggressiveAI=") != std::string::npos;
 	}
-	// wkbai's day and night, seasons and weather as saved (<save>.env.txt), else off
+	// wkbai's day and night, seasons and weather as saved, else off
 	environment.reset();
 	nightSight = NightSight();
-	if (const std::string side = std::string(filename) + ".env.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		environment.loadText(std::string(text, size));
-		free(text);
+	if (!parts.environment.empty()) {
+		environment.loadText(parts.environment);
 		environment.trace = g_settings.value("environmentTrace", false); // (tests, as a new game's)
 	}
-	char *filetext; int filesize;
-	LoadFile(filename, &filetext, &filesize, 1);
-	filetext[filesize] = 0;
-	GSFileParser gsf(filetext);
+	GSFileParser gsf(parts.world.c_str());
 	// the random state as saved, set once everything is loaded (creating the objects draws numbers)
 	std::optional<uint32_t> randomSeed;
 
@@ -187,21 +178,15 @@ void Server::loadSaveGame(const char * filename)
 	if (randomSeed)
 		g_simRandom.seed(*randomSeed);
 
-	free(filetext);
-
 	for (auto &t : postAssociations)
 		std::get<0>(t)->associateObject(std::get<1>(t), findObject(std::get<2>(t)));
 	postAssociations.clear();
 	for (auto& [task, id] : postTaskTargets)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
-	// the workers' attachment paths as saved (<save>.paths.txt, wkbai's own)
-	if (const std::string side = std::string(filename) + ".paths.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		std::string all(text, size);
-		free(text);
+	// the workers' attachment paths as saved (wkbai's own)
+	if (!parts.paths.empty()) {
+		const std::string& all = parts.paths;
 		size_t at = 0;
 		while (at < all.size()) {
 			size_t end = all.find('\n', at);
@@ -224,15 +209,12 @@ void Server::loadSaveGame(const char * filename)
 							RestoreAttachmentPath(task.get(), targetId, pathNo, step, tried != 0);
 		}
 	}
-	// wkbai's unit history as saved (<save>.history.txt): kills, creators, the last hits
-	if (const std::string side = std::string(filename) + ".history.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		std::string all(text, size);
-		free(text);
-		UnitHistory::loadText(*this, all);
-	}
+	// the walks going on as saved (after the attachment paths, which may start one)
+	if (!parts.movement.empty())
+		restoreMovements(parts.movement);
+	// wkbai's unit history as saved: kills, creators, the last hits
+	if (!parts.history.empty())
+		UnitHistory::loadText(*this, parts.history);
 	unitHistory.loaded(*this);
 	// the players whose game was over at the save (the clients had the game set's message: their
 	// lists are empty)

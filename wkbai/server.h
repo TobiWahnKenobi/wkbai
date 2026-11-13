@@ -202,10 +202,25 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 
 	Server();
 
+	// Loads a wkbai save file (SaveFile.h), or an original save game or level (the world alone;
+	// an older wkbai save's side files <save>.ai.txt, .env.txt, .paths.txt, .history.txt with it)
 	void loadSaveGame(const char *filename);
 	// Writes the game to a save game file (a file system path, its folders are created) that
-	// loadSaveGame reads back (ServerSave.cpp)
+	// loadSaveGame reads back (ServerSave.cpp): a wkbai save file; a level (savingLevel), or any
+	// save with saveOriginalFormat (or the setting "saveFormat": "original"), in the original's
+	// format, with the side files
 	bool saveGame(const char* filename);
+	bool saveOriginalFormat = false;
+	// a save game's parts as loadSaveGame applies them: from a wkbai save file's sections, or an
+	// original-format file and its side files (ServerSave.cpp)
+	struct SaveParts {
+		bool saveFile = false;
+		std::string world, settings, environment, paths, history, movement;
+	};
+	static SaveParts ReadSaveParts(const char* filename);
+	// the walks going on, as a save keeps them (the movement section), and back
+	std::string movementSaveText() const;
+	void restoreMovements(const std::string& text);
 	// what the game was loaded from, for saving
 	std::string gameSetFile, mapFile;
 	// GAME_TYPE: 4 in every shipped level, 1 in the original's skirmish saves (its Load Game
@@ -231,7 +246,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
 	// (recorded, so a replay applies the panel's changes too)
 	bool cheatMode = false;
-	// loadSaveGame read the game's settings from the save game (<save>.ai.txt): the lobby's
+	// loadSaveGame read the game's settings from the save game (its settings section, or an
+	// older save's <save>.ai.txt): the lobby's
 	// applySettings then keeps them (all the game's settings go with its save game)
 	bool settingsFromSave = false;
 	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, everything on the map is

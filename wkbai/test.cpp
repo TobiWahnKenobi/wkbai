@@ -1372,9 +1372,25 @@ static size_t CountObjects(const CommonGameObject* obj)
 	return n;
 }
 
-// Same words, numbers equal within 0.05 (a unit's height snaps to the terrain again on loading)
+// Same words, numbers equal within 0.05 (a unit's height snaps to the terrain again on loading);
+// a save file's section line by its name and version (its length follows the numbers' digits)
 static bool SameSaveLine(const std::string& a, const std::string& b)
 {
+	if (a.rfind("SECTION ", 0) == 0 && b.rfind("SECTION ", 0) == 0)
+		return a.substr(0, a.rfind(' ')) == b.substr(0, b.rfind(' '));
+	// the chronicle's "first scan" flag is set again by loading (GameChronicle::stateFromText: what
+	// it had seen isn't saved, so its first scan only notes it); the narrator's, not the game's
+	if (a.rfind("CHRONICLE STATE ", 0) == 0 && b.rfind("CHRONICLE STATE ", 0) == 0) {
+		auto without = [](const std::string& s) {
+			std::istringstream in(s);
+			std::string w, out;
+			for (int i = 0; in >> w; i++)
+				if (i != 0 && i != 5) // (without "CHRONICLE" too: compared as numbers, not again here)
+					out += w + " ";
+			return out;
+		};
+		return SameSaveLine(without(a), without(b));
+	}
 	std::istringstream sa(a), sb(b);
 	std::string wa, wb;
 	while (true) {
@@ -2109,6 +2125,252 @@ static uint64_t DeterminismRun(uint32_t seed)
 		(int)(g_simRandom.state != randomBefore));
 	fflush(stdout);
 	return hash;
+}
+
+// Save format (needs the game data): 4 Peaks with a fixed seed, every peasant chopping wood. At 30 s
+// the game is saved and plays on to 60 s; the save loaded in a new server plays the same 30 s.
+// Checked: the file is a wkbai save file (WKBAI_SAVE, a world section, no side files); the same
+// hash and positions after the 30 s; the original format (saveOriginalFormat: FORMAT SCENARIO and
+// the side files) loads with as many objects; a section from a newer build is skipped; a file
+// whose line breaks were converted to \r\n loads. Prints "SAVEFMT <check> <0|1>" and
+// "SAVEFMT all <0|1>".
+static uint64_t WorldHash(Server& server, std::map<uint32_t, Vector3>* positions = nullptr, size_t* count = nullptr)
+{
+	uint64_t hash = 1469598103934665603ull;
+	auto mix = [&](const void* data, size_t n) {
+		for (size_t i = 0; i < n; i++) { hash ^= ((const uint8_t*)data)[i]; hash *= 1099511628211ull; }
+	};
+	size_t objects = 0;
+	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+		objects++;
+		mix(&obj->id, sizeof(obj->id));
+		mix(&obj->position, sizeof(obj->position));
+		mix(&obj->orientation, sizeof(obj->orientation));
+		if (positions)
+			(*positions)[obj->id] = obj->position;
+		for (const auto& [item, value] : obj->items) { mix(&item, sizeof(item)); mix(&value, sizeof(value)); }
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self(child, self);
+	};
+	walk(server.getLevel(), walk);
+	if (count)
+		*count = objects;
+	return hash;
+}
+
+// Every object's state by id, in an order that doesn't depend on how the objects were created or
+// loaded (the children lists and item maps of a loaded game come in the save's order): its
+// position, orientation and items, sorted
+static std::map<uint32_t, std::string> WorldState(Server& server)
+{
+	std::map<uint32_t, std::string> state;
+	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+		char buf[160];
+		snprintf(buf, sizeof(buf), "pos %.9g %.9g %.9g ori %.9g %.9g %.9g", obj->position.x, obj->position.y, obj->position.z,
+			obj->orientation.x, obj->orientation.y, obj->orientation.z);
+		std::string s = buf;
+		std::vector<std::pair<int, float>> items(obj->items.begin(), obj->items.end());
+		std::sort(items.begin(), items.end());
+		for (const auto& [item, value] : items)
+			if (value != 0.0f) { // (a missing item reads as 0, and the save leaves 0 out)
+				snprintf(buf, sizeof(buf), " %s=%.9g", server.gameSet->items.names.getString(item).c_str(), value);
+				s += buf;
+			}
+		state[obj->id] = s;
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children)
+				self(child, self);
+	};
+	walk(server.getLevel(), walk);
+	return state;
+}
+
+static void StepServer(Server& server, int steps)
+{
+	server.timeManager.stepMs = 20;
+	for (int i = 0; i < steps; i++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs; // a step without the real clock
+		if (server.timeManager.step())
+			server.simulate();
+	}
+}
+
+void Test_SaveFormat()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("SAVEFMT %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	const auto dir = g_userPath / "saved" / "Save_Games";
+	const std::string name = "wkbai save format test";
+	const std::string file = PathToUtf8(dir / PathFromUtf8(name + ".sav"));
+	const std::string vfsName = "Save_Games\\" + name + ".sav";
+	auto readAll = [](const std::string& path) {
+		std::ifstream f(PathFromUtf8(path), std::ios::binary);
+		return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+	};
+	auto writeAll = [](const std::string& path, const std::string& text) {
+		std::ofstream f(PathFromUtf8(path), std::ios::binary);
+		f.write(text.data(), (std::streamsize)text.size());
+	};
+	auto exists = [](const std::string& path) { std::error_code ec; return std::filesystem::exists(PathFromUtf8(path), ec); };
+
+	// the game played straight through, saved at 30 s
+	uint64_t straight = 0;
+	std::map<uint32_t, Vector3> straightAt;
+	std::map<uint32_t, std::string> straightState;
+	size_t savedObjects = 0;
+	float savedTime = 0.0f;
+	{
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		g_settings["simSeed"] = 4242;
+		server.startLevel();
+		const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+		std::vector<ServerGameObject*> peasants, trees;
+		auto find = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					if (child->blueprint->name == "Peasant")
+						peasants.push_back(child->dyncast<ServerGameObject>());
+					else if (child->blueprint->name == "Coniferous Tree")
+						trees.push_back(child->dyncast<ServerGameObject>());
+					self(child, self);
+				}
+		};
+		find(server.getLevel(), find);
+		for (ServerGameObject* peasant : peasants) {
+			ServerGameObject* best = nullptr;
+			float bestDist = 1e12f;
+			for (ServerGameObject* tree : trees)
+				if (float d = (tree->position - peasant->position).sqlen2xz(); d < bestDist) { bestDist = d; best = tree; }
+			if (best && chop >= 0)
+				server.gameSet->commands[chop].execute(peasant, best, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		}
+		server.timeManager.unpause();
+		StepServer(server, 1500);
+		check("saved", server.saveGame(file.c_str()));
+		WorldHash(server, nullptr, &savedObjects);
+		savedTime = server.timeManager.currentTime;
+		StepServer(server, 1500);
+		straight = WorldHash(server, &straightAt);
+		straightState = WorldState(server);
+	}
+	const std::string text = readAll(file);
+	check("magic", text.rfind("WKBAI_SAVE 1\n", 0) == 0);
+	check("world section", text.find("\nSECTION world 1 ") != std::string::npos && text.find("\nEND_SECTION world\n") != std::string::npos);
+	check("settings section", text.find("\nSECTION settings 1 ") != std::string::npos);
+	check("no side files", !exists(file + ".ai.txt") && !exists(file + ".env.txt") && !exists(file + ".paths.txt") && !exists(file + ".history.txt"));
+	printf("SAVEFMT file %zu bytes\n", text.size());
+
+	// loaded and played on for the same 30 s
+	{
+		Server server;
+		server.loadSaveGame(vfsName.c_str());
+		size_t loadedObjects = 0;
+		WorldHash(server, nullptr, &loadedObjects);
+		check("objects loaded", loadedObjects == savedObjects);
+		check("time loaded", server.timeManager.currentTime == savedTime);
+		StepServer(server, 1500);
+		std::map<uint32_t, Vector3> at;
+		const uint64_t loaded = WorldHash(server, &at);
+		int moved = 0, missing = 0;
+		float worst = 0.0f;
+		for (const auto& [id, p] : straightAt) {
+			auto it = at.find(id);
+			if (it == at.end()) { missing++; continue; }
+			const float d = (it->second - p).len3();
+			if (d > 0.0f) {
+				moved++;
+				worst = std::max(worst, d);
+				if (moved <= 10) {
+					const ServerGameObject* o = server.findObject(id);
+					std::string orders;
+					if (o)
+						for (const Order& order : o->orderConfig.orders) {
+							orders += " " + server.gameSet->orders.getString(order.blueprint);
+							if (order.currentTask >= 0 && order.currentTask < (int)order.tasks.size())
+								orders += "/" + server.gameSet->tasks.getString(order.tasks[order.currentTask]->blueprint);
+						}
+					printf("SAVEFMT elsewhere %u %s: %.2f m (straight %.1f %.1f, loaded %.1f %.1f), orders:%s\n", id,
+						o ? o->blueprint->name.c_str() : "?", d, p.x, p.z, it->second.x, it->second.z, orders.c_str());
+				}
+			}
+		}
+		printf("SAVEFMT play on: straight %016llx, loaded %016llx; objects %zu vs %zu, %d missing, %d elsewhere (worst %.2f m)\n",
+			(unsigned long long)straight, (unsigned long long)loaded, straightAt.size(), at.size(), missing, moved, worst);
+		// the same state, object by object (the hash also depends on the order of the lists)
+		const std::map<uint32_t, std::string> state = WorldState(server);
+		int differ = 0;
+		for (const auto& [id, s] : straightState) {
+			auto it = state.find(id);
+			if (it != state.end() && it->second == s)
+				continue;
+			if (++differ <= 10) {
+				const ServerGameObject* o = server.findObject(id);
+				printf("SAVEFMT differs %u %s:\n  straight %s\n  loaded   %s\n", id, o ? o->blueprint->name.c_str() : "?", s.c_str(),
+					it == state.end() ? "(none)" : it->second.c_str());
+			}
+		}
+		for (const auto& [id, s] : state)
+			if (!straightState.count(id) && ++differ <= 10)
+				printf("SAVEFMT differs %u: only after loading: %s\n", id, s.c_str());
+		printf("SAVEFMT play on: %d of %zu objects differ in position, orientation or items; hashes %s\n", differ, straightState.size(),
+			loaded == straight ? "same" : "differ (order of the lists)");
+		check("play on same", differ == 0);
+	}
+
+	// the original format, with its side files
+	{
+		const std::string orig = PathToUtf8(dir / PathFromUtf8(name + " original.sav"));
+		Server server;
+		server.loadSaveGame(vfsName.c_str());
+		server.timeManager.pause();
+		server.saveOriginalFormat = true;
+		check("original saved", server.saveGame(orig.c_str()));
+		const std::string otext = readAll(orig);
+		check("original format", otext.rfind("FORMAT SCENARIO", 0) == 0 && otext.find("WKBAI_SAVE") == std::string::npos);
+		check("original side file", exists(orig + ".ai.txt"));
+		Server again;
+		again.loadSaveGame(("Save_Games\\" + name + " original.sav").c_str());
+		size_t n = 0;
+		WorldHash(again, nullptr, &n);
+		check("original loaded", n == savedObjects);
+	}
+
+	// a section of a newer build, and the line breaks converted
+	{
+		std::string future = text;
+		const size_t end = future.rfind("END_SAVE");
+		future.insert(end, "SECTION ministries 3 12\nhello world\nEND_SECTION ministries\n");
+		const std::string fpath = PathToUtf8(dir / PathFromUtf8(name + " future.sav"));
+		writeAll(fpath, future);
+		Server server;
+		server.loadSaveGame(("Save_Games\\" + name + " future.sav").c_str());
+		size_t n = 0;
+		WorldHash(server, nullptr, &n);
+		check("unknown section skipped", n == savedObjects);
+	}
+	{
+		std::string crlf;
+		for (char c : text) {
+			if (c == '\n')
+				crlf += '\r';
+			crlf += c;
+		}
+		const std::string cpath = PathToUtf8(dir / PathFromUtf8(name + " crlf.sav"));
+		writeAll(cpath, crlf);
+		Server server;
+		server.loadSaveGame(("Save_Games\\" + name + " crlf.sav").c_str());
+		size_t n = 0;
+		WorldHash(server, nullptr, &n);
+		check("crlf loaded", n == savedObjects && server.timeManager.currentTime == savedTime);
+	}
+	printf("SAVEFMT all %d\n", (int)all);
+	fflush(stdout);
 }
 
 void Test_Determinism()
@@ -3492,6 +3754,7 @@ void Test_DiffRun()
 	}
 	server.timeManager.pause();
 	const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / PathFromUtf8(out + ".sav"));
+	server.saveOriginalFormat = true; // (compared with the original's save, which the original loads too)
 	const bool ok = server.saveGame(path.c_str());
 	printf("DIFFRUN %s: %.2f -> %.2f game s, saved %d to %s\n", source.c_str(), start, server.timeManager.currentTime, (int)ok, path.c_str());
 	fflush(stdout);
@@ -8484,6 +8747,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_LobbyItems, "Lobby items: Team Placement, a renamed AI General, Unit Lives Infinite, Lock Server"},
 {Test_CampaignInterface, "Campaign and tutorial actions: the interface off and on, objectives markers, UNLOCK_LEVEL"},
 {Test_SpawnPoint, "Spawn point: a unit trained with no rally point comes out at the building's CR_ path, off its footprint"},
+{Test_SaveFormat, "Save format: wkbai's save file with sections, the original format, unknown sections, play on after loading"},
 };
 
 void LaunchTest()
