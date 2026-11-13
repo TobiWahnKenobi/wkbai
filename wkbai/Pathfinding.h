@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -287,7 +288,21 @@ namespace Pathfinding {
 
         TileWalker walker(start_x, start_z, dir_x, dir_z);
 
+        // (no more steps than the tiles between the ends, and a few: a walk that never landed on the
+        // end tile went on for good, the game frozen in a path search, 4 Player Fields Of Blood seed 2
+        // at 25 minutes; past that it counts as not free, and a search is made)
+        const float span = std::abs(dir_x) + std::abs(dir_z);
+        const long limit = std::isfinite(span) && span < 100000.0f ? (long)span + 8 : 100000;
+        long steps = 0;
         while (currentTile != endTile) {
+            if (++steps > limit) {
+                static bool reported = false;
+                if (!reported) {
+                    reported = true;
+                    printf("WARNING: a straight-line test from (%g, %g) to (%g, %g) didn't reach its end tile in %ld steps\n", start_x, start_z, end_x, end_z, limit);
+                }
+                return currentTile;
+            }
             currentTile = walker.next();
             if (pred(currentTile))
                 return currentTile;

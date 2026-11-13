@@ -324,6 +324,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the ministry AI's reaction time, in percent of its departments' periods (a difficulty: 100 the
 	// default, 200 thinks half as often, 50 twice as often): "aiReaction"
 	int aiReaction = 100;
+	// which AI positions get a government: bit i for the i-th player (by id, the neutral player not
+	// counted); 0, the default, every AI: "aiMinistriesSlots" (for comparing it with the others)
+	int aiMinistriesSlots = 0;
 	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone

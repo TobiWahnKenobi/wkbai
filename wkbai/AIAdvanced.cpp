@@ -408,12 +408,26 @@ namespace AIUtil {
 	std::vector<ServerGameObject*> Peasants(ServerGameObject* player)
 	{
 		g_items.update(Server::instance->gameSet.get());
-		std::vector<ServerGameObject*> list;
+		// (all of the player's, through its armies, cities and towns: straight under the player only,
+		// as the Lua AI's ai.peasants had it, found none in an AI test game, so no gold miner went)
+		std::vector<ServerGameObject*> list, todo;
 		if (player)
-			for (const auto& [type, children] : player->children)
-				for (CommonGameObject* c : children)
-					if (!((ServerGameObject*)c)->deleted && ::IsPeasant((ServerGameObject*)c))
-						list.push_back((ServerGameObject*)c);
+			todo.push_back(player);
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* u = (ServerGameObject*)c;
+					if (u->deleted)
+						continue;
+					if (::IsPeasant(u))
+						list.push_back(u);
+					else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						todo.push_back(u);
+				}
+		}
+		std::sort(list.begin(), list.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 		return list;
 	}
 	void Attack(const std::vector<ServerGameObject*>& units, ServerGameObject* target)
@@ -1225,8 +1239,10 @@ void AIController::warUpdate()
 			printf("WAR player %u t=%.0f: %zu enemies at (%.0f,%.0f)%s, %zu defenders sent\n", gameObj->id, now, t.enemies.size(), t.place.at.x, t.place.at.z,
 				t.place.palace ? " (palace)" : "", used);
 	}
-	// soldiers defend, not the peasants: no militia while there are soldiers to send
-	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0)
+	// soldiers defend, not the peasants: no militia while there are soldiers to send (with the
+	// ministry AI its Labour & Population decides: it allows militia only in an emergency, and this
+	// switched it back on every 3 s while the missions were out)
+	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0 && !ministryWaves)
 		gameObj->setItem(noMilitia, (available.size() + busy.size() >= 5) ? 1.0f : 0.0f);
 
 	// ---- The waves out ----
@@ -1660,14 +1676,7 @@ void AIController::startLuaAI(const std::string& name)
 		return IdList(ts, list);
 	});
 	ai.set_function("peasants", [player](sol::this_state ts) {
-		std::vector<ServerGameObject*> list;
-		g_items.update(Server::instance->gameSet.get());
-		if (ServerGameObject* p = player())
-			for (const auto& [type, children] : p->children)
-				for (CommonGameObject* c : children)
-					if (!((ServerGameObject*)c)->deleted && IsPeasant((ServerGameObject*)c))
-						list.push_back((ServerGameObject*)c);
-		return IdList(ts, list);
+		return IdList(ts, AIUtil::Peasants(player()));
 	});
 	// the soldiers at home (the defensive army), and the attacking armies with their units
 	ai.set_function("home", [player](sol::this_state ts) {

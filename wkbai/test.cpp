@@ -3297,6 +3297,28 @@ void Test_BCMRoundTrip()
 void Test_AIvsAI()
 {
 	LoadBCP("data.bcp");
+	// WKB_WATCHDOG=<seconds>: a step that doesn't end in that time: where the simulation is, then exit
+	if (const char* wd = getenv("WKB_WATCHDOG")) {
+		extern std::atomic<const char*> g_simPhase;
+		extern std::atomic<uint32_t> g_simPhaseObject;
+		extern std::atomic<uint64_t> g_simSteps;
+		const int limit = std::max(2, atoi(wd));
+		std::thread([limit]() {
+			uint64_t last = 0;
+			int still = 0;
+			for (;;) {
+				std::this_thread::sleep_for(std::chrono::seconds(1));
+				const uint64_t now = g_simSteps.load();
+				still = now == last && now > 0 ? still + 1 : 0;
+				last = now;
+				if (still >= limit) {
+					printf("WATCHDOG step %llu has not ended in %d s: in %s, object %u\n", (unsigned long long)now, limit, g_simPhase.load(), g_simPhaseObject.load());
+					fflush(stdout);
+					_exit(3);
+				}
+			}
+		}).detach();
+	}
 	const nlohmann::json cfg = g_settings.value("aiTest", nlohmann::json::object());
 	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
 	const float minutes = cfg.value("minutes", 20.0f);

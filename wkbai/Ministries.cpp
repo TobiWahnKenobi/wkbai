@@ -341,15 +341,22 @@ void Ministries::update(Server& server)
 	ServerGameObject* level = (ServerGameObject*)server.getLevel();
 	if (!level)
 		return;
-	std::vector<ServerGameObject*> players;
+	std::vector<ServerGameObject*> players, all;
 	for (const auto& [type, children] : level->children)
 		for (CommonGameObject* child : children) {
 			ServerGameObject* p = (ServerGameObject*)child;
-			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && !p->deleted && !(p->flags & ServerGameObject::fTerminated)
-				&& p->aiController.isAI())
-				players.push_back(p);
+			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player")
+				all.push_back(p);
 		}
-	std::sort(players.begin(), players.end(), [](auto* a, auto* b) { return a->id < b->id; });
+	std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->id < b->id; });
+	for (size_t i = 0; i < all.size(); i++) {
+		ServerGameObject* p = all[i];
+		// (aiMinistriesSlots: only the positions asked for)
+		if (server.aiMinistriesSlots != 0 && !(i < 31 && (server.aiMinistriesSlots >> i) & 1))
+			continue;
+		if (!p->deleted && !(p->flags & ServerGameObject::fTerminated) && p->aiController.isAI())
+			players.push_back(p);
+	}
 	for (ServerGameObject* p : players) {
 		auto& g = governments[p->id];
 		if (!g) {

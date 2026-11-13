@@ -34,6 +34,10 @@
 Server *Server::instance = nullptr;
 
 std::atomic_int g_diag_serverTicks{ 0 };
+// where the simulation is (tests: a watchdog prints it when a step doesn't end, WKB_WATCHDOG)
+std::atomic<const char*> g_simPhase{ "" };
+std::atomic<uint32_t> g_simPhaseObject{ 0 };
+std::atomic<uint64_t> g_simSteps{ 0 };
 
 SimRandom g_simRandom;
 
@@ -56,6 +60,7 @@ void Server::loadSaveGame(const char * filename)
 	aiVision = 0;
 	aiGenerals = 4;
 	aiReaction = 100;
+	aiMinistriesSlots = 0;
 	ministries.clear();
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
@@ -611,6 +616,8 @@ std::string Server::aiSettingsText() const
 		text += "aiGenerals=" + std::to_string(aiGenerals) + "\n";
 	if (aiReaction != 100) // (the same)
 		text += "aiReaction=" + std::to_string(aiReaction) + "\n";
+	if (aiMinistriesSlots != 0) // (the same)
+		text += "aiMinistriesSlots=" + std::to_string(aiMinistriesSlots) + "\n";
 	// the simulation's step count: each player's AI and each viewer's sight run on their own steps
 	// of 10 and 4 (by step and id), so a loaded game goes on with them on the same steps
 	if (simStepIndex)
@@ -733,6 +740,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiVision") aiVision = (int)v;
 		else if (name == "aiGenerals") aiGenerals = (int)v;
 		else if (name == "aiReaction") aiReaction = std::clamp((int)v, 25, 400);
+		else if (name == "aiMinistriesSlots") aiMinistriesSlots = (int)v;
 		else if (name == "simStepIndex") simStepIndex = (uint64_t)atoll(line.c_str() + eq + 1);
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;
@@ -3270,6 +3278,8 @@ void Server::simulate()
 	SimTimer totalTimer(g_simProfile.total);
 	g_simProfile.steps++;
 	simStepIndex++;
+	g_simSteps++;
+	g_simPhase = "sequences";
 	if (recording && recording->file) {
 		const uint32_t ms = timeManager.psCurrentTime - recording->lastTime;
 		recording->lastTime = timeManager.psCurrentTime;
@@ -3450,7 +3460,9 @@ void Server::simulate()
 		// different steps: every step took 3 ms with 8 AI players
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && (simStepIndex + obj->id) % 10 == 0) {
 			SimTimer aiTimer(g_simProfile.ai);
+			g_simPhase = "AI"; g_simPhaseObject = obj->id;
 			obj->aiController.update();
+			g_simPhase = "object tree";
 			// Update "Number of Farmers" item (important for Food Consumption to work properly)
 			static const std::string numFarmersName = "Number of Farmers";
 			int numFarmersFinder = gameSet->objectFinderDefinitions.names.getIndex(numFarmersName);
@@ -3476,6 +3488,7 @@ void Server::simulate()
 	// tree's order, which a loaded game has in the save's order)
 	if (aiMinistries && getLevel()) {
 		SimTimer aiTimer(g_simProfile.ai);
+		g_simPhase = "ministries";
 		ministries.update(*this);
 	}
 	g_simProfile.objects += toprocess.size();
@@ -3486,6 +3499,7 @@ void Server::simulate()
 			Order* current = obj->orderConfig.getCurrentOrder();
 			const std::string name = current ? gameSet->orders.getString(current->blueprint->bpid) : std::string("(none)");
 			const double start = SimProfile::now();
+			g_simPhase = "orders"; g_simPhaseObject = obj->id;
 			obj->orderConfig.process();
 			const double took = SimProfile::now() - start;
 			g_simProfile.orders += took;
@@ -3493,8 +3507,10 @@ void Server::simulate()
 		}
 		else {
 			SimTimer ordersTimer(g_simProfile.orders);
+			g_simPhase = "orders"; g_simPhaseObject = obj->id;
 			obj->orderConfig.process();
 		}
+		g_simPhase = "movement";
 		if (!ref) continue;
 		std::optional<SimTimer> moveTimer(std::in_place, g_simProfile.movement);
 		if (obj->movement.isMoving()) {
@@ -3533,6 +3549,7 @@ void Server::simulate()
 		// sight range events every 4th step (80 ms), the objects on different steps
 		if (obj->blueprint->receiveSightRangeEvents && (simStepIndex + obj->id) % 4 == 0) {
 			SimTimer sightTimer(g_simProfile.sight);
+			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
 		}
@@ -3542,9 +3559,12 @@ void Server::simulate()
 	// the step's path searches, on worker threads, their paths applied in the order asked for
 	{
 		SimTimer ordersTimer(g_simProfile.orders);
+		g_simPhase = "path searches";
 		MovementController::runPathSearches();
 	}
+	g_simPhase = "delete";
 	freeDeletedObjects();
+	g_simPhase = "between steps";
 }
 
 void Server::network()

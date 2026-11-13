@@ -129,6 +129,7 @@ namespace {
 		uint8_t id() const override { return STRATEGIST; }
 		float period() const override { return 5.0f; }
 		float lastAttack = -1000.0f;
+		double lastSucceeded = 0.0; // the successful missions when the last attack was given
 
 		void think(Government& g) override {
 			if (MinOff() & 64) return;
@@ -181,9 +182,14 @@ namespace {
 				return;
 			}
 
-			// an attack: not too soon after the last one (the more impatient, the sooner)
-			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression);
-			if (attacks >= 1 + (int)(c.aggression * 2.0f) || now - lastAttack < cooldown)
+			// an attack: not too soon after the last one (the more impatient, the sooner; half as long
+			// after a mission that did what it set out to do)
+			const double succeeded = b.get("missions.raze.done") + b.get("missions.palace.done") + b.get("missions.raid.done");
+			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded ? 0.5f : 1.0f);
+			// (one more attack for every 30 free soldiers: in a stage-1 game 114 waited at home while two
+			// small missions were out)
+			const int freeNow = (int)b.get("war.available");
+			if (attacks >= 1 + (int)(c.aggression * 2.0f) + freeNow / 30 || now - lastAttack < cooldown)
 				return;
 			const float poolPower = (float)b.get("war.availablePower");
 			const int pool = (int)b.get("war.available");
@@ -216,7 +222,7 @@ namespace {
 			for (const Candidate& cand : cands) {
 				// what guards it, and a share of the enemy's whole known army (which can come)
 				const float known = (float)b.get("intel." + std::to_string(cand.s->player) + ".power");
-				const float need = std::sqrt(margin) * std::max(cand.defence, 0.35f * known);
+				const float need = std::sqrt(margin) * std::max(cand.defence, 0.2f * known);
 				if (poolPower < need)
 					continue;
 				Mission m;
@@ -229,6 +235,13 @@ namespace {
 				const float avg = poolPower / std::max(1, pool);
 				int want = (int)std::ceil((need + 40.0f) / std::max(avg, 1.0f));
 				want = std::max(want, m.kind == Mission::RAID ? 6 : 10);
+				// and a share of the free soldiers (35-70 % by aggression): the war layer sent 15 % of the
+				// population limit a wave, and did four times the damage in the stage-1 games
+				if (m.kind != Mission::RAID)
+					want = std::max(want, (int)(pool * (0.35f + 0.35f * c.aggression)));
+				// the palace is decisive: most of what is free
+				if (m.kind == Mission::PALACE)
+					want = std::max(want, (int)(pool * 0.8f));
 				m.want = std::min(want, pool);
 				m.goal = m.kind == Mission::RAID ? 8 : m.kind == Mission::RAZE ? 3 : 1;
 				m.maxLoss = 0.5f + 0.3f * c.aggression;
@@ -253,19 +266,43 @@ namespace {
 				snprintf(why, sizeof(why), "it guards with %.0f, we have %.0f at home (margin %.2f)", cand.defence, poolPower, margin);
 				give(g, m, why);
 				lastAttack = now;
+				lastSucceeded = succeeded;
 				return;
+			}
+			// none outmatched, but an army of a wave's size waiting does nothing: as the war layer, a wave
+			// of 15 % of the population limit (at least 12) goes at the best target anyway
+			const int popItem = g.server.gameSet->items.names.getIndex("Total Population Count");
+			const float popLimit = popItem >= 0 ? me->getItem(popItem) : 200.0f;
+			const int waveSize = std::max(12, (int)(popLimit * 0.15f));
+			if (pool >= waveSize && !cands.empty()) {
+				const Candidate& cand = cands.front();
+				Mission m;
+				m.kind = cand.kind == Mission::RAID ? Mission::RAZE : cand.kind;
+				m.enemy = cand.s->player;
+				m.target = cand.s->id;
+				m.tx = cand.s->x;
+				m.tz = cand.s->z;
+				m.want = std::max(waveSize, (int)(pool * (0.5f + 0.3f * c.aggression)));
+				m.want = std::min(m.want, pool);
+				m.goal = m.kind == Mission::RAZE ? 3 : 1;
+				m.maxLoss = 0.6f;
+				char why[160];
+				snprintf(why, sizeof(why), "a wave's worth waiting (%d free), its guard %.0f", pool, cand.defence);
+				give(g, m, why);
+				lastAttack = now;
+				lastSucceeded = succeeded;
 			}
 		}
 
 		void give(Government& g, Mission& m, const char* why) { GiveMission(g, m, why); }
 
 		void save(const Government&, std::vector<std::string>& lines) const override {
-			char buf[40];
-			snprintf(buf, sizeof(buf), "lastAttack %.9g", lastAttack);
+			char buf[96];
+			snprintf(buf, sizeof(buf), "lastAttack %.9g %.17g", lastAttack, lastSucceeded);
 			lines.push_back(buf);
 		}
 		void load(Government&, const std::string& line) override {
-			sscanf(line.c_str(), "lastAttack %f", &lastAttack);
+			sscanf(line.c_str(), "lastAttack %f %lf", &lastAttack, &lastSucceeded);
 		}
 	};
 
@@ -308,20 +345,55 @@ namespace {
 			ServerGameObject* myPalace = AIUtil::Palace(me);
 			std::vector<ServerGameObject*> home = ai.freeFighters(myPalace ? myPalace->position : me->playerStartCameraPosition);
 			std::sort(home.begin(), home.end(), [](auto* a, auto* b) { return a->id < b->id; });
-			// a home guard: more for a careful General, more with a threat at home
+			// a home guard: more for a careful General, more with a threat at home, and at home at least
+			// as much power as (1.2 - 0.4 x aggression) times the strongest enemy army Intelligence knows
+			// (one against one, missions with most of the soldiers left the peasants to the enemy's waves:
+			// the ministry side ended with half the characters of the same General without it)
 			const float threat = (float)g.board.get("intel.threat.home");
 			int guard = std::max(6, (int)std::ceil(home.size() * (0.15f + 0.25f * (1.0f - g.personality.aggression))));
 			if (threat > 0.0f)
 				guard = std::max(guard, (int)home.size() / 2);
+			{
+				float strongest = 0.0f;
+				for (const auto& [key, v] : g.board.reports)
+					if (key.rfind("intel.", 0) == 0 && key.size() > 6 && key.compare(key.size() - 6, 6, ".power") == 0)
+						strongest = std::max(strongest, (float)v);
+				// (0.6-1.0 x, and at most 60 % of the soldiers at home: with all of it kept, a General facing a
+				// big army never attacked at all and lost to the war layer's waves)
+				const float keep = strongest * (1.0f - 0.4f * g.personality.aggression);
+				// the strongest stay home first
+				std::vector<ServerGameObject*> byPower = home;
+				std::stable_sort(byPower.begin(), byPower.end(), [](ServerGameObject* a, ServerGameObject* b) { return AIUtil::UnitPower(a) > AIUtil::UnitPower(b); });
+				float kept = 0.0f;
+				int n = 0;
+				while (n < (int)byPower.size() && kept < keep)
+					kept += AIUtil::UnitPower(byPower[n++]);
+				guard = std::max(guard, std::min(n, (int)(home.size() * 0.6f)));
+				g.board.report("war.guardPower", keep);
+			}
+			guard = std::min(guard, (int)home.size());
 			const int available = std::max(0, (int)home.size() - guard);
 			float power = 0.0f;
 			for (int i = guard; i < (int)home.size(); i++)
 				power += AIUtil::UnitPower(home[i]);
 			g.board.report("war.home", (double)home.size());
 			g.board.report("war.guard", guard);
+			// the recall (the Generals'): a threat at home over 1.2 times what is there to meet it
+			{
+				float homePower = 0.0f;
+				for (ServerGameObject* u : home)
+					homePower += AIUtil::UnitPower(u);
+				const bool recall = threat > 1.2f * homePower + 50.0f;
+				if (recall && g.board.get("war.recall") == 0.0)
+					g.log(WAR, "the missions come home: a threat of %.0f at home against %.0f", threat, homePower);
+				g.board.report("war.recall", recall ? 1.0 : 0.0);
+			}
 			g.board.report("war.available", available);
 			g.board.report("war.availablePower", power);
 			g.board.report("war.inMissions", (double)ai.ministryUnits.size());
+			if (thinks % 10 == 0) // (every 30 s)
+				g.log(WAR, "%zu fighters free at home (guard %d, %d may go, power %.0f), %zu in missions; the war layer's defenders %zu",
+					home.size(), guard, available, power, ai.ministryUnits.size(), ai.warDefences.size());
 			// abilities at home, with enemies there
 			if (threat > 0.0f)
 				UseAbilities(g, home, ready);
@@ -332,7 +404,9 @@ namespace {
 			for (Mission& m : g.missions) {
 				const std::vector<ServerGameObject*> have = g.alive(m);
 				const int need = m.want - (int)have.size();
-				if (need <= 0 || free.empty() || m.state == Mission::RETURNING)
+				// (reinforcements in groups of 4 at least, or all that is needed: one at a time, they
+				// walked to the target alone and died there)
+				if (need <= 0 || free.empty() || m.state == Mission::RETURNING || (m.state == Mission::OUT && (int)free.size() < std::min(need, 4)))
 					continue;
 				// those that counter the target's known army first (its classes' shares), then the strongest
 				float shares[5] = {};
@@ -469,8 +543,17 @@ namespace {
 				if (AIUtil::Strength(units, enemies) < 0.5f * AIUtil::Strength(enemies, units))
 					return "gave up";
 			}
-			if (now - m.stateSince > 480.0f)
+			// (8 minutes out, 15 while its target is below half its strength: winning, slowly)
+			const bool winning = target && target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && [&] {
+				const int si = srv.gameSet->items.names.getIndex("Structural Integrity"), cap = srv.gameSet->items.names.getIndex("Structural Integrity Capacity");
+				return si >= 0 && cap >= 0 && target->getItem(cap) > 0.0f && target->getItem(si) < 0.5f * target->getItem(cap);
+			}();
+			if (now - m.stateSince > (winning ? 900.0f : 480.0f))
 				return "too long";
+			// home in danger: the threat there over what guards it, the attacks come back to defend it
+			// (not a decoy, nor one at its last building)
+			if (attacking && g.board.get("war.recall") > 0.0 && !winning)
+				return "recalled";
 			// reinforcements once, for an attack that has lost a third and isn't winning
 			if (!m.reinforced && attacking && m.kind != Mission::RAID && losses > 0.35f) {
 				m.reinforced = true;
@@ -515,8 +598,17 @@ namespace {
 			case Mission::RAZE:
 				if (!target) {
 					m.progress++;
-					if (m.progress >= m.goal)
-						return "done";
+					if (m.progress >= m.goal) {
+						// winning: no one defends there and few lost: three more (the stage-1 games: a
+						// mission that came home after three buildings left the war layer's waves to do
+						// four times the damage)
+						if (losses < 0.3f && AIUtil::EnemiesNear(me, at, 100.0f, true).empty() && m.goal < 30) {
+							m.goal += 3;
+							g.log(GENERALS, "mission %u is winning: %d more buildings", m.id, 3);
+						}
+						else
+							return "done";
+					}
 					// on to the next building near where the last one stood
 					std::vector<ServerGameObject*> next = AIUtil::EnemyBuildingsNear(me, Vector3(m.tx, 0, m.tz), 150.0f);
 					if (next.empty())

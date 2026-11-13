@@ -249,6 +249,31 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	g.board.report("labour.cap", ai.ministryPeasantCap);
 	ServerGameObject* palace = AIUtil::Palace(me);
 	const Vector3 home = palace ? palace->position : me->playerStartCameraPosition;
+	// No militia but in an emergency: the scripts' "Cannot Use Militia", which the war layer sets only
+	// while 5 soldiers are at home. With the missions out, a Kingmaker's defence raised every peasant
+	// as militia at once (47 in a minute, one against one) and they all died: the economy gone. Only
+	// a threat at home over twice what defends it with the palace under 60 % lets them fight.
+	{
+		static uint64_t of = 0;
+		static int noMilitia = -1, si = -1, siCap = -1;
+		if (of != srv.gameSet->serial) {
+			of = srv.gameSet->serial;
+			noMilitia = srv.gameSet->items.names.getIndex("Cannot Use Militia");
+			si = srv.gameSet->items.names.getIndex("Structural Integrity");
+			siCap = srv.gameSet->items.names.getIndex("Structural Integrity Capacity");
+		}
+		if (noMilitia >= 0) {
+			float defence = 0.0f;
+			for (ServerGameObject* u : ai.freeFighters(home))
+				defence += AIUtil::UnitPower(u);
+			const float threat = (float)g.board.get("intel.threat.home");
+			const bool palaceFalling = palace && si >= 0 && siCap >= 0 && palace->getItem(siCap) > 0.0f && palace->getItem(si) < 0.6f * palace->getItem(siCap);
+			const bool emergency = threat > 2.0f * defence + 50.0f && palaceFalling;
+			if (emergency != (me->getItem(noMilitia) == 0.0f))
+				g.log(LABOUR, emergency ? "the peasants may fight (a threat of %.0f against %.0f, the palace falling)" : "no militia (a threat of %.0f against %.0f)", threat, defence);
+			me->setItem(noMilitia, emergency ? 0.0f : 1.0f);
+		}
+	}
 	// the gold miners: the dead and those whose gold ran out let go (another gold source first)
 	for (auto it = goldMiners.begin(); it != goldMiners.end();) {
 		ServerGameObject* p = srv.findObject(it->first);
@@ -270,6 +295,10 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	}
 	const Request* ask = g.board.find(ECONOMY, "workers.gold");
 	const int want = ask ? (int)ask->amount : 0;
+	if (want > 0 && g.board.get("labour.goldAsked") == 0.0)
+		g.log(LABOUR, "Economy asks for %d gold miners (%zu peasants, %zu held)", want, peasants.size(), ai.ministryHeld.size());
+	if (want > 0)
+		g.board.report("labour.goldAsked", g.board.get("labour.goldAsked") + 1);
 	// enough gold: those held at least 2 minutes go back to the scripts
 	if (!ask)
 		for (auto it = goldMiners.begin(); it != goldMiners.end();)
@@ -281,12 +310,18 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 				++it;
 	// more miners: the idle first, then woodcutters (with wood to spare), the nearest the gold
 	if ((int)goldMiners.size() < want && !(MinOff() & 2)) {
+		// (with wood to spare all of them; without, two at most: the scripts keep every peasant busy,
+		// and in a stage-1 game wood stayed under 300 for 10 minutes, so no miner ever went)
 		const bool woodToSpare = me->getItem(Tags::PDITEM_WOOD) > 300.0f;
+		const int fromWood = woodToSpare ? want : std::min(want, 2);
+		int woodTaken = 0;
+		for (const auto& [id, since] : goldMiners)
+			woodTaken++;
 		std::vector<ServerGameObject*> candidates;
 		for (ServerGameObject* p : peasants)
 			if (!ai.ministryHeld.count(p->id) && p->isInteractable()) {
 				const std::string order = CurrentOrder(srv, p);
-				if (order.empty() || (woodToSpare && order == "Chop Tree"))
+				if (order.empty() || (order == "Chop Tree" && woodTaken < fromWood))
 					candidates.push_back(p);
 			}
 		std::stable_sort(candidates.begin(), candidates.end(), [&](ServerGameObject* a, ServerGameObject* b) {
@@ -297,8 +332,12 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			if ((int)goldMiners.size() >= want)
 				break;
 			ServerGameObject* gold = FindWork(srv, p, g_items.mineGold, "Gold", home, 300.0f);
-			if (!gold)
+			if (!gold) {
+				if (g.board.get("labour.goldNone") == 0.0)
+					g.log(LABOUR, "gold asked for, but no gold within 300 m of home the peasants can mine (%zu candidates)", candidates.size());
+				g.board.report("labour.goldNone", g.board.get("labour.goldNone") + 1);
 				break; // (no gold near home)
+			}
 			if (!g.board.assign(p->id, ECONOMY, now, 120.0f, false))
 				continue;
 			srv.gameSet->commands[g_items.mineGold].execute(p, gold, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
