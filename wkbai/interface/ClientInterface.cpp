@@ -1587,6 +1587,29 @@ void ClientInterface::drawSettingsWindow(bool* open)
 // axes; the longer axis also sets the height, so that neighbouring segments meet at their ends.
 // The ground's height where the terrain is drawn: the tessellated terrain's smooth surface, or
 // the game's own heights
+// The game set's snowy fir (the "Snowy Tree", Coniferous Snow\Pine01, which no map of the original
+// game uses) is the winter look of the fir Pine04: the same height, outline and build (crossed
+// upright cards and flat layers). For a model of Pine04 (its mesh or its swaying animation): that
+// snowy fir; null for every other model.
+static Model* SnowyFirModel(ModelCache& cache, Model* model)
+{
+	static std::unordered_map<Model*, Model*> known;
+	if (!model)
+		return nullptr;
+	auto it = known.find(model);
+	if (it != known.end())
+		return it->second;
+	std::string file;
+	if (auto* s = dynamic_cast<StaticModel*>(model)) file = s->fileName;
+	else if (auto* a = dynamic_cast<AnimatedModel*>(model)) file = a->fileName;
+	for (char& c : file)
+		c = c == '/' ? '\\' : (char)std::tolower((unsigned char)c);
+	Model* snowy = file.find("trees\\coniferous\\pine04\\") != std::string::npos
+		? cache.getModel("Warrior Kings Game Set\\Resources\\Trees\\Coniferous Snow\\Pine01\\DEFAULT.MESH3") : nullptr;
+	known[model] = snowy;
+	return snowy;
+}
+
 static float VisualGroundHeight(const Terrain* terrain, float x, float z)
 {
 	return g_terrainTessellationActive ? terrain->getSmoothHeight(x, z) : terrain->getHeight(x, z);
@@ -3133,6 +3156,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
 		else if (broadleaf)
 			AddLeafTree(client, sphereCenter, sphereRadius, obj->id); // its leaves falling in autumn
+		else if (Model* snowy = SnowyFirModel(client->gameSet->modelCache, model); snowy && TreeSnowLaden(client, obj->id))
+			obj->sceneEntity.model = snowy; // the fir Pine04 under deep snow: the game set's snowy fir
 		if (charred)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_CHARRED;
 	}
@@ -5803,6 +5828,9 @@ void ClientInterface::drawExtendedTrees()
 				look.bare = LeaflessTreeModel(client->gameSet->modelCache, (int)(look.id * 2654435761u >> 28), false);
 				look.bareTransform = Matrix::getScaleMatrix(Vector3(m.height, m.height, m.height)) * e.transform;
 			}
+			// the fir Pine04's under deep snow (SnowyFirModel)
+			if (client->gameSet)
+				look.snowy = SnowyFirModel(client->gameSet->modelCache, m.model);
 			extTreeEntities.push_back(e);
 			extTreeLooks.push_back(look);
 		}
@@ -5812,7 +5840,7 @@ void ClientInterface::drawExtendedTrees()
 		SceneEntity& e = extTreeEntities[i];
 		const ExtTreeLook& l = extTreeLooks[i];
 		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
-		e.model = bare ? l.bare : l.leafy;
+		e.model = bare ? l.bare : l.snowy && TreeSnowLaden(client, l.id) ? l.snowy : l.leafy;
 		e.transform = bare ? l.bareTransform : l.leafyTransform;
 		e.flags = bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags;
 	}

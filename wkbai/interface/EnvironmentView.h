@@ -34,6 +34,10 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera);
 // the broadleaf trees in winter: each loses its leaves at its own moment early in winter (in the
 // first 12% of it, by a hash of its id, so a replay looks the same), all bare after that
 bool TreeBareInWinter(Client* client, uint32_t id);
+// a fir under snow (the game set's "Snowy Tree" look, SnowyFirModel): once the lying snow is deep
+// enough, each at its own depth (a cover between 0.15 and 0.45, by a hash of its id) so the forest
+// whitens tree by tree as the snow builds up and greens again as it melts
+bool TreeSnowLaden(Client* client, uint32_t id);
 // a broadleaf tree in leaf drawn this frame (its bounding sphere): its leaves fall around it in
 // autumn (DrawWeather, the nearest ones)
 void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t id);

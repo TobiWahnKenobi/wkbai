@@ -382,6 +382,13 @@ bool TreeBareInWinter(Client* client, uint32_t id)
 	return into >= 0.005f + 0.115f * Hash(id * 2654435761u ^ 0x5EEDu);
 }
 
+bool TreeSnowLaden(Client* client, uint32_t id)
+{
+	if (!client->environmentActive || !g_environment.active)
+		return false;
+	return g_environment.snowCover >= 0.15f + 0.3f * Hash(id * 2246822519u ^ 0x5A0Bu);
+}
+
 void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t id)
 {
 	if (g_leafTrees.size() < 4096 && LeafFall(client) > 0.0f)
