@@ -71,6 +71,7 @@
 #include "AgentInput.h"
 #include "interface/ChronicleNarrator.h"
 #include "interface/FogOfWar.h"
+#include "gfx/ChimneySmoke.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -3242,6 +3243,208 @@ void Test_TeamColours()
 		check("material ids", ip != it && !cache.getMaterial(ip).team && cache.getMaterial(it).team);
 	}
 	printf("TEAM all %d\n", all ? 1 : 0);
+	fflush(stdout);
+}
+
+// Chimney smoke (gfx/ChimneySmoke.cpp, docs/engine/gltf.md "Chimney smoke"): the glTF's wkSmoke
+// nodes, the Mesh3's PS_Chimney points and their rule by building, the houses' table, the rules
+// by day, night and season, the puffs (the same every time, rising, downwind, fading). No game files.
+void Test_ChimneySmoke()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("SMOKE %s %d\n", what, ok ? 1 : 0); all &= ok; };
+	auto closeTo = [](const Vector3& a, const Vector3& b) { return (a - b).sqlen3() < 1e-4f; };
+
+	// a glTF: one triangle, and smoke nodes: A the defaults (true) at (1, 5, 2); B under a parent
+	// moved by (10, 0, 0): always, rate 2, size 1.5 at (0, 8, -3); C "day" with an unknown key; and
+	// a plain node without wkSmoke
+	const float pos[9] = { 0, 0, 0, 1, 0, 0, 0, 1, 0 };
+	std::string b64;
+	{
+		static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		const uint8_t* bin = (const uint8_t*)pos;
+		const size_t n = sizeof(pos);
+		for (size_t i = 0; i < n; i += 3) {
+			uint32_t v = (uint32_t)bin[i] << 16;
+			int k = 1;
+			if (i + 1 < n) { v |= (uint32_t)bin[i + 1] << 8; k++; }
+			if (i + 2 < n) { v |= bin[i + 2]; k++; }
+			for (int j = 0; j < 4; j++)
+				b64 += j <= k ? t[(v >> (18 - 6 * j)) & 63] : '=';
+		}
+	}
+	auto makeDoc = [&](const nlohmann::json& nodes, const nlohmann::json& roots) {
+		return nlohmann::json{ { "asset", { { "version", "2.0" } } },
+			{ "buffers", { { { "byteLength", sizeof(pos) }, { "uri", "data:application/octet-stream;base64," + b64 } } } },
+			{ "bufferViews", { { { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", sizeof(pos) } } } },
+			{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC3" } } } },
+			{ "materials", { { { "extras", { { "wkTexture", "SmokeTest.tga" } } } } } },
+			{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } }, { "material", 0 } } } } } } },
+			{ "nodes", nodes }, { "scenes", { { { "nodes", roots } } } }, { "scene", 0 } };
+	};
+	const nlohmann::json nodes = {
+		{ { "mesh", 0 } },
+		{ { "translation", { 1, 5, 2 } }, { "extras", { { "wkSmoke", true } } } },
+		{ { "translation", { 10, 0, 0 } }, { "children", { 3 } } },
+		{ { "translation", { 0, 8, -3 } }, { "extras", { { "wkSmoke", { { "when", "always" }, { "rate", 2.0 }, { "size", 1.5 } } } } } },
+		{ { "translation", { 0, 3, 0 } }, { "extras", { { "wkSmoke", { { "when", "day" }, { "colour", "red" } } } } } },
+		{ { "translation", { 0, 9, 0 } } },
+	};
+	const std::filesystem::path dir = std::filesystem::temp_directory_path();
+	const std::filesystem::path g1 = dir / "wkbai-smoke-test.gltf", g2 = dir / "wkbai-smoke-none.gltf";
+	{ std::ofstream f(g1, std::ios::binary); f << makeDoc(nodes, { 0, 1, 2, 4, 5 }).dump(); }
+	{
+		const nlohmann::json off = { { { "mesh", 0 } }, { { "extras", { { "wkSmoke", false } } } } };
+		std::ofstream f(g2, std::ios::binary); f << makeDoc(off, { 0, 1 }).dump();
+	}
+	Mesh m;
+	m.loadGltf(g1.string().c_str());
+	check("declared", m.smokeDeclared && m.smokeEmitters.size() == 3);
+	if (m.smokeEmitters.size() == 3) {
+		const SmokeEmitter &a = m.smokeEmitters[0], &b = m.smokeEmitters[1], &c = m.smokeEmitters[2];
+		printf("SMOKE emitters (%.2f %.2f %.2f) %s, (%.2f %.2f %.2f) %s rate %.1f size %.1f, (%.2f %.2f %.2f) %s\n",
+			a.position.x, a.position.y, a.position.z, SmokeEmitter::whenName(a.when), b.position.x, b.position.y, b.position.z,
+			SmokeEmitter::whenName(b.when), b.rate, b.size, c.position.x, c.position.y, c.position.z, SmokeEmitter::whenName(c.when));
+		// (glTF's z is the game's -z)
+		check("default node", closeTo(a.position, Vector3(1, 5, -2)) && a.when == SmokeEmitter::NIGHT_WINTER && a.rate == 1.0f && a.size == 1.0f);
+		check("child node", closeTo(b.position, Vector3(10, 8, 3)) && b.when == SmokeEmitter::ALWAYS && b.rate == 2.0f && b.size == 1.5f);
+		check("day node", closeTo(c.position, Vector3(0, 3, 0)) && c.when == SmokeEmitter::DAY);
+	}
+	Mesh none;
+	none.loadGltf(g2.string().c_str());
+	check("declared none", none.smokeDeclared && none.smokeEmitters.empty());
+	std::filesystem::remove(g1);
+	std::filesystem::remove(g2);
+	SmokeEmitter::When w;
+	check("when names", SmokeEmitter::parseWhen("always", w) && w == SmokeEmitter::ALWAYS && SmokeEmitter::parseWhen("day", w) && w == SmokeEmitter::DAY
+		&& SmokeEmitter::parseWhen("night_winter", w) && w == SmokeEmitter::NIGHT_WINTER && !SmokeEmitter::parseWhen("dusk", w) && w == SmokeEmitter::NIGHT_WINTER);
+
+	// the Mesh3's way: PS_Chimney points, their rule by the building (the Blacksmith always); the
+	// houses from the table; a glTF's declaration replaces the points
+	{
+		ModelCache cache;
+		auto triangle = [](Mesh& mesh) {
+			Mesh::BuildGroup g;
+			g.mat.textureFilename = "SmokeTest.tga";
+			g.mat.alphaTest = false;
+			g.triangles = { 0, 1, 2 };
+			mesh.build({ 0, 0, 0, 1, 0, 0, 0, 1, 0 }, { Vector3(0, 0, 1), Vector3(0, 0, 1), Vector3(0, 0, 1) }, { 0, 0, 1, 0, 0, 1 }, { g });
+		};
+		auto withPoints = [triangle](bool declared) {
+			return [declared, triangle](Mesh& mesh) {
+				triangle(mesh);
+				mesh.attachPoints.resize(3);
+				const char* tags[3] = { "PS_Chimney", "SP_Spawn", "PS_CHIMNEY" };
+				for (int i = 0; i < 3; i++) {
+					mesh.attachPoints[i].tag = tags[i];
+					mesh.attachPoints[i].staticState.position = Vector3((float)i, 10.0f, 0.0f);
+					mesh.attachPoints[i].staticState.on = true;
+				}
+				mesh.numAttachPoints = 3;
+				if (declared) {
+					SmokeEmitter e;
+					e.position = Vector3(0, 12, 0);
+					e.when = SmokeEmitter::DAY;
+					mesh.smokeEmitters = { e };
+					mesh.smokeDeclared = true;
+				}
+			};
+		};
+		Model* smith = cache.getGeneratedModel("Warrior Kings Game Set\\Buildings\\Blacksmith\\Fully Built\\DEFAULT.MESH3", withPoints(false));
+		Model* manor = cache.getGeneratedModel("Warrior Kings Game Set/Buildings/Manor/Fully Built/DEFAULT.MESH3", withPoints(false));
+		Model* hd = cache.getGeneratedModel("Warrior Kings Game Set\\Buildings\\Tavern\\Wood\\Fully Built\\DEFAULT.MESH3", withPoints(true));
+		Model* house = cache.getGeneratedModel("Warrior Kings Game Set\\Buildings\\Houses\\house02\\DEFAULT.MESH3", triangle);
+		Model* ruin = cache.getGeneratedModel("Warrior Kings Game Set\\Buildings\\Houses\\house02\\Ruined\\DEFAULT.MESH3", triangle);
+		const auto& es = ChimneySmoke::EmittersOf(smith);
+		const auto& em = ChimneySmoke::EmittersOf(manor);
+		const auto& eh = ChimneySmoke::EmittersOf(hd);
+		const auto& ehouse = ChimneySmoke::EmittersOf(house);
+		printf("SMOKE emitters of blacksmith %zu, manor %zu, HD tavern %zu, house %zu, ruin %zu, counted\n", es.size(), em.size(), eh.size(), ehouse.size(), ChimneySmoke::EmittersOf(ruin).size());
+		check("blacksmith always", es.size() == 2 && es[0].when == SmokeEmitter::ALWAYS && es[1].when == SmokeEmitter::ALWAYS
+			&& std::abs(es[1].position.x - 2.0f) < 1e-4f && es[0].position.y > 10.0f);
+		check("manor night and winter", em.size() == 2 && em[0].when == SmokeEmitter::NIGHT_WINTER);
+		check("glTF replaces the points", eh.size() == 1 && eh[0].when == SmokeEmitter::DAY && closeTo(eh[0].position, Vector3(0, 12, 0)));
+		check("house table", ehouse.size() == 1 && ehouse[0].when == SmokeEmitter::NIGHT_WINTER && ehouse[0].position.y > 6.5f
+			&& ChimneySmoke::EmittersOf(ruin).empty());
+		check("cached", &ChimneySmoke::EmittersOf(smith) == &es);
+		ChimneySmoke::Clear();
+		ChimneySmoke::Add(smith, Matrix::getTranslationMatrix(Vector3(100, 0, 50)), 7);
+		ChimneySmoke::Add(house, Matrix::getTranslationMatrix(Vector3(0, 0, 0)), 8);
+		check("added", ChimneySmoke::PendingCount() == 3);
+		ChimneySmoke::Clear();
+	}
+
+	// the rules
+	{
+		EnvironmentView v;
+		v.active = false;
+		const bool off = ChimneySmoke::Strength(SmokeEmitter::NIGHT_WINTER, v) == 1.0f && ChimneySmoke::Strength(SmokeEmitter::DAY, v) == 1.0f
+			&& ChimneySmoke::Strength(SmokeEmitter::ALWAYS, v) == 1.0f;
+		check("environment off: all smoke", off);
+		v.active = true;
+		auto at = [&](float daylight, float yearFraction, float temperature, SmokeEmitter::When when) {
+			v.sun.daylight = daylight; v.yearFraction = yearFraction; v.temperatureC = temperature;
+			return ChimneySmoke::Strength(when, v);
+		};
+		const float sNoon[3] = { at(1, 0.4f, 20, SmokeEmitter::NIGHT_WINTER), at(1, 0.4f, 20, SmokeEmitter::ALWAYS), at(1, 0.4f, 20, SmokeEmitter::DAY) };
+		const float sNight[3] = { at(0, 0.4f, 15, SmokeEmitter::NIGHT_WINTER), at(0, 0.4f, 15, SmokeEmitter::ALWAYS), at(0, 0.4f, 15, SmokeEmitter::DAY) };
+		const float sWinter[3] = { at(1, 0.87f, -3, SmokeEmitter::NIGHT_WINTER), at(1, 0.87f, -3, SmokeEmitter::ALWAYS), at(1, 0.87f, -3, SmokeEmitter::DAY) };
+		const float dusk = at(0.35f, 0.4f, 15, SmokeEmitter::NIGHT_WINTER);
+		const float coldSpring = at(1, 0.05f, -2, SmokeEmitter::NIGHT_WINTER), mildWinter = at(1, 0.87f, 8, SmokeEmitter::NIGHT_WINTER);
+		printf("SMOKE strength noon %.2f %.2f %.2f, midnight %.2f %.2f %.2f, winter noon %.2f %.2f %.2f, dusk %.2f, cold spring %.2f, mild winter %.2f\n",
+			sNoon[0], sNoon[1], sNoon[2], sNight[0], sNight[1], sNight[2], sWinter[0], sWinter[1], sWinter[2], dusk, coldSpring, mildWinter);
+		check("summer noon", sNoon[0] == 0.0f && sNoon[1] == 1.0f && sNoon[2] == 1.0f);
+		check("summer midnight", sNight[0] == 1.0f && sNight[1] == 1.0f && sNight[2] == 0.0f);
+		check("winter noon", sWinter[0] == 1.0f && sWinter[1] == 1.0f && sWinter[2] == 1.0f);
+		check("dusk between", dusk > 0.0f && dusk < 1.0f);
+		check("cold days and winter", coldSpring > 0.5f && mildWinter == 1.0f);
+	}
+
+	// the puffs
+	{
+		SmokeEmitter e;
+		const Vector3 at(100, 20, 100), wind(3, 0, 0);
+		std::vector<ChimneySmoke::Puff> p1, p2, calm, zero, half;
+		ChimneySmoke::Puffs(e, at, 1234, 500.0f, 1.0f, wind, p1);
+		ChimneySmoke::Puffs(e, at, 1234, 500.0f, 1.0f, wind, p2);
+		ChimneySmoke::Puffs(e, at, 1234, 500.0f, 1.0f, Vector3(0, 0, 0), calm);
+		ChimneySmoke::Puffs(e, at, 1234, 500.0f, 0.0f, wind, zero);
+		ChimneySmoke::Puffs(e, at, 1234, 500.0f, 0.4f, wind, half);
+		bool same = p1.size() == p2.size();
+		for (size_t i = 0; same && i < p1.size(); i++)
+			same = closeTo(p1[i].position, p2[i].position) && p1[i].alpha == p2[i].alpha;
+		check("the same every time", same && !p1.empty());
+		const float expected = 1.3f * ChimneySmoke::LIFE;
+		printf("SMOKE %zu puffs (about %.1f expected), %zu at strength 0.4\n", p1.size(), expected, half.size());
+		check("puff count", p1.size() >= expected - 2 && p1.size() <= expected + 2);
+		// the oldest (first) higher, bigger and further downwind than the youngest (last)
+		bool order = p1.size() > 2;
+		bool fades = true, above = true;
+		float meanDx = 0, meanCalm = 0;
+		for (auto& p : p1) {
+			fades &= p.alpha > 0.0f && p.alpha <= 0.8f;
+			above &= p.position.y >= at.y;
+			meanDx += (p.position.x - at.x) / p1.size();
+		}
+		for (auto& p : calm)
+			meanCalm += (p.position.x - at.x) / calm.size();
+		if (order) {
+			const auto &old = p1.front(), &young = p1.back();
+			order = old.age > young.age && old.position.y > young.position.y + 3.0f && old.size > young.size * 2.0f && old.position.x > young.position.x + 5.0f;
+			printf("SMOKE oldest %.1f s at +%.1f up, +%.1f downwind, %.1f m, alpha %.2f; youngest %.1f s at +%.1f up, %.1f m, alpha %.2f\n",
+				old.age, old.position.y - at.y, old.position.x - at.x, old.size, old.alpha, young.age, young.position.y - at.y, young.size, young.alpha);
+		}
+		check("rise, grow and drift", order && above);
+		check("downwind", meanDx > 3.0f && std::abs(meanCalm) < 1.5f);
+		check("fade", fades);
+		check("off: none", zero.empty());
+		check("thinned", half.size() < p1.size() && !half.empty());
+		// half a second later: the puffs moved on
+		std::vector<ChimneySmoke::Puff> later;
+		ChimneySmoke::Puffs(e, at, 1234, 500.5f, 1.0f, wind, later);
+		check("moves on", !later.empty() && later.front().age != p1.front().age);
+	}
+	printf("SMOKE all %d\n", all ? 1 : 0);
 	fflush(stdout);
 }
 
@@ -8815,6 +9018,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
+{Test_ChimneySmoke, "Chimney smoke: wkSmoke nodes, PS_Chimney points and their rule, the houses' table, night/winter/always/day, the puffs"},
 };
 
 void LaunchTest()
