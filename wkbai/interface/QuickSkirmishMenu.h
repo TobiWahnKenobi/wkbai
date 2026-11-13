@@ -88,6 +88,7 @@ private:
 	bool aiMinistries = false; // Server::aiMinistries
 	int aiVision = 0; // Server::aiVision
 	int aiGenerals = 4; // Server::aiGenerals
+	int aiReaction = 100; // Server::aiReaction
 	int aiWeather = 1; // Server::aiWeather
 	int aiHumanFocus = 50; // Server::aiHumanFocus
 	int modPolicy = 0; // Server::modPolicy

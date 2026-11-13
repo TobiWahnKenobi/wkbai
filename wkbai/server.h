@@ -321,6 +321,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	int aiVision = 0;
 	// the most missions (Generals) a ministry AI runs at once: "aiGenerals"
 	int aiGenerals = 4;
+	// the ministry AI's reaction time, in percent of its departments' periods (a difficulty: 100 the
+	// default, 200 thinks half as often, 50 twice as often): "aiReaction"
+	int aiReaction = 100;
 	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone

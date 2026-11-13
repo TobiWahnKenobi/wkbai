@@ -18,6 +18,7 @@
 //   next building there.
 #include "AIController.h"
 #include "AIUtil.h"
+#include "MinistryDepartments.h"
 #include "server.h"
 #include "gameset/ScriptContext.h"
 #include "gameset/gameset.h"
@@ -1778,6 +1779,96 @@ void AIController::startLuaAI(const std::string& name)
 		if (ok)
 			p->aiController.trained++;
 		return ok;
+	});
+
+	// The ministry AI (Ministries.h), with "aiMinistries" on: this player's government, read and
+	// steered from Lua. Nil or false without one.
+	auto gov = [player]() -> Ministry::Government* {
+		ServerGameObject* p = player();
+		if (!p)
+			return nullptr;
+		auto& govs = Server::instance->ministries.governments;
+		auto it = govs.find(p->id);
+		return it == govs.end() ? nullptr : it->second.get();
+	};
+	// a report ("economy.gold", "intel.1030.power", "trust.1027", ...), and all of them
+	ai.set_function("report", [gov](const std::string& key) -> sol::optional<double> {
+		Ministry::Government* g = gov();
+		if (!g || !g->board.reports.count(key))
+			return sol::nullopt;
+		return g->board.get(key);
+	});
+	ai.set_function("reports", [gov](sol::this_state ts) {
+		sol::state_view lua(ts);
+		sol::table t = lua.create_table();
+		if (Ministry::Government* g = gov())
+			for (const auto& [key, v] : g->board.reports)
+				t[key] = v;
+		return t;
+	});
+	// the missions: id, kind, state ("assembling", "out", "returning"), enemy, target, x, z, want, alive
+	ai.set_function("missions", [gov](sol::this_state ts) {
+		sol::state_view lua(ts);
+		sol::table list = lua.create_table();
+		if (Ministry::Government* g = gov()) {
+			int i = 1;
+			static const char* const states[] = { "assembling", "out", "returning" };
+			for (Ministry::Mission& m : g->missions) {
+				sol::table t = lua.create_table();
+				t["id"] = m.id;
+				t["kind"] = Ministry::Mission::KindName(m.kind);
+				t["state"] = states[std::min<int>(m.state, 2)];
+				t["enemy"] = m.enemy;
+				t["target"] = m.target;
+				t["x"] = m.tx;
+				t["z"] = m.tz;
+				t["want"] = m.want;
+				t["alive"] = (int)g->alive(m).size();
+				list[i++] = t;
+			}
+		}
+		return list;
+	});
+	// a mission of the script's own: kind ("raze", "palace", "raid", "kill", "decoy", "scout"), the
+	// target object, how many units; its id, nil if refused (no government, no target, no such kind)
+	ai.set_function("giveMission", [gov](const std::string& kind, uint32_t target, int units) -> sol::optional<uint32_t> {
+		Ministry::Government* g = gov();
+		ServerGameObject* t = Server::instance->findObject(target);
+		if (!g || !t || t->deleted || units <= 0)
+			return sol::nullopt;
+		Ministry::Mission m;
+		int k = -1;
+		for (int i = 0; i < Ministry::Mission::KIND_COUNT; i++)
+			if (kind == Ministry::Mission::KindName(i))
+				k = i;
+		if (k < 0)
+			return sol::nullopt;
+		m.kind = (uint8_t)k;
+		m.target = t->id;
+		ServerGameObject* owner = t->getPlayer();
+		m.enemy = owner ? owner->id : 0;
+		m.tx = t->position.x;
+		m.tz = t->position.z;
+		m.want = units;
+		m.goal = m.kind == Ministry::Mission::RAID ? 8 : m.kind == Ministry::Mission::RAZE ? 3 : m.kind == Ministry::Mission::KILL ? 10 : 1;
+		m.maxLoss = m.kind == Ministry::Mission::DECOY ? 1.0f : 0.6f;
+		m.duration = 60.0f;
+		return Ministry::GiveMission(*g, m, "given by the Lua AI");
+	});
+	// a department's weight ("war", "economy", ...), and the trust in a player (below 0: a grudge)
+	ai.set_function("setWeight", [gov](const std::string& dept, float w) {
+		Ministry::Government* g = gov();
+		const int d = Ministry::DeptFromName(dept);
+		if (!g || d < 0)
+			return false;
+		g->board.weights[d] = std::clamp(w, 0.0f, 10.0f);
+		return true;
+	});
+	ai.set_function("trust", [gov](uint32_t of) -> sol::optional<float> {
+		Ministry::Government* g = gov();
+		if (!g)
+			return sol::nullopt;
+		return g->trust(of);
 	});
 
 	// a replay: the copy its recording kept

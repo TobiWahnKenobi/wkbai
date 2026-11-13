@@ -21,10 +21,14 @@ namespace Ministry {
 	// gold miners: peasant id -> since when)
 	void EconomyNeeds(Government& g);
 	void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners);
-	// the General's character from its items (MinistryWar.cpp)
+	// the General's character from its items, and the departments' weights from it, once when the
+	// government is formed (MinistryWar.cpp)
 	void ReadPersonality(Government& g);
+	void SetWeightsFromCharacter(Government& g);
 	// MinistryTactics.cpp: the units' abilities by the rule table (cooldowns: unit id << 8 | rule ->
 	// the game time it may again), how many used; fighters trained by counters, how many ordered
 	int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std::map<uint64_t, float>& ready);
 	int TrainByCounters(Government& g);
+	// a mission given (by the Strategist, or a Lua AI's ai.giveMission): its id
+	uint32_t GiveMission(Government& g, Mission& m, const char* why);
 }

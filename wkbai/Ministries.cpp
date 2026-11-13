@@ -311,11 +311,14 @@ void Government::step()
 {
 	const float t = now();
 	const float stepSec = server.timeManager.stepMs > 0 ? server.timeManager.stepMs / 1000.0f : 0.02f;
+	// the difficulty's reaction time ("aiReaction", percent)
+	const float scale = std::clamp(server.aiReaction, 25, 400) / 100.0f;
 	for (const auto& d : departments) {
+		const float period = d->period() * scale;
 		if (d->nextAt < 0.0f) {
 			// the first think: staggered by player and department over one period, in whole steps,
 			// so that the governments' departments don't all think at the same step
-			const int steps = std::max(1, (int)std::lround(d->period() / stepSec));
+			const int steps = std::max(1, (int)std::lround(period / stepSec));
 			d->nextAt = t + (float)((playerId * 7u + d->id() * 3u) % (uint32_t)steps) * stepSec;
 		}
 		if (t + 1e-4f < d->nextAt)
@@ -325,9 +328,9 @@ void Government::step()
 		g_deptMs[d->id()] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		g_deptThinks[d->id()]++;
 		d->thinks++;
-		d->nextAt += d->period();
+		d->nextAt += period;
 		if (d->nextAt <= t) // (behind: a jump in time)
-			d->nextAt = t + d->period();
+			d->nextAt = t + period;
 	}
 }
 
@@ -352,6 +355,7 @@ void Ministries::update(Server& server)
 		if (!g) {
 			g = std::make_unique<Government>(server, p->id);
 			g->log(STRATEGIST, "a government of %zu departments", g->departments.size());
+			SetWeightsFromCharacter(*g);
 		}
 		g->step();
 	}

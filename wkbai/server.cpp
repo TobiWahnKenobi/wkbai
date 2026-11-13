@@ -55,6 +55,7 @@ void Server::loadSaveGame(const char * filename)
 	aiMinistries = false;
 	aiVision = 0;
 	aiGenerals = 4;
+	aiReaction = 100;
 	ministries.clear();
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
@@ -608,6 +609,8 @@ std::string Server::aiSettingsText() const
 		text += "aiVision=" + std::to_string(aiVision) + "\n";
 	if (aiGenerals != 4) // (the same)
 		text += "aiGenerals=" + std::to_string(aiGenerals) + "\n";
+	if (aiReaction != 100) // (the same)
+		text += "aiReaction=" + std::to_string(aiReaction) + "\n";
 	// the simulation's step count: each player's AI and each viewer's sight run on their own steps
 	// of 10 and 4 (by step and id), so a loaded game goes on with them on the same steps
 	if (simStepIndex)
@@ -729,6 +732,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiMinistries") aiMinistries = v != 0;
 		else if (name == "aiVision") aiVision = (int)v;
 		else if (name == "aiGenerals") aiGenerals = (int)v;
+		else if (name == "aiReaction") aiReaction = std::clamp((int)v, 25, 400);
 		else if (name == "simStepIndex") simStepIndex = (uint64_t)atoll(line.c_str() + eq + 1);
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;

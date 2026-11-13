@@ -3095,6 +3095,82 @@ void Test_MinistryEconomy()
 	fflush(stdout);
 }
 
+// The ministry AI from Lua, and its difficulty (needs the game data). A Lua AI of the test's own
+// (saved\LuaAI\MinistryProbe.lua in the test profile) for Belisar reads a report, sets War's
+// weight and gives a raze mission; with "aiReaction" 200 the departments think half as often.
+// Prints "LUAMIN <check> <0|1>" and "LUAMIN all <0|1>".
+void Test_MinistryLua()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("LUAMIN %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	{
+		const auto dir = g_userPath / "saved" / "LuaAI";
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+		std::ofstream f(dir / "MinistryProbe.lua", std::ios::binary);
+		f << "food = -1\nweightSet = false\ngiven = nil\nmissions = 0\n"
+			"function think(ai)\n"
+			"  food = ai.report(\"economy.food\") or -2\n"
+			"  if not weightSet then weightSet = ai.setWeight(\"war\", 3.0) end\n"
+			"  missions = #ai.missions()\n"
+			"  if not given and ai.time() > 30 then\n"
+			"    local b = ai.buildingsNear(300, 300, 5000)\n"
+			"    if #b > 0 then given = ai.giveMission(\"raze\", b[1], 6) end\n"
+			"  end\n"
+			"end\n"
+			"function census() return \"food \" .. tostring(food) .. \" weight \" .. tostring(weightSet) .. \" mission \" .. tostring(given) .. \" missions \" .. tostring(missions) end\n";
+	}
+	auto game = [&](Server& server, const char* script, int reaction) {
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		g_settings["simSeed"] = 99;
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+		std::vector<QuickSkirmishMenu::Slot> slots(2);
+		const char* generals[2] = { "Belisar The Hammer Kingmaker", "Lady Elinor Kingmaker" };
+		for (int i = 0; i < 2; i++) { slots[i].type = QuickSkirmishMenu::Slot::AI; slots[i].general = generals[i]; }
+		slots[0].aiScript = script;
+		skirmish.setSlots(slots);
+		skirmish.setSetting("aiMinistries", 1);
+		skirmish.setSetting("aiReaction", reaction);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		skirmish.applySettings(server);
+	};
+	{
+		Server server;
+		game(server, "MinistryProbe", 100);
+		StepServer(server, 3000);
+		ServerGameObject* belisar = server.findObject(1027);
+		Government* g = server.ministries.governments.count(1027) ? server.ministries.governments[1027].get() : nullptr;
+		const std::string census = belisar ? belisar->aiController.luaCensus() : std::string();
+		printf("LUAMIN the Lua AI's census: %s\n", census.c_str());
+		check("the Lua AI runs with the government", g && census.find("food ") != std::string::npos);
+		check("ai.report", census.find("food -") == std::string::npos && census.find("food ") != std::string::npos);
+		check("ai.setWeight", g && g->board.weights[WAR] == 3.0f);
+		bool luaMission = false;
+		if (g)
+			for (const Mission& m : g->missions)
+				luaMission |= m.kind == Mission::RAZE && m.want == 6;
+		check("ai.giveMission", census.find("mission nil") == std::string::npos && (luaMission || (g && g->board.get("missions.raze.done") + g->board.get("missions.raze.failed") > 0)));
+	}
+	{
+		Server server;
+		game(server, "", 200);
+		StepServer(server, 3000);
+		Government* g = server.ministries.governments.count(1027) ? server.ministries.governments[1027].get() : nullptr;
+		Department* economy = g ? g->department(ECONOMY) : nullptr;
+		printf("LUAMIN aiReaction 200: economy thought %llu times in 60 s (every 2 s at 100)\n", economy ? (unsigned long long)economy->thinks : 0ull);
+		check("aiReaction slows them", economy && economy->thinks >= 14 && economy->thinks <= 16);
+	}
+	printf("LUAMIN all %d\n", (int)all);
+	fflush(stdout);
+}
+
 void Test_Determinism()
 {
 	LoadBCP("data.bcp");
@@ -9476,6 +9552,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryTactics, "Ministry AI tactics: training by counters, abilities (heal, curse) by the rule table"},
 {Test_MinistryDiplomacy, "Ministry AI diplomacy: gratitude for a tribute, peace, a grudge and war, a real kill in the ledger, through a save"},
 {Test_MinistryEconomy, "Ministry AI economy: the peasant cap, gold miners, research and repairs against the same game without"},
+{Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 };
 
 void LaunchTest()

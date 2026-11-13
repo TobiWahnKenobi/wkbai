@@ -140,10 +140,8 @@ namespace {
 			const Personality& c = g.personality;
 			const float now = g.now();
 			Blackboard& b = g.board;
-			b.weights[WAR] = 0.5f + c.aggression;
-			b.weights[GENERALS] = b.weights[WAR];
-			b.weights[ECONOMY] = 1.5f - c.aggression;
-			b.budgets["war.income"] = 0.25f + 0.45f * c.aggression;
+			// (the weights come from the character when the government is formed, SetWeightsFromCharacter;
+			// a Lua AI may change them later: ai.setWeight)
 
 			const int maxMissions = std::clamp(g.server.aiGenerals, 1, 8);
 			int attacks = 0;
@@ -259,14 +257,7 @@ namespace {
 			}
 		}
 
-		void give(Government& g, Mission& m, const char* why) {
-			m.id = g.nextMission++;
-			m.since = m.stateSince = g.now();
-			g.log(STRATEGIST, "mission %u: %s %u of player %u at (%.0f, %.0f), %d units, goal %d: %s", m.id, Mission::KindName(m.kind), m.target, m.enemy,
-				m.tx, m.tz, m.want, m.goal, why);
-			g.board.report("missions.given", g.board.get("missions.given") + 1);
-			g.missions.push_back(m);
-		}
+		void give(Government& g, Mission& m, const char* why) { GiveMission(g, m, why); }
 
 		void save(const Government&, std::vector<std::string>& lines) const override {
 			char buf[40];
@@ -586,6 +577,29 @@ namespace {
 			return nullptr;
 		}
 	};
+}
+
+void SetWeightsFromCharacter(Government& g)
+{
+	if (!g.personality.read)
+		ReadPersonality(g);
+	const Personality& c = g.personality;
+	Blackboard& b = g.board;
+	b.weights[WAR] = 0.5f + c.aggression;
+	b.weights[GENERALS] = b.weights[WAR];
+	b.weights[ECONOMY] = 1.5f - c.aggression;
+	b.budgets["war.income"] = 0.25f + 0.45f * c.aggression;
+}
+
+uint32_t GiveMission(Government& g, Mission& m, const char* why)
+{
+	m.id = g.nextMission++;
+	m.since = m.stateSince = g.now();
+	g.log(STRATEGIST, "mission %u: %s %u of player %u at (%.0f, %.0f), %d units, goal %d: %s", m.id, Mission::KindName(m.kind), m.target, m.enemy,
+		m.tx, m.tz, m.want, m.goal, why);
+	g.board.report("missions.given", g.board.get("missions.given") + 1);
+	g.missions.push_back(m);
+	return m.id;
 }
 
 std::unique_ptr<Department> MakeStrategist() { return std::make_unique<Strategist>(); }

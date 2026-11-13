@@ -1200,6 +1200,7 @@ local SETTINGS = {
 	barbarianTribes = 0, teamPlacement = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0,
+	aiMinistries = 0, -- wkbai's ministry AI (Ministries.h): each AI General a government of departments
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1362,6 +1363,13 @@ local function settingsTab()
 	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
 	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
+	-- wkbai's own: the ministry AI (the RE repo's docs/engine/ministry-ai.md): the AI Generals'
+	-- strategist, departments and missions on top of the Kingmaker scripts
+	do
+		local my = skirmish.multiplayer and Y(818) or Y(894)
+		if roundButton(X(200), my, L(52), s.aiMinistries ~= 0, true) then s.aiMinistries = (s.aiMinistries ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, X(264), my + L(18), "Ministry AI", WHITE, S)
+	end
 	-- wkbre2's own, multiplayer: an AI General plays on for a guest who leaves; guests with no
 	-- position (and ones who join the running game) may watch, up to a number
 	if skirmish.multiplayer then
