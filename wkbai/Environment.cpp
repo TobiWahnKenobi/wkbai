@@ -5,6 +5,7 @@
 #include "common.h"
 #include "network.h"
 #include "terrain.h"
+#include "gfx/EnhancedTerrainData.h"
 #include "tags.h"
 #include "util/BinaryReader.h"
 #include "gameset/gameset.h"
@@ -238,6 +239,138 @@ float EnvYearFraction(const EnvironmentSettings& s, float time)
 	if (!s.seasons)
 		return 0.125f; // mid spring
 	return Frac(s.startSeason * 0.25f + s.yearShift + time / (4.0f * s.seasonLengthS()));
+}
+
+float SeaIceReach(int severity, float ice)
+{
+	const float base = severity <= 0 ? 0.0f : severity == 1 ? 6.0f : 16.0f;
+	return base * std::clamp((ice - 0.15f) / 0.7f, 0.0f, 1.0f);
+}
+
+namespace {
+	// an integer hash and value noise the terrain shader has the same of (IceHash, IceValue)
+	uint32_t IceHash(int x, int z)
+	{
+		uint32_t h = (uint32_t)x * 73856093u ^ (uint32_t)z * 19349663u;
+		h ^= h >> 13;
+		h *= 0x5bd1e995u;
+		h ^= h >> 15;
+		return h;
+	}
+	float IceValue(float x, float z)
+	{
+		const float fx = std::floor(x), fz = std::floor(z);
+		const int ix = (int)fx, iz = (int)fz;
+		float tx = x - fx, tz = z - fz;
+		tx = tx * tx * (3 - 2 * tx);
+		tz = tz * tz * (3 - 2 * tz);
+		auto v = [](int a, int b) { return (float)IceHash(a, b) / 4294967295.0f; };
+		const float a = v(ix, iz) + (v(ix + 1, iz) - v(ix, iz)) * tx;
+		const float b = v(ix, iz + 1) + (v(ix + 1, iz + 1) - v(ix, iz + 1)) * tx;
+		return a + (b - a) * tz;
+	}
+}
+
+float SeaIceEdge(float wx, float wz, float reach)
+{
+	const float n = IceValue(wx / 30.0f, wz / 30.0f) * 0.65f + IceValue(wx / 11.0f + 17.3f, wz / 11.0f + 5.1f) * 0.35f - 0.5f;
+	return n * (1.4f * reach + 4.0f);
+}
+
+std::vector<uint8_t> BuildCoastDistance(const Terrain* t)
+{
+	const int W = (int)t->width, H = (int)t->height;
+	std::vector<float> d((size_t)W * H, 0.0f);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++)
+			if (const Terrain::Tile* tile = t->getTile(x, z); tile && tile->fullOfWater)
+				d[(size_t)z * W + x] = 1e9f;
+	// two passes of a chamfer (1, 1.41)
+	const float D = 1.41421356f;
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			float& v = d[(size_t)z * W + x];
+			if (x > 0) v = std::min(v, d[(size_t)z * W + x - 1] + 1);
+			if (z > 0) {
+				v = std::min(v, d[(size_t)(z - 1) * W + x] + 1);
+				if (x > 0) v = std::min(v, d[(size_t)(z - 1) * W + x - 1] + D);
+				if (x + 1 < W) v = std::min(v, d[(size_t)(z - 1) * W + x + 1] + D);
+			}
+		}
+	for (int z = H - 1; z >= 0; z--)
+		for (int x = W - 1; x >= 0; x--) {
+			float& v = d[(size_t)z * W + x];
+			if (x + 1 < W) v = std::min(v, d[(size_t)z * W + x + 1] + 1);
+			if (z + 1 < H) {
+				v = std::min(v, d[(size_t)(z + 1) * W + x] + 1);
+				if (x + 1 < W) v = std::min(v, d[(size_t)(z + 1) * W + x + 1] + D);
+				if (x > 0) v = std::min(v, d[(size_t)(z + 1) * W + x - 1] + D);
+			}
+		}
+	std::vector<uint8_t> out((size_t)W * H);
+	for (size_t i = 0; i < out.size(); i++)
+		out[i] = (uint8_t)std::clamp((int)std::lround(d[i] * 4.0f), 0, 255);
+	return out;
+}
+
+void KeepOpenSea(const Terrain* t, std::vector<uint8_t>& sea, const std::vector<uint8_t>& coast)
+{
+	const int W = (int)t->width, H = (int)t->height;
+	if (sea.size() != (size_t)W * H || coast.size() != sea.size())
+		return;
+	std::vector<int> piece((size_t)W * H, -1);
+	std::vector<int> stack;
+	for (int start = 0; start < W * H; start++) {
+		if (!sea[start] || piece[start] >= 0)
+			continue;
+		std::vector<int> tiles;
+		stack.push_back(start);
+		piece[start] = start;
+		int widest = 0, border = 0;
+		while (!stack.empty()) {
+			const int i = stack.back();
+			stack.pop_back();
+			tiles.push_back(i);
+			widest = std::max(widest, (int)coast[i]);
+			const int x = i % W, z = i / W;
+			if (x == 0 || z == 0 || x == W - 1 || z == H - 1)
+				border++;
+			const int nb[4][2] = { { x + 1, z }, { x - 1, z }, { x, z + 1 }, { x, z - 1 } };
+			for (const auto& q : nb) {
+				if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H)
+					continue;
+				const int j = q[1] * W + q[0];
+				if (sea[j] && piece[j] < 0) {
+					piece[j] = start;
+					stack.push_back(j);
+				}
+			}
+		}
+		// (a sea along a good stretch of the edge; a river crosses it only over its width)
+		const bool isSea = widest >= 8 * 4 && border >= std::max(40, (2 * W + 2 * H) * 12 / 100);
+		printf("Open sea: a piece of %zu tiles, %.1f tiles from the shore at most, %d along the edge: %s\n", tiles.size(), widest / 4.0f, border, isSea ? "a sea" : "not a sea");
+		if (!isSea)
+			for (int i : tiles)
+				sea[i] = 0;
+	}
+}
+
+std::vector<uint8_t> OpenSeaTiles(Terrain* t)
+{
+	std::vector<uint8_t> sea;
+	BuildWaterFlow(t, &sea);
+	KeepOpenSea(t, sea, BuildCoastDistance(t));
+	for (uint8_t& s : sea)
+		s = s ? 1 : 0;
+	return sea;
+}
+
+void PrepareSeaIce(Terrain* t)
+{
+	if (!t || t->seaTiles.size() == (size_t)t->width * t->height)
+		return;
+	t->seaTiles = OpenSeaTiles(t);
+	t->coastTiles = BuildCoastDistance(t);
 }
 
 std::vector<FloodLand> FindFloodLand(const Terrain* t)

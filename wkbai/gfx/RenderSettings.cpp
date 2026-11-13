@@ -67,6 +67,10 @@ void RenderSettings::load()
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
+	snowQuality = std::clamp(g_settings.value<int>("snowQuality", def.snowQuality), 0, 2);
+	iceQuality = std::clamp(g_settings.value<int>("iceQuality", def.iceQuality), 0, 2);
+	rainbows = g_settings.value<bool>("rainbows", def.rainbows);
+	heatShimmer = g_settings.value<bool>("heatShimmer", def.heatShimmer);
 	skyGI = g_settings.value<bool>("skyGI", def.skyGI);
 	dynamicGI = std::clamp(g_settings.value<int>("dynamicGI", def.dynamicGI), 0, 3);
 	dynamicGIStrength = std::clamp(g_settings.value<float>("dynamicGIStrength", def.dynamicGIStrength), 0.0f, 3.0f);
@@ -172,6 +176,10 @@ void RenderSettings::save()
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
 	g_settings["weatherEffects"] = weatherEffects;
+	g_settings["snowQuality"] = snowQuality;
+	g_settings["iceQuality"] = iceQuality;
+	g_settings["rainbows"] = rainbows;
+	g_settings["heatShimmer"] = heatShimmer;
 	g_settings["skyGI"] = skyGI;
 	g_settings["dynamicGI"] = dynamicGI;
 	g_settings["dynamicGIStrength"] = dynamicGIStrength;

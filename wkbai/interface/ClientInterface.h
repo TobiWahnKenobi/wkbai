@@ -288,9 +288,13 @@ private:
 	std::deque<SceneEntity> attachSceneEntities;
 	// Extend map's trees (ExtendMap.h): the level's own tree models as seen (with their size and
 	// season flags), and an entity per tree, made once those are known
-	struct ExtTreeModel { Model* model; float scale; uint32_t flags; };
+	// (broadleaf: bare in winter as the map's own, height: its model's, for the leafless one's size)
+	struct ExtTreeModel { Model* model; float scale; uint32_t flags; bool broadleaf; float height; };
 	std::vector<ExtTreeModel> extTreeModels;
 	std::vector<SceneEntity> extTreeEntities;
+	// per entity: its leafy and its bare look (a broadleaf tree's), its id for when it drops its leaves
+	struct ExtTreeLook { Model* leafy; Matrix leafyTransform; Model* bare; Matrix bareTransform; uint32_t flags; uint32_t id; };
+	std::vector<ExtTreeLook> extTreeLooks;
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
 	void drawExtendedTrees();

@@ -1124,6 +1124,38 @@ struct DiligentRenderer : DiligentGfx
 		s.fovY = camera.fovY;
 		s.frameTimeMs = std::chrono::duration<float, std::milli>(now - lastApply).count();
 		lastApply = now;
+		// the weather's own looks: a heatwave's shimmer by day, a rainbow
+		{
+			static float clock = 0.0f, rainLeft = 0.0f;
+			const float dt = std::clamp(s.frameTimeMs / 1000.0f, 0.0f, 0.1f);
+			clock = std::fmod(clock + dt, 3600.0f);
+			s.clockSeconds = clock;
+			const EnvironmentView& ev = g_environment;
+			const float daylight = ev.active ? ev.sun.daylight : 0.0f;
+			if (g_renderSettings.heatShimmer && ev.active && ev.weather == WEATHER_HEATWAVE)
+				s.heatShimmer = std::clamp((ev.temperatureC - 24.0f) / 8.0f, 0.0f, 1.0f) * daylight;
+			// A rainbow wants drops in the air (rain falling, or just past: its memory fades over a
+			// minute and a half), the sun shining through broken cloud, low enough (under 42
+			// degrees, else the bow is under the horizon), above it, and no snow; moister air,
+			// more drops: a little stronger
+			rainLeft = ev.active ? std::max(rainLeft - dt / 90.0f, std::clamp(ev.rain * 2.5f, 0.0f, 1.0f)) : 0.0f;
+			static const float forced = g_settings.value<float>("rainbowForce", 0.0f); // (test runs)
+			if (g_renderSettings.rainbows && ev.active) {
+				const Vector3 sun = ev.sunWorld.sqlen3() > 1e-6f ? ev.sunWorld.normal() : Vector3(0, -1, 0);
+				const float e = sun.y;
+				auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+				const float high = smooth(0.0f, 0.06f, e) * (1.0f - smooth(0.55f, 0.67f, e));
+				const float through = std::clamp((0.92f - ev.cloudCover) / 0.3f, 0.0f, 1.0f);
+				const float drops = std::max(rainLeft, forced) * (0.6f + 0.4f * std::clamp(ev.humidity, 0.0f, 1.0f));
+				const float strength = drops * std::max(through, forced) * high * (1.0f - std::clamp(ev.snowShown * 3.0f, 0.0f, 1.0f)) * (ev.temperatureC > 1.0f ? 1.0f : 0.0f);
+				if (strength > 0.001f) {
+					s.rainbow[0] = -sun.x;
+					s.rainbow[1] = -sun.y;
+					s.rainbow[2] = -sun.z;
+					s.rainbow[3] = strength;
+				}
+			}
+		}
 		if (!postEffects) {
 			s.ssao = s.bloom = false;
 			s.motionBlur = 0.0f;

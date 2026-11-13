@@ -120,6 +120,13 @@ struct Terrain
 	// the rivers and lakes frozen over hard enough to walk on (wkbai's weather): everything
 	// stands on the water's surface, as boats do (getHeightEx)
 	bool waterFrozen = false;
+	// with it, the open sea (seaTiles 1) frozen only out to seaIceReach tiles from its coasts
+	// (coastTiles: each tile's distance to the land in quarter tiles; SeaIceReach, SeaIceEdge,
+	// PrepareSeaIce in Environment.h); per tile in row order, empty: all the water freezes
+	std::vector<uint8_t> seaTiles, coastTiles;
+	float seaIceReach = 0.0f;
+	// whether a tile's water (full tile coordinates) is frozen over
+	bool frozenAt(int tx, int tz) const;
 
 	Vector3 getNormal(int x, int z) const;
 

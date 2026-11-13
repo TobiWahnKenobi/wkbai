@@ -229,6 +229,26 @@ namespace {
 		}
 		{
 			MenuOption o;
+			o.id = "snowQuality"; o.page = "sky"; o.label = "Snow quality"; // (Low the first look, Medium softer and the same over the far land, High glinting)
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.snowQuality; };
+			o.set = [&rs](float v) { rs.snowQuality = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "iceQuality"; o.page = "sky"; o.label = "Ice quality"; // (Low plain, Medium lit with cracks, High glossy and frosty)
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.iceQuality; };
+			o.set = [&rs](float v) { rs.iceQuality = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
+		list.push_back(toggle("rainbows", "sky", "Rainbows", rs.rainbows));
+		list.push_back(toggle("heatShimmer", "sky", "Heat shimmer in a heatwave", rs.heatShimmer));
+		{
+			MenuOption o;
 			o.id = "terrainTessellation"; o.page = "terrain"; o.label = "Terrain tessellation";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Low", "Medium", "High" };

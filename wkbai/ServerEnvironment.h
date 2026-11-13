@@ -90,6 +90,8 @@ struct ServerEnvironment {
 	// always, the water's level heading there; -1 / a NaN: none
 	int forceWeather = -1;
 	float forceWaterRise = -1000.0f;
+	bool forceWaterRiseNow = false; // (the forced level at once, not risen to)
+	float forceSnowCover = -1.0f, forceIce = -1.0f; // test runs: held (below 0: not)
 	// tests ("environmentForce": { "fireAt": [x, z, after s] }): a flaming missile comes down there
 	// once that many seconds in (the screenshots' fire)
 	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;

@@ -257,6 +257,10 @@ struct DiligentGfx : IRenderer
 		// ambient occlusion (1 open, half size)
 		Diligent::ITextureView* lightRtMask = nullptr;
 		Diligent::ITextureView* lightAo = nullptr;
+		// Extend map's terrain shadows (the far land's horizons over the copy's vertices, the
+		// terrain renderer's, FarTerrain::nearHorizon: directions 0-3, 4-7), for the objects too;
+		// null: none
+		Diligent::ITextureView* farHorizon[2] = { nullptr, nullptr };
 		bool lightPrepass = false;
 		// the haze's tint along the horizon (the physical sky's, DiligentSkyRenderer;
 		// FogBuffer.FogSun, FogSunColour, FogHorizon): towards the true sun and the tint's weight,

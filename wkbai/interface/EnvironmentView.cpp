@@ -144,6 +144,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	if (!g_lightningKnown) {
 		v.cloudCover = stCloud; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;
+		v.severity = st.severity;
 	}
 	ease(v.cloudCover, stCloud);
 	ease(v.rain, st.rain);
@@ -285,6 +286,10 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		}
 		approach(v.autumn, autumn, 0.05f);
 		approach(v.mud, std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f + 0.1f * std::min(st.rain, 1.0f) * (st.waterRise > 0.2f ? 1.0f : 0.0f), 0.02f);
+		// (test runs: the flood's mud at once, WKB_MUD_NOW)
+		static const bool mudNow = getenv("WKB_MUD_NOW") != nullptr;
+		if (mudNow)
+			v.mud = std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f;
 		approach(v.flow, std::clamp(1.0f + 0.55f * std::max(st.waterRise, 0.0f) + 0.3f * st.rain - 0.3f * std::max(-st.waterRise, 0.0f), 0.4f, 2.0f), 0.05f);
 		// the falls freeze in a harsh winter's hard cold (below -5 degrees), and thaw above -1
 		const bool freezing = es.seasons && st.season == 3 && st.severity >= 2 && st.temperatureC < -5.0f;

@@ -63,6 +63,17 @@ struct RenderSettings {
 	// footprints that last longer). The flood water, the ground's snow and ice and the light of
 	// day and night are drawn at every level: they are part of the game.
 	int weatherEffects = 2;
+	// the lying snow's look: 0 Low (the first: one white in patches), 1 Medium (softer patches
+	// that keep their cover out over the near and far land, bluer where thin), 2 High (and the
+	// sun glinting in its crystals)
+	int snowQuality = 1;
+	// the ice's look: 0 Low (a plain grey-blue), 1 Medium (lit, mirroring the sky, cracks),
+	// 2 High (and a glossy highlight, frost glittering, bubbles frozen in)
+	int iceQuality = 1;
+	// rainbows: opposite the sun when it is low and shines while rain falls or has just fallen
+	bool rainbows = true;
+	// a heatwave's air shimmering over the distance by day (very slight)
+	bool heatShimmer = true;
 	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
 	// square unit (0 to TerrainGrassBuilder::MAX_DENSITY), their height (times 0.4-0.85 units)
 	// and how far from the camera they are drawn
