@@ -98,8 +98,9 @@ namespace Pathfinding {
             nextTiles.push_back({ start, 0 });
         }
 
-        template<typename Predicate, typename Heuristic>
-        bool next(Predicate pred, Heuristic heuristic) {
+        struct NoCost { int operator()(PFPos) const { return 0; } };
+        template<typename Predicate, typename Heuristic, typename Cost = NoCost>
+        bool next(Predicate pred, Heuristic heuristic, Cost extra = Cost()) {
             if (finished) return true;
 
             static auto heapcmp = [](const auto& a, const auto& b) {return a.second > b.second; };
@@ -140,7 +141,7 @@ namespace Pathfinding {
                 const int pi = index(pfp);
                 if (closed(pi))
                     return;
-                score_t newscore = mtScore + cost;
+                score_t newscore = mtScore + cost + extra(pfp);
                 if (!hasScore(pi) || newscore < scores[pi]) {
                     scores[pi] = newscore;
                     scoreStamp[pi] = stamp;
@@ -185,8 +186,8 @@ namespace Pathfinding {
     // the tiles the last DoPathfinding of this thread took from its open lists (both directions; profiling)
     inline thread_local int g_lastSearchSteps = 0;
 
-    template<typename Predicate, typename Heuristic>
-    std::vector<PFPos> DoPathfinding(PFPos start, PFPos end, Predicate pred, Heuristic heuristic, int width = 1024, int height = 1024) {
+    template<typename Predicate, typename Heuristic, typename Cost = AStarPathfinder::NoCost>
+    std::vector<PFPos> DoPathfinding(PFPos start, PFPos end, Predicate pred, Heuristic heuristic, int width = 1024, int height = 1024, Cost extra = Cost()) {
         //AStarPathfinder astar;
         //astar.begin(start, end);
 
@@ -207,8 +208,8 @@ namespace Pathfinding {
                 g_lastSearchCut = true;
                 return astar1.getTo(astar1.best);
             }
-            if (astar1.next(pred, heuristic)) return astar1.get();
-            if (astar2.next(pred, heuristic)) {
+            if (astar1.next(pred, heuristic, extra)) return astar1.get();
+            if (astar2.next(pred, heuristic, extra)) {
                 auto vec = astar2.get();
                 std::reverse(vec.begin(), vec.end());
                 return vec;

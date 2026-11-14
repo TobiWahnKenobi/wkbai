@@ -14,6 +14,8 @@
 #include "GameObjectRef.h"
 #include "MovementController.h"
 #include "Order.h"
+#include "settings.h"
+#include <nlohmann/json.hpp>
 
 // The member places of the original's formations (WKB.exe: Line 0x64a7a0, Column 0x64a900,
 // Wedge 0x64aa70, Orb 0x64ad50), chosen by the formation type at 0x550c60. x is across, z
@@ -370,6 +372,37 @@ void FormationController::faceMembersWay(ServerGameObject* formation)
 		formation->setOrientation(Vector3(0.0f, std::atan2(sx, cz), 0.0f));
 }
 
+bool FormationController::shareDamage(ServerGameObject* member, float drop)
+{
+	static bool sharing = false;
+	ServerGameObject* formation = member->getParent();
+	if (sharing || drop <= 4.0f || !formation || formation->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION
+		|| (member->flags & CommonGameObject::fTerminated))
+		return false;
+	const GameObjBlueprint* bp = formation->blueprint;
+	const int n = bp->damageSharers;
+	// (the original loses the hit when the formation hasn't formed up yet, 0x551f50; here the member
+	// takes it)
+	if (bp->damageSharePercentage <= 0.0f || n <= 0 || !formation->formationController.formed)
+		return false;
+	std::vector<ServerGameObject*> members = liveMembers(formation);
+	const float per = bp->damageSharePercentage * drop / (float)n;
+	if (n < (int)members.size() - 1) {
+		// the n nearest the one hit (itself at 0)
+		std::stable_sort(members.begin(), members.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			return (a->position - member->position).sqlen2xz() < (b->position - member->position).sqlen2xz();
+		});
+		members.resize(n);
+	}
+	sharing = true;
+	for (ServerGameObject* m : members) {
+		const float hp = m->getItem(Tags::PDITEM_HIT_POINTS);
+		m->setItem(Tags::PDITEM_HIT_POINTS, std::max(0.0f, hp - per));
+	}
+	sharing = false;
+	return true;
+}
+
 void FormationController::flushDisbands()
 {
 	auto list = std::move(pendingDisbands);
@@ -542,7 +575,11 @@ void FormationController::update()
 		wasMarching = false;
 		holding = false;
 	}
-	faceAttackers();
+	// wkbai's own: WKB.exe never turns a formation to face an attack (docs/re/combat.md), so only
+	// with "formationsFaceAttacks"
+	static const bool faceAttacks = g_settings.value<bool>("formationsFaceAttacks", false);
+	if (faceAttacks)
+		faceAttackers();
 	// a form-up: the first time, a member without a place (joined), an Orb that lost one, or a turn
 	// while standing (a facing order, an attack from the flank)
 	const bool joined = std::any_of(members.begin(), members.end(), [&](auto* m) { return !slotOf.count(m->id); });

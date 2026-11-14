@@ -44,6 +44,20 @@ bool AIController::moveUnitsTo(const std::vector<ServerGameObject*>& units, Serv
 	return true;
 }
 
+// An attack by the AI: the unit's DEFAULT_ATTACK_COMMAND, as a right-click gives it ("Fire Arrow",
+// "Fire Bullet", "Fire Trebuchet", ...; "Attack" for melee), not the melee "Attack" order for everyone
+void AIAttack(ServerGameObject* unit, ServerGameObject* target)
+{
+	const GameSet* gs = Server::instance->gameSet.get();
+	if (const Command* cmd = gs->commands.getPointer(unit->blueprint->defaultAttackCommand)) {
+		cmd->execute(unit, target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		return;
+	}
+	const int attackOrder = gs->orders.names.getIndex("Attack");
+	if (attackOrder >= 0)
+		unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+}
+
 // A wave sent from home at a target: a new Kingmaker Attacking Army under the player; each unit
 // type of 4 or more in a formation marching to 50 m short of the target (aiWaveFormations), or
 // all first to a rally point 120 m short (aiWaveGather), else each unit attacking. Returns the army.
@@ -105,7 +119,7 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 		if (gather)
 			gathering.push_back(unit);
 		else
-			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			AIAttack(unit, target);
 	}
 	if (gather && moveUnitsTo(gathering, gameObj, rally)) {
 		float farthest = 0.0f;
@@ -115,7 +129,7 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 	}
 	else
 		for (ServerGameObject* unit : gathering)
-			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			AIAttack(unit, target);
 	waves++;
 	waveUnits += (int)members.size();
 	return army;
@@ -687,7 +701,7 @@ void AIController::update()
 					printf("GATHER player %u army %u: %zu of %zu at the rally after %.0f s (waits up to %.0f s)\n", gameObj->id, it->army, there, units.size(), now - it->since, it->wait);
 				for (ServerGameObject* u : units)
 					if (!weatherHolds(u->id))
-						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+						AIAttack(u, target);
 				it = gatheringWaves.erase(it);
 				continue;
 			}
@@ -741,7 +755,7 @@ void AIController::update()
 				for (ServerGameObject* u : units) {
 					u->setParent(army);
 					if (!targetGone && attackOrder >= 0)
-						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+						AIAttack(u, target);
 				}
 				it = marchingFormations.erase(it);
 				continue;
@@ -821,9 +835,9 @@ void AIController::update()
 			for (ServerGameObject* u : shooters) {
 				Order* order = u->orderConfig.getCurrentOrder();
 				Task* task = order ? order->getCurrentTask() : nullptr;
-				if (order && order->blueprint == &gs->orders[attackOrder] && task && task->target.get() == weakest)
+				if (order && task && task->target.get() == weakest)
 					continue;
-				u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, weakest);
+				AIAttack(u, weakest);
 				focusOrders++;
 			}
 		}

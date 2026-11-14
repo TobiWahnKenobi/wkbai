@@ -72,6 +72,70 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		int tag = Tags::CBLUEPRINT_tagDict.getTagID(strtag.c_str());
 		if (strtag == endtag)
 			break;
+		// keywords WKB.exe reads that aren't in the tag list (docs/re/combat.md)
+		if (strtag == "DAMAGE_SHARE_PERCENTAGE") {
+			damageSharePercentage = gsf.nextFloat();
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "NUMBER_OF_DAMAGE_SHARERS") {
+			damageSharers = gsf.nextInt();
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "IGNORE_ALL_MISSILE_COLLISION") {
+			ignoreAllMissileCollision = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "IGNORE_FRIENDLY_MISSILE_COLLISION") {
+			ignoreFriendlyMissileCollision = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "STRIKE_FLOOR_SPECIAL_EFFECT") {
+			strikeFloorEffect = gameSet->specialEffectTags.readIndex(gsf);
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "DEFAULT_ATTACK_COMMAND" || strtag == "FORMATION_ATTACK_COMMAND") {
+			const int cmd = gameSet->commands.names.getIndex(gsf.nextString(true));
+			(strtag == "DEFAULT_ATTACK_COMMAND" ? defaultAttackCommand : formationAttackCommand) = cmd;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "MAX_GRADIENT") {
+			maxGradient = std::clamp(gsf.nextFloat(), 0.0f, 90.0f);
+			hasMaxGradient = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "APPLY_INTENSITY_MAP_TO_PATHFINDING") {
+			if (gsf.nextString(true) == "Threat")
+				avoidsThreat = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "UPDATE_INTENSITY_MAP") {
+			if (gsf.nextString(true) == "Threat" && gsf.nextString() == "ON_TILE_CHANGE") {
+				std::unique_ptr<ValueDeterminer> radius(ReadValueDeterminer(gsf, *gameSet));
+				std::unique_ptr<ValueDeterminer> strength(ReadValueDeterminer(gsf, *gameSet));
+				// (constants in the shipped game set: radius 0, strength 5)
+				if (radius && strength) {
+					writesThreat = true;
+					threatRadius = radius->eval(nullptr);
+					threatStrength = strength->eval(nullptr);
+				}
+			}
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "BOUNDING_VOLUME") {
+			if (gsf.nextString() == "SPHERE")
+				boundingRadius = gsf.nextFloat();
+			gsf.advanceLine();
+			continue;
+		}
 		if (strtag == "CAN_BE_BUILT_UPON") {
 			canBeBuiltUpon = gsf.nextInt() != 0;
 			gsf.advanceLine();
@@ -396,6 +460,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "USE_PASSABILITY_FIELDS") {
 			passabilityFieldsName = gsf.nextString(true);
 		}
+		else if (strtag == "CAN_TRAVERSE") {
+			canTraverseNames.push_back(gsf.nextString(true));
+		}
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}
@@ -508,11 +575,30 @@ const std::vector<bool>* GameObjBlueprint::getPassableTerrains() const
 {
 	if (!passableTerrainsResolved) {
 		passableTerrainsResolved = true;
-		auto it = gameSet->passabilityFields.find(passabilityFieldsName);
-		if (!passabilityFieldsName.empty() && it != gameSet->passabilityFields.end())
-			passableTerrains = &it->second;
+		if (!canTraverseNames.empty()) {
+			traverseMask.assign(gameSet->terrains.size(), false);
+			for (const std::string& name : canTraverseNames) {
+				const int t = gameSet->terrains.names.getIndex(name);
+				if (t >= 0)
+					traverseMask[t] = true;
+			}
+			passableTerrains = &traverseMask;
+		}
+		else {
+			auto it = gameSet->passabilityFields.find(passabilityFieldsName);
+			if (!passabilityFieldsName.empty() && it != gameSet->passabilityFields.end())
+				passableTerrains = &it->second;
+		}
 	}
 	return passableTerrains;
+}
+
+bool GameObjBlueprint::wades() const
+{
+	for (const std::string& name : canTraverseNames)
+		if (name == "Water")
+			return true;
+	return false;
 }
 
 bool GameObjBlueprint::canWalkOnWater() const { return floatsOnWater || bpClass != Tags::GAMEOBJCLASS_CHARACTER; }

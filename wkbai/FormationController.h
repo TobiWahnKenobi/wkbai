@@ -47,6 +47,10 @@ public:
 	static void flushDisbands();
 	// a new formation faces the way its members face (their mean heading), not the map's north
 	static void faceMembersWay(ServerGameObject* formation);
+	// A hit of `drop` hit points on a member of a formation (WKB.exe 0x551f50): true when the
+	// formation took it, as a share spread over the members nearest the one hit; false when the
+	// hit is the member's own (too small, not formed, no sharing)
+	static bool shareDamage(ServerGameObject* member, float drop);
 	// form up again where it stands (CREATE_FORMATION of a formation: "Reform Yourself", the Halt
 	// command's)
 	void requestFormUp() { reformWanted = true; }

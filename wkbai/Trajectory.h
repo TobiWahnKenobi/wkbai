@@ -15,6 +15,8 @@ public:
 	Vector3 getRotationAngles(float time);
 	void start(const Vector3& initPos, const Vector3& initVel, float startTime);
 	bool isMoving() { return m_started; }
+	// stopped where it is (a missile that struck the ground)
+	void stop() { m_started = false; }
 	Vector3 initialPosition() const { return m_initialPosition; }
 	Vector3 initialVelocity() const { return m_initialVelocity; }
 	float startTime() const { return m_startTime; }

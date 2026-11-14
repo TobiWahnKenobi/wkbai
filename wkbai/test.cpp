@@ -4750,6 +4750,17 @@ void Test_Corpses()
 	};
 	struct Corpse { SrvGORef ref; Vector3 pos; float since; float maxMoved = 0.0f; };
 	std::map<uint32_t, Corpse> corpses;
+	// (the formation breaks up when fewer than 8 are left in it, as WKB.exe's: members hit on the
+	// flank leave it, as the game set's human-player rule has it; then its survivors go on loose)
+	SrvGORef formationRef(formation);
+	auto anchor = [&]() -> ServerGameObject* {
+		if (formationRef)
+			return formationRef.get();
+		for (auto& r : ownUnits)
+			if (r && r->blueprint->name.rfind("Dead ", 0) != 0)
+				return r.get();
+		return nullptr;
+	};
 	std::vector<SrvGORef> all = ownUnits;
 	all.insert(all.end(), enemyUnits.begin(), enemyUnits.end());
 	bool sentAway = false;
@@ -4758,24 +4769,26 @@ void Test_Corpses()
 		const float t = step * 0.02f;
 		// every 3 s, the living attack the nearest living enemy (the formation as a whole)
 		if (step % 150 == 0 && !sentAway) {
-			if (ServerGameObject* tg = nearest(formation, enemyUnits))
-				server.gameSet->commands[attack].execute(formation, tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			if (formationRef)
+				if (ServerGameObject* tg = nearest(formationRef.get(), enemyUnits))
+					server.gameSet->commands[attack].execute(formationRef.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 			// to everyone it set out with, the dead too: the AI's lists kept a unit's id, which its
 			// corpse keeps (it is the unit converted in place); the corpses got "Attack" and walked
 			for (auto& r : all) {
-				if (!r || r->getParent() == formation)
+				if (!r || (formationRef && r->getParent() == formationRef.get()))
 					continue;
 				if (ServerGameObject* tg = nearest(r.get(), r->getParent() == enemy ? ownUnits : enemyUnits))
 					server.gameSet->commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 			}
 		}
 		// once the enemy is beaten (or after 60 s), the survivors walk 60 m away
-		if (!sentAway && (t > 60.0f || !nearest(formation, enemyUnits))) {
+		if (!sentAway && (t > 60.0f || !anchor() || !nearest(anchor(), enemyUnits))) {
 			sentAway = true;
-			printf("CORPSE t=%.1f survivors sent away\n", t);
-			server.gameSet->commands[move].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position + Vector3(60, 0, 0));
+			printf("CORPSE t=%.1f survivors sent away (the formation %s)\n", t, formationRef ? "stands" : "broke up");
+			if (formationRef)
+				server.gameSet->commands[move].execute(formationRef.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formationRef->position + Vector3(60, 0, 0));
 			for (auto& r : all)
-				if (r && r->getParent() != formation)
+				if (r && !(formationRef && r->getParent() == formationRef.get()))
 					server.gameSet->commands[move].execute(r.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, r->position + Vector3(60, 0, 0));
 		}
 		server.timeManager.pendingMs = server.timeManager.stepMs;
@@ -7658,6 +7671,8 @@ void Test_Disguises()
 // faceAttackers), not one from the front, and not again within 4 s
 void Test_FormationFacing()
 {
+	// (wkbai's own turn, off by default: WKB.exe has none)
+	g_settings["formationsFaceAttacks"] = true;
 	int failures = 0;
 	auto check = [&](bool ok, const std::string& what) {
 		if (!ok) failures++;
@@ -7731,6 +7746,30 @@ void Test_FormationFacing()
 	run(0.5f);
 	printf("UNITTEST facing after the rear attack: %.2f\n", formation->orientation.y);
 	check(std::abs(std::abs(formation->orientation.y) - 1.5708f) < 0.05f && formation->orientation.y < 0.0f, "then it turns to face the rear attack (west)");
+	// damage sharing (WKB.exe 0x551f50): a hit of 10 on a member of the formed formation costs the
+	// formation DAMAGE_SHARE_PERCENTAGE of it, spread over NUMBER_OF_DAMAGE_SHARERS members (all of
+	// them when that's at least the members less one)
+	{
+		extern int g_simulating;
+		const GameObjBlueprint* fbp = formation->blueprint;
+		std::vector<float> before;
+		float total = 0.0f;
+		for (ServerGameObject* m : members) {
+			before.push_back(m->getItem(Tags::PDITEM_HIT_POINTS));
+			total += before.back();
+		}
+		g_simulating++;
+		members[1]->setItem(Tags::PDITEM_HIT_POINTS, before[1] - 10.0f);
+		g_simulating--;
+		float after = 0.0f;
+		for (ServerGameObject* m : members)
+			after += m->getItem(Tags::PDITEM_HIT_POINTS);
+		const int n = fbp->damageSharers >= (int)members.size() - 1 ? (int)members.size() : fbp->damageSharers;
+		const float expected = fbp->damageSharePercentage * 10.0f * (float)n / (float)std::max(fbp->damageSharers, 1);
+		printf("UNITTEST %s shares %.2f over %d: a hit of 10 cost %.2f in all, the one hit %.2f\n", fbp->name.c_str(),
+			fbp->damageSharePercentage, fbp->damageSharers, total - after, before[1] - members[1]->getItem(Tags::PDITEM_HIT_POINTS));
+		check(fbp->damageSharers > 0 && std::abs((total - after) - expected) < 0.05f, "a hit on a member is shared out by the formation");
+	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 

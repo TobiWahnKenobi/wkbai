@@ -562,7 +562,7 @@ void AIController::advancedUpdate()
 		for (size_t i = 0; i < used; i++) {
 			ServerGameObject* u = available[i];
 			if (ServerGameObject* e = NearestEnemy(t.enemies, u->position))
-				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+				AIAttack(u, e);
 			defenders[u->id] = { t.at, now };
 			defendersSent++;
 		}
@@ -621,7 +621,7 @@ void AIController::advancedUpdate()
 				}
 				if (next) {
 					for (ServerGameObject* u : units)
-						u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, next);
+						AIAttack(u, next);
 					it->target = next->id;
 					it->targetAt = next->position;
 					wavesRetargeted++;
@@ -893,7 +893,7 @@ void AIController::warUpdate()
 			ServerGameObject* tg = targetOf(u);
 			if (!enemies.empty() && (!tg || !IsSoldier(tg)))
 				if (ServerGameObject* e = NearestEnemy(enemies, u->position))
-					u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+					AIAttack(u, e);
 		}
 		++it;
 	}
@@ -960,7 +960,7 @@ void AIController::warUpdate()
 			weatherRelease(u->id);
 			u->setParent(army);
 			if (ServerGameObject* e = NearestEnemy(t.enemies, u->position))
-				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+				AIAttack(u, e);
 			busy.insert(u);
 		}
 		available.erase(available.begin(), available.begin() + used);
@@ -1051,12 +1051,12 @@ void AIController::warUpdate()
 			ServerGameObject* tg = targetOf(u);
 			if (!soldiers.empty() && (!tg || !IsSoldier(tg))) {
 				if (ServerGameObject* e = NearestEnemy(soldiers, u->position)) {
-					u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, e);
+					AIAttack(u, e);
 					warEngaged++;
 				}
 			}
 			else if (soldiers.empty() && !tg)
-				u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+				AIAttack(u, target);
 			else if (soldiers.empty() && tg && tg->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !u->movement.isMoving()) {
 				// standing out of reach of its building (a palace walled in: waves stood at the
 				// human's palisade for minutes and did no damage): the nearest enemy building
@@ -1076,7 +1076,7 @@ void AIController::warUpdate()
 							}
 						}
 					if (nearest) {
-						u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, nearest);
+						AIAttack(u, nearest);
 						warBreaches++;
 					}
 				}
@@ -1453,7 +1453,7 @@ void AIController::startLuaAI(const std::string& name)
 		if (!t || t->deleted || g_items.attackOrder < 0)
 			return;
 		for (ServerGameObject* u : Objects(units))
-			u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, t);
+			AIAttack(u, t);
 	});
 	ai.set_function("sendHome", [player](sol::table units) {
 		const GameSet* gs = Server::instance->gameSet.get();

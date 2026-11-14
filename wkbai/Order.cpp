@@ -658,6 +658,9 @@ void MissileTask::onStart()
 
 	SrvScriptContext ssc{ Server::instance, this->order->gameObject };
 	float speed = this->order->gameObject->blueprint->missileSpeed->eval(&ssc);
+	// (WKB.exe's getter 0x5a6450: a speed not above 0 is 2)
+	if (!(speed > 0.0f))
+		speed = 2.0f;
 
 	// missile destination to hit
 	Vector3 dest = this->target->position;
@@ -701,8 +704,9 @@ void MissileTask::onStart()
 	}
 	if (moved) {
 		const auto area = Server::instance->terrain->getPlayableArea();
-		dest.x = std::clamp(dest.x, 0.0f, (float)area.first);
-		dest.z = std::clamp(dest.z, 0.0f, (float)area.second);
+		// (1 m inside the map's edge, as WKB.exe 0x509910)
+		dest.x = std::clamp(dest.x, 1.0f, std::max(1.0f, (float)area.first - 1.0f));
+		dest.z = std::clamp(dest.z, 1.0f, std::max(1.0f, (float)area.second - 1.0f));
 		dest.y = Server::instance->terrain->getHeightEx(dest.x, dest.z, this->target->blueprint->floatsOnWater) + terrainOffset;
 	}
 
@@ -752,46 +756,171 @@ static void FlamingMissileLanded(ServerGameObject* missile)
 		server->environment.fireLanded(*server, missile->position);
 }
 
+// Whether a missile passes through an object (WKB.exe 0x50a820, kept per object as the original's
+// set at +0x50): its own firer's kind of things aren't spared, only
+// - objects whose blueprint has IGNORE_ALL_MISSILE_COLLISION (trees, farms, shipwrecks, palms);
+// - with IGNORE_FRIENDLY_MISSILE_COLLISION, the firer's own and its allies';
+// - the missile's DO_NOT_COLLIDE_WITH ("Allied Characters", "Trees & Allied Characters"): its
+//   equations read "a character allied to the missile('s player)" and "a tree" of the candidate.
+//   How the original binds their FINDER_SELF isn't traced (evaluated on the candidate they'd spare
+//   every character, on the missile none), so they're applied as they read.
+static bool MissilePassesThrough(ServerGameObject* missile, ServerGameObject* obj)
+{
+	const GameObjBlueprint* bp = obj->blueprint;
+	if (bp->ignoreAllMissileCollision)
+		return true;
+	Server* server = Server::instance;
+	ServerGameObject* own = missile->getPlayer();
+	ServerGameObject* theirs = obj->getPlayer();
+	const bool allied = own && theirs && (own == theirs
+		|| server->getDiplomaticStatus(own, theirs) <= server->gameSet->diplomaticStatuses.names.getIndex("Allied"));
+	if (bp->ignoreFriendlyMissileCollision && allied)
+		return true;
+	if (const GameObjBlueprint* mbp = missile->blueprint; mbp->doNotCollideWith) {
+		// a tree: the equation on it ("Trees & ..." spares it, "Allied Characters" doesn't)
+		static const GameSet* of = nullptr;
+		static int treeItem = -1;
+		if (of != server->gameSet.get()) {
+			of = server->gameSet.get();
+			treeItem = of->items.names.getIndex("I am a tree");
+		}
+		if (treeItem >= 0 && obj->getItem(treeItem) > 0.0f) {
+			SrvScriptContext ctx(server, obj);
+			return mbp->doNotCollideWith->eval(&ctx) > 0.0f;
+		}
+		// a character: spared when it's the firer's or an ally's (both shipped equations)
+		if (bp->bpClass == Tags::GAMEOBJCLASS_CHARACTER && allied)
+			return true;
+	}
+	return false;
+}
+
+// where along the segment a (sphere) enters: the fraction in [0, 1], or -1 if it doesn't; a segment
+// starting inside counts at 0 (a big building no longer lets a shot through that starts within it)
+static float SegmentSphereEntry(const Vector3& a, const Vector3& b, const Vector3& centre, float radius)
+{
+	const Vector3 d = b - a;
+	const float len2 = d.sqlen3();
+	const Vector3 m = a - centre;
+	const float c = m.sqlen3() - radius * radius;
+	if (c <= 0.0f)
+		return 0.0f;
+	if (len2 < 1e-8f)
+		return -1.0f;
+	const float bq = m.dot(d);
+	const float disc = bq * bq - len2 * c;
+	if (disc < 0.0f || bq > 0.0f)
+		return -1.0f;
+	const float t = (-bq - std::sqrt(disc)) / len2;
+	return t >= 0.0f && t <= 1.0f ? t : -1.0f;
+}
+
 void MissileTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
+	Server* server = Server::instance;
+	if (msLanded)
+		return;
 
-	Vector3 prevPosition = msPrevPosition;
-	msPrevPosition = go->position;
+	const Vector3 prevPosition = msPrevPosition;
+	const Vector3 nowPosition = go->position;
+	msPrevPosition = nowPosition;
 
-	// unit collision
-	NNSearch nns;
-	nns.start(Server::instance, go->position, 15.0f);
-	while (ServerGameObject* col = (ServerGameObject*)nns.next()) {
-		if (col->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING || col->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
-			if (col->getPlayer() != go->getPlayer() && col->isInteractable()) {
-				if (Model* model = col->blueprint->getModel(col->subtype, col->appearance, col->animationIndex, col->animationVariant)) {
-					Vector3 sCenter = model->getSphereCenter().transform(col->getWorldMatrix());
-					float sRadius = model->getSphereRadius();
-					if (LineSegmentIntersectsSphere(prevPosition, go->position, sCenter, sRadius)) {
-						SrvScriptContext ctx(Server::instance, go);
-						auto _ = ctx.change(ctx.collisionSubject, col);
-						FlamingMissileLanded(go);
-						this->blueprint->collisionTrigger.run(&ctx);
-						return;
-					}
+	// leaving the map: removed, with no trigger (WKB.exe 0x509e20)
+	const auto area = server->terrain->getPlayableArea();
+	if (nowPosition.x < 0.0f || nowPosition.z < 0.0f || nowPosition.x > (float)area.first || nowPosition.z > (float)area.second) {
+		server->deleteObject(go);
+		return;
+	}
+
+	// The step from the last position is tested against the ground (water counts) and the objects
+	// near it; the nearest hit along it wins (WKB.exe 0x60f900, 0x50a570).
+	const Vector3 step = nowPosition - prevPosition;
+	const float stepLen = step.len3();
+	float groundAt = -1.0f;
+	{
+		auto below = [&](float t) {
+			const Vector3 p = prevPosition + step * t;
+			return p.y < server->terrain->getHeightEx(p.x, p.z, true);
+		};
+		const int samples = std::max(1, (int)std::ceil(stepLen / 0.5f));
+		float lo = 0.0f;
+		for (int i = 1; i <= samples; i++) {
+			const float t = (float)i / samples;
+			if (below(t)) {
+				float hi = t;
+				for (int k = 0; k < 8; k++) {
+					const float mid = 0.5f * (lo + hi);
+					(below(mid) ? hi : lo) = mid;
 				}
+				groundAt = hi;
+				break;
 			}
+			lo = t;
 		}
 	}
 
-	// floor collision
-	float theight = Server::instance->terrain->getHeight(go->position.x, go->position.z);
-	if (go->position.y < theight) {
-		// TODO: we could play sound directly on client without sending packet
-		// (which is probably why strikeFloorSound was made for WKB in the first place)
-		if (go->blueprint->strikeFloorSound != -1) {
-			go->playSoundAtObject(go->blueprint->strikeFloorSound, go);
+	ServerGameObject* hitObject = nullptr;
+	float hitAt = 2.0f;
+	NNSearch nns;
+	nns.start(server, prevPosition + step * 0.5f, 15.0f + stepLen * 0.5f);
+	while (ServerGameObject* col = (ServerGameObject*)nns.next()) {
+		if (col == go || (col->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING && col->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER))
+			continue;
+		if ((col->flags & CommonGameObject::fTerminated) || !col->isInteractable())
+			continue;
+		auto it = msPassesThrough.find(col->id);
+		if (it == msPassesThrough.end())
+			it = msPassesThrough.emplace(col->id, MissilePassesThrough(go, col)).first;
+		if (it->second)
+			continue;
+		Model* model = col->blueprint->getModel(col->subtype, col->appearance, col->animationIndex, col->animationVariant);
+		if (!model)
+			continue;
+		const Vector3 centre = model->getSphereCenter().transform(col->getWorldMatrix());
+		// what the missile was launched from within (the firer, a tower's garrison shooting from it)
+		// it passes through
+		if ((msInitialPosition - centre).sqlen3() <= model->getSphereRadius() * model->getSphereRadius() || col->id == go->creatorId) {
+			msPassesThrough[col->id] = true;
+			continue;
 		}
+		const float t = SegmentSphereEntry(prevPosition, nowPosition, centre, model->getSphereRadius());
+		if (t >= 0.0f && t < hitAt) {
+			hitAt = t;
+			hitObject = col;
+		}
+	}
+
+	if (hitObject && (groundAt < 0.0f || hitAt <= groundAt)) {
+		go->updatePosition(prevPosition + step * hitAt);
+		SrvScriptContext ctx(server, go);
+		auto _ = ctx.change(ctx.collisionSubject, hitObject);
 		FlamingMissileLanded(go);
+		this->blueprint->collisionTrigger.run(&ctx);
+		return;
+	}
+	if (groundAt >= 0.0f) {
+		// the ground (or water): the missile stops at the hit point, with the blueprint's sound and
+		// special effect (STRIKE_FLOOR_* / STRIKE_WATER_SOUND over water)
+		Vector3 at = prevPosition + step * groundAt;
+		const float floor = server->terrain->getHeightEx(at.x, at.z, true);
+		const bool water = floor > server->terrain->getHeight(at.x, at.z) + 0.01f;
+		at.y = floor;
+		msLanded = true;
+		go->trajectory.stop();
+		go->updatePosition(at);
+		const int sound = water && go->blueprint->strikeWaterSound != -1 ? go->blueprint->strikeWaterSound : go->blueprint->strikeFloorSound;
+		if (sound != -1)
+			go->playSoundAtObject(sound, go);
+		if (!water && go->blueprint->strikeFloorEffect != -1)
+			go->playSpecialEffectAt(go->blueprint->strikeFloorEffect, at);
+		if (!water)
+			FlamingMissileLanded(go);
 		this->blueprint->struckFloorTrigger.run(go);
 	}
 }
+
+void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 
 void MoveTask::onStart()
 {
@@ -1195,6 +1324,11 @@ void ObjectReferenceTask::onUpdate()
 			goal = pathPoints[pathStep];
 		}
 		float prox = this->proximity;
+		// a character's or formation's size counts (WKB.exe 0x50d9d0: the proximity plus a quarter
+		// of the target's box, maxX + maxZ; here half its BOUNDING_VOLUME sphere): big units (Michael,
+		// Abaddon, siege engines) are reached from further out instead of crowded into
+		if (prox >= 0.0f && !following && target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+			prox += 0.5f * target->blueprint->boundingRadius;
 		if (prox >= 0.0f) prox = std::max(prox - (destination - goal).len2xz(), 0.1f);
 		// a follower is there while it stands near the target's current goal (the last
 		// movement's destination stays behind when the target walks on)
@@ -1223,6 +1357,19 @@ void ObjectReferenceTask::onUpdate()
 			this->startTriggers();
 			if (go->movementController.isMoving())
 				go->movementController.stopMovement();
+			// facing a target that moves (WKB.exe turns to it every tick, 0x50d900), not only on
+			// arriving (below); a change under 3 degrees isn't sent
+			if (proximitySatisfied && go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && target->movement.isMoving()) {
+				const Vector3 dir = target->position - go->position;
+				if (dir.sqlen2xz() > 0.01f) {
+					const float want = std::atan2(dir.x, -dir.z);
+					float off = std::fmod(want - go->orientation.y, 6.2831855f);
+					if (off > 3.14159265f) off -= 6.2831855f;
+					if (off < -3.14159265f) off += 6.2831855f;
+					if (std::abs(off) > 0.05f)
+						go->setOrientation(Vector3(0, want, 0));
+				}
+			}
 			if (!proximitySatisfied) {
 				proximitySatisfied = true;
 				TraceTask(this, "proximity satisfied");
@@ -1244,7 +1391,7 @@ void ObjectReferenceTask::onUpdate()
 					go->setAnimation(animtoplay, blueprint->playAnimationOnce, blueprint->synchAnimationToFraction ? blueprint->bpid : -1,
 						-1.0f, AnimationSpeedToFit(go, animtoplay));
 
-				// Set orientation towards target, TODO: update when target moves (perhaps on Client?)
+				// Set orientation towards target (and while it moves, above)
 				if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 					Vector3 dir = (target->position - go->position).normal2xz();
 					if (!(dir.x == 0.0f && dir.z == 0.0f))
@@ -1260,8 +1407,20 @@ void ObjectReferenceTask::onUpdate()
 				// only then the proximity can be dissatisfied
 
 				this->stopTriggers();
-				if (go->movementController.takeSearchFailed())
+				const bool searchFailed = go->movementController.takeSearchFailed();
+				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// An attack whose walk ended out of range, a building in the way (WKB.exe 0x50dc50 ->
+				// 0x50e760): that building becomes the unit's "Attack Target" associate and it gets the
+				// event "Attack Wall Target" (the game set's "... Respond to Attack Wall Event" then
+				// attack the wall)
+				if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && !go->movementController.isMoving()
+					&& (searchFailed || (destination - goal).len2xz() > 2.0f)
+					&& Server::instance->timeManager.currentTime >= wallCheckAt)
+				{
+					wallCheckAt = Server::instance->timeManager.currentTime + 2.0f;
+					AttackWallInTheWay(go, target.get());
+				}
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					destination = go->movementController.startMovement(goal);
 					pathStepTried = onPath;
@@ -1277,8 +1436,12 @@ void ObjectReferenceTask::onUpdate()
 				// units searched again every step whatever the target did.)
 				if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 					if (go->movementController.isMoving()) {
-						const float off = std::max(2.0f, 0.1f * (goal - go->position).len2xz());
-						if ((goal - go->movementController.getRequestedDestination()).sqlen2xz() > off * off)
+						// WKB.exe 0x50cf9b: again when the target is off the path's end by more than
+						// 0.7 of what is left to walk (|D - T|^2 > 0.5 |U - D|^2); here not under 1 m,
+						// which near the target would be a search every step
+						const Vector3& asked = go->movementController.getRequestedDestination();
+						const float drift2 = (goal - asked).sqlen2xz();
+						if (drift2 > std::max(1.0f, 0.5f * (go->position - asked).sqlen2xz()))
 							destination = go->movementController.startMovement(goal);
 					}
 				if (proximitySatisfied) {
@@ -1303,6 +1466,47 @@ void ObjectReferenceTask::onUpdate()
 		terminate();
 		if (blueprint->terminateEntireOrderIfNoTarget)
 			order->terminate();
+	}
+}
+
+// The building of another player (not an ally) on the straight line from the unit to its target,
+// nearest to the unit: registered as the unit's "Attack Target" (its others cleared), and the unit
+// gets "Attack Wall Target" (WKB.exe 0x50e760)
+void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target)
+{
+	Server* server = Server::instance;
+	if (!server || !server->terrain || !server->tiles || !target)
+		return;
+	const auto size = server->terrain->getNumPlayableTiles();
+	const Vector3 from = unit->position, to = target->position;
+	const float len = (to - from).len2xz();
+	ServerGameObject* own = unit->getPlayer();
+	const int allied = server->gameSet->diplomaticStatuses.names.getIndex("Allied");
+	for (float d = 0.0f; d <= len; d += 2.5f) {
+		const Vector3 p = from + (to - from) * (len > 0.0f ? d / len : 0.0f);
+		const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+		if (tx < 0 || tz < 0 || tx >= size.first || tz >= size.second)
+			break;
+		const auto& tile = server->tiles[tz * size.first + tx];
+		ServerGameObject* b = tile.building.getFrom<Server>();
+		if (!b || tile.buildingPassable || b == target || (b->flags & CommonGameObject::fTerminated))
+			continue;
+		ServerGameObject* theirs = b->getPlayer();
+		if (!theirs || theirs == own || (allied >= 0 && server->getDiplomaticStatus(own, theirs) <= allied))
+			continue;
+		static const GameSet* of = nullptr;
+		static int category = -1, event = -1;
+		if (of != server->gameSet.get()) {
+			of = server->gameSet.get();
+			category = of->associations.names.getIndex("Attack Target");
+			event = of->events.names.getIndex("Attack Wall Target");
+		}
+		if (category < 0 || event < 0)
+			return;
+		unit->clearAssociates(category);
+		unit->associateObject(category, b);
+		unit->sendEvent(event, b);
+		return;
 	}
 }
 

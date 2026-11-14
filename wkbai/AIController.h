@@ -205,3 +205,6 @@ void InstallAIAggressionOverrides(GameSet& gs);
 // the Lua AIs there are (LuaAI\*.lua, redata's and the mods'), by name; one's game path
 std::vector<std::string> ListLuaAIs();
 std::string LuaAIPath(const std::string& name);
+
+// an AI unit attacks: its DEFAULT_ATTACK_COMMAND (else the "Attack" order)
+void AIAttack(ServerGameObject* unit, ServerGameObject* target);

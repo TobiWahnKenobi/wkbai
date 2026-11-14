@@ -7,6 +7,7 @@
 #include <vector>
 #include <queue>
 #include <deque>
+#include <map>
 #include "gameset/actions.h"
 #include "GameObjectRef.h"
 #include "util/vecmat.h"
@@ -129,6 +130,8 @@ struct Task {
 
 struct MissileTask : Task {
 	float msStartTime; Vector3 msInitialPosition, msInitialVelocity, msPrevPosition;
+	bool msLanded = false; // struck the ground: no more hit tests
+	std::map<uint32_t, bool> msPassesThrough; // per object: the missile doesn't collide with it
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;
@@ -141,6 +144,7 @@ struct MoveTask : Task {
 };
 
 struct ObjectReferenceTask : Task {
+	float wallCheckAt = 0.0f; // the next "Attack Wall Target" look (once per failed approach)
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;

@@ -63,6 +63,8 @@ namespace {
 	struct ClassGrid {
 		bool water = false;
 		const std::vector<bool>* passable = nullptr;
+		float maxGradient = 90.0f; // MAX_GRADIENT (degrees)
+		bool wades = false;
 		const GameObjBlueprint* sample = nullptr;
 		std::vector<uint8_t> state; // per tile: 0 not looked at, 1 free, 2 blocked (the ground alone)
 		std::vector<int> region;    // terrainRegion, valid with regionValid
@@ -265,10 +267,12 @@ int MovementController::movementClass(const GameObjBlueprint* blueprint)
 	else {
 		const bool water = waterUnit(blueprint);
 		const std::vector<bool>* passable = blueprint->getPassableTerrains();
+		const bool wades = blueprint->wades();
 		cls = -1;
 		for (size_t i = 0; i < g.classes.size() && cls < 0; i++) {
 			const ClassGrid& c = g.classes[i];
-			if (c.water == water && (c.passable == passable || (c.passable && passable && *c.passable == *passable)))
+			if (c.water == water && c.maxGradient == blueprint->maxGradient && c.wades == wades
+				&& (c.passable == passable || (c.passable && passable && *c.passable == *passable)))
 				cls = (int)i;
 		}
 		if (cls < 0) {
@@ -276,6 +280,8 @@ int MovementController::movementClass(const GameObjBlueprint* blueprint)
 			ClassGrid& c = g.classes.emplace_back();
 			c.water = water;
 			c.passable = passable;
+			c.maxGradient = blueprint->maxGradient;
+			c.wades = wades;
 			c.sample = blueprint;
 			c.state.assign((size_t)g.w * g.h, 0);
 		}
@@ -381,9 +387,8 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 		if (trn->waterFrozen && trnTile->fullOfWater && trnTile->waterLevel > *minH)
 			return waterUnit;
 
-		// the type's passability fields (USE_PASSABILITY_FIELDS, Passability_Fields.cpp; WKB.exe
-		// reads them, its pathfinder's use of them isn't traced): a land unit can't
-		// stand on water, river beds or mountains (by the tile's texture), however flat
+		// the terrains the type can walk on (CAN_TRAVERSE, WKB.exe's movement mask; or the
+		// passability fields when it has none), by the tile's texture
 		if (const std::vector<bool>* passable = blueprint->getPassableTerrains()) {
 			auto& tile = server->tiles[tz * trnsize.first + tx];
 			if (tile.terrainType == -2) {
@@ -397,13 +402,17 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 				return true;
 		}
 
-		if (!waterUnit && trnTile->fullOfWater) {
+		// deep water (wkbai's: the original's tile test has none, but its land units' masks keep them
+		// off water textures); a type that may traverse "Water" wades through any depth
+		if (!waterUnit && trnTile->fullOfWater && !blueprint->wades()) {
 			if (trnTile->waterLevel - *minH > 1.5f)
 				return true;
 		}
 
-		// no gradients above 45 degrees
-		if (!waterUnit && *maxH - *minH > 5.0f)
+		// the type's steepest slope (MAX_GRADIENT, WKB.exe 0x5953a0; the game set gives most 45
+		// degrees, rams and big engines 30, without it 90): the tile's corners over its 5 m
+		if (!waterUnit && blueprint->maxGradient < 89.9f
+			&& *maxH - *minH > 5.0f * std::tan(blueprint->maxGradient * 3.14159265f / 180.0f))
 			return true;
 	}
 
@@ -575,6 +584,8 @@ namespace {
 		bool fromField = false, cut = false;
 		int steps = 0;
 		double ms = 0.0;
+		// the enemies' "Threat" per tile (strength), for a type that avoids it; null otherwise
+		const std::vector<uint8_t>* threat = nullptr;
 	};
 	std::vector<PathRequest> g_pathQueue;
 	// the game the queue is for (a test may leave searches queued outside a step, and the next
@@ -588,6 +599,13 @@ namespace {
 	// game, then went to the nearest tile it had seen, or stood). Reads only, on any thread.
 	template<typename Predicate, typename RegionOf> void prepareSearch(PathRequest& r, int w, int h, Predicate pred, RegionOf regionOf) {
 		r.straight = !Pathfinding::SegmentTraversal(r.from.x / 5.0f, r.from.z / 5.0f, r.destination.x / 5.0f, r.destination.z / 5.0f, pred);
+		// (a threat on the straight line: searched, round it)
+		if (r.straight && r.threat) {
+			const auto* t = r.threat;
+			const Pathfinding::PFPos startTile = r.start, endTile = r.end;
+			r.straight = !Pathfinding::SegmentTraversal(r.from.x / 5.0f, r.from.z / 5.0f, r.destination.x / 5.0f, r.destination.z / 5.0f,
+				[&](Pathfinding::PFPos p) { return p.x >= 0 && p.z >= 0 && p.x < w && p.z < h && !(p == startTile) && !(p == endTile) && (*t)[(size_t)p.z * w + p.x] > 0; });
+		}
 		if (r.straight)
 			return;
 		if (const int startRegion = regionOf(r.start); startRegion >= 0 && regionOf(r.end) != startRegion) {
@@ -605,7 +623,16 @@ namespace {
 			r.tiles = walkField(*r.field, w, h, r.start, r.end, r.destination, pred);
 			r.fromField = !r.tiles.empty();
 		}
-		if (!r.fromField) {
+		if (!r.fromField && r.threat) {
+			// a "Threat" tile costs its strength x a straight step more (strength 5: a detour of up to 5
+			// tiles is taken round a pikeman); the A*'s guess stays the distance, so it still finds one
+			const auto* t = r.threat;
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h,
+				[t, w](Pathfinding::PFPos p) { return 100 * (int)(*t)[(size_t)p.z * w + p.x]; });
+			r.cut = Pathfinding::g_lastSearchCut;
+			r.steps = Pathfinding::g_lastSearchSteps;
+		}
+		else if (!r.fromField) {
 			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h);
 			r.cut = Pathfinding::g_lastSearchCut;
 			r.steps = Pathfinding::g_lastSearchSteps;
@@ -890,6 +917,46 @@ void MovementController::runPathSearches()
 			todo.push_back(&r);
 	}
 	g_pathBatchRequests += todo.size();
+	// The "Threat" intensity maps of this step (wkbai's take on WKB.exe's: their search cost isn't
+	// traced): each writer marks its tile (and those within its radius) with its strength; a type
+	// that avoids them gets the sum over its enemies' writers
+	std::map<uint32_t, std::vector<uint8_t>> threatFor; // player id -> its enemies' threat
+	for (PathRequest* rp : todo) {
+		ServerGameObject* obj = rp->object.get();
+		if (!obj || !obj->blueprint->avoidsThreat)
+			continue;
+		ServerGameObject* own = obj->getPlayer();
+		const uint32_t ownId = own ? own->id : 0;
+		auto it = threatFor.find(ownId);
+		if (it == threatFor.end()) {
+			std::vector<uint8_t> grid((size_t)w * h, 0);
+			const int allied = server->gameSet->diplomaticStatuses.names.getIndex("Allied");
+			bool any = false;
+			for (const auto& [id, cobj] : server->idmap) {
+				const GameObjBlueprint* bp = cobj->blueprint;
+				if (!bp->writesThreat || bp->threatStrength <= 0.0f || (cobj->flags & CommonGameObject::fTerminated))
+					continue;
+				ServerGameObject* wobj = (ServerGameObject*)cobj;
+				ServerGameObject* theirs = wobj->getPlayer();
+				if (!theirs || theirs == own || (own && allied >= 0 && server->getDiplomaticStatus(own, theirs) <= allied))
+					continue;
+				const int cx = (int)(wobj->position.x / 5.0f), cz = (int)(wobj->position.z / 5.0f);
+				const int rt = (int)std::ceil(bp->threatRadius / 5.0f);
+				for (int z = cz - rt; z <= cz + rt; z++)
+					for (int x = cx - rt; x <= cx + rt; x++)
+						if (x >= 0 && z >= 0 && x < w && z < h) {
+							uint8_t& v = grid[(size_t)z * w + x];
+							v = (uint8_t)std::min(255, (int)v + (int)bp->threatStrength);
+							any = true;
+						}
+			}
+			if (!any)
+				grid.clear();
+			it = threatFor.emplace(ownId, std::move(grid)).first;
+		}
+		if (!it->second.empty())
+			rp->threat = &it->second;
+	}
 	forEach(todo.size(), [&](size_t i) {
 		PathRequest& r = *todo[i];
 		const ClassGrid* c = &g.classes[r.cls];
@@ -907,7 +974,7 @@ void MovementController::runPathSearches()
 			continue;
 		if (r.unreachable)
 			g_unreachableGoals++;
-		if (r.searchEnd == r.end && !g_noFields) {
+		if (r.searchEnd == r.end && !g_noFields && !r.threat) {
 			const ClassGrid* c = &g.classes[r.cls];
 			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));
 		}

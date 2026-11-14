@@ -428,7 +428,11 @@ struct PDFiringAttachmentPoint : PositionDeterminer {
 			for (size_t i = 0; i < numAPs; i++) {
 				if (model->getAPInfo(i).tag.substr(0, 3) == "SP_") {
 					Matrix mat = obj->getWorldMatrix();
-					return model->getAPState(i, obj->animStartTime).position.transform(mat);
+					// the point where it is in the animation now (as the ATTACHMENT_POINT trigger
+					// reads it); passing animStartTime itself took the frame at that many ms
+					const float now = Server::instance ? Server::instance->timeManager.currentTime : obj->animStartTime;
+					const uint32_t animTime = (uint32_t)(std::max(0.0f, now - obj->animStartTime) * obj->animSpeed * 1000.0f);
+					return model->getAPState(i, animTime).position.transform(mat);
 				}
 			}
 		}

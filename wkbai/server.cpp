@@ -1462,10 +1462,18 @@ void Server::loadSavePredec(GSFileParser & gsf)
 	}
 }
 
+extern int g_simulating;
+
 void ServerGameObject::setItem(int index, float value)
 {
 	assert(index != -1);
 	if (getItem(index) == value) return;
+	// a member of a formation hit for more than 4: the formation shares it out (WKB.exe 0x554c00);
+	// only for the simulation's writes, not a save being loaded
+	if (index == Tags::PDITEM_HIT_POINTS && g_simulating > 0 && parent
+		&& parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+		&& FormationController::shareDamage(this, getItem(index) - value))
+		return;
 	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item (id 0: on any object)
 	static const char* traceItem = getenv("WKB_TRACE_ITEM");
 	if (traceItem) {
@@ -1487,6 +1495,12 @@ void ServerGameObject::setItem(int index, float value)
 void ServerGameObject::setParent(ServerGameObject * newParent)
 {
 	assert(!this->deleted);
+	// debugging: WKB_TRACE_PARENT prints every change of controller of a formation's member
+	static const bool traceParent = getenv("WKB_TRACE_PARENT") != nullptr;
+	if (traceParent && ((parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		|| (newParent && newParent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)))
+		printf("PARENT t=%.2f %u %s: %s %u -> %s %u\n", Server::instance->timeManager.currentTime, id, blueprint->name.c_str(),
+			parent ? parent->blueprint->name.c_str() : "-", parent ? parent->id : 0, newParent ? newParent->blueprint->name.c_str() : "-", newParent ? newParent->id : 0);
 	// a parent deleted in this tick (an army whose script terminated it, say) is freed at the end
 	// of it: a unit put under it was left with a dangling parent, and crashed the next transfer
 	// (a 22-minute AI test with formation waves). Its first live ancestor takes the unit instead.
@@ -3360,9 +3374,12 @@ namespace {
 	};
 }
 
+int g_simulating = 0;
+
 void Server::simulate()
 {
 	ZoneScoped;
+	struct Simulating { Simulating() { g_simulating++; } ~Simulating() { g_simulating--; } } simulating;
 	static const bool profile = g_settings.value("profileSim", false);
 	// with profileSim, a step over 50 ms printed with its parts (a step that long loses game
 	// time: the server catches up 10 steps at most)
