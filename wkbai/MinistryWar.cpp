@@ -72,8 +72,16 @@ namespace {
 			for (CommonGameObject* c : children) {
 				auto* p = (ServerGameObject*)c;
 				if (p != me && !p->deleted && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player"
-					&& !(p->flags & ServerGameObject::fTerminated) && AIUtil::IsEnemy(me, p))
-					list.push_back(p);
+					&& !(p->flags & ServerGameObject::fTerminated) && AIUtil::IsEnemy(me, p)) {
+					// (not an empty slot: the evaluations' "human" has nothing on the map, and four players,
+					// seed 9, a soldier walked to its start (0, 0) every 40 s from minute 19 to scout it)
+					bool any = false;
+					for (const auto& [t, objs] : p->children)
+						for (CommonGameObject* o : objs)
+							any |= !((ServerGameObject*)o)->deleted;
+					if (any)
+						list.push_back(p);
+				}
 			}
 		std::sort(list.begin(), list.end(), [](auto* a, auto* b) { return a->id < b->id; });
 		return list;
@@ -483,10 +491,21 @@ namespace {
 				return;
 			AIController& ai = me->aiController;
 			ai.ministryWaves = !(MinOff() & 128);
-			// (the budget "war.defence" 0 leaves the defence to the war layer again: a test's, or a script's)
+			// The war layer defends home, with its militia (while fewer than 5 soldiers are there to
+			// send), unless the budget "war.defence" asks War to (a test's, or a script's), and then only
+			// against one rival. Step 14: with War's defence, which allowed no militia but for a falling
+			// palace and held its soldiers at the palace while outnumbered, the peasants died to the
+			// enemy's waves. Four players, 30 seeds: 93.5 characters both ways now (75 against 90 before,
+			// 15 seeds). One against one, 15 seeds: the ministry side won 17 of 30 games, against 13
+			// with War's defence (the same Generals without the ministries: 15).
 			{
 				auto it = g.board.budgets.find("war.defence");
-				ai.ministryDefence = !(MinOff() & 256) && (it == g.board.budgets.end() || it->second != 0.0);
+				const bool asked = it != g.board.budgets.end() && it->second != 0.0;
+				const bool several = g.board.get("intel.rivals") > 1.0;
+				const bool was = ai.ministryDefence;
+				ai.ministryDefence = !(MinOff() & 256) && asked && !several;
+				if (was != ai.ministryDefence && thinks > 1)
+					g.log(WAR, ai.ministryDefence ? "War defends home" : "the war layer defends home (%.0f rivals)", g.board.get("intel.rivals"));
 			}
 			ai.ministryTraining = !(MinOff() & 32);
 			// the surplus into fighters, by counters

@@ -92,7 +92,7 @@ namespace {
 	struct Labour : Department {
 		uint8_t id() const override { return LABOUR; }
 		float period() const override { return 2.0f; }
-		int lastPeasants = -1, lastIdle = -1, lastSoldiers = -1;
+		int lastPeasants = -1, lastIdle = -1, lastSoldiers = -1, jobRound = 0;
 		void think(Government& g) override {
 			ServerGameObject* player = g.player();
 			if (!player)
@@ -100,6 +100,7 @@ namespace {
 			g_items.update(g.server.gameSet.get());
 			int peasants = 0, idle = 0, soldiers = 0, militia = 0, characters = 0, buildings = 0;
 			std::string others;
+			std::map<std::string, int> jobs;
 			auto walk = [&](CommonGameObject* obj, auto& self) -> void {
 				for (const auto& [type, children] : obj->children)
 					for (CommonGameObject* child : children) {
@@ -119,6 +120,10 @@ namespace {
 								peasants++;
 								if (o->orderConfig.orders.empty())
 									idle++;
+								if (g.trace) {
+									const Order* ord = o->orderConfig.getCurrentOrder();
+									jobs[ord ? g.server.gameSet->orders.getString(ord->blueprint->bpid) : std::string("-")]++;
+								}
 							}
 							else if (Item(o, g_items.military) > 0.0f)
 								soldiers++;
@@ -141,6 +146,12 @@ namespace {
 			g.board.report("labour.buildings", buildings);
 			if (peasants != lastPeasants || idle != lastIdle || soldiers != lastSoldiers)
 				g.log(LABOUR, "%d peasants (%d without work, cap %.0f), %d soldiers, %d militia, %d characters, %d buildings; others %s", peasants, idle, g.board.get("labour.cap"), soldiers, militia, characters, buildings, others.c_str());
+			if (g.trace && ++jobRound % 30 == 0) { // (every 60 s: what the peasants do)
+				std::string j;
+				for (const auto& [k, v] : jobs)
+					j += k + " " + std::to_string(v) + "; ";
+				g.log(LABOUR, "jobs: %s", j.c_str());
+			}
 			lastPeasants = peasants;
 			lastIdle = idle;
 			lastSoldiers = soldiers;
@@ -544,7 +555,10 @@ void Ministries::loadText(Server& server, const std::string& text)
 	for (auto& [id, gov] : governments)
 		if (ServerGameObject* p = gov->player()) {
 			p->aiController.ministryWaves = true;
-			p->aiController.ministryDefence = true;
+			{ // (as War decides it, MinistryWar.cpp)
+				auto it = gov->board.budgets.find("war.defence");
+				p->aiController.ministryDefence = !(MinOff() & 256) && it != gov->board.budgets.end() && it->second != 0.0 && gov->board.get("intel.rivals") <= 1.0;
+			}
 			p->aiController.ministryUnits.clear();
 			for (const Mission& m : gov->missions)
 				p->aiController.ministryUnits.insert(m.units.begin(), m.units.end());

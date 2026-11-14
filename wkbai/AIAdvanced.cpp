@@ -1252,9 +1252,10 @@ void AIController::warUpdate()
 				t.place.palace ? " (palace)" : "", used);
 	}
 	// soldiers defend, not the peasants: no militia while there are soldiers to send (with the
-	// ministry AI its Labour & Population decides: it allows militia only in an emergency, and this
-	// switched it back on every 3 s while the missions were out)
-	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0 && !ministryWaves)
+	// ministry AI's War defending, its Labour & Population decides: it allows militia only in an
+	// emergency, and this switched it back on every 3 s while the missions were out; with this layer
+	// defending, against several rivals, this rule again)
+	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0 && (!ministryWaves || !ministryDefence || (Ministry::MinOff() & 512)))
 		gameObj->setItem(noMilitia, (available.size() + busy.size() >= 5) ? 1.0f : 0.0f);
 
 	// ---- The waves out ----

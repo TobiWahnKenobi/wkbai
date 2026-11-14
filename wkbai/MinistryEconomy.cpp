@@ -307,7 +307,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			si = srv.gameSet->items.names.getIndex("Structural Integrity");
 			siCap = srv.gameSet->items.names.getIndex("Structural Integrity Capacity");
 		}
-		if (noMilitia >= 0) {
+		if (noMilitia >= 0 && !(MinOff() & 512) && ai.ministryDefence) { // (else the war layer's rule, with its defence: militia while fewer than 5 soldiers)
 			// (what defends: the soldiers at home and War's defences; counting only those at home, "0"
 			// while all of them defended)
 			float defence = 0.0f;
@@ -477,8 +477,23 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	// not where enemy soldiers are (four players, seed 3: the peasants that had fled an army stood idle
 	// at home and were sent to the nearest trees, back to it: 45 peasants down to 22. With this rule
 	// switched off he ended with 130 characters instead of 36)
+	// Only once more than two have stood idle for 10 s: the scripts hand out work a moment after a
+	// building is done (four players, seed 3: 20 of 33 peasants idle for a moment were all sent to the
+	// trees, the scripts' next buildings went up late, and the game went its own way: 6 living
+	// characters at 30 minutes against 132 for the same General without the ministries)
 	int idle = 0;
-	if (!(MinOff() & 1))
+	{
+		int waiting = 0;
+		for (ServerGameObject* p : peasants)
+			waiting += !ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable();
+		// ("labour.idleFrom": when more than two became idle, plus 1; 0 while not)
+		if (waiting <= 2)
+			g.board.report("labour.idleFrom", 0.0);
+		else if (g.board.get("labour.idleFrom") == 0.0)
+			g.board.report("labour.idleFrom", now + 1.0);
+	}
+	const double idleFrom = g.board.get("labour.idleFrom");
+	if (!(MinOff() & 1) && idleFrom > 0.0 && now - (idleFrom - 1.0) >= 10.0)
 	for (ServerGameObject* p : peasants)
 		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable()) {
 			if (++idle <= 2)

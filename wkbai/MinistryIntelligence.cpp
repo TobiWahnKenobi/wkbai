@@ -258,6 +258,8 @@ namespace {
 			}
 			g.board.report("intel.sightings", total);
 			g.board.report("intel.enemies", (double)enemies.size());
+			// (those whose palace stands: War defends against one alone, MinistryWar.cpp)
+			g.board.report("intel.rivals", (double)std::count_if(enemies.begin(), enemies.end(), [](ServerGameObject* p) { return AIUtil::Palace(p) != nullptr; }));
 			if (myPalace)
 				g.board.report("intel.threat.home", pic.threatNear(myPalace->position.x, myPalace->position.z, 250.0f));
 			if (thinks % 15 == 0)

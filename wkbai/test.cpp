@@ -3218,6 +3218,7 @@ void Test_MinistryDefence()
 	const GameObjBlueprint* pike = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
 	check("set up", me && enemy && g && palace && homeArmy && spear && pike);
 	if (!(me && enemy && g && palace && homeArmy && spear && pike)) { printf("DEFENCE all 0\n"); return; }
+	g->board.budgets["war.defence"] = 1.0; // (War's defence: by default the war layer's)
 	for (int i = 0; i < 12; i++)
 		server.spawnObject(spear, homeArmy, palace->position + Vector3(15.0f + (i % 4) * 3.0f, 0, 15.0f + (i / 4) * 3.0f), Vector3(0, 0, 0));
 	StepServer(server, 200);
@@ -3515,6 +3516,7 @@ void Test_AIvsAI()
 				float damage = 0.0f; // hit points missing from the standing buildings
 				std::pair<float, float> sightLow{ 1e9f, 0.0f }, sightHigh{ -1e9f, 0.0f }; // characters' sight (tiles), at height
 				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
+				int living = 0, livingSoldiers = 0; // (the characters count corpses too: "Dead Peasant", "Rider Dying")
 				int carts = 0, villages = 0;
 				float villageFood = 0, villageWood = 0, villageGold = 0; // what the villages hold, not yet carted home
 				std::map<std::string, int> orders; // the characters' current orders
@@ -3537,9 +3539,14 @@ void Test_AIvsAI()
 									const std::string& n = o->blueprint->name;
 									if (n.find("Cart") != std::string::npos)
 										carts++;
-									if (std::none_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; })) {
+									const bool civilian = std::any_of(std::begin(civilians), std::end(civilians), [&](const char* c) { return n.find(c) != std::string::npos; });
+									if (!civilian) {
 										soldiers++;
 										raised[player->id].insert(o->id);
+									}
+									if (n.rfind("Dead ", 0) != 0 && n.find("Dying") == std::string::npos) {
+										living++;
+										livingSoldiers += !civilian;
 									}
 									static const char* engines[] = { "Battering Ram", "Trebuchet", "Mangonel", "Siege Tower" };
 									if (std::any_of(std::begin(engines), std::end(engines), [&](const char* e) { return n.find(e) != std::string::npos; })) {
@@ -3635,9 +3642,9 @@ void Test_AIvsAI()
 						}
 				};
 				count(player, count);
-				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f\n", when,
+				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f; living %d (%d soldiers)\n", when,
 					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), player->aiController.retreated, buildings,
-					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD));
+					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), living, livingSoldiers);
 				{
 					static const int cartsRequired = server.gameSet->items.names.getIndex("Carts Required");
 					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f\n", player->id, carts,
