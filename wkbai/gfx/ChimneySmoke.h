@@ -35,6 +35,8 @@ namespace ChimneySmoke {
 		float alpha;    // 0..1
 		float age;      // seconds
 		float angle;    // its sprite's turn, radians
+		float tone;     // its own shade, 0..1: 0 a grey puff, 1 a white one
+		int variant;    // which of the texture's four puffs, 0..3
 	};
 
 	// the emitters of a model, in its space (cached per model)
@@ -50,6 +52,9 @@ namespace ChimneySmoke {
 	// strength thins and fades them; wind in metres per second
 	void Puffs(const SmokeEmitter& e, const Vector3& world, uint32_t seed, float time, float strength,
 		const Vector3& wind, std::vector<Puff>& out);
+	// a puff's colour before the light, 0..1 each: grey to white by its tone, darker and denser young,
+	// lighter as it thins; wood smoke (the houses') a warm grey, the forge's (always) a darker cool grey
+	Vector3 Albedo(const Puff& f, SmokeEmitter::When when);
 	// the life of a puff, seconds
 	constexpr float LIFE = 9.0f;
 
