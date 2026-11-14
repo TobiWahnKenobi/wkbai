@@ -160,12 +160,12 @@ bool ServerEnvironment::igniteAt(Server& server, const Vector3& at, float life, 
 	burnt.insert(tile);
 	charTrees(server, f.pos);
 	static const GameObjBlueprint* burning = nullptr;
-	static const GameSet* of = nullptr;
-	if (of != server.gameSet.get()) {
-		of = server.gameSet.get();
-		burning = of->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Big Burning Object");
+	static uint64_t of = 0; // (the game set's serial: a pointer, its address could be the last one's)
+	if (of != server.gameSet->serial) {
+		of = server.gameSet->serial;
+		burning = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Big Burning Object");
 		if (!burning)
-			burning = of->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Burning Object");
+			burning = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Burning Object");
 	}
 	// owned by a player, as the Firestorm's flames are (the client draws them in its colour): the
 	// neutral player where the map has one, else the first

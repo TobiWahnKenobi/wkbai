@@ -800,6 +800,12 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 		killer = server.findObject(killerId);
 		auto kit = records.find(killerId);
 		killerRec = kit != records.end() ? &kit->second : nullptr;
+		// the ministry AI's ledger: what the victim's player lost to the killer's (a killer dead since
+		// its blow counts too, by its record)
+		if (server.aiMinistries) {
+			ServerGameObject* killerPlayer = killer && !killer->deleted ? killer->getPlayer() : killerRec ? server.findObject(killerRec->player) : nullptr;
+			server.ministries.onLoss(obj->getPlayer(), killerPlayer, obj);
+		}
 		// (a killer dead since its last blow, its corpse still there: the kill goes to its record)
 		const bool killerDead = killerRec && killerRec->death >= 0.0f;
 		if (killer && !killer->deleted && !killerDead && isEnemy(server, killer, obj)) {

@@ -883,9 +883,12 @@ void MovementController::runPathSearches()
 			for (size_t i = 0; i < n; i++)
 				f(i);
 	};
+	extern std::atomic<const char*> g_simPhase;
+	g_simPhase = "path searches: grids";
 	if (parallel)
 		fillGrids(g, forEach);
 	lap(0);
+	g_simPhase = "path searches: prepare";
 	auto lazyPred =[&](int cls) { ClassGrid* c = &g.classes[cls]; return [c, server, w, h](PFPos p) { return tileBlocked(server, *c, w, h, p.x, p.z); }; };
 	// the requests still wanted (not stopped or replaced since)
 	std::vector<PathRequest*> todo;
@@ -905,6 +908,7 @@ void MovementController::runPathSearches()
 			prepareSearch(r, w, h, lazyPred(r.cls), [&, cls = r.cls](PFPos p) { return g_noCache ? -1 : terrainRegion(cls, p.x, p.z); });
 	});
 	lap(1);
+	g_simPhase = "path searches: group fields";
 	// the searches, their fields chosen in the order asked for
 	std::vector<PathRequest*> searches;
 	for (PathRequest* rp : todo) {
@@ -921,6 +925,7 @@ void MovementController::runPathSearches()
 	}
 	g_pathBatchSearches += searches.size();
 	lap(2);
+	g_simPhase = "path searches: searches";
 	forEach(searches.size(), [&](size_t i) {
 		PathRequest& r = *searches[i];
 		if (parallel)
@@ -929,6 +934,7 @@ void MovementController::runPathSearches()
 			runSearch(r, w, h, lazyPred(r.cls));
 	});
 	lap(3);
+	g_simPhase = "path searches: apply";
 	// applied in the order asked for
 	static const bool tracePath = getenv("WKB_TRACE_PATH") != nullptr;
 	for (PathRequest* rp : todo) {

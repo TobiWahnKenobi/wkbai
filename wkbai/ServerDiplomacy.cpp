@@ -139,6 +139,9 @@ void Server::giveTribute(ServerGameObject* from, ServerGameObject* to, int item,
 		return;
 	from->setItem(item, from->getItem(item) - amount);
 	to->setItem(item, to->getItem(item) + amount);
+	// the ministry AI's ledger: gratitude
+	if (aiMinistries)
+		ministries.onGift(from, to, amount);
 	// (by the item's index: the declared names' spelling varies, "FOOD" in the base game set)
 	const float type = item == gameSet->items.names.getIndex("Wood") ? 1.0f : item == gameSet->items.names.getIndex("Food") ? 2.0f
 		: item == gameSet->items.names.getIndex("Gold") ? 3.0f : 0.0f;

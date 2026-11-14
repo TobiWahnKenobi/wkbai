@@ -36,6 +36,10 @@
 Server *Server::instance = nullptr;
 
 std::atomic_int g_diag_serverTicks{ 0 };
+// where the simulation is (tests: a watchdog prints it when a step doesn't end, WKB_WATCHDOG)
+std::atomic<const char*> g_simPhase{ "" };
+std::atomic<uint32_t> g_simPhaseObject{ 0 };
+std::atomic<uint64_t> g_simSteps{ 0 };
 
 SimRandom g_simRandom;
 
@@ -48,14 +52,22 @@ Server::Server()
 
 void Server::loadSaveGame(const char * filename)
 {
-	// a save game's settings and players' Lua AIs (<save>.ai.txt, wkbai's own); cheat mode only
+	// a save game's settings and players' Lua AIs (its settings sections, wkbai's own); cheat mode only
 	// when it was saved on (older saves have the scripts only)
 	aiScripts.clear();
+	landscapeId = 0; // (the file's, or one given once it's read)
 	cheatMode = false;
+	// the ministry AI as saved (its "ai" section), else none; on only when the save had it on
+	aiMinistries = false;
+	aiVision = 0;
+	aiGenerals = 4;
+	aiReaction = 100;
+	aiMinistriesSlots = 0;
+	ministries.clear();
 	settingsFromSave = false;
 	// the fog of war unless the save game was a skirmish's with Clear Fog Of War (the campaign has it)
 	clearFogOfWar = false;
-	// nobody's game over, unless the save says so (<save>.ai.txt "finished.<id>")
+	// nobody's game over, unless the save says so ("finished.<id>")
 	finishedPlayers.clear();
 	// diplomacy: the offers (DIPLOMATIC_OFFER in the save), the chat personalities and the
 	// diplomacy buttons (<save>.ai.txt "chatPersonality.<id>", "diplomacyWindow.<id>.<window>")
@@ -69,32 +81,23 @@ void Server::loadSaveGame(const char * filename)
 	// the interface on, whatever window would have switched it on again)
 	interfaceDisabled.clear();
 	objectiveMarkers.clear();
-	if (const std::string side = std::string(filename) + ".ai.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		const std::string settings(text, size);
-		applyAiSettingsText(settings, false);
+	// the save's parts: a wkbai save file's sections, or an original save game or level (and an
+	// older wkbai save's side files)
+	const SaveParts parts = ReadSaveParts(filename);
+	if (!parts.settings.empty()) {
+		applyAiSettingsText(parts.settings, false);
 		// the game's settings, not the Lua AIs only (aiSettingsText writes aggressiveAI first;
 		// before 2026-11-07 the file had the scripts only): the lobby's applySettings keeps them
-		settingsFromSave = settings.find("aggressiveAI=") != std::string::npos;
-		free(text);
+		settingsFromSave = parts.settings.find("aggressiveAI=") != std::string::npos;
 	}
-	// wkbai's day and night, seasons and weather as saved (<save>.env.txt), else off
+	// wkbai's day and night, seasons and weather as saved, else off
 	environment.reset();
 	nightSight = NightSight();
-	if (const std::string side = std::string(filename) + ".env.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		environment.loadText(std::string(text, size));
-		free(text);
+	if (!parts.environment.empty()) {
+		environment.loadText(parts.environment);
 		environment.trace = g_settings.value("environmentTrace", false); // (tests, as a new game's)
 	}
-	char *filetext; int filesize;
-	LoadFile(filename, &filetext, &filesize, 1);
-	filetext[filesize] = 0;
-	GSFileParser gsf(filetext);
+	GSFileParser gsf(parts.world.c_str());
 	// the random state as saved, set once everything is loaded (creating the objects draws numbers)
 	std::optional<uint32_t> randomSeed;
 
@@ -186,10 +189,12 @@ void Server::loadSaveGame(const char * filename)
 		}
 		gsf.advanceLine();
 	}
+	// the landscape's id, if the file had none (a level, a scenario): given now, once, so that saving
+	// later doesn't take an id from the game (Server::saveGame)
+	if (!landscapeId && !mapFile.empty())
+		landscapeId = nextUniqueId++;
 	if (randomSeed)
 		g_simRandom.seed(*randomSeed);
-
-	free(filetext);
 
 	for (auto &t : postAssociations)
 		std::get<0>(t)->associateObject(std::get<1>(t), findObject(std::get<2>(t)));
@@ -197,13 +202,9 @@ void Server::loadSaveGame(const char * filename)
 	for (auto& [task, id] : postTaskTargets)
 		task->setTarget(findObject(id));
 	postTaskTargets.clear();
-	// the workers' attachment paths as saved (<save>.paths.txt, wkbai's own)
-	if (const std::string side = std::string(filename) + ".paths.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		std::string all(text, size);
-		free(text);
+	// the workers' attachment paths as saved (wkbai's own)
+	if (!parts.paths.empty()) {
+		const std::string& all = parts.paths;
 		size_t at = 0;
 		while (at < all.size()) {
 			size_t end = all.find('\n', at);
@@ -226,15 +227,17 @@ void Server::loadSaveGame(const char * filename)
 							RestoreAttachmentPath(task.get(), targetId, pathNo, step, tried != 0);
 		}
 	}
-	// wkbai's unit history as saved (<save>.history.txt): kills, creators, the last hits
-	if (const std::string side = std::string(filename) + ".history.txt"; FileExists(side.c_str())) {
-		char* text = nullptr;
-		int size = 0;
-		LoadFile(side.c_str(), &text, &size);
-		std::string all(text, size);
-		free(text);
-		UnitHistory::loadText(*this, all);
-	}
+	// the walks going on as saved (after the attachment paths, which may start one)
+	if (!parts.movement.empty())
+		restoreMovements(parts.movement);
+	// the ministry AI's governments as saved
+	if (!parts.ai.empty())
+		ministries.loadText(*this, parts.ai);
+	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
+	DiscoveredLoadText(parts.discovered);
+	// wkbai's unit history as saved: kills, creators, the last hits
+	if (!parts.history.empty())
+		UnitHistory::loadText(*this, parts.history);
 	unitHistory.loaded(*this);
 	// the players whose game was over at the save (the clients had the game set's message: their
 	// lists are empty)
@@ -618,6 +621,20 @@ std::string Server::aiSettingsText() const
 	text += "teamReconnaissance=" + std::to_string((int)teamReconnaissance) + "\n";
 	if (cheatMode) // (only when on: the text of other games stays as it was)
 		text += "cheatMode=1\n";
+	if (aiMinistries) // (the same)
+		text += "aiMinistries=1\n";
+	if (aiVision) // (the same)
+		text += "aiVision=" + std::to_string(aiVision) + "\n";
+	if (aiGenerals != 4) // (the same)
+		text += "aiGenerals=" + std::to_string(aiGenerals) + "\n";
+	if (aiReaction != 100) // (the same)
+		text += "aiReaction=" + std::to_string(aiReaction) + "\n";
+	if (aiMinistriesSlots != 0) // (the same)
+		text += "aiMinistriesSlots=" + std::to_string(aiMinistriesSlots) + "\n";
+	// the simulation's step count: each player's AI and each viewer's sight run on their own steps
+	// of 10 and 4 (by step and id), so a loaded game goes on with them on the same steps
+	if (simStepIndex)
+		text += "simStepIndex=" + std::to_string(simStepIndex) + "\n";
 	// the players whose game is over (only when there are: the text of other games stays as it was)
 	for (const auto& [id, outcome] : finishedPlayers)
 		text += "finished." + std::to_string(id) + "=" + std::to_string((int)outcome) + "\n";
@@ -738,6 +755,12 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiWar") aiWar = v != 0;
+		else if (name == "aiMinistries") aiMinistries = v != 0;
+		else if (name == "aiVision") aiVision = (int)v;
+		else if (name == "aiGenerals") aiGenerals = (int)v;
+		else if (name == "aiReaction") aiReaction = std::clamp((int)v, 25, 400);
+		else if (name == "aiMinistriesSlots") aiMinistriesSlots = (int)v;
+		else if (name == "simStepIndex") simStepIndex = (uint64_t)atoll(line.c_str() + eq + 1);
 		else if (name == "aiHumanFocus") aiHumanFocus = (int)v;
 		else if (name == "aiWeather") aiWeather = (int)v;
 		else if (name == "aiGoldExpansion") aiGoldExpansion = v != 0;
@@ -3392,6 +3415,8 @@ void Server::simulate()
 	SimTimer totalTimer(g_simProfile.total);
 	g_simProfile.steps++;
 	simStepIndex++;
+	g_simSteps++;
+	g_simPhase = "sequences";
 	if (recording && recording->file) {
 		const uint32_t ms = timeManager.psCurrentTime - recording->lastTime;
 		recording->lastTime = timeManager.psCurrentTime;
@@ -3464,6 +3489,8 @@ void Server::simulate()
 			printf("SIMPROFILE   AI plans %.2f ms, Lua AIs %.2f ms (longest think %.1f ms), work orders %.2f ms, commissions %.2f ms per step; searches %.0f tiles, %.0f objects per step\n",
 				g_aiPlanMs / p.steps, g_aiLuaMs / p.steps, g_aiLuaMaxMs, g_aiWorkMs / p.steps, g_aiCommissionMs / p.steps, (double)g_nnTiles / p.steps, (double)g_nnObjects / p.steps);
 		g_nnTiles = g_nnObjects = 0;
+		if (p.lastPrint && aiMinistries)
+			printf("SIMPROFILE   ministries %s\n", Ministry::Ministries::profileText(p.steps).c_str());
 		g_aiPlanMs = g_aiLuaMs = g_aiLuaMaxMs = g_aiWorkMs = g_aiCommissionMs = 0.0;
 		g_pathfindingMs = 0.0;
 		g_pathfindingSearches = 0;
@@ -3570,7 +3597,9 @@ void Server::simulate()
 		// different steps: every step took 3 ms with 8 AI players
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && (simStepIndex + obj->id) % 10 == 0) {
 			SimTimer aiTimer(g_simProfile.ai);
+			g_simPhase = "AI"; g_simPhaseObject = obj->id;
 			obj->aiController.update();
+			g_simPhase = "object tree";
 			// Update "Number of Farmers" item (important for Food Consumption to work properly)
 			static const std::string numFarmersName = "Number of Farmers";
 			int numFarmersFinder = gameSet->objectFinderDefinitions.names.getIndex(numFarmersName);
@@ -3594,6 +3623,13 @@ void Server::simulate()
 	}
 	// formations left with too few members, disbanded now that the tree isn't being walked
 	FormationController::flushDisbands();
+	// the ministry AI: its departments due at this step, the players by id (not in the object
+	// tree's order, which a loaded game has in the save's order)
+	if (aiMinistries && getLevel()) {
+		SimTimer aiTimer(g_simProfile.ai);
+		g_simPhase = "ministries";
+		ministries.update(*this);
+	}
 	g_simProfile.objects += toprocess.size();
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
@@ -3602,6 +3638,7 @@ void Server::simulate()
 			Order* current = obj->orderConfig.getCurrentOrder();
 			const std::string name = current ? gameSet->orders.getString(current->blueprint->bpid) : std::string("(none)");
 			const double start = SimProfile::now();
+			g_simPhase = "orders"; g_simPhaseObject = obj->id;
 			obj->orderConfig.process();
 			const double took = SimProfile::now() - start;
 			g_simProfile.orders += took;
@@ -3609,8 +3646,10 @@ void Server::simulate()
 		}
 		else {
 			SimTimer ordersTimer(g_simProfile.orders);
+			g_simPhase = "orders"; g_simPhaseObject = obj->id;
 			obj->orderConfig.process();
 		}
+		g_simPhase = "movement";
 		if (!ref) continue;
 		std::optional<SimTimer> moveTimer(std::in_place, g_simProfile.movement);
 		const bool isFormation = obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
@@ -3660,6 +3699,7 @@ void Server::simulate()
 		// sight range events every 4th step (80 ms), the objects on different steps
 		if (obj->blueprint->receiveSightRangeEvents && (simStepIndex + obj->id) % 4 == 0) {
 			SimTimer sightTimer(g_simProfile.sight);
+			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
 		}
@@ -3669,9 +3709,12 @@ void Server::simulate()
 	// the step's path searches, on worker threads, their paths applied in the order asked for
 	{
 		SimTimer ordersTimer(g_simProfile.orders);
+		g_simPhase = "path searches";
 		MovementController::runPathSearches();
 	}
+	g_simPhase = "delete";
 	freeDeletedObjects();
+	g_simPhase = "between steps";
 }
 
 void Server::network()
