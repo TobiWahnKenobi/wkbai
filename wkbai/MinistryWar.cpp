@@ -896,7 +896,29 @@ namespace {
 			case Mission::RAID: case Mission::KILL: {
 				if (kills >= m.goal)
 					return "done";
+				// three minutes out without a kill: home (archers chasing peasants fought them in melee,
+				// and the enemy's monks healed them: 222 blows on one peasant in 200 s, 8 minutes for none)
+				if (kills == 0 && now - m.stateSince > 180.0f)
+					return "gave up";
 				std::vector<ServerGameObject*> prey = m.kind == Mission::RAID ? AIUtil::EnemyPeasantsNear(me, at, 120.0f) : AIUtil::EnemiesNear(me, at, 120.0f, false);
+				if (g.trace && (int)now % 30 == 0) {
+					int idle = 0;
+					float spread = 0.0f;
+					std::string doing;
+					for (ServerGameObject* u : units) {
+						Order* o = u->orderConfig.getCurrentOrder();
+						Task* t = o ? o->getCurrentTask() : nullptr;
+						ServerGameObject* tg = t ? t->target.get() : nullptr;
+						idle += !o;
+						spread = std::max(spread, (u->position - at).len2xz());
+						if (doing.size() < 400)
+							doing += " " + std::to_string(u->id) + "(k" + std::to_string(u->kills) + ")" + u->blueprint->name + (u->getParent() && u->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION ? "[f]" : "") + ":"
+								+ (o ? srv.gameSet->orders.getString(o->blueprint->bpid) : std::string("-")) + (tg ? "->" + tg->blueprint->name + "@" + std::to_string((int)(tg->position - u->position).len2xz()) + "#" + std::to_string(tg->id) + " hp "
+									+ std::to_string((int)tg->getItem(srv.gameSet->items.names.getIndex("Hit Points"))) : "");
+					}
+					g.log(GENERALS, "mission %u (%s): %zu at (%.0f, %.0f), %.0f m from (%.0f, %.0f), spread %.0f m, %d idle, %zu prey, %d kills;%s", m.id, Mission::KindName(m.kind),
+						units.size(), at.x, at.z, (at - Vector3(m.tx, 0, m.tz)).len2xz(), m.tx, m.tz, spread, idle, prey.size(), kills, doing.c_str());
+				}
 				if (prey.empty()) {
 					if ((at - Vector3(m.tx, 0, m.tz)).len2xz() < 30.0f && now - m.stateSince > 30.0f) {
 						// none here: the nearest peasants Intelligence knows of that player, else home

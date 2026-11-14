@@ -2660,7 +2660,7 @@ void Test_MinistryIntelligence()
 }
 
 // The ministry AI's Strategist, War and Generals (needs the game data): 4 Peaks, Belisar the Hammer
-// against Lady Elinor, both with the ministries, 25 minutes. A scout goes out first; attacks are
+// against Lady Elinor, both with the ministries, 25 minutes. No attack before the enemy's buildings are known (a scout, or seen otherwise); attacks are
 // given as missions; the war layer sends no waves of its own; missions end. Saved at 12 minutes
 // and loaded: the missions go on. Prints the missions every 2 minutes, "WAR <check> <0|1>" and
 // "WAR all <0|1>".
@@ -2677,6 +2677,8 @@ void Test_MinistryWar()
 	const std::string file = PathToUtf8(g_userPath / "saved" / "Save_Games" / "wkbai war test.sav");
 	std::map<uint32_t, size_t> missionsAtSave;
 	std::set<std::string> kindsGiven;
+	std::set<uint32_t> firstAttack;
+	bool blindAttack = false;
 	double given = 0, done = 0, failed = 0;
 	int warLayerWaves = 0;
 	g_settings["aiTrace"] = 1;
@@ -2686,8 +2688,14 @@ void Test_MinistryWar()
 		for (int m = 1; m <= minutes; m++) {
 			StepServer(server, 3000);
 			for (const auto& [id, g] : server.ministries.governments) {
-				for (const Mission& mi : g->missions)
+				for (const Mission& mi : g->missions) {
 					kindsGiven.insert(Mission::KindName(mi.kind));
+					// each side's first attack: the enemy's buildings known by then (a scout went first, or
+					// they were seen otherwise)
+					const bool attack = mi.kind != Mission::SCOUT && mi.kind != Mission::DECOY && mi.kind != Mission::DEFEND;
+					if (attack && firstAttack.insert(id).second)
+						blindAttack |= g->board.get("intel." + std::to_string(mi.enemy) + ".buildings") <= 0.0;
+				}
 				if (m % 2 == 0 || m == minutes) {
 					std::string list;
 					for (Mission& mi : g->missions)
@@ -2725,7 +2733,11 @@ void Test_MinistryWar()
 	for (const std::string& k : kindsGiven)
 		kinds += " " + k;
 	printf("WAR missions given %.0f (kinds:%s), done %.0f, failed %.0f; the war layer's own waves %d\n", given, kinds.c_str(), done, failed, warLayerWaves);
-	check("a scout first", kindsGiven.count("scout") != 0);
+	// (a scout goes only while nothing of the enemy is known: in a game where the other side's buildings
+	// were seen first, or no soldier was free, there is none; since the farms level their ground, 4 Peaks'
+	// seed 99 plays such a game)
+	printf("WAR scouts given %d\n", (int)kindsGiven.count("scout"));
+	check("no attack before the enemy is known", !firstAttack.empty() && !blindAttack);
 	check("attacks given", kindsGiven.count("raze") || kindsGiven.count("palace") || kindsGiven.count("raid"));
 	check("missions end", done + failed > 0);
 	check("no waves from the war layer", warLayerWaves == 0);
@@ -2958,6 +2970,7 @@ void Test_MinistryDiplomacy()
 	const GameObjBlueprint* pikeBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
 	ServerGameObject* palace = AIUtil::Palace(elinor);
 	ServerGameObject* victim = server.spawnObject(peasantBp, elinor, palace->position + Vector3(30, 0, 0), Vector3(0, 0, 0));
+	const Vector3 madeAt = victim->position;
 	for (int i = 0; i < 40; i++)
 		server.ministries.onLoss(elinor, belisar, victim);
 	const Ledger& l = g->ledgerOf(1027);
@@ -2976,9 +2989,15 @@ void Test_MinistryDiplomacy()
 	ServerGameObject* worker = nullptr;
 	for (ServerGameObject* p : hers)
 		if (p != victim && p->isInteractable()) { worker = p; break; }
-	check("a working peasant of hers", worker != nullptr);
+	// (none left when Belisar's army has killed them all: a new one at her palace, the one made for
+	// the losses above may be dead by now)
+	printf("DIPLO a working peasant of hers %d\n", (int)(worker != nullptr));
 	if (worker)
 		victim = worker;
+	else {
+		ServerGameObject* home = AIUtil::Palace(elinor);
+		victim = server.spawnObject(peasantBp, elinor, (home ? home->position : madeAt) + Vector3(30, 0, 10), Vector3(0, 0, 0));
+	}
 	// (a Spearman: a Pikeman going for peasants switched between them and never struck, 60 s)
 	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
 	ServerGameObject* pike = server.spawnObject(spearBp ? spearBp : pikeBp, belisar, victim->position + Vector3(3, 0, 0), Vector3(0, 0, 0));
@@ -10668,7 +10687,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SaveFormat, "Save format: wkbai's save file with sections, the original format, unknown sections, play on after loading"},
 {Test_MinistryFramework, "Ministry AI framework: the blackboard, departments at their rates and staggered, reports, nothing changed in the game, the ai section through a save"},
 {Test_MinistryIntelligence, "Ministry AI Intelligence: only what was seen (aiVision), the threat map, remembered and forgotten, through a save"},
-{Test_MinistryWar, "Ministry AI war: a scout first, attacks as missions, no waves from the war layer, missions through a save"},
+{Test_MinistryWar, "Ministry AI war: no attack before the enemy is known, attacks as missions, no waves from the war layer, missions through a save"},
 {Test_MinistryTactics, "Ministry AI tactics: training by counters, abilities (heal, curse) by the rule table"},
 {Test_MinistryDiplomacy, "Ministry AI diplomacy: gratitude for a tribute, peace, a grudge and war, a real kill in the ledger, through a save"},
 {Test_MinistryEconomy, "Ministry AI economy: the peasant cap, gold miners, research and repairs against the same game without"},
