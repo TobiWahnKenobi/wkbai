@@ -323,14 +323,40 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			// the palace's attackers with every soldier there is: four players, a Kingmaker overrun lost
 			// 32 peasants who weren't allowed to fight. Not "unable" alone: an army passing 240 m from the
 			// palace made all 45 peasants militia, which never went back to work, and died)
-			const bool emergency = palaceFalling && (threat > 2.0f * defence + 50.0f || g.board.get("war.palaceUnmet") > 0.0);
+			const bool falling = palaceFalling && (threat > 2.0f * defence + 50.0f || g.board.get("war.palaceUnmet") > 0.0);
+			const bool emergency = falling;
 			if (emergency != (me->getItem(noMilitia) == 0.0f))
 				g.log(LABOUR, emergency ? "the peasants may fight (a threat of %.0f against %.0f, the palace falling)" : "no militia (a threat of %.0f against %.0f)", threat, defence);
 			me->setItem(noMilitia, emergency ? 0.0f : 1.0f);
+			// (the scripts convert in one batch once allowed, 22 at once in a test, and those on their way
+			// finish after it is forbidden again: unless the palace is falling, the conversions over 8
+			// militia are called back, the newest first, and they go back to work)
+			if (!falling) {
+				std::vector<ServerGameObject*> converting;
+				int armed = 0;
+				for (ServerGameObject* p : peasants) {
+					const char* o = CurrentOrder(srv, p);
+					if (strstr(o, "Militia"))
+						converting.push_back(p);
+				}
+				armed = (int)g.board.get("labour.militia") - (int)converting.size();
+				std::sort(converting.begin(), converting.end(), [](auto* a, auto* b) { return a->id > b->id; });
+				int called = 0;
+				for (ServerGameObject* p : converting)
+					if (armed + (int)converting.size() - called > 8) {
+						p->orderConfig.cancelAllOrders();
+						called++;
+					}
+				if (called) {
+					g.log(LABOUR, "%d peasants called back from becoming militia (%d militia)", called, armed + (int)converting.size() - called);
+					g.board.report("labour.militiaCalledBack", g.board.get("labour.militiaCalledBack") + called);
+				}
+			}
 			// the emergency over: the militia with no enemy within 100 m go back to work (their own
 			// "Disband Militia"; the scripts never send them back: in a four-player game 43 militia stayed
 			// soldiers until they died, the economy gone)
-			if (!emergency) {
+			// (and not while the threat is more than the soldiers can meet)
+			if (!emergency && threat <= defence) {
 				int disbanded = 0;
 				const GameSet* gs = srv.gameSet.get();
 				std::vector<ServerGameObject*> militia;
@@ -447,14 +473,19 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 		}
 	}
 	g.board.report("labour.goldMiners", (double)goldMiners.size());
-	// idle peasants (not held), more than a few: to the wood near home (the scripts give the rest work)
+	// idle peasants (not held), more than a few: to the wood near home (the scripts give the rest work);
+	// not where enemy soldiers are (four players, seed 3: the peasants that had fled an army stood idle
+	// at home and were sent to the nearest trees, back to it: 45 peasants down to 22. With this rule
+	// switched off he ended with 130 characters instead of 36)
 	int idle = 0;
 	if (!(MinOff() & 1))
 	for (ServerGameObject* p : peasants)
 		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable()) {
 			if (++idle <= 2)
 				continue;
-			if (ServerGameObject* tree = FindWork(srv, p, g_items.chop, "Tree", p->position, 120.0f)) {
+			if (!AIUtil::EnemiesNear(me, p->position, 200.0f, false).empty())
+				continue;
+			if (ServerGameObject* tree = FindWork(srv, p, g_items.chop, "Tree", p->position, 120.0f); tree && AIUtil::EnemiesNear(me, tree->position, 150.0f, false).empty()) {
 				srv.gameSet->commands[g_items.chop].execute(p, tree, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 				g.board.report("labour.putToWork", g.board.get("labour.putToWork") + 1);
 			}

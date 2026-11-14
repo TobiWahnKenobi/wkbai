@@ -98,7 +98,8 @@ namespace {
 			if (!player)
 				return;
 			g_items.update(g.server.gameSet.get());
-			int peasants = 0, idle = 0, soldiers = 0, characters = 0, buildings = 0;
+			int peasants = 0, idle = 0, soldiers = 0, militia = 0, characters = 0, buildings = 0;
+			std::string others;
 			auto walk = [&](CommonGameObject* obj, auto& self) -> void {
 				for (const auto& [type, children] : obj->children)
 					for (CommonGameObject* child : children) {
@@ -107,6 +108,13 @@ namespace {
 							continue;
 						if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 							characters++;
+							// (militia, and peasants on their way to become militia: neither peasants nor soldiers then)
+							{
+								const Order* ord = o->orderConfig.getCurrentOrder();
+								if (o->blueprint->name.find("Militia") != std::string::npos
+									|| (ord && g.server.gameSet->orders.getString(ord->blueprint->bpid).find("Militia") != std::string::npos))
+									militia++;
+							}
 							if (Item(o, g_items.peasant) > 0.0f) {
 								peasants++;
 								if (o->orderConfig.orders.empty())
@@ -114,6 +122,10 @@ namespace {
 							}
 							else if (Item(o, g_items.military) > 0.0f)
 								soldiers++;
+							else if (g.trace && others.size() < 3000) {
+								const Order* ord = o->orderConfig.getCurrentOrder();
+								others += o->blueprint->name + "/" + (ord ? g.server.gameSet->orders.getString(ord->blueprint->bpid) : std::string("-")) + "; ";
+							}
 						}
 						else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
 							buildings++;
@@ -124,10 +136,11 @@ namespace {
 			g.board.report("labour.peasants", peasants);
 			g.board.report("labour.idle", idle);
 			g.board.report("labour.soldiers", soldiers);
+			g.board.report("labour.militia", militia);
 			g.board.report("labour.characters", characters);
 			g.board.report("labour.buildings", buildings);
 			if (peasants != lastPeasants || idle != lastIdle || soldiers != lastSoldiers)
-				g.log(LABOUR, "%d peasants (%d without work), %d soldiers, %d characters, %d buildings", peasants, idle, soldiers, characters, buildings);
+				g.log(LABOUR, "%d peasants (%d without work, cap %.0f), %d soldiers, %d militia, %d characters, %d buildings; others %s", peasants, idle, g.board.get("labour.cap"), soldiers, militia, characters, buildings, others.c_str());
 			lastPeasants = peasants;
 			lastIdle = idle;
 			lastSoldiers = soldiers;
