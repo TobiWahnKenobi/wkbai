@@ -755,7 +755,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 			const int q = (int)SkyFlags.w; // the clouds' quality: Low 0 to Ultra 3
 			float3 types = HighTypes(p, fp, cHigh.w);
 			if (q <= 0)
-				types = float3(0, types.y, 0); // Low: streaks and bands only
+				types.x = 0; // Low: no mares' tails; the ripples as their cells only (below)
 			// the wind's direction turning slowly over the sky (the streaks' bend)
 			float ang = (wAng - 0.5) * 1.8;
 			float2 dir = float2(wind.x * cos(ang) - wind.y * sin(ang), wind.x * sin(ang) + wind.y * cos(ang));
@@ -818,9 +818,19 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 				float wave = (w0.x * lw.x + w1.x * lw.y + w2.x * lw.z) / max(dot(lw, 1), 1e-4);
 				float resolved = (w0.y * lw.x + w1.y * lw.y + w2.y * lw.z) / max(dot(lw, 1), 1e-4);
 				float cell = HighCell(p * 1.3, 0.61 + CloudScale.w * 0.0006, fp * 1.3);
-				float rip = smoothstep(0.35, 0.95, wave * 0.5 + cell * 0.6) * lerp(0.7, 1, fine);
-				// (where the waves are only a few pixels apart, a soft sheet instead)
-				rip = lerp(0.3, rip, resolved);
+				float rip;
+				if (q <= 0) {
+					// Low: a field of cloudlets (cirrocumulus) from the cells alone, larger (before
+					// the moire fix this region fell back to the streaks, whose three point-sampled
+					// taps broke into such a field, with the moire inside)
+					float big = HighCell(p * 0.45 + 2900, 0.23 + CloudScale.w * 0.0006, fp * 0.45);
+					rip = smoothstep(0.38, 0.6, big * 0.7 + cell * 0.3) * lerp(0.7, 1, fine);
+				}
+				else {
+					rip = smoothstep(0.35, 0.95, wave * 0.5 + cell * 0.6) * lerp(0.7, 1, fine);
+					// (where the waves are only a few pixels apart, a soft sheet instead)
+					rip = lerp(0.3, rip, resolved);
+				}
 				d = lerp(d, rip * smoothstep(0.02, 0.3, smear + 0.15), types.z);
 				opacity = lerp(opacity, 0.7, types.z);
 			}
