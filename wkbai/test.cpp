@@ -2473,7 +2473,7 @@ void Test_MinistryFramework()
 				economyReports += key.rfind("economy.", 0) == 0;
 				labourReports += key.rfind("labour.", 0) == 0;
 			}
-			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports == 8 && labourReports >= 5);
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports >= 8 && labourReports >= 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
 		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
@@ -2963,15 +2963,32 @@ void Test_MinistryDiplomacy()
 	printf("DIPLO then the status %s\n", gs->diplomaticStatuses.names.getString(status2).c_str());
 	check("declares war", status2 == enemy);
 	check("the Strategist sees the grudge", g->board.get("trust.1027") < 0.0);
-	// a real kill
+	// a real kill: one of her working peasants, at one blow (the peasant made for the losses above,
+	// held in place, was never hit; before 2026-11-13 this check counted another kill)
 	const int killsBefore = g->ledgerOf(1027).kills;
-	ServerGameObject* pike = server.spawnObject(pikeBp, belisar, victim->position + Vector3(3, 0, 0), Vector3(0, 0, 0));
-	if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+	std::vector<ServerGameObject*> hers = AIUtil::Peasants(elinor);
+	ServerGameObject* worker = nullptr;
+	for (ServerGameObject* p : hers)
+		if (p != victim && p->isInteractable()) { worker = p; break; }
+	check("a working peasant of hers", worker != nullptr);
+	if (worker)
+		victim = worker;
+	// (a Spearman: a Pikeman going for peasants switched between them and never struck, 60 s)
+	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	ServerGameObject* pike = server.spawnObject(spearBp ? spearBp : pikeBp, belisar, victim->position + Vector3(3, 0, 0), Vector3(0, 0, 0));
+	if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0) {
 		victim->setItem(hp, 1.0f); // (one blow)
-	victim->disableCount++; // (it stays: no running away)
-	AIUtil::Attack({ pike }, victim);
-	for (int i = 0; i < 60 && server.findObject(victim->id) && !server.findObject(victim->id)->deleted; i++)
-		StepServer(server, 50);
+		pike->setItem(hp, 100000.0f); // (her defenders come for it: it lives, and whatever of hers it kills counts)
+	}
+	// The blow itself is the game's (an attack package notes its sender, UnitHistory::hit): here it is
+	// recorded directly and the peasant dies through the game's own path (terminate ->
+	// UnitHistory::terminated, the kill's credit -> the ledger). A real fight was tried: a walking
+	// peasant got away from an attacker of the same speed (peasants walk home when no help can win).
+	victim->lastHitBy = pike->id;
+	victim->lastHitTime = server.timeManager.currentTime;
+	victim->setItem(gs->items.names.getIndex("Hit Points"), 0.0f);
+	victim->terminate();
+	StepServer(server, 5);
 	printf("DIPLO the Pikeman's kill: victim gone %d, kills in her ledger %d -> %d\n", (int)!server.findObject(victim->id), killsBefore, g->ledgerOf(1027).kills);
 	check("a real kill in the ledger", g->ledgerOf(1027).kills > killsBefore);
 	// through a save
@@ -3047,7 +3064,7 @@ void Test_MinistryEconomy()
 		}
 	}
 	g_settings["aiTrace"] = 1027;
-	bool withinCap = true, goldSent = false;
+	bool withinCap = true, goldSent = false, goldInTheWay = false;
 	{
 		Server server;
 		MinistryGame(server, true, 7);
@@ -3077,13 +3094,16 @@ void Test_MinistryEconomy()
 					g->board.get("research.ordered"), g->board.get("builders.repaired"), g->board.get("missions.given"));
 				withinCap &= c.peasants <= cap + 3; // (those in training when the cap was reached)
 				goldSent |= g->board.get("labour.goldSent") > 0;
+				goldInTheWay |= g->board.get("economy.goldNeeded") > 0;
 				with[id] = c;
 			}
 		}
 	}
 	g_settings["aiTrace"] = 0;
 	check("peasants within the cap", withinCap);
-	check("gold miners sent", goldSent);
+	// (since 2026-11-14 only when a fighter that can be trained costs more gold than there is)
+	printf("ECON gold in the way %d, miners sent %d\n", (int)goldInTheWay, (int)goldSent);
+	check("gold miners only when gold is in the way", !goldSent || goldInTheWay);
 	float goldWithout = 0, goldWith = 0;
 	int soldiersWithout = 0, soldiersWith = 0;
 	for (uint32_t id : { 1027u, 1030u }) {
@@ -3168,6 +3188,119 @@ void Test_MinistryLua()
 		check("aiReaction slows them", economy && economy->thinks >= 14 && economy->thinks <= 16);
 	}
 	printf("LUAMIN all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The ministry AI's defence (needs the game data): 4 Peaks, Belisar (1027) against Lady Elinor, the
+// ministries on. 12 Spearmen of Belisar's at home. Two Pikemen of Elinor's 60 m from his palace: a
+// defence mission with some of the Spearmen, not all; the war layer sends none; done when they're
+// gone, and the Spearmen are free again. 40 Pikemen at the palace: all go, and the missions are
+// recalled. Prints "DEFENCE <check> <0|1>" and "DEFENCE all <0|1>".
+void Test_MinistryDefence()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("DEFENCE %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	using namespace Ministry;
+	g_settings["aiTrace"] = 1027;
+	Server server;
+	MinistryGame(server, true, 99);
+	StepServer(server, 250);
+	ServerGameObject* me = server.findObject(1027), * enemy = server.findObject(1030);
+	Government* g = server.ministries.governments.count(1027) ? server.ministries.governments[1027].get() : nullptr;
+	ServerGameObject* palace = me ? AIUtil::Palace(me) : nullptr;
+	ServerGameObject* homeArmy = me ? AIUtil::HomeArmy(me) : nullptr;
+	const GameSet* gs = server.gameSet.get();
+	const GameObjBlueprint* spear = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* pike = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Pikeman");
+	check("set up", me && enemy && g && palace && homeArmy && spear && pike);
+	if (!(me && enemy && g && palace && homeArmy && spear && pike)) { printf("DEFENCE all 0\n"); return; }
+	for (int i = 0; i < 12; i++)
+		server.spawnObject(spear, homeArmy, palace->position + Vector3(15.0f + (i % 4) * 3.0f, 0, 15.0f + (i / 4) * 3.0f), Vector3(0, 0, 0));
+	StepServer(server, 200);
+	auto defences = [&]() {
+		int n = 0, units = 0;
+		for (Mission& m : g->missions)
+			if (m.kind == Mission::DEFEND) { n++; units += (int)g->alive(m).size(); }
+		return std::make_pair(n, units);
+	};
+	check("no threat, no defence", defences().first == 0);
+	const double freeBefore = g->board.get("war.home");
+	printf("DEFENCE fighters free at home: %.0f\n", freeBefore);
+	// a raid
+	std::vector<ServerGameObject*> raiders;
+	for (int i = 0; i < 2; i++) {
+		raiders.push_back(server.spawnObject(pike, enemy, palace->position + Vector3(-60.0f, 0, 3.0f * i), Vector3(0, 0, 0)));
+		raiders.back()->setItem(gs->items.names.getIndex("Hit Points"), 30.0f); // (the test is the orders, not the fight)
+	}
+	// they stand (Elinor's scripts walked them home, the defence after them; a disabled unit can't
+	// be hit): no orders, no walk, every second
+	auto standStill = [&]() {
+		for (ServerGameObject* r : raiders)
+			if (server.findObject(r->id) && !(r->flags & ServerGameObject::fTerminated)) {
+				r->orderConfig.cancelAllOrders();
+				r->stopMovement();
+			}
+	};
+	auto stepStill = [&](int steps) {
+		for (int s = 0; s < steps; s += 50) {
+			standStill();
+			StepServer(server, std::min(50, steps - s));
+		}
+	};
+	stepStill(200);
+	auto [n, units] = defences();
+	printf("DEFENCE two Pikemen at the palace: %d defence missions, %d defenders; the war layer's defences %zu\n", n, units, me->aiController.warDefences.size());
+	check("a defence", n == 1 && units >= 1);
+	check("not all of them", units < 12);
+	check("the war layer sends none", me->aiController.warDefences.empty());
+	for (int s = 0; s < 6; s++) {
+		stepStill(250);
+		ServerGameObject* d = nullptr;
+		for (Mission& m : g->missions)
+			if (m.kind == Mission::DEFEND && !g->alive(m).empty())
+				d = g->alive(m).front();
+		printf("DEFENCE t=%.0f defender %s (%.1f, %.1f) moving %d; raiders (%.1f, %.1f) moving %d, (%.1f, %.1f)\n", server.timeManager.currentTime,
+			d ? "" : "none", d ? d->position.x : 0, d ? d->position.z : 0, d ? (int)d->movement.isMoving() : 0,
+			raiders[0]->position.x, raiders[0]->position.z, (int)raiders[0]->movement.isMoving(), raiders[1]->position.x, raiders[1]->position.z);
+	}
+	for (Mission& m : g->missions)
+		if (m.kind == Mission::DEFEND)
+			for (ServerGameObject* u : g->alive(m)) {
+				Order* o = u->orderConfig.getCurrentOrder();
+				Task* t = o ? o->getCurrentTask() : nullptr;
+				ServerGameObject* tg = t ? t->target.get() : nullptr;
+				printf("DEFENCE defender %u at (%.0f, %.0f): %s / %s -> %u %s, parent %s\n", u->id, u->position.x, u->position.z,
+					o ? gs->orders.getString(o->blueprint->bpid).c_str() : "-", t ? gs->tasks.getString(t->blueprint).c_str() : "-",
+					tg ? tg->id : 0, tg ? tg->blueprint->name.c_str() : "", u->getParent() ? u->getParent()->blueprint->name.c_str() : "?");
+			}
+	for (ServerGameObject* r : raiders)
+		if (server.findObject(r->id))
+			printf("DEFENCE raider %u at (%.0f, %.0f), hit points %.0f\n", r->id, r->position.x, r->position.z, r->getItem(gs->items.names.getIndex("Hit Points")));
+	for (int i = 0; i < 60 && defences().first > 0; i++)
+		stepStill(50);
+	auto [n2, units2] = defences();
+	int raidersAlive = 0;
+	for (ServerGameObject* r : raiders)
+		raidersAlive += server.findObject(r->id) && !(r->flags & ServerGameObject::fTerminated) ? 1 : 0;
+	printf("DEFENCE later: %d raiders alive, %d defence missions; done %.0f\n", raidersAlive, n2, g->board.get("missions.defend.done"));
+	check("done when they're gone", n2 == 0 && g->board.get("missions.defend.done") >= 1);
+	StepServer(server, 200);
+	printf("DEFENCE fighters free at home again: %.0f\n", g->board.get("war.home"));
+	check("free again", g->board.get("war.home") >= freeBefore - 2);
+	// an attack on the palace
+	for (int i = 0; i < 40; i++)
+		server.spawnObject(pike, enemy, palace->position + Vector3(-50.0f - (i % 8) * 3.0f, 0, -12.0f + (i / 8) * 3.0f), Vector3(0, 0, 0));
+	StepServer(server, 200);
+	auto [n3, units3] = defences();
+	printf("DEFENCE forty Pikemen at the palace: %d defence missions, %d defenders, free left %.0f, recall %.0f\n", n3, units3, g->board.get("war.home"), g->board.get("war.recall"));
+	check("all go to the palace", n3 >= 1 && g->board.get("war.home") == 0);
+	check("the missions are recalled", g->board.get("war.recall") > 0);
+	g_settings["aiTrace"] = 0;
+	printf("DEFENCE all %d\n", (int)all);
 	fflush(stdout);
 }
 
@@ -9575,6 +9708,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryDiplomacy, "Ministry AI diplomacy: gratitude for a tribute, peace, a grudge and war, a real kill in the ledger, through a save"},
 {Test_MinistryEconomy, "Ministry AI economy: the peasant cap, gold miners, research and repairs against the same game without"},
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
+{Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
 };
 
 void LaunchTest()

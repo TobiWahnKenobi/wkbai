@@ -401,7 +401,7 @@ std::string Ministries::saveText() const
 			out += "MISSION " + std::to_string(m.id) + " " + Mission::KindName(m.kind) + " " + std::to_string(m.state) + " " + std::to_string(m.enemy) + " "
 				+ std::to_string(m.target) + " " + Num(m.tx) + " " + Num(m.tz) + " " + std::to_string(m.want) + " " + std::to_string(m.goal) + " "
 				+ std::to_string(m.progress) + " " + Num(m.maxLoss) + " " + Num(m.duration) + " " + Num(m.since) + " " + Num(m.stateSince) + " "
-				+ std::to_string(m.startUnits) + " " + std::to_string(m.kills0) + " " + (m.reinforced ? "1" : "0") + " " + std::to_string(m.units.size());
+				+ std::to_string(m.startUnits) + " " + std::to_string(m.kills0) + " " + (m.reinforced ? "1" : "0") + " " + Num(m.radius) + " " + Num(m.clearSince) + " " + std::to_string(m.units.size());
 			for (uint32_t u : m.units)
 				out += " " + std::to_string(u);
 			out += "\n";
@@ -519,6 +519,8 @@ void Ministries::loadText(Server& server, const std::string& text)
 			m.maxLoss = f32(); m.duration = f32(); m.since = f32(); m.stateSince = f32();
 			m.startUnits = (int)u32(); m.kills0 = (int)u32();
 			m.reinforced = word(rest, p) == "1";
+			m.radius = f32();
+			m.clearSince = f32();
 			const uint32_t n = u32();
 			for (uint32_t i = 0; i < n && i < 10000; i++)
 				m.units.push_back(u32());
@@ -529,6 +531,7 @@ void Ministries::loadText(Server& server, const std::string& text)
 	for (auto& [id, gov] : governments)
 		if (ServerGameObject* p = gov->player()) {
 			p->aiController.ministryWaves = true;
+			p->aiController.ministryDefence = true;
 			p->aiController.ministryUnits.clear();
 			for (const Mission& m : gov->missions)
 				p->aiController.ministryUnits.insert(m.units.begin(), m.units.end());

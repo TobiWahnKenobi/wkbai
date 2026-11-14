@@ -18,6 +18,8 @@
 #include "server.h"
 #include "gameset/gameset.h"
 #include "gameset/command.h"
+#include "gameset/ScriptContext.h"
+#include "gameset/condition.h"
 #include "NNSearch.h"
 #include <algorithm>
 #include <cmath>
@@ -224,7 +226,50 @@ void EconomyNeeds(Government& g)
 		return;
 	const float now = g.now();
 	const double gold = g.board.get("economy.gold"), income = g.board.get("economy.gold.income");
-	const int want = now > 180.0f && gold < 500.0 && income < 20.0 ? 4 + (g.personality.aggression > 0.5f ? 2 : 0) : gold > 1500.0 ? 0 : -1;
+	// Gold only when it is in the way: a fighter its buildings can train (possible now) costs more gold
+	// than there is. (Asked for whenever gold didn't come in, the miners came from the wood and cost a
+	// third of the soldiers one against one, while the gold stayed unspent: 400-500 at the end.)
+	double goldNeeded = 0.0;
+	if (now > 180.0f && g.department(ECONOMY) && g.department(ECONOMY)->thinks % 15 == 0) {
+		Server& srv = g.server;
+		const GameSet* gs = srv.gameSet.get();
+		std::vector<ServerGameObject*> todo{ me };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [t, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* b = (ServerGameObject*)c;
+					if (b->deleted || b->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						continue;
+					todo.push_back(b);
+					if (b->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						continue;
+					for (const Command* cmd : b->blueprint->offeredCommands) {
+						const std::string& name = gs->commands.getString(cmd);
+						if (name.rfind("Spawn ", 0) != 0)
+							continue;
+						const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6));
+						const float cost = type ? type->getStartingItemValue(Tags::PDITEM_GOLD_COST) : 0.0f;
+						if (!type || cost <= gold || AIUtil::TypeClass(type) == 0)
+							continue;
+						SrvScriptContext cctx(&srv, b);
+						auto _s = cctx.selectedObject.change(b);
+						if (std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), [&](GSCondition* cond) { return cond->test->booleval(&cctx); }))
+							goldNeeded = std::max(goldNeeded, (double)cost);
+					}
+				}
+		}
+		g.board.report("economy.goldForFighters", goldNeeded);
+	}
+	else
+		goldNeeded = g.board.get("economy.goldForFighters");
+	// and for Research (it spends a surplus from 300 gold), with wood to spare only: alone, the gold this
+	// mined gave Belisar 212 characters at 30 minutes against 135
+	if (goldNeeded < 300.0 && g.board.get("economy.wood") > 600.0)
+		goldNeeded = 300.0;
+	g.board.report("economy.goldNeeded", goldNeeded);
+	const int want = goldNeeded > gold && income < 20.0 ? 3 + (g.personality.aggression > 0.5f ? 1 : 0) : goldNeeded <= gold || gold > 1500.0 ? 0 : -1;
 	if (want > 0)
 		g.board.ask(ECONOMY, "workers.gold", (float)want, 2.0f, gold < 200.0 ? 2.0f : 1.0f, false, now);
 	else if (want == 0)
@@ -268,7 +313,9 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 				defence += AIUtil::UnitPower(u);
 			const float threat = (float)g.board.get("intel.threat.home");
 			const bool palaceFalling = palace && si >= 0 && siCap >= 0 && palace->getItem(siCap) > 0.0f && palace->getItem(si) < 0.6f * palace->getItem(siCap);
-			const bool emergency = threat > 2.0f * defence + 50.0f && palaceFalling;
+			// (or War's defence can't meet the palace's attackers with every soldier there is: four players,
+			// a Kingmaker overrun at its palace lost 32 peasants who weren't allowed to fight)
+			const bool emergency = (threat > 2.0f * defence + 50.0f && palaceFalling) || g.board.get("war.palaceUnmet") > 0.0;
 			if (emergency != (me->getItem(noMilitia) == 0.0f))
 				g.log(LABOUR, emergency ? "the peasants may fight (a threat of %.0f against %.0f, the palace falling)" : "no militia (a threat of %.0f against %.0f)", threat, defence);
 			me->setItem(noMilitia, emergency ? 0.0f : 1.0f);
@@ -312,8 +359,9 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	if ((int)goldMiners.size() < want && !(MinOff() & 2)) {
 		// (with wood to spare all of them; without, two at most: the scripts keep every peasant busy,
 		// and in a stage-1 game wood stayed under 300 for 10 minutes, so no miner ever went)
-		const bool woodToSpare = me->getItem(Tags::PDITEM_WOOD) > 300.0f;
-		const int fromWood = woodToSpare ? want : std::min(want, 2);
+		const bool woodToSpare = me->getItem(Tags::PDITEM_WOOD) > 500.0f;
+		// (from the wood only with wood to spare: soldiers need it)
+		const int fromWood = woodToSpare ? want : 0;
 		int woodTaken = 0;
 		for (const auto& [id, since] : goldMiners)
 			woodTaken++;

@@ -1136,6 +1136,18 @@ void AIController::warUpdate()
 	for (const Threat& t : threats)
 		if (t.place.palace)
 			atPalace += (int)t.enemies.size();
+	// with the ministry AI its War defends (defence missions): the war layer's forces go home, and it
+	// meets no threat itself (it held every soldier near home while an enemy was about, and the
+	// ministries' missions got none: one against one, no attack in 25 minutes)
+	if (ministryDefence) {
+		for (const WarDefence& d : warDefences) {
+			ServerGameObject* army = srv->findObject(d.army);
+			for (ServerGameObject* u : unitsOf(army))
+				sendHome(u);
+		}
+		warDefences.clear();
+		threats.clear();
+	}
 
 	// the forces out: fight the nearest enemy there; home 6 s after the place was cleared
 	std::set<ServerGameObject*> busy;

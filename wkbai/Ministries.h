@@ -113,7 +113,7 @@ namespace Ministry {
 	// A military mission (the strategist gives it, a General carries it out): a goal, a budget, an
 	// abort condition
 	struct Mission {
-		enum Kind : uint8_t { SCOUT, RAZE, PALACE, RAID, KILL, DECOY, KIND_COUNT };
+		enum Kind : uint8_t { SCOUT, RAZE, PALACE, RAID, KILL, DECOY, DEFEND, KIND_COUNT };
 		enum State : uint8_t { ASSEMBLING, OUT, RETURNING };
 		static const char* KindName(int k);
 		uint32_t id = 0;
@@ -128,6 +128,8 @@ namespace Ministry {
 		float since = 0.0f, stateSince = 0.0f;
 		int startUnits = 0, kills0 = 0;
 		bool reinforced = false;
+		// a defence's place: its radius, and since when no enemy has been there (-1: enemies there)
+		float radius = 0.0f, clearSince = -1.0f;
 		std::vector<uint32_t> units; // its units, the dead too (their kills count to its goal)
 	};
 

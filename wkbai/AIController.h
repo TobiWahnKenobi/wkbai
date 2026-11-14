@@ -161,7 +161,8 @@ struct AIController {
 	void warUpdate();
 	// the ministry AI (Ministries.h) commands this player's attacks: the war layer defends but sends
 	// no waves, and leaves the missions' armies and units alone (set by its War department)
-	bool ministryWaves = false, ministryTraining = false;
+	// (ministryDefence: the ministry AI's War defends too, the war layer not at all)
+	bool ministryWaves = false, ministryTraining = false, ministryDefence = false;
 	std::set<uint32_t> ministryArmies, ministryUnits;
 	// the ministry AI's Labour: the peasants it gave work of its own (the work orders leave them
 	// alone), the most peasants it wants (-1: no cap) and how many there are (AISpawnAllowed
