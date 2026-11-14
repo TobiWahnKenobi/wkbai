@@ -3916,6 +3916,126 @@ void Test_Levelling()
 	fflush(stdout);
 }
 
+// Farmer's farm levelled (needs the game data): a "Peasant Farmer" trained at player 1027's Manor
+// on 4 Peaks gets a farm from its "Auto Farm" OBJECT_CREATION (NEAREST_VALID_STAMPDOWN_POS); its
+// FLATTEN tiles must end as level as those of a farm stamped down by hand (WKB.exe levels every
+// building it puts on the map, 0x513790). Prints "AUTOFARM" lines: the auto farm's spot and its
+// corners' spread before and after, the hand-placed farm's, and "AUTOFARM PASS" or "FAIL".
+void Test_AutoFarmLevelled()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	const GameObjBlueprint* farmBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+	const int spawnFarmer = server.gameSet->commands.names.getIndex("Spawn Peasant Farmer");
+	ServerGameObject* manor = nullptr;
+	auto findManor = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (!manor && child->blueprint->name == "Manor")
+					manor = child->dyncast<ServerGameObject>();
+				self(child, self);
+			}
+	};
+	if (player)
+		findManor(player, findManor);
+	if (!player || !farmBp || !farmBp->footprint || spawnFarmer < 0 || !manor || !server.terrain) {
+		printf("AUTOFARM not set up\n");
+		printf("AUTOFARM FAIL\n");
+		return;
+	}
+	player->setItem(Tags::PDITEM_WOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_FOOD, 10000.0f);
+	player->setItem(Tags::PDITEM_GOLD, 10000.0f);
+	Terrain& t = *server.terrain;
+	// the heights as loaded, to measure the ground before
+	const int verts = (t.width + 1) * (t.height + 1);
+	std::vector<float> loaded(verts);
+	for (int i = 0; i < verts; i++)
+		loaded[i] = t.heightSteps(i) * t.scale;
+	// the spread of a farm's FLATTEN tile corners, now or as loaded
+	auto spread = [&](const Footprint* fp, const Vector3& at, float rotY, bool asLoaded) {
+		const auto rot = fp->rotateOrigin(rotY);
+		const int ox = (int)((at.x - rot.first) / 5.0f), oz = (int)((at.z - rot.second) / 5.0f);
+		float lo = 1e9f, hi = -1e9f;
+		for (const auto& to : fp->tiles) {
+			if (!to.flatten)
+				continue;
+			const auto [rx, rz] = to.rotate(rotY);
+			for (int dz = 0; dz <= 1; dz++)
+				for (int dx = 0; dx <= 1; dx++) {
+					const int vx = ox + rx + t.edge + dx, vz = oz + rz + t.edge + dz;
+					const float h = asLoaded ? loaded[vz * (t.width + 1) + vx] : t.getVertex(vx, vz);
+					lo = std::min(lo, h);
+					hi = std::max(hi, h);
+				}
+		}
+		return hi - lo;
+	};
+	auto farms = [&]() {
+		std::set<ServerGameObject*> found;
+		auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* child : children) {
+					// the foundation turns into its ground's kind on stampdown ("Fertile Farm Foundation")
+					if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && child->blueprint->name.find("Farm Foundation") != std::string::npos)
+						found.insert(child->dyncast<ServerGameObject>());
+					self(child, self);
+				}
+		};
+		walk(player, walk);
+		return found;
+	};
+	const std::set<ServerGameObject*> before = farms();
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	server.gameSet->commands[spawnFarmer].execute(manor, nullptr, Tags::ORDERASSIGNMODE_DO_LAST);
+	ServerGameObject* autoFarm = nullptr;
+	for (int step = 0; step * 20 < 120000 && !autoFarm; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		for (ServerGameObject* f : farms())
+			if (!before.count(f))
+				autoFarm = f;
+	}
+	if (!autoFarm) {
+		printf("AUTOFARM no farm after 120 s\n");
+		printf("AUTOFARM FAIL\n");
+		return;
+	}
+	const Footprint* autoFp = autoFarm->blueprint->footprint;
+	const float autoBefore = spread(autoFp, autoFarm->position, autoFarm->orientation.y, true), autoAfter = spread(autoFp, autoFarm->position, autoFarm->orientation.y, false);
+	printf("AUTOFARM auto %s %u at (%.1f, %.1f) t=%.1f: corners spread %.2f before, %.2f after; farm y %.2f, ground %.2f\n", autoFarm->blueprint->name.c_str(), autoFarm->id,
+		autoFarm->position.x, autoFarm->position.z, server.timeManager.currentTime, autoBefore, autoAfter, autoFarm->position.y,
+		t.getHeight(autoFarm->position.x, autoFarm->position.z));
+	// a farm placed by hand on the most uneven spot near the Manor that takes one
+	Vector3 best;
+	float bestSpread = -1.0f;
+	for (float z = manor->position.z - 80.0f; z <= manor->position.z + 80.0f; z += 5.0f)
+		for (float x = manor->position.x - 80.0f; x <= manor->position.x + 80.0f; x += 5.0f) {
+			const Vector3 at(std::floor(x / 5.0f) * 5.0f + 2.5f + farmBp->footprint->originX, 0.0f, std::floor(z / 5.0f) * 5.0f + 2.5f + farmBp->footprint->originZ);
+			if (StampdownPlan::getStampdownPlan(&server, player, farmBp, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+				continue;
+			const float s = spread(farmBp->footprint, at, 0.0f, false);
+			if (s > bestSpread) {
+				bestSpread = s;
+				best = at;
+			}
+		}
+	float handAfter = -1.0f;
+	if (bestSpread >= 0.0f) {
+		best.y = t.getHeight(best.x, best.z);
+		if (ServerGameObject* hand = server.stampdownObject(farmBp, player, best, Vector3(0, 0, 0), true, true))
+			handAfter = spread(hand->blueprint->footprint, hand->position, hand->orientation.y, false);
+	}
+	printf("AUTOFARM hand-placed farm at (%.1f, %.1f): corners spread %.2f before, %.2f after\n", best.x, best.z, bestSpread, handAfter);
+	const bool pass = handAfter >= 0.0f && autoAfter <= handAfter + 0.01f;
+	printf("AUTOFARM %s\n", pass ? "PASS" : "FAIL");
+	fflush(stdout);
+}
+
 // Placement rules (needs the game data), as WKB.exe's (StampdownPlan::getStampdownPlan), for a
 // human player on 4 Peaks: every tile of the map tried with a barracks (8 m limit) and a farm
 // (12 m, "Can Be Farmed On"). Prints "PLACE" lines: the count of each outcome, the steepest
@@ -9321,6 +9441,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_EnvironmentClock, "Environment clock: the debug's hour, season and sunset on a game whose environment has not started (an original's save)"},
 {Test_BloodDrip, "Drips: wkDrip nodes (a fall, a point, the defaults), the rhythm, forming, falling, splash and pool, the same every time"},
 {Test_WaypointFlags, "Waypoint flags: three queued move points stand three flags, two once the first is reached, none at the end; a new order forgets the queue"},
+{Test_AutoFarmLevelled, "Farmer's farm: the farm a trained farmer gets is levelled like one placed by hand"},
 };
 
 void LaunchTest()

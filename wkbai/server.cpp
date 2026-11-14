@@ -447,6 +447,8 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 // put back on the new ground (0x59c990 collects them, 0x51f8f0), and the building too.
 void Server::levelTerrainUnder(ServerGameObject* building)
 {
+	if (!building)
+		return;
 	const Footprint* fp = building->blueprint->footprint;
 	if (!terrain || !fp || building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 		return;
@@ -473,8 +475,12 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 		return;
 	const float target = building->position.y / terrain->scale;
 	std::vector<int> list(vertices.begin(), vertices.end());
-	for (int i : list)
+	float lowBefore = 1e9f, highBefore = -1e9f;
+	for (int i : list) {
+		lowBefore = std::min(lowBefore, terrain->heightSteps(i) * terrain->scale);
+		highBefore = std::max(highBefore, terrain->heightSteps(i) * terrain->scale);
 		terrain->setHeightSteps(i, target);
+	}
 	levelledVertices.insert(list.begin(), list.end());
 	{
 		const float steps = terrain->heightSteps(list[0]);
@@ -489,8 +495,8 @@ void Server::levelTerrainUnder(ServerGameObject* building)
 			sendToAll(packet);
 		}
 		if (getenv("WKB_TRACE_LEVEL"))
-			printf("LEVEL t=%.1f player %u %s at (%.0f,%.0f): %zu vertices to %.2f\n", timeManager.currentTime, building->getPlayer() ? building->getPlayer()->id : 0,
-				building->blueprint->name.c_str(), building->position.x, building->position.z, list.size(), steps * terrain->scale);
+			printf("LEVEL t=%.1f player %u %s at (%.0f,%.0f): %zu vertices from %.2f-%.2f to %.2f\n", timeManager.currentTime, building->getPlayer() ? building->getPlayer()->id : 0,
+				building->blueprint->name.c_str(), building->position.x, building->position.z, list.size(), lowBefore, highBefore, steps * terrain->scale);
 	}
 	if (tiles) {
 		const auto [tileWidth, tileHeight] = terrain->getNumPlayableTiles();

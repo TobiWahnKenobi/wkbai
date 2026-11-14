@@ -1844,6 +1844,8 @@ struct ActionCreateObject : Action {
 		if (!posori.found)
 			return;
 		ServerGameObject* obj = ctx->server->spawnObject(objbp, ctx->getSelf()->getPlayer(), posori.position, posori.rotation);
+		// levelled as a stamped-down building (see ObjectCreation::run: WKB.exe 0x513790)
+		ctx->server->levelTerrainUnder(obj);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		objbp = gs.readObjBlueprintPtr(gsf);
