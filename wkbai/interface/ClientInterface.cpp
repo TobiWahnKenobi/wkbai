@@ -36,6 +36,7 @@
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
 #include "../gfx/ChimneySmoke.h"
+#include "../gfx/BloodDrip.h"
 #include "EnvironmentView.h"
 #include "../TreeModels.h"
 #include "../settings.h"
@@ -3196,9 +3197,11 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	// Attachment points
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
-	// chimney smoke (drawn in the particle pass)
-	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+	// chimney smoke and drips (drawn in the particle pass)
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
 		ChimneySmoke::Add(obj->sceneEntity.model, obj->sceneEntity.transform, obj->id);
+		BloodDrip::Add(obj->sceneEntity.model, obj->sceneEntity.transform, obj->id);
+	}
 
 	// shadow
 	bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
@@ -5612,6 +5615,8 @@ void ClientInterface::iter()
 			dgfx->SetSoftParticles(false);
 			gfx->BeginParticles(); // (the state without them)
 		}
+		// the drips: centimetre drops, without the soft fade (over metres it would hide them)
+		BloodDrip::Draw(gfx, client->camera, client->timeManager.currentTime);
 	}
 
 	if (postGfx) {

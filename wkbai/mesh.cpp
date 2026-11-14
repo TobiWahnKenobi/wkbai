@@ -64,6 +64,7 @@ void Mesh::loadMesh3(const char* filename)
 	exactNormals.clear();
 	smokeEmitters.clear();
 	smokeDeclared = false;
+	dripEmitters.clear();
 	std::string sign = br.readString(4);
 	if (sign != "Mesh")
 		return;

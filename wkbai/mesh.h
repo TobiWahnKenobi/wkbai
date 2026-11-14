@@ -57,6 +57,18 @@ struct SmokeEmitter
 	static const char* whenName(When w);
 };
 
+// A drip (gfx/BloodDrip.cpp; docs/engine/gltf.md "Drips"): drops that form at a point of the
+// model, fall and splash on the surface below, at a slow irregular rhythm, all day. From a
+// glTF's "wkDrip" nodes (the Black Mass's blood from its funnel onto the altar).
+struct DripEmitter
+{
+	Vector3 position;              // where the drops form, in the model's space
+	Vector3 landing;               // where they land (straight below by default)
+	float rate = 0.5f;             // drops per second on average, 0.05-5 (each gap 0.5-1.5 times 1 / rate)
+	float size = 1.0f;             // the drops' size, 1 the default's (a drop about 6 cm across)
+	float colour[3] = { 0.42f, 0.02f, 0.025f }; // dark red (linear 0..1)
+};
+
 struct IndexTuple
 {
 	uint16_t vertex, normal, uv;
@@ -97,6 +109,8 @@ struct Mesh
 	// such node ("wkSmoke": false declares no smoke), and they replace the Mesh3's PS_Chimney points
 	std::vector<SmokeEmitter> smokeEmitters;
 	bool smokeDeclared = false;
+	// a glTF model's drips (its nodes with "wkDrip")
+	std::vector<DripEmitter> dripEmitters;
 
 	Vector3 aabbLow, aabbHigh;
 
