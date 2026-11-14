@@ -110,6 +110,39 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			gsf.advanceLine();
 			continue;
 		}
+		if (strtag == "IDEAL_TURN_RADIUS" || strtag == "MINIMUM_TURN_RADIUS" || strtag == "PREFERRED_SPACING") {
+			const float v = std::max(0.0f, gsf.nextFloat());
+			(strtag[0] == 'I' ? idealTurnRadius : strtag[0] == 'M' ? minTurnRadius : preferredSpacing) = v;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "PERPENDICULAR_TO_LANDSCAPE") {
+			perpendicularToLandscape = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "TRIGGER_SOUND_FROM_ANIMATION") {
+			const int anim = gameSet->animations.names.getIndex(gsf.nextString(true));
+			if (anim >= 0)
+				soundFromAnimations.push_back(anim);
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "WHEEL_ON_FACING") {
+			wheelOnFacing = gsf.nextInt() != 0;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "CREATE_INTENSITY_MAP") {
+			createsIntensityMaps.push_back(gsf.nextString(true));
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "START_APPLY_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING" || strtag == "APPLY_INTERMITTANT_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING") {
+			(strtag[0] == 'S' ? appliesIntensityMaps : intermittentIntensityMaps).push_back(gsf.nextString(true));
+			gsf.advanceLine();
+			continue;
+		}
 		if (strtag == "APPLY_INTENSITY_MAP_TO_PATHFINDING") {
 			if (gsf.nextString(true) == "Threat")
 				avoidsThreat = true;
@@ -117,7 +150,16 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			continue;
 		}
 		if (strtag == "UPDATE_INTENSITY_MAP") {
-			if (gsf.nextString(true) == "Threat" && gsf.nextString() == "ON_TILE_CHANGE") {
+			const std::string map = gsf.nextString(true), when = gsf.nextString();
+			if (when == "ON_SIGHTING") {
+				IntensityWriter w;
+				w.map = map;
+				w.radius = ReadValueDeterminer(gsf, *gameSet);
+				w.strength = ReadValueDeterminer(gsf, *gameSet);
+				if (w.radius && w.strength)
+					intensityWriters.push_back(w);
+			}
+			else if (map == "Threat" && when == "ON_TILE_CHANGE") {
 				std::unique_ptr<ValueDeterminer> radius(ReadValueDeterminer(gsf, *gameSet));
 				std::unique_ptr<ValueDeterminer> strength(ReadValueDeterminer(gsf, *gameSet));
 				// (constants in the shipped game set: radius 0, strength 5)

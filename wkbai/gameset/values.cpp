@@ -863,6 +863,12 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 	return false;
 }
 
+// (for the intensity maps)
+bool ObjectSeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameObject* player)
+{
+	return SeenByPlayer(ctx, obj, player);
+}
+
 struct ValueIsDiscovered : ValueDeterminer {
 	std::unique_ptr<ObjectFinder> fObjects, fPlayer;
 	// once seen, discovered for good (per player and object), for this server

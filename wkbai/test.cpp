@@ -8775,6 +8775,131 @@ void Test_BuildIdentity()
 	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
+// The smaller items as WKB.exe's (the RE repo's docs/re/combat-smaller-items.md): the sight scan
+// once a second, the "Dangerous Buildings" map and a scout's path round a tower seen, a wheeling
+// unit's arcs, the stop spacing by PREFERRED_SPACING
+void Test_SmallerItems()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* scoutBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Scout");
+	const GameObjBlueprint* towerBp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Watch Tower");
+	if (!player || !enemyPlayer || !scoutBp || !towerBp) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	server.timeManager.unpause();
+	auto run = [&](float seconds) {
+		const float until = server.timeManager.currentTime + seconds;
+		const uint64_t start = SDL_GetTicks();
+		while (server.timeManager.currentTime < until && SDL_GetTicks() - start < (uint64_t)(seconds * 4000.0f)) {
+			server.tick();
+			SDL_Delay(5);
+		}
+	};
+	// 1. the sight scan: each receiver about once a second
+	{
+		extern uint64_t g_sightCalls;
+		int receivers = 0;
+		for (const auto& [id, o] : server.idmap)
+			if (o->blueprint->receiveSightRangeEvents && !(o->flags & CommonGameObject::fTerminated))
+				receivers++;
+		run(1.0f);
+		const uint64_t before = g_sightCalls;
+		const float t0 = server.timeManager.currentTime;
+		run(5.0f);
+		const float secs = server.timeManager.currentTime - t0;
+		const double perSecond = (double)(g_sightCalls - before) / std::max(1, receivers) / std::max(0.1f, secs);
+		printf("UNITTEST sight scans: %d receivers, %.2f scans each a second over %.1f s\n", receivers, perSecond, secs);
+		check(receivers > 0 && perSecond > 0.2 && perSecond < 1.4, "each unit is scanned about once a second (at most; some skip it by their conditions)");
+	}
+	// 2. "Dangerous Buildings": the player's map (as the Kingmaker AI's), a tower of the enemy's
+	// seen by its scout, the scout's path round it
+	{
+		const_cast<GameObjBlueprint*>(player->blueprint)->createsIntensityMaps.push_back("Dangerous Buildings");
+		ServerGameObject* scout = server.spawnObject(scoutBp, player, {}, {});
+		// open ground: the scout's tile and 120 m east of it free
+		Vector3 from = player->position;
+		for (const auto& [id, o] : server.idmap)
+			if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() == player) { from = o->position; break; }
+		from = MovementController::nearestValidPosition(scoutBp, from);
+		scout->setPosition(from);
+		const Vector3 to = MovementController::nearestValidPosition(scoutBp, from + Vector3(120.0f, 0, 0));
+		const Vector3 mid = (from + to) * 0.5f;
+		ServerGameObject* tower = server.spawnObject(towerBp, enemyPlayer, mid, {});
+		tower->setPosition(mid);
+		run(2.5f); // seen; the maps made again
+		const std::vector<int32_t>* cost = server.intensityMaps.costFor(scout);
+		const auto [w, h] = server.terrain->getNumPlayableTiles();
+		const int tx = (int)(mid.x / 5.0f), tz = (int)(mid.z / 5.0f);
+		const int here = cost ? (*cost)[(size_t)tz * w + tx] : 0;
+		printf("UNITTEST Dangerous Buildings: the tower's tile costs %d more for the scout\n", here);
+		check(cost && here > 0, "a tower seen marks the player's Dangerous Buildings map, which the scout applies");
+		scout->movementController.startMovement(to);
+		run(0.5f);
+		float nearest = 1e9f;
+		const auto& nodes = scout->movementController.m_pathNodes;
+		for (size_t i = 0; i + 1 < nodes.size(); i++) {
+			// the nearest the leg between two nodes comes to the tower
+			const Vector3 a = nodes[i + 1], b = nodes[i];
+			const Vector3 ab = b - a;
+			const float l2 = std::max(1e-4f, ab.sqlen2xz());
+			const float t = std::clamp(((mid - a).x * ab.x + (mid - a).z * ab.z) / l2, 0.0f, 1.0f);
+			nearest = std::min(nearest, (a + ab * t - mid).len2xz());
+		}
+		printf("UNITTEST the scout's path: %zu nodes, at least %.1f m from the tower\n", nodes.size(), nearest);
+		check(nodes.size() > 2 && nearest > 10.0f, "the scout's path goes round the tower");
+		scout->movementController.stopMovement();
+		// another player's units without the map: none
+		check(server.intensityMaps.costFor(tower) == nullptr, "a type that applies no map has no extra cost");
+	}
+	// 3. turning: a wheeling type with a turn radius of 3 m or more walks an arc to a point behind it
+	{
+		const GameObjBlueprint* wheeler = nullptr;
+		const auto& characters = gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER];
+		for (size_t i = 0; i < characters.size() && !wheeler; i++)
+			if (characters[i].wheelOnFacing && characters[i].idealTurnRadius >= 3.0f && !characters[i].canWalkOnWater())
+				wheeler = &characters[i];
+		if (!wheeler)
+			check(false, "a wheeling type with a large turn radius in the game set");
+		else {
+			ServerGameObject* unit = server.spawnObject(wheeler, player, {}, {});
+			const Vector3 at = MovementController::nearestValidPosition(wheeler, player->position + Vector3(0, 0, 40.0f));
+			unit->setPosition(at);
+			unit->setOrientation(Vector3(0, 0, 0)); // facing north (-z)
+			const Vector3 behind = MovementController::nearestValidPosition(wheeler, at + Vector3(0, 0, 30.0f));
+			unit->movementController.startMovement(behind);
+			run(0.2f);
+			const size_t n = unit->movementController.m_pathNodes.size();
+			printf("UNITTEST %s (turn radius %.1f): %zu nodes to a point 30 m behind it\n", wheeler->name.c_str(), wheeler->idealTurnRadius, n);
+			check(n > 3, "it turns on an arc instead of on the spot");
+			unit->movementController.stopMovement();
+		}
+	}
+	// 4. stop spacing: two units sent to the same rally point keep their PREFERRED_SPACING apart
+	{
+		ServerGameObject* a = server.spawnObject(scoutBp, player, {}, {});
+		ServerGameObject* b = server.spawnObject(scoutBp, player, {}, {});
+		const Vector3 place = MovementController::nearestValidPosition(scoutBp, player->position + Vector3(-60.0f, 0, 0));
+		a->setPosition(FreeStandingSpot(a, place));
+		const Vector3 sb = FreeStandingSpot(b, place);
+		const float need = 2.0f * scoutBp->preferredSpacing;
+		printf("UNITTEST spacing: the second scout's spot %.2f m from the first (spacing %.2f each)\n", (sb - a->position).len2xz(), scoutBp->preferredSpacing);
+		check((sb - a->position).len2xz() >= need - 0.01f, "the second keeps both spacings from the first");
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
@@ -8854,6 +8979,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
+{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing"},
 };
 
 void LaunchTest()

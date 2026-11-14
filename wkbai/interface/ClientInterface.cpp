@@ -4678,6 +4678,12 @@ void ClientInterface::iter()
 								cs.isCurrentOrder = cmd->order->bpid == sel->reportedCurrentOrder;
 								if (auto it = sel->buildingOrderCountMap.find(cmd->order->bpid); it != sel->buildingOrderCountMap.end())
 									cs.count = it->second;
+								// an upgrade's spawn button counts the spawns of the order it replaces too
+								if (const int old = cmd->order->replacesSpawnOrder; old >= 0) {
+									cs.isCurrentOrder = cs.isCurrentOrder || old == sel->reportedCurrentOrder;
+									if (auto it = sel->buildingOrderCountMap.find(old); it != sel->buildingOrderCountMap.end())
+										cs.count += it->second;
+								}
 							}
 							cmdStates.push_back(std::move(cs));
 							//cmdStates.push_back(lua.create_table_with(

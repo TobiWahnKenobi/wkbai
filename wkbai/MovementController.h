@@ -72,6 +72,12 @@ struct MovementController {
 	// order they were asked for: the same game with any number of threads.
 	static void runPathSearches();
 
+	// counts the walks started on a path found (a task's MOVEMENT_STARTED_SEQUENCE runs on each)
+	uint32_t m_walksStarted = 0;
+	// The nearest tile centre to `from` where `boat` can stand, in the boat's own terrain region, next
+	// to a tile `land` can stand on (PATHFIND_TO_SHORE); `from` itself when none within maxRadius
+	static Vector3 nearestShorePosition(const GameObjBlueprint* boat, const GameObjBlueprint* land, const Vector3& boatAt, const Vector3& from, int maxRadius = 40);
+
 	bool m_started = false;
 	bool m_pending = false;
 	bool m_searchFailed = false;

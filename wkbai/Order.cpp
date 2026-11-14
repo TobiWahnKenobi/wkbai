@@ -568,11 +568,12 @@ void AnimationLoopTrigger::update()
 	ServerGameObject* obj = this->task->order->gameObject;
 	Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant);
 	if (obj->animSynchronizedTask != -1) {
-		// TODO: We might need to prevent the trigger to happen twice if the task is not terminated in the trigger sequence
-		// The Construction Animation tasks do terminate the order, so it's not "that" important.
 		SrvScriptContext ctx{ Server::instance, obj };
 		float frac = Server::instance->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
-		if (frac >= 1.0f) {
+		if (frac < 1.0f)
+			synchFired = false;
+		else if (!synchFired) {
+			synchFired = true;
 			this->blueprint->actions.run(this->task->order->gameObject);
 		}
 	}
@@ -1323,6 +1324,15 @@ void ObjectReferenceTask::onUpdate()
 			}
 			goal = pathPoints[pathStep];
 		}
+		// PATHFIND_TO_SHORE: to the shore nearest to the target (found again once it has moved 5 m)
+		if (blueprint->pathfindToShore && !following && !onAttack && !onPath) {
+			if (!shoreSet || (target->position - shoreFor).sqlen2xz() > 25.0f) {
+				shoreGoal = MovementController::nearestShorePosition(go->blueprint, target->blueprint, go->position, target->position);
+				shoreFor = target->position;
+				shoreSet = true;
+			}
+			goal = shoreGoal;
+		}
 		float prox = this->proximity;
 		// a character's or formation's size counts (WKB.exe 0x50d9d0: the proximity plus a quarter
 		// of the target's box, maxX + maxZ; here half its BOUNDING_VOLUME sphere): big units (Michael,
@@ -1352,7 +1362,23 @@ void ObjectReferenceTask::onUpdate()
 				// (its last tile next to the footprint was taken), within one tile more
 				? (edge < reach || (!go->movementController.isMoving() && edge < reach + 5.0f))
 				: (go->position - destination).sqlen2xz() < prox * prox));
-		const bool arrived = loadedArrived || measured;
+		// a vessel at the shore point is there (it can't come nearer to a boarder on land)
+		const bool atShore = blueprint->pathfindToShore && shoreSet && !go->movementController.isMoving()
+			&& (go->position - shoreGoal).sqlen2xz() < 25.0f;
+		const bool arrived = loadedArrived || measured || atShore;
+		// MOVEMENT_STARTED_SEQUENCE: on each walk started on a path found
+		{
+			const uint32_t walks = go->movementController.m_walksStarted;
+			if (!walksSeenSet) {
+				walksSeenSet = true;
+				walksSeen = walks;
+			}
+			else if (walks != walksSeen) {
+				walksSeen = walks;
+				if (!arrived && go->movementController.isMoving())
+					blueprint->movementStartedSequence.run(order->gameObject);
+			}
+		}
 		if (arrived) {
 			this->startTriggers();
 			if (go->movementController.isMoving())
@@ -1550,9 +1576,12 @@ void SpawnTask::onStart()
 // to its rally point gather around it instead of on top of each other.
 Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 {
-	constexpr float SPACING = 3.0f;
+	// the room each keeps (PREFERRED_SPACING, WKB.exe 0x436120: free where |p - q| >= r + r_q);
+	// rings as far apart as two of the unit's
+	const float own = unit->blueprint->preferredSpacing;
+	const float SPACING = std::max(1.5f, 2.0f * own);
 	constexpr int RINGS = 10;
-	std::vector<Vector3> taken;
+	std::vector<std::pair<Vector3, float>> taken;
 	NNSearch nns;
 	nns.start(Server::instance, place, SPACING * RINGS + 40.0f);
 	while (CommonGameObject* o = nns.next()) {
@@ -1561,15 +1590,15 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 		if (other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
 			continue;
 		if (other->movementController.isMoving())
-			taken.push_back(other->movementController.getDestination());
+			taken.emplace_back(other->movementController.getDestination(), other->blueprint->preferredSpacing);
 		else
-			taken.push_back(other->position);
+			taken.emplace_back(other->position, other->blueprint->preferredSpacing);
 	}
 	auto isFree = [&](const Vector3& spot) {
 		if (MovementController::isTileBlocked(unit->blueprint, (int)(spot.x / 5.0f), (int)(spot.z / 5.0f)))
 			return false;
-		for (const Vector3& t : taken)
-			if ((t - spot).sqlen2xz() < SPACING * SPACING * 0.8f)
+		for (const auto& [t, r] : taken)
+			if ((t - spot).sqlen2xz() < (own + r) * (own + r))
 				return false;
 		return true;
 	};

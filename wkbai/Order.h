@@ -145,6 +145,12 @@ struct MoveTask : Task {
 
 struct ObjectReferenceTask : Task {
 	float wallCheckAt = 0.0f; // the next "Attack Wall Target" look (once per failed approach)
+	// MOVEMENT_STARTED_SEQUENCE: the unit's walks started when it last looked
+	uint32_t walksSeen = 0;
+	bool walksSeenSet = false;
+	// PATHFIND_TO_SHORE: the shore point and where the target was when it was found
+	Vector3 shoreGoal, shoreFor;
+	bool shoreSet = false;
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;
@@ -195,6 +201,9 @@ struct TimerTrigger : Trigger {
 
 struct AnimationLoopTrigger : Trigger {
 	float referenceTime = 0.0f;
+	// a synchronised animation (SYNCH_ANIMATION_TO_FRACTION): fired when its fraction reaches 1,
+	// once, as WKB.exe's 0x4fc820 fires once per loop wrap (again only after it went below 1)
+	bool synchFired = false;
 	using Trigger::Trigger;
 	void init() override;
 	void update() override;

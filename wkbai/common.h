@@ -43,6 +43,10 @@ struct CommonGameObject {
 	std::map<std::pair<int, int>, float> indexedItems;
 
 	Vector3 position, orientation, scale = Vector3(1.0f, 1.0f, 1.0f);
+	// PERPENDICULAR_TO_LANDSCAPE types (siege engines, carts, the Behemoth, corpses): the ground's
+	// up there (the client sets it as they move; the server's objects stay upright)
+	Vector3 groundUp = Vector3(0.0f, 1.0f, 0.0f);
+	bool tilted = false;
 
 	int subtype = 0, appearance = 0;
 	int color = 0;
@@ -95,6 +99,24 @@ struct CommonGameObject {
 	CommonGameObject* getPlayer() const;
 
 	Matrix getWorldMatrix() const {
+		if (tilted && orientation.x == 0.0f && orientation.z == 0.0f) {
+			// turned around y, then laid on the ground: the rows are the model's axes in the world
+			// (as below: x = up x z, z = x x up), up the ground's
+			const float c = std::cos(-orientation.y), s = std::sin(-orientation.y);
+			const Vector3 z0(s, 0.0f, c), up = groundUp;
+			Vector3 x(up.y * z0.z - up.z * z0.y, up.z * z0.x - up.x * z0.z, up.x * z0.y - up.y * z0.x);
+			const float xl = std::sqrt(x.x * x.x + x.y * x.y + x.z * x.z);
+			if (xl > 1e-4f) {
+				x = x * (1.0f / xl);
+				const Vector3 z(x.y * up.z - x.z * up.y, x.z * up.x - x.x * up.z, x.x * up.y - x.y * up.x);
+				Matrix m = Matrix::getZeroMatrix();
+				m.m[0][0] = scale.x * x.x; m.m[0][1] = scale.x * x.y; m.m[0][2] = scale.x * x.z;
+				m.m[1][0] = scale.y * up.x; m.m[1][1] = scale.y * up.y; m.m[1][2] = scale.y * up.z;
+				m.m[2][0] = scale.z * z.x; m.m[2][1] = scale.z * z.y; m.m[2][2] = scale.z * z.z;
+				m.m[3][0] = position.x; m.m[3][1] = position.y; m.m[3][2] = position.z; m.m[3][3] = 1.0f;
+				return m;
+			}
+		}
 		if (orientation.x == 0.0f && orientation.z == 0.0f) {
 			// Most objects only turn around y: scale * rotation y * translation, written out
 			// (drawn objects call this every frame)

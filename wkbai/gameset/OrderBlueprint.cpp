@@ -22,6 +22,8 @@ void OrderBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->classType = Tags::ORDTSKTYPE_tagDict.getTagID(gsf.nextString().c_str());
 		else if (tag == "USE_TASK")
 			this->tasks.push_back(gs.tasks.readPtr(gsf));
+		else if (tag == "REPLACES_SPAWN_ORDER")
+			replacesSpawnOrder = gs.orders.readIndex(gsf);
 		else if (tag == "FLAG") {
 			std::string flag = gsf.nextString();
 			if (flag == "CYCLE_ORDER")
@@ -129,6 +131,10 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			playAnimationOnce = true;
 		else if (tag == "MOVEMENT_COMPLETED_SEQUENCE")
 			movementCompletedSequence.init(gsf, gs, "END_MOVEMENT_COMPLETED_SEQUENCE");
+		else if (tag == "MOVEMENT_STARTED_SEQUENCE")
+			movementStartedSequence.init(gsf, gs, "END_MOVEMENT_STARTED_SEQUENCE");
+		else if (tag == "PATHFIND_TO_SHORE")
+			pathfindToShore = true;
 		else if (tag == "SYNCH_ANIMATION_TO_FRACTION")
 			synchAnimationToFraction = ReadValueDeterminer(gsf, gs);
 		else if (tag == "PLAY_ANIMATION_TO_FIT")

@@ -28,6 +28,9 @@ struct OrderBlueprint {
 	int category = -1;
 	bool cycleOrder = false;
 	bool cannotInterruptOrder = false;
+	// REPLACES_SPAWN_ORDER <order>: an upgrade's spawn order; its button also counts and shows the
+	// queued spawns of the order it replaces (WKB.exe 0x502d70, the spawn button only)
+	int replacesSpawnOrder = -1;
 	std::vector<int> preConditions;
 	std::vector<TaskBlueprint*> tasks;
 	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
@@ -70,6 +73,12 @@ struct TaskBlueprint {
 	bool playAnimationOnce = false;
 
 	ActionSequence movementCompletedSequence;
+	// MOVEMENT_STARTED_SEQUENCE: run when a path is found and the walk starts, again on every new
+	// path (WKB.exe 0x50b1b0, the mover's events 6, 8, 9); not when the unit is already in range
+	ActionSequence movementStartedSequence;
+	// PATHFIND_TO_SHORE: the walk goes to the nearest point where the unit's water meets land the
+	// target can walk on, nearest to the target (WKB.exe 0x6d6893: a vessel picking up a boarder)
+	bool pathfindToShore = false;
 
 	ValueDeterminer* synchAnimationToFraction = nullptr;
 	// PLAY_ANIMATION_TO_FIT <value>: the task's animation is played to last that many seconds (its

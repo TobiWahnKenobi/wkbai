@@ -235,6 +235,16 @@ void Server::loadSaveGame(const char * filename)
 		free(text);
 		UnitHistory::loadText(*this, all);
 	}
+	// the intensity maps as saved (<save>.intensity.txt): what the players had seen, the maps on
+	intensityMaps.clear();
+	if (const std::string side = std::string(filename) + ".intensity.txt"; FileExists(side.c_str())) {
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(side.c_str(), &text, &size);
+		std::string all(text, size);
+		free(text);
+		intensityMaps.loadText(this, all);
+	}
 	unitHistory.loaded(*this);
 	// the players whose game was over at the save (the clients had the game set's message: their
 	// lists are empty)
@@ -3606,6 +3616,18 @@ void Server::simulate()
 	// formations left with too few members, disbanded now that the tree isn't being walked
 	FormationController::flushDisbands();
 	g_simProfile.objects += toprocess.size();
+	// The sight scan as WKB.exe's (0x566c10): every object about once a second, round-robin, the
+	// objects spread evenly over the steps (here by a phase from the id: scanned when the second
+	// counted from its phase turns over)
+	const double sightNow = timeManager.currentTime, sightBefore = sightScanTime < 0.0 ? sightNow - 1.0 : sightScanTime;
+	sightScanTime = sightNow;
+	// the intensity maps once a second too
+	if (std::floor(sightNow) != std::floor(sightBefore))
+		intensityMaps.update(this);
+	auto sightDue = [&](uint32_t id) {
+		const double phase = std::fmod((double)id * 0.6180339887498949, 1.0);
+		return std::floor(sightNow + phase) != std::floor(sightBefore + phase);
+	};
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
 		if (!obj) continue;
@@ -3668,8 +3690,8 @@ void Server::simulate()
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);
 		}
 		moveTimer.reset();
-		// sight range events every 4th step (80 ms), the objects on different steps
-		if (obj->blueprint->receiveSightRangeEvents && (simStepIndex + obj->id) % 4 == 0) {
+		// sight range events once a second (above)
+		if (obj->blueprint->receiveSightRangeEvents && sightDue(obj->id)) {
 			SimTimer sightTimer(g_simProfile.sight);
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;

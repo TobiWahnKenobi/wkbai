@@ -73,6 +73,53 @@ void Client::tick()
 			Vector3 dir = obj->movement.getDirection();
 			obj->orientation.y = atan2f(dir.x, -dir.z);
 		}
+		// laid on the ground (PERPENDICULAR_TO_LANDSCAPE): the slope over 4 m round it, every frame
+		// (four heights; it follows walks, teleports and the ground's changes)
+		if (obj->blueprint->perpendicularToLandscape && terrain) {
+			const float x = obj->position.x, z = obj->position.z;
+			const float dx = terrain->getHeight(x - 2.0f, z) - terrain->getHeight(x + 2.0f, z);
+			const float dz = terrain->getHeight(x, z - 2.0f) - terrain->getHeight(x, z + 2.0f);
+			const float len = std::sqrt(dx * dx + 16.0f + dz * dz);
+			obj->groundUp = Vector3(dx / len, 4.0f / len, dz / len);
+			obj->tilted = true;
+		}
+		// TS_ attachment points of the animations that sound (TRIGGER_SOUND_FROM_ANIMATION)
+		if (!obj->blueprint->soundFromAnimations.empty() && timeManager.currentTime > timeManager.previousTime) {
+			const auto& anims = obj->blueprint->soundFromAnimations;
+			if (std::find(anims.begin(), anims.end(), obj->animationIndex) != anims.end())
+				if (Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant)) {
+					const float prevT = std::max(0.0f, (float)timeManager.previousTime - obj->animStartTime) * obj->animSpeed;
+					const float nextT = std::max(0.0f, (float)timeManager.currentTime - obj->animStartTime) * obj->animSpeed;
+					const float duration = model->getDuration();
+					if (!(obj->animClamped && prevT >= duration)) {
+						const uint32_t prevMs = (uint32_t)(prevT * 1000.0f), nextMs = (uint32_t)(std::min(nextT, obj->animClamped ? duration * 0.999f : nextT) * 1000.0f);
+						for (size_t i = 0; i < model->getNumAPs(); i++) {
+							const std::string& tag = model->getAPInfo(i).tag;
+							if (tag.size() <= 3 || _strnicmp(tag.c_str(), "TS_", 3) != 0)
+								continue;
+							const auto sw = model->hasAPFlagSwitched(i, prevMs, nextMs);
+							if (!sw.first || !sw.second)
+								continue;
+							// the sound tag: the point's name after TS_ (its trailing digits too, if no tag has them)
+							std::string name = tag.substr(3);
+							int soundTag = gameSet->soundTags.names.getIndex(name);
+							while (soundTag < 0 && !name.empty() && (std::isdigit((unsigned char)name.back()) || name.back() == '_')) {
+								name.pop_back();
+								soundTag = gameSet->soundTags.names.getIndex(name);
+							}
+							if (soundTag < 0)
+								continue;
+							std::string path; float refDist, maxDist;
+							std::tie(path, refDist, maxDist) = obj->blueprint->getSound(soundTag, obj->subtype);
+							if (!path.empty()) {
+								SoundPlayer::getSoundPlayer()->soundOwner = obj->id;
+								SoundPlayer::getSoundPlayer()->playSound3D("Warrior Kings Game Set\\Sounds\\" + path, obj->position, refDist, maxDist);
+								SoundPlayer::getSoundPlayer()->soundOwner = 0;
+							}
+						}
+					}
+				}
+		}
 		if (obj->trajectory.isMoving()) {
 			obj->updatePosition(obj->trajectory.getPosition(timeManager.currentTime));
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);

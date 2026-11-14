@@ -24,6 +24,7 @@
 #include "FormationController.h"
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
+#include "IntensityMaps.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -329,6 +330,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	ServerEnvironment environment;
 	// wkbai's unit history: who killed whom (UnitHistory.h)
 	UnitHistory unitHistory;
+	// the players' intensity maps (IntensityMaps.h)
+	IntensityMaps intensityMaps;
 	// the players whose game is over, by id: 1 won, 2 lost. The game set's REMOVE_MULTIPLAYER_PLAYER
 	// (Game Endings.cpp: the beaten one after "Alive Multiplayer Player" 0, the winners while still
 	// alive). The view's state only (that client lifts its fog of war and shows every player's
@@ -551,6 +554,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	struct SightEntry { float x, y, z; uint32_t id; ServerGameObject* obj; };
 	std::vector<std::vector<SightEntry>> sightBlocks;
 	int sightBlocksWidth = 0, sightBlocksHeight = 0;
+	// the game time of the previous step's sight scans (each object is scanned once a second)
+	double sightScanTime = -1.0;
 	void updateSightBlock(ServerGameObject* obj, bool removed = false);
 	void network();
 	// one client message (NETSRVMSG_*), as network() receives it

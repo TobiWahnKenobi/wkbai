@@ -187,12 +187,37 @@ struct GameObjBlueprint {
 	bool hasMaxGradient = false;
 	// BOUNDING_VOLUME SPHERE <r>: the type's size (metres)
 	float boundingRadius = 0.0f;
+	// Turning (WKB.exe smooths every path into arcs of IDEAL_TURN_RADIUS, shrunk down to
+	// MINIMUM_TURN_RADIUS where the legs are short; WHEEL_ON_FACING types also start on an arc from
+	// their facing): the defaults as the original's (0.5 m, 0)
+	float idealTurnRadius = 0.5f, minTurnRadius = 0.0f;
+	// PERPENDICULAR_TO_LANDSCAPE: drawn tilted to the ground (WKB.exe blueprint +0x60; its tilt
+	// isn't traced, here the ground's slope over 4 m round the object)
+	bool perpendicularToLandscape = false;
+	// TRIGGER_SOUND_FROM_ANIMATION <animation>: while it plays, each TS_<tag> attachment point
+	// switching on plays the sound tag <tag> from the type's MAP_SOUND_TAGs (WKB.exe 0x52c860)
+	std::vector<int> soundFromAnimations;
+	bool wheelOnFacing = false;
+	// PREFERRED_SPACING <r>: the room a stopped unit keeps round it (WKB.exe 0x436120: free where
+	// |p - q| >= r + r_q); the original's default 1.2 m
+	float preferredSpacing = 1.2f;
 	// The "Threat" intensity map: pikemen, spearmen, militia, the Undead Legion mark the tiles they
 	// stand on (UPDATE_INTENSITY_MAP "Threat" ON_TILE_CHANGE <radius m> <strength>), and the types
-	// with APPLY_INTENSITY_MAP_TO_PATHFINDING "Threat" (cavalry, heroes) route around the enemies'
+	// with APPLY_INTENSITY_MAP_TO_PATHFINDING "Threat" (cavalry, heroes) route around the enemies'.
+	// wkbai's own, off unless the setting "threatAvoidance" is on: WKB.exe has no
+	// APPLY_INTENSITY_MAP_TO_PATHFINDING keyword, and nobody creates a "Threat" map.
 	bool writesThreat = false;
 	float threatRadius = 0.0f, threatStrength = 0.0f;
 	bool avoidsThreat = false;
+	// The intensity maps as WKB.exe's (IntensityMaps.h): the maps a player creates
+	// (CREATE_INTENSITY_MAP), what an object stamps into the others' once seen
+	// (UPDATE_INTENSITY_MAP <map> ON_SIGHTING <radius m> <strength>), and the maps of its player a
+	// unit's paths avoid: always (START_APPLY_MY_PLAYERS_...) or once switched on
+	// (APPLY_INTERMITTANT_MY_PLAYERS_..., SWITCH_ON_INTENSITY_MAP)
+	struct IntensityWriter { std::string map; ValueDeterminer* radius = nullptr; ValueDeterminer* strength = nullptr; };
+	std::vector<std::string> createsIntensityMaps;
+	std::vector<IntensityWriter> intensityWriters;
+	std::vector<std::string> appliesIntensityMaps, intermittentIntensityMaps;
 	std::vector<ObjectFinder*> spritesWhenSelectedFor;
 
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);

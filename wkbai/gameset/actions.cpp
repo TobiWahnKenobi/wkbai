@@ -592,6 +592,21 @@ struct ActionConvertTo : Action {
 	}
 };
 
+// SWITCH_ON_INTENSITY_MAP "<map>" <finder>: the units' paths avoid their player's map from now on,
+// for those whose type allows it (APPLY_INTERMITTANT_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING)
+struct ActionSwitchOnIntensityMap : Action {
+	std::string map;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->intensityMaps.switchOn(obj, map);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		map = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
 struct ActionNop : Action {
 	virtual void run(SrvScriptContext* ctx) override {}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {}
@@ -2133,7 +2148,7 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(0); break;
 	case Tags::ACTION_UNLOCK_LEVEL: action = new ActionUnlockLevel; break;
 		// Below are ignored actions (that should not affect gameplay very much)
-	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
+	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP: action = new ActionSwitchOnIntensityMap; break;
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
 	case Tags::ACTION_LOCK_TIME:
 	case Tags::ACTION_UNLOCK_TIME:
