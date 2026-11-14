@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../Model.h"
+#include "GameObjBlueprint.h"
 #include "values.h"
 #include "gameset.h"
 #include "../util/GSFileParser.h"
@@ -287,6 +289,8 @@ struct ValueObjectType : ValueDeterminer {
 
 struct ValueDistanceBetween : ValueDeterminer {
 	bool takeHorizontal, takeVertical;
+	// DISTANCE_BETWEEN_INCLUDING_RADIUS: less both objects' sizes (BOUNDING_VOLUME), not below 0
+	bool includeRadius = false;
 	std::unique_ptr<ObjectFinder> fnd1, fnd2;
 	Vector3 centre(const ObjectFinderResult& vec) {
 		if (vec.empty()) return {};
@@ -296,10 +300,15 @@ struct ValueDistanceBetween : ValueDeterminer {
 		return sum / (float)vec.size();
 	}
 	virtual float eval(ScriptContext* ctx) override {
-		Vector3 v = centre(fnd1->eval(ctx)) - centre(fnd2->eval(ctx));
+		const auto a = fnd1->eval(ctx), b = fnd2->eval(ctx);
+		Vector3 v = centre(a) - centre(b);
 		float dist = 0.0f;
 		if (takeHorizontal) dist += v.x * v.x + v.z * v.z;
 		if (takeVertical) dist += v.y * v.y;
+		if (includeRadius) {
+			auto radius = [](const ObjectFinderResult& vec) { return vec.empty() ? 0.0f : vec[0]->blueprint->boundingRadius; };
+			return std::max(0.0f, std::sqrt(dist) - radius(a) - radius(b));
+		}
 		return std::sqrt(dist);
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
@@ -477,33 +486,41 @@ struct ValueHasDirectLineOfSightTo : ValueDeterminer {
 		if (!targetObj)
 			return 0.0f;
 
+		// As WKB.exe's VD_Has_Direct_Line_Of_Sight_To (0x460930): from the firing point to the
+		// target's position raised by its full height (0x5c1ea0; here its model's), blocked by the
+		// ground itself (sampled along the line every metre, 0x60f900's segment test) and by the
+		// buildings on the tiles it crosses but those missiles pass (IGNORE_ALL_MISSILE_COLLISION),
+		// the shooter's, the target and what the shooter stands in
 		Vector3 startPos = pos->eval(ctx).position;
-		Vector3 endPos = targetObj->position + Vector3(0, 2, 0);
-		Vector3 dir = (endPos - startPos).normal();
-		
+		float height = 2.0f;
+		if (Model* model = targetObj->blueprint->getModel(targetObj->subtype, targetObj->appearance, targetObj->animationIndex, targetObj->animationVariant)) {
+			const Vector3 centre = model->getSphereCenter().transform(targetObj->getWorldMatrix());
+			height = std::max(1.0f, 2.0f * (centre.y - targetObj->position.y));
+		}
+		Vector3 endPos = targetObj->position + Vector3(0, height, 0);
+
 		auto* terrain = ctx->gameState->terrain;
 		auto [trnWidth, trnHeight] = terrain->getNumPlayableTiles();
+		const CommonGameObject* container = sourceObj ? sourceObj->parent : nullptr;
+
+		// the ground
+		const Vector3 line = endPos - startPos;
+		const float len = line.len3();
+		const int samples = std::max(1, (int)std::ceil(len));
+		for (int i = 1; i < samples; i++) {
+			const Vector3 p = startPos + line * ((float)i / samples);
+			if (p.y < terrain->getHeight(p.x, p.z))
+				return 0.0f;
+		}
 
 		auto pred = [&](Pathfinding::PFPos pos) {
 			if (!(pos.x >= 0 && pos.x < trnWidth && pos.z >= 0 && pos.z < trnHeight))
 				return true;
-
 			const auto& tile = ctx->gameState->tiles[pos.z * trnWidth + pos.x];
 			const auto* owningBuilding = tile.building.getFrom(ctx->gameState);
-			if (owningBuilding && owningBuilding != sourceObj && owningBuilding != targetObj && !tile.buildingPassable)
-				return true;
-
-			const float h1 = terrain->getVertex(pos.x + terrain->edge, pos.z + terrain->edge);
-			const float h2 = terrain->getVertex(pos.x + terrain->edge + 1, pos.z + terrain->edge);
-			const float h3 = terrain->getVertex(pos.x + terrain->edge + 1, pos.z + terrain->edge + 1);
-			const float h4 = terrain->getVertex(pos.x + terrain->edge, pos.z + terrain->edge + 1);
-			const float tileHeight = std::min({ h1,h2,h3,h4 });
-			Vector3 testPos = startPos + dir * dir.dot(Vector3(pos.x * 5.0f + 2.5f, tileHeight, pos.z * 5.0f + 2.5f) - startPos);
-			if (testPos.y < tileHeight)
-				return true;
-
-			return false;
-			};
+			return owningBuilding && owningBuilding != sourceObj && owningBuilding != targetObj && owningBuilding != container
+				&& !tile.buildingPassable && !owningBuilding->blueprint->ignoreAllMissileCollision;
+		};
 
 		auto intersectingTile = Pathfinding::SegmentTraversal(startPos.x / 5.0f, startPos.z / 5.0f, endPos.x / 5.0f, endPos.z / 5.0f, pred);
 		return !intersectingTile.has_value();
@@ -1682,7 +1699,7 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 	case Tags::VALUE_SAME_PLAYER: vd = new ValueSamePlayer; break;
 	case Tags::VALUE_OBJECT_TYPE: vd = new ValueObjectType; break;
 	case Tags::VALUE_DISTANCE_BETWEEN: vd = new ValueDistanceBetween; break;
-	case Tags::VALUE_DISTANCE_BETWEEN_INCLUDING_RADIUS: vd = new ValueDistanceBetween; break; // TODO
+	case Tags::VALUE_DISTANCE_BETWEEN_INCLUDING_RADIUS: { auto* d = new ValueDistanceBetween; d->includeRadius = true; vd = d; break; }
 	case Tags::VALUE_VALUE_TAG_INTERPRETATION: vd = new ValueValueTagInterpretation; break;
 	case Tags::VALUE_DIPLOMATIC_STATUS_AT_LEAST: vd = new ValueDiplomaticStatusAtLeast; break;
 	case Tags::VALUE_ARE_ASSOCIATED: vd = new ValueAreAssociated; break;
