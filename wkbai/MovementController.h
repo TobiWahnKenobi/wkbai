@@ -65,6 +65,15 @@ struct MovementController {
 	// The nearest tile centre around a position where the object can stand (searching up to
 	// maxRadius tiles out); the position itself when none is found
 	static Vector3 nearestValidPosition(const GameObjBlueprint* blueprint, const Vector3& position, int maxRadius = 32);
+	// NEAREST_VALID_POSITION_FOR as WKB.exe's (0x4a80b0 -> 0x55f6e0): the point itself, else rings
+	// 2 x (PREFERRED_SPACING + 0.05) apart round it, both sides alternately from `facing` (radians,
+	// as the position's: IN_FRONT_OF's object's); a spot needs ground the object can stand on, room
+	// for its spacing from the other characters' and, if the point's own tile is walkable, a
+	// straight line from the point. At the ground's height (no walls to stand on).
+	static Vector3 nearestValidSpot(ServerGameObject* object, const Vector3& position, float facing);
+	// a character walking into another stopped there (updateMovement); the task takes it as there
+	// (true once, read)
+	bool takeContactArrived() { const bool a = m_contactArrived; m_contactArrived = false; return a; }
 
 	// Runs the step's queued searches (Server::simulate, at its end; server thread): the ground
 	// caches filled for every class first, then the searches on worker threads ("pathThreads" in
@@ -72,6 +81,9 @@ struct MovementController {
 	// order they were asked for: the same game with any number of threads.
 	static void runPathSearches();
 
+	// Unit contacts (WKB.exe's collision session, 0x4378f0: a moving unit's leg is cut where its
+	// BOUNDING_VOLUME touches another's; no pushing, no sliding): whether the walk ended at one
+	bool m_contactArrived = false;
 	// counts the walks started on a path found (a task's MOVEMENT_STARTED_SEQUENCE runs on each)
 	uint32_t m_walksStarted = 0;
 	// The nearest tile centre to `from` where `boat` can stand, in the boat's own terrain region, next

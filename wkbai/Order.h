@@ -45,6 +45,8 @@ struct Order {
 	std::vector<std::unique_ptr<Task>> tasks;
 	int nextTaskId = 0;
 	int currentTask = -1;
+	// a new order waits behind this one (an uninterruptible loop): it ends with its running task
+	bool finishAfterTask = false;
 
 	Order(int id, const OrderBlueprint *blueprint, ServerGameObject *gameObject) : gameObject(gameObject), id(id), blueprint(blueprint) {}
 
@@ -201,6 +203,9 @@ struct TimerTrigger : Trigger {
 
 struct AnimationLoopTrigger : Trigger {
 	float referenceTime = 0.0f;
+	// UNINTERRUPTIBLE_ANIMATION_LOOP (WKB.exe 0x4fca00 with flag 0): while its task's order runs, a
+	// new order that would replace it waits behind it (OrderConfiguration::assignOrder)
+	bool uninterruptible = false;
 	// a synchronised animation (SYNCH_ANIMATION_TO_FRACTION): fired when its fraction reaches 1,
 	// once, as WKB.exe's 0x4fc820 fires once per loop wrap (again only after it went below 1)
 	bool synchFired = false;

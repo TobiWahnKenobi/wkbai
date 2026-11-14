@@ -113,6 +113,12 @@ Task * Order::getCurrentTask()
 
 void Order::advanceToNextTask()
 {
+	// an order another waits behind (an uninterruptible loop's): it ends with its running task
+	// instead of going on to the next or cycling (WKB.exe 0x504989)
+	if (finishAfterTask) {
+		terminate();
+		return;
+	}
 	currentTask = (currentTask + 1) % tasks.size();
 	// a patrol: round again, to its next point
 	if (currentTask == 0 && patrolPoints.size() >= 2) {
@@ -136,8 +142,11 @@ Task::Task(int id, const TaskBlueprint * blueprint, Order * order) : order(order
 			trigger = std::make_unique<TimerTrigger>(this, &trigbp);
 		else if (trigbp.type == Tags::TASKTRIGGER_ANIMATION_LOOP)
 			trigger = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
-		else if (trigbp.type == Tags::TASKTRIGGER_UNINTERRUPTIBLE_ANIMATION_LOOP)
-			trigger = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
+		else if (trigbp.type == Tags::TASKTRIGGER_UNINTERRUPTIBLE_ANIMATION_LOOP) {
+			auto loop = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
+			loop->uninterruptible = true;
+			trigger = std::move(loop);
+		}
 		else if (trigbp.type == Tags::TASKTRIGGER_ATTACHMENT_POINT)
 			trigger = std::make_unique<AttachmentPointTrigger>(this, &trigbp);
 		else
@@ -410,9 +419,25 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
-	if (Order* currentOrder = getCurrentOrder()) {
-		if (currentOrder->blueprint->cannotInterruptOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST)
+	// As WKB.exe's 0x562130: an order that would replace the current one (DO_FIRST, FORGET_EVERYTHING_ELSE)
+	// - is refused while the current order can't be interrupted (CANNOT_INTERRUPT_ORDER, 0x53fbd0);
+	// - waits behind it while one of its tasks plays an uninterruptible loop (the Rocket Launcher
+	//   limbering, the siege tower's climb, the explosive cart's fuse): it is put last, and the
+	//   current order ends with its running task;
+	// unless it overrides those (OVERRIDE_NON_INTERRUPTIBLE_ORDERS: the deaths)
+	if (Order* currentOrder = getCurrentOrder(); currentOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST
+		&& !orderBlueprint->overrideNonInterruptible) {
+		if (currentOrder->blueprint->cannotInterruptOrder)
 			return nullptr;
+		bool held = false;
+		for (const auto& task : currentOrder->tasks)
+			for (const auto& trigger : task->triggers)
+				if (auto* loop = dynamic_cast<const AnimationLoopTrigger*>(trigger.get()); loop && loop->uninterruptible)
+					held = true;
+		if (held) {
+			currentOrder->finishAfterTask = true;
+			assignMode = Tags::ORDERASSIGNMODE_DO_LAST;
+		}
 	}
 
 	// Check preconditions
@@ -931,8 +956,10 @@ void MoveTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
 	const Vector3& dest = this->target ? this->target->position : this->destination;
-	if ((go->position - dest).sqlen2xz() < 0.1f) {
+	// there, or as near as another unit in the way lets it (its walk ended at the contact)
+	if ((go->position - dest).sqlen2xz() < 0.1f || go->movementController.takeContactArrived()) {
 		terminate();
+		return;
 	}
 	// (a second between searches that found no way, as ObjectReferenceTask's; a search runs at
 	// the end of the step, and its unit is moving, pending, until then)

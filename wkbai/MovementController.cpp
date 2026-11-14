@@ -5,6 +5,7 @@
 #include "MovementController.h"
 #include "server.h"
 #include "Pathfinding.h"
+#include "NNSearch.h"
 #include "terrain.h"
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
@@ -419,6 +420,58 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 	return false;
 }
 
+Vector3 MovementController::nearestValidSpot(ServerGameObject* object, const Vector3& position, float facing)
+{
+	const GameObjBlueprint* bp = object->blueprint;
+	const Server* server = Server::instance;
+	const Terrain* trn = server ? server->terrain : nullptr;
+	if (!trn)
+		return position;
+	const float spacing = bp->preferredSpacing;
+	// the others' room: stopped characters where they stand, walking ones where they go
+	std::vector<std::pair<Vector3, float>> taken;
+	NNSearch nns;
+	nns.start(Server::instance, position, 60.0f);
+	while (CommonGameObject* o = nns.next()) {
+		ServerGameObject* other = o->dyncast<ServerGameObject>();
+		if (!other || other == object || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
+			continue;
+		taken.emplace_back(other->movementController.isMoving() ? other->movementController.getDestination() : other->position, other->blueprint->preferredSpacing);
+	}
+	const int px = (int)(position.x / 5.0f), pz = (int)(position.z / 5.0f);
+	const bool pointWalkable = !isTileBlocked(bp, px, pz);
+	auto valid = [&](const Vector3& p) {
+		const int tx = (int)std::floor(p.x / 5.0f), tz = (int)std::floor(p.z / 5.0f);
+		if (p.x < 0.0f || p.z < 0.0f || isTileBlocked(bp, tx, tz))
+			return false;
+		for (const auto& [q, rq] : taken)
+			if ((p - q).sqlen2xz() < (spacing + rq) * (spacing + rq))
+				return false;
+		if (pointWalkable && (tx != px || tz != pz)
+			&& Pathfinding::SegmentTraversal(position.x / 5.0f, position.z / 5.0f, p.x / 5.0f, p.z / 5.0f,
+				[&](Pathfinding::PFPos t) { return isTileBlocked(bp, t.x, t.z); }))
+			return false;
+		return true;
+	};
+	auto at = [&](Vector3 p) { p.y = trn->getHeight(p.x, p.z); return p; };
+	if (valid(position))
+		return at(position);
+	const float step = 2.0f * (spacing + 0.05f);
+	for (int ring = 1; ring * step <= 60.0f; ring++) {
+		const float radius = ring * step;
+		const int count = std::max(6, (int)(6.2831853f * radius / step));
+		// from straight ahead, both sides alternately
+		for (int i = 0; i < count; i++) {
+			const int k = (i + 1) / 2;
+			const float a = facing + (i % 2 ? 1.0f : -1.0f) * 6.2831853f * k / count;
+			const Vector3 p = position + Vector3(std::sin(a), 0.0f, -std::cos(a)) * radius;
+			if (valid(p))
+				return at(p);
+		}
+	}
+	return at(nearestValidPosition(bp, position));
+}
+
 Vector3 MovementController::nearestShorePosition(const GameObjBlueprint* boat, const GameObjBlueprint* land, const Vector3& boatAt, const Vector3& from, int maxRadius)
 {
 	const Server* server = Server::instance;
@@ -766,6 +819,7 @@ uint64_t g_pathfindingSearches = 0;
 
 Vector3 MovementController::startMovement(const Vector3& destination)
 {
+	m_contactArrived = false;
 	const uint64_t profileStart = SDL_GetPerformanceCounter();
 	struct ProfileEnd {
 		uint64_t start;
@@ -1221,10 +1275,75 @@ void MovementController::walkToNextNode()
 		m_pathNodes.clear();
 }
 
+// The character this walking one runs into, if any (WKB.exe's collision session cuts the leg at
+// the contact; the pair test isn't traced): another character with a BOUNDING_VOLUME, live, whose
+// sphere the walker's touches, ahead of it (within 70 degrees of where it walks). Not the walker's
+// task target (it is walked up to), nor a member of the walker's formation (the formation keeps its
+// own spacing). Two walking into each other: the one with the lower id goes on (neither would ever
+// move again).
+static ServerGameObject* ContactAhead(ServerGameObject* obj, const Vector3& towards)
+{
+	const float r = obj->blueprint->boundingRadius;
+	Vector3 dir = towards - obj->position;
+	dir.y = 0.0f;
+	const float dl = dir.len2xz();
+	if (dl < 0.01f)
+		return nullptr;
+	dir = dir * (1.0f / dl);
+	CommonGameObject* formation = obj->getParent();
+	if (formation && formation->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+		formation = nullptr;
+	const ServerGameObject* target = nullptr;
+	if (Order* order = obj->orderConfig.getCurrentOrder())
+		if (Task* task = order->getCurrentTask())
+			target = task->target.get();
+	NNSearch search;
+	search.start(Server::instance, obj->position, r + 3.5f);
+	while (CommonGameObject* c = search.next()) {
+		ServerGameObject* other = (ServerGameObject*)c;
+		if (other == obj || other == target || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
+			continue;
+		const float rb = other->blueprint->boundingRadius;
+		if (rb <= 0.0f || (formation && other->getParent() == formation))
+			continue;
+		Vector3 off = other->position - obj->position;
+		off.y = 0.0f;
+		const float d = off.len2xz();
+		if (d >= r + rb || d < 0.05f)
+			continue;
+		if (dir.x * off.x + dir.z * off.z < 0.34f * d)
+			continue; // not ahead
+		if (other->movementController.m_started && other->movement.isMoving() && other->id < obj->id) {
+			const Vector3 od = other->movement.getDirection();
+			if (od.x * -off.x + od.z * -off.z > 0.0f)
+				continue; // coming at us: it goes on, we do
+		}
+		return other;
+	}
+	return nullptr;
+}
+
 void MovementController::updateMovement()
 {
 	// check if Movement is done, if yes, go to next path node...
 	if (!m_started) return;
+	// Walking into another unit: WKB.exe cuts the walk where their BOUNDING_VOLUMEs touch. Here only
+	// where it matters and can't jam: a Move's last leg onto a unit standing on its destination ends at the
+	// contact, as arrived (the units stand side by side, not on top of each other). Mid-way contacts
+	// and the tasks' walks (work, attack, follow) pass: wkbai's paths and work spots aren't the
+	// original's, and stopping there jammed crowds and kept peasants from their work (test 30's
+	// economies starved, 46's arrivals halved).
+	if (m_pathNodes.size() == 2 && m_object->blueprint->boundingRadius > 0.0f && m_object->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		const Order* order = m_object->orderConfig.getCurrentOrder();
+		const Task* task = order ? const_cast<Order*>(order)->getCurrentTask() : nullptr;
+		if (task && task->blueprint->classType == Tags::ORDTSKTYPE_MOVE)
+			if (ServerGameObject* other = ContactAhead(m_object, m_pathNodes[0]); other && !other->movementController.isMoving()
+				&& (other->position - m_pathNodes[0]).len2xz() < m_object->blueprint->boundingRadius + other->blueprint->boundingRadius) {
+				endWalk();
+				m_contactArrived = true;
+				return;
+			}
+	}
 	if (!m_object->movement.isMoving() || (m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() < 0.01f) {
 		m_pathNodes.pop_back();
 		walkToNextNode();

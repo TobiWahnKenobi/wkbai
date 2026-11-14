@@ -5315,7 +5315,18 @@ void Test_MoveArrival()
 						return false;
 					if (formed && (!formation || (formation->position - goal).len2xz() > 3.0f))
 						return false;
-					return distToSpot(i) < 3.0f;
+					if (distToSpot(i) < 3.0f)
+						return true;
+					// or stopped where it touches a unit standing on its spot (WKB.exe's contacts: units
+					// don't stand on top of each other; the spots are 3 m apart, pikemen 4 m across)
+					ServerGameObject* u = army[i].get();
+					if (formed || u->movementController.isMoving())
+						return false;
+					for (int j = 0; j < units; j++)
+						if (j != i && !isDead(j) && (army[j]->position - spots[i]).len2xz() < u->blueprint->boundingRadius + army[j]->blueprint->boundingRadius
+							&& (u->position - army[j]->position).len2xz() < u->blueprint->boundingRadius + army[j]->blueprint->boundingRadius + 0.5f)
+							return true;
+					return false;
 				};
 				int arrived = 0, arrivalSecond = -1;
 				for (int s = 0; s < seconds; s++) {
@@ -8897,6 +8908,47 @@ void Test_SmallerItems()
 		printf("UNITTEST spacing: the second scout's spot %.2f m from the first (spacing %.2f each)\n", (sb - a->position).len2xz(), scoutBp->preferredSpacing);
 		check((sb - a->position).len2xz() >= need - 0.01f, "the second keeps both spacings from the first");
 	}
+	// 5. contacts (WKB.exe's collision session): a scout sent onto a standing one stops where their
+	// BOUNDING_VOLUMEs touch, and its Move ends there
+	{
+		const int move = gs.commands.names.getIndex("Move");
+		ServerGameObject* stander = server.spawnObject(scoutBp, player, {}, {});
+		ServerGameObject* walker = server.spawnObject(scoutBp, player, {}, {});
+		const Vector3 spot = MovementController::nearestValidPosition(scoutBp, player->position + Vector3(0, 0, -60.0f));
+		stander->setPosition(spot);
+		walker->setPosition(MovementController::nearestValidPosition(scoutBp, spot + Vector3(25.0f, 0, 0)));
+		gs.commands[move].execute(walker, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, spot);
+		run(15.0f);
+		const float d = (walker->position - stander->position).len2xz();
+		const float touch = scoutBp->boundingRadius * 2.0f;
+		printf("UNITTEST contact: the walker stopped %.2f m from the standing scout (touching at %.2f), its order %s, moving %d\n", d,
+			touch, walker->orderConfig.getCurrentOrder() ? "on" : "done", (int)walker->movementController.isMoving());
+		check(d >= touch - 0.3f && d < touch + 1.5f && !walker->movementController.isMoving(), "a unit walking onto another stops where they touch");
+		check(!walker->orderConfig.getCurrentOrder(), "its Move ends there");
+	}
+	// 6. an uninterruptible loop (the Rocket Launcher's limbering): a Move given meanwhile waits
+	// behind it; the launcher limbers, then moves
+	if (const GameObjBlueprint* rlBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Rocket Launcher")) {
+		const int limber = gs.commands.names.getIndex("Limber"), move = gs.commands.names.getIndex("Move");
+		ServerGameObject* rl = server.spawnObject(rlBp, player, {}, {});
+		const Vector3 at = MovementController::nearestValidPosition(rlBp, player->position + Vector3(40.0f, 0, 40.0f));
+		rl->setPosition(at);
+		run(0.5f);
+		gs.commands[limber].execute(rl, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, {});
+		run(1.0f);
+		const Vector3 goal = MovementController::nearestValidPosition(rlBp, at + Vector3(30.0f, 0, 0));
+		gs.commands[move].execute(rl, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, goal);
+		const size_t orders = rl->orderConfig.orders.size();
+		const Order* front = rl->orderConfig.getCurrentOrder();
+		const std::string frontName = front ? gs.orders.getString(front->blueprint) : "-";
+		printf("UNITTEST limbering: after the Move, %zu orders, the current %s\n", orders, frontName.c_str());
+		check(orders >= 2 && frontName == "Limber", "a Move during the limbering waits behind it");
+		run(12.0f);
+		printf("UNITTEST then: %s, %.1f m from where it limbered\n", rl->blueprint->name.c_str(), (rl->position - at).len2xz());
+		check(rl->blueprint->name == "Rocket Launcher Limbered" && (rl->position - at).len2xz() > 5.0f, "it limbers, then moves");
+	}
+	else
+		check(false, "the Rocket Launcher in the game set");
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
@@ -8979,7 +9031,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
-{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing"},
+{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, contacts, an uninterruptible loop"},
 };
 
 void LaunchTest()

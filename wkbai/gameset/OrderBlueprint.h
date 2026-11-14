@@ -28,6 +28,9 @@ struct OrderBlueprint {
 	int category = -1;
 	bool cycleOrder = false;
 	bool cannotInterruptOrder = false;
+	// FLAG OVERRIDE_NON_INTERRUPTIBLE_ORDERS (the deaths' orders): replaces even an order that
+	// can't be interrupted, or one whose task plays an uninterruptible loop (WKB.exe 0x562130)
+	bool overrideNonInterruptible = false;
 	// REPLACES_SPAWN_ORDER <order>: an upgrade's spawn order; its button also counts and shows the
 	// queued spawns of the order it replaces (WKB.exe 0x502d70, the spawn button only)
 	int replacesSpawnOrder = -1;

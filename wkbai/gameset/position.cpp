@@ -148,7 +148,7 @@ struct PDNearestValidPositionFor : PositionDeterminer {
 		if (!ctx->isServer())
 			return po;
 		if (CommonGameObject* obj = a->getFirst(ctx))
-			po.position = MovementController::nearestValidPosition(obj->blueprint, po.position);
+			po.position = MovementController::nearestValidSpot((ServerGameObject*)obj, po.position, po.rotation.y);
 		return po;
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {

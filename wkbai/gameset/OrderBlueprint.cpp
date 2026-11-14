@@ -30,6 +30,8 @@ void OrderBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 				cycleOrder = true;
 			else if (flag == "CANNOT_INTERRUPT_ORDER")
 				cannotInterruptOrder = true;
+			else if (flag == "OVERRIDE_NON_INTERRUPTIBLE_ORDERS")
+				overrideNonInterruptible = true;
 		}
 		else if (tag == "PRE_CONDITION")
 			preConditions.push_back(gs.equations.readIndex(gsf));
