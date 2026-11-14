@@ -72,6 +72,7 @@
 #include "interface/ChronicleNarrator.h"
 #include "interface/FogOfWar.h"
 #include "gfx/ChimneySmoke.h"
+#include "gfx/BloodDrip.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -3468,6 +3469,127 @@ void Test_ChimneySmoke()
 	}
 	printf("SMOKE all %d\n", all ? 1 : 0);
 	fflush(stdout);
+}
+
+// Drips (gfx/BloodDrip.cpp, docs/engine/gltf.md "Drips"): the glTF's wkDrip nodes (a fall, a "to"
+// point, the defaults), the drops' rhythm (gaps 0.5 to 1.5 times 1 / rate), forming, falling under
+// gravity, the splash and the pool, the same every time, few sprites. No game files.
+void Test_BloodDrip()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("DRIP %s %d\n", what, ok ? 1 : 0); all &= ok; };
+	auto closeTo = [](const Vector3& a, const Vector3& b) { return (a - b).sqlen3() < 1e-4f; };
+
+	const float pos[9] = { 0, 0, 0, 1, 0, 0, 0, 1, 0 };
+	std::string b64;
+	{
+		static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+		const uint8_t* bin = (const uint8_t*)pos;
+		const size_t n = sizeof(pos);
+		for (size_t i = 0; i < n; i += 3) {
+			uint32_t v = (uint32_t)bin[i] << 16;
+			int k = 1;
+			if (i + 1 < n) { v |= (uint32_t)bin[i + 1] << 8; k++; }
+			if (i + 2 < n) { v |= bin[i + 2]; k++; }
+			for (int j = 0; j < 4; j++)
+				b64 += j <= k ? t[(v >> (18 - 6 * j)) & 63] : '=';
+		}
+	}
+	// A: the defaults (true) at (1, 5, 2); B: under a parent moved by (10, 0, 0), a fall of 3.8 m,
+	// rate 0.5, size 1.5, a colour; C: "to" a point (glTF space) below and aside; D: false (none)
+	const nlohmann::json nodes = {
+		{ { "mesh", 0 } },
+		{ { "translation", { 1, 5, 2 } }, { "extras", { { "wkDrip", true } } } },
+		{ { "translation", { 10, 0, 0 } }, { "children", { 3 } } },
+		{ { "translation", { 0, 6, -2.4 } }, { "extras", { { "wkDrip", { { "fall", 3.8 }, { "rate", 0.5 }, { "size", 1.5 }, { "colour", { 0.5, 0.0, 0.1 } } } } } } },
+		{ { "translation", { 0, 4, 0 } }, { "extras", { { "wkDrip", { { "to", { 0.5, 1, 0 } } } } } } },
+		{ { "translation", { 0, 9, 0 } }, { "extras", { { "wkDrip", false } } } },
+	};
+	const nlohmann::json doc = { { "asset", { { "version", "2.0" } } },
+		{ "buffers", { { { "byteLength", sizeof(pos) }, { "uri", "data:application/octet-stream;base64," + b64 } } } },
+		{ "bufferViews", { { { "buffer", 0 }, { "byteOffset", 0 }, { "byteLength", sizeof(pos) } } } },
+		{ "accessors", { { { "bufferView", 0 }, { "componentType", 5126 }, { "count", 3 }, { "type", "VEC3" } } } },
+		{ "materials", { { { "extras", { { "wkTexture", "DripTest.tga" } } } } } },
+		{ "meshes", { { { "primitives", { { { "attributes", { { "POSITION", 0 } } }, { "material", 0 } } } } } } },
+		{ "nodes", nodes }, { "scenes", { { { "nodes", { 0, 1, 2, 4, 5 } } } } }, { "scene", 0 } };
+	const std::filesystem::path g = std::filesystem::temp_directory_path() / "wkbai-drip-test.gltf";
+	{ std::ofstream f(g, std::ios::binary); f << doc.dump(); }
+	Mesh m;
+	m.loadGltf(g.string().c_str());
+	check("emitters", m.dripEmitters.size() == 3 && m.smokeEmitters.empty() && !m.smokeDeclared);
+	if (m.dripEmitters.size() == 3) {
+		const DripEmitter &a = m.dripEmitters[0], &b = m.dripEmitters[1], &c = m.dripEmitters[2];
+		printf("DRIP emitters (%.2f %.2f %.2f)->(%.2f %.2f %.2f), (%.2f %.2f %.2f)->(%.2f %.2f %.2f) rate %.2f size %.1f, (%.2f %.2f %.2f)->(%.2f %.2f %.2f)\n",
+			a.position.x, a.position.y, a.position.z, a.landing.x, a.landing.y, a.landing.z, b.position.x, b.position.y, b.position.z,
+			b.landing.x, b.landing.y, b.landing.z, b.rate, b.size, c.position.x, c.position.y, c.position.z, c.landing.x, c.landing.y, c.landing.z);
+		check("default node", closeTo(a.position, Vector3(1, 5, -2)) && closeTo(a.landing, Vector3(1, 4, -2)) && a.rate == 0.5f && a.size == 1.0f
+			&& a.colour[0] > a.colour[1] && a.colour[0] < 0.5f);
+		check("child node and fall", closeTo(b.position, Vector3(10, 6, 2.4f)) && closeTo(b.landing, Vector3(10, 2.2f, 2.4f)) && b.rate == 0.5f
+			&& b.size == 1.5f && b.colour[0] == 0.5f && b.colour[2] == 0.1f);
+		check("to a point", closeTo(c.position, Vector3(0, 4, 0)) && closeTo(c.landing, Vector3(0.5f, 1, 0)));
+	}
+	std::filesystem::remove(g);
+
+	// the rhythm: one drop every 1 to 3 seconds at rate 0.5
+	DripEmitter e;
+	e.position = Vector3(0, 6, 0);
+	e.landing = Vector3(0, 2.2f, 0);
+	float minGap = 1e9f, maxGap = 0, sum = 0;
+	const int n = 400;
+	for (int i = 0; i < n; i++) {
+		const float gap = BloodDrip::BirthOf(e, 99, i + 1) - BloodDrip::BirthOf(e, 99, i);
+		minGap = std::min(minGap, gap); maxGap = std::max(maxGap, gap); sum += gap;
+	}
+	printf("DRIP gaps %.2f to %.2f s, mean %.2f s\n", minGap, maxGap, sum / n);
+	check("rhythm", minGap >= 0.99f && maxGap <= 3.01f && std::abs(sum / n - 2.0f) < 0.1f && maxGap - minGap > 1.0f);
+
+	// one drop through its life: forming at the tip, falling, splashing, pooling
+	const float born = BloodDrip::BirthOf(e, 99, 1000);
+	const float fall = std::sqrt(2.0f * 3.8f / BloodDrip::GRAVITY);
+	auto at = [&](float t, BloodDrip::Sprite::Kind kind, std::vector<BloodDrip::Sprite>& found) {
+		std::vector<BloodDrip::Sprite> every;
+		BloodDrip::Sprites(e, e.position, e.landing, 99, t, every);
+		found.clear();
+		for (auto& s : every)
+			if (s.kind == kind)
+				found.push_back(s);
+		return every.size();
+	};
+	std::vector<BloodDrip::Sprite> s1, s2, s3, s4, s5, s6;
+	const float form = 0.45f / 0.5f;
+	at(born + form * 0.5f, BloodDrip::Sprite::FORMING, s1);
+	at(born + form + fall * 0.3f, BloodDrip::Sprite::FALLING, s2);
+	at(born + form + fall * 0.8f, BloodDrip::Sprite::FALLING, s3);
+	at(born + form + fall + 0.1f, BloodDrip::Sprite::SPLASH, s4);
+	at(born + form + fall + 1.0f, BloodDrip::Sprite::POOL, s5);
+	bool forming = false;
+	for (auto& s : s1) forming |= s.position.y < e.position.y && s.position.y > e.position.y - 0.1f;
+	check("forms at the tip", forming);
+	bool falls = false;
+	for (auto& a : s2) for (auto& b : s3)
+		falls |= std::abs(a.position.y - (e.position.y - 0.5f * BloodDrip::GRAVITY * (fall * 0.3f) * (fall * 0.3f))) < 0.01f
+			&& b.position.y < a.position.y - 1.0f && b.length > a.length && a.axis.y < -0.99f;
+	check("falls under gravity", falls);
+	bool splash = s4.size() >= 3;
+	for (auto& s : s4) splash &= s.position.y >= e.landing.y && s.position.y < e.landing.y + 0.5f && (s.position - e.landing).len3() > 0.01f;
+	check("splashes", splash);
+	bool pool = false;
+	for (auto& s : s5) pool |= std::abs(s.position.y - e.landing.y) < 0.05f && s.width > 0.1f && s.alpha > 0.1f;
+	check("pools", pool);
+	// the same every time, and a handful of sprites at any time
+	std::vector<BloodDrip::Sprite> a1, a2;
+	BloodDrip::Sprites(e, e.position, e.landing, 99, 777.7f, a1);
+	BloodDrip::Sprites(e, e.position, e.landing, 99, 777.7f, a2);
+	bool same = a1.size() == a2.size();
+	for (size_t i = 0; same && i < a1.size(); i++)
+		same = closeTo(a1[i].position, a2[i].position) && a1[i].alpha == a2[i].alpha;
+	check("the same every time", same && !a1.empty());
+	size_t most = 0;
+	for (float t = 1000.0f; t < 1060.0f; t += 0.05f)
+		most = std::max(most, at(t, BloodDrip::Sprite::POOL, s6));
+	printf("DRIP at most %zu sprites at once\n", most);
+	check("cheap", most <= 16);
+	printf("DRIP all %d\n", all ? 1 : 0);
 }
 
 // Automatic walls: a Manor stamped down on open ground of 4 Peaks for player 1027, turned 0 and a
@@ -9098,6 +9220,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ChimneySmoke, "Chimney smoke: wkSmoke nodes, PS_Chimney points and their rule, the houses' table, night/winter/always/day, the puffs"},
 {Test_FarLandCache, "Far land cache: a cold load fills it with the same bytes, a warm one makes nothing, a changed map, generator or quality makes its own, damaged entries, the size cap"},
 {Test_EnvironmentClock, "Environment clock: the debug's hour, season and sunset on a game whose environment has not started (an original's save)"},
+{Test_BloodDrip, "Drips: wkDrip nodes (a fall, a point, the defaults), the rhythm, forming, falling, splash and pool, the same every time"},
 };
 
 void LaunchTest()
