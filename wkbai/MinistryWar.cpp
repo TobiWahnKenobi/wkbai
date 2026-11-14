@@ -188,7 +188,17 @@ namespace {
 			// an attack: not too soon after the last one (the more impatient, the sooner; half as long
 			// after a mission that did what it set out to do)
 			const double succeeded = b.get("missions.raze.done") + b.get("missions.palace.done") + b.get("missions.raid.done");
-			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded ? 0.5f : 1.0f);
+			// striking back (the war layer's): who attacked with 5 or more in the last 5 minutes, once
+			// home is clear, is the first target, and sooner
+			auto struck = [&](uint32_t player) {
+				const double at = b.get("war.struckBy." + std::to_string(player), -1.0);
+				return at >= 0.0 && now - at < 300.0f;
+			};
+			bool striking = false;
+			for (ServerGameObject* e : enemies)
+				striking |= struck(e->id);
+			striking &= b.get("war.threats") == 0.0;
+			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f);
 			// (one more attack for every 30 free soldiers: in a stage-1 game 114 waited at home while two
 			// small missions were out)
 			const int freeNow = (int)b.get("war.available");
@@ -215,7 +225,8 @@ namespace {
 				if (s.palace) { worth = 3.0f + 2.0f * c.siege; kind = Mission::PALACE; }
 				else if (s.building) { worth = 1.0f; kind = Mission::RAZE; }
 				else { worth = 0.6f + 1.4f * c.raiding; kind = Mission::RAID; }
-				const float score = worth * grudge * peace / ((defence + 30.0f) * (1.0f + dist / 600.0f));
+				const float revenge = striking && struck(s.player) ? 3.0f : 1.0f;
+				const float score = worth * grudge * peace * revenge / ((defence + 30.0f) * (1.0f + dist / 600.0f));
 				cands.push_back({ &s, kind, defence, score });
 			}
 			std::sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b) {
@@ -317,6 +328,8 @@ namespace {
 	// would win (under 0.8 times), the peasants there walk home instead. The soldiers sent leave
 	// `home`. Returns whether the palace's attackers outmatch all that could be sent (the Generals
 	// then recall the attacks).
+	constexpr float REACH = 80.0f; // how far beyond a place its attackers may shoot from
+
 	bool Defend(Government& g, ServerGameObject* me, std::vector<ServerGameObject*>& home)
 	{
 		Server& srv = g.server;
@@ -339,11 +352,21 @@ namespace {
 		std::vector<Threat> threats;
 		for (const Place& p : places) {
 			std::vector<ServerGameObject*> enemies;
+			// (found inside the place; counted with those shooting into it from up to REACH beyond: in a
+			// four-player game Lady Elinor's archers shot 14 defenders of a peasants' place from outside
+			// its 40 m, and the defence, fighting only inside, killed none)
+			// (a place whose enemies are all another's already is that one's threat; but each is sized
+			// against all the enemies near it: counting only those not yet seen, the peasants' defence
+			// saw 1 of 16 next to the palace's and sent soldiers into them)
+			bool fresh = false;
 			for (ServerGameObject* e : AIUtil::EnemiesNear(me, p.at, p.radius, false))
-				if (seen.insert(e).second)
-					enemies.push_back(e);
-			if (!enemies.empty())
-				threats.push_back({ p, std::move(enemies) });
+				fresh |= seen.insert(e).second;
+			if (!fresh)
+				continue;
+			enemies = AIUtil::EnemiesNear(me, p.at, p.radius + REACH, false);
+			for (ServerGameObject* e : enemies)
+				seen.insert(e);
+			threats.push_back({ p, std::move(enemies) });
 		}
 		// the palace first, then the biggest
 		std::stable_sort(threats.begin(), threats.end(), [](const Threat& a, const Threat& b) {
@@ -370,6 +393,10 @@ namespace {
 				sent.push_back(home[used++]);
 			}
 			const float ratio = AIUtil::Strength(sent, t.enemies) / std::max(1.0f, AIUtil::Strength(t.enemies, sent));
+			// striking back: who came with 5 or more is the Strategist's first target for 5 minutes
+			if (t.enemies.size() >= 5)
+				if (ServerGameObject* owner = t.enemies.front()->getPlayer())
+					g.board.report("war.struckBy." + std::to_string(owner->id), g.now());
 			if (!t.place.palace && ratio < 0.8f) {
 				// no help that would win: the peasants there walk home
 				std::vector<ServerGameObject*> flee;
@@ -380,7 +407,8 @@ namespace {
 				g.board.report("war.peasantsFled", g.board.get("war.peasantsFled") + (double)flee.size());
 				continue;
 			}
-			if (t.place.palace && ratio < 1.0f)
+			// (unmet: outmatched with enemies close, within 150 m; not an army passing at the edge)
+			if (t.place.palace && ratio < 1.0f && !AIUtil::EnemiesNear(me, t.place.at, 150.0f, false).empty())
 				palaceUnmet = true;
 			if (!used)
 				continue;
@@ -402,9 +430,15 @@ namespace {
 			Mission& m = g.missions[mi];
 			const std::vector<ServerGameObject*> given(home.begin(), home.begin() + used);
 			AIUtil::Hold(me, given, t.place.at, nullptr);
+			// outmatched at the palace: no one goes in alone; they gather at the palace (the Generals
+			// fight only near it then) until the recalled missions are back (seed 3 of the four-player
+			// games: the last soldiers went in one to three at a time, 0.07-0.6 times the attackers, and died)
+			const bool gather = t.place.palace && ratio < 1.0f;
 			for (ServerGameObject* u : given) {
 				m.units.push_back(u->id);
 				me->aiController.ministryUnits.insert(u->id);
+				if (gather)
+					continue;
 				ServerGameObject* best = t.enemies.front();
 				for (ServerGameObject* e : t.enemies)
 					if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
@@ -480,13 +514,22 @@ namespace {
 			if (threat > 0.0f)
 				guard = std::max(guard, (int)home.size() / 2);
 			{
-				float strongest = 0.0f;
+				// (against all the known neighbours: the strongest and half of each other's army; with three
+				// enemies the strongest alone left home open to the next one)
+				float strongest = 0.0f, all = 0.0f;
+				int armies = 0;
 				for (const auto& [key, v] : g.board.reports)
-					if (key.rfind("intel.", 0) == 0 && key.size() > 6 && key.compare(key.size() - 6, 6, ".power") == 0)
+					if (key.rfind("intel.", 0) == 0 && key.size() > 6 && key.compare(key.size() - 6, 6, ".power") == 0) {
 						strongest = std::max(strongest, (float)v);
-				// (0.6-1.0 x, and at most 60 % of the soldiers at home: with all of it kept, a General facing a
-				// big army never attacked at all and lost to the war layer's waves)
-				const float keep = strongest * (1.0f - 0.4f * g.personality.aggression);
+						all += (float)v;
+						armies += v > 0.0;
+					}
+				const float against = strongest + 0.5f * (all - strongest);
+				// (0.6-1.0 x, and at most 60 % of the soldiers at home, 75 % with more than one enemy army
+				// known: with all of it kept, a General facing a big army never attacked at all and lost to
+				// the war layer's waves)
+				const float keep = against * (1.0f - 0.4f * g.personality.aggression);
+				const float share = armies > 1 ? 0.75f : 0.6f;
 				// the strongest stay home first
 				std::vector<ServerGameObject*> byPower = home;
 				std::stable_sort(byPower.begin(), byPower.end(), [](ServerGameObject* a, ServerGameObject* b) { return AIUtil::UnitPower(a) > AIUtil::UnitPower(b); });
@@ -494,7 +537,7 @@ namespace {
 				int n = 0;
 				while (n < (int)byPower.size() && kept < keep)
 					kept += AIUtil::UnitPower(byPower[n++]);
-				guard = std::max(guard, std::min(n, (int)(home.size() * 0.6f)));
+				guard = std::max(guard, std::min(n, (int)(home.size() * share)));
 				g.board.report("war.guardPower", keep);
 			}
 			guard = std::min(guard, (int)home.size());
@@ -670,23 +713,69 @@ namespace {
 					return now - m.clearSince > 6.0f ? "done" : nullptr;
 				}
 				m.clearSince = -1.0f;
-				// (only those inside the place are attacked, and a defender doesn't chase one out of it: the
-				// test's raiders walked home as fast as the Spearmen, who followed them across the map)
-				const std::vector<ServerGameObject*> inside = AIUtil::EnemiesNear(me, place, m.radius, false);
+				// (those inside the place and those shooting into it are attacked, and a defender doesn't chase
+				// one further: the test's raiders walked home as fast as the Spearmen, who followed them
+				// across the map)
+				const bool palace = m.radius >= 200.0f;
+				std::vector<ServerGameObject*> inside = AIUtil::EnemiesNear(me, place, m.radius + REACH, false);
+				const float ratio = AIUtil::Strength(units, inside) / std::max(1.0f, AIUtil::Strength(inside, units));
+				// away from the palace, losing (half lost, outmatched): the rest go home, the peasants with them
+				if (!palace && ((m.startUnits > 0 && (int)units.size() * 2 <= m.startUnits && ratio < 0.8f) || (ratio < 0.5f && now - m.since > 10.0f))) {
+					std::vector<ServerGameObject*> flee;
+					for (ServerGameObject* p : AIUtil::Peasants(me))
+						if ((p->position - place).sqlen2xz() < (m.radius + 20.0f) * (m.radius + 20.0f))
+							flee.push_back(p);
+					AIUtil::SendHome(me, flee);
+					return "gave up";
+				}
+				// outmatched at the palace: they gather at its centre and fight only what comes within 60 m
+				// of it (with the palace's own arrows), until the recalled missions are back
+				// (and with no clear win, under 1.5 times, only 120 m out: at 1.08 times the defence went 330 m
+				// out after archers, and died)
+				const bool gather = palace && ratio < 1.0f;
+				const float zone = gather ? 60.0f : palace && ratio < 1.5f ? 120.0f : m.radius + REACH;
+				if (zone < m.radius + REACH)
+					inside = AIUtil::EnemiesNear(me, place, zone, false);
+				if (g.trace && (int)now % 10 == 0) {
+					// (the trace: what the defence is doing)
+					int idle = 0, fighting = 0, other = 0;
+					float dmin = 1e9f;
+					for (ServerGameObject* u : units) {
+						Order* o = u->orderConfig.getCurrentOrder();
+						Task* t = o ? o->getCurrentTask() : nullptr;
+						ServerGameObject* tg = t ? t->target.get() : nullptr;
+						if (!o) idle++;
+						else if (tg && AIUtil::IsSoldier(tg)) fighting++;
+						else other++;
+					}
+					std::string seen;
+					for (ServerGameObject* e : enemies) {
+						const float d = (e->position - place).len2xz();
+						dmin = std::min(dmin, d);
+						if (seen.size() < 120)
+							seen += e->blueprint->name + "@" + std::to_string((int)d) + " ";
+					}
+					g.log(GENERALS, "defence %u: %zu units (%d idle, %d fighting, %d other), %zu enemies (%zu inside the zone %.0f), ratio %.2f%s; %s", m.id,
+						units.size(), idle, fighting, other, enemies.size(), inside.size(), zone, ratio, gather ? ", gathering" : "", seen.c_str());
+				}
 				std::vector<ServerGameObject*> back;
 				for (ServerGameObject* u : units) {
 					Order* o = u->orderConfig.getCurrentOrder();
 					Task* t = o ? o->getCurrentTask() : nullptr;
 					ServerGameObject* tg = t ? t->target.get() : nullptr;
-					const bool tgInside = tg && !tg->deleted && (tg->position - place).sqlen2xz() <= (m.radius + 20.0f) * (m.radius + 20.0f);
-					if ((u->position - place).sqlen2xz() > (m.radius + 60.0f) * (m.radius + 60.0f) && !tgInside) {
+					const bool tgInside = tg && !tg->deleted && (tg->position - place).sqlen2xz() <= (zone + 20.0f) * (zone + 20.0f);
+					if ((u->position - place).sqlen2xz() > (zone + 60.0f) * (zone + 60.0f) && !tgInside) {
 						back.push_back(u);
 						continue;
 					}
 					if (tg && !tg->deleted && AIUtil::IsSoldier(tg) && tgInside)
 						continue;
-					if (inside.empty())
+					if (inside.empty()) {
+						// (gathering: one fighting out beyond the zone comes back to the others)
+						if (gather && tg && !tg->deleted && !tgInside && (u->position - place).sqlen2xz() > zone * zone)
+							back.push_back(u);
 						continue;
+					}
 					ServerGameObject* best = inside.front();
 					for (ServerGameObject* e : inside)
 						if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())

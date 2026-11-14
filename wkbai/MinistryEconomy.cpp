@@ -308,17 +308,68 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			siCap = srv.gameSet->items.names.getIndex("Structural Integrity Capacity");
 		}
 		if (noMilitia >= 0) {
+			// (what defends: the soldiers at home and War's defences; counting only those at home, "0"
+			// while all of them defended)
 			float defence = 0.0f;
 			for (ServerGameObject* u : ai.freeFighters(home))
 				defence += AIUtil::UnitPower(u);
+			for (Mission& m : g.missions)
+				if (m.kind == Mission::DEFEND)
+					for (ServerGameObject* u : g.alive(m))
+						defence += AIUtil::UnitPower(u);
 			const float threat = (float)g.board.get("intel.threat.home");
 			const bool palaceFalling = palace && si >= 0 && siCap >= 0 && palace->getItem(siCap) > 0.0f && palace->getItem(si) < 0.6f * palace->getItem(siCap);
-			// (or War's defence can't meet the palace's attackers with every soldier there is: four players,
-			// a Kingmaker overrun at its palace lost 32 peasants who weren't allowed to fight)
-			const bool emergency = (threat > 2.0f * defence + 50.0f && palaceFalling) || g.board.get("war.palaceUnmet") > 0.0;
+			// (the palace falling, and the threat over twice the defence or War's defence unable to meet
+			// the palace's attackers with every soldier there is: four players, a Kingmaker overrun lost
+			// 32 peasants who weren't allowed to fight. Not "unable" alone: an army passing 240 m from the
+			// palace made all 45 peasants militia, which never went back to work, and died)
+			const bool emergency = palaceFalling && (threat > 2.0f * defence + 50.0f || g.board.get("war.palaceUnmet") > 0.0);
 			if (emergency != (me->getItem(noMilitia) == 0.0f))
 				g.log(LABOUR, emergency ? "the peasants may fight (a threat of %.0f against %.0f, the palace falling)" : "no militia (a threat of %.0f against %.0f)", threat, defence);
 			me->setItem(noMilitia, emergency ? 0.0f : 1.0f);
+			// the emergency over: the militia with no enemy within 100 m go back to work (their own
+			// "Disband Militia"; the scripts never send them back: in a four-player game 43 militia stayed
+			// soldiers until they died, the economy gone)
+			if (!emergency) {
+				int disbanded = 0;
+				const GameSet* gs = srv.gameSet.get();
+				std::vector<ServerGameObject*> militia;
+				// (all of the player's, through its armies, cities and towns)
+				std::vector<ServerGameObject*> todo{ me };
+				while (!todo.empty()) {
+					ServerGameObject* o = todo.back();
+					todo.pop_back();
+					for (const auto& [type, children] : o->children)
+						for (CommonGameObject* c : children) {
+							auto* u = (ServerGameObject*)c;
+							if (u->deleted)
+								continue;
+							if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+								if (u->blueprint->name.find("Militia") != std::string::npos && !ai.ministryUnits.count(u->id) && !(u->flags & ServerGameObject::fTerminated))
+									militia.push_back(u);
+							}
+							else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+								todo.push_back(u);
+						}
+				}
+				std::sort(militia.begin(), militia.end(), [](auto* a, auto* b) { return a->id < b->id; });
+				for (ServerGameObject* u : militia) {
+					if (!AIUtil::EnemiesNear(me, u->position, 100.0f, false).empty())
+						continue;
+					for (const Command* c : u->blueprint->offeredCommands) {
+						const std::string& n = gs->commands.names.getString(c->id);
+						if (n.find("Militia") == std::string::npos || n.find("Convert") != std::string::npos || !c->canBeExecuted(u, nullptr))
+							continue;
+						c->execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+						disbanded++;
+						break;
+					}
+				}
+				if (disbanded) {
+					g.log(LABOUR, "%d militia back to work", disbanded);
+					g.board.report("labour.disbanded", g.board.get("labour.disbanded") + disbanded);
+				}
+			}
 		}
 	}
 	// the gold miners: the dead and those whose gold ran out let go (another gold source first)
