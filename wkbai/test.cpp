@@ -7805,6 +7805,105 @@ void Test_HotKeys()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Waypoint flags (ClientInterface::updateOrderFlags): a peasant on 4 Peaks sent to one point and
+// Shift-queued to two more: the client stands three flags, two once the first point is reached,
+// none once it has walked them all; a new order without Shift forgets the queued ones
+void Test_WaypointFlags()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	server.startLevel();
+	ClientInterface ui(&client, nullptr);
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			ui.updateOrderFlags();
+			SDL_Delay(20);
+		}
+	};
+	step(10);
+	ServerGameObject* me = server.findObject(1027);
+	ServerGameObject* peasant = nullptr;
+	auto findUnit = [&](CommonGameObject* o, auto& self) -> void {
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children) {
+				if (!peasant && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					peasant = c->dyncast<ServerGameObject>();
+				self(c, self);
+			}
+	};
+	findUnit(me, findUnit);
+	const int moveIndex = client.gameSet->commands.names.getIndex("Move");
+	ClientGameObject* unit = peasant ? client.findObject(peasant->id) : nullptr;
+	if (!unit || moveIndex < 0) {
+		printf("UNITTEST FAILED (no peasant or no Move command)\n");
+		return;
+	}
+	Command* move = const_cast<Command*>(&client.gameSet->commands[moveIndex]);
+	const Vector3 start = peasant->position;
+	auto ground = [&](float dx, float dz) {
+		Vector3 p = start + Vector3(dx, 0.0f, dz);
+		p.y = server.terrain ? server.terrain->getHeight(p.x, p.z) : start.y;
+		return p;
+	};
+	const Vector3 points[3] = { ground(12.0f, 0.0f), ground(25.0f, 0.0f), ground(25.0f, 8.0f) };
+	printf("UNITTEST the unit: %s %u at %.1f %.1f %.1f\n", peasant->blueprint->name.c_str(), peasant->id, start.x, start.y, start.z);
+	ui.selection.insert(unit);
+	for (int i = 0; i < 3; i++) {
+		g_modShift = i > 0;
+		ui.sendRightClickCommand(move, nullptr, points[i], Vector3(-1, 0, 0));
+	}
+	g_modShift = false;
+	ui.updateOrderFlags();
+	check(ui.orderFlagCount() == 3, "three points queued: three flags (" + std::to_string(ui.orderFlagCount()) + ")");
+	step(5);
+	check(ui.orderFlagCount() == 3, "still three while it walks to the first");
+	// walk to the first point; a frame later the client has the unit there
+	int reached = -1, afterFirst = -1, minFlags = 99;
+	for (int s = 0; s < 50 * 60; s++) {
+		step(1);
+		minFlags = std::min(minFlags, ui.orderFlagCount());
+		if (reached < 0 && (peasant->position - points[0]).len2xz() < 2.5f) {
+			reached = s;
+			step(3);
+			afterFirst = ui.orderFlagCount();
+		}
+		if (reached >= 0 && ui.orderFlagCount() == 0)
+			break;
+	}
+	printf("UNITTEST first point reached at frame %d: %d flags after it, %d at the end, %.1f m from the last point\n", reached, afterFirst,
+		ui.orderFlagCount(), (peasant->position - points[2]).len2xz());
+	check(reached >= 0 && afterFirst == 2, "the first point reached: two flags");
+	check(ui.orderFlagCount() == 0, "all three walked: no flag");
+	// queued again, then a new order without Shift: only its flag stays (once the old ones' second is up)
+	for (int i = 0; i < 3; i++) {
+		g_modShift = i > 0;
+		ui.sendRightClickCommand(move, nullptr, points[2 - i], Vector3(-1, 0, 0));
+	}
+	g_modShift = false;
+	check(ui.orderFlagCount() == 3, "queued again: three flags");
+	step(60);
+	ui.sendRightClickCommand(move, nullptr, start, Vector3(-1, 0, 0));
+	ui.updateOrderFlags();
+	check(ui.orderFlagCount() == 1, "a new order without Shift: its flag only (" + std::to_string(ui.orderFlagCount()) + ")");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 // Disguises and fog reveals (ServerDiplomacy.cpp): a unit of B (1030) on 4 Peaks disguised as a
 // peasant to A (1027), unmasked for A, dropped; revealed to A through the fog for a time
 void Test_Disguises()
@@ -9076,6 +9175,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ChimneySmoke, "Chimney smoke: wkSmoke nodes, PS_Chimney points and their rule, the houses' table, night/winter/always/day, the puffs"},
 {Test_FarLandCache, "Far land cache: a cold load fills it with the same bytes, a warm one makes nothing, a changed map, generator or quality makes its own, damaged entries, the size cap"},
 {Test_EnvironmentClock, "Environment clock: the debug's hour, season and sunset on a game whose environment has not started (an original's save)"},
+{Test_WaypointFlags, "Waypoint flags: three queued move points stand three flags, two once the first is reached, none at the end; a new order forgets the queue"},
 };
 
 void LaunchTest()

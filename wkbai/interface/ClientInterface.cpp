@@ -932,26 +932,58 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 // The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
 // Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
 // target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
-// Here a unit order's flag stays until the units sent there have arrived (at least 1 s, at
-// most 30 s), a rally point's for 3 s, with their animations.
-bool ClientInterface::orderFlagDone(float age) const
+// The original keeps one of each in the interface ([ui+0x104], [ui+0x108]), so a new order's
+// flag replaces the last. Here every ground point a unit is still sent to has its flag, the
+// queued (Shift) ones too: each unit's points are kept in order (unitWaypoints), its first one
+// dropped when it comes within 3 m of its own destination there (and any before it), all of them once the server
+// reports it with no order for 0.3 s after it had one (stopped, done, gave up; not while the
+// game is paused before it started). A flag stands at least 1 s and while a unit
+// still has it; a rally point's or a patrol's (no units kept) for 3 s; a right-drag's until the
+// button is released. Client-side only: the server's orders are as before.
+void ClientInterface::updateOrderFlags()
 {
-	// a right-drag's flag stands until the button is released
-	if (formationDrag.active)
-		return false;
-	if (orderFlagRally || orderFlagUnits.empty())
-		return age >= 3.0f;
-	if (age < 1.0f)
-		return false;
-	if (age >= 30.0f)
-		return true;
-	for (const CliGORef& ref : orderFlagUnits) {
-		const ClientGameObject* unit = ref.get();
-		if (unit && !(unit->flags & ClientGameObject::fTerminated)
-			&& (unit->position - orderFlagPosition).sqlen2xz() > 3.0f * 3.0f)
-			return false;
+	constexpr float ARRIVED = 3.0f;
+	const uint64_t now = SDL_GetTicks();
+	std::unordered_set<uint32_t> wanted;
+	for (auto it = unitWaypoints.begin(); it != unitWaypoints.end();) {
+		UnitWaypoints& uw = it->second;
+		const ClientGameObject* unit = uw.unit.get();
+		if (!unit || (unit->flags & ClientGameObject::fTerminated)) {
+			it = unitWaypoints.erase(it);
+			continue;
+		}
+		if (unit->reportedCurrentOrder != -1) {
+			uw.sawOrder = true;
+			uw.idleTicks = 0;
+		}
+		else if (uw.sawOrder) {
+			if (!uw.idleTicks)
+				uw.idleTicks = now;
+			else if (now - uw.idleTicks >= 300)
+				uw.points.clear();
+		}
+		// reached: the last point it stands at, with those before it (one it stopped short of)
+		for (size_t i = uw.points.size(); i-- > 0;)
+			if ((unit->position - uw.points[i].destination).sqlen2xz() <= ARRIVED * ARRIVED) {
+				uw.points.erase(uw.points.begin(), uw.points.begin() + i + 1);
+				break;
+			}
+		if (uw.points.empty()) {
+			it = unitWaypoints.erase(it);
+			continue;
+		}
+		for (const UnitWaypoint& p : uw.points)
+			wanted.insert(p.flagId);
+		++it;
 	}
-	return true;
+	orderFlags.remove_if([&](const OrderFlag& f) {
+		const uint64_t age = now - f.startTicks;
+		if (f.held)
+			return false;
+		if (f.timed)
+			return age >= 3000;
+		return age >= 1000 && !wanted.count(f.id);
+	});
 }
 
 // As WKB.exe: on a selection change it lists the selected objects' offered commands that have a
@@ -1054,7 +1086,19 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 
 void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo)
 {
-	int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
+	bool rallyFlag = false; // a building's rally point set
+	// the flag of the units sent to the ground point: a right-drag's, standing since the press,
+	// or a new one
+	const uint32_t heldFlag = dragFlagId;
+	dragFlagId = 0;
+	OrderFlag* dragFlag = nullptr;
+	for (OrderFlag& f : orderFlags)
+		if (f.id == heldFlag && heldFlag) {
+			dragFlag = &f;
+			f.held = false;
+		}
+	uint32_t flagId = 0;
+	bool flagTried = false;
 	Vector3 destPos = peapos;
 	const int NUM_DIRECTIONS = 8;
 	const float SEPARATION = 3.0f;
@@ -1070,11 +1114,32 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 				const Vector3 unitFaceTo = faceTo.x >= 0.0f ? destPos + (faceTo - peapos) : faceTo;
 				client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos, unitFaceTo);
 				if (!nextSelectedObject) {
-					if (orderFlag == 0)
-						orderFlagUnits.clear();
-					orderFlag = 1;
-					orderFlagUnits.push_back(sel);
+					if (!flagTried) {
+						flagTried = true;
+						flagId = dragFlag ? heldFlag : showOrderFlag(peapos, false);
+						for (OrderFlag& f : orderFlags)
+							if (f.id == flagId)
+								f.timed = false;
+					}
+					if (flagId) {
+						// the unit's points: this one replaces them, goes after them (Shift) or first (Ctrl)
+						UnitWaypoints& uw = unitWaypoints[sel->id];
+						uw.unit = sel;
+						const UnitWaypoint wp{ flagId, destPos };
+						if (assignmentMode == Tags::ORDERASSIGNMODE_DO_LAST && !uw.points.empty())
+							uw.points.push_back(wp);
+						else {
+							if (assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE || uw.points.empty()) {
+								uw.points.clear();
+								uw.sawOrder = false;
+								uw.idleTicks = 0;
+							}
+							uw.points.push_front(wp);
+						}
+					}
 				}
+				else if (assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE)
+					unitWaypoints.erase(sel->id); // sent to an object: its ground points are forgotten
 				// calc destination pos for next selected object
 				destPos = peapos + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
 				nextPosDir += SEPARATION / nextPosRadius;
@@ -1096,7 +1161,7 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 									printf("Order for spawned unit changed to: %s\n", client->gameSet->commands.getString(cmd).c_str());
 									if (cmd->order && cmd->order->classType == Tags::ORDTSKTYPE_MOVE) {
 										client->sendSetBuildingSpawnedUnitOrderToDestination(sel, client->gameSet->commands.getIndex(cmd), peapos);
-										orderFlag = std::max(orderFlag, 2);
+										rallyFlag = true;
 									}
 									else {
 										client->sendSetBuildingSpawnedUnitOrderToTarget(sel, client->gameSet->commands.getIndex(cmd), nextSelectedObject);
@@ -1109,14 +1174,14 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 			}
 		}
 	}
-	if (orderFlag)
-		showOrderFlag(peapos, orderFlag == 2);
+	if (rallyFlag && !flagId)
+		showOrderFlag(peapos, true);
 }
 
-void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
+uint32_t ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 {
 	if (!client->terrain || !client->gameSet)
-		return;
+		return 0;
 	const float ground = client->terrain->getHeight(position.x, position.z);
 	const float surface = client->terrain->getHeightEx(position.x, position.z, true);
 	const bool onWater = surface > ground + 0.01f;
@@ -1124,17 +1189,15 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 		: onWater ? "Warrior Kings Game Set\\Resources\\Bouy\\DEFAULT.ANIM3"
 		: "Warrior Kings Game Set\\Flags\\Way_Point1.ANIM3";
 	if (!FileExists(path))
-		return;
-	orderFlagEntity.model = client->gameSet->modelCache.getModel(path);
-	orderFlagEntity.transform = Matrix::getTranslationMatrix(Vector3(position.x, surface, position.z));
-	orderFlagEntity.color = client->clientPlayer ? client->clientPlayer->color : 0;
-	orderFlagEntity.flags = 0;
-	orderFlagStartTicks = SDL_GetTicks();
-	orderFlagActive = true;
-	orderFlagRally = rallyPoint;
-	orderFlagPosition = position;
-	if (rallyPoint)
-		orderFlagUnits.clear();
+		return 0;
+	OrderFlag& f = orderFlags.emplace_back();
+	f.id = nextOrderFlagId++;
+	f.entity.model = client->gameSet->modelCache.getModel(path);
+	f.entity.transform = Matrix::getTranslationMatrix(Vector3(position.x, surface, position.z));
+	f.entity.color = client->clientPlayer ? client->clientPlayer->color : 0;
+	f.entity.flags = 0;
+	f.startTicks = SDL_GetTicks();
+	return f.id;
 }
 
 // The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
@@ -3650,6 +3713,21 @@ void ClientInterface::iter()
 			}
 		}
 	}
+	// Test runs: "benchmark": { ..., "moveQueue": [[x, z], ...] } sends the selection ("select")
+	// to those points once: the first as a right-click, the others with Shift (queued)
+	static bool benchmarkMoved = false;
+	if (BenchmarkEnabled() && benchmarkSelected && !benchmarkMoved && client->gameSet && client->terrain) {
+		benchmarkMoved = true;
+		const auto points = g_settings.value("benchmark", nlohmann::json::object()).value("moveQueue", nlohmann::json::array());
+		const int move = client->gameSet->commands.names.getIndex("Move");
+		const bool shift = g_modShift;
+		for (size_t i = 0; move >= 0 && i < points.size(); i++) {
+			const float x = points[i].at(0).get<float>(), z = points[i].at(1).get<float>();
+			g_modShift = i > 0;
+			sendRightClickCommand(const_cast<Command*>(&client->gameSet->commands[move]), nullptr, Vector3(x, client->terrain->getHeight(x, z), z), Vector3(-1, 0, 0));
+		}
+		g_modShift = shift;
+	}
 	const bool menuOpen = frontEnd && frontEnd->isOpen();
 	static MenuInput menuInput;
 	// a game text window (or the objectives) under the mouse, or a modal one: it gets the
@@ -4085,8 +4163,11 @@ void ClientInterface::iter()
 		// of the patrol it walks), as the original's R; the order's flag at the point
 		for (ClientGameObject* obj : selection)
 			if (obj && (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
-				&& obj->getPlayer() == client->clientPlayer.get())
+				&& obj->getPlayer() == client->clientPlayer.get()) {
 				client->sendPatrol(obj, g_modShift, peapos);
+				if (!g_modShift)
+					unitWaypoints.erase(obj->id);
+			}
 		showOrderFlag(peapos, false);
 	}
 	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
@@ -4113,8 +4194,10 @@ void ClientInterface::iter()
 			// button, facing the way the mouse was dragged meanwhile. As in the original, the
 			// order's flag stands at the destination from the press on, and a line shows the facing.
 			formationDrag = { true, peapos, rightClickCommand };
-			showOrderFlag(peapos, false);
-			orderFlagUnits.clear();
+			dragFlagId = showOrderFlag(peapos, false);
+			for (OrderFlag& f : orderFlags)
+				if (f.id == dragFlagId)
+					f.held = true;
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
@@ -5444,15 +5527,12 @@ void ClientInterface::iter()
 				drawAttachmentPoints(&sfx.entity);
 			}
 		}
-		if (orderFlagActive && orderFlagEntity.model) {
-			const float age = (SDL_GetTicks() - orderFlagStartTicks) / 1000.0f;
-			if (age >= 0.0f && !orderFlagDone(age)) {
-				orderFlagEntity.animTime = (uint32_t)(age * 1000.0f);
-				scene->add(&orderFlagEntity);
+		updateOrderFlags();
+		for (OrderFlag& f : orderFlags)
+			if (f.entity.model) {
+				f.entity.animTime = (uint32_t)(SDL_GetTicks() - f.startTicks);
+				scene->add(&f.entity);
 			}
-			else
-				orderFlagActive = false;
-		}
 		// A right-drag's line, as WKB.exe (0x64db18): Schematics\White_Line (a thin prism 1 m long
 		// down -z) stretched from the flag towards the point under the mouse, raised 0.5 m there and
 		// at most 5 m long, so it shows the facing, not the distance; none within 2.5 m
