@@ -50,18 +50,21 @@ namespace {
 	struct Pending { Vector3 world; uint32_t seed; SmokeEmitter e; };
 	std::vector<Pending> s_pending;
 
-	// a puff: a soft round blob with a cloudy edge (value noise), white, its shape in the alpha
+	// four puffs (2 x 2, each its own noise): soft round blobs with a cloudy edge (value noise),
+	// mottled light grey to white across, their shape in the alpha
 	texture PuffTexture(IRenderer* gfx)
 	{
 		static texture tex = nullptr;
 		static IRenderer* owner = nullptr;
 		if (tex && owner == gfx)
 			return tex;
-		constexpr int N = 64, G = 8;
-		float grid[G + 1][G + 1];
-		for (int y = 0; y <= G; y++)
-			for (int x = 0; x <= G; x++)
-				grid[y][x] = Hash01(Mix(x % G, y % G + 101));
+		constexpr int H = 64, N = 2 * H, G = 8;
+		float grid[4][G + 1][G + 1];
+		for (int q = 0; q < 4; q++)
+			for (int y = 0; y <= G; y++)
+				for (int x = 0; x <= G; x++)
+					grid[q][y][x] = Hash01(Mix(x % G + 17 * q, y % G + 101 + 53 * q));
+		int q = 0;
 		auto noise = [&](float u, float v, int octave) {
 			const int g = G >> (2 - octave);
 			const float fx = u * g, fy = v * g;
@@ -69,7 +72,7 @@ namespace {
 			const float tx = fx - ix, ty = fy - iy;
 			const float sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
 			const int k = G / g;
-			auto at = [&](int x, int y) { return grid[(y % g) * k][(x % g) * k]; };
+			auto at = [&](int x, int y) { return grid[q][(y % g) * k][(x % g) * k]; };
 			const float a = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * sx;
 			const float b = at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * sx;
 			return a + (b - a) * sy;
@@ -80,7 +83,8 @@ namespace {
 		bmp.pixels.resize(N * N * 4);
 		for (int y = 0; y < N; y++)
 			for (int x = 0; x < N; x++) {
-				const float u = (x + 0.5f) / N, v = (y + 0.5f) / N;
+				q = (x >= H ? 1 : 0) + (y >= H ? 2 : 0);
+				const float u = (x % H + 0.5f) / H, v = (y % H + 0.5f) / H;
 				const float dx = u * 2 - 1, dy = v * 2 - 1;
 				const float r = std::sqrt(dx * dx + dy * dy);
 				const float n = 0.5f * noise(u, v, 0) + 0.3f * noise(u, v, 1) + 0.2f * noise(u, v, 2);
@@ -88,8 +92,11 @@ namespace {
 				const float edge = Saturate((1.0f - r) * 1.6f - (1.0f - n) * 0.55f);
 				const float a = edge * edge * (3 - 2 * edge) * (0.75f + 0.25f * n);
 				uint8_t* p = &bmp.pixels[(y * N + x) * 4];
-				const uint8_t shade = (uint8_t)std::lround(215 + 40 * n); // a little relief
-				p[0] = p[1] = p[2] = shade;
+				// grey and white mixed across the puff: the noise's dips darker (a 0.6 grey), its
+				// rises white, the cloudy edge thinner and lighter
+				const float m = Saturate((n - 0.3f) / 0.45f);
+				const float shade = 0.6f + 0.4f * (m * m * (3 - 2 * m)) * (0.8f + 0.2f * r) + 0.1f * r;
+				p[0] = p[1] = p[2] = (uint8_t)std::lround(Saturate(shade) * 255.0f);
 				p[3] = (uint8_t)std::lround(Saturate(a) * 255.0f);
 			}
 		tex = gfx->CreateTexture(bmp, 0);
@@ -216,8 +223,25 @@ void Puffs(const SmokeEmitter& e, const Vector3& world, uint32_t seed, float tim
 		p.alpha = 0.8f * fadeIn * fadeOut * (0.55f + 0.45f * Saturate(strength));
 		p.age = age;
 		p.angle = h1 * 6.283f + age * (h2 - 0.5f) * 0.4f;
+		p.tone = Hash01(h + 5);
+		p.variant = (int)(Hash01(h + 6) * 4.0f) & 3;
 		out.push_back(p);
 	}
+}
+
+Vector3 Albedo(const Puff& f, SmokeEmitter::When when)
+{
+	const float t = Saturate(f.age / 4.0f);
+	const float s = t * t * (3 - 2 * t);
+	auto lerp = [](float a, float b, float x) { return a + (b - a) * x; };
+	if (when == SmokeEmitter::ALWAYS) {
+		// the forge's coal and charcoal: a darker, cooler grey, thinning to a light grey
+		const float g = lerp(0.36f, 0.66f, s) + 0.2f * f.tone;
+		return Vector3(g * 0.95f, g * 0.97f, g);
+	}
+	// wood smoke: a warm grey (a touch of brown) young, near white as it thins
+	const float g = lerp(0.55f + 0.3f * f.tone, 0.8f + 0.18f * f.tone, s);
+	return Vector3(g, g * lerp(0.93f, 0.98f, s), g * lerp(0.84f, 0.95f, s));
 }
 
 void Add(Model* model, const Matrix& transform, uint32_t objid)
@@ -287,18 +311,17 @@ void Draw(IRenderer* gfx, const Camera& camera, float time)
 		puffs.clear();
 		Puffs(p.e, p.world, p.seed, time, s, v.wind, puffs);
 		for (const Puff& f : puffs) {
-			// young smoke greyer, thinning to white; the forge's lit orange from below at night
-			const float t = Saturate(f.age / 3.0f);
-			const float grey = 0.62f + 0.3f * t;
-			float rgb[3];
-			for (int c = 0; c < 3; c++)
-				rgb[c] = grey * light[c];
+			// each puff its grey (Albedo) in the light; the darker young ones a little denser;
+			// the forge's lit orange from below at night
+			const Vector3 albedo = Albedo(f, p.e.when);
+			float rgb[3] = { albedo.x * light[0], albedo.y * light[1], albedo.z * light[2] };
+			const float dense = 1.0f + 0.25f * (1.0f - Saturate(f.age / 3.0f)) * (1.0f - f.tone);
 			if (p.e.when == SmokeEmitter::ALWAYS && night > 0.0f) {
 				const float glow = night * Saturate(1.0f - f.age / 1.6f) * 0.55f;
 				rgb[0] += glow * 1.0f; rgb[1] += glow * 0.45f; rgb[2] += glow * 0.15f;
 			}
 			auto byte = [](float x) { return (uint32_t)std::lround(Saturate(x) * 255.0f); };
-			const uint32_t colour = byte(f.alpha) << 24 | byte(rgb[0]) << 16 | byte(rgb[1]) << 8 | byte(rgb[2]);
+			const uint32_t colour = byte(f.alpha * dense) << 24 | byte(rgb[0]) << 16 | byte(rgb[1]) << 8 | byte(rgb[2]);
 			const float ca = std::cos(f.angle) * f.size * 0.5f, sa = std::sin(f.angle) * f.size * 0.5f;
 			const Vector3 a = camside * ca + camup * sa, b = camup * ca - camside * sa;
 			// (the winding DefaultParticleRenderer's: the other way round is culled)
@@ -308,8 +331,8 @@ void Draw(IRenderer* gfx, const Camera& camera, float time)
 			for (int k = 0; k < 4; k++) {
 				verts[k].x = corner[k].x; verts[k].y = corner[k].y; verts[k].z = corner[k].z;
 				verts[k].color = (int)colour;
-				verts[k].u = (k == 1 || k == 2) ? 1.0f : 0.0f;
-				verts[k].v = (k >= 2) ? 0.0f : 1.0f;
+				verts[k].u = ((f.variant & 1) + ((k == 1 || k == 2) ? 1.0f : 0.0f)) * 0.5f;
+				verts[k].v = ((f.variant >> 1) + ((k >= 2) ? 0.0f : 1.0f)) * 0.5f;
 			}
 			const uint16_t order[6] = { 0, 3, 1, 1, 3, 2 };
 			for (int k = 0; k < 6; k++)

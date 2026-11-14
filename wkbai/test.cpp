@@ -3439,6 +3439,28 @@ void Test_ChimneySmoke()
 		check("fade", fades);
 		check("off: none", zero.empty());
 		check("thinned", half.size() < p1.size() && !half.empty());
+		// grey and white: each puff its own tone and texture puff; young darker, lighter as it thins;
+		// wood smoke a warm grey, the forge's darker and cooler
+		{
+			float lo = 1, hi = 0;
+			int seen = 0;
+			for (auto& p : p1) {
+				lo = std::min(lo, p.tone); hi = std::max(hi, p.tone);
+				seen |= 1 << (p.variant & 3);
+			}
+			auto puff = [](float age, float tone) { ChimneySmoke::Puff f{}; f.age = age; f.tone = tone; return f; };
+			const Vector3 grey = ChimneySmoke::Albedo(puff(0.5f, 0.0f), SmokeEmitter::NIGHT_WINTER);
+			const Vector3 white = ChimneySmoke::Albedo(puff(0.5f, 1.0f), SmokeEmitter::NIGHT_WINTER);
+			const Vector3 young = ChimneySmoke::Albedo(puff(0.5f, 0.5f), SmokeEmitter::NIGHT_WINTER);
+			const Vector3 old = ChimneySmoke::Albedo(puff(6.0f, 0.5f), SmokeEmitter::NIGHT_WINTER);
+			const Vector3 forge = ChimneySmoke::Albedo(puff(0.5f, 0.5f), SmokeEmitter::ALWAYS);
+			printf("SMOKE tones %.2f-%.2f; wood young (%.2f %.2f %.2f), old (%.2f %.2f %.2f); forge young (%.2f %.2f %.2f)\n",
+				lo, hi, young.x, young.y, young.z, old.x, old.y, old.z, forge.x, forge.y, forge.z);
+			check("grey and white puffs", hi - lo > 0.5f && white.x > grey.x + 0.2f && seen == 15);
+			check("darker young, lighter thinning", old.x > young.x + 0.1f && old.x <= 1.0f);
+			check("wood smoke warm", young.x > young.z + 0.05f && young.y < young.x);
+			check("the forge's darker and cooler", forge.x < young.x - 0.1f && forge.z >= forge.x);
+		}
 		// half a second later: the puffs moved on
 		std::vector<ChimneySmoke::Puff> later;
 		ChimneySmoke::Puffs(e, at, 1234, 500.5f, 1.0f, wind, later);
