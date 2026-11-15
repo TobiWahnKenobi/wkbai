@@ -7,6 +7,7 @@
 #include "../AgentUi.h"
 #include "ClientInterface.h"
 #include "../AgentInput.h"
+#include "../AgentServer.h"
 #include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
@@ -2936,7 +2937,9 @@ void ClientInterface::drawSelectionPortrait()
 	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
 	if (!obj)
 		obj = nextSelectedObject.get();
-	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+	// characters and buildings (a selected building stands in the window too; with the HD
+	// models its model is the glTF replacement, larger and with its own centre)
+	if (!obj || (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
 		return;
 	Model* model = obj->getModel();
 	if (!model)
@@ -2951,19 +2954,35 @@ void ClientInterface::drawSelectionPortrait()
 	const float angle = (float)(SDL_GetTicks() % 12000) / 12000.0f * 6.2831853f;
 	portrait = obj->sceneEntity;
 	portrait.model = model;
-	portrait.transform = Matrix::getRotationYMatrix(angle);
-	// lit normally (a selected unit is drawn unlit as its highlight)
-	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING);
+	// fitted to the model's bounding box, as the hover pick tests it (its bounding sphere is
+	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
+	// zoom in and out
+	const auto box = model->interpolateBoundingBox(0);
+	const Vector3 centre = (box[0] + box[1]) * 0.5f;
+	const Vector3 half = (box[1] - box[0]) * 0.5f;
+	// the footprint's radius as it turns, and the half height
+	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
+	const float halfHeight = std::max(0.3f, half.y);
+	const float radius = std::sqrt(footprint * footprint + halfHeight * halfHeight);
+	// turning about its centre's vertical (a building's centre is often off its origin: it
+	// swung out of the square)
+	const Vector3 axis(centre.x, 0.0f, centre.z);
+	portrait.transform = Matrix::getTranslationMatrix(-axis) * Matrix::getRotationYMatrix(angle) * Matrix::getTranslationMatrix(axis);
+	// lit normally (a selected unit is drawn unlit as its highlight; a placed building red or green)
+	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING | SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 	// the camera a little above, the figure filling the square
-	const Vector3 centre = model->getSphereCenter();
-	const float radius = std::max(0.5f, model->getSphereRadius());
 	Camera cam;
 	cam.fovY = 0.6f;
 	cam.aspect = 1.0f;
-	cam.nearDist = 0.1f;
-	cam.farDist = 100.0f;
-	const float dist = radius / std::sin(cam.fovY * 0.5f) * 1.05f;
-	cam.position = centre + Vector3(0.0f, radius * 0.25f, -dist);
+	// far enough that the turning footprint fits across and the box's top and bottom fit at its
+	// nearest corner
+	const float halfFov = cam.fovY * 0.5f;
+	const float dist = std::max(footprint / std::sin(halfFov), halfHeight / std::tan(halfFov) + footprint) * 1.05f;
+	// the clip planes around the box (a building reaches tens of metres: the fixed 100 m far
+	// plane cut it off)
+	cam.nearDist = std::max(0.1f, dist - radius * 1.5f);
+	cam.farDist = dist + radius * 1.5f;
+	cam.position = centre + Vector3(0.0f, halfHeight * 0.25f, -dist);
 	cam.direction = (centre - cam.position).normal();
 	cam.orientation = Vector3(std::asin(cam.direction.y), 0.0f, 0.0f);
 	cam.viewMatrix = Matrix::getLHLookAtViewMatrix(cam.position, centre, Vector3(0, 1, 0));
@@ -5755,12 +5774,14 @@ void ClientInterface::iter()
 		ZoneScopedN("ImGui rendering");
 		PROFILE_SCOPE("UI");
 		gfx->InitImGuiDrawing();
-		ImGuiImpl_Render(gfx);
+		ImGuiImpl_Render(gfx, false);
 	}
 	{
 		PROFILE_SCOPE("Unit portrait");
 		drawSelectionPortrait();
 	}
+	// the agent's screenshot with the portrait in it (it is drawn after the HUD)
+	AgentServer::TakeScreenshotIfAsked(gfx);
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	// (a guest: once the host has sent the rows of the players)
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
