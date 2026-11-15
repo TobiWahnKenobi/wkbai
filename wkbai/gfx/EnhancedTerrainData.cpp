@@ -220,25 +220,117 @@ std::vector<EnhancedTerrainVertex> BuildEnhancedTerrainVertices(Terrain* terrain
 	return trnVertices;
 }
 
-void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out)
+// the picture's colour at (fx, fz) within the tile (0-1, the corners' UVs bilinearly), over
+// 3 x 3 texels: a single one is often a dark speck of the picture
+static void GrassTexel(const Bitmap& a, const std::array<std::pair<float, float>, 4>& uvs, float fx, float fz, float& r, float& g, float& b)
+{
+	const float u = (uvs[0].first + (uvs[1].first - uvs[0].first) * fx) * (1 - fz) + (uvs[3].first + (uvs[2].first - uvs[3].first) * fx) * fz;
+	const float v = (uvs[0].second + (uvs[1].second - uvs[0].second) * fx) * (1 - fz) + (uvs[3].second + (uvs[2].second - uvs[3].second) * fx) * fz;
+	r = g = b = 0;
+	for (int dz = -1; dz <= 1; dz++)
+		for (int dx = -1; dx <= 1; dx++) {
+			const int px = std::clamp((int)(u * a.width) + dx, 0, a.width - 1), pz = std::clamp((int)(v * a.height) + dz, 0, a.height - 1);
+			const uint8_t* t = &a.pixels[(pz * a.width + px) * 4];
+			r += t[0] / 9.0f; g += t[1] / 9.0f; b += t[2] / 9.0f;
+		}
+}
+// green enough for blades (not rock, sand, earth, snow)
+static bool IsGrassColour(float r, float g, float b) { return g > r * 1.05f && g > b * 1.15f && g > 40; }
+
+// smooth value noise, 0-1, on a lattice of one unit (the blend's shifts; build time only)
+static float GrassNoise(float x, float z, uint32_t salt)
+{
+	auto hash = [salt](int ix, int iz) {
+		uint32_t h = (uint32_t)ix * 374761393u + (uint32_t)iz * 668265263u + salt * 2246822519u;
+		h = (h ^ (h >> 13)) * 1274126177u;
+		return ((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+	};
+	const float fx = std::floor(x), fz = std::floor(z);
+	const int ix = (int)fx, iz = (int)fz;
+	float tx = x - fx, tz = z - fz;
+	tx = tx * tx * (3 - 2 * tx); tz = tz * tz * (3 - 2 * tz);
+	const float a = hash(ix, iz) + (hash(ix + 1, iz) - hash(ix, iz)) * tx;
+	const float c = hash(ix, iz + 1) + (hash(ix + 1, iz + 1) - hash(ix, iz + 1)) * tx;
+	return a + (c - a) * tz;
+}
+
+const Bitmap* TerrainGrassBuilder::grassPicture(Terrain* terrain, int x, int z)
 {
 	const TerrainTile* tile = terrain->getTile(x, z);
 	if (tile->fullOfWater || !tile->texture)
-		return;
+		return nullptr;
 	constexpr float tilesize = 5.0f;
 	const float h00 = terrain->getVertex(x, z), h10 = terrain->getVertex(x + 1, z);
 	const float h11 = terrain->getVertex(x + 1, z + 1), h01 = terrain->getVertex(x, z + 1);
 	// none on steep ground (a rise of more than 0.6 per unit)
 	const float rise = std::max({ std::abs(h10 - h00), std::abs(h01 - h00), std::abs(h11 - h01), std::abs(h11 - h10) }) / tilesize;
 	if (rise > 0.6f)
-		return;
+		return nullptr;
 	auto it = atlases.find(tile->texture->file);
 	if (it == atlases.end())
 		it = atlases.emplace(tile->texture->file, Bitmap::loadBitmap(("Maps\\Map_Textures\\" + tile->texture->file).c_str()).convertToR8G8B8A8()).first;
 	const Bitmap& a = it->second;
 	if (a.width <= 0 || a.height <= 0)
+		return nullptr;
+	return &a;
+}
+
+const TerrainGrassBuilder::TileShare& TerrainGrassBuilder::tileShare(Terrain* terrain, int x, int z)
+{
+	x = std::clamp(x, 0, terrain->width - 1);
+	z = std::clamp(z, 0, terrain->height - 1);
+	const size_t n = (size_t)terrain->width * terrain->height, i = (size_t)z * terrain->width + x;
+	if (shares.size() != n) {
+		shares.assign(n, TileShare());
+		shareDone.assign(n, 0);
+	}
+	TileShare& s = shares[i];
+	if (shareDone[i])
+		return s;
+	shareDone[i] = 1;
+	const Bitmap* a = grassPicture(terrain, x, z);
+	if (!a)
+		return s;
+	// 8 x 8 points over the tile
+	const auto uvs = TileCornerUVs(terrain->getTile(x, z));
+	constexpr int N = 8;
+	int hits = 0;
+	for (int pz = 0; pz < N; pz++)
+		for (int px = 0; px < N; px++) {
+			float r, g, b;
+			GrassTexel(*a, uvs, (px + 0.5f) / N, (pz + 0.5f) / N, r, g, b);
+			if (IsGrassColour(r, g, b)) {
+				hits++;
+				s.r += r; s.g += g; s.b += b;
+			}
+		}
+	s.share = hits / (float)(N * N);
+	if (hits > 0) {
+		s.r /= hits; s.g /= hits; s.b /= hits;
+	}
+	return s;
+}
+
+void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out)
+{
+	const Bitmap* picture = grassPicture(terrain, x, z);
+	if (!picture)
 		return;
+	const Bitmap& a = *picture;
+	const TerrainTile* tile = terrain->getTile(x, z);
+	constexpr float tilesize = 5.0f;
+	const float h00 = terrain->getVertex(x, z), h10 = terrain->getVertex(x + 1, z);
+	const float h11 = terrain->getVertex(x + 1, z + 1), h01 = terrain->getVertex(x, z + 1);
 	const auto uvs = TileCornerUVs(tile);
+	// this tile and its 8 neighbours' shares; the blend reaches only into the neighbours
+	const TileShare* near[3][3];
+	bool even = true;
+	const float own = tileShare(terrain, x, z).share;
+	for (int dz = -1; dz <= 1; dz++)
+		for (int dx = -1; dx <= 1; dx++) {
+			near[dz + 1][dx + 1] = &tileShare(terrain, x + dx, z + dz);
+			even = even && std::abs(near[dz + 1][dx + 1]->share - own) < 0.02f;
+		}
 	uint32_t seed = ((uint32_t)x * 73856093u) ^ ((uint32_t)z * 19349663u) ^ 0x9e3779b9u;
 	auto rnd = [&]() {
 		seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
@@ -248,18 +340,45 @@ void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density,
 	const int count = (int)(density * tilesize * tilesize + 0.5f);
 	for (int i = 0; i < count; i++) {
 		const float fx = rnd(), fz = rnd();
-		// the picture's texel there: the corners' UVs, bilinearly
-		const float u = (uvs[0].first + (uvs[1].first - uvs[0].first) * fx) * (1 - fz) + (uvs[3].first + (uvs[2].first - uvs[3].first) * fx) * fz;
-		const float v = (uvs[0].second + (uvs[1].second - uvs[0].second) * fx) * (1 - fz) + (uvs[3].second + (uvs[2].second - uvs[3].second) * fx) * fz;
-		// 3 x 3 texels: a single one is often a dark speck of the picture
-		float r = 0, g = 0, b = 0;
-		for (int dz = -1; dz <= 1; dz++)
-			for (int dx = -1; dx <= 1; dx++) {
-				const int px = std::clamp((int)(u * a.width) + dx, 0, a.width - 1), pz = std::clamp((int)(v * a.height) + dz, 0, a.height - 1);
-				const uint8_t* t = &a.pixels[(pz * a.width + px) * 4];
-				r += t[0] / 9.0f; g += t[1] / 9.0f; b += t[2] / 9.0f;
+		float r, g, b;
+		GrassTexel(a, uvs, fx, fz, r, g, b);
+		const bool green = IsGrassColour(r, g, b);
+		float heightScale = 1.0f;
+		if (!even) {
+			// the shares blended between the tiles' centres at a point shifted by noise (two
+			// octaves, up to 0.55 of a tile): the change runs from one tile's centre to the next
+			// along a ragged line, not the tile's edge
+			const float px = x + fx, pz = z + fz;
+			const float sx = (GrassNoise(px * 0.8f, pz * 0.8f, 1) - 0.5f) * 0.8f + (GrassNoise(px * 2.3f, pz * 2.3f, 3) - 0.5f) * 0.3f;
+			const float sz = (GrassNoise(px * 0.8f, pz * 0.8f, 2) - 0.5f) * 0.8f + (GrassNoise(px * 2.3f, pz * 2.3f, 4) - 0.5f) * 0.3f;
+			const float gx = std::clamp(fx + sx - 0.5f, -1.0f, 0.999f), gz = std::clamp(fz + sz - 0.5f, -1.0f, 0.999f);
+			const int ix = (int)std::floor(gx), iz = (int)std::floor(gz);
+			const float tx = gx - ix, tz = gz - iz;
+			const TileShare* c[4] = { near[iz + 1][ix + 1], near[iz + 1][ix + 2], near[iz + 2][ix + 1], near[iz + 2][ix + 2] };
+			const float w[4] = { (1 - tx) * (1 - tz), tx * (1 - tz), (1 - tx) * tz, tx * tz };
+			float want = 0, cr = 0, cg = 0, cb = 0, high = 0;
+			for (int k = 0; k < 4; k++) {
+				want += w[k] * c[k]->share;
+				cr += w[k] * c[k]->share * c[k]->r; cg += w[k] * c[k]->share * c[k]->g; cb += w[k] * c[k]->share * c[k]->b;
+				high = std::max(high, c[k]->share * std::min(1.0f, w[k] * 4)); // (fading out with its weight: no step)
 			}
-		if (!(g > r * 1.05f && g > b * 1.15f && g > 40))
+			// the own picture's grass kept at the blended chance (want / own), its bare texels
+			// grown over at the rest ((want - own) / (1 - own)): on average want blades in all
+			const float keep = rnd();
+			if (green) {
+				if (own > want && keep * own >= want)
+					continue;
+			}
+			else {
+				if (want <= own || keep * (1 - own) >= want - own || want <= 0)
+					continue;
+				// a bare texel overgrown: the neighbours' grass colour
+				r = cr / want; g = cg / want; b = cb / want;
+			}
+			// thinning out, the blades get shorter too (half height where none would be left)
+			heightScale = 0.5f + 0.5f * std::min(1.0f, want / std::max(high, 1e-3f));
+		}
+		else if (!green)
 			continue; // not grass: rock, sand, earth, snow
 		const float shade = 0.8f + 0.4f * rnd();
 		auto channel = [&](float c) { return (uint32_t)std::clamp(c * shade, 0.0f, 255.0f); };
@@ -269,7 +388,7 @@ void TerrainGrassBuilder::addTile(Terrain* terrain, int x, int z, float density,
 		blade.y = (h00 + (h10 - h00) * fx) * (1 - fz) + (h01 + (h11 - h01) * fx) * fz;
 		blade.colour = channel(r) | (channel(g) << 8) | (channel(b) << 16) | ((uint32_t)(rnd() * 255.0f) << 24);
 		blade.yaw = rnd() * 6.2831853f;
-		blade.height = 0.4f + 0.45f * rnd();
+		blade.height = (0.4f + 0.45f * rnd()) * heightScale;
 		out.push_back(blade);
 	}
 }
