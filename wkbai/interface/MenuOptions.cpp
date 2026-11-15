@@ -156,7 +156,7 @@ namespace {
 			MenuOption o;
 			o.id = "waterQuality"; o.page = "water"; o.label = "Water";
 			o.type = MenuOption::CHOICE;
-			o.choices = { "Original", "Off", "Low", "Medium", "High", "Very high", "Ultra", "Extreme" }; // RenderSettings::WATER_*
+			o.choices = { "Original", "Off", "Very low", "Low", "Medium", "High", "Very high", "Ultra" }; // RenderSettings::WATER_*
 			o.get = [&rs]() { return (float)rs.waterQuality; };
 			o.set = [&rs](float v) { rs.waterQuality = std::clamp((int)v, 0, (int)RenderSettings::WATER_LEVELS - 1); };
 			list.push_back(o);
