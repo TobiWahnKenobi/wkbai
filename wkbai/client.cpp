@@ -110,7 +110,7 @@ void Client::tick()
 							if (soundTag < 0)
 								continue;
 							std::string path; float refDist, maxDist;
-							std::tie(path, refDist, maxDist) = obj->blueprint->getSound(soundTag, obj->subtype);
+							std::tie(path, refDist, maxDist) = obj->blueprint->getSound(soundTag, obj->subtype, (obj->position - camera.position).len3());
 							if (!path.empty()) {
 								SoundPlayer::getSoundPlayer()->soundOwner = obj->id;
 								SoundPlayer::getSoundPlayer()->playSound3D("Warrior Kings Game Set\\Sounds\\" + path, obj->position, refDist, maxDist);
@@ -731,12 +731,15 @@ void Client::tick()
 				if (ClientGameObject* from = findObject(objid)) {
 					if (ClientGameObject* to = findObject(targetid)) {
 						std::string path; float refDist, maxDist;
-						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
+						const bool toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER;
+						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype, toPlayer ? 0.0f : (to->position - camera.position).len3());
 						if (!path.empty()) {
 							std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
 							SoundPlayer::getSoundPlayer()->soundOwner = objid;
-							if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
-								SoundPlayer::getSoundPlayer()->playSound(gfspath);
+							// to the player (the units' acknowledgements, "Issue Attack" from every
+							// unit of a group order): one of a tag and type at a time, not a chorus
+							if (toPlayer)
+								SoundPlayer::getSoundPlayer()->playSound(gfspath, from->blueprint->name + "\n" + std::to_string(soundTag));
 							else {
 								//float rolloff = (refDist / 0.1f - refDist) / (maxDist - refDist);
 								SoundPlayer::getSoundPlayer()->playSound3D(gfspath, to->position, refDist, maxDist);
@@ -752,7 +755,7 @@ void Client::tick()
 				br.readTo(objid, soundTag, targetPos, randval);
 				if (ClientGameObject* from = findObject(objid)) {
 					std::string path; float refDist, maxDist;
-					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
+					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype, (targetPos - camera.position).len3());
 					if (!path.empty()) {
 						std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
 						SoundPlayer::getSoundPlayer()->soundOwner = objid;

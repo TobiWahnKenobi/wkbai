@@ -140,6 +140,10 @@ struct MissileTask : Task {
 };
 
 struct MoveTask : Task {
+	// where it stops: the destination, or the free spot nearest to it (FreeStandingSpot), chosen
+	// once per destination
+	Vector3 stopAt, stopFor;
+	bool stopChosen = false;
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;

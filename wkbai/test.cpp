@@ -5317,16 +5317,12 @@ void Test_MoveArrival()
 						return false;
 					if (distToSpot(i) < 3.0f)
 						return true;
-					// or stopped where it touches a unit standing on its spot (WKB.exe's contacts: units
-					// don't stand on top of each other; the spots are 3 m apart, pikemen 4 m across)
+					// or its Move ended at the free spot nearest to it (WKB.exe's stop discs: PREFERRED_SPACING
+					// round each unit; the spots are 3 m apart, pikemen keep 2 m each)
 					ServerGameObject* u = army[i].get();
-					if (formed || u->movementController.isMoving())
+					if (formed || u->movementController.isMoving() || u->orderConfig.getCurrentOrder())
 						return false;
-					for (int j = 0; j < units; j++)
-						if (j != i && !isDead(j) && (army[j]->position - spots[i]).len2xz() < u->blueprint->boundingRadius + army[j]->blueprint->boundingRadius
-							&& (u->position - army[j]->position).len2xz() < u->blueprint->boundingRadius + army[j]->blueprint->boundingRadius + 0.5f)
-							return true;
-					return false;
+					return distToSpot(i) < 3.0f + 4.0f * u->blueprint->preferredSpacing;
 				};
 				int arrived = 0, arrivalSecond = -1;
 				for (int s = 0; s < seconds; s++) {
@@ -8908,8 +8904,8 @@ void Test_SmallerItems()
 		printf("UNITTEST spacing: the second scout's spot %.2f m from the first (spacing %.2f each)\n", (sb - a->position).len2xz(), scoutBp->preferredSpacing);
 		check((sb - a->position).len2xz() >= need - 0.01f, "the second keeps both spacings from the first");
 	}
-	// 5. contacts (WKB.exe's collision session): a scout sent onto a standing one stops where their
-	// BOUNDING_VOLUMEs touch, and its Move ends there
+	// 5. stop spots (WKB.exe: no unit collisions; a walk ends at a spot with PREFERRED_SPACING clear
+	// of the others'): a scout sent onto a standing one ends its Move next to it, not on top of it
 	{
 		const int move = gs.commands.names.getIndex("Move");
 		ServerGameObject* stander = server.spawnObject(scoutBp, player, {}, {});
@@ -8920,10 +8916,10 @@ void Test_SmallerItems()
 		gs.commands[move].execute(walker, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, spot);
 		run(15.0f);
 		const float d = (walker->position - stander->position).len2xz();
-		const float touch = scoutBp->boundingRadius * 2.0f;
-		printf("UNITTEST contact: the walker stopped %.2f m from the standing scout (touching at %.2f), its order %s, moving %d\n", d,
-			touch, walker->orderConfig.getCurrentOrder() ? "on" : "done", (int)walker->movementController.isMoving());
-		check(d >= touch - 0.3f && d < touch + 1.5f && !walker->movementController.isMoving(), "a unit walking onto another stops where they touch");
+		const float need = 2.0f * scoutBp->preferredSpacing;
+		printf("UNITTEST stop spot: the walker stopped %.2f m from the standing scout (spacings %.2f), its order %s, moving %d\n", d,
+			need, walker->orderConfig.getCurrentOrder() ? "on" : "done", (int)walker->movementController.isMoving());
+		check(d >= need - 0.1f && d < need + 3.0f && !walker->movementController.isMoving(), "a unit sent onto another stops at the free spot next to it");
 		check(!walker->orderConfig.getCurrentOrder(), "its Move ends there");
 	}
 	// 6. an uninterruptible loop (the Rocket Launcher's limbering): a Move given meanwhile waits
@@ -9031,7 +9027,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AgentInput, "Agent input: the agent's frames give the same input as the system's; its Ctrl; the system's dropped; the take-over key"},
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
-{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, contacts, an uninterruptible loop"},
+{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
 };
 
 void LaunchTest()

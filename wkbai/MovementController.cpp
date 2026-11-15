@@ -819,7 +819,6 @@ uint64_t g_pathfindingSearches = 0;
 
 Vector3 MovementController::startMovement(const Vector3& destination)
 {
-	m_contactArrived = false;
 	const uint64_t profileStart = SDL_GetPerformanceCounter();
 	struct ProfileEnd {
 		uint64_t start;
@@ -1275,75 +1274,10 @@ void MovementController::walkToNextNode()
 		m_pathNodes.clear();
 }
 
-// The character this walking one runs into, if any (WKB.exe's collision session cuts the leg at
-// the contact; the pair test isn't traced): another character with a BOUNDING_VOLUME, live, whose
-// sphere the walker's touches, ahead of it (within 70 degrees of where it walks). Not the walker's
-// task target (it is walked up to), nor a member of the walker's formation (the formation keeps its
-// own spacing). Two walking into each other: the one with the lower id goes on (neither would ever
-// move again).
-static ServerGameObject* ContactAhead(ServerGameObject* obj, const Vector3& towards)
-{
-	const float r = obj->blueprint->boundingRadius;
-	Vector3 dir = towards - obj->position;
-	dir.y = 0.0f;
-	const float dl = dir.len2xz();
-	if (dl < 0.01f)
-		return nullptr;
-	dir = dir * (1.0f / dl);
-	CommonGameObject* formation = obj->getParent();
-	if (formation && formation->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
-		formation = nullptr;
-	const ServerGameObject* target = nullptr;
-	if (Order* order = obj->orderConfig.getCurrentOrder())
-		if (Task* task = order->getCurrentTask())
-			target = task->target.get();
-	NNSearch search;
-	search.start(Server::instance, obj->position, r + 3.5f);
-	while (CommonGameObject* c = search.next()) {
-		ServerGameObject* other = (ServerGameObject*)c;
-		if (other == obj || other == target || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
-			continue;
-		const float rb = other->blueprint->boundingRadius;
-		if (rb <= 0.0f || (formation && other->getParent() == formation))
-			continue;
-		Vector3 off = other->position - obj->position;
-		off.y = 0.0f;
-		const float d = off.len2xz();
-		if (d >= r + rb || d < 0.05f)
-			continue;
-		if (dir.x * off.x + dir.z * off.z < 0.34f * d)
-			continue; // not ahead
-		if (other->movementController.m_started && other->movement.isMoving() && other->id < obj->id) {
-			const Vector3 od = other->movement.getDirection();
-			if (od.x * -off.x + od.z * -off.z > 0.0f)
-				continue; // coming at us: it goes on, we do
-		}
-		return other;
-	}
-	return nullptr;
-}
-
 void MovementController::updateMovement()
 {
 	// check if Movement is done, if yes, go to next path node...
 	if (!m_started) return;
-	// Walking into another unit: WKB.exe cuts the walk where their BOUNDING_VOLUMEs touch. Here only
-	// where it matters and can't jam: a Move's last leg onto a unit standing on its destination ends at the
-	// contact, as arrived (the units stand side by side, not on top of each other). Mid-way contacts
-	// and the tasks' walks (work, attack, follow) pass: wkbai's paths and work spots aren't the
-	// original's, and stopping there jammed crowds and kept peasants from their work (test 30's
-	// economies starved, 46's arrivals halved).
-	if (m_pathNodes.size() == 2 && m_object->blueprint->boundingRadius > 0.0f && m_object->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
-		const Order* order = m_object->orderConfig.getCurrentOrder();
-		const Task* task = order ? const_cast<Order*>(order)->getCurrentTask() : nullptr;
-		if (task && task->blueprint->classType == Tags::ORDTSKTYPE_MOVE)
-			if (ServerGameObject* other = ContactAhead(m_object, m_pathNodes[0]); other && !other->movementController.isMoving()
-				&& (other->position - m_pathNodes[0]).len2xz() < m_object->blueprint->boundingRadius + other->blueprint->boundingRadius) {
-				endWalk();
-				m_contactArrived = true;
-				return;
-			}
-	}
 	if (!m_object->movement.isMoving() || (m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() < 0.01f) {
 		m_pathNodes.pop_back();
 		walkToNextNode();

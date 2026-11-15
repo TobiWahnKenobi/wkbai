@@ -765,8 +765,9 @@ void GameSet::parseFile(const char * fn, int pass)
 			case Tags::GAMESET_GLOBAL_MAP_SOUND_TAG: {
 				int st = soundTags.readIndex(gsf);
 				int unk1 = gsf.nextInt();
-				auto unk2 = gsf.nextString();
+				const bool far = gsf.nextString() == "FAR";
 				globalSoundMap[st].push_back(gsf.nextString(true));
+				globalSoundMap[st].back().far = far;
 				break;
 			}
 			case Tags::GAMESET_GLOBAL_SPECIAL_EFFECT_MAPPING: {

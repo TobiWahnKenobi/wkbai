@@ -14,6 +14,8 @@ struct SoundPlayer {
 	virtual void init() = 0;
 	virtual void deinit() = 0;
 	virtual void playSound(const std::string& filePath) = 0;
+	// at the listener, at most one with this key within 0.4 s (a group order's acknowledgements)
+	virtual void playSound(const std::string& filePath, const std::string& key) { playSound(filePath); }
 	virtual void playSound3D(const std::string& filePath, const Vector3& pos, float refDist, float maxDist) = 0;
 	virtual void setListenerPosition(const Vector3& pos, const Vector3& at) = 0;
 	virtual void playMusic(const std::string& filePath) = 0;

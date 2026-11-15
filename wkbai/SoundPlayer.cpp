@@ -32,7 +32,7 @@
 #include <nlohmann/json.hpp>
 
 struct OALSoundPlayer : SoundPlayer {
-	static constexpr size_t MAX_SOURCES = 48;
+	static constexpr size_t MAX_SOURCES = 64;
 
 	bool initialised = false;
 	ALCdevice* device;
@@ -41,6 +41,10 @@ struct OALSoundPlayer : SoundPlayer {
 	std::map<std::string, ALuint> sndBufCache;
 	std::array<ALuint, MAX_SOURCES> sources;
 	std::array<uint32_t, MAX_SOURCES> sourceOwners{}; // the object each played for (STOP_SOUND)
+	// where each plays (its distance to the listener when started; -1 at the listener): with every
+	// source busy, a new sound takes the farthest one playing farther than it is
+	std::array<float, MAX_SOURCES> sourceDistance{};
+	std::map<std::string, std::chrono::steady_clock::time_point> lastKeyPlayed;
 	ALuint musicSource; ALuint musicBuffer = 0;
 	std::array<ALuint, MAX_LOOPS> loopSources;
 	std::array<std::string, MAX_LOOPS> loopFiles;
@@ -131,6 +135,30 @@ struct OALSoundPlayer : SoundPlayer {
 		return false;
 	}
 
+	// a free source, or the one playing the farthest sound beyond `distance`; -1: none
+	int takeSource(float distance) {
+		int farthest = -1;
+		for (size_t i = 0; i < MAX_SOURCES; i++) {
+			ALint val;
+			alGetSourcei(sources[i], AL_SOURCE_STATE, &val);
+			if (val != AL_PLAYING)
+				return (int)i;
+			if (sourceDistance[i] > distance && (farthest < 0 || sourceDistance[i] > sourceDistance[farthest]))
+				farthest = (int)i;
+		}
+		if (farthest >= 0)
+			alSourceStop(sources[farthest]);
+		return farthest;
+	}
+
+	void playSound(const std::string& filePath, const std::string& key) override {
+		const auto now = std::chrono::steady_clock::now();
+		if (auto it = lastKeyPlayed.find(key); it != lastKeyPlayed.end() && now - it->second < std::chrono::milliseconds(400))
+			return;
+		lastKeyPlayed[key] = now;
+		playSound(filePath);
+	}
+
 	void playSound(const std::string& filePath) override {
 		if (checkSoundPlayedRecently(filePath))
 			return;
@@ -141,11 +169,10 @@ struct OALSoundPlayer : SoundPlayer {
 			return;
 		}
 
-		size_t i = 0;
-		for (; i < MAX_SOURCES; i++) {
-			ALint val;
-			alGetSourcei(sources[i], AL_SOURCE_STATE, &val);
-			if (val != AL_PLAYING) {
+		const int took = takeSource(0.0f);
+		for (size_t i = (size_t)std::max(took, 0); took >= 0 && i == (size_t)took; i++) {
+			{
+				sourceDistance[i] = 0.0f;
 				auto src = sources[i];
 				alSourcei(src, AL_BUFFER, *optBuffer);
 				alSourcef(src, AL_MIN_GAIN, 1.0f);
@@ -182,11 +209,11 @@ struct OALSoundPlayer : SoundPlayer {
 			return;
 		}
 
-		size_t i = 0;
-		for (; i < MAX_SOURCES; i++) {
-			ALint val;
-			alGetSourcei(sources[i], AL_SOURCE_STATE, &val);
-			if (val != AL_PLAYING) {
+		const float distance = std::sqrt((pos - listenerPosition).sqlen3());
+		const int took = takeSource(distance);
+		for (size_t i = (size_t)std::max(took, 0); took >= 0 && i == (size_t)took; i++) {
+			{
+				sourceDistance[i] = distance;
 				auto src = sources[i];
 				alSourcei(src, AL_BUFFER, *optBuffer);
 				alSourcef(src, AL_MIN_GAIN, 0.0f);

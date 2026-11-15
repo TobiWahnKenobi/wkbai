@@ -31,6 +31,9 @@ struct GameObjBlueprint {
 	struct SoundRef {
 		std::string filePath;
 		int soundBlueprint = -1;
+		// MAP_SOUND_TAG <tag> <n> NEAR|FAR: WKB.exe keeps two lists (0x4ed110 / 0x4ed160); FAR for
+		// a listener far off (the bombards' distant boom)
+		bool far = false;
 		SoundRef(std::string&& name) : filePath(name) {}
 		SoundRef(int sndBp) : soundBlueprint(sndBp) {}
 	};
@@ -226,7 +229,9 @@ struct GameObjBlueprint {
 	uint32_t getFullId() const;
 	std::string getFullName() const;
 
-	std::tuple<std::string, float, float> getSound(int sndTag, int subtype) const;
+	// The file for a sound tag, its reference and farthest distance; listenerDistance (m, -1: not
+	// known) picks the FAR list beyond 60 m (WKB.exe's rule between them isn't traced)
+	std::tuple<std::string, float, float> getSound(int sndTag, int subtype, float listenerDistance = -1.0f) const;
 	const BPAppearance* getAppearance(int subtype, int appear) const;
 	Model* getModel(int subtype, int appear, int anim, int variant) const;
 	Model* getSpecialEffect(int sfxTag) const;

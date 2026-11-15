@@ -1484,6 +1484,19 @@ void ServerGameObject::setItem(int index, float value)
 		&& parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
 		&& FormationController::shareDamage(this, getItem(index) - value))
 		return;
+	// "Invulnerable": no hit points or structural integrity lost while it isn't 0 (WKB.exe 0x554c00;
+	// Valhalla's palaces)
+	if (g_simulating > 0 && value < getItem(index) && Server::instance->gameSet) {
+		static const GameSet* of = nullptr;
+		static int invulnerable = -1, integrity = -1;
+		if (of != Server::instance->gameSet.get()) {
+			of = Server::instance->gameSet.get();
+			invulnerable = of->items.names.getIndex("Invulnerable");
+			integrity = of->items.names.getIndex("Structural Integrity");
+		}
+		if (invulnerable >= 0 && (index == Tags::PDITEM_HIT_POINTS || index == integrity) && getItem(invulnerable) != 0.0f)
+			return;
+	}
 	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item (id 0: on any object)
 	static const char* traceItem = getenv("WKB_TRACE_ITEM");
 	if (traceItem) {
@@ -1672,6 +1685,9 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 
 	// Find and play movement animation
 	int anim = -1;
+	// the walk played at the speed over the band's NATURAL_MOVEMENT_SPEED (WKB.exe 0x515cd0,
+	// 0x620620: a Knight charging at 8.5 m/s plays Move_Charge at 1.42x); 1 without bands
+	float rate = 1.0f;
 	if (!blueprint->movementBands.empty()) {
 		// take movement band with nearest natural speed
 		auto mbcmp = [speed](const GameObjBlueprint::MovementBand& mb1, const GameObjBlueprint::MovementBand& mb2) {
@@ -1680,6 +1696,8 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 		auto it = std::min_element(blueprint->movementBands.begin(), blueprint->movementBands.end(), mbcmp);
 		auto& mb = *it;
 		anim = mb.defaultAnim;
+		if (mb.naturalMovementSpeed > 0.01f)
+			rate = std::clamp(speed / mb.naturalMovementSpeed, 0.1f, 10.0f);
 		auto& gs = Server::instance->gameSet;
 		SrvScriptContext ctx{ Server::instance, this };
 		for (auto& p : mb.onEquAnims) {
@@ -1694,12 +1712,16 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 	// already walking with it (the next path segment, a formation member following its place),
 	// or stopped just now after walking with it: the walk goes on, not from its first frame again
 	const float now = Server::instance->timeManager.currentTime;
-	if (wasMoving && anim == animationIndex)
+	if (wasMoving && anim == animationIndex) {
+		// the same walk at another rate: on from the same phase
+		if (std::abs(rate - animSpeed) > 1e-3f)
+			setAnimation(anim, false, -1, now - (now - animStartTime) * animSpeed / rate, rate);
 		return;
+	}
 	if (anim == lastWalkAnim && lastWalkStop >= 0.0f && now - lastWalkStop < 0.5f)
-		setAnimation(anim, false, -1, lastWalkAnimStart);
+		setAnimation(anim, false, -1, now - (now - lastWalkAnimStart) * lastWalkAnimSpeed / rate, rate);
 	else
-		setAnimation(anim);
+		setAnimation(anim, false, -1, -1.0f, rate);
 }
 
 void ServerGameObject::stopMovement()
@@ -1707,6 +1729,7 @@ void ServerGameObject::stopMovement()
 	if (movement.isMoving()) {
 		lastWalkAnim = animationIndex;
 		lastWalkAnimStart = animStartTime;
+		lastWalkAnimSpeed = animSpeed;
 		lastWalkStop = Server::instance->timeManager.currentTime;
 	}
 	movement.stopMovement();
@@ -2301,7 +2324,8 @@ float ServerGameObject::baseSpeed()
 	}
 	if (equation != -1) {
 		SrvScriptContext ctx{ Server::instance, this };
-		speed = Server::instance->gameSet->equations[equation]->eval(&ctx);
+		// not under 0.75 m/s (WKB.exe 0x595910 / 0x595980: max(equation, 0.75))
+		speed = std::max(Server::instance->gameSet->equations[equation]->eval(&ctx), 0.75f);
 	}
 	// wet or snowy ground (wkbai's weather; 1 when off)
 	if (Server::instance->environment.enabled())
@@ -3668,10 +3692,14 @@ void Server::simulate()
 				Vector3 dir = obj->movement.getDirection();
 				obj->orientation.y = atan2f(dir.x, -dir.z);
 			}
-			// restart movement is speed changes
-			float speed = obj->computeSpeed();
-			if (speed != obj->currentSpeed) {
-				obj->startMovement(obj->movement.getDestination());
+			// The speed is set once per leg, as WKB.exe's (0x547800 when a leg starts; items and the
+			// ground under the unit count from the next one). Only a formation and its members go on
+			// at a new speed at once: the formation's pace keeps them in their places.
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+				|| (obj->parent && obj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)) {
+				float speed = obj->computeSpeed();
+				if (speed != obj->currentSpeed)
+					obj->startMovement(obj->movement.getDestination());
 			}
 			if (profile) t3 = SimProfile::now();
 			// pf

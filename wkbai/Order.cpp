@@ -955,9 +955,21 @@ void MoveTask::onStart()
 void MoveTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
-	const Vector3& dest = this->target ? this->target->position : this->destination;
-	// there, or as near as another unit in the way lets it (its walk ended at the contact)
-	if ((go->position - dest).sqlen2xz() < 0.1f || go->movementController.takeContactArrived()) {
+	// A walk ends at a free spot (WKB.exe: the stop point needs a PREFERRED_SPACING disc clear of the
+	// other units', 0x436120; the walk itself goes through them, there are no unit collisions):
+	// the destination, or the nearest spot round it with room (FreeStandingSpot). Not for a
+	// formation's members (their places) or a move after a target.
+	Vector3 dest = this->target ? this->target->position : this->destination;
+	const bool member = go->getParent() && go->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+	if (!this->target && !member && go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		if (!stopChosen || (stopFor - dest).sqlen2xz() > 0.01f) {
+			stopFor = dest;
+			stopAt = FreeStandingSpot(go, dest);
+			stopChosen = true;
+		}
+		dest = stopAt;
+	}
+	if ((go->position - dest).sqlen2xz() < 0.1f) {
 		terminate();
 		return;
 	}

@@ -247,14 +247,16 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 				else if (apphead == "MAP_SOUND_TAG") {
 					int st = gameSet->soundTags.readIndex(gsf);
 					int unk1 = gsf.nextInt();
-					auto unk2 = gsf.nextString();
+					const bool far = gsf.nextString() == "FAR";
 					ps.soundMap[st].push_back(gsf.nextString(true));
+					ps.soundMap[st].back().far = far;
 				}
 				else if (apphead == "MAP_SOUND_TAG_TO") {
 					int st = gameSet->soundTags.readIndex(gsf);
 					int unk1 = gsf.nextInt();
-					auto unk2 = gsf.nextString();
+					const bool far = gsf.nextString() == "FAR";
 					ps.soundMap[st].push_back(gameSet->sounds.readIndex(gsf));
+					ps.soundMap[st].back().far = far;
 				}
 				gsf.advanceLine();
 			}
@@ -297,16 +299,17 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			int st = gameSet->soundTags.readIndex(gsf);
 			int unk1 = gsf.nextInt();
 			//assert(unk1 == 1);
-			auto unk2 = gsf.nextString();
-			//assert(unk2 == "NEAR");
+			const bool far = gsf.nextString() == "FAR";
 			soundMap[st].push_back(gsf.nextString(true));
+			soundMap[st].back().far = far;
 			break;
 		}
 		case Tags::CBLUEPRINT_MAP_SOUND_TAG_TO: {
 			int st = gameSet->soundTags.readIndex(gsf);
 			int unk1 = gsf.nextInt();
-			auto unk2 = gsf.nextString();
+			const bool far = gsf.nextString() == "FAR";
 			soundMap[st].push_back(gameSet->sounds.readIndex(gsf));
+			soundMap[st].back().far = far;
 			break;
 		}
 		case Tags::CBLUEPRINT_MAP_MUSIC_TAG: {
@@ -530,7 +533,7 @@ std::string GameObjBlueprint::getFullName() const {
 	return std::string(Tags::GAMEOBJCLASS_tagDict.getStringFromID(bpClass)) + " \"" + name + "\"";
 }
 
-std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int subtype) const
+std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int subtype, float listenerDistance) const
 {
 	const std::vector<GameObjBlueprint::SoundRef>* sndVars = nullptr;
 	auto it = soundMap.find(sndTag);
@@ -538,7 +541,6 @@ std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int
 		sndVars = &it->second;
 	}
 	else {
-		printf("from->subtype: %i\n", subtype);
 		auto& pssm = subtypes.at(subtype).soundMap;
 		it = pssm.find(sndTag);
 		if (it != pssm.end())
@@ -552,10 +554,21 @@ std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int
 	if (sndVars) {
 		const std::string* path = nullptr;
 		float refDist = 30.0f; float maxDist = 300.0f;
-		const GameObjBlueprint::SoundRef& sndref = sndVars->at(rand() % sndVars->size());
+		// the NEAR or FAR list by the listener's distance (either when the other is empty)
+		std::vector<const GameObjBlueprint::SoundRef*> pick;
+		const bool wantFar = listenerDistance > 60.0f;
+		for (const auto& r : *sndVars)
+			if (r.far == wantFar)
+				pick.push_back(&r);
+		if (pick.empty())
+			for (const auto& r : *sndVars)
+				pick.push_back(&r);
+		const GameObjBlueprint::SoundRef& sndref = *pick[rand() % pick.size()];
 		if (sndref.soundBlueprint != -1) {
 			GSSound& snd = gameSet->sounds[sndref.soundBlueprint];
 			refDist = snd.gradientStartDist;
+			// (MUTE_DIST unused, as in WKB.exe: its DirectSound maximum is FLT_MAX, the sound fades
+			// as refDist / d; wkbai stops at 300 m, a tenth of the volume)
 			//maxDist = snd.muteDist;
 			if (snd.files.size() > 0)
 				path = &snd.files[rand() % snd.files.size()];
