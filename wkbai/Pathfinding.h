@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -17,6 +18,12 @@
 //#include <iostream>
 
 namespace Pathfinding {
+
+    // test runs (timing each part): WKB_PATH_NOPRUNE=1 all 8 neighbours, WKB_PATH_CORNERS=1 diagonal
+    // steps across corners allowed, WKB_PATH_NOLATE=1 no leaning on the guess in long searches
+    inline const bool g_noPrune = std::getenv("WKB_PATH_NOPRUNE") != nullptr;
+    inline const bool g_cutCorners = std::getenv("WKB_PATH_CORNERS") != nullptr;
+    inline const bool g_noLate = std::getenv("WKB_PATH_NOLATE") != nullptr;
 
     struct PFPos {
         int x, z;
@@ -134,9 +141,41 @@ namespace Pathfinding {
             // update neighbours
             const int mi = index(mt);
             const score_t mtScore = scores[mi];
+            // The way it came: the 3 neighbours behind aren't looked at (WKB.exe 0x6c5df0: 5 of
+            // the 8). Each is a neighbour of the parent no dearer from there, so the paths stay the
+            // same, with 3/8 fewer tests.
+            int idx = 0, idz = 0;
+            if (mt != start) {
+                const PFPos parent = posOf(edges[mi]);
+                idx = mt.x - parent.x; idz = mt.z - parent.z;
+            }
+            // the four straight neighbours' blocked test, each made once (-1 not yet)
+            int straightBlocked[4] = { -1, -1, -1, -1 }; // +x, -x, +z, -z
+            auto blockedStraight = [&](int k, int dx, int dz) {
+                if (straightBlocked[k] < 0) {
+                    const PFPos p{ mt.x + dx, mt.z + dz };
+                    straightBlocked[k] = (!inside(p) || pred(p)) ? 1 : 0;
+                }
+                return straightBlocked[k] == 1;
+            };
             auto updateNeighbour = [&](int dx, int dz, score_t cost) {
+                if (dx * idx + dz * idz < 0 && !g_noPrune)
+                    return;
                 PFPos pfp{ mt.x + dx, mt.z + dz };
-                if (!inside(pfp) || pred(pfp))
+                if (dx != 0 && dz != 0 && g_cutCorners) {
+                    if (!inside(pfp) || pred(pfp))
+                        return;
+                }
+                else if (dx != 0 && dz != 0) {
+                    // no cutting across a blocked tile's corner: both straight tiles beside the
+                    // diagonal step are free (units clipped building corners; a diagonal wall
+                    // let them through)
+                    if (blockedStraight(dx > 0 ? 0 : 1, dx, 0) || blockedStraight(dz > 0 ? 2 : 3, 0, dz))
+                        return;
+                    if (!inside(pfp) || pred(pfp))
+                        return;
+                }
+                else if (blockedStraight(dx > 0 ? 0 : dx < 0 ? 1 : dz > 0 ? 2 : 3, dx, dz))
                     return;
                 const int pi = index(pfp);
                 if (closed(pi))
@@ -202,19 +241,70 @@ namespace Pathfinding {
         astar2.begin(end, start, width, height);
 
         g_lastSearchCut = false;
+        // A long search (over 2000 steps a side) leans on its guess by 1.2 from there: 2-4 times
+        // fewer tiles on the long ways round, paths a few percent longer at most
+        bool late = false;
+        auto h = [&](PFPos a, PFPos b) { const int v = heuristic(a, b); return late ? v + v / 5 : v; };
         for (int steps = 0;; steps++) {
             g_lastSearchSteps = steps * 2;
             if (steps >= MAX_SEARCH_STEPS) {
                 g_lastSearchCut = true;
                 return astar1.getTo(astar1.best);
             }
-            if (astar1.next(pred, heuristic, extra)) return astar1.get();
-            if (astar2.next(pred, heuristic, extra)) {
+            if (steps == 2000 && !g_noLate)
+                late = true;
+            if (astar1.next(pred, h, extra)) return astar1.get();
+            if (astar2.next(pred, h, extra)) {
                 auto vec = astar2.get();
                 std::reverse(vec.begin(), vec.end());
                 return vec;
             }
         }
+    }
+
+    template<typename Predicate> std::optional<PFPos> SegmentTraversal(float start_x, float start_z, float end_x, float end_z, Predicate pred);
+
+    // A path made straight (end first, as DoPathfinding's): from the start, on to the farthest tile
+    // the straight line to which is free, and so on. The legs go at any angle instead of the
+    // grid's 45-degree zig-zag, with far fewer nodes (movement messages). The farthest free tile is
+    // found by doubling and halving, so a leg costs a few line tests.
+    template<typename Blocked> void StraightenPath(std::vector<PFPos>& tiles, Blocked blocked) {
+        if (tiles.size() < 3)
+            return;
+        auto freeLine = [&](size_t a, size_t b) {
+            return !SegmentTraversal(tiles[a].x + 0.5f, tiles[a].z + 0.5f, tiles[b].x + 0.5f, tiles[b].z + 0.5f, blocked);
+        };
+        std::vector<PFPos> out;
+        size_t a = tiles.size() - 1; // the start
+        out.push_back(tiles[a]);
+        while (a > 0) {
+            // the farthest free one (toward index 0): a-1 is the next tile, always reachable
+            size_t good = a - 1, step = 2;
+            while (true) {
+                const size_t k = a >= step ? a - step : 0;
+                if (k >= good || !freeLine(a, k))
+                    break;
+                good = k;
+                if (k == 0) break;
+                step *= 2;
+            }
+            // between good and the first failure, halving
+            size_t bad = (a >= step ? a - step : 0);
+            if (good > 0 && bad < good) {
+                size_t lo = bad, hi = good; // hi free, lo not (or 0 untested)
+                if (lo == 0 && freeLine(a, 0)) good = 0;
+                else {
+                    while (hi - lo > 1) {
+                        const size_t mid = (lo + hi) / 2;
+                        if (freeLine(a, mid)) hi = mid; else lo = mid;
+                    }
+                    good = hi;
+                }
+            }
+            out.push_back(tiles[good]);
+            a = good;
+        }
+        tiles.assign(out.rbegin(), out.rend());
     }
 
     // Walks through tiles from a starting point in a direction

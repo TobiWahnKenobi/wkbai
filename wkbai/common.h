@@ -197,7 +197,8 @@ struct CommonGameState {
 
 	CommonGameState(ProgramType programType) : programType(programType) {}
 
-	void updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);
+	// oldBlueprint: the footprint freed (a conversion: the old one; null: the object's own)
+	void updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation, const GameObjBlueprint* oldBlueprint = nullptr);
 };
 
 template<typename AnyGameObject, ProgramType PROGTYPE> struct SpecificGameState : CommonGameState {

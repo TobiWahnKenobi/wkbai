@@ -53,11 +53,28 @@ int CommonGameState::getDiplomaticStatus(CommonGameObject* a, CommonGameObject* 
 		return gameSet->defaultDiplomaticStatus;
 }
 
-void CommonGameState::updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation)
+void CommonGameState::updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation, const GameObjBlueprint* oldBlueprint)
 {
 	if (!this->tiles) return;
 	int trnNumX, trnNumZ;
 	std::tie(trnNumX, trnNumZ) = this->terrain->getNumPlayableTiles();
+	// a conversion frees the old blueprint's footprint first, then takes the new one's (WKB.exe
+	// 0x542b60): tiles only the old one had are free again
+	const GameObjBlueprint* oldBp = oldBlueprint ? oldBlueprint : object->blueprint;
+	if (oldBp != object->blueprint && oldBp->bpClass == Tags::GAMEOBJCLASS_BUILDING && oldBp->footprint) {
+		auto rotOrigin = oldBp->footprint->rotateOrigin(oldorientation.y);
+		int ox = (int)((oldposition.x - rotOrigin.first) / 5.0f);
+		int oz = (int)((oldposition.z - rotOrigin.second) / 5.0f);
+		for (auto& to : oldBp->footprint->tiles) {
+			auto ro = to.rotate(oldorientation.y);
+			int px = ox + ro.first, pz = oz + ro.second;
+			if (px >= 0 && px < trnNumX && pz >= 0 && pz < trnNumZ) {
+				auto& tile = this->tiles[pz * trnNumX + px];
+				if (tile.building == object->id)
+					tile.building = nullptr;
+			}
+		}
+	}
 	if (object->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && object->blueprint->footprint) {
 		// free tiles from old position
 		auto rotOrigin = object->blueprint->footprint->rotateOrigin(oldorientation.y);

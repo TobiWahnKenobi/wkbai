@@ -1827,11 +1827,18 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	Server::instance->sendToAll(npw);
 	// change subtype to matching one
 	int postsubtype = postbp->subtypeNames.getIndex(prevbp->subtypeNames.getString(this->subtype));
-	this->setSubtypeAndAppearance((postsubtype != -1) ? postsubtype : 0, 0); // TODO: random subtype as fallback?
+	// the appearance is kept where the new type has it (WKB.exe's conversion swaps only the
+	// blueprint, 0x542b60 / 0x547190)
+	{
+		const int st = (postsubtype != -1) ? postsubtype : 0;
+		auto sit = postbp->subtypes.find(st);
+		const int app = (sit != postbp->subtypes.end() && sit->second.appearances.count(this->appearance)) ? this->appearance : 0;
+		this->setSubtypeAndAppearance(st, app);
+	}
 	// update sight range
 	this->updateSightRange();
 	// update footprint
-	this->updateOccupiedTiles(this->position, this->orientation, this->position, this->orientation);
+	Server::instance->updateOccupiedTiles(this, this->position, this->orientation, this->position, this->orientation, prevbp);
 	// what can be built upon (tree stumps, props) goes from the footprint's tiles. (Seen first as
 	// the stump under a finished foundation; WKB.exe's saves show it gone on loading instead, so
 	// this only matters for a building converted onto new ground.)

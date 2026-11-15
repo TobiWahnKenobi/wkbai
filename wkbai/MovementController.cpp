@@ -31,6 +31,20 @@ uint64_t g_astarSearches = 0, g_astarTiles = 0;
 // the searches a group field answered, the fields made, the goals no search could reach
 uint64_t g_fieldPaths = 0, g_fieldBuilds = 0, g_unreachableGoals = 0;
 double g_astarMs = 0.0;
+// test runs: WKB_PATH_STATS=1 prints the game's totals at exit (searches, tiles taken from the open
+// lists, search ms on the threads, the path nodes walks got)
+namespace {
+	struct PathStats {
+		uint64_t searches = 0, tiles = 0, walks = 0, nodes = 0; double ms = 0.0;
+		const bool on = getenv("WKB_PATH_STATS") != nullptr;
+		~PathStats() {
+			if (on)
+				printf("PATHSTATS searches %llu tiles %llu (%.0f per search) search ms %.1f walks %llu nodes %llu (%.2f per walk)\n",
+					(unsigned long long)searches, (unsigned long long)tiles, searches ? (double)tiles / searches : 0.0, ms,
+					(unsigned long long)walks, (unsigned long long)nodes, walks ? (double)nodes / walks : 0.0);
+		}
+	} g_pathStats;
+}
 
 namespace {
 	// WKB_PATHDUMP=<folder> WKB_PATHDUMP_FROM=<game s> WKB_PATHDUMP_TO=<game s>: every A* search in that
@@ -85,6 +99,7 @@ namespace {
 	const bool g_noFields = getenv("WKB_PATH_NOFIELDS") != nullptr;
 	// changes whenever a cached tile may have changed (the group fields are dropped then)
 	uint32_t g_gridsVersion = 1;
+
 
 	bool waterUnit(const GameObjBlueprint* bp) { return bp->canWalkOnWater() && bp->bpClass != Tags::GAMEOBJCLASS_FORMATION; }
 
@@ -577,6 +592,8 @@ namespace {
 					if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
 					const int ni = nz * w + nx;
 					if (blocked[ni]) continue;
+					// (no diagonal across a blocked corner, as the A*'s)
+					if (k >= 4 && (blocked[z * w + nx] || blocked[nz * w + x])) continue;
 					const uint32_t nd = d + cost[k];
 					if (nd < f.dist[ni]) { f.dist[ni] = nd; ring[nd % 142].push_back(ni); pending++; }
 				}
@@ -608,6 +625,7 @@ namespace {
 				const int nx = p.x + dx[k], nz = p.z + dz[k];
 				if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
 				const int ni = nz * w + nx;
+				if (k >= 4 && (pred(PFPos{ nx, p.z }) || pred(PFPos{ p.x, nz }))) continue;
 				if (f.dist[ni] < bd) { bd = f.dist[ni]; best = ni; }
 			}
 			if (best < 0)
@@ -712,6 +730,9 @@ namespace {
 	// The search itself: reads only (the cache, the tiles, the field), on any thread
 	template<typename Predicate> void runSearch(PathRequest& r, int w, int h, Predicate pred) {
 		const uint64_t t0 = SDL_GetPerformanceCounter();
+		// (TERRAIN_COST, WKB.exe's scale on the guess per tile, was tried: it doubled the search
+		// time, docs/re/pathfinding-search.md; the guess stays the diagonal distance)
+		const auto heuristic = Pathfinding::ManhattanDiagHeuristic;
 		if (r.field) {
 			r.tiles = walkField(*r.field, w, h, r.start, r.end, r.destination, pred);
 			r.fromField = !r.tiles.empty();
@@ -720,16 +741,28 @@ namespace {
 			// a tile costs its extra more (a "Threat" its strength x a straight step: strength 5, a detour
 			// of up to 5 tiles round a pikeman); the A*'s guess stays the distance, so it still finds one
 			const auto* t = r.threat;
-			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h,
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h,
 				[t, w](Pathfinding::PFPos p) { return (int)(*t)[(size_t)p.z * w + p.x]; });
 			r.cut = Pathfinding::g_lastSearchCut;
 			r.steps = Pathfinding::g_lastSearchSteps;
 		}
 		else if (!r.fromField) {
-			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h);
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h);
 			r.cut = Pathfinding::g_lastSearchCut;
 			r.steps = Pathfinding::g_lastSearchSteps;
 		}
+		// straight legs between the path's corners (the tiles with a cost, the intensity maps,
+		// count as in the way, so a leg doesn't cut through a tower's range the search went round)
+		static const bool noStraight = getenv("WKB_PATH_NOSTRAIGHT") != nullptr; // (test runs)
+		if (noStraight) {}
+		else if (r.threat) {
+			const auto* t = r.threat;
+			const Pathfinding::PFPos s = r.start, e = r.end;
+			Pathfinding::StraightenPath(r.tiles, [&](Pathfinding::PFPos p) {
+				return pred(p) || (!(p == s) && !(p == e) && (*t)[(size_t)p.z * w + p.x] > 0); });
+		}
+		else
+			Pathfinding::StraightenPath(r.tiles, pred);
 		r.ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
 	}
 
@@ -1218,6 +1251,12 @@ void MovementController::runPathSearches()
 					r.start.x, r.start.z, r.end.x, r.end.z, r.tiles.empty() ? -1 : r.tiles.front().x, r.tiles.empty() ? -1 : r.tiles.front().z);
 		}
 		PathSearchRunner::apply(obj->movementController, r);
+		if (g_pathStats.on) {
+			if (!r.straight && !r.fromField) { g_pathStats.searches++; g_pathStats.tiles += r.steps; }
+			g_pathStats.ms += r.ms;
+			g_pathStats.walks++;
+			g_pathStats.nodes += obj->movementController.m_pathNodes.size();
+		}
 		if (g_recordSearches) {
 			LastPathSearch& ls = g_lastSearches[obj->id];
 			ls.time = server->timeManager.currentTime;

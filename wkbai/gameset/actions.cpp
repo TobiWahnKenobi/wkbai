@@ -1446,7 +1446,11 @@ struct ActionTeleport : Action {
 	virtual void run(SrvScriptContext* ctx) override {
 		auto op = pos->eval(ctx);
 		for (ServerGameObject* obj : finder->eval(ctx)) {
-			obj->orderConfig.cancelAllOrders();
+			// WKB.exe's TELEPORT (0x49e430 -> 0x547e90) stops the walk and moves the unit; its orders
+			// and the running task go on (a siege tower's Scale ends with its own
+			// TERMINATE_THIS_TASK; a Banished unit walks back and carries on)
+			if (obj->movementController.isMoving())
+				obj->movementController.stopMovement();
 			obj->setPosition(op.position);
 			obj->setOrientation(op.rotation);
 		}

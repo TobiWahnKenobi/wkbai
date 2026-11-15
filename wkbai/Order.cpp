@@ -749,6 +749,21 @@ void MissileTask::onStart()
 	this->msStartTime = Server::instance->timeManager.currentTime;
 	this->order->gameObject->startTrajectory(msInitialPosition, msInitialVelocity, msStartTime);
 	this->msPrevPosition = this->msInitialPosition;
+	// every object on the launch tile is passed through (WKB.exe 0x509734 / 0x566bd0: the firer,
+	// those beside it, the tower a garrison shoots from)
+	if (Server* server = Server::instance; server->tiles && server->terrain) {
+		int nx, nz;
+		std::tie(nx, nz) = server->terrain->getNumPlayableTiles();
+		const int tx = (int)(pos_i.x / 5.0f), tz = (int)(pos_i.z / 5.0f);
+		if (tx >= 0 && tz >= 0 && tx < nx && tz < nz) {
+			auto& tile = server->tiles[tz * nx + tx];
+			for (const auto& ref : tile.objList)
+				if (CommonGameObject* o = ref.getFrom(server))
+					msPassesThrough[o->id] = true;
+			if (CommonGameObject* b = tile.building.getFrom(server))
+				msPassesThrough[b->id] = true;
+		}
+	}
 }
 
 static bool LineSegmentIntersectsSphere(const Vector3& lineStart, const Vector3& lineEnd, const Vector3& center, float radius)
@@ -891,7 +906,15 @@ void MissileTask::onUpdate()
 	NNSearch nns;
 	nns.start(server, prevPosition + step * 0.5f, 15.0f + stepLen * 0.5f);
 	while (ServerGameObject* col = (ServerGameObject*)nns.next()) {
-		if (col == go || (col->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING && col->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER))
+		// every class with a body (WKB.exe tests all the objects on the tiles the step crosses): props
+		// and containers too, unless IGNORE_ALL_MISSILE_COLLISION
+		const int cls = col->blueprint->bpClass;
+		if (col == go || !(cls == Tags::GAMEOBJCLASS_BUILDING || cls == Tags::GAMEOBJCLASS_CHARACTER
+			|| cls == Tags::GAMEOBJCLASS_PROP || cls == Tags::GAMEOBJCLASS_CONTAINER))
+			continue;
+		// (wkbai's: a prop or container that can't be targeted, the birds over the fields and the
+		// like, isn't hit; their models' spheres cover a whole flock)
+		if ((cls == Tags::GAMEOBJCLASS_PROP || cls == Tags::GAMEOBJCLASS_CONTAINER) && !(col->flags & CommonGameObject::fTargetable))
 			continue;
 		if ((col->flags & CommonGameObject::fTerminated) || !col->isInteractable())
 			continue;
@@ -904,9 +927,8 @@ void MissileTask::onUpdate()
 		if (!model)
 			continue;
 		const Vector3 centre = model->getSphereCenter().transform(col->getWorldMatrix());
-		// what the missile was launched from within (the firer, a tower's garrison shooting from it)
-		// it passes through
-		if ((msInitialPosition - centre).sqlen3() <= model->getSphereRadius() * model->getSphereRadius() || col->id == go->creatorId) {
+		// the firer it passes through (and the launch tile's objects, onStart)
+		if (col->id == go->creatorId) {
 			msPassesThrough[col->id] = true;
 			continue;
 		}
@@ -917,7 +939,14 @@ void MissileTask::onUpdate()
 		}
 	}
 
-	if (hitObject && (groundAt < 0.0f || hitAt <= groundAt)) {
+	// a tie goes to the ground (WKB.exe 0x50a570)
+	// test runs: WKB_TRACE_MISSILE=1 prints what each missile hit
+	static const bool traceMissile = getenv("WKB_TRACE_MISSILE") != nullptr;
+	if (traceMissile && (hitObject || groundAt >= 0.0f))
+		printf("MISSILE t=%.2f %u %s from %u hit %s %u %s at (%.1f,%.1f,%.1f)\n", server->timeManager.currentTime, go->id, go->blueprint->name.c_str(),
+			go->creatorId, hitObject && (groundAt < 0.0f || hitAt < groundAt) ? "object" : "ground",
+			hitObject ? hitObject->id : 0, hitObject ? hitObject->blueprint->name.c_str() : "-", nowPosition.x, nowPosition.y, nowPosition.z);
+	if (hitObject && (groundAt < 0.0f || hitAt < groundAt)) {
 		go->updatePosition(prevPosition + step * hitAt);
 		SrvScriptContext ctx(server, go);
 		auto _ = ctx.change(ctx.collisionSubject, hitObject);
@@ -1419,6 +1448,18 @@ void ObjectReferenceTask::onUpdate()
 			}
 		}
 		if (arrived) {
+			// A task loaded as satisfied whose triggers hadn't started, on a standing unit and aimed
+			// at a building: WKB.exe runs its PROXIMITY_SATISFIED_SEQUENCE on the first tick
+			// (0x50d1e0), before the triggers. A cart loaded in "Wait to Collect Resources from
+			// Village" thus ends the wait at once when the village holds enough, and drives to its
+			// point in the Collect task.
+			if (proximitySatisfied && loadedArrived && !triggersStarted && !go->movementController.isMoving()
+				&& target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+				TraceTask(this, "loaded satisfied: proximity sequence");
+				blueprint->proximitySatisfiedSequence.run(order->gameObject);
+				if (!isWorking())
+					return;
+			}
 			this->startTriggers();
 			if (go->movementController.isMoving())
 				go->movementController.stopMovement();

@@ -430,7 +430,10 @@ void Client::tick()
 					// add it back at the correct blueprint key
 					obj->parent->children[postbp].push_back(obj);
 					// now converted!
+					const GameObjBlueprint* prevbp = obj->blueprint;
 					obj->blueprint = postbp;
+					// the footprint: the old one freed, the new one taken (as the server's)
+					updateOccupiedTiles(obj, obj->position, obj->orientation, obj->position, obj->orientation, prevbp);
 				}
 				break;
 			}
