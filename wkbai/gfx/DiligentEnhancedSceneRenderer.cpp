@@ -739,7 +739,7 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		rd = normalize(float3(rd.x, lerp(rd.y, -0.6 * rd.y, lift), rd.z));
 	const float3 sharp = EnvColour(rd);
 	const float3 hemi = 0.5 * EnvColour(n) + 0.25 * EnvColour(normalize(n + float3(0, 1, 0))) + 0.25 * EnvColour(normalize(float3(n.x, 0.05, n.z) + 1e-4));
-	float3 skyReflected = lerp(sharp, hemi, saturate(a * 1.6));
+	float3 sharpFound = sharp;
 	// the sky light (RenderSettings::skyGI): the ambient and the sky's reflection as much as the
 	// point sees of the sky, the sun's light bounced off the ground onto faces turned down, the
 	// clouds' shadow on the sun's light only
@@ -799,15 +799,22 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 			const float4 rt = reflRt.SampleLevel(lightMaskSampler, pixel * LightMasks.zw, 0);
 			if (rt.a > 0.5) {
 				// a model in the way: its colour as the frame before showed it, else a shaded wall
-				const float3 wall = lerp(hemi * 0.3, UngradeColour(rt.rgb), saturate(rt.a - 1));
+				const float3 wall = lerp(diffuse * 0.5, UngradeColour(rt.rgb), saturate(rt.a - 1));
 				found = lerp(wall, found, trust);
 				trust = 1;
 			}
 		}
-		skyReflected = lerp(lerp(sharp, found, trust), hemi, blur);
+		sharpFound = lerp(sharp, found, trust);
 		dbgRefl.xy = float2(ssr.a, trust);
 	}
-	float3 sky = skyReflected * fv * orm.r * vis * occ;
+	// the rough part of the reflection: the light the surface's whole hemisphere gets, its
+	// irradiance, which the diffuse term has already summed (the ambient, the sun on it, the
+	// bounce, the occlusion and the shadows). Before, the sky box's colours (no sun, the ground
+	// one flat colour) stood in for it, so a rough metal, which has no diffuse light, was dark
+	// whatever its albedo; now a rough metal is lit like a diffuse surface of its F0's colour,
+	// and only the smooth part mirrors the sky, the ground and the screen.
+	const float3 skyReflected = lerp(sharpFound * orm.r * vis * occ, diffuse, blur);
+	float3 sky = skyReflected * fv;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
 	// Ultra's lamps and windows: direct light, without the occlusion (DirectWindowLight)
 	float3 cast = float3(0, 0, 0);
