@@ -25,6 +25,12 @@ namespace Pathfinding {
     inline const bool g_cutCorners = std::getenv("WKB_PATH_CORNERS") != nullptr;
     inline const bool g_noLate = std::getenv("WKB_PATH_NOLATE") != nullptr;
 
+    // The next DoPathfinding of this thread may end at the first tile whose centre is within the
+    // radius of the goal point (metres; r2 < 0: no radius). WKB.exe's goal radius for attack moves
+    // (0x6c5ac3: accepted when r^2 > the squared distance)
+    struct GoalRadius { float x = 0.0f, z = 0.0f, r2 = -1.0f; };
+    inline thread_local GoalRadius g_goal;
+
     struct PFPos {
         int x, z;
         bool operator==(const PFPos& p) const { return x == p.x && z == p.z; }
@@ -62,6 +68,7 @@ namespace Pathfinding {
         uint32_t stamp = 0;
         int width = 0, height = 0;
         PFPos start, end;
+        GoalRadius goal; // (the forward search's only)
         bool finished = false;
         bool nothingFound = false;
         // the visited tile nearest to the end so far (a partial path when the search is cut short)
@@ -136,6 +143,15 @@ namespace Pathfinding {
                 finished = true;
                 nothingFound = false;
                 return true;
+            }
+            if (goal.r2 > 0.0f) {
+                const float gx = mt.x * 5.0f + 2.5f - goal.x, gz = mt.z * 5.0f + 2.5f - goal.z;
+                if (gx * gx + gz * gz < goal.r2) {
+                    end = mt;
+                    finished = true;
+                    nothingFound = false;
+                    return true;
+                }
             }
 
             // update neighbours
@@ -239,6 +255,9 @@ namespace Pathfinding {
         static thread_local AStarPathfinder astar1, astar2;
         astar1.begin(start, end, width, height);
         astar2.begin(end, start, width, height);
+        astar1.goal = g_goal;
+        astar2.goal = GoalRadius();
+        g_goal = GoalRadius();
 
         g_lastSearchCut = false;
         // A long search (over 2000 steps a side) leans on its guess by 1.2 from there: 2-4 times

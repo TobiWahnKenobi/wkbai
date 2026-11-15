@@ -26,6 +26,11 @@ struct MovementController {
 	// (runPathSearches). The walk then starts at the step's game time, as it did when it started
 	// here.
 	Vector3 startMovement(const Vector3& destination);
+	// For the next startMovement only: the search may end at the first tile within this many
+	// metres of the destination (WKB.exe's goal radius, request +0x191: an ATTACK task's
+	// proximity, 0x6d937c); -1 to the destination itself
+	void setGoalRadius(float metres) { m_goalRadius = metres; }
+	float m_goalRadius = -1.0f;
 	// stops the walk, and drops a pending search
 	void stopMovement();
 	void updateMovement();

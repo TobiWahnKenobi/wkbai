@@ -819,24 +819,27 @@ static bool MissilePassesThrough(ServerGameObject* missile, ServerGameObject* ob
 	return false;
 }
 
-// where along the segment a (sphere) enters: the fraction in [0, 1], or -1 if it doesn't; a segment
-// starting inside counts at 0 (a big building no longer lets a shot through that starts within it)
-static float SegmentSphereEntry(const Vector3& a, const Vector3& b, const Vector3& centre, float radius)
+// where along the segment a box (low, high; in the segment's frame) is entered: the fraction in
+// [0, 1], or -1 if it isn't (the slab test); a segment starting inside counts at 0
+static float SegmentBoxEntry(const Vector3& a, const Vector3& b, const Vector3& low, const Vector3& high)
 {
-	const Vector3 d = b - a;
-	const float len2 = d.sqlen3();
-	const Vector3 m = a - centre;
-	const float c = m.sqlen3() - radius * radius;
-	if (c <= 0.0f)
-		return 0.0f;
-	if (len2 < 1e-8f)
-		return -1.0f;
-	const float bq = m.dot(d);
-	const float disc = bq * bq - len2 * c;
-	if (disc < 0.0f || bq > 0.0f)
-		return -1.0f;
-	const float t = (-bq - std::sqrt(disc)) / len2;
-	return t >= 0.0f && t <= 1.0f ? t : -1.0f;
+	float t0 = 0.0f, t1 = 1.0f;
+	for (int c = 0; c < 3; c++) {
+		const float lo = std::min(low.coord[c], high.coord[c]), hi = std::max(low.coord[c], high.coord[c]);
+		const float d = b.coord[c] - a.coord[c];
+		if (std::abs(d) < 1e-8f) {
+			if (a.coord[c] < lo || a.coord[c] > hi)
+				return -1.0f;
+			continue;
+		}
+		float ta = (lo - a.coord[c]) / d, tb = (hi - a.coord[c]) / d;
+		if (ta > tb) std::swap(ta, tb);
+		t0 = std::max(t0, ta);
+		t1 = std::min(t1, tb);
+		if (t0 > t1)
+			return -1.0f;
+	}
+	return t0;
 }
 
 void MissileTask::onUpdate()
@@ -886,39 +889,74 @@ void MissileTask::onUpdate()
 
 	ServerGameObject* hitObject = nullptr;
 	float hitAt = 2.0f;
-	NNSearch nns;
-	nns.start(server, prevPosition + step * 0.5f, 15.0f + stepLen * 0.5f);
-	while (ServerGameObject* col = (ServerGameObject*)nns.next()) {
-		// every class with a body (WKB.exe tests all the objects on the tiles the step crosses): props
-		// and containers too, unless IGNORE_ALL_MISSILE_COLLISION
+	// The candidates are the objects on the tiles the step crosses (WKB.exe 0x60f900 / 0x50a570): a
+	// building on every tile of its footprint, the others (characters, containers, props) on the
+	// one tile under their centre. Missiles pass through missiles. The filter (0x50a820) reads only
+	// whether it's terminated, IGNORE_ALL_MISSILE_COLLISION and IGNORE_FRIENDLY_MISSILE_COLLISION:
+	// not targetable, built-upon, corpses and the missile's own target count as anything else.
+	auto consider = [&](ServerGameObject* col) {
+		if (!col || col == go)
+			return;
 		const int cls = col->blueprint->bpClass;
-		if (col == go || !(cls == Tags::GAMEOBJCLASS_BUILDING || cls == Tags::GAMEOBJCLASS_CHARACTER
+		if (!(cls == Tags::GAMEOBJCLASS_BUILDING || cls == Tags::GAMEOBJCLASS_CHARACTER
 			|| cls == Tags::GAMEOBJCLASS_PROP || cls == Tags::GAMEOBJCLASS_CONTAINER))
-			continue;
-		// (wkbai's: a prop or container that can't be targeted, the birds over the fields and the
-		// like, isn't hit; their models' spheres cover a whole flock)
-		if ((cls == Tags::GAMEOBJCLASS_PROP || cls == Tags::GAMEOBJCLASS_CONTAINER) && !(col->flags & CommonGameObject::fTargetable))
-			continue;
-		if ((col->flags & CommonGameObject::fTerminated) || !col->isInteractable())
-			continue;
+			return;
+		if (col->flags & CommonGameObject::fTerminated)
+			return;
 		auto it = msPassesThrough.find(col->id);
 		if (it == msPassesThrough.end())
-			it = msPassesThrough.emplace(col->id, MissilePassesThrough(go, col)).first;
+			it = msPassesThrough.emplace(col->id, col->id == go->creatorId || MissilePassesThrough(go, col)).first;
 		if (it->second)
-			continue;
+			return;
 		Model* model = col->blueprint->getModel(col->subtype, col->appearance, col->animationIndex, col->animationVariant);
 		if (!model)
-			continue;
-		const Vector3 centre = model->getSphereCenter().transform(col->getWorldMatrix());
-		// the firer it passes through (and the launch tile's objects, onStart)
-		if (col->id == go->creatorId) {
-			msPassesThrough[col->id] = true;
-			continue;
+			return;
+		// the step against the model's bounding box at its current animation frame, in the object's
+		// own frame (position, orientation, scale; 0x5c0aa0, 0x5b84f0), its faces widened by 0.1
+		// (0x5cb6f0); a step starting inside counts at once
+		const Matrix toLocal = col->getWorldMatrix().getInverse4x3();
+		const float now = server->timeManager.currentTime;
+		const uint32_t animTime = (uint32_t)std::max(0.0f, (now - col->animStartTime) * col->animSpeed * 1000.0f);
+		auto box = model->interpolateBoundingBox(animTime);
+		for (int c = 0; c < 3; c++) {
+			const float lo = std::min(box[0].coord[c], box[1].coord[c]), hi = std::max(box[0].coord[c], box[1].coord[c]);
+			box[0].coord[c] = lo - 0.1f; box[1].coord[c] = hi + 0.1f;
 		}
-		const float t = SegmentSphereEntry(prevPosition, nowPosition, centre, model->getSphereRadius());
+		const float t = SegmentBoxEntry(prevPosition.transform(toLocal), nowPosition.transform(toLocal), box[0], box[1]);
 		if (t >= 0.0f && t < hitAt) {
 			hitAt = t;
 			hitObject = col;
+		}
+	};
+	if (server->tiles) {
+		int nx, nz;
+		std::tie(nx, nz) = server->terrain->getNumPlayableTiles();
+		const float ax = prevPosition.x / 5.0f, az = prevPosition.z / 5.0f, bx = nowPosition.x / 5.0f, bz = nowPosition.z / 5.0f;
+		auto onTile = [&](int tx, int tz) {
+			if (tx < 0 || tz < 0 || tx >= nx || tz >= nz)
+				return;
+			auto& tile = server->tiles[(size_t)tz * nx + tx];
+			consider(tile.building.getFrom<Server>());
+			for (const auto& ref : tile.objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+					consider(o);
+		};
+		// the tiles in order along the step (a building met on several of them is tested once a
+		// step: msPassesThrough doesn't hold hits, so the nearest entry wins anyway)
+		int tx = (int)ax, tz = (int)az;
+		const int ex = (int)bx, ez = (int)bz;
+		onTile(tx, tz);
+		if (tx != ex || tz != ez) {
+			const float dx = bx - ax, dz = bz - az;
+			const int sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+			const float tdx = dx != 0.0f ? std::abs(1.0f / dx) : 1e30f, tdz = dz != 0.0f ? std::abs(1.0f / dz) : 1e30f;
+			float tmx = dx != 0.0f ? ((sx > 0 ? (tx + 1) - ax : ax - tx) * tdx) : 1e30f;
+			float tmz = dz != 0.0f ? ((sz > 0 ? (tz + 1) - az : az - tz) * tdz) : 1e30f;
+			for (int guard = 0; guard < 64 && (tx != ex || tz != ez); guard++) {
+				if (tmx < tmz) { tx += sx; tmx += tdx; }
+				else { tz += sz; tmz += tdz; }
+				onTile(tx, tz);
+			}
 		}
 	}
 
@@ -1510,7 +1548,13 @@ void ObjectReferenceTask::onUpdate()
 					wallCheckAt = Server::instance->timeManager.currentTime + 2.0f;
 					AttackWallInTheWay(go, target.get());
 				}
+				// an attack's search may end within its proximity, in whole metres (WKB.exe 0x6d937c)
+				auto attackRadius = [&] {
+					if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && this->proximity >= 1.0f && !onPath && !following)
+						go->movementController.setGoalRadius(std::floor(this->proximity));
+				};
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
+					attackRadius();
 					destination = go->movementController.startMovement(goal);
 					pathStepTried = onPath;
 					if (!go->movementController.isMoving())
@@ -1530,8 +1574,10 @@ void ObjectReferenceTask::onUpdate()
 						// which near the target would be a search every step
 						const Vector3& asked = go->movementController.getRequestedDestination();
 						const float drift2 = (goal - asked).sqlen2xz();
-						if (drift2 > std::max(1.0f, 0.5f * (go->position - asked).sqlen2xz()))
+						if (drift2 > std::max(1.0f, 0.5f * (go->position - asked).sqlen2xz())) {
+							attackRadius();
 							destination = go->movementController.startMovement(goal);
+						}
 					}
 				if (proximitySatisfied) {
 					proximitySatisfied = false;

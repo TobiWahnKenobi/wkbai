@@ -100,6 +100,33 @@ namespace {
 	// changes whenever a cached tile may have changed (the group fields are dropped then)
 	uint32_t g_gridsVersion = 1;
 
+	// A steep tile (its rise over half the class's MAX_GRADIENT) costs 20 more (a fifth of a step):
+	// routes go round hills rather than over them, as WKB.exe's search leans by the height
+	// difference (0x6c5a40). About the same search work (tiles -5 % on 4 Peaks' AI game, +9 % in
+	// test 46). Test runs: WKB_PATH_NOSLOPE=1 without.
+	const bool g_slopeCost = getenv("WKB_PATH_NOSLOPE") == nullptr;
+	struct RiseGrid { uint32_t terrainId = 0, revision = 0; size_t logged = 0; int w = 0, h = 0; std::vector<float> rise; } g_rise;
+	const std::vector<float>& riseGrid() {
+		RiseGrid& g = g_rise;
+		const Server* server = Server::instance;
+		const Terrain* trn = server ? server->terrain : nullptr;
+		if (!trn)
+			return g.rise;
+		const auto [w, h] = trn->getNumPlayableTiles();
+		if (g.terrainId == trn->instanceId && g.revision == trn->revision && g.logged == trn->changedVertices.size() && g.w == w && g.h == h)
+			return g.rise;
+		g.terrainId = trn->instanceId; g.revision = trn->revision; g.logged = trn->changedVertices.size(); g.w = w; g.h = h;
+		g.rise.assign((size_t)w * h, 0.0f);
+		for (int tz = 0; tz < h; tz++)
+			for (int tx = 0; tx < w; tx++) {
+				const float v[4] = { trn->getVertex(trn->edge + tx, trn->edge + tz), trn->getVertex(trn->edge + tx + 1, trn->edge + tz),
+					trn->getVertex(trn->edge + tx, trn->edge + tz + 1), trn->getVertex(trn->edge + tx + 1, trn->edge + tz + 1) };
+				g.rise[(size_t)tz * w + tx] = *std::max_element(v, v + 4) - *std::min_element(v, v + 4);
+			}
+		return g.rise;
+	}
+	const float* g_riseData = nullptr; // this batch's (riseGrid), read on the threads
+
 
 	bool waterUnit(const GameObjBlueprint* bp) { return bp->canWalkOnWater() && bp->bpClass != Tags::GAMEOBJCLASS_FORMATION; }
 
@@ -697,6 +724,7 @@ namespace {
 		// unit's paths avoid (IntensityMaps.h), and the "Threat" (wkbai's own, off by default); null:
 		// none
 		const std::vector<int32_t>* threat = nullptr;
+		float goalRadius = -1.0f; // (MovementController::setGoalRadius)
 	};
 	std::vector<PathRequest> g_pathQueue;
 	// the game the queue is for (a test may leave searches queued outside a step, and the next
@@ -730,6 +758,7 @@ namespace {
 	// The search itself: reads only (the cache, the tiles, the field), on any thread
 	template<typename Predicate> void runSearch(PathRequest& r, int w, int h, Predicate pred) {
 		const uint64_t t0 = SDL_GetPerformanceCounter();
+		Pathfinding::g_goal = { r.destination.x, r.destination.z, r.goalRadius > 0.0f ? r.goalRadius * r.goalRadius : -1.0f };
 		// (TERRAIN_COST, WKB.exe's scale on the guess per tile, was tried: it doubled the search
 		// time, docs/re/pathfinding-search.md; the guess stays the diagonal distance)
 		const auto heuristic = Pathfinding::ManhattanDiagHeuristic;
@@ -737,7 +766,16 @@ namespace {
 			r.tiles = walkField(*r.field, w, h, r.start, r.end, r.destination, pred);
 			r.fromField = !r.tiles.empty();
 		}
-		if (!r.fromField && r.threat) {
+		if (!r.fromField && g_slopeCost && g_riseData && r.object.get()) {
+			const float* rise = g_riseData;
+			const float limit = 5.0f * std::tan(std::min(r.object.get()->blueprint->maxGradient, 89.0f) * 0.5f * 3.14159265f / 180.0f);
+			const auto* t = r.threat;
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h,
+				[t, w, rise, limit](Pathfinding::PFPos p) { const size_t i = (size_t)p.z * w + p.x; return (t ? (int)(*t)[i] : 0) + (rise[i] > limit ? 20 : 0); });
+			r.cut = Pathfinding::g_lastSearchCut;
+			r.steps = Pathfinding::g_lastSearchSteps;
+		}
+		else if (!r.fromField && r.threat) {
 			// a tile costs its extra more (a "Threat" its strength x a straight step: strength 5, a detour
 			// of up to 5 tiles round a pikeman); the A*'s guess stays the distance, so it still finds one
 			const auto* t = r.threat;
@@ -860,6 +898,8 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 			g_pathfindingSearches++;
 		}
 	} profileEnd{ profileStart };
+	const float goalRadius = m_goalRadius;
+	m_goalRadius = -1.0f;
 	//m_object->startMovement(destination);
 	//m_pathNodes = { destination };
 
@@ -951,6 +991,7 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	r.end = posEnd;
 	r.searchEnd = posEnd;
 	r.destination = realDestination;
+	r.goalRadius = goalRadius;
 	m_pending = true;
 	m_pendingDestination = realDestination;
 	return realDestination;
@@ -1221,6 +1262,10 @@ void MovementController::runPathSearches()
 		searches.push_back(&r);
 	}
 	g_pathBatchSearches += searches.size();
+	if (g_slopeCost) {
+		const std::vector<float>& rg = riseGrid();
+		g_riseData = rg.size() == (size_t)w * h ? rg.data() : nullptr;
+	}
 	lap(2);
 	forEach(searches.size(), [&](size_t i) {
 		PathRequest& r = *searches[i];
