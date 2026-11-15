@@ -1584,6 +1584,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Models lit per pixel, with highlights", &s.modelLighting);
 		ImGui::BeginDisabled(!s.modelLighting);
 		ImGui::SliderFloat("Model highlight strength", &s.modelSpecular, 0.0f, 3.0f, "%.2f");
+		{
+			static const char* const reflLevels[] = { "Low (sky and ground)", "High (screen-space)", "Ultra (screen-space + ray-traced, needs DXR 1.1)" };
+			ImGui::Combo("Reflections on buildings and units", &s.modelReflections, reflLevels, 3);
+		}
 		ImGui::SliderFloat("Model detail from textures", &s.modelDetailNormals, 0.0f, 8.0f, "%.1f");
 		ImGui::Checkbox("Sky light on models", &s.skyLight);
 		ImGui::EndDisabled();
@@ -5607,6 +5611,10 @@ void ClientInterface::iter()
 			dgfx->shadows.rayShadowsOn = g_renderSettings.staticShadows && g_renderSettings.rtShadows && dgfx->shadows.rayShadowsSupported;
 			dgfx->shadows.staticShadows = g_renderSettings.staticShadows && !dgfx->shadows.rayShadowsOn;
 			dgfx->shadows.rayReflectionsOn = g_renderSettings.rtReflections && g_renderSettings.waterQuality >= RenderSettings::WATER_LOW && dgfx->shadows.rayShadowsSupported;
+			// the reflections on buildings and units (with the models lit per pixel); Ultra's rays where
+			// the GPU can, else as High
+			dgfx->shadows.modelReflections = g_renderSettings.modelLighting ? g_renderSettings.modelReflections : 0;
+			dgfx->shadows.modelRtReflectionsOn = dgfx->shadows.modelReflections >= 2 && dgfx->shadows.rayShadowsSupported;
 		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))

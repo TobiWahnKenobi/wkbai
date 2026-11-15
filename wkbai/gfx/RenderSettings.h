@@ -217,6 +217,12 @@ struct RenderSettings {
 	// the water's screen-space reflections (water Low or better): the frame behind the water seen
 	// along the mirror ray; off, the water mirrors the sky alone (and the ray-traced reflections)
 	bool ssReflections = true;
+	// the reflections on buildings and units (models lit per pixel, enhanced renderers on
+	// Diligent): 0 Low, the sky and the ground along the reflected view; 1 High, with
+	// screen-space reflections (the frame before seen along the mirror ray; needs the
+	// post-processing effects' depth pre-pass); 2 Ultra, High and ray-traced rays where the
+	// screen has no answer (needs inline ray tracing, else as High)
+	int modelReflections = 0;
 	// the ground's Fresnel (enhanced terrain renderer on Diligent): its reflection of the sky
 	// at grazing angles, as a rough dielectric's (Schlick, F0 0.04) times this; 0 off. The
 	// models' per-pixel lighting (modelLighting) has its own Fresnel, PBR packs or not.

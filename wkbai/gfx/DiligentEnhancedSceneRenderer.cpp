@@ -272,6 +272,13 @@ cbuffer SunBuffer
 	float4 FireLightCount; // x: how many of FireLights are in use, y: the night's share of the windows' cast light
 	float4 FireLights[32]; // per light: position and radius, colour
 	float4 Season; // wkbai's seasons: x autumn (the broadleaf trees' colours), y dryness (heat); 0 without
+	// the reflections on buildings and units (RenderSettings::modelReflections): this frame's
+	// view-projection (the screen-space march), the frame before's (its colour); x: 0 off,
+	// 1 screen-space, 2 and the ray-traced; y, z: the projection's P33, P43 (view z from the
+	// depth); w: the frame (the march's noise)
+	float4x4 ReflViewProj;
+	float4x4 ReflPrevViewProj;
+	float4 Reflect;
 };
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
@@ -485,6 +492,88 @@ float3 SkyColour(float3 d)
 	return d.y >= 0 ? lerp(SkyHorizon.rgb, SkyUp.rgb, saturate(d.y)) : lerp(SkyHorizon.rgb, SkyDown.rgb, saturate(-d.y));
 }
 
+// The reflections on buildings and units, High and Ultra (RenderSettings::modelReflections,
+// SunBuffer.Reflect): the depth pre-pass's depth of this frame, the frame before's colour (as
+// drawn: graded), Ultra's ray-traced reflections (DiligentRayShadows::renderModelReflections,
+// half size: rgb the frame before's colour where its ray hit a model, a 0 no hit, else 1 + how
+// much of that colour is known)
+Texture2D<float> reflDepth;
+Texture2D reflPrevScene;
+Texture2D reflRt;
+
+// GradeColour undone (without its clipping): the frame before's colour as the light it was
+float3 UngradeColour(float3 c)
+{
+	c = (c - 0.5 - Grade.y) / max(Grade.z, 0.05) + 0.5;
+	float lum = dot(c, float3(0.299, 0.587, 0.114));
+	c = lum + (c - lum) / max(Grade.w, 0.05);
+	return max(c / max(Grade.x, 0.05), 0);
+}
+
+float ReflViewZ(float d)
+{
+	return Reflect.z / (d - Reflect.y);
+}
+
+// where a world point is on this frame's screen (uv) and its view depth (z); w <= 0: behind
+float3 ReflProject(float3 q, float4x4 viewProj)
+{
+	float4 c = mul(float4(q, 1), viewProj);
+	if (c.w <= 0.05)
+		return float3(-1, -1, 0);
+	return float3(c.xy / c.w * float2(0.5, -0.5) + 0.5, c.w);
+}
+
+// The screen-space reflection from p along r: a march over this frame's depth (20 steps, each
+// longer than the last, from a jittered start: the temporal anti-aliasing smooths the bands),
+// the crossing refined by halving; the colour where that point was in the frame before. rgb its
+// light, a how far it can be trusted (the screen's and the reach's edges fade it); a -1: none,
+// rgb why (WKBAI_MODEL_DEBUG 12): red the ray left the screen, green it went behind a surface
+// the depth can't see past, blue no place in the frame before, yellow nothing within its reach
+float4 ScreenReflection(float3 p, float3 r, float2 pixel)
+{
+	float2 dsize;
+	reflDepth.GetDimensions(dsize.x, dsize.y);
+	const float noise = frac(52.9829189 * frac(dot(pixel + 5.588238 * fmod(Reflect.w, 64), float2(0.06711056, 0.00583715))));
+	const float dist = distance(p, FogCamera.xyz);
+	const float reach = 30 + dist * 0.5;
+	const int STEPS = 20;
+	float t = (0.12 + 0.002 * dist) * (0.6 + 0.8 * noise);
+	const float growth = pow(reach / t, 1.0 / STEPS);
+	float prevT = 0;
+	[loop] for (int i = 0; i < STEPS; i++) {
+		float3 s = ReflProject(p + r * t, ReflViewProj);
+		if (s.z <= 0 || any(s.xy < 0) || any(s.xy > 1))
+			return float4(1, 0, 0, -1); // (debug: why none, in rgb)
+		float diff = s.z - ReflViewZ(reflDepth.Load(int3(s.xy * dsize, 0)));
+		if (diff > 0) {
+			// a crossing: in front of the surface there, or behind it (a thick object: no hit)
+			if (diff > 0.6 + s.z * 0.02 + (t - prevT) * 1.5)
+				return float4(0, 1, 0, -1);
+			float a0 = prevT, a1 = t;
+			[unroll] for (int j = 0; j < 5; j++) {
+				float m = (a0 + a1) * 0.5;
+				float3 sm = ReflProject(p + r * m, ReflViewProj);
+				if (sm.z - ReflViewZ(reflDepth.Load(int3(saturate(sm.xy) * (dsize - 1), 0))) > 0)
+					a1 = m;
+				else
+					a0 = m;
+			}
+			float3 hit = p + r * a1;
+			float3 h = ReflProject(hit, ReflViewProj);
+			float3 ph = ReflProject(hit, ReflPrevViewProj);
+			if (ph.z <= 0 || any(ph.xy < 0) || any(ph.xy > 1))
+				return float4(0, 0, 1, -1);
+			float2 e = min(min(h.xy, 1 - h.xy), min(ph.xy, 1 - ph.xy));
+			float trust = saturate(min(e.x, e.y) * 14) * saturate((reach - a1) / (reach * 0.3));
+			return float4(UngradeColour(reflPrevScene.SampleLevel(lightMaskSampler, ph.xy, 0).rgb), trust);
+		}
+		prevT = t;
+		t *= growth;
+	}
+	return float4(1, 1, 0, -1);
+}
+
 // What a reflection sees towards a direction: the live sky (by the clock and the weather) and
 // the ground below it, else the sky box's colours, else the map's fog colour
 float3 EnvColour(float3 d)
@@ -690,6 +779,34 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	// the sky's and the ground's light reflected, by the Fresnel of the view (smooth surfaces
 	// more at grazing angles) and the surface's occlusion (the bake's, the screen's, the sky's)
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
+	// High and Ultra: what the screen (and Ultra's rays) see along the reflection, in place of
+	// the sharp part of the sky and ground (the rough part keeps the hemisphere's light).
+	// Skipped where the reflection hardly shows (rough, or a dull non-metal).
+	const float blur = saturate(a * 1.6);
+	float3 dbgRefl = float3(0, 0, Reflect.x / 2), dbgFound = float3(0, 0, 0);
+	if (Reflect.x > 0 && blur < 0.85 && max(fv.r, max(fv.g, fv.b)) * (1 - blur) > 0.02) {
+		const float2 pixel = input.Pos.xy;
+		// the lobe: the dominant direction, jittered within the roughness every frame
+		const float3 jit = frac(sin(float3(dot(pixel, float2(12.9898, 78.233)), dot(pixel, float2(39.346, 11.135)),
+			dot(pixel, float2(73.156, 52.235)))) * 43758.5453 + Reflect.w * 0.618034) - 0.5;
+		float3 rr = normalize(lerp(r, n, a) + jit * a * 0.8);
+		rr = normalize(rr + n * max(0.02 - dot(rr, n), 0));
+		const float4 ssr = ScreenReflection(input.WorldPos + n * (0.02 + 0.0005 * distance(input.WorldPos, FogCamera.xyz)), rr, pixel);
+		float3 found = ssr.a < 0 ? float3(0, 0, 0) : ssr.rgb;
+		float trust = max(ssr.a, 0);
+		dbgFound = ssr.a < 0 ? ssr.rgb : float3(1, 1, 1);
+		if (Reflect.x > 1.5 && trust < 0.99) {
+			const float4 rt = reflRt.SampleLevel(lightMaskSampler, pixel * LightMasks.zw, 0);
+			if (rt.a > 0.5) {
+				// a model in the way: its colour as the frame before showed it, else a shaded wall
+				const float3 wall = lerp(hemi * 0.3, UngradeColour(rt.rgb), saturate(rt.a - 1));
+				found = lerp(wall, found, trust);
+				trust = 1;
+			}
+		}
+		skyReflected = lerp(lerp(sharp, found, trust), hemi, blur);
+		dbgRefl.xy = float2(ssr.a, trust);
+	}
 	float3 sky = skyReflected * fv * orm.r * vis * occ;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
 	// Ultra's lamps and windows: direct light, without the occlusion (DirectWindowLight)
@@ -698,7 +815,9 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		cast = CastLightOn(albedo * (1 - metal), DirectWindowLight(input.WorldPos, n));
 	// WKBAI_MODEL_DEBUG (Season.z): 1 the ORM map, 2 metalness, 3 the sky's reflection x4,
 	// 4 the reflected sky's colour, 5 the sun's highlight, 6 the albedo, 7 f0, 8 NaN finder (sharp,
-	// hemi, specular), 9 sky visibility / occlusion / sun shadow, 10 roughness, metal, NaN
+	// hemi, specular), 9 sky visibility / occlusion / sun shadow, 10 roughness, metal, NaN,
+	// 11 the screen-space reflection's trust, with Ultra's rays, on; 12 why it found none
+	// (ScreenReflection; white: found, black: not tried)
 	if (Season.z > 0.5) {
 		const int m = (int)(Season.z + 0.5);
 		if (m == 1) return orm;
@@ -710,6 +829,8 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 		if (m == 7) return f0;
 		if (m == 8) return float3(any(isnan(sharp)) ? 1 : 0, any(isnan(hemi)) ? 1 : 0, any(isnan(specular)) ? 1 : 0);
 		if (m == 9) return float3(vis, occ, PomShadow * rtSun);
+		if (m == 11) return dbgRefl;
+		if (m == 12) return dbgFound;
 		if (m == 10) return float3(roughness, metal, any(isnan(diffuse + sky + fire + cast)) ? 1 : 0);
 	}
 	// (the light a surface reflects it does not also scatter: the diffuse less the Fresnel)
@@ -1765,7 +1886,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 672;
+	cbDesc.Size = 816;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 	cbDesc.Name = "Scene motion";
 	cbDesc.Size = 128;
@@ -1843,6 +1964,10 @@ void DiligentEnhancedSceneRenderer::init()
 		{ SHADER_TYPE_PIXEL, "farHorizonA", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 		{ SHADER_TYPE_PIXEL, "farHorizonB", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 		{ SHADER_TYPE_PIXEL, "lightAoMask", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		// the reflections on buildings and units (High, Ultra): the pre-pass's depth, the frame before, Ultra's rays
+		{ SHADER_TYPE_PIXEL, "reflDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "reflPrevScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
+		{ SHADER_TYPE_PIXEL, "reflRt", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_DYNAMIC },
 	};
 	SamplerDesc cloudSampler; // the cloud map tiles the map
 	cloudSampler.AddressU = cloudSampler.AddressV = cloudSampler.AddressW = TEXTURE_ADDRESS_WRAP;
@@ -2213,7 +2338,7 @@ void DiligentEnhancedSceneRenderer::render()
 		UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 672);
+	memset(mapped, 0, 816);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -2251,9 +2376,21 @@ void DiligentEnhancedSceneRenderer::render()
 		season[0] = g_environment.autumn;
 		season[1] = g_environment.dryness;
 	}
-	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..10
+	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..12
 	static const float modelDebug = [] { const char* e = getenv("WKBAI_MODEL_DEBUG"); return e ? (float)atoi(e) : 0.0f; }();
 	season[2] = modelDebug;
+	// the reflections on buildings and units (DiligentGfx::shadows.modelReflections): on with the
+	// pre-pass's depth and the frame before (the same test as their textures' binding below)
+	{
+		const bool on = !depthOnly && shadows.modelReflections >= 1 && shadows.lightingDepth && shadows.prevScene && !shadows.portraitPass;
+		float* refl = (float*)mapped + 168;
+		memcpy(refl, &shadows.viewProj, sizeof(Matrix));
+		memcpy(refl + 16, &shadows.prevViewProj, sizeof(Matrix));
+		refl[32] = !on ? 0.0f : shadows.modelReflections >= 2 && shadows.modelRtReflections ? 2.0f : 1.0f;
+		refl[33] = camera->projMatrix._33;
+		refl[34] = camera->projMatrix._43;
+		refl[35] = (float)(dgfx->FrameIndex() % 1024);
+	}
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
@@ -2288,6 +2425,14 @@ void DiligentEnhancedSceneRenderer::render()
 			v->Set(shadows.farHorizon[k] ? shadows.farHorizon[k] : dgfx->GetTextureView(nullptr));
 	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "lightAoMask"))
 		v->Set(shadows.lightAo ? shadows.lightAo : dgfx->GetTextureView(nullptr));
+	// the reflections on buildings and units (SunBuffer.Reflect: off without them)
+	const bool reflOn = !_impl->depthOnly && shadows.modelReflections >= 1 && shadows.lightingDepth && shadows.prevScene && !shadows.portraitPass;
+	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "reflDepth"))
+		v->Set(reflOn ? shadows.lightingDepth : dgfx->GetTextureView(nullptr));
+	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "reflPrevScene"))
+		v->Set(reflOn ? shadows.prevScene : dgfx->GetTextureView(nullptr));
+	if (auto* v = _impl->envBinding->GetVariableByName(SHADER_TYPE_PIXEL, "reflRt"))
+		v->Set(reflOn && shadows.modelRtReflections ? shadows.modelRtReflections : dgfx->GetTextureView(nullptr));
 
 	// a material's binding: its texture, and the override pack's albedo, normal and ORM maps
 	// beside it (<texture>_albedo, _normal, _orm, _emissive, .png, .tga, .dds or .ktx2) or
@@ -2638,7 +2783,7 @@ void DiligentEnhancedSceneRenderer::render()
 	// The ray-traced shadows' casters (and what the ray-traced reflections see): every entity
 	// casting a shadow, with its mesh's structure
 	// (an animated one's at its current key frame), then the frame's top-level structure
-	if (!prepared && (shadows.rayShadowsOn || shadows.rayReflectionsOn)) {
+	if (!prepared && (shadows.rayShadowsOn || shadows.rayReflectionsOn || shadows.modelRtReflectionsOn)) {
 		PROFILE_SCOPE("RT structures");
 		if (!shadows.rayShadows)
 			shadows.rayShadows = new DiligentRayShadows(device);
