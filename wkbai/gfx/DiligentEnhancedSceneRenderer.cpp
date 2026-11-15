@@ -697,7 +697,8 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	if (gi && GIRegion.w != 0)
 		cast = CastLightOn(albedo * (1 - metal), DirectWindowLight(input.WorldPos, n));
 	// WKBAI_MODEL_DEBUG (Season.z): 1 the ORM map, 2 metalness, 3 the sky's reflection x4,
-	// 4 the reflected sky's colour, 5 the sun's highlight, 6 the albedo, 7 f0
+	// 4 the reflected sky's colour, 5 the sun's highlight, 6 the albedo, 7 f0, 8 NaN finder (sharp,
+	// hemi, specular), 9 sky visibility / occlusion / sun shadow, 10 roughness, metal, NaN
 	if (Season.z > 0.5) {
 		const int m = (int)(Season.z + 0.5);
 		if (m == 1) return orm;
@@ -2250,7 +2251,7 @@ void DiligentEnhancedSceneRenderer::render()
 		season[0] = g_environment.autumn;
 		season[1] = g_environment.dryness;
 	}
-	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..7
+	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..10
 	static const float modelDebug = [] { const char* e = getenv("WKBAI_MODEL_DEBUG"); return e ? (float)atoi(e) : 0.0f; }();
 	season[2] = modelDebug;
 	float* fire = (float*)mapped + 32;
