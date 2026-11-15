@@ -10598,6 +10598,78 @@ void Test_BuildIdentity()
 	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
+// The lobby's AI choice per position (FrontEndUI.lua aiKinds) sends the ministries as
+// "aiMinistries" and "aiMinistriesSlots", a bitmask of start positions. On Fields Of Blood with
+// the second position empty, the ministries at the third position only govern that position's
+// player (from the first step on, and after the empty position's player is freed); with the mask
+// 0 (old configs: every AI) all three AIs; a mask of the empty position alone none.
+// Prints "AISLOT <check> <0|1>" and "AISLOT all <0|1>".
+void Test_MinistrySlots()
+{
+	LoadBCP("data.bcp");
+	bool all = true;
+	auto check = [&](const char* what, bool ok) {
+		printf("AISLOT %s %d\n", what, (int)ok);
+		all &= ok;
+	};
+	// the governed players' ids after `steps` steps; `ids` the players at the 4 positions
+	auto game = [&](int mask, int steps, std::vector<uint32_t>& ids, bool& on) {
+		Server server;
+		server.loadSaveGame("Save_Games\\4 Player Fields Of Blood.lvl");
+		g_settings["simSeed"] = 7;
+		ids.clear();
+		for (const auto& [type, children] : server.getLevel()->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && c->blueprint->name == "Human Player")
+					ids.push_back(c->id);
+		std::sort(ids.begin(), ids.end());
+		QuickSkirmishMenu skirmish;
+		skirmish.changeSettingsForLevel("4 Player Fields Of Blood.lvl");
+		std::vector<QuickSkirmishMenu::Slot> slots(4);
+		const char* generals[4] = { "Belisar The Hammer Kingmaker", "", "Lady Elinor Kingmaker", "Kolvas The Great Kingmaker" };
+		for (int i = 0; i < 4; i++) { slots[i].type = QuickSkirmishMenu::Slot::AI; slots[i].general = generals[i]; }
+		slots[1].type = QuickSkirmishMenu::Slot::EMPTY;
+		skirmish.setSlots(slots);
+		skirmish.setSetting("aiMinistries", 1);
+		skirmish.setSetting("aiMinistriesSlots", mask);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		skirmish.applySettings(server);
+		on = server.aiMinistries;
+		std::set<uint32_t> governed;
+		for (int s = 0; s < steps; s++) {
+			StepServer(server, 1);
+			for (const auto& [id, g] : server.ministries.governments)
+				governed.insert(id);
+		}
+		printf("AISLOT mask %d: on %d, governed", mask, (int)on);
+		for (uint32_t id : governed)
+			printf(" %u", id);
+		printf(" (positions %u %u %u %u)\n", ids.size() > 0 ? ids[0] : 0, ids.size() > 1 ? ids[1] : 0, ids.size() > 2 ? ids[2] : 0, ids.size() > 3 ? ids[3] : 0);
+		return governed;
+	};
+	std::vector<uint32_t> ids;
+	bool on = false;
+	{
+		const std::set<uint32_t> g = game(4, 200, ids, on);
+		check("4 positions", ids.size() == 4);
+		check("the third position alone", on && ids.size() == 4 && g == std::set<uint32_t>{ ids[2] });
+	}
+	{
+		const std::set<uint32_t> g = game(0, 200, ids, on);
+		check("every AI (old configs)", on && ids.size() == 4 && g == std::set<uint32_t>{ ids[0], ids[2], ids[3] });
+	}
+	{
+		const std::set<uint32_t> g = game(2, 50, ids, on);
+		check("the empty position alone: none", !on && g.empty());
+	}
+	{
+		const std::set<uint32_t> g = game(1 | 8, 200, ids, on);
+		check("the first and fourth", on && ids.size() == 4 && g == std::set<uint32_t>{ ids[0], ids[3] });
+	}
+	printf("AISLOT all %d\n", (int)all);
+}
+
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
@@ -10693,6 +10765,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryEconomy, "Ministry AI economy: the peasant cap, gold miners, research and repairs against the same game without"},
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 {Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
+{Test_MinistrySlots, "Ministry AI per start position (the lobby's AI choice): the positions' players with an empty position before them, every AI with mask 0"},
 };
 
 void LaunchTest()

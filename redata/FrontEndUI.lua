@@ -971,8 +971,48 @@ local function slotText(slot)
 	if slot.type == "empty" then return T("FRONT_END_CHAT_AI_PLAYER"), GREY end
 	local g = slot.general and generalsByBlueprint and generalsByBlueprint[slot.general]
 	local name = g and g.name or T("FRONT_END_CHAT_RANDOM_GENERAL")
-	if slot.aiScript and slot.aiScript ~= "" then name = name .. " [" .. slot.aiScript .. "]" end
+	local script = slot.aiScript and slot.aiScript ~= ""
+	-- (short enough to stay left of the colour column)
+	if script and slot.ministries then name = name .. " [" .. slot.aiScript .. "+Min]"
+	elseif script then name = name .. " [" .. slot.aiScript .. "]"
+	elseif slot.ministries then name = name .. " [Ministries]" end
 	return name, YELLOW
+end
+
+-- The AI of an AI position, one choice (wkbai's own): the Kingmaker scripts alone (the default),
+-- the ministry AI on top of them (Ministries.h), a Lua AI (LuaAI\<name>.lua: redata's and the
+-- mods'), or a Lua AI with the ministries, which it reads and steers (ai.report, ai.giveMission,
+-- ai.setWeight). Each is { script, ministries, label }.
+local function aiKinds()
+	local kinds = { { "", false, "Kingmaker (default)" }, { "", true, "Ministries" } }
+	local luaAIs = getLuaAIs()
+	for _, name in ipairs(luaAIs) do kinds[#kinds + 1] = { name, false, "Lua " .. name } end
+	for _, name in ipairs(luaAIs) do kinds[#kinds + 1] = { name, true, "Lua " .. name .. " + Ministries" } end
+	return kinds
+end
+
+-- The ministries' settings from the positions' choices: "aiMinistries" on when any AI position
+-- has them, "aiMinistriesSlots" the bitmask of those positions (bit 0 the first). Old settings
+-- (a config's or a test's "aiMinistries", with its "aiMinistriesSlots", 0 for every AI) are first
+-- taken into the AI positions' choices.
+local function absorbMinistrySettings()
+	local s = skirmish.settings
+	if (s.aiMinistries or 0) == 0 then return end
+	local mask = s.aiMinistriesSlots or 0
+	for i, slot in ipairs(skirmish.slots) do
+		if slot.type == "ai" and (mask == 0 or (i <= 31 and math.floor(mask / 2 ^ (i - 1)) % 2 == 1)) then slot.ministries = true end
+	end
+	s.aiMinistries, s.aiMinistriesSlots = 0, 0
+end
+local function ministrySettingsFromSlots()
+	absorbMinistrySettings()
+	local mask = 0
+	for i, slot in ipairs(skirmish.slots) do
+		if slot.type == "ai" and slot.ministries and i <= 31 then mask = mask + 2 ^ (i - 1) end
+	end
+	-- (sent as these two; absorbed again the next time the players tab shows)
+	skirmish.settings.aiMinistries = mask > 0 and 1 or 0
+	skirmish.settings.aiMinistriesSlots = mask
 end
 
 -- Sent before the start: "H;c1;t0|A:<general>;c2;t0|A;c3;t0|E"
@@ -1001,6 +1041,7 @@ end
 
 local function playersTab()
 	generals()
+	absorbMinistrySettings()
 	local slots = skirmish.slots
 	-- the start positions
 	panel(X(20), Y(88), L(408), L(197))
@@ -1076,19 +1117,19 @@ local function playersTab()
 	local _, hoveredRow = listBox(skirmish.generalList, list, X(439), Y(110), L(1461), L(113))
 	if skirmish.generalList.selected ~= before and sel then
 		local g = entries[skirmish.generalList.selected]
-		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team, aiScript = sel.aiScript }
+		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team, aiScript = sel.aiScript, ministries = sel.ministries }
 	end
-	-- the selected AI's Lua AI (wkbai's own): none (the Kingmaker scripts alone) or one of the
-	-- LuaAI\*.lua there are (redata's and the mods'); a click takes the next
+	-- the selected AI's AI (aiKinds): a click takes the next
 	if sel and sel.type == "ai" then
-		local choices = { "" }
-		for _, name in ipairs(getLuaAIs()) do choices[#choices + 1] = name end
+		local kinds = aiKinds()
 		local current = 1
-		for i, c in ipairs(choices) do if c == (sel.aiScript or "") then current = i end end
-		local label = choices[current] == "" and "Lua AI: none (the Kingmaker scripts)" or ("Lua AI: " .. choices[current])
-		-- (disabled when there is none to choose)
-		if button(label, X(439), Y(232), L(600), L(24), #choices > 1) then
-			sel.aiScript = choices[current % #choices + 1]
+		for i, k in ipairs(kinds) do
+			if k[1] == (sel.aiScript or "") and k[2] == (sel.ministries == true) then current = i end
+		end
+		if button("AI: " .. kinds[current][3], X(439), Y(232), L(600), L(24), true) then
+			local nextKind = kinds[current % #kinds + 1]
+			sel.aiScript = nextKind[1] ~= "" and nextKind[1] or nil
+			sel.ministries = nextKind[2] or nil
 		end
 	end
 
@@ -1203,7 +1244,9 @@ local SETTINGS = {
 	barbarianTribes = 0, teamPlacement = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1, allowAgents = 1,
-	aiMinistries = 0, -- wkbai's ministry AI (Ministries.h): each AI General a government of departments
+	-- wkbai's ministry AI (Ministries.h): an AI General a government of departments; chosen per
+	-- AI position on the players tab (aiKinds), sent as these two (ministrySettingsFromSlots)
+	aiMinistries = 0, aiMinistriesSlots = 0,
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1368,13 +1411,6 @@ local function settingsTab()
 	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
 	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
-	-- wkbai's own: the ministry AI (the RE repo's docs/engine/ministry-ai.md): the AI Generals'
-	-- strategist, departments and missions on top of the Kingmaker scripts
-	do
-		local my = skirmish.multiplayer and Y(818) or Y(894)
-		if roundButton(X(200), my, L(52), s.aiMinistries ~= 0, true) then s.aiMinistries = (s.aiMinistries ~= 0) and 0 or 1 end
-		drawText(FONT_LIST, X(264), my + L(18), "Ministry AI", WHITE, S)
-	end
 	-- wkbre2's own, multiplayer: an AI General plays on for a guest who leaves; guests with no
 	-- position (and ones who join the running game) may watch, up to a number
 	if skirmish.multiplayer then
@@ -1978,6 +2014,7 @@ local function drawLobby(multiplayer)
 	if button(T("FRONT_END_CHAT_START"), X(770), Y(1032), L(182), L(24), canStart) then
 		local function go()
 			for _, id in ipairs(excess) do request("kick_guest", tostring(id)) end
+			ministrySettingsFromSlots()
 			settingsRequests()
 			skirmish.armyField = valhalla and armySlotField(skirmish.army, skirmish.settings.resourcePoints) or ""
 			slotsRequest()
