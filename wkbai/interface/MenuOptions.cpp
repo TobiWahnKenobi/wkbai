@@ -409,6 +409,11 @@ namespace {
 		// the original's 3D Sound: off, the sounds of the world play without direction (louder
 		// nearer, as before)
 		settingToggle("sound3D", "sound", "3D Sound", true);
+		// OpenAL Soft's extras (not in the original, off by default; SoundPlayer.cpp):
+		// HRTF for headphones (on speakers it sounds dull), and an open-plain reverb with
+		// distance taking the highs away, for the world's sounds only
+		settingToggle("soundHRTF", "sound", "Headphone 3D sound (HRTF)", false);
+		settingToggle("soundReverb", "sound", "Reverb", false);
 
 		// System
 		{
