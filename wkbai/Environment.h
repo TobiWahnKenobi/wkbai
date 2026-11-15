@@ -192,6 +192,17 @@ extern uint64_t g_cloudFrontArrivalTicks;
 float EnvDayFraction(const EnvironmentSettings& s, float time);
 float EnvYearFraction(const EnvironmentSettings& s, float time);
 
+// The day's temperature curve (the server's, ServerEnvironment::update): -1 at its coldest, half
+// an hour before sunrise (hours, 0-24: SunState::sunrise), +1 at its warmest at 14:30; a half
+// cosine up through the morning and a longer one down through the evening and the night, so it
+// is smooth (no kinks at the turns) and its mean over the day is 0 (the season's mean stays the
+// day's mean)
+float DiurnalShape(float hour, float sunrise);
+// its half range in degrees (the mean to the warmest): by the season (a smooth curve over the
+// year, 7 in midsummer, 4.5 in midwinter; 6 without the seasons), smaller under clouds (40% left
+// overcast) and in fog
+float DiurnalAmplitude(float yearFraction, bool seasons, float cloudCover, float fog);
+
 // the temperature in the chosen scale, with its unit ("12 °C" in plain ASCII: "12 C")
 float ConvertTemperature(float celsius, int scale);
 std::string FormatTemperature(float celsius, int scale);

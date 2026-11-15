@@ -549,6 +549,32 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 	return sun;
 }
 
+float DiurnalShape(float hour, float sunrise)
+{
+	const float coldest = sunrise - 0.5f, warmest = 14.5f;
+	const float rise = std::clamp(warmest - coldest, 4.0f, 20.0f); // the morning's hours
+	float h = hour - coldest;
+	h -= 24.0f * std::floor(h / 24.0f); // hours since the coldest, 0..24
+	if (h < rise)
+		return -std::cos(PI * h / rise);
+	return std::cos(PI * (h - rise) / (24.0f - rise));
+}
+
+float DiurnalAmplitude(float yearFraction, bool seasons, float cloudCover, float fog)
+{
+	float a = 6.0f;
+	if (seasons) {
+		// through the seasons' middles (spring 6, summer 7, autumn 5, winter 4.5), as their means
+		static const float swing[4] = { 6.0f, 7.0f, 5.0f, 4.5f };
+		const float x = yearFraction * 4.0f - 0.5f;
+		const int i = (int)std::floor(x);
+		const float f = x - i;
+		const float lo = swing[(i % 4 + 4) % 4], hi = swing[((i + 1) % 4 + 4) % 4];
+		a = lo + (hi - lo) * (1.0f - std::cos(PI * f)) * 0.5f;
+	}
+	return a * (1.0f - 0.6f * std::clamp(cloudCover, 0.0f, 1.0f)) * (1.0f - 0.4f * std::clamp(fog, 0.0f, 1.0f));
+}
+
 float ConvertTemperature(float c, int scale)
 {
 	return scale == 1 ? c * 9.0f / 5.0f + 32.0f : scale == 2 ? c + 273.15f : c;
