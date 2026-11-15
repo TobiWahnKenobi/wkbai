@@ -801,10 +801,9 @@ static void FlamingMissileLanded(ServerGameObject* missile)
 // set at +0x50): its own firer's kind of things aren't spared, only
 // - objects whose blueprint has IGNORE_ALL_MISSILE_COLLISION (trees, farms, shipwrecks, palms);
 // - with IGNORE_FRIENDLY_MISSILE_COLLISION, the firer's own and its allies';
-// - the missile's DO_NOT_COLLIDE_WITH ("Allied Characters", "Trees & Allied Characters"): its
-//   equations read "a character allied to the missile('s player)" and "a tree" of the candidate.
-//   How the original binds their FINDER_SELF isn't traced (evaluated on the candidate they'd spare
-//   every character, on the missile none), so they're applied as they read.
+// Friendly fire: the missile's DO_NOT_COLLIDE_WITH ("Allied Characters") isn't an engine keyword in
+// WKB.exe (docs/re/missiles-removal-siege-carts.md A), so arrows and balls hit own and allied
+// units in their way.
 static bool MissilePassesThrough(ServerGameObject* missile, ServerGameObject* obj)
 {
 	const GameObjBlueprint* bp = obj->blueprint;
@@ -817,22 +816,6 @@ static bool MissilePassesThrough(ServerGameObject* missile, ServerGameObject* ob
 		|| server->getDiplomaticStatus(own, theirs) <= server->gameSet->diplomaticStatuses.names.getIndex("Allied"));
 	if (bp->ignoreFriendlyMissileCollision && allied)
 		return true;
-	if (const GameObjBlueprint* mbp = missile->blueprint; mbp->doNotCollideWith) {
-		// a tree: the equation on it ("Trees & ..." spares it, "Allied Characters" doesn't)
-		static const GameSet* of = nullptr;
-		static int treeItem = -1;
-		if (of != server->gameSet.get()) {
-			of = server->gameSet.get();
-			treeItem = of->items.names.getIndex("I am a tree");
-		}
-		if (treeItem >= 0 && obj->getItem(treeItem) > 0.0f) {
-			SrvScriptContext ctx(server, obj);
-			return mbp->doNotCollideWith->eval(&ctx) > 0.0f;
-		}
-		// a character: spared when it's the firer's or an ally's (both shipped equations)
-		if (bp->bpClass == Tags::GAMEOBJCLASS_CHARACTER && allied)
-			return true;
-	}
 	return false;
 }
 
