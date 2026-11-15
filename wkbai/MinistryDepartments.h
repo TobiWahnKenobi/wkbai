@@ -29,6 +29,9 @@ namespace Ministry {
 	// the game time it may again), how many used; fighters trained by counters, how many ordered
 	int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std::map<uint64_t, float>& ready);
 	int TrainByCounters(Government& g);
+	// the opening (MinistryTactics.cpp, WKB_MINOFF 1024 off): how many fighters short of the home
+	// guard the first 20 minutes want (0: none short, or the opening over)
+	int OpeningShort(Government& g);
 	// a mission given (by the Strategist, or a Lua AI's ai.giveMission): its id
 	uint32_t GiveMission(Government& g, Mission& m, const char* why);
 }

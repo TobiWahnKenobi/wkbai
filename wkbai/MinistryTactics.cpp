@@ -142,6 +142,34 @@ int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std
 	return used;
 }
 
+// The opening. One against one, 15 seeds on each of plain WKB, WKB Plus 2021 and Plus v9.5, the
+// games were decided by the first wave: about 10 soldiers at minutes 15-22 (plain, 2021), 40-80 at
+// minutes 7-9 (v9.5), against a side with 0-6 soldiers among 20-60 peasants. And the ministries
+// changed nothing before minute 7-16: they trained only with food over 500, which the scripts'
+// peasant spawns never left. So from minute 4 to 20 a home guard: 12 fighters, or 1.2 times the
+// most fighters an enemy has been seen with (at most 60). While it is short, Labour holds the
+// peasants at their number (at least 25) and Tactics trains whatever is affordable.
+int OpeningShort(Government& g)
+{
+	ServerGameObject* me = g.player();
+	if (!me || (MinOff() & 1024))
+		return 0;
+	const float now = g.now();
+	if (now < 240.0f || now > 1200.0f)
+		return 0;
+	std::map<uint32_t, int> seen;
+	for (const auto& [id, s] : g.picture.sightings)
+		if (s.fighter)
+			seen[s.player]++;
+	int most = 0;
+	for (const auto& [p, n] : seen)
+		most = std::max(most, n);
+	const int want = std::min(60, std::max(12, (int)std::ceil(most * 1.2f)));
+	const int have = me->aiController.fighters();
+	g.board.report("opening.guard", want);
+	return std::max(0, want - have);
+}
+
 int TrainByCounters(Government& g)
 {
 	ServerGameObject* me = g.player();
@@ -150,7 +178,9 @@ int TrainByCounters(Government& g)
 		return 0;
 	const GameSet* gs = srv.gameSet.get();
 	const float now = g.now();
-	if (now < 120.0f || me->getItem(Tags::PDITEM_FOOD) <= 500.0f)
+	// (the opening's guard short: whatever is affordable, Train checks)
+	const int short_ = OpeningShort(g);
+	if (short_ == 0 && (now < 120.0f || me->getItem(Tags::PDITEM_FOOD) <= 500.0f))
 		return 0;
 	// the main enemy: the one whose known army is strongest; its classes' share of power
 	float shares[5] = {}, total = 0.0f;
@@ -205,7 +235,7 @@ int TrainByCounters(Government& g)
 			own[AIUtil::TypeClass(gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, *best))]++;
 			const std::string k = "war.trained." + *best;
 			g.board.report(k, g.board.get(k) + 1);
-			if (me->getItem(Tags::PDITEM_FOOD) <= 500.0f)
+			if (short_ > 0 ? ordered >= short_ : me->getItem(Tags::PDITEM_FOOD) <= 500.0f)
 				break;
 		}
 	}

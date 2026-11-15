@@ -1122,6 +1122,9 @@ void AIController::update()
 				const GameSet* gs = Server::instance->gameSet.get();
 				bool anyServed = false, anyUnaffordable = false, anyBusy = false;
 				for (auto& rung : gsreq.ladder->entries) {
+					// (the ministry AI's peasant cap: the commissions' peasants too, which went past it)
+					if (AIPeasantCapped(rung.type, this->gameObj->getPlayer()))
+						continue;
 					const std::string spawnName = "Spawn " + rung.type->name;
 					const int ordid = gs->orders.names.getIndex(spawnName);
 					if (ordid < 0)

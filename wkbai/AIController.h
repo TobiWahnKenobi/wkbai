@@ -215,6 +215,8 @@ std::string DiscoveredSaveText();
 void DiscoveredLoadText(const std::string& text);
 // Whether one of the buildings may spawn the type now (gameset/values.cpp)
 bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<ServerGameObject>& buildings);
+// Whether the type is a peasant and the player's ministry AI has its peasants at the cap (gameset/values.cpp)
+bool AIPeasantCapped(const GameObjBlueprint* type, const ServerGameObject* player);
 // How many characters each character requirement of the commission needs, evaluated for its
 // handler; with forceBalance, a requirement none of whose ladder's types can be spawned now
 // gives what it still misses to the others that can and need some (gameset/values.cpp)
