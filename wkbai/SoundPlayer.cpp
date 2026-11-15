@@ -6,6 +6,9 @@
 
 #include "AL/al.h"
 #include "AL/alc.h"
+#include "AL/alext.h"
+#include "AL/efx.h"
+#include "AL/efx-presets.h"
 #include <SDL3/SDL_timer.h>
 
 #include <cassert>
@@ -56,6 +59,131 @@ struct OALSoundPlayer : SoundPlayer {
 
 	std::unordered_map<std::string, std::chrono::time_point<std::chrono::steady_clock>> lastTimePlayedMap;
 
+	// OpenAL Soft's own extras, both options (off by default):
+	// - "soundHRTF", Headphone 3D sound: ALC_SOFT_HRTF, set with alcResetDeviceSOFT
+	// - "soundReverb", Reverb: an EFX effect slot with an open-plain reverb, fed by the
+	//   world's sounds (send 0); the interface's sounds and the music stay dry
+	LPALCRESETDEVICESOFT alcResetDeviceSOFT_ = nullptr;
+	int hrtfApplied = -1; // (-1: not set yet)
+	bool efx = false;
+	LPALGENEFFECTS alGenEffects_ = nullptr;
+	LPALDELETEEFFECTS alDeleteEffects_ = nullptr;
+	LPALEFFECTI alEffecti_ = nullptr;
+	LPALEFFECTF alEffectf_ = nullptr;
+	LPALEFFECTFV alEffectfv_ = nullptr;
+	LPALGENAUXILIARYEFFECTSLOTS alGenAuxiliaryEffectSlots_ = nullptr;
+	LPALDELETEAUXILIARYEFFECTSLOTS alDeleteAuxiliaryEffectSlots_ = nullptr;
+	LPALAUXILIARYEFFECTSLOTI alAuxiliaryEffectSloti_ = nullptr;
+	ALuint reverbEffect = 0, reverbSlot = 0;
+	bool reverbOn = false;
+
+	void initEfx() {
+		if (!alcIsExtensionPresent(device, ALC_EXT_EFX_NAME))
+			return;
+		alGenEffects_ = (LPALGENEFFECTS)alGetProcAddress("alGenEffects");
+		alDeleteEffects_ = (LPALDELETEEFFECTS)alGetProcAddress("alDeleteEffects");
+		alEffecti_ = (LPALEFFECTI)alGetProcAddress("alEffecti");
+		alEffectf_ = (LPALEFFECTF)alGetProcAddress("alEffectf");
+		alEffectfv_ = (LPALEFFECTFV)alGetProcAddress("alEffectfv");
+		alGenAuxiliaryEffectSlots_ = (LPALGENAUXILIARYEFFECTSLOTS)alGetProcAddress("alGenAuxiliaryEffectSlots");
+		alDeleteAuxiliaryEffectSlots_ = (LPALDELETEAUXILIARYEFFECTSLOTS)alGetProcAddress("alDeleteAuxiliaryEffectSlots");
+		alAuxiliaryEffectSloti_ = (LPALAUXILIARYEFFECTSLOTI)alGetProcAddress("alAuxiliaryEffectSloti");
+		if (!alGenEffects_ || !alDeleteEffects_ || !alEffecti_ || !alEffectf_ || !alEffectfv_ ||
+			!alGenAuxiliaryEffectSlots_ || !alDeleteAuxiliaryEffectSlots_ || !alAuxiliaryEffectSloti_)
+			return;
+		alGetError();
+		alGenEffects_(1, &reverbEffect);
+		// the reverb of an open plain (EFX's PLAIN preset): a short, faint tail, no hall
+		EFXEAXREVERBPROPERTIES r = EFX_REVERB_PRESET_PLAIN;
+		alEffecti_(reverbEffect, AL_EFFECT_TYPE, AL_EFFECT_EAXREVERB);
+		if (alGetError() == AL_NO_ERROR) {
+			alEffectf_(reverbEffect, AL_EAXREVERB_DENSITY, r.flDensity);
+			alEffectf_(reverbEffect, AL_EAXREVERB_DIFFUSION, r.flDiffusion);
+			alEffectf_(reverbEffect, AL_EAXREVERB_GAIN, r.flGain);
+			alEffectf_(reverbEffect, AL_EAXREVERB_GAINHF, r.flGainHF);
+			alEffectf_(reverbEffect, AL_EAXREVERB_GAINLF, r.flGainLF);
+			alEffectf_(reverbEffect, AL_EAXREVERB_DECAY_TIME, r.flDecayTime);
+			alEffectf_(reverbEffect, AL_EAXREVERB_DECAY_HFRATIO, r.flDecayHFRatio);
+			alEffectf_(reverbEffect, AL_EAXREVERB_DECAY_LFRATIO, r.flDecayLFRatio);
+			alEffectf_(reverbEffect, AL_EAXREVERB_REFLECTIONS_GAIN, r.flReflectionsGain);
+			alEffectf_(reverbEffect, AL_EAXREVERB_REFLECTIONS_DELAY, r.flReflectionsDelay);
+			alEffectfv_(reverbEffect, AL_EAXREVERB_REFLECTIONS_PAN, r.flReflectionsPan);
+			alEffectf_(reverbEffect, AL_EAXREVERB_LATE_REVERB_GAIN, r.flLateReverbGain);
+			alEffectf_(reverbEffect, AL_EAXREVERB_LATE_REVERB_DELAY, r.flLateReverbDelay);
+			alEffectfv_(reverbEffect, AL_EAXREVERB_LATE_REVERB_PAN, r.flLateReverbPan);
+			alEffectf_(reverbEffect, AL_EAXREVERB_ECHO_TIME, r.flEchoTime);
+			alEffectf_(reverbEffect, AL_EAXREVERB_ECHO_DEPTH, r.flEchoDepth);
+			alEffectf_(reverbEffect, AL_EAXREVERB_MODULATION_TIME, r.flModulationTime);
+			alEffectf_(reverbEffect, AL_EAXREVERB_MODULATION_DEPTH, r.flModulationDepth);
+			alEffectf_(reverbEffect, AL_EAXREVERB_AIR_ABSORPTION_GAINHF, r.flAirAbsorptionGainHF);
+			alEffectf_(reverbEffect, AL_EAXREVERB_HFREFERENCE, r.flHFReference);
+			alEffectf_(reverbEffect, AL_EAXREVERB_LFREFERENCE, r.flLFReference);
+			alEffectf_(reverbEffect, AL_EAXREVERB_ROOM_ROLLOFF_FACTOR, r.flRoomRolloffFactor);
+			alEffecti_(reverbEffect, AL_EAXREVERB_DECAY_HFLIMIT, r.iDecayHFLimit);
+		}
+		else {
+			// (no EAX reverb: the standard one, with the same numbers it has)
+			alEffecti_(reverbEffect, AL_EFFECT_TYPE, AL_EFFECT_REVERB);
+			alEffectf_(reverbEffect, AL_REVERB_DENSITY, r.flDensity);
+			alEffectf_(reverbEffect, AL_REVERB_DIFFUSION, r.flDiffusion);
+			alEffectf_(reverbEffect, AL_REVERB_GAIN, r.flGain);
+			alEffectf_(reverbEffect, AL_REVERB_GAINHF, r.flGainHF);
+			alEffectf_(reverbEffect, AL_REVERB_DECAY_TIME, r.flDecayTime);
+			alEffectf_(reverbEffect, AL_REVERB_DECAY_HFRATIO, r.flDecayHFRatio);
+			alEffectf_(reverbEffect, AL_REVERB_REFLECTIONS_GAIN, r.flReflectionsGain);
+			alEffectf_(reverbEffect, AL_REVERB_REFLECTIONS_DELAY, r.flReflectionsDelay);
+			alEffectf_(reverbEffect, AL_REVERB_LATE_REVERB_GAIN, r.flLateReverbGain);
+			alEffectf_(reverbEffect, AL_REVERB_LATE_REVERB_DELAY, r.flLateReverbDelay);
+			alEffectf_(reverbEffect, AL_REVERB_AIR_ABSORPTION_GAINHF, r.flAirAbsorptionGainHF);
+			alEffectf_(reverbEffect, AL_REVERB_ROOM_ROLLOFF_FACTOR, r.flRoomRolloffFactor);
+			alEffecti_(reverbEffect, AL_REVERB_DECAY_HFLIMIT, r.iDecayHFLimit);
+		}
+		alGenAuxiliaryEffectSlots_(1, &reverbSlot);
+		alAuxiliaryEffectSloti_(reverbSlot, AL_EFFECTSLOT_EFFECT, (ALint)reverbEffect);
+		efx = alGetError() == AL_NO_ERROR;
+		if (!efx)
+			printf("WARNING: the reverb could not be set up (EFX)\n");
+	}
+
+	// a source's send 0: into the reverb (a sound of the world, with Reverb on) or dry
+	void setReverbSend(ALuint src, bool world) {
+		if (!efx)
+			return;
+		const bool wet = world && reverbOn;
+		alSource3i(src, AL_AUXILIARY_SEND_FILTER, wet ? (ALint)reverbSlot : AL_EFFECTSLOT_NULL, 0, AL_FILTER_NULL);
+		// distance takes the highs away (only with the reverb: the original had no such thing)
+		alSourcef(src, AL_AIR_ABSORPTION_FACTOR, wet ? 1.0f : 0.0f);
+	}
+
+	// the two options applied: HRTF by resetting the device (only when it changed), the reverb
+	// to the sounds playing now and to every later one
+	void applySpatialSettings() {
+		if (!initialised)
+			return;
+		const int hrtf = g_settings.value("soundHRTF", false) ? 1 : 0;
+		if (hrtf != hrtfApplied && alcResetDeviceSOFT_) {
+			const ALCint attrs[] = { ALC_HRTF_SOFT, hrtf ? ALC_TRUE : ALC_FALSE, 0 };
+			alcResetDeviceSOFT_(device, attrs);
+			ALCint status = 0;
+			alcGetIntegerv(device, ALC_HRTF_STATUS_SOFT, 1, &status);
+			const char* name = status == ALC_HRTF_ENABLED_SOFT ? alcGetString(device, ALC_HRTF_SPECIFIER_SOFT) : nullptr;
+			printf("Sound: HRTF %s (status 0x%X%s%s)\n", hrtf ? "asked for" : "off", status,
+				name ? ", " : "", name ? name : "");
+		}
+		hrtfApplied = hrtf;
+		const bool reverb = g_settings.value("soundReverb", false);
+		if (reverb != reverbOn) {
+			reverbOn = reverb;
+			for (size_t i = 0; i < MAX_SOURCES; i++) {
+				ALint rel = AL_TRUE;
+				alGetSourcei(sources[i], AL_SOURCE_RELATIVE, &rel);
+				setReverbSend(sources[i], rel == AL_FALSE);
+			}
+			for (auto src : loopSources)
+				setReverbSend(src, true);
+		}
+	}
+
 	std::optional<ALuint> getSoundBuf(const std::string& filePath) {
 		auto it = sndBufCache.find(filePath);
 		ALuint buf;
@@ -100,7 +228,15 @@ struct OALSoundPlayer : SoundPlayer {
 		alGenSources(MAX_SOURCES, sources.data());
 		alGenSources(1, &musicSource);
 		alGenSources(MAX_LOOPS, loopSources.data());
+		// the music as it is, without HRTF's virtual speakers
+		alSourcei(musicSource, AL_DIRECT_CHANNELS_SOFT, AL_TRUE);
+		if (alcIsExtensionPresent(device, "ALC_SOFT_HRTF"))
+			alcResetDeviceSOFT_ = (LPALCRESETDEVICESOFT)alcGetProcAddress(device, "alcResetDeviceSOFT");
+		initEfx();
 		initialised = true;
+		// (HRTF off at the start: the device left as OpenAL Soft opened it)
+		hrtfApplied = 0;
+		applySpatialSettings();
 	}
 	void deinit() override {
 		if (!initialised) return;
@@ -115,6 +251,13 @@ struct OALSoundPlayer : SoundPlayer {
 		sndBufCache.clear();
 		if (musicBuffer)
 			alDeleteBuffers(1, &musicBuffer);
+		if (efx) {
+			alDeleteAuxiliaryEffectSlots_(1, &reverbSlot);
+			alDeleteEffects_(1, &reverbEffect);
+			efx = false;
+		}
+		reverbOn = false;
+		hrtfApplied = -1;
 		alcDestroyContext(context);
 		alcCloseDevice(device);
 		initialised = false;
@@ -152,6 +295,7 @@ struct OALSoundPlayer : SoundPlayer {
 				alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
 				alSourcei(src, AL_SOURCE_RELATIVE, AL_TRUE);
 				alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
+				setReverbSend(src, false);
 				alSourcePlay(src);
 				sourceOwners[i] = soundOwner;
 				break;
@@ -200,6 +344,7 @@ struct OALSoundPlayer : SoundPlayer {
 					alSourcei(src, AL_SOURCE_RELATIVE, AL_TRUE);
 					alSource3f(src, AL_POSITION, 0.0f, 0.0f, 0.0f);
 					alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume * gain);
+					setReverbSend(src, false);
 					sourceOwners[i] = soundOwner;
 					alSourcePlay(src);
 					break;
@@ -208,6 +353,7 @@ struct OALSoundPlayer : SoundPlayer {
 				//alSourcef(src, AL_MAX_DISTANCE, maxDist);
 				Vector3 fpos = pos * Vector3(1, 1, -1);
 				alSourcefv(src, AL_POSITION, &fpos.x);
+				setReverbSend(src, true);
 				alSourcePlay(src);
 				sourceOwners[i] = soundOwner;
 				break;
@@ -230,6 +376,7 @@ struct OALSoundPlayer : SoundPlayer {
 			alSourceStop(src);
 			alSourcei(src, AL_BUFFER, *buf);
 			loopFiles[slot] = filePath;
+			setReverbSend(src, true);
 		}
 		alSourcei(src, AL_LOOPING, AL_TRUE);
 		alSourcei(src, AL_SOURCE_RELATIVE, AL_FALSE);
@@ -337,6 +484,7 @@ struct OALSoundPlayer : SoundPlayer {
 		alSourcef(musicSource, AL_GAIN, g_renderSettings.musicVolume);
 		for (auto src : sources)
 			alSourcef(src, AL_GAIN, g_renderSettings.effectsVolume);
+		applySpatialSettings();
 	}
 
 	// the music's fade-out (stopMusic): from its volume to nothing between these SDL ticks
@@ -393,6 +541,7 @@ struct OALSoundPlayer : SoundPlayer {
 			return false;
 		streamEnd();
 		alGenSources(1, &streamSource);
+		alSourcei(streamSource, AL_DIRECT_CHANNELS_SOFT, AL_TRUE);
 		alSourcei(streamSource, AL_SOURCE_RELATIVE, AL_TRUE);
 		alSource3f(streamSource, AL_POSITION, 0.0f, 0.0f, 0.0f);
 		// (a video's sound: at the music's volume)
