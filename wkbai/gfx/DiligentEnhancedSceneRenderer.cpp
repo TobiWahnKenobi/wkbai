@@ -167,11 +167,12 @@ float3 SkyRing(int ring, float b)
 float3 SkyReflect(float3 d)
 {
 	d = normalize(d);
-	float b = frac(atan2(d.z, d.x) / 6.2831853 + 1) * 16;
+	// (straight up or down the bearing is undefined: atan2(0, 0) is NaN on the GPU)
+	float b = abs(d.x) + abs(d.z) > 1e-6 ? frac(atan2(d.z, d.x) / 6.2831853 + 1) * 16 : 0;
 	float3 low = SkyRing(0, b);
 	if (d.y <= 0.0698) // (4 degrees)
 		return lerp(low, FogSky[49].rgb, saturate(-d.y * 3));
-	float e = asin(d.y) * 57.29578;
+	float e = asin(min(d.y, 1)) * 57.29578;   // (a normalized straight up may come out a hair over 1: NaN)
 	if (e < 22)
 		return lerp(low, SkyRing(1, b), (e - 4) / 18);
 	if (e < 50)
@@ -484,6 +485,17 @@ float3 SkyColour(float3 d)
 	return d.y >= 0 ? lerp(SkyHorizon.rgb, SkyUp.rgb, saturate(d.y)) : lerp(SkyHorizon.rgb, SkyDown.rgb, saturate(-d.y));
 }
 
+// What a reflection sees towards a direction: the live sky (by the clock and the weather) and
+// the ground below it, else the sky box's colours, else the map's fog colour
+float3 EnvColour(float3 d)
+{
+	if (FogSky[48].w != 0)
+		return SkyReflect(d);
+	if (SkyUp.w != 0)
+		return SkyColour(d);
+	return FogColor.rgb;
+}
+
 // The surface a pixel shows: its UV (moved by the parallax), the UV derivatives of the triangle
 // itself (for mip selection and the tangent frame, so the relief's steps make no seams), and
 // the relief's own shadow on the sun's light
@@ -576,6 +588,11 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	if (MeshLighting.z == 0)
 		return (input.Color.rgb * lerp(0.55, 1, rtSun) * occ + FireLight(input.WorldPos, normalize(input.Norm)) * input.Tint.rgb) * albedo;
 	float3 n = normalize(input.Norm);
+	// a face seen from its back (the HD models' double-sided materials, a face turned the wrong
+	// way): lit as its side towards the eye. Its reflection had pointed into the surface (black,
+	// the Blacksmith's hearth tops) and its light came from behind it.
+	if (dot(n, FogCamera.xyz - input.WorldPos) < 0)
+		n = -n;
 	// the normal map in a tangent frame from the screen-space derivatives (the meshes have
 	// no tangents)
 	float4 ns = normalMap.SampleGrad(inpSampler, SurfUV, SurfDx, SurfDy);
@@ -612,15 +629,28 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	// image-based light from the sky box (a stand-in for a filtered cube map): the ambient takes
 	// the sky's colour where the surface faces, at the same mean strength, and reflections the
 	// sky's colour along the reflected view. Without a sky, the map's fog colour.
-	float3 ambientTint = float3(1, 1, 1), skyReflected = FogColor.rgb;
-	if (SkyUp.w != 0) {
+	float3 ambientTint = float3(1, 1, 1);
+	if (SkyUp.w != 0)
 		ambientTint = SkyColour(n) / SkyHorizon.w;
-		skyReflected = SkyColour(reflect(-v, n));
-	}
-	// the reflections from the live sky (by the clock and the weather; the sky box's painted
-	// faces kept the reflected sky a fixed blue at dusk and at night)
-	if (FogSky[48].w != 0)
-		skyReflected = SkyReflect(reflect(-v, n));
+	// the reflection by the roughness (a stand-in for a prefiltered cube map): a smooth surface
+	// mirrors the sky and the ground along the reflected view; the rougher, the more the lobe
+	// leans towards the normal (the dominant direction of GGX) and the more it blurs into the
+	// light the surface's whole hemisphere sees (its irradiance). Before, the roughness only
+	// dimmed one sky colour, so a rough and a polished surface looked the same.
+	const float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
+	const float a = roughness * roughness, a2 = a * a;
+	const float3 r = reflect(-v, n);
+	// smooth surfaces seen from the RTS camera mostly reflect downwards, into the ground's one
+	// flat colour (no buildings or trees around in this stand-in): their reflection lifted
+	// towards the horizon and the sky above it, so a window or a polished iron reads as glossy
+	// (performance over faithfulness: no screen-space or probe reflections)
+	float3 rd = normalize(lerp(r, n, a) + n * 1e-3);
+	const float lift = saturate(1 - roughness * 2) * 0.75;
+	if (rd.y < 0)
+		rd = normalize(float3(rd.x, lerp(rd.y, -0.6 * rd.y, lift), rd.z));
+	const float3 sharp = EnvColour(rd);
+	const float3 hemi = 0.5 * EnvColour(n) + 0.25 * EnvColour(normalize(n + float3(0, 1, 0))) + 0.25 * EnvColour(normalize(float3(n.x, 0.05, n.z) + 1e-4));
+	float3 skyReflected = lerp(sharp, hemi, saturate(a * 1.6));
 	// the sky light (RenderSettings::skyGI): the ambient and the sky's reflection as much as the
 	// point sees of the sky, the sun's light bounced off the ground onto faces turned down, the
 	// clouds' shadow on the sun's light only
@@ -641,24 +671,48 @@ float3 ModelLight(VS_OUTPUT input, float3 albedo)
 	}
 	sunShade *= PomShadow * rtSun;
 	float3 diffuse = min((MeshLighting.x * orm.r * ambientTint + bounce * orm.r) * occ + MeshLighting.y * SunColour.rgb * nl * sunShade, 1);
-	float roughness = clamp(orm.g, 0.05, 1), metal = orm.b;
-	float a = roughness * roughness, a2 = a * a;
 	float d = a2 / (3.14159265 * pow(nh * nh * (a2 - 1) + 1, 2));
 	float k = a / 2;
 	float gvis = 1 / ((nl * (1 - k) + k) * (nv * (1 - k) + k));
-	float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
+	// a metal's reflectance: its albedo's hue, at least METAL_F0 bright. The HD packs' baked
+	// albedo of a metal is its tile's diffuse photo, darkened by the bake (the Castle's iron
+	// 0.11, the Blacksmith's 0.3), while real metals reflect 50-95%: taken as it was, f0 0.11
+	// made every metal a black mirror of the sky.
+	const float METAL_F0 = 0.62;
+	const float lum = dot(albedo, float3(0.299, 0.587, 0.114));
+	const float3 metalF0 = saturate(albedo * clamp(METAL_F0 / max(lum, 1e-3), 1, 6));
+	// glossy non-metals (glass, polish, glaze: roughness under 0.35) a clear-coat's reflectance,
+	// up to 0.14 (glass's 0.04 left a pane over its baked albedo with no visible reflection)
+	const float gloss = saturate((0.35 - roughness) / 0.25);
+	float3 f0 = lerp((0.04 + 0.10 * gloss).xxx, metalF0, metal);
 	float3 f = f0 + (1 - f0) * pow(1 - vh, 5);
 	float3 specular = SunColour.rgb * (d * gvis * f * nl / 4) * MeshLighting.w * sunShade;
-	// the sky's light reflected, by the Fresnel of the view and the surface's occlusion; rough
-	// surfaces get less. Without it a metal lit by the sun alone is black away from the highlight.
+	// the sky's and the ground's light reflected, by the Fresnel of the view (smooth surfaces
+	// more at grazing angles) and the surface's occlusion (the bake's, the screen's, the sky's)
 	float3 fv = f0 + (max(1 - roughness, f0) - f0) * pow(1 - nv, 5);
-	float3 sky = skyReflected * fv * orm.r * (1 - 0.5 * roughness) * vis * occ;
+	float3 sky = skyReflected * fv * orm.r * vis * occ;
 	float3 fire = FireLight(input.WorldPos, n) * orm.r;
 	// Ultra's lamps and windows: direct light, without the occlusion (DirectWindowLight)
 	float3 cast = float3(0, 0, 0);
 	if (gi && GIRegion.w != 0)
 		cast = CastLightOn(albedo * (1 - metal), DirectWindowLight(input.WorldPos, n));
-	return ((diffuse * albedo * (1 - metal) + specular + sky) * allShade + fire * albedo * (1 - metal) + cast) * input.Tint.rgb;
+	// WKBAI_MODEL_DEBUG (Season.z): 1 the ORM map, 2 metalness, 3 the sky's reflection x4,
+	// 4 the reflected sky's colour, 5 the sun's highlight, 6 the albedo, 7 f0
+	if (Season.z > 0.5) {
+		const int m = (int)(Season.z + 0.5);
+		if (m == 1) return orm;
+		if (m == 2) return metal.xxx;
+		if (m == 3) return sky * 4;
+		if (m == 4) return skyReflected;
+		if (m == 5) return specular;
+		if (m == 6) return albedo;
+		if (m == 7) return f0;
+		if (m == 8) return float3(any(isnan(sharp)) ? 1 : 0, any(isnan(hemi)) ? 1 : 0, any(isnan(specular)) ? 1 : 0);
+		if (m == 9) return float3(vis, occ, PomShadow * rtSun);
+		if (m == 10) return float3(roughness, metal, any(isnan(diffuse + sky + fire + cast)) ? 1 : 0);
+	}
+	// (the light a surface reflects it does not also scatter: the diffuse less the Fresnel)
+	return ((diffuse * albedo * (1 - metal) * (1 - fv) + specular + sky) * allShade + fire * albedo * (1 - metal) + cast) * input.Tint.rgb;
 }
 
 // wkbai's weather on a model: snow lying where the surface faces up (roofs, ledges, the tops of
@@ -1365,6 +1419,9 @@ struct DiligentEnhancedSceneRenderer::Impl {
 		e.maps[3] = overrideMap("_emissive");
 		e.maps[4] = overrideMap("_height");
 		anyEmissive |= e.maps[3] != nullptr;
+		if (getenv("WKBAI_MODEL_DEBUG") && filename.find("_hd") != std::string::npos)
+			printf("MODELDBG maps of '%s' (dir '%s'): albedo %d normal %d orm %d emissive %d height %d\n", filename.c_str(), scene->texCache.directory.c_str(),
+				albedo != nullptr, e.maps[1] != nullptr, e.maps[2] != nullptr, e.maps[3] != nullptr, e.maps[4] != nullptr);
 	}
 	texture deriveNormal = nullptr, defaultOrm = nullptr, noEmission = nullptr, noHeight = nullptr; // the override maps' defaults
 
@@ -2193,6 +2250,9 @@ void DiligentEnhancedSceneRenderer::render()
 		season[0] = g_environment.autumn;
 		season[1] = g_environment.dryness;
 	}
+	// a debug view of the models' PBR terms (ModelLight): WKBAI_MODEL_DEBUG=1..7
+	static const float modelDebug = [] { const char* e = getenv("WKBAI_MODEL_DEBUG"); return e ? (float)atoi(e) : 0.0f; }();
+	season[2] = modelDebug;
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
 	const int numFires = (int)std::min(fireLights.size() / 7, (size_t)DiligentGfx::ShadowEnvironment::MAX_FIRE_LIGHTS);
