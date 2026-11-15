@@ -39,8 +39,10 @@ struct RenderSettings {
 	// Physical: the earth's shadow after sunset, ozone's deep blue, the horizon's haze in the
 	// sky's own colours (warm towards a low sun), a lower horizon band
 	int skyModel = 1;
-	// the water (WATER_*; saved as "waterSetting"): 0 Original (the original's two scrolling
-	// layers of the map's water texture and nothing else), 1 Off (a plain colour), 2 Very low (the
+	// the water (WATER_*; saved as "waterSetting"; the menus call the levels from WATER_VERYLOW on
+	// Low, Medium, High, Very high, Ultra and Extreme): 0 Original (the original's two scrolling
+	// layers of the map's own water texture, never an HD replacement, and nothing else), 1 Off (a
+	// plain colour), 2 Very low (the
 	// texture with bump-mapped ripples and a sun glint), 3 Low (with the sky reflected, deeper
 	// water darker, cloud shadows, shore foam, separate river and sea looks, short screen-space
 	// reflections), 4 Medium (High's ocean look on the flat surface, longer reflections), 5 High

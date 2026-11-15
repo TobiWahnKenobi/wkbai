@@ -1515,13 +1515,13 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	}
 	if (ImGui::CollapsingHeader("Water")) {
 		{
-			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (scrolling texture)", "Off (plain colour)",
-				"Very low (bump-mapped ripples)", "Low", "Medium", "High (tessellated waves)", "Very high", "Ultra" };
+			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (two drifting texture layers)", "Off (plain colour)",
+				"Low (bump-mapped ripples)", "Medium", "High", "Very high (tessellated waves)", "Ultra", "Extreme" };
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
 		ImGui::Checkbox("Rivers flow downstream", &s.waterFlow);
-		ImGui::Checkbox("Screen-space water reflections (water Low or better)", &s.ssReflections);
-		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Low or better)", &s.rtReflections);
+		ImGui::Checkbox("Screen-space water reflections (water Medium or better)", &s.ssReflections);
+		ImGui::Checkbox("Ray-traced water reflections (needs DXR 1.1, water Medium or better)", &s.rtReflections);
 	}
 	if (ImGui::CollapsingHeader("Terrain and grass")) {
 		{

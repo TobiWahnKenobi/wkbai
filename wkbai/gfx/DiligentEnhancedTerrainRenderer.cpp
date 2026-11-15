@@ -652,6 +652,14 @@ float FloodShore(float flood, float depth)
 	return flood > 0.5 ? smoothstep(0, 0.5, depth) * saturate((WeatherParams.z - 0.05) * 4) : 1;
 }
 
+// Off's and Original's transparency: half at the shore (the original's 0x80), opaque from a
+// depth of 4 units, so a deep sea doesn't show its bed (the HD ground's relief read as bumps on
+// the water, and its sand turned the sea brown)
+float PlainWaterAlpha(float flood, float depth)
+{
+	return lerp(LakeColour.a, 1.0, saturate(depth / 4)) * FloodShore(flood, depth);
+}
+
 LAKE_OUTPUT VS_Lake(float3 Pos : ATTRIB0, float Depth : ATTRIB1)
 {
 	LAKE_OUTPUT output;
@@ -1091,7 +1099,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	if ((WeatherParams.z < 0 || input.Flood > 0.5) && input.World.y < SmoothHeight(input.World.xz))
 		discard;
 	if (WaterParams.x == 0)
-		return float4(GradeColour(lerp(LakeColour.rgb, FogTint(input.World), input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth));
+		return float4(GradeColour(lerp(LakeColour.rgb, FogTint(input.World), input.Fog)), PlainWaterAlpha(input.Flood, input.Depth));
 	float2 uv = input.World.xz * WaterParams.y;
 	if (WaterParams.x > 1.5) {
 		// the Original level (RE repository, docs/re/water.md; Two_textures_per_pass_water_surface,
@@ -1100,8 +1108,14 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// flat ground's: the sun's height, at least a third) times the cloud value; half
 		// transparent, fogged. No ripples, glint, sky or depth.
 		float3 otex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
-		float olight = max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World);
-		return IceOver(float4(GradeColour(lerp(otex * olight, FogTint(input.World), input.Fog)), LakeColour.a * FloodShore(input.Flood, input.Depth)), input.World);
+		// the texture's faint noise (a few levels out of 255) stretched around its mean (the
+		// smallest mip), so that the two layers drifting across each other show as they do in
+		// the original; and twice the light, as the landscape's colour stage, which brings the
+		// sea to the brightness of the other levels
+		float3 omean = inpTexture.SampleLevel(cloudSampler, float2(0.5, 0.5), 12).rgb;
+		otex = max(omean + (otex - omean) * 5.0, 0);
+		float olight = 2.0 * max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World);
+		return IceOver(float4(GradeColour(lerp(otex * olight, FogTint(input.World), input.Fog)), PlainWaterAlpha(input.Flood, input.Depth)), input.World);
 	}
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
@@ -1787,7 +1801,10 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> waveBuffer;      // cbuffer WaveBuffer
 	RefCntAutoPtr<IShaderResourceBinding> lakeBinding;
 	texture cloudMap = nullptr;
-	texture waterTexture = nullptr, rippleTexture = nullptr;
+	// waterTexture: the map's Water_Surface (an HD pack's replacement if there is one);
+	// originalWaterTexture: the original file for the Original level; boundWater: the one bound
+	texture waterTexture = nullptr, originalWaterTexture = nullptr, rippleTexture = nullptr;
+	ITextureView* boundWater = nullptr;
 	RefCntAutoPtr<ITexture> shadowMap;
 	// Blob shadows: their own pipeline, drawing into blobMap
 	RefCntAutoPtr<IPipelineResourceSignature> blobSignature;
@@ -2607,10 +2624,25 @@ void DiligentEnhancedTerrainRenderer::init()
 	}
 	_impl->signature->CreateShaderResourceBinding(&_impl->lakeBinding, true);
 	const std::string waterPath = skyDirectory + "Water_Surface.tga";
-	if (!skyDirectory.empty() && FileExists(waterPath.c_str()))
+	if (!skyDirectory.empty() && FileExists(waterPath.c_str())) {
 		_impl->waterTexture = gfx->CreateTexture(Bitmap::loadBitmap(waterPath.c_str()), 0);
+		// The Original level: the map's own 128 x 128 Water_Surface.tga, never an HD pack's
+		// replacement (whose smoothed blotches read as a bump map), at the original's default
+		// 16-bit texture precision (R5G6B5). The texture is faint noise around one colour; the
+		// 16-bit rounding is what makes that noise show as a speckle in the original.
+		Bitmap orig = Bitmap::loadBitmapExact(waterPath.c_str()).convertToR8G8B8A8();
+		for (int i = 0; i < orig.width * orig.height; i++) {
+			unsigned char* px = &orig.pixels[i * 4];
+			for (int c = 0; c < 3; c++) {
+				const int levels = c == 1 ? 63 : 31;
+				px[c] = (unsigned char)((px[c] * levels + 127) / 255 * 255 / levels);
+			}
+		}
+		_impl->originalWaterTexture = gfx->CreateTexture(orig, 0);
+	}
 	_impl->rippleTexture = CreateRippleTexture(gfx);
-	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(dgfx->GetTextureView(_impl->waterTexture));
+	_impl->boundWater = dgfx->GetTextureView(_impl->waterTexture);
+	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(_impl->boundWater, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "normalTexture")->Set(dgfx->GetTextureView(_impl->rippleTexture));
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "sceneTexture")->Set(dgfx->GetTextureView(nullptr));
 	_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "depthTexture")->Set(dgfx->GetTextureView(nullptr));
@@ -2809,6 +2841,10 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 			gfx->FreeTexture(_impl->cloudMap);
 		if (_impl->waterTexture)
 			gfx->FreeTexture(_impl->waterTexture);
+		if (_impl->originalWaterTexture)
+			gfx->FreeTexture(_impl->originalWaterTexture);
+		_impl->originalWaterTexture = nullptr;
+		_impl->boundWater = nullptr;
 		if (_impl->rippleTexture)
 			gfx->FreeTexture(_impl->rippleTexture);
 		if (_impl->blobSprite)
@@ -3048,6 +3084,15 @@ void DiligentEnhancedTerrainRenderer::render()
 	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6, false);
 	// 0 the plain colour (Off, or no texture), 1 the textured water, 2 the Original level
 	water[8] = !_impl->waterTexture || wq == RenderSettings::WATER_OFF ? 0.0f : originalWater ? 2.0f : 1.0f;
+	// the Original level samples the original file, the others the (HD) texture; rebound only
+	// when the level changes
+	if (_impl->lakeBinding) {
+		ITextureView* wv = dgfx->GetTextureView(originalWater && _impl->originalWaterTexture ? _impl->originalWaterTexture : _impl->waterTexture);
+		if (wv != _impl->boundWater) {
+			_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "inpTexture")->Set(wv, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
+			_impl->boundWater = wv;
+		}
+	}
 	water[9] = 0.1f;  // one texture repeat per two tiles, as the original's
 	water[10] = 0.04f;
 	// refraction from Low up: the scene target copied before the water (not with multisampling)
