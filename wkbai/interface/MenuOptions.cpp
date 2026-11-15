@@ -352,6 +352,17 @@ namespace {
 		}
 		list.push_back(toggle("bumpMapping", "terrain", "Terrain bump mapping", rs.bumpMapping));
 		list.push_back(toggle("modelLighting", "models", "Model highlights", rs.modelLighting));
+		{
+			// the reflections on buildings and units (RenderSettings::modelReflections): need the
+			// models lit per pixel
+			MenuOption o;
+			o.id = "modelReflections"; o.page = "models"; o.label = "Reflections on buildings and units";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "High (screen-space)", "Ultra (screen-space + ray-traced)" };
+			o.get = [&rs]() { return (float)rs.modelReflections; };
+			o.set = [&rs](float v) { rs.modelReflections = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.modelLighting; }));
+		}
 		list.push_back(withEnabled(slider("modelDetailNormals", "models", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));
 		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));

@@ -257,6 +257,19 @@ struct DiligentGfx : IRenderer
 		// ambient occlusion (1 open, half size)
 		Diligent::ITextureView* lightRtMask = nullptr;
 		Diligent::ITextureView* lightAo = nullptr;
+		// the reflections on buildings and units (RenderSettings::modelReflections) in this frame:
+		// 0 Low, 1 High (screen-space), 2 Ultra (and ray-traced). High needs the depth pre-pass
+		// (lightingDepth: its depth) and the frame before (prevScene: the colour target after
+		// the water, MarkWaterDone; prevViewProj: its view-projection, transposed as the shaders'
+		// matrices; null until there is one of the frame just before); Ultra's ray-traced pass
+		// (FinishLightingPrepass: rgb the colour its ray found in the frame before, a 0 no hit,
+		// 1..2 a hit, 1 + how much of its colour is known)
+		int modelReflections = 0;
+		bool modelRtReflectionsOn = false;
+		Diligent::ITextureView* lightingDepth = nullptr;
+		Diligent::ITextureView* prevScene = nullptr;
+		Matrix prevViewProj, viewProj;
+		Diligent::ITextureView* modelRtReflections = nullptr;
 		// Extend map's terrain shadows (the far land's horizons over the copy's vertices, the
 		// terrain renderer's, FarTerrain::nearHorizon: directions 0-3, 4-7), for the objects too;
 		// null: none

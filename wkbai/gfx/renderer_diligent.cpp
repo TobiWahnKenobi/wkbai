@@ -635,6 +635,10 @@ struct DiligentRenderer : DiligentGfx
 	RefCntAutoPtr<IBuffer> softBuffer, decalBuffer;
 	RefCntAutoPtr<IPipelineState> decalPipeline;
 	bool softParticles = false, decalsFailed = false, prepassOrtho = false;
+	// the models' screen-space reflections' frame before (shadows.prevScene): the colour target
+	// copied after the water (MarkWaterDone) and the frame it was copied in
+	RefCntAutoPtr<ITexture> prevSceneTex;
+	uint64_t prevSceneFrame = ~0ull;
 	float prepassProj[6] = {};
 	Matrix prepassInvView;
 	std::map<uint32_t, RefCntAutoPtr<IPipelineState>> pipelines;
@@ -1045,6 +1049,26 @@ struct DiligentRenderer : DiligentGfx
 	void FinishLightingPrepass(const Camera& camera) override
 	{
 		shadows.lightRtMask = shadows.lightAo = nullptr;
+		// the models' reflections: this frame's depth and view-projection, the frame just before
+		// (none after a skipped frame or a resize), Ultra's rays
+		shadows.lightingDepth = post->lightingDepth()->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+		shadows.viewProj = camera.sceneMatrix.getTranspose();
+		shadows.prevScene = nullptr;
+		shadows.modelRtReflections = nullptr;
+		if (shadows.modelReflections >= 1 && !camera.orthoMode && prevSceneTex && prevSceneFrame + 1 == frame
+			&& prevSceneTex->GetDesc().Width == post->lightingDepth()->GetDesc().Width
+			&& prevSceneTex->GetDesc().Height == post->lightingDepth()->GetDesc().Height) {
+			shadows.prevScene = prevSceneTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+			if (shadows.modelReflections >= 2 && shadows.modelRtReflectionsOn && shadows.rayShadows && shadows.rayShadows->valid()) {
+				const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
+				PROFILE_SCOPE("RT model reflections");
+				shadows.modelRtReflections = shadows.rayShadows->renderModelReflections(ctx, post->lightingDepth(), proj,
+					camera.viewMatrix.getInverse4x3(), shadows.viewProj, prevSceneTex, shadows.prevViewProj);
+			}
+		}
+		if (getenv("WKBAI_MODEL_DEBUG") && frame % 60 == 0)
+			printf("MODELDBG reflections %d: prevScene %d (copied in %llu, frame %llu), rt %d\n", shadows.modelReflections, shadows.prevScene != nullptr,
+				(unsigned long long)prevSceneFrame, (unsigned long long)frame, shadows.modelRtReflections != nullptr);
 		if (shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid()) {
 			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
 			PROFILE_SCOPE("RT shadow mask");
@@ -1272,6 +1296,34 @@ struct DiligentRenderer : DiligentGfx
 
 	void MarkWaterDone() override
 	{
+		// the frame for the next one's reflections on the models: the scene up to the water and
+		// the waterfalls (not the particles or the interface), with its view-projection
+		if (postActive && shadows.modelReflections >= 1 && !shadows.portraitPass && shadows.lightPrepass) {
+			ITexture* target = currentColorTarget() ? currentColorTarget()->GetTexture() : nullptr;
+			if (target && target->GetDesc().SampleCount == 1) {
+				const TextureDesc& td = target->GetDesc();
+				if (!prevSceneTex || prevSceneTex->GetDesc().Width != td.Width || prevSceneTex->GetDesc().Height != td.Height
+					|| prevSceneTex->GetDesc().Format != td.Format) {
+					TextureDesc cd;
+					cd.Name = "Frame before (model reflections)";
+					cd.Type = RESOURCE_DIM_TEX_2D;
+					cd.Width = td.Width;
+					cd.Height = td.Height;
+					cd.Format = td.Format;
+					cd.BindFlags = BIND_SHADER_RESOURCE;
+					prevSceneTex.Release();
+					device->CreateTexture(cd, nullptr, &prevSceneTex);
+				}
+				if (prevSceneTex) {
+					ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+					CopyTextureAttribs copy(target, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, prevSceneTex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+					ctx->CopyTexture(copy);
+					RestoreRenderTargets();
+					prevSceneFrame = frame;
+					shadows.prevViewProj = shadows.viewProj;
+				}
+			}
+		}
 		if (!postActive || !fsr3Active)
 			return;
 		post->copyAfterWater(ctx);
@@ -1592,6 +1644,9 @@ struct DiligentRenderer : DiligentGfx
 	void BeginDrawing() override
 	{
 		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
+		shadows.modelReflections = 0;
+		shadows.modelRtReflectionsOn = false;
+		shadows.lightingDepth = shadows.prevScene = shadows.modelRtReflections = nullptr;
 		{
 			// the per-pass timings (GpuProfiler): the frames whose stamps are in, this frame's
 			const auto now = std::chrono::steady_clock::now();
