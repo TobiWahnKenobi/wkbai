@@ -328,6 +328,8 @@ namespace {
 
 // ---- AIUtil (AIUtil.h): the helpers above, and the orders the Lua AIs and the ministry AI give ----
 
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach); // Order.cpp
+
 namespace AIUtil {
 	int ClassOf(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::ClassOf(o); }
 	int TypeClass(const GameObjBlueprint* type)
@@ -436,8 +438,34 @@ namespace AIUtil {
 		g_items.update(gs);
 		if (!target || target->deleted || g_items.attackOrder < 0)
 			return;
+		// each with its own attack (DEFAULT_ATTACK_COMMAND: an archer's Fire Arrow), as a right-click
+		// gives it; the melee "Attack" order for all sent the ministries' archers into the enemy's
+		// village to fight in melee, where they stood and killed no one (the AI play test,
+		// 2026-11-16). Not a unit that can't reach the target at all (CanReach).
 		for (ServerGameObject* u : units)
-			u->orderConfig.addOrder(&gs->orders[g_items.attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			if (CanReach(u, target))
+				AIAttack(u, target);
+	}
+	// whether the unit can come within its attack's reach of the target (Order.cpp's OutOfReach:
+	// a tile that near in the ground its class can stand on); an archer's reach 30 m, else 3 m
+	bool CanReach(ServerGameObject* unit, ServerGameObject* target)
+	{
+		return !target || !OutOfReach(unit, target->position, ClassOf(unit) == 2 ? 30.0f : 3.0f);
+	}
+	ServerGameObject* NearestReachable(ServerGameObject* unit, const std::vector<ServerGameObject*>& candidates)
+	{
+		ServerGameObject* best = nullptr;
+		float bd = 0.0f;
+		for (ServerGameObject* c : candidates) {
+			if (!c || c->deleted)
+				continue;
+			const float d = (c->position - unit->position).sqlen2xz();
+			if ((!best || d < bd) && CanReach(unit, c)) {
+				best = c;
+				bd = d;
+			}
+		}
+		return best;
 	}
 	void SendHome(ServerGameObject* p, const std::vector<ServerGameObject*>& units)
 	{

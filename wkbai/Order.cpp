@@ -22,6 +22,7 @@
 #include "gameset/GameObjBlueprint.h"
 #include "NNSearch.h"
 #include "util/StriCompare.h"
+#include "AIUtil.h"
 #include "Model.h"
 #include <map>
 #include <cstdio>
@@ -1002,6 +1003,45 @@ void MissileTask::onUpdate()
 
 void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 
+// Whether an attacker can never get within `reach` metres of a point: no tile that close lies in
+// the attacker's terrain region (the ground its movement class can stand on, 8-connected; from
+// the terrain alone, buildings only block more, so another region is out of reach for good). A
+// formation goes by its first member. The AI play test of 2026-11-16: a scout on a hilltop no
+// spearman could climb drew every army of the enemy's, which stood at the foot of the slope (or
+// formed up and broke again) for the rest of the game. Ranged units find a reachable tile within
+// their range, and shoot.
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
+{
+	ServerGameObject* mover = unit;
+	if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		mover = nullptr;
+		for (const auto& [type, children] : unit->children)
+			for (CommonGameObject* c : children)
+				if (!mover && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !((ServerGameObject*)c)->deleted)
+					mover = (ServerGameObject*)c;
+		if (!mover)
+			return false;
+	}
+	if (mover->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		return false;
+	const int cls = MovementController::movementClass(mover->blueprint);
+	const int own = MovementController::terrainRegion(cls, (int)(mover->position.x / 5.0f), (int)(mover->position.z / 5.0f));
+	if (own < 0)
+		return false; // standing where its class can't (pushed, spawned): no judgement
+	const int r = std::clamp((int)std::ceil(reach / 5.0f), 1, 12);
+	const int cx = (int)(point.x / 5.0f), cz = (int)(point.z / 5.0f);
+	for (int dz = -r; dz <= r; dz++)
+		for (int dx = -r; dx <= r; dx++) {
+			// the tile's nearest point within reach of the point
+			const float nx = std::clamp(point.x, (cx + dx) * 5.0f, (cx + dx + 1) * 5.0f), nz = std::clamp(point.z, (cz + dz) * 5.0f, (cz + dz + 1) * 5.0f);
+			if ((nx - point.x) * (nx - point.x) + (nz - point.z) * (nz - point.z) > reach * reach)
+				continue;
+			if (MovementController::terrainRegion(cls, cx + dx, cz + dz) == own)
+				return false;
+		}
+	return true;
+}
+
 void MoveTask::onStart()
 {
 }
@@ -1484,6 +1524,28 @@ void ObjectReferenceTask::onUpdate()
 			}
 		}
 		if (arrived) {
+			// A formation "in range" of an enemy its members can never reach: its range counts from
+			// its centre and is wide, so the walk ends at once, satisfied, while its spearmen stand
+			// at the foot of a slope below a scout (the Kingmaker's "Move To Attack Range Of
+			// Original Victim", started again every 4 s all game: the play test of 2026-11-16).
+			// By the members' own reach (an archer's 30 m, else 3 m) the task ends as if the target
+			// were gone. (Out of reach by the terrain alone: a target behind a wall stays in reach,
+			// and the wall in the way is attacked, AttackWallInTheWay.)
+			if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && !proximitySatisfied && go->getPlayer()
+				&& AIUtil::IsEnemy(go->getPlayer(), target.get())) {
+				const ServerGameObject* first = nullptr;
+				for (const auto& [type, children] : go->children)
+					for (CommonGameObject* c : children)
+						if (!first && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							first = (const ServerGameObject*)c;
+				if (first && OutOfReach(go, target->position, AIUtil::ClassOf(first) == 2 ? 30.0f : 3.0f)) {
+					TraceTask(this, "target out of the members' reach: the task ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
+			}
 			// A task loaded as satisfied whose triggers hadn't started, on a standing unit and aimed
 			// at a building: WKB.exe runs its PROXIMITY_SATISFIED_SEQUENCE on the first tick
 			// (0x50d1e0), before the triggers. A cart loaded in "Wait to Collect Resources from
@@ -1552,6 +1614,22 @@ void ObjectReferenceTask::onUpdate()
 				const bool searchFailed = go->movementController.takeSearchFailed();
 				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// An attack (or a walk to an enemy: the Kingmaker formations' "Move To Attack Range
+				// Of Original Victim") whose walk ended short of a target it can never reach
+				// (OutOfReach: up a slope its class can't climb, across water): the task ends as if
+				// the target were gone, and the unit (or its AI's script) picks another, instead of
+				// standing there or searching again every second for the rest of the game (wkbai's;
+				// no WKB.exe rule was traced for it, docs/engine/ministry-ai.md step 16)
+				if ((blueprint->classType == Tags::ORDTSKTYPE_ATTACK || (go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), target.get())))
+					&& !go->movementController.isMoving()
+					&& (searchFailed || (destination - goal).len2xz() > 2.0f)
+					&& OutOfReach(go, goal, std::max(this->proximity, 1.5f) + 1.0f)) {
+					TraceTask(this, "target out of reach: the attack ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
 				// An attack whose walk ended out of range, a building in the way (WKB.exe 0x50dc50 ->
 				// 0x50e760): that building becomes the unit's "Attack Target" associate and it gets the
 				// event "Attack Wall Target" (the game set's "... Respond to Attack Wall Event" then

@@ -10882,6 +10882,104 @@ void Test_SmallerItems()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// A save played on without a window, as fast as it goes: "runSave": { "path": "<full path of a .sav>",
+// "seconds": n } (default 120 game seconds). For a slow game (the play test's PERFORMANCE save): with
+// "profileSim" the simulation's parts every 10 s; here "RUNSAVE t=<s> real <ms> per game second,
+// steps over 50 ms <n>, characters moving <n>" every 10 game seconds, then the slowest step.
+void Test_RunSave()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("runSave", nlohmann::json::object());
+	const std::string path = cfg.value("path", std::string());
+	const float seconds = cfg.value("seconds", 120.0f);
+	Server server;
+	server.loadSaveGame(path.c_str());
+	server.timeManager.unpause();
+	extern std::map<uint32_t, int>* g_unreachableBy;
+	std::map<uint32_t, int> unreachableBy;
+	g_unreachableBy = &unreachableBy;
+	printf("RUNSAVE %s: %zu objects, ministries %d\n", path.c_str(), server.idmap.size(), (int)server.aiMinistries);
+	fflush(stdout);
+	const float start = server.timeManager.currentTime;
+	float nextPrint = start + 10.0f;
+	double worst = 0.0;
+	int slow = 0;
+	auto t0 = std::chrono::steady_clock::now();
+	while (server.timeManager.currentTime < start + seconds) {
+		const auto s0 = std::chrono::steady_clock::now();
+		StepServer(server, 1);
+		const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s0).count();
+		worst = std::max(worst, ms);
+		if (ms > 50.0)
+			slow++;
+		if (server.timeManager.currentTime >= nextPrint) {
+			int moving = 0;
+			for (const auto& [id, o] : server.idmap) {
+				const ServerGameObject* obj = (const ServerGameObject*)o;
+				if (obj && !obj->deleted && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->movementController.isMoving())
+					moving++;
+			}
+			const double real = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+			printf("RUNSAVE t=%.0f real %.0f ms per game second, steps over 50 ms %d, characters moving %d\n", server.timeManager.currentTime - start,
+				real / 10.0, slow, moving);
+			fflush(stdout);
+			t0 = std::chrono::steady_clock::now();
+			slow = 0;
+			nextPrint += 10.0f;
+		}
+	}
+	printf("RUNSAVE end: the slowest step %.1f ms\n", worst);
+	// who asked for paths to goals no search could reach: the units, their orders and targets
+	std::vector<std::pair<int, uint32_t>> askers;
+	for (const auto& [id, n] : unreachableBy)
+		askers.push_back({ n, id });
+	std::sort(askers.rbegin(), askers.rend());
+	std::map<std::string, int> byKind;
+	for (const auto& [n, id] : askers) {
+		ServerGameObject* o = server.findObject(id);
+		std::string kind = o ? o->blueprint->name : std::string("(gone)");
+		if (o) {
+			Order* order = o->orderConfig.getCurrentOrder();
+			kind += std::string(" / ") + (order ? server.gameSet->orders.getString(order->blueprint) : std::string("no order"));
+			const ServerGameObject* t = order && order->getCurrentTask() ? order->getCurrentTask()->target.get() : nullptr;
+			kind += t ? " -> " + t->blueprint->name : std::string();
+			const ServerGameObject* pl = o->getPlayer();
+			kind += pl ? " (player " + std::to_string(pl->id) + ")" : std::string();
+		}
+		byKind[kind] += n;
+	}
+	std::vector<std::pair<int, std::string>> kinds;
+	for (const auto& [k, n] : byKind)
+		kinds.push_back({ n, k });
+	std::sort(kinds.rbegin(), kinds.rend());
+	printf("RUNSAVE unreachable goals: %zu units asked\n", askers.size());
+	for (size_t i = 0; i < kinds.size() && i < 25; i++)
+		printf("RUNSAVE   %6d  %s\n", kinds[i].first, kinds[i].second.c_str());
+	for (size_t i = 0; i < askers.size() && i < 10; i++) {
+		ServerGameObject* o = server.findObject(askers[i].second);
+		Order* order = o ? o->orderConfig.getCurrentOrder() : nullptr;
+		const ServerGameObject* t = order && order->getCurrentTask() ? order->getCurrentTask()->target.get() : nullptr;
+		printf("RUNSAVE   unit %u: %d asks, at (%.0f, %.0f), target %u at (%.0f, %.0f)\n", askers[i].second, askers[i].first, o ? o->position.x : 0.0f,
+			o ? o->position.z : 0.0f, t ? t->id : 0, t ? t->position.x : 0.0f, t ? t->position.z : 0.0f);
+	}
+	// the askers' formations and armies: their orders and targets
+	std::set<ServerGameObject*> parents;
+	for (size_t i = 0; i < askers.size(); i++)
+		if (ServerGameObject* o = server.findObject(askers[i].second))
+			for (ServerGameObject* p = o->getParent(); p && p->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER; p = p->getParent())
+				parents.insert(p);
+	for (ServerGameObject* p : parents) {
+		Order* order = p->orderConfig.getCurrentOrder();
+		Task* task = order ? order->getCurrentTask() : nullptr;
+		const ServerGameObject* t = task ? task->target.get() : nullptr;
+		printf("RUNSAVE   parent %s %u at (%.0f, %.0f): %s%s%s, moving %d\n", p->blueprint->getFullName().c_str(), p->id, p->position.x, p->position.z,
+			order ? server.gameSet->orders.getString(order->blueprint).c_str() : "no order", t ? " -> " : "", t ? (t->blueprint->getFullName() + " " + std::to_string(t->id)).c_str() : "",
+			(int)p->movementController.isMoving());
+	}
+	g_unreachableBy = nullptr;
+	fflush(stdout);
+}
+
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
@@ -11243,6 +11341,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistrySlots, "Ministry AI per start position (the lobby's AI choice): the positions' players with an empty position before them, every AI with mask 0"},
 {Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
+{Test_RunSave, "Run a save without a window (\"runSave\": path, seconds): real time per game second, slow steps, moving characters"},
 };
 
 void LaunchTest()

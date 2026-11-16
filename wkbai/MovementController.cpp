@@ -30,6 +30,8 @@
 uint64_t g_astarSearches = 0, g_astarTiles = 0;
 // the searches a group field answered, the fields made, the goals no search could reach
 uint64_t g_fieldPaths = 0, g_fieldBuilds = 0, g_unreachableGoals = 0;
+// the unreachable goals by the asking object (on when a test sets it: Test_RunSave)
+std::map<uint32_t, int>* g_unreachableBy = nullptr;
 double g_astarMs = 0.0;
 // test runs: WKB_PATH_STATS=1 prints the game's totals at exit (searches, tiles taken from the open
 // lists, search ms on the threads, the path nodes walks got)
@@ -1265,8 +1267,12 @@ void MovementController::runPathSearches()
 		PathRequest& r = *rp;
 		if (r.straight)
 			continue;
-		if (r.unreachable)
+		if (r.unreachable) {
 			g_unreachableGoals++;
+			// (Test_RunSave: who asks for them)
+			if (g_unreachableBy && r.object.get())
+				(*g_unreachableBy)[r.object.get()->id]++;
+		}
 		if (r.searchEnd == r.end && !g_noFields && !r.threat) {
 			const ClassGrid* c = &g.classes[r.cls];
 			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));

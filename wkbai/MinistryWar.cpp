@@ -456,11 +456,8 @@ namespace {
 				me->aiController.ministryUnits.insert(u->id);
 				if (gather)
 					continue;
-				ServerGameObject* best = t.enemies.front();
-				for (ServerGameObject* e : t.enemies)
-					if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-						best = e;
-				AIUtil::Attack({ u }, best);
+				if (ServerGameObject* best = AIUtil::NearestReachable(u, t.enemies))
+					AIUtil::Attack({ u }, best);
 			}
 			m.startUnits += (int)used;
 			home.erase(home.begin(), home.begin() + used);
@@ -814,7 +811,11 @@ namespace {
 						back.push_back(u);
 						continue;
 					}
-					if (tg && !tg->deleted && AIUtil::IsSoldier(tg) && tgInside)
+					// fighting a soldier in the zone: on with it, unless another is 15 m nearer (one
+					// fast rider led a whole defence round the town: the play test, 2026-11-16)
+					ServerGameObject* nearer = inside.empty() ? nullptr : AIUtil::NearestReachable(u, inside);
+					if (tg && !tg->deleted && AIUtil::IsSoldier(tg) && tgInside
+						&& !(nearer && nearer != tg && (nearer->position - u->position).len2xz() + 15.0f < (tg->position - u->position).len2xz()))
 						continue;
 					if (inside.empty()) {
 						// (gathering: one fighting out beyond the zone comes back to the others)
@@ -822,11 +823,8 @@ namespace {
 							back.push_back(u);
 						continue;
 					}
-					ServerGameObject* best = inside.front();
-					for (ServerGameObject* e : inside)
-						if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-							best = e;
-					AIUtil::Attack({ u }, best);
+					if (nearer)
+						AIUtil::Attack({ u }, nearer);
 				}
 				if (!back.empty())
 					AIUtil::Hold(me, back, place, nullptr);
@@ -884,8 +882,8 @@ namespace {
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
 						std::vector<ServerGameObject*> near = AIUtil::EnemiesNear(me, u->position, 40.0f, false);
-						if (!near.empty())
-							AIUtil::Attack({ u }, near.front());
+						if (ServerGameObject* n = AIUtil::NearestReachable(u, near))
+							AIUtil::Attack({ u }, n);
 						else if (target)
 							AIUtil::Attack({ u }, target);
 					}
@@ -969,11 +967,8 @@ namespace {
 				// each idle raider takes the nearest
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
-						ServerGameObject* best = prey.front();
-						for (ServerGameObject* p : prey)
-							if ((p->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-								best = p;
-						AIUtil::Attack({ u }, best);
+						if (ServerGameObject* best = AIUtil::NearestReachable(u, prey))
+							AIUtil::Attack({ u }, best);
 					}
 				return nullptr;
 			}
@@ -985,7 +980,8 @@ namespace {
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
 						std::vector<ServerGameObject*> near = AIUtil::EnemiesNear(me, u->position, 40.0f, false);
-						AIUtil::Attack({ u }, near.empty() ? target : near.front());
+						ServerGameObject* n = AIUtil::NearestReachable(u, near);
+						AIUtil::Attack({ u }, n ? n : target);
 					}
 			return nullptr;
 		}

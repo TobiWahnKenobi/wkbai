@@ -805,7 +805,15 @@ void FormationController::update()
 		const bool moving = member->movementController.isMoving();
 		if (d > ARRIVED || formSpeed > 0.0f) {
 			const Vector3& asked = member->movementController.getRequestedDestination();
-			if (!moving || (asked - target).sqlen2xz() > RETARGET * RETARGET
+			// a member standing although it asked for this place already: its search found no way
+			// there (a place up a slope it can't climb, in water, in a wall) or ended short. It
+			// asks again once a second, by its id, not every step: 65 members of two formations
+			// round a scout on a hilltop asked 20 times a second each, all game long (the AI play
+			// test's PERFORMANCE save, 2026-11-16). From the saved request and the clock alone, so a
+			// loaded game asks at the same steps.
+			const bool askedHere = (asked - target).sqlen2xz() <= RETARGET * RETARGET;
+			const bool retryDue = !server || ((uint32_t)(server->timeManager.currentTime * 20.0f + 0.5f) + member->id) % 20 == 0;
+			if ((!moving && (!askedHere || retryDue)) || (moving && !askedHere)
 				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed))
 				member->movementController.startMovement(target);
 		}
