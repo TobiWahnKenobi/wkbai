@@ -318,6 +318,7 @@ Department* Government::department(uint8_t id) const
 }
 
 float Government::now() const { return server.timeManager.currentTime; }
+float Government::played() const { return now() - (float)board.get("gov.start"); }
 
 void Government::log(uint8_t dept, const char* fmt, ...)
 {
@@ -387,6 +388,8 @@ void Ministries::update(Server& server)
 		auto& g = governments[p->id];
 		if (!g) {
 			g = std::make_unique<Government>(server, p->id);
+			// (when it began: a level's clock needn't start at 0, Battleground's starts at 5916 s)
+			g->board.report("gov.start", g->now());
 			g->log(STRATEGIST, "a government of %zu departments", g->departments.size());
 			SetWeightsFromCharacter(*g);
 		}

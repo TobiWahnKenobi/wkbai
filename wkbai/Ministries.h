@@ -179,6 +179,9 @@ namespace Ministry {
 		ServerGameObject* player() const;
 		Department* department(uint8_t id) const;
 		float now() const;
+		// the game time since the government began (the "minute 4 to 20" of the opening and such:
+		// a level's clock needn't start at 0)
+		float played() const;
 		// a trace line (only with the trace on for this player)
 		void log(uint8_t dept, const char* fmt, ...);
 		// runs the departments due at this step

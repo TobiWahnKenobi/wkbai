@@ -156,7 +156,7 @@ int OpeningShort(Government& g)
 	ServerGameObject* me = g.player();
 	if (!me || (MinOff() & 1024))
 		return 0;
-	const float now = g.now();
+	const float now = g.played();
 	if (now < 240.0f || now > Tune("openingEnd", 1200.0f))
 		return 0;
 	std::map<uint32_t, int> seen;
@@ -196,7 +196,7 @@ int TrainByCounters(Government& g)
 	if (!me)
 		return 0;
 	const GameSet* gs = srv.gameSet.get();
-	const float now = g.now();
+	const float now = g.played();
 	// (the opening's guard short: whatever is affordable, Train checks)
 	const int short_ = std::max(OpeningShort(g), DangerShort(g));
 	const float spare = Tune("trainFood", 500.0f);

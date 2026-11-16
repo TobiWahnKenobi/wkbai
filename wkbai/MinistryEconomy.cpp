@@ -168,7 +168,7 @@ namespace {
 			if (MinOff() & 8) return;
 			Server& srv = g.server;
 			ServerGameObject* me = g.player();
-			if (!me || g.now() < 360.0f)
+			if (!me || g.played() < 360.0f)
 				return;
 			// a surplus over what War and the reserves need; near the population limit (90 %), when
 			// fighters can't be trained any more, half that, military first (improvement 7: alone under
@@ -235,7 +235,7 @@ void EconomyNeeds(Government& g)
 	// than there is. (Asked for whenever gold didn't come in, the miners came from the wood and cost a
 	// third of the soldiers one against one, while the gold stayed unspent: 400-500 at the end.)
 	double goldNeeded = 0.0;
-	if (now > 180.0f && g.department(ECONOMY) && g.department(ECONOMY)->thinks % 15 == 0) {
+	if (g.played() > 180.0f && g.department(ECONOMY) && g.department(ECONOMY)->thinks % 15 == 0) {
 		Server& srv = g.server;
 		const GameSet* gs = srv.gameSet.get();
 		std::vector<ServerGameObject*> todo{ me };
