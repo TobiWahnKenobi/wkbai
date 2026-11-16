@@ -125,6 +125,8 @@ private:
 	// it had none: worked out again from its temperature at the first update (baseKnown false)
 	float temperatureBase = 12.0f;
 	bool baseKnown = true;
+	// how far the heatwave's warm nights have come (0-1, eased; saved on the "temperature" line)
+	float heatNights = 0.0f;
 	bool started = false;
 	// startClock done (not saved: a saved game has started)
 	bool clockStarted = false;

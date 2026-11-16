@@ -848,8 +848,18 @@ void ServerEnvironment::update(Server& server)
 		temperatureTarget = target;
 		// the day's swing (none without day and night: the season's temperature all day); its
 		// size follows the clouds and the fog, which change gradually
+		// in a heatwave the nights stay warm (the warm air mass and the heat stored in the ground
+		// and the walls): the night's side of the swing cut to 40%, the day's kept; eased in and
+		// out over two minutes, as the heatwave comes and goes
+		{
+			const float heat = state.weather == WEATHER_HEATWAVE ? 1.0f : 0.0f;
+			heatNights = !started || snapTemperature ? heat : Approach(heatNights, heat, dt / 120.0f, dt / 120.0f);
+		}
+		float shape = DiurnalShape(state.dayFraction * 24.0f, sun.sunrise);
+		if (shape < 0.0f)
+			shape *= 1.0f - 0.6f * heatNights;
 		const float swing = settings.dayNight
-			? DiurnalAmplitude(state.yearFraction, settings.seasons, state.cloudCover, state.fog) * DiurnalShape(state.dayFraction * 24.0f, sun.sunrise)
+			? DiurnalAmplitude(state.yearFraction, settings.seasons, state.cloudCover, state.fog) * shape
 			: 0.0f;
 		// (at once also after the debug panel moved the clock or held a weather: a jump from
 		// summer to winter was 29 degrees and its blizzard rain for a minute and a half)
@@ -1035,7 +1045,7 @@ std::string ServerEnvironment::saveText() const
 			o << ' ' << id;
 		o << '\n';
 	}
-	o << "temperature " << temperatureBase << '\n';
+	o << "temperature " << temperatureBase << ' ' << heatNights << '\n';
 	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
@@ -1063,6 +1073,8 @@ void ServerEnvironment::loadText(const std::string& text)
 				>> state.fog >> state.wetness >> state.snowCover >> state.ice >> state.waterRise >> state.sightFactor >> state.speedFactor >> state.lightningCount;
 		else if (tag == "temperature") {
 			l >> temperatureBase;
+			if (!(l >> heatNights)) // (none before the warm nights)
+				heatNights = state.weather == WEATHER_HEATWAVE ? 1.0f : 0.0f;
 			baseKnown = true;
 		}
 		else if (tag == "timers") {

@@ -10601,7 +10601,8 @@ void Test_BuildIdentity()
 // Night cold (the day's temperature swing, ServerEnvironment::update): on 4 Peaks in midsummer,
 // a clear day and night of 20 minutes, one update a second: the coldest shortly before sunrise,
 // the warmest in the early afternoon, the night colder than the afternoon by a summer's swing,
-// smooth from second to second; an overcast day's swing smaller; without day and night the
+// smooth from second to second; an overcast day's swing smaller; a heatwave's nights warm (more
+// than its 8 degrees' pull above the clear night, the swing smaller); without day and night the
 // season's temperature all day. A save and load goes on with the same temperatures, and a save
 // from before the day's mean (no "temperature" line) goes on without a jump. Prints "NIGHTCOLD
 // ok/FAILED ..." and "NIGHTCOLD PASSED/FAILED".
@@ -10670,6 +10671,11 @@ void Test_NightCold()
 	const Day cloudy = runDay(true, WEATHER_CLOUDY);
 	snprintf(what, sizeof(what), "cloudy midsummer: %.1f to %.1f C (swing %.1f against the clear day's %.1f)", cloudy.lo, cloudy.hi, cloudy.hi - cloudy.lo, clear.hi - clear.lo);
 	check(cloudy.hi - cloudy.lo < 0.8f * (clear.hi - clear.lo) && cloudy.hi - cloudy.lo > 3.0f, what);
+	const Day heat = runDay(true, WEATHER_HEATWAVE);
+	snprintf(what, sizeof(what), "heatwave midsummer: %.1f C at %05.2f h to %.1f C at %05.2f h (swing %.1f; the clear night's %.1f, its swing %.1f)",
+		heat.lo, heat.loHour, heat.hi, heat.hiHour, heat.hi - heat.lo, clear.lo, clear.hi - clear.lo);
+	check(heat.lo - clear.lo > 8.0f + 3.0f && heat.hi - heat.lo < 0.8f * (clear.hi - clear.lo) && heat.hi > clear.hi && heat.maxStep < 0.1f,
+		std::string("warm nights: ") + what);
 	const Day flat = runDay(false, WEATHER_CLEAR);
 	snprintf(what, sizeof(what), "day and night off: %.2f to %.2f C all day", flat.lo, flat.hi);
 	check(flat.hi - flat.lo < 0.2f, what);
