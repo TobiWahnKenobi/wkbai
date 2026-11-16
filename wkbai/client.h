@@ -35,6 +35,8 @@ struct ClientGameObject : SpecificGameObject<Client, ClientGameObject> {
 	ClientGameObject(uint32_t id, const GameObjBlueprint *blueprint) : SpecificGameObject<Client, ClientGameObject>(id, blueprint) {}
 	SceneEntity sceneEntity;
 	std::unordered_map<int, int> buildingOrderCountMap;
+	// ENABLE_/DISABLE_SHADOW (mods): -1 as its type has it, 0 no static shadow, 1 one
+	int8_t shadowSwitch = -1;
 
 	void updatePosition(const Vector3& newposition);
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);
@@ -161,6 +163,13 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// it until the game time `until` (< 0: for good), radius in 5 m tiles
 	struct FogReveal { uint32_t object; float until, radius; };
 	std::vector<FogReveal> fogReveals;
+	// the mods' script actions (RE repo docs/re/keyword-coverage.md): DISPLAY_SAVE_GAME_MENU,
+	// SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC's picture, PLAY_LOOPED_SOUND's sounds (until
+	// STOP_SOUND of their source or either object is gone)
+	bool saveMenuRequested = false;
+	std::string objectivesMapGraphic;
+	struct LoopedSound { uint32_t source; int soundTag; uint32_t target; };
+	std::vector<LoopedSound> loopedSounds;
 	// the minimap alerts going (NETCLIMSG_MINIMAP_ALERT): a blinking dot or collapsing circles at
 	// (x, z), colour 0xRRGGBB or 0xFF0000nn (player colour nn), from SDL tick `start`
 	struct MinimapAlert {

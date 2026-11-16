@@ -171,6 +171,32 @@ static std::vector<std::pair<float, float>> placesOf(const ServerGameObject* for
 	return formationPlaces(formationTypeOf(formation), count, first->formationSeparationX, first->formationSeparationY);
 }
 
+float FormationController::maxDimension() const
+{
+	const auto places = placesOf(formation, slotCount > 0 ? slotCount : (int)formation->countChildren());
+	if (places.empty())
+		return 0.0f;
+	float x0 = places[0].first, x1 = x0, z0 = places[0].second, z1 = z0;
+	for (const auto& p : places) {
+		x0 = std::min(x0, p.first);
+		x1 = std::max(x1, p.first);
+		z0 = std::min(z0, p.second);
+		z1 = std::max(z1, p.second);
+	}
+	return std::max(x1 - x0, z1 - z0);
+}
+
+bool FormationController::isFormedUp() const
+{
+	if (!formed)
+		return false;
+	for (const auto& [childType, childList] : formation->children)
+		for (auto* member : childList)
+			if (static_cast<ServerGameObject*>(member)->movementController.isMoving())
+				return false;
+	return true;
+}
+
 bool FormationController::memberPlace(const ServerGameObject* formation, const ServerGameObject* member, Vector3& place)
 {
 	const FormationController& fc = formation->formationController;

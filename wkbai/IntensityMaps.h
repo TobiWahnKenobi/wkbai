@@ -30,6 +30,8 @@ struct IntensityMaps {
 	void update(Server* server);
 	// SWITCH_ON_INTENSITY_MAP
 	void switchOn(ServerGameObject* obj, const std::string& map);
+	// SWITCH_OFF_INTENSITY_MAP (mods; WKB.exe 0x5485a0)
+	void switchOff(ServerGameObject* obj, const std::string& map);
 	// The extra cost per tile (in the search's units: 100 a straight step) for this unit's paths,
 	// or null if it applies no map or its maps are empty. Valid until the next update.
 	const std::vector<int32_t>* costFor(ServerGameObject* obj);

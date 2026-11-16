@@ -41,6 +41,8 @@ void OrderBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->startSequence.init(gsf, gs, "END_START_SEQUENCE");
 		else if (tag == "RESUMPTION_SEQUENCE")
 			this->resumptionSequence.init(gsf, gs, "END_RESUMPTION_SEQUENCE");
+		else if (tag == "SUSPENSION_SEQUENCE")
+			this->suspensionSequence.init(gsf, gs, "END_SUSPENSION_SEQUENCE");
 		else if (tag == "TERMINATION_SEQUENCE")
 			this->terminationSequence.init(gsf, gs, "END_TERMINATION_SEQUENCE");
 		else if (tag == "CANCELLATION_SEQUENCE")
@@ -68,6 +70,8 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->startSequence.init(gsf, gs, "END_START_SEQUENCE");
 		else if (tag == "RESUMPTION_SEQUENCE")
 			this->resumptionSequence.init(gsf, gs, "END_RESUMPTION_SEQUENCE");
+		else if (tag == "SUSPENSION_SEQUENCE")
+			this->suspensionSequence.init(gsf, gs, "END_SUSPENSION_SEQUENCE");
 		else if (tag == "TERMINATION_SEQUENCE")
 			this->terminationSequence.init(gsf, gs, "END_TERMINATION_SEQUENCE");
 		else if (tag == "CANCELLATION_SEQUENCE")

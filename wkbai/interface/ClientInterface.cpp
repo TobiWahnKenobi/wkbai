@@ -3136,7 +3136,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			return bp->shearModel;
 		}
 	};
-	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
+	if (obj->shadowSwitch == 1 || (obj->shadowSwitch != 0 && (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 	// the fields in winter (wkbai's seasons; they give no food then): bare soil
 	if (client->environmentActive && client->environmentSettings.seasons && client->environment.season == 3
@@ -3553,6 +3553,45 @@ void ClientInterface::iter()
 		if (singlePlayer && !client->timeManager.paused) {
 			client->sendPauseRequest(true);
 			menuPausedGame = true;
+		}
+	}
+	// DISPLAY_SAVE_GAME_MENU (mods): the in-game menu's Save screen, pausing a single-player game
+	if (client->saveMenuRequested) {
+		client->saveMenuRequested = false;
+		if (frontEnd && !frontEnd->isOpen() && saveGame && client->getLevel()) {
+			frontEnd->setSinglePlayer(singlePlayer);
+			frontEnd->setCanSave(true);
+			frontEnd->open("ingame");
+			frontEnd->open("save");
+			if (singlePlayer && !client->timeManager.paused) {
+				client->sendPauseRequest(true);
+				menuPausedGame = true;
+			}
+		}
+	}
+	// PLAY_LOOPED_SOUND (mods): the two latest looped sounds, at their targets, in the sound
+	// player's last two loop slots
+	if (SoundPlayer* sp = SoundPlayer::getSoundPlayer()) {
+		auto& loops = client->loopedSounds;
+		loops.erase(std::remove_if(loops.begin(), loops.end(), [this](const Client::LoopedSound& l) {
+			return !client->findObject(l.source) || !client->findObject(l.target); }), loops.end());
+		for (int k = 0; k < SoundPlayer::MAX_LOOPS - SoundPlayer::WATERFALL_LOOPS; k++) {
+			const int slot = SoundPlayer::MAX_LOOPS - 1 - k;
+			bool playing = false;
+			if (k < (int)loops.size()) {
+				const Client::LoopedSound& l = loops[loops.size() - 1 - k];
+				ClientGameObject* from = client->findObject(l.source);
+				ClientGameObject* to = client->findObject(l.target);
+				const bool toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER;
+				const Vector3 at = toPlayer ? client->camera.position : to->position;
+				const auto [path, refDist, maxDist] = from->blueprint->getSound(l.soundTag, from->subtype, (at - client->camera.position).len3());
+				if (!path.empty()) {
+					sp->setLoop(slot, "Warrior Kings Game Set\\Sounds\\" + path, at, toPlayer ? 1000.0f : refDist, 1.0f, 1.0f);
+					playing = true;
+				}
+			}
+			if (!playing)
+				sp->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 		}
 	}
 	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
@@ -6027,6 +6066,7 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 			if (state != MissionObjectives::HIDDEN)
 				objectives.entries.push_back({ GameText(lang.getText(key)), state == MissionObjectives::INACTIVE });
 		objectives.changed = client->objectivesChanged;
+		objectives.map = client->objectivesMapGraphic;
 	}
 	frontEnd->setObjectives(std::move(objectives));
 	if (toggleObjectivesRequested) {

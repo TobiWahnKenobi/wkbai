@@ -65,7 +65,8 @@ void Order::suspend()
 	if (!isWorking()) return;
 	this->state = OTS_SUSPENDED;
 	this->tasks[this->currentTask]->suspend();
-	//this->blueprint->suspensionSequence.run(this->gameObject);
+	// (no shipped script has a SUSPENSION_SEQUENCE; mods may, WKB.exe 0x505970 runs it)
+	this->blueprint->suspensionSequence.run(this->gameObject);
 }
 
 void Order::resume()
@@ -95,6 +96,8 @@ void Order::terminate()
 
 void Order::process()
 {
+	if (this->scriptSuspended)
+		return;
 	if (this->state == OTS_SUSPENDED)
 		this->resume();
 	else if (this->state != OTS_PROCESSING)
@@ -302,6 +305,7 @@ void Task::suspend()
 		go->movementController.stopMovement();
 	go->setAnimation(0);
 	//this->blueprint->suspensionSequence.run(this->order->gameObject);
+	this->blueprint->suspensionSequence.run(this->order->gameObject); // (WKB.exe 0x5063e0; none shipped)
 }
 
 void Task::resume()

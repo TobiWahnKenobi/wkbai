@@ -32,6 +32,8 @@ enum class ProgramType {
 	CLIENT = 2
 };
 
+struct Footprint;
+
 struct CommonGameObject {
 	uint32_t id;
 	const GameObjBlueprint* blueprint;
@@ -43,6 +45,8 @@ struct CommonGameObject {
 	std::map<std::pair<int, int>, float> indexedItems;
 
 	Vector3 position, orientation, scale = Vector3(1.0f, 1.0f, 1.0f);
+	// SWITCH_FOOTPRINT (mods): the building's footprint instead of its type's (server)
+	const Footprint* footprintOverride = nullptr;
 	// PERPENDICULAR_TO_LANDSCAPE types (siege engines, carts, the Behemoth, corpses): the ground's
 	// up there (the client sets it as they move; the server's objects stay upright)
 	Vector3 groundUp = Vector3(0.0f, 1.0f, 0.0f);
@@ -180,6 +184,10 @@ struct CommonGameState {
 		// the tile's TERRAIN (GameSet::terrains index, -1 none), from its texture group; -2 not
 		// looked up yet (MovementController::isTileBlocked; reset when the texture changes)
 		short terrainType = -2;
+		// SET_TILE_STATUS (mods; WKB.exe 0x496f70): 0 BLOCKED, 1 CANNOT_BE_CONSTRUCTED_UPON, 2
+		// BLOCKED_BY_CITY_PERIMETER, 3 CONTAINS_WALL_SECTION, 4 HAS_FORMATION, 5 PASSABLE (as the
+		// map has it). 0 and 3 block the way, 0 to 3 keep buildings off.
+		uint8_t scriptStatus = 5;
 	};
 	std::unique_ptr<Tile[]> tiles;
 	Terrain* terrain = nullptr;

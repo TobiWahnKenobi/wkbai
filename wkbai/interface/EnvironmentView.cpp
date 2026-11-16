@@ -926,7 +926,7 @@ void UpdateWaterfallSounds(Client* client)
 	}
 	std::sort(heard.begin(), heard.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
 	const float flow = WaterfallFlow(g_environment);
-	for (int slot = 0; slot < SoundPlayer::MAX_LOOPS; slot++) {
+	for (int slot = 0; slot < SoundPlayer::WATERFALL_LOOPS; slot++) {
 		if (slot >= (int)heard.size() || flow < 0.12f) {
 			player->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 			continue;

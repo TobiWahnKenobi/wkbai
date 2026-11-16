@@ -589,7 +589,47 @@ void Client::tick()
 				break;
 			}
 			case NETCLIMSG_STOP_SOUND: {
-				SoundPlayer::getSoundPlayer()->stopSoundsOf(br.readUint32());
+				const uint32_t owner = br.readUint32();
+				SoundPlayer::getSoundPlayer()->stopSoundsOf(owner);
+				loopedSounds.erase(std::remove_if(loopedSounds.begin(), loopedSounds.end(),
+					[owner](const LoopedSound& l) { return l.source == owner; }), loopedSounds.end());
+				break;
+			}
+			case NETCLIMSG_SHADOW_SWITCH: {
+				const uint32_t objid = br.readUint32();
+				const bool on = br.readUint8() != 0;
+				if (ClientGameObject* obj = findObject(objid))
+					obj->shadowSwitch = on ? 1 : 0;
+				break;
+			}
+			case NETCLIMSG_FOG_RESET: {
+				const uint32_t objid = br.readUint32();
+				fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(),
+					[objid](const FogReveal& r) { return r.object == objid; }), fogReveals.end());
+				break;
+			}
+			case NETCLIMSG_SAVE_GAME_MENU:
+				saveMenuRequested = true;
+				break;
+			case NETCLIMSG_OBJECTIVES_MAP_GRAPHIC:
+				objectivesMapGraphic = br.readStringZ();
+				break;
+			case NETCLIMSG_LOOPED_SOUND: {
+				LoopedSound l;
+				l.source = br.readUint32();
+				l.soundTag = (int)br.readUint32();
+				l.target = br.readUint32();
+				loopedSounds.push_back(l);
+				break;
+			}
+			case NETCLIMSG_TILE_STATUS: {
+				const int tx = br.readUint16(), tz = br.readUint16();
+				const uint8_t status = br.readUint8();
+				if (tiles && terrain) {
+					const auto [w, h] = terrain->getNumPlayableTiles();
+					if (tx < w && tz < h)
+						tiles[(size_t)tz * w + tx].scriptStatus = status;
+				}
 				break;
 			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {

@@ -521,6 +521,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// end of a level): no HUD, no orders, only the game's windows and the menu
 	std::set<uint32_t> interfaceDisabled;
 	void setGameInterface(ServerGameObject* player, bool enabled);
+	// the mods' script actions (RE repo docs/re/keyword-coverage.md)
+	void sendShadowSwitch(ServerGameObject* obj, bool on);
+	void resetFogOfWar(ServerGameObject* obj, ServerGameObject* player);
+	void openSaveGameMenu(ServerGameObject* player);
+	void setObjectivesMapGraphic(ServerGameObject* player, const std::string& path);
+	void playLoopedSound(ServerGameObject* from, int soundTag, ServerGameObject* to);
+	void setTileStatus(int tx, int tz, int status);
 	// INDICATE_POSITION_OF_ / TRACK_OBJECT_POSITION_FROM_ / STOP_INDICATING_POSITION_OF_
 	// MISSION_OBJECTIVES_ENTRY: a marker for an entry on a player's minimap, by (player, key)
 	struct ObjectiveMarker { uint8_t kind = 0; float x = 0, z = 0; uint32_t object = 0; };

@@ -2582,6 +2582,73 @@ void Server::setGameInterface(ServerGameObject* player, bool enabled)
 	sendTo(player, msg);
 }
 
+void Server::sendShadowSwitch(ServerGameObject* obj, bool on)
+{
+	NetPacketWriter msg{ NETCLIMSG_SHADOW_SWITCH };
+	msg.writeUint32(obj->id);
+	msg.writeUint8(on ? 1 : 0);
+	sendToAll(msg);
+}
+
+void Server::resetFogOfWar(ServerGameObject* obj, ServerGameObject* player)
+{
+	if (!obj || !player)
+		return;
+	fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(),
+		[&](const FogReveal& r) { return r.object == obj->id && r.player == player->id; }), fogReveals.end());
+	NetPacketWriter msg{ NETCLIMSG_FOG_RESET };
+	msg.writeUint32(obj->id);
+	sendTo(player, msg);
+}
+
+void Server::openSaveGameMenu(ServerGameObject* player)
+{
+	if (!player)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_SAVE_GAME_MENU };
+	sendTo(player, msg);
+}
+
+void Server::setObjectivesMapGraphic(ServerGameObject* player, const std::string& path)
+{
+	if (!player)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_OBJECTIVES_MAP_GRAPHIC };
+	msg.writeStringZ(path);
+	sendTo(player, msg);
+}
+
+void Server::playLoopedSound(ServerGameObject* from, int soundTag, ServerGameObject* to)
+{
+	NetPacketWriter msg{ NETCLIMSG_LOOPED_SOUND };
+	msg.writeUint32(from->id);
+	msg.writeUint32((uint32_t)soundTag);
+	msg.writeUint32(to->id);
+	if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+		sendTo(to, msg);
+	else
+		sendToAll(msg);
+}
+
+void Server::setTileStatus(int tx, int tz, int status)
+{
+	if (!tiles || !terrain)
+		return;
+	const auto [w, h] = terrain->getNumPlayableTiles();
+	if (tx < 0 || tz < 0 || tx >= w || tz >= h)
+		return;
+	// as WKB.exe's: only a tile that is passable now changes, so a tile is never unblocked
+	auto& tile = tiles[(size_t)tz * w + tx];
+	if (tile.scriptStatus != 5)
+		return;
+	tile.scriptStatus = (uint8_t)status;
+	NetPacketWriter msg{ NETCLIMSG_TILE_STATUS };
+	msg.writeUint16((uint16_t)tx);
+	msg.writeUint16((uint16_t)tz);
+	msg.writeUint8((uint8_t)status);
+	sendToAll(msg);
+}
+
 void Server::setObjectiveMarker(ServerGameObject* player, const std::string& key, const ObjectiveMarker& marker)
 {
 	if (!player)

@@ -642,7 +642,7 @@ struct FrontEnd::Impl {
 			sol::table entries = lua.create_table();
 			for (const Objectives::Entry& e : objectives.entries)
 				entries.add(lua.create_table_with("text", e.text, "inactive", e.inactive));
-			return sol::make_object(lua, lua.create_table_with("title", objectives.title, "changed", objectives.changed, "entries", entries));
+			return sol::make_object(lua, lua.create_table_with("title", objectives.title, "changed", objectives.changed, "entries", entries, "map", objectives.map));
 		});
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });

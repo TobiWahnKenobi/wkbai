@@ -214,6 +214,8 @@ namespace {
 		const auto& tile = server->tiles[(size_t)tz * w + tx];
 		if (!tile.buildingPassable && tile.building.getFrom<Server>())
 			return true;
+		if (tile.scriptStatus == 0 || tile.scriptStatus == 3) // SET_TILE_STATUS BLOCKED, CONTAINS_WALL_SECTION
+			return true;
 		return groundBlocked(c, w, tx, tz);
 	}
 

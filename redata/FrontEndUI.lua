@@ -3311,12 +3311,18 @@ local function drawObjectives(blocked)
 	local count = 0
 	for _, r in ipairs(rows) do count = count + #r.lines end
 	local titleH = L(34)
-	local h = 2 * L(GAME_WINDOW_PAD_Y) + titleH + math.max(1, count) * lineH + #rows * L(6) + L(40)
+	-- SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC (mods): its picture above the entries
+	local mapH = (o.map and o.map ~= "") and L(200) or 0
+	local h = 2 * L(GAME_WINDOW_PAD_Y) + titleH + (mapH > 0 and mapH + L(8) or 0) + math.max(1, count) * lineH + #rows * L(6) + L(40)
 	local x, y = math.floor(W - w - L(20)), math.floor(math.max(90, L(90)))
 	reportGameWindowArea(x, y, w, h, false)
 	gameFrame(x, y, w, h)
 	centredText(FONT_BUTTON, o.title, x, y + L(GAME_WINDOW_PAD_Y) - L(6), w, titleH, 0xFF9CE6F0)
 	local ty = y + L(GAME_WINDOW_PAD_Y) + titleH
+	if mapH > 0 then
+		drawImage(o.map, x + (w - mapH) / 2, ty, mapH, mapH)
+		ty = ty + mapH + L(8)
+	end
 	for _, r in ipairs(rows) do
 		local bullet = r.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
 		drawImage(bullet, x + L(GAME_WINDOW_PAD_X), ty + (lineH - L(12)) / 2, L(12), L(12))

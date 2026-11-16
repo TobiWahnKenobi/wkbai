@@ -1364,6 +1364,12 @@ void AIController::registerWorkOrder(ServerGameObject* city, ObjectFinder* unitF
 	workOrderInstances.push_back(std::move(woi));
 }
 
+void AIController::deregisterWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder)
+{
+	workOrderInstances.erase(std::remove_if(workOrderInstances.begin(), workOrderInstances.end(),
+		[&](const WorkOrderInstance& woi) { return woi.city.get() == city && woi.unitFinder == unitFinder; }), workOrderInstances.end());
+}
+
 void AIController::activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance)
 {
 	deactivateCommission(commission, handler);

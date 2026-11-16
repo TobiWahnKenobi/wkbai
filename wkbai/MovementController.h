@@ -48,6 +48,19 @@ struct MovementController {
 	// where startMovement was asked to go: getDestination is the nearest place the unit can
 	// stand to it, which for a goal on blocked ground (a target in a building) can be far from it
 	const Vector3& getRequestedDestination() const { return m_requested; }
+	// the length on the ground of the walk still ahead (LENGTH_OF_PATH_REMAINING, WKB.exe
+	// 0x465bb0): from `from` to the next path point, then point to point; 0 when not walking
+	float remainingPathLength(const Vector3& from) const {
+		if (m_pending || m_pathNodes.empty())
+			return 0.0f;
+		float length = 0.0f;
+		Vector3 at = from;
+		for (auto it = m_pathNodes.rbegin(); it != m_pathNodes.rend(); ++it) {
+			length += (*it - at).len2xz();
+			at = *it;
+		}
+		return length;
+	}
 
 	MovementController(ServerGameObject* object) : m_object(object) {}
 

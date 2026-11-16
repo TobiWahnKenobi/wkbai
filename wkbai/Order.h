@@ -47,6 +47,8 @@ struct Order {
 	int currentTask = -1;
 	// a new order waits behind this one (an uninterruptible loop): it ends with its running task
 	bool finishAfterTask = false;
+	// SUSPEND_ORDER (mods): held, not resumed when in front, until RESUME_ORDER
+	bool scriptSuspended = false;
 
 	Order(int id, const OrderBlueprint *blueprint, ServerGameObject *gameObject) : gameObject(gameObject), id(id), blueprint(blueprint) {}
 

@@ -91,6 +91,7 @@ struct FrontEnd {
 		std::string title;
 		std::vector<Entry> entries;
 		uint32_t changed = 0;        // grows when an entry is shown or hidden (the button flashes)
+		std::string map;             // SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC's picture (mods), shown above the entries
 	};
 	void setObjectives(Objectives objectives);
 	// The objectives window opened or closed (the top bar's button, the Objectives key), and

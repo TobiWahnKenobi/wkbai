@@ -36,7 +36,7 @@ struct OrderBlueprint {
 	int replacesSpawnOrder = -1;
 	std::vector<int> preConditions;
 	std::vector<TaskBlueprint*> tasks;
-	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
+	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence, suspensionSequence;
 
 	void parse(GSFileParser &gsf, GameSet &gs);
 };
@@ -58,7 +58,7 @@ struct TaskBlueprint {
 	// attack paths (AT_<path>_<point>), the least used, the nearest of those; wkbai does so for a
 	// unit of the target's own player (training at a dummy: Order.cpp, AttackPathSpot)
 	bool attackPath = false;
-	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
+	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence, suspensionSequence;
 	std::vector<TriggerBlueprint> triggers;
 	ActionSequence collisionTrigger, struckFloorTrigger;
 

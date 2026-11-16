@@ -189,6 +189,8 @@ struct AIController {
 	void activatePlan(int planTag);
 	void abandonPlan();
 	void registerWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder, const WorkOrder* workOrder);
+	// DEREGISTER_WORK_ORDER (mods; WKB.exe 0x4cf830): the city's work orders for those units dropped
+	void deregisterWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder);
 	void activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance = false);
 	void deactivateCommission(const GSCommission* commission, ServerGameObject* handler);
 };

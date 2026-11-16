@@ -8950,6 +8950,269 @@ void Test_SmallerItems()
 
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 
+// The original's keywords only mods use (RE repo docs/re/keyword-coverage.md): each one read
+// without a warning and doing what WKB.exe's does (or what its name says, where the original
+// has an evident bug)
+void Test_ModKeywords()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	if (!player || !enemyPlayer) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(2);
+		}
+	};
+	step(10);
+	// the player's characters and buildings
+	std::vector<ServerGameObject*> units, buildings;
+	for (const auto& [id, o] : server.idmap) {
+		if (o->flags & CommonGameObject::fTerminated || o->getPlayer() != player)
+			continue;
+		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			units.push_back((ServerGameObject*)o);
+		else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && o->blueprint->footprint)
+			buildings.push_back((ServerGameObject*)o);
+	}
+	if (units.size() < 3 || buildings.empty()) {
+		printf("UNITTEST FAILED (%zu units, %zu buildings)\n", units.size(), buildings.size());
+		return;
+	}
+	ServerGameObject* unit = units[0];
+	auto value = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<ValueDeterminer> vd(ReadValueDeterminer(gsf, gs));
+		return vd->eval(&ctx);
+	};
+	auto finder = [&](ServerGameObject* self, const std::string& text, bool node) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(text.c_str());
+		std::unique_ptr<ObjectFinder> f(node ? ReadFinderNode(gsf, gs) : ReadFinder(gsf, gs));
+		return f->eval(&ctx);
+	};
+	auto position = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<PositionDeterminer> pd(PositionDeterminer::createFrom(gsf, gs));
+		return pd->eval(&ctx);
+	};
+	auto run = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+
+	// ---- values
+	{
+		const std::string tag = gs.valueTags.names.getString(0);
+		const std::string one = " FINDER_SPECIFIC_ID " + std::to_string(units[0]->id);
+		const float v0 = value(player, "VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one);
+		check(value(player, "TOTAL_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "AVERAGE_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "MAX_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "MIN_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0,
+			"TOTAL/AVERAGE/MAX/MIN_VALUE_TAG_INTERPRETATION of one object: its value");
+		check(value(unit, "WITHIN_ARC FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(units[1]->id) + " CONSTANT 0 CONSTANT 360 CONSTANT 0") == 1.0f,
+			"WITHIN_ARC with a full circle: in it");
+		// a point straight behind the unit is outside a 30-degree arc ahead, inside one turned by 180
+		ServerGameObject* other = units[1];
+		const Vector3 saved = other->position;
+		const float yaw = unit->orientation.y;
+		other->position = unit->position - Vector3(std::sin(yaw), 0, -std::cos(yaw)) * 10.0f;
+		const std::string pair = "FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(other->id);
+		check(value(unit, "WITHIN_ARC " + pair + " CONSTANT 0 CONSTANT 30 CONSTANT 0") == 0.0f
+			&& value(unit, "WITHIN_ARC " + pair + " CONSTANT 180 CONSTANT 30 CONSTANT 0") == 1.0f
+			&& value(unit, "WITHIN_ARC " + pair + " CONSTANT 180 CONSTANT 30 CONSTANT 5") == 0.0f,
+			"WITHIN_ARC: behind is outside the arc ahead, inside the arc turned round, out of a 5 m range");
+		check(value(unit, "WITHIN_ARC_TOWARDS FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(other->id) + " FINDER_SPECIFIC_ID " + std::to_string(other->id) + " CONSTANT 10 CONSTANT 0") == 1.0f,
+			"WITHIN_ARC_TOWARDS: the target itself is in the arc towards it");
+		other->position = saved;
+		check(value(unit, "IS_FORMED FINDER_SELF") == 0.0f && value(unit, "FORMATION_DIMENSION_MAX FINDER_SELF") == 0.0f,
+			"IS_FORMED and FORMATION_DIMENSION_MAX of a unit outside a formation: 0");
+		const float discovered = value(player, "NUM_DISCOVERED_BUILDINGS FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(enemyPlayer->id));
+		check(discovered >= 0.0f, "NUM_DISCOVERED_BUILDINGS: " + std::to_string((int)discovered) + " of the enemy's buildings");
+		const std::string commission = gs.commissions.names.getString(0);
+		const float possible = value(player, "COMMISSION_POSSIBLE \"" + commission + "\" FINDER_SPECIFIC_ID " + std::to_string(buildings[0]->id));
+		check(possible == 0.0f || possible == 1.0f, "COMMISSION_POSSIBLE \"" + commission + "\": " + std::to_string((int)possible));
+		// LENGTH_OF_PATH_REMAINING: a walk 60 m away, then standing
+		const Vector3 to = MovementController::nearestValidPosition(unit->blueprint, unit->position + Vector3(60.0f, 0, 0));
+		unit->movementController.startMovement(to);
+		step(30);
+		const float walking = value(unit, "LENGTH_OF_PATH_REMAINING FINDER_SELF");
+		unit->movementController.stopMovement();
+		const float standing = value(unit, "LENGTH_OF_PATH_REMAINING FINDER_SELF");
+		check(walking > 1.0f && walking < 80.0f && standing == 0.0f,
+			"LENGTH_OF_PATH_REMAINING: " + std::to_string(walking) + " m walking, 0 standing");
+	}
+
+	// ---- finders
+	{
+		const std::string around = "FINDER_METRE_RADIUS CONSTANT 200 CHARACTERS_ONLY";
+		const auto all = finder(unit, "\n" + around + "\n", true);
+		const auto two = finder(unit, "\nFINDER_GRADE_SELECT_CANDIDATES BY_LOWEST DISTANCE_BETWEEN HORIZONTAL FINDER_SELF FINDER_CANDIDATE CONSTANT 2\n" + around + "\n", true);
+		bool nearestFirst = two.size() == 2;
+		if (nearestFirst)
+			for (CommonGameObject* o : all)
+				if ((o->position - unit->position).sqlen2xz() < (two[0]->position - unit->position).sqlen2xz())
+					nearestFirst = false;
+		check(all.size() > 2 && nearestFirst, "GRADE_SELECT_CANDIDATES BY_LOWEST distance, 2: the two nearest of " + std::to_string(all.size()));
+		const auto kept = finder(unit, "\nFINDER_CULL_CANDIDATES CONSTANT 0\n" + around + "\n", true);
+		const auto culled = finder(unit, "\nFINDER_CULL_CANDIDATES CONSTANT 1\n" + around + "\n", true);
+		check(kept.size() == all.size() && culled.empty(), "CULL_CANDIDATES keeps those for which the value isn't above 0");
+		const auto me = finder(unit, "FINDER_CHAIN_ORIGINAL_SELF", false);
+		check(me.size() == 1 && me[0] == unit, "CHAIN_ORIGINAL_SELF outside a chain: self");
+		const auto nearby = finder(unit, "FINDER_WITHIN_HORIZ_DISTANCE CONSTANT 30", false);
+		bool inside = true;
+		for (CommonGameObject* o : nearby)
+			if (o == unit || (o->position - unit->position).sqlen2xz() > 30.0f * 30.0f)
+				inside = false;
+		check(inside, "WITHIN_HORIZ_DISTANCE 30: " + std::to_string(nearby.size()) + " objects, all within 30 m on the ground, not self");
+	}
+
+	// ---- positions
+	{
+		check(!position(unit, "ATTACHMENT_POINT_BY_INDEX \"No Such Point\" FINDER_SELF CONSTANT 0").found,
+			"ATTACHMENT_POINT_BY_INDEX: no point of that tag, no position");
+		check(!position(unit, "POINT_ALONG_PATH FINDER_SELF LOCATION_OF FINDER_SELF LOCATION_OF FINDER_SELF CONSTANT 5").found,
+			"POINT_ALONG_PATH: read, no position (as WKB.exe's)");
+	}
+
+	// ---- actions
+	{
+		// SET_TILE_STATUS: a tile blocked for the way and for buildings, never unblocked
+		const Vector3 spot = MovementController::nearestValidPosition(unit->blueprint, unit->position + Vector3(25.0f, 0, 25.0f));
+		const int tx = (int)(spot.x / 5.0f), tz = (int)(spot.z / 5.0f);
+		const std::string at = "OFFSET_FROM FINDER_SELF CONSTANT " + std::to_string(spot.x - unit->position.x) + " CONSTANT 0 CONSTANT " + std::to_string(spot.z - unit->position.z);
+		run(unit, "SET_TILE_STATUS BLOCKED " + at);
+		run(unit, "SET_TILE_STATUS PASSABLE " + at);
+		step(3);
+		const auto [w, h] = server.terrain->getNumPlayableTiles();
+		check(server.tiles[(size_t)tz * w + tx].scriptStatus == 0 && MovementController::isTileBlocked(unit->blueprint, tx, tz)
+			&& client.tiles[(size_t)tz * w + tx].scriptStatus == 0,
+			"SET_TILE_STATUS BLOCKED: the tile blocked (server and client); PASSABLE doesn't unblock it");
+		// SUSPEND_ORDER / RESUME_ORDER
+		ServerGameObject* walker = units[1];
+		const Vector3 away = MovementController::nearestValidPosition(walker->blueprint, walker->position + Vector3(-50.0f, 0, 0));
+		const OrderBlueprint* moveOrder = nullptr;
+		for (size_t i = 0; i < gs.orders.size() && !moveOrder; i++)
+			if (gs.orders[i].classType == Tags::ORDTSKTYPE_MOVE)
+				moveOrder = &gs.orders[i];
+		bool suspendedHeld = false, resumed = false;
+		if (moveOrder) {
+			Order* order = walker->orderConfig.addOrder(moveOrder, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, away);
+			step(5);
+			run(walker, "SUSPEND_ORDER FINDER_SELF");
+			step(20);
+			suspendedHeld = order && walker->orderConfig.getCurrentOrder() && walker->orderConfig.getCurrentOrder()->scriptSuspended
+				&& walker->orderConfig.getCurrentOrder()->state == OTS_SUSPENDED;
+			run(walker, "RESUME_ORDER FINDER_SELF");
+			step(3);
+			resumed = walker->orderConfig.getCurrentOrder() && !walker->orderConfig.getCurrentOrder()->scriptSuspended
+				&& walker->orderConfig.getCurrentOrder()->state == OTS_PROCESSING;
+			run(walker, "REEVALUATE_TASK_PROXIMITY FINDER_SELF");
+			run(walker, "ABORT_TASK FINDER_SELF");
+		}
+		check(moveOrder && suspendedHeld && resumed, "SUSPEND_ORDER holds the order over 20 steps; RESUME_ORDER takes it up again");
+		// shadows, the looped sound, the save screen, the objectives' picture
+		run(buildings[0], "DISABLE_SHADOW FINDER_SELF");
+		step(3);
+		ClientGameObject* cb = client.findObject(buildings[0]->id);
+		const bool off = cb && cb->shadowSwitch == 0;
+		run(buildings[0], "ENABLE_SHADOW FINDER_SELF");
+		step(3);
+		check(off && cb->shadowSwitch == 1, "DISABLE_SHADOW / ENABLE_SHADOW: the building's static shadow off, on again");
+		const std::string sound = gs.soundTags.names.getString(0);
+		run(unit, "PLAY_LOOPED_SOUND \"" + sound + "\" FINDER_SELF FINDER_PLAYER");
+		step(3);
+		const size_t loops = client.loopedSounds.size();
+		run(unit, "STOP_SOUND FINDER_SELF");
+		step(3);
+		check(loops == 1 && client.loopedSounds.empty(), "PLAY_LOOPED_SOUND loops until STOP_SOUND");
+		run(unit, "DISPLAY_SAVE_GAME_MENU");
+		run(player, "SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC \"Maps\\Test.pcx\" FINDER_SELF");
+		step(3);
+		check(client.saveMenuRequested && client.objectivesMapGraphic == "Maps\\Test.pcx",
+			"DISPLAY_SAVE_GAME_MENU and SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC reach the player's client");
+		// RESET_FOG_OF_WAR after REVEAL_FOG_OF_WAR
+		ServerGameObject* enemyThing = nullptr;
+		for (const auto& [id, o] : server.idmap)
+			if (o->getPlayer() == enemyPlayer && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) { enemyThing = (ServerGameObject*)o; break; }
+		bool revealed = false, reset = false;
+		if (enemyThing) {
+			const std::string obj = "FINDER_SPECIFIC_ID " + std::to_string(enemyThing->id);
+			run(player, "REVEAL_FOG_OF_WAR " + obj + " CONSTANT 0 CONSTANT 3 FINDER_SELF");
+			step(3);
+			for (const auto& r : client.fogReveals) revealed |= r.object == enemyThing->id;
+			run(player, "RESET_FOG_OF_WAR " + obj + " FINDER_SELF");
+			step(3);
+			reset = true;
+			for (const auto& r : client.fogReveals) reset &= r.object != enemyThing->id;
+		}
+		check(revealed && reset, "RESET_FOG_OF_WAR ends REVEAL_FOG_OF_WAR's view");
+		// FLOODFILL_AREA_WITH: one object per tile of the square
+		const GameObjBlueprint* fill = nullptr;
+		if (gs.objBlueprints[Tags::GAMEOBJCLASS_MARKER].size() > 0)
+			fill = &gs.objBlueprints[Tags::GAMEOBJCLASS_MARKER][0];
+		size_t before = 0, after = 0;
+		if (fill) {
+			for (const auto& [id, o] : server.idmap) before += o->blueprint == fill && !(o->flags & CommonGameObject::fTerminated);
+			run(unit, "FLOODFILL_AREA_WITH MARKER \"" + fill->name + "\" LOCATION_OF FINDER_SELF CONSTANT 4");
+			for (const auto& [id, o] : server.idmap) after += o->blueprint == fill && !(o->flags & CommonGameObject::fTerminated);
+		}
+		check(fill && after - before == 9, "FLOODFILL_AREA_WITH, half size 4 m: " + std::to_string(after - before) + " markers, one on each of 3 x 3 tiles");
+		// REPEAT_SEQUENCE_AFTER_DELAY: count runs queued
+		const size_t queued = server.delayedSequences.size();
+		run(unit, "REPEAT_SEQUENCE_AFTER_DELAY \"" + gs.actionSequences.names.getString(0) + "\" FINDER_SELF CONSTANT 3 CONSTANT 100");
+		check(server.delayedSequences.size() == queued + 3, "REPEAT_SEQUENCE_AFTER_DELAY 3 after 100 s: three runs queued");
+		// SWITCH_FOOTPRINT: the building's tiles follow the new footprint
+		ServerGameObject* b = buildings[0];
+		auto held = [&]() { size_t n = 0; for (size_t i = 0; i < (size_t)w * h; i++) n += server.tiles[i].building == b->id; return n; };
+		const size_t heldBefore = held();
+		std::string otherFp;
+		for (size_t i = 0; i < gs.footprints.size(); i++)
+			if (&gs.footprints[i] != b->blueprint->footprint && gs.footprints[i].tiles.size() != b->blueprint->footprint->tiles.size()) {
+				otherFp = gs.footprints.names.getString(i);
+				break;
+			}
+		run(b, "SWITCH_FOOTPRINT \"" + otherFp + "\"");
+		const size_t heldAfter = held();
+		check(!otherFp.empty() && heldAfter != heldBefore && b->footprintOverride != nullptr,
+			"SWITCH_FOOTPRINT \"" + otherFp + "\": the building holds " + std::to_string(heldAfter) + " tiles, " + std::to_string(heldBefore) + " before");
+		// read and run without effect or with effects not checked here
+		run(unit, "ASSERT CONSTANT 1 \"never printed\"");
+		run(unit, "DISPLAY_ON_MINIMAP FINDER_SELF CONSTANT 1 CONSTANT 2 FINDER_SELF");
+		run(unit, "SET_AMBIENT_LIGHTING 10 20 30");
+		run(unit, "SWITCH_OFF_INTENSITY_MAP \"Threat\" FINDER_SELF");
+		run(b, "DEREGISTER_WORK_ORDER FINDER_RESULTS \"" + gs.objectFinderDefinitions.names.getString(0) + "\" FINDER_SELF");
+		check(true, "ASSERT, DISPLAY_ON_MINIMAP, SET_AMBIENT_LIGHTING, SWITCH_OFF_INTENSITY_MAP, DEREGISTER_WORK_ORDER run");
+	}
+	printf("UNITTEST %s: %d failures\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -9028,6 +9291,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_BuildIdentity, "Build identity: the code hash, challenge answers, a code byte changed in memory, the build policies"},
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
 {Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
+{Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
 };
 
 void LaunchTest()

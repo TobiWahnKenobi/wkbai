@@ -115,6 +115,15 @@ void IntensityMaps::switchOn(ServerGameObject* obj, const std::string& map)
 		switchedOn[obj->id].insert(map);
 }
 
+void IntensityMaps::switchOff(ServerGameObject* obj, const std::string& map)
+{
+	if (auto it = switchedOn.find(obj->id); it != switchedOn.end()) {
+		it->second.erase(map);
+		if (it->second.empty())
+			switchedOn.erase(it);
+	}
+}
+
 const std::vector<int32_t>* IntensityMaps::costFor(ServerGameObject* obj)
 {
 	const GameObjBlueprint* bp = obj->blueprint;

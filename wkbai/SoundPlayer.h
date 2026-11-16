@@ -37,7 +37,9 @@ struct SoundPlayer {
 	virtual void applyVolumes() {}
 	// A looping sound in one of MAX_LOOPS slots (the waterfalls'), set every frame: that file at
 	// that place, its gain (times the effects volume; 0 stops it) and pitch
-	static constexpr int MAX_LOOPS = 6;
+	static constexpr int MAX_LOOPS = 8;
+	// the waterfalls' slots (0 to 5); the last two are PLAY_LOOPED_SOUND's
+	static constexpr int WATERFALL_LOOPS = 6;
 	virtual void setLoop(int slot, const std::string& filePath, const Vector3& pos, float refDist, float gain, float pitch) {}
 
 	static std::unique_ptr<SoundPlayer> s_soundPlayer;

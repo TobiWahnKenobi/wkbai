@@ -54,6 +54,11 @@ public:
 	// form up again where it stands (CREATE_FORMATION of a formation: "Reform Yourself", the Halt
 	// command's)
 	void requestFormUp() { reformWanted = true; }
+	// FORMATION_DIMENSION_MAX (WKB.exe 0x45f730): the larger of the layout's width and depth in
+	// metres, 0 without members
+	float maxDimension() const;
+	// IS_FORMED (WKB.exe 0x550ba0): formed up, and no member still walking to its place
+	bool isFormedUp() const;
 private:
 	// standing without an order: turn to face an attack from the flank or rear
 	void faceAttackers();
