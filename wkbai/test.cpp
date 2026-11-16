@@ -4071,15 +4071,17 @@ void Test_TurnedPlacement()
 			server.handlePacket(0, std::string((const char*)msg.data, msg.size()));
 			return server.clientInfos.empty() ? nullptr : server.clientInfos[0].lastStampdown.get();
 		};
-		int startX = 20;
+		int startX = 20, startZ = 60;
 		for (int q = 0; q <= 4; q++) {
 			const int turns = q % 4; // the fifth: without the orientation, unturned
 			const Vector3 orientation(0.0f, turns * quarter, 0.0f);
 			ServerGameObject* obj = nullptr;
 			int tx = 0, tz = 0;
 			// the first spot, along the map from the west, that takes it so turned
-			for (int z = 60; z < th - 20 && !obj; z += 3)
-				for (int x = startX; x < tw - 20 && !obj; x += 3) {
+			// (on the last one's row east of it, then the rows after it from the west: trees keep
+			// buildings off since the play test of 2026-11-16, and the row filled up)
+			for (int z = startZ; z < th - 20 && !obj; z += 3)
+				for (int x = z == startZ ? startX : 20; x < tw - 20 && !obj; x += 3) {
 					Vector3 at = spotAt(fp, x, z, turns);
 					if (StampdownPlan::getStampdownPlan(&server, player, manor, at, orientation).status != StampdownPlan::Status::Valid)
 						continue;
@@ -4094,6 +4096,7 @@ void Test_TurnedPlacement()
 				continue;
 			}
 			startX = tx + 12;
+			startZ = tz;
 			std::set<std::pair<int, int>> got;
 			for (int z = 0; z < th; z++)
 				for (int x = 0; x < tw; x++)
@@ -9213,6 +9216,90 @@ void Test_ModKeywords()
 	printf("UNITTEST %s: %d failures\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+
+// Several farmers, several farms (the play test 2026-11-16): three peasants each given Build on
+// three new farm foundations, the first FORGET_EVERYTHING_ELSE, the others DO_LAST, as Shift-placed
+// farms with the three selected. In the original each finished farm takes its nearest builder
+// (Building and Repairing.cpp "Only 1 Builder", Farming.cpp "Auto-attend Farm",
+// FORGET_EVERYTHING_ELSE), who farms it; the others go on to the next. Prints "FARMB t=<s>" with
+// each peasant's order and target every 10 s, and at the end how many farm a field.
+void Test_FarmBuilders()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	std::vector<ServerGameObject*> peasants;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant" && peasants.size() < 3)
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	const GameObjBlueprint* foundationType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+	const int build = server.gameSet->commands.names.getIndex("Build");
+	if (peasants.size() < 3 || !foundationType || build < 0) {
+		printf("FARMB not set up (%zu peasants)\n", peasants.size());
+		return;
+	}
+	g_settings["simSeed"] = 1;
+	server.startLevel();
+	std::vector<SrvGORef> farms;
+	const Vector3 base = peasants[0]->position;
+	// WKB_FARMB_FARMS=<n>: n farms instead of 3
+	const size_t farmCount = getenv("WKB_FARMB_FARMS") ? (size_t)std::max(1, atoi(getenv("WKB_FARMB_FARMS"))) : 3;
+	for (int i = 0; i < 800 && farms.size() < farmCount; i++) {
+		const Vector3 at = base + Vector3(20.0f + 5.0f * (i % 20), 0, -40.0f + 5.0f * (i / 20));
+		if (StampdownPlan::getStampdownPlan(&server, player, foundationType, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+			continue;
+		ServerGameObject* f = server.spawnObject(foundationType, player, at, Vector3(0, 0, 0));
+		f->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+		farms.emplace_back(f);
+	}
+	if (farms.size() < farmCount) {
+		printf("FARMB no room\n");
+		return;
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	for (size_t f = 0; f < farms.size(); f++)
+		for (ServerGameObject* p : peasants)
+			server.gameSet->commands[build].execute(p, farms[f].get(), f == 0 ? Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE : Tags::ORDERASSIGNMODE_DO_LAST);
+	auto describe = [&](ServerGameObject* p) {
+		std::string order = "-", target = "-";
+		if (Order* o = p->orderConfig.getCurrentOrder()) {
+			order = server.gameSet->orders.getString(o->blueprint->bpid);
+			if (Task* tk = o->getCurrentTask(); tk && tk->target)
+				target = tk->target->blueprint->name + " #" + std::to_string(tk->target->id);
+		}
+		std::string queue;
+		for (Order& o : p->orderConfig.orders)
+			queue += (queue.empty() ? "" : ",") + server.gameSet->orders.getString(o.blueprint->bpid) + (o.isDone() ? "(done)" : "");
+		return order + " -> " + target + " [" + queue + "]";
+	};
+	for (int step = 0; step * 20 <= 400000; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		if (step % 500)
+			continue;
+		printf("FARMB t=%d", step * 20 / 1000);
+		for (ServerGameObject* p : peasants)
+			printf(" | %u: %s", p->id, describe(p).c_str());
+		printf("\n");
+	}
+	int farming = 0;
+	for (ServerGameObject* p : peasants)
+		if (Order* o = p->orderConfig.getCurrentOrder(); o && server.gameSet->orders.getString(o->blueprint->bpid) == "Farm")
+			farming++;
+	printf("FARMB end: %d of 3 peasants farm\n", farming);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -9292,6 +9379,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ShaderCache, "Shader cache: a cold start fills it, a warm one compiles nothing, an edited shader or include alone, damaged entries, a driver update rebuilds all"},
 {Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
+{Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 };
 
 void LaunchTest()

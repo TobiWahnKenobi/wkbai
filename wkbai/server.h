@@ -130,6 +130,8 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();
+	// attack at will ("Become Aggressive"): idle with an enemy character in sight, "On Idle" again
+	void wakeAggressiveIdle();
 	void addZoneTile(int tx, int tz);
 	void removeZoneTile(int tx, int tz);
 	//void removeZoneTile(int tx, int tz);

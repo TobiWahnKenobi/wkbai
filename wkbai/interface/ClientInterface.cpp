@@ -778,7 +778,22 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			client->camera.position.z += targetZ - lookAt.z;
 		}
 	}
-	else if (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f) {
+	else if (hovered && g_mousePressed[SDL_BUTTON_RIGHT] && !stampdownBlueprint) {
+		// a right-click on the map sends the selected units there, as a right-click on that
+		// ground (the original's minimap orders: the ground command, "Move" for units)
+		const float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
+		const float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
+		std::vector<ClientGameObject*> selected;
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				selected.push_back(sel);
+		const auto cmds = FindCursorCommands(client, selected, nullptr);
+		if (!cmds.empty()) {
+			const Vector3 pos(targetX, terrain->getHeightEx(targetX, targetZ, true), targetZ);
+			sendRightClickCommand(cmds[0].second, nullptr, pos, Vector3(-1, 0, 0));
+		}
+	}
+	if (!(hovered && g_mouseDown[SDL_BUTTON_LEFT]) && (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f)) {
 		// most of the way in a third of a second, the rest when it is under half a metre
 		const float dt = std::min(0.1f, (now - minimapGlideTick) / 1000.0f);
 		minimapGlideTick = now;
@@ -1024,6 +1039,10 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 		for (size_t s = 0; s < selection.size(); s++) {
 			if (std::find(offered[s].begin(), offered[s].end(), cmd) == offered[s].end())
 				continue;
+			// a unit is no target of its own commands (right-clicking one of the selected units
+			// gave them all Guard on it, the unit guarding itself)
+			if (target && selection[s] == target)
+				continue;
 			CliScriptContext ctx(client, selection[s]);
 			auto _ = ctx.change(ctx.target, target);
 			auto _sel = ctx.change(ctx.selectedObject, selection[s]);
@@ -1099,6 +1118,9 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 	float nextPosRadius = SEPARATION;
 	for (ClientGameObject *sel : selection) {
 		if (sel) {
+			// the command's target itself is not sent it (Guard on itself)
+			if (nextSelectedObject && sel == nextSelectedObject)
+				continue;
 			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
 				// if object offers this command, send the command
 				int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
@@ -1344,6 +1366,31 @@ void ClientInterface::drawFootprintTiles()
 // The refusal while placing a building, as WKB.exe shows it: "Cannot build here : ..." in its
 // in-game font (Fonts\Drop_Shadow_White) on a dark red box with a lighter red edge, under the
 // cursor (the look from the user's screenshots of the original at 1920 x 1080)
+std::vector<std::pair<Vector3, Vector3>> ClientInterface::wallLine(const Vector3& from, const Vector3& to) const
+{
+	std::vector<std::pair<Vector3, Vector3>> line;
+	const int x0 = (int)std::floor(from.x / 5.0f), z0 = (int)std::floor(from.z / 5.0f);
+	const int x1 = (int)std::floor(to.x / 5.0f), z1 = (int)std::floor(to.z / 5.0f);
+	const bool alongX = std::abs(x1 - x0) >= std::abs(z1 - z0);
+	const int n = alongX ? std::abs(x1 - x0) : std::abs(z1 - z0);
+	const int step = (alongX ? x1 - x0 : z1 - z0) >= 0 ? 1 : -1;
+	// a straight piece runs along its model's x (Stockade*.mesh3): unturned along x, a quarter along z
+	const Vector3 turn = n == 0 ? stampdownOrientation() : Vector3(0.0f, alongX ? 0.0f : 1.5707964f, 0.0f);
+	for (int i = 0; i <= n && i < 200; i++) {
+		const int tx = alongX ? x0 + i * step : x0, tz = alongX ? z0 : z0 + i * step;
+		Vector3 pos(tx * 5.0f + 2.5f, 0.0f, tz * 5.0f + 2.5f);
+		if (stampdownBlueprint && stampdownBlueprint->footprint) {
+			const auto rotOrigin = stampdownBlueprint->footprint->rotateOrigin(turn.y);
+			pos.x += rotOrigin.first;
+			pos.z += rotOrigin.second;
+		}
+		if (client->terrain)
+			pos.y = client->terrain->getHeightEx(pos.x, pos.z, false);
+		line.emplace_back(pos, turn);
+	}
+	return line;
+}
+
 Vector3 ClientInterface::stampdownOrientation() const
 {
 	return StampdownPlan::quarterTurn(Vector3(0.0f, stampdownQuarter * 1.5707964f, 0.0f));
@@ -4145,7 +4192,13 @@ void ClientInterface::iter()
 		showOrderFlag(peapos, false);
 	}
 	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
-		if (stampdownBlueprint && stampdownPlayer) {
+		const int sbType = stampdownBlueprint ? stampdownBlueprint->buildingType : -1;
+		if (stampdownBlueprint && stampdownPlayer && stampdownFromCommand && (sbType == Tags::BUILDINGTYPE_WALL
+			|| sbType == Tags::BUILDINGTYPE_WALL_CORNER_IN || sbType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || sbType == Tags::BUILDINGTYPE_WALL_CROSSROADS)) {
+			// a wall: laid on the button's release, along the drag
+			wallDrag = { true, peapos };
+		}
+		else if (stampdownBlueprint && stampdownPlayer) {
 			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand, stampdownOrientation());
 			if (stampdownFromCommand) {
 				const Command* cmd = &client->gameSet->commands[client->gameSet->commands.names.getIndex("Build")];
@@ -4173,6 +4226,28 @@ void ClientInterface::iter()
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
+	}
+	if (wallDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
+		wallDrag.active = false;
+		if (stampdownBlueprint && stampdownPlayer) {
+			const int buildIndex = client->gameSet->commands.names.getIndex("Build");
+			const Command* build = buildIndex >= 0 ? &client->gameSet->commands[buildIndex] : nullptr;
+			bool first = true;
+			for (const auto& [pos, turn] : wallLine(wallDrag.start, peapos)) {
+				client->sendStampdown(stampdownBlueprint, stampdownPlayer, pos, sendStampdownEvent, true, turn);
+				// the builders take the pieces one after the other, in the line's order
+				if (build)
+					for (ClientGameObject* obj : selection)
+						if (obj && std::find(obj->blueprint->offeredCommands.begin(), obj->blueprint->offeredCommands.end(), build) != obj->blueprint->offeredCommands.end()) {
+							const int assignmentMode = !first ? Tags::ORDERASSIGNMODE_DO_LAST
+								: g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+							client->sendBuildLastStampdownedObject(obj, assignmentMode);
+						}
+				first = false;
+			}
+			if (!g_modShift && !g_modCtrl)
+				stampdownBlueprint = nullptr;
+		}
 	}
 	if (formationDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
 		formationDrag.active = false;
@@ -4749,6 +4824,16 @@ void ClientInterface::iter()
 					const std::string cmdname = client->gameSet->commands.names.getString(cmd->id);
 					if (!filter(cmdname))
 						continue;
+					// Formation makes one only from 8 or more of the player's characters (the
+					// server's rule, WKB.exe 0x54f0d0): with fewer the button did nothing, so none
+					if (cmdname == "Formation") {
+						int characters = 0;
+						for (ClientGameObject* obj : selection)
+							if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->getPlayer() == client->clientPlayer.get())
+								characters++;
+						if (characters < 8)
+							continue;
+					}
 					auto iconPred = [this, &ctx](int eq) {return client->gameSet->equations[eq]->booleval(&ctx); };
 					auto condPred = [&ctx](GSCondition* cond) {return cond->test->booleval(&ctx); };
 					if (std::all_of(cmd->iconConditions.begin(), cmd->iconConditions.end(), iconPred)) {
@@ -5426,8 +5511,23 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, orientation);
+				// a wall on the ring: the piece the server puts there (a corner where the ring turns)
+				if (plan.placeBlueprint) {
+					test.model = finishedModel(plan.placeBlueprint);
+					const Vector3 at((int)(peapos.x / 5.0f) * 5.0f + 2.5f, peapos.y, (int)(peapos.z / 5.0f) * 5.0f + 2.5f);
+					test.transform = Matrix::getRotationYMatrix(-plan.placeOrientation.y) * Matrix::getTranslationMatrix(at);
+				}
 				for (const auto& verdict : plan.tiles)
 					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
+				// a wall being dragged: every piece of the line, green or red as each would be placed
+				if (wallDrag.active) {
+					const auto line = wallLine(wallDrag.start, peapos);
+					for (size_t i = 0; i + 1 < line.size(); i++) {
+						const auto piece = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, line[i].first, line[i].second);
+						for (const auto& verdict : piece.tiles)
+							footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok && piece.status == StampdownPlan::Status::Valid });
+					}
+				}
 				// red where it can't be placed (the server refuses it too), green where it can, as in
 				// the original
 				test.flags |= plan.status != StampdownPlan::Status::Valid ? SceneEntity::SEFLAG_BLOCKED : SceneEntity::SEFLAG_PLACEABLE;

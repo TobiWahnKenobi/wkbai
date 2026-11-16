@@ -405,7 +405,8 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 	ServerGameObject* parent = player;
 	std::vector<ServerGameObject*> walls;
 	// a quarter turn about y (WKB.exe turns footprints by quarters only, 0x59a420)
-	const Vector3 turned = StampdownPlan::quarterTurn(orientation);
+	Vector3 turned = StampdownPlan::quarterTurn(orientation);
+	Vector3 placedAt = position;
 
 	if (inGameplay) {
 		if (!player->canAffordObject(blueprint))
@@ -414,6 +415,12 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 		StampdownPlan plan = StampdownPlan::getStampdownPlan(this, player, blueprint, position, turned);
 		if (plan.status != StampdownPlan::Status::Valid)
 			return nullptr;
+		// a wall on a city's ring: the piece that tile takes (a corner where it turns)
+		if (plan.placeBlueprint) {
+			blueprint = plan.placeBlueprint;
+			turned = plan.placeOrientation;
+			placedAt = Vector3((int)(position.x / 5.0f) * 5.0f + 2.5f, position.y, (int)(position.z / 5.0f) * 5.0f + 2.5f);
+		}
 
 		if (auto* pparent = plan.ownerObject.getFrom<Server>())
 			parent = pparent;
@@ -437,7 +444,7 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 			walls.push_back(spawnObject(creation.blueprint, parent, creation.position, creation.orientation));
 	}
 
-	ServerGameObject* obj = spawnObject(blueprint, parent, position, turned);
+	ServerGameObject* obj = spawnObject(blueprint, parent, placedAt, turned);
 	if (inGameplay) {
 		player->payObjectCost(obj->blueprint);
 		levelTerrainUnder(obj);
@@ -2256,6 +2263,35 @@ void ServerGameObject::lookForSightRangeEvents()
 			this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
 }
 
+// Attack at will: the scripts' "Aggression" sets "Become Aggressive" and sends "On Idle" once;
+// their idle reaction looks for a target near the unit then, and later only a hit, a missile
+// or an enemy on its own tile woke it (the play test: such units waited to be attacked). Once a
+// second, with the sight scan, an idle aggressive unit out of formations that sees an enemy
+// character gets "On Idle" again, so its idle reaction looks again.
+void ServerGameObject::wakeAggressiveIdle()
+{
+	static const GameSet* itemsOf = nullptr;
+	static int aggressive = -1, enemy = -1;
+	const GameSet* gs = Server::instance->gameSet.get();
+	if (itemsOf != gs) {
+		itemsOf = gs;
+		aggressive = gs->items.names.getIndex("Become Aggressive");
+		enemy = gs->diplomaticStatuses.names.getIndex("Enemy");
+	}
+	if (aggressive < 0 || enemy < 0 || blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || (flags & fTerminated)
+		|| orderConfig.getCurrentOrder() || getItem(aggressive) <= 0.0f)
+		return;
+	if (const CommonGameObject* p = getParent(); p && p->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		return;
+	ServerGameObject* me = getPlayer();
+	for (const uint32_t id : seenObjects)
+		if (ServerGameObject* seen = Server::instance->findObject(id); seen && seen->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+			&& !(seen->flags & fTerminated) && seen->getPlayer() && Server::instance->getDiplomaticStatus(seen->getPlayer(), me) == enemy) {
+			sendEvent(Tags::PDEVENT_ON_IDLE);
+			return;
+		}
+}
+
 void ServerGameObject::addZoneTile(int tx, int tz)
 {
 	Server* server = Server::instance;
@@ -3806,6 +3842,8 @@ void Server::simulate()
 			SimTimer sightTimer(g_simProfile.sight);
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
+			obj->wakeAggressiveIdle();
+			if (!ref) continue;
 		}
 		if (obj->blueprint->removeWhenNotReferenced)
 			obj->removeIfNotReferenced();
@@ -4265,6 +4303,12 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				uint32_t objid = br.readUint32();
 				if (ServerGameObject* obj = findObject(objid)) {
 					int assignmentMode = br.readUint32();
+					// Shift on a working peasant (farming, chopping: an order that cycles for ever):
+					// put last, the Build never came, and the foundation stood unbuilt (the play
+					// test). Nothing after a cycling order is ever reached, so the Build replaces it.
+					if (assignmentMode == Tags::ORDERASSIGNMODE_DO_LAST)
+						if (Order* current = obj->orderConfig.getCurrentOrder(); current && current->blueprint->cycleOrder && !current->finishAfterTask)
+							assignmentMode = Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE;
 					int cmdid = gameSet->commands.names.getIndex("Build");
 					gameSet->commands[cmdid].execute(obj, clientInfos[clientIndex].lastStampdown, assignmentMode);
 				}
@@ -4304,6 +4348,9 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				for (ServerGameObject* sub : subs) {
 					positionSum += sub->position;
 					numUnits += 1;
+					// what the unit did on its own ends (training at a dummy went on in the
+					// formation, the formation never placing it): the formation leads it now
+					sub->orderConfig.cancelAllOrders();
 					sub->setParent(formation);
 				}
 				formation->setPosition(positionSum / numUnits);

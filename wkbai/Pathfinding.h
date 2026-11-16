@@ -398,9 +398,20 @@ namespace Pathfinding {
         TileWalker walker(start_x, start_z, dir_x, dir_z);
 
         while (currentTile != endTile) {
+            const PFPos previous = currentTile;
             currentTile = walker.next();
             if (pred(currentTile))
                 return currentTile;
+            // through a tile corner (diagonally): not past a blocked tile on either side, as the
+            // search's diagonal steps (above). The play test: units walked through a wall where
+            // two pieces touch only at their corners, on straightened paths and straight walks.
+            if (currentTile.x != previous.x && currentTile.z != previous.z) {
+                const PFPos sideA{ currentTile.x, previous.z }, sideB{ previous.x, currentTile.z };
+                if (pred(sideA))
+                    return sideA;
+                if (pred(sideB))
+                    return sideB;
+            }
         }
         return std::nullopt;
     }

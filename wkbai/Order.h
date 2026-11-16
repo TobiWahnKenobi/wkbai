@@ -77,6 +77,10 @@ struct Task {
 	SrvGORef target;
 	Vector3 destination;
 	float proximity = -1.0f; bool proximitySatisfied = false, lastDestinationValid = false;
+	// resumed (after an order put in front, a fight it was drawn into) out of range: its
+	// PROXIMITY_DISSATISFIED_SEQUENCE before it walks, as at its start; the play test: archers on
+	// Hold Ground resumed their Fire Arrow and walked after a target out of range
+	bool resumedUnchecked = false;
 	// loaded from a save as having reached its target (PROXIMITY_SATISFIED 1): kept so until the
 	// task starts again or its target changes. The original's test 36 save has a cart "arrived"
 	// 28 m from its village's centre (15 m from its nearest delivery point), which the
@@ -234,6 +238,9 @@ struct OrderConfiguration {
 	std::deque<Order> orders;
 	int nextOrderId = 0;
 	bool busy = false;
+	// the own object whose attack spot (AT_) the unit's last task ended at, a Training Dummy: going
+	// idle there it steps off the spot (the play test: trained units stood on it, in the way)
+	uint32_t stepAwayFrom = 0;
 
 	OrderConfiguration(ServerGameObject *gameobj) : gameobj(gameobj) {}
 	void process();

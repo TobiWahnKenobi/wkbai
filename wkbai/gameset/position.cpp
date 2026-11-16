@@ -473,6 +473,9 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 				// as the placement itself (StampdownPlan): no farm on a hill, no house on sand
 				if (!StampdownPlan::tileTerrainAllowed(server, to, px, pz))
 					return false;
+				// no farm in a city, past the walls (the play test: a farmer's farm inside them)
+				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInAnyCity(server, px, pz))
+					return false;
 			}
 		}
 		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)

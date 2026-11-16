@@ -314,6 +314,7 @@ void Task::resume()
 	this->state = OTS_PROCESSING;
 	this->blueprint->resumptionSequence.run(this->order->gameObject);
 	this->proximitySatisfied = false; // TODO: put this in "onResume"
+	this->resumedUnchecked = true;
 }
 
 void Task::cancel()
@@ -339,6 +340,8 @@ void Task::terminate()
 	if (go->movementController.isMoving())
 		go->movementController.stopMovement();
 	go->setAnimation(0);
+	if (ServerGameObject* t = target.get(); t && attackPathOf == t->id && t->getPlayer() == go->getPlayer())
+		go->orderConfig.stepAwayFrom = t->id;
 	this->releaseAttackPath();
 	this->blueprint->terminationSequence.run(this->order->gameObject);
 	this->order->advanceToNextTask();
@@ -538,6 +541,26 @@ void OrderConfiguration::process()
 	bool nextBusy = !orders.empty();
 	if (busy && !nextBusy)
 		gameobj->sendEvent(Tags::PDEVENT_ON_IDLE);
+	// idle on the spot it trained at: a few metres out from the dummy, to a free place
+	if (stepAwayFrom) {
+		const uint32_t from = std::exchange(stepAwayFrom, 0u);
+		ServerGameObject* t = Server::instance->findObject(from);
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int move = gs->commands.names.getIndex("Move");
+		const CommonGameObject* parent = gameobj->getParent();
+		const bool inFormation = parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (orders.empty() && t && !t->deleted && !(t->flags & ServerGameObject::fTerminated) && move >= 0 && !inFormation) {
+			Vector3 out = gameobj->position - t->position;
+			out.y = 0.0f;
+			const float d = std::sqrt(out.sqlen2xz());
+			if (d < 6.0f) {
+				out = d > 0.01f ? out * (1.0f / d) : Vector3(1, 0, 0);
+				const Vector3 dest = FreeStandingSpot(gameobj, t->position + out * 6.0f);
+				gs->commands[move].execute(gameobj, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, dest);
+			}
+		}
+	}
+	nextBusy = !orders.empty();
 	busy = nextBusy;
 
 	Order* curorder = getCurrentOrder();
@@ -1557,6 +1580,27 @@ void ObjectReferenceTask::onUpdate()
 					if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && this->proximity >= 1.0f && !onPath && !following)
 						go->movementController.setGoalRadius(std::floor(this->proximity));
 				};
+				// out of range: the dissatisfied sequence first, before any walk (it ends a missile
+				// task of a unit that may not move, "Don't Skirmish"/Hold Ground: wkbai ran it after
+				// the walk was asked for, and a resumed task never, so the archers walked on).
+				// A resumed task's only when it would have run at the start (not the end-the-order-only
+				// sequence a trebuchet walks into range with)
+				const bool endsOnly = blueprint->proximityDissatisfiedEquation < 0
+					&& blueprint->proximityDissatisfiedSequence.actionList.size() == 1
+					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder();
+				if (proximitySatisfied || (resumedUnchecked && !endsOnly && this->proximity > 0.0f)) {
+					proximitySatisfied = false;
+					resumedUnchecked = false;
+					if (getenv("WKB_TRACE_TASKS_ID")) {
+						char buf[160];
+						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
+						TraceTask(this, buf);
+					}
+					RunProximityDissatisfied(blueprint, order->gameObject);
+					if (!this->isWorking() || !this->order->isWorking())
+						return;
+				}
+				resumedUnchecked = false;
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					attackRadius();
 					destination = go->movementController.startMovement(goal);
@@ -1583,17 +1627,6 @@ void ObjectReferenceTask::onUpdate()
 							destination = go->movementController.startMovement(goal);
 						}
 					}
-				if (proximitySatisfied) {
-					proximitySatisfied = false;
-					if (getenv("WKB_TRACE_TASKS_ID")) {
-						char buf[160];
-						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
-						TraceTask(this, buf);
-					}
-					//if (blueprint->defaultAnim != -1)
-					//	go->setAnimation(0);
-					RunProximityDissatisfied(blueprint, order->gameObject);
-				}
 			}
 		}
 		if (this->triggersStarted) {

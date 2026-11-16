@@ -293,6 +293,35 @@ void FormationController::formUp()
 		slotOf[members[bestMember]->id] = bestSlot;
 		dist[bestMember] = std::sqrt(bestNear);
 	}
+	// then pairs swapped while that shortens their squared walks together: with the least sum of
+	// squares no two walks cross (the greedy pick alone sent members across the block, through
+	// each other: the play test's flickering form-ups)
+	{
+		std::vector<int> slotIdx(members.size(), -1);
+		for (size_t m = 0; m < members.size(); m++)
+			if (auto it = slotOf.find(members[m]->id); it != slotOf.end())
+				slotIdx[m] = it->second;
+		auto cost = [&](size_t m, int s) { return (members[m]->position - world[s]).sqlen2xz(); };
+		for (int pass = 0; pass < 8; pass++) {
+			bool swapped = false;
+			for (size_t a = 0; a < members.size(); a++)
+				for (size_t b = a + 1; b < members.size(); b++) {
+					if (slotIdx[a] < 0 || slotIdx[b] < 0)
+						continue;
+					if (cost(a, slotIdx[b]) + cost(b, slotIdx[a]) + 0.01f < cost(a, slotIdx[a]) + cost(b, slotIdx[b])) {
+						std::swap(slotIdx[a], slotIdx[b]);
+						swapped = true;
+					}
+				}
+			if (!swapped)
+				break;
+		}
+		for (size_t m = 0; m < members.size(); m++)
+			if (slotIdx[m] >= 0) {
+				slotOf[members[m]->id] = slotIdx[m];
+				dist[m] = std::sqrt(cost(m, slotIdx[m]));
+			}
+	}
 	// arriving together: T = the longest walk's time; each member at dist / T (not below 30 % of
 	// its speed, so that nobody crawls)
 	float longest = 0.0f;
@@ -609,8 +638,18 @@ void FormationController::update()
 	// a form-up: the first time, a member without a place (joined), an Orb that lost one, or a turn
 	// while standing (a facing order, an attack from the flank)
 	const bool joined = std::any_of(members.begin(), members.end(), [&](auto* m) { return !slotOf.count(m->id); });
+	const float nowTime = Server::instance ? Server::instance->timeManager.currentTime : 0.0f;
+	bool turned = false;
+	if (!marching && std::abs(wrapAngle(formation->orientation.y - slotHeading)) > 0.35f) {
+		if (headingOffSince < 0.0f)
+			headingOffSince = nowTime;
+		turned = nowTime - headingOffSince >= 0.5f;
+	}
+	else
+		headingOffSince = -1.0f;
 	if (!formed || joined || (lost && type == FormationType::Orb) || layoutOf != formation->blueprint
-		|| (reformWanted && !marching) || (!marching && std::abs(wrapAngle(formation->orientation.y - slotHeading)) > 0.35f)) {
+		|| (reformWanted && !marching) || turned) {
+		headingOffSince = -1.0f;
 		reformWanted = false;
 		distorted = false;
 		formUp();
