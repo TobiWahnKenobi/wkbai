@@ -2479,7 +2479,9 @@ void Test_MinistryFramework()
 				economyReports += key.rfind("economy.", 0) == 0;
 				labourReports += key.rfind("labour.", 0) == 0;
 			}
-			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports >= 8 && labourReports >= 5);
+			// (the food reported, not above 0: with the combat branch's play-test fixes the
+			// Kingmaker spends its first 100 food within the minute, and has more people later)
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.reports.count("economy.food") && economyReports >= 8 && labourReports >= 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
 		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
