@@ -2399,7 +2399,7 @@ function campaign.text(key)
 	return (string.gsub(T(key), "\\n", "\n"))
 end
 
--- A province's AI Generals as the review lists them: { name, tier, alignment }
+-- A province's AI Generals as the panel lists them: { name, tier, alignment }
 function campaign.provinceGenerals(prov)
 	local list = {}
 	local tiers = (campaignDefinition().levels[string.lower(prov.level)] or { tiers = {} }).tiers
@@ -2412,8 +2412,8 @@ function campaign.provinceGenerals(prov)
 	return list
 end
 
--- A box of lines in the middle of the screen with an OK button: the province review (a
--- right-click) and the story brief of a new campaign. Returns whether it was closed.
+-- A box of lines in the middle of the screen with an OK button: the story brief of a new
+-- campaign. Returns whether it was closed.
 function campaign.campaignBox(w, h, draw)
 	local x, y = math.floor((W - w) / 2), math.floor((H - h) / 2)
 	drawRect(0, 0, W, H, 0x80000000)
@@ -2427,14 +2427,15 @@ end
 -- beside a panel) with the original's behaviour: the conquered provinces drawn with their region
 -- image; Campaign_Target on the provinces that can be attacked; Campaign_Location on the chosen
 -- province only, blinking 5 times and then staying; the province's name at the mouse and the
--- attack cursor over one that can be attacked; a right-click opens its review (name, bonus,
--- description, its Enemy Generals). Conquered provinces can be played again (their scripts give
--- the bonus once). A new campaign starts with the story brief and Angland chosen.
+-- attack cursor over one that can be attacked. The panel shows the province under the mouse,
+-- or the chosen one (name, bonus, description, its Enemy Generals): wkbai's choice where the
+-- original opens a review box on a right-click. Conquered provinces can be played again (their
+-- scripts give the bonus once). A new campaign starts with the story brief and Angland chosen.
 Screens.campaignmap = {
 	background = seaBackground,
 	open = function()
 		campaign.data = campaign.profile and getCampaignProfile(campaign.profile) or nil
-		campaign.selected, campaign.selectedAt, campaign.review = nil, 0, nil
+		campaign.selected, campaign.selectedAt = nil, 0
 		if campaign.data and #(campaign.data.conquered or {}) == 0 then
 			campaign.selected = campaign.provinceByLevel(campaignDefinition().first)
 			campaign.selectedAt = getTime()
@@ -2443,7 +2444,7 @@ Screens.campaignmap = {
 	draw = function()
 		if not campaign.data then pop(); return end
 		local conquered, attackable = campaignState()
-		local modal = campaign.brief or campaign.review ~= nil
+		local modal = campaign.brief
 		local savedBlocked = mouse.blocked
 		if modal then mouse.blocked = true end
 		-- the map, as large as it fits left of the panel
@@ -2465,7 +2466,6 @@ Screens.campaignmap = {
 			if campaign.selected ~= hoveredProv then campaign.selectedAt = getTime() end
 			campaign.selected = hoveredProv
 		end
-		if hoveredProv and isMouseReleased(3) then campaign.review = hoveredProv end
 		for _, prov in ipairs(PROVINCES) do
 			if conquered[prov.key] then
 				local img = "Interface\\FrontEnd\\Regions\\" .. prov.key .. ".tga"
@@ -2487,7 +2487,7 @@ Screens.campaignmap = {
 			drawImage("Interface\\FrontEnd\\Campaign_Location.tga", mx + sel.mx * k - size / 2, my + sel.my * k - size / 2, size, size)
 		end
 
-		-- the panel: the campaign, then the province chosen
+		-- the panel: the campaign, then the province under the mouse or the one chosen
 		local px, pw = X(1340), L(560)
 		title(T("FRONT_END_CAMPAIGN_TITLE") .. ": " .. campaign.profile)
 		panel(px, Y(70), pw, H - Y(70) - L(70), true)
@@ -2495,6 +2495,7 @@ Screens.campaignmap = {
 		local y = Y(84)
 		local function line(font, text, colour)
 			for _, l in ipairs(wrapText(font, text, pw - L(32))) do
+				if y + fontHeight(font, S) > H - L(112) then return end
 				drawText(font, px + L(16), y, l, colour or WHITE, S)
 				y = y + fontHeight(font, S)
 			end
@@ -2517,7 +2518,7 @@ Screens.campaignmap = {
 		line(FONT_LIST, string.format("%s %d   %s %d   %s %d", label("FRONT_END_CAMPAIGN_PAGAN_ADVANCE"), item("Pagan Tech Level"),
 			label("FRONT_END_CAMPAIGN_IMPERIAL_ADVANCE"), item("Imperial Tech Level"), label("FRONT_END_CAMPAIGN_RENAISSANCE_ADVANCE"), item("Renaissance Tech Level")), 0xFFE6E6E6)
 		y = y + L(16)
-		local prov = campaign.selected
+		local prov = (not modal and hoveredProv) or campaign.selected
 		if prov then
 			line(FONT_BUTTON, T("FRONT_END_CAMPAIGN_" .. prov.key), 0xFF9CE6F0)
 			y = y + L(6)
@@ -2530,6 +2531,10 @@ Screens.campaignmap = {
 			line(FONT_LIST, campaign.text("Province_Bonus_" .. prov.key), 0xFF80FF80)
 			y = y + L(10)
 			line(FONT_LIST, campaign.text("Province_" .. prov.key), 0xFFE6E6E6)
+		end
+		-- what Start plays, so it is clear while the panel shows another province
+		if sel then
+			drawText(FONT_LIST, px + L(20), H - L(102), T("FRONT_END_CAMPAIGN_START") .. ": " .. T("FRONT_END_CAMPAIGN_" .. sel.key), 0xFF9CE6F0, S)
 		end
 		local canStart = sel ~= nil and (attackable[sel.key] == true or conquered[sel.key] == true)
 		if button(T("FRONT_END_CAMPAIGN_START"), px + L(20), H - L(56), L(250), L(30), canStart) then
@@ -2550,30 +2555,8 @@ Screens.campaignmap = {
 			if attackable[hoveredProv.key] then menuCursor = "Interface\\C_Attack.tga" end
 		end
 
-		-- the review of a province (a right-click)
-		if campaign.review then
-			local r = campaign.review
-			if campaign.campaignBox(L(700), L(560), function(x, by, w, h)
-				local ty = by + L(30)
-				local function rline(font, text, colour)
-					for _, l in ipairs(wrapText(font, text, w - L(128))) do
-						if ty + fontHeight(font, S) > by + h - L(70) then return end
-						drawText(font, x + L(64), ty, l, colour or WHITE, S)
-						ty = ty + fontHeight(font, S)
-					end
-				end
-				centredText(FONT_TITLE, T("FRONT_END_CAMPAIGN_" .. r.key), x, ty, w, L(44), 0xFF9CE6F0)
-				ty = ty + L(54)
-				rline(FONT_LIST, campaign.text("Province_Bonus_" .. r.key), 0xFF80FF80)
-				ty = ty + L(8)
-				rline(FONT_LIST, campaign.text("Province_" .. r.key), 0xFFE6E6E6)
-				ty = ty + L(12)
-				for _, g in ipairs(campaign.provinceGenerals(r)) do
-					rline(FONT_LIST, g.name .. " - " .. g.tier .. (g.alignment ~= "" and (" - " .. g.alignment) or ""), YELLOW)
-				end
-			end) then campaign.review = nil end
 		-- a new campaign: the story brief, in a box three quarters of the screen
-		elseif campaign.brief then
+		if campaign.brief then
 			if campaign.campaignBox(math.floor(W * 0.75), math.floor(H * 0.75), function(x, by, w, h)
 				local ty = by + L(30)
 				for _, l in ipairs(wrapText(FONT_TEXT, campaign.text("Campaign_Story_Brief"), w - L(128))) do
@@ -2584,10 +2567,9 @@ Screens.campaignmap = {
 			end) then campaign.brief = false end
 		end
 	end,
-	-- Esc closes the review or the brief first
+	-- Esc closes the brief first
 	onEscape = function()
-		if campaign.review then campaign.review = nil
-		elseif campaign.brief then campaign.brief = false
+		if campaign.brief then campaign.brief = false
 		else pop() end
 	end,
 }
