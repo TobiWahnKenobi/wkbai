@@ -56,6 +56,19 @@ struct TerrainGrassBuilder {
 	static float BuildDensity(float density) { return std::clamp(std::ceil(density / 6.0f - 1e-3f) * 6.0f, 6.0f, MAX_DENSITY); }
 	// adds tile (x, z)'s blades, about density per square unit
 	void addTile(Terrain* terrain, int x, int z, float density, std::vector<GrassBlade>& out);
+
+	// Each tile's grass share (the part of its picture green enough for blades; 0 on water,
+	// steep or bare ground) and its grass's mean colour, worked out once per tile. A blade's
+	// chance follows these shares blended between the neighbouring tiles' centres at a
+	// noise-shifted point, so dense grass thins out across the tile edge into sparser ground
+	// instead of stopping at it (the play test of 2026-11-15); inside even ground each tile
+	// keeps its own picture's patches, as before.
+	struct TileShare { float share = 0, r = 0, g = 0, b = 0; };
+	std::vector<TileShare> shares;
+	std::vector<uint8_t> shareDone;
+	const TileShare& tileShare(Terrain* terrain, int x, int z);
+	// the tile's picture (nullptr where it gets no blades: water, no texture, steep ground)
+	const Bitmap* grassPicture(Terrain* terrain, int x, int z);
 };
 
 // The water's flow (RenderSettings::waterFlow), one RGBA8 texel per tile ((x, z) at

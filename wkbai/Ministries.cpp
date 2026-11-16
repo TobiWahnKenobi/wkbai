@@ -369,7 +369,9 @@ void Ministries::update(Server& server)
 	for (const auto& [type, children] : level->children)
 		for (CommonGameObject* child : children) {
 			ServerGameObject* p = (ServerGameObject*)child;
-			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player")
+			// (not one deleted, an empty start position's: the count is the same from the first step
+			// on, as QuickSkirmishMenu::applySettings maps the positions onto it)
+			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && !p->deleted)
 				all.push_back(p);
 		}
 	std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->id < b->id; });

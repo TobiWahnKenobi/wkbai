@@ -70,7 +70,19 @@ uint64_t Mix(uint64_t x)
 }
 // The generator's version: raised with every change to what BuildExtendedTerrain's far part makes
 // (FarLandCache: entries of another version are misses)
-constexpr uint32_t EXTEND_MAP_ALGORITHM = 1;
+constexpr uint32_t EXTEND_MAP_ALGORITHM = 2;
+
+// A river's valley: its sides rising from the water, steeper farther out, until they meet the
+// land. Out to RIVER_VALLEY_REACH tiles, fading out over the last 10 (cut off at 20 tiles, a river
+// low in high land had stood in a trench with walls of up to 90 units at its edge, The Bad Place
+// in the play test of 2026-11-15; at 60 the side stands some 270 units over the water)
+constexpr float RIVER_VALLEY_REACH = 60.0f;
+inline float RiverValleySide(float level, float u) { return level + 0.35f + 1.1f * u * (0.4f + 0.06f * u); }
+inline float RiverValley(float v, float level, float u)
+{
+	const float fade = std::clamp((RIVER_VALLEY_REACH - u) / 10.0f, 0.0f, 1.0f);
+	return v + (std::min(v, RiverValleySide(level, u)) - v) * fade;
+}
 
 uint64_t HashAt(uint64_t seed, int x, int z, int salt)
 {
@@ -1173,7 +1185,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		const float phase = Unit(HashAt(seed, (int)r, 0, 91)) * 6.2832f;
 		// its valley: banks rising from the water at up to VALLEY_SLOPE units per tile, so the land
 		// opens up around the river instead of standing over it as walls
-		constexpr float VALLEY = 20.0f, VALLEY_SLOPE = 1.1f;
+		constexpr float VALLEY = RIVER_VALLEY_REACH;
 		// (with far rings it carries on through them: its points beyond the copy are kept for them)
 		const int steps = farRings > 0 ? 3 * n + 700 : 3 * n;
 		// The course first: meanders (a slow swing, a faster one, a wander) and a broad drift of
@@ -1257,7 +1269,6 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					}
 				}
 		}
-		(void)VALLEY_SLOPE;
 	}
 	// The river's tiles: every tile the channel reaches at a corner, at its lowest level there.
 	// The water covers them whole and the banks rise out of it, so the shore follows the banks
@@ -1277,12 +1288,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		}
 	// the channels and their valleys, each vertex by its nearest river point: the bed under
 	// the water, banks that hold it, and the valley's sides opening up from them
-	constexpr float VALLEY_W = 20.0f, VALLEY_SLOPE_W = 1.1f;
 	std::vector<float> bankFrom((size_t)EW * EH, 1e30f); // a bank's height before it was raised
 	for (int Z = 0; Z <= H; Z++)
 		for (int X = 0; X <= W; X++) {
 			const size_t vi = (size_t)Z * EW + X;
-			if (riverU[vi] > VALLEY_W || inMapV(X, Z))
+			if (riverU[vi] > RIVER_VALLEY_REACH || inMapV(X, Z))
 				continue;
 			const float u = riverU[vi], half = riverHalf[vi];
 			// the bed under the lowest level near (no bare bed where the level steps down)
@@ -1301,7 +1311,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			if (u <= 0) // (down from the bank's height without a step: the step drew lines in the water)
 				v = std::min(v, std::max(level + 0.35f + 2.0f * u, level - 2.2f - 1.6f * std::min(-u / half, 1.0f)));
 			else {
-				v = std::min(v, level + 0.35f + VALLEY_SLOPE_W * u * (0.4f + 0.06f * u));
+				v = RiverValley(v, level, u);
 				if (u < 1.5f)
 				{
 					// the bank itself holds the water (the land's own height kept: another water at
@@ -2082,25 +2092,32 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		far->blocks.clear();
 		const float S0 = farFoot0; // ring 0's spacing, tiles
 		constexpr float B0 = 48.0f;  // ring 0's width, tiles; each ring twice the one before
-		// the river points in buckets of 32 tiles, for the nearest one to a place
+		// the river points in buckets of 32 tiles, for the nearest one to a place (on a flat grid,
+		// 5 x 5 buckets searched: at least 64 tiles round, beyond the valleys' reach)
 		constexpr float RB = 32.0f;
-		std::map<std::pair<int, int>, std::vector<int>> riverBuckets;
+		constexpr int RR = 2;
+		static_assert(RB * RR >= RIVER_VALLEY_REACH, "the lookup must reach the valleys' edge");
+		int rbx0 = 0, rbz0 = 0, rbx1 = -1, rbz1 = -1;
+		for (size_t k = 0; k < riverPts.size(); k++) {
+			const int bx = (int)std::floor(riverPts[k].x / RB), bz = (int)std::floor(riverPts[k].z / RB);
+			if (k == 0) { rbx0 = rbx1 = bx; rbz0 = rbz1 = bz; }
+			rbx0 = std::min(rbx0, bx); rbx1 = std::max(rbx1, bx);
+			rbz0 = std::min(rbz0, bz); rbz1 = std::max(rbz1, bz);
+		}
+		const int rbw = rbx1 - rbx0 + 1, rbh = rbz1 - rbz0 + 1;
+		std::vector<std::vector<int>> riverBuckets((size_t)std::max(rbw, 0) * std::max(rbh, 0));
 		for (size_t k = 0; k < riverPts.size(); k++)
-			riverBuckets[{ (int)std::floor(riverPts[k].x / RB), (int)std::floor(riverPts[k].z / RB) }].push_back((int)k);
+			riverBuckets[(size_t)((int)std::floor(riverPts[k].z / RB) - rbz0) * rbw + (int)std::floor(riverPts[k].x / RB) - rbx0].push_back((int)k);
 		auto nearestRiver = [&](float px, float pz, float& u, float& level, float& half) {
 			u = 1e30f;
-			const int bx = (int)std::floor(px / RB), bz = (int)std::floor(pz / RB);
-			for (int dz = -1; dz <= 1; dz++)
-				for (int dx = -1; dx <= 1; dx++) {
-					auto it = riverBuckets.find({ bx + dx, bz + dz });
-					if (it == riverBuckets.end())
-						continue;
-					for (int k : it->second) {
+			const int bx = (int)std::floor(px / RB) - rbx0, bz = (int)std::floor(pz / RB) - rbz0;
+			for (int z = std::max(bz - RR, 0); z <= std::min(bz + RR, rbh - 1); z++)
+				for (int x = std::max(bx - RR, 0); x <= std::min(bx + RR, rbw - 1); x++)
+					for (int k : riverBuckets[(size_t)z * rbw + x]) {
 						const RiverPt& p = riverPts[k];
 						const float dd = std::sqrt((p.x - px) * (p.x - px) + (p.z - pz) * (p.z - pz)) - p.half;
 						if (dd < u) { u = dd; level = p.level; half = p.half; }
 					}
-				}
 		};
 		// (more saturated and a little darker than the pictures' means: averaged, a picture's
 		// colour is paler than the picture looks, and without its relief and the screen's
@@ -2292,8 +2309,8 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					}
 					if (u2 <= 0)
 						v = std::min(v, std::max(level + 0.35f + 0.9f * u2, level - 2.5f));
-					else if (u2 < 20.0f + s) {
-						v = std::min(v, level + 0.35f + 1.1f * u2 * (0.4f + 0.06f * u2));
+					else if (u2 < RIVER_VALLEY_REACH + s) {
+						v = RiverValley(v, level, u2);
 						// (over the river's level along its corridor: hollows beside it under its
 						// level showed as splotches of water)
 						// (not where it runs at the sea's level into the sea: a strip of land had
@@ -2488,7 +2505,6 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					continue;
 				H_(X, Z) = h;
 			}
-
 
 		lap("far rings");
 		// The far land's terrain shadows: each point's horizon in 8 directions (the highest angle the

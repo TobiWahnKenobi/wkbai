@@ -352,6 +352,17 @@ namespace {
 		}
 		list.push_back(toggle("bumpMapping", "terrain", "Terrain bump mapping", rs.bumpMapping));
 		list.push_back(toggle("modelLighting", "models", "Model highlights", rs.modelLighting));
+		{
+			// the reflections on buildings and units (RenderSettings::modelReflections): need the
+			// models lit per pixel
+			MenuOption o;
+			o.id = "modelReflections"; o.page = "models"; o.label = "Reflections on buildings and units";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "High (screen-space)", "Ultra (screen-space + ray-traced)" };
+			o.get = [&rs]() { return (float)rs.modelReflections; };
+			o.set = [&rs](float v) { rs.modelReflections = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.modelLighting; }));
+		}
 		list.push_back(withEnabled(slider("modelDetailNormals", "models", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));
 		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
@@ -398,6 +409,11 @@ namespace {
 		// the original's 3D Sound: off, the sounds of the world play without direction (louder
 		// nearer, as before)
 		settingToggle("sound3D", "sound", "3D Sound", true);
+		// OpenAL Soft's extras (not in the original, off by default; SoundPlayer.cpp):
+		// HRTF for headphones (on speakers it sounds dull), and an open-plain reverb with
+		// distance taking the highs away, for the world's sounds only
+		settingToggle("soundHRTF", "sound", "Headphone 3D sound (HRTF)", false);
+		settingToggle("soundReverb", "sound", "Reverb", false);
 
 		// System
 		{

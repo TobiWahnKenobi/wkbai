@@ -87,6 +87,7 @@ void RenderSettings::load()
 	contactShadows = g_settings.value<bool>("contactShadows", def.contactShadows);
 	rtReflections = g_settings.value<bool>("rtReflections", def.rtReflections);
 	ssReflections = g_settings.value<bool>("ssReflections", def.ssReflections);
+	modelReflections = std::clamp(g_settings.value<int>("modelReflections", def.modelReflections), 0, 2);
 	terrainFresnel = g_settings.value<float>("terrainFresnel", def.terrainFresnel);
 	grass = g_settings.value<bool>("grass", def.grass);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
@@ -198,6 +199,7 @@ void RenderSettings::save()
 	g_settings["contactShadows"] = contactShadows;
 	g_settings["rtReflections"] = rtReflections;
 	g_settings["ssReflections"] = ssReflections;
+	g_settings["modelReflections"] = modelReflections;
 	g_settings["terrainFresnel"] = terrainFresnel;
 	g_settings["grass"] = grass;
 	g_settings["terrainTessellation"] = terrainTessellation;

@@ -88,6 +88,15 @@ public:
 	Diligent::ITextureView* beginWaterReflections(Diligent::IDeviceContext* ctx, Diligent::IBuffer* transformBuffer,
 		Diligent::ITexture* scene, Diligent::ITexture* sceneDepth, Diligent::ITextureView* dsv, const Vector3& camera,
 		float projZ22, float projZ32, const float fallback[3]);
+	// the reflections on buildings and units, Ultra (RenderSettings::modelReflections): at half
+	// the depth's size, per pixel the mirror ray of its surface (the position and the normal
+	// from the depth pre-pass's depth: the shape without the normal maps), the nearest model
+	// it hits; rgb the colour there in the frame before (prevScene, graded as drawn, through
+	// prevViewProj; transposed), a: 0 no hit, else 1 + how much of that colour is known (the
+	// hit on the screen then and in sight now; 0: off the screen, the shaders darken it).
+	// projection, inverseView as renderMask's; viewProj: this frame's (transposed). Or null.
+	Diligent::ITextureView* renderModelReflections(Diligent::IDeviceContext* ctx, Diligent::ITexture* depth, const float projection[4],
+		const Matrix& inverseView, const Matrix& viewProj, Diligent::ITexture* prevScene, const Matrix& prevViewProj);
 	bool reflectionsUsable() const { return reflectOk; }
 	bool valid() const { return built; }
 	bool usable() const { return ok; } // the mask's shader and pipeline were made
@@ -145,4 +154,14 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::ITexture> reflections;
 	Diligent::ITexture* reflectBound[2] = {};
 	Diligent::ITopLevelAS* reflectBoundTlas = nullptr;
+	// the models' reflections (renderModelReflections): made at the first use
+	bool modelReflTried = false;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> modelReflSignature;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineState> modelReflPipeline;
+	Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> modelReflSrb;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> modelReflConstants;
+	Diligent::RefCntAutoPtr<Diligent::ITexture> modelRefl;
+	Diligent::ITexture* modelReflBound[2] = {};
+	Diligent::ITopLevelAS* modelReflBoundTlas = nullptr;
+	uint32_t modelReflAlphaVersion = ~0u;
 };
