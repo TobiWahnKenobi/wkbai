@@ -1113,7 +1113,15 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		// the original; and twice the light, as the landscape's colour stage, which brings the
 		// sea to the brightness of the other levels
 		float3 omean = inpTexture.SampleLevel(cloudSampler, float2(0.5, 0.5), 12).rgb;
-		otex = max(omean + (otex - omean) * 5.0, 0);
+		float3 grain = max(1 + (otex / max(omean, 1e-3) - 1) * 3.0, 0);
+		// the shallow colour (the texture's mean) to the deep one (LakeColour) with the depth,
+		// and large soft patches drifting across: the original's grid of random normals, read at
+		// the tile corners, here the ripple map at a coarse scale on the normal field's wind
+		float2 puv = input.World.xz * 0.006 + WaterRipples.xy * 0.15;
+		float drift = normalTexture.Sample(cloudSampler, puv).x + normalTexture.Sample(cloudSampler, puv * 0.47 + 0.31).y
+			- normalTexture.SampleLevel(cloudSampler, float2(0.5, 0.5), 12).x - normalTexture.SampleLevel(cloudSampler, float2(0.5, 0.5), 12).y;
+		float deep = saturate(saturate(input.Depth / 6) * 0.9 + drift * 1.5);
+		otex = lerp(omean, LakeColour.rgb, deep) * grain;
 		float olight = 2.0 * max(SunDirection.y, 1.0 / 3.0) * CloudLight(input.World);
 		return IceOver(float4(GradeColour(lerp(otex * olight, FogTint(input.World), input.Fog)), PlainWaterAlpha(input.Flood, input.Depth)), input.World);
 	}
@@ -1805,6 +1813,9 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	// originalWaterTexture: the original file for the Original level; boundWater: the one bound
 	texture waterTexture = nullptr, originalWaterTexture = nullptr, rippleTexture = nullptr;
 	ITextureView* boundWater = nullptr;
+	// the Original level's deep colour: Water_Surface_DiffuseMap2's mean (originalWaterTexture
+	// holds DiffuseMap1's, the shallow colour); deepColour[3] = 0 without the file
+	float deepColour[4] = {};
 	RefCntAutoPtr<ITexture> shadowMap;
 	// Blob shadows: their own pipeline, drawing into blobMap
 	RefCntAutoPtr<IPipelineResourceSignature> blobSignature;
@@ -2630,12 +2641,38 @@ void DiligentEnhancedTerrainRenderer::init()
 		// replacement (whose smoothed blotches read as a bump map), at the original's default
 		// 16-bit texture precision (R5G6B5). The texture is faint noise around one colour; the
 		// 16-bit rounding is what makes that noise show as a speckle in the original.
+		// Its colour: the original's screenshots show a bright blue, light cyan in the shallows
+		// and a deeper blue farther out, the colours of the sky set's Water_Surface_DiffuseMap1
+		// (light) and DiffuseMap2 (dark), which the original's Dot3 stages mix (docs/re/water.md).
+		// So the texture is DiffuseMap1's mean colour carrying Water_Surface's noise, and
+		// DiffuseMap2's mean is the deep colour.
 		Bitmap orig = Bitmap::loadBitmapExact(waterPath.c_str()).convertToR8G8B8A8();
+		auto mean = [](const Bitmap& b, double* m) {
+			m[0] = m[1] = m[2] = 0;
+			for (int i = 0; i < b.width * b.height; i++)
+				for (int c = 0; c < 3; c++)
+					m[c] += b.pixels[i * 4 + c];
+			for (int c = 0; c < 3; c++)
+				m[c] /= std::max(b.width * b.height, 1);
+		};
+		double surface[3], shallow[3], deep[3];
+		mean(orig, surface);
+		for (int c = 0; c < 3; c++)
+			shallow[c] = surface[c];
+		const std::string shallowPath = skyDirectory + "Water_Surface_DiffuseMap1.tga", deepPath = skyDirectory + "Water_Surface_DiffuseMap2.tga";
+		if (FileExists(shallowPath.c_str()) && FileExists(deepPath.c_str())) {
+			mean(Bitmap::loadBitmapExact(shallowPath.c_str()).convertToR8G8B8A8(), shallow);
+			mean(Bitmap::loadBitmapExact(deepPath.c_str()).convertToR8G8B8A8(), deep);
+			for (int c = 0; c < 3; c++)
+				_impl->deepColour[c] = (float)(deep[c] / 255.0);
+			_impl->deepColour[3] = 1.0f;
+		}
 		for (int i = 0; i < orig.width * orig.height; i++) {
 			unsigned char* px = &orig.pixels[i * 4];
 			for (int c = 0; c < 3; c++) {
+				const double v = std::clamp(shallow[c] * px[c] / std::max(surface[c], 1.0), 0.0, 255.0);
 				const int levels = c == 1 ? 63 : 31;
-				px[c] = (unsigned char)((px[c] * levels + 127) / 255 * 255 / levels);
+				px[c] = (unsigned char)(((int)(v + 0.5) * levels + 127) / 255 * 255 / levels);
 			}
 		}
 		_impl->originalWaterTexture = gfx->CreateTexture(orig, 0);
@@ -3057,6 +3094,9 @@ void DiligentEnhancedTerrainRenderer::render()
 	lakeColour[1] = ((terrain->fogColor >> 8) & 255) / 255.0f;
 	lakeColour[2] = (terrain->fogColor & 255) / 255.0f;
 	lakeColour[3] = 0x80 / 255.0f;
+	if (g_renderSettings.waterQuality == RenderSettings::WATER_ORIGINAL && _impl->deepColour[3] != 0)
+		for (int c = 0; c < 3; c++)
+			lakeColour[c] = _impl->deepColour[c];
 	// The texture scroll: the offset moves along the wind vector at the original's speed
 	// (0x5F3830: (ms >> 4) / 128 per millisecond). The original adds a 4.1 s surge,
 	// w * ((sin(2 pi ((ms >> 2) & 1023) / 1024) + 0.8) * 0.3)^2, which makes the water speed
