@@ -313,8 +313,12 @@ void Task::resume()
 	TraceTask(this, "resume");
 	this->state = OTS_PROCESSING;
 	this->blueprint->resumptionSequence.run(this->order->gameObject);
+	// only a task that was in range when it was put aside: its target has gone out of range since
+	// (an archer drawn into a fight). One that hadn't reached it walks on: the Kingmaker's siege
+	// formations, resumed 220 m from their target, ran their dissatisfied sequence (a Wait) again
+	// at every resume and never walked.
+	this->resumedUnchecked = this->proximitySatisfied;
 	this->proximitySatisfied = false; // TODO: put this in "onResume"
-	this->resumedUnchecked = true;
 }
 
 void Task::cancel()

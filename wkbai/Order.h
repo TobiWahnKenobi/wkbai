@@ -77,9 +77,9 @@ struct Task {
 	SrvGORef target;
 	Vector3 destination;
 	float proximity = -1.0f; bool proximitySatisfied = false, lastDestinationValid = false;
-	// resumed (after an order put in front, a fight it was drawn into) out of range: its
-	// PROXIMITY_DISSATISFIED_SEQUENCE before it walks, as at its start; the play test: archers on
-	// Hold Ground resumed their Fire Arrow and walked after a target out of range
+	// resumed (after an order put in front, a fight it was drawn into) out of range, having been in
+	// range when put aside: its PROXIMITY_DISSATISFIED_SEQUENCE before it walks; the play test:
+	// archers on Hold Ground resumed their Fire Arrow and walked after a target out of range
 	bool resumedUnchecked = false;
 	// loaded from a save as having reached its target (PROXIMITY_SATISFIED 1): kept so until the
 	// task starts again or its target changes. The original's test 36 save has a cart "arrived"
