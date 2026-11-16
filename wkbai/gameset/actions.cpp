@@ -1903,15 +1903,35 @@ struct ActionDetachLoopingSpecialEffect : Action {
 	}
 };
 
+// SKIP_CAMERA_PATH_PLAYBACK <finder> [SKIP_ACTIONS] (WKB.exe 0x641a30): the path's end view at
+// once, its POST_PLAY_SEQUENCE run unless SKIP_ACTIONS
 struct ActionSkipCameraPathPlayback : Action {
 	std::unique_ptr<ObjectFinder> finder;
+	bool skipActions = false;
 	virtual void run(SrvScriptContext* ctx) override {
 		for (ServerGameObject* obj : finder->eval(ctx))
-			ctx->server->skipCameraPath(obj);
+			ctx->server->skipCameraPath(obj, skipActions);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		finder.reset(ReadFinder(gsf, gs));
+		skipActions = gsf.nextString() == "SKIP_ACTIONS";
 	}
+};
+
+// LOCK_TIME / UNLOCK_TIME (the campaign's intros, WKB.exe's time lock): the game time stands
+// still until it is unlocked as often as it was locked
+struct ActionLockTime : Action {
+	bool lock;
+	ActionLockTime(bool lock) : lock(lock) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		auto& tm = ctx->server->timeManager;
+		if (lock)
+			tm.scriptLocks++;
+		else if (tm.scriptLocks > 0)
+			tm.scriptLocks--;
+		ctx->server->syncTime();
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
 struct ActionActivatePlan : Action {
@@ -2482,9 +2502,9 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_UNLOCK_LEVEL: action = new ActionUnlockLevel; break;
 		// Below are ignored actions (that should not affect gameplay very much)
 	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP: action = new ActionSwitchOnIntensityMap; break;
+	case Tags::ACTION_LOCK_TIME: action = new ActionLockTime(true); break;
+	case Tags::ACTION_UNLOCK_TIME: action = new ActionLockTime(false); break;
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
-	case Tags::ACTION_LOCK_TIME:
-	case Tags::ACTION_UNLOCK_TIME:
 	case Tags::ACTION_SET_RECONNAISSANCE:
 	case Tags::ACTION_RESERVE_TILE_FOR_CONSTRUCTION:
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:

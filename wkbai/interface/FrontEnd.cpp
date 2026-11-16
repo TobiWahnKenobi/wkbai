@@ -590,7 +590,7 @@ struct FrontEnd::Impl {
 			for (const GameWindow& w : gameWindows) {
 				sol::table buttons = lua.create_table();
 				for (const GameWindow::Button& b : w.buttons)
-					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled));
+					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled, "close", b.close));
 				list.add(lua.create_table_with("id", w.id, "text", w.text, "page", w.page + 1, "pages", w.pages,
 					"x", w.x, "y", w.y, "width", w.width, "atBottom", w.atBottom, "modal", w.modal, "buttons", buttons,
 					"title", w.title, "general", w.general, "titleColour", w.titleColour));

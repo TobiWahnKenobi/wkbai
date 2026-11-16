@@ -3203,38 +3203,33 @@ end
 -- screen stays between them, or above them where there is no room.
 local HUD_LEFT_W, HUD_LEFT_H, HUD_RIGHT_W, HUD_RIGHT_H = 330, 326, 345, 343
 
--- The text windows, oldest first, so the newest is drawn on top and takes a click first
+-- The text windows, oldest first, so the newest is drawn on top and takes a click first. As
+-- WKB.exe's CGameTextWindow (0x77ee60, 0x77e540; RE repo docs/re/campaign-comparison.md): 540
+-- pixels wide and centred, its bottom a tenth of the screen above the bottom (PUT_AT_BOTTOM_OF_SCREEN)
+-- or its top just below the middle; the lines centred, wrapped at PIXEL_WIDTH less 12; at least
+-- 120 high; the buttons 180 x 30 spread evenly along the bottom in the order of their x; Enter
+-- presses the newest window's only button, or its Close
+local GTW_WIDTH = 540
 local function drawGameTextWindows(blocked)
 	local windows = getGameWindows()
 	local layout = {}
 	for i, win in ipairs(windows) do
-		local w = math.min(L(win.width), W - L(20))
-		local px, py = L(GAME_WINDOW_PAD_X), L(GAME_WINDOW_PAD_Y)
+		local w = math.min(L(GTW_WIDTH), W - L(20))
+		local px = L(24)
 		-- an AI General's message: its portrait at the left, its name as the title (WKB.exe's
-		-- "|<colour><name>|" first line)
+		-- "|<colour><name>|" first line; wkbai's)
 		local portrait = win.general ~= "" and generalPortrait(win.general) or nil
 		local textX = portrait and (L(64) + L(12)) or 0
 		local titleH = win.title ~= "" and (fontHeight(FONT_BUTTON, S) + L(6)) or 0
-		local lines = wrapText(FONT_GAME_TEXT, win.text, w - 2 * px - textX)
-		local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
-		-- the buttons' row: as high as the highest button's top (the scripts place them up
-		-- from the window's bottom, mostly 5 pixels)
-		local buttonsTop = 0
-		for _, b in ipairs(win.buttons) do buttonsTop = math.max(buttonsTop, b.y + math.max(b.height, 25)) end
+		local wrapW = math.min(L(math.max(win.width, 100) - 12), w - 2 * px) - textX
+		local lines = wrapText(FONT_GAME_TEXT, win.text, wrapW)
+		local lineH = math.max(L(15), fontHeight(FONT_GAME_TEXT, S))
 		local textH = math.max(titleH + #lines * lineH, portrait and L(80) or 0)
-		local h = 2 * py + textH + (buttonsTop > 0 and (L(buttonsTop) + L(6)) or 0)
-		local x = math.floor(math.max(L(10), math.min(W * win.x, W - w - L(10))))
-		local bottom = win.atBottom and (H - L(6)) or (H * win.y)
-		if bottom > H - math.max(HUD_LEFT_H, HUD_RIGHT_H) then
-			local left, right = HUD_LEFT_W + L(8), W - HUD_RIGHT_W - L(8)
-			if right - left >= w then
-				x = math.max(left, math.min(x, right - w))
-			else
-				bottom = H - math.max(HUD_LEFT_H, HUD_RIGHT_H)
-			end
-		end
-		local y = math.floor(math.max(L(10), math.min(bottom - h, H - h - L(6))))
-		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px, py = py,
+		local h = math.max(L(120), L(22) + textH + L(50))
+		local x = math.floor((W - w) / 2)
+		local y = win.atBottom and math.floor(H - H * 0.104 - h) or math.floor(H * 0.479)
+		y = math.max(L(10), math.min(y, H - h - L(6)))
+		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px,
 			portrait = portrait, textX = textX, titleH = titleH }
 		reportGameWindowArea(x, y, w, h, win.modal)
 	end
@@ -3247,37 +3242,57 @@ local function drawGameTextWindows(blocked)
 	for i, win in ipairs(windows) do
 		local l = layout[i]
 		gameFrame(l.x, l.y, l.w, l.h)
-		local ty = l.y + l.py
+		local ty = l.y + L(22)
+		local areaX, areaW = l.x + l.px + l.textX, l.w - 2 * l.px - l.textX
 		if l.portrait then
 			drawImage(l.portrait, l.x + l.px, ty, L(64), L(80))
 		end
 		if win.title ~= "" then
-			drawText(FONT_BUTTON, l.x + l.px + l.textX, ty, win.title, playerColour(win.titleColour), S)
+			drawText(FONT_BUTTON, areaX + (areaW - textWidth(FONT_BUTTON, win.title, S)) / 2, ty, win.title, playerColour(win.titleColour), S)
 			ty = ty + l.titleH
 		end
 		for _, line in ipairs(l.lines) do
-			drawText(FONT_GAME_TEXT, l.x + l.px + l.textX, ty, line, GAME_TEXT_COLOUR, S)
+			drawText(FONT_GAME_TEXT, math.floor(areaX + (areaW - textWidth(FONT_GAME_TEXT, line, S)) / 2), ty, line, GAME_TEXT_COLOUR, S)
 			ty = ty + l.lineH
 		end
-		local innerBottom = l.y + l.h - l.py
-		-- the page, when there are several
-		if win.pages > 1 then
-			local p = win.page .. "/" .. win.pages
-			drawText(FONT_LIST, l.x + l.w - l.px - textWidth(FONT_LIST, p, S), innerBottom - fontHeight(FONT_LIST, S), p, GREY, S)
+		-- the buttons: in the order of their x, 180 x 30, spread evenly, 10 pixels above the bottom
+		local order = {}
+		for bi, b in ipairs(win.buttons) do
+			if b.text ~= "" then order[#order + 1] = bi end
 		end
+		table.sort(order, function(a, b) return win.buttons[a].x < win.buttons[b].x end)
+		local n = #order
+		local bw, bh = math.min(L(180), math.floor((l.w - L(20)) / math.max(n, 1))), L(30)
+		local gap = (l.w - n * bw) / (n + 1)
 		local saved = mouse.blocked
 		mouse.blocked = blocked or (top ~= i)
-		for bi, b in ipairs(win.buttons) do
-			-- x from the window's left edge (the scripts' OK at 275 of 550 is centred), y up from
-			-- the inner bottom
-			local bw, bh = L(b.width), L(math.max(b.height, 25))
-			local bx = l.x + L(b.x)
-			local by = innerBottom - L(b.y) - bh
-			if b.text ~= "" and button(b.text, bx, by, bw, bh, b.enabled) then
+		for k, bi in ipairs(order) do
+			local b = win.buttons[bi]
+			local bx = math.floor(l.x + gap + (k - 1) * (bw + gap))
+			local by = l.y + l.h - L(40)
+			if button(b.text, bx, by, bw, bh, b.enabled) then
 				request("gtw_button", win.id .. "," .. (bi - 1))
 			end
 		end
 		mouse.blocked = saved
+	end
+	-- Enter: the newest window's only button, or its Close (WKB.exe 0x64f91a)
+	local newest = windows[#windows]
+	if newest and not blocked and (isKeyPressed("Return") or isKeyPressed("Keypad Enter")) then
+		local pick = nil
+		local shown = 0
+		for bi, b in ipairs(newest.buttons) do
+			if b.text ~= "" then shown = shown + 1 pick = pick or bi end
+		end
+		if shown ~= 1 then
+			pick = nil
+			for bi, b in ipairs(newest.buttons) do
+				if b.close then pick = bi break end
+			end
+		end
+		if pick and newest.buttons[pick].enabled then
+			request("gtw_button", newest.id .. "," .. (pick - 1))
+		end
 	end
 end
 
@@ -3295,46 +3310,43 @@ function FE_ObjectivesNews()
 	return o ~= nil and o.changed ~= objectivesSeen and not objectivesOpen
 end
 
+-- As WKB.exe's (RE repo docs/re/campaign-comparison.md): 600 x 440 in the middle of the screen,
+-- the title, "Objectives", the map picture (SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC) in a
+-- 300 x 300 square at the left, the entries in a column at the right (gold, inactive ones grey
+-- blue), OK below; Enter closes it. The text windows are hidden while it is open.
+local OBJ_ACTIVE, OBJ_INACTIVE = 0xFF5BA7B3, 0xFFBCA19A
 local function drawObjectives(blocked)
 	local o = getObjectives()
 	if not o then objectivesOpen = false return end
 	if not objectivesOpen then return end
 	objectivesSeen = o.changed
-	local w = L(520)
-	local textW = w - 2 * L(GAME_WINDOW_PAD_X) - L(28)
-	local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
-	local rows = {}
-	for _, e in ipairs(o.entries) do
-		local lines = wrapText(FONT_GAME_TEXT, e.text, textW)
-		rows[#rows + 1] = { lines = lines, inactive = e.inactive }
-	end
-	local count = 0
-	for _, r in ipairs(rows) do count = count + #r.lines end
-	local titleH = L(34)
-	-- SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC (mods): its picture above the entries
-	local mapH = (o.map and o.map ~= "") and L(200) or 0
-	local h = 2 * L(GAME_WINDOW_PAD_Y) + titleH + (mapH > 0 and mapH + L(8) or 0) + math.max(1, count) * lineH + #rows * L(6) + L(40)
-	local x, y = math.floor(W - w - L(20)), math.floor(math.max(90, L(90)))
-	reportGameWindowArea(x, y, w, h, false)
+	local w, h = math.min(L(600), W - L(20)), math.min(L(440), H - L(20))
+	local x, y = math.floor((W - w) / 2), math.floor((H - h) / 2)
+	reportGameWindowArea(x, y, w, h, true)
 	gameFrame(x, y, w, h)
-	centredText(FONT_BUTTON, o.title, x, y + L(GAME_WINDOW_PAD_Y) - L(6), w, titleH, 0xFF9CE6F0)
-	local ty = y + L(GAME_WINDOW_PAD_Y) + titleH
-	if mapH > 0 then
-		drawImage(o.map, x + (w - mapH) / 2, ty, mapH, mapH)
-		ty = ty + mapH + L(8)
+	centredText(FONT_TITLE, o.title, x, y + L(18), w, L(44), 0xFF9CE6F0)
+	centredText(FONT_BUTTON, T("MISSION_OBJECTIVES_OBJECTIVES"), x, y + L(62), w, L(24), 0xFF9CE6F0)
+	local mapX, mapY, mapS = x + L(30), y + L(92), math.min(L(300), h - L(150))
+	if o.map and o.map ~= "" then
+		drawImage(o.map, mapX, mapY, mapS, mapS)
 	end
-	for _, r in ipairs(rows) do
-		local bullet = r.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
-		drawImage(bullet, x + L(GAME_WINDOW_PAD_X), ty + (lineH - L(12)) / 2, L(12), L(12))
-		for _, line in ipairs(r.lines) do
-			drawText(FONT_GAME_TEXT, x + L(GAME_WINDOW_PAD_X) + L(28), ty, line, r.inactive and GREY or GAME_TEXT_COLOUR, S)
+	local colX = mapX + mapS + L(30)
+	local colW = x + w - L(30) - colX
+	local lineH = fontHeight(FONT_BUTTON, S) + L(2)
+	local ty = mapY
+	for _, e in ipairs(o.entries) do
+		local bullet = e.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
+		drawImage(bullet, colX, ty + (lineH - L(12)) / 2, L(12), L(12))
+		for _, line in ipairs(wrapText(FONT_BUTTON, e.text, colW - L(20))) do
+			if ty + lineH > y + h - L(60) then break end
+			drawText(FONT_BUTTON, colX + L(20), ty, line, e.inactive and OBJ_INACTIVE or OBJ_ACTIVE, S)
 			ty = ty + lineH
 		end
 		ty = ty + L(6)
 	end
 	local saved = mouse.blocked
 	mouse.blocked = blocked
-	if button(T("BUTTON_OK"), x + (w - L(100)) / 2, y + h - L(GAME_WINDOW_PAD_Y) - L(30), L(100), L(28)) then
+	if button(T("BUTTON_OK"), x + (w - L(150)) / 2, y + h - L(55), L(150), L(35)) or (not blocked and (isKeyPressed("Return") or isKeyPressed("Keypad Enter"))) then
 		objectivesOpen = false
 	end
 	mouse.blocked = saved
@@ -3596,7 +3608,8 @@ local function drawGameWindows()
 	local menuScale = S
 	S = gameWindowScale(menuScale)
 	drawDiplomacyWindows(blocked)
-	drawGameTextWindows(blocked)
+	-- as WKB.exe's: the text windows are hidden under the menus and the objectives
+	if not objectivesOpen and #stack == 0 then drawGameTextWindows(blocked) end
 	drawObjectives(blocked)
 	S = menuScale
 end

@@ -6044,7 +6044,9 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 				button.enabled = !lastPage || !b.onClickSequence.actionList.empty();
 				break;
 			case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-				button.enabled = !gtw.forceReadAllPages || lastPage;
+				// as WKB.exe's: a window of several pages closes once its last page has been shown
+				button.enabled = gtw.pages.size() <= 1 || client->gtwReadAll.count(index) || !b.onClickSequence.actionList.empty();
+				button.close = true;
 				break;
 			}
 			w.buttons.push_back(std::move(button));
@@ -6194,9 +6196,9 @@ void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
 	const int page = it->second, pages = (int)gtw.pages.size();
 	switch (button.onClickWindowAction) {
 	case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-		if (gtw.forceReadAllPages && page + 1 < pages)
+		if (pages > 1 && !client->gtwReadAll.count(gtwIndex) && button.onClickSequence.actionList.empty())
 			return;
-		it->second = -1;
+		client->setGameTextWindowPage(gtwIndex, -1);
 		// the AI General's message read: the next one, if any, shows
 		if (gtwIndex == client->gameSet->gameTextWindows.names.getIndex("AI General Chat Window") && !client->chatDisplays.empty())
 			client->chatDisplays.pop_front();

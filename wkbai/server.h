@@ -510,7 +510,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void restoreCameraPosition(ServerGameObject* player);
 	void playCameraPath(ServerGameObject* player, int camPathIndex);
 	void stopCameraPath(ServerGameObject* player, bool skipActions);
-	void skipCameraPath(ServerGameObject* player);
+	void skipCameraPath(ServerGameObject* player, bool skipActions = false);
 	void interpolateCameraToPosition(ServerGameObject* player, const Vector3& position, const Vector3& orientation, float duration);
 	void interpolateCameraToStoredPosition(ServerGameObject* player, float duration);
 	void setGameSpeed(float nextSpeed);

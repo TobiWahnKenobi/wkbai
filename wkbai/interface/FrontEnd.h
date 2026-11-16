@@ -67,6 +67,7 @@ struct FrontEnd {
 			std::string text;
 			float x = 0, y = 0, width = 75, height = 25; // pixels from the window's bottom left
 			bool enabled = true;
+			bool close = false; // closes the window (Enter presses it)
 		};
 		int id = 0;
 		std::string text;            // the page's text, translated, "\n" as new lines

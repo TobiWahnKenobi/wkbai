@@ -129,6 +129,11 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::vector<std::pair<Vector3, Vector3>> cameraPathPos;
 	std::vector<float> cameraPathDur;
 	uint32_t cameraStartTime;
+	// as WKB.exe's (RE repo docs/re/campaign-comparison.md): game time, or the real clock when the
+	// time was locked or paused as the path started; looping from the first INTERPOLATE_TO
+	bool cameraRealClock = true, cameraPathLoop = false;
+	float cameraStartGameTime = 0.0f;
+	size_t cameraLoopFrom = 0;
 
 	ClientInterface *cliInterface;
 
@@ -138,6 +143,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// The game text windows showing: window index -> its page (-1: closed by its button);
 	// gtwOrder: when each was shown (a serial number, the newest on top)
 	std::map<int, int> gtwStates;
+	// the text windows whose last page has been shown since they opened (WKB.exe greys a
+	// several-page window's Close until then)
+	std::set<int> gtwReadAll;
 	std::map<int, uint32_t> gtwOrder;
 	uint32_t gtwSerial = 0;
 	// The player's mission objectives (NETCLIMSG_MISSION_OBJECTIVES_*): the active set (-1: none),

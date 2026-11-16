@@ -299,6 +299,9 @@ void Server::loadSaveGame(const char * filename)
 	}
 
 	timeManager.unlock();
+	// the save's locks beyond the one saving holds are LOCK_TIMEs of its scripts (an intro)
+	timeManager.scriptLocks = timeManager.lockCount;
+	timeManager.lockCount = 0;
 	timeManager.unpause();
 	lastSync = time(nullptr);
 }
@@ -2443,6 +2446,7 @@ void Server::syncTime()
 	msg.writeUint32(timeManager.psCurrentTime);
 	// a replay's viewer paused: its clock stands still too
 	msg.writeUint8(timeManager.paused || (replay && replayPaused));
+	msg.writeUint8(timeManager.scriptLocks ? 1 : 0);
 	sendToAll(msg);
 }
 
@@ -2514,9 +2518,10 @@ void Server::stopCameraPath(ServerGameObject* player, bool skipActions)
 	sendTo(player, msg);
 }
 
-void Server::skipCameraPath(ServerGameObject* player)
+void Server::skipCameraPath(ServerGameObject* player, bool skipActions)
 {
 	NetPacketWriter msg{ NETCLIMSG_SKIP_CAMERA_PATH };
+	msg.writeUint8(skipActions ? 1 : 0);
 	sendTo(player, msg);
 }
 
@@ -3326,6 +3331,7 @@ void Server::sendStateTo(NetLink* link)
 		NetPacketWriter msg(NETCLIMSG_TIME_SYNC);
 		msg.writeUint32(timeManager.psCurrentTime);
 		msg.writeUint8(timeManager.paused);
+		msg.writeUint8(timeManager.scriptLocks ? 1 : 0);
 		send(msg);
 	}
 	if (!hostRegionsText.empty())

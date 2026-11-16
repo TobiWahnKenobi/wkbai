@@ -360,7 +360,7 @@ bool Server::saveGame(const char* filename)
 	w.line("PREVIOUS_TIME %.9g", timeManager.previousTime);
 	w.line("ELAPSED_TIME %.9g", timeManager.elapsedTime);
 	w.line("PAUSED %d", (int)timeManager.paused);
-	w.line("LOCK_COUNT %u", timeManager.lockCount + 1); // as the original: saving holds a lock, which the loader releases
+	w.line("LOCK_COUNT %u", timeManager.lockCount + timeManager.scriptLocks + 1); // as the original: saving holds a lock, which the loader releases
 	w.depth--;
 	w.line("END_TIME_MANAGER_STATE");
 	w.line("");
