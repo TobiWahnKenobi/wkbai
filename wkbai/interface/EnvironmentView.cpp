@@ -8,6 +8,7 @@
 #include "../scene.h"
 #include "../tags.h"
 #include "../gameset/GameObjBlueprint.h"
+#include "../gameset/gameset.h"
 #include "../Camera.h"
 #include "../gfx/renderer.h"
 #include "../gfx/bitmap.h"
@@ -144,6 +145,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	if (!g_lightningKnown) {
 		v.cloudCover = stCloud; v.rain = st.rain; v.snowfall = st.snowfall; v.fog = st.fog;
 		v.wetness = st.wetness; v.snowCover = st.snowCover; v.ice = st.ice; v.waterRise = st.waterRise;
+		v.severity = st.severity;
 	}
 	ease(v.cloudCover, stCloud);
 	ease(v.rain, st.rain);
@@ -285,6 +287,10 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		}
 		approach(v.autumn, autumn, 0.05f);
 		approach(v.mud, std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f + 0.1f * std::min(st.rain, 1.0f) * (st.waterRise > 0.2f ? 1.0f : 0.0f), 0.02f);
+		// (test runs: the flood's mud at once, WKB_MUD_NOW)
+		static const bool mudNow = getenv("WKB_MUD_NOW") != nullptr;
+		if (mudNow)
+			v.mud = std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f;
 		approach(v.flow, std::clamp(1.0f + 0.55f * std::max(st.waterRise, 0.0f) + 0.3f * st.rain - 0.3f * std::max(-st.waterRise, 0.0f), 0.4f, 2.0f), 0.05f);
 		// the falls freeze in a harsh winter's hard cold (below -5 degrees), and thaw above -1
 		const bool freezing = es.seasons && st.season == 3 && st.severity >= 2 && st.temperatureC < -5.0f;
@@ -342,6 +348,20 @@ std::string EnvironmentHudText(Client* client)
 			add("Frozen");
 		if (st.season == 3)
 			add("Fields fallow");
+		// the farmers wintering indoors (PeasantLodging): their crafts' bonus on wood and gold
+		if (client->gameSet && client->clientPlayer.get()) {
+			static const GameSet* of = nullptr;
+			static int bonusItem = -1;
+			if (of != client->gameSet.get()) {
+				of = client->gameSet.get();
+				bonusItem = of->items.names.getIndex("Winter Crafts Bonus");
+			}
+			const float bonus = bonusItem >= 0 ? client->clientPlayer.get()->getItem(bonusItem) : 0.0f;
+			if (bonus > 0.0f) {
+				snprintf(buf, sizeof(buf), "Crafts +%.1f%%", bonus * 100.0f);
+				add(buf);
+			}
+		}
 	}
 	return out;
 }
@@ -375,6 +395,13 @@ bool TreeBareInWinter(Client* client, uint32_t id)
 	if (SeasonNow(client, into) != 3)
 		return false;
 	return into >= 0.005f + 0.115f * Hash(id * 2654435761u ^ 0x5EEDu);
+}
+
+bool TreeSnowLaden(Client* client, uint32_t id)
+{
+	if (!client->environmentActive || !g_environment.active)
+		return false;
+	return g_environment.snowCover >= 0.15f + 0.3f * Hash(id * 2246822519u ^ 0x5A0Bu);
 }
 
 void AddLeafTree(Client* client, const Vector3& centre, float radius, uint32_t id)

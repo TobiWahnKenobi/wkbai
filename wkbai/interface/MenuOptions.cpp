@@ -229,6 +229,26 @@ namespace {
 		}
 		{
 			MenuOption o;
+			o.id = "snowQuality"; o.page = "sky"; o.label = "Snow quality"; // (Low the first look, Medium softer and the same over the far land, High glinting)
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.snowQuality; };
+			o.set = [&rs](float v) { rs.snowQuality = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
+		{
+			MenuOption o;
+			o.id = "iceQuality"; o.page = "sky"; o.label = "Ice quality"; // (Low plain, Medium lit with cracks, High glossy and frosty)
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "Medium", "High" };
+			o.get = [&rs]() { return (float)rs.iceQuality; };
+			o.set = [&rs](float v) { rs.iceQuality = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
+		list.push_back(toggle("rainbows", "sky", "Rainbows", rs.rainbows));
+		list.push_back(toggle("heatShimmer", "sky", "Heat shimmer in a heatwave", rs.heatShimmer));
+		{
+			MenuOption o;
 			o.id = "terrainTessellation"; o.page = "terrain"; o.label = "Terrain tessellation";
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Off", "Low", "Medium", "High" };
@@ -264,6 +284,18 @@ namespace {
 			o.get = [&rs]() { return rs.extendMapShadows ? 1.0f : 0.0f; };
 			o.set = [&rs](float v) { rs.extendMapShadows = v != 0.0f; };
 			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2; }));
+		}
+		// the far land kept on disk (FarLandCache.h), and its folder's size
+		list.push_back(withEnabled(toggle("farLandCache", "terrain", "Keep the far land on disk", rs.farLandCache), [&rs]() { return rs.extendMap >= 2; }));
+		{
+			MenuOption o;
+			o.id = "farLandCacheMB"; o.page = "terrain"; o.label = "Far land cache size (MB)";
+			o.type = MenuOption::SLIDER;
+			o.min = 256.0f; o.max = 32768.0f;
+			o.format = "%.0f";
+			o.get = [&rs]() { return (float)rs.farLandCacheMB; };
+			o.set = [&rs](float v) { rs.farLandCacheMB = std::clamp((int)std::lround(v / 256.0f) * 256, 256, 32768); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2 && rs.farLandCache; }));
 		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
@@ -320,6 +352,17 @@ namespace {
 		}
 		list.push_back(toggle("bumpMapping", "terrain", "Terrain bump mapping", rs.bumpMapping));
 		list.push_back(toggle("modelLighting", "models", "Model highlights", rs.modelLighting));
+		{
+			// the reflections on buildings and units (RenderSettings::modelReflections): need the
+			// models lit per pixel
+			MenuOption o;
+			o.id = "modelReflections"; o.page = "models"; o.label = "Reflections on buildings and units";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Low", "High (screen-space)", "Ultra (screen-space + ray-traced)" };
+			o.get = [&rs]() { return (float)rs.modelReflections; };
+			o.set = [&rs](float v) { rs.modelReflections = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.modelLighting; }));
+		}
 		list.push_back(withEnabled(slider("modelDetailNormals", "models", "Model surface detail", rs.modelDetailNormals, 0.0f, 8.0f, "%.1f"),
 			[&rs]() { return rs.modelLighting; }));
 		list.push_back(slider("meshAmbient", "models", "Model ambient light", rs.meshAmbient, 0.0f, 1.0f));
@@ -366,6 +409,11 @@ namespace {
 		// the original's 3D Sound: off, the sounds of the world play without direction (louder
 		// nearer, as before)
 		settingToggle("sound3D", "sound", "3D Sound", true);
+		// OpenAL Soft's extras (not in the original, off by default; SoundPlayer.cpp):
+		// HRTF for headphones (on speakers it sounds dull), and an open-plain reverb with
+		// distance taking the highs away, for the world's sounds only
+		settingToggle("soundHRTF", "sound", "Headphone 3D sound (HRTF)", false);
+		settingToggle("soundReverb", "sound", "Reverb", false);
 
 		// System
 		{

@@ -59,6 +59,10 @@ struct DiligentPostProcess {
 		float motionBlur = 0.0f;
 		// tilt-shift: 0 (off) to 1 (the strongest blur above and below the sharp band)
 		float tiltShift = 0.0f;
+		// a heatwave's shimmer (0 off to 1), a clock for it (seconds); a rainbow: the world
+		// direction opposite the sun and its strength (0: none)
+		float heatShimmer = 0.0f, clockSeconds = 0.0f;
+		float rainbow[4] = { 0, 0, 0, 0 };
 	};
 	// The object motion vectors' clear value: no moving object drawn there (the camera's
 	// motion is computed from the depth instead)

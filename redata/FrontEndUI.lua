@@ -1203,6 +1203,7 @@ local SETTINGS = {
 	barbarianTribes = 0, teamPlacement = 0, resourcePoints = 2500, victoryPointLimit = 10000, valhallaModeFood = 20000,
 	unitLives = 0, capturableFlags = 4, aggressiveAI = 1, recordGame = 0,
 	aiTakeOver = 1, allowSpectators = 0, maxSpectators = 4, modPolicy = 0, buildPolicy = 1, allowAgents = 1,
+	aiMinistries = 0, -- wkbai's ministry AI (Ministries.h): each AI General a government of departments
 	-- wkbai's own (Environment.h): day and night, seasons and weather, all off
 	dayNight = 0, dayLength = 20, startHour = 8, seasons = 0, seasonLength = 30, startSeason = 0, tempScale = 0,
 	weatherSpring = 3, weatherSummer = 3, weatherAutumn = 3, weatherWinter = 3, -- random: chosen every year
@@ -1211,6 +1212,9 @@ local SETTINGS = {
 	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
 	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])
 	weatherStability = 3, weatherMinChange = 3, weatherMaxChange = 10, weatherTypes = 1023,
+	-- the peasants' lodging (PeasantLodging.h): they sleep in their houses, villages, manors and
+	-- castles at night (with day and night); the farmers spend the winter indoors (with the seasons)
+	peasantsSleep = 1, farmersWinter = 1,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1367,6 +1371,13 @@ local function settingsTab()
 	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
 	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
+	-- wkbai's own: the ministry AI (the RE repo's docs/engine/ministry-ai.md): the AI Generals'
+	-- strategist, departments and missions on top of the Kingmaker scripts
+	do
+		local my = skirmish.multiplayer and Y(818) or Y(894)
+		if roundButton(X(200), my, L(52), s.aiMinistries ~= 0, true) then s.aiMinistries = (s.aiMinistries ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, X(264), my + L(18), "Ministry AI", WHITE, S)
+	end
 	-- wkbre2's own, multiplayer: an AI General plays on for a guest who leaves; guests with no
 	-- position (and ones who join the running game) may watch, up to a number
 	if skirmish.multiplayer then
@@ -1528,7 +1539,15 @@ local function weatherTab()
 		if #none > 0 then
 			note(X(1000), Y(864), { "None of them in " .. table.concat(none, ", ") .. ": clear weather then." })
 		end
-	else
+	end
+	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter)
+	if s.dayNight ~= 0 then
+		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(904))
+	end
+	if s.seasons ~= 0 then
+		switch("farmersWinter", "Farmers winter indoors", X(1000), Y(970))
+	end
+	if not (s.seasons ~= 0 and s.weatherStability == 4) then
 		note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
 			"summers, more storms, floods and droughts. Random: chosen every year.",
 			"",

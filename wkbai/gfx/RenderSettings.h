@@ -64,6 +64,22 @@ struct RenderSettings {
 	// footprints that last longer). The flood water, the ground's snow and ice and the light of
 	// day and night are drawn at every level: they are part of the game.
 	int weatherEffects = 2;
+	// the lying snow's look: 0 Low (the first: one white in patches), 1 Medium (softer patches
+	// that keep their cover out over the near and far land, bluer where thin), 2 High (and the
+	// sun glinting in its crystals)
+	int snowQuality = 1;
+	// Extend map's far land kept on disk (FarLandCache.h; the user folder's farlandcache): made
+	// again only when the map, the generator or a setting that changes it changed; at most this
+	// many MB (every quality setting of the maps played, least recently used dropped first)
+	bool farLandCache = true;
+	int farLandCacheMB = 4096;
+	// the ice's look: 0 Low (a plain grey-blue), 1 Medium (lit, mirroring the sky, cracks),
+	// 2 High (and a glossy highlight, frost glittering, bubbles frozen in)
+	int iceQuality = 1;
+	// rainbows: opposite the sun when it is low and shines while rain falls or has just fallen
+	bool rainbows = true;
+	// a heatwave's air shimmering over the distance by day (very slight)
+	bool heatShimmer = true;
 	// grass blades on green ground near the camera (enhanced renderers on Diligent): blades per
 	// square unit (0 to TerrainGrassBuilder::MAX_DENSITY), their height (times 0.4-0.85 units)
 	// and how far from the camera they are drawn
@@ -202,6 +218,12 @@ struct RenderSettings {
 	// the water's screen-space reflections (water Low or better): the frame behind the water seen
 	// along the mirror ray; off, the water mirrors the sky alone (and the ray-traced reflections)
 	bool ssReflections = true;
+	// the reflections on buildings and units (models lit per pixel, enhanced renderers on
+	// Diligent): 0 Low, the sky and the ground along the reflected view; 1 High, with
+	// screen-space reflections (the frame before seen along the mirror ray; needs the
+	// post-processing effects' depth pre-pass); 2 Ultra, High and ray-traced rays where the
+	// screen has no answer (needs inline ray tracing, else as High)
+	int modelReflections = 0;
 	// the ground's Fresnel (enhanced terrain renderer on Diligent): its reflection of the sky
 	// at grazing angles, as a rough dielectric's (Schlick, F0 0.04) times this; 0 off. The
 	// models' per-pixel lighting (modelLighting) has its own Fresnel, PBR packs or not.

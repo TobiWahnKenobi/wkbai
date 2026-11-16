@@ -1,4 +1,5 @@
 #include "FormationController.h"
+#include "gameset/gameset.h"
 
 #define _USE_MATH_DEFINES
 #include <cmath>
@@ -489,6 +490,11 @@ void FormationController::faceAttackers()
 		return;
 	const float now = server->timeManager.currentTime;
 	static std::map<uint32_t, float> lastTurn;
+	static uint64_t of = 0; // (by object id: kept for this game only)
+	if (of != server->gameSet->serial) {
+		of = server->gameSet->serial;
+		lastTurn.clear();
+	}
 	if (auto it = lastTurn.find(formation->id); it != lastTurn.end() && now >= it->second && now - it->second < 4.0f)
 		return;
 	ServerGameObject* own = formation->getPlayer();

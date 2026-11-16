@@ -16,6 +16,7 @@
 #include "GameChronicle.h"
 #include "ReplayView.h"
 #include <deque>
+#include <list>
 #include <functional>
 #include <memory>
 
@@ -141,6 +142,15 @@ struct ClientInterface {
 	void lastWarning();
 	std::vector<std::pair<Vector3, uint32_t>> minimapPings;
 	std::optional<Vector3> hotKeyCameraTarget;
+	// A right-click command to the selection (units spread around the place, buildings' rally
+	// points); faceTo: where the units face at the end (x < 0: nowhere). Shift queues it (DO_LAST),
+	// Ctrl puts it first (DO_FIRST), as g_modShift/g_modCtrl say.
+	void sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo);
+	// The order flags (Flags\Way_Point1 and the others): one per ground point a unit is still
+	// sent to, queued points too. updateOrderFlags drops the points the units reached (each
+	// frame, before drawing); orderFlagCount: the flags standing now.
+	void updateOrderFlags();
+	int orderFlagCount() const { return (int)orderFlags.size(); }
 private:
 	bool firstFrame = true;
 	// the map editor: its state, its mouse input (before the game's; true when it used the
@@ -194,9 +204,6 @@ private:
 	void saveRequested(const std::string& name);
 	bool toggleObjectivesRequested = false; // the objectives button or key, for updateGameWindows
 	int toggleDiplomacyRequested = -1;      // a diplomacy window's top-bar button (0-2)
-	// A right-click command to the selection (units spread around the place, buildings' rally
-	// points); faceTo: where the units face at the end (x < 0: nowhere)
-	void sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo);
 	// a formation's right-drag: the move waits for the button's release, facing the drag
 	struct FormationDrag {
 		bool active = false;
@@ -297,9 +304,14 @@ private:
 	std::deque<SceneEntity> attachSceneEntities;
 	// Extend map's trees (ExtendMap.h): the level's own tree models as seen (with their size and
 	// season flags), and an entity per tree, made once those are known
-	struct ExtTreeModel { Model* model; float scale; uint32_t flags; };
+	// (broadleaf: bare in winter as the map's own, height: its model's, for the leafless one's size)
+	struct ExtTreeModel { Model* model; float scale; uint32_t flags; bool broadleaf; float height; };
 	std::vector<ExtTreeModel> extTreeModels;
 	std::vector<SceneEntity> extTreeEntities;
+	// per entity: its leafy and its bare look (a broadleaf tree's), its id for when it drops its
+	// leaves, and its snowy look (the fir Pine04's, SnowyFirModel; null for the others)
+	struct ExtTreeLook { Model* leafy; Matrix leafyTransform; Model* bare; Matrix bareTransform; uint32_t flags; uint32_t id; Model* snowy = nullptr; };
+	std::vector<ExtTreeLook> extTreeLooks;
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
 	void drawExtendedTrees();
@@ -321,10 +333,32 @@ private:
 	// returns true while the mouse is over it, a left click/drag moves the camera there
 	bool drawMinimap(int x, int y, int w, int h);
 	void drawSettingsWindow(bool* open);
-	// The original's marker at the ground target of a right-click order
-	void showOrderFlag(const Vector3& position, bool rallyPoint);
-	bool orderFlagDone(float age) const;
-	SceneEntity orderFlagEntity;
+	// The original's marker at the ground target of a right-click order: a new flag, its id
+	uint32_t showOrderFlag(const Vector3& position, bool rallyPoint);
+	struct OrderFlag {
+		uint32_t id = 0;
+		SceneEntity entity;
+		uint64_t startTicks = 0; // SDL ticks (ms): a UI marker, independent of the game clock
+		bool timed = true;       // no units sent there (a rally point, a patrol): 3 s
+		bool held = false;       // a right-drag's flag: stands until the button is released
+	};
+	std::list<OrderFlag> orderFlags; // (a list: the scene keeps pointers to their entities)
+	uint32_t nextOrderFlagId = 1;
+	uint32_t dragFlagId = 0;         // the right-drag's flag, which its order then takes over
+	// each unit's ground points still to reach, in order: the flag and its own destination there
+	struct UnitWaypoint {
+		uint32_t flagId;
+		Vector3 destination;
+	};
+	struct UnitWaypoints {
+		CliGORef unit;
+		std::deque<UnitWaypoint> points;
+		// its order as the server reports it: one seen since the points were given (a cancelled
+		// order's "none" before the new one does not count), and since when it has had none
+		bool sawOrder = false;
+		uint64_t idleTicks = 0;
+	};
+	std::unordered_map<uint32_t, UnitWaypoints> unitWaypoints; // by unit id
 	SceneEntity dragLineEntity; // a right-drag's Schematics\White_Line, from the flag towards the mouse
 	std::deque<SceneEntity> rallyFlagEntities; // of the selected buildings, this frame
 	// This frame's range circles: a band texture repeated around a circle on the ground
@@ -345,11 +379,6 @@ private:
 	std::vector<FootprintTile> footprintTiles;
 	RBatch* footprintBatch = nullptr;
 	void drawFootprintTiles();
-	uint64_t orderFlagStartTicks = 0; // SDL ticks (ms): a UI marker, independent of the game clock
-	bool orderFlagActive = false;
-	bool orderFlagRally = false;
-	Vector3 orderFlagPosition;
-	std::vector<CliGORef> orderFlagUnits; // the units sent there; the flag goes when they arrive
 	void applyCameraLimits();
 	// The four mode buttons around the minimap, at the top-left corner of Bottom_Right_Panel.tga
 	bool drawMinimapButtons(int panelX, int panelY);

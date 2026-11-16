@@ -429,7 +429,8 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 			return true;
 		// frozen over (wkbai's weather, off by default): boats held fast, the others walk on it
 		// whatever the bed's texture, depth or slope
-		if (trn->waterFrozen && trnTile->fullOfWater && trnTile->waterLevel > *minH)
+		// (the sea only near its coasts, as far as the winter is hard: Terrain::frozenAt)
+		if (trnTile->fullOfWater && trnTile->waterLevel > *minH && trn->frozenAt(trn->edge + tx, trn->edge + tz))
 			return waterUnit;
 
 		// the terrains the type can walk on (CAN_TRAVERSE, WKB.exe's movement mask; or the
@@ -919,6 +920,11 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 
 	PFPos posStart{ (int)(m_object->position.x / 5.0f), (int)(m_object->position.z / 5.0f) };
 	PFPos posEnd{ (int)(destination.x / 5.0f), (int)(destination.z / 5.0f) };
+	// a boat in the ice is held fast: it goes nowhere until it thaws
+	if (boatHeldFast()) {
+		stopMovement();
+		return m_object->position;
+	}
 
 	// if start is blocked...
 	if (pred(posStart)) {
@@ -1171,9 +1177,12 @@ void MovementController::runPathSearches()
 			for (size_t i = 0; i < n; i++)
 				f(i);
 	};
+	extern std::atomic<const char*> g_simPhase;
+	g_simPhase = "path searches: grids";
 	if (parallel)
 		fillGrids(g, forEach);
 	lap(0);
+	g_simPhase = "path searches: prepare";
 	auto lazyPred =[&](int cls) { ClassGrid* c = &g.classes[cls]; return [c, server, w, h](PFPos p) { return tileBlocked(server, *c, w, h, p.x, p.z); }; };
 	// the requests still wanted (not stopped or replaced since)
 	std::vector<PathRequest*> todo;
@@ -1249,6 +1258,7 @@ void MovementController::runPathSearches()
 			prepareSearch(r, w, h, lazyPred(r.cls), [&, cls = r.cls](PFPos p) { return g_noCache ? -1 : terrainRegion(cls, p.x, p.z); });
 	});
 	lap(1);
+	g_simPhase = "path searches: group fields";
 	// the searches, their fields chosen in the order asked for
 	std::vector<PathRequest*> searches;
 	for (PathRequest* rp : todo) {
@@ -1269,6 +1279,7 @@ void MovementController::runPathSearches()
 		g_riseData = rg.size() == (size_t)w * h ? rg.data() : nullptr;
 	}
 	lap(2);
+	g_simPhase = "path searches: searches";
 	forEach(searches.size(), [&](size_t i) {
 		PathRequest& r = *searches[i];
 		if (parallel)
@@ -1277,6 +1288,7 @@ void MovementController::runPathSearches()
 			runSearch(r, w, h, lazyPred(r.cls));
 	});
 	lap(3);
+	g_simPhase = "path searches: apply";
 	// applied in the order asked for
 	static const bool tracePath = getenv("WKB_TRACE_PATH") != nullptr;
 	for (PathRequest* rp : todo) {
@@ -1360,10 +1372,24 @@ void MovementController::walkToNextNode()
 		m_pathNodes.clear();
 }
 
+bool MovementController::boatHeldFast() const
+{
+	const Terrain* trn = Server::instance ? Server::instance->terrain : nullptr;
+	const GameObjBlueprint* bp = m_object->blueprint;
+	if (!trn || !trn->waterFrozen || !bp->canWalkOnWater() || bp->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		return false;
+	return trn->frozenAt(trn->edge + (int)(m_object->position.x / 5.0f), trn->edge + (int)(m_object->position.z / 5.0f));
+}
+
 void MovementController::updateMovement()
 {
 	// check if Movement is done, if yes, go to next path node...
 	if (!m_started) return;
+	// (the ice closing round a boat under way stops it)
+	if (boatHeldFast()) {
+		stopMovement();
+		return;
+	}
 	if (!m_object->movement.isMoving() || (m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() < 0.01f) {
 		m_pathNodes.pop_back();
 		walkToNextNode();

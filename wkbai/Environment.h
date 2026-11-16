@@ -56,6 +56,12 @@ struct EnvironmentSettings {
 	// tests); below 0 not chosen yet: the year 1000's for startSeason (HistoricMoonAge)
 	int moonPhase = 0;
 	float moonStart = -1.0f;
+	// the peasants' lodging (PeasantLodging.h): "peasantsSleep" (with day and night) the peasants
+	// go into their own houses, villages, manors and castles at dusk and back to work at dawn;
+	// "farmersWinter" (with the seasons) the farmers go in at winter's first dusk and stay until
+	// spring's first dawn. Off here (a save or recording without them: as before); the lobby's
+	// default is on
+	bool peasantsSleep = false, farmersWinter = false;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
 	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it
@@ -118,6 +124,28 @@ struct EnvironmentState {
 // ones still out on deep water go through it and drown
 constexpr float ICE_WALKABLE = 0.85f, ICE_BREAKS = 0.5f;
 
+// The sea's ice: the rivers and lakes freeze over whole, the open sea only from its coasts out, as
+// far as the winter is hard (a gentle one: none; a normal one: about 6 tiles; a harsh one: about
+// 16), growing with the ice. Never the whole sea; its edge follows the coast (each tile's
+// distance to the nearest land), wandering by SeaIceEdge, so it is no straight line. The
+// terrain shader draws the same edge (SeaIceEdge there), the path finding holds boats in it.
+float SeaIceReach(int severity, float ice);           // tiles from the coast
+float SeaIceEdge(float wx, float wz, float reach);    // the edge's wander at a world position, tiles
+// per tile of a terrain (row order, width x height): each water tile's distance to the nearest
+// land in quarter tiles (land 0, at most 255)
+std::vector<uint8_t> BuildCoastDistance(const Terrain* t);
+// the terrain's open sea and coast distances (Terrain::seaTiles, coastTiles), once
+void PrepareSeaIce(Terrain* t);
+// The open sea (BuildWaterFlow's: wide water reaching the edge) kept only where it is a sea: some
+// of its water at least 8 tiles from any shore, and along a good stretch of the edge (at least 40
+// tiles and an eighth of it); a river, however wide, crosses the edge only over its width (the
+// Great River had counted as a sea: blue in a flood, the play test of 2026-11-12). sea: per tile,
+// nonzero in the open sea (BuildWaterFlow's), cleared in the pieces that are rivers; coast:
+// BuildCoastDistance's
+void KeepOpenSea(const Terrain* t, std::vector<uint8_t>& sea, const std::vector<uint8_t>& coast);
+// the open sea of a terrain as kept (per tile 1 sea, 0 not)
+std::vector<uint8_t> OpenSeaTiles(Terrain* t);
+
 // The land that floods (the server's floods and the client's picture of them, the same tiles):
 // spread out from the shores, tile by tile (4 neighbours), up to 10 tiles from the water, over
 // the land less than 4 m above the water it spreads from and not more than 1.5 m below it (so not
@@ -170,6 +198,17 @@ extern uint64_t g_cloudFrontArrivalTicks;
 float EnvDayFraction(const EnvironmentSettings& s, float time);
 float EnvYearFraction(const EnvironmentSettings& s, float time);
 
+// The day's temperature curve (the server's, ServerEnvironment::update): -1 at its coldest, half
+// an hour before sunrise (hours, 0-24: SunState::sunrise), +1 at its warmest at 14:30; a half
+// cosine up through the morning and a longer one down through the evening and the night, so it
+// is smooth (no kinks at the turns) and its mean over the day is 0 (the season's mean stays the
+// day's mean)
+float DiurnalShape(float hour, float sunrise);
+// its half range in degrees (the mean to the warmest): by the season (a smooth curve over the
+// year, 7 in midsummer, 4.5 in midwinter; 6 without the seasons), smaller under clouds (40% left
+// overcast) and in fog
+float DiurnalAmplitude(float yearFraction, bool seasons, float cloudCover, float fog);
+
 // the temperature in the chosen scale, with its unit ("12 °C" in plain ASCII: "12 C")
 float ConvertTemperature(float celsius, int scale);
 std::string FormatTemperature(float celsius, int scale);
@@ -202,6 +241,7 @@ struct EnvironmentView {
 	// as drawn: rain and snowfall while their clouds are overhead (PrecipitationShown)
 	float rainShown = 0.0f, snowShown = 0.0f;
 	float wetness = 0.0f, snowCover = 0.0f, ice = 0.0f, waterRise = 0.0f;
+	int severity = 1; // the season's: 0 gentle, 1 normal, 2 harsh (the sea's ice: SeaIceReach)
 	float lightningFlash = 0.0f;  // 0..1, this frame
 	Vector3 lightningPos;
 	Vector3 wind{ 0.3f, 0.0f, 0.1f }; // metres per second of the falling rain and snow

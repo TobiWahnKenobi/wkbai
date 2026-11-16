@@ -635,6 +635,10 @@ struct DiligentRenderer : DiligentGfx
 	RefCntAutoPtr<IBuffer> softBuffer, decalBuffer;
 	RefCntAutoPtr<IPipelineState> decalPipeline;
 	bool softParticles = false, decalsFailed = false, prepassOrtho = false;
+	// the models' screen-space reflections' frame before (shadows.prevScene): the colour target
+	// copied after the water (MarkWaterDone) and the frame it was copied in
+	RefCntAutoPtr<ITexture> prevSceneTex;
+	uint64_t prevSceneFrame = ~0ull;
 	float prepassProj[6] = {};
 	Matrix prepassInvView;
 	std::map<uint32_t, RefCntAutoPtr<IPipelineState>> pipelines;
@@ -1045,6 +1049,26 @@ struct DiligentRenderer : DiligentGfx
 	void FinishLightingPrepass(const Camera& camera) override
 	{
 		shadows.lightRtMask = shadows.lightAo = nullptr;
+		// the models' reflections: this frame's depth and view-projection, the frame just before
+		// (none after a skipped frame or a resize), Ultra's rays
+		shadows.lightingDepth = post->lightingDepth()->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+		shadows.viewProj = camera.sceneMatrix.getTranspose();
+		shadows.prevScene = nullptr;
+		shadows.modelRtReflections = nullptr;
+		if (shadows.modelReflections >= 1 && !camera.orthoMode && prevSceneTex && prevSceneFrame + 1 == frame
+			&& prevSceneTex->GetDesc().Width == post->lightingDepth()->GetDesc().Width
+			&& prevSceneTex->GetDesc().Height == post->lightingDepth()->GetDesc().Height) {
+			shadows.prevScene = prevSceneTex->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+			if (shadows.modelReflections >= 2 && shadows.modelRtReflectionsOn && shadows.rayShadows && shadows.rayShadows->valid()) {
+				const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
+				PROFILE_SCOPE("RT model reflections");
+				shadows.modelRtReflections = shadows.rayShadows->renderModelReflections(ctx, post->lightingDepth(), proj,
+					camera.viewMatrix.getInverse4x3(), shadows.viewProj, prevSceneTex, shadows.prevViewProj);
+			}
+		}
+		if (getenv("WKBAI_MODEL_DEBUG") && frame % 60 == 0)
+			printf("MODELDBG reflections %d: prevScene %d (copied in %llu, frame %llu), rt %d\n", shadows.modelReflections, shadows.prevScene != nullptr,
+				(unsigned long long)prevSceneFrame, (unsigned long long)frame, shadows.modelRtReflections != nullptr);
 		if (shadows.rayShadowsOn && shadows.rayShadows && shadows.rayShadows->valid()) {
 			const float proj[4] = { camera.projMatrix._11, camera.projMatrix._22, camera.projMatrix._33, camera.projMatrix._43 };
 			PROFILE_SCOPE("RT shadow mask");
@@ -1124,6 +1148,38 @@ struct DiligentRenderer : DiligentGfx
 		s.fovY = camera.fovY;
 		s.frameTimeMs = std::chrono::duration<float, std::milli>(now - lastApply).count();
 		lastApply = now;
+		// the weather's own looks: a heatwave's shimmer by day, a rainbow
+		{
+			static float clock = 0.0f, rainLeft = 0.0f;
+			const float dt = std::clamp(s.frameTimeMs / 1000.0f, 0.0f, 0.1f);
+			clock = std::fmod(clock + dt, 3600.0f);
+			s.clockSeconds = clock;
+			const EnvironmentView& ev = g_environment;
+			const float daylight = ev.active ? ev.sun.daylight : 0.0f;
+			if (g_renderSettings.heatShimmer && ev.active && ev.weather == WEATHER_HEATWAVE)
+				s.heatShimmer = std::clamp((ev.temperatureC - 24.0f) / 8.0f, 0.0f, 1.0f) * daylight;
+			// A rainbow wants drops in the air (rain falling, or just past: its memory fades over a
+			// minute and a half), the sun shining through broken cloud, low enough (under 42
+			// degrees, else the bow is under the horizon), above it, and no snow; moister air,
+			// more drops: a little stronger
+			rainLeft = ev.active ? std::max(rainLeft - dt / 90.0f, std::clamp(ev.rain * 2.5f, 0.0f, 1.0f)) : 0.0f;
+			static const float forced = g_settings.value<float>("rainbowForce", 0.0f); // (test runs)
+			if (g_renderSettings.rainbows && ev.active) {
+				const Vector3 sun = ev.sunWorld.sqlen3() > 1e-6f ? ev.sunWorld.normal() : Vector3(0, -1, 0);
+				const float e = sun.y;
+				auto smooth = [](float a, float b, float x) { const float t = std::clamp((x - a) / (b - a), 0.0f, 1.0f); return t * t * (3 - 2 * t); };
+				const float high = smooth(0.0f, 0.06f, e) * (1.0f - smooth(0.55f, 0.67f, e));
+				const float through = std::clamp((0.92f - ev.cloudCover) / 0.3f, 0.0f, 1.0f);
+				const float drops = std::max(rainLeft, forced) * (0.6f + 0.4f * std::clamp(ev.humidity, 0.0f, 1.0f));
+				const float strength = drops * std::max(through, forced) * high * (1.0f - std::clamp(ev.snowShown * 3.0f, 0.0f, 1.0f)) * std::clamp(ev.temperatureC - 0.5f, 0.0f, 1.0f);
+				if (strength > 0.001f) {
+					s.rainbow[0] = -sun.x;
+					s.rainbow[1] = -sun.y;
+					s.rainbow[2] = -sun.z;
+					s.rainbow[3] = strength;
+				}
+			}
+		}
 		if (!postEffects) {
 			s.ssao = s.bloom = false;
 			s.motionBlur = 0.0f;
@@ -1240,6 +1296,34 @@ struct DiligentRenderer : DiligentGfx
 
 	void MarkWaterDone() override
 	{
+		// the frame for the next one's reflections on the models: the scene up to the water and
+		// the waterfalls (not the particles or the interface), with its view-projection
+		if (postActive && shadows.modelReflections >= 1 && !shadows.portraitPass && shadows.lightPrepass) {
+			ITexture* target = currentColorTarget() ? currentColorTarget()->GetTexture() : nullptr;
+			if (target && target->GetDesc().SampleCount == 1) {
+				const TextureDesc& td = target->GetDesc();
+				if (!prevSceneTex || prevSceneTex->GetDesc().Width != td.Width || prevSceneTex->GetDesc().Height != td.Height
+					|| prevSceneTex->GetDesc().Format != td.Format) {
+					TextureDesc cd;
+					cd.Name = "Frame before (model reflections)";
+					cd.Type = RESOURCE_DIM_TEX_2D;
+					cd.Width = td.Width;
+					cd.Height = td.Height;
+					cd.Format = td.Format;
+					cd.BindFlags = BIND_SHADER_RESOURCE;
+					prevSceneTex.Release();
+					device->CreateTexture(cd, nullptr, &prevSceneTex);
+				}
+				if (prevSceneTex) {
+					ctx->SetRenderTargets(0, nullptr, nullptr, RESOURCE_STATE_TRANSITION_MODE_NONE);
+					CopyTextureAttribs copy(target, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, prevSceneTex, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+					ctx->CopyTexture(copy);
+					RestoreRenderTargets();
+					prevSceneFrame = frame;
+					shadows.prevViewProj = shadows.viewProj;
+				}
+			}
+		}
 		if (!postActive || !fsr3Active)
 			return;
 		post->copyAfterWater(ctx);
@@ -1415,6 +1499,16 @@ struct DiligentRenderer : DiligentGfx
 			if (!dxc.empty())
 				eci.pDxCompilerPath = dxc.c_str();
 			if (adapter >= 0) eci.AdapterId = (Uint32)adapter;
+			// The shader-visible CBV/SRV/UAV heap, 8 times Diligent's defaults (16384 static, 8192
+			// dynamic): every commit of a binding with DYNAMIC variables takes fresh descriptors,
+			// for every frame in flight. Extend map's terrain shadows (farHorizonA/B) in the
+			// environment binding and an animated HD model drawn group by group (the Blacksmith's
+			// bellows, a constant buffer mapped between the groups) used up the 8192 within a
+			// frame; the allocation then came back empty and CopyDescriptorsSimple read address 0
+			// in CommitRootTables (2026-11-14). 131072 descriptors take about 4 MB; D3D12 allows a
+			// million. (The sampler heap stays: static + dynamic must not pass 2048.)
+			eci.GPUDescriptorHeapSize[0] = 65536;
+			eci.GPUDescriptorHeapDynamicSize[0] = 65536;
 			factory->CreateDeviceAndContextsD3D12(eci, &device, contexts);
 			ctx.Attach(contexts[0]);
 			if (!device)
@@ -1550,6 +1644,9 @@ struct DiligentRenderer : DiligentGfx
 	void BeginDrawing() override
 	{
 		shadows.rayShadowsOn = shadows.rayReflectionsOn = false; // until the client interface asks for them this frame
+		shadows.modelReflections = 0;
+		shadows.modelRtReflectionsOn = false;
+		shadows.lightingDepth = shadows.prevScene = shadows.modelRtReflections = nullptr;
 		{
 			// the per-pass timings (GpuProfiler): the frames whose stamps are in, this frame's
 			const auto now = std::chrono::steady_clock::now();

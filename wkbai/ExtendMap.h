@@ -32,7 +32,10 @@ int ExtendMapFarRings(int setting);
 // on water. Blocks: index ranges with their bounding boxes, for culling.
 // horizon: the land's height round the vertex seen from it, an angle per 45 degrees of the compass
 // (from +x towards +z; a byte, 254 straight up), 4 to a word; all 255: none worked out
-struct FarVertex { float x, y, z; uint32_t normal, colour; uint32_t horizon[2] = { ~0u, ~0u }; };
+// water (its surface's vertices): the low byte 255 fresh water (a river's, a lake's: it freezes
+// over whole and muddies in a flood), 0 the sea's; the high 16 bits the distance to the coast in
+// quarter tiles (the sea's ice reaches out from it, SeaIceReach)
+struct FarVertex { float x, y, z; uint32_t normal, colour; uint32_t horizon[2] = { ~0u, ~0u }; uint32_t water = 0; };
 struct FarBlock { uint32_t first, count; float lo[3], hi[3]; };
 struct FarTerrain {
 	std::vector<FarVertex> vertices;

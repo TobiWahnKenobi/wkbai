@@ -330,7 +330,7 @@ void AIController::weatherUpdate()
 	}
 
 	// ---- The ice: off the deep water before it thaws ----
-	if (seasons && env.state.ice > 0.05f && env.state.temperatureC > -1.0f) {
+	if (seasons && env.state.ice > 0.05f && env.iceTemperature() > -1.0f) {
 		for (ServerGameObject* u : units) {
 			if (!env.onDeepWater(u->position))
 				continue;
@@ -494,7 +494,7 @@ bool AIController::weatherHoldsWave(const Vector3& base, ServerGameObject* targe
 		if ((cold < -3.0f && coldRate * walk > 60.0f) || (heat > 33.0f && heatRate * walk > 60.0f))
 			return hold(wavesHeldCold);
 		// over the ice near the thaw: the straight way crosses deep water
-		if (env.state.ice > 0.05f && env.state.temperatureC > -2.0f) {
+		if (env.state.ice > 0.05f && env.iceTemperature() > -2.0f) {
 			const int steps = (int)(dist / 5.0f);
 			for (int i = 1; i < steps; i++)
 				if (env.onDeepWater(base + (target->position - base) * ((float)i / steps)))

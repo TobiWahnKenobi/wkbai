@@ -62,6 +62,9 @@ void Mesh::loadMesh3(const char* filename)
 	LoadFile(filename, &fcnt, &fsize);
 	BinaryReader br(fcnt);
 	exactNormals.clear();
+	smokeEmitters.clear();
+	smokeDeclared = false;
+	dripEmitters.clear();
 	std::string sign = br.readString(4);
 	if (sign != "Mesh")
 		return;

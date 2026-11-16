@@ -2,12 +2,21 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
-// Writing save games and levels, in the original's text format (the "FORMAT SCENARIO" files of
-// Save_Games): what Server::loadSaveGame reads back, and what the original game loads (checked
-// with its Load Game: it needs GAME_TYPE, PREDEC wrapped as it wraps it, the LANDSCAPE object and
-// every pair's diplomacy). The client state's camera is the player's start camera.
+// Writing save games and levels. The world is the original's text format (the "FORMAT SCENARIO"
+// files of Save_Games): what Server::loadSaveGame reads back, and what the original game loads
+// (checked with its Load Game: it needs GAME_TYPE, PREDEC wrapped as it wraps it, the LANDSCAPE
+// object and every pair's diplomacy). The client state's camera is the player's start camera.
+//
+// A save game is a wkbai save file (SaveFile.h): the world and wkbai's own state as sections. A
+// level (the map editor's), or a save with saveOriginalFormat, is the world alone in the
+// original's format, with wkbai's state in side files beside it as before 2026-11-13.
 
 #include "server.h"
+#include "SaveFile.h"
+#include "settings.h"
+#include <nlohmann/json.hpp>
+#include "network.h"
+#include <cmath>
 #include "Order.h"
 #include "AIController.h"
 #include "gameset/gameset.h"
@@ -24,20 +33,68 @@
 
 namespace {
 	struct SaveWriter {
-		FILE* f;
+		std::string& out;
 		const GameSet& gs;
 		int depth = 0;
 
 		void line(const char* fmt, ...) {
-			for (int i = 0; i < depth; i++)
-				fputc('\t', f);
+			out.append(depth, '\t');
 			va_list args;
 			va_start(args, fmt);
-			vfprintf(f, fmt, args);
+			char buf[2048];
+			va_list copy;
+			va_copy(copy, args);
+			const int n = vsnprintf(buf, sizeof(buf), fmt, copy);
+			va_end(copy);
+			if (n >= 0 && n < (int)sizeof(buf))
+				out.append(buf, n);
+			else if (n > 0) {
+				std::string big(n + 1, '\0');
+				vsnprintf(big.data(), big.size(), fmt, args);
+				out.append(big.data(), n);
+			}
 			va_end(args);
-			fputc('\n', f);
+			out += '\n';
 		}
 	};
+
+	// The sections of wkbai's settings text (Server::aiSettingsText's "name=value" lines) by
+	// their names: the players' state, what is disguised or revealed, else the game's settings
+	int settingsPart(const std::string& line)
+	{
+		auto starts = [&](const char* prefix) { return line.rfind(prefix, 0) == 0; };
+		if (starts("finished.") || starts("aiScript.") || starts("chatPersonality.") || starts("diplomacyWindow."))
+			return 1;
+		if (starts("disguise.") || starts("fogReveal."))
+			return 2;
+		return 0;
+	}
+	const char* const SETTINGS_SECTIONS[3] = { "settings", "players", "visibility" };
+
+	// a file's whole contents (empty if it isn't there)
+	std::string readFile(const std::string& path)
+	{
+		if (!FileExists(path.c_str()))
+			return std::string();
+		char* text = nullptr;
+		int size = 0;
+		LoadFile(path.c_str(), &text, &size);
+		std::string all(text, size);
+		free(text);
+		return all;
+	}
+
+	bool writeFile(const std::filesystem::path& path, const std::string& text, bool textMode)
+	{
+		FILE* f = _wfopen(path.c_str(), textMode ? L"w" : L"wb");
+		if (!f)
+			return false;
+		const bool ok = fwrite(text.data(), 1, text.size(), f) == text.size() && !ferror(f);
+		return fclose(f) == 0 && ok;
+	}
+
+	// The side files of an original-format save, or of an older wkbai save
+	const char* const SIDE_FILES[8] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -318,10 +375,9 @@ bool Server::saveGame(const char* filename)
 	const std::filesystem::path path = PathFromUtf8(filename);
 	std::error_code ec;
 	std::filesystem::create_directories(path.parent_path(), ec);
-	FILE* f = _wfopen(path.c_str(), L"w");
-	if (!f)
-		return false;
-	SaveWriter w{ f, *gameSet };
+	std::string world;
+	world.reserve(4 << 20);
+	SaveWriter w{ world, *gameSet };
 	w.line("FORMAT SCENARIO");
 	w.line("VERSION 1.0");
 	w.line("MODE TEXT");
@@ -364,6 +420,8 @@ bool Server::saveGame(const char* filename)
 	w.depth--;
 	w.line("END_TIME_MANAGER_STATE");
 	w.line("");
+	// (the landscape's id is given when the game is loaded, Server::loadSaveGame: given here, the first
+	// save took an id, and every object made after it had another id than in the same game unsaved)
 	if (!landscapeId)
 		landscapeId = nextUniqueId++;
 	w.line("NEXT_UNIQUE_ID %u", nextUniqueId);
@@ -457,96 +515,218 @@ bool Server::saveGame(const char* filename)
 				w.line("END_CLIENT_STATE");
 			}
 	}
-	const bool ok = !ferror(f);
-	fclose(f);
-	// the game's settings (wkbai's own: the lobby's that the save game itself doesn't hold, the
-	// AI's options, cheat mode) and the players' Lua AIs, beside it: <save>.ai.txt; in single
-	// player and multiplayer alike (before 2026-11-07 the scripts only; the play test: a loaded
-	// game lost its cheat mode)
-	{
-		const std::string scripts = savingLevel ? std::string() : aiSettingsText();
-		std::filesystem::path side = path;
-		side += ".ai.txt";
-		if (!scripts.empty()) {
-			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
-				fwrite(scripts.data(), 1, scripts.size(), sf);
-				fclose(sf);
-			}
+	// wkbai's own state, none in a level:
+	// - the game's settings (the lobby's that the world doesn't hold, the AI's options, cheat
+	//   mode), the players' state (Lua AIs, game over, chat personalities, diplomacy buttons) and
+	//   the disguises and fog reveals: Server::aiSettingsText (before 2026-11-07 the scripts only;
+	//   the play test: a loaded game lost its cheat mode);
+	// - day and night, seasons and weather (or only the game's sky);
+	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
+	//   id> <target> <path> <point> <tried>" each;
+	// - the unit history (UnitHistory).
+	std::string settings, environmentText, paths, history, movements, government, discovered, intensity;
+	if (!savingLevel) {
+		movements = movementSaveText();
+		discovered = DiscoveredSaveText();
+		government = ministries.saveText();
+		settings = aiSettingsText();
+		const EnvironmentSettings& es = environment.settings;
+		if (environment.enabled() || es.skyWeather != 0 || es.skyCover != 45)
+			environmentText = environment.saveText();
+		for (const auto& [id, cobj] : idmap) {
+			const ServerGameObject* obj = (const ServerGameObject*)cobj;
+			if (obj->deleted)
+				continue;
+			for (const Order& order : obj->orderConfig.orders)
+				for (const auto& task : order.tasks)
+					if (task->pathChosen) {
+						char line[96];
+						snprintf(line, sizeof(line), "%u %d %d %u %d %zu %d\n", obj->id, order.id, task->id, task->pathTargetId,
+							task->pathNo, task->pathStep, (int)task->pathStepTried);
+						paths += line;
+					}
 		}
-		else
-			std::filesystem::remove(side, ec);
+		history = UnitHistory::saveText(*this);
+		// the intensity maps (IntensityMaps): what the players had seen, the maps on
+		intensity = intensityMaps.saveText();
 	}
-	// wkbai's day and night, seasons and weather (wkbai's own), beside it: <save>.env.txt
-	{
-		std::filesystem::path side = path;
-		side += ".env.txt";
-		const EnvironmentSettings& es = environment.settings; // (or only the game's sky)
-		if ((environment.enabled() || es.skyWeather != 0 || es.skyCover != 45) && !savingLevel) {
-			const std::string text = environment.saveText();
-			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
-				fwrite(text.data(), 1, text.size(), sf);
-				fclose(sf);
-			}
+
+	auto sidePath = [&](const char* ext) { std::filesystem::path side = path; side += ext; return side; };
+	const bool original = savingLevel || saveOriginalFormat || g_settings.value("saveFormat", std::string()) == "original";
+	if (original) {
+		// the original's format (text mode: its line breaks), with wkbai's state beside it in
+		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt and .ministries.txt (none for a level)
+		const bool ok = writeFile(path, world, true);
+		const std::string* sides[8] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity };
+		for (int i = 0; i < 8; i++) {
+			if (!sides[i]->empty())
+				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
+			else
+				std::filesystem::remove(sidePath(SIDE_FILES[i]), ec);
 		}
-		else
-			std::filesystem::remove(side, ec);
+		return ok;
 	}
-	// the workers' attachment paths (wkbai's own, RestoreAttachmentPath), beside it:
-	// <save>.paths.txt, a line "<object> <order id> <task id> <target> <path> <point> <tried>" each
+	// wkbai's save file: every part a section, in the order the loader applies them
+	SaveFile file;
+	file.add("world", 1, std::move(world));
 	{
-		std::string text;
-		if (!savingLevel)
-			for (const auto& [id, cobj] : idmap) {
-				const ServerGameObject* obj = (const ServerGameObject*)cobj;
-				if (obj->deleted)
-					continue;
-				for (const Order& order : obj->orderConfig.orders)
-					for (const auto& task : order.tasks)
-						if (task->pathChosen) {
-							char line[96];
-							snprintf(line, sizeof(line), "%u %d %d %u %d %zu %d\n", obj->id, order.id, task->id, task->pathTargetId,
-								task->pathNo, task->pathStep, (int)task->pathStepTried);
-							text += line;
-						}
-			}
-		std::filesystem::path side = path;
-		side += ".paths.txt";
-		if (!text.empty()) {
-			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
-				fwrite(text.data(), 1, text.size(), sf);
-				fclose(sf);
-			}
+		std::string parts[3];
+		size_t start = 0;
+		while (start < settings.size()) {
+			size_t end = settings.find('\n', start);
+			if (end == std::string::npos)
+				end = settings.size();
+			const std::string line = settings.substr(start, end - start);
+			start = end + 1;
+			if (!line.empty())
+				parts[settingsPart(line)] += line + "\n";
 		}
-		else
-			std::filesystem::remove(side, ec);
+		for (int i = 0; i < 3; i++)
+			file.add(SETTINGS_SECTIONS[i], 1, std::move(parts[i]));
 	}
-	// the intensity maps (IntensityMaps), beside it: <save>.intensity.txt
-	{
-		const std::string text = savingLevel ? std::string() : intensityMaps.saveText();
-		std::filesystem::path side = path;
-		side += ".intensity.txt";
-		if (!text.empty()) {
-			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
-				fwrite(text.data(), 1, text.size(), sf);
-				fclose(sf);
-			}
-		}
-		else
-			std::filesystem::remove(side, ec);
-	}
-	// wkbai's unit history (UnitHistory), beside it: <save>.history.txt
-	{
-		const std::string text = savingLevel ? std::string() : UnitHistory::saveText(*this);
-		std::filesystem::path side = path;
-		side += ".history.txt";
-		if (!text.empty()) {
-			if (FILE* sf = _wfopen(side.c_str(), L"wb")) {
-				fwrite(text.data(), 1, text.size(), sf);
-				fclose(sf);
-			}
-		}
-		else
-			std::filesystem::remove(side, ec);
-	}
+	file.add("environment", 1, std::move(environmentText));
+	file.add("paths", 1, std::move(paths));
+	file.add("history", 1, std::move(history));
+	file.add("movement", 1, std::move(movements));
+	file.add("ai", 1, std::move(government));
+	file.add("discovered", 1, std::move(discovered));
+	file.add("intensity", 1, std::move(intensity));
+	const bool ok = writeFile(path, file.write(), false);
+	// an older save's side files of the same name would be stale: everything is in the file now
+	if (ok)
+		for (const char* ext : SIDE_FILES)
+			std::filesystem::remove(sidePath(ext), ec);
 	return ok;
+}
+
+Server::SaveParts Server::ReadSaveParts(const char* filename)
+{
+	SaveParts parts;
+	char* data = nullptr;
+	int size = 0;
+	LoadFile(filename, &data, &size);
+	std::string all(data, size);
+	free(data);
+	if (!SaveFile::IsSaveFile(all)) {
+		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
+		parts.world = std::move(all);
+		std::string* sides[8] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity };
+		for (int i = 0; i < 8; i++)
+			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
+		return parts;
+	}
+	parts.saveFile = true;
+	SaveFile file;
+	std::string error;
+	if (!file.read(all, error))
+		printf("Save game %s is damaged (%s); loading what could be read\n", filename, error.c_str());
+	// the sections this build reads, with the newest version it knows
+	struct Known { const char* name; std::string* text; };
+	const Known known[] = { { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
+		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
+		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity } };
+	for (const SaveSection& s : file.sections) {
+		const Known* k = nullptr;
+		for (const Known& candidate : known)
+			if (s.name == candidate.name)
+				k = &candidate;
+		if (!k) {
+			printf("Save game %s: section %s (version %d) skipped: this build doesn't know it\n", filename, s.name.c_str(), s.version);
+			continue;
+		}
+		if (s.version > 1) {
+			printf("Save game %s: section %s is version %d, this build reads 1: skipped\n", filename, s.name.c_str(), s.version);
+			continue;
+		}
+		*k->text += s.text;
+	}
+	return parts;
+}
+
+// The walks going on (the movement section): "<id> <controller walking> <pending> <requested x y z>
+// <path nodes n> <x y z>... <segment walking> <from x y z> <to x y z> <start time> <speed>
+// <current speed>" a line each, ids ascending. Without it a loaded unit searched its path again a
+// step late and walked another way (test 73: 3 of 8 woodcutters up to 5 m off after 30 s).
+std::string Server::movementSaveText() const
+{
+	std::vector<const ServerGameObject*> walking;
+	for (const auto& [id, cobj] : idmap) {
+		const ServerGameObject* obj = (const ServerGameObject*)cobj;
+		if (obj && !obj->deleted && (obj->movement.isMoving() || obj->movementController.m_started || obj->movementController.m_pending))
+			walking.push_back(obj);
+	}
+	std::sort(walking.begin(), walking.end(), [](auto* a, auto* b) { return a->id < b->id; });
+	std::string text;
+	char buf[160];
+	auto v3 = [&](const Vector3& v) { snprintf(buf, sizeof(buf), " %.9g %.9g %.9g", v.x, v.y, v.z); text += buf; };
+	for (const ServerGameObject* obj : walking) {
+		const MovementController& mc = obj->movementController;
+		const Movement& m = obj->movement;
+		snprintf(buf, sizeof(buf), "%u %d %d", obj->id, (int)mc.m_started, (int)mc.m_pending);
+		text += buf;
+		v3(mc.m_requested);
+		text += " " + std::to_string(mc.m_pathNodes.size());
+		for (const Vector3& node : mc.m_pathNodes)
+			v3(node);
+		text += m.isMoving() ? " 1" : " 0";
+		v3(m.getSource());
+		v3(m.getDestination());
+		snprintf(buf, sizeof(buf), " %.9g %.9g %.9g\n", m.isMoving() ? m.getStartTime() : 0.0f, m.isMoving() ? m.getSpeed() : 0.0f, obj->currentSpeed);
+		text += buf;
+	}
+	return text;
+}
+
+void Server::restoreMovements(const std::string& text)
+{
+	size_t at = 0;
+	while (at < text.size()) {
+		size_t end = text.find('\n', at);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = text.substr(at, end - at);
+		at = end + 1;
+		const char* c = line.c_str();
+		char* e = nullptr;
+		auto num = [&]() { const double v = strtod(c, &e); const bool ok = e != c; c = e; return ok ? v : NAN; };
+		auto vec = [&]() { const float x = (float)num(), y = (float)num(), z = (float)num(); return Vector3(x, y, z); };
+		const uint32_t id = (uint32_t)num();
+		ServerGameObject* obj = findObject(id);
+		if (!obj || obj->deleted)
+			continue;
+		const bool started = num() != 0, pending = num() != 0;
+		const Vector3 requested = vec();
+		const double count = num();
+		if (!(count >= 0 && count < 100000))
+			continue;
+		std::vector<Vector3> nodes((size_t)count);
+		for (Vector3& node : nodes)
+			node = vec();
+		const bool moving = num() != 0;
+		const Vector3 from = vec(), to = vec();
+		const float startTime = (float)num(), speed = (float)num(), currentSpeed = (float)num();
+		if (std::isnan(currentSpeed))
+			continue; // a line cut short
+		MovementController& mc = obj->movementController;
+		mc.m_requested = requested;
+		if (pending) {
+			// (saved between steps a search is never pending; asked again, as when it was)
+			mc.startMovement(requested);
+			continue;
+		}
+		mc.m_started = started;
+		mc.m_pathNodes = std::move(nodes);
+		if (moving && speed > 0.0f) {
+			obj->movement.startMovement(from, to, startTime, speed);
+			obj->currentSpeed = currentSpeed;
+			// the clients' walk, from where the unit stands now
+			NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };
+			npw.writeUint32(obj->id);
+			npw.writeVector3(obj->position);
+			npw.writeVector3(to);
+			npw.writeFloat(timeManager.currentTime);
+			npw.writeFloat(speed);
+			sendToAll(npw);
+		}
+	}
 }

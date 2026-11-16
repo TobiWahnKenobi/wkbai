@@ -10,6 +10,7 @@
 #include <vector>
 #include "Environment.h"
 #include "GameObjectRef.h"
+#include "PeasantLodging.h"
 
 struct Server;
 struct ServerGameObject;
@@ -52,6 +53,13 @@ struct ServerEnvironment {
 	// harms; above 30 C the heat exposure grows, above 34 C it harms
 	float coldFeel() const;
 	float heatFeel() const;
+	// the day's mean temperature (the season's and the weather's, without the day's swing:
+	// EnvironmentState::temperatureC has it), and what the ice and the snow cover answer to: the
+	// mean with a quarter (the ice) or half (the snow's thaw) of the swing, as the water and the
+	// ground are slow to warm and cool, so a frozen lake does not thaw every sunny afternoon
+	float dailyMeanTemperature() const { return temperatureBase; }
+	float iceTemperature() const { return temperatureBase + 0.25f * (state.temperatureC - temperatureBase); }
+	float meltTemperature() const { return temperatureBase + 0.5f * (state.temperatureC - temperatureBase); }
 	// a unit's cold and heat exposure (0-200; over 100 it is harmed)
 	float coldExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.cold : 0.0f; }
 	float heatExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.heat : 0.0f; }
@@ -73,9 +81,14 @@ struct ServerEnvironment {
 	// the burning land's patches
 	std::vector<Vector3> firePositions() const;
 
-	// a save game's side file (<save>.env.txt): the settings and the state, read back as is
+	// the peasants' lodging at night and in winter (PeasantLodging.h)
+	PeasantLodging lodging;
+
+	// the save file's environment section (an older save's side file <save>.env.txt): the settings
+	// and the state, read back as is; the lodging's units after the world is loaded
 	std::string saveText() const;
 	void loadText(const std::string& text);
+	void afterWorldLoaded(Server& server) { lodging.afterLoad(server); }
 	void reset() { *this = ServerEnvironment(); }
 
 	// for the tests: what happened ("AITEST environment" lines)
@@ -90,6 +103,8 @@ struct ServerEnvironment {
 	// always, the water's level heading there; -1 / a NaN: none
 	int forceWeather = -1;
 	float forceWaterRise = -1000.0f;
+	bool forceWaterRiseNow = false; // (the forced level at once, not risen to)
+	float forceSnowCover = -1.0f, forceIce = -1.0f; // test runs: held (below 0: not)
 	// tests ("environmentForce": { "fireAt": [x, z, after s] }): a flaming missile comes down there
 	// once that many seconds in (the screenshots' fire)
 	float forceFireX = -1, forceFireZ = -1, forceFireAt = -1;
@@ -102,6 +117,9 @@ struct ServerEnvironment {
 	// there), "weather" (an EnvWeather held from now on, -1: chosen again as usual); the clients
 	// are told at once
 	void debugSet(Server& server, const std::string& name, float value);
+	// a new game's clock put at the start hour and season, whatever the map's game time: once,
+	// by the first update or by a debug jump of the clock before it
+	void startClock(float now);
 
 private:
 	float nextUpdate = -1.0f;
@@ -109,7 +127,15 @@ private:
 	int resolvedYear = -1;
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
 	float temperatureTarget = 12.0f;
+	// the day's mean, eased towards temperatureTarget (saved: "temperature"); a save from before
+	// it had none: worked out again from its temperature at the first update (baseKnown false)
+	float temperatureBase = 12.0f;
+	bool baseKnown = true;
+	// how far the heatwave's warm nights have come (0-1, eased; saved on the "temperature" line)
+	float heatNights = 0.0f;
 	bool started = false;
+	// startClock done (not saved: a saved game has started)
+	bool clockStarted = false;
 	bool snapTemperature = false; // the debug panel's jump: the temperature at its target at once
 	bool skySent = false; // (without day and night and the seasons: the clients sent the sky)
 	// each unit's cold and heat exposure (by id: in order, saved)

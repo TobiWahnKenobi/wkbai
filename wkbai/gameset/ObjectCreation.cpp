@@ -73,6 +73,11 @@ void ObjectCreation::run(ServerGameObject * creator, SrvScriptContext* ctx) cons
 	}
 	OrientedPosition opos = createAt ? createAt->eval(ctx) : OrientedPosition({ creator->position, creator->orientation });
 	ServerGameObject* created = Server::instance->spawnObject(type, ctrl, opos.position, opos.rotation);
+	// a building a script creates levels its ground as a stamped-down one does: WKB.exe puts every
+	// building on the map through 0x513790, which collects the FLATTEN tiles' corners (flag 1 to
+	// 0x514790, 0x5149e7) and levels them (0x514a20), wherever the building came from. The farmer's
+	// "Auto Farm" (Peasant Unit.cpp) is one; wkbai levelled only in stampdownObject.
+	Server::instance->levelTerrainUnder(created);
 	// wkbai's unit history: who made it (a missile: who fired it, or the troop in a building)
 	Server::instance->unitHistory.created(*Server::instance, created, creator);
 	if (subordinates) {

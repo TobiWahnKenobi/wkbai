@@ -67,6 +67,12 @@ void RenderSettings::load()
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
 	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
+	snowQuality = std::clamp(g_settings.value<int>("snowQuality", def.snowQuality), 0, 2);
+	farLandCache = g_settings.value<bool>("farLandCache", def.farLandCache);
+	farLandCacheMB = std::clamp(g_settings.value<int>("farLandCacheMB", def.farLandCacheMB), 64, 65536);
+	iceQuality = std::clamp(g_settings.value<int>("iceQuality", def.iceQuality), 0, 2);
+	rainbows = g_settings.value<bool>("rainbows", def.rainbows);
+	heatShimmer = g_settings.value<bool>("heatShimmer", def.heatShimmer);
 	skyGI = g_settings.value<bool>("skyGI", def.skyGI);
 	dynamicGI = std::clamp(g_settings.value<int>("dynamicGI", def.dynamicGI), 0, 3);
 	dynamicGIStrength = std::clamp(g_settings.value<float>("dynamicGIStrength", def.dynamicGIStrength), 0.0f, 3.0f);
@@ -81,6 +87,7 @@ void RenderSettings::load()
 	contactShadows = g_settings.value<bool>("contactShadows", def.contactShadows);
 	rtReflections = g_settings.value<bool>("rtReflections", def.rtReflections);
 	ssReflections = g_settings.value<bool>("ssReflections", def.ssReflections);
+	modelReflections = std::clamp(g_settings.value<int>("modelReflections", def.modelReflections), 0, 2);
 	terrainFresnel = g_settings.value<float>("terrainFresnel", def.terrainFresnel);
 	grass = g_settings.value<bool>("grass", def.grass);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
@@ -172,6 +179,12 @@ void RenderSettings::save()
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
 	g_settings["weatherEffects"] = weatherEffects;
+	g_settings["snowQuality"] = snowQuality;
+	g_settings["farLandCache"] = farLandCache;
+	g_settings["farLandCacheMB"] = farLandCacheMB;
+	g_settings["iceQuality"] = iceQuality;
+	g_settings["rainbows"] = rainbows;
+	g_settings["heatShimmer"] = heatShimmer;
 	g_settings["skyGI"] = skyGI;
 	g_settings["dynamicGI"] = dynamicGI;
 	g_settings["dynamicGIStrength"] = dynamicGIStrength;
@@ -186,6 +199,7 @@ void RenderSettings::save()
 	g_settings["contactShadows"] = contactShadows;
 	g_settings["rtReflections"] = rtReflections;
 	g_settings["ssReflections"] = ssReflections;
+	g_settings["modelReflections"] = modelReflections;
 	g_settings["terrainFresnel"] = terrainFresnel;
 	g_settings["grass"] = grass;
 	g_settings["terrainTessellation"] = terrainTessellation;

@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "terrain.h"
+#include "Environment.h"
 #include "file.h"
 #include "util/util.h"
 #include "util/GSFileParser.h"
@@ -51,13 +52,26 @@ float Terrain::getSmoothHeight(float ipx, float ipz) const
 	return spline(row[0], row[1], row[2], row[3], fz);
 }
 
+bool Terrain::frozenAt(int tx, int tz) const
+{
+	if (!waterFrozen || tx < 0 || tz < 0 || tx >= (int)width || tz >= (int)height)
+		return false;
+	const size_t i = (size_t)tz * width + tx;
+	if (seaTiles.size() != (size_t)width * height || coastTiles.size() != seaTiles.size() || !seaTiles[i])
+		return true;
+	if (seaIceReach <= 0.0f)
+		return false;
+	const float wx = ((float)(tx - (int)edge) + 0.5f) * 5.0f, wz = ((float)(tz - (int)edge) + 0.5f) * 5.0f;
+	return coastTiles[i] / 4.0f + SeaIceEdge(wx, wz, seaIceReach) <= seaIceReach;
+}
+
 float Terrain::getHeightEx(float x, float z, bool floatOnWater) const
 {
 	float h = getHeight(x, z);
 	if (floatOnWater || waterFrozen) {
 		int ix = (int)(edge + x / 5.0f);
 		int iz = (int)(edge + z / 5.0f);
-		if (ix >= 0 && ix < width && iz >= 0 && iz < height) {
+		if (ix >= 0 && ix < width && iz >= 0 && iz < height && (floatOnWater || frozenAt(ix, iz))) {
 			if (const Tile* tile = getTile(ix, iz)) {
 				if (tile->fullOfWater && tile->waterLevel > h)
 					h = tile->waterLevel;

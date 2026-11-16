@@ -8,6 +8,7 @@
 #include "../AgentUi.h"
 #include "ClientInterface.h"
 #include "../AgentInput.h"
+#include "../AgentServer.h"
 #include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
@@ -36,6 +37,8 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "../gfx/ChimneySmoke.h"
+#include "../gfx/BloodDrip.h"
 #include "EnvironmentView.h"
 #include "../TreeModels.h"
 #include "../settings.h"
@@ -107,7 +110,9 @@ namespace {
 		return 0;
 	}
 	
-	Vector3 CalcStampdownPos(const Vector3 &raystart, const Vector3 &raydir, const Terrain &terrain)
+	// onWater: the ray stops on the water's surface (a click on water aims where it is seen, for
+	// boats and on ice; the play test of 2026-11-13); else on the ground under it (the editor's)
+	Vector3 CalcStampdownPos(const Vector3 &raystart, const Vector3 &raydir, const Terrain &terrain, bool onWater = true)
 	{
 		float lv = 4;
 
@@ -116,12 +121,13 @@ namespace {
 		float h;
 		const float farzvalue = 250.0f;
 		int nlp = static_cast<int>(farzvalue * 1.5f / lv);
-		int m = (ptt.y < terrain.getHeight(ptt.x, ptt.z)) ? 0 : 1;
+		// (on the water's surface or the ice: a click on it had aimed at the bed under it)
+		int m = (ptt.y < terrain.getHeightEx(ptt.x, ptt.z, onWater)) ? 0 : 1;
 
 		for (int i = 0; i < nlp; i++) {
 			ptt += vta;
 			if (!InMap(ptt, terrain)) continue;
-			h = terrain.getHeight(ptt.x, ptt.z);
+			h = terrain.getHeightEx(ptt.x, ptt.z, onWater);
 
 			if (ptt.y == h)
 				break;
@@ -944,26 +950,58 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 // The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
 // Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
 // target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
-// Here a unit order's flag stays until the units sent there have arrived (at least 1 s, at
-// most 30 s), a rally point's for 3 s, with their animations.
-bool ClientInterface::orderFlagDone(float age) const
+// The original keeps one of each in the interface ([ui+0x104], [ui+0x108]), so a new order's
+// flag replaces the last. Here every ground point a unit is still sent to has its flag, the
+// queued (Shift) ones too: each unit's points are kept in order (unitWaypoints), its first one
+// dropped when it comes within 3 m of its own destination there (and any before it), all of them once the server
+// reports it with no order for 0.3 s after it had one (stopped, done, gave up; not while the
+// game is paused before it started). A flag stands at least 1 s and while a unit
+// still has it; a rally point's or a patrol's (no units kept) for 3 s; a right-drag's until the
+// button is released. Client-side only: the server's orders are as before.
+void ClientInterface::updateOrderFlags()
 {
-	// a right-drag's flag stands until the button is released
-	if (formationDrag.active)
-		return false;
-	if (orderFlagRally || orderFlagUnits.empty())
-		return age >= 3.0f;
-	if (age < 1.0f)
-		return false;
-	if (age >= 30.0f)
-		return true;
-	for (const CliGORef& ref : orderFlagUnits) {
-		const ClientGameObject* unit = ref.get();
-		if (unit && !(unit->flags & ClientGameObject::fTerminated)
-			&& (unit->position - orderFlagPosition).sqlen2xz() > 3.0f * 3.0f)
-			return false;
+	constexpr float ARRIVED = 3.0f;
+	const uint64_t now = SDL_GetTicks();
+	std::unordered_set<uint32_t> wanted;
+	for (auto it = unitWaypoints.begin(); it != unitWaypoints.end();) {
+		UnitWaypoints& uw = it->second;
+		const ClientGameObject* unit = uw.unit.get();
+		if (!unit || (unit->flags & ClientGameObject::fTerminated)) {
+			it = unitWaypoints.erase(it);
+			continue;
+		}
+		if (unit->reportedCurrentOrder != -1) {
+			uw.sawOrder = true;
+			uw.idleTicks = 0;
+		}
+		else if (uw.sawOrder) {
+			if (!uw.idleTicks)
+				uw.idleTicks = now;
+			else if (now - uw.idleTicks >= 300)
+				uw.points.clear();
+		}
+		// reached: the last point it stands at, with those before it (one it stopped short of)
+		for (size_t i = uw.points.size(); i-- > 0;)
+			if ((unit->position - uw.points[i].destination).sqlen2xz() <= ARRIVED * ARRIVED) {
+				uw.points.erase(uw.points.begin(), uw.points.begin() + i + 1);
+				break;
+			}
+		if (uw.points.empty()) {
+			it = unitWaypoints.erase(it);
+			continue;
+		}
+		for (const UnitWaypoint& p : uw.points)
+			wanted.insert(p.flagId);
+		++it;
 	}
-	return true;
+	orderFlags.remove_if([&](const OrderFlag& f) {
+		const uint64_t age = now - f.startTicks;
+		if (f.held)
+			return false;
+		if (f.timed)
+			return age >= 3000;
+		return age >= 1000 && !wanted.count(f.id);
+	});
 }
 
 // As WKB.exe: on a selection change it lists the selected objects' offered commands that have a
@@ -1109,7 +1147,19 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 				if (obj && !std::get<0>(obj->blueprint->getSound(moveTag, obj->subtype, 0.0f)).empty()) { hasMove = true; break; }
 		PlaySelectionVoice(client, selection, isMove && hasMove ? "Move" : "Selected");
 	}
-	int orderFlag = 0; // 1: units sent to the ground position, 2: a building's rally point
+	bool rallyFlag = false; // a building's rally point set
+	// the flag of the units sent to the ground point: a right-drag's, standing since the press,
+	// or a new one
+	const uint32_t heldFlag = dragFlagId;
+	dragFlagId = 0;
+	OrderFlag* dragFlag = nullptr;
+	for (OrderFlag& f : orderFlags)
+		if (f.id == heldFlag && heldFlag) {
+			dragFlag = &f;
+			f.held = false;
+		}
+	uint32_t flagId = 0;
+	bool flagTried = false;
 	Vector3 destPos = peapos;
 	const int NUM_DIRECTIONS = 8;
 	const float SEPARATION = 3.0f;
@@ -1128,11 +1178,32 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 				const Vector3 unitFaceTo = faceTo.x >= 0.0f ? destPos + (faceTo - peapos) : faceTo;
 				client->sendCommand(sel, rightClickCommand, assignmentMode, nextSelectedObject, destPos, unitFaceTo);
 				if (!nextSelectedObject) {
-					if (orderFlag == 0)
-						orderFlagUnits.clear();
-					orderFlag = 1;
-					orderFlagUnits.push_back(sel);
+					if (!flagTried) {
+						flagTried = true;
+						flagId = dragFlag ? heldFlag : showOrderFlag(peapos, false);
+						for (OrderFlag& f : orderFlags)
+							if (f.id == flagId)
+								f.timed = false;
+					}
+					if (flagId) {
+						// the unit's points: this one replaces them, goes after them (Shift) or first (Ctrl)
+						UnitWaypoints& uw = unitWaypoints[sel->id];
+						uw.unit = sel;
+						const UnitWaypoint wp{ flagId, destPos };
+						if (assignmentMode == Tags::ORDERASSIGNMODE_DO_LAST && !uw.points.empty())
+							uw.points.push_back(wp);
+						else {
+							if (assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE || uw.points.empty()) {
+								uw.points.clear();
+								uw.sawOrder = false;
+								uw.idleTicks = 0;
+							}
+							uw.points.push_front(wp);
+						}
+					}
 				}
+				else if (assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE)
+					unitWaypoints.erase(sel->id); // sent to an object: its ground points are forgotten
 				// calc destination pos for next selected object
 				destPos = peapos + Vector3(std::cos(nextPosDir), 0.0f, std::sin(nextPosDir)) * nextPosRadius;
 				nextPosDir += SEPARATION / nextPosRadius;
@@ -1154,7 +1225,7 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 									printf("Order for spawned unit changed to: %s\n", client->gameSet->commands.getString(cmd).c_str());
 									if (cmd->order && cmd->order->classType == Tags::ORDTSKTYPE_MOVE) {
 										client->sendSetBuildingSpawnedUnitOrderToDestination(sel, client->gameSet->commands.getIndex(cmd), peapos);
-										orderFlag = std::max(orderFlag, 2);
+										rallyFlag = true;
 									}
 									else {
 										client->sendSetBuildingSpawnedUnitOrderToTarget(sel, client->gameSet->commands.getIndex(cmd), nextSelectedObject);
@@ -1167,14 +1238,14 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 			}
 		}
 	}
-	if (orderFlag)
-		showOrderFlag(peapos, orderFlag == 2);
+	if (rallyFlag && !flagId)
+		showOrderFlag(peapos, true);
 }
 
-void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
+uint32_t ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 {
 	if (!client->terrain || !client->gameSet)
-		return;
+		return 0;
 	const float ground = client->terrain->getHeight(position.x, position.z);
 	const float surface = client->terrain->getHeightEx(position.x, position.z, true);
 	const bool onWater = surface > ground + 0.01f;
@@ -1182,17 +1253,15 @@ void ClientInterface::showOrderFlag(const Vector3& position, bool rallyPoint)
 		: onWater ? "Warrior Kings Game Set\\Resources\\Bouy\\DEFAULT.ANIM3"
 		: "Warrior Kings Game Set\\Flags\\Way_Point1.ANIM3";
 	if (!FileExists(path))
-		return;
-	orderFlagEntity.model = client->gameSet->modelCache.getModel(path);
-	orderFlagEntity.transform = Matrix::getTranslationMatrix(Vector3(position.x, surface, position.z));
-	orderFlagEntity.color = client->clientPlayer ? client->clientPlayer->color : 0;
-	orderFlagEntity.flags = 0;
-	orderFlagStartTicks = SDL_GetTicks();
-	orderFlagActive = true;
-	orderFlagRally = rallyPoint;
-	orderFlagPosition = position;
-	if (rallyPoint)
-		orderFlagUnits.clear();
+		return 0;
+	OrderFlag& f = orderFlags.emplace_back();
+	f.id = nextOrderFlagId++;
+	f.entity.model = client->gameSet->modelCache.getModel(path);
+	f.entity.transform = Matrix::getTranslationMatrix(Vector3(position.x, surface, position.z));
+	f.entity.color = client->clientPlayer ? client->clientPlayer->color : 0;
+	f.entity.flags = 0;
+	f.startTicks = SDL_GetTicks();
+	return f.id;
 }
 
 // The range circles (DISPLAY_SPRITE_WHEN_SELECTED / _STAMPING_DOWN): the "Border Bands" textures
@@ -1603,6 +1672,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Models lit per pixel, with highlights", &s.modelLighting);
 		ImGui::BeginDisabled(!s.modelLighting);
 		ImGui::SliderFloat("Model highlight strength", &s.modelSpecular, 0.0f, 3.0f, "%.2f");
+		{
+			static const char* const reflLevels[] = { "Low (sky and ground)", "High (screen-space)", "Ultra (screen-space + ray-traced, needs DXR 1.1)" };
+			ImGui::Combo("Reflections on buildings and units", &s.modelReflections, reflLevels, 3);
+		}
 		ImGui::SliderFloat("Model detail from textures", &s.modelDetailNormals, 0.0f, 8.0f, "%.1f");
 		ImGui::Checkbox("Sky light on models", &s.skyLight);
 		ImGui::EndDisabled();
@@ -1670,6 +1743,29 @@ void ClientInterface::drawSettingsWindow(bool* open)
 // axes; the longer axis also sets the height, so that neighbouring segments meet at their ends.
 // The ground's height where the terrain is drawn: the tessellated terrain's smooth surface, or
 // the game's own heights
+// The game set's snowy fir (the "Snowy Tree", Coniferous Snow\Pine01, which no map of the original
+// game uses) is the winter look of the fir Pine04: the same height, outline and build (crossed
+// upright cards and flat layers). For a model of Pine04 (its mesh or its swaying animation): that
+// snowy fir; null for every other model.
+static Model* SnowyFirModel(ModelCache& cache, Model* model)
+{
+	static std::unordered_map<Model*, Model*> known;
+	if (!model)
+		return nullptr;
+	auto it = known.find(model);
+	if (it != known.end())
+		return it->second;
+	std::string file;
+	if (auto* s = dynamic_cast<StaticModel*>(model)) file = s->fileName;
+	else if (auto* a = dynamic_cast<AnimatedModel*>(model)) file = a->fileName;
+	for (char& c : file)
+		c = c == '/' ? '\\' : (char)std::tolower((unsigned char)c);
+	Model* snowy = file.find("trees\\coniferous\\pine04\\") != std::string::npos
+		? cache.getModel("Warrior Kings Game Set\\Resources\\Trees\\Coniferous Snow\\Pine01\\DEFAULT.MESH3") : nullptr;
+	known[model] = snowy;
+	return snowy;
+}
+
 static float VisualGroundHeight(const Terrain* terrain, float x, float z)
 {
 	return g_terrainTessellationActive ? terrain->getSmoothHeight(x, z) : terrain->getHeight(x, z);
@@ -2928,7 +3024,9 @@ void ClientInterface::drawSelectionPortrait()
 	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
 	if (!obj)
 		obj = nextSelectedObject.get();
-	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+	// characters and buildings (a selected building stands in the window too; with the HD
+	// models its model is the glTF replacement, larger and with its own centre)
+	if (!obj || (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
 		return;
 	Model* model = obj->getModel();
 	if (!model)
@@ -2943,19 +3041,35 @@ void ClientInterface::drawSelectionPortrait()
 	const float angle = (float)(SDL_GetTicks() % 12000) / 12000.0f * 6.2831853f;
 	portrait = obj->sceneEntity;
 	portrait.model = model;
-	portrait.transform = Matrix::getRotationYMatrix(angle);
-	// lit normally (a selected unit is drawn unlit as its highlight)
-	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING);
+	// fitted to the model's bounding box, as the hover pick tests it (its bounding sphere is
+	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
+	// zoom in and out
+	const auto box = model->interpolateBoundingBox(0);
+	const Vector3 centre = (box[0] + box[1]) * 0.5f;
+	const Vector3 half = (box[1] - box[0]) * 0.5f;
+	// the footprint's radius as it turns, and the half height
+	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
+	const float halfHeight = std::max(0.3f, half.y);
+	const float radius = std::sqrt(footprint * footprint + halfHeight * halfHeight);
+	// turning about its centre's vertical (a building's centre is often off its origin: it
+	// swung out of the square)
+	const Vector3 axis(centre.x, 0.0f, centre.z);
+	portrait.transform = Matrix::getTranslationMatrix(-axis) * Matrix::getRotationYMatrix(angle) * Matrix::getTranslationMatrix(axis);
+	// lit normally (a selected unit is drawn unlit as its highlight; a placed building red or green)
+	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING | SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 	// the camera a little above, the figure filling the square
-	const Vector3 centre = model->getSphereCenter();
-	const float radius = std::max(0.5f, model->getSphereRadius());
 	Camera cam;
 	cam.fovY = 0.6f;
 	cam.aspect = 1.0f;
-	cam.nearDist = 0.1f;
-	cam.farDist = 100.0f;
-	const float dist = radius / std::sin(cam.fovY * 0.5f) * 1.05f;
-	cam.position = centre + Vector3(0.0f, radius * 0.25f, -dist);
+	// far enough that the turning footprint fits across and the box's top and bottom fit at its
+	// nearest corner
+	const float halfFov = cam.fovY * 0.5f;
+	const float dist = std::max(footprint / std::sin(halfFov), halfHeight / std::tan(halfFov) + footprint) * 1.05f;
+	// the clip planes around the box (a building reaches tens of metres: the fixed 100 m far
+	// plane cut it off)
+	cam.nearDist = std::max(0.1f, dist - radius * 1.5f);
+	cam.farDist = dist + radius * 1.5f;
+	cam.position = centre + Vector3(0.0f, halfHeight * 0.25f, -dist);
 	cam.direction = (centre - cam.position).normal();
 	cam.orientation = Vector3(std::asin(cam.direction.y), 0.0f, 0.0f);
 	cam.viewMatrix = Matrix::getLHLookAtViewMatrix(cam.position, centre, Vector3(0, 1, 0));
@@ -3222,6 +3336,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_BARE;
 		else if (broadleaf)
 			AddLeafTree(client, sphereCenter, sphereRadius, obj->id); // its leaves falling in autumn
+		else if (Model* snowy = SnowyFirModel(client->gameSet->modelCache, model); snowy && TreeSnowLaden(client, obj->id))
+			obj->sceneEntity.model = snowy; // the fir Pine04 under deep snow: the game set's snowy fir
 		if (charred)
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_CHARRED;
 	}
@@ -3243,19 +3359,28 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
 		const std::string& name = obj->blueprint->name;
 		if (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos
-			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))) {
+			&& !(obj->sceneEntity.flags & (SceneEntity::SEFLAG_CHARRED | SceneEntity::SEFLAG_BARE))
+			&& obj->sceneEntity.model == model) { // (not a tree drawn bare: its transform has the leafless one's size)
 			bool known = false;
 			for (const ExtTreeModel& t : extTreeModels)
 				known = known || t.model == model;
 			if (!known) {
 				const Matrix& m = obj->sceneEntity.transform;
 				const float s = std::sqrt(m._11 * m._11 + m._12 * m._12 + m._13 * m._13);
-				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES });
+				const bool broadleaf = name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos;
+				const auto box = model->interpolateBoundingBox(0);
+				const float height = std::clamp(box[1].y - std::max(box[0].y, 0.0f), 0.5f, 60.0f);
+				extTreeModels.push_back({ model, s > 0.01f ? s : 1.0f, obj->sceneEntity.flags & SceneEntity::SEFLAG_LEAVES, broadleaf, height });
 			}
 		}
 	}
 	// Attachment points
 	drawAttachmentPoints(&obj->sceneEntity, obj->id);
+	// chimney smoke and drips (drawn in the particle pass)
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+		ChimneySmoke::Add(obj->sceneEntity.model, obj->sceneEntity.transform, obj->id);
+		BloodDrip::Add(obj->sceneEntity.model, obj->sceneEntity.transform, obj->id);
+	}
 
 	// shadow
 	bool blobShadow = model && obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows;
@@ -3348,7 +3473,10 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 		const AttachmentPoint& ap = model->getAPInfo(i);
 		auto state = model->getAPState(i, sceneEntity->animTime);
 		if (state.on) {
-			if (StrCICompare(ap.tag, "PS_Trail") == 0) {
+			// the chimneys' smoke is ChimneySmoke's (by its rules: night and winter, always, by day)
+			if (StrCICompare(ap.tag, "PS_Chimney") == 0) {
+			}
+			else if (StrCICompare(ap.tag, "PS_Trail") == 0) {
 				particlesContainer->generateTrail(state.position.transform(sceneEntity->transform), objid, client->timeManager.previousTime, client->timeManager.currentTime);
 			}
 			else if (std::string_view(ap.tag).substr(0, 3) == "PS_") {
@@ -3742,6 +3870,21 @@ void ClientInterface::iter()
 				benchmarkSelected = true;
 			}
 		}
+	}
+	// Test runs: "benchmark": { ..., "moveQueue": [[x, z], ...] } sends the selection ("select")
+	// to those points once: the first as a right-click, the others with Shift (queued)
+	static bool benchmarkMoved = false;
+	if (BenchmarkEnabled() && benchmarkSelected && !benchmarkMoved && client->gameSet && client->terrain) {
+		benchmarkMoved = true;
+		const auto points = g_settings.value("benchmark", nlohmann::json::object()).value("moveQueue", nlohmann::json::array());
+		const int move = client->gameSet->commands.names.getIndex("Move");
+		const bool shift = g_modShift;
+		for (size_t i = 0; move >= 0 && i < points.size(); i++) {
+			const float x = points[i].at(0).get<float>(), z = points[i].at(1).get<float>();
+			g_modShift = i > 0;
+			sendRightClickCommand(const_cast<Command*>(&client->gameSet->commands[move]), nullptr, Vector3(x, client->terrain->getHeight(x, z), z), Vector3(-1, 0, 0));
+		}
+		g_modShift = shift;
 	}
 	const bool menuOpen = frontEnd && frontEnd->isOpen();
 	static MenuInput menuInput;
@@ -4187,8 +4330,11 @@ void ClientInterface::iter()
 		// of the patrol it walks), as the original's R; the order's flag at the point
 		for (ClientGameObject* obj : selection)
 			if (obj && (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
-				&& obj->getPlayer() == client->clientPlayer.get())
+				&& obj->getPlayer() == client->clientPlayer.get()) {
 				client->sendPatrol(obj, g_modShift, peapos);
+				if (!g_modShift)
+					unitWaypoints.erase(obj->id);
+			}
 		showOrderFlag(peapos, false);
 	}
 	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
@@ -4221,8 +4367,10 @@ void ClientInterface::iter()
 			// button, facing the way the mouse was dragged meanwhile. As in the original, the
 			// order's flag stands at the destination from the press on, and a line shows the facing.
 			formationDrag = { true, peapos, rightClickCommand };
-			showOrderFlag(peapos, false);
-			orderFlagUnits.clear();
+			dragFlagId = showOrderFlag(peapos, false);
+			for (OrderFlag& f : orderFlags)
+				if (f.id == dragFlagId)
+					f.held = true;
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
@@ -5469,7 +5617,7 @@ void ClientInterface::iter()
 		//Vector3 peapos = client->camera.position + getRay(client->camera).normal() * 16;
 		peapos = Vector3(0, 0, 0);
 		if(client->terrain)
-			peapos = CalcStampdownPos(client->camera.position, rayDirection, *client->terrain);
+			peapos = CalcStampdownPos(client->camera.position, rayDirection, *client->terrain, !editorOn);
 		SceneEntity test;
 		if (stampdownBlueprint && stampdownPlayer) {
 			//test.model = client->gameSet->modelCache.getModel("Warrior Kings Game Set\\Characters\\Peasant\\Male\\Peasant1.MESH3");
@@ -5605,15 +5753,12 @@ void ClientInterface::iter()
 				drawAttachmentPoints(&sfx.entity);
 			}
 		}
-		if (orderFlagActive && orderFlagEntity.model) {
-			const float age = (SDL_GetTicks() - orderFlagStartTicks) / 1000.0f;
-			if (age >= 0.0f && !orderFlagDone(age)) {
-				orderFlagEntity.animTime = (uint32_t)(age * 1000.0f);
-				scene->add(&orderFlagEntity);
+		updateOrderFlags();
+		for (OrderFlag& f : orderFlags)
+			if (f.entity.model) {
+				f.entity.animTime = (uint32_t)(SDL_GetTicks() - f.startTicks);
+				scene->add(&f.entity);
 			}
-			else
-				orderFlagActive = false;
-		}
 		// A right-drag's line, as WKB.exe (0x64db18): Schematics\White_Line (a thin prism 1 m long
 		// down -z) stretched from the flag towards the point under the mouse, raised 0.5 m there and
 		// at most 5 m long, so it shows the facing, not the distance; none within 2.5 m
@@ -5685,6 +5830,10 @@ void ClientInterface::iter()
 			dgfx->shadows.rayShadowsOn = g_renderSettings.staticShadows && g_renderSettings.rtShadows && dgfx->shadows.rayShadowsSupported;
 			dgfx->shadows.staticShadows = g_renderSettings.staticShadows && !dgfx->shadows.rayShadowsOn;
 			dgfx->shadows.rayReflectionsOn = g_renderSettings.rtReflections && g_renderSettings.waterQuality >= RenderSettings::WATER_LOW && dgfx->shadows.rayShadowsSupported;
+			// the reflections on buildings and units (with the models lit per pixel); Ultra's rays where
+			// the GPU can, else as High
+			dgfx->shadows.modelReflections = g_renderSettings.modelLighting ? g_renderSettings.modelReflections : 0;
+			dgfx->shadows.modelRtReflectionsOn = dgfx->shadows.modelReflections >= 2 && dgfx->shadows.rayShadowsSupported;
 		}
 		if (!sceneRenderer) {
 			if (UseEnhancedRenderers(gfx))
@@ -5767,11 +5916,14 @@ void ClientInterface::iter()
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
 		particlesContainer->update(client->timeManager.currentTime);
+		ChimneySmoke::Draw(gfx, client->camera, client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
 		if (dgfx) {
 			dgfx->SetSoftParticles(false);
 			gfx->BeginParticles(); // (the state without them)
 		}
+		// the drips: centimetre drops, without the soft fade (over metres it would hide them)
+		BloodDrip::Draw(gfx, client->camera, client->timeManager.currentTime);
 	}
 
 	if (postGfx) {
@@ -5822,12 +5974,14 @@ void ClientInterface::iter()
 		ZoneScopedN("ImGui rendering");
 		PROFILE_SCOPE("UI");
 		gfx->InitImGuiDrawing();
-		ImGuiImpl_Render(gfx);
+		ImGuiImpl_Render(gfx, false);
 	}
 	{
 		PROFILE_SCOPE("Unit portrait");
 		drawSelectionPortrait();
 	}
+	// the agent's screenshot with the portrait in it (it is drawn after the HUD)
+	AgentServer::TakeScreenshotIfAsked(gfx);
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	// (a guest: once the host has sent the rows of the players)
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;
@@ -5971,6 +6125,8 @@ void ClientInterface::drawExtendedTrees()
 		extTreesModels = extTreeModels.size();
 		extTreeEntities.clear();
 		extTreeEntities.reserve(trees->size());
+		extTreeLooks.clear();
+		extTreeLooks.reserve(trees->size());
 		for (const ExtendedTree& t : *trees) {
 			const ExtTreeModel& m = extTreeModels[t.variant % extTreeModels.size()];
 			SceneEntity e;
@@ -5979,8 +6135,28 @@ void ClientInterface::drawExtendedTrees()
 			e.transform = Matrix::getScaleMatrix(Vector3(s, s, s)) * Matrix::getRotationYMatrix(t.yaw) * Matrix::getTranslationMatrix(Vector3(t.x, t.y, t.z));
 			e.flags = m.flags;
 			e.animTime = (uint32_t)(t.variant & 0xFFFF);
+			// a broadleaf tree's bare look: the leafless tree made in code, as the map's own get in
+			// winter (they had kept their leaves, the play test of 2026-11-12)
+			ExtTreeLook look{ e.model, e.transform, nullptr, e.transform, e.flags, 0x9E000000u + (uint32_t)extTreeLooks.size() };
+			if (m.broadleaf && client->gameSet) {
+				look.bare = LeaflessTreeModel(client->gameSet->modelCache, (int)(look.id * 2654435761u >> 28), false);
+				look.bareTransform = Matrix::getScaleMatrix(Vector3(m.height, m.height, m.height)) * e.transform;
+			}
+			// the fir Pine04's under deep snow (SnowyFirModel)
+			if (client->gameSet)
+				look.snowy = SnowyFirModel(client->gameSet->modelCache, m.model);
 			extTreeEntities.push_back(e);
+			extTreeLooks.push_back(look);
 		}
+	}
+	const bool winterLooks = client->environmentActive && client->environmentSettings.seasons;
+	for (size_t i = 0; i < extTreeEntities.size() && i < extTreeLooks.size(); i++) {
+		SceneEntity& e = extTreeEntities[i];
+		const ExtTreeLook& l = extTreeLooks[i];
+		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
+		e.model = bare ? l.bare : l.snowy && TreeSnowLaden(client, l.id) ? l.snowy : l.leafy;
+		e.transform = bare ? l.bareTransform : l.leafyTransform;
+		e.flags = bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags;
 	}
 	const Vector3 cam = client->camera.position;
 	const Vector3 dir = client->camera.direction;

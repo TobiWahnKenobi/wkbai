@@ -128,7 +128,9 @@ float FarGroundShare(float3 world)
 	float2 outside = max(-world.xz, world.xz - FarArea.xy);
 	// (from halfway out: seen at a grazing angle the last tenth of the reach was two or three
 	// pixels, a line under the ground beyond)
-	float r = max(outside.x, outside.y) / max(FarGround.y, 1);
+	// (round: by the distance from the playable area, as the rings end; their square had shown
+	// as a quad on the horizon, the play test of 2026-11-13)
+	float r = length(max(outside, 0)) / max(FarGround.y, 1);
 	float k = smoothstep(0.55, 0.99, r) * smoothstep(0.55, 0.99, r);
 	if (FarArea.w > 0)
 		k = max(k, smoothstep(0.8, 0.97, distance(world, FogCamera.xyz) / FarArea.w));
@@ -234,6 +236,7 @@ float SkyFog(float t)
 Texture3D cloudShape;  // r: Perlin-Worley, g/b/a: Worley at 4, 8, 16 cells (tiling, 64^3)
 Texture3D cloudDetail; // r/g/b: Worley at 4, 8, 16 cells (tiling, 32^3)
 SamplerState cloud3DSampler;
+SamplerState highNoiseSampler; // (as cloudNoiseSampler, anisotropic 16x: the cirrus' smear, HighNoiseLine)
 
 static const float SHAPE_PERIOD = 480, DETAIL_PERIOD = 120; // world units per tile
 
@@ -636,6 +639,40 @@ float HighNoise(float2 p, float period, float fp)
 	return cloudNoise.SampleLevel(cloudNoiseSampler, p / period, log2(max(fp * 256 / period, 1))).a;
 }
 
+// the same where p is warped by other noise: the warp can make p change several times faster
+// over the screen than the pixel's footprint fp says (and in other directions, a bilinear texel
+// of the warp at a time). dpx, dpy: p's change to the next pixel (ddx/ddy, taken outside any
+// branch); the coarser of the two picks the level, so the warped noise never aliases (the
+// cirrus' moire: zebra stripes in rectangular patches)
+float HighNoiseD(float2 p, float period, float fp, float2 dpx, float2 dpy)
+{
+	float g = sqrt(max(dot(dpx, dpx), dot(dpy, dpy)));
+	return cloudNoise.SampleLevel(cloudNoiseSampler, p / period, log2(max(max(fp, g) * 256 / period, 1))).a;
+}
+
+// the same averaged along a line: the noise over a segment `len` long along `axis` (unit), as
+// across it the pixel's footprint (anisotropic filtering does the averaging, up to 16 to 1). The
+// cirrus' smear sums the noise at a few taps up to 190 units apart along the wind: sampled at a
+// point, detail finer than the taps' spacing interfered between them into fine stripes, bent
+// with the streaks in patches (the moire seen at every distance); each tap now covers its
+// stretch, so together they are one continuous blur along the streak, sharp across it
+float HighNoiseLine(float2 p, float period, float fp, float2 dpx, float2 dpy, float2 axis, float len)
+{
+	// (across, one level blurrier than the pixel: the tufts' smoothstep sharpens the noise about
+	// three times, which put their edges past the pixels' own frequency, fine stepped lines)
+	float g = max(max(fp, sqrt(max(dot(dpx, dpx), dot(dpy, dpy)))) * 2, period / 256);
+	float2 across = float2(-axis.y, axis.x);
+	return cloudNoise.SampleGrad(highNoiseSampler, p / period, axis * (max(len, g) / period), across * (g / period)).a;
+}
+
+// a wave of `cycles` cycles (its change to the next pixel cx, cy in cycles): 0-1, faded to its
+// mean 0.5 as it nears the pixels' own frequency (full up to 1/14 of a cycle a pixel, gone at 1/7)
+float2 HighWave(float cycles, float cx, float cy)
+{
+	float r = saturate(2 - max(abs(cx), abs(cy)) / 0.07);
+	return float2(0.5 + 0.5 * r * sin(cycles * 6.2831853), r);
+}
+
 // a high layer's regions: 0-1, how much of the layer is there (cover 0-1 widens them)
 float HighRegions(float2 p, float fp, float cover, float scale, float2 seed)
 {
@@ -697,14 +734,30 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 9;
 		float fp = t * 0.0012 * grazing; // the pixel's size there
 		float2 styleShift = cHigh.w * float2(61000, 37000); // each sky its own regions
+		// the warps (the streaks' bend, the fibres' sway, the ripples' bend) and their change over
+		// the screen, taken here, before any branch (ddx/ddy are undefined in divergent code).
+		// The bend from its broad octaves only (at least 1000 units a texel), the ripples' bend
+		// too (188, and 2 cycles instead of 6: its octaves as fine as the waves curled them into
+		// contour lines), the sway from two levels coarser: a smear's taps lie up to 1500 units along the
+		// bent wind, so the bend's fine octaves swung them through the noise several times faster
+		// than the sky moved, a texel of the bend at a time: fingerprint stripes in rectangular
+		// patches (the moire), at every distance
+		float2 dpx = ddx(p), dpy = ddy(p);
+		float wAng = HighNoise(p + styleShift, 16000, max(fp, 1000));
+		float wFib = HighNoise(p, 14000, max(fp * 4, 440));
+		float wRip = HighNoise(p + 500, 3000, max(fp * 4, 188));
+		float lamN = HighNoise(p + 8100, 20000, fp);
+		float2 dAng = float2(ddx(wAng), ddy(wAng)) * 1.8;
+		float2 dFib = float2(ddx(wFib), ddy(wFib)) * 1000;
+		float2 dRip = float2(ddx(wRip), ddy(wRip)) * 2;
 		float regions = HighRegions(p + styleShift, fp, cHigh.x, 1, float2(0.31, 0.77));
 		if (regions > 0.001) {
 			const int q = (int)SkyFlags.w; // the clouds' quality: Low 0 to Ultra 3
 			float3 types = HighTypes(p, fp, cHigh.w);
 			if (q <= 0)
-				types = float3(0, types.y, 0); // Low: streaks and bands only
+				types.x = 0; // Low: no mares' tails; the ripples as their cells only (below)
 			// the wind's direction turning slowly over the sky (the streaks' bend)
-			float ang = (HighNoise(p + styleShift, 16000, fp) - 0.5) * 1.8;
+			float ang = (wAng - 0.5) * 1.8;
 			float2 dir = float2(wind.x * cos(ang) - wind.y * sin(ang), wind.x * sin(ang) + wind.y * cos(ang));
 			float2 perp = float2(-dir.y, dir.x);
 			// the smear's form by the kinds there: its length, how one-sided (a mares' tail: the
@@ -716,35 +769,68 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 			float hook = types.x * 0.3 * hookSide;
 			float tuftScale = lerp(1, 2.2, types.y);
 			const int N = q <= 0 ? 3 : q == 1 ? 5 : 8;
+			// the tufts' edge softer with the distance: past a few units a pixel the noise comes
+			// from mips whose texels are a few pixels wide, each a straight ramp, and the edge's
+			// steepening made every ramp a thin band: stepped zigzag lines in the far cirrus
+			float soft = 0.16 * saturate(log2(max(fp, 1) / 6) / 3);
 			float sum = 0, wsum = 0;
 			[loop] for (int i = 0; i < N; i++) {
 				float s = (i + 0.5) / N;
 				float along = lerp(s - 0.5, -s, asym) * L;
 				float w = lerp(1, pow(1 - s, 1.5) * 2, asym);
-				float2 o = p + dir * along + perp * (hook * s * s * L * 0.3);
-				float n = HighNoise(o + 1300, 560 * tuftScale, fp) * 0.65 + HighNoise(o + 700, 200 * tuftScale, fp) * 0.35;
-				sum += w * smoothstep(0.48, 0.78, n);
+				float hookT = hook * s * s * L * 0.3;
+				float2 o = p + dir * along + perp * hookT;
+				// (o turns with the bend: far along the smear a small turn moves it a lot)
+				float2 turn = perp * along - dir * hookT;
+				float2 ox = dpx + turn * dAng.x, oy = dpy + turn * dAng.y;
+				float n = HighNoiseLine(o + 1300, 560 * tuftScale, fp, ox, oy, dir, L / N) * 0.65 + HighNoiseLine(o + 700, 200 * tuftScale, fp, ox, oy, dir, L / N) * 0.35;
+				sum += w * smoothstep(0.48 - soft, 0.78 + soft, n);
 				wsum += w;
 			}
 			float smear = sum / wsum;
 			float d = smoothstep(0.04, lerp(0.85, 0.6, types.y), smear);
 			// the fine fibres in it, along the wind
-			float2 f = float2(dot(p, wind), dot(p, across) + (HighNoise(p, 14000, fp) - 0.5) * 2600);
-			float fine = HighNoise(f * float2(1.0 / 3000, 1.0 / 60) + 0.53, 1, fp / 60) * 0.6
-				+ HighNoise(f * float2(1.0 / 9000, 1.0 / 190) + 0.21, 1, fp / 190) * 0.4;
+			// (swayed by up to 500 units, from the sway's broad octaves: by 1300 from its fine ones
+			// the sway's slope passed the fibres' own and folded them into fingerprint loops, and in
+			// a warp texel they ran several times as dense as the footprint says)
+			float2 f = float2(dot(p, wind), dot(p, across) + (wFib - 0.5) * 1000);
+			float2 fx = float2(dot(dpx, wind), dot(dpx, across) + dFib.x);
+			float2 fy = float2(dot(dpy, wind), dot(dpy, across) + dFib.y);
+			const float2 s1 = float2(1.0 / 3000, 1.0 / 60), s2 = float2(1.0 / 9000, 1.0 / 190);
+			// (one level blurrier than the pixel: hairlines at two pixels stepped along their length)
+			float fine = HighNoiseD(f * s1 + 0.53, 1, fp / 30, fx * s1 * 2, fy * s1 * 2) * 0.6
+				+ HighNoiseD(f * s2 + 0.21, 1, fp / 95, fx * s2 * 2, fy * s2 * 2) * 0.4;
 			d *= lerp(0.3, 1.25, fine);
 			float opacity = lerp(lerp(0.55, 0.65, types.x), 0.8, types.y);
 			// ripples (cirrocumulus, undulatus, billows): waves across the wind (140-320 units
-			// apart, bent), broken along their crests into small cells
+			// apart, bent), broken along their crests into small cells.
+			// The spacing goes from one of three fixed wavelengths to the next over the sky: a
+			// varying lambda in f.x / lambda made the waves' frequency grow with the distance
+			// from the world's origin (f.x times lambda's slope), into the tens of cycles a pixel
+			// in each of lambda's texels, the moire. Each wave fades to a soft sheet by its true
+			// frequency on the screen (with the bend's).
 			if (types.z > 0.01) {
-				float lambda = lerp(140, 320, HighNoise(p + 8100, 20000, fp));
-				float phase = f.x / lambda + (HighNoise(p + 500, 3000, fp) - 0.5) * 6;
-				float wave = 0.5 + 0.5 * sin(phase * 6.2831853);
+				float3 lw = saturate(1 - abs(lamN * 2 - float3(0, 1, 2)));
+				float bend = (wRip - 0.5) * 2;
+				float2 w0 = HighWave(f.x / 140 + bend, fx.x / 140 + dRip.x, fy.x / 140 + dRip.y);
+				float2 w1 = HighWave(f.x / 230 + bend, fx.x / 230 + dRip.x, fy.x / 230 + dRip.y);
+				float2 w2 = HighWave(f.x / 320 + bend, fx.x / 320 + dRip.x, fy.x / 320 + dRip.y);
+				float wave = (w0.x * lw.x + w1.x * lw.y + w2.x * lw.z) / max(dot(lw, 1), 1e-4);
+				float resolved = (w0.y * lw.x + w1.y * lw.y + w2.y * lw.z) / max(dot(lw, 1), 1e-4);
 				float cell = HighCell(p * 1.3, 0.61 + CloudScale.w * 0.0006, fp * 1.3);
-				float rip = smoothstep(0.35, 0.95, wave * 0.5 + cell * 0.6) * lerp(0.7, 1, fine);
-				// (where the waves are only a few pixels apart, a soft sheet instead: no moirÃ©)
-				float resolved = saturate(1.5 - fp / (lambda * 0.035));
-				rip = lerp(0.3, rip, resolved);
+				float rip;
+				if (q <= 0) {
+					// Low: a field of cloudlets (cirrocumulus) from the cells alone, larger (before
+					// the moire fix this region fell back to the streaks, whose three point-sampled
+					// taps broke into such a field, with the moire inside)
+					float big = HighCell(p * 0.45 + 2900, 0.23 + CloudScale.w * 0.0006, fp * 0.45);
+					rip = smoothstep(0.38, 0.6, big * 0.7 + cell * 0.3) * lerp(0.7, 1, fine);
+				}
+				else {
+					rip = smoothstep(0.35, 0.95, wave * 0.5 + cell * 0.6) * lerp(0.7, 1, fine);
+					// (where the waves are only a few pixels apart, a soft sheet instead)
+					rip = lerp(0.3, rip, resolved);
+				}
 				d = lerp(d, rip * smoothstep(0.02, 0.3, smear + 0.15), types.z);
 				opacity = lerp(opacity, 0.7, types.z);
 			}
@@ -762,13 +848,16 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		float2 p = still - wind * CloudScale.w * 7;
 		float fp = t * 0.0012 * grazing;
 		float sheet = cHigh.z;
+		// the rows' bent waves and their change over the screen (before the branch, as the
+		// cirrus' ripples): faded by their true frequency, no moire
+		float2 rowP = p + across * (HighNoise(p, 5000, fp) - 0.5) * 900 + wind * (HighNoise(p + 1700, 1800, fp) - 0.5) * 160;
+		float rowC = dot(rowP, wind) / 150;
+		float rows = HighWave(rowC, ddx(rowC), ddy(rowC)).x;
 		float regions = HighRegions(p + cHigh.w * float2(43000, 71000), fp, cHigh.y, lerp(0.55, 0.8, sheet), float2(0.13, 0.42));
 		if (regions > 0.001) {
 			// the cells (about 80 units across, slowly changing), ragged by smaller ones; in a
 			// sheet set in rows across the wind
 			float evolve = 0.37 + CloudScale.w * 0.0008;
-			float2 rowP = p + across * (HighNoise(p, 5000, fp) - 0.5) * 900 + wind * (HighNoise(p + 1700, 1800, fp) - 0.5) * 160;
-			float rows = 0.5 + 0.5 * sin(dot(rowP, wind) * (6.2831853 / 150));
 			float rowsHere = smoothstep(0.35, 0.7, HighNoise(p + 4100, 3200, fp)); // rows in places, not everywhere
 			float cell = HighCell(p, evolve, fp) + (rows - 0.5) * 0.2 * sheet * rowsHere;
 			// ragged, cauliflower edges: eaten by the 3D detail noise (about 20 units)
@@ -1352,8 +1441,11 @@ DiligentSkyRenderer::DiligentSkyRenderer(IRenderer* gfx, const Terrain* terrain,
 	sampler.AddressU = sampler.AddressV = sampler.AddressW = TEXTURE_ADDRESS_CLAMP;
 	SamplerDesc noiseSampler;
 	noiseSampler.AddressU = noiseSampler.AddressV = noiseSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+	SamplerDesc anisoSampler = noiseSampler; // (the cirrus' smear: HighNoiseLine)
+	anisoSampler.MinFilter = anisoSampler.MagFilter = anisoSampler.MipFilter = FILTER_TYPE_ANISOTROPIC;
+	anisoSampler.MaxAnisotropy = 16;
 	const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "skySampler", sampler }, { SHADER_TYPE_PIXEL, "cloudNoiseSampler", noiseSampler },
-		{ SHADER_TYPE_PIXEL, "skyOccSampler", sampler }, { SHADER_TYPE_PIXEL, "cloud3DSampler", noiseSampler } };
+		{ SHADER_TYPE_PIXEL, "skyOccSampler", sampler }, { SHADER_TYPE_PIXEL, "cloud3DSampler", noiseSampler }, { SHADER_TYPE_PIXEL, "highNoiseSampler", anisoSampler } };
 	PipelineResourceSignatureDesc sigDesc;
 	sigDesc.Name = "Sky resources";
 	sigDesc.Resources = resources.data();

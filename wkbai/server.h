@@ -25,6 +25,7 @@
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
 #include "IntensityMaps.h"
+#include "Ministries.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -75,6 +76,11 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	// garrisoned building's last troop credited (its shooters take turns)
 	uint32_t creatorId = 0, creditId = 0, lastHitBy = 0, garrisonCredit = 0;
 	float lastHitTime = -1.0f;
+	// wkbai's peasant lodging (PeasantLodging.h): where the peasant is in its night or winter
+	// (LodgeState: 0 none, going in, inside, waiting without a shelter, returning to work), and
+	// the factor its walk to shelter and back is sped up by (1: none)
+	uint8_t lodging = 0;
+	float lodgeSpeed = 1.0f;
 
 	ServerGameObject(uint32_t id, const GameObjBlueprint *blueprint) : SpecificGameObject<Server, ServerGameObject>(id, blueprint), orderConfig(this) {}
 
@@ -217,10 +223,25 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 
 	Server();
 
+	// Loads a wkbai save file (SaveFile.h), or an original save game or level (the world alone;
+	// an older wkbai save's side files <save>.ai.txt, .env.txt, .paths.txt, .history.txt with it)
 	void loadSaveGame(const char *filename);
 	// Writes the game to a save game file (a file system path, its folders are created) that
-	// loadSaveGame reads back (ServerSave.cpp)
+	// loadSaveGame reads back (ServerSave.cpp): a wkbai save file; a level (savingLevel), or any
+	// save with saveOriginalFormat (or the setting "saveFormat": "original"), in the original's
+	// format, with the side files
 	bool saveGame(const char* filename);
+	bool saveOriginalFormat = false;
+	// a save game's parts as loadSaveGame applies them: from a wkbai save file's sections, or an
+	// original-format file and its side files (ServerSave.cpp)
+	struct SaveParts {
+		bool saveFile = false;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity;
+	};
+	static SaveParts ReadSaveParts(const char* filename);
+	// the walks going on, as a save keeps them (the movement section), and back
+	std::string movementSaveText() const;
+	void restoreMovements(const std::string& text);
 	// what the game was loaded from, for saving
 	std::string gameSetFile, mapFile;
 	// GAME_TYPE: 4 in every shipped level, 1 in the original's skirmish saves (its Load Game
@@ -246,7 +267,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// the skirmish setting "cheatMode": the environment's debug panel (F9) works only with it
 	// (recorded, so a replay applies the panel's changes too)
 	bool cheatMode = false;
-	// loadSaveGame read the game's settings from the save game (<save>.ai.txt): the lobby's
+	// loadSaveGame read the game's settings from the save game (its settings section, or an
+	// older save's <save>.ai.txt): the lobby's
 	// applySettings then keeps them (all the game's settings go with its save game)
 	bool settingsFromSave = false;
 	// the lobby's "clearFogOfWar" (the original's Clear Fog Of War: on, everything on the map is
@@ -311,6 +333,21 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
 	// target and go on to the next building, and the attacker is attacked back: "aiWar"
 	bool aiWar = true;
+	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
+	// while it is being built (Phase 16): "aiMinistries"
+	bool aiMinistries = false;
+	// what the ministry AI knows of the others: 0 only what its units and buildings saw (the
+	// default), 1 everything (a difficulty setting): "aiVision"
+	int aiVision = 0;
+	// the most missions (Generals) a ministry AI runs at once: "aiGenerals"
+	int aiGenerals = 4;
+	// the ministry AI's reaction time, in percent of its departments' periods (a difficulty: 100 the
+	// default, 200 thinks half as often, 50 twice as often): "aiReaction"
+	int aiReaction = 100;
+	// which AI positions get a government: bit i for the i-th player (by id, the neutral player not
+	// counted); 0, the default, every AI: "aiMinistriesSlots" (for comparing it with the others)
+	int aiMinistriesSlots = 0;
+	Ministry::Ministries ministries;
 	// with it, a human enemy counts as this much (percent) of its distance when an AI picks whom
 	// its armies attack (FinderFocusedEnemyPalaces): "aiHumanFocus"; 100: by distance alone
 	int aiHumanFocus = 50;

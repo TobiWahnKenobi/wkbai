@@ -17,6 +17,8 @@
 //   strength around it) comes home instead of dying, and one whose target fell goes on to the
 //   next building there.
 #include "AIController.h"
+#include "AIUtil.h"
+#include "MinistryDepartments.h"
 #include "server.h"
 #include "gameset/ScriptContext.h"
 #include "gameset/gameset.h"
@@ -324,6 +326,237 @@ namespace {
 	}
 }
 
+// ---- AIUtil (AIUtil.h): the helpers above, and the orders the Lua AIs and the ministry AI give ----
+
+namespace AIUtil {
+	int ClassOf(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::ClassOf(o); }
+	int TypeClass(const GameObjBlueprint* type)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		if (!type || g_items.military < 0 || !type->startItemValues.count(g_items.military))
+			return 0;
+		const int c = (int)type->startItemValues.at(g_items.military);
+		return c >= 1 && c <= 4 ? c : 0;
+	}
+	float TypeCost(const GameObjBlueprint* type)
+	{
+		return type ? type->getStartingItemValue(Tags::PDITEM_FOOD_COST) + type->getStartingItemValue(Tags::PDITEM_WOOD_COST)
+			+ type->getStartingItemValue(Tags::PDITEM_GOLD_COST) : 0.0f;
+	}
+	bool IsSoldier(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsSoldier(o); }
+	bool IsPeasant(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsPeasant(o); }
+	bool IsFighter(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::IsFighter(o); }
+	bool IsEnemy(ServerGameObject* me, ServerGameObject* other) { g_items.update(Server::instance->gameSet.get()); return ::IsEnemy(me, other); }
+	bool IsHuman(const ServerGameObject* player) { return ::IsHuman(player); }
+	float UnitPower(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::UnitPower(o); }
+	float Strength(const std::vector<ServerGameObject*>& units, const std::vector<ServerGameObject*>& against)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		return ::Strength(units, against);
+	}
+	float ClassFactor(int cls, int against) { return cls >= 0 && cls < 5 && against >= 0 && against < 5 ? CLASS_FACTOR[cls][against] : 1.0f; }
+	std::vector<ServerGameObject*> EnemiesNear(ServerGameObject* me, const Vector3& centre, float radius, bool towers)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		return ::EnemiesNear(me, centre, radius, towers);
+	}
+	std::vector<ServerGameObject*> EnemyBuildingsNear(ServerGameObject* me, const Vector3& centre, float radius)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		std::vector<ServerGameObject*> list;
+		NNSearch search;
+		search.start(Server::instance, centre, radius);
+		while (ServerGameObject* b = (ServerGameObject*)search.next())
+			if (me && !b->deleted && b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && ::IsEnemy(me, b)
+				&& (b->position - centre).sqlen2xz() <= radius * radius)
+				list.push_back(b);
+		std::sort(list.begin(), list.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			const float da = (a->position - centre).sqlen2xz(), db = (b->position - centre).sqlen2xz();
+			return da != db ? da < db : a->id < b->id; });
+		return list;
+	}
+	std::vector<ServerGameObject*> EnemyPeasantsNear(ServerGameObject* me, const Vector3& centre, float radius)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		std::vector<ServerGameObject*> list;
+		NNSearch search;
+		search.start(Server::instance, centre, radius);
+		while (ServerGameObject* o = (ServerGameObject*)search.next())
+			if (me && !o->deleted && ::IsPeasant(o) && ::IsEnemy(me, o) && o->isInteractable() && (o->position - centre).sqlen2xz() <= radius * radius)
+				list.push_back(o);
+		std::sort(list.begin(), list.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			const float da = (a->position - centre).sqlen2xz(), db = (b->position - centre).sqlen2xz();
+			return da != db ? da < db : a->id < b->id; });
+		return list;
+	}
+	void CollectUnits(ServerGameObject* o, std::vector<ServerGameObject*>& units) { ::CollectUnits(o, units); }
+	void CollectArmies(ServerGameObject* player, std::vector<ServerGameObject*>& armies) { ::CollectArmies(player, armies); }
+	void CollectTowns(ServerGameObject* player, std::vector<ServerGameObject*>& towns) { ::CollectTowns(player, towns); }
+	std::vector<ServerGameObject*> BuildingsOf(ServerGameObject* town) { return ::BuildingsOf(town); }
+	ServerGameObject* HomeArmy(ServerGameObject* player) { return ::HomeArmy(player); }
+	std::vector<ServerGameObject*> HomeSoldiers(ServerGameObject* player) { g_items.update(Server::instance->gameSet.get()); return ::HomeSoldiers(player); }
+	ServerGameObject* Palace(ServerGameObject* player)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int finder = gs->objectFinderDefinitions.names.getIndex("Palace Building Of Player");
+		if (finder < 0 || !player)
+			return nullptr;
+		SrvScriptContext ctx{ Server::instance, player };
+		auto* p = (ServerGameObject*)gs->objectFinderDefinitions[finder]->getFirst(&ctx);
+		return p && !p->deleted ? p : nullptr;
+	}
+	std::vector<ServerGameObject*> Peasants(ServerGameObject* player)
+	{
+		g_items.update(Server::instance->gameSet.get());
+		// (all of the player's, through its armies, cities and towns: straight under the player only,
+		// as the Lua AI's ai.peasants had it, found none in an AI test game, so no gold miner went)
+		std::vector<ServerGameObject*> list, todo;
+		if (player)
+			todo.push_back(player);
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* u = (ServerGameObject*)c;
+					if (u->deleted)
+						continue;
+					if (::IsPeasant(u))
+						list.push_back(u);
+					else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && u->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						todo.push_back(u);
+				}
+		}
+		std::sort(list.begin(), list.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+		return list;
+	}
+	void Attack(const std::vector<ServerGameObject*>& units, ServerGameObject* target)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		if (!target || target->deleted || g_items.attackOrder < 0)
+			return;
+		for (ServerGameObject* u : units)
+			AIAttack(u, target); // its own default attack (a unit's, not the melee "Attack")
+	}
+	void SendHome(ServerGameObject* p, const std::vector<ServerGameObject*>& units)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		if (!p)
+			return;
+		ServerGameObject* defensive = ::HomeArmy(p);
+		SrvScriptContext ctx{ Server::instance, p };
+		for (ServerGameObject* u : units) {
+			if (defensive && ::IsSoldier(u))
+				u->setParent(defensive);
+			if (g_items.moveHome >= 0)
+				gs->orderAssignments[g_items.moveHome].assignTo(u, &ctx, p);
+		}
+	}
+	ServerGameObject* Hold(ServerGameObject* p, const std::vector<ServerGameObject*>& held, const Vector3& at, ServerGameObject* army)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+		if (!p || !armyBp)
+			return nullptr;
+		if (!army || army->deleted || army->getPlayer() != p || army->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY)
+			army = Server::instance->spawnObject(armyBp, p, Vector3(at.x, 0, at.z), Vector3(0, 0, 0));
+		if (!army)
+			return nullptr;
+		for (ServerGameObject* u : held)
+			if (u->getParent() != army)
+				u->setParent(army);
+		AIController::moveUnitsTo(held, p, Vector3(at.x, 0, at.z));
+		return army;
+	}
+	ServerGameObject* Launch(ServerGameObject* p, const std::vector<ServerGameObject*>& units, ServerGameObject* target)
+	{
+		if (!p || !target || target->deleted || units.empty())
+			return nullptr;
+		ServerGameObject* defensive = ::HomeArmy(p);
+		ServerGameObject* army = p->aiController.launchWave(units, target, defensive ? defensive : p);
+		if (army) {
+			p->aiController.waves++;
+			p->aiController.waveUnits += (int)units.size();
+		}
+		return army;
+	}
+	std::vector<std::pair<ServerGameObject*, std::vector<std::string>>> Trainers(ServerGameObject* p, bool fightersOnly)
+	{
+		std::vector<std::pair<ServerGameObject*, std::vector<std::string>>> list;
+		if (!p)
+			return list;
+		const GameSet* gs = Server::instance->gameSet.get();
+		g_items.update(gs);
+		std::vector<ServerGameObject*> buildings, todo{ p };
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* b = (ServerGameObject*)c;
+					if (b->deleted)
+						continue;
+					if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+						buildings.push_back(b);
+					// (through cities and towns too, where the barracks stand: the Lua AI's ai.trainers
+					// looked under the player and its armies only, and saw none of them)
+					else if (b->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+						todo.push_back(b);
+				}
+		}
+		std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+		for (ServerGameObject* b : buildings) {
+			if (b->orderConfig.getCurrentOrder())
+				continue;
+			std::vector<std::string> types;
+			for (const Command* cmd : b->blueprint->offeredCommands) {
+				const std::string& name = gs->commands.getString(cmd);
+				if (name.rfind("Spawn ", 0) != 0)
+					continue;
+				const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6));
+				if (!type || gs->orders.names.getIndex(name) < 0)
+					continue;
+				SrvScriptContext cctx(Server::instance, b);
+				auto _s = cctx.selectedObject.change(b);
+				auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+				if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
+					|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
+					|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
+					continue;
+				// fighters only: the soldier's item (not peasants, carts, priests, ...)
+				const bool fighter = g_items.military >= 0 && type->startItemValues.count(g_items.military) && type->startItemValues.at(g_items.military) > 0.0f;
+				if (fightersOnly && !fighter)
+					continue;
+				types.push_back(type->name);
+			}
+			if (!types.empty())
+				list.emplace_back(b, std::move(types));
+		}
+		return list;
+	}
+	bool Train(ServerGameObject* p, ServerGameObject* b, const std::string& typeName)
+	{
+		const GameSet* gs = Server::instance->gameSet.get();
+		if (!p || !b || b->deleted || b->getPlayer() != p || b->orderConfig.getCurrentOrder())
+			return false;
+		const std::string spawnName = "Spawn " + typeName;
+		const int ordid = gs->orders.names.getIndex(spawnName);
+		const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, typeName);
+		if (ordid < 0 || !type || !p->canAffordObject(type))
+			return false;
+		Order* order = b->orderConfig.addOrder(&gs->orders[ordid], Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, { -1, -1, -1 }, false);
+		if (!order || order->tasks.empty())
+			return false;
+		auto* task = (SpawnTask*)(order->tasks[0].get());
+		task->setSpawnBlueprint(type);
+		if (ServerGameObject* home = ::HomeArmy(p))
+			task->aiCommissioner = home;
+		return true;
+	}
+}
+
 bool AIController::advanced()
 {
 	Server* srv = Server::instance;
@@ -360,7 +593,8 @@ int AIController::homeGuard(float now)
 	g_items.update(gs);
 	const int target = std::clamp((int)((now - 120.0f) / 45.0f), 0, 10);
 	const float SURPLUS_FOOD = 500.0f;
-	auto surplus = [&]() { return Server::instance->aiWar && now > 120.0f && p->getItem(Tags::PDITEM_FOOD) > SURPLUS_FOOD; };
+	// (with the ministry AI its War department trains the surplus, by counters: ministryTraining)
+	auto surplus = [&]() { return Server::instance->aiWar && !ministryTraining && now > 120.0f && p->getItem(Tags::PDITEM_FOOD) > SURPLUS_FOOD; };
 	if (target == 0 && !surplus())
 		return 0;
 	int soldiers = 0;
@@ -737,6 +971,83 @@ int AIController::fighters() const
 //   reach of its building (walled in) attacks the nearest enemy building within 60 m, a wall or
 //   gate; the wave goes on to the nearest enemy building within 250 m when its target falls (else
 //   the next palace), and comes home when it has lost 60% and is outmatched two to one.
+// The war layer's pool (and the ministry AI War department's): the fighters at home and the
+// scripts' idle or not-fighting attackers near the base (see warUpdate); not those in `mine`'s
+// armies nor in `inWaves`
+std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves)
+{
+	Server* srv = Server::instance;
+	const GameSet* gs = srv->gameSet.get();
+	g_items.update(gs);
+	const GameObjBlueprint* armyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_ARMY, "Kingmaker Attacking Army");
+	auto targetOf = [](ServerGameObject* u) -> ServerGameObject* {
+		Order* o = u->orderConfig.getCurrentOrder();
+		Task* t = o ? o->getCurrentTask() : nullptr;
+		ServerGameObject* tg = t ? t->target.get() : nullptr;
+		return tg && !tg->deleted ? tg : nullptr;
+	};
+	std::vector<ServerGameObject*> pool;
+	{
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		for (ServerGameObject* a : armies) {
+			std::vector<ServerGameObject*> units;
+			if (a->blueprint->name == "Kingmaker Defensive Army")
+				CollectUnits(a, units);
+			else if (a->blueprint->name == "Kingmaker Co-ordinator")
+				for (const auto& [type, children] : a->children)
+					for (CommonGameObject* c : children)
+						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							units.push_back((ServerGameObject*)c);
+			for (ServerGameObject* u : units)
+				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id) && !inWaves.count(u->id))
+					pool.push_back(u);
+		}
+	}
+	{
+		static const GameSet* of = nullptr;
+		static int myFort = -1;
+		if (of != gs) {
+			of = gs;
+			myFort = gs->associations.names.getIndex("My Fort");
+		}
+		std::vector<ServerGameObject*> armies;
+		CollectArmies(gameObj, armies);
+		std::vector<ServerGameObject*> loose;
+		for (ServerGameObject* a : armies)
+			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
+				CollectUnits(a, loose);
+		for (const auto& [type, children] : gameObj->children)
+			for (CommonGameObject* c : children)
+				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					loose.push_back((ServerGameObject*)c);
+		for (ServerGameObject* u : loose) {
+			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
+				continue;
+			const float d2 = (u->position - base).sqlen2xz();
+			const bool idle = !u->orderConfig.getCurrentOrder();
+			ServerGameObject* tg = idle ? nullptr : targetOf(u);
+			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
+			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
+				pool.push_back(u);
+		}
+	}
+	return pool;
+}
+
+std::vector<ServerGameObject*> AIController::freeFighters(const Vector3& base)
+{
+	std::set<uint32_t> mine, inWaves(ministryUnits.begin(), ministryUnits.end());
+	for (const WarDefence& d : warDefences)
+		mine.insert(d.army);
+	for (const WarWave& w : warWaves) {
+		mine.insert(w.army);
+		inWaves.insert(w.members.begin(), w.members.end());
+	}
+	mine.insert(ministryArmies.begin(), ministryArmies.end());
+	return warPool(base, mine, inWaves);
+}
+
 void AIController::warUpdate()
 {
 	Server* srv = Server::instance;
@@ -780,58 +1091,16 @@ void AIController::warUpdate()
 		mine.insert(w.army);
 		inWaves.insert(w.members.begin(), w.members.end());
 	}
+	// and the ministry AI's missions (their armies and units are the Generals')
+	mine.insert(ministryArmies.begin(), ministryArmies.end());
+	inWaves.insert(ministryUnits.begin(), ministryUnits.end());
 
 	// the pool: soldiers at home; the scripts' attackers still within 300 m of the palace and not
 	// fighting (the scripts sent each soldier out alone: at 20 minutes the AIs' homes were empty
 	// and the pool held 0-6), and their idle ones within 1 km; soldiers the scripts handed to the
 	// player likewise. Not the archers garrisoned in towers and forts (handed to the player too),
 	// nor those walking to a fort to garrison it (an army with a "My Fort").
-	std::vector<ServerGameObject*> pool;
-	{
-		std::vector<ServerGameObject*> armies;
-		CollectArmies(gameObj, armies);
-		for (ServerGameObject* a : armies) {
-			std::vector<ServerGameObject*> units;
-			if (a->blueprint->name == "Kingmaker Defensive Army")
-				CollectUnits(a, units);
-			else if (a->blueprint->name == "Kingmaker Co-ordinator")
-				for (const auto& [type, children] : a->children)
-					for (CommonGameObject* c : children)
-						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-							units.push_back((ServerGameObject*)c);
-			for (ServerGameObject* u : units)
-				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id))
-					pool.push_back(u);
-		}
-	}
-	{
-		static const GameSet* of = nullptr;
-		static int myFort = -1;
-		if (of != gs) {
-			of = gs;
-			myFort = gs->associations.names.getIndex("My Fort");
-		}
-		std::vector<ServerGameObject*> armies;
-		CollectArmies(gameObj, armies);
-		std::vector<ServerGameObject*> loose;
-		for (ServerGameObject* a : armies)
-			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
-				CollectUnits(a, loose);
-		for (const auto& [type, children] : gameObj->children)
-			for (CommonGameObject* c : children)
-				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
-					loose.push_back((ServerGameObject*)c);
-		for (ServerGameObject* u : loose) {
-			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
-				continue;
-			const float d2 = (u->position - base).sqlen2xz();
-			const bool idle = !u->orderConfig.getCurrentOrder();
-			ServerGameObject* tg = idle ? nullptr : targetOf(u);
-			const bool fighting = tg && IsSoldier(tg) && (tg->position - u->position).sqlen2xz() < 60.0f * 60.0f;
-			if (((idle && d2 < 1000.0f * 1000.0f) || (!fighting && d2 < 300.0f * 300.0f)) && !inWaves.count(u->id))
-				pool.push_back(u);
-		}
-	}
+	std::vector<ServerGameObject*> pool = warPool(base, mine, inWaves);
 
 	// ---- Defence ----
 	std::vector<ServerGameObject*> towns;
@@ -867,6 +1136,18 @@ void AIController::warUpdate()
 	for (const Threat& t : threats)
 		if (t.place.palace)
 			atPalace += (int)t.enemies.size();
+	// with the ministry AI its War defends (defence missions): the war layer's forces go home, and it
+	// meets no threat itself (it held every soldier near home while an enemy was about, and the
+	// ministries' missions got none: one against one, no attack in 25 minutes)
+	if (ministryDefence) {
+		for (const WarDefence& d : warDefences) {
+			ServerGameObject* army = srv->findObject(d.army);
+			for (ServerGameObject* u : unitsOf(army))
+				sendHome(u);
+		}
+		warDefences.clear();
+		threats.clear();
+	}
 
 	// the forces out: fight the nearest enemy there; home 6 s after the place was cleared
 	std::set<ServerGameObject*> busy;
@@ -970,8 +1251,11 @@ void AIController::warUpdate()
 			printf("WAR player %u t=%.0f: %zu enemies at (%.0f,%.0f)%s, %zu defenders sent\n", gameObj->id, now, t.enemies.size(), t.place.at.x, t.place.at.z,
 				t.place.palace ? " (palace)" : "", used);
 	}
-	// soldiers defend, not the peasants: no militia while there are soldiers to send
-	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0)
+	// soldiers defend, not the peasants: no militia while there are soldiers to send (with the
+	// ministry AI's War defending, its Labour & Population decides: it allows militia only in an
+	// emergency, and this switched it back on every 3 s while the missions were out; with this layer
+	// defending, against several rivals, this rule again)
+	if (const int noMilitia = gs->items.names.getIndex("Cannot Use Militia"); noMilitia >= 0 && (!ministryWaves || !ministryDefence || (Ministry::MinOff() & 512)))
 		gameObj->setItem(noMilitia, (available.size() + busy.size() >= 5) ? 1.0f : 0.0f);
 
 	// ---- The waves out ----
@@ -1086,6 +1370,9 @@ void AIController::warUpdate()
 	}
 
 	// ---- A new wave ----
+	// (not with the ministry AI: its strategist and Generals send the attacks, as missions)
+	if (ministryWaves)
+		return;
 	const int popItem = gs->items.names.getIndex("Total Population Count");
 	const float popLimit = popItem >= 0 ? gameObj->getItem(popItem) : 200.0f;
 	const int cap = srv->aiAttackWave > 0 ? srv->aiAttackWave : 50;
@@ -1402,14 +1689,7 @@ void AIController::startLuaAI(const std::string& name)
 		return IdList(ts, list);
 	});
 	ai.set_function("peasants", [player](sol::this_state ts) {
-		std::vector<ServerGameObject*> list;
-		g_items.update(Server::instance->gameSet.get());
-		if (ServerGameObject* p = player())
-			for (const auto& [type, children] : p->children)
-				for (CommonGameObject* c : children)
-					if (!((ServerGameObject*)c)->deleted && IsPeasant((ServerGameObject*)c))
-						list.push_back((ServerGameObject*)c);
-		return IdList(ts, list);
+		return IdList(ts, AIUtil::Peasants(player()));
 	});
 	// the soldiers at home (the defensive army), and the attacking armies with their units
 	ai.set_function("home", [player](sol::this_state ts) {
@@ -1447,28 +1727,10 @@ void AIController::startLuaAI(const std::string& name)
 	// orders: each unit attacks the target; home (into the defensive army, walking to the manor);
 	// a wave (a new attacking army in formations, see AIController::launchWave): its army's id
 	ai.set_function("attack", [](sol::table units, uint32_t target) {
-		const GameSet* gs = Server::instance->gameSet.get();
-		g_items.update(gs);
-		ServerGameObject* t = Server::instance->findObject(target);
-		if (!t || t->deleted || g_items.attackOrder < 0)
-			return;
-		for (ServerGameObject* u : Objects(units))
-			AIAttack(u, t);
+		AIUtil::Attack(Objects(units), Server::instance->findObject(target));
 	});
 	ai.set_function("sendHome", [player](sol::table units) {
-		const GameSet* gs = Server::instance->gameSet.get();
-		g_items.update(gs);
-		ServerGameObject* p = player();
-		if (!p)
-			return;
-		ServerGameObject* defensive = HomeArmy(p);
-		SrvScriptContext ctx{ Server::instance, p };
-		for (ServerGameObject* u : Objects(units)) {
-			if (defensive && IsSoldier(u))
-				u->setParent(defensive);
-			if (g_items.moveHome >= 0)
-				gs->orderAssignments[g_items.moveHome].assignTo(u, &ctx, p);
-		}
+		AIUtil::SendHome(player(), Objects(units));
 	});
 	// units held at a place: moved into an army of the AI's own (the given one if it still
 	// exists, else a new Kingmaker Attacking Army), out of the scripts' hands, walking there;
@@ -1508,16 +1770,9 @@ void AIController::startLuaAI(const std::string& name)
 			p->aiController.warUpdate();
 	});
 	ai.set_function("launch", [player](sol::table units, uint32_t target) -> sol::optional<uint32_t> {
-		ServerGameObject* p = player();
-		ServerGameObject* t = Server::instance->findObject(target);
-		if (!p || !t || t->deleted)
-			return sol::nullopt;
-		ServerGameObject* defensive = HomeArmy(p);
-		ServerGameObject* army = p->aiController.launchWave(Objects(units), t, defensive ? defensive : p);
+		ServerGameObject* army = AIUtil::Launch(player(), Objects(units), Server::instance->findObject(target));
 		if (!army)
 			return sol::nullopt;
-		p->aiController.waves++;
-		p->aiController.waveUnits += (int)units.size();
 		return army->id;
 	});
 	// training: this AI's idle buildings and the fighters each can train now (its "Spawn <type>"
@@ -1526,82 +1781,116 @@ void AIController::startLuaAI(const std::string& name)
 	ai.set_function("trainers", [player](sol::this_state ts) {
 		sol::state_view lua(ts);
 		sol::table list = lua.create_table();
-		ServerGameObject* p = player();
-		if (!p)
-			return list;
-		const GameSet* gs = Server::instance->gameSet.get();
-		g_items.update(gs);
-		std::vector<ServerGameObject*> buildings, todo{ p };
-		while (!todo.empty()) {
-			ServerGameObject* o = todo.back();
-			todo.pop_back();
-			for (const auto& [type, children] : o->children)
-				for (CommonGameObject* c : children) {
-					auto* b = (ServerGameObject*)c;
-					if (b->deleted)
-						continue;
-					if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
-						buildings.push_back(b);
-					else if (b->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER || b->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
-						todo.push_back(b);
-				}
-		}
-		std::sort(buildings.begin(), buildings.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 		int i = 1;
-		for (ServerGameObject* b : buildings) {
-			if (b->orderConfig.getCurrentOrder())
-				continue;
+		for (const auto& [b, names] : AIUtil::Trainers(player())) {
 			sol::table types = lua.create_table();
 			int n = 1;
-			for (const Command* cmd : b->blueprint->offeredCommands) {
-				const std::string& name = gs->commands.getString(cmd);
-				if (name.rfind("Spawn ", 0) != 0)
-					continue;
-				const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name.substr(6));
-				if (!type || gs->orders.names.getIndex(name) < 0)
-					continue;
-				SrvScriptContext cctx(Server::instance, b);
-				auto _s = cctx.selectedObject.change(b);
-				auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
-				if (!std::all_of(cmd->conditionsImpossible.begin(), cmd->conditionsImpossible.end(), holds)
-					|| !std::all_of(cmd->conditionsWait.begin(), cmd->conditionsWait.end(), holds)
-					|| !cmd->canBeExecuted(b) || !p->canAffordObject(type))
-					continue;
-				// fighters only: the soldier's item (not peasants, carts, priests, ...)
-				if (g_items.military < 0 || !type->startItemValues.count(g_items.military) || type->startItemValues.at(g_items.military) <= 0.0f)
-					continue;
-				types[n++] = type->name;
-			}
-			if (n > 1) {
-				sol::table t = lua.create_table();
-				t["id"] = b->id;
-				t["type"] = b->blueprint->name;
-				t["types"] = types;
-				list[i++] = t;
-			}
+			for (const std::string& name : names)
+				types[n++] = name;
+			sol::table t = lua.create_table();
+			t["id"] = b->id;
+			t["type"] = b->blueprint->name;
+			t["types"] = types;
+			list[i++] = t;
 		}
 		return list;
 	});
 	ai.set_function("train", [player](uint32_t building, const std::string& typeName) {
 		ServerGameObject* p = player();
-		ServerGameObject* b = Server::instance->findObject(building);
-		const GameSet* gs = Server::instance->gameSet.get();
-		if (!p || !b || b->deleted || b->getPlayer() != p || b->orderConfig.getCurrentOrder())
+		const bool ok = AIUtil::Train(p, Server::instance->findObject(building), typeName);
+		if (ok)
+			p->aiController.trained++;
+		return ok;
+	});
+
+	// The ministry AI (Ministries.h), with "aiMinistries" on: this player's government, read and
+	// steered from Lua. Nil or false without one.
+	auto gov = [player]() -> Ministry::Government* {
+		ServerGameObject* p = player();
+		if (!p)
+			return nullptr;
+		auto& govs = Server::instance->ministries.governments;
+		auto it = govs.find(p->id);
+		return it == govs.end() ? nullptr : it->second.get();
+	};
+	// a report ("economy.gold", "intel.1030.power", "trust.1027", ...), and all of them
+	ai.set_function("report", [gov](const std::string& key) -> sol::optional<double> {
+		Ministry::Government* g = gov();
+		if (!g || !g->board.reports.count(key))
+			return sol::nullopt;
+		return g->board.get(key);
+	});
+	ai.set_function("reports", [gov](sol::this_state ts) {
+		sol::state_view lua(ts);
+		sol::table t = lua.create_table();
+		if (Ministry::Government* g = gov())
+			for (const auto& [key, v] : g->board.reports)
+				t[key] = v;
+		return t;
+	});
+	// the missions: id, kind, state ("assembling", "out", "returning"), enemy, target, x, z, want, alive
+	ai.set_function("missions", [gov](sol::this_state ts) {
+		sol::state_view lua(ts);
+		sol::table list = lua.create_table();
+		if (Ministry::Government* g = gov()) {
+			int i = 1;
+			static const char* const states[] = { "assembling", "out", "returning" };
+			for (Ministry::Mission& m : g->missions) {
+				sol::table t = lua.create_table();
+				t["id"] = m.id;
+				t["kind"] = Ministry::Mission::KindName(m.kind);
+				t["state"] = states[std::min<int>(m.state, 2)];
+				t["enemy"] = m.enemy;
+				t["target"] = m.target;
+				t["x"] = m.tx;
+				t["z"] = m.tz;
+				t["want"] = m.want;
+				t["alive"] = (int)g->alive(m).size();
+				list[i++] = t;
+			}
+		}
+		return list;
+	});
+	// a mission of the script's own: kind ("raze", "palace", "raid", "kill", "decoy", "scout"), the
+	// target object, how many units; its id, nil if refused (no government, no target, no such kind)
+	ai.set_function("giveMission", [gov](const std::string& kind, uint32_t target, int units) -> sol::optional<uint32_t> {
+		Ministry::Government* g = gov();
+		ServerGameObject* t = Server::instance->findObject(target);
+		if (!g || !t || t->deleted || units <= 0)
+			return sol::nullopt;
+		Ministry::Mission m;
+		int k = -1;
+		for (int i = 0; i < Ministry::Mission::KIND_COUNT; i++)
+			if (kind == Ministry::Mission::KindName(i))
+				k = i;
+		if (k < 0)
+			return sol::nullopt;
+		m.kind = (uint8_t)k;
+		m.target = t->id;
+		ServerGameObject* owner = t->getPlayer();
+		m.enemy = owner ? owner->id : 0;
+		m.tx = t->position.x;
+		m.tz = t->position.z;
+		m.want = units;
+		m.goal = m.kind == Ministry::Mission::RAID ? 8 : m.kind == Ministry::Mission::RAZE ? 3 : m.kind == Ministry::Mission::KILL ? 10 : 1;
+		m.maxLoss = m.kind == Ministry::Mission::DECOY ? 1.0f : 0.6f;
+		m.duration = 60.0f;
+		return Ministry::GiveMission(*g, m, "given by the Lua AI");
+	});
+	// a department's weight ("war", "economy", ...), and the trust in a player (below 0: a grudge)
+	ai.set_function("setWeight", [gov](const std::string& dept, float w) {
+		Ministry::Government* g = gov();
+		const int d = Ministry::DeptFromName(dept);
+		if (!g || d < 0)
 			return false;
-		const std::string spawnName = "Spawn " + typeName;
-		const int ordid = gs->orders.names.getIndex(spawnName);
-		const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, typeName);
-		if (ordid < 0 || !type || !p->canAffordObject(type))
-			return false;
-		Order* order = b->orderConfig.addOrder(&gs->orders[ordid], Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, { -1, -1, -1 }, false);
-		if (!order || order->tasks.empty())
-			return false;
-		auto* task = (SpawnTask*)(order->tasks[0].get());
-		task->setSpawnBlueprint(type);
-		if (ServerGameObject* home = HomeArmy(p))
-			task->aiCommissioner = home;
-		p->aiController.trained++;
+		g->board.weights[d] = std::clamp(w, 0.0f, 10.0f);
 		return true;
+	});
+	ai.set_function("trust", [gov](uint32_t of) -> sol::optional<float> {
+		Ministry::Government* g = gov();
+		if (!g)
+			return sol::nullopt;
+		return g->trust(of);
 	});
 
 	// a replay: the copy its recording kept

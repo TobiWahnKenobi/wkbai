@@ -8,6 +8,7 @@
 #include "GameObjectRef.h"
 #include "util/vecmat.h"
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -158,6 +159,21 @@ struct AIController {
 	float counterUntil = -1.0f;
 	int warThreats = 0, warDefenders = 0, warWavesSent = 0, warWaveUnits = 0, warCounters = 0, warRetargets = 0, warRetreats = 0, warEngaged = 0, warBreaches = 0;
 	void warUpdate();
+	// the ministry AI (Ministries.h) commands this player's attacks: the war layer defends but sends
+	// no waves, and leaves the missions' armies and units alone (set by its War department)
+	// (ministryDefence: the ministry AI's War defends too, the war layer not at all)
+	bool ministryWaves = false, ministryTraining = false, ministryDefence = false;
+	std::set<uint32_t> ministryArmies, ministryUnits;
+	// the ministry AI's Labour: the peasants it gave work of its own (the work orders leave them
+	// alone), the most peasants it wants (-1: no cap) and how many there are (AISpawnAllowed
+	// refuses peasants at the cap)
+	std::set<uint32_t> ministryHeld;
+	int ministryPeasantCap = -1, ministryPeasants = 0;
+	// the war layer's pool: the fighters at home, and the scripts' idle or not-fighting attackers
+	// near the base; not those in the armies `mine` nor the units `inWaves`
+	std::vector<ServerGameObject*> warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves);
+	// for the ministry AI: the same, without the war layer's own defenders and waves
+	std::vector<ServerGameObject*> freeFighters(const Vector3& base);
 	// the characters under this player that fight (soldiers, armed ones without a class: Monks)
 	int fighters() const;
 	// a Lua AI (AIAdvanced.cpp, LuaAI\<name>.lua) steering this player: whether it has one (made
@@ -195,6 +211,10 @@ struct AIController {
 	void deactivateCommission(const GSCommission* commission, ServerGameObject* handler);
 };
 
+// IS_DISCOVERED's memory (which objects each player has discovered), for the save's "discovered"
+// section, and back (gameset/values.cpp)
+std::string DiscoveredSaveText();
+void DiscoveredLoadText(const std::string& text);
 // Whether one of the buildings may spawn the type now (gameset/values.cpp)
 bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<ServerGameObject>& buildings);
 // How many characters each character requirement of the commission needs, evaluated for its

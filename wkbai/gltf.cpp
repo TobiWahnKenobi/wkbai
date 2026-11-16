@@ -13,6 +13,10 @@
 //  - Team colours of HD models (docs/engine/gltf.md): "wkTeam": true, the albedo times the
 //    owner's colour; "wkEmblem": true, the owner's emblem over it through TEXCOORD_1 (on such a
 //    material TEXCOORD_1 is the emblem's UVs, not UV list 1).
+//  - Chimney smoke (docs/engine/gltf.md "Chimney smoke"): a node's "extras": { "wkSmoke": ... }
+//    is a smoke emitter at the node's origin (Mesh::smokeEmitters).
+//  - Drips (docs/engine/gltf.md "Drips"): a node's "extras": { "wkDrip": ... } is a drip at the
+//    node's origin (Mesh::dripEmitters).
 //  - Animations and skins are not read (the game's are per-vertex, Anim3).
 
 #include "mesh.h"
@@ -21,6 +25,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -308,9 +313,62 @@ void Mesh::loadGltf(const char* filename)
 				g.triangles.insert(g.triangles.end(), { first + i, first + i + 2, first + i + 1 });
 		groups.push_back(std::move(g));
 	};
+	std::vector<SmokeEmitter> smoke;
+	bool smokeNodes = false;
+	std::vector<DripEmitter> drips;
 	auto addNode = [&](int index, const Mat4& parent, auto& self) -> void {
 		const auto& node = doc["nodes"][index];
 		const Mat4 world = NodeMatrix(node) * parent;
+		// a chimney's smoke (docs/engine/gltf.md "Chimney smoke"): the node's origin, "wkSmoke":
+		// true (the defaults), false (no smoke on this model) or { "when", "rate", "size" }
+		if (node.contains("extras") && node["extras"].is_object() && node["extras"].contains("wkSmoke")) {
+			const auto& ws = node["extras"]["wkSmoke"];
+			smokeNodes = true;
+			if (!(ws.is_boolean() && !ws.get<bool>())) {
+				SmokeEmitter e;
+				const Vector3 p = world.point(Vector3(0, 0, 0));
+				e.position = Vector3(p.x, p.y, -p.z);
+				if (ws.is_object()) {
+					if (ws.contains("when") && ws["when"].is_string() && !SmokeEmitter::parseWhen(ws["when"].get<std::string>(), e.when))
+						printf("glTF %s: node %d's wkSmoke \"when\" \"%s\" is not night_winter, always or day; night_winter taken\n",
+							filename, index, ws["when"].get<std::string>().c_str());
+					if (ws.contains("rate") && ws["rate"].is_number()) e.rate = std::clamp(ws["rate"].get<float>(), 0.1f, 10.0f);
+					if (ws.contains("size") && ws["size"].is_number()) e.size = std::clamp(ws["size"].get<float>(), 0.1f, 10.0f);
+				}
+				smoke.push_back(e);
+			}
+		}
+		// a drip (docs/engine/gltf.md "Drips"): drops form at the node's origin; "wkDrip": true
+		// (the defaults: 1 m fall) or { "fall" (metres straight down) or "to" ([x, y, z] where they
+		// land, in the node's parent's space like its translation), "rate", "size", "colour" }
+		if (node.contains("extras") && node["extras"].is_object() && node["extras"].contains("wkDrip")) {
+			const auto& wd = node["extras"]["wkDrip"];
+			if (!(wd.is_boolean() && !wd.get<bool>())) {
+				DripEmitter e;
+				const Vector3 p = world.point(Vector3(0, 0, 0));
+				e.position = Vector3(p.x, p.y, -p.z);
+				float fall = 1.0f;
+				bool to = false;
+				if (wd.is_object()) {
+					if (wd.contains("fall") && wd["fall"].is_number()) fall = std::clamp(wd["fall"].get<float>(), 0.05f, 100.0f);
+					if (wd.contains("to") && wd["to"].is_array() && wd["to"].size() == 3) {
+						const Vector3 q = parent.point(Vector3(wd["to"][0].get<float>(), wd["to"][1].get<float>(), wd["to"][2].get<float>()));
+						e.landing = Vector3(q.x, q.y, -q.z);
+						to = e.landing.y < e.position.y - 0.01f;
+						if (!to)
+							printf("glTF %s: node %d's wkDrip \"to\" is not below the node; a fall of %.2f m taken\n", filename, index, fall);
+					}
+					if (wd.contains("rate") && wd["rate"].is_number()) e.rate = std::clamp(wd["rate"].get<float>(), 0.05f, 5.0f);
+					if (wd.contains("size") && wd["size"].is_number()) e.size = std::clamp(wd["size"].get<float>(), 0.1f, 10.0f);
+					if (wd.contains("colour") && wd["colour"].is_array() && wd["colour"].size() == 3)
+						for (int c = 0; c < 3; c++)
+							e.colour[c] = std::clamp(wd["colour"][c].get<float>(), 0.0f, 1.0f);
+				}
+				if (!to)
+					e.landing = e.position - Vector3(0, fall, 0);
+				drips.push_back(e);
+			}
+		}
 		if (node.contains("mesh"))
 			for (const auto& prim : doc["meshes"][(int)node["mesh"]]["primitives"])
 				addPrimitive(prim, world);
@@ -333,6 +391,23 @@ void Mesh::loadGltf(const char* filename)
 	exactNormals = std::move(exact);
 	embUvs.resize(anyEmblem ? (size_t)numUvs * 2 : 0);
 	emblemUvs = std::move(embUvs);
+	smokeEmitters = std::move(smoke);
+	smokeDeclared = smokeNodes;
+	dripEmitters = std::move(drips);
+}
+
+bool SmokeEmitter::parseWhen(const std::string& text, When& out)
+{
+	if (text == "night_winter") out = NIGHT_WINTER;
+	else if (text == "always") out = ALWAYS;
+	else if (text == "day") out = DAY;
+	else { out = NIGHT_WINTER; return false; }
+	return true;
+}
+
+const char* SmokeEmitter::whenName(When w)
+{
+	return w == ALWAYS ? "always" : w == DAY ? "day" : "night_winter";
 }
 
 void Mesh::build(const std::vector<float>& positions, const std::vector<Vector3>& normals, const std::vector<float>& uvs, const std::vector<BuildGroup>& groups)

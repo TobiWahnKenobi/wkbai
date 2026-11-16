@@ -889,3 +889,228 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 	ctx->CommitShaderResources(reflectSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	return reflections->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
 }
+
+// The reflections on buildings and units, Ultra (RenderSettings::modelReflections): per pixel of
+// the depth pre-pass's depth (at half its size) the surface's mirror ray, the nearest model it
+// hits; its colour from the frame before where the hit was on the screen and is in sight now
+// (the screen-space reflections' frame), else marked unknown (the model shader darkens its own
+// reflection there: a wall stands in the way). The models only, not the terrain: past them the
+// shaders' sky and ground. Without the normal maps (the shape's normal from the depth).
+static const char modelReflShaderCode[] = ALPHA_TEST_CODE R"---(
+RaytracingAccelerationStructure tlas;
+Texture2D<float> tDepth;
+Texture2D tScene;
+SamplerState sLinear;
+
+cbuffer ModelReflBuffer
+{
+	float4 Proj;          // P11, P22, P33, P43
+	float4 Texel;         // 1 / the depth's width, height; the rays' reach
+	float4x4 InverseView; // view -> world (row vectors)
+	float4x4 ViewProj;    // this frame's
+	float4x4 PrevViewProj; // the frame before's
+};
+
+struct VS_OUTPUT
+{
+	float4 Pos : SV_POSITION;
+	float2 Uv : TEXCOORD0;
+};
+
+VS_OUTPUT VS(uint id : SV_VertexID)
+{
+	VS_OUTPUT o;
+	float2 p = float2((id << 1) & 2, id & 2) * 2 - 1;
+	o.Pos = float4(p, 0, 1);
+	o.Uv = float2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+	return o;
+}
+
+float3 WorldAt(float2 uv, float d)
+{
+	float z = Proj.w / (d - Proj.z);
+	float2 ndc = float2(uv.x * 2 - 1, 1 - uv.y * 2);
+	return mul(float4(ndc.x * z / Proj.x, ndc.y * z / Proj.y, z, 1), InverseView).xyz;
+}
+
+float4 PS(VS_OUTPUT input) : SV_Target
+{
+	float2 size = 1 / Texel.xy;
+	int2 px = int2(input.Uv * size);
+	float2 uv = (px + 0.5) * Texel.xy;
+	float d = tDepth.Load(int3(px, 0));
+	if (d >= 0.99999)
+		return float4(0, 0, 0, 0);
+	float3 p = WorldAt(uv, d);
+	float3 px1 = WorldAt(uv + float2(Texel.x, 0), tDepth.Load(int3(px + int2(1, 0), 0)));
+	float3 px0 = WorldAt(uv - float2(Texel.x, 0), tDepth.Load(int3(px - int2(1, 0), 0)));
+	float3 py1 = WorldAt(uv + float2(0, Texel.y), tDepth.Load(int3(px + int2(0, 1), 0)));
+	float3 py0 = WorldAt(uv - float2(0, Texel.y), tDepth.Load(int3(px - int2(0, 1), 0)));
+	float3 dx = distance(px1, p) < distance(px0, p) ? px1 - p : p - px0;
+	float3 dy = distance(py1, p) < distance(py0, p) ? py1 - p : p - py0;
+	float3 n = normalize(cross(dy, dx));
+	float3 camPos = InverseView[3].xyz;
+	float3 v = normalize(camPos - p);
+	if (dot(n, v) < 0)
+		n = -n;
+	float3 r = reflect(-v, n);
+	float dist = length(camPos - p);
+	RayDesc ray;
+	ray.Origin = p + n * (0.03 + dist * 0.0006);
+	ray.TMin = 0.02;
+	ray.Direction = r;
+	ray.TMax = Texel.z;
+	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
+	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
+)---" ALPHA_TEST_LOOP(rq) R"---(
+	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+		return float4(0, 0, 0, 0);
+	float3 hit = ray.Origin + r * rq.CommittedRayT();
+	// in sight now: the hit's depth against the pre-pass's where it is on the screen
+	float seen = 0.35;
+	float4 c = mul(float4(hit, 1), ViewProj);
+	if (c.w > 0.05) {
+		float2 cuv = c.xy / c.w * float2(0.5, -0.5) + 0.5;
+		if (all(cuv >= 0) && all(cuv <= 1)) {
+			float sceneZ = Proj.w / (tDepth.Load(int3(cuv * size, 0)) - Proj.z);
+			seen = abs(sceneZ - c.w) < 0.5 + c.w * 0.02 ? 1 : 0.35;
+		}
+	}
+	// its colour in the frame before
+	float4 q = mul(float4(hit, 1), PrevViewProj);
+	if (q.w <= 0.05)
+		return float4(0, 0, 0, 1);
+	float2 quv = q.xy / q.w * float2(0.5, -0.5) + 0.5;
+	if (any(quv < 0) || any(quv > 1))
+		return float4(0, 0, 0, 1);
+	float2 edge = min(quv, 1 - quv);
+	float known = seen * saturate(min(edge.x, edge.y) * 20);
+	return float4(tScene.SampleLevel(sLinear, quv, 0).rgb, 1 + known);
+}
+)---";
+
+ITextureView* DiligentRayShadows::renderModelReflections(IDeviceContext* ctx, ITexture* depth, const float projection[4],
+	const Matrix& inverseView, const Matrix& viewProj, ITexture* prevScene, const Matrix& prevViewProj)
+{
+	if (!built || !depth || !prevScene)
+		return nullptr;
+	if (!modelReflTried) {
+		modelReflTried = true;
+		const PipelineResourceDesc resources[] = {
+			{ SHADER_TYPE_PIXEL, "ModelReflBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+			{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		};
+		SamplerDesc linear;
+		linear.AddressU = linear.AddressV = linear.AddressW = TEXTURE_ADDRESS_CLAMP;
+		SamplerDesc alphaSampler;
+		alphaSampler.MinFilter = alphaSampler.MagFilter = alphaSampler.MipFilter = FILTER_TYPE_POINT;
+		alphaSampler.AddressU = alphaSampler.AddressV = alphaSampler.AddressW = TEXTURE_ADDRESS_WRAP;
+		const ImmutableSamplerDesc samplers[] = { { SHADER_TYPE_PIXEL, "sLinear", linear }, { SHADER_TYPE_PIXEL, "sAlpha", alphaSampler } };
+		PipelineResourceSignatureDesc sig;
+		sig.Name = "Ray-traced model reflections";
+		sig.Resources = resources;
+		sig.NumResources = (Uint32)std::size(resources);
+		sig.ImmutableSamplers = samplers;
+		sig.NumImmutableSamplers = (Uint32)std::size(samplers);
+		device->CreatePipelineResourceSignature(sig, &modelReflSignature);
+		BufferDesc cb;
+		cb.Name = "Ray-traced model reflections";
+		cb.Size = 224;
+		cb.BindFlags = BIND_UNIFORM_BUFFER;
+		cb.Usage = USAGE_DYNAMIC;
+		cb.CPUAccessFlags = CPU_ACCESS_WRITE;
+		device->CreateBuffer(cb, nullptr, &modelReflConstants);
+		if (!modelReflSignature || !modelReflConstants)
+			return nullptr;
+		modelReflSignature->GetStaticVariableByName(SHADER_TYPE_PIXEL, "ModelReflBuffer")->Set(modelReflConstants);
+		auto shader = [&](SHADER_TYPE type, const char* entry) {
+			ShaderCreateInfo sci;
+			sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+			sci.ShaderCompiler = SHADER_COMPILER_DXC;
+			sci.HLSLVersion = ShaderVersion{ 6, 5 };
+			sci.Source = modelReflShaderCode;
+			sci.SourceLength = sizeof(modelReflShaderCode) - 1;
+			sci.EntryPoint = entry;
+			sci.Desc.ShaderType = type;
+			sci.Desc.Name = "Ray-traced model reflections";
+			RefCntAutoPtr<IShader> s;
+			ShaderCache::CreateShader(device, sci, &s);
+			if (!s)
+				printf("Ray-traced model reflections: could not compile %s (DXC, shader model 6.5): off\n", entry);
+			return s;
+		};
+		RefCntAutoPtr<IShader> vs = shader(SHADER_TYPE_VERTEX, "VS"), ps = shader(SHADER_TYPE_PIXEL, "PS");
+		if (!vs || !ps)
+			return nullptr;
+		GraphicsPipelineStateCreateInfo ci;
+		ci.PSODesc.Name = "Ray-traced model reflections";
+		ci.PSODesc.PipelineType = PIPELINE_TYPE_GRAPHICS;
+		auto& gp = ci.GraphicsPipeline;
+		gp.NumRenderTargets = 1;
+		gp.RTVFormats[0] = TEX_FORMAT_RGBA16_FLOAT;
+		gp.DSVFormat = TEX_FORMAT_UNKNOWN;
+		gp.PrimitiveTopology = PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		gp.RasterizerDesc.CullMode = CULL_MODE_NONE;
+		gp.DepthStencilDesc.DepthEnable = False;
+		gp.DepthStencilDesc.DepthWriteEnable = False;
+		ci.pVS = vs;
+		ci.pPS = ps;
+		IPipelineResourceSignature* sigs[] = { modelReflSignature };
+		ci.ppResourceSignatures = sigs;
+		ci.ResourceSignaturesCount = 1;
+		ShaderCache::CreateGraphicsPipeline(device, ci, &modelReflPipeline);
+		printf("Ray-traced model reflections: %s\n", modelReflPipeline ? "ready" : "could not create the pipeline: off");
+	}
+	if (!modelReflPipeline)
+		return nullptr;
+	const TextureDesc& dd = depth->GetDesc();
+	const Uint32 w = std::max<Uint32>(dd.Width / 2, 1), h = std::max<Uint32>(dd.Height / 2, 1);
+	if (!modelRefl || modelRefl->GetDesc().Width != w || modelRefl->GetDesc().Height != h) {
+		TextureDesc td;
+		td.Name = "Ray-traced model reflections";
+		td.Type = RESOURCE_DIM_TEX_2D;
+		td.Width = w;
+		td.Height = h;
+		td.Format = TEX_FORMAT_RGBA16_FLOAT;
+		td.BindFlags = BIND_RENDER_TARGET | BIND_SHADER_RESOURCE;
+		modelRefl.Release();
+		device->CreateTexture(td, nullptr, &modelRefl);
+		if (!modelRefl)
+			return nullptr;
+	}
+	if (!modelReflSrb || modelReflBound[0] != depth || modelReflBound[1] != prevScene || modelReflBoundTlas != tlas.RawPtr()
+		|| modelReflAlphaVersion != alphaVersion) {
+		modelReflSrb.Release();
+		modelReflSignature->CreateShaderResourceBinding(&modelReflSrb, true);
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tScene")->Set(prevScene->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		bindAlpha(modelReflSrb);
+		modelReflAlphaVersion = alphaVersion;
+		modelReflBound[0] = depth;
+		modelReflBound[1] = prevScene;
+		modelReflBoundTlas = tlas;
+	}
+	void* mapped = nullptr;
+	ctx->MapBuffer(modelReflConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+	float* f = (float*)mapped;
+	const float head[8] = { projection[0], projection[1], projection[2], projection[3], 1.0f / dd.Width, 1.0f / dd.Height, 150.0f, 0 };
+	memcpy(f, head, sizeof(head));
+	const Matrix iv = inverseView.getTranspose();
+	memcpy(f + 8, &iv, sizeof(Matrix));
+	memcpy(f + 24, &viewProj, sizeof(Matrix));
+	memcpy(f + 40, &prevViewProj, sizeof(Matrix));
+	ctx->UnmapBuffer(modelReflConstants, MAP_WRITE);
+	ITextureView* rtv = modelRefl->GetDefaultView(TEXTURE_VIEW_RENDER_TARGET);
+	ctx->SetRenderTargets(1, &rtv, nullptr, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->SetViewports(1, nullptr, 0, 0);
+	ctx->SetPipelineState(modelReflPipeline);
+	ctx->CommitShaderResources(modelReflSrb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	ctx->Draw(DrawAttribs{ 3, DRAW_FLAG_VERIFY_ALL });
+	return modelRefl->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE);
+}
