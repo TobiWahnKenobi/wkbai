@@ -3254,12 +3254,13 @@ local HUD_LEFT_W, HUD_LEFT_H, HUD_RIGHT_W, HUD_RIGHT_H = 330, 326, 345, 343
 -- or its top just below the middle; the lines centred, wrapped at PIXEL_WIDTH less 12; at least
 -- 120 high; the buttons 180 x 30 spread evenly along the bottom in the order of their x; Enter
 -- presses the newest window's only button, or its Close
-local GTW_WIDTH = 540
+-- (the campaign windows' constants in one table: the main chunk is near Lua's 200 locals)
+local CAMPAIGN_UI = { gtwWidth = 540, objActive = 0xFF5BA7B3, objInactive = 0xFFBCA19A }
 local function drawGameTextWindows(blocked)
 	local windows = getGameWindows()
 	local layout = {}
 	for i, win in ipairs(windows) do
-		local w = math.min(L(GTW_WIDTH), W - L(20))
+		local w = math.min(L(CAMPAIGN_UI.gtwWidth), W - L(20))
 		local px = L(24)
 		-- an AI General's message: its portrait at the left, its name as the title (WKB.exe's
 		-- "|<colour><name>|" first line; wkbai's)
@@ -3359,7 +3360,6 @@ end
 -- the title, "Objectives", the map picture (SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC) in a
 -- 300 x 300 square at the left, the entries in a column at the right (gold, inactive ones grey
 -- blue), OK below; Enter closes it. The text windows are hidden while it is open.
-local OBJ_ACTIVE, OBJ_INACTIVE = 0xFF5BA7B3, 0xFFBCA19A
 local function drawObjectives(blocked)
 	local o = getObjectives()
 	if not o then objectivesOpen = false return end
@@ -3384,7 +3384,7 @@ local function drawObjectives(blocked)
 		drawImage(bullet, colX, ty + (lineH - L(12)) / 2, L(12), L(12))
 		for _, line in ipairs(wrapText(FONT_BUTTON, e.text, colW - L(20))) do
 			if ty + lineH > y + h - L(60) then break end
-			drawText(FONT_BUTTON, colX + L(20), ty, line, e.inactive and OBJ_INACTIVE or OBJ_ACTIVE, S)
+			drawText(FONT_BUTTON, colX + L(20), ty, line, e.inactive and CAMPAIGN_UI.objInactive or CAMPAIGN_UI.objActive, S)
 			ty = ty + lineH
 		end
 		ty = ty + L(6)
