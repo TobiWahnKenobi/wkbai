@@ -13,7 +13,7 @@ struct GSFileParser;
 
 struct GSTerrain {
 	std::map<int, float> itemValues;
-	float terrainCost;
+	float terrainCost = 1.0f;
 	std::vector<std::string> associatedGroups;
 	void parse(GSFileParser& gsf, GameSet& gs);
 };

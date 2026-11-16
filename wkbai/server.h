@@ -25,6 +25,7 @@
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
 #include "Ministries.h"
+#include "IntensityMaps.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -91,6 +92,7 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	// the walk animation of the last movement, to go on with it when the next movement follows
 	// at once (a formation member reaching its moving place stops and starts again)
 	int lastWalkAnim = -1;
+	float lastWalkAnimSpeed = 1.0f;
 	float lastWalkAnimStart = 0.0f, lastWalkStop = -1.0f;
 	void sendEvent(int evt, ServerGameObject *sender = nullptr);
 	void associateObject(int category, ServerGameObject *associated);
@@ -227,7 +229,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai, discovered;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity;
 	};
 	static SaveParts ReadSaveParts(const char* filename);
 	// the walks going on, as a save keeps them (the movement section), and back
@@ -361,6 +363,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	ServerEnvironment environment;
 	// wkbai's unit history: who killed whom (UnitHistory.h)
 	UnitHistory unitHistory;
+	// the players' intensity maps (IntensityMaps.h)
+	IntensityMaps intensityMaps;
 	// the players whose game is over, by id: 1 won, 2 lost. The game set's REMOVE_MULTIPLAYER_PLAYER
 	// (Game Endings.cpp: the beaten one after "Alive Multiplayer Player" 0, the winners while still
 	// alive). The view's state only (that client lifts its fog of war and shows every player's
@@ -538,7 +542,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	void restoreCameraPosition(ServerGameObject* player);
 	void playCameraPath(ServerGameObject* player, int camPathIndex);
 	void stopCameraPath(ServerGameObject* player, bool skipActions);
-	void skipCameraPath(ServerGameObject* player);
+	void skipCameraPath(ServerGameObject* player, bool skipActions = false);
 	void interpolateCameraToPosition(ServerGameObject* player, const Vector3& position, const Vector3& orientation, float duration);
 	void interpolateCameraToStoredPosition(ServerGameObject* player, float duration);
 	void setGameSpeed(float nextSpeed);
@@ -549,6 +553,13 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// end of a level): no HUD, no orders, only the game's windows and the menu
 	std::set<uint32_t> interfaceDisabled;
 	void setGameInterface(ServerGameObject* player, bool enabled);
+	// the mods' script actions (RE repo docs/re/keyword-coverage.md)
+	void sendShadowSwitch(ServerGameObject* obj, bool on);
+	void resetFogOfWar(ServerGameObject* obj, ServerGameObject* player);
+	void openSaveGameMenu(ServerGameObject* player);
+	void setObjectivesMapGraphic(ServerGameObject* player, const std::string& path);
+	void playLoopedSound(ServerGameObject* from, int soundTag, ServerGameObject* to);
+	void setTileStatus(int tx, int tz, int status);
 	// INDICATE_POSITION_OF_ / TRACK_OBJECT_POSITION_FROM_ / STOP_INDICATING_POSITION_OF_
 	// MISSION_OBJECTIVES_ENTRY: a marker for an entry on a player's minimap, by (player, key)
 	struct ObjectiveMarker { uint8_t kind = 0; float x = 0, z = 0; uint32_t object = 0; };
@@ -583,6 +594,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	struct SightEntry { float x, y, z; uint32_t id; ServerGameObject* obj; };
 	std::vector<std::vector<SightEntry>> sightBlocks;
 	int sightBlocksWidth = 0, sightBlocksHeight = 0;
+	// the game time of the previous step's sight scans (each object is scanned once a second)
+	double sightScanTime = -1.0;
 	void updateSightBlock(ServerGameObject* obj, bool removed = false);
 	void network();
 	// one client message (NETSRVMSG_*), as network() receives it

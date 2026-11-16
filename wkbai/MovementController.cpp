@@ -5,6 +5,7 @@
 #include "MovementController.h"
 #include "server.h"
 #include "Pathfinding.h"
+#include "NNSearch.h"
 #include "terrain.h"
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
@@ -30,6 +31,20 @@ uint64_t g_astarSearches = 0, g_astarTiles = 0;
 // the searches a group field answered, the fields made, the goals no search could reach
 uint64_t g_fieldPaths = 0, g_fieldBuilds = 0, g_unreachableGoals = 0;
 double g_astarMs = 0.0;
+// test runs: WKB_PATH_STATS=1 prints the game's totals at exit (searches, tiles taken from the open
+// lists, search ms on the threads, the path nodes walks got)
+namespace {
+	struct PathStats {
+		uint64_t searches = 0, tiles = 0, walks = 0, nodes = 0; double ms = 0.0;
+		const bool on = getenv("WKB_PATH_STATS") != nullptr;
+		~PathStats() {
+			if (on)
+				printf("PATHSTATS searches %llu tiles %llu (%.0f per search) search ms %.1f walks %llu nodes %llu (%.2f per walk)\n",
+					(unsigned long long)searches, (unsigned long long)tiles, searches ? (double)tiles / searches : 0.0, ms,
+					(unsigned long long)walks, (unsigned long long)nodes, walks ? (double)nodes / walks : 0.0);
+		}
+	} g_pathStats;
+}
 
 namespace {
 	// WKB_PATHDUMP=<folder> WKB_PATHDUMP_FROM=<game s> WKB_PATHDUMP_TO=<game s>: every A* search in that
@@ -63,6 +78,8 @@ namespace {
 	struct ClassGrid {
 		bool water = false;
 		const std::vector<bool>* passable = nullptr;
+		float maxGradient = 90.0f; // MAX_GRADIENT (degrees)
+		bool wades = false;
 		const GameObjBlueprint* sample = nullptr;
 		std::vector<uint8_t> state; // per tile: 0 not looked at, 1 free, 2 blocked (the ground alone)
 		std::vector<int> region;    // terrainRegion, valid with regionValid
@@ -82,6 +99,34 @@ namespace {
 	const bool g_noFields = getenv("WKB_PATH_NOFIELDS") != nullptr;
 	// changes whenever a cached tile may have changed (the group fields are dropped then)
 	uint32_t g_gridsVersion = 1;
+
+	// A steep tile (its rise over half the class's MAX_GRADIENT) costs 20 more (a fifth of a step):
+	// routes go round hills rather than over them, as WKB.exe's search leans by the height
+	// difference (0x6c5a40). About the same search work (tiles -5 % on 4 Peaks' AI game, +9 % in
+	// test 46). Test runs: WKB_PATH_NOSLOPE=1 without.
+	const bool g_slopeCost = getenv("WKB_PATH_NOSLOPE") == nullptr;
+	struct RiseGrid { uint32_t terrainId = 0, revision = 0; size_t logged = 0; int w = 0, h = 0; std::vector<float> rise; } g_rise;
+	const std::vector<float>& riseGrid() {
+		RiseGrid& g = g_rise;
+		const Server* server = Server::instance;
+		const Terrain* trn = server ? server->terrain : nullptr;
+		if (!trn)
+			return g.rise;
+		const auto [w, h] = trn->getNumPlayableTiles();
+		if (g.terrainId == trn->instanceId && g.revision == trn->revision && g.logged == trn->changedVertices.size() && g.w == w && g.h == h)
+			return g.rise;
+		g.terrainId = trn->instanceId; g.revision = trn->revision; g.logged = trn->changedVertices.size(); g.w = w; g.h = h;
+		g.rise.assign((size_t)w * h, 0.0f);
+		for (int tz = 0; tz < h; tz++)
+			for (int tx = 0; tx < w; tx++) {
+				const float v[4] = { trn->getVertex(trn->edge + tx, trn->edge + tz), trn->getVertex(trn->edge + tx + 1, trn->edge + tz),
+					trn->getVertex(trn->edge + tx, trn->edge + tz + 1), trn->getVertex(trn->edge + tx + 1, trn->edge + tz + 1) };
+				g.rise[(size_t)tz * w + tx] = *std::max_element(v, v + 4) - *std::min_element(v, v + 4);
+			}
+		return g.rise;
+	}
+	const float* g_riseData = nullptr; // this batch's (riseGrid), read on the threads
+
 
 	bool waterUnit(const GameObjBlueprint* bp) { return bp->canWalkOnWater() && bp->bpClass != Tags::GAMEOBJCLASS_FORMATION; }
 
@@ -168,6 +213,8 @@ namespace {
 			return true;
 		const auto& tile = server->tiles[(size_t)tz * w + tx];
 		if (!tile.buildingPassable && tile.building.getFrom<Server>())
+			return true;
+		if (tile.scriptStatus == 0 || tile.scriptStatus == 3) // SET_TILE_STATUS BLOCKED, CONTAINS_WALL_SECTION
 			return true;
 		return groundBlocked(c, w, tx, tz);
 	}
@@ -265,10 +312,12 @@ int MovementController::movementClass(const GameObjBlueprint* blueprint)
 	else {
 		const bool water = waterUnit(blueprint);
 		const std::vector<bool>* passable = blueprint->getPassableTerrains();
+		const bool wades = blueprint->wades();
 		cls = -1;
 		for (size_t i = 0; i < g.classes.size() && cls < 0; i++) {
 			const ClassGrid& c = g.classes[i];
-			if (c.water == water && (c.passable == passable || (c.passable && passable && *c.passable == *passable)))
+			if (c.water == water && c.maxGradient == blueprint->maxGradient && c.wades == wades
+				&& (c.passable == passable || (c.passable && passable && *c.passable == *passable)))
 				cls = (int)i;
 		}
 		if (cls < 0) {
@@ -276,6 +325,8 @@ int MovementController::movementClass(const GameObjBlueprint* blueprint)
 			ClassGrid& c = g.classes.emplace_back();
 			c.water = water;
 			c.passable = passable;
+			c.maxGradient = blueprint->maxGradient;
+			c.wades = wades;
 			c.sample = blueprint;
 			c.state.assign((size_t)g.w * g.h, 0);
 		}
@@ -382,9 +433,8 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 		if (trnTile->fullOfWater && trnTile->waterLevel > *minH && trn->frozenAt(trn->edge + tx, trn->edge + tz))
 			return waterUnit;
 
-		// the type's passability fields (USE_PASSABILITY_FIELDS, Passability_Fields.cpp; WKB.exe
-		// reads them, its pathfinder's use of them isn't traced): a land unit can't
-		// stand on water, river beds or mountains (by the tile's texture), however flat
+		// the terrains the type can walk on (CAN_TRAVERSE, WKB.exe's movement mask; or the
+		// passability fields when it has none), by the tile's texture
 		if (const std::vector<bool>* passable = blueprint->getPassableTerrains()) {
 			auto& tile = server->tiles[tz * trnsize.first + tx];
 			if (tile.terrainType == -2) {
@@ -398,17 +448,111 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 				return true;
 		}
 
-		if (!waterUnit && trnTile->fullOfWater) {
+		// deep water (wkbai's: the original's tile test has none, but its land units' masks keep them
+		// off water textures); a type that may traverse "Water" wades through any depth
+		if (!waterUnit && trnTile->fullOfWater && !blueprint->wades()) {
 			if (trnTile->waterLevel - *minH > 1.5f)
 				return true;
 		}
 
-		// no gradients above 45 degrees
-		if (!waterUnit && *maxH - *minH > 5.0f)
+		// the type's steepest slope (MAX_GRADIENT, WKB.exe 0x5953a0; the game set gives most 45
+		// degrees, rams and big engines 30, without it 90): the tile's corners over its 5 m
+		if (!waterUnit && blueprint->maxGradient < 89.9f
+			&& *maxH - *minH > 5.0f * std::tan(blueprint->maxGradient * 3.14159265f / 180.0f))
 			return true;
 	}
 
 	return false;
+}
+
+Vector3 MovementController::nearestValidSpot(ServerGameObject* object, const Vector3& position, float facing)
+{
+	const GameObjBlueprint* bp = object->blueprint;
+	const Server* server = Server::instance;
+	const Terrain* trn = server ? server->terrain : nullptr;
+	if (!trn)
+		return position;
+	const float spacing = bp->preferredSpacing;
+	// the others' room: stopped characters where they stand, walking ones where they go
+	std::vector<std::pair<Vector3, float>> taken;
+	NNSearch nns;
+	nns.start(Server::instance, position, 60.0f);
+	while (CommonGameObject* o = nns.next()) {
+		ServerGameObject* other = o->dyncast<ServerGameObject>();
+		if (!other || other == object || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
+			continue;
+		taken.emplace_back(other->movementController.isMoving() ? other->movementController.getDestination() : other->position, other->blueprint->preferredSpacing);
+	}
+	const int px = (int)(position.x / 5.0f), pz = (int)(position.z / 5.0f);
+	const bool pointWalkable = !isTileBlocked(bp, px, pz);
+	auto valid = [&](const Vector3& p) {
+		const int tx = (int)std::floor(p.x / 5.0f), tz = (int)std::floor(p.z / 5.0f);
+		if (p.x < 0.0f || p.z < 0.0f || isTileBlocked(bp, tx, tz))
+			return false;
+		for (const auto& [q, rq] : taken)
+			if ((p - q).sqlen2xz() < (spacing + rq) * (spacing + rq))
+				return false;
+		if (pointWalkable && (tx != px || tz != pz)
+			&& Pathfinding::SegmentTraversal(position.x / 5.0f, position.z / 5.0f, p.x / 5.0f, p.z / 5.0f,
+				[&](Pathfinding::PFPos t) { return isTileBlocked(bp, t.x, t.z); }))
+			return false;
+		return true;
+	};
+	auto at = [&](Vector3 p) { p.y = trn->getHeight(p.x, p.z); return p; };
+	if (valid(position))
+		return at(position);
+	const float step = 2.0f * (spacing + 0.05f);
+	for (int ring = 1; ring * step <= 60.0f; ring++) {
+		const float radius = ring * step;
+		const int count = std::max(6, (int)(6.2831853f * radius / step));
+		// from straight ahead, both sides alternately
+		for (int i = 0; i < count; i++) {
+			const int k = (i + 1) / 2;
+			const float a = facing + (i % 2 ? 1.0f : -1.0f) * 6.2831853f * k / count;
+			const Vector3 p = position + Vector3(std::sin(a), 0.0f, -std::cos(a)) * radius;
+			if (valid(p))
+				return at(p);
+		}
+	}
+	return at(nearestValidPosition(bp, position));
+}
+
+Vector3 MovementController::nearestShorePosition(const GameObjBlueprint* boat, const GameObjBlueprint* land, const Vector3& boatAt, const Vector3& from, int maxRadius)
+{
+	const Server* server = Server::instance;
+	const Terrain* trn = server ? server->terrain : nullptr;
+	if (!trn)
+		return from;
+	const int cls = movementClass(boat);
+	const int region = terrainRegion(cls, (int)(boatAt.x / 5.0f), (int)(boatAt.z / 5.0f));
+	const int fx = (int)(from.x / 5.0f), fz = (int)(from.z / 5.0f);
+	auto shore = [&](int x, int z) {
+		if (isTileBlockedFast(cls, x, z) || (region >= 0 && terrainRegion(cls, x, z) != region))
+			return false;
+		for (int dz = -1; dz <= 1; dz++)
+			for (int dx = -1; dx <= 1; dx++)
+				if ((dx || dz) && !isTerrainBlocked(land, x + dx, z + dz))
+					return true;
+		return false;
+	};
+	// ring by ring; the nearest of a ring and the next (a nearer one can lie a ring further out)
+	int best = -1, bx = 0, bz = 0, lastRing = maxRadius;
+	for (int r = 0; r <= lastRing; r++) {
+		for (int z = fz - r; z <= fz + r; z++)
+			for (int x = fx - r; x <= fx + r; x++) {
+				if (std::max(std::abs(x - fx), std::abs(z - fz)) != r || !shore(x, z))
+					continue;
+				const int d = (x - fx) * (x - fx) + (z - fz) * (z - fz);
+				if (best < 0 || d < best) { best = d; bx = x; bz = z; }
+			}
+		if (best >= 0 && lastRing == maxRadius)
+			lastRing = std::min(maxRadius, (int)std::ceil(std::sqrt((float)best)));
+	}
+	if (best < 0)
+		return from;
+	Vector3 p(bx * 5.0f + 2.5f, 0.0f, bz * 5.0f + 2.5f);
+	p.y = trn->getHeightEx(p.x, p.z, true);
+	return p;
 }
 
 Vector3 MovementController::nearestValidPosition(const GameObjBlueprint* blueprint, const Vector3& position, int maxRadius)
@@ -478,6 +622,8 @@ namespace {
 					if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
 					const int ni = nz * w + nx;
 					if (blocked[ni]) continue;
+					// (no diagonal across a blocked corner, as the A*'s)
+					if (k >= 4 && (blocked[z * w + nx] || blocked[nz * w + x])) continue;
 					const uint32_t nd = d + cost[k];
 					if (nd < f.dist[ni]) { f.dist[ni] = nd; ring[nd % 142].push_back(ni); pending++; }
 				}
@@ -509,6 +655,7 @@ namespace {
 				const int nx = p.x + dx[k], nz = p.z + dz[k];
 				if (nx < 0 || nz < 0 || nx >= w || nz >= h) continue;
 				const int ni = nz * w + nx;
+				if (k >= 4 && (pred(PFPos{ nx, p.z }) || pred(PFPos{ p.x, nz }))) continue;
 				if (f.dist[ni] < bd) { bd = f.dist[ni]; best = ni; }
 			}
 			if (best < 0)
@@ -576,6 +723,11 @@ namespace {
 		bool fromField = false, cut = false;
 		int steps = 0;
 		double ms = 0.0;
+		// the extra cost per tile (the search's units, 100 a straight step): the intensity maps the
+		// unit's paths avoid (IntensityMaps.h), and the "Threat" (wkbai's own, off by default); null:
+		// none
+		const std::vector<int32_t>* threat = nullptr;
+		float goalRadius = -1.0f; // (MovementController::setGoalRadius)
 	};
 	std::vector<PathRequest> g_pathQueue;
 	// the game the queue is for (a test may leave searches queued outside a step, and the next
@@ -589,6 +741,13 @@ namespace {
 	// game, then went to the nearest tile it had seen, or stood). Reads only, on any thread.
 	template<typename Predicate, typename RegionOf> void prepareSearch(PathRequest& r, int w, int h, Predicate pred, RegionOf regionOf) {
 		r.straight = !Pathfinding::SegmentTraversal(r.from.x / 5.0f, r.from.z / 5.0f, r.destination.x / 5.0f, r.destination.z / 5.0f, pred);
+		// (a threat on the straight line: searched, round it)
+		if (r.straight && r.threat) {
+			const auto* t = r.threat;
+			const Pathfinding::PFPos startTile = r.start, endTile = r.end;
+			r.straight = !Pathfinding::SegmentTraversal(r.from.x / 5.0f, r.from.z / 5.0f, r.destination.x / 5.0f, r.destination.z / 5.0f,
+				[&](Pathfinding::PFPos p) { return p.x >= 0 && p.z >= 0 && p.x < w && p.z < h && !(p == startTile) && !(p == endTile) && (*t)[(size_t)p.z * w + p.x] > 0; });
+		}
 		if (r.straight)
 			return;
 		if (const int startRegion = regionOf(r.start); startRegion >= 0 && regionOf(r.end) != startRegion) {
@@ -602,15 +761,49 @@ namespace {
 	// The search itself: reads only (the cache, the tiles, the field), on any thread
 	template<typename Predicate> void runSearch(PathRequest& r, int w, int h, Predicate pred) {
 		const uint64_t t0 = SDL_GetPerformanceCounter();
+		Pathfinding::g_goal = { r.destination.x, r.destination.z, r.goalRadius > 0.0f ? r.goalRadius * r.goalRadius : -1.0f };
+		// (TERRAIN_COST, WKB.exe's scale on the guess per tile, was tried: it doubled the search
+		// time, docs/re/pathfinding-search.md; the guess stays the diagonal distance)
+		const auto heuristic = Pathfinding::ManhattanDiagHeuristic;
 		if (r.field) {
 			r.tiles = walkField(*r.field, w, h, r.start, r.end, r.destination, pred);
 			r.fromField = !r.tiles.empty();
 		}
-		if (!r.fromField) {
-			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, Pathfinding::ManhattanDiagHeuristic, w, h);
+		if (!r.fromField && g_slopeCost && g_riseData && r.object.get()) {
+			const float* rise = g_riseData;
+			const float limit = 5.0f * std::tan(std::min(r.object.get()->blueprint->maxGradient, 89.0f) * 0.5f * 3.14159265f / 180.0f);
+			const auto* t = r.threat;
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h,
+				[t, w, rise, limit](Pathfinding::PFPos p) { const size_t i = (size_t)p.z * w + p.x; return (t ? (int)(*t)[i] : 0) + (rise[i] > limit ? 20 : 0); });
 			r.cut = Pathfinding::g_lastSearchCut;
 			r.steps = Pathfinding::g_lastSearchSteps;
 		}
+		else if (!r.fromField && r.threat) {
+			// a tile costs its extra more (a "Threat" its strength x a straight step: strength 5, a detour
+			// of up to 5 tiles round a pikeman); the A*'s guess stays the distance, so it still finds one
+			const auto* t = r.threat;
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h,
+				[t, w](Pathfinding::PFPos p) { return (int)(*t)[(size_t)p.z * w + p.x]; });
+			r.cut = Pathfinding::g_lastSearchCut;
+			r.steps = Pathfinding::g_lastSearchSteps;
+		}
+		else if (!r.fromField) {
+			r.tiles = Pathfinding::DoPathfinding(r.start, r.searchEnd, pred, heuristic, w, h);
+			r.cut = Pathfinding::g_lastSearchCut;
+			r.steps = Pathfinding::g_lastSearchSteps;
+		}
+		// straight legs between the path's corners (the tiles with a cost, the intensity maps,
+		// count as in the way, so a leg doesn't cut through a tower's range the search went round)
+		static const bool noStraight = getenv("WKB_PATH_NOSTRAIGHT") != nullptr; // (test runs)
+		if (noStraight) {}
+		else if (r.threat) {
+			const auto* t = r.threat;
+			const Pathfinding::PFPos s = r.start, e = r.end;
+			Pathfinding::StraightenPath(r.tiles, [&](Pathfinding::PFPos p) {
+				return pred(p) || (!(p == s) && !(p == e) && (*t)[(size_t)p.z * w + p.x] > 0); });
+		}
+		else
+			Pathfinding::StraightenPath(r.tiles, pred);
 		r.ms = (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
 	}
 
@@ -708,6 +901,8 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 			g_pathfindingSearches++;
 		}
 	} profileEnd{ profileStart };
+	const float goalRadius = m_goalRadius;
+	m_goalRadius = -1.0f;
 	//m_object->startMovement(destination);
 	//m_pathNodes = { destination };
 
@@ -804,9 +999,104 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	r.end = posEnd;
 	r.searchEnd = posEnd;
 	r.destination = realDestination;
+	r.goalRadius = goalRadius;
 	m_pending = true;
 	m_pendingDestination = realDestination;
 	return realDestination;
+}
+
+// Turning as WKB.exe's (0x5601e0 -> 0x438f60: every path smoothed into arcs and straight lines): the
+// corners rounded with arcs of the type's IDEAL_TURN_RADIUS, smaller where the legs are short but
+// not under MINIMUM_TURN_RADIUS (a sharper corner stays a corner); a WHEEL_ON_FACING type (cavalry,
+// carts) also starts on an arc from where it faces, at most 5/4 of a turn (0x4382b0). Only for
+// radii of a metre or more: under that (the original's default 0.5 m) the arcs can't be seen and
+// each point would be another movement message. nodes: the destination first, the unit last.
+static void SmoothTurns(ServerGameObject* obj, std::vector<Vector3>& nodes)
+{
+	const GameObjBlueprint* bp = obj->blueprint;
+	const float ideal = bp->idealTurnRadius, minimum = std::max(0.001f, bp->minTurnRadius);
+	if (ideal < 1.0f || nodes.size() < 2 || bp->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		return;
+	if (CommonGameObject* parent = obj->getParent(); parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		return; // (the formation steers its members)
+	constexpr float STEP = 3.14159265f / 8.0f;
+	std::vector<Vector3> pts(nodes.rbegin(), nodes.rend()); // the unit first
+	pts[0] = obj->position; // (a search's last node is the unit's tile)
+	auto free = [&](const Vector3& p) { return !MovementController::isTileBlocked(bp, (int)(p.x / 5.0f), (int)(p.z / 5.0f)); };
+	auto flat = [](Vector3 v) { v.y = 0.0f; return v; };
+	std::vector<Vector3> out;
+	out.push_back(pts[0]);
+	// the start, from the facing
+	if (bp->wheelOnFacing) {
+		const float yaw = obj->orientation.y;
+		Vector3 h(std::sin(yaw), 0.0f, -std::cos(yaw));
+		const Vector3 to = flat(pts[1] - pts[0]);
+		const float cross = h.x * to.z - h.z * to.x, dot = h.x * to.x + h.z * to.z;
+		const float phi = std::atan2(cross, dot);
+		float r = std::min(ideal, 0.5f * to.len2xz());
+		if (std::abs(phi) > 0.2f && r >= minimum) {
+			const float side = phi > 0.0f ? 1.0f : -1.0f;
+			const Vector3 n(-h.z * side, 0.0f, h.x * side); // towards the turn
+			const Vector3 c = pts[0] + n * r;
+			if ((flat(pts[1]) - flat(c)).len2xz() > r * 1.05f) {
+				std::vector<Vector3> arc;
+				Vector3 q = pts[0];
+				float swept = 0.0f;
+				bool ok = false;
+				while (swept < 3.92699f) {
+					// heading at q: along the circle, turning towards the side
+					const Vector3 rq = flat(q) - flat(c);
+					const Vector3 t(-rq.z * side, 0.0f, rq.x * side);
+					const Vector3 tq = flat(pts[1]) - flat(q);
+					if ((t.x * tq.z - t.z * tq.x) * side <= 0.0f && t.x * tq.x + t.z * tq.z > 0.0f) { ok = true; break; } // facing it now
+					swept += STEP;
+					const float a0 = std::atan2(rq.z, rq.x) + side * STEP;
+					q = Vector3(c.x + std::cos(a0) * r, pts[0].y, c.z + std::sin(a0) * r);
+					if (!free(q)) break;
+					arc.push_back(q);
+				}
+				if (ok)
+					out.insert(out.end(), arc.begin(), arc.end());
+			}
+		}
+	}
+	// the corners
+	for (size_t i = 1; i + 1 < pts.size(); i++) {
+		const Vector3 a = out.back(), b = pts[i], c = pts[i + 1];
+		Vector3 d1 = flat(b - a), d2 = flat(c - b);
+		const float l1 = d1.len2xz(), l2 = d2.len2xz();
+		if (l1 < 0.01f || l2 < 0.01f) { out.push_back(b); continue; }
+		d1 = d1 * (1.0f / l1); d2 = d2 * (1.0f / l2);
+		const float theta = std::acos(std::clamp(d1.x * d2.x + d1.z * d2.z, -1.0f, 1.0f));
+		const float half = std::tan(theta * 0.5f);
+		if (theta < 0.15f || theta > 2.8f) { out.push_back(b); continue; }
+		float r = ideal;
+		const float maxT = 0.5f * std::min(l1, l2);
+		if (r * half > maxT) r = maxT / half;
+		if (r < minimum) { out.push_back(b); continue; }
+		const float t = r * half;
+		const float side = (d1.x * d2.z - d1.z * d2.x) > 0.0f ? 1.0f : -1.0f;
+		const Vector3 p1 = b - d1 * t;
+		const Vector3 n(-d1.z * side, 0.0f, d1.x * side);
+		const Vector3 centre = p1 + n * r;
+		const int k = std::max(2, (int)std::ceil(theta / STEP));
+		std::vector<Vector3> arc;
+		bool ok = true;
+		const Vector3 r0 = p1 - centre;
+		for (int j = 0; j <= k && ok; j++) {
+			const float ang = side * theta * j / k;
+			const float cs = std::cos(ang), sn = std::sin(ang);
+			Vector3 q(centre.x + r0.x * cs - r0.z * sn, b.y, centre.z + r0.x * sn + r0.z * cs);
+			ok = free(q);
+			arc.push_back(q);
+		}
+		if (ok)
+			out.insert(out.end(), arc.begin(), arc.end());
+		else
+			out.push_back(b);
+	}
+	out.push_back(pts.back());
+	nodes.assign(out.rbegin(), out.rend());
 }
 
 // The walk a request found, applied to its unit (as startMovement applied it at once before)
@@ -816,6 +1106,7 @@ struct PathSearchRunner {
 		mc.m_pending = false;
 		if (r.straight) {
 			mc.m_pathNodes = { r.destination, mc.m_object->position };
+			SmoothTurns(mc.m_object, mc.m_pathNodes);
 			mc.walkToNextNode();
 		}
 		else if (r.tiles.size() >= 1) {
@@ -827,11 +1118,14 @@ struct PathSearchRunner {
 				mc.m_pathNodes.emplace_back(r.destination);
 			for (const PFPos& pfp : r.tiles)
 				mc.m_pathNodes.emplace_back(pfp.x * 5.0f + 2.5f, mc.m_object->position.y, pfp.z * 5.0f + 2.5f);
+			SmoothTurns(mc.m_object, mc.m_pathNodes);
 			mc.walkToNextNode(); // (none when cut short without getting any nearer)
 		}
 		else
 			mc.endWalk();
 		mc.m_searchFailed = !mc.isMoving();
+		if (mc.m_started)
+			mc.m_walksStarted++;
 	}
 };
 
@@ -899,6 +1193,62 @@ void MovementController::runPathSearches()
 			todo.push_back(&r);
 	}
 	g_pathBatchRequests += todo.size();
+	// The "Threat" intensity maps of this step (wkbai's take on WKB.exe's: their search cost isn't
+	// traced): each writer marks its tile (and those within its radius) with its strength; a type
+	// that avoids them gets the sum over its enemies' writers
+	std::map<uint32_t, std::vector<int32_t>> threatFor; // player id -> its enemies' threat
+	std::vector<std::vector<int32_t>> combined;         // a unit's intensity maps and threat added
+	combined.reserve(todo.size());
+	static const bool threatAvoidance = g_settings.value<bool>("threatAvoidance", false);
+	for (PathRequest* rp : todo) {
+		ServerGameObject* obj = rp->object.get();
+		if (!obj)
+			continue;
+		const std::vector<int32_t>* maps = const_cast<Server*>(server)->intensityMaps.costFor(obj);
+		rp->threat = maps;
+		if (!threatAvoidance || !obj->blueprint->avoidsThreat)
+			continue;
+		ServerGameObject* own = obj->getPlayer();
+		const uint32_t ownId = own ? own->id : 0;
+		auto it = threatFor.find(ownId);
+		if (it == threatFor.end()) {
+			std::vector<int32_t> grid((size_t)w * h, 0);
+			const int allied = server->gameSet->diplomaticStatuses.names.getIndex("Allied");
+			bool any = false;
+			for (const auto& [id, cobj] : server->idmap) {
+				const GameObjBlueprint* bp = cobj->blueprint;
+				if (!bp->writesThreat || bp->threatStrength <= 0.0f || (cobj->flags & CommonGameObject::fTerminated))
+					continue;
+				ServerGameObject* wobj = (ServerGameObject*)cobj;
+				ServerGameObject* theirs = wobj->getPlayer();
+				if (!theirs || theirs == own || (own && allied >= 0 && server->getDiplomaticStatus(own, theirs) <= allied))
+					continue;
+				const int cx = (int)(wobj->position.x / 5.0f), cz = (int)(wobj->position.z / 5.0f);
+				const int rt = (int)std::ceil(bp->threatRadius / 5.0f);
+				for (int z = cz - rt; z <= cz + rt; z++)
+					for (int x = cx - rt; x <= cx + rt; x++)
+						if (x >= 0 && z >= 0 && x < w && z < h) {
+							int32_t& v = grid[(size_t)z * w + x];
+							v = std::min(100000, v + 100 * (int)bp->threatStrength);
+							any = true;
+						}
+			}
+			if (!any)
+				grid.clear();
+			it = threatFor.emplace(ownId, std::move(grid)).first;
+		}
+		if (!it->second.empty()) {
+			if (!maps)
+				rp->threat = &it->second;
+			else {
+				combined.push_back(*maps);
+				auto& c = combined.back();
+				for (size_t i = 0; i < c.size() && i < it->second.size(); i++)
+					c[i] += it->second[i];
+				rp->threat = &c;
+			}
+		}
+	}
 	forEach(todo.size(), [&](size_t i) {
 		PathRequest& r = *todo[i];
 		const ClassGrid* c = &g.classes[r.cls];
@@ -917,13 +1267,17 @@ void MovementController::runPathSearches()
 			continue;
 		if (r.unreachable)
 			g_unreachableGoals++;
-		if (r.searchEnd == r.end && !g_noFields) {
+		if (r.searchEnd == r.end && !g_noFields && !r.threat) {
 			const ClassGrid* c = &g.classes[r.cls];
 			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));
 		}
 		searches.push_back(&r);
 	}
 	g_pathBatchSearches += searches.size();
+	if (g_slopeCost) {
+		const std::vector<float>& rg = riseGrid();
+		g_riseData = rg.size() == (size_t)w * h ? rg.data() : nullptr;
+	}
 	lap(2);
 	g_simPhase = "path searches: searches";
 	forEach(searches.size(), [&](size_t i) {
@@ -956,6 +1310,12 @@ void MovementController::runPathSearches()
 					r.start.x, r.start.z, r.end.x, r.end.z, r.tiles.empty() ? -1 : r.tiles.front().x, r.tiles.empty() ? -1 : r.tiles.front().z);
 		}
 		PathSearchRunner::apply(obj->movementController, r);
+		if (g_pathStats.on) {
+			if (!r.straight && !r.fromField) { g_pathStats.searches++; g_pathStats.tiles += r.steps; }
+			g_pathStats.ms += r.ms;
+			g_pathStats.walks++;
+			g_pathStats.nodes += obj->movementController.m_pathNodes.size();
+		}
 		if (g_recordSearches) {
 			LastPathSearch& ls = g_lastSearches[obj->id];
 			ls.time = server->timeManager.currentTime;

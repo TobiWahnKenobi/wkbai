@@ -32,6 +32,8 @@ bool StampdownPlan::groundAllows(CommonGameState* gameState, const Footprint* fp
 		const auto [px, pz] = taken[t];
 		if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight)
 			return false;
+		if (gameState->tiles[pz * tileWidth + px].scriptStatus <= 3) // SET_TILE_STATUS
+			return false;
 		for (int dz = 0; dz <= 1; dz++)
 			for (int dx = 0; dx <= 1; dx++) {
 				const float h = trn->getVertex(px + trn->edge + dx, pz + trn->edge + dz);
@@ -174,6 +176,10 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			}
 			bool ok = true;
 			const auto& tile = gameState->tiles[pz * tileWidth + px];
+			if (tile.scriptStatus <= 3) { // SET_TILE_STATUS: no building here
+				refuse(Status::InvalidOccupied);
+				ok = false;
+			}
 			if (const CommonGameObject* other = tile.building.getFrom(gameState)) {
 				const bool onWall = civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes);
 				const bool shared = to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType));

@@ -47,9 +47,18 @@ public:
 	static void flushDisbands();
 	// a new formation faces the way its members face (their mean heading), not the map's north
 	static void faceMembersWay(ServerGameObject* formation);
+	// A hit of `drop` hit points on a member of a formation (WKB.exe 0x551f50): true when the
+	// formation took it, as a share spread over the members nearest the one hit; false when the
+	// hit is the member's own (too small, not formed, no sharing)
+	static bool shareDamage(ServerGameObject* member, float drop);
 	// form up again where it stands (CREATE_FORMATION of a formation: "Reform Yourself", the Halt
 	// command's)
 	void requestFormUp() { reformWanted = true; }
+	// FORMATION_DIMENSION_MAX (WKB.exe 0x45f730): the larger of the layout's width and depth in
+	// metres, 0 without members
+	float maxDimension() const;
+	// IS_FORMED (WKB.exe 0x550ba0): formed up, and no member still walking to its place
+	bool isFormedUp() const;
 private:
 	// standing without an order: turn to face an attack from the flank or rear
 	void faceAttackers();

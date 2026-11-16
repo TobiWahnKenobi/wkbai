@@ -7,6 +7,7 @@
 #include <vector>
 #include <queue>
 #include <deque>
+#include <map>
 #include "gameset/actions.h"
 #include "GameObjectRef.h"
 #include "util/vecmat.h"
@@ -44,6 +45,10 @@ struct Order {
 	std::vector<std::unique_ptr<Task>> tasks;
 	int nextTaskId = 0;
 	int currentTask = -1;
+	// a new order waits behind this one (an uninterruptible loop): it ends with its running task
+	bool finishAfterTask = false;
+	// SUSPEND_ORDER (mods): held, not resumed when in front, until RESUME_ORDER
+	bool scriptSuspended = false;
 
 	Order(int id, const OrderBlueprint *blueprint, ServerGameObject *gameObject) : gameObject(gameObject), id(id), blueprint(blueprint) {}
 
@@ -129,18 +134,31 @@ struct Task {
 
 struct MissileTask : Task {
 	float msStartTime; Vector3 msInitialPosition, msInitialVelocity, msPrevPosition;
+	bool msLanded = false; // struck the ground: no more hit tests
+	std::map<uint32_t, bool> msPassesThrough; // per object: the missile doesn't collide with it
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;
 };
 
 struct MoveTask : Task {
+	// where it stops: the destination, or the free spot nearest to it (FreeStandingSpot), chosen
+	// once per destination
+	Vector3 stopAt, stopFor;
+	bool stopChosen = false;
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;
 };
 
 struct ObjectReferenceTask : Task {
+	float wallCheckAt = 0.0f; // the next "Attack Wall Target" look (once per failed approach)
+	// MOVEMENT_STARTED_SEQUENCE: the unit's walks started when it last looked
+	uint32_t walksSeen = 0;
+	bool walksSeenSet = false;
+	// PATHFIND_TO_SHORE: the shore point and where the target was when it was found
+	Vector3 shoreGoal, shoreFor;
+	bool shoreSet = false;
 	using Task::Task;
 	virtual void onStart() override;
 	virtual void onUpdate() override;
@@ -191,6 +209,12 @@ struct TimerTrigger : Trigger {
 
 struct AnimationLoopTrigger : Trigger {
 	float referenceTime = 0.0f;
+	// UNINTERRUPTIBLE_ANIMATION_LOOP (WKB.exe 0x4fca00 with flag 0): while its task's order runs, a
+	// new order that would replace it waits behind it (OrderConfiguration::assignOrder)
+	bool uninterruptible = false;
+	// a synchronised animation (SYNCH_ANIMATION_TO_FRACTION): fired when its fraction reaches 1,
+	// once, as WKB.exe's 0x4fc820 fires once per loop wrap (again only after it went below 1)
+	bool synchFired = false;
 	using Trigger::Trigger;
 	void init() override;
 	void update() override;

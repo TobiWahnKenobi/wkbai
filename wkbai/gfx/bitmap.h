@@ -41,6 +41,8 @@ struct Bitmap
 
 	// Loads by extension; an original .tga or .pcx with a replacement (replacementFile) loads that
 	static Bitmap loadBitmap(const char* fn);
+	// Loads exactly fn, by extension, without looking for a replacement
+	static Bitmap loadBitmapExact(const char* fn);
 	// A mod's replacement for an original .tga or .pcx: the same name as .png, or with gpu first
 	// .ktx2 or .dds (which may be BC7, so only for textures going to the GPU as they are);
 	// else fn itself. High-resolution texture packs use it (mod format 2).

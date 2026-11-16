@@ -148,7 +148,7 @@ struct PDNearestValidPositionFor : PositionDeterminer {
 		if (!ctx->isServer())
 			return po;
 		if (CommonGameObject* obj = a->getFirst(ctx))
-			po.position = MovementController::nearestValidPosition(obj->blueprint, po.position);
+			po.position = MovementController::nearestValidSpot((ServerGameObject*)obj, po.position, po.rotation.y);
 		return po;
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
@@ -428,7 +428,11 @@ struct PDFiringAttachmentPoint : PositionDeterminer {
 			for (size_t i = 0; i < numAPs; i++) {
 				if (model->getAPInfo(i).tag.substr(0, 3) == "SP_") {
 					Matrix mat = obj->getWorldMatrix();
-					return model->getAPState(i, obj->animStartTime).position.transform(mat);
+					// the point where it is in the animation now (as the ATTACHMENT_POINT trigger
+					// reads it); passing animStartTime itself took the frame at that many ms
+					const float now = Server::instance ? Server::instance->timeManager.currentTime : obj->animStartTime;
+					const uint32_t animTime = (uint32_t)(std::max(0.0f, now - obj->animStartTime) * obj->animSpeed * 1000.0f);
+					return model->getAPState(i, animTime).position.transform(mat);
 				}
 			}
 		}
@@ -568,6 +572,57 @@ struct PDRandomAttachmentPoint : public PositionDeterminer {
 	}
 };
 
+// ATTACHMENT_POINT_BY_INDEX "<tag>" <finder> <index> (WKB.exe 0x4a2eb0, mods): the first object's
+// attachment point with that tag at the index (truncated), counted from the highest-numbered one
+// as the original does; none (found = false) out of range
+struct PDAttachmentPointByIndex : public PositionDeterminer {
+	std::string sAttachTag;
+	std::unique_ptr<ObjectFinder> finder;
+	std::unique_ptr<ValueDeterminer> vdIndex;
+	virtual OrientedPosition eval(ScriptContext* ctx) override {
+		OrientedPosition none;
+		none.found = false;
+		CommonGameObject* obj = finder->getFirst(ctx);
+		if (!obj)
+			return none;
+		Model* model = obj->getModel();
+		if (!model)
+			return none;
+		std::vector<size_t> aps;
+		for (size_t i = model->getNumAPs(); i-- > 0;)
+			if (model->getAPInfo(i).tag.substr(0, sAttachTag.size()) == sAttachTag)
+				aps.push_back(i);
+		const int index = (int)vdIndex->eval(ctx);
+		if (index < 0 || index >= (int)aps.size())
+			return none;
+		return model->getAPInfo(aps[index]).staticState.position.transform(obj->getWorldMatrix());
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		sAttachTag = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
+		vdIndex.reset(ReadValueDeterminer(gsf, gs));
+	}
+};
+
+// POINT_ALONG_PATH <finder> <position> <position> <value> (mods): read, but as in WKB.exe (its
+// evaluation is the empty 0x448a40) it never gives a position
+struct PDPointAlongPath : public PositionDeterminer {
+	std::unique_ptr<ObjectFinder> finder;
+	std::unique_ptr<PositionDeterminer> from, to;
+	std::unique_ptr<ValueDeterminer> distance;
+	virtual OrientedPosition eval(ScriptContext* ctx) override {
+		OrientedPosition none;
+		none.found = false;
+		return none;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		finder.reset(ReadFinder(gsf, gs));
+		from.reset(PositionDeterminer::createFrom(gsf, gs));
+		to.reset(PositionDeterminer::createFrom(gsf, gs));
+		distance.reset(ReadValueDeterminer(gsf, gs));
+	}
+};
+
 // NEAREST_CONSTRUCTION_SITE <position> <building> <minimum sites> <cluster distance> <range>, as
 // WKB.exe's (0x4a6a40; parser 0x4a6780): every site within <range> metres of the position
 // (snapped to the tile grid) where the building fits, grouped into clusters of sites within
@@ -681,6 +736,8 @@ PositionDeterminer * PositionDeterminer::createFrom(GSFileParser & gsf, const Ga
 	default:
 		if (tag == "NEAREST_VALID_POSITION_TOWARDS") { pos = new PDNearestValidPositionTowards; break; }
 		if (tag == "POSITION_BETWEEN") { pos = new PDPositionBetween; break; }
+		if (tag == "ATTACHMENT_POINT_BY_INDEX") { pos = new PDAttachmentPointByIndex; break; }
+		if (tag == "POINT_ALONG_PATH") { pos = new PDPointAlongPath; break; }
 		if (const char* signature = FindStubSignature(positionStubSignatures, tag)) {
 			pos = new PDStub(tag, signature);
 			printf("WARNING: Position determiner %s is not implemented (arguments read, uses its first argument's position) at %s\n", tag.c_str(), gsf.locate().c_str());

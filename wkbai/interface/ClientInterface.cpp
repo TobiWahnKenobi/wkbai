@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../SoundPlayer.h"
 #include "../Order.h"
 #include "../MovementController.h"
 #include "../AgentUi.h"
@@ -1085,8 +1086,47 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 	return found;
 }
 
+// The voices WKB.exe plays itself (it registers the sound tags "Selected" and "Move", 0x65c1de; the
+// game set maps "Selected" for 350 types, marked "In Code"): the first own unit of the selection
+// answers, at the listener, once
+static void PlaySelectionVoice(Client* client, const std::unordered_set<CliGORef>& selection, const char* tagName)
+{
+	const int tag = client->gameSet->soundTags.names.getIndex(tagName);
+	if (tag < 0)
+		return;
+	for (ClientGameObject* obj : selection) {
+		if (!obj || obj->getPlayer() != client->clientPlayer.get())
+			continue;
+		ClientGameObject* unit = obj;
+		// a formation: one of its members speaks
+		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+			unit = nullptr;
+			for (const auto& [type, members] : obj->children)
+				if (!members.empty()) { unit = (ClientGameObject*)members[0]; break; }
+			if (!unit)
+				continue;
+		}
+		std::string path; float refDist, maxDist;
+		std::tie(path, refDist, maxDist) = unit->blueprint->getSound(tag, unit->subtype, 0.0f);
+		if (path.empty())
+			continue;
+		SoundPlayer::getSoundPlayer()->playSound("Warrior Kings Game Set\\Sounds\\" + path, std::string("voice\n") + tagName);
+		return;
+	}
+}
+
 void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo)
 {
+	// the order's acknowledgement: "Move" for a move, "Selected" for the others (or with no "Move")
+	if (rightClickCommand) {
+		const int moveTag = client->gameSet->soundTags.names.getIndex("Move");
+		const bool isMove = client->gameSet->commands.names.getString(rightClickCommand->id) == "Move";
+		bool hasMove = false;
+		if (isMove && moveTag >= 0)
+			for (ClientGameObject* obj : selection)
+				if (obj && !std::get<0>(obj->blueprint->getSound(moveTag, obj->subtype, 0.0f)).empty()) { hasMove = true; break; }
+		PlaySelectionVoice(client, selection, isMove && hasMove ? "Move" : "Selected");
+	}
 	bool rallyFlag = false; // a building's rally point set
 	// the flag of the units sent to the ground point: a right-drag's, standing since the press,
 	// or a new one
@@ -1543,7 +1583,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	}
 	if (ImGui::CollapsingHeader("Water")) {
 		{
-			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (scrolling texture)", "Off (plain colour)",
+			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (two drifting texture layers)", "Off (plain colour)",
 				"Very low (bump-mapped ripples)", "Low", "Medium", "High (tessellated waves)", "Very high", "Ultra" };
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
@@ -3165,7 +3205,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (obj->animSynchronizedTask != -1 && !remembered) {
 		CliScriptContext ctx{ client, obj };
 		float frac = client->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
-		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * frac * 1000.0f);
+		// as WKB.exe's 0x507ec0: clamped to 0..1, in steps of 1 %, and only forward (a site that takes
+		// damage doesn't take its scaffold down)
+		static std::unordered_map<uint32_t, std::pair<int, float>> shown;
+		auto& [task, most] = shown[obj->id];
+		if (task != obj->animSynchronizedTask) { task = obj->animSynchronizedTask; most = 0.0f; }
+		most = std::max(most, std::floor(std::clamp(frac, 0.0f, 1.0f) * 100.0f) / 100.0f);
+		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * most * 1000.0f);
 	}
 	else if (!remembered)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
@@ -3185,7 +3231,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			return bp->shearModel;
 		}
 	};
-	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
+	if (obj->shadowSwitch == 1 || (obj->shadowSwitch != 0 && (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 	// the fields in winter (wkbai's seasons; they give no food then): bare soil
 	if (client->environmentActive && client->environmentSettings.seasons && client->environment.season == 3
@@ -3616,6 +3662,45 @@ void ClientInterface::iter()
 		if (singlePlayer && !client->timeManager.paused) {
 			client->sendPauseRequest(true);
 			menuPausedGame = true;
+		}
+	}
+	// DISPLAY_SAVE_GAME_MENU (mods): the in-game menu's Save screen, pausing a single-player game
+	if (client->saveMenuRequested) {
+		client->saveMenuRequested = false;
+		if (frontEnd && !frontEnd->isOpen() && saveGame && client->getLevel()) {
+			frontEnd->setSinglePlayer(singlePlayer);
+			frontEnd->setCanSave(true);
+			frontEnd->open("ingame");
+			frontEnd->open("save");
+			if (singlePlayer && !client->timeManager.paused) {
+				client->sendPauseRequest(true);
+				menuPausedGame = true;
+			}
+		}
+	}
+	// PLAY_LOOPED_SOUND (mods): the two latest looped sounds, at their targets, in the sound
+	// player's last two loop slots
+	if (SoundPlayer* sp = SoundPlayer::getSoundPlayer()) {
+		auto& loops = client->loopedSounds;
+		loops.erase(std::remove_if(loops.begin(), loops.end(), [this](const Client::LoopedSound& l) {
+			return !client->findObject(l.source) || !client->findObject(l.target); }), loops.end());
+		for (int k = 0; k < SoundPlayer::MAX_LOOPS - SoundPlayer::WATERFALL_LOOPS; k++) {
+			const int slot = SoundPlayer::MAX_LOOPS - 1 - k;
+			bool playing = false;
+			if (k < (int)loops.size()) {
+				const Client::LoopedSound& l = loops[loops.size() - 1 - k];
+				ClientGameObject* from = client->findObject(l.source);
+				ClientGameObject* to = client->findObject(l.target);
+				const bool toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER;
+				const Vector3 at = toPlayer ? client->camera.position : to->position;
+				const auto [path, refDist, maxDist] = from->blueprint->getSound(l.soundTag, from->subtype, (at - client->camera.position).len3());
+				if (!path.empty()) {
+					sp->setLoop(slot, "Warrior Kings Game Set\\Sounds\\" + path, at, toPlayer ? 1000.0f : refDist, 1.0f, 1.0f);
+					playing = true;
+				}
+			}
+			if (!playing)
+				sp->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 		}
 	}
 	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
@@ -4117,7 +4202,10 @@ void ClientInterface::iter()
 	}
 
 	static bool clickedScriptedUi = false;
+	// the selection when the button went down (its voice when the click or box changed it)
+	static decltype(selection) selectionBeforeClick;
 	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_LEFT]) {
+		selectionBeforeClick = selection;
 		debugger.selectObject(nextSelectedObject);
 		if (!g_modShift)
 			selection.clear();
@@ -4161,7 +4249,13 @@ void ClientInterface::iter()
 			selBoxOn = false;
 			//if (!g_modShift)
 			//	selection.clear();
-			selection.insert(nextSelFromBox.begin(), nextSelFromBox.end());
+			// a release within 25 pixels of the press is a click, not a box (WKB.exe 0x6549ef)
+			const int dx = selBoxEndX - selBoxStartX, dy = selBoxEndY - selBoxStartY;
+			if (dx * dx + dy * dy > 25 * 25)
+				selection.insert(nextSelFromBox.begin(), nextSelFromBox.end());
+			// "Selected": the new selection answers
+			if (selection != selectionBeforeClick && !selection.empty())
+				PlaySelectionVoice(client, selection, "Selected");
 		}
 	}
 
@@ -4807,6 +4901,12 @@ void ClientInterface::iter()
 								cs.isCurrentOrder = cmd->order->bpid == sel->reportedCurrentOrder;
 								if (auto it = sel->buildingOrderCountMap.find(cmd->order->bpid); it != sel->buildingOrderCountMap.end())
 									cs.count = it->second;
+								// an upgrade's spawn button counts the spawns of the order it replaces too
+								if (const int old = cmd->order->replacesSpawnOrder; old >= 0) {
+									cs.isCurrentOrder = cs.isCurrentOrder || old == sel->reportedCurrentOrder;
+									if (auto it = sel->buildingOrderCountMap.find(old); it != sel->buildingOrderCountMap.end())
+										cs.count += it->second;
+								}
 							}
 							cmdStates.push_back(std::move(cs));
 							//cmdStates.push_back(lua.create_table_with(
@@ -6099,7 +6199,9 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 				button.enabled = !lastPage || !b.onClickSequence.actionList.empty();
 				break;
 			case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-				button.enabled = !gtw.forceReadAllPages || lastPage;
+				// as WKB.exe's: a window of several pages closes once its last page has been shown
+				button.enabled = gtw.pages.size() <= 1 || client->gtwReadAll.count(index) || !b.onClickSequence.actionList.empty();
+				button.close = true;
 				break;
 			}
 			w.buttons.push_back(std::move(button));
@@ -6121,6 +6223,7 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 			if (state != MissionObjectives::HIDDEN)
 				objectives.entries.push_back({ GameText(lang.getText(key)), state == MissionObjectives::INACTIVE });
 		objectives.changed = client->objectivesChanged;
+		objectives.map = client->objectivesMapGraphic;
 	}
 	frontEnd->setObjectives(std::move(objectives));
 	if (toggleObjectivesRequested) {
@@ -6248,9 +6351,9 @@ void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
 	const int page = it->second, pages = (int)gtw.pages.size();
 	switch (button.onClickWindowAction) {
 	case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-		if (gtw.forceReadAllPages && page + 1 < pages)
+		if (pages > 1 && !client->gtwReadAll.count(gtwIndex) && button.onClickSequence.actionList.empty())
 			return;
-		it->second = -1;
+		client->setGameTextWindowPage(gtwIndex, -1);
 		// the AI General's message read: the next one, if any, shows
 		if (gtwIndex == client->gameSet->gameTextWindows.names.getIndex("AI General Chat Window") && !client->chatDisplays.empty())
 			client->chatDisplays.pop_front();

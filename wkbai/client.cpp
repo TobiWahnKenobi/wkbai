@@ -24,6 +24,10 @@
 #include "SoundPlayer.h"
 #include <tracy/Tracy.hpp>
 
+// a text window's narration (ACTIVATION_SOUND) belongs to this owner: stopped when the page
+// turns or the window closes, as WKB.exe's
+static uint32_t GameTextWindowSoundOwner(int gtwIndex) { return 0xFFF00000u + (uint32_t)gtwIndex; }
+
 Client * Client::instance = nullptr;
 
 void Client::loadFromServerObject(Server & server)
@@ -73,6 +77,53 @@ void Client::tick()
 			Vector3 dir = obj->movement.getDirection();
 			obj->orientation.y = atan2f(dir.x, -dir.z);
 		}
+		// laid on the ground (PERPENDICULAR_TO_LANDSCAPE): the slope over 4 m round it, every frame
+		// (four heights; it follows walks, teleports and the ground's changes)
+		if (obj->blueprint->perpendicularToLandscape && terrain) {
+			const float x = obj->position.x, z = obj->position.z;
+			const float dx = terrain->getHeight(x - 2.0f, z) - terrain->getHeight(x + 2.0f, z);
+			const float dz = terrain->getHeight(x, z - 2.0f) - terrain->getHeight(x, z + 2.0f);
+			const float len = std::sqrt(dx * dx + 16.0f + dz * dz);
+			obj->groundUp = Vector3(dx / len, 4.0f / len, dz / len);
+			obj->tilted = true;
+		}
+		// TS_ attachment points of the animations that sound (TRIGGER_SOUND_FROM_ANIMATION)
+		if (!obj->blueprint->soundFromAnimations.empty() && timeManager.currentTime > timeManager.previousTime) {
+			const auto& anims = obj->blueprint->soundFromAnimations;
+			if (std::find(anims.begin(), anims.end(), obj->animationIndex) != anims.end())
+				if (Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant)) {
+					const float prevT = std::max(0.0f, (float)timeManager.previousTime - obj->animStartTime) * obj->animSpeed;
+					const float nextT = std::max(0.0f, (float)timeManager.currentTime - obj->animStartTime) * obj->animSpeed;
+					const float duration = model->getDuration();
+					if (!(obj->animClamped && prevT >= duration)) {
+						const uint32_t prevMs = (uint32_t)(prevT * 1000.0f), nextMs = (uint32_t)(std::min(nextT, obj->animClamped ? duration * 0.999f : nextT) * 1000.0f);
+						for (size_t i = 0; i < model->getNumAPs(); i++) {
+							const std::string& tag = model->getAPInfo(i).tag;
+							if (tag.size() <= 3 || _strnicmp(tag.c_str(), "TS_", 3) != 0)
+								continue;
+							const auto sw = model->hasAPFlagSwitched(i, prevMs, nextMs);
+							if (!sw.first || !sw.second)
+								continue;
+							// the sound tag: the point's name after TS_ (its trailing digits too, if no tag has them)
+							std::string name = tag.substr(3);
+							int soundTag = gameSet->soundTags.names.getIndex(name);
+							while (soundTag < 0 && !name.empty() && (std::isdigit((unsigned char)name.back()) || name.back() == '_')) {
+								name.pop_back();
+								soundTag = gameSet->soundTags.names.getIndex(name);
+							}
+							if (soundTag < 0)
+								continue;
+							std::string path; float refDist, maxDist;
+							std::tie(path, refDist, maxDist) = obj->blueprint->getSound(soundTag, obj->subtype, (obj->position - camera.position).len3());
+							if (!path.empty()) {
+								SoundPlayer::getSoundPlayer()->soundOwner = obj->id;
+								SoundPlayer::getSoundPlayer()->playSound3D("Warrior Kings Game Set\\Sounds\\" + path, obj->position, refDist, maxDist);
+								SoundPlayer::getSoundPlayer()->soundOwner = 0;
+							}
+						}
+					}
+				}
+		}
 		if (obj->trajectory.isMoving()) {
 			obj->updatePosition(obj->trajectory.getPosition(timeManager.currentTime));
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);
@@ -92,45 +143,54 @@ void Client::tick()
 		cameraMode = 0;
 		cameraCurrentPath = nullptr;
 	};
+	// As WKB.exe's (0x606b40..0x608402): the positions on a Catmull-Rom curve through the inner
+	// segments (with 4 nodes or more; the first and last segments straight), the view turned the
+	// short way round between the nodes' pitch and yaw (no roll); the node's time from the one
+	// before it (the first one's not counted); game time, or the real clock when the time was
+	// locked as the path started (the campaign's intros); held on the last node at the end, or
+	// looping from the first INTERPOLATE_TO
 	if (cameraMode == 1) {
-		float camTime = (float)(SDL_GetTicks() - cameraStartTime) / 1000.0f;
-		float prevTime = 0.0f, nextTime = 0.0f;
-		size_t nextNode;
-		for (nextNode = 1; nextNode < cameraPathPos.size(); nextNode++) {
-			prevTime = nextTime;
-			nextTime += cameraPathDur[nextNode];
-			if (camTime < nextTime)
-				break;
+		const size_t n = cameraPathPos.size();
+		float camTime = cameraRealClock ? (float)(SDL_GetTicks() - cameraStartTime) / 1000.0f : timeManager.currentTime - cameraStartGameTime;
+		std::vector<float> at(n, 0.0f); // each node's time
+		for (size_t k = 1; k < n; k++)
+			at[k] = at[k - 1] + cameraPathDur[k];
+		const float total = n ? at[n - 1] : 0.0f;
+		if (cameraPathLoop && n >= 2 && camTime >= total) {
+			const size_t from = std::min(cameraLoopFrom, n - 1);
+			const float span = total - at[from];
+			camTime = span > 0.0f ? at[from] + std::fmod(camTime - at[from], span) : total;
 		}
-		if (nextNode == cameraPathPos.size()) {
+		if (n < 2 || (!cameraPathLoop && camTime >= total)) {
+			if (n)
+				std::tie(camera.position, camera.orientation) = cameraPathPos.back();
 			resetCameraMode();
 		}
 		else {
-			auto p0 = cameraPathPos[nextNode - 1];
-			auto p1 = cameraPathPos[nextNode];
-			// Limit angles to [0;2pi)
-			constexpr float pi = (float)M_PI;
-			for (auto& p : { &p0, &p1 }) {
-				for (float& c : p->second) {
-					c = fmodf(c, 2*pi);
-					if (c < 0.0f) c += 2*pi;
-				}
+			size_t k = 1;
+			while (k < n - 1 && camTime >= at[k])
+				k++;
+			const float seg = at[k] - at[k - 1];
+			const float t = seg > 0.0f ? std::clamp((camTime - at[k - 1]) / seg, 0.0f, 1.0f) : 1.0f;
+			const Vector3& p1 = cameraPathPos[k - 1].first;
+			const Vector3& p2 = cameraPathPos[k].first;
+			Vector3 pos = p1 + (p2 - p1) * t;
+			if (n >= 4 && k >= 2 && k + 1 < n) {
+				const Vector3& p0 = cameraPathPos[k - 2].first;
+				const Vector3& p3 = cameraPathPos[k + 1].first;
+				const float t2 = t * t, t3 = t2 * t;
+				pos = (p1 * 2.0f + (p2 - p0) * t + (p0 * 2.0f - p1 * 5.0f + p2 * 4.0f - p3) * t2 + (p1 * 3.0f - p0 - p2 * 3.0f + p3) * t3) * 0.5f;
 			}
-			// Try to make distances between angles as small as possible (< pi radians)
-			for (int i = 0; i < 3; i++) {
-				float d = p1.second.coord[i] - p0.second.coord[i];
-				if (fabs(d) > pi) {
-					if (d > 0)
-						p1.second.coord[i] -= 2 * pi;
-					else
-						p1.second.coord[i] += 2 * pi;
-				}
-			}
-			float dt = (camTime - prevTime) / (nextTime - prevTime);
-			Vector3 pos = (p1.first - p0.first)*dt + p0.first;
-			Vector3 ori = (p1.second - p0.second)*dt + p0.second;
+			// the view: the two directions turned into each other along the great circle
+			auto dirOf = [](const Vector3& o) { return Vector3(-std::sin(o.y) * std::cos(o.x), std::sin(o.x), std::cos(o.y) * std::cos(o.x)); };
+			const Vector3 d0 = dirOf(cameraPathPos[k - 1].second), d1 = dirOf(cameraPathPos[k].second);
+			const float cosA = std::clamp(d0.dot(d1), -1.0f, 1.0f);
+			const float angle = std::acos(cosA);
+			Vector3 d = angle < 1e-4f ? d0 + (d1 - d0) * t
+				: (d0 * std::sin((1.0f - t) * angle) + d1 * std::sin(t * angle)) * (1.0f / std::sin(angle));
+			d = d.normal();
 			camera.position = pos;
-			camera.orientation = ori;
+			camera.orientation = Vector3(std::asin(std::clamp(d.y, -1.0f, 1.0f)), std::atan2(-d.x, d.z), 0.0f);
 		}
 	}
 
@@ -327,6 +387,7 @@ void Client::tick()
 				timeManager.psCurrentTime = br.readUint32();
 				timeManager.currentTime = (float)timeManager.psCurrentTime / 1000.0f;
 				timeManager.paused = br.readUint8();
+				timeManager.scriptLocks = br.readUint8();
 				break;
 			}
 			case NETCLIMSG_OBJECT_ANIM_SET: {
@@ -383,7 +444,10 @@ void Client::tick()
 					// add it back at the correct blueprint key
 					obj->parent->children[postbp].push_back(obj);
 					// now converted!
+					const GameObjBlueprint* prevbp = obj->blueprint;
 					obj->blueprint = postbp;
+					// the footprint: the old one freed, the new one taken (as the server's)
+					updateOccupiedTiles(obj, obj->position, obj->orientation, obj->position, obj->orientation, prevbp);
 				}
 				break;
 			}
@@ -539,7 +603,47 @@ void Client::tick()
 				break;
 			}
 			case NETCLIMSG_STOP_SOUND: {
-				SoundPlayer::getSoundPlayer()->stopSoundsOf(br.readUint32());
+				const uint32_t owner = br.readUint32();
+				SoundPlayer::getSoundPlayer()->stopSoundsOf(owner);
+				loopedSounds.erase(std::remove_if(loopedSounds.begin(), loopedSounds.end(),
+					[owner](const LoopedSound& l) { return l.source == owner; }), loopedSounds.end());
+				break;
+			}
+			case NETCLIMSG_SHADOW_SWITCH: {
+				const uint32_t objid = br.readUint32();
+				const bool on = br.readUint8() != 0;
+				if (ClientGameObject* obj = findObject(objid))
+					obj->shadowSwitch = on ? 1 : 0;
+				break;
+			}
+			case NETCLIMSG_FOG_RESET: {
+				const uint32_t objid = br.readUint32();
+				fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(),
+					[objid](const FogReveal& r) { return r.object == objid; }), fogReveals.end());
+				break;
+			}
+			case NETCLIMSG_SAVE_GAME_MENU:
+				saveMenuRequested = true;
+				break;
+			case NETCLIMSG_OBJECTIVES_MAP_GRAPHIC:
+				objectivesMapGraphic = br.readStringZ();
+				break;
+			case NETCLIMSG_LOOPED_SOUND: {
+				LoopedSound l;
+				l.source = br.readUint32();
+				l.soundTag = (int)br.readUint32();
+				l.target = br.readUint32();
+				loopedSounds.push_back(l);
+				break;
+			}
+			case NETCLIMSG_TILE_STATUS: {
+				const int tx = br.readUint16(), tz = br.readUint16();
+				const uint8_t status = br.readUint8();
+				if (tiles && terrain) {
+					const auto [w, h] = terrain->getNumPlayableTiles();
+					if (tx < w && tz < h)
+						tiles[(size_t)tz * w + tx].scriptStatus = status;
+				}
 				break;
 			}
 			case NETCLIMSG_TRIBUTE_RECEIVED: {
@@ -566,7 +670,11 @@ void Client::tick()
 			}
 			case NETCLIMSG_SHOW_GAME_TEXT_WINDOW: {
 				int gtwIndex = br.readUint32();
+				// shown again while open: nothing (WKB.exe's)
+				if (auto open = gtwStates.find(gtwIndex); open != gtwStates.end() && open->second >= 0)
+					break;
 				gtwOrder[gtwIndex] = ++gtwSerial;
+				gtwReadAll.erase(gtwIndex);
 				setGameTextWindowPage(gtwIndex, 0);
 				break;
 			}
@@ -579,6 +687,7 @@ void Client::tick()
 			}
 			case NETCLIMSG_HIDE_GAME_TEXT_WINDOW: {
 				const int gtwIndex = br.readUint32();
+				SoundPlayer::getSoundPlayer()->stopSoundsOf(GameTextWindowSoundOwner(gtwIndex));
 				gtwStates.erase(gtwIndex);
 				gtwOrder.erase(gtwIndex);
 				break;
@@ -645,17 +754,22 @@ void Client::tick()
 				cameraCurrentPath = &gspath;
 				cameraPathIndex = camPathIndex;
 				cameraStartTime = SDL_GetTicks();
+				cameraStartGameTime = timeManager.currentTime;
+				cameraRealClock = timeManager.paused || timeManager.scriptLocks > 0;
+				cameraPathLoop = gspath.loopCameraPath;
+				cameraLoopFrom = gspath.startAtCurrentCameraPosition ? 1 : 0;
 				cameraPathPos.clear();
 				cameraPathDur.clear();
 				if (gspath.startAtCurrentCameraPosition) {
 					cameraPathPos.push_back({ camera.position, camera.orientation });
-					cameraPathDur.push_back(1.0f);
+					cameraPathDur.push_back(0.0f);
 				}
 				for (auto& node : gspath.pathNodes) {
 					CliScriptContext ctx(this);
 					OrientedPosition op = node.position->eval(&ctx);
 					cameraPathPos.push_back({ op.position, op.rotation });
-					cameraPathDur.push_back(node.duration->eval(&ctx));
+					// whole milliseconds, as the original's
+					cameraPathDur.push_back(std::floor(std::max(0.0f, node.duration->eval(&ctx)) * 1000.0f) / 1000.0f);
 				}
 				if (!cameraPathPos.empty()) {
 					std::tie(camera.position, camera.orientation) = cameraPathPos.front();
@@ -684,12 +798,15 @@ void Client::tick()
 				if (ClientGameObject* from = findObject(objid)) {
 					if (ClientGameObject* to = findObject(targetid)) {
 						std::string path; float refDist, maxDist;
-						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
+						const bool toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER;
+						std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype, toPlayer ? 0.0f : (to->position - camera.position).len3());
 						if (!path.empty()) {
 							std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
 							SoundPlayer::getSoundPlayer()->soundOwner = objid;
-							if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
-								SoundPlayer::getSoundPlayer()->playSound(gfspath);
+							// to the player (the units' acknowledgements, "Issue Attack" from every
+							// unit of a group order): one of a tag and type at a time, not a chorus
+							if (toPlayer)
+								SoundPlayer::getSoundPlayer()->playSound(gfspath, from->blueprint->name + "\n" + std::to_string(soundTag));
 							else {
 								//float rolloff = (refDist / 0.1f - refDist) / (maxDist - refDist);
 								SoundPlayer::getSoundPlayer()->playSound3D(gfspath, to->position, refDist, maxDist);
@@ -705,7 +822,7 @@ void Client::tick()
 				br.readTo(objid, soundTag, targetPos, randval);
 				if (ClientGameObject* from = findObject(objid)) {
 					std::string path; float refDist, maxDist;
-					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype);
+					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype, (targetPos - camera.position).len3());
 					if (!path.empty()) {
 						std::string gfspath = "Warrior Kings Game Set\\Sounds\\" + path;
 						SoundPlayer::getSoundPlayer()->soundOwner = objid;
@@ -872,10 +989,11 @@ void Client::tick()
 				break;
 			}
 			case NETCLIMSG_SKIP_CAMERA_PATH: {
+				const bool skipActions = br.readUint8() != 0;
 				if (cameraCurrentPath && !cameraPathPos.empty()) {
 					std::tie(camera.position, camera.orientation) = cameraPathPos.back();
 				}
-				resetCameraMode();
+				resetCameraMode(skipActions);
 				break;
 			}
 			case NETCLIMSG_ALIAS_ASSIGNED: {
@@ -1331,15 +1449,21 @@ void Client::sendTribute(uint32_t player, int item, float amount)
 
 void Client::setGameTextWindowPage(int gtwIndex, int page)
 {
+	SoundPlayer::getSoundPlayer()->stopSoundsOf(GameTextWindowSoundOwner(gtwIndex));
 	const auto& pages = gameSet->gameTextWindows[gtwIndex].pages;
 	if (page < 0 || page >= (int)pages.size()) {
 		gtwStates[gtwIndex] = -1;
 		return;
 	}
 	gtwStates[gtwIndex] = page;
+	if (page + 1 >= (int)pages.size())
+		gtwReadAll.insert(gtwIndex);
 	const auto& snd = pages[page].activationSound;
-	if (!snd.empty())
+	if (!snd.empty()) {
+		SoundPlayer::getSoundPlayer()->soundOwner = GameTextWindowSoundOwner(gtwIndex);
 		SoundPlayer::getSoundPlayer()->playSound(snd);
+		SoundPlayer::getSoundPlayer()->soundOwner = 0;
+	}
 }
 
 void Client::sendGameTextWindowButtonClicked(int gtwIndex, int buttonIndex)

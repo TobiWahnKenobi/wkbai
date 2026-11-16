@@ -238,6 +238,10 @@ void Server::loadSaveGame(const char * filename)
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);
+	// the intensity maps as saved (the intensity section): what the players had seen, the maps on
+	intensityMaps.clear();
+	if (!parts.intensity.empty())
+		intensityMaps.loadText(this, parts.intensity);
 	unitHistory.loaded(*this);
 	// the players whose game was over at the save (the clients had the game set's message: their
 	// lists are empty)
@@ -292,6 +296,9 @@ void Server::loadSaveGame(const char * filename)
 	}
 
 	timeManager.unlock();
+	// the save's locks beyond the one saving holds are LOCK_TIMEs of its scripts (an intro)
+	timeManager.scriptLocks = timeManager.lockCount;
+	timeManager.lockCount = 0;
 	timeManager.unpause();
 	lastSync = time(nullptr);
 }
@@ -1491,10 +1498,31 @@ void Server::loadSavePredec(GSFileParser & gsf)
 	}
 }
 
+extern int g_simulating;
+
 void ServerGameObject::setItem(int index, float value)
 {
 	assert(index != -1);
 	if (getItem(index) == value) return;
+	// a member of a formation hit for more than 4: the formation shares it out (WKB.exe 0x554c00);
+	// only for the simulation's writes, not a save being loaded
+	if (index == Tags::PDITEM_HIT_POINTS && g_simulating > 0 && parent
+		&& parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+		&& FormationController::shareDamage(this, getItem(index) - value))
+		return;
+	// "Invulnerable": no hit points or structural integrity lost while it isn't 0 (WKB.exe 0x554c00;
+	// Valhalla's palaces)
+	if (g_simulating > 0 && value < getItem(index) && Server::instance->gameSet) {
+		static const GameSet* of = nullptr;
+		static int invulnerable = -1, integrity = -1;
+		if (of != Server::instance->gameSet.get()) {
+			of = Server::instance->gameSet.get();
+			invulnerable = of->items.names.getIndex("Invulnerable");
+			integrity = of->items.names.getIndex("Structural Integrity");
+		}
+		if (invulnerable >= 0 && (index == Tags::PDITEM_HIT_POINTS || index == integrity) && getItem(invulnerable) != 0.0f)
+			return;
+	}
 	// debugging: "WKB_TRACE_ITEM=<object id>:<item name>" prints every change of that item (id 0: on any object)
 	static const char* traceItem = getenv("WKB_TRACE_ITEM");
 	if (traceItem) {
@@ -1516,6 +1544,12 @@ void ServerGameObject::setItem(int index, float value)
 void ServerGameObject::setParent(ServerGameObject * newParent)
 {
 	assert(!this->deleted);
+	// debugging: WKB_TRACE_PARENT prints every change of controller of a formation's member
+	static const bool traceParent = getenv("WKB_TRACE_PARENT") != nullptr;
+	if (traceParent && ((parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		|| (newParent && newParent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)))
+		printf("PARENT t=%.2f %u %s: %s %u -> %s %u\n", Server::instance->timeManager.currentTime, id, blueprint->name.c_str(),
+			parent ? parent->blueprint->name.c_str() : "-", parent ? parent->id : 0, newParent ? newParent->blueprint->name.c_str() : "-", newParent ? newParent->id : 0);
 	// a parent deleted in this tick (an army whose script terminated it, say) is freed at the end
 	// of it: a unit put under it was left with a dangling parent, and crashed the next transfer
 	// (a 22-minute AI test with formation waves). Its first live ancestor takes the unit instead.
@@ -1677,6 +1711,9 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 
 	// Find and play movement animation
 	int anim = -1;
+	// the walk played at the speed over the band's NATURAL_MOVEMENT_SPEED (WKB.exe 0x515cd0,
+	// 0x620620: a Knight charging at 8.5 m/s plays Move_Charge at 1.42x); 1 without bands
+	float rate = 1.0f;
 	if (!blueprint->movementBands.empty()) {
 		// take movement band with nearest natural speed
 		auto mbcmp = [speed](const GameObjBlueprint::MovementBand& mb1, const GameObjBlueprint::MovementBand& mb2) {
@@ -1685,6 +1722,8 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 		auto it = std::min_element(blueprint->movementBands.begin(), blueprint->movementBands.end(), mbcmp);
 		auto& mb = *it;
 		anim = mb.defaultAnim;
+		if (mb.naturalMovementSpeed > 0.01f)
+			rate = std::clamp(speed / mb.naturalMovementSpeed, 0.1f, 10.0f);
 		auto& gs = Server::instance->gameSet;
 		SrvScriptContext ctx{ Server::instance, this };
 		for (auto& p : mb.onEquAnims) {
@@ -1699,12 +1738,16 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 	// already walking with it (the next path segment, a formation member following its place),
 	// or stopped just now after walking with it: the walk goes on, not from its first frame again
 	const float now = Server::instance->timeManager.currentTime;
-	if (wasMoving && anim == animationIndex)
+	if (wasMoving && anim == animationIndex) {
+		// the same walk at another rate: on from the same phase
+		if (std::abs(rate - animSpeed) > 1e-3f)
+			setAnimation(anim, false, -1, now - (now - animStartTime) * animSpeed / rate, rate);
 		return;
+	}
 	if (anim == lastWalkAnim && lastWalkStop >= 0.0f && now - lastWalkStop < 0.5f)
-		setAnimation(anim, false, -1, lastWalkAnimStart);
+		setAnimation(anim, false, -1, now - (now - lastWalkAnimStart) * lastWalkAnimSpeed / rate, rate);
 	else
-		setAnimation(anim);
+		setAnimation(anim, false, -1, -1.0f, rate);
 }
 
 void ServerGameObject::stopMovement()
@@ -1712,6 +1755,7 @@ void ServerGameObject::stopMovement()
 	if (movement.isMoving()) {
 		lastWalkAnim = animationIndex;
 		lastWalkAnimStart = animStartTime;
+		lastWalkAnimSpeed = animSpeed;
 		lastWalkStop = Server::instance->timeManager.currentTime;
 	}
 	movement.stopMovement();
@@ -1809,11 +1853,18 @@ void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
 	Server::instance->sendToAll(npw);
 	// change subtype to matching one
 	int postsubtype = postbp->subtypeNames.getIndex(prevbp->subtypeNames.getString(this->subtype));
-	this->setSubtypeAndAppearance((postsubtype != -1) ? postsubtype : 0, 0); // TODO: random subtype as fallback?
+	// the appearance is kept where the new type has it (WKB.exe's conversion swaps only the
+	// blueprint, 0x542b60 / 0x547190)
+	{
+		const int st = (postsubtype != -1) ? postsubtype : 0;
+		auto sit = postbp->subtypes.find(st);
+		const int app = (sit != postbp->subtypes.end() && sit->second.appearances.count(this->appearance)) ? this->appearance : 0;
+		this->setSubtypeAndAppearance(st, app);
+	}
 	// update sight range
 	this->updateSightRange();
 	// update footprint
-	this->updateOccupiedTiles(this->position, this->orientation, this->position, this->orientation);
+	Server::instance->updateOccupiedTiles(this, this->position, this->orientation, this->position, this->orientation, prevbp);
 	// what can be built upon (tree stumps, props) goes from the footprint's tiles. (Seen first as
 	// the stump under a finished foundation; WKB.exe's saves show it gone on loading instead, so
 	// this only matters for a building converted onto new ground.)
@@ -2306,7 +2357,8 @@ float ServerGameObject::baseSpeed()
 	}
 	if (equation != -1) {
 		SrvScriptContext ctx{ Server::instance, this };
-		speed = Server::instance->gameSet->equations[equation]->eval(&ctx);
+		// not under 0.75 m/s (WKB.exe 0x595910 / 0x595980: max(equation, 0.75))
+		speed = std::max(Server::instance->gameSet->equations[equation]->eval(&ctx), 0.75f);
 	}
 	// wet or snowy ground (wkbai's weather; 1 when off)
 	if (Server::instance->environment.enabled())
@@ -2417,6 +2469,7 @@ void Server::syncTime()
 	msg.writeUint32(timeManager.psCurrentTime);
 	// a replay's viewer paused: its clock stands still too
 	msg.writeUint8(timeManager.paused || (replay && replayPaused));
+	msg.writeUint8(timeManager.scriptLocks ? 1 : 0);
 	sendToAll(msg);
 }
 
@@ -2488,9 +2541,10 @@ void Server::stopCameraPath(ServerGameObject* player, bool skipActions)
 	sendTo(player, msg);
 }
 
-void Server::skipCameraPath(ServerGameObject* player)
+void Server::skipCameraPath(ServerGameObject* player, bool skipActions)
 {
 	NetPacketWriter msg{ NETCLIMSG_SKIP_CAMERA_PATH };
+	msg.writeUint8(skipActions ? 1 : 0);
 	sendTo(player, msg);
 }
 
@@ -2554,6 +2608,73 @@ void Server::setGameInterface(ServerGameObject* player, bool enabled)
 	NetPacketWriter msg{ NETCLIMSG_GAME_INTERFACE };
 	msg.writeUint8(enabled ? 1 : 0);
 	sendTo(player, msg);
+}
+
+void Server::sendShadowSwitch(ServerGameObject* obj, bool on)
+{
+	NetPacketWriter msg{ NETCLIMSG_SHADOW_SWITCH };
+	msg.writeUint32(obj->id);
+	msg.writeUint8(on ? 1 : 0);
+	sendToAll(msg);
+}
+
+void Server::resetFogOfWar(ServerGameObject* obj, ServerGameObject* player)
+{
+	if (!obj || !player)
+		return;
+	fogReveals.erase(std::remove_if(fogReveals.begin(), fogReveals.end(),
+		[&](const FogReveal& r) { return r.object == obj->id && r.player == player->id; }), fogReveals.end());
+	NetPacketWriter msg{ NETCLIMSG_FOG_RESET };
+	msg.writeUint32(obj->id);
+	sendTo(player, msg);
+}
+
+void Server::openSaveGameMenu(ServerGameObject* player)
+{
+	if (!player)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_SAVE_GAME_MENU };
+	sendTo(player, msg);
+}
+
+void Server::setObjectivesMapGraphic(ServerGameObject* player, const std::string& path)
+{
+	if (!player)
+		return;
+	NetPacketWriter msg{ NETCLIMSG_OBJECTIVES_MAP_GRAPHIC };
+	msg.writeStringZ(path);
+	sendTo(player, msg);
+}
+
+void Server::playLoopedSound(ServerGameObject* from, int soundTag, ServerGameObject* to)
+{
+	NetPacketWriter msg{ NETCLIMSG_LOOPED_SOUND };
+	msg.writeUint32(from->id);
+	msg.writeUint32((uint32_t)soundTag);
+	msg.writeUint32(to->id);
+	if (to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+		sendTo(to, msg);
+	else
+		sendToAll(msg);
+}
+
+void Server::setTileStatus(int tx, int tz, int status)
+{
+	if (!tiles || !terrain)
+		return;
+	const auto [w, h] = terrain->getNumPlayableTiles();
+	if (tx < 0 || tz < 0 || tx >= w || tz >= h)
+		return;
+	// as WKB.exe's: only a tile that is passable now changes, so a tile is never unblocked
+	auto& tile = tiles[(size_t)tz * w + tx];
+	if (tile.scriptStatus != 5)
+		return;
+	tile.scriptStatus = (uint8_t)status;
+	NetPacketWriter msg{ NETCLIMSG_TILE_STATUS };
+	msg.writeUint16((uint16_t)tx);
+	msg.writeUint16((uint16_t)tz);
+	msg.writeUint8((uint8_t)status);
+	sendToAll(msg);
 }
 
 void Server::setObjectiveMarker(ServerGameObject* player, const std::string& key, const ObjectiveMarker& marker)
@@ -3233,6 +3354,7 @@ void Server::sendStateTo(NetLink* link)
 		NetPacketWriter msg(NETCLIMSG_TIME_SYNC);
 		msg.writeUint32(timeManager.psCurrentTime);
 		msg.writeUint8(timeManager.paused);
+		msg.writeUint8(timeManager.scriptLocks ? 1 : 0);
 		send(msg);
 	}
 	if (!hostRegionsText.empty())
@@ -3389,9 +3511,12 @@ namespace {
 	};
 }
 
+int g_simulating = 0;
+
 void Server::simulate()
 {
 	ZoneScoped;
+	struct Simulating { Simulating() { g_simulating++; } ~Simulating() { g_simulating--; } } simulating;
 	static const bool profile = g_settings.value("profileSim", false);
 	// with profileSim, a step over 50 ms printed with its parts (a step that long loses game
 	// time: the server catches up 10 steps at most)
@@ -3631,6 +3756,18 @@ void Server::simulate()
 		ministries.update(*this);
 	}
 	g_simProfile.objects += toprocess.size();
+	// The sight scan as WKB.exe's (0x566c10): every object about once a second, round-robin, the
+	// objects spread evenly over the steps (here by a phase from the id: scanned when the second
+	// counted from its phase turns over)
+	const double sightNow = timeManager.currentTime, sightBefore = sightScanTime < 0.0 ? sightNow - 1.0 : sightScanTime;
+	sightScanTime = sightNow;
+	// the intensity maps once a second too
+	if (std::floor(sightNow) != std::floor(sightBefore))
+		intensityMaps.update(this);
+	auto sightDue = [&](uint32_t id) {
+		const double phase = std::fmod((double)id * 0.6180339887498949, 1.0);
+		return std::floor(sightNow + phase) != std::floor(sightBefore + phase);
+	};
 	for (const SrvGORef& ref : toprocess) {
 		ServerGameObject* obj = ref.get();
 		if (!obj) continue;
@@ -3674,10 +3811,14 @@ void Server::simulate()
 				Vector3 dir = obj->movement.getDirection();
 				obj->orientation.y = atan2f(dir.x, -dir.z);
 			}
-			// restart movement is speed changes
-			float speed = obj->computeSpeed();
-			if (speed != obj->currentSpeed) {
-				obj->startMovement(obj->movement.getDestination());
+			// The speed is set once per leg, as WKB.exe's (0x547800 when a leg starts; items and the
+			// ground under the unit count from the next one). Only a formation and its members go on
+			// at a new speed at once: the formation's pace keeps them in their places.
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+				|| (obj->parent && obj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)) {
+				float speed = obj->computeSpeed();
+				if (speed != obj->currentSpeed)
+					obj->startMovement(obj->movement.getDestination());
 			}
 			if (profile) t3 = SimProfile::now();
 			// pf
@@ -3696,8 +3837,8 @@ void Server::simulate()
 			obj->orientation = obj->trajectory.getRotationAngles(timeManager.currentTime);
 		}
 		moveTimer.reset();
-		// sight range events every 4th step (80 ms), the objects on different steps
-		if (obj->blueprint->receiveSightRangeEvents && (simStepIndex + obj->id) % 4 == 0) {
+		// sight range events once a second (above)
+		if (obj->blueprint->receiveSightRangeEvents && sightDue(obj->id)) {
 			SimTimer sightTimer(g_simProfile.sight);
 			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();

@@ -205,6 +205,8 @@ struct AIController {
 	void activatePlan(int planTag);
 	void abandonPlan();
 	void registerWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder, const WorkOrder* workOrder);
+	// DEREGISTER_WORK_ORDER (mods; WKB.exe 0x4cf830): the city's work orders for those units dropped
+	void deregisterWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder);
 	void activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance = false);
 	void deactivateCommission(const GSCommission* commission, ServerGameObject* handler);
 };
@@ -227,3 +229,6 @@ void InstallAIAggressionOverrides(GameSet& gs);
 // the Lua AIs there are (LuaAI\*.lua, redata's and the mods'), by name; one's game path
 std::vector<std::string> ListLuaAIs();
 std::string LuaAIPath(const std::string& name);
+
+// an AI unit attacks: its DEFAULT_ATTACK_COMMAND (else the "Attack" order)
+void AIAttack(ServerGameObject* unit, ServerGameObject* target);

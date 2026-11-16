@@ -590,7 +590,7 @@ struct FrontEnd::Impl {
 			for (const GameWindow& w : gameWindows) {
 				sol::table buttons = lua.create_table();
 				for (const GameWindow::Button& b : w.buttons)
-					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled));
+					buttons.add(lua.create_table_with("text", b.text, "x", b.x, "y", b.y, "width", b.width, "height", b.height, "enabled", b.enabled, "close", b.close));
 				list.add(lua.create_table_with("id", w.id, "text", w.text, "page", w.page + 1, "pages", w.pages,
 					"x", w.x, "y", w.y, "width", w.width, "atBottom", w.atBottom, "modal", w.modal, "buttons", buttons,
 					"title", w.title, "general", w.general, "titleColour", w.titleColour));
@@ -642,7 +642,7 @@ struct FrontEnd::Impl {
 			sol::table entries = lua.create_table();
 			for (const Objectives::Entry& e : objectives.entries)
 				entries.add(lua.create_table_with("text", e.text, "inactive", e.inactive));
-			return sol::make_object(lua, lua.create_table_with("title", objectives.title, "changed", objectives.changed, "entries", entries));
+			return sol::make_object(lua, lua.create_table_with("title", objectives.title, "changed", objectives.changed, "entries", entries, "map", objectives.map));
 		});
 		lua.set_function("isSinglePlayer", [this]() { return singlePlayer; });
 		lua.set_function("getSaveGames", [this]() { return sol::as_table(saveGames); });
