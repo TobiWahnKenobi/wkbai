@@ -1212,6 +1212,9 @@ local SETTINGS = {
 	-- how often the weather changes: 0 Frequent, 1 Normal, 2 Seldom, 3 Random, 4 Custom (the
 	-- minutes between changes, the weathers allowed: bit n of weatherTypes, CLOUD_WEATHERS[n + 2])
 	weatherStability = 3, weatherMinChange = 3, weatherMaxChange = 10, weatherTypes = 1023,
+	-- the peasants' lodging (PeasantLodging.h): they sleep in their houses, villages, manors and
+	-- castles at night (with day and night); the farmers spend the winter indoors (with the seasons)
+	peasantsSleep = 1, farmersWinter = 1,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1536,7 +1539,15 @@ local function weatherTab()
 		if #none > 0 then
 			note(X(1000), Y(864), { "None of them in " .. table.concat(none, ", ") .. ": clear weather then." })
 		end
-	else
+	end
+	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter)
+	if s.dayNight ~= 0 then
+		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(904))
+	end
+	if s.seasons ~= 0 then
+		switch("farmersWinter", "Farmers winter indoors", X(1000), Y(970))
+	end
+	if not (s.seasons ~= 0 and s.weatherStability == 4) then
 		note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
 			"summers, more storms, floods and droughts. Random: chosen every year.",
 			"",

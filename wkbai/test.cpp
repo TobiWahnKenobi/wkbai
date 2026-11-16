@@ -4136,6 +4136,25 @@ void Test_AIvsAI()
 					st.wildfires, st.fromMissiles, st.fromBuildings, st.spontaneous, st.fireCells, st.fireCellsMost, st.buildingsFired, st.fireDeaths, server.environment.charredCount());
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
+				// the peasants' lodging (PeasantLodging): who is in, and each player's farmers counted
+				// while in, their "Number of Farmers" and crafts bonus
+				{
+					const PeasantLodging& lg = env.lodging;
+					std::string per;
+					const int bonusItem = server.gameSet->items.names.getIndex("Winter Crafts Bonus");
+					if (CommonGameObject* level = server.getLevel())
+						for (const auto& [type, children] : level->children)
+							for (CommonGameObject* c : children)
+								if (auto* pl = (ServerGameObject*)c; c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && pl->blueprint->name != "Neutral Player") {
+									char b[96];
+									snprintf(b, sizeof(b), " %u: farmers in %d, Number of Farmers %.0f, crafts %.3f;", pl->id, lg.farmersOf(pl->id),
+										pl->getItem(Tags::PDITEM_NUMBER_OF_FARMERS), bonusItem >= 0 ? pl->getItem(bonusItem) : 0.0f);
+									per += b;
+								}
+					printf("AITEST lodging t=%.0f: %zu lodgers, %d inside; departures %d, lodged %d, woken %d, waited %d, evicted %d, stuck %d;%s\n",
+						server.timeManager.currentTime, lg.count(), lg.lodgedCount(), lg.stats.departures, lg.stats.lodged, lg.stats.woken,
+						lg.stats.waited, lg.stats.evicted, lg.stats.stuck, per.c_str());
+				}
 				// each player's: the weather's deaths, and the AI's answers (AIWeather.cpp)
 				if (CommonGameObject* level = server.getLevel())
 					for (const auto& [type, children] : level->children)

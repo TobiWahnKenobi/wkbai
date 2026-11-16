@@ -233,6 +233,8 @@ void Server::loadSaveGame(const char * filename)
 	// the ministry AI's governments as saved
 	if (!parts.ai.empty())
 		ministries.loadText(*this, parts.ai);
+	// the peasants in for the night or the winter (PeasantLodging): their states on the units
+	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
 	DiscoveredLoadText(parts.discovered);
 	// wkbai's unit history as saved: kills, creators, the last hits
@@ -3348,7 +3350,10 @@ void Server::updatePeasantActivity()
 						auto* so = (ServerGameObject*)o;
 						if (so->deleted)
 							continue;
-						if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && so->getItem(isPeasant) > 0.0f) {
+						// (a peasant in for the night or the winter, PeasantLodging, is not idle: the
+						// scripts would hand it work or train more)
+						if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && so->getItem(isPeasant) > 0.0f
+							&& (so->lodging == 0 || so->lodging == 4)) {
 							Order* order = so->orderConfig.getCurrentOrder();
 							if (!order)
 								counts[IDLE]++;
@@ -3605,7 +3610,9 @@ void Server::simulate()
 			int numFarmersFinder = gameSet->objectFinderDefinitions.names.getIndex(numFarmersName);
 			if (numFarmersFinder != -1) {
 				SrvScriptContext ctx(this, obj);
-				obj->setItem(Tags::PDITEM_NUMBER_OF_FARMERS, gameSet->objectFinderDefinitions[numFarmersFinder]->eval(&ctx).size());
+				// (with the farmers in for the night or the winter, PeasantLodging: their support goes on)
+				obj->setItem(Tags::PDITEM_NUMBER_OF_FARMERS, (float)(gameSet->objectFinderDefinitions[numFarmersFinder]->eval(&ctx).size()
+					+ environment.lodging.farmersOf(obj->id)));
 			}
 		}
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {

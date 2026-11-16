@@ -56,6 +56,12 @@ struct EnvironmentSettings {
 	// tests); below 0 not chosen yet: the year 1000's for startSeason (HistoricMoonAge)
 	int moonPhase = 0;
 	float moonStart = -1.0f;
+	// the peasants' lodging (PeasantLodging.h): "peasantsSleep" (with day and night) the peasants
+	// go into their own houses, villages, manors and castles at dusk and back to work at dawn;
+	// "farmersWinter" (with the seasons) the farmers go in at winter's first dusk and stay until
+	// spring's first dawn. Off here (a save or recording without them: as before); the lobby's
+	// default is on
+	bool peasantsSleep = false, farmersWinter = false;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
 	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it

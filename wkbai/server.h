@@ -75,6 +75,11 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 	// garrisoned building's last troop credited (its shooters take turns)
 	uint32_t creatorId = 0, creditId = 0, lastHitBy = 0, garrisonCredit = 0;
 	float lastHitTime = -1.0f;
+	// wkbai's peasant lodging (PeasantLodging.h): where the peasant is in its night or winter
+	// (LodgeState: 0 none, going in, inside, waiting without a shelter, returning to work), and
+	// the factor its walk to shelter and back is sped up by (1: none)
+	uint8_t lodging = 0;
+	float lodgeSpeed = 1.0f;
 
 	ServerGameObject(uint32_t id, const GameObjBlueprint *blueprint) : SpecificGameObject<Server, ServerGameObject>(id, blueprint), orderConfig(this) {}
 
