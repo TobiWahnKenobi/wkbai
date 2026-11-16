@@ -10,6 +10,7 @@
 #include <vector>
 #include "Environment.h"
 #include "GameObjectRef.h"
+#include "PeasantLodging.h"
 
 struct Server;
 struct ServerGameObject;
@@ -73,9 +74,14 @@ struct ServerEnvironment {
 	// the burning land's patches
 	std::vector<Vector3> firePositions() const;
 
-	// a save game's side file (<save>.env.txt): the settings and the state, read back as is
+	// the peasants' lodging at night and in winter (PeasantLodging.h)
+	PeasantLodging lodging;
+
+	// the save file's environment section (an older save's side file <save>.env.txt): the settings
+	// and the state, read back as is; the lodging's units after the world is loaded
 	std::string saveText() const;
 	void loadText(const std::string& text);
+	void afterWorldLoaded(Server& server) { lodging.afterLoad(server); }
 	void reset() { *this = ServerEnvironment(); }
 
 	// for the tests: what happened ("AITEST environment" lines)

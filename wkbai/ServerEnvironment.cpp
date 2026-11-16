@@ -95,6 +95,9 @@ float ServerEnvironment::speedFactorFor(const ServerGameObject* obj) const
 	// the undead: the mud drags at them far more (to a quarter of their speed on soaked ground)
 	if (kindOf(obj->blueprint) == K_UNDEAD)
 		return std::clamp(Quantize(1.0f - 0.75f * state.wetness - 0.35f * state.snowCover, 0.05f), 0.25f, 1.0f);
+	// a peasant's walk to its shelter and back, sped up on short days (PeasantLodging)
+	if (obj->lodgeSpeed != 1.0f)
+		return state.speedFactor * obj->lodgeSpeed;
 	return state.speedFactor;
 }
 
@@ -577,7 +580,7 @@ void ServerEnvironment::applyExposure(Server& server)
 		CommonGameObject* player = unit->getPlayer();
 		if (!player || player->blueprint->name == "Neutral Player")
 			continue;
-		bool sheltered = unit->parent && unit->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+		bool sheltered = (unit->parent && unit->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) || unit->lodging == LODGE_INSIDE;
 		for (size_t i = 0; i < shelters.size() && !sheltered; i++) {
 			const Shelter& s = shelters[i];
 			if (s.player != player && (!s.player || server.getDiplomaticStatus(s.player, player) != 0))
@@ -926,6 +929,12 @@ void ServerEnvironment::update(Server& server)
 		}
 		updateFires(server);
 	}
+	// the peasants' lodging at night and in winter
+	if (dt > 0.0f) {
+		static const bool traceLodging = getenv("WKB_TRACE_LODGING") != nullptr;
+		lodging.trace = trace || traceLodging;
+		lodging.update(server, settings, state, sun.daylight);
+	}
 
 	server.nightSight.factor = state.sightFactor;
 	if (server.nightSight.active())
@@ -1026,6 +1035,8 @@ std::string ServerEnvironment::saveText() const
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
 		o << "exposure " << id << ' ' << e.cold << ' ' << e.heat << '\n';
+	if (Server::instance)
+		o << lodging.saveText(*Server::instance);
 	return o.str();
 }
 
@@ -1075,6 +1086,8 @@ void ServerEnvironment::loadText(const std::string& text)
 			l >> id >> e.cold >> e.heat;
 			exposure[id] = e;
 		}
+		else if (tag == "lodging" || tag == "lodger")
+			lodging.loadLine(tag, line);
 	}
 }
 

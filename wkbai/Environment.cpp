@@ -66,6 +66,12 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "weatherCover=%d\n", weatherCover);
 		out += buf;
 	}
+	// (only with day and night or the seasons on: they do nothing without, and the lobby sends them
+	// for every game)
+	if (active() && (peasantsSleep || farmersWinter)) {
+		snprintf(buf, sizeof(buf), "peasantsSleep=%d\nfarmersWinter=%d\n", (int)peasantsSleep, (int)farmersWinter);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -124,6 +130,8 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "moonPhase") moonPhase = std::clamp(i, 0, 8);
 	else if (name == "moonStart") moonStart = v < 0.0f ? -1.0f : Frac(v);
 	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
+	else if (name == "peasantsSleep") peasantsSleep = i != 0;
+	else if (name == "farmersWinter") farmersWinter = i != 0;
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;

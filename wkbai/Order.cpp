@@ -23,6 +23,7 @@
 #include "NNSearch.h"
 #include "util/StriCompare.h"
 #include "Model.h"
+#include "PeasantLodging.h"
 #include <map>
 #include <cstdio>
 
@@ -410,6 +411,12 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	// a peasant on its way into its shelter for the night or winter, inside or waiting for one
+	// (PeasantLodging) takes no orders but the lodging's own: not the player's, the AI's or the
+	// scripts' (a dying one's "Die" still)
+	if (gameobj->lodging != LODGE_NONE && gameobj->lodging != LODGE_RETURNING && !g_lodgingOrders
+		&& !(gameobj->flags & CommonGameObject::fTerminated))
+		return nullptr;
 	if (Order* currentOrder = getCurrentOrder()) {
 		if (currentOrder->blueprint->cannotInterruptOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST)
 			return nullptr;

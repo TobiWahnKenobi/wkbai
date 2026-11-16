@@ -8,6 +8,7 @@
 #include "../scene.h"
 #include "../tags.h"
 #include "../gameset/GameObjBlueprint.h"
+#include "../gameset/gameset.h"
 #include "../Camera.h"
 #include "../gfx/renderer.h"
 #include "../gfx/bitmap.h"
@@ -347,6 +348,20 @@ std::string EnvironmentHudText(Client* client)
 			add("Frozen");
 		if (st.season == 3)
 			add("Fields fallow");
+		// the farmers wintering indoors (PeasantLodging): their crafts' bonus on wood and gold
+		if (client->gameSet && client->clientPlayer.get()) {
+			static const GameSet* of = nullptr;
+			static int bonusItem = -1;
+			if (of != client->gameSet.get()) {
+				of = client->gameSet.get();
+				bonusItem = of->items.names.getIndex("Winter Crafts Bonus");
+			}
+			const float bonus = bonusItem >= 0 ? client->clientPlayer.get()->getItem(bonusItem) : 0.0f;
+			if (bonus > 0.0f) {
+				snprintf(buf, sizeof(buf), "Crafts +%.1f%%", bonus * 100.0f);
+				add(buf);
+			}
+		}
 	}
 	return out;
 }
