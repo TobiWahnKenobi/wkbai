@@ -206,6 +206,9 @@ namespace {
 			for (ServerGameObject* e : enemies)
 				striking |= struck(e->id);
 			striking &= b.get("war.threats") == 0.0;
+			// no new attack while home is in danger (the warning, or the missions called home)
+			if (b.get("war.recall") > 0.0 || b.get("intel.approach") >= 5.0)
+				return;
 			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f);
 			// (one more attack for every 30 free soldiers: in a stage-1 game 114 waited at home while two
 			// small missions were out)
@@ -232,7 +235,13 @@ namespace {
 				uint8_t kind;
 				if (s.palace) { worth = 3.0f + 2.0f * c.siege; kind = Mission::PALACE; }
 				else if (s.building) { worth = 1.0f; kind = Mission::RAZE; }
-				else { worth = 0.6f + 1.4f * c.raiding; kind = Mission::RAID; }
+				else {
+					// (a raid only with 6 melee soldiers free: archers make none of the kills, improvement 4)
+					if (!(MinOff() & 4096) && b.get("war.availableMelee") < Tune("raidMelee", 6.0f))
+						continue;
+					worth = 0.6f + 1.4f * c.raiding;
+					kind = Mission::RAID;
+				}
 				const float revenge = striking && struck(s.player) ? 3.0f : 1.0f;
 				const float score = worth * grudge * peace * revenge / ((defence + 30.0f) * (1.0f + dist / 600.0f));
 				cands.push_back({ &s, kind, defence, score });
@@ -548,7 +557,7 @@ namespace {
 				// known: with all of it kept, a General facing a big army never attacked at all and lost to
 				// the war layer's waves)
 				const float keep = against * (1.0f - 0.4f * g.personality.aggression);
-				const float share = armies > 1 ? 0.75f : 0.6f;
+				const float share = armies > 1 ? Tune("guardShareMany", 0.75f) : Tune("guardShare", 0.6f);
 				// the strongest stay home first
 				std::vector<ServerGameObject*> byPower = home;
 				std::stable_sort(byPower.begin(), byPower.end(), [](ServerGameObject* a, ServerGameObject* b) { return AIUtil::UnitPower(a) > AIUtil::UnitPower(b); });
@@ -572,13 +581,24 @@ namespace {
 				for (ServerGameObject* u : home)
 					homePower += AIUtil::UnitPower(u);
 				// (without War's defence: the threat map's threat over what is at home)
-				const bool recall = ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f;
+				// (and with the warning: 5 or more enemy fighters within 500 m, more than 1.2 times what is
+				// at home; the threat map's 250 m called them back when the wave was in the town already)
+				const float approach = (float)g.board.get("intel.approachPower");
+				const bool warned = g.board.get("intel.approach") >= 5.0 && approach > Tune("recallFactor", 1.2f) * homePower + 50.0f;
+				const bool recall = (ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f) || warned;
 				if (recall && g.board.get("war.recall") == 0.0)
 					g.log(WAR, "the missions come home: %s", palaceUnmet ? "the palace's attackers outmatch what is at home" : "a threat at home");
 				g.board.report("war.recall", recall ? 1.0 : 0.0);
 			}
 			g.board.report("war.available", available);
 			g.board.report("war.availablePower", power);
+			{
+				// (the free melee soldiers, for the Strategist's raids)
+				int melee = 0;
+				for (int i = guard; i < (int)home.size(); i++)
+					melee += AIUtil::ClassOf(home[i]) != 2 && AIUtil::ClassOf(home[i]) != 0;
+				g.board.report("war.availableMelee", melee);
+			}
 			g.board.report("war.inMissions", (double)ai.ministryUnits.size());
 			if (thinks % 10 == 0) // (every 30 s)
 				g.log(WAR, "%zu fighters free at home (guard %d, %d may go, power %.0f), %zu in missions; the war layer's defenders %zu",
@@ -613,6 +633,13 @@ namespace {
 					// a scout: the fastest (light cavalry first)
 					if (m.kind == Mission::SCOUT)
 						return (cls == 4 ? 1000.0f : cls == 3 ? 500.0f : 0.0f) - AIUtil::UnitPower(u);
+					// a raid (improvement 4): fast melee first, light then heavy cavalry, then foot, archers
+					// last (archers chasing peasants ended in melee, and raids made no kills)
+					// siege engines go with the attacks on buildings first, and never on a raid
+					if (IsSiegeName(u->blueprint->name) && !(MinOff() & 8192))
+						return m.kind == Mission::RAZE || m.kind == Mission::PALACE ? 5000.0f : -5000.0f;
+					if (m.kind == Mission::RAID && !(MinOff() & 4096))
+						return (cls == 4 ? 3000.0f : cls == 3 ? 2000.0f : cls == 1 ? 1000.0f : cls == 2 ? 0.0f : 500.0f) + AIUtil::UnitPower(u) * 0.01f;
 					return f * 100.0f + AIUtil::UnitPower(u) * 0.01f;
 				};
 				std::stable_sort(free.begin(), free.end(), [&](ServerGameObject* a, ServerGameObject* b) {

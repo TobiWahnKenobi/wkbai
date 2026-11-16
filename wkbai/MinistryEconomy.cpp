@@ -29,13 +29,14 @@ namespace Ministry {
 namespace {
 	struct Items {
 		const GameSet* of = nullptr;
-		int popLimit = -1, si = -1, siCap = -1;
+		int popLimit = -1, popCount = -1, si = -1, siCap = -1;
 		int mineGold = -1, chop = -1, repair = -1;
 		void update(const GameSet* gs) {
 			if (of == gs)
 				return;
 			of = gs;
 			popLimit = gs->items.names.getIndex("Total Population Count");
+			popCount = gs->items.names.getIndex("Population Count");
 			si = gs->items.names.getIndex("Structural Integrity");
 			siCap = gs->items.names.getIndex("Structural Integrity Capacity");
 			mineGold = gs->commands.names.getIndex("Mine Gold");
@@ -169,11 +170,15 @@ namespace {
 			ServerGameObject* me = g.player();
 			if (!me || g.now() < 360.0f)
 				return;
-			// a surplus over what War and the reserves need
-			if (me->getItem(Tags::PDITEM_FOOD) < 800.0f || me->getItem(Tags::PDITEM_WOOD) < 400.0f || me->getItem(Tags::PDITEM_GOLD) < 300.0f)
+			// a surplus over what War and the reserves need; near the population limit (90 %), when
+			// fighters can't be trained any more, half that, military first (improvement 7: alone under
+			// Plus v9.5 the ministries built half again as many buildings and ended at the same population)
+			const bool full = !(MinOff() & 32768) && g.board.get("labour.full") >= 0.9;
+			const float f = full ? 0.5f : 1.0f;
+			if (me->getItem(Tags::PDITEM_FOOD) < 800.0f * f || me->getItem(Tags::PDITEM_WOOD) < 400.0f * f || me->getItem(Tags::PDITEM_GOLD) < 300.0f * f)
 				return;
 			const GameSet* gs = srv.gameSet.get();
-			const bool military = g.personality.aggression >= 0.5f;
+			const bool military = full || g.personality.aggression >= 0.5f;
 			static const char* const MILITARY[] = { "Infantry", "Cavalry", "Crossbow", "Gunpowder", "Arrow", "Blade", "Armour", "Barding", "Chivalry", "Grapeshot", "Greek Fire" };
 			static const char* const ECONOMY[] = { "Sawmill", "Windmill", "Plough", "Crop", "Banking", "Harness", "Alchemy" };
 			auto kindOf = [&](const std::string& name) {
@@ -290,10 +295,15 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	// the cap: a share of the population limit (40-60 %), at least 20
 	const float limit = g_items.popLimit >= 0 ? me->getItem(g_items.popLimit) : 200.0f;
 	ai.ministryPeasantCap = std::max(20, (int)(limit * (0.6f - 0.2f * g.personality.aggression)));
-	// the opening (OpeningShort): while the home guard is short, no more peasants than there were
-	// when the hold began (at least 25), so the food goes into fighters. (The cap following the
-	// count let them grow from 25 to 50 by minute 13 with food at 0 and 6 soldiers trained.)
-	if (OpeningShort(g) > 0) {
+	// how full the population is (improvement 7: near the limit the surplus goes into research and
+	// better units, Research and Tactics)
+	g.board.report("labour.full", g_items.popCount >= 0 && limit > 0.0f ? me->getItem(g_items.popCount) / limit : 0.0);
+	// the warning (DangerShort): while enemy fighters near the palace outnumber the own, no more
+	// peasants than there were when the hold began (at least 25), so the food goes into fighters.
+	// (The cap following the count let them grow from 25 to 50 by minute 13 with food at 0 and 6
+	// soldiers trained. Held for the opening's guard instead, four players under plain WKB stalled
+	// at 27 peasants from minute 9 to 13 with no food to train: 43 characters at minute 15 against 52.)
+	if (DangerShort(g) > 0) {
 		if (g.board.get("opening.hold") <= 0.0)
 			g.board.report("opening.hold", std::max(25, (int)peasants.size()));
 		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, (int)g.board.get("opening.hold"));
