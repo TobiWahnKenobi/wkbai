@@ -10598,6 +10598,125 @@ void Test_BuildIdentity()
 	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
+// Night cold (the day's temperature swing, ServerEnvironment::update): on 4 Peaks in midsummer,
+// a clear day and night of 20 minutes, one update a second: the coldest shortly before sunrise,
+// the warmest in the early afternoon, the night colder than the afternoon by a summer's swing,
+// smooth from second to second; an overcast day's swing smaller; a heatwave's nights warm (more
+// than its 8 degrees' pull above the clear night, the swing smaller); without day and night the
+// season's temperature all day. A save and load goes on with the same temperatures, and a save
+// from before the day's mean (no "temperature" line) goes on without a jump. Prints "NIGHTCOLD
+// ok/FAILED ..." and "NIGHTCOLD PASSED/FAILED".
+void Test_NightCold()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("NIGHTCOLD %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerEnvironment& env = server.environment;
+	const float t0 = 1000.0f;
+	auto setUp = [&](bool dayNight, int weather) {
+		env.reset();
+		server.timeManager.currentTime = t0;
+		env.settings.seasons = true;
+		env.settings.seasonLengthMin = 600; // (the season's own drift negligible over a day)
+		env.settings.dayNight = dayNight;
+		env.settings.dayLengthMin = 20;
+		for (int s = 0; s < 4; s++)
+			env.settings.severity[s] = 1;
+		env.forceWeather = weather;
+		env.debugSet(server, "season", 1.5f); // midsummer
+		env.debugSet(server, "hour", 20.0f);  // the evening: the clouds settle before midnight
+	};
+	auto step = [&]() {
+		server.timeManager.currentTime += 1.0f;
+		env.update(server);
+		return env.state.temperatureC;
+	};
+	// a whole day from midnight: the temperature by the hour (each second's), its coldest and warmest
+	struct Day { float lo = 1e9f, hi = -1e9f, loHour = 0, hiHour = 0, maxStep = 0, at2 = 0, at14 = 0, sunrise = 0; };
+	auto runDay = [&](bool dayNight, int weather) {
+		setUp(dayNight, weather);
+		env.update(server); // the first update (started)
+		// (to midnight; without day and night the clock stands at noon: a day's length on from here)
+		while (dayNight && EnvDayFraction(env.settings, server.timeManager.currentTime + 1.0f) > 0.01f)
+			step();
+		Day d;
+		float prev = env.state.temperatureC;
+		const float len = env.settings.dayLengthS();
+		for (int i = 0; i < (int)len; i++) {
+			const float T = step();
+			const float hour = env.state.dayFraction * 24.0f;
+			if (T < d.lo) d.lo = T, d.loHour = hour;
+			if (T > d.hi) d.hi = T, d.hiHour = hour;
+			d.maxStep = std::max(d.maxStep, std::fabs(T - prev));
+			prev = T;
+			if (std::fabs(hour - 2.0f) < 0.03f) d.at2 = T;
+			if (std::fabs(hour - 14.0f) < 0.03f) d.at14 = T;
+		}
+		d.sunrise = ComputeSun(env.state.dayFraction, env.state.yearFraction, true, 0.0f).sunrise;
+		return d;
+	};
+	char what[300];
+	const Day clear = runDay(true, WEATHER_CLEAR);
+	snprintf(what, sizeof(what), "clear midsummer: coldest %.1f C at %05.2f h (sunrise %05.2f), warmest %.1f C at %05.2f h, 02:00 %.1f, 14:00 %.1f, step at most %.3f",
+		clear.lo, clear.loHour, clear.sunrise, clear.hi, clear.hiHour, clear.at2, clear.at14, clear.maxStep);
+	check(clear.loHour > clear.sunrise - 1.5f && clear.loHour <= clear.sunrise + 0.1f && clear.hiHour > 13.0f && clear.hiHour < 16.0f, std::string("the turns: ") + what);
+	check(clear.at14 - clear.at2 > 8.0f && clear.hi - clear.lo > 11.0f && clear.hi - clear.lo < 16.0f, "a summer's swing (11-16 degrees, the night colder than the afternoon)");
+	check(clear.maxStep < 0.1f, "smooth (under 0.1 degrees a second)");
+	const Day cloudy = runDay(true, WEATHER_CLOUDY);
+	snprintf(what, sizeof(what), "cloudy midsummer: %.1f to %.1f C (swing %.1f against the clear day's %.1f)", cloudy.lo, cloudy.hi, cloudy.hi - cloudy.lo, clear.hi - clear.lo);
+	check(cloudy.hi - cloudy.lo < 0.8f * (clear.hi - clear.lo) && cloudy.hi - cloudy.lo > 3.0f, what);
+	const Day heat = runDay(true, WEATHER_HEATWAVE);
+	snprintf(what, sizeof(what), "heatwave midsummer: %.1f C at %05.2f h to %.1f C at %05.2f h (swing %.1f; the clear night's %.1f, its swing %.1f)",
+		heat.lo, heat.loHour, heat.hi, heat.hiHour, heat.hi - heat.lo, clear.lo, clear.hi - clear.lo);
+	check(heat.lo - clear.lo > 8.0f + 3.0f && heat.hi - heat.lo < 0.8f * (clear.hi - clear.lo) && heat.hi > clear.hi && heat.maxStep < 0.1f,
+		std::string("warm nights: ") + what);
+	const Day flat = runDay(false, WEATHER_CLEAR);
+	snprintf(what, sizeof(what), "day and night off: %.2f to %.2f C all day", flat.lo, flat.hi);
+	check(flat.hi - flat.lo < 0.2f, what);
+
+	// the save: at 03:00 of a clear day
+	setUp(true, WEATHER_CLEAR);
+	env.update(server);
+	while (std::fabs(EnvDayFraction(env.settings, server.timeManager.currentTime) * 24.0f - 3.0f) > 0.05f)
+		step();
+	const float savedTime = server.timeManager.currentTime;
+	const std::string text = env.saveText();
+	std::vector<float> ahead;
+	for (int i = 0; i < 120; i++)
+		ahead.push_back(step());
+	check(text.find("\ntemperature ") != std::string::npos, "the day's mean in the save");
+	env.loadText(text);
+	check(env.saveText() == text, "saved, loaded and saved again: the same text");
+	server.timeManager.currentTime = savedTime;
+	float worst = 0.0f;
+	for (int i = 0; i < 120; i++)
+		worst = std::max(worst, std::fabs(step() - ahead[i]));
+	snprintf(what, sizeof(what), "loaded: the same temperatures on (at most %.4f off over 2 minutes)", worst);
+	check(worst < 1e-3f, what);
+	// a save from before the day's mean
+	std::string old;
+	{
+		std::istringstream in(text);
+		std::string line;
+		while (std::getline(in, line))
+			if (line.rfind("temperature ", 0) != 0)
+				old += line + "\n";
+	}
+	env.loadText(old);
+	server.timeManager.currentTime = savedTime;
+	worst = 0.0f;
+	for (int i = 0; i < 120; i++)
+		worst = std::max(worst, std::fabs(step() - ahead[i]));
+	snprintf(what, sizeof(what), "an older save (no day's mean): goes on with at most %.3f degrees off", worst);
+	check(worst < 0.05f, what);
+	printf("NIGHTCOLD %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+}
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
@@ -10693,6 +10812,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryEconomy, "Ministry AI economy: the peasant cap, gold miners, research and repairs against the same game without"},
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 {Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
+{Test_NightCold, "Night cold: the day's temperature swing, coldest before sunrise and warmest in the early afternoon, smaller overcast, none without day and night, through a save"},
 };
 
 void LaunchTest()

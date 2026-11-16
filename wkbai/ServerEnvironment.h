@@ -52,6 +52,13 @@ struct ServerEnvironment {
 	// harms; above 30 C the heat exposure grows, above 34 C it harms
 	float coldFeel() const;
 	float heatFeel() const;
+	// the day's mean temperature (the season's and the weather's, without the day's swing:
+	// EnvironmentState::temperatureC has it), and what the ice and the snow cover answer to: the
+	// mean with a quarter (the ice) or half (the snow's thaw) of the swing, as the water and the
+	// ground are slow to warm and cool, so a frozen lake does not thaw every sunny afternoon
+	float dailyMeanTemperature() const { return temperatureBase; }
+	float iceTemperature() const { return temperatureBase + 0.25f * (state.temperatureC - temperatureBase); }
+	float meltTemperature() const { return temperatureBase + 0.5f * (state.temperatureC - temperatureBase); }
 	// a unit's cold and heat exposure (0-200; over 100 it is harmed)
 	float coldExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.cold : 0.0f; }
 	float heatExposure(uint32_t id) const { auto it = exposure.find(id); return it != exposure.end() ? it->second.heat : 0.0f; }
@@ -114,6 +121,12 @@ private:
 	int resolvedYear = -1;
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
 	float temperatureTarget = 12.0f;
+	// the day's mean, eased towards temperatureTarget (saved: "temperature"); a save from before
+	// it had none: worked out again from its temperature at the first update (baseKnown false)
+	float temperatureBase = 12.0f;
+	bool baseKnown = true;
+	// how far the heatwave's warm nights have come (0-1, eased; saved on the "temperature" line)
+	float heatNights = 0.0f;
 	bool started = false;
 	// startClock done (not saved: a saved game has started)
 	bool clockStarted = false;

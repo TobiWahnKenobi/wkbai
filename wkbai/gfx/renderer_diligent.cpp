@@ -1171,7 +1171,7 @@ struct DiligentRenderer : DiligentGfx
 				const float high = smooth(0.0f, 0.06f, e) * (1.0f - smooth(0.55f, 0.67f, e));
 				const float through = std::clamp((0.92f - ev.cloudCover) / 0.3f, 0.0f, 1.0f);
 				const float drops = std::max(rainLeft, forced) * (0.6f + 0.4f * std::clamp(ev.humidity, 0.0f, 1.0f));
-				const float strength = drops * std::max(through, forced) * high * (1.0f - std::clamp(ev.snowShown * 3.0f, 0.0f, 1.0f)) * (ev.temperatureC > 1.0f ? 1.0f : 0.0f);
+				const float strength = drops * std::max(through, forced) * high * (1.0f - std::clamp(ev.snowShown * 3.0f, 0.0f, 1.0f)) * std::clamp(ev.temperatureC - 0.5f, 0.0f, 1.0f);
 				if (strength > 0.001f) {
 					s.rainbow[0] = -sun.x;
 					s.rainbow[1] = -sun.y;
