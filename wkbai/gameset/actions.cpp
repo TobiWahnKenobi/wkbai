@@ -2614,3 +2614,21 @@ void ActionSequence::run(ServerGameObject* self) const {
 	SrvScriptContext ctx(Server::instance, self);
 	run(&ctx);
 }
+
+void SequencePlayerCosts(const ActionSequence& seq, SrvScriptContext* ctx, const int* items, float* costs, int count)
+{
+	ServerGameObject* self = ctx->getSelf() ? (ServerGameObject*)ctx->getSelf() : nullptr;
+	ServerGameObject* player = self ? self->getPlayer() : nullptr;
+	for (const auto& action : seq.actionList) {
+		const auto* dec = dynamic_cast<const ActionDecreaseItem*>(action.get());
+		if (!dec || !player)
+			continue;
+		for (int i = 0; i < count; i++) {
+			if (dec->item != items[i])
+				continue;
+			const auto found = dec->finder->eval(ctx);
+			if (std::find(found.begin(), found.end(), player) != found.end())
+				costs[i] += std::max(0.0f, dec->value->eval(ctx));
+		}
+	}
+}

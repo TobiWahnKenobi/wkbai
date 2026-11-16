@@ -2399,6 +2399,9 @@ bool ServerGameObject::canAffordObject(const GameObjBlueprint* blueprint)
 
 void ServerGameObject::payObjectCost(const GameObjBlueprint* blueprint)
 {
+	// debugging: "WKB_TRACE_PAY=<player id>" prints what that player pays for (0: any player)
+	if (const char* e = getenv("WKB_TRACE_PAY"); e && ((uint32_t)atoi(e) == 0 || (uint32_t)atoi(e) == this->id))
+		printf("PAY t=%.2f %u %s\n", Server::instance->timeManager.currentTime, this->id, blueprint->getFullName().c_str());
 	for (auto [resItem, costItem] : objectCostResourceItems) {
 		this->setItem(resItem, this->getItem(resItem) - blueprint->getStartingItemValue(costItem));
 	}
