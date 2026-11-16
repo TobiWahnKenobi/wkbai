@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -16,6 +17,9 @@ struct CampaignProfile {
 	std::string name;
 	std::vector<std::string> conquered; // province keys ("Angland")
 	std::map<std::string, float> items;
+	// the campaign's seed: it fixes which AI General plays on which province for the whole
+	// campaign (WKB.exe keeps one in the .usr profile, 0x63a870 draws the generals from it)
+	uint32_t seed = 0;
 
 	static std::vector<std::string> list();
 	static bool load(const std::string& name, CampaignProfile& out);

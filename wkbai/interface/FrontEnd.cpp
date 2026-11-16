@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <random>
 #include <algorithm>
 #include <memory>
 #include <sstream>
@@ -782,6 +783,7 @@ struct FrontEnd::Impl {
 				return sol::lua_nil;
 			sol::table t = lua.create_table();
 			t["name"] = p.name;
+			t["seed"] = p.seed;
 			t["conquered"] = sol::as_table(p.conquered);
 			sol::table items = lua.create_table();
 			for (const auto& [item, value] : p.items)
@@ -796,6 +798,7 @@ struct FrontEnd::Impl {
 			if (CampaignProfile::load(name, p))
 				return false; // exists
 			p.name = name;
+			p.seed = std::random_device()() | 1u;
 			if (start) {
 				static const std::pair<const char*, const char*> fields[] = {
 					{ "food", "Food" }, { "wood", "Wood" }, { "gold", "Gold" }, { "population", "Total Population Count" },
@@ -807,6 +810,21 @@ struct FrontEnd::Impl {
 			return p.save();
 		});
 		lua.set_function("deleteCampaignProfile", [](const std::string& name) { return CampaignProfile::remove(name); });
+		// The menus' mouse cursor: a cursor image ("Interface\\C_Attack.tga", the campaign map's
+		// attack cursor), or "" for the arrow. Only a change is applied, and "" does nothing until
+		// the menus have set another one, so the game's own cursors are left alone.
+		lua.set_function("setMenuCursor", [](const std::string& path) {
+			static std::map<std::string, WndCursor*> cursors;
+			static std::string current;
+			if (path == current)
+				return;
+			current = path;
+			const std::string file = path.empty() ? std::string("Interface\\C_DEFAULT.TGA") : path;
+			WndCursor*& c = cursors[file];
+			if (!c)
+				c = WndCreateCursor(file.c_str());
+			WndSetCursor(c);
+		});
 
 		// Multiplayer lobby
 		lua.set_function("getLobbyGuests", [this]() {
