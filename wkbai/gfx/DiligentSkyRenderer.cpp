@@ -545,7 +545,25 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// light scattered many times inside the cloud (the light that a single scattering misses
 		// in thick clouds: an overcast sheet is grey, not black), less absorbed and isotropic
 		// (away from the sun at dawn and dusk less of it: its orange against the sky's blue made grey)
-		energy += lerp(0.35, 0.18, away) * exp(-SIGMA * 0.2 * od);
+		float msLight = exp(-SIGMA * 0.2 * od);
+		if (dl >= 3) {
+			// Very high and Ultra: the light scattered many times by the cloud's density at the
+			// point, not one flat share (Hillaire 2020, sec. 5.5's local geometric series, with
+			// Jiaye's reduced-extinction envelope, "An Energy Budget for Local Multiple Scattering
+			// in Volumetric Clouds", 2026; written here from the formulas): the local gain
+			// G(q) = w (1 - e^-q) / (1 - w + w e^-q) of the local optical thickness q = c rho,
+			// about rho squared at the thin edges (they stay light and translucent instead of
+			// a grey haze) and saturating in the cores (their inner glow); attenuated towards the
+			// sun by exp(-(1 - w g) tau), the diffusion's reduced extinction (g 0.88 of the
+			// cloud droplets: 0.12). w and c fitted to this renderer's units rather than
+			// calibrated by the two-flux slab: w 0.75, c 3, the gain 1 at two thirds density
+			// (the flat share's brightness kept there)
+			float rho = saturate(dens / (1.6 * max(cWeather.z, 0.1)));
+			float e = exp(-3 * rho);
+			float gain = 0.75 * (1 - e) / (0.25 + 0.75 * e);
+			msLight = gain / 1.85 * exp(-SIGMA * 0.12 * od);
+		}
+		energy += lerp(0.35, 0.18, away) * msLight;
 		ambient = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.4 * (1 - away)) * 1.3;
 		// (away from the sun at dawn and dusk: the sky's own colour there, its pink and violet
 		// belt low and its blue higher up, at the ambient's brightness; their bases darker, their
