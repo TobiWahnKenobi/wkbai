@@ -382,8 +382,8 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		float fine = d2.r * 0.5 + d2.g * 0.3 + d2.b * 0.2;
 		hf = lerp(hf, fine, 0.4 * saturate(h * 2 + stormCore));
 		erosion *= lerp(1, 1.3, saturate(h * 1.5) * (1 - stratus));
-		if (detailLevel >= 4 && detailLod < 2.5) {
-			// Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
+		if (detailLevel >= 3 && detailLod < 2.5) {
+			// Very high and Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
 			float3 d3 = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.1) / (DETAIL_PERIOD / 8), max(detailLod + 3, 0)).rgb;
 			hf = lerp(hf, d3.r * 0.5 + d3.g * 0.3 + d3.b * 0.2, 0.25 * saturate(2.5 - detailLod) * saturate(h * 2 + stormCore));
 		}
@@ -398,7 +398,7 @@ float HenyeyGreenstein(float mu, float g)
 	return (1 - g2) / (12.566371 * pow(1 + g2 - 2 * g * mu, 1.5));
 }
 
-// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Ultra detail (jittered per pixel; at most
+// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Very high and Ultra detail (jittered per pixel; at most
 // 1800 units of it), each lit by the sun through 3 to 6 steps of cloud towards it over 108 units
 // (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
@@ -449,10 +449,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 	// the detail (Low 0 to Ultra 4): Very High and Ultra light their steps through the eroded shape
 	// (the billows shade each other: relief within a cloud, not only between clouds), with a far
 	// step for the shadows of the clouds around and the sky's light occluded from above (darker
-	// bases, lit tops); Ultra a quarter more view steps and a third octave
+	// bases, lit tops), a quarter more view steps and a third octave; Ultra also the multiple
+	// scattering by the density (below; the play test of 2026-11-17: Very high is the former Ultra)
 	// (all six light steps eroded and half again as many view steps cost twice High's pass for little more)
 	const int dl = (int)SkyStarY.w;
-	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 4 ? 5 : 4) / 4;
+	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 3 ? 5 : 4) / 4;
 	const int LIGHT_STEPS = q + 3;
 	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
 	// thickness: thin parts brighter, its relief)
@@ -546,8 +547,8 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// in thick clouds: an overcast sheet is grey, not black), less absorbed and isotropic
 		// (away from the sun at dawn and dusk less of it: its orange against the sky's blue made grey)
 		float msLight = exp(-SIGMA * 0.2 * od);
-		if (dl >= 3) {
-			// Very high and Ultra: the light scattered many times by the cloud's density at the
+		if (dl >= 4) {
+			// Ultra: the light scattered many times by the cloud's density at the
 			// point, not one flat share (Hillaire 2020, sec. 5.5's local geometric series, with
 			// Jiaye's reduced-extinction envelope, "An Energy Budget for Local Multiple Scattering
 			// in Volumetric Clouds", 2026; written here from the formulas): the local gain

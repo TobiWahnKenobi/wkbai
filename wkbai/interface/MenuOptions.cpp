@@ -210,7 +210,7 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "cloudDetail"; o.page = "sky"; o.label = "Cloud detail"; // (the volumetric clouds' shapes: Low one density, Medium varying, High billows and cumulonimbus, Very high and Ultra self-shadowed billows)
+			o.id = "cloudDetail"; o.page = "sky"; o.label = "Cloud detail"; // (the volumetric clouds' shapes: Low one density, Medium varying, High billows and cumulonimbus, Very high self-shadowed billows and more steps, Ultra also multiple scattering by density)
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Low", "Medium", "High", "Very high", "Ultra" };
 			o.get = [&rs]() { return (float)rs.cloudDetail; };
