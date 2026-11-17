@@ -1518,6 +1518,7 @@ void ObjectReferenceTask::onUpdate()
 			}
 		}
 		if (arrived) {
+			shortWalks = 0;
 			// A task loaded as satisfied whose triggers hadn't started, on a standing unit and aimed
 			// at a building: WKB.exe runs its PROXIMITY_SATISFIED_SEQUENCE on the first tick
 			// (0x50d1e0), before the triggers. A cart loaded in "Wait to Collect Resources from
@@ -1623,6 +1624,18 @@ void ObjectReferenceTask::onUpdate()
 						return;
 				}
 				resumedUnchecked = false;
+				// a building it can't reach (not an attack, which goes for the wall in its way): the
+				// task ends after five walks that ended short, and with it the order, so that the
+				// unit goes on to its next one
+				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt
+					&& blueprint->classType != Tags::ORDTSKTYPE_ATTACK && target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING
+					&& ++shortWalks > 5) {
+					if (getenv("WKB_TRACE_TASKS_ID"))
+						TraceTask(this, "given up: the building can't be reached");
+					shortWalks = 0;
+					order->terminate();
+					return;
+				}
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					attackRadius();
 					destination = go->movementController.startMovement(goal);

@@ -2479,7 +2479,9 @@ void Test_MinistryFramework()
 				economyReports += key.rfind("economy.", 0) == 0;
 				labourReports += key.rfind("labour.", 0) == 0;
 			}
-			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports >= 8 && labourReports >= 5);
+			// (the food reported, not that there is some: since the AI pays its spawns queued at busy
+			// buildings as WKB.exe, its food can be spent down to 0 at the minute)
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.reports.count("economy.food") && economyReports >= 8 && labourReports >= 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
 		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
@@ -7143,7 +7145,9 @@ void Test_MoveArrival()
 				allUnits += alive;
 			}
 	g_recordSearches = false;
-	printf("MOVEARRIVAL all arrived %d/%d\n", allArrived, allUnits);
+	extern uint64_t g_formationWalks, g_pathBatchRequests, g_pathBatchSearches;
+	printf("MOVEARRIVAL all arrived %d/%d; formation members' walks %llu, path requests %llu, searches %llu\n", allArrived, allUnits,
+		(unsigned long long)g_formationWalks, (unsigned long long)g_pathBatchRequests, (unsigned long long)g_pathBatchSearches);
 	fflush(stdout);
 }
 

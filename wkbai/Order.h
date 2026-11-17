@@ -81,6 +81,10 @@ struct Task {
 	// range when put aside: its PROXIMITY_DISSATISFIED_SEQUENCE before it walks; the play test:
 	// archers on Hold Ground resumed their Fire Arrow and walked after a target out of range
 	bool resumedUnchecked = false;
+	// walks to a building that ended short of it, one after the other (none since it arrived): the
+	// sixth gives up (the play test: peasants stood at a foundation boxed in by other buildings,
+	// trying again every second, their queued orders never reached); wkbai's own
+	int shortWalks = 0;
 	// loaded from a save as having reached its target (PROXIMITY_SATISFIED 1): kept so until the
 	// task starts again or its target changes. The original's test 36 save has a cart "arrived"
 	// 28 m from its village's centre (15 m from its nearest delivery point), which the

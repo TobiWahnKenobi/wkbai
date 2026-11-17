@@ -222,6 +222,8 @@ float FormationController::marchSpeed(float slowestMember) const
 // takes the nearest free one, the member whose nearest free place is farthest choosing first (as
 // the original's assignment 0x6ee110 looks); then the members' speeds are set so that all arrive at
 // once (the slowest needed time, everyone else slower)
+uint64_t g_formationWalks = 0; // the members' walks asked for (test 46's profile)
+
 void FormationController::formUp()
 {
 	std::vector<ServerGameObject*> members = liveMembers(formation);
@@ -845,8 +847,11 @@ void FormationController::update()
 		if (d > ARRIVED || formSpeed > 0.0f) {
 			const Vector3& asked = member->movementController.getRequestedDestination();
 			if (!moving || (asked - target).sqlen2xz() > RETARGET * RETARGET
-				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed))
+				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed)) {
+				extern uint64_t g_formationWalks;
+				g_formationWalks++;
 				member->movementController.startMovement(target);
+			}
 		}
 		else if (!marching || holding) {
 			// in place, and the formation stands: stop, facing its way (an Orb's outwards)

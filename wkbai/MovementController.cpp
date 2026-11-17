@@ -292,6 +292,10 @@ namespace {
 			const auto& tile = server->tiles[i];
 			if (!tile.buildingPassable && tile.building.getFrom<Server>())
 				return true;
+			// as tileBlocked: a level's scripted wall sections and blocked tiles (SET_TILE_STATUS
+			// BLOCKED, CONTAINS_WALL_SECTION); the threads' searches went through them
+			if (tile.scriptStatus == 0 || tile.scriptStatus == 3)
+				return true;
 			return c->state[i] == 2;
 		}
 	};
@@ -1023,6 +1027,12 @@ static void SmoothTurns(ServerGameObject* obj, std::vector<Vector3>& nodes)
 	std::vector<Vector3> pts(nodes.rbegin(), nodes.rend()); // the unit first
 	pts[0] = obj->position; // (a search's last node is the unit's tile)
 	auto free = [&](const Vector3& p) { return !MovementController::isTileBlocked(bp, (int)(p.x / 5.0f), (int)(p.z / 5.0f)); };
+	// and the line between two of an arc's points (a rounded corner cut a wall's corner tile
+	// between two free points)
+	auto freeLine = [&](const Vector3& a, const Vector3& b) {
+		return !Pathfinding::SegmentTraversal(a.x / 5.0f, a.z / 5.0f, b.x / 5.0f, b.z / 5.0f,
+			[&](Pathfinding::PFPos p) { return MovementController::isTileBlocked(bp, p.x, p.z); }).has_value();
+	};
 	auto flat = [](Vector3 v) { v.y = 0.0f; return v; };
 	std::vector<Vector3> out;
 	out.push_back(pts[0]);
@@ -1051,8 +1061,9 @@ static void SmoothTurns(ServerGameObject* obj, std::vector<Vector3>& nodes)
 					if ((t.x * tq.z - t.z * tq.x) * side <= 0.0f && t.x * tq.x + t.z * tq.z > 0.0f) { ok = true; break; } // facing it now
 					swept += STEP;
 					const float a0 = std::atan2(rq.z, rq.x) + side * STEP;
+					const Vector3 before = q;
 					q = Vector3(c.x + std::cos(a0) * r, pts[0].y, c.z + std::sin(a0) * r);
-					if (!free(q)) break;
+					if (!free(q) || !freeLine(before, q)) break;
 					arc.push_back(q);
 				}
 				if (ok)
@@ -1087,7 +1098,7 @@ static void SmoothTurns(ServerGameObject* obj, std::vector<Vector3>& nodes)
 			const float ang = side * theta * j / k;
 			const float cs = std::cos(ang), sn = std::sin(ang);
 			Vector3 q(centre.x + r0.x * cs - r0.z * sn, b.y, centre.z + r0.x * sn + r0.z * cs);
-			ok = free(q);
+			ok = free(q) && (arc.empty() || freeLine(arc.back(), q));
 			arc.push_back(q);
 		}
 		if (ok)
