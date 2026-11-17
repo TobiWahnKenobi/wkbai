@@ -9115,6 +9115,12 @@ void Test_GameOverView()
 		check(uiB.fogOfWarOn(), "B, still fighting: keeps its fog of war");
 		check(!uiB.showsEveryone(), "B: still its own side's statistics only");
 		check(server.watchesOnly(0) && !server.watchesOnly(1), "A only watches while B plays");
+		{
+			ClientGameObject* seenA = clientB.findObject(idA);
+			check((playerA->flags & CommonGameObject::fPlayerTerminated) && !(playerB->flags & CommonGameObject::fPlayerTerminated),
+				"A PLAYER_TERMINATED (WKB.exe's REMOVE_MULTIPLAYER_PLAYER: its AI gone), B not");
+			check(seenA && (seenA->flags & CommonGameObject::fPlayerTerminated), "client B knows A's flag");
+		}
 		// A's chat: to A only (B still plays)
 		clientA.chatMessages.clear();
 		clientB.chatMessages.clear();
@@ -9134,6 +9140,7 @@ void Test_GameOverView()
 		server.finishedPlayers.clear();
 		server.sendFinishedPlayers();
 		playerA->setItem(alive, 1.0f);
+		playerA->updateFlags(playerA->flags & ~CommonGameObject::fPlayerTerminated);
 		step(10);
 		check(clientA.ownOutcome() == 0 && uiA.fogOfWarOn(), "the list cleared: A has its fog again");
 		ServerGameObject* manor = nullptr;
@@ -9159,6 +9166,20 @@ void Test_GameOverView()
 		check(!uiA.fogOfWarOn() && !uiB.fogOfWarOn(), "both, the game over: no fog of war");
 		check(uiA.showsEveryone() && uiB.showsEveryone(), "both show every player's statistics");
 		check(!server.watchesOnly(0) && !server.watchesOnly(1), "nobody plays on: nobody's chat held back");
+		// the Manor box's Exit to Main Menu (EXIT_TO_MAIN_MENU), WKB.exe 0x483C50: to the clicking
+		// player's own client only. The guest B leaves alone; the host's A ends the hosted game.
+		auto exitFor = [&](ServerGameObject* p) {
+			SrvScriptContext ctx(&server, p);
+			GSFileParser gsf("EXIT_TO_MAIN_MENU");
+			std::unique_ptr<Action> act(ReadAction(gsf, *server.gameSet));
+			act->run(&ctx);
+			step(10);
+		};
+		exitFor(playerB);
+		check(clientB.exitToMenu && !clientA.exitToMenu && !server.exitToMenu, "the guest's Exit: only the guest's client leaves, the host plays on");
+		exitFor(playerA);
+		check(server.exitToMenu && !clientA.exitToMenu, "the host's Exit: the hosted game ends");
+		server.exitToMenu = false;
 	}
 	// the save from after A's loss: loaded with a client for A
 	{
@@ -9178,6 +9199,8 @@ void Test_GameOverView()
 		}
 		check(server.finishedPlayers.count(idA) && server.finishedPlayers[idA] == 2 && !server.finishedPlayers.count(idB), "the save keeps A lost, B playing");
 		check(client.ownOutcome() == 2 && !ui.fogOfWarOn() && ui.showsEveryone(), "loaded: A's client without fog, every player shown");
+		ServerGameObject* loadedA = server.findObject(idA);
+		check(loadedA && (loadedA->flags & CommonGameObject::fPlayerTerminated), "loaded: A still PLAYER_TERMINATED");
 	}
 	{
 		Server server;

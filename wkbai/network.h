@@ -181,6 +181,9 @@ enum NetClientMessages {
 	NETCLIMSG_LOOPED_SOUND,
 	// SET_TILE_STATUS (mods): x and z (16 bits each), the status (8 bits, CommonGameState::Tile)
 	NETCLIMSG_TILE_STATUS,
+	// EXIT_TO_MAIN_MENU run for this client's player (a guest's Exit button, WKB.exe's msg 0xC2):
+	// this client leaves the game, the others play on
+	NETCLIMSG_EXIT_TO_MENU,
 };
 
 enum NetServerMessages {

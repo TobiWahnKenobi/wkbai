@@ -3101,6 +3101,17 @@ void Server::playerFinished(ServerGameObject* player)
 	const uint8_t outcome = (alive >= 0 && player->getItem(alive) > 0.0f && !(player->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated))) ? 1 : 2;
 	finishedPlayers[player->id] = outcome;
 	printf("FINISHED t=%.2f player %u %s\n", (float)timeManager.currentTime, player->id, outcome == 1 ? "won" : "lost");
+	// as WKB.exe's REMOVE_MULTIPLAYER_PLAYER (0x5778C0): PLAYER_TERMINATED (saved, sent to every
+	// client) and its AI deleted, the winners' too (its update and the ministries skip it; the plan,
+	// commissions, work orders, a Lua AI and the ministries' government dropped); no AI takes the
+	// place of a guest leaving
+	player->updateFlags(player->flags | ServerGameObject::fPlayerTerminated);
+	AIController& ai = player->aiController;
+	ai.abandonPlan();
+	ai.commissionInstances.clear();
+	ai.workOrderInstances.clear();
+	ai.luaAI.reset();
+	ministries.governments.erase(player->id);
 	NetPacketWriter msg(NETCLIMSG_PLAYER_FINISHED);
 	msg.writeUint32(player->id);
 	msg.writeUint8(outcome);
@@ -3767,7 +3778,9 @@ void Server::simulate()
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && (simStepIndex + obj->id) % 10 == 0) {
 			SimTimer aiTimer(g_simProfile.ai);
 			g_simPhase = "AI"; g_simPhaseObject = obj->id;
-			obj->aiController.update();
+			// (a finished player's AI is gone, as in WKB.exe: Server::playerFinished)
+			if (!(obj->flags & ServerGameObject::fPlayerTerminated))
+				obj->aiController.update();
 			g_simPhase = "object tree";
 			// Update "Number of Farmers" item (important for Food Consumption to work properly)
 			static const std::string numFarmersName = "Number of Farmers";

@@ -85,6 +85,8 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
 	// of war (everything on the map shown); off until the server says
 	bool clearFogOfWar = false;
+	// EXIT_TO_MAIN_MENU for this client's player (NETCLIMSG_EXIT_TO_MENU): a guest leaves the game
+	bool exitToMenu = false;
 	// the players whose game is over (NETCLIMSG_PLAYER_FINISHED, Server::finishedPlayers): 1 won,
 	// 2 lost, by id. The client's own in it: no fog of war, every player's statistics.
 	std::map<uint32_t, uint8_t> finishedPlayers;
