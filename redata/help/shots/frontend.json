@@ -1,0 +1,277 @@
+[
+ {
+  "name": "frontend-main",
+  "what": "The main menu: logo and the whole button column",
+  "menu": [
+   "main"
+  ]
+ },
+ {
+  "name": "frontend-tutorial",
+  "what": "The Tutorials screen with its five lessons and Back",
+  "menu": [
+   "tutorial"
+  ]
+ },
+ {
+  "name": "frontend-mods",
+  "what": "The Mods screen; ideally two or three mods listed, one of them moved (own load order)",
+  "menu": [
+   "mods"
+  ]
+ },
+ {
+  "name": "frontend-credits",
+  "what": "The credits a few seconds in, the Black Cactus heading and some roles in view",
+  "menu": [
+   "credits"
+  ]
+ },
+ {
+  "name": "frontend-load",
+  "what": "Load Game, Skirmish tab, with the saved games listed and one selected",
+  "menu": [
+   "load"
+  ]
+ },
+ {
+  "name": "frontend-load-replays",
+  "what": "Load Game, Replays tab (menuTest open: load.replays), at least one recording listed with its columns",
+  "menu": [
+   "load.replays"
+  ]
+ },
+ {
+  "name": "frontend-save",
+  "what": "The Save Game As window over a running game (in-game menu, then Save Game As)",
+  "game": {
+   "save": "2 Player 4 Peaks.lvl",
+   "openMenu": [
+    "ingame",
+    "save"
+   ],
+   "ready": true
+  }
+ },
+ {
+  "name": "frontend-ingame",
+  "what": "The in-game menu over a running single-player game, with Game Paused at the top",
+  "game": {
+   "save": "2 Player 4 Peaks.lvl",
+   "openMenu": [
+    "ingame"
+   ],
+   "ready": true
+  }
+ },
+ {
+  "name": "frontend-editlevels",
+  "what": "The Map Editor's list of maps, one selected",
+  "menu": [
+   "editlevels"
+  ]
+ },
+ {
+  "name": "frontend-generaleditor",
+  "what": "The AI General Editor with a portrait, a name and the 14 sliders",
+  "menu": [
+   "generaleditor"
+  ]
+ },
+ {
+  "name": "frontend-campaign",
+  "what": "The Campaign screen: starting resources on the left, at least one campaign in the list",
+  "menu": [
+   "campaign"
+  ]
+ },
+ {
+  "name": "frontend-campaignmap",
+  "what": "The campaign map of a profile with a few provinces conquered and one chosen, its panel filled (menuTest open: campaignmap.<profile>)",
+  "menu": [
+   "campaignmap"
+  ]
+ },
+ {
+  "name": "frontend-skirmish-players",
+  "what": "Skirmish lobby, Players tab, on 2 Player 4 Peaks or a 4-player map: you and AI Generals at the positions, a general's portrait and story, the map with its start flags",
+  "menu": [
+   "skirmish"
+  ]
+ },
+ {
+  "name": "frontend-skirmish-settings",
+  "what": "Skirmish lobby, Settings tab (menuTest open: skirmish.settings), Standard mode, a map chosen with its preview",
+  "menu": [
+   "skirmish.settings"
+  ]
+ },
+ {
+  "name": "frontend-skirmish-weather",
+  "what": "Skirmish lobby, Seasons & Weather tab with Day and night and Seasons and weather on (menuTest open: skirmish.weather:dayNight=1,seasons=1)",
+  "menu": [
+   "skirmish.weather:dayNight=1,seasons=1"
+  ]
+ },
+ {
+  "name": "frontend-skirmish-army",
+  "what": "Skirmish lobby, Army Enlistment tab in Valhalla mode (menuTest open: skirmish.army:mode=1), a company selected and two or three enlisted",
+  "menu": [
+   "skirmish.army:mode=1"
+  ]
+ },
+ {
+  "name": "frontend-multiplayer",
+  "what": "The Multiplayer screen, New Game tab, a map chosen and a name typed",
+  "menu": [
+   "multiplayer"
+  ]
+ },
+ {
+  "name": "frontend-multiplayer-games",
+  "what": "The Multiplayer screen, Find Games tab (menuTest open: multiplayer.games), the local network heading, ideally one game listed",
+  "menu": [
+   "multiplayer.games"
+  ]
+ },
+ {
+  "name": "frontend-mphost",
+  "what": "The host's lobby, Players tab, with the guests list and the chat (opened as a screen, no network needed: 'Waiting for players to join' is fine)",
+  "menu": [
+   "mphost"
+  ]
+ },
+ {
+  "name": "frontend-mpguest",
+  "what": "The guest's lobby; best with a host on 127.0.0.1 so that the host's positions show, else the no-connection line",
+  "menu": [
+   "mpguest"
+  ]
+ },
+ {
+  "name": "frontend-mpload",
+  "what": "The saved game's lobby for a saved multiplayer game, its saved players listed (menuTest open: mpload.<save>)",
+  "menu": [
+   "mpload"
+  ]
+ },
+ {
+  "name": "options-view",
+  "what": "Options, Graphics > View and fog (menuTest open: options.view)",
+  "menu": [
+   "options.view"
+  ]
+ },
+ {
+  "name": "options-sky",
+  "what": "Options, Graphics > Sky and weather (menuTest open: options.sky)",
+  "menu": [
+   "options.sky"
+  ]
+ },
+ {
+  "name": "options-lighting",
+  "what": "Options, Graphics > Shadows and light (menuTest open: options.lighting)",
+  "menu": [
+   "options.lighting"
+  ]
+ },
+ {
+  "name": "options-water",
+  "what": "Options, Graphics > Water (menuTest open: options.water)",
+  "menu": [
+   "options.water"
+  ]
+ },
+ {
+  "name": "options-terrain",
+  "what": "Options, Graphics > Terrain and grass (menuTest open: options.terrain)",
+  "menu": [
+   "options.terrain"
+  ]
+ },
+ {
+  "name": "options-models",
+  "what": "Options, Graphics > Models (menuTest open: options.models)",
+  "menu": [
+   "options.models"
+  ]
+ },
+ {
+  "name": "options-picture",
+  "what": "Options, Graphics > Picture (menuTest open: options.picture)",
+  "menu": [
+   "options.picture"
+  ]
+ },
+ {
+  "name": "options-quality",
+  "what": "Options, Graphics > Anti-aliasing (menuTest open: options.quality)",
+  "menu": [
+   "options.quality"
+  ]
+ },
+ {
+  "name": "options-effects",
+  "what": "Options, Graphics > Effects (menuTest open: options.effects)",
+  "menu": [
+   "options.effects"
+  ]
+ },
+ {
+  "name": "options-keyboard",
+  "what": "Options, Controls > Keyboard (menuTest open: options.keyboard), the Camera group at the top",
+  "menu": [
+   "options.keyboard"
+  ]
+ },
+ {
+  "name": "options-mouse",
+  "what": "Options, Controls > Mouse (menuTest open: options.mouse)",
+  "menu": [
+   "options.mouse"
+  ]
+ },
+ {
+  "name": "options-camera",
+  "what": "Options, Controls > Camera (menuTest open: options.camera)",
+  "menu": [
+   "options.camera"
+  ]
+ },
+ {
+  "name": "options-interface",
+  "what": "Options, Interface (menuTest open: options.interface)",
+  "menu": [
+   "options.interface"
+  ]
+ },
+ {
+  "name": "options-sound",
+  "what": "Options, Sound (menuTest open: options.sound)",
+  "menu": [
+   "options.sound"
+  ]
+ },
+ {
+  "name": "options-system",
+  "what": "Options, System (menuTest open: options.system)",
+  "menu": [
+   "options.system"
+  ]
+ },
+ {
+  "name": "options-online",
+  "what": "Options, Online (menuTest open: options.online), the server field empty with its hint",
+  "menu": [
+   "options.online"
+  ]
+ },
+ {
+  "name": "options-agent",
+  "what": "Options, Agent control (menuTest open: options.agent), switched off",
+  "menu": [
+   "options.agent"
+  ]
+ }
+]

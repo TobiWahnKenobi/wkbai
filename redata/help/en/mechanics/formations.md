@@ -1,0 +1,60 @@
+---
+title: Formations
+ids: [mechanics/formations, mechanic/formations, mechanic/line, mechanic/column, mechanic/orb, mechanic/wedge, mechanic/damage-sharing]
+order: 90
+---
+
+# Formations
+
+Eight or more soldiers of one type can form up as a block. A formation moves together, fights together and shares the blows it takes. How to give the order is in [the formation command](../commands/formation.md); this page is about the rules.
+
+## Forming up
+
+- **At least 8** units of the same type. A mixed selection splits into one formation per type.
+- **Four shapes:** Line, Column, Orb and Wedge. The Wedge is for heavy units only.
+- **Joining:** more units of the type can [join](../commands/join-formation.md) a formation; it re-forms with them.
+- **Breaking up:** a formation that falls below **8** members disbands into single units.
+
+| Shape | How it stands |
+|---|---|
+| **Line** | at least two ranks, up to 12 a rank |
+| **Column** | about ten ranks deep, narrow |
+| **Wedge** | one at the point, then 2, 3, 4 ... |
+| **Orb** | rings facing out; the outer ring's radius is 12 m or more |
+
+## Bonuses
+
+A formation multiplies its members' attack and armour, and changes how fast they march:
+
+| Shape | Attack | Armour | Speed (foot / horse) | Shares a hit with | Total damage taken |
+|---|---|---|---|---|---|
+| Line | ×1.2 | ×1.2 | −10% / −10% | 5 nearest | 60% |
+| Column | ×0.7 | ×0.5 | +40% / ±0 | 2 nearest | 20% |
+| Wedge | ×1.5 | ×0.5 | ±0 / +10% | 4 nearest | 40% |
+| Orb | ×1.0 | ×1.5 | ±0 / ±0 | 8 nearest | 80% |
+
+- **Armour above 1 protects more:** armour is taken off the attack, so ×1.5 armour takes half as much again off every blow.
+- **Shared damage.** A hit of more than 4 hit points on a formed member isn't taken by that member alone: the stated share of it is spread evenly over the nearest members, the one hit included. A Line hit for 10 loses 6 hit points in all, 1.2 each over 5 men. A formation that isn't formed up (still marching into shape) doesn't share.
+- **The Wedge's first blow** does three times the damage, once per Wedge order.
+- **Heavy infantry in an Orb** take 30% less from missiles, and an Orb answers attacks from every side.
+- **Experience** is the formation's average for everyone below it ([experience](experience.md)).
+
+## Fighting
+
+- **Ordered to attack**, a formation marches to its target as a block, stops, and each member picks a victim within 40 m (8 m for an Orb) and goes for it. Every 2.5 seconds stragglers more than 30 m away are called back, and when the fight is over the block re-forms where it stands.
+- **Not ordered**, a hand-to-hand formation doesn't charge what comes near. It reacts to blows:
+  - a blow on a member's **front** (or anywhere on an Orb) makes the whole formation fight back;
+  - a blow on a member's **flank or rear** makes that member leave the formation and fight alone; after 5 seconds the rest of the formation takes up the fight too. The member rejoins when it is idle.
+- **Missile formations** shoot from their places and never walk out of the block to shoot. They fire at anything in range while standing, and ignore Hold Fire. Attacked hand to hand, they fight back.
+- **Light troops in formation don't skirmish.**
+- **Badly hurt members** (15% of their hit points or less) leave and run home.
+- There is no morale: a formation doesn't rout.
+
+## Moving
+
+- A formation keeps together at about the pace of its slowest member, changed by the shape (table above).
+- Over rough ground members may fall out of their places for a while and catch up.
+
+![A Line of pikemen holding against cavalry, with an Orb behind](shot:mech-formations-line-orb)
+
+> **wkbai.** In this version of wkbai a standing formation without an order turns to face an attack from its flank or rear, when the attackers are more than 50° off its front: wkbai's own rule. The original never turns a formation; its members only leave it. This version also doesn't share damage between members yet: each member takes its own hits in full. Both are being brought in line with the original.

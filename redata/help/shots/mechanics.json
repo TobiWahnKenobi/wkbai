@@ -1,0 +1,192 @@
+[
+ {
+  "name": "mech-resources-topbar",
+  "what": "The top bar's food, materials and gold and the food bar, with a peasant walking home carrying wood (its load arc showing) in view",
+  "game": {
+   "save": "2 Player 4 Peaks.lvl",
+   "select": "Peasant",
+   "note": "A few minutes into a skirmish so stocks have moved; a woodcutter selected on its way to deliver; daylight, clouds off"
+  }
+ },
+ {
+  "name": "mech-peasants-at-work",
+  "what": "Peasants farming, chopping trees and carrying goods to a village, the peasant activity panel above the minimap open with its five rows",
+  "game": {
+   "note": "A town some minutes in with farms and woodcutters near a village; open the peasant activity panel (the minimap's top arc) to its five-row state"
+  }
+ },
+ {
+  "name": "mech-food-support",
+  "what": "The top bar's food bar and population with the army's consumption above the food support (the bar in the red)",
+  "game": {
+   "note": "A skirmish with few farmers and a large army so consumption exceeds support; crop to the top bar's right half"
+  }
+ },
+ {
+  "name": "mech-peasants-dusk",
+  "what": "Peasants walking from the fields into a village at dusk, the sky reddening",
+  "game": {
+   "note": "Skirmish with Seasons & Weather: day and night on, Peasants sleep at night on, short day; camera over a village at the moment daylight drops below half"
+  }
+ },
+ {
+  "name": "mech-city-placement",
+  "what": "A city building being placed at the end of a street of the city: the green footprint and the new palisade's banner poles moving out around it",
+  "game": {
+   "select": "Peasant",
+   "note": "A town with a few city buildings; pick a Barracks from the build menu and hold it at the city's edge, touching the walls, before clicking"
+  }
+ },
+ {
+  "name": "mech-alignment-menu",
+  "what": "The build menu's Alignment tab with some buildings available and some shown as ghost icons because another path's building was built",
+  "game": {
+   "select": "Peasant",
+   "note": "A town with an Observatory finished, so the Michael Statue and others show their ghost icons; hover one so its tooltip names the reason"
+  }
+ },
+ {
+  "name": "mech-combat-archers-hill",
+  "what": "Archers on a hill shooting down at cavalry in the valley, arrows in flight",
+  "game": {
+   "note": "A test setup or late skirmish: a line of archers on high ground, enemy horsemen approaching from below; daylight, clouds off; a known camera above ground"
+  }
+ },
+ {
+  "name": "mech-experience-arc",
+  "what": "The selection panel of a veteran knight with most of the 16-segment experience arc lit",
+  "game": {
+   "select": "Knight",
+   "note": "A knight with high experience (raise it with the cheat panel or after fights); crop to the lower left panel"
+  }
+ },
+ {
+  "name": "mech-research-blacksmith",
+  "what": "A Blacksmith selected, its command panel showing the armour and weapon research buttons, some lit, some greyed",
+  "game": {
+   "select": "Blacksmith",
+   "note": "A town with a finished Blacksmith and some resources; hover one research button so its tooltip shows the effect"
+  }
+ },
+ {
+  "name": "mech-formations-line-orb",
+  "what": "A Line of pikemen holding against charging cavalry, with an Orb of infantry behind it",
+  "game": {
+   "note": "Two formed formations of 8+ heavy infantry (one Line, one Orb) and enemy cavalry attacking the Line's front; daylight, clouds off"
+  }
+ },
+ {
+  "name": "mech-movement-road",
+  "what": "A column of soldiers marching along a cobbled road past a forest",
+  "game": {
+   "note": "A map with cobbles leading out of a town; a Column formation moving along it; camera low, daylight"
+  }
+ },
+ {
+  "name": "mech-siege-trebuchet",
+  "what": "A trebuchet and mangonels shelling a stone wall, a stone in flight, pikemen guarding the engines",
+  "game": {
+   "note": "Late skirmish or test setup with an enemy town walled in stone; unpacked trebuchet in range; daylight, clouds off"
+  }
+ },
+ {
+  "name": "mech-naval-cog",
+  "what": "A Cog at a dock with pikemen walking aboard",
+  "game": {
+   "note": "A map with water and no AI Generals (docks need that); a finished Dock, a Cog moored, foot soldiers ordered to board"
+  }
+ },
+ {
+  "name": "mech-fog-hill-scout",
+  "what": "The fog of war around two scouts, one on a hilltop lighting a much wider circle than one in the valley; the minimap showing both circles",
+  "game": {
+   "note": "Clear Fog Of War off; two scouts, one on high ground, one low; camera high enough to show both lit areas"
+  }
+ },
+ {
+  "name": "mech-night-town",
+  "what": "A town at midnight under a full moon: lit windows, darker fog of war, a short night sight circle around a unit in the fields",
+  "game": {
+   "note": "Seasons & Weather: day and night on, moon fixed at full, start hour 0; camera over the town; clouds off"
+  }
+ },
+ {
+  "name": "mech-weather-winter",
+  "what": "A town in a harsh winter: snow on roofs and ground, fields fallow, the river frozen; the top bar showing the temperature below zero and 'fields fallow'",
+  "game": {
+   "note": "Seasons on, start season winter, winter harsh, weather snow forced with the cheat panel (F9); a town by a river"
+  }
+ },
+ {
+  "name": "mech-weather-flood",
+  "what": "Heavy rain over a river that has risen over its banks onto low land, the top bar showing the weather",
+  "game": {
+   "note": "Seasons on, weather heavy rain forced (F9) for some minutes so the water rises; a low riverside on a map with shores"
+  }
+ },
+ {
+  "name": "mech-diplomacy-offer",
+  "what": "The Diplomacy window with an alliance offer from an AI General blinking (Accept Offer), and the General's message window with portrait",
+  "game": {
+   "note": "Skirmish with Allow Diplomacy on and no teams; wait for or force an AI offer (script chat) and open the Diplomacy window"
+  }
+ },
+ {
+  "name": "mech-disguise-spy",
+  "what": "An enemy spy disguised as one of the player's own peasants next to a priest who has just unmasked it",
+  "game": {
+   "note": "Test setup: an enemy Spy walking into the player's town, one of the player's Priests nearby; shoot before and after the unmasking if possible"
+  }
+ },
+ {
+  "name": "mech-hero-panel",
+  "what": "The selection panel of a hero: name with epithet and laurel, 'born' line, age and kills",
+  "game": {
+   "note": "A unit past the hero threshold (raise its kills with a test hook, or a long AI game); select it; crop to the lower left panel"
+  }
+ },
+ {
+  "name": "mech-ai-lobby",
+  "what": "The skirmish lobby's players tab with three AI Generals of different tiers and a Lua AI shown after one name ([Advanced])",
+  "menu": [
+   "skirmish"
+  ]
+ },
+ {
+  "name": "mech-victory-message",
+  "what": "The victory message window after the last enemy Manor fell, with Return to Game and Exit to Main Menu",
+  "game": {
+   "note": "A 2-player skirmish where the enemy's last Manor-type building is destroyed (test hook or cheat panel); take the shot as the window opens"
+  }
+ },
+ {
+  "name": "mech-campaign-map",
+  "what": "The campaign map with some provinces conquered (in their region colours), target markers on their neighbours and the panel showing the chosen province",
+  "menu": [
+   "campaign",
+   "campaignmap"
+  ]
+ },
+ {
+  "name": "mech-multiplayer-lobby",
+  "what": "A multiplayer host lobby with two humans and an AI General, the Settings tab's host options (AI takes over, spectators, mods policy) visible",
+  "menu": [
+   "multiplayer",
+   "mphost"
+  ]
+ },
+ {
+  "name": "mech-replay-viewer",
+  "what": "A replay playing: the controls under the top panel, the progress bar with red and white event ticks, a battle announced at the top",
+  "game": {
+   "note": "Play a recorded AI game with the benchmark's replay hook, some minutes in, during a battle"
+  }
+ },
+ {
+  "name": "mech-mods-screen",
+  "what": "The Mods screen with two mods enabled, one moved so the own load order is in use",
+  "menu": [
+   "mods"
+  ]
+ }
+]

@@ -1,0 +1,55 @@
+[
+ {
+  "name": "gamedata-army",
+  "what": "A mixed army in the field: a line of spearmen in front, archers behind, a few mounted spearmen on a flank",
+  "game": {
+   "note": "Skirmish a few minutes in, about 20 soldiers of three kinds standing in formation on open grass; clouds off; daylight"
+  }
+ },
+ {
+  "name": "gamedata-town",
+  "what": "A grown town from above: Manor, Village, farms, Barracks, Stables, Guildhall and a stockade with a gatehouse",
+  "game": {
+   "note": "A skirmish 15 to 20 minutes in (or a save of one), camera high enough to show the town centre and its buildings; clouds off"
+  }
+ },
+ {
+  "name": "gamedata-research",
+  "what": "A Blacksmith selected: its research buttons shown, one research under way with its progress bar",
+  "game": {
+   "select": "Blacksmith",
+   "note": "A town with a finished Blacksmith and enough resources; start one research so the progress bar shows"
+  }
+ },
+ {
+  "name": "gamedata-commands",
+  "what": "An archer selected: the command buttons round the selection panel (Hold Fire, Fire at Will, Hold Ground, Skirmish Mode, Formation, Garrison)",
+  "game": {
+   "select": "Archer",
+   "note": "Two or three archers selected, mouse over one command button so its tooltip shows"
+  }
+ },
+ {
+  "name": "gamedata-peasants-at-work",
+  "what": "Peasants at work: some chopping trees, some farming a field, one carrying wood back to the Manor",
+  "game": {
+   "select": "Peasant",
+   "note": "The start of a skirmish after a minute or two, peasants spread over a wood and a farm; daylight",
+   "ready": true
+  }
+ },
+ {
+  "name": "gamedata-knight-charge",
+  "what": "Knights in a wedge formation charging into a group of enemy archers",
+  "game": {
+   "note": "A skirmish with Chivalry researched and 8 to 10 knights; a wedge formation moving into enemy missile troops"
+  }
+ },
+ {
+  "name": "gamedata-trebuchet",
+  "what": "A trebuchet set up and throwing at an enemy tower or wall, the stone in the air",
+  "game": {
+   "note": "A sapper-built trebuchet within range of an enemy stone tower; capture the moment of the throw"
+  }
+ }
+]

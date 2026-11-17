@@ -1,0 +1,17 @@
+[
+ {
+  "name": "core-main-menu",
+  "what": "The main menu",
+  "menu": [
+   "main"
+  ]
+ },
+ {
+  "name": "core-game-start",
+  "what": "A skirmish just started: the start town, the whole HUD",
+  "game": {
+   "save": "2 Player 4 Peaks.lvl",
+   "ready": true
+  }
+ }
+]
