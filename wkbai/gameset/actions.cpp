@@ -613,9 +613,21 @@ struct ActionNop : Action {
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {}
 };
 
-// The game ends, back to the main menu (the campaign map in a campaign)
+// The game ends, back to the main menu (the campaign map in a campaign). WKB.exe (0x483C50) sends
+// it to the context player's own client only: a guest who clicks Exit leaves alone
+// (NETCLIMSG_EXIT_TO_MENU) and the host's game goes on; an AI player (no client) leaves nobody.
 struct ActionExitToMainMenu : Action {
-	virtual void run(SrvScriptContext* ctx) override { ctx->server->exitToMenu = true; }
+	virtual void run(SrvScriptContext* ctx) override {
+		ServerGameObject* self = ctx->getSelf();
+		CommonGameObject* player = self ? self->getPlayer() : nullptr;
+		const int client = player ? player->dyncast<ServerGameObject>()->clientIndex : 0;
+		if (client > 0) {
+			NetPacketWriter msg(NETCLIMSG_EXIT_TO_MENU);
+			ctx->server->sendToClient(client, msg);
+		}
+		else if (client == 0)
+			ctx->server->exitToMenu = true;
+	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 

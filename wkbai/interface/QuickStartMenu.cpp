@@ -575,6 +575,11 @@ void QuickStartMenu::launchGame()
 
 		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
+			// the game set's Exit to Main Menu, clicked by this guest (EXIT_TO_MAIN_MENU): it leaves
+			if (client->exitToMenu) {
+				cliui.leaveAction = "exit_to_menu";
+				break;
+			}
 
 			Matchmaking::get().tick();
 			for (GuestConnection::Event e; connection && (e = nextEvent()) != GuestConnection::NONE;) {
