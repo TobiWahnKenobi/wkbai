@@ -315,6 +315,8 @@ private:
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
 	void drawExtendedTrees();
+	// test runs: "benchmark": { "burnBuildings": n } sets the n drawn buildings nearest the camera on fire (FireEffects.h)
+	void drawBenchmarkFires();
 	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
 	std::vector<float>* gpuBlobShadows = nullptr; // this frame's blob shadows for the enhanced terrain renderer
 	bool selBoxOn = false;

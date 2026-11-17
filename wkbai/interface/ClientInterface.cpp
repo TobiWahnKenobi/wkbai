@@ -37,6 +37,7 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "../gfx/FireEffects.h"
 #include "../gfx/ChimneySmoke.h"
 #include "../gfx/BloodDrip.h"
 #include "EnvironmentView.h"
@@ -947,6 +948,9 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// the buildings drawn this frame (drawObject), for drawBenchmarkFires
+static std::vector<ClientGameObject*> s_benchFireBuildings;
+
 // The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
 // Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
 // target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
@@ -1623,6 +1627,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const fireLevels[] = { "Original (the sprites)", "Low (procedural flames)", "High (finer flames, glow, flicker, smoke, shimmer)" };
+			ImGui::Combo("Fire", &s.fireQuality, fireLevels, 3);
+		}
 		ImGui::Checkbox("Ambient occlusion", &s.ssao);
 		ImGui::BeginDisabled(!s.ssao);
 		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
@@ -3355,6 +3363,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 
 	scene->add(&obj->sceneEntity);
 	numObjectsDrawn++;
+	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+		s_benchFireBuildings.push_back(obj);
 	// Extend map: the level's tree models, to grow its trees with (a few of each kind seen)
 	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
 		const std::string& name = obj->blueprint->name;
@@ -3462,6 +3472,63 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 				nextSelFromBox.push_back(obj);
 			}
 		}
+	}
+}
+
+// test runs: "benchmark": { "burnBuildings": n, "burnDamage": d } sets the n buildings drawn
+// nearest the camera on fire, as the game set's "Building Fire" effects (Missiles\Fire
+// Buildings\DEFAULT1-4.MESH3 and their PS_Fire_Building points) at one to three of their MI_
+// points, more the more damaged (d: their integrity, 0..1; else each its own, 0.1 to 0.9): only
+// drawn, nothing reaches the game, to see and time the fires (FireEffects.h)
+void ClientInterface::drawBenchmarkFires()
+{
+	std::vector<ClientGameObject*> drawn;
+	drawn.swap(s_benchFireBuildings);
+	static const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
+	static const int wanted = bench.is_object() ? bench.value("burnBuildings", 0) : 0;
+	static const float fixedDamage = bench.is_object() ? bench.value("burnDamage", -1.0f) : -1.0f;
+	if (wanted <= 0 || !client->gameSet || !scene)
+		return;
+	const Vector3 eye = client->camera.position;
+	std::sort(drawn.begin(), drawn.end(), [&](ClientGameObject* a, ClientGameObject* b) {
+		return (a->position - eye).sqlen2xz() < (b->position - eye).sqlen2xz() || ((a->position - eye).sqlen2xz() == (b->position - eye).sqlen2xz() && a->id < b->id);
+	});
+	static const char* const fires[4] = { "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT1.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT2.MESH3", "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT3.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT4.MESH3" };
+	int burning = 0;
+	for (ClientGameObject* obj : drawn) {
+		if (burning >= wanted)
+			break;
+		Model* model = obj->sceneEntity.model;
+		if (!model)
+			continue;
+		std::vector<Vector3> points;
+		for (size_t i = 0; i < model->getNumAPs(); i++)
+			if (model->getAPInfo(i).tag.compare(0, 3, "MI_") == 0) {
+				auto st = model->getAPState(i, obj->sceneEntity.animTime);
+				points.push_back(st.position);
+			}
+		if (points.empty())
+			continue;
+		const uint32_t h = obj->id * 2654435761u;
+		const float integrity = fixedDamage >= 0.0f ? std::clamp(fixedDamage, 0.0f, 1.0f) : 0.1f + 0.8f * ((h >> 8) & 255) / 255.0f;
+		FireFx::SetDamage(obj->id, integrity);
+		const int count = std::min((int)points.size(), integrity > 0.66f ? 1 : integrity > 0.33f ? 2 : 3);
+		for (int k = 0; k < count; k++) {
+			const Vector3& at = points[(h + (uint32_t)k * 7u) % points.size()];
+			SceneEntity& e = attachSceneEntities.emplace_back();
+			e.model = client->gameSet->modelCache.getModel(fires[(h + (uint32_t)k) % 4]);
+			e.transform = Matrix::getTranslationMatrix(at) * obj->sceneEntity.transform;
+			e.color = 0;
+			e.flags = 0;
+			e.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
+			if (!e.model)
+				continue;
+			scene->add(&e);
+			drawAttachmentPoints(&e, FireFx::Level() > FireFx::ORIGINAL ? obj->id : 0);
+		}
+		burning++;
 	}
 }
 
@@ -5415,6 +5482,10 @@ void ClientInterface::iter()
 			psCache = new PSCache("Warrior Kings Game Set\\Particle_Systems");
 		if (!particleRenderer)
 			particleRenderer = new DefaultParticleRenderer(gfx, particlesContainer);
+		// the fires' look this frame (RenderSettings::fireQuality: Low and High with the enhanced
+		// renderers on Diligent)
+		FireFx::BeginFrame(g_renderSettings.fireQuality, dynamic_cast<DiligentGfx*>(gfx) && client->terrain && UseEnhancedRenderers(gfx));
+		s_benchFireBuildings.clear();
 
 		numObjectsDrawn = 0;
 		attachSceneEntities.clear();
@@ -5499,8 +5570,16 @@ void ClientInterface::iter()
 						continue;
 					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
 					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
-					const float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
-					std::array<float, 7> l = { at.x, at.y, at.z, 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f),
+					float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
+					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
+					// more its building is damaged
+					if (FireFx::Level() >= FireFx::HIGH) {
+						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
+						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
+						reach *= 1.0f + 0.25f * damage;
+					}
+					std::array<float, 7> l = { at.x, at.y, at.z, reach,
 						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
 					list.push_back({ (at - client->camera.position).sqlen3(), l });
 				}
@@ -5802,14 +5881,34 @@ void ClientInterface::iter()
 			flag.animTime = (uint32_t)SDL_GetTicks();
 			scene->add(&flag);
 		}
+		// (the fire levels: a looping effect's particles carry its object's id, a burning building's
+		// fires burn by its damage, FireFx::SetDamage; Original: as before, no id)
+		static const GameSet* fireItemsOf = nullptr;
+		static int fireIntegrity = -1, fireCapacity = -1;
+		if (FireFx::Level() > FireFx::ORIGINAL && fireItemsOf != client->gameSet.get()) {
+			fireItemsOf = client->gameSet.get();
+			fireIntegrity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity") : -1;
+			fireCapacity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
+		}
+		auto fireObject = [&](ClientGameObject* obj) -> uint32_t {
+			if (FireFx::Level() == FireFx::ORIGINAL || !obj)
+				return 0;
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fireIntegrity >= 0 && fireCapacity >= 0) {
+				const float capacity = obj->getItem(fireCapacity);
+				if (capacity > 0.0f)
+					FireFx::SetDamage(obj->id, obj->getItem(fireIntegrity) / capacity);
+			}
+			return obj->id;
+		};
 		for (auto& lsfx : client->loopingSpecialEffects) {
 			Vector3 ttpp = lsfx.second.transform.getTranslationVector().transformScreenCoords(client->camera.sceneMatrix);
 			if (ttpp.x >= -1 && ttpp.x <= 1 && ttpp.y >= -1 && ttpp.y <= 1 && ttpp.z >= -1 && ttpp.z <= 1) {
 				lsfx.second.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
 				scene->add(&lsfx.second);
-				drawAttachmentPoints(&lsfx.second);
+				drawAttachmentPoints(&lsfx.second, fireObject(lsfx.first.first.get()));
 			}
 		}
+		drawBenchmarkFires();
 		if (client->terrain) {
 			// a test run's sun ("benchmark": { "sunVector": [x, y, z] }), for comparing with the original
 			if (BenchmarkEnabled()) {
@@ -5915,6 +6014,8 @@ void ClientInterface::iter()
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
+		// the fires the particle renderer left to the fire shader (Low and High)
+		FireFx::Draw(gfx, client->camera, client->timeManager.currentTime);
 		particlesContainer->update(client->timeManager.currentTime);
 		ChimneySmoke::Draw(gfx, client->camera, client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
