@@ -1540,12 +1540,13 @@ local function weatherTab()
 			note(X(1000), Y(864), { "None of them in " .. table.concat(none, ", ") .. ": clear weather then." })
 		end
 	end
-	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter)
+	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter),
+	-- side by side on one row above the cheat mode's
 	if s.dayNight ~= 0 then
-		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(904))
+		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(896))
 	end
 	if s.seasons ~= 0 then
-		switch("farmersWinter", "Farmers winter indoors", X(1000), Y(970))
+		switch("farmersWinter", "Farmers winter indoors", X(1440), Y(896))
 	end
 	if not (s.seasons ~= 0 and s.weatherStability == 4) then
 		note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
@@ -1561,8 +1562,8 @@ local function weatherTab()
 	if skirmish.multiplayer then
 		s.cheatMode = 0
 	else
-		switch("cheatMode", "Cheat mode", X(1000), Y(900))
-		note(X(1000), Y(962), { "F9 in the game: set the time of day, the season and the weather." })
+		switch("cheatMode", "Cheat mode", X(1000), Y(962))
+		note(X(1240), Y(980), { "F9 in the game: set the time of day, the season and the weather." })
 	end
 end
 
@@ -2249,16 +2250,114 @@ local function campaignState()
 	return conquered, attackable
 end
 
--- Starts a province: the player at the first position, the level's AI Generals (random ones of
--- their tiers) after, the other positions empty
+function campaign.provinceByLevel(level)
+	for _, prov in ipairs(PROVINCES) do
+		if string.lower(prov.level) == string.lower(level) then return prov end
+	end
+	return nil
+end
+
+-- The AI Generals of every province, fixed for the whole campaign by the profile's seed, as
+-- WKB.exe's 0x63a870 deals them (RE repo docs/re/campaign-comparison.md): the nine story
+-- generals first, on their provinces (Grayhame in Angland, Roland in Aquilos, Ignis in
+-- Liguriensis, Marjoria in Rusland, Wendlyna in Valakia, Alexandros in Akaia or Ryetia,
+-- Zinerva, Sir Piter and Vlad each on one of a few provinces), then every other place a
+-- general of its tier drawn from the rest, no general twice while there are others.
+-- Returns level (lower case) -> { blueprint or false per place }.
+campaign.STORY_GENERALS = {
+	"Grayhame, Prince of Pies Kingmaker", "Roland the Weaver Kingmaker", "Ignis the Lord Protector Kingmaker",
+	"Marjoria, War Queen of the Dawn Kingmaker", "The Countess Wendlyna Kingmaker", "Alexandros the Dowdey Kingmaker",
+	"High Queen Zinerva Kingmaker", "Sir Piter Von Hovart Kingmaker", "Vlad Komar the Sorceror-Priest Kingmaker",
+}
+campaign.dealt = { seed = nil, levels = nil }
+function campaign.campaignGenerals()
+	local seed = (campaign.data and campaign.data.seed) or 1
+	if campaign.dealt.seed == seed and campaign.dealt.levels then return campaign.dealt.levels end
+	-- a small generator of its own, so the deal doesn't depend on Lua's math.random
+	local state = math.floor(seed) % 2147483648
+	local function rand(n)
+		state = (state * 1103515245 + 12345) % 2147483648
+		return math.floor(state / 65536) % math.max(1, n)
+	end
+	local def = campaignDefinition()
+	local levels = {}
+	for _, prov in ipairs(PROVINCES) do
+		local d = def.levels[string.lower(prov.level)]
+		local places = {}
+		for k = 1, #((d and d.tiers) or {}) do places[k] = false end
+		levels[string.lower(prov.level)] = places
+	end
+	local story, byBlueprint = {}, {}
+	for _, b in ipairs(campaign.STORY_GENERALS) do story[b] = true end
+	for _, g in ipairs(generals()) do byBlueprint[g.blueprint] = g end
+	local function tiersOf(level) return (def.levels[string.lower(level)] or { tiers = {} }).tiers end
+	-- a story general on a place of its province: a given place, or a free one at random
+	-- (one of the general's tier first)
+	local function place(blueprint, level, at)
+		local places = levels[string.lower(level)]
+		if not places or not byBlueprint[blueprint] or #places == 0 then return end
+		if at then
+			if not places[at] then places[at] = blueprint end
+			return
+		end
+		local tiers, free, fitting = tiersOf(level), {}, {}
+		for k = 1, #places do
+			if not places[k] then
+				free[#free + 1] = k
+				if tiers[k] == byBlueprint[blueprint].category then fitting[#fitting + 1] = k end
+			end
+		end
+		local from = #fitting > 0 and fitting or free
+		if #from > 0 then places[from[rand(#from) + 1]] = blueprint end
+	end
+	place(campaign.STORY_GENERALS[1], "CH2_Angland.lvl", 1)
+	place(campaign.STORY_GENERALS[2], "CH2_Aquilos.lvl", 1)
+	place(campaign.STORY_GENERALS[3], "CH2_Liguriensis.lvl", 1)
+	place(campaign.STORY_GENERALS[4], "CH2_Rusland.lvl")
+	place(campaign.STORY_GENERALS[5], "CH2_Valakia.lvl")
+	place(campaign.STORY_GENERALS[6], rand(2) == 0 and "CH2_Akaia.lvl" or "CH2_Ryetia.lvl")
+	place(campaign.STORY_GENERALS[7], ({ "CH2_Amboise.lvl", "CH2_Bohemundia.lvl", "CH2_Tharingia.lvl" })[rand(3) + 1])
+	place(campaign.STORY_GENERALS[8], ({ "CH2_Bohemundia.lvl", "CH2_Dacianus.lvl", "CH2_Illyricus.lvl", "CH2_Tharingia.lvl" })[rand(4) + 1])
+	place(campaign.STORY_GENERALS[9], ({ "CH2_Bohemundia.lvl", "CH2_Dacianus.lvl", "CH2_Magiaria.lvl", "CH2_Rusland.lvl" })[rand(4) + 1])
+	-- the rest: by tier, each general once while the tier has unused ones
+	local pools = {}
+	for _, g in ipairs(generals()) do
+		if not story[g.blueprint] then
+			pools[g.category] = pools[g.category] or {}
+			table.insert(pools[g.category], g.blueprint)
+		end
+	end
+	local used = {}
+	for _, prov in ipairs(PROVINCES) do
+		local level = string.lower(prov.level)
+		local tiers = tiersOf(level)
+		for k, b in ipairs(levels[level]) do
+			if not b then
+				local pool = pools[tiers[k]] or {}
+				local unused = {}
+				for _, g in ipairs(pool) do if not used[g] then unused[#unused + 1] = g end end
+				local from = #unused > 0 and unused or pool
+				if #from > 0 then
+					local g = from[rand(#from) + 1]
+					used[g] = true
+					levels[level][k] = g
+				end
+			end
+		end
+	end
+	campaign.dealt = { seed = seed, levels = levels }
+	return levels
+end
+
+-- Starts a province: the player at the first position, the level's AI Generals (the campaign's
+-- deal) after, the other positions empty
 local function startProvince(prov)
-	local def = campaignDefinition().levels[string.lower(prov.level)] or { tiers = { "VETERAN" } }
+	local deal = campaign.campaignGenerals()[string.lower(prov.level)] or {}
 	local parts = { "H;c1" }
-	for i, tier in ipairs(def.tiers) do
-		local pool = {}
-		for _, g in ipairs(generals()) do if g.category == tier then pool[#pool + 1] = g end end
-		local g = pool[math.random(math.max(1, #pool))]
-		parts[#parts + 1] = (g and ("A:" .. g.blueprint) or "A") .. ";c" .. (i + 1)
+	local tiers = (campaignDefinition().levels[string.lower(prov.level)] or { tiers = { "VETERAN" } }).tiers
+	for i = 1, math.max(#tiers, 1) do
+		local b = deal[i]
+		parts[#parts + 1] = (b and ("A:" .. b) or "A") .. ";c" .. (i + 1)
 	end
 	for _ = 1, 8 do parts[#parts + 1] = "E" end
 	request("slots", table.concat(parts, "|"))
@@ -2286,6 +2385,7 @@ Screens.campaign = {
 		if (button(T("FRONT_END_CAMPAIGN_NEW"), x, Y(800), L(250), L(30), name ~= "") or entered) and name ~= "" then
 			if createCampaignProfile(name, start) then
 				campaign.profile = name
+				campaign.brief = true
 				push("campaignmap")
 			else
 				dialog = { text = string.format(T("FRONT_END_CAMPAIGN_OVERWRITE_PROFILE"), name), buttons = {
@@ -2294,6 +2394,7 @@ Screens.campaign = {
 						deleteCampaignProfile(name)
 						createCampaignProfile(name, start)
 						campaign.profile = name
+						campaign.brief = true
 						push("campaignmap")
 					end },
 					{ T("FRONT_END_DIALOG_BUTTON_NO"), function() dialog = nil end },
@@ -2313,17 +2414,59 @@ Screens.campaign = {
 
 local TIER_TEXT = { CONSCRIPT = "FRONT_END_CHAT_AI_CONSCRIPT", VETERAN = "FRONT_END_CHAT_AI_VETERAN", ELITE = "FRONT_END_CHAT_AI_ELITE" }
 
--- The campaign map: conquered provinces in the player's colour, the ones that can be attacked
--- marked; a click shows a province, Start attacks it
+-- A province's text: Language.txt writes its line breaks as a backslash and n
+function campaign.text(key)
+	return (string.gsub(T(key), "\\n", "\n"))
+end
+
+-- A province's AI Generals as the panel lists them: { name, tier, alignment }
+function campaign.provinceGenerals(prov)
+	local list = {}
+	local tiers = (campaignDefinition().levels[string.lower(prov.level)] or { tiers = {} }).tiers
+	local deal = campaign.campaignGenerals()[string.lower(prov.level)] or {}
+	generals()
+	for k, tier in ipairs(tiers) do
+		local g = deal[k] and generalsByBlueprint[deal[k]]
+		list[#list + 1] = { name = g and g.name or "?", tier = T(TIER_TEXT[tier] or tier), alignment = g and g.alignment or "" }
+	end
+	return list
+end
+
+-- A box of lines in the middle of the screen with an OK button: the story brief of a new
+-- campaign. Returns whether it was closed.
+function campaign.campaignBox(w, h, draw)
+	local x, y = math.floor((W - w) / 2), math.floor((H - h) / 2)
+	drawRect(0, 0, W, H, 0x80000000)
+	goldFrame(x, y, w, h)
+	draw(x, y, w, h)
+	return button(T("BUTTON_OK"), x + (w - L(150)) / 2, y + h - L(55), L(150), L(35))
+		or isKeyPressed("Return") or isKeyPressed("Keypad Enter")
+end
+
+-- The campaign map (WKB.exe's AddOn_Button_Map, 0x74d730), in wkbai's layout (the whole map
+-- beside a panel) with the original's behaviour: the conquered provinces drawn with their region
+-- image; Campaign_Target on the provinces that can be attacked; Campaign_Location on the chosen
+-- province only, blinking 5 times and then staying; the province's name at the mouse and the
+-- attack cursor over one that can be attacked. The panel shows the province under the mouse,
+-- or the chosen one (name, bonus, description, its Enemy Generals): wkbai's choice where the
+-- original opens a review box on a right-click. Conquered provinces can be played again (their
+-- scripts give the bonus once). A new campaign starts with the story brief and Angland chosen.
 Screens.campaignmap = {
 	background = seaBackground,
 	open = function()
 		campaign.data = campaign.profile and getCampaignProfile(campaign.profile) or nil
-		campaign.selected = nil
+		campaign.selected, campaign.selectedAt = nil, 0
+		if campaign.data and #(campaign.data.conquered or {}) == 0 then
+			campaign.selected = campaign.provinceByLevel(campaignDefinition().first)
+			campaign.selectedAt = getTime()
+		end
 	end,
 	draw = function()
 		if not campaign.data then pop(); return end
 		local conquered, attackable = campaignState()
+		local modal = campaign.brief
+		local savedBlocked = mouse.blocked
+		if modal then mouse.blocked = true end
 		-- the map, as large as it fits left of the panel
 		local boxW, boxH = L(1300), H - Y(70) - L(20)
 		local k = math.min(boxW / 1600, boxH / 1236)
@@ -2339,28 +2482,32 @@ Screens.campaignmap = {
 				if imageAlpha(img, math.floor(ux - prov.x), math.floor(uy - prov.y)) > 128 then hoveredProv = prov end
 			end
 		end
-		if hoveredProv and mouse.released then campaign.selected = hoveredProv end
-		for _, prov in ipairs(PROVINCES) do
-			local img = "Interface\\FrontEnd\\Regions\\" .. prov.key .. ".tga"
-			local w, h = imageSize(img)
-			local colour = nil
-			if conquered[prov.key] then colour = 0xFFFFFFFF
-			elseif prov == campaign.selected then colour = 0xC0FFFFFF
-			elseif prov == hoveredProv then colour = 0x70FFFFFF end
-			if colour then drawImage(img, mx + prov.x * k, my + prov.y * k, w * k, h * k, colour) end
+		if hoveredProv and mouse.released then
+			if campaign.selected ~= hoveredProv then campaign.selectedAt = getTime() end
+			campaign.selected = hoveredProv
 		end
-		local pulse = 0.85 + 0.15 * math.sin(getTime() * 4)
 		for _, prov in ipairs(PROVINCES) do
-			if attackable[prov.key] then
-				local size = L(56) * pulse
-				drawImage("Interface\\FrontEnd\\Campaign_Target.tga", mx + prov.mx * k - size / 2, my + prov.my * k - size / 2, size, size * 0.89)
-			elseif conquered[prov.key] then
-				local size = L(40)
-				drawImage("Interface\\FrontEnd\\Campaign_Location.tga", mx + prov.mx * k - size / 2, my + prov.my * k - size / 2, size, size)
+			if conquered[prov.key] then
+				local img = "Interface\\FrontEnd\\Regions\\" .. prov.key .. ".tga"
+				local w, h = imageSize(img)
+				drawImage(img, mx + prov.x * k, my + prov.y * k, w * k, h * k)
 			end
 		end
+		for _, prov in ipairs(PROVINCES) do
+			if attackable[prov.key] then
+				local size = L(56)
+				drawImage("Interface\\FrontEnd\\Campaign_Target.tga", mx + prov.mx * k - size / 2, my + prov.my * k - size / 2, size, size * 0.89)
+			end
+		end
+		-- the chosen province: blinking 5 times (200 ms on, 200 ms off), then staying
+		local sel = campaign.selected
+		local since = getTime() - (campaign.selectedAt or 0)
+		if sel and (since >= 2 or math.floor(since / 0.2) % 2 == 0) then
+			local size = L(40)
+			drawImage("Interface\\FrontEnd\\Campaign_Location.tga", mx + sel.mx * k - size / 2, my + sel.my * k - size / 2, size, size)
+		end
 
-		-- the panel: the campaign, then the province chosen
+		-- the panel: the campaign, then the province under the mouse or the one chosen
 		local px, pw = X(1340), L(560)
 		title(T("FRONT_END_CAMPAIGN_TITLE") .. ": " .. campaign.profile)
 		panel(px, Y(70), pw, H - Y(70) - L(70), true)
@@ -2368,6 +2515,7 @@ Screens.campaignmap = {
 		local y = Y(84)
 		local function line(font, text, colour)
 			for _, l in ipairs(wrapText(font, text, pw - L(32))) do
+				if y + fontHeight(font, S) > H - L(112) then return end
 				drawText(font, px + L(16), y, l, colour or WHITE, S)
 				y = y + fontHeight(font, S)
 			end
@@ -2375,33 +2523,74 @@ Screens.campaignmap = {
 		local count = 0
 		for _ in pairs(conquered) do count = count + 1 end
 		line(FONT_LIST, count .. " / " .. #PROVINCES, YELLOW)
-		if next(items) then
-			line(FONT_LIST, string.format("%s %d   %s %d   %s %d", T("FRONT_END_CAMPAIGN_STARTING_FOOD"), items["FOOD"] or items["Food"] or 0,
-				T("FRONT_END_CAMPAIGN_STARTING_WOOD"), items["WOOD"] or items["Wood"] or 0, T("FRONT_END_CAMPAIGN_STARTING_GOLD"), items["GOLD"] or items["Gold"] or 0), 0xFFE6E6E6)
+		-- the carried-over resources, population and Advances (the original's panel)
+		local function item(...)
+			for _, name in ipairs({ ... }) do if items[name] then return math.floor(items[name]) end end
+			return 0
 		end
+		local function label(key)
+			local text = string.gsub(string.gsub(T(key), "%s*%(.-%)", ""), "^Starting%s+", "")
+			return text
+		end
+		line(FONT_LIST, string.format("%s %d   %s %d   %s %d   %s %d", label("FRONT_END_CAMPAIGN_STARTING_FOOD"), item("Food", "FOOD"),
+			label("FRONT_END_CAMPAIGN_STARTING_WOOD"), item("Wood", "WOOD"), label("FRONT_END_CAMPAIGN_STARTING_GOLD"), item("Gold", "GOLD"),
+			label("FRONT_END_SETTINGS_POPULATION_LIMIT"), item("Total Population Count")), 0xFFE6E6E6)
+		line(FONT_LIST, string.format("%s %d   %s %d   %s %d", label("FRONT_END_CAMPAIGN_PAGAN_ADVANCE"), item("Pagan Tech Level"),
+			label("FRONT_END_CAMPAIGN_IMPERIAL_ADVANCE"), item("Imperial Tech Level"), label("FRONT_END_CAMPAIGN_RENAISSANCE_ADVANCE"), item("Renaissance Tech Level")), 0xFFE6E6E6)
 		y = y + L(16)
-		local prov = campaign.selected or hoveredProv
+		local prov = (not modal and hoveredProv) or campaign.selected
 		if prov then
 			line(FONT_BUTTON, T("FRONT_END_CAMPAIGN_" .. prov.key), 0xFF9CE6F0)
 			y = y + L(6)
 			if conquered[prov.key] then line(FONT_LIST, "Conquered", 0xFF80FF80) end
-			local def = campaignDefinition().levels[string.lower(prov.level)]
-			if def then
-				local tiers = {}
-				for _, t in ipairs(def.tiers) do tiers[#tiers + 1] = T(TIER_TEXT[t] or t) end
-				line(FONT_LIST, #def.tiers .. " AI Generals: " .. table.concat(tiers, ", "), YELLOW)
+			for _, g in ipairs(campaign.provinceGenerals(prov)) do
+				line(FONT_LIST, g.name .. " (" .. g.tier .. (g.alignment ~= "" and (", " .. g.alignment) or "") .. ")", YELLOW)
 			end
 			y = y + L(10)
 			line(FONT_LIST, T("FRONT_END_CAMPAIGN_CONQUER_THIS_PROVINCE"), WHITE)
-			line(FONT_LIST, T("Province_Bonus_" .. prov.key), 0xFF80FF80)
+			line(FONT_LIST, campaign.text("Province_Bonus_" .. prov.key), 0xFF80FF80)
 			y = y + L(10)
-			line(FONT_LIST, T("Province_" .. prov.key), 0xFFE6E6E6)
+			line(FONT_LIST, campaign.text("Province_" .. prov.key), 0xFFE6E6E6)
 		end
-		local canStart = campaign.selected ~= nil and attackable[campaign.selected.key] == true
+		-- what Start plays, so it is clear while the panel shows another province
+		if sel then
+			drawText(FONT_LIST, px + L(20), H - L(102), T("FRONT_END_CAMPAIGN_START") .. ": " .. T("FRONT_END_CAMPAIGN_" .. sel.key), 0xFF9CE6F0, S)
+		end
+		local canStart = sel ~= nil and (attackable[sel.key] == true or conquered[sel.key] == true)
 		if button(T("FRONT_END_CAMPAIGN_START"), px + L(20), H - L(56), L(250), L(30), canStart) then
-			startProvince(campaign.selected)
+			startProvince(sel)
 		end
 		if button(T("FRONT_END_BUTTON_BACK"), px + pw - L(270), H - L(56), L(250), L(30)) then pop() end
+		mouse.blocked = savedBlocked
+
+		-- the province's name at the mouse, and the attack cursor over one that can be attacked
+		if hoveredProv and not modal then
+			local text = T("FRONT_END_CAMPAIGN_" .. hoveredProv.key)
+			local tw, th = textWidth(FONT_LIST, text, S), fontHeight(FONT_LIST, S)
+			local tx = math.min(mouse.x + L(16), W - tw - L(12))
+			local ty = math.min(mouse.y + L(24), H - th - L(8))
+			drawRect(tx - L(5), ty - L(3), tw + L(10), th + L(6), 0xE0101010)
+			drawFrame(tx - L(5), ty - L(3), tw + L(10), th + L(6), 0xFF5A7A8C, 1)
+			drawText(FONT_LIST, tx, ty, text, 0xFF9CE6F0, S)
+			if attackable[hoveredProv.key] then menuCursor = "Interface\\C_Attack.tga" end
+		end
+
+		-- a new campaign: the story brief, in a box three quarters of the screen
+		if campaign.brief then
+			if campaign.campaignBox(math.floor(W * 0.75), math.floor(H * 0.75), function(x, by, w, h)
+				local ty = by + L(30)
+				for _, l in ipairs(wrapText(FONT_TEXT, campaign.text("Campaign_Story_Brief"), w - L(128))) do
+					if ty + fontHeight(FONT_TEXT, S) > by + h - L(70) then break end
+					drawText(FONT_TEXT, x + L(64), ty, l, 0xFFE6E6E6, S)
+					ty = ty + fontHeight(FONT_TEXT, S)
+				end
+			end) then campaign.brief = false end
+		end
+	end,
+	-- Esc closes the brief first
+	onEscape = function()
+		if campaign.brief then campaign.brief = false
+		else pop() end
 	end,
 }
 
@@ -3222,38 +3411,33 @@ end
 -- screen stays between them, or above them where there is no room.
 local HUD_LEFT_W, HUD_LEFT_H, HUD_RIGHT_W, HUD_RIGHT_H = 330, 326, 345, 343
 
--- The text windows, oldest first, so the newest is drawn on top and takes a click first
+-- The text windows, oldest first, so the newest is drawn on top and takes a click first. As
+-- WKB.exe's CGameTextWindow (0x77ee60, 0x77e540; RE repo docs/re/campaign-comparison.md): 540
+-- pixels wide and centred, its bottom a tenth of the screen above the bottom (PUT_AT_BOTTOM_OF_SCREEN)
+-- or its top just below the middle; the lines centred, wrapped at PIXEL_WIDTH less 12; at least
+-- 120 high; the buttons 180 x 30 spread evenly along the bottom in the order of their x; Enter
+-- presses the newest window's only button, or its Close
+local GTW_WIDTH = 540
 local function drawGameTextWindows(blocked)
 	local windows = getGameWindows()
 	local layout = {}
 	for i, win in ipairs(windows) do
-		local w = math.min(L(win.width), W - L(20))
-		local px, py = L(GAME_WINDOW_PAD_X), L(GAME_WINDOW_PAD_Y)
+		local w = math.min(L(GTW_WIDTH), W - L(20))
+		local px = L(24)
 		-- an AI General's message: its portrait at the left, its name as the title (WKB.exe's
-		-- "|<colour><name>|" first line)
+		-- "|<colour><name>|" first line; wkbai's)
 		local portrait = win.general ~= "" and generalPortrait(win.general) or nil
 		local textX = portrait and (L(64) + L(12)) or 0
 		local titleH = win.title ~= "" and (fontHeight(FONT_BUTTON, S) + L(6)) or 0
-		local lines = wrapText(FONT_GAME_TEXT, win.text, w - 2 * px - textX)
-		local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
-		-- the buttons' row: as high as the highest button's top (the scripts place them up
-		-- from the window's bottom, mostly 5 pixels)
-		local buttonsTop = 0
-		for _, b in ipairs(win.buttons) do buttonsTop = math.max(buttonsTop, b.y + math.max(b.height, 25)) end
+		local wrapW = math.min(L(math.max(win.width, 100) - 12), w - 2 * px) - textX
+		local lines = wrapText(FONT_GAME_TEXT, win.text, wrapW)
+		local lineH = math.max(L(15), fontHeight(FONT_GAME_TEXT, S))
 		local textH = math.max(titleH + #lines * lineH, portrait and L(80) or 0)
-		local h = 2 * py + textH + (buttonsTop > 0 and (L(buttonsTop) + L(6)) or 0)
-		local x = math.floor(math.max(L(10), math.min(W * win.x, W - w - L(10))))
-		local bottom = win.atBottom and (H - L(6)) or (H * win.y)
-		if bottom > H - math.max(HUD_LEFT_H, HUD_RIGHT_H) then
-			local left, right = HUD_LEFT_W + L(8), W - HUD_RIGHT_W - L(8)
-			if right - left >= w then
-				x = math.max(left, math.min(x, right - w))
-			else
-				bottom = H - math.max(HUD_LEFT_H, HUD_RIGHT_H)
-			end
-		end
-		local y = math.floor(math.max(L(10), math.min(bottom - h, H - h - L(6))))
-		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px, py = py,
+		local h = math.max(L(120), L(22) + textH + L(50))
+		local x = math.floor((W - w) / 2)
+		local y = win.atBottom and math.floor(H - H * 0.104 - h) or math.floor(H * 0.479)
+		y = math.max(L(10), math.min(y, H - h - L(6)))
+		layout[i] = { x = x, y = y, w = w, h = h, lines = lines, lineH = lineH, px = px,
 			portrait = portrait, textX = textX, titleH = titleH }
 		reportGameWindowArea(x, y, w, h, win.modal)
 	end
@@ -3266,37 +3450,57 @@ local function drawGameTextWindows(blocked)
 	for i, win in ipairs(windows) do
 		local l = layout[i]
 		gameFrame(l.x, l.y, l.w, l.h)
-		local ty = l.y + l.py
+		local ty = l.y + L(22)
+		local areaX, areaW = l.x + l.px + l.textX, l.w - 2 * l.px - l.textX
 		if l.portrait then
 			drawImage(l.portrait, l.x + l.px, ty, L(64), L(80))
 		end
 		if win.title ~= "" then
-			drawText(FONT_BUTTON, l.x + l.px + l.textX, ty, win.title, playerColour(win.titleColour), S)
+			drawText(FONT_BUTTON, areaX + (areaW - textWidth(FONT_BUTTON, win.title, S)) / 2, ty, win.title, playerColour(win.titleColour), S)
 			ty = ty + l.titleH
 		end
 		for _, line in ipairs(l.lines) do
-			drawText(FONT_GAME_TEXT, l.x + l.px + l.textX, ty, line, GAME_TEXT_COLOUR, S)
+			drawText(FONT_GAME_TEXT, math.floor(areaX + (areaW - textWidth(FONT_GAME_TEXT, line, S)) / 2), ty, line, GAME_TEXT_COLOUR, S)
 			ty = ty + l.lineH
 		end
-		local innerBottom = l.y + l.h - l.py
-		-- the page, when there are several
-		if win.pages > 1 then
-			local p = win.page .. "/" .. win.pages
-			drawText(FONT_LIST, l.x + l.w - l.px - textWidth(FONT_LIST, p, S), innerBottom - fontHeight(FONT_LIST, S), p, GREY, S)
+		-- the buttons: in the order of their x, 180 x 30, spread evenly, 10 pixels above the bottom
+		local order = {}
+		for bi, b in ipairs(win.buttons) do
+			if b.text ~= "" then order[#order + 1] = bi end
 		end
+		table.sort(order, function(a, b) return win.buttons[a].x < win.buttons[b].x end)
+		local n = #order
+		local bw, bh = math.min(L(180), math.floor((l.w - L(20)) / math.max(n, 1))), L(30)
+		local gap = (l.w - n * bw) / (n + 1)
 		local saved = mouse.blocked
 		mouse.blocked = blocked or (top ~= i)
-		for bi, b in ipairs(win.buttons) do
-			-- x from the window's left edge (the scripts' OK at 275 of 550 is centred), y up from
-			-- the inner bottom
-			local bw, bh = L(b.width), L(math.max(b.height, 25))
-			local bx = l.x + L(b.x)
-			local by = innerBottom - L(b.y) - bh
-			if b.text ~= "" and button(b.text, bx, by, bw, bh, b.enabled) then
+		for k, bi in ipairs(order) do
+			local b = win.buttons[bi]
+			local bx = math.floor(l.x + gap + (k - 1) * (bw + gap))
+			local by = l.y + l.h - L(40)
+			if button(b.text, bx, by, bw, bh, b.enabled) then
 				request("gtw_button", win.id .. "," .. (bi - 1))
 			end
 		end
 		mouse.blocked = saved
+	end
+	-- Enter: the newest window's only button, or its Close (WKB.exe 0x64f91a)
+	local newest = windows[#windows]
+	if newest and not blocked and (isKeyPressed("Return") or isKeyPressed("Keypad Enter")) then
+		local pick = nil
+		local shown = 0
+		for bi, b in ipairs(newest.buttons) do
+			if b.text ~= "" then shown = shown + 1 pick = pick or bi end
+		end
+		if shown ~= 1 then
+			pick = nil
+			for bi, b in ipairs(newest.buttons) do
+				if b.close then pick = bi break end
+			end
+		end
+		if pick and newest.buttons[pick].enabled then
+			request("gtw_button", newest.id .. "," .. (pick - 1))
+		end
 	end
 end
 
@@ -3314,40 +3518,43 @@ function FE_ObjectivesNews()
 	return o ~= nil and o.changed ~= objectivesSeen and not objectivesOpen
 end
 
+-- As WKB.exe's (RE repo docs/re/campaign-comparison.md): 600 x 440 in the middle of the screen,
+-- the title, "Objectives", the map picture (SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC) in a
+-- 300 x 300 square at the left, the entries in a column at the right (gold, inactive ones grey
+-- blue), OK below; Enter closes it. The text windows are hidden while it is open.
+local OBJ_ACTIVE, OBJ_INACTIVE = 0xFF5BA7B3, 0xFFBCA19A
 local function drawObjectives(blocked)
 	local o = getObjectives()
 	if not o then objectivesOpen = false return end
 	if not objectivesOpen then return end
 	objectivesSeen = o.changed
-	local w = L(520)
-	local textW = w - 2 * L(GAME_WINDOW_PAD_X) - L(28)
-	local lineH = fontHeight(FONT_GAME_TEXT, S) + L(2)
-	local rows = {}
-	for _, e in ipairs(o.entries) do
-		local lines = wrapText(FONT_GAME_TEXT, e.text, textW)
-		rows[#rows + 1] = { lines = lines, inactive = e.inactive }
-	end
-	local count = 0
-	for _, r in ipairs(rows) do count = count + #r.lines end
-	local titleH = L(34)
-	local h = 2 * L(GAME_WINDOW_PAD_Y) + titleH + math.max(1, count) * lineH + #rows * L(6) + L(40)
-	local x, y = math.floor(W - w - L(20)), math.floor(math.max(90, L(90)))
-	reportGameWindowArea(x, y, w, h, false)
+	local w, h = math.min(L(600), W - L(20)), math.min(L(440), H - L(20))
+	local x, y = math.floor((W - w) / 2), math.floor((H - h) / 2)
+	reportGameWindowArea(x, y, w, h, true)
 	gameFrame(x, y, w, h)
-	centredText(FONT_BUTTON, o.title, x, y + L(GAME_WINDOW_PAD_Y) - L(6), w, titleH, 0xFF9CE6F0)
-	local ty = y + L(GAME_WINDOW_PAD_Y) + titleH
-	for _, r in ipairs(rows) do
-		local bullet = r.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
-		drawImage(bullet, x + L(GAME_WINDOW_PAD_X), ty + (lineH - L(12)) / 2, L(12), L(12))
-		for _, line in ipairs(r.lines) do
-			drawText(FONT_GAME_TEXT, x + L(GAME_WINDOW_PAD_X) + L(28), ty, line, r.inactive and GREY or GAME_TEXT_COLOUR, S)
+	centredText(FONT_TITLE, o.title, x, y + L(18), w, L(44), 0xFF9CE6F0)
+	centredText(FONT_BUTTON, T("MISSION_OBJECTIVES_OBJECTIVES"), x, y + L(62), w, L(24), 0xFF9CE6F0)
+	local mapX, mapY, mapS = x + L(30), y + L(92), math.min(L(300), h - L(150))
+	if o.map and o.map ~= "" then
+		drawImage(o.map, mapX, mapY, mapS, mapS)
+	end
+	local colX = mapX + mapS + L(30)
+	local colW = x + w - L(30) - colX
+	local lineH = fontHeight(FONT_BUTTON, S) + L(2)
+	local ty = mapY
+	for _, e in ipairs(o.entries) do
+		local bullet = e.inactive and "Interface\\InGame\\Inactive Bullet point.tga" or "Interface\\InGame\\Bullet point.tga"
+		drawImage(bullet, colX, ty + (lineH - L(12)) / 2, L(12), L(12))
+		for _, line in ipairs(wrapText(FONT_BUTTON, e.text, colW - L(20))) do
+			if ty + lineH > y + h - L(60) then break end
+			drawText(FONT_BUTTON, colX + L(20), ty, line, e.inactive and OBJ_INACTIVE or OBJ_ACTIVE, S)
 			ty = ty + lineH
 		end
 		ty = ty + L(6)
 	end
 	local saved = mouse.blocked
 	mouse.blocked = blocked
-	if button(T("BUTTON_OK"), x + (w - L(100)) / 2, y + h - L(GAME_WINDOW_PAD_Y) - L(30), L(100), L(28)) then
+	if button(T("BUTTON_OK"), x + (w - L(150)) / 2, y + h - L(55), L(150), L(35)) or (not blocked and (isKeyPressed("Return") or isKeyPressed("Keypad Enter"))) then
 		objectivesOpen = false
 	end
 	mouse.blocked = saved
@@ -3609,7 +3816,8 @@ local function drawGameWindows()
 	local menuScale = S
 	S = gameWindowScale(menuScale)
 	drawDiplomacyWindows(blocked)
-	drawGameTextWindows(blocked)
+	-- as WKB.exe's: the text windows are hidden under the menus and the objectives
+	if not objectivesOpen and #stack == 0 then drawGameTextWindows(blocked) end
 	drawObjectives(blocked)
 	S = menuScale
 end
@@ -3625,10 +3833,12 @@ function FE_Frame(place)
 	mouse.down, mouse.pressed, mouse.released = isMouseDown(1), isMousePressed(1), isMouseReleased(1)
 	mouse.wheel = getMouseWheel()
 	mouse.blocked = isMouseOverOtherUi()
+	-- the mouse cursor the menus want (the campaign map's attack cursor), the arrow if none
+	menuCursor = ""
 
 	if place == "game" then drawGameWindows() end
 	if place == "menu" and #stack == 0 then push("main") end
-	if #stack == 0 then return end
+	if #stack == 0 then setMenuCursor("") return end
 
 	local name = stack[#stack]
 	local screen = Screens[name]
@@ -3662,6 +3872,7 @@ function FE_Frame(place)
 		elseif name ~= "main" then pop() end
 	end
 	openedThisFrame = false
+	setMenuCursor(menuCursor)
 end
 
 -- In game: the menu is showing

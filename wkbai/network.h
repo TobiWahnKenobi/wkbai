@@ -167,6 +167,23 @@ enum NetClientMessages {
 	NETCLIMSG_OBJECTIVE_MARKER,
 	// UNLOCK_LEVEL: the level's name (zero-ended)
 	NETCLIMSG_LEVEL_UNLOCKED,
+	// ENABLE_/DISABLE_SHADOW (mods): the object id (32 bits), on (8 bits)
+	NETCLIMSG_SHADOW_SWITCH,
+	// RESET_FOG_OF_WAR (mods) for this client's player: the object id (32 bits), its reveal ended
+	NETCLIMSG_FOG_RESET,
+	// DISPLAY_SAVE_GAME_MENU (mods) for this client's player: the in-game menu's Save screen
+	NETCLIMSG_SAVE_GAME_MENU,
+	// SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC (mods) for this client's player: the picture's path
+	// (zero-ended; empty: none)
+	NETCLIMSG_OBJECTIVES_MAP_GRAPHIC,
+	// PLAY_LOOPED_SOUND (mods): the source's id (32 bits), the sound tag (32 bits), the target's id
+	// (32 bits); it loops until STOP_SOUND of the source
+	NETCLIMSG_LOOPED_SOUND,
+	// SET_TILE_STATUS (mods): x and z (16 bits each), the status (8 bits, CommonGameState::Tile)
+	NETCLIMSG_TILE_STATUS,
+	// EXIT_TO_MAIN_MENU run for this client's player (a guest's Exit button, WKB.exe's msg 0xC2):
+	// this client leaves the game, the others play on
+	NETCLIMSG_EXIT_TO_MENU,
 };
 
 enum NetServerMessages {

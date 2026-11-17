@@ -15,6 +15,8 @@
 #include "GameObjectRef.h"
 #include "MovementController.h"
 #include "Order.h"
+#include "settings.h"
+#include <nlohmann/json.hpp>
 
 // The member places of the original's formations (WKB.exe: Line 0x64a7a0, Column 0x64a900,
 // Wedge 0x64aa70, Orb 0x64ad50), chosen by the formation type at 0x550c60. x is across, z
@@ -170,6 +172,32 @@ static std::vector<std::pair<float, float>> placesOf(const ServerGameObject* for
 	return formationPlaces(formationTypeOf(formation), count, first->formationSeparationX, first->formationSeparationY);
 }
 
+float FormationController::maxDimension() const
+{
+	const auto places = placesOf(formation, slotCount > 0 ? slotCount : (int)formation->countChildren());
+	if (places.empty())
+		return 0.0f;
+	float x0 = places[0].first, x1 = x0, z0 = places[0].second, z1 = z0;
+	for (const auto& p : places) {
+		x0 = std::min(x0, p.first);
+		x1 = std::max(x1, p.first);
+		z0 = std::min(z0, p.second);
+		z1 = std::max(z1, p.second);
+	}
+	return std::max(x1 - x0, z1 - z0);
+}
+
+bool FormationController::isFormedUp() const
+{
+	if (!formed)
+		return false;
+	for (const auto& [childType, childList] : formation->children)
+		for (auto* member : childList)
+			if (static_cast<ServerGameObject*>(member)->movementController.isMoving())
+				return false;
+	return true;
+}
+
 bool FormationController::memberPlace(const ServerGameObject* formation, const ServerGameObject* member, Vector3& place)
 {
 	const FormationController& fc = formation->formationController;
@@ -194,6 +222,8 @@ float FormationController::marchSpeed(float slowestMember) const
 // takes the nearest free one, the member whose nearest free place is farthest choosing first (as
 // the original's assignment 0x6ee110 looks); then the members' speeds are set so that all arrive at
 // once (the slowest needed time, everyone else slower)
+uint64_t g_formationWalks = 0; // the members' walks asked for (test 46's profile)
+
 void FormationController::formUp()
 {
 	std::vector<ServerGameObject*> members = liveMembers(formation);
@@ -265,6 +295,35 @@ void FormationController::formUp()
 		taken[bestSlot] = true;
 		slotOf[members[bestMember]->id] = bestSlot;
 		dist[bestMember] = std::sqrt(bestNear);
+	}
+	// then pairs swapped while that shortens their squared walks together: with the least sum of
+	// squares no two walks cross (the greedy pick alone sent members across the block, through
+	// each other: the play test's flickering form-ups)
+	{
+		std::vector<int> slotIdx(members.size(), -1);
+		for (size_t m = 0; m < members.size(); m++)
+			if (auto it = slotOf.find(members[m]->id); it != slotOf.end())
+				slotIdx[m] = it->second;
+		auto cost = [&](size_t m, int s) { return (members[m]->position - world[s]).sqlen2xz(); };
+		for (int pass = 0; pass < 8; pass++) {
+			bool swapped = false;
+			for (size_t a = 0; a < members.size(); a++)
+				for (size_t b = a + 1; b < members.size(); b++) {
+					if (slotIdx[a] < 0 || slotIdx[b] < 0)
+						continue;
+					if (cost(a, slotIdx[b]) + cost(b, slotIdx[a]) + 0.01f < cost(a, slotIdx[a]) + cost(b, slotIdx[b])) {
+						std::swap(slotIdx[a], slotIdx[b]);
+						swapped = true;
+					}
+				}
+			if (!swapped)
+				break;
+		}
+		for (size_t m = 0; m < members.size(); m++)
+			if (slotIdx[m] >= 0) {
+				slotOf[members[m]->id] = slotIdx[m];
+				dist[m] = std::sqrt(cost(m, slotIdx[m]));
+			}
 	}
 	// arriving together: T = the longest walk's time; each member at dist / T (not below 30 % of
 	// its speed, so that nobody crawls)
@@ -369,6 +428,37 @@ void FormationController::faceMembersWay(ServerGameObject* formation)
 		}
 	if (sx * sx + cz * cz > 1e-6f)
 		formation->setOrientation(Vector3(0.0f, std::atan2(sx, cz), 0.0f));
+}
+
+bool FormationController::shareDamage(ServerGameObject* member, float drop)
+{
+	static bool sharing = false;
+	ServerGameObject* formation = member->getParent();
+	if (sharing || drop <= 4.0f || !formation || formation->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION
+		|| (member->flags & CommonGameObject::fTerminated))
+		return false;
+	const GameObjBlueprint* bp = formation->blueprint;
+	const int n = bp->damageSharers;
+	// (the original loses the hit when the formation hasn't formed up yet, 0x551f50; here the member
+	// takes it)
+	if (bp->damageSharePercentage <= 0.0f || n <= 0 || !formation->formationController.formed)
+		return false;
+	std::vector<ServerGameObject*> members = liveMembers(formation);
+	const float per = bp->damageSharePercentage * drop / (float)n;
+	if (n < (int)members.size() - 1) {
+		// the n nearest the one hit (itself at 0)
+		std::stable_sort(members.begin(), members.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			return (a->position - member->position).sqlen2xz() < (b->position - member->position).sqlen2xz();
+		});
+		members.resize(n);
+	}
+	sharing = true;
+	for (ServerGameObject* m : members) {
+		const float hp = m->getItem(Tags::PDITEM_HIT_POINTS);
+		m->setItem(Tags::PDITEM_HIT_POINTS, std::max(0.0f, hp - per));
+	}
+	sharing = false;
+	return true;
 }
 
 void FormationController::flushDisbands()
@@ -548,12 +638,26 @@ void FormationController::update()
 		wasMarching = false;
 		holding = false;
 	}
-	faceAttackers();
+	// wkbai's own: WKB.exe never turns a formation to face an attack (docs/re/combat.md), so only
+	// with "formationsFaceAttacks"
+	static const bool faceAttacks = g_settings.value<bool>("formationsFaceAttacks", false);
+	if (faceAttacks)
+		faceAttackers();
 	// a form-up: the first time, a member without a place (joined), an Orb that lost one, or a turn
 	// while standing (a facing order, an attack from the flank)
 	const bool joined = std::any_of(members.begin(), members.end(), [&](auto* m) { return !slotOf.count(m->id); });
+	const float nowTime = Server::instance ? Server::instance->timeManager.currentTime : 0.0f;
+	bool turned = false;
+	if (!marching && std::abs(wrapAngle(formation->orientation.y - slotHeading)) > 0.35f) {
+		if (headingOffSince < 0.0f)
+			headingOffSince = nowTime;
+		turned = nowTime - headingOffSince >= 0.5f;
+	}
+	else
+		headingOffSince = -1.0f;
 	if (!formed || joined || (lost && type == FormationType::Orb) || layoutOf != formation->blueprint
-		|| (reformWanted && !marching) || (!marching && std::abs(wrapAngle(formation->orientation.y - slotHeading)) > 0.35f)) {
+		|| (reformWanted && !marching) || turned) {
+		headingOffSince = -1.0f;
 		reformWanted = false;
 		distorted = false;
 		formUp();
@@ -743,8 +847,11 @@ void FormationController::update()
 		if (d > ARRIVED || formSpeed > 0.0f) {
 			const Vector3& asked = member->movementController.getRequestedDestination();
 			if (!moving || (asked - target).sqlen2xz() > RETARGET * RETARGET
-				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed))
+				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed)) {
+				extern uint64_t g_formationWalks;
+				g_formationWalks++;
 				member->movementController.startMovement(target);
+			}
 		}
 		else if (!marching || holding) {
 			// in place, and the formation stands: stop, facing its way (an Orb's outwards)

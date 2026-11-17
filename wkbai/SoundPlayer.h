@@ -14,6 +14,8 @@ struct SoundPlayer {
 	virtual void init() = 0;
 	virtual void deinit() = 0;
 	virtual void playSound(const std::string& filePath) = 0;
+	// at the listener, at most one with this key within 0.4 s (a group order's acknowledgements)
+	virtual void playSound(const std::string& filePath, const std::string& key) { playSound(filePath); }
 	virtual void playSound3D(const std::string& filePath, const Vector3& pos, float refDist, float maxDist) = 0;
 	virtual void setListenerPosition(const Vector3& pos, const Vector3& at) = 0;
 	virtual void playMusic(const std::string& filePath) = 0;
@@ -35,7 +37,9 @@ struct SoundPlayer {
 	virtual void applyVolumes() {}
 	// A looping sound in one of MAX_LOOPS slots (the waterfalls'), set every frame: that file at
 	// that place, its gain (times the effects volume; 0 stops it) and pitch
-	static constexpr int MAX_LOOPS = 6;
+	static constexpr int MAX_LOOPS = 8;
+	// the waterfalls' slots (0 to 5); the last two are PLAY_LOOPED_SOUND's
+	static constexpr int WATERFALL_LOOPS = 6;
 	virtual void setLoop(int slot, const std::string& filePath, const Vector3& pos, float refDist, float gain, float pitch) {}
 
 	static std::unique_ptr<SoundPlayer> s_soundPlayer;

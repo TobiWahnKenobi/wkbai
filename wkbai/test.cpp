@@ -75,6 +75,9 @@
 #include "interface/FogOfWar.h"
 #include "gfx/ChimneySmoke.h"
 #include "gfx/BloodDrip.h"
+#include "gfx/FireEffects.h"
+#include "gfx/RenderSettings.h"
+#include "interface/MenuOptions.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -2479,7 +2482,9 @@ void Test_MinistryFramework()
 				economyReports += key.rfind("economy.", 0) == 0;
 				labourReports += key.rfind("labour.", 0) == 0;
 			}
-			check("reports", g->board.get("labour.peasants") > 0 && g->board.get("economy.food") > 0 && economyReports >= 8 && labourReports >= 5);
+			// (the food reported, not that there is some: since the AI pays its spawns queued at busy
+			// buildings as WKB.exe, its food can be spent down to 0 at the minute)
+			check("reports", g->board.get("labour.peasants") > 0 && g->board.reports.count("economy.food") && economyReports >= 8 && labourReports >= 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
 		check("staggered", std::adjacent_find(firsts.begin(), firsts.end(), [](float a, float b) { return std::abs(a - b) < 0.001f; }) == firsts.end());
@@ -5799,15 +5804,17 @@ void Test_TurnedPlacement()
 			server.handlePacket(0, std::string((const char*)msg.data, msg.size()));
 			return server.clientInfos.empty() ? nullptr : server.clientInfos[0].lastStampdown.get();
 		};
-		int startX = 20;
+		int startX = 20, startZ = 60;
 		for (int q = 0; q <= 4; q++) {
 			const int turns = q % 4; // the fifth: without the orientation, unturned
 			const Vector3 orientation(0.0f, turns * quarter, 0.0f);
 			ServerGameObject* obj = nullptr;
 			int tx = 0, tz = 0;
 			// the first spot, along the map from the west, that takes it so turned
-			for (int z = 60; z < th - 20 && !obj; z += 3)
-				for (int x = startX; x < tw - 20 && !obj; x += 3) {
+			// (on the last one's row east of it, then the rows after it from the west: trees keep
+			// buildings off since the play test of 2026-11-16, and the row filled up)
+			for (int z = startZ; z < th - 20 && !obj; z += 3)
+				for (int x = z == startZ ? startX : 20; x < tw - 20 && !obj; x += 3) {
 					Vector3 at = spotAt(fp, x, z, turns);
 					if (StampdownPlan::getStampdownPlan(&server, player, manor, at, orientation).status != StampdownPlan::Status::Valid)
 						continue;
@@ -5822,6 +5829,7 @@ void Test_TurnedPlacement()
 				continue;
 			}
 			startX = tx + 12;
+			startZ = tz;
 			std::set<std::pair<int, int>> got;
 			for (int z = 0; z < th; z++)
 				for (int x = 0; x < tw; x++)
@@ -6478,6 +6486,17 @@ void Test_Corpses()
 	};
 	struct Corpse { SrvGORef ref; Vector3 pos; float since; float maxMoved = 0.0f; };
 	std::map<uint32_t, Corpse> corpses;
+	// (the formation breaks up when fewer than 8 are left in it, as WKB.exe's: members hit on the
+	// flank leave it, as the game set's human-player rule has it; then its survivors go on loose)
+	SrvGORef formationRef(formation);
+	auto anchor = [&]() -> ServerGameObject* {
+		if (formationRef)
+			return formationRef.get();
+		for (auto& r : ownUnits)
+			if (r && r->blueprint->name.rfind("Dead ", 0) != 0)
+				return r.get();
+		return nullptr;
+	};
 	std::vector<SrvGORef> all = ownUnits;
 	all.insert(all.end(), enemyUnits.begin(), enemyUnits.end());
 	bool sentAway = false;
@@ -6486,24 +6505,26 @@ void Test_Corpses()
 		const float t = step * 0.02f;
 		// every 3 s, the living attack the nearest living enemy (the formation as a whole)
 		if (step % 150 == 0 && !sentAway) {
-			if (ServerGameObject* tg = nearest(formation, enemyUnits))
-				server.gameSet->commands[attack].execute(formation, tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			if (formationRef)
+				if (ServerGameObject* tg = nearest(formationRef.get(), enemyUnits))
+					server.gameSet->commands[attack].execute(formationRef.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 			// to everyone it set out with, the dead too: the AI's lists kept a unit's id, which its
 			// corpse keeps (it is the unit converted in place); the corpses got "Attack" and walked
 			for (auto& r : all) {
-				if (!r || r->getParent() == formation)
+				if (!r || (formationRef && r->getParent() == formationRef.get()))
 					continue;
 				if (ServerGameObject* tg = nearest(r.get(), r->getParent() == enemy ? ownUnits : enemyUnits))
 					server.gameSet->commands[attack].execute(r.get(), tg, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 			}
 		}
 		// once the enemy is beaten (or after 60 s), the survivors walk 60 m away
-		if (!sentAway && (t > 60.0f || !nearest(formation, enemyUnits))) {
+		if (!sentAway && (t > 60.0f || !anchor() || !nearest(anchor(), enemyUnits))) {
 			sentAway = true;
-			printf("CORPSE t=%.1f survivors sent away\n", t);
-			server.gameSet->commands[move].execute(formation, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formation->position + Vector3(60, 0, 0));
+			printf("CORPSE t=%.1f survivors sent away (the formation %s)\n", t, formationRef ? "stands" : "broke up");
+			if (formationRef)
+				server.gameSet->commands[move].execute(formationRef.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, formationRef->position + Vector3(60, 0, 0));
 			for (auto& r : all)
-				if (r && r->getParent() != formation)
+				if (r && !(formationRef && r->getParent() == formationRef.get()))
 					server.gameSet->commands[move].execute(r.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, r->position + Vector3(60, 0, 0));
 		}
 		server.timeManager.pendingMs = server.timeManager.stepMs;
@@ -7030,7 +7051,14 @@ void Test_MoveArrival()
 						return false;
 					if (formed && (!formation || (formation->position - goal).len2xz() > 3.0f))
 						return false;
-					return distToSpot(i) < 3.0f;
+					if (distToSpot(i) < 3.0f)
+						return true;
+					// or its Move ended at the free spot nearest to it (WKB.exe's stop discs: PREFERRED_SPACING
+					// round each unit; the spots are 3 m apart, pikemen keep 2 m each)
+					ServerGameObject* u = army[i].get();
+					if (formed || u->movementController.isMoving() || u->orderConfig.getCurrentOrder())
+						return false;
+					return distToSpot(i) < 3.0f + 4.0f * u->blueprint->preferredSpacing;
 				};
 				int arrived = 0, arrivalSecond = -1;
 				for (int s = 0; s < seconds; s++) {
@@ -7120,7 +7148,9 @@ void Test_MoveArrival()
 				allUnits += alive;
 			}
 	g_recordSearches = false;
-	printf("MOVEARRIVAL all arrived %d/%d\n", allArrived, allUnits);
+	extern uint64_t g_formationWalks, g_pathBatchRequests, g_pathBatchSearches;
+	printf("MOVEARRIVAL all arrived %d/%d; formation members' walks %llu, path requests %llu, searches %llu\n", allArrived, allUnits,
+		(unsigned long long)g_formationWalks, (unsigned long long)g_pathBatchRequests, (unsigned long long)g_pathBatchSearches);
 	fflush(stdout);
 }
 
@@ -9085,6 +9115,12 @@ void Test_GameOverView()
 		check(uiB.fogOfWarOn(), "B, still fighting: keeps its fog of war");
 		check(!uiB.showsEveryone(), "B: still its own side's statistics only");
 		check(server.watchesOnly(0) && !server.watchesOnly(1), "A only watches while B plays");
+		{
+			ClientGameObject* seenA = clientB.findObject(idA);
+			check((playerA->flags & CommonGameObject::fPlayerTerminated) && !(playerB->flags & CommonGameObject::fPlayerTerminated),
+				"A PLAYER_TERMINATED (WKB.exe's REMOVE_MULTIPLAYER_PLAYER: its AI gone), B not");
+			check(seenA && (seenA->flags & CommonGameObject::fPlayerTerminated), "client B knows A's flag");
+		}
 		// A's chat: to A only (B still plays)
 		clientA.chatMessages.clear();
 		clientB.chatMessages.clear();
@@ -9104,6 +9140,7 @@ void Test_GameOverView()
 		server.finishedPlayers.clear();
 		server.sendFinishedPlayers();
 		playerA->setItem(alive, 1.0f);
+		playerA->updateFlags(playerA->flags & ~CommonGameObject::fPlayerTerminated);
 		step(10);
 		check(clientA.ownOutcome() == 0 && uiA.fogOfWarOn(), "the list cleared: A has its fog again");
 		ServerGameObject* manor = nullptr;
@@ -9129,6 +9166,20 @@ void Test_GameOverView()
 		check(!uiA.fogOfWarOn() && !uiB.fogOfWarOn(), "both, the game over: no fog of war");
 		check(uiA.showsEveryone() && uiB.showsEveryone(), "both show every player's statistics");
 		check(!server.watchesOnly(0) && !server.watchesOnly(1), "nobody plays on: nobody's chat held back");
+		// the Manor box's Exit to Main Menu (EXIT_TO_MAIN_MENU), WKB.exe 0x483C50: to the clicking
+		// player's own client only. The guest B leaves alone; the host's A ends the hosted game.
+		auto exitFor = [&](ServerGameObject* p) {
+			SrvScriptContext ctx(&server, p);
+			GSFileParser gsf("EXIT_TO_MAIN_MENU");
+			std::unique_ptr<Action> act(ReadAction(gsf, *server.gameSet));
+			act->run(&ctx);
+			step(10);
+		};
+		exitFor(playerB);
+		check(clientB.exitToMenu && !clientA.exitToMenu && !server.exitToMenu, "the guest's Exit: only the guest's client leaves, the host plays on");
+		exitFor(playerA);
+		check(server.exitToMenu && !clientA.exitToMenu, "the host's Exit: the hosted game ends");
+		server.exitToMenu = false;
 	}
 	// the save from after A's loss: loaded with a client for A
 	{
@@ -9148,6 +9199,8 @@ void Test_GameOverView()
 		}
 		check(server.finishedPlayers.count(idA) && server.finishedPlayers[idA] == 2 && !server.finishedPlayers.count(idB), "the save keeps A lost, B playing");
 		check(client.ownOutcome() == 2 && !ui.fogOfWarOn() && ui.showsEveryone(), "loaded: A's client without fog, every player shown");
+		ServerGameObject* loadedA = server.findObject(idA);
+		check(loadedA && (loadedA->flags & CommonGameObject::fPlayerTerminated), "loaded: A still PLAYER_TERMINATED");
 	}
 	{
 		Server server;
@@ -9539,6 +9592,8 @@ void Test_Disguises()
 // faceAttackers), not one from the front, and not again within 4 s
 void Test_FormationFacing()
 {
+	// (wkbai's own turn, off by default: WKB.exe has none)
+	g_settings["formationsFaceAttacks"] = true;
 	int failures = 0;
 	auto check = [&](bool ok, const std::string& what) {
 		if (!ok) failures++;
@@ -9612,6 +9667,30 @@ void Test_FormationFacing()
 	run(0.5f);
 	printf("UNITTEST facing after the rear attack: %.2f\n", formation->orientation.y);
 	check(std::abs(std::abs(formation->orientation.y) - 1.5708f) < 0.05f && formation->orientation.y < 0.0f, "then it turns to face the rear attack (west)");
+	// damage sharing (WKB.exe 0x551f50): a hit of 10 on a member of the formed formation costs the
+	// formation DAMAGE_SHARE_PERCENTAGE of it, spread over NUMBER_OF_DAMAGE_SHARERS members (all of
+	// them when that's at least the members less one)
+	{
+		extern int g_simulating;
+		const GameObjBlueprint* fbp = formation->blueprint;
+		std::vector<float> before;
+		float total = 0.0f;
+		for (ServerGameObject* m : members) {
+			before.push_back(m->getItem(Tags::PDITEM_HIT_POINTS));
+			total += before.back();
+		}
+		g_simulating++;
+		members[1]->setItem(Tags::PDITEM_HIT_POINTS, before[1] - 10.0f);
+		g_simulating--;
+		float after = 0.0f;
+		for (ServerGameObject* m : members)
+			after += m->getItem(Tags::PDITEM_HIT_POINTS);
+		const int n = fbp->damageSharers >= (int)members.size() - 1 ? (int)members.size() : fbp->damageSharers;
+		const float expected = fbp->damageSharePercentage * 10.0f * (float)n / (float)std::max(fbp->damageSharers, 1);
+		printf("UNITTEST %s shares %.2f over %d: a hit of 10 cost %.2f in all, the one hit %.2f\n", fbp->name.c_str(),
+			fbp->damageSharePercentage, fbp->damageSharers, total - after, before[1] - members[1]->getItem(Tags::PDITEM_HIT_POINTS));
+		check(fbp->damageSharers > 0 && std::abs((total - after) - expected) < 0.05f, "a hit on a member is shared out by the formation");
+	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
@@ -10617,6 +10696,173 @@ void Test_BuildIdentity()
 	}
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
+// The smaller items as WKB.exe's (the RE repo's docs/re/combat-smaller-items.md): the sight scan
+// once a second, the "Dangerous Buildings" map and a scout's path round a tower seen, a wheeling
+// unit's arcs, the stop spacing by PREFERRED_SPACING
+void Test_SmallerItems()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* scoutBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Scout");
+	const GameObjBlueprint* towerBp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Watch Tower");
+	if (!player || !enemyPlayer || !scoutBp || !towerBp) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	server.timeManager.unpause();
+	auto run = [&](float seconds) {
+		const float until = server.timeManager.currentTime + seconds;
+		const uint64_t start = SDL_GetTicks();
+		while (server.timeManager.currentTime < until && SDL_GetTicks() - start < (uint64_t)(seconds * 4000.0f)) {
+			server.tick();
+			SDL_Delay(5);
+		}
+	};
+	// 1. the sight scan: each receiver about once a second
+	{
+		extern uint64_t g_sightCalls;
+		int receivers = 0;
+		for (const auto& [id, o] : server.idmap)
+			if (o->blueprint->receiveSightRangeEvents && !(o->flags & CommonGameObject::fTerminated))
+				receivers++;
+		run(1.0f);
+		const uint64_t before = g_sightCalls;
+		const float t0 = server.timeManager.currentTime;
+		run(5.0f);
+		const float secs = server.timeManager.currentTime - t0;
+		const double perSecond = (double)(g_sightCalls - before) / std::max(1, receivers) / std::max(0.1f, secs);
+		printf("UNITTEST sight scans: %d receivers, %.2f scans each a second over %.1f s\n", receivers, perSecond, secs);
+		check(receivers > 0 && perSecond > 0.2 && perSecond < 1.4, "each unit is scanned about once a second (at most; some skip it by their conditions)");
+	}
+	// 2. "Dangerous Buildings": the player's map (as the Kingmaker AI's), a tower of the enemy's
+	// seen by its scout, the scout's path round it
+	{
+		const_cast<GameObjBlueprint*>(player->blueprint)->createsIntensityMaps.push_back("Dangerous Buildings");
+		ServerGameObject* scout = server.spawnObject(scoutBp, player, {}, {});
+		// open ground: the scout's tile and 120 m east of it free
+		Vector3 from = player->position;
+		for (const auto& [id, o] : server.idmap)
+			if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() == player) { from = o->position; break; }
+		from = MovementController::nearestValidPosition(scoutBp, from);
+		scout->setPosition(from);
+		const Vector3 to = MovementController::nearestValidPosition(scoutBp, from + Vector3(120.0f, 0, 0));
+		const Vector3 mid = (from + to) * 0.5f;
+		ServerGameObject* tower = server.spawnObject(towerBp, enemyPlayer, mid, {});
+		tower->setPosition(mid);
+		run(2.5f); // seen; the maps made again
+		const std::vector<int32_t>* cost = server.intensityMaps.costFor(scout);
+		const auto [w, h] = server.terrain->getNumPlayableTiles();
+		const int tx = (int)(mid.x / 5.0f), tz = (int)(mid.z / 5.0f);
+		const int here = cost ? (*cost)[(size_t)tz * w + tx] : 0;
+		printf("UNITTEST Dangerous Buildings: the tower's tile costs %d more for the scout\n", here);
+		check(cost && here > 0, "a tower seen marks the player's Dangerous Buildings map, which the scout applies");
+		scout->movementController.startMovement(to);
+		run(0.5f);
+		float nearest = 1e9f;
+		const auto& nodes = scout->movementController.m_pathNodes;
+		for (size_t i = 0; i + 1 < nodes.size(); i++) {
+			// the nearest the leg between two nodes comes to the tower
+			const Vector3 a = nodes[i + 1], b = nodes[i];
+			const Vector3 ab = b - a;
+			const float l2 = std::max(1e-4f, ab.sqlen2xz());
+			const float t = std::clamp(((mid - a).x * ab.x + (mid - a).z * ab.z) / l2, 0.0f, 1.0f);
+			nearest = std::min(nearest, (a + ab * t - mid).len2xz());
+		}
+		printf("UNITTEST the scout's path: %zu nodes, at least %.1f m from the tower\n", nodes.size(), nearest);
+		check(nodes.size() > 2 && nearest > 10.0f, "the scout's path goes round the tower");
+		scout->movementController.stopMovement();
+		// another player's units without the map: none
+		check(server.intensityMaps.costFor(tower) == nullptr, "a type that applies no map has no extra cost");
+	}
+	// 3. turning: a wheeling type with a turn radius of 3 m or more walks an arc to a point behind it
+	{
+		const GameObjBlueprint* wheeler = nullptr;
+		const auto& characters = gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER];
+		for (size_t i = 0; i < characters.size() && !wheeler; i++)
+			if (characters[i].wheelOnFacing && characters[i].idealTurnRadius >= 3.0f && !characters[i].canWalkOnWater())
+				wheeler = &characters[i];
+		if (!wheeler)
+			check(false, "a wheeling type with a large turn radius in the game set");
+		else {
+			ServerGameObject* unit = server.spawnObject(wheeler, player, {}, {});
+			const Vector3 at = MovementController::nearestValidPosition(wheeler, player->position + Vector3(0, 0, 40.0f));
+			unit->setPosition(at);
+			unit->setOrientation(Vector3(0, 0, 0)); // facing north (-z)
+			const Vector3 behind = MovementController::nearestValidPosition(wheeler, at + Vector3(0, 0, 30.0f));
+			unit->movementController.startMovement(behind);
+			run(0.2f);
+			const size_t n = unit->movementController.m_pathNodes.size();
+			printf("UNITTEST %s (turn radius %.1f): %zu nodes to a point 30 m behind it\n", wheeler->name.c_str(), wheeler->idealTurnRadius, n);
+			check(n > 3, "it turns on an arc instead of on the spot");
+			unit->movementController.stopMovement();
+		}
+	}
+	// 4. stop spacing: two units sent to the same rally point keep their PREFERRED_SPACING apart
+	{
+		ServerGameObject* a = server.spawnObject(scoutBp, player, {}, {});
+		ServerGameObject* b = server.spawnObject(scoutBp, player, {}, {});
+		const Vector3 place = MovementController::nearestValidPosition(scoutBp, player->position + Vector3(-60.0f, 0, 0));
+		a->setPosition(FreeStandingSpot(a, place));
+		const Vector3 sb = FreeStandingSpot(b, place);
+		const float need = 2.0f * scoutBp->preferredSpacing;
+		printf("UNITTEST spacing: the second scout's spot %.2f m from the first (spacing %.2f each)\n", (sb - a->position).len2xz(), scoutBp->preferredSpacing);
+		check((sb - a->position).len2xz() >= need - 0.01f, "the second keeps both spacings from the first");
+	}
+	// 5. stop spots (WKB.exe: no unit collisions; a walk ends at a spot with PREFERRED_SPACING clear
+	// of the others'): a scout sent onto a standing one ends its Move next to it, not on top of it
+	{
+		const int move = gs.commands.names.getIndex("Move");
+		ServerGameObject* stander = server.spawnObject(scoutBp, player, {}, {});
+		ServerGameObject* walker = server.spawnObject(scoutBp, player, {}, {});
+		const Vector3 spot = MovementController::nearestValidPosition(scoutBp, player->position + Vector3(0, 0, -60.0f));
+		stander->setPosition(spot);
+		walker->setPosition(MovementController::nearestValidPosition(scoutBp, spot + Vector3(25.0f, 0, 0)));
+		gs.commands[move].execute(walker, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, spot);
+		run(15.0f);
+		const float d = (walker->position - stander->position).len2xz();
+		const float need = 2.0f * scoutBp->preferredSpacing;
+		printf("UNITTEST stop spot: the walker stopped %.2f m from the standing scout (spacings %.2f), its order %s, moving %d\n", d,
+			need, walker->orderConfig.getCurrentOrder() ? "on" : "done", (int)walker->movementController.isMoving());
+		check(d >= need - 0.1f && d < need + 3.0f && !walker->movementController.isMoving(), "a unit sent onto another stops at the free spot next to it");
+		check(!walker->orderConfig.getCurrentOrder(), "its Move ends there");
+	}
+	// 6. an uninterruptible loop (the Rocket Launcher's limbering): a Move given meanwhile waits
+	// behind it; the launcher limbers, then moves
+	if (const GameObjBlueprint* rlBp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Rocket Launcher")) {
+		const int limber = gs.commands.names.getIndex("Limber"), move = gs.commands.names.getIndex("Move");
+		ServerGameObject* rl = server.spawnObject(rlBp, player, {}, {});
+		const Vector3 at = MovementController::nearestValidPosition(rlBp, player->position + Vector3(40.0f, 0, 40.0f));
+		rl->setPosition(at);
+		run(0.5f);
+		gs.commands[limber].execute(rl, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, {});
+		run(1.0f);
+		const Vector3 goal = MovementController::nearestValidPosition(rlBp, at + Vector3(30.0f, 0, 0));
+		gs.commands[move].execute(rl, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, goal);
+		const size_t orders = rl->orderConfig.orders.size();
+		const Order* front = rl->orderConfig.getCurrentOrder();
+		const std::string frontName = front ? gs.orders.getString(front->blueprint) : "-";
+		printf("UNITTEST limbering: after the Move, %zu orders, the current %s\n", orders, frontName.c_str());
+		check(orders >= 2 && frontName == "Limber", "a Move during the limbering waits behind it");
+		run(12.0f);
+		printf("UNITTEST then: %s, %.1f m from where it limbered\n", rl->blueprint->name.c_str(), (rl->position - at).len2xz());
+		check(rl->blueprint->name == "Rocket Launcher Limbered" && (rl->position - at).len2xz() > 5.0f, "it limbers, then moves");
+	}
+	else
+		check(false, "the Rocket Launcher in the game set");
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+
 // Night cold (the day's temperature swing, ServerEnvironment::update): on 4 Peaks in midsummer,
 // a clear day and night of 20 minutes, one update a second: the coldest shortly before sunrise,
 // the warmest in the early afternoon, the night colder than the afternoon by a summer's swing,
@@ -10739,6 +10985,560 @@ void Test_NightCold()
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
+// The original's keywords only mods use (RE repo docs/re/keyword-coverage.md): each one read
+// without a warning and doing what WKB.exe's does (or what its name says, where the original
+// has an evident bug)
+void Test_ModKeywords()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	Client client(true);
+	NetLocalBuffer b1, b2;
+	NetLocalLink srv(&b1, &b2), cli(&b2, &b1);
+	server.addClient(&srv);
+	client.serverLink = &cli;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = server.findObject(1030);
+	const GameSet& gs = *server.gameSet;
+	if (!player || !enemyPlayer) {
+		printf("UNITTEST FAILED (not set up)\n");
+		return;
+	}
+	server.setClientPlayerControl(0, 1027);
+	server.timeManager.unpause();
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			client.tick();
+			SDL_Delay(2);
+		}
+	};
+	step(10);
+	// the player's characters and buildings
+	std::vector<ServerGameObject*> units, buildings;
+	for (const auto& [id, o] : server.idmap) {
+		if (o->flags & CommonGameObject::fTerminated || o->getPlayer() != player)
+			continue;
+		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			units.push_back((ServerGameObject*)o);
+		else if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && o->blueprint->footprint)
+			buildings.push_back((ServerGameObject*)o);
+	}
+	if (units.size() < 3 || buildings.empty()) {
+		printf("UNITTEST FAILED (%zu units, %zu buildings)\n", units.size(), buildings.size());
+		return;
+	}
+	ServerGameObject* unit = units[0];
+	auto value = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<ValueDeterminer> vd(ReadValueDeterminer(gsf, gs));
+		return vd->eval(&ctx);
+	};
+	auto finder = [&](ServerGameObject* self, const std::string& text, bool node) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(text.c_str());
+		std::unique_ptr<ObjectFinder> f(node ? ReadFinderNode(gsf, gs) : ReadFinder(gsf, gs));
+		return f->eval(&ctx);
+	};
+	auto position = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<PositionDeterminer> pd(PositionDeterminer::createFrom(gsf, gs));
+		return pd->eval(&ctx);
+	};
+	auto run = [&](ServerGameObject* self, const std::string& line) {
+		SrvScriptContext ctx(&server, self);
+		GSFileParser gsf(line.c_str());
+		std::unique_ptr<Action> act(ReadAction(gsf, gs));
+		act->run(&ctx);
+	};
+
+	// ---- values
+	{
+		const std::string tag = gs.valueTags.names.getString(0);
+		const std::string one = " FINDER_SPECIFIC_ID " + std::to_string(units[0]->id);
+		const float v0 = value(player, "VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one);
+		check(value(player, "TOTAL_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "AVERAGE_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "MAX_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0
+			&& value(player, "MIN_VALUE_TAG_INTERPRETATION \"" + tag + "\"" + one) == v0,
+			"TOTAL/AVERAGE/MAX/MIN_VALUE_TAG_INTERPRETATION of one object: its value");
+		check(value(unit, "WITHIN_ARC FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(units[1]->id) + " CONSTANT 0 CONSTANT 360 CONSTANT 0") == 1.0f,
+			"WITHIN_ARC with a full circle: in it");
+		// a point straight behind the unit is outside a 30-degree arc ahead, inside one turned by 180
+		ServerGameObject* other = units[1];
+		const Vector3 saved = other->position;
+		const float yaw = unit->orientation.y;
+		other->position = unit->position - Vector3(std::sin(yaw), 0, -std::cos(yaw)) * 10.0f;
+		const std::string pair = "FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(other->id);
+		check(value(unit, "WITHIN_ARC " + pair + " CONSTANT 0 CONSTANT 30 CONSTANT 0") == 0.0f
+			&& value(unit, "WITHIN_ARC " + pair + " CONSTANT 180 CONSTANT 30 CONSTANT 0") == 1.0f
+			&& value(unit, "WITHIN_ARC " + pair + " CONSTANT 180 CONSTANT 30 CONSTANT 5") == 0.0f,
+			"WITHIN_ARC: behind is outside the arc ahead, inside the arc turned round, out of a 5 m range");
+		check(value(unit, "WITHIN_ARC_TOWARDS FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(other->id) + " FINDER_SPECIFIC_ID " + std::to_string(other->id) + " CONSTANT 10 CONSTANT 0") == 1.0f,
+			"WITHIN_ARC_TOWARDS: the target itself is in the arc towards it");
+		other->position = saved;
+		check(value(unit, "IS_FORMED FINDER_SELF") == 0.0f && value(unit, "FORMATION_DIMENSION_MAX FINDER_SELF") == 0.0f,
+			"IS_FORMED and FORMATION_DIMENSION_MAX of a unit outside a formation: 0");
+		const float discovered = value(player, "NUM_DISCOVERED_BUILDINGS FINDER_SELF FINDER_SPECIFIC_ID " + std::to_string(enemyPlayer->id));
+		check(discovered >= 0.0f, "NUM_DISCOVERED_BUILDINGS: " + std::to_string((int)discovered) + " of the enemy's buildings");
+		const std::string commission = gs.commissions.names.getString(0);
+		const float possible = value(player, "COMMISSION_POSSIBLE \"" + commission + "\" FINDER_SPECIFIC_ID " + std::to_string(buildings[0]->id));
+		check(possible == 0.0f || possible == 1.0f, "COMMISSION_POSSIBLE \"" + commission + "\": " + std::to_string((int)possible));
+		// LENGTH_OF_PATH_REMAINING: a walk 60 m away, then standing
+		const Vector3 to = MovementController::nearestValidPosition(unit->blueprint, unit->position + Vector3(60.0f, 0, 0));
+		unit->movementController.startMovement(to);
+		step(30);
+		const float walking = value(unit, "LENGTH_OF_PATH_REMAINING FINDER_SELF");
+		unit->movementController.stopMovement();
+		const float standing = value(unit, "LENGTH_OF_PATH_REMAINING FINDER_SELF");
+		check(walking > 1.0f && walking < 80.0f && standing == 0.0f,
+			"LENGTH_OF_PATH_REMAINING: " + std::to_string(walking) + " m walking, 0 standing");
+	}
+
+	// ---- finders
+	{
+		const std::string around = "FINDER_METRE_RADIUS CONSTANT 200 CHARACTERS_ONLY";
+		const auto all = finder(unit, "\n" + around + "\n", true);
+		const auto two = finder(unit, "\nFINDER_GRADE_SELECT_CANDIDATES BY_LOWEST DISTANCE_BETWEEN HORIZONTAL FINDER_SELF FINDER_CANDIDATE CONSTANT 2\n" + around + "\n", true);
+		bool nearestFirst = two.size() == 2;
+		if (nearestFirst)
+			for (CommonGameObject* o : all)
+				if ((o->position - unit->position).sqlen2xz() < (two[0]->position - unit->position).sqlen2xz())
+					nearestFirst = false;
+		check(all.size() > 2 && nearestFirst, "GRADE_SELECT_CANDIDATES BY_LOWEST distance, 2: the two nearest of " + std::to_string(all.size()));
+		const auto kept = finder(unit, "\nFINDER_CULL_CANDIDATES CONSTANT 0\n" + around + "\n", true);
+		const auto culled = finder(unit, "\nFINDER_CULL_CANDIDATES CONSTANT 1\n" + around + "\n", true);
+		check(kept.size() == all.size() && culled.empty(), "CULL_CANDIDATES keeps those for which the value isn't above 0");
+		const auto me = finder(unit, "FINDER_CHAIN_ORIGINAL_SELF", false);
+		check(me.size() == 1 && me[0] == unit, "CHAIN_ORIGINAL_SELF outside a chain: self");
+		const auto nearby = finder(unit, "FINDER_WITHIN_HORIZ_DISTANCE CONSTANT 30", false);
+		bool inside = true;
+		for (CommonGameObject* o : nearby)
+			if (o == unit || (o->position - unit->position).sqlen2xz() > 30.0f * 30.0f)
+				inside = false;
+		check(inside, "WITHIN_HORIZ_DISTANCE 30: " + std::to_string(nearby.size()) + " objects, all within 30 m on the ground, not self");
+	}
+
+	// ---- positions
+	{
+		check(!position(unit, "ATTACHMENT_POINT_BY_INDEX \"No Such Point\" FINDER_SELF CONSTANT 0").found,
+			"ATTACHMENT_POINT_BY_INDEX: no point of that tag, no position");
+		check(!position(unit, "POINT_ALONG_PATH FINDER_SELF LOCATION_OF FINDER_SELF LOCATION_OF FINDER_SELF CONSTANT 5").found,
+			"POINT_ALONG_PATH: read, no position (as WKB.exe's)");
+	}
+
+	// ---- actions
+	{
+		// SET_TILE_STATUS: a tile blocked for the way and for buildings, never unblocked
+		const Vector3 spot = MovementController::nearestValidPosition(unit->blueprint, unit->position + Vector3(25.0f, 0, 25.0f));
+		const int tx = (int)(spot.x / 5.0f), tz = (int)(spot.z / 5.0f);
+		const std::string at = "OFFSET_FROM FINDER_SELF CONSTANT " + std::to_string(spot.x - unit->position.x) + " CONSTANT 0 CONSTANT " + std::to_string(spot.z - unit->position.z);
+		run(unit, "SET_TILE_STATUS BLOCKED " + at);
+		run(unit, "SET_TILE_STATUS PASSABLE " + at);
+		step(3);
+		const auto [w, h] = server.terrain->getNumPlayableTiles();
+		check(server.tiles[(size_t)tz * w + tx].scriptStatus == 0 && MovementController::isTileBlocked(unit->blueprint, tx, tz)
+			&& client.tiles[(size_t)tz * w + tx].scriptStatus == 0,
+			"SET_TILE_STATUS BLOCKED: the tile blocked (server and client); PASSABLE doesn't unblock it");
+		// SUSPEND_ORDER / RESUME_ORDER
+		ServerGameObject* walker = units[1];
+		const Vector3 away = MovementController::nearestValidPosition(walker->blueprint, walker->position + Vector3(-50.0f, 0, 0));
+		const OrderBlueprint* moveOrder = nullptr;
+		for (size_t i = 0; i < gs.orders.size() && !moveOrder; i++)
+			if (gs.orders[i].classType == Tags::ORDTSKTYPE_MOVE)
+				moveOrder = &gs.orders[i];
+		bool suspendedHeld = false, resumed = false;
+		if (moveOrder) {
+			Order* order = walker->orderConfig.addOrder(moveOrder, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, away);
+			step(5);
+			run(walker, "SUSPEND_ORDER FINDER_SELF");
+			step(20);
+			suspendedHeld = order && walker->orderConfig.getCurrentOrder() && walker->orderConfig.getCurrentOrder()->scriptSuspended
+				&& walker->orderConfig.getCurrentOrder()->state == OTS_SUSPENDED;
+			run(walker, "RESUME_ORDER FINDER_SELF");
+			step(3);
+			resumed = walker->orderConfig.getCurrentOrder() && !walker->orderConfig.getCurrentOrder()->scriptSuspended
+				&& walker->orderConfig.getCurrentOrder()->state == OTS_PROCESSING;
+			run(walker, "REEVALUATE_TASK_PROXIMITY FINDER_SELF");
+			run(walker, "ABORT_TASK FINDER_SELF");
+		}
+		check(moveOrder && suspendedHeld && resumed, "SUSPEND_ORDER holds the order over 20 steps; RESUME_ORDER takes it up again");
+		// shadows, the looped sound, the save screen, the objectives' picture
+		run(buildings[0], "DISABLE_SHADOW FINDER_SELF");
+		step(3);
+		ClientGameObject* cb = client.findObject(buildings[0]->id);
+		const bool off = cb && cb->shadowSwitch == 0;
+		run(buildings[0], "ENABLE_SHADOW FINDER_SELF");
+		step(3);
+		check(off && cb->shadowSwitch == 1, "DISABLE_SHADOW / ENABLE_SHADOW: the building's static shadow off, on again");
+		const std::string sound = gs.soundTags.names.getString(0);
+		run(unit, "PLAY_LOOPED_SOUND \"" + sound + "\" FINDER_SELF FINDER_PLAYER");
+		step(3);
+		const size_t loops = client.loopedSounds.size();
+		run(unit, "STOP_SOUND FINDER_SELF");
+		step(3);
+		check(loops == 1 && client.loopedSounds.empty(), "PLAY_LOOPED_SOUND loops until STOP_SOUND");
+		run(unit, "DISPLAY_SAVE_GAME_MENU");
+		run(player, "SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC \"Maps\\Test.pcx\" FINDER_SELF");
+		step(3);
+		check(client.saveMenuRequested && client.objectivesMapGraphic == "Maps\\Test.pcx",
+			"DISPLAY_SAVE_GAME_MENU and SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC reach the player's client");
+		// RESET_FOG_OF_WAR after REVEAL_FOG_OF_WAR
+		ServerGameObject* enemyThing = nullptr;
+		for (const auto& [id, o] : server.idmap)
+			if (o->getPlayer() == enemyPlayer && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) { enemyThing = (ServerGameObject*)o; break; }
+		bool revealed = false, reset = false;
+		if (enemyThing) {
+			const std::string obj = "FINDER_SPECIFIC_ID " + std::to_string(enemyThing->id);
+			run(player, "REVEAL_FOG_OF_WAR " + obj + " CONSTANT 0 CONSTANT 3 FINDER_SELF");
+			step(3);
+			for (const auto& r : client.fogReveals) revealed |= r.object == enemyThing->id;
+			run(player, "RESET_FOG_OF_WAR " + obj + " FINDER_SELF");
+			step(3);
+			reset = true;
+			for (const auto& r : client.fogReveals) reset &= r.object != enemyThing->id;
+		}
+		check(revealed && reset, "RESET_FOG_OF_WAR ends REVEAL_FOG_OF_WAR's view");
+		// FLOODFILL_AREA_WITH: one object per tile of the square
+		const GameObjBlueprint* fill = nullptr;
+		if (gs.objBlueprints[Tags::GAMEOBJCLASS_MARKER].size() > 0)
+			fill = &gs.objBlueprints[Tags::GAMEOBJCLASS_MARKER][0];
+		size_t before = 0, after = 0;
+		if (fill) {
+			for (const auto& [id, o] : server.idmap) before += o->blueprint == fill && !(o->flags & CommonGameObject::fTerminated);
+			run(unit, "FLOODFILL_AREA_WITH MARKER \"" + fill->name + "\" LOCATION_OF FINDER_SELF CONSTANT 4");
+			for (const auto& [id, o] : server.idmap) after += o->blueprint == fill && !(o->flags & CommonGameObject::fTerminated);
+		}
+		check(fill && after - before == 9, "FLOODFILL_AREA_WITH, half size 4 m: " + std::to_string(after - before) + " markers, one on each of 3 x 3 tiles");
+		// REPEAT_SEQUENCE_AFTER_DELAY: count runs queued
+		const size_t queued = server.delayedSequences.size();
+		run(unit, "REPEAT_SEQUENCE_AFTER_DELAY \"" + gs.actionSequences.names.getString(0) + "\" FINDER_SELF CONSTANT 3 CONSTANT 100");
+		check(server.delayedSequences.size() == queued + 3, "REPEAT_SEQUENCE_AFTER_DELAY 3 after 100 s: three runs queued");
+		// SWITCH_FOOTPRINT: the building's tiles follow the new footprint
+		ServerGameObject* b = buildings[0];
+		auto held = [&]() { size_t n = 0; for (size_t i = 0; i < (size_t)w * h; i++) n += server.tiles[i].building == b->id; return n; };
+		const size_t heldBefore = held();
+		std::string otherFp;
+		for (size_t i = 0; i < gs.footprints.size(); i++)
+			if (&gs.footprints[i] != b->blueprint->footprint && gs.footprints[i].tiles.size() != b->blueprint->footprint->tiles.size()) {
+				otherFp = gs.footprints.names.getString(i);
+				break;
+			}
+		run(b, "SWITCH_FOOTPRINT \"" + otherFp + "\"");
+		const size_t heldAfter = held();
+		check(!otherFp.empty() && heldAfter != heldBefore && b->footprintOverride != nullptr,
+			"SWITCH_FOOTPRINT \"" + otherFp + "\": the building holds " + std::to_string(heldAfter) + " tiles, " + std::to_string(heldBefore) + " before");
+		// read and run without effect or with effects not checked here
+		run(unit, "ASSERT CONSTANT 1 \"never printed\"");
+		run(unit, "DISPLAY_ON_MINIMAP FINDER_SELF CONSTANT 1 CONSTANT 2 FINDER_SELF");
+		run(unit, "SET_AMBIENT_LIGHTING 10 20 30");
+		run(unit, "SWITCH_OFF_INTENSITY_MAP \"Threat\" FINDER_SELF");
+		run(b, "DEREGISTER_WORK_ORDER FINDER_RESULTS \"" + gs.objectFinderDefinitions.names.getString(0) + "\" FINDER_SELF");
+		check(true, "ASSERT, DISPLAY_ON_MINIMAP, SET_AMBIENT_LIGHTING, SWITCH_OFF_INTENSITY_MAP, DEREGISTER_WORK_ORDER run");
+	}
+	printf("UNITTEST %s: %d failures\n", failures ? "FAILED" : "PASSED", failures);
+}
+
+
+// Several farmers, several farms (the play test 2026-11-16): three peasants each given Build on
+// three new farm foundations, the first FORGET_EVERYTHING_ELSE, the others DO_LAST, as Shift-placed
+// farms with the three selected. In the original each finished farm takes its nearest builder
+// (Building and Repairing.cpp "Only 1 Builder", Farming.cpp "Auto-attend Farm",
+// FORGET_EVERYTHING_ELSE), who farms it; the others go on to the next. Prints "FARMB t=<s>" with
+// each peasant's order and target every 10 s, and at the end how many farm a field.
+void Test_FarmBuilders()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	std::vector<ServerGameObject*> peasants;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant" && peasants.size() < 3)
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	const GameObjBlueprint* foundationType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+	const int build = server.gameSet->commands.names.getIndex("Build");
+	if (peasants.size() < 3 || !foundationType || build < 0) {
+		printf("FARMB not set up (%zu peasants)\n", peasants.size());
+		return;
+	}
+	g_settings["simSeed"] = 1;
+	server.startLevel();
+	std::vector<SrvGORef> farms;
+	const Vector3 base = peasants[0]->position;
+	// WKB_FARMB_FARMS=<n>: n farms instead of 3
+	const size_t farmCount = getenv("WKB_FARMB_FARMS") ? (size_t)std::max(1, atoi(getenv("WKB_FARMB_FARMS"))) : 3;
+	for (int i = 0; i < 800 && farms.size() < farmCount; i++) {
+		const Vector3 at = base + Vector3(20.0f + 5.0f * (i % 20), 0, -40.0f + 5.0f * (i / 20));
+		if (StampdownPlan::getStampdownPlan(&server, player, foundationType, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+			continue;
+		ServerGameObject* f = server.spawnObject(foundationType, player, at, Vector3(0, 0, 0));
+		f->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+		farms.emplace_back(f);
+	}
+	if (farms.size() < farmCount) {
+		printf("FARMB no room\n");
+		return;
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	for (size_t f = 0; f < farms.size(); f++)
+		for (ServerGameObject* p : peasants)
+			server.gameSet->commands[build].execute(p, farms[f].get(), f == 0 ? Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE : Tags::ORDERASSIGNMODE_DO_LAST);
+	auto describe = [&](ServerGameObject* p) {
+		std::string order = "-", target = "-";
+		if (Order* o = p->orderConfig.getCurrentOrder()) {
+			order = server.gameSet->orders.getString(o->blueprint->bpid);
+			if (Task* tk = o->getCurrentTask(); tk && tk->target)
+				target = tk->target->blueprint->name + " #" + std::to_string(tk->target->id);
+		}
+		std::string queue;
+		for (Order& o : p->orderConfig.orders)
+			queue += (queue.empty() ? "" : ",") + server.gameSet->orders.getString(o.blueprint->bpid) + (o.isDone() ? "(done)" : "");
+		return order + " -> " + target + " [" + queue + "]";
+	};
+	for (int step = 0; step * 20 <= 400000; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		if (step % 500)
+			continue;
+		printf("FARMB t=%d", step * 20 / 1000);
+		for (ServerGameObject* p : peasants)
+			printf(" | %u: %s", p->id, describe(p).c_str());
+		printf("\n");
+	}
+	int farming = 0;
+	for (ServerGameObject* p : peasants)
+		if (Order* o = p->orderConfig.getCurrentOrder(); o && server.gameSet->orders.getString(o->blueprint->bpid) == "Farm")
+			farming++;
+	printf("FARMB end: %d of 3 peasants farm\n", farming);
+	fflush(stdout);
+}
+
+IRenderer* CreateNULLRenderer();
+
+void Test_FireQuality()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("FIRE %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the option: its values, the menu's choice, the defaults and the clamping
+	check("names", strcmp(FireFx::QualityName(0), "Original") == 0 && strcmp(FireFx::QualityName(1), "Low") == 0
+		&& strcmp(FireFx::QualityName(2), "High") == 0 && strcmp(FireFx::QualityName(9), "High") == 0);
+	check("default", RenderSettings().fireQuality == FireFx::HIGH);
+	const RenderSettings savedRender = g_renderSettings;
+	const nlohmann::json savedSettings = g_settings;
+	const MenuOption* o = FindMenuOption("fireQuality");
+	check("menu option", o && o->type == MenuOption::CHOICE && o->page == "lighting"
+		&& o->choices == std::vector<std::string>{ "Original", "Low", "High" });
+	if (o) {
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			o->set((float)v);
+			ok &= g_renderSettings.fireQuality == v && o->get() == (float)v;
+		}
+		o->set(7.0f);
+		ok &= g_renderSettings.fireQuality == 2;
+		o->set(-3.0f);
+		ok &= g_renderSettings.fireQuality == 0;
+		check("menu set and get", ok);
+	}
+	// the config's round trip (wkconfig.json, as the other quality options: a graphics setting,
+	// not the game's, so not in the save game)
+	{
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			g_renderSettings.fireQuality = v;
+			g_renderSettings.save();
+			ok &= g_settings.value("fireQuality", -1) == v;
+			g_renderSettings.fireQuality = -1;
+			g_renderSettings.load();
+			ok &= g_renderSettings.fireQuality == v;
+			// and from the file itself
+			std::ifstream f("wkconfig.json");
+			nlohmann::json written = nlohmann::json::parse(f, nullptr, false);
+			ok &= written.is_object() && written.value("fireQuality", -1) == v;
+		}
+		check("config round trip", ok);
+		g_settings["fireQuality"] = 9;
+		g_renderSettings.load();
+		const bool high = g_renderSettings.fireQuality == 2;
+		g_settings["fireQuality"] = -4;
+		g_renderSettings.load();
+		const bool low = g_renderSettings.fireQuality == 0;
+		g_settings.erase("fireQuality");
+		g_renderSettings.load();
+		check("config clamped, missing is the default", high && low && g_renderSettings.fireQuality == RenderSettings().fireQuality);
+	}
+	g_settings = savedSettings;
+	g_renderSettings = savedRender;
+	SaveSettings();
+
+	// which systems the fire shader takes: the flame sprites' (a building's fire, an arrow's, the
+	// fireballs), not the smoke, the smoke-puff fire nor the fort's grapeshot sparks
+	LoadBCP("data.bcp");
+	PSCache cache("Warrior Kings Game Set\\Particle_Systems");
+	ParticleSystem* building = cache.getPS("Fire_Building");
+	ParticleSystem* arrow = cache.getPS("Flame_Arrow");
+	ParticleSystem* fireball = cache.getPS("Fireball");
+	ParticleSystem* smoke = cache.getPS("Burningobjectsmoke");
+	ParticleSystem* smoky = cache.getPS("Smokyfire");
+	ParticleSystem* fort = cache.getPS("Fort_Fire");
+	ParticleSystem* dust = cache.getPS("Dust");
+	printf("FIRE flags building %d %d arrow %d %d fireball %d smoke %d smoky %d fort %d dust %d\n", building->flameSprite, building->standingFire,
+		arrow->flameSprite, arrow->standingFire, fireball->flameSprite, smoke->flameSprite, smoky->flameSprite, fort->flameSprite, dust->flameSprite);
+	check("flame systems", building->flameSprite && building->standingFire && arrow->flameSprite && !arrow->standingFire && fireball->flameSprite
+		&& !smoke->flameSprite && !smoky->flameSprite && !fort->flameSprite && !dust->flameSprite);
+	check("takes", !FireFx::Takes(0, building) && !FireFx::Takes(0, arrow) && FireFx::Takes(1, building) && FireFx::Takes(2, arrow)
+		&& !FireFx::Takes(1, smoke) && !FireFx::Takes(2, dust));
+
+	// the level in effect: Original without a renderer that can draw the others
+	FireFx::BeginFrame(2, false);
+	check("unavailable is Original", FireFx::Level() == FireFx::ORIGINAL);
+	FireFx::BeginFrame(1, true);
+	check("available", FireFx::Level() == FireFx::LOW);
+
+	// the damage and the flicker
+	check("damage scale", FireFx::DamageScale(1.0f) == 1.0f && std::abs(FireFx::DamageScale(0.0f) - 1.6f) < 1e-5f
+		&& FireFx::DamageScale(0.3f) > FireFx::DamageScale(0.6f) && FireFx::DamageScale(-1.0f) == FireFx::DamageScale(0.0f));
+	FireFx::SetDamage(77, 0.25f);
+	check("damage of", std::abs(FireFx::DamageOf(77) - FireFx::DamageScale(0.25f)) < 1e-6f && FireFx::DamageOf(78) == 1.0f);
+	{
+		bool inRange = true, varies = false;
+		const float first = FireFx::Flicker(0.0f, 5);
+		for (int i = 0; i < 2000; i++) {
+			const float f = FireFx::Flicker(i * 0.0137f, 5);
+			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.1f;
+		}
+		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
+	}
+
+	// the particles: a burning building's fire (its object 41, damaged), an arrow's flight and the
+	// burning object's smoke, 6 s of them
+	ParticleContainer pc;
+	srand(1234);
+	const float dt = 0.05f;
+	float now = 0.0f;
+	for (int i = 0; i < 120; i++) {
+		const float prev = now;
+		now += dt;
+		pc.generate(building, Vector3(10, 2, 10), 41, prev, now);
+		pc.generate(arrow, Vector3(-5.0f + now * 6.0f, 4, 3), 42, prev, now);
+		pc.generate(smoke, Vector3(10, 4, 10), 41, prev, now);
+		pc.update(now);
+	}
+	Camera camera;
+	camera.position = Vector3(0, 30, -30);
+	camera.direction = Vector3(0, -0.6f, 0.8f).normal();
+	camera.sceneMatrix = Matrix::getIdentity();
+	IRenderer* nul = CreateNULLRenderer();
+	DefaultParticleRenderer renderer(nul, &pc);
+
+	// the old path's quads, worked out here as DefaultParticleRenderer always drew a sprite (its
+	// position, its scale, the camera's side and up), for the particles of the systems asked
+	auto reference = [&](bool fires) {
+		std::vector<batchVertex> out;
+		const Vector3 camside = camera.direction.cross(Vector3(0, 1, 0)).normal();
+		const Vector3 camhor = camside.cross(camera.direction).normal();
+		for (auto& kv : pc.particles)
+			for (Particle& p : kv.second) {
+				const uint32_t color = p.getColor(now);
+				if (color >> 24 == 0 || (!fires && p.system->flameSprite))
+					continue;
+				const Vector3 pos = p.getPosition(now);
+				const auto [s1, s2, si] = p.system->Particles.Scale_Gradient.getAtTime(now - p.startTime, 1.0f);
+				const float size = s1 + (s2 - s1) * si;
+				const Vector3 pts[4] = { pos + (camside + camhor) * size * 0.5f, pos + (camside - camhor) * size * 0.5f,
+					pos + (-camside - camhor) * size * 0.5f, pos + (-camside + camhor) * size * 0.5f };
+				const float uv[4][2] = { { 0, 0 }, { 0, 1 }, { 1, 1 }, { 1, 0 } };
+				for (int k = 0; k < 4; k++)
+					out.emplace_back(pts[k].x, pts[k].y, pts[k].z, (int)color, uv[k][0], uv[k][1]);
+			}
+		return out;
+	};
+	auto same = [](const std::vector<batchVertex>& a, const std::vector<batchVertex>& b) {
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); i++)
+			if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].z != b[i].z || a[i].color != b[i].color || a[i].u != b[i].u || a[i].v != b[i].v)
+				return false;
+		return true;
+	};
+	std::vector<batchVertex> rec;
+	DefaultParticleRenderer::s_record = &rec;
+	FireFx::BeginFrame(FireFx::ORIGINAL, true);
+	renderer.render(now - dt, now, camera);
+	const std::vector<batchVertex> original = reference(true);
+	size_t flames = 0, visible = 0;
+	for (auto& kv : pc.particles)
+		for (Particle& p : kv.second)
+			if (p.getColor(now) >> 24) {
+				visible++;
+				flames += p.system->flameSprite;
+			}
+	printf("FIRE particles %zu visible, %zu of them flames, Original drew %zu quads\n", visible, flames, rec.size() / 4);
+	check("Original is the old path", flames > 0 && rec.size() == visible * 4 && same(rec, original) && FireFx::PendingCount() == 0);
+
+	for (int level = FireFx::LOW; level <= FireFx::HIGH; level++) {
+		rec.clear();
+		FireFx::Clear();
+		FireFx::BeginFrame(level, true);
+		FireFx::SetDamage(41, 0.2f);
+		renderer.render(now - dt, now, camera);
+		bool match = FireFx::PendingCount() == flames;
+		for (const FireFx::Flame& f : FireFx::Pending())
+			match &= f.system->flameSprite && f.alpha > 0 && f.size > 0 && f.life >= 0 && f.life <= 1
+				&& (f.objid == 41 ? std::abs(f.heat - FireFx::DamageScale(0.2f)) < 1e-6f : f.heat == 1.0f);
+		check(level == 1 ? "Low: the rest as before" : "High: the rest as before", same(rec, reference(false)));
+		check(level == 1 ? "Low: the flames to the shader" : "High: the flames to the shader", match);
+		std::vector<FireFx::Instance> inst, again;
+		FireFx::BuildInstances(level, now, true, inst);
+		FireFx::BuildInstances(level, now, true, again);
+		int kinds[4] = {};
+		int lastKind = -1;
+		bool ordered = true;
+		const int order[4] = { 2, 3, 1, 0 }; // drawn: the shimmer, the smoke, the flames, the glow
+		for (const FireFx::Instance& i : inst) {
+			const int k = (int)i.c[0];
+			kinds[k]++;
+			ordered &= lastKind < 0 || order[lastKind] <= order[k];
+			lastKind = k;
+		}
+		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
+		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
+		if (level == FireFx::LOW)
+			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+		else
+			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
+			// the standing fire only
+			check("High: flames, glow, smoke, shimmer", kinds[0] == (int)flames && kinds[1] == 2 && kinds[3] == 1 && kinds[2] >= 3
+				&& ordered && deterministic);
+	}
+	DefaultParticleRenderer::s_record = nullptr;
+	FireFx::Clear();
+	FireFx::BeginFrame(FireFx::ORIGINAL, false);
+	delete nul;
+	printf("FIRE all %d\n", all ? 1 : 0);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -10832,6 +11632,10 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 {Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
 {Test_NightCold, "Night cold: the day's temperature swing, coldest before sunrise and warmest in the early afternoon, smaller overcast, none without day and night, through a save"},
+{Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
+{Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
+{Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
+{Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
 };
 
 void LaunchTest()

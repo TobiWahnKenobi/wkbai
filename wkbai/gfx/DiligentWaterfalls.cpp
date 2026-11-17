@@ -1183,7 +1183,7 @@ DiligentWaterfalls::~DiligentWaterfalls()
 	g_waterfallSoundSpots.clear();
 	// the waterfalls' sounds stop with them (the map left)
 	if (SoundPlayer::s_soundPlayer)
-		for (int slot = 0; slot < SoundPlayer::MAX_LOOPS; slot++)
+		for (int slot = 0; slot < SoundPlayer::WATERFALL_LOOPS; slot++)
 			SoundPlayer::s_soundPlayer->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 	delete _impl;
 }

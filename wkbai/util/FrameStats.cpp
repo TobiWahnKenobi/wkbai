@@ -149,8 +149,11 @@ const char* BenchmarkScreenshotDue()
 	const auto* bm = BenchmarkSettings();
 	const bool list = bm && bm->contains("cameras") && bm->at("cameras").is_array();
 	const int count = list ? (int)bm->at("cameras").size() : bm ? bm->value("screenshotCount", 1) : 1;
-	// with a camera list: the last frame each camera is held
+	// with a camera list: the last frame each camera is held; with "screenshotEvery": n, every
+	// n-th frame after the warm-up (a cut scene's frames, screenshotCount of them)
+	const int every = bm ? bm->value("screenshotEvery", 0) : 0;
 	const int due = !bm ? 0 : list ? bm->value("warmupFrames", 120) + (taken + 1) * std::max(1, bm->value("cameraHold", 30)) - 1
+	                      : every > 0 ? bm->value("warmupFrames", 120) + taken * every
 	                              : bm->value("warmupFrames", 120);
 	if (taken >= count || !bm || !bm->contains("screenshot") || s_benchmarkFrame < due)
 		return nullptr;

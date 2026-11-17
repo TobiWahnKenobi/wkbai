@@ -72,6 +72,112 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		int tag = Tags::CBLUEPRINT_tagDict.getTagID(strtag.c_str());
 		if (strtag == endtag)
 			break;
+		// keywords WKB.exe reads that aren't in the tag list (docs/re/combat.md)
+		if (strtag == "DAMAGE_SHARE_PERCENTAGE") {
+			damageSharePercentage = gsf.nextFloat();
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "NUMBER_OF_DAMAGE_SHARERS") {
+			damageSharers = gsf.nextInt();
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "IGNORE_ALL_MISSILE_COLLISION") {
+			ignoreAllMissileCollision = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "IGNORE_FRIENDLY_MISSILE_COLLISION") {
+			ignoreFriendlyMissileCollision = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "STRIKE_FLOOR_SPECIAL_EFFECT") {
+			strikeFloorEffect = gameSet->specialEffectTags.readIndex(gsf);
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "DEFAULT_ATTACK_COMMAND" || strtag == "FORMATION_ATTACK_COMMAND") {
+			const int cmd = gameSet->commands.names.getIndex(gsf.nextString(true));
+			(strtag == "DEFAULT_ATTACK_COMMAND" ? defaultAttackCommand : formationAttackCommand) = cmd;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "MAX_GRADIENT") {
+			maxGradient = std::clamp(gsf.nextFloat(), 0.0f, 90.0f);
+			hasMaxGradient = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "IDEAL_TURN_RADIUS" || strtag == "MINIMUM_TURN_RADIUS" || strtag == "PREFERRED_SPACING") {
+			const float v = std::max(0.0f, gsf.nextFloat());
+			(strtag[0] == 'I' ? idealTurnRadius : strtag[0] == 'M' ? minTurnRadius : preferredSpacing) = v;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "PERPENDICULAR_TO_LANDSCAPE") {
+			perpendicularToLandscape = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "TRIGGER_SOUND_FROM_ANIMATION") {
+			const int anim = gameSet->animations.names.getIndex(gsf.nextString(true));
+			if (anim >= 0)
+				soundFromAnimations.push_back(anim);
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "WHEEL_ON_FACING") {
+			wheelOnFacing = gsf.nextInt() != 0;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "CREATE_INTENSITY_MAP") {
+			createsIntensityMaps.push_back(gsf.nextString(true));
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "START_APPLY_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING" || strtag == "APPLY_INTERMITTANT_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING") {
+			(strtag[0] == 'S' ? appliesIntensityMaps : intermittentIntensityMaps).push_back(gsf.nextString(true));
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "APPLY_INTENSITY_MAP_TO_PATHFINDING") {
+			if (gsf.nextString(true) == "Threat")
+				avoidsThreat = true;
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "UPDATE_INTENSITY_MAP") {
+			const std::string map = gsf.nextString(true), when = gsf.nextString();
+			if (when == "ON_SIGHTING") {
+				IntensityWriter w;
+				w.map = map;
+				w.radius = ReadValueDeterminer(gsf, *gameSet);
+				w.strength = ReadValueDeterminer(gsf, *gameSet);
+				if (w.radius && w.strength)
+					intensityWriters.push_back(w);
+			}
+			else if (map == "Threat" && when == "ON_TILE_CHANGE") {
+				std::unique_ptr<ValueDeterminer> radius(ReadValueDeterminer(gsf, *gameSet));
+				std::unique_ptr<ValueDeterminer> strength(ReadValueDeterminer(gsf, *gameSet));
+				// (constants in the shipped game set: radius 0, strength 5)
+				if (radius && strength) {
+					writesThreat = true;
+					threatRadius = radius->eval(nullptr);
+					threatStrength = strength->eval(nullptr);
+				}
+			}
+			gsf.advanceLine();
+			continue;
+		}
+		if (strtag == "BOUNDING_VOLUME") {
+			if (gsf.nextString() == "SPHERE")
+				boundingRadius = gsf.nextFloat();
+			gsf.advanceLine();
+			continue;
+		}
 		if (strtag == "CAN_BE_BUILT_UPON") {
 			canBeBuiltUpon = gsf.nextInt() != 0;
 			gsf.advanceLine();
@@ -141,14 +247,16 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 				else if (apphead == "MAP_SOUND_TAG") {
 					int st = gameSet->soundTags.readIndex(gsf);
 					int unk1 = gsf.nextInt();
-					auto unk2 = gsf.nextString();
+					const bool far = gsf.nextString() == "FAR";
 					ps.soundMap[st].push_back(gsf.nextString(true));
+					ps.soundMap[st].back().far = far;
 				}
 				else if (apphead == "MAP_SOUND_TAG_TO") {
 					int st = gameSet->soundTags.readIndex(gsf);
 					int unk1 = gsf.nextInt();
-					auto unk2 = gsf.nextString();
+					const bool far = gsf.nextString() == "FAR";
 					ps.soundMap[st].push_back(gameSet->sounds.readIndex(gsf));
+					ps.soundMap[st].back().far = far;
 				}
 				gsf.advanceLine();
 			}
@@ -191,16 +299,17 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			int st = gameSet->soundTags.readIndex(gsf);
 			int unk1 = gsf.nextInt();
 			//assert(unk1 == 1);
-			auto unk2 = gsf.nextString();
-			//assert(unk2 == "NEAR");
+			const bool far = gsf.nextString() == "FAR";
 			soundMap[st].push_back(gsf.nextString(true));
+			soundMap[st].back().far = far;
 			break;
 		}
 		case Tags::CBLUEPRINT_MAP_SOUND_TAG_TO: {
 			int st = gameSet->soundTags.readIndex(gsf);
 			int unk1 = gsf.nextInt();
-			auto unk2 = gsf.nextString();
+			const bool far = gsf.nextString() == "FAR";
 			soundMap[st].push_back(gameSet->sounds.readIndex(gsf));
+			soundMap[st].back().far = far;
 			break;
 		}
 		case Tags::CBLUEPRINT_MAP_MUSIC_TAG: {
@@ -396,6 +505,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 		else if (strtag == "USE_PASSABILITY_FIELDS") {
 			passabilityFieldsName = gsf.nextString(true);
 		}
+		else if (strtag == "CAN_TRAVERSE") {
+			canTraverseNames.push_back(gsf.nextString(true));
+		}
 		else if (strtag == "DISPLAY_ON_MINIMAP") {
 			displayOnMinimap = gsf.nextInt() != 0;
 		}
@@ -421,7 +533,7 @@ std::string GameObjBlueprint::getFullName() const {
 	return std::string(Tags::GAMEOBJCLASS_tagDict.getStringFromID(bpClass)) + " \"" + name + "\"";
 }
 
-std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int subtype) const
+std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int subtype, float listenerDistance) const
 {
 	const std::vector<GameObjBlueprint::SoundRef>* sndVars = nullptr;
 	auto it = soundMap.find(sndTag);
@@ -429,7 +541,6 @@ std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int
 		sndVars = &it->second;
 	}
 	else {
-		printf("from->subtype: %i\n", subtype);
 		auto& pssm = subtypes.at(subtype).soundMap;
 		it = pssm.find(sndTag);
 		if (it != pssm.end())
@@ -443,10 +554,21 @@ std::tuple<std::string, float, float> GameObjBlueprint::getSound(int sndTag, int
 	if (sndVars) {
 		const std::string* path = nullptr;
 		float refDist = 30.0f; float maxDist = 300.0f;
-		const GameObjBlueprint::SoundRef& sndref = sndVars->at(rand() % sndVars->size());
+		// the NEAR or FAR list by the listener's distance (either when the other is empty)
+		std::vector<const GameObjBlueprint::SoundRef*> pick;
+		const bool wantFar = listenerDistance > 60.0f;
+		for (const auto& r : *sndVars)
+			if (r.far == wantFar)
+				pick.push_back(&r);
+		if (pick.empty())
+			for (const auto& r : *sndVars)
+				pick.push_back(&r);
+		const GameObjBlueprint::SoundRef& sndref = *pick[rand() % pick.size()];
 		if (sndref.soundBlueprint != -1) {
 			GSSound& snd = gameSet->sounds[sndref.soundBlueprint];
 			refDist = snd.gradientStartDist;
+			// (MUTE_DIST unused, as in WKB.exe: its DirectSound maximum is FLT_MAX, the sound fades
+			// as refDist / d; wkbai stops at 300 m, a tenth of the volume)
 			//maxDist = snd.muteDist;
 			if (snd.files.size() > 0)
 				path = &snd.files[rand() % snd.files.size()];
@@ -508,11 +630,30 @@ const std::vector<bool>* GameObjBlueprint::getPassableTerrains() const
 {
 	if (!passableTerrainsResolved) {
 		passableTerrainsResolved = true;
-		auto it = gameSet->passabilityFields.find(passabilityFieldsName);
-		if (!passabilityFieldsName.empty() && it != gameSet->passabilityFields.end())
-			passableTerrains = &it->second;
+		if (!canTraverseNames.empty()) {
+			traverseMask.assign(gameSet->terrains.size(), false);
+			for (const std::string& name : canTraverseNames) {
+				const int t = gameSet->terrains.names.getIndex(name);
+				if (t >= 0)
+					traverseMask[t] = true;
+			}
+			passableTerrains = &traverseMask;
+		}
+		else {
+			auto it = gameSet->passabilityFields.find(passabilityFieldsName);
+			if (!passabilityFieldsName.empty() && it != gameSet->passabilityFields.end())
+				passableTerrains = &it->second;
+		}
 	}
 	return passableTerrains;
+}
+
+bool GameObjBlueprint::wades() const
+{
+	for (const std::string& name : canTraverseNames)
+		if (name == "Water")
+			return true;
+	return false;
 }
 
 bool GameObjBlueprint::canWalkOnWater() const { return floatsOnWater || bpClass != Tags::GAMEOBJCLASS_CHARACTER; }

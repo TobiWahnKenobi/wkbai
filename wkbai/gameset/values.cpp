@@ -2,6 +2,8 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../Model.h"
+#include "GameObjBlueprint.h"
 #include "values.h"
 #include "gameset.h"
 #include "../util/GSFileParser.h"
@@ -287,6 +289,8 @@ struct ValueObjectType : ValueDeterminer {
 
 struct ValueDistanceBetween : ValueDeterminer {
 	bool takeHorizontal, takeVertical;
+	// DISTANCE_BETWEEN_INCLUDING_RADIUS: less both objects' sizes (BOUNDING_VOLUME), not below 0
+	bool includeRadius = false;
 	std::unique_ptr<ObjectFinder> fnd1, fnd2;
 	Vector3 centre(const ObjectFinderResult& vec) {
 		if (vec.empty()) return {};
@@ -296,10 +300,15 @@ struct ValueDistanceBetween : ValueDeterminer {
 		return sum / (float)vec.size();
 	}
 	virtual float eval(ScriptContext* ctx) override {
-		Vector3 v = centre(fnd1->eval(ctx)) - centre(fnd2->eval(ctx));
+		const auto a = fnd1->eval(ctx), b = fnd2->eval(ctx);
+		Vector3 v = centre(a) - centre(b);
 		float dist = 0.0f;
 		if (takeHorizontal) dist += v.x * v.x + v.z * v.z;
 		if (takeVertical) dist += v.y * v.y;
+		if (includeRadius) {
+			auto radius = [](const ObjectFinderResult& vec) { return vec.empty() ? 0.0f : vec[0]->blueprint->boundingRadius; };
+			return std::max(0.0f, std::sqrt(dist) - radius(a) - radius(b));
+		}
 		return std::sqrt(dist);
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
@@ -477,33 +486,41 @@ struct ValueHasDirectLineOfSightTo : ValueDeterminer {
 		if (!targetObj)
 			return 0.0f;
 
+		// As WKB.exe's VD_Has_Direct_Line_Of_Sight_To (0x460930): from the firing point to the
+		// target's position raised by its full height (0x5c1ea0; here its model's), blocked by the
+		// ground itself (sampled along the line every metre, 0x60f900's segment test) and by the
+		// buildings on the tiles it crosses but those missiles pass (IGNORE_ALL_MISSILE_COLLISION),
+		// the shooter's, the target and what the shooter stands in
 		Vector3 startPos = pos->eval(ctx).position;
-		Vector3 endPos = targetObj->position + Vector3(0, 2, 0);
-		Vector3 dir = (endPos - startPos).normal();
-		
+		float height = 2.0f;
+		if (Model* model = targetObj->blueprint->getModel(targetObj->subtype, targetObj->appearance, targetObj->animationIndex, targetObj->animationVariant)) {
+			const Vector3 centre = model->getSphereCenter().transform(targetObj->getWorldMatrix());
+			height = std::max(1.0f, 2.0f * (centre.y - targetObj->position.y));
+		}
+		Vector3 endPos = targetObj->position + Vector3(0, height, 0);
+
 		auto* terrain = ctx->gameState->terrain;
 		auto [trnWidth, trnHeight] = terrain->getNumPlayableTiles();
+		const CommonGameObject* container = sourceObj ? sourceObj->parent : nullptr;
+
+		// the ground
+		const Vector3 line = endPos - startPos;
+		const float len = line.len3();
+		const int samples = std::max(1, (int)std::ceil(len));
+		for (int i = 1; i < samples; i++) {
+			const Vector3 p = startPos + line * ((float)i / samples);
+			if (p.y < terrain->getHeight(p.x, p.z))
+				return 0.0f;
+		}
 
 		auto pred = [&](Pathfinding::PFPos pos) {
 			if (!(pos.x >= 0 && pos.x < trnWidth && pos.z >= 0 && pos.z < trnHeight))
 				return true;
-
 			const auto& tile = ctx->gameState->tiles[pos.z * trnWidth + pos.x];
 			const auto* owningBuilding = tile.building.getFrom(ctx->gameState);
-			if (owningBuilding && owningBuilding != sourceObj && owningBuilding != targetObj && !tile.buildingPassable)
-				return true;
-
-			const float h1 = terrain->getVertex(pos.x + terrain->edge, pos.z + terrain->edge);
-			const float h2 = terrain->getVertex(pos.x + terrain->edge + 1, pos.z + terrain->edge);
-			const float h3 = terrain->getVertex(pos.x + terrain->edge + 1, pos.z + terrain->edge + 1);
-			const float h4 = terrain->getVertex(pos.x + terrain->edge, pos.z + terrain->edge + 1);
-			const float tileHeight = std::min({ h1,h2,h3,h4 });
-			Vector3 testPos = startPos + dir * dir.dot(Vector3(pos.x * 5.0f + 2.5f, tileHeight, pos.z * 5.0f + 2.5f) - startPos);
-			if (testPos.y < tileHeight)
-				return true;
-
-			return false;
-			};
+			return owningBuilding && owningBuilding != sourceObj && owningBuilding != targetObj && owningBuilding != container
+				&& !tile.buildingPassable && !owningBuilding->blueprint->ignoreAllMissileCollision;
+		};
 
 		auto intersectingTile = Pathfinding::SegmentTraversal(startPos.x / 5.0f, startPos.z / 5.0f, endPos.x / 5.0f, endPos.z / 5.0f, pred);
 		return !intersectingTile.has_value();
@@ -844,6 +861,12 @@ static bool SeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameOb
 			return true;
 	}
 	return false;
+}
+
+// (for the intensity maps)
+bool ObjectSeenByPlayer(ScriptContext* ctx, CommonGameObject* obj, CommonGameObject* player)
+{
+	return SeenByPlayer(ctx, obj, player);
 }
 
 struct ValueIsDiscovered : ValueDeterminer {
@@ -1585,6 +1608,216 @@ struct ValueCanAffordCommission : ValueDeterminer {
 	}
 };
 
+// AVERAGE_, MAX_, MIN_ and TOTAL_VALUE_TAG_INTERPRETATION <value tag> <finder> (mods; RE repo
+// docs/re/keyword-coverage.md): the value tag's interpretation over every object found, 0 with
+// none. WKB.exe's (0x4558f0, 0x466d80, 0x467c90, 0x46baf0) read the first object on every pass
+// and its MIN never leaves FLT_MAX; wkbai does what the names say.
+struct ValueValueTagAggregate : ValueDeterminer {
+	enum Mode { AVERAGE, MAX, MIN, TOTAL } mode;
+	int valueTag = 0;
+	std::unique_ptr<ObjectFinder> fnd;
+	ValueValueTagAggregate(Mode mode) : mode(mode) {}
+	virtual float eval(ScriptContext* ctx) override {
+		float total = 0.0f, best = 0.0f;
+		int n = 0;
+		for (CommonGameObject* obj : fnd->eval(ctx)) {
+			ValueDeterminer* vd = nullptr;
+			auto it = obj->blueprint->mappedValueTags.find(valueTag);
+			if (it != obj->blueprint->mappedValueTags.end())
+				vd = it->second;
+			else
+				vd = ctx->gameState->gameSet->valueTags[valueTag].get();
+			if (!vd)
+				continue;
+			float v;
+			{
+				auto _ = ctx->changeSelf(obj);
+				v = vd->eval(ctx);
+			}
+			if (n == 0 || (mode == MAX && v > best) || (mode == MIN && v < best))
+				best = v;
+			total += v;
+			n++;
+		}
+		if (n == 0)
+			return 0.0f;
+		return mode == AVERAGE ? total / n : mode == TOTAL ? total : best;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		valueTag = gs.valueTags.readIndex(gsf);
+		fnd.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// FORMATION_DIMENSION_MAX <finder> (WKB.exe 0x45f730): the first formation's larger dimension
+// (width or depth) in metres, 0 without one
+struct ValueFormationDimensionMax : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> fnd;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer())
+			return 0.0f;
+		for (CommonGameObject* obj : fnd->eval(ctx))
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+				return ((ServerGameObject*)obj)->formationController.maxDimension();
+		return 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { fnd.reset(ReadFinder(gsf, gs)); }
+};
+
+// IS_FORMED <finder> (WKB.exe 0x463570): 1 when every object found is a formation that has formed
+// up (no member still walking to its place); nothing found also gives 1, as the original's
+struct ValueIsFormed : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> fnd;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer())
+			return 0.0f;
+		for (CommonGameObject* obj : fnd->eval(ctx))
+			if (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION || !((ServerGameObject*)obj)->formationController.isFormedUp())
+				return 0.0f;
+		return 1.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { fnd.reset(ReadFinder(gsf, gs)); }
+};
+
+// LENGTH_OF_PATH_REMAINING <finder> (WKB.exe 0x465bb0): the first object's walk still ahead in
+// metres on the ground, 0 when it isn't walking
+struct ValueLengthOfPathRemaining : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> fnd;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer())
+			return 0.0f;
+		ServerGameObject* obj = (ServerGameObject*)fnd->getFirst(ctx);
+		return obj ? obj->movementController.remainingPathLength(obj->position) : 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { fnd.reset(ReadFinder(gsf, gs)); }
+};
+
+// NUM_DISCOVERED_BUILDINGS <finder A> <finder B> (WKB.exe 0x4681f0): for the first pair of
+// different players (A's, B's), how many of B's buildings A has discovered (IS_DISCOVERED's
+// record: once seen, discovered for good)
+struct ValueNumDiscoveredBuildings : ValueDeterminer {
+	std::unique_ptr<ObjectFinder> fA, fB;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer())
+			return 0.0f;
+		const auto as = fA->eval(ctx), bs = fB->eval(ctx);
+		for (CommonGameObject* a : as) {
+			CommonGameObject* pa = a->getPlayer();
+			if (!pa)
+				continue;
+			for (CommonGameObject* b : bs) {
+				CommonGameObject* pb = b->getPlayer();
+				if (!pb || pb == pa)
+					continue;
+				int count = 0;
+				std::vector<CommonGameObject*> stack{ pb };
+				while (!stack.empty()) {
+					CommonGameObject* o = stack.back();
+					stack.pop_back();
+					for (auto& [type, list] : o->children)
+						for (auto* child : list)
+							stack.push_back(child);
+					if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+						continue;
+					if (ValueIsDiscovered::discovered.count({ pa->id, o->id }) || SeenByPlayer(ctx, o, pa))
+						count++;
+				}
+				return (float)count;
+			}
+		}
+		return 0.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fA.reset(ReadFinder(gsf, gs));
+		fB.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// COMMISSION_POSSIBLE "<commission>" <finder> (WKB.exe 0x4591a0): 1 when every requirement of the
+// commission can be met for the first object found (the commissioning building or village). What
+// the original's per-requirement test checks wasn't traced; wkbai's reading: an upgrade needs a
+// building that supports it, characters and buildings can always be made.
+struct ValueCommissionPossible : ValueDeterminer {
+	const GSCommission* commission = nullptr;
+	std::unique_ptr<ObjectFinder> fHandler;
+	virtual float eval(ScriptContext* ctx) override {
+		if (!ctx->isServer() || !commission)
+			return 0.0f;
+		ServerGameObject* handler = (ServerGameObject*)fHandler->getFirst(ctx);
+		if (!handler)
+			return 0.0f;
+		SrvScriptContext hctx(Server::instance, handler);
+		for (const auto& req : commission->upgradeRequirements)
+			if (req.fdSupportedBuildings && req.fdSupportedBuildings->eval(&hctx).empty())
+				return 0.0f;
+		return 1.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		commission = gs.commissions.readPtr(gsf);
+		fHandler.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// WITHIN_ARC <finder A> <finder B> <offset deg> <arc deg> <range> and WITHIN_ARC_TOWARDS <finder A>
+// <finder T> <finder B> <arc deg> <range> (WKB.exe 0x46cd10, 0x46d870): 1 when every B is within
+// range of every A (0: any distance) and inside the arc, its full width in degrees, half either
+// side of A's facing turned by the offset, or of the way from A to the centre of T's objects.
+// Nothing found gives 1, as the original's.
+struct ValueWithinArc : ValueDeterminer {
+	bool towards;
+	std::unique_ptr<ObjectFinder> fA, fT, fB;
+	std::unique_ptr<ValueDeterminer> vOffset, vArc, vRange;
+	ValueWithinArc(bool towards) : towards(towards) {}
+	static float wrap(float a) {
+		a = std::fmod(a, 6.2831853f);
+		return a < 0.0f ? a + 6.2831853f : a;
+	}
+	virtual float eval(ScriptContext* ctx) override {
+		const auto as = fA->eval(ctx), bs = fB->eval(ctx);
+		Vector3 centre;
+		if (towards) {
+			const auto ts = fT->eval(ctx);
+			if (ts.empty())
+				return 0.0f;
+			for (CommonGameObject* t : ts)
+				centre += t->position;
+			centre = centre / (float)ts.size();
+		}
+		const float offset = towards ? 0.0f : vOffset->eval(ctx) * 3.14159265f / 180.0f;
+		const float half = vArc->eval(ctx) * 3.14159265f / 180.0f * 0.5f;
+		const float range = vRange->eval(ctx), r2 = range * range;
+		for (CommonGameObject* a : as) {
+			// wkbai's facing (sin y, -cos y) has the angle y - pi/2 in the x-z plane
+			const float phi = towards ? wrap(std::atan2(centre.z - a->position.z, centre.x - a->position.x))
+				: wrap(a->orientation.y - offset - 1.5707963f);
+			for (CommonGameObject* b : bs) {
+				const float dx = b->position.x - a->position.x, dz = b->position.z - a->position.z;
+				const float d2 = dx * dx + dz * dz;
+				if (r2 != 0.0f && d2 > r2)
+					return 0.0f;
+				if (d2 <= 0.0f)
+					continue;
+				float diff = wrap(std::atan2(dz, dx)) - phi;
+				if (diff < 0.0f)
+					diff += 6.2831853f;
+				if (!(diff <= half || diff >= 6.2831853f - half))
+					return 0.0f;
+			}
+		}
+		return 1.0f;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fA.reset(ReadFinder(gsf, gs));
+		if (towards)
+			fT.reset(ReadFinder(gsf, gs));
+		fB.reset(ReadFinder(gsf, gs));
+		if (!towards)
+			vOffset.reset(ReadValueDeterminer(gsf, gs));
+		vArc.reset(ReadValueDeterminer(gsf, gs));
+		vRange.reset(ReadValueDeterminer(gsf, gs));
+	}
+};
+
 struct ValueAverageItemValue : ValueDeterminer {
 	int item;
 	std::unique_ptr<ObjectFinder> finder;
@@ -1740,7 +1973,7 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 	case Tags::VALUE_SAME_PLAYER: vd = new ValueSamePlayer; break;
 	case Tags::VALUE_OBJECT_TYPE: vd = new ValueObjectType; break;
 	case Tags::VALUE_DISTANCE_BETWEEN: vd = new ValueDistanceBetween; break;
-	case Tags::VALUE_DISTANCE_BETWEEN_INCLUDING_RADIUS: vd = new ValueDistanceBetween; break; // TODO
+	case Tags::VALUE_DISTANCE_BETWEEN_INCLUDING_RADIUS: { auto* d = new ValueDistanceBetween; d->includeRadius = true; vd = d; break; }
 	case Tags::VALUE_VALUE_TAG_INTERPRETATION: vd = new ValueValueTagInterpretation; break;
 	case Tags::VALUE_DIPLOMATIC_STATUS_AT_LEAST: vd = new ValueDiplomaticStatusAtLeast; break;
 	case Tags::VALUE_ARE_ASSOCIATED: vd = new ValueAreAssociated; break;
@@ -1786,6 +2019,17 @@ ValueDeterminer *ReadValueDeterminer(::GSFileParser &gsf, const ::GameSet &gs)
 		if (strtag == "MAX_EQUATION_RESULT") { vd = new ValueEquationResultOver(ValueEquationResultOver::MAX); break; }
 		if (strtag == "TOTAL_EQUATION_RESULT") { vd = new ValueEquationResultOver(ValueEquationResultOver::TOTAL); break; }
 		if (strtag == "DIPLOMATIC_STATUS_IS") { vd = new ValueDiplomaticStatusIs; break; }
+		if (strtag == "AVERAGE_VALUE_TAG_INTERPRETATION") { vd = new ValueValueTagAggregate(ValueValueTagAggregate::AVERAGE); break; }
+		if (strtag == "MAX_VALUE_TAG_INTERPRETATION") { vd = new ValueValueTagAggregate(ValueValueTagAggregate::MAX); break; }
+		if (strtag == "MIN_VALUE_TAG_INTERPRETATION") { vd = new ValueValueTagAggregate(ValueValueTagAggregate::MIN); break; }
+		if (strtag == "TOTAL_VALUE_TAG_INTERPRETATION") { vd = new ValueValueTagAggregate(ValueValueTagAggregate::TOTAL); break; }
+		if (strtag == "FORMATION_DIMENSION_MAX") { vd = new ValueFormationDimensionMax; break; }
+		if (strtag == "IS_FORMED") { vd = new ValueIsFormed; break; }
+		if (strtag == "LENGTH_OF_PATH_REMAINING") { vd = new ValueLengthOfPathRemaining; break; }
+		if (strtag == "NUM_DISCOVERED_BUILDINGS") { vd = new ValueNumDiscoveredBuildings; break; }
+		if (strtag == "COMMISSION_POSSIBLE") { vd = new ValueCommissionPossible; break; }
+		if (strtag == "WITHIN_ARC") { vd = new ValueWithinArc(false); break; }
+		if (strtag == "WITHIN_ARC_TOWARDS") { vd = new ValueWithinArc(true); break; }
 		if (const char* signature = FindStubSignature(valueStubSignatures, strtag)) {
 			vd = new ValueStub(strtag, signature);
 			printf("WARNING: Value determiner %s is not implemented (arguments read, evaluates to 0) at %s\n", strtag.c_str(), gsf.locate().c_str());

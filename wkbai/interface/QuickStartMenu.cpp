@@ -423,11 +423,14 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		CampaignProfile profile;
 		CampaignProfile::load(campaignProfile, profile);
 		profile.name = campaignProfile;
-		if (std::find(profile.conquered.begin(), profile.conquered.end(), campaignProvince) == profile.conquered.end())
+		// a conquered province played again: its script gives no bonus ("<P> Not Previously
+		// Completed") and doesn't run UPDATE_USER_PROFILE, so the profile's items stay as they were
+		const bool replay = std::find(profile.conquered.begin(), profile.conquered.end(), campaignProvince) != profile.conquered.end();
+		if (!replay)
 			profile.conquered.push_back(campaignProvince);
 		if (server->userProfileUpdated)
 			profile.items = server->userProfileItems;
-		else if (ServerGameObject* user = server->findUser()) {
+		else if (ServerGameObject* user = replay ? nullptr : server->findUser()) {
 			profile.items.clear();
 			for (const auto& [item, value] : user->items)
 				profile.items[server->gameSet->items.names.getString(item)] = value;
@@ -457,7 +460,8 @@ void QuickStartMenu::afterGame(const std::string& leaveAction, const std::string
 		refreshSaveGames(true); // a level the map editor just made (a new map of another size)
 		handleRequest({ "edit_level", leaveArg });
 	}
-	else if (conquered || leaveAction == "campaign_lost")
+	// a won province goes back to the campaign map; a lost one to the main menu (WKB.exe 0x76c5ba)
+	else if (conquered)
 		if (FrontEnd* fe = FrontEnd::get())
 			fe->open("campaignmap." + profileName);
 }
@@ -571,6 +575,11 @@ void QuickStartMenu::launchGame()
 
 		while (!g_windowQuit && !cliui.wantsToLeave() && !leave) {
 			client->tick();
+			// the game set's Exit to Main Menu, clicked by this guest (EXIT_TO_MAIN_MENU): it leaves
+			if (client->exitToMenu) {
+				cliui.leaveAction = "exit_to_menu";
+				break;
+			}
 
 			Matchmaking::get().tick();
 			for (GuestConnection::Event e; connection && (e = nextEvent()) != GuestConnection::NONE;) {

@@ -211,7 +211,8 @@ void LaunchQSM() {
 	while (!g_windowQuit) {
 		// "menuTest": { ..., "hold": { "x", "y", "from", "to", "shift" } }: the left button held
 		// there from frame "from" to frame "to" (window pixels), as a player holding a button,
-		// with Shift held as well if "shift" is true; "holds": [ ... ] for several in turn
+		// with Shift held as well if "shift" is true; "button": 3 holds the right button instead;
+		// "holds": [ ... ] for several in turn
 		nlohmann::json holds = nlohmann::json::array();
 		if (menuTest.is_object() && menuTest.contains("hold"))
 			holds.push_back(menuTest["hold"]);
@@ -220,16 +221,17 @@ void LaunchQSM() {
 				holds.push_back(h);
 		for (const nlohmann::json& hold : holds) {
 			const int from = hold.value("from", 30), to = hold.value("to", 90);
+			const int button = hold.value("button", (int)SDL_BUTTON_LEFT) == SDL_BUTTON_RIGHT ? SDL_BUTTON_RIGHT : SDL_BUTTON_LEFT;
 			if (menuFrame + 1 >= from && menuFrame + 1 <= to) {
 				g_mouseX = hold.value("x", 0);
 				g_mouseY = hold.value("y", 0);
-				g_mousePressed[SDL_BUTTON_LEFT] = menuFrame + 1 == from;
-				g_mouseDown[SDL_BUTTON_LEFT] = true;
+				g_mousePressed[button] = menuFrame + 1 == from;
+				g_mouseDown[button] = true;
 				g_modShift = hold.value("shift", false);
 			}
 			else if (menuFrame + 1 == to + 1) {
-				g_mouseDown[SDL_BUTTON_LEFT] = false;
-				g_mouseReleased[SDL_BUTTON_LEFT] = true;
+				g_mouseDown[button] = false;
+				g_mouseReleased[button] = true;
 				g_modShift = false;
 			}
 		}

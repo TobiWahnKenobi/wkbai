@@ -66,6 +66,7 @@ void RenderSettings::load()
 	waterfalls = std::clamp(g_settings.value<int>("waterfalls", def.waterfalls), 0, 4);
 	waterFlow = g_settings.value<bool>("waterFlow", def.waterFlow);
 	fireLights = g_settings.value<bool>("fireLights", def.fireLights);
+	fireQuality = std::clamp(g_settings.value<int>("fireQuality", def.fireQuality), 0, 2);
 	weatherEffects = std::clamp(g_settings.value<int>("weatherEffects", def.weatherEffects), 0, 3);
 	snowQuality = std::clamp(g_settings.value<int>("snowQuality", def.snowQuality), 0, 2);
 	farLandCache = g_settings.value<bool>("farLandCache", def.farLandCache);
@@ -178,6 +179,7 @@ void RenderSettings::save()
 	g_settings.erase("waterDetail");
 	g_settings["waterFlow"] = waterFlow;
 	g_settings["fireLights"] = fireLights;
+	g_settings["fireQuality"] = fireQuality;
 	g_settings["weatherEffects"] = weatherEffects;
 	g_settings["snowQuality"] = snowQuality;
 	g_settings["farLandCache"] = farLandCache;

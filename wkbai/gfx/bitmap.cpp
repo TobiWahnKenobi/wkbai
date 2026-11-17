@@ -41,8 +41,11 @@ std::string Bitmap::replacementFile(const std::string& fn, bool gpu)
 
 Bitmap Bitmap::loadBitmap(const char *fname)
 {
-	const std::string resolved = replacementFile(fname);
-	const char* fn = resolved.c_str();
+	return loadBitmapExact(replacementFile(fname).c_str());
+}
+
+Bitmap Bitmap::loadBitmapExact(const char *fn)
+{
 	char *d; int s;
 	const char *e = strrchr(fn, '.');
 	LoadFile(fn, &d, &s);

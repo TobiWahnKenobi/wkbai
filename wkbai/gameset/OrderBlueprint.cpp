@@ -22,12 +22,16 @@ void OrderBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->classType = Tags::ORDTSKTYPE_tagDict.getTagID(gsf.nextString().c_str());
 		else if (tag == "USE_TASK")
 			this->tasks.push_back(gs.tasks.readPtr(gsf));
+		else if (tag == "REPLACES_SPAWN_ORDER")
+			replacesSpawnOrder = gs.orders.readIndex(gsf);
 		else if (tag == "FLAG") {
 			std::string flag = gsf.nextString();
 			if (flag == "CYCLE_ORDER")
 				cycleOrder = true;
 			else if (flag == "CANNOT_INTERRUPT_ORDER")
 				cannotInterruptOrder = true;
+			else if (flag == "OVERRIDE_NON_INTERRUPTIBLE_ORDERS")
+				overrideNonInterruptible = true;
 		}
 		else if (tag == "PRE_CONDITION")
 			preConditions.push_back(gs.equations.readIndex(gsf));
@@ -37,6 +41,8 @@ void OrderBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->startSequence.init(gsf, gs, "END_START_SEQUENCE");
 		else if (tag == "RESUMPTION_SEQUENCE")
 			this->resumptionSequence.init(gsf, gs, "END_RESUMPTION_SEQUENCE");
+		else if (tag == "SUSPENSION_SEQUENCE")
+			this->suspensionSequence.init(gsf, gs, "END_SUSPENSION_SEQUENCE");
 		else if (tag == "TERMINATION_SEQUENCE")
 			this->terminationSequence.init(gsf, gs, "END_TERMINATION_SEQUENCE");
 		else if (tag == "CANCELLATION_SEQUENCE")
@@ -64,6 +70,8 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			this->startSequence.init(gsf, gs, "END_START_SEQUENCE");
 		else if (tag == "RESUMPTION_SEQUENCE")
 			this->resumptionSequence.init(gsf, gs, "END_RESUMPTION_SEQUENCE");
+		else if (tag == "SUSPENSION_SEQUENCE")
+			this->suspensionSequence.init(gsf, gs, "END_SUSPENSION_SEQUENCE");
 		else if (tag == "TERMINATION_SEQUENCE")
 			this->terminationSequence.init(gsf, gs, "END_TERMINATION_SEQUENCE");
 		else if (tag == "CANCELLATION_SEQUENCE")
@@ -129,6 +137,10 @@ void TaskBlueprint::parse(GSFileParser & gsf, GameSet &gs)
 			playAnimationOnce = true;
 		else if (tag == "MOVEMENT_COMPLETED_SEQUENCE")
 			movementCompletedSequence.init(gsf, gs, "END_MOVEMENT_COMPLETED_SEQUENCE");
+		else if (tag == "MOVEMENT_STARTED_SEQUENCE")
+			movementStartedSequence.init(gsf, gs, "END_MOVEMENT_STARTED_SEQUENCE");
+		else if (tag == "PATHFIND_TO_SHORE")
+			pathfindToShore = true;
 		else if (tag == "SYNCH_ANIMATION_TO_FRACTION")
 			synchAnimationToFraction = ReadValueDeterminer(gsf, gs);
 		else if (tag == "PLAY_ANIMATION_TO_FIT")

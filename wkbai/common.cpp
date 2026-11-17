@@ -53,17 +53,35 @@ int CommonGameState::getDiplomaticStatus(CommonGameObject* a, CommonGameObject* 
 		return gameSet->defaultDiplomaticStatus;
 }
 
-void CommonGameState::updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation)
+void CommonGameState::updateOccupiedTiles(CommonGameObject* object, const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation, const GameObjBlueprint* oldBlueprint)
 {
 	if (!this->tiles) return;
 	int trnNumX, trnNumZ;
 	std::tie(trnNumX, trnNumZ) = this->terrain->getNumPlayableTiles();
-	if (object->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && object->blueprint->footprint) {
-		// free tiles from old position
-		auto rotOrigin = object->blueprint->footprint->rotateOrigin(oldorientation.y);
+	// a conversion frees the old blueprint's footprint first, then takes the new one's (WKB.exe
+	// 0x542b60): tiles only the old one had are free again
+	const GameObjBlueprint* oldBp = oldBlueprint ? oldBlueprint : object->blueprint;
+	if (oldBp != object->blueprint && oldBp->bpClass == Tags::GAMEOBJCLASS_BUILDING && oldBp->footprint) {
+		auto rotOrigin = oldBp->footprint->rotateOrigin(oldorientation.y);
 		int ox = (int)((oldposition.x - rotOrigin.first) / 5.0f);
 		int oz = (int)((oldposition.z - rotOrigin.second) / 5.0f);
-		for (auto& to : object->blueprint->footprint->tiles) {
+		for (auto& to : oldBp->footprint->tiles) {
+			auto ro = to.rotate(oldorientation.y);
+			int px = ox + ro.first, pz = oz + ro.second;
+			if (px >= 0 && px < trnNumX && pz >= 0 && pz < trnNumZ) {
+				auto& tile = this->tiles[pz * trnNumX + px];
+				if (tile.building == object->id)
+					tile.building = nullptr;
+			}
+		}
+	}
+	const Footprint* curFootprint = object->footprintOverride ? object->footprintOverride : object->blueprint->footprint;
+	if (object->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && curFootprint) {
+		// free tiles from old position
+		auto rotOrigin = curFootprint->rotateOrigin(oldorientation.y);
+		int ox = (int)((oldposition.x - rotOrigin.first) / 5.0f);
+		int oz = (int)((oldposition.z - rotOrigin.second) / 5.0f);
+		for (auto& to : curFootprint->tiles) {
 			if (true /*!to.mode*/) {
 				auto ro = to.rotate(oldorientation.y);
 				int px = ox + ro.first, pz = oz + ro.second;
@@ -75,10 +93,10 @@ void CommonGameState::updateOccupiedTiles(CommonGameObject* object, const Vector
 			}
 		}
 		// take tiles from new position
-		rotOrigin = object->blueprint->footprint->rotateOrigin(neworientation.y);
+		rotOrigin = curFootprint->rotateOrigin(neworientation.y);
 		ox = (int)((newposition.x - rotOrigin.first) / 5.0f);
 		oz = (int)((newposition.z - rotOrigin.second) / 5.0f);
-		for (auto& to : object->blueprint->footprint->tiles) {
+		for (auto& to : curFootprint->tiles) {
 			if (true /*!to.mode*/) {
 				auto ro = to.rotate(neworientation.y);
 				int px = ox + ro.first, pz = oz + ro.second;

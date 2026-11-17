@@ -40,7 +40,8 @@ struct RenderSettings {
 	// sky's own colours (warm towards a low sun), a lower horizon band
 	int skyModel = 1;
 	// the water (WATER_*; saved as "waterSetting"): 0 Original (the original's two scrolling
-	// layers of the map's water texture and nothing else), 1 Off (a plain colour), 2 Very low (the
+	// layers of the map's own water texture, never an HD replacement, and nothing else), 1 Off (a
+	// plain colour), 2 Very low (the
 	// texture with bump-mapped ripples and a sun glint), 3 Low (with the sky reflected, deeper
 	// water darker, cloud shadows, shore foam, separate river and sea looks, short screen-space
 	// reflections), 4 Medium (High's ocean look on the flat surface, longer reflections), 5 High
@@ -57,6 +58,14 @@ struct RenderSettings {
 	// fires (burning buildings, flaming arrows, fire spells) light the terrain and models around
 	// them, up to 16 at once (enhanced renderers on Diligent)
 	bool fireLights = true;
+	// the fires' look (FireEffects.h; burning buildings, flaming arrows, fire spells, the map's
+	// fires): 0 Original (the original's Fire.TGA sprites, unchanged), 1 Low (each fire particle a
+	// procedural flame: noise rising through a teardrop, coloured by its temperature along the
+	// black-body curve), 2 High (finer, domain-warped flames, a glow around them, the fire lights
+	// flickering with them and stronger the more a building is damaged, smoke rising from the
+	// flames and the air shimmering above them). Low and High need the enhanced renderers on
+	// Diligent (else Original).
+	int fireQuality = 2;
 	// wkbai's day and night, seasons and weather, how much of it is drawn: 0 Low (a third of the
 	// rain and snow), 1 Medium (two thirds; snow on roofs and models, wet models darker), 2 High
 	// (all of it; footprints in snow and mud), 3 Ultra (half as much rain and snow again, more

@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../SoundPlayer.h"
 #include "../Order.h"
 #include "../MovementController.h"
 #include "../AgentUi.h"
@@ -36,6 +37,7 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "../gfx/FireEffects.h"
 #include "../gfx/ChimneySmoke.h"
 #include "../gfx/BloodDrip.h"
 #include "EnvironmentView.h"
@@ -783,7 +785,22 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			client->camera.position.z += targetZ - lookAt.z;
 		}
 	}
-	else if (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f) {
+	else if (hovered && g_mousePressed[SDL_BUTTON_RIGHT] && !stampdownBlueprint) {
+		// a right-click on the map sends the selected units there, as a right-click on that
+		// ground (the original's minimap orders: the ground command, "Move" for units)
+		const float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
+		const float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
+		std::vector<ClientGameObject*> selected;
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				selected.push_back(sel);
+		const auto cmds = FindCursorCommands(client, selected, nullptr);
+		if (!cmds.empty()) {
+			const Vector3 pos(targetX, terrain->getHeightEx(targetX, targetZ, true), targetZ);
+			sendRightClickCommand(cmds[0].second, nullptr, pos, Vector3(-1, 0, 0));
+		}
+	}
+	if (!(hovered && g_mouseDown[SDL_BUTTON_LEFT]) && (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f)) {
 		// most of the way in a third of a second, the rest when it is under half a metre
 		const float dt = std::min(0.1f, (now - minimapGlideTick) / 1000.0f);
 		minimapGlideTick = now;
@@ -931,6 +948,9 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// the buildings drawn this frame (drawObject), for drawBenchmarkFires
+static std::vector<ClientGameObject*> s_benchFireBuildings;
+
 // The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
 // Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
 // target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
@@ -1061,6 +1081,10 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 		for (size_t s = 0; s < selection.size(); s++) {
 			if (std::find(offered[s].begin(), offered[s].end(), cmd) == offered[s].end())
 				continue;
+			// a unit is no target of its own commands (right-clicking one of the selected units
+			// gave them all Guard on it, the unit guarding itself)
+			if (target && selection[s] == target)
+				continue;
 			CliScriptContext ctx(client, selection[s]);
 			auto _ = ctx.change(ctx.target, target);
 			auto _sel = ctx.change(ctx.selectedObject, selection[s]);
@@ -1086,8 +1110,47 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 	return found;
 }
 
+// The voices WKB.exe plays itself (it registers the sound tags "Selected" and "Move", 0x65c1de; the
+// game set maps "Selected" for 350 types, marked "In Code"): the first own unit of the selection
+// answers, at the listener, once
+static void PlaySelectionVoice(Client* client, const std::unordered_set<CliGORef>& selection, const char* tagName)
+{
+	const int tag = client->gameSet->soundTags.names.getIndex(tagName);
+	if (tag < 0)
+		return;
+	for (ClientGameObject* obj : selection) {
+		if (!obj || obj->getPlayer() != client->clientPlayer.get())
+			continue;
+		ClientGameObject* unit = obj;
+		// a formation: one of its members speaks
+		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+			unit = nullptr;
+			for (const auto& [type, members] : obj->children)
+				if (!members.empty()) { unit = (ClientGameObject*)members[0]; break; }
+			if (!unit)
+				continue;
+		}
+		std::string path; float refDist, maxDist;
+		std::tie(path, refDist, maxDist) = unit->blueprint->getSound(tag, unit->subtype, 0.0f);
+		if (path.empty())
+			continue;
+		SoundPlayer::getSoundPlayer()->playSound("Warrior Kings Game Set\\Sounds\\" + path, std::string("voice\n") + tagName);
+		return;
+	}
+}
+
 void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGameObject* nextSelectedObject, const Vector3& peapos, const Vector3& faceTo)
 {
+	// the order's acknowledgement: "Move" for a move, "Selected" for the others (or with no "Move")
+	if (rightClickCommand) {
+		const int moveTag = client->gameSet->soundTags.names.getIndex("Move");
+		const bool isMove = client->gameSet->commands.names.getString(rightClickCommand->id) == "Move";
+		bool hasMove = false;
+		if (isMove && moveTag >= 0)
+			for (ClientGameObject* obj : selection)
+				if (obj && !std::get<0>(obj->blueprint->getSound(moveTag, obj->subtype, 0.0f)).empty()) { hasMove = true; break; }
+		PlaySelectionVoice(client, selection, isMove && hasMove ? "Move" : "Selected");
+	}
 	bool rallyFlag = false; // a building's rally point set
 	// the flag of the units sent to the ground point: a right-drag's, standing since the press,
 	// or a new one
@@ -1109,6 +1172,9 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 	float nextPosRadius = SEPARATION;
 	for (ClientGameObject *sel : selection) {
 		if (sel) {
+			// the command's target itself is not sent it (Guard on itself)
+			if (nextSelectedObject && sel == nextSelectedObject)
+				continue;
 			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
 				// if object offers this command, send the command
 				int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
@@ -1373,6 +1439,31 @@ void ClientInterface::drawFootprintTiles()
 // The refusal while placing a building, as WKB.exe shows it: "Cannot build here : ..." in its
 // in-game font (Fonts\Drop_Shadow_White) on a dark red box with a lighter red edge, under the
 // cursor (the look from the user's screenshots of the original at 1920 x 1080)
+std::vector<std::pair<Vector3, Vector3>> ClientInterface::wallLine(const Vector3& from, const Vector3& to) const
+{
+	std::vector<std::pair<Vector3, Vector3>> line;
+	const int x0 = (int)std::floor(from.x / 5.0f), z0 = (int)std::floor(from.z / 5.0f);
+	const int x1 = (int)std::floor(to.x / 5.0f), z1 = (int)std::floor(to.z / 5.0f);
+	const bool alongX = std::abs(x1 - x0) >= std::abs(z1 - z0);
+	const int n = alongX ? std::abs(x1 - x0) : std::abs(z1 - z0);
+	const int step = (alongX ? x1 - x0 : z1 - z0) >= 0 ? 1 : -1;
+	// a straight piece runs along its model's x (Stockade*.mesh3): unturned along x, a quarter along z
+	const Vector3 turn = n == 0 ? stampdownOrientation() : Vector3(0.0f, alongX ? 0.0f : 1.5707964f, 0.0f);
+	for (int i = 0; i <= n && i < 200; i++) {
+		const int tx = alongX ? x0 + i * step : x0, tz = alongX ? z0 : z0 + i * step;
+		Vector3 pos(tx * 5.0f + 2.5f, 0.0f, tz * 5.0f + 2.5f);
+		if (stampdownBlueprint && stampdownBlueprint->footprint) {
+			const auto rotOrigin = stampdownBlueprint->footprint->rotateOrigin(turn.y);
+			pos.x += rotOrigin.first;
+			pos.z += rotOrigin.second;
+		}
+		if (client->terrain)
+			pos.y = client->terrain->getHeightEx(pos.x, pos.z, false);
+		line.emplace_back(pos, turn);
+	}
+	return line;
+}
+
 Vector3 ClientInterface::stampdownOrientation() const
 {
 	return StampdownPlan::quarterTurn(Vector3(0.0f, stampdownQuarter * 1.5707964f, 0.0f));
@@ -1536,6 +1627,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const fireLevels[] = { "Original (the sprites)", "Low (procedural flames)", "High (finer flames, glow, flicker, smoke, shimmer)" };
+			ImGui::Combo("Fire", &s.fireQuality, fireLevels, 3);
+		}
 		ImGui::Checkbox("Ambient occlusion", &s.ssao);
 		ImGui::BeginDisabled(!s.ssao);
 		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
@@ -1544,7 +1639,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	}
 	if (ImGui::CollapsingHeader("Water")) {
 		{
-			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (scrolling texture)", "Off (plain colour)",
+			static const char* const waterLevels[RenderSettings::WATER_LEVELS] = { "Original (two drifting texture layers)", "Off (plain colour)",
 				"Very low (bump-mapped ripples)", "Low", "Medium", "High (tessellated waves)", "Very high", "Ultra" };
 			ImGui::Combo("Water", &s.waterQuality, waterLevels, RenderSettings::WATER_LEVELS);
 		}
@@ -3184,7 +3279,13 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (obj->animSynchronizedTask != -1 && !remembered) {
 		CliScriptContext ctx{ client, obj };
 		float frac = client->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
-		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * frac * 1000.0f);
+		// as WKB.exe's 0x507ec0: clamped to 0..1, in steps of 1 %, and only forward (a site that takes
+		// damage doesn't take its scaffold down)
+		static std::unordered_map<uint32_t, std::pair<int, float>> shown;
+		auto& [task, most] = shown[obj->id];
+		if (task != obj->animSynchronizedTask) { task = obj->animSynchronizedTask; most = 0.0f; }
+		most = std::max(most, std::floor(std::clamp(frac, 0.0f, 1.0f) * 100.0f) / 100.0f);
+		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * most * 1000.0f);
 	}
 	else if (!remembered)
 		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
@@ -3204,7 +3305,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			return bp->shearModel;
 		}
 	};
-	if (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))
+	if (obj->shadowSwitch == 1 || (obj->shadowSwitch != 0 && (obj->blueprint->hasStaticShadow || (g_renderSettings.wallShadows && isWallPiece(obj->blueprint)))))
 		obj->sceneEntity.flags |= SceneEntity::SEFLAG_STATIC_SHADOW;
 	// the fields in winter (wkbai's seasons; they give no food then): bare soil
 	if (client->environmentActive && client->environmentSettings.seasons && client->environment.season == 3
@@ -3262,6 +3363,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 
 	scene->add(&obj->sceneEntity);
 	numObjectsDrawn++;
+	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+		s_benchFireBuildings.push_back(obj);
 	// Extend map: the level's tree models, to grow its trees with (a few of each kind seen)
 	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
 		const std::string& name = obj->blueprint->name;
@@ -3369,6 +3472,63 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 				nextSelFromBox.push_back(obj);
 			}
 		}
+	}
+}
+
+// test runs: "benchmark": { "burnBuildings": n, "burnDamage": d } sets the n buildings drawn
+// nearest the camera on fire, as the game set's "Building Fire" effects (Missiles\Fire
+// Buildings\DEFAULT1-4.MESH3 and their PS_Fire_Building points) at one to three of their MI_
+// points, more the more damaged (d: their integrity, 0..1; else each its own, 0.1 to 0.9): only
+// drawn, nothing reaches the game, to see and time the fires (FireEffects.h)
+void ClientInterface::drawBenchmarkFires()
+{
+	std::vector<ClientGameObject*> drawn;
+	drawn.swap(s_benchFireBuildings);
+	static const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
+	static const int wanted = bench.is_object() ? bench.value("burnBuildings", 0) : 0;
+	static const float fixedDamage = bench.is_object() ? bench.value("burnDamage", -1.0f) : -1.0f;
+	if (wanted <= 0 || !client->gameSet || !scene)
+		return;
+	const Vector3 eye = client->camera.position;
+	std::sort(drawn.begin(), drawn.end(), [&](ClientGameObject* a, ClientGameObject* b) {
+		return (a->position - eye).sqlen2xz() < (b->position - eye).sqlen2xz() || ((a->position - eye).sqlen2xz() == (b->position - eye).sqlen2xz() && a->id < b->id);
+	});
+	static const char* const fires[4] = { "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT1.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT2.MESH3", "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT3.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT4.MESH3" };
+	int burning = 0;
+	for (ClientGameObject* obj : drawn) {
+		if (burning >= wanted)
+			break;
+		Model* model = obj->sceneEntity.model;
+		if (!model)
+			continue;
+		std::vector<Vector3> points;
+		for (size_t i = 0; i < model->getNumAPs(); i++)
+			if (model->getAPInfo(i).tag.compare(0, 3, "MI_") == 0) {
+				auto st = model->getAPState(i, obj->sceneEntity.animTime);
+				points.push_back(st.position);
+			}
+		if (points.empty())
+			continue;
+		const uint32_t h = obj->id * 2654435761u;
+		const float integrity = fixedDamage >= 0.0f ? std::clamp(fixedDamage, 0.0f, 1.0f) : 0.1f + 0.8f * ((h >> 8) & 255) / 255.0f;
+		FireFx::SetDamage(obj->id, integrity);
+		const int count = std::min((int)points.size(), integrity > 0.66f ? 1 : integrity > 0.33f ? 2 : 3);
+		for (int k = 0; k < count; k++) {
+			const Vector3& at = points[(h + (uint32_t)k * 7u) % points.size()];
+			SceneEntity& e = attachSceneEntities.emplace_back();
+			e.model = client->gameSet->modelCache.getModel(fires[(h + (uint32_t)k) % 4]);
+			e.transform = Matrix::getTranslationMatrix(at) * obj->sceneEntity.transform;
+			e.color = 0;
+			e.flags = 0;
+			e.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
+			if (!e.model)
+				continue;
+			scene->add(&e);
+			drawAttachmentPoints(&e, FireFx::Level() > FireFx::ORIGINAL ? obj->id : 0);
+		}
+		burning++;
 	}
 }
 
@@ -3635,6 +3795,45 @@ void ClientInterface::iter()
 		if (singlePlayer && !client->timeManager.paused) {
 			client->sendPauseRequest(true);
 			menuPausedGame = true;
+		}
+	}
+	// DISPLAY_SAVE_GAME_MENU (mods): the in-game menu's Save screen, pausing a single-player game
+	if (client->saveMenuRequested) {
+		client->saveMenuRequested = false;
+		if (frontEnd && !frontEnd->isOpen() && saveGame && client->getLevel()) {
+			frontEnd->setSinglePlayer(singlePlayer);
+			frontEnd->setCanSave(true);
+			frontEnd->open("ingame");
+			frontEnd->open("save");
+			if (singlePlayer && !client->timeManager.paused) {
+				client->sendPauseRequest(true);
+				menuPausedGame = true;
+			}
+		}
+	}
+	// PLAY_LOOPED_SOUND (mods): the two latest looped sounds, at their targets, in the sound
+	// player's last two loop slots
+	if (SoundPlayer* sp = SoundPlayer::getSoundPlayer()) {
+		auto& loops = client->loopedSounds;
+		loops.erase(std::remove_if(loops.begin(), loops.end(), [this](const Client::LoopedSound& l) {
+			return !client->findObject(l.source) || !client->findObject(l.target); }), loops.end());
+		for (int k = 0; k < SoundPlayer::MAX_LOOPS - SoundPlayer::WATERFALL_LOOPS; k++) {
+			const int slot = SoundPlayer::MAX_LOOPS - 1 - k;
+			bool playing = false;
+			if (k < (int)loops.size()) {
+				const Client::LoopedSound& l = loops[loops.size() - 1 - k];
+				ClientGameObject* from = client->findObject(l.source);
+				ClientGameObject* to = client->findObject(l.target);
+				const bool toPlayer = to->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER;
+				const Vector3 at = toPlayer ? client->camera.position : to->position;
+				const auto [path, refDist, maxDist] = from->blueprint->getSound(l.soundTag, from->subtype, (at - client->camera.position).len3());
+				if (!path.empty()) {
+					sp->setLoop(slot, "Warrior Kings Game Set\\Sounds\\" + path, at, toPlayer ? 1000.0f : refDist, 1.0f, 1.0f);
+					playing = true;
+				}
+			}
+			if (!playing)
+				sp->setLoop(slot, "", Vector3(), 1.0f, 0.0f, 1.0f);
 		}
 	}
 	// Test runs: "benchmark": { ..., "openMenu": [screens] } shows the in-game menu in the screenshot
@@ -4136,7 +4335,10 @@ void ClientInterface::iter()
 	}
 
 	static bool clickedScriptedUi = false;
+	// the selection when the button went down (its voice when the click or box changed it)
+	static decltype(selection) selectionBeforeClick;
 	if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_LEFT]) {
+		selectionBeforeClick = selection;
 		debugger.selectObject(nextSelectedObject);
 		if (!g_modShift)
 			selection.clear();
@@ -4180,7 +4382,13 @@ void ClientInterface::iter()
 			selBoxOn = false;
 			//if (!g_modShift)
 			//	selection.clear();
-			selection.insert(nextSelFromBox.begin(), nextSelFromBox.end());
+			// a release within 25 pixels of the press is a click, not a box (WKB.exe 0x6549ef)
+			const int dx = selBoxEndX - selBoxStartX, dy = selBoxEndY - selBoxStartY;
+			if (dx * dx + dy * dy > 25 * 25)
+				selection.insert(nextSelFromBox.begin(), nextSelFromBox.end());
+			// "Selected": the new selection answers
+			if (selection != selectionBeforeClick && !selection.empty())
+				PlaySelectionVoice(client, selection, "Selected");
 		}
 	}
 
@@ -4197,7 +4405,13 @@ void ClientInterface::iter()
 		showOrderFlag(peapos, false);
 	}
 	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
-		if (stampdownBlueprint && stampdownPlayer) {
+		const int sbType = stampdownBlueprint ? stampdownBlueprint->buildingType : -1;
+		if (stampdownBlueprint && stampdownPlayer && stampdownFromCommand && (sbType == Tags::BUILDINGTYPE_WALL
+			|| sbType == Tags::BUILDINGTYPE_WALL_CORNER_IN || sbType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || sbType == Tags::BUILDINGTYPE_WALL_CROSSROADS)) {
+			// a wall: laid on the button's release, along the drag
+			wallDrag = { true, peapos };
+		}
+		else if (stampdownBlueprint && stampdownPlayer) {
 			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand, stampdownOrientation());
 			if (stampdownFromCommand) {
 				const Command* cmd = &client->gameSet->commands[client->gameSet->commands.names.getIndex("Build")];
@@ -4227,6 +4441,28 @@ void ClientInterface::iter()
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
+	}
+	if (wallDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
+		wallDrag.active = false;
+		if (stampdownBlueprint && stampdownPlayer) {
+			const int buildIndex = client->gameSet->commands.names.getIndex("Build");
+			const Command* build = buildIndex >= 0 ? &client->gameSet->commands[buildIndex] : nullptr;
+			bool first = true;
+			for (const auto& [pos, turn] : wallLine(wallDrag.start, peapos)) {
+				client->sendStampdown(stampdownBlueprint, stampdownPlayer, pos, sendStampdownEvent, true, turn);
+				// the builders take the pieces one after the other, in the line's order
+				if (build)
+					for (ClientGameObject* obj : selection)
+						if (obj && std::find(obj->blueprint->offeredCommands.begin(), obj->blueprint->offeredCommands.end(), build) != obj->blueprint->offeredCommands.end()) {
+							const int assignmentMode = !first ? Tags::ORDERASSIGNMODE_DO_LAST
+								: g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+							client->sendBuildLastStampdownedObject(obj, assignmentMode);
+						}
+				first = false;
+			}
+			if (!g_modShift && !g_modCtrl)
+				stampdownBlueprint = nullptr;
+		}
 	}
 	if (formationDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
 		formationDrag.active = false;
@@ -4803,6 +5039,16 @@ void ClientInterface::iter()
 					const std::string cmdname = client->gameSet->commands.names.getString(cmd->id);
 					if (!filter(cmdname))
 						continue;
+					// Formation makes one only from 8 or more of the player's characters (the
+					// server's rule, WKB.exe 0x54f0d0): with fewer the button did nothing, so none
+					if (cmdname == "Formation") {
+						int characters = 0;
+						for (ClientGameObject* obj : selection)
+							if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->getPlayer() == client->clientPlayer.get())
+								characters++;
+						if (characters < 8)
+							continue;
+					}
 					auto iconPred = [this, &ctx](int eq) {return client->gameSet->equations[eq]->booleval(&ctx); };
 					auto condPred = [&ctx](GSCondition* cond) {return cond->test->booleval(&ctx); };
 					if (std::all_of(cmd->iconConditions.begin(), cmd->iconConditions.end(), iconPred)) {
@@ -4826,6 +5072,12 @@ void ClientInterface::iter()
 								cs.isCurrentOrder = cmd->order->bpid == sel->reportedCurrentOrder;
 								if (auto it = sel->buildingOrderCountMap.find(cmd->order->bpid); it != sel->buildingOrderCountMap.end())
 									cs.count = it->second;
+								// an upgrade's spawn button counts the spawns of the order it replaces too
+								if (const int old = cmd->order->replacesSpawnOrder; old >= 0) {
+									cs.isCurrentOrder = cs.isCurrentOrder || old == sel->reportedCurrentOrder;
+									if (auto it = sel->buildingOrderCountMap.find(old); it != sel->buildingOrderCountMap.end())
+										cs.count += it->second;
+								}
 							}
 							cmdStates.push_back(std::move(cs));
 							//cmdStates.push_back(lua.create_table_with(
@@ -5230,6 +5482,10 @@ void ClientInterface::iter()
 			psCache = new PSCache("Warrior Kings Game Set\\Particle_Systems");
 		if (!particleRenderer)
 			particleRenderer = new DefaultParticleRenderer(gfx, particlesContainer);
+		// the fires' look this frame (RenderSettings::fireQuality: Low and High with the enhanced
+		// renderers on Diligent)
+		FireFx::BeginFrame(g_renderSettings.fireQuality, dynamic_cast<DiligentGfx*>(gfx) && client->terrain && UseEnhancedRenderers(gfx));
+		s_benchFireBuildings.clear();
 
 		numObjectsDrawn = 0;
 		attachSceneEntities.clear();
@@ -5314,8 +5570,16 @@ void ClientInterface::iter()
 						continue;
 					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
 					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
-					const float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
-					std::array<float, 7> l = { at.x, at.y, at.z, 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f),
+					float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
+					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
+					// more its building is damaged
+					if (FireFx::Level() >= FireFx::HIGH) {
+						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
+						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
+						reach *= 1.0f + 0.25f * damage;
+					}
+					std::array<float, 7> l = { at.x, at.y, at.z, reach,
 						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
 					list.push_back({ (at - client->camera.position).sqlen3(), l });
 				}
@@ -5474,8 +5738,23 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, orientation);
+				// a wall on the ring: the piece the server puts there (a corner where the ring turns)
+				if (plan.placeBlueprint) {
+					test.model = finishedModel(plan.placeBlueprint);
+					const Vector3 at((int)(peapos.x / 5.0f) * 5.0f + 2.5f, peapos.y, (int)(peapos.z / 5.0f) * 5.0f + 2.5f);
+					test.transform = Matrix::getRotationYMatrix(-plan.placeOrientation.y) * Matrix::getTranslationMatrix(at);
+				}
 				for (const auto& verdict : plan.tiles)
 					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
+				// a wall being dragged: every piece of the line, green or red as each would be placed
+				if (wallDrag.active) {
+					const auto line = wallLine(wallDrag.start, peapos);
+					for (size_t i = 0; i + 1 < line.size(); i++) {
+						const auto piece = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, line[i].first, line[i].second);
+						for (const auto& verdict : piece.tiles)
+							footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok && piece.status == StampdownPlan::Status::Valid });
+					}
+				}
 				// red where it can't be placed (the server refuses it too), green where it can, as in
 				// the original
 				test.flags |= plan.status != StampdownPlan::Status::Valid ? SceneEntity::SEFLAG_BLOCKED : SceneEntity::SEFLAG_PLACEABLE;
@@ -5602,14 +5881,34 @@ void ClientInterface::iter()
 			flag.animTime = (uint32_t)SDL_GetTicks();
 			scene->add(&flag);
 		}
+		// (the fire levels: a looping effect's particles carry its object's id, a burning building's
+		// fires burn by its damage, FireFx::SetDamage; Original: as before, no id)
+		static const GameSet* fireItemsOf = nullptr;
+		static int fireIntegrity = -1, fireCapacity = -1;
+		if (FireFx::Level() > FireFx::ORIGINAL && fireItemsOf != client->gameSet.get()) {
+			fireItemsOf = client->gameSet.get();
+			fireIntegrity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity") : -1;
+			fireCapacity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
+		}
+		auto fireObject = [&](ClientGameObject* obj) -> uint32_t {
+			if (FireFx::Level() == FireFx::ORIGINAL || !obj)
+				return 0;
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fireIntegrity >= 0 && fireCapacity >= 0) {
+				const float capacity = obj->getItem(fireCapacity);
+				if (capacity > 0.0f)
+					FireFx::SetDamage(obj->id, obj->getItem(fireIntegrity) / capacity);
+			}
+			return obj->id;
+		};
 		for (auto& lsfx : client->loopingSpecialEffects) {
 			Vector3 ttpp = lsfx.second.transform.getTranslationVector().transformScreenCoords(client->camera.sceneMatrix);
 			if (ttpp.x >= -1 && ttpp.x <= 1 && ttpp.y >= -1 && ttpp.y <= 1 && ttpp.z >= -1 && ttpp.z <= 1) {
 				lsfx.second.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
 				scene->add(&lsfx.second);
-				drawAttachmentPoints(&lsfx.second);
+				drawAttachmentPoints(&lsfx.second, fireObject(lsfx.first.first.get()));
 			}
 		}
+		drawBenchmarkFires();
 		if (client->terrain) {
 			// a test run's sun ("benchmark": { "sunVector": [x, y, z] }), for comparing with the original
 			if (BenchmarkEnabled()) {
@@ -5715,6 +6014,8 @@ void ClientInterface::iter()
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
+		// the fires the particle renderer left to the fire shader (Low and High)
+		FireFx::Draw(gfx, client->camera, client->timeManager.currentTime);
 		particlesContainer->update(client->timeManager.currentTime);
 		ChimneySmoke::Draw(gfx, client->camera, client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
@@ -6120,7 +6421,9 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 				button.enabled = !lastPage || !b.onClickSequence.actionList.empty();
 				break;
 			case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-				button.enabled = !gtw.forceReadAllPages || lastPage;
+				// as WKB.exe's: a window of several pages closes once its last page has been shown
+				button.enabled = gtw.pages.size() <= 1 || client->gtwReadAll.count(index) || !b.onClickSequence.actionList.empty();
+				button.close = true;
 				break;
 			}
 			w.buttons.push_back(std::move(button));
@@ -6142,6 +6445,7 @@ void ClientInterface::updateGameWindows(FrontEnd* frontEnd)
 			if (state != MissionObjectives::HIDDEN)
 				objectives.entries.push_back({ GameText(lang.getText(key)), state == MissionObjectives::INACTIVE });
 		objectives.changed = client->objectivesChanged;
+		objectives.map = client->objectivesMapGraphic;
 	}
 	frontEnd->setObjectives(std::move(objectives));
 	if (toggleObjectivesRequested) {
@@ -6269,9 +6573,9 @@ void ClientInterface::gameWindowButton(int gtwIndex, int buttonIndex)
 	const int page = it->second, pages = (int)gtw.pages.size();
 	switch (button.onClickWindowAction) {
 	case Tags::GTW_BUTTON_WINDOW_ACTION_CLOSE_WINDOW:
-		if (gtw.forceReadAllPages && page + 1 < pages)
+		if (pages > 1 && !client->gtwReadAll.count(gtwIndex) && button.onClickSequence.actionList.empty())
 			return;
-		it->second = -1;
+		client->setGameTextWindowPage(gtwIndex, -1);
 		// the AI General's message read: the next one, if any, shows
 		if (gtwIndex == client->gameSet->gameTextWindows.names.getIndex("AI General Chat Window") && !client->chatDisplays.empty())
 			client->chatDisplays.pop_front();
