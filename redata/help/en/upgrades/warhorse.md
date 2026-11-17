@@ -4,10 +4,10 @@ ids: [upgrade/Warhorse, command/Research Warhorse]
 order: 10
 ---
 
-# Heavy Cavalry Heavy Cavalry Warhorse
+# Heavy Cavalry Warhorse
 
 <!-- gen:icon -->
-![Heavy Cavalry Heavy Cavalry Warhorse](game:interface/icons/upgrades/Warhorse.tga)
+![Heavy Cavalry Warhorse](game:interface/icons/upgrades/Warhorse.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

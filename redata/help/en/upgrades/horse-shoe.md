@@ -4,10 +4,10 @@ ids: [upgrade/Horse Shoe, command/Research Horse Shoe]
 order: 10
 ---
 
-# Heavy Cavalry Heavy Cavalry Horse Shoe
+# Heavy Cavalry Horse Shoe
 
 <!-- gen:icon -->
-![Heavy Cavalry Heavy Cavalry Horse Shoe](game:interface/icons/upgrades/Horseshoes.tga)
+![Heavy Cavalry Horse Shoe](game:interface/icons/upgrades/Horseshoes.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

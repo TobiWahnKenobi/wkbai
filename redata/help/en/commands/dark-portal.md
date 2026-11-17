@@ -4,10 +4,10 @@ ids: [command/Dark Portal]
 order: 10
 ---
 
-# Create Create Dark Portal
+# Create Dark Portal
 
 <!-- gen:icon -->
-![Create Create Dark Portal](game:interface/icons/SIC_Portal.tga)
+![Create Dark Portal](game:interface/icons/SIC_Portal.tga)
 <!-- /gen:icon -->
 
 ## Role

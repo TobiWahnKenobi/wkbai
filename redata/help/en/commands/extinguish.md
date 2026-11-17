@@ -4,10 +4,10 @@ ids: [command/Extinguish]
 order: 10
 ---
 
-# Extinguish Fire Fire
+# Extinguish Fire
 
 <!-- gen:icon -->
-![Extinguish Fire Fire](game:interface/icons/sic_Extinguish.tga)
+![Extinguish Fire](game:interface/icons/sic_Extinguish.tga)
 <!-- /gen:icon -->
 
 ## Role

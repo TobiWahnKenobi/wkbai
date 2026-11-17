@@ -4,10 +4,10 @@ ids: [command/Ring Bell]
 order: 10
 ---
 
-# Sanctuary (Sanctuary (Ring Bell))
+# Sanctuary (Ring Bell)
 
 <!-- gen:icon -->
-![Sanctuary (Sanctuary (Ring Bell))](game:interface/icons/SIC_Bell.tga)
+![Sanctuary (Ring Bell)](game:interface/icons/SIC_Bell.tga)
 <!-- /gen:icon -->
 
 ## Role

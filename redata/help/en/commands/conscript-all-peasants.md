@@ -4,10 +4,10 @@ ids: [command/Conscript all Peasants]
 order: 10
 ---
 
-# Conscript all Peasants into Militia into Militia
+# Conscript all Peasants into Militia
 
 <!-- gen:icon -->
-![Conscript all Peasants into Militia into Militia](game:interface/icons/SIC_Convert_to_Militia.tga)
+![Conscript all Peasants into Militia](game:interface/icons/SIC_Convert_to_Militia.tga)
 <!-- /gen:icon -->
 
 ## Role

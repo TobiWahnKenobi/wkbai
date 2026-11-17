@@ -2,6 +2,10 @@
 
     python -I tools/help/build_html.py [--lang en] [--out DIR] [--shots DIR]
 
+- --lang de: the German help (redata/help/de), written to DIR/de unless --out says otherwise.
+  Pages not translated yet are the English ones with a notice; a translation made from an older
+  English page gets an "out of date" notice (translation.py explains the fingerprint).
+
 - Writes DIR/<path>.html for every page, with the contents tree beside each one.
 - Screenshots (shot:<name>) are taken from --shots (default DIR/shots), never from git.
 - Prints every broken link, unknown help id and missing screenshot, and exits with 1 if a
@@ -10,10 +14,25 @@
 Standard library only. It understands the Markdown the pages use (CommonMark's common part:
 headings, paragraphs, lists, block quotes, tables, fenced code, links, images, emphasis).
 """
-import argparse, html, json, os, re, sys, urllib.parse
+import argparse, hashlib, html, json, os, re, sys, urllib.parse
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 HELP = os.path.join(ROOT, "redata", "help")
+
+
+def fingerprint(text):
+    """As translation.py: the English page's body without front matter, as 12 hex digits."""
+    text = text.replace("\r\n", "\n")
+    m = re.match(r"---\n(.*?)\n---\n?", text, re.S)
+    body = (text[m.end():] if m else text).strip()
+    return hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
+
+
+def heading_parts(text):
+    """A heading's text and its anchor: an explicit <!-- #anchor --> (kept by translations), or its slug."""
+    a = re.search(r"<!--\s*#([\w-]+)\s*-->", text)
+    clean = re.sub(r"\s*<!--.*?-->\s*", " ", text).strip()
+    return clean, (a.group(1) if a else slug(clean))
 
 
 def slug(text):
@@ -43,19 +62,37 @@ def parse_front(text):
 class Site:
     def __init__(self, lang, out, shots):
         self.lang, self.out, self.shots = lang, out, shots
-        self.base = os.path.join(HELP, lang)
+        self.base = os.path.join(HELP, "en")
         self.pages = {}   # rel path (no .md, '/') -> dict
         self.ids = {}     # help id -> (page, anchor)
         self.problems, self.missing_shots = [], set()
+        self.ui = json.load(open(os.path.join(self.base, "_language.json"), encoding="utf-8"))["ui"]
+        if lang != "en":
+            lp = os.path.join(HELP, lang, "_language.json")
+            if os.path.exists(lp):
+                self.ui.update({k: v for k, v in json.load(open(lp, encoding="utf-8")).get("ui", {}).items() if v})
+        self.counts = {"translated": 0, "outOfDate": 0, "english": 0}
         for dirpath, _, files in os.walk(self.base):
             for f in files:
                 if not f.endswith(".md"):
                     continue
                 full = os.path.join(dirpath, f)
                 rel = os.path.relpath(full, self.base).replace("\\", "/")[:-3]
-                meta, body = parse_front(open(full, encoding="utf-8").read())
-                heads = {slug(m.group(2)) for m in re.finditer(r"^(#{1,6})\s+(.+?)\s*#*\s*$", body, re.M)}
-                self.pages[rel] = {"meta": meta, "body": body, "heads": heads,
+                en_text = open(full, encoding="utf-8").read()
+                meta, body = parse_front(en_text)
+                state = ""
+                if lang != "en":
+                    tr = os.path.join(HELP, lang, rel + ".md")
+                    if os.path.exists(tr):
+                        tmeta, body = parse_front(open(tr, encoding="utf-8").read())
+                        state = "translated" if tmeta.get("translation-of") == fingerprint(en_text) else "outOfDate"
+                        # a translation keeps the English page's ids; its title and order are its own
+                        meta = dict(meta, **{k: v for k, v in tmeta.items() if k in ("title", "order", "parent")})
+                    else:
+                        state = "english"
+                    self.counts[state] += 1
+                heads = {heading_parts(m.group(2))[1] for m in re.finditer(r"^(#{1,6})\s+(.+?)\s*#*\s*$", body, re.M)}
+                self.pages[rel] = {"meta": meta, "body": body, "heads": heads, "state": state,
                                    "title": meta.get("title") or rel.split("/")[-1]}
         for rel, p in self.pages.items():
             ids = p["meta"].get("ids", [])
@@ -150,11 +187,16 @@ class Site:
         if url.startswith("game:"):
             return f'<span class="gameart" title="{html.escape(url[5:])}">[{a or "game art"}]</span>'
         full = os.path.normpath(os.path.join(self.base, os.path.dirname(frm), url))
+        img_root = os.path.join(HELP, "img")
+        if self.lang != "en" and full.startswith(img_root + os.sep):
+            own = os.path.join(img_root, self.lang, os.path.relpath(full, img_root))
+            if os.path.exists(own):
+                full = own
         if not os.path.exists(full):
             self.problems.append(f"{frm}: picture {url}: no such file")
         rel = os.path.relpath(full, os.path.dirname(os.path.join(self.base, frm))).replace("\\", "/")
         # pictures are copied beside the pages, keeping the folder layout under redata/help
-        dst = os.path.join(self.out, os.path.relpath(full, self.base))
+        dst = os.path.normpath(os.path.join(self.out, os.path.relpath(full, self.base)))
         if os.path.exists(full):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             with open(full, "rb") as s, open(dst, "wb") as d:
@@ -177,7 +219,7 @@ class Site:
             s = line.strip()
             if not s:
                 flush(); i += 1; continue
-            if s.startswith("<!--"):
+            if s.startswith("<!--") and not re.match(r"^#{1,6}\s", s):
                 flush()
                 while "-->" not in lines[i]:
                     i += 1
@@ -199,7 +241,8 @@ class Site:
             if m:
                 flush()
                 n = len(m.group(1))
-                out.append(f'<h{n} id="{slug(m.group(2))}">{self.inline(frm, m.group(2))}</h{n}>')
+                text, anchor = heading_parts(m.group(2))
+                out.append(f'<h{n} id="{anchor}">{self.inline(frm, text)}</h{n}>')
                 i += 1; continue
             if re.match(r"^(-{3,}|\*{3,}|_{3,})$", s):
                 flush(); out.append("<hr>"); i += 1; continue
@@ -299,18 +342,22 @@ class Site:
                         h += "<ul>" + sub + "</ul>"
                 h += "</li>"
             return h
-        return f'<ul class="tree"><li><a href="{self.href(frm, "index")}">Start</a></li>' + node("", 0) + "</ul>"
+        return f'<ul class="tree"><li><a href="{self.href(frm, "index")}">{html.escape(self.ui["home"])}</a></li>' + node("", 0) + "</ul>"
 
     def build(self):
         for rel, p in sorted(self.pages.items()):
             body = self.blocks(rel, p["body"])
+            if p["state"] == "english":
+                body = f'<p class="notice">{html.escape(self.ui["notTranslated"])}</p>' + body
+            elif p["state"] == "outOfDate":
+                body = f'<p class="notice">{html.escape(self.ui["outOfDate"])}</p>' + body
             dst = os.path.join(self.out, rel + ".html")
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             css = os.path.relpath(os.path.join(self.out, "help.css"), os.path.dirname(dst)).replace("\\", "/")
             with open(dst, "w", encoding="utf-8") as f:
-                f.write(f"""<!doctype html><html lang="{self.lang}"><head><meta charset="utf-8">
+                f.write(f"""<!doctype html><html lang="{self.lang if p['state'] != 'english' else 'en'}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(p['title'])} - wkbai help</title><link rel="stylesheet" href="{css}"></head>
+<title>{html.escape(p['title'])} - wkbai {html.escape(self.ui['windowTitle'])}</title><link rel="stylesheet" href="{css}"></head>
 <body><nav>{self.tree_html(rel)}</nav><main>{body}</main></body></html>""")
         with open(os.path.join(self.out, "help.css"), "w", encoding="utf-8") as f:
             f.write(CSS)
@@ -328,6 +375,7 @@ table{border-collapse:collapse;margin:12px 0;display:block;overflow-x:auto}th,td
 figure{margin:14px 0}figure img,video{max-width:100%;border:1px solid var(--line)}figcaption{color:var(--muted);font-size:0.9em}
 figure.noshot div{border:1px dashed var(--line);padding:30px;text-align:center;color:var(--muted);font:14px system-ui,sans-serif}
 .facts{border-left:4px solid var(--accent);background:var(--panel);padding:8px 12px;font:14px system-ui,sans-serif;color:var(--muted)}
+.notice{border:1px solid var(--line);background:var(--panel);padding:8px 12px;font:14px system-ui,sans-serif;color:var(--muted)}
 .show{border-bottom:1px dotted var(--accent);cursor:help}.gameart{color:var(--muted)}blockquote{border-left:3px solid var(--line);margin-left:0;padding-left:14px;color:var(--muted)}
 @media (max-width:760px){body{display:block}nav{width:auto;height:auto;position:static}main{padding:16px}}
 """
@@ -336,16 +384,21 @@ figure.noshot div{border:1px dashed var(--line);padding:30px;text-align:center;c
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lang", default="en")
-    ap.add_argument("--out", default=os.path.join("C:\\Dev", "help-html"))
+    ap.add_argument("--out")
     ap.add_argument("--shots")
     a = ap.parse_args()
-    shots = a.shots or os.path.join(a.out, "shots")
+    base_out = os.path.join("C:\\Dev", "help-html")
+    a.out = a.out or (base_out if a.lang == "en" else os.path.join(base_out, a.lang))
+    shots = a.shots or os.path.join(base_out, "shots")
     site = Site(a.lang, a.out, shots)
     site.build()
     for p in site.problems:
         print("PROBLEM", p)
     if site.missing_shots:
         print(f"{len(site.missing_shots)} screenshots not taken yet:", " ".join(sorted(site.missing_shots)))
+    if a.lang != "en":
+        c = site.counts
+        print(f"{a.lang}: {c['translated']} pages translated, {c['outOfDate']} out of date, {c['english']} shown in English")
     print(f"{len(site.pages)} pages, {len(site.ids)} help ids, {len(site.problems)} problems -> {a.out}")
     sys.exit(1 if site.problems else 0)
 

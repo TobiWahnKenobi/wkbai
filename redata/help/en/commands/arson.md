@@ -4,7 +4,7 @@ ids: [command/Arson]
 order: 10
 ---
 
-# Arson Attack Attack
+# Arson Attack
 
 ## Role
 

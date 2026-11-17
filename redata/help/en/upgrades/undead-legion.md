@@ -38,7 +38,7 @@ An Arcanum research that lets the Hall of Warriors raise the [undead legion](../
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Invoke Hecate](../units/undead-legion.md)
+- **Unlocks:** [Undead Legion](../units/undead-legion.md)
 <!-- /gen:leads -->
 
 ## Commands

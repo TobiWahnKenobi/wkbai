@@ -4,7 +4,7 @@ ids: [command/Resupply]
 order: 10
 ---
 
-# Resupply Ammunition Ammunition
+# Resupply Ammunition
 
 ## Role
 

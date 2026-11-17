@@ -32,6 +32,12 @@ names are taken from Language.txt, never its descriptions; the prose stays our o
 game the help viewer titles these pages from the loaded game's own Language.txt, so a translated
 or modded game shows its own names.)
 
+Other languages (see redata/help/TRANSLATING.md): --lang <code> works on redata/help/<code>/.
+It never creates pages there (a translator starts them with translation.py start); it refreshes
+the generated parts of the pages that exist, in that language: the names from --language (that
+language's Language.txt) and the fixed phrases from tools/help/strings/<code>.json. A phrase without
+a translation stays English. --phrases writes the list of phrases (tools/help/strings/template.json).
+
 Standard library only.
 """
 import argparse, json, os, re, sys
@@ -816,8 +822,18 @@ class Catalogue:
                 out.append(f"- `{it}` (set by the level or a script, not by anything you build)")
         for ic in c["icon_cond"]:
             if ic in ICON_NOTES:
-                out.append("- " + ICON_NOTES[ic].replace("../" + frm + "/", ""))
+                out.append("- " + self.title_links(ICON_NOTES[ic]).replace("../" + frm + "/", ""))
         return out
+
+    def title_links(self, text):
+        """[x](../units/slug.md) and so on: the link text set to that page's current title."""
+        by_path = {q.path: q for q in list(self.units.values()) + list(self.buildings.values())
+                   + list(self.upgrades.values()) + list(self.cmds.values())}
+
+        def fix(m):
+            q = by_path.get(m.group(2) + "/" + m.group(3))
+            return f"[{q.title if q else m.group(1)}](../{m.group(2)}/{m.group(3)}.md{m.group(4) or ''})"
+        return re.sub(r"\[([^\]]*)\]\(\.\./(units|buildings|upgrades|commands)/([^)#]+)\.md(#[^)]*)?\)", fix, text)
 
     def d_player_start(self):
         if not hasattr(self, "_start"):
@@ -1134,6 +1150,81 @@ TRAINED_TITLE = {"units": "Trained at / Built by", "buildings": "Built by", "upg
 PLACEHOLDER = "*To be written.*"
 
 
+# The fixed phrases of the generated parts, for translations (tools/help/strings/<lang>.json).
+# "{0}" stands for a link. Matched whole (not inside a longer word), longest first.
+SENTENCES = [
+    "Trained at:", "Built by:", "Comes from:", "Builds:", "Can turn into or call up:", "Trains:",
+    "Research here:", "Building it unlocks:", "Finishing it turns into or calls up:", "Researched at:",
+    "Unlocks:", "Turns units or buildings into, or calls up:", "Offered by:",
+    "(the engine is put up on the spot like a building, then rolls out)",
+    "Not trained in a normal game: it comes with the level or the campaign.",
+    "Nothing beyond the building that trains it and the cost.",
+    "Nothing: it unlocks no building, unit or research.", "Only the basic orders.",
+    "Not built directly: it is on the map from the start.", "Nothing beyond the cost.",
+    "Nothing new: it trains no units and offers no research.", "None of its own.",
+    "Nothing beyond the building and the cost.", "No new buttons: it improves what you already have.",
+    "Nothing: it is there whenever the unit or building is.", "The research is its own button:",
+    "(set by the level or a script, not by anything you build)", "(not offered in a normal game)",
+    "building a", "the research", "the command", "every unit except", "(any level)",
+]
+LABELS = [
+    "Cost", "Build time", "Train time", "Food upkeep", "Hit points", "Armour", "Melee attack",
+    "Missile attack", "Damage to buildings", "Speed", "Sight", "Strength (structural integrity)",
+    "Repair cost", "Research time", "Name", "Trained at / built by", "Built by", "Research", "Where",
+    "Command", "Button",
+]
+WORDS = ["food", "wood", "gold", "stone", "every", "s", "per missile", "per blow", "range", "front",
+         "sides", "rear", "yes", "no", "units", "buildings", "and", "or", "none"]
+
+LANG = {"code": "en", "phrases": {}}   # set by --lang
+
+
+def protect_links(text):
+    links = []
+
+    def keep(m):
+        links.append(m.group(0))
+        return "{0}"
+    return re.sub(r"!?\[[^\]]*\]\([^)]*\)", keep, text), links
+
+
+def phrase_list():
+    """Every phrase a translation of the generated parts can give, English first."""
+    out = list(SENTENCES)
+    out += [protect_links(v)[0] for v in ICON_NOTES.values()]
+    out += [protect_links(v)[0] for v in CURSOR_NOTES.values()] + [protect_links(CURSOR_NOTE)[0]]
+    out += [t for _, t in UNIT_GROUPS + BUILDING_GROUPS + UPGRADE_GROUPS + COMMAND_GROUPS]
+    out += [t for t, _ in INDEX_FRONT.values()] + [PLACEHOLDER]
+    out += LABELS + WORDS
+    return list(dict.fromkeys(out))
+
+
+def translate(md):
+    """Generated Markdown in LANG's phrases; links, code and the facts block stay as they are."""
+    table = {k: v for k, v in LANG["phrases"].items() if v}
+    if not table and LANG.get("decimal", ".") == ".":
+        return md
+    table = table or {"\x00": "\x00"}
+    out, pos = [], 0
+    for c in re.finditer(r"```.*?```|`[^`]*`|<!--.*?-->", md, re.S):
+        out.append(_translate_text(md[pos:c.start()], table))
+        out.append(c.group(0))
+        pos = c.end()
+    out.append(_translate_text(md[pos:], table))
+    return "".join(out)
+
+
+def _translate_text(text, table):
+    text, links = protect_links(text)
+    keys = sorted(table, key=len, reverse=True)
+    rx = re.compile(r"(?<![\w{])(" + "|".join(re.escape(k) for k in keys) + r")(?![\w}])")
+    text = rx.sub(lambda m: table[m.group(1)], text)
+    if LANG.get("decimal", ".") != ".":          # 2.5 -> 2,5
+        text = re.sub(r"(?<=\d)\.(?=\d)", LANG["decimal"], text)
+    it = iter(links)
+    return re.sub(r"\{0\}", lambda m: next(it, "{0}"), text)
+
+
 def static_table(rows):
     if not rows:
         return ""
@@ -1272,12 +1363,14 @@ def update_page(text, p):
     for key in GEN_KEYS:
         if key in p.sections:
             parts[key] = gen(key, p.sections[key] or "-")
+    if LANG["code"] != "en":
+        parts = {k: translate(v) for k, v in parts.items()}
     for key, new in parts.items():
         pat = re.compile(r"<!-- gen:" + key + r" -->.*?<!-- /gen:" + key + r" -->", re.S)
         if new and pat.search(text):
             text = pat.sub(lambda m: new, text, count=1)
     m = re.match(r"---\n(.*?)\n---", text, re.S)
-    if m:
+    if m and LANG["code"] == "en":   # a translation takes its ids from the English page
         fm = m.group(1)
         im = re.search(r"^ids:\s*\[(.*)\]\s*$", fm, re.M)
         if im:
@@ -1411,7 +1504,9 @@ INDEX_FRONT = {
 
 def write_index(folder, pages, cat, force):
     path = os.path.join(HELP, folder, "index.md")
-    body = gen("index", index_page(folder, pages, cat))
+    body = gen("index", translate(index_page(folder, pages, cat)))
+    if LANG["code"] != "en" and not os.path.exists(path):
+        return
     if os.path.exists(path) and not force:
         text = open(path, encoding="utf-8").read()
         pat = re.compile(r"<!-- gen:index -->.*?<!-- /gen:index -->", re.S)
@@ -1431,17 +1526,48 @@ def main():
     ap.add_argument("--dump", default="")
     ap.add_argument("--language", default="", help="the game's Languages/Language.txt: titles as the player sees them")
     ap.add_argument("--renames", default="", help="with --language: write {old title: new title} as JSON")
+    ap.add_argument("--lang", default="en", help="the help language folder to work on (redata/help/<lang>)")
+    ap.add_argument("--phrases", action="store_true", help="write tools/help/strings/template.json and stop")
     a = ap.parse_args()
+    global HELP
+    if a.phrases:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strings", "template.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        json.dump({"language": "", "decimal": ".", "phrases": {k: "" for k in phrase_list()}}, open(path, "w", encoding="utf-8"),
+                  indent=1, ensure_ascii=False)
+        print(f"{len(phrase_list())} phrases -> {path}")
+        return
+    if a.lang != "en":
+        HELP = os.path.join(os.path.dirname(HELP), a.lang)
+        if not os.path.isdir(HELP):
+            sys.exit(f"no help folder for '{a.lang}' yet: start one with tools/help/translation.py new {a.lang}")
+        sp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strings", a.lang + ".json")
+        LANG["code"] = a.lang
+        if os.path.exists(sp):
+            strings = json.load(open(sp, encoding="utf-8"))
+            LANG["phrases"] = strings.get("phrases", {})
+            LANG["decimal"] = strings.get("decimal", ".") or "."
     gs = GameSet(a.gameset)
     data = Data(gs)
     cat = Catalogue(data)
+    folders = {"units": cat.units, "buildings": cat.buildings, "upgrades": cat.upgrades, "commands": cat.cmds}
+    if not a.language:
+        # no Language.txt: the pages' own titles (the game's names from an earlier --language run)
+        # are kept, and the generated links use them
+        for f, ps in folders.items():
+            for p in ps.values():
+                path = os.path.join(HELP, p.folder, p.slug + ".md")
+                if os.path.exists(path):
+                    t = re.search(r"^title:\s*(.*)$", open(path, encoding="utf-8").read(), re.M)
+                    if t and t.group(1).strip():
+                        p.title = t.group(1).strip()
+        cat._fill()
     if a.language:
         renamed = apply_game_titles(cat, data, load_language(a.language))
         cat._fill()   # the generated sections link by title: fill them again with the new ones
         print(f"{sum(len(v) for v in renamed.values())} titles taken from the game's names")
         if a.renames:
             json.dump(renamed, open(a.renames, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
-    folders = {"units": cat.units, "buildings": cat.buildings, "upgrades": cat.upgrades, "commands": cat.cmds}
     only = set(a.only.split(",")) if a.only else set(folders)
     if a.list:
         for f, ps in folders.items():
@@ -1466,6 +1592,8 @@ def main():
         n_new = n_upd = 0
         for p in sorted(ps.values(), key=lambda x: x.slug):
             path = os.path.join(HELP, p.folder, p.slug + ".md")
+            if a.lang != "en" and not os.path.exists(path):
+                continue                 # translations are started by hand (translation.py start)
             if os.path.exists(path) and not a.force:
                 old = open(path, encoding="utf-8").read()
                 new = update_page(old, p)

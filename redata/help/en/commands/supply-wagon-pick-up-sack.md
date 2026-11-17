@@ -4,7 +4,7 @@ ids: [command/Supply Wagon - Pick up Sack]
 order: 10
 ---
 
-# Pick Up Resource Sack (Pick Up Resource Sack (Supply Wagon - Pick up Sack))
+# Pick Up Resource Sack (Supply Wagon - Pick up Sack)
 
 ## Role
 

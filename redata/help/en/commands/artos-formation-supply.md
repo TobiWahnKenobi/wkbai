@@ -4,7 +4,7 @@ ids: [command/Artos Formation Supply]
 order: 10
 ---
 
-# Distribute Food Rations (Baron Distribute Food Rations (Baron Artos Formation Supply))
+# Distribute Food Rations (Baron Artos Formation Supply)
 
 ## Role
 

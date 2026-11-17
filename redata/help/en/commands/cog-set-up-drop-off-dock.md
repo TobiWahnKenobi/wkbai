@@ -4,7 +4,7 @@ ids: [command/Cog Set Up Drop Off Dock]
 order: 10
 ---
 
-# Deliver Resources (Deliver Resources (Cog Set Up Drop Off Dock))
+# Deliver Resources (Cog Set Up Drop Off Dock)
 
 ## Role
 

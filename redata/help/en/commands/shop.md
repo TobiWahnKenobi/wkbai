@@ -4,10 +4,10 @@ ids: [command/Shop]
 order: 10
 ---
 
-# Trade at Trade at Shop
+# Trade at Shop
 
 <!-- gen:icon -->
-![Trade at Trade at Shop](game:interface/icons/sic_shop.tga)
+![Trade at Shop](game:interface/icons/sic_shop.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

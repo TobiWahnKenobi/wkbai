@@ -4,7 +4,7 @@ ids: [command/Peasant Pick up Sack]
 order: 10
 ---
 
-# Pick Up Resource Sack (Pick Up Resource Sack (Peasant Pick up Sack))
+# Pick Up Resource Sack (Peasant Pick up Sack)
 
 ## Role
 

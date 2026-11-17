@@ -1,0 +1,32 @@
+{
+ "code": "en",
+ "name": "English",
+ "englishName": "English",
+ "fallback": "",
+ "detect": {
+  "FRONT_END_MAIN_MENU_SKIRMISH": "Skirmish",
+  "FRONT_END_MAIN_MENU_EXIT": "Exit"
+ },
+ "ui": {
+  "windowTitle": "Help",
+  "contents": "Contents",
+  "search": "Search",
+  "searchNoResults": "Nothing found for \"{0}\".",
+  "back": "Back",
+  "forward": "Forward",
+  "home": "Start page",
+  "contextMenuHelp": "Help: {0}",
+  "whatsThis": "What's this? Click on something to see its help. Esc: cancel.",
+  "takeScreenshots": "Take screenshots",
+  "takingScreenshots": "Taking screenshots: {0} of {1}",
+  "screenshotMissing": "Screenshot not taken yet: {0}",
+  "playVideo": "Play",
+  "liveNumbers": "Live numbers from the game you are playing",
+  "openLinkQuestion": "Open {0} in your web browser?",
+  "showMeNotOnScreen": "This is not on screen right now. It is on: {0}",
+  "notTranslated": "This page is not translated yet. Here is the English page.",
+  "outOfDate": "The English page has changed since this translation was made; some of it may be out of date.",
+  "language": "Language of the help",
+  "languageAuto": "As the game"
+ }
+}

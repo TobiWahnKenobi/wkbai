@@ -1,6 +1,6 @@
 ---
 title: Using the help
-ids: [help/viewer, help/context-menu#help-for-anything-on-screen, help/whats-this#whats-this]
+ids: [help/viewer, option/helpLanguage#the-help-window, help/context-menu#help-for-anything-on-screen, help/whats-this#whats-this]
 order: 900
 ---
 
@@ -25,6 +25,7 @@ Press **Shift+F1** and the cursor turns into a question mark. The next click ope
 - **Show me** links flash the part of the screen a page talks about.
 - **Live numbers:** the tables of costs, hit points and attack on unit and building pages come from the game you are playing, mods included.
 - **Screenshots:** wkbai takes them on your computer from your own copy of the game, the first time you open the help, or when you press **Take screenshots**. Until then a frame with a description stands in their place.
+- **Language:** the help opens in the language of your copy of the game when it has a translation, else in English. Pages not translated yet are shown in English. **Help language** in the help window's menu chooses another one.
 - In single player the game pauses while the help is open (Options can switch that off). In multiplayer it goes on.
 
 > wkbai: the help viewer is planned; these pages describe how it will work. Until then the same pages are in the HTML manual.

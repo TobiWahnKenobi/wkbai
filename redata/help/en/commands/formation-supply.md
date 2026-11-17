@@ -4,7 +4,7 @@ ids: [command/Formation Supply]
 order: 10
 ---
 
-# Distribute Food Rations (Distribute Food Rations (Formation Supply))
+# Distribute Food Rations (Formation Supply)
 
 ## Role
 

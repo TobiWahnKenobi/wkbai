@@ -4,10 +4,10 @@ ids: [command/Docking]
 order: 10
 ---
 
-# Repair (Repair (Docking))
+# Repair (Docking)
 
 <!-- gen:icon -->
-![Repair (Repair (Docking))](game:interface/icons/sic_heal.tga)
+![Repair (Docking)](game:interface/icons/sic_heal.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

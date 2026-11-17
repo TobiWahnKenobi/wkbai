@@ -4,7 +4,8 @@ The help is a folder of Markdown pages. wkbai shows them in its help viewer (F1,
 
 ## Files
 
-- `redata/help/<language>/<path>.md`, UTF-8. English is `en/`. A missing page in another language falls back to `en/`.
+- `redata/help/<language>/<path>.md`, UTF-8. English is `en/`, the original; other languages are folders beside it with the same paths, and a page missing there falls back to `en/`. `TRANSLATING.md` explains how to translate.
+- `redata/help/<language>/_language.json`: the language's name, the help window's own texts (`ui`) and how to recognise the game's language (`detect`).
 - `redata/help/img/`: our own pictures and diagrams (never game art). A diagram's source (`.mmd`, `.dot`, `.svg`) sits next to its `.png`.
 - `redata/help/shots/*.json`: the lists of screenshots the pages use, one file per area (see "Screenshots").
 
@@ -24,6 +25,10 @@ order: 30
 - **ids:** the help ids that open this page. The page's path without `.md` (`ui/hud/minimap`) is always one of them. `id#slug` opens the page at a heading. A heading's slug is its text in lower case, with spaces as `-` and everything but letters, digits and `-` dropped ("Zoom buttons" -> `zoom-buttons`).
 - **order:** the place among its siblings in the contents tree (smaller first; then by title).
 - **parent:** optional; a page from another folder to sit under in the tree.
+
+## Headings
+
+A heading's anchor is its slug (see `ids` above). In a translation, every heading keeps the English anchor in a comment at its end, `## Was sie zeigt <!-- #what-it-shows -->`, so that ids and links keep working; `translation.py start` adds these.
 
 ## Help ids
 

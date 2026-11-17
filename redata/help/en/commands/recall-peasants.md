@@ -4,10 +4,10 @@ ids: [command/Recall Peasants]
 order: 10
 ---
 
-# Sanctuary (Sanctuary (Recall Peasants))
+# Sanctuary (Recall Peasants)
 
 <!-- gen:icon -->
-![Sanctuary (Sanctuary (Recall Peasants))](game:interface/icons/SIC_Bell.tga)
+![Sanctuary (Recall Peasants)](game:interface/icons/SIC_Bell.tga)
 <!-- /gen:icon -->
 
 ## Role

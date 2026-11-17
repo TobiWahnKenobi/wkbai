@@ -4,10 +4,10 @@ ids: [command/Poison Bile]
 order: 10
 ---
 
-# Squirt Squirt Poison Bile
+# Squirt Poison Bile
 
 <!-- gen:icon -->
-![Squirt Squirt Poison Bile](game:interface/icons/SIC_Poison_Bile.tga)
+![Squirt Poison Bile](game:interface/icons/SIC_Poison_Bile.tga)
 <!-- /gen:icon -->
 
 ## Role
