@@ -8,6 +8,7 @@
 #include "renderer.h"
 #include "../client.h"
 #include "../ParticleSystem.h"
+#include "FireEffects.h"
 
 DefaultParticleRenderer::DefaultParticleRenderer(IRenderer* gfx, ParticleContainer* particleContainer)
 	: ParticleRenderer(gfx, particleContainer), texCache(gfx)
@@ -15,6 +16,8 @@ DefaultParticleRenderer::DefaultParticleRenderer(IRenderer* gfx, ParticleContain
 }
 
 DefaultParticleRenderer::~DefaultParticleRenderer() = default;
+
+std::vector<batchVertex>* DefaultParticleRenderer::s_record = nullptr;
 
 void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camera& camera)
 {
@@ -24,6 +27,9 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 		batch.reset(gfx->CreateBatch(4 * 100, 6 * 100));
 
 	texture curTexture = nullptr;
+	// RenderSettings::fireQuality Low and High: the flame-sprite fires go to the fire shader
+	// (FireEffects.h) instead of being drawn here; Original: all as before
+	const int fireLevel = FireFx::Level();
 	gfx->NoTexture(0);
 	gfx->SetTransformMatrix(&camera.sceneMatrix);
 	for (auto& kv : particleContainer->particles) {
@@ -39,6 +45,11 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 			// no texture of their own: untextured, not whatever sprite was drawn before them
 			if (particle.system->Particles.type == PSType::Mesh)
 				continue;
+			if (FireFx::Takes(fireLevel, particle.system)) {
+				const auto [f1, f2, fi] = particle.system->Particles.Scale_Gradient.getAtTime(nextTime - particle.startTime, 1.0f);
+				FireFx::Add(particle, nextTime, f1 + (f2 - f1) * fi, (color >> 24) / 255.0f);
+				continue;
+			}
 			texture tex = particle.system->Particles.type == PSType::Sprites ? texCache.getTexture(particle.system->Particles.Sprites.c_str(), true) : nullptr;
 			if (tex != curTexture) {
 				batch->flush();
@@ -101,6 +112,8 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 			indices[3] = firstIndex + 1;
 			indices[4] = firstIndex + 3;
 			indices[5] = firstIndex + 2;
+			if (s_record)
+				s_record->insert(s_record->end(), verts, verts + 4);
 		}
 	}
 	batch->flush();

@@ -75,6 +75,9 @@
 #include "interface/FogOfWar.h"
 #include "gfx/ChimneySmoke.h"
 #include "gfx/BloodDrip.h"
+#include "gfx/FireEffects.h"
+#include "gfx/RenderSettings.h"
+#include "interface/MenuOptions.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -10739,6 +10742,213 @@ void Test_NightCold()
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
+IRenderer* CreateNULLRenderer();
+
+void Test_FireQuality()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("FIRE %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the option: its values, the menu's choice, the defaults and the clamping
+	check("names", strcmp(FireFx::QualityName(0), "Original") == 0 && strcmp(FireFx::QualityName(1), "Low") == 0
+		&& strcmp(FireFx::QualityName(2), "High") == 0 && strcmp(FireFx::QualityName(9), "High") == 0);
+	check("default", RenderSettings().fireQuality == FireFx::HIGH);
+	const RenderSettings savedRender = g_renderSettings;
+	const nlohmann::json savedSettings = g_settings;
+	const MenuOption* o = FindMenuOption("fireQuality");
+	check("menu option", o && o->type == MenuOption::CHOICE && o->page == "lighting"
+		&& o->choices == std::vector<std::string>{ "Original", "Low", "High" });
+	if (o) {
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			o->set((float)v);
+			ok &= g_renderSettings.fireQuality == v && o->get() == (float)v;
+		}
+		o->set(7.0f);
+		ok &= g_renderSettings.fireQuality == 2;
+		o->set(-3.0f);
+		ok &= g_renderSettings.fireQuality == 0;
+		check("menu set and get", ok);
+	}
+	// the config's round trip (wkconfig.json, as the other quality options: a graphics setting,
+	// not the game's, so not in the save game)
+	{
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			g_renderSettings.fireQuality = v;
+			g_renderSettings.save();
+			ok &= g_settings.value("fireQuality", -1) == v;
+			g_renderSettings.fireQuality = -1;
+			g_renderSettings.load();
+			ok &= g_renderSettings.fireQuality == v;
+			// and from the file itself
+			std::ifstream f("wkconfig.json");
+			nlohmann::json written = nlohmann::json::parse(f, nullptr, false);
+			ok &= written.is_object() && written.value("fireQuality", -1) == v;
+		}
+		check("config round trip", ok);
+		g_settings["fireQuality"] = 9;
+		g_renderSettings.load();
+		const bool high = g_renderSettings.fireQuality == 2;
+		g_settings["fireQuality"] = -4;
+		g_renderSettings.load();
+		const bool low = g_renderSettings.fireQuality == 0;
+		g_settings.erase("fireQuality");
+		g_renderSettings.load();
+		check("config clamped, missing is the default", high && low && g_renderSettings.fireQuality == RenderSettings().fireQuality);
+	}
+	g_settings = savedSettings;
+	g_renderSettings = savedRender;
+	SaveSettings();
+
+	// which systems the fire shader takes: the flame sprites' (a building's fire, an arrow's, the
+	// fireballs), not the smoke, the smoke-puff fire nor the fort's grapeshot sparks
+	LoadBCP("data.bcp");
+	PSCache cache("Warrior Kings Game Set\\Particle_Systems");
+	ParticleSystem* building = cache.getPS("Fire_Building");
+	ParticleSystem* arrow = cache.getPS("Flame_Arrow");
+	ParticleSystem* fireball = cache.getPS("Fireball");
+	ParticleSystem* smoke = cache.getPS("Burningobjectsmoke");
+	ParticleSystem* smoky = cache.getPS("Smokyfire");
+	ParticleSystem* fort = cache.getPS("Fort_Fire");
+	ParticleSystem* dust = cache.getPS("Dust");
+	printf("FIRE flags building %d %d arrow %d %d fireball %d smoke %d smoky %d fort %d dust %d\n", building->flameSprite, building->standingFire,
+		arrow->flameSprite, arrow->standingFire, fireball->flameSprite, smoke->flameSprite, smoky->flameSprite, fort->flameSprite, dust->flameSprite);
+	check("flame systems", building->flameSprite && building->standingFire && arrow->flameSprite && !arrow->standingFire && fireball->flameSprite
+		&& !smoke->flameSprite && !smoky->flameSprite && !fort->flameSprite && !dust->flameSprite);
+	check("takes", !FireFx::Takes(0, building) && !FireFx::Takes(0, arrow) && FireFx::Takes(1, building) && FireFx::Takes(2, arrow)
+		&& !FireFx::Takes(1, smoke) && !FireFx::Takes(2, dust));
+
+	// the level in effect: Original without a renderer that can draw the others
+	FireFx::BeginFrame(2, false);
+	check("unavailable is Original", FireFx::Level() == FireFx::ORIGINAL);
+	FireFx::BeginFrame(1, true);
+	check("available", FireFx::Level() == FireFx::LOW);
+
+	// the damage and the flicker
+	check("damage scale", FireFx::DamageScale(1.0f) == 1.0f && std::abs(FireFx::DamageScale(0.0f) - 1.6f) < 1e-5f
+		&& FireFx::DamageScale(0.3f) > FireFx::DamageScale(0.6f) && FireFx::DamageScale(-1.0f) == FireFx::DamageScale(0.0f));
+	FireFx::SetDamage(77, 0.25f);
+	check("damage of", std::abs(FireFx::DamageOf(77) - FireFx::DamageScale(0.25f)) < 1e-6f && FireFx::DamageOf(78) == 1.0f);
+	{
+		bool inRange = true, varies = false;
+		const float first = FireFx::Flicker(0.0f, 5);
+		for (int i = 0; i < 2000; i++) {
+			const float f = FireFx::Flicker(i * 0.0137f, 5);
+			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.1f;
+		}
+		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
+	}
+
+	// the particles: a burning building's fire (its object 41, damaged), an arrow's flight and the
+	// burning object's smoke, 6 s of them
+	ParticleContainer pc;
+	srand(1234);
+	const float dt = 0.05f;
+	float now = 0.0f;
+	for (int i = 0; i < 120; i++) {
+		const float prev = now;
+		now += dt;
+		pc.generate(building, Vector3(10, 2, 10), 41, prev, now);
+		pc.generate(arrow, Vector3(-5.0f + now * 6.0f, 4, 3), 42, prev, now);
+		pc.generate(smoke, Vector3(10, 4, 10), 41, prev, now);
+		pc.update(now);
+	}
+	Camera camera;
+	camera.position = Vector3(0, 30, -30);
+	camera.direction = Vector3(0, -0.6f, 0.8f).normal();
+	camera.sceneMatrix = Matrix::getIdentity();
+	IRenderer* nul = CreateNULLRenderer();
+	DefaultParticleRenderer renderer(nul, &pc);
+
+	// the old path's quads, worked out here as DefaultParticleRenderer always drew a sprite (its
+	// position, its scale, the camera's side and up), for the particles of the systems asked
+	auto reference = [&](bool fires) {
+		std::vector<batchVertex> out;
+		const Vector3 camside = camera.direction.cross(Vector3(0, 1, 0)).normal();
+		const Vector3 camhor = camside.cross(camera.direction).normal();
+		for (auto& kv : pc.particles)
+			for (Particle& p : kv.second) {
+				const uint32_t color = p.getColor(now);
+				if (color >> 24 == 0 || (!fires && p.system->flameSprite))
+					continue;
+				const Vector3 pos = p.getPosition(now);
+				const auto [s1, s2, si] = p.system->Particles.Scale_Gradient.getAtTime(now - p.startTime, 1.0f);
+				const float size = s1 + (s2 - s1) * si;
+				const Vector3 pts[4] = { pos + (camside + camhor) * size * 0.5f, pos + (camside - camhor) * size * 0.5f,
+					pos + (-camside - camhor) * size * 0.5f, pos + (-camside + camhor) * size * 0.5f };
+				const float uv[4][2] = { { 0, 0 }, { 0, 1 }, { 1, 1 }, { 1, 0 } };
+				for (int k = 0; k < 4; k++)
+					out.emplace_back(pts[k].x, pts[k].y, pts[k].z, (int)color, uv[k][0], uv[k][1]);
+			}
+		return out;
+	};
+	auto same = [](const std::vector<batchVertex>& a, const std::vector<batchVertex>& b) {
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); i++)
+			if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].z != b[i].z || a[i].color != b[i].color || a[i].u != b[i].u || a[i].v != b[i].v)
+				return false;
+		return true;
+	};
+	std::vector<batchVertex> rec;
+	DefaultParticleRenderer::s_record = &rec;
+	FireFx::BeginFrame(FireFx::ORIGINAL, true);
+	renderer.render(now - dt, now, camera);
+	const std::vector<batchVertex> original = reference(true);
+	size_t flames = 0, visible = 0;
+	for (auto& kv : pc.particles)
+		for (Particle& p : kv.second)
+			if (p.getColor(now) >> 24) {
+				visible++;
+				flames += p.system->flameSprite;
+			}
+	printf("FIRE particles %zu visible, %zu of them flames, Original drew %zu quads\n", visible, flames, rec.size() / 4);
+	check("Original is the old path", flames > 0 && rec.size() == visible * 4 && same(rec, original) && FireFx::PendingCount() == 0);
+
+	for (int level = FireFx::LOW; level <= FireFx::HIGH; level++) {
+		rec.clear();
+		FireFx::Clear();
+		FireFx::BeginFrame(level, true);
+		FireFx::SetDamage(41, 0.2f);
+		renderer.render(now - dt, now, camera);
+		bool match = FireFx::PendingCount() == flames;
+		for (const FireFx::Flame& f : FireFx::Pending())
+			match &= f.system->flameSprite && f.alpha > 0 && f.size > 0 && f.life >= 0 && f.life <= 1
+				&& (f.objid == 41 ? std::abs(f.heat - FireFx::DamageScale(0.2f)) < 1e-6f : f.heat == 1.0f);
+		check(level == 1 ? "Low: the rest as before" : "High: the rest as before", same(rec, reference(false)));
+		check(level == 1 ? "Low: the flames to the shader" : "High: the flames to the shader", match);
+		std::vector<FireFx::Instance> inst, again;
+		FireFx::BuildInstances(level, now, true, inst);
+		FireFx::BuildInstances(level, now, true, again);
+		int kinds[4] = {};
+		int lastKind = -1;
+		bool ordered = true;
+		const int order[4] = { 2, 3, 1, 0 }; // drawn: the shimmer, the smoke, the flames, the glow
+		for (const FireFx::Instance& i : inst) {
+			const int k = (int)i.c[0];
+			kinds[k]++;
+			ordered &= lastKind < 0 || order[lastKind] <= order[k];
+			lastKind = k;
+		}
+		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
+		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
+		if (level == FireFx::LOW)
+			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+		else
+			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
+			// the standing fire only
+			check("High: flames, glow, smoke, shimmer", kinds[0] == (int)flames && kinds[1] == 2 && kinds[3] == 1 && kinds[2] >= 3
+				&& ordered && deterministic);
+	}
+	DefaultParticleRenderer::s_record = nullptr;
+	FireFx::Clear();
+	FireFx::BeginFrame(FireFx::ORIGINAL, false);
+	delete nul;
+	printf("FIRE all %d\n", all ? 1 : 0);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -10832,6 +11042,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 {Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
 {Test_NightCold, "Night cold: the day's temperature swing, coldest before sunrise and warmest in the early afternoon, smaller overcast, none without day and night, through a save"},
+{Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
 };
 
 void LaunchTest()

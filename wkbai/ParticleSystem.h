@@ -150,6 +150,12 @@ struct ParticleSystem {
 	// a fire (its name has fire, flame, burn or torch, and not smoke): lights the ground and
 	// models around it (RenderSettings::fireLights)
 	bool emitsLight = false;
+	// a fire drawn with a flame sprite (Fire, Fireball, FireCloud, White_Flame, Stargatefire: a
+	// light-emitting system whose sprite's name has fire or flame), which RenderSettings::fireQuality
+	// Low and High draw as procedural flames (FireEffects.h); standingFire: one that burns in place
+	// with no smoke of its own (a burning building's Fire_Building, Fire, Mapfire, Broad_Flame),
+	// which High's smoke rises from
+	bool flameSprite = false, standingFire = false;
 	PS_Particles Particles;
 	PS_Generation_Decision Generation_Decision;
 	PS_State_Generation State_Generation;
