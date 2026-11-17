@@ -55,24 +55,24 @@ The priest is the Imperial holy man from the [Church](../buildings/church-stone.
 <!-- gen:commands -->
 - [Capture](../commands/capture.md)
 - [Halt](../commands/halt.md)
-- [Exorcism](../commands/exorcism.md)
+- [Exorcise Demons](../commands/exorcism.md)
 - [Interrogate](../commands/interrogate.md)
-- [Burn Heretic](../commands/burn-heretic.md)
+- [Burn a Heretic](../commands/burn-heretic.md)
 - [Bless](../commands/bless.md)
 - [Attack](../commands/attack.md)
-- [Pray at Church](../commands/pray-at-church.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Pray](../commands/pray-at-church.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Pray for Righteousness](../commands/pray-for-righteousness.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - [Bless](../commands/bless.md) your best soldiers before a battle.
-- [Exorcism](../commands/exorcism.md) frees units that an enemy succubus has possessed: keep a priest near the army.
-- [Pray at Church](../commands/pray-at-church.md) puts idle priests to use at home.
+- [Exorcise Demons](../commands/exorcism.md) frees units that an enemy succubus has possessed: keep a priest near the army.
+- [Pray](../commands/pray-at-church.md) puts idle priests to use at home.

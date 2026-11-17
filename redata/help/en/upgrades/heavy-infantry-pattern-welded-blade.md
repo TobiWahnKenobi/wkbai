@@ -1,13 +1,13 @@
 ---
-title: Heavy Infantry Pattern Welded Blade
+title: Heavy Infantry Pattern Welded Steel
 ids: [upgrade/Heavy Infantry Pattern Welded Blade, command/Research Heavy Infantry Pattern Welded Blade]
 order: 10
 ---
 
-# Heavy Infantry Pattern Welded Blade
+# Heavy Infantry Pattern Welded Steel
 
 <!-- gen:icon -->
-![Heavy Infantry Pattern Welded Blade](game:interface/icons/upgrades/Patten_Welded_Blade.tga)
+![Heavy Infantry Pattern Welded Steel](game:interface/icons/upgrades/Patten_Welded_Blade.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ A Blacksmith research that gives your heavy foot soldiers ([spearmen](../units/s
 ## Needs
 
 <!-- gen:needs -->
-- building a [Monastery](../buildings/monastery.md) or building a [Sawmill](../buildings/sawmill.md) or building a [Temple](../buildings/temple.md) or building a [Windmill](../buildings/windmill.md)
+- building a [Monastery](../buildings/monastery.md) or building a [Sawmill](../buildings/sawmill.md) or building a [Sacred Grove](../buildings/temple.md) or building a [Windmill](../buildings/windmill.md)
 - Shown from the second Manor level (Keep) on.
 <!-- /gen:needs -->
 

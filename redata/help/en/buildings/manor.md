@@ -40,7 +40,7 @@ The Manor is the heart of your town. It trains peasants and carts, stores goods,
 ## Needs
 
 <!-- gen:needs -->
-- building a [Castle (Imperial)](castle-celestial.md) or building a [Castle (Pagan)](castle-pagan.md) or building a [Castle (Renaissance)](castle-tech.md)
+- building a [Imperial Castle](castle-celestial.md) or building a [Pagan Castle](castle-pagan.md) or building a [Renaissance Castle](castle-tech.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -52,19 +52,19 @@ The Manor is the heart of your town. It trains peasants and carts, stores goods,
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Ring Bell](../commands/ring-bell.md)
-- [Recall Peasants](../commands/recall-peasants.md)
-- [Conscript all Peasants](../commands/conscript-all-peasants.md)
-- [Demob all Militia](../commands/demob-all-militia.md)
+- [Sanctuary (Ring Bell)](../commands/ring-bell.md)
+- [Sanctuary (Recall Peasants)](../commands/recall-peasants.md)
+- [Conscript all Peasants into Militia](../commands/conscript-all-peasants.md)
+- [Convert all Militia into Peasants](../commands/demob-all-militia.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Keep it training peasants for most of the early game.
-- Garrison troops inside to make it shoot harder, and use [Ring Bell](../commands/ring-bell.md) to send peasants into shelter during a raid.
-- [Conscript all Peasants](../commands/conscript-all-peasants.md) arms the whole town at once; [Demob all Militia](../commands/demob-all-militia.md) sends them back to work.
+- Garrison troops inside to make it shoot harder, and use [Sanctuary (Ring Bell)](../commands/ring-bell.md) to send peasants into shelter during a raid.
+- [Conscript all Peasants into Militia](../commands/conscript-all-peasants.md) arms the whole town at once; [Convert all Militia into Peasants](../commands/demob-all-militia.md) sends them back to work.
 - A second Manor needs a Castle first.

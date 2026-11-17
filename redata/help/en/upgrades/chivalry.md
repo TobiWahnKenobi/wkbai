@@ -38,7 +38,7 @@ A Monastery (or Holy Chapter) research in the code of knighthood: it unlocks [kn
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Knight](../units/knight.md), [Pikeman](../units/pikeman.md)
+- **Unlocks:** [Knight](../units/knight.md), [Man-at-Arms](../units/pikeman.md)
 <!-- /gen:leads -->
 
 ## Commands

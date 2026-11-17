@@ -1,19 +1,19 @@
 ---
-title: Vandavar - Pick up Sack
+title: Pick Up Resource Sack (Vandavar Barbarian - Pick up Sack)
 ids: [command/Vandavar - Pick up Sack]
 order: 10
 ---
 
-# Vandavar - Pick up Sack
+# Pick Up Resource Sack (Vandavar Barbarian - Pick up Sack)
 
 ## Role
 
-A Vandavar raider picks up a sack of goods, often the loot from a plundered building.
+A Vandavar Barbarian raider picks up a sack of goods, often the loot from a plundered building.
 
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Vandavar](../units/vandavar.md)
+- **Offered by:** [Vandavar Barbarian](../units/vandavar.md)
 - No button of its own: you give it with a right-click on the target (see [Orders](../controls/orders.md#the-right-click)).
 <!-- /gen:trained -->
 

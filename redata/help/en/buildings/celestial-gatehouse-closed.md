@@ -1,10 +1,10 @@
 ---
-title: Celestial Gatehouse
+title: Gatehouse Ramparts
 ids: [building/Celestial Gatehouse Closed, building/Celestial Gatehouse Open, command/Build Celestial Gatehouse Closed]
 order: 10
 ---
 
-# Celestial Gatehouse
+# Gatehouse Ramparts
 
 <!-- gen:facts -->
 ```facts
@@ -30,13 +30,13 @@ The Imperial gatehouse is the gate in an Imperial wall: strength 900 and a 15-po
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- **Comes from:** [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -48,6 +48,6 @@ The Imperial gatehouse is the gate in an Imperial wall: strength 900 and a 15-po
 ## Commands
 
 <!-- gen:commands -->
-- [Open Celestial Gatehouse](../commands/open-celestial-gatehouse.md)
+- [Open (Gatehouse Ramparts)](../commands/open-celestial-gatehouse.md)
 <!-- /gen:commands -->
 

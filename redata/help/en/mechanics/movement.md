@@ -30,8 +30,8 @@ Each unit type has a base speed (a peasant walks at 4, most cavalry much faster)
 ## Where units can go
 
 - **Ground by type.** Every unit type has a list of the terrains it may cross. Land units keep off deep water, coastlines and river beds; siege engines and wagons also keep off forest and rock. Boats only sail.
-- **Steepness.** Most units climb slopes up to 45°. Heavy machines (the battering ram, bombard, Infernal Engine) only 30°.
-- **Water.** Land units ford shallow water. Michael, Abaddon and the large elementals wade through any depth.
+- **Steepness.** Most units climb slopes up to 45°. Heavy machines (the battering ram, bombard, DeathWyrm) only 30°.
+- **Water.** Land units ford shallow water. Archangel, Abaddon and the large elementals wade through any depth.
 - **Buildings and walls** block the way; an open gatehouse lets units through. Units don't block each other: they walk through, and spread out where they stop.
 
 ## Paths
@@ -42,6 +42,6 @@ Each unit type has a base speed (a peasant walks at 4, most cavalry much faster)
 
 ![A column marching along a cobbled road past a forest](shot:mech-movement-road)
 
-> **wkbai.** In this version of wkbai the per-type terrain lists and slope limits aren't applied yet: every land unit follows the same land rules and climbs up to 45°, siege engines and wagons can enter forest and rock, and water deeper than 1.5 m stops everyone but boats (Michael, Abaddon and the elementals included). This is being brought in line with the original.
+> **wkbai.** In this version of wkbai the per-type terrain lists and slope limits aren't applied yet: every land unit follows the same land rules and climbs up to 45°, siege engines and wagons can enter forest and rock, and water deeper than 1.5 m stops everyone but boats (Archangel, Abaddon and the elementals included). This is being brought in line with the original.
 
 > **wkbai.** Path searches run on several threads and are much faster than the original's, so large games stay smooth. With wkbai's seasons on, wet and snowy ground slows everyone further, and frozen rivers can be walked on ([seasons and weather](seasons-weather.md#effects-on-play)).

@@ -1,13 +1,13 @@
 ---
-title: Recon
+title: Reconnoitre
 ids: [command/Recon]
 order: 10
 ---
 
-# Recon
+# Reconnoitre
 
 <!-- gen:icon -->
-![Recon](game:interface/icons/SIC_Recon.tga)
+![Reconnoitre](game:interface/icons/SIC_Recon.tga)
 <!-- /gen:icon -->
 
 ## Role

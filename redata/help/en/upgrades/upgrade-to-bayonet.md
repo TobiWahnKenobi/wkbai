@@ -1,13 +1,13 @@
 ---
-title: Upgrade to Bayonet
+title: Bayonet
 ids: [upgrade/Upgrade to Bayonet, command/Upgrade to Bayonet]
 order: 10
 ---
 
-# Upgrade to Bayonet
+# Bayonet
 
 <!-- gen:icon -->
-![Upgrade to Bayonet](game:interface/icons/upgrades/Bayonet.tga)
+![Bayonet](game:interface/icons/upgrades/Bayonet.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,14 +32,14 @@ A research at the University or Scriptorium that gives your gunners a plug bayon
 ## Needs
 
 <!-- gen:needs -->
-- [Gunpowder](gunpowder.md) or [Celestial Gunpowder](celestial-gunpowder.md) or building a [University](../buildings/university.md)
+- [Bombard Upgrade](gunpowder.md) or [Gunpowder](celestial-gunpowder.md) or building a [University](../buildings/university.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Gunner with Bayonet](../units/gunner-bayonet.md)
-- **Turns units or buildings into, or calls up:** [Gunner with Bayonet](../units/gunner-bayonet.md)
+- **Unlocks:** [Gunner (with Bayonet)](../units/gunner-bayonet.md)
+- **Turns units or buildings into, or calls up:** [Gunner (with Bayonet)](../units/gunner-bayonet.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -50,4 +50,4 @@ A research at the University or Scriptorium that gives your gunners a plug bayon
 
 ## Tips
 
-- See the [Gunner with Bayonet](../units/gunner-bayonet.md) page for switching between the two.
+- See the [Gunner (with Bayonet)](../units/gunner-bayonet.md) page for switching between the two.

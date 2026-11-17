@@ -1,13 +1,13 @@
 ---
-title: Extinguish
+title: Extinguish Fire
 ids: [command/Extinguish]
 order: 10
 ---
 
-# Extinguish
+# Extinguish Fire Fire
 
 <!-- gen:icon -->
-![Extinguish](game:interface/icons/sic_Extinguish.tga)
+![Extinguish Fire Fire](game:interface/icons/sic_Extinguish.tga)
 <!-- /gen:icon -->
 
 ## Role

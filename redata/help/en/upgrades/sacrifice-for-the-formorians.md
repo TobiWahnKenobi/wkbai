@@ -1,10 +1,10 @@
 ---
-title: Sacrifice for the Formorians
+title: Summon the Fomorians
 ids: [upgrade/Sacrifice for the Formorians, command/Research Sacrifice for the Formorians]
 order: 10
 ---
 
-# Sacrifice for the Formorians
+# Summon the Fomorians
 
 <!-- gen:facts -->
 <!-- facts:static -->
@@ -16,12 +16,12 @@ order: 10
 
 ## Role
 
-A Black Mass sacrifice that unlocks the [rock thrower](../units/rock-thrower.md) at the Henge.
+A Temple of the Moon sacrifice that unlocks the [rock thrower](../units/rock-thrower.md) at the Henge.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Black Mass](../buildings/black-mass.md)
+- **Researched at:** [Temple of the Moon](../buildings/black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -33,7 +33,7 @@ A Black Mass sacrifice that unlocks the [rock thrower](../units/rock-thrower.md)
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Rock Thrower](../units/rock-thrower.md)
+- **Unlocks:** [Fomorian Beast](../units/rock-thrower.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -1,10 +1,10 @@
 ---
-title: Burn Heretic
+title: Burn a Heretic
 ids: [command/Burn Heretic]
 order: 10
 ---
 
-# Burn Heretic
+# Burn a Heretic
 
 ## Role
 

@@ -1,13 +1,13 @@
 ---
-title: Mounted Hand Gunner
+title: Dragoon
 ids: [unit/Mounted Hand Gunner, command/Spawn Mounted Hand Gunner]
 order: 10
 ---
 
-# Mounted Hand Gunner
+# Dragoon
 
 <!-- gen:icon -->
-![Mounted Hand Gunner](game:interface/icons/characters/tech_mounted_gunner.tga)
+![Dragoon](game:interface/icons/characters/tech_mounted_gunner.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: Mounted Hand Gunner
 
 ## Role
 
-The mounted hand gunner is a horseman with a firearm: speed 12, 120 hit points and a 20-point shot. It needs [Celestial Gunpowder](../upgrades/celestial-gunpowder.md) and is not offered on the Pagan path.
+The mounted hand gunner is a horseman with a firearm: speed 12, 120 hit points and a 20-point shot. It needs [Gunpowder](../upgrades/celestial-gunpowder.md) and is not offered on the Pagan path.
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The mounted hand gunner is a horseman with a firearm: speed 12, 120 hit points a
 ## Needs
 
 <!-- gen:needs -->
-- [Celestial Gunpowder](../upgrades/celestial-gunpowder.md)
+- [Gunpowder](../upgrades/celestial-gunpowder.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -63,17 +63,17 @@ The mounted hand gunner is a horseman with a firearm: speed 12, 120 hit points a
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
-- [Follow](../commands/follow.md)
+- [Skirmish](../commands/skirmish-mode.md)
+- [Follow Next Unit Selected](../commands/follow.md)
 - [Interrogate](../commands/interrogate.md)
-- [Fire Bullet](../commands/fire-bullet.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Fire (Bullet)](../commands/fire-bullet.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Form Up](../commands/formation.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
@@ -81,4 +81,4 @@ The mounted hand gunner is a horseman with a firearm: speed 12, 120 hit points a
 ## Tips
 
 - Ride in, fire, ride out: it is a raider, not a line unit.
-- It can [Follow](../commands/follow.md) another unit to stay close to it.
+- It can [Follow Next Unit Selected](../commands/follow.md) another unit to stay close to it.

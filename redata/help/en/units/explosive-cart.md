@@ -54,11 +54,11 @@ The explosive cart is a moving bomb: drive it next to a target and [trigger it](
 ## Commands
 
 <!-- gen:commands -->
-- [Trigger Explosives](../commands/trigger-explosives.md)
+- [Detonate](../commands/trigger-explosives.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

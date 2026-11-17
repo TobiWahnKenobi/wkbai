@@ -12,12 +12,12 @@ order: 10
 
 ## Role
 
-Cast from the Black Mass after the [Charm of Madness](../upgrades/charm-of-madness.md) research: it drives enemy units mad so they turn on each other.
+Cast from the Temple of the Moon after the [Charm of Madness](../upgrades/charm-of-madness.md) research: it drives enemy units mad so they turn on each other.
 
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Black Mass](../buildings/black-mass.md)
+- **Offered by:** [Temple of the Moon](../buildings/black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs

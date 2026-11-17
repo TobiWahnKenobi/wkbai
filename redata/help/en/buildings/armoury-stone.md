@@ -44,9 +44,9 @@ The armoury trains sappers and siege engines (mangonels, bombards, explosive car
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Sapper](../units/sapper.md), [Mangonel](../units/mangonel.md), [Bombard](../units/bombard.md), [War Elephant](../units/war-elephant.md), [Explosive Cart](../units/explosive-cart.md)
+- **Trains:** [Sapper](../units/sapper.md), [Mangonel](../units/mangonel.md), [Bombard](../units/bombard.md), [Imperial War Elephant](../units/war-elephant.md), [Explosive Cart](../units/explosive-cart.md)
 - **Research here:** [Explosive Mine](../upgrades/explosive-mine.md)
-- **Building it unlocks:** [Mangonel Boat](../units/mangonel-boat.md)
+- **Building it unlocks:** [Carrack](../units/mangonel-boat.md)
 <!-- /gen:leads -->
 
 ## Commands

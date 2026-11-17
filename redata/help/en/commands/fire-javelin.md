@@ -1,10 +1,10 @@
 ---
-title: Fire Javelin
+title: Throw Javelin
 ids: [command/Fire Javelin]
 order: 10
 ---
 
-# Fire Javelin
+# Throw Javelin
 
 ## Role
 

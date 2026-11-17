@@ -1,13 +1,13 @@
 ---
-title: Pagan Archer
+title: Huntress of the Dawn
 ids: [unit/Pagan Archer, command/Spawn Pagan Archer]
 order: 10
 ---
 
-# Pagan Archer
+# Huntress of the Dawn
 
 <!-- gen:icon -->
-![Pagan Archer](game:interface/icons/characters/pagan_archer.tga)
+![Huntress of the Dawn](game:interface/icons/characters/pagan_archer.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -43,7 +43,7 @@ The Pagan archer shoots harder than the common archer (20 damage) and has a litt
 ## Needs
 
 <!-- gen:needs -->
-- building a [Hall of Warriors](../buildings/hall-of-warriors.md) or building a [Wickerman](../buildings/wickerman.md)
+- building a [Hall of Warriors](../buildings/hall-of-warriors.md) or building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -62,24 +62,24 @@ The Pagan archer shoots harder than the common archer (20 damage) and has a litt
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Take Cart](../commands/take-cart.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire Arrow](../commands/fire-arrow.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Pagan side only.
-- Building a [Wickerman](../buildings/wickerman.md) turns your Pagan archers into the stronger [Wickerman version](pagan-archer-upgrade.md).
+- Building a [The Wickerman](../buildings/wickerman.md) turns your Pagan archers into the stronger [Wickerman version](pagan-archer-upgrade.md).

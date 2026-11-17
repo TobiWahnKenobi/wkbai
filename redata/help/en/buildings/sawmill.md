@@ -44,7 +44,7 @@ The sawmill improves your wood production and, like the windmill, turns your Man
 ## Leads to
 
 <!-- gen:leads -->
-- **Building it unlocks:** [Observatory](observatory.md), [Wooden Forts](../upgrades/fort-wood.md), [Heavy Cavalry Mail Barding](../upgrades/heavy-cavalry-mail-barding.md), [Heavy Infantry Chainmail](../upgrades/heavy-infantry-chainmail.md), [Heavy Infantry Pattern Welded Blade](../upgrades/heavy-infantry-pattern-welded-blade.md), [Horse Harness](../upgrades/horse-harness.md), [Light Cavalry Mail Barding](../upgrades/light-cavalry-mail-barding.md), [Light Cavalry Steel-tipped Weapon](../upgrades/light-cavalry-steel-tipped-weapon.md), [Light Infantry Hardened Leather Armour](../upgrades/light-infantry-hardened-leather-armour.md)
+- **Building it unlocks:** [Observatory](observatory.md), [Fort Upgrade](../upgrades/fort-wood.md), [Heavy Cavalry Mail Barding](../upgrades/heavy-cavalry-mail-barding.md), [Heavy Infantry Chainmail](../upgrades/heavy-infantry-chainmail.md), [Heavy Infantry Pattern Welded Steel](../upgrades/heavy-infantry-pattern-welded-blade.md), [Horse Harness](../upgrades/horse-harness.md), [Light Cavalry Mail Barding](../upgrades/light-cavalry-mail-barding.md), [Light Cavalry Steel-tipped Weapon](../upgrades/light-cavalry-steel-tipped-weapon.md), [Light Infantry Hardened Leather Armour](../upgrades/light-infantry-hardened-leather-armour.md)
 <!-- /gen:leads -->
 
 ## Commands

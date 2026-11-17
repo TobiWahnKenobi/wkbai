@@ -1,10 +1,10 @@
 ---
-title: Supply Wagon - Pick up Sack
+title: Pick Up Resource Sack (Supply Wagon - Pick up Sack)
 ids: [command/Supply Wagon - Pick up Sack]
 order: 10
 ---
 
-# Supply Wagon - Pick up Sack
+# Pick Up Resource Sack (Pick Up Resource Sack (Supply Wagon - Pick up Sack))
 
 ## Role
 

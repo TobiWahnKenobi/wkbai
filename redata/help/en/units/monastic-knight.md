@@ -1,13 +1,13 @@
 ---
-title: Monastic Knight
+title: Holy Warrior
 ids: [unit/Monastic Knight, command/Spawn Monastic Knight]
 order: 10
 ---
 
-# Monastic Knight
+# Holy Warrior
 
 <!-- gen:icon -->
-![Monastic Knight](game:interface/icons/characters/celestial_knight_upgrade.tga)
+![Holy Warrior](game:interface/icons/characters/celestial_knight_upgrade.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -59,25 +59,25 @@ The monastic knight is a holy warrior from the [Holy Chapter](../buildings/holy-
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Artos Formation Supply](../commands/artos-formation-supply.md)
-- [Monastic Knight Heal](../commands/monastic-knight-heal.md)
-- [Exorcism](../commands/exorcism.md)
-- [Formation](../commands/formation.md)
+- [Distribute Food Rations (Baron Artos Formation Supply)](../commands/artos-formation-supply.md)
+- [Heal](../commands/monastic-knight-heal.md)
+- [Exorcise Demons](../commands/exorcism.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Use [Monastic Knight Heal](../commands/monastic-knight-heal.md) between fights to patch up the army.
-- [Exorcism](../commands/exorcism.md) frees units that an enemy succubus has possessed.
+- Use [Holy Warrior Heal](../commands/monastic-knight-heal.md) between fights to patch up the army.
+- [Exorcise Demons](../commands/exorcism.md) frees units that an enemy succubus has possessed.

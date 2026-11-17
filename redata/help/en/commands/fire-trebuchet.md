@@ -1,10 +1,10 @@
 ---
-title: Fire Trebuchet
+title: Fire (Trebuchet)
 ids: [command/Fire Trebuchet]
 order: 10
 ---
 
-# Fire Trebuchet
+# Fire (Trebuchet)
 
 ## Role
 

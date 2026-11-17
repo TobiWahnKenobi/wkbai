@@ -27,7 +27,7 @@ blueprint: Arcanum
 
 ## Role
 
-The arcanum researches [Grapeshot](../upgrades/grapeshot.md), the [Infernal Engine](../upgrades/infernal-engine.md) and the [Undead Legion](../upgrades/undead-legion.md). It needs a Black Mass and an Observatory, and it turns your Manor into a Palace.
+The arcanum researches [Explosives](../upgrades/grapeshot.md), the [DeathWyrm](../upgrades/infernal-engine.md) and the [Invoke Hecate](../upgrades/undead-legion.md). It needs a Temple of the Moon and an Observatory, and it turns your Manor into a Palace.
 
 ## Built by
 
@@ -38,7 +38,7 @@ The arcanum researches [Grapeshot](../upgrades/grapeshot.md), the [Infernal Engi
 ## Needs
 
 <!-- gen:needs -->
-- building a [Black Mass](black-mass.md)
+- building a [Temple of the Moon](black-mass.md)
 - building a [Observatory](observatory.md)
 - Pagan or neutral side only: the button goes once you build a [Church](church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
@@ -46,8 +46,8 @@ The arcanum researches [Grapeshot](../upgrades/grapeshot.md), the [Infernal Engi
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Grapeshot](../upgrades/grapeshot.md), [Infernal Engine](../upgrades/infernal-engine.md), [Undead Legion](../upgrades/undead-legion.md)
-- **Building it unlocks:** [Mangonel Boat](../units/mangonel-boat.md)
+- **Research here:** [Explosives](../upgrades/grapeshot.md), [DeathWyrm](../upgrades/infernal-engine.md), [Invoke Hecate](../upgrades/undead-legion.md)
+- **Building it unlocks:** [Carrack](../units/mangonel-boat.md)
 <!-- /gen:leads -->
 
 ## Commands

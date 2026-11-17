@@ -1,13 +1,13 @@
 ---
-title: Horse Shoe
+title: Heavy Cavalry Horse Shoe
 ids: [upgrade/Horse Shoe, command/Research Horse Shoe]
 order: 10
 ---
 
-# Horse Shoe
+# Heavy Cavalry Heavy Cavalry Horse Shoe
 
 <!-- gen:icon -->
-![Horse Shoe](game:interface/icons/upgrades/Horseshoes.tga)
+![Heavy Cavalry Heavy Cavalry Horse Shoe](game:interface/icons/upgrades/Horseshoes.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -21,7 +21,7 @@ order: 10
 
 ## Role
 
-A Blacksmith research that makes your heavy cavalry ([mounted spearmen](../units/mounted-spearman.md), [knights](../units/knight.md), [heavy horsemen](../units/heavy-horseman.md), [monastic knights](../units/monastic-knight.md)) hit harder: the first of three steps (Horse Shoe, Stirrup, Warhorse), offered from the start.
+A Blacksmith research that makes your heavy cavalry ([mounted spearmen](../units/mounted-spearman.md), [knights](../units/knight.md), [heavy horsemen](../units/heavy-horseman.md), [monastic knights](../units/monastic-knight.md)) hit harder: the first of three steps (Heavy Cavalry Horse Shoe, Stirrup, Warhorse), offered from the start.
 
 ## Researched at
 

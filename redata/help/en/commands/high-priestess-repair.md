@@ -1,10 +1,10 @@
 ---
-title: High Priestess Repair
+title: Repair (High Priestess)
 ids: [command/High Priestess Repair]
 order: 10
 ---
 
-# High Priestess Repair
+# Repair (High Priestess)
 
 ## Role
 

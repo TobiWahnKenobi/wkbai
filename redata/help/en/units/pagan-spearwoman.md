@@ -1,13 +1,13 @@
 ---
-title: Pagan Spearwoman
+title: Warrioress of the Dawn
 ids: [unit/Pagan Spearwoman, command/Spawn Pagan Spearwoman]
 order: 10
 ---
 
-# Pagan Spearwoman
+# Warrioress of the Dawn
 
 <!-- gen:icon -->
-![Pagan Spearwoman](game:interface/icons/characters/pagan_spearwoman.tga)
+![Warrioress of the Dawn](game:interface/icons/characters/pagan_spearwoman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -59,19 +59,19 @@ The spearwoman is the Pagan line infantry, trained at the [Hall of Warriors](../
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

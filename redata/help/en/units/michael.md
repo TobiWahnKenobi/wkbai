@@ -1,10 +1,10 @@
 ---
-title: Michael
+title: The Archangel, Sword of God
 ids: [unit/Michael]
 order: 10
 ---
 
-# Michael
+# The Archangel, Sword of God
 
 <!-- gen:facts -->
 ```facts
@@ -26,12 +26,12 @@ blueprint: Michael
 
 ## Role
 
-Michael is the archangel of the pure Imperial path. He comes from the [Michael Statue](../buildings/michael-statue.md) after the [Sacrifice for Michael](../upgrades/sacrifice-for-michael.md): 1000 hit points, armour 25 from the front and blows that do 150 damage to buildings.
+Archangel is the archangel of the pure Imperial path. He comes from the [Statue of the Archangel](../buildings/michael-statue.md) after the [Sacrifice for Archangel](../upgrades/sacrifice-for-michael.md): 1000 hit points, armour 25 from the front and blows that do 150 damage to buildings.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
-- **Comes from:** building a [Michael Statue](../buildings/michael-statue.md)
+- **Comes from:** building a [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -54,4 +54,4 @@ Michael is the archangel of the pure Imperial path. He comes from the [Michael S
 
 ## Tips
 
-- One Michael can break an enemy town on his own; send troops with him to deal with the small fry.
+- One Archangel can break an enemy town on his own; send troops with him to deal with the small fry.

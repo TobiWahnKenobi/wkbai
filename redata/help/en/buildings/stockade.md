@@ -27,7 +27,7 @@ blueprint: Stockade
 
 ## Role
 
-The stockade is the first wall: a wooden fence, cheap (30 wood) and quick to put up, but weak (strength 100). After [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md) you build stone walls instead.
+The stockade is the first wall: a wooden fence, cheap (30 wood) and quick to put up, but weak (strength 100). After [Stockade to Fortified Wall](../upgrades/stockade-to-unaligned-wall.md) you build stone walls instead.
 
 ## Built by
 

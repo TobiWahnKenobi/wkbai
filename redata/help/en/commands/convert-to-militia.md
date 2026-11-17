@@ -1,13 +1,13 @@
 ---
-title: Convert to Militia
+title: Conscript Peasant into Militia
 ids: [command/Convert to Militia]
 order: 10
 ---
 
-# Convert to Militia
+# Conscript Peasant into Militia
 
 <!-- gen:icon -->
-![Convert to Militia](game:interface/icons/SIC_Convert_To_Militia.tga)
+![Conscript Peasant into Militia](game:interface/icons/SIC_Convert_To_Militia.tga)
 <!-- /gen:icon -->
 
 ## Role

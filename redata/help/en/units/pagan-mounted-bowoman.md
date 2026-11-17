@@ -1,13 +1,13 @@
 ---
-title: Pagan Mounted Bowoman
+title: Mounted Huntress
 ids: [unit/Pagan Mounted Bowoman, command/Spawn Pagan Mounted Bowoman]
 order: 10
 ---
 
-# Pagan Mounted Bowoman
+# Mounted Huntress
 
 <!-- gen:icon -->
-![Pagan Mounted Bowoman](game:interface/icons/characters/pagan_mounted_bowoman.tga)
+![Mounted Huntress](game:interface/icons/characters/pagan_mounted_bowoman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: Pagan Mounted Bowoman
 
 ## Role
 
-The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points and an 18-point arrow. She needs a [Temple](../buildings/temple.md) and is not offered on the Imperial path.
+The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points and an 18-point arrow. She needs a [Sacred Grove](../buildings/temple.md) and is not offered on the Imperial path.
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Temple](../buildings/temple.md)
+- building a [Sacred Grove](../buildings/temple.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -64,15 +64,15 @@ The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points 
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire Arrow](../commands/fire-arrow.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Form Up](../commands/formation.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

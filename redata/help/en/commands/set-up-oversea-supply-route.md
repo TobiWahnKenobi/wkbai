@@ -1,13 +1,13 @@
 ---
-title: Set Up Oversea Supply Route
+title: Up Overseas Supply Line
 ids: [command/Set Up Oversea Supply Route]
 order: 10
 ---
 
-# Set Up Oversea Supply Route
+# Up Overseas Supply Line
 
 <!-- gen:icon -->
-![Set Up Oversea Supply Route](game:interface/icons/SIC_Set_Up_Oversea_Supply_Route.tga)
+![Up Overseas Supply Line](game:interface/icons/SIC_Set_Up_Oversea_Supply_Route.tga)
 <!-- /gen:icon -->
 
 ## Role

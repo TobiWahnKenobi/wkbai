@@ -4,7 +4,7 @@ ids: [upgrade/Sacrifice for Michael, command/Research Sacrifice for Michael]
 order: 10
 ---
 
-# Sacrifice for Michael
+# Sacrifice for Archangel
 
 <!-- gen:icon -->
 ![Sacrifice for Michael](game:interface/icons/upgrades/Sacrifice_to_Michael.tga)
@@ -20,18 +20,18 @@ order: 10
 
 ## Role
 
-Made at the [Michael Statue](../buildings/michael-statue.md): after it, the archangel [Michael](../units/michael.md) comes to fight for you. It takes 600 seconds.
+Made at the [Statue of the Archangel](../buildings/michael-statue.md): after it, the archangel [Archangel](../units/michael.md) comes to fight for you. It takes 600 seconds.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Michael Statue](../buildings/michael-statue.md)
+- **Researched at:** [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:needs -->
 
 ## Leads to

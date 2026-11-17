@@ -1,13 +1,13 @@
 ---
-title: Clear Supply Route
+title: Clear Supply Line
 ids: [command/Clear Supply Route]
 order: 10
 ---
 
-# Clear Supply Route
+# Clear Supply Line
 
 <!-- gen:icon -->
-![Clear Supply Route](game:interface/icons/SIC_Clear_Supply_Route.tga)
+![Clear Supply Line](game:interface/icons/SIC_Clear_Supply_Route.tga)
 <!-- /gen:icon -->
 
 ## Role

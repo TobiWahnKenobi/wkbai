@@ -54,15 +54,15 @@ The cog is the transport ship: it carries troops and goods across water. It has 
 
 <!-- gen:commands -->
 - [Halt](../commands/halt.md)
-- [Cog Set Up Drop Off Dock](../commands/cog-set-up-drop-off-dock.md)
-- [Docking](../commands/docking.md)
-- [Pick up Passenger](../commands/pick-up-passenger.md)
-- [Unload Passengers](../commands/unload-passengers.md)
-- [Guard](../commands/guard.md)
+- [Deliver Resources (Cog Set Up Drop Off Dock)](../commands/cog-set-up-drop-off-dock.md)
+- [Repair (Docking)](../commands/docking.md)
+- [Embark Next unit Selected](../commands/pick-up-passenger.md)
+- [Disembark](../commands/unload-passengers.md)
+- [Guard Next Unit Selected](../commands/guard.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Load troops with [Board Vessel](../commands/board-vessel.md) or [Pick up Passenger](../commands/pick-up-passenger.md) and land them with [Unload Passengers](../commands/unload-passengers.md).
+- Load troops with [Board Vessel](../commands/board-vessel.md) or [Embark Next unit Selected](../commands/pick-up-passenger.md) and land them with [Disembark](../commands/unload-passengers.md).
 - A cog can also run a sea supply route between docks.

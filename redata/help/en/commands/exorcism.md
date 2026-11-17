@@ -1,13 +1,13 @@
 ---
-title: Exorcism
+title: Exorcise Demons
 ids: [command/Exorcism]
 order: 10
 ---
 
-# Exorcism
+# Exorcise Demons
 
 <!-- gen:icon -->
-![Exorcism](game:interface/icons/SIC_Exorsist.tga)
+![Exorcise Demons](game:interface/icons/SIC_Exorsist.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Drives out an evil spirit: frees a unit possessed by a succubus.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Inquisitor](../units/inquisitor.md), [Monastic Knight](../units/monastic-knight.md), [Priest](../units/priest.md)
+- **Offered by:** [Holy Warrior](../units/monastic-knight.md), [Inquisitor](../units/inquisitor.md), [Priest](../units/priest.md)
 <!-- /gen:trained -->
 
 ## Needs

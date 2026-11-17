@@ -1,13 +1,13 @@
 ---
-title: Become Heretic
+title: Spread Heresy
 ids: [command/Become Heretic]
 order: 10
 ---
 
-# Become Heretic
+# Spread Heresy
 
 <!-- gen:icon -->
-![Become Heretic](game:interface/icons/SIC_heritic.tga)
+![Spread Heresy](game:interface/icons/SIC_heritic.tga)
 <!-- /gen:icon -->
 
 ## Role

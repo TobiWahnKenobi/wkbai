@@ -1,13 +1,13 @@
 ---
-title: Close Unaligned Gatehouse
+title: Close (Fortified Gatehouse)
 ids: [command/Close Unaligned Gatehouse]
 order: 10
 ---
 
-# Close Unaligned Gatehouse
+# Close (Fortified Gatehouse)
 
 <!-- gen:icon -->
-![Close Unaligned Gatehouse](game:interface/icons/sic_close_gate.tga)
+![Close (Fortified Gatehouse)](game:interface/icons/sic_close_gate.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Closes the stone gatehouse.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Unaligned Gatehouse](../buildings/unaligned-gatehouse-closed.md)
+- **Offered by:** [Fortified Gatehouse](../buildings/unaligned-gatehouse-closed.md)
 <!-- /gen:trained -->
 
 ## Needs

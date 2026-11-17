@@ -1,13 +1,13 @@
 ---
-title: Demob all Militia
+title: Convert all Militia into Peasants
 ids: [command/Demob all Militia]
 order: 10
 ---
 
-# Demob all Militia
+# Convert all Militia into Peasants
 
 <!-- gen:icon -->
-![Demob all Militia](game:interface/icons/SIC_Dispand_Militia.tga)
+![Convert all Militia into Peasants](game:interface/icons/SIC_Dispand_Militia.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Sends all militia back to work as peasants.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Castle (Imperial)](../buildings/castle-celestial.md), [Castle (Pagan)](../buildings/castle-pagan.md), [Castle (Renaissance)](../buildings/castle-tech.md), [Keep (Imperial)](../buildings/keep-celestial.md), [Keep (Pagan)](../buildings/keep-pagan.md), [Keep (Renaissance)](../buildings/keep-tech.md), [Manor](../buildings/manor.md), [Palace (Imperial)](../buildings/palace-celestial.md), [Palace (Pagan)](../buildings/palace-pagan.md), [Palace (Renaissance)](../buildings/palace-tech.md)
+- **Offered by:** [Imperial Castle](../buildings/castle-celestial.md), [Imperial Keep](../buildings/keep-celestial.md), [Imperial Palace](../buildings/palace-celestial.md), [Manor](../buildings/manor.md), [Pagan Castle](../buildings/castle-pagan.md), [Pagan Keep](../buildings/keep-pagan.md), [Pagan Palace](../buildings/palace-pagan.md), [Renaissance Castle](../buildings/castle-tech.md), [Renaissance Keep](../buildings/keep-tech.md), [Renaissance Palace](../buildings/palace-tech.md)
 <!-- /gen:trained -->
 
 ## Needs

@@ -1,13 +1,13 @@
 ---
-title: Inflict Firestorm
+title: Inflict Wrath of Heaven
 ids: [command/Inflict Firestorm]
 order: 10
 ---
 
-# Inflict Firestorm
+# Inflict Wrath of Heaven
 
 <!-- gen:icon -->
-![Inflict Firestorm](game:interface/icons/SIC_Firestorm.tga)
+![Inflict Wrath of Heaven](game:interface/icons/SIC_Firestorm.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -23,7 +23,7 @@ An act of God called down by the [bishop](../units/bishop.md): it rains fire on 
 ## Needs
 
 <!-- gen:needs -->
-- [Malleus Maleficarum](../upgrades/malleus-maleficarum.md)
+- [Witch Hunt](../upgrades/malleus-maleficarum.md)
 <!-- /gen:needs -->
 
 ## Tips

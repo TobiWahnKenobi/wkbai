@@ -1,13 +1,13 @@
 ---
-title: Bombard Boat
+title: Galleass
 ids: [unit/Bombard Boat, command/Spawn Bombard Boat]
 order: 10
 ---
 
-# Bombard Boat
+# Galleass
 
 <!-- gen:icon -->
-![Bombard Boat](game:interface/icons/characters/unaligned_bombard_boat.tga)
+![Galleass](game:interface/icons/characters/unaligned_bombard_boat.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: Bombard Boat
 
 ## Role
 
-The bombard boat is the heaviest warship: 700 hit points, armour 22 all round and a cannon with a range of 90. It costs 800 wood and 100 gold and needs [Gunpowder](../upgrades/gunpowder.md), a [Black Mass](../buildings/black-mass.md) or a [Cathedral](../buildings/cathedral-stone.md).
+The bombard boat is the heaviest warship: 700 hit points, armour 22 all round and a cannon with a range of 90. It costs 800 wood and 100 gold and needs [Bombard Upgrade](../upgrades/gunpowder.md), a [Temple of the Moon](../buildings/black-mass.md) or a [Cathedral](../buildings/cathedral-stone.md).
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The bombard boat is the heaviest warship: 700 hit points, armour 22 all round an
 ## Needs
 
 <!-- gen:needs -->
-- [Gunpowder](../upgrades/gunpowder.md) or building a [Black Mass](../buildings/black-mass.md) or building a [Cathedral](../buildings/cathedral-stone.md)
+- [Bombard Upgrade](../upgrades/gunpowder.md) or building a [Temple of the Moon](../buildings/black-mass.md) or building a [Cathedral](../buildings/cathedral-stone.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -58,9 +58,9 @@ The bombard boat is the heaviest warship: 700 hit points, armour 22 all round an
 - [Halt](../commands/halt.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Fire Bombard](../commands/fire-bombard.md)
-- [Guard](../commands/guard.md)
-- [Docking](../commands/docking.md)
+- [Fire (Bombard)](../commands/fire-bombard.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Repair (Docking)](../commands/docking.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

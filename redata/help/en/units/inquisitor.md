@@ -43,7 +43,7 @@ The inquisitor is the Imperial witch hunter from the [Cathedral](../buildings/ca
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md) or building a [Observatory](../buildings/observatory.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md) or building a [Observatory](../buildings/observatory.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -58,23 +58,23 @@ The inquisitor is the Imperial witch hunter from the [Cathedral](../buildings/ca
 - [Capture](../commands/capture.md)
 - [Halt](../commands/halt.md)
 - [Hold Fire](../commands/hold-fire.md)
-- [Burn Heretic](../commands/burn-heretic.md)
-- [Exorcism](../commands/exorcism.md)
-- [Banish](../commands/banish.md)
+- [Burn a Heretic](../commands/burn-heretic.md)
+- [Exorcise Demons](../commands/exorcism.md)
+- [Banish Demon](../commands/banish.md)
 - [Interrogate](../commands/interrogate.md)
-- [Holy Fire](../commands/holy-fire.md)
-- [Pray at Church](../commands/pray-at-church.md)
+- [Holy Flame](../commands/holy-fire.md)
+- [Pray](../commands/pray-at-church.md)
 - [Pray for Righteousness](../commands/pray-for-righteousness.md)
-- [Resupply](../commands/resupply.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Send inquisitors after enemy succubi, druids and priestesses.
-- It needs a [Michael Statue](../buildings/michael-statue.md) or an [Observatory](../buildings/observatory.md).
+- It needs a [Statue of the Archangel](../buildings/michael-statue.md) or an [Observatory](../buildings/observatory.md).

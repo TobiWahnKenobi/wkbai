@@ -44,7 +44,7 @@ The stables train every horseman: mounted spearmen and javelineers from the star
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Javelineer](../units/javelineer.md), [Mounted Hand Gunner](../units/mounted-hand-gunner.md), [Pagan Mounted Bowoman](../units/pagan-mounted-bowoman.md), [Mounted Spearman](../units/mounted-spearman.md), [Heavy Horseman](../units/heavy-horseman.md), [Heavy Horseman (Wickerman)](../units/heavy-horseman-upgrade.md), [Knight](../units/knight.md), [Celestial Knight](../units/celestial-knight.md)
+- **Trains:** [Javelineer](../units/javelineer.md), [Dragoon](../units/mounted-hand-gunner.md), [Mounted Huntress](../units/pagan-mounted-bowoman.md), [Squire](../units/mounted-spearman.md), [Battle Rider](../units/heavy-horseman.md), [War Rider](../units/heavy-horseman-upgrade.md), [Knight](../units/knight.md), [Imperial Knight](../units/celestial-knight.md)
 <!-- /gen:leads -->
 
 ## Commands

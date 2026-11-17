@@ -17,7 +17,7 @@ Sends peasants to repair a damaged building. It costs some of the building's mat
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Peasant](../units/peasant.md), [Technological Hero](../units/hero-technological.md)
+- **Offered by:** [King Artos](../units/hero-technological.md), [Peasant](../units/peasant.md)
 <!-- /gen:trained -->
 
 ## Needs

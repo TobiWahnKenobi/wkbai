@@ -1,10 +1,10 @@
 ---
-title: Wooden Forts
+title: Fort Upgrade
 ids: [upgrade/Fort Wood, command/Research Fort Wood]
 order: 10
 ---
 
-# Wooden Forts
+# Fort Upgrade
 
 <!-- gen:facts -->
 <!-- facts:static -->
@@ -28,13 +28,13 @@ The Guildhall's fort plans: after this research, peasants can build the [wooden 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Monastery](../buildings/monastery.md) or building a [Sawmill](../buildings/sawmill.md) or building a [Temple](../buildings/temple.md) or building a [Windmill](../buildings/windmill.md)
+- building a [Monastery](../buildings/monastery.md) or building a [Sawmill](../buildings/sawmill.md) or building a [Sacred Grove](../buildings/temple.md) or building a [Windmill](../buildings/windmill.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Fort (stone)](../buildings/fort-stone.md), [Fort (wooden)](../buildings/fort-wood.md), [Upgrade to Wooden Fort](upgrade-to-wooden-fort.md)
+- **Unlocks:** [Holy Fortress](../buildings/fort-stone.md), [Fort](../buildings/fort-wood.md), [Upgrade Watch Tower to Fort](upgrade-to-wooden-fort.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -1,13 +1,13 @@
 ---
-title: Stop Recon
+title: Stop Exploring
 ids: [command/Stop Recon]
 order: 10
 ---
 
-# Stop Recon
+# Stop Exploring
 
 <!-- gen:icon -->
-![Stop Recon](game:interface/icons/SIC_Scout_Stop_Exploring.tga)
+![Stop Exploring](game:interface/icons/SIC_Scout_Stop_Exploring.tga)
 <!-- /gen:icon -->
 
 ## Role

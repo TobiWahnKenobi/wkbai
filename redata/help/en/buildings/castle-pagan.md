@@ -1,10 +1,10 @@
 ---
-title: Castle (Pagan)
+title: Pagan Castle
 ids: [building/Castle_Pagan]
 order: 10
 ---
 
-# Castle (Pagan)
+# Pagan Castle
 
 <!-- gen:facts -->
 ```facts
@@ -23,12 +23,12 @@ blueprint: Castle_Pagan
 
 ## Role
 
-The Pagan Castle is your Manor's third level. The Keep becomes this Castle by itself when you finish a Black Mass. It has structural integrity 2000 and opens the third tier of research at the Blacksmith; with a Castle you may also build another Manor.
+The Pagan Castle is your Manor's third level. The Keep becomes this Castle by itself when you finish a Temple of the Moon. It has structural integrity 2000 and opens the third tier of research at the Blacksmith; with a Castle you may also build another Manor.
 
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** building a [Black Mass](black-mass.md)
+- **Comes from:** building a [Temple of the Moon](black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -47,17 +47,17 @@ The Pagan Castle is your Manor's third level. The Keep becomes this Castle by it
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Ring Bell](../commands/ring-bell.md)
-- [Recall Peasants](../commands/recall-peasants.md)
-- [Conscript all Peasants](../commands/conscript-all-peasants.md)
-- [Demob all Militia](../commands/demob-all-militia.md)
+- [Sanctuary (Ring Bell)](../commands/ring-bell.md)
+- [Sanctuary (Recall Peasants)](../commands/recall-peasants.md)
+- [Conscript all Peasants into Militia](../commands/conscript-all-peasants.md)
+- [Convert all Militia into Peasants](../commands/demob-all-militia.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Garrison troops inside to make it shoot harder, and use [Ring Bell](../commands/ring-bell.md) to send peasants into shelter during a raid.
+- Garrison troops inside to make it shoot harder, and use [Sanctuary (Ring Bell)](../commands/ring-bell.md) to send peasants into shelter during a raid.
 - A second [Manor](manor.md) elsewhere gives you another place to train peasants and store goods.

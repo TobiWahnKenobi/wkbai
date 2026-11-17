@@ -1,13 +1,13 @@
 ---
-title: Undead Legion
+title: Invoke Hecate
 ids: [upgrade/Undead Legion, command/Research Undead Legion]
 order: 10
 ---
 
-# Undead Legion
+# Invoke Hecate
 
 <!-- gen:icon -->
-![Undead Legion](game:interface/icons/upgrades/Research_Undead.tga)
+![Invoke Hecate](game:interface/icons/upgrades/Research_Undead.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -38,7 +38,7 @@ An Arcanum research that lets the Hall of Warriors raise the [undead legion](../
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Undead Legion](../units/undead-legion.md)
+- **Unlocks:** [Invoke Hecate](../units/undead-legion.md)
 <!-- /gen:leads -->
 
 ## Commands

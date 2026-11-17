@@ -1,13 +1,13 @@
 ---
-title: Monastic Knight Heal
+title: Heal
 ids: [command/Monastic Knight Heal]
 order: 10
 ---
 
-# Monastic Knight Heal
+# Heal
 
 <!-- gen:icon -->
-![Monastic Knight Heal](game:interface/icons/sic_heal.tga)
+![Heal](game:interface/icons/sic_heal.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ The monastic knight heals a wounded unit.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Monastic Knight](../units/monastic-knight.md)
+- **Offered by:** [Holy Warrior](../units/monastic-knight.md)
 <!-- /gen:trained -->
 
 ## Needs

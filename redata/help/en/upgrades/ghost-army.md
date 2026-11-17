@@ -21,12 +21,12 @@ order: 10
 
 ## Role
 
-A Black Mass research that lets the [high priestess](../units/high-priestess.md) raise a [ghost army](../commands/ghost-army.md).
+A Temple of the Moon research that lets the [high priestess](../units/high-priestess.md) raise a [ghost army](../commands/ghost-army.md).
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Black Mass](../buildings/black-mass.md)
+- **Researched at:** [Temple of the Moon](../buildings/black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs

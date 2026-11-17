@@ -27,7 +27,7 @@ You always see your own and your allies' disguised units as they are.
 
 ## What spies do
 
-- **[Arson](../commands/arson.md):** set an enemy building on fire.
+- **[Arson Attack](../commands/arson.md):** set an enemy building on fire.
 - **[Blow Open Gates](../commands/blow-open-gates.md):** open an enemy gatehouse.
 - **[Spy on Infantry](../commands/spy-on-infantry.md)** (and on cavalry): show you the enemy's troops for 10 seconds, even in the fog.
 - **Ride in a cart:** a spy can hide in a cart and climb out when it delivers in an enemy town.

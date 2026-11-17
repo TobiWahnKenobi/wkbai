@@ -1,10 +1,10 @@
 ---
-title: Unaligned Wall to Technological Wall
+title: Battlements Upgrade
 ids: [upgrade/Unaligned Wall to Technological Wall, command/Research Unaligned Wall to Technological Wall]
 order: 10
 ---
 
-# Unaligned Wall to Technological Wall
+# Battlements Upgrade
 
 <!-- gen:facts -->
 <!-- facts:static -->
@@ -33,8 +33,8 @@ The second wall research at the Guildhall: your stone walls, towers and gates ar
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Technological Gatehouse](../buildings/technological-gatehouse-closed.md), [Technological Wall](../buildings/technological-wall.md), [Unaligned Wall](../buildings/unaligned-wall.md), [Upgrade to Technological Tower](upgrade-to-technological-tower.md)
-- **Turns units or buildings into, or calls up:** [Technological Wall](../buildings/technological-wall.md), [Technological Tower](../buildings/technological-tower-stone.md), [Technological Gatehouse](../buildings/technological-gatehouse-closed.md)
+- **Unlocks:** [Gatehouse Battlements](../buildings/technological-gatehouse-closed.md), [Battlements](../buildings/technological-wall.md), [Fortified Wall](../buildings/unaligned-wall.md), [Upgrade Wall to Battlement Tower](upgrade-to-technological-tower.md)
+- **Turns units or buildings into, or calls up:** [Battlements](../buildings/technological-wall.md), [Battlement Tower](../buildings/technological-tower-stone.md), [Gatehouse Battlements](../buildings/technological-gatehouse-closed.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -1,13 +1,13 @@
 ---
-title: Inflict Vision
+title: Visions
 ids: [command/Inflict Vision]
 order: 10
 ---
 
-# Inflict Vision
+# Visions
 
 <!-- gen:icon -->
-![Inflict Vision](game:interface/icons/SIC_Vision.tga)
+![Visions](game:interface/icons/SIC_Vision.tga)
 <!-- /gen:icon -->
 
 ## Role

@@ -21,7 +21,7 @@ order: 10
 
 ## Role
 
-A Cathedral research that calls a crusade: it allows the [Michael Statue](../buildings/michael-statue.md) and the bishop's first acts of God (vision, blindness and plague).
+A Cathedral research that calls a crusade: it allows the [Statue of the Archangel](../buildings/michael-statue.md) and the bishop's first acts of God (vision, blindness and plague).
 
 ## Researched at
 
@@ -38,7 +38,7 @@ A Cathedral research that calls a crusade: it allows the [Michael Statue](../bui
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Michael Statue](../buildings/michael-statue.md)
+- **Unlocks:** [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:leads -->
 
 ## Commands

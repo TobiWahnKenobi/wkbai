@@ -1,13 +1,13 @@
 ---
-title: Open Celestial Gatehouse
+title: Open (Gatehouse Ramparts)
 ids: [command/Open Celestial Gatehouse]
 order: 10
 ---
 
-# Open Celestial Gatehouse
+# Open (Gatehouse Ramparts)
 
 <!-- gen:icon -->
-![Open Celestial Gatehouse](game:interface/icons/sic_open_gate.tga)
+![Open (Gatehouse Ramparts)](game:interface/icons/sic_open_gate.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Opens the Imperial gatehouse so units can pass through.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Celestial Gatehouse](../buildings/celestial-gatehouse-closed.md)
+- **Offered by:** [Gatehouse Ramparts](../buildings/celestial-gatehouse-closed.md)
 <!-- /gen:trained -->
 
 ## Needs

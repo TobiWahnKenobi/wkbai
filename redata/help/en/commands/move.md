@@ -17,7 +17,7 @@ Sends the selected units to a place. With a unit selected, a right-click on open
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** every unit except [Abaddon](../units/abaddon.md), [Michael](../units/michael.md), [Monk](../units/monk.md), [Trebuchet](../units/trebuchet.md)
+- **Offered by:** every unit except [Abaddon](../units/abaddon.md), [Monk](../units/monk.md), [The Archangel, Sword of God](../units/michael.md), [Trebuchet](../units/trebuchet.md)
 <!-- /gen:trained -->
 
 ## Needs

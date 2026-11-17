@@ -12,7 +12,7 @@ order: 10
 
 ## Role
 
-The arch druid grows new trees. It needs a [Wickerman](../buildings/wickerman.md).
+The arch druid grows new trees. It needs a [The Wickerman](../buildings/wickerman.md).
 
 ## Offered by
 
@@ -23,6 +23,6 @@ The arch druid grows new trees. It needs a [Wickerman](../buildings/wickerman.md
 ## Needs
 
 <!-- gen:needs -->
-- building a [Wickerman](../buildings/wickerman.md)
+- building a [The Wickerman](../buildings/wickerman.md)
 <!-- /gen:needs -->
 

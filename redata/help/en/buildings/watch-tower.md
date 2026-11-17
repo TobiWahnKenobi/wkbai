@@ -46,15 +46,15 @@ The watch tower is a lone wooden tower that shoots at enemies (18 damage) and se
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Upgrade to Wooden Fort](../upgrades/upgrade-to-wooden-fort.md)
+- **Research here:** [Upgrade Watch Tower to Fort](../upgrades/upgrade-to-wooden-fort.md)
 <!-- /gen:leads -->
 
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
-- [UnGarrison Hand to Hand Units](../commands/ungarrison-hand-to-hand-units.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
+- [Ungarrison Hand to Hand Defenders](../commands/ungarrison-hand-to-hand-units.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->
@@ -62,4 +62,4 @@ The watch tower is a lone wooden tower that shoots at enemies (18 damage) and se
 ## Tips
 
 - Put one on each approach to an outlying Village.
-- [Upgrade to Wooden Fort](../upgrades/upgrade-to-wooden-fort.md) after the Guildhall's fort research.
+- [Upgrade Watch Tower to Fort](../upgrades/upgrade-to-wooden-fort.md) after the Guildhall's fort research.

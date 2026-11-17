@@ -51,8 +51,8 @@ The gold elemental is a giant woken by an [Arch Druid](arch-druid.md) from a gol
 - [Interrogate](../commands/interrogate.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Attack](../commands/attack.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

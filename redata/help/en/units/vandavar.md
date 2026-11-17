@@ -1,13 +1,13 @@
 ---
-title: Vandavar
+title: Vandavar Barbarian
 ids: [unit/Vandavar, command/Spawn Vandavar]
 order: 10
 ---
 
-# Vandavar
+# Vandavar Barbarian
 
 <!-- gen:icon -->
-![Vandavar](game:interface/icons/characters/pagan_vandavar_barbarian.tga)
+![Vandavar Barbarian](game:interface/icons/characters/pagan_vandavar_barbarian.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,7 +31,7 @@ blueprint: Vandavar
 
 ## Role
 
-Vandavar raiders are Pagan plunderers from the [Trading Post](../buildings/trading-post.md). They steal goods from enemy buildings ([Plunder](../commands/plunder.md)), carry off sacks and burn what they leave. They cost 80 food and need a [Temple](../buildings/temple.md).
+Vandavar Barbarian raiders are Pagan plunderers from the [Trading Post](../buildings/trading-post.md). They steal goods from enemy buildings ([Plunder](../commands/plunder.md)), carry off sacks and burn what they leave. They cost 80 food and need a [Sacred Grove](../buildings/temple.md).
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ Vandavar raiders are Pagan plunderers from the [Trading Post](../buildings/tradi
 ## Needs
 
 <!-- gen:needs -->
-- building a [Temple](../buildings/temple.md)
+- building a [Sacred Grove](../buildings/temple.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -60,16 +60,16 @@ Vandavar raiders are Pagan plunderers from the [Trading Post](../buildings/tradi
 - [Halt](../commands/halt.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
-- [Arson](../commands/arson.md)
+- [Arson Attack](../commands/arson.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Train](../commands/train.md)
-- [Vandavar - Pick up Sack](../commands/vandavar-pick-up-sack.md)
-- [Resupply](../commands/resupply.md)
+- [Pick Up Resource Sack (Vandavar Barbarian - Pick up Sack)](../commands/vandavar-pick-up-sack.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

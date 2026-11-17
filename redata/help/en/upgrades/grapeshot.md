@@ -1,13 +1,13 @@
 ---
-title: Grapeshot
+title: Explosives
 ids: [upgrade/Grapeshot, command/Research Grapeshot]
 order: 10
 ---
 
-# Grapeshot
+# Explosives
 
 <!-- gen:icon -->
-![Grapeshot](game:interface/icons/upgrades/Grape_Shot.tga)
+![Explosives](game:interface/icons/upgrades/Grape_Shot.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

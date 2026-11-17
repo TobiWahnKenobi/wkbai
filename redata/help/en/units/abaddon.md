@@ -27,12 +27,12 @@ blueprint: Abaddon
 
 ## Role
 
-Abaddon is the demon lord of the pure Pagan path. He comes from the [Wickerman](../buildings/wickerman.md) after the [Sacrifice for Abaddon](../upgrades/sacrifice-for-abaddon.md): 800 hit points, armour 25 from the front and blows that do 150 damage to buildings.
+Abaddon is the demon lord of the pure Pagan path. He comes from the [The Wickerman](../buildings/wickerman.md) after the [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md): 800 hit points, armour 25 from the front and blows that do 150 damage to buildings.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
-- **Comes from:** building a [Wickerman](../buildings/wickerman.md)
+- **Comes from:** building a [The Wickerman](../buildings/wickerman.md)
 <!-- /gen:trained -->
 
 ## Needs

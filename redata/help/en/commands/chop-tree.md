@@ -1,13 +1,13 @@
 ---
-title: Chop Tree
+title: Gather Materials
 ids: [command/Chop Tree]
 order: 10
 ---
 
-# Chop Tree
+# Gather Materials
 
 <!-- gen:icon -->
-![Chop Tree](game:interface/icons/SIC_Chop_Wood.tga)
+![Gather Materials](game:interface/icons/SIC_Chop_Wood.tga)
 <!-- /gen:icon -->
 
 ## Role

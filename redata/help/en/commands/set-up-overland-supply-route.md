@@ -1,13 +1,13 @@
 ---
-title: Set Up Overland Supply Route
+title: Up Overland Supply Line
 ids: [command/Set Up Overland Supply Route]
 order: 10
 ---
 
-# Set Up Overland Supply Route
+# Up Overland Supply Line
 
 <!-- gen:icon -->
-![Set Up Overland Supply Route](game:interface/icons/SIC_Set_Up_Overland_Supply_Route.tga)
+![Up Overland Supply Line](game:interface/icons/SIC_Set_Up_Overland_Supply_Route.tga)
 <!-- /gen:icon -->
 
 ## Role

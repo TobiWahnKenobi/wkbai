@@ -1,13 +1,13 @@
 ---
-title: Banish
+title: Banish Demon
 ids: [command/Banish]
 order: 10
 ---
 
-# Banish
+# Banish Demon Demon
 
 <!-- gen:icon -->
-![Banish](game:interface/icons/SIC_Bannish.tga)
+![Banish Demon Demon](game:interface/icons/SIC_Bannish.tga)
 <!-- /gen:icon -->
 
 ## Role

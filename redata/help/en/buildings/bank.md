@@ -27,7 +27,7 @@ blueprint: Bank
 
 ## Role
 
-The bank is a late economy building of the Renaissance side. It costs 600 wood, needs an Observatory and is not offered once you take a pure path (Michael Statue or Wickerman).
+The bank is a late economy building of the Renaissance side. It costs 600 wood, needs an Observatory and is not offered once you take a pure path (Statue of the Archangel or Wickerman).
 
 ## Built by
 
@@ -39,7 +39,7 @@ The bank is a late economy building of the Renaissance side. It costs 600 wood, 
 
 <!-- gen:needs -->
 - building a [Observatory](observatory.md)
-- Not on the pure paths: the button goes once you build a [Michael Statue](michael-statue.md) or a [Wickerman](wickerman.md).
+- Not on the pure paths: the button goes once you build a [Statue of the Archangel](michael-statue.md) or a [The Wickerman](wickerman.md).
 <!-- /gen:needs -->
 
 ## Leads to

@@ -1,10 +1,10 @@
 ---
-title: Pick up Passenger
+title: Embark Next unit Selected
 ids: [command/Pick up Passenger]
 order: 10
 ---
 
-# Pick up Passenger
+# Embark Next unit Selected
 
 ## Role
 

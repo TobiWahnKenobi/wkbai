@@ -1,13 +1,13 @@
 ---
-title: Farm
+title: Standard Farm
 ids: [building/Standard Farm, command/Build Farm Wood]
 order: 10
 ---
 
-# Farm
+# Standard Farm
 
 <!-- gen:icon -->
-![Farm](game:interface/icons/buildings/farms.tga)
+![Standard Farm](game:interface/icons/buildings/farms.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

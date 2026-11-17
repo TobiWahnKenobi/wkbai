@@ -49,9 +49,9 @@ The stockade gatehouse is the gate in a wooden stockade. Your units pass when it
 ## Commands
 
 <!-- gen:commands -->
-- [Open Stockade Gatehouse](../commands/open-stockade-gatehouse.md)
+- [Open (Stockade Gatehouse)](../commands/open-stockade-gatehouse.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- [Open Stockade Gatehouse](../commands/open-stockade-gatehouse.md) and [Close Stockade Gatehouse](../commands/close-stockade-gatehouse.md) switch it.
+- [Open (Stockade Gatehouse)](../commands/open-stockade-gatehouse.md) and [Close (Stockade Gatehouse)](../commands/close-stockade-gatehouse.md) switch it.

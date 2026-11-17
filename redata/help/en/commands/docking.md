@@ -1,13 +1,13 @@
 ---
-title: Docking
+title: Repair (Docking)
 ids: [command/Docking]
 order: 10
 ---
 
-# Docking
+# Repair (Repair (Docking))
 
 <!-- gen:icon -->
-![Docking](game:interface/icons/sic_heal.tga)
+![Repair (Repair (Docking))](game:interface/icons/sic_heal.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -25,7 +25,7 @@ Sends a ship into a dock, where it is repaired.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Arrow Boat](../units/arrow-boat.md), [Bombard Boat](../units/bombard-boat.md), [Cog](../units/cog.md), [Fire Boat](../units/fire-boat.md), [Mangonel Boat](../units/mangonel-boat.md)
+- **Offered by:** [Carrack](../units/mangonel-boat.md), [Cog](../units/cog.md), [Corsair](../units/arrow-boat.md), [Fire Boat](../units/fire-boat.md), [Galleass](../units/bombard-boat.md)
 <!-- /gen:trained -->
 
 ## Needs

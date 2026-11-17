@@ -38,13 +38,13 @@ The henge is the Pagan place of power, built by a high priestess. It brings fort
 ## Needs
 
 <!-- gen:needs -->
-- building a [Temple](temple.md)
+- building a [Sacred Grove](temple.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Gibbering Horde](../units/gibbering-horde.md), [Succubus](../units/succubus.md), [Horde Spewer](../units/horde-spewer.md), [Rock Thrower](../units/rock-thrower.md), [Infernal Engine](../units/infernal-engine.md), [Behemoth](../units/behemoth.md)
+- **Trains:** [Gibbering Horde](../units/gibbering-horde.md), [Succubus](../units/succubus.md), [Spider Demon](../units/horde-spewer.md), [Fomorian Beast](../units/rock-thrower.md), [DeathWyrm](../units/infernal-engine.md), [Behemoth](../units/behemoth.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -55,4 +55,4 @@ The henge is the Pagan place of power, built by a high priestess. It brings fort
 
 ## Tips
 
-- Train a high priestess at the Temple first: only she can build it.
+- Train a high priestess at the Sacred Grove first: only she can build it.

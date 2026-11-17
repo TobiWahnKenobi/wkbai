@@ -1,13 +1,13 @@
 ---
-title: Upgrade Holy Chapter
+title: Holy Chapter Upgrade
 ids: [upgrade/Upgrade Holy Chapter, command/Research Upgrade Holy Chapter]
 order: 10
 ---
 
-# Upgrade Holy Chapter
+# Holy Chapter Upgrade
 
 <!-- gen:icon -->
-![Upgrade Holy Chapter](game:interface/icons/upgrades/Upgrade_to_holy_chapter.tga)
+![Holy Chapter Upgrade](game:interface/icons/upgrades/Upgrade_to_holy_chapter.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

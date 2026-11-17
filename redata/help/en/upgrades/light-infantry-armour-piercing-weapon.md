@@ -1,13 +1,13 @@
 ---
-title: Light Infantry Armour Piercing Weapon
+title: Light Infantry Armour Piercing
 ids: [upgrade/Light Infantry Armour Piercing Weapon, command/Research Light Infantry Armour Piercing Weapon]
 order: 10
 ---
 
-# Light Infantry Armour Piercing Weapon
+# Light Infantry Armour Piercing
 
 <!-- gen:icon -->
-![Light Infantry Armour Piercing Weapon](game:interface/icons/upgrades/LI_Armour_Piercing.tga)
+![Light Infantry Armour Piercing](game:interface/icons/upgrades/LI_Armour_Piercing.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

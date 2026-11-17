@@ -1,13 +1,13 @@
 ---
-title: Rock Thrower
+title: Fomorian Beast
 ids: [unit/Rock Thrower, command/Spawn Rock Thrower]
 order: 10
 ---
 
-# Rock Thrower
+# Fomorian Beast
 
 <!-- gen:icon -->
-![Rock Thrower](game:interface/icons/characters/pagan_rock_thrower.tga)
+![Fomorian Beast](game:interface/icons/characters/pagan_rock_thrower.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,7 +31,7 @@ blueprint: Rock Thrower
 
 ## Role
 
-The rock thrower is a Pagan giant engine from the [Henge](../buildings/henge.md): 500 hit points, armour 15 from the front and rocks that do 35 damage (50 to buildings) every 3 seconds at ranges from 15 to 95. It needs the [Sacrifice for the Formorians](../upgrades/sacrifice-for-the-formorians.md) or a [University](../buildings/university.md).
+The rock thrower is a Pagan giant engine from the [Henge](../buildings/henge.md): 500 hit points, armour 15 from the front and rocks that do 35 damage (50 to buildings) every 3 seconds at ranges from 15 to 95. It needs the [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md) or a [University](../buildings/university.md).
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ The rock thrower is a Pagan giant engine from the [Henge](../buildings/henge.md)
 ## Needs
 
 <!-- gen:needs -->
-- [Sacrifice for the Formorians](../upgrades/sacrifice-for-the-formorians.md) or building a [University](../buildings/university.md)
+- [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md) or building a [University](../buildings/university.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -62,9 +62,9 @@ The rock thrower is a Pagan giant engine from the [Henge](../buildings/henge.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Throw Rock](../commands/throw-rock.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

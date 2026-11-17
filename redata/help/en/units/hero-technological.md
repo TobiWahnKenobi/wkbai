@@ -1,10 +1,10 @@
 ---
-title: Technological Hero
+title: King Artos
 ids: [unit/Hero Technological]
 order: 10
 ---
 
-# Technological Hero
+# King Artos
 
 <!-- gen:facts -->
 ```facts
@@ -51,18 +51,18 @@ The technological hero is the campaign's Renaissance leader: as strong as the ot
 <!-- gen:commands -->
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
-- [Repair Character](../commands/repair-character.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
+- [Repair (Character)](../commands/repair-character.md)
 - [Repair](../commands/repair.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

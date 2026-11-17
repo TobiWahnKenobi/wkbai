@@ -30,7 +30,7 @@ blueprint: Undead Legion
 
 ## Role
 
-The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../buildings/hall-of-warriors.md): 200 hit points, armour 23 from the front and a 37-point attack. They cost 120 food and no food upkeep, and need the [Undead Legion](../upgrades/undead-legion.md) research.
+The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../buildings/hall-of-warriors.md): 200 hit points, armour 23 from the front and a 37-point attack. They cost 120 food and no food upkeep, and need the [Invoke Hecate](../upgrades/undead-legion.md) research.
 
 ## Trained at / Built by
 
@@ -41,7 +41,7 @@ The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../b
 ## Needs
 
 <!-- gen:needs -->
-- [Undead Legion](../upgrades/undead-legion.md)
+- [Invoke Hecate](../upgrades/undead-legion.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -57,14 +57,14 @@ The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../b
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Attack](../commands/attack.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Run Away](../commands/run-away.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

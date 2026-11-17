@@ -23,7 +23,7 @@ An act of God called down by the [bishop](../units/bishop.md): it brings down th
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:needs -->
 
 ## Tips

@@ -1,13 +1,13 @@
 ---
-title: Squirt Ichor
+title: Squirt Slime
 ids: [command/Squirt Ichor]
 order: 10
 ---
 
-# Squirt Ichor
+# Squirt Slime
 
 <!-- gen:icon -->
-![Squirt Ichor](game:interface/icons/SIC_Squirt_Ichor.tga)
+![Squirt Slime](game:interface/icons/SIC_Squirt_Ichor.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ One of the infernal engine's ranged attacks: a burst of ichor at the target.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Infernal Engine](../units/infernal-engine.md)
+- **Offered by:** [DeathWyrm](../units/infernal-engine.md)
 <!-- /gen:trained -->
 
 ## Needs

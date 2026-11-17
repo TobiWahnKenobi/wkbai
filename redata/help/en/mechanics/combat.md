@@ -12,10 +12,10 @@ Every fighting unit belongs to a class, and the classes beat one another in a ci
 
 | Class | Examples | Typical role |
 |---|---|---|
-| **Heavy infantry** (HI) | [Pikeman](../units/pikeman.md), [Man at Arms](../units/man-at-arms.md) | holds a line; stops cavalry from the front |
+| **Heavy infantry** (HI) | [Man-at-Arms](../units/pikeman.md), [Imperial Pikeman](../units/man-at-arms.md) | holds a line; stops cavalry from the front |
 | **Light infantry** (LI) | [Archer](../units/archer.md), [Gunner](../units/gunner.md), [Javelineer](../units/javelineer.md) | wears the enemy down from a distance |
-| **Heavy cavalry** (HC) | [Knight](../units/knight.md), [Heavy Horseman](../units/heavy-horseman.md) | rides down missile troops; strikes flanks and rears |
-| **Light cavalry** (LC) | [Mounted Spearman](../units/mounted-spearman.md), [Scout](../units/scout.md) | scouting, raids, chasing |
+| **Heavy cavalry** (HC) | [Knight](../units/knight.md), [Battle Rider](../units/heavy-horseman.md) | rides down missile troops; strikes flanks and rears |
+| **Light cavalry** (LC) | [Squire](../units/mounted-spearman.md), [Scout](../units/scout.md) | scouting, raids, chasing |
 | **Siege weapons** (SW) | [Mangonel](../units/mangonel.md), [Trebuchet](../units/trebuchet.md) | buildings, packed troops |
 
 Each unit type also rates how well it does against each class; that rating is what the attack cursor shows.
@@ -64,7 +64,7 @@ Set on the unit's command panel ([commands](../commands/index.md)):
 
 - **[Hold Fire](../commands/hold-fire.md)** / **[Fire at Will](../commands/fire-at-will.md)**: missile units wait for an order, or shoot what comes in range.
 - **[Hold Ground](../commands/hold-ground.md)**: the unit doesn't walk to its targets.
-- **[Skirmish Mode](../commands/skirmish-mode.md)**: archers and gunners step back from approaching heavy troops (archers to 30 m, gunners to 40 m), shooting as they go.
+- **[Skirmish](../commands/skirmish-mode.md)**: archers and gunners step back from approaching heavy troops (archers to 30 m, gunners to 40 m), shooting as they go.
 - Missile units forced into hand-to-hand fight back with a dagger.
 
 ## Wounded and dying

@@ -38,15 +38,15 @@ The university is the Renaissance centre of research: gunpowder, rocketry, espio
 ## Needs
 
 <!-- gen:needs -->
-- building a [Black Mass](black-mass.md) or building a [Cathedral](cathedral-stone.md) or building a [Observatory](observatory.md)
-- Not on the pure paths: the button goes once you build a [Michael Statue](michael-statue.md) or a [Wickerman](wickerman.md).
+- building a [Temple of the Moon](black-mass.md) or building a [Cathedral](cathedral-stone.md) or building a [Observatory](observatory.md)
+- Not on the pure paths: the button goes once you build a [Statue of the Archangel](michael-statue.md) or a [The Wickerman](wickerman.md).
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Advanced Windmill](../upgrades/advanced-windmill.md), [Advanced Sawmill](../upgrades/advanced-sawmill.md), [Gunpowder](../upgrades/gunpowder.md), [Rocketry](../upgrades/rocketry.md), [Espionage](../upgrades/espionage.md), [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md)
-- **Building it unlocks:** [Gunner](../units/gunner.md), [Infernal Engine](../units/infernal-engine.md), [Rock Thrower](../units/rock-thrower.md), [Crop Rotation](../upgrades/crop-rotation.md), [Heavy Cavalry Plate Barding](../upgrades/heavy-cavalry-plate-barding.md), [Heavy Infantry Plate Armour](../upgrades/heavy-infantry-plate-armour.md), [Heavy Infantry Tempered Steel Blade](../upgrades/heavy-infantry-tempered-steel-blade.md), [Light Cavalry Armour Piercing Weapon](../upgrades/light-cavalry-armour-piercing-weapon.md), [Light Cavalry Plate Barding](../upgrades/light-cavalry-plate-barding.md), [Light Infantry Armour Piercing Weapon](../upgrades/light-infantry-armour-piercing-weapon.md), [Light Infantry Ringmail Armour](../upgrades/light-infantry-ringmail-armour.md), [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md)
+- **Research here:** [Advanced Windmill](../upgrades/advanced-windmill.md), [Advanced Sawmill](../upgrades/advanced-sawmill.md), [Bombard Upgrade](../upgrades/gunpowder.md), [Rocketry](../upgrades/rocketry.md), [Espionage](../upgrades/espionage.md), [Bayonet](../upgrades/upgrade-to-bayonet.md)
+- **Building it unlocks:** [Gunner](../units/gunner.md), [DeathWyrm](../units/infernal-engine.md), [Fomorian Beast](../units/rock-thrower.md), [Crop Rotation](../upgrades/crop-rotation.md), [Heavy Cavalry Plate Barding](../upgrades/heavy-cavalry-plate-barding.md), [Heavy Infantry Plate Armour](../upgrades/heavy-infantry-plate-armour.md), [Heavy Infantry Tempered Steel](../upgrades/heavy-infantry-tempered-steel-blade.md), [Light Cavalry Armour Piercing Weapon](../upgrades/light-cavalry-armour-piercing-weapon.md), [Light Cavalry Plate Barding](../upgrades/light-cavalry-plate-barding.md), [Light Infantry Armour Piercing](../upgrades/light-infantry-armour-piercing-weapon.md), [Light Infantry Ringmail Armour](../upgrades/light-infantry-ringmail-armour.md), [Bayonet](../upgrades/upgrade-to-bayonet.md)
 <!-- /gen:leads -->
 
 ## Commands

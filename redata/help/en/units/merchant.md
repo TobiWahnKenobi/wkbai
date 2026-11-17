@@ -57,13 +57,13 @@ The merchant trades: it turns goods into gold at a shop or market and carries th
 - [Halt](../commands/halt.md)
 - [Interrogate](../commands/interrogate.md)
 - [Convert Goods to Gold](../commands/convert-goods-to-gold.md)
-- [Shop](../commands/shop.md)
-- [Deliver Resources to Deliverable Building](../commands/deliver-resources-to-deliverable-building.md)
+- [Trade at Shop](../commands/shop.md)
+- [Deliver Resources (to Deliverable Building)](../commands/deliver-resources-to-deliverable-building.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

@@ -44,8 +44,8 @@ The barracks trains foot soldiers: archers and spearmen from the start, then pik
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Archer](../units/archer.md), [Spearman](../units/spearman.md), [Pikeman](../units/pikeman.md), [Celestial Archer](../units/celestial-archer.md), [Man at Arms](../units/man-at-arms.md), [Gunner](../units/gunner.md), [Gunner with Bayonet](../units/gunner-bayonet.md)
-- **Building it unlocks:** [Armoury](armoury-stone.md), [Fort (wooden)](fort-wood.md), [Training Dummy](training-dummy.md), [Watch Tower](watch-tower.md)
+- **Trains:** [Archer](../units/archer.md), [Spearman](../units/spearman.md), [Man-at-Arms](../units/pikeman.md), [Imperial Archer](../units/celestial-archer.md), [Imperial Pikeman](../units/man-at-arms.md), [Gunner](../units/gunner.md), [Gunner (with Bayonet)](../units/gunner-bayonet.md)
+- **Building it unlocks:** [Armoury](armoury-stone.md), [Fort](fort-wood.md), [Training Dummy](training-dummy.md), [Watch Tower](watch-tower.md)
 <!-- /gen:leads -->
 
 ## Commands

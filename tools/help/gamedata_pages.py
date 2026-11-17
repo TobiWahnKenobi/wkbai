@@ -24,8 +24,15 @@ What the script owns, and what the author owns:
 --list prints what would get a page and why (nothing is written). --dump writes the cross
 references as JSON, for writing the prose.
 
-Standard library only. Our own words: the script never reads Language.txt; titles come from the
-blueprint names, tidied by the TITLES table below.
+Titles: with --language <the game's Languages/Language.txt> each page is titled with the name the
+player sees in the game: a unit's or building's BLUEPRINT_TOOLTIP, an upgrade's or command's
+DEFAULT_HINT (its first line), and an existing page's title and top heading follow it. Only those
+names are taken from Language.txt, never its descriptions; the prose stays our own words. Without
+--language the titles come from the blueprint names, tidied by the TITLES table below. (In the
+game the help viewer titles these pages from the loaded game's own Language.txt, so a translated
+or modded game shows its own names.)
+
+Standard library only.
 """
 import argparse, json, os, re, sys
 
@@ -1154,6 +1161,90 @@ def icon_line(p):
     return ""
 
 
+def load_language(path):
+    """KEY "text" lines of the game's Language.txt (ANSI or UTF-8)."""
+    raw = open(path, "rb").read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252")
+    lang = {}
+    for line in text.splitlines():
+        m = re.match(r'^\s*([A-Za-z0-9_]+)\s+"(.*)"\s*$', line)
+        if m:
+            lang[m.group(1).lower()] = m.group(2)
+    return lang
+
+
+def game_name(lang, key):
+    """The first line of a language entry: the name the player sees ("Archer\\nFood - %d..." -> Archer)."""
+    v = lang.get((key or "").lower())
+    if not v:
+        return ""
+    v = v.split("\\n")[0].strip().rstrip(".").strip()
+    return "" if "%" in v else v
+
+
+def tidy_game_name(v):
+    """A game name as a page title: colour codes, jokes and shouting taken off."""
+    v = re.sub(r"\\c", "", v)
+    v = re.split(r", heh", v)[0]
+    v = re.sub(r"^Set ", "", v)
+    return v.strip().rstrip("!?").strip()
+
+
+def apply_game_titles(cat, data, lang):
+    """Titles as the game shows them (see the module text). Returns {folder: {old title: new title}}.
+
+    - a name of more than five words is a sentence (a hint such as "Locates all your Bishops,
+      ..."), not a name: the page keeps its own title;
+    - two pages of one folder with the same game name ("Close", "Fire") get what tells them
+      apart in brackets: "Close (Stockade Gatehouse)", using the game's names for it.
+    """
+    renamed = {}
+    folders = [list(cat.units.values()), list(cat.buildings.values()),
+               list(cat.upgrades.values()), list(cat.cmds.values())]
+    for pages in folders:
+        names = {}
+        for p in pages:
+            if p.folder in ("units", "buildings"):
+                name = game_name(lang, p.bp.tooltip if p.bp else "")
+                if not name:
+                    verb = "Spawn " if p.folder == "units" else "Build "
+                    c = data.command(verb + p.key)
+                    name = game_name(lang, c["hint"]) if c else ""
+            else:
+                c = data.command(getattr(p, "cmd", p.key))
+                name = game_name(lang, c["hint"]) if c else ""
+            name = tidy_game_name(name) if name else ""
+            if p.folder == "upgrades":         # the button says "Research Chivalry": the upgrade is Chivalry
+                name = re.sub(r"^Research ", "", name)
+            if name and len(name.split()) <= 5:
+                names[p] = name
+        count = {}
+        for n in names.values():
+            count[n.lower()] = count.get(n.lower(), 0) + 1
+        for p, n in names.items():
+            if count[n.lower()] > 1:
+                rest = re.sub(r"\b" + re.escape(n) + r"\b", "", p.title, flags=re.I).strip(" -")
+                for o, nw in {**renamed.get("units", {}), **renamed.get("buildings", {})}.items():   # renamed first
+                    rest = re.sub(r"\b" + re.escape(o) + r"\b", nw, rest)
+                if not rest or rest.lower() == n.lower():
+                    continue                     # nothing tells them apart: keep the page's own title
+                n = f"{n} ({rest})"
+            if n != p.title:
+                renamed.setdefault(p.folder, {})[p.title] = n
+                p.title = n
+            p.game_title = True
+    return renamed
+
+
+def retitle(text, title):
+    """An existing page's front-matter title and top heading set to the game's name."""
+    text = re.sub(r"^(---\n(?:.*\n)*?)title:.*\n", lambda m: m.group(1) + "title: " + title + "\n", text, count=1)
+    return re.sub(r"^# .*$", lambda m: "# " + title, text, count=1, flags=re.M)
+
+
 def new_page(p, order):
     ids = ", ".join(p.ids)
     out = [f"---\ntitle: {p.title}\nids: [{ids}]\norder: {order}\n---", f"# {p.title}"]
@@ -1338,10 +1429,18 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--dump", default="")
+    ap.add_argument("--language", default="", help="the game's Languages/Language.txt: titles as the player sees them")
+    ap.add_argument("--renames", default="", help="with --language: write {old title: new title} as JSON")
     a = ap.parse_args()
     gs = GameSet(a.gameset)
     data = Data(gs)
     cat = Catalogue(data)
+    if a.language:
+        renamed = apply_game_titles(cat, data, load_language(a.language))
+        cat._fill()   # the generated sections link by title: fill them again with the new ones
+        print(f"{sum(len(v) for v in renamed.values())} titles taken from the game's names")
+        if a.renames:
+            json.dump(renamed, open(a.renames, "w", encoding="utf-8"), indent=1, ensure_ascii=False)
     folders = {"units": cat.units, "buildings": cat.buildings, "upgrades": cat.upgrades, "commands": cat.cmds}
     only = set(a.only.split(",")) if a.only else set(folders)
     if a.list:
@@ -1370,6 +1469,8 @@ def main():
             if os.path.exists(path) and not a.force:
                 old = open(path, encoding="utf-8").read()
                 new = update_page(old, p)
+                if getattr(p, "game_title", False):
+                    new = retitle(new, p.title)
                 if new != old:
                     write(path, new)
                 n_upd += 1

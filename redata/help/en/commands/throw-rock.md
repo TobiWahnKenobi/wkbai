@@ -17,7 +17,7 @@ The rock thrower's attack on a target in range.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Rock Thrower](../units/rock-thrower.md)
+- **Offered by:** [Fomorian Beast](../units/rock-thrower.md)
 <!-- /gen:trained -->
 
 ## Needs

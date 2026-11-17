@@ -1,10 +1,10 @@
 ---
-title: Technological Wall
+title: Battlements
 ids: [building/Technological Wall, building/Technological Wall Corner In, building/Technological Wall Corner Out, command/Build Technological Wall]
 order: 10
 ---
 
-# Technological Wall
+# Battlements
 
 <!-- gen:facts -->
 ```facts
@@ -23,25 +23,25 @@ blueprint: Technological Wall
 
 ## Role
 
-The Renaissance wall comes after [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md): strength 800 per section; existing stone walls are rebuilt in this form.
+The Renaissance wall comes after [Fortified Wall to Battlements](../upgrades/unaligned-wall-to-technological-wall.md): strength 800 per section; existing stone walls are rebuilt in this form.
 
 ## Built by
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- **Comes from:** [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md) or [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md) or [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Upgrade to Technological Tower](../upgrades/upgrade-to-technological-tower.md)
+- **Research here:** [Upgrade Wall to Battlement Tower](../upgrades/upgrade-to-technological-tower.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -52,4 +52,4 @@ The Renaissance wall comes after [Unaligned Wall to Technological Wall](../upgra
 
 ## Tips
 
-- Raise sections into towers with [Upgrade to Technological Tower](../upgrades/upgrade-to-technological-tower.md).
+- Raise sections into towers with [Upgrade to Battlement Tower](../upgrades/upgrade-to-technological-tower.md).

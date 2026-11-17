@@ -21,12 +21,12 @@ order: 10
 
 ## Role
 
-A Temple festival that makes your farms yield more and strengthens the Pagan faith.
+A Sacred Grove festival that makes your farms yield more and strengthens the Pagan faith.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Temple](../buildings/temple.md)
+- **Researched at:** [Sacred Grove](../buildings/temple.md)
 <!-- /gen:trained -->
 
 ## Needs

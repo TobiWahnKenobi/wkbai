@@ -1,13 +1,13 @@
 ---
-title: Pikeman
+title: Man-at-Arms
 ids: [unit/Pikeman, command/Spawn Pikeman]
 order: 10
 ---
 
-# Pikeman
+# Man-at-Arms
 
 <!-- gen:icon -->
-![Pikeman](game:interface/icons/characters/unaligned_pikeman.tga)
+![Man-at-Arms](game:interface/icons/characters/unaligned_pikeman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,7 +31,7 @@ blueprint: Pikeman
 
 ## Role
 
-The pikeman is the heavier foot soldier of the Imperial side: 150 hit points, armour 12 from the front and a 35-point attack. It needs [Chivalry](../upgrades/chivalry.md) (or a [Michael Statue](../buildings/michael-statue.md)) before the Barracks can train it.
+The pikeman is the heavier foot soldier of the Imperial side: 150 hit points, armour 12 from the front and a 35-point attack. It needs [Chivalry](../upgrades/chivalry.md) (or a [Statue of the Archangel](../buildings/michael-statue.md)) before the Barracks can train it.
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ The pikeman is the heavier foot soldier of the Imperial side: 150 hit points, ar
 ## Needs
 
 <!-- gen:needs -->
-- [Chivalry](../upgrades/chivalry.md) or building a [Michael Statue](../buildings/michael-statue.md)
+- [Chivalry](../upgrades/chivalry.md) or building a [Statue of the Archangel](../buildings/michael-statue.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -59,24 +59,24 @@ The pikeman is the heavier foot soldier of the Imperial side: 150 hit points, ar
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Pikemen in front stop cavalry; put missile troops behind them.
+- Men-at-Arms in front stop cavalry; put missile troops behind them.
 - They are slow (speed 3): do not try to chase anything with them.
-- Building a [Michael Statue](../buildings/michael-statue.md) turns your pikemen into [Men at Arms](man-at-arms.md).
+- Building a [Statue of the Archangel](../buildings/michael-statue.md) turns your pikemen into [Imperial Pikemen](man-at-arms.md).

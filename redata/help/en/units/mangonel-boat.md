@@ -1,13 +1,13 @@
 ---
-title: Mangonel Boat
+title: Carrack
 ids: [unit/Mangonel Boat, command/Spawn Mangonel Boat]
 order: 10
 ---
 
-# Mangonel Boat
+# Carrack
 
 <!-- gen:icon -->
-![Mangonel Boat](game:interface/icons/characters/unaligned_Mangonel_Boat.tga)
+![Carrack](game:interface/icons/characters/unaligned_Mangonel_Boat.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -58,9 +58,9 @@ The mangonel boat carries a catapult: 600 hit points and 35-point shots at range
 - [Halt](../commands/halt.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Fire Mangonel](../commands/fire-mangonel.md)
-- [Guard](../commands/guard.md)
-- [Docking](../commands/docking.md)
+- [Fire (Mangonel)](../commands/fire-mangonel.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Repair (Docking)](../commands/docking.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

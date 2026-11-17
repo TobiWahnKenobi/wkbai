@@ -1,13 +1,13 @@
 ---
-title: Trigger Explosives
+title: Detonate
 ids: [command/Trigger Explosives]
 order: 10
 ---
 
-# Trigger Explosives
+# Detonate
 
 <!-- gen:icon -->
-![Trigger Explosives](game:interface/icons/sic_Detonate.tga)
+![Detonate](game:interface/icons/sic_Detonate.tga)
 <!-- /gen:icon -->
 
 ## Role

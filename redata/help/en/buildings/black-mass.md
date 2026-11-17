@@ -1,13 +1,13 @@
 ---
-title: Black Mass
+title: Temple of the Moon
 ids: [building/Black Mass, command/Build Black Mass]
 order: 10
 ---
 
-# Black Mass
+# Temple of the Moon
 
 <!-- gen:icon -->
-![Black Mass](game:interface/icons/buildings/blackmass.tga)
+![Temple of the Moon](game:interface/icons/buildings/blackmass.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -27,7 +27,7 @@ blueprint: Black Mass
 
 ## Role
 
-The Black Mass trains arch druids and researches the [Sacrifice for the Formorians](../upgrades/sacrifice-for-the-formorians.md), the [Ghost Army](../upgrades/ghost-army.md) and the [Charm of Madness](../upgrades/charm-of-madness.md). It turns your Manor into the Pagan Castle and unlocks the Hall of Warriors, the Arcanum and the Wickerman.
+The Temple of the Moon trains arch druids and researches the [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md), the [Ghost Army](../upgrades/ghost-army.md) and the [Charm of Madness](../upgrades/charm-of-madness.md). It turns your Manor into the Pagan Castle and unlocks the Hall of Warriors, the Arcanum and the Wickerman.
 
 ## Built by
 
@@ -38,7 +38,7 @@ The Black Mass trains arch druids and researches the [Sacrifice for the Formoria
 ## Needs
 
 <!-- gen:needs -->
-- building a [Temple](temple.md)
+- building a [Sacred Grove](temple.md)
 - Pagan or neutral side only: the button goes once you build a [Church](church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -46,8 +46,8 @@ The Black Mass trains arch druids and researches the [Sacrifice for the Formoria
 
 <!-- gen:leads -->
 - **Trains:** [Arch Druid](../units/arch-druid.md)
-- **Research here:** [Sacrifice for the Formorians](../upgrades/sacrifice-for-the-formorians.md), [Ghost Army](../upgrades/ghost-army.md), [Charm of Madness](../upgrades/charm-of-madness.md)
-- **Building it unlocks:** [Bombard Boat](../units/bombard-boat.md), [Arcanum](arcanum.md), [Hall of Warriors](hall-of-warriors.md), [University](university.md), [Wickerman](wickerman.md)
+- **Research here:** [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md), [Ghost Army](../upgrades/ghost-army.md), [Charm of Madness](../upgrades/charm-of-madness.md)
+- **Building it unlocks:** [Galleass](../units/bombard-boat.md), [Arcanum](arcanum.md), [Hall of Warriors](hall-of-warriors.md), [University](university.md), [The Wickerman](wickerman.md)
 <!-- /gen:leads -->
 
 ## Commands

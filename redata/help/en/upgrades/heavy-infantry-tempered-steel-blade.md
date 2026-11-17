@@ -1,13 +1,13 @@
 ---
-title: Heavy Infantry Tempered Steel Blade
+title: Heavy Infantry Tempered Steel
 ids: [upgrade/Heavy Infantry Tempered Steel Blade, command/Research Heavy Infantry Tempered Steel Blade]
 order: 10
 ---
 
-# Heavy Infantry Tempered Steel Blade
+# Heavy Infantry Tempered Steel
 
 <!-- gen:icon -->
-![Heavy Infantry Tempered Steel Blade](game:interface/icons/upgrades/Tempered_Steel_Blade.tga)
+![Heavy Infantry Tempered Steel](game:interface/icons/upgrades/Tempered_Steel_Blade.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

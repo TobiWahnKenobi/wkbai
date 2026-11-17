@@ -63,7 +63,7 @@ The trebuchet is a huge siege catapult: 75 damage, 65 of it to buildings, every 
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Fire Trebuchet](../commands/fire-trebuchet.md)
+- [Fire (Trebuchet)](../commands/fire-trebuchet.md)
 <!-- /gen:commands -->
 
 ## Tips

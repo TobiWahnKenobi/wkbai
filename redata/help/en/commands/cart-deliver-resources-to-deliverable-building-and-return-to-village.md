@@ -1,10 +1,10 @@
 ---
-title: Cart Deliver Resources to Deliverable Building and Return to Village
+title: Deliver Resources (Cart  to Deliverable Building and Return to Village)
 ids: [command/Cart Deliver Resources to Deliverable Building and Return to Village]
 order: 10
 ---
 
-# Cart Deliver Resources to Deliverable Building and Return to Village
+# Deliver Resources (Cart  to Deliverable Building and Return to Village)
 
 ## Role
 

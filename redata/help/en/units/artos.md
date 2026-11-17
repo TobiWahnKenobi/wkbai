@@ -1,10 +1,10 @@
 ---
-title: Artos
+title: Baron Artos
 ids: [unit/Artos]
 order: 10
 ---
 
-# Artos
+# Baron Artos
 
 <!-- gen:facts -->
 ```facts
@@ -26,7 +26,7 @@ blueprint: Artos
 
 ## Role
 
-Artos is a hero of the campaign: a strong mounted leader (350 hit points, armour 22 from the front, a 45-point attack every second) who heals the troops around him. He is not trained in skirmish; levels and the campaign bring him in.
+Baron Artos is a hero of the campaign: a strong mounted leader (350 hit points, armour 22 from the front, a 45-point attack every second) who heals the troops around him. He is not trained in skirmish; levels and the campaign bring him in.
 
 ## Trained at / Built by
 
@@ -51,17 +51,17 @@ Artos is a hero of the campaign: a strong mounted leader (350 hit points, armour
 <!-- gen:commands -->
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

@@ -1,13 +1,13 @@
 ---
-title: Sacrifice for Fertility
+title: Blessings of the Goddess
 ids: [upgrade/Sacrifice for Fertility, command/Research Sacrifice for Fertility]
 order: 10
 ---
 
-# Sacrifice for Fertility
+# Blessings of the Goddess
 
 <!-- gen:icon -->
-![Sacrifice for Fertility](game:interface/icons/upgrades/Fest_of_Fertility.tga)
+![Blessings of the Goddess](game:interface/icons/upgrades/Fest_of_Fertility.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -20,12 +20,12 @@ order: 10
 
 ## Role
 
-A Temple sacrifice that again improves your farms. It costs 600 food and 600 wood.
+A Sacred Grove sacrifice that again improves your farms. It costs 600 food and 600 wood.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Temple](../buildings/temple.md)
+- **Researched at:** [Sacred Grove](../buildings/temple.md)
 <!-- /gen:trained -->
 
 ## Needs

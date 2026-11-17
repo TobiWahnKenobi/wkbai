@@ -15,13 +15,13 @@ Select peasants and right-click what they should work on. The cursor shows the j
 | Right-click on | Job | What they do |
 |---|---|---|
 | a farm | [Farm](../commands/farm.md) | work the field, carry the food home |
-| a tree | [Chop Tree](../commands/chop-tree.md) | cut wood, then the next tree nearby |
-| a stone outcrop | [Mine](../commands/mine.md) | cut stone (each stone = 2 materials) |
+| a tree | [Gather Materials](../commands/chop-tree.md) | cut wood, then the next tree nearby |
+| a stone outcrop | [Mine for Stone](../commands/mine.md) | cut stone (each stone = 2 materials) |
 | a gold outcrop | [Mine Gold](../commands/mine-gold.md) | mine gold |
-| a shop | [Shop](../commands/shop.md) | turn materials into gold ([resources](resources.md#gold)) |
+| a shop | [Trade at Shop](../commands/shop.md) | turn materials into gold ([resources](resources.md#gold)) |
 | a foundation | [Build](../commands/build.md) | raise the building |
 | a damaged building | [Repair](../commands/repair.md) | repair it, at a cost |
-| a burning building | [Extinguish](../commands/extinguish.md) | put the fire out |
+| a burning building | [Extinguish Fire](../commands/extinguish.md) | put the fire out |
 | a sack | [Pick Up Sack](../commands/peasant-pick-up-sack.md) | carry its goods home |
 
 - **One farmer a farm.** A second peasant sent to a busy farm looks for a free one.
@@ -39,7 +39,7 @@ Select peasants and right-click what they should work on. The cursor shows the j
 
 Every seventh delivery is a day of rest. On the way back from it, a peasant visits a place of worship of yours or an ally's within 50 m, if there is one:
 
-- **[Church](../buildings/church-stone.md):** he prays, and from then on carries **12** instead of 10. The more a church is prayed at ([Pray at Church](../commands/pray-at-church.md)), the more its piety, and up to 3 more on top.
+- **[Church](../buildings/church-stone.md):** he prays, and from then on carries **12** instead of 10. The more a church is prayed at ([Pray](../commands/pray-at-church.md)), the more its piety, and up to 3 more on top.
 - **[Maypole](../buildings/maypole.md):** he dances, and from then on farms at **1.5 times** the rate, but carries the plain 10.
 
 The last visit counts: a peasant who prays after dancing loses the dance's bonus, and the other way round.
@@ -48,7 +48,7 @@ The last visit counts: a peasant who prays after dancing loses the dance's bonus
 
 - **Panic.** A peasant who is hit while not fighting runs about 15 m away from the attacker, and goes back to work after about 5 seconds.
 - **Fighting back.** Peasants can attack, weakly (5 damage a blow, 80 hit points).
-- **Militia.** [Convert to Militia](../commands/convert-to-militia.md) turns peasants into [Militia](../units/militia.md) for a fight, and back again afterwards. A Manor-type building can call up all your peasants at once ([Conscript All Peasants](../commands/conscript-all-peasants.md)).
+- **Militia.** [Conscript Peasant into Militia](../commands/convert-to-militia.md) turns peasants into [Militia](../units/militia.md) for a fight, and back again afterwards. A Manor-type building can call up all your peasants at once ([Conscript All Peasants](../commands/conscript-all-peasants.md)).
 - **Shelter.** Peasants can [garrison](../commands/garrison.md) in your Manor, Keep, Castle or Palace (50 places).
 
 ![Peasants farming, chopping and carrying, with the peasant activity panel open](shot:mech-peasants-at-work)

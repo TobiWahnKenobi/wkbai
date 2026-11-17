@@ -48,7 +48,7 @@ The spy works behind enemy lines. It can look like an ordinary soldier, hide in 
 ## Leads to
 
 <!-- gen:leads -->
-- **Can turn into or call up:** [Archer](archer.md), [Mounted Spearman](mounted-spearman.md), [Spearman](spearman.md)
+- **Can turn into or call up:** [Archer](archer.md), [Squire](mounted-spearman.md), [Spearman](spearman.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -61,19 +61,19 @@ The spy works behind enemy lines. It can look like an ordinary soldier, hide in 
 - [Blow Open Gates](../commands/blow-open-gates.md)
 - [Spy on Infantry](../commands/spy-on-infantry.md)
 - [Interrogate](../commands/interrogate.md)
-- [Arson](../commands/arson.md)
+- [Arson Attack](../commands/arson.md)
 - [Attack](../commands/attack.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Garrison](../commands/garrison.md)
-- [Resupply](../commands/resupply.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 - [Start Mission](../commands/start-mission.md)
-- [Stop Mission](../commands/stop-mission.md)
+- [Stop converting enemy Peasants](../commands/stop-mission.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- [Start Mission](../commands/start-mission.md) disguises the spy; [Stop Mission](../commands/stop-mission.md) ends the disguise.
+- [Start Mission](../commands/start-mission.md) disguises the spy; [Stop converting enemy Peasants](../commands/stop-mission.md) ends the disguise.
 - Open an enemy gate with [Blow Open Gates](../commands/blow-open-gates.md) just as your army arrives.
 - [Enter Cart](../commands/enter-cart.md) hides the spy in a cart for the trip into an enemy town.

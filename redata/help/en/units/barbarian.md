@@ -60,19 +60,19 @@ The barbarian is a cheap hired fighter from the [Trading Post](../buildings/trad
 - [Take Cart](../commands/take-cart.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
-- [Arson](../commands/arson.md)
+- [Arson Attack](../commands/arson.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Barbarians are glass cannons: use them in numbers, quickly, before archers wear them down.
-- They can set fire to buildings with [Arson](../commands/arson.md).
+- They can set fire to buildings with [Arson Attack](../commands/arson.md).

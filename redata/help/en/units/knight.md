@@ -31,7 +31,7 @@ blueprint: Knight
 
 ## Role
 
-The knight is the Imperial heavy cavalry: 180 hit points, armour 12 from the front and a 29-point attack at speed 8.5. It costs 100 food and 15 gold and needs [Chivalry](../upgrades/chivalry.md) or a [Michael Statue](../buildings/michael-statue.md).
+The knight is the Imperial heavy cavalry: 180 hit points, armour 12 from the front and a 29-point attack at speed 8.5. It costs 100 food and 15 gold and needs [Chivalry](../upgrades/chivalry.md) or a [Statue of the Archangel](../buildings/michael-statue.md).
 
 ![Knights in a wedge charging enemy archers](shot:gamedata-knight-charge)
 
@@ -44,7 +44,7 @@ The knight is the Imperial heavy cavalry: 180 hit points, armour 12 from the fro
 ## Needs
 
 <!-- gen:needs -->
-- [Chivalry](../upgrades/chivalry.md) or building a [Michael Statue](../buildings/michael-statue.md)
+- [Chivalry](../upgrades/chivalry.md) or building a [Statue of the Archangel](../buildings/michael-statue.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -61,18 +61,18 @@ The knight is the Imperial heavy cavalry: 180 hit points, armour 12 from the fro
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
@@ -80,4 +80,4 @@ The knight is the Imperial heavy cavalry: 180 hit points, armour 12 from the fro
 
 - Charge archers, siege engines and the flanks of infantry; avoid the front of a pike line.
 - Its rear armour is 1: once it is stuck in a melee, pull it out and charge again.
-- Building a [Michael Statue](../buildings/michael-statue.md) turns knights into [Celestial Knights](celestial-knight.md).
+- Building a [Statue of the Archangel](../buildings/michael-statue.md) turns knights into [Imperial Knights](celestial-knight.md).

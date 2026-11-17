@@ -23,7 +23,7 @@ An act of God called down by the [bishop](../units/bishop.md): it shakes the gro
 ## Needs
 
 <!-- gen:needs -->
-- [Malleus Maleficarum](../upgrades/malleus-maleficarum.md)
+- [Witch Hunt](../upgrades/malleus-maleficarum.md)
 <!-- /gen:needs -->
 
 ## Tips

@@ -58,21 +58,21 @@ The succubus is a Pagan temptress from the [Henge](../buildings/henge.md). She c
 - [Halt](../commands/halt.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
-- [Make Baresark](../commands/make-baresark.md)
+- [Berserker Rage](../commands/make-baresark.md)
 - [Possess](../commands/possess.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Charm](../commands/charm.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - [Charm](../commands/charm.md) steals the enemy's best units one at a time.
-- [Make Baresark](../commands/make-baresark.md) turns your own troops into frenzied fighters for a while.
+- [Berserker Rage](../commands/make-baresark.md) turns your own troops into frenzied fighters for a while.
 - Enemy inquisitors can banish her: keep her away from them.

@@ -1,10 +1,10 @@
 ---
-title: Unaligned Tower
+title: Fortified Tower
 ids: [building/Unaligned Tower Stone, building/Unaligned Tower Stone Corner In, building/Unaligned Tower Stone Corner Out]
 order: 10
 ---
 
-# Unaligned Tower
+# Fortified Tower
 
 <!-- gen:facts -->
 ```facts
@@ -27,7 +27,7 @@ A stone tower is a wall section raised into a tower. Troops garrisoned inside sh
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** [Upgrade to Unaligned Tower](../upgrades/upgrade-to-unaligned-tower.md)
+- **Comes from:** [Upgrade Wall to Fortified Tower](../upgrades/upgrade-to-unaligned-tower.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -45,8 +45,8 @@ A stone tower is a wall section raised into a tower. Troops garrisoned inside sh
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->

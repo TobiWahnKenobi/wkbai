@@ -21,12 +21,12 @@ blueprint: Holy Chapter
 
 ## Role
 
-The Holy Chapter is the Monastery after [Upgrade Holy Chapter](../upgrades/upgrade-holy-chapter.md). It trains monastic knights as well as monks.
+The Holy Chapter is the Monastery after [Holy Chapter Upgrade](../upgrades/upgrade-holy-chapter.md). It trains monastic knights as well as monks.
 
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** [Upgrade Holy Chapter](../upgrades/upgrade-holy-chapter.md)
+- **Comes from:** [Holy Chapter Upgrade](../upgrades/upgrade-holy-chapter.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -38,9 +38,9 @@ The Holy Chapter is the Monastery after [Upgrade Holy Chapter](../upgrades/upgra
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Monk](../units/monk.md), [Monastic Knight](../units/monastic-knight.md)
+- **Trains:** [Monk](../units/monk.md), [Holy Warrior](../units/monastic-knight.md)
 - **Research here:** [Chivalry](../upgrades/chivalry.md)
-- **Building it unlocks:** [Monastic Knight](../units/monastic-knight.md)
+- **Building it unlocks:** [Holy Warrior](../units/monastic-knight.md)
 - **Finishing it turns into or calls up:** [Monk](../units/monk.md)
 <!-- /gen:leads -->
 

@@ -61,9 +61,9 @@ The battering ram breaks gates and walls. A [Sapper](sapper.md) builds it on the
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

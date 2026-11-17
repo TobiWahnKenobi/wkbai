@@ -17,7 +17,7 @@ Gunners take the bayonet off and shoot again.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Gunner with Bayonet](../units/gunner-bayonet.md)
+- **Offered by:** [Gunner (with Bayonet)](../units/gunner-bayonet.md)
 <!-- /gen:trained -->
 
 ## Needs

@@ -1,13 +1,13 @@
 ---
-title: Aggression
+title: Attack at Will
 ids: [command/Aggression]
 order: 10
 ---
 
-# Aggression
+# Attack at Will
 
 <!-- gen:icon -->
-![Aggression](game:interface/icons/SIC_Aggressive.tga)
+![Attack at Will](game:interface/icons/SIC_Aggressive.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Sets the selected units to aggressive: they go after enemies they see on their o
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Artos](../units/artos.md), [Behemoth](../units/behemoth.md), [Celestial Hero](../units/celestial-hero.md), [Celestial Knight](../units/celestial-knight.md), [Gunner with Bayonet](../units/gunner-bayonet.md), [Heavy Horseman (Wickerman)](../units/heavy-horseman-upgrade.md), [Heavy Horseman](../units/heavy-horseman.md), [Knight](../units/knight.md), [Man at Arms](../units/man-at-arms.md), [Mercenary](../units/mercenary.md), [Militia](../units/militia.md), [Monastic Knight](../units/monastic-knight.md), [Mounted Spearman](../units/mounted-spearman.md), [Pagan Hero](../units/hero-pagan.md), [Pagan Pikeman](../units/pagan-pikeman.md), [Pagan Spearwoman](../units/pagan-spearwoman.md), [Pikeman](../units/pikeman.md), [Spearman](../units/spearman.md), [Technological Hero](../units/hero-technological.md), [Undead Legion](../units/undead-legion.md), [War Elephant](../units/war-elephant.md)
+- **Offered by:** [Artos the Warlord](../units/hero-pagan.md), [Baron Artos](../units/artos.md), [Battle Rider](../units/heavy-horseman.md), [Behemoth](../units/behemoth.md), [Grand Duke Artos](../units/celestial-hero.md), [Gunner (with Bayonet)](../units/gunner-bayonet.md), [Holy Warrior](../units/monastic-knight.md), [Imperial Knight](../units/celestial-knight.md), [Imperial Pikeman](../units/man-at-arms.md), [Imperial War Elephant](../units/war-elephant.md), [King Artos](../units/hero-technological.md), [Knight](../units/knight.md), [Man-at-Arms](../units/pikeman.md), [Mercenary](../units/mercenary.md), [Militia](../units/militia.md), [Spearman](../units/spearman.md), [Squire](../units/mounted-spearman.md), [Undead Legion](../units/undead-legion.md), [War Rider](../units/heavy-horseman-upgrade.md), [Warrior of the Sun](../units/pagan-pikeman.md), [Warrioress of the Dawn](../units/pagan-spearwoman.md)
 <!-- /gen:trained -->
 
 ## Needs

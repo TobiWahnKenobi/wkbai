@@ -1,13 +1,13 @@
 ---
-title: Inflict Fimblewinter
+title: Inflict Fimbulwinter
 ids: [command/Inflict Fimblewinter]
 order: 10
 ---
 
-# Inflict Fimblewinter
+# Inflict Fimbulwinter
 
 <!-- gen:icon -->
-![Inflict Fimblewinter](game:interface/icons/SIC_Fimblewinter.tga)
+![Inflict Fimbulwinter](game:interface/icons/SIC_Fimblewinter.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -23,7 +23,7 @@ An act of God called down by the [bishop](../units/bishop.md): it brings a bitte
 ## Needs
 
 <!-- gen:needs -->
-- [Malleus Maleficarum](../upgrades/malleus-maleficarum.md)
+- [Witch Hunt](../upgrades/malleus-maleficarum.md)
 <!-- /gen:needs -->
 
 ## Tips

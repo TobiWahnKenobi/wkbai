@@ -22,9 +22,9 @@ Every unit you can train, build or call up in a normal game, grouped by what it 
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Cart](cart.md) | 50 food, 50 wood | [Manor](../buildings/manor.md) (any level), [Village](../buildings/village-wood.md) |
+| [Cart](cart.md) | 50 food, 50 wood | [Imperial Castle](../buildings/castle-celestial.md), [Imperial Keep](../buildings/keep-celestial.md), [Imperial Palace](../buildings/palace-celestial.md), [Manor](../buildings/manor.md) (any level), [Pagan Castle](../buildings/castle-pagan.md), [Pagan Keep](../buildings/keep-pagan.md), [Pagan Palace](../buildings/palace-pagan.md), [Renaissance Castle](../buildings/castle-tech.md), [Renaissance Keep](../buildings/keep-tech.md), [Renaissance Palace](../buildings/palace-tech.md), [Village](../buildings/village-wood.md) |
 | [Merchant](merchant.md) | 100 food, 20 gold | [Warehouse](../buildings/warehouse-stone.md) |
-| [Peasant](peasant.md) | 50 food | [Manor](../buildings/manor.md) (any level), [Village](../buildings/village-wood.md) |
+| [Peasant](peasant.md) | 50 food | [Imperial Castle](../buildings/castle-celestial.md), [Imperial Keep](../buildings/keep-celestial.md), [Imperial Palace](../buildings/palace-celestial.md), [Manor](../buildings/manor.md) (any level), [Pagan Castle](../buildings/castle-pagan.md), [Pagan Keep](../buildings/keep-pagan.md), [Pagan Palace](../buildings/palace-pagan.md), [Renaissance Castle](../buildings/castle-tech.md), [Renaissance Keep](../buildings/keep-tech.md), [Renaissance Palace](../buildings/palace-tech.md), [Village](../buildings/village-wood.md) |
 | [Sapper](sapper.md) | 150 food, 25 gold | [Armoury](../buildings/armoury-stone.md) |
 | [Scout](scout.md) | 60 food | [Trading Post](../buildings/trading-post.md) |
 | [Spy](spy.md) | 100 food, 50 gold | [Tavern](../buildings/tavern-wood.md) |
@@ -34,9 +34,9 @@ Every unit you can train, build or call up in a normal game, grouped by what it 
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Arch Druid](arch-druid.md) | 250 food, 150 gold | [Black Mass](../buildings/black-mass.md) |
+| [Arch Druid](arch-druid.md) | 250 food, 150 gold | [Temple of the Moon](../buildings/black-mass.md) |
 | [Bishop](bishop.md) | 200 food, 50 gold | [Cathedral](../buildings/cathedral-stone.md) |
-| [High Priestess](high-priestess.md) | 100 food, 50 gold | [Temple](../buildings/temple.md) |
+| [High Priestess](high-priestess.md) | 100 food, 50 gold | [Sacred Grove](../buildings/temple.md) |
 | [Inquisitor](inquisitor.md) | 200 food, 50 gold | [Cathedral](../buildings/cathedral-stone.md) |
 | [Monk](monk.md) | 10 food | [Holy Chapter](../buildings/holy-chapter.md), [Monastery](../buildings/monastery.md) |
 | [Priest](priest.md) | 150 food, 150 wood | [Church](../buildings/church-stone.md) |
@@ -47,38 +47,38 @@ Every unit you can train, build or call up in a normal game, grouped by what it 
 | Name | Cost | Trained at / built by |
 |---|---|---|
 | [Barbarian](barbarian.md) | 50 food | [Trading Post](../buildings/trading-post.md) |
-| [Gunner with Bayonet](gunner-bayonet.md) | 100 food, 15 gold | [Barracks](../buildings/barracks-stone.md) |
-| [Man at Arms](man-at-arms.md) | 60 food, 30 wood | [Barracks](../buildings/barracks-stone.md) |
+| [Gunner (with Bayonet)](gunner-bayonet.md) | 100 food, 15 gold | [Barracks](../buildings/barracks-stone.md) |
+| [Imperial Pikeman](man-at-arms.md) | 60 food, 30 wood | [Barracks](../buildings/barracks-stone.md) |
+| [Man-at-Arms](pikeman.md) | 60 food, 30 wood | [Barracks](../buildings/barracks-stone.md) |
 | [Mercenary](mercenary.md) | 20 gold | [Tavern](../buildings/tavern-wood.md) |
-| [Militia](militia.md) | 75 food | [Convert to Militia](../commands/convert-to-militia.md) |
-| [Pagan Pikeman](pagan-pikeman.md) | 70 food, 20 gold | [Hall of Warriors](../buildings/hall-of-warriors.md) |
-| [Pagan Spearwoman](pagan-spearwoman.md) | 70 food, 10 gold | [Hall of Warriors](../buildings/hall-of-warriors.md) |
-| [Pikeman](pikeman.md) | 60 food, 30 wood | [Barracks](../buildings/barracks-stone.md) |
+| [Militia](militia.md) | 75 food | [Conscript Peasant into Militia](../commands/convert-to-militia.md) |
 | [Spearman](spearman.md) | 60 food | [Barracks](../buildings/barracks-stone.md) |
+| [Warrior of the Sun](pagan-pikeman.md) | 70 food, 20 gold | [Hall of Warriors](../buildings/hall-of-warriors.md) |
+| [Warrioress of the Dawn](pagan-spearwoman.md) | 70 food, 10 gold | [Hall of Warriors](../buildings/hall-of-warriors.md) |
 
 ## Missile troops
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
 | [Archer](archer.md) | 60 food, 20 wood | [Barracks](../buildings/barracks-stone.md) |
-| [Celestial Archer](celestial-archer.md) | 100 food, 20 gold | [Barracks](../buildings/barracks-stone.md) |
 | [Gunner](gunner.md) | 100 food, 15 gold | [Barracks](../buildings/barracks-stone.md) |
+| [Huntress of the Dawn](pagan-archer.md) | 100 food, 50 wood | [Hall of Warriors](../buildings/hall-of-warriors.md) |
+| [Huntress of the Sun](pagan-archer-upgrade.md) | 100 food, 50 wood | [Hall of Warriors](../buildings/hall-of-warriors.md) |
+| [Imperial Archer](celestial-archer.md) | 100 food, 20 gold | [Barracks](../buildings/barracks-stone.md) |
 | [Javelineer](javelineer.md) | 90 food, 20 wood | [Stables](../buildings/stables.md) |
-| [Pagan Archer](pagan-archer.md) | 100 food, 50 wood | [Hall of Warriors](../buildings/hall-of-warriors.md) |
-| [Pagan Archer (Wickerman)](pagan-archer-upgrade.md) | 100 food, 50 wood | [Hall of Warriors](../buildings/hall-of-warriors.md) |
 
 ## Cavalry
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Celestial Knight](celestial-knight.md) | 100 food, 10 gold | [Stables](../buildings/stables.md) |
-| [Heavy Horseman](heavy-horseman.md) | 100 food, 40 wood | [Stables](../buildings/stables.md) |
-| [Heavy Horseman (Wickerman)](heavy-horseman-upgrade.md) | 100 food, 40 wood | [Stables](../buildings/stables.md) |
+| [Battle Rider](heavy-horseman.md) | 100 food, 40 wood | [Stables](../buildings/stables.md) |
+| [Dragoon](mounted-hand-gunner.md) | 100 food, 20 gold | [Stables](../buildings/stables.md) |
+| [Holy Warrior](monastic-knight.md) | 100 food, 20 gold | [Holy Chapter](../buildings/holy-chapter.md) |
+| [Imperial Knight](celestial-knight.md) | 100 food, 10 gold | [Stables](../buildings/stables.md) |
 | [Knight](knight.md) | 100 food, 15 gold | [Stables](../buildings/stables.md) |
-| [Monastic Knight](monastic-knight.md) | 100 food, 20 gold | [Holy Chapter](../buildings/holy-chapter.md) |
-| [Mounted Hand Gunner](mounted-hand-gunner.md) | 100 food, 20 gold | [Stables](../buildings/stables.md) |
-| [Mounted Spearman](mounted-spearman.md) | 90 food, 20 wood | [Stables](../buildings/stables.md) |
-| [Pagan Mounted Bowoman](pagan-mounted-bowoman.md) | 100 food, 30 wood | [Stables](../buildings/stables.md) |
+| [Mounted Huntress](pagan-mounted-bowoman.md) | 100 food, 30 wood | [Stables](../buildings/stables.md) |
+| [Squire](mounted-spearman.md) | 90 food, 20 wood | [Stables](../buildings/stables.md) |
+| [War Rider](heavy-horseman-upgrade.md) | 100 food, 40 wood | [Stables](../buildings/stables.md) |
 
 ## Siege engines
 
@@ -86,36 +86,36 @@ Every unit you can train, build or call up in a normal game, grouped by what it 
 |---|---|---|
 | [Battering Ram](battering-ram.md) | 200 wood | [Sapper](../units/sapper.md) |
 | [Bombard](bombard.md) | 100 food, 100 wood, 50 gold | [Armoury](../buildings/armoury-stone.md) |
+| [DeathWyrm](infernal-engine.md) | 400 food, 50 gold | [Henge](../buildings/henge.md) |
 | [Explosive Cart](explosive-cart.md) | 200 food, 50 gold | [Armoury](../buildings/armoury-stone.md) |
-| [Infernal Engine](infernal-engine.md) | 400 food, 50 gold | [Henge](../buildings/henge.md) |
+| [Fomorian Beast](rock-thrower.md) | 400 food | [Henge](../buildings/henge.md) |
+| [Imperial War Elephant](war-elephant.md) | 1000 food, 50 gold | [Armoury](../buildings/armoury-stone.md) |
 | [Mangonel](mangonel.md) | 200 food, 200 wood | [Armoury](../buildings/armoury-stone.md) |
-| [Rock Thrower](rock-thrower.md) | 400 food | [Henge](../buildings/henge.md) |
 | [Rocket Launcher](rocket-launcher.md) | 500 wood, 500 gold | [Sapper](../units/sapper.md) |
 | [Siege Tower](siege-tower.md) | 200 wood | [Sapper](../units/sapper.md) |
 | [Trebuchet](trebuchet.md) | 200 food, 500 wood | [Sapper](../units/sapper.md) |
-| [War Elephant](war-elephant.md) | 1000 food, 50 gold | [Armoury](../buildings/armoury-stone.md) |
 
 ## Ships
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Arrow Boat](arrow-boat.md) | 100 food, 400 wood | [Dock](../buildings/dock-wood.md) |
-| [Bombard Boat](bombard-boat.md) | 800 wood, 100 gold | [Dock](../buildings/dock-wood.md) |
+| [Carrack](mangonel-boat.md) | 600 wood, 70 gold | [Dock](../buildings/dock-wood.md) |
 | [Cog](cog.md) | 25 food, 150 wood, 10 gold | [Dock](../buildings/dock-wood.md) |
+| [Corsair](arrow-boat.md) | 100 food, 400 wood | [Dock](../buildings/dock-wood.md) |
 | [Fire Boat](fire-boat.md) | 100 food, 200 wood | [Dock](../buildings/dock-wood.md) |
-| [Mangonel Boat](mangonel-boat.md) | 600 wood, 70 gold | [Dock](../buildings/dock-wood.md) |
+| [Galleass](bombard-boat.md) | 800 wood, 100 gold | [Dock](../buildings/dock-wood.md) |
 
 ## Summoned creatures
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Abaddon](abaddon.md) | 500 food, 250 gold | building a [Wickerman](../buildings/wickerman.md) |
+| [Abaddon](abaddon.md) | 500 food, 250 gold | building a [The Wickerman](../buildings/wickerman.md) |
 | [Behemoth](behemoth.md) | 1000 food, 50 gold | [Henge](../buildings/henge.md) |
 | [Gibbering Horde](gibbering-horde.md) | 30 food | [Henge](../buildings/henge.md) |
 | [Gold Elemental](gold-elemental-large.md) |  | [Awaken Gold Elemental](../commands/awaken-gold-elemental.md) |
-| [Horde Spewer](horde-spewer.md) | 300 food, 25 gold | [Henge](../buildings/henge.md) |
-| [Michael](michael.md) | 500 food, 250 gold | building a [Michael Statue](../buildings/michael-statue.md) |
+| [Spider Demon](horde-spewer.md) | 300 food, 25 gold | [Henge](../buildings/henge.md) |
 | [Stone Elemental](stone-elemental-large.md) |  | [Awaken Stone Elemental](../commands/awaken-stone-elemental.md) |
+| [The Archangel, Sword of God](michael.md) | 500 food, 250 gold | building a [Statue of the Archangel](../buildings/michael-statue.md) |
 | [Undead Legion](undead-legion.md) | 120 food | [Hall of Warriors](../buildings/hall-of-warriors.md) |
 | [Wood Elemental](wood-elemental.md) | 100 food, 50 gold | [Awaken Wood Elemental](../commands/awaken-wood-elemental.md) |
 
@@ -123,9 +123,9 @@ Every unit you can train, build or call up in a normal game, grouped by what it 
 
 | Name | Cost | Trained at / built by |
 |---|---|---|
-| [Artos](artos.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
-| [Celestial Hero](celestial-hero.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
-| [Pagan Hero](hero-pagan.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
-| [Technological Hero](hero-technological.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
-| [Vandavar](vandavar.md) | 80 food | [Trading Post](../buildings/trading-post.md) |
+| [Artos the Warlord](hero-pagan.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
+| [Baron Artos](artos.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
+| [Grand Duke Artos](celestial-hero.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
+| [King Artos](hero-technological.md) | 75 food, 10 gold | Not trained in a normal game: it comes with the level or the campaign. |
+| [Vandavar Barbarian](vandavar.md) | 80 food | [Trading Post](../buildings/trading-post.md) |
 <!-- /gen:index -->

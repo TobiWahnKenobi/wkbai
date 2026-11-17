@@ -1,13 +1,13 @@
 ---
-title: Stirrup
+title: Heavy Cavalry Stirrups
 ids: [upgrade/Stirrup, command/Research Stirrup]
 order: 10
 ---
 
-# Stirrup
+# Heavy Cavalry Stirrups
 
 <!-- gen:icon -->
-![Stirrup](game:interface/icons/upgrades/Stirrups.tga)
+![Heavy Cavalry Stirrups](game:interface/icons/upgrades/Stirrups.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -21,7 +21,7 @@ order: 10
 
 ## Role
 
-The second step of the heavy cavalry's weapon line at the Blacksmith (after the [Horse Shoe](horse-shoe.md)): your heavy cavalry ([mounted spearmen](../units/mounted-spearman.md), [knights](../units/knight.md), [heavy horsemen](../units/heavy-horseman.md), [monastic knights](../units/monastic-knight.md)) hit harder still. It is offered once your Manor has grown into a Keep.
+The second step of the heavy cavalry's weapon line at the Blacksmith (after the [Heavy Cavalry Horse Shoe](horse-shoe.md)): your heavy cavalry ([mounted spearmen](../units/mounted-spearman.md), [knights](../units/knight.md), [heavy horsemen](../units/heavy-horseman.md), [monastic knights](../units/monastic-knight.md)) hit harder still. It is offered once your Manor has grown into a Keep.
 
 ## Researched at
 

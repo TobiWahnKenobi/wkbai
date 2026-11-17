@@ -1,13 +1,13 @@
 ---
-title: Wickerman
+title: The Wickerman
 ids: [building/Wickerman, command/Build Wickerman]
 order: 10
 ---
 
-# Wickerman
+# The Wickerman
 
 <!-- gen:icon -->
-![Wickerman](game:interface/icons/buildings/wickerman.tga)
+![The Wickerman](game:interface/icons/buildings/wickerman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -27,7 +27,7 @@ blueprint: Wickerman
 
 ## Role
 
-The Wickerman is the crown of the pure Pagan path. Building it strengthens your heavy horsemen and Pagan archers, unlocks Pagan pikemen, and lets you make the [Sacrifice for Abaddon](../upgrades/sacrifice-for-abaddon.md) that brings the demon lord.
+The Wickerman is the crown of the pure Pagan path. Building it strengthens your heavy horsemen and Pagan archers, unlocks Pagan pikemen, and lets you make the [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md) that brings the demon lord.
 
 ## Built by
 
@@ -38,7 +38,7 @@ The Wickerman is the crown of the pure Pagan path. Building it strengthens your 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Black Mass](black-mass.md) or building a [Observatory](observatory.md)
+- building a [Temple of the Moon](black-mass.md) or building a [Observatory](observatory.md)
 - Pagan or neutral side only: the button goes once you build a [Church](church-stone.md) (the Imperial path).
 - Shown once you have chosen the Wickerman path.
 <!-- /gen:needs -->
@@ -46,8 +46,8 @@ The Wickerman is the crown of the pure Pagan path. Building it strengthens your 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Sacrifice for Abaddon](../upgrades/sacrifice-for-abaddon.md)
-- **Building it unlocks:** [Sacrifice for Abaddon](../upgrades/sacrifice-for-abaddon.md), [Behemoth](../units/behemoth.md), [Heavy Horseman](../units/heavy-horseman.md), [Heavy Horseman (Wickerman)](../units/heavy-horseman-upgrade.md), [Horde Spewer](../units/horde-spewer.md), [Infernal Engine](../units/infernal-engine.md), [Pagan Archer](../units/pagan-archer.md), [Pagan Archer (Wickerman)](../units/pagan-archer-upgrade.md), [Pagan Pikeman](../units/pagan-pikeman.md), [Observatory](observatory.md)
+- **Research here:** [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md)
+- **Building it unlocks:** [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md), [Behemoth](../units/behemoth.md), [Battle Rider](../units/heavy-horseman.md), [War Rider](../units/heavy-horseman-upgrade.md), [Spider Demon](../units/horde-spewer.md), [DeathWyrm](../units/infernal-engine.md), [Huntress of the Dawn](../units/pagan-archer.md), [Huntress of the Sun](../units/pagan-archer-upgrade.md), [Warrior of the Sun](../units/pagan-pikeman.md), [Observatory](observatory.md)
 - **Finishing it turns into or calls up:** [Abaddon](../units/abaddon.md)
 <!-- /gen:leads -->
 

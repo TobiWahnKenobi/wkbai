@@ -1,13 +1,13 @@
 ---
-title: Gunner with Bayonet
+title: Gunner (with Bayonet)
 ids: [unit/Gunner Bayonet, unit/Gunner Bayonet Without Bayonet, command/Spawn Gunner Bayonet Without Bayonet]
 order: 10
 ---
 
-# Gunner with Bayonet
+# Gunner (with Bayonet)
 
 <!-- gen:icon -->
-![Gunner with Bayonet](game:interface/icons/characters/tech_gunner.tga)
+![Gunner (with Bayonet)](game:interface/icons/characters/tech_gunner.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,19 +32,19 @@ blueprint: Gunner Bayonet
 
 ## Role
 
-The gunner with a bayonet can fight both ways: it shoots like a [Gunner](gunner.md) and, with the bayonet fixed, fights hand to hand with 80 hit points, armour 10 from the front and a 35-point attack. The [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md) research gives every gunner the bayonet.
+The gunner with a bayonet can fight both ways: it shoots like a [Gunner](gunner.md) and, with the bayonet fixed, fights hand to hand with 80 hit points, armour 10 from the front and a 35-point attack. The [Bayonet](../upgrades/upgrade-to-bayonet.md) research gives every gunner the bayonet.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
 - **Trained at:** [Barracks](../buildings/barracks-stone.md)
-- **Comes from:** [Gunner](gunner.md), [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md)
+- **Comes from:** [Gunner](gunner.md), [Bayonet](../upgrades/upgrade-to-bayonet.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md)
+- [Bayonet](../upgrades/upgrade-to-bayonet.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -60,21 +60,21 @@ The gunner with a bayonet can fight both ways: it shoots like a [Gunner](gunner.
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Convert to Gunner](../commands/convert-to-gunner.md)
 - [Train](../commands/train.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

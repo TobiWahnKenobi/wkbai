@@ -61,26 +61,26 @@ The archer is the basic missile soldier: 60 food and 20 wood at the [Barracks](.
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
 - [Take Cart](../commands/take-cart.md)
 - [Fire Arrow](../commands/fire-arrow.md)
 - [Eat Carrion](../commands/eat-carrion.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Put archers behind spearmen or pikemen and let them shoot over the line.
-- [Hold Fire](../commands/hold-fire.md), [Fire at Will](../commands/fire-at-will.md), [Hold Ground](../commands/hold-ground.md) and [Skirmish Mode](../commands/skirmish-mode.md) control how freely they shoot and move.
+- [Hold Fire](../commands/hold-fire.md), [Fire at Will](../commands/fire-at-will.md), [Hold Ground](../commands/hold-ground.md) and [Skirmish](../commands/skirmish-mode.md) control how freely they shoot and move.
 - The [Flaming Arrow](../upgrades/flaming-arrow.md) research gives them burning arrows.

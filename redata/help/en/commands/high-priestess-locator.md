@@ -12,12 +12,12 @@ order: 10
 
 ## Role
 
-Picks out your high priestess one after another, so you can find them on the map. Offered by the Temple.
+Picks out your high priestess one after another, so you can find them on the map. Offered by the Sacred Grove.
 
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Temple](../buildings/temple.md)
+- **Offered by:** [Sacred Grove](../buildings/temple.md)
 <!-- /gen:trained -->
 
 ## Needs

@@ -1,13 +1,13 @@
 ---
-title: Malleus Maleficarum
+title: Witch Hunt
 ids: [upgrade/Malleus Maleficarum, command/Research Malleus Maleficarum]
 order: 10
 ---
 
-# Malleus Maleficarum
+# Witch Hunt
 
 <!-- gen:icon -->
-![Malleus Maleficarum](game:interface/icons/upgrades/Malleus_Maleficarium.tga)
+![Witch Hunt](game:interface/icons/upgrades/Malleus_Maleficarium.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

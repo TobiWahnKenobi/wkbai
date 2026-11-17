@@ -1,13 +1,13 @@
 ---
-title: Open Technological Gatehouse
+title: Open (Gatehouse Battlements)
 ids: [command/Open Technological Gatehouse]
 order: 10
 ---
 
-# Open Technological Gatehouse
+# Open (Gatehouse Battlements)
 
 <!-- gen:icon -->
-![Open Technological Gatehouse](game:interface/icons/sic_open_gate.tga)
+![Open (Gatehouse Battlements)](game:interface/icons/sic_open_gate.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Opens the Renaissance gatehouse so units can pass through.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Technological Gatehouse](../buildings/technological-gatehouse-closed.md)
+- **Offered by:** [Gatehouse Battlements](../buildings/technological-gatehouse-closed.md)
 <!-- /gen:trained -->
 
 ## Needs

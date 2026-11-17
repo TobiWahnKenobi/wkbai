@@ -1,13 +1,13 @@
 ---
-title: Make Baresark
+title: Berserker Rage
 ids: [command/Make Baresark]
 order: 10
 ---
 
-# Make Baresark
+# Berserker Rage
 
 <!-- gen:icon -->
-![Make Baresark](game:interface/icons/sic_berserker.tga)
+![Berserker Rage](game:interface/icons/sic_berserker.tga)
 <!-- /gen:icon -->
 
 ## Role

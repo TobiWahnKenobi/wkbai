@@ -1,10 +1,10 @@
 ---
-title: Celestial Tower
+title: Ramparts Tower
 ids: [building/Celestial Tower, building/Celestial Tower Corner In, building/Celestial Tower Corner Out]
 order: 10
 ---
 
-# Celestial Tower
+# Ramparts Tower
 
 <!-- gen:facts -->
 ```facts
@@ -27,7 +27,7 @@ An Imperial tower is a wall section raised into a tower: strength 900, shoots at
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** [Upgrade to Celestial Tower](../upgrades/upgrade-to-celestial-tower.md), [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- **Comes from:** [Upgrade Wall to Rampart Tower](../upgrades/upgrade-to-celestial-tower.md), [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -45,8 +45,8 @@ An Imperial tower is a wall section raised into a tower: strength 900, shoots at
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->

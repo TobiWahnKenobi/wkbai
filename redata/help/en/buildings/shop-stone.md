@@ -50,11 +50,11 @@ The shop is where trade turns goods into gold. Peasants and merchants go shoppin
 ## Commands
 
 <!-- gen:commands -->
-- [Pause Shopping](../commands/pause-shopping.md)
-- [Continue Shopping](../commands/continue-shopping.md)
+- [Pause trading at Shop](../commands/pause-shopping.md)
+- [Continue trading at Shop](../commands/continue-shopping.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- [Pause Shopping](../commands/pause-shopping.md) and [Continue Shopping](../commands/continue-shopping.md) start and stop its trade.
+- [Pause trading at Shop](../commands/pause-shopping.md) and [Continue trading at Shop](../commands/continue-shopping.md) start and stop its trade.
 - A Shop unlocks the Tavern.

@@ -1,10 +1,10 @@
 ---
-title: Celestial Hero
+title: Grand Duke Artos
 ids: [unit/Celestial Hero]
 order: 10
 ---
 
-# Celestial Hero
+# Grand Duke Artos
 
 <!-- gen:facts -->
 ```facts
@@ -51,17 +51,17 @@ The celestial hero is the campaign's Imperial hero: 400 hit points, armour 24 fr
 <!-- gen:commands -->
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

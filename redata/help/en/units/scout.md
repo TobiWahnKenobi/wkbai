@@ -60,20 +60,20 @@ The scout explores. It is fast (speed 8) and sees far (sight 20), but has only 5
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Recon](../commands/recon.md)
-- [Stop Recon](../commands/stop-recon.md)
+- [Reconnoitre](../commands/recon.md)
+- [Stop Exploring](../commands/stop-recon.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Send it off with [Recon](../commands/recon.md) to explore on its own, and call it back with [Stop Recon](../commands/stop-recon.md).
+- Send it off with [Reconnoitre](../commands/recon.md) to explore on its own, and call it back with [Stop Exploring](../commands/stop-recon.md).
 - One scout early on shows you where the enemy builds and which path he took.

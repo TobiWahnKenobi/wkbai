@@ -58,9 +58,9 @@ The fire boat is a fast (speed 10) but flimsy ship (70 hit points) that showers 
 - [Halt](../commands/halt.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Arrow Boat Attack](../commands/arrow-boat-attack.md)
-- [Guard](../commands/guard.md)
-- [Docking](../commands/docking.md)
+- [Flaming Arrow Salvo](../commands/arrow-boat-attack.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Repair (Docking)](../commands/docking.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

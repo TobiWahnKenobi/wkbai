@@ -12,7 +12,7 @@ Music, the sound effects, and how the world's sounds are placed around you.
 
 ## Music
 
-The first switch on the page: **On** (the default) plays music in the menus and in the game; **Off** plays none.
+The **Music** switch at the top of the page: **On** (the default) plays music in the menus and in the game; **Off** plays none.
 
 ## Music volume
 

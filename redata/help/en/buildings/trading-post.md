@@ -28,7 +28,7 @@ blueprint: Trading Post
 
 ## Role
 
-The trading post hires scouts, barbarians and Vandavar raiders, and offers the [Reconnaissance](../upgrades/reconnaissance.md) research. It sees far (sight 30).
+The trading post hires scouts, barbarians and Vandavar Barbarian raiders, and offers the [Shared Vision](../upgrades/reconnaissance.md) research. It sees far (sight 30).
 
 ## Built by
 
@@ -45,8 +45,8 @@ The trading post hires scouts, barbarians and Vandavar raiders, and offers the [
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Scout](../units/scout.md), [Barbarian](../units/barbarian.md), [Vandavar](../units/vandavar.md)
-- **Research here:** [Reconnaissance](../upgrades/reconnaissance.md)
+- **Trains:** [Scout](../units/scout.md), [Barbarian](../units/barbarian.md), [Vandavar Barbarian](../units/vandavar.md)
+- **Research here:** [Shared Vision](../upgrades/reconnaissance.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -58,4 +58,4 @@ The trading post hires scouts, barbarians and Vandavar raiders, and offers the [
 ## Tips
 
 - A cheap way to get a scout out early.
-- Barbarians and Vandavar raiders need the Pagan buildings (Maypole, Temple).
+- Barbarians and Vandavar Barbarian raiders need the Pagan buildings (Maypole, Sacred Grove).

@@ -1,13 +1,13 @@
 ---
-title: Pagan Archer (Wickerman)
+title: Huntress of the Sun
 ids: [unit/Pagan Archer Upgrade, command/Spawn Pagan Archer Upgrade]
 order: 10
 ---
 
-# Pagan Archer (Wickerman)
+# Huntress of the Sun
 
 <!-- gen:icon -->
-![Pagan Archer (Wickerman)](game:interface/icons/characters/pagan_archer.tga)
+![Huntress of the Sun](game:interface/icons/characters/pagan_archer.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,19 +32,19 @@ blueprint: Pagan Archer Upgrade
 
 ## Role
 
-This is the Pagan archer after the Wickerman's battle gathering: 70 hit points and a 24-point arrow for the same price. Existing Pagan archers turn into it when the [Wickerman](../buildings/wickerman.md) is built.
+This is the Pagan archer after the Wickerman's battle gathering: 70 hit points and a 24-point arrow for the same price. Existing Pagan archers turn into it when the [The Wickerman](../buildings/wickerman.md) is built.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
 - **Trained at:** [Hall of Warriors](../buildings/hall-of-warriors.md)
-- **Comes from:** [Pagan Archer](pagan-archer.md), building a [Wickerman](../buildings/wickerman.md)
+- **Comes from:** [Huntress of the Dawn](pagan-archer.md), building a [The Wickerman](../buildings/wickerman.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Wickerman](../buildings/wickerman.md)
+- building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -63,19 +63,19 @@ This is the Pagan archer after the Wickerman's battle gathering: 70 hit points a
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Take Cart](../commands/take-cart.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire Arrow](../commands/fire-arrow.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

@@ -1,13 +1,13 @@
 ---
-title: War Elephant
+title: Imperial War Elephant
 ids: [unit/War Elephant, command/Spawn War Elephant]
 order: 10
 ---
 
-# War Elephant
+# Imperial War Elephant
 
 <!-- gen:icon -->
-![War Elephant](game:interface/icons/characters/Celestial_War_Elephant.tga)
+![Imperial War Elephant](game:interface/icons/characters/Celestial_War_Elephant.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: War Elephant
 
 ## Role
 
-The war elephant is a living siege engine of the pure Imperial path: 500 hit points, armour 22 all round and blows that do 100 damage to buildings. It costs 1000 food and 50 gold at the [Armoury](../buildings/armoury-stone.md) and needs a [Michael Statue](../buildings/michael-statue.md).
+The war elephant is a living siege engine of the pure Imperial path: 500 hit points, armour 22 all round and blows that do 100 damage to buildings. It costs 1000 food and 50 gold at the [Armoury](../buildings/armoury-stone.md) and needs a [Statue of the Archangel](../buildings/michael-statue.md).
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The war elephant is a living siege engine of the pure Imperial path: 500 hit poi
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -58,13 +58,13 @@ The war elephant is a living siege engine of the pure Imperial path: 500 hit poi
 <!-- gen:commands -->
 - [Capture](../commands/capture.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Attack](../commands/attack.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

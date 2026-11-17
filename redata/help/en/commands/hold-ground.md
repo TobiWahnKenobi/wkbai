@@ -17,7 +17,7 @@ Missile troops stay where they are and shoot from there, without moving to get a
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Archer](../units/archer.md), [Celestial Archer](../units/celestial-archer.md), [Gunner with Bayonet](../units/gunner-bayonet.md), [Gunner](../units/gunner.md), [Javelineer](../units/javelineer.md), [Mounted Hand Gunner](../units/mounted-hand-gunner.md), [Pagan Archer (Wickerman)](../units/pagan-archer-upgrade.md), [Pagan Archer](../units/pagan-archer.md), [Pagan Mounted Bowoman](../units/pagan-mounted-bowoman.md)
+- **Offered by:** [Archer](../units/archer.md), [Dragoon](../units/mounted-hand-gunner.md), [Gunner (with Bayonet)](../units/gunner-bayonet.md), [Gunner](../units/gunner.md), [Huntress of the Dawn](../units/pagan-archer.md), [Huntress of the Sun](../units/pagan-archer-upgrade.md), [Imperial Archer](../units/celestial-archer.md), [Javelineer](../units/javelineer.md), [Mounted Huntress](../units/pagan-mounted-bowoman.md)
 <!-- /gen:trained -->
 
 ## Needs

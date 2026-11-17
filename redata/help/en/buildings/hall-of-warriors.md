@@ -27,7 +27,7 @@ blueprint: Hall of Warriors
 
 ## Role
 
-The Hall of Warriors trains the Pagan foot: spearwomen, archers and pikemen, and later the undead legion. It needs a Black Mass and is not offered on the Imperial path.
+The Hall of Warriors trains the Pagan foot: spearwomen, archers and pikemen, and later the undead legion. It needs a Temple of the Moon and is not offered on the Imperial path.
 
 ## Built by
 
@@ -38,15 +38,15 @@ The Hall of Warriors trains the Pagan foot: spearwomen, archers and pikemen, and
 ## Needs
 
 <!-- gen:needs -->
-- building a [Black Mass](black-mass.md)
+- building a [Temple of the Moon](black-mass.md)
 - Pagan or neutral side only: the button goes once you build a [Church](church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Trains:** [Pagan Spearwoman](../units/pagan-spearwoman.md), [Pagan Archer](../units/pagan-archer.md), [Pagan Archer (Wickerman)](../units/pagan-archer-upgrade.md), [Pagan Pikeman](../units/pagan-pikeman.md), [Undead Legion](../units/undead-legion.md)
-- **Building it unlocks:** [Pagan Archer](../units/pagan-archer.md), [Pagan Spearwoman](../units/pagan-spearwoman.md)
+- **Trains:** [Warrioress of the Dawn](../units/pagan-spearwoman.md), [Huntress of the Dawn](../units/pagan-archer.md), [Huntress of the Sun](../units/pagan-archer-upgrade.md), [Warrior of the Sun](../units/pagan-pikeman.md), [Undead Legion](../units/undead-legion.md)
+- **Building it unlocks:** [Huntress of the Dawn](../units/pagan-archer.md), [Warrioress of the Dawn](../units/pagan-spearwoman.md)
 <!-- /gen:leads -->
 
 ## Commands

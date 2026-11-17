@@ -1,13 +1,13 @@
 ---
-title: Infernal Engine
+title: DeathWyrm
 ids: [upgrade/Infernal Engine, command/Research Infernal Engine]
 order: 10
 ---
 
-# Infernal Engine
+# DeathWyrm
 
 <!-- gen:icon -->
-![Infernal Engine](game:interface/icons/upgrades/Research_InfernalEngine.tga)
+![DeathWyrm](game:interface/icons/upgrades/Research_InfernalEngine.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -38,7 +38,7 @@ An Arcanum research that lets the Henge bring forth the [infernal engine](../uni
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Infernal Engine](../units/infernal-engine.md)
+- **Unlocks:** [DeathWyrm](../units/infernal-engine.md)
 <!-- /gen:leads -->
 
 ## Commands

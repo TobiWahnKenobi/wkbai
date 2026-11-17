@@ -1,13 +1,13 @@
 ---
-title: Close Stockade Gatehouse
+title: Close (Stockade Gatehouse)
 ids: [command/Close Stockade Gatehouse]
 order: 10
 ---
 
-# Close Stockade Gatehouse
+# Close (Stockade Gatehouse)
 
 <!-- gen:icon -->
-![Close Stockade Gatehouse](game:interface/icons/sic_close_gate.tga)
+![Close (Stockade Gatehouse)](game:interface/icons/sic_close_gate.tga)
 <!-- /gen:icon -->
 
 ## Role

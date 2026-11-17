@@ -21,12 +21,12 @@ order: 10
 
 ## Role
 
-A Black Mass research that allows the [Charm of Madness](../commands/charm-of-madness.md), cast from the Black Mass itself.
+A Temple of the Moon research that allows the [Charm of Madness](../commands/charm-of-madness.md), cast from the Temple of the Moon itself.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Black Mass](../buildings/black-mass.md)
+- **Researched at:** [Temple of the Moon](../buildings/black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs

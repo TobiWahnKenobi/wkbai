@@ -1,10 +1,10 @@
 ---
-title: Cog Set Up Drop Off Dock
+title: Deliver Resources (Cog Set Up Drop Off Dock)
 ids: [command/Cog Set Up Drop Off Dock]
 order: 10
 ---
 
-# Cog Set Up Drop Off Dock
+# Deliver Resources (Deliver Resources (Cog Set Up Drop Off Dock))
 
 ## Role
 

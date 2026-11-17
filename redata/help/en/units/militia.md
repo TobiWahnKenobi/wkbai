@@ -30,7 +30,7 @@ Militia are peasants with weapons. You get them by [converting peasants](../comm
 ## Trained at / Built by
 
 <!-- gen:trained -->
-- **Comes from:** [Convert to Militia](../commands/convert-to-militia.md)
+- **Comes from:** [Conscript Peasant into Militia](../commands/convert-to-militia.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -51,18 +51,18 @@ Militia are peasants with weapons. You get them by [converting peasants](../comm
 - [Capture](../commands/capture.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Take Cart](../commands/take-cart.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Convert to Peasant](../commands/convert-to-peasant.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
-- [Formation](../commands/formation.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Form Up](../commands/formation.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

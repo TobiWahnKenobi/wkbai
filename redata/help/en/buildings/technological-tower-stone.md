@@ -1,10 +1,10 @@
 ---
-title: Technological Tower
+title: Battlement Tower
 ids: [building/Technological Tower Stone, building/Technological Tower Stone Corner In, building/Technological Tower Stone Corner Out]
 order: 10
 ---
 
-# Technological Tower
+# Battlement Tower
 
 <!-- gen:facts -->
 ```facts
@@ -27,7 +27,7 @@ A Renaissance tower is a wall section raised into a tower: strength 700, shoots 
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** [Upgrade to Technological Tower](../upgrades/upgrade-to-technological-tower.md), [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- **Comes from:** [Upgrade Wall to Battlement Tower](../upgrades/upgrade-to-technological-tower.md), [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -45,8 +45,8 @@ A Renaissance tower is a wall section raised into a tower: strength 700, shoots 
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->

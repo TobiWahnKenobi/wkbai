@@ -1,13 +1,13 @@
 ---
-title: Heavy Horseman
+title: Battle Rider
 ids: [unit/Heavy Horseman, command/Spawn Heavy Horseman]
 order: 10
 ---
 
-# Heavy Horseman
+# Battle Rider
 
 <!-- gen:icon -->
-![Heavy Horseman](game:interface/icons/characters/pagan_heavy_horseman.tga)
+![Battle Rider](game:interface/icons/characters/pagan_heavy_horseman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,7 +31,7 @@ blueprint: Heavy Horseman
 
 ## Role
 
-The heavy horseman is the Pagan heavy cavalry: 150 hit points, armour 10 from the front and a 29-point attack at speed 8.5, for 100 food and 40 wood. It needs a [Temple](../buildings/temple.md) or a [Wickerman](../buildings/wickerman.md) and is not offered on the Imperial path.
+The heavy horseman is the Pagan heavy cavalry: 150 hit points, armour 10 from the front and a 29-point attack at speed 8.5, for 100 food and 40 wood. It needs a [Sacred Grove](../buildings/temple.md) or a [The Wickerman](../buildings/wickerman.md) and is not offered on the Imperial path.
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ The heavy horseman is the Pagan heavy cavalry: 150 hit points, armour 10 from th
 ## Needs
 
 <!-- gen:needs -->
-- building a [Temple](../buildings/temple.md) or building a [Wickerman](../buildings/wickerman.md)
+- building a [Sacred Grove](../buildings/temple.md) or building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -59,23 +59,23 @@ The heavy horseman is the Pagan heavy cavalry: 150 hit points, armour 10 from th
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Charge the enemy's missile troops and flanks.
-- Building a [Wickerman](../buildings/wickerman.md) turns your heavy horsemen into the stronger [Wickerman version](heavy-horseman-upgrade.md).
+- Building a [The Wickerman](../buildings/wickerman.md) turns your heavy horsemen into the stronger [Wickerman version](heavy-horseman-upgrade.md).

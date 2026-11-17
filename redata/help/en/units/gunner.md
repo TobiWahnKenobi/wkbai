@@ -33,7 +33,7 @@ blueprint: Gunner
 
 ## Role
 
-The gunner fires a musket for 20 damage every 4.2 seconds. It costs 100 food and 15 gold at the [Barracks](../buildings/barracks-stone.md) and needs [Gunpowder](../upgrades/gunpowder.md), [Celestial Gunpowder](../upgrades/celestial-gunpowder.md) or a [University](../buildings/university.md). It is hidden once you take a pure path (Michael Statue or Wickerman).
+The gunner fires a musket for 20 damage every 4.2 seconds. It costs 100 food and 15 gold at the [Barracks](../buildings/barracks-stone.md) and needs [Bombard Upgrade](../upgrades/gunpowder.md), [Gunpowder](../upgrades/celestial-gunpowder.md) or a [University](../buildings/university.md). It is hidden once you take a pure path (Statue of the Archangel or Wickerman).
 
 ## Trained at / Built by
 
@@ -44,8 +44,8 @@ The gunner fires a musket for 20 damage every 4.2 seconds. It costs 100 food and
 ## Needs
 
 <!-- gen:needs -->
-- [Gunpowder](../upgrades/gunpowder.md) or [Celestial Gunpowder](../upgrades/celestial-gunpowder.md) or building a [University](../buildings/university.md)
-- Not on the pure paths: the button goes once you build a [Michael Statue](../buildings/michael-statue.md) or a [Wickerman](../buildings/wickerman.md).
+- [Bombard Upgrade](../upgrades/gunpowder.md) or [Gunpowder](../upgrades/celestial-gunpowder.md) or building a [University](../buildings/university.md)
+- Not on the pure paths: the button goes once you build a [Statue of the Archangel](../buildings/michael-statue.md) or a [The Wickerman](../buildings/wickerman.md).
 <!-- /gen:needs -->
 
 ## Leads to
@@ -63,24 +63,24 @@ The gunner fires a musket for 20 damage every 4.2 seconds. It costs 100 food and
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Take Cart](../commands/take-cart.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
-- [Fire Bullet](../commands/fire-bullet.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Fire (Bullet)](../commands/fire-bullet.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Gunners are fragile (50 hit points): keep them behind a line.
-- The [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md) research lets them fight hand to hand as well.
+- The [Bayonet](../upgrades/upgrade-to-bayonet.md) research lets them fight hand to hand as well.

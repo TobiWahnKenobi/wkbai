@@ -1,13 +1,13 @@
 ---
-title: Spit Projectile
+title: Spit Gallstone
 ids: [command/Spit Projectile]
 order: 10
 ---
 
-# Spit Projectile
+# Spit Gallstone
 
 <!-- gen:icon -->
-![Spit Projectile](game:interface/icons/SIC_Spir_Projectile.tga)
+![Spit Gallstone](game:interface/icons/SIC_Spir_Projectile.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ One of the infernal engine's three ranged attacks: it spits a burning missile at
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Infernal Engine](../units/infernal-engine.md)
+- **Offered by:** [DeathWyrm](../units/infernal-engine.md)
 <!-- /gen:trained -->
 
 ## Needs

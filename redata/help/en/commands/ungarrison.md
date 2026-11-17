@@ -1,13 +1,13 @@
 ---
-title: UnGarrison
+title: Ungarrison
 ids: [command/UnGarrison]
 order: 10
 ---
 
-# UnGarrison
+# Ungarrison
 
 <!-- gen:icon -->
-![UnGarrison](game:interface/icons/sic_ungarison.tga)
+![Ungarrison](game:interface/icons/sic_ungarison.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Sends every unit out of the building.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Castle (Imperial)](../buildings/castle-celestial.md), [Castle (Pagan)](../buildings/castle-pagan.md), [Castle (Renaissance)](../buildings/castle-tech.md), [Celestial Tower](../buildings/celestial-tower.md), [Church](../buildings/church-stone.md), [Fort (stone)](../buildings/fort-stone.md), [Fort (wooden)](../buildings/fort-wood.md), [Keep (Imperial)](../buildings/keep-celestial.md), [Keep (Pagan)](../buildings/keep-pagan.md), [Keep (Renaissance)](../buildings/keep-tech.md), [Manor](../buildings/manor.md), [Palace (Imperial)](../buildings/palace-celestial.md), [Palace (Pagan)](../buildings/palace-pagan.md), [Palace (Renaissance)](../buildings/palace-tech.md), [Technological Tower](../buildings/technological-tower-stone.md), [Unaligned Tower](../buildings/unaligned-tower-stone.md), [Watch Tower](../buildings/watch-tower.md)
+- **Offered by:** [Battlement Tower](../buildings/technological-tower-stone.md), [Church](../buildings/church-stone.md), [Fort](../buildings/fort-wood.md), [Fortified Tower](../buildings/unaligned-tower-stone.md), [Holy Fortress](../buildings/fort-stone.md), [Imperial Castle](../buildings/castle-celestial.md), [Imperial Keep](../buildings/keep-celestial.md), [Imperial Palace](../buildings/palace-celestial.md), [Manor](../buildings/manor.md), [Pagan Castle](../buildings/castle-pagan.md), [Pagan Keep](../buildings/keep-pagan.md), [Pagan Palace](../buildings/palace-pagan.md), [Ramparts Tower](../buildings/celestial-tower.md), [Renaissance Castle](../buildings/castle-tech.md), [Renaissance Keep](../buildings/keep-tech.md), [Renaissance Palace](../buildings/palace-tech.md), [Watch Tower](../buildings/watch-tower.md)
 <!-- /gen:trained -->
 
 ## Needs

@@ -31,12 +31,12 @@ blueprint: Arch Druid
 
 ## Role
 
-The arch druid is the senior Pagan magic user from the [Black Mass](../buildings/black-mass.md). He wakes elementals out of the land (wood, stone and gold), entangles enemies, hardens your troops' skin and regrows forests.
+The arch druid is the senior Pagan magic user from the [Temple of the Moon](../buildings/black-mass.md). He wakes elementals out of the land (wood, stone and gold), entangles enemies, hardens your troops' skin and regrows forests.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
-- **Trained at:** [Black Mass](../buildings/black-mass.md)
+- **Trained at:** [Temple of the Moon](../buildings/black-mass.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -63,19 +63,19 @@ The arch druid is the senior Pagan magic user from the [Black Mass](../buildings
 - [Capture](../commands/capture.md)
 - [Build](../commands/build.md)
 - [Halt](../commands/halt.md)
-- [Dark Portal](../commands/dark-portal.md)
+- [Create Dark Portal](../commands/dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Burn Unbeliever](../commands/burn-unbeliever.md)
-- [High Priestess Repair](../commands/high-priestess-repair.md)
+- [Repair (High Priestess)](../commands/high-priestess-repair.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Curse](../commands/curse.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

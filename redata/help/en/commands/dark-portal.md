@@ -1,13 +1,13 @@
 ---
-title: Dark Portal
+title: Create Dark Portal
 ids: [command/Dark Portal]
 order: 10
 ---
 
-# Dark Portal
+# Create Create Dark Portal
 
 <!-- gen:icon -->
-![Dark Portal](game:interface/icons/SIC_Portal.tga)
+![Create Create Dark Portal](game:interface/icons/SIC_Portal.tga)
 <!-- /gen:icon -->
 
 ## Role

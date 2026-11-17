@@ -1,13 +1,13 @@
 ---
-title: Infernal Engine
+title: DeathWyrm
 ids: [unit/Infernal Engine, command/Spawn Infernal Engine]
 order: 10
 ---
 
-# Infernal Engine
+# DeathWyrm
 
 <!-- gen:icon -->
-![Infernal Engine](game:interface/icons/characters/pagan_infernal_engine.tga)
+![DeathWyrm](game:interface/icons/characters/pagan_infernal_engine.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: Infernal Engine
 
 ## Role
 
-The infernal engine is the Pagan war machine from the [Henge](../buildings/henge.md): 500 hit points and three ranged attacks (spit, poison bile and ichor) that hit for 70, 60 of it to buildings. It costs 400 food and 50 gold and needs the [Infernal Engine](../upgrades/infernal-engine.md) research, a [University](../buildings/university.md) or a [Wickerman](../buildings/wickerman.md).
+The infernal engine is the Pagan war machine from the [Henge](../buildings/henge.md): 500 hit points and three ranged attacks (spit, poison bile and ichor) that hit for 70, 60 of it to buildings. It costs 400 food and 50 gold and needs the [DeathWyrm](../upgrades/infernal-engine.md) research, a [University](../buildings/university.md) or a [The Wickerman](../buildings/wickerman.md).
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The infernal engine is the Pagan war machine from the [Henge](../buildings/henge
 ## Needs
 
 <!-- gen:needs -->
-- [Infernal Engine](../upgrades/infernal-engine.md) or building a [University](../buildings/university.md) or building a [Wickerman](../buildings/wickerman.md)
+- [DeathWyrm](../upgrades/infernal-engine.md) or building a [University](../buildings/university.md) or building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -61,17 +61,17 @@ The infernal engine is the Pagan war machine from the [Henge](../buildings/henge
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Spit Projectile](../commands/spit-projectile.md)
-- [Poison Bile](../commands/poison-bile.md)
-- [Squirt Ichor](../commands/squirt-ichor.md)
-- [Resupply](../commands/resupply.md)
+- [Spit Gallstone](../commands/spit-projectile.md)
+- [Squirt Poison Bile](../commands/poison-bile.md)
+- [Squirt Slime](../commands/squirt-ichor.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Its attacks reach 90: keep it behind the line.
-- [Poison Bile](../commands/poison-bile.md) and [Squirt Ichor](../commands/squirt-ichor.md) are its special attacks.
+- [Squirt Poison Bile](../commands/poison-bile.md) and [Squirt Slime](../commands/squirt-ichor.md) are its special attacks.

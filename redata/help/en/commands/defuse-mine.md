@@ -1,10 +1,10 @@
 ---
-title: Defuse Mine
+title: Defuse
 ids: [command/Defuse Mine]
 order: 10
 ---
 
-# Defuse Mine
+# Defuse
 
 ## Role
 

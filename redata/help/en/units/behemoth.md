@@ -31,7 +31,7 @@ blueprint: Behemoth
 
 ## Role
 
-The behemoth is the giant of the Henge: 700 hit points, armour 25 all round and 150-point blows (70 to buildings), but slow (2.8). It costs 1000 food and 50 gold and needs an [Observatory](../buildings/observatory.md) or a [Wickerman](../buildings/wickerman.md).
+The behemoth is the giant of the Henge: 700 hit points, armour 25 all round and 150-point blows (70 to buildings), but slow (2.8). It costs 1000 food and 50 gold and needs an [Observatory](../buildings/observatory.md) or a [The Wickerman](../buildings/wickerman.md).
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ The behemoth is the giant of the Henge: 700 hit points, armour 25 all round and 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Observatory](../buildings/observatory.md) or building a [Wickerman](../buildings/wickerman.md)
+- building a [Observatory](../buildings/observatory.md) or building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -57,13 +57,13 @@ The behemoth is the giant of the Henge: 700 hit points, armour 25 all round and 
 <!-- gen:commands -->
 - [Capture](../commands/capture.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Attack](../commands/attack.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

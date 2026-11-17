@@ -1,13 +1,13 @@
 ---
-title: Open Stockade Gatehouse
+title: Open (Stockade Gatehouse)
 ids: [command/Open Stockade Gatehouse]
 order: 10
 ---
 
-# Open Stockade Gatehouse
+# Open (Stockade Gatehouse)
 
 <!-- gen:icon -->
-![Open Stockade Gatehouse](game:interface/icons/sic_open_gate.tga)
+![Open (Stockade Gatehouse)](game:interface/icons/sic_open_gate.tga)
 <!-- /gen:icon -->
 
 ## Role

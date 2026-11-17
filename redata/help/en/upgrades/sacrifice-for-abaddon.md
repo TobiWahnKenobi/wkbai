@@ -1,13 +1,13 @@
 ---
-title: Sacrifice for Abaddon
+title: Summon Abaddon
 ids: [upgrade/Sacrifice for Abaddon, command/Research Sacrifice for Abaddon]
 order: 10
 ---
 
-# Sacrifice for Abaddon
+# Summon Abaddon
 
 <!-- gen:icon -->
-![Sacrifice for Abaddon](game:interface/icons/upgrades/Wickerman_battle_gathering.tga)
+![Summon Abaddon](game:interface/icons/upgrades/Wickerman_battle_gathering.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -21,18 +21,18 @@ order: 10
 
 ## Role
 
-Made at the [Wickerman](../buildings/wickerman.md): after it, the demon lord [Abaddon](../units/abaddon.md) comes to fight for you. It takes 600 seconds.
+Made at the [The Wickerman](../buildings/wickerman.md): after it, the demon lord [Abaddon](../units/abaddon.md) comes to fight for you. It takes 600 seconds.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Wickerman](../buildings/wickerman.md)
+- **Researched at:** [The Wickerman](../buildings/wickerman.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Wickerman](../buildings/wickerman.md)
+- building a [The Wickerman](../buildings/wickerman.md)
 <!-- /gen:needs -->
 
 ## Leads to

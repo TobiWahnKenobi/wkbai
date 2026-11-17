@@ -1,13 +1,13 @@
 ---
-title: Celestial Gunpowder
+title: Gunpowder
 ids: [upgrade/Celestial Gunpowder, command/Research Celestial Gunpowder]
 order: 10
 ---
 
-# Celestial Gunpowder
+# Gunpowder
 
 <!-- gen:icon -->
-![Celestial Gunpowder](game:interface/icons/upgrades/Gunpowder.tga)
+![Gunpowder](game:interface/icons/upgrades/Gunpowder.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -38,7 +38,7 @@ The Imperial way to gunpowder, researched at the Scriptorium: it unlocks [gunner
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Gunner](../units/gunner.md), [Mounted Hand Gunner](../units/mounted-hand-gunner.md), [Upgrade to Bayonet](upgrade-to-bayonet.md)
+- **Unlocks:** [Gunner](../units/gunner.md), [Dragoon](../units/mounted-hand-gunner.md), [Bayonet](upgrade-to-bayonet.md)
 <!-- /gen:leads -->
 
 ## Commands

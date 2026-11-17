@@ -1,13 +1,13 @@
 ---
-title: Warhorse
+title: Heavy Cavalry Warhorse
 ids: [upgrade/Warhorse, command/Research Warhorse]
 order: 10
 ---
 
-# Warhorse
+# Heavy Cavalry Heavy Cavalry Warhorse
 
 <!-- gen:icon -->
-![Warhorse](game:interface/icons/upgrades/Warhorse.tga)
+![Heavy Cavalry Heavy Cavalry Warhorse](game:interface/icons/upgrades/Warhorse.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -21,7 +21,7 @@ order: 10
 
 ## Role
 
-The last step of the heavy cavalry's weapon line at the Blacksmith (after the [Stirrup](stirrup.md)), offered once your Manor has grown into a Castle. It costs 800 food and 150 gold.
+The last step of the heavy cavalry's weapon line at the Blacksmith (after the [Heavy Cavalry Stirrups](stirrup.md)), offered once your Manor has grown into a Castle. It costs 800 food and 150 gold.
 
 ## Researched at
 

@@ -31,7 +31,7 @@ blueprint: Bombard
 
 ## Role
 
-The bombard is an early cannon: 45 damage (50 to buildings) every 10 seconds at ranges from 20 to 140. It needs [Gunpowder](../upgrades/gunpowder.md) and is hidden once you take a pure path.
+The bombard is an early cannon: 45 damage (50 to buildings) every 10 seconds at ranges from 20 to 140. It needs [Bombard Upgrade](../upgrades/gunpowder.md) and is hidden once you take a pure path.
 
 ## Trained at / Built by
 
@@ -42,8 +42,8 @@ The bombard is an early cannon: 45 damage (50 to buildings) every 10 seconds at 
 ## Needs
 
 <!-- gen:needs -->
-- [Gunpowder](../upgrades/gunpowder.md)
-- Not on the pure paths: the button goes once you build a [Michael Statue](../buildings/michael-statue.md) or a [Wickerman](../buildings/wickerman.md).
+- [Bombard Upgrade](../upgrades/gunpowder.md)
+- Not on the pure paths: the button goes once you build a [Statue of the Archangel](../buildings/michael-statue.md) or a [The Wickerman](../buildings/wickerman.md).
 <!-- /gen:needs -->
 
 ## Leads to
@@ -60,11 +60,11 @@ The bombard is an early cannon: 45 damage (50 to buildings) every 10 seconds at 
 - [Hold Fire](../commands/hold-fire.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Fire Bombard](../commands/fire-bombard.md)
+- [Fire (Bombard)](../commands/fire-bombard.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

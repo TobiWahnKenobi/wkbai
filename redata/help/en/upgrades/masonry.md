@@ -1,13 +1,13 @@
 ---
-title: Masonry
+title: Shield of God
 ids: [upgrade/Masonry, command/Research Masonry]
 order: 10
 ---
 
-# Masonry
+# Shield of God
 
 <!-- gen:icon -->
-![Masonry](game:interface/icons/upgrades/Masonry.tga)
+![Shield of God](game:interface/icons/upgrades/Masonry.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -38,7 +38,7 @@ A Cathedral research in stonework that unlocks the [stone fort](../buildings/for
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Fort (stone)](../buildings/fort-stone.md), [Upgrade to Stone Fort](upgrade-to-stone-fort.md)
+- **Unlocks:** [Holy Fortress](../buildings/fort-stone.md), [Upgrade to Holy Fortress](upgrade-to-stone-fort.md)
 <!-- /gen:leads -->
 
 ## Commands

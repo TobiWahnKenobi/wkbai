@@ -1,13 +1,13 @@
 ---
-title: Holy Fire
+title: Holy Flame
 ids: [command/Holy Fire]
 order: 10
 ---
 
-# Holy Fire
+# Holy Flame
 
 <!-- gen:icon -->
-![Holy Fire](game:interface/icons/SIC_Holy_Fire.tga)
+![Holy Flame](game:interface/icons/SIC_Holy_Fire.tga)
 <!-- /gen:icon -->
 
 ## Role

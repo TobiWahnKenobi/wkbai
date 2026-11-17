@@ -1,13 +1,13 @@
 ---
-title: Michael Statue
+title: Statue of the Archangel
 ids: [building/Michael Statue, command/Build Michael Statue]
 order: 10
 ---
 
-# Michael Statue
+# Statue of the Archangel
 
 <!-- gen:icon -->
-![Michael Statue](game:interface/icons/buildings/Michael_Statue.tga)
+![Statue of the Archangel](game:interface/icons/buildings/Michael_Statue.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -27,7 +27,7 @@ blueprint: Michael Statue
 
 ## Role
 
-The Michael Statue is the crown of the pure Imperial path. Building it unlocks men at arms, celestial knights and archers and war elephants, turns your pikemen and knights into their elite forms, and lets you make the [Sacrifice for Michael](../upgrades/sacrifice-for-michael.md) that brings the archangel himself.
+The Statue of the Archangel is the crown of the pure Imperial path. Building it unlocks men at arms, celestial knights and archers and war elephants, turns your pikemen and knights into their elite forms, and lets you make the [Sacrifice for Archangel](../upgrades/sacrifice-for-michael.md) that brings the archangel himself.
 
 ## Built by
 
@@ -46,8 +46,8 @@ The Michael Statue is the crown of the pure Imperial path. Building it unlocks m
 
 <!-- gen:leads -->
 - **Research here:** [Sacrifice for Michael](../upgrades/sacrifice-for-michael.md)
-- **Building it unlocks:** [Sacrifice for Michael](../upgrades/sacrifice-for-michael.md), [Celestial Archer](../units/celestial-archer.md), [Celestial Knight](../units/celestial-knight.md), [Inquisitor](../units/inquisitor.md), [Knight](../units/knight.md), [Man at Arms](../units/man-at-arms.md), [Pikeman](../units/pikeman.md), [War Elephant](../units/war-elephant.md)
-- **Finishing it turns into or calls up:** [Michael](../units/michael.md)
+- **Building it unlocks:** [Sacrifice for Michael](../upgrades/sacrifice-for-michael.md), [Imperial Archer](../units/celestial-archer.md), [Imperial Knight](../units/celestial-knight.md), [Inquisitor](../units/inquisitor.md), [Knight](../units/knight.md), [Imperial Pikeman](../units/man-at-arms.md), [Man-at-Arms](../units/pikeman.md), [Imperial War Elephant](../units/war-elephant.md)
+- **Finishing it turns into or calls up:** [The Archangel, Sword of God](../units/michael.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -60,8 +60,8 @@ The siege tower carries troops over a wall. A [Sapper](sapper.md) builds it for 
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

@@ -1,13 +1,13 @@
 ---
-title: Man at Arms
+title: Imperial Pikeman
 ids: [unit/Man at Arms, command/Spawn Man at Arms]
 order: 10
 ---
 
-# Man at Arms
+# Imperial Pikeman
 
 <!-- gen:icon -->
-![Man at Arms](game:interface/icons/characters/Celestial_Man_at_Arms.tga)
+![Imperial Pikeman](game:interface/icons/characters/Celestial_Man_at_Arms.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,19 +31,19 @@ blueprint: Man at Arms
 
 ## Role
 
-The man at arms is the elite Imperial foot soldier: 180 hit points, armour 15 from the front and a 38-point attack, for 60 food and 30 wood. It appears with the pure Imperial path: building a [Michael Statue](../buildings/michael-statue.md) unlocks it and turns existing pikemen into men at arms.
+The man at arms is the elite Imperial foot soldier: 180 hit points, armour 15 from the front and a 38-point attack, for 60 food and 30 wood. It appears with the pure Imperial path: building a [Statue of the Archangel](../buildings/michael-statue.md) unlocks it and turns existing pikemen into men at arms.
 
 ## Trained at / Built by
 
 <!-- gen:trained -->
 - **Trained at:** [Barracks](../buildings/barracks-stone.md)
-- **Comes from:** [Pikeman](pikeman.md), building a [Michael Statue](../buildings/michael-statue.md)
+- **Comes from:** [Man-at-Arms](pikeman.md), building a [Statue of the Archangel](../buildings/michael-statue.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -59,20 +59,20 @@ The man at arms is the elite Imperial foot soldier: 180 hit points, armour 15 fr
 - [Capture](../commands/capture.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Take Cart](../commands/take-cart.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

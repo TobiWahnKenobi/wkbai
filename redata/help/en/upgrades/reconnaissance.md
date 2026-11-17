@@ -1,13 +1,13 @@
 ---
-title: Reconnaissance
+title: Shared Vision
 ids: [upgrade/Reconnaissance, command/Research Reconnaissance]
 order: 10
 ---
 
-# Reconnaissance
+# Shared Vision
 
 <!-- gen:icon -->
-![Reconnaissance](game:interface/icons/upgrades/Reconnaissance.tga)
+![Shared Vision](game:interface/icons/upgrades/Reconnaissance.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

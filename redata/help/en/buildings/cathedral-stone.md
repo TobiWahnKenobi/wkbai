@@ -27,7 +27,7 @@ blueprint: Cathedral Stone
 
 ## Role
 
-The cathedral trains bishops and inquisitors and researches [Masonry](../upgrades/masonry.md), [Surgery](../upgrades/surgery.md), the [Crusade](../upgrades/crusade.md) and the [Crossbow](../upgrades/crossbow.md). It turns your Manor into the Imperial Castle.
+The cathedral trains bishops and inquisitors and researches [Shield of God](../upgrades/masonry.md), [Surgery](../upgrades/surgery.md), the [Crusade](../upgrades/crusade.md) and the [Crossbow](../upgrades/crossbow.md). It turns your Manor into the Imperial Castle.
 
 ## Built by
 
@@ -46,8 +46,8 @@ The cathedral trains bishops and inquisitors and researches [Masonry](../upgrade
 
 <!-- gen:leads -->
 - **Trains:** [Bishop](../units/bishop.md), [Inquisitor](../units/inquisitor.md)
-- **Research here:** [Masonry](../upgrades/masonry.md), [Surgery](../upgrades/surgery.md), [Crusade](../upgrades/crusade.md), [Crossbow](../upgrades/crossbow.md)
-- **Building it unlocks:** [Bishop](../units/bishop.md), [Bombard Boat](../units/bombard-boat.md), [Scriptorium](scriptorium.md), [University](university.md), [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md), [Upgrade Holy Chapter](../upgrades/upgrade-holy-chapter.md)
+- **Research here:** [Shield of God](../upgrades/masonry.md), [Surgery](../upgrades/surgery.md), [Crusade](../upgrades/crusade.md), [Crossbow](../upgrades/crossbow.md)
+- **Building it unlocks:** [Bishop](../units/bishop.md), [Galleass](../units/bombard-boat.md), [Scriptorium](scriptorium.md), [University](university.md), [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md), [Holy Chapter Upgrade](../upgrades/upgrade-holy-chapter.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -58,4 +58,4 @@ The cathedral trains bishops and inquisitors and researches [Masonry](../upgrade
 
 ## Tips
 
-- The Crusade opens the Michael Statue and the first acts of God.
+- The Crusade opens the Statue of the Archangel and the first acts of God.

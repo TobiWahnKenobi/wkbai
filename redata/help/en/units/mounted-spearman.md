@@ -1,13 +1,13 @@
 ---
-title: Mounted Spearman
+title: Squire
 ids: [unit/Mounted Spearman, command/Spawn Mounted Spearman]
 order: 10
 ---
 
-# Mounted Spearman
+# Squire
 
 <!-- gen:icon -->
-![Mounted Spearman](game:interface/icons/characters/Unaligned_Mounted_Spearman.tga)
+![Squire](game:interface/icons/characters/Unaligned_Mounted_Spearman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -58,19 +58,19 @@ The mounted spearman is the first horseman you can train, with no research: 150 
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Interrogate](../commands/interrogate.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Attack](../commands/attack.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

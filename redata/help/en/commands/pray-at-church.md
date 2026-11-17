@@ -1,13 +1,13 @@
 ---
-title: Pray at Church
+title: Pray
 ids: [command/Pray at Church]
 order: 10
 ---
 
-# Pray at Church
+# Pray
 
 <!-- gen:icon -->
-![Pray at Church](game:interface/icons/sic_pray.tga)
+![Pray](game:interface/icons/sic_pray.tga)
 <!-- /gen:icon -->
 
 ## Role

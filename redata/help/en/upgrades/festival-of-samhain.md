@@ -21,12 +21,12 @@ order: 10
 
 ## Role
 
-The second Pagan festival at the Temple, after Beltane: farms yield more again.
+The second Pagan festival at the Sacred Grove, after Beltane: farms yield more again.
 
 ## Researched at
 
 <!-- gen:trained -->
-- **Researched at:** [Temple](../buildings/temple.md)
+- **Researched at:** [Sacred Grove](../buildings/temple.md)
 <!-- /gen:trained -->
 
 ## Needs

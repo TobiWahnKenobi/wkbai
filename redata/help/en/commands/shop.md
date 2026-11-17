@@ -1,13 +1,13 @@
 ---
-title: Shop
+title: Trade at Shop
 ids: [command/Shop]
 order: 10
 ---
 
-# Shop
+# Trade at Trade at Shop
 
 <!-- gen:icon -->
-![Shop](game:interface/icons/sic_shop.tga)
+![Trade at Trade at Shop](game:interface/icons/sic_shop.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

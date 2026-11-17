@@ -52,8 +52,8 @@ The church is the first Imperial building: it trains priests and lets peasants a
 ## Commands
 
 <!-- gen:commands -->
-- [UnGarrison](../commands/ungarrison.md)
-- [UnGarrison Hand to Hand Units](../commands/ungarrison-hand-to-hand-units.md)
+- [Ungarrison](../commands/ungarrison.md)
+- [Ungarrison Hand to Hand Defenders](../commands/ungarrison-hand-to-hand-units.md)
 - [Priest Locator](../commands/priest-locator.md)
 <!-- /gen:commands -->
 

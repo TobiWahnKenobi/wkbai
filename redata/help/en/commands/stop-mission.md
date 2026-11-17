@@ -1,13 +1,13 @@
 ---
-title: Stop Mission
+title: Stop converting enemy Peasants
 ids: [command/Stop Mission]
 order: 10
 ---
 
-# Stop Mission
+# Stop converting enemy Peasants
 
 <!-- gen:icon -->
-![Stop Mission](game:interface/icons/sic_Stop_Mission.tga)
+![Stop converting enemy Peasants](game:interface/icons/sic_Stop_Mission.tga)
 <!-- /gen:icon -->
 
 ## Role

@@ -25,7 +25,7 @@ You see only what your units and buildings see. Everything else on the map is da
 ## Allies
 
 - With **Team Reconnaissance** on in the lobby, allies see what each other sees from the start.
-- Otherwise a player shares its sight with its allies once it has the [Reconnaissance](../upgrades/reconnaissance.md) research (at the Trading Post).
+- Otherwise a player shares its sight with its allies once it has the [Shared Vision](../upgrades/reconnaissance.md) research (at the Trading Post).
 
 ## Brief reveals
 

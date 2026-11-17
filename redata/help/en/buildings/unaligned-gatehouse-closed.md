@@ -1,10 +1,10 @@
 ---
-title: Unaligned Gatehouse
+title: Fortified Gatehouse
 ids: [building/Unaligned Gatehouse Closed, building/Unaligned Gatehouse Open, command/Build Unaligned Gatehouse Closed]
 order: 10
 ---
 
-# Unaligned Gatehouse
+# Fortified Gatehouse
 
 <!-- gen:facts -->
 ```facts
@@ -30,13 +30,13 @@ The stone gatehouse is the gate in a stone wall. It shoots at enemies (15 damage
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md)
+- **Comes from:** [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md)
+- [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -48,7 +48,7 @@ The stone gatehouse is the gate in a stone wall. It shoots at enemies (15 damage
 ## Commands
 
 <!-- gen:commands -->
-- [Open Unaligned Gatehouse](../commands/open-unaligned-gatehouse.md)
+- [Open (Fortified Gatehouse)](../commands/open-unaligned-gatehouse.md)
 <!-- /gen:commands -->
 
 ## Tips

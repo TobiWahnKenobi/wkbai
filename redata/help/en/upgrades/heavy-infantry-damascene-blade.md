@@ -1,13 +1,13 @@
 ---
-title: Heavy Infantry Damascene Blade
+title: Heavy Infantry Damascene Steel
 ids: [upgrade/Heavy Infantry Damascene Blade, command/Research Heavy Infantry Damascene Blade]
 order: 10
 ---
 
-# Heavy Infantry Damascene Blade
+# Heavy Infantry Damascene Steel
 
 <!-- gen:icon -->
-![Heavy Infantry Damascene Blade](game:interface/icons/upgrades/Damascene_Blade.tga)
+![Heavy Infantry Damascene Steel](game:interface/icons/upgrades/Damascene_Blade.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->

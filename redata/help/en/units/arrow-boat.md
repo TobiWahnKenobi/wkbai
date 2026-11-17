@@ -1,13 +1,13 @@
 ---
-title: Arrow Boat
+title: Corsair
 ids: [unit/Arrow Boat, command/Spawn Arrow Boat]
 order: 10
 ---
 
-# Arrow Boat
+# Corsair
 
 <!-- gen:icon -->
-![Arrow Boat](game:interface/icons/characters/unaligned_archer_boat.tga)
+![Corsair](game:interface/icons/characters/unaligned_archer_boat.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -57,9 +57,9 @@ The arrow boat is a warship full of archers: 300 hit points and a 26-point volle
 - [Halt](../commands/halt.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Arrow Boat Attack](../commands/arrow-boat-attack.md)
-- [Guard](../commands/guard.md)
-- [Docking](../commands/docking.md)
+- [Flaming Arrow Salvo](../commands/arrow-boat-attack.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Repair (Docking)](../commands/docking.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

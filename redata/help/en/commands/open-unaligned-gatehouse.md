@@ -1,13 +1,13 @@
 ---
-title: Open Unaligned Gatehouse
+title: Open (Fortified Gatehouse)
 ids: [command/Open Unaligned Gatehouse]
 order: 10
 ---
 
-# Open Unaligned Gatehouse
+# Open (Fortified Gatehouse)
 
 <!-- gen:icon -->
-![Open Unaligned Gatehouse](game:interface/icons/sic_open_gate.tga)
+![Open (Fortified Gatehouse)](game:interface/icons/sic_open_gate.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Opens the stone gatehouse so units can pass through.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Unaligned Gatehouse](../buildings/unaligned-gatehouse-closed.md)
+- **Offered by:** [Fortified Gatehouse](../buildings/unaligned-gatehouse-closed.md)
 <!-- /gen:trained -->
 
 ## Needs

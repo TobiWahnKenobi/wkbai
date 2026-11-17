@@ -36,7 +36,7 @@ The gibbering horde is a mob of cheap Pagan creatures (30 food, 40 hit points) f
 
 <!-- gen:trained -->
 - **Trained at:** [Henge](../buildings/henge.md)
-- **Comes from:** [Summon Gibbering Horde](../commands/summon-gibbering-horde.md)
+- **Comes from:** [Polymorph to Gibbering Horde](../commands/summon-gibbering-horde.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -62,9 +62,9 @@ The gibbering horde is a mob of cheap Pagan creatures (30 food, 40 hit points) f
 - [Devour](../commands/devour.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

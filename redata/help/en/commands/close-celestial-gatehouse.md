@@ -1,13 +1,13 @@
 ---
-title: Close Celestial Gatehouse
+title: Close (Gatehouse Ramparts)
 ids: [command/Close Celestial Gatehouse]
 order: 10
 ---
 
-# Close Celestial Gatehouse
+# Close (Gatehouse Ramparts)
 
 <!-- gen:icon -->
-![Close Celestial Gatehouse](game:interface/icons/sic_close_gate.tga)
+![Close (Gatehouse Ramparts)](game:interface/icons/sic_close_gate.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Closes the Imperial gatehouse.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Celestial Gatehouse](../buildings/celestial-gatehouse-closed.md)
+- **Offered by:** [Gatehouse Ramparts](../buildings/celestial-gatehouse-closed.md)
 <!-- /gen:trained -->
 
 ## Needs

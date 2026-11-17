@@ -1,10 +1,10 @@
 ---
-title: Celestial Wall
+title: Ramparts
 ids: [building/Celestial Wall, building/Celestial Wall Corner In, building/Celestial Wall Corner Out, command/Build Celestial Wall]
 order: 10
 ---
 
-# Celestial Wall
+# Ramparts
 
 <!-- gen:facts -->
 ```facts
@@ -23,25 +23,25 @@ blueprint: Celestial Wall
 
 ## Role
 
-The Imperial (celestial) wall is the strongest wall, after [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md): strength 1100 per section.
+The Imperial (celestial) wall is the strongest wall, after [Battlements to Ramparts](../upgrades/technological-wall-to-celestial-wall.md): strength 1100 per section.
 
 ## Built by
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- **Comes from:** [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
+- [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Upgrade to Celestial Tower](../upgrades/upgrade-to-celestial-tower.md)
+- **Research here:** [Upgrade Wall to Rampart Tower](../upgrades/upgrade-to-celestial-tower.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -52,4 +52,4 @@ The Imperial (celestial) wall is the strongest wall, after [Technological Wall t
 
 ## Tips
 
-- Raise sections into towers with [Upgrade to Celestial Tower](../upgrades/upgrade-to-celestial-tower.md).
+- Raise sections into towers with [Upgrade to Ramparts Tower](../upgrades/upgrade-to-celestial-tower.md).

@@ -51,8 +51,8 @@ The stone elemental is a giant of rock woken by an [Arch Druid](arch-druid.md) f
 - [Interrogate](../commands/interrogate.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Attack](../commands/attack.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

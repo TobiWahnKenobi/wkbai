@@ -1,13 +1,13 @@
 ---
-title: Unload Passengers
+title: Disembark
 ids: [command/Unload Passengers]
 order: 10
 ---
 
-# Unload Passengers
+# Disembark
 
 <!-- gen:icon -->
-![Unload Passengers](game:interface/icons/sic_unload_boat.tga)
+![Disembark](game:interface/icons/sic_unload_boat.tga)
 <!-- /gen:icon -->
 
 ## Role

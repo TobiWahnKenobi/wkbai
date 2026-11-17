@@ -55,31 +55,31 @@ The sapper is the army's engineer. It puts up siege engines (battering rams, sie
 
 <!-- gen:commands -->
 - [Capture](../commands/capture.md)
-- [Detonate Mine](../commands/detonate-mine.md)
-- [Defuse Mine](../commands/defuse-mine.md)
+- [Explosive Mine](../commands/detonate-mine.md)
+- [Defuse](../commands/defuse-mine.md)
 - [Halt](../commands/halt.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
-- [Repair Character](../commands/repair-character.md)
+- [Repair (Character)](../commands/repair-character.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
 - [Build](../commands/build.md)
 - [Take Cart](../commands/take-cart.md)
-- [Sapper Repair](../commands/sapper-repair.md)
+- [Repair (Sapper)](../commands/sapper-repair.md)
 - [Finish Building](../commands/finish-building.md)
 - [Finish Wall](../commands/finish-wall.md)
 - [Repair Wall](../commands/repair-wall.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Take sappers with the army: the siege engines are built on the spot, close to the walls you want to break.
-- Mines need the [Explosive Mine](../upgrades/explosive-mine.md) research first; [Detonate Mine](../commands/detonate-mine.md) sets them off and [Defuse Mine](../commands/defuse-mine.md) clears enemy ones.
-- Sappers also mend damaged engines with [Sapper Repair](../commands/sapper-repair.md).
+- Mines need the [Explosive Mine](../upgrades/explosive-mine.md) research first; [Explosive Mine](../commands/detonate-mine.md) sets them off and [Defuse](../commands/defuse-mine.md) clears enemy ones.
+- Sappers also mend damaged engines with [Repair (Sapper)](../commands/sapper-repair.md).

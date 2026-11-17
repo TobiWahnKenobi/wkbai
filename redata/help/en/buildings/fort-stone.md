@@ -1,13 +1,13 @@
 ---
-title: Fort (stone)
+title: Holy Fortress
 ids: [building/Fort Stone, command/Build Fort Stone]
 order: 10
 ---
 
-# Fort (stone)
+# Holy Fortress
 
 <!-- gen:icon -->
-![Fort (stone)](game:interface/icons/buildings/Fortstone.tga)
+![Holy Fortress](game:interface/icons/buildings/Fortstone.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -29,20 +29,20 @@ blueprint: Fort Stone
 
 ## Role
 
-The stone fort is the strongest lone strongpoint: strength 900, a 20-point attack and sight 23. It needs [Masonry](../upgrades/masonry.md) and is not offered on the Pagan path.
+The stone fort is the strongest lone strongpoint: strength 900, a 20-point attack and sight 23. It needs [Shield of God](../upgrades/masonry.md) and is not offered on the Pagan path.
 
 ## Built by
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Upgrade to Stone Fort](../upgrades/upgrade-to-stone-fort.md)
+- **Comes from:** [Upgrade to Holy Fortress](../upgrades/upgrade-to-stone-fort.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Masonry](../upgrades/masonry.md)
-- [Wooden Forts](../upgrades/fort-wood.md)
+- [Shield of God](../upgrades/masonry.md)
+- [Fort Upgrade](../upgrades/fort-wood.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -55,9 +55,9 @@ The stone fort is the strongest lone strongpoint: strength 900, a 20-point attac
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
-- [UnGarrison Hand to Hand Units](../commands/ungarrison-hand-to-hand-units.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
+- [Ungarrison Hand to Hand Defenders](../commands/ungarrison-hand-to-hand-units.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->

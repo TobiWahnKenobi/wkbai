@@ -1,10 +1,10 @@
 ---
-title: Formation Supply
+title: Distribute Food Rations (Formation Supply)
 ids: [command/Formation Supply]
 order: 10
 ---
 
-# Formation Supply
+# Distribute Food Rations (Distribute Food Rations (Formation Supply))
 
 ## Role
 

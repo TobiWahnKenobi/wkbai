@@ -1,10 +1,10 @@
 ---
-title: Unaligned Wall
+title: Fortified Wall
 ids: [building/Unaligned Wall, building/Unaligned Wall Corner In, building/Unaligned Wall Corner Out, building/Unaligned Wall Cross Piece, command/Build Unaligned Wall]
 order: 10
 ---
 
-# Unaligned Wall
+# Fortified Wall
 
 <!-- gen:facts -->
 ```facts
@@ -23,25 +23,25 @@ blueprint: Unaligned Wall
 
 ## Role
 
-The stone wall (unaligned wall) replaces the stockade after [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md): strength 500 per section, and existing stockades turn to stone. Sections can be raised into towers.
+The stone wall (unaligned wall) replaces the stockade after [Stockade to Fortified Wall](../upgrades/stockade-to-unaligned-wall.md): strength 500 per section, and existing stockades turn to stone. Sections can be raised into towers.
 
 ## Built by
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md)
+- **Comes from:** [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md) or [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md) or [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Upgrade to Unaligned Tower](../upgrades/upgrade-to-unaligned-tower.md)
+- **Research here:** [Upgrade Wall to Fortified Tower](../upgrades/upgrade-to-unaligned-tower.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -52,4 +52,4 @@ The stone wall (unaligned wall) replaces the stockade after [Stockade to Unalign
 
 ## Tips
 
-- Use [Upgrade to Unaligned Tower](../upgrades/upgrade-to-unaligned-tower.md) on wall sections at corners and gates.
+- Use [Upgrade to Fortified Tower](../upgrades/upgrade-to-unaligned-tower.md) on wall sections at corners and gates.

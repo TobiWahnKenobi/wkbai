@@ -38,14 +38,14 @@ The observatory looks far and plans big works: it researches the [Trebuchet](../
 ## Needs
 
 <!-- gen:needs -->
-- building a [Sawmill](sawmill.md) or building a [Wickerman](wickerman.md) or building a [Windmill](windmill.md)
+- building a [Sawmill](sawmill.md) or building a [The Wickerman](wickerman.md) or building a [Windmill](windmill.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
 - **Research here:** [Trebuchet](../upgrades/trebuchet.md), [Telescope](../upgrades/telescope.md)
-- **Building it unlocks:** [Behemoth](../units/behemoth.md), [Explosive Cart](../units/explosive-cart.md), [Horde Spewer](../units/horde-spewer.md), [Inquisitor](../units/inquisitor.md), [Arcanum](arcanum.md), [Bank](bank.md), [Michael Statue](michael-statue.md), [Scriptorium](scriptorium.md), [University](university.md), [Wickerman](wickerman.md), [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- **Building it unlocks:** [Behemoth](../units/behemoth.md), [Explosive Cart](../units/explosive-cart.md), [Spider Demon](../units/horde-spewer.md), [Inquisitor](../units/inquisitor.md), [Arcanum](arcanum.md), [Bank](bank.md), [Statue of the Archangel](michael-statue.md), [Scriptorium](scriptorium.md), [University](university.md), [The Wickerman](wickerman.md), [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -16,13 +16,13 @@ Damage to buildings is counted separately from damage to units. Some examples fr
 |---|---|
 | soldiers, peasants | 0.1 a blow |
 | [Sapper](../units/sapper.md) | 20 a blow |
-| [Battering Ram](../units/battering-ram.md), [Rock Thrower](../units/rock-thrower.md) | 40 a blow |
+| [Battering Ram](../units/battering-ram.md), [Fomorian Beast](../units/rock-thrower.md) | 40 a blow |
 | [Mangonel](../units/mangonel.md) ball | 40 |
 | [Bombard](../units/bombard.md) ball | 50 |
 | [Trebuchet](../units/trebuchet.md) ball | 65 |
 | [Rocket Launcher](../units/rocket-launcher.md) | 135 a blow, rockets 250 near where they land |
-| [War Elephant](../units/war-elephant.md), large elementals | 80 to 100 |
-| [Michael](../units/michael.md), [Abaddon](../units/abaddon.md) | 150 |
+| [Imperial War Elephant](../units/war-elephant.md), large elementals | 80 to 100 |
+| [Archangel](../units/michael.md), [Abaddon](../units/abaddon.md) | 150 |
 
 Fire does steady damage too ([buildings and construction](buildings-and-construction.md#fire)).
 
@@ -39,12 +39,12 @@ Fire does steady damage too ([buildings and construction](buildings-and-construc
 
 - **[Siege Tower](../units/siege-tower.md):** pushed up to a wall, it lets the troops inside [scale](../commands/scale-siege-tower.md) it and come down on the far side.
 - **[Sappers](../units/sapper.md)** dig [explosive mines](../buildings/explosive-mine.md) (research at the Armoury) under walls and buildings and set them off. An enemy sapper can [defuse](../commands/defuse-mine.md) a mine.
-- **[Spies](../units/spy.md)** can set buildings on fire ([Arson](../commands/arson.md)) and [blow open gates](../commands/blow-open-gates.md).
+- **[Spies](../units/spy.md)** can set buildings on fire ([Arson Attack](../commands/arson.md)) and [blow open gates](../commands/blow-open-gates.md).
 - **A blocked path:** when a wall stands between soldiers and their target, the original makes them attack the wall (not yet in this version of wkbai).
 
 ## Defending
 
-- **Walls** come with the city. The Guildhall's research turns your palisade into stone walls and then into the Renaissance and Imperial walls ([Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md), [Unaligned to Technological](../upgrades/unaligned-wall-to-technological-wall.md), [Technological to Celestial](../upgrades/technological-wall-to-celestial-wall.md)).
+- **Walls** come with the city. The Guildhall's research turns your palisade into stone walls and then into the Renaissance and Imperial walls ([Stockade to Fortified Wall](../upgrades/stockade-to-unaligned-wall.md), [Unaligned to Technological](../upgrades/unaligned-wall-to-technological-wall.md), [Technological to Celestial](../upgrades/technological-wall-to-celestial-wall.md)).
 - **Gatehouses** let your troops out and keep enemies in front of the wall. Open and close them from their panel.
 - **Towers and forts** shoot when garrisoned ([garrisons](buildings-and-construction.md#garrisons)). A garrison is thrown out, unhurt, when its building falls below 10%.
 - **Repair** walls with peasants ([Repair Wall](../commands/repair-wall.md)), even under attack.

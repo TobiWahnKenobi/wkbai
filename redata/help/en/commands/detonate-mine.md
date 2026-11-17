@@ -1,13 +1,13 @@
 ---
-title: Detonate Mine
+title: Explosive Mine
 ids: [command/Detonate Mine]
 order: 10
 ---
 
-# Detonate Mine
+# Explosive Mine
 
 <!-- gen:icon -->
-![Detonate Mine](game:interface/icons/SIC_Detonate.tga)
+![Explosive Mine](game:interface/icons/SIC_Detonate.tga)
 <!-- /gen:icon -->
 
 ## Role

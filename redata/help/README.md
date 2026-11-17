@@ -20,7 +20,7 @@ order: 30
 ---
 ```
 
-- **title:** the name in the contents tree, the search results and the window's title bar.
+- **title:** the name in the contents tree, the search results and the window's title bar. Always the name the player sees in the game, never an internal blueprint name: unit, building, upgrade and command pages take it from the game's `Language.txt` (`tools/help/gamedata_pages.py --language`), and the viewer uses the loaded game's own name at run time.
 - **ids:** the help ids that open this page. The page's path without `.md` (`ui/hud/minimap`) is always one of them. `id#slug` opens the page at a heading. A heading's slug is its text in lower case, with spaces as `-` and everything but letters, digits and `-` dropped ("Zoom buttons" -> `zoom-buttons`).
 - **order:** the place among its siblings in the contents tree (smaller first; then by title).
 - **parent:** optional; a page from another folder to sit under in the tree.
@@ -79,6 +79,6 @@ Each file is a JSON array, one entry per screenshot:
 
 - Plain words, short sentences, lists with a bold lead-in where a paragraph would run long.
 - Say what the player sees and does first, the rule behind it second. Numbers where the game has them.
-- Our own words only: never copy text from the game's `Language.txt`, its manual or other games' help.
+- Our own words only: never copy text from the game's `Language.txt` (apart from the names of things, which must match what the player sees), its manual or other games' help.
 - Where wkbai differs from the original game, say so in a short "wkbai" note.
 - wkbai is not affiliated with Black Cactus, the rights holders of Warrior Kings, or wkbre2 / AdrienTD (the start page says so).

@@ -1,13 +1,13 @@
 ---
-title: Upgrade to Wooden Fort
+title: Upgrade Watch Tower to Fort
 ids: [upgrade/Upgrade to Wooden Fort, command/Research Upgrade to Wooden Fort]
 order: 10
 ---
 
-# Upgrade to Wooden Fort
+# Upgrade Watch Tower to Fort
 
 <!-- gen:icon -->
-![Upgrade to Wooden Fort](game:interface/icons/buildings/fortwood.tga)
+![Upgrade Watch Tower to Fort](game:interface/icons/buildings/fortwood.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -20,7 +20,7 @@ order: 10
 
 ## Role
 
-Turns a [Watch Tower](../buildings/watch-tower.md) into a [wooden fort](../buildings/fort-wood.md). Researched at the tower itself; it needs the [Wooden Forts](fort-wood.md) research.
+Turns a [Watch Tower](../buildings/watch-tower.md) into a [wooden fort](../buildings/fort-wood.md). Researched at the tower itself; it needs the [Fort Upgrade](fort-wood.md) research.
 
 ## Researched at
 
@@ -31,13 +31,13 @@ Turns a [Watch Tower](../buildings/watch-tower.md) into a [wooden fort](../build
 ## Needs
 
 <!-- gen:needs -->
-- [Wooden Forts](fort-wood.md)
+- [Fort Upgrade](fort-wood.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Turns units or buildings into, or calls up:** [Fort (wooden)](../buildings/fort-wood.md)
+- **Turns units or buildings into, or calls up:** [Fort](../buildings/fort-wood.md)
 <!-- /gen:leads -->
 
 ## Commands

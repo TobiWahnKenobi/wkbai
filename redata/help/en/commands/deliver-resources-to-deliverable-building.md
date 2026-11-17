@@ -1,10 +1,10 @@
 ---
-title: Deliver Resources to Deliverable Building
+title: Deliver Resources (to Deliverable Building)
 ids: [command/Deliver Resources to Deliverable Building]
 order: 10
 ---
 
-# Deliver Resources to Deliverable Building
+# Deliver Resources (to Deliverable Building)
 
 ## Role
 

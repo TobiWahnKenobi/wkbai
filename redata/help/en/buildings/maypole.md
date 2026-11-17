@@ -27,7 +27,7 @@ blueprint: Maypole
 
 ## Role
 
-The maypole is the first Pagan building. It unlocks barbarians and the Temple. Building it sets you on the Pagan path: Imperial buildings and units are no longer offered.
+The maypole is the first Pagan building. It unlocks barbarians and the Sacred Grove. Building it sets you on the Pagan path: Imperial buildings and units are no longer offered.
 
 ## Built by
 
@@ -45,7 +45,7 @@ The maypole is the first Pagan building. It unlocks barbarians and the Temple. B
 ## Leads to
 
 <!-- gen:leads -->
-- **Building it unlocks:** [Barbarian](../units/barbarian.md), [Temple](temple.md)
+- **Building it unlocks:** [Barbarian](../units/barbarian.md), [Sacred Grove](temple.md)
 <!-- /gen:leads -->
 
 ## Commands

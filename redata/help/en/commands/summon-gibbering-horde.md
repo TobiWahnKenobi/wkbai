@@ -1,13 +1,13 @@
 ---
-title: Summon Gibbering Horde
+title: Polymorph to Gibbering Horde
 ids: [command/Summon Gibbering Horde]
 order: 10
 ---
 
-# Summon Gibbering Horde
+# Polymorph to Gibbering Horde
 
 <!-- gen:icon -->
-![Summon Gibbering Horde](game:interface/icons/sic_SummonHord.tga)
+![Polymorph to Gibbering Horde](game:interface/icons/sic_SummonHord.tga)
 <!-- /gen:icon -->
 
 ## Role

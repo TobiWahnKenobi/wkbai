@@ -1,10 +1,10 @@
 ---
-title: Stockade to Unaligned Wall
+title: Fortified Wall Upgrade
 ids: [upgrade/Stockade to Unaligned Wall, command/Research Stockade to Unaligned Wall]
 order: 10
 ---
 
-# Stockade to Unaligned Wall
+# Fortified Wall Upgrade
 
 <!-- gen:facts -->
 <!-- facts:static -->
@@ -34,8 +34,8 @@ The first wall research at the Guildhall: your wooden stockades become stone wal
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Stockade](../buildings/stockade.md), [Unaligned Gatehouse](../buildings/unaligned-gatehouse-closed.md), [Unaligned Wall](../buildings/unaligned-wall.md), [Upgrade to Unaligned Tower](upgrade-to-unaligned-tower.md)
-- **Turns units or buildings into, or calls up:** [Unaligned Wall](../buildings/unaligned-wall.md), [Unaligned Gatehouse](../buildings/unaligned-gatehouse-closed.md)
+- **Unlocks:** [Stockade](../buildings/stockade.md), [Fortified Gatehouse](../buildings/unaligned-gatehouse-closed.md), [Fortified Wall](../buildings/unaligned-wall.md), [Upgrade Wall to Fortified Tower](upgrade-to-unaligned-tower.md)
+- **Turns units or buildings into, or calls up:** [Fortified Wall](../buildings/unaligned-wall.md), [Fortified Gatehouse](../buildings/unaligned-gatehouse-closed.md)
 <!-- /gen:leads -->
 
 ## Commands

@@ -1,13 +1,13 @@
 ---
-title: Pagan Pikeman
+title: Warrior of the Sun
 ids: [unit/Pagan Pikeman, command/Spawn Pagan Pikeman]
 order: 10
 ---
 
-# Pagan Pikeman
+# Warrior of the Sun
 
 <!-- gen:icon -->
-![Pagan Pikeman](game:interface/icons/characters/pagan_pikeman.tga)
+![Warrior of the Sun](game:interface/icons/characters/pagan_pikeman.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -31,7 +31,7 @@ blueprint: Pagan Pikeman
 
 ## Role
 
-The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 from the front and a 40-point attack. The [Hall of Warriors](../buildings/hall-of-warriors.md) trains it once you have built a [Wickerman](../buildings/wickerman.md) (or the battle-gathering sacrifice was made).
+The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 from the front and a 40-point attack. The [Hall of Warriors](../buildings/hall-of-warriors.md) trains it once you have built a [The Wickerman](../buildings/wickerman.md) (or the battle-gathering sacrifice was made).
 
 ## Trained at / Built by
 
@@ -42,7 +42,7 @@ The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 
 ## Needs
 
 <!-- gen:needs -->
-- building a [Wickerman](../buildings/wickerman.md)
+- building a [The Wickerman](../buildings/wickerman.md)
 - Pagan or neutral side only: the button goes once you build a [Church](../buildings/church-stone.md) (the Imperial path).
 <!-- /gen:needs -->
 
@@ -59,18 +59,18 @@ The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 
 - [Take Cart](../commands/take-cart.md)
 - [Join Formation](../commands/join-formation.md)
 - [Halt](../commands/halt.md)
-- [Aggression](../commands/aggression.md)
-- [Passivity](../commands/passivity.md)
+- [Attack at Will](../commands/aggression.md)
+- [Stand your Ground](../commands/passivity.md)
 - [Enter Dark Portal](../commands/enter-dark-portal.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Train](../commands/train.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->

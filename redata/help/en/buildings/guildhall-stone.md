@@ -44,8 +44,8 @@ The guildhall is the town's place of learning for crafts. It researches farming 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Horse Harness](../upgrades/horse-harness.md), [Heavy Plough](../upgrades/heavy-plough.md), [Crop Rotation](../upgrades/crop-rotation.md), [Wooden Forts](../upgrades/fort-wood.md), [Flaming Arrow](../upgrades/flaming-arrow.md), [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md), [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md), [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md)
-- **Building it unlocks:** [Blacksmith](blacksmith.md), [Sawmill](sawmill.md), [Warehouse](warehouse-stone.md), [Windmill](windmill.md), [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md)
+- **Research here:** [Horse Harness](../upgrades/horse-harness.md), [Heavy Plough](../upgrades/heavy-plough.md), [Crop Rotation](../upgrades/crop-rotation.md), [Fort Upgrade](../upgrades/fort-wood.md), [Flaming Arrow](../upgrades/flaming-arrow.md), [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md), [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md), [Ramparts Upgrade](../upgrades/technological-wall-to-celestial-wall.md)
+- **Building it unlocks:** [Blacksmith](blacksmith.md), [Sawmill](sawmill.md), [Warehouse](warehouse-stone.md), [Windmill](windmill.md), [Fortified Wall Upgrade](../upgrades/stockade-to-unaligned-wall.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -57,4 +57,4 @@ The guildhall is the town's place of learning for crafts. It researches farming 
 ## Tips
 
 - Build it early: almost every later economy building needs it.
-- The wall research goes in order: [Stockade to Unaligned Wall](../upgrades/stockade-to-unaligned-wall.md), then [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md), then [Technological Wall to Celestial Wall](../upgrades/technological-wall-to-celestial-wall.md).
+- The wall research goes in order: [Stockade to Fortified Wall](../upgrades/stockade-to-unaligned-wall.md), then [Fortified Wall to Battlements](../upgrades/unaligned-wall-to-technological-wall.md), then [Battlements to Ramparts](../upgrades/technological-wall-to-celestial-wall.md).

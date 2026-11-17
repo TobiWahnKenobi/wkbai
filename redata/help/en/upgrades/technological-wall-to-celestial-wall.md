@@ -1,10 +1,10 @@
 ---
-title: Technological Wall to Celestial Wall
+title: Ramparts Upgrade
 ids: [upgrade/Technological Wall to Celestial Wall, command/Research Technological Wall to Celestial Wall]
 order: 10
 ---
 
-# Technological Wall to Celestial Wall
+# Ramparts Upgrade
 
 <!-- gen:facts -->
 <!-- facts:static -->
@@ -33,8 +33,8 @@ The last wall research at the Guildhall: your walls become the strongest kind, t
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Celestial Gatehouse](../buildings/celestial-gatehouse-closed.md), [Celestial Wall](../buildings/celestial-wall.md), [Technological Wall](../buildings/technological-wall.md), [Upgrade to Celestial Tower](upgrade-to-celestial-tower.md)
-- **Turns units or buildings into, or calls up:** [Celestial Wall](../buildings/celestial-wall.md), [Celestial Tower](../buildings/celestial-tower.md), [Celestial Gatehouse](../buildings/celestial-gatehouse-closed.md)
+- **Unlocks:** [Gatehouse Ramparts](../buildings/celestial-gatehouse-closed.md), [Ramparts](../buildings/celestial-wall.md), [Battlements](../buildings/technological-wall.md), [Upgrade Wall to Rampart Tower](upgrade-to-celestial-tower.md)
+- **Turns units or buildings into, or calls up:** [Ramparts](../buildings/celestial-wall.md), [Ramparts Tower](../buildings/celestial-tower.md), [Gatehouse Ramparts](../buildings/celestial-gatehouse-closed.md)
 <!-- /gen:leads -->
 
 ## Commands

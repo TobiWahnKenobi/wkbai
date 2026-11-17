@@ -1,13 +1,13 @@
 ---
-title: Continue Shopping
+title: Continue trading at Shop
 ids: [command/Continue Shopping]
 order: 10
 ---
 
-# Continue Shopping
+# Continue trading at Shop
 
 <!-- gen:icon -->
-![Continue Shopping](game:interface/icons/sic_shop.tga)
+![Continue trading at Shop](game:interface/icons/sic_shop.tga)
 <!-- /gen:icon -->
 
 ## Role

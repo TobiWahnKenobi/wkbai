@@ -1,13 +1,13 @@
 ---
-title: Celestial Archer
+title: Imperial Archer
 ids: [unit/Celestial Archer, command/Spawn Celestial Archer]
 order: 10
 ---
 
-# Celestial Archer
+# Imperial Archer
 
 <!-- gen:icon -->
-![Celestial Archer](game:interface/icons/characters/Celestial_Archer.tga)
+![Imperial Archer](game:interface/icons/characters/Celestial_Archer.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -32,7 +32,7 @@ blueprint: Celestial Archer
 
 ## Role
 
-The celestial archer is the Imperial path's elite bowman: 70 hit points, a 20-point arrow and a very long sight of 25. It costs 100 food and 20 gold and needs a [Michael Statue](../buildings/michael-statue.md).
+The celestial archer is the Imperial path's elite bowman: 70 hit points, a 20-point arrow and a very long sight of 25. It costs 100 food and 20 gold and needs a [Statue of the Archangel](../buildings/michael-statue.md).
 
 ## Trained at / Built by
 
@@ -43,7 +43,7 @@ The celestial archer is the Imperial path's elite bowman: 70 hit points, a 20-po
 ## Needs
 
 <!-- gen:needs -->
-- building a [Michael Statue](../buildings/michael-statue.md)
+- building a [Statue of the Archangel](../buildings/michael-statue.md)
 - Imperial or neutral side only: the button goes once you build a [Maypole](../buildings/maypole.md) (the Pagan path).
 <!-- /gen:needs -->
 
@@ -62,20 +62,20 @@ The celestial archer is the Imperial path's elite bowman: 70 hit points, a 20-po
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 - [Hold Ground](../commands/hold-ground.md)
-- [Skirmish Mode](../commands/skirmish-mode.md)
+- [Skirmish](../commands/skirmish-mode.md)
 - [Take Cart](../commands/take-cart.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire Arrow](../commands/fire-arrow.md)
 - [Hunt Missile](../commands/hunt-missile.md)
-- [Military Unit Convert to Peasant](../commands/military-unit-convert-to-peasant.md)
+- [Convert Troops to Peasants](../commands/military-unit-convert-to-peasant.md)
 - [Garrison](../commands/garrison.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Formation](../commands/formation.md)
+- [Form Up](../commands/formation.md)
 - [Train](../commands/train.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Scale Siege Tower](../commands/scale-siege-tower.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

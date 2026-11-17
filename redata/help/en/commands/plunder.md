@@ -8,12 +8,12 @@ order: 10
 
 ## Role
 
-Vandavar raiders steal goods from an enemy building.
+Vandavar Barbarian raiders steal goods from an enemy building.
 
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Vandavar](../units/vandavar.md)
+- **Offered by:** [Vandavar Barbarian](../units/vandavar.md)
 - No button of its own: you give it with a right-click on the target (see [Orders](../controls/orders.md#the-right-click)).
 <!-- /gen:trained -->
 

@@ -1,10 +1,10 @@
 ---
-title: Palace (Imperial)
+title: Imperial Palace
 ids: [building/Palace_Celestial]
 order: 10
 ---
 
-# Palace (Imperial)
+# Imperial Palace
 
 <!-- gen:facts -->
 ```facts
@@ -22,12 +22,12 @@ blueprint: Palace_Celestial
 
 ## Role
 
-The Imperial Palace is the last level of your Manor, reached by finishing a Scriptorium or Michael Statue. It is as strong as a Castle and marks the top of your path.
+The Imperial Palace is the last level of your Manor, reached by finishing a Scriptorium or Statue of the Archangel. It is as strong as a Castle and marks the top of your path.
 
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** building a [Michael Statue](michael-statue.md), building a [Scriptorium](scriptorium.md)
+- **Comes from:** building a [Statue of the Archangel](michael-statue.md), building a [Scriptorium](scriptorium.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -45,16 +45,16 @@ The Imperial Palace is the last level of your Manor, reached by finishing a Scri
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Ring Bell](../commands/ring-bell.md)
-- [Recall Peasants](../commands/recall-peasants.md)
-- [Conscript all Peasants](../commands/conscript-all-peasants.md)
-- [Demob all Militia](../commands/demob-all-militia.md)
+- [Sanctuary (Ring Bell)](../commands/ring-bell.md)
+- [Sanctuary (Recall Peasants)](../commands/recall-peasants.md)
+- [Conscript all Peasants into Militia](../commands/conscript-all-peasants.md)
+- [Convert all Militia into Peasants](../commands/demob-all-militia.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Garrison troops inside to make it shoot harder, and use [Ring Bell](../commands/ring-bell.md) to send peasants into shelter during a raid.
+- Garrison troops inside to make it shoot harder, and use [Sanctuary (Ring Bell)](../commands/ring-bell.md) to send peasants into shelter during a raid.

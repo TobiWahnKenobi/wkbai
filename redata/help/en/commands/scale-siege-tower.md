@@ -13,7 +13,7 @@ Sends foot soldiers up a siege tower that is against an enemy wall, and over ont
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Archer](../units/archer.md), [Barbarian](../units/barbarian.md), [Celestial Archer](../units/celestial-archer.md), [Gunner with Bayonet](../units/gunner-bayonet.md), [Gunner](../units/gunner.md), [Man at Arms](../units/man-at-arms.md), [Mercenary](../units/mercenary.md), [Pagan Archer (Wickerman)](../units/pagan-archer-upgrade.md), [Pagan Archer](../units/pagan-archer.md), [Pagan Pikeman](../units/pagan-pikeman.md), [Pagan Spearwoman](../units/pagan-spearwoman.md), [Pikeman](../units/pikeman.md), [Sapper](../units/sapper.md), [Scout](../units/scout.md), [Spearman](../units/spearman.md), [Vandavar](../units/vandavar.md)
+- **Offered by:** [Archer](../units/archer.md), [Barbarian](../units/barbarian.md), [Gunner (with Bayonet)](../units/gunner-bayonet.md), [Gunner](../units/gunner.md), [Huntress of the Dawn](../units/pagan-archer.md), [Huntress of the Sun](../units/pagan-archer-upgrade.md), [Imperial Archer](../units/celestial-archer.md), [Imperial Pikeman](../units/man-at-arms.md), [Man-at-Arms](../units/pikeman.md), [Mercenary](../units/mercenary.md), [Sapper](../units/sapper.md), [Scout](../units/scout.md), [Spearman](../units/spearman.md), [Vandavar Barbarian](../units/vandavar.md), [Warrior of the Sun](../units/pagan-pikeman.md), [Warrioress of the Dawn](../units/pagan-spearwoman.md)
 - No button of its own: you give it with a right-click on the target (see [Orders](../controls/orders.md#the-right-click)).
 <!-- /gen:trained -->
 

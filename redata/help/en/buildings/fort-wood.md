@@ -1,13 +1,13 @@
 ---
-title: Fort (wooden)
+title: Fort
 ids: [building/Fort Wood, command/Build Fort Wood]
 order: 10
 ---
 
-# Fort (wooden)
+# Fort
 
 <!-- gen:icon -->
-![Fort (wooden)](game:interface/icons/buildings/Fortwood.tga)
+![Fort](game:interface/icons/buildings/Fortwood.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -29,34 +29,34 @@ blueprint: Fort Wood
 
 ## Role
 
-The wooden fort is a strongpoint that shoots and holds a garrison. It needs the Guildhall's [Wooden Forts](../upgrades/fort-wood.md) research and a Barracks, and it can be upgraded to stone.
+The wooden fort is a strongpoint that shoots and holds a garrison. It needs the Guildhall's [Fort Upgrade](../upgrades/fort-wood.md) research and a Barracks, and it can be upgraded to stone.
 
 ## Built by
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Upgrade to Wooden Fort](../upgrades/upgrade-to-wooden-fort.md)
+- **Comes from:** [Upgrade Watch Tower to Fort](../upgrades/upgrade-to-wooden-fort.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Wooden Forts](../upgrades/fort-wood.md)
+- [Fort Upgrade](../upgrades/fort-wood.md)
 - building a [Barracks](barracks-stone.md)
 <!-- /gen:needs -->
 
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Upgrade to Stone Fort](../upgrades/upgrade-to-stone-fort.md)
+- **Research here:** [Upgrade to Holy Fortress](../upgrades/upgrade-to-stone-fort.md)
 <!-- /gen:leads -->
 
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
-- [UnGarrison Hand to Hand Units](../commands/ungarrison-hand-to-hand-units.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
+- [Ungarrison Hand to Hand Defenders](../commands/ungarrison-hand-to-hand-units.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
 <!-- /gen:commands -->
@@ -64,4 +64,4 @@ The wooden fort is a strongpoint that shoots and holds a garrison. It needs the 
 ## Tips
 
 - Garrison archers inside to add to its fire.
-- [Upgrade to Stone Fort](../upgrades/upgrade-to-stone-fort.md) after [Masonry](../upgrades/masonry.md).
+- [Upgrade to Holy Fortress](../upgrades/upgrade-to-stone-fort.md) after [Shield of God](../upgrades/masonry.md).

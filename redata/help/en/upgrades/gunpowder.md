@@ -1,13 +1,13 @@
 ---
-title: Gunpowder
+title: Bombard Upgrade
 ids: [upgrade/Gunpowder, command/Research Gunpowder]
 order: 10
 ---
 
-# Gunpowder
+# Bombard Upgrade
 
 <!-- gen:icon -->
-![Gunpowder](game:interface/icons/upgrades/Bombard_Upgrade.tga)
+![Bombard Upgrade](game:interface/icons/upgrades/Bombard_Upgrade.tga)
 <!-- /gen:icon -->
 
 <!-- gen:facts -->
@@ -38,7 +38,7 @@ The University's gunpowder: it unlocks [gunners](../units/gunner.md), [bombards]
 ## Leads to
 
 <!-- gen:leads -->
-- **Unlocks:** [Bombard](../units/bombard.md), [Bombard Boat](../units/bombard-boat.md), [Gunner](../units/gunner.md), [Upgrade to Bayonet](upgrade-to-bayonet.md)
+- **Unlocks:** [Bombard](../units/bombard.md), [Galleass](../units/bombard-boat.md), [Gunner](../units/gunner.md), [Bayonet](upgrade-to-bayonet.md)
 <!-- /gen:leads -->
 
 ## Commands
@@ -49,4 +49,4 @@ The University's gunpowder: it unlocks [gunners](../units/gunner.md), [bombards]
 
 ## Tips
 
-- Not offered on the pure paths (Michael Statue or Wickerman).
+- Not offered on the pure paths (Statue of the Archangel or Wickerman).

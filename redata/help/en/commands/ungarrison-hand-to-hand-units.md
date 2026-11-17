@@ -1,13 +1,13 @@
 ---
-title: UnGarrison Hand to Hand Units
+title: Ungarrison Hand to Hand Defenders
 ids: [command/UnGarrison Hand to Hand Units]
 order: 10
 ---
 
-# UnGarrison Hand to Hand Units
+# Ungarrison Hand to Hand Defenders
 
 <!-- gen:icon -->
-![UnGarrison Hand to Hand Units](game:interface/icons/sic_ungarison.tga)
+![Ungarrison Hand to Hand Defenders](game:interface/icons/sic_ungarison.tga)
 <!-- /gen:icon -->
 
 ## Role
@@ -17,7 +17,7 @@ Sends only the melee fighters out of the building and keeps the missile troops i
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Church](../buildings/church-stone.md), [Fort (stone)](../buildings/fort-stone.md), [Fort (wooden)](../buildings/fort-wood.md), [Watch Tower](../buildings/watch-tower.md)
+- **Offered by:** [Church](../buildings/church-stone.md), [Fort](../buildings/fort-wood.md), [Holy Fortress](../buildings/fort-stone.md), [Watch Tower](../buildings/watch-tower.md)
 <!-- /gen:trained -->
 
 ## Needs

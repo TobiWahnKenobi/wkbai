@@ -27,7 +27,7 @@ blueprint: Scriptorium
 
 ## Role
 
-The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Celestial Gunpowder](../upgrades/celestial-gunpowder.md), [Malleus Maleficarum](../upgrades/malleus-maleficarum.md) and the bayonet. It needs a Cathedral and an Observatory, and it turns your Manor into a Palace.
+The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Gunpowder](../upgrades/celestial-gunpowder.md), [Witch Hunt](../upgrades/malleus-maleficarum.md) and the bayonet. It needs a Cathedral and an Observatory, and it turns your Manor into a Palace.
 
 ## Built by
 
@@ -46,7 +46,7 @@ The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Celestial G
 ## Leads to
 
 <!-- gen:leads -->
-- **Research here:** [Greek Fire](../upgrades/greek-fire.md), [Celestial Gunpowder](../upgrades/celestial-gunpowder.md), [Malleus Maleficarum](../upgrades/malleus-maleficarum.md), [Upgrade to Bayonet](../upgrades/upgrade-to-bayonet.md)
+- **Research here:** [Greek Fire](../upgrades/greek-fire.md), [Gunpowder](../upgrades/celestial-gunpowder.md), [Witch Hunt](../upgrades/malleus-maleficarum.md), [Bayonet](../upgrades/upgrade-to-bayonet.md)
 <!-- /gen:leads -->
 
 ## Commands

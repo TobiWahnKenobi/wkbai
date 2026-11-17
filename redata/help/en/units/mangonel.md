@@ -60,12 +60,12 @@ The mangonel is the first siege catapult you can train, with no research: 30 dam
 - [Hold Fire](../commands/hold-fire.md)
 - [Interrogate](../commands/interrogate.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Fire Mangonel](../commands/fire-mangonel.md)
+- [Fire (Mangonel)](../commands/fire-mangonel.md)
 - [Attack](../commands/attack.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Resupply](../commands/resupply.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

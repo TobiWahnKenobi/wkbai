@@ -1,10 +1,10 @@
 ---
-title: Technological Gatehouse
+title: Gatehouse Battlements
 ids: [building/Technological Gatehouse Closed, building/Technological Gatehouse Open, command/Build Technological Gatehouse Closed]
 order: 10
 ---
 
-# Technological Gatehouse
+# Gatehouse Battlements
 
 <!-- gen:facts -->
 ```facts
@@ -30,13 +30,13 @@ The Renaissance gatehouse is the gate in a Renaissance wall: strength 700 and a 
 
 <!-- gen:trained -->
 - **Built by:** [Peasant](../units/peasant.md)
-- **Comes from:** [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- **Comes from:** [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:trained -->
 
 ## Needs
 
 <!-- gen:needs -->
-- [Unaligned Wall to Technological Wall](../upgrades/unaligned-wall-to-technological-wall.md)
+- [Battlements Upgrade](../upgrades/unaligned-wall-to-technological-wall.md)
 <!-- /gen:needs -->
 
 ## Leads to
@@ -48,6 +48,6 @@ The Renaissance gatehouse is the gate in a Renaissance wall: strength 700 and a 
 ## Commands
 
 <!-- gen:commands -->
-- [Open Technological Gatehouse](../commands/open-technological-gatehouse.md)
+- [Open (Gatehouse Battlements)](../commands/open-technological-gatehouse.md)
 <!-- /gen:commands -->
 

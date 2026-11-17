@@ -1,13 +1,13 @@
 ---
-title: Pause Shopping
+title: Pause trading at Shop
 ids: [command/Pause Shopping]
 order: 10
 ---
 
-# Pause Shopping
+# Pause trading at Shop
 
 <!-- gen:icon -->
-![Pause Shopping](game:interface/icons/SIC_Shop_Pause.tga)
+![Pause trading at Shop](game:interface/icons/SIC_Shop_Pause.tga)
 <!-- /gen:icon -->
 
 ## Role

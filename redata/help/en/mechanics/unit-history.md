@@ -10,7 +10,7 @@ order: 170
 
 ## Names, age and kills
 
-- **Every soldier gets a name** when it is made, drawn from English, French, Norse and Nordic names by its side, unique among your units. Boats get ships' names. Peasants, siege engines, carts, wagons and summoned creatures have none. Named characters (Michael, Abaddon, the campaign heroes) keep their own.
+- **Every soldier gets a name** when it is made, drawn from English, French, Norse and Nordic names by its side, unique among your units. Boats get ships' names. Peasants, siege engines, carts, wagons and summoned creatures have none. Named characters (Archangel, Abaddon, the campaign heroes) keep their own.
 - **Militia** get a name when called up; a peasant who killed as militia keeps it.
 - **Kills** are counted from the last blow before an enemy dies. A missile's kill goes to whoever shot it; a tower's or fort's kills go to the troops inside. Buildings destroyed are counted apart. Allies, your own units and animals don't count.
 - **Age** is shown as years from 25 with wkbai's seasons on, in days with only day and night on, otherwise as playing time.

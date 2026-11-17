@@ -56,18 +56,18 @@ The supply wagon is a moving store. It refills nearby troops with what they need
 - [Capture](../commands/capture.md)
 - [Halt](../commands/halt.md)
 - [Interrogate](../commands/interrogate.md)
-- [Formation Supply](../commands/formation-supply.md)
-- [Supply](../commands/supply.md)
+- [Distribute Food Rations (Formation Supply)](../commands/formation-supply.md)
+- [Distribute Food Rations (Supply)](../commands/supply.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Supply Wagon - Pick up Sack](../commands/supply-wagon-pick-up-sack.md)
-- [Resupply](../commands/resupply.md)
-- [Deliver Resources to Deliverable Building](../commands/deliver-resources-to-deliverable-building.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Pick Up Resource Sack (Supply Wagon - Pick up Sack)](../commands/supply-wagon-pick-up-sack.md)
+- [Resupply Ammunition](../commands/resupply.md)
+- [Deliver Resources (to Deliverable Building)](../commands/deliver-resources-to-deliverable-building.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
 ## Tips
 
 - Park a supply wagon behind a formation on a long campaign so the soldiers do not walk home to resupply.
-- Use [Supply](../commands/supply.md) or [Formation Supply](../commands/formation-supply.md) to tell it whom to look after.
+- Use [Distribute Food Rations (Supply)](../commands/supply.md) or [Distribute Food Rations (Formation Supply)](../commands/formation-supply.md) to tell it whom to look after.

@@ -1,13 +1,13 @@
 ---
-title: Sapper Repair
+title: Repair (Sapper)
 ids: [command/Sapper Repair]
 order: 10
 ---
 
-# Sapper Repair
+# Repair (Sapper)
 
 <!-- gen:icon -->
-![Sapper Repair](game:interface/icons/sic_repair.tga)
+![Repair (Sapper)](game:interface/icons/sic_repair.tga)
 <!-- /gen:icon -->
 
 ## Role

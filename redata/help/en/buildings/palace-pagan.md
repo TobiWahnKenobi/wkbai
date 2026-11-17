@@ -1,10 +1,10 @@
 ---
-title: Palace (Pagan)
+title: Pagan Palace
 ids: [building/Palace_Pagan]
 order: 10
 ---
 
-# Palace (Pagan)
+# Pagan Palace
 
 <!-- gen:facts -->
 ```facts
@@ -28,7 +28,7 @@ The Pagan Palace is the last level of your Manor, reached by finishing a Arcanum
 ## Built by
 
 <!-- gen:trained -->
-- **Comes from:** building a [Arcanum](arcanum.md), building a [Wickerman](wickerman.md)
+- **Comes from:** building a [Arcanum](arcanum.md), building a [The Wickerman](wickerman.md)
 <!-- /gen:trained -->
 
 ## Needs
@@ -46,16 +46,16 @@ The Pagan Palace is the last level of your Manor, reached by finishing a Arcanum
 ## Commands
 
 <!-- gen:commands -->
-- [Fort Attack](../commands/fort-attack.md)
-- [UnGarrison](../commands/ungarrison.md)
+- [Attack (Fort)](../commands/fort-attack.md)
+- [Ungarrison](../commands/ungarrison.md)
 - [Hold Fire](../commands/hold-fire.md)
 - [Fire at Will](../commands/fire-at-will.md)
-- [Ring Bell](../commands/ring-bell.md)
-- [Recall Peasants](../commands/recall-peasants.md)
-- [Conscript all Peasants](../commands/conscript-all-peasants.md)
-- [Demob all Militia](../commands/demob-all-militia.md)
+- [Sanctuary (Ring Bell)](../commands/ring-bell.md)
+- [Sanctuary (Recall Peasants)](../commands/recall-peasants.md)
+- [Conscript all Peasants into Militia](../commands/conscript-all-peasants.md)
+- [Convert all Militia into Peasants](../commands/demob-all-militia.md)
 <!-- /gen:commands -->
 
 ## Tips
 
-- Garrison troops inside to make it shoot harder, and use [Ring Bell](../commands/ring-bell.md) to send peasants into shelter during a raid.
+- Garrison troops inside to make it shoot harder, and use [Sanctuary (Ring Bell)](../commands/ring-bell.md) to send peasants into shelter during a raid.

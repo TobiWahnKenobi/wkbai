@@ -30,7 +30,7 @@ blueprint: Bishop
 
 ## Role
 
-The bishop is the senior Imperial cleric from the [Cathedral](../buildings/cathedral-stone.md). He calls down acts of God: visions, blindness, plague, winter, lightning, firestorm, earthquake and the falling star Wormwood. Most of these need research first ([Crusade](../upgrades/crusade.md), [Malleus Maleficarum](../upgrades/malleus-maleficarum.md)) or a [Michael Statue](../buildings/michael-statue.md).
+The bishop is the senior Imperial cleric from the [Cathedral](../buildings/cathedral-stone.md). He calls down acts of God: visions, blindness, plague, winter, lightning, firestorm, earthquake and the falling star Wormwood. Most of these need research first ([Crusade](../upgrades/crusade.md), [Witch Hunt](../upgrades/malleus-maleficarum.md)) or a [Statue of the Archangel](../buildings/michael-statue.md).
 
 ## Trained at / Built by
 
@@ -54,24 +54,24 @@ The bishop is the senior Imperial cleric from the [Cathedral](../buildings/cathe
 
 <!-- gen:commands -->
 - [Capture](../commands/capture.md)
-- [Inflict Vision](../commands/inflict-vision.md)
+- [Visions](../commands/inflict-vision.md)
 - [Inflict Blindness](../commands/inflict-blindness.md)
 - [Inflict Plague](../commands/inflict-plague.md)
-- [Inflict Fimblewinter](../commands/inflict-fimblewinter.md)
+- [Inflict Fimbulwinter](../commands/inflict-fimblewinter.md)
 - [Inflict Lightning](../commands/inflict-lightning.md)
-- [Inflict Firestorm](../commands/inflict-firestorm.md)
+- [Inflict Wrath of Heaven](../commands/inflict-firestorm.md)
 - [Inflict Earthquake](../commands/inflict-earthquake.md)
 - [Inflict Wormwood](../commands/inflict-wormwood.md)
 - [Halt](../commands/halt.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Pray at Church](../commands/pray-at-church.md)
+- [Pray](../commands/pray-at-church.md)
 - [Pray for Righteousness](../commands/pray-for-righteousness.md)
 - [Garrison](../commands/garrison.md)
-- [Resupply](../commands/resupply.md)
+- [Resupply Ammunition](../commands/resupply.md)
 - [Board Vessel](../commands/board-vessel.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 

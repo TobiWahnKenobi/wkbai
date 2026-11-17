@@ -1,13 +1,13 @@
 ---
-title: Mine
+title: Mine for Stone
 ids: [command/Mine]
 order: 10
 ---
 
-# Mine
+# Mine for Stone
 
 <!-- gen:icon -->
-![Mine](game:interface/icons/sic_mine.tga)
+![Mine for Stone](game:interface/icons/sic_mine.tga)
 <!-- /gen:icon -->
 
 ## Role

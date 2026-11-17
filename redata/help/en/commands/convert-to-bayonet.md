@@ -17,7 +17,7 @@ Gunners fix bayonets and fight hand to hand.
 ## Offered by
 
 <!-- gen:trained -->
-- **Offered by:** [Gunner with Bayonet](../units/gunner-bayonet.md)
+- **Offered by:** [Gunner (with Bayonet)](../units/gunner-bayonet.md)
 <!-- /gen:trained -->
 
 ## Needs

@@ -52,8 +52,8 @@ The wood elemental is a forest woken by an [Arch Druid](arch-druid.md): 200 hit 
 - [Halt](../commands/halt.md)
 - [Interrogate](../commands/interrogate.md)
 - [Attack](../commands/attack.md)
-- [Guard](../commands/guard.md)
-- [Run Away](../commands/run-away.md)
+- [Guard Next Unit Selected](../commands/guard.md)
+- [Flee](../commands/run-away.md)
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
