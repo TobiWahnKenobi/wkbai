@@ -11307,6 +11307,8 @@ void Test_FarmBuilders()
 			farming++;
 	printf("FARMB end: %d of 3 peasants farm\n", farming);
 	fflush(stdout);
+}
+
 IRenderer* CreateNULLRenderer();
 
 void Test_FireQuality()
