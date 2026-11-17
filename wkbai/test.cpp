@@ -10888,6 +10888,7 @@ void Test_SmallerItems()
 // "seconds": n } (default 120 game seconds). For a slow game (the play test's PERFORMANCE save): with
 // "profileSim" the simulation's parts every 10 s; here "RUNSAVE t=<s> real <ms> per game second,
 // steps over 50 ms <n>, characters moving <n>" every 10 game seconds, then the slowest step.
+static void PrintAimedAt(Server& server, const char* name);
 void Test_RunSave()
 {
 	LoadBCP("data.bcp");
@@ -10901,6 +10902,7 @@ void Test_RunSave()
 	std::map<uint32_t, int> unreachableBy;
 	g_unreachableBy = &unreachableBy;
 	printf("RUNSAVE %s: %zu objects, ministries %d\n", path.c_str(), server.idmap.size(), (int)server.aiMinistries);
+	PrintAimedAt(server, cfg.value("aimedAt", std::string("Scout")).c_str());
 	fflush(stdout);
 	const float start = server.timeManager.currentTime;
 	float nextPrint = start + 10.0f;
@@ -10931,6 +10933,7 @@ void Test_RunSave()
 		}
 	}
 	printf("RUNSAVE end: the slowest step %.1f ms\n", worst);
+	PrintAimedAt(server, cfg.value("aimedAt", std::string("Scout")).c_str());
 	// who asked for paths to goals no search could reach: the units, their orders and targets
 	std::vector<std::pair<int, uint32_t>> askers;
 	for (const auto& [id, n] : unreachableBy)
@@ -10979,6 +10982,64 @@ void Test_RunSave()
 			(int)p->movementController.isMoving());
 	}
 	g_unreachableBy = nullptr;
+	fflush(stdout);
+}
+
+// (Test_RunSave) every object whose current task aims at an object whose type name holds `name`
+// ("Scout"): its order, task, place, the target's, walking or not, and the target's terrain
+// region against its own
+static void PrintAimedAt(Server& server, const char* name)
+{
+	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+	int n = 0;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (!o || o->deleted)
+			continue;
+		Order* order = o->orderConfig.getCurrentOrder();
+		Task* task = order ? order->getCurrentTask() : nullptr;
+		ServerGameObject* t = task ? task->target.get() : nullptr;
+		if (!t || t->blueprint->name.find(name) == std::string::npos)
+			continue;
+		n++;
+		if (n > 30)
+			continue;
+		const ServerGameObject* mover = o;
+		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children)
+					if (mover == o && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						mover = (const ServerGameObject*)c;
+		const int cls = MovementController::movementClass(mover->blueprint);
+		const int own = MovementController::terrainRegion(cls, (int)(mover->position.x / 5.0f), (int)(mover->position.z / 5.0f));
+		const int theirs = MovementController::terrainRegion(cls, (int)(t->position.x / 5.0f), (int)(t->position.z / 5.0f));
+		printf("RUNSAVE   aimed: %s %u (player %u) %s / %s at (%.1f, %.1f, h %.1f) -> %s %u at (%.1f, %.1f, h %.1f), %.0f m, moving %d, regions %d / %d, out of reach (3 m) %d, proximity %.1f\n",
+			o->blueprint->name.c_str(), o->id, o->getPlayer() ? o->getPlayer()->id : 0, server.gameSet->orders.getString(order->blueprint).c_str(),
+			server.gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), o->position.x, o->position.z, o->position.y, t->blueprint->name.c_str(), t->id,
+			t->position.x, t->position.z, t->position.y, (t->position - o->position).len2xz(), (int)o->movementController.isMoving(), own, theirs,
+			(int)OutOfReach(o, t->position, 3.0f), task->proximity);
+	}
+	printf("RUNSAVE aimed at a %s: %d objects\n", name, n);
+	// a formation's members ("runSave": { "members": <formation id> }): where each stands and walks to
+	const uint32_t fid = g_settings.value("runSave", nlohmann::json::object()).value("members", 0u);
+	if (ServerGameObject* f = fid ? server.findObject(fid) : nullptr) {
+		int i = 0;
+		for (const auto& [type, children] : f->children)
+			for (CommonGameObject* c : children) {
+				ServerGameObject* m = (ServerGameObject*)c;
+				if (m->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || i++ >= 12)
+					continue;
+				const int cls = MovementController::movementClass(m->blueprint);
+				const Vector3 to = m->movementController.getRequestedDestination(), end = m->movementController.getDestination();
+				auto reg = [&](const Vector3& p) { return MovementController::terrainRegion(cls, (int)(p.x / 5.0f), (int)(p.z / 5.0f)); };
+				printf("RUNSAVE   member %u: at (%.1f, %.1f, h %.1f) region %d, moving %d, asked (%.1f, %.1f) region %d blocked %d, path end (%.1f, %.1f), %zu nodes, maxGradient %.0f\n",
+					m->id, m->position.x, m->position.z, m->position.y, reg(m->position), (int)m->movementController.isMoving(), to.x, to.z, reg(to),
+					(int)MovementController::isTileBlockedFast(cls, (int)(to.x / 5.0f), (int)(to.z / 5.0f)), end.x, end.z, m->movementController.m_pathNodes.size(),
+					m->blueprint->maxGradient);
+			}
+		printf("RUNSAVE   formation %u at (%.1f, %.1f, h %.1f), region (members') %d\n", f->id, f->position.x, f->position.z, f->position.y,
+			MovementController::terrainRegion(MovementController::movementClass(((ServerGameObject*)f->children.begin()->second.front())->blueprint), (int)(f->position.x / 5.0f), (int)(f->position.z / 5.0f)));
+	}
 	fflush(stdout);
 }
 

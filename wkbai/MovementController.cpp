@@ -917,6 +917,19 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();
 	const GameObjBlueprint* blueprint = m_object->blueprint;
+	// a formation goes where its members can: by the ground of the member type that climbs least
+	// (the formation type's own has no slope limit: on the play test's save the Kingmaker's
+	// formations stood on a summit by the scout they were sent at, their spearmen climbing to their
+	// places for the rest of the game, 2026-11-17)
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		const GameObjBlueprint* member = nullptr;
+		for (const auto& [type, children] : m_object->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && (!member || c->blueprint->maxGradient < member->maxGradient))
+					member = c->blueprint;
+		if (member)
+			blueprint = member;
+	}
 	const int cls = movementClass(blueprint);
 	auto pred = [cls](PFPos pfp) -> bool { return isTileBlockedFast(cls, pfp.x, pfp.z); };
 

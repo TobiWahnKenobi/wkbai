@@ -585,6 +585,44 @@ void FormationController::update()
 	if (members.empty())
 		return;
 
+	// standing where its members can't get (a formation moved by its own type's ground, which has
+	// no slope limit, before 2026-11-17: the play test's saves have six on a summit plateau, a
+	// terrain region of its own ringed by slopes no spearman climbs, their spearmen climbing for
+	// good): to the nearest tile of its first member's region, at once. Not while it walks (its
+	// walk keeps to its members' ground now, MovementController::startMovement).
+	if (server && server->terrain && !formation->movementController.isMoving()) {
+		const GameObjBlueprint* climbsLeast = nullptr;
+		for (ServerGameObject* m : members)
+			if (!climbsLeast || m->blueprint->maxGradient < climbsLeast->maxGradient)
+				climbsLeast = m->blueprint;
+		const int cls = MovementController::movementClass(climbsLeast);
+		const int theirs = MovementController::terrainRegion(cls, (int)(members[0]->position.x / 5.0f), (int)(members[0]->position.z / 5.0f));
+		const int tx = (int)(formation->position.x / 5.0f), tz = (int)(formation->position.z / 5.0f);
+		if (theirs >= 0 && MovementController::terrainRegion(cls, tx, tz) != theirs) {
+			// rings of tiles outwards, the nearest tile centre of the members' region
+			float best = -1.0f;
+			Vector3 at;
+			for (int r = 1; r <= 40 && best < 0.0f; r++)
+				for (int dz = -r; dz <= r; dz++)
+					for (int dx = -r; dx <= r; dx++) {
+						if (std::abs(dx) != r && std::abs(dz) != r)
+							continue;
+						if (MovementController::terrainRegion(cls, tx + dx, tz + dz) != theirs)
+							continue;
+						const Vector3 c((tx + dx) * 5.0f + 2.5f, 0.0f, (tz + dz) * 5.0f + 2.5f);
+						const float d = (c - formation->position).sqlen2xz();
+						if (best < 0.0f || d < best) {
+							best = d;
+							at = c;
+						}
+					}
+			if (best >= 0.0f) {
+				at.y = server->terrain->getHeightEx(at.x, at.z, climbsLeast->canWalkOnWater());
+				formation->setPosition(at);
+			}
+		}
+	}
+
 	// members gone (dead, left): their places stay empty, but an Orb closes up; a formation that had
 	// formed up and has fewer than 8 left disbands (WKB.exe 0x54f1d0)
 	bool lost = false;
