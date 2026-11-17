@@ -1540,12 +1540,13 @@ local function weatherTab()
 			note(X(1000), Y(864), { "None of them in " .. table.concat(none, ", ") .. ": clear weather then." })
 		end
 	end
-	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter)
+	-- the peasants' lodging: shown with day and night (sleep) and with the seasons (winter),
+	-- side by side on one row above the cheat mode's
 	if s.dayNight ~= 0 then
-		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(904))
+		switch("peasantsSleep", "Peasants sleep at night", X(1000), Y(896))
 	end
 	if s.seasons ~= 0 then
-		switch("farmersWinter", "Farmers winter indoors", X(1000), Y(970))
+		switch("farmersWinter", "Farmers winter indoors", X(1440), Y(896))
 	end
 	if not (s.seasons ~= 0 and s.weatherStability == 4) then
 		note(X(1000), Y(600), { "Gentle: milder seasons, rare storms. Harsh: colder winters, hotter",
@@ -1561,8 +1562,8 @@ local function weatherTab()
 	if skirmish.multiplayer then
 		s.cheatMode = 0
 	else
-		switch("cheatMode", "Cheat mode", X(1000), Y(900))
-		note(X(1000), Y(962), { "F9 in the game: set the time of day, the season and the weather." })
+		switch("cheatMode", "Cheat mode", X(1000), Y(962))
+		note(X(1240), Y(980), { "F9 in the game: set the time of day, the season and the weather." })
 	end
 end
 
