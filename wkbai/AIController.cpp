@@ -11,6 +11,7 @@
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <numeric>
+#include <set>
 
 // "Move To" (Mechanics\Movement.cpp) is an OBJECT_REFERENCE task with
 // TERMINATE_ENTIRE_ORDER_IF_NO_TARGET: it follows an object to within 1 m, and without one it
@@ -42,6 +43,20 @@ bool AIController::moveUnitsTo(const std::vector<ServerGameObject*>& units, Serv
 	for (ServerGameObject* u : units)
 		gs->commands[moveCommand].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, point);
 	return true;
+}
+
+// An attack by the AI: the unit's DEFAULT_ATTACK_COMMAND, as a right-click gives it ("Fire Arrow",
+// "Fire Bullet", "Fire Trebuchet", ...; "Attack" for melee), not the melee "Attack" order for everyone
+void AIAttack(ServerGameObject* unit, ServerGameObject* target)
+{
+	const GameSet* gs = Server::instance->gameSet.get();
+	if (const Command* cmd = gs->commands.getPointer(unit->blueprint->defaultAttackCommand)) {
+		cmd->execute(unit, target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		return;
+	}
+	const int attackOrder = gs->orders.names.getIndex("Attack");
+	if (attackOrder >= 0)
+		unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
 }
 
 // A wave sent from home at a target: a new Kingmaker Attacking Army under the player; each unit
@@ -105,7 +120,7 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 		if (gather)
 			gathering.push_back(unit);
 		else
-			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			AIAttack(unit, target);
 	}
 	if (gather && moveUnitsTo(gathering, gameObj, rally)) {
 		float farthest = 0.0f;
@@ -115,7 +130,7 @@ ServerGameObject* AIController::launchWave(const std::vector<ServerGameObject*>&
 	}
 	else
 		for (ServerGameObject* unit : gathering)
-			unit->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+			AIAttack(unit, target);
 	waves++;
 	waveUnits += (int)members.size();
 	return army;
@@ -694,7 +709,7 @@ void AIController::update()
 					printf("GATHER player %u army %u: %zu of %zu at the rally after %.0f s (waits up to %.0f s)\n", gameObj->id, it->army, there, units.size(), now - it->since, it->wait);
 				for (ServerGameObject* u : units)
 					if (!weatherHolds(u->id))
-						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+						AIAttack(u, target);
 				it = gatheringWaves.erase(it);
 				continue;
 			}
@@ -748,7 +763,7 @@ void AIController::update()
 				for (ServerGameObject* u : units) {
 					u->setParent(army);
 					if (!targetGone && attackOrder >= 0)
-						u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, target);
+						AIAttack(u, target);
 				}
 				it = marchingFormations.erase(it);
 				continue;
@@ -828,9 +843,9 @@ void AIController::update()
 			for (ServerGameObject* u : shooters) {
 				Order* order = u->orderConfig.getCurrentOrder();
 				Task* task = order ? order->getCurrentTask() : nullptr;
-				if (order && order->blueprint == &gs->orders[attackOrder] && task && task->target.get() == weakest)
+				if (order && task && task->target.get() == weakest)
 					continue;
-				u->orderConfig.addOrder(&gs->orders[attackOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, weakest);
+				AIAttack(u, weakest);
 				focusOrders++;
 			}
 		}
@@ -1046,11 +1061,9 @@ void AIController::update()
 
 	sections.commissions = ProfileNow();
 	// ---- Commissions ----
-	// Highest PRIORITY first. While a commission can't afford the spawn it wants, the
-	// resources are reserved for it: the ones below it spawn nothing in that update (the
-	// original's saves show this: a priority-0 "Monk Spawning Army" stays UNPROCESSED while the
-	// army above it is CANT_AFFORD, and its other rungs RESOURCE_REQUIRED_RESERVED). Not for the
-	// aggressive AI, which spends what it has.
+	// Highest PRIORITY first, with the resources reserved by type below (the original's saves show
+	// a priority-0 "Monk Spawning Army" UNPROCESSED while the army above it is CANT_AFFORD, and its
+	// other rungs RESOURCE_REQUIRED_RESERVED).
 	std::vector<std::pair<float, size_t>> byPriority;
 	for (size_t i = 0; i < commissionInstances.size(); i++) {
 		ServerGameObject* handler = commissionInstances[i].handlerObject.get();
@@ -1062,7 +1075,59 @@ void AIController::update()
 		byPriority.push_back({ priority, i });
 	}
 	std::stable_sort(byPriority.begin(), byPriority.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-	bool reserved = false;
+	// The resources reserved in this update, by type (WKB.exe: one set passed through every
+	// commission, highest priority first, and through every requirement of each). A rung, building
+	// or upgrade that costs more of a resource than the player has is CANT_AFFORD and reserves that
+	// resource (0x4d3760, 0x4d57c0); one that costs any of a reserved resource is
+	// RESOURCE_REQUIRED_RESERVED and isn't tried (0x4d36e0, 0x4d5730). A building busy with another
+	// spawn, or a wait condition that fails, reserves nothing. Not for the aggressive AI, which
+	// spends what it has.
+	static const int RES_ITEMS[3] = { Tags::PDITEM_FOOD, Tags::PDITEM_WOOD, Tags::PDITEM_GOLD };
+	static const int COST_ITEMS[3] = { Tags::PDITEM_FOOD_COST, Tags::PDITEM_WOOD_COST, Tags::PDITEM_GOLD_COST };
+	bool reservedRes[3] = { false, false, false };
+	const bool reserving = !Server::instance->aggressiveAI;
+	auto usesReserved = [&](const float* cost) {
+		for (int r = 0; r < 3; r++)
+			if (reservedRes[r] && cost[r] > 0.0f)
+				return true;
+		return false;
+	};
+	auto affordOrReserve = [&](const float* cost) {
+		ServerGameObject* player = this->gameObj;
+		bool ok = true;
+		for (int r = 0; r < 3; r++) {
+			// as canAffordObject: an AI's food kept back for the winter (wkbai's seasons) counts as spent
+			const float reserve = RES_ITEMS[r] == Tags::PDITEM_FOOD ? player->aiController.winterReserve : 0.0f;
+			if (cost[r] > 0.0f && player->getItem(RES_ITEMS[r]) < cost[r] + reserve) {
+				ok = false;
+				if (reserving)
+					reservedRes[r] = true;
+			}
+		}
+		return ok;
+	};
+	// the spawns this AI has ordered for a requirement and not yet got: queued or in progress at
+	// the buildings of the ladder's rungs
+	auto pendingSpawns = [&](const GSCommission::CharacterRequirement& req) {
+		std::set<ServerGameObject*> seen;
+		size_t count = 0;
+		SrvScriptContext lctx{ Server::instance, this->gameObj };
+		for (auto& rung : req.ladder->entries)
+			for (ServerGameObject* building : rung.finder->eval(&lctx)) {
+				if (!seen.insert(building).second)
+					continue;
+				for (Order& order : building->orderConfig.orders)
+					for (auto& t : order.tasks)
+						if (auto* st = dynamic_cast<SpawnTask*>(t.get()); st && !st->isSpawned && st->aiCommissioner.get()
+							&& std::any_of(req.ladder->entries.begin(), req.ladder->entries.end(), [&](const auto& e) { return e.type == st->toSpawn; }))
+							count++;
+			}
+		return count;
+	};
+	auto typeCost = [&](const GameObjBlueprint* type, float* cost) {
+		for (int r = 0; r < 3; r++)
+			cost[r] = type ? type->getStartingItemValue(COST_ITEMS[r]) : 0.0f;
+	};
 	for (const auto& [commissionPriority, cid] : byPriority) {
 		auto& cominst = commissionInstances[cid];
 		const GSCommission* gscomm = cominst.blueprint;
@@ -1090,7 +1155,6 @@ void AIController::update()
 
 		// Character Requirements
 		const std::vector<int> charNeeds = AICharacterNeeds(gscomm, &ctx, cominst.forceBalance);
-		bool shortOfResources = false; // a requirement found nothing it could pay for
 		// FORCE_BALANCE: the requirement furthest below its count first (the least filled share;
 		// ties in the commission's order). The original's test 36: the defensive army at heavy
 		// infantry 5 of 6 and light infantry 4 of 6 got an Archer, then the Spearman, then an
@@ -1109,18 +1173,19 @@ void AIController::update()
 			auto& gsreq = gscomm->characterRequirements[ri];
 			auto& reqinst = cominst.characterReqInsts[ri];
 			size_t requiredCount = (size_t)std::max(0, charNeeds[ri]);
-			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size();
-			//size_t inCtrCount = reqinst.foundations.size();
+			// what it has and what it has queued (WKB.exe's count, 0x4c7d10: have + spawning)
+			size_t existingCount = gsreq.fdAlreadyHaving->eval(&ctx).size() + pendingSpawns(gsreq);
 			if (existingCount >= requiredCount)
 				completeCount += 1;
-			else if (!reserved) {
+			else {
 				// The ladder's rungs best first, as WKB.exe (AI_Character_Requirement 0x4c7da0, which
-				// tries each rung in order and stops at the first that spawns): a rung is spawned at
-				// the idle buildings of its finder where its "Spawn <type>" command can be executed
-				// now (tech level, alignment, cost, population); a rung already being spawned
-				// counts too, so a busy building doesn't make the AI fall back to a worse rung
+				// tries each rung in order and stops at the first that spawns), one spawn per update.
+				// A rung takes the first building of its finder (0x4ca520, which doesn't ask whether
+				// it is idle): a busy one gets the spawn queued after its orders, paid now. wkbai had
+				// waited for an idle barracks, and the lower commissions spent the food meanwhile
+				// (test 36: Peasants and an armour research where the original queued 2 Archers and
+				// a Spearman).
 				const GameSet* gs = Server::instance->gameSet.get();
-				bool anyServed = false, anyUnaffordable = false, anyBusy = false;
 				for (auto& rung : gsreq.ladder->entries) {
 					const std::string spawnName = "Spawn " + rung.type->name;
 					const int ordid = gs->orders.names.getIndex(spawnName);
@@ -1129,76 +1194,64 @@ void AIController::update()
 					const OrderBlueprint* orderBp = &gs->orders[ordid];
 					const int cmdid = gs->commands.names.getIndex(spawnName);
 					const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
-					bool served = false, unaffordable = false, busy = false;
+					bool served = false, unaffordable = false, busy = false, held = false;
+					float cost[3];
+					typeCost(rung.type, cost);
 					for (ServerGameObject* building : rung.finder->eval(&ctx)) {
 						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 							continue;
-						if (Order* current = building->orderConfig.getCurrentOrder()) {
-							if (current->blueprint == orderBp)
-								served = true;
-							else
-								busy = true;
+						busy = building->orderConfig.getCurrentOrder() != nullptr;
+						// impossible here (tech level, alignment): try another building. Then as WKB.exe's
+						// rung (0x4c9970): a resource reserved above (RESOURCE_REQUIRED_RESERVED), the
+						// type's cost (CANT_AFFORD, which reserves what is short), the wait conditions
+						SrvScriptContext cctx(Server::instance, building);
+						auto _s = cctx.selectedObject.change(building);
+						auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
+						if (command && !std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
 							continue;
+						if (usesReserved(cost)) {
+							held = true;
+							break;
 						}
-						// impossible here (tech level, alignment): try another building; only waiting
-						// (the cost, population) or short of the type's cost: the rung can't be paid
+						if (!affordOrReserve(cost)) {
+							unaffordable = true;
+							if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
+								printf("RUNGWAIT %s at %u: cost (handler %u)\n", rung.type->name.c_str(), building->id, this->gameObj->id);
+							break;
+						}
 						if (command) {
-							SrvScriptContext cctx(Server::instance, building);
-							auto _s = cctx.selectedObject.change(building);
-							auto holds = [&](GSCondition* cond) { return cond->test->booleval(&cctx); };
-							if (!std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
-								continue;
 							if (!std::all_of(command->conditionsWait.begin(), command->conditionsWait.end(), holds)) {
-								unaffordable = true;
 								if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
 									for (GSCondition* cond : command->conditionsWait)
 										if (!holds(cond))
 											printf("RUNGWAIT t=%.0f %s at %u player %u food %.0f handler %u: \"%s\"\n", Server::instance->timeManager.currentTime, rung.type->name.c_str(), building->id,
 												building->getPlayer() ? building->getPlayer()->id : 0, building->getPlayer() ? building->getPlayer()->getItem(gs->items.names.getIndex("Food")) : -1.0f,
 												this->gameObj->id, gs->conditions.getString(cond).c_str());
-								continue;
+								break;
 							}
 							if (!command->canBeExecuted(building))
 								continue;
 						}
-						if (!this->gameObj->canAffordObject(rung.type)) {
-							unaffordable = true;
-							if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
-								printf("RUNGWAIT %s at %u: cost (handler %u)\n", rung.type->name.c_str(), building->id, this->gameObj->id);
-							continue;
-						}
 						if (getenv("WKB_TRACE_COMMISSION"))
 							printf("COMMISSION t=%.2f \"%s\" (priority %.1f, handler %u): spawn %s at %u, required %zu, existing %zu\n", Server::instance->timeManager.currentTime,
 								Server::instance->gameSet->commissions.getString(gscomm).c_str(), commissionPriority, obj->id, rung.type->name.c_str(), building->id, requiredCount, existingCount);
-						Order* order = building->orderConfig.addOrder(orderBp, Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, {-1,-1,-1}, false);
+						Order* order = building->orderConfig.addOrder(orderBp, busy ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_DO_FIRST, nullptr, {-1,-1,-1}, false);
 						auto* task = (SpawnTask*)(order->tasks[0].get());
 						task->setSpawnBlueprint(rung.type);
 						task->aiCommissioner = obj;
 						served = true;
-					}
-					anyUnaffordable |= unaffordable;
-					anyBusy |= busy;
-					if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
-						printf("RUNG t=%.2f \"%s\" req %zu: %s served %d unaffordable %d (required %zu, existing %zu, reserved %d)\n", Server::instance->timeManager.currentTime,
-							Server::instance->gameSet->commissions.getString(gscomm).c_str(), ri, rung.type->name.c_str(), (int)served, (int)unaffordable, requiredCount, existingCount, (int)reserved);
-					if (served) {
-						anyServed = true;
 						break;
 					}
+					if (getenv("WKB_TRACE_COMMISSION_RUNGS"))
+						printf("RUNG t=%.2f \"%s\" req %zu: %s served %d unaffordable %d busy %d reserved %d (required %zu, existing %zu)\n", Server::instance->timeManager.currentTime,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), ri, rung.type->name.c_str(), (int)served, (int)unaffordable, (int)busy, (int)held, requiredCount, existingCount);
+					if (served)
+						break;
 					// a rung it can't pay for: down to the next, cheaper one (the original's save:
 					// Pikeman CANT_AFFORD, then Spearman spawned)
 				}
-				// waiting for a building busy with another spawn holds the resources too: the
-				// original spawned no Peasant or Monk while its one barracks trained the army
-				if (!anyServed && (anyUnaffordable || anyBusy))
-					shortOfResources = true;
 			}
 		}
-		// a commission that couldn't pay for what it needs keeps the resources: the ones below it
-		// spawn nothing in this update (not for the aggressive AI, which spends what it has)
-		if (shortOfResources && !Server::instance->aggressiveAI)
-			reserved = true;
-
 		// Building Requirements
 		int isFoundationItem = Server::instance->gameSet->items.names.getIndex("Is a Foundation");
 		// The aggressive AI places the buildings that train fighters (Barracks, Stables) first and
@@ -1263,6 +1316,17 @@ void AIController::update()
 				if (weatherAvoidsSite(posori.position))
 					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
+				// a resource reserved above, or the foundation's cost short (which reserves it):
+				// WKB.exe's building requirement (0x4c4da0 -> 0x4c6b30, 0x4c6b60)
+				float cost[3];
+				typeCost(bpFoundation, cost);
+				if (usesReserved(cost))
+					break;
+				if (!affordOrReserve(cost)) {
+					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding))
+						saving = true;
+					break;
+				}
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);
 				if (!foundation) {
 					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding) && !obj->getPlayer()->canAffordObject(bpFoundation))
@@ -1305,9 +1369,28 @@ void AIController::update()
 					for (ServerGameObject* building : buildingList) {
 						if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || building->orderConfig.getCurrentOrder())
 							continue;
+						// as WKB.exe's upgrade requirement (0x4d4450): the command's impossible conditions,
+						// a resource reserved above (RESOURCE_REQUIRED_RESERVED, 0x4d5730), the cost
+						// (CANT_AFFORD, which reserves what is short, 0x4d57c0), then the wait conditions.
+						// The cost is what the research's start sequences take from the player.
+						SrvScriptContext uctx(Server::instance, building);
+						auto _s = uctx.selectedObject.change(building);
+						auto holds = [&](GSCondition* cond) { return cond->test->booleval(&uctx); };
+						if (command && !std::all_of(command->conditionsImpossible.begin(), command->conditionsImpossible.end(), holds))
+							continue;
+						float cost[3] = { 0.0f, 0.0f, 0.0f };
+						SequencePlayerCosts(gsreq.order->startSequence, &uctx, RES_ITEMS, cost, 3);
+						for (const TaskBlueprint* tb : gsreq.order->tasks)
+							if (tb)
+								SequencePlayerCosts(tb->startSequence, &uctx, RES_ITEMS, cost, 3);
+						if (usesReserved(cost) || !affordOrReserve(cost))
+							break;
 						if (command) {
 							if (!command->canBeExecuted(building))
 								continue;
+							if (getenv("WKB_TRACE_COMMISSION"))
+								printf("COMMISSION t=%.2f \"%s\" (priority %.1f): upgrade %s at %u\n", Server::instance->timeManager.currentTime,
+									Server::instance->gameSet->commissions.getString(gscomm).c_str(), commissionPriority, gs->orders.getString(gsreq.order).c_str(), building->id);
 							command->execute(building, nullptr, Tags::ORDERASSIGNMODE_DO_FIRST);
 						}
 						else
@@ -1358,6 +1441,12 @@ void AIController::registerWorkOrder(ServerGameObject* city, ObjectFinder* unitF
 		}
 	WorkOrderInstance woi{ city, unitFinder, workOrder };
 	workOrderInstances.push_back(std::move(woi));
+}
+
+void AIController::deregisterWorkOrder(ServerGameObject* city, ObjectFinder* unitFinder)
+{
+	workOrderInstances.erase(std::remove_if(workOrderInstances.begin(), workOrderInstances.end(),
+		[&](const WorkOrderInstance& woi) { return woi.city.get() == city && woi.unitFinder == unitFinder; }), workOrderInstances.end());
 }
 
 void AIController::activateCommission(const GSCommission* commission, ServerGameObject* handler, bool forceBalance)

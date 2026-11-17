@@ -28,9 +28,15 @@ struct OrderBlueprint {
 	int category = -1;
 	bool cycleOrder = false;
 	bool cannotInterruptOrder = false;
+	// FLAG OVERRIDE_NON_INTERRUPTIBLE_ORDERS (the deaths' orders): replaces even an order that
+	// can't be interrupted, or one whose task plays an uninterruptible loop (WKB.exe 0x562130)
+	bool overrideNonInterruptible = false;
+	// REPLACES_SPAWN_ORDER <order>: an upgrade's spawn order; its button also counts and shows the
+	// queued spawns of the order it replaces (WKB.exe 0x502d70, the spawn button only)
+	int replacesSpawnOrder = -1;
 	std::vector<int> preConditions;
 	std::vector<TaskBlueprint*> tasks;
-	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
+	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence, suspensionSequence;
 
 	void parse(GSFileParser &gsf, GameSet &gs);
 };
@@ -52,7 +58,7 @@ struct TaskBlueprint {
 	// attack paths (AT_<path>_<point>), the least used, the nearest of those; wkbai does so for a
 	// unit of the target's own player (training at a dummy: Order.cpp, AttackPathSpot)
 	bool attackPath = false;
-	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence;
+	ActionSequence initSequence, startSequence, resumptionSequence, terminationSequence, cancellationSequence, suspensionSequence;
 	std::vector<TriggerBlueprint> triggers;
 	ActionSequence collisionTrigger, struckFloorTrigger;
 
@@ -70,6 +76,12 @@ struct TaskBlueprint {
 	bool playAnimationOnce = false;
 
 	ActionSequence movementCompletedSequence;
+	// MOVEMENT_STARTED_SEQUENCE: run when a path is found and the walk starts, again on every new
+	// path (WKB.exe 0x50b1b0, the mover's events 6, 8, 9); not when the unit is already in range
+	ActionSequence movementStartedSequence;
+	// PATHFIND_TO_SHORE: the walk goes to the nearest point where the unit's water meets land the
+	// target can walk on, nearest to the target (WKB.exe 0x6d6893: a vessel picking up a boarder)
+	bool pathfindToShore = false;
 
 	ValueDeterminer* synchAnimationToFraction = nullptr;
 	// PLAY_ANIMATION_TO_FIT <value>: the task's animation is played to last that many seconds (its

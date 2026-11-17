@@ -67,6 +67,7 @@ struct FrontEnd {
 			std::string text;
 			float x = 0, y = 0, width = 75, height = 25; // pixels from the window's bottom left
 			bool enabled = true;
+			bool close = false; // closes the window (Enter presses it)
 		};
 		int id = 0;
 		std::string text;            // the page's text, translated, "\n" as new lines
@@ -91,6 +92,7 @@ struct FrontEnd {
 		std::string title;
 		std::vector<Entry> entries;
 		uint32_t changed = 0;        // grows when an entry is shown or hidden (the button flashes)
+		std::string map;             // SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC's picture (mods), shown above the entries
 	};
 	void setObjectives(Objectives objectives);
 	// The objectives window opened or closed (the top bar's button, the Objectives key), and

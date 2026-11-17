@@ -31,6 +31,9 @@ struct GameObjBlueprint {
 	struct SoundRef {
 		std::string filePath;
 		int soundBlueprint = -1;
+		// MAP_SOUND_TAG <tag> <n> NEAR|FAR: WKB.exe keeps two lists (0x4ed110 / 0x4ed160); FAR for
+		// a listener far off (the bombards' distant boom)
+		bool far = false;
 		SoundRef(std::string&& name) : filePath(name) {}
 		SoundRef(int sndBp) : soundBlueprint(sndBp) {}
 	};
@@ -107,7 +110,15 @@ struct GameObjBlueprint {
 	std::string passabilityFieldsName;
 	mutable const std::vector<bool>* passableTerrains = nullptr;
 	mutable bool passableTerrainsResolved = false;
+	// The terrains the type walks on: WKB.exe builds its movement mask (+0x140, tested per tile by
+	// 0x5953a0) from CAN_TRAVERSE; the passability fields are for placing buildings. So the
+	// CAN_TRAVERSE list when the type has one, else the passability fields.
 	const std::vector<bool>* getPassableTerrains() const;
+	std::vector<std::string> canTraverseNames;
+	mutable std::vector<bool> traverseMask;
+	// whether CAN_TRAVERSE includes "Water" (Michael, Abaddon, the Stone and Gold Elementals): such a
+	// type wades through water of any depth (the original's tile test has no depth limit)
+	bool wades() const;
 
 	bool removeWhenNotReferenced = false;
 
@@ -156,6 +167,60 @@ struct GameObjBlueprint {
 	// FORMATION_SEPERATION_X/Y: a character's distance to its neighbours in a formation, across
 	// and between rows (the original's default 2.8 m; cavalry 4 x 6)
 	float formationSeparationX = 2.8f, formationSeparationY = 2.8f;
+	// A formation's damage sharing (WKB.exe 0x59e1d0, used by SetItem 0x554c00 -> 0x551f50): a hit
+	// of more than 4 HP on a member of a formed formation costs DAMAGE_SHARE_PERCENTAGE of it in all,
+	// spread over the NUMBER_OF_DAMAGE_SHARERS members nearest the one hit (Line 0.6 / 5, Wedge
+	// 0.4 / 4, Column 0.2 / 2, Orb 0.8 / 8)
+	float damageSharePercentage = 0.0f;
+	int damageSharers = 0;
+	// missiles pass through it (trees, farms: IGNORE_ALL_MISSILE_COLLISION), or through it when it
+	// is the firer's or an ally's (IGNORE_FRIENDLY_MISSILE_COLLISION)
+	bool ignoreAllMissileCollision = false;
+	bool ignoreFriendlyMissileCollision = false;
+	// a missile's special effect where it strikes the ground (STRIKE_FLOOR_SPECIAL_EFFECT: "Ground
+	// Explosion", "Rocket Explosion", "Greek Fire Explosion"); -1 none
+	int strikeFloorEffect = -1;
+	// the commands a right-click on an enemy gives this type (DEFAULT_ATTACK_COMMAND: "Attack",
+	// "Fire Arrow", "Fire Trebuchet", ...) and a formation of it (FORMATION_ATTACK_COMMAND); -1 none
+	int defaultAttackCommand = -1;
+	int formationAttackCommand = -1;
+	// MAX_GRADIENT: the steepest slope (degrees) the type can walk on (WKB.exe stores cos of it,
+	// 0x594a2f); the original's default 90, the game set gives most 45, rams and big engines 30
+	float maxGradient = 90.0f;
+	bool hasMaxGradient = false;
+	// BOUNDING_VOLUME SPHERE <r>: the type's size (metres)
+	float boundingRadius = 0.0f;
+	// Turning (WKB.exe smooths every path into arcs of IDEAL_TURN_RADIUS, shrunk down to
+	// MINIMUM_TURN_RADIUS where the legs are short; WHEEL_ON_FACING types also start on an arc from
+	// their facing): the defaults as the original's (0.5 m, 0)
+	float idealTurnRadius = 0.5f, minTurnRadius = 0.0f;
+	// PERPENDICULAR_TO_LANDSCAPE: drawn tilted to the ground (WKB.exe blueprint +0x60; its tilt
+	// isn't traced, here the ground's slope over 4 m round the object)
+	bool perpendicularToLandscape = false;
+	// TRIGGER_SOUND_FROM_ANIMATION <animation>: while it plays, each TS_<tag> attachment point
+	// switching on plays the sound tag <tag> from the type's MAP_SOUND_TAGs (WKB.exe 0x52c860)
+	std::vector<int> soundFromAnimations;
+	bool wheelOnFacing = false;
+	// PREFERRED_SPACING <r>: the room a stopped unit keeps round it (WKB.exe 0x436120: free where
+	// |p - q| >= r + r_q); the original's default 1.2 m
+	float preferredSpacing = 1.2f;
+	// The "Threat" intensity map: pikemen, spearmen, militia, the Undead Legion mark the tiles they
+	// stand on (UPDATE_INTENSITY_MAP "Threat" ON_TILE_CHANGE <radius m> <strength>), and the types
+	// with APPLY_INTENSITY_MAP_TO_PATHFINDING "Threat" (cavalry, heroes) route around the enemies'.
+	// wkbai's own, off unless the setting "threatAvoidance" is on: WKB.exe has no
+	// APPLY_INTENSITY_MAP_TO_PATHFINDING keyword, and nobody creates a "Threat" map.
+	bool writesThreat = false;
+	float threatRadius = 0.0f, threatStrength = 0.0f;
+	bool avoidsThreat = false;
+	// The intensity maps as WKB.exe's (IntensityMaps.h): the maps a player creates
+	// (CREATE_INTENSITY_MAP), what an object stamps into the others' once seen
+	// (UPDATE_INTENSITY_MAP <map> ON_SIGHTING <radius m> <strength>), and the maps of its player a
+	// unit's paths avoid: always (START_APPLY_MY_PLAYERS_...) or once switched on
+	// (APPLY_INTERMITTANT_MY_PLAYERS_..., SWITCH_ON_INTENSITY_MAP)
+	struct IntensityWriter { std::string map; ValueDeterminer* radius = nullptr; ValueDeterminer* strength = nullptr; };
+	std::vector<std::string> createsIntensityMaps;
+	std::vector<IntensityWriter> intensityWriters;
+	std::vector<std::string> appliesIntensityMaps, intermittentIntensityMaps;
 	std::vector<ObjectFinder*> spritesWhenSelectedFor;
 
 	void parse(GSFileParser &gsf, const std::string &directory, bool isExtension = false);
@@ -164,7 +229,9 @@ struct GameObjBlueprint {
 	uint32_t getFullId() const;
 	std::string getFullName() const;
 
-	std::tuple<std::string, float, float> getSound(int sndTag, int subtype) const;
+	// The file for a sound tag, its reference and farthest distance; listenerDistance (m, -1: not
+	// known) picks the FAR list beyond 60 m (WKB.exe's rule between them isn't traced)
+	std::tuple<std::string, float, float> getSound(int sndTag, int subtype, float listenerDistance = -1.0f) const;
 	const BPAppearance* getAppearance(int subtype, int appear) const;
 	Model* getModel(int subtype, int appear, int anim, int variant) const;
 	Model* getSpecialEffect(int sfxTag) const;

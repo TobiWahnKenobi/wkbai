@@ -416,6 +416,41 @@ struct FinderAgAsObj : ObjectFinder {
 	}
 };
 
+// CHAIN_ORIGINAL_SELF (WKB.exe 0x448890, mods): the self the enclosing FINDER_CHAIN started from,
+// else self
+struct FinderChainOriginalSelf : ObjectFinder {
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		CommonGameObject* obj = ctx->get(ctx->chainOriginalSelf);
+		if (!obj)
+			obj = ctx->getSelf();
+		if (obj) return { obj };
+		return {};
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// WITHIN_HORIZ_DISTANCE <distance> (mods): the objects within that distance of self on the ground,
+// heights left out, but self and armies. WKB.exe's (0x451e50) compares only the x coordinates
+// and so finds a strip across the map; wkbai does what the name says.
+struct FinderWithinHorizDistance : ObjectFinder {
+	std::unique_ptr<ValueDeterminer> vdDistance;
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		CommonGameObject* self = ctx->getSelf();
+		const float d = vdDistance->eval(ctx);
+		if (!self || d <= 0.0f)
+			return {};
+		NNSearch search;
+		search.start(ctx->gameState, self->position, d);
+		ObjectFinderResult res;
+		while (CommonGameObject* obj = (CommonGameObject*)search.next())
+			if (obj != self && obj->isInteractable() && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY
+				&& (obj->position - self->position).sqlen2xz() <= d * d)
+				res.push_back(obj);
+		return res;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { vdDistance.reset(ReadValueDeterminer(gsf, gs)); }
+};
+
 ObjectFinder *ReadFinder(GSFileParser &gsf, const GameSet &gs)
 {
 	std::string strtag = gsf.nextString();
@@ -453,6 +488,8 @@ ObjectFinder *ReadFinder(GSFileParser &gsf, const GameSet &gs)
 	default:
 		if (findername == "AG_ALL_OF_TYPE") { finder = new FinderAgAllOfType; break; }
 		if (findername == "AG_AS_OBJ") { finder = new FinderAgAsObj; break; }
+		if (findername == "CHAIN_ORIGINAL_SELF") { finder = new FinderChainOriginalSelf; break; }
+		if (findername == "WITHIN_HORIZ_DISTANCE") { finder = new FinderWithinHorizDistance; break; }
 		if (const char* signature = FindStubSignature(finderStubSignatures, findername)) {
 			finder = new FinderStub(strtag, signature);
 			printf("WARNING: Finder %s is not implemented (arguments read, finds nothing) at %s\n", strtag.c_str(), gsf.locate().c_str());
@@ -833,15 +870,19 @@ struct FinderRandomSelection : ObjectFinder {
 	}
 };
 
+// FILTER_CANDIDATES <condition>, the source on the next line: the candidates for which it is
+// above 0; CULL_CANDIDATES (cull = true, WKB.exe 0x448cb0, mods) keeps the others
 struct FinderFilterCandidates : ObjectFinder {
+	bool cull = false;
 	std::unique_ptr<ValueDeterminer> condition;
 	std::unique_ptr<ObjectFinder> finder;
+	FinderFilterCandidates(bool cull = false) : cull(cull) {}
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
 		decltype(vec) res;
 		for (CommonGameObject* obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
-			if (condition->eval(ctx) > 0.0f) {
+			if ((condition->eval(ctx) > 0.0f) != cull) {
 				res.push_back(obj);
 			}
 		}
@@ -849,6 +890,42 @@ struct FinderFilterCandidates : ObjectFinder {
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		condition.reset(ReadValueDeterminer(gsf, gs));
+		finder.reset(ReadFinderNode(gsf, gs));
+	}
+};
+
+// GRADE_SELECT_CANDIDATES BY_HIGHEST|BY_LOWEST <grade value> [<count value>], the source on the
+// next line (WKB.exe 0x44b0e0): the count best of the source by the grade, each graded as the
+// candidate, best first (the first wins a tie); all of them, in their order, when there are no
+// more than the count; none with a count of 0
+struct FinderGradeSelectCandidates : ObjectFinder {
+	bool byHighest = true;
+	std::unique_ptr<ValueDeterminer> vdGrade, vdCount;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		auto vec = finder->eval(ctx);
+		const int count = vdCount ? (int)vdCount->eval(ctx) : (int)vec.size();
+		if (count <= 0)
+			return {};
+		if ((size_t)count >= vec.size())
+			return vec;
+		std::vector<std::pair<float, CommonGameObject*>> graded(vec.size());
+		for (size_t i = 0; i < vec.size(); i++) {
+			auto _ = ctx->change(ctx->candidate, vec[i]);
+			graded[i] = { vdGrade->eval(ctx), vec[i] };
+		}
+		std::stable_sort(graded.begin(), graded.end(), [this](auto& a, auto& b) { return byHighest ? a.first > b.first : a.first < b.first; });
+		ObjectFinderResult res;
+		for (int i = 0; i < count; i++)
+			res.push_back(graded[i].second);
+		return res;
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		const std::string mode = gsf.nextString();
+		byHighest = mode != "BY_LOWEST";
+		vdGrade.reset(ReadValueDeterminer(gsf, gs));
+		if (!gsf.eol)
+			vdCount.reset(ReadValueDeterminer(gsf, gs));
 		finder.reset(ReadFinderNode(gsf, gs));
 	}
 };
@@ -881,6 +958,8 @@ ObjectFinder *ReadFinderNode(::GSFileParser &gsf, const ::GameSet &gs)
 			case Tags::FINDER_RANDOM_SELECTION: finder = new FinderRandomSelection; break;
 			case Tags::FINDER_FILTER_CANDIDATES: finder = new FinderFilterCandidates; break;
 			default:
+				if (strtag == "FINDER_GRADE_SELECT_CANDIDATES") { finder = new FinderGradeSelectCandidates; break; }
+				if (strtag == "FINDER_CULL_CANDIDATES") { finder = new FinderFilterCandidates(true); break; }
 				gsf.cursor = oldcur;
 				return ReadFinder(gsf, gs);
 			}

@@ -210,6 +210,15 @@ private:
 		Vector3 start;
 		Command* command = nullptr;
 	} formationDrag;
+	// a wall's right-drag: a line of pieces from where it was pressed to where it is released,
+	// as the original lays a run of wall in one go (the play test: only one by one)
+	struct WallDrag {
+		bool active = false;
+		Vector3 start;
+	} wallDrag;
+	// the pieces of a wall line between two points: the tiles along the longer axis, each its
+	// tile's centre and the turn that runs along the line (one tile: the [ ] turn)
+	std::vector<std::pair<Vector3, Vector3>> wallLine(const Vector3& from, const Vector3& to) const;
 	// what the player's units see (darker elsewhere, enemy characters hidden there)
 	FogOfWar fogOfWar;
 	// the peasant activity interface over the minimap: -1 closed, 0 the idle bar, 1 all five

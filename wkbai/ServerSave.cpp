@@ -94,7 +94,7 @@ namespace {
 	}
 
 	// The side files of an original-format save, or of an older wkbai save
-	const char* const SIDE_FILES[7] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt" };
+	const char* const SIDE_FILES[8] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -416,7 +416,7 @@ bool Server::saveGame(const char* filename)
 	w.line("PREVIOUS_TIME %.9g", timeManager.previousTime);
 	w.line("ELAPSED_TIME %.9g", timeManager.elapsedTime);
 	w.line("PAUSED %d", (int)timeManager.paused);
-	w.line("LOCK_COUNT %u", timeManager.lockCount + 1); // as the original: saving holds a lock, which the loader releases
+	w.line("LOCK_COUNT %u", timeManager.lockCount + timeManager.scriptLocks + 1); // as the original: saving holds a lock, which the loader releases
 	w.depth--;
 	w.line("END_TIME_MANAGER_STATE");
 	w.line("");
@@ -524,7 +524,7 @@ bool Server::saveGame(const char* filename)
 	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
 	//   id> <target> <path> <point> <tried>" each;
 	// - the unit history (UnitHistory).
-	std::string settings, environmentText, paths, history, movements, government, discovered;
+	std::string settings, environmentText, paths, history, movements, government, discovered, intensity;
 	if (!savingLevel) {
 		movements = movementSaveText();
 		discovered = DiscoveredSaveText();
@@ -547,6 +547,8 @@ bool Server::saveGame(const char* filename)
 					}
 		}
 		history = UnitHistory::saveText(*this);
+		// the intensity maps (IntensityMaps): what the players had seen, the maps on
+		intensity = intensityMaps.saveText();
 	}
 
 	auto sidePath = [&](const char* ext) { std::filesystem::path side = path; side += ext; return side; };
@@ -555,8 +557,8 @@ bool Server::saveGame(const char* filename)
 		// the original's format (text mode: its line breaks), with wkbai's state beside it in
 		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt and .ministries.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
-		const std::string* sides[7] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered };
-		for (int i = 0; i < 7; i++) {
+		const std::string* sides[8] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity };
+		for (int i = 0; i < 8; i++) {
 			if (!sides[i]->empty())
 				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
 			else
@@ -588,6 +590,7 @@ bool Server::saveGame(const char* filename)
 	file.add("movement", 1, std::move(movements));
 	file.add("ai", 1, std::move(government));
 	file.add("discovered", 1, std::move(discovered));
+	file.add("intensity", 1, std::move(intensity));
 	const bool ok = writeFile(path, file.write(), false);
 	// an older save's side files of the same name would be stale: everything is in the file now
 	if (ok)
@@ -607,8 +610,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	if (!SaveFile::IsSaveFile(all)) {
 		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
 		parts.world = std::move(all);
-		std::string* sides[7] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered };
-		for (int i = 0; i < 7; i++)
+		std::string* sides[8] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity };
+		for (int i = 0; i < 8; i++)
 			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
 		return parts;
 	}
@@ -621,7 +624,7 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	struct Known { const char* name; std::string* text; };
 	const Known known[] = { { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
-		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered } };
+		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity } };
 	for (const SaveSection& s : file.sections) {
 		const Known* k = nullptr;
 		for (const Known& candidate : known)

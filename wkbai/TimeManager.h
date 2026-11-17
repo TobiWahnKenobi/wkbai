@@ -15,6 +15,9 @@ struct TimeManager {
 	uint32_t psCurrentTime = 0;
 	game_time_t currentTime = 0.0f, previousTime = 0.0f, elapsedTime = 0.0f, timeSpeed = 1.0f;
 	bool paused = true; uint32_t lockCount = 1;
+	// LOCK_TIME / UNLOCK_TIME (the campaign's intros): while above 0 the game time stands still,
+	// as WKB.exe's; the camera paths then run on the real clock. Not a pause (no "Paused").
+	uint32_t scriptLocks = 0;
 	
 	uint32_t previousSDLTime;
 

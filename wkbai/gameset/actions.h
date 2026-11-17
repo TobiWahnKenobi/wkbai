@@ -36,3 +36,7 @@ struct ActionSequence {
 };
 
 Action *ReadAction(GSFileParser &gsf, const GameSet &gs);
+
+// What a sequence takes from the player through DECREASE_ITEM <item> FINDER_PLAYER <value>, per
+// item, evaluated in ctx (the AI's upgrade costs: a research's start sequence takes its cost so)
+void SequencePlayerCosts(const ActionSequence& seq, SrvScriptContext* ctx, const int* items, float* costs, int count);

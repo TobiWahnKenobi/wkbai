@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "actions.h"
+#include "../terrain.h"
 #include "finder.h"
 #include "../util/GSFileParser.h"
 #include "gameset.h"
@@ -588,6 +589,21 @@ struct ActionConvertTo : Action {
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
 		postbp = gs.readObjBlueprintPtr(gsf);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SWITCH_ON_INTENSITY_MAP "<map>" <finder>: the units' paths avoid their player's map from now on,
+// for those whose type allows it (APPLY_INTERMITTANT_MY_PLAYERS_INTENSITY_MAP_TO_PATHFINDING)
+struct ActionSwitchOnIntensityMap : Action {
+	std::string map;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->intensityMaps.switchOn(obj, map);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		map = gsf.nextString(true);
 		finder.reset(ReadFinder(gsf, gs));
 	}
 };
@@ -1431,7 +1447,11 @@ struct ActionTeleport : Action {
 	virtual void run(SrvScriptContext* ctx) override {
 		auto op = pos->eval(ctx);
 		for (ServerGameObject* obj : finder->eval(ctx)) {
-			obj->orderConfig.cancelAllOrders();
+			// WKB.exe's TELEPORT (0x49e430 -> 0x547e90) stops the walk and moves the unit; its orders
+			// and the running task go on (a siege tower's Scale ends with its own
+			// TERMINATE_THIS_TASK; a Banished unit walks back and carries on)
+			if (obj->movementController.isMoving())
+				obj->movementController.stopMovement();
 			obj->setPosition(op.position);
 			obj->setOrientation(op.rotation);
 		}
@@ -1885,15 +1905,35 @@ struct ActionDetachLoopingSpecialEffect : Action {
 	}
 };
 
+// SKIP_CAMERA_PATH_PLAYBACK <finder> [SKIP_ACTIONS] (WKB.exe 0x641a30): the path's end view at
+// once, its POST_PLAY_SEQUENCE run unless SKIP_ACTIONS
 struct ActionSkipCameraPathPlayback : Action {
 	std::unique_ptr<ObjectFinder> finder;
+	bool skipActions = false;
 	virtual void run(SrvScriptContext* ctx) override {
 		for (ServerGameObject* obj : finder->eval(ctx))
-			ctx->server->skipCameraPath(obj);
+			ctx->server->skipCameraPath(obj, skipActions);
 	}
 	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
 		finder.reset(ReadFinder(gsf, gs));
+		skipActions = gsf.nextString() == "SKIP_ACTIONS";
 	}
+};
+
+// LOCK_TIME / UNLOCK_TIME (the campaign's intros, WKB.exe's time lock): the game time stands
+// still until it is unlocked as often as it was locked
+struct ActionLockTime : Action {
+	bool lock;
+	ActionLockTime(bool lock) : lock(lock) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		auto& tm = ctx->server->timeManager;
+		if (lock)
+			tm.scriptLocks++;
+		else if (tm.scriptLocks > 0)
+			tm.scriptLocks--;
+		ctx->server->syncTime();
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
 };
 
 struct ActionActivatePlan : Action {
@@ -2032,6 +2072,334 @@ struct ActionLeaveFormation : Action {
 	}
 };
 
+// ---- The original's actions only mods use (RE repo docs/re/keyword-coverage.md, traced in
+// WKB.exe; where the original has an evident bug, wkbai does what the keyword says)
+
+// FLOODFILL_AREA_WITH <type> <position> <half size> and FLOODFILL_MAP_WITH <type> (WKB.exe 0x484640,
+// 0x484b50): one object of the type for self's player on every tile of the square around the
+// position's tile (or of the whole map), each with On Stampdown as a placed one. (The original
+// steps 2 m one way and 5 m the other; wkbai one per tile.)
+struct ActionFloodfill : Action {
+	bool wholeMap;
+	const GameObjBlueprint* objbp = nullptr;
+	std::unique_ptr<PositionDeterminer> pCentre;
+	std::unique_ptr<ValueDeterminer> vHalfSize;
+	ActionFloodfill(bool wholeMap) : wholeMap(wholeMap) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		Server* server = ctx->server;
+		if (!objbp || !server->terrain || !ctx->getSelf())
+			return;
+		const auto [w, h] = server->terrain->getNumPlayableTiles();
+		int x0 = 0, z0 = 0, x1 = w - 1, z1 = h - 1;
+		if (!wholeMap) {
+			const OrientedPosition c = pCentre->eval(ctx);
+			const float r = vHalfSize->eval(ctx);
+			if (!c.found || r <= 0.0f)
+				return;
+			const float cx = std::floor(c.position.x / 5.0f) * 5.0f + 2.5f, cz = std::floor(c.position.z / 5.0f) * 5.0f + 2.5f;
+			x0 = std::max(0, (int)std::floor((cx - r) / 5.0f));
+			z0 = std::max(0, (int)std::floor((cz - r) / 5.0f));
+			x1 = std::min(w - 1, (int)std::floor((cx + r) / 5.0f));
+			z1 = std::min(h - 1, (int)std::floor((cz + r) / 5.0f));
+		}
+		ServerGameObject* player = ctx->getSelf()->getPlayer();
+		for (int tx = x0; tx <= x1; tx++)
+			for (int tz = z0; tz <= z1; tz++) {
+				const float x = tx * 5.0f + 2.5f, z = tz * 5.0f + 2.5f;
+				server->spawnObject(objbp, player, Vector3(x, server->terrain->getHeight(x, z), z), Vector3());
+			}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		objbp = gs.readObjBlueprintPtr(gsf);
+		if (!wholeMap) {
+			pCentre.reset(PositionDeterminer::createFrom(gsf, gs));
+			vHalfSize.reset(ReadValueDeterminer(gsf, gs));
+		}
+	}
+};
+
+// ASSERT <value> "<message>": WKB.exe's release build does nothing (0x4a0be0); wkbai prints the
+// message when the value is 0
+struct ActionAssert : Action {
+	std::unique_ptr<ValueDeterminer> value;
+	std::string message;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (value->eval(ctx) == 0.0f)
+			printf("ASSERT failed: %s\n", message.c_str());
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		value.reset(ReadValueDeterminer(gsf, gs));
+		message = gsf.nextString(true);
+	}
+};
+
+// Read and left without effect, as in WKB.exe (their execute is an empty 0x4a0be0):
+// DISPLAY_ON_MINIMAP <finder> <value> <value> <finder> and SET_AMBIENT_LIGHTING <r> <g> <b>
+// (three plain numbers)
+struct ActionReadOnly : Action {
+	std::vector<std::unique_ptr<ObjectFinder>> finders;
+	std::vector<std::unique_ptr<ValueDeterminer>> values;
+	const char* signature;
+	ActionReadOnly(const char* signature) : signature(signature) {}
+	virtual void run(SrvScriptContext* ctx) override {}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		for (const char* c = signature; *c; c++)
+			switch (*c) {
+			case 'F': finders.emplace_back(ReadFinder(gsf, gs)); break;
+			case 'V': values.emplace_back(ReadValueDeterminer(gsf, gs)); break;
+			case 'I': gsf.nextInt(); break;
+			}
+	}
+};
+
+// DEREGISTER_WORK_ORDER <unit finder> <city finder> (WKB.exe 0x47cfd0): the work orders
+// REGISTER_WORK_ORDER gave the cities for those units dropped. As in the original the units are
+// matched by the finder itself, so only FINDER_RESULTS "<name>" (the one REGISTER takes) matches.
+struct ActionDeregisterWorkOrder : Action {
+	int gsUnitFinder = -1;
+	std::unique_ptr<ObjectFinder> otherFinder;
+	std::unique_ptr<ObjectFinder> cityFinder;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (gsUnitFinder < 0)
+			return;
+		for (ServerGameObject* city : cityFinder->eval(ctx))
+			if (ServerGameObject* player = city->getPlayer())
+				player->aiController.deregisterWorkOrder(city, Server::instance->gameSet->objectFinderDefinitions[gsUnitFinder]);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		const char* before = gsf.cursor;
+		if (gsf.nextString() == "FINDER_RESULTS")
+			gsUnitFinder = gs.objectFinderDefinitions.readIndex(gsf);
+		else {
+			gsf.cursor = before;
+			otherFinder.reset(ReadFinder(gsf, gs));
+		}
+		cityFinder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// ENABLE_SHADOW / DISABLE_SHADOW <finder> (WKB.exe 0x4811e0 / 0x47e9b0): the objects' static
+// shadow on or off. (Both of the original's turn it off.)
+struct ActionShadowSwitch : Action {
+	bool on;
+	std::unique_ptr<ObjectFinder> finder;
+	ActionShadowSwitch(bool on) : on(on) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->sendShadowSwitch(obj, on);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { finder.reset(ReadFinder(gsf, gs)); }
+};
+
+// DISPLAY_SAVE_GAME_MENU (WKB.exe 0x47f7b0): self's player's client opens the Save screen
+struct ActionDisplaySaveGameMenu : Action {
+	virtual void run(SrvScriptContext* ctx) override {
+		if (ServerGameObject* self = ctx->getSelf())
+			ctx->server->openSaveGameMenu(self->getPlayer());
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {}
+};
+
+// PLAY_LOOPED_SOUND "<tag>" <source> <receiver> (WKB.exe 0x48aaa0): PLAY_SOUND, looping until
+// STOP_SOUND of the source
+struct ActionPlayLoopedSound : Action {
+	int soundTag;
+	std::unique_ptr<ObjectFinder> objFrom, objTo;
+	virtual void run(SrvScriptContext* ctx) override {
+		if (auto* from = objFrom->getFirst(ctx))
+			for (ServerGameObject* to : objTo->eval(ctx))
+				ctx->server->playLoopedSound(from, soundTag, to);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		soundTag = gs.soundTags.readIndex(gsf);
+		objFrom.reset(ReadFinder(gsf, gs));
+		objTo.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// REEVALUATE_TASK_PROXIMITY <finder> (WKB.exe 0x48ce20): the current task's PROXIMITY_REQUIREMENT
+// evaluated again (-1 without one)
+struct ActionReevaluateTaskProximity : Action {
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx)) {
+			Order* order = obj->orderConfig.getCurrentOrder();
+			Task* task = order && order->isWorking() ? order->getCurrentTask() : nullptr;
+			if (!task)
+				continue;
+			if (task->blueprint->proximityRequirement) {
+				SrvScriptContext tctx(Server::instance, obj);
+				task->proximity = task->blueprint->proximityRequirement->eval(&tctx);
+			}
+			else
+				task->proximity = -1.0f;
+		}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { finder.reset(ReadFinder(gsf, gs)); }
+};
+
+// REPEAT_SEQUENCE_AFTER_DELAY "<sequence>" <finder> <count> <delay> (WKB.exe 0x48f0e0): after the
+// delay (at once when it isn't positive), the sequence count times for each object, the objects
+// found now
+struct ActionRepeatSequenceAfterDelay : Action {
+	const ActionSequence* sequence;
+	std::unique_ptr<ObjectFinder> finder;
+	std::unique_ptr<ValueDeterminer> vdCount, vdDelay;
+	virtual void run(SrvScriptContext* ctx) override {
+		const int count = (int)vdCount->eval(ctx);
+		if (count <= 0)
+			return;
+		auto objs = finder->eval(ctx);
+		const float delay = vdDelay->eval(ctx);
+		if (delay <= 0.0f) {
+			for (ServerGameObject* obj : objs) {
+				auto _1 = ctx->change(ctx->sequenceExecutor, ctx->getSelf());
+				auto _2 = ctx->changeSelf(obj);
+				for (int i = 0; i < count; i++)
+					sequence->run(ctx);
+			}
+			return;
+		}
+		Server::DelayedSequence ds;
+		ds.executor = ctx->getSelf();
+		ds.actionSequence = sequence;
+		for (ServerGameObject* obj : objs)
+			ds.selfs.emplace_back(obj);
+		const game_time_t atTime = Server::instance->timeManager.currentTime + delay;
+		for (int i = 0; i < count; i++)
+			Server::instance->delayedSequences.insert(std::make_pair(atTime, ds));
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		sequence = gs.actionSequences.readPtr(gsf);
+		finder.reset(ReadFinder(gsf, gs));
+		vdCount.reset(ReadValueDeterminer(gsf, gs));
+		vdDelay.reset(ReadValueDeterminer(gsf, gs));
+	}
+};
+
+// RESET_FOG_OF_WAR <objects> <players> (WKB.exe 0x491f50): REVEAL_FOG_OF_WAR undone
+struct ActionResetFogOfWar : Action {
+	std::unique_ptr<ObjectFinder> fObjects, fPlayers;
+	virtual void run(SrvScriptContext* ctx) override {
+		auto players = fPlayers->eval(ctx);
+		for (ServerGameObject* obj : fObjects->eval(ctx))
+			for (ServerGameObject* p : players) {
+				ServerGameObject* player = p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER ? p : p->getPlayer();
+				ctx->server->resetFogOfWar(obj, player);
+			}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		fObjects.reset(ReadFinder(gsf, gs));
+		fPlayers.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SUSPEND_ORDER / RESUME_ORDER <finder> (WKB.exe 0x561d30 / 0x561d60): the first active order held
+// (its task's and its own SUSPENSION_SEQUENCE run) until RESUME_ORDER, which takes up every held
+// order (RESUMPTION_SEQUENCEs)
+struct ActionSuspendOrder : Action {
+	bool resume;
+	std::unique_ptr<ObjectFinder> finder;
+	ActionSuspendOrder(bool resume) : resume(resume) {}
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx)) {
+			if (resume) {
+				for (Order& order : obj->orderConfig.orders)
+					if (order.scriptSuspended) {
+						order.scriptSuspended = false;
+						if (order.state == OTS_SUSPENDED)
+							order.resume();
+					}
+			}
+			else
+				for (Order& order : obj->orderConfig.orders)
+					if (order.state == OTS_PROCESSING && !order.scriptSuspended) {
+						order.suspend();
+						order.scriptSuspended = true;
+						break;
+					}
+		}
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { finder.reset(ReadFinder(gsf, gs)); }
+};
+
+// SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC "<picture>" <players> (WKB.exe 0x494750): the picture
+// in the players' Mission Objectives window
+struct ActionSetObjectivesMapGraphic : Action {
+	std::string path;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		ForEachObjectivesPlayer(ctx, finder.get(), [&](ServerGameObject* player) { ctx->server->setObjectivesMapGraphic(player, path); });
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		path = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
+// SET_TILE_STATUS <status> <position> (WKB.exe 0x496f70): the position's tile, if passable now,
+// gets the status (CommonGameState::Tile::scriptStatus)
+struct ActionSetTileStatus : Action {
+	int status = 5;
+	std::unique_ptr<PositionDeterminer> pos;
+	virtual void run(SrvScriptContext* ctx) override {
+		const OrientedPosition p = pos->eval(ctx);
+		if (p.found)
+			ctx->server->setTileStatus((int)std::floor(p.position.x / 5.0f), (int)std::floor(p.position.z / 5.0f), status);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		static const char* const names[6] = { "BLOCKED", "CANNOT_BE_CONSTRUCTED_UPON", "BLOCKED_BY_CITY_PERIMETER", "CONTAINS_WALL_SECTION", "HAS_FORMATION", "PASSABLE" };
+		const std::string word = gsf.nextString();
+		for (int i = 0; i < 6; i++)
+			if (word == names[i])
+				status = i;
+		pos.reset(PositionDeterminer::createFrom(gsf, gs));
+	}
+};
+
+// SWITCH_FOOTPRINT "<footprint>" (WKB.exe 0x49c7d0): self, a building, takes the tiles of that
+// footprint instead of its type's. (The original frees and takes its old ones again.)
+struct ActionSwitchFootprint : Action {
+	const Footprint* footprint = nullptr;
+	virtual void run(SrvScriptContext* ctx) override {
+		ServerGameObject* obj = ctx->getSelf();
+		Server* server = ctx->server;
+		if (!obj || !footprint || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !server->tiles || !server->terrain)
+			return;
+		const Footprint* old = obj->footprintOverride ? obj->footprintOverride : obj->blueprint->footprint;
+		if (old == footprint)
+			return;
+		if (old) {
+			const auto [w, h] = server->terrain->getNumPlayableTiles();
+			const auto origin = old->rotateOrigin(obj->orientation.y);
+			const int ox = (int)((obj->position.x - origin.first) / 5.0f), oz = (int)((obj->position.z - origin.second) / 5.0f);
+			for (const auto& to : old->tiles) {
+				const auto ro = to.rotate(obj->orientation.y);
+				const int px = ox + ro.first, pz = oz + ro.second;
+				if (px >= 0 && px < w && pz >= 0 && pz < h && server->tiles[(size_t)pz * w + px].building == obj->id)
+					server->tiles[(size_t)pz * w + px].building = nullptr;
+			}
+		}
+		obj->footprintOverride = footprint;
+		server->updateOccupiedTiles(obj, obj->position, obj->orientation, obj->position, obj->orientation);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override { footprint = gs.footprints.readPtr(gsf); }
+};
+
+// SWITCH_OFF_INTENSITY_MAP "<map>" <finder> (WKB.exe 0x49dbc0): SWITCH_ON_INTENSITY_MAP undone
+struct ActionSwitchOffIntensityMap : Action {
+	std::string map;
+	std::unique_ptr<ObjectFinder> finder;
+	virtual void run(SrvScriptContext* ctx) override {
+		for (ServerGameObject* obj : finder->eval(ctx))
+			ctx->server->intensityMaps.switchOff(obj, map);
+	}
+	virtual void parse(GSFileParser& gsf, const GameSet& gs) override {
+		map = gsf.nextString(true);
+		finder.reset(ReadFinder(gsf, gs));
+	}
+};
+
 Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 {
 	Action *action;
@@ -2135,10 +2503,10 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 	case Tags::ACTION_STOP_INDICATING_POSITION_OF_MISSION_OBJECTIVES_ENTRY: action = new ActionObjectiveMarker(0); break;
 	case Tags::ACTION_UNLOCK_LEVEL: action = new ActionUnlockLevel; break;
 		// Below are ignored actions (that should not affect gameplay very much)
-	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP:
+	case Tags::ACTION_SWITCH_ON_INTENSITY_MAP: action = new ActionSwitchOnIntensityMap; break;
+	case Tags::ACTION_LOCK_TIME: action = new ActionLockTime(true); break;
+	case Tags::ACTION_UNLOCK_TIME: action = new ActionLockTime(false); break;
 	case Tags::ACTION_DISPLAY_LOAD_GAME_MENU:
-	case Tags::ACTION_LOCK_TIME:
-	case Tags::ACTION_UNLOCK_TIME:
 	case Tags::ACTION_SET_RECONNAISSANCE:
 	case Tags::ACTION_RESERVE_TILE_FOR_CONSTRUCTION:
 	case Tags::ACTION_RESERVE_SPACE_FOR_CONSTRUCTION:
@@ -2181,6 +2549,26 @@ Action *ReadAction(GSFileParser &gsf, const GameSet &gs)
 		if (name == "RESUME_GAME") { action = new ActionPauseGame(false); break; }
 		if (name == "RECALCULATE_SIGHT_RANGE") { action = new ActionRecalculateSightRange; break; }
 		if (name == "STOP_MUSIC") { action = new ActionStopMusic(false); break; }
+		if (name == "FLOODFILL_AREA_WITH") { action = new ActionFloodfill(false); break; }
+		if (name == "FLOODFILL_MAP_WITH") { action = new ActionFloodfill(true); break; }
+		if (name == "ABORT_TASK") { action = new ActionTerminateTask; break; } // the same function in WKB.exe (0x561cd0)
+		if (name == "ASSERT") { action = new ActionAssert; break; }
+		if (name == "DEREGISTER_WORK_ORDER") { action = new ActionDeregisterWorkOrder; break; }
+		if (name == "ENABLE_SHADOW") { action = new ActionShadowSwitch(true); break; }
+		if (name == "DISABLE_SHADOW") { action = new ActionShadowSwitch(false); break; }
+		if (name == "DISPLAY_ON_MINIMAP") { action = new ActionReadOnly("FVVF"); break; }
+		if (name == "SET_AMBIENT_LIGHTING") { action = new ActionReadOnly("III"); break; }
+		if (name == "DISPLAY_SAVE_GAME_MENU") { action = new ActionDisplaySaveGameMenu; break; }
+		if (name == "PLAY_LOOPED_SOUND") { action = new ActionPlayLoopedSound; break; }
+		if (name == "REEVALUATE_TASK_PROXIMITY") { action = new ActionReevaluateTaskProximity; break; }
+		if (name == "REPEAT_SEQUENCE_AFTER_DELAY") { action = new ActionRepeatSequenceAfterDelay; break; }
+		if (name == "RESET_FOG_OF_WAR") { action = new ActionResetFogOfWar; break; }
+		if (name == "SUSPEND_ORDER") { action = new ActionSuspendOrder(false); break; }
+		if (name == "RESUME_ORDER") { action = new ActionSuspendOrder(true); break; }
+		if (name == "SET_ACTIVE_MISSION_OBJECTIVES_MAP_GRAPHIC") { action = new ActionSetObjectivesMapGraphic; break; }
+		if (name == "SET_TILE_STATUS") { action = new ActionSetTileStatus; break; }
+		if (name == "SWITCH_FOOTPRINT") { action = new ActionSwitchFootprint; break; }
+		if (name == "SWITCH_OFF_INTENSITY_MAP") { action = new ActionSwitchOffIntensityMap; break; }
 		action = new ActionUnknown(name, gsf.locate()); printf("WARNING: Unknown ACTION %s at %s\n", name.c_str(), gsf.locate().c_str()); break;
 	}
 	action->parse(gsf, gs);
@@ -2227,4 +2615,22 @@ void ActionSequence::run(SrvScriptContext* ctx) const {
 void ActionSequence::run(ServerGameObject* self) const {
 	SrvScriptContext ctx(Server::instance, self);
 	run(&ctx);
+}
+
+void SequencePlayerCosts(const ActionSequence& seq, SrvScriptContext* ctx, const int* items, float* costs, int count)
+{
+	ServerGameObject* self = ctx->getSelf() ? (ServerGameObject*)ctx->getSelf() : nullptr;
+	ServerGameObject* player = self ? self->getPlayer() : nullptr;
+	for (const auto& action : seq.actionList) {
+		const auto* dec = dynamic_cast<const ActionDecreaseItem*>(action.get());
+		if (!dec || !player)
+			continue;
+		for (int i = 0; i < count; i++) {
+			if (dec->item != items[i])
+				continue;
+			const auto found = dec->finder->eval(ctx);
+			if (std::find(found.begin(), found.end(), player) != found.end())
+				costs[i] += std::max(0.0f, dec->value->eval(ctx));
+		}
+	}
 }

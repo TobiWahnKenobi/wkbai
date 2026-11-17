@@ -43,7 +43,7 @@ void TimeManager::tick() {
 	uint32_t nextSDLTime = SDL_GetTicks();
 	uint32_t elapsedSDLTime = nextSDLTime - previousSDLTime;
 	previousSDLTime = nextSDLTime;
-	if (paused) return;
+	if (paused || scriptLocks) return;
 	if (elapsedSDLTime >= 1000)
 		elapsedSDLTime = 34;
 	if (stepMs) {
@@ -58,7 +58,7 @@ void TimeManager::tick() {
 }
 
 bool TimeManager::step() {
-	if (paused || !stepMs || pendingMs < stepMs)
+	if (paused || scriptLocks || !stepMs || pendingMs < stepMs)
 		return false;
 	pendingMs -= stepMs;
 	previousTime = currentTime;

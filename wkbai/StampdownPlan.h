@@ -54,6 +54,11 @@ struct StampdownPlan {
 	std::vector<StampdownRemoveAction> toRemove;
 
 	GameObjectRef ownerObject;
+	// a wall piece put on a city's ring: the piece and turn that tile takes there (a corner where
+	// the ring turns; the play test: a new wall in a razed corner was a straight piece), placed
+	// instead of the one asked for; null: the one asked for
+	const GameObjBlueprint* placeBlueprint = nullptr;
+	Vector3 placeOrientation;
 	const GameObjBlueprint* newOwnerBlueprint = nullptr;
 	CommonGameObject::CityRectangle cityRectangle;
 
@@ -62,6 +67,13 @@ struct StampdownPlan {
 	// the slope limit and the neighbour rule alone for the footprint, unturned, at playable tile
 	// (ox, oz), as WKB.exe's yes/no check (0x59b020) the searches for a site use
 	static bool groundAllows(CommonGameState* gameState, const Footprint* fp, int ox, int oz);
+	// a tree, a stone or gold deposit (a container that can't be built upon) on playable tile
+	// (tx, tz): no building there, and the auto-walls leave it out, as the original's
+	static bool tileHasBlockingObject(CommonGameState* gameState, int tx, int tz);
+	// playable tile (tx, tz) in any player's city: no farm or village there (the original's
+	// placement check 6, CANNOT_BUILD_HERE; the play test: a farmer's farm inside the walls)
+	static bool tileInAnyCity(CommonGameState* gameState, int tx, int tz);
+	static bool isRural(const GameObjBlueprint* blueprint);
 	// whether the footprint tile may stand on playable tile (tx, tz) by its terrain
 	// (USE_TERRAIN_BLUEPRINT_LIST)
 	static bool tileTerrainAllowed(const CommonGameState* gameState, const Footprint::TileOffset& to, int tx, int tz);

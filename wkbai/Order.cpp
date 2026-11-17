@@ -66,7 +66,8 @@ void Order::suspend()
 	if (!isWorking()) return;
 	this->state = OTS_SUSPENDED;
 	this->tasks[this->currentTask]->suspend();
-	//this->blueprint->suspensionSequence.run(this->gameObject);
+	// (no shipped script has a SUSPENSION_SEQUENCE; mods may, WKB.exe 0x505970 runs it)
+	this->blueprint->suspensionSequence.run(this->gameObject);
 }
 
 void Order::resume()
@@ -96,6 +97,8 @@ void Order::terminate()
 
 void Order::process()
 {
+	if (this->scriptSuspended)
+		return;
 	if (this->state == OTS_SUSPENDED)
 		this->resume();
 	else if (this->state != OTS_PROCESSING)
@@ -114,6 +117,12 @@ Task * Order::getCurrentTask()
 
 void Order::advanceToNextTask()
 {
+	// an order another waits behind (an uninterruptible loop's): it ends with its running task
+	// instead of going on to the next or cycling (WKB.exe 0x504989)
+	if (finishAfterTask) {
+		terminate();
+		return;
+	}
 	currentTask = (currentTask + 1) % tasks.size();
 	// a patrol: round again, to its next point
 	if (currentTask == 0 && patrolPoints.size() >= 2) {
@@ -137,8 +146,11 @@ Task::Task(int id, const TaskBlueprint * blueprint, Order * order) : order(order
 			trigger = std::make_unique<TimerTrigger>(this, &trigbp);
 		else if (trigbp.type == Tags::TASKTRIGGER_ANIMATION_LOOP)
 			trigger = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
-		else if (trigbp.type == Tags::TASKTRIGGER_UNINTERRUPTIBLE_ANIMATION_LOOP)
-			trigger = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
+		else if (trigbp.type == Tags::TASKTRIGGER_UNINTERRUPTIBLE_ANIMATION_LOOP) {
+			auto loop = std::make_unique<AnimationLoopTrigger>(this, &trigbp);
+			loop->uninterruptible = true;
+			trigger = std::move(loop);
+		}
 		else if (trigbp.type == Tags::TASKTRIGGER_ATTACHMENT_POINT)
 			trigger = std::make_unique<AttachmentPointTrigger>(this, &trigbp);
 		else
@@ -294,6 +306,7 @@ void Task::suspend()
 		go->movementController.stopMovement();
 	go->setAnimation(0);
 	//this->blueprint->suspensionSequence.run(this->order->gameObject);
+	this->blueprint->suspensionSequence.run(this->order->gameObject); // (WKB.exe 0x5063e0; none shipped)
 }
 
 void Task::resume()
@@ -301,6 +314,11 @@ void Task::resume()
 	TraceTask(this, "resume");
 	this->state = OTS_PROCESSING;
 	this->blueprint->resumptionSequence.run(this->order->gameObject);
+	// only a task that was in range when it was put aside: its target has gone out of range since
+	// (an archer drawn into a fight). One that hadn't reached it walks on: the Kingmaker's siege
+	// formations, resumed 220 m from their target, ran their dissatisfied sequence (a Wait) again
+	// at every resume and never walked.
+	this->resumedUnchecked = this->proximitySatisfied;
 	this->proximitySatisfied = false; // TODO: put this in "onResume"
 }
 
@@ -327,6 +345,8 @@ void Task::terminate()
 	if (go->movementController.isMoving())
 		go->movementController.stopMovement();
 	go->setAnimation(0);
+	if (ServerGameObject* t = target.get(); t && attackPathOf == t->id && t->getPlayer() == go->getPlayer())
+		go->orderConfig.stepAwayFrom = t->id;
 	this->releaseAttackPath();
 	this->blueprint->terminationSequence.run(this->order->gameObject);
 	this->order->advanceToNextTask();
@@ -417,9 +437,25 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 	if (gameobj->lodging != LODGE_NONE && gameobj->lodging != LODGE_RETURNING && !g_lodgingOrders
 		&& !(gameobj->flags & CommonGameObject::fTerminated))
 		return nullptr;
-	if (Order* currentOrder = getCurrentOrder()) {
-		if (currentOrder->blueprint->cannotInterruptOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST)
+	// As WKB.exe's 0x562130: an order that would replace the current one (DO_FIRST, FORGET_EVERYTHING_ELSE)
+	// - is refused while the current order can't be interrupted (CANNOT_INTERRUPT_ORDER, 0x53fbd0);
+	// - waits behind it while one of its tasks plays an uninterruptible loop (the Rocket Launcher
+	//   limbering, the siege tower's climb, the explosive cart's fuse): it is put last, and the
+	//   current order ends with its running task;
+	// unless it overrides those (OVERRIDE_NON_INTERRUPTIBLE_ORDERS: the deaths)
+	if (Order* currentOrder = getCurrentOrder(); currentOrder && assignMode != Tags::ORDERASSIGNMODE_DO_LAST
+		&& !orderBlueprint->overrideNonInterruptible) {
+		if (currentOrder->blueprint->cannotInterruptOrder)
 			return nullptr;
+		bool held = false;
+		for (const auto& task : currentOrder->tasks)
+			for (const auto& trigger : task->triggers)
+				if (auto* loop = dynamic_cast<const AnimationLoopTrigger*>(trigger.get()); loop && loop->uninterruptible)
+					held = true;
+		if (held) {
+			currentOrder->finishAfterTask = true;
+			assignMode = Tags::ORDERASSIGNMODE_DO_LAST;
+		}
 	}
 
 	// Check preconditions
@@ -516,6 +552,26 @@ void OrderConfiguration::process()
 	bool nextBusy = !orders.empty();
 	if (busy && !nextBusy)
 		gameobj->sendEvent(Tags::PDEVENT_ON_IDLE);
+	// idle on the spot it trained at: a few metres out from the dummy, to a free place
+	if (stepAwayFrom) {
+		const uint32_t from = std::exchange(stepAwayFrom, 0u);
+		ServerGameObject* t = Server::instance->findObject(from);
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int move = gs->commands.names.getIndex("Move");
+		const CommonGameObject* parent = gameobj->getParent();
+		const bool inFormation = parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (orders.empty() && t && !t->deleted && !(t->flags & ServerGameObject::fTerminated) && move >= 0 && !inFormation) {
+			Vector3 out = gameobj->position - t->position;
+			out.y = 0.0f;
+			const float d = std::sqrt(out.sqlen2xz());
+			if (d < 6.0f) {
+				out = d > 0.01f ? out * (1.0f / d) : Vector3(1, 0, 0);
+				const Vector3 dest = FreeStandingSpot(gameobj, t->position + out * 6.0f);
+				gs->commands[move].execute(gameobj, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, dest);
+			}
+		}
+	}
+	nextBusy = !orders.empty();
 	busy = nextBusy;
 
 	Order* curorder = getCurrentOrder();
@@ -575,11 +631,12 @@ void AnimationLoopTrigger::update()
 	ServerGameObject* obj = this->task->order->gameObject;
 	Model* model = obj->blueprint->getModel(obj->subtype, obj->appearance, obj->animationIndex, obj->animationVariant);
 	if (obj->animSynchronizedTask != -1) {
-		// TODO: We might need to prevent the trigger to happen twice if the task is not terminated in the trigger sequence
-		// The Construction Animation tasks do terminate the order, so it's not "that" important.
 		SrvScriptContext ctx{ Server::instance, obj };
 		float frac = Server::instance->gameSet->tasks[obj->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
-		if (frac >= 1.0f) {
+		if (frac < 1.0f)
+			synchFired = false;
+		else if (!synchFired) {
+			synchFired = true;
 			this->blueprint->actions.run(this->task->order->gameObject);
 		}
 	}
@@ -665,6 +722,9 @@ void MissileTask::onStart()
 
 	SrvScriptContext ssc{ Server::instance, this->order->gameObject };
 	float speed = this->order->gameObject->blueprint->missileSpeed->eval(&ssc);
+	// (WKB.exe's getter 0x5a6450: a speed not above 0 is 2)
+	if (!(speed > 0.0f))
+		speed = 2.0f;
 
 	// missile destination to hit
 	Vector3 dest = this->target->position;
@@ -708,8 +768,9 @@ void MissileTask::onStart()
 	}
 	if (moved) {
 		const auto area = Server::instance->terrain->getPlayableArea();
-		dest.x = std::clamp(dest.x, 0.0f, (float)area.first);
-		dest.z = std::clamp(dest.z, 0.0f, (float)area.second);
+		// (1 m inside the map's edge, as WKB.exe 0x509910)
+		dest.x = std::clamp(dest.x, 1.0f, std::max(1.0f, (float)area.first - 1.0f));
+		dest.z = std::clamp(dest.z, 1.0f, std::max(1.0f, (float)area.second - 1.0f));
 		dest.y = Server::instance->terrain->getHeightEx(dest.x, dest.z, this->target->blueprint->floatsOnWater) + terrainOffset;
 	}
 
@@ -726,6 +787,21 @@ void MissileTask::onStart()
 	this->msStartTime = Server::instance->timeManager.currentTime;
 	this->order->gameObject->startTrajectory(msInitialPosition, msInitialVelocity, msStartTime);
 	this->msPrevPosition = this->msInitialPosition;
+	// every object on the launch tile is passed through (WKB.exe 0x509734 / 0x566bd0: the firer,
+	// those beside it, the tower a garrison shoots from)
+	if (Server* server = Server::instance; server->tiles && server->terrain) {
+		int nx, nz;
+		std::tie(nx, nz) = server->terrain->getNumPlayableTiles();
+		const int tx = (int)(pos_i.x / 5.0f), tz = (int)(pos_i.z / 5.0f);
+		if (tx >= 0 && tz >= 0 && tx < nx && tz < nz) {
+			auto& tile = server->tiles[tz * nx + tx];
+			for (const auto& ref : tile.objList)
+				if (CommonGameObject* o = ref.getFrom(server))
+					msPassesThrough[o->id] = true;
+			if (CommonGameObject* b = tile.building.getFrom(server))
+				msPassesThrough[b->id] = true;
+		}
+	}
 }
 
 static bool LineSegmentIntersectsSphere(const Vector3& lineStart, const Vector3& lineEnd, const Vector3& center, float radius)
@@ -759,46 +835,206 @@ static void FlamingMissileLanded(ServerGameObject* missile)
 		server->environment.fireLanded(*server, missile->position);
 }
 
+// Whether a missile passes through an object (WKB.exe 0x50a820, kept per object as the original's
+// set at +0x50): its own firer's kind of things aren't spared, only
+// - objects whose blueprint has IGNORE_ALL_MISSILE_COLLISION (trees, farms, shipwrecks, palms);
+// - with IGNORE_FRIENDLY_MISSILE_COLLISION, the firer's own and its allies';
+// Friendly fire: the missile's DO_NOT_COLLIDE_WITH ("Allied Characters") isn't an engine keyword in
+// WKB.exe (docs/re/missiles-removal-siege-carts.md A), so arrows and balls hit own and allied
+// units in their way.
+static bool MissilePassesThrough(ServerGameObject* missile, ServerGameObject* obj)
+{
+	const GameObjBlueprint* bp = obj->blueprint;
+	if (bp->ignoreAllMissileCollision)
+		return true;
+	Server* server = Server::instance;
+	ServerGameObject* own = missile->getPlayer();
+	ServerGameObject* theirs = obj->getPlayer();
+	const bool allied = own && theirs && (own == theirs
+		|| server->getDiplomaticStatus(own, theirs) <= server->gameSet->diplomaticStatuses.names.getIndex("Allied"));
+	if (bp->ignoreFriendlyMissileCollision && allied)
+		return true;
+	return false;
+}
+
+// where along the segment a box (low, high; in the segment's frame) is entered: the fraction in
+// [0, 1], or -1 if it isn't (the slab test); a segment starting inside counts at 0
+static float SegmentBoxEntry(const Vector3& a, const Vector3& b, const Vector3& low, const Vector3& high)
+{
+	float t0 = 0.0f, t1 = 1.0f;
+	for (int c = 0; c < 3; c++) {
+		const float lo = std::min(low.coord[c], high.coord[c]), hi = std::max(low.coord[c], high.coord[c]);
+		const float d = b.coord[c] - a.coord[c];
+		if (std::abs(d) < 1e-8f) {
+			if (a.coord[c] < lo || a.coord[c] > hi)
+				return -1.0f;
+			continue;
+		}
+		float ta = (lo - a.coord[c]) / d, tb = (hi - a.coord[c]) / d;
+		if (ta > tb) std::swap(ta, tb);
+		t0 = std::max(t0, ta);
+		t1 = std::min(t1, tb);
+		if (t0 > t1)
+			return -1.0f;
+	}
+	return t0;
+}
+
 void MissileTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
+	Server* server = Server::instance;
+	if (msLanded)
+		return;
 
-	Vector3 prevPosition = msPrevPosition;
-	msPrevPosition = go->position;
+	const Vector3 prevPosition = msPrevPosition;
+	const Vector3 nowPosition = go->position;
+	msPrevPosition = nowPosition;
 
-	// unit collision
-	NNSearch nns;
-	nns.start(Server::instance, go->position, 15.0f);
-	while (ServerGameObject* col = (ServerGameObject*)nns.next()) {
-		if (col->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING || col->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
-			if (col->getPlayer() != go->getPlayer() && col->isInteractable()) {
-				if (Model* model = col->blueprint->getModel(col->subtype, col->appearance, col->animationIndex, col->animationVariant)) {
-					Vector3 sCenter = model->getSphereCenter().transform(col->getWorldMatrix());
-					float sRadius = model->getSphereRadius();
-					if (LineSegmentIntersectsSphere(prevPosition, go->position, sCenter, sRadius)) {
-						SrvScriptContext ctx(Server::instance, go);
-						auto _ = ctx.change(ctx.collisionSubject, col);
-						FlamingMissileLanded(go);
-						this->blueprint->collisionTrigger.run(&ctx);
-						return;
-					}
+	// leaving the map: removed, with no trigger (WKB.exe 0x509e20)
+	const auto area = server->terrain->getPlayableArea();
+	if (nowPosition.x < 0.0f || nowPosition.z < 0.0f || nowPosition.x > (float)area.first || nowPosition.z > (float)area.second) {
+		server->deleteObject(go);
+		return;
+	}
+
+	// The step from the last position is tested against the ground (water counts) and the objects
+	// near it; the nearest hit along it wins (WKB.exe 0x60f900, 0x50a570).
+	const Vector3 step = nowPosition - prevPosition;
+	const float stepLen = step.len3();
+	float groundAt = -1.0f;
+	{
+		auto below = [&](float t) {
+			const Vector3 p = prevPosition + step * t;
+			return p.y < server->terrain->getHeightEx(p.x, p.z, true);
+		};
+		const int samples = std::max(1, (int)std::ceil(stepLen / 0.5f));
+		float lo = 0.0f;
+		for (int i = 1; i <= samples; i++) {
+			const float t = (float)i / samples;
+			if (below(t)) {
+				float hi = t;
+				for (int k = 0; k < 8; k++) {
+					const float mid = 0.5f * (lo + hi);
+					(below(mid) ? hi : lo) = mid;
 				}
+				groundAt = hi;
+				break;
+			}
+			lo = t;
+		}
+	}
+
+	ServerGameObject* hitObject = nullptr;
+	float hitAt = 2.0f;
+	// The candidates are the objects on the tiles the step crosses (WKB.exe 0x60f900 / 0x50a570): a
+	// building on every tile of its footprint, the others (characters, containers, props) on the
+	// one tile under their centre. Missiles pass through missiles. The filter (0x50a820) reads only
+	// whether it's terminated, IGNORE_ALL_MISSILE_COLLISION and IGNORE_FRIENDLY_MISSILE_COLLISION:
+	// not targetable, built-upon, corpses and the missile's own target count as anything else.
+	auto consider = [&](ServerGameObject* col) {
+		if (!col || col == go)
+			return;
+		const int cls = col->blueprint->bpClass;
+		if (!(cls == Tags::GAMEOBJCLASS_BUILDING || cls == Tags::GAMEOBJCLASS_CHARACTER
+			|| cls == Tags::GAMEOBJCLASS_PROP || cls == Tags::GAMEOBJCLASS_CONTAINER))
+			return;
+		if (col->flags & CommonGameObject::fTerminated)
+			return;
+		auto it = msPassesThrough.find(col->id);
+		if (it == msPassesThrough.end())
+			it = msPassesThrough.emplace(col->id, col->id == go->creatorId || MissilePassesThrough(go, col)).first;
+		if (it->second)
+			return;
+		Model* model = col->blueprint->getModel(col->subtype, col->appearance, col->animationIndex, col->animationVariant);
+		if (!model)
+			return;
+		// the step against the model's bounding box at its current animation frame, in the object's
+		// own frame (position, orientation, scale; 0x5c0aa0, 0x5b84f0), its faces widened by 0.1
+		// (0x5cb6f0); a step starting inside counts at once
+		const Matrix toLocal = col->getWorldMatrix().getInverse4x3();
+		const float now = server->timeManager.currentTime;
+		const uint32_t animTime = (uint32_t)std::max(0.0f, (now - col->animStartTime) * col->animSpeed * 1000.0f);
+		auto box = model->interpolateBoundingBox(animTime);
+		for (int c = 0; c < 3; c++) {
+			const float lo = std::min(box[0].coord[c], box[1].coord[c]), hi = std::max(box[0].coord[c], box[1].coord[c]);
+			box[0].coord[c] = lo - 0.1f; box[1].coord[c] = hi + 0.1f;
+		}
+		const float t = SegmentBoxEntry(prevPosition.transform(toLocal), nowPosition.transform(toLocal), box[0], box[1]);
+		if (t >= 0.0f && t < hitAt) {
+			hitAt = t;
+			hitObject = col;
+		}
+	};
+	if (server->tiles) {
+		int nx, nz;
+		std::tie(nx, nz) = server->terrain->getNumPlayableTiles();
+		const float ax = prevPosition.x / 5.0f, az = prevPosition.z / 5.0f, bx = nowPosition.x / 5.0f, bz = nowPosition.z / 5.0f;
+		auto onTile = [&](int tx, int tz) {
+			if (tx < 0 || tz < 0 || tx >= nx || tz >= nz)
+				return;
+			auto& tile = server->tiles[(size_t)tz * nx + tx];
+			consider(tile.building.getFrom<Server>());
+			for (const auto& ref : tile.objList)
+				if (ServerGameObject* o = ref.getFrom<Server>(); o && o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+					consider(o);
+		};
+		// the tiles in order along the step (a building met on several of them is tested once a
+		// step: msPassesThrough doesn't hold hits, so the nearest entry wins anyway)
+		int tx = (int)ax, tz = (int)az;
+		const int ex = (int)bx, ez = (int)bz;
+		onTile(tx, tz);
+		if (tx != ex || tz != ez) {
+			const float dx = bx - ax, dz = bz - az;
+			const int sx = dx > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+			const float tdx = dx != 0.0f ? std::abs(1.0f / dx) : 1e30f, tdz = dz != 0.0f ? std::abs(1.0f / dz) : 1e30f;
+			float tmx = dx != 0.0f ? ((sx > 0 ? (tx + 1) - ax : ax - tx) * tdx) : 1e30f;
+			float tmz = dz != 0.0f ? ((sz > 0 ? (tz + 1) - az : az - tz) * tdz) : 1e30f;
+			for (int guard = 0; guard < 64 && (tx != ex || tz != ez); guard++) {
+				if (tmx < tmz) { tx += sx; tmx += tdx; }
+				else { tz += sz; tmz += tdz; }
+				onTile(tx, tz);
 			}
 		}
 	}
 
-	// floor collision
-	float theight = Server::instance->terrain->getHeight(go->position.x, go->position.z);
-	if (go->position.y < theight) {
-		// TODO: we could play sound directly on client without sending packet
-		// (which is probably why strikeFloorSound was made for WKB in the first place)
-		if (go->blueprint->strikeFloorSound != -1) {
-			go->playSoundAtObject(go->blueprint->strikeFloorSound, go);
-		}
+	// a tie goes to the ground (WKB.exe 0x50a570)
+	// test runs: WKB_TRACE_MISSILE=1 prints what each missile hit
+	static const bool traceMissile = getenv("WKB_TRACE_MISSILE") != nullptr;
+	if (traceMissile && (hitObject || groundAt >= 0.0f))
+		printf("MISSILE t=%.2f %u %s from %u hit %s %u %s at (%.1f,%.1f,%.1f)\n", server->timeManager.currentTime, go->id, go->blueprint->name.c_str(),
+			go->creatorId, hitObject && (groundAt < 0.0f || hitAt < groundAt) ? "object" : "ground",
+			hitObject ? hitObject->id : 0, hitObject ? hitObject->blueprint->name.c_str() : "-", nowPosition.x, nowPosition.y, nowPosition.z);
+	if (hitObject && (groundAt < 0.0f || hitAt < groundAt)) {
+		go->updatePosition(prevPosition + step * hitAt);
+		SrvScriptContext ctx(server, go);
+		auto _ = ctx.change(ctx.collisionSubject, hitObject);
 		FlamingMissileLanded(go);
+		this->blueprint->collisionTrigger.run(&ctx);
+		return;
+	}
+	if (groundAt >= 0.0f) {
+		// the ground (or water): the missile stops at the hit point, with the blueprint's sound and
+		// special effect (STRIKE_FLOOR_* / STRIKE_WATER_SOUND over water)
+		Vector3 at = prevPosition + step * groundAt;
+		const float floor = server->terrain->getHeightEx(at.x, at.z, true);
+		const bool water = floor > server->terrain->getHeight(at.x, at.z) + 0.01f;
+		at.y = floor;
+		msLanded = true;
+		go->trajectory.stop();
+		go->updatePosition(at);
+		const int sound = water && go->blueprint->strikeWaterSound != -1 ? go->blueprint->strikeWaterSound : go->blueprint->strikeFloorSound;
+		if (sound != -1)
+			go->playSoundAtObject(sound, go);
+		if (!water && go->blueprint->strikeFloorEffect != -1)
+			go->playSpecialEffectAt(go->blueprint->strikeFloorEffect, at);
+		if (!water)
+			FlamingMissileLanded(go);
 		this->blueprint->struckFloorTrigger.run(go);
 	}
 }
+
+void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 
 void MoveTask::onStart()
 {
@@ -807,9 +1043,23 @@ void MoveTask::onStart()
 void MoveTask::onUpdate()
 {
 	ServerGameObject* go = this->order->gameObject;
-	const Vector3& dest = this->target ? this->target->position : this->destination;
+	// A walk ends at a free spot (WKB.exe: the stop point needs a PREFERRED_SPACING disc clear of the
+	// other units', 0x436120; the walk itself goes through them, there are no unit collisions):
+	// the destination, or the nearest spot round it with room (FreeStandingSpot). Not for a
+	// formation's members (their places) or a move after a target.
+	Vector3 dest = this->target ? this->target->position : this->destination;
+	const bool member = go->getParent() && go->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+	if (!this->target && !member && go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		if (!stopChosen || (stopFor - dest).sqlen2xz() > 0.01f) {
+			stopFor = dest;
+			stopAt = FreeStandingSpot(go, dest);
+			stopChosen = true;
+		}
+		dest = stopAt;
+	}
 	if ((go->position - dest).sqlen2xz() < 0.1f) {
 		terminate();
+		return;
 	}
 	// (a second between searches that found no way, as ObjectReferenceTask's; a search runs at
 	// the end of the step, and its unit is moving, pending, until then)
@@ -1212,7 +1462,21 @@ void ObjectReferenceTask::onUpdate()
 			}
 			goal = pathPoints[pathStep];
 		}
+		// PATHFIND_TO_SHORE: to the shore nearest to the target (found again once it has moved 5 m)
+		if (blueprint->pathfindToShore && !following && !onAttack && !onPath) {
+			if (!shoreSet || (target->position - shoreFor).sqlen2xz() > 25.0f) {
+				shoreGoal = MovementController::nearestShorePosition(go->blueprint, target->blueprint, go->position, target->position);
+				shoreFor = target->position;
+				shoreSet = true;
+			}
+			goal = shoreGoal;
+		}
 		float prox = this->proximity;
+		// a character's or formation's size counts (WKB.exe 0x50d9d0: the proximity plus a quarter
+		// of the target's box, maxX + maxZ; here half its BOUNDING_VOLUME sphere): big units (Michael,
+		// Abaddon, siege engines) are reached from further out instead of crowded into
+		if (prox >= 0.0f && !following && target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
+			prox += 0.5f * target->blueprint->boundingRadius;
 		if (prox >= 0.0f) prox = std::max(prox - (destination - goal).len2xz(), 0.1f);
 		// a follower is there while it stands near the target's current goal (the last
 		// movement's destination stays behind when the target walks on)
@@ -1236,11 +1500,53 @@ void ObjectReferenceTask::onUpdate()
 				// (its last tile next to the footprint was taken), within one tile more
 				? (edge < reach || (!go->movementController.isMoving() && edge < reach + 5.0f))
 				: (go->position - destination).sqlen2xz() < prox * prox));
-		const bool arrived = loadedArrived || measured;
+		// a vessel at the shore point is there (it can't come nearer to a boarder on land)
+		const bool atShore = blueprint->pathfindToShore && shoreSet && !go->movementController.isMoving()
+			&& (go->position - shoreGoal).sqlen2xz() < 25.0f;
+		const bool arrived = loadedArrived || measured || atShore;
+		// MOVEMENT_STARTED_SEQUENCE: on each walk started on a path found
+		{
+			const uint32_t walks = go->movementController.m_walksStarted;
+			if (!walksSeenSet) {
+				walksSeenSet = true;
+				walksSeen = walks;
+			}
+			else if (walks != walksSeen) {
+				walksSeen = walks;
+				if (!arrived && go->movementController.isMoving())
+					blueprint->movementStartedSequence.run(order->gameObject);
+			}
+		}
 		if (arrived) {
+			shortWalks = 0;
+			// A task loaded as satisfied whose triggers hadn't started, on a standing unit and aimed
+			// at a building: WKB.exe runs its PROXIMITY_SATISFIED_SEQUENCE on the first tick
+			// (0x50d1e0), before the triggers. A cart loaded in "Wait to Collect Resources from
+			// Village" thus ends the wait at once when the village holds enough, and drives to its
+			// point in the Collect task.
+			if (proximitySatisfied && loadedArrived && !triggersStarted && !go->movementController.isMoving()
+				&& target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+				TraceTask(this, "loaded satisfied: proximity sequence");
+				blueprint->proximitySatisfiedSequence.run(order->gameObject);
+				if (!isWorking())
+					return;
+			}
 			this->startTriggers();
 			if (go->movementController.isMoving())
 				go->movementController.stopMovement();
+			// facing a target that moves (WKB.exe turns to it every tick, 0x50d900), not only on
+			// arriving (below); a change under 3 degrees isn't sent
+			if (proximitySatisfied && go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && target->movement.isMoving()) {
+				const Vector3 dir = target->position - go->position;
+				if (dir.sqlen2xz() > 0.01f) {
+					const float want = std::atan2(dir.x, -dir.z);
+					float off = std::fmod(want - go->orientation.y, 6.2831855f);
+					if (off > 3.14159265f) off -= 6.2831855f;
+					if (off < -3.14159265f) off += 6.2831855f;
+					if (std::abs(off) > 0.05f)
+						go->setOrientation(Vector3(0, want, 0));
+				}
+			}
 			if (!proximitySatisfied) {
 				proximitySatisfied = true;
 				TraceTask(this, "proximity satisfied");
@@ -1262,7 +1568,7 @@ void ObjectReferenceTask::onUpdate()
 					go->setAnimation(animtoplay, blueprint->playAnimationOnce, blueprint->synchAnimationToFraction ? blueprint->bpid : -1,
 						-1.0f, AnimationSpeedToFit(go, animtoplay));
 
-				// Set orientation towards target, TODO: update when target moves (perhaps on Client?)
+				// Set orientation towards target (and while it moves, above)
 				if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
 					Vector3 dir = (target->position - go->position).normal2xz();
 					if (!(dir.x == 0.0f && dir.z == 0.0f))
@@ -1278,9 +1584,60 @@ void ObjectReferenceTask::onUpdate()
 				// only then the proximity can be dissatisfied
 
 				this->stopTriggers();
-				if (go->movementController.takeSearchFailed())
+				const bool searchFailed = go->movementController.takeSearchFailed();
+				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// An attack whose walk ended out of range, a building in the way (WKB.exe 0x50dc50 ->
+				// 0x50e760): that building becomes the unit's "Attack Target" associate and it gets the
+				// event "Attack Wall Target" (the game set's "... Respond to Attack Wall Event" then
+				// attack the wall)
+				if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && !go->movementController.isMoving()
+					&& (searchFailed || (destination - goal).len2xz() > 2.0f)
+					&& Server::instance->timeManager.currentTime >= wallCheckAt)
+				{
+					wallCheckAt = Server::instance->timeManager.currentTime + 2.0f;
+					AttackWallInTheWay(go, target.get());
+				}
+				// an attack's search may end within its proximity, in whole metres (WKB.exe 0x6d937c)
+				auto attackRadius = [&] {
+					if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && this->proximity >= 1.0f && !onPath && !following)
+						go->movementController.setGoalRadius(std::floor(this->proximity));
+				};
+				// out of range: the dissatisfied sequence first, before any walk (it ends a missile
+				// task of a unit that may not move, "Don't Skirmish"/Hold Ground: wkbai ran it after
+				// the walk was asked for, and a resumed task never, so the archers walked on).
+				// A resumed task's only when it would have run at the start (not the end-the-order-only
+				// sequence a trebuchet walks into range with)
+				const bool endsOnly = blueprint->proximityDissatisfiedEquation < 0
+					&& blueprint->proximityDissatisfiedSequence.actionList.size() == 1
+					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder();
+				if (proximitySatisfied || (resumedUnchecked && !endsOnly && this->proximity > 0.0f)) {
+					proximitySatisfied = false;
+					resumedUnchecked = false;
+					if (getenv("WKB_TRACE_TASKS_ID")) {
+						char buf[160];
+						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
+						TraceTask(this, buf);
+					}
+					RunProximityDissatisfied(blueprint, order->gameObject);
+					if (!this->isWorking() || !this->order->isWorking())
+						return;
+				}
+				resumedUnchecked = false;
+				// a building it can't reach (not an attack, which goes for the wall in its way): the
+				// task ends after five walks that ended short, and with it the order, so that the
+				// unit goes on to its next one
+				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt
+					&& blueprint->classType != Tags::ORDTSKTYPE_ATTACK && target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING
+					&& ++shortWalks > 5) {
+					if (getenv("WKB_TRACE_TASKS_ID"))
+						TraceTask(this, "given up: the building can't be reached");
+					shortWalks = 0;
+					order->terminate();
+					return;
+				}
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
+					attackRadius();
 					destination = go->movementController.startMovement(goal);
 					pathStepTried = onPath;
 					if (!go->movementController.isMoving())
@@ -1295,21 +1652,16 @@ void ObjectReferenceTask::onUpdate()
 				// units searched again every step whatever the target did.)
 				if (target->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 					if (go->movementController.isMoving()) {
-						const float off = std::max(2.0f, 0.1f * (goal - go->position).len2xz());
-						if ((goal - go->movementController.getRequestedDestination()).sqlen2xz() > off * off)
+						// WKB.exe 0x50cf9b: again when the target is off the path's end by more than
+						// 0.7 of what is left to walk (|D - T|^2 > 0.5 |U - D|^2); here not under 1 m,
+						// which near the target would be a search every step
+						const Vector3& asked = go->movementController.getRequestedDestination();
+						const float drift2 = (goal - asked).sqlen2xz();
+						if (drift2 > std::max(1.0f, 0.5f * (go->position - asked).sqlen2xz())) {
+							attackRadius();
 							destination = go->movementController.startMovement(goal);
+						}
 					}
-				if (proximitySatisfied) {
-					proximitySatisfied = false;
-					if (getenv("WKB_TRACE_TASKS_ID")) {
-						char buf[160];
-						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
-						TraceTask(this, buf);
-					}
-					//if (blueprint->defaultAnim != -1)
-					//	go->setAnimation(0);
-					RunProximityDissatisfied(blueprint, order->gameObject);
-				}
 			}
 		}
 		if (this->triggersStarted) {
@@ -1321,6 +1673,47 @@ void ObjectReferenceTask::onUpdate()
 		terminate();
 		if (blueprint->terminateEntireOrderIfNoTarget)
 			order->terminate();
+	}
+}
+
+// The building of another player (not an ally) on the straight line from the unit to its target,
+// nearest to the unit: registered as the unit's "Attack Target" (its others cleared), and the unit
+// gets "Attack Wall Target" (WKB.exe 0x50e760)
+void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target)
+{
+	Server* server = Server::instance;
+	if (!server || !server->terrain || !server->tiles || !target)
+		return;
+	const auto size = server->terrain->getNumPlayableTiles();
+	const Vector3 from = unit->position, to = target->position;
+	const float len = (to - from).len2xz();
+	ServerGameObject* own = unit->getPlayer();
+	const int allied = server->gameSet->diplomaticStatuses.names.getIndex("Allied");
+	for (float d = 0.0f; d <= len; d += 2.5f) {
+		const Vector3 p = from + (to - from) * (len > 0.0f ? d / len : 0.0f);
+		const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+		if (tx < 0 || tz < 0 || tx >= size.first || tz >= size.second)
+			break;
+		const auto& tile = server->tiles[tz * size.first + tx];
+		ServerGameObject* b = tile.building.getFrom<Server>();
+		if (!b || tile.buildingPassable || b == target || (b->flags & CommonGameObject::fTerminated))
+			continue;
+		ServerGameObject* theirs = b->getPlayer();
+		if (!theirs || theirs == own || (allied >= 0 && server->getDiplomaticStatus(own, theirs) <= allied))
+			continue;
+		static const GameSet* of = nullptr;
+		static int category = -1, event = -1;
+		if (of != server->gameSet.get()) {
+			of = server->gameSet.get();
+			category = of->associations.names.getIndex("Attack Target");
+			event = of->events.names.getIndex("Attack Wall Target");
+		}
+		if (category < 0 || event < 0)
+			return;
+		unit->clearAssociates(category);
+		unit->associateObject(category, b);
+		unit->sendEvent(event, b);
+		return;
 	}
 }
 
@@ -1364,9 +1757,12 @@ void SpawnTask::onStart()
 // to its rally point gather around it instead of on top of each other.
 Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 {
-	constexpr float SPACING = 3.0f;
+	// the room each keeps (PREFERRED_SPACING, WKB.exe 0x436120: free where |p - q| >= r + r_q);
+	// rings as far apart as two of the unit's
+	const float own = unit->blueprint->preferredSpacing;
+	const float SPACING = std::max(1.5f, 2.0f * own);
 	constexpr int RINGS = 10;
-	std::vector<Vector3> taken;
+	std::vector<std::pair<Vector3, float>> taken;
 	NNSearch nns;
 	nns.start(Server::instance, place, SPACING * RINGS + 40.0f);
 	while (CommonGameObject* o = nns.next()) {
@@ -1375,15 +1771,15 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 		if (other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
 			continue;
 		if (other->movementController.isMoving())
-			taken.push_back(other->movementController.getDestination());
+			taken.emplace_back(other->movementController.getDestination(), other->blueprint->preferredSpacing);
 		else
-			taken.push_back(other->position);
+			taken.emplace_back(other->position, other->blueprint->preferredSpacing);
 	}
 	auto isFree = [&](const Vector3& spot) {
 		if (MovementController::isTileBlocked(unit->blueprint, (int)(spot.x / 5.0f), (int)(spot.z / 5.0f)))
 			return false;
-		for (const Vector3& t : taken)
-			if ((t - spot).sqlen2xz() < SPACING * SPACING * 0.8f)
+		for (const auto& [t, r] : taken)
+			if ((t - spot).sqlen2xz() < (own + r) * (own + r))
 				return false;
 		return true;
 	};
