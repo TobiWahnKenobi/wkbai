@@ -459,6 +459,13 @@ namespace {
 		uint32_t seed = 0;
 		bool standing = false;
 	};
+
+	// a flame's height over its width
+	const float FLAME_ASPECT = 1.7f;
+	// how far a standing fire's flames are sunk into what burns, in their half-heights
+	const float STANDING_SINK = 0.4f;
+	// and how much taller they are (what's sunk still reaching out)
+	const float STANDING_TALL = 1.3f;
 }
 
 const char* QualityName(int quality)
@@ -579,7 +586,7 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 		if (shimmer)
 			for (const Cluster& c : clusters)
 				if (c.standing)
-					push(c.base + Vector3(0, c.size * 0.55f, 0), c.size * 1.1f, Saturate(c.alpha), 0, 0, c.heat, SHIMMER, 1.9f, 0.4f, 1.0f);
+					push(c.base + Vector3(0, c.size * 0.35f, 0), c.size * 1.1f, Saturate(c.alpha), 0, 0, c.heat, SHIMMER, 1.9f, 0.4f, 1.0f);
 		// the smoke of a standing fire: puffs rising from its flames' tops, drifting with the wind,
 		// growing and thinning (a puff every LIFE / count seconds, each its own path)
 		const Vector3 wind = g_environment.active ? g_environment.wind : Vector3(0.3f, 0.0f, 0.1f);
@@ -595,7 +602,7 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 				const float offset = Hash01(ps);
 				const float age = std::fmod(time / LIFE + offset, 1.0f) * LIFE;
 				const float u = age / LIFE;
-				Vector3 at = c.base + Vector3(0, c.size * 0.65f + rise * age, 0) + wind * (age * 0.8f);
+				Vector3 at = c.base + Vector3(0, c.size * 0.4f + rise * age, 0) + wind * (age * 0.8f);
 				at.x += (Hash01(ps ^ 0x1234567U) - 0.5f) * c.size * (0.3f + u);
 				at.z += (Hash01(ps ^ 0x7654321U) - 0.5f) * c.size * (0.3f + u);
 				const float width = c.size * (0.5f + 1.1f * u);
@@ -608,16 +615,25 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 		}
 	}
 	// the flames: a little narrower than the sprite and half again as tall, the base at the particle,
-	// bigger the more the building is damaged
+	// bigger the more the building is damaged. A standing fire's sunk into what burns: its points
+	// (a building's MI_) are on the roof, its ridges and peaks, where the original's sprite, centred
+	// on them, was half inside; the flame's root and hottest third in the building (hidden by it),
+	// its tongues coming out of the roof instead of sitting on it
 	for (const Flame& f : s_pending) {
 		const float damage = (f.heat - 1.0f) / 0.6f;
 		const float width = f.size * 0.5f * (0.9f + 0.3f * damage);
-		push(f.position, width, f.alpha, f.life, Hash01(f.seed), f.heat, FLAME, 1.7f, 0.45f, 0.0f);
+		Vector3 at = f.position;
+		float aspect = FLAME_ASPECT;
+		if (f.system->standingFire) {
+			aspect *= STANDING_TALL;
+			at.y -= width * 0.5f * aspect * STANDING_SINK;
+		}
+		push(at, width, f.alpha, f.life, Hash01(f.seed), f.heat, FLAME, aspect, 0.45f, 0.0f);
 	}
 	// the glow around each fire, flickering
 	if (level >= HIGH)
 		for (const Cluster& c : clusters)
-			push(c.base + Vector3(0, c.size * 0.3f, 0), c.size * 1.6f, Saturate(c.alpha * 0.7f), 0, 0, c.heat, GLOW, 1.0f, 0.0f,
+			push(c.base + Vector3(0, c.size * (c.standing ? 0.1f : 0.3f), 0), c.size * 1.6f, Saturate(c.alpha * 0.7f), 0, 0, c.heat, GLOW, 1.0f, 0.0f,
 				Flicker(time, c.seed) * (0.8f + 0.4f * (c.heat - 1.0f) / 0.6f));
 }
 
