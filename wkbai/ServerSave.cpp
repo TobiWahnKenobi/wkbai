@@ -622,7 +622,10 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 		printf("Save game %s is damaged (%s); loading what could be read\n", filename, error.c_str());
 	// the sections this build reads, with the newest version it knows
 	struct Known { const char* name; std::string* text; };
-	const Known known[] = { { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
+	// a wkbai map folder's level (MapFolder.h): which rule made which object, read by the map
+	// folder's compiler and editor, not by the game
+	std::string authoring;
+	const Known known[] = { { "authoring", &authoring }, { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
 		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity } };
 	for (const SaveSection& s : file.sections) {

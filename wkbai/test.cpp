@@ -29,6 +29,8 @@
 #include "Model.h"
 #include "TrnTextureDb.h"
 #include "terrain.h"
+#include "MapFolder.h"
+#include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <SDL3/SDL_keycode.h>
 #include "mesh.h"
@@ -11307,6 +11309,8 @@ void Test_FarmBuilders()
 			farming++;
 	printf("FARMB end: %d of 3 peasants farm\n", farming);
 	fflush(stdout);
+}
+
 IRenderer* CreateNULLRenderer();
 
 void Test_FireQuality()
@@ -11514,6 +11518,335 @@ void Test_FireQuality()
 	printf("FIRE all %d\n", all ? 1 : 0);
 }
 
+// Map folders (MapFolder.h; needs the game data). A headless run of a level: a fixed seed, every
+// peasant chopping the nearest tree, `steps` steps of 20 ms; the world's hash (WorldHash) and one
+// of the terrain (heights, tiles, water)
+static uint64_t MapPlayHash(const std::string& level, int steps, uint64_t& terrainHash, size_t& objects)
+{
+	Server server;
+	server.loadSaveGame(level.c_str());
+	g_settings["simSeed"] = 4242u;
+	server.startLevel();
+	const int chop = server.gameSet->commands.names.getIndex("Chop Tree");
+	std::vector<ServerGameObject*> peasants, trees;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant")
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				else if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && child->blueprint->name.find("Tree") != std::string::npos)
+					trees.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	find(server.getLevel(), find);
+	for (ServerGameObject* peasant : peasants) {
+		ServerGameObject* best = nullptr;
+		float bestDist = 1e12f;
+		for (ServerGameObject* tree : trees)
+			if (float d = (tree->position - peasant->position).sqlen2xz(); d < bestDist) { bestDist = d; best = tree; }
+		if (best && chop >= 0)
+			server.gameSet->commands[chop].execute(peasant, best, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	}
+	server.timeManager.unpause();
+	StepServer(server, steps);
+	const Terrain& t = *server.terrain;
+	uint64_t h = 1469598103934665603ull;
+	auto mix = [&](const void* data, size_t n) {
+		for (size_t i = 0; i < n; i++) { h ^= ((const uint8_t*)data)[i]; h *= 1099511628211ull; }
+	};
+	for (int i = 0; i < (t.width + 1) * (t.height + 1); i++) {
+		const float steps256 = t.heightSteps(i);
+		mix(&steps256, sizeof(steps256));
+	}
+	for (int i = 0; i < t.width * t.height; i++) {
+		const TerrainTile& tile = t.tiles[i];
+		mix(tile.texture->grp->name.data(), tile.texture->grp->name.size());
+		mix(&tile.texture->id, sizeof(int));
+		const uint8_t bits[4] = { (uint8_t)tile.rot, (uint8_t)tile.xflip, (uint8_t)tile.zflip, (uint8_t)tile.fullOfWater };
+		mix(bits, 4);
+		mix(&tile.waterLevel, sizeof(float));
+	}
+	for (const Vector3& l : t.lakes)
+		mix(&l, sizeof(l));
+	// the header: texture database, sky, scale, sun, fog, edge, the minimap
+	mix(t.texDbPath.data(), t.texDbPath.size() * sizeof(wchar_t));
+	mix(t.skyTextureDirectory.data(), t.skyTextureDirectory.size() * sizeof(wchar_t));
+	const float header[5] = { t.scale, t.sunVector.x, t.sunVector.y, t.sunVector.z, (float)t.edge };
+	mix(header, sizeof(header));
+	const uint32_t colours[2] = { t.sunColor, t.fogColor };
+	mix(colours, sizeof(colours));
+	mix(t.minimapRGBA.data(), t.minimapRGBA.size());
+	terrainHash = h;
+	return WorldHash(server, nullptr, &objects);
+}
+
+// Every original map imported into a map folder and played headless gives the same game hash as
+// the original: per map (its first level in Save_Games, "mapFolderTest": { "from": n, "count": n,
+// "steps": n } to run part of them) "MAPFOLDER <map> <level>: world <h> <h> terrain <h> <h> objects
+// <n> <n> same <0|1>", then "MAPFOLDER maps <n> same <n>"
+void Test_MapFolderImport()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("mapFolderTest", nlohmann::json::object());
+	const int from = cfg.value("from", 0), count = cfg.value("count", 1000), steps = cfg.value("steps", 750);
+	// each map's first level
+	std::map<std::string, std::string> levelOf;
+	std::unique_ptr<std::vector<std::string>> files(ListFiles("Save_Games"));
+	std::sort(files->begin(), files->end());
+	for (const std::string& f : *files) {
+		if (f.size() < 4 || StrCICompare(std::string_view(f).substr(f.size() - 4), ".lvl") != 0)
+			continue;
+		char* data = nullptr;
+		int size = 0;
+		LoadFile(("Save_Games\\" + f).c_str(), &data, &size, 1);
+		data[size] = 0;
+		std::string map;
+		if (const char* m = strstr(data, "MAP \"")) {
+			if (const char* end = strchr(m + 5, '"'))
+				map.assign(m + 5, end);
+		}
+		free(data);
+		std::string key = map;
+		for (char& c : key)
+			c = (char)tolower((unsigned char)c);
+		if (!key.empty() && !levelOf.count(key))
+			levelOf[key] = f;
+	}
+	std::unique_ptr<std::vector<std::string>> dirs(ListDirectories("Maps"));
+	std::sort(dirs->begin(), dirs->end());
+	int maps = 0, same = 0, index = -1;
+	const std::filesystem::path testRoot = g_userPath / "saved" / "Maps" / "__import_test";
+	for (const std::string& dir : *dirs) {
+		const std::string bcm = "Maps\\" + dir + "\\" + dir + ".bcm";
+		if (!FileExists(bcm.c_str()))
+			continue;
+		index++;
+		if (index < from || index >= from + count)
+			continue;
+		std::string key = bcm;
+		for (char& c : key)
+			c = (char)tolower((unsigned char)c);
+		maps++;
+		auto it = levelOf.find(key);
+		if (it == levelOf.end()) {
+			printf("MAPFOLDER %d %s: no level uses it\n", index, bcm.c_str());
+			fflush(stdout);
+			continue;
+		}
+		const std::string level = it->second;
+		uint64_t t1 = 0, t2 = 0;
+		size_t o1 = 0, o2 = 0;
+		// "only": "original" or "imported": that one game alone (a second game in one process
+		// doesn't play the same as the first: a fresh process for each, tools in the RE repo's notes)
+		const std::string only = cfg.value("only", std::string());
+		const uint64_t h1 = only == "imported" ? 0 : MapPlayHash("Save_Games\\" + level, steps, t1, o1);
+		const std::string stem = level.substr(0, level.size() - 4);
+		const std::filesystem::path folder = testRoot / PathFromUtf8(stem + ".wkbai");
+		std::error_code ec;
+		std::filesystem::remove_all(folder, ec);
+		const MapFolder::Result r = MapFolder::Import(level, folder);
+		uint64_t h2 = 0;
+		if (only == "original") {
+			printf("MAPFOLDERONE %d %s original world %016llx terrain %016llx objects %zu\n", index, dir.c_str(), (unsigned long long)h1, (unsigned long long)t1, o1);
+			fflush(stdout);
+			continue;
+		}
+		// "twice": the original a second time instead (is a second game in this process the same?)
+		if (cfg.value("twice", false))
+			h2 = MapPlayHash("Save_Games\\" + level, steps, t2, o2);
+		else if (r.ok)
+			h2 = MapPlayHash(MapFolder::GamePathOf(folder), steps, t2, o2);
+		if (only == "imported") {
+			printf("MAPFOLDERONE %d %s imported world %016llx terrain %016llx objects %zu%s%s\n", index, dir.c_str(), (unsigned long long)h2, (unsigned long long)t2, o2,
+				r.ok ? "" : " import failed: ", r.ok ? "" : r.error.c_str());
+			fflush(stdout);
+			continue;
+		}
+		const bool ok = r.ok && h1 == h2 && t1 == t2 && o1 == o2;
+		same += ok;
+		printf("MAPFOLDER %d %s %s: world %016llx %016llx terrain %016llx %016llx objects %zu %zu same %d%s%s\n", index, dir.c_str(), level.c_str(),
+			(unsigned long long)h1, (unsigned long long)h2, (unsigned long long)t1, (unsigned long long)t2, o1, o2, (int)ok,
+			r.ok ? "" : " import failed: ", r.ok ? "" : r.error.c_str());
+		fflush(stdout);
+	}
+	printf("MAPFOLDER maps %d same %d\n", maps, same);
+	fflush(stdout);
+}
+
+// A map folder made from nothing (needs the game data): a 16-bit PNG of heights with two basins,
+// one material (GRASS1, from 4 Peaks' texture database), a lake in each basin, a Manor and peasants
+// per player by the base rule; compiled, loaded as a skirmish level, played for a minute.
+// "MAPFOLDERNEW <check> <0|1>" and "MAPFOLDERNEW all <0|1>"
+void Test_MapFolderNew()
+{
+	LoadBCP("data.bcp");
+	const std::string name = g_settings.value("mapFolderNewName", std::string("PNG Test"));
+	const std::filesystem::path folder = g_userPath / "saved" / "Maps" / PathFromUtf8(name + ".wkbai");
+	std::error_code ec;
+	std::filesystem::remove_all(folder, ec);
+	std::filesystem::create_directories(folder, ec);
+	Terrain ref;
+	ref.readBCM("Maps\\128_4Peaks\\128_4Peaks.bcm");
+	const int playable = 160, edge = ref.edge, w = playable + 2 * edge, h = playable + 2 * edge;
+	// the heights: a plain at 20 steps, rolling, two round basins 7 steps deep, a ridge between
+	// the halves with a pass in the middle, rising towards the edge band
+	const float centreX[2] = { 200.0f, 600.0f }, centreZ[2] = { 560.0f, 240.0f };
+	std::vector<uint16_t> png((size_t)(w + 1) * (h + 1));
+	for (int r = 0; r <= h; r++)
+		for (int x = 0; x <= w; x++) {
+			const int zv = h - r;
+			const float px = (x - edge) * 5.0f, pz = (zv - edge) * 5.0f;
+			float steps = 20.0f + 1.5f * std::sin(px * 0.013f) * std::cos(pz * 0.011f);
+			for (int b = 0; b < 2; b++) {
+				const float d = std::hypot(px - centreX[b], pz - centreZ[b]);
+				if (d < 90.0f)
+					steps -= 7.0f * 0.5f * (1.0f + std::cos(d / 90.0f * 3.14159265f));
+			}
+			const float ridge = std::abs(px - 400.0f);
+			if (ridge < 40.0f && std::abs(pz - 400.0f) > 50.0f)
+				steps += 9.0f * 0.5f * (1.0f + std::cos(ridge / 40.0f * 3.14159265f));
+			const float out = std::max({ -px, px - playable * 5.0f, -pz, pz - playable * 5.0f, 0.0f });
+			steps += out * 0.12f;
+			png[(size_t)r * (w + 1) + x] = (uint16_t)std::clamp((int)std::lround(steps * 256.0f), 0, 65535);
+		}
+	bool ok = MapFolder::WritePng16(folder / "heights.png", w + 1, h + 1, png);
+	std::string db, sky;
+	for (wchar_t c : ref.texDbPath) db += (char)c;
+	for (wchar_t c : ref.skyTextureDirectory) sky += (char)c;
+	nlohmann::ordered_json mj;
+	mj["format"] = "wkbai map";
+	mj["version"] = 1;
+	mj["name"] = name;
+	mj["size"] = { { "tiles", { w, h } }, { "edge", edge } };
+	mj["heights"] = { { "scale", ref.scale } };
+	mj["textures"] = { { "database", db }, { "translation", "Maps\\Map_Textures\\128_4Peaks.lttt" } };
+	mj["sky"] = sky;
+	mj["sun"] = { { "colour", { (ref.sunColor >> 16) & 255, (ref.sunColor >> 8) & 255, ref.sunColor & 255 } },
+		{ "direction", { ref.sunVector.x, ref.sunVector.y, ref.sunVector.z } } };
+	mj["fog"] = { (ref.fogColor >> 16) & 255, (ref.fogColor >> 8) & 255, ref.fogColor & 255 };
+	mj["seed"] = 7;
+	mj["ground"] = { { "fill", "GRASS1" } };
+	mj["players"] = nlohmann::ordered_json::array({
+		{ { "name", "North" }, { "colour", 1 }, { "start", { 160.0f, 300.0f } }, { "base", "Manor" }, { "peasants", 4 } },
+		{ { "name", "South" }, { "colour", 2 }, { "start", { 640.0f, 500.0f } }, { "base", "Manor" }, { "peasants", 4 } } });
+	{
+		std::ofstream f(folder / "map.json", std::ios::binary);
+		f << mj.dump(1) << "\n";
+		ok = ok && (bool)f;
+	}
+	{
+		// a lake in each basin, 4 steps above its floor (whole-map coordinates)
+		nlohmann::ordered_json wj;
+		wj["format"] = "wkbai water";
+		wj["version"] = 1;
+		auto lakes = nlohmann::ordered_json::array();
+		for (int b = 0; b < 2; b++)
+			lakes.push_back({ centreX[b] + edge * 5.0f, (20.0f - 7.0f + 4.0f) * ref.scale, centreZ[b] + edge * 5.0f, 0 });
+		wj["lakes"] = lakes;
+		std::ofstream f(folder / "water.json", std::ios::binary);
+		f << wj.dump(1) << "\n";
+		ok = ok && (bool)f;
+	}
+	printf("MAPFOLDERNEW written %d (%d x %d tiles, texture database %s)\n", (int)ok, w, h, db.c_str());
+	const MapFolder::Result r = MapFolder::Compile(folder, true);
+	for (const std::string& warning : r.warnings)
+		printf("MAPFOLDERNEW warning: %s\n", warning.c_str());
+	printf("MAPFOLDERNEW compiled %d %s\n", (int)r.ok, r.ok ? r.reportPath.c_str() : r.error.c_str());
+	const bool fresh = MapFolder::IsFresh(folder);
+	printf("MAPFOLDERNEW fresh after compiling %d\n", (int)fresh);
+	if (!r.ok) {
+		printf("MAPFOLDERNEW all 0\n");
+		fflush(stdout);
+		return;
+	}
+	// loaded as the skirmish list names it, and played a minute
+	Server server;
+	server.loadSaveGame(("Save_Games\\" + name + ".wkbai").c_str());
+	g_settings["simSeed"] = 7u;
+	server.startLevel();
+	int manors = 0, peasants = 0, players = 0;
+	std::vector<std::string> owners;
+	auto walk = [&](CommonGameObject* obj, ServerGameObject* player, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* c = child->dyncast<ServerGameObject>();
+				ServerGameObject* p = player;
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER) {
+					p = c;
+					if (c->blueprint->name == "Human Player")
+						players++;
+				}
+				if (c->blueprint->name == "Manor") {
+					manors++;
+					owners.push_back(p ? std::to_string(p->id) : "-");
+				}
+				if (c->blueprint->name == "Peasant")
+					peasants++;
+				self(child, p, self);
+			}
+	};
+	walk(server.getLevel(), nullptr, walk);
+	int flooded = 0;
+	for (int i = 0; i < server.terrain->width * server.terrain->height; i++)
+		flooded += server.terrain->tiles[i].fullOfWater;
+	const bool basesOk = players == 2 && manors == 2 && peasants == 8 && owners.size() == 2 && owners[0] != owners[1];
+	const bool waterOk = flooded > 100 && server.terrain->lakes.size() == 2;
+	server.timeManager.unpause();
+	StepServer(server, 3000);
+	size_t objects = 0;
+	WorldHash(server, nullptr, &objects);
+	int manorsAfter = 0;
+	auto count = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Manor" && !child->dyncast<ServerGameObject>()->deleted)
+					manorsAfter++;
+				self(child, self);
+			}
+	};
+	count(server.getLevel(), count);
+	printf("MAPFOLDERNEW bases %d (%d players, %d Manors of %s, %d peasants)\n", (int)basesOk, players, manors,
+		owners.empty() ? "-" : (owners[0] + (owners.size() > 1 ? " and " + owners[1] : "")).c_str(), peasants);
+	printf("MAPFOLDERNEW water %d (%zu lakes, %d tiles under water)\n", (int)waterOk, server.terrain->lakes.size(), flooded);
+	printf("MAPFOLDERNEW played %d (60 s, t=%.1f, %zu objects, %d Manors standing)\n", (int)(manorsAfter == 2), server.timeManager.currentTime, objects, manorsAfter);
+	// a second load: the cache is fresh, nothing compiled again
+	const bool stillFresh = MapFolder::IsFresh(folder) && !MapFolder::Compile(folder).compiled;
+	printf("MAPFOLDERNEW cache reused %d\n", (int)stillFresh);
+	// map.json's "environment" block (docs/engine/map-environment.md): day and night from 5:00,
+	// the seasons from winter; the rest of the block (climate, latitude, wind, ...) kept, not applied.
+	// A new game set up as the skirmish lobby does, with its defaults: the clock at 5:00 in winter
+	mj["environment"] = { { "climate", "nordic" }, { "latitude", 62 },
+		{ "dayNight", { { "on", true }, { "dayLengthMin", 24 }, { "start", 5 }, { "moonPhase", "natural" } } },
+		{ "seasons", { { "on", true }, { "seasonLengthMin", 30 }, { "start", "winter" }, { "severity", { { "winter", "harsh" } } } } },
+		{ "weather", { { "stability", "normal" }, { "allowed", { "clear", "cloudy", "snow", "fog" } } } },
+		{ "wind", { { "gustiness", 0.4 } } }, { "fixed", { "dayNight.on" } } };
+	{
+		std::ofstream f(folder / "map.json", std::ios::binary);
+		f << mj.dump(1) << "\n";
+	}
+	bool envOk = false;
+	{
+		Server envServer;
+		envServer.loadSaveGame(("Save_Games\\" + name + ".wkbai").c_str());
+		QuickSkirmishMenu lobby;
+		lobby.changeSettingsForLevel(name + ".wkbai");
+		lobby.applySettings(envServer);
+		envServer.startLevel();
+		envServer.timeManager.unpause();
+		StepServer(envServer, 5);
+		const EnvironmentSettings& es = envServer.environment.settings;
+		const EnvironmentState& st = envServer.environment.state;
+		envOk = es.dayNight && es.seasons && es.startHour == 5 && es.startSeason == 3 && es.dayLengthMin == 24 && es.severity[3] == 2
+			&& es.weatherStability == 1 && std::abs(st.dayFraction - 5.0f / 24.0f) < 0.01f && st.season == 3;
+		printf("MAPFOLDERNEW environment %d (day and night %d, start hour %d, day %d min; seasons %d, start %d, winter %d, stability %d; "
+			"at t=%.1f day fraction %.3f, season %d)\n", (int)envOk, (int)es.dayNight, es.startHour, es.dayLengthMin, (int)es.seasons, es.startSeason,
+			es.severity[3], es.weatherStability, envServer.timeManager.currentTime, st.dayFraction, st.season);
+	}
+	printf("MAPFOLDERNEW all %d\n", (int)(ok && r.ok && fresh && basesOk && waterOk && manorsAfter == 2 && stillFresh && envOk));
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -11611,6 +11944,8 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
 {Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 {Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
+{Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
+{Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 };
 
 void LaunchTest()

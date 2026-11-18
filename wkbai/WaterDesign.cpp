@@ -121,6 +121,7 @@ bool WaterDesign::fromText(const std::string& text, std::string& error)
 		for (const auto& w : j.value("waterways", nlohmann::json::array())) {
 			Waterway ww;
 			ww.width = std::clamp(w.value("width", ww.width), 2.5f, 200.0f);
+			ww.speed = std::clamp(w.value("speed", 0.0f), 0.0f, 20.0f);
 			for (const auto& p : w.at("points"))
 				ww.points.emplace_back(p.at(0).get<float>(), 0.0f, p.at(1).get<float>());
 			if (ww.points.size() >= 2)
@@ -168,7 +169,10 @@ std::string WaterDesign::toText() const
 		auto pts = nlohmann::ordered_json::array();
 		for (const Vector3& p : w.points)
 			pts.push_back({ p.x, p.z });
-		ws.push_back({ { "points", pts }, { "width", w.width } });
+		nlohmann::ordered_json way = { { "points", pts }, { "width", w.width } };
+		if (w.speed > 0.0f)
+			way["speed"] = w.speed;
+		ws.push_back(way);
 	}
 	j["waterways"] = ws;
 	auto fs = nlohmann::ordered_json::array();

@@ -67,6 +67,9 @@ struct Terrain
 	// null: none, everything found automatically)
 	std::string mapFile;
 	std::shared_ptr<WaterDesign> waterDesign;
+	// the texture translation (.lttt) readBCM applies: empty, the one named after the BCM
+	// (Maps\Map_Textures\<name>.lttt); "-" none. A wkbai map folder's (MapFolder.h) names its own.
+	std::string ltttPath;
 
 	TerrainTextureDatabase texDb;
 	// wkbai's Extend map (ExtendMap.h): this terrain is a client-only, bigger copy of a map for the

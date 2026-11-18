@@ -543,6 +543,16 @@ bool IsLogicFileImpl(const std::string& path)
 	for (char& c : ext) c = (char)tolower((unsigned char)c);
 	if (ext == "cpp" || ext == "gsf" || ext == "h" || ext == "lvl" || ext == "sav" || ext == "bcm")
 		return true;
+	// a wkbai map folder's sources (Maps\<name>.wkbai\: map.json, heights, hand layers, water.json
+	// with its flow, level.txt; MapFolder.h), not its cache
+	{
+		std::string lower = path;
+		for (char& c : lower) c = (char)tolower((unsigned char)c);
+		for (char& c : lower) if (c == '/') c = '\\';
+		const size_t folder = lower.find(".wkbai\\");
+		if (folder != std::string::npos && lower.find("\\build\\", folder) == std::string::npos)
+			return true;
+	}
 	if (ext == "txt") {
 		std::string lower = path;
 		for (char& c : lower) c = (char)tolower((unsigned char)c);

@@ -4291,6 +4291,10 @@ void ClientInterface::iter()
 		editorOn = true;
 		editorTestStep(peapos);
 	}
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).contains("editorFolderTest")) {
+		editorOn = true;
+		editorFolderTestStep(peapos);
+	}
 	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorCheckTest", false)) {
 		// a test run: the map editor's check printed once
 		static int frame = 0;

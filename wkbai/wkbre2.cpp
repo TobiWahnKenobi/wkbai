@@ -29,6 +29,7 @@
 #include "gfx/RenderSettings.h"
 #include "mesh.h"
 #include "util/StriCompare.h"
+#include "MapFolder.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -262,7 +263,7 @@ void LaunchQSM() {
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 //int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR cmdArgs, int showMode)
 {
 	// Unbuffered so redirected logs keep everything up to a crash
@@ -385,6 +386,12 @@ int main()
 	}
 
 	try {
+		// wkbai's map folders (MapFolder.h), headless: "--author <folder>" compiles one,
+		// "--author import <level> [<folder>]" makes one from an original map
+		if (argc >= 2 && std::string(argv[1]) == "--author") {
+			std::vector<std::string> args(argv + 2, argv + argc);
+			return MapFolder::RunCommandLine(args);
+		}
 		if (g_settings.contains("exportGltf"))
 			ExportGltfModels(g_settings.at("exportGltf"));
 		else if (g_settings.contains("loadImagesTest")) {

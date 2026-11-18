@@ -842,6 +842,8 @@ local function levelList(filter)
 	local levels, names = {}, {}
 	local provinces, others = {}, {}
 	local all = savesOfType(".lvl")
+	-- wkbai's map folders (Maps\\<name>.wkbai): with the levels named otherwise, under their name
+	for _, m in ipairs(savesOfType(".wkbai")) do all[#all + 1] = m end
 	local have = {}
 	for _, l in ipairs(all) do have[string.lower(l)] = true end
 	local function wanted(players) return not filter or filter == 0 or tonumber(players) == filter end
@@ -849,7 +851,9 @@ local function levelList(filter)
 		local base = stripExtension(l)
 		local players, name = string.match(base, "^(%d+) Player (.+)$")
 		local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
-		if players then
+		if string.lower(string.sub(l, -6)) == ".wkbai" then
+			if not filter or filter == 0 then others[#others + 1] = l end
+		elseif players then
 			if wanted(players) then
 				levels[#levels + 1] = l
 				names[#names + 1] = name .. " (" .. players .. ")"
