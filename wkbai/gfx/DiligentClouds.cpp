@@ -61,6 +61,9 @@ cbuffer CloudBuffer
 	// keep CloudSun
 	float4 CloudLightDir;
 	float4 CloudLightColour;
+	// the cumulonimbus' life (StormStage): x 0 none to 1 grown, y 1 growing, 0 decaying, z and w
+	// the storm layer's base and thickness
+	float4 CloudStorm;
 };
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
@@ -141,13 +144,35 @@ float StormCell(float2 xz, float lod)
 // x: the towers (h: the height in the layer, 0-1; a little wider at the middle, narrower up,
 // their sides bulging by a noise that changes with the height: billows, not a cylinder), y: the
 // anvils' reach (wider than the towers, carried downwind with height)
-float2 StormCells(float2 xz, float h, float lod)
+// widen: the cell threshold lowered (wider towers: a growing tower's head, a dying one's spread)
+float2 StormCells(float2 xz, float h, float lod, float widen)
 {
 	float n = StormCell(xz, lod);
 	float bulge = cloudNoise.SampleLevel(cloudNoiseSampler, xz / 3000 + float2(h * 0.09, h * 0.05), max(lod - 1, 0)).g - 0.5;
-	float tower = saturate((n - (0.65 + 0.015 * h - 0.02 * sin(saturate(h) * 3.14159) + bulge * 0.06)) / 0.12);
+	float tower = saturate((n - (0.65 + 0.015 * h - 0.02 * sin(saturate(h) * 3.14159) + bulge * 0.06 - widen)) / 0.12);
 	float a = StormCell(xz - float2(0.948683, 0.316228) * (saturate(h - 0.7) * 2500), lod);
 	return float2(tower, saturate((a - 0.625) / 0.05)); // only the strong cells' anvils
+}
+
+// The cumulonimbus' stage now (CloudStorm; the play test of 2026-11-17: they came and went as a
+// spiky mess, the towers fading in and out at their full height). Growing: a low heap that
+// shoots up, its head swelling wider than the stem (a rising thermal's cap), the anvil spreading
+// only once it has reached the top. Decaying: the anvil thinning out first, the tower sinking
+// and spreading flat, then gone. x: the height the towers reach (a share of the storm layer), y:
+// how much of them stands, z: the anvils' share, w: the spread (decaying), 1 growing in .y's sign
+float4 StormStage()
+{
+	float life = CloudStorm.x;
+	if (CloudStorm.y > 0.5)
+		return float4(lerp(0.12, 1.0, smoothstep(0.0, 0.75, life)), smoothstep(0.0, 0.08, life), smoothstep(0.7, 1.0, life), 0);
+	return float4(lerp(0.22, 1.0, smoothstep(0.1, 0.85, life)), smoothstep(0.0, 0.3, life), smoothstep(0.4, 0.9, life), 1 - life);
+}
+
+// where the towers stand: growing, where the storm's weather has come (behind its front);
+// decaying, wherever they are (the front took the storm's weather away, they melt after it)
+float StormRegion(float storm)
+{
+	return CloudStorm.y > 0.5 && CloudStorm.y < 1.5 ? saturate(storm * 2.5) : 1; // (y 2: steady, or the test hook's: anywhere)
 }
 
 // The light the clouds leave at a point: the sun's ray through it crosses the cloud layer's
@@ -164,9 +189,11 @@ float CloudShadow(float3 p)
 	// (from a cover of 0.55 to 0.8 back to the plain cover: an overcast shades evenly)
 	float cc = CloudCover(xz, 1.5);
 	float c = lerp(smoothstep(0.35, 0.75, cc), cc, saturate((cShape.x - 0.55) / 0.25));
-	if (cWeather.y > 0) { // the storm's towers and anvils over its low deck
-		float2 cb = StormCells(xz, 0.9, 1.5);
-		c = lerp(c, max(max(cb.x, cb.y * 0.75), saturate(cc * 1.4)), cWeather.y); // the deck's thin parts shade too
+	c = lerp(c, saturate(cc * 1.4), cWeather.y); // the storm's low deck: its thin parts shade too
+	if (CloudStorm.x > 0) { // the towers and anvils as they stand now (StormStage)
+		float4 st = StormStage();
+		float2 cb = StormCells(xz, 0.9, 1.5, st.w * 0.05);
+		c = max(c, max(cb.x, cb.y * 0.75 * st.z) * st.y * StormRegion(cWeather.y));
 	}
 	return 1 - cShadow * c;
 }
@@ -605,7 +632,7 @@ void CreateCloudResources(DiligentGfx* gfx)
 
 	BufferDesc cb;
 	cb.Name = "Clouds";
-	cb.Size = 336;
+	cb.Size = 352;
 	cb.BindFlags = BIND_UNIFORM_BUFFER;
 	cb.Usage = USAGE_DEFAULT; // written with UpdateBuffer, kept between frames (the sky draws first)
 	const std::vector<float> zeros(cb.Size / 4, 0.0f); // off until the scene renderer writes it
@@ -718,6 +745,8 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.45f, 0.70f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
 
+static bool stormTestAnywhere = false; // (WKBAI_STORM_LIFE's growing 2)
+
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
 {
 	auto& env = gfx->shadows;
@@ -770,7 +799,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		float* from = &env.cloudFrom.cover;
 		float* at = &env.cloudPreset.cover;
 		const float* tgt = &target.cover;
+		bool firstWeather = false;
 		if (env.cloudKindNow == -2) { // the first frame: the weather at once
+			firstWeather = true;
 			memcpy(to, tgt, sizeof(CloudPreset));
 			memcpy(from, tgt, sizeof(CloudPreset));
 			env.cloudKindNow = kind;
@@ -814,6 +845,46 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 			at[i] = from[i] + (to[i] - from[i]) * tCam;
 		g_cloudFrontArrival = tCam;
 		g_cloudFrontArrivalTicks = now;
+		// The cumulonimbus' life (the play test of 2026-11-17: a storm's coming and going was a
+		// spiky mess, its towers fading in and out at their full height with the front's blend):
+		// it follows the storm at the camera over real time, growing in about 12 seconds (a low
+		// heap shooting up, its head swelling, the anvil spreading last) and decaying in about 15
+		// (sinking and spreading flat, the anvil thinning out); at once on the first frame (the
+		// play test's next round: 70 and 120 seconds held up quick weather changes)
+		// Test hook: WKBAI_STORM_LIFE="life,growing" holds it (0-1; 1 growing, 0 decaying, 2 growing
+		// anywhere, not only where the storm's weather is: the towers seen over a cumulus sky).
+		{
+			const float target = std::clamp(env.cloudPreset.storm, 0.0f, 1.0f);
+			// (steady, grown or at a rain's share: the towers stand everywhere, not only where
+			// the storm's weather is: the next weather took them away in a blink upwind, where its
+			// front starts, before they began to melt at the camera, the play test's next round)
+			env.stormSteady = true;
+			if (firstWeather)
+				env.stormLife = target;
+			else if (target > env.stormLife + 1e-4f) {
+				env.stormGrowing = true;
+				env.stormSteady = false;
+				env.stormLife = std::min(target, env.stormLife + dt / 12.0f);
+			}
+			else if (target < env.stormLife - 1e-4f) {
+				env.stormGrowing = false;
+				env.stormSteady = false;
+				env.stormLife = std::max(target, env.stormLife - dt / 15.0f);
+			}
+			if (const char* hold = getenv("WKBAI_STORM_LIFE")) {
+				float life = 1, growing = 1;
+				if (sscanf(hold, "%f,%f", &life, &growing) >= 1) {
+					env.stormLife = std::clamp(life, 0.0f, 1.0f);
+					env.stormGrowing = growing >= 0.5f;
+					stormTestAnywhere = growing >= 1.5f;
+				}
+			}
+			const DiligentGfx::ShadowEnvironment::CloudPresetState* layer = env.cloudTo.storm > 0.01f ? &env.cloudTo : env.cloudFrom.storm > 0.01f ? &env.cloudFrom : nullptr;
+			if (layer) {
+				env.stormBase = layer->base;
+				env.stormThickness = layer->thickness;
+			}
+		}
 		env.frontHalfWidth = env.frontActive ? FRONT_HALF_WIDTH : 0.0f;
 		// lightning inside the storm's clouds (with the seasons' weather, its strikes): flashes
 		// every 4 to 14 seconds, flickering out over a quarter of a second
@@ -923,7 +994,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 			lightCol[c] = ((g_cloudSunColor >> (16 - 8 * c)) & 255) / 255.0f;
 		g_cloudSunValid = false; // (set again by the next frame's environment)
 	}
-	const float data[84] = {
+	const float data[88] = {
 		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
@@ -945,8 +1016,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), 0.0f, 0.0f, 0.0f,
 		lightDir.x, lightDir.y, lightDir.z, 1.0f,
 		lightCol[0], lightCol[1], lightCol[2], 0.0f,
+		env.stormLife, env.stormGrowing ? (stormTestAnywhere || env.stormSteady ? 2.0f : 1.0f) : 0.0f, env.stormBase, env.stormThickness,
 	};
-	static_assert(sizeof(data) <= 336, "the cloud buffer's size (CreateCloudResources)");
+	static_assert(sizeof(data) <= 352, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 	env.skyOccOn = skyOn;
 }

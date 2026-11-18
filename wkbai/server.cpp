@@ -5,6 +5,8 @@
 #include "BuildIdentity.h"
 #include <random>
 #include "server.h"
+#include "MapFolder.h"
+#include "util/util.h"
 #include "util/LoadingProgress.h"
 #include <set>
 #include "file.h"
@@ -83,7 +85,15 @@ void Server::loadSaveGame(const char * filename)
 	objectiveMarkers.clear();
 	// the save's parts: a wkbai save file's sections, or an original save game or level (and an
 	// older wkbai save's side files)
-	const SaveParts parts = ReadSaveParts(filename);
+	// a wkbai map folder (MapFolder.h, "Save_Games\<name>.wkbai" as the skirmish list names it): the
+	// level of its cache, compiled first when stale
+	std::string levelFile = filename;
+	if (MapFolder::IsMapPath(levelFile)) {
+		levelFile = MapFolder::LevelFileOf(levelFile);
+		if (levelFile.empty())
+			ferr("The map folder \"%s\" could not be found or compiled (its build\\report.json says why).", filename);
+	}
+	const SaveParts parts = ReadSaveParts(levelFile.c_str());
 	if (!parts.settings.empty()) {
 		applyAiSettingsText(parts.settings, false);
 		// the game's settings, not the Lua AIs only (aiSettingsText writes aggressiveAI first;

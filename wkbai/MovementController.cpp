@@ -1275,6 +1275,29 @@ void MovementController::runPathSearches()
 			}
 		}
 	}
+	// The river currents' dangerous water (ServerEnvironment::currentsPathCost): a land unit's
+	// (or formation's) path goes round it where it can, as round a tower's range, when its way
+	// comes within 8 tiles of it (else it keeps its group field: no cost to the others). Each
+	// map the cost is added to once (by what the unit had; std::map: its vectors stay put).
+	std::map<const std::vector<int32_t>*, std::vector<int32_t>> withWater;
+	if (const ServerEnvironment::PathCost* water = server->environment.currentsPathCost(); water && water->w == w && water->h == h)
+		for (PathRequest* rp : todo) {
+			ServerGameObject* obj = rp->object.get();
+			if (!obj || obj->blueprint->canWalkOnWater() || server->environment.waterHardiness(obj->blueprint) == ServerEnvironment::WATER_UNHARMED
+				|| !water->around(rp->from, rp->destination))
+				continue;
+			if (!rp->threat) {
+				rp->threat = &water->cost;
+				continue;
+			}
+			auto [it, fresh] = withWater.try_emplace(rp->threat);
+			if (fresh) {
+				it->second = *rp->threat;
+				for (size_t i = 0; i < it->second.size() && i < water->cost.size(); i++)
+					it->second[i] += water->cost[i];
+			}
+			rp->threat = &it->second;
+		}
 	forEach(todo.size(), [&](size_t i) {
 		PathRequest& r = *todo[i];
 		const ClassGrid* c = &g.classes[r.cls];

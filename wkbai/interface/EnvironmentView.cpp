@@ -291,7 +291,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 		static const bool mudNow = getenv("WKB_MUD_NOW") != nullptr;
 		if (mudNow)
 			v.mud = std::clamp(st.waterRise / 1.2f, 0.0f, 1.0f) * 0.85f;
-		approach(v.flow, std::clamp(1.0f + 0.55f * std::max(st.waterRise, 0.0f) + 0.3f * st.rain - 0.3f * std::max(-st.waterRise, 0.0f), 0.4f, 2.0f), 0.05f);
+		approach(v.flow, EnvWaterFlowFactor(st.waterRise, st.rain), 0.05f);
 		// the falls freeze in a harsh winter's hard cold (below -5 degrees), and thaw above -1
 		const bool freezing = es.seasons && st.season == 3 && st.severity >= 2 && st.temperatureC < -5.0f;
 		const bool thawing = st.temperatureC > -1.0f || st.season != 3;

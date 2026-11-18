@@ -842,6 +842,8 @@ local function levelList(filter)
 	local levels, names = {}, {}
 	local provinces, others = {}, {}
 	local all = savesOfType(".lvl")
+	-- wkbai's map folders (Maps\\<name>.wkbai): with the levels named otherwise, under their name
+	for _, m in ipairs(savesOfType(".wkbai")) do all[#all + 1] = m end
 	local have = {}
 	for _, l in ipairs(all) do have[string.lower(l)] = true end
 	local function wanted(players) return not filter or filter == 0 or tonumber(players) == filter end
@@ -849,7 +851,9 @@ local function levelList(filter)
 		local base = stripExtension(l)
 		local players, name = string.match(base, "^(%d+) Player (.+)$")
 		local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
-		if players then
+		if string.lower(string.sub(l, -6)) == ".wkbai" then
+			if not filter or filter == 0 then others[#others + 1] = l end
+		elseif players then
 			if wanted(players) then
 				levels[#levels + 1] = l
 				names[#names + 1] = name .. " (" .. players .. ")"
@@ -1258,6 +1262,9 @@ local SETTINGS = {
 	-- the peasants' lodging (PeasantLodging.h): they sleep in their houses, villages, manors and
 	-- castles at night (with day and night); the farmers spend the winter indoors (with the seasons)
 	peasantsSleep = 1, farmersWinter = 1,
+	-- river currents (ServerEnvironment.h, with the seasons): the water's flow carries and hurts
+	-- the units in it, they swim to the shore; a game setting, the same for every player
+	riverCurrents = 1,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1591,15 +1598,20 @@ local function weatherTab()
 			"Units in the open freeze in the cold (worse marching in snow) and",
 			"can die of thirst in the heat; they are safe at their own or their",
 			"allies' villages and manors. Wet and snowy ground slows them down.",
-			"Lightning strikes units and sets buildings on fire. Floods damage",
-			"buildings and drown units in deep water." })
+			"Lightning strikes units and sets buildings on fire, which rain puts out",
+			"and snow slows. Floods damage buildings and drown units in deep water." })
+	end
+	-- the river currents (with the seasons) and the cheat mode side by side on the row below the
+	-- peasants' (as their two switches), the cheat mode's F9 note under it
+	if s.seasons ~= 0 then
+		switch("riverCurrents", "River currents", X(1000), Y(962))
 	end
 	-- cheat mode: the F9 panel (a skirmish against the AI only, never in multiplayer)
 	if skirmish.multiplayer then
 		s.cheatMode = 0
 	else
-		switch("cheatMode", "Cheat mode", X(1000), Y(962))
-		note(X(1240), Y(980), { "F9 in the game: set the time of day, the season and the weather." })
+		switch("cheatMode", "Cheat mode", X(1440), Y(962))
+		note(X(1440), Y(1016), { "F9: time of day, season, weather." })
 	end
 end
 

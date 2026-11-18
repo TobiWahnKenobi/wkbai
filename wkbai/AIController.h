@@ -126,6 +126,7 @@ struct AIController {
 	std::map<uint32_t, float> weatherUngarrisoned;
 	int weatherState = -1;
 	float nextWeatherCheck = 0.0f, waveHeldSince = -1.0f;
+	int weatherCurrentRetreats = 0; // out of the river currents' harmful water (AIWeather.cpp)
 	int weatherSheltered = 0, weatherIceRetreats = 0, weatherFloodRetreats = 0, weatherFireRetreats = 0, weatherExtinguish = 0, weatherUngarrisons = 0;
 	int wavesHeldCold = 0, wavesHeldIce = 0, wavesHeldNight = 0, nightWaves = 0;
 	bool weatherActive();

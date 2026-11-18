@@ -30,11 +30,12 @@ struct Terrain;
 //                                        is also the wind of the seas found automatically and of
 //                                        the lakes. Where regions meet, their waves blend over a
 //                                        few tiles.
-//     "waterways": [ { "points": [[x, z], ...], "width": 25 }, ... ],
+//     "waterways": [ { "points": [[x, z], ...], "width": 25, "speed": 1.5 }, ... ],
 //                                        rivers' courses (world units, the playable area's), each
 //                                        flowing from its first point to its last: the water
 //                                        within width of it is a river flowing along it, its
-//                                        mouth at the last point
+//                                        mouth at the last point; "speed" (m/s, optional): its
+//                                        current set by hand (0 or left out: found from the land)
 //     "waterfalls": [ { "from": [x, z], "to": [x, z] }, ... ],
 //                                        falls placed by hand: the lip they pour over, along the
 //                                        tile edges (x or z, whichever the line runs along more),
@@ -52,6 +53,7 @@ struct WaterDesign {
 	struct Waterway {
 		std::vector<Vector3> points; // x, z (y unused)
 		float width = 25.0f;
+		float speed = 0.0f; // m/s set by the map's maker; 0: found from the land, as without it
 	};
 	struct PlacedFall {
 		Vector3 from, to; // x, z

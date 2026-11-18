@@ -227,6 +227,12 @@ struct DiligentGfx : IRenderer
 		int cloudKindNow = -2; // -2: no frame yet
 		bool frontActive = false;
 		float frontPos = 0, frontHalfWidth = 0;
+		// the cumulonimbus' life (UpdateCloudBuffer, CloudStorm): 0 none to 1 grown, growing or
+		// decaying, over real time after the weather at the camera; the storm layer's base and
+		// thickness (the towers keep it while they sink back into a cumulus layer)
+		float stormLife = 0;
+		bool stormGrowing = true, stormSteady = true; // (steady: neither growing nor decaying)
+		float stormBase = 170, stormThickness = 1300; // (the thunderstorm preset's until a storm comes)
 		uint64_t cloudPresetTicks = 0;
 		int cloudWeatherKind = -1;
 		// the game's sky without the seasons (-1: none, the lighting options' cloudWeather and

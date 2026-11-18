@@ -1579,7 +1579,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
-			static const char* const cloudDetails[] = { "Low (one density)", "Medium (varying density)", "High (+ billows, cumulonimbus)", "Very high (+ self-shadowed billows)", "Ultra (+ more steps, finer)" };
+			static const char* const cloudDetails[] = { "Low (one density)", "Medium (varying density)", "High (+ billows, cumulonimbus)", "Very high (+ self-shadowed billows, more steps)", "Ultra (+ multiple scattering by density)" };
 			ImGui::Combo("Cloud detail", &s.cloudDetail, cloudDetails, 5);
 		}
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
@@ -4291,6 +4291,10 @@ void ClientInterface::iter()
 		editorOn = true;
 		editorTestStep(peapos);
 	}
+	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).contains("editorFolderTest")) {
+		editorOn = true;
+		editorFolderTestStep(peapos);
+	}
 	else if (withServer && BenchmarkEnabled() && g_settings.value("benchmark", nlohmann::json::object()).value("editorCheckTest", false)) {
 		// a test run: the map editor's check printed once
 		static int frame = 0;
@@ -5485,6 +5489,7 @@ void ClientInterface::iter()
 		// the fires' look this frame (RenderSettings::fireQuality: Low and High with the enhanced
 		// renderers on Diligent)
 		FireFx::BeginFrame(g_renderSettings.fireQuality, dynamic_cast<DiligentGfx*>(gfx) && client->terrain && UseEnhancedRenderers(gfx));
+		FireFx::SetShares(&client->fireShares);
 		s_benchFireBuildings.clear();
 
 		numObjectsDrawn = 0;
@@ -5574,6 +5579,11 @@ void ClientInterface::iter()
 					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
 					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
 					// more its building is damaged
+					// (a fire the weather is putting out: dimmer and nearer, as its flames shrink)
+					if (const float share = FireFx::ShareOf(key.second); share < 1.0f) {
+						strength *= 0.3f + 0.7f * share;
+						reach *= 0.6f + 0.4f * share;
+					}
 					if (FireFx::Level() >= FireFx::HIGH) {
 						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
 						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
@@ -5890,9 +5900,12 @@ void ClientInterface::iter()
 			fireIntegrity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity") : -1;
 			fireCapacity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
 		}
+		// (a fire the weather is putting out carries its id at Original too: its sprites shrink)
 		auto fireObject = [&](ClientGameObject* obj) -> uint32_t {
-			if (FireFx::Level() == FireFx::ORIGINAL || !obj)
+			if (!obj || (FireFx::Level() == FireFx::ORIGINAL && !FireFx::HasShare(obj->id)))
 				return 0;
+			if (FireFx::Level() == FireFx::ORIGINAL)
+				return obj->id;
 			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fireIntegrity >= 0 && fireCapacity >= 0) {
 				const float capacity = obj->getItem(fireCapacity);
 				if (capacity > 0.0f)

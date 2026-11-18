@@ -162,7 +162,14 @@ private:
 	void editorTestStep(Vector3& cursor);
 	// "benchmark": { "editorMode": "players" }: the editor open in that mode (for screenshots)
 	void editorOpenMode(const std::string& mode);
+	// Save map: wkbai's map folder saved\Maps\<name>.wkbai (MapFolder.h: the strokes into its
+	// hand layers), or with the setting "editorSaveFormat": "original" the original's files
+	// (editorSaveOriginal: Maps\<name>\<name>.bcm and Save_Games\<name>.lvl)
 	bool editorSave(const std::string& name);
+	bool editorSaveOriginal(const std::string& name);
+	// test runs: "benchmark": { ..., "editorFolderTest": { "at": [x, z], "save": name } }: a raise
+	// stroke there, saved into the map folder, the hand layer read back and compiled again
+	void editorFolderTestStep(Vector3& cursor);
 	// for the original game: the map saved, then saved\Export\<name>.bcp (the map, and the level
 	// as replaceLevel, a built-in skirmish level's file, unless empty) and <name>.sav (Load Game)
 	bool editorExport(const std::string& name, const std::string& replaceLevel);

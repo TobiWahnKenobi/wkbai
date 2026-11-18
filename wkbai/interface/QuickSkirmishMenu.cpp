@@ -1,5 +1,6 @@
 #include "QuickSkirmishMenu.h"
 #include "../server.h"
+#include "../MapFolder.h"
 #include "../imgui/imgui.h"
 #include "../gameset/gameset.h"
 #include "../gameset/ScriptContext.h"
@@ -199,7 +200,8 @@ void QuickSkirmishMenu::changeSettingsForLevel(std::string_view levelName)
 {
 	// If it is not a LVL (such as SAV), then always use DevMode (to not restart the level).
 	const auto dotPosition = levelName.rfind('.');
-	if (dotPosition == levelName.npos || StrCICompare(levelName.substr(dotPosition + 1), "lvl") != 0) {
+	if (dotPosition == levelName.npos || (StrCICompare(levelName.substr(dotPosition + 1), "lvl") != 0
+		&& StrCICompare(levelName.substr(dotPosition + 1), "wkbai") != 0)) {
 		mode = DevMode;
 		return;
 	}
@@ -610,6 +612,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.environment.reset();
 		// (none in the campaign: its levels play as the original's, whatever the skirmish set)
 		server.environment.settings = campaignProfile ? EnvironmentSettings() : environment;
+		// a wkbai map folder's own defaults (map.json "environment", MapFolder.h), where the lobby
+		// left a setting at its default
+		if (!campaignProfile && MapFolder::IsMapPath(server.mapFile))
+			MapFolder::ApplyEnvironmentDefaults(server.mapFile, server.environment.settings);
 		// the natural moon starts at the phase it had on the first day of the starting season in
 		// the year 1000 (unless the settings gave one), saved with the game
 		if (server.environment.settings.moonStart < 0.0f)

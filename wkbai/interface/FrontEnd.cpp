@@ -5,6 +5,7 @@
 #include "../AgentUi.h"
 #include "../client.h"
 #include "FrontEnd.h"
+#include "../MapFolder.h"
 #include "../terrain.h"
 #include "LuaScripts.h"
 #include "MenuOptions.h"
@@ -358,8 +359,10 @@ struct FrontEnd::Impl {
 		auto [it, isNew] = images.try_emplace("level:" + level);
 		if (!isNew)
 			return it->second;
-		const std::string path = "Save_Games\\" + level;
-		if (!FileExists(path.c_str()))
+		std::string path = "Save_Games\\" + level;
+		if (MapFolder::IsMapPath(path))
+			path = MapFolder::LevelFileOf(path);
+		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
 		int size = 0;
@@ -372,6 +375,9 @@ struct FrontEnd::Impl {
 				map.assign(m + 5, end);
 		}
 		free(data);
+		// a map folder's: the BCM of its cache
+		if (MapFolder::IsMapPath(map))
+			map = MapFolder::TerrainFileOf(map);
 		if (map.size() < 4 || StrCICompare(std::string_view(map).substr(map.size() - 4), ".bcm") != 0 || !FileExists(map.c_str()))
 			return it->second;
 		LoadFile(map.c_str(), &data, &size);
@@ -414,8 +420,10 @@ struct FrontEnd::Impl {
 		auto [it, isNew] = levelStarts.try_emplace(level);
 		if (!isNew)
 			return it->second;
-		const std::string path = "Save_Games\\" + level;
-		if (!FileExists(path.c_str()))
+		std::string path = "Save_Games\\" + level;
+		if (MapFolder::IsMapPath(path))
+			path = MapFolder::LevelFileOf(path);
+		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
 		int size = 0;
@@ -1327,10 +1335,11 @@ void FrontEnd::setSinglePlayer(bool singlePlayer) { impl->singlePlayer = singleP
 void FrontEnd::setCurrentSave(const std::string& name) { impl->currentSave = name; }
 void FrontEnd::setCanSave(bool canSave) { impl->canSave = canSave; }
 
-std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& path)
+std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& levelPath)
 {
 	std::vector<SaveGameHuman> humans;
-	if (!FileExists(path.c_str()))
+	const std::string path = MapFolder::IsMapPath(levelPath) ? MapFolder::LevelFileOf(levelPath) : levelPath;
+	if (path.empty() || !FileExists(path.c_str()))
 		return humans;
 	char* data = nullptr;
 	int size = 0;
