@@ -553,7 +553,14 @@ struct ActionRegisterAssociates : Action {
 		f_aors.reset(ReadFinder(gsf, gs));
 		category = gs.associations.readIndex(gsf);
 		f_ated.reset(ReadFinder(gsf, gs));
-		reachableOnly = category >= 0 && gs.associations.names.getString(category) == "Units In Range I Should Attack";
+		// (also a formation army's "Victims", "Enemy Units Within Formation Attack Range metres of
+		// Me" every 2.5 s, and a formation's "Original Victim": with the scout among them the
+		// Formation Army's attack never ended, its formation stood in "Wait" and the siege army's
+		// march to its next target found no idle formation to send, PERFORMANCE3)
+		if (category >= 0) {
+			const std::string& name = gs.associations.names.getString(category);
+			reachableOnly = name == "Units In Range I Should Attack" || name == "Victims" || name == "Original Victim";
+		}
 	}
 };
 

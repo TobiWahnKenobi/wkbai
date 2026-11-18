@@ -3807,6 +3807,36 @@ void Server::simulate()
 	}
 	// formations left with too few members, disbanded now that the tree isn't being walked
 	FormationController::flushDisbands();
+	// wkbai's: once a game second, a "Victims" or "Original Victim" its holder's soldiers can't
+	// get within reach of is dropped (gameset/actions.cpp registers no new ones; these are from
+	// before, a game saved with them: three Formation Armies of the AI play test's PERFORMANCE3
+	// save stood in their attack on a hilltop scout, their formations in "Wait", for good)
+	if (getLevel() && (int)timeManager.currentTime != (int)timeManager.previousTime) {
+		static const GameSet* of = nullptr;
+		static int victims = -1, original = -1;
+		if (of != gameSet.get()) {
+			of = gameSet.get();
+			victims = of->associations.names.getIndex("Victims");
+			original = of->associations.names.getIndex("Original Victim");
+		}
+		extern bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target);
+		for (const auto& [id, co] : idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o->associates.empty())
+				continue;
+			for (int cat : { victims, original }) {
+				auto it = cat >= 0 ? o->associates.find(cat) : o->associates.end();
+				if (it == o->associates.end())
+					continue;
+				std::vector<ServerGameObject*> drop;
+				for (const SrvGORef& r : it->second)
+					if (ServerGameObject* t = r.get(); t && ArmyCannotReach(o, t))
+						drop.push_back(t);
+				for (ServerGameObject* t : drop)
+					o->dissociateObject(cat, t);
+			}
+		}
+	}
 	// the ministry AI: its departments due at this step, the players by id (not in the object
 	// tree's order, which a loaded game has in the save's order)
 	if (aiMinistries && getLevel()) {

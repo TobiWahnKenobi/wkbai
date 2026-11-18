@@ -11000,6 +11000,14 @@ void Test_RunSave()
 				+ std::to_string((int)o->movementController.isMoving()) + " | parent " + (p ? p->blueprint->getFullName() + " " + std::to_string(p->id) : std::string("-"))
 				+ ": " + (po ? server.gameSet->orders.getString(po->blueprint) : std::string("no order")) + (ptg ? " -> " + ptg->blueprint->name + " " + std::to_string(ptg->id) : std::string())
 				+ (p ? " at (" + std::to_string((int)p->position.x) + ", " + std::to_string((int)p->position.z) + ") moving " + std::to_string((int)p->movementController.isMoving()) : std::string());
+			// the parent's controllers up to the player: their orders, tasks and targets
+			for (ServerGameObject* g = p ? p->getParent() : nullptr; g && g->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER; g = g->getParent()) {
+				Order* go = g->orderConfig.getCurrentOrder();
+				Task* gt = go ? go->getCurrentTask() : nullptr;
+				ServerGameObject* gtg = gt ? gt->target.get() : nullptr;
+				k += " < " + g->blueprint->getFullName() + " " + std::to_string(g->id) + ": " + (go ? server.gameSet->orders.getString(go->blueprint) : std::string("no order"))
+					+ (gt ? " / " + server.gameSet->tasks.names.getString(gt->blueprint->bpid) : std::string()) + (gtg ? " -> " + gtg->blueprint->name + " " + std::to_string(gtg->id) : std::string());
+			}
 			kinds[k]++;
 		}
 		for (const auto& [k, n] : kinds)
