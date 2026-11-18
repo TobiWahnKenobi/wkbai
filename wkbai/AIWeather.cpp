@@ -10,6 +10,9 @@
 // - Floods: units standing in water over 0.7 m deep (0.3 m: the undead), counted half a metre
 //   ahead while it rises, walk to dry land; no foundation is laid on land the flood there is or
 //   coming would cover.
+// - River currents ("riverCurrents"): units in water that harms them (ServerEnvironment's
+//   currents: deep or fast water, floods) walk to the nearest dry land, as carried they swim
+//   that way; the path finding's own cost keeps the waves' routes out of such water.
 // - Fires: units within 9 m of a burning patch step 12 m away from it; up to 3 peasants put out
 //   each of the AI's burning buildings (the scripts' "Extinguish", then the repair it goes on to),
 //   and a burning building's garrison is let out once it is half burnt down.
@@ -35,7 +38,7 @@
 namespace {
 	constexpr float WALK_SPEED = 3.5f; // m/s: a unit on foot, for the times to walk somewhere
 	constexpr float NIGHT = 0.3f;      // daylight under which it counts as night (sight 0.6 or less)
-	enum HoldWhy : uint8_t { HOLD_COLD = 1, HOLD_HEAT, HOLD_ICE, HOLD_FLOOD, HOLD_FIRE, HOLD_EXTINGUISH };
+	enum HoldWhy : uint8_t { HOLD_COLD = 1, HOLD_HEAT, HOLD_ICE, HOLD_FLOOD, HOLD_FIRE, HOLD_EXTINGUISH, HOLD_CURRENT };
 
 	struct WItems {
 		const GameSet* of = nullptr;
@@ -385,6 +388,41 @@ void AIController::weatherUpdate()
 		}
 	}
 
+	// ---- River currents: out of the water that harms ----
+	if (seasons && env.settings.riverCurrents) {
+		auto harms = [&](ServerGameObject* u, const Vector3& p) {
+			const uint8_t hardy = env.waterHardiness(u->blueprint);
+			if (hardy == ServerEnvironment::WATER_UNHARMED)
+				return false;
+			const auto c = env.currentHere(p);
+			// (a war machine sinks where the water would carry it)
+			if (hardy == ServerEnvironment::WATER_MACHINE)
+				return c.depth != ServerEnvironment::DEPTH_SHALLOW && c.drag > 0.0f;
+			return c.harm > 0.0f;
+		};
+		for (ServerGameObject* u : units) {
+			if (!harms(u, u->position))
+				continue;
+			auto held = weatherHeld.find(u->id);
+			if (held != weatherHeld.end() && held->second.why == HOLD_CURRENT && u->movement.isMoving())
+				continue;
+			Vector3 to;
+			if (NearestTile(u->position, [&](const Vector3& p) { return !harms(u, p); }, to)) {
+				weatherHold(u, HOLD_CURRENT, now + 30.0f, &to);
+				weatherCurrentRetreats++;
+			}
+		}
+	}
+	for (auto it = weatherHeld.begin(); it != weatherHeld.end();) {
+		auto next = std::next(it);
+		if (it->second.why == HOLD_CURRENT) {
+			ServerGameObject* u = srv->findObject(it->first);
+			if (!u || now > it->second.until || (env.currentHere(u->position).harm <= 0.0f && !u->movement.isMoving()))
+				weatherRelease(it->first);
+		}
+		it = next;
+	}
+
 	// ---- Fires ----
 	{
 		const std::vector<Vector3> fires = seasons ? env.firePositions() : std::vector<Vector3>();
@@ -550,8 +588,8 @@ bool AIController::weatherAvoidsSite(const Vector3& pos)
 
 std::string AIController::weatherCensus() const
 {
-	char buf[256];
-	snprintf(buf, sizeof(buf), "sheltered %d, off the ice %d, out of floods %d, away from fires %d, extinguishing %d, garrisons out %d; waves held: cold/heat %d, ice %d, for the night %d; night waves %d; held now %zu",
-		weatherSheltered, weatherIceRetreats, weatherFloodRetreats, weatherFireRetreats, weatherExtinguish, weatherUngarrisons, wavesHeldCold, wavesHeldIce, wavesHeldNight, nightWaves, weatherHeld.size());
+	char buf[320];
+	snprintf(buf, sizeof(buf), "out of currents %d, sheltered %d, off the ice %d, out of floods %d, away from fires %d, extinguishing %d, garrisons out %d; waves held: cold/heat %d, ice %d, for the night %d; night waves %d; held now %zu",
+		weatherCurrentRetreats, weatherSheltered, weatherIceRetreats, weatherFloodRetreats, weatherFireRetreats, weatherExtinguish, weatherUngarrisons, wavesHeldCold, wavesHeldIce, wavesHeldNight, nightWaves, weatherHeld.size());
 	return buf;
 }

@@ -72,11 +72,18 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "peasantsSleep=%d\nfarmersWinter=%d\n", (int)peasantsSleep, (int)farmersWinter);
 		out += buf;
 	}
+	if (seasons && riverCurrents)
+		out += "riverCurrents=1\n";
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
 	}
 	return out;
+}
+
+float EnvWaterFlowFactor(float waterRise, float rain)
+{
+	return std::clamp(1.0f + 0.55f * std::max(waterRise, 0.0f) + 0.3f * rain - 0.3f * std::max(-waterRise, 0.0f), 0.4f, 2.0f);
 }
 
 float WeatherCoverFor(int weather, float spellSeed, float* centre)
@@ -132,6 +139,7 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
 	else if (name == "peasantsSleep") peasantsSleep = i != 0;
 	else if (name == "farmersWinter") farmersWinter = i != 0;
+	else if (name == "riverCurrents") riverCurrents = i != 0;
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;

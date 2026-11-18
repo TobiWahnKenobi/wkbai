@@ -12,6 +12,9 @@
 #include "gameset/GameObjBlueprint.h"
 #include "gameset/ScriptContext.h"
 #include "gameset/actions.h"
+#include "MovementController.h"
+#include "gfx/EnhancedTerrainData.h"
+#include "WaterDesign.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -316,6 +319,427 @@ void ServerEnvironment::updateFires(Server& server)
 			}
 		}
 	stats.fireCellsMost = std::max(stats.fireCellsMost, (int)fires.size());
+}
+
+// ---- river currents (see ServerEnvironment.h) ----
+
+void ServerEnvironment::prepareCurrents(Server& server)
+{
+	currentsPrepared = true;
+	flowGrid.clear();
+	currentTiles.clear();
+	Terrain* t = server.terrain;
+	if (!t)
+		return;
+	if (!floodPrepared)
+		prepareFloods(server);
+	const auto [w, h] = t->getNumPlayableTiles();
+	const int W = (int)t->width, edge = (int)t->edge;
+	// (the same flow the clients draw, from the terrain and the map's water design alone: no
+	// graphics setting goes into it)
+	const std::vector<uint8_t> flow = BuildWaterFlow(t);
+	flowGrid.assign((size_t)w * h, FlowCell());
+	auto toInt8 = [](float v) { return (int8_t)std::clamp((int)std::lround(v * 127.0f), -127, 127); };
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++) {
+			const TerrainTile* tile = t->getPlayableTile(x, z);
+			if (!tile || !tile->fullOfWater)
+				continue;
+			FlowCell& c = flowGrid[z * w + x];
+			const size_t fi = ((size_t)(z + edge) * W + (x + edge)) * 4;
+			c.water = true;
+			if (fi + 3 < flow.size()) {
+				c.dx = toInt8(flow[fi] / 255.0f * 2.0f - 1.0f);
+				c.dz = toInt8(flow[fi + 1] / 255.0f * 2.0f - 1.0f);
+				c.speed = flow[fi + 2];
+			}
+			const float mean = 0.25f * (t->getVertex(edge + x, edge + z) + t->getVertex(edge + x + 1, edge + z) + t->getVertex(edge + x, edge + z + 1)
+				+ t->getVertex(edge + x + 1, edge + z + 1));
+			const float depth = std::max(tile->waterLevel - mean, 0.0f);
+			c.depth = (uint8_t)std::clamp((int)std::lround(depth / 0.02f), 0, 255);
+			// (a waterway of the map's water design with its own speed: that)
+			if (const WaterDesign* design = t->waterDesign.get(); design && !design->waterways.empty()) {
+				float dx, dz, dist, toMouth;
+				const int ww = design->nearestWaterway(x * 5.0f + 2.5f, z * 5.0f + 2.5f, dx, dz, dist, toMouth);
+				if (ww >= 0 && design->waterways[ww].speed > 0.0f)
+					c.designed = (uint8_t)std::clamp((int)std::lround(design->waterways[ww].speed * 10.0f), 1, 255);
+			}
+			if (depth <= 1.5f)
+				currentTiles.push_back(z * w + x);
+		}
+	// the way to the shore: down the distance from the land, over the water
+	static const int nx[8] = { 1, -1, 0, 0, 1, 1, -1, -1 }, nz[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+	std::vector<int> dist((size_t)w * h, -1);
+	std::vector<int> queue;
+	for (int i = 0; i < w * h; i++)
+		if (!flowGrid[i].water) {
+			dist[i] = 0;
+			queue.push_back(i);
+		}
+	for (size_t qi = 0; qi < queue.size(); qi++) {
+		const int i = queue[qi], x = i % w, z = i / w;
+		for (int k = 0; k < 8; k++) {
+			const int ax = x + nx[k], az = z + nz[k];
+			if (ax < 0 || az < 0 || ax >= w || az >= h || dist[az * w + ax] >= 0)
+				continue;
+			dist[az * w + ax] = dist[i] + 1;
+			queue.push_back(az * w + ax);
+		}
+	}
+	for (int i = 0; i < w * h; i++) {
+		if (!flowGrid[i].water)
+			continue;
+		const int x = i % w, z = i / w;
+		float sx = 0, sz = 0;
+		for (int k = 0; k < 8; k++) {
+			const int ax = x + nx[k], az = z + nz[k];
+			if (ax < 0 || az < 0 || ax >= w || az >= h || dist[az * w + ax] < 0 || dist[az * w + ax] >= dist[i])
+				continue;
+			const float l = (k < 4) ? 1.0f : 0.7071f;
+			sx += nx[k] * l;
+			sz += nz[k] * l;
+		}
+		const float l = std::sqrt(sx * sx + sz * sz);
+		if (l > 1e-4f) {
+			flowGrid[i].sx = toInt8(sx / l);
+			flowGrid[i].sz = toInt8(sz / l);
+		}
+	}
+	// flooded land: the nearest water's flow, and the way away from it (12 tiles out at most)
+	std::vector<int> source((size_t)w * h, -1);
+	queue.clear();
+	for (int i = 0; i < w * h; i++)
+		if (flowGrid[i].water) {
+			source[i] = i;
+			queue.push_back(i);
+		}
+	for (size_t qi = 0; qi < queue.size(); qi++) {
+		const int i = queue[qi], x = i % w, z = i / w;
+		const int s = source[i];
+		if (std::abs(x - s % w) + std::abs(z - s / w) >= 12)
+			continue;
+		for (int k = 0; k < 4; k++) {
+			const int ax = x + nx[k], az = z + nz[k];
+			if (ax < 0 || az < 0 || ax >= w || az >= h || source[az * w + ax] >= 0)
+				continue;
+			source[az * w + ax] = s;
+			queue.push_back(az * w + ax);
+		}
+	}
+	for (const FloodTile& ft : floodTiles) {
+		const int s = source[ft.tile];
+		if (s < 0 || s == ft.tile)
+			continue;
+		FlowCell& c = flowGrid[ft.tile];
+		c.dx = flowGrid[s].dx;
+		c.dz = flowGrid[s].dz;
+		c.speed = flowGrid[s].speed;
+		c.designed = flowGrid[s].designed;
+		const float ax = (float)(ft.tile % w - s % w), az = (float)(ft.tile / w - s / w), l = std::sqrt(ax * ax + az * az);
+		if (l > 0.0f) {
+			c.sx = toInt8(ax / l);
+			c.sz = toInt8(az / l);
+		}
+	}
+	printf("River currents: %zu tiles of water to stand in, %zu flood tiles\n", currentTiles.size(), floodTiles.size());
+}
+
+const std::vector<int>& ServerEnvironment::wadeableTiles(Server& server)
+{
+	if (!currentsPrepared)
+		prepareCurrents(server);
+	return currentTiles;
+}
+
+ServerEnvironment::CurrentAt ServerEnvironment::currentAtTile(int ti) const
+{
+	CurrentAt c;
+	if (ti < 0 || ti >= (int)flowGrid.size())
+		return c;
+	const FlowCell& f = flowGrid[ti];
+	const float rise = state.waterRise;
+	const bool flood = rise >= FLOOD_RISE;
+	if (f.water) {
+		c.water = true;
+		c.metres = f.depth * 0.02f + std::max(rise, 0.0f);
+		c.depth = flood ? DEPTH_FLOOD : c.metres <= 0.75f ? DEPTH_SHALLOW : DEPTH_NORMAL;
+	}
+	else {
+		const int fi = ti < (int)floodIndex.size() ? floodIndex[ti] : -1;
+		if (fi < 0 || !flood)
+			return c;
+		c.metres = floodTiles[fi].water + rise - floodTiles[fi].ground;
+		if (c.metres <= 0.3f)
+			return c;
+		c.depth = DEPTH_FLOOD;
+	}
+	c.flow = (f.designed ? designedFlow(f.designed * 0.1f) : f.speed / 255.0f) * EnvWaterFlowFactor(rise, state.rain);
+	c.speed = c.flow < FLOW_SLOW ? 0 : c.flow < FLOW_NORMAL ? 1 : 2;
+	c.dir = Vector3(f.dx / 127.0f, 0, f.dz / 127.0f);
+	if (c.dir.len2xz() > 1e-4f)
+		c.dir = c.dir.normal2xz();
+	c.shore = Vector3(f.sx / 127.0f, 0, f.sz / 127.0f);
+	if (c.shore.len2xz() > 1e-4f)
+		c.shore = c.shore.normal2xz();
+	c.drag = CURRENT_DRAG[c.depth - 1][c.speed];
+	c.harm = CURRENT_HARM[c.depth - 1][c.speed];
+	return c;
+}
+
+float ServerEnvironment::designedFlow(float ms)
+{
+	if (ms <= 0.5f)
+		return std::max(ms, 0.0f) / 0.5f * 0.3f;
+	if (ms <= 1.2f)
+		return 0.3f + (ms - 0.5f) / 0.7f * 0.15f;
+	return 0.45f + (ms - 1.2f) * 0.2f;
+}
+
+uint8_t ServerEnvironment::waterHardiness(const GameObjBlueprint* bp) const
+{
+	auto it = hardiness.find(bp);
+	if (it != hardiness.end())
+		return it->second;
+	const std::string& n = bp->name;
+	uint8_t h = WATER_ANY;
+	if (ContainsCI(n, "abaddon") || ContainsCI(n, "michael"))
+		h = WATER_UNHARMED;
+	else if (ContainsCI(n, "behemoth") || ContainsCI(n, "elemental") || ContainsCI(n, "horde spewer"))
+		h = WATER_HUGE;
+	else if (kindOf(bp) == K_MACHINE && !bp->canWalkOnWater())
+		h = WATER_MACHINE;
+	hardiness[bp] = h;
+	return h;
+}
+
+ServerEnvironment::CurrentAt ServerEnvironment::currentHere(const Vector3& p) const
+{
+	if (!currentsPrepared || !settings.riverCurrents)
+		return CurrentAt();
+	const int x = (int)std::floor(p.x / 5.0f), z = (int)std::floor(p.z / 5.0f);
+	if (x < 0 || z < 0 || gridW <= 0 || x >= gridW || z >= gridH)
+		return CurrentAt();
+	return currentAtTile(z * gridW + x);
+}
+
+bool ServerEnvironment::PathCost::around(const Vector3& a, const Vector3& b, int margin) const
+{
+	if (cost.empty())
+		return false;
+	const int x0 = std::clamp((int)std::floor(std::min(a.x, b.x) / 5.0f) - margin, 0, w), x1 = std::clamp((int)std::floor(std::max(a.x, b.x) / 5.0f) + margin + 1, 0, w);
+	const int z0 = std::clamp((int)std::floor(std::min(a.z, b.z) / 5.0f) - margin, 0, h), z1 = std::clamp((int)std::floor(std::max(a.z, b.z) / 5.0f) + margin + 1, 0, h);
+	auto at = [&](int x, int z) { return sum[(size_t)z * (w + 1) + x]; };
+	return at(x1, z1) - at(x0, z1) - at(x1, z0) + at(x0, z0) > 0;
+}
+
+// the water the currents make dangerous now, for the path finding (only rebuilt when it changes)
+void ServerEnvironment::buildPathCost()
+{
+	std::vector<std::pair<int, int32_t>> tiles;
+	if (settings.riverCurrents && currentsPrepared) {
+		auto add = [&](int ti) {
+			const CurrentAt c = currentAtTile(ti);
+			if (c.depth != DEPTH_NONE)
+				if (const int v = CURRENT_PATH_COST[c.depth - 1][c.speed]; v > 0)
+					tiles.push_back({ ti, v });
+		};
+		for (int ti : currentTiles)
+			add(ti);
+		if (state.waterRise >= FLOOD_RISE)
+			for (const FloodTile& ft : floodTiles)
+				add(ft.tile);
+		std::sort(tiles.begin(), tiles.end());
+	}
+	if (tiles == pathCost.tiles && (!tiles.empty() || pathCost.cost.empty()))
+		return;
+	pathCost.tiles = std::move(tiles);
+	if (pathCost.tiles.empty()) {
+		pathCost.cost.clear();
+		pathCost.sum.clear();
+		return;
+	}
+	const int w = gridW, h = gridH;
+	pathCost.w = w;
+	pathCost.h = h;
+	pathCost.cost.assign((size_t)w * h, 0);
+	for (const auto& [ti, v] : pathCost.tiles)
+		pathCost.cost[ti] = v;
+	pathCost.sum.assign((size_t)(w + 1) * (h + 1), 0);
+	for (int z = 0; z < h; z++)
+		for (int x = 0; x < w; x++)
+			pathCost.sum[(size_t)(z + 1) * (w + 1) + x + 1] = (pathCost.cost[(size_t)z * w + x] > 0 ? 1 : 0) + pathCost.sum[(size_t)z * (w + 1) + x + 1]
+				+ pathCost.sum[(size_t)(z + 1) * (w + 1) + x] - pathCost.sum[(size_t)z * (w + 1) + x];
+}
+
+ServerEnvironment::CurrentAt ServerEnvironment::currentAt(Server& server, const Vector3& p)
+{
+	if (!currentsPrepared)
+		prepareCurrents(server);
+	const int x = (int)std::floor(p.x / 5.0f), z = (int)std::floor(p.z / 5.0f);
+	if (x < 0 || z < 0 || gridW <= 0 || x >= gridW || z >= gridH)
+		return CurrentAt();
+	return currentAtTile(z * gridW + x);
+}
+
+namespace {
+	// a leg of a walk the current gives (as ServerGameObject::startMovement's, at this speed, the
+	// unit's animation as it is)
+	void CurrentLeg(Server& server, ServerGameObject* o, const Vector3& to, float speed, bool swims)
+	{
+		const float now = server.timeManager.currentTime;
+		// swimming: its "Swim" if its model has one (the Scout's), else its walk, slower; wading
+		// (shallow water, on its way): as it walks
+		if (swims || !o->movement.isMoving()) {
+			static const GameSet* of = nullptr;
+			static int swimAnim = -1, moveAnim = -1;
+			if (of != server.gameSet.get()) {
+				of = server.gameSet.get();
+				swimAnim = of->animations.names.getIndex("Swim");
+				moveAnim = of->animations.names.getIndex("Move");
+			}
+			const auto* app = o->blueprint->getAppearance(o->subtype, o->appearance);
+			const bool hasSwim = swims && swimAnim >= 0 && app && app->animations.count(swimAnim);
+			const int anim = hasSwim ? swimAnim : moveAnim;
+			if (anim >= 0 && o->animationIndex != anim)
+				o->setAnimation(anim, false, -1, -1.0f, hasSwim || !swims ? 1.0f : 0.6f);
+		}
+		o->movement.startMovement(o->position, to, now, speed);
+		o->currentSpeed = speed;
+		NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };
+		npw.writeUint32(o->id);
+		npw.writeVector3(o->position);
+		npw.writeVector3(to);
+		npw.writeFloat(now);
+		npw.writeFloat(speed);
+		// (as Server::sendToAll: not to a guest still waiting for the game's state)
+		for (size_t i = 0; i < server.clientLinks.size(); i++)
+			if (i >= server.clientInfos.size() || !server.clientInfos[i].awaitingState)
+				server.clientLinks[i]->send(npw);
+	}
+}
+
+void ServerEnvironment::applyCurrents(Server& server)
+{
+	if (!server.tiles || !server.terrain)
+		return;
+	// the water frozen (walkable ice), or the setting off: no currents; who was carried goes on
+	const bool on = settings.riverCurrents && !server.terrain->waterFrozen;
+	if (on && !currentsPrepared)
+		prepareCurrents(server);
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	// the units in water that does something, by id
+	std::map<uint32_t, std::pair<SrvGORef, CurrentAt>> inWater;
+	auto look = [&](int ti) {
+		const CurrentAt c = currentAtTile(ti);
+		if (c.depth == DEPTH_NONE || (c.drag <= 0.0f && c.harm <= 0.0f))
+			return;
+		for (const auto& ref : server.tiles[ti].objList)
+			if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && !(o->flags & CommonGameObject::fTerminated)
+				&& o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !o->blueprint->canWalkOnWater() && (hp < 0 || o->getItem(hp) > 0.0f))
+				inWater.emplace(o->id, std::make_pair(SrvGORef(o), c));
+	};
+	if (on) {
+		for (int ti : currentTiles)
+			look(ti);
+		if (state.waterRise >= FLOOD_RISE)
+			for (const FloodTile& ft : floodTiles)
+				look(ft.tile);
+	}
+	stats.carriedMost = std::max(stats.carriedMost, (int)inWater.size());
+	struct Hit { SrvGORef obj; float frac; };
+	std::vector<Hit> hits;
+	std::set<uint32_t> carried;
+	const auto [pw, ph] = server.terrain->getNumPlayableTiles();
+	auto blocked = [&](ServerGameObject* o, const Vector3& p) {
+		const int tx = (int)std::floor(p.x / 5.0f), tz = (int)std::floor(p.z / 5.0f);
+		return tx < 0 || tz < 0 || tx >= pw || tz >= ph || MovementController::isTileBlocked(o->blueprint, tx, tz);
+	};
+	for (auto& [id, entry] : inWater) {
+		ServerGameObject* o = entry.first.get();
+		if (!o)
+			continue;
+		const CurrentAt& c = entry.second;
+		const uint8_t k = kindOf(o->blueprint);
+		// the harm (flooded land deeper than applyFloods drowns in: as before, not on top)
+		const uint8_t hardy = waterHardiness(o->blueprint);
+		if (hardy == WATER_UNHARMED)
+			continue; // (otherworldly: walks the bed, untouched)
+		float harm = c.harm * (k == K_UNDEAD ? 2.0f : 1.0f);
+		// (a war machine goes under where the water would carry it: not in the shallows)
+		if (hardy == WATER_MACHINE)
+			harm = c.depth != DEPTH_SHALLOW && c.drag > 0.0f ? MACHINE_SINK : 0.0f;
+		if (!c.water && (k == K_UNDEAD ? c.metres > 0.5f : (c.metres > 1.0f && (k == K_LIVING || k == K_MACHINE))))
+			harm = 0.0f;
+		if (harm > 0.0f)
+			hits.push_back({ o, harm });
+		// carried along, swimming
+		const bool member = o->parent && o->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (member || c.drag <= 0.0f)
+			continue;
+		Swimmer& s = swimmers[id];
+		const bool pathing = o->movementController.isMoving() && !o->movementController.isPending() && o->movement.isMoving();
+		if (pathing) {
+			const Vector3 d = o->movement.getDestination();
+			if (!s.pathing || (d - s.leg).sqlen2xz() > 0.01f)
+				s.node = d; // (a leg of its own: its path's next point)
+		}
+		s.pathing = pathing;
+		// (war machines and the huge can't swim: dragged on their way, the machines a little)
+		const bool swims = c.depth != DEPTH_SHALLOW && hardy == WATER_ANY && k != K_MACHINE;
+		const bool canSwim = hardy == WATER_ANY && k != K_MACHINE;
+		const float own = o->computeSpeed() * (swims ? SWIM_SHARE : 1.0f) * (canSwim || c.depth == DEPTH_SHALLOW ? 1.0f : 0.0f);
+		const float drag = c.drag * (hardy == WATER_MACHINE ? MACHINE_DRAG : 1.0f);
+		Vector3 want;
+		if (s.pathing && (s.node - o->position).len2xz() > 0.05f)
+			want = (s.node - o->position).normal2xz() * own;
+		else if (swims)
+			want = c.shore * own;
+		Vector3 v = want + c.dir * drag;
+		Vector3 to = o->position + v * 1.5f;
+		// (never into water too deep for it, a building, off the map: then its own way only)
+		if (blocked(o, to)) {
+			v = want;
+			to = o->position + v * 1.5f;
+			if (v.len2xz() < 0.05f || blocked(o, to))
+				continue;
+		}
+		const float speed = v.len2xz();
+		if (speed < 0.05f)
+			continue;
+		to.y = server.terrain->getHeightEx(to.x, to.z, false);
+		CurrentLeg(server, o, to, speed, swims);
+		s.leg = to;
+		carried.insert(id);
+		stats.carriedSeconds++;
+	}
+	// the ones out of the water (or let go): on their way again, to their path's point
+	for (auto it = swimmers.begin(); it != swimmers.end();) {
+		if (carried.count(it->first)) {
+			++it;
+			continue;
+		}
+		ServerGameObject* o = (ServerGameObject*)server.findObject(it->first);
+		if (o && !o->deleted && o->movement.isMoving() && (o->movement.getDestination() - it->second.leg).sqlen2xz() < 0.01f) {
+			if (it->second.pathing && o->movementController.isMoving())
+				o->startMovement(it->second.node);
+			else if (!o->movementController.isMoving())
+				o->stopMovement();
+		}
+		it = swimmers.erase(it);
+	}
+	buildPathCost();
+	if (trace && !inWater.empty())
+		printf("ENVIRONMENT t=%.0f currents: %zu units in the water, %zu carried, %zu hurt\n", state.time, inWater.size(), carried.size(), hits.size());
+	for (auto& [ref, frac] : hits)
+		if (ServerGameObject* o = ref.get()) {
+			const bool wasAlive = hp >= 0 && o->getItem(hp) > 0.0f;
+			damage(server, o, frac, "swept away by the river");
+			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
+				stats.drowned++;
+				stats.sweptAway++;
+				countDeath(o, 2);
+			}
+		}
 }
 
 float ServerEnvironment::roofSnow(uint32_t id) const
@@ -864,7 +1288,8 @@ void ServerEnvironment::applyFloods(Server& server)
 		for (int ti : deepTiles)
 			for (const auto& ref : server.tiles[ti].objList)
 				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
-					&& !o->blueprint->canWalkOnWater() && (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE || kindOf(o->blueprint) == K_UNDEAD))
+					&& !o->blueprint->canWalkOnWater() && waterHardiness(o->blueprint) != WATER_UNHARMED
+					&& (kindOf(o->blueprint) == K_LIVING || kindOf(o->blueprint) == K_MACHINE || kindOf(o->blueprint) == K_UNDEAD))
 					hits.push_back({ o, kindOf(o->blueprint) == K_UNDEAD ? 0.4f : 0.2f, "went through the ice" });
 	if (state.waterRise < 0.1f && hits.empty())
 		return;
@@ -881,7 +1306,7 @@ void ServerEnvironment::applyFloods(Server& server)
 		if (depth > 0.5f && state.ice < 0.6f)
 			for (const auto& ref : tile.objList)
 				if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
-					&& !o->blueprint->canWalkOnWater()) {
+					&& !o->blueprint->canWalkOnWater() && waterHardiness(o->blueprint) != WATER_UNHARMED) {
 					const uint8_t k = kindOf(o->blueprint);
 					if (k == K_UNDEAD)
 						hits.push_back({ o, 0.1f, "drowned" });
@@ -1096,6 +1521,7 @@ void ServerEnvironment::update(Server& server)
 			strikeLightning(server);
 		applyExposure(server);
 		applyFloods(server);
+		applyCurrents(server);
 		if (forceFireAt >= 0.0f && now >= forceFireAt) {
 			forceFireAt = -1.0f;
 			fireLanded(server, Vector3(forceFireX, 0, forceFireZ), true);
@@ -1221,6 +1647,10 @@ std::string ServerEnvironment::saveText() const
 		o << "roof " << id << ' ' << r.peak << ' ' << r.melt << ' ' << r.share << '\n';
 	if (snowProofed)
 		o << "snowproofed 1\n";
+	// the units the river currents carry (a save from before them: none)
+	for (const auto& [id, s] : swimmers)
+		o << "swim " << id << ' ' << (int)s.pathing << ' ' << s.node.x << ' ' << s.node.y << ' ' << s.node.z << ' '
+			<< s.leg.x << ' ' << s.leg.y << ' ' << s.leg.z << '\n';
 	if (Server::instance)
 		o << lodging.saveText(*Server::instance);
 	return o.str();
@@ -1287,6 +1717,14 @@ void ServerEnvironment::loadText(const std::string& text)
 		}
 		else if (tag == "snowproofed")
 			snowProofed = true;
+		else if (tag == "swim") {
+			uint32_t id = 0;
+			int pathing = 0;
+			Swimmer s;
+			l >> id >> pathing >> s.node.x >> s.node.y >> s.node.z >> s.leg.x >> s.leg.y >> s.leg.z;
+			s.pathing = pathing != 0;
+			swimmers[id] = s;
+		}
 		else if (tag == "lodging" || tag == "lodger")
 			lodging.loadLine(tag, line);
 	}
