@@ -14,6 +14,13 @@
   ]
  },
  {
+  "name": "frontend-editors",
+  "what": "The Editors screen: Map Editor, AI General Editor and Back",
+  "menu": [
+   "editors"
+  ]
+ },
+ {
   "name": "frontend-mods",
   "what": "The Mods screen; ideally two or three mods listed, one of them moved (own load order)",
   "menu": [

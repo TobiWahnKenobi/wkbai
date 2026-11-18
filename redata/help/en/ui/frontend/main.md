@@ -1,6 +1,6 @@
 ---
 title: Main menu
-ids: [ui/frontend/main, ui/frontend/main/load-game#load-game, ui/frontend/main/campaign#campaign, ui/frontend/main/skirmish#skirmish, ui/frontend/main/multiplayer#multiplayer, ui/frontend/main/tutorial#tutorial, ui/frontend/main/options#options, ui/frontend/main/mods#mods, ui/frontend/main/map-editor#map-editor, ui/frontend/main/generaleditor#ai-general-editor, ui/frontend/main/credits#credits, ui/frontend/main/exit#exit, FRONT_END_MAIN_MENU_LOAD_GAME#load-game, FRONT_END_MAIN_MENU_CAMPAIGN#campaign, FRONT_END_MAIN_MENU_SKIRMISH#skirmish, FRONT_END_MAIN_MENU_MULTIPLAYER#multiplayer, FRONT_END_MAIN_MENU_TUTORIAL#tutorial, FRONT_END_MAIN_MENU_OPTIONS#options, FRONT_END_OPTIONS_GENERAL_CREATION#ai-general-editor, FRONT_END_MAIN_MENU_CREDITS#credits, FRONT_END_MAIN_MENU_EXIT#exit]
+ids: [ui/frontend/main, ui/frontend/main/load-game#load-game, ui/frontend/main/campaign#campaign, ui/frontend/main/skirmish#skirmish, ui/frontend/main/multiplayer#multiplayer, ui/frontend/main/tutorial#tutorial, ui/frontend/main/options#options, ui/frontend/main/mods#mods, ui/frontend/main/editors#editors, ui/frontend/main/help#help, ui/frontend/main/credits#credits, ui/frontend/main/exit#exit, FRONT_END_MAIN_MENU_LOAD_GAME#load-game, FRONT_END_MAIN_MENU_CAMPAIGN#campaign, FRONT_END_MAIN_MENU_SKIRMISH#skirmish, FRONT_END_MAIN_MENU_MULTIPLAYER#multiplayer, FRONT_END_MAIN_MENU_TUTORIAL#tutorial, FRONT_END_MAIN_MENU_OPTIONS#options, FRONT_END_MAIN_MENU_CREDITS#credits, FRONT_END_MAIN_MENU_EXIT#exit]
 order: 10
 ---
 
@@ -38,13 +38,13 @@ Opens the [Options](../../options/index.md): graphics, controls and keys, sound,
 
 Opens the [mod manager](mods.md), where you switch mods on and off and choose which one wins when two change the same file.
 
-## Map Editor
+## Editors
 
-Opens the [list of maps to edit](map-editor.md). The chosen map opens paused with the editor.
+Opens the [Editors](editors/index.md) screen: the [Map Editor](map-editor.md) and the [AI General Editor](general-editor.md).
 
-## AI General Editor
+## Help
 
-Opens the [AI General Editor](general-editor.md), where you make AI Generals of your own with a portrait, a story and fourteen personality sliders.
+Opens this help at the page of the main menu. Anywhere else, F1 opens the help for what is under the cursor: see [Using the help](../../using-help.md).
 
 ## Credits
 
@@ -58,4 +58,4 @@ Asks whether you really want to leave, then closes wkbai.
 
 The small "wkbai" in the bottom right corner shows that this is wkbai, not the original game.
 
-> wkbai: Mods and Map Editor are wkbai's own entries. A mod can add more buttons to this column; the column tightens its spacing so that they all fit.
+> wkbai: Mods, Editors and Help are wkbai's own entries. A mod can add more buttons to this column; the column tightens its spacing so that they all fit.

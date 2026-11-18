@@ -1,6 +1,6 @@
 ---
 title: Top bar
-ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line]
+ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line, ui/hud/top-bar/mission-objectives#mission-objectives]
 order: 20
 ---
 

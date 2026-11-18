@@ -548,6 +548,8 @@ struct FrontEnd::Impl {
 			AgentUi::AddHelpZone(help, x, y, w, h);
 		});
 		lua.set_function("setHelpScreen", [](const std::string& id) { Help::SetScreen(id); });
+		// the main menu's Help button: the help at a page ("" or nil: the start page)
+		lua.set_function("openHelp", [](sol::optional<std::string> ids) { Help::Open(ids && !ids->empty() ? *ids : "index"); });
 		lua.set_function("drawText", [this](const std::string& fontName, float x, float y, const std::string& text, sol::optional<uint32_t> colour, sol::optional<float> scale) {
 			if (const BitmapFont* f = font(fontName))
 				f->draw(drawList, x, y, text, colourArg(colour), scale ? *scale : 1.0f);

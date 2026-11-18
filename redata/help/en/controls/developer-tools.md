@@ -45,7 +45,7 @@ Key action [Environment panel](keys.md#cheat-keys-cheat-mode-only). wkbai's day 
 
 ## Map editor
 
-**F8** (key action [Map editor](keys.md#windows-and-tools)) opens the map editor over the running level, in single player, on a level opened from the main menu for editing. See [the map editor](help:ui/editor).
+**F8** (key action [Map editor](keys.md#windows-and-tools)) opens the map editor over the running level, in single player, on a level opened for editing (main menu, Editors, Map Editor). See [the map editor](help:ui/editor).
 
 ## Agent control
 

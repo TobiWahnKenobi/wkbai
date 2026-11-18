@@ -465,6 +465,14 @@ bool Library::resolveOne(const std::string& idIn, std::string& path, std::string
 		auto it = imguiWindows().find(id.substr(12));
 		return it != imguiWindows().end() && resolveOne(it->second, path, anchor);
 	}
+	// "page:<path>#<anchor>": a page by its path (the heading a label matched: Help.cpp)
+	if (id.compare(0, 5, "page:") == 0) {
+		if (!pages.count(id.substr(5)))
+			return false;
+		path = id.substr(5);
+		anchor = wantAnchor;
+		return true;
+	}
 	// "prefix/**/last": an id under prefix that ends in /last (the lobby's tabs, whatever the tab)
 	if (const size_t w = id.find("/**/"); w != std::string::npos) {
 		const std::string prefix = id.substr(0, w + 1), last = "/" + id.substr(w + 4);

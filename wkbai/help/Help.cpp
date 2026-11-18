@@ -16,7 +16,9 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <fstream>
 #include <list>
+#include <set>
 
 using namespace Help::detail;
 
@@ -92,8 +94,46 @@ void ensureLoaded()
 // the title shown for a page: the game's own name of the thing when a game set is loaded
 std::string titleOf(const Page& p) { return p.gameName.empty() ? p.title : p.gameName; }
 
-// The help ids of an element of the UI registry, the screen's after them
-std::string idsOf(const AgentUi::Element& e)
+// The heading a label names on the screen's page or the pages under it (its tabs), as
+// "page:<path>#<anchor>"; "" none. A heading named as the label wins, then the longest heading
+// the label starts with ("Lua AI: none (...)": "Lua AI"), then one that starts with the label.
+std::string labelHeading(const std::string& label)
+{
+	const std::string slug = Slug(label);
+	if (slug.empty() || s_lastScreen.empty())
+		return {};
+	std::string screenPath, a;
+	bool exact = false;
+	if (!Lib().resolve(s_lastScreen, screenPath, a, &exact) || !exact)
+		return {};
+	std::string dir = screenPath;
+	if (dir.size() > 6 && dir.compare(dir.size() - 6, 6, "/index") == 0)
+		dir.resize(dir.size() - 6);
+	int bestScore = 0;
+	size_t bestLen = 0;
+	std::string best;
+	for (const auto& [path, page] : Lib().all()) {
+		if (path != screenPath && path.compare(0, dir.size() + 1, dir + "/") != 0)
+			continue;
+		for (const std::string& anchor : page.anchors) {
+			int score = 0;
+			if (anchor == slug) score = 3;
+			else if (slug.compare(0, anchor.size() + 1, anchor + "-") == 0) score = 2;
+			else if (anchor.compare(0, slug.size() + 1, slug + "-") == 0) score = 1;
+			if (!score) continue;
+			// the better match; the longer heading; the screen's own page
+			if (score > bestScore || (score == bestScore && (anchor.size() > bestLen || (anchor.size() == bestLen && path == screenPath)))) {
+				bestScore = score;
+				bestLen = anchor.size();
+				best = "page:" + path + "#" + anchor;
+			}
+		}
+	}
+	return best;
+}
+
+// The help ids of an element of the UI registry, the screen's after them (withScreen)
+std::string idsOf(const AgentUi::Element& e, bool withScreen = true)
 {
 	std::string id = e.id;
 	if (const size_t hash = id.rfind('#'); hash != std::string::npos && id.find_first_not_of("0123456789", hash + 1) == std::string::npos)
@@ -106,17 +146,48 @@ std::string idsOf(const AgentUi::Element& e)
 	if (ids.empty()) {
 		const bool inGame = s_lastScreen == "ui/hud";
 		if (std::string x = after("cmd:"); !x.empty()) ids = "command/" + x;
-		else if (std::string x = after("top:"); !x.empty()) ids = "ui/hud/top-bar/" + lowerAscii(x);
-		else if (std::string x = after("tab:"); !x.empty() && inGame) ids = "ui/hud/build-menu/" + lowerAscii(x);
+		else if (std::string x = after("top:"); !x.empty()) ids = "ui/hud/top-bar/" + Slug(x);
+		else if (std::string x = after("tab:"); !x.empty() && inGame) ids = "ui/hud/build-menu/" + Slug(x);
 		else if (after("activity:").size()) ids = "ui/hud/peasant-activity";
 		else if (after("formation:").size()) ids = "ui/hud/formation-buttons";
-		else if (std::string x = after("minimapButton:"); !x.empty()) ids = "ui/hud/minimap/" + lowerAscii(x);
+		else if (std::string x = after("minimapButton:"); !x.empty()) ids = "ui/hud/minimap/" + Slug(x);
 		else if (id == "minimap") ids = "ui/hud/minimap";
 		else if (std::string x = after("key:"); !x.empty()) ids = "key/" + x.substr(0, x.find(':'));
 	}
-	if (!s_lastScreen.empty())
+	// no page or heading of its own: the heading of its screen's pages that its label names
+	// ("Ministry AI" on the lobby: the Settings tab's "Ministry AI"), else the screen
+	if (!e.label.empty() && Lib().loaded()) {
+		std::string p, a;
+		bool exact = false;
+		if (ids.empty() || (Lib().resolve(ids, p, a, &exact), !exact))
+			if (std::string h = labelHeading(e.label); !h.empty())
+				ids += (ids.empty() ? "" : "|") + h;
+	}
+	if (withScreen && !s_lastScreen.empty())
 		ids += (ids.empty() ? "" : "|") + s_lastScreen;
 	return ids;
+}
+
+// The coverage report ("helpTest": { "coverage": "<file>" }): every element drawn that has no
+// page of its own (it falls back to its screen's), once each, as screen, id, label, ids
+void reportCoverage(const std::string& file)
+{
+	static std::set<std::string> seen;
+	static std::ofstream out;
+	if (!out.is_open()) out.open(file, std::ios::app);
+	for (const AgentUi::Element& e : AgentUi::Elements()) {
+		std::string id = e.id;
+		if (const size_t hash = id.rfind('#'); hash != std::string::npos && id.find_first_not_of("0123456789", hash + 1) == std::string::npos)
+			id.resize(hash);
+		const std::string own = idsOf(e, false);
+		std::string p, a;
+		bool exact = false;
+		if (!own.empty()) Lib().resolve(own, p, a, &exact);
+		const std::string key = s_lastScreen + '\t' + id;
+		if (exact || !seen.insert(key).second) continue;
+		out << s_lastScreen << '\t' << id << '\t' << e.label << '\t' << own << '\n';
+	}
+	out.flush();
 }
 
 // what is under the cursor, as help ids: an element of the interface, else the 3D world's object,
@@ -535,6 +606,10 @@ void Help::Frame(IRenderer* gfx)
 			if (t.contains("open")) s_pendingOpen = t.value("open", std::string());
 			if (t.contains("menu")) { s_menuIds = t.value("menu", std::string()); s_menuPending = true; }
 			if (t.contains("search")) snprintf(s_search, sizeof(s_search), "%s", t.value("search", std::string()).c_str());
+		}
+		if (t.contains("coverage") && frame > 2) {
+			ensureLoaded();
+			reportCoverage(t.value("coverage", std::string()));
 		}
 	}
 	if (!s_pendingOpen.empty() || s_menuPending || s_open)

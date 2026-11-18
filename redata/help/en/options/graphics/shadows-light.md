@@ -1,6 +1,6 @@
 ---
 title: Shadows and light
-ids: [ui/frontend/options/lighting, option/buildingShadows#building-shadows, option/staticShadows#building-shadows, option/staticShadowLight#light-in-building-shadows, option/wallShadows#wall-shadows, option/shadowResolution#building-shadow-detail, option/characterShadows#character-shadows, option/realCharacterShadows#real-character-shadows, option/rtShadows#ray-traced-shadows, option/contactShadows#contact-shadows, option/fireLights#light-from-fires, option/skyGI#light-from-the-sky, option/dynamicGI#bounced-light-dynamic-gi, option/dynamicGIStrength#bounced-light-strength, option/emissiveLightStrength#window-light-strength-ultra, option/ssao#ambient-occlusion]
+ids: [ui/frontend/options/lighting, option/buildingShadows#building-shadows, option/staticShadows#building-shadows, option/staticShadowLight#light-in-building-shadows, option/wallShadows#wall-shadows, option/shadowResolution#building-shadow-detail, option/characterShadows#character-shadows, option/realCharacterShadows#real-character-shadows, option/rtShadows#ray-traced-shadows, option/contactShadows#contact-shadows, option/fireLights#light-from-fires, option/skyGI#light-from-the-sky, option/dynamicGI#bounced-light-dynamic-gi, option/dynamicGIStrength#bounced-light-strength, option/emissiveLightStrength#window-light-strength-ultra, option/ssao#ambient-occlusion, option/fireQuality#fire]
 order: 30
 ---
 
@@ -51,6 +51,10 @@ On (the default): the small shadows where units' feet, fences and walls meet the
 ## Light from fires
 
 On (the default): fires light the ground and the models around them: burning buildings, flaming arrows, fire spells, up to 16 at once.
+
+## Fire
+
+How fires look. **Original**: the original game's flame pictures. **Low**: drawn flames that move and flicker. **High** (the default): the drawn flames with a glow around them, smoke and the heat shimmering above them.
 
 ## Light from the sky
 

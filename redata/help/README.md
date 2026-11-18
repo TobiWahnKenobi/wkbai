@@ -46,6 +46,8 @@ A help id names a thing in the game. The interface tags each part of itself with
 
 - Ids are case sensitive and use the game set's own names for blueprints and commands, spaces included (`building/Peasant Hut`).
 - **Fallback:** an id without a page falls back to its parent (`ui/hud/minimap/zoom` -> `ui/hud/minimap` -> `ui/hud` -> the start page), so every part of the interface opens something useful even before it has a page of its own.
+- **Headings first:** not every control needs a page. Most point at the heading of their screen's page that explains them (`ui/frontend/skirmish/settings/aiMinistries#ministry-ai`). When a control's ids find nothing, the help looks for a heading named like the control's label on its screen's page and the pages under it ("Ministry AI" finds `## Ministry AI`), before the screen's page itself.
+- **Coverage:** `"helpTest": { "coverage": "<file>" }` in wkconfig.json writes every element drawn whose help only reaches its screen's page (screen, id, label, ids). Run it over the screens after adding controls; the list should be empty.
 
 ## Links
 

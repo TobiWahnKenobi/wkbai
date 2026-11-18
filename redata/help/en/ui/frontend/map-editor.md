@@ -1,6 +1,7 @@
 ---
 title: Map Editor
 ids: [ui/frontend/editlevels, ui/hud/map-editor, ui/editor, ui/frontend/editlevels/list#the-list-of-maps, ui/frontend/editlevels/edit#edit, ui/frontend/editlevels/back#back]
+parent: ui/frontend/editors
 order: 90
 ---
 
@@ -20,7 +21,7 @@ Opens the selected map in the editor. A double click on a map does the same.
 
 ## Back
 
-Returns to the [main menu](main.md). Esc does the same.
+Returns to the [Editors](editors/index.md) screen. Esc does the same.
 
 ## Tips
 

@@ -1,6 +1,7 @@
 ---
 title: AI General Editor
 ids: [ui/frontend/generaleditor, ui/frontend/generaleditor/portrait#portrait, ui/frontend/generaleditor/name#name, ui/frontend/generaleditor/category#category, ui/frontend/generaleditor/alignment#alignment, ui/frontend/generaleditor/random#randomise-all, ui/frontend/generaleditor/military#military-behaviour, ui/frontend/generaleditor/diplomatic#diplomatic-behaviour, ui/frontend/generaleditor/generals#your-generals, ui/frontend/generaleditor/delete#delete, ui/frontend/generaleditor/new#new-ai-general, ui/frontend/generaleditor/background#background, ui/frontend/generaleditor/save#save-ai-general, ui/frontend/generaleditor/back#back, FRONT_END_GENERAL_CREATION_TITLE, FRONT_END_GENERAL_CREATION_RANDOM#randomise-all, FRONT_END_GENERAL_CREATION_SAVE_GENERAL#save-ai-general, FRONT_END_GENERAL_CREATION_NEW_GENERAL#new-ai-general]
+parent: ui/frontend/editors
 order: 100
 ---
 
@@ -76,7 +77,7 @@ Saves the general (a message confirms it). Saving under the name of a general yo
 
 ## Back
 
-Returns to the [main menu](main.md). Changes you haven't saved are lost.
+Returns to the [Editors](editors/index.md) screen. Changes you haven't saved are lost.
 
 ## Tips
 
