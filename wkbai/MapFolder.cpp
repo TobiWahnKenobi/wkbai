@@ -1,6 +1,7 @@
 // wkbai - wkbai's own map format, its compiler and the import of original maps (MapFolder.h)
 
 #include "MapFolder.h"
+#include "MapAuthoring.h"
 #include "terrain.h"
 #include "server.h"
 #include "file.h"
@@ -1837,9 +1838,16 @@ int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& se
 int RunCommandLine(const std::vector<std::string>& args)
 {
 	if (args.empty()) {
-		printf("usage: wkbai --author <folder.wkbai>\n       wkbai --author import <level.lvl> [<folder.wkbai>]\n");
+		printf("usage: wkbai --author <folder.wkbai>\n       wkbai --author import <level.lvl> [<folder.wkbai>]\n"
+			"       wkbai --author catalog [--mod <name>|none] [--gameset <file>] [--edges] [--out <file.json>]\n"
+			"       wkbai --author describe <folder.wkbai | level> [--mod <name>|none] [--png <file.png>] [--out <file.json>]\n");
 		return 2;
 	}
+	// what can go on a map, and an existing map in numbers and a picture (MapAuthoring.h)
+	if (args[0] == "catalog")
+		return MapAuthoring::RunCatalog(std::vector<std::string>(args.begin() + 1, args.end()));
+	if (args[0] == "describe")
+		return MapAuthoring::RunDescribe(std::vector<std::string>(args.begin() + 1, args.end()));
 	LoadBCP("data.bcp");
 	Result r;
 	if (args[0] == "import") {
