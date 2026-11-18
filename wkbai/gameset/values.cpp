@@ -394,12 +394,21 @@ struct ValueDiplomaticStatusAtLeast : ValueDeterminer {
 // (b did REGISTER_ASSOCIATES b <category> a), as WKB.exe's VD_Are_Associated (0x454900): each a's
 // associators must include each b; an a without any is 0, no a at all is 1. wkbre2 checked the
 // other way round, so "Not the Village I Collect From" let carts deliver to their own village.
+bool FinderFailsWhenEmpty(const ObjectFinder* finder); // finder.cpp
+
 struct ValueAreAssociated : ValueDeterminer {
 	int category;
 	std::unique_ptr<ObjectFinder> a, b;
 	virtual float eval(ScriptContext* ctx) override {
 		if (!ctx->isServer()) return fail(ctx);
 		const auto as = a->eval(ctx), bs = b->eval(ctx);
+		// WKB.exe 0x454900: 0 when either finder fails, and FINDER_TARGET fails when there is no
+		// target (0x450880); other finders that find nothing leave a vacuous 1. The Formation
+		// Army's "I Am Not Already Attacking A Victim Of My Controller" (IS_ZERO ARE_ASSOCIATED
+		// FINDER_TARGET "Victims" FINDER_CONTROLLER) gave an idle member "already attacking": only
+		// the 3 primary attackers of a formation fought, the rest stood (the play test's wedge).
+		if ((as.empty() && FinderFailsWhenEmpty(a.get())) || (bs.empty() && FinderFailsWhenEmpty(b.get())))
+			return 0.0f;
 		for (CommonGameObject* x : as) {
 			auto& associators = ((ServerGameObject*)x)->associators;
 			auto it = associators.find(category);
