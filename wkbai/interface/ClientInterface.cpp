@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../help/Help.h"
 #include "../SoundPlayer.h"
 #include "../Order.h"
 #include "../MovementController.h"
@@ -199,6 +200,7 @@ namespace {
 ClientInterface::~ClientInterface()
 {
 	SetKeyCheatGate(nullptr);
+	Help::SetGame(nullptr, nullptr);
 	if (AgentUi::GetWorld() == &agentWorld)
 		AgentUi::SetWorld(nullptr);
 }
@@ -3752,6 +3754,10 @@ void ClientInterface::controlGroupKeys()
 void ClientInterface::iter()
 {
 	setUpAgentWorld();
+	// the help: the game's screen for F1 over nothing, the game set for its names and numbers
+	Help::SetScreen("ui/hud");
+	Help::SetGame(client->gameSet.get(), client->gameSet ? &lang : nullptr);
+	Help::SetHovered({});
 	ZoneScoped;
 	static uint32_t oldCliTime = SDL_GetTicks();
 	uint32_t cliTime = SDL_GetTicks();
@@ -5103,8 +5109,12 @@ void ClientInterface::iter()
 		// ImGui
 		lua.set_function("setTooltip",[](const std::string& str) { ImGui::SetTooltip("%s", str.c_str()); });
 		// agent control: an interactive element drawn this frame (AgentUi's registry; nothing while it is off)
-		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
-			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled, sol::optional<std::string> help) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true), help.value_or(std::string()));
+		});
+		// the in-game help: a part of the screen that is no button (a panel, a read-out), with its help ids
+		lua.set_function("helpZone", [](const std::string& help, float x, float y, float w, float h) {
+			AgentUi::AddHelpZone(help, x, y, w, h);
 		});
 		lua.set_function("commandName", [this](const Command* cmd) { return cmd ? client->gameSet->commands.getString(cmd) : std::string(); });
 		// Button
@@ -5599,6 +5609,17 @@ void ClientInterface::iter()
 			particlesContainer->generate(psCache->getPS(particleTest), at, 0, client->timeManager.previousTime, client->timeManager.currentTime);
 		}
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
+		// the help for what is under the cursor (F1, Alt+right-click): what it looks like to this
+		// player, so a disguised spy opens the page of what it pretends to be
+		if (nextSelectedObject && nextSelectedObject->blueprint) {
+			const GameObjBlueprint* bp = nextSelectedObject->blueprint;
+			if (const Client::Disguise* d = client->disguiseFor(nextSelectedObject); d && d->blueprint)
+				bp = d->blueprint;
+			if (bp->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+				Help::SetHovered("unit/" + bp->name);
+			else if (bp->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+				Help::SetHovered("building/" + bp->name);
+		}
 
 		// highlight hovered object; not in test runs ("benchmark"): they start detached but still read
 		// the real cursor, and a building under it was drawn unshaded (SEFLAG_NOLIGHTING), so test

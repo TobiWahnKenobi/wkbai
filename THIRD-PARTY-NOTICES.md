@@ -64,6 +64,9 @@ From vcpkg (`vcpkg.json`, baseline `817892b`); each port's licence is installed 
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.12.0 | MIT | header-only |
 | [sol2](https://github.com/ThePhD/sol2) | 3.5.0 | MIT | header-only |
 | [stb](https://github.com/nothings/stb) | 2026-08-02 | Public domain or MIT, at your choice | header-only (`gfx/bitmap.cpp`) |
+| [MD4C](https://github.com/mity/md4c) | 0.6.0 | MIT | `md4c.dll`: the help's Markdown parser (`wkbai/help/HelpView.cpp`) |
+| [lunasvg](https://github.com/sammycage/lunasvg) | 3.5.0 | MIT | `lunasvg.dll`: the help's SVG diagrams (`wkbai/help/HelpView.cpp`) |
+| [plutovg](https://github.com/sammycage/plutovg) | 1.3.3 | MIT | `plutovg.dll`: lunasvg's 2D renderer |
 
 The two LGPL libraries stay separate DLLs, so they can be replaced by other builds of the same
 version. Their sources are at the links above (the vcpkg ports name the exact archives).

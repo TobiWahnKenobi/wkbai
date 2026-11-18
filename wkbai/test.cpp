@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "help/Help.h"
 #include "wkbre2.h"
 #include "platform.h"
 #include "Environment.h"
@@ -15,6 +16,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <array>
 #include "gameset/gameset.h"
 #include "file.h"
@@ -11539,6 +11541,31 @@ void Test_FireQuality()
 	printf("FIRE all %d\n", all ? 1 : 0);
 }
 
+// The in-game help's pages (redata/help, help/Help.h): every link, help id and heading anchor of
+// the English pages, and of each translation, leads somewhere
+void Test_HelpPages()
+{
+	int failures = 0;
+	std::error_code ec;
+	std::vector<std::string> languages = { "en" };
+	for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path("redata") / "help", ec))
+		if (e.is_directory() && e.path().filename() != "en" && std::filesystem::exists(e.path() / "_language.json"))
+			languages.push_back(e.path().filename().string());
+	for (const std::string& lang : languages) {
+		const std::string problems = Help::Check(lang);
+		std::istringstream in(problems);
+		int n = 0;
+		for (std::string line; std::getline(in, line);) {
+			printf("UNITTEST FAILED: help (%s): %s\n", lang.c_str(), line.c_str());
+			n++;
+		}
+		printf("UNITTEST %s: help pages (%s), %d problems\n", n ? "FAILED" : "ok", lang.c_str(), n);
+		failures += n;
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -11636,6 +11663,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
 {Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 {Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
+{Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
 };
 
 void LaunchTest()

@@ -44,7 +44,34 @@ local PANEL_FILL = 0x46100A30
 local PANEL_BORDER = 0xFF1A14B4
 local DIM = 0x99000000
 
-local function T(key) return getText(key) end
+-- The in-game help (wkbai/help/Help.h): each control tells it its help ids, "a|b|c", the first
+-- with a page wins. T() remembers the language key of each text it gave, so a button's help id
+-- doesn't depend on the language (FRONT_END_MAIN_MENU_SKIRMISH); a readable one follows
+-- ("ui/frontend/main/skirmish"). While a row of one setting is drawn, FE_Help.context names the
+-- setting ("option/cameraSnapping") for every control in it.
+-- (a global table: the file's main chunk is at Lua's limit of 200 locals)
+FE_Help = { textKey = {}, screen = "", context = nil }
+local function T(key)
+	local t = getText(key)
+	FE_Help.textKey[t] = key
+	return t
+end
+function FE_Help.slug(text)
+	return (string.gsub(string.gsub(string.lower(text), " ", "-"), "[^%w%-]", ""))
+end
+-- text: a control's label (its language key and its slug); part: a name of its own (a setting key)
+function FE_Help.idsFor(text, part)
+	local H = FE_Help
+	if H.context then return H.context end
+	local ids = {}
+	if text and H.textKey[text] then ids[#ids + 1] = H.textKey[text] end
+	local name = part or (text and H.slug(text)) or ""
+	if name ~= "" then
+		ids[#ids + 1] = "ui/frontend/" .. H.screen .. "/" .. name
+		ids[#ids + 1] = "ui/frontend/" .. H.screen .. "/**/" .. name
+	end
+	return table.concat(ids, "|")
+end
 
 ---------------------------------------------------------------------------- Layout and input
 
@@ -95,7 +122,7 @@ end
 -- A menu button; returns true when clicked
 local function button(text, x, y, w, h, enabled, selected)
 	if enabled == nil then enabled = true end
-	uiElement("button:" .. text, text, x, y, w, h, enabled) -- agent control's registry
+	uiElement("button:" .. text, text, x, y, w, h, enabled, FE_Help.idsFor(text)) -- agent control's registry, the help
 	local hot = enabled and hovered(x, y, w, h)
 	local suffix = ""
 	if selected or (hot and mouse.down) then suffix = "_Dep" elseif hot then suffix = "_High" end
@@ -108,6 +135,7 @@ end
 -- A slider over a 0..1 position; returns the new position
 local function slider(id, pos, x, y, w, enabled, height)
 	local h = height or w / 3
+	uiElement("slider:" .. id, "", x, y, w, h, enabled, FE_Help.idsFor(nil, id))
 	drawImage(enabled and ART.slider or ART.sliderGrey, x, y, w, h)
 	-- the track runs between the rounded ends of the bar
 	local x0, x1 = x + w * 0.06, x + w * 0.94
@@ -136,7 +164,7 @@ local function tabs(labels, selected, x, y, h, enabledList)
 		local w = textWidth(FONT_BUTTON, label, S) + L(56)
 		local enabled = not enabledList or enabledList[i] ~= false
 		local hot = enabled and hovered(cx, y, w, h)
-		uiElement("tab:" .. label, label, cx, y, w, h, enabled)
+		uiElement("tab:" .. label, label, cx, y, w, h, enabled, FE_Help.idsFor(label))
 		local suffix = (i == selected) and "_Dep" or (hot and "_High" or "")
 		threeSlice(ART.tab, suffix, TAB_RIM, cx, y, w, h)
 		centredText(FONT_BUTTON, label, cx, y, w, h, (i == selected) and WHITE or (enabled and GREY or DARK_GREY))
@@ -1229,7 +1257,7 @@ end
 -- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked
 local function roundButton(x, y, size, on, enabled)
 	local hot = enabled and hovered(x, y, size, size)
-	uiElement(on and "switch:on" or "switch:off", "", x, y, size, size, enabled)
+	uiElement(on and "switch:on" or "switch:off", "", x, y, size, size, enabled, FE_Help.context)
 	local art = "Interface\\FrontEnd\\Check_Box_" .. (not enabled and "Grey" or (on and "On" or (hot and "Blank_High" or "Blank"))) .. ".tga"
 	drawImage(art, x, y, size, size)
 	return hot and mouse.released
@@ -1240,7 +1268,7 @@ end
 local stepperHold = {} -- the button held: its key, when the press began, when it steps next
 local function stepperButton(kind, key, x, y, size)
 	local hot = hovered(x, y, size, size)
-	uiElement("stepper:" .. key, kind, x, y, size, size, true)
+	uiElement("stepper:" .. key, kind, x, y, size, size, true, FE_Help.idsFor(nil, key))
 	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
 	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
 	local t = getTime()
@@ -3250,6 +3278,9 @@ Screens.options = {
 			if not o then break end
 			local enabled = isOptionEnabled(o.id)
 			local ry = py + L(20) + (r - 1) * rowH
+			-- the help: the whole row, and every control in it, is this setting's
+			FE_Help.context = "option/" .. o.id
+			helpZone(FE_Help.context, px, ry, pw, rowH)
 			local labelColour = enabled and WHITE or GREY
 			-- the label right-aligned before the centre, the control after it
 			local lw = textWidth(FONT_BUTTON, o.label, S)
@@ -3301,6 +3332,7 @@ Screens.options = {
 				restart = true
 			end
 		end
+		FE_Help.context = nil
 		if #options > rows then
 			drawText(FONT_LIST, px + pw - L(260), py + ph - L(22), "Scroll for more settings", GREY, S)
 		end
@@ -3842,6 +3874,9 @@ function FE_Frame(place)
 
 	local name = stack[#stack]
 	local screen = Screens[name]
+	-- the help: the screen shown (F1 over nothing opens its page)
+	FE_Help.screen = name
+	setHelpScreen("ui/frontend/" .. name)
 	if place == "game" then
 		-- the screens opened from the in-game menu draw over the dimmed game
 		if name ~= "ingame" then drawRect(0, 0, W, H, DIM) end

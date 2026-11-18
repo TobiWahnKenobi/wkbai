@@ -24,12 +24,22 @@ struct Element {
 	std::string label;  // what the player reads on it (may be empty)
 	int x, y, w, h;     // window pixels (g_mouseX/Y)
 	bool enabled;
+	// the in-game help's ids for it, "a|b|c": the first with a page wins (help/Help.h); empty:
+	// the help derives one from the id. A help-only element ("help:...") is no button to click.
+	std::string help;
 };
 
+// The registry is kept while agent control is on, and while the help wants it (right-click >
+// Help, F1, "What's this?" find what is under the cursor in it: help/Help.cpp)
+bool Recording();
+void SetHelpRecording(bool on);
+
 // in points (the UI's units: pixels / g_uiScale)
-void Add(const std::string& id, const std::string& label, float x, float y, float w, float h, bool enabled);
+void Add(const std::string& id, const std::string& label, float x, float y, float w, float h, bool enabled, const std::string& help = {});
+// a part of the screen that has help but is no button (a panel, a read-out): "help:<help ids>"
+void AddHelpZone(const std::string& help, float x, float y, float w, float h);
 // in window pixels
-void AddPixels(const std::string& id, const std::string& label, int x, int y, int w, int h, bool enabled);
+void AddPixels(const std::string& id, const std::string& label, int x, int y, int w, int h, bool enabled, const std::string& help = {});
 // the frame is drawn: its list becomes the one the agent sees (ImGuiImpl_Render)
 void EndFrame();
 const std::vector<Element>& Elements();

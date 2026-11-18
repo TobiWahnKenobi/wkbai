@@ -1,6 +1,6 @@
 ---
 title: Developer and cheat tools
-ids: [controls/developer-tools, key/serverWindow#server-window-f1, key/debugger#debugger-f2, key/environmentPanel#environment-panel-f9, ui/hud/debug/server#server-window-f1, ui/hud/debug/client#debugger-f2, ui/hud/debug/environment#environment-panel-f9, ui/hud/debug/frame-timings#frame-timings, ui/hud/agent#agent-control]
+ids: [controls/developer-tools, key/serverWindow#server-window-ctrlf1, key/debugger#debugger-f2, key/environmentPanel#environment-panel-f9, ui/hud/debug/server#server-window-ctrlf1, ui/hud/debug/client#debugger-f2, ui/hud/debug/environment#environment-panel-f9, ui/hud/debug/frame-timings#frame-timings, ui/hud/agent#agent-control]
 order: 90
 ---
 
@@ -14,7 +14,7 @@ These windows are for mod makers, testers and the curious. They show, and can ch
 
 Elsewhere the keys do nothing. The windows are plain tool windows (you can move them and change their size), in English only.
 
-## Server window (F1)
+## Server window (Ctrl+F1)
 
 Key action [Server window](keys.md#cheat-keys-cheat-mode-only). The game as the server holds it, which is the truth, fog of war or not:
 
@@ -23,7 +23,7 @@ Key action [Server window](keys.md#cheat-keys-cheat-mode-only). The game as the 
 - **Server Object Properties:** the object picked in the tree: its items (values), associates, orders and tasks.
 - **Additional windows**, such as the map's tiles.
 
-While it is open the server window takes the screen in place of the game. **F1** closes it again, always.
+While it is open the server window takes the screen in place of the game. **Ctrl+F1** closes it again, always. (F1 itself opens the help.)
 
 ## Debugger (F2)
 

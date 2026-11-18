@@ -915,7 +915,7 @@ void QuickStartMenu::launchGame()
 			if (!onServerUi)
 				srvMutex.unlock();
 			Matchmaking::get().tick();
-			// F1: the server's window (the whole game's state, editable): a cheat key, as F2 and F9
+			// Ctrl+F1: the server's window (the whole game's state, editable): a cheat key, as F2 and F9 (F1 is the help)
 			// (closing it always works)
 			if (onServerUi ? KeyPressedUngated(KeyAction::ServerWindow) : (KeyPressed(KeyAction::ServerWindow) && cliui.cheatKeysAllowed())) {
 				onServerUi = !onServerUi;

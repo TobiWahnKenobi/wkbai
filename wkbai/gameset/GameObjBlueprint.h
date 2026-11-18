@@ -55,6 +55,8 @@ struct GameObjBlueprint {
 	GameSet *gameSet;
 
 	std::map<int, float> startItemValues;
+	// BLUEPRINT_TOOLTIP: the language key of the name the player sees ("TOOLTIP_KNIGHT"; the help's titles)
+	std::string tooltip;
 
 	IndexedStringList subtypeNames;
 	std::map<int, PhysicalSubtype> subtypes;
