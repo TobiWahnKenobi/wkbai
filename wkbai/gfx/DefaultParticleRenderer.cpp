@@ -63,6 +63,14 @@ void DefaultParticleRenderer::render(float prevTime, float nextTime, const Camer
 			float ss1, ss2, ssi;
 			std::tie(ss1, ss2, ssi) = particle.system->Particles.Scale_Gradient.getAtTime(nextTime - particle.startTime, 1.0f);
 			float spriteSize = ss1 + (ss2 - ss1) * ssi;
+			// (a building's fire the weather is putting out: its flames smaller and fainter, as at
+			// Low and High, FireFx::SetShares)
+			if (particle.objid && particle.system->flameSprite) {
+				if (const float share = FireFx::ShareOf(particle.objid); share < 1.0f) {
+					spriteSize *= FireFx::ShareSize(share);
+					color = (color & 0xFFFFFFu) | ((uint32_t)((color >> 24) * FireFx::ShareAlpha(share)) << 24);
+				}
+			}
 			//float spriteSize = 1.0f;
 			Vector3 sphereEnd = pos + Vector3(0, spriteSize, 0);
 

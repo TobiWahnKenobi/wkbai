@@ -1137,6 +1137,15 @@ void Client::tick()
 					charredTrees.insert(br.readUint32());
 				break;
 			}
+			case NETCLIMSG_FIRE_SHARES: {
+				fireShares.clear();
+				const uint8_t n = br.readUint8();
+				for (uint8_t i = 0; i < n; i++) {
+					const uint32_t id = br.readUint32();
+					fireShares[id] = br.readUint8() / 255.0f;
+				}
+				break;
+			}
 			case NETCLIMSG_HOST_DATA: {
 				const uint8_t kind = br.readUint8();
 				const uint16_t part = br.readUint16(), parts = br.readUint16();

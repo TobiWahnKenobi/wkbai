@@ -181,6 +181,11 @@ enum NetClientMessages {
 	NETCLIMSG_LOOPED_SOUND,
 	// SET_TILE_STATUS (mods): x and z (16 bits each), the status (8 bits, CommonGameState::Tile)
 	NETCLIMSG_TILE_STATUS,
+	// the burning buildings' fires as wkbai's weather left them (ServerEnvironment.h: rain puts
+	// them out, snow holds them down): count (8 bits), then each one's id (32 bits) and the share
+	// of its fire left (8 bits, 255 whole); the ones not sent burn whole. When they change, after
+	// NETCLIMSG_ENVIRONMENT
+	NETCLIMSG_FIRE_SHARES,
 };
 
 enum NetServerMessages {
