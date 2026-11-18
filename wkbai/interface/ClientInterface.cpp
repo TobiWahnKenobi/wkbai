@@ -1579,7 +1579,7 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 			static const char* const cloudQualities[] = { "Low (quarter size)", "Medium (half size)", "High (full size)", "Ultra (full size, finer)" };
 			ImGui::Combo("Volumetric cloud quality", &s.cloudQuality, cloudQualities, 4);
-			static const char* const cloudDetails[] = { "Low (one density)", "Medium (varying density)", "High (+ billows, cumulonimbus)", "Very high (+ self-shadowed billows)", "Ultra (+ more steps, finer)" };
+			static const char* const cloudDetails[] = { "Low (one density)", "Medium (varying density)", "High (+ billows, cumulonimbus)", "Very high (+ self-shadowed billows, more steps)", "Ultra (+ multiple scattering by density)" };
 			ImGui::Combo("Cloud detail", &s.cloudDetail, cloudDetails, 5);
 		}
 		ImGui::Checkbox("Cloud shadows", &s.cloudShadows);
