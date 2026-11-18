@@ -54,6 +54,7 @@
 #include "ParticleContainer.h"
 #include "settings.h"
 #include "MovementController.h"
+#include "WaterDesign.h"
 #include "FormationController.h"
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
@@ -11843,6 +11844,30 @@ void Test_RiverCurrents()
 		check(moved >= 0.0f && moved < 0.3f && share(u) > 0.999f, what);
 		if (u.get()) server.deleteObject(u.get());
 	}
+	// a waterway of the map's water design with its own speed (2 m/s) over that water: fast
+	{
+		const std::shared_ptr<WaterDesign> had = server.terrain->waterDesign;
+		auto design = std::make_shared<WaterDesign>(had ? *had : WaterDesign::blank((int)server.terrain->width, (int)server.terrain->height));
+		const Vector3 at = centre(fast);
+		WaterDesign::Waterway way;
+		way.points = { Vector3(at.x - 30.0f, 0, at.z), Vector3(at.x + 30.0f, 0, at.z) };
+		way.width = 6.0f;
+		way.speed = 2.0f;
+		design->waterways.push_back(way);
+		// (its JSON keeps the speed: the map folder's water.json)
+		WaterDesign back;
+		std::string error;
+		const bool read = back.fromText(design->toText(), error) && !back.waterways.empty() && back.waterways.back().speed == 2.0f;
+		server.terrain->waterDesign = design;
+		env.forgetCurrents();
+		const auto c = env.currentAt(server, at);
+		snprintf(what, sizeof(what), "a waterway of 2 m/s: flow %.2f (speed class %d), drag %.1f m/s, harm %.3f, flowing (%.2f, %.2f); its JSON read back %d",
+			c.flow, c.speed, c.drag, c.harm, c.dir.x, c.dir.z, (int)read);
+		check(read && c.speed == 2 && c.drag == ServerEnvironment::CURRENT_DRAG[c.depth - 1][2] && c.dir.x > 0.5f, std::string("the map maker's speed: ") + what);
+		server.terrain->waterDesign = had;
+		env.forgetCurrents();
+		check(env.currentAt(server, at).speed == 0, "without it: slow again in fair weather");
+	}
 	// heavy rain (the water's level held where it is: no flood): the water flows faster
 	env.debugSet(server, "weather", (float)WEATHER_HEAVY_RAIN); // (held from now on, at once)
 	env.forceWaterRise = 0.0f;
@@ -11887,6 +11912,55 @@ void Test_RiverCurrents()
 		check(alive(u) && out.drag <= 0.0f && env.swimmerCount() == 0, std::string("swam out by itself: ") + what);
 		if (u.get()) server.deleteObject(u.get());
 	}
+	// the path finding's cost for the dangerous water, near it only
+	{
+		const ServerEnvironment::PathCost* pc = env.currentsPathCost();
+		const int cost = pc ? pc->cost[fast] : -1;
+		const Vector3 cornerA(pw * 5.0f - 3.0f, 0, 3.0f), cornerB(pw * 5.0f - 8.0f, 0, 8.0f);
+		snprintf(what, sizeof(what), "path cost there %d (%zu costly tiles), near it %d, at the map's corner %d", cost, pc ? pc->tiles.size() : (size_t)0,
+			pc ? (int)pc->around(centre(fast), centre(fast) + Vector3(20, 0, 0)) : -1, pc ? (int)pc->around(cornerA, cornerB, 0) : -1);
+		check(pc && cost == ServerEnvironment::CURRENT_PATH_COST[fc.depth - 1][fc.speed] && cost > 0 && pc->around(centre(fast), centre(fast) + Vector3(20, 0, 0)),
+			std::string("the path finding goes round it: ") + what);
+	}
+	// the AI walks its unit out of the water that harms it (AIWeather.cpp)
+	{
+		SrvGORef u = server.spawnObject(spear, enemy, centre(fast), Vector3(0, 0, 0));
+		AIController& ai = enemy->aiController;
+		const int before = ai.weatherCurrentRetreats;
+		ai.nextWeatherCheck = 0.0f;
+		ai.weatherUpdate();
+		const bool held = u.get() && ai.weatherHolds(u->id);
+		run(0.1f); // (its order taken up in the next steps)
+		const bool walking = u.get() && (u->movementController.isMoving() || u->movement.isMoving());
+		snprintf(what, sizeof(what), "the AI's unit in harmful water: retreats %d -> %d, held %d, walking %d", before, ai.weatherCurrentRetreats, (int)held, (int)walking);
+		check(ai.weatherCurrentRetreats == before + 1 && held && walking, std::string("the AI takes it out: ") + what);
+		run(20.0f);
+		ai.nextWeatherCheck = 0.0f;
+		ai.weatherUpdate();
+		snprintf(what, sizeof(what), "after 20 s: in harmful water %d, still held %d", u.get() ? (int)(env.currentAt(server, u->position).harm > 0.0f) : -1,
+			u.get() ? (int)ai.weatherHolds(u->id) : -1);
+		check(u.get() && env.currentAt(server, u->position).harm <= 0.0f, std::string("out, let go once it stands: ") + what);
+		if (u.get()) server.deleteObject(u.get());
+	}
+	// a Scout (the one model with a swim) swims; a spearman walks the water (no swim of its own)
+	{
+		const GameObjBlueprint* scout = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Scout");
+		const int swim = gs.animations.names.getIndex("Swim"), move = gs.animations.names.getIndex("Move");
+		if (scout && swim >= 0) {
+			SrvGORef u = server.spawnObject(scout, enemy, centre(fast), Vector3(0, 0, 0));
+			for (int i = 0; i < 110 && env.swimmerCount() == 0; i++)
+				run(0.02f);
+			const int whileIn = u.get() ? u->animationIndex : -1;
+			run(20.0f);
+			const int after = u.get() ? u->animationIndex : -1;
+			snprintf(what, sizeof(what), "the Scout carried: animation %d (Swim %d, Move %d); out of it: %d, moving %d", whileIn, swim, move, after,
+				u.get() ? (int)u->movement.isMoving() : -1);
+			check(whileIn == swim && after == 0 && u.get() && !u->movement.isMoving(), std::string("it swims, then stands: ") + what);
+			if (u.get()) server.deleteObject(u.get());
+		}
+		else
+			check(false, "a Scout and the Swim animation in the game set");
+	}
 	// the setting off: nothing
 	{
 		env.settings.riverCurrents = false;
@@ -11929,6 +12003,43 @@ void Test_RiverCurrents()
 				c.metres, c.flow, c.drag, after1 * 100.0f, after5 * 100.0f, moved);
 			check(alive(u) && 1.0f - after1 >= 0.029f && 1.0f - after1 < 0.1f && 1.0f - after1 > 2.0f * fc.harm && moved > 1.0f,
 				std::string("hurt fast (3% a second), not at once, carried and swimming: ") + what);
+			if (u.get()) server.deleteObject(u.get());
+		}
+	}
+	// in the flood: a war machine sinks, dragged a little; a huge creature drifts, can't swim,
+	// hurt; the otherworldly (the Archangel Michael, Abaddon) stand on the bed untouched
+	{
+		int flooded = -1;
+		for (int ti = 0; ti < pw * ph && flooded < 0; ti++) {
+			const int x = ti % pw, z = ti / pw;
+			if (x < 4 || z < 4 || x >= pw - 4 || z >= ph - 4)
+				continue;
+			const auto c = env.currentAt(server, centre(ti));
+			if (c.depth == ServerEnvironment::DEPTH_FLOOD && !c.water && c.metres > 0.4f && c.metres < 0.9f && c.drag > 0.0f)
+				flooded = ti;
+		}
+		const auto c = flooded >= 0 ? env.currentAt(server, centre(flooded)) : ServerEnvironment::CurrentAt();
+		for (const char* name : { "Battering Ram", "Behemoth", "Abaddon", "Michael" }) {
+			const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
+			if (!bp || flooded < 0) {
+				check(false, std::string("a ") + name + " and flooded land");
+				continue;
+			}
+			const uint8_t hardy = env.waterHardiness(bp);
+			SrvGORef u = server.spawnObject(bp, enemy, centre(flooded), Vector3(0, 0, 0));
+			const Vector3 at = u->position;
+			const int carried0 = env.stats.carriedSeconds;
+			run(3.0f);
+			const float moved = alive(u) ? (u->position - at).len2xz() : -1.0f, health = share(u);
+			const int carried = env.stats.carriedSeconds - carried0;
+			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s", name, hardy, c.drag,
+				health * 100.0f, moved, carried);
+			if (hardy == ServerEnvironment::WATER_MACHINE)
+				check(health < 0.7f && health > 0.0f && carried >= 1 && moved > 0.2f && moved < c.drag * 3.0f * 0.6f, std::string("a war machine sinks, dragged a little: ") + what);
+			else if (hardy == ServerEnvironment::WATER_HUGE)
+				check(alive(u) && health < 0.97f && carried >= 1 && moved > 0.5f * c.drag, std::string("a huge creature drifts, hurt: ") + what);
+			else
+				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && moved < 0.3f, std::string("otherworldly, untouched: ") + what);
 			if (u.get()) server.deleteObject(u.get());
 		}
 	}

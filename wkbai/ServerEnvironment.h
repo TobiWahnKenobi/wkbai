@@ -123,7 +123,24 @@ struct ServerEnvironment {
 	//    the nearest shore when they have nowhere to go; not in shallow water (they walk on), and
 	//    machines don't swim. Each second they walk a leg of 1.5 s with the current and the swim
 	//    together (one NETCLIMSG_OBJECT_MOVEMENT_STARTED); out of the water they go on their way.
+	//  - A waterway of the map's water design with its own "speed" (WaterDesign::Waterway, m/s):
+	//    its water's speed is that, the classes slow below 0.5 m/s, normal below 1.2 m/s, fast
+	//    (as flow 0.3, 0.45: designedFlow), the weather's factor on it as on the rest.
+	//  - Carried and swimming, a unit plays its "Swim" animation if its model has one (the
+	//    Scout's), else its walk, slower; out of the water an idle one stops, its default again.
+	//  - waterHardiness: the war machines (rams, bombards, trebuchets, mangonels, siege towers,
+	//    carts, the Infernal Engine ...) sink where the water would carry them (normal depth, a
+	//    flood: MACHINE_SINK of their health a second), dragged MACHINE_DRAG of the current's way
+	//    as they go under; in shallow water only dragged that much. The huge creatures (the
+	//    Behemoth, the large Elementals, the Horde Spewer) drift with the current but can't swim,
+	//    and are hurt as any. The otherworldly (the Archangel Michael, Abaddon) walk the bed as
+	//    ever: neither carried nor hurt by water (nor drowned in floods or through the ice,
+	//    applyFloods, whether or not the currents are on).
 	//  - Formations' members, boats, buildings: not carried (the members are hurt, though).
+	//  - The path finding (currentsPathCost, MovementController's searches) goes round the water
+	//    that harms or carries, CURRENT_PATH_COST more a tile (a straight step 100), for land
+	//    units whose way comes within 8 tiles of it; the AI (AIWeather.cpp) walks its units out of
+	//    harmful water to the nearest dry land.
 	// With the setting off, or without the seasons, nothing of this runs.
 	enum WaterDepth : uint8_t { DEPTH_NONE = 0, DEPTH_SHALLOW = 1, DEPTH_NORMAL = 2, DEPTH_FLOOD = 3 };
 	static constexpr float FLOOD_RISE = 0.3f;
@@ -136,9 +153,34 @@ struct ServerEnvironment {
 	static constexpr float CURRENT_HARM[3][3] = { { 0.0f, 0.0f, 0.0f },
 	                                              { 0.0f, 0.005f, 0.015f }, // about 3 min, 1 min
 	                                              { 0.03f, 0.03f, 0.03f } };// about 30 s
+	static constexpr int CURRENT_PATH_COST[3][3] = { { 0, 0, 60 },
+	                                                 { 60, 300, 800 },
+	                                                 { 800, 800, 800 } };
+	// a waterway's speed set by the map's maker (m/s) as the flow map's scale: 0.5 m/s 0.3 (slow
+	// below), 1.2 m/s 0.45 (normal below), on from there 0.2 a m/s
+	static float designedFlow(float metresPerSecond);
+	// how a unit fares in water: as any (swims), a war machine (sinks, dragged a little), a huge
+	// creature (drifts, can't swim), otherworldly (untouched: Michael, Abaddon)
+	enum : uint8_t { WATER_ANY = 0, WATER_MACHINE = 1, WATER_HUGE = 2, WATER_UNHARMED = 3 };
+	static constexpr float MACHINE_SINK = 0.15f, MACHINE_DRAG = 0.35f;
+	uint8_t waterHardiness(const GameObjBlueprint* bp) const;
 	// what the water does at a place now (DEPTH_NONE: no water there); tests, the AI
 	struct CurrentAt { int depth = DEPTH_NONE, speed = 0; float metres = 0, flow = 0, drag = 0, harm = 0; bool water = false; Vector3 dir, shore; };
 	CurrentAt currentAt(Server& server, const Vector3& p);
+	// the same without working out the flow first (the AI's: none until the currents ran once)
+	CurrentAt currentHere(const Vector3& p) const;
+	// the path finding's extra cost a tile for the water the currents make dangerous (null: none
+	// now); around: whether the way between two points comes within margin tiles of any of it
+	struct PathCost {
+		int w = 0, h = 0;
+		std::vector<int32_t> cost;
+		std::vector<int32_t> sum; // (w + 1) x (h + 1): the tiles with a cost, summed (a box's count)
+		std::vector<std::pair<int, int32_t>> tiles; // (the costly tiles: rebuilt only when they change)
+		bool around(const Vector3& a, const Vector3& b, int margin = 8) const;
+	};
+	const PathCost* currentsPathCost() const { return pathCost.cost.empty() ? nullptr : &pathCost; }
+	// the flow worked out again (tests: a water design changed)
+	void forgetCurrents() { currentsPrepared = false; }
 	// the playable tiles of water units can stand in (tests)
 	const std::vector<int>& wadeableTiles(Server& server);
 	size_t swimmerCount() const { return swimmers.size(); }
@@ -250,7 +292,10 @@ private:
 	// water's flow and the way away from it), the tiles of water units can stand in, and the units
 	// being carried (by id; saved, "swim" lines: on their path or not, its point they make for,
 	// the leg they walk)
-	struct FlowCell { int8_t dx = 0, dz = 0, sx = 0, sz = 0; uint8_t speed = 0, depth = 0; bool water = false; };
+	struct FlowCell { int8_t dx = 0, dz = 0, sx = 0, sz = 0; uint8_t speed = 0, depth = 0, designed = 0; bool water = false; }; // (designed: 0.1 m/s)
+	PathCost pathCost;
+	void buildPathCost();
+	mutable std::map<const GameObjBlueprint*, uint8_t> hardiness;
 	std::vector<FlowCell> flowGrid;
 	std::vector<int> currentTiles;
 	bool currentsPrepared = false;
