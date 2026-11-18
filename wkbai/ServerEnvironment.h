@@ -86,9 +86,9 @@ struct ServerEnvironment {
 	// Structural Integrity it loses every 2.9 s (3 when lit, up to 27; it grows by 1.5 whenever the
 	// building's Fire Proofing fails a roll, a house's 1 in 5, a castle's 1 in 200). Once a second:
 	//  - Rain puts it out: RAIN_DOUSE * rain^1.5 off the strength a second (EnvironmentState::rain:
-	//    rain 0.5 0.18/s, a thunderstorm 0.9 0.43/s, heavy rain 1.0 0.5/s): a full fire (27) goes
-	//    out in about 3-4 minutes of rain and about a minute of heavy rain (a little more while
-	//    the rain sets in, and for a house, whose fire grows fastest). Its flames shrink as it does
+	//    rain 0.5 0.18/s, a thunderstorm 0.9 0.43/s, heavy rain 1.0 0.5/s): a full fire (27) on a
+	//    barracks goes out in about 2.5 minutes of rain and about a minute of heavy rain (test 96:
+	//    150 s and 53 s; longer while the rain sets in, and for a house, whose fire grows fastest). Its flames shrink as it does
 	//    (one "Building Fire" effect fewer below 19 and 9, the clients' flames by the share left,
 	//    NETCLIMSG_FIRE_SHARES), and at 0.5 it is out ("Stop Building Burning", as the peasants').
 	//  - Snow on a roof (the snow cover, less what a fire on it melted) slows a fire: at full
