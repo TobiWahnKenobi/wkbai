@@ -1572,13 +1572,14 @@ local function weatherTab()
 end
 
 -- The wind (Wind.h): on or off, where it blows from, how strong, whether it veers, its effects
-local WIND_FROM = { "Random (mostly westerly)", "North", "North-east", "East", "South-east", "South", "South-west", "West", "North-west" }
-local WIND_STRENGTHS = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" }
-local WIND_STRENGTH_NOTES = {
+-- (in the skirmish table: the main chunk is at Lua's limit of 200 locals)
+skirmish.windTab = function()
+	local WIND_FROM = { "Random (mostly westerly)", "North", "North-east", "East", "South-east", "South", "South-west", "West", "North-west" }
+	local WIND_STRENGTHS = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" }
+	local WIND_STRENGTH_NOTES = {
 	"Calm in fog, light in a heatwave, a breeze when clear or cloudy, fresh in rain and",
 	"droughts, strong in heavy rain, gales in thunderstorms and blizzards; it rises and",
 	"falls as it goes, and gusts." }
-local function windTab()
 	local s = skirmish.settings
 	local function switch(name, label, x, y)
 		if roundButton(x, y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
@@ -1997,7 +1998,7 @@ local function drawLobby(multiplayer)
 	skirmish.tab = tabs(labels, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
 	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab()
-	elseif skirmish.tab == 4 then windTab()
+	elseif skirmish.tab == 4 then skirmish.windTab()
 	elseif skirmish.tab == 5 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
 	else settingsTab() end
 	-- agent control: who has it on, on every tab, in every lobby (the host's list)
