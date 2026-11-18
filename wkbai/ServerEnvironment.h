@@ -57,6 +57,9 @@ struct ServerEnvironment {
 	float windFireFactor() const;
 	// the felt cold's and heat's drop from the wind (degrees; 0 without its effects)
 	float windChill() const;
+	// a boat's speed factor on a leg heading that way (xz): with the wind faster, against it slower,
+	// by the angle and the wind's speed (WindBoatFactor; 1 without its effects)
+	float windBoatFactor(const Vector3& heading) const;
 	void sendWind(Server& server, NetLink* only = nullptr);
 
 	// ---- for the AI (AIWeather.cpp): what the weather does, asked without random numbers ----

@@ -383,6 +383,13 @@ float ServerEnvironment::windChill() const
 	return 0.6f * std::pow(wind.speed - 1.5f, 0.75f);
 }
 
+float ServerEnvironment::windBoatFactor(const Vector3& heading) const
+{
+	if (!windOn() || !settings.windEffects)
+		return 1.0f;
+	return WindBoatFactor(heading, wind);
+}
+
 // the weather the wind blows by: the seasons' (or the debug panel's held one), else the game's sky
 static int WindWeather(const EnvironmentSettings& s, const EnvironmentState& st, int forced)
 {

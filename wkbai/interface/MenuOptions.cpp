@@ -318,6 +318,16 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
+		{
+			// the grass in the wind (Wind.h): Field reads the wind field's texture per blade vertex
+			MenuOption o;
+			o.id = "grassWind"; o.page = "terrain"; o.label = "Grass in the wind";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Waves", "Field" };
+			o.get = [&rs]() { return (float)rs.grassWind; };
+			o.set = [&rs](float v) { rs.grassWind = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.grass; }));
+		}
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
 		list.push_back(withEnabled(slider("grassHeight", "terrain", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
@@ -489,7 +499,8 @@ namespace {
 		for (const auto& [key, label] : { std::pair<const char*, const char*>{ "showHeroNames", "Show hero names" },
 			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" },
 			std::pair<const char*, const char*>{ "timelineChronicle", "Timeline (F7) told as a chronicle" },
-			std::pair<const char*, const char*>{ "buildingHealthBars", "Building health bars" } }) {
+			std::pair<const char*, const char*>{ "buildingHealthBars", "Building health bars" },
+			std::pair<const char*, const char*>{ "windGauge", "Wind gauge (direction and strength)" } }) {
 			MenuOption o;
 			o.id = key; o.page = "interface"; o.label = label;
 			o.type = MenuOption::TOGGLE;

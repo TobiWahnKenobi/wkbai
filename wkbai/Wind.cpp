@@ -5,10 +5,15 @@
 #include "Environment.h"
 #include "network.h"
 #include "util/BinaryReader.h"
+#include "common.h"
+#include "terrain.h"
+#include "tags.h"
+#include "gameset/GameObjBlueprint.h"
 #include <algorithm>
 #include <cmath>
 
 WindView g_wind;
+WindShelterMap g_windShelter;
 
 namespace {
 	constexpr float PI = 3.14159265358979f;
@@ -77,6 +82,16 @@ const char* WindCompass(float dirX, float dirZ)
 	if (b < 0.0f)
 		b += 360.0f;
 	return points[(int)std::floor(b / 22.5f + 0.5f) % 16];
+}
+
+float WindBoatFactor(const Vector3& heading, const WindState& wind)
+{
+	const float l = heading.len2xz();
+	if (l < 1e-4f)
+		return 1.0f;
+	const float c = std::clamp((heading.x * wind.dirX + heading.z * wind.dirZ) / l, -1.0f, 1.0f);
+	const float k = std::clamp(wind.speed / 8.0f, 0.0f, 2.0f);
+	return std::clamp(1.0f + k * (0.12f + 0.30f * c - 0.17f * c * c), 0.35f, 1.6f);
 }
 
 float WindNoise(float x, uint32_t seed)
@@ -149,4 +164,140 @@ Vector3 WindView::particle() const
 float WindView::flagRate() const
 {
 	return std::clamp(0.5f + 0.1f * now(), 0.45f, 2.2f);
+}
+
+float WindShelterMap::at(float x, float z) const
+{
+	if (width <= 0 || height <= 0)
+		return 1.0f;
+	const float fx = x / 5.0f - 0.5f, fz = z / 5.0f - 0.5f;
+	const int ix = (int)std::floor(fx), iz = (int)std::floor(fz);
+	const float tx = fx - ix, tz = fz - iz;
+	auto v = [&](int a, int b) {
+		a = std::clamp(a, 0, width - 1);
+		b = std::clamp(b, 0, height - 1);
+		return value[(size_t)b * width + a] / 170.0f;
+	};
+	const float top = v(ix, iz) + (v(ix + 1, iz) - v(ix, iz)) * tx, bottom = v(ix, iz + 1) + (v(ix + 1, iz + 1) - v(ix, iz + 1)) * tx;
+	return top + (bottom - top) * tz;
+}
+
+void BuildWindShelter(const CommonGameState* gs, const Vector3& dir, WindShelterMap& out)
+{
+	ComputeWindShelter(GatherWindShelter(gs, dir), out);
+}
+
+WindShelterInput GatherWindShelter(const CommonGameState* gs, const Vector3& dirIn)
+{
+	WindShelterInput in;
+	in.dir = dirIn;
+	const Terrain* t = gs ? gs->terrain : nullptr;
+	if (!t)
+		return in;
+	const auto [tw, th] = t->getNumPlayableTiles();
+	const int W = std::max(tw, 1), H = std::max(th, 1);
+	const size_t n = (size_t)W * H;
+	in.width = W;
+	in.height = H;
+	std::vector<float>& ground = in.ground;
+	std::vector<float>& above = in.above;
+	ground.resize(n);
+	above.assign(n, 0.0f);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++)
+			ground[(size_t)z * W + x] = t->getHeight(x * 5.0f + 2.5f, z * 5.0f + 2.5f);
+	// what stands on the ground: buildings (walls and palisades lower, the larger ones over
+	// their neighbouring tiles too), trees, bushes; their tops over the ground (m)
+	auto mark = [&](const Vector3& p, float h, int r) {
+		const int cx = (int)(p.x / 5.0f), cz = (int)(p.z / 5.0f);
+		for (int dz = -r; dz <= r; dz++)
+			for (int dx = -r; dx <= r; dx++) {
+				const int x = cx + dx, z = cz + dz;
+				if (x >= 0 && z >= 0 && x < W && z < H)
+					above[(size_t)z * W + x] = std::max(above[(size_t)z * W + x], h);
+			}
+	};
+	for (const auto& [id, obj] : gs->idmap) {
+		if (!obj || !obj->blueprint || (obj->flags & CommonGameObject::fTerminated))
+			continue;
+		const GameObjBlueprint* bp = obj->blueprint;
+		const std::string& name = bp->name;
+		if (bp->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+			const bool wall = name.find("Wall") != std::string::npos || name.find("Palisade") != std::string::npos
+				|| name.find("Gate") != std::string::npos || name.find("Tower") != std::string::npos;
+			const bool field = name.size() > 5 && name.compare(name.size() - 5, 5, " Farm") == 0;
+			if (!field)
+				mark(obj->position, wall ? 5.0f : 9.0f, wall ? 0 : 1);
+		}
+		else if (bp->bpClass != Tags::GAMEOBJCLASS_CHARACTER && bp->bpClass != Tags::GAMEOBJCLASS_MISSILE) {
+			if (name.find("Bush") != std::string::npos)
+				mark(obj->position, 2.0f, 0);
+			else if (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos)
+				mark(obj->position, 11.0f, 0);
+		}
+	}
+	return in;
+}
+
+void ComputeWindShelter(const WindShelterInput& in, WindShelterMap& out)
+{
+	if (in.width <= 0 || in.height <= 0) {
+		out.width = out.height = 0;
+		out.value.clear();
+		out.revision++;
+		return;
+	}
+	const int W = in.width, H = in.height;
+	const size_t n = (size_t)W * H;
+	const std::vector<float>& ground = in.ground;
+	const std::vector<float>& above = in.above;
+	Vector3 dir(in.dir.x, 0.0f, in.dir.z);
+	dir = dir.sqlen2xz() > 1e-6f ? dir.normal2xz() : Vector3(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
+	auto tileAt = [&](float x, float z) {
+		const int ix = std::clamp((int)std::floor(x / 5.0f), 0, W - 1), iz = std::clamp((int)std::floor(z / 5.0f), 0, H - 1);
+		return (size_t)iz * W + ix;
+	};
+	std::vector<float> f(n);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			const size_t i = (size_t)z * W + x;
+			const float cx = x * 5.0f + 2.5f, cz = z * 5.0f + 2.5f, g = ground[i];
+			// the steepest rise upwind within 50 m (ground and what stands on it), over the ground here;
+			// under trees the wood itself shelters
+			float rise = above[i] > 3.0f ? 0.45f : 0.0f;
+			for (int k = 1; k <= 10; k++) {
+				const size_t j = tileAt(cx - dir.x * 5.0f * k, cz - dir.z * 5.0f * k);
+				rise = std::max(rise, (ground[j] + above[j] - g) / (5.0f * k));
+			}
+			float factor = 1.0f - std::clamp((rise - 0.04f) * 2.2f, 0.0f, 0.75f);
+			// a crest over the ground 30-80 m upwind: faster
+			if (rise < 0.1f) {
+				float mean = 0.0f;
+				for (int k = 6; k <= 16; k++)
+					mean += ground[tileAt(cx - dir.x * 5.0f * k, cz - dir.z * 5.0f * k)];
+				mean /= 11.0f;
+				factor *= 1.0f + std::clamp((g - mean) / 25.0f, 0.0f, 0.35f);
+			}
+			f[i] = factor;
+		}
+	// softened over the neighbouring tiles
+	out.width = W;
+	out.height = H;
+	out.value.assign(n, 170);
+	for (int z = 0; z < H; z++)
+		for (int x = 0; x < W; x++) {
+			float sum = 0.0f;
+			int count = 0;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const int a = x + dx, b = z + dz;
+					if (a >= 0 && b >= 0 && a < W && b < H) {
+						sum += f[(size_t)b * W + a];
+						count++;
+					}
+				}
+			out.value[(size_t)z * W + x] = (uint8_t)std::clamp((int)std::lround(sum / count * 170.0f), 0, 255);
+		}
+	out.dir = dir;
+	out.revision++;
 }

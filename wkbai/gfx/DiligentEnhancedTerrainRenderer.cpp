@@ -48,6 +48,9 @@ SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
 Texture2D<float> seaTexture; // per tile: 1 in a sea's open water, 0 elsewhere (lakes; BuildWaterFlow)
+// per playable tile... of the renderer's grid (terrain width x height): the wind field's still
+// part (WindShelterMap: the factor on the wind's speed / 1.5), for the grass's Field level
+Texture2D<float> windShelter;
 Texture2D<float> coastTexture; // per tile: the distance to the land in quarter tiles / 255 (BuildCoastDistance; the sea's ice)
 Texture2D riverTexture; // the rivers' coordinates, 4 texels per tile (BuildRiverField)
 Texture2D<float> riverWidth; // and their half width
@@ -305,6 +308,9 @@ cbuffer SunBuffer
 	// the lobby's wind (Wind.h): the way it blows (xy), its strength now (z, 0..1 of a gale; 0
 	// without it: the grass as before), how far the air has moved along it (w, m, wrapped)
 	float4 WindParams;
+	// the grass in the wind (RenderSettings::grassWind): x 0 off, 1 waves, 2 field; y the gusts'
+	// clock (s, wrapped)
+	float4 WindParams2;
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -1673,10 +1679,37 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	float3 p = Root + float3(side.x, 0, side.y) * (s.x * 0.07 * grow) + float3(dir.x, 0, dir.y) * bend + float3(0, s.y * height, 0);
 	// the lobby's wind (WindParams, Wind.h): the blades lean downwind, in waves of gusts running
 	// over the meadow with the air (every 14 m or so), held to their length
-	if (WindParams.z > 0) {
-		float gustWave = sin((dot(Root.xz, WindParams.xy) - WindParams.w) * 0.45 + Root.x * 0.05) * 0.5 + 0.5;
-		float lean = WindParams.z * (0.35 + 0.65 * gustWave * gustWave) * 1.2 * height * s.y * s.y;
-		p.xz += WindParams.xy * lean;
+	if (WindParams.z > 0 && WindParams2.x > 0.5) {
+		float2 wdir = WindParams.xy;
+		float gust, flutter = 0;
+		if (WindParams2.x < 1.5) {
+			// Waves: one wave of gusts every 14 m along the wind
+			float gustWave = sin((dot(Root.xz, wdir) - WindParams.w) * 0.45 + Root.x * 0.05) * 0.5 + 0.5;
+			gust = 0.35 + 0.65 * gustWave * gustWave;
+		}
+		else {
+			// Field: the wind near the ground. Its still part from the map (the lee of hills, woods
+			// and buildings calmer, crests faster: windShelter); gust cells drifting with the air
+			// (noise in the wind's frame, 20-40 m and 10 m across, moving along it), the wind's way
+			// swirling by up to 25 degrees over 70 m, and the blades' tips fluttering in a strong wind
+			int2 last = (int2)TessGrid.xy - 1;
+			float2 g = (Root.xz + BlobParams.w) / 5.0 - 0.5;
+			int2 i = (int2)floor(g);
+			float2 f = g - i;
+			float a = windShelter.Load(int3(clamp(i, 0, last), 0)), b = windShelter.Load(int3(clamp(i + int2(1, 0), 0, last), 0));
+			float c = windShelter.Load(int3(clamp(i + int2(0, 1), 0, last), 0)), d = windShelter.Load(int3(clamp(i + int2(1, 1), 0, last), 0));
+			float shelter = lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 1.5;
+			float2 side = float2(-wdir.y, wdir.x);
+			float2 q = float2(dot(Root.xz, wdir) - WindParams.w, dot(Root.xz, side));
+			float cells = WeatherNoise(q * float2(1.0 / 36, 1.0 / 24)) * 0.65 + WeatherNoise(q * (1.0 / 11) + 5.3) * 0.35;
+			float swirl = (WeatherNoise(q * (1.0 / 70) + 17.3) - 0.5) * 0.9;
+			float cs = cos(swirl), sn = sin(swirl);
+			wdir = float2(wdir.x * cs - wdir.y * sn, wdir.x * sn + wdir.y * cs);
+			gust = shelter * (0.3 + 1.15 * cells * cells);
+			flutter = sin(WindParams2.y * (8 + 10 * WindParams.z) + Root.x * 1.7 + Root.z * 1.1) * 0.08 * saturate(WindParams.z * shelter * 1.6);
+		}
+		float lean = WindParams.z * gust * 1.2 * height * s.y * s.y;
+		p.xz += wdir * lean + float2(-wdir.y, wdir.x) * (flutter * height * s.y * s.y);
 		p.y -= lean * lean / max(2 * s.y * height, 0.05);
 	}
 	GRASS_OUTPUT output;
@@ -2032,6 +2065,14 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	// that changes (once a game: the waves' phase jumps with their way)
 	void writeWaves(IRenderDevice* device, IDeviceContext* ctx, const Terrain* terrain);
 	bool wavesWindOn = false;
+	// the wind field's shelter on the renderer's grid (g_windShelter sampled per tile), its revision
+	RefCntAutoPtr<ITexture> windShelterMap;
+	uint32_t windShelterRevision = ~0u;
+	// a new map blended in over 2 s from the one shown (on the CPU, uploaded about 8 times a
+	// second while it blends: no cost on the GPU, ~0.05 ms here), so the grass's calm and windy
+	// patches move over instead of jumping
+	std::vector<float> shelterFrom, shelterTo, shelterShown;
+	uint64_t shelterBlendStart = 0, shelterLastUpload = 0;
 	Vector3 wavesWind;
 	// the HD ripple layers' offsets with the lobby's wind (integrated: its speed changes never jump them)
 	double ripple[4] = {};
@@ -2349,7 +2390,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 944;
+	cbDesc.Size = 960;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -2382,6 +2423,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "seaTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "coastTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "windShelter", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions1", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "WaveBuffer", 1, SHADER_RESOURCE_TYPE_CONSTANT_BUFFER, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -3038,6 +3080,12 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	put(flowMap, "water flow map", "flowTexture", W, H, TEX_FORMAT_RGBA8_UNORM, 4, flow.data());
 	put(seaMap, "open sea map", "seaTexture", W, H, TEX_FORMAT_R8_UNORM, 1, sea.data());
 	put(coastMap, "coast distance map", "coastTexture", W, H, TEX_FORMAT_R8_UNORM, 1, coast.data());
+	{
+		// the wind field (neutral until the client's first build, uploaded in render)
+		const std::vector<uint8_t> calm((size_t)W * H, 113);
+		put(windShelterMap, "wind field shelter", "windShelter", W, H, TEX_FORMAT_R8_UNORM, 1, calm.data());
+		windShelterRevision = ~0u;
+	}
 	put(waveRegions[0], "wave regions (1-4)", "waveRegions0", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[0].data());
 	put(waveRegions[1], "wave regions (5-8)", "waveRegions1", W, H, TEX_FORMAT_RGBA8_UNORM, 4, regionHalves[1].data());
 	put(riverField, "river coordinates", "riverTexture", W * RIVER_FIELD_RES, H * RIVER_FIELD_RES, TEX_FORMAT_RGBA32_FLOAT, 16, field.data());
@@ -3554,6 +3602,44 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
 	// the lobby's wind for the grass (WindParams)
+	float* wind2 = (float*)(sbdata + 944);
+	wind2[0] = g_wind.on && g_renderSettings.grass ? (float)std::clamp(g_renderSettings.grassWind, 0, 2) : 0.0f;
+	wind2[1] = (float)std::fmod(SDL_GetTicks() / 1000.0, 3600.0);
+	wind2[2] = wind2[3] = 0.0f;
+	// the wind field's shelter, uploaded when the client has built it again
+	if (_impl->windShelterMap && g_wind.on && g_renderSettings.grassWind >= 2) {
+		const uint32_t W = terrain->width, H = terrain->height;
+		const size_t n = (size_t)W * H;
+		const TextureDesc& d = _impl->windShelterMap->GetDesc();
+		const uint64_t nowNs = SDL_GetTicksNS();
+		if (d.Width == W && d.Height == H && g_windShelter.revision != _impl->windShelterRevision) {
+			// a new map: from what is shown now (the first one at once) to it
+			const bool first = _impl->shelterShown.size() != n;
+			_impl->windShelterRevision = g_windShelter.revision;
+			_impl->shelterTo.resize(n);
+			for (uint32_t z = 0; z < H; z++)
+				for (uint32_t x = 0; x < W; x++)
+					_impl->shelterTo[(size_t)z * W + x] = g_windShelter.at(((int)x - terrain->edge) * 5.0f + 2.5f, ((int)z - terrain->edge) * 5.0f + 2.5f);
+			_impl->shelterFrom = first ? _impl->shelterTo : _impl->shelterShown;
+			_impl->shelterShown.resize(n);
+			_impl->shelterBlendStart = first ? nowNs - 3000000000ull : nowNs;
+			_impl->shelterLastUpload = 0;
+		}
+		const double since = (nowNs - _impl->shelterBlendStart) / 1e9;
+		const bool blending = _impl->shelterShown.size() == n && _impl->shelterTo.size() == n && _impl->shelterLastUpload <= _impl->shelterBlendStart + 2000000000ull;
+		if (blending && nowNs - _impl->shelterLastUpload >= 120000000ull) {
+			_impl->shelterLastUpload = nowNs;
+			const float k = (float)std::clamp(since / 2.0, 0.0, 1.0), e = k * k * (3.0f - 2.0f * k);
+			std::vector<uint8_t> data(n);
+			for (size_t i = 0; i < n; i++) {
+				const float v = _impl->shelterFrom[i] + (_impl->shelterTo[i] - _impl->shelterFrom[i]) * e;
+				_impl->shelterShown[i] = v;
+				data[i] = (uint8_t)std::clamp((int)std::lround(v / 1.5f * 255.0f), 0, 255);
+			}
+			TextureSubResData sub{ data.data(), (Uint64)W };
+			ctx->UpdateTexture(_impl->windShelterMap, 0, 0, Box{ 0, W, 0, H }, sub, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		}
+	}
 	float* wind = (float*)(sbdata + 928);
 	wind[0] = g_wind.dir.x;
 	wind[1] = g_wind.dir.z;

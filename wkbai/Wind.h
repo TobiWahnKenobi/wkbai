@@ -22,11 +22,13 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 #include "util/vecmat.h"
 
 struct NetPacketWriter;
 struct BinaryReader;
 struct EnvironmentSettings;
+struct CommonGameState;
 
 // the fixed wind from before (the clouds' drift (6, 2), the rain's (0.3, 0.1)): the way it blows
 // and its speed in metres a second; the clouds drift 6.3 units a second at this speed
@@ -60,6 +62,12 @@ WindState WindTarget(const EnvironmentSettings& s, int weather, float time);
 float WindGust(float time, float gustiness, uint32_t seed);
 // the prevailing direction it blows (unit), before the veering
 Vector3 WindPrevailing(const EnvironmentSettings& s);
+// A boat's speed factor on a heading (xz) in a wind: the square sails and oars of the game's
+// ships run best before the wind and worst into it. With c the cosine between the heading and
+// the way the wind blows (1 running before it, 0 across it, -1 into it) and k its speed / 8 m/s
+// (at most 2): 1 + k (0.12 + 0.30 c - 0.17 c^2), held to 0.35 .. 1.6. A moderate breeze: +25 %
+// before it, +12 % across, -35 % into it; a gale twice that (into it down to 0.35).
+float WindBoatFactor(const Vector3& heading, const WindState& wind);
 // a smooth noise of one variable, 0..1, the same everywhere for a seed
 float WindNoise(float x, uint32_t seed);
 
@@ -78,7 +86,7 @@ struct WindView {
 	// metres the air has moved since the start (x, z; wrapped at 100 km): what drifts with the wind
 	// (the rain's and snow's boxes, the clouds' offsets)
 	double driftX = 0.0, driftZ = 0.0;
-	// metres along its way, whatever the way (the grass's waves of gusts; wrapped at 13960)
+	// metres along its way, whatever the way (the grass's gusts; wrapped at 100 km)
 	double along = 0.0;
 	// the banners' clock (seconds): their flapping animation runs at 0.5 times its own speed in a
 	// calm, 1 at the reference speed, up to 2.2 in a gale
@@ -96,3 +104,31 @@ struct WindView {
 	double particleX = 0.0, particleZ = 0.0;
 };
 extern WindView g_wind;
+
+// The wind near the ground (the wind field's still part; the grass's, later the fires' shelter):
+// per tile of the playable map (5 m), a factor on the wind's speed. Below 1 in the lee of what
+// stands upwind higher than the tile (hills, woods, buildings, walls: the steeper it rises, the
+// calmer, down to 0.25 right behind a wall or a wood's edge, and under the trees themselves),
+// above 1 on crests standing over the ground upwind (up to 1.35). Worked out for one direction:
+// the client's again as the wind turns, and every few seconds (buildings come and go).
+struct WindShelterMap {
+	int width = 0, height = 0;   // playable tiles
+	std::vector<uint8_t> value;  // the factor * 170 (0 .. 1.5), row order
+	Vector3 dir{ WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z }; // what it was worked out for
+	uint32_t revision = 0;       // counts up with each build
+	// at a world position of the playable area, bilinear; 1 outside it or before the first build
+	float at(float x, float z) const;
+};
+// for a game state's terrain and objects, the wind blowing along dir (unit, xz)
+void BuildWindShelter(const CommonGameState* gs, const Vector3& dir, WindShelterMap& out);
+// the same in two steps: what it needs from the game state (quick, on the thread that owns it:
+// the ground's height and what stands on each tile), then the work (on any thread)
+struct WindShelterInput {
+	int width = 0, height = 0;
+	std::vector<float> ground, above;
+	Vector3 dir;
+};
+WindShelterInput GatherWindShelter(const CommonGameState* gs, const Vector3& dir);
+void ComputeWindShelter(const WindShelterInput& in, WindShelterMap& out);
+// the client's (UpdateWindView), for the grass (DiligentEnhancedTerrainRenderer)
+extern WindShelterMap g_windShelter;

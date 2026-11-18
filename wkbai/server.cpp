@@ -1708,6 +1708,9 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 			stopMovement();
 		return;
 	}
+	// boats: faster before the wind, slower into it, for this leg (Wind.h; 1 without the wind's effects)
+	if (blueprint->canWalkOnWater())
+		speed *= Server::instance->environment.windBoatFactor(destination - position);
 	movement.startMovement(position, destination, Server::instance->timeManager.currentTime, speed);
 	currentSpeed = speed;
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };
@@ -3612,8 +3615,8 @@ void Server::simulate()
 		updatePeasantActivity();
 	}
 	// wkbai's day and night, seasons and weather: once a game second, only when a setting is on
-	// (else once, for the game's sky)
-	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
+	// (else once, for the game's sky); the wind (Wind.h) also alone
+	if (environment.enabled() || environment.windOn() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
 	// wkbai's unit history: the hero threshold once the game runs
 	unitHistory.update(*this);

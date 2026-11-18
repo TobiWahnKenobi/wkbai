@@ -11441,10 +11441,33 @@ void Test_Wind()
 			&& std::fabs(loaded.wind.dirX - 0.6f) < 1e-6f && std::fabs(loaded.wind.dirZ + 0.8f) < 1e-6f
 			&& std::fabs(loaded.wind.speed - 12.5f) < 1e-5f && std::fabs(loaded.wind.gustiness - 0.45f) < 1e-6f);
 	}
-	// the graphics setting: its menu choice and range
+	// the graphics settings: their menu choices and defaults
 	{
 		const MenuOption* o = FindMenuOption("windTrees");
 		check("windTrees option", o && o->choices.size() == 3 && RenderSettings().windTrees == 2);
+		const MenuOption* g = FindMenuOption("grassWind");
+		check("grassWind option", g && g->choices.size() == 3 && RenderSettings().grassWind == 2);
+	}
+	// boats: before the wind faster, into it slower, across a little faster; a gale's limits
+	{
+		WindState w;
+		w.dirX = 1.0f; w.dirZ = 0.0f; w.speed = 8.0f;
+		const float before = WindBoatFactor(Vector3(10, 0, 0), w), into = WindBoatFactor(Vector3(-10, 0, 0), w), across = WindBoatFactor(Vector3(0, 0, 5), w);
+		printf("WIND boats at 8 m/s: before %.2f, across %.2f, into %.2f\n", before, across, into);
+		check("boats by the wind", std::fabs(before - 1.25f) < 1e-3f && std::fabs(across - 1.12f) < 1e-3f && std::fabs(into - 0.65f) < 1e-3f);
+		w.speed = 30.0f;
+		check("boats in a gale", std::fabs(WindBoatFactor(Vector3(-1, 0, 0), w) - 0.35f) < 1e-4f && std::fabs(WindBoatFactor(Vector3(1, 0, 0), w) - 1.5f) < 1e-4f);
+		ServerEnvironment env;
+		check("boats without the wind", env.windBoatFactor(Vector3(-1, 0, 0)) == 1.0f);
+	}
+	// the wind field's map: 1 before a build and outside, bilinear between the tiles' middles
+	{
+		WindShelterMap m;
+		check("shelter neutral", m.at(10, 10) == 1.0f);
+		m.width = 2; m.height = 1;
+		m.value = { 85, 255 }; // 0.5, 1.5
+		const float mid = m.at(5.0f, 2.5f), left = m.at(2.5f, 2.5f), out = m.at(-50.0f, 2.5f);
+		check("shelter bilinear", std::fabs(mid - 1.0f) < 1e-3f && std::fabs(left - 0.5f) < 1e-3f && std::fabs(out - 0.5f) < 1e-3f);
 	}
 	printf("WIND %s\n", all ? "PASSED" : "FAILED");
 }

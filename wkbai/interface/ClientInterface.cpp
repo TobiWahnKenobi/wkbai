@@ -1717,6 +1717,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::Combo("Trees in the wind", &s.windTrees, windTreeLevels, 3);
 		}
 		ImGui::Checkbox("Grass", &s.grass);
+		{
+			static const char* const grassWindLevels[] = { "Off", "Waves", "Field (shelter, gust cells, swirl)" };
+			ImGui::Combo("Grass in the wind", &s.grassWind, grassWindLevels, 3);
+		}
 		ImGui::BeginDisabled(!s.grass);
 		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 24.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
@@ -2358,6 +2362,61 @@ void ClientInterface::drawUnitHistoryOverlay()
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
 // this player and its allies only, and the timeline what it saw; in a replay, everyone and
 // everything. A timeline entry clicked moves the camera there.
+void ClientInterface::drawWindGauge()
+{
+	if (!client || !client->windActive || !g_settings.value("windGauge", true))
+		return;
+	ImGuiIO& io = ImGui::GetIO();
+	const float scale = std::clamp(io.DisplaySize.y / 1080.0f, 0.7f, 2.0f);
+	const float r = 34.0f * scale;
+	// (its reading below kept on the screen)
+	const float textHalf = std::max(ImGui::CalcTextSize("WSW 30 m/s").x, ImGui::CalcTextSize(WindSpeedName(g_wind.speed)).x) * 0.5f;
+	const ImVec2 c(io.DisplaySize.x - std::max(r, textHalf) - 14.0f * scale, 150.0f * scale);
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	// the camera's frame on the ground: up on the screen is where it looks
+	Vector3 f(client->camera.direction.x, 0.0f, client->camera.direction.z);
+	f = f.sqlen2xz() > 1e-6f ? f.normal2xz() : Vector3(0, 0, 1);
+	const Vector3 right(f.z, 0.0f, -f.x);
+	auto screen = [&](float wx, float wz, float len) { return ImVec2(c.x + (wx * right.x + wz * right.z) * len, c.y - (wx * f.x + wz * f.z) * len); };
+	dl->AddCircleFilled(c, r, IM_COL32(20, 16, 10, 170), 40);
+	dl->AddCircle(c, r, IM_COL32(200, 170, 110, 220), 40, 2.0f * scale);
+	// north (+z) and the other points
+	const char* points[4] = { "N", "E", "S", "W" };
+	const float px[4] = { 0, 1, 0, -1 }, pz[4] = { 1, 0, -1, 0 };
+	for (int i = 0; i < 4; i++) {
+		const ImVec2 at = screen(px[i], pz[i], r - 8.0f * scale);
+		const ImVec2 size = ImGui::CalcTextSize(points[i]);
+		dl->AddText(ImVec2(at.x - size.x * 0.5f, at.y - size.y * 0.5f), i == 0 ? IM_COL32(255, 220, 120, 255) : IM_COL32(190, 180, 160, 200), points[i]);
+	}
+	// the arrow: from upwind to downwind, longer and redder the stronger (with the gust now)
+	const float s = g_wind.strength();
+	const float len = r * (0.35f + 0.45f * std::sqrt(s));
+	const ImU32 col = s < 0.25f ? IM_COL32(150, 220, 150, 255) : s < 0.55f ? IM_COL32(240, 220, 110, 255) : IM_COL32(240, 110, 80, 255);
+	const ImVec2 tail = screen(-g_wind.dir.x, -g_wind.dir.z, len), head = screen(g_wind.dir.x, g_wind.dir.z, len);
+	dl->AddLine(tail, head, col, 3.0f * scale);
+	const ImVec2 back = screen(-g_wind.dir.x, -g_wind.dir.z, 9.0f * scale), side = screen(g_wind.dir.z, -g_wind.dir.x, 5.0f * scale);
+	const ImVec2 b(back.x - c.x, back.y - c.y), sd(side.x - c.x, side.y - c.y);
+	dl->AddTriangleFilled(head, ImVec2(head.x + b.x + sd.x, head.y + b.y + sd.y), ImVec2(head.x + b.x - sd.x, head.y + b.y - sd.y), col);
+	// the reading below: from where, how fast (the mean), its name
+	char text[64];
+	snprintf(text, sizeof(text), "%s %.0f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed);
+	ImVec2 size = ImGui::CalcTextSize(text);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale), IM_COL32(235, 225, 200, 255), text);
+	const char* name = WindSpeedName(g_wind.speed);
+	size = ImGui::CalcTextSize(name);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale + ImGui::GetTextLineHeight()), IM_COL32(190, 180, 160, 220), name);
+	// its tooltip
+	const ImVec2 m = io.MousePos;
+	if ((m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) < r * r) {
+		ImGui::BeginTooltip();
+		ImGui::Text("Wind from %s at %.1f m/s (%s), now %.1f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed, WindSpeedName(g_wind.speed), g_wind.now());
+		if (client->environmentSettings.windEffects)
+			ImGui::TextUnformatted("Boats run faster before it and slower into it. It fans wildfires\nand chills units in the cold.");
+		ImGui::TextDisabled("Options, Interface: \"Wind gauge\" to hide it");
+		ImGui::EndTooltip();
+	}
+}
+
 void ClientInterface::drawChronicle()
 {
 	// a replay shows everyone and everything; a game the player's own statistics and its allies',
@@ -6124,6 +6183,7 @@ void ClientInterface::iter()
 	drawLoadingScreen();
 	if (loadingDone) {
 		drawChronicle();
+		drawWindGauge();
 	}
 	// agent control: every player and spectator sees who has it on (the host's list), all game long
 	if (!client->agentPlayers.empty()) {
