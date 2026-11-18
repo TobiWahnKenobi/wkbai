@@ -949,10 +949,7 @@ struct FrontEnd::Impl {
 				companiesLoaded = true;
 			}
 			auto text = [this](const std::string& key) {
-				std::string s = key.empty() ? std::string() : lang.getText(key);
-				size_t pos;
-				while ((pos = s.find("\\n")) != std::string::npos)
-					s.replace(pos, 2, "\n");
+				std::string s = key.empty() ? std::string() : lang.getText(key); // (its line breaks real ones: Language::load)
 				// a description's "|Title|" first line (the title is shown above it)
 				if (!s.empty() && s[0] == '|')
 					if (const size_t end = s.find('|', 1); end != std::string::npos)
@@ -1010,7 +1007,7 @@ struct FrontEnd::Impl {
 			int i = 1;
 			for (const General& g : generals) {
 				std::string bio = g.background.empty() ? std::string()
-					: g.background[0] == '"' ? g.background.substr(1) : lang.getText(g.background);
+					: g.background[0] == '"' ? Language::decodeLineBreaks(g.background.substr(1)) : lang.getText(g.background);
 				// "|Name|%s\n..." in Language.txt: the name between bars and a placeholder line
 				if (!bio.empty() && bio[0] == '|') {
 					const size_t end = bio.find('|', 1);
@@ -1019,10 +1016,6 @@ struct FrontEnd::Impl {
 				}
 				if (bio.rfind("%s", 0) == 0)
 					bio = bio.substr(2);
-				size_t pos;
-				// Language.txt writes line breaks as a backslash and n
-				while ((pos = bio.find("\\n")) != std::string::npos)
-					bio.replace(pos, 2, "\n");
 				sol::table stats = lua.create_table();
 				for (const auto& [item, value] : g.stats)
 					stats[item] = value;

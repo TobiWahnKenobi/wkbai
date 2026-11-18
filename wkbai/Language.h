@@ -13,6 +13,11 @@ struct Language {
 	void load(const char* path);
 	std::string getText(const std::string& key) const;
 
+	// Language.txt writes a line break as a backslash and n: made a real one at load, so every
+	// reader of the text (menus, dialogs, tooltips) gets it. "\\" and other escapes ("\c", the
+	// advisor's marker) are kept for the readers that interpret them.
+	static std::string decodeLineBreaks(const std::string& str);
+
 	Language() = default;
 	//Language(const char* path) { load(path); }
 };
