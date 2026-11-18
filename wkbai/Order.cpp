@@ -1107,6 +1107,77 @@ bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
 	return m && OutOfReach(m, target->position, AIUtil::ClassOf(m) == 2 ? 30.0f : 3.0f);
 }
 
+// Kiting (the AI play test of 2026-11-16: "Formation/groups from the enemy chase always the same
+// nearest target", so one fast unit led them around the map). wkbai's: an AI player's unit that
+// walks after a moving enemy character and hasn't come a metre nearer in 12 s gives up; for 30 s
+// it, its formation and its armies leave that enemy out of their victims (actions.cpp) and the
+// ministries' choices (AIUtil::CanReach). By the clock, every 2 s per unit; kept for this game
+// only (not saved: a loaded game forgets a chase under way and the last 30 s of give-ups).
+namespace {
+	struct Chase { float checkAt = 0.0f, best = 0.0f, since = 0.0f; };
+	std::map<std::pair<uint32_t, uint32_t>, Chase> s_chases;
+	std::map<std::pair<uint32_t, uint32_t>, float> s_gaveUp;
+	uint64_t s_chaseGame = 0;
+	void ChaseTablesForThisGame()
+	{
+		const uint64_t serial = Server::instance && Server::instance->gameSet ? Server::instance->gameSet->serial : 0;
+		if (s_chaseGame != serial) {
+			s_chaseGame = serial;
+			s_chases.clear();
+			s_gaveUp.clear();
+		}
+	}
+}
+constexpr float CHASE_CHECK = 2.0f, CHASE_PATIENCE = 12.0f, GAVE_UP_FOR = 30.0f;
+
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target)
+{
+	if (!holder || !target)
+		return false;
+	ChaseTablesForThisGame();
+	auto it = s_gaveUp.find({ holder->id, target->id });
+	return it != s_gaveUp.end() && Server::instance->timeManager.currentTime < it->second + GAVE_UP_FOR;
+}
+
+static bool ChaseGivesUp(ServerGameObject* go, ServerGameObject* target)
+{
+	ServerGameObject* player = go->getPlayer();
+	if (!target || go->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER
+		|| !player || !player->aiController.isAI() || !AIUtil::IsEnemy(player, target))
+		return false;
+	ChaseTablesForThisGame();
+	const float now = Server::instance->timeManager.currentTime;
+	const std::pair<uint32_t, uint32_t> key{ go->id, target->id };
+	// only while both walk: a unit at its target, or one standing, isn't chasing
+	if (!go->movementController.isMoving() || !target->movementController.isMoving()) {
+		s_chases.erase(key);
+		return false;
+	}
+	const float d = (target->position - go->position).len2xz();
+	auto [it, fresh] = s_chases.try_emplace(key);
+	Chase& c = it->second;
+	if (fresh) {
+		c.checkAt = now + CHASE_CHECK;
+		c.best = d;
+		c.since = now;
+		return false;
+	}
+	if (now < c.checkAt)
+		return false;
+	c.checkAt = now + CHASE_CHECK;
+	if (d < c.best - 1.0f) {
+		c.best = d;
+		c.since = now;
+		return false;
+	}
+	if (now - c.since < CHASE_PATIENCE)
+		return false;
+	s_chases.erase(key);
+	for (ServerGameObject* o = go; o && o->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER; o = o->getParent())
+		s_gaveUp[{ o->id, target->id }] = now;
+	return true;
+}
+
 // The reach an attacker needs to get within, from a task's range: a melee unit's (not an
 // archer's) at most 3 m. A "Move To Attack Range" walk has a 10 m range before the attack takes
 // over, and slope tiles within 10 m of a hilltop scout let a spearman stand 31 m below it for good
@@ -1726,6 +1797,14 @@ void ObjectReferenceTask::onUpdate()
 				const bool searchFailed = go->movementController.takeSearchFailed();
 				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// an AI unit chasing an enemy it doesn't gain on gives up (ChaseGivesUp)
+				if (ChaseGivesUp(go, target.get())) {
+					TraceTask(this, "chase not gaining: the attack ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
 				// An attack (or a walk to an enemy: the Kingmaker formations' "Move To Attack Range
 				// Of Original Victim") whose walk ended short of a target it can never reach
 				// (OutOfReach: up a slope its class can't climb, across water): the task ends as if

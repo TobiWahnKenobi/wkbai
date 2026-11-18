@@ -530,6 +530,7 @@ struct ActionCreateObjectVia : Action {
 };
 
 bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target); // Order.cpp
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target); // Order.cpp (kiting)
 
 struct ActionRegisterAssociates : Action {
 	std::unique_ptr<ObjectFinder> f_aors, f_ated;
@@ -545,7 +546,7 @@ struct ActionRegisterAssociates : Action {
 		auto ated = f_ated->eval(ctx);
 		for (ServerGameObject *aor : aors) {
 			for (ServerGameObject *obj : ated)
-				if (!reachableOnly || !ArmyCannotReach(aor, obj))
+				if (!reachableOnly || (!ArmyCannotReach(aor, obj) && !RecentlyGaveUp(aor, obj)))
 					aor->associateObject(category, obj);
 		}
 	}

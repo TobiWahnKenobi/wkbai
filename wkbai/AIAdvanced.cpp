@@ -329,6 +329,7 @@ namespace {
 // ---- AIUtil (AIUtil.h): the helpers above, and the orders the Lua AIs and the ministry AI give ----
 
 bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach); // Order.cpp
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target); // Order.cpp (kiting)
 
 namespace AIUtil {
 	int ClassOf(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::ClassOf(o); }
@@ -450,7 +451,8 @@ namespace AIUtil {
 	// a tile that near in the ground its class can stand on); an archer's reach 30 m, else 3 m
 	bool CanReach(ServerGameObject* unit, ServerGameObject* target)
 	{
-		return !target || !OutOfReach(unit, target->position, ClassOf(unit) == 2 ? 30.0f : 3.0f);
+		// (and not an enemy it gave up chasing in the last 30 s, Order.cpp ChaseGivesUp)
+		return !target || (!OutOfReach(unit, target->position, ClassOf(unit) == 2 ? 30.0f : 3.0f) && !RecentlyGaveUp(unit, target));
 	}
 	ServerGameObject* NearestReachable(ServerGameObject* unit, const std::vector<ServerGameObject*>& candidates)
 	{
