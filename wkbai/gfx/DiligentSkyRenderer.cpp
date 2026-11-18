@@ -313,7 +313,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float cover = CloudCover(xz, lod + 1);
 	// a sheet closes up: a stratus deck is one layer of varying thickness, not broken cloud
 	cover = lerp(cover, saturate(cover * 1.3 + 0.12), stratus * smoothstep(0.5, 0.8, cShape.x));
-	float stormCore = 0, deck = 0, towers = 0, towerBase = 0;
+	float stormCore = 0, deck = 0, towers = 0, towerBase = 0, dissolve = 0;
 	// a storm's weather: a dark low deck of the ordinary cover (the lowest sixth of the layer: a
 	// few hundred units, as a rain's)
 	if (storm > 0)
@@ -344,6 +344,9 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 			stormCore = tower * stand;
 			// their own flat base (the storm layer's, a 30 unit ramp)
 			towerBase = saturate(hs * CloudStorm.w / 30);
+			// melting: the towers dissolve as they sink (below: holes, wisps), more the further gone
+			if (CloudStorm.y < 0.5)
+				dissolve = st.w * saturate(towers * 3);
 		}
 		deck = storm * (1 - stormCore) * (1 - smoothstep(0.1, 0.2, h));
 	}
@@ -392,6 +395,10 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	}
 	shape = lerp(shape, 0.3 + 0.7 * shape, stormCore * stormCore) * profile; // the towers' middles solid
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
+	// a melting cumulonimbus dissolving (the play test's next round: it only sank and spread):
+	// holes opening in its thin parts first, by the shape's own cells, wider as it goes
+	if (dissolve > 0)
+		c = saturate(Remap(c, dissolve * (0.15 + 0.55 * (1 - s.b)), 1, 0, 1));
 	// (Medium and High: thick and thin clouds by region; a storm's towers keep theirs)
 	if (detailLevel >= 1 && c > 0)
 		c *= lerp(cRegion, 1, stormCore);
@@ -400,7 +407,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float detailLod = log2(footprint * 32 / DETAIL_PERIOD);
 	float3 d = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.3) / DETAIL_PERIOD, max(detailLod, 0)).rgb;
 	float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
-	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus);
+	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus) * (1 + 1.5 * dissolve); // (a melting tower's edges frayed into wisps)
 	if (detailLevel >= 2 && detailLod < 3.5) {
 		// High: a finer octave of billows (about 40 units) on the cumulus' tops and a storm tower's
 		// sides, and the tops' cauliflower relief cut a little deeper
