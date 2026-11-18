@@ -250,12 +250,12 @@ float Remap(float x, float a, float b, float c, float d)
 // billowing out in lumps (a 3D noise of a few hundred units, changing up the tower), to an anvil
 // that spreads out from about three quarters of the layer, downwind and wider the higher (several
 // times the tower across), flat under the layer's top. x: the towers, y: the anvils.
-float2 StormCellsHigh(float3 p, float h, float lod)
+float2 StormCellsHigh(float3 p, float h, float lod, float widen)
 {
 	float n = StormCell(p.xz, lod);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, p / 1900 + float3(0.31, 0.17, 0.67), max(lod - 1, 0));
 	float billow = s.g * 0.55 + s.b * 0.3 + s.a * 0.15 - 0.5;
-	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09;
+	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09 - widen;
 	float tower = saturate((n - th) / 0.05);
 	float spread = smoothstep(0.72, 0.97, h);
 	float a = StormCell(p.xz - float2(0.948683, 0.316228) * (spread * 3200), lod);
@@ -313,29 +313,55 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float cover = CloudCover(xz, lod + 1);
 	// a sheet closes up: a stratus deck is one layer of varying thickness, not broken cloud
 	cover = lerp(cover, saturate(cover * 1.3 + 0.12), stratus * smoothstep(0.5, 0.8, cShape.x));
-	float stormCore = 0, deck = 0;
-	if (storm > 0) {
-		// cumulonimbus: towers on the storm cells' cores up to the layer's top, their anvils
-		// spreading out wide under it, over a dark low deck of the ordinary cover all around
-		// (the lowest sixth of the layer: a few hundred units, as a rain's)
-		float2 cb = detailLevel >= 2 ? StormCellsHigh(float3(xz.x, p.y, xz.y), h, lod) : StormCells(xz, h, lod);
-		float anvil = detailLevel >= 2 ? cb.y : cb.y * smoothstep(0.8, 0.9, h);
-		float low = cover * (1 - smoothstep(0.1, 0.17, h));
-		cover = lerp(cover, max(max(cb.x, anvil), low), storm);
-		stormCore = cb.x * storm;
-		deck = storm * (1 - cb.x) * (1 - smoothstep(0.1, 0.2, h));
+	float stormCore = 0, deck = 0, towers = 0, towerBase = 0;
+	// a storm's weather: a dark low deck of the ordinary cover (the lowest sixth of the layer: a
+	// few hundred units, as a rain's)
+	if (storm > 0)
+		cover = lerp(cover, cover * (1 - smoothstep(0.1, 0.17, h)), storm);
+	if (CloudStorm.x > 0) {
+		// cumulonimbus: towers on the storm cells' cores, their anvils spreading out wide under
+		// the layer's top, as they stand now (StormStage: rising and swelling, or sinking and
+		// spreading flat); in the storm layer's own heights (CloudStorm.zw: they keep them while
+		// they sink back into a cumulus layer), hn the height in the tower as it stands
+		float4 st = StormStage();
+		float stand = st.y * StormRegion(storm);
+		float hs = (p.y - CloudStorm.z) / max(CloudStorm.w, 1);
+		float hn = hs / st.x;
+		if (stand > 0 && hs > -0.02 && hn < 1.05) {
+			// the swelling head while it rises: wider around its top, until the anvil takes over;
+			// the spread while it decays: wider and flatter
+			float head = CloudStorm.y > 0.5 ? exp(-pow((hn - 0.86) / 0.1, 2)) * (1 - st.z) : 0;
+			float widen = head * 0.05 + st.w * 0.05;
+			float hc = saturate(hn);
+			float2 cb = detailLevel >= 2 ? StormCellsHigh(float3(xz.x, p.y, xz.y), hc, lod, widen) : StormCells(xz, hc, lod, widen);
+			float anvil = (detailLevel >= 2 ? cb.y : cb.y * smoothstep(0.8, 0.9, hc)) * st.z;
+			// a rounded top (the cores highest), not the layer's flat cut
+			float domeTop = lerp(0.8, 1.0, cb.x);
+			float tower = cb.x * smoothstep(domeTop, domeTop - 0.1, hn);
+			anvil *= smoothstep(1.03, 0.97, hn);
+			towers = max(tower, anvil) * stand;
+			cover = max(cover, towers);
+			stormCore = tower * stand;
+			// their own flat base (the storm layer's, a 30 unit ramp)
+			towerBase = saturate(hs * CloudStorm.w / 30);
+		}
+		deck = storm * (1 - stormCore) * (1 - smoothstep(0.1, 0.2, h));
 	}
+	else if (storm > 0)
+		deck = storm * (1 - smoothstep(0.1, 0.2, h));
 	if (cover <= 0.002)
 		return 0;
 	// the tops: by region; a stratus sheet's level; a storm's flat, at the layer's top (the anvils)
 	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
-	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
+	top = lerp(top, 0.85, stratus); // (a storm's towers: their own top, below)
 	// the base: a 10-40 unit ramp (not a share of the layer: a tall storm layer's base went soft),
 	// raised and lowered a little by region (a ragged base)
 	float baseH = (topVar - 0.5) * 30 / cShape.w;
-	const float topStart = lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm);
+	const float topStart = top * lerp(0.45, 0.7, stratus);
 	float profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) *saturate(Remap(h, topStart, top, 1, 0));
+	const float towerProfile = towerBase * saturate(towers * 4); // (the towers' own: their base, their top in the cover)
+	profile = max(profile, towerProfile);
 	if (profile <= 0)
 		return 0;
 	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
@@ -347,7 +373,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		// cover low, as while clouds form, the profile before the coverage's cut narrowed every
 		// bump of the 2D cover to a point at the top: spikes going up into the sky)
 		float x = saturate(Remap(h, topStart, top - 0.08 * (top - topStart) * s.a, 0, 1));
-		profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) * sqrt(saturate(1 - x * x));
+		profile = max(saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) * sqrt(saturate(1 - x * x)), towerProfile);
 		if (profile <= 0)
 			return 0;
 	}
@@ -430,6 +456,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		base = min(base, CloudFromShape.y);
 		top = max(top, CloudFromShape.y + CloudFromShape.z);
 	}
+	// (and the cumulonimbus as they stand, also over a cumulus layer while they sink back)
+	if (CloudStorm.x > 0) {
+		base = min(base, CloudStorm.z);
+		top = max(top, CloudStorm.z + CloudStorm.w * StormStage().x);
+	}
 	CloudAt(ro.xz);
 	if (ro.y > base)
 		return float4(0, 0, 0, 1); // above the base (zoomed out): the shadows only
@@ -441,7 +472,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		return beyond;
 	// at most 1800 units of the ray in the layer; a storm's 6000, so that the cumulonimbus'
 	// towers show to their anvils towards the horizon
-	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, cWeather.y));
+	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, max(cWeather.y, CloudStorm.x * StormRegion(0))));
 	if (t1 <= t0 || t0 > 9000)
 		return beyond;
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
