@@ -184,6 +184,9 @@ enum NetClientMessages {
 	// EXIT_TO_MAIN_MENU run for this client's player (a guest's Exit button, WKB.exe's msg 0xC2):
 	// this client leaves the game, the others play on
 	NETCLIMSG_EXIT_TO_MENU,
+	// wkbai's wind (Wind.h), once a game second while the lobby's wind is on: the settings
+	// (WindSettings::write) and the state (WindState::write)
+	NETCLIMSG_WIND,
 };
 
 enum NetServerMessages {

@@ -10,6 +10,7 @@
 #include "../Camera.h"
 #include "../util/util.h"
 #include "../Environment.h"
+#include "../Wind.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -55,13 +56,16 @@ cbuffer CloudBuffer
 	// Dynamic global illumination (RenderSettings::dynamicGI, DiligentGI): the bounce map's
 	// corner x, z, 1 / its size, w: 0 off, 1 Low, 2 High, 3 Ultra; GIParams: x the bounce's strength
 	float4 GIRegion;
-	float4 GIParams;
+	float4 GIParams; // (y, z: CloudDrift's)
 	// the clouds' own light (SunState::cloudDirection: the true sun until it is 4 degrees below
 	// the horizon, then the moon): its direction (w: 1), its colour; the ground's cloud shadows
 	// keep CloudSun
 	float4 CloudLightDir;
 	float4 CloudLightColour;
 };
+// how far the low clouds have drifted (world units, x and z): (6, 2) a second without the lobby's
+// wind (Wind.h), else along it by its mean speed (UpdateCloudBuffer)
+float2 CloudDrift() { return GIParams.yz; }
 SamplerState cloudNoiseSampler; // wrapping, linear
 SamplerState skyOccSampler;     // clamped, linear
 Texture2D cloudNoise;   // r: the base layer, g: the detail, b: cells for the clouds' edges, a: the high clouds' smooth noise (tiling)
@@ -146,7 +150,7 @@ float2 StormCells(float2 xz, float h, float lod)
 	float n = StormCell(xz, lod);
 	float bulge = cloudNoise.SampleLevel(cloudNoiseSampler, xz / 3000 + float2(h * 0.09, h * 0.05), max(lod - 1, 0)).g - 0.5;
 	float tower = saturate((n - (0.65 + 0.015 * h - 0.02 * sin(saturate(h) * 3.14159) + bulge * 0.06)) / 0.12);
-	float a = StormCell(xz - float2(0.948683, 0.316228) * (saturate(h - 0.7) * 2500), lod);
+	float a = StormCell(xz - CloudFront.xy * (saturate(h - 0.7) * 2500), lod);
 	return float2(tower, saturate((a - 0.625) / 0.05)); // only the strong cells' anvils
 }
 
@@ -718,6 +722,14 @@ const CloudPreset g_cloudPresets[CLOUD_WEATHER_COUNT] = {
 	{ 0.00f, 260, 110, 0.0f, 0.0f, 0.8f, 0.50f, 1.05f, 0.45f, 0.70f, 1.0f }, // drought: altocumulus stratiformis, some cirrus
 };
 
+// the way a weather front comes: the wind's (Wind.h) as it was when the front set out (a veering
+// wind doesn't swing a front already on its way)
+static Vector3 s_frontDir(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
+// the clouds' offsets with the lobby's wind (base layer xy, detail zw, in noise UV): its way and
+// mean speed integrated, so a change of the wind never jumps them
+static double s_cloudUV[4] = {}, s_cloudDrift[2] = {};
+static float s_cloudTime = -1.0f;
+
 void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& sunDirection, uint32_t sunColour)
 {
 	auto& env = gfx->shadows;
@@ -749,7 +761,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		// about 6 seconds and the rain, snow and lightning wait for it, g_cloudFrontArrival)
 		constexpr float FRONT_START = 1100, FRONT_HALF_WIDTH = 350;
 		static float frontSpeed = 120;
-		const Vector3 wind(0.948683f, 0, 0.316228f); // as the clouds' drift (6, 2)
+		if (!env.frontActive)
+			s_frontDir = g_wind.on ? g_wind.dir : Vector3(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
+		const Vector3 wind = s_frontDir; // (as the clouds' drift: (6, 2) without the lobby's wind)
 		const Vector3 look = camera.position + camera.direction.normal() * 400.0f;
 		const float lookAlong = look.dot(wind);
 		CloudPreset target = g_cloudPresets[1];
@@ -923,8 +937,33 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 			lightCol[c] = ((g_cloudSunColor >> (16 - 8 * c)) & 255) / 255.0f;
 		g_cloudSunValid = false; // (set again by the next frame's environment)
 	}
+	// the lobby's wind (Wind.h): the clouds move along it (the noise sampled against it), at 6.3
+	// units a second for the reference speed by its mean (no gusts up there), the detail layer
+	// 7.6 a second, 27.5 degrees to the right of it, as the fixed drift's two layers
+	float cloudUV[4] = { wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE) };
+	if (g_wind.on) {
+		const float dtc = s_cloudTime >= 0.0f ? std::clamp(time - s_cloudTime, 0.0f, 0.5f) : 0.0f;
+		const float k = std::min(g_wind.speed, 30.0f) / WIND_REFERENCE_SPEED;
+		const float cs = std::cos(-0.4804f), sn = std::sin(-0.4804f);
+		const float dx = g_wind.dir.x * cs - g_wind.dir.z * sn, dz = g_wind.dir.x * sn + g_wind.dir.z * cs;
+		s_cloudDrift[0] += g_wind.dir.x * 6.3246f * k * dtc;
+		s_cloudDrift[1] += g_wind.dir.z * 6.3246f * k * dtc;
+		s_cloudUV[0] = -s_cloudDrift[0] * BASE_SCALE;
+		s_cloudUV[1] = -s_cloudDrift[1] * BASE_SCALE;
+		s_cloudUV[2] -= dx * 7.5954f * k * dtc * DETAIL_SCALE;
+		s_cloudUV[3] -= dz * 7.5954f * k * dtc * DETAIL_SCALE;
+		for (int i = 0; i < 4; i++) {
+			s_cloudUV[i] -= std::floor(s_cloudUV[i]);
+			cloudUV[i] = (float)s_cloudUV[i];
+		}
+	}
+	else {
+		s_cloudDrift[0] = time * 6.0;
+		s_cloudDrift[1] = time * 2.0;
+	}
+	s_cloudTime = time;
 	const float data[84] = {
-		wrap(time * 6.0f * BASE_SCALE), wrap(time * 2.0f * BASE_SCALE), wrap(time * 7.5f * DETAIL_SCALE), wrap(-time * 1.2f * DETAIL_SCALE),
+		cloudUV[0], cloudUV[1], cloudUV[2], cloudUV[3],
 		std::clamp(preset.cover, 0.0f, 1.0f), 0.22f, preset.base, preset.thickness,
 		sun.x, sun.y, sun.z, rs.cloudShadows ? (float)rs.dynamicClouds : 0.0f,
 		r, g, b, preset.shadow,
@@ -940,9 +979,9 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		std::clamp(old.cover, 0.0f, 1.0f), old.base, old.thickness, old.shadow,
 		old.stratus, old.storm, old.density, old.light,
 		std::min(old.cirrus * highCirrus, 1.0f), std::min(old.alto * highAlto, 1.0f), old.altoSheet, highStyle,
-		0.948683f, 0.316228f, env.frontPos, env.frontHalfWidth,
+		s_frontDir.x, s_frontDir.z, env.frontPos, env.frontHalfWidth,
 		env.giMapOrigin[0], env.giMapOrigin[1], 1.0f / DiligentGfx::ShadowEnvironment::GI_EXTENT, (float)env.giMode,
-		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), 0.0f, 0.0f, 0.0f,
+		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), (float)s_cloudDrift[0], (float)s_cloudDrift[1], 0.0f,
 		lightDir.x, lightDir.y, lightDir.z, 1.0f,
 		lightCol[0], lightCol[1], lightCol[2], 0.0f,
 	};

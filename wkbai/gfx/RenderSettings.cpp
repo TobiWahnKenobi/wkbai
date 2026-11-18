@@ -91,6 +91,7 @@ void RenderSettings::load()
 	modelReflections = std::clamp(g_settings.value<int>("modelReflections", def.modelReflections), 0, 2);
 	terrainFresnel = g_settings.value<float>("terrainFresnel", def.terrainFresnel);
 	grass = g_settings.value<bool>("grass", def.grass);
+	windTrees = std::clamp(g_settings.value<int>("windTrees", def.windTrees), 0, 2);
 	terrainTessellation = std::clamp(g_settings.value<int>("terrainTessellation", def.terrainTessellation), 0, 3);
 	extendMap = std::clamp(g_settings.value<int>("extendMap", def.extendMap), 0, 3);
 	extendMapDetail = std::clamp(g_settings.value<int>("extendMapDetail", def.extendMapDetail), 0, 3);
@@ -204,6 +205,7 @@ void RenderSettings::save()
 	g_settings["modelReflections"] = modelReflections;
 	g_settings["terrainFresnel"] = terrainFresnel;
 	g_settings["grass"] = grass;
+	g_settings["windTrees"] = windTrees;
 	g_settings["terrainTessellation"] = terrainTessellation;
 	g_settings["extendMap"] = extendMap;
 	g_settings["extendMapDetail"] = extendMapDetail;

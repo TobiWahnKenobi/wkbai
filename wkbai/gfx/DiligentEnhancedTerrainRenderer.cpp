@@ -30,6 +30,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include "../Wind.h"
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -301,6 +302,9 @@ cbuffer SunBuffer
 	float4 WeatherParams2; // dryness, the rivers' mud, their clock, their speed factor (0: none, the clock is GrassParams.z)
 	float4 WeatherParams3; // the sea's ice: how far out from the coasts, tiles (SeaIceReach; 0: none); the snow's and the ice's quality (0 Low, 1 Medium, 2 High); the glints' light (GlintLight)
 	float4 WeatherParams4; // the glints' colour (the sun's by its height, warm low down; the moon's cool), at most 1; w: set
+	// the lobby's wind (Wind.h): the way it blows (xy), its strength now (z, 0..1 of a gale; 0
+	// without it: the grass as before), how far the air has moved along it (w, m, wrapped)
+	float4 WindParams;
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -910,7 +914,9 @@ void GerstnerWaves(float2 xz, float depth, float4 flow, float sea, float4 r0, fl
 	// Near the shore the surf's bands run in along the depth. The waves' sideways movement is
 	// shared out so that the surface never folds (sum of k * a * q 0.6): the folds had drawn spikes.
 	float river = flow.a;
-	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod * lerp(LAKE_WAVES, 1, sea);
+	// (GrassParams.w: the lobby's wind, Wind.h: the waves higher in a strong wind, 1 at the
+	// reference speed and without it)
+	float amp = 0.55 * smoothstep(0.5, 6, depth) * (1 - river) * lod * lerp(LAKE_WAVES, 1, sea) * GrassParams.w;
 	float weights[8] = { r0.x, r0.y, r0.z, r0.w, r1.x, r1.y, r1.z, r1.w };
 	weights[0] += saturate(1 - dot(r0, 1) - dot(r1, 1));
 	offset = float3(0, 0, 0);
@@ -1665,6 +1671,14 @@ GRASS_OUTPUT VS_Grass(float3 Root : ATTRIB0, float4 Colour : ATTRIB1, float2 Yaw
 	float sway = sin(GrassParams.z * 1.7 + Root.x * 0.35 + Root.z * 0.23) * 0.5 + 0.5;
 	float bend = (0.15 + 0.25 * sway) * height * s.y * s.y;
 	float3 p = Root + float3(side.x, 0, side.y) * (s.x * 0.07 * grow) + float3(dir.x, 0, dir.y) * bend + float3(0, s.y * height, 0);
+	// the lobby's wind (WindParams, Wind.h): the blades lean downwind, in waves of gusts running
+	// over the meadow with the air (every 14 m or so), held to their length
+	if (WindParams.z > 0) {
+		float gustWave = sin((dot(Root.xz, WindParams.xy) - WindParams.w) * 0.45 + Root.x * 0.05) * 0.5 + 0.5;
+		float lean = WindParams.z * (0.35 + 0.65 * gustWave * gustWave) * 1.2 * height * s.y * s.y;
+		p.xz += WindParams.xy * lean;
+		p.y -= lean * lean / max(2 * s.y * height, 0.05);
+	}
 	GRASS_OUTPUT output;
 	output.Pos = mul(float4(p, 1), Transform);
 	output.World = p;
@@ -2013,6 +2027,14 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
+	// the regions' waves into WaveBuffer (made with device the first time): the water design's
+	// ways, turned towards the lobby's prevailing wind (Wind.h) while it blows; again whenever
+	// that changes (once a game: the waves' phase jumps with their way)
+	void writeWaves(IRenderDevice* device, IDeviceContext* ctx, const Terrain* terrain);
+	bool wavesWindOn = false;
+	Vector3 wavesWind;
+	// the HD ripple layers' offsets with the lobby's wind (integrated: its speed changes never jump them)
+	double ripple[4] = {};
 	// the water's maps from the terrain and its water design: made the first time, written again
 	// afterwards (the signature's static variables keep the same textures)
 	void buildWaterMaps(IRenderDevice* device, IDeviceContext* ctx, Terrain* terrain);
@@ -2327,7 +2349,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 928;
+	cbDesc.Size = 944;
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -3021,19 +3043,37 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	put(riverField, "river coordinates", "riverTexture", W * RIVER_FIELD_RES, H * RIVER_FIELD_RES, TEX_FORMAT_RGBA32_FLOAT, 16, field.data());
 	put(riverWidth, "river half width", "riverWidth", W * RIVER_FIELD_RES, H * RIVER_FIELD_RES, TEX_FORMAT_R32_FLOAT, 4, halfWidth.data());
 
+	writeWaves(device, ctx, terrain);
+}
+
+void DiligentEnhancedTerrainRenderer::Impl::writeWaves(IRenderDevice* device, IDeviceContext* ctx, const Terrain* terrain)
+{
 	// the regions' waves: the way they run (x, z) and their height; the first also where no
-	// region is (a design without regions, or none at all: the default wind)
+	// region is (a design without regions, or none at all: the default wind). With the lobby's
+	// wind they run 60% along its prevailing way (the design's local seas keep some of their own)
 	float waves[WaterDesign::MAX_SEA_REGIONS * 4] = {};
 	const WaterDesign* design = terrain->waterDesign.get();
 	const std::vector<WaterDesign::SeaRegion> seas = design ? design->seas : std::vector<WaterDesign::SeaRegion>{ WaterDesign::SeaRegion() };
+	wavesWindOn = g_wind.on;
+	wavesWind = g_wind.prevailing;
 	for (int r = 0; r < WaterDesign::MAX_SEA_REGIONS; r++) {
 		const WaterDesign::SeaRegion& s = r < (int)seas.size() ? seas[r] : seas[0];
 		const float a = s.windDegrees * 3.14159265f / 180.0f;
-		waves[r * 4] = std::cos(a);
-		waves[r * 4 + 1] = std::sin(a);
+		float x = std::cos(a), z = std::sin(a);
+		if (wavesWindOn) {
+			x = 0.4f * x + 0.6f * wavesWind.x;
+			z = 0.4f * z + 0.6f * wavesWind.z;
+			const float l = std::sqrt(x * x + z * z);
+			if (l > 1e-3f) { x /= l; z /= l; }
+			else { x = wavesWind.x; z = wavesWind.z; }
+		}
+		waves[r * 4] = x;
+		waves[r * 4 + 1] = z;
 		waves[r * 4 + 2] = s.waves;
 	}
 	if (!waveBuffer) {
+		if (!device)
+			return;
 		BufferDesc desc;
 		desc.Name = "Wave regions";
 		desc.Size = sizeof(waves);
@@ -3353,6 +3393,24 @@ void DiligentEnhancedTerrainRenderer::render()
 	scroll(0.1f, 0.3f, water + 2, originalWater);
 	scroll(0.9f * 0.25f, 0.34f * 0.25f, water + 4, false); // the original's normal field wind, slowed for the finer ripples
 	scroll(-0.34f * 0.2f, 0.9f * 0.2f, water + 6, false);
+	// the lobby's wind (Wind.h): the HD levels' ripples run along it (the second layer across),
+	// faster in a strong wind (its mean and half its gusts: cat's paws), integrated
+	if (g_wind.on && !originalWater) {
+		static uint64_t last = 0;
+		const uint64_t nowNs = SDL_GetTicksNS();
+		const double dt = last != 0 ? std::min((nowNs - last) / 1e9, 0.25) : 0.0;
+		last = nowNs;
+		const double k = (1000.0 / 16.0 / 128.0) * std::clamp(g_wind.speed * (0.5f + 0.5f * g_wind.gust) / WIND_REFERENCE_SPEED, 0.3f, 2.5f) * dt;
+		const double dx = g_wind.dir.x, dz = g_wind.dir.z;
+		const double v[4] = { dx * 0.2425, dz * 0.2425, -dz * 0.2071, dx * 0.2071 }; // (the fixed layers' speeds)
+		for (int i = 0; i < 4; i++) {
+			_impl->ripple[i] = std::fmod(_impl->ripple[i] + v[i] * k, 1.0);
+			water[4 + i] = (float)_impl->ripple[i];
+		}
+	}
+	// the waves' way, turned once the wind is known (and back without it)
+	if (_impl->waveBuffer && (g_wind.on != _impl->wavesWindOn || (g_wind.on && (g_wind.prevailing - _impl->wavesWind).sqlen2xz() > 1e-4f)))
+		_impl->writeWaves(nullptr, ctx, terrain);
 	// 0 the plain colour (Off, or no texture), 1 the textured water, 2 the Original level
 	water[8] = !_impl->waterTexture || wq == RenderSettings::WATER_OFF ? 0.0f : originalWater ? 2.0f : 1.0f;
 	// the Original level samples the original file, the others the (HD) texture; rebound only
@@ -3434,7 +3492,9 @@ void DiligentEnhancedTerrainRenderer::render()
 	// the waves, the flow and the grass's sway run on the water's steady clock (the game time is
 	// nudged by the server's time sync and stops while paused, which made the waves jump or stand)
 	grassParams[2] = (float)std::fmod(SDL_GetTicks() / 1000.0, 3600.0);
-	grassParams[3] = 0.0f;
+	// the waves' height by the lobby's wind (Wind.h; its mean, eased): 1 at the reference speed and
+	// without it, 0.35 in a calm, up to 2.2 in a gale
+	grassParams[3] = g_wind.on ? std::clamp(0.3f + 0.14f * g_wind.speed, 0.35f, 2.2f) : 1.0f;
 	const bool tessOn = _impl->tessellation && g_renderSettings.terrainTessellation > 0;
 	g_terrainTessellationActive = tessOn;
 	float* tessParams = (float*)(sbdata + 800);
@@ -3493,6 +3553,12 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[0] = g_environment.active ? SeaIceReach(g_environment.severity, g_environment.ice) : 0.0f;
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
+	// the lobby's wind for the grass (WindParams)
+	float* wind = (float*)(sbdata + 928);
+	wind[0] = g_wind.dir.x;
+	wind[1] = g_wind.dir.z;
+	wind[2] = g_wind.on ? g_wind.strength() : 0.0f;
+	wind[3] = (float)g_wind.along;
 	{
 		// The glints' light: the sun's from the moment it rises (a few degrees up: all of it), in its
 		// colour (warm low down); else the moon's, by its lit part and height, cool. (By the

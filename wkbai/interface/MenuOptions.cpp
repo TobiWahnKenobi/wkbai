@@ -307,6 +307,16 @@ namespace {
 			o.set = [&rs](float v) { rs.farLandCacheMB = std::clamp((int)std::lround(v / 256.0f) * 256, 256, 32768); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2 && rs.farLandCache; }));
 		}
+		{
+			// the trees in the wind (Wind.h): the bend costs a few instructions a vertex of the trees
+			MenuOption o;
+			o.id = "windTrees"; o.page = "terrain"; o.label = "Trees in the wind";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Sway", "Sway and leaves" };
+			o.get = [&rs]() { return (float)rs.windTrees; };
+			o.set = [&rs](float v) { rs.windTrees = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));

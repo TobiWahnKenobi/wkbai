@@ -254,6 +254,8 @@ void Client::tick()
 				environmentActive = false;
 				environmentSkyKnown = false;
 				environment = EnvironmentState();
+				windActive = false;
+				wind = WindState();
 				nightSight = NightSight();
 				unitInfo.clear();
 				newHeroes.clear();
@@ -1131,6 +1133,19 @@ void Client::tick()
 						terrain->revision++;
 					}
 				}
+				break;
+			}
+			case NETCLIMSG_WIND: {
+				const uint8_t flags = br.readUint8();
+				EnvironmentSettings& es = environmentSettings;
+				es.wind = (flags & 4) ? 0 : 1;
+				es.windVeers = (flags & 1) != 0;
+				es.windEffects = (flags & 2) != 0;
+				es.windFrom = br.readUint8();
+				es.windStrength = br.readUint8();
+				es.windSeed = (int)br.readUint32();
+				wind.read(br);
+				windActive = es.wind != 0;
 				break;
 			}
 			case NETCLIMSG_CHARRED_TREES: {

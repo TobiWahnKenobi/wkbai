@@ -11,6 +11,7 @@
 #include "Environment.h"
 #include "GameObjectRef.h"
 #include "PeasantLodging.h"
+#include "Wind.h"
 
 struct Server;
 struct ServerGameObject;
@@ -47,6 +48,16 @@ struct ServerEnvironment {
 	// ground): in the heat it may set the land alight, a large fire at once
 	float fireRisk() const;
 	void fireLanded(Server& server, const Vector3& pos, bool sure = false);
+
+	// the wind (Wind.h): simulated once a game second while the lobby's wind is on (whatever the
+	// day and night and the seasons), sent to the clients (NETCLIMSG_WIND), saved
+	WindState wind;
+	bool windOn() const { return settings.wind != 0; }
+	// how much it fans the fires: 0 (off, no effects, still air) .. 2.5 (a gale), 1 at 8 m/s
+	float windFireFactor() const;
+	// the felt cold's and heat's drop from the wind (degrees; 0 without its effects)
+	float windChill() const;
+	void sendWind(Server& server, NetLink* only = nullptr);
 
 	// ---- for the AI (AIWeather.cpp): what the weather does, asked without random numbers ----
 	// the felt temperatures (the exposure's): below 2 C the cold exposure grows, below -4 C it
@@ -123,6 +134,9 @@ struct ServerEnvironment {
 
 private:
 	float nextUpdate = -1.0f;
+	float nextWindUpdate = -1.0f; // (saved on the "wind" line; below 0: not started)
+	bool windSent = false; // the clients were sent the wind on (not saved: a loaded game sends it again)
+	void updateWind(Server& server);
 	float weatherEnds = 0.0f, nextLightning = 0.0f;
 	int resolvedYear = -1;
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };
