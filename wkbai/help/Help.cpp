@@ -606,6 +606,12 @@ void Help::Frame(IRenderer* gfx)
 			if (t.contains("open")) s_pendingOpen = t.value("open", std::string());
 			if (t.contains("menu")) { s_menuIds = t.value("menu", std::string()); s_menuPending = true; }
 			if (t.contains("search")) snprintf(s_search, sizeof(s_search), "%s", t.value("search", std::string()).c_str());
+			// "f1": true: as F1 there, the help for what is under the cursor
+			if (t.value("f1", false)) {
+				ensureLoaded();
+				s_pendingOpen = idsAtMouse();
+				printf("HELP F1 %s\n", s_pendingOpen.c_str());
+			}
 		}
 		if (t.contains("coverage") && frame > 2) {
 			ensureLoaded();

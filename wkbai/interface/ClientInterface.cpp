@@ -5619,6 +5619,24 @@ void ClientInterface::iter()
 				Help::SetHovered("unit/" + bp->name);
 			else if (bp->bpClass == Tags::GAMEOBJCLASS_BUILDING)
 				Help::SetHovered("building/" + bp->name);
+			else if (client->gameSet) {
+				// a tree, a stone or gold outcrop, a sack (containers and props): its own page if it
+				// has one, else the good it holds (the resources page's heading), else the screen
+				std::string ids = "object/" + bp->name;
+				if (bp->name.find("Sack") != std::string::npos)
+					ids += "|mechanic/sacks";
+				for (const char* good : { "Wood", "Stone", "Gold", "Food" }) {
+					const int x = client->gameSet->items.names.getIndex(good);
+					const auto it = x >= 0 ? bp->startItemValues.find(x) : bp->startItemValues.end();
+					if (it != bp->startItemValues.end() && it->second > 0) {
+						std::string lower = good;
+						for (char& c : lower) c = (char)tolower((unsigned char)c);
+						ids += "|mechanic/" + lower;
+						break;
+					}
+				}
+				Help::SetHovered(ids);
+			}
 		}
 
 		// highlight hovered object; not in test runs ("benchmark"): they start detached but still read

@@ -1,6 +1,6 @@
 ---
 title: Resources
-ids: [mechanics/resources, mechanic/resources, mechanic/food, mechanic/wood, mechanic/materials, mechanic/stone, mechanic/gold, mechanic/sacks]
+ids: [mechanics/resources, mechanic/resources, mechanic/food#the-four-goods, mechanic/wood#the-four-goods, mechanic/materials#the-four-goods, mechanic/stone#the-four-goods, mechanic/gold#gold, mechanic/sacks#sacks-and-losses]
 order: 10
 ---
 
