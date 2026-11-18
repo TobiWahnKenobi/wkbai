@@ -1037,6 +1037,22 @@ void MissileTask::onUpdate()
 
 void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 
+// A formation's first character; a character itself; else none. (Not through armies: with a
+// "Formation Army" ending its attack on the scout, the Kingmaker's scripts sent its formations
+// back at once and they stood on the slope, PERFORMANCE save, 2026-11-18.)
+static ServerGameObject* FirstCharacter(ServerGameObject* obj, int depth = 0)
+{
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+		return obj->deleted ? nullptr : obj;
+	if (depth > 3 || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+		return nullptr;
+	for (const auto& [type, children] : obj->children)
+		for (CommonGameObject* c : children)
+			if (ServerGameObject* m = FirstCharacter((ServerGameObject*)c, depth + 1))
+				return m;
+	return nullptr;
+}
+
 // Whether an attacker can never get within `reach` metres of a point: no tile that close lies in
 // the attacker's terrain region (the ground its movement class can stand on, 8-connected; from
 // the terrain alone, buildings only block more, so another region is out of reach for good). A
@@ -1046,17 +1062,8 @@ void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 // their range, and shoot.
 bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 {
-	ServerGameObject* mover = unit;
-	if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
-		mover = nullptr;
-		for (const auto& [type, children] : unit->children)
-			for (CommonGameObject* c : children)
-				if (!mover && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !((ServerGameObject*)c)->deleted)
-					mover = (ServerGameObject*)c;
-		if (!mover)
-			return false;
-	}
-	if (mover->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+	ServerGameObject* mover = FirstCharacter(unit);
+	if (!mover)
 		return false;
 	const int cls = MovementController::movementClass(mover->blueprint);
 	const int own = MovementController::terrainRegion(cls, (int)(mover->position.x / 5.0f), (int)(mover->position.z / 5.0f));
@@ -1074,6 +1081,18 @@ bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 				return false;
 		}
 	return true;
+}
+
+// The reach an attacker needs to get within, from a task's range: a melee unit's (not an
+// archer's) at most 3 m. A "Move To Attack Range" walk has a 10 m range before the attack takes
+// over, and slope tiles within 10 m of a hilltop scout let a spearman stand 31 m below it for good
+// (the play test's PERFORMANCE2 save, 2026-11-17).
+static float MeleeReachCap(ServerGameObject* unit, float reach)
+{
+	ServerGameObject* m = FirstCharacter(unit);
+	if (!m || AIUtil::ClassOf(m) == 2)
+		return reach;
+	return std::min(reach, 3.0f);
 }
 
 void MoveTask::onStart()
@@ -1103,8 +1122,23 @@ void MoveTask::onUpdate()
 	}
 	// (a second between searches that found no way, as ObjectReferenceTask's; a search runs at
 	// the end of the step, and its unit is moving, pending, until then)
-	if (go->movementController.takeSearchFailed())
+	const bool searchFailed = go->movementController.takeSearchFailed();
+	if (searchFailed)
 		nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+	// A walk to an enemy (the Attack order's "Move To Attack Range") that ended short of a target
+	// it can never get within reach of (OutOfReach; a melee unit's 3 m): the task ends, and the
+	// whole order, as if the target were gone. A spearman stood 31 m below a hilltop scout for
+	// good, searching once a second (the play test's PERFORMANCE2 save, 2026-11-17).
+	if (this->target && !go->movementController.isMoving() && go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), this->target.get())
+		&& (searchFailed || (destination - dest).len2xz() > 2.0f)) {
+		const float need = MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f);
+		if (ServerGameObject* fc = FirstCharacter(go); fc && (this->target->position - fc->position).len2xz() > need && OutOfReach(go, this->target->position, need)) {
+			TraceTask(this, "walk ended short of a target out of reach: the order ends");
+			terminate();
+			order->terminate();
+			return;
+		}
+	}
 	if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 		destination = go->movementController.startMovement(dest);
 		if (!go->movementController.isMoving())
@@ -1566,6 +1600,25 @@ void ObjectReferenceTask::onUpdate()
 			// By the members' own reach (an archer's 30 m, else 3 m) the task ends as if the target
 			// were gone. (Out of reach by the terrain alone: a target behind a wall stays in reach,
 			// and the wall in the way is attacked, AttackWallInTheWay.)
+			// A unit "there" where its walk ended short (arrival counts from the walk's end, not the
+			// target): a spearman 31 m below a hilltop scout stood in "Move To Attack Range" for good
+			// (the play test's PERFORMANCE2 save, 2026-11-17). Once a second, by its id, from the
+			// clock alone (a loaded game checks at the same steps), out of a melee unit's 3 m or the
+			// task's range for an archer: the task ends as if the target were gone.
+			const int cl = go->blueprint->bpClass;
+			if (cl == Tags::GAMEOBJCLASS_CHARACTER
+				&& !go->movementController.isMoving() && go->getPlayer()
+				&& ((uint32_t)(Server::instance->timeManager.currentTime * 20.0f + 0.5f) + go->id) % 20 == 0
+				&& AIUtil::IsEnemy(go->getPlayer(), target.get())) {
+				const float need = MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f);
+				if (ServerGameObject* fc = FirstCharacter(go); fc && (target->position - fc->position).len2xz() > need && OutOfReach(go, target->position, need)) {
+					TraceTask(this, "arrived short of a target out of reach: the task ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
+			}
 			if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && !proximitySatisfied && go->getPlayer()
 				&& AIUtil::IsEnemy(go->getPlayer(), target.get())) {
 				const ServerGameObject* first = nullptr;
@@ -1658,7 +1711,7 @@ void ObjectReferenceTask::onUpdate()
 				if ((blueprint->classType == Tags::ORDTSKTYPE_ATTACK || (go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), target.get())))
 					&& !go->movementController.isMoving()
 					&& (searchFailed || (destination - goal).len2xz() > 2.0f)
-					&& OutOfReach(go, goal, std::max(this->proximity, 1.5f) + 1.0f)) {
+					&& OutOfReach(go, goal, MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f))) {
 					TraceTask(this, "target out of reach: the attack ends");
 					terminate();
 					if (blueprint->terminateEntireOrderIfNoTarget)

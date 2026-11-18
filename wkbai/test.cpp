@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include <typeinfo>
 #include "wkbre2.h"
 #include "platform.h"
 #include "Environment.h"
@@ -10983,6 +10984,27 @@ void Test_RunSave()
 		}
 	}
 	printf("RUNSAVE end: the slowest step %.1f ms\n", worst);
+	// ("near": object id) the characters within 70 m of it at the end: their orders and parents
+	if (const uint32_t nearId = cfg.value("near", 0u); ServerGameObject* c = nearId ? server.findObject(nearId) : nullptr) {
+		std::map<std::string, int> kinds;
+		for (const auto& [id, co] : server.idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o == c || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || (o->position - c->position).len2xz() > 70.0f)
+				continue;
+			Order* order = o->orderConfig.getCurrentOrder();
+			ServerGameObject* p = o->getParent();
+			Order* po = p ? p->orderConfig.getCurrentOrder() : nullptr;
+			Task* pt = po ? po->getCurrentTask() : nullptr;
+			ServerGameObject* ptg = pt ? pt->target.get() : nullptr;
+			std::string k = o->blueprint->name + " / " + (order ? server.gameSet->orders.getString(order->blueprint) : std::string("no order")) + " / moving "
+				+ std::to_string((int)o->movementController.isMoving()) + " | parent " + (p ? p->blueprint->getFullName() + " " + std::to_string(p->id) : std::string("-"))
+				+ ": " + (po ? server.gameSet->orders.getString(po->blueprint) : std::string("no order")) + (ptg ? " -> " + ptg->blueprint->name + " " + std::to_string(ptg->id) : std::string())
+				+ (p ? " at (" + std::to_string((int)p->position.x) + ", " + std::to_string((int)p->position.z) + ") moving " + std::to_string((int)p->movementController.isMoving()) : std::string());
+			kinds[k]++;
+		}
+		for (const auto& [k, n] : kinds)
+			printf("RUNSAVE   near: %3d  %s\n", n, k.c_str());
+	}
 	PrintAimedAt(server, cfg.value("aimedAt", std::string("Scout")).c_str());
 	// who asked for paths to goals no search could reach: the units, their orders and targets
 	std::vector<std::pair<int, uint32_t>> askers;
@@ -11068,6 +11090,7 @@ static void PrintAimedAt(Server& server, const char* name)
 			server.gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), o->position.x, o->position.z, o->position.y, t->blueprint->name.c_str(), t->id,
 			t->position.x, t->position.z, t->position.y, (t->position - o->position).len2xz(), (int)o->movementController.isMoving(), own, theirs,
 			(int)OutOfReach(o, t->position, 3.0f), task->proximity);
+		printf("RUNSAVE     task class %s state %d, order state %d\n", typeid(*task).name(), (int)task->state, (int)order->state);
 	}
 	printf("RUNSAVE aimed at a %s: %d objects\n", name, n);
 	// a formation's members ("runSave": { "members": <formation id> }): where each stands and walks to
