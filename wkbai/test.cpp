@@ -11539,6 +11539,197 @@ void Test_FireQuality()
 	printf("FIRE all %d\n", all ? 1 : 0);
 }
 
+// Rain and snow on burning buildings (ServerEnvironment::updateBuildingFires, redata's "wkbai
+// patches\Snow and Fire.cpp"): on 4 Peaks with the seasons on, a barracks of the enemy's far
+// from everything, its integrity raised so that it cannot burn down, set alight and its fire
+// brought to the most (27, three "Building Fire" effects) by the game set's "Set Fire to Building".
+//  - clear spring weather: the fire as the game set burns it (its strength never drops, its
+//    share whole, no fire put out);
+//  - rain and heavy rain (held, the rain set in first): each puts the fire out, heavy rain
+//    sooner (about a minute) than rain (a few minutes), the effects and the share shrinking;
+//  - snow (winter, the cover held full): the building loses less in 40 s than in clear winter
+//    weather, the fire melts its roof's snow, a building not burning has its "Snow Fire Proofing";
+//  - the save: in heavy rain 20 s in, saved and loaded (the environment section's "roof" lines),
+//    the same lines and share after loading, the fire still being put out; an older save's
+//    environment (no "roof" lines) loads with nothing tracked.
+// Prints "RAINFIRE ok/FAILED ..." and "RAINFIRE PASSED/FAILED".
+void Test_RainFire()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("RAINFIRE %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 96;
+	struct Result {
+		float outAfter = -1.0f, siLost = 0.0f, shareMin = 1.0f, melt = 0.0f, proofOther = -1.0f;
+		bool dropped = false, setUp = false, saveSame = false, loadedShare = false, goesOnOut = false, oldLoads = false;
+		int shrunk = 0, rainedOut = 0;
+	};
+	const std::string saveName = "Save_Games\\wkbai rain fire.sav";
+	// weather: an EnvWeather held; season: where the year is; snowCover: held (below 0: not);
+	// seconds: how long the fire is watched at most
+	auto runFire = [&](int weather, float season, float snowCover, float seconds, bool save) {
+		Result r;
+		std::string savedEnv;
+		uint32_t fireId = 0;
+		float savedShare = 1.0f;
+		{
+			Server server;
+			server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+			server.startLevel();
+			const GameSet& gs = *server.gameSet;
+			ServerGameObject* enemy = server.findObject(1030);
+			const GameObjBlueprint* barracks = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Barracks Stone");
+			const int setFire = gs.actionSequences.names.getIndex("Set Fire to Building");
+			const int si = gs.items.names.getIndex("Structural Integrity");
+			const int siCap = gs.items.names.getIndex("Structural Integrity Capacity");
+			const int strength = gs.items.names.getIndex("Fire Strength (SI)");
+			const int effects = gs.items.names.getIndex("Fire Effects Attached");
+			const int proof = gs.items.names.getIndex("Snow Fire Proofing");
+			if (!enemy || !barracks || setFire < 0 || si < 0 || siCap < 0 || strength < 0 || effects < 0 || proof < 0) {
+				printf("RAINFIRE not set up\n");
+				return r;
+			}
+			ServerEnvironment& env = server.environment;
+			env.settings.seasons = true;
+			env.settings.seasonLengthMin = 600;
+			env.forceWeather = weather;
+			env.forceSnowCover = snowCover;
+			env.debugSet(server, "season", season);
+			server.timeManager.unpause();
+			server.timeManager.stepMs = 20;
+			// (each: after every game second; false stops)
+			auto run = [&](float secs, const std::function<bool()>& each) {
+				for (int step = 0; step < (int)(secs * 50.0f); step++) {
+					server.timeManager.pendingMs = server.timeManager.stepMs;
+					if (server.timeManager.step())
+						server.simulate();
+					if (step % 50 == 49 && each && !each())
+						return;
+				}
+			};
+			run(30.0f, nullptr); // (the weather set in: the rain at its fall)
+			const auto area = server.terrain->getPlayableArea();
+			auto at = [&](float x, float z) { Vector3 p(area.first * 0.5f + x, 0, area.second * 0.5f + z); p.y = server.terrain->getHeight(p.x, p.z); return p; };
+			SrvGORef b = server.spawnObject(barracks, enemy, at(140, 40), Vector3(0, 0, 0));
+			SrvGORef other = server.spawnObject(barracks, enemy, at(140, 120), Vector3(0, 0, 0));
+			if (!b.get() || !other.get()) {
+				printf("RAINFIRE no barracks\n");
+				return r;
+			}
+			fireId = b->id;
+			b->setItem(siCap, 100000.0f);
+			b->setItem(si, 100000.0f);
+			for (int i = 0; i < 17; i++) {
+				SrvScriptContext ctx(&server, b.get());
+				auto _ = ctx.change(ctx.sequenceExecutor, b.get());
+				gs.actionSequences[setFire].run(&ctx);
+			}
+			printf("RAINFIRE weather %d: rain %.2f, snow cover %.2f, fire %.1f with %.0f effects\n", weather, env.state.rain, env.state.snowCover,
+				b->getItem(strength), b->getItem(effects));
+			r.setUp = b->getItem(strength) >= 26.9f && b->getItem(effects) >= 3.0f;
+			const float siStart = b->getItem(si);
+			float last = b->getItem(strength), t = 0.0f;
+			const int shrunk0 = env.stats.firesShrunk, out0 = env.stats.rainedOut;
+			run(seconds, [&]() {
+				t += 1.0f;
+				const float s = b->getItem(strength);
+				if (s < last - 1e-4f)
+					r.dropped = true;
+				last = s;
+				r.shareMin = std::min(r.shareMin, env.fireShare(b->id));
+				if (env.state.snowCover > 0.0f)
+					r.melt = std::max(r.melt, 1.0f - env.roofSnow(b->id) / env.state.snowCover);
+				if (s <= 0.0f && r.outAfter < 0.0f) {
+					r.outAfter = t;
+					printf("RAINFIRE weather %d: out after %.0f s, effects %.0f\n", weather, t, b->getItem(effects));
+				}
+				if (save && t == 20.0f) {
+					server.timeManager.pause();
+					savedShare = env.fireShare(b->id);
+					printf("RAINFIRE save at 20 s (fire %.1f, share %.3f): %d\n", s, savedShare, (int)server.saveGame(PathToUtf8(g_userPath / "saved" / PathFromUtf8(saveName)).c_str()));
+					savedEnv = env.saveText();
+					return false;
+				}
+				return r.outAfter < 0.0f || snowCover >= 0.0f || weather == WEATHER_CLEAR;
+			});
+			r.siLost = siStart - b->getItem(si);
+			r.shrunk = env.stats.firesShrunk - shrunk0;
+			r.rainedOut = env.stats.rainedOut - out0;
+			r.proofOther = other->getItem(proof);
+		}
+		if (save) {
+			Server server;
+			server.loadSaveGame(saveName.c_str());
+			server.timeManager.pause(); // (the loader starts the clock)
+			ServerEnvironment& env = server.environment;
+			auto roofLines = [](const std::string& text, bool keep) {
+				std::string o;
+				std::istringstream in(text);
+				std::string line;
+				while (std::getline(in, line))
+					if ((line.rfind("roof ", 0) == 0 || line.rfind("snowproofed", 0) == 0) == keep)
+						o += line + "\n";
+				return o;
+			};
+			const std::string loaded = env.saveText();
+			printf("RAINFIRE saved roofs:\n%sRAINFIRE loaded roofs:\n%s", roofLines(savedEnv, true).c_str(), roofLines(loaded, true).c_str());
+			r.saveSame = !roofLines(savedEnv, true).empty() && roofLines(savedEnv, true) == roofLines(loaded, true);
+			r.loadedShare = savedShare < 1.0f && std::fabs(env.fireShare(fireId) - savedShare) < 1e-5f;
+			const int strength = server.gameSet->items.names.getIndex("Fire Strength (SI)");
+			ServerGameObject* b = server.findObject(fireId);
+			const float before = b ? b->getItem(strength) : 0.0f;
+			server.timeManager.unpause();
+			server.timeManager.stepMs = 20;
+			for (int step = 0; step < 15 * 50; step++) {
+				server.timeManager.pendingMs = server.timeManager.stepMs;
+				if (server.timeManager.step())
+					server.simulate();
+			}
+			b = server.findObject(fireId);
+			const float after = b ? b->getItem(strength) : 0.0f;
+			printf("RAINFIRE loaded: fire %.1f -> %.1f in 15 s\n", before, after);
+			r.goesOnOut = before > 0.0f && after < before - 3.0f;
+			// a save from before (its environment without the "roof" lines)
+			env.loadText(roofLines(savedEnv, false));
+			r.oldLoads = env.fireShare(fireId) == 1.0f && env.saveText().find("\nroof ") == std::string::npos && env.state.rain > 0.0f;
+		}
+		return r;
+	};
+	char what[300];
+	const Result clear = runFire(WEATHER_CLEAR, 0.5f, -1.0f, 40.0f, false);
+	snprintf(what, sizeof(what), "clear: lost %.0f in 40 s, strength dropped %d, share %.2f, put out %d, effects shed %d", clear.siLost, (int)clear.dropped,
+		clear.shareMin, clear.rainedOut, clear.shrunk);
+	check(clear.setUp && !clear.dropped && clear.shareMin == 1.0f && clear.rainedOut == 0 && clear.shrunk == 0 && clear.siLost > 300.0f,
+		std::string("no rain, burning unchanged: ") + what);
+	const Result rain = runFire(WEATHER_RAIN, 0.5f, -1.0f, 400.0f, false);
+	const Result heavy = runFire(WEATHER_HEAVY_RAIN, 0.5f, -1.0f, 400.0f, false);
+	snprintf(what, sizeof(what), "rain: out after %.0f s (lost %.0f), heavy rain: after %.0f s (lost %.0f); effects shed %d and %d, share down to %.2f and %.2f",
+		rain.outAfter, rain.siLost, heavy.outAfter, heavy.siLost, rain.shrunk, heavy.shrunk, rain.shareMin, heavy.shareMin);
+	check(rain.setUp && heavy.setUp && rain.outAfter > 0.0f && heavy.outAfter > 0.0f && heavy.outAfter < rain.outAfter,
+		std::string("heavy rain puts it out sooner than rain: ") + what);
+	check(heavy.outAfter >= 35.0f && heavy.outAfter <= 110.0f && rain.outAfter >= 110.0f && rain.outAfter <= 360.0f,
+		"about a minute in heavy rain, a few minutes in rain");
+	check(heavy.siLost < rain.siLost && rain.siLost < clear.siLost / 40.0f * rain.outAfter * 0.75f, "the harm drops as it goes out");
+	check(rain.shrunk >= 2 && heavy.shrunk >= 2 && heavy.shareMin < 0.2f && rain.rainedOut == 1 && heavy.rainedOut == 1,
+		"the flames shrink (two effects shed, the share down) and it goes out once");
+	const Result snow = runFire(WEATHER_SNOW, 3.5f, 1.0f, 40.0f, false);
+	const Result winterClear = runFire(WEATHER_CLEAR, 3.5f, 0.0f, 40.0f, false);
+	snprintf(what, sizeof(what), "snow: lost %.0f in 40 s against %.0f in clear winter weather, its roof %.0f%% melted, a building not burning: Snow Fire Proofing %.0f (clear: %.0f)",
+		snow.siLost, winterClear.siLost, snow.melt * 100.0f, snow.proofOther, winterClear.proofOther);
+	check(snow.setUp && winterClear.setUp && snow.siLost > 0.0f && snow.siLost < 0.8f * winterClear.siLost, std::string("snow-covered, it burns slower: ") + what);
+	check(snow.melt > 0.1f && snow.melt < 1.0f && snow.proofOther == ServerEnvironment::SNOW_PROOFING && winterClear.proofOther == 0.0f,
+		"the fire melts its roof's snow; a building not burning proofed by its snow");
+	const Result saved = runFire(WEATHER_HEAVY_RAIN, 0.5f, -1.0f, 400.0f, true);
+	check(saved.saveSame && saved.loadedShare, "saved and loaded: the same roofs, the same share");
+	check(saved.goesOnOut, "loaded: the rain still puts the fire out");
+	check(saved.oldLoads, "an older save's environment (no roofs) loads, nothing tracked");
+	printf("RAINFIRE %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -11636,6 +11827,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
 {Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 {Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
+{Test_RainFire, "Rain and snow on burning buildings: rain puts a fire out, heavy rain sooner; no rain as before; snow slows it and melts; through a save"},
 };
 
 void LaunchTest()

@@ -105,6 +105,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::string chronicleParts;
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
+	// the burning buildings' fires the weather is putting out (NETCLIMSG_FIRE_SHARES): id, the
+	// share left (0..1); the flames drawn that much smaller (FireFx::SetShares)
+	std::unordered_map<uint32_t, float> fireShares;
 	std::map<int, std::string> hostDataParts;
 	// the host's mods for this game (NETCLIMSG_HOST_DATA 3): the session to mount, JSON; the
 	// folder its sent files went to

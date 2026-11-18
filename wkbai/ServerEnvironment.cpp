@@ -318,6 +318,161 @@ void ServerEnvironment::updateFires(Server& server)
 	stats.fireCellsMost = std::max(stats.fireCellsMost, (int)fires.size());
 }
 
+float ServerEnvironment::roofSnow(uint32_t id) const
+{
+	auto it = roofs.find(id);
+	return state.snowCover * (1.0f - (it != roofs.end() ? it->second.melt : 0.0f));
+}
+
+float ServerEnvironment::fireShare(uint32_t id) const
+{
+	auto it = roofs.find(id);
+	return it != roofs.end() ? it->second.share : 1.0f;
+}
+
+// the weather on burning buildings (see ServerEnvironment.h): rain puts their fires out, snow
+// on their roofs slows them; once a second, in the order of the ids, no random numbers
+void ServerEnvironment::updateBuildingFires(Server& server)
+{
+	const GameSet& gs = *server.gameSet;
+	static const GameSet* of = nullptr;
+	static int strengthItem = -1, effectsItem = -1, proofItem = -1, burningAlias = -1, stopSeq = -1, fireFx = -1;
+	static float maxStrength = 27.0f;
+	if (of != &gs) {
+		of = &gs;
+		strengthItem = gs.items.names.getIndex("Fire Strength (SI)");
+		effectsItem = gs.items.names.getIndex("Fire Effects Attached");
+		proofItem = gs.items.names.getIndex("Snow Fire Proofing");
+		burningAlias = gs.aliases.names.getIndex("Burning Buildings");
+		stopSeq = gs.actionSequences.names.getIndex("Stop Building Burning");
+		fireFx = gs.specialEffectTags.names.getIndex("Building Fire");
+		auto mv = gs.definedValues.find("Max Fire Strength (SI)");
+		maxStrength = mv != gs.definedValues.end() && mv->second > 0.0f ? mv->second : 27.0f;
+	}
+	if (strengthItem < 0 || burningAlias < 0)
+		return;
+	const float snow = state.snowCover;
+	const float douse = RAIN_DOUSE * state.rain * std::sqrt(std::max(state.rain, 0.0f));
+
+	// the burning buildings
+	std::vector<ServerGameObject*> burning;
+	if (auto al = server.aliases.find(burningAlias); al != server.aliases.end())
+		for (const auto& ref : al->second)
+			if (ServerGameObject* b = ref.getFrom<Server>(); b && !b->deleted && !(b->flags & CommonGameObject::fTerminated))
+				burning.push_back(b);
+	std::sort(burning.begin(), burning.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+	std::set<uint32_t> lit;
+	for (ServerGameObject* b : burning) {
+		float s = b->getItem(strengthItem);
+		if (s <= 0.0f)
+			continue;
+		auto it = roofs.find(b->id);
+		const float roof = snow * (1.0f - (it != roofs.end() ? it->second.melt : 0.0f));
+		const bool weather = douse > 0.0f || roof > 0.0f;
+		if (!weather && (it == roofs.end() || it->second.peak <= 0.0f))
+			continue; // (burning as the game set has it)
+		Roof& r = it != roofs.end() ? it->second : roofs[b->id];
+		lit.insert(b->id);
+		r.peak = std::max(r.peak, s);
+		const float was = s;
+		s -= douse;
+		s = std::min(s, maxStrength * (1.0f - SNOW_CAP * roof));
+		if (snow > 0.0f)
+			r.melt = std::min(1.0f, r.melt + ROOF_MELT + ROOF_MELT_HOT * std::min(was, maxStrength) / maxStrength);
+		if (!weather) // (the weather gone: the fire back as it was, its flames growing again)
+			r.peak = std::max(s, r.peak - 0.5f);
+		if (s <= 0.5f) {
+			// put out: as by the peasants (Extinguish.cpp), the effects, the sound, the extinguishers
+			if (trace)
+				printf("ENVIRONMENT t=%.0f the rain puts out the fire of %u\n", state.time, b->id);
+			if (stopSeq >= 0) {
+				SrvScriptContext ctx(&server, b);
+				auto _ = ctx.change(ctx.sequenceExecutor, b);
+				gs.actionSequences[stopSeq].run(&ctx);
+			}
+			else
+				b->setItem(strengthItem, 0.0f);
+			stats.rainedOut++;
+			r.peak = 0.0f;
+			r.share = 1.0f;
+			lit.erase(b->id);
+			continue;
+		}
+		if (s != was)
+			b->setItem(strengthItem, s);
+		r.share = r.peak > 0.0f ? std::clamp(s / r.peak, 0.0f, 1.0f) : 1.0f;
+		// one "Building Fire" fewer as it dies down (the game set adds one above 10 and 20)
+		if (effectsItem >= 0 && fireFx >= 0) {
+			const float attached = b->getItem(effectsItem);
+			if (attached > 1.0f && s < 10.0f * (attached - 1.0f) - 1.0f) {
+				b->detachLoopingSpecialEffect(fireFx);
+				b->setItem(effectsItem, attached - 1.0f);
+				stats.firesShrunk++;
+			}
+		}
+	}
+	// the roofs not burning: the snow falling covers them again; the ones gone, or bare and out
+	for (auto it = roofs.begin(); it != roofs.end();) {
+		Roof& r = it->second;
+		if (!lit.count(it->first)) {
+			r.peak = 0.0f;
+			r.share = 1.0f;
+			r.melt = snow > 0.0f ? std::max(0.0f, r.melt - ROOF_COVER * state.snowfall) : 0.0f;
+		}
+		else if (snow <= 0.0f)
+			r.melt = 0.0f;
+		ServerGameObject* o = (ServerGameObject*)server.findObject(it->first);
+		if (!o || o->deleted || (r.peak <= 0.0f && r.melt <= 0.0f) || (r.share >= 1.0f && r.melt <= 0.0f && douse <= 0.0f && snow <= 0.0f))
+			it = roofs.erase(it);
+		else
+			++it;
+	}
+	// the snow's Fire Proofing on every building (only while there is snow, and once more after)
+	if (proofItem >= 0 && (snow > 0.0f || snowProofed)) {
+		auto walk = [&](ServerGameObject* obj, auto& self) -> void {
+			for (const auto& [type, children] : obj->children)
+				for (CommonGameObject* c : children) {
+					ServerGameObject* so = (ServerGameObject*)c;
+					if (so->deleted || (so->flags & CommonGameObject::fTerminated))
+						continue;
+					if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+						const float v = std::round(SNOW_PROOFING * roofSnow(so->id));
+						if (so->getItem(proofItem) != v)
+							so->setItem(proofItem, v);
+					}
+					self(so, self);
+				}
+		};
+		walk(server.getLevel(), walk);
+		snowProofed = snow > 0.0f;
+	}
+}
+
+// the burning buildings' fires as the weather left them (NETCLIMSG_FIRE_SHARES): every one not
+// whole, when they changed (all of them to a client joining)
+void ServerEnvironment::sendFireShares(Server& server, NetLink* only)
+{
+	std::vector<std::pair<uint32_t, uint8_t>> now;
+	for (const auto& [id, r] : roofs)
+		if (r.peak > 0.0f && r.share < 0.995f && now.size() < 255)
+			now.push_back({ id, (uint8_t)std::lround(std::clamp(r.share, 0.0f, 1.0f) * 255.0f) });
+	if (!only && now == sharesSent)
+		return;
+	NetPacketWriter msg(NETCLIMSG_FIRE_SHARES);
+	msg.writeUint8((uint8_t)now.size());
+	for (const auto& [id, q] : now) {
+		msg.writeUint32(id);
+		msg.writeUint8(q);
+	}
+	if (only)
+		only->send(msg);
+	else {
+		sharesSent = now;
+		for (NetLink* link : server.clientLinks)
+			link->send(msg);
+	}
+}
+
 float ServerEnvironment::winterAhead(float now, int* severity) const
 {
 	if (!settings.seasons)
@@ -951,6 +1106,7 @@ void ServerEnvironment::update(Server& server)
 			strikeLightning(server, &near);
 		}
 		updateFires(server);
+		updateBuildingFires(server);
 	}
 	// the peasants' lodging at night and in winter
 	if (dt > 0.0f) {
@@ -1003,6 +1159,7 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 		for (NetLink* link : server.clientLinks)
 			link->send(msg);
 	sendCharred(server, only);
+	sendFireShares(server, only);
 }
 
 // the charred trees (NETCLIMSG_CHARRED_TREES): the new ones, or all of them to a client joining,
@@ -1059,6 +1216,11 @@ std::string ServerEnvironment::saveText() const
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
 		o << "exposure " << id << ' ' << e.cold << ' ' << e.heat << '\n';
+	// the weather on burning buildings (a save from before it: none, burning as the game set has it)
+	for (const auto& [id, r] : roofs)
+		o << "roof " << id << ' ' << r.peak << ' ' << r.melt << ' ' << r.share << '\n';
+	if (snowProofed)
+		o << "snowproofed 1\n";
 	if (Server::instance)
 		o << lodging.saveText(*Server::instance);
 	return o.str();
@@ -1117,6 +1279,14 @@ void ServerEnvironment::loadText(const std::string& text)
 			l >> id >> e.cold >> e.heat;
 			exposure[id] = e;
 		}
+		else if (tag == "roof") {
+			uint32_t id = 0;
+			Roof r;
+			l >> id >> r.peak >> r.melt >> r.share;
+			roofs[id] = r;
+		}
+		else if (tag == "snowproofed")
+			snowProofed = true;
 		else if (tag == "lodging" || tag == "lodger")
 			lodging.loadLine(tag, line);
 	}

@@ -23,6 +23,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 #include "../util/vecmat.h"
 
@@ -51,6 +52,16 @@ namespace FireFx {
 	// this frame's integrity of a burning object (the fires attached to it carry its id)
 	void SetDamage(uint32_t objid, float integrity);
 	float DamageOf(uint32_t objid); // DamageScale of what was set, 1 for an object without
+
+	// the burning buildings' fires the weather is putting out (Client::fireShares: id, the share
+	// of the fire left, 0..1; ServerEnvironment.h): their flames that much smaller and fainter, at
+	// every level (Original: the sprites, DefaultParticleRenderer). Null: none.
+	void SetShares(const std::unordered_map<uint32_t, float>* shares);
+	float ShareOf(uint32_t objid); // 1 for an object without
+	bool HasShare(uint32_t objid);
+	// a flame's size and its alpha for a share left (1 at 1; 0.35 and 0.5 nearly out)
+	inline float ShareSize(float share) { return 0.35f + 0.65f * share; }
+	inline float ShareAlpha(float share) { return 0.5f + 0.5f * share; }
 
 	// a fire's flicker about 1 (0.7..1.3) at a game time; seed: which fire (the same every time)
 	float Flicker(float time, uint32_t seed);

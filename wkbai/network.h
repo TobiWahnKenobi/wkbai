@@ -184,6 +184,11 @@ enum NetClientMessages {
 	// EXIT_TO_MAIN_MENU run for this client's player (a guest's Exit button, WKB.exe's msg 0xC2):
 	// this client leaves the game, the others play on
 	NETCLIMSG_EXIT_TO_MENU,
+	// the burning buildings' fires as wkbai's weather left them (ServerEnvironment.h: rain puts
+	// them out, snow holds them down): count (8 bits), then each one's id (32 bits) and the share
+	// of its fire left (8 bits, 255 whole); the ones not sent burn whole. When they change, after
+	// NETCLIMSG_ENVIRONMENT
+	NETCLIMSG_FIRE_SHARES,
 };
 
 enum NetServerMessages {

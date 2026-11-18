@@ -326,6 +326,7 @@ bool s_forceAvailable = false;
 namespace {
 	int s_level = ORIGINAL;
 	std::unordered_map<uint32_t, float> s_damage;
+	const std::unordered_map<uint32_t, float>* s_shares = nullptr;
 	std::vector<Flame> s_pending;
 
 	float Saturate(float x) { return x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x; }
@@ -507,6 +508,18 @@ float DamageOf(uint32_t objid)
 	return it == s_damage.end() ? 1.0f : DamageScale(it->second);
 }
 
+void SetShares(const std::unordered_map<uint32_t, float>* shares) { s_shares = shares; }
+
+float ShareOf(uint32_t objid)
+{
+	if (!s_shares || !objid || s_shares->empty())
+		return 1.0f;
+	auto it = s_shares->find(objid);
+	return it == s_shares->end() ? 1.0f : Saturate(it->second);
+}
+
+bool HasShare(uint32_t objid) { return s_shares && objid && s_shares->count(objid) != 0; }
+
 float Flicker(float time, uint32_t seed)
 {
 	const float s = Hash01(seed) * 6.2831853f, s2 = Hash01(seed ^ 0x5bd1e995U) * 6.2831853f;
@@ -526,10 +539,12 @@ void Add(const Particle& p, float now, float size, float alpha)
 	Flame f;
 	f.position = const_cast<Particle&>(p).getPosition(now); // (not const in ParticleContainer.h)
 	f.emitter = p.startPosition;
-	f.size = size;
-	f.alpha = Saturate(alpha);
+	// (a fire the rain is putting out, or snow holding down: smaller and fainter, cooler)
+	const float share = ShareOf(p.objid);
+	f.size = size * ShareSize(share);
+	f.alpha = Saturate(alpha * ShareAlpha(share));
 	f.life = p.maxAge > 0 ? Saturate((now - p.startTime) / p.maxAge) : 0.0f;
-	f.heat = DamageOf(p.objid);
+	f.heat = 1.0f + (DamageOf(p.objid) - 1.0f) * share;
 	f.seed = SeedOf(p);
 	f.objid = p.objid;
 	f.system = p.system;

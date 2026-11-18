@@ -1555,8 +1555,8 @@ local function weatherTab()
 			"Units in the open freeze in the cold (worse marching in snow) and",
 			"can die of thirst in the heat; they are safe at their own or their",
 			"allies' villages and manors. Wet and snowy ground slows them down.",
-			"Lightning strikes units and sets buildings on fire. Floods damage",
-			"buildings and drown units in deep water." })
+			"Lightning strikes units and sets buildings on fire, which rain puts out",
+			"and snow slows. Floods damage buildings and drown units in deep water." })
 	end
 	-- cheat mode: the F9 panel (a skirmish against the AI only, never in multiplayer)
 	if skirmish.multiplayer then

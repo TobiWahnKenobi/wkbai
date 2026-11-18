@@ -81,6 +81,31 @@ struct ServerEnvironment {
 	// the burning land's patches
 	std::vector<Vector3> firePositions() const;
 
+	// ---- the weather on burning buildings (updateBuildingFires) ----
+	// The game set's fire (Mechanics\Fire.cpp) burns a building by its "Fire Strength (SI)": the
+	// Structural Integrity it loses every 2.9 s (3 when lit, up to 27; it grows by 1.5 whenever the
+	// building's Fire Proofing fails a roll, a house's 1 in 5, a castle's 1 in 200). Once a second:
+	//  - Rain puts it out: RAIN_DOUSE * rain^1.5 off the strength a second (EnvironmentState::rain:
+	//    rain 0.5 0.18/s, a thunderstorm 0.9 0.43/s, heavy rain 1.0 0.5/s): a full fire (27) on a
+	//    barracks goes out in about 2.5 minutes of rain and about a minute of heavy rain (test 96:
+	//    150 s and 53 s; longer while the rain sets in, and for a house, whose fire grows fastest). Its flames shrink as it does
+	//    (one "Building Fire" effect fewer below 19 and 9, the clients' flames by the share left,
+	//    NETCLIMSG_FIRE_SHARES), and at 0.5 it is out ("Stop Building Burning", as the peasants').
+	//  - Snow on a roof (the snow cover, less what a fire on it melted) slows a fire: at full
+	//    cover the strength is held to half the most (SNOW_CAP: half the harm), and the building's
+	//    Fire Proofing counts SNOW_PROOFING more (the item "Snow Fire Proofing", redata's "wkbai
+	//    patches\Snow and Fire.cpp"): a house's fire grows and spreads to it 4 times less often.
+	//    The fire melts its roof's snow: ROOF_MELT + ROOF_MELT_HOT * its strength / 27 a second (a
+	//    new fire's roof bare in about 4 minutes, a full fire's in about 1); snow falling covers
+	//    it again (ROOF_COVER * the snowfall a second).
+	// Lightning still sets buildings alight in a storm; the storm's rain then works against it.
+	static constexpr float RAIN_DOUSE = 0.5f, SNOW_CAP = 0.5f, SNOW_PROOFING = 30.0f;
+	static constexpr float ROOF_MELT = 0.003f, ROOF_MELT_HOT = 0.012f, ROOF_COVER = 0.01f;
+	// a building's roof snow (0..1) and its fire's share left by the weather (1: as it burned, or
+	// not burning); tests
+	float roofSnow(uint32_t id) const;
+	float fireShare(uint32_t id) const;
+
 	// the peasants' lodging at night and in winter (PeasantLodging.h)
 	PeasantLodging lodging;
 
@@ -92,7 +117,7 @@ struct ServerEnvironment {
 	void reset() { *this = ServerEnvironment(); }
 
 	// for the tests: what happened ("AITEST environment" lines)
-	struct Stats { int frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
+	struct Stats { int rainedOut = 0, firesShrunk = 0, frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
 		size_t floodTiles = 0, floodedTiles = 0; int onIceMost = 0, onIceSeconds = 0, fallowHarvests = 0;
 		int wildfires = 0, fireCells = 0, fireCellsMost = 0, fireDeaths = 0, buildingsFired = 0, fromMissiles = 0, fromBuildings = 0, spontaneous = 0;
 		// the deaths by player id: 0 frozen, 1 thirst, 2 drowned (floods and the ice), 3 fire, 4 lightning
@@ -175,6 +200,15 @@ private:
 	std::vector<uint32_t> charredOrder; // the same, in the order they burned
 	size_t charredSent = 0;
 	void sendCharred(Server& server, NetLink* only);
+	// the burning and snowed-on buildings (by id; saved, "roof" lines): the strength their fire
+	// had at most while the weather was on it (0: not burning), the share of the snow cover a fire
+	// melted off the roof, the share left this update (not saved: the next update's)
+	struct Roof { float peak = 0.0f, melt = 0.0f, share = 1.0f; };
+	std::map<uint32_t, Roof> roofs;
+	bool snowProofed = false; // (some building's "Snow Fire Proofing" may be set; saved)
+	std::vector<std::pair<uint32_t, uint8_t>> sharesSent; // what the clients were last sent
+	void updateBuildingFires(Server& server);
+	void sendFireShares(Server& server, NetLink* only);
 	void charTrees(Server& server, const Vector3& at);
 	void updateFires(Server& server);
 	bool igniteAt(Server& server, const Vector3& pos, float life, int gen = 0);
