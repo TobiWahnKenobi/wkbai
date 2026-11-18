@@ -231,7 +231,7 @@ struct DiligentGfx : IRenderer
 		// decaying, over real time after the weather at the camera; the storm layer's base and
 		// thickness (the towers keep it while they sink back into a cumulus layer)
 		float stormLife = 0;
-		bool stormGrowing = true;
+		bool stormGrowing = true, stormSteady = true; // (steady: neither growing nor decaying)
 		float stormBase = 170, stormThickness = 1300; // (the thunderstorm preset's until a storm comes)
 		uint64_t cloudPresetTicks = 0;
 		int cloudWeatherKind = -1;

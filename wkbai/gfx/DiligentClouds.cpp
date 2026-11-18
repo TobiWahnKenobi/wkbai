@@ -172,7 +172,7 @@ float4 StormStage()
 // decaying, wherever they are (the front took the storm's weather away, they melt after it)
 float StormRegion(float storm)
 {
-	return CloudStorm.y > 0.5 && CloudStorm.y < 1.5 ? saturate(storm * 2.5) : 1; // (y 2: the test hook's, anywhere)
+	return CloudStorm.y > 0.5 && CloudStorm.y < 1.5 ? saturate(storm * 2.5) : 1; // (y 2: steady, or the test hook's: anywhere)
 }
 
 // The light the clouds leave at a point: the sun's ray through it crosses the cloud layer's
@@ -855,14 +855,20 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		// anywhere, not only where the storm's weather is: the towers seen over a cumulus sky).
 		{
 			const float target = std::clamp(env.cloudPreset.storm, 0.0f, 1.0f);
+			// (steady, grown or at a rain's share: the towers stand everywhere, not only where
+			// the storm's weather is: the next weather took them away in a blink upwind, where its
+			// front starts, before they began to melt at the camera, the play test's next round)
+			env.stormSteady = true;
 			if (firstWeather)
 				env.stormLife = target;
 			else if (target > env.stormLife + 1e-4f) {
 				env.stormGrowing = true;
+				env.stormSteady = false;
 				env.stormLife = std::min(target, env.stormLife + dt / 12.0f);
 			}
 			else if (target < env.stormLife - 1e-4f) {
 				env.stormGrowing = false;
+				env.stormSteady = false;
 				env.stormLife = std::max(target, env.stormLife - dt / 15.0f);
 			}
 			if (const char* hold = getenv("WKBAI_STORM_LIFE")) {
@@ -1010,7 +1016,7 @@ void UpdateCloudBuffer(DiligentGfx* gfx, const Camera& camera, const Vector3& su
 		std::clamp(rs.dynamicGIStrength, 0.0f, 3.0f), 0.0f, 0.0f, 0.0f,
 		lightDir.x, lightDir.y, lightDir.z, 1.0f,
 		lightCol[0], lightCol[1], lightCol[2], 0.0f,
-		env.stormLife, env.stormGrowing ? (stormTestAnywhere ? 2.0f : 1.0f) : 0.0f, env.stormBase, env.stormThickness,
+		env.stormLife, env.stormGrowing ? (stormTestAnywhere || env.stormSteady ? 2.0f : 1.0f) : 0.0f, env.stormBase, env.stormThickness,
 	};
 	static_assert(sizeof(data) <= 352, "the cloud buffer's size (CreateCloudResources)");
 	gfx->ctx->UpdateBuffer(env.cloudBuffer, 0, sizeof(data), data, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
