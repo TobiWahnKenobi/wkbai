@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Order.h"
+#include <functional>
 #include <set>
 #include <map>
 #include <algorithm>
@@ -1081,6 +1082,29 @@ bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 				return false;
 		}
 	return true;
+}
+
+// (gameset/actions.cpp, an AI army's victims) whether an army's soldiers can never get within
+// reach of the target: its first character, through its formations and the armies under it (an
+// archer's 30 m, else 3 m). A target that isn't a character or formation (a building: walls and
+// gates are attacked from beside them) is always in reach.
+bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
+{
+	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
+		return false;
+	std::function<ServerGameObject*(ServerGameObject*, int)> first = [&](ServerGameObject* o, int depth) -> ServerGameObject* {
+		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			return o->deleted ? nullptr : o;
+		if (depth > 4 || (o->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION && o->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY))
+			return nullptr;
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children)
+				if (ServerGameObject* m = first((ServerGameObject*)c, depth + 1))
+					return m;
+		return nullptr;
+	};
+	ServerGameObject* m = first(army, 0);
+	return m && OutOfReach(m, target->position, AIUtil::ClassOf(m) == 2 ? 30.0f : 3.0f);
 }
 
 // The reach an attacker needs to get within, from a task's range: a melee unit's (not an

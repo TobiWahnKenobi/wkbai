@@ -529,21 +529,31 @@ struct ActionCreateObjectVia : Action {
 	}
 };
 
+bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target); // Order.cpp
+
 struct ActionRegisterAssociates : Action {
 	std::unique_ptr<ObjectFinder> f_aors, f_ated;
 	int category;
+	// wkbai's: an AI army's "Units In Range I Should Attack" (the victims its formations go for,
+	// the Siege/Kingmaker armies' "What Units In Range Should I Attack?" reactions, by distance
+	// alone) leaves out enemies its soldiers can't get within reach of (ArmyCannotReach: a scout
+	// on a hilltop no spearman can climb). Three Kingmaker armies stood on the slope below one
+	// for good, "clearing" it every 4 s (the AI play test's PERFORMANCE3 save, 2026-11-18).
+	bool reachableOnly = false;
 	virtual void run(SrvScriptContext* ctx) override {
 		auto aors = f_aors->eval(ctx);
 		auto ated = f_ated->eval(ctx);
 		for (ServerGameObject *aor : aors) {
 			for (ServerGameObject *obj : ated)
-				aor->associateObject(category, obj);
+				if (!reachableOnly || !ArmyCannotReach(aor, obj))
+					aor->associateObject(category, obj);
 		}
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
 		f_aors.reset(ReadFinder(gsf, gs));
 		category = gs.associations.readIndex(gsf);
 		f_ated.reset(ReadFinder(gsf, gs));
+		reachableOnly = category >= 0 && gs.associations.names.getString(category) == "Units In Range I Should Attack";
 	}
 };
 
