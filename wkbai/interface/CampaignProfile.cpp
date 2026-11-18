@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <random>
 
 namespace {
 	std::filesystem::path folder() { return g_userPath / "saved" / "Campaigns"; }
@@ -50,6 +51,12 @@ bool CampaignProfile::load(const std::string& name, CampaignProfile& out)
 	for (const auto& [item, value] : items.items())
 		if (value.is_number())
 			out.items[item] = value.get<float>();
+	// profiles made before the seed get one now, kept from then on
+	out.seed = j.value("seed", 0u);
+	if (out.seed == 0) {
+		out.seed = std::random_device()() | 1u;
+		out.save();
+	}
 	return true;
 }
 
@@ -59,7 +66,7 @@ bool CampaignProfile::save() const
 		return false;
 	std::error_code ec;
 	std::filesystem::create_directories(folder(), ec);
-	nlohmann::json j = { { "campaign", "Kingmaker" }, { "conquered", conquered }, { "items", items } };
+	nlohmann::json j = { { "campaign", "Kingmaker" }, { "conquered", conquered }, { "items", items }, { "seed", seed } };
 	std::ofstream out(fileOf(name));
 	out << j.dump(1);
 	return (bool)out;

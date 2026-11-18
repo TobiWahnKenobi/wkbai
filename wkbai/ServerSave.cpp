@@ -549,6 +549,8 @@ bool Server::saveGame(const char* filename)
 					}
 		}
 		history = UnitHistory::saveText(*this);
+		// the intensity maps (IntensityMaps): what the players had seen, the maps on
+		intensity = intensityMaps.saveText();
 	}
 
 	auto sidePath = [&](const char* ext) { std::filesystem::path side = path; side += ext; return side; };

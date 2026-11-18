@@ -66,6 +66,12 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "weatherCover=%d\n", weatherCover);
 		out += buf;
 	}
+	// (only with day and night or the seasons on: they do nothing without, and the lobby sends them
+	// for every game)
+	if (active() && (peasantsSleep || farmersWinter)) {
+		snprintf(buf, sizeof(buf), "peasantsSleep=%d\nfarmersWinter=%d\n", (int)peasantsSleep, (int)farmersWinter);
+		out += buf;
+	}
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -124,6 +130,8 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "moonPhase") moonPhase = std::clamp(i, 0, 8);
 	else if (name == "moonStart") moonStart = v < 0.0f ? -1.0f : Frac(v);
 	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
+	else if (name == "peasantsSleep") peasantsSleep = i != 0;
+	else if (name == "farmersWinter") farmersWinter = i != 0;
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;
@@ -547,6 +555,32 @@ SunState ComputeSun(float dayFraction, float yearFraction, bool seasons, float c
 			sun.cloudColour[c] = moonCol[c] * sunDim * up;
 	}
 	return sun;
+}
+
+float DiurnalShape(float hour, float sunrise)
+{
+	const float coldest = sunrise - 0.5f, warmest = 14.5f;
+	const float rise = std::clamp(warmest - coldest, 4.0f, 20.0f); // the morning's hours
+	float h = hour - coldest;
+	h -= 24.0f * std::floor(h / 24.0f); // hours since the coldest, 0..24
+	if (h < rise)
+		return -std::cos(PI * h / rise);
+	return std::cos(PI * (h - rise) / (24.0f - rise));
+}
+
+float DiurnalAmplitude(float yearFraction, bool seasons, float cloudCover, float fog)
+{
+	float a = 6.0f;
+	if (seasons) {
+		// through the seasons' middles (spring 6, summer 7, autumn 5, winter 4.5), as their means
+		static const float swing[4] = { 6.0f, 7.0f, 5.0f, 4.5f };
+		const float x = yearFraction * 4.0f - 0.5f;
+		const int i = (int)std::floor(x);
+		const float f = x - i;
+		const float lo = swing[(i % 4 + 4) % 4], hi = swing[((i + 1) % 4 + 4) % 4];
+		a = lo + (hi - lo) * (1.0f - std::cos(PI * f)) * 0.5f;
+	}
+	return a * (1.0f - 0.6f * std::clamp(cloudCover, 0.0f, 1.0f)) * (1.0f - 0.4f * std::clamp(fog, 0.0f, 1.0f));
 }
 
 float ConvertTemperature(float c, int scale)

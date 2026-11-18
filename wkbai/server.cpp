@@ -233,6 +233,8 @@ void Server::loadSaveGame(const char * filename)
 	// the ministry AI's governments as saved
 	if (!parts.ai.empty())
 		ministries.loadText(*this, parts.ai);
+	// the peasants in for the night or the winter (PeasantLodging): their states on the units
+	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
 	DiscoveredLoadText(parts.discovered);
 	// wkbai's unit history as saved: kills, creators, the last hits
@@ -402,7 +404,8 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 	ServerGameObject* parent = player;
 	std::vector<ServerGameObject*> walls;
 	// a quarter turn about y (WKB.exe turns footprints by quarters only, 0x59a420)
-	const Vector3 turned = StampdownPlan::quarterTurn(orientation);
+	Vector3 turned = StampdownPlan::quarterTurn(orientation);
+	Vector3 placedAt = position;
 
 	if (inGameplay) {
 		if (!player->canAffordObject(blueprint))
@@ -411,6 +414,12 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 		StampdownPlan plan = StampdownPlan::getStampdownPlan(this, player, blueprint, position, turned);
 		if (plan.status != StampdownPlan::Status::Valid)
 			return nullptr;
+		// a wall on a city's ring: the piece that tile takes (a corner where it turns)
+		if (plan.placeBlueprint) {
+			blueprint = plan.placeBlueprint;
+			turned = plan.placeOrientation;
+			placedAt = Vector3((int)(position.x / 5.0f) * 5.0f + 2.5f, position.y, (int)(position.z / 5.0f) * 5.0f + 2.5f);
+		}
 
 		if (auto* pparent = plan.ownerObject.getFrom<Server>())
 			parent = pparent;
@@ -434,7 +443,7 @@ ServerGameObject* Server::stampdownObject(const GameObjBlueprint* blueprint, Ser
 			walls.push_back(spawnObject(creation.blueprint, parent, creation.position, creation.orientation));
 	}
 
-	ServerGameObject* obj = spawnObject(blueprint, parent, position, turned);
+	ServerGameObject* obj = spawnObject(blueprint, parent, placedAt, turned);
 	if (inGameplay) {
 		player->payObjectCost(obj->blueprint);
 		levelTerrainUnder(obj);
@@ -2279,6 +2288,35 @@ void ServerGameObject::lookForSightRangeEvents()
 			this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
 }
 
+// Attack at will: the scripts' "Aggression" sets "Become Aggressive" and sends "On Idle" once;
+// their idle reaction looks for a target near the unit then, and later only a hit, a missile
+// or an enemy on its own tile woke it (the play test: such units waited to be attacked). Once a
+// second, with the sight scan, an idle aggressive unit out of formations that sees an enemy
+// character gets "On Idle" again, so its idle reaction looks again.
+void ServerGameObject::wakeAggressiveIdle()
+{
+	static const GameSet* itemsOf = nullptr;
+	static int aggressive = -1, enemy = -1;
+	const GameSet* gs = Server::instance->gameSet.get();
+	if (itemsOf != gs) {
+		itemsOf = gs;
+		aggressive = gs->items.names.getIndex("Become Aggressive");
+		enemy = gs->diplomaticStatuses.names.getIndex("Enemy");
+	}
+	if (aggressive < 0 || enemy < 0 || blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || (flags & fTerminated)
+		|| orderConfig.getCurrentOrder() || getItem(aggressive) <= 0.0f)
+		return;
+	if (const CommonGameObject* p = getParent(); p && p->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+		return;
+	ServerGameObject* me = getPlayer();
+	for (const uint32_t id : seenObjects)
+		if (ServerGameObject* seen = Server::instance->findObject(id); seen && seen->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+			&& !(seen->flags & fTerminated) && seen->getPlayer() && Server::instance->getDiplomaticStatus(seen->getPlayer(), me) == enemy) {
+			sendEvent(Tags::PDEVENT_ON_IDLE);
+			return;
+		}
+}
+
 void ServerGameObject::addZoneTile(int tx, int tz)
 {
 	Server* server = Server::instance;
@@ -2422,6 +2460,9 @@ bool ServerGameObject::canAffordObject(const GameObjBlueprint* blueprint)
 
 void ServerGameObject::payObjectCost(const GameObjBlueprint* blueprint)
 {
+	// debugging: "WKB_TRACE_PAY=<player id>" prints what that player pays for (0: any player)
+	if (const char* e = getenv("WKB_TRACE_PAY"); e && ((uint32_t)atoi(e) == 0 || (uint32_t)atoi(e) == this->id))
+		printf("PAY t=%.2f %u %s\n", Server::instance->timeManager.currentTime, this->id, blueprint->getFullName().c_str());
 	for (auto [resItem, costItem] : objectCostResourceItems) {
 		this->setItem(resItem, this->getItem(resItem) - blueprint->getStartingItemValue(costItem));
 	}
@@ -3060,6 +3101,17 @@ void Server::playerFinished(ServerGameObject* player)
 	const uint8_t outcome = (alive >= 0 && player->getItem(alive) > 0.0f && !(player->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated))) ? 1 : 2;
 	finishedPlayers[player->id] = outcome;
 	printf("FINISHED t=%.2f player %u %s\n", (float)timeManager.currentTime, player->id, outcome == 1 ? "won" : "lost");
+	// as WKB.exe's REMOVE_MULTIPLAYER_PLAYER (0x5778C0): PLAYER_TERMINATED (saved, sent to every
+	// client) and its AI deleted, the winners' too (its update and the ministries skip it; the plan,
+	// commissions, work orders, a Lua AI and the ministries' government dropped); no AI takes the
+	// place of a guest leaving
+	player->updateFlags(player->flags | ServerGameObject::fPlayerTerminated);
+	AIController& ai = player->aiController;
+	ai.abandonPlan();
+	ai.commissionInstances.clear();
+	ai.workOrderInstances.clear();
+	ai.luaAI.reset();
+	ministries.governments.erase(player->id);
 	NetPacketWriter msg(NETCLIMSG_PLAYER_FINISHED);
 	msg.writeUint32(player->id);
 	msg.writeUint8(outcome);
@@ -3470,7 +3522,10 @@ void Server::updatePeasantActivity()
 						auto* so = (ServerGameObject*)o;
 						if (so->deleted)
 							continue;
-						if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && so->getItem(isPeasant) > 0.0f) {
+						// (a peasant in for the night or the winter, PeasantLodging, is not idle: the
+						// scripts would hand it work or train more)
+						if (so->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && so->getItem(isPeasant) > 0.0f
+							&& (so->lodging == 0 || so->lodging == 4)) {
 							Order* order = so->orderConfig.getCurrentOrder();
 							if (!order)
 								counts[IDLE]++;
@@ -3723,14 +3778,18 @@ void Server::simulate()
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && (simStepIndex + obj->id) % 10 == 0) {
 			SimTimer aiTimer(g_simProfile.ai);
 			g_simPhase = "AI"; g_simPhaseObject = obj->id;
-			obj->aiController.update();
+			// (a finished player's AI is gone, as in WKB.exe: Server::playerFinished)
+			if (!(obj->flags & ServerGameObject::fPlayerTerminated))
+				obj->aiController.update();
 			g_simPhase = "object tree";
 			// Update "Number of Farmers" item (important for Food Consumption to work properly)
 			static const std::string numFarmersName = "Number of Farmers";
 			int numFarmersFinder = gameSet->objectFinderDefinitions.names.getIndex(numFarmersName);
 			if (numFarmersFinder != -1) {
 				SrvScriptContext ctx(this, obj);
-				obj->setItem(Tags::PDITEM_NUMBER_OF_FARMERS, gameSet->objectFinderDefinitions[numFarmersFinder]->eval(&ctx).size());
+				// (with the farmers in for the night or the winter, PeasantLodging: their support goes on)
+				obj->setItem(Tags::PDITEM_NUMBER_OF_FARMERS, (float)(gameSet->objectFinderDefinitions[numFarmersFinder]->eval(&ctx).size()
+					+ environment.lodging.farmersOf(obj->id)));
 			}
 		}
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
@@ -3842,6 +3901,8 @@ void Server::simulate()
 			SimTimer sightTimer(g_simProfile.sight);
 			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();
+			if (!ref) continue;
+			obj->wakeAggressiveIdle();
 			if (!ref) continue;
 		}
 		if (obj->blueprint->removeWhenNotReferenced)
@@ -4305,6 +4366,12 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				uint32_t objid = br.readUint32();
 				if (ServerGameObject* obj = findObject(objid)) {
 					int assignmentMode = br.readUint32();
+					// Shift on a working peasant (farming, chopping: an order that cycles for ever):
+					// put last, the Build never came, and the foundation stood unbuilt (the play
+					// test). Nothing after a cycling order is ever reached, so the Build replaces it.
+					if (assignmentMode == Tags::ORDERASSIGNMODE_DO_LAST)
+						if (Order* current = obj->orderConfig.getCurrentOrder(); current && current->blueprint->cycleOrder && !current->finishAfterTask)
+							assignmentMode = Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE;
 					int cmdid = gameSet->commands.names.getIndex("Build");
 					gameSet->commands[cmdid].execute(obj, clientInfos[clientIndex].lastStampdown, assignmentMode);
 				}
@@ -4344,6 +4411,9 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				for (ServerGameObject* sub : subs) {
 					positionSum += sub->position;
 					numUnits += 1;
+					// what the unit did on its own ends (training at a dummy went on in the
+					// formation, the formation never placing it): the formation leads it now
+					sub->orderConfig.cancelAllOrders();
 					sub->setParent(formation);
 				}
 				formation->setPosition(positionSum / numUnits);

@@ -214,6 +214,13 @@ ParticleSystem* PSCache::getPS(const std::string& name) {
 		ps.emitsLight = lower.find("smoke") == std::string::npos
 			&& (lower.find("fire") != std::string::npos || lower.find("flame") != std::string::npos
 				|| lower.find("burn") != std::string::npos || lower.find("torch") != std::string::npos);
+		std::string sprite = ps.Particles.type == PSType::Sprites ? ps.Particles.Sprites : std::string();
+		std::transform(sprite.begin(), sprite.end(), sprite.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+		const size_t slash = sprite.find_last_of("/\\");
+		if (slash != std::string::npos)
+			sprite = sprite.substr(slash + 1);
+		ps.flameSprite = ps.emitsLight && (sprite.find("fire") != std::string::npos || sprite.find("flame") != std::string::npos);
+		ps.standingFire = ps.flameSprite && (lower == "fire_building" || lower == "fire" || lower == "mapfire" || lower == "broad_flame");
 		return &ps;
 	}
 }

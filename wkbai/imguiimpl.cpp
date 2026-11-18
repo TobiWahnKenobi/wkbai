@@ -120,11 +120,12 @@ void ImGuiImpl_NewFrame()
 	ImGui::NewFrame();
 }
 
-void ImGuiImpl_Render(IRenderer *gfx)
+void ImGuiImpl_Render(IRenderer *gfx, bool agentShot)
 {
 	AgentInput::DrawCursorOverlay(); // the agent's cursor and its tag, while it has the input
 	ImGui::Render();
 	ImGuiImpl_RenderDrawLists(ImGui::GetDrawData(), gfx);
-	AgentServer::TakeScreenshotIfAsked(gfx); // the frame as the player sees it, if the agent asked
+	if (agentShot)
+		AgentServer::TakeScreenshotIfAsked(gfx); // the frame as the player sees it, if the agent asked
 	AgentUi::EndFrame(); // this frame's buttons and items: what the agent can aim at
 }

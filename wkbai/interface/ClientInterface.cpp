@@ -8,6 +8,7 @@
 #include "../AgentUi.h"
 #include "ClientInterface.h"
 #include "../AgentInput.h"
+#include "../AgentServer.h"
 #include "ChronicleNarrator.h"
 #include "../gfx/GpuProfiler.h"
 #include "../gfx/TerrainRenderer.h"
@@ -36,6 +37,7 @@
 #include "../ParticleContainer.h"
 #include "../ParticleSystem.h"
 #include "../gfx/DefaultParticleRenderer.h"
+#include "../gfx/FireEffects.h"
 #include "../gfx/ChimneySmoke.h"
 #include "../gfx/BloodDrip.h"
 #include "EnvironmentView.h"
@@ -783,7 +785,22 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			client->camera.position.z += targetZ - lookAt.z;
 		}
 	}
-	else if (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f) {
+	else if (hovered && g_mousePressed[SDL_BUTTON_RIGHT] && !stampdownBlueprint) {
+		// a right-click on the map sends the selected units there, as a right-click on that
+		// ground (the original's minimap orders: the ground command, "Move" for units)
+		const float targetX = std::clamp((mx - mapX) / mapW, 0.0f, 1.0f) * areaWidth;
+		const float targetZ = (1.0f - std::clamp((my - mapY) / mapH, 0.0f, 1.0f)) * areaDepth;
+		std::vector<ClientGameObject*> selected;
+		for (ClientGameObject* sel : selection)
+			if (sel)
+				selected.push_back(sel);
+		const auto cmds = FindCursorCommands(client, selected, nullptr);
+		if (!cmds.empty()) {
+			const Vector3 pos(targetX, terrain->getHeightEx(targetX, targetZ, true), targetZ);
+			sendRightClickCommand(cmds[0].second, nullptr, pos, Vector3(-1, 0, 0));
+		}
+	}
+	if (!(hovered && g_mouseDown[SDL_BUTTON_LEFT]) && (minimapGlide.x != 0.0f || minimapGlide.z != 0.0f)) {
 		// most of the way in a third of a second, the rest when it is under half a metre
 		const float dt = std::min(0.1f, (now - minimapGlideTick) / 1000.0f);
 		minimapGlideTick = now;
@@ -931,6 +948,9 @@ bool UseEnhancedRenderers(IRenderer* gfx)
 	return g_settings.value<bool>("enhancedGraphics", false) && dynamic_cast<DiligentGfx*>(gfx) != nullptr;
 }
 
+// the buildings drawn this frame (drawObject), for drawBenchmarkFires
+static std::vector<ClientGameObject*> s_benchFireBuildings;
+
 // The original's interface creates these markers (table at 0x8B5704, used at 0x64CA40):
 // Flags\Way_Point1 at the ground target of a unit order, the buoy (Resources\Bouy) when that
 // target is on water, and Flags\Land_Spawn_Rally_Point for a building's spawn rally point.
@@ -1061,6 +1081,10 @@ std::vector<std::pair<WndCursor*, Command*>> FindCursorCommands(Client* client, 
 		for (size_t s = 0; s < selection.size(); s++) {
 			if (std::find(offered[s].begin(), offered[s].end(), cmd) == offered[s].end())
 				continue;
+			// a unit is no target of its own commands (right-clicking one of the selected units
+			// gave them all Guard on it, the unit guarding itself)
+			if (target && selection[s] == target)
+				continue;
 			CliScriptContext ctx(client, selection[s]);
 			auto _ = ctx.change(ctx.target, target);
 			auto _sel = ctx.change(ctx.selectedObject, selection[s]);
@@ -1148,6 +1172,9 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 	float nextPosRadius = SEPARATION;
 	for (ClientGameObject *sel : selection) {
 		if (sel) {
+			// the command's target itself is not sent it (Guard on itself)
+			if (nextSelectedObject && sel == nextSelectedObject)
+				continue;
 			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
 				// if object offers this command, send the command
 				int assignmentMode = g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
@@ -1412,6 +1439,31 @@ void ClientInterface::drawFootprintTiles()
 // The refusal while placing a building, as WKB.exe shows it: "Cannot build here : ..." in its
 // in-game font (Fonts\Drop_Shadow_White) on a dark red box with a lighter red edge, under the
 // cursor (the look from the user's screenshots of the original at 1920 x 1080)
+std::vector<std::pair<Vector3, Vector3>> ClientInterface::wallLine(const Vector3& from, const Vector3& to) const
+{
+	std::vector<std::pair<Vector3, Vector3>> line;
+	const int x0 = (int)std::floor(from.x / 5.0f), z0 = (int)std::floor(from.z / 5.0f);
+	const int x1 = (int)std::floor(to.x / 5.0f), z1 = (int)std::floor(to.z / 5.0f);
+	const bool alongX = std::abs(x1 - x0) >= std::abs(z1 - z0);
+	const int n = alongX ? std::abs(x1 - x0) : std::abs(z1 - z0);
+	const int step = (alongX ? x1 - x0 : z1 - z0) >= 0 ? 1 : -1;
+	// a straight piece runs along its model's x (Stockade*.mesh3): unturned along x, a quarter along z
+	const Vector3 turn = n == 0 ? stampdownOrientation() : Vector3(0.0f, alongX ? 0.0f : 1.5707964f, 0.0f);
+	for (int i = 0; i <= n && i < 200; i++) {
+		const int tx = alongX ? x0 + i * step : x0, tz = alongX ? z0 : z0 + i * step;
+		Vector3 pos(tx * 5.0f + 2.5f, 0.0f, tz * 5.0f + 2.5f);
+		if (stampdownBlueprint && stampdownBlueprint->footprint) {
+			const auto rotOrigin = stampdownBlueprint->footprint->rotateOrigin(turn.y);
+			pos.x += rotOrigin.first;
+			pos.z += rotOrigin.second;
+		}
+		if (client->terrain)
+			pos.y = client->terrain->getHeightEx(pos.x, pos.z, false);
+		line.emplace_back(pos, turn);
+	}
+	return line;
+}
+
 Vector3 ClientInterface::stampdownOrientation() const
 {
 	return StampdownPlan::quarterTurn(Vector3(0.0f, stampdownQuarter * 1.5707964f, 0.0f));
@@ -1575,6 +1627,10 @@ void ClientInterface::drawSettingsWindow(bool* open)
 			ImGui::EndDisabled();
 		}
 		ImGui::Checkbox("Fires light their surroundings", &s.fireLights);
+		{
+			static const char* const fireLevels[] = { "Original (the sprites)", "Low (procedural flames)", "High (finer flames, glow, flicker, smoke, shimmer)" };
+			ImGui::Combo("Fire", &s.fireQuality, fireLevels, 3);
+		}
 		ImGui::Checkbox("Ambient occlusion", &s.ssao);
 		ImGui::BeginDisabled(!s.ssao);
 		ImGui::SliderFloat("AO radius", &s.ssaoRadius, 0.5f, 10.0f, "%.1f");
@@ -2976,7 +3032,9 @@ void ClientInterface::drawSelectionPortrait()
 	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
 	if (!obj)
 		obj = nextSelectedObject.get();
-	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+	// characters and buildings (a selected building stands in the window too; with the HD
+	// models its model is the glTF replacement, larger and with its own centre)
+	if (!obj || (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
 		return;
 	Model* model = obj->getModel();
 	if (!model)
@@ -2991,19 +3049,35 @@ void ClientInterface::drawSelectionPortrait()
 	const float angle = (float)(SDL_GetTicks() % 12000) / 12000.0f * 6.2831853f;
 	portrait = obj->sceneEntity;
 	portrait.model = model;
-	portrait.transform = Matrix::getRotationYMatrix(angle);
-	// lit normally (a selected unit is drawn unlit as its highlight)
-	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING);
+	// fitted to the model's bounding box, as the hover pick tests it (its bounding sphere is
+	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
+	// zoom in and out
+	const auto box = model->interpolateBoundingBox(0);
+	const Vector3 centre = (box[0] + box[1]) * 0.5f;
+	const Vector3 half = (box[1] - box[0]) * 0.5f;
+	// the footprint's radius as it turns, and the half height
+	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
+	const float halfHeight = std::max(0.3f, half.y);
+	const float radius = std::sqrt(footprint * footprint + halfHeight * halfHeight);
+	// turning about its centre's vertical (a building's centre is often off its origin: it
+	// swung out of the square)
+	const Vector3 axis(centre.x, 0.0f, centre.z);
+	portrait.transform = Matrix::getTranslationMatrix(-axis) * Matrix::getRotationYMatrix(angle) * Matrix::getTranslationMatrix(axis);
+	// lit normally (a selected unit is drawn unlit as its highlight; a placed building red or green)
+	portrait.flags &= ~(SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW | SceneEntity::SEFLAG_NOLIGHTING | SceneEntity::SEFLAG_BLOCKED | SceneEntity::SEFLAG_PLACEABLE);
 	// the camera a little above, the figure filling the square
-	const Vector3 centre = model->getSphereCenter();
-	const float radius = std::max(0.5f, model->getSphereRadius());
 	Camera cam;
 	cam.fovY = 0.6f;
 	cam.aspect = 1.0f;
-	cam.nearDist = 0.1f;
-	cam.farDist = 100.0f;
-	const float dist = radius / std::sin(cam.fovY * 0.5f) * 1.05f;
-	cam.position = centre + Vector3(0.0f, radius * 0.25f, -dist);
+	// far enough that the turning footprint fits across and the box's top and bottom fit at its
+	// nearest corner
+	const float halfFov = cam.fovY * 0.5f;
+	const float dist = std::max(footprint / std::sin(halfFov), halfHeight / std::tan(halfFov) + footprint) * 1.05f;
+	// the clip planes around the box (a building reaches tens of metres: the fixed 100 m far
+	// plane cut it off)
+	cam.nearDist = std::max(0.1f, dist - radius * 1.5f);
+	cam.farDist = dist + radius * 1.5f;
+	cam.position = centre + Vector3(0.0f, halfHeight * 0.25f, -dist);
 	cam.direction = (centre - cam.position).normal();
 	cam.orientation = Vector3(std::asin(cam.direction.y), 0.0f, 0.0f);
 	cam.viewMatrix = Matrix::getLHLookAtViewMatrix(cam.position, centre, Vector3(0, 1, 0));
@@ -3289,6 +3363,8 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 
 	scene->add(&obj->sceneEntity);
 	numObjectsDrawn++;
+	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+		s_benchFireBuildings.push_back(obj);
 	// Extend map: the level's tree models, to grow its trees with (a few of each kind seen)
 	if (terrainRenderer && terrainRenderer->extendedTrees() && extTreeModels.size() < 12 && model) {
 		const std::string& name = obj->blueprint->name;
@@ -3396,6 +3472,63 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 				nextSelFromBox.push_back(obj);
 			}
 		}
+	}
+}
+
+// test runs: "benchmark": { "burnBuildings": n, "burnDamage": d } sets the n buildings drawn
+// nearest the camera on fire, as the game set's "Building Fire" effects (Missiles\Fire
+// Buildings\DEFAULT1-4.MESH3 and their PS_Fire_Building points) at one to three of their MI_
+// points, more the more damaged (d: their integrity, 0..1; else each its own, 0.1 to 0.9): only
+// drawn, nothing reaches the game, to see and time the fires (FireEffects.h)
+void ClientInterface::drawBenchmarkFires()
+{
+	std::vector<ClientGameObject*> drawn;
+	drawn.swap(s_benchFireBuildings);
+	static const nlohmann::json bench = g_settings.value("benchmark", nlohmann::json::object());
+	static const int wanted = bench.is_object() ? bench.value("burnBuildings", 0) : 0;
+	static const float fixedDamage = bench.is_object() ? bench.value("burnDamage", -1.0f) : -1.0f;
+	if (wanted <= 0 || !client->gameSet || !scene)
+		return;
+	const Vector3 eye = client->camera.position;
+	std::sort(drawn.begin(), drawn.end(), [&](ClientGameObject* a, ClientGameObject* b) {
+		return (a->position - eye).sqlen2xz() < (b->position - eye).sqlen2xz() || ((a->position - eye).sqlen2xz() == (b->position - eye).sqlen2xz() && a->id < b->id);
+	});
+	static const char* const fires[4] = { "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT1.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT2.MESH3", "Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT3.MESH3",
+		"Warrior Kings Game Set\\Missiles\\Fire Buildings\\DEFAULT4.MESH3" };
+	int burning = 0;
+	for (ClientGameObject* obj : drawn) {
+		if (burning >= wanted)
+			break;
+		Model* model = obj->sceneEntity.model;
+		if (!model)
+			continue;
+		std::vector<Vector3> points;
+		for (size_t i = 0; i < model->getNumAPs(); i++)
+			if (model->getAPInfo(i).tag.compare(0, 3, "MI_") == 0) {
+				auto st = model->getAPState(i, obj->sceneEntity.animTime);
+				points.push_back(st.position);
+			}
+		if (points.empty())
+			continue;
+		const uint32_t h = obj->id * 2654435761u;
+		const float integrity = fixedDamage >= 0.0f ? std::clamp(fixedDamage, 0.0f, 1.0f) : 0.1f + 0.8f * ((h >> 8) & 255) / 255.0f;
+		FireFx::SetDamage(obj->id, integrity);
+		const int count = std::min((int)points.size(), integrity > 0.66f ? 1 : integrity > 0.33f ? 2 : 3);
+		for (int k = 0; k < count; k++) {
+			const Vector3& at = points[(h + (uint32_t)k * 7u) % points.size()];
+			SceneEntity& e = attachSceneEntities.emplace_back();
+			e.model = client->gameSet->modelCache.getModel(fires[(h + (uint32_t)k) % 4]);
+			e.transform = Matrix::getTranslationMatrix(at) * obj->sceneEntity.transform;
+			e.color = 0;
+			e.flags = 0;
+			e.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
+			if (!e.model)
+				continue;
+			scene->add(&e);
+			drawAttachmentPoints(&e, FireFx::Level() > FireFx::ORIGINAL ? obj->id : 0);
+		}
+		burning++;
 	}
 }
 
@@ -4272,7 +4405,13 @@ void ClientInterface::iter()
 		showOrderFlag(peapos, false);
 	}
 	else if (!clickedScriptedUi && g_mousePressed[SDL_BUTTON_RIGHT]) {
-		if (stampdownBlueprint && stampdownPlayer) {
+		const int sbType = stampdownBlueprint ? stampdownBlueprint->buildingType : -1;
+		if (stampdownBlueprint && stampdownPlayer && stampdownFromCommand && (sbType == Tags::BUILDINGTYPE_WALL
+			|| sbType == Tags::BUILDINGTYPE_WALL_CORNER_IN || sbType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || sbType == Tags::BUILDINGTYPE_WALL_CROSSROADS)) {
+			// a wall: laid on the button's release, along the drag
+			wallDrag = { true, peapos };
+		}
+		else if (stampdownBlueprint && stampdownPlayer) {
 			client->sendStampdown(stampdownBlueprint, stampdownPlayer, peapos, sendStampdownEvent, stampdownFromCommand, stampdownOrientation());
 			if (stampdownFromCommand) {
 				const Command* cmd = &client->gameSet->commands[client->gameSet->commands.names.getIndex("Build")];
@@ -4302,6 +4441,28 @@ void ClientInterface::iter()
 		}
 		else if (rightClickCommand)
 			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
+	}
+	if (wallDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
+		wallDrag.active = false;
+		if (stampdownBlueprint && stampdownPlayer) {
+			const int buildIndex = client->gameSet->commands.names.getIndex("Build");
+			const Command* build = buildIndex >= 0 ? &client->gameSet->commands[buildIndex] : nullptr;
+			bool first = true;
+			for (const auto& [pos, turn] : wallLine(wallDrag.start, peapos)) {
+				client->sendStampdown(stampdownBlueprint, stampdownPlayer, pos, sendStampdownEvent, true, turn);
+				// the builders take the pieces one after the other, in the line's order
+				if (build)
+					for (ClientGameObject* obj : selection)
+						if (obj && std::find(obj->blueprint->offeredCommands.begin(), obj->blueprint->offeredCommands.end(), build) != obj->blueprint->offeredCommands.end()) {
+							const int assignmentMode = !first ? Tags::ORDERASSIGNMODE_DO_LAST
+								: g_modCtrl ? Tags::ORDERASSIGNMODE_DO_FIRST : (g_modShift ? Tags::ORDERASSIGNMODE_DO_LAST : Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+							client->sendBuildLastStampdownedObject(obj, assignmentMode);
+						}
+				first = false;
+			}
+			if (!g_modShift && !g_modCtrl)
+				stampdownBlueprint = nullptr;
+		}
 	}
 	if (formationDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
 		formationDrag.active = false;
@@ -4878,6 +5039,16 @@ void ClientInterface::iter()
 					const std::string cmdname = client->gameSet->commands.names.getString(cmd->id);
 					if (!filter(cmdname))
 						continue;
+					// Formation makes one only from 8 or more of the player's characters (the
+					// server's rule, WKB.exe 0x54f0d0): with fewer the button did nothing, so none
+					if (cmdname == "Formation") {
+						int characters = 0;
+						for (ClientGameObject* obj : selection)
+							if (obj && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->getPlayer() == client->clientPlayer.get())
+								characters++;
+						if (characters < 8)
+							continue;
+					}
 					auto iconPred = [this, &ctx](int eq) {return client->gameSet->equations[eq]->booleval(&ctx); };
 					auto condPred = [&ctx](GSCondition* cond) {return cond->test->booleval(&ctx); };
 					if (std::all_of(cmd->iconConditions.begin(), cmd->iconConditions.end(), iconPred)) {
@@ -5311,6 +5482,10 @@ void ClientInterface::iter()
 			psCache = new PSCache("Warrior Kings Game Set\\Particle_Systems");
 		if (!particleRenderer)
 			particleRenderer = new DefaultParticleRenderer(gfx, particlesContainer);
+		// the fires' look this frame (RenderSettings::fireQuality: Low and High with the enhanced
+		// renderers on Diligent)
+		FireFx::BeginFrame(g_renderSettings.fireQuality, dynamic_cast<DiligentGfx*>(gfx) && client->terrain && UseEnhancedRenderers(gfx));
+		s_benchFireBuildings.clear();
 
 		numObjectsDrawn = 0;
 		attachSceneEntities.clear();
@@ -5395,8 +5570,16 @@ void ClientInterface::iter()
 						continue;
 					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
 					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
-					const float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
-					std::array<float, 7> l = { at.x, at.y, at.z, 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f),
+					float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
+					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
+					// more its building is damaged
+					if (FireFx::Level() >= FireFx::HIGH) {
+						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
+						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
+						reach *= 1.0f + 0.25f * damage;
+					}
+					std::array<float, 7> l = { at.x, at.y, at.z, reach,
 						hue[0] / peak * strength, hue[1] / peak * strength, hue[2] / peak * strength };
 					list.push_back({ (at - client->camera.position).sqlen3(), l });
 				}
@@ -5555,8 +5738,23 @@ void ClientInterface::iter()
 				static std::vector<SceneEntity> planEntities;
 				planEntities.clear();
 				auto plan = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, peapos, orientation);
+				// a wall on the ring: the piece the server puts there (a corner where the ring turns)
+				if (plan.placeBlueprint) {
+					test.model = finishedModel(plan.placeBlueprint);
+					const Vector3 at((int)(peapos.x / 5.0f) * 5.0f + 2.5f, peapos.y, (int)(peapos.z / 5.0f) * 5.0f + 2.5f);
+					test.transform = Matrix::getRotationYMatrix(-plan.placeOrientation.y) * Matrix::getTranslationMatrix(at);
+				}
 				for (const auto& verdict : plan.tiles)
 					footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok });
+				// a wall being dragged: every piece of the line, green or red as each would be placed
+				if (wallDrag.active) {
+					const auto line = wallLine(wallDrag.start, peapos);
+					for (size_t i = 0; i + 1 < line.size(); i++) {
+						const auto piece = StampdownPlan::getStampdownPlan(client, client->clientPlayer.get(), stampdownBlueprint, line[i].first, line[i].second);
+						for (const auto& verdict : piece.tiles)
+							footprintTiles.push_back({ verdict.x, verdict.z, verdict.ok && piece.status == StampdownPlan::Status::Valid });
+					}
+				}
 				// red where it can't be placed (the server refuses it too), green where it can, as in
 				// the original
 				test.flags |= plan.status != StampdownPlan::Status::Valid ? SceneEntity::SEFLAG_BLOCKED : SceneEntity::SEFLAG_PLACEABLE;
@@ -5683,14 +5881,34 @@ void ClientInterface::iter()
 			flag.animTime = (uint32_t)SDL_GetTicks();
 			scene->add(&flag);
 		}
+		// (the fire levels: a looping effect's particles carry its object's id, a burning building's
+		// fires burn by its damage, FireFx::SetDamage; Original: as before, no id)
+		static const GameSet* fireItemsOf = nullptr;
+		static int fireIntegrity = -1, fireCapacity = -1;
+		if (FireFx::Level() > FireFx::ORIGINAL && fireItemsOf != client->gameSet.get()) {
+			fireItemsOf = client->gameSet.get();
+			fireIntegrity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity") : -1;
+			fireCapacity = fireItemsOf ? fireItemsOf->items.names.getIndex("Structural Integrity Capacity") : -1;
+		}
+		auto fireObject = [&](ClientGameObject* obj) -> uint32_t {
+			if (FireFx::Level() == FireFx::ORIGINAL || !obj)
+				return 0;
+			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fireIntegrity >= 0 && fireCapacity >= 0) {
+				const float capacity = obj->getItem(fireCapacity);
+				if (capacity > 0.0f)
+					FireFx::SetDamage(obj->id, obj->getItem(fireIntegrity) / capacity);
+			}
+			return obj->id;
+		};
 		for (auto& lsfx : client->loopingSpecialEffects) {
 			Vector3 ttpp = lsfx.second.transform.getTranslationVector().transformScreenCoords(client->camera.sceneMatrix);
 			if (ttpp.x >= -1 && ttpp.x <= 1 && ttpp.y >= -1 && ttpp.y <= 1 && ttpp.z >= -1 && ttpp.z <= 1) {
 				lsfx.second.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
 				scene->add(&lsfx.second);
-				drawAttachmentPoints(&lsfx.second);
+				drawAttachmentPoints(&lsfx.second, fireObject(lsfx.first.first.get()));
 			}
 		}
+		drawBenchmarkFires();
 		if (client->terrain) {
 			// a test run's sun ("benchmark": { "sunVector": [x, y, z] }), for comparing with the original
 			if (BenchmarkEnabled()) {
@@ -5796,6 +6014,8 @@ void ClientInterface::iter()
 		gfx->BeginParticles();
 		gfx->BeginBatchDrawing();
 		particleRenderer->render(client->timeManager.previousTime, client->timeManager.currentTime, client->camera);
+		// the fires the particle renderer left to the fire shader (Low and High)
+		FireFx::Draw(gfx, client->camera, client->timeManager.currentTime);
 		particlesContainer->update(client->timeManager.currentTime);
 		ChimneySmoke::Draw(gfx, client->camera, client->timeManager.currentTime);
 		DrawWeather(gfx, client, client->camera);
@@ -5855,12 +6075,14 @@ void ClientInterface::iter()
 		ZoneScopedN("ImGui rendering");
 		PROFILE_SCOPE("UI");
 		gfx->InitImGuiDrawing();
-		ImGuiImpl_Render(gfx);
+		ImGuiImpl_Render(gfx, false);
 	}
 	{
 		PROFILE_SCOPE("Unit portrait");
 		drawSelectionPortrait();
 	}
+	// the agent's screenshot with the portrait in it (it is drawn after the HUD)
+	AgentServer::TakeScreenshotIfAsked(gfx);
 	// Test runs: "benchmark": { ..., "loadingScreenshot": path } once the loading screen is at stage 4
 	// (a guest: once the host has sent the rows of the players)
 	const bool rowsIn = client->localServer || client->loadingRows.size() > 1;

@@ -940,6 +940,10 @@ void Client::tick()
 					finishedPlayers[id] = outcome;
 				break;
 			}
+			case NETCLIMSG_EXIT_TO_MENU: {
+				exitToMenu = true;
+				break;
+			}
 			case NETCLIMSG_HERO_THRESHOLD: {
 				heroThreshold = (int)br.readUint32();
 				break;

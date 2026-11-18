@@ -210,6 +210,15 @@ private:
 		Vector3 start;
 		Command* command = nullptr;
 	} formationDrag;
+	// a wall's right-drag: a line of pieces from where it was pressed to where it is released,
+	// as the original lays a run of wall in one go (the play test: only one by one)
+	struct WallDrag {
+		bool active = false;
+		Vector3 start;
+	} wallDrag;
+	// the pieces of a wall line between two points: the tiles along the longer axis, each its
+	// tile's centre and the turn that runs along the line (one tile: the [ ] turn)
+	std::vector<std::pair<Vector3, Vector3>> wallLine(const Vector3& from, const Vector3& to) const;
 	// what the player's units see (darker elsewhere, enemy characters hidden there)
 	FogOfWar fogOfWar;
 	// the peasant activity interface over the minimap: -1 closed, 0 the idle bar, 1 all five
@@ -306,6 +315,8 @@ private:
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
 	void drawExtendedTrees();
+	// test runs: "benchmark": { "burnBuildings": n } sets the n drawn buildings nearest the camera on fire (FireEffects.h)
+	void drawBenchmarkFires();
 	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
 	std::vector<float>* gpuBlobShadows = nullptr; // this frame's blob shadows for the enhanced terrain renderer
 	bool selBoxOn = false;

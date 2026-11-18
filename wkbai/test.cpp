@@ -75,6 +75,9 @@
 #include "interface/FogOfWar.h"
 #include "gfx/ChimneySmoke.h"
 #include "gfx/BloodDrip.h"
+#include "gfx/FireEffects.h"
+#include "gfx/RenderSettings.h"
+#include "interface/MenuOptions.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -2479,8 +2482,8 @@ void Test_MinistryFramework()
 				economyReports += key.rfind("economy.", 0) == 0;
 				labourReports += key.rfind("labour.", 0) == 0;
 			}
-			// (the food reported, not above 0: with the combat branch's play-test fixes the
-			// Kingmaker spends its first 100 food within the minute, and has more people later)
+			// (the food reported, not that there is some: since the AI pays its spawns queued at busy
+			// buildings as WKB.exe, its food can be spent down to 0 at the minute)
 			check("reports", g->board.get("labour.peasants") > 0 && g->board.reports.count("economy.food") && economyReports >= 8 && labourReports >= 5);
 		}
 		std::sort(firsts.begin(), firsts.end());
@@ -4138,6 +4141,25 @@ void Test_AIvsAI()
 					st.wildfires, st.fromMissiles, st.fromBuildings, st.spontaneous, st.fireCells, st.fireCellsMost, st.buildingsFired, st.fireDeaths, server.environment.charredCount());
 				printf("AITEST environment deaths: frozen %d, thirst %d, drowned %d; lightning: %d units, %d buildings, %d ground; flooded building-seconds %d (%.2f of capacity)\n",
 					st.frozen, st.thirst, st.drowned, st.lightningUnits, st.lightningBuildings, st.lightningGround, st.floodedBuildings, st.floodDamage);
+				// the peasants' lodging (PeasantLodging): who is in, and each player's farmers counted
+				// while in, their "Number of Farmers" and crafts bonus
+				{
+					const PeasantLodging& lg = env.lodging;
+					std::string per;
+					const int bonusItem = server.gameSet->items.names.getIndex("Winter Crafts Bonus");
+					if (CommonGameObject* level = server.getLevel())
+						for (const auto& [type, children] : level->children)
+							for (CommonGameObject* c : children)
+								if (auto* pl = (ServerGameObject*)c; c->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && pl->blueprint->name != "Neutral Player") {
+									char b[96];
+									snprintf(b, sizeof(b), " %u: farmers in %d, Number of Farmers %.0f, crafts %.3f;", pl->id, lg.farmersOf(pl->id),
+										pl->getItem(Tags::PDITEM_NUMBER_OF_FARMERS), bonusItem >= 0 ? pl->getItem(bonusItem) : 0.0f);
+									per += b;
+								}
+					printf("AITEST lodging t=%.0f: %zu lodgers, %d inside; departures %d, lodged %d, woken %d, waited %d, evicted %d, stuck %d;%s\n",
+						server.timeManager.currentTime, lg.count(), lg.lodgedCount(), lg.stats.departures, lg.stats.lodged, lg.stats.woken,
+						lg.stats.waited, lg.stats.evicted, lg.stats.stuck, per.c_str());
+				}
 				// each player's: the weather's deaths, and the AI's answers (AIWeather.cpp)
 				if (CommonGameObject* level = server.getLevel())
 					for (const auto& [type, children] : level->children)
@@ -5782,15 +5804,17 @@ void Test_TurnedPlacement()
 			server.handlePacket(0, std::string((const char*)msg.data, msg.size()));
 			return server.clientInfos.empty() ? nullptr : server.clientInfos[0].lastStampdown.get();
 		};
-		int startX = 20;
+		int startX = 20, startZ = 60;
 		for (int q = 0; q <= 4; q++) {
 			const int turns = q % 4; // the fifth: without the orientation, unturned
 			const Vector3 orientation(0.0f, turns * quarter, 0.0f);
 			ServerGameObject* obj = nullptr;
 			int tx = 0, tz = 0;
 			// the first spot, along the map from the west, that takes it so turned
-			for (int z = 60; z < th - 20 && !obj; z += 3)
-				for (int x = startX; x < tw - 20 && !obj; x += 3) {
+			// (on the last one's row east of it, then the rows after it from the west: trees keep
+			// buildings off since the play test of 2026-11-16, and the row filled up)
+			for (int z = startZ; z < th - 20 && !obj; z += 3)
+				for (int x = z == startZ ? startX : 20; x < tw - 20 && !obj; x += 3) {
 					Vector3 at = spotAt(fp, x, z, turns);
 					if (StampdownPlan::getStampdownPlan(&server, player, manor, at, orientation).status != StampdownPlan::Status::Valid)
 						continue;
@@ -5805,6 +5829,7 @@ void Test_TurnedPlacement()
 				continue;
 			}
 			startX = tx + 12;
+			startZ = tz;
 			std::set<std::pair<int, int>> got;
 			for (int z = 0; z < th; z++)
 				for (int x = 0; x < tw; x++)
@@ -7123,7 +7148,9 @@ void Test_MoveArrival()
 				allUnits += alive;
 			}
 	g_recordSearches = false;
-	printf("MOVEARRIVAL all arrived %d/%d\n", allArrived, allUnits);
+	extern uint64_t g_formationWalks, g_pathBatchRequests, g_pathBatchSearches;
+	printf("MOVEARRIVAL all arrived %d/%d; formation members' walks %llu, path requests %llu, searches %llu\n", allArrived, allUnits,
+		(unsigned long long)g_formationWalks, (unsigned long long)g_pathBatchRequests, (unsigned long long)g_pathBatchSearches);
 	fflush(stdout);
 }
 
@@ -9088,6 +9115,12 @@ void Test_GameOverView()
 		check(uiB.fogOfWarOn(), "B, still fighting: keeps its fog of war");
 		check(!uiB.showsEveryone(), "B: still its own side's statistics only");
 		check(server.watchesOnly(0) && !server.watchesOnly(1), "A only watches while B plays");
+		{
+			ClientGameObject* seenA = clientB.findObject(idA);
+			check((playerA->flags & CommonGameObject::fPlayerTerminated) && !(playerB->flags & CommonGameObject::fPlayerTerminated),
+				"A PLAYER_TERMINATED (WKB.exe's REMOVE_MULTIPLAYER_PLAYER: its AI gone), B not");
+			check(seenA && (seenA->flags & CommonGameObject::fPlayerTerminated), "client B knows A's flag");
+		}
 		// A's chat: to A only (B still plays)
 		clientA.chatMessages.clear();
 		clientB.chatMessages.clear();
@@ -9107,6 +9140,7 @@ void Test_GameOverView()
 		server.finishedPlayers.clear();
 		server.sendFinishedPlayers();
 		playerA->setItem(alive, 1.0f);
+		playerA->updateFlags(playerA->flags & ~CommonGameObject::fPlayerTerminated);
 		step(10);
 		check(clientA.ownOutcome() == 0 && uiA.fogOfWarOn(), "the list cleared: A has its fog again");
 		ServerGameObject* manor = nullptr;
@@ -9132,6 +9166,20 @@ void Test_GameOverView()
 		check(!uiA.fogOfWarOn() && !uiB.fogOfWarOn(), "both, the game over: no fog of war");
 		check(uiA.showsEveryone() && uiB.showsEveryone(), "both show every player's statistics");
 		check(!server.watchesOnly(0) && !server.watchesOnly(1), "nobody plays on: nobody's chat held back");
+		// the Manor box's Exit to Main Menu (EXIT_TO_MAIN_MENU), WKB.exe 0x483C50: to the clicking
+		// player's own client only. The guest B leaves alone; the host's A ends the hosted game.
+		auto exitFor = [&](ServerGameObject* p) {
+			SrvScriptContext ctx(&server, p);
+			GSFileParser gsf("EXIT_TO_MAIN_MENU");
+			std::unique_ptr<Action> act(ReadAction(gsf, *server.gameSet));
+			act->run(&ctx);
+			step(10);
+		};
+		exitFor(playerB);
+		check(clientB.exitToMenu && !clientA.exitToMenu && !server.exitToMenu, "the guest's Exit: only the guest's client leaves, the host plays on");
+		exitFor(playerA);
+		check(server.exitToMenu && !clientA.exitToMenu, "the host's Exit: the hosted game ends");
+		server.exitToMenu = false;
 	}
 	// the save from after A's loss: loaded with a client for A
 	{
@@ -9151,6 +9199,8 @@ void Test_GameOverView()
 		}
 		check(server.finishedPlayers.count(idA) && server.finishedPlayers[idA] == 2 && !server.finishedPlayers.count(idB), "the save keeps A lost, B playing");
 		check(client.ownOutcome() == 2 && !ui.fogOfWarOn() && ui.showsEveryone(), "loaded: A's client without fog, every player shown");
+		ServerGameObject* loadedA = server.findObject(idA);
+		check(loadedA && (loadedA->flags & CommonGameObject::fPlayerTerminated), "loaded: A still PLAYER_TERMINATED");
 	}
 	{
 		Server server;
@@ -11043,6 +11093,126 @@ static void PrintAimedAt(Server& server, const char* name)
 	fflush(stdout);
 }
 
+
+// Night cold (the day's temperature swing, ServerEnvironment::update): on 4 Peaks in midsummer,
+// a clear day and night of 20 minutes, one update a second: the coldest shortly before sunrise,
+// the warmest in the early afternoon, the night colder than the afternoon by a summer's swing,
+// smooth from second to second; an overcast day's swing smaller; a heatwave's nights warm (more
+// than its 8 degrees' pull above the clear night, the swing smaller); without day and night the
+// season's temperature all day. A save and load goes on with the same temperatures, and a save
+// from before the day's mean (no "temperature" line) goes on without a jump. Prints "NIGHTCOLD
+// ok/FAILED ..." and "NIGHTCOLD PASSED/FAILED".
+void Test_NightCold()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("NIGHTCOLD %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerEnvironment& env = server.environment;
+	const float t0 = 1000.0f;
+	auto setUp = [&](bool dayNight, int weather) {
+		env.reset();
+		server.timeManager.currentTime = t0;
+		env.settings.seasons = true;
+		env.settings.seasonLengthMin = 600; // (the season's own drift negligible over a day)
+		env.settings.dayNight = dayNight;
+		env.settings.dayLengthMin = 20;
+		for (int s = 0; s < 4; s++)
+			env.settings.severity[s] = 1;
+		env.forceWeather = weather;
+		env.debugSet(server, "season", 1.5f); // midsummer
+		env.debugSet(server, "hour", 20.0f);  // the evening: the clouds settle before midnight
+	};
+	auto step = [&]() {
+		server.timeManager.currentTime += 1.0f;
+		env.update(server);
+		return env.state.temperatureC;
+	};
+	// a whole day from midnight: the temperature by the hour (each second's), its coldest and warmest
+	struct Day { float lo = 1e9f, hi = -1e9f, loHour = 0, hiHour = 0, maxStep = 0, at2 = 0, at14 = 0, sunrise = 0; };
+	auto runDay = [&](bool dayNight, int weather) {
+		setUp(dayNight, weather);
+		env.update(server); // the first update (started)
+		// (to midnight; without day and night the clock stands at noon: a day's length on from here)
+		while (dayNight && EnvDayFraction(env.settings, server.timeManager.currentTime + 1.0f) > 0.01f)
+			step();
+		Day d;
+		float prev = env.state.temperatureC;
+		const float len = env.settings.dayLengthS();
+		for (int i = 0; i < (int)len; i++) {
+			const float T = step();
+			const float hour = env.state.dayFraction * 24.0f;
+			if (T < d.lo) d.lo = T, d.loHour = hour;
+			if (T > d.hi) d.hi = T, d.hiHour = hour;
+			d.maxStep = std::max(d.maxStep, std::fabs(T - prev));
+			prev = T;
+			if (std::fabs(hour - 2.0f) < 0.03f) d.at2 = T;
+			if (std::fabs(hour - 14.0f) < 0.03f) d.at14 = T;
+		}
+		d.sunrise = ComputeSun(env.state.dayFraction, env.state.yearFraction, true, 0.0f).sunrise;
+		return d;
+	};
+	char what[300];
+	const Day clear = runDay(true, WEATHER_CLEAR);
+	snprintf(what, sizeof(what), "clear midsummer: coldest %.1f C at %05.2f h (sunrise %05.2f), warmest %.1f C at %05.2f h, 02:00 %.1f, 14:00 %.1f, step at most %.3f",
+		clear.lo, clear.loHour, clear.sunrise, clear.hi, clear.hiHour, clear.at2, clear.at14, clear.maxStep);
+	check(clear.loHour > clear.sunrise - 1.5f && clear.loHour <= clear.sunrise + 0.1f && clear.hiHour > 13.0f && clear.hiHour < 16.0f, std::string("the turns: ") + what);
+	check(clear.at14 - clear.at2 > 8.0f && clear.hi - clear.lo > 11.0f && clear.hi - clear.lo < 16.0f, "a summer's swing (11-16 degrees, the night colder than the afternoon)");
+	check(clear.maxStep < 0.1f, "smooth (under 0.1 degrees a second)");
+	const Day cloudy = runDay(true, WEATHER_CLOUDY);
+	snprintf(what, sizeof(what), "cloudy midsummer: %.1f to %.1f C (swing %.1f against the clear day's %.1f)", cloudy.lo, cloudy.hi, cloudy.hi - cloudy.lo, clear.hi - clear.lo);
+	check(cloudy.hi - cloudy.lo < 0.8f * (clear.hi - clear.lo) && cloudy.hi - cloudy.lo > 3.0f, what);
+	const Day heat = runDay(true, WEATHER_HEATWAVE);
+	snprintf(what, sizeof(what), "heatwave midsummer: %.1f C at %05.2f h to %.1f C at %05.2f h (swing %.1f; the clear night's %.1f, its swing %.1f)",
+		heat.lo, heat.loHour, heat.hi, heat.hiHour, heat.hi - heat.lo, clear.lo, clear.hi - clear.lo);
+	check(heat.lo - clear.lo > 8.0f + 3.0f && heat.hi - heat.lo < 0.8f * (clear.hi - clear.lo) && heat.hi > clear.hi && heat.maxStep < 0.1f,
+		std::string("warm nights: ") + what);
+	const Day flat = runDay(false, WEATHER_CLEAR);
+	snprintf(what, sizeof(what), "day and night off: %.2f to %.2f C all day", flat.lo, flat.hi);
+	check(flat.hi - flat.lo < 0.2f, what);
+
+	// the save: at 03:00 of a clear day
+	setUp(true, WEATHER_CLEAR);
+	env.update(server);
+	while (std::fabs(EnvDayFraction(env.settings, server.timeManager.currentTime) * 24.0f - 3.0f) > 0.05f)
+		step();
+	const float savedTime = server.timeManager.currentTime;
+	const std::string text = env.saveText();
+	std::vector<float> ahead;
+	for (int i = 0; i < 120; i++)
+		ahead.push_back(step());
+	check(text.find("\ntemperature ") != std::string::npos, "the day's mean in the save");
+	env.loadText(text);
+	check(env.saveText() == text, "saved, loaded and saved again: the same text");
+	server.timeManager.currentTime = savedTime;
+	float worst = 0.0f;
+	for (int i = 0; i < 120; i++)
+		worst = std::max(worst, std::fabs(step() - ahead[i]));
+	snprintf(what, sizeof(what), "loaded: the same temperatures on (at most %.4f off over 2 minutes)", worst);
+	check(worst < 1e-3f, what);
+	// a save from before the day's mean
+	std::string old;
+	{
+		std::istringstream in(text);
+		std::string line;
+		while (std::getline(in, line))
+			if (line.rfind("temperature ", 0) != 0)
+				old += line + "\n";
+	}
+	env.loadText(old);
+	server.timeManager.currentTime = savedTime;
+	worst = 0.0f;
+	for (int i = 0; i < 120; i++)
+		worst = std::max(worst, std::fabs(step() - ahead[i]));
+	snprintf(what, sizeof(what), "an older save (no day's mean): goes on with at most %.3f degrees off", worst);
+	check(worst < 0.05f, what);
+	printf("NIGHTCOLD %s (%d failed)\n", failures ? "FAILED" : "PASSED", failures);
+}
 void Test_ShaderCache(); // gfx/ShaderCacheTest.cpp
 void Test_FarLandCache(); // FarLandCacheTest.cpp
 
@@ -11309,6 +11479,297 @@ void Test_ModKeywords()
 	printf("UNITTEST %s: %d failures\n", failures ? "FAILED" : "PASSED", failures);
 }
 
+
+// Several farmers, several farms (the play test 2026-11-16): three peasants each given Build on
+// three new farm foundations, the first FORGET_EVERYTHING_ELSE, the others DO_LAST, as Shift-placed
+// farms with the three selected. In the original each finished farm takes its nearest builder
+// (Building and Repairing.cpp "Only 1 Builder", Farming.cpp "Auto-attend Farm",
+// FORGET_EVERYTHING_ELSE), who farms it; the others go on to the next. Prints "FARMB t=<s>" with
+// each peasant's order and target every 10 s, and at the end how many farm a field.
+void Test_FarmBuilders()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	ServerGameObject* player = server.findObject(1027);
+	std::vector<ServerGameObject*> peasants;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Peasant" && peasants.size() < 3)
+					peasants.push_back(child->dyncast<ServerGameObject>());
+				self(child, self);
+			}
+	};
+	if (player)
+		find(player, find);
+	const GameObjBlueprint* foundationType = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Standard Farm Foundation");
+	const int build = server.gameSet->commands.names.getIndex("Build");
+	if (peasants.size() < 3 || !foundationType || build < 0) {
+		printf("FARMB not set up (%zu peasants)\n", peasants.size());
+		return;
+	}
+	g_settings["simSeed"] = 1;
+	server.startLevel();
+	std::vector<SrvGORef> farms;
+	const Vector3 base = peasants[0]->position;
+	// WKB_FARMB_FARMS=<n>: n farms instead of 3
+	const size_t farmCount = getenv("WKB_FARMB_FARMS") ? (size_t)std::max(1, atoi(getenv("WKB_FARMB_FARMS"))) : 3;
+	for (int i = 0; i < 800 && farms.size() < farmCount; i++) {
+		const Vector3 at = base + Vector3(20.0f + 5.0f * (i % 20), 0, -40.0f + 5.0f * (i / 20));
+		if (StampdownPlan::getStampdownPlan(&server, player, foundationType, at, Vector3(0, 0, 0)).status != StampdownPlan::Status::Valid)
+			continue;
+		ServerGameObject* f = server.spawnObject(foundationType, player, at, Vector3(0, 0, 0));
+		f->sendEvent(Tags::PDEVENT_ON_STAMPDOWN);
+		farms.emplace_back(f);
+	}
+	if (farms.size() < farmCount) {
+		printf("FARMB no room\n");
+		return;
+	}
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	for (size_t f = 0; f < farms.size(); f++)
+		for (ServerGameObject* p : peasants)
+			server.gameSet->commands[build].execute(p, farms[f].get(), f == 0 ? Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE : Tags::ORDERASSIGNMODE_DO_LAST);
+	auto describe = [&](ServerGameObject* p) {
+		std::string order = "-", target = "-";
+		if (Order* o = p->orderConfig.getCurrentOrder()) {
+			order = server.gameSet->orders.getString(o->blueprint->bpid);
+			if (Task* tk = o->getCurrentTask(); tk && tk->target)
+				target = tk->target->blueprint->name + " #" + std::to_string(tk->target->id);
+		}
+		std::string queue;
+		for (Order& o : p->orderConfig.orders)
+			queue += (queue.empty() ? "" : ",") + server.gameSet->orders.getString(o.blueprint->bpid) + (o.isDone() ? "(done)" : "");
+		return order + " -> " + target + " [" + queue + "]";
+	};
+	for (int step = 0; step * 20 <= 400000; step++) {
+		server.timeManager.pendingMs = server.timeManager.stepMs;
+		if (server.timeManager.step())
+			server.simulate();
+		if (step % 500)
+			continue;
+		printf("FARMB t=%d", step * 20 / 1000);
+		for (ServerGameObject* p : peasants)
+			printf(" | %u: %s", p->id, describe(p).c_str());
+		printf("\n");
+	}
+	int farming = 0;
+	for (ServerGameObject* p : peasants)
+		if (Order* o = p->orderConfig.getCurrentOrder(); o && server.gameSet->orders.getString(o->blueprint->bpid) == "Farm")
+			farming++;
+	printf("FARMB end: %d of 3 peasants farm\n", farming);
+	fflush(stdout);
+}
+
+IRenderer* CreateNULLRenderer();
+
+void Test_FireQuality()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("FIRE %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the option: its values, the menu's choice, the defaults and the clamping
+	check("names", strcmp(FireFx::QualityName(0), "Original") == 0 && strcmp(FireFx::QualityName(1), "Low") == 0
+		&& strcmp(FireFx::QualityName(2), "High") == 0 && strcmp(FireFx::QualityName(9), "High") == 0);
+	check("default", RenderSettings().fireQuality == FireFx::HIGH);
+	const RenderSettings savedRender = g_renderSettings;
+	const nlohmann::json savedSettings = g_settings;
+	const MenuOption* o = FindMenuOption("fireQuality");
+	check("menu option", o && o->type == MenuOption::CHOICE && o->page == "lighting"
+		&& o->choices == std::vector<std::string>{ "Original", "Low", "High" });
+	if (o) {
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			o->set((float)v);
+			ok &= g_renderSettings.fireQuality == v && o->get() == (float)v;
+		}
+		o->set(7.0f);
+		ok &= g_renderSettings.fireQuality == 2;
+		o->set(-3.0f);
+		ok &= g_renderSettings.fireQuality == 0;
+		check("menu set and get", ok);
+	}
+	// the config's round trip (wkconfig.json, as the other quality options: a graphics setting,
+	// not the game's, so not in the save game)
+	{
+		bool ok = true;
+		for (int v = 0; v < 3; v++) {
+			g_renderSettings.fireQuality = v;
+			g_renderSettings.save();
+			ok &= g_settings.value("fireQuality", -1) == v;
+			g_renderSettings.fireQuality = -1;
+			g_renderSettings.load();
+			ok &= g_renderSettings.fireQuality == v;
+			// and from the file itself
+			std::ifstream f("wkconfig.json");
+			nlohmann::json written = nlohmann::json::parse(f, nullptr, false);
+			ok &= written.is_object() && written.value("fireQuality", -1) == v;
+		}
+		check("config round trip", ok);
+		g_settings["fireQuality"] = 9;
+		g_renderSettings.load();
+		const bool high = g_renderSettings.fireQuality == 2;
+		g_settings["fireQuality"] = -4;
+		g_renderSettings.load();
+		const bool low = g_renderSettings.fireQuality == 0;
+		g_settings.erase("fireQuality");
+		g_renderSettings.load();
+		check("config clamped, missing is the default", high && low && g_renderSettings.fireQuality == RenderSettings().fireQuality);
+	}
+	g_settings = savedSettings;
+	g_renderSettings = savedRender;
+	SaveSettings();
+
+	// which systems the fire shader takes: the flame sprites' (a building's fire, an arrow's, the
+	// fireballs), not the smoke, the smoke-puff fire nor the fort's grapeshot sparks
+	LoadBCP("data.bcp");
+	PSCache cache("Warrior Kings Game Set\\Particle_Systems");
+	ParticleSystem* building = cache.getPS("Fire_Building");
+	ParticleSystem* arrow = cache.getPS("Flame_Arrow");
+	ParticleSystem* fireball = cache.getPS("Fireball");
+	ParticleSystem* smoke = cache.getPS("Burningobjectsmoke");
+	ParticleSystem* smoky = cache.getPS("Smokyfire");
+	ParticleSystem* fort = cache.getPS("Fort_Fire");
+	ParticleSystem* dust = cache.getPS("Dust");
+	printf("FIRE flags building %d %d arrow %d %d fireball %d smoke %d smoky %d fort %d dust %d\n", building->flameSprite, building->standingFire,
+		arrow->flameSprite, arrow->standingFire, fireball->flameSprite, smoke->flameSprite, smoky->flameSprite, fort->flameSprite, dust->flameSprite);
+	check("flame systems", building->flameSprite && building->standingFire && arrow->flameSprite && !arrow->standingFire && fireball->flameSprite
+		&& !smoke->flameSprite && !smoky->flameSprite && !fort->flameSprite && !dust->flameSprite);
+	check("takes", !FireFx::Takes(0, building) && !FireFx::Takes(0, arrow) && FireFx::Takes(1, building) && FireFx::Takes(2, arrow)
+		&& !FireFx::Takes(1, smoke) && !FireFx::Takes(2, dust));
+
+	// the level in effect: Original without a renderer that can draw the others
+	FireFx::BeginFrame(2, false);
+	check("unavailable is Original", FireFx::Level() == FireFx::ORIGINAL);
+	FireFx::BeginFrame(1, true);
+	check("available", FireFx::Level() == FireFx::LOW);
+
+	// the damage and the flicker
+	check("damage scale", FireFx::DamageScale(1.0f) == 1.0f && std::abs(FireFx::DamageScale(0.0f) - 1.6f) < 1e-5f
+		&& FireFx::DamageScale(0.3f) > FireFx::DamageScale(0.6f) && FireFx::DamageScale(-1.0f) == FireFx::DamageScale(0.0f));
+	FireFx::SetDamage(77, 0.25f);
+	check("damage of", std::abs(FireFx::DamageOf(77) - FireFx::DamageScale(0.25f)) < 1e-6f && FireFx::DamageOf(78) == 1.0f);
+	{
+		bool inRange = true, varies = false;
+		const float first = FireFx::Flicker(0.0f, 5);
+		for (int i = 0; i < 2000; i++) {
+			const float f = FireFx::Flicker(i * 0.0137f, 5);
+			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.1f;
+		}
+		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
+	}
+
+	// the particles: a burning building's fire (its object 41, damaged), an arrow's flight and the
+	// burning object's smoke, 6 s of them
+	ParticleContainer pc;
+	srand(1234);
+	const float dt = 0.05f;
+	float now = 0.0f;
+	for (int i = 0; i < 120; i++) {
+		const float prev = now;
+		now += dt;
+		pc.generate(building, Vector3(10, 2, 10), 41, prev, now);
+		pc.generate(arrow, Vector3(-5.0f + now * 6.0f, 4, 3), 42, prev, now);
+		pc.generate(smoke, Vector3(10, 4, 10), 41, prev, now);
+		pc.update(now);
+	}
+	Camera camera;
+	camera.position = Vector3(0, 30, -30);
+	camera.direction = Vector3(0, -0.6f, 0.8f).normal();
+	camera.sceneMatrix = Matrix::getIdentity();
+	IRenderer* nul = CreateNULLRenderer();
+	DefaultParticleRenderer renderer(nul, &pc);
+
+	// the old path's quads, worked out here as DefaultParticleRenderer always drew a sprite (its
+	// position, its scale, the camera's side and up), for the particles of the systems asked
+	auto reference = [&](bool fires) {
+		std::vector<batchVertex> out;
+		const Vector3 camside = camera.direction.cross(Vector3(0, 1, 0)).normal();
+		const Vector3 camhor = camside.cross(camera.direction).normal();
+		for (auto& kv : pc.particles)
+			for (Particle& p : kv.second) {
+				const uint32_t color = p.getColor(now);
+				if (color >> 24 == 0 || (!fires && p.system->flameSprite))
+					continue;
+				const Vector3 pos = p.getPosition(now);
+				const auto [s1, s2, si] = p.system->Particles.Scale_Gradient.getAtTime(now - p.startTime, 1.0f);
+				const float size = s1 + (s2 - s1) * si;
+				const Vector3 pts[4] = { pos + (camside + camhor) * size * 0.5f, pos + (camside - camhor) * size * 0.5f,
+					pos + (-camside - camhor) * size * 0.5f, pos + (-camside + camhor) * size * 0.5f };
+				const float uv[4][2] = { { 0, 0 }, { 0, 1 }, { 1, 1 }, { 1, 0 } };
+				for (int k = 0; k < 4; k++)
+					out.emplace_back(pts[k].x, pts[k].y, pts[k].z, (int)color, uv[k][0], uv[k][1]);
+			}
+		return out;
+	};
+	auto same = [](const std::vector<batchVertex>& a, const std::vector<batchVertex>& b) {
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); i++)
+			if (a[i].x != b[i].x || a[i].y != b[i].y || a[i].z != b[i].z || a[i].color != b[i].color || a[i].u != b[i].u || a[i].v != b[i].v)
+				return false;
+		return true;
+	};
+	std::vector<batchVertex> rec;
+	DefaultParticleRenderer::s_record = &rec;
+	FireFx::BeginFrame(FireFx::ORIGINAL, true);
+	renderer.render(now - dt, now, camera);
+	const std::vector<batchVertex> original = reference(true);
+	size_t flames = 0, visible = 0;
+	for (auto& kv : pc.particles)
+		for (Particle& p : kv.second)
+			if (p.getColor(now) >> 24) {
+				visible++;
+				flames += p.system->flameSprite;
+			}
+	printf("FIRE particles %zu visible, %zu of them flames, Original drew %zu quads\n", visible, flames, rec.size() / 4);
+	check("Original is the old path", flames > 0 && rec.size() == visible * 4 && same(rec, original) && FireFx::PendingCount() == 0);
+
+	for (int level = FireFx::LOW; level <= FireFx::HIGH; level++) {
+		rec.clear();
+		FireFx::Clear();
+		FireFx::BeginFrame(level, true);
+		FireFx::SetDamage(41, 0.2f);
+		renderer.render(now - dt, now, camera);
+		bool match = FireFx::PendingCount() == flames;
+		for (const FireFx::Flame& f : FireFx::Pending())
+			match &= f.system->flameSprite && f.alpha > 0 && f.size > 0 && f.life >= 0 && f.life <= 1
+				&& (f.objid == 41 ? std::abs(f.heat - FireFx::DamageScale(0.2f)) < 1e-6f : f.heat == 1.0f);
+		check(level == 1 ? "Low: the rest as before" : "High: the rest as before", same(rec, reference(false)));
+		check(level == 1 ? "Low: the flames to the shader" : "High: the flames to the shader", match);
+		std::vector<FireFx::Instance> inst, again;
+		FireFx::BuildInstances(level, now, true, inst);
+		FireFx::BuildInstances(level, now, true, again);
+		int kinds[4] = {};
+		int lastKind = -1;
+		bool ordered = true;
+		const int order[4] = { 2, 3, 1, 0 }; // drawn: the shimmer, the smoke, the flames, the glow
+		for (const FireFx::Instance& i : inst) {
+			const int k = (int)i.c[0];
+			kinds[k]++;
+			ordered &= lastKind < 0 || order[lastKind] <= order[k];
+			lastKind = k;
+		}
+		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
+		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
+		if (level == FireFx::LOW)
+			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+		else
+			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
+			// the standing fire only
+			check("High: flames, glow, smoke, shimmer", kinds[0] == (int)flames && kinds[1] == 2 && kinds[3] == 1 && kinds[2] >= 3
+				&& ordered && deterministic);
+	}
+	DefaultParticleRenderer::s_record = nullptr;
+	FireFx::Clear();
+	FireFx::BeginFrame(FireFx::ORIGINAL, false);
+	delete nul;
+	printf("FIRE all %d\n", all ? 1 : 0);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -11402,9 +11863,12 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MinistryLua, "Ministry AI from Lua (reports, weights, missions) and its difficulty (aiReaction)"},
 {Test_MinistryDefence, "Ministry AI defence: a raid met by as many as it needs, done when it's gone; an attack on the palace met by all, the missions recalled"},
 {Test_MinistrySlots, "Ministry AI per start position (the lobby's AI choice): the positions' players with an empty position before them, every AI with mask 0"},
+{Test_NightCold, "Night cold: the day's temperature swing, coldest before sunrise and warmest in the early afternoon, smaller overcast, none without day and night, through a save"},
 {Test_SmallerItems, "The smaller items as WKB.exe's: the sight scan once a second, Dangerous Buildings round a tower, turning arcs, stop spacing, stop spots, an uninterruptible loop"},
 {Test_ModKeywords, "The keywords only mods use: values, finders, positions and actions as WKB.exe's (or as named where it has a bug)"},
 {Test_RunSave, "Run a save without a window (\"runSave\": path, seconds): real time per game second, slow steps, moving characters"},
+{Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
+{Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
 };
 
 void LaunchTest()

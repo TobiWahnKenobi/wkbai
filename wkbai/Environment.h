@@ -56,6 +56,12 @@ struct EnvironmentSettings {
 	// tests); below 0 not chosen yet: the year 1000's for startSeason (HistoricMoonAge)
 	int moonPhase = 0;
 	float moonStart = -1.0f;
+	// the peasants' lodging (PeasantLodging.h): "peasantsSleep" (with day and night) the peasants
+	// go into their own houses, villages, manors and castles at dusk and back to work at dawn;
+	// "farmersWinter" (with the seasons) the farmers go in at winter's first dusk and stay until
+	// spring's first dawn. Off here (a save or recording without them: as before); the lobby's
+	// default is on
+	bool peasantsSleep = false, farmersWinter = false;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
 	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it
@@ -191,6 +197,17 @@ extern uint64_t g_cloudFrontArrivalTicks;
 // the day fraction / year fraction at a game time
 float EnvDayFraction(const EnvironmentSettings& s, float time);
 float EnvYearFraction(const EnvironmentSettings& s, float time);
+
+// The day's temperature curve (the server's, ServerEnvironment::update): -1 at its coldest, half
+// an hour before sunrise (hours, 0-24: SunState::sunrise), +1 at its warmest at 14:30; a half
+// cosine up through the morning and a longer one down through the evening and the night, so it
+// is smooth (no kinks at the turns) and its mean over the day is 0 (the season's mean stays the
+// day's mean)
+float DiurnalShape(float hour, float sunrise);
+// its half range in degrees (the mean to the warmest): by the season (a smooth curve over the
+// year, 7 in midsummer, 4.5 in midwinter; 6 without the seasons), smaller under clouds (40% left
+// overcast) and in fog
+float DiurnalAmplitude(float yearFraction, bool seasons, float cloudCover, float fog);
 
 // the temperature in the chosen scale, with its unit ("12 °C" in plain ASCII: "12 C")
 float ConvertTemperature(float celsius, int scale);

@@ -95,6 +95,9 @@ float ServerEnvironment::speedFactorFor(const ServerGameObject* obj) const
 	// the undead: the mud drags at them far more (to a quarter of their speed on soaked ground)
 	if (kindOf(obj->blueprint) == K_UNDEAD)
 		return std::clamp(Quantize(1.0f - 0.75f * state.wetness - 0.35f * state.snowCover, 0.05f), 0.25f, 1.0f);
+	// a peasant's walk to its shelter and back, sped up on short days (PeasantLodging)
+	if (obj->lodgeSpeed != 1.0f)
+		return state.speedFactor * obj->lodgeSpeed;
 	return state.speedFactor;
 }
 
@@ -577,7 +580,7 @@ void ServerEnvironment::applyExposure(Server& server)
 		CommonGameObject* player = unit->getPlayer();
 		if (!player || player->blueprint->name == "Neutral Player")
 			continue;
-		bool sheltered = unit->parent && unit->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING;
+		bool sheltered = (unit->parent && unit->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) || unit->lodging == LODGE_INSIDE;
 		for (size_t i = 0; i < shelters.size() && !sheltered; i++) {
 			const Shelter& s = shelters[i];
 			if (s.player != player && (!s.player || server.getDiplomaticStatus(s.player, player) != 0))
@@ -827,12 +830,13 @@ void ServerEnvironment::update(Server& server)
 		}
 	}
 
-	// the temperature: the season's mean (a smooth curve through the seasons' middles), the day's
-	// swing, the weather's pull, eased towards
+	// the temperature: the season's mean (a smooth curve through the seasons' middles) and the
+	// weather's pull, eased towards (the day's mean); then the day's swing on it, straight from
+	// the clock (DiurnalShape: coldest just before sunrise, warmest at 14:30), not eased: the
+	// easing (up to 90 s) had damped and delayed it, with short days to almost nothing
 	const SunState sun = ComputeSun(state.dayFraction, state.yearFraction, settings.seasons, state.cloudCover);
 	{
 		static const float means[4] = { 12.0f, 24.0f, 11.0f, -3.0f };
-		static const float swing[4] = { 6.0f, 7.0f, 5.0f, 4.0f };
 		const float x = state.yearFraction * 4.0f - 0.5f;
 		const int i = (int)std::floor(x);
 		const float f = x - i;
@@ -840,20 +844,39 @@ void ServerEnvironment::update(Server& server)
 		float target = a + (b - a) * (1.0f - std::cos(PI * f)) * 0.5f;
 		const float scale = SEVERITY_SCALE[std::clamp(state.severity, 0, 2)];
 		target = 11.0f + (target - 11.0f) * scale;
-		if (settings.dayNight)
-			target += swing[state.season] * (1.0f - 0.5f * state.cloudCover) * std::sin(2.0f * PI * (state.dayFraction - 0.375f));
 		target += WEATHER_TEMPERATURE[state.weather] * (WEATHER_TEMPERATURE[state.weather] > 0 ? scale : 1.0f);
 		// no hotter than 40 degrees (a harsh summer's heatwave in the afternoon would reach 48):
 		// the game's lands are temperate
 		target = std::min(target, 40.0f);
 		temperatureTarget = target;
+		// the day's swing (none without day and night: the season's temperature all day); its
+		// size follows the clouds and the fog, which change gradually
+		// in a heatwave the nights stay warm (the warm air mass and the heat stored in the ground
+		// and the walls): the night's side of the swing cut to 40%, the day's kept; eased in and
+		// out over two minutes, as the heatwave comes and goes
+		{
+			const float heat = state.weather == WEATHER_HEATWAVE ? 1.0f : 0.0f;
+			heatNights = !started || snapTemperature ? heat : Approach(heatNights, heat, dt / 120.0f, dt / 120.0f);
+		}
+		float shape = DiurnalShape(state.dayFraction * 24.0f, sun.sunrise);
+		if (shape < 0.0f)
+			shape *= 1.0f - 0.6f * heatNights;
+		const float swing = settings.dayNight
+			? DiurnalAmplitude(state.yearFraction, settings.seasons, state.cloudCover, state.fog) * shape
+			: 0.0f;
 		// (at once also after the debug panel moved the clock or held a weather: a jump from
 		// summer to winter was 29 degrees and its blizzard rain for a minute and a half)
 		if (!started || snapTemperature)
-			state.temperatureC = target;
-		else
+			temperatureBase = target;
+		else {
+			// (a save from before the day's mean: its temperature had the swing in it)
+			if (!baseKnown)
+				temperatureBase = state.temperatureC - swing;
 			// (quicker with short seasons: a twentieth of a season, 10 to 90 s)
-			state.temperatureC += (target - state.temperatureC) * (1.0f - std::exp(-dt / std::clamp(settings.seasonLengthS() / 20.0f, 10.0f, 90.0f)));
+			temperatureBase += (target - temperatureBase) * (1.0f - std::exp(-dt / std::clamp(settings.seasonLengthS() / 20.0f, 10.0f, 90.0f)));
+		}
+		baseKnown = true;
+		state.temperatureC = std::min(temperatureBase + swing, 40.0f);
 	}
 	snapTemperature = false;
 	const float T = state.temperatureC;
@@ -880,12 +903,15 @@ void ServerEnvironment::update(Server& server)
 		state.wetness += state.rain / 90.0f - dry;
 		if (state.snowfall > 0.05f && T < 1.0f)
 			state.snowCover += state.snowfall / 200.0f * (state.weather == WEATHER_BLIZZARD ? 2.0f : 1.0f);
-		if (T > 1.0f) {
-			const float melt = std::min(state.snowCover, (T - 1.0f) / 400.0f + state.rain / 150.0f);
+		// (the thaw and the ice by the slower ground's and water's temperatures: the day's mean
+		// with part of the swing; the snow still lies where it falls in the night's frost)
+		const float Tm = meltTemperature(), Ti = iceTemperature();
+		if (Tm > 1.0f) {
+			const float melt = std::min(state.snowCover, (Tm - 1.0f) / 400.0f + state.rain / 150.0f);
 			state.snowCover -= melt;
 			state.wetness += melt * 0.5f;
 		}
-		state.ice += T < 0.0f ? -T / 500.0f : -(T / 250.0f + 0.002f);
+		state.ice += Ti < 0.0f ? -Ti / 500.0f : -(Ti / 250.0f + 0.002f);
 		state.wetness = std::clamp(state.wetness, 0.0f, 1.0f);
 		state.snowCover = std::clamp(state.snowCover, 0.0f, 1.0f);
 		state.ice = std::clamp(state.ice, 0.0f, 1.0f);
@@ -925,6 +951,12 @@ void ServerEnvironment::update(Server& server)
 			strikeLightning(server, &near);
 		}
 		updateFires(server);
+	}
+	// the peasants' lodging at night and in winter
+	if (dt > 0.0f) {
+		static const bool traceLodging = getenv("WKB_TRACE_LODGING") != nullptr;
+		lodging.trace = trace || traceLodging;
+		lodging.update(server, settings, state, sun.daylight);
 	}
 
 	server.nightSight.factor = state.sightFactor;
@@ -1022,16 +1054,20 @@ std::string ServerEnvironment::saveText() const
 			o << ' ' << id;
 		o << '\n';
 	}
+	o << "temperature " << temperatureBase << ' ' << heatNights << '\n';
 	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
 		o << "exposure " << id << ' ' << e.cold << ' ' << e.heat << '\n';
+	if (Server::instance)
+		o << lodging.saveText(*Server::instance);
 	return o.str();
 }
 
 void ServerEnvironment::loadText(const std::string& text)
 {
 	reset();
+	baseKnown = false; // (until a "temperature" line: a save from before the day's mean)
 	std::istringstream in(text);
 	std::string line;
 	while (std::getline(in, line)) {
@@ -1046,6 +1082,12 @@ void ServerEnvironment::loadText(const std::string& text)
 		if (tag == "state")
 			l >> state.time >> state.season >> state.severity >> state.weather >> state.temperatureC >> state.cloudCover >> state.rain >> state.snowfall
 				>> state.fog >> state.wetness >> state.snowCover >> state.ice >> state.waterRise >> state.sightFactor >> state.speedFactor >> state.lightningCount;
+		else if (tag == "temperature") {
+			l >> temperatureBase;
+			if (!(l >> heatNights)) // (none before the warm nights)
+				heatNights = state.weather == WEATHER_HEATWAVE ? 1.0f : 0.0f;
+			baseKnown = true;
+		}
 		else if (tag == "timers") {
 			int s = 0;
 			l >> nextUpdate >> weatherEnds >> nextLightning >> resolvedYear >> resolvedSeverity[0] >> resolvedSeverity[1] >> resolvedSeverity[2] >> resolvedSeverity[3] >> s;
@@ -1075,6 +1117,8 @@ void ServerEnvironment::loadText(const std::string& text)
 			l >> id >> e.cold >> e.heat;
 			exposure[id] = e;
 		}
+		else if (tag == "lodging" || tag == "lodger")
+			lodging.loadLine(tag, line);
 	}
 }
 

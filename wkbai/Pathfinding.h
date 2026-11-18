@@ -405,6 +405,7 @@ namespace Pathfinding {
         const long limit = std::isfinite(span) && span < 100000.0f ? (long)span + 8 : 100000;
         long steps = 0;
         while (currentTile != endTile) {
+            const PFPos previous = currentTile;
             if (++steps > limit) {
                 static bool reported = false;
                 if (!reported) {
@@ -416,6 +417,16 @@ namespace Pathfinding {
             currentTile = walker.next();
             if (pred(currentTile))
                 return currentTile;
+            // through a tile corner (diagonally): not past a blocked tile on either side, as the
+            // search's diagonal steps (above). The play test: units walked through a wall where
+            // two pieces touch only at their corners, on straightened paths and straight walks.
+            if (currentTile.x != previous.x && currentTile.z != previous.z) {
+                const PFPos sideA{ currentTile.x, previous.z }, sideB{ previous.x, currentTile.z };
+                if (pred(sideA))
+                    return sideA;
+                if (pred(sideB))
+                    return sideB;
+            }
         }
         return std::nullopt;
     }

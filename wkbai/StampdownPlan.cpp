@@ -9,6 +9,7 @@
 #include <iterator>
 #include <map>
 #include <cmath>
+#include <functional>
 
 // Walls don't count as neighbours (WKB.exe leaves out four building types, read here as the
 // wall pieces)
@@ -16,6 +17,43 @@ static bool isWallPiece(int buildingType)
 {
 	return buildingType == Tags::BUILDINGTYPE_WALL || buildingType == Tags::BUILDINGTYPE_WALL_CORNER_IN
 		|| buildingType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || buildingType == Tags::BUILDINGTYPE_WALL_CROSSROADS;
+}
+
+bool StampdownPlan::tileHasBlockingObject(CommonGameState* gameState, int tx, int tz)
+{
+	if (!gameState->tiles || !gameState->terrain)
+		return false;
+	const auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
+	if (tx < 0 || tz < 0 || tx >= tileWidth || tz >= tileHeight)
+		return false;
+	for (const auto& ref : gameState->tiles[tz * tileWidth + tx].objList) {
+		const CommonGameObject* obj = ref.getFrom(gameState);
+		if (obj && !(obj->flags & CommonGameObject::fTerminated) && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER
+			&& !obj->blueprint->canBeBuiltUpon)
+			return true;
+	}
+	return false;
+}
+
+bool StampdownPlan::tileInAnyCity(CommonGameState* gameState, int tx, int tz)
+{
+	const CommonGameObject* level = gameState->getLevel();
+	if (!level)
+		return false;
+	for (const auto& [type, players] : level->children)
+		for (const CommonGameObject* player : players)
+			for (const auto& [ctype, objs] : player->children)
+				for (const CommonGameObject* city : objs)
+					if (city->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+						for (const auto& rect : city->cityRectangles)
+							if (rect.xStart <= tx && tx <= rect.xEnd && rect.yStart <= tz && tz <= rect.yEnd)
+								return true;
+	return false;
+}
+
+bool StampdownPlan::isRural(const GameObjBlueprint* blueprint)
+{
+	return blueprint->buildingType == Tags::BUILDINGTYPE_RURAL || blueprint->buildingType == Tags::BUILDINGTYPE_RURAL_CENTRE;
 }
 
 bool StampdownPlan::groundAllows(CommonGameState* gameState, const Footprint* fp, int ox, int oz)
@@ -33,6 +71,8 @@ bool StampdownPlan::groundAllows(CommonGameState* gameState, const Footprint* fp
 		if (px < 0 || pz < 0 || px >= tileWidth || pz >= tileHeight)
 			return false;
 		if (gameState->tiles[pz * tileWidth + px].scriptStatus <= 3) // SET_TILE_STATUS
+			return false;
+		if (tileHasBlockingObject(gameState, px, pz)) // a tree, a deposit
 			return false;
 		for (int dz = 0; dz <= 1; dz++)
 			for (int dx = 0; dx <= 1; dx++) {
@@ -104,6 +144,77 @@ Vector3 StampdownPlan::quarterTurn(const Vector3& orientation)
 	return Vector3(0.0f, quarters[q], 0.0f);
 }
 
+// The piece a tile of a city takes on its ring (no blueprint: none, it is inside), from which of
+// its eight neighbours lie outside the city
+static StampdownPlan::StampdownCreateAction RingPiece(const std::function<bool(int, int)>& outside, const GameObjBlueprint* bpWall,
+	const GameObjBlueprint* bpWallCornerIn, const GameObjBlueprint* bpWallCornerOut, const GameObjBlueprint* bpWallCrossPiece,
+	int wx, int wz, float y)
+{
+	const bool left = outside(wx - 1, wz), right = outside(wx + 1, wz);
+	const bool bottom = outside(wx, wz - 1), top = outside(wx, wz + 1);
+
+	const GameObjBlueprint* needWall = nullptr;
+	float needAngle = 0.0f;
+	if (!left && !right && !bottom && !top) {
+		const bool dl = outside(wx - 1, wz - 1), dr = outside(wx + 1, wz - 1);
+		const bool ur = outside(wx + 1, wz + 1), ul = outside(wx - 1, wz + 1);
+		const int diagonals = dl + dr + ur + ul;
+		if (diagonals == 1) {
+			needWall = bpWallCornerIn;
+			needAngle = dl ? 0.0f : dr ? 0.25f : ur ? 0.5f : 0.75f;
+		}
+		else if (diagonals > 1)
+			needWall = bpWallCrossPiece;
+	}
+	else if (left && !right && !top && bottom) {
+		// |.
+		needWall = bpWallCornerOut;
+		needAngle = 0.5f;
+	}
+	else if (!left && right && !top && bottom) {
+		// .|
+		needWall = bpWallCornerOut;
+		needAngle = 0.75f;
+	}
+	else if (!left && right && top && !bottom) {
+		// '|
+		needWall = bpWallCornerOut;
+		needAngle = 0.0f;
+	}
+	else if (left && !right && top && !bottom) {
+		// |'
+		needWall = bpWallCornerOut;
+		needAngle = 0.25f;
+	}
+	else if (!left && right) {
+		needWall = bpWall;
+		needAngle = 0.25f;
+	}
+	else if (!bottom && top) {
+		needWall = bpWall;
+		needAngle = 0.5f;
+	}
+	else if (left && !right) {
+		needWall = bpWall;
+		needAngle = 0.75f;
+	}
+	else if (bottom && !top) {
+		needWall = bpWall;
+		needAngle = 0.0f;
+	}
+	// a strip one tile wide: a straight piece across it
+	else if (left && right && !(bottom && top)) {
+		needWall = bpWall;
+		needAngle = 0.25f;
+	}
+	else if (bottom && top && !(left && right)) {
+		needWall = bpWall;
+		needAngle = 0.0f;
+	}
+	return StampdownPlan::StampdownCreateAction{ needWall, Vector3(wx * 5.0f + 2.5f, y, wz * 5.0f + 2.5f),
+		Vector3(0.0f, needAngle * 3.1415f * 2.0f, 0.0f) };
+}
+
 StampdownPlan StampdownPlan::getStampdownPlan(
 	CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation)
 {
@@ -115,6 +226,46 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 		Tags::BUILDINGTYPE_WALL_CORNER_OUT,
 		Tags::BUILDINGTYPE_WALL_CROSSROADS
 	};
+
+	// a wall piece by hand on the ring of one of the player's cities: the piece the ring takes on
+	// that tile, of the same wall set (the corner where it turns), as the ring's own pieces are
+	if (isWallPiece(blueprint->buildingType) && playerObj && gameState->terrain) {
+		const GameSet* gameSet = gameState->gameSet.get();
+		static const char* const wallSets[4] = { "Stockade", "Unaligned Wall", "Technological Wall", "Celestial Wall" };
+		std::string set;
+		for (const char* name : wallSets)
+			if (blueprint->name.rfind(name, 0) == 0 && std::string_view(name).size() > set.size())
+				set = name;
+		const int tx = (int)(position.x / 5.0f), tz = (int)(position.z / 5.0f);
+		if (!set.empty())
+			for (const auto& [bpid, objlist] : playerObj->children)
+				for (const CommonGameObject* city : objlist) {
+					if (city->blueprint->bpClass != Tags::GAMEOBJCLASS_CITY)
+						continue;
+					const auto& rects = city->cityRectangles;
+					auto outside = [&rects](int x, int z) {
+						for (const auto& r : rects)
+							if (r.xStart <= x && x <= r.xEnd && r.yStart <= z && z <= r.yEnd)
+								return false;
+						return true;
+					};
+					if (outside(tx, tz))
+						continue;
+					auto piece = [&](const char* suffix) { return gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, set + suffix); };
+					const StampdownCreateAction ring = RingPiece(outside, piece(" Foundation"), piece(" Corner In Foundation"),
+						piece(" Corner Out Foundation"), piece(" Cross Piece Foundation"), tx, tz, position.y);
+					if (ring.blueprint && ring.blueprint->footprint) {
+						plan.placeBlueprint = ring.blueprint;
+						plan.placeOrientation = ring.orientation;
+						blueprint = ring.blueprint;
+						orientation = ring.orientation;
+						// the footprint's origin offset, as the ring's pieces are placed
+						position = ring.position;
+					}
+					goto ringPieceChosen;
+				}
+	ringPieceChosen:;
+	}
 
 	const bool civic = blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC || blueprint->buildingType == Tags::BUILDINGTYPE_CIVIC_CENTRE;
 	// the city rules' refusal (WKB.exe 0x510f90), given after the walls are laid out: the preview
@@ -180,10 +331,32 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 				refuse(Status::InvalidOccupied);
 				ok = false;
 			}
+			// a tree or a deposit on it (the play test: houses went up on trees and gold)
+			if (ok && tileHasBlockingObject(gameState, px, pz)) {
+				refuse(Status::InvalidOccupied);
+				ok = false;
+			}
+			// no farm or village in a city (WKB.exe's check 6, CANNOT_BUILD_HERE)
+			if (ok && isRural(blueprint) && tileInAnyCity(gameState, px, pz)) {
+				refuse(Status::InvalidOccupied);
+				ok = false;
+			}
 			if (const CommonGameObject* other = tile.building.getFrom(gameState)) {
 				const bool onWall = civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes);
 				const bool shared = to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType));
-				if (!onWall && !shared) {
+				// a gatehouse put into a straight wall (built or a foundation) along it takes the
+				// pieces' place, in their city (the play test: it could go on neither)
+				auto quarterOf = [](float y) { return ((int)std::lround(y / 1.5707964f) % 4 + 4) % 4; };
+				const bool gateOnWall = blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE
+					&& other->blueprint->buildingType == Tags::BUILDINGTYPE_WALL
+					&& quarterOf(other->orientation.y) % 2 == quarterOf(orientation.y) % 2;
+				if (gateOnWall) {
+					if (std::none_of(plan.toRemove.begin(), plan.toRemove.end(), [&](const StampdownRemoveAction& r) { return r.object == other->id; }))
+						plan.toRemove.emplace_back().object = other->id;
+					if (const CommonGameObject* city = other->getParent(); city && city->blueprint->bpClass == Tags::GAMEOBJCLASS_CITY)
+						plan.ownerObject = city->id;
+				}
+				else if (!onWall && !shared) {
 					refuse(Status::InvalidOccupied);
 					ok = false;
 				}
@@ -425,69 +598,7 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 
 			// the piece a tile of the city takes (no blueprint: none, it is inside)
 			auto pieceFor = [&](int wx, int wz) {
-				const bool left = outside(wx - 1, wz), right = outside(wx + 1, wz);
-				const bool bottom = outside(wx, wz - 1), top = outside(wx, wz + 1);
-
-				const GameObjBlueprint* needWall = nullptr;
-				float needAngle = 0.0f;
-				if (!left && !right && !bottom && !top) {
-					const bool dl = outside(wx - 1, wz - 1), dr = outside(wx + 1, wz - 1);
-					const bool ur = outside(wx + 1, wz + 1), ul = outside(wx - 1, wz + 1);
-					const int diagonals = dl + dr + ur + ul;
-					if (diagonals == 1) {
-						needWall = bpWallCornerIn;
-						needAngle = dl ? 0.0f : dr ? 0.25f : ur ? 0.5f : 0.75f;
-					}
-					else if (diagonals > 1)
-						needWall = bpWallCrossPiece;
-				}
-				else if (left && !right && !top && bottom) {
-					// |.
-					needWall = bpWallCornerOut;
-					needAngle = 0.5f;
-				}
-				else if (!left && right && !top && bottom) {
-					// .|
-					needWall = bpWallCornerOut;
-					needAngle = 0.75f;
-				}
-				else if (!left && right && top && !bottom) {
-					// '|
-					needWall = bpWallCornerOut;
-					needAngle = 0.0f;
-				}
-				else if (left && !right && top && !bottom) {
-					// |'
-					needWall = bpWallCornerOut;
-					needAngle = 0.25f;
-				}
-				else if (!left && right) {
-					needWall = bpWall;
-					needAngle = 0.25f;
-				}
-				else if (!bottom && top) {
-					needWall = bpWall;
-					needAngle = 0.5f;
-				}
-				else if (left && !right) {
-					needWall = bpWall;
-					needAngle = 0.75f;
-				}
-				else if (bottom && !top) {
-					needWall = bpWall;
-					needAngle = 0.0f;
-				}
-				// a strip one tile wide: a straight piece across it
-				else if (left && right && !(bottom && top)) {
-					needWall = bpWall;
-					needAngle = 0.25f;
-				}
-				else if (bottom && top && !(left && right)) {
-					needWall = bpWall;
-					needAngle = 0.0f;
-				}
-				return StampdownCreateAction{ needWall, Vector3(wx * 5.0f + 2.5f, position.y, wz * 5.0f + 2.5f),
-					Vector3(0.0f, needAngle * 3.1415f * 2.0f, 0.0f) };
+				return RingPiece(outside, bpWall, bpWallCornerIn, bpWallCornerOut, bpWallCrossPiece, wx, wz, position.y);
 			};
 
 			for (int wx = nx0; wx <= nx1; ++wx) {
@@ -512,7 +623,8 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 						else
 							remove(wall);
 					}
-					if (piece.blueprint && !keep)
+					// none on a tree or a deposit: the ring has a gap there, as the original's
+					if (piece.blueprint && !keep && !tileHasBlockingObject(gameState, wx, wz))
 						plan.toCreate.push_back(piece);
 				}
 			}
@@ -520,7 +632,7 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			// grown over it) leaves its other tiles to straight pieces, also those past the tiles
 			// redone above
 			for (const auto& [gate, piece] : keptByGate)
-				if (std::any_of(plan.toRemove.begin(), plan.toRemove.end(), [&](const StampdownRemoveAction& r) { return r.object == gate; }))
+				if (!tileHasBlockingObject(gameState, (int)(piece.position.x / 5.0f), (int)(piece.position.z / 5.0f)) && std::any_of(plan.toRemove.begin(), plan.toRemove.end(), [&](const StampdownRemoveAction& r) { return r.object == gate; }))
 					plan.toCreate.push_back(piece);
 			if (gameState->tiles) {
 				for (const auto& removal : std::vector<StampdownRemoveAction>(plan.toRemove)) {
@@ -534,7 +646,7 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 								continue;
 							if (gameState->tiles[wz * tileWidth + wx].building.getFrom(gameState) != gate || outside(wx, wz))
 								continue;
-							if (const StampdownCreateAction piece = pieceFor(wx, wz); piece.blueprint)
+							if (const StampdownCreateAction piece = pieceFor(wx, wz); piece.blueprint && !tileHasBlockingObject(gameState, wx, wz))
 								plan.toCreate.push_back(piece);
 						}
 				}

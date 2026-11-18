@@ -1755,13 +1755,7 @@ void AIController::startLuaAI(const std::string& name)
 	// orders: each unit attacks the target; home (into the defensive army, walking to the manor);
 	// a wave (a new attacking army in formations, see AIController::launchWave): its army's id
 	ai.set_function("attack", [](sol::table units, uint32_t target) {
-		const GameSet* gs = Server::instance->gameSet.get();
-		g_items.update(gs);
-		ServerGameObject* t = Server::instance->findObject(target);
-		if (!t || t->deleted || g_items.attackOrder < 0)
-			return;
-		for (ServerGameObject* u : Objects(units))
-			AIAttack(u, t);
+		AIUtil::Attack(Objects(units), Server::instance->findObject(target));
 	});
 	ai.set_function("sendHome", [player](sol::table units) {
 		AIUtil::SendHome(player(), Objects(units));

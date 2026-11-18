@@ -172,6 +172,16 @@ namespace {
 			list.push_back(o);
 		}
 		list.push_back(toggle("fireLights", "lighting", "Light from fires", rs.fireLights));
+		{
+			// the fires' look (FireEffects.h): Original's sprites, Low's and High's procedural flames
+			MenuOption o;
+			o.id = "fireQuality"; o.page = "lighting"; o.label = "Fire";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Original", "Low", "High" };
+			o.get = [&rs]() { return (float)rs.fireQuality; };
+			o.set = [&rs](float v) { rs.fireQuality = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("skyGI", "lighting", "Light from the sky", rs.skyGI));
 		{
 			// the dynamic GI (DiligentGI): needs the sky light

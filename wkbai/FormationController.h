@@ -76,6 +76,9 @@ private:
 	std::map<uint32_t, int> slotOf; // member id -> place index
 	int slotCount = 0; // places in the layout (more than members after deaths)
 	float slotHeading = 0.0f; // the heading the places were given at
+	// since when the standing formation faces off its places' heading (-1: it doesn't): a re-form
+	// only once that has lasted half a second (the play test: members flickered between places)
+	float headingOffSince = -1.0f;
 	bool formed = false;
 	bool holding = false; // the march waits for the members to form up facing its way
 	float holdUntil = 0.0f;

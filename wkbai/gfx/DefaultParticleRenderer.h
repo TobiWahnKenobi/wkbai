@@ -7,6 +7,7 @@
 #include "ParticleRenderer.h"
 #include "TextureCache.h"
 #include <memory>
+#include <vector>
 
 struct RBatch;
 
@@ -17,4 +18,6 @@ struct DefaultParticleRenderer : ParticleRenderer {
 
 	TextureCache texCache;
 	std::unique_ptr<RBatch> batch;
+	// tests: every sprite, point and streak quad drawn (its four vertices) is appended here
+	static std::vector<batchVertex>* s_record;
 };

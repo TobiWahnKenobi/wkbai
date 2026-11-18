@@ -381,7 +381,7 @@ void Ministries::update(Server& server)
 		// (aiMinistriesSlots: only the positions asked for)
 		if (server.aiMinistriesSlots != 0 && !(i < 31 && (server.aiMinistriesSlots >> i) & 1))
 			continue;
-		if (!p->deleted && !(p->flags & ServerGameObject::fTerminated) && p->aiController.isAI())
+		if (!p->deleted && !(p->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated)) && p->aiController.isAI())
 			players.push_back(p);
 	}
 	for (ServerGameObject* p : players) {

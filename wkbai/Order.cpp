@@ -24,6 +24,7 @@
 #include "util/StriCompare.h"
 #include "AIUtil.h"
 #include "Model.h"
+#include "PeasantLodging.h"
 #include <map>
 #include <cstdio>
 
@@ -314,6 +315,11 @@ void Task::resume()
 	TraceTask(this, "resume");
 	this->state = OTS_PROCESSING;
 	this->blueprint->resumptionSequence.run(this->order->gameObject);
+	// only a task that was in range when it was put aside: its target has gone out of range since
+	// (an archer drawn into a fight). One that hadn't reached it walks on: the Kingmaker's siege
+	// formations, resumed 220 m from their target, ran their dissatisfied sequence (a Wait) again
+	// at every resume and never walked.
+	this->resumedUnchecked = this->proximitySatisfied;
 	this->proximitySatisfied = false; // TODO: put this in "onResume"
 }
 
@@ -340,6 +346,8 @@ void Task::terminate()
 	if (go->movementController.isMoving())
 		go->movementController.stopMovement();
 	go->setAnimation(0);
+	if (ServerGameObject* t = target.get(); t && attackPathOf == t->id && t->getPlayer() == go->getPlayer())
+		go->orderConfig.stepAwayFrom = t->id;
 	this->releaseAttackPath();
 	this->blueprint->terminationSequence.run(this->order->gameObject);
 	this->order->advanceToNextTask();
@@ -424,6 +432,12 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	// a peasant on its way into its shelter for the night or winter, inside or waiting for one
+	// (PeasantLodging) takes no orders but the lodging's own: not the player's, the AI's or the
+	// scripts' (a dying one's "Die" still)
+	if (gameobj->lodging != LODGE_NONE && gameobj->lodging != LODGE_RETURNING && !g_lodgingOrders
+		&& !(gameobj->flags & CommonGameObject::fTerminated))
+		return nullptr;
 	// As WKB.exe's 0x562130: an order that would replace the current one (DO_FIRST, FORGET_EVERYTHING_ELSE)
 	// - is refused while the current order can't be interrupted (CANNOT_INTERRUPT_ORDER, 0x53fbd0);
 	// - waits behind it while one of its tasks plays an uninterruptible loop (the Rocket Launcher
@@ -539,6 +553,26 @@ void OrderConfiguration::process()
 	bool nextBusy = !orders.empty();
 	if (busy && !nextBusy)
 		gameobj->sendEvent(Tags::PDEVENT_ON_IDLE);
+	// idle on the spot it trained at: a few metres out from the dummy, to a free place
+	if (stepAwayFrom) {
+		const uint32_t from = std::exchange(stepAwayFrom, 0u);
+		ServerGameObject* t = Server::instance->findObject(from);
+		const GameSet* gs = Server::instance->gameSet.get();
+		const int move = gs->commands.names.getIndex("Move");
+		const CommonGameObject* parent = gameobj->getParent();
+		const bool inFormation = parent && parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (orders.empty() && t && !t->deleted && !(t->flags & ServerGameObject::fTerminated) && move >= 0 && !inFormation) {
+			Vector3 out = gameobj->position - t->position;
+			out.y = 0.0f;
+			const float d = std::sqrt(out.sqlen2xz());
+			if (d < 6.0f) {
+				out = d > 0.01f ? out * (1.0f / d) : Vector3(1, 0, 0);
+				const Vector3 dest = FreeStandingSpot(gameobj, t->position + out * 6.0f);
+				gs->commands[move].execute(gameobj, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, dest);
+			}
+		}
+	}
+	nextBusy = !orders.empty();
 	busy = nextBusy;
 
 	Order* curorder = getCurrentOrder();
@@ -1524,6 +1558,7 @@ void ObjectReferenceTask::onUpdate()
 			}
 		}
 		if (arrived) {
+			shortWalks = 0;
 			// A formation "in range" of an enemy its members can never reach: its range counts from
 			// its centre and is wide, so the walk ends at once, satisfied, while its spearmen stand
 			// at the foot of a slope below a scout (the Kingmaker's "Move To Attack Range Of
@@ -1646,6 +1681,39 @@ void ObjectReferenceTask::onUpdate()
 					if (blueprint->classType == Tags::ORDTSKTYPE_ATTACK && this->proximity >= 1.0f && !onPath && !following)
 						go->movementController.setGoalRadius(std::floor(this->proximity));
 				};
+				// out of range: the dissatisfied sequence first, before any walk (it ends a missile
+				// task of a unit that may not move, "Don't Skirmish"/Hold Ground: wkbai ran it after
+				// the walk was asked for, and a resumed task never, so the archers walked on).
+				// A resumed task's only when it would have run at the start (not the end-the-order-only
+				// sequence a trebuchet walks into range with)
+				const bool endsOnly = blueprint->proximityDissatisfiedEquation < 0
+					&& blueprint->proximityDissatisfiedSequence.actionList.size() == 1
+					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder();
+				if (proximitySatisfied || (resumedUnchecked && !endsOnly && this->proximity > 0.0f)) {
+					proximitySatisfied = false;
+					resumedUnchecked = false;
+					if (getenv("WKB_TRACE_TASKS_ID")) {
+						char buf[160];
+						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
+						TraceTask(this, buf);
+					}
+					RunProximityDissatisfied(blueprint, order->gameObject);
+					if (!this->isWorking() || !this->order->isWorking())
+						return;
+				}
+				resumedUnchecked = false;
+				// a building it can't reach (not an attack, which goes for the wall in its way): the
+				// task ends after five walks that ended short, and with it the order, so that the
+				// unit goes on to its next one
+				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt
+					&& blueprint->classType != Tags::ORDTSKTYPE_ATTACK && target->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING
+					&& ++shortWalks > 5) {
+					if (getenv("WKB_TRACE_TASKS_ID"))
+						TraceTask(this, "given up: the building can't be reached");
+					shortWalks = 0;
+					order->terminate();
+					return;
+				}
 				if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 					attackRadius();
 					destination = go->movementController.startMovement(goal);
@@ -1672,17 +1740,6 @@ void ObjectReferenceTask::onUpdate()
 							destination = go->movementController.startMovement(goal);
 						}
 					}
-				if (proximitySatisfied) {
-					proximitySatisfied = false;
-					if (getenv("WKB_TRACE_TASKS_ID")) {
-						char buf[160];
-						snprintf(buf, sizeof(buf), "proximity dissatisfied (edge %.2f, proximity %.2f, distance %.2f)", edge, this->proximity, (go->position - target->position).len2xz());
-						TraceTask(this, buf);
-					}
-					//if (blueprint->defaultAnim != -1)
-					//	go->setAnimation(0);
-					RunProximityDissatisfied(blueprint, order->gameObject);
-				}
 			}
 		}
 		if (this->triggersStarted) {

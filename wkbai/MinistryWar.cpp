@@ -72,7 +72,7 @@ namespace {
 			for (CommonGameObject* c : children) {
 				auto* p = (ServerGameObject*)c;
 				if (p != me && !p->deleted && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player"
-					&& !(p->flags & ServerGameObject::fTerminated) && AIUtil::IsEnemy(me, p)) {
+					&& !(p->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated)) && AIUtil::IsEnemy(me, p)) {
 					// (not an empty slot: the evaluations' "human" has nothing on the map, and four players,
 					// seed 9, a soldier walked to its start (0, 0) every 40 s from minute 19 to scout it)
 					bool any = false;
