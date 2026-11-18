@@ -12379,6 +12379,258 @@ void Test_RiverCurrents()
 	printf(failures ? "CURRENTS FAILED (%d)\n" : "CURRENTS PASSED\n", failures);
 }
 
+// A wedge of riders charging a line (the play test: the wedge stopped at first contact, only its
+// tip fought, the others stood). WKB.exe's scripts (Formation Army.cpp, Standard Heavy Cavalry
+// Targets.cpp; docs/re/combat-original-formations.md): the formation marches to the target, then
+// every member picks its own victim among the enemies within "My Individual Formation Attack
+// Range" (40 m) and rides out to it, at most "Number Of Units I Can Be Attacked By" (3) on one.
+// On 4 Peaks, 15 Knights in a Wedge and 24 Men at Arms in a Line 50 m off, facing each other:
+//  - case 0, "Formation Army Attack" on a man of the line (a right-click on it);
+//  - case 1, a Move through the line to 30 m behind it (a charge by moving);
+// every second each rider's order, target, distance to it and to the nearest enemy can be logged
+// (WKB_WEDGE_LOG=1). Fighting: an attack order on an enemy, or the game set's break-off of cavalry
+// that hit formed heavy infantry from the front. Checked: within 6 s of the first contact 60 %
+// of the riders fighting at once, from 2 to 12 s after it half of them on average (the
+// scripts hand out victims every 2.5 s, at most 3 riders on one), and in those 12 s none standing
+// idle (no order, not walking) with an enemy within 10 m for more than 3 s. Before the fix to ARE_ASSOCIATED (an idle
+// member's FINDER_TARGET finds nothing: 0, as WKB.exe's) only the tip and the 2 others nearest the
+// target fought, the rest stood. WKB_WEDGE_CASE=<n> runs one case.
+// Prints "WEDGE ok/FAILED ..." and "WEDGE PASSED/FAILED".
+void Test_WedgeCharge()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("WEDGE %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	const bool log = getenv("WKB_WEDGE_LOG") != nullptr;
+	const int onlyCase = getenv("WKB_WEDGE_CASE") ? atoi(getenv("WKB_WEDGE_CASE")) : -1;
+	for (int scenario = 0; scenario < 2; scenario++) {
+		if (onlyCase >= 0 && onlyCase != scenario)
+			continue;
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		ServerGameObject* own = server.findObject(1027);
+		ServerGameObject* enemy = server.findObject(1030);
+		const GameSet& gs = *server.gameSet;
+		const GameObjBlueprint* rider = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_RIDER") ? getenv("WKB_WEDGE_RIDER") : "Knight");
+		const GameObjBlueprint* foot = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_FOOT") ? getenv("WKB_WEDGE_FOOT") : "Man At Arms");
+		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : "Wedge"), lineCmd = gs.commands.names.getIndex("Line");
+		const int attackCmd = gs.commands.names.getIndex("Formation Army Attack"), moveCmd = gs.commands.names.getIndex("Move");
+		if (!own || !enemy || !rider || !foot || wedgeCmd < 0 || lineCmd < 0 || attackCmd < 0 || moveCmd < 0
+			|| gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+			printf("WEDGE FAILED (not set up)\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		// open ground: the spot nearest the map's middle with no tile blocked for either within
+		// 35 m across, 50 m ahead of the line and 55 m behind the riders (and under 12 m of height difference)
+		Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		{
+			auto open = [&](const Vector3& c) {
+				float lo = 1e9f, hi = -1e9f;
+				for (float dz = -50.0f; dz <= 55.0f; dz += 5.0f)
+					for (float dx = -35.0f; dx <= 35.0f; dx += 5.0f) {
+						const float x = c.x + dx, z = c.z + dz;
+						if (x < 10.0f || z < 10.0f || x > area.first - 10.0f || z > area.second - 10.0f)
+							return false;
+						if (MovementController::isTileBlocked(rider, (int)(x / 5.0f), (int)(z / 5.0f))
+							|| MovementController::isTileBlocked(foot, (int)(x / 5.0f), (int)(z / 5.0f)))
+							return false;
+						const float h = server.terrain->getHeight(x, z);
+						lo = std::min(lo, h);
+						hi = std::max(hi, h);
+					}
+				return hi - lo < 12.0f;
+			};
+			const Vector3 middle = centre;
+			bool found = false;
+			for (float r = 0.0f; r < 400.0f && !found; r += 10.0f)
+				for (int k = 0; k < std::max(1, (int)(r / 5.0f)) && !found; k++) {
+					const float a = k * 6.2831855f / std::max(1, (int)(r / 5.0f));
+					const Vector3 c = middle + Vector3(std::sin(a) * r, 0, std::cos(a) * r);
+					if (open(c)) {
+						centre = c;
+						found = true;
+					}
+				}
+			printf("WEDGE open ground at (%.0f, %.0f)\n", centre.x, centre.z);
+			if (!found) {
+				printf("WEDGE FAILED (no open ground)\n");
+				return;
+			}
+		}
+		auto at = [&](float x, float z, const GameObjBlueprint* bp) { return MovementController::nearestValidPosition(bp, centre + Vector3(x, 0, z)); };
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto step = [&]() {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		};
+		auto makeFormation = [&](ServerGameObject* player, const std::vector<ServerGameObject*>& units, float heading, int command) {
+			ServerGameObject* f = server.spawnObject(&gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+			Vector3 sum;
+			for (ServerGameObject* u : units) {
+				sum += u->position;
+				u->setParent(f);
+			}
+			f->setPosition(sum / (float)units.size());
+			f->setOrientation(Vector3(0, heading, 0));
+			f->sendEvent(Tags::PDEVENT_ON_SPAWN);
+			gs.commands[command].execute(f, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			return SrvGORef(f);
+		};
+		// the riders south (+z), facing north (heading 0 faces -z); the line north, facing south
+		std::vector<ServerGameObject*> riders, foes;
+		for (int i = 0; i < 15; i++)
+			riders.push_back(server.spawnObject(rider, own, at(-12.0f + (i % 5) * 6.0f, 30.0f + (i / 5) * 6.0f, rider), Vector3(0, 0, 0)));
+		for (int i = 0; i < 24; i++)
+			foes.push_back(server.spawnObject(foot, enemy, at(-23.0f + (i % 12) * 4.0f, -20.0f - (i / 12) * 3.0f, foot), Vector3(0, 3.14159f, 0)));
+		std::vector<SrvGORef> riderRefs(riders.begin(), riders.end()), foeRefs(foes.begin(), foes.end());
+		SrvGORef wedge = makeFormation(own, riders, 0.0f, wedgeCmd);
+		SrvGORef line = makeFormation(enemy, foes, 3.14159f, lineCmd);
+		// (the formations' own objects: the type commands replace them)
+		for (int i = 0; i < 5 * 50; i++)
+			step();
+		wedge = riderRefs[0] ? SrvGORef(riderRefs[0]->getParent()) : SrvGORef();
+		line = foeRefs[0] ? SrvGORef(foeRefs[0]->getParent()) : SrvGORef();
+		const bool formedUp = wedge && wedge->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && line && line->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		printf("WEDGE case %d: %s of %zu (%s) at (%.0f, %.0f), %s of %zu (%s) at (%.0f, %.0f)\n", scenario,
+			wedge ? wedge->blueprint->name.c_str() : "-", riders.size(), rider->name.c_str(), wedge ? wedge->position.x : 0.0f, wedge ? wedge->position.z : 0.0f,
+			line ? line->blueprint->name.c_str() : "-", foes.size(), foot->name.c_str(), line ? line->position.x : 0.0f, line ? line->position.z : 0.0f);
+		if (log)
+			for (const SrvGORef& f : foeRefs)
+				if (f)
+					printf("WEDGE   foe %u at (%.1f, %.1f) under %s\n", f->id, f->position.x, f->position.z, f->getParent() ? f->getParent()->blueprint->name.c_str() : "-");
+		if (!formedUp) {
+			check(false, "both formations formed");
+			continue;
+		}
+		if (scenario == 0)
+			gs.commands[attackCmd].execute(wedge.get(), foes[5], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		else
+			gs.commands[moveCmd].execute(wedge.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, line->position + Vector3(0, 0, -30.0f));
+		auto alive = [](const SrvGORef& r) { return r && !(r->flags & CommonGameObject::fTerminated) && r->blueprint->name.rfind("Dead", 0) != 0; };
+		auto nearestFoe = [&](const ServerGameObject* u) {
+			float best = 1e9f;
+			for (const SrvGORef& f : foeRefs)
+				if (alive(f))
+					best = std::min(best, std::sqrt((f->position - u->position).sqlen2xz()));
+			return best;
+		};
+		// fighting: an attack order of its own on a (living) enemy, or the game set's break-off of
+		// cavalry that struck formed heavy infantry from the front ("Run Away After Attack": "Rear
+		// and Flee", then "Move To Cavalry Broken Marker", and back to the fight)
+		auto inMelee = [&](ServerGameObject* u) {
+			Order* o = u->orderConfig.getCurrentOrder();
+			if (!o)
+				return false;
+			const std::string& on = gs.orders.names.getString(o->blueprint->bpid);
+			if (on.find("Flee") != std::string::npos || on.find("Broken Marker") != std::string::npos)
+				return true;
+			if (o->blueprint->classType != Tags::ORDTSKTYPE_ATTACK)
+				return false;
+			Task* t = o->getCurrentTask();
+			ServerGameObject* tg = t ? t->target.get() : nullptr;
+			return tg && !(tg->flags & CommonGameObject::fTerminated) && tg->getPlayer() != own;
+		};
+		float contact = -1.0f;
+		double shareSum = 0.0;
+		int shareCount = 0;
+		int peak = 0;
+		float longestIdle = 0.0f;
+		uint32_t longestIdleOf = 0;
+		std::map<uint32_t, float> idleSince; // riders standing idle with an enemy within 10 m, since when
+		const float t0 = server.timeManager.currentTime;
+		for (int s = 0; s < 40 * 50; s++) {
+			step();
+			const float now = server.timeManager.currentTime - t0;
+			int living = 0, melee = 0, idleNear = 0, foesLeft = 0;
+			for (const SrvGORef& f : foeRefs)
+				foesLeft += alive(f) ? 1 : 0;
+			for (const SrvGORef& r : riderRefs)
+				if (alive(r)) {
+					living++;
+					if (contact < 0.0f && nearestFoe(r.get()) < 4.0f)
+						contact = now;
+					if (inMelee(r.get()))
+						melee++;
+					if (!r->orderConfig.getCurrentOrder() && !r->movementController.isMoving() && nearestFoe(r.get()) < 10.0f) {
+						idleNear++;
+						auto it = idleSince.emplace(r->id, now).first;
+						if (contact >= 0.0f && now <= contact + 12.0f && foesLeft > 0)
+							if (now - it->second > longestIdle) {
+								longestIdle = now - it->second;
+								longestIdleOf = r->id;
+							}
+					}
+					else
+						idleSince.erase(r->id);
+				}
+			if (s % 50 == 49) {
+				ServerGameObject* wf = riderRefs[0] && alive(riderRefs[0]) ? riderRefs[0]->getParent() : nullptr;
+				if (log) {
+					printf("WEDGE t=%4.1f %s %s at (%.1f, %.1f)%s; riders %d, in melee %d, idle near %d; foes %d\n", now,
+						wf ? wf->blueprint->name.c_str() : "-",
+						wf && wf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(wf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						wf ? wf->position.x : 0.0f, wf ? wf->position.z : 0.0f, wf && wf->movement.isMoving() ? " moving" : "", living, melee, idleNear, foesLeft);
+					ServerGameObject* lf = foeRefs[0] && alive(foeRefs[0]) ? foeRefs[0]->getParent() : nullptr;
+					printf("WEDGE   the foes' %s %s at (%.1f, %.1f)%s; foe 0 at (%.1f, %.1f) %s\n", lf ? lf->blueprint->name.c_str() : "-",
+						lf && lf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(lf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						lf ? lf->position.x : 0.0f, lf ? lf->position.z : 0.0f, lf && lf->movement.isMoving() ? " moving" : "",
+						foeRefs[0] ? foeRefs[0]->position.x : 0.0f, foeRefs[0] ? foeRefs[0]->position.z : 0.0f,
+						foeRefs[0] && foeRefs[0]->orderConfig.getCurrentOrder() ? gs.orders.names.getString(foeRefs[0]->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "(no order)");
+					for (const SrvGORef& r : riderRefs) {
+						if (!alive(r))
+							continue;
+						if (getenv("WKB_WEDGE_DEBUG")) {
+							SrvScriptContext ctx(&server, r.get());
+							const int fi = gs.objectFinderDefinitions.names.getIndex("Enemy Units Within Formation Attack Range metres of Me");
+							const int e1 = gs.equations.names.getIndex("I Am Not Already Attacking A Victim Of My Controller");
+							const int e2 = gs.equations.names.getIndex("No Victims Left");
+							const int e3 = gs.equations.names.getIndex("I Am In A Formation");
+							const int e4 = gs.equations.names.getIndex("I Am Currently Attacking");
+							printf("WEDGE   debug %u: victims %d, not already %.0f, none left (controller) %.0f, in a formation %.0f, attacking %.0f\n", r->id,
+								fi >= 0 ? (int)gs.objectFinderDefinitions[fi]->eval(&ctx).size() : -1,
+								e1 >= 0 ? gs.equations[e1]->eval(&ctx) : -9.0f,
+								[&] { SrvScriptContext c2(&server, r->getParent()); return e2 >= 0 ? gs.equations[e2]->eval(&c2) : -9.0f; }(),
+								e3 >= 0 ? gs.equations[e3]->eval(&ctx) : -9.0f, e4 >= 0 ? gs.equations[e4]->eval(&ctx) : -9.0f);
+						}
+						Order* o = r->orderConfig.getCurrentOrder();
+						Task* t = o ? o->getCurrentTask() : nullptr;
+						ServerGameObject* tg = t ? t->target.get() : nullptr;
+						printf("WEDGE   %u at (%.1f, %.1f)%s %s -> %u (%.1f m), nearest foe %.1f m, place %.1f m off, under %s\n", r->id, r->position.x, r->position.z,
+							r->movementController.isMoving() ? " moving" : "", o ? gs.orders.names.getString(o->blueprint->bpid).c_str() : "(no order)",
+							tg ? tg->id : 0u, tg ? std::sqrt((tg->position - r->position).sqlen2xz()) : 0.0f, nearestFoe(r.get()),
+							[&] { Vector3 pl; return r->getParent() && FormationController::memberPlace(r->getParent(), r.get(), pl) ? std::sqrt((pl - r->position).sqlen2xz()) : -1.0f; }(),
+							r->getParent() ? r->getParent()->blueprint->name.c_str() : "-");
+					}
+				}
+				// 2 to 12 s after the first contact: the riders fighting, of those alive
+				if (contact >= 0.0f && now >= contact + 2.0f && now <= contact + 12.0f && foesLeft > 0 && living > 0) {
+					shareSum += (double)melee / living;
+					shareCount++;
+				}
+				// the most fighting at once within 6 s of it
+				if (contact >= 0.0f && now <= contact + 6.0f && living > 0)
+					peak = std::max(peak, (int)std::lround(100.0 * melee / living));
+			}
+		}
+		const int share = shareCount ? (int)std::lround(100.0 * shareSum / shareCount) : -1;
+		printf("WEDGE case %d: first contact %.1f s after the order; within 6 s of it at most %d%% of the riders fighting at once, 2-12 s after it %d%% on average; the longest stand idle with an enemy within 10 m in those 12 s %.1f s (%u)\n",
+			scenario, contact, peak, share, longestIdle, longestIdleOf);
+		const std::string name = "case " + std::to_string(scenario) + (scenario == 0 ? " (an attack order)" : " (a move through the line)");
+		check(contact >= 0.0f, name + ": the wedge reaches the line");
+		check(peak >= 60, name + ": within 6 s of contact most riders fight at once");
+		check(share >= 50, name + ": most riders fight in the 12 s after contact");
+		check(longestIdle <= 3.0f, name + ": none stands idle with an enemy in reach (more than 3 s)");
+	}
+	printf(failures ? "WEDGE FAILED (%d)\n" : "WEDGE PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -12480,6 +12732,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
+{Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
 };
 
 void LaunchTest()
