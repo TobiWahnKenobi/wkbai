@@ -4966,6 +4966,14 @@ void ClientInterface::iter()
 				if (it != cmd->conditionsWarning.end()) {
 					return (*it)->getFormattedHint(lang, &ctx);
 				}
+				// the attack-at-will button: the state it is in and what a click does (the button shows the
+				// action, "Aggression" the red fist while the unit is passive, as WKB.exe's; its hints only
+				// named the action, and the red fist read as "on", the play test of 2026-11-19)
+				const std::string& name = client->gameSet->commands.getString(cmd);
+				if (name == "Aggression")
+					return "Attack at will: off - click to turn on";
+				if (name == "Passivity")
+					return "Attack at will: on - click to turn off";
 				if (!cmd->defaultHint.empty())
 					return GSCondition::getFormattedHint(cmd->defaultHint, cmd->defaultHintValues, lang, &ctx);
 				return client->gameSet->commands.getString(cmd);
