@@ -5729,7 +5729,8 @@ void ClientInterface::iter()
 				test.model = finishedModel(stampdownBlueprint);
 				// turned with [ and ]: the model, its footprint and its origin (WKB.exe 0x59a4d0 turns
 				// the origin as the tiles), the city rectangle (StampdownPlan)
-				const Vector3 orientation = stampdownOrientation();
+				Vector3 orientation = stampdownOrientation();
+				const Vector3 cursorGround = peapos;
 				if (auto* fp = stampdownBlueprint->footprint) {
 					const auto rotOrigin = fp->rotateOrigin(orientation.y);
 					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + rotOrigin.first;
@@ -5737,6 +5738,18 @@ void ClientInterface::iter()
 					if (client->terrain)
 						peapos.y = client->terrain->getHeightEx(peapos.x, peapos.z, stampdownBlueprint->canWalkOnWater());
 				}
+				// A gatehouse pointed at a wall piece goes onto that wall (wkbai's own help; the play
+				// test of 2026-11-18: "You cannot build a gatehouse on top of walls"): the cursor's
+				// ground point lies behind a standing wall, a tile or more, so the gatehouse went
+				// beside the wall, never onto it. The piece is the one the ray passes over (not the
+				// hovered object: the preview hides the pieces it replaces, which then can't be
+				// hovered, and the gatehouse flickered on and off the wall). It is turned along the
+				// piece if it lay across (as ] would) and put where its four tiles take the piece's
+				// tile (StampdownPlan); the click sends that spot.
+				if (stampdownBlueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE && client->terrain
+					&& StampdownPlan::gatehouseOntoWall(client, client->clientPlayer.get(), stampdownBlueprint,
+						StampdownPlan::wallOnRay(client, client->camera.position, cursorGround), cursorGround, stampdownQuarter, peapos))
+					orientation = stampdownOrientation();
 				test.transform = Matrix::getRotationYMatrix(-orientation.y) * Matrix::getTranslationMatrix(peapos);
 				test.color = stampdownPlayer->color;
 				scene->add(&test);

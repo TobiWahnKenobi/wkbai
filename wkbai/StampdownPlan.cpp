@@ -19,6 +19,19 @@ static bool isWallPiece(int buildingType)
 		|| buildingType == Tags::BUILDINGTYPE_WALL_CORNER_OUT || buildingType == Tags::BUILDINGTYPE_WALL_CROSSROADS;
 }
 
+// The building placed and a wall piece under it have the same "Race Type" (WKB.exe 0x59bd6d:
+// the item 0x927f5e of the blueprint placed, against the piece's own; no item counts as 0)
+static bool sameRaceType(CommonGameState* gameState, const GameObjBlueprint* placed, const CommonGameObject* piece)
+{
+	static const GameSet* indexOf = nullptr;
+	static int raceType = -1;
+	if (indexOf != gameState->gameSet.get()) {
+		indexOf = gameState->gameSet.get();
+		raceType = indexOf->items.names.getIndex("Race Type");
+	}
+	return raceType < 0 || placed->getStartingItemValue(raceType) == piece->getItem(raceType);
+}
+
 bool StampdownPlan::tileHasBlockingObject(CommonGameState* gameState, int tx, int tz)
 {
 	if (!gameState->tiles || !gameState->terrain)
@@ -131,6 +144,71 @@ const char* StampdownPlan::statusTextKey(Status status)
 	case Status::InvalidNoExplanation: return "BUILDING_PLACEMENT_CANNOT_BUILD_HERE";
 	default: return nullptr;
 	}
+}
+
+// (the play test of 2026-11-18: "You cannot build a gatehouse on top of walls": pointed at the
+// palisade, the cursor's ground point lay a tile or more behind it, by the wall's height over
+// the view's slope, and the gatehouse went there, beside the wall; the rules are the plan's)
+bool StampdownPlan::gatehouseOntoWall(CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint,
+	const CommonGameObject* piece, const Vector3& cursorGround, int& quarter, Vector3& position)
+{
+	if (!piece || !blueprint || !blueprint->footprint || !gameState->terrain || blueprint->buildingType != Tags::BUILDINGTYPE_GATEHOUSE
+		|| piece->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || !isWallPiece(piece->blueprint->buildingType))
+		return false;
+	const int wx = (int)(piece->position.x / 5.0f), wz = (int)(piece->position.z / 5.0f);
+	const int pieceQuarter = ((int)std::lround(piece->orientation.y / 1.5707964f) % 4 + 4) % 4;
+	int q = ((quarter % 4) + 4) % 4;
+	if (pieceQuarter % 2 != q % 2)
+		q = (q + 1) % 4;
+	const Vector3 orientation = quarterTurn(Vector3(0.0f, q * 1.5707964f, 0.0f));
+	const auto rotOrigin = blueprint->footprint->rotateOrigin(orientation.y);
+	const bool alongX = q % 2 == 0;
+	bool found = false, foundValid = false;
+	float foundDistance = 0.0f;
+	// the cursor tiles along the wall whose footprint can take the piece's tile
+	for (int k = -3; k <= 3; k++) {
+		const int cx = wx + (alongX ? k : 0), cz = wz + (alongX ? 0 : k);
+		Vector3 at(cx * 5.0f + 2.5f + rotOrigin.first, 0.0f, cz * 5.0f + 2.5f + rotOrigin.second);
+		at.y = gameState->terrain->getHeightEx(at.x, at.z, false);
+		const StampdownPlan p = getStampdownPlan(gameState, playerObj, blueprint, at, orientation);
+		if (std::none_of(p.tiles.begin(), p.tiles.end(), [&](const TileVerdict& t) { return t.x == wx && t.z == wz; }))
+			continue;
+		const bool valid = p.status == Status::Valid;
+		const float distance = (at - cursorGround).sqlen2xz();
+		if (!found || (valid && !foundValid) || (valid == foundValid && distance < foundDistance)) {
+			found = true;
+			foundValid = valid;
+			foundDistance = distance;
+			position = at;
+		}
+	}
+	if (found)
+		quarter = q;
+	return found;
+}
+
+const CommonGameObject* StampdownPlan::wallOnRay(CommonGameState* gameState, const Vector3& eye, const Vector3& cursorGround)
+{
+	if (!gameState->tiles || !gameState->terrain)
+		return nullptr;
+	const auto [tileWidth, tileHeight] = gameState->terrain->getNumPlayableTiles();
+	Vector3 back = eye - cursorGround;
+	const float length = back.len3();
+	if (length < 0.01f)
+		return nullptr;
+	back *= 1.0f / length;
+	for (float t = 0.0f; t <= length; t += 1.0f) {
+		const Vector3 p = cursorGround + back * t;
+		if (p.y - gameState->terrain->getHeight(p.x, p.z) > 10.0f)
+			break;
+		const int tx = (int)(p.x / 5.0f), tz = (int)(p.z / 5.0f);
+		if (p.x < 0.0f || p.z < 0.0f || tx >= tileWidth || tz >= tileHeight)
+			continue;
+		if (const CommonGameObject* b = gameState->tiles[tz * tileWidth + tx].building.getFrom(gameState);
+			b && b->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && isWallPiece(b->blueprint->buildingType))
+			return b;
+	}
+	return nullptr;
 }
 
 Vector3 StampdownPlan::quarterTurn(const Vector3& orientation)
@@ -343,12 +421,23 @@ StampdownPlan StampdownPlan::getStampdownPlan(
 			}
 			if (const CommonGameObject* other = tile.building.getFrom(gameState)) {
 				const bool onWall = civic && std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes);
-				const bool shared = to.mode && tile.buildingPassable && (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType));
-				// a gatehouse put into a straight wall (built or a foundation) along it takes the
-				// pieces' place, in their city (the play test: it could go on neither)
+				// (not a gatehouse placed: WKB.exe's case GATEHOUSE takes no other building, so its
+				// open gateway may not stand across a run of wall foundations)
+				const bool shared = to.mode && tile.buildingPassable && blueprint->buildingType != Tags::BUILDINGTYPE_GATEHOUSE
+					&& (isWallLike(blueprint->buildingType) || isWallLike(other->blueprint->buildingType));
+				// a gatehouse put into a wall (built or a foundation) takes the pieces' place, in
+				// their city. WKB.exe's tile test (0x59ba80, case GATEHOUSE at 0x59bc7a) lets a
+				// gatehouse tile hold a wall piece (any of the four, its types 6-9) of the player
+				// placing it (+0x48 against the player's +0x34), with the same "Race Type" (item
+				// 0x927f5e; stockade and unaligned 1, celestial 2, technological 3: no celestial
+				// gatehouse in a palisade) and lying along the gatehouse's axis (0x609cb0: 0 and pi
+				// alike, a quarter and three alike). Anything else on the tile refuses it,
+				// BUILDING_PLACEMENT_CANNOT_BUILD_HERE.
 				auto quarterOf = [](float y) { return ((int)std::lround(y / 1.5707964f) % 4 + 4) % 4; };
 				const bool gateOnWall = blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE
-					&& other->blueprint->buildingType == Tags::BUILDINGTYPE_WALL
+					&& std::find(std::begin(wallBuildingTypes), std::end(wallBuildingTypes), other->blueprint->buildingType) != std::end(wallBuildingTypes)
+					&& other->getPlayer() == playerObj
+					&& sameRaceType(gameState, blueprint, other)
 					&& quarterOf(other->orientation.y) % 2 == quarterOf(orientation.y) % 2;
 				if (gateOnWall) {
 					if (std::none_of(plan.toRemove.begin(), plan.toRemove.end(), [&](const StampdownRemoveAction& r) { return r.object == other->id; }))
