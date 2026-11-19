@@ -382,19 +382,8 @@ local function drawDialog()
 	local x, y = (W - w) / 2, (H - h) / 2
 	drawRect(0, 0, W, H, 0x66000000)
 	goldFrame(x, y, w, h)
-	-- the text, wrapped at spaces
-	local words, lines, line = {}, {}, ""
-	for word in string.gmatch(dialog.text, "%S+") do words[#words + 1] = word end
-	for _, word in ipairs(words) do
-		local try = (line == "") and word or (line .. " " .. word)
-		if textWidth(FONT_TEXT, try, S) > w - L(120) and line ~= "" then
-			lines[#lines + 1] = line
-			line = word
-		else
-			line = try
-		end
-	end
-	if line ~= "" then lines[#lines + 1] = line end
+	-- the text, wrapped at spaces, its own line breaks kept
+	local lines = wrapText(FONT_TEXT, dialog.text, w - L(120))
 	-- centred up and down in the space between the frame and the button row
 	local lh = fontHeight(FONT_TEXT, S)
 	local top, bottom = y + L(20), y + h - L(80)

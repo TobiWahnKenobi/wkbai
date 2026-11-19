@@ -13309,6 +13309,64 @@ void Test_TreeMemory()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+#include "Language.h"
+#include <sol/sol.hpp>
+void Test_TextLineBreaks()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("BREAKS %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the escape: "\n" a line break, "\\" and "\c" kept for the readers that interpret them
+	check("decode", Language::decodeLineBreaks("a\\nb") == "a\nb" && Language::decodeLineBreaks("a\\\\nb") == "a\\\\nb"
+		&& Language::decodeLineBreaks("\\cAdvisor:\\nLord") == "\\cAdvisor:\nLord" && Language::decodeLineBreaks("end\\") == "end\\"
+		&& Language::decodeLineBreaks("plain") == "plain");
+
+	// the real Language.txt: the lobby's question has a line break, no backslash
+	LoadBCP("data.bcp");
+	Language lang;
+	lang.load("Languages\\Language.txt");
+	const std::string text = lang.getText("FRONT_END_CHAT_SINGLE_PLAYER_GAME");
+	check("loaded", text.find('\n') != std::string::npos && text.find('\\') == std::string::npos);
+	size_t escaped = 0;
+	for (const auto& [key, value] : lang.text)
+		for (size_t p = value.find("\\n"); p != std::string::npos; p = value.find("\\n", p + 2))
+			if (p == 0 || value[p - 1] != '\\')
+				escaped++;
+	check("none left", escaped == 0);
+
+	// FrontEndUI.lua's wrapText (as the dialog wraps it): its own line breaks kept, each line
+	// wrapped at the width; textWidth here 10 pixels a character
+	std::ifstream in("redata\\FrontEndUI.lua", std::ios::binary);
+	std::string ui((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	ui.erase(std::remove(ui.begin(), ui.end(), '\r'), ui.end());
+	const size_t from = ui.find("local function wrapText(");
+	const size_t to = from == std::string::npos ? from : ui.find("\nend\n", from);
+	check("wrapText found", to != std::string::npos);
+	if (to != std::string::npos) {
+		sol::state lua;
+		lua.open_libraries(sol::lib::base, sol::lib::string, sol::lib::table);
+		lua.set_function("textWidth", [](const std::string&, const std::string& s, float scale) { return 10.0f * (float)s.size() * scale; });
+		sol::protected_function wrap = lua.script("S = 1\n" + ui.substr(from, to + 5 - from) + "return wrapText");
+		auto shown = [&](const std::string& s, float width) {
+			std::vector<std::string> lines;
+			sol::table t = wrap("Proportional 20", s, width);
+			for (size_t i = 1; i <= t.size(); i++) lines.push_back(t[i]);
+			return lines;
+		};
+		// wide enough for each sentence: the two of them
+		const auto wide = shown(text, 600.0f);
+		for (const auto& l : wide) printf("BREAKS  wide | %s\n", l.c_str());
+		check("two lines", wide == std::vector<std::string>{ "You have no opponents selected.", "Are you sure you want to start a single player game?" });
+		// narrower: the second wrapped too, never joined to the first
+		const auto narrow = shown(text, 320.0f);
+		for (const auto& l : narrow) printf("BREAKS  narrow | %s\n", l.c_str());
+		bool ok = narrow.size() == 3 && narrow[0] == "You have no opponents selected." && narrow[1].rfind("Are you", 0) == 0;
+		for (const auto& l : narrow) ok &= l.size() * 10 <= 320 && l.find('\\') == std::string::npos;
+		check("wrapped", ok);
+	}
+	printf("BREAKS all %d\n", all ? 1 : 0);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -13414,6 +13472,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
 {Test_GatehouseOnWall, "Gatehouse on a wall: over four straight pieces (turned too) it replaces them between the wall's ends; refused across a run, on a corner, on a gatehouse; walked through open, not closed"},
 {Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
+{Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
 };
 
 void LaunchTest()
