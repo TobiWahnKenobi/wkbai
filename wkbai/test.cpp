@@ -11278,6 +11278,90 @@ void Test_MixedFormation()
 		else
 			check(false, "a second formation for the join");
 	}
+	// an order on the formation's own member (a right-click inside it): refused, not followed
+	if (merged) {
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		const int follow = gs->commands.names.getIndex("Follow");
+		if (member && follow >= 0) {
+			gs->commands[follow].execute(merged, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			Order* o = merged->orderConfig.getCurrentOrder();
+			check(!o || o->getCurrentTask() == nullptr || o->getCurrentTask()->target.get() != member,
+				"Follow on the formation's own member refused (" + std::string(o ? gs->orders.getString(o->blueprint) : "no order") + ")");
+		}
+	}
+	// an attack on an enemy inside the formation (the play test: it walked away and stood): within
+	// 15 s most of its members fight it, the formation not more than 15 m from where it stood
+	// (a clean Line of 12 Spearmen, formed up and standing)
+	ServerGameObject* fresh = nullptr;
+	{
+		std::vector<ServerGameObject*> twelve;
+		for (int i = 0; i < 12; i++)
+			if (ServerGameObject* u = server.spawnObject(spearBp, player, at + Vector3(60.0f + (i % 6) * 2.5f, 0, 30.0f + (i / 6) * 2.5f), Vector3(0, 0, 0)))
+				twelve.push_back(u);
+		fresh = CreateFormationFrom(server, player, twelve);
+		for (int i = 0; i < 20 * 10; i++)
+			StepServer(server, 1);
+	}
+	if (fresh) {
+		const GameObjBlueprint* enemyBp = spearBp;
+		ServerGameObject* intruder = server.spawnObject(enemyBp, enemyPlayer, fresh->position + Vector3(1, 0, 1), Vector3(0, 0, 0));
+		const int fattack = gs->commands.names.getIndex("Formation Army Attack");
+		if (intruder && fattack >= 0) {
+			if (const int cap = gs->items.names.getIndex("Hit Point Capacity"); cap >= 0)
+				intruder->setItem(cap, 5000.0f);
+			if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+				intruder->setItem(hp, 5000.0f);
+			const Vector3 from = fresh->position;
+			gs->commands[fattack].execute(fresh, intruder, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			int most = 0;
+			float farthest = 0.0f;
+			for (int i = 0; i < 20 * 15 * 2 && !intruder->deleted && server.timeManager.currentTime >= 0.0f; i++) {
+				StepServer(server, 1);
+				int fighting = 0;
+				for (const auto& [type, children] : fresh->children)
+					for (CommonGameObject* c : children) {
+						ServerGameObject* m = (ServerGameObject*)c;
+						Order* o = m->orderConfig.getCurrentOrder();
+						if (o && o->getCurrentTask() && o->getCurrentTask()->target.get() == intruder)
+							fighting++;
+					}
+				most = std::max(most, fighting);
+				farthest = std::max(farthest, (fresh->position - from).len2xz());
+				if (i % 20 == 0) {
+					auto describe = [&](ServerGameObject* o) {
+						if (!o)
+							return std::string("-");
+						Order* ord = o->orderConfig.getCurrentOrder();
+						Task* tk = ord ? ord->getCurrentTask() : nullptr;
+						return o->blueprint->getFullName() + " at (" + std::to_string((int)o->position.x) + "," + std::to_string((int)o->position.z) + ") "
+							+ (ord ? gs->orders.getString(ord->blueprint) : std::string("-")) + " / " + (tk ? gs->tasks.names.getString(tk->blueprint->bpid) : std::string("-"))
+							+ (tk && tk->target.get() ? " -> " + tk->target->blueprint->name : std::string()) + (o->movementController.isMoving() ? " walking" : "");
+					};
+					printf("MIXEDF   t=%d formation %s | its controller %s | members %d, fighting %d, intruder at (%d,%d)\n", i / 20, describe(fresh).c_str(),
+						describe(fresh->getParent()).c_str(), characters(fresh), fighting, (int)intruder->position.x, (int)intruder->position.z);
+				}
+			}
+			// where the 27 members are after it: under whom, alive
+			{
+				std::map<std::string, int> under;
+				for (auto* list : { &spears, &archers, &knights, &loose })
+					for (ServerGameObject* u : *list)
+						under[u->deleted ? std::string("(gone)") : (u->getParent() ? u->getParent()->blueprint->getFullName() : std::string("-"))]++;
+				for (const auto& [who, n] : under)
+					printf("MIXEDF   after the attack: %d under %s\n", n, who.c_str());
+				printf("MIXEDF   the intruder: %s\n", intruder->deleted ? "gone" : "alive");
+			}
+			snprintf(what, sizeof(what), "an attack on an enemy inside it: at most %d of %d members fight it, the formation at most %.1f m from where it stood",
+				most, characters(fresh), farthest);
+			check(most * 2 >= 3 && farthest < 15.0f, what);
+		}
+		else
+			check(false, "an intruder and the Formation Army Attack command");
+	}
 	// Disband (the formation's button): its members back under the player
 	const int disband = gs->commands.names.getIndex("Disband");
 	if (merged && disband >= 0) {
@@ -11721,6 +11805,40 @@ void Test_RunSave()
 		worst = std::max(worst, ms);
 		if (ms > 50.0)
 			slow++;
+		// ("formationDump": true) the Human Player's formations every half second: where, heading,
+		// order and task, its target or destination, walking, members walking
+		if (cfg.value("formationDump", false)) {
+			static int lastHalf = -1;
+			const int half = (int)((server.timeManager.currentTime - start) * 2.0f);
+			if (half != lastHalf) {
+				lastHalf = half;
+				const GameSet* gs = server.gameSet.get();
+				for (const auto& [id, co] : server.idmap) {
+					ServerGameObject* f = (ServerGameObject*)co;
+					if (!f || f->deleted || f->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION || !f->getPlayer()
+						|| f->getPlayer()->blueprint->name != "Human Player")
+						continue;
+					Order* o = f->orderConfig.getCurrentOrder();
+					Task* t = o ? o->getCurrentTask() : nullptr;
+					int members = 0, walking = 0, ordered = 0;
+					for (const auto& [type, children] : f->children)
+						for (CommonGameObject* c : children) {
+							ServerGameObject* m = (ServerGameObject*)c;
+							if (m->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+								continue;
+							members++;
+							walking += m->movementController.isMoving() ? 1 : 0;
+							ordered += m->orderConfig.getCurrentOrder() ? 1 : 0;
+						}
+					const Vector3 dest = f->movementController.getDestination();
+					printf("FDUMP t=%.1f %s %u at (%.1f, %.1f) facing %.2f: %s / %s%s, dest (%.1f, %.1f), walking %d, members %d walking %d with orders %d\n",
+						server.timeManager.currentTime - start, f->blueprint->name.c_str(), f->id, f->position.x, f->position.z, f->orientation.y,
+						o ? gs->orders.getString(o->blueprint).c_str() : "-", t ? gs->tasks.names.getString(t->blueprint->bpid).c_str() : "-",
+						t && t->target.get() ? (" -> " + t->target->blueprint->name + " " + std::to_string(t->target->id) + (t->target->getParent() == f ? " (its own member)" : "")).c_str() : "",
+						dest.x, dest.z, (int)f->movementController.isMoving(), members, walking, ordered);
+				}
+			}
+		}
 		if (server.timeManager.currentTime >= nextPrint) {
 			int moving = 0;
 			for (const auto& [id, o] : server.idmap) {

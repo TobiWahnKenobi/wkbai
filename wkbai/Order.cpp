@@ -445,6 +445,11 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 {
 	if (gameobj->flags & CommonGameObject::fTerminated)
 		return nullptr;
+	// a formation given an order on its own member (Follow, Guard, Attack: a right-click inside it)
+	// went round in circles after the member it carried along (the play test's FormationBug1
+	// save, 2026-11-19): refused
+	if (target && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && target->getParent() == gameobj)
+		return nullptr;
 	// Improved formations: a ranged member of a formation sent to fight with the melee "Attack" (the
 	// Formation Army's "Attack Victims", a mixed formation charging) takes its own attack's order
 	// instead (its DEFAULT_ATTACK_COMMAND's: Fire Arrow, Fire Bullet), so it shoots rather than
