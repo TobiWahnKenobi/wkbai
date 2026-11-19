@@ -40,6 +40,7 @@ public:
 	// whether the device can (inline ray tracing, DXC for the mask's shader)
 	static bool Supported(Diligent::IRenderDevice* device);
 	DiligentRayShadows(Diligent::IRenderDevice* device);
+	~DiligentRayShadows();
 
 	// a material group; alpha-tested ones also with their texture and per triangle its corners'
 	// UVs (6 floats), filled before the mesh's first structure is built
@@ -52,10 +53,25 @@ public:
 	// a mesh's structure: key (the mesh, or the animation and key frame), its positions (float3,
 	// from the byte offset), 16-bit indices per group relative to the group's first vertex
 	// animated: an animation's key frame, dropped when unused for a while (evictAnimated)
+	// The structures themselves (GPU allocations, which took 25-140 ms each on the play test's
+	// save, the more the slower) are made on a worker thread and taken from the key's pool:
+	// null while the key's first one is being made (the caster then casts no shadow for a frame
+	// or two); an animation has at most POSES_PER_KEY of them, built again for new poses
 	Diligent::IBottomLevelAS* blas(Diligent::IDeviceContext* ctx, const void* key, uint32_t frame, Diligent::IBuffer* positions,
 		uint64_t positionOffset, uint32_t vertexCount, Diligent::IBuffer* indices, const std::vector<Group>& groups, bool animated = false);
 	// the structure if made already (an animated one marked as used now)
 	Diligent::IBottomLevelAS* cached(const void* key, uint32_t frame);
+	// an animated pose's structure from its positions (float3 per vertex, in the mesh's order):
+	// copied into one shared buffer (none made per pose), built into a structure of the key's
+	// pool (a spare one, else its pose unused longest, at most POSES_PER_KEY); null: none free
+	Diligent::IBottomLevelAS* pose(Diligent::IDeviceContext* ctx, const void* key, uint32_t frame, const float* positions,
+		uint32_t vertexCount, Diligent::IBuffer* indices, const std::vector<Group>& groups);
+	// whether pose would find a structure for key now (else one is asked of the worker)
+	bool poseSlot(const void* key, const std::vector<Group>& groups);
+	// the cached pose of key nearest to frame, at most range away (marked as used), or null: a
+	// stand-in while frame's own pose waits for a structure or the frame's allowance
+	Diligent::IBottomLevelAS* cachedNear(const void* key, uint32_t frame, uint32_t range);
+	static constexpr int POSES_PER_KEY = 16;
 
 	// The terrain as a caster too (hills shading the valleys): its height grid, two triangles per
 	// tile, built again when version changes (the terrain renderer's heights). The terrain
@@ -66,9 +82,14 @@ public:
 	// null: no terrain.
 	void setTerrain(Diligent::IDeviceContext* ctx, const Terrain* terrain, uint64_t version);
 
-	// (and the animated structures unused for ANIMATED_KEEP frames dropped)
+	// (and the animated structures unused for ANIMATED_KEEP frames back into their pool; a
+	// pool whose animation went unused that long freed, at most MAX_FREES_PER_FRAME a frame;
+	// the worker's new structures taken in)
 	void beginFrame();
 	static constexpr uint64_t ANIMATED_KEEP = 600;
+	static constexpr int MAX_FREES_PER_FRAME = 8;
+	// a pose's structure is built again for another only once no frame in flight can use it
+	static constexpr uint64_t IN_FLIGHT = 8;
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
 	// the frame's top-level structure from the casters added
@@ -102,6 +123,9 @@ public:
 	bool usable() const { return ok; } // the mask's shader and pipeline were made
 	size_t blasCount() const { return blases.size(); }
 	size_t instanceCount() const { return lastInstanceCount; }
+	// this frame's work (the hitch report: RT structures over 30 ms)
+	struct FrameStats { int created = 0, evicted = 0, terrain = 0, tlasGrown = 0; double createMs = 0, evictMs = 0, terrainMs = 0, tlasMs = 0; };
+	FrameStats stats;
 
 private:
 	Diligent::IRenderDevice* device;
@@ -115,6 +139,27 @@ private:
 	std::map<const void*, uint32_t> geometryBases; // by the mesh's group list
 	std::map<Diligent::IBottomLevelAS*, uint32_t> blasGeometryBase;
 	std::map<std::pair<const void*, uint32_t>, uint64_t> animatedLastUse;
+	// per key its pool: structures not in use (made by the worker, or dropped poses: the same
+	// geometries' sizes), how many it has in all (built, spare, being made), whether one is
+	// being made, its last use
+	struct Pool {
+		std::vector<Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS>> spare;
+		int owned = 0;
+		bool pending = false;
+		uint64_t lastUse = 0;
+	};
+	std::map<const void*, Pool> pools;
+	struct Maker; // the worker thread
+	Maker* maker = nullptr;
+	// a structure for key from its pool (stolen from its pose unused longest when at the
+	// limit), or null and one asked of the worker
+	Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS> take(const void* key, const std::vector<Group>& groups, bool animated, bool peek = false);
+	void request(const void* key, Pool& pool, const std::vector<Group>& groups);
+	// the poses' positions, this frame's one after another (from the start again each frame:
+	// the GPU copies and builds in order)
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> poseBuffer;
+	uint64_t poseOffset = 0, poseFrame = ~0ull;
+	int terrainW = -1, terrainH = -1;
 	uint64_t frameCounter = 0;
 	std::vector<uint32_t> geometryRecords; // pairs
 	std::vector<float> alphaUVs;

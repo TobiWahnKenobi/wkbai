@@ -1507,8 +1507,17 @@ struct DiligentRenderer : DiligentGfx
 			// frame; the allocation then came back empty and CopyDescriptorsSimple read address 0
 			// in CommitRootTables (2026-11-14). 131072 descriptors take about 4 MB; D3D12 allows a
 			// million. (The sampler heap stays: static + dynamic must not pass 2048.)
+			// (dynamic part 262144 since the AI play test of 2026-11-16: the same crash after two
+			// hours, more batches drawn per pass; the scene renderer now also commits its
+			// environment binding once per pass. 327680 descriptors take about 10 MB)
 			eci.GPUDescriptorHeapSize[0] = 65536;
-			eci.GPUDescriptorHeapDynamicSize[0] = 65536;
+			eci.GPUDescriptorHeapDynamicSize[0] = 262144;
+			// The upload pages (UpdateBuffer, Map DISCARD): 16 of 4 MB made up front, not one of
+			// 1 MB in the middle of a frame when the frame's uploads (ray-traced poses, the
+			// top-level structure's instances) outgrow the pool, each a GPU allocation of tens
+			// of milliseconds on the play test's machine (2026-11-16)
+			eci.DynamicHeapPageSize = 4 << 20;
+			eci.NumDynamicHeapPagesToReserve = 16;
 			factory->CreateDeviceAndContextsD3D12(eci, &device, contexts);
 			ctx.Attach(contexts[0]);
 			if (!device)

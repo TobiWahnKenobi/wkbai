@@ -8,10 +8,16 @@
 #include "../util/util.h"
 #include "../terrain.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <string>
+#include <thread>
 
 using namespace Diligent;
 
@@ -267,8 +273,61 @@ bool DiligentRayShadows::Supported(IRenderDevice* device)
 	return info.Features.RayTracing == DEVICE_FEATURE_STATE_ENABLED && (rt.CapFlags & RAY_TRACING_CAP_FLAG_INLINE_RAY_TRACING) != 0;
 }
 
+// The worker thread making the structures (the GPU allocations, IRenderDevice being free-threaded)
+struct DiligentRayShadows::Maker {
+	struct Job {
+		const void* key;
+		std::vector<std::string> names;
+		std::vector<BLASTriangleDesc> descs;
+	};
+	IRenderDevice* device;
+	std::mutex mutex;
+	std::condition_variable wake;
+	std::deque<Job> jobs;
+	std::vector<std::pair<const void*, RefCntAutoPtr<IBottomLevelAS>>> made;
+	bool quit = false;
+	std::thread thread;
+
+	explicit Maker(IRenderDevice* d) : device(d), thread([this] { run(); }) {}
+	~Maker()
+	{
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			quit = true;
+		}
+		wake.notify_all();
+		thread.join();
+	}
+	void run()
+	{
+		for (;;) {
+			Job job;
+			{
+				std::unique_lock<std::mutex> lock(mutex);
+				wake.wait(lock, [this] { return quit || !jobs.empty(); });
+				if (quit)
+					return;
+				job = std::move(jobs.front());
+				jobs.pop_front();
+			}
+			for (size_t i = 0; i < job.descs.size(); i++)
+				job.descs[i].GeometryName = job.names[i].c_str();
+			BottomLevelASDesc desc;
+			desc.Name = "Shadow caster";
+			desc.pTriangles = job.descs.data();
+			desc.TriangleCount = (Uint32)job.descs.size();
+			desc.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE;
+			RefCntAutoPtr<IBottomLevelAS> blas;
+			device->CreateBLAS(desc, &blas);
+			std::lock_guard<std::mutex> lock(mutex);
+			made.emplace_back(job.key, std::move(blas));
+		}
+	}
+};
+
 DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 {
+	maker = new Maker(device);
 	BufferDesc cb;
 	cb.Name = "Ray-traced shadows";
 	cb.Size = 112;
@@ -386,22 +445,149 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 	printf("Ray-traced shadows: %s\n", ok ? "ready" : "could not create the pipeline: off");
 }
 
+static double MsSince(std::chrono::steady_clock::time_point t0)
+{
+	return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+
 void DiligentRayShadows::beginFrame()
 {
+	stats = {};
+	const auto t0 = std::chrono::steady_clock::now();
 	instances.clear();
 	frameCounter++;
+	// the worker's new structures into their pools
+	{
+		std::vector<std::pair<const void*, RefCntAutoPtr<IBottomLevelAS>>> made;
+		{
+			std::lock_guard<std::mutex> lock(maker->mutex);
+			made.swap(maker->made);
+		}
+		for (auto& m : made) {
+			Pool& pool = pools[m.first];
+			pool.pending = false;
+			if (m.second)
+				pool.spare.push_back(std::move(m.second));
+			else
+				pool.owned--; // (could not be made: asked again when next wanted)
+		}
+	}
+	// the poses unused for a while back into their pools (their structures kept for the
+	// animation's next poses: no GPU allocation freed or made)
 	for (auto it = animatedLastUse.begin(); it != animatedLastUse.end(); ) {
 		if (frameCounter - it->second > ANIMATED_KEEP) {
 			auto b = blases.find(it->first);
 			if (b != blases.end()) {
 				blasGeometryBase.erase(b->second.RawPtr());
+				Pool& pool = pools[it->first.first];
+				if (b->second)
+					pool.spare.push_back(std::move(b->second));
+				else
+					pool.owned--;
 				blases.erase(b);
 			}
 			it = animatedLastUse.erase(it);
+			stats.evicted++;
 		}
 		else
 			++it;
 	}
+	// the pools of the animations unused that long: their spare structures freed, a few a frame
+	// (a burst of frees is a hitch too)
+	if (frameCounter % 30 == 0) {
+		int freed = 0;
+		for (auto& [key, pool] : pools) {
+			if (frameCounter - pool.lastUse <= ANIMATED_KEEP || pool.spare.empty())
+				continue;
+			while (!pool.spare.empty() && freed < MAX_FREES_PER_FRAME) {
+				pool.spare.pop_back();
+				pool.owned--;
+				freed++;
+			}
+			if (freed >= MAX_FREES_PER_FRAME)
+				break;
+		}
+	}
+	stats.evictMs = MsSince(t0);
+}
+
+DiligentRayShadows::~DiligentRayShadows()
+{
+	delete maker;
+}
+
+void DiligentRayShadows::request(const void* key, Pool& pool, const std::vector<Group>& groups)
+{
+	if (pool.pending)
+		return;
+	Maker::Job job;
+	job.key = key;
+	for (size_t g = 0; g < groups.size(); g++) {
+		const Group& gr = groups[g];
+		if (gr.indexCount < 3 || gr.vertexCount == 0)
+			continue;
+		job.names.push_back("g" + std::to_string(g));
+		BLASTriangleDesc d;
+		d.MaxVertexCount = gr.vertexCount;
+		d.VertexValueType = VT_FLOAT32;
+		d.VertexComponentCount = 3;
+		d.MaxPrimitiveCount = gr.indexCount / 3;
+		d.IndexType = VT_UINT16;
+		job.descs.push_back(d);
+	}
+	if (job.descs.empty())
+		return;
+	pool.pending = true;
+	pool.owned++;
+	{
+		std::lock_guard<std::mutex> lock(maker->mutex);
+		maker->jobs.push_back(std::move(job));
+	}
+	maker->wake.notify_one();
+}
+
+RefCntAutoPtr<IBottomLevelAS> DiligentRayShadows::take(const void* key, const std::vector<Group>& groups, bool animated, bool peek)
+{
+	Pool& pool = pools[key];
+	pool.lastUse = frameCounter;
+	RefCntAutoPtr<IBottomLevelAS> got;
+	if (!pool.spare.empty()) {
+		if (peek)
+			return pool.spare.back();
+		got = std::move(pool.spare.back());
+		pool.spare.pop_back();
+		// (one more made ahead while the animation's pool may grow)
+		if (animated && pool.spare.empty() && pool.owned < POSES_PER_KEY)
+			request(key, pool, groups);
+		return got;
+	}
+	if (!animated || pool.owned < POSES_PER_KEY) {
+		request(key, pool, groups);
+		return got;
+	}
+	// at the limit: the animation's pose unused longest, if no frame in flight can still use it
+	auto first = animatedLastUse.lower_bound({ key, 0u });
+	auto oldest = animatedLastUse.end();
+	for (auto it = first; it != animatedLastUse.end() && it->first.first == key; ++it)
+		if (oldest == animatedLastUse.end() || it->second < oldest->second)
+			oldest = it;
+	if (oldest == animatedLastUse.end() || oldest->second + IN_FLIGHT > frameCounter)
+		return got;
+	auto b = blases.find(oldest->first);
+	if (b != blases.end()) {
+		if (peek)
+			return b->second;
+		got = std::move(b->second);
+		blasGeometryBase.erase(got.RawPtr());
+		blases.erase(b);
+	}
+	animatedLastUse.erase(oldest);
+	return got;
+}
+
+bool DiligentRayShadows::poseSlot(const void* key, const std::vector<Group>& groups)
+{
+	return take(key, groups, true, true) != nullptr;
 }
 
 IBottomLevelAS* DiligentRayShadows::cached(const void* key, uint32_t frame)
@@ -410,19 +596,76 @@ IBottomLevelAS* DiligentRayShadows::cached(const void* key, uint32_t frame)
 	if (it == blases.end() || !it->second)
 		return nullptr;
 	auto used = animatedLastUse.find({ key, frame });
-	if (used != animatedLastUse.end())
+	if (used != animatedLastUse.end()) {
 		used->second = frameCounter;
+		auto pool = pools.find(key);
+		if (pool != pools.end())
+			pool->second.lastUse = frameCounter;
+	}
 	return it->second;
+}
+
+IBottomLevelAS* DiligentRayShadows::cachedNear(const void* key, uint32_t frame, uint32_t range)
+{
+	// (the key's poses are next to each other in the map, by pose)
+	auto after = blases.lower_bound({ key, frame });
+	uint32_t best = ~0u, bestDistance = ~0u;
+	if (after != blases.end() && after->first.first == key && after->second && after->first.second - frame <= range)
+		best = after->first.second, bestDistance = after->first.second - frame;
+	for (auto it = after; it != blases.begin(); ) {
+		--it;
+		if (it->first.first != key)
+			break;
+		if (it->second) {
+			if (frame - it->first.second <= range && frame - it->first.second < bestDistance)
+				best = it->first.second;
+			break;
+		}
+	}
+	return best != ~0u ? cached(key, best) : nullptr;
+}
+
+IBottomLevelAS* DiligentRayShadows::pose(IDeviceContext* ctx, const void* key, uint32_t frame, const float* positions,
+	uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups)
+{
+	if (IBottomLevelAS* b = cached(key, frame))
+		return b;
+	if (frameCounter != poseFrame) {
+		poseFrame = frameCounter;
+		poseOffset = 0;
+	}
+	const uint64_t bytes = std::max<uint64_t>((uint64_t)vertexCount * 12, 12);
+	const uint64_t start = (poseOffset + 255) & ~255ull;
+	if (!poseBuffer || start + bytes > poseBuffer->GetDesc().Size) {
+		// (the old one is freed once the GPU has done with this frame's copies into it)
+		BufferDesc pd;
+		pd.Name = "RT poses";
+		pd.Size = std::max<uint64_t>({ bytes * 4, poseBuffer ? poseBuffer->GetDesc().Size * 2 : 0, 4ull << 20 });
+		pd.BindFlags = BIND_RAY_TRACING;
+		pd.Usage = USAGE_DEFAULT;
+		poseBuffer.Release();
+		device->CreateBuffer(pd, nullptr, &poseBuffer);
+		if (!poseBuffer)
+			return nullptr;
+		poseOffset = 0;
+	}
+	const uint64_t offset = (poseOffset + 255) & ~255ull;
+	ctx->UpdateBuffer(poseBuffer, offset, bytes, positions, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	poseOffset = offset + bytes;
+	return blas(ctx, key, frame, poseBuffer, offset, vertexCount, indices, groups, true);
 }
 
 IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, uint32_t frame, IBuffer* positions,
 	uint64_t positionOffset, uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups, bool animated)
 {
-	if (animated)
-		animatedLastUse[{ key, frame }] = frameCounter;
-	auto& slot = blases[{ key, frame }];
-	if (slot)
-		return slot;
+	{
+		auto it = blases.find({ key, frame });
+		if (it != blases.end() && it->second) {
+			if (animated)
+				animatedLastUse[{ key, frame }] = frameCounter;
+			return it->second;
+		}
+	}
 	// the mesh's geometries for the alpha test, once per mesh (all its key frames share them)
 	auto base = geometryBases.find(&groups);
 	if (base == geometryBases.end()) {
@@ -448,6 +691,11 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 		alphaDirty = true;
 	}
 	const uint32_t geometryBase = base->second;
+	RefCntAutoPtr<IBottomLevelAS> slot = take(key, groups, animated);
+	if (!slot)
+		return nullptr;
+	const auto t0 = std::chrono::steady_clock::now();
+	struct Done { FrameStats& s; std::chrono::steady_clock::time_point t0; ~Done() { s.created++; s.createMs += MsSince(t0); } } done{ stats, t0 };
 	std::vector<BLASTriangleDesc> descs;
 	std::vector<BLASBuildTriangleData> data;
 	std::vector<std::string> geometryNames;
@@ -483,14 +731,6 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 	}
 	if (descs.empty())
 		return nullptr;
-	BottomLevelASDesc desc;
-	desc.Name = "Shadow caster";
-	desc.pTriangles = descs.data();
-	desc.TriangleCount = (Uint32)descs.size();
-	desc.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE;
-	device->CreateBLAS(desc, &slot);
-	if (!slot)
-		return nullptr;
 	const Uint64 need = slot->GetScratchBufferSizes().Build;
 	if (!scratch || scratch->GetDesc().Size < need) {
 		BufferDesc sd;
@@ -510,7 +750,11 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 	ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
 	ctx->BuildBLAS(ba);
 	blasGeometryBase[slot.RawPtr()] = geometryBase;
-	return slot;
+	if (animated)
+		animatedLastUse[{ key, frame }] = frameCounter;
+	auto& stored = blases[{ key, frame }];
+	stored = std::move(slot);
+	return stored;
 }
 
 void DiligentRayShadows::add(IBottomLevelAS* b, const Matrix& transform)
@@ -521,6 +765,8 @@ void DiligentRayShadows::add(IBottomLevelAS* b, const Matrix& transform)
 
 void DiligentRayShadows::build(IDeviceContext* ctx)
 {
+	const auto t0 = std::chrono::steady_clock::now();
+	struct Done { FrameStats& s; std::chrono::steady_clock::time_point t0; ~Done() { s.tlasMs += MsSince(t0); } } done{ stats, t0 };
 	lastInstanceCount = instances.size();
 	built = false;
 	const bool withTerrain = terrainBlas != nullptr;
@@ -529,6 +775,7 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 	const Uint32 count = (Uint32)instances.size() + (withTerrain ? 1 : 0);
 	if (count > tlasCapacity) {
 		tlasCapacity = std::max<Uint32>(count * 2, 1024);
+		stats.tlasGrown++;
 		TopLevelASDesc td;
 		td.Name = "Shadow casters";
 		td.MaxInstanceCount = tlasCapacity;
@@ -601,9 +848,16 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 	}
 	if (terrain == terrainKey && version == terrainVersion && terrainBlas)
 		return;
+	// only the heights changed (a building levelled its ground): the positions copied into the
+	// buffer, the structure built again in place (none of the allocations, nor the indices)
+	const bool inPlace = terrain == terrainKey && terrainBlas && terrainVertices && terrainIndices
+		&& terrain->width == terrainW && terrain->height == terrainH;
+	const auto t0 = std::chrono::steady_clock::now();
+	struct Done { FrameStats& s; std::chrono::steady_clock::time_point t0; ~Done() { s.terrain++; s.terrainMs += MsSince(t0); } } done{ stats, t0 };
 	terrainKey = terrain;
 	terrainVersion = version;
-	terrainBlas.Release();
+	if (!inPlace)
+		terrainBlas.Release();
 	// the vertices as the terrain renderer places them: (x - edge, z - edge) tiles of 5 units
 	const int w = terrain->width, h = terrain->height;
 	const uint32_t vertexCount = (uint32_t)(w + 1) * (h + 1);
@@ -615,6 +869,45 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 			p[1] = terrain->getVertex(x, z);
 			p[2] = (z - terrain->edge) * 5.0f;
 		}
+	const uint32_t primitives = (uint32_t)w * h * 2;
+	auto buildTerrain = [&]() {
+		const Uint64 need = terrainBlas->GetScratchBufferSizes().Build;
+		if (!scratch || scratch->GetDesc().Size < need) {
+			BufferDesc sd;
+			sd.Name = "BLAS scratch";
+			sd.Size = std::max<Uint64>(need, 1 << 20);
+			sd.BindFlags = BIND_RAY_TRACING;
+			scratch.Release();
+			device->CreateBuffer(sd, nullptr, &scratch);
+		}
+		BLASBuildTriangleData b;
+		b.GeometryName = "terrain";
+		b.pVertexBuffer = terrainVertices;
+		b.VertexStride = 12;
+		b.VertexCount = vertexCount;
+		b.VertexValueType = VT_FLOAT32;
+		b.VertexComponentCount = 3;
+		b.PrimitiveCount = primitives;
+		b.pIndexBuffer = terrainIndices;
+		b.IndexType = VT_UINT32;
+		b.Flags = RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+		BuildBLASAttribs ba;
+		ba.pBLAS = terrainBlas;
+		ba.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+		ba.GeometryTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+		ba.pTriangleData = &b;
+		ba.TriangleDataCount = 1;
+		ba.pScratchBuffer = scratch;
+		ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+		ctx->BuildBLAS(ba);
+	};
+	if (inPlace) {
+		ctx->UpdateBuffer(terrainVertices, 0, positions.size() * 4, positions.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		buildTerrain();
+		return;
+	}
+	terrainW = w;
+	terrainH = h;
 	// per tile its corners 0 (x, z), 1 (x + 1, z), 2 (x + 1, z + 1), 3 (x, z + 1) as the terrain
 	// renderer's 0 3 1, 1 3 2: clockwise seen from above, so the upper side is the front
 	std::vector<uint32_t> indices;
@@ -625,18 +918,19 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 			for (uint32_t c : { c0, c3, c1, c1, c3, c2 })
 				indices.push_back(c);
 		}
-	auto make = [&](const char* name, const void* data, uint64_t bytes, RefCntAutoPtr<IBuffer>& buffer) {
+	auto make = [&](const char* name, const void* data, uint64_t bytes, RefCntAutoPtr<IBuffer>& buffer, USAGE usage) {
 		BufferDesc bd;
 		bd.Name = name;
 		bd.Size = bytes;
 		bd.BindFlags = BIND_RAY_TRACING;
-		bd.Usage = USAGE_IMMUTABLE;
+		bd.Usage = usage;
 		BufferData init{ data, bytes };
 		buffer.Release();
 		device->CreateBuffer(bd, &init, &buffer);
 	};
-	make("Ray tracing: terrain vertices", positions.data(), positions.size() * 4, terrainVertices);
-	make("Ray tracing: terrain indices", indices.data(), indices.size() * 4, terrainIndices);
+	// (the vertices updatable: the heights change in play)
+	make("Ray tracing: terrain vertices", positions.data(), positions.size() * 4, terrainVertices, USAGE_DEFAULT);
+	make("Ray tracing: terrain indices", indices.data(), indices.size() * 4, terrainIndices, USAGE_IMMUTABLE);
 	if (!terrainVertices || !terrainIndices || indices.empty())
 		return;
 	BLASTriangleDesc d;
@@ -654,35 +948,7 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 	device->CreateBLAS(desc, &terrainBlas);
 	if (!terrainBlas)
 		return;
-	const Uint64 need = terrainBlas->GetScratchBufferSizes().Build;
-	if (!scratch || scratch->GetDesc().Size < need) {
-		BufferDesc sd;
-		sd.Name = "BLAS scratch";
-		sd.Size = std::max<Uint64>(need, 1 << 20);
-		sd.BindFlags = BIND_RAY_TRACING;
-		scratch.Release();
-		device->CreateBuffer(sd, nullptr, &scratch);
-	}
-	BLASBuildTriangleData b;
-	b.GeometryName = d.GeometryName;
-	b.pVertexBuffer = terrainVertices;
-	b.VertexStride = 12;
-	b.VertexCount = vertexCount;
-	b.VertexValueType = VT_FLOAT32;
-	b.VertexComponentCount = 3;
-	b.PrimitiveCount = d.MaxPrimitiveCount;
-	b.pIndexBuffer = terrainIndices;
-	b.IndexType = VT_UINT32;
-	b.Flags = RAYTRACING_GEOMETRY_FLAG_OPAQUE;
-	BuildBLASAttribs ba;
-	ba.pBLAS = terrainBlas;
-	ba.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
-	ba.GeometryTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
-	ba.pTriangleData = &b;
-	ba.TriangleDataCount = 1;
-	ba.pScratchBuffer = scratch;
-	ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
-	ctx->BuildBLAS(ba);
+	buildTerrain();
 	printf("Ray-traced shadows: terrain %d x %d tiles\n", w, h);
 }
 
