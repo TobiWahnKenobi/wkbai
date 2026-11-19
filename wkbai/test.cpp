@@ -11570,8 +11570,8 @@ void Test_FireQuality()
 		const float first = FireFx::Flicker(0.0f, 5);
 		for (int i = 0; i < 2000; i++) {
 			const float f = FireFx::Flicker(i * 0.0137f, 5);
-			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
-			varies |= std::abs(f - first) > 0.1f;
+			inRange &= f >= 0.45f && f <= 1.55f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.3f;
 		}
 		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
 	}
@@ -11670,7 +11670,8 @@ void Test_FireQuality()
 		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
 		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
 		if (level == FireFx::LOW)
-			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+			// the flames and the standing fire's smoke, no glow nor shimmer
+			check("Low: flames and smoke", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] >= 4 && kinds[3] == 0 && ordered && deterministic);
 		else
 			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
 			// the standing fire only
