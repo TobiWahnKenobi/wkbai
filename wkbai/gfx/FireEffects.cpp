@@ -233,13 +233,12 @@ float4 Flame(FIRE_OUTPUT i)
 	// the noise in the world (across the screen and up), about three cells across a flame:
 	// the flames of one fire move as one; it rises
 	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(size * 0.3, 0.05);
-	// (rising slowly, churning more slowly still: a fire's tongues swell and fade over seconds)
-	q.y -= t * 0.12;
+	q.y -= t * 1.1;
 	q.x += seed * 0.37;
 	float n;
 	if (Params.y >= 2) {
 		// High: domain-warped (the noise displaced by noise: tongues that curl and split)
-		float2 warp = float2(Fbm(q * 0.55 + float2(0, t * 0.05), 2), Fbm(q * 0.55 + float2(5.2, 1.3 + t * 0.05), 2));
+		float2 warp = float2(Fbm(q * 0.55 + float2(0, t * 0.4), 2), Fbm(q * 0.55 + float2(5.2, 1.3 + t * 0.4), 2));
 		n = Fbm(q + (warp - 0.5) * 0.9, 4);
 		// (four octaves average out: their contrast back to two's, else the flames merge into sheets)
 		n = saturate(0.5 + (n - 0.5) * 1.45);
@@ -302,7 +301,7 @@ float4 Shimmer(FIRE_OUTPUT i)
 	if (m <= 0.001)
 		discard;
 	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(i.More.y * 0.12, 0.05);
-	q.y -= Params.x * 0.4;
+	q.y -= Params.x * 1.8;
 	float2 d = float2(Noise(q), Noise(q + float2(7.7, 3.1))) - 0.5;
 	float2 uv = i.Pos.xy * float2(CamRight.w, CamUp.w) + d * m * 0.012 * saturate(60 / max(i.ViewZ, 1));
 	float3 behind = sceneTexture.SampleLevel(sLinear, uv, 0).rgb;
