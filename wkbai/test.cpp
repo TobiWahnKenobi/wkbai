@@ -11219,6 +11219,65 @@ void Test_MixedFormation()
 	check(merged && characters(merged) == 18 && characters(formation) == 0, what);
 	for (int i = 0; i < 40; i++)
 		StepServer(server, 1);
+	// Join Formation (a right-click of a single unit on a member of the formation): the unit in it,
+	// the formation kept (the play test of 2026-11-19: it was disbanded)
+	const int join = gs->commands.names.getIndex("Join Formation");
+	if (merged && join >= 0) {
+		ServerGameObject* joiner = server.spawnObject(spearBp, player, merged->position + Vector3(10, 0, 10), Vector3(0, 0, 0));
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		if (joiner && member) {
+			gs->commands[join].execute(joiner, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 60; i++)
+				StepServer(server, 1);
+			snprintf(what, sizeof(what), "Join Formation: the unit's controller %s, the formation %s with %d characters (19 wanted)",
+				joiner->getParent() ? joiner->getParent()->blueprint->getFullName().c_str() : "-", merged->deleted ? "gone" : "there", characters(merged));
+			check(joiner->getParent() == merged && !merged->deleted && characters(merged) == 19, what);
+			loose.push_back(joiner);
+		}
+		else
+			check(false, "a unit and a member for Join Formation");
+	}
+	else
+		check(false, "the Join Formation command");
+	// a formation joining another (its member right-clicking a member of the other, the selection
+	// being its formation): the script disbands it and hands its members to the other
+	if (merged && join >= 0) {
+		std::vector<ServerGameObject*> eight;
+		for (int i = 0; i < 8; i++)
+			if (ServerGameObject* u = server.spawnObject(spearBp, player, merged->position + Vector3(20.0f + (i % 4) * 2.0f, 0, 20.0f + (i / 4) * 2.0f), Vector3(0, 0, 0)))
+				eight.push_back(u);
+		ServerGameObject* other = CreateFormationFrom(server, player, eight);
+		for (int i = 0; i < 40; i++)
+			StepServer(server, 1);
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		if (other && member) {
+			gs->commands[join].execute(other, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 60; i++)
+				StepServer(server, 1);
+			int in = 0;
+			std::string where;
+			for (ServerGameObject* u : eight) {
+				if (u->getParent() == merged)
+					in++;
+				else if (where.empty())
+					where = u->getParent() ? u->getParent()->blueprint->getFullName() : std::string("-");
+			}
+			snprintf(what, sizeof(what), "a formation joining another: %d of 8 in it (another under %s), %d characters in it (27 wanted)", in,
+				where.empty() ? "-" : where.c_str(), characters(merged));
+			check(in == 8 && characters(merged) == 27, what);
+			loose.insert(loose.end(), eight.begin(), eight.end());
+		}
+		else
+			check(false, "a second formation for the join");
+	}
 	// Disband (the formation's button): its members back under the player
 	const int disband = gs->commands.names.getIndex("Disband");
 	if (merged && disband >= 0) {
@@ -11231,7 +11290,7 @@ void Test_MixedFormation()
 				if (!u->deleted && u->getParent() == merged)
 					still++;
 		Order* order = merged->orderConfig.getCurrentOrder();
-		snprintf(what, sizeof(what), "Disband: %d of 18 still in the formation (its order: %s)", still,
+		snprintf(what, sizeof(what), "Disband: %d of 27 still in the formation (its order: %s)", still,
 			order ? gs->orders.getString(order->blueprint).c_str() : "none");
 		check(still == 0, what);
 	}
@@ -11672,6 +11731,39 @@ void Test_RunSave()
 			const double real = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 			printf("RUNSAVE t=%.0f real %.0f ms per game second, steps over 50 ms %d, characters moving %d\n", server.timeManager.currentTime - start,
 				real / 10.0, slow, moving);
+			// ("humanDump": true) the Human Player's characters with an enemy character within 40 m:
+			// controller, order, attack at will, the nearest enemy
+			if (cfg.value("humanDump", false)) {
+				const GameSet* gs = server.gameSet.get();
+				const int agg = gs->items.names.getIndex("Become Aggressive");
+				const int enemyStatus = gs->diplomaticStatuses.names.getIndex("Enemy");
+				for (const auto& [id, co] : server.idmap) {
+					ServerGameObject* u = (ServerGameObject*)co;
+					if (!u || u->deleted || u->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !u->getPlayer() || u->getPlayer()->blueprint->name != "Human Player")
+						continue;
+					ServerGameObject* nearest = nullptr;
+					float nd = 40.0f;
+					for (const auto& [id2, co2] : server.idmap) {
+						ServerGameObject* e = (ServerGameObject*)co2;
+						if (!e || e->deleted || e->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !e->getPlayer()
+							|| server.getDiplomaticStatus(e->getPlayer(), u->getPlayer()) != enemyStatus)
+							continue;
+						const float d = (e->position - u->position).len2xz();
+						if (d < nd) {
+							nd = d;
+							nearest = e;
+						}
+					}
+					if (!nearest)
+						continue;
+					Order* o = u->orderConfig.getCurrentOrder();
+					ServerGameObject* p = u->getParent();
+					printf("RUNSAVE   human %s %u: under %s %u, order %s, at will %.0f, sees %zu, enemy %s %u at %.1f m%s\n", u->blueprint->name.c_str(), u->id,
+						p ? p->blueprint->getFullName().c_str() : "-", p ? p->id : 0, o ? gs->orders.getString(o->blueprint).c_str() : "-",
+						agg >= 0 ? u->getItem(agg) : -1.0f, u->seenObjects.size(), nearest->blueprint->name.c_str(), nearest->id, nd,
+						nearest->movementController.isMoving() ? " moving" : "");
+				}
+			}
 			fflush(stdout);
 			t0 = std::chrono::steady_clock::now();
 			slow = 0;
