@@ -79,6 +79,9 @@ namespace FireFx {
 		Vector3 position;  // the particle's
 		Vector3 emitter;   // where it started (a standing fire's emitter)
 		float size;        // the original sprite's size (its Scale_Gradient)
+		float steady;      // and the fire's, for its smoke, glow and shimmer: its system's size late in a
+		                   // particle's life, not the live particles' (their largest dying, the smoke
+		                   // jumped narrower every second)
 		float alpha;       // its colour's alpha, 0..1 (its Colour_Fn)
 		float life;        // its age over its maximum age, 0..1
 		float heat;        // DamageScale of its object

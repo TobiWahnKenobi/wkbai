@@ -560,6 +560,10 @@ void Add(const Particle& p, float now, float size, float alpha)
 	// (a fire the rain is putting out, or snow holding down: smaller and fainter, cooler)
 	const float share = ShareOf(p.objid);
 	f.size = size * ShareSize(share);
+	{
+		const auto [s1, s2, si] = const_cast<ParticleSystem*>(p.system)->Particles.Scale_Gradient.getAtTime(0.875f * p.maxAge, size);
+		f.steady = (s1 + (s2 - s1) * si) * ShareSize(share);
+	}
 	f.alpha = Saturate(alpha * ShareAlpha(share));
 	f.life = p.maxAge > 0 ? Saturate((now - p.startTime) / p.maxAge) : 0.0f;
 	f.heat = 1.0f + (DamageOf(p.objid) - 1.0f) * share;
@@ -604,7 +608,7 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			}
 			Cluster& c = clusters[it->second];
 			c.sum += f.position;
-			c.size = std::max(c.size, f.size);
+			c.size = std::max(c.size, f.steady);
 			c.alpha += f.alpha;
 			c.heat = std::max(c.heat, f.heat);
 			c.lowest = std::min(c.lowest, f.position.y);
