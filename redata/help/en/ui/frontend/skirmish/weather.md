@@ -1,6 +1,6 @@
 ---
 title: Seasons & Weather tab
-ids: [ui/frontend/skirmish/weather, ui/frontend/mphost/weather, ui/frontend/skirmish/weather/dayNight#day-and-night, ui/frontend/skirmish/weather/dayLength#day-min, ui/frontend/skirmish/weather/startHour#start-hour, ui/frontend/skirmish/weather/moonPhase#moon, ui/frontend/skirmish/weather/seasons#seasons-and-weather, ui/frontend/skirmish/weather/seasonLength#season-min, ui/frontend/skirmish/weather/startSeason#first-season, ui/frontend/skirmish/weather/tempScale#temperature, ui/frontend/skirmish/weather/weatherStability#weather-changes, ui/frontend/skirmish/weather/weatherMinChange#weather-changes, ui/frontend/skirmish/weather/weatherMaxChange#weather-changes, ui/frontend/skirmish/weather/weatherTypes#weather-that-may-come, ui/frontend/skirmish/weather/cloudWeather#clouds, ui/frontend/skirmish/weather/cloudCover#cover, ui/frontend/skirmish/weather/weatherWinter#each-seasons-weather, ui/frontend/skirmish/weather/weatherSpring#each-seasons-weather, ui/frontend/skirmish/weather/weatherSummer#each-seasons-weather, ui/frontend/skirmish/weather/weatherAutumn#each-seasons-weather, ui/frontend/skirmish/weather/peasantsSleep#peasants-sleep-at-night, ui/frontend/skirmish/weather/farmersWinter#farmers-winter-indoors, ui/frontend/skirmish/weather/cheatMode#cheat-mode, ui/frontend/skirmish/seasons-weather]
+ids: [ui/frontend/skirmish/weather, ui/frontend/mphost/weather, ui/frontend/skirmish/weather/dayNight#day-and-night, ui/frontend/skirmish/weather/dayLength#day-min, ui/frontend/skirmish/weather/startHour#start-hour, ui/frontend/skirmish/weather/moonPhase#moon, ui/frontend/skirmish/weather/seasons#seasons-and-weather, ui/frontend/skirmish/weather/seasonLength#season-min, ui/frontend/skirmish/weather/startSeason#first-season, ui/frontend/skirmish/weather/tempScale#temperature, ui/frontend/skirmish/weather/weatherStability#weather-changes, ui/frontend/skirmish/weather/weatherMinChange#weather-changes, ui/frontend/skirmish/weather/weatherMaxChange#weather-changes, ui/frontend/skirmish/weather/weatherTypes#weather-that-may-come, ui/frontend/skirmish/weather/cloudWeather#clouds, ui/frontend/skirmish/weather/cloudCover#cover, ui/frontend/skirmish/weather/weatherWinter#each-seasons-weather, ui/frontend/skirmish/weather/weatherSpring#each-seasons-weather, ui/frontend/skirmish/weather/weatherSummer#each-seasons-weather, ui/frontend/skirmish/weather/weatherAutumn#each-seasons-weather, ui/frontend/skirmish/weather/peasantsSleep#peasants-sleep-at-night, ui/frontend/skirmish/weather/farmersWinter#farmers-winter-indoors, ui/frontend/skirmish/weather/riverCurrents#river-currents, ui/frontend/skirmish/weather/cheatMode#cheat-mode, ui/frontend/skirmish/seasons-weather]
 order: 30
 ---
 
@@ -32,10 +32,10 @@ On: the year turns through spring, summer, autumn and winter, with their tempera
 
 - Units in the open suffer in the cold (marching through snow is worse) and can die of thirst in great heat. They are safe in their own or their allies' villages and manors.
 - Wet and snowy ground slows units down.
-- Lightning strikes units and sets buildings on fire.
+- Lightning strikes units and sets buildings on fire. Rain puts burning buildings out, and snow on a roof slows a fire.
 - Rivers rise in spring and freeze below zero in winter; floods damage buildings and drown units in deep water.
 
-See [seasons and weather](help:mechanic/seasons-weather) for the rules.
+See [seasons and weather](help:mechanic/seasons-weather) for the rules. The wind has a tab of its own ([Wind](wind.md)).
 
 ## Season (min)
 
@@ -89,6 +89,10 @@ With day and night on; on at first. Peasants go home to their houses, villages, 
 ## Farmers winter indoors
 
 With the seasons on; on at first. Farmers spend the winter indoors, when nothing grows.
+
+## River currents
+
+With the seasons on; on at first. Moving water carries the units in it downstream and, where it is deep or fast, hurts them. They swim to the shore. Rain and floods make the water faster. See [water, currents and swimming](help:mechanic/river-currents).
 
 ## Cheat mode
 

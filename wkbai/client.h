@@ -14,6 +14,7 @@
 #include "common.h"
 #include "util/vecmat.h"
 #include "Camera.h"
+#include "Wind.h"
 #include "scene.h"
 #include <cstdarg>
 #include "TimeManager.h"
@@ -27,6 +28,7 @@ struct NetLink;
 struct Command;
 struct Terrain;
 struct ClientInterface;
+struct FogOfWar;
 struct Client;
 struct CameraPath;
 
@@ -85,6 +87,10 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
 	// of war (everything on the map shown); off until the server says
 	bool clearFogOfWar = false;
+	// wkbai's wind as the server last sent it (NETCLIMSG_WIND; its settings in environmentSettings):
+	// windActive false: the lobby's wind is off (the fixed look from before)
+	bool windActive = false;
+	WindState wind;
 	// EXIT_TO_MAIN_MENU for this client's player (NETCLIMSG_EXIT_TO_MENU): a guest leaves the game
 	bool exitToMenu = false;
 	// the players whose game is over (NETCLIMSG_PLAYER_FINISHED, Server::finishedPlayers): 1 won,
@@ -105,6 +111,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	std::string chronicleParts;
 	// the trees and bushes a wildfire burned (their ids): drawn charred, bare of leaves
 	std::set<uint32_t> charredTrees;
+	// the burning buildings' fires the weather is putting out (NETCLIMSG_FIRE_SHARES): id, the
+	// share left (0..1); the flames drawn that much smaller (FireFx::SetShares)
+	std::unordered_map<uint32_t, float> fireShares;
 	std::map<int, std::string> hostDataParts;
 	// the host's mods for this game (NETCLIMSG_HOST_DATA 3): the session to mount, JSON; the
 	// folder its sent files went to
@@ -138,6 +147,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	size_t cameraLoopFrom = 0;
 
 	ClientInterface *cliInterface;
+	// the player's memory of the trees under the fog of war (FogOfWar, the client interface's):
+	// told before a server message changes a tree, and of new objects
+	FogOfWar* treeMemory = nullptr;
 
 	bool localServer;
 	CliGORef clientPlayer;

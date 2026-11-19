@@ -18,7 +18,7 @@ The editor can't add or remove players, so your map has the players of the map y
 
 ## 2. Name your map
 
-At the bottom of the window, type a name in **Map name**. Start it with the number of players and the word "Player", for example **2 Player Green Vale**. Skirmish then lists it as "Green Vale (2)" with two start positions ([why](saving.md#name-it-for-skirmish)).
+At the bottom of the window, type a name in **Map name**. Start it with the number of players and the word "Player", for example **2 Player Green Vale**. Skirmish then gives it two start positions ([why](saving.md#name-it-for-skirmish)).
 
 ## 3. Clear the land
 
@@ -96,18 +96,18 @@ Click **Players**. For each player, set its starting **Food**, **Wood**, **Gold*
 ## 10. Check and save
 
 1. Click **Check**. Fix what it lists in orange: a player with no units or buildings, or a start that can't be reached by land. "No problems found" means all is well.
-2. Click **Save map**. The message says "Saved 2 Player Green Vale.lvl (in Skirmish)".
+2. Click **Save map**. The message says "Saved Maps\2 Player Green Vale.wkbai (in Skirmish)".
 3. Click **Save and play** to try it at once.
 
 ## 11. Play it in Skirmish
 
 1. Leave the game and go back to the main menu.
-2. Click **Skirmish**. Your map is in the map list as "Green Vale (2)".
+2. Click **Skirmish**. With the Players filter on **All**, your map is at the end of the map list as "2 Player Green Vale".
 3. Choose it, set up the players and settings, and click **Start**.
 
-To change it again: main menu, **Editors**, **Map Editor**, your map, **Edit**. Save under the same name to replace it.
+To change it again: main menu, **Editors**, **Map Editor**, your map, **Edit**. Save under the same name to update it.
 
 ## 12. Share it
 
-- **With wkbai players:** send them the files listed under [Where the files go](saving.md#where-the-files-go).
+- **With wkbai players:** send them your map's folder, `2 Player Green Vale.wkbai` ([sharing a map](saving.md#sharing-a-map)).
 - **With players of the original game:** use [Export for the original](saving.md#export-for-the-original).

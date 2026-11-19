@@ -62,6 +62,19 @@ struct EnvironmentSettings {
 	// spring's first dawn. Off here (a save or recording without them: as before); the lobby's
 	// default is on
 	bool peasantsSleep = false, farmersWinter = false;
+	// river currents ("riverCurrents", with the seasons; ServerEnvironment.h): the water's flow
+	// drags the units in it, hurts them in deep or fast water and floods, and they swim to the
+	// shore. A game setting, the host's, the server's alone: the same for every player whatever
+	// their graphics. Off here (a save or recording without it: as before); the lobby's default
+	// is on
+	bool riverCurrents = false;
+	// the wind (Wind.h): "wind" 0 off (the fixed look from before, no effect on the game), 1 on;
+	// "windFrom" 0 random by windSeed (mostly westerly), 1-8 from the north, north-east, ... north-
+	// west; "windStrength" 0 by the weather, 1-5 calm, light, breeze, strong, gale; "windVeers" its
+	// direction turns slowly; "windEffects" it acts on the game (wildfires, wind chill);
+	// "windSeed" 1-16777215 (chosen when the game starts, QuickSkirmishMenu; 0 not chosen yet)
+	int wind = 0, windFrom = 0, windStrength = 0, windSeed = 0;
+	bool windVeers = true, windEffects = true;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
 	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it
@@ -98,6 +111,11 @@ float HistoricMoonAge(int season);
 float MoonLitFraction(float age);
 
 // What the server simulates; the clients get it every game second
+// How fast the water flows against its usual (the drawn rivers' speed, EnvironmentView::flow, and
+// the river currents', ServerEnvironment): faster as the water rises (floods) and in rain,
+// slower in a drought; 0.4 to 2
+float EnvWaterFlowFactor(float waterRise, float rain);
+
 struct EnvironmentState {
 	float time = 0.0f;          // the game time it is for
 	float dayFraction = 0.0f;   // 0 midnight, 0.5 noon

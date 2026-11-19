@@ -27,7 +27,9 @@ wkbai plays *Warrior Kings: Battles* with a new engine. The game itself, its map
 
 **The world**
 
-- [Day and night](mechanics/day-night.md) and [seasons and weather](mechanics/seasons-weather.md): snow, rain, floods, frozen rivers, lightning and wildfires; peasants who sleep at night and winter indoors ([peasants at night and in winter](mechanics/peasant-lodging.md)). All of it is off until you switch it on in the lobby.
+- [Day and night](mechanics/day-night.md) and [seasons and weather](mechanics/seasons-weather.md): snow, rain, floods, frozen rivers, lightning and wildfires; peasants who sleep at night and winter indoors ([peasants at night and in winter](mechanics/peasant-lodging.md)); rain that puts burning buildings out; [river currents](mechanics/water-and-currents.md) that carry units off and make them swim. All of it is off until you switch it on in the lobby.
+- A [wind](ui/frontend/skirmish/wind.md) that moves the clouds, rain, smoke, waves, trees and grass, fans wildfires, chills units and speeds or slows boats. It is on at first; its lobby tab switches it off.
+- The fog of war remembers the trees as you last saw them ([fog of war](mechanics/fog-of-war.md#trees)).
 
 **Playing**
 
@@ -45,6 +47,7 @@ wkbai plays *Warrior Kings: Battles* with a new engine. The game itself, its map
 **Menus and tools**
 
 - A [Mods screen](ui/frontend/mods.md) with your own load order, a [Map Editor](ui/frontend/map-editor.md), the [AI General Editor](ui/frontend/general-editor.md) and this help.
+- [A map format of its own](ui/editor/map-format.md): map folders that keep a map maker's hand edits, any number of lakes and river speeds, with tools to import the original's maps, list what can go on a map and describe a map, and a server for AI assistants that design maps.
 - [Many more options](options/index.md).
 - Multiplayer with its own network play, a local game list, passwords, spectators, joining running games and AI takeover for players who leave ([Multiplayer](mechanics/multiplayer.md)).
 

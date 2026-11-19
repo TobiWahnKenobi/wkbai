@@ -250,15 +250,15 @@ float Remap(float x, float a, float b, float c, float d)
 // billowing out in lumps (a 3D noise of a few hundred units, changing up the tower), to an anvil
 // that spreads out from about three quarters of the layer, downwind and wider the higher (several
 // times the tower across), flat under the layer's top. x: the towers, y: the anvils.
-float2 StormCellsHigh(float3 p, float h, float lod)
+float2 StormCellsHigh(float3 p, float h, float lod, float widen)
 {
 	float n = StormCell(p.xz, lod);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, p / 1900 + float3(0.31, 0.17, 0.67), max(lod - 1, 0));
 	float billow = s.g * 0.55 + s.b * 0.3 + s.a * 0.15 - 0.5;
-	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09;
+	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09 - widen;
 	float tower = saturate((n - th) / 0.05);
 	float spread = smoothstep(0.72, 0.97, h);
-	float a = StormCell(p.xz - float2(0.948683, 0.316228) * (spread * 3200), lod);
+	float a = StormCell(p.xz - CloudFront.xy * (spread * 3200), lod);
 	float anvil = saturate((a - lerp(0.645, 0.56, spread) - billow * 0.04) / 0.05) * smoothstep(0.72, 0.8, h);
 	return float2(tower, anvil);
 }
@@ -268,7 +268,7 @@ float2 StormCellsHigh(float3 p, float h, float lod)
 // units across), drifting with the wind; 0.35 to 1.5 times.
 float DensityRegions(float2 xz, float footprint)
 {
-	float2 dp = xz - float2(6, 2) * CloudScale.w;
+	float2 dp = xz - CloudDrift();
 	float r = cloudNoise.SampleLevel(cloudNoiseSampler, dp / 2600 + float2(0.43, 0.17), max(log2(footprint * 256 / 2600), 0)).a * 0.65
 		+ cloudNoise.SampleLevel(cloudNoiseSampler, dp / 900 + float2(0.29, 0.61), max(log2(footprint * 256 / 900), 0)).a * 0.35;
 	return lerp(0.35, 1.5, smoothstep(0.3, 0.72, r));
@@ -313,32 +313,61 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float cover = CloudCover(xz, lod + 1);
 	// a sheet closes up: a stratus deck is one layer of varying thickness, not broken cloud
 	cover = lerp(cover, saturate(cover * 1.3 + 0.12), stratus * smoothstep(0.5, 0.8, cShape.x));
-	float stormCore = 0, deck = 0;
-	if (storm > 0) {
-		// cumulonimbus: towers on the storm cells' cores up to the layer's top, their anvils
-		// spreading out wide under it, over a dark low deck of the ordinary cover all around
-		// (the lowest sixth of the layer: a few hundred units, as a rain's)
-		float2 cb = detailLevel >= 2 ? StormCellsHigh(float3(xz.x, p.y, xz.y), h, lod) : StormCells(xz, h, lod);
-		float anvil = detailLevel >= 2 ? cb.y : cb.y * smoothstep(0.8, 0.9, h);
-		float low = cover * (1 - smoothstep(0.1, 0.17, h));
-		cover = lerp(cover, max(max(cb.x, anvil), low), storm);
-		stormCore = cb.x * storm;
-		deck = storm * (1 - cb.x) * (1 - smoothstep(0.1, 0.2, h));
+	float stormCore = 0, deck = 0, towers = 0, towerBase = 0, dissolve = 0;
+	// a storm's weather: a dark low deck of the ordinary cover (the lowest sixth of the layer: a
+	// few hundred units, as a rain's)
+	if (storm > 0)
+		cover = lerp(cover, cover * (1 - smoothstep(0.1, 0.17, h)), storm);
+	if (CloudStorm.x > 0) {
+		// cumulonimbus: towers on the storm cells' cores, their anvils spreading out wide under
+		// the layer's top, as they stand now (StormStage: rising and swelling, or sinking and
+		// spreading flat); in the storm layer's own heights (CloudStorm.zw: they keep them while
+		// they sink back into a cumulus layer), hn the height in the tower as it stands
+		float4 st = StormStage();
+		float stand = st.y * StormRegion(storm);
+		float hs = (p.y - CloudStorm.z) / max(CloudStorm.w, 1);
+		float hn = hs / st.x;
+		if (stand > 0 && hs > -0.02 && hn < 1.05) {
+			// the swelling head while it rises: wider around its top, until the anvil takes over;
+			// the spread while it decays: wider and flatter
+			float head = CloudStorm.y > 0.5 ? exp(-pow((hn - 0.86) / 0.1, 2)) * (1 - st.z) : 0;
+			float widen = head * 0.05 + st.w * 0.05;
+			float hc = saturate(hn);
+			float2 cb = detailLevel >= 2 ? StormCellsHigh(float3(xz.x, p.y, xz.y), hc, lod, widen) : StormCells(xz, hc, lod, widen);
+			float anvil = (detailLevel >= 2 ? cb.y : cb.y * smoothstep(0.8, 0.9, hc)) * st.z;
+			// a rounded top (the cores highest), not the layer's flat cut
+			float domeTop = lerp(0.8, 1.0, cb.x);
+			float tower = cb.x * smoothstep(domeTop, domeTop - 0.1, hn);
+			anvil *= smoothstep(1.03, 0.97, hn);
+			towers = max(tower, anvil) * stand;
+			cover = max(cover, towers);
+			stormCore = tower * stand;
+			// their own flat base (the storm layer's, a 30 unit ramp)
+			towerBase = saturate(hs * CloudStorm.w / 30);
+			// melting: the towers dissolve as they sink (below: holes, wisps), more the further gone
+			if (CloudStorm.y < 0.5)
+				dissolve = st.w * saturate(towers * 3);
+		}
+		deck = storm * (1 - stormCore) * (1 - smoothstep(0.1, 0.2, h));
 	}
+	else if (storm > 0)
+		deck = storm * (1 - smoothstep(0.1, 0.2, h));
 	if (cover <= 0.002)
 		return 0;
 	// the tops: by region; a stratus sheet's level; a storm's flat, at the layer's top (the anvils)
 	float topVar = cloudNoise.SampleLevel(cloudNoiseSampler, xz * (CloudScale.x * 0.7) + float2(0.37, 0.71), lod + 1).g;
 	float top = lerp(0.5, 1.0, saturate(topVar * 1.6 - 0.3));
-	top = lerp(lerp(top, 0.85, stratus), 1.0, storm);
+	top = lerp(top, 0.85, stratus); // (a storm's towers: their own top, below)
 	// the base: a 10-40 unit ramp (not a share of the layer: a tall storm layer's base went soft),
 	// raised and lowered a little by region (a ragged base)
 	float baseH = (topVar - 0.5) * 30 / cShape.w;
-	const float topStart = lerp(top * lerp(0.45, 0.7, stratus), 0.93, storm);
+	const float topStart = top * lerp(0.45, 0.7, stratus);
 	float profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) *saturate(Remap(h, topStart, top, 1, 0));
+	const float towerProfile = towerBase * saturate(towers * 4); // (the towers' own: their base, their top in the cover)
+	profile = max(profile, towerProfile);
 	if (profile <= 0)
 		return 0;
-	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
+	float3 drift = float3(CloudDrift().x, 0, CloudDrift().y); // as the cover's base layer (CloudDrift)
 	float3 q = p - drift - float3(0, cShape.z, 0);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
 	if (detailLevel >= 1) {
@@ -347,7 +376,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		// cover low, as while clouds form, the profile before the coverage's cut narrowed every
 		// bump of the 2D cover to a point at the top: spikes going up into the sky)
 		float x = saturate(Remap(h, topStart, top - 0.08 * (top - topStart) * s.a, 0, 1));
-		profile = saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) * sqrt(saturate(1 - x * x));
+		profile = max(saturate(Remap(h, baseH, baseH + lerp(10, 40, stratus) / cShape.w, 0, 1)) * sqrt(saturate(1 - x * x)), towerProfile);
 		if (profile <= 0)
 			return 0;
 	}
@@ -358,7 +387,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		// a sheet's underside mottled at three scales (about 180, 65 and 25 units: the lumps
 		// and rolls of a real stratus deck; the billows' shape alone left it a smooth blur);
 		// the view's steps only (the light's would cost three samples more each)
-		float2 sp = p.xz - float2(6, 2) * CloudScale.w;
+		float2 sp = p.xz - CloudDrift();
 		float m = cloudNoise.SampleLevel(cloudNoiseSampler, sp / 1400 + float2(0.21, 0.47), max(log2(footprint * 256 / 1400), 0)).g * 0.5
 			+ cloudNoise.SampleLevel(cloudNoiseSampler, sp / 520 + float2(0.63, 0.12), max(log2(footprint * 256 / 520), 0)).g * 0.3
 			+ cloudNoise.SampleLevel(cloudNoiseSampler, sp / 200 + float2(0.11, 0.83), max(log2(footprint * 256 / 200), 0)).b * 0.2;
@@ -366,6 +395,10 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	}
 	shape = lerp(shape, 0.3 + 0.7 * shape, stormCore * stormCore) * profile; // the towers' middles solid
 	float c = saturate(Remap(shape, 1 - cover, 1, 0, 1)) * cover;
+	// a melting cumulonimbus dissolving (the play test's next round: it only sank and spread):
+	// holes opening in its thin parts first, by the shape's own cells, wider as it goes
+	if (dissolve > 0)
+		c = saturate(Remap(c, dissolve * (0.15 + 0.55 * (1 - s.b)), 1, 0, 1));
 	// (Medium and High: thick and thin clouds by region; a storm's towers keep theirs)
 	if (detailLevel >= 1 && c > 0)
 		c *= lerp(cRegion, 1, stormCore);
@@ -374,7 +407,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	float detailLod = log2(footprint * 32 / DETAIL_PERIOD);
 	float3 d = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.3) / DETAIL_PERIOD, max(detailLod, 0)).rgb;
 	float hf = d.r * 0.625 + d.g * 0.25 + d.b * 0.125;
-	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus);
+	float erosion = 0.4 * saturate(2 - detailLod * 0.5) * (1 - 0.6 * stratus) * (1 + 1.5 * dissolve); // (a melting tower's edges frayed into wisps)
 	if (detailLevel >= 2 && detailLod < 3.5) {
 		// High: a finer octave of billows (about 40 units) on the cumulus' tops and a storm tower's
 		// sides, and the tops' cauliflower relief cut a little deeper
@@ -382,8 +415,8 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		float fine = d2.r * 0.5 + d2.g * 0.3 + d2.b * 0.2;
 		hf = lerp(hf, fine, 0.4 * saturate(h * 2 + stormCore));
 		erosion *= lerp(1, 1.3, saturate(h * 1.5) * (1 - stratus));
-		if (detailLevel >= 4 && detailLod < 2.5) {
-			// Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
+		if (detailLevel >= 3 && detailLod < 2.5) {
+			// Very high and Ultra: a third octave (about 15 units), the small curls on the billows' edges near by
 			float3 d3 = cloudDetail.SampleLevel(cloud3DSampler, (q - drift * 0.1) / (DETAIL_PERIOD / 8), max(detailLod + 3, 0)).rgb;
 			hf = lerp(hf, d3.r * 0.5 + d3.g * 0.3 + d3.b * 0.2, 0.25 * saturate(2.5 - detailLod) * saturate(h * 2 + stormCore));
 		}
@@ -398,7 +431,7 @@ float HenyeyGreenstein(float mu, float g)
 	return (1 - g2) / (12.566371 * pow(1 + g2 - 2 * g * mu, 1.5));
 }
 
-// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Ultra detail (jittered per pixel; at most
+// The view ray through the cloud layer, 48 to 128 steps by the quality, 160 at Very high and Ultra detail (jittered per pixel; at most
 // 1800 units of it), each lit by the sun through 3 to 6 steps of cloud towards it over 108 units
 // (Beer's law with the powder term away from the sun) and
 // a strong forward scattering lobe (the silver linings), plus the sky's light from above.
@@ -430,6 +463,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		base = min(base, CloudFromShape.y);
 		top = max(top, CloudFromShape.y + CloudFromShape.z);
 	}
+	// (and the cumulonimbus as they stand, also over a cumulus layer while they sink back)
+	if (CloudStorm.x > 0) {
+		base = min(base, CloudStorm.z);
+		top = max(top, CloudStorm.z + CloudStorm.w * StormStage().x);
+	}
 	CloudAt(ro.xz);
 	if (ro.y > base)
 		return float4(0, 0, 0, 1); // above the base (zoomed out): the shadows only
@@ -441,7 +479,7 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		return beyond;
 	// at most 1800 units of the ray in the layer; a storm's 6000, so that the cumulonimbus'
 	// towers show to their anvils towards the horizon
-	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, cWeather.y));
+	float t0 = (base - ro.y) / rd.y, t1 = min((top - ro.y) / rd.y, t0 + lerp(1800, 6000, max(cWeather.y, CloudStorm.x * StormRegion(0))));
 	if (t1 <= t0 || t0 > 9000)
 		return beyond;
 	// Low: a quarter of the size, Medium: half, High and Ultra: the full size
@@ -449,10 +487,11 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 	// the detail (Low 0 to Ultra 4): Very High and Ultra light their steps through the eroded shape
 	// (the billows shade each other: relief within a cloud, not only between clouds), with a far
 	// step for the shadows of the clouds around and the sky's light occluded from above (darker
-	// bases, lit tops); Ultra a quarter more view steps and a third octave
+	// bases, lit tops), a quarter more view steps and a third octave; Ultra also the multiple
+	// scattering by the density (below; the play test of 2026-11-17: Very high is the former Ultra)
 	// (all six light steps eroded and half again as many view steps cost twice High's pass for little more)
 	const int dl = (int)SkyStarY.w;
-	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 4 ? 5 : 4) / 4;
+	const int STEPS = (q <= 0 ? 48 : q == 1 ? 64 : q == 2 ? 96 : 128) * (dl >= 3 ? 5 : 4) / 4;
 	const int LIGHT_STEPS = q + 3;
 	// towards the sun over 108 units, further the cloudier (an overcast deck's light shows its
 	// thickness: thin parts brighter, its relief)
@@ -545,7 +584,25 @@ float4 MarchClouds(float3 ro, float3 rd, float2 pixel, float3 skyThere)
 		// light scattered many times inside the cloud (the light that a single scattering misses
 		// in thick clouds: an overcast sheet is grey, not black), less absorbed and isotropic
 		// (away from the sun at dawn and dusk less of it: its orange against the sky's blue made grey)
-		energy += lerp(0.35, 0.18, away) * exp(-SIGMA * 0.2 * od);
+		float msLight = exp(-SIGMA * 0.2 * od);
+		if (dl >= 4) {
+			// Ultra: the light scattered many times by the cloud's density at the
+			// point, not one flat share (Hillaire 2020, sec. 5.5's local geometric series, with
+			// Jiaye's reduced-extinction envelope, "An Energy Budget for Local Multiple Scattering
+			// in Volumetric Clouds", 2026; written here from the formulas): the local gain
+			// G(q) = w (1 - e^-q) / (1 - w + w e^-q) of the local optical thickness q = c rho,
+			// about rho squared at the thin edges (they stay light and translucent instead of
+			// a grey haze) and saturating in the cores (their inner glow); attenuated towards the
+			// sun by exp(-(1 - w g) tau), the diffusion's reduced extinction (g 0.88 of the
+			// cloud droplets: 0.12). w and c fitted to this renderer's units rather than
+			// calibrated by the two-flux slab: w 0.75, c 3, the gain 1 at two thirds density
+			// (the flat share's brightness kept there)
+			float rho = saturate(dens / (1.6 * max(cWeather.z, 0.1)));
+			float e = exp(-3 * rho);
+			float gain = 0.75 * (1 - e) / (0.25 + 0.75 * e);
+			msLight = gain / 1.85 * exp(-SIGMA * 0.12 * od);
+		}
+		energy += lerp(0.35, 0.18, away) * msLight;
 		ambient = lerp(ambient, dot(ambient, float3(0.3, 0.59, 0.11)).xxx, 0.4 * (1 - away)) * 1.3;
 		// (away from the sun at dawn and dusk: the sky's own colour there, its pink and violet
 		// belt low and its blue higher up, at the ambient's brightness; their bases darker, their
@@ -723,7 +780,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		sunLight *= lerp(1, 1.6, duskK);
 		ambient *= lerp(1, 0.6, duskK);
 	}
-	const float2 wind = float2(0.948683, 0.316228); // as the cumulus' drift (6, 2)
+	const float2 wind = CloudFront.xy; // as the cumulus' drift (Wind.h; (6, 2) without the lobby's wind)
 	const float2 across = float2(-wind.y, wind.x);
 	float grazing = 1 / max(rd.y, 0.08); // the pixel's footprint stretched towards the horizon
 	// towards the horizon the layers are seen edge on: denser, then lost in the haze
@@ -731,7 +788,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 	{
 		float t = (1600 - ro.y) / rd.y;
 		CloudAt(ro.xz + rd.xz * t);
-		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 9;
+		float2 p = ro.xz + rd.xz * t - CloudDrift() * 1.423;
 		float fp = t * 0.0012 * grazing; // the pixel's size there
 		float2 styleShift = cHigh.w * float2(61000, 37000); // each sky its own regions
 		// the warps (the streaks' bend, the fibres' sway, the ripples' bend) and their change over
@@ -845,7 +902,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		float t = (800 - ro.y) / rd.y;
 		CloudAt(ro.xz + rd.xz * t);
 		float2 still = ro.xz + rd.xz * t; // (where the lenticulars stand)
-		float2 p = still - wind * CloudScale.w * 7;
+		float2 p = still - CloudDrift() * 1.107;
 		float fp = t * 0.0012 * grazing;
 		float sheet = cHigh.z;
 		// the rows' bent waves and their change over the screen (before the branch, as the

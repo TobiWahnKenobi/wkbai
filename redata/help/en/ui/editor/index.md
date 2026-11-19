@@ -12,7 +12,7 @@ wkbai's map editor changes a map while it is open in the game: its hills and val
 
 - **New here?** [Make a skirmish map](make-a-map.md) walks you through it from start to finish.
 - **Each mode:** [Terrain](terrain.md), [Textures](textures.md), [Water](water.md), [Objects](objects.md), [Players](players.md), [Zones](zones.md), [Scripts](scripts.md) and [Regions](regions.md).
-- **Keeping it:** [saving, testing and sharing](saving.md).
+- **Keeping it:** [saving, testing and sharing](saving.md), and [wkbai's map format](map-format.md) for map makers.
 
 ## Opening and closing it
 
@@ -77,7 +77,7 @@ While the mouse is over the editor's window, clicks and brushes don't reach the 
 **Map name** is the name your map is saved under ("My map" at first). It is also the name it has in the [Map Editor](../frontend/map-editor.md) list and in Skirmish.
 
 - A name can't contain `\ / : * ? " < > |`.
-- A name of the form **"4 Player Green Vale"** puts your map among the skirmish maps, as "Green Vale (4)", with four start positions in the lobby. See [Name it for Skirmish](saving.md#name-it-for-skirmish).
+- A name of the form **"4 Player Green Vale"** gives your map four start positions in the lobby. See [Name it for Skirmish](saving.md#name-it-for-skirmish).
 
 ## Undo and redo
 

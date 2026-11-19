@@ -33,11 +33,13 @@ The words this help uses, in alphabetical order, with the page that explains eac
 - **King Piece:** a Standard-mode setting: each player has a king, and loses when he dies ([victory and defeat](mechanics/victory-conditions.md#king-piece)).
 - **Knuckle buttons:** the order buttons on the "knuckles" round the rim of the lower left panel ([command buttons](ui/hud/command-panel.md#knuckle-buttons)).
 - **Lua AI:** an AI General played by a Lua script, chosen per position in the lobby ([AI opponents](mechanics/ai-opponents.md)).
+- **Map folder (`.wkbai`):** wkbai's own map format, a folder that holds a map, its level and its water; the map editor saves into one ([wkbai's map format](ui/editor/map-format.md)).
 - **Ministry AI:** wkbai's lobby setting that runs every AI General as a government of departments ([AI opponents](mechanics/ai-opponents.md)).
 - **Mod:** files that add to or replace the game's, such as new rules, maps or art ([mods](mechanics/mods.md), [the Mods screen](ui/frontend/mods.md)).
 - **Population Limit:** the most people a player may have ([food, population and upkeep](mechanics/population-and-food.md#the-population-limit)).
 - **Recording, replay:** a recorded game, and watching it again ([saves and replays](mechanics/saves-and-replays.md)).
 - **Resource Points:** the budget for buying an army in Valhalla mode ([Army Enlistment](ui/frontend/skirmish/army.md)).
+- **River currents:** wkbai's lobby setting, with the seasons: moving water carries and hurts the units in it, and they swim to the shore ([river currents and swimming](mechanics/water-and-currents.md)).
 - **Siege engine:** a machine that batters buildings and walls, such as the Trebuchet ([siege](mechanics/siege.md)).
 - **Skirmish:** a single game against AI Generals on a map of your choice ([your first skirmish](getting-started.md)).
 - **Spectator:** someone who watches a multiplayer game without playing ([multiplayer](mechanics/multiplayer.md)).
@@ -49,4 +51,6 @@ The words this help uses, in alphabetical order, with the page that explains eac
 - **User folder:** `%APPDATA%\wkbai`, where your saves, replays and campaigns are kept ([files and folders](files.md#your-own-folder)).
 - **Valhalla mode:** a battle without an economy: armies bought before the start fight for flags and victory points ([victory and defeat](mechanics/victory-conditions.md#valhalla-mode)).
 - **Village:** a building that starts a settlement of its own, clear of every city ([Village](buildings/village-wood.md)).
+- **Wind:** wkbai's simulated wind, with a direction and a strength that change through the game; set on the lobby's Wind tab ([Wind tab](ui/frontend/skirmish/wind.md), [seasons and weather](mechanics/seasons-weather.md#wind)).
+- **Wind chill:** how much colder the wind makes units feel ([seasons and weather](mechanics/seasons-weather.md#wind)).
 - **`wkconfig.json`:** wkbai's settings file, in its folder ([settings without a menu](options/config-file.md)).

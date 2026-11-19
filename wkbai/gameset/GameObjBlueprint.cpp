@@ -8,6 +8,9 @@
 #include "../tags.h"
 #include <string>
 #include "../file.h"
+#include "../SwimAnim.h"
+#include "../settings.h"
+#include <nlohmann/json.hpp>
 #include "finder.h"
 #include "../common.h"
 
@@ -27,6 +30,14 @@ void GameObjBlueprint::loadAnimations(GameObjBlueprint::BPAppearance &ap, const 
 			//printf("? %s\n", ats.c_str());
 			int animTag = this->gameSet->animations.names.getIndex(ats);
 			if (animTag != -1) {
+				// (a real animation takes the place of one made in code: the Scout's own SWIM1, a
+				// mod's or an HD model's)
+				auto made = ap.animations.find(animTag);
+				if (made != ap.animations.end() && !made->second.empty()) {
+					auto* am = dynamic_cast<AnimatedModel*>(made->second.front());
+					if (am && am->generator)
+						made->second.clear();
+				}
 				if(overrideAnims)
 					if (!alreadyOverridenAnims.count(animTag)) {
 						alreadyOverridenAnims.insert(animTag);
@@ -47,6 +58,45 @@ void GameObjBlueprint::loadAnimations(GameObjBlueprint::BPAppearance &ap, const 
 			}
 		}
 	}
+	addMadeSwim(ap);
+}
+
+// wkbai: a character with a walk but no swim of its own gets one made from its walk (SwimAnim.h),
+// made when first drawn; the river currents play it (ServerEnvironment). Made again from the walk
+// an override brings; a real SWIM file found later (another LOAD_ANIMATIONS_FROM, a mod) takes
+// its place (loadAnimations).
+void GameObjBlueprint::addMadeSwim(BPAppearance& ap)
+{
+	// ("madeSwimAnimations": false: none made, the walk slowed down as before)
+	static const bool on = g_settings.value<bool>("madeSwimAnimations", true);
+	if (bpClass != Tags::GAMEOBJCLASS_CHARACTER || !on || !SwimsByName(name))
+		return;
+	const int swimTag = gameSet->animations.names.getIndex("Swim");
+	const int moveTag = gameSet->animations.names.getIndex("Move");
+	if (swimTag < 0 || moveTag < 0)
+		return;
+	auto swim = ap.animations.find(swimTag);
+	if (swim != ap.animations.end() && !swim->second.empty()) {
+		auto* am = dynamic_cast<AnimatedModel*>(swim->second.front());
+		if (!am || !am->generator)
+			return; // (its own)
+	}
+	auto move = ap.animations.find(moveTag);
+	AnimatedModel* walk = move != ap.animations.end() && !move->second.empty() ? dynamic_cast<AnimatedModel*>(move->second.front()) : nullptr;
+	if (!walk) {
+		if (swim != ap.animations.end())
+			ap.animations.erase(swim);
+		return;
+	}
+	const std::string& file = walk->fileName;
+	const size_t slash = file.find_last_of("\\/");
+	const std::string folder = slash == std::string::npos ? std::string() : file.substr(0, slash + 1);
+	const SwimStyle style = SwimStyleForFolder(folder);
+	AnimatedModel* made = gameSet->modelCache.getGeneratedAnim(file + "*swim", walk, [walk, style](Anim& out) {
+		if (!MakeSwimAnim(walk->getAnim(), style, out))
+			out = walk->getAnim(); // (a walk it can't use: the walk itself)
+	});
+	ap.animations[swimTag] = { made };
 }
 
 void GameObjBlueprint::init(int i_bpClass, int i_bpId, const std::string &i_name, GameSet *i_gameSet) {

@@ -1,6 +1,6 @@
 ---
 title: Saving, testing and sharing
-ids: [ui/editor/saving, ui/editor/save#save-map, ui/editor/saveplay#save-and-play, ui/editor/check#check, ui/editor/blank#new-blank-map, ui/editor/export#export-for-the-original, ui/editor/newsize#new-map-of-another-size, ui/editor/files#where-the-files-go, ui/editor/skirmish#name-it-for-skirmish]
+ids: [ui/editor/saving, ui/editor/save#save-map, ui/editor/saveplay#save-and-play, ui/editor/check#check, ui/editor/blank#new-blank-map, ui/editor/export#export-for-the-original, ui/editor/newsize#new-map-of-another-size, ui/editor/files#where-the-files-go, ui/editor/skirmish#name-it-for-skirmish, ui/editor/original-format#saving-in-the-original-format, ui/editor/saveformat#saving-in-the-original-format, ui/editor/share#sharing-a-map]
 order: 90
 ---
 
@@ -10,11 +10,14 @@ The buttons at the bottom of the [map editor's window](index.md#the-map-editor-w
 
 ## Save map
 
-Saves the map under the **Map name** as a new map and level of your own. "Saved My map.lvl (in Skirmish)" confirms it.
+Saves the map under the **Map name** as a map of your own, in wkbai's own [map format](map-format.md): one folder, `My map.wkbai`, that holds the map and its level. "Saved Maps\My map.wkbai (in Skirmish)" confirms it.
 
-- The map you opened stays as it was. Saving again under the same name replaces your earlier save.
+- The map you opened stays as it was. Saving again under the same name updates your earlier save.
+- The folder keeps what you changed by hand apart from what the map started as: your height strokes, the tiles you painted, the objects you placed, moved or removed, and the water. A map maker's tools that rebuild the map from its rules keep your hand edits.
+- A name can't contain `\ / : * ? " < > |`; the editor then says "Not a valid name".
 - From then on the saved map is listed in the [Map Editor](../frontend/map-editor.md) list and in Skirmish.
 - To work on it again later: main menu, **Editors**, **Map Editor**, your map, **Edit**.
+- The original game can't read this format. To save the original's files instead, see [saving in the original format](#saving-in-the-original-format); to play your map in the original, see [Export for the original](#export-for-the-original).
 
 ## Save and play
 
@@ -53,12 +56,16 @@ Makes a new, empty map of any size and opens it in the editor.
 
 The new map is like a [blank map](#new-blank-map): flat, one texture, no lakes, only the players. Their start cameras are moved inside the new area if they were outside it. The game goes back to the menu for a moment and opens the new map with the editor. The map you had open stays as it was saved.
 
+The new map is first written in the original's format (`<name>.lvl`). **Save map** then saves it as a map folder of the same name, and the lists show only the folder from then on.
+
 ## Name it for Skirmish
 
-The skirmish lobby finds out how many start positions a map has from its name:
+The skirmish lobby finds out how many start positions a map has from its name. A name that starts with the number of players and the word "Player", such as **"2 Player Green Vale"**, gets that many; any other name, such as "Green Vale", gets two.
 
-- **"2 Player Green Vale"** is listed among the skirmish maps as "Green Vale (2)", with two start positions, and the lobby's [Players filter](../frontend/skirmish/settings.md#players-filter) finds it.
-- **Any other name,** such as "Green Vale", is listed at the end of the list, under its own name, only with the filter on All. The lobby then gives it two start positions.
+Where the map is listed depends on how it was saved:
+
+- **Named "2 Player Green Vale"** (a map folder or a map in the [original format](#saving-in-the-original-format)): it is listed among the skirmish maps as "Green Vale (2)", and the [Players filter](../frontend/skirmish/settings.md#players-filter) finds it.
+- **Under any other name:** at the end of the list, under its own name, only with the filter on All.
 
 Use the number of players your map really has: those listed in the [Players](players.md) mode as **Human Player**. It is the number the map you started from had.
 
@@ -68,14 +75,28 @@ Everything goes into your user folder, `%APPDATA%\wkbai\saved`, never into the g
 
 | File | What |
 |---|---|
+| `Maps\<name>.wkbai\` | The map folder: the map, its level and its water ([map format](map-format.md#whats-in-a-map-folder)) |
+| `Regions\<name>.json` | The timeline's regions (only if you edited them) |
+
+## Sharing a map
+
+To give your map to a friend who plays wkbai, send the whole `<name>.wkbai` folder (and the regions file, if there is one). It goes into `saved\Maps` of their user folder, or into a mod's `Maps` folder. The `build` folder inside can be left out: wkbai makes it again when the map is first loaded.
+
+In multiplayer a map folder counts as game logic, like a level: every player needs the same copy ([mods in multiplayer](../../mechanics/mods.md#mods-in-multiplayer)).
+
+## Saving in the original format
+
+With `"editorSaveFormat": "original"` in `wkconfig.json` ([settings without a menu](../../options/config-file.md#editorsaveformat)), **Save map** and **Save and play** save the original game's files instead of a map folder, as earlier versions of wkbai did:
+
+| File | What |
+|---|---|
 | `Save_Games\<name>.lvl` | The level: players, objects, zones, aliases |
 | `Maps\<name>\<name>.bcm` | The map: heights, tiles, lakes, sky and the minimap |
 | `Maps\<name>\<name>.wkbmap` | wkbai's extras: fine heights and lakes past the 63rd (only when needed) |
 | `Maps\<name>\<name>.water` | The water design (only when there is one) |
 | `Maps\Map_Textures\<name>.lttt` | The map's texture translation, copied from the map you started from (if it has one) |
-| `Regions\<name>.json` | The timeline's regions (only if you edited them) |
 
-To give your map to a friend who plays wkbai, send these files. They go into the same folders of their user folder.
+"Saved My map.lvl (in Skirmish)" confirms it. To share such a map, send these files; they go into the same folders of the other player's user folder.
 
 ## Export for the original
 
@@ -85,7 +106,7 @@ The original *Warrior Kings: Battles* can play maps made in wkbai's editor, but 
 2. Under **Also replace in Skirmish**, choose:
    - **None (Load Game only):** you start the map from the original's Load Game screen;
    - **one of the original's skirmish maps:** your map then takes that map's place in the original's Skirmish list, under that map's name. Take one with the same number of players as yours.
-3. Click **Export**. It saves your map first, then writes two files to `saved\Export` in your user folder: `<name>.bcp` (the map) and `<name>.sav` (the level).
+3. Click **Export**. It saves your map first, in the original format, then writes two files to `saved\Export` in your user folder: `<name>.bcp` (the map) and `<name>.sav` (the level).
 4. Copy `<name>.bcp` into the original game's folder, next to its `data.bcp`, and `<name>.sav` into its `saved\Save_Games` folder.
 
 To undo a replaced skirmish map, remove the `.bcp` file from the original's folder.

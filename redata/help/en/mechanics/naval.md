@@ -1,6 +1,6 @@
 ---
 title: Ships
-ids: [mechanics/naval, mechanic/naval, mechanic/ships, mechanic/boats, mechanic/docks, mechanic/transport]
+ids: [mechanics/naval, mechanic/naval, mechanic/ships, mechanic/boats, mechanic/docks, mechanic/transport, mechanic/sailing#sailing-and-the-wind]
 order: 115
 ---
 
@@ -24,6 +24,20 @@ The dock builds:
 
 - Boats sail only on water and aren't slowed by the ground.
 - A damaged boat is repaired at a dock ([Repair (Docking)](../commands/docking.md)).
+
+## Sailing and the wind
+
+With the lobby's [wind](../ui/frontend/skirmish/wind.md) and its **Effects on the game** on (wkbai's own), the wind changes a boat's speed by the way it sails. The ships have square sails and oars, so they run best with the wind behind them and worst straight into it:
+
+| Course | Wind of 8 m/s | Wind of 16 m/s or more |
+|---|---|---|
+| Wind behind | +25 % | +50 % |
+| Wind across | +12 % | +24 % |
+| Into the wind | −35 % | −65 % |
+
+A boat is never slower than 35 % of its speed, nor faster than 160 %. The [wind gauge](../ui/hud/top-bar.md#wind-gauge) shows where the wind blows. This works with or without the seasons.
+
+> wkbai: in the original the wind doesn't exist, and boats keep their speed on every course.
 
 ## Carrying troops
 

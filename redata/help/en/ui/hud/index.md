@@ -17,6 +17,7 @@ The battlefield fills the window. The interface sits around its edges, so the mi
 | Along the top | **The top bar.** At the left: Settings, Mission Objectives, Global Diplomacy, Diplomacy and Tributes. At the right: your colour, population, food, wood and gold. | [Top bar](top-bar.md) |
 | Under the top bar, left | **The speed line:** the game speed, or "Paused". | [Top bar](top-bar.md#game-speed-line) |
 | Under the top bar, right | **The weather line:** time of day, season, weather and temperature, when they are switched on. | [Top bar](top-bar.md#weather-line) |
+| Top right, below the resources | **The wind gauge:** where the wind comes from and how strong it is, when the game has wind. | [Top bar](top-bar.md#wind-gauge) |
 | Under the top bar, middle | **Notices:** diplomacy news and tributes, in the colour of the player concerned. | [Chat and notices](chat.md#notices) |
 | Upper left | **The build menu** (a builder selected), or **the train and research buttons** (a building selected). | [Command buttons](command-panel.md) |
 | Lower left | **The selection panel:** the selected unit or building turning in its window, its hit points, its name and its stats, with the command buttons around the rim. | [Selection panel](selection-panel.md) |

@@ -416,19 +416,8 @@ local function drawDialog()
 	local x, y = (W - w) / 2, (H - h) / 2
 	drawRect(0, 0, W, H, 0x66000000)
 	goldFrame(x, y, w, h)
-	-- the text, wrapped at spaces
-	local words, lines, line = {}, {}, ""
-	for word in string.gmatch(dialog.text, "%S+") do words[#words + 1] = word end
-	for _, word in ipairs(words) do
-		local try = (line == "") and word or (line .. " " .. word)
-		if textWidth(FONT_TEXT, try, S) > w - L(120) and line ~= "" then
-			lines[#lines + 1] = line
-			line = word
-		else
-			line = try
-		end
-	end
-	if line ~= "" then lines[#lines + 1] = line end
+	-- the text, wrapped at spaces, its own line breaks kept
+	local lines = wrapText(FONT_TEXT, dialog.text, w - L(120))
 	-- centred up and down in the space between the frame and the button row
 	local lh = fontHeight(FONT_TEXT, S)
 	local top, bottom = y + L(20), y + h - L(80)
@@ -895,14 +884,30 @@ local function levelList(filter)
 	local levels, names = {}, {}
 	local provinces, others = {}, {}
 	local all = savesOfType(".lvl")
+	-- wkbai's map folders (Maps\\<name>.wkbai): with the levels named otherwise, under their name
+	for _, m in ipairs(savesOfType(".wkbai")) do all[#all + 1] = m end
 	local have = {}
 	for _, l in ipairs(all) do have[string.lower(l)] = true end
+	-- a map folder replaces the level of the same name ("New map of another size" makes a level,
+	-- Save map then a folder of that name): the level is not listed twice
+	local folders = {}
+	for _, l in ipairs(all) do
+		if string.lower(string.sub(l, -6)) == ".wkbai" then
+			folders[string.lower(stripExtension(string.match(l, "([^\\/]+)$") or l))] = true
+		end
+	end
 	local function wanted(players) return not filter or filter == 0 or tonumber(players) == filter end
 	for _, l in ipairs(all) do
 		local base = stripExtension(l)
-		local players, name = string.match(base, "^(%d+) Player (.+)$")
+		if string.lower(string.sub(l, -4)) == ".lvl" and folders[string.lower(string.match(base, "([^\\/]+)$") or base)] then
+			goto continue
+		end
+		-- (a map folder may come with its folder, "Maps\\2 Player X.wkbai")
+		local players, name = string.match(string.match(base, "([^\\/]+)$") or base, "^(%d+) Player (.+)$")
 		local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
-		if players then
+		if string.lower(string.sub(l, -6)) == ".wkbai" and not players then
+			if not filter or filter == 0 then others[#others + 1] = l end
+		elseif players then
 			if wanted(players) then
 				levels[#levels + 1] = l
 				names[#names + 1] = name .. " (" .. players .. ")"
@@ -920,6 +925,7 @@ local function levelList(filter)
 		elseif not isStoryLevel(l) and (not filter or filter == 0) then
 			others[#others + 1] = l
 		end
+		::continue::
 	end
 	table.sort(provinces, function(a, b) return a.name < b.name end)
 	for _, p in ipairs(provinces) do
@@ -1268,6 +1274,13 @@ local SETTINGS = {
 	-- the peasants' lodging (PeasantLodging.h): they sleep in their houses, villages, manors and
 	-- castles at night (with day and night); the farmers spend the winter indoors (with the seasons)
 	peasantsSleep = 1, farmersWinter = 1,
+	-- river currents (ServerEnvironment.h, with the seasons): the water's flow carries and hurts
+	-- the units in it, they swim to the shore; a game setting, the same for every player
+	riverCurrents = 1,
+	-- the wind (Wind.h): on, blowing by the weather from a random (mostly westerly) way, veering;
+	-- windFrom 0 random, 1-8 N .. NW; windStrength 0 by the weather, 1-5 calm .. gale; its
+	-- effects on the game (wildfires, wind chill)
+	wind = 1, windFrom = 0, windStrength = 0, windVeers = 1, windEffects = 1,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1612,16 +1625,80 @@ local function weatherTab()
 			"Units in the open freeze in the cold (worse marching in snow) and",
 			"can die of thirst in the heat; they are safe at their own or their",
 			"allies' villages and manors. Wet and snowy ground slows them down.",
-			"Lightning strikes units and sets buildings on fire. Floods damage",
-			"buildings and drown units in deep water." })
+			"Lightning strikes units and sets buildings on fire, which rain puts out",
+			"and snow slows. Floods damage buildings and drown units in deep water." })
+	end
+	-- the river currents (with the seasons) and the cheat mode side by side on the row below the
+	-- peasants' (as their two switches), the cheat mode's F9 note under it
+	if s.seasons ~= 0 then
+		switch("riverCurrents", "River currents", X(1000), Y(962))
 	end
 	-- cheat mode: the F9 panel (a skirmish against the AI only, never in multiplayer)
 	if skirmish.multiplayer then
 		s.cheatMode = 0
 	else
-		switch("cheatMode", "Cheat mode", X(1000), Y(962))
-		note(X(1240), Y(980), { "F9 in the game: set the time of day, the season and the weather." })
+		switch("cheatMode", "Cheat mode", X(1440), Y(962))
+		note(X(1440), Y(1016), { "F9: time of day, season, weather." })
 	end
+end
+
+-- The wind (Wind.h): on or off, where it blows from, how strong, whether it veers, its effects
+-- (in the skirmish table: the main chunk is at Lua's limit of 200 locals)
+skirmish.windTab = function()
+	local WIND_FROM = { "Random (mostly westerly)", "North", "North-east", "East", "South-east", "South", "South-west", "West", "North-west" }
+	local WIND_STRENGTHS = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" }
+	local WIND_STRENGTH_NOTES = {
+	"Calm in fog, light in a heatwave, a breeze when clear or cloudy, fresh in rain and",
+	"droughts, strong in heavy rain, gales in thunderstorms and blizzards; it rises and",
+	"falls as it goes, and gusts." }
+	local s = skirmish.settings
+	local function switch(name, label, x, y)
+		if roundButton(x, y, L(52), s[name] ~= 0, true, FE_Help.idsFor(nil, name), label) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, x + L(64), y + L(18), label, s[name] ~= 0 and YELLOW or WHITE, S)
+	end
+	local function note(x, y, lines)
+		for i, line in ipairs(lines) do drawText(FONT_LIST, x, y + (i - 1) * L(22), line, GREY, S) end
+	end
+	panel(X(28), Y(100), L(930), L(940))
+	panel(X(968), Y(100), L(930), L(940))
+	switch("wind", "Wind", X(60), Y(124))
+	note(X(60), Y(186), { "The wind blows over the land, the same for every player: the clouds,",
+		"the rain and the snow, smoke and flames, the sea's waves, the grass,",
+		"the banners and the trees move with it." })
+	if s.wind ~= 0 then
+		local lw = textWidth(FONT_LIST, "From", S)
+		drawText(FONT_LIST, X(170) - lw, Y(278), "From", WHITE, S)
+		if button(WIND_FROM[s.windFrom + 1], X(200), Y(266), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "windFrom")) then s.windFrom = (s.windFrom + 1) % #WIND_FROM end
+		lw = textWidth(FONT_LIST, "Strength", S)
+		drawText(FONT_LIST, X(170) - lw, Y(344), "Strength", WHITE, S)
+		if button(WIND_STRENGTHS[s.windStrength + 1], X(200), Y(332), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "windStrength")) then
+			s.windStrength = (s.windStrength + 1) % #WIND_STRENGTHS
+		end
+		if s.windStrength == 0 then
+			note(X(60), Y(394), WIND_STRENGTH_NOTES)
+		else
+			note(X(60), Y(394), { "About that strength all game, rising and falling a little, with gusts." })
+		end
+		switch("windVeers", "Changes direction", X(60), Y(486))
+		note(X(60), Y(548), { "It veers slowly, up to 35 degrees either way, faster in storms;",
+			"off: it keeps its way all game." })
+		switch("windEffects", "Effects on the game", X(60), Y(618))
+		note(X(60), Y(680), { "Off: the wind is only seen." })
+	end
+	drawText(FONT_BUTTON, X(1000), Y(130), "Effects on the game", (s.wind ~= 0 and s.windEffects ~= 0) and WHITE or GREY, S)
+	note(X(1000), Y(190), {
+		"Wildfires (with the seasons: heatwaves and droughts) break out more",
+		"often in the wind and spread faster and further, mostly downwind; they",
+		"burn hotter and out sooner, set buildings alight more often, and in a",
+		"strong wind throw embers well ahead of the fire.",
+		"",
+		"Wind chill: a wind makes the cold bite (1.5 degrees in a gentle",
+		"breeze, 5 in a gale): units in the open freeze sooner, most in a",
+		"blizzard. In the heat it cools them a little.",
+		"",
+		"Without the seasons only boats feel the wind; the rest is the look.",
+		"",
+		"The trees bending in it: Options, Terrain, \"Trees in the wind\"." })
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
@@ -1985,14 +2062,15 @@ local function drawLobby(multiplayer)
 	if skirmish.renaming then mouse.blocked = true end
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
-	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }
+	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather", "Wind" }
 	-- Valhalla: the Army Enlistment tab
 	local valhalla = skirmish.settings.mode == 1
-	if valhalla then labels[4] = T("FRONT_END_LOBBY_ARMIES") elseif skirmish.tab == 4 then skirmish.tab = 1 end
+	if valhalla then labels[5] = T("FRONT_END_LOBBY_ARMIES") elseif skirmish.tab == 5 then skirmish.tab = 1 end
 	skirmish.tab = tabs(labels, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
 	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab()
-	elseif skirmish.tab == 4 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
+	elseif skirmish.tab == 4 then skirmish.windTab()
+	elseif skirmish.tab == 5 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
 	else settingsTab() end
 	-- agent control: who has it on, on every tab, in every lobby (the host's list)
 	if multiplayer then
@@ -3958,7 +4036,7 @@ function FE_Open(name)
 		local settings
 		tab, settings = string.match(tab, "^([^:]*):?(.*)$")
 		for k, v in string.gmatch(settings, "(%w+)=(%-?%d+)") do skirmish.settings[k] = tonumber(v) end
-		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or (tab == "army") and 4 or 1
+		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or (tab == "wind") and 4 or (tab == "army") and 5 or 1
 	end
 	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a
 	-- place or after 20 seconds alone

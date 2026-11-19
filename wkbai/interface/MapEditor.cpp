@@ -27,6 +27,7 @@
 #include "../gfx/RenderSettings.h"
 #include "../util/FrameStats.h"
 #include "../settings.h"
+#include "../MapFolder.h"
 #include <nlohmann/json.hpp>
 #include "../imgui/imgui.h"
 #include "../util/StriCompare.h"
@@ -1517,7 +1518,7 @@ void ClientInterface::editorWindow()
 		if (ImGui::Button("Save and play")) {
 			if (editorSave(ed.saveName)) {
 				leaveAction = "start";
-				leaveArg = std::string(ed.saveName) + ".lvl";
+				leaveArg = std::string(ed.saveName) + (g_settings.value("editorSaveFormat", std::string()) == "original" ? ".lvl" : ".wkbai");
 			}
 		}
 		ImGui::SameLine();
@@ -2310,7 +2311,40 @@ std::vector<std::string> ClientInterface::editorCheck()
 	return warnings;
 }
 
+// Save map: wkbai's map folder, saved\Maps\<name>.wkbai (MapFolder::SaveFromEditor: the strokes
+// into heights.hand.png, painted tiles into tiles.hand.json, the objects into level.txt as
+// hand-made, the water into water.json), compiled again; "editorSaveFormat": "original" saves the
+// original's files instead
 bool ClientInterface::editorSave(const std::string& name)
+{
+	if (g_settings.value("editorSaveFormat", std::string()) == "original")
+		return editorSaveOriginal(name);
+	EditorState& ed = *editor;
+	if (name.empty() || name.find_first_of("\\/:*?\"<>|") != std::string::npos) {
+		ed.status = "Not a valid name";
+		return false;
+	}
+	bool savedOk = false;
+	const std::filesystem::path folder = g_userPath / "saved" / "Maps" / PathFromUtf8(name + ".wkbai");
+	withServer([&](Server& server) {
+		if (!server.terrain) {
+			ed.status = "No terrain";
+			return;
+		}
+		// regions edited by hand: under the map's name
+		if (chronicle.regions.ready() && chronicle.regions.edited)
+			chronicle.regions.save(name);
+		const MapFolder::Result r = MapFolder::SaveFromEditor(server, client->terrain, folder);
+		savedOk = r.ok;
+		ed.status = r.ok ? "Saved Maps\\" + name + ".wkbai (in Skirmish)" : "Saving failed: " + r.error;
+		for (const std::string& w : r.warnings)
+			ed.warnings.push_back(w);
+		printf("Map editor: %s %s\n", PathToUtf8(folder).c_str(), r.ok ? "saved" : ("failed: " + r.error).c_str());
+	});
+	return savedOk;
+}
+
+bool ClientInterface::editorSaveOriginal(const std::string& name)
 {
 	EditorState& ed = *editor;
 	bool savedOk = false;
@@ -2378,7 +2412,7 @@ bool ClientInterface::editorSave(const std::string& name)
 bool ClientInterface::editorExport(const std::string& name, const std::string& replaceLevel)
 {
 	EditorState& ed = *editor;
-	if (!editorSave(name))
+	if (!editorSaveOriginal(name))
 		return false;
 	const auto saved = g_userPath / "saved";
 	const std::string bcmRel = "Maps\\" + name + "\\" + name + ".bcm";
@@ -2442,6 +2476,68 @@ void ClientInterface::editorOpenMode(const std::string& mode)
 	for (const auto& [name, m] : modes)
 		if (mode == name)
 			editor->mode = m;
+}
+
+void ClientInterface::editorFolderTestStep(Vector3& cursor)
+{
+	if (!editor)
+		editor = std::make_shared<EditorState>();
+	EditorState& ed = *editor;
+	static int frame = 0;
+	static Vector3 target;
+	static int before = -1;
+	if (!client->getLevel() || !client->terrain)
+		return;
+	frame++;
+	const nlohmann::json cfg = g_settings["benchmark"]["editorFolderTest"];
+	const std::string name = cfg.value("save", std::string("Folder Test"));
+	Terrain* trn = client->terrain;
+	auto height256 = [&](Terrain* t) {
+		const int x = (int)std::lround(target.x / 5.0f) + t->edge, z = (int)std::lround(target.z / 5.0f) + t->edge;
+		const int i = z * (t->width + 1) + x;
+		return t->vertices[i] * 256 + (t->heightFraction.empty() ? 0 : t->heightFraction[i]);
+	};
+	if (frame == 30) {
+		target = Vector3(cfg["at"][0].get<float>(), 0, cfg["at"][1].get<float>());
+		before = height256(trn);
+		printf("EDITORFOLDER map %s, height before %d/256 at (%.0f, %.0f)\n", trn->mapFile.c_str(), before, target.x, target.z);
+		ed.mode = EditorState::TERRAIN;
+		ed.tool = EditorState::RAISE;
+		ed.radius = 25.0f;
+		ed.strength = 40.0f;
+	}
+	if (frame >= 30 && frame < 90) {
+		cursor = target;
+		g_mouseDown[SDL_BUTTON_LEFT] = true;
+	}
+	if (frame == 95) {
+		const int after = height256(trn);
+		int serverAfter = -1;
+		withServer([&](Server& server) { serverAfter = height256(server.terrain); });
+		const bool saved = editorSave(name);
+		printf("EDITORFOLDER height after %d/256 (server %d); saved %d: %s\n", after, serverAfter, (int)saved, ed.status.c_str());
+		// the hand layer read back, and the folder compiled again from scratch
+		const std::filesystem::path folder = g_userPath / "saved" / "Maps" / PathFromUtf8(name + ".wkbai");
+		int w = 0, h = 0;
+		std::vector<uint16_t> hand;
+		int handValue = -1, handVertices = 0;
+		if (MapFolder::ReadPng16(folder / "heights.hand.png", w, h, hand) && w == trn->width + 1 && h == trn->height + 1) {
+			const int x = (int)std::lround(target.x / 5.0f) + trn->edge, z = (int)std::lround(target.z / 5.0f) + trn->edge;
+			handValue = (int)hand[(size_t)(trn->height - z) * w + x] - MapFolder::HAND_ZERO;
+			for (uint16_t v : hand)
+				handVertices += v != MapFolder::HAND_ZERO;
+		}
+		std::error_code ec;
+		std::filesystem::remove_all(folder / "build", ec);
+		const MapFolder::Result r = MapFolder::Compile(folder, true);
+		Terrain again;
+		again.readFromFile(MapFolder::GamePathOf(folder).c_str());
+		const int compiled = height256(&again);
+		printf("EDITORFOLDER hand layer at the stroke %+d/256, %d vertices in it; recompiled %d, height there %d/256 (edited %d, before %d): %s\n",
+			handValue, handVertices, (int)r.ok, compiled, after, before,
+			(handValue == after - before && compiled == after && after != before) ? "kept" : "LOST");
+		fflush(stdout);
+	}
 }
 
 void ClientInterface::editorTestStep(Vector3& cursor)

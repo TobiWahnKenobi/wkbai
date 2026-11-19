@@ -13,6 +13,7 @@ Pick a building from the top bar's Military, Alignment or Economic menu (or a pe
 - **The cost is paid when you place the foundation.** A building whose button is grey is waiting for resources; a ghost button names the building or research it still needs ([alignment](alignment.md), [training and research](upgrades-and-research.md)).
 - **City buildings** (barracks, church, shops and the like) must join your **city**: their outline has to reach into the city's area or onto its walls. The city starts as your Manor's ground and grows with every city building, so a long street of buildings can lead far from the Manor.
 - **Walls grow by themselves.** Each new city building pushes the city's palisade out around it; the old wall pieces left inside come down. Building over a gatehouse is refused.
+- **A gatehouse goes into a wall.** Point it at a straight stretch of your own wall: it turns along the wall and takes the place of the wall pieces under it ([placing buildings](../controls/building-placement.md#a-gatehouse-in-a-wall)).
 - **A [Village](../buildings/village-wood.md)** starts a settlement of its own: it must stand clear of every city.
 - **Farms and other country buildings** stand outside the walls; a city may not grow around one.
 - The ground under a new building is levelled.
@@ -38,6 +39,7 @@ A building's health is its **structural integrity** (the bar over it, and its pa
 - Flaming arrows, Greek fire, rockets, arson by spies and lightning set buildings alight.
 - A burning building loses strength steadily, and the fire grows. It can leap to other buildings within 25 m. Walls don't burn.
 - A fire doesn't die out by itself: it burns the building down unless peasants put it out. The better the building's fire proofing, the less often a flaming arrow sets it alight.
+- **With wkbai's seasons on**, rain puts burning buildings out by itself (about 2.5 minutes of rain, a minute of heavy rain), and snow on a roof makes a fire burn less fiercely and spread to that building less often ([rain and snow on burning buildings](seasons-weather.md#rain-and-snow-on-burning-buildings)).
 - Peasants on [Extinguish Fire](../commands/extinguish.md) put it out. Your minimap marks burning buildings with an orange circle.
 
 ## Garrisons

@@ -13,14 +13,14 @@ A mod adds to or replaces the game's files. wkbai reads the rules from the game 
 | Kind | What it changes |
 |---|---|
 | **The game set** (`Warrior Kings Game Set\*.cpp`, `.gsf`) | the rules: units, buildings, costs, hit points, damage, research, upkeep, alignment, victory, the AI's scripts |
-| **Maps and levels** | new maps, campaign levels, scenarios |
+| **Maps and levels** | new maps, campaign levels, scenarios; also wkbai's own [map folders](../ui/editor/map-format.md) in the mod's `Maps` folder |
 | **Models, textures, sounds, music** | how things look and sound (wkbai also takes `.png`, `.dds` and `.ktx2` textures of any size in place of the originals) |
 | **Lua scripts** | the menus and the in-game interface; new menu entries and screens |
 | **Lua AIs** (`LuaAI\<name>.lua`) | new computer players, chosen per position in the lobby ([AI opponents](ai-opponents.md)) |
 
 - A mod ships only its own files. A file with the same path as a game file replaces it.
 - The help's tables of costs and hit points read the loaded game set, so they show a mod's own numbers.
-- **wkbai's own fixes to the game set** are kept in a folder of patches (`Warrior Kings Game Set\wkbai patches`) that loads after the game set. A mod can replace a patch with its own copy, or add patches of its own. The current patches fix the King of the Hill ending, make lightning only scratch buildings, and add the winter crafts bonus.
+- **wkbai's own fixes to the game set** are kept in a folder of patches (`Warrior Kings Game Set\wkbai patches`) that loads after the game set. A mod can replace a patch with its own copy, or add patches of its own. The current patches fix the King of the Hill ending, make lightning only scratch buildings, add the winter crafts bonus, and let snow on a roof protect a building from fire (`Snow and Fire.cpp`, [rain and snow on burning buildings](seasons-weather.md#rain-and-snow-on-burning-buildings)).
 - WKB.exe knows a few dozen script keywords that no shipped script uses. wkbai supports all of them, so mods written for the original that use them work.
 
 ## Replacing models and textures

@@ -5,6 +5,8 @@
 #include "BuildIdentity.h"
 #include <random>
 #include "server.h"
+#include "MapFolder.h"
+#include "util/util.h"
 #include "util/LoadingProgress.h"
 #include <set>
 #include "file.h"
@@ -83,7 +85,15 @@ void Server::loadSaveGame(const char * filename)
 	objectiveMarkers.clear();
 	// the save's parts: a wkbai save file's sections, or an original save game or level (and an
 	// older wkbai save's side files)
-	const SaveParts parts = ReadSaveParts(filename);
+	// a wkbai map folder (MapFolder.h, "Save_Games\<name>.wkbai" as the skirmish list names it): the
+	// level of its cache, compiled first when stale
+	std::string levelFile = filename;
+	if (MapFolder::IsMapPath(levelFile)) {
+		levelFile = MapFolder::LevelFileOf(levelFile);
+		if (levelFile.empty())
+			ferr("The map folder \"%s\" could not be found or compiled (its build\\report.json says why).", filename);
+	}
+	const SaveParts parts = ReadSaveParts(levelFile.c_str());
 	if (!parts.settings.empty()) {
 		applyAiSettingsText(parts.settings, false);
 		// the game's settings, not the Lua AIs only (aiSettingsText writes aggressiveAI first;
@@ -237,6 +247,9 @@ void Server::loadSaveGame(const char * filename)
 	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
 	DiscoveredLoadText(parts.discovered);
+	// the players' memory of the trees under the fog of war as saved (FogOfWar), else none: all
+	// trees known as they stand
+	treeMemoryLoadText(parts.treeMemory);
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);
@@ -1260,8 +1273,17 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 				}
 				else if (strtag == "ORDER") {
 					auto orderName = gsf.nextString(true);
-					int orderType = gameSet->orders.names.getIndex(orderName); assert(orderType != -1);
+					int orderType = gameSet->orders.names.getIndex(orderName);
 					gsf.advanceLine();
+					// an order the game set doesn't have: skipped to its END_ORDER (an index of -1
+					// read memory before the list)
+					if (orderType == -1) {
+						printf("WARNING: object %u: order \"%s\" isn't in the game set, left out\n", obj->id, orderName.c_str());
+						while (!gsf.eof && gsf.nextTag() != "END_ORDER")
+							gsf.advanceLine();
+						gsf.advanceLine();
+						continue;
+					}
 					const OrderBlueprint &orderBp = gameSet->orders[orderType];
 					obj->orderConfig.orders.emplace_back(0, &orderBp, obj);
 					Order &order = obj->orderConfig.orders.back();
@@ -1280,9 +1302,26 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 							order.currentTask = gsf.nextInt();
 						}
 						else if (ordtag == "TASK") {
-							int taskType = gameSet->tasks.names.getIndex(gsf.nextString(true)); assert(taskType != -1);
+							const std::string taskName = gsf.nextString(true);
+							int taskType = gameSet->tasks.names.getIndex(taskName);
 							gsf.advanceLine();
-							const TaskBlueprint &taskBp = gameSet->tasks[taskType];
+							// a task the game set doesn't have (2 Player Lakes.lvl's "Play Ambient Sound"
+							// orders name a task "Play Ambient Sound" that isn't there): the order's own
+							// task in that place, else the task is left out. Its index of -1 had read
+							// memory before the list: "bad allocation" or not, by the memory's layout
+							// (test 97, 2026-11-19).
+							const TaskBlueprint* knownBp = taskType != -1 ? &gameSet->tasks[taskType]
+								: order.tasks.size() < orderBp.tasks.size() ? orderBp.tasks[order.tasks.size()] : nullptr;
+							if (taskType == -1)
+								printf("WARNING: object %u: task \"%s\" isn't in the game set: %s\n", obj->id, taskName.c_str(),
+									knownBp ? ("the order's own, \"" + gameSet->tasks.names.getString(knownBp->bpid) + "\"").c_str() : "left out");
+							if (!knownBp) {
+								while (!gsf.eof && gsf.nextTag() != "END_TASK")
+									gsf.advanceLine();
+								gsf.advanceLine();
+								continue;
+							}
+							const TaskBlueprint &taskBp = *knownBp;
 							auto taskptr = Task::create(0, &taskBp, &order);
 							Task &task = *taskptr;
 							while (!gsf.eof) {
@@ -1301,7 +1340,10 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 									task.triggersStarted = gsf.nextInt();
 								}
 								else if (tsktag == "TRIGGER") {
-									task.triggers[gsf.nextInt()]->parse(gsf, *gameSet);
+									// (a trigger the task doesn't have, as a substituted task's: left out)
+									const int t = gsf.nextInt();
+									if (t >= 0 && t < (int)task.triggers.size())
+										task.triggers[t]->parse(gsf, *gameSet);
 								}
 								else if (tsktag == "FIRST_EXECUTION") {
 									task.firstExecution = gsf.nextInt();
@@ -1708,6 +1750,9 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 			stopMovement();
 		return;
 	}
+	// boats: faster before the wind, slower into it, for this leg (Wind.h; 1 without the wind's effects)
+	if (blueprint->canWalkOnWater())
+		speed *= Server::instance->environment.windBoatFactor(destination - position);
 	movement.startMovement(position, destination, Server::instance->timeManager.currentTime, speed);
 	currentSpeed = speed;
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };
@@ -3612,8 +3657,8 @@ void Server::simulate()
 		updatePeasantActivity();
 	}
 	// wkbai's day and night, seasons and weather: once a game second, only when a setting is on
-	// (else once, for the game's sky)
-	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
+	// (else once, for the game's sky); the wind (Wind.h) also alone
+	if (environment.enabled() || environment.windOn() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
 	// wkbai's unit history: the hero threshold once the game runs
 	unitHistory.update(*this);

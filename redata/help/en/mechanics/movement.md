@@ -31,7 +31,7 @@ Each unit type has a base speed (a peasant walks at 4, most cavalry much faster)
 
 - **Ground by type.** Every unit type has a list of the terrains it may cross. Land units keep off deep water, coastlines and river beds; siege engines and wagons also keep off forest and rock. Boats only sail.
 - **Steepness.** Most units climb slopes up to 45°. Heavy machines (the battering ram, bombard, DeathWyrm) only 30°.
-- **Water.** Land units ford shallow water. Archangel, Abaddon and the large elementals wade through any depth.
+- **Water.** Land units ford shallow water. Archangel, Abaddon and the large elementals wade through any depth. With wkbai's [river currents](water-and-currents.md) on, moving water pushes and hurts the units in it, and they swim to the shore.
 - **Buildings and walls** block the way; an open gatehouse lets units through. Units don't block each other: they walk through, and spread out where they stop.
 
 ## Paths
@@ -44,4 +44,4 @@ Each unit type has a base speed (a peasant walks at 4, most cavalry much faster)
 
 > **wkbai.** In this version of wkbai the per-type terrain lists and slope limits aren't applied yet: every land unit follows the same land rules and climbs up to 45°, siege engines and wagons can enter forest and rock, and water deeper than 1.5 m stops everyone but boats (Archangel, Abaddon and the elementals included). This is being brought in line with the original.
 
-> **wkbai.** Path searches run on several threads and are much faster than the original's, so large games stay smooth. With wkbai's seasons on, wet and snowy ground slows everyone further, and frozen rivers can be walked on ([seasons and weather](seasons-weather.md#effects-on-play)).
+> **wkbai.** Path searches run on several threads and are much faster than the original's, so large games stay smooth. With wkbai's seasons on, wet and snowy ground slows everyone further, and frozen rivers can be walked on ([seasons and weather](seasons-weather.md#effects-on-play)). With the river currents on, paths keep away from water that would carry or hurt a unit ([river currents and swimming](water-and-currents.md#paths-and-the-ai)).

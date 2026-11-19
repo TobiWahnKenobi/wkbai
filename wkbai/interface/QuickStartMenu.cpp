@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "QuickStartMenu.h"
+#include "../MapFolder.h"
 #include "KeyBindings.h"
 #include "../util/LoadingProgress.h"
 #include "../file.h"
@@ -163,6 +164,10 @@ void QuickStartMenu::refreshSaveGames(bool keepSelection)
 	auto* gsl = ListFiles("Save_Games");
 	savegames = std::move(*gsl);
 	delete gsl;
+	// wkbai's map folders (MapFolder.h): Maps\<name>.wkbai, listed as "<name>.wkbai"
+	for (const std::string& dir : MapFolder::ListFolders())
+		if (std::find(savegames.begin(), savegames.end(), dir) == savegames.end())
+			savegames.push_back(dir);
 	savselected = 0;
 	if (auto it = std::find(savegames.begin(), savegames.end(), selected); !selected.empty() && it != savegames.end())
 		savselected = it - savegames.begin();

@@ -1,6 +1,6 @@
 ---
 title: Top bar
-ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line, ui/hud/top-bar/mission-objectives#mission-objectives]
+ids: [ui/hud/top-bar, ui/hud/top-bar/settings#settings, ui/hud/top-bar/objectives#mission-objectives, ui/hud/top-bar/global-diplomacy#global-diplomacy, ui/hud/top-bar/diplomacy#diplomacy, ui/hud/top-bar/tributes#tributes, ui/hud/top-bar/player-colour#your-colour, ui/hud/top-bar/population#population, ui/hud/top-bar/food#food-wood-and-gold, ui/hud/top-bar/wood#food-wood-and-gold, ui/hud/top-bar/gold#food-wood-and-gold, ui/hud/top-bar/food-balance#the-food-bar, ui/hud/speed#game-speed-line, ui/hud/environment#weather-line, ui/hud/wind#wind-gauge, ui/hud/wind-gauge#wind-gauge, ui/hud/top-bar/mission-objectives#mission-objectives]
 order: 20
 ---
 
@@ -87,3 +87,14 @@ Under the right end of the bar, when day and night, seasons or weather are switc
 - **"Fields fallow"** in winter.
 
 The line may carry a few more notes of the same kind (farmers wintering indoors, for example). See [Seasons and weather](help:mechanic/seasons-weather) for what they do.
+
+## Wind gauge
+
+At the top right, below the resources, when the game has the lobby's [wind](../frontend/skirmish/wind.md) on (wkbai's own):
+
+- **the dial** turns with the camera: its top is the way the camera looks, and N, E, S and W mark the map's sides (N is the top of the minimap);
+- **the arrow** points the way the wind blows, from where it comes from to where it goes. It is longer the stronger the wind, and green in a light wind (up to about 5 m/s), yellow up to about 11 m/s and red in a stronger wind;
+- **below the dial,** where it comes from and its speed, for example "WSW 7 m/s", and the wind's name on the Beaufort scale, from "calm" to "storm";
+- **its tooltip** also gives the speed of the gust blowing now and what the wind does in the game.
+
+The option [Wind gauge (direction and strength)](help:option/windGauge) hides it.

@@ -49,6 +49,19 @@ Model* ModelCache::getGeneratedModel(const std::string& name, std::function<void
 	return m;
 }
 
+AnimatedModel* ModelCache::getGeneratedAnim(const std::string& name, AnimatedModel* from, std::function<void(Anim&)> generator)
+{
+	std::lock_guard<decltype(g_modelPreparationMutex)> lock(g_modelPreparationMutex);
+	auto it = models.find(name);
+	if (it != models.end())
+		return dynamic_cast<AnimatedModel*>(it->second.get());
+	AnimatedModel* m = new AnimatedModel(this, name);
+	m->generator = std::move(generator);
+	m->madeFrom = from;
+	models[name].reset(m);
+	return m;
+}
+
 const Material& ModelCache::getMaterial(int id)
 {
 	std::lock_guard<decltype(g_modelPreparationMutex)> lock(g_modelPreparationMutex);
@@ -278,7 +291,10 @@ void AnimatedModel::prepare() {
 	if (ready) return;
 
 	//printf("Preparing anim %s\n", fileName.c_str());
-	anim.load(fileName.c_str());
+	if (generator)
+		generator(anim);
+	else
+		anim.load(fileName.c_str());
 
 	std::string dir;
 	if (const char *lastbs = strrchr(fileName.c_str(), '\\'))

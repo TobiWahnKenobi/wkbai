@@ -121,6 +121,13 @@
   ]
  },
  {
+  "name": "frontend-skirmish-wind",
+  "what": "Skirmish lobby, Wind tab with the wind on, its settings at their defaults (menuTest open: skirmish.wind)",
+  "menu": [
+   "skirmish.wind"
+  ]
+ },
+ {
   "name": "frontend-skirmish-army",
   "what": "Skirmish lobby, Army Enlistment tab in Valhalla mode (menuTest open: skirmish.army:mode=1), a company selected and two or three enlisted",
   "menu": [

@@ -6,7 +6,7 @@ order: 50
 
 # Skirmish lobby
 
-Set up a game on any map against AI Generals: who plays at each start position, the map and the rules, and (wkbai's own) day and night, seasons and weather. Then press Start.
+Set up a game on any map against AI Generals: who plays at each start position, the map and the rules, and (wkbai's own) day and night, seasons, weather and wind. Then press Start.
 
 The same lobby, with a list of guests and a chat added, is the host's lobby of a [multiplayer game](../multiplayer/host.md).
 
@@ -16,7 +16,8 @@ The same lobby, with a list of guests and a chat added, is the host's lobby of a
 
 - **[Players](players.md):** the start positions: you, AI Generals or nobody, with colours and teams.
 - **[Settings](settings.md):** the map, the starting resources, the game mode and the rule switches.
-- **[Seasons & Weather](weather.md):** day and night, the seasons, the weather and the sky.
+- **[Seasons & Weather](weather.md):** day and night, the seasons, the weather, the sky and the river currents.
+- **[Wind](wind.md):** the wind's direction and strength, and whether it changes the game.
 - **[Army Enlistment](army.md):** only in Valhalla mode: the companies your army starts with.
 
 ## Start

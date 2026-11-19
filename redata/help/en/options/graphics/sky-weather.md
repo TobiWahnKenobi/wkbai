@@ -56,9 +56,14 @@ With Volumetric clouds: how detailed the clouds' shapes are.
 - **Low:** one even density through the cloud layer.
 - **Medium** (the default): thick and thin clouds; a cloud deck with denser and thinner parts.
 - **High:** also finer billows on the tops, and storm clouds as towers under wide anvils.
-- **Very high** and **Ultra:** also the billows shading each other.
+- **Very high:** also the billows shading each other, more steps through the cloud, and light reflected up from the ground below.
+- **Ultra:** also the light scattered many times inside the cloud, by how dense it is there: the thick middles of the clouds a little brighter and softer.
 
-**Cost:** small next to Cloud quality; the higher levels add a few texture reads per pixel of sky.
+**Cost:** small next to Cloud quality; the higher levels add a few texture reads per pixel of sky. Ultra costs no more than Very high to speak of.
+
+A thunderstorm's towering clouds live their own life: when the storm comes, a low heap shoots up within about 12 seconds, its head swelling wider than its stem and an anvil spreading at the top. When it has passed, they melt over about 15 seconds: the anvil thins, the tower sinks and spreads, holes open and its edges fray into wisps. Their shadows on the ground follow.
+
+> wkbai: before this version, Ultra was what Very high is now.
 
 ## Weather and season effects
 

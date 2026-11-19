@@ -220,7 +220,7 @@ namespace {
 		}
 		{
 			MenuOption o;
-			o.id = "cloudDetail"; o.page = "sky"; o.label = "Cloud detail"; // (the volumetric clouds' shapes: Low one density, Medium varying, High billows and cumulonimbus, Very high and Ultra self-shadowed billows)
+			o.id = "cloudDetail"; o.page = "sky"; o.label = "Cloud detail"; // (the volumetric clouds' shapes: Low one density, Medium varying, High billows and cumulonimbus, Very high self-shadowed billows and more steps, Ultra also multiple scattering by density)
 			o.type = MenuOption::CHOICE;
 			o.choices = { "Low", "Medium", "High", "Very high", "Ultra" };
 			o.get = [&rs]() { return (float)rs.cloudDetail; };
@@ -307,7 +307,27 @@ namespace {
 			o.set = [&rs](float v) { rs.farLandCacheMB = std::clamp((int)std::lround(v / 256.0f) * 256, 256, 32768); };
 			list.push_back(withEnabled(o, [&rs]() { return rs.extendMap >= 2 && rs.farLandCache; }));
 		}
+		{
+			// the trees in the wind (Wind.h): the bend costs a few instructions a vertex of the trees
+			MenuOption o;
+			o.id = "windTrees"; o.page = "terrain"; o.label = "Trees in the wind";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Sway", "Sway and leaves" };
+			o.get = [&rs]() { return (float)rs.windTrees; };
+			o.set = [&rs](float v) { rs.windTrees = std::clamp((int)v, 0, 2); };
+			list.push_back(o);
+		}
 		list.push_back(toggle("grass", "terrain", "Grass", rs.grass));
+		{
+			// the grass in the wind (Wind.h): Field reads the wind field's texture per blade vertex
+			MenuOption o;
+			o.id = "grassWind"; o.page = "terrain"; o.label = "Grass in the wind";
+			o.type = MenuOption::CHOICE;
+			o.choices = { "Off", "Waves", "Field" };
+			o.get = [&rs]() { return (float)rs.grassWind; };
+			o.set = [&rs](float v) { rs.grassWind = std::clamp((int)v, 0, 2); };
+			list.push_back(withEnabled(o, [&rs]() { return rs.grass; }));
+		}
 		list.push_back(withEnabled(slider("grassDensity", "terrain", "Grass density", rs.grassDensity, 0.0f, 24.0f, "%.1f"),
 			[&rs]() { return rs.grass; }));
 		list.push_back(withEnabled(slider("grassHeight", "terrain", "Grass height", rs.grassHeight, 0.2f, 3.0f, "%.2f"),
@@ -479,7 +499,8 @@ namespace {
 		for (const auto& [key, label] : { std::pair<const char*, const char*>{ "showHeroNames", "Show hero names" },
 			std::pair<const char*, const char*>{ "showUnitNamesOnHover", "Show unit names on hover" },
 			std::pair<const char*, const char*>{ "timelineChronicle", "Timeline (F7) told as a chronicle" },
-			std::pair<const char*, const char*>{ "buildingHealthBars", "Building health bars" } }) {
+			std::pair<const char*, const char*>{ "buildingHealthBars", "Building health bars" },
+			std::pair<const char*, const char*>{ "windGauge", "Wind gauge (direction and strength)" } }) {
 			MenuOption o;
 			o.id = key; o.page = "interface"; o.label = label;
 			o.type = MenuOption::TOGGLE;

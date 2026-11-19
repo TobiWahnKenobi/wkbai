@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "terrain.h"
+#include "MapFolder.h"
 #include "Environment.h"
 #include "file.h"
 #include "util/util.h"
@@ -129,11 +130,21 @@ int Terrain::GetMaxBits(int x)
 
 void Terrain::readFromFile(const char* filename)
 {
-	const char* ext = strrchr(filename, '.');
+	// a wkbai map folder (MapFolder.h): its cache (compiled first when stale), a BCM with its
+	// .wkbmap and .water beside it, and the folder's texture translation
+	std::string loadFrom = filename;
+	if (MapFolder::IsMapPath(filename)) {
+		loadFrom = MapFolder::TerrainFileOf(filename);
+		if (loadFrom.empty())
+			ferr("The map folder \"%s\" could not be found or compiled (its build\\report.json says why).", filename);
+		const std::string translation = MapFolder::TranslationOf(MapFolder::Resolve(filename));
+		ltttPath = translation.empty() ? "-" : translation;
+	}
+	const char* ext = strrchr(loadFrom.c_str(), '.');
 	if (!StrCICompare(ext, ".bcm"))
-		readBCM(filename);
+		readBCM(loadFrom.c_str());
 	else
-		readSNR(filename);
+		readSNR(loadFrom.c_str());
 	// the map's file (its regions are kept by its name: MapRegions)
 	filePath = PathFromUtf8(filename).wstring();
 	mapFile = filename;
@@ -142,15 +153,15 @@ void Terrain::readFromFile(const char* filename)
 	waterDesign.reset();
 	auto design = std::make_shared<WaterDesign>();
 	std::string error;
-	if (!design->load(mapFile, error))
+	if (!design->load(loadFrom, error))
 		printf("WARNING: %s\n", error.c_str());
 	else if (design->width == width && design->height == height) {
 		waterDesign = design;
-		printf("Water design: %s (%zu sea regions, %zu waterways, %zu waterfalls)\n", WaterDesign::pathFor(mapFile).c_str(),
+		printf("Water design: %s (%zu sea regions, %zu waterways, %zu waterfalls)\n", WaterDesign::pathFor(loadFrom).c_str(),
 			design->seas.size(), design->waterways.size(), design->waterfalls.size());
 	}
 	else if (design->width)
-		printf("WARNING: %s is for a map of %d x %d tiles, not %d x %d; not used\n", WaterDesign::pathFor(mapFile).c_str(), design->width, design->height, width, height);
+		printf("WARNING: %s is for a map of %d x %d tiles, not %d x %d; not used\n", WaterDesign::pathFor(loadFrom).c_str(), design->width, design->height, width, height);
 	// the lowest vertex, as WKB.exe's terrain keeps it (0x60DD50, +0x30): sight grows with the
 	// height above it
 	float lowest = std::numeric_limits<float>::max();
@@ -180,7 +191,8 @@ void Terrain::readBCM(const char * filename) {
 
 	std::string ctexDbPath((uint16_t*)texDbPath.data(), (uint16_t*)texDbPath.data()+strs1);
 	texDb.load(ctexDbPath.c_str());
-	texDb.translate(texDb.getLTTTPath(filename).c_str());
+	if (ltttPath != "-")
+		texDb.translate((ltttPath.empty() ? texDb.getLTTTPath(filename) : ltttPath).c_str());
 
 	int numVerts = (width + 1)*(height + 1);
 	vertices.resize(numVerts);

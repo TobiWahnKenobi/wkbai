@@ -1,6 +1,6 @@
 ---
 title: Fog of war and sight
-ids: [mechanics/fog-of-war, mechanic/fog-of-war, mechanic/sight, mechanic/vision, mechanic/reveal, mechanic/clear-fog-of-war]
+ids: [mechanics/fog-of-war, mechanic/fog-of-war, mechanic/sight, mechanic/vision, mechanic/reveal, mechanic/clear-fog-of-war, mechanic/trees-in-the-fog#trees]
 order: 120
 ---
 
@@ -12,8 +12,19 @@ You see only what your units and buildings see. Everything else on the map is da
 
 - **Enemy units** (and their arrows and shots) outside your sight aren't shown.
 - **Enemy buildings** are shown only once you have seen them, and then **as you last saw them**: a building destroyed out of your sight stays on your map until you look again. Neutral buildings that belong to the map are always shown.
+- **Trees** are shown as you last saw them (below).
 - **The ground** itself is always drawn, only darker.
 - **Your allies' units** are always shown, but they don't light the map for you unless they share their sight (below).
+
+## Trees
+
+You know every tree on the map as it stands at the start. After that you see a tree change only where you, or an ally who shares sight with you, can see it:
+
+- **Felled, used up or removed out of your sight:** still drawn standing, on the map and on the minimap, until you see its ground again.
+- **New or grown again out of your sight:** not shown until you see it.
+- A tree in the fog makes no sound and no effects when it falls.
+
+So an enemy's woodcutters can clear a wood behind the fog without your map showing it. Your memory of the trees is kept in a save game. In multiplayer, a guest's memory stays on the guest's computer and isn't saved.
 
 ## How far a unit sees
 
@@ -43,4 +54,4 @@ Some events show the enemy to you for a moment, even in the fog:
 
 ![The same valley seen from a scout on a hill and from one below it](shot:mech-fog-hill-scout)
 
-> **wkbai.** With wkbai's day and night on, sight shrinks at night away from light, and fog, rain and snow shorten it further: see [day and night](day-night.md#night-sight). The original's exact fog darkness wasn't read from its files; wkbai's is an estimate from screenshots.
+> **wkbai.** Earlier versions of wkbai showed every tree in the fog as it really was. With wkbai's day and night on, sight shrinks at night away from light, and fog, rain and snow shorten it further: see [day and night](day-night.md#night-sight). The original's exact fog darkness wasn't read from its files; wkbai's is an estimate from screenshots.

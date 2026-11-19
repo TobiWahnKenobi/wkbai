@@ -1,6 +1,6 @@
 ---
 title: Water
-ids: [ui/editor/water, ui/editor/water/addlake#add-a-lake, ui/editor/water/depth#depth-m, ui/editor/water/removelake#remove-a-lake, ui/editor/water/surface#surface, ui/editor/water/waterways#waterways, ui/editor/water/waterfalls#waterfalls, ui/editor/water/seas#sea-regions-wind, ui/editor/water/save#save-water-design, ui/editor/water/clear#clear-design]
+ids: [ui/editor/water, ui/editor/water/addlake#add-a-lake, ui/editor/water/depth#depth-m, ui/editor/water/removelake#remove-a-lake, ui/editor/water/surface#surface, ui/editor/water/waterways#waterways, ui/editor/water/waterfalls#waterfalls, ui/editor/water/seas#sea-regions-wind, ui/editor/water/save#save-water-design, ui/editor/water/clear#clear-design, ui/editor/water/speed#waterway-speeds]
 order: 30
 ---
 
@@ -55,6 +55,12 @@ A waterway is a river's course, from its source to its mouth. The water within i
 The list shows the map's waterways and their points. Click one to add points to it, change its width, or remove it with **Delete waterway**. Over the map, waterways are drawn as lines with arrows showing the flow; the chosen one is white.
 
 A waterway only steers water that is there. To make the river itself, dig its bed below a lake's level, or paint river textures.
+
+## Waterway speeds
+
+With the [river currents](../../mechanics/water-and-currents.md) on, a river's flow pushes and hurts the units in it. Without a speed of its own, a waterway's water flows as fast as wkbai finds it from the land. A map maker can give a waterway a speed in metres a second: below 0.5 m/s it counts as slow, below 1.2 m/s as normal, above that as fast. Rain and floods speed it up, as they do any river.
+
+The editor has no field for it yet. Set it in the map folder's `water.json` ([wkbai's map format](map-format.md#whats-in-a-map-folder)): `"speed": 1.5` beside the waterway's `"points"` and `"width"`. The editor's **Save map** keeps it.
 
 ## Waterfalls
 

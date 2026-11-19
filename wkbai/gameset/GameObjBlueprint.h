@@ -247,8 +247,11 @@ struct GameObjBlueprint {
 	//GameObjBlueprint(GameSet *gameSet) : gameSet(gameSet) {}
 	//GameObjBlueprint(int cls, const std::string &name, GameSet &gameSet) : bpClass(cls), name(name), gameSet(gameSet) {}
 
-private:
+	// (public for the tests: Test_SwimAnimations)
 	void loadAnimations(GameObjBlueprint::BPAppearance &ap, const std::string &dir, bool overrideAnims = false);
+
+private:
+	void addMadeSwim(BPAppearance &ap);
 };
 
 class GameObjBlueprintIndex

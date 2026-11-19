@@ -33,10 +33,34 @@ void Language::load(const char* path)
 	while (!gsf.eof) {
 		auto tag = gsf.nextTag();
 		auto str = gsf.nextString(true);
-		text[tag] = convertLatin1ToUtf8(str);
+		text[tag] = decodeLineBreaks(convertLatin1ToUtf8(str));
 		gsf.advanceLine();
 	}
 	free(out);
+}
+
+std::string Language::decodeLineBreaks(const std::string& str)
+{
+	if (str.find('\\') == std::string::npos)
+		return str;
+	std::string out;
+	out.reserve(str.size());
+	for (size_t i = 0; i < str.size(); i++) {
+		if (str[i] == '\\' && i + 1 < str.size()) {
+			if (str[i + 1] == 'n') {
+				out.push_back('\n');
+				i++;
+				continue;
+			}
+			if (str[i + 1] == '\\') { // an escaped backslash stays escaped
+				out.append("\\\\");
+				i++;
+				continue;
+			}
+		}
+		out.push_back(str[i]);
+	}
+	return out;
 }
 
 std::string Language::getText(const std::string& key) const

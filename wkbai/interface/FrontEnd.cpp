@@ -6,6 +6,7 @@
 #include "../AgentUi.h"
 #include "../client.h"
 #include "FrontEnd.h"
+#include "../MapFolder.h"
 #include "../terrain.h"
 #include "LuaScripts.h"
 #include "MenuOptions.h"
@@ -359,8 +360,10 @@ struct FrontEnd::Impl {
 		auto [it, isNew] = images.try_emplace("level:" + level);
 		if (!isNew)
 			return it->second;
-		const std::string path = "Save_Games\\" + level;
-		if (!FileExists(path.c_str()))
+		std::string path = "Save_Games\\" + level;
+		if (MapFolder::IsMapPath(path))
+			path = MapFolder::LevelFileOf(path);
+		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
 		int size = 0;
@@ -373,6 +376,9 @@ struct FrontEnd::Impl {
 				map.assign(m + 5, end);
 		}
 		free(data);
+		// a map folder's: the BCM of its cache
+		if (MapFolder::IsMapPath(map))
+			map = MapFolder::TerrainFileOf(map);
 		if (map.size() < 4 || StrCICompare(std::string_view(map).substr(map.size() - 4), ".bcm") != 0 || !FileExists(map.c_str()))
 			return it->second;
 		LoadFile(map.c_str(), &data, &size);
@@ -415,8 +421,10 @@ struct FrontEnd::Impl {
 		auto [it, isNew] = levelStarts.try_emplace(level);
 		if (!isNew)
 			return it->second;
-		const std::string path = "Save_Games\\" + level;
-		if (!FileExists(path.c_str()))
+		std::string path = "Save_Games\\" + level;
+		if (MapFolder::IsMapPath(path))
+			path = MapFolder::LevelFileOf(path);
+		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
 		int size = 0;
@@ -958,10 +966,7 @@ struct FrontEnd::Impl {
 				companiesLoaded = true;
 			}
 			auto text = [this](const std::string& key) {
-				std::string s = key.empty() ? std::string() : lang.getText(key);
-				size_t pos;
-				while ((pos = s.find("\\n")) != std::string::npos)
-					s.replace(pos, 2, "\n");
+				std::string s = key.empty() ? std::string() : lang.getText(key); // (its line breaks real ones: Language::load)
 				// a description's "|Title|" first line (the title is shown above it)
 				if (!s.empty() && s[0] == '|')
 					if (const size_t end = s.find('|', 1); end != std::string::npos)
@@ -1019,7 +1024,7 @@ struct FrontEnd::Impl {
 			int i = 1;
 			for (const General& g : generals) {
 				std::string bio = g.background.empty() ? std::string()
-					: g.background[0] == '"' ? g.background.substr(1) : lang.getText(g.background);
+					: g.background[0] == '"' ? Language::decodeLineBreaks(g.background.substr(1)) : lang.getText(g.background);
 				// "|Name|%s\n..." in Language.txt: the name between bars and a placeholder line
 				if (!bio.empty() && bio[0] == '|') {
 					const size_t end = bio.find('|', 1);
@@ -1028,10 +1033,6 @@ struct FrontEnd::Impl {
 				}
 				if (bio.rfind("%s", 0) == 0)
 					bio = bio.substr(2);
-				size_t pos;
-				// Language.txt writes line breaks as a backslash and n
-				while ((pos = bio.find("\\n")) != std::string::npos)
-					bio.replace(pos, 2, "\n");
 				sol::table stats = lua.create_table();
 				for (const auto& [item, value] : g.stats)
 					stats[item] = value;
@@ -1336,10 +1337,11 @@ void FrontEnd::setSinglePlayer(bool singlePlayer) { impl->singlePlayer = singleP
 void FrontEnd::setCurrentSave(const std::string& name) { impl->currentSave = name; }
 void FrontEnd::setCanSave(bool canSave) { impl->canSave = canSave; }
 
-std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& path)
+std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& levelPath)
 {
 	std::vector<SaveGameHuman> humans;
-	if (!FileExists(path.c_str()))
+	const std::string path = MapFolder::IsMapPath(levelPath) ? MapFolder::LevelFileOf(levelPath) : levelPath;
+	if (path.empty() || !FileExists(path.c_str()))
 		return humans;
 	char* data = nullptr;
 	int size = 0;

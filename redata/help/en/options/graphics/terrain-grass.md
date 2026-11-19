@@ -1,12 +1,12 @@
 ---
 title: Terrain and grass
-ids: [ui/frontend/options/terrain, option/terrainFresnel#ground-fresnel-sky-sheen, option/terrainTessellation#terrain-tessellation, option/extendMap#extend-map, option/extendMapDetail#extend-map-detail, option/extendMapShadows#far-land-shadows, option/farLandCache#keep-the-far-land-on-disk, option/farLandCacheMB#far-land-cache-size-mb, option/grass#grass, option/grassDensity#grass-density, option/grassHeight#grass-height, option/grassDistance#grass-distance, option/bumpMapping#terrain-bump-mapping]
+ids: [ui/frontend/options/terrain, option/terrainFresnel#ground-fresnel-sky-sheen, option/terrainTessellation#terrain-tessellation, option/extendMap#extend-map, option/extendMapDetail#extend-map-detail, option/extendMapShadows#far-land-shadows, option/farLandCache#keep-the-far-land-on-disk, option/farLandCacheMB#far-land-cache-size-mb, option/windTrees#trees-in-the-wind, option/grass#grass, option/grassWind#grass-in-the-wind, option/grassDensity#grass-density, option/grassHeight#grass-height, option/grassDistance#grass-distance, option/bumpMapping#terrain-bump-mapping]
 order: 50
 ---
 
 # Terrain and grass
 
-The ground: its shape and sheen, the land drawn beyond the map's edge, and the grass on it.
+The ground: its shape and sheen, the land drawn beyond the map's edge, the grass on it, and how trees and grass move in the wind.
 
 ![Graphics > Terrain and grass](shot:options-terrain)
 
@@ -52,9 +52,29 @@ With Extend map at Far or Horizon; on by default. The far land, once built, is k
 
 With Keep the far land on disk: the most space it may take, 256 to 32,768 MB, in steps of 256; default 4,096. When it is full, the far land used least recently goes first.
 
+## Trees in the wind
+
+How the trees and bushes move in the game's [wind](../../ui/frontend/skirmish/wind.md). The trunk stays rooted and the crown bends downwind, more in a stronger wind and in the gusts; each tree also sways at its own pace. Their shadows bend with them.
+
+- **Off:** the trees stand still.
+- **Sway:** the trees bend and sway.
+- **Sway and leaves** (the default): also the twigs and leaves flutter.
+
+With the lobby's Wind off, the trees and grass still move as in a steady gentle breeze. **Cost:** none to speak of (at most about 0.04 ms with hundreds of trees in view).
+
 ## Grass
 
 On (the default): blades of grass grow on green ground near the camera.
+
+## Grass in the wind
+
+With Grass: how the blades move in the game's [wind](../../ui/frontend/skirmish/wind.md).
+
+- **Off:** the blades stand still.
+- **Waves:** the blades lean downwind, with waves of gusts running over the grass.
+- **Field** (the default): the wind near the ground. It is calmer in the lee of hills, woods, buildings and walls, and stronger on crests. Gusts drift over in patches, the wind's way swirls a little, and the tips flutter.
+
+**Cost:** Waves almost nothing; Field about 0.14 ms more.
 
 ## Grass density
 
@@ -72,4 +92,4 @@ With Grass: how far from the camera grass is drawn, 10 to 250 units, default 80.
 
 On (the default): the ground's texture shows small bumps in the light, as in the original.
 
-> wkbai: the original's ground has the bump mapping and nothing else on this page.
+> wkbai: the original's ground has the bump mapping and nothing else on this page. The original has no wind.

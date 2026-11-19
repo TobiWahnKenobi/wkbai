@@ -66,17 +66,30 @@ std::string EnvironmentSettings::text() const
 		snprintf(buf, sizeof(buf), "weatherCover=%d\n", weatherCover);
 		out += buf;
 	}
+	// (only with the wind on: the text of a game without it stays as it was)
+	if (wind != 0) {
+		snprintf(buf, sizeof(buf), "wind=%d\nwindFrom=%d\nwindStrength=%d\nwindVeers=%d\nwindEffects=%d\nwindSeed=%d\n",
+			wind, windFrom, windStrength, (int)windVeers, (int)windEffects, windSeed);
+		out += buf;
+	}
 	// (only with day and night or the seasons on: they do nothing without, and the lobby sends them
 	// for every game)
 	if (active() && (peasantsSleep || farmersWinter)) {
 		snprintf(buf, sizeof(buf), "peasantsSleep=%d\nfarmersWinter=%d\n", (int)peasantsSleep, (int)farmersWinter);
 		out += buf;
 	}
+	if (seasons && riverCurrents)
+		out += "riverCurrents=1\n";
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
 	}
 	return out;
+}
+
+float EnvWaterFlowFactor(float waterRise, float rain)
+{
+	return std::clamp(1.0f + 0.55f * std::max(waterRise, 0.0f) + 0.3f * rain - 0.3f * std::max(-waterRise, 0.0f), 0.4f, 2.0f);
 }
 
 float WeatherCoverFor(int weather, float spellSeed, float* centre)
@@ -132,6 +145,13 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "moonDay") moonStart = Frac(std::clamp(v, 0.0f, 29.53f) / 29.530589f);
 	else if (name == "peasantsSleep") peasantsSleep = i != 0;
 	else if (name == "farmersWinter") farmersWinter = i != 0;
+	else if (name == "riverCurrents") riverCurrents = i != 0;
+	else if (name == "wind") wind = std::clamp(i, 0, 1);
+	else if (name == "windFrom") windFrom = std::clamp(i, 0, 8);
+	else if (name == "windStrength") windStrength = std::clamp(i, 0, 5);
+	else if (name == "windVeers") windVeers = i != 0;
+	else if (name == "windEffects") windEffects = i != 0;
+	else if (name == "windSeed") windSeed = std::clamp(i, 0, 16777215);
 	else if (name == "dayShift") dayShift = v;
 	else if (name == "yearShift") yearShift = v;
 	else return false;

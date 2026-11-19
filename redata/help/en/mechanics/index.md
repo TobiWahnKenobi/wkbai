@@ -29,6 +29,7 @@ Almost every rule here comes from the game set, the script files of *Warrior Kin
 - [Experience](experience.md): how units grow better and the Training Dummy.
 - [Formations](formations.md): the four shapes, their bonuses and how they break.
 - [Movement and terrain](movement.md): speed by ground, where units can go, and paths.
+- [River currents and swimming](water-and-currents.md): wkbai's moving water that carries, hurts and swims units.
 - [Siege](siege.md): attacking buildings and walls, siege engines and garrisons.
 - [Ships](naval.md): docks, transports and war boats.
 - [Disguises and spies](disguises-and-spies.md): units that look like peasants, and who sees through them.
@@ -38,7 +39,7 @@ Almost every rule here comes from the game set, the script files of *Warrior Kin
 
 - [Fog of war and sight](fog-of-war.md): what you see, and what you remember.
 - [Day and night](day-night.md): wkbai's clock, the moon and night sight.
-- [Seasons and weather](seasons-weather.md): wkbai's temperature, snow, rain, floods, ice and fires.
+- [Seasons and weather](seasons-weather.md): wkbai's temperature, snow, rain, floods, ice, fires and wind.
 
 ## Opponents, modes and files
 

@@ -20,7 +20,7 @@ The chosen map's picture, at the top left. A map without a picture shows its nam
 
 ## The map list
 
-The maps to play, as "4 Peaks (2)": the name, then the number of start positions. The skirmish maps come first, then the Kingmaker campaign's provinces as skirmish maps, then maps saved with the [map editor](../map-editor.md) (only with All; a map named "N Player ..." is listed with the skirmish maps, see [Name it for Skirmish](../../editor/saving.md#name-it-for-skirmish)). Click one to choose it; the [Players tab](players.md) sets up its positions again.
+The maps to play, as "4 Peaks (2)": the name, then the number of start positions. The skirmish maps come first, then the Kingmaker campaign's provinces as skirmish maps, then maps saved with the [map editor](../map-editor.md) and other [map folders](../../editor/map-format.md) under their own names (only with All). A map named "N Player ..." is listed with the skirmish maps instead ([Name it for Skirmish](../../editor/saving.md#name-it-for-skirmish)). A map folder may bring its own day, seasons and weather, which the game starts with in place of the [Seasons & Weather tab](weather.md)'s settings you left at their defaults ([the map's own day and weather](../../editor/map-format.md#the-maps-own-day-and-weather)). Click one to choose it; the [Players tab](players.md) sets up its positions again.
 
 ## Start Food, Wood and Gold
 

@@ -1,6 +1,6 @@
 ---
 title: Placing buildings
-ids: [controls/building-placement, controls/building-placement/preview#the-preview, controls/building-placement/turn#turning-it, controls/building-placement/place#placing-it, controls/building-placement/refused#why-it-cant-go-there, controls/building-placement/farm#farms-and-fertile-soil, controls/building-placement/walls#walls-round-a-city]
+ids: [controls/building-placement, controls/building-placement/preview#the-preview, controls/building-placement/turn#turning-it, controls/building-placement/place#placing-it, controls/building-placement/refused#why-it-cant-go-there, controls/building-placement/farm#farms-and-fertile-soil, controls/building-placement/walls#walls-round-a-city, controls/building-placement/gatehouse#a-gatehouse-in-a-wall]
 order: 60
 ---
 
@@ -54,5 +54,13 @@ While you place a farm, a tooltip rates the soil under it: arid, ordinary or fer
 ## Walls round a city
 
 When a civic building grows a city, the preview shows the banner poles of the new stretch of palisade round it, on green tiles. Old walls that would end up inside the city disappear from the preview: they will be taken down.
+
+## A gatehouse in a wall
+
+A gatehouse is built into a wall, as in the original:
+
+- **Point at your wall.** Move the gatehouse over a straight stretch of your own wall. The preview jumps onto the wall piece under the cursor, even when the cursor's ground point is a tile or two behind it, and turns the gatehouse along the wall.
+- **Place it.** The wall pieces under it disappear from the preview; once it is placed they are gone, and the wall's ends meet the gatehouse.
+- **Where it can't go:** over a wall's corner, onto another gatehouse, across a run of wall foundations, or onto someone else's wall.
 
 > wkbai: the preview, the footprint squares, the refusal box and the quarter turns follow the original. The city rules are the original's, read from its code.

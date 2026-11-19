@@ -1,6 +1,6 @@
 ---
 title: Settings without a menu
-ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation]
+ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation, option/madeSwimAnimations#madeswimanimations, option/editorSaveFormat#editorsaveformat]
 order: 90
 ---
 
@@ -109,6 +109,14 @@ For a host with **Mods: only the host's**: the mods guests may have besides the 
 ## gfxValidation
 
 `true`: the graphics interface checks every call and reports mistakes, much slower. For finding graphics bugs only. Default `false`.
+
+## madeSwimAnimations
+
+`true` (the default): units that have no swimming animation of their own get one that wkbai makes from their walk, and are drawn at the water's surface while they swim ([swimming](../mechanics/water-and-currents.md#swimming)). `false`: none is made; a swimmer plays its walk, slowed down.
+
+## editorSaveFormat
+
+The format the [map editor](../ui/editor/saving.md#save-map) saves in. Left out (the default): wkbai's own map folder, `saved\Maps\<name>.wkbai`. `"original"`: the original game's files instead, a `.lvl` level and a `.bcm` map, as earlier versions of wkbai saved ([the original format](../ui/editor/saving.md#saving-in-the-original-format)).
 
 ## Kept by the menus
 
