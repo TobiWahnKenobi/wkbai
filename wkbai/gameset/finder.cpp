@@ -101,6 +101,9 @@ struct FinderController : ObjectFinder {
 	}
 };
 
+// WKB.exe's Object_Finder_Target (0x450880): the context's target, else the unit's current one
+// (message 0x7d4); with neither the finder fails (returns false), it doesn't find an empty set
+// (FinderFailsWhenEmpty, below)
 struct FinderTarget : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ctx->isServer()) {
@@ -123,6 +126,12 @@ struct FinderTarget : ObjectFinder {
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
 	}
 };
+
+// (ARE_ASSOCIATED, values.cpp: a FINDER_TARGET that found nothing failed, as in WKB.exe)
+bool FinderFailsWhenEmpty(const ObjectFinder* finder)
+{
+	return dynamic_cast<const FinderTarget*>(finder) != nullptr;
+}
 
 struct FinderResults : ObjectFinder {
 	int ofd;
