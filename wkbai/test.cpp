@@ -11934,14 +11934,102 @@ static uint64_t MapPlayHash(const std::string& level, int steps, uint64_t& terra
 	return WorldHash(server, nullptr, &objects);
 }
 
+// the test LaunchTest started (a test that runs itself again in child processes names it)
+static size_t g_launchedTest = 0;
+
 // Every original map imported into a map folder and played headless gives the same game hash as
 // the original: per map (its first level in Save_Games, "mapFolderTest": { "from": n, "count": n,
 // "steps": n } to run part of them) "MAPFOLDER <map> <level>: world <h> <h> terrain <h> <h> objects
-// <n> <n> same <0|1>", then "MAPFOLDER maps <n> same <n>"
+// <n> <n> same <0|1>", then "MAPFOLDER maps <n> same <n>".
+// Each game runs in a process of its own (this program again, as a child, with WKB_TEST and
+// WKB_MAPFOLDER_ONLY / _FROM): a second game in one process doesn't always play the same as the
+// first (some state outlives a Server), and the 54 maps' games one after another in one process
+// ran out of memory ("bad allocation" on the sixth map, 2026-11-19). "inProcess": true plays
+// both in this process as before; "only": "original" or "imported" plays that one game alone
+// (what a child does).
+static void MapFolderImportInChildren(const nlohmann::json& cfg)
+{
+	char* program = nullptr;
+	_get_pgmptr(&program);
+	const std::string exe = program ? program : "wkbai.exe";
+	const int from = cfg.value("from", 0), count = cfg.value("count", 1000);
+	auto child = [&](int index, const char* only, std::string& line) {
+		_putenv_s("WKB_TEST", std::to_string(g_launchedTest).c_str());
+		_putenv_s("WKB_MAPFOLDER_ONLY", only);
+		_putenv_s("WKB_MAPFOLDER_FROM", std::to_string(index).c_str());
+		// (cmd /c strips the outer quotes: the path in its own)
+		FILE* p = _popen(("\"\"" + exe + "\" < NUL\"").c_str(), "r");
+		if (!p)
+			return 0;
+		char buf[4096];
+		int found = 0; // 1: the game's line, 2: no level, 3: past the last map
+		while (fgets(buf, sizeof(buf), p)) {
+			const std::string l = buf;
+			if (l.rfind("MAPFOLDERONE ", 0) == 0) {
+				line = l;
+				found = 1;
+			}
+			else if (l.rfind("MAPFOLDER ", 0) == 0 && l.find("no level uses it") != std::string::npos) {
+				line = l;
+				found = 2;
+			}
+			else if (l.rfind("MAPFOLDER maps 0 ", 0) == 0 && !found)
+				found = 3;
+		}
+		const int code = _pclose(p);
+		if (!found && code != 0)
+			line = "the child process ended with " + std::to_string(code);
+		return found;
+	};
+	int maps = 0, same = 0;
+	for (int index = from; index < from + count; index++) {
+		std::string a, b;
+		const int fa = child(index, "original", a);
+		if (fa == 3)
+			break;
+		maps++;
+		if (fa == 2) {
+			printf("%s", a.c_str());
+			fflush(stdout);
+			continue;
+		}
+		const int fb = fa == 1 ? child(index, "imported", b) : 0;
+		// "MAPFOLDERONE <index> <dir> <kind> world <h> terrain <h> objects <n>..."
+		auto field = [](const std::string& l, const char* name) {
+			const size_t at = l.find(std::string(" ") + name + " ");
+			if (at == std::string::npos)
+				return std::string();
+			const size_t start = at + strlen(name) + 2;
+			return l.substr(start, l.find_first_of(" \r\n", start) - start);
+		};
+		const size_t kindAt = a.find(" original world ");
+		const std::string dir = fa == 1 && kindAt != std::string::npos ? a.substr(13, kindAt - 13) : std::to_string(index);
+		const bool ok = fa == 1 && fb == 1 && b.find(" import failed") == std::string::npos && field(a, "world") == field(b, "world")
+			&& field(a, "terrain") == field(b, "terrain") && field(a, "objects") == field(b, "objects") && !field(a, "world").empty();
+		same += ok;
+		printf("MAPFOLDER %s: world %s %s terrain %s %s objects %s %s same %d%s%s\n", dir.c_str(), field(a, "world").c_str(), field(b, "world").c_str(),
+			field(a, "terrain").c_str(), field(b, "terrain").c_str(), field(a, "objects").c_str(), field(b, "objects").c_str(), (int)ok,
+			ok ? "" : " | ", ok ? "" : (fa != 1 ? a : b).c_str());
+		fflush(stdout);
+	}
+	printf("MAPFOLDER maps %d same %d\n", maps, same);
+	fflush(stdout);
+}
+
 void Test_MapFolderImport()
 {
 	LoadBCP("data.bcp");
-	const nlohmann::json cfg = g_settings.value("mapFolderTest", nlohmann::json::object());
+	nlohmann::json cfg = g_settings.value("mapFolderTest", nlohmann::json::object());
+	// a child of MapFolderImportInChildren: its one game
+	if (const char* only = getenv("WKB_MAPFOLDER_ONLY"); only && *only) {
+		cfg["only"] = only;
+		cfg["from"] = atoi(getenv("WKB_MAPFOLDER_FROM") ? getenv("WKB_MAPFOLDER_FROM") : "0");
+		cfg["count"] = 1;
+	}
+	else if (!cfg.value("inProcess", false) && !cfg.contains("only")) {
+		MapFolderImportInChildren(cfg);
+		return;
+	}
 	const int from = cfg.value("from", 0), count = cfg.value("count", 1000), steps = cfg.value("steps", 750);
 	// each map's first level
 	std::map<std::string, std::string> levelOf;
@@ -12628,10 +12716,15 @@ void LaunchTest()
 		printf(" %2zu: %s\n", i, testList[i].second);
 	}
 	printf("Launch test number? ");
-	char inp[12];
-	gets_s(inp);
+	char inp[12] = {};
+	// WKB_TEST=<n>: that test without asking (a test running itself again in a child process)
+	if (const char* env = getenv("WKB_TEST"); env && *env)
+		snprintf(inp, sizeof(inp), "%s", env);
+	else
+		gets_s(inp);
 	printf("\n");
 	size_t testnum = (size_t)atoi(inp);
 	if (testnum >= testList.size()) testnum = 0;
+	g_launchedTest = testnum;
 	testList[testnum].first();
 }
