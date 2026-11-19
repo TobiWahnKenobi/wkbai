@@ -1273,8 +1273,17 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 				}
 				else if (strtag == "ORDER") {
 					auto orderName = gsf.nextString(true);
-					int orderType = gameSet->orders.names.getIndex(orderName); assert(orderType != -1);
+					int orderType = gameSet->orders.names.getIndex(orderName);
 					gsf.advanceLine();
+					// an order the game set doesn't have: skipped to its END_ORDER (an index of -1
+					// read memory before the list)
+					if (orderType == -1) {
+						printf("WARNING: object %u: order \"%s\" isn't in the game set, left out\n", obj->id, orderName.c_str());
+						while (!gsf.eof && gsf.nextTag() != "END_ORDER")
+							gsf.advanceLine();
+						gsf.advanceLine();
+						continue;
+					}
 					const OrderBlueprint &orderBp = gameSet->orders[orderType];
 					obj->orderConfig.orders.emplace_back(0, &orderBp, obj);
 					Order &order = obj->orderConfig.orders.back();
@@ -1293,9 +1302,26 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 							order.currentTask = gsf.nextInt();
 						}
 						else if (ordtag == "TASK") {
-							int taskType = gameSet->tasks.names.getIndex(gsf.nextString(true)); assert(taskType != -1);
+							const std::string taskName = gsf.nextString(true);
+							int taskType = gameSet->tasks.names.getIndex(taskName);
 							gsf.advanceLine();
-							const TaskBlueprint &taskBp = gameSet->tasks[taskType];
+							// a task the game set doesn't have (2 Player Lakes.lvl's "Play Ambient Sound"
+							// orders name a task "Play Ambient Sound" that isn't there): the order's own
+							// task in that place, else the task is left out. Its index of -1 had read
+							// memory before the list: "bad allocation" or not, by the memory's layout
+							// (test 97, 2026-11-19).
+							const TaskBlueprint* knownBp = taskType != -1 ? &gameSet->tasks[taskType]
+								: order.tasks.size() < orderBp.tasks.size() ? orderBp.tasks[order.tasks.size()] : nullptr;
+							if (taskType == -1)
+								printf("WARNING: object %u: task \"%s\" isn't in the game set: %s\n", obj->id, taskName.c_str(),
+									knownBp ? ("the order's own, \"" + gameSet->tasks.names.getString(knownBp->bpid) + "\"").c_str() : "left out");
+							if (!knownBp) {
+								while (!gsf.eof && gsf.nextTag() != "END_TASK")
+									gsf.advanceLine();
+								gsf.advanceLine();
+								continue;
+							}
+							const TaskBlueprint &taskBp = *knownBp;
 							auto taskptr = Task::create(0, &taskBp, &order);
 							Task &task = *taskptr;
 							while (!gsf.eof) {
@@ -1314,7 +1340,10 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 									task.triggersStarted = gsf.nextInt();
 								}
 								else if (tsktag == "TRIGGER") {
-									task.triggers[gsf.nextInt()]->parse(gsf, *gameSet);
+									// (a trigger the task doesn't have, as a substituted task's: left out)
+									const int t = gsf.nextInt();
+									if (t >= 0 && t < (int)task.triggers.size())
+										task.triggers[t]->parse(gsf, *gameSet);
 								}
 								else if (tsktag == "FIRST_EXECUTION") {
 									task.firstExecution = gsf.nextInt();
