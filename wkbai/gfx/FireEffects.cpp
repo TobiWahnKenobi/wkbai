@@ -458,8 +458,6 @@ namespace {
 	struct Cluster {
 		Vector3 base, sum;
 		float size = 0, alpha = 0, heat = 1, lowest = 1e9f;
-		// (a standing fire's: its particles' crossfade weights added up, Window)
-		float weights = 0;
 		int count = 0;
 		uint32_t seed = 0;
 		bool standing = false;
@@ -471,12 +469,6 @@ namespace {
 	const float STANDING_SINK = 0.4f;
 	// and how much taller they are (what's sunk still reaching out)
 	const float STANDING_TALL = 1.3f;
-
-	// a standing fire's flames don't follow their particles (which shoot up a metre or two a second,
-	// grow two and a half times and are gone in seconds: the original's sprites, a fire far too fast
-	// as flames): each burns steadily at its emitter, fading in and out over its particle's life,
-	// the few alive at an emitter crossfaded into one flame whose only motion is the shader's slow noise
-	float Window(float life) { const float s = std::sin(3.14159265f * life); return s * s; }
 }
 
 const char* QualityName(int quality)
@@ -566,20 +558,6 @@ void Add(const Particle& p, float now, float size, float alpha)
 	f.seed = SeedOf(p);
 	f.objid = p.objid;
 	f.system = p.system;
-	if (p.system->standingFire) {
-		// (Window: steady, at the emitter, the size it has a quarter into its life, the colour's
-		// most opaque, the pattern the emitter's)
-		const auto& ps = p.system->Particles;
-		f.position = p.startPosition;
-		const auto [s1, s2, si] = const_cast<ParticleSystem*>(p.system)->Particles.Scale_Gradient.getAtTime(0.25f * std::max(ps.Max_Age_Range[0], 0.1f), size);
-		f.size = (s1 + (s2 - s1) * si) * ShareSize(share);
-		float peak = alpha;
-		if (ps.Colour_Fn.isDynamic)
-			for (const auto& c : ps.Colour_Fn.cdynamic.Gradient.Value)
-				peak = std::max(peak, c[3] / 255.0f);
-		f.alpha = Saturate(peak * ShareAlpha(share));
-		f.seed = Mix(FloatBits(p.startPosition.x) + 0x9E3779B1U * FloatBits(p.startPosition.z) ^ (p.objid * 0x85ebca6bU));
-	}
 	s_pending.push_back(f);
 }
 
@@ -600,10 +578,8 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 	// (kept between frames: no allocations once they have grown)
 	static std::vector<Cluster> clusters;
 	static std::unordered_map<uint64_t, size_t> index;
-	static std::vector<size_t> flameCluster;
 	clusters.clear();
 	index.clear();
-	flameCluster.clear();
 	{
 		for (const Flame& f : s_pending) {
 			const bool standing = f.system->standingFire;
@@ -612,7 +588,6 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 				key ^= (uint64_t)Mix((uint32_t)std::lround(f.emitter.x) * 73856093U ^ (uint32_t)std::lround(f.emitter.y) * 19349663U
 					^ (uint32_t)std::lround(f.emitter.z) * 83492791U) << 1;
 			auto [it, isNew] = index.try_emplace(key, clusters.size());
-			flameCluster.push_back(it->second);
 			if (isNew) {
 				clusters.emplace_back();
 				clusters.back().seed = Mix((uint32_t)key ^ (uint32_t)(key >> 32));
@@ -625,8 +600,6 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			c.alpha += f.alpha;
 			c.heat = std::max(c.heat, f.heat);
 			c.lowest = std::min(c.lowest, f.position.y);
-			if (standing)
-				c.weights += Window(f.life);
 			c.count++;
 		}
 		for (Cluster& c : clusters)
@@ -679,15 +652,12 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 		const float damage = (f.heat - 1.0f) / 0.6f;
 		const float width = f.size * 0.5f * (0.9f + 0.3f * damage);
 		Vector3 at = f.position;
-		float aspect = FLAME_ASPECT, alpha = f.alpha, life = f.life;
+		float aspect = FLAME_ASPECT;
 		if (f.system->standingFire) {
 			aspect *= STANDING_TALL;
 			at.y -= width * 0.5f * aspect * STANDING_SINK;
-			// (Window: its share of the emitter's flame; young, all flame and no soot)
-			alpha *= Window(f.life) / std::max(clusters[flameCluster[&f - s_pending.data()]].weights, 1.0f);
-			life = 0.15f;
 		}
-		push(at, width, alpha, life, Hash01(f.seed), f.heat, FLAME, aspect, 0.45f, 0.0f);
+		push(at, width, f.alpha, f.life, Hash01(f.seed), f.heat, FLAME, aspect, 0.45f, 0.0f);
 	}
 	// the glow around each fire, flickering
 	if (level >= HIGH)
