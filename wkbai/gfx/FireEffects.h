@@ -10,10 +10,11 @@
 //    (DefaultParticleRenderer).
 //  - Low: each fire particle drawn as a procedural flame instead of its sprite: value noise
 //    rising through a teardrop, its temperature (the particle's age, the noise, a building's
-//    damage) coloured along the black-body curve (Planck's law at 610, 550 and 465 nm).
+//    damage) coloured along the black-body curve (Planck's law at 610, 550 and 465 nm); smoke
+//    rising from a standing fire's flames (a burning building's).
 //  - High: finer flames (more octaves, the noise domain-warped by noise, after Quilez), a glow
-//    around each fire, the air shimmering above it (the frame behind, displaced), smoke rising
-//    from a standing fire's flames, the fire lights (RenderSettings::fireLights) flickering with
+//    around each fire, the air shimmering above it (the frame behind, displaced), a thicker
+//    column of smoke, the fire lights (RenderSettings::fireLights) flickering with
 //    them and stronger and wider the more a building is damaged.
 // Visual only: worked out each frame from the particles and the game time (no state, no rand()),
 // so nothing reaches the simulation and replays stay the same. Low and High need the enhanced
