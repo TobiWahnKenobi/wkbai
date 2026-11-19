@@ -12776,14 +12776,20 @@ void Test_RiverCurrents()
 			run(3.0f);
 			const float moved = alive(u) ? (u->position - at).len2xz() : -1.0f, health = share(u);
 			const int carried = env.stats.carriedSeconds - carried0;
-			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s", name, hardy, c.drag,
-				health * 100.0f, moved, carried);
+			// (what moved it, if anything: its own walk, its order)
+			const Order* order = alive(u) ? u->orderConfig.getCurrentOrder() : nullptr;
+			const std::string orderName = order ? gs.orders.getString(order->blueprint->bpid) : std::string("none");
+			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s; walking on its own %d, order %s", name, hardy, c.drag,
+				health * 100.0f, moved, carried, alive(u) ? (int)(u->movementController.isMoving() || u->movement.isMoving()) : -1, orderName.c_str());
 			if (hardy == ServerEnvironment::WATER_MACHINE)
 				check(health < 0.7f && health > 0.0f && carried >= 1 && moved > 0.2f && moved < c.drag * 3.0f * 0.6f, std::string("a war machine sinks, dragged a little: ") + what);
 			else if (hardy == ServerEnvironment::WATER_HUGE)
 				check(alive(u) && health < 0.97f && carried >= 1 && moved > 0.5f * c.drag, std::string("a huge creature drifts, hurt: ") + what);
 			else
-				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && moved < 0.3f, std::string("otherworldly, untouched: ") + what);
+				// (not carried, not hurt; moved only by an order of its own: another copy of the game's
+				// data has an enemy in its sight there, and it goes for it)
+				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && (moved < 0.3f || order),
+					std::string("otherworldly, untouched: ") + what);
 			if (u.get()) server.deleteObject(u.get());
 		}
 	}
