@@ -609,7 +609,8 @@ namespace {
 	void CurrentLeg(Server& server, ServerGameObject* o, const Vector3& to, float speed, bool swims)
 	{
 		const float now = server.timeManager.currentTime;
-		// swimming: its "Swim" if its model has one (the Scout's), else its walk, slower; wading
+		// swimming: its "Swim" (its own, the Scout's, or one made from its walk: SwimAnim.h), else
+		// (no walk to make one from) its walk, slower; wading
 		// (shallow water, on its way): as it walks
 		if (swims || !o->movement.isMoving()) {
 			static const GameSet* of = nullptr;

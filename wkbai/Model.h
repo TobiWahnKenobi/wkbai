@@ -96,6 +96,12 @@ struct AnimatedModel : Model {
 	uint32_t reboundVerticesTime = UINT32_MAX, reboundNormalsTime = UINT32_MAX;
 	std::string fileName;
 	bool ready = false;
+	// an animation made in code (ModelCache::getGeneratedAnim, e.g. a swim made from the walk):
+	// fills the Anim instead of a file; the mesh is still found by the Anim's meshname, in the
+	// folder of fileName
+	std::function<void(Anim&)> generator;
+	// the animation it was made from (null for a file's)
+	AnimatedModel* madeFrom = nullptr;
 
 	AnimatedModel(ModelCache *cache, const std::string &fileName) : Model(cache), fileName(fileName) {}
 
@@ -137,5 +143,8 @@ public:
 	Model *getModel(const std::string &filename);
 	// a static model made in code, by a name of its own (never a file's): made when first drawn
 	Model *getGeneratedModel(const std::string &name, std::function<void(Mesh&)> generator);
+	// an animation made in code from another one, by a name of its own (that one's file name and a
+	// suffix, e.g. "*swim": not a file's, in the same folder): made when first needed
+	AnimatedModel *getGeneratedAnim(const std::string &name, AnimatedModel *from, std::function<void(Anim&)> generator);
 	const Material& getMaterial(int id);
 };

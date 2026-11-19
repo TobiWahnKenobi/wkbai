@@ -140,8 +140,9 @@ struct ServerEnvironment {
 	//  - A waterway of the map's water design with its own "speed" (WaterDesign::Waterway, m/s):
 	//    its water's speed is that, the classes slow below 0.5 m/s, normal below 1.2 m/s, fast
 	//    (as flow 0.3, 0.45: designedFlow), the weather's factor on it as on the rest.
-	//  - Carried and swimming, a unit plays its "Swim" animation if its model has one (the
-	//    Scout's), else its walk, slower; out of the water an idle one stops, its default again.
+	//  - Carried and swimming, a unit plays its "Swim" animation: its model's own (the Scout's, a
+	//    mod's) or one made from its walk (SwimAnim.h; the client draws it at the water's surface),
+	//    else (no walk) its walk, slower; out of the water an idle one stops, its default again.
 	//  - waterHardiness: the war machines (rams, bombards, trebuchets, mangonels, siege towers,
 	//    carts, the Infernal Engine ...) sink where the water would carry them (normal depth, a
 	//    flood: MACHINE_SINK of their health a second), dragged MACHINE_DRAG of the current's way
