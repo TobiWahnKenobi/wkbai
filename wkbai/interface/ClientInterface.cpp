@@ -5810,8 +5810,12 @@ void ClientInterface::iter()
 						strength *= 0.3f + 0.7f * share;
 						reach *= 0.6f + 0.4f * share;
 					}
-					if (fireFx)
-						strength *= FireFx::Flicker(now, seed);
+					// (and its pool of light breathing with it)
+					if (fireFx) {
+						const float flicker = FireFx::Flicker(now, seed);
+						strength *= flicker;
+						reach *= 0.85f + 0.15f * flicker;
+					}
 					if (FireFx::Level() >= FireFx::HIGH) {
 						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
 						strength *= 1.0f + 0.2f * damage;

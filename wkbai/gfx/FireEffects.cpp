@@ -254,6 +254,10 @@ float4 Flame(FIRE_OUTPUT i)
 	float cool = saturate(1 - life * 1.5);
 	temp = saturate(body * cool * (0.8 + 0.3 * (heat - 1) / 0.6));
 	float soot = smoothstep(0.25, 0.75, life) * smoothstep(0.05, 0.5, body) * (0.35 + 0.65 * n);
+	// the soot dissolving over the last third of its life (the noise eating it from its thin parts,
+	// its edges first), not vanishing whole as the particle dies
+	float gone = smoothstep(0.65, 1.0, life);
+	soot *= saturate((n + 0.15 - gone * 1.2) * 4) * (1 - gone * gone);
 	if (temp <= 0.02 && soot <= 0.01)
 		discard;
 	// 800 K (a dull red at the edges and the tips) to 2600 K (the core's yellow-white)
@@ -525,16 +529,20 @@ bool HasShare(uint32_t objid) { return s_shares && objid && s_shares->count(obji
 float Flicker(float time, uint32_t seed)
 {
 	const float s = Hash01(seed) * 6.2831853f, s2 = Hash01(seed ^ 0x5bd1e995U) * 6.2831853f;
-	// (slow swells, 0.25 to 0.8 a second, and a little faster wavering on them; no buzz)
-	return 1.0f + 0.15f * std::sin(time * 1.6f + s) + 0.10f * std::sin(time * 2.9f + s2) + 0.05f * std::sin(time * 5.1f + s + s2);
+	// (swells of a third to one a second, and quicker flickers on them, up to three a second:
+	// about half to one and a half times; no buzz)
+	return 1.0f + 0.2f * std::sin(time * 2.1f + s) + 0.15f * std::sin(time * 5.7f + s2) + 0.1f * std::sin(time * 11.3f + s + s2)
+		+ 0.06f * std::sin(time * 17.9f + 2.0f * s);
 }
 
 Vector3 Sway(float time, uint32_t seed)
 {
 	const float s = Hash01(seed ^ 0x3c6ef372U) * 6.2831853f, s2 = Hash01(seed ^ 0xa54ff53aU) * 6.2831853f;
-	return Vector3(0.35f * std::sin(time * 1.1f + s) + 0.15f * std::sin(time * 2.3f + s2),
-		0.25f * std::sin(time * 1.7f + s2) + 0.1f * std::sin(time * 3.1f + s),
-		0.35f * std::sin(time * 0.9f + s2 + 1.0f) + 0.15f * std::sin(time * 2.6f + s));
+	// (a metre and a half or so across, half a metre up and down: the pool of light on the ground
+	// moving with the flames)
+	return Vector3(1.0f * std::sin(time * 1.3f + s) + 0.5f * std::sin(time * 3.7f + s2),
+		0.4f * std::sin(time * 2.3f + s2) + 0.2f * std::sin(time * 5.3f + s),
+		1.0f * std::sin(time * 1.1f + s2 + 1.0f) + 0.5f * std::sin(time * 4.1f + s));
 }
 
 uint32_t SeedOf(const Particle& p)
@@ -657,6 +665,10 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			aspect *= STANDING_TALL;
 			at.y -= width * 0.5f * aspect * STANDING_SINK;
 		}
+		// (its soot, as it dissolves, rising a little further than the particle: up to two thirds
+		// of the flame's width more by the end of its life)
+		const float late = Saturate((f.life - 0.5f) * 2.0f);
+		at.y += late * late * width * 0.65f;
 		push(at, width, f.alpha, f.life, Hash01(f.seed), f.heat, FLAME, aspect, 0.45f, 0.0f);
 	}
 	// the glow around each fire, flickering

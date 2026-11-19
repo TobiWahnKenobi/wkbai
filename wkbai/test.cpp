@@ -11568,8 +11568,8 @@ void Test_FireQuality()
 		const float first = FireFx::Flicker(0.0f, 5);
 		for (int i = 0; i < 2000; i++) {
 			const float f = FireFx::Flicker(i * 0.0137f, 5);
-			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
-			varies |= std::abs(f - first) > 0.1f;
+			inRange &= f >= 0.45f && f <= 1.55f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.3f;
 		}
 		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
 	}
