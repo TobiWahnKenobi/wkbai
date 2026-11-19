@@ -98,8 +98,8 @@ namespace MapFolder {
 	// default (a setting the lobby changed stays the lobby's); how many were applied
 	int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& settings);
 
-	// headless: "wkbai --author <folder>" and "wkbai --author import <level> [<folder>]"; returns
-	// the process's exit code
+	// headless: "wkbai --author <folder>", "wkbai --author import <level> [<folder>]", and "catalog" and
+	// "describe" (MapAuthoring.h); returns the process's exit code
 	int RunCommandLine(const std::vector<std::string>& args);
 
 	// 16-bit grey PNG (one channel), for the hand layers and tests

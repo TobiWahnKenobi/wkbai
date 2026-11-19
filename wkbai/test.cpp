@@ -30,6 +30,7 @@
 #include "TrnTextureDb.h"
 #include "terrain.h"
 #include "MapFolder.h"
+#include "MapAuthoring.h"
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <SDL3/SDL_keycode.h>
@@ -13367,6 +13368,152 @@ void Test_TextLineBreaks()
 	printf("BREAKS all %d\n", all ? 1 : 0);
 }
 
+// The map catalog and describe (step 17.3, MapAuthoring.h; needs the game data): the catalog of
+// the base game alone and with WKB Plus (WKB_Plus.bcp, when the game folder has it) against the
+// game set's own counts (every class's blueprints) and the texture database file's (its
+// TEXTURE_GROUP, TEXTURE and MATCHING lines and EDGE rules); then describe on three original
+// levels and on test 98's PNG map (made first when it isn't there).
+// "MAPCATALOG <check> <0|1> ..." and "MAPCATALOG all <0|1>"
+void Test_MapCatalog()
+{
+	LoadBCP("data.bcp");
+	const std::string gsFile = "Warrior Kings Game Set\\multi-player extensions.cpp";
+	// the mods to try: none (the base game), and WKB Plus
+	std::string plusId;
+	for (const ModInfo& m : GetMods())
+		if (StrCICompare(m.id, "WKB_Plus.bcp") == 0)
+			plusId = m.id;
+	const nlohmann::json configured = g_settings.value("disabledMods", nlohmann::json::array());
+	bool all = true;
+	std::vector<std::pair<std::string, size_t>> totals;
+	for (int run = 0; run < (plusId.empty() ? 1 : 2); run++) {
+		nlohmann::json disabled = nlohmann::json::array();
+		for (const ModInfo& m : GetMods())
+			if (run == 0 || m.id != plusId)
+				disabled.push_back(m.id);
+		g_settings["disabledMods"] = disabled;
+		InitFileSystem();
+		const std::string label = run == 0 ? "base" : "WKB Plus";
+		GameSet gs(gsFile.c_str(), g_settings.value<int>("gameVersion", 0));
+		const nlohmann::ordered_json c = MapAuthoring::Catalog(gs, gsFile, run == 0);
+		bool ok = true;
+		size_t listed = 0, own = 0;
+		for (int k = 0; k < Tags::GAMEOBJCLASS_COUNT; k++) {
+			std::string cls = Tags::GAMEOBJCLASS_tagDict.tags[k];
+			for (char& ch : cls)
+				ch = (char)tolower((unsigned char)ch);
+			const size_t n = c["classes"][cls]["blueprints"].size();
+			listed += n;
+			own += gs.objBlueprints[k].size();
+			if (n != gs.objBlueprints[k].size()) {
+				printf("MAPCATALOG %s class %s: %zu listed, the game set has %zu\n", label.c_str(), cls.c_str(), n, gs.objBlueprints[k].size());
+				ok = false;
+			}
+			// every name once
+			std::set<std::string> names;
+			for (const auto& b : c["classes"][cls]["blueprints"])
+				names.insert(b["name"].get<std::string>());
+			ok = ok && names.size() == n;
+		}
+		// the texture database against its file's own lines
+		size_t groupsListed = 0, texturesListed = 0, rulesListed = 0, coloured = 0, withTerrain = 0;
+		size_t groupLines = 0, textureLines = 0, edgeLines = 0;
+		for (const auto& db : c["textureDatabases"]) {
+			groupsListed += db["groups"].size();
+			for (const auto& g : db["groups"]) {
+				texturesListed += g["textures"].size();
+				rulesListed += g["edgeRules"].get<size_t>();
+				coloured += !g["meanColour"].is_null();
+				withTerrain += !g["terrain"].is_null();
+			}
+			char* data = nullptr;
+			int size = 0;
+			LoadFile(db["file"].get<std::string>().c_str(), &data, &size, 1);
+			data[size] = 0;
+			std::istringstream in(std::string(data, size));
+			free(data);
+			for (std::string line; std::getline(in, line);) {
+				std::istringstream ls(line);
+				std::string tag;
+				ls >> tag;
+				groupLines += tag == "TEXTURE_GROUP";
+				textureLines += tag == "TEXTURE" || tag == "MATCHING";
+				edgeLines += tag == "EDGE";
+			}
+		}
+		const bool texOk = groupsListed == groupLines && texturesListed == textureLines && rulesListed == edgeLines && coloured == groupsListed && groupsListed > 0;
+		const auto& n = c["counts"];
+		const bool restOk = n["skies"].get<int>() > 0 && n["trees"].get<int>() > 0 && c["environment"]["weathers"].size() == WEATHER_COUNT
+			&& c["resources"].size() > 0 && c["terrains"].size() == gs.terrains.size();
+		printf("MAPCATALOG %s blueprints %d (%zu listed, the game set's %zu)\n", label.c_str(), (int)(ok && listed == own), listed, own);
+		printf("MAPCATALOG %s textures %d (%zu groups of %zu TEXTURE_GROUP lines, %zu textures of %zu TEXTURE/MATCHING lines, %zu edge rules of %zu EDGE lines, "
+			"%zu with a mean colour, %zu with a terrain)\n", label.c_str(), (int)texOk, groupsListed, groupLines, texturesListed, textureLines, rulesListed, edgeLines, coloured, withTerrain);
+		printf("MAPCATALOG %s rest %d (%d skies, %d trees, %zu terrains, %zu resources, %zu weathers)\n", label.c_str(), (int)restOk, n["skies"].get<int>(),
+			n["trees"].get<int>(), c["terrains"].size(), c["resources"].size(), c["environment"]["weathers"].size());
+		std::string perClass;
+		for (const auto& [k, v] : n.items())
+			if (k != "blueprints" && v.is_number() && c["classes"].contains(k))
+				perClass += " " + k + "=" + std::to_string(v.get<int>());
+		printf("MAPCATALOG %s per class:%s\n", label.c_str(), perClass.c_str());
+		all = all && ok && listed == own && texOk && restOk;
+		totals.emplace_back(label, listed);
+		fflush(stdout);
+	}
+	if (totals.size() == 2)
+		printf("MAPCATALOG mod adds %d (base %zu, with WKB Plus %zu blueprints)\n", (int)(totals[1].second > totals[0].second), totals[0].second, totals[1].second);
+	else
+		printf("MAPCATALOG no WKB_Plus.bcp in the game folder: the base game only\n");
+	g_settings["disabledMods"] = configured;
+	InitFileSystem();
+
+	// describe: three original levels and the PNG map
+	const std::string pngName = g_settings.value("mapFolderNewName", std::string("PNG Test"));
+	if (!std::filesystem::exists(g_userPath / "saved" / "Maps" / PathFromUtf8(pngName + ".wkbai") / "map.json"))
+		Test_MapFolderNew();
+	const std::filesystem::path outDir = g_userPath / "describe";
+	std::vector<std::string> maps = { "2 Player 4 Peaks.lvl", "2 Player Forking River.lvl", "8 Player Flynn's Fjords.lvl", "Maps\\" + pngName + ".wkbai" };
+	for (const auto& m : g_settings.value("mapCatalogMaps", nlohmann::json::array()))
+		maps.push_back(m.get<std::string>());
+	int described = 0;
+	for (const std::string& m : maps) {
+		nlohmann::ordered_json d;
+		std::string error, stem = m;
+		for (char& ch : stem)
+			if (ch == '\\' || ch == '/' || ch == ' ' || ch == '\'')
+				ch = '_';
+		const std::filesystem::path png = outDir / PathFromUtf8(stem + ".png");
+		std::error_code ec;
+		std::filesystem::remove(png, ec);
+		const bool loaded = MapAuthoring::Describe(m, PathToUtf8(png), d, error);
+		bool ok = loaded;
+		if (loaded) {
+			const int w = d["size"]["tiles"][0], h = d["size"]["tiles"][1];
+			double share = 0;
+			for (const auto& g : d["materials"]["textureGroups"])
+				share += g["share"].get<double>();
+			const int ppt = d["png"]["pixelsPerTile"], pw = d["png"]["size"][0], ph = d["png"]["size"][1];
+			const bool pic = std::filesystem::file_size(png, ec) > 1000 && pw == w * ppt && ph == h * ppt;
+			ok = w > 0 && h > 0 && d["heights"]["maxM"].get<double>() >= d["heights"]["minM"].get<double>() && std::abs(share - 1.0) < 1e-6
+				&& d["objects"]["count"].get<int>() > 0 && d["players"].size() > 0 && pic;
+			std::ofstream(outDir / PathFromUtf8(stem + ".json"), std::ios::binary) << d.dump(1) << "\n";
+			printf("MAPCATALOG describe %d %s: %d x %d tiles, heights %.1f-%.1f m, %d lakes, %d tiles under water, %zu waterways, %zu groups (top %s %.2f), "
+				"%d objects, %zu players, picture %dx%d\n", (int)ok, m.c_str(), w, h, d["heights"]["minM"].get<double>(), d["heights"]["maxM"].get<double>(),
+				d["water"]["lakeCount"].get<int>(), d["water"]["tilesUnderWater"].get<int>(),
+				d["water"]["design"].is_null() ? (size_t)0 : d["water"]["design"]["waterways"].size(), d["materials"]["textureGroups"].size(),
+				d["materials"]["textureGroups"][0]["name"].get<std::string>().c_str(), d["materials"]["textureGroups"][0]["share"].get<double>(),
+				d["objects"]["count"].get<int>(), d["players"].size(), pw, ph);
+		}
+		else
+			printf("MAPCATALOG describe 0 %s: %s\n", m.c_str(), error.c_str());
+		described += ok;
+		fflush(stdout);
+	}
+	all = all && described == (int)maps.size();
+	printf("MAPCATALOG described %d of %zu\n", described, maps.size());
+	printf("MAPCATALOG all %d\n", (int)all);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -13473,6 +13620,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GatehouseOnWall, "Gatehouse on a wall: over four straight pieces (turned too) it replaces them between the wall's ends; refused across a run, on a corner, on a gatehouse; walked through open, not closed"},
 {Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
 {Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
+{Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
 };
 
 void LaunchTest()
