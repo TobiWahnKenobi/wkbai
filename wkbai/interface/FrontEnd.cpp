@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../help/Help.h"
 #include "../AgentUi.h"
 #include "../client.h"
 #include "FrontEnd.h"
@@ -546,9 +547,17 @@ struct FrontEnd::Impl {
 		lua.set_function("pushClip", [this](float x, float y, float w, float h) { drawList->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true); });
 		lua.set_function("popClip", [this]() { drawList->PopClipRect(); });
 		// agent control: an interactive element drawn this frame (AgentUi's registry)
-		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
-			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled, sol::optional<std::string> help) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true), help.value_or(std::string()));
 		});
+		// the in-game help (help/Help.h): a part of a screen that is no button, with its help ids;
+		// the screen being shown ("ui/frontend/<screen>"), for F1 over nothing
+		lua.set_function("helpZone", [](const std::string& help, float x, float y, float w, float h) {
+			AgentUi::AddHelpZone(help, x, y, w, h);
+		});
+		lua.set_function("setHelpScreen", [](const std::string& id) { Help::SetScreen(id); });
+		// the main menu's Help button: the help at a page ("" or nil: the start page)
+		lua.set_function("openHelp", [](sol::optional<std::string> ids) { Help::Open(ids && !ids->empty() ? *ids : "index"); });
 		lua.set_function("drawText", [this](const std::string& fontName, float x, float y, const std::string& text, sol::optional<uint32_t> colour, sol::optional<float> scale) {
 			if (const BitmapFont* f = font(fontName))
 				f->draw(drawList, x, y, text, colourArg(colour), scale ? *scale : 1.0f);

@@ -1,0 +1,52 @@
+---
+title: Explosives
+ids: [upgrade/Grapeshot, command/Research Grapeshot]
+order: 10
+---
+
+# Explosives
+
+<!-- gen:icon -->
+![Explosives](game:interface/icons/upgrades/Grape_Shot.tga)
+<!-- /gen:icon -->
+
+<!-- gen:facts -->
+<!-- facts:static -->
+| | |
+|---|---|
+| Cost | 300 wood, 200 gold |
+| Research time | 120 s |
+<!-- /facts:static -->
+<!-- /gen:facts -->
+
+## Role
+
+An Arcanum research that gives your [trebuchets](../units/trebuchet.md) grapeshot against troops: when one shoots at units rather than buildings, it fires grapeshot, which costs it more charge. (The game data has a grapeshot button for the bombard too, but it is switched off, so bombards don't use it.)
+
+## Researched at
+
+<!-- gen:trained -->
+- **Researched at:** [Arcanum](../buildings/arcanum.md)
+<!-- /gen:trained -->
+
+## Needs
+
+<!-- gen:needs -->
+- Nothing beyond the building and the cost.
+<!-- /gen:needs -->
+
+## Leads to
+
+<!-- gen:leads -->
+- No new buttons: it improves what you already have.
+<!-- /gen:leads -->
+
+## Commands
+
+<!-- gen:commands -->
+- The research is its own button: `Research Grapeshot`.
+<!-- /gen:commands -->
+
+## Tips
+
+- Makes trebuchets a weapon against massed troops, not only against walls.

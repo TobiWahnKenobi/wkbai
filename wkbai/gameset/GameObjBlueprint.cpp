@@ -264,6 +264,9 @@ void GameObjBlueprint::parse(GSFileParser & gsf, const std::string &directory, b
 			this->startItemValues[x] = gsf.nextFloat();
 			break;
 		}
+		case Tags::CBLUEPRINT_BLUEPRINT_TOOLTIP:
+			tooltip = gsf.nextString(true);
+			break;
 		case Tags::CBLUEPRINT_PHYSICAL_SUBTYPE: {
 			std::string sts = gsf.nextString(true);
 			subtypeNames.insertString(sts);

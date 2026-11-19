@@ -305,6 +305,11 @@ function CCUI_PerFrame()
 	else
 		drawTopPanel()
 	end
+	-- the in-game help (wkbai/help/Help.h): the panels as a whole; their buttons, drawn after,
+	-- lie on top with help of their own
+	helpZone("ui/hud/top-bar", 0, 0, getWindowWidth(), 56)
+	helpZone("ui/hud/selection-panel", 0, getWindowHeight()-326, 330, 326)
+	helpZone("ui/hud/minimap", getWindowWidth()-345, getWindowHeight()-343, 345, 343)
 	drawStainedGlassPanel(0, getWindowHeight()-326, 330, 326)
 	drawImage(getWindowWidth()-345, getWindowHeight()-343, 345, 343, "Interface/InGame/Bottom_Right_Panel.tga")
 	-- Minimap inside the panel's inner frame (pixels 53-287 x 53-286 of Bottom_Right_Panel.tga)

@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "help/Help.h"
 #include "AgentUi.h"
 #include "imguiimpl.h"
 #include "imgui/imgui.h"
@@ -81,6 +82,10 @@ void ImGuiImpl_CreateFontsTexture(IRenderer *gfx)
 	uint8_t *pix; int w, h, bpp;
 	if(imguiFontFile)
 		io.Fonts->AddFontFromFileTTF(imguiFontFile, imguiFontSize);
+	// the help's own fonts (help/Help.cpp), after the default font so that it stays ImGui's default
+	if (io.Fonts->Fonts.empty())
+		io.Fonts->AddFontDefault();
+	Help::AddFonts(io.Fonts);
 	io.Fonts->GetTexDataAsRGBA32(&pix, &w, &h, &bpp);
 	Bitmap bm;
 	bm.width = w; bm.height = h; bm.format = BMFORMAT_B8G8R8A8;
@@ -122,6 +127,7 @@ void ImGuiImpl_NewFrame()
 
 void ImGuiImpl_Render(IRenderer *gfx, bool agentShot)
 {
+	Help::Frame(gfx); // the help window and its right-click menu, over everything else
 	AgentInput::DrawCursorOverlay(); // the agent's cursor and its tag, while it has the input
 	ImGui::Render();
 	ImGuiImpl_RenderDrawLists(ImGui::GetDrawData(), gfx);
