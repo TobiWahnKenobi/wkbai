@@ -81,6 +81,7 @@
 #include "gfx/FireEffects.h"
 #include "gfx/RenderSettings.h"
 #include "interface/MenuOptions.h"
+#include "Wind.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -11337,6 +11338,143 @@ void Test_FarmBuilders()
 
 IRenderer* CreateNULLRenderer();
 
+// The wind (Wind.h): the lobby's settings and their text, the target by the weather and the
+// settings, the veering's bounds, the gusts' mean and range, the names, the wind chill and the
+// fires' factor, the save's round trip; all without the simulation's random numbers
+void Test_Wind()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("WIND %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// off by default (a game from before, the campaign): no text, nothing to send
+	EnvironmentSettings off;
+	check("off by default", off.wind == 0 && off.text().find("wind=") == std::string::npos);
+	EnvironmentSettings es;
+	for (auto [n, v] : { std::pair<const char*, float>{ "wind", 1 }, { "windFrom", 7 }, { "windStrength", 4 }, { "windVeers", 0 }, { "windEffects", 1 }, { "windSeed", 4242 } })
+		check(n, es.apply(n, v));
+	EnvironmentSettings back;
+	{
+		const std::string text = es.text();
+		size_t at = 0;
+		while (at < text.size()) {
+			const size_t end = text.find('\n', at), eq = text.find('=', at);
+			if (eq != std::string::npos && eq < end)
+				back.apply(text.substr(at, eq - at), (float)atof(text.c_str() + eq + 1));
+			at = end == std::string::npos ? text.size() : end + 1;
+		}
+	}
+	check("settings text round trip", back.wind == 1 && back.windFrom == 7 && back.windStrength == 4 && !back.windVeers && back.windEffects && back.windSeed == 4242);
+	check("clamped", [] { EnvironmentSettings c; c.apply("windFrom", 12); c.apply("windStrength", -3); return c.windFrom == 8 && c.windStrength == 0; }());
+
+	// fixed: from the west (7), not veering: it blows to the east (+x), the same at any time
+	{
+		const WindState a = WindTarget(es, WEATHER_CLEAR, 10.0f), b = WindTarget(es, WEATHER_BLIZZARD, 5000.0f);
+		check("from the west blows east", std::fabs(a.dirX - 1.0f) < 1e-4f && std::fabs(a.dirZ) < 1e-4f && std::fabs(b.dirX - a.dirX) < 1e-6f);
+		check("compass W", strcmp(WindCompass(a.dirX, a.dirZ), "W") == 0);
+		// Strong (4): 11 m/s, +-15 %, whatever the weather
+		check("fixed strength", a.speed > 9.3f && a.speed < 12.7f && b.speed > 9.3f && b.speed < 12.7f);
+	}
+	EnvironmentSettings n = es;
+	n.windFrom = 1;
+	check("compass N", strcmp(WindCompass(WindTarget(n, 0, 0).dirX, WindTarget(n, 0, 0).dirZ), "N") == 0
+		&& WindTarget(n, 0, 0).dirZ < -0.999f);
+	// by the weather, random, veering: fog calmer than a blizzard, always; the direction within
+	// 90 + 35 + 12 degrees of the west-south-west; deterministic
+	EnvironmentSettings w;
+	w.wind = 1;
+	w.windSeed = 777;
+	bool calmer = true, bounded = true, same = true;
+	float minDot = 1.0f;
+	for (int i = 0; i < 400; i++) {
+		const float t = i * 37.0f;
+		const WindState fog = WindTarget(w, WEATHER_FOG, t), bliz = WindTarget(w, WEATHER_BLIZZARD, t);
+		calmer &= fog.speed < 2.0f && bliz.speed > 11.0f;
+		const float dot = fog.dirX * WIND_DEFAULT_X + fog.dirZ * WIND_DEFAULT_Z;
+		minDot = std::min(minDot, dot);
+		bounded &= dot > std::cos((90.0f + 35.0f + 12.0f) * 3.14159265f / 180.0f) - 1e-3f;
+		same &= WindTarget(w, WEATHER_FOG, t).speed == fog.speed;
+	}
+	check("fog calmer than a blizzard", calmer);
+	check("direction bounded", bounded);
+	check("deterministic", same);
+	{
+		EnvironmentSettings steady = w;
+		steady.windVeers = false;
+		const WindState a = WindTarget(steady, WEATHER_RAIN, 0), b = WindTarget(steady, WEATHER_RAIN, 3000);
+		const Vector3 p = WindPrevailing(steady);
+		check("steady keeps its way", std::fabs(a.dirX - b.dirX) < 1e-6f && std::fabs(a.dirX - p.x) < 1e-5f && std::fabs(a.dirZ - p.z) < 1e-5f);
+	}
+	// the gusts: mean about 1, never below 0.3, squalls only when gusty
+	{
+		double sum = 0, sumCalm = 0;
+		float lo = 9, hi = 0, hiCalm = 0;
+		const int N = 20000;
+		for (int i = 0; i < N; i++) {
+			const float t = i * 0.37f;
+			const float g = WindGust(t, 0.6f, 99), c = WindGust(t, 0.1f, 99);
+			sum += g; sumCalm += c;
+			lo = std::min(lo, g); hi = std::max(hi, g); hiCalm = std::max(hiCalm, c);
+		}
+		printf("WIND gusts: mean %.3f (calm %.3f), %.2f .. %.2f (calm up to %.2f)\n", sum / N, sumCalm / N, lo, hi, hiCalm);
+		check("gust mean", std::fabs(sum / N - 1.0) < 0.12 && std::fabs(sumCalm / N - 1.0) < 0.05);
+		check("gust range", lo >= 0.3f && hi > 1.5f && hiCalm < 1.3f);
+	}
+	check("speed names", strcmp(WindSpeedName(0.2f), "calm") == 0 && strcmp(WindSpeedName(5.0f), "gentle breeze") == 0
+		&& strcmp(WindSpeedName(30.0f), "storm") == 0);
+
+	// the server's: the chill and the fires' factor by the speed, none with the effects off
+	{
+		ServerEnvironment env;
+		env.settings.wind = 1;
+		env.wind.speed = 17.0f;
+		const float chill = env.windChill(), fire = env.windFireFactor();
+		printf("WIND at 17 m/s: chill %.2f, fire factor %.2f\n", chill, fire);
+		check("gale chills", chill > 4.0f && chill < 5.5f && std::fabs(fire - 17.0f / 8.0f) < 1e-4f);
+		env.settings.windEffects = false;
+		check("no effects", env.windChill() == 0.0f && env.windFireFactor() == 0.0f);
+		env.settings.windEffects = true;
+		env.settings.wind = 0;
+		check("off no effects", env.windChill() == 0.0f && env.windFireFactor() == 0.0f);
+		// the save: the settings and the wind as it is
+		env.settings = es;
+		env.wind.dirX = 0.6f; env.wind.dirZ = -0.8f; env.wind.speed = 12.5f; env.wind.gustiness = 0.45f;
+		ServerEnvironment loaded;
+		loaded.loadText(env.saveText());
+		check("save round trip", loaded.settings.wind == 1 && loaded.settings.windSeed == 4242 && loaded.settings.windFrom == 7
+			&& std::fabs(loaded.wind.dirX - 0.6f) < 1e-6f && std::fabs(loaded.wind.dirZ + 0.8f) < 1e-6f
+			&& std::fabs(loaded.wind.speed - 12.5f) < 1e-5f && std::fabs(loaded.wind.gustiness - 0.45f) < 1e-6f);
+	}
+	// the graphics settings: their menu choices and defaults
+	{
+		const MenuOption* o = FindMenuOption("windTrees");
+		check("windTrees option", o && o->choices.size() == 3 && RenderSettings().windTrees == 2);
+		const MenuOption* g = FindMenuOption("grassWind");
+		check("grassWind option", g && g->choices.size() == 3 && RenderSettings().grassWind == 2);
+	}
+	// boats: before the wind faster, into it slower, across a little faster; a gale's limits
+	{
+		WindState w;
+		w.dirX = 1.0f; w.dirZ = 0.0f; w.speed = 8.0f;
+		const float before = WindBoatFactor(Vector3(10, 0, 0), w), into = WindBoatFactor(Vector3(-10, 0, 0), w), across = WindBoatFactor(Vector3(0, 0, 5), w);
+		printf("WIND boats at 8 m/s: before %.2f, across %.2f, into %.2f\n", before, across, into);
+		check("boats by the wind", std::fabs(before - 1.25f) < 1e-3f && std::fabs(across - 1.12f) < 1e-3f && std::fabs(into - 0.65f) < 1e-3f);
+		w.speed = 30.0f;
+		check("boats in a gale", std::fabs(WindBoatFactor(Vector3(-1, 0, 0), w) - 0.35f) < 1e-4f && std::fabs(WindBoatFactor(Vector3(1, 0, 0), w) - 1.5f) < 1e-4f);
+		ServerEnvironment env;
+		check("boats without the wind", env.windBoatFactor(Vector3(-1, 0, 0)) == 1.0f);
+	}
+	// the wind field's map: 1 before a build and outside, bilinear between the tiles' middles
+	{
+		WindShelterMap m;
+		check("shelter neutral", m.at(10, 10) == 1.0f);
+		m.width = 2; m.height = 1;
+		m.value = { 85, 255 }; // 0.5, 1.5
+		const float mid = m.at(5.0f, 2.5f), left = m.at(2.5f, 2.5f), out = m.at(-50.0f, 2.5f);
+		check("shelter bilinear", std::fabs(mid - 1.0f) < 1e-3f && std::fabs(left - 0.5f) < 1e-3f && std::fabs(out - 0.5f) < 1e-3f);
+	}
+	printf("WIND %s\n", all ? "PASSED" : "FAILED");
+}
+
 void Test_FireQuality()
 {
 	bool all = true;
@@ -12480,6 +12618,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
+{Test_Wind, "Wind: the lobby's settings and text, the target by the weather, veering and gusts, wind chill and the fires' factor, the save"},
 };
 
 void LaunchTest()

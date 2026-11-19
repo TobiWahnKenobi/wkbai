@@ -1,4 +1,5 @@
 #include "QuickSkirmishMenu.h"
+#include <random>
 #include "../server.h"
 #include "../MapFolder.h"
 #include "../imgui/imgui.h"
@@ -594,6 +595,10 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		// the year 1000 (unless the settings gave one), saved with the game
 		if (server.environment.settings.moonStart < 0.0f)
 			server.environment.settings.moonStart = HistoricMoonAge(server.environment.settings.startSeason);
+		// the wind's seed (Wind.h: its prevailing direction, its swings and gusts), chosen now and
+		// kept in the settings (saved, recorded), outside the simulation's random numbers
+		if (server.environment.settings.wind != 0 && server.environment.settings.windSeed == 0)
+			server.environment.settings.windSeed = 1 + (int)(std::random_device{}() % 16777214u);
 		server.environment.trace = g_settings.value("environmentTrace", false);
 		if (const nlohmann::json force = g_settings.value("environmentForce", nlohmann::json()); force.is_object()) {
 			server.environment.forceWeather = force.value("weather", -1);

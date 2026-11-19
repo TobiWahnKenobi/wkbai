@@ -14,6 +14,7 @@
 #include "common.h"
 #include "util/vecmat.h"
 #include "Camera.h"
+#include "Wind.h"
 #include "scene.h"
 #include <cstdarg>
 #include "TimeManager.h"
@@ -85,6 +86,10 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	// the lobby's Clear Fog Of War (Server::clearFogOfWar, with NETCLIMSG_ENVIRONMENT): on, no fog
 	// of war (everything on the map shown); off until the server says
 	bool clearFogOfWar = false;
+	// wkbai's wind as the server last sent it (NETCLIMSG_WIND; its settings in environmentSettings):
+	// windActive false: the lobby's wind is off (the fixed look from before)
+	bool windActive = false;
+	WindState wind;
 	// EXIT_TO_MAIN_MENU for this client's player (NETCLIMSG_EXIT_TO_MENU): a guest leaves the game
 	bool exitToMenu = false;
 	// the players whose game is over (NETCLIMSG_PLAYER_FINISHED, Server::finishedPlayers): 1 won,

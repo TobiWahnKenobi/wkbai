@@ -40,6 +40,7 @@ struct SceneEntity {
 		SEFLAG_LEAVES = 128, // a broadleaf tree or bush (wkbai's seasons: autumn colours, dry in heat)
 		SEFLAG_CHARRED = 256, // a tree or bush a wildfire burned: drawn black (and bare)
 		SEFLAG_BARE = 512, // a tree without its leaves (winter, burnt): the materials other than its bark not drawn
+		SEFLAG_WIND = 1024, // a tree or bush: bends in the wind (Wind.h; RenderSettings::windTrees)
 	};
 };
 

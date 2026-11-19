@@ -531,7 +531,7 @@ bool Server::saveGame(const char* filename)
 		government = ministries.saveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
-		if (environment.enabled() || es.skyWeather != 0 || es.skyCover != 45)
+		if (environment.enabled() || environment.windOn() || es.skyWeather != 0 || es.skyCover != 45)
 			environmentText = environment.saveText();
 		for (const auto& [id, cobj] : idmap) {
 			const ServerGameObject* obj = (const ServerGameObject*)cobj;

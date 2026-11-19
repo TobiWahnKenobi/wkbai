@@ -70,6 +70,49 @@
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
 #include "../util/LoadingProgress.h"
+#include "../Wind.h"
+
+// The wind's look on the models (Wind.h):
+// the banners and flags (a model whose file's path names a flag, banner or pennant): with the
+// lobby's wind their animation runs on the wind's flag clock (slower in a calm, up to 2.2 times
+// in a gale), each a little apart (offset: its id's); without it as before
+static bool IsBannerModel(Model* m)
+{
+	static std::unordered_map<Model*, bool> known;
+	auto [it, isNew] = known.try_emplace(m, false);
+	if (isNew && m) {
+		std::string n;
+		if (auto* am = dynamic_cast<AnimatedModel*>(m))
+			n = am->fileName;
+		else if (StaticModel* sm = m->getStaticModel())
+			n = sm->fileName;
+		for (char& c : n)
+			c = (char)std::tolower((unsigned char)c);
+		it->second = n.find("flag") != std::string::npos || n.find("banner") != std::string::npos || n.find("pennant") != std::string::npos;
+	}
+	return it->second;
+}
+
+static uint32_t WindAnimTime(Model* m, uint32_t ms, uint32_t offset, float speed)
+{
+	if (!g_wind.on || !m || !IsBannerModel(m))
+		return ms;
+	return (uint32_t)(g_wind.flagClock * 1000.0 * std::max(speed, 0.05f)) + offset * 7919u % 4000u;
+}
+
+// the trees and bushes that bend in it (SEFLAG_WIND): by their blueprint's name, as the seasons'
+static bool IsWindTree(const GameObjBlueprint* bp)
+{
+	static std::unordered_map<const GameObjBlueprint*, bool> known;
+	auto [it, isNew] = known.try_emplace(bp, false);
+	if (isNew && bp) {
+		const std::string& name = bp->name;
+		it->second = (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos)
+			|| name.find("Bush") != std::string::npos || name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos
+			|| name.find("Pine") != std::string::npos || name.find("Fir ") != std::string::npos || name.find("Cedar") != std::string::npos;
+	}
+	return it->second;
+}
 
 // The players' colours by index, taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga
 static const ImU32 playerColors[9] = {
@@ -1669,7 +1712,15 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
+		{
+			static const char* const windTreeLevels[] = { "Off", "Sway", "Sway and leaves" };
+			ImGui::Combo("Trees in the wind", &s.windTrees, windTreeLevels, 3);
+		}
 		ImGui::Checkbox("Grass", &s.grass);
+		{
+			static const char* const grassWindLevels[] = { "Off", "Waves", "Field (shelter, gust cells, swirl)" };
+			ImGui::Combo("Grass in the wind", &s.grassWind, grassWindLevels, 3);
+		}
 		ImGui::BeginDisabled(!s.grass);
 		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 24.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
@@ -2311,6 +2362,61 @@ void ClientInterface::drawUnitHistoryOverlay()
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
 // this player and its allies only, and the timeline what it saw; in a replay, everyone and
 // everything. A timeline entry clicked moves the camera there.
+void ClientInterface::drawWindGauge()
+{
+	if (!client || !client->windActive || !g_settings.value("windGauge", true))
+		return;
+	ImGuiIO& io = ImGui::GetIO();
+	const float scale = std::clamp(io.DisplaySize.y / 1080.0f, 0.7f, 2.0f);
+	const float r = 34.0f * scale;
+	// (its reading below kept on the screen)
+	const float textHalf = std::max(ImGui::CalcTextSize("WSW 30 m/s").x, ImGui::CalcTextSize(WindSpeedName(g_wind.speed)).x) * 0.5f;
+	const ImVec2 c(io.DisplaySize.x - std::max(r, textHalf) - 14.0f * scale, 150.0f * scale);
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	// the camera's frame on the ground: up on the screen is where it looks
+	Vector3 f(client->camera.direction.x, 0.0f, client->camera.direction.z);
+	f = f.sqlen2xz() > 1e-6f ? f.normal2xz() : Vector3(0, 0, 1);
+	const Vector3 right(f.z, 0.0f, -f.x);
+	auto screen = [&](float wx, float wz, float len) { return ImVec2(c.x + (wx * right.x + wz * right.z) * len, c.y - (wx * f.x + wz * f.z) * len); };
+	dl->AddCircleFilled(c, r, IM_COL32(20, 16, 10, 170), 40);
+	dl->AddCircle(c, r, IM_COL32(200, 170, 110, 220), 40, 2.0f * scale);
+	// north (+z) and the other points
+	const char* points[4] = { "N", "E", "S", "W" };
+	const float px[4] = { 0, 1, 0, -1 }, pz[4] = { 1, 0, -1, 0 };
+	for (int i = 0; i < 4; i++) {
+		const ImVec2 at = screen(px[i], pz[i], r - 8.0f * scale);
+		const ImVec2 size = ImGui::CalcTextSize(points[i]);
+		dl->AddText(ImVec2(at.x - size.x * 0.5f, at.y - size.y * 0.5f), i == 0 ? IM_COL32(255, 220, 120, 255) : IM_COL32(190, 180, 160, 200), points[i]);
+	}
+	// the arrow: from upwind to downwind, longer and redder the stronger (with the gust now)
+	const float s = g_wind.strength();
+	const float len = r * (0.35f + 0.45f * std::sqrt(s));
+	const ImU32 col = s < 0.25f ? IM_COL32(150, 220, 150, 255) : s < 0.55f ? IM_COL32(240, 220, 110, 255) : IM_COL32(240, 110, 80, 255);
+	const ImVec2 tail = screen(-g_wind.dir.x, -g_wind.dir.z, len), head = screen(g_wind.dir.x, g_wind.dir.z, len);
+	dl->AddLine(tail, head, col, 3.0f * scale);
+	const ImVec2 back = screen(-g_wind.dir.x, -g_wind.dir.z, 9.0f * scale), side = screen(g_wind.dir.z, -g_wind.dir.x, 5.0f * scale);
+	const ImVec2 b(back.x - c.x, back.y - c.y), sd(side.x - c.x, side.y - c.y);
+	dl->AddTriangleFilled(head, ImVec2(head.x + b.x + sd.x, head.y + b.y + sd.y), ImVec2(head.x + b.x - sd.x, head.y + b.y - sd.y), col);
+	// the reading below: from where, how fast (the mean), its name
+	char text[64];
+	snprintf(text, sizeof(text), "%s %.0f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed);
+	ImVec2 size = ImGui::CalcTextSize(text);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale), IM_COL32(235, 225, 200, 255), text);
+	const char* name = WindSpeedName(g_wind.speed);
+	size = ImGui::CalcTextSize(name);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale + ImGui::GetTextLineHeight()), IM_COL32(190, 180, 160, 220), name);
+	// its tooltip
+	const ImVec2 m = io.MousePos;
+	if ((m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) < r * r) {
+		ImGui::BeginTooltip();
+		ImGui::Text("Wind from %s at %.1f m/s (%s), now %.1f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed, WindSpeedName(g_wind.speed), g_wind.now());
+		if (client->environmentSettings.windEffects)
+			ImGui::TextUnformatted("Boats run faster before it and slower into it. It fans wildfires\nand chills units in the cold.");
+		ImGui::TextDisabled("Options, Interface: \"Wind gauge\" to hide it");
+		ImGui::EndTooltip();
+	}
+}
+
 void ClientInterface::drawChronicle()
 {
 	// a replay shows everyone and everything; a game the player's own statistics and its allies',
@@ -2927,6 +3033,36 @@ void ClientInterface::drawEnvironmentDebug()
 	if (ImGui::Combo("Weather changes", &stabilityChoice, "Frequent\0Normal\0Seldom\0Random\0Custom\0"))
 		send("weatherStability", (float)stabilityChoice);
 	ImGui::EndDisabled();
+	// the wind (Wind.h): the server's now and as drawn (with its gust), its settings
+	{
+		ImGui::Separator();
+		if (client->windActive)
+			ImGui::Text("wind from %s at %.1f m/s (%s), gusts %.2f; drawn %.1f m/s", WindCompass(client->wind.dirX, client->wind.dirZ),
+				client->wind.speed, WindSpeedName(client->wind.speed), client->wind.gustiness, g_wind.now());
+		else
+			ImGui::TextDisabled("wind off (the fixed look from before)");
+		bool windOn = client->windActive;
+		if (ImGui::Checkbox("Wind", &windOn))
+			send("wind", windOn ? 1.0f : 0.0f);
+		ImGui::BeginDisabled(!client->windActive);
+		static const char* const froms[] = { "Random", "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+		static const char* const strengths[] = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" };
+		int from = std::clamp(es.windFrom, 0, 8), strength = std::clamp(es.windStrength, 0, 5);
+		ImGui::SetNextItemWidth(110);
+		if (ImGui::Combo("From", &from, froms, 9))
+			send("windFrom", (float)from);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(130);
+		if (ImGui::Combo("Strength", &strength, strengths, 6))
+			send("windStrength", (float)strength);
+		bool veers = es.windVeers, effects = es.windEffects;
+		if (ImGui::Checkbox("Veers", &veers))
+			send("windVeers", veers ? 1.0f : 0.0f);
+		ImGui::SameLine();
+		if (ImGui::Checkbox("Effects on the game", &effects))
+			send("windEffects", effects ? 1.0f : 0.0f);
+		ImGui::EndDisabled();
+	}
 	int scale = es.tempScale;
 	ImGui::SetNextItemWidth(120);
 	if (ImGui::Combo("Temperature", &scale, "Celsius\0Fahrenheit\0Kelvin\0"))
@@ -3288,8 +3424,11 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * most * 1000.0f);
 	}
 	else if (!remembered)
-		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
+		obj->sceneEntity.animTime = WindAnimTime(model, (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f), obj->id, obj->animSpeed);
 	obj->sceneEntity.flags = 0;
+	// the trees and bushes bend in the wind (Wind.h; drawn by RenderSettings::windTrees)
+	if (IsWindTree(obj->blueprint))
+		obj->sceneEntity.flags |= SceneEntity::SEFLAG_WIND;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
 	// walls (RenderSettings::wallShadows): the sheared wall segments and every other piece of a
 	// wall line by its building type, as the corners aren't sheared and would leave holes
@@ -3558,7 +3697,7 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 				apse.model = cached->second;
 				apse.transform = Matrix::getTranslationMatrix(state.position) * sceneEntity->transform;
 				apse.color = sceneEntity->color;
-				apse.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
+				apse.animTime = WindAnimTime(apse.model, (uint32_t)(client->timeManager.currentTime * 1000.0f), objid * 31u + (uint32_t)i, 1.0f);
 				scene->add(&apse);
 				// Recursively draw attach. points of the attach. point's model!
 				drawAttachmentPoints(&apse, objid); // NOTE: Same objid kept, trail might be shared!!
@@ -5888,7 +6027,7 @@ void ClientInterface::iter()
 			flag.model = client->gameSet->modelCache.getModel(rallyFlagPath);
 			flag.transform = Matrix::getTranslationMatrix(Vector3(dest.x, client->terrain->getHeightEx(dest.x, dest.z, true), dest.z));
 			flag.color = sel->getPlayer()->color;
-			flag.animTime = (uint32_t)SDL_GetTicks();
+			flag.animTime = WindAnimTime(flag.model, (uint32_t)SDL_GetTicks(), sel->id, 1.0f);
 			scene->add(&flag);
 		}
 		// (the fire levels: a looping effect's particles carry its object's id, a burning building's
@@ -6057,6 +6196,7 @@ void ClientInterface::iter()
 	drawLoadingScreen();
 	if (loadingDone) {
 		drawChronicle();
+		drawWindGauge();
 	}
 	// agent control: every player and spectator sees who has it on (the host's list), all game long
 	if (!client->agentPlayers.empty()) {
@@ -6270,7 +6410,7 @@ void ClientInterface::drawExtendedTrees()
 		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
 		e.model = bare ? l.bare : l.snowy && TreeSnowLaden(client, l.id) ? l.snowy : l.leafy;
 		e.transform = bare ? l.bareTransform : l.leafyTransform;
-		e.flags = bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags;
+		e.flags = (bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags) | SceneEntity::SEFLAG_WIND; // (in the wind, Wind.h)
 	}
 	const Vector3 cam = client->camera.position;
 	const Vector3 dir = client->camera.direction;

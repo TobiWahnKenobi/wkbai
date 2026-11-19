@@ -189,6 +189,9 @@ enum NetClientMessages {
 	// of its fire left (8 bits, 255 whole); the ones not sent burn whole. When they change, after
 	// NETCLIMSG_ENVIRONMENT
 	NETCLIMSG_FIRE_SHARES,
+	// wkbai's wind (Wind.h), once a game second while the lobby's wind is on: the settings
+	// (WindSettings::write) and the state (WindState::write)
+	NETCLIMSG_WIND,
 };
 
 enum NetServerMessages {

@@ -258,7 +258,7 @@ float2 StormCellsHigh(float3 p, float h, float lod, float widen)
 	float th = 0.66 - 0.035 * smoothstep(0.55, 0.8, h) + billow * 0.09 - widen;
 	float tower = saturate((n - th) / 0.05);
 	float spread = smoothstep(0.72, 0.97, h);
-	float a = StormCell(p.xz - float2(0.948683, 0.316228) * (spread * 3200), lod);
+	float a = StormCell(p.xz - CloudFront.xy * (spread * 3200), lod);
 	float anvil = saturate((a - lerp(0.645, 0.56, spread) - billow * 0.04) / 0.05) * smoothstep(0.72, 0.8, h);
 	return float2(tower, anvil);
 }
@@ -268,7 +268,7 @@ float2 StormCellsHigh(float3 p, float h, float lod, float widen)
 // units across), drifting with the wind; 0.35 to 1.5 times.
 float DensityRegions(float2 xz, float footprint)
 {
-	float2 dp = xz - float2(6, 2) * CloudScale.w;
+	float2 dp = xz - CloudDrift();
 	float r = cloudNoise.SampleLevel(cloudNoiseSampler, dp / 2600 + float2(0.43, 0.17), max(log2(footprint * 256 / 2600), 0)).a * 0.65
 		+ cloudNoise.SampleLevel(cloudNoiseSampler, dp / 900 + float2(0.29, 0.61), max(log2(footprint * 256 / 900), 0)).a * 0.35;
 	return lerp(0.35, 1.5, smoothstep(0.3, 0.72, r));
@@ -367,7 +367,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 	profile = max(profile, towerProfile);
 	if (profile <= 0)
 		return 0;
-	float3 drift = float3(6, 0, 2) * CloudScale.w; // as the cover's base layer (6 and 2 units a second)
+	float3 drift = float3(CloudDrift().x, 0, CloudDrift().y); // as the cover's base layer (CloudDrift)
 	float3 q = p - drift - float3(0, cShape.z, 0);
 	float4 s = cloudShape.SampleLevel(cloud3DSampler, q / SHAPE_PERIOD, max(log2(footprint * 64 / SHAPE_PERIOD), 0));
 	if (detailLevel >= 1) {
@@ -387,7 +387,7 @@ float CloudDensity(float3 p, float lod, float footprint, bool detail)
 		// a sheet's underside mottled at three scales (about 180, 65 and 25 units: the lumps
 		// and rolls of a real stratus deck; the billows' shape alone left it a smooth blur);
 		// the view's steps only (the light's would cost three samples more each)
-		float2 sp = p.xz - float2(6, 2) * CloudScale.w;
+		float2 sp = p.xz - CloudDrift();
 		float m = cloudNoise.SampleLevel(cloudNoiseSampler, sp / 1400 + float2(0.21, 0.47), max(log2(footprint * 256 / 1400), 0)).g * 0.5
 			+ cloudNoise.SampleLevel(cloudNoiseSampler, sp / 520 + float2(0.63, 0.12), max(log2(footprint * 256 / 520), 0)).g * 0.3
 			+ cloudNoise.SampleLevel(cloudNoiseSampler, sp / 200 + float2(0.11, 0.83), max(log2(footprint * 256 / 200), 0)).b * 0.2;
@@ -780,7 +780,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		sunLight *= lerp(1, 1.6, duskK);
 		ambient *= lerp(1, 0.6, duskK);
 	}
-	const float2 wind = float2(0.948683, 0.316228); // as the cumulus' drift (6, 2)
+	const float2 wind = CloudFront.xy; // as the cumulus' drift (Wind.h; (6, 2) without the lobby's wind)
 	const float2 across = float2(-wind.y, wind.x);
 	float grazing = 1 / max(rd.y, 0.08); // the pixel's footprint stretched towards the horizon
 	// towards the horizon the layers are seen edge on: denser, then lost in the haze
@@ -788,7 +788,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 	{
 		float t = (1600 - ro.y) / rd.y;
 		CloudAt(ro.xz + rd.xz * t);
-		float2 p = ro.xz + rd.xz * t - wind * CloudScale.w * 9;
+		float2 p = ro.xz + rd.xz * t - CloudDrift() * 1.423;
 		float fp = t * 0.0012 * grazing; // the pixel's size there
 		float2 styleShift = cHigh.w * float2(61000, 37000); // each sky its own regions
 		// the warps (the streaks' bend, the fibres' sway, the ripples' bend) and their change over
@@ -902,7 +902,7 @@ float3 HighClouds(float3 ro, float3 rd, float3 colour)
 		float t = (800 - ro.y) / rd.y;
 		CloudAt(ro.xz + rd.xz * t);
 		float2 still = ro.xz + rd.xz * t; // (where the lenticulars stand)
-		float2 p = still - wind * CloudScale.w * 7;
+		float2 p = still - CloudDrift() * 1.107;
 		float fp = t * 0.0012 * grazing;
 		float sheet = cHigh.z;
 		// the rows' bent waves and their change over the screen (before the branch, as the

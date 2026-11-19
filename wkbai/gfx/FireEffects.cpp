@@ -604,7 +604,10 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 					push(c.base + Vector3(0, c.size * 0.35f, 0), c.size * 1.1f, Saturate(c.alpha), 0, 0, c.heat, SHIMMER, 1.9f, 0.4f, 1.0f);
 		// the smoke of a standing fire: puffs rising from its flames' tops, drifting with the wind,
 		// growing and thinning (a puff every LIFE / count seconds, each its own path)
-		const Vector3 wind = g_environment.active ? g_environment.wind : Vector3(0.3f, 0.0f, 0.1f);
+		// (the lobby's wind, Wind.h, also without the seasons; a gale's lean held to 6 m/s)
+		Vector3 wind = g_environment.wind;
+		if (wind.len2xz() > 6.0f)
+			wind = wind * (6.0f / wind.len2xz());
 		for (const Cluster& c : clusters) {
 			if (!c.standing)
 				continue;

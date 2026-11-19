@@ -112,6 +112,15 @@ struct RenderSettings {
 	bool appliedExtendMapShadows = true;
 	void applyExtendMap() { appliedExtendMap = extendMap; appliedExtendMapDetail = extendMapDetail; appliedExtendMapShadows = extendMapShadows; }
 	bool grass = true;
+	// the trees and bushes in the wind (Wind.h): 0 Off (standing still), 1 Sway (the whole tree
+	// bends from its foot downwind, swinging; a few instructions a vertex of the trees only),
+	// 2 Sway and leaves (also the crowns' twigs and leaves fluttering, faster in the gusts)
+	int windTrees = 2;
+	// the grass in the wind (Wind.h): 0 Off (still), 1 Waves (it leans downwind in waves of gusts
+	// running with the air), 2 Field (the wind near the ground: calmer in the lee of hills, woods
+	// and buildings, faster on crests, gust cells drifting with the air, its way swirling, the
+	// blades' tips fluttering; one texture read a blade vertex more)
+	int grassWind = 2;
 	float grassDensity = 3.0f, grassHeight = 1.0f, grassDistance = 80.0f;
 	// camera motion blur (post-processing): the shutter, 0 off to 1 (the whole frame's motion)
 	float motionBlur = 0.0f;
