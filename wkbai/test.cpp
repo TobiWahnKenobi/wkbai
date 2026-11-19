@@ -13604,6 +13604,8 @@ void Test_MapCatalog()
 
 // Step 17.4's test: MapTerrainTest.cpp
 void Test_MapTerrain();
+// Step 17.5's test: MapMaterialsTest.cpp
+void Test_MapMaterials();
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -13713,6 +13715,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
 {Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
 {Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
+{Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
 };
 
 void LaunchTest()

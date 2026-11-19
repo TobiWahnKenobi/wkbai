@@ -1,8 +1,9 @@
 """wkbai map authoring as an MCP server (stdio), so that an AI assistant such as Claude Code can
 design maps for wkbai: know exactly what can go on a map (catalog), read existing maps back
 (describe_map, get_map), make and change map folders (new_map, import_map, set_map, compile), and
-make the land (plan_terrain, generate_terrain, import_heightmap, import_elevation).
-Steps 17.3 and 17.4 of the RE repo's docs/engine/map-authoring.md; the ground, water, object,
+make the land (plan_terrain, generate_terrain, import_heightmap, import_elevation), and texture it
+by rule (set_material_rules, paint_materials, material_report).
+Steps 17.3, 17.4 and 17.5 of the RE repo's docs/engine/map-authoring.md; the water, object,
 check and preview tools follow in later steps. import_elevation never downloads: it names the
 tiles an area needs, and the agent asks the user before each download.
 
@@ -11,6 +12,8 @@ Everything runs wkbai's headless commands (no window, nothing on the screen):
     wkbai --author describe <map> --png <file> --out <file>
     wkbai --author import <level> <folder>
     wkbai --author <folder>                    (compile)
+    wkbai --author materials <folder> --out <file>   (compile, the materials report)
+    wkbai --author material-presets --out <file>
 in a work folder of its own with its own wkconfig.json ("test": true, so a crash never shows a
 dialog) and its own user folder: maps are made in <work>\\profile\\saved\\Maps\\<name>.wkbai, which the
 game there loads as "Maps\\<name>.wkbai". --user-path puts them in another wkbai user folder (e.g.
@@ -123,6 +126,31 @@ TOOLS = [
           "bbox": {"type": "array", "items": NUM}, "centre": {"type": "array", "items": NUM}, "sizeKm": {"type": ["number", "array"]},
           "verticalScale": NUM, "exaggerate": NUM, "maxSlopeDeg": NUM, "maxSteepShare": NUM, "floor": NUM, "sea": BOOL, "seaDepth": NUM,
           "keepAspect": BOOL, "weight": NUM, "generate": BOOL, "picture": BOOL}, ["map"])),
+    # --- the ground (step 17.5): MapMaterials.h ---
+    ("set_material_rules", "Set or change the rules that choose the ground's material per vertex (map.json \"ground\"), then paint (paint: false to only save). "
+     "preset: temperate | nordic | dry (a start: ordered rules and a default material), or none to drop it; default: the material where no rule holds; "
+     "rules: an ordered list, the first rule that holds wins, each {material, and conditions as [min, max] (null open): height m, heightRel 0-1 over the playable land, "
+     "aboveSea m, slope deg, curvature m (+ a crest, - a hollow, against the 5 x 5 vertices round it), moisture 0-1 (from water, rivers, drainage, hollows; "
+     "or layers/moisture.png), drainage 0-1, river (distance to a carved river's middle in half-widths: [null, 0.9] is its bed), seaDistance m, "
+     "noise 0-1 (a patch noise of the rule's own, noiseScale m), mask (layers/<name>.png) with maskRange (default [0.5, null]), water true|false; "
+     "jitter (a factor, or per condition) and jitterScale m (how the limits wander; borders are organic by default)}. "
+     "rulesMode: before (the map's rules first, then the preset's; default) or replace. add: rules put first; remove: rule indices. "
+     "materials: {name: {groups: [[GROUP, weight], ...], patchScale m, description}} adds or changes materials (null removes). "
+     "moisture: {waterReachM, riverReachM, drainage, noise}; despeckle: passes (default 1). "
+     "Materials of the base game: grass, meadow, dry grass, forest floor, sand, beach, hillside, rocky grass, rock, cliff (blocks), sea cliff (blocks), snow, mud, "
+     "river bed (a ford), deep river bed (blocks), farmland, road, track, desert rock (blocks), sandstone (blocks); material_report presets: true lists them with the presets' rules.",
+     obj({"map": MAP, "preset": STR, "default": STR, "rules": {"type": "array", "items": {"type": "object"}}, "add": {"type": "array", "items": {"type": "object"}},
+          "remove": {"type": "array", "items": INT}, "rulesMode": {"type": "string", "enum": ["before", "replace"]}, "materials": {"type": "object"},
+          "moisture": {"type": "object"}, "despeckle": INT, "paint": BOOL, "picture": BOOL}, ["map"])),
+    ("paint_materials", "Compile the map's tiles from its ground rules: the materials per vertex, then the edge-rule solver (every tile's four sides matched to its "
+     "neighbours by the texture database's EDGE rules, transitions found between materials, a group with no transition to its neighbour bridged by the "
+     "next one on the way, e.g. grass to rock through the hillside; a random picture, turn and flips from the map's seed). Hand tiles (tiles.hand.json) stay "
+     "as they are; the solver works around them. Returns the materials report: each material's share, tiles and passability (blocked and slow tiles), "
+     "every unmatched tile with its place and why, the solver's numbers and time; picture (default true): the top-down material map (unmatched tiles red).",
+     obj({"map": MAP, "picture": BOOL}, ["map"])),
+    ("material_report", "The last paint's materials report (as paint_materials returns it) and the material map, without compiling; "
+     "moisture: true for the moisture picture too; presets: true for the material data instead (every material with its groups, the presets and their rules).",
+     obj({"map": STR, "picture": BOOL, "moisture": BOOL, "presets": BOOL})),
 ]
 
 
@@ -533,11 +561,87 @@ class Author:
             raise
         return self._with_picture(a, r, folder) if a.get("generate", True) else r
 
+    # --- the ground ---
+    def _material_result(self, folder, picture=True, moisture=False):
+        rep = os.path.join(folder, "build", "report.json")
+        if not os.path.isfile(rep):
+            raise AuthorError({"error": "no report: paint (or compile) the map first"})
+        with open(rep, encoding="utf-8") as f:
+            report = json.load(f)
+        if "materials" not in report:
+            return {"folder": folder, "materials": None, "note": "map.json has no ground rules or preset: set_material_rules first",
+                    "warnings": report.get("warnings", [])}
+        r = {"folder": folder, "report": report["materials"], "warnings": report.get("warnings", [])}
+        out = {"description": r}
+        images = []
+        for want, name in ((picture, "materials.png"), (moisture, "moisture.png")):
+            png = os.path.join(folder, "build", name)
+            if want and os.path.isfile(png):
+                images.append({"image": base64.b64encode(open(png, "rb").read()).decode(), "path": png})
+        if not images:
+            return r
+        out["image"] = images[0]["image"]
+        out["path"] = images[0]["path"]
+        if len(images) > 1:
+            out["images"] = images
+        return out
+
+    def set_material_rules(self, a):
+        folder = self.need_folder(a["map"])
+        path = os.path.join(folder, "map.json")
+        with open(path, encoding="utf-8") as f:
+            mj = json.load(f)
+        g = dict(mj.get("ground") or {})
+        if "preset" in a:
+            if a["preset"] in (None, "", "none"):
+                g.pop("preset", None)
+            else:
+                g["preset"] = a["preset"]
+        for k in ("default", "rulesMode", "moisture", "despeckle"):
+            if k in a:
+                g[k] = a[k]
+        rules = list(g.get("rules") or [])
+        if "rules" in a:
+            rules = list(a["rules"])
+        if a.get("remove"):
+            rules = [r for i, r in enumerate(rules) if i not in a["remove"]]
+        rules = list(a.get("add") or []) + rules
+        bad = [i for i, r in enumerate(rules) if not isinstance(r, dict) or not isinstance(r.get("material"), str)]
+        if bad:
+            raise AuthorError({"error": "rules %s: each needs a material (a name)" % bad})
+        if rules or "rules" in a or a.get("remove"):
+            g["rules"] = rules
+        if "materials" in a:
+            g["materials"] = merge_patch(g.get("materials") or {}, a["materials"])
+        mj["ground"] = g
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(mj, f, indent=1)
+        r = {"folder": folder, "ground": g}
+        if a.get("paint", True):
+            return self.paint_materials({"map": folder, "picture": a.get("picture", True)})
+        return r
+
+    def paint_materials(self, a):
+        folder = self.need_folder(a["map"])
+        self.run("materials", folder, "--out", os.path.join(self.work, "materials.json"))
+        return self._material_result(folder, a.get("picture", True))
+
+    def material_report(self, a):
+        if a.get("presets"):
+            out = os.path.join(self.work, "material-presets.json")
+            self.run("material-presets", "--out", out)
+            with open(out, encoding="utf-8") as f:
+                return json.load(f)
+        if not a.get("map"):
+            raise AuthorError({"error": "map (or presets: true)"})
+        return self._material_result(self.need_folder(a["map"]), a.get("picture", True), a.get("moisture", False))
+
     def call(self, name, a):
         f = {"catalog": self.catalog, "describe_map": self.describe_map, "new_map": self.new_map, "import_map": self.import_map,
              "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile,
              "plan_terrain": self.plan_terrain, "generate_terrain": self.generate_terrain,
-             "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation}.get(name)
+             "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation,
+             "set_material_rules": self.set_material_rules, "paint_materials": self.paint_materials, "material_report": self.material_report}.get(name)
         if not f:
             raise AuthorError({"error": "unknown tool " + str(name)})
         return f(a)
@@ -574,8 +678,9 @@ def main():
             try:
                 r = author.call(p.get("name"), p.get("arguments") or {})
                 if isinstance(r, dict) and "image" in r:
-                    content = [{"type": "text", "text": json.dumps(r["description"])}, {"type": "image", "data": r["image"], "mimeType": "image/png"},
-                               {"type": "text", "text": r["path"]}]
+                    content = [{"type": "text", "text": json.dumps(r["description"])}]
+                    for im in r.get("images") or [{"image": r["image"], "path": r["path"]}]:
+                        content += [{"type": "image", "data": im["image"], "mimeType": "image/png"}, {"type": "text", "text": im["path"]}]
                 else:
                     content = [{"type": "text", "text": json.dumps(r)}]
                 send({"jsonrpc": "2.0", "id": mid, "result": {"content": content}})

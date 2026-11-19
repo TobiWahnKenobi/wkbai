@@ -1407,6 +1407,8 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	std::vector<PassSite> passes;
 	std::vector<Site> sites;
 	json featRep = json::array();
+	// the rivers as carved (their course, width and bed), for the materials (MapMaterials.h)
+	json riversGen = json::array();
 	for (const Feature& f : feats) featRep.push_back({ { "index", f.index }, { "kind", f.kind } });
 	auto rep = [&](const Feature& f) -> json& {
 		for (json& r : featRep) if (r["index"] == f.index) return r;
@@ -1824,6 +1826,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		r["bedToM"] = bed.back();
 		r["bedMaxRiseM"] = maxRise;
 		r["fords"] = fr;
+		json course = json::array();
+		for (size_t i = 0; i < c.size(); i += 2)
+			course.push_back({ std::round(c[i].x * 10) / 10, std::round(c[i].z * 10) / 10, std::round(bed[i] * 100) / 100 });
+		riversGen.push_back({ { "id", f.j.value("id", "") }, { "width", width }, { "course", course }, { "fords", fr } });
 	}
 	timing["details"] = Ms(t1);
 
@@ -1888,6 +1894,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	gen["lakes"] = lakesJ;
 	gen["seaLevel"] = hasSea ? json(sea) : json();
 	gen["raisedByM"] = raisedBy;
+	for (json& rv : riversGen)
+		for (json& pt : rv["course"])
+			pt[2] = pt[2].get<float>() + raisedBy;
+	gen["rivers"] = riversGen;
 	json terrainOut = raw.value("terrain", json::object());
 	if (!terrainOut.is_object()) terrainOut = json::object();
 	terrainOut["generated"] = gen;
