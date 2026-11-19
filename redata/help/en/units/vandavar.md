@@ -19,19 +19,38 @@ blueprint: Vandavar
 | | |
 |---|---|
 | Cost | 80 food |
-| Train time | 18 s |
 | Food upkeep | 1 |
 | Hit points | 120 |
 | Armour | 10 (front 5, sides 2, rear 0) |
 | Melee attack | 27 every 1.5 s |
 | Speed | 3 |
-| Sight | 6 |
+| Sight | 6 (30 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-Vandavar Barbarian raiders are Pagan plunderers from the [Trading Post](../buildings/trading-post.md). They steal goods from enemy buildings ([Plunder](../commands/plunder.md)), carry off sacks and burn what they leave. They cost 80 food and need a [Sacred Grove](../buildings/temple.md).
+Vandavar Barbarian raiders are Pagan plunderers from the [Trading Post](../buildings/trading-post.md), for 80 food once you have a [Sacred Grove](../buildings/temple.md). They have 120 hit points and fast, 27-point blows every 1.5 seconds, but little armour (5 at the front, 2 on the sides, none behind) and cannot form up. Their work is stealing and burning.
+
+## Abilities
+
+- **[Plunder](../commands/plunder.md):** at an enemy [Village](../buildings/village-wood.md), Warehouse or Manor, the barbarian takes one unit of goods every 5 seconds, gold first, then wood, then food. At a Village it empties the Village's own store; at a Warehouse or Manor it takes from the enemy's whole stock. When there is nothing left it sets the building on fire. It can also plunder an abandoned cart.
+- **[Arson Attack](../commands/arson.md):** 15 seconds at a building to set it alight.
+- **[Pick Up Resource Sack](../commands/vandavar-pick-up-sack.md):** goods from a sack go straight into your stock, without carrying them home.
+- **Raiding kills:** a worker carrying goods that a barbarian kills gives its load straight to you.
+
+## Strong against
+
+- **Peasants and carts**: 26 a blow to a peasant, which dies in four.
+- **Archers and gunners** in melee: 25 a blow, twice as often as most soldiers.
+- **Undefended Villages and Warehouses**, through plunder and fire.
+
+## Weak against
+
+- **Heavy cavalry**: a [Knight](knight.md) does 24 a blow and takes 15.
+- **Formed spears and pikes**: a [Man-at-Arms](pikeman.md) does 30 a blow.
+- **Missiles**: a [Huntress of the Dawn](pagan-archer.md) or [Gunner](gunner.md) does 15 a shot through its front.
+- The [Archangel](michael.md) and similar demons make idle barbarians flee.
 
 ## Trained at / Built by
 
@@ -75,5 +94,6 @@ Vandavar Barbarian raiders are Pagan plunderers from the [Trading Post](../build
 
 ## Tips
 
-- Raid the enemy's outlying farms and Villages, not his army.
-- Their 120 hit points do not last against real soldiers: hit and run.
+- Raid the enemy's outlying Villages and farms, not his army.
+- Plunder the Manor or a Warehouse to take from the enemy's whole stock, gold first.
+- Their 120 hit points don't last against real soldiers: hit and run.

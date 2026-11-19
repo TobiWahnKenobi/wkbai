@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Sends all militia back to work as peasants.
+Sends all your [Militia](../units/militia.md) back to work as [peasants](../units/peasant.md), from your Manor, Keep, Castle or Palace.
+
+## How it works
+
+- **Button:** it appears only once your player is allowed militia, and in the shipped game set nothing grants that (the research that would is offered by no building). So in a normal game you won't see this button unless a map or mod unlocks it.
+- **Confirm:** a box asks first; *Yes* goes ahead.
+- **Who:** every militiaman you own walks to his nearest Manor, Keep, Castle or Palace or [Village](../buildings/village-wood.md), and after about 2 seconds there becomes a peasant.
+- **Back to work:** they go to the nearest free farms, shops and trees, shared out by how many did each job before they were conscripted. Builders don't go back to their building site.
 
 ## Offered by
 

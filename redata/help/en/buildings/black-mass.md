@@ -27,7 +27,21 @@ blueprint: Black Mass
 
 ## Role
 
-The Temple of the Moon trains arch druids and researches the [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md), the [Ghost Army](../upgrades/ghost-army.md) and the [Charm of Madness](../upgrades/charm-of-madness.md). It turns your Manor into the Pagan Castle and unlocks the Hall of Warriors, the Arcanum and the Wickerman.
+The Temple of the Moon trains arch druids and researches the [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md), the [Ghost Army](../upgrades/ghost-army.md) and the [Charm of Madness](../upgrades/charm-of-madness.md). It turns your Keep into the Pagan Castle and unlocks the Hall of Warriors, the Arcanum and the Wickerman.
+
+## What it does
+
+- **Trains** arch druids; researches the Fomorians, the Ghost Army and the Charm of Madness (see the list below).
+- **Charge.** It gathers power, 2 every 1.9 seconds, up to 300 (about 5 minutes from empty). [Charm of Madness](../commands/charm-of-madness.md) uses all 300.
+- **Sacrifices:** while one of its sacrifices runs, select peasants and right-click it ([Wickerman Sacrifice](../commands/wickerman-sacrifice.md)). Each peasant burned takes 10 seconds off the time. [Summon the Fomorians](../upgrades/sacrifice-for-the-formorians.md) takes 300 seconds.
+- **Pagan Castle:** finishing it turns your Keep into the Pagan Castle.
+
+## Defence
+
+- **Strength:** 1000.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
 
 ## Built by
 

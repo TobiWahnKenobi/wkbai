@@ -12,7 +12,16 @@ order: 10
 
 ## Role
 
-An act of God called down by the [bishop](../units/bishop.md): it shows you a far part of the map.
+An Act of God called down by the [Bishop](../units/bishop.md): point at one enemy unit or building, and for a few seconds you see every soldier its owner has, wherever they are on the map.
+
+## How it works
+
+- **Give it:** press the button, then click an enemy unit or building (the cursor changes over a target once there is enough piety). A right-click never casts it.
+- **Target:** any enemy unit, building or formation. It only chooses which enemy player you spy on.
+- **Range:** the bishop walks to within 100 m.
+- **Effect:** every military unit of the target's owner shows through the fog of war for 10 s, with the ground 30 m around each one. Peasants and buildings are not shown.
+- **Cost:** 100 piety, paid by your Cathedrals and your allies' (see [Piety](pray-for-righteousness.md#piety)). The button stays grey until they hold that much together.
+- **Gives you away:** the target's owner sees your bishop for 10 s after he casts.
 
 ## Offered by
 
@@ -28,4 +37,5 @@ An act of God called down by the [bishop](../units/bishop.md): it shows you a fa
 
 ## Tips
 
-- Acts of God need a charge that builds up over time; the button stays grey until there is enough.
+- The cheapest Act of God, and the only one with no upgrade to wait for. Before the [Crusade](../upgrades/crusade.md) a Cathedral gains no piety by itself, but holy men praying at it ([Pray for Righteousness](pray-for-righteousness.md)) can fill it to exactly 100.
+- Cast it before an attack to see where the enemy army is gathering.

@@ -12,7 +12,15 @@ order: 10
 
 ## Role
 
-Sets up a supply route over sea from this Dock: cogs carry goods along it on their own.
+Tells the cogs of this [Dock](../buildings/dock-wood.md) which Dock to ship its goods to. Press the button, then click the other Dock; the cursor shows the delivery cursor over a Dock.
+
+## How it works
+
+- **Target:** another Dock.
+- **Effect:** a [Cog](../units/cog.md) set to work at this Dock ([Deliver Resources (Cog)](cog-set-up-drop-off-dock.md)) loads up to 500 of the goods stored here, once at least 50 are waiting, sails them to the chosen Dock and unloads them there.
+- **Filling the Dock:** give a Village an [overland supply line](set-up-overland-supply-route.md) to this Dock, so its carts bring their goods here.
+- **Without a line:** a cog takes the goods to your Dock nearest to a Manor-type building that a cart can reach.
+- **Undo:** [Clear Supply Line](clear-supply-route.md).
 
 ## Offered by
 

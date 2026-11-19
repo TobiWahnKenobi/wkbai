@@ -12,7 +12,7 @@ order: 10
 
 ## Role
 
-Opens the shop again after a pause.
+Starts trade again at a [paused](pause-shopping.md) [Shop](../buildings/shop-stone.md). Its keeper goes back to turning materials into gold ([Trade at Shop](shop.md)). The button shows only while the shop is paused.
 
 ## Offered by
 

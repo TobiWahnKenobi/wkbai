@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Closes the stockade gatehouse.
+Shuts your open [Stockade Gatehouse](../buildings/stockade-gatehouse-closed.md), so nobody can pass through it.
+
+## How it works
+
+- **How to give it:** select the open gatehouse and click the button.
+- **What happens:** the gate plays its closing animation and sound; when that ends, the gatehouse is closed and blocks the way like the wall. Its button is now [Open](open-stockade-gatehouse.md).
+- **Limits:** clicking again while it closes does nothing.
+- **Counter:** an enemy [Spy](../units/spy.md) can wreck a closed gatehouse with [Blow Open Gates](blow-open-gates.md).
 
 ## Offered by
 

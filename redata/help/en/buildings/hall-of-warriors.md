@@ -29,6 +29,18 @@ blueprint: Hall of Warriors
 
 The Hall of Warriors trains the Pagan foot: spearwomen, archers and pikemen, and later the undead legion. It needs a Temple of the Moon and is not offered on the Imperial path.
 
+## What it does
+
+- **Trains** the Pagan foot soldiers (see the list below).
+- **Rally point:** set it on a [Training Dummy](training-dummy.md) and new warriors start training at once.
+
+## Defence
+
+- **Strength:** 600.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->
@@ -55,3 +67,6 @@ The Hall of Warriors trains the Pagan foot: spearwomen, archers and pikemen, and
 - None of its own.
 <!-- /gen:commands -->
 
+## Tips
+
+- It needs the Temple of the Moon: protect that too, it also makes your Castle.

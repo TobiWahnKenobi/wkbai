@@ -8,7 +8,15 @@ order: 10
 
 ## Role
 
-Sends a sapper to repair a damaged wall.
+The [Sapper](../units/sapper.md)'s way of mending damaged walls and gatehouses. Right-click a damaged wall piece or gatehouse; the cursor shows the repair cursor.
+
+## How it works
+
+- **Target:** a finished, damaged wall piece, corner or gatehouse that isn't burning.
+- **Speed:** each sapper adds 3 strength a second. A [Stockade](../buildings/stockade.md) piece (100 strength) takes a lone sapper about 33 seconds from nothing.
+- **Cost:** like [Repair](repair.md): a full repair costs half of the piece's repair price, paid step by step from your stock (a Stockade piece: 15 materials).
+- **Short of wood:** the sapper then waits, checks every 5 seconds, and goes back to work once you have more than 50 materials.
+- **Afterwards:** he goes on to the nearest damaged wall piece or gatehouse within 100 m that has fewer than two workers, and stops when none is left.
 
 ## Offered by
 

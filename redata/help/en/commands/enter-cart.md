@@ -8,7 +8,13 @@ order: 10
 
 ## Role
 
-The spy hides in a cart, to be carried into an enemy town unseen.
+The [Spy](../units/spy.md) hides inside a cart to ride along unseen. Right-click a cart; the cursor shows the enter cursor.
+
+## How it works
+
+- **Target:** any cart, yours or an enemy's, that doesn't already hide someone. One spy per cart.
+- **Inside:** the spy disappears into the cart. Every 4 seconds the land around the cart is uncovered for you, wherever the cart goes. Only you see a ghostly shimmer on the cart.
+- **Getting out:** the spy climbs out where the cart unloads its goods at a store.
 
 ## Offered by
 
@@ -23,3 +29,6 @@ The spy hides in a cart, to be carried into an enemy town unseen.
 - Nothing: it is there whenever the unit or building is.
 <!-- /gen:needs -->
 
+## Tips
+
+- An enemy's cart drives from its Village to the enemy's Manor: a spy inside sees the whole way, and gets out in the middle of the enemy's town.

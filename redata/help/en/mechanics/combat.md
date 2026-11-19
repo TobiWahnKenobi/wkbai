@@ -37,7 +37,7 @@ and never less than 0.
 - **Research** multiplies attack and armour (×1.15, ×1.3, ×1.45; [training and research](upgrades-and-research.md#armour-and-weapons)).
 - **Formations** multiply both again ([formations](formations.md#bonuses)).
 - **Three at a time.** At most three units fight one enemy hand to hand; others look for another victim nearby.
-- **Charge.** Heavy horsemen and knights speed up by half over the last 10 m to their target.
+- **Charge.** Cavalry gallop at their target, but a charge does no extra damage by itself. In a [Wedge](formations.md) the first blow does three times the damage. Heavy cavalry that hits formed heavy infantry from the front, outside a Wedge, breaks off after one blow and rides back.
 - **The Wedge's first blow** does three times the damage ([formations](formations.md)).
 - **Cavalry against pikes.** Heavy cavalry that strikes formed heavy infantry from the front breaks off after its blow and rides away, unless it attacks in a Wedge.
 
@@ -49,7 +49,7 @@ and never less than 0.
 - **Over obstacles.** Archers and javelin throwers lob over walls and hills when they can't see their target directly, but much less accurately (three times the scatter). **Gunners need a clear line of sight** and don't fire without one.
 - **Damage:** the missile's damage × research, less the armour on the side it strikes, but always at least 1. Shooting from above adds 5% a metre of height, up to double. Heavy infantry in an Orb take 30% less from missiles.
 - **Minimum range.** Mangonels can't shoot closer than 15 m, trebuchets and bombards 20 m, rocket launchers 25 m.
-- **Ammunition.** Missile units carry a limited supply (an archer 6 shots, a gunner 16); siege engines a few. Out of shots, they stop until a [Supply Wagon](../units/supply-wagon.md), a tower or a Manor-type building refills them. Flaming arrows use ammunition fast.
+- **Ammunition.** Missile units carry a limited supply (an archer 6 shots, a gunner 16); siege engines a few. Their supply refills by itself, slowly. A [Supply Wagon](../units/supply-wagon.md), a tower, a fort, the Barracks or the Armoury refills them faster. Flaming arrows use ammunition fast.
 
 ## Splash and friendly fire
 
@@ -64,7 +64,7 @@ Set on the unit's command panel ([commands](../commands/index.md)):
 
 - **[Hold Fire](../commands/hold-fire.md)** / **[Fire at Will](../commands/fire-at-will.md)**: missile units wait for an order, or shoot what comes in range.
 - **[Hold Ground](../commands/hold-ground.md)**: the unit doesn't walk to its targets.
-- **[Skirmish](../commands/skirmish-mode.md)**: archers and gunners step back from approaching heavy troops (archers to 30 m, gunners to 40 m), shooting as they go.
+- **[Skirmish](../commands/skirmish-mode.md)**: archers and gunners step back from approaching enemies, keeping about half their shooting range away (an archer about 35 m), and shoot as they go.
 - Missile units forced into hand-to-hand fight back with a dagger.
 
 ## Wounded and dying

@@ -23,15 +23,33 @@ blueprint: Peasant
 | Armour | 5 (front 1, sides 0, rear 0) |
 | Melee attack | 5 every 2 s |
 | Speed | 4 |
-| Sight | 7 |
+| Sight | 7 (35 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The peasant is the worker of your town. Peasants gather food, wood, stone and gold, carry it to a store, put up every building and repair what is damaged. At 50 food each they are cheap, and they cost no food upkeep, but with 80 hit points and almost no armour they die quickly to any soldier.
+The peasant is the worker of your town. Peasants gather food, wood, stone and gold, carry it to a store (10 at a time), put up every building and repair what is damaged. At 50 food each they are cheap, and they cost no food upkeep, but with 80 hit points, armour 1 at the front and none elsewhere and a 5-point blow they die quickly to any soldier.
 
 ![Peasants chopping wood and farming](shot:gamedata-peasants-at-work)
+
+## Abilities
+
+- **[Conscript Peasant into Militia](../commands/convert-to-militia.md):** the peasant walks to your nearest Manor or Village and becomes [Militia](militia.md), at no cost.
+- **[Extinguish Fire](../commands/extinguish.md):** peasants put out your burning buildings, two at most on each; a peasant picks the nearest fire within 70 m and then goes on to repair the building.
+- **[Repair (Character)](../commands/repair-character.md):** mends your siege engines, carts and boats, 3 hit points at a time for 1 wood.
+- **[Wickerman Sacrifice](../commands/wickerman-sacrifice.md):** for a Pagan rite that needs victims, the peasant dances to its death; each one adds 10 to the rite.
+- **Panic:** a peasant that is hurt, and not under an attack order, runs 15 m away from its attacker.
+- **Danger from magic:** an enemy [Succubus](succubus.md) can possess a peasant and turn it into a heretic, whose preaching makes nearby peasants stop work. A [Priest](priest.md) ends it with [Burn a Heretic](../commands/burn-heretic.md).
+
+## Strong against
+
+- Nothing. A peasant fights only to defend itself.
+
+## Weak against
+
+- **Everything.** Light cavalry and raiders are the worst: a [Vandavar Barbarian](vandavar.md) kills one in four blows, and kills of loaded workers hand their goods to the raider.
+- The [Archangel](michael.md) and similar demons make peasants flee on sight.
 
 ## Trained at / Built by
 
@@ -89,3 +107,4 @@ The peasant is the worker of your town. Peasants gather food, wood, stone and go
 - Keep the Manor and Villages training peasants early on: more workers means more of everything later.
 - When raiders come, [ring the Manor's bell](../commands/ring-bell.md) so the peasants take shelter, or arm them with [Conscript Peasant into Militia](../commands/convert-to-militia.md); bare peasants lose every fight.
 - A peasant builds every town building; the [Sapper](sapper.md) builds the siege engines and traps instead.
+- Against Pagans, keep a priest near the fields to unmask possessed peasants.

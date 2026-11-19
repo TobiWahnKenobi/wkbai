@@ -29,6 +29,18 @@ blueprint: Henge
 
 The henge is the Pagan place of power, built by a high priestess. It brings forth the gibbering horde, succubi, horde spewers, rock throwers, infernal engines and the behemoth.
 
+## What it does
+
+- **Built by** a [High Priestess](../units/high-priestess.md) only.
+- **Brings forth** the Pagan creatures (see the list below).
+
+## Defence
+
+- **Strength:** 300. Weak: hide it behind your town.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

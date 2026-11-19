@@ -19,19 +19,31 @@ blueprint: Pagan Pikeman
 | | |
 |---|---|
 | Cost | 70 food, 20 gold |
-| Train time | 18 s |
 | Food upkeep | 1 |
 | Hit points | 200 |
 | Armour | 15 (front 18, sides 9, rear 3) |
 | Melee attack | 40 every 2.5 s |
 | Speed | 3 |
-| Sight | 3 |
+| Sight | 3 (15 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 from the front and a 40-point attack. The [Hall of Warriors](../buildings/hall-of-warriors.md) trains it once you have built a [The Wickerman](../buildings/wickerman.md) (or the battle-gathering sacrifice was made).
+The Warrior of the Sun is the heaviest Pagan foot soldier: 200 hit points, a 40-point blow every 2.5 seconds and armour 18 from the front, 9 on the sides and 3 from behind, for 70 food and 20 gold. The [Hall of Warriors](../buildings/hall-of-warriors.md) trains it once you have built [The Wickerman](../buildings/wickerman.md) (or the battle-gathering sacrifice was made).
+
+## Strong against
+
+- **Cavalry from the front.** A [Knight](knight.md) does 11 a blow to it and takes 28. Heavy cavalry that strikes the front of formed heavy infantry rears and rides away after one blow, unless it attacks in a Wedge.
+- **Missiles from the front.** Archers and gunners do 1 or 2 a shot through armour 18.
+- **Other heavy infantry.** It hits a [Man-at-Arms](pikeman.md) for 28 and takes 17.
+- **Siege engines up close**: 35 a blow to a [Mangonel](mangonel.md).
+
+## Weak against
+
+- **Flanks and rear** (armour 9 and 3): a knight from behind does 26 a blow; mounted archers that circle it do 15 to 17 a shot in the back.
+- **Heavy siege and monsters**: [Trebuchet](trebuchet.md) stones (57), rockets (armour doesn't count), the [Imperial War Elephant](war-elephant.md) (32 a blow, and it hits several men at once).
+- It is slow (speed 3).
 
 ## Trained at / Built by
 
@@ -77,5 +89,6 @@ The Pagan pikeman is the heaviest Pagan foot soldier: 200 hit points, armour 18 
 
 ## Tips
 
-- Use it as the anvil of a Pagan army, with archers or mounted bowwomen behind.
-- Like all heavy foot it is slow (speed 3).
+- Use it as the anvil of a Pagan army, with [Huntresses](pagan-archer-upgrade.md) or [Mounted Huntresses](pagan-mounted-bowoman.md) behind.
+- Keep the front towards the enemy and the flanks covered by spearwomen.
+- Enemy succubi can [charm](../commands/charm.md) it: against another Pagan player, keep your own Arch Druid or holy buildings near, as they make the spell fail.

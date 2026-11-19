@@ -8,7 +8,13 @@ order: 10
 
 ## Role
 
-Sends units through a dark portal that a Pagan magic user has opened.
+Sends a unit through a dark portal that your [Arch Druid](../units/arch-druid.md) or [High Priestess](../units/high-priestess.md) has opened ([Create Dark Portal](dark-portal.md)): it steps in beside the caster and comes out at the far portal.
+
+## How it works
+
+- **Target:** one of your own portals. Right-click it with the units selected; the cursor changes over your portal.
+- **Effect:** each unit walks into the portal and appears 5 m in front of the other one.
+- **Limits:** a pair of portals carries 1200 hit points' worth of units: each unit uses up as much as it has hit points. When that runs out both portals close, and the unit that used up the last of it stays behind. Only the portal beside the caster sends units on; the far one is the way out.
 
 ## Offered by
 

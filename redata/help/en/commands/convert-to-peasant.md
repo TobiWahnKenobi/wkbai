@@ -20,7 +20,14 @@ order: 10
 
 ## Role
 
-Sends militia back to work as [peasants](../units/peasant.md).
+Sends [Militia](../units/militia.md) back to work as [peasants](../units/peasant.md).
+
+## How it works
+
+- **How to give it:** select militia and click the button, or right-click one of your own Manor, Keep, Castle or Palace buildings or a [Village](../buildings/village-wood.md). The cursor shows the dismiss sign over them.
+- **Where:** each militiaman walks to the building you right-clicked (with the button, to your nearest one), waits there about 2 seconds and becomes a peasant.
+- **Back to work:** he then goes to the nearest free farm, shop or tree by himself: to the job most of your conscripted peasants had before (farming when nothing is known). Builders and miners don't go back to their old work.
+- **Cost:** nothing.
 
 ## Offered by
 

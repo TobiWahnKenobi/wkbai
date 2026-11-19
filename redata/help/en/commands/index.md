@@ -156,7 +156,7 @@ Spells, prayers and acts of God draw on a charge that refills over time; their b
 | [Arson Attack](arson.md) | no | [Barbarian](../units/barbarian.md), [Mercenary](../units/mercenary.md), [Spy](../units/spy.md), [Vandavar Barbarian](../units/vandavar.md) |
 | [Bishop Locator](bishop-locator.md) | yes | [Cathedral](../buildings/cathedral-stone.md) |
 | [Blow Open Gates](blow-open-gates.md) | no | [Spy](../units/spy.md) |
-| [Build](build.md) | yes | [Arch Druid](../units/arch-druid.md), [High Priestess](../units/high-priestess.md), [Observatory](../buildings/observatory.md), [Peasant](../units/peasant.md), [Sapper](../units/sapper.md) |
+| [Build](build.md) | yes | [High Priestess](../units/high-priestess.md), [Observatory](../buildings/observatory.md), [Peasant](../units/peasant.md), [Sapper](../units/sapper.md) |
 | [Build Wall](build-wall.md) | yes | [Peasant](../units/peasant.md), [Sapper](../units/sapper.md) |
 | [Close Siege Tower](close-siege-tower.md) | yes | [Siege Tower](../units/siege-tower.md) |
 | [Conscript Peasant into Militia](convert-to-militia.md) | yes | [Peasant](../units/peasant.md) |

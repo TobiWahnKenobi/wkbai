@@ -23,6 +23,14 @@ A mod adds to or replaces the game's files. wkbai reads the rules from the game 
 - **wkbai's own fixes to the game set** are kept in a folder of patches (`Warrior Kings Game Set\wkbai patches`) that loads after the game set. A mod can replace a patch with its own copy, or add patches of its own. The current patches fix the King of the Hill ending, make lightning only scratch buildings, and add the winter crafts bonus.
 - WKB.exe knows a few dozen script keywords that no shipped script uses. wkbai supports all of them, so mods written for the original that use them work.
 
+## Replacing models and textures
+
+wkbai reads more kinds of model and texture than the original, so a mod can bring new art without the game's old tools.
+
+- **glTF models:** a file `X.glb` or `X.gltf` beside a game model `X.mesh3`, at the same path, is drawn in its place. It may be in a mod, or in the `saved` folder of [your own folder](../files.md#your-own-folder). A glTF model has at most 65,535 vertices and no animation of its own, and keeps the original model's attachment points (flags, smoke, the place where new units appear).
+- **Exporting the game's models:** `"exportGltf": ["Warrior Kings Game Set\\Buildings\\Manor"]` in `wkconfig.json` writes each model of that folder and its subfolders (or a single `.mesh3` named there) as a `.glb` file into the `exported` folder of your own folder, at its own path. wkbai then closes. Take the setting out again afterwards. Edit an exported model and put it into `saved` at the same path to try it, for example `saved\Warrior Kings Game Set\Buildings\Manor\Fully Built\DEFAULT.glb`.
+- **Material maps:** beside a texture `T.tga`, the files `T_albedo`, `T_normal`, `T_orm` (ambient occlusion, roughness and metalness) and `T_emissive` (light of its own, such as lit windows), each `.png`, `.tga`, `.dds` or `.ktx2`, give the enhanced renderer more detail for every model that uses that texture. They show best with [Model highlights](../options/graphics/models.md#model-highlights) on.
+
 ## Load order
 
 - **Original order** (the default): as in the original game, the newest copy of each file wins, whichever mod or archive holds it. Mods like WKB Plus rely on this.

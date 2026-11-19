@@ -23,6 +23,18 @@ blueprint: Holy Chapter
 
 The Holy Chapter is the Monastery after [Holy Chapter Upgrade](../upgrades/upgrade-holy-chapter.md). It trains monastic knights as well as monks.
 
+## What it does
+
+- **Trains** monastic knights as well as monks.
+- Selected, it shows a 50 m healing ring, as the Monastery does.
+
+## Defence
+
+- **Strength:** 500.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 2.5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

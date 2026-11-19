@@ -12,7 +12,12 @@ order: 10
 
 ## Role
 
-Sets the selected units to passive: they do not chase enemies on their own and only fight back when attacked.
+The selected soldiers stay put when they are shot at, instead of charging the shooters. This is how most soldiers start. The button shows while a unit is set to [Attack at Will](aggression.md); pressed, it swaps back.
+
+## How it works
+
+- **Effect:** hit by arrows, bullets, thrown stones or spew attacks, they don't go after the shooter.
+- **Still fighting:** struck hand to hand they fight back, and when idle they still attack enemies near them.
 
 ## Offered by
 

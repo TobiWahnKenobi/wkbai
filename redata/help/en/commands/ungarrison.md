@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Sends every unit out of the building.
+Sends every unit out of the building. The button shows while anyone is inside.
+
+## How it works
+
+- **Order:** one unit leaves every 0.3 s, heavy infantry and cavalry first.
+- **Where to:** a Fort, Holy Fortress or Watch Tower sets them down in a ring 10 m around it; other buildings at the nearest free spot. Peasants who work go back to their work.
+- **Late comers:** units that go in after you pressed it stay inside.
 
 ## Offered by
 

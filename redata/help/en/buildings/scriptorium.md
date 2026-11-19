@@ -27,7 +27,19 @@ blueprint: Scriptorium
 
 ## Role
 
-The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Gunpowder](../upgrades/celestial-gunpowder.md), [Witch Hunt](../upgrades/malleus-maleficarum.md) and the bayonet. It needs a Cathedral and an Observatory, and it turns your Manor into a Palace.
+The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Gunpowder](../upgrades/celestial-gunpowder.md), [Witch Hunt](../upgrades/malleus-maleficarum.md) and the bayonet. It needs a Cathedral and an Observatory, and it turns your Castle into a Palace.
+
+## What it does
+
+- **Research:** Greek Fire, Gunpowder, Witch Hunt and the bayonet (see the list below).
+- **Palace:** finishing it turns your Castle into a Palace: Imperial if your Castle is Imperial, else Renaissance ([the five paths](../mechanics/alignment.md#the-five-paths)).
+
+## Defence
+
+- **Strength:** 500.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 2.5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
 
 ## Built by
 
@@ -55,3 +67,6 @@ The scriptorium researches [Greek Fire](../upgrades/greek-fire.md), [Gunpowder](
 - None of its own.
 <!-- /gen:commands -->
 
+## Tips
+
+- [Greek Fire](../upgrades/greek-fire.md) makes your trebuchets set buildings alight.

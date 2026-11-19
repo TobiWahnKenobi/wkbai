@@ -21,7 +21,7 @@ order: 10
 
 ## Role
 
-An Arcanum research that gives your cannon grapeshot, a spray of small shot against troops.
+An Arcanum research that gives your [trebuchets](../units/trebuchet.md) grapeshot against troops: when one shoots at units rather than buildings, it fires grapeshot, which costs it more charge. (The game data has a grapeshot button for the bombard too, but it is switched off, so bombards don't use it.)
 
 ## Researched at
 
@@ -49,4 +49,4 @@ An Arcanum research that gives your cannon grapeshot, a spray of small shot agai
 
 ## Tips
 
-- Turns bombards into a weapon against massed foot.
+- Makes trebuchets a weapon against massed troops, not only against walls.

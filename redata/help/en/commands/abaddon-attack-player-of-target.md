@@ -8,7 +8,15 @@ order: 10
 
 ## Role
 
-Abaddon's order to attack the side that owns the target.
+[Abaddon](../units/abaddon.md) fights on his own: from the moment he appears he marches against your enemies by himself. This order chooses which enemy player he goes after.
+
+## How it works
+
+- **Give it:** right-click any unit or building of the enemy player you want him to destroy (the attack cursor shows).
+- **Effect:** he turns his campaign against that player. He goes first for its houses of the faith, the nearest first: the [Cathedral](../buildings/cathedral-stone.md), [Church](../buildings/church-stone.md), [Holy Chapter](../buildings/holy-chapter.md), [Scriptorium](../buildings/scriptorium.md) and [Monastery](../buildings/monastery.md). Then he goes for all of that player's units and buildings, walls apart, the nearest first.
+- **On the way:** enemies that come within 100 m are dealt with first. He uses his special attack whenever his charge bar is full and enemies are in sight.
+- **Afterwards:** when that player has nothing left, he goes back to fighting all your enemies.
+- **Limits:** right-clicking the player he is already fighting changes nothing.
 
 ## Offered by
 
@@ -22,4 +30,3 @@ Abaddon's order to attack the side that owns the target.
 <!-- gen:needs -->
 - Nothing: it is there whenever the unit or building is.
 <!-- /gen:needs -->
-

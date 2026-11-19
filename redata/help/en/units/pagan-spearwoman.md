@@ -19,19 +19,30 @@ blueprint: Pagan Spearwoman
 | | |
 |---|---|
 | Cost | 70 food, 10 gold |
-| Train time | 18 s |
 | Food upkeep | 1 |
 | Hit points | 130 |
 | Armour | 17 (front 13, sides 4, rear 0) |
 | Melee attack | 37 every 2.5 s |
 | Speed | 3 |
-| Sight | 4 |
+| Sight | 4 (20 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The spearwoman is the Pagan line infantry, trained at the [Hall of Warriors](../buildings/hall-of-warriors.md): 130 hit points, armour 13 from the front and a 37-point attack for 70 food and 10 gold.
+The Warrioress of the Dawn is the Pagan line infantry, trained at the [Hall of Warriors](../buildings/hall-of-warriors.md): 130 hit points, a 37-point blow every 2.5 seconds and armour 13 from the front, 4 on the sides and none from behind, for 70 food and 10 gold. She is heavy infantry: she holds a line and stops horsemen.
+
+## Strong against
+
+- **Heavy cavalry from the front.** She hits a [Knight](knight.md) for 25 a blow and takes 16. Heavy cavalry that strikes the front of formed heavy infantry rears and rides away after one blow, unless it attacks in a Wedge.
+- **Lighter foot**: 29 a blow to a [Spearman](spearman.md), who does 17 back.
+- **Arrows from the front**: an [Archer](archer.md) does 2 a shot, a [Gunner](gunner.md) 7.
+
+## Weak against
+
+- **Her flanks and back.** Armour 4 and 0: a knight does 25 from the side and 29 from behind.
+- **Mounted archers and gunners**, the game's natural enemy of heavy infantry: they are four times as fast.
+- **Heavier foot**: a [Warrior of the Sun](pagan-pikeman.md) or [Imperial Pikeman](man-at-arms.md) outlasts her.
 
 ## Trained at / Built by
 
@@ -79,4 +90,5 @@ The spearwoman is the Pagan line infantry, trained at the [Hall of Warriors](../
 ## Tips
 
 - She hits hard for her price; keep her facing the enemy, as her rear armour is nil.
+- Form a [Line](../commands/formation.md) to raise attack and armour by a fifth, an Orb against archers (30% less from missiles).
 - Pagan side only: building a Church hides her button.

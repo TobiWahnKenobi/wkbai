@@ -23,13 +23,13 @@ blueprint: Cart
 | Armour | 5 (front 5, sides 3.5, rear 0.5) |
 | Melee attack | 15 every 2 s |
 | Speed | 5 |
-| Sight | 5 |
+| Sight | 5 (25 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The cart moves goods between a Village and your stocks, and it can bring goods to a building that takes deliveries. It has 400 hit points, so it survives a few blows, but it cannot fight back in any useful way.
+The cart moves goods: up to 500 food, wood and gold in all, from a Village or a Dock to your stocks, or to a building that takes deliveries. It has 400 hit points and armour 5 at the front, but its 15-point blow is no real defence.
 
 ## Trained at / Built by
 
@@ -65,7 +65,23 @@ The cart moves goods between a Village and your stocks, and it can bring goods t
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
+## Abilities
+
+- **[Transport Resources from Village to Global Stocks](../commands/transport-resources-from-village-to-global-stocks.md):** right-click a Village or a Dock. The cart waits until it holds at least 50 goods, loads up, drives them to the Village's supply route or the nearest Palace, Warehouse or Village, and comes back. It keeps doing this until you give it another order.
+- **[Deliver Resources (to Deliverable Building)](../commands/deliver-resources-to-deliverable-building.md)** and **[Deliver Resources (Cart to Deliverable Building and Return to Village)](../commands/cart-deliver-resources-to-deliverable-building-and-return-to-village.md):** take the load to a building that accepts deliveries.
+- **Losing the driver.** When the cart is down to a quarter of its hit points (100), its driver is killed. The cart stops, keeps its load and has only 40 hit points. Any soldier with [Take Cart](../commands/take-cart.md) (archers, gunners, javelineers, barbarians, knights and others) can climb on: the cart becomes his player's, back at full hit points, with the load.
+- It can be carried in a [Cog](cog.md); it takes the room of 3 soldiers.
+
+## Strong against
+
+- Nothing: it is a transport.
+
+## Weak against
+
+- **Raiders.** Cavalry, barbarians and javelin riders kill the driver quickly; an arrow does it 10.
+
 ## Tips
 
 - Villages far from the Manor need carts to get their goods home: guard the road between them.
-- Soldiers can [take over an enemy cart](../commands/take-cart.md) they catch, so do not leave carts alone near the front.
+- If an enemy cart loses its driver, send an archer or a rider to take it, load and all.
+- Do not leave carts alone near the front.

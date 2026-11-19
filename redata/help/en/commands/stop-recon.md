@@ -12,7 +12,12 @@ order: 10
 
 ## Role
 
-Stops a scout's exploring.
+Ends a [Scout](../units/scout.md)'s [Recon](recon.md): he stops exploring and waits for your orders.
+
+## How it works
+
+- **How to give it:** select the exploring scout and click the button. It shows only while he is on recon.
+- **What happens:** he stops where he is, no longer runs from enemies by himself, and is under your direct command again. The button turns back into Recon.
 
 ## Offered by
 

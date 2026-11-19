@@ -19,19 +19,18 @@ blueprint: Celestial Knight
 | | |
 |---|---|
 | Cost | 100 food, 10 gold |
-| Train time | 18 s |
 | Food upkeep | 2 |
 | Hit points | 160 |
 | Armour | 16 (front 16, sides 8, rear 3) |
 | Melee attack | 34 every 2.5 s |
 | Speed | 8.5 |
-| Sight | 4 |
+| Sight | 4 (20 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The celestial knight is the knight of the pure Imperial path: armour 16 from the front and a 34-point attack. Building a [Statue of the Archangel](../buildings/michael-statue.md) unlocks it and turns your existing knights into celestial knights.
+The Imperial Knight is the knight of the pure Imperial path. When you finish a [Statue of the Archangel](../buildings/michael-statue.md), every [Knight](knight.md) you have, garrisoned and on board ships too, becomes an Imperial Knight, and knights trained later arrive as Imperial Knights. Compared with the knight it has 160 hit points instead of 180, but armour 16 at the front instead of 12, a 34-point blow instead of 29, and it costs 10 gold instead of 15.
 
 ## Trained at / Built by
 
@@ -75,6 +74,27 @@ The celestial knight is the knight of the pure Imperial path: armour 16 from the
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
+## Abilities
+
+- **Wedge.** In a [Wedge](../mechanics/formations.md) each rider's first blow does three times the damage.
+- **Breaking off.** A rider that strikes formed heavy infantry from the front, when not in a Wedge, breaks off after the blow and rides 25-35 m away.
+- No special abilities beyond that.
+
+## Strong against
+
+Damage numbers below are per blow or per shot, before research, experience, height and formation bonuses: the attack minus the armour on the side that is hit (see [Combat](../mechanics/combat.md)).
+
+- **Missile troops.** 32 a blow to an archer or a gunner: two blows each. Arrows do it only 1 from the front, bullets 4.
+- **Siege engines**: 29 a blow to a mangonel, and every engine is rated poorly against heavy cavalry.
+- **Flanks and rears of infantry.** 28 into a [Man-at-Arms](pikeman.md)'s flank, 33 into his rear.
+
+## Weak against
+
+- **Pikes and spears from the front.** A [Man-at-Arms](pikeman.md) does it 19, a [Warrior of the Sun](pagan-pikeman.md) 24, and from the front it breaks off after one blow unless it attacks in a Wedge. The game rates pikes, spears and militia well against heavy cavalry.
+- **Light cavalry**: javelin riders and mounted archers are rated well against it, and it cannot catch them.
+- **Being stuck in a melee**: its rear armour is 3.
+
 ## Tips
 
-- Use it like a knight: charges into flanks and against missile troops.
+- Use it like a knight: charge flanks and missile troops, and use the Wedge for the first blow.
+- Pull it out of a long melee and charge again.

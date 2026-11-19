@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Forms the selected soldiers into a formation that moves and fights as one body. See [Formations](../controls/formations.md) for the shapes and how to give them orders.
+Forms the selected soldiers into a formation that moves and fights as one body. It always starts as a Line; the formation buttons change the shape. See [Formations](../controls/formations.md) for the shapes and how to give them orders, and [Formations](../mechanics/formations.md) for what they are good for.
+
+## How it works
+
+- **Size:** at least 8 soldiers. A formation that drops below 8 breaks up.
+- **Who:** almost every soldier, foot and horse alike, and they can be mixed in one formation.
+- **Orders:** every formation can Move, Follow, Guard, Flee and Join Formation, whoever is in it.
 
 ## Offered by
 

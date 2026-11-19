@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Picks out your high priestess one after another, so you can find them on the map. Offered by the Sacred Grove.
+Shows you where all your [High Priestesses](../units/high-priestess.md) are, so you can find them on the map.
+
+## How it works
+
+- **How to give it:** select your [Sacred Grove](../buildings/temple.md) and click the button.
+- **What happens:** a white circle shrinks onto each of your High Priestesses on the minimap, for 2 seconds. It shows every one you own, wherever it is.
+- It doesn't select them or move the camera.
 
 ## Offered by
 

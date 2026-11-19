@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Lets missile troops and buildings shoot at any enemy in range again.
+Ends [Hold Fire](hold-fire.md): ranged units and shooting buildings fire at enemies they see by themselves again.
+
+## How it works
+
+- **How:** press the button. It shows only while the unit or building is holding fire, and never for members of a Ghost Army.
+- **Effect:** the unit looks for a target straight away, as if it had just become idle.
+- **Who needs it most:** a new Mangonel, Trebuchet, Bombard, Rocket Launcher, [Fomorian Beast](../units/rock-thrower.md) or [DeathWyrm](../units/infernal-engine.md) starts out holding fire. Press this to let it pick its own targets.
+- Any attack order you give also switches Hold Fire off, so you don't need this button before a right-click attack.
 
 ## Offered by
 

@@ -37,12 +37,12 @@ A building's health is its **structural integrity** (the bar over it, and its pa
 
 - Flaming arrows, Greek fire, rockets, arson by spies and lightning set buildings alight.
 - A burning building loses strength steadily, and the fire grows. It can leap to other buildings within 25 m. Walls don't burn.
-- A fire may die out by itself; the better the building's fire proofing, the likelier.
+- A fire doesn't die out by itself: it burns the building down unless peasants put it out. The better the building's fire proofing, the less often a flaming arrow sets it alight.
 - Peasants on [Extinguish Fire](../commands/extinguish.md) put it out. Your minimap marks burning buildings with an orange circle.
 
 ## Garrisons
 
-Units can [garrison](../commands/garrison.md) inside some buildings. Missile units shoot out of them.
+Units can [garrison](../commands/garrison.md) inside some buildings. Missile units shoot out of them. Into the Manor and its later stages (Keep, Castle, Palace) only peasants go, through the [Sanctuary (Ring Bell)](../commands/ring-bell.md), and Baron Artos; your soldiers go into forts, towers and churches. Each building's page says who fits and how it shoots.
 
 | Building | Places |
 |---|---|

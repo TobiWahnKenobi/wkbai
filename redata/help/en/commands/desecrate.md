@@ -8,7 +8,14 @@ order: 10
 
 ## Role
 
-The succubus defiles a holy building.
+The [Succubus](../units/succubus.md) defiles an enemy [Cathedral](../buildings/cathedral-stone.md) and empties its store of piety, which the [Bishop](../units/bishop.md) needs for his acts of God (such as [Inflict Lightning](inflict-lightning.md)).
+
+## How it works
+
+- **Target:** an enemy Cathedral. Right-click it with a succubus selected; the cursor changes over an enemy Cathedral.
+- **Range:** she walks up to it (within 5 m).
+- **Effect:** when her spell ends, the Cathedral's piety bar drops to zero. A Cathedral only gathers piety after the [Crusade](../upgrades/crusade.md) research.
+- **Cost:** free: it uses no mana.
 
 ## Offered by
 
@@ -23,3 +30,6 @@ The succubus defiles a holy building.
 - Nothing: it is there whenever the unit or building is.
 <!-- /gen:needs -->
 
+## Tips
+
+- Do it just before you attack: the bishop then has nothing to strike back with until the bar fills again.

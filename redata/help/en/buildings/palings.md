@@ -27,7 +27,16 @@ blueprint: Palings
 
 ## Role
 
-Palings are sharpened stakes that a sapper sets in the ground (20 wood each) to break up charges.
+Palings are sharpened stakes that a sapper sets in the ground, 20 wood each, to block the way and break up charges.
+
+## What it does
+
+- **A barrier.** Each paling blocks its piece of ground. A sapper lays them in a line like a wall; each takes about 5 seconds to put up.
+- **Can't be attacked.** Enemy units can't hit palings; they have to go around them.
+
+## Defence
+
+- **Strength:** 20.
 
 ## Built by
 
@@ -56,3 +65,4 @@ Palings are sharpened stakes that a sapper sets in the ground (20 wood each) to 
 ## Tips
 
 - Plant them in front of your archers where cavalry will come.
+- Leave a gap for your own troops: palings block them too.

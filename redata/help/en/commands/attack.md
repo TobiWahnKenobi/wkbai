@@ -8,7 +8,15 @@ order: 10
 
 ## Role
 
-Orders the selected units to attack a target. A right-click on an enemy does the same; missile troops shoot, others close in.
+Sends the selected soldiers to fight an enemy unit, building or formation. You give it with a right-click on the enemy. Hand-to-hand troops, cavalry, siege engines and most special units use it; archers, gunners and javelineers right-click with their own shooting commands instead ([Fire Arrow](fire-arrow.md), [Fire Bullet](fire-bullet.md), [Fire Javelin](fire-javelin.md)).
+
+## How it works
+
+- **Target:** an enemy unit, building or formation that can still be hurt. Neutral and allied ones can't be attacked this way.
+- **Cursor:** over an enemy soldier, the attack cursor is **green** when your unit has the better of the match (the target suits it as a victim far better than it suits the target), **red** when the target has the better of it, and plain when they are about even. Over buildings it is always plain.
+- **One group:** the units you send together fight as one group. Besides your target, the group takes on the enemy soldiers within 10 m of it. Units you send later against the same target join that group.
+- **After the kill:** when the first target is dead, the group goes on with the enemy soldiers within 20 m of where the fighting was, and stops when none are left. It looks again every second.
+- **Formations:** a formation leaves any group it was in and attacks as a body (see [Fighting](../controls/formations.md#fighting)).
 
 ## Offered by
 
@@ -26,3 +34,4 @@ Orders the selected units to attack a target. A right-click on an enemy does the
 ## Tips
 
 - Pick targets: missile troops die fast to cavalry, so send horsemen at them first.
+- Watch the cursor's colour before you click: a red cursor means the enemy is the better match for that unit, so send something else.

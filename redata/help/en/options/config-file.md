@@ -1,18 +1,26 @@
 ---
 title: Settings without a menu
-ids: [options/config-file, option/gamePath#gamepath, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation]
+ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation]
 order: 90
 ---
 
 # Settings without a menu
 
-All settings are kept in one file, `wkconfig.json`, which wkbai reads at start and writes when you press OK in the Options. A few settings have no place in the menus: they are for unusual setups, or are kept by the menus themselves. You can change them in the file with a text editor while wkbai is closed. A setting left out of the file has its default.
+All settings are kept in one file, `wkconfig.json` in wkbai's folder ([files and folders](../files.md#wkbais-folder)), which wkbai reads at start and writes when you press OK in the Options. A few settings have no place in the menus: they are for unusual setups, or are kept by the menus themselves. You can change them in the file with a text editor while wkbai is closed. A setting left out of the file has its default.
 
 The file is JSON: names in quotes, then a colon and the value, separated by commas, for example `"introVideo": false,`.
 
 ## gamePath
 
-The folder of your *Warrior Kings: Battles* installation, which wkbai reads the game's files from. Default `"."`, the folder wkbai runs in.
+The folder of your *Warrior Kings: Battles* installation, which wkbai reads the game's files from. Default `"."`, the folder wkbai runs in. When that folder has no `data.bcp`, wkbai looks for a Steam installation of the game and sets `gamePath` to it ([installing wkbai](../install.md#the-first-start)). Write each backslash twice: `"D:\\Games\\Warrior Kings Battles"`.
+
+## gameVersion
+
+Which game the files are from: `2` for *Warrior Kings: Battles*, `0` for the original *Warrior Kings*. wkbai sets it on the first start: a game folder with the *Battles* program or its `WKB_Plus.bcp` is *Battles*. If the ground is drawn with black or wrong textures, check that it is `2`.
+
+## userPath
+
+Your own folder, where saves, replays, campaigns and crash reports go. Left out (the default), it is `%APPDATA%\wkbai`. See [files and folders](../files.md#your-own-folder).
 
 ## enhancedGraphics
 
@@ -104,4 +112,4 @@ For a host with **Mods: only the host's**: the mods guests may have besides the 
 
 ## Kept by the menus
 
-These are in the file too, written by their menus: `keyBindings` (the [Keyboard](controls/keyboard.md) page), `matchmaking` (the [Online](online.md) page) and `agentControl` (the [Agent control](agent-control.md) page). Every other Options entry is saved under a name of its own; its help ids (`option/<name>`) include that name.
+These are in the file too, written by their menus: `keyBindings` (the [Keyboard](controls/keyboard.md) page), `matchmaking` (the [Online](online.md) page; the server itself: [Hosting a Nakama server](../multiplayer/nakama-server.md)), `disabledMods` and `modLoadOrder` (the [Mods screen](../ui/frontend/mods.md)) and `agentControl` (the [Agent control](agent-control.md) page). Every other Options entry is saved under a name of its own; its help ids (`option/<name>`) include that name.

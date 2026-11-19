@@ -8,7 +8,16 @@ order: 10
 
 ## Role
 
-Sends units on board a ship, usually a cog: right-click the ship.
+Sends units on board one of your [Cogs](../units/cog.md): right-click the Cog. The cursor shows the boarding sign while it has room.
+
+## How it works
+
+- **Target:** a Cog of yours with room. A Cog carries a load of 40; what each unit weighs is on [Ships](../mechanics/naval.md#carrying-troops).
+- **Pick-up:** the Cog sails to the shore within 6 m of the first unit sent to board. The units walk to where it lands and get on once it is waiting there. A unit more than 40 m from the one being fetched, and closer to the ship, is fetched first.
+- **Full:** a unit that no longer fits stays ashore.
+- **On board:** the passengers are out of sight; the Cog's bar shows its load.
+- **Formations** break up, and every member boards.
+- **Getting off:** [Disembark](unload-passengers.md).
 
 ## Offered by
 

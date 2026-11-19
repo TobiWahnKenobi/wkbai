@@ -12,7 +12,7 @@ order: 10
 
 ## Role
 
-Removes the supply route set up from this building.
+Removes the supply lines set up from this [Village](../buildings/village-wood.md) or [Dock](../buildings/dock-wood.md), both the [overland](set-up-overland-supply-route.md) and the [overseas](set-up-oversea-supply-route.md) one. Its carts then take their goods to the nearest store again.
 
 ## Offered by
 

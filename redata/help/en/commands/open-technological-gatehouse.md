@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Opens the Renaissance gatehouse so units can pass through.
+Opens your closed [Gatehouse Battlements](../buildings/technological-gatehouse-closed.md) so units can pass through the wall.
+
+## How it works
+
+- **How to give it:** select the closed gatehouse and click the button.
+- **What happens:** the gate plays its opening animation and sound; when that ends, the gatehouse is open and the way through is clear. Its button is now [Close](close-technological-gatehouse.md).
+- **Limits:** clicking again while it opens does nothing.
+- A newly built gatehouse starts open.
 
 ## Offered by
 

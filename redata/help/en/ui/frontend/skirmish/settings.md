@@ -20,7 +20,7 @@ The chosen map's picture, at the top left. A map without a picture shows its nam
 
 ## The map list
 
-The maps to play, as "4 Peaks (2)": the name, then the number of start positions. The skirmish maps come first, then the Kingmaker campaign's provinces as skirmish maps, then maps saved with the [map editor](../map-editor.md) (only with All). Click one to choose it; the [Players tab](players.md) sets up its positions again.
+The maps to play, as "4 Peaks (2)": the name, then the number of start positions. The skirmish maps come first, then the Kingmaker campaign's provinces as skirmish maps, then maps saved with the [map editor](../map-editor.md) (only with All; a map named "N Player ..." is listed with the skirmish maps, see [Name it for Skirmish](../../editor/saving.md#name-it-for-skirmish)). Click one to choose it; the [Players tab](players.md) sets up its positions again.
 
 ## Start Food, Wood and Gold
 

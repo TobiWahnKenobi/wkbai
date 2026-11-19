@@ -8,7 +8,15 @@ order: 10
 
 ## Role
 
-The high priestess's (and arch druid's) way of mending Pagan buildings such as the Henge.
+How the [High Priestess](../units/high-priestess.md) and the [Arch Druid](../units/arch-druid.md) raise a [Henge](../buildings/henge.md): they finish its construction with magic instead of tools.
+
+## How it works
+
+- **Target:** an unfinished Henge of yours or an ally's. Right-click it; the cursor changes only over a Henge that is still being built.
+- **Range:** the caster stands next to it (6.5 m).
+- **Effect:** every second the Henge gains a fortieth of its full strength, so a fresh one is finished in about 40 s. More casters build it faster.
+- **Cost:** no mana and no resources.
+- **Limits:** only Henge foundations. A finished Henge that is damaged is [repaired](repair.md) by peasants.
 
 ## Offered by
 

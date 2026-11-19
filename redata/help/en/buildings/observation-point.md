@@ -16,6 +16,12 @@ blueprint: Observation Point
 
 An observation point is a lookout placed by the Observatory. It shows you the land around it.
 
+## What it does
+
+- **Placed by the Observatory** when its charge is full, anywhere on the map, even in the fog.
+- **What you see:** about 40 m around it at first, shrinking every 3 seconds; after about 20 seconds it is gone.
+- It can't be seen or attacked by anyone.
+
 ## Built by
 
 <!-- gen:trained -->
@@ -43,3 +49,4 @@ An observation point is a lookout placed by the Observatory. It shows you the la
 ## Tips
 
 - Place them over roads and fords the enemy is likely to use.
+- Use one just before an attack, on the enemy's town.

@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Packs up the rocket launcher so it can move.
+Packs up the [Rocket Launcher](../units/rocket-launcher.md) for travel. Set up, the launcher can fire but not move; packed, it can move but not fire.
+
+## How it works
+
+- **How:** press the button. The crew packs up over 5 s, then the launcher becomes its travelling form, with a Move order and the [Unlimber](unlimber.md) button instead of its firing orders.
+- **Can't be interrupted:** a Move you give while it is packing waits until packing is done, then runs.
+- **Limits:** the button is hidden while the launcher is already packing.
 
 ## Offered by
 

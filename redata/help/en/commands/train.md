@@ -12,7 +12,16 @@ order: 10
 
 ## Role
 
-Sends soldiers to practise at a [Training Dummy](../buildings/training-dummy.md), which gives them experience.
+Sends soldiers to practise at a [Training Dummy](../buildings/training-dummy.md), which gives them experience without a fight, up to half the most they can have.
+
+## How it works
+
+- **Target:** right-click a dummy of yours or an ally's with a free place. With the button, they go to the nearest dummy with a free place within 350 m.
+- **Places:** four soldiers at a time per dummy.
+- **Gain:** each blow at the dummy gives 0.0025 experience. Training stops at half the unit's maximum ([Experience](../mechanics/experience.md)): 0.375 after 150 blows for the plain early troops, 0.5 after 200 for most others, 0.575 after 230 for the best. A sound tells you when one is done.
+- **Taking turns:** when a soldier is done, an idle soldier of yours within 20 m who still needs training takes its place, and the finished one steps away from the dummies.
+- **Formations** break up; members who don't get a place go near the dummy and train at the nearest one with room.
+- **Limits:** the button shows only while you own a Training Dummy. The cursor shows only for a unit not yet fully trained and not training already.
 
 ## Offered by
 
@@ -28,4 +37,4 @@ Sends soldiers to practise at a [Training Dummy](../buildings/training-dummy.md)
 
 ## Tips
 
-- It needs a Training Dummy.
+- Set a barracks' rally point on a dummy, so new soldiers start training at once.

@@ -23,13 +23,27 @@ blueprint: Monk
 | Armour | 5 (front 5, sides 3.75, rear 0.5) |
 | Melee attack | 8 every 2 s |
 | Speed | 4 |
-| Sight | 5 |
+| Sight | 5 (25 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The monk is a cheap holy man (10 food) from the [Monastery](../buildings/monastery.md) or [Holy Chapter](../buildings/holy-chapter.md). A finished Monastery also brings monks with it.
+The monk is a healer. A finished [Monastery](../buildings/monastery.md) or [Holy Chapter](../buildings/holy-chapter.md) brings one monk with it; there is no button to train more, so a dead monk is not replaced. Monks take no orders at all: they work on their own.
+
+## Abilities
+
+- **Healing:** every 4 seconds the monks of a Monastery look for wounded allies within 50 m of it, go to them and heal them quickly (15 hit points every half second, 25 after [Surgery](../upgrades/surgery.md)), at no cost. When everyone is whole they go back to the Monastery.
+- **Hiding:** when an enemy soldier comes within 50 m, the monks shut themselves in the Monastery until the danger has passed.
+- **Holy protection:** enemy spells (Charm, Possess, Berserker Rage) fail on your units within 50 m of a monk.
+
+## Strong against
+
+- Nothing in a fight (an 8-point blow).
+
+## Weak against
+
+- **Any attacker.** It has 80 hit points.
 
 ## Trained at / Built by
 
@@ -58,4 +72,5 @@ The monk is a cheap holy man (10 food) from the [Monastery](../buildings/monaste
 
 ## Tips
 
-- Monks are not fighters: keep them in the town, out of harm's way.
+- Monks are not fighters: they stay near their Monastery. Bring wounded troops back there to be healed for free.
+- A Monastery near the front is a free field hospital, but its monk hides whenever enemies come close.

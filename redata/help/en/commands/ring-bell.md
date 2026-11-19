@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Rings the town's bell: peasants nearby stop work and shelter in the building.
+Rings the alarm: all your [peasants](../units/peasant.md) stop work and hide in your buildings. Use it when raiders come.
+
+## How it works
+
+- **Who:** every peasant you own, wherever he is, except those listening to an enemy's heresy.
+- **Where:** each one notes his job (farming, woodcutting, stone or gold mining, shop keeping, building or repairing) and goes to the nearest of your buildings within 200 m that still has room for a [Garrison](garrison.md). If it is full when he gets there, he tries the next.
+- **Sound:** an alarm plays for you.
+- **Limits:** the bell rings once: the button stays hidden until you call the peasants out with [Sanctuary (Recall Peasants)](recall-peasants.md). Not in [Valhalla mode](../mechanics/victory-conditions.md#valhalla-mode).
 
 ## Offered by
 
@@ -29,3 +36,4 @@ Rings the town's bell: peasants nearby stop work and shelter in the building.
 ## Tips
 
 - Ring it when raiders appear, then use [Sanctuary (Recall Peasants)](recall-peasants.md) to send them back once the danger has passed.
+- A peasant with no building with room within 200 m stays outside.

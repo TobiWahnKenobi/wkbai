@@ -157,6 +157,46 @@ class GameSet:
 
 RESOURCES = ("Food", "Wood", "Gold", "Stone")
 
+# Working out an equation as far as the blueprint alone decides it (Data.usable).
+ITEM_CHANGERS = ("SET_ITEM", "INCREASE_ITEM", "DECREASE_ITEM", "SET_INDEXED_ITEM", "INCREASE_INDEXED_ITEM",
+                 "DECREASE_INDEXED_ITEM", "ITEM_MODIFICATION")
+SELF_FINDERS = ("FINDER_SELF", "FINDER_SELECTED_OBJECT")    # in a command's test both are the unit
+ENODE_ARITY = {op: 1 for op in ("NEGATE", "NOT", "IS_ZERO", "IS_POSITIVE", "IS_NEGATIVE", "ABSOLUTE_VALUE",
+                                "RANDOM_UP_TO", "ROUND", "TRUNC", "CEIL")}
+ENODE_ARITY.update({op: 2 for op in ("ADDITION", "SUBTRACTION", "MULTIPLICATION", "DIVISION", "AND", "OR",
+                                     "LESS_THAN", "LESS_THAN_OR_EQUAL_TO", "GREATER_THAN",
+                                     "GREATER_THAN_OR_EQUAL_TO", "EQUALS", "MAX", "MIN", "RANDOM_INTEGER",
+                                     "RANDOM_RANGE")})
+ENODE_ARITY.update({"IF_THEN_ELSE": 3, "IS_BETWEEN": 3, "FRONT_BACK_LEFT_RIGHT": 4})
+
+
+def enode(op, a):
+    """One equation node, as wkbai's Enode* classes work it out; None where an input is unknown
+    (AND and OR still decide when one known input settles them)."""
+    if op == "AND":
+        if any(x is not None and x <= 0 for x in a):
+            return 0.0
+        return 1.0 if all(x is not None for x in a) else None
+    if op == "OR":
+        if any(x is not None and x > 0 for x in a):
+            return 1.0
+        return 0.0 if all(x is not None for x in a) else None
+    if op == "IF_THEN_ELSE":
+        if a[0] is None:
+            return a[1] if a[1] is not None and a[1] == a[2] else None
+        return a[1] if a[0] > 0 else a[2]
+    if any(x is None for x in a):
+        return None
+    f = {"NEGATE": lambda x: -x[0], "NOT": lambda x: float(x[0] <= 0), "IS_ZERO": lambda x: float(x[0] == 0),
+         "IS_POSITIVE": lambda x: float(x[0] > 0), "IS_NEGATIVE": lambda x: float(x[0] < 0),
+         "ABSOLUTE_VALUE": lambda x: abs(x[0]), "ADDITION": lambda x: x[0] + x[1],
+         "SUBTRACTION": lambda x: x[0] - x[1], "MULTIPLICATION": lambda x: x[0] * x[1],
+         "LESS_THAN": lambda x: float(x[0] < x[1]), "LESS_THAN_OR_EQUAL_TO": lambda x: float(x[0] <= x[1]),
+         "GREATER_THAN": lambda x: float(x[0] > x[1]), "GREATER_THAN_OR_EQUAL_TO": lambda x: float(x[0] >= x[1]),
+         "EQUALS": lambda x: float(x[0] == x[1]), "MAX": max, "MIN": min,
+         "IS_BETWEEN": lambda x: float(x[1] < x[0] < x[2])}.get(op)
+    return f(a) if f else None
+
 
 class Blueprint:
     def __init__(self, gs, cls, name):
@@ -250,6 +290,15 @@ class Data:
         self.setters = {}         # lower item -> [(kind, name)]; kind: research / built
         self.makers = {}          # (cls, lower name) -> [(kind, name)]; kind: research / command / built
         self._effects()
+        # items something in the game set changes (on anyone): their value on a unit is not its start value
+        self.changed_items = set()
+        for kd in gs.blocks.values():
+            for bs in kd.values():
+                for b in bs:
+                    for l in b.lines:
+                        for i, t in enumerate(l[:-1]):
+                            if t in ITEM_CHANGERS:
+                                self.changed_items.add(low(l[i + 1]))
 
     def blueprint(self, cls, name):
         return self.bp.get((cls, low(name)))
@@ -402,6 +451,99 @@ class Data:
                 lst = self.makers.setdefault((mcls, low(n)), [])
                 if ("built", b.name) not in lst:
                     lst.append(("built", b.name))
+
+    # ---- can a blueprint ever use a command? ----
+    # The engine's test (Command::canBeExecuted, the button panel and the right-click): every
+    # CONDITION_IMPOSSIBLE and CONDITION_WAIT holds, and either the button shows (all ICON_CONDITIONs)
+    # or the cursor does (all CURSOR_CONDITIONs, or one CURSOR_AVAILABLE). The equations are worked
+    # out here with only what is fixed for the blueprint itself: its class and name, and its start
+    # value of items nothing ever changes. The target, the player, the level and everything else
+    # are unknown (None). A command whose every way in is surely false for the blueprint is one it
+    # offers but can never use (the Peasant Farmer's "Convert to Militia", meant for the Peasant).
+    def _leaf(self, t, bp, stack):
+        if not t:
+            return None
+        h = t[0]
+        try:
+            if h == "CONSTANT":
+                return float(t[1])
+            if h == "DEFINED_VALUE":
+                return self.gs.defined.get(low(t[1]))
+            if h == "ITEM_VALUE" and len(t) == 3 and t[2] in SELF_FINDERS:
+                if low(t[1]) in self.changed_items:
+                    return None
+                return next((v for k, v in bp.items.items() if low(k) == low(t[1])), 0.0)
+            if h == "OBJECT_TYPE" and len(t) == 4 and t[3] in SELF_FINDERS:
+                return 1.0 if t[1] == bp.cls and low(t[2]) == low(bp.name) else 0.0
+            if h == "OBJECT_CLASS" and len(t) == 3 and t[2] in SELF_FINDERS:
+                return 1.0 if t[1] == bp.cls else 0.0
+            if h == "EQUATION_RESULT" and len(t) == 3 and t[2] in SELF_FINDERS:
+                return self.eq_value(t[1], bp, stack)
+        except (ValueError, IndexError):
+            return None
+        return None
+
+    def eq_value(self, name, bp, stack=frozenset()):
+        """An equation's value for the blueprint, or None if it depends on anything else."""
+        if low(name) in stack:
+            return None
+        b = self.gs.first("EQUATION", name)
+        if not b:
+            return None
+        lines = [l[1:] for l in b.lines if l[0] == "ENODE"]
+        pos = [0]
+        inner = stack | {low(name)}
+
+        def node():
+            if pos[0] >= len(lines):
+                return None
+            t = lines[pos[0]]
+            pos[0] += 1
+            n = ENODE_ARITY.get(t[0] if t else "", 0)
+            if not n:
+                return self._leaf(t, bp, inner)
+            return enode(t[0], [node() for _ in range(n)])
+        return node()
+
+    def cond_value(self, name, bp):
+        b = self.gs.first("CONDITION", name)
+        for l in (b.lines if b else []):
+            if l[0] == "TEST":
+                return self._leaf(l[1:], bp, frozenset())
+        return None
+
+    def usable(self, bp, cname):
+        """False if the blueprint offers the command but can never meet its conditions."""
+        b = self.gs.first("COMMAND", cname)
+        if not b:
+            return True
+        never = lambda v: v is not None and v <= 0
+        tests, icon, cursor, avail = [], [], [], []
+        button = has_cursor = False
+        for l in b.lines:
+            tag, a = l[0], l[1:]
+            if tag in ("CONDITION_IMPOSSIBLE", "CONDITION_WAIT") and a:
+                tests.append(a[0])
+            elif tag == "ICON_CONDITION" and a:
+                icon.append(a[0])
+            elif tag == "CURSOR_CONDITION" and a:
+                cursor.append(a[0])
+            elif tag == "CURSOR_AVAILABLE" and a:
+                avail.append(a[0])
+            elif tag in ("BUTTON_ENABLED", "BUTTON_AVAILABLE") and a:
+                button = True
+            elif tag == "CURSOR" and a:
+                has_cursor = True
+        if any(never(self.cond_value(c, bp)) for c in tests):
+            return False
+        if not (button or has_cursor or avail):
+            return True          # given by a key (Halt) or by the engine
+        by_button = button and not any(never(self.eq_value(e, bp)) for e in icon)
+        if avail:
+            by_cursor = any(not never(self.cond_value(c, bp)) for c in avail)
+        else:
+            by_cursor = has_cursor and not any(never(self.eq_value(e, bp)) for e in cursor)
+        return by_button or by_cursor
 
     # ---- conditions ----
     def cond_items(self, cname, seen=None):
@@ -772,6 +914,14 @@ class Catalogue:
         self._fill()
 
     # ---- sections ----
+    def can_use(self, b, cname):
+        """The blueprint offers the command and can use it: not "Build" without anything to build
+        (the build menu holds its "Build <building>" buttons; wkbai shows no button of its own),
+        and not a command whose conditions it can never meet (Data.usable)."""
+        if low(cname) == "build" and not any(low(x).startswith("build ") for x in b.offered()):
+            return False
+        return self.d.usable(b, cname)
+
     def who_links(self, keys, frm):
         out = []
         for cls, key in keys:
@@ -866,15 +1016,26 @@ class Catalogue:
                         out.append(page)
         return out
 
-    def command_links(self, b, frm, exclude=()):
+    def states(self, page):
+        """The page's blueprint and its other states in play (ALIASES: an open gatehouse, a
+        limbered rocket launcher), each as the blueprint it is then."""
+        out = [page.bp]
+        for (cls, n), main in ALIASES.items():
+            if low(main) == low(page.key) and (cls, low(n)) in self.reached and self.d.bp[(cls, low(n))] not in out:
+                out.append(self.d.bp[(cls, low(n))])
+        return out
+
+    def command_links(self, page, frm, exclude=()):
+        """The commands the unit or building can use, in any of its states (Catalogue.can_use)."""
         out = []
-        for cname in b.offered():
-            lc = low(cname)
-            if lc in exclude or lc.startswith(("spawn ", "build ")):
-                continue
-            p = self.cmds.get(lc)
-            if p and p.link(frm) not in out:
-                out.append(p.link(frm))
+        for b in self.states(page):
+            for cname in b.offered():
+                lc = low(cname)
+                if lc in exclude or lc.startswith(("spawn ", "build ")) or not self.can_use(b, cname):
+                    continue
+                p = self.cmds.get(lc)
+                if p and p.link(frm) not in out:
+                    out.append(p.link(frm))
         return out
 
     def _fill(self):
@@ -941,7 +1102,7 @@ class Catalogue:
             if conv:
                 leads.append("- **Can turn into or call up:** " + ", ".join(conv))
             p.sections["leads"] = "\n".join(leads) or "- Nothing: it unlocks no building, unit or research."
-            cl = self.command_links(b, "units")
+            cl = self.command_links(p, "units")
             p.sections["commands"] = ("- " + "\n- ".join(cl)) if cl else "- Only the basic orders."
             self.static_unit(p)
         for p in self.buildings.values():
@@ -1007,7 +1168,7 @@ class Catalogue:
             if conv:
                 leads.append("- **Finishing it turns into or calls up:** " + ", ".join(conv))
             p.sections["leads"] = "\n".join(leads) or "- Nothing new: it trains no units and offers no research."
-            cl = self.command_links(b, "buildings")
+            cl = self.command_links(p, "buildings")
             p.sections["commands"] = ("- " + "\n- ".join(cl)) if cl else "- None of its own."
             self.static_building(p)
         for lc, p in self.upgrades.items():
@@ -1034,7 +1195,7 @@ class Catalogue:
             p.sets = sets
         for lc, p in self.cmds.items():
             c = d.commands[lc]
-            who = self.who_links(self.offerers.get(lc, []), "commands")
+            who = self.who_links([k for k in self.offerers.get(lc, []) if self.can_use(d.bp[k], c["name"])], "commands")
             p.sections["trained"] = "- **Offered by:** " + (", ".join(who) or "-")
             units = [w for w in who if "../units/" in w]
             if len(units) > 15:
@@ -1076,8 +1237,6 @@ class Catalogue:
             s = [("Cost", cost_text(found.items))] if cost_text(found.items) else []
             if found.item("Construction Time"):
                 s.append(("Build time", fmt(found.item("Construction Time")) + " s"))
-        elif b.item("Train Time") and getattr(p, "spawn", None):
-            s.append(("Train time", fmt(b.item("Train Time")) + " s"))
         if b.item("Food Consumption"):
             s.append(("Food upkeep", fmt(b.item("Food Consumption"))))
         hp = b.item("Hit Point Capacity", "Hit Points")
@@ -1098,8 +1257,9 @@ class Catalogue:
             v = fmt(b.item("Missile Damage"))
             if b.item("Missile Attack Time"):
                 v += f" every {fmt(b.item('Missile Attack Time'))} s"
-            if b.item("Maximum Missile Range"):
-                v += f", range {fmt(b.item('Minimum Missile Range')) + '-' if b.item('Minimum Missile Range') else ''}{fmt(b.item('Maximum Missile Range'))}"
+            if b.item("Sight Range"):
+                reach = b.item("Sight Range") * (b.item("My Missile Sight Range Modifier") or 5)
+                v += f", range {fmt(round(reach))} m"
             s.append(("Missile attack", v))
         if b.item("Missile Structural Integrity Damage") >= 1:
             s.append(("Damage to buildings", fmt(b.item("Missile Structural Integrity Damage")) + " per missile"))
@@ -1108,7 +1268,7 @@ class Catalogue:
         if b.item("Base Movement Speed"):
             s.append(("Speed", fmt(b.item("Base Movement Speed"))))
         if b.item("Sight Range"):
-            s.append(("Sight", fmt(b.item("Sight Range"))))
+            s.append(("Sight", f"{fmt(b.item('Sight Range'))} ({fmt(round(b.item('Sight Range') * 5))} m)"))
         p.static = s
 
     def static_building(self, p):
@@ -1129,8 +1289,8 @@ class Catalogue:
             s.append(("Strength (structural integrity)", fmt(si)))
         if "Armour" in b.items:
             s.append(("Armour", fmt(b.items["Armour"])))
-        if b.item("Missile Damage"):
-            s.append(("Missile attack", fmt(b.item("Missile Damage"))))
+        if b.item("Missile Damage") and "Fort Attack On Sight" in b.reactions:
+            s.append(("Missile attack", fmt(b.item("Missile Damage")) + " per arrow"))
         rep = {r: b.item(r + " Repair Cost") for r in RESOURCES}
         if any(rep.values()):
             s.append(("Repair cost", cost_text(rep)))

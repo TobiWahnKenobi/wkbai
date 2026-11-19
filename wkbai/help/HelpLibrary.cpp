@@ -249,7 +249,10 @@ const std::map<std::string, std::string>& imguiWindows()
 		{ "Timeline (F7)", "ui/hud/chronicle#timeline" },
 		{ "##replay", "ui/hud/replay-controls" },
 		{ "Events (L)", "ui/hud/replay-controls" },
-		{ "Map editor (F8)", "ui/frontend/map-editor" },
+		{ "Map editor (F8)", "ui/editor" },
+		{ "New blank map", "ui/editor/blank" },
+		{ "Export for the original game", "ui/editor/export" },
+		{ "New map of another size", "ui/editor/newsize" },
 		{ "Environment debug (F9)", "controls/developer-tools#environment-panel-f9" },
 		{ "Client messages", "controls/developer-tools#debugger-f2" },
 		{ "Client Object Tree", "controls/developer-tools#debugger-f2" },
@@ -462,7 +465,8 @@ bool Library::resolveOne(const std::string& idIn, std::string& path, std::string
 		id.resize(h);
 	}
 	if (id.compare(0, 12, "imguiwindow:") == 0) {
-		auto it = imguiWindows().find(id.substr(12));
+		// (a child window: its window's, "Map editor (F8)/list_C7115161")
+		auto it = imguiWindows().find(id.substr(12, id.find('/', 12) == std::string::npos ? std::string::npos : id.find('/', 12) - 12));
 		return it != imguiWindows().end() && resolveOne(it->second, path, anchor);
 	}
 	// "page:<path>#<anchor>": a page by its path (the heading a label matched: Help.cpp)

@@ -8,7 +8,14 @@ order: 10
 
 ## Role
 
-Makes an enemy explosive mine safe: right-click the mine with a sapper.
+Makes an [Explosive Mine](../buildings/explosive-mine.md) harmless: your [Sapper](../units/sapper.md) takes it apart before it can be set off.
+
+## How it works
+
+- **How to give it:** select the sapper and right-click a laid mine. The cursor shows the defuse sign.
+- **Target:** any laid explosive mine. The game doesn't check whose it is, so this works on your own mines too.
+- **Time:** the sapper goes right up to the mine and works on it for 5 seconds. Then the mine is gone.
+- **Effect on the mine's owner:** the sapper who laid it loses his [Detonate](detonate-mine.md) button and can lay a new mine.
 
 ## Offered by
 

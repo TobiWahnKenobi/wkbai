@@ -20,13 +20,13 @@ blueprint: Celestial Hero
 | Armour | 25 (front 24, sides 14, rear 4) |
 | Melee attack | 55 every 1 s |
 | Speed | 8 |
-| Sight | 15 |
+| Sight | 15 (75 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The celestial hero is the campaign's Imperial hero: 400 hit points, armour 24 from the front and a 55-point attack every second, with healing. Levels bring him in; he is not trained.
+Grand Duke Artos is the campaign's Imperial hero: 400 hit points, armour 24 at the front, 14 at the sides and 4 at the rear, a 55-point blow every second and a sight of 15. He is not trained; the missions bring him in.
 
 ## Trained at / Built by
 
@@ -65,6 +65,24 @@ The celestial hero is the campaign's Imperial hero: 400 hit points, armour 24 fr
 - [Move](../commands/move.md)
 <!-- /gen:commands -->
 
+## Abilities
+
+- **Heals himself and others.** When he is idle, hurt and no enemy is within 30 m, he uses 10 points of his charge bar (90 at most) each second to heal 15 hit points (25 after [Surgery](../upgrades/surgery.md)), then heals other hurt units within 30 m. The bar refills at about 1 point a second.
+- **Heals the unit he guards** a little every 3 s.
+- **Fizzle:** enemy curses, entangles and possessions aimed at units within 50 m of him fail.
+
+## Strong against
+
+Damage numbers below are per blow or per shot, before research, experience, height and formation bonuses: the attack minus the armour on the side that is hit (see [Combat](../mechanics/combat.md)).
+
+- **Cavalry and missile troops.** 55 a second: 43 against a knight's front, 53 against an archer. Knights do him 5 from the front, arrows 1.
+
+## Weak against
+
+- **Heavy infantry and monsters.** A [Warrior of the Sun](pagan-pikeman.md) does 16 a blow, an [Undead Legion](undead-legion.md) 13; the game rates heavy infantry as good against him.
+- **Blows from behind**: his rear armour is 4.
+
 ## Tips
 
-- Lead with him, but pull him back before he is surrounded.
+- Lead with him, but pull him back before he is surrounded; out of combat he heals himself.
+- Let him guard a valuable unit to keep it topped up.

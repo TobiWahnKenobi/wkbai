@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Missile troops keep their distance: they fall back from enemies that come close and shoot again.
+Missile troops keep their distance: they fall back from heavy enemies that come close, then shoot again. All of them start this way; the button shows only after [Hold Ground](hold-ground.md) was pressed, and swaps back to it.
+
+## How it works
+
+- **Who they fall back from:** enemy heavy infantry, heavy cavalry, and the [Battering Ram](../units/battering-ram.md), [Behemoth](../units/behemoth.md) and [Imperial War Elephant](../units/war-elephant.md).
+- **Distance:** they react to such enemies within half their sight range: about 35 m for Archers, Gunners and Huntresses, 37 m for the Dragoon and the Mounted Huntress, 62 m for the Imperial Archer, 22 m for the Javelineer.
+- **Where to:** a spot away from the enemy that they can reach; if they can't reach one, they stay.
+- **Not when:** they are in a formation, allied heavy infantry stands within 25 m in front of them, or your [Palings](../buildings/palings.md) are within 25 m in front of them. Then they stand and shoot.
 
 ## Offered by
 
@@ -29,3 +36,4 @@ Missile troops keep their distance: they fall back from enemies that come close 
 ## Tips
 
 - Good for archers and horse archers against slow foot soldiers.
+- Put heavy infantry or palings in front of your archers when you want them to stand and shoot instead.

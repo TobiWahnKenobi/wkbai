@@ -20,7 +20,14 @@ order: 10
 
 ## Role
 
-Sends a ship into a dock, where it is repaired.
+Sends a damaged ship to a [Dock](../buildings/dock-wood.md), where it is repaired. Right-click the Dock; the cursor shows the repair sign while the ship is damaged.
+
+## How it works
+
+- **Target:** a Dock of yours or of an ally.
+- **Range:** the ship sails to within 25 m of the Dock.
+- **Repair:** 10 hit points every second, for 1 wood each, until the ship is whole. Without wood it waits.
+- **Who:** every ship: the [Cog](../units/cog.md), [Corsair](../units/arrow-boat.md), [Fire Boat](../units/fire-boat.md), [Carrack](../units/mangonel-boat.md) and [Galleass](../units/bombard-boat.md).
 
 ## Offered by
 

@@ -30,6 +30,20 @@ blueprint: Monastery
 
 The monastery trains monks, researches [Chivalry](../upgrades/chivalry.md) (pikemen and knights) and can be raised into a Holy Chapter. It turns your Manor into the Imperial Keep.
 
+## What it does
+
+- **Its own monk.** A Monastery comes with a monk who heals your and your allies' wounded within 50 m of it. When enemies come within 50 m, he goes inside and the bell rings; he comes out again when they have gone. Selecting it shows the 50 m.
+- **Trains** monks; researches [Chivalry](../upgrades/chivalry.md).
+- **Imperial Keep:** finishing it turns your Manor into the Imperial Keep.
+- **Holy Chapter:** [Holy Chapter Upgrade](../upgrades/upgrade-holy-chapter.md) raises it into a [Holy Chapter](holy-chapter.md).
+
+## Defence
+
+- **Strength:** 500.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 2.5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->
@@ -61,4 +75,5 @@ The monastery trains monks, researches [Chivalry](../upgrades/chivalry.md) (pike
 ## Tips
 
 - Research Chivalry early if you want pikemen and knights.
+- Build it where your army falls back to: wounded troops near it are healed.
 - Unlocks the Cathedral.

@@ -23,7 +23,7 @@ Under the guests: the lobby's messages. Type in the line at the bottom and press
 
 ## Offer on
 
-The row at the bottom left: where the game is offered. The local network is always ticked. Each online matchmaking service you have set up can be ticked to list the game there too; one that isn't ready shows its state, and the mouse over it shows more.
+The row at the bottom left: where the game is offered. The local network is always ticked. Each online matchmaking service you have set up can be ticked to list the game there too; one that isn't ready shows its state, and the mouse over it shows more. Setting up a service: the [Online](../../../options/online.md) options and [Hosting a Nakama server](../../../multiplayer/nakama-server.md).
 
 ## Agent players in the game
 

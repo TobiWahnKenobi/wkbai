@@ -8,7 +8,13 @@ order: 10
 
 ## Role
 
-A Vandavar Barbarian raider picks up a sack of goods, often the loot from a plundered building.
+A [Vandavar Barbarian](../units/vandavar.md) plunders the goods in a sack lying on the ground. Right-click a sack; the cursor shows the delivery cursor.
+
+## How it works
+
+- **Straight into the stock:** the goods don't have to be carried home. Every fifth of a second, 1 of each good in the sack goes straight to your stock, however far away your town is.
+- **No load limit:** the raider empties the whole sack.
+- **Then:** an empty sack vanishes, and he moves on to the nearest sack within 30 m, until none are left.
 
 ## Offered by
 

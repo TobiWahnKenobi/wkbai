@@ -12,7 +12,15 @@ order: 10
 
 ## Role
 
-Stops missile troops and buildings from shooting until you give the word.
+Stops ranged units and shooting buildings from opening fire on their own, until you give the word with [Fire at Will](fire-at-will.md).
+
+## How it works
+
+- **How:** press the button. It shows only while the unit or building is not holding fire; [Fire at Will](fire-at-will.md) takes its place.
+- **Units:** a unit holding fire doesn't shoot at enemies it sees, and stops an attack it is making the next time it would shoot. Any attack order you give it switches Hold Fire off again.
+- **Buildings:** a building holding fire stops choosing targets. One you right-click is still shot, as the right-click switches Hold Fire off.
+- **Siege engines start this way:** a new Mangonel, Trebuchet, Bombard, Rocket Launcher, [Fomorian Beast](../units/rock-thrower.md) or [DeathWyrm](../units/infernal-engine.md) holds fire until you press Fire at Will or order an attack.
+- **Limits:** only your own orders count: computer players' units ignore Hold Fire.
 
 ## Offered by
 
@@ -29,3 +37,5 @@ Stops missile troops and buildings from shooting until you give the word.
 ## Tips
 
 - Hold fire to keep hidden or to let the enemy come into a trap.
+- Holding fire keeps ammunition for the target you choose: archers and gunners won't spend arrows on a passing scout.
+- Press [Fire at Will](fire-at-will.md) on new siege engines once they are in place, or they stand idle while enemies walk past.

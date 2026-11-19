@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Missile troops stay where they are and shoot from there, without moving to get a better shot or to close in.
+Missile troops stay where they stand: they don't walk towards their targets and don't step back from enemies that come close. The button shows while a unit [skirmishes](skirmish-mode.md), as all of them do at first; pressed, it swaps to the Skirmish button.
+
+## How it works
+
+- **Targets:** they pick only targets already in range. A target that moves out of range is dropped, not followed.
+- **No falling back:** they stop skirmishing until you press [Skirmish](skirmish-mode.md).
+- **Who:** archers, gunners, javelineers and mounted archers and gunners.
 
 ## Offered by
 

@@ -12,7 +12,7 @@ The main menu's Editors button opens this screen. It holds wkbai's two editors.
 
 ## Map Editor
 
-Opens the [list of maps to edit](../map-editor.md). The chosen map opens paused with the editor.
+Opens the [list of maps to edit](../map-editor.md). The chosen map opens paused with the editor: see [the map editor](../../editor/index.md) and [making a map](../../editor/make-a-map.md).
 
 ## AI General Editor
 

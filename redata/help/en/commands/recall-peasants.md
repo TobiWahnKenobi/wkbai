@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Sends the sheltering peasants back to their work after the bell has rung.
+Ends the alarm of [Sanctuary (Ring Bell)](ring-bell.md): the sheltering [peasants](../units/peasant.md) come out and go back to work.
+
+## How it works
+
+- **Button:** it shows only after the bell has rung, on the same buildings.
+- **Who:** every peasant inside any of your buildings comes out, and those still on their way turn back.
+- **Back to work:** each goes back to the job he had when the bell rang: his farm, the trees, the stone or gold, his shop, or the building he was putting up or repairing. A peasant who had no job just leaves the building.
+- **Sound:** the alarm plays again.
 
 ## Offered by
 

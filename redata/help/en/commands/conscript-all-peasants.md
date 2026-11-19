@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Arms every peasant of the town as [militia](../units/militia.md) at once.
+Arms every peasant you have as [Militia](../units/militia.md) at once, from your Manor, Keep, Castle or Palace.
+
+## How it works
+
+- **Button:** it appears only once your player is allowed militia, and in the shipped game set nothing grants that (the research that would is offered by no building). So in a normal game you won't see this button unless a map or mod unlocks it. Arm selected peasants with [Conscript Peasant into Militia](convert-to-militia.md) instead.
+- **Confirm:** a box asks first; *Yes* goes ahead.
+- **Who:** every [Peasant](../units/peasant.md) you own, wherever he is. Each drops his work, walks to his nearest Manor, Keep, Castle or Palace or [Village](../buildings/village-wood.md), and after about 2 seconds there becomes militia.
+- **Their jobs:** the game counts how many were farming, woodcutting, keeping shop or building. When the militia go back to work, they are shared out over farms, shops and trees by those counts.
 
 ## Offered by
 
@@ -28,4 +35,5 @@ Arms every peasant of the town as [militia](../units/militia.md) at once.
 
 ## Tips
 
-- A last resort: nobody gathers while the town is under arms.
+- A last resort: while the town is under arms, nobody gathers resources.
+- [Convert all Militia into Peasants](demob-all-militia.md) sends them all back.

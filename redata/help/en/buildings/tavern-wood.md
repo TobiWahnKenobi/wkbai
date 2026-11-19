@@ -29,6 +29,18 @@ blueprint: Tavern Wood
 
 The tavern hires mercenaries (gold only, no food upkeep) and spies. It needs a Shop.
 
+## What it does
+
+- **Hires** mercenaries and spies (see the list below). Mercenaries eat no food.
+- **Diplomacy:** while you own a Tavern, the Global Diplomacy window is open to you: everyone's relations with everyone ([diplomacy](../mechanics/diplomacy.md#the-windows)).
+
+## Defence
+
+- **Strength:** 200.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 15% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

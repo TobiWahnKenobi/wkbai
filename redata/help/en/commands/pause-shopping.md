@@ -12,7 +12,7 @@ order: 10
 
 ## Role
 
-Closes the shop for now: no trade happens there until you continue.
+Stops trade at this [Shop](../buildings/shop-stone.md) for now, to save your materials. The keeper stays at the shop and waits; he trades nothing and uses no materials. The button then changes to [Continue trading at Shop](continue-shopping.md).
 
 ## Offered by
 

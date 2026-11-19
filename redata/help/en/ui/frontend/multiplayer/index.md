@@ -28,7 +28,7 @@ The saved games. Choose one and press **Create**: the [saved game's lobby](mploa
 
 ## Find Games
 
-The games on offer, grouped by where they were found: first the local network, then each online matchmaking service under its name. A heading says when a service is off, still signing in, or has failed, and why. The list looks again every five seconds.
+The games on offer, grouped by where they were found: first the local network, then each online matchmaking service under its name. A heading says when a service is off, still signing in, or has failed, and why. The list looks again every five seconds. An online service needs a Nakama server: see [Hosting a Nakama server](../../../multiplayer/nakama-server.md).
 
 Each game shows:
 

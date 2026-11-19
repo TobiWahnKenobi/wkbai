@@ -29,6 +29,18 @@ blueprint: Blacksmith
 
 The blacksmith researches better weapons and armour for every kind of soldier: heavy and light infantry, heavy and light cavalry. Each line has three steps; the second needs your Manor's second level (Keep), the third its third level (Castle).
 
+## What it does
+
+- **Research:** three steps of weapons and armour for each of heavy and light infantry and heavy and light cavalry (see the list below). The later steps wait for your Keep and Castle.
+- **Towers too:** the light infantry weapons also sharpen the arrows of your Manor, forts, watch towers and wall towers.
+
+## Defence
+
+- **Strength:** 500.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 10% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

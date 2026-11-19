@@ -15,6 +15,7 @@
 #include "../gfx/bitmap.h"
 #include "../gameset/gameset.h"
 #include "../gameset/GameObjBlueprint.h"
+#include "../gameset/reaction.h"
 #include "../imgui/imgui.h"
 #include <md4c.h>
 #include <lunasvg/lunasvg.h>
@@ -709,7 +710,6 @@ std::vector<std::pair<std::string, std::string>> liveFacts(const GameSet* gs, co
 			cost += (cost.empty() ? "" : ", ") + number(v) + " " + L.ui(key);
 	if (!cost.empty()) rows.push_back({ L.ui("factCost"), cost });
 	if (character) {
-		if (const float v = item(bp, "Train Time")) rows.push_back({ L.ui("factTrainTime"), number(v) + " s" });
 		if (const float v = item(bp, "Food Consumption")) rows.push_back({ L.ui("factFoodUpkeep"), number(v) });
 		if (const float v = std::max(item(bp, "Hit Point Capacity"), item(bp, "Hit Points"))) rows.push_back({ L.ui("factHitPoints"), number(v) });
 	}
@@ -726,14 +726,27 @@ std::vector<std::pair<std::string, std::string>> liveFacts(const GameSet* gs, co
 		if (const float t = item(bp, "Attack Time")) a += " " + L.ui("factEvery", number(t));
 		rows.push_back({ L.ui("factMelee"), a });
 	}
-	if (const float v = item(bp, "Missile Damage")) {
+	// a building shoots only with the fort attack reaction (gatehouses carry a Missile Damage they
+	// never use: Fort Attack.cpp)
+	bool shoots = character;
+	if (!character) {
+		const int fort = gs->reactions.names.getIndex("Fort Attack On Sight");
+		for (const Reaction* r : bp->intrinsicReactions)
+			if (fort >= 0 && r == &gs->reactions[fort]) shoots = true;
+	}
+	if (const float v = item(bp, "Missile Damage"); v && shoots) {
 		std::string a = number(v);
 		if (const float t = item(bp, "Missile Attack Time")) a += " " + L.ui("factEvery", number(t));
-		if (const float r = item(bp, "Maximum Missile Range")) a += ", " + L.ui("factRange", number(item(bp, "Minimum Missile Range")) + "-" + number(r));
+		// the range it shoots at: its sight times "My Missile Sight Range Modifier", 5 without one
+		// (Fire Arrow.cpp's "Sight Range in Metres"; "Maximum Missile Range" is read only by the AI)
+		if (const float sight = item(bp, "Sight Range"); sight && character) {
+			const float k = item(bp, "My Missile Sight Range Modifier");
+			a += ", " + L.ui("factRange", number(std::round(sight * (k > 0 ? k : 5.0f))) + " m");
+		}
 		rows.push_back({ L.ui("factMissile"), a });
 	}
 	if (const float v = item(bp, "Base Movement Speed")) rows.push_back({ L.ui("factSpeed"), number(v) });
-	if (const float v = item(bp, "Sight Range")) rows.push_back({ L.ui("factSight"), number(v) });
+	if (const float v = item(bp, "Sight Range")) rows.push_back({ L.ui("factSight"), number(v) + " (" + number(std::round(v * 5)) + " m)" });
 	return rows;
 }
 

@@ -8,7 +8,14 @@ order: 10
 
 ## Role
 
-Dismisses a soldier: he goes back to the town as a peasant.
+Dismisses soldiers and most other trained units: they walk home and become [peasants](../units/peasant.md). Use it to turn an army you no longer need back into workers.
+
+## How it works
+
+- **How to give it:** select the units and right-click one of your own Manor, Keep, Castle or Palace buildings or a [Village](../buildings/village-wood.md). The cursor shows the dismiss sign over them.
+- **Confirm:** a box asks whether to dismiss the troops. *Yes* sends them; *No* cancels. Only one box is open at a time: units you send while it is open wait for the same answer.
+- **Where:** each unit walks to the building you clicked and becomes a peasant once within 6 m of it.
+- **Limits:** not in [Valhalla mode](../mechanics/victory-conditions.md#valhalla-mode) or in the tutorial.
 
 ## Offered by
 
@@ -25,4 +32,4 @@ Dismisses a soldier: he goes back to the town as a peasant.
 
 ## Tips
 
-- Dismiss troops you no longer need to free food for others.
+- Each unit becomes one peasant. Nothing you paid for it comes back.

@@ -29,6 +29,19 @@ blueprint: Dock Wood
 
 The dock builds ships: cogs to carry troops and goods, and warships (arrow boats, fire boats, mangonel boats, bombard boats). It can also run supply routes over sea or land.
 
+## What it does
+
+- **Builds ships** (see the list below; [ships](../mechanics/naval.md)).
+- **Repairs ships:** a damaged boat is mended at a dock ([Repair (Docking)](../commands/docking.md)).
+- **Supply lines:** cogs carry goods between docks, carts overland ([supply routes](../mechanics/naval.md#supply-routes)).
+- **Only without AI Generals:** it is offered only when no AI plays ([docks](../mechanics/naval.md#docks-only-without-ai-generals)).
+
+## Defence
+
+- **Strength:** 600.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

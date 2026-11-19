@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-The sapper's repair of damaged siege engines in the field.
+The sapper's way of speeding up a line of [Palings](../buildings/palings.md) that is still being put up. Despite the name, it doesn't mend damaged siege engines.
+
+## How it works
+
+- **Target:** an unfinished line of Palings of yours or an ally's. The cursor shows the repair cursor only over one.
+- **Speed:** a fixed share each second; one sapper alone finishes a piece in 5 s.
+- **Cost:** none.
+- **When it ends:** when the piece is whole, the sapper stops.
 
 ## Offered by
 

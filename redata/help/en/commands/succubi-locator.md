@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Picks out your succubi one after another, so you can find them on the map. Offered by the Henge.
+Shows you where all your [Succubi](../units/succubus.md) are, so you can find them on the map.
+
+## How it works
+
+- **How to give it:** select your [Henge](../buildings/henge.md) and click the button.
+- **What happens:** a white circle shrinks onto each of your Succubi on the minimap, for 2 seconds. It shows every one you own, wherever it is.
+- It doesn't select them or move the camera.
 
 ## Offered by
 

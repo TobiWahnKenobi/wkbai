@@ -8,7 +8,15 @@ order: 10
 
 ## Role
 
-Takes over an enemy building that can be captured, such as a supply point, for your side. Right-click it with a soldier; the cursor shows when a target can be captured.
+Takes over a building that the map has made capturable, by walking a unit up to it. Right-click it; the cursor shows the capture sign over a target you can take.
+
+## How it works
+
+- **Target:** an object marked as capturable that isn't yours already. No unit or building of the game is capturable by itself: only a map can mark one so. On most maps the capture cursor never shows.
+- **Range:** the unit walks to within 5 m, and the target becomes yours.
+- **King of the Hill:** the game's King of the Hill rules use it. A hill building you capture adds its victory points to your score every second.
+- **Valhalla flags** are not taken with this command: a flag goes to the side whose units are near it alone, and turns neutral while units of two sides are near it ([Valhalla mode](../mechanics/victory-conditions.md#valhalla-mode)).
+- **Who:** nearly every land unit, peasants and siege engines too.
 
 ## Offered by
 

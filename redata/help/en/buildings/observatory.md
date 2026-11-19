@@ -27,7 +27,20 @@ blueprint: Observatory
 
 ## Role
 
-The observatory looks far and plans big works: it researches the [Trebuchet](../upgrades/trebuchet.md) and the [Telescope](../upgrades/telescope.md), and it can build observation points that reveal distant land. It turns your Manor into the Renaissance Castle and unlocks many late buildings and units.
+The observatory looks far and plans big works: it researches the [Trebuchet](../upgrades/trebuchet.md) and the [Telescope](../upgrades/telescope.md), and it can build observation points that reveal distant land. It turns your Keep into the Renaissance Castle and unlocks many late buildings and units.
+
+## What it does
+
+- **Research:** the [Trebuchet](../upgrades/trebuchet.md) and the [Telescope](../upgrades/telescope.md).
+- **Observation points:** its charge fills by 2 every 1.9 seconds, up to 100 (about 95 seconds). When it is full, its observation point button lets you pick any spot on the map: you see about 40 m around it for about 20 seconds, the view shrinking. The charge then starts again. It can't do this while it researches.
+- **Renaissance Castle:** finishing it turns your Keep into the Renaissance Castle.
+
+## Defence
+
+- **Strength:** 1000.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 5% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
 
 ## Built by
 
@@ -56,4 +69,5 @@ The observatory looks far and plans big works: it researches the [Trebuchet](../
 
 ## Tips
 
-- Use [Build](../commands/build.md) here to place observation points.
+- Look into the enemy town before you attack: an [observation point](observation-point.md) shows what is there.
+- With an Observatory, the Bank, University, Scriptorium (with a Cathedral) and Arcanum (with a Temple of the Moon) open up.

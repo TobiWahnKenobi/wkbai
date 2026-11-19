@@ -8,7 +8,13 @@ order: 10
 
 ## Role
 
-Adds the selected soldier to an existing formation: right-click the formation.
+Adds the selected soldiers to an existing formation: right-click one of its members. The cursor shows the join sign where joining is allowed.
+
+## How it works
+
+- **Target:** a member of a formation of yours or an ally's, of the same class as the joiner: heavy infantry, light infantry, heavy cavalry or light cavalry. A unit already in that formation can't join it again.
+- **Formations:** a formation told to join another breaks up, and all its members join.
+- **Re-forming:** the formation forms up again with its new members, unless it is fighting at that moment.
 
 ## Offered by
 

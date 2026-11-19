@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Sets up a supply route over land from this Village or Dock: carts carry goods along it on their own.
+Tells the carts of this [Village](../buildings/village-wood.md) (or [Dock](../buildings/dock-wood.md)) where to take its goods. Press the button, then click the building that should receive them; the cursor shows the delivery cursor over one that fits.
+
+## How it works
+
+- **Target:** a Manor-type building, Village, Dock or [Warehouse](../buildings/warehouse-stone.md) of yours, other than this building.
+- **Effect:** from then on the carts that work for this building take their loads to the chosen building, instead of the nearest store ([Transport Resources](transport-resources-from-village-to-global-stocks.md)).
+- **Over the sea:** point the line at a Dock, then give that Dock an [overseas supply line](set-up-oversea-supply-route.md) so a [Cog](../units/cog.md) ships the goods on.
+- **Undo:** [Clear Supply Line](clear-supply-route.md).
 
 ## Offered by
 

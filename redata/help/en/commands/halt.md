@@ -8,7 +8,12 @@ order: 10
 
 ## Role
 
-Stops the selected units where they are and cancels their orders.
+Stops the selected units and cancels what they were doing. Press **H**, or its button.
+
+## How it works
+
+- **Units:** they drop their orders, leave any attack or guard group they were part of, and stand where they are.
+- **Formations:** the formation stops and forms up again in its present shape where it stands.
 
 ## Offered by
 

@@ -12,7 +12,15 @@ order: 10
 
 ## Role
 
-Arms the selected peasants as [militia](../units/militia.md).
+Turns a [Peasant](../units/peasant.md) into a [Militia](../units/militia.md) fighter. Use it when raiders reach your town and your soldiers are elsewhere.
+
+## How it works
+
+- **How to give it:** select one or more peasants and click the button.
+- **Where:** each peasant drops his work and walks to your nearest Manor, Keep, Castle or Palace or [Village](../buildings/village-wood.md). He becomes militia as soon as he gets there.
+- **Cost:** nothing.
+- **Limits:** a peasant under the [Possess](possess.md) spell has no button.
+- **Back to work:** [Convert to Peasant](convert-to-peasant.md) turns militia back into peasants.
 
 ## Offered by
 

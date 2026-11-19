@@ -8,6 +8,8 @@ order: 110
 
 The names of the people who made Warrior Kings: Battles at Black Cactus and its publisher, followed by wkbai's, scroll slowly up the screen over a dark column. When the last line has passed, the credits start again.
 
+wkbai's licence and the other free software it is built with are on [about wkbai](../../about.md).
+
 ![The credits scrolling](shot:frontend-credits)
 
 ## Back

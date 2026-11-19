@@ -19,18 +19,30 @@ blueprint: Undead Legion
 | | |
 |---|---|
 | Cost | 120 food |
-| Train time | 18 s |
 | Hit points | 200 |
 | Armour | 6 (front 23, sides 12, rear 3) |
 | Melee attack | 37 every 2.5 s |
 | Speed | 2.5 |
-| Sight | 9 |
+| Sight | 9 (45 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../buildings/hall-of-warriors.md): 200 hit points, armour 23 from the front and a 37-point attack. They cost 120 food and no food upkeep, and need the [Invoke Hecate](../upgrades/undead-legion.md) research.
+The Undead Legion is a Pagan unit of risen dead from the [Hall of Warriors](../buildings/hall-of-warriors.md): 200 hit points, a 37-point blow every 2.5 seconds and armour 23 from the front, 12 on the sides and 3 from behind. They cost 120 food, eat no food afterwards, and need the [Invoke Hecate](../upgrades/undead-legion.md) research (800 food and 200 gold, 400 seconds). They are heavy infantry, the toughest from the front in the game after the giants.
+
+## Strong against
+
+- **Anything that comes from the front.** A [Knight](knight.md) does 6 a blow, a [Spearman](spearman.md) 7, arrows and bullets the minimum 1. The legion hits a knight for 25.
+- **Enemy succubi**: undead can't be charmed.
+
+## Weak against
+
+- **Flanks and rear** (armour 12 and 3): a knight from behind does 26 a blow. At speed 2.5 the legion can't turn away from horsemen.
+- **Heavy siege**: a [Trebuchet](trebuchet.md) stone does 52, rockets ignore armour.
+- **Giants**: a [Stone Elemental](stone-elemental-large.md) hits it for 77.
+- Its reach is short (3 m against the 6 m of spears and pikes).
+- Like siege engines, it can't enter forest or rocky ground.
 
 ## Trained at / Built by
 
@@ -71,4 +83,6 @@ The undead legion is a Pagan unit of risen dead from the [Hall of Warriors](../b
 
 ## Tips
 
-- Very slow (2.5) but very tough from the front: use them to hold ground.
+- Very slow (2.5) but very tough from the front: use it to hold a gap or guard a gate.
+- Put it in a [Line](../commands/formation.md) and keep cavalry on its flanks.
+- It eats nothing, so a large legion costs you no farms.

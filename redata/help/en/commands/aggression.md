@@ -12,7 +12,14 @@ order: 10
 
 ## Role
 
-Sets the selected units to aggressive: they go after enemies they see on their own.
+Sets the selected soldiers to go after enemies that shoot at them. Most soldiers start without it, on [Stand your Ground](passivity.md); the [Barbarian](../units/barbarian.md), the [Gibbering Horde](../units/gibbering-horde.md) and the [Vandavar Barbarian](../units/vandavar.md) start with it on. The button shows while a unit stands its ground; pressed, it swaps to the Stand your Ground button.
+
+## How it works
+
+- **Effect:** a hand-to-hand unit hit by an arrow, a bullet, a thrown stone or a spew attack charges whoever shot it.
+- **Friends join in:** your other soldiers set to Attack at Will within 20 m, not in a formation or a group, join the charge. The charge also takes on the enemy soldiers within 20 m of the shooter.
+- **In a formation:** the formation is told it is under attack and deals with the shooter as a body.
+- **Close combat:** units fight back when struck hand to hand whatever the setting; this one only decides what they do about missile fire.
 
 ## Offered by
 
@@ -29,3 +36,4 @@ Sets the selected units to aggressive: they go after enemies they see on their o
 ## Tips
 
 - Good for a defending army that should react without being told.
+- Leave it off for a line that must hold: enemy archers could lure your infantry out of it.

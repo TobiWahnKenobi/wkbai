@@ -29,6 +29,21 @@ blueprint: Standard Farm
 
 The farm is where your food comes from. Peasants work its fields; every soldier eats food, so the number of farmers decides how big an army you can keep. Fertile land gives more, barren land less.
 
+## What it does
+
+- **One farmer.** Only one peasant works a farm at a time; a second goes to the nearest free farm.
+- **The ground decides.** Placed on fertile ground it becomes a Fertile Farm (1.5 food a turn of the hoe), on barren ground a Barren Farm (0.5) ([farms and the ground](../mechanics/resources.md#farms-and-the-ground)).
+- **Food support.** Each working farmer feeds 4 of your army's upkeep, more after the farming research ([food support](../mechanics/population-and-food.md#the-food-support)).
+- **Mills.** A [Windmill](windmill.md) within 40 m of the farmer's way home doubles his load. Selecting a farm shows your windmills' reach.
+- **Arrows pass over it**: it doesn't stop missiles.
+
+## Defence
+
+- **Strength:** 100. Fields are easy to burn and easy to replace.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 20% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

@@ -8,7 +8,14 @@ order: 10
 
 ## Role
 
-Feeding on dead bodies: an order made for wild animals. The game set also lists it on the archer.
+Lets a wounded [Archer](../units/archer.md) heal by eating the carcass a dead sheep leaves behind.
+
+## How it works
+
+- **Target:** a sheep carcass. The eating cursor shows only while the archer has lost hit points.
+- **Range:** the archer walks up to within 6 m.
+- **Effect:** each round of its eating animation the archer gains 5 hit points and the carcass loses 5 of its 100 food. It stops when the archer is back to full health.
+- **Limits:** a carcass is gone once all its food is eaten, so one carcass heals at most 100 hit points in all.
 
 ## Offered by
 

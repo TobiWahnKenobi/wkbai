@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Picks out your scout one after another, so you can find them on the map. Offered by the Trading Post.
+Shows you where all your [Scouts](../units/scout.md) are, so you can find them on the map.
+
+## How it works
+
+- **How to give it:** select your [Trading Post](../buildings/trading-post.md) and click the button.
+- **What happens:** a white circle shrinks onto each of your Scouts on the minimap, for 2 seconds. It shows every one you own, wherever it is.
+- It doesn't select them or move the camera.
 
 ## Offered by
 

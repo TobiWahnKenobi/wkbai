@@ -29,6 +29,18 @@ blueprint: Windmill
 
 The windmill improves your food production and is one of the buildings that turn your Manor into the Renaissance Keep.
 
+## What it does
+
+- **Doubles the harvest.** A farmer who passes it within 40 m on his way to deliver doubles his load; ×2.5 after [Advanced Windmill](../upgrades/advanced-windmill.md). Selecting it shows the 40 m.
+- **Renaissance Keep:** the first Windmill or Sawmill you finish turns your Manor into the Renaissance Keep.
+
+## Defence
+
+- **Strength:** 400.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 15% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

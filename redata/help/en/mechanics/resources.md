@@ -19,7 +19,7 @@ The top bar shows three stocks: **food**, **materials** and **gold**. Everything
 | **Stone** | Stone outcrops: 10 to 200 stone each | Stone isn't a stock of its own: each stone delivered adds **2 materials**. |
 | **Gold** | Gold outcrops (10 to 200 gold), [shops](../buildings/shop-stone.md), [merchants](../units/merchant.md), tribute | An outcrop shrinks as it is mined and vanishes when empty. |
 
-**Starting stock.** The lobby sets it: by default 500 food, 500 materials and 200 gold. *Randomise Resources* (Off, Low, Medium, High; Medium by default) takes away the map's own stone and gold outcrops at the start and scatters new ones: some near each player's Manor and more over the whole map, the more the higher the setting. Off keeps the map's own outcrops. Trees are never changed. In the campaign you start with what your profile carries over ([campaign](campaign.md)).
+**Starting stock.** The lobby sets it: by default 500 food, 500 materials and 200 gold. *Randomise Resources* (Off, Low, Medium, High; Medium by default) takes away the map's own stone and gold outcrops at the start and scatters new ones: some near each player's Manor and more over the whole map, the more the higher the setting. Off keeps the map's own outcrops. Trees are never changed. (Placing outcrops in your own maps: [the map editor's Objects mode](../ui/editor/objects.md#tips).) In the campaign you start with what your profile carries over ([campaign](campaign.md)).
 
 ## Farms and the ground
 

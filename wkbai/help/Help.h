@@ -45,6 +45,9 @@ void SetGame(const GameSet* gameSet, const Language* language);
 // The object under the cursor in the 3D world, as help ids ("unit/Knight"): F1 and
 // Alt+right-click on it; set by the game interface each frame
 void SetHovered(const std::string& ids);
+// The part of an ImGui window shown now, as help ids (the map editor's mode: "ui/editor/terrain"):
+// the window's items find their heading on its page first, by their label
+void SetWindowPart(const std::string& window, const std::string& ids);
 
 // Tests: the pages of a language checked (every link, id and anchor); the problems found
 std::string Check(const std::string& language);

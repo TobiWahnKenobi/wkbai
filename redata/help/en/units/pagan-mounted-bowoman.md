@@ -19,20 +19,36 @@ blueprint: Pagan Mounted Bowoman
 | | |
 |---|---|
 | Cost | 100 food, 30 wood |
-| Train time | 18 s |
 | Food upkeep | 1 |
 | Hit points | 140 |
 | Armour | 7 (front 2, sides 1, rear 0) |
 | Melee attack | 15 every 2 s |
-| Missile attack | 18 every 4 s |
+| Missile attack | 18 every 4 s, range 75 m |
 | Speed | 12 |
-| Sight | 15 |
+| Sight | 15 (75 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points and an 18-point arrow. She needs a [Sacred Grove](../buildings/temple.md) and is not offered on the Imperial path.
+The Mounted Huntress is the Pagan horse archer: speed 12, 140 hit points and an 18-point arrow every 4 seconds out to 75 m, for 100 food and 30 wood at the [Stables](../buildings/stables.md). She needs a [Sacred Grove](../buildings/temple.md) and is not offered on the Imperial path. She is light cavalry with almost no armour (2 at the front, 1 on the sides, none behind).
+
+## Abilities
+
+- **[Fire Arrow](../commands/fire-arrow.md):** 10 arrows on a full charge bar, refilling by about 1 a second. Without a clear view she lobs the arrow, less accurately.
+- **[Skirmish](../commands/skirmish-mode.md):** when enemy heavy infantry, heavy cavalry or a fighting siege beast comes within about 37 m, she rides away to the far side and keeps shooting (not in a formation). [Hold Ground](../commands/hold-ground.md) switches this off.
+
+## Strong against
+
+- **Slow heavy infantry**, the game's ideal target for light cavalry: 10 a shot through a [Spearman](spearman.md)'s front, 17 in the back.
+- **Light foot**: 16 a shot to an [Archer](archer.md) or [Gunner](gunner.md).
+- **Peasants and raiders**, which can't catch her.
+
+## Weak against
+
+- **Heavy cavalry**: a [Knight](knight.md) does 27 a blow.
+- **Arrow-proof units**: siege engines, priests and the [Archangel](michael.md) take only a quarter of an arrow's damage, so she does nothing to a [Mangonel](mangonel.md)'s front.
+- **Heavily armoured fronts**: 1 a shot to a [Warrior of the Sun](pagan-pikeman.md) or [Undead Legion](undead-legion.md) from the front.
 
 ## Trained at / Built by
 
@@ -80,4 +96,5 @@ The mounted bowwoman is the Pagan horse archer: fast (speed 12), 140 hit points 
 ## Tips
 
 - Hit the enemy's flanks and rear where his armour is thinnest.
-- Keep her moving: she is weak in a melee.
+- Keep her moving, with Skirmish on: she is weak in a melee.
+- Send cavalry, not her, against siege engines.

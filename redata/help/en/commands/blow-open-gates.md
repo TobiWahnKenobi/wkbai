@@ -8,7 +8,14 @@ order: 10
 
 ## Role
 
-The spy blows open an enemy gatehouse.
+A [Spy](../units/spy.md) blows up a closed enemy gatehouse, opening a way through the wall.
+
+## How it works
+
+- **How to give it:** select the spy and right-click a closed enemy gatehouse. The cursor shows the blast sign. An open gatehouse can't be picked.
+- **Range and time:** he goes within 5 m of it and works for 10 seconds; a bar counts down.
+- **Effect:** explosions go off around him and the gatehouse is destroyed outright, however strong it was.
+- **Cost:** nothing; the spy survives and can do it again.
 
 ## Offered by
 

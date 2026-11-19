@@ -26,6 +26,12 @@ blueprint: Explosive Mine
 
 An explosive mine is a hidden charge that a sapper buries after the [Explosive Mine](../upgrades/explosive-mine.md) research. It goes off under the enemy.
 
+## What it does
+
+- **Planting.** After the [Explosive Mine](../upgrades/explosive-mine.md) research at the Armoury, a [Sapper](../units/sapper.md) buries a mine where you place it. Each sapper has one mine at a time.
+- **Setting it off.** The sapper's [Explosive Mine](../commands/detonate-mine.md) button lights a fuse that runs to the mine. When it gets there, everything within 30 m is hit: buildings lose up to 300 strength and units up to 480 hit points at the centre, less further out, nothing at 30 m.
+- **Defusing.** An enemy sapper can [Defuse](../commands/defuse-mine.md) it.
+
 ## Built by
 
 <!-- gen:trained -->
@@ -53,3 +59,5 @@ An explosive mine is a hidden charge that a sapper buries after the [Explosive M
 ## Tips
 
 - Bury mines on the paths the enemy uses to reach your town.
+- Under a wall or a gatehouse, a mine opens a breach no ordinary soldier could make.
+- Keep your own men 30 m away when you set it off.

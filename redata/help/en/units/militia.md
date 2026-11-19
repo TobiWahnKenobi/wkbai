@@ -19,13 +19,28 @@ blueprint: Militia
 | Armour | 10 (front 7, sides 2, rear 0) |
 | Melee attack | 20 every 2 s |
 | Speed | 4 |
-| Sight | 5 |
+| Sight | 5 (25 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-Militia are peasants with weapons. You get them by [converting peasants](../commands/convert-to-militia.md) or by conscripting all peasants at the Manor; they cost no food upkeep and turn back into peasants when the danger has passed. With 80 hit points and a 20-point attack they hold off raiders but not a real army.
+Militia are peasants with weapons. You get them by [converting a peasant](../commands/convert-to-militia.md): it walks to your nearest Manor or [Village](../buildings/village-wood.md) and takes up arms there, at no cost. Militia eat no food. With 80 hit points, a 20-point blow every 2 seconds and armour 7 from the front (2 on the sides, none behind) they count as heavy infantry, but they hold off raiders, not a real army. They don't go back to work on their own.
+
+## Abilities
+
+- **[Convert to Peasant](../commands/convert-to-peasant.md):** point at your own Manor or Village. The militiaman walks there, waits 2 seconds and becomes a peasant again.
+
+## Strong against
+
+- **Raiders and light foot**: 18 a blow to an [Archer](archer.md), 15 to a [Vandavar Barbarian](vandavar.md).
+- **Peasants and other civilians**, which have almost no armour.
+
+## Weak against
+
+- **Real soldiers.** A [Spearman](spearman.md) hits militia for 23 and takes 12; a [Knight](knight.md) kills one in four blows.
+- **Their back**, armour 0.
+- The [Archangel](michael.md) and similar demons make idle militia flee.
 
 ## Trained at / Built by
 
@@ -70,3 +85,4 @@ Militia are peasants with weapons. You get them by [converting peasants](../comm
 
 - Call them up when the town is attacked and send them back to work with [Convert to Peasant](../commands/convert-to-peasant.md) afterwards.
 - Every peasant under arms is a peasant not gathering, so keep it short.
+- They can [form up](../commands/formation.md) like other heavy infantry; a Line makes them a little sturdier.

@@ -25,6 +25,17 @@ blueprint: Celestial Wall
 
 The Imperial (celestial) wall is the strongest wall, after [Battlements to Ramparts](../upgrades/technological-wall-to-celestial-wall.md): strength 1100 per section.
 
+## What it does
+
+- **Blocks the way:** enemies must break through or come in by a gate.
+- **Towers:** select a section and use [Upgrade to Ramparts Tower](../upgrades/upgrade-to-celestial-tower.md) to raise it into a tower for five archers.
+
+## Defence
+
+- **Strength:** 1100.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->

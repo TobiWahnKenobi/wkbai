@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Sends the selected units to a place. With a unit selected, a right-click on open ground does the same.
+Sends the selected units or formation to a place. With units selected, a right-click on open ground does it.
+
+## How it works
+
+- **Target:** a place on the ground.
+- **Leaving a group:** a unit that was fighting in an attack or guard group leaves it and just walks. A formation moves as a whole and leaves any group it was in.
+- **Facing:** at the end the units turn the way you dragged, if you held the right button and dragged ([Facing with a right-drag](../controls/orders.md#facing-with-a-right-drag)).
 
 ## Offered by
 

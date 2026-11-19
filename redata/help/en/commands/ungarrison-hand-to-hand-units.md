@@ -12,7 +12,13 @@ order: 10
 
 ## Role
 
-Sends only the melee fighters out of the building and keeps the missile troops inside.
+Sends out everyone but the archers and gunners, who stay inside and keep shooting. Use it to throw the hand-to-hand troops at enemies below the walls.
+
+## How it works
+
+- **Who leaves:** every unit that isn't light infantry: spearmen, pikemen, cavalry, javelineers, peasants.
+- **Order:** one every 0.3 s, set down in a ring 10 m around the building.
+- **Limits:** the button shows only while such units are inside. [Ungarrison](ungarrison.md) empties the building.
 
 ## Offered by
 

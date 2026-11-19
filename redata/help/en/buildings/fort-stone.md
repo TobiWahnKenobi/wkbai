@@ -21,7 +21,7 @@ blueprint: Fort Stone
 | Cost | 1000 wood, 150 gold |
 | Build time | 60 s |
 | Strength (structural integrity) | 900 |
-| Missile attack | 20 |
+| Missile attack | 20 per arrow |
 | Repair cost | 1000 wood, 150 gold |
 | Sight | 23 |
 <!-- /facts:static -->
@@ -29,7 +29,23 @@ blueprint: Fort Stone
 
 ## Role
 
-The stone fort is the strongest lone strongpoint: strength 900, a 20-point attack and sight 23. It needs [Shield of God](../upgrades/masonry.md) and is not offered on the Pagan path.
+The Holy Fortress is the strongest lone strongpoint: strength 900, room for 20 men and the longest reach of any building (sight 23). It needs [Shield of God](../upgrades/masonry.md) and is not offered on the Pagan path.
+
+## What it does
+
+- **Garrison:** 20 of your units fit inside, foot or horse, peasants too (not siege engines or carts). Select them and right-click it ([Garrison](../commands/garrison.md)).
+- **Shooting:** it shoots only while someone is inside. About every 5 seconds each archer inside looses an arrow and each gunner fires a bullet (30 damage). Other troops shelter but don't shoot, until the Cathedral's [Crossbow](../upgrades/crossbow.md) research: from then on everyone inside shoots.
+- **Range and damage:** its range is its sight (23, about 115 m, a little more from high ground). It aims at enemy units only, never at buildings: the nearest, one target for every two shots. Arrows do 20 damage, more when the target stands lower (up to double), and the Blacksmith's [light infantry weapons](../upgrades/light-infantry-iron-tipped-weapon.md) make them hit harder.
+- **Orders:** [Attack (Fort)](../commands/fort-attack.md) picks a target in range; [Hold Fire](../commands/hold-fire.md) stops it shooting, [Fire at Will](../commands/fire-at-will.md) starts it again.
+- **Leaving:** [Ungarrison](../commands/ungarrison.md) lets everyone out into a ring 10 m around it; [Ungarrison Hand to Hand Defenders](../commands/ungarrison-hand-to-hand-units.md) only those who don't shoot. When it falls below 10% of its strength, everyone inside runs out unhurt.
+- **Resupply:** your and your allies' archers, gunners, siege engines and other troops that use ammunition get 10 back every 5 seconds or so while within 25 m of it; 50 m after [Logistics](../upgrades/logistics.md).
+
+## Defence
+
+- **Strength:** 900.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 1% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
 
 ## Built by
 
@@ -64,4 +80,6 @@ The stone fort is the strongest lone strongpoint: strength 900, a 20-point attac
 
 ## Tips
 
-- The [Crossbow](../upgrades/crossbow.md) research makes forts shoot crossbows.
+- Fill it with archers or gunners: twenty shooters loose twenty shots every 5 seconds.
+- The [Crossbow](../upgrades/crossbow.md) research makes everyone inside shoot, not only archers.
+- Build it where your armies gather: it refills their ammunition.

@@ -94,17 +94,20 @@ void ensureLoaded()
 // the title shown for a page: the game's own name of the thing when a game set is loaded
 std::string titleOf(const Page& p) { return p.gameName.empty() ? p.title : p.gameName; }
 
-// The heading a label names on the screen's page or the pages under it (its tabs), as
+// ImGui windows' parts shown now (Help::SetWindowPart)
+std::map<std::string, std::string> s_windowPart;
+
+// The heading a label names on the page of `under` (help ids) or the pages under it (its tabs), as
 // "page:<path>#<anchor>"; "" none. A heading named as the label wins, then the longest heading
 // the label starts with ("Lua AI: none (...)": "Lua AI"), then one that starts with the label.
-std::string labelHeading(const std::string& label)
+std::string labelHeading(const std::string& label, const std::string& under)
 {
 	const std::string slug = Slug(label);
-	if (slug.empty() || s_lastScreen.empty())
+	if (slug.empty() || under.empty())
 		return {};
 	std::string screenPath, a;
 	bool exact = false;
-	if (!Lib().resolve(s_lastScreen, screenPath, a, &exact) || !exact)
+	if (!Lib().resolve(under, screenPath, a, &exact) || !exact)
 		return {};
 	std::string dir = screenPath;
 	if (dir.size() > 6 && dir.compare(dir.size() - 6, 6, "/index") == 0)
@@ -139,6 +142,23 @@ std::string idsOf(const AgentUi::Element& e, bool withScreen = true)
 	if (const size_t hash = id.rfind('#'); hash != std::string::npos && id.find_first_not_of("0123456789", hash + 1) == std::string::npos)
 		id.resize(hash);
 	std::string ids = e.help;
+	// an item of an ImGui window (or of a child window in it, "Map editor (F8)/list_C7115161"):
+	// the heading its label names on the page of the part the window shows ("Radius (m)" in the
+	// editor's Terrain mode), then that part's page; else the heading on the window's pages
+	if (ids.compare(0, 12, "imguiwindow:") == 0 && !e.label.empty() && Lib().loaded()) {
+		const std::string window = ids.substr(12, ids.find('/', 12) == std::string::npos ? std::string::npos : ids.find('/', 12) - 12);
+		ids = "imguiwindow:" + window;
+		if (auto part = s_windowPart.find(window); part != s_windowPart.end()) {
+			if (std::string h = labelHeading(e.label, part->second); !h.empty())
+				ids = h + "|" + part->second + "|" + ids;
+			else if (std::string w = labelHeading(e.label, ids); !w.empty())
+				ids = w + "|" + part->second + "|" + ids;
+			else
+				ids = part->second + "|" + ids;
+		}
+		else if (std::string w = labelHeading(e.label, ids); !w.empty())
+			ids = w + "|" + ids;
+	}
 	auto after = [&](const char* prefix) -> std::string {
 		const size_t n = strlen(prefix);
 		return id.compare(0, n, prefix) == 0 ? id.substr(n) : std::string();
@@ -160,7 +180,7 @@ std::string idsOf(const AgentUi::Element& e, bool withScreen = true)
 		std::string p, a;
 		bool exact = false;
 		if (ids.empty() || (Lib().resolve(ids, p, a, &exact), !exact))
-			if (std::string h = labelHeading(e.label); !h.empty())
+			if (std::string h = labelHeading(e.label, s_lastScreen); !h.empty())
 				ids += (ids.empty() ? "" : "|") + h;
 	}
 	if (withScreen && !s_lastScreen.empty())
@@ -170,11 +190,23 @@ std::string idsOf(const AgentUi::Element& e, bool withScreen = true)
 
 // The coverage report ("helpTest": { "coverage": "<file>" }): every element drawn that has no
 // page of its own (it falls back to its screen's), once each, as screen, id, label, ids
-void reportCoverage(const std::string& file)
+// all: every element, with where its help opens (path#anchor) as a fifth column
+void reportCoverage(const std::string& file, bool all = false)
 {
 	static std::set<std::string> seen;
 	static std::ofstream out;
 	if (!out.is_open()) out.open(file, std::ios::app);
+	if (all) {
+		for (const AgentUi::Element& e : AgentUi::Elements()) {
+			const std::string ids = idsOf(e);
+			std::string p, a;
+			Lib().resolve(ids, p, a);
+			if (seen.insert(e.id + '\t' + ids).second)
+				out << s_lastScreen << '\t' << e.id << '\t' << e.label << '\t' << ids << '\t' << p << '#' << a << '\n';
+		}
+		out.flush();
+		return;
+	}
 	for (const AgentUi::Element& e : AgentUi::Elements()) {
 		std::string id = e.id;
 		if (const size_t hash = id.rfind('#'); hash != std::string::npos && id.find_first_not_of("0123456789", hash + 1) == std::string::npos)
@@ -523,6 +555,7 @@ void drawWindow(IRenderer* gfx)
 
 void Help::SetScreen(const std::string& id) { s_screen = id; }
 void Help::SetHovered(const std::string& ids) { s_hovered = ids; }
+void Help::SetWindowPart(const std::string& window, const std::string& ids) { s_windowPart[window] = ids; }
 bool Help::IsOpen() { return s_open; }
 void Help::Open(const std::string& ids) { openIds(ids); }
 
@@ -615,7 +648,7 @@ void Help::Frame(IRenderer* gfx)
 		}
 		if (t.contains("coverage") && frame > 2) {
 			ensureLoaded();
-			reportCoverage(t.value("coverage", std::string()));
+			reportCoverage(t.value("coverage", std::string()), t.value("coverageAll", false));
 		}
 	}
 	if (!s_pendingOpen.empty() || s_menuPending || s_open)

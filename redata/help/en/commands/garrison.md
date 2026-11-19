@@ -12,7 +12,18 @@ order: 10
 
 ## Role
 
-Sends the selected units into a building (Manor, church, fort, tower). Inside they are safe, and missile troops shoot from it.
+Sends units into one of your buildings: inside they are safe, and archers and gunners shoot from it. There is no button: right-click the building; the cursor shows the entry sign while it has room.
+
+## How it works
+
+- **Target:** a building of your own with room: [Fort](../buildings/fort-wood.md) 10, [Holy Fortress](../buildings/fort-stone.md) 20, [Church](../buildings/church-stone.md) 20, and 5 in a tower ([Watch Tower](../buildings/watch-tower.md), [Battlement Tower](../buildings/technological-tower-stone.md), [Fortified Tower](../buildings/unaligned-tower-stone.md), [Ramparts Tower](../buildings/celestial-tower.md)). The building shows how many are inside.
+- **Manor, keeps, castles and palaces:** the right-click takes only your king there, in a King Piece game; going into one makes it his new seat ([King Piece](../mechanics/victory-conditions.md#king-piece)).
+- **Shooting:** when a fort, tower, Manor, keep, castle or palace shoots, every archer inside adds an arrow and every gunner a bullet. Javelineers and hand-to-hand troops add nothing, until you research the [Crossbow](../upgrades/crossbow.md): then everyone inside shoots an arrow.
+- **Full:** a unit that arrives when the building is full waits outside.
+- **Danger:** when the building falls below a tenth of its strength under attack, everyone inside runs out, 10 to 20 m away. If you delete the building yourself, the units inside are lost with it.
+- **Changing sides:** when a Fort, Holy Fortress or Watch Tower changes owner, the units inside change sides with it.
+- **Formations** break up, and every member goes in.
+- **Getting out:** [Ungarrison](ungarrison.md), or [Ungarrison Hand to Hand Defenders](ungarrison-hand-to-hand-units.md).
 
 ## Offered by
 
@@ -28,4 +39,4 @@ Sends the selected units into a building (Manor, church, fort, tower). Inside th
 
 ## Tips
 
-- A garrisoned building shoots harder.
+- A garrisoned building shoots harder, but only archers and gunners add shots: put them in towers, and keep spearmen and cavalry outside.

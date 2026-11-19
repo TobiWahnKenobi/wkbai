@@ -8,7 +8,13 @@ order: 10
 
 ## Role
 
-A soldier takes over a cart, usually an enemy cart caught on the road.
+A unit takes over a cart whose driver has been killed and drives it for you. Right-click the driverless cart; the cursor shows the mount cursor.
+
+## How it works
+
+- **Target:** a cart without a driver, anyone's.
+- **Effect:** the unit walks up to the cart and becomes its driver. The cart becomes your [Cart](../units/cart.md) at full health, and the unit itself is gone. Whatever goods the unit carried go into the cart (stone as 2 materials).
+- **Who:** peasants, sappers, spies, scouts and most foot and mounted soldiers.
 
 ## Offered by
 

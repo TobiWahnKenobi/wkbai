@@ -19,19 +19,31 @@ blueprint: Man at Arms
 | | |
 |---|---|
 | Cost | 60 food, 30 wood |
-| Train time | 18 s |
 | Food upkeep | 1 |
 | Hit points | 180 |
 | Armour | 18 (front 15, sides 7, rear 2) |
 | Melee attack | 38 every 2.5 s |
 | Speed | 3 |
-| Sight | 4 |
+| Sight | 4 (20 m) |
 <!-- /facts:static -->
 <!-- /gen:facts -->
 
 ## Role
 
-The man at arms is the elite Imperial foot soldier: 180 hit points, armour 15 from the front and a 38-point attack, for 60 food and 30 wood. It appears with the pure Imperial path: building a [Statue of the Archangel](../buildings/michael-statue.md) unlocks it and turns existing pikemen into men at arms.
+The Imperial Pikeman is the elite Imperial foot soldier: 180 hit points, a 38-point blow every 2.5 seconds and armour 15 from the front, 7 on the sides and 2 from behind, for 60 food and 30 wood. It appears with the pure Imperial path: building a [Statue of the Archangel](../buildings/michael-statue.md) unlocks it and turns existing [Men-at-Arms](pikeman.md) into Imperial Pikemen. It is the heaviest Imperial heavy infantry.
+
+## Strong against
+
+- **Cavalry from the front.** A [Knight](knight.md) does 14 a blow to it and takes 26. Heavy cavalry that strikes the front of formed heavy infantry rears and rides away after one blow, unless it attacks in a Wedge.
+- **Arrows and bullets from the front.** An [Archer](archer.md) does the minimum 1 a shot, a [Gunner](gunner.md) or [Huntress of the Dawn](pagan-archer.md) 5.
+- **Other foot soldiers**: it hits a [Spearman](spearman.md) for 30 and a [Warrioress of the Dawn](pagan-spearwoman.md) for 25.
+
+## Weak against
+
+- **Flanks and rear** (armour 7 and 2): mounted archers that ride round it, and knights from behind (27 a blow).
+- **Heavy siege**: a [Trebuchet](trebuchet.md) stone does 60, a rocket ignores armour altogether.
+- **Monsters**: a [Stone Elemental](stone-elemental-large.md) hits it for 85.
+- Its speed of 3 means it can never catch anything that runs.
 
 ## Trained at / Built by
 
@@ -78,5 +90,6 @@ The man at arms is the elite Imperial foot soldier: 180 hit points, armour 15 fr
 
 ## Tips
 
-- A wall of men at arms holds almost anything that comes from the front.
-- At speed 3 it is the slowest foot soldier: let cavalry do the chasing.
+- A [Line](../commands/formation.md) of Imperial Pikemen holds almost anything that comes from the front; guard its flanks with cavalry.
+- At speed 3 it is the slowest Imperial foot soldier: bring it to the battle, don't send it after raiders.
+- To break it, go round it: its back is armoured 2.

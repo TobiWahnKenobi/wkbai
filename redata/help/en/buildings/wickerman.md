@@ -29,6 +29,20 @@ blueprint: Wickerman
 
 The Wickerman is the crown of the pure Pagan path. Building it strengthens your heavy horsemen and Pagan archers, unlocks Pagan pikemen, and lets you make the [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md) that brings the demon lord.
 
+## What it does
+
+- **When it is finished:** heavy horsemen and Pagan archers grow stronger and Pagan pikemen open up.
+- **Abaddon:** [Summon Abaddon](../upgrades/sacrifice-for-abaddon.md) (600 seconds) brings the demon lord [Abaddon](../units/abaddon.md).
+- **Sacrifices:** while one of its sacrifices runs, select peasants and right-click it ([Wickerman Sacrifice](../commands/wickerman-sacrifice.md)). Each peasant burned takes 10 seconds off the time.
+- **Pagan Palace:** finishing it turns your Castle into the Pagan Palace.
+
+## Defence
+
+- **Strength:** 500. A straw giant: weak, and it burns easily.
+- **What hurts it:** soldiers barely scratch it (0.1 a blow). Siege engines, sappers and fire do the work ([siege](../mechanics/siege.md#structural-damage)).
+- **Fire:** each flaming arrow that hits it has a 30% chance to set it alight. Left alone, a fire grows until the building burns down, and it can leap to buildings within 25 m. Send peasants to [Extinguish Fire](../commands/extinguish.md).
+- **Repair:** peasants [repair](../commands/repair.md) it, paying as they go ([strength and repair](../mechanics/buildings-and-construction.md#strength-damage-and-repair)).
+
 ## Built by
 
 <!-- gen:trained -->
