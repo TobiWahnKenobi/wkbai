@@ -11411,7 +11411,10 @@ void Test_WedgeCharge()
 	LoadBCP("data.bcp");
 	const bool log = getenv("WKB_WEDGE_LOG") != nullptr;
 	const int onlyCase = getenv("WKB_WEDGE_CASE") ? atoi(getenv("WKB_WEDGE_CASE")) : -1;
-	for (int scenario = 0; scenario < 2; scenario++) {
+	// the riders' formation and their order (a move through the line only for the wedge)
+	struct Scenario { const char* type; bool attack; };
+	const Scenario scenarios[] = { { "Wedge", true }, { "Wedge", false }, { "Line", true }, { "Column", true }, { "Orb", true } };
+	for (int scenario = 0; scenario < (int)std::size(scenarios); scenario++) {
 		if (onlyCase >= 0 && onlyCase != scenario)
 			continue;
 		Server server;
@@ -11421,7 +11424,7 @@ void Test_WedgeCharge()
 		const GameSet& gs = *server.gameSet;
 		const GameObjBlueprint* rider = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_RIDER") ? getenv("WKB_WEDGE_RIDER") : "Knight");
 		const GameObjBlueprint* foot = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_FOOT") ? getenv("WKB_WEDGE_FOOT") : "Man At Arms");
-		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : "Wedge"), lineCmd = gs.commands.names.getIndex("Line");
+		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : scenarios[scenario].type), lineCmd = gs.commands.names.getIndex("Line");
 		const int attackCmd = gs.commands.names.getIndex("Formation Army Attack"), moveCmd = gs.commands.names.getIndex("Move");
 		if (!own || !enemy || !rider || !foot || wedgeCmd < 0 || lineCmd < 0 || attackCmd < 0 || moveCmd < 0
 			|| gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
@@ -11513,7 +11516,7 @@ void Test_WedgeCharge()
 			check(false, "both formations formed");
 			continue;
 		}
-		if (scenario == 0)
+		if (scenarios[scenario].attack)
 			gs.commands[attackCmd].execute(wedge.get(), foes[5], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 		else
 			gs.commands[moveCmd].execute(wedge.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, line->position + Vector3(0, 0, -30.0f));
@@ -11575,7 +11578,15 @@ void Test_WedgeCharge()
 						idleSince.erase(r->id);
 				}
 			if (s % 50 == 49) {
-				ServerGameObject* wf = riderRefs[0] && alive(riderRefs[0]) ? riderRefs[0]->getParent() : nullptr;
+				// the riders' formation while some are in it, else the first rider's controller
+				ServerGameObject* wf = nullptr;
+				for (const SrvGORef& r : riderRefs)
+					if (alive(r) && r->getParent() && r->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+						wf = r->getParent();
+						break;
+					}
+				if (!wf && riderRefs[0] && alive(riderRefs[0]))
+					wf = riderRefs[0]->getParent();
 				if (log) {
 					printf("WEDGE t=%4.1f %s %s at (%.1f, %.1f)%s; riders %d, in melee %d, idle near %d; foes %d\n", now,
 						wf ? wf->blueprint->name.c_str() : "-",
@@ -11602,6 +11613,16 @@ void Test_WedgeCharge()
 								e1 >= 0 ? gs.equations[e1]->eval(&ctx) : -9.0f,
 								[&] { SrvScriptContext c2(&server, r->getParent()); return e2 >= 0 ? gs.equations[e2]->eval(&c2) : -9.0f; }(),
 								e3 >= 0 ? gs.equations[e3]->eval(&ctx) : -9.0f, e4 >= 0 ? gs.equations[e4]->eval(&ctx) : -9.0f);
+							for (const char* fn : { "Most appropriate Victim for Heavy Cavalry From Formation", "My Armies Victims", "Victims Of My Controller" }) {
+								const int k = gs.objectFinderDefinitions.names.getIndex(fn);
+								printf("WEDGE   debug %u: \"%s\" %d\n", r->id, fn, k >= 0 ? (int)gs.objectFinderDefinitions[k]->eval(&ctx).size() : -1);
+							}
+							if (const int se = gs.equations.names.getIndex("Suitability of Candidate as Heavy Cavalry Target"); se >= 0 && r->getParent())
+								for (const SrvGORef& f : foeRefs)
+									if (alive(f) && f.get() == foeRefs[5].get()) {
+										auto _c = ctx.change(ctx.candidate, f.get());
+										printf("WEDGE   debug %u: suitability of %u %.2f\n", r->id, f->id, gs.equations[se]->eval(&ctx));
+									}
 						}
 						Order* o = r->orderConfig.getCurrentOrder();
 						Task* t = o ? o->getCurrentTask() : nullptr;
@@ -11626,7 +11647,7 @@ void Test_WedgeCharge()
 		const int share = shareCount ? (int)std::lround(100.0 * shareSum / shareCount) : -1;
 		printf("WEDGE case %d: first contact %.1f s after the order; within 6 s of it at most %d%% of the riders fighting at once, 2-12 s after it %d%% on average; the longest stand idle with an enemy within 10 m in those 12 s %.1f s (%u)\n",
 			scenario, contact, peak, share, longestIdle, longestIdleOf);
-		const std::string name = "case " + std::to_string(scenario) + (scenario == 0 ? " (an attack order)" : " (a move through the line)");
+		const std::string name = "case " + std::to_string(scenario) + " (" + std::string(scenarios[scenario].type) + ", " + (scenarios[scenario].attack ? "an attack order)" : "a move through the line)");
 		check(contact >= 0.0f, name + ": the wedge reaches the line");
 		check(peak >= 60, name + ": within 6 s of contact most riders fight at once");
 		check(share >= 50, name + ": most riders fight in the 12 s after contact");
