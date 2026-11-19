@@ -232,9 +232,11 @@ float4 Flame(FIRE_OUTPUT i)
 		discard;
 	// the noise in the world (across the screen and up), about three cells across a flame:
 	// the flames of one fire move as one; it rises
-	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(size * 0.3, 0.05);
+	// (across: from the flame's own centre, not the world's: the camera's right from the map's
+	// origin swept the pattern across hundreds of cells as the camera turned)
+	float2 q = float2((i.UV.x - 0.5) * size, i.World.y) / max(size * 0.3, 0.05);
 	q.y -= t * 1.1;
-	q.x += seed * 0.37;
+	q.x += seed * 7.3;
 	float n;
 	if (Params.y >= 2) {
 		// High: domain-warped (the noise displaced by noise: tongues that curl and split)
@@ -300,7 +302,7 @@ float4 Shimmer(FIRE_OUTPUT i)
 	float m = saturate(1 - x * x) * smoothstep(0.0, 0.2, y) * saturate(1 - y) * i.More.z * i.Look.x;
 	if (m <= 0.001)
 		discard;
-	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(i.More.y * 0.12, 0.05);
+	float2 q = float2((i.UV.x - 0.5) * i.More.y, i.World.y) / max(i.More.y * 0.12, 0.05);
 	q.y -= Params.x * 1.8;
 	float2 d = float2(Noise(q), Noise(q + float2(7.7, 3.1))) - 0.5;
 	float2 uv = i.Pos.xy * float2(CamRight.w, CamUp.w) + d * m * 0.012 * saturate(60 / max(i.ViewZ, 1));
