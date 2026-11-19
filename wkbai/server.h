@@ -5,6 +5,7 @@
 #pragma once
 #include <atomic>
 #include <filesystem>
+#include <mutex>
 #include <memory>
 
 #include <cstdint>
@@ -236,8 +237,18 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory;
 	};
+	// The players' memory of the trees under the fog of war (FogOfWar's tree memory, the
+	// treeMemory section): kept by each player's client on this machine, by player id, its text
+	// as FogOfWar::treeMemoryText writes it; as saved until the client sends its own. Only for
+	// what the server's own simulation never reads (a guest's memory stays on the guest).
+	std::mutex treeMemoryMutex;
+	std::map<uint32_t, std::string> treeMemory;
+	void setTreeMemory(uint32_t player, std::string text);
+	std::string getTreeMemory(uint32_t player);
+	std::string treeMemorySaveText();
+	void treeMemoryLoadText(const std::string& text);
 	static SaveParts ReadSaveParts(const char* filename);
 	// the walks going on, as a save keeps them (the movement section), and back
 	std::string movementSaveText() const;

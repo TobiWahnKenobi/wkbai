@@ -247,6 +247,9 @@ void Server::loadSaveGame(const char * filename)
 	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
 	DiscoveredLoadText(parts.discovered);
+	// the players' memory of the trees under the fog of war as saved (FogOfWar), else none: all
+	// trees known as they stand
+	treeMemoryLoadText(parts.treeMemory);
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);

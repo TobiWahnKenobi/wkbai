@@ -12379,6 +12379,179 @@ void Test_RiverCurrents()
 	printf(failures ? "CURRENTS FAILED (%d)\n" : "CURRENTS PASSED\n", failures);
 }
 
+// The trees under the fog of war (FogOfWar's tree memory) on 4 Peaks, A (1027) and B (1030): all
+// known at the start; one felled and one used up out of A's sight stay as A saw them, a new one
+// unknown, until A sees there; one felled where only B sees is updated once B shares its sight
+// with A as an ally; no sound from a fogged tree; the memory through the save
+void Test_TreeMemory()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server::clearFogOfWar = false;
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	FogOfWar fog; // A's
+	clientA.treeMemory = &fog;
+	fog.memoryOn = true;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	// the fog's update, 250 ms apart
+	auto update = [&]() { step(14); fog.update(&clientA); };
+	step(10);
+	update();
+	ServerGameObject* A = server.findObject(1027);
+	ServerGameObject* B = server.findObject(1030);
+	check(fog.treesStarted() && fog.treeGhosts.empty() && fog.treeUnknown.empty(), "at the start: every tree known as it stands");
+	// the trees out of A's sight: the farthest from A's units, and one in B's sight
+	std::vector<ServerGameObject*> trees;
+	std::vector<Vector3> unitsB;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Coniferous Tree" || child->blueprint->name == "Deciduous Tree")
+					trees.push_back(child->dyncast<ServerGameObject>());
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && child->getPlayer() == B)
+					unitsB.push_back(child->position);
+				self(child, self);
+			}
+	};
+	find(server.getLevel(), find);
+	ServerGameObject *felled = nullptr, *usedUp = nullptr, *nearB = nullptr;
+	float nearest = 1e9f;
+	auto distB = [&](ServerGameObject* t) {
+		float d = 1e9f;
+		for (const Vector3& u : unitsB)
+			d = std::min(d, (u - t->position).len2xz());
+		return d;
+	};
+	for (ServerGameObject* t : trees)
+		if (!fog.isSeen(t->position) && distB(t) < nearest) {
+			nearest = distB(t);
+			nearB = t;
+		}
+	for (ServerGameObject* t : trees) {
+		if (fog.isSeen(t->position))
+			continue;
+		const bool byB = distB(t) < 80.0f;
+		if (byB)
+			continue;
+		if (!felled)
+			felled = t;
+		else if (!byB && !usedUp && (t->position - felled->position).len2xz() > 30.0f)
+			usedUp = t;
+	}
+	const GameObjBlueprint* fallenBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Fallen Tree");
+	const GameObjBlueprint* treeBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Coniferous Tree");
+	if (!A || !B || !felled || !usedUp || !nearB || !fallenBp || !treeBp) {
+		printf("UNITTEST FAILED (not set up: %zu trees, B's units %zu)\n", trees.size(), unitsB.size());
+		return;
+	}
+	const uint32_t felledId = felled->id, usedUpId = usedUp->id, nearBId = nearB->id;
+	const Vector3 usedUpAt = usedUp->position;
+	const std::string felledType = felled->blueprint->name;
+	printf("UNITTEST %zu trees; felled %u (%s) at (%.0f, %.0f), used up %u, by B's units %u (%.0f m)\n", trees.size(), felledId, felledType.c_str(),
+		felled->position.x, felled->position.z, usedUpId, nearBId, nearest);
+
+	// felled out of sight (as Tree Chopping.cpp's "Falling Version"), another used up and gone, a
+	// new tree out of sight
+	felled->convertTo(fallenBp);
+	usedUp->terminate();
+	const Vector3 newAt = felled->position + Vector3(8, 0, 8);
+	ServerGameObject* grown = server.spawnObject(treeBp, server.getLevel(), newAt, Vector3(0, 0, 0));
+	const uint32_t grownId = grown ? grown->id : 0;
+	nearB->convertTo(fallenBp);
+	update();
+	ClientGameObject* liveFelled = clientA.findObject(felledId);
+	check(liveFelled && liveFelled->blueprint == fallenBp, "A's client has the felled tree as the server: fallen");
+	auto ghost = [&](uint32_t id) -> ClientGameObject* { auto it = fog.treeGhosts.find(id); return it == fog.treeGhosts.end() ? nullptr : it->second.get(); };
+	check(ghost(felledId) && ghost(felledId)->blueprint->name == felledType && liveFelled && fog.treeHidden(liveFelled),
+		"felled out of sight: A still sees it standing");
+	ClientGameObject* liveUsed = clientA.findObject(usedUpId);
+	check(ghost(usedUpId) && ghost(usedUpId)->blueprint->name.find("Tree") != std::string::npos,
+		std::string("used up out of sight: still standing for A (the live one ") + (liveUsed ? "terminated" : "removed") + ")");
+	check(grownId && fog.treeUnknown.count(grownId) && clientA.findObject(grownId) && fog.treeHidden(clientA.findObject(grownId)),
+		"a tree grown out of sight: unknown to A");
+	check(ghost(nearBId) != nullptr, "felled where only B sees: standing for A");
+	check(liveFelled && fog.hidesTreeEffect(&clientA, liveFelled), "no sound from the fogged tree");
+	check(fog.treeGhosts.size() == 3 && fog.treeUnknown.size() == 1, "nothing else remembered (" + std::to_string(fog.treeGhosts.size()) + " copies, "
+		+ std::to_string(fog.treeUnknown.size()) + " unknown)");
+	printf("UNITTEST memory: %zu copies of %zu bytes and %zu unknown ids\n", fog.treeGhosts.size(), sizeof(ClientGameObject), fog.treeUnknown.size());
+
+	// the save: the local server has A's memory; written to the file, read back
+	const std::string mine = fog.treeMemoryText(&clientA);
+	check(server.getTreeMemory(1027) == mine && mine.find("ghost " + std::to_string(felledId) + " ") != std::string::npos
+		&& mine.find("unknown " + std::to_string(grownId)) != std::string::npos, "the server holds A's memory for a save");
+	const std::string file = PathToUtf8(g_userPath / "saved" / PathFromUtf8("Save_Games\\wkbai tree memory test.sav"));
+	check(server.saveGame(file.c_str()), "saved");
+	{
+		const Server::SaveParts parts = Server::ReadSaveParts(file.c_str());
+		check(parts.saveFile && parts.treeMemory.find("player 1027\n") != std::string::npos, "the save's treeMemory section");
+		server.treeMemoryLoadText(parts.treeMemory);
+		check(server.getTreeMemory(1027) == mine, "read back as written");
+		FogOfWar loaded;
+		loaded.loadTreeMemory(&clientA, server.getTreeMemory(1027));
+		check(loaded.treeMemoryText(&clientA) == mine && loaded.treeGhosts.count(felledId) && loaded.treeGhosts.at(felledId)->blueprint->name == felledType
+			&& (loaded.treeGhosts.at(felledId)->position - fog.treeGhosts.at(felledId)->position).len3() < 0.001f, "loaded: the same memory");
+		// an older save (none): every tree known as it stands
+		const Server::SaveParts old = Server::ReadSaveParts("Save_Games\\2 Player 4 Peaks.lvl");
+		FogOfWar fresh;
+		fresh.loadTreeMemory(&clientA, old.treeMemory);
+		check(old.treeMemory.empty() && fresh.treeGhosts.empty() && fresh.treeUnknown.empty(), "an older save: no memory, all trees known");
+	}
+	{
+		std::error_code ec;
+		std::filesystem::remove(PathFromUtf8(file), ec);
+	}
+
+	// A sees there: the felled tree fallen, the used up one gone, the new one there
+	fog.testViewers.push_back({ felled->position, 25.0f });
+	update();
+	check(!ghost(felledId) && liveFelled && !fog.treeHidden(liveFelled), "seen: A sees the felled tree fallen");
+	check(!fog.treeUnknown.count(grownId), "seen: and the new tree");
+	fog.testViewers.clear();
+	fog.testViewers.push_back({ usedUpAt, 25.0f });
+	update();
+	check(!ghost(usedUpId), "seen: the used up tree gone");
+	fog.testViewers.clear();
+	// B's sight shared with A: allies, Shared Vision (Reconnaissance Upgrade Status 2)
+	update();
+	check(ghost(nearBId) != nullptr, "an enemy's sight: nothing for A");
+	server.setDiplomaticStatus(A, B, 0);
+	const int recon = server.gameSet->items.names.getIndex("Reconnaissance Upgrade Status");
+	if (recon >= 0)
+		B->setItem(recon, 2.0f);
+	update();
+	update();
+	check(recon >= 0 && fog.isSeen(nearB->position) && !ghost(nearBId), "an ally's shared sight: A sees it fallen");
+	// a new game: the memory afresh
+	fog.resetTrees();
+	check(!fog.treesStarted() && fog.treeGhosts.empty(), "a new game: no memory until it starts");
+	clientA.treeMemory = nullptr;
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -12480,6 +12653,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
+{Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
 };
 
 void LaunchTest()
