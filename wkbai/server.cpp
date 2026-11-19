@@ -2383,6 +2383,48 @@ void ServerGameObject::wakeAggressiveIdle()
 			sendEvent(Tags::PDEVENT_ON_IDLE);
 			return;
 		}
+	// A melee unit (not one in an army either): the scripts' idle reaction looks only 1.25 "Actual
+	// Sight Range" metres round it ("Most Appropriate Target In Idle Range for Heavy Infantry": 5.5 m
+	// for a Spearman, whose sight is 4.4 tiles), and it has no sight events, so it let enemies walk
+	// past 12 m away (the play test of 2026-11-19). wkbai's: the nearest enemy character within its
+	// sight (the item's tiles x 5 m, 10 to 30 m) that it can get at is attacked with its own attack
+	// command, as a right-click on it would.
+	extern bool IsRangedUnit(const ServerGameObject* unit);
+	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+	if (IsRangedUnit(this) || !me || (getParent() && getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY))
+		return;
+	// (a melee type has no DEFAULT_ATTACK_COMMAND: the "Attack" command, a right-click's)
+	const Command* cmd = gs->commands.getPointer(blueprint->defaultAttackCommand);
+	if (!cmd)
+		cmd = gs->commands.getPointer(gs->commands.names.getIndex("Attack"));
+	if (!cmd)
+		return;
+	static const GameSet* sightOf = nullptr;
+	static int sightItem = -1;
+	if (sightOf != gs) {
+		sightOf = gs;
+		sightItem = gs->items.names.getIndex("Actual Sight Range");
+	}
+	const float radius = std::clamp(sightItem >= 0 ? getItem(sightItem) * 5.0f : 20.0f, 10.0f, 30.0f);
+	NNSearch search;
+	search.start(Server::instance, position, radius);
+	ServerGameObject* best = nullptr;
+	float bestD = 0.0f;
+	while (CommonGameObject* c = search.next()) {
+		ServerGameObject* o = (ServerGameObject*)c;
+		if (o == this || o->deleted || (o->flags & fTerminated) || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !o->getPlayer()
+			|| Server::instance->getDiplomaticStatus(o->getPlayer(), me) != enemy)
+			continue;
+		const float d = (o->position - position).sqlen2xz();
+		if (d > radius * radius || (best && (d > bestD || (d == bestD && o->id > best->id))))
+			continue;
+		if (OutOfReach(this, o->position, 3.0f))
+			continue;
+		best = o;
+		bestD = d;
+	}
+	if (best)
+		cmd->execute(this, best, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 }
 
 void ServerGameObject::addZoneTile(int tx, int tz)
@@ -3840,8 +3882,16 @@ void Server::simulate()
 		if (obj->disableCount > 0)
 			return;
 		// moving without an order too: formation members walking to their places
+		// (and a character set to attack at will: its look for enemies once a second, wakeAggressiveIdle)
+		static const GameSet* aggressiveOf = nullptr;
+		static int aggressiveItem = -1;
+		if (aggressiveOf != gameSet.get()) {
+			aggressiveOf = gameSet.get();
+			aggressiveItem = gameSet->items.names.getIndex("Become Aggressive");
+		}
 		if (!obj->orderConfig.orders.empty() || obj->blueprint->receiveSightRangeEvents || obj->blueprint->removeWhenNotReferenced
-			|| obj->movement.isMoving())
+			|| obj->movement.isMoving()
+			|| (aggressiveItem >= 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->getItem(aggressiveItem) > 0.0f))
 			toprocess.emplace_back(obj);
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY) {
 			Vector3 avg(0,0,0);
@@ -4016,6 +4066,11 @@ void Server::simulate()
 			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
+			obj->wakeAggressiveIdle();
+			if (!ref) continue;
+		}
+		// (a character without sight events, a Spearman: its attack at will once a second too)
+		else if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && sightDue(obj->id)) {
 			obj->wakeAggressiveIdle();
 			if (!ref) continue;
 		}

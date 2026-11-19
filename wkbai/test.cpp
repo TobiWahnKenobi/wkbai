@@ -10941,6 +10941,121 @@ void Test_SmallerItems()
 // Archer member told the melee "Attack" on an enemy takes its own attack's order; the formation's
 // reach of a point only its Archers could shoot at: in reach. Prints "MIXEDF ..." and "MIXEDF
 // result: ok|FAIL".
+void Test_MixedFormation();
+
+// Attack at will (the "Aggression" command): on 4 Peaks, 4 Spearmen and 4 Archers of player 1027,
+// idle, out of formations, set to attack at will; an enemy Spearman walks past them at about
+// 12 m. Prints each second who of ours has an order (and which), and "ATWILL result: ok|FAIL"
+// (ok: at least half of ours went for the enemy within 15 s of it coming within 20 m).
+void Test_AttackAtWill()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	const GameSet* gs = server.gameSet.get();
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() && o->getPlayer() != player
+			&& o->getPlayer()->blueprint->name != "Neutral Player") {
+			enemyPlayer = o->getPlayer();
+			break;
+		}
+	}
+	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* archerBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Archer");
+	const int aggression = gs->commands.names.getIndex("Aggression"), move = gs->commands.names.getIndex("Move");
+	if (!player || !enemyPlayer || !spearBp || !archerBp || aggression < 0 || move < 0) {
+		printf("ATWILL not set up\nATWILL result: FAIL\n");
+		return;
+	}
+	Vector3 at(0, 0, 0);
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && o->getPlayer() == player && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+			at = o->position + Vector3(40, 0, 0);
+			break;
+		}
+	}
+	std::vector<ServerGameObject*> ours;
+	for (int i = 0; i < 8; i++)
+		if (ServerGameObject* u = server.spawnObject(i < 4 ? spearBp : archerBp, player, at + Vector3((float)(i % 4) * 3.0f, 0, (float)(i / 4) * 3.0f), Vector3(0, 0, 0)))
+			ours.push_back(u);
+	server.timeManager.unpause();
+	for (int i = 0; i < 20; i++)
+		StepServer(server, 1);
+	for (ServerGameObject* u : ours)
+		gs->commands[aggression].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// the enemy: 60 m to one side, walking past 12 m in front of them to 60 m on the other side
+	ServerGameObject* foe = server.spawnObject(spearBp, enemyPlayer, at + Vector3(-60, 0, 12), Vector3(0, 0, 0));
+	if (!foe) {
+		printf("ATWILL no enemy\nATWILL result: FAIL\n");
+		return;
+	}
+	// (it lives through the arrows, so that it walks past all of them)
+	if (const int cap = gs->items.names.getIndex("Hit Point Capacity"); cap >= 0)
+		foe->setItem(cap, 5000.0f);
+	if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+		foe->setItem(hp, 5000.0f);
+	gs->commands[move].execute(foe, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, at + Vector3(70, 0, 12));
+	float nearAt = -1.0f;
+	int most = 0, mostSpears = 0;
+	for (int step = 0; step < 20 * 40 * 4 && server.timeManager.currentTime < 80.0f; step++) {
+		StepServer(server, 1);
+		const float t = server.timeManager.currentTime;
+		const float d = (foe->position - at).len2xz();
+		if (nearAt < 0.0f && d < 20.0f)
+			nearAt = t;
+		// (once, the enemy 15 m away: the first Spearman's idle reaction's parts)
+		static bool told = false;
+		if (!told && d < 15.0f) {
+			told = true;
+			ServerGameObject* s = ours[0];
+			SrvScriptContext ctx(&server, s);
+			auto eqv = [&](const char* name) {
+				const int e = gs->equations.names.getIndex(name);
+				return e >= 0 ? gs->equations[e]->eval(&ctx) : -999.0f;
+			};
+			const int ofd = gs->objectFinderDefinitions.names.getIndex("Most appropriate Target In Idle Range for Heavy Infantry");
+			const size_t found = ofd >= 0 ? gs->objectFinderDefinitions[ofd]->eval(&ctx).size() : 0;
+			const int sight = gs->items.names.getIndex("Actual Sight Range");
+			printf("ATWILL   Spearman %u: player type %s, Controlled by Human %.0f, in Army %.0f, My Idle Attack Range %.1f (sight %.1f), idle-range finder %d -> %zu, sees %zu objects, order %s\n",
+				s->id, s->getPlayer()->blueprint->name.c_str(), eqv("Controlled by Human"), eqv("Controlled by Human, in Army"), eqv("My Idle Attack Range"),
+				sight >= 0 ? s->getItem(sight) : -1.0f, ofd, found, s->seenObjects.size(),
+				s->orderConfig.getCurrentOrder() ? gs->orders.getString(s->orderConfig.getCurrentOrder()->blueprint).c_str() : "-");
+		}
+		int going = 0, spearsGoing = 0;
+		std::string line;
+		for (ServerGameObject* u : ours) {
+			if (u->deleted)
+				continue;
+			Order* o = u->orderConfig.getCurrentOrder();
+			Task* task = o ? o->getCurrentTask() : nullptr;
+			if (task && task->target.get() == foe) {
+				going++;
+				if (u->blueprint == spearBp)
+					spearsGoing++;
+			}
+			if (step % 20 == 0)
+				line += std::string(" | ") + u->blueprint->name.substr(0, 5) + ": " + (o ? gs->orders.getString(o->blueprint) : std::string("-"))
+					+ (task && task->target.get() == foe ? " (foe)" : "") + " agg " + std::to_string((int)u->getItem(gs->items.names.getIndex("Become Aggressive")));
+		}
+		if (nearAt >= 0.0f && t - nearAt <= 15.0f) {
+			most = std::max(most, going);
+			mostSpears = std::max(mostSpears, spearsGoing);
+		}
+		if (step % 20 == 0)
+			printf("ATWILL t=%.0f foe %.0f m%s\n", t, d, line.c_str());
+		if (foe->deleted)
+			break;
+	}
+	printf("ATWILL went for the enemy within 15 s of it coming within 20 m: %d of %zu (Spearmen %d of 4)\n", most, ours.size(), mostSpears);
+	printf("ATWILL result: %s\n", nearAt >= 0.0f && most * 2 >= (int)ours.size() && mostSpears >= 2 ? "ok" : "FAIL");
+}
+
 void Test_MixedFormation()
 {
 	LoadBCP("data.bcp");
@@ -12483,6 +12598,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
 {Test_MixedFormation, "Improved mixed formations: Knights on the wings, Spearmen in front of Archers, the widest spacing, an Archer member's Attack its own, reach by kind"},
 {Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
+{Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
 };
 
 void LaunchTest()
