@@ -11079,6 +11079,49 @@ void Test_MixedFormation()
 	// ground: we take a point the Archers stand next to, so the test is that some kind reaches it)
 	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
 	check(!OutOfReach(formation, archers.empty() ? at : archers[0]->position, 3.0f), "the formation reaches a point beside its own Archers");
+	// a new formation of the formation and 2 loose Spearmen (the selection's "Formation" button):
+	// every character directly in the new one, the old one left without members
+	for (ServerGameObject* u : { archers[0], spears[0] })
+		u->orderConfig.cancelAllOrders();
+	std::vector<ServerGameObject*> loose;
+	for (int i = 0; i < 2; i++)
+		if (ServerGameObject* u = server.spawnObject(spearBp, player, at + Vector3(-6.0f - 2.0f * i, 0, -6.0f), Vector3(0, 0, 0)))
+			loose.push_back(u);
+	extern ServerGameObject* CreateFormationFrom(Server& server, ServerGameObject* player, const std::vector<ServerGameObject*>& units);
+	std::vector<ServerGameObject*> selection{ formation };
+	selection.insert(selection.end(), loose.begin(), loose.end());
+	ServerGameObject* merged = CreateFormationFrom(server, player, selection);
+	auto characters = [](ServerGameObject* f) {
+		int n = 0;
+		for (const auto& [type, children] : f->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !((ServerGameObject*)c)->deleted)
+					n++;
+		return n;
+	};
+	snprintf(what, sizeof(what), "a formation and 2 loose units make one: %d characters in the new one, %d left in the old one",
+		merged ? characters(merged) : -1, characters(formation));
+	check(merged && characters(merged) == 18 && characters(formation) == 0, what);
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// Disband (the formation's button): its members back under the player
+	const int disband = gs->commands.names.getIndex("Disband");
+	if (merged && disband >= 0) {
+		gs->commands[disband].execute(merged, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		for (int i = 0; i < 40; i++)
+			StepServer(server, 1);
+		int still = 0;
+		for (auto* list : { &spears, &archers, &knights, &loose })
+			for (ServerGameObject* u : *list)
+				if (!u->deleted && u->getParent() == merged)
+					still++;
+		Order* order = merged->orderConfig.getCurrentOrder();
+		snprintf(what, sizeof(what), "Disband: %d of 18 still in the formation (its order: %s)", still,
+			order ? gs->orders.getString(order->blueprint).c_str() : "none");
+		check(still == 0, what);
+	}
+	else
+		check(false, "the Disband command");
 	printf("MIXEDF result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
 }
 

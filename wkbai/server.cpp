@@ -1803,6 +1803,54 @@ void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 			r->actions.run(&ctx);
 }
 
+// A new formation of the player's selected units (NETSRVMSG_CREATE_NEW_FORMATION): its characters,
+// and the members of a formation among them (a selection of loose units and a formation: the
+// formation was left out and went on as one block beside the new one, keeping its spacing, the
+// play test of 2026-11-19; it is disbanded into the new one). A formation needs more than 7
+// characters (WKB.exe 0x54f0d0); fewer stay as they are. Returns the formation, or none.
+ServerGameObject* CreateFormationFrom(Server& server, ServerGameObject* player, const std::vector<ServerGameObject*>& units)
+{
+	std::vector<ServerGameObject*> subs, oldFormations;
+	auto add = [&](ServerGameObject* sub) {
+		if (sub && !sub->deleted && !(sub->flags & CommonGameObject::fTerminated) && sub->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+			&& std::find(subs.begin(), subs.end(), sub) == subs.end())
+			subs.push_back(sub);
+	};
+	for (ServerGameObject* unit : units) {
+		if (!unit || unit->deleted)
+			continue;
+		if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+			if (std::find(oldFormations.begin(), oldFormations.end(), unit) == oldFormations.end())
+				oldFormations.push_back(unit);
+			for (const auto& [type, children] : unit->children)
+				for (CommonGameObject* c : children)
+					add((ServerGameObject*)c);
+		}
+		else
+			add(unit);
+	}
+	if (subs.size() < 8 || !player)
+		return nullptr;
+	for (ServerGameObject* old : oldFormations)
+		FormationController::disband(old);
+	const GameObjBlueprint* blueprint = &server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0];
+	ServerGameObject* formation = server.spawnObject(blueprint, player, {}, {});
+	if (!formation)
+		return nullptr;
+	Vector3 positionSum;
+	for (ServerGameObject* sub : subs) {
+		positionSum += sub->position;
+		// what the unit did on its own ends (training at a dummy went on in the formation, the
+		// formation never placing it): the formation leads it now
+		sub->orderConfig.cancelAllOrders();
+		sub->setParent(formation);
+	}
+	formation->setPosition(positionSum / (float)subs.size());
+	FormationController::faceMembersWay(formation);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	return formation;
+}
+
 // (NETCLIMSG_OBJECT_ASSOCIATION) an association change, to the clients: not a missile's (an
 // arrow's firer and target, many a second in a battle; no button asks for them)
 static bool AssociationPacket(NetPacketWriter& msg, uint8_t change, const ServerGameObject* obj, int category, const ServerGameObject* other)
@@ -4462,29 +4510,12 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				break;
 			}
 			case NETSRVMSG_CREATE_NEW_FORMATION: {
-				// a formation needs more than 7 characters (WKB.exe 0x54f0d0); fewer stay as they are
-				std::vector<ServerGameObject*> subs;
+				std::vector<ServerGameObject*> units;
 				for (ServerGameObject* sub : clientInfos[clientIndex].unitsForNewFormation)
-					if (sub && !(sub->flags & CommonGameObject::fTerminated) && sub->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
-						&& std::find(subs.begin(), subs.end(), sub) == subs.end())
-						subs.push_back(sub);
+					if (sub)
+						units.push_back(sub);
 				clientInfos[clientIndex].unitsForNewFormation.clear();
-				if (subs.size() < 8)
-					break;
-				const GameObjBlueprint* blueprint = &gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0];
-				ServerGameObject* formation = spawnObject(blueprint, player, {}, {});
-				Vector3 positionSum; int numUnits = 0;
-				for (ServerGameObject* sub : subs) {
-					positionSum += sub->position;
-					numUnits += 1;
-					// what the unit did on its own ends (training at a dummy went on in the
-					// formation, the formation never placing it): the formation leads it now
-					sub->orderConfig.cancelAllOrders();
-					sub->setParent(formation);
-				}
-				formation->setPosition(positionSum / numUnits);
-				FormationController::faceMembersWay(formation);
-				formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+				CreateFormationFrom(*this, player, units);
 				break;
 			}
 			case NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_TARGET: {

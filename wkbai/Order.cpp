@@ -281,6 +281,19 @@ void Task::start()
 			}
 		}
 	}
+	// An object-reference task without a target, a task target or a proximity, whose work is its
+	// start sequence (TASK "Disband Formation into Group": DISBAND_FORMATION FINDER_SELF, the
+	// formation's Disband button, an order given with no target): the sequence runs and the task
+	// ends. Without, it waited for a target that never came and the button did nothing (the play
+	// test of 2026-11-19).
+	else if (blueprint->classType == Tags::ORDTSKTYPE_OBJECT_REFERENCE && !blueprint->taskTarget && !blueprint->usePreviousTaskTarget
+		&& !blueprint->proximityRequirement && !blueprint->startSequence.actionList.empty()) {
+		this->blueprint->startSequence.run(order->gameObject);
+		this->startSequenceExecuted = true;
+		if (this->isWorking())
+			this->terminate();
+		return;
+	}
 	this->onStart();
 }
 
