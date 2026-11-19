@@ -1745,6 +1745,32 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	ImGui::End();
 }
 
+// wkbai's swimming (the river currents): the water's surface over a place, its tile's water (and
+// the flooded land's, while a flood is up: FindFloodLand's tiles, as drawn) raised by the
+// weather's rise; NAN where there is no water
+static float SwimSurface(Client* client, const Vector3& at)
+{
+	const Terrain* t = client->terrain;
+	if (!t)
+		return NAN;
+	const int tx = (int)std::floor(at.x / 5.0f), tz = (int)std::floor(at.z / 5.0f);
+	const float rise = client->environmentActive ? client->environment.waterRise : 0.0f;
+	if (const auto* tile = t->getPlayableTile(tx, tz); tile && tile->fullOfWater)
+		return tile->waterLevel + rise;
+	if (rise <= 0.05f)
+		return NAN;
+	static const Terrain* of = nullptr;
+	static std::unordered_map<int64_t, float> flood;
+	if (of != t) {
+		of = t;
+		flood.clear();
+		for (const FloodLand& f : FindFloodLand(t))
+			flood[(int64_t)f.z << 32 | (uint32_t)f.x] = f.water;
+	}
+	auto it = flood.find((int64_t)tz << 32 | (uint32_t)tx);
+	return it != flood.end() ? it->second + rise : NAN;
+}
+
 // SHEAR_MODEL: a world-space shear that keeps the model upright but lifts each vertex by the
 // ground's slope under the object, so that wall segments follow the terrain as one band. The
 // slope comes from the ground heights at the ends of the model's bounding box along its own
@@ -1850,7 +1876,7 @@ void ClientInterface::prewarmLevel()
 		};
 		auto loadable = [&](Model* m) {
 			if (auto* anim = dynamic_cast<AnimatedModel*>(m)) {
-				if (!anim->ready && !FileExists(anim->fileName.c_str()))
+				if (!anim->ready && !(anim->madeFrom ? FileExists(anim->madeFrom->fileName.c_str()) : FileExists(anim->fileName.c_str())))
 					return false;
 				StaticModel* mesh = anim->getStaticModel();
 				return mesh && (mesh->ready || mesh->generator || meshExists(mesh->fileName));
@@ -3272,6 +3298,38 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	if (obj->blueprint->shearModel && client->terrain)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
+	// a swimmer (the river currents play its "Swim": SwimAnim.h, the Scout's own) is drawn at the
+	// water's surface, its swim's origin there, instead of on the bed; eased up as it starts and
+	// down to its feet as it stops (the game keeps its height: the server and multiplayer as before)
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !remembered) {
+		static const GameSet* of = nullptr;
+		static int swimTag = -1;
+		static std::unordered_map<uint32_t, std::pair<float, float>> lifts; // id -> (lift, time)
+		if (of != client->gameSet.get()) {
+			of = client->gameSet.get();
+			swimTag = of->animations.names.getIndex("Swim");
+			lifts.clear();
+		}
+		const bool swimming = swimTag >= 0 && obj->animationIndex == swimTag;
+		auto it = lifts.find(obj->id);
+		if (swimming || it != lifts.end()) {
+			float want = 0.0f;
+			if (swimming) {
+				const float surface = SwimSurface(client, obj->position);
+				if (!std::isnan(surface))
+					want = std::clamp(surface - obj->sceneEntity.transform._42, 0.0f, 6.0f);
+			}
+			const float now = (float)client->timeManager.currentTime;
+			auto& [lift, last] = it != lifts.end() ? it->second : lifts[obj->id];
+			if (it == lifts.end()) last = now;
+			const float step = std::clamp(now - last, 0.0f, 0.5f) * 1.5f; // (1.5 m a second)
+			last = now;
+			lift = want > lift ? std::min(want, lift + step) : std::max(want, lift - step);
+			obj->sceneEntity.transform._42 += lift;
+			if (!swimming && lift <= 0.0f)
+				lifts.erase(obj->id);
+		}
+	}
 	// a remembered building has no parent: its colour and frame are those it had when last seen
 	obj->sceneEntity.color = remembered ? obj->color : obj->getPlayer()->color;
 	if (disguise && client->clientPlayer)
