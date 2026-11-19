@@ -13602,6 +13602,9 @@ void Test_MapCatalog()
 	fflush(stdout);
 }
 
+// Step 17.4's test: MapTerrainTest.cpp
+void Test_MapTerrain();
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -13709,6 +13712,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
 {Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
 {Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
+{Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
 };
 
 void LaunchTest()
