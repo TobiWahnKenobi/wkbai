@@ -601,6 +601,10 @@ void AIController::update()
 	const bool war = Server::instance->aggressiveAI && Server::instance->aiWar && !lua && !advanced();
 	if (war)
 		warUpdate();
+	// the AI at sea (Naval.cpp): for every AI (the Kingmaker, the aggressive one, a Lua AI, the
+	// ministries); nothing on a map without a sea between the players
+	if (Server::instance->aiNaval && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+		Naval::Update(gameObj);
 
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units

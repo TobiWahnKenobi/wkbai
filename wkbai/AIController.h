@@ -6,6 +6,7 @@
 
 #include "gameset/Plan.h"
 #include "GameObjectRef.h"
+#include "Naval.h"
 #include "util/vecmat.h"
 #include <map>
 #include <set>
@@ -170,6 +171,10 @@ struct AIController {
 	// refuses peasants at the cap)
 	std::set<uint32_t> ministryHeld;
 	int ministryPeasantCap = -1, ministryPeasants = 0;
+	// the AI at sea (Naval.h, "aiNaval"): its navy and ferries; the units on a ferry (boarding,
+	// aboard, landing), which the war layer, the waves and the ministries leave alone
+	Naval::State naval;
+	std::set<uint32_t> navalUnits;
 	// the war layer's pool: the fighters at home, and the scripts' idle or not-fighting attackers
 	// near the base; not those in the armies `mine` nor the units `inWaves`
 	std::vector<ServerGameObject*> warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves);

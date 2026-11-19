@@ -333,6 +333,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
 	// target and go on to the next building, and the attacker is attacked back: "aiWar"
 	bool aiWar = true;
+	// the AI at sea (Naval.h): every AI player builds a dock and ships where the map has water
+	// between it and an enemy, ferries armies over, fights at sea: "aiNaval"
+	bool aiNaval = true;
 	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
 	// while it is being built (Phase 16): "aiMinistries"
 	bool aiMinistries = false;

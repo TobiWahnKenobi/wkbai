@@ -19,7 +19,7 @@ double g_deptMs[DEPT_COUNT] = {};
 uint64_t g_deptThinks[DEPT_COUNT] = {};
 
 namespace {
-	const char* const NAMES[DEPT_COUNT] = { "strategist", "economy", "labour", "builders", "research", "war", "generals", "intelligence", "diplomacy" };
+	const char* const NAMES[DEPT_COUNT] = { "strategist", "economy", "labour", "builders", "research", "war", "generals", "intelligence", "diplomacy", "admiralty" };
 
 	// the game set's items the departments read, looked up once per game set
 	struct Items {
@@ -189,6 +189,7 @@ namespace {
 		g.departments.push_back(MakeGenerals());
 		g.departments.push_back(MakeIntelligence());
 		g.departments.push_back(MakeDiplomacy());
+		g.departments.push_back(MakeAdmiralty());
 	}
 
 	// "aiTrace" / WKB_TRACE_AI: 0 off, 1 every AI, else a player's id

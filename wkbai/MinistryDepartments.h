@@ -44,6 +44,7 @@ namespace Ministry {
 	std::unique_ptr<Department> MakeStrategist();     // MinistryWar.cpp
 	std::unique_ptr<Department> MakeWar();
 	std::unique_ptr<Department> MakeGenerals();
+	std::unique_ptr<Department> MakeAdmiralty();      // (the navy, Naval.h)
 	std::unique_ptr<Department> MakeDiplomacy();      // MinistryDiplomacy.cpp
 	std::unique_ptr<Department> MakeBuilders();       // MinistryEconomy.cpp
 	std::unique_ptr<Department> MakeResearch();

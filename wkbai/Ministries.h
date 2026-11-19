@@ -26,7 +26,7 @@ struct ServerGameObject;
 namespace Ministry {
 
 	// the departments, in the order they run
-	enum Dept : uint8_t { STRATEGIST, ECONOMY, LABOUR, BUILDERS, RESEARCH, WAR, GENERALS, INTELLIGENCE, DIPLOMACY, DEPT_COUNT };
+	enum Dept : uint8_t { STRATEGIST, ECONOMY, LABOUR, BUILDERS, RESEARCH, WAR, GENERALS, INTELLIGENCE, DIPLOMACY, ADMIRALTY, DEPT_COUNT };
 	const char* DeptName(int dept);
 	int DeptFromName(const std::string& name); // -1 if none
 
@@ -48,7 +48,7 @@ namespace Ministry {
 	struct Blackboard {
 		std::map<std::string, double> reports; // "economy.food" -> 1200 (ordered: saved in order)
 		std::vector<Request> requests; // in the order they were asked
-		float weights[DEPT_COUNT] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+		float weights[DEPT_COUNT] = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 		std::map<std::string, double> budgets; // "war.income" -> 0.4 (shares the strategist sets)
 		struct Assignment { uint8_t dept = 0; float since = 0.0f; };
 		std::map<uint32_t, Assignment> assignments; // worker id -> the department it is lent to
@@ -131,6 +131,10 @@ namespace Ministry {
 		// a defence's place: its radius, and since when no enemy has been there (-1: enemies there)
 		float radius = 0.0f, clearSince = -1.0f;
 		std::vector<uint32_t> units; // its units, the dead too (their kills count to its goal)
+		// a target across the sea (Naval::Overseas): the ferry it went out on (Naval.h), and whether
+		// it landed; not saved (a loaded game's ferries are taken up again by the naval layer)
+		uint32_t ferry = 0;
+		bool landed = false;
 	};
 
 	// What another player did to this one and for it (Diplomacy's grudges and gratitude): the value

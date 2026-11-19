@@ -633,6 +633,7 @@ std::string Server::aiSettingsText() const
 	text += "aiLifeline=" + std::to_string((int)aiLifeline) + "\n";
 	text += "aiHomeGuard=" + std::to_string((int)aiHomeGuard) + "\n";
 	text += "aiWar=" + std::to_string((int)aiWar) + "\n";
+	text += "aiNaval=" + std::to_string((int)aiNaval) + "\n";
 	text += "aiHumanFocus=" + std::to_string(aiHumanFocus) + "\n";
 	// (the rest of the lobby's that the save game itself doesn't hold: starting resources,
 	// population limit, king piece, diplomacy, barbarians are the players' and the level's items)
@@ -781,6 +782,7 @@ void Server::applyAiSettingsText(const std::string& text, bool scriptsOnly)
 		else if (name == "aiLifeline") aiLifeline = v != 0;
 		else if (name == "aiHomeGuard") aiHomeGuard = v != 0;
 		else if (name == "aiWar") aiWar = v != 0;
+		else if (name == "aiNaval") aiNaval = v != 0;
 		else if (name == "aiMinistries") aiMinistries = v != 0;
 		else if (name == "aiVision") aiVision = (int)v;
 		else if (name == "aiGenerals") aiGenerals = (int)v;

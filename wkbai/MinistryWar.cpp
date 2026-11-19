@@ -15,6 +15,7 @@
 
 #include "MinistryDepartments.h"
 #include "AIUtil.h"
+#include "Naval.h"
 #include "server.h"
 #include "gameset/gameset.h"
 #include "settings.h"
@@ -612,7 +613,8 @@ namespace {
 				const int need = m.want - (int)have.size();
 				// (reinforcements in groups of 4 at least, or all that is needed: one at a time, they
 				// walked to the target alone and died there)
-				if (m.kind == Mission::DEFEND || need <= 0 || free.empty() || m.state == Mission::RETURNING || (m.state == Mission::OUT && (int)free.size() < std::min(need, 4)))
+				// (none for a mission at sea or landed across it: they can't walk there)
+				if (m.kind == Mission::DEFEND || need <= 0 || free.empty() || m.state == Mission::RETURNING || m.ferry || (m.state == Mission::OUT && (int)free.size() < std::min(need, 4)))
 					continue;
 				// those that counter the target's known army first (its classes' shares), then the strongest
 				float shares[5] = {};
@@ -701,7 +703,15 @@ namespace {
 					continue;
 				}
 				const std::vector<ServerGameObject*> units = g.alive(m);
-				AIUtil::SendHome(me, units);
+				if (m.landed && !units.empty()) {
+					// landed across the sea: no walk home; they fight on as one of the scripts' waves
+					const std::vector<ServerGameObject*> near = AIUtil::EnemyBuildingsNear(me, Centre(units), 400.0f);
+					ServerGameObject* home = AIUtil::HomeArmy(me);
+					if (!near.empty())
+						me->aiController.launchWave(units, near.front(), home ? home : me);
+				}
+				else
+					AIUtil::SendHome(me, units);
 				for (uint32_t id : m.units)
 					me->aiController.ministryUnits.erase(id);
 				const int kills = KillsOf(srv, m) - m.kills0;
@@ -725,10 +735,46 @@ namespace {
 				const int have = (int)units.size();
 				const bool ready = have >= m.want || (now - m.since > 60.0f && have >= std::max(1, m.want * 6 / 10))
 					|| (now - m.since > 120.0f && have >= std::max(1, m.want / 2));
-				if (now - m.since > 180.0f && !ready)
+				if (now - m.since > 180.0f && !ready && !m.ferry)
 					return "gave up";
-				if (!ready)
+				if (!ready && !m.ferry)
 					return nullptr;
+				// across the sea (the Admiralty's ferries, Naval.h): they embark, sail and land, and the
+				// mission goes out from the shore where they landed, with those that landed
+				{
+					const Vector3 dest = target ? target->position : Vector3(m.tx, 0, m.tz);
+					if (m.ferry || (!units.empty() && Naval::Overseas(me, units.front(), dest))) {
+						if (!m.ferry) {
+							m.ferry = Naval::SendFerry(me, units, target, dest, Naval::Ferry::MINISTRY, m.id);
+							if (!m.ferry)
+								return now - m.since > 420.0f ? "no ship" : nullptr;
+							g.log(GENERALS, "mission %u (%s) embarks on ferry %u: %zu units for (%.0f, %.0f) across the sea", m.id, Mission::KindName(m.kind),
+								m.ferry, units.size(), dest.x, dest.z);
+							g.board.report("naval.missionsAtSea", g.board.get("naval.missionsAtSea") + 1);
+						}
+						const Naval::Ferry* f = Naval::FindFerry(me, m.ferry);
+						if (f && f->landed > 0 && !m.landed) {
+							// the mission is those that landed (the rest went home)
+							m.landed = true;
+							std::vector<uint32_t> kept;
+							for (uint32_t id : m.units)
+								if (std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+									kept.push_back(id);
+								else
+									me->aiController.ministryUnits.erase(id);
+							m.units = kept;
+							units = g.alive(m);
+							g.log(GENERALS, "mission %u landed %d at (%.0f, %.0f)", m.id, f->landed, f->landing.x, f->landing.z);
+						}
+						if (!m.landed) {
+							if (!f)
+								return "lost at sea";
+							return nullptr;
+						}
+						if (units.empty())
+							return "lost";
+					}
+				}
 				m.state = Mission::OUT;
 				m.stateSince = now;
 				m.startUnits = (int)units.size();
@@ -849,7 +895,7 @@ namespace {
 				return "too long";
 			// home in danger: the threat there over what guards it, the attacks come back to defend it
 			// (not a decoy, nor one at its last building)
-			if (attacking && g.board.get("war.recall") > 0.0 && !winning)
+			if (attacking && g.board.get("war.recall") > 0.0 && !winning && !m.landed)
 				return "recalled";
 			// reinforcements once, for an attack that has lost a third and isn't winning
 			if (!m.reinforced && attacking && m.kind != Mission::RAID && losses > 0.35f) {
@@ -987,6 +1033,51 @@ namespace {
 		}
 	};
 }
+
+namespace {
+	// ---- The Admiralty (the navy; Naval.h) ----
+	// Reads the naval layer's map (the sea between this player and its enemies), sets how many cogs
+	// and war boats the layer keeps (by the General's aggression), and leaves the ferrying to the
+	// Generals: the layer sends no army of its own for a ministry player (State::manual). Reports
+	// naval.* for the others (and the tests).
+	struct Admiralty : Department {
+		uint8_t id() const override { return ADMIRALTY; }
+		float period() const override { return 5.0f; }
+		void think(Government& g) override {
+			ServerGameObject* me = g.player();
+			if (!me || !g.server.aiNaval)
+				return;
+			if (!g.personality.read)
+				ReadPersonality(g);
+			Naval::State& st = me->aiController.naval;
+			st.manual = true;
+			const float ag = g.personality.aggression;
+			if (st.need == Naval::NEED_ONLY) {
+				st.wantTransports = 1 + (ag > 0.6f ? 1 : 0);
+				st.wantWarships = 2 + (int)std::lround(ag * 2.0f);
+			}
+			else if (st.need == Naval::NEED_SHORTER) {
+				st.wantTransports = 1;
+				st.wantWarships = 1 + (ag > 0.6f ? 1 : 0);
+			}
+			else {
+				st.wantTransports = st.wantWarships = 0;
+			}
+			if (st.need <= Naval::NEED_NONE && st.ferries.empty())
+				return;
+			int transports = 0, warships = 0;
+			for (ServerGameObject* s : Naval::Ships(me))
+				(Naval::IsTransport(s) ? transports : warships)++;
+			g.board.report("naval.need", (double)st.need);
+			g.board.report("naval.transports", transports);
+			g.board.report("naval.warships", warships);
+			g.board.report("naval.ferriesSent", st.ferriesSent);
+			g.board.report("naval.unitsLanded", st.unitsLanded);
+			g.board.report("naval.docksLaid", st.docksLaid);
+		}
+	};
+}
+std::unique_ptr<Department> MakeAdmiralty() { return std::make_unique<Admiralty>(); }
 
 void SetWeightsFromCharacter(Government& g)
 {

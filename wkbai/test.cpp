@@ -62,6 +62,7 @@
 #include <set>
 #include "interface/QuickSkirmishMenu.h"
 #include "AIUtil.h"
+#include "Naval.h"
 #include "MinistryDepartments.h"
 #include "gameset/finder.h"
 #include "gameset/Commission.h"
@@ -12641,6 +12642,316 @@ void Test_RiverCurrents()
 	printf(failures ? "CURRENTS FAILED (%d)\n" : "CURRENTS PASSED\n", failures);
 }
 
+// ---- The AI at sea (Naval.h; the RE repo's docs/engine/naval-ai.md) ----
+// A sea across 2 Player 4 Peaks: the land within 30 m of the line halfway between the two palaces
+// (and the banks 15 m beyond) lowered under a lake's level, water textures on what the water
+// covers, the trees and props there removed. No land unit can cross; a ship can. Whole map, edge
+// band too. Server only (the headless test has no client). Returns the tiles under water.
+static int CarveSea(Server& server, Vector3& a, Vector3& b)
+{
+	Terrain* t = server.terrain;
+	const GameSet& gs = *server.gameSet;
+	ServerGameObject* pa = AIUtil::Palace(server.findObject(1027));
+	ServerGameObject* pb = AIUtil::Palace(server.findObject(1030));
+	if (!t || !pa || !pb)
+		return 0;
+	a = pa->position;
+	b = pb->position;
+	const Vector3 mid = (a + b) * 0.5f;
+	// (across the map along the axis the palaces differ most on: straight coasts, where a dock's
+	// three tiles of land and of water side by side fit, as on the original maps' coasts)
+	const Vector3 n = std::abs(b.x - a.x) > std::abs(b.z - a.z) ? Vector3(1, 0, 0) : Vector3(0, 0, 1);
+	// the lowest vertex, everything raised so that the sea's floor fits under it
+	const int verts = (t->width + 1) * (t->height + 1);
+	float lowest = 1e9f;
+	for (int i = 0; i < verts; i++)
+		lowest = std::min(lowest, t->heightSteps(i));
+	const float depthSteps = std::ceil(3.0f / std::max(t->scale, 0.1f)) + 1.0f;
+	const float raise = std::max(0.0f, depthSteps + 2.0f - lowest);
+	if (raise > 0.0f)
+		for (int i = 0; i < verts; i++)
+			t->setHeightSteps(i, std::min(t->heightSteps(i) + raise, 255.0f));
+	lowest += raise;
+	const float level = lowest - 0.5f, floor = lowest - depthSteps;
+	for (int z = 0; z <= t->height; z++)
+		for (int x = 0; x <= t->width; x++) {
+			const Vector3 p((x - t->edge) * 5.0f, 0, (z - t->edge) * 5.0f);
+			const Vector3 rel = p - mid;
+			const float d = std::abs(rel.x * n.x + rel.z * n.z);
+			if (d >= 150.0f)
+				continue;
+			const int i = z * (t->width + 1) + x;
+			const float orig = t->heightSteps(i);
+			// the sea's floor 60 m wide, a steep 4 m into it, then a beach rising 1 m in 12, back
+			// to the land as it was from 120 m out
+			float target = d <= 30.0f ? floor : d <= 34.0f ? floor + (level + 1.0f - floor) * (d - 30.0f) / 4.0f
+				: level + 1.0f + (d - 34.0f) / 12.0f / t->scale;
+			if (d > 120.0f)
+				target += (orig - target) * (d - 120.0f) / 30.0f;
+			t->setHeightSteps(i, std::min(orig, target));
+		}
+	t->lakes.push_back(Vector3(mid.x + t->edge * 5.0f, level * t->scale, mid.z + t->edge * 5.0f));
+	t->floodfillWater();
+	// water textures where the water is
+	TerrainTexture* water = nullptr;
+	for (const auto& [name, group] : t->texDb.groups) {
+		auto it = gs.associatedTileTexGroups.find(name);
+		if (it != gs.associatedTileTexGroups.end() && gs.terrains.getString(it->second) == "Water" && !group->textures.empty()) {
+			water = group->textures.begin()->second.get();
+			break;
+		}
+	}
+	if (!water) {
+		// (4 Peaks' texture database has rivers but no sea: a "WATER" group made for the server,
+		// which goes by the group's name alone; its picture is the deep river's)
+		auto group = std::make_unique<TerrainTextureGroup>();
+		group->name = "WATER";
+		auto tex = std::make_unique<TerrainTexture>();
+		if (auto river = t->texDb.groups.find("DEEP_RIVER"); river != t->texDb.groups.end() && !river->second->textures.empty())
+			*tex = *river->second->textures.begin()->second;
+		tex->grp = group.get();
+		water = tex.get();
+		group->textures[0] = std::move(tex);
+		t->texDb.groups["WATER"] = std::move(group);
+	}
+	// the shore: the land beside the water (the original maps' "SAND1-WATER")
+	TerrainTexture* shore = nullptr;
+	if (auto it = t->texDb.groups.find("SAND1-WATER"); it != t->texDb.groups.end() && !it->second->textures.empty())
+		shore = it->second->textures.begin()->second.get();
+	else if (auto sand = t->texDb.groups.find("SAND1"); sand != t->texDb.groups.end() && !sand->second->textures.empty())
+		shore = sand->second->textures.begin()->second.get();
+	int flooded = 0;
+	const auto [pw, ph] = t->getNumPlayableTiles();
+	for (int z = 1; shore && z + 1 < t->height; z++)
+		for (int x = 1; x + 1 < t->width; x++) {
+			TerrainTile& tile = t->tiles[z * t->width + x];
+			if (tile.fullOfWater)
+				continue;
+			if (t->tiles[z * t->width + x - 1].fullOfWater || t->tiles[z * t->width + x + 1].fullOfWater
+				|| t->tiles[(z - 1) * t->width + x].fullOfWater || t->tiles[(z + 1) * t->width + x].fullOfWater) {
+				tile.texture = shore;
+				tile.rot = 0; tile.xflip = 0; tile.zflip = 0;
+			}
+		}
+	for (int z = 0; z < t->height; z++)
+		for (int x = 0; x < t->width; x++) {
+			TerrainTile& tile = t->tiles[z * t->width + x];
+			if (!tile.fullOfWater)
+				continue;
+			flooded++;
+			if (water) {
+				tile.texture = water;
+				tile.rot = 0; tile.xflip = 0; tile.zflip = 0;
+			}
+		}
+	for (int i = 0; i < pw * ph; i++)
+		server.tiles[i].terrainType = -2;
+	t->revision++;
+	// the trees, deposits and props under water
+	std::vector<ServerGameObject*> drowned;
+	auto walk = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				auto* o = (ServerGameObject*)child;
+				const int cls = o->blueprint->bpClass;
+				if (cls == Tags::GAMEOBJCLASS_PLAYER || cls == Tags::GAMEOBJCLASS_ARMY || cls == Tags::GAMEOBJCLASS_TOWN || cls == Tags::GAMEOBJCLASS_CITY) {
+					self(child, self);
+					continue;
+				}
+				// (a building in the water too, but not a palace: 4 Peaks has buildings where the sea is)
+				if (cls == Tags::GAMEOBJCLASS_CHARACTER || o->deleted || o == pa || o == pb)
+					continue;
+				const TerrainTile* tt = t->getPlayableTile((int)(o->position.x / 5.0f), (int)(o->position.z / 5.0f));
+				if (tt && tt->fullOfWater)
+					drowned.push_back(o);
+			}
+	};
+	walk(server.getLevel(), walk);
+	for (ServerGameObject* o : drowned)
+		server.deleteObject(o);
+	printf("NAVAL the sea: %d tiles under water (raised %.0f steps, level %.1f m, %s), %zu objects removed; palaces (%.0f, %.0f) and (%.0f, %.0f)\n",
+		flooded, raise, level * t->scale, water ? "water textures" : "NO water texture", drowned.size(), a.x, a.z, b.x, b.z);
+	return flooded;
+}
+
+// a game on the carved 4 Peaks: two AI Generals of a kind ("kingmaker", "aggressive", "lua", "ministry")
+static void NavalGame(Server& server, uint32_t seed, const std::string& kind)
+{
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	g_settings["simSeed"] = seed;
+	QuickSkirmishMenu skirmish;
+	skirmish.changeSettingsForLevel("2 Player 4 Peaks.lvl");
+	std::vector<QuickSkirmishMenu::Slot> slots(2);
+	const char* generals[2] = { "Belisar The Hammer Kingmaker", "Lady Elinor Kingmaker" };
+	for (int i = 0; i < 2; i++) {
+		slots[i].type = QuickSkirmishMenu::Slot::AI;
+		slots[i].general = generals[i];
+		if (kind == "lua")
+			slots[i].aiScript = "Advanced";
+	}
+	skirmish.setSlots(slots);
+	skirmish.setSetting("aggressiveAI", kind == "kingmaker" ? 0 : 1);
+	skirmish.setSetting("aiMinistries", kind == "ministry" ? 1 : 0);
+	skirmish.setSetting("aiNaval", 1);
+	// (resources for a dock, ships and soldiers early: the test is about the sea, not the opening;
+	// with the map's own the carved 4 Peaks starved, and the ministries had 11 fighters at 16 minutes)
+	skirmish.setSetting("startWood", 2000);
+	skirmish.setSetting("startFood", 2500);
+	skirmish.setSetting("startGold", 1000);
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	skirmish.applySettings(server);
+}
+
+void Test_NavalAI()
+{
+	LoadBCP("data.bcp");
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("NAVAL %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	const int minutes = getenv("WKB_NAVAL_MINUTES") ? atoi(getenv("WKB_NAVAL_MINUTES")) : 35;
+	const char* only = getenv("WKB_NAVAL_ONLY"); // one kind (or "ferry" for the first part alone)
+
+	// ---- 1. The sea and the ferry's mechanics: six spearmen ferried across ----
+	if (!only || !strcmp(only, "ferry")) {
+		Server server;
+		NavalGame(server, 5, "aggressive");
+		const GameSet* gs = server.gameSet.get();
+		Vector3 a, b;
+		const int flooded = CarveSea(server, a, b);
+		check(flooded > 200, "a sea of " + std::to_string(flooded) + " tiles across the map");
+		const GameObjBlueprint* spear = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+		const GameObjBlueprint* cog = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cog");
+		ServerGameObject* me = server.findObject(1027);
+		ServerGameObject* them = server.findObject(1030);
+		ServerGameObject* enemyPalace = AIUtil::Palace(them);
+		StepServer(server, 50 * 6); // (the regions are made and the map read at 5 s)
+		const int landCls = MovementController::movementClass(spear);
+		const int ra = MovementController::terrainRegion(landCls, (int)(a.x / 5), (int)(a.z / 5));
+		const int rb = MovementController::terrainRegion(landCls, (int)(b.x / 5), (int)(b.z / 5));
+		printf("NAVAL land regions %d and %d; need %d and %d\n", ra, rb, (int)me->aiController.naval.need, (int)them->aiController.naval.need);
+		check(me->aiController.naval.need == Naval::NEED_ONLY && them->aiController.naval.need == Naval::NEED_ONLY,
+			"both AIs read the map: the sea is the only way to the enemy");
+		// a cog at the home shore, six spearmen by the palace; the ferry by hand (as a Lua AI's)
+		me->aiController.naval.manual = true; // (no ferry of the layer's own meanwhile)
+		const Vector3 shore = me->aiController.naval.homeShore;
+		ServerGameObject* ship = cog && spear ? server.spawnObject(cog, me, shore, Vector3(0, 0, 0)) : nullptr;
+		std::vector<ServerGameObject*> men;
+		for (int i = 0; spear && i < 6; i++)
+			men.push_back(server.spawnObject(spear, me, MovementController::nearestValidPosition(spear, a + Vector3(20.0f + 3.0f * i, 0, 20.0f)), Vector3(0, 0, 0)));
+		const uint32_t ferry = ship && enemyPalace ? Naval::SendFerry(me, men, enemyPalace, enemyPalace->position, Naval::Ferry::LUA) : 0;
+		check(ship && ferry != 0, "a ferry sent with the cog " + std::to_string(ship ? ship->id : 0));
+		int boarded = 0, ashore = 0;
+		float sailedAt = -1.0f, landedAt = -1.0f;
+		for (int s = 0; ferry && s < 50 * 300; s++) {
+			StepServer(server, 1);
+			const Naval::Ferry* f = Naval::FindFerry(me, ferry);
+			if (!f)
+				break;
+			if (f->state >= Naval::Ferry::SAILING && sailedAt < 0.0f) {
+				sailedAt = server.timeManager.currentTime;
+				for (ServerGameObject* u : men)
+					boarded += !u->deleted && u->disableCount > 0;
+			}
+			if (f->landed > 0) {
+				landedAt = server.timeManager.currentTime;
+				for (ServerGameObject* u : men)
+					ashore += !u->deleted && u->isInteractable() && MovementController::terrainRegion(landCls, (int)(u->position.x / 5), (int)(u->position.z / 5)) == rb;
+				break;
+			}
+		}
+		printf("NAVAL ferry: %d boarded (sailed at %.0f s), %d ashore on the enemy's side at %.0f s\n", boarded, sailedAt, ashore, landedAt);
+		check(boarded >= 5, "the spearmen boarded the cog (Board Vessel)");
+		check(ashore >= 5, "and landed across the sea (Unload Passengers), on the enemy's land");
+	}
+
+	// ---- 2. Each AI on its own: a dock, ships, a ferry across, a landing and an attack ----
+	for (const std::string kind : { "kingmaker", "aggressive", "lua", "ministry" }) {
+		if (only && kind != only)
+			continue;
+		Server server;
+		NavalGame(server, 11, kind);
+		Vector3 a, b;
+		CarveSea(server, a, b);
+		std::map<uint32_t, std::set<uint32_t>> ferried; // player -> its units that landed
+		std::map<uint32_t, int> enemyBuildings0;
+		auto buildingsOf = [&](uint32_t id) {
+			std::vector<ServerGameObject*> todo{ server.findObject(id) };
+			int count = 0;
+			while (!todo.empty()) {
+				ServerGameObject* o = todo.back();
+				todo.pop_back();
+				if (!o)
+					continue;
+				for (const auto& [type, children] : o->children)
+					for (CommonGameObject* c : children) {
+						auto* u = (ServerGameObject*)c;
+						if (u->deleted)
+							continue;
+						if (u->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+							count++;
+						else if (u->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+							todo.push_back(u);
+					}
+			}
+			return count;
+		};
+		for (int m = 1; m <= minutes; m++) {
+			for (int s = 0; s < 60; s++) {
+				StepServer(server, 50);
+				for (uint32_t id : { 1027u, 1030u })
+					if (ServerGameObject* p = server.findObject(id))
+						for (const Naval::Ferry& f : p->aiController.naval.ferries)
+							if (f.landed > 0) {
+								if (!enemyBuildings0.count(id))
+									enemyBuildings0[id] = buildingsOf(id == 1027 ? 1030 : 1027);
+								ferried[id].insert(f.passengers.begin(), f.passengers.end());
+							}
+			}
+			if (m % 5 == 0 || m == minutes)
+				for (uint32_t id : { 1027u, 1030u })
+					if (ServerGameObject* p = server.findObject(id))
+						printf("NAVAL %s t=%d min player %u: %s\n", kind.c_str(), m, id, Naval::Census(p).c_str());
+		}
+		int playersOk = 0;
+		for (uint32_t id : { 1027u, 1030u }) {
+			ServerGameObject* p = server.findObject(id);
+			if (!p)
+				continue;
+			const Naval::State& st = p->aiController.naval;
+			int kills = 0, fighting = 0, alive = 0;
+			for (uint32_t u : ferried[id]) {
+				ServerGameObject* o = server.findObject(u);
+				const UnitHistory::Record* r = server.unitHistory.find(u);
+				kills += o && !o->deleted ? o->kills : r ? r->kills : 0;
+				if (o && !o->deleted && !(o->flags & ServerGameObject::fTerminated)) {
+					alive++;
+					Order* ord = o->orderConfig.getCurrentOrder();
+					Task* t = ord ? ord->getCurrentTask() : nullptr;
+					ServerGameObject* tg = t ? t->target.get() : nullptr;
+					fighting += tg && AIUtil::IsEnemy(p, tg);
+				}
+			}
+			const int lost = enemyBuildings0.count(id) ? enemyBuildings0[id] - buildingsOf(id == 1027 ? 1030 : 1027) : 0;
+			const bool attacked = kills > 0 || lost > 0 || fighting > 0;
+			std::string mission;
+			if (kind == "ministry")
+				if (auto it = server.ministries.governments.find(id); it != server.ministries.governments.end())
+					mission = ", missions at sea " + std::to_string((int)it->second->board.get("naval.missionsAtSea"));
+			printf("NAVAL %s player %u: docks laid %d, ships ordered %d (%d war boats), ferries %d, landed %d units (%zu ferried: %d alive, %d fighting, %d kills; enemy buildings lost since %d), boat fights %d, coast %d%s\n",
+				kind.c_str(), id, st.docksLaid, st.shipsOrdered, st.warshipsOrdered, st.ferriesSent, st.unitsLanded, ferried[id].size(), alive, fighting, kills, lost,
+				st.shipAttacks, st.coastAttacks, mission.c_str());
+			playersOk += st.docksLaid > 0 && st.shipsOrdered > 0 && st.ferriesSent > 0 && st.unitsLanded > 0 && attacked;
+		}
+		check(playersOk >= 1, kind + ": an AI built a dock and ships, ferried an army across, landed it and attacked (" + std::to_string(playersOk) + " of 2)");
+	}
+	printf("NAVAL %s (%d)\n", failures ? "FAILED" : "all ok", failures);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -12744,6 +13055,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
+{Test_NavalAI, "The AI at sea: a sea across 4 Peaks; a ferry boards, sails and lands; the Kingmaker, aggressive, Lua and ministry AIs each build a dock and ships, ferry an army across and attack"},
 };
 
 void LaunchTest()

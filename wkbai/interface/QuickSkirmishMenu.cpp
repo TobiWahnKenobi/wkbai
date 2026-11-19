@@ -167,6 +167,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiLifeline") aiLifeline = value != 0;
 	else if (name == "aiHomeGuard") aiHomeGuard = value != 0;
 	else if (name == "aiWar") aiWar = value != 0;
+	else if (name == "aiNaval") aiNaval = value != 0;
 	else if (name == "aiMinistries") aiMinistries = value != 0;
 	else if (name == "aiVision") aiVision = std::clamp(value, 0, 1);
 	else if (name == "aiGenerals") aiGenerals = std::clamp(value, 1, 8);
@@ -559,6 +560,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.aiLifeline = aiLifeline;
 		server.aiHomeGuard = aiHomeGuard;
 		server.aiWar = aiWar;
+		server.aiNaval = aiNaval;
 		server.aiMinistries = aiMinistries;
 		server.aiVision = aiVision;
 		server.aiGenerals = aiGenerals;
