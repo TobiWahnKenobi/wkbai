@@ -10935,6 +10935,153 @@ void Test_SmallerItems()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Improved mixed formations (ImprovedFormations, on by default): on 4 Peaks a Line of 8 Spearmen,
+// 6 Archers and 2 Knights of player 1027. Formed up: the Knights on the outermost files, every
+// Spearman's row in front of every Archer's, the places at least the Knight's spacing apart; an
+// Archer member told the melee "Attack" on an enemy takes its own attack's order; the formation's
+// reach of a point only its Archers could shoot at: in reach. Prints "MIXEDF ..." and "MIXEDF
+// result: ok|FAIL".
+void Test_MixedFormation()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("MIXEDF %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+	};
+	const GameSet* gs = server.gameSet.get();
+	ServerGameObject* player = server.findObject(1027);
+	// the enemy: the player of another player's character
+	ServerGameObject* enemyPlayer = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() && o->getPlayer() != player
+			&& o->getPlayer()->blueprint->name != "Neutral Player") {
+			enemyPlayer = o->getPlayer();
+			break;
+		}
+	}
+	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* archerBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Archer");
+	const GameObjBlueprint* knightBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Knight");
+	const GameObjBlueprint* lineBp = gs->findBlueprint(Tags::GAMEOBJCLASS_FORMATION, "Line");
+	if (!player || !enemyPlayer || !spearBp || !archerBp || !knightBp || !lineBp) {
+		printf("MIXEDF not set up: player %d, enemy %d, Spearman %d, Archer %d, Knight %d, Line %d\nMIXEDF result: FAIL\n", player != nullptr,
+			enemyPlayer != nullptr, spearBp != nullptr, archerBp != nullptr, knightBp != nullptr, lineBp != nullptr);
+		return;
+	}
+	// the enemies' units can't wander into the test (the AI off): only the formation's own fights
+	printf("MIXEDF enemy player %u\n", enemyPlayer->id);
+	// beside the player's Manor (its first building)
+	Vector3 at(0, 0, 0);
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && o->getPlayer() == player && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+			at = o->position + Vector3(40, 0, 0);
+			break;
+		}
+	}
+	std::vector<ServerGameObject*> spears, archers, knights;
+	ServerGameObject* formation = server.spawnObject(lineBp, player, at, Vector3(0, 0, 0));
+	auto add = [&](const GameObjBlueprint* bp, int n, std::vector<ServerGameObject*>& list) {
+		for (int i = 0; i < n; i++) {
+			ServerGameObject* u = server.spawnObject(bp, player, at + Vector3((float)(i % 4) * 2.0f, 0, (float)(list.size() / 4) * 2.0f + (bp == archerBp ? 6.0f : bp == knightBp ? 12.0f : 0.0f)), Vector3(0, 0, 0));
+			if (u) {
+				u->setParent(formation);
+				list.push_back(u);
+			}
+		}
+	};
+	add(spearBp, 8, spears);
+	add(archerBp, 6, archers);
+	add(knightBp, 2, knights);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	server.timeManager.unpause();
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// each member's place in the layout: x across, z back from the front row
+	const Matrix m = formation->getWorldMatrix();
+	const Vector3 o = Vector3(0, 0, 0).transform(m), ax = Vector3(1, 0, 0).transform(m) - o, az = Vector3(0, 0, 1).transform(m) - o;
+	auto local = [&](ServerGameObject* u, float& x, float& z) {
+		Vector3 p;
+		if (!FormationController::memberPlace(formation, u, p))
+			return false;
+		const Vector3 d = p - o;
+		x = (d.x * ax.x + d.z * ax.z) / std::max(ax.sqlen2xz(), 1e-6f);
+		z = (d.x * az.x + d.z * az.z) / std::max(az.sqlen2xz(), 1e-6f);
+		return true;
+	};
+	float knightMinX = 1e9f, otherMaxX = 0.0f, spearMaxZ = -1e9f, archerMinZ = 1e9f;
+	bool placed = true;
+	std::vector<std::pair<float, float>> all;
+	for (auto* list : { &spears, &archers, &knights })
+		for (ServerGameObject* u : *list) {
+			float x, z;
+			if (!local(u, x, z)) {
+				placed = false;
+				continue;
+			}
+			all.emplace_back(x, z);
+			if (list == &knights)
+				knightMinX = std::min(knightMinX, std::abs(x));
+			else
+				otherMaxX = std::max(otherMaxX, std::abs(x));
+			if (list == &spears)
+				spearMaxZ = std::max(spearMaxZ, z);
+			if (list == &archers)
+				archerMinZ = std::min(archerMinZ, z);
+		}
+	float nearest = 1e9f;
+	for (size_t i = 0; i < all.size(); i++)
+		for (size_t j = i + 1; j < all.size(); j++)
+			nearest = std::min(nearest, std::hypot(all[i].first - all[j].first, all[i].second - all[j].second));
+	char what[200];
+	check(placed && all.size() == 16, "every member has a place");
+	snprintf(what, sizeof(what), "the Knights on the wings (their |x| at least %.1f, the others' at most %.1f)", knightMinX, otherMaxX);
+	check(knightMinX + 0.01f >= otherMaxX, what);
+	snprintf(what, sizeof(what), "the Spearmen in front (rows back to %.1f), the Archers behind (from %.1f)", spearMaxZ, archerMinZ);
+	check(spearMaxZ <= archerMinZ + 0.01f, what);
+	const float sep = std::min(knightBp->formationSeparationX, knightBp->formationSeparationY);
+	snprintf(what, sizeof(what), "spaced for the widest member: places %.2f m apart at least (the Knight's %.2f)", nearest, sep);
+	check(nearest + 0.01f >= sep, what);
+	// an Archer member sent the melee Attack on an enemy
+	ServerGameObject* enemy = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* e = (ServerGameObject*)co;
+		if (e && !e->deleted && e->getPlayer() == enemyPlayer && e->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+			enemy = e;
+			break;
+		}
+	}
+	const int attack = gs->orders.names.getIndex("Attack");
+	if (enemy && attack >= 0 && !archers.empty()) {
+		{
+			extern bool IsRangedUnit(const ServerGameObject* unit);
+			const int dac = archers[0]->blueprint->defaultAttackCommand;
+			printf("MIXEDF   Archer: default attack command %d \"%s\", ranged %d, parent %s, Attack order %d\n", dac,
+				dac >= 0 && dac < (int)gs->commands.names.size() ? gs->commands.names.getString(dac).c_str() : "-", (int)IsRangedUnit(archers[0]),
+				archers[0]->getParent() ? archers[0]->getParent()->blueprint->getFullName().c_str() : "-", attack);
+		}
+		archers[0]->orderConfig.addOrder(&gs->orders[attack], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, enemy);
+		Order* order = archers[0]->orderConfig.getCurrentOrder();
+		const std::string name = order ? gs->orders.getString(order->blueprint) : std::string("none");
+		check(order && order->blueprint->bpid != attack, "an Archer member told \"Attack\" takes \"" + name + "\"");
+		spears[0]->orderConfig.addOrder(&gs->orders[attack], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, enemy);
+		Order* sorder = spears[0]->orderConfig.getCurrentOrder();
+		check(sorder && sorder->blueprint->bpid == attack, "a Spearman member keeps \"Attack\"");
+	}
+	else
+		check(false, "an enemy character and the Attack order");
+	// reach by kind: a point 20 m from the formation's archers on their own ground is in reach (an
+	// archer's 30 m) even where a 3 m reach would not be (the point's own tile not on the members'
+	// ground: we take a point the Archers stand next to, so the test is that some kind reaches it)
+	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+	check(!OutOfReach(formation, archers.empty() ? at : archers[0]->position, 3.0f), "the formation reaches a point beside its own Archers");
+	printf("MIXEDF result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
+}
+
 // Associations mirrored to the client (NETCLIMSG_OBJECT_ASSOCIATION): a save loaded with a local
 // client ("assocMirror": { "path": "<.sav>" }, default the AI play test's PERFORMANCE3), every
 // non-missile object's associates the same on both sides; after 30 game seconds of play again;
@@ -11026,6 +11173,30 @@ void Test_AssocMirror()
 	// the Druids' Dark Portal condition on the client, as on the server
 	const int eq = server.gameSet->equations.names.getIndex("Don't Already have a portal");
 	int druids = 0;
+	// (a save without one: an Arch Druid of the first player, beside its first character)
+	{
+		bool any = false;
+		ServerGameObject* owner = nullptr;
+		Vector3 where;
+		for (const auto& [id, co] : server.idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+				continue;
+			if (o->blueprint->name.find("Druid") != std::string::npos)
+				any = true;
+			if (!owner && o->getPlayer()) {
+				owner = o->getPlayer();
+				where = o->position + Vector3(3, 0, 0);
+			}
+		}
+		const GameObjBlueprint* druidBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Arch Druid");
+		if (!any && owner && druidBp) {
+			server.spawnObject(druidBp, owner, where, Vector3(0, 0, 0));
+			pump();
+		}
+		else if (!any)
+			printf("ASSOC   no Arch Druid type (%d) or owner (%d)\n", druidBp != nullptr, owner != nullptr);
+	}
 	if (eq >= 0)
 		for (const auto& [id, co] : server.idmap) {
 			ServerGameObject* o = (ServerGameObject*)co;
@@ -11043,6 +11214,8 @@ void Test_AssocMirror()
 			druids++;
 		}
 	printf("ASSOC druids checked: %d\n", druids);
+	if (!druids)
+		failures++;
 	printf("ASSOC result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
 }
 
@@ -12012,6 +12185,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 {Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
 {Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
+{Test_MixedFormation, "Improved mixed formations: Knights on the wings, Spearmen in front of Archers, the widest spacing, an Archer member's Attack its own, reach by kind"},
 };
 
 void LaunchTest()

@@ -26,6 +26,7 @@
 #include "AIUtil.h"
 #include "Model.h"
 #include "PeasantLodging.h"
+#include "gameset/command.h"
 #include <map>
 #include <cstdio>
 
@@ -424,10 +425,38 @@ std::unique_ptr<Task> Task::create(int id, const TaskBlueprint* blueprint, Order
 
 
 
+bool ImprovedFormations(); // FormationController.cpp
+bool IsRangedUnit(const ServerGameObject* unit); // FormationController.cpp
+
 Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
 	if (gameobj->flags & CommonGameObject::fTerminated)
 		return nullptr;
+	// Improved formations: a ranged member of a formation sent to fight with the melee "Attack" (the
+	// Formation Army's "Attack Victims", a mixed formation charging) takes its own attack's order
+	// instead (its DEFAULT_ATTACK_COMMAND's: Fire Arrow, Fire Bullet), so it shoots rather than
+	// runs in with the melee
+	if (target && orderBlueprint && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && gameobj->parent
+		&& gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && Server::instance && Server::instance->gameSet) {
+		static const GameSet* of = nullptr;
+		static int attackOrder = -1;
+		const GameSet* gs = Server::instance->gameSet.get();
+		if (of != gs) {
+			of = gs;
+			attackOrder = gs->orders.names.getIndex("Attack");
+		}
+		// (the command's USE_ORDER, or the order of its name: "Fire Arrow" has none and runs a start
+		// sequence that sends its archer to an army, Mechanics\Fire Arrow.cpp; its order "Fire
+		// Arrow" shoots)
+		if (orderBlueprint->bpid == attackOrder && ImprovedFormations() && IsRangedUnit(gameobj)) {
+			const int dac = gameobj->blueprint->defaultAttackCommand;
+			const Command* cmd = gs->commands.getPointer(dac);
+			if (cmd && cmd->order)
+				orderBlueprint = cmd->order;
+			else if (const int byName = gs->orders.names.getIndex(gs->commands.names.getString(dac)); byName >= 0)
+				orderBlueprint = &gs->orders[byName];
+		}
+	}
 	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
 }
 
@@ -1061,8 +1090,46 @@ static ServerGameObject* FirstCharacter(ServerGameObject* obj, int depth = 0)
 // spearman could climb drew every army of the enemy's, which stood at the foot of the slope (or
 // formed up and broke again) for the rest of the game. Ranged units find a reachable tile within
 // their range, and shoot.
+
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+
+// Improved formations: one character for each kind of member (movement class, ranged or not),
+// through formations (and the armies under an army: throughArmies), each kind's first in the
+// children's order
+static void MemberKinds(ServerGameObject* obj, bool throughArmies, std::map<int, ServerGameObject*>& kinds, int depth = 0)
+{
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		if (!obj->deleted)
+			kinds.emplace(MovementController::movementClass(obj->blueprint) * 2 + (IsRangedUnit(obj) ? 1 : 0), obj);
+		return;
+	}
+	if (depth > 4 || !(obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || (throughArmies && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)))
+		return;
+	for (const auto& [type, children] : obj->children)
+		for (CommonGameObject* c : children)
+			MemberKinds((ServerGameObject*)c, throughArmies, kinds, depth + 1);
+}
+
+// a mixed formation's (or army's) target is out of reach when no kind of its members can get
+// within its own reach of it (a ranged one 30 m, else 3 m): the spearmen below a hilltop scout
+// don't end the formation's attack while its archers can shoot at it. A few kinds at most, one
+// region test each.
+static bool KindsOutOfReach(ServerGameObject* obj, const Vector3& point, bool throughArmies)
+{
+	std::map<int, ServerGameObject*> kinds;
+	MemberKinds(obj, throughArmies, kinds);
+	if (kinds.empty())
+		return false;
+	for (const auto& [kind, rep] : kinds)
+		if (!OutOfReach(rep, point, IsRangedUnit(rep) ? 30.0f : 3.0f))
+			return false;
+	return true;
+}
+
 bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 {
+	if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && ImprovedFormations())
+		return KindsOutOfReach(unit, point, false);
 	ServerGameObject* mover = FirstCharacter(unit);
 	if (!mover)
 		return false;
@@ -1092,6 +1159,8 @@ bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
 {
 	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
 		return false;
+	if (ImprovedFormations())
+		return KindsOutOfReach(army, target->position, true);
 	std::function<ServerGameObject*(ServerGameObject*, int)> first = [&](ServerGameObject* o, int depth) -> ServerGameObject* {
 		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 			return o->deleted ? nullptr : o;

@@ -405,6 +405,10 @@ namespace {
 		// "single_click_selects_all_military_units": off, a single click selects one unit and a
 		// double click all of its type nearby, for every unit
 		settingToggle("singleClickSelectsAll", "mouse", "Single click selects all units", true);
+		// wkbai's improved mixed formations (FormationController.cpp ImprovedFormations): spaced for
+		// the widest member, cavalry on the wings, melee in front, ranged behind, archers shooting
+		// when the formation fights; off, as the original (from the next game)
+		settingToggle("improvedFormations", "mouse", "Improved mixed formations", true);
 
 		// Sound
 		{
