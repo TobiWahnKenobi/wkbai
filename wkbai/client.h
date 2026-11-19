@@ -28,6 +28,7 @@ struct NetLink;
 struct Command;
 struct Terrain;
 struct ClientInterface;
+struct FogOfWar;
 struct Client;
 struct CameraPath;
 
@@ -146,6 +147,9 @@ struct Client : SpecificGameState<ClientGameObject, ProgramType::CLIENT>
 	size_t cameraLoopFrom = 0;
 
 	ClientInterface *cliInterface;
+	// the player's memory of the trees under the fog of war (FogOfWar, the client interface's):
+	// told before a server message changes a tree, and of new objects
+	FogOfWar* treeMemory = nullptr;
 
 	bool localServer;
 	CliGORef clientPlayer;

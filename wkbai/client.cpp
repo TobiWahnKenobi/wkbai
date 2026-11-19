@@ -18,6 +18,7 @@
 #include <algorithm>
 #include "terrain.h"
 #include "interface/ClientInterface.h"
+#include "interface/FogOfWar.h"
 #include <SDL3/SDL_timer.h>
 #include "gameset/ScriptContext.h"
 #include <cmath>
@@ -245,6 +246,8 @@ void Client::tick()
 				finishedPlayers.clear();
 				disguises.clear();
 				fogReveals.clear();
+				if (treeMemory)
+					treeMemory->resetTrees();
 				minimapAlerts.clear();
 				warningPlaces.clear();
 				gameInterfaceEnabled = true;
@@ -296,6 +299,9 @@ void Client::tick()
 				obj->appearance = appear;
 				if (blueprint->bpClass == Tags::GAMEOBJCLASS_LEVEL)
 					level = obj;
+				// a tree that comes into being out of the player's sight: unknown to it until seen
+				if (treeMemory)
+					treeMemory->treeCreated(this, obj);
 				break;
 			}
 			case NETCLIMSG_OBJECT_ITEM_SET: {
@@ -305,6 +311,8 @@ void Client::tick()
 				info("Object %u changed its item \"%s\" to the value %f.\n", objid, gameSet->items.names.getString(index).c_str(), value);
 				auto* obj = findObject(objid);
 				if (!obj) printf("CLI-WARN: Obj %i from message does not exist\n", objid);
+				if (obj && treeMemory)
+					treeMemory->beforeTreeChange(this, obj);
 				if (obj)
 					obj->items[index] = value;
 				break;
@@ -353,6 +361,8 @@ void Client::tick()
 				Vector3 pos = br.readVector3();
 				info("Object %u teleported to (%f,%f,%f)\n", objid, pos.x, pos.y, pos.z);
 				if (ClientGameObject *obj = findObject(objid)) {
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->updatePosition(pos);
 				}
 				break;
@@ -362,6 +372,8 @@ void Client::tick()
 				Vector3 ori = br.readVector3();
 				info("Object %u oriented to (%f,%f,%f)\n", objid, ori.x, ori.y, ori.z);
 				if (ClientGameObject *obj = findObject(objid)) {
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->orientation = ori;
 				}
 				break;
@@ -371,6 +383,8 @@ void Client::tick()
 				uint32_t subtype = br.readUint32();
 				uint32_t appear = br.readUint32();
 				if (ClientGameObject *obj = findObject(objid)) {
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->subtype = subtype;
 					obj->appearance = appear;
 				}
@@ -395,6 +409,8 @@ void Client::tick()
 			case NETCLIMSG_OBJECT_ANIM_SET: {
 				uint32_t objid = br.readUint32();
 				if (ClientGameObject *obj = findObject(objid)) {
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->animationIndex = br.readUint32();
 					obj->animationVariant = br.readUint32();
 					obj->animStartTime = br.readFloat();
@@ -425,6 +441,9 @@ void Client::tick()
 			case NETCLIMSG_OBJECT_REMOVED: {
 				uint32_t objid = br.readUint32();
 				if (ClientGameObject *obj = findObject(objid)) {
+					// a tree out of sight: remembered standing
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					// remove from parent's children
 					auto &vec = obj->parent->children.at(obj->blueprint);
 					vec.erase(std::find(vec.begin(), vec.end(), obj));
@@ -440,6 +459,10 @@ void Client::tick()
 				uint32_t postbpid = br.readUint32();
 				if (ClientGameObject *obj = findObject(objid)) {
 					const GameObjBlueprint *postbp = gameSet->getBlueprint(postbpid);
+					// a tree felled out of sight (into its fallen version): remembered standing
+					const bool wasTree = treeMemory && treeMemory->isTree(this, obj);
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					// remove from parent's children
 					auto &vec = obj->parent->children.at(obj->blueprint);
 					vec.erase(std::find(vec.begin(), vec.end(), obj));
@@ -450,6 +473,9 @@ void Client::tick()
 					obj->blueprint = postbp;
 					// the footprint: the old one freed, the new one taken (as the server's)
 					updateOccupiedTiles(obj, obj->position, obj->orientation, obj->position, obj->orientation, prevbp);
+					// something else turned into a tree out of sight: unknown until seen
+					if (treeMemory && !wasTree && !treeMemory->isSeen(obj->position))
+						treeMemory->treeCreated(this, obj);
 				}
 				break;
 			}
@@ -683,8 +709,11 @@ void Client::tick()
 			case NETCLIMSG_OBJECT_SCALE_SET: {
 				auto id = br.readUint32();
 				Vector3 scale = br.readVector3();
-				if (ClientGameObject* obj = findObject(id))
+				if (ClientGameObject* obj = findObject(id)) {
+					if (treeMemory)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->scale = scale;
+				}
 				break;
 			}
 			case NETCLIMSG_HIDE_GAME_TEXT_WINDOW: {
@@ -727,6 +756,8 @@ void Client::tick()
 				uint32_t objid = br.readUint32();
 				uint8_t flags = br.readUint8();
 				if (ClientGameObject* obj = findObject(objid)) {
+					if (treeMemory && obj->flags != flags)
+						treeMemory->beforeTreeChange(this, obj);
 					obj->flags = flags;
 				}
 				break;
@@ -822,7 +853,8 @@ void Client::tick()
 			case NETCLIMSG_SOUND_AT_POSITION: {
 				uint32_t objid; int soundTag; Vector3 targetPos; uint8_t randval;
 				br.readTo(objid, soundTag, targetPos, randval);
-				if (ClientGameObject* from = findObject(objid)) {
+				// (a tree's out of the player's sight: its fall unheard, FogOfWar)
+				if (ClientGameObject* from = findObject(objid); from && !(treeMemory && treeMemory->hidesTreeEffect(this, from))) {
 					std::string path; float refDist, maxDist;
 					std::tie(path, refDist, maxDist) = from->blueprint->getSound(soundTag, from->subtype, (targetPos - camera.position).len3());
 					if (!path.empty()) {
@@ -850,7 +882,7 @@ void Client::tick()
 			case NETCLIMSG_SPECIAL_EFFECT_PLAYED_AT_POS: {
 				uint32_t objid; int sfxTag; Vector3 pos;
 				br.readTo(objid, sfxTag, pos);
-				if (auto* obj = findObject(objid)) {
+				if (auto* obj = findObject(objid); obj && !(treeMemory && treeMemory->hidesTreeEffect(this, obj))) {
 					if (Model* sfxmodel = obj->blueprint->getSpecialEffect(sfxTag)) {
 						specialEffects.emplace_back();
 						auto& sfx = specialEffects.back();
@@ -865,7 +897,7 @@ void Client::tick()
 			case NETCLIMSG_SPECIAL_EFFECT_PLAYED_BETWEEN: {
 				uint32_t objid; int sfxTag; Vector3 pos1, pos2;
 				br.readTo(objid, sfxTag, pos1, pos2);
-				if (auto* obj = findObject(objid)) {
+				if (auto* obj = findObject(objid); obj && !(treeMemory && treeMemory->hidesTreeEffect(this, obj))) {
 					if (Model* sfxmodel = obj->blueprint->getSpecialEffect(sfxTag)) {
 						Vector3 dir = pos2 - pos1;
 						float dist = dir.len3();
@@ -884,7 +916,7 @@ void Client::tick()
 			case NETCLIMSG_ATTACHED_SPECIAL_EFFECT_PLAYED: {
 				uint32_t objid; int sfxTag; uint32_t targetid;
 				br.readTo(objid, sfxTag, targetid);
-				if (auto* obj = findObject(objid)) {
+				if (auto* obj = findObject(objid); obj && !(treeMemory && treeMemory->hidesTreeEffect(this, obj))) {
 					if (auto* target = findObject(targetid)) {
 						if (Model* sfxmodel = obj->blueprint->getSpecialEffect(sfxTag)) {
 							specialEffects.emplace_back();

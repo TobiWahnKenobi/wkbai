@@ -10,6 +10,10 @@
 #include "../gameset/gameset.h"
 #include "../gameset/ScriptContext.h"
 #include "../Model.h"
+#include "../server.h"
+#include "../util/LoadingProgress.h"
+#include <cstdio>
+#include <cstdlib>
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
 #include <cmath>
@@ -137,6 +141,9 @@ void FogOfWar::updateMemory(Client* client)
 {
 	if (memoryLevel != client->getLevel() || memoryPlayer != client->clientPlayer.get()) {
 		remembered.clear();
+		treeGhosts.clear();
+		treeUnknown.clear();
+		treesOn = false;
 		memoryLevel = client->getLevel();
 		memoryPlayer = client->clientPlayer.get();
 	}
@@ -155,31 +162,231 @@ void FogOfWar::updateMemory(Client* client)
 				self(child, self);
 				if (!isRemembered(client, child) || (child->flags & CommonGameObject::fTerminated) || !isBuildingSeen(child->position))
 					continue;
-				auto& copy = remembered[child->id];
-				if (!copy || copy->blueprint != child->blueprint)
-					copy = std::make_unique<ClientGameObject>(child->id, child->blueprint);
-				copy->position = child->position;
-				copy->orientation = child->orientation;
-				copy->scale = child->scale;
-				copy->subtype = child->subtype;
-				copy->appearance = child->appearance;
-				copy->color = child->getPlayer()->color;
-				copy->animationIndex = child->animationIndex;
-				copy->animationVariant = child->animationVariant;
-				copy->animClamped = child->animClamped;
-				// the frame it had then, held (a building going up stays as far as it was)
-				uint32_t animTime = (uint32_t)((client->timeManager.currentTime - child->animStartTime) * child->animSpeed * 1000.0f);
-				if (child->animSynchronizedTask != -1) {
-					CliScriptContext ctx{ client, (ClientGameObject*)child };
-					const float frac = client->gameSet->tasks[child->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
-					Model* model = child->getModel();
-					animTime = model ? (uint32_t)(model->getDuration() * frac * 1000.0f) : 0;
-				}
-				copy->sceneEntity.animTime = animTime;
-				copy->flags = CommonGameObject::fRenderable;
+				copyLook(client, child, remembered[child->id]);
 			}
 	};
 	walk(client->getLevel(), walk);
+	updateTrees(client);
+}
+
+void FogOfWar::copyLook(Client* client, CommonGameObject* child, std::unique_ptr<ClientGameObject>& copy)
+{
+	if (!copy || copy->blueprint != child->blueprint)
+		copy = std::make_unique<ClientGameObject>(child->id, child->blueprint);
+	copy->position = child->position;
+	copy->orientation = child->orientation;
+	copy->scale = child->scale;
+	copy->tilted = child->tilted;
+	copy->groundUp = child->groundUp;
+	copy->subtype = child->subtype;
+	copy->appearance = child->appearance;
+	CommonGameObject* owner = child->getPlayer();
+	copy->color = owner ? owner->color : 0;
+	copy->animationIndex = child->animationIndex;
+	copy->animationVariant = child->animationVariant;
+	copy->animClamped = child->animClamped;
+	// the frame it had then, held (a building going up stays as far as it was)
+	uint32_t animTime = (uint32_t)std::max(0.0f, (client->timeManager.currentTime - child->animStartTime) * child->animSpeed * 1000.0f);
+	if (child->animSynchronizedTask != -1 && client->gameSet) {
+		CliScriptContext ctx{ client, (ClientGameObject*)child };
+		const float frac = client->gameSet->tasks[child->animSynchronizedTask].synchAnimationToFraction->eval(&ctx);
+		Model* model = child->getModel();
+		animTime = model ? (uint32_t)(model->getDuration() * frac * 1000.0f) : 0;
+	}
+	copy->sceneEntity.animTime = animTime;
+	copy->flags = CommonGameObject::fRenderable;
+}
+
+void FogOfWar::lookUpTreeItems(Client* client)
+{
+	if (treeItemsOf == client->gameSet.get())
+		return;
+	treeItemsOf = client->gameSet.get();
+	treeItem = client->gameSet ? client->gameSet->items.names.getIndex("I am a tree") : -1;
+	workedItem = client->gameSet ? client->gameSet->items.names.getIndex("I'm Being Worked at") : -1;
+}
+
+bool FogOfWar::isTree(Client* client, const CommonGameObject* obj) const
+{
+	if (!obj || !obj->blueprint)
+		return false;
+	const int cls = obj->blueprint->bpClass;
+	if (cls != Tags::GAMEOBJCLASS_CONTAINER && cls != Tags::GAMEOBJCLASS_PROP)
+		return false;
+	const std::string& name = obj->blueprint->name;
+	if (name.find("Tree") != std::string::npos)
+		return name.find("Bird") == std::string::npos;
+	return treeItem >= 0 && obj->blueprint->startItemValues.count(treeItem) != 0;
+}
+
+bool FogOfWar::treeHiddenLookUp(const ClientGameObject* obj) const
+{
+	const int cls = obj->blueprint->bpClass;
+	if (cls != Tags::GAMEOBJCLASS_CONTAINER && cls != Tags::GAMEOBJCLASS_PROP)
+		return false;
+	return (treeGhosts.count(obj->id) || treeUnknown.count(obj->id)) && !isSeen(obj->position);
+}
+
+void FogOfWar::resetTrees()
+{
+	treeGhosts.clear();
+	treeUnknown.clear();
+	treesOn = false;
+	treesDirty = false;
+	// the next update starts the memory afresh, for the new game's level
+	memoryLevel = nullptr;
+}
+
+void FogOfWar::beforeTreeChange(Client* client, ClientGameObject* obj)
+{
+	if (!treesOn || !memoryOn || !obj || tiles.empty())
+		return;
+	// already remembered as it was, or not known at all
+	if (treeGhosts.count(obj->id) || treeUnknown.count(obj->id))
+		return;
+	lookUpTreeItems(client);
+	if (!isTree(client, obj) || isSeen(obj->position))
+		return;
+	copyLook(client, obj, treeGhosts[obj->id]);
+	treesDirty = true;
+}
+
+void FogOfWar::treeCreated(Client* client, ClientGameObject* obj)
+{
+	if (!treesOn || !memoryOn || !obj)
+		return;
+	lookUpTreeItems(client);
+	if (!isTree(client, obj) || treeGhosts.count(obj->id))
+		return;
+	// (its position comes with the next message: the next update shows it if it is in sight)
+	treeUnknown.insert(obj->id);
+	treesDirty = true;
+}
+
+bool FogOfWar::hidesTreeEffect(Client* client, ClientGameObject* obj) const
+{
+	if (!memoryOn || !obj || tiles.empty() || isSeen(obj->position))
+		return false;
+	const_cast<FogOfWar*>(this)->lookUpTreeItems(client);
+	return isTree(client, obj);
+}
+
+void FogOfWar::updateTrees(Client* client)
+{
+	if (!memoryOn || tiles.empty())
+		return;
+	lookUpTreeItems(client);
+	// begun at the first update of a game, once it has loaded: every tree known as it stands, or
+	// the memory as the save had it
+	if (!treesOn) {
+		if (LoadingActive())
+			return;
+		treesOn = true;
+		treeGhosts.clear();
+		treeUnknown.clear();
+		if (Server* server = client->localServer ? Server::instance : nullptr; server && client->clientPlayer)
+			loadTreeMemory(client, server->getTreeMemory(client->clientPlayer->id));
+		treesDirty = false;
+	}
+	// seen again: the live tree as it is now (or gone)
+	for (auto it = treeGhosts.begin(); it != treeGhosts.end();)
+		if (isSeen(it->second->position)) {
+			it = treeGhosts.erase(it);
+			treesDirty = true;
+		}
+		else
+			++it;
+	for (auto it = treeUnknown.begin(); it != treeUnknown.end();) {
+		CommonGameObject* live = client->findObject(*it);
+		if (!live || isSeen(live->position)) {
+			it = treeUnknown.erase(it);
+			treesDirty = true;
+		}
+		else
+			++it;
+	}
+	// for a save game of the server on this machine
+	if (treesDirty && client->localServer && Server::instance && client->clientPlayer) {
+		Server::instance->setTreeMemory(client->clientPlayer->id, treeMemoryText(client));
+		treesDirty = false;
+	}
+}
+
+std::string FogOfWar::treeMemoryText(Client* client) const
+{
+	// ids ascending: the same memory gives the same text
+	std::vector<uint32_t> ids;
+	for (const auto& [id, copy] : treeGhosts)
+		ids.push_back(id);
+	std::sort(ids.begin(), ids.end());
+	std::string out;
+	char line[512];
+	for (uint32_t id : ids) {
+		const ClientGameObject* g = treeGhosts.at(id).get();
+		const Vector3 &p = g->position, &o = g->orientation, &s = g->scale, &u = g->groundUp;
+		snprintf(line, sizeof(line), "ghost %u %d \"%s\" %d %d %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %d %.9g %.9g %.9g %d %d %d %u\n",
+			id, g->blueprint->bpClass, g->blueprint->name.c_str(), g->subtype, g->appearance, p.x, p.y, p.z, o.x, o.y, o.z, s.x, s.y, s.z,
+			(int)g->tilted, u.x, u.y, u.z, g->animationIndex, g->animationVariant, (int)g->animClamped, g->sceneEntity.animTime);
+		out += line;
+	}
+	ids.assign(treeUnknown.begin(), treeUnknown.end());
+	std::sort(ids.begin(), ids.end());
+	for (uint32_t id : ids)
+		out += "unknown " + std::to_string(id) + "\n";
+	return out;
+}
+
+void FogOfWar::loadTreeMemory(Client* client, const std::string& text)
+{
+	if (!client->gameSet)
+		return;
+	size_t start = 0;
+	while (start < text.size()) {
+		size_t end = text.find('\n', start);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = text.substr(start, end - start);
+		start = end + 1;
+		uint32_t id = 0;
+		if (line.rfind("unknown ", 0) == 0) {
+			id = (uint32_t)std::strtoul(line.c_str() + 8, nullptr, 10);
+			if (client->findObject(id))
+				treeUnknown.insert(id);
+			continue;
+		}
+		if (line.rfind("ghost ", 0) != 0)
+			continue;
+		int cls = -1;
+		int n = 0;
+		if (sscanf(line.c_str(), "ghost %u %d \"%n", &id, &cls, &n) < 2 || n <= 0)
+			continue;
+		const size_t q = line.find('"', (size_t)n);
+		if (q == std::string::npos || cls < 0 || cls >= Tags::GAMEOBJCLASS_COUNT)
+			continue;
+		const GameObjBlueprint* bp = client->gameSet->findBlueprint(cls, line.substr((size_t)n, q - (size_t)n));
+		if (!bp)
+			continue;
+		int subtype = 0, appearance = 0, tilted = 0, anim = 0, variant = 0, clamped = 0;
+		unsigned frame = 0;
+		Vector3 p, o, s, u;
+		if (sscanf(line.c_str() + q + 1, " %d %d %f %f %f %f %f %f %f %f %f %d %f %f %f %d %d %d %u", &subtype, &appearance, &p.x, &p.y, &p.z,
+			&o.x, &o.y, &o.z, &s.x, &s.y, &s.z, &tilted, &u.x, &u.y, &u.z, &anim, &variant, &clamped, &frame) != 19)
+			continue;
+		auto copy = std::make_unique<ClientGameObject>(id, bp);
+		copy->subtype = subtype;
+		copy->appearance = appearance;
+		copy->position = p;
+		copy->orientation = o;
+		copy->scale = s;
+		copy->tilted = tilted != 0;
+		copy->groundUp = u;
+		copy->animationIndex = anim;
+		copy->animationVariant = variant;
+		copy->animClamped = clamped != 0;
+		copy->sceneEntity.animTime = frame;
+		copy->flags = CommonGameObject::fRenderable;
+		treeGhosts[id] = std::move(copy);
+	}
 }
 
 bool FogOfWar::isSeen(const Vector3& position) const

@@ -667,6 +667,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			return;
 		if (fogOn && !remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 			return;
+		// and the trees as last seen
+		if (fogOn && !remembered && fogOfWar.treeHidden(obj))
+			return;
 		// Hidden when all its display categories are toggled off
 		const uint8_t categories = obj->blueprint->minimapCategories;
 		if (categories && !(categories & ~minimapHiddenCategories))
@@ -691,10 +694,14 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	};
 	if (client->getLevel())
 		drawDots(client->getLevel(), drawDots);
-	if (fogOn)
+	if (fogOn) {
 		for (const auto& [id, copy] : fogOfWar.remembered)
 			if (!fogOfWar.isBuildingSeen(copy->position))
 				drawDot(copy.get(), true);
+		for (const auto& [id, copy] : fogOfWar.treeGhosts)
+			if (!fogOfWar.isSeen(copy->position))
+				drawDot(copy.get(), true);
+	}
 	// the selection keys' pings: a ring shrinking onto the object for a second and a half
 	{
 		const uint32_t now = SDL_GetTicks();
@@ -3275,6 +3282,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	// and enemy buildings out of sight: drawn as last seen (FogOfWar::remembered) instead
 	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fogOfWarOn() && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 		return;
+	// and trees changed out of sight: drawn as last seen (FogOfWar::treeGhosts), new ones not at all
+	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
+		return;
 
 	static const float tolerance = 25.0f;
 	// (with the ray-traced shadows at a low sun an object off the view may cast its shadow into
@@ -5449,7 +5459,10 @@ void ClientInterface::iter()
 		// (with Extend map, drawn 40 tiles on over its land: further than any sight reaches past
 		// the border, so the land beyond is unseen alike)
 		fogOfWar.drawPad = terrainRenderer && terrainRenderer->extendedTiles() > 0 ? 40 : 0;
-		fogOfWar.update(client);
+	// the trees as last seen (FogOfWar): told of the server's changes to them
+	client->treeMemory = &fogOfWar;
+	fogOfWar.memoryOn = fogOn;
+	fogOfWar.update(client);
 	if (postGfx) {
 		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
 		postGfx->BeginPostProcessing(client->getLevel() && (effects || fogOn), UseEnhancedRenderers(gfx));
@@ -5641,10 +5654,14 @@ void ClientInterface::iter()
 		if (client->getLevel())
 			drawObject(client->getLevel());
 		drawExtendedTrees();
-		if (fogOfWarOn())
+		if (fogOfWarOn()) {
 			for (const auto& [id, copy] : fogOfWar.remembered)
 				if (!fogOfWar.isBuildingSeen(copy->position))
 					drawObject(copy.get(), true);
+			for (const auto& [id, copy] : fogOfWar.treeGhosts)
+				if (!fogOfWar.isSeen(copy->position))
+					drawObject(copy.get(), true);
+		}
 		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
 		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
 		// The particle renderer only draws sprites; these were blank squares before.
