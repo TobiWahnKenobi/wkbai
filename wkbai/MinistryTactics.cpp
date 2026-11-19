@@ -13,6 +13,7 @@
 
 #include "MinistryDepartments.h"
 #include "AIUtil.h"
+#include "Naval.h"
 #include "server.h"
 #include "gameset/gameset.h"
 #include "gameset/command.h"
@@ -169,7 +170,11 @@ int OpeningShort(Government& g)
 	// (the floor by the map: 12 with an enemy starting within 700 m, 8 further away; improvement 6)
 	const double nearest = g.board.get("map.nearestEnemy", -1.0);
 	const int floor = (int)Tune("openingFloor", 12.0f) - (nearest >= 0.0 && nearest > 700.0 ? 4 : 0);
-	const int want = std::min((int)Tune("openingCap", 60.0f), std::max(floor, (int)std::ceil(most * Tune("openingFactor", 1.2f))));
+	int want = std::min((int)Tune("openingCap", 60.0f), std::max(floor, (int)std::ceil(most * Tune("openingFactor", 1.2f))));
+	// (on an island, the sea the only way in: no land rush can come, so a guard of 4, and the
+	// peasants aren't held for one; on 3 Isles the guard kept the economy small for 16 minutes)
+	if (me->aiController.naval.need == Naval::NEED_ONLY)
+		want = std::min(want, 4);
 	const int have = me->aiController.fighters();
 	g.board.report("opening.guard", want);
 	return std::max(0, want - have);

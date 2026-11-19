@@ -294,7 +294,7 @@ namespace {
 	// the safe shore to land at for a target: in the target's land region, in the sea the ship
 	// sails, within 350 m of it; the nearest, but away from enemies and towers (a tower or soldier
 	// within 60 m costs as much as 40 m more of walk) and not under the target's own walls
-	Naval::Ferry LandingFor(ServerGameObject* player, int boatRegion, const Vector3& at, Naval::Ferry f, bool& ok)
+	Naval::Ferry LandingFor(ServerGameObject* player, int boatRegion, const Vector3& at, Naval::Ferry f, bool& ok, const Vector3* avoid = nullptr)
 	{
 		ok = false;
 		const int boatCls = MovementController::movementClass(g_ids.cog), landCls = MovementController::movementClass(g_ids.land);
@@ -314,9 +314,11 @@ namespace {
 				}
 		if (found.empty())
 			return f;
-		// a sample 15 m apart at least, nearest first
+		// a sample 15 m apart at least, nearest first (not by a landing that failed)
 		std::vector<Shore> sample;
 		for (const Shore& s : found) {
+			if (avoid && (s.water - *avoid).sqlen2xz() < 25.0f * 25.0f)
+				continue;
 			if (sample.size() >= 40)
 				break;
 			if (std::none_of(sample.begin(), sample.end(), [&](const Shore& o) { return (o.water - s.water).sqlen2xz() < 15.0f * 15.0f; }))
@@ -364,16 +366,48 @@ namespace {
 		st.need = Naval::NEED_NONE;
 		st.enemy = 0;
 		ServerGameObject* home = Home(player);
-		if (!home || !g_ids.cog || !g_ids.land)
+		if (!home || !g_ids.cog || !g_ids.land) {
+			if (was == Naval::NEED_UNKNOWN)
+				Log(player, "the map: no home");
 			return;
+		}
 		st.home = home->position;
 		const int boatCls = MovementController::movementClass(g_ids.cog), landCls = MovementController::movementClass(g_ids.land);
 		const int homeRegion = RegionNear(landCls, st.home);
-		if (homeRegion < 0)
+		if (homeRegion < 0) {
+			if (was == Naval::NEED_UNKNOWN)
+				Log(player, "the map: the home (%.0f, %.0f) on no land region", st.home.x, st.home.z);
 			return;
+		}
 		const Shore hs = ShoreNear(boatCls, -1, landCls, homeRegion, st.home, 100);
-		if (!hs.ok)
+		if (!hs.ok) {
+			if (was == Naval::NEED_UNKNOWN) {
+				// (why: how many tiles round home a boat could stand on at all)
+				int boatTiles = 0, wet = 0;
+				const int cx = TileX(st.home.x), cz = TileX(st.home.z);
+				for (int z = cz - 100; z <= cz + 100; z++)
+					for (int x = cx - 100; x <= cx + 100; x++)
+						if (InMap(x, z)) {
+							boatTiles += !MovementController::isTileBlockedFast(boatCls, x, z);
+							const TerrainTile* tt = Srv()->terrain->getPlayableTile(x, z);
+							wet += tt && tt->fullOfWater;
+						}
+				std::map<std::string, int> groups;
+				for (int z = cz - 100; z <= cz + 100; z++)
+					for (int x = cx - 100; x <= cx + 100; x++)
+						if (InMap(x, z))
+							if (const TerrainTile* tt = Srv()->terrain->getPlayableTile(x, z); tt && tt->fullOfWater && tt->texture && tt->texture->grp) {
+								const auto& gs = Srv()->gameSet->associatedTileTexGroups;
+								auto it = gs.find(tt->texture->grp->name);
+								groups[tt->texture->grp->name + "=" + (it == gs.end() ? std::string("none") : Srv()->gameSet->terrains.getString(it->second))]++;
+							}
+				std::string list;
+				for (const auto& [g, n] : groups)
+					list += " " + g + ":" + std::to_string(n);
+				Log(player, "the map: no shore within 500 m of home (%.0f, %.0f): %d tiles under water, %d a boat can stand on; under water:%s", st.home.x, st.home.z, wet, boatTiles, list.c_str());
+			}
 			return; // no sea by this home
+		}
 		float bestScore = 1e30f;
 		for (ServerGameObject* e : Players()) {
 			if (e == player || !AIUtil::IsEnemy(player, e) || (e->flags & ServerGameObject::fTerminated))
@@ -497,7 +531,7 @@ namespace {
 	// round the palace 40 to 150 m out, by the game's placement rule
 	void LayVillage(ServerGameObject* player, Naval::State& st)
 	{
-		if (!g_ids.villageFoundation || st.need != Naval::NEED_ONLY || Now() < 240.0f || Now() < st.nextVillageTry)
+		if (!g_ids.villageFoundation || st.need != Naval::NEED_ONLY || Now() - st.start < 240.0f || Now() < st.nextVillageTry)
 			return;
 		if (g_ids.canBuildDock < 0 || player->getItem(g_ids.canBuildDock) > 0.0f)
 			return;
@@ -802,7 +836,10 @@ namespace {
 				if (now - f.stateSince > 240.0f) {
 					bool ok = false;
 					const int sea = MovementController::terrainRegion(MovementController::movementClass(ship->blueprint), TileX(ship->position.x), TileX(ship->position.z));
-					f = LandingFor(player, sea, ship->position, f, ok);
+					const Vector3 failed = f.landing;
+					Naval::Ferry g = LandingFor(player, sea, f.targetAt, f, ok, &failed);
+					if (ok)
+						f.landing = g.landing;
 					f.stateSince = now;
 				}
 				AIController::moveUnitsTo({ ship }, player, f.landing);
@@ -836,7 +873,8 @@ namespace {
 				if (now - f.stateSince > 12.0f) {
 					bool ok = false;
 					const int sea = MovementController::terrainRegion(MovementController::movementClass(ship->blueprint), TileX(ship->position.x), TileX(ship->position.z));
-					Naval::Ferry g = LandingFor(player, sea, f.targetAt + (ship->position - f.targetAt) * 0.5f, f, ok);
+					const Vector3 failed = f.landing;
+					Naval::Ferry g = LandingFor(player, sea, f.targetAt, f, ok, &failed);
 					if (ok && (g.landing - f.landing).sqlen2xz() > 25.0f) {
 						f.landing = g.landing;
 						AIController::moveUnitsTo({ ship }, player, f.landing);
@@ -986,7 +1024,7 @@ namespace {
 			return;
 		const size_t free = pool.size() - guard;
 		const size_t minWave = aggressive ? 8 : 10;
-		const bool long_ = st.lastFerry < 0.0f ? now > 600.0f : now - st.lastFerry > 360.0f;
+		const bool long_ = st.lastFerry < 0.0f ? now - st.start > 600.0f : now - st.lastFerry > 360.0f;
 		if (free < minWave && !(long_ && free >= 3))
 			return;
 		// the youngest go (the guard keeps the oldest), as many as the transport holds
@@ -1144,8 +1182,11 @@ namespace Naval {
 			return;
 		State& st = player->aiController.naval;
 		const float now = Now();
+		// (the game's own start: a map's clock may not start at 0, 3 Isles' at 6242 s)
+		if (st.start < 0.0f)
+			st.start = now;
 		// the map, every 60 s (from 5 s: the regions are made then)
-		if (now >= st.nextCheck && now >= 5.0f) {
+		if (now >= st.nextCheck && now - st.start >= 5.0f) {
 			st.nextCheck = now + 60.0f;
 			ReadMap(player, st);
 		}
@@ -1176,7 +1217,7 @@ namespace Naval {
 			if (st.wantWarships >= 0) warships = st.wantWarships;
 			// cogs first; war boats once the first ferry could go (not before minute 6, or the
 			// opening's wood went into them)
-			TrainShips(player, st, transports, now > 360.0f || ministry ? std::max(warships, 0) : 0, aggressive);
+			TrainShips(player, st, transports, now - st.start > 360.0f || ministry ? std::max(warships, 0) : 0, aggressive);
 		}
 		st.hadShips = st.hadShips || !Ships(player).empty();
 		if (Trace() && now >= st.nextTrace) {
@@ -1216,6 +1257,118 @@ namespace Naval {
 			}
 		if (!ministry)
 			LayerFerries(player, st, aggressive);
+	}
+
+	int HomeLandRegion(ServerGameObject* player, int* cls)
+	{
+		g_ids.update(Srv()->gameSet.get());
+		const GameObjBlueprint* peasant = Srv()->gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+		ServerGameObject* home = player ? Home(player) : nullptr;
+		if (!peasant || !home || !Srv()->terrain)
+			return -1;
+		const int c = MovementController::movementClass(peasant);
+		if (cls)
+			*cls = c;
+		return RegionNear(c, home->position);
+	}
+
+	const std::vector<int>& PeasantRegions(ServerGameObject* player, int* cls)
+	{
+		struct Cache { uint64_t game = 0; float at = -1.0f; int cls = -1; std::vector<int> regions; };
+		static std::map<uint32_t, Cache> caches;
+		static const std::vector<int> none;
+		if (!player || !Srv()->terrain)
+			return none;
+		Cache& c = caches[player->id];
+		const uint64_t game = Srv()->gameSet->serial;
+		if (c.game != game || Now() < c.at || Now() - c.at >= 1.0f) {
+			c.game = game;
+			c.at = Now();
+			c.regions.clear();
+			const int home = HomeLandRegion(player, &c.cls);
+			if (home >= 0)
+				c.regions.push_back(home);
+			if (c.cls >= 0)
+				for (ServerGameObject* u : AIUtil::Peasants(player))
+					if (const int r = RegionNear(c.cls, u->position); r >= 0)
+						c.regions.push_back(r);
+			std::sort(c.regions.begin(), c.regions.end());
+			c.regions.erase(std::unique(c.regions.begin(), c.regions.end()), c.regions.end());
+		}
+		if (cls)
+			*cls = c.cls;
+		return c.regions;
+	}
+
+	bool PlaceOverseas(ServerGameObject* player, const Vector3& place)
+	{
+		if (!player || player->aiController.naval.need <= NEED_NONE)
+			return false;
+		int cls = -1;
+		const int home = HomeLandRegion(player, &cls);
+		if (home < 0 || cls < 0)
+			return false;
+		const int there = RegionNear(cls, place);
+		return there >= 0 && there != home;
+	}
+
+	bool StartAtHomeIfUnreachable(ServerGameObject* player, Vector3& from)
+	{
+		int cls = -1;
+		const std::vector<int>& regions = PeasantRegions(player, &cls);
+		if (regions.empty() || cls < 0)
+			return false;
+		const int r = RegionNear(cls, from);
+		if (r < 0 || std::binary_search(regions.begin(), regions.end(), r))
+			return false;
+		ServerGameObject* home = Home(player);
+		if (!home)
+			return false;
+		from = home->position;
+		return true;
+	}
+
+	Vector3 HomeSite(ServerGameObject* player, const GameObjBlueprint* foundation, const Vector3& wanted)
+	{
+		g_ids.update(Srv()->gameSet.get());
+		if (!player || !foundation || !g_ids.land || !Srv()->terrain || (wanted.x == 0.0f && wanted.z == 0.0f))
+			return wanted;
+		ServerGameObject* home = Home(player);
+		if (!home)
+			return wanted;
+		const int landCls = MovementController::movementClass(g_ids.land);
+		const int homeRegion = RegionNear(landCls, home->position);
+		const int there = RegionNear(landCls, wanted);
+		if (homeRegion < 0 || there < 0 || there == homeRegion)
+			return wanted;
+		// the nearest to the site that was wanted, among the valid ones on the home's land
+		Vector3 best;
+		float bd = -1.0f;
+		for (float r = 20.0f; r <= 250.0f; r += 10.0f) {
+			for (int k = 0; k < 24; k++) {
+				const float a = k * 6.2831853f / 24.0f;
+				Vector3 p(home->position.x + r * std::sin(a), 0.0f, home->position.z + r * std::cos(a));
+				const int tx = TileX(p.x), tz = TileX(p.z);
+				if (!InMap(tx, tz) || MovementController::terrainRegion(landCls, tx, tz) != homeRegion)
+					continue;
+				p = TileCentre(tx, tz);
+				const float d = (p - wanted).sqlen2xz();
+				if (bd >= 0.0f && d >= bd)
+					continue;
+				if (StampdownPlan::getStampdownPlan(Srv(), player, foundation, p, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid) {
+					best = p;
+					bd = d;
+				}
+			}
+			if (bd >= 0.0f && r >= 60.0f)
+				break; // (the nearest rings found one: no need to go further out)
+		}
+		if (bd < 0.0f) {
+			Log(player, "no site on its own land for %s (wanted at (%.0f, %.0f), across the water)", foundation->name.c_str(), wanted.x, wanted.z);
+			return Vector3(0, 0, 0);
+		}
+		Log(player, "%s moved from (%.0f, %.0f) across the water to (%.0f, %.0f) on its own land", foundation->name.c_str(), wanted.x, wanted.z, best.x, best.z);
+		return best;
 	}
 
 	std::string Census(ServerGameObject* player)

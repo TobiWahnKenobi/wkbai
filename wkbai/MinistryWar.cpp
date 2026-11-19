@@ -275,6 +275,16 @@ namespace {
 				if (m.kind == Mission::PALACE)
 					want = std::max(want, (int)(pool * 0.8f));
 				m.want = std::min(want, pool);
+				// across the sea (Naval.h): one crossing that counts, not a trickle (on 3 Isles six-unit
+				// razes went over one after another and were lost on the beach while 1,700 power waited
+				// at home): at least 15 and three fifths of the free soldiers; no raid that far
+				if (Naval::PlaceOverseas(me, Vector3(m.tx, 0, m.tz))) {
+					if (m.kind == Mission::RAID)
+						continue;
+					m.want = std::min(pool, std::max({ m.want, 15, (int)(pool * 0.6f) }));
+					if (m.want < 12)
+						continue;
+				}
 				m.goal = m.kind == Mission::RAID ? 8 : m.kind == Mission::RAZE ? 3 : 1;
 				m.maxLoss = 0.5f + 0.3f * c.aggression;
 				// a decoy first, the other way, if the General is sneaky and there are soldiers to spare
@@ -305,7 +315,11 @@ namespace {
 			// of 15 % of the population limit (at least 12) goes at the best target anyway
 			const int popItem = g.server.gameSet->items.names.getIndex("Total Population Count");
 			const float popLimit = popItem >= 0 ? me->getItem(popItem) : 200.0f;
-			const int waveSize = std::max(12, (int)(popLimit * 0.15f));
+			int waveSize = std::max(12, (int)(popLimit * 0.15f));
+			// (across the sea the cogs carry 40 weight each, two or three of them a crossing: a wave of 15
+			// goes; at 30 the ministries waited with 21 free while the others' ferries landed 120)
+			if (!cands.empty() && Naval::PlaceOverseas(me, Vector3(cands.front().s->x, 0, cands.front().s->z)))
+				waveSize = 15;
 			if (pool >= waveSize && !cands.empty()) {
 				const Candidate& cand = cands.front();
 				Mission m;
@@ -748,26 +762,68 @@ namespace {
 							m.ferry = Naval::SendFerry(me, units, target, dest, Naval::Ferry::MINISTRY, m.id);
 							if (!m.ferry)
 								return now - m.since > 420.0f ? "no ship" : nullptr;
-							g.log(GENERALS, "mission %u (%s) embarks on ferry %u: %zu units for (%.0f, %.0f) across the sea", m.id, Mission::KindName(m.kind),
-								m.ferry, units.size(), dest.x, dest.z);
+							// more than one cog's load (40 weight): the rest on the other free cogs (one load went,
+							// and the rest were sent home)
+							auto aboardAny = [&](uint32_t id) {
+								for (uint32_t fid : std::vector<uint32_t>{ m.ferry })
+									if (const Naval::Ferry* f = Naval::FindFerry(me, fid); f && std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+										return true;
+								for (uint32_t fid : m.moreFerries)
+									if (const Naval::Ferry* f = Naval::FindFerry(me, fid); f && std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+										return true;
+								return false;
+							};
+							for (int more = 0; more < 4; more++) {
+								std::vector<ServerGameObject*> rest;
+								for (ServerGameObject* u : units)
+									if (!aboardAny(u->id))
+										rest.push_back(u);
+								if (rest.empty())
+									break;
+								const uint32_t id = Naval::SendFerry(me, rest, target, dest, Naval::Ferry::MINISTRY, m.id);
+								if (!id)
+									break;
+								m.moreFerries.push_back(id);
+							}
+							g.log(GENERALS, "mission %u (%s) embarks on %zu ferries (the first %u): %zu units for (%.0f, %.0f) across the sea", m.id, Mission::KindName(m.kind),
+								1 + m.moreFerries.size(), m.ferry, units.size(), dest.x, dest.z);
 							g.board.report("naval.missionsAtSea", g.board.get("naval.missionsAtSea") + 1);
 						}
-						const Naval::Ferry* f = Naval::FindFerry(me, m.ferry);
-						if (f && f->landed > 0 && !m.landed) {
-							// the mission is those that landed (the rest went home)
+						// its ferries: the first to land takes the mission ashore; those at sea still land after it
+						std::vector<const Naval::Ferry*> fs;
+						if (const Naval::Ferry* f = Naval::FindFerry(me, m.ferry))
+							fs.push_back(f);
+						for (uint32_t fid : m.moreFerries)
+							if (const Naval::Ferry* f = Naval::FindFerry(me, fid))
+								fs.push_back(f);
+						const Naval::Ferry* first = nullptr;
+						for (const Naval::Ferry* f : fs)
+							if (f->landed > 0 && !first)
+								first = f;
+						if (first && !m.landed) {
+							// the mission is those on its ferries (the rest went home)
 							m.landed = true;
 							std::vector<uint32_t> kept;
-							for (uint32_t id : m.units)
-								if (std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+							int landed = 0;
+							for (uint32_t id : m.units) {
+								bool on = false;
+								for (const Naval::Ferry* f : fs)
+									on |= std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end();
+								if (on)
 									kept.push_back(id);
 								else
 									me->aiController.ministryUnits.erase(id);
+							}
+							for (const Naval::Ferry* f : fs)
+								landed += f->landed;
 							m.units = kept;
 							units = g.alive(m);
-							g.log(GENERALS, "mission %u landed %d at (%.0f, %.0f)", m.id, f->landed, f->landing.x, f->landing.z);
+							// (those still aboard are disabled: the attack goes with those ashore)
+							units.erase(std::remove_if(units.begin(), units.end(), [](ServerGameObject* u) { return !u->isInteractable(); }), units.end());
+							g.log(GENERALS, "mission %u landed %d at (%.0f, %.0f), %zu ferries", m.id, landed, first->landing.x, first->landing.z, fs.size());
 						}
 						if (!m.landed) {
-							if (!f)
+							if (fs.empty())
 								return "lost at sea";
 							return nullptr;
 						}
@@ -1053,8 +1109,16 @@ namespace {
 			st.manual = true;
 			const float ag = g.personality.aggression;
 			if (st.need == Naval::NEED_ONLY) {
-				st.wantTransports = 1 + (ag > 0.6f ? 1 : 0);
+				// (an attack of 15 % of the population limit or more is more than one cog's 40 weight:
+				// two cogs, three for an aggressive General, so a mission crosses in one go)
+				st.wantTransports = 2 + (ag > 0.6f ? 1 : 0);
 				st.wantWarships = 2 + (int)std::lround(ag * 2.0f);
+				// the wood the scripts don't spend into the fleet (on 3 Isles the ministries sat on 8,500
+				// wood): a war boat more for every 800 over 1,000, up to 8; the sea is the way in, and the
+				// war boats sink the enemy's cogs before they land and shoot what stands on its coast
+				const double wood = g.board.get("economy.wood");
+				if (wood > 1000.0)
+					st.wantWarships = std::min(8, st.wantWarships + (int)((wood - 1000.0) / 800.0));
 			}
 			else if (st.need == Naval::NEED_SHORTER) {
 				st.wantTransports = 1;

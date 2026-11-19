@@ -4,6 +4,7 @@
 #include "gameset/GameObjBlueprint.h"
 #include "tags.h"
 #include "terrain.h"
+#include "WaterOverlay.h"
 #include "gameset/Footprint.h"
 #include <algorithm>
 #include <iterator>
@@ -104,6 +105,21 @@ bool StampdownPlan::tileTerrainAllowed(const CommonGameState* gameState, const F
 {
 	if (!to.terrains || to.terrains->empty())
 		return true;
+	// a list with a water terrain (a dock's water rows) takes WKB.exe's water overlay of the tile
+	// ("Shallow Water", "Water"; WaterOverlay.h): the original maps' sea beds are sand and grass
+	{
+		static uint64_t of = 0;
+		static int shallow = -1, deep = -1;
+		if (of != gameState->gameSet->serial) {
+			of = gameState->gameSet->serial;
+			shallow = gameState->gameSet->terrains.names.getIndex("Shallow Water");
+			deep = gameState->gameSet->terrains.names.getIndex("Water");
+		}
+		auto in = [&](int i) { return i >= 0 && i < (int)to.terrains->size() && (*to.terrains)[i]; };
+		if (in(shallow) || in(deep))
+			if (const int ov = WaterOverlayClass(gameState->terrain, tx, tz))
+				return in(ov == 2 ? deep : shallow);
+	}
 	const auto* tile = gameState->terrain->getPlayableTile(tx, tz);
 	if (!tile || !tile->texture || !tile->texture->grp)
 		return false;

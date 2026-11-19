@@ -3724,6 +3724,8 @@ void Test_AIvsAI()
 						mix[0] >= 0 ? player->getItem(mix[0]) : 0.0f, mix[1] >= 0 ? player->getItem(mix[1]) : 0.0f, mix[2] >= 0 ? player->getItem(mix[2]) : 0.0f, mix[3] >= 0 ? player->getItem(mix[3]) : 0.0f,
 						ai.baseMix[0], ai.baseMix[1], ai.baseMix[2], ai.baseMix[3], ai.mixChanges, ai.grudgePlayer);
 				}
+				// the navy (Naval.h)
+				printf("NAVALCENSUS t=%.0f player %u: %s\n", server.timeManager.currentTime, player->id, Naval::Census(player).c_str());
 				// its Lua AI, if any, and what it did (the script's census())
 				if (const std::string lua = player->aiController.luaCensus(); !lua.empty())
 					printf("AITEST   lua player %u: %s\n", player->id, lua.c_str());

@@ -9,6 +9,7 @@
 #include "terrain.h"
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
+#include "WaterOverlay.h"
 #include <cassert>
 #include <SDL3/SDL_timer.h>
 #include <unordered_map>
@@ -450,7 +451,21 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 				if (it != groups.end())
 					tile.terrainType = (short)(it->second - &server->gameSet->terrains[0]);
 			}
-			if (tile.terrainType >= 0 && tile.terrainType < (int)passable->size() && !(*passable)[tile.terrainType])
+			int terrain = tile.terrainType;
+			// a boat goes by WKB.exe's water overlay ("Shallow Water", "Water"; WaterOverlay.h), not
+			// the sea bed's texture
+			if (waterUnit) {
+				static uint64_t of = 0;
+				static int shallow = -1, deep = -1;
+				if (of != server->gameSet->serial) {
+					of = server->gameSet->serial;
+					shallow = server->gameSet->terrains.names.getIndex("Shallow Water");
+					deep = server->gameSet->terrains.names.getIndex("Water");
+				}
+				if (const int ov = WaterOverlayClass(trn, tx, tz))
+					terrain = ov == 2 ? deep : shallow;
+			}
+			if (terrain >= 0 && terrain < (int)passable->size() && !(*passable)[terrain])
 				return true;
 		}
 

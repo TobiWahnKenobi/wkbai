@@ -22,6 +22,8 @@
 #include "KeywordStubs.h"
 #include "../util/SimRandom.h"
 #include "../StampdownPlan.h"
+#include "../MovementController.h"
+#include "../Naval.h"
 #include <map>
 #include <numeric>
 
@@ -446,6 +448,67 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	const GameObjBlueprint* objbp;
 	std::unique_ptr<PositionDeterminer> p;
 	std::unique_ptr<ObjectFinder> fdExemptTilesReservedBy;
+	// GLOBAL_CAN_REACH_FOR_CONSTRUCTION "Land Unit" (Passability_Fields.cpp: "used by
+	// NEAREST_VALID_STAMPDOWN_POSITION, NEAREST_CONSTRUCTION_SITE, RESERVE_SPACE_FOR_CONSTRUCTION"):
+	// a site only where the player's land units can walk: a tile of the footprint in a land region
+	// where it has peasants (its home's always). Not the home's alone: on 3 Isles Kolvas starts with
+	// buildings and peasants on a second landmass too, and his farms there were refused. wkbre2 had none: on 3 Isles the Kingmaker's first village went to
+	// another player's island, its builder waited there for the whole game and its economy never
+	// started (WKB.exe refuses AI Generals on the island maps). -1: no limit (the client, or a
+	// start no land unit can stand near).
+	int reachClass = -1, reachRegion = -1;
+	const std::vector<int>* reachRegions = nullptr; // where the player has peasants
+	void setReach(ScriptContext* ctx, Vector3& from) {
+		reachClass = reachRegion = -1;
+		Server* srv = Server::instance;
+		// (off by default: on 3 Isles it took the first village off another player's island, but
+		// Kolvas's opening then laid no farm at all; WKB_REACH=1 turns it on for study)
+		static const bool off = getenv("WKB_REACH") == nullptr;
+		if (off || !srv || ctx->gameState != srv || !srv->terrain)
+			return;
+		CommonGameObject* self = ctx->getSelf();
+		ServerGameObject* player = self ? (ServerGameObject*)self->getPlayer() : nullptr;
+		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+			return;
+		int cls = -1;
+		reachRegions = &Naval::PeasantRegions(player, &cls);
+		// (a search from land without the player's peasants, e.g. 3 Isles' start buildings on the
+		// central landmass, from home: else no site at all, and Kolvas had no farm)
+		Naval::StartAtHomeIfUnreachable(player, from);
+		reachRegion = reachRegions->empty() ? -1 : reachRegions->front();
+		const auto [w, h] = srv->terrain->getNumPlayableTiles();
+		if (reachRegion >= 0)
+			reachClass = cls;
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && reachRegion >= 0 && atoi(e) == reachRegion) {
+			static int shown = 0;
+			if (shown++ < 30) {
+				std::string regs;
+				for (int r : *reachRegions)
+					regs += " " + std::to_string(r);
+				printf("REACH search t=%.0f %s by %s #%u from (%.0f, %.0f), regions%s\n", srv->timeManager.currentTime, objbp->name.c_str(),
+					self->blueprint->name.c_str(), self->id, from.x, from.z, regs.c_str());
+			}
+		}
+	}
+	bool reachable(int tx, int tz) const {
+		if (reachRegion < 0)
+			return true;
+		for (const auto& to : objbp->footprint->tiles) {
+			const int r = MovementController::terrainRegion(reachClass, tx + to.offsetX, tz + to.offsetZ);
+			if (r >= 0 && reachRegions && std::binary_search(reachRegions->begin(), reachRegions->end(), r))
+				return true;
+		}
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && (atoi(e) == 1 || atoi(e) == reachRegion)) {
+			static int shown = 0;
+			if (shown++ < 12) {
+				std::string regs;
+				for (const auto& to : objbp->footprint->tiles)
+					regs += " " + std::to_string(MovementController::terrainRegion(reachClass, tx + to.offsetX, tz + to.offsetZ));
+				printf("REACH refused %s at tile (%d, %d), home region %d, the footprint's:%s\n", objbp->name.c_str(), tx, tz, reachRegion, regs.c_str());
+			}
+		}
+		return false;
+	}
 	bool isTileFree(CommonGameState* server, int tx, int tz) {
 		int sx, sz;
 		std::tie(sx, sz) = server->terrain->getNumPlayableTiles();
@@ -478,6 +541,9 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 					return false;
 			}
 		}
+		// where a land unit can get to from the start (GLOBAL_CAN_REACH_FOR_CONSTRUCTION)
+		if (!reachable(tx, tz))
+			return false;
 		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)
 		return StampdownPlan::groundAllows(server, objbp->footprint, tx, tz);
 	}
@@ -519,9 +585,14 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		// for them, and its builders spent the game walking there.
 		if (!objbp->footprint || (po.position.x == 0.0f && po.position.z == 0.0f))
 			return po;
+		setReach(ctx, po.position);
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
+		const int sx = ox, sz = oz;
 		std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && reachRegion >= 0 && atoi(e) == reachRegion)
+			printf("REACH result %s: from tile (%d, %d) to (%d, %d), %s\n", objbp->name.c_str(), sx, sz, ox, oz,
+				canBuildOn(ctx->gameState, ox, oz) ? "a site" : "NO SITE (the start returned)");
 		float fx = ox * 5 + objbp->footprint->originX + 2.5f;
 		float fz = oz * 5 + objbp->footprint->originZ + 2.5f;
 		return { Vector3(fx, ctx->gameState->terrain->getHeight(fx, fz), fz) };
@@ -650,6 +721,7 @@ struct PDNearestConstructionSite : public PDNearestValidStampdownPos {
 		const int join = (int)val2->eval(ctx), range = (int)val3->eval(ctx);
 		if (minSites <= 0 || join <= 0 || range <= 0)
 			return none;
+		setReach(ctx, po.position);
 		const int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		const int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
 		const int r = range / 5, jr = join / 5;

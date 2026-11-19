@@ -43,6 +43,7 @@ namespace Naval {
 		Vector3 home, homeShore, enemyShore;
 		float nextCheck = 0.0f, nextThink = 0.0f, nextDockTry = 0.0f, nextVillageTry = 0.0f, nextBuildersCheck = 0.0f;
 		bool hadShips = false;
+		float start = -1.0f;        // the game time the layer first ran (a map's clock may not start at 0)
 		float nextTrace = 0.0f;
 		int lastTrainWant = 0, lastPool = -1; // (the trace: 0 nothing wanted, 1 a ship ordered, 2 none could be)      // ships seen once (they are looked after even with no need left)
 		uint32_t dock = 0;           // the dock or its foundation
@@ -80,6 +81,25 @@ namespace Naval {
 	std::vector<ServerGameObject*> Ships(ServerGameObject* player);
 	bool IsBoat(const ServerGameObject* o);
 	bool IsTransport(const ServerGameObject* o);
+	// An AI's foundation site where its peasants can walk (not in WKB.exe): a site in another land
+	// region than the player's home (an island across the sea) is moved to the nearest valid site
+	// round the palace on the home's land, 20 to 250 m out; (0, 0, 0) when there is none. The
+	// Kingmaker's first village on 3 Isles went to the "Nearest Farming Marker To My Manor" on
+	// another player's island, its builder stood 253 m away on its own, and the scripts' economy
+	// never started (WKB.exe refuses AI Generals on the two island maps). Unchanged elsewhere.
+	Vector3 HomeSite(ServerGameObject* player, const GameObjBlueprint* foundation, const Vector3& wanted);
+	// the land region of the player's home (its palace, else its first building) for a Peasant's
+	// movement class (set in cls); -1 when it has none
+	int HomeLandRegion(ServerGameObject* player, int* cls);
+	// the land regions (a Peasant's class, set in cls) where the player has peasants (its home's
+	// too), sorted; looked up again once a game second
+	const std::vector<int>& PeasantRegions(ServerGameObject* player, int* cls);
+	// a search for a site that starts on land where the player has no peasant starts at its home
+	// instead (its palace); whether it was moved
+	bool StartAtHomeIfUnreachable(ServerGameObject* player, Vector3& from);
+	// whether a place is across the sea from the player's home (another land region, a sea route
+	// known: need > NONE)
+	bool PlaceOverseas(ServerGameObject* player, const Vector3& place);
 	// for the census: one line
 	std::string Census(ServerGameObject* player);
 	// the type of a land unit for the map's regions (a Spearman, else a Peasant)

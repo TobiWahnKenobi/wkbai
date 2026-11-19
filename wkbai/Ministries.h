@@ -134,6 +134,7 @@ namespace Ministry {
 		// a target across the sea (Naval::Overseas): the ferry it went out on (Naval.h), and whether
 		// it landed; not saved (a loaded game's ferries are taken up again by the naval layer)
 		uint32_t ferry = 0;
+		std::vector<uint32_t> moreFerries; // (more than one cog's load: the others' ferries)
 		bool landed = false;
 	};
 

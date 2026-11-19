@@ -1048,9 +1048,15 @@ std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const 
 		std::vector<ServerGameObject*> armies;
 		CollectArmies(gameObj, armies);
 		std::vector<ServerGameObject*> loose;
-		for (ServerGameObject* a : armies)
+		for (ServerGameObject* a : armies) {
 			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
 				CollectUnits(a, loose);
+			// the game's default "Human Army" too (the soldiers trained with no Kingmaker Defensive Army
+			// to commission them join it: on 3 Isles a player without one had 52 of its 62 soldiers
+			// there, and the war layer, the ministries and the naval layer saw none of them)
+			else if (a->blueprint->name == "Human Army" && !mine.count(a->id))
+				CollectUnits(a, loose);
+		}
 		for (const auto& [type, children] : gameObj->children)
 			for (CommonGameObject* c : children)
 				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
