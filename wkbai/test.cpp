@@ -12769,6 +12769,373 @@ void Test_WedgeCharge()
 	printf(failures ? "WEDGE FAILED (%d)\n" : "WEDGE PASSED\n", failures);
 }
 
+// A gatehouse on a wall (the play test of 2026-11-18: "You cannot build a gatehouse on top of
+// walls"): a Manor stamped down on 4 Peaks for player 1027, then a Stockade Gatehouse placed as
+// the client's preview places it (the cursor's tile, snapped) over four straight pieces of its
+// ring, along the south run and, turned a quarter, along the west run. The plan must be valid, the
+// four pieces gone, the gatehouse in the city between the two pieces left at the run's ends.
+// Across the run, on a corner or on a gatehouse it is refused. Then, the walls built: a peasant
+// inside walks out through the open gate; with the gate closed, neither it nor an enemy crosses
+// the gate's tiles. Prints "GATEWALL ok|FAILED: <check>" and "GATEWALL all <0/1>".
+void Test_GatehouseOnWall()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("GATEWALL %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	// a client on a local link too: the preview's plan (the client's own copy of the walls) must
+	// agree with the server's
+	Server server;
+	Client client(true);
+	NetLocalBuffer toClient, toServer;
+	NetLocalLink srv2cli(&toClient, &toServer), cli2srv(&toServer, &toClient);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	auto pump = [&]() {
+		for (int i = 0; i < 1000 && cli2srv.available(); i++)
+			client.tick();
+	};
+	pump();
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	ClientGameObject* cliPlayer = client.findObject(1027);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* cliGate = client.gameSet ? client.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation") : nullptr;
+	const GameObjBlueprint* manor = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+	const GameObjBlueprint* gateFoundation = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
+	const GameObjBlueprint* gateClosed = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Closed");
+	const GameObjBlueprint* peasant = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const int move = gs.commands.names.getIndex("Move");
+	if (!player || !enemy || !cliPlayer || !cliGate || !manor || !gateFoundation || !gateClosed || !peasant || move < 0 || !server.terrain || !server.tiles || !client.tiles) {
+		printf("GATEWALL not set up\nGATEWALL all 0\n");
+		return;
+	}
+	for (ServerGameObject* p : { player, enemy }) {
+		p->setItem(Tags::PDITEM_FOOD, 1e6f);
+		p->setItem(Tags::PDITEM_WOOD, 1e6f);
+		p->setItem(Tags::PDITEM_GOLD, 1e6f);
+	}
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	auto tileCentre = [](const GameObjBlueprint* bp, int tx, int tz) {
+		return Vector3(tx * 5.0f + 2.5f + bp->footprint->originX, 0.0f, tz * 5.0f + 2.5f + bp->footprint->originZ);
+	};
+	// Manors stamped down one at a time, on a grid of spots from near the start outwards: each
+	// run is tried on the first city that has a site for it
+	ServerGameObject* first = nullptr;
+	ServerGameObject* city = nullptr;
+	int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+	int nextSpot = 0, manors = 0;
+	auto nextCity = [&]() {
+		for (; nextSpot < 12 * 12; nextSpot++) {
+			const int tx = 50 + (nextSpot % 12) * 10, tz = 50 + (nextSpot / 12) * 10;
+			ServerGameObject* m = server.stampdownObject(manor, player, tileCentre(manor, tx, tz), Vector3(0, 0, 0), true, true);
+			if (!m || !m->parent || m->parent->blueprint->bpClass != Tags::GAMEOBJCLASS_CITY)
+				continue;
+			nextSpot++;
+			manors++;
+			pump();
+			first = m;
+			city = (ServerGameObject*)m->parent;
+			x0 = 1 << 30, z0 = 1 << 30, x1 = -1, z1 = -1;
+			for (const auto& r : city->cityRectangles) {
+				x0 = std::min(x0, r.xStart); z0 = std::min(z0, r.yStart);
+				x1 = std::max(x1, r.xEnd); z1 = std::max(z1, r.yEnd);
+			}
+			printf("GATEWALL Manor %d at tile (%d, %d), city tiles (%d, %d) to (%d, %d)\n", manors, tx, tz, x0, z0, x1, z1);
+			return true;
+		}
+		return false;
+	};
+	if (!nextCity()) {
+		printf("GATEWALL no Manor stamped down\nGATEWALL all 0\n");
+		return;
+	}
+	auto pieceOn = [&](int x, int z) -> ServerGameObject* {
+		if (x < 0 || z < 0 || x >= tw || z >= th)
+			return nullptr;
+		ServerGameObject* o = server.tiles[z * tw + x].building.getFrom<Server>();
+		return o && o->parent == city ? o : nullptr;
+	};
+	auto isStraight = [](const ServerGameObject* o) { return o && o->blueprint->buildingType == Tags::BUILDINGTYPE_WALL; };
+	auto quarterOf = [](float y) { return ((int)std::lround(y / 1.5707963f) % 4 + 4) % 4; };
+	// where the client's preview puts a building for a cursor on tile (cx, cz) (ClientInterface:
+	// the tile's centre plus the turned origin)
+	auto snapped = [&](const GameObjBlueprint* bp, int cx, int cz, float turn) {
+		const auto o = bp->footprint->rotateOrigin(turn);
+		Vector3 p(cx * 5.0f + 2.5f + o.first, 0.0f, cz * 5.0f + 2.5f + o.second);
+		p.y = server.terrain->getHeight(p.x, p.z);
+		return p;
+	};
+	int clientDiffers = 0, otherRefusals = 0;
+	struct Placed { Vector3 at; float turn = 0; std::vector<std::pair<int, int>> tiles; ServerGameObject* gate = nullptr; };
+	// along a run of the ring: the south one (z0, along x, no turn) and the west one (x0, along
+	// z, a quarter): every cursor tile whose footprint lies on four straight pieces with a
+	// straight piece beyond each end; the server's verdicts counted, the client's compared, and the
+	// first valid one (from the run's middle) taken. Sites on sloping ground beside the Manor are
+	// refused as WKB.exe does (OVERLAPS_NEIGHBOURING_BUILDING, 0x59c4d0: only wall pieces are
+	// left out of the neighbours).
+	auto placeOn = [&](bool west, const std::string& run) {
+		Placed r;
+		r.turn = west ? 1.5707964f : 0.0f;
+		const int len = west ? z1 - z0 + 1 : x1 - x0 + 1;
+		std::map<int, int> verdicts;
+		int sites = 0, differ = 0;
+		for (int d = 0; d < len; d++) {
+			const int k = len / 2 + ((d & 1) ? -(d + 1) / 2 : d / 2);
+			const int cx = west ? x0 : x0 + k, cz = west ? z0 + k : z0;
+			const Vector3 at = snapped(gateFoundation, cx, cz, r.turn);
+			const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, at, Vector3(0, r.turn, 0));
+			if (plan.tiles.size() != 4)
+				continue;
+			bool onRun = true;
+			std::vector<std::pair<int, int>> tiles;
+			for (const auto& t : plan.tiles) {
+				onRun &= isStraight(pieceOn(t.x, t.z));
+				tiles.emplace_back(t.x, t.z);
+			}
+			std::sort(tiles.begin(), tiles.end());
+			const auto [ax, az] = tiles.front();
+			const auto [bx, bz] = tiles.back();
+			const int ex = west ? 0 : 1, ez = west ? 1 : 0;
+			if (!onRun || !isStraight(pieceOn(ax - ex, az - ez)) || !isStraight(pieceOn(bx + ex, bz + ez)))
+				continue;
+			sites++;
+			verdicts[(int)plan.status]++;
+			const StampdownPlan cp = StampdownPlan::getStampdownPlan(&client, cliPlayer, cliGate, at, Vector3(0, r.turn, 0));
+			if (cp.status != plan.status || cp.toRemove.size() != plan.toRemove.size()) {
+				printf("GATEWALL %s at (%.1f, %.1f): the server says %d (%zu to remove), the client %d (%zu)\n", run.c_str(), at.x, at.z,
+					(int)plan.status, plan.toRemove.size(), (int)cp.status, cp.toRemove.size());
+				differ++;
+			}
+			if (r.tiles.empty() && plan.status == StampdownPlan::Status::Valid) {
+				r.at = at;
+				r.tiles = tiles;
+			}
+		}
+		printf("GATEWALL %s: %d sites on four straight pieces;", run.c_str(), sites);
+		for (const auto& [s, n] : verdicts)
+			printf(" status %d x %d,", s, n);
+		printf("\n");
+		clientDiffers += differ;
+		for (const auto& [s, n] : verdicts)
+			if (s != (int)StampdownPlan::Status::Valid && s != (int)StampdownPlan::Status::InvalidNeighbour)
+				otherRefusals += n;
+		return r;
+	};
+	for (bool west : { false, true }) {
+		const std::string run = west ? "west run (turned a quarter)" : "south run";
+		Placed p = placeOn(west, run);
+		// none here (the ground too uneven beside the Manor): another Manor elsewhere
+		while (p.tiles.empty() && manors < 8 && nextCity())
+			p = placeOn(west, run);
+		check(!p.tiles.empty(), run + ": a site on four straight pieces the gatehouse may take");
+		if (p.tiles.empty())
+			continue;
+		const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, p.at, Vector3(0, p.turn, 0));
+		printf("GATEWALL %s: at (%.1f, %.1f) turn %.2f, status %d, %zu to remove\n", run.c_str(), p.at.x, p.at.z, p.turn, (int)plan.status, plan.toRemove.size());
+		check(plan.toRemove.size() == 4, run + ": it takes the four pieces down");
+		// the placing interface pointed at one of those pieces (the client's copy, as hovered),
+		// the cursor's ground point one and two tiles behind the wall (inside the city: where the
+		// ray through a standing wall meets the ground), the gatehouse unturned and turned: onto
+		// the wall, a valid plan taking the four pieces
+		{
+			pump(); // (the client's copy of the walls, built since by the walk's part)
+			const auto [hx, hz] = p.tiles[1];
+			const ClientGameObject* hovered = nullptr;
+			if (const ServerGameObject* s = pieceOn(hx, hz))
+				hovered = client.findObject(s->id);
+			int onto = 0, tries = 0;
+			// (the eye outside the wall, looking in: 1 tile behind at the usual pitch, 0.9 rad,
+			// where the ray is 6.3 m up over the wall; 2 tiles behind at a flatter 0.6)
+			for (const int behind : { 1, 2 })
+				for (const int startQuarter : { 0, 1 }) {
+					tries++;
+					Vector3 ground(hx * 5.0f + 2.5f + (west ? behind * 5.0f : 0.0f), 0.0f, hz * 5.0f + 2.5f + (west ? 0.0f : behind * 5.0f));
+					ground.y = client.terrain->getHeight(ground.x, ground.z);
+					const float pitch = behind == 1 ? 0.9f : 0.6f, back = 40.0f / std::tan(pitch);
+					const Vector3 eye = ground + Vector3(west ? -back : 0.0f, 40.0f, west ? 0.0f : -back);
+					const CommonGameObject* pointed = StampdownPlan::wallOnRay(&client, eye, ground);
+					int quarter = startQuarter;
+					Vector3 at;
+					const bool snapped = pointed == hovered && StampdownPlan::gatehouseOntoWall(&client, cliPlayer, cliGate, pointed, ground, quarter, at);
+					const StampdownPlan sp = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, at, Vector3(0, quarter * 1.5707964f, 0));
+					const bool ok = snapped && sp.status == StampdownPlan::Status::Valid && sp.toRemove.size() == 4 && quarter % 2 == (west ? 1 : 0);
+					if (!ok)
+						printf("GATEWALL %s pointed at (%d, %d), ground %d behind, turn %d: snapped %d to (%.1f, %.1f) turn %d, status %d\n", run.c_str(), hx, hz,
+							behind, startQuarter, (int)snapped, at.x, at.z, quarter, (int)sp.status);
+					onto += ok;
+				}
+			check(hovered && onto == tries, run + ": pointed at the wall, the preview goes onto it (" + std::to_string(onto) + " of " + std::to_string(tries) + ")");
+		}
+		// across the run (turned the other way) it stands on one piece and off the wall: refused
+		const float across = west ? 0.0f : 1.5707964f;
+		const auto [mx, mz] = p.tiles[1];
+		const StampdownPlan crossing = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, snapped(gateFoundation, mx, mz, across), Vector3(0, across, 0));
+		printf("GATEWALL %s across: status %d\n", run.c_str(), (int)crossing.status);
+		// (the wall's own tile is red: a gatehouse takes no piece lying across it)
+		const bool wallTileRed = std::any_of(crossing.tiles.begin(), crossing.tiles.end(), [&](const StampdownPlan::TileVerdict& t) {
+			return isStraight(pieceOn(t.x, t.z)) && !t.ok; });
+		check(crossing.status != StampdownPlan::Status::Valid && crossing.toRemove.empty() && wallTileRed, run + ": across the run it is refused, on the wall's tile");
+		std::vector<SrvGORef> pieces;
+		for (const auto& [x, z] : p.tiles)
+			pieces.emplace_back(pieceOn(x, z));
+		p.gate = server.stampdownObject(gateFoundation, player, p.at, Vector3(0, p.turn, 0), true, true);
+		pump();
+		check(p.gate != nullptr, run + ": the server stamps it down");
+		if (!p.gate)
+			continue;
+		int gone = 0;
+		for (auto& ref : pieces)
+			if (!ref.get() || ref->deleted)
+				gone++;
+		check(gone == 4, run + ": the four pieces are gone (" + std::to_string(gone) + ")");
+		check(p.gate->parent == city, run + ": the gatehouse is in the wall's city");
+		int own = 0;
+		for (const auto& [x, z] : p.tiles)
+			own += server.tiles[z * tw + x].building.getFrom<Server>() == p.gate;
+		check(own == 4, run + ": it takes the four tiles (" + std::to_string(own) + ")");
+		const auto [ax, az] = p.tiles.front();
+		const auto [bx, bz] = p.tiles.back();
+		const int ex = west ? 0 : 1, ez = west ? 1 : 0;
+		ServerGameObject* endA = pieceOn(ax - ex, az - ez);
+		ServerGameObject* endB = pieceOn(bx + ex, bz + ez);
+		check(isStraight(endA) && isStraight(endB) && quarterOf(endA->orientation.y) % 2 == quarterOf(p.gate->orientation.y) % 2
+			&& quarterOf(endB->orientation.y) % 2 == quarterOf(p.gate->orientation.y) % 2,
+			run + ": the wall's ends meet the gatehouse, along its line");
+		// a second gatehouse over the first one: refused
+		const StampdownPlan again = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, p.at, Vector3(0, p.turn, 0));
+		check(again.status != StampdownPlan::Status::Valid, run + ": no gatehouse on a gatehouse");
+		if (west)
+			continue;
+		// the walk: the walls built (the foundations swapped for their finished buildings, the
+		// gatehouse's the open one), a peasant 3 tiles inside walks to 3 tiles outside
+		std::vector<ServerGameObject*> foundations;
+		for (const auto& [bpid, objlist] : city->children)
+			for (CommonGameObject* c : objlist)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation") && c != first)
+					foundations.push_back((ServerGameObject*)c);
+		ServerGameObject* openGate = nullptr;
+		for (ServerGameObject* o : foundations) {
+			const std::string built = o->blueprint->name.substr(0, o->blueprint->name.size() - 11);
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, built)) {
+				const Vector3 at = o->position, turn = o->orientation;
+				const bool mine = o == p.gate;
+				server.destroyObject(o);
+				ServerGameObject* b = server.spawnObject(bp, city, at, turn);
+				if (mine)
+					openGate = b;
+			}
+		}
+		check(openGate && openGate->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE, "the walls and the gatehouse built");
+		if (!openGate)
+			continue;
+		const float gx = (p.tiles[1].first + p.tiles[2].first) * 2.5f + 2.5f;
+		const float gz = p.tiles[1].second * 5.0f + 2.5f;
+		auto ground = [&](float x, float z) { return Vector3(x, server.terrain->getHeight(x, z), z); };
+		const Vector3 inside = ground(gx, gz + 15.0f), outside = ground(gx, gz - 15.0f);
+		auto crosses = [&](ServerGameObject* unit, const Vector3& to, float seconds, float& left) {
+			gs.commands[move].execute(unit, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, to);
+			const float start = server.timeManager.currentTime;
+			bool onGate = false;
+			while (server.timeManager.currentTime < start + seconds) {
+				server.timeManager.pendingMs = server.timeManager.stepMs;
+				if (server.timeManager.step())
+					server.simulate();
+				const int ux = (int)(unit->position.x / 5.0f), uz = (int)(unit->position.z / 5.0f);
+				for (const auto& [x, z] : p.tiles)
+					onGate |= x == ux && z == uz;
+			}
+			left = std::sqrt((unit->position - to).len2xz());
+			return onGate;
+		};
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		ServerGameObject* walker = server.spawnObject(peasant, player, inside, Vector3(0, 0, 0));
+		float left = 0;
+		const bool through = crosses(walker, outside, 40.0f, left);
+		printf("GATEWALL open gate: the peasant through %d, %.1f m from the point outside\n", (int)through, left);
+		check(through && left < 3.0f, "a peasant walks out through the open gate");
+		// closed: the gatehouse's closed version blocks all its tiles, for its own player and
+		// an enemy alike (the scripts open and close it by command)
+		const Vector3 gateAt = openGate->position, gateTurn = openGate->orientation;
+		server.destroyObject(openGate);
+		ServerGameObject* closed = server.spawnObject(gateClosed, city, gateAt, gateTurn);
+		float walkerLeft = 0;
+		const bool backIn = crosses(walker, inside, 40.0f, walkerLeft);
+		check(closed && !backIn, "with the gate closed the peasant doesn't cross it");
+		ServerGameObject* foe = server.spawnObject(peasant, enemy, ground(gx + 5.0f, gz - 15.0f), Vector3(0, 0, 0));
+		const bool foeIn = crosses(foe, inside, 40.0f, left);
+		printf("GATEWALL closed gate: own peasant crossed %d (%.1f m left), enemy crossed %d (%.1f m left)\n", (int)backIn, walkerLeft, (int)foeIn, left);
+		check(!foeIn, "with the gate closed an enemy doesn't cross it");
+		server.timeManager.pause();
+	}
+	check(clientDiffers == 0, "the client's preview agrees with the server on every site (" + std::to_string(clientDiffers) + " differ)");
+	// the straight sites refused were refused for the levelling only, as in WKB.exe
+	check(otherRefusals == 0, "sites on four straight pieces refused only by the levelling's neighbour rule (" + std::to_string(otherRefusals) + " otherwise)");
+	// a gatehouse over a corner piece, along the run that reaches it from the other side (the
+	// corner's arms run along -x and -z turned with it, so the gatehouse along the run is across
+	// one arm): refused. The ring's four outer corners, the first that has a piece.
+	{
+		const int corners[4][2] = { { x0, z1 }, { x1, z1 }, { x0, z0 }, { x1, z0 } };
+		ServerGameObject* corner = nullptr;
+		int cx = 0, cz = 0;
+		for (const auto& c : corners)
+			if (ServerGameObject* o = pieceOn(c[0], c[1]); o && o->blueprint->buildingType == Tags::BUILDINGTYPE_WALL_CORNER_OUT) {
+				corner = o, cx = c[0], cz = c[1];
+				break;
+			}
+		if (corner) {
+			// along x, the corner on its second tile and the rest on the run; and along z
+			const int inward = cx == x0 ? 1 : -1;
+			int refused = 0;
+			for (const float turn : { 0.0f, 1.5707964f }) {
+				const int qx = turn == 0.0f ? cx + inward : cx, qz = turn == 0.0f ? cz : cz + (cz == z0 ? 1 : -1);
+				const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, snapped(gateFoundation, qx, qz, turn), Vector3(0, turn, 0));
+				const bool onCorner = std::any_of(plan.tiles.begin(), plan.tiles.end(), [&](const StampdownPlan::TileVerdict& t) { return t.x == cx && t.z == cz; });
+				printf("GATEWALL corner (%d, %d) %s, turn %.2f: on it %d, status %d\n", cx, cz, corner->blueprint->name.c_str(), turn, (int)onCorner, (int)plan.status);
+				refused += onCorner && plan.status != StampdownPlan::Status::Valid;
+			}
+			// one of the two lies along the corner's turned axis, as WKB.exe's 0x609cb0 allows
+			// (0x59bd63 takes all four piece types); the other crosses it
+			check(refused >= 1, "over an outer corner, across its axis, it is refused");
+		}
+		else
+			check(false, "an outer corner piece found");
+	}
+	// for a look in game: one more city, its walls built, saved as saved\Save_Games\
+	// GatehouseOnWall.sav with the first free site on its south run printed (the cursor's spot)
+	for (int k = 0; k < 6 && nextCity(); k++) {
+		std::vector<ServerGameObject*> foundations;
+		for (const auto& [bpid, objlist] : city->children)
+			for (CommonGameObject* c : objlist)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation"))
+					foundations.push_back((ServerGameObject*)c);
+		for (ServerGameObject* o : foundations)
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, o->blueprint->name.substr(0, o->blueprint->name.size() - 11))) {
+				const Vector3 at = o->position, turn = o->orientation;
+				server.destroyObject(o);
+				server.spawnObject(bp, city, at, turn);
+			}
+		pump();
+		const Placed site = placeOn(false, "saved city's south run");
+		if (site.tiles.empty())
+			continue;
+		if (server.clientPlayerObjects.empty())
+			server.clientPlayerObjects.emplace_back(player->id);
+		const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / "GatehouseOnWall.sav");
+		printf("GATEWALL saved %d to %s: the site at (%.1f, %.1f, %.1f), the Manor at (%.1f, %.1f)\n", (int)server.saveGame(path.c_str()), path.c_str(),
+			site.at.x, site.at.y, site.at.z, first->position.x, first->position.z);
+		break;
+	}
+	printf("GATEWALL all %d\n", failures == 0 ? 1 : 0);
+	fflush(stdout);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -12872,6 +13239,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
 {Test_Wind, "Wind: the lobby's settings and text, the target by the weather, veering and gusts, wind chill and the fires' factor, the save"},
 {Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
+{Test_GatehouseOnWall, "Gatehouse on a wall: over four straight pieces (turned too) it replaces them between the wall's ends; refused across a run, on a corner, on a gatehouse; walked through open, not closed"},
 };
 
 void LaunchTest()
