@@ -1803,10 +1803,25 @@ void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 			r->actions.run(&ctx);
 }
 
+// (NETCLIMSG_OBJECT_ASSOCIATION) an association change, to the clients: not a missile's (an
+// arrow's firer and target, many a second in a battle; no button asks for them)
+static bool AssociationPacket(NetPacketWriter& msg, uint8_t change, const ServerGameObject* obj, int category, const ServerGameObject* other)
+{
+	if (!Server::instance || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE
+		|| (other && other->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE))
+		return false;
+	msg.writeUint8(change);
+	msg.writeUint32(obj->id);
+	msg.writeUint32((uint32_t)category);
+	msg.writeUint32(other ? other->id : 0);
+	return true;
+}
+
 void ServerGameObject::associateObject(int category, ServerGameObject * associated)
 {
 	assert(this && associated);
-	this->associates[category].insert(associated);
+	if (this->associates[category].insert(associated).second)
+		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 1, this, category, associated)) Server::instance->sendToAll(msg); }
 	associated->associators[category].insert(this);
 	// the AI tests: a missile's firer is registered after its target (Mechanics\fort attack.cpp,
 	// Fire Arrow.cpp): a building's shot counts for its player against the target's
@@ -1828,16 +1843,21 @@ void ServerGameObject::associateObject(int category, ServerGameObject * associat
 void ServerGameObject::dissociateObject(int category, ServerGameObject * associated)
 {
 	assert(this && associated);
-	this->associates[category].erase(associated);
+	if (this->associates[category].erase(associated))
+		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 2, this, category, associated)) Server::instance->sendToAll(msg); }
 	associated->associators[category].erase(this);
 }
 
 void ServerGameObject::clearAssociates(int category)
 {
 	assert(this);
-	for (auto &obj : associates[category])
+	auto& set = associates[category];
+	if (set.empty())
+		return;
+	for (auto &obj : set)
 		obj->associators[category].erase(this);
-	associates[category].clear();
+	set.clear();
+	{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 3, this, category, nullptr)) Server::instance->sendToAll(msg); }
 }
 
 void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
@@ -3361,6 +3381,22 @@ void Server::sendStateTo(NetLink* link)
 				sendObject(child->dyncast<ServerGameObject>());
 	};
 	sendObject(getLevel()->dyncast<ServerGameObject>());
+	// the associations, once every object is there (NETCLIMSG_OBJECT_ASSOCIATION)
+	for (const auto& [id, co] : idmap) {
+		const ServerGameObject* obj = (const ServerGameObject*)co;
+		if (!obj || obj->deleted || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+			continue;
+		for (const auto& [category, set] : obj->associates)
+			for (const SrvGORef& ref : set)
+				if (const ServerGameObject* other = ref.get(); other && other->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE) {
+					NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION);
+					msg.writeUint8(1);
+					msg.writeUint32(obj->id);
+					msg.writeUint32((uint32_t)category);
+					msg.writeUint32(other->id);
+					send(msg);
+				}
+	}
 	for (const auto& [pair, status] : diplomaticStatuses) {
 		NetPacketWriter msg(NETCLIMSG_DIPLOMATIC_STATUS_SET);
 		msg.writeUint32(pair.first);

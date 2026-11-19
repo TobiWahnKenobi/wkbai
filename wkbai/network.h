@@ -184,6 +184,12 @@ enum NetClientMessages {
 	// EXIT_TO_MAIN_MENU run for this client's player (a guest's Exit button, WKB.exe's msg 0xC2):
 	// this client leaves the game, the others play on
 	NETCLIMSG_EXIT_TO_MENU,
+	// wkbai's: an association changed (REGISTER_/DEREGISTER_/CLEAR_ASSOCIATES), so the client's
+	// finders see the server's (a command button's condition: the Dark Portal's "Don't Already
+	// have a portal", FINDER_ASSOCIATES "Portal Exit"): the change (8 bits: 1 associated, 2
+	// dissociated, 3 the category cleared), the object's id, the category (32 bits each), the
+	// associated object's id (32 bits; 0 for 3). All of them to a client joining.
+	NETCLIMSG_OBJECT_ASSOCIATION,
 };
 
 enum NetServerMessages {

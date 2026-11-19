@@ -10935,6 +10935,117 @@ void Test_SmallerItems()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Associations mirrored to the client (NETCLIMSG_OBJECT_ASSOCIATION): a save loaded with a local
+// client ("assocMirror": { "path": "<.sav>" }, default the AI play test's PERFORMANCE3), every
+// non-missile object's associates the same on both sides; after 30 game seconds of play again;
+// one associated, one dissociated, a category cleared, again. Then the Dark Portal's "Don't Already
+// have a portal" on the client for each Druid, as the server has it (right-clicking with a Druid
+// ended the game: FINDER_ASSOCIATES on the client). Prints "ASSOC ..." and "ASSOC result: ok|FAIL".
+void Test_AssocMirror()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("assocMirror", nlohmann::json::object());
+	const std::string path = cfg.value("path", std::string("C:/Dev/wkbai-saveformat/tests/PERFORMANCE3.sav"));
+	Server server;
+	Client client(true);
+	NetLocalBuffer toClient, toServer;
+	NetLocalLink srv2cli(&toClient, &toServer), cli2srv(&toServer, &toClient);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame(path.c_str());
+	auto pump = [&]() {
+		for (int i = 0; i < 100000 && cli2srv.available(); i++)
+			client.tick();
+	};
+	pump();
+	int failures = 0;
+	auto compare = [&](const char* when) {
+		int objects = 0, links = 0, wrong = 0;
+		for (const auto& [id, co] : server.idmap) {
+			const ServerGameObject* o = (const ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+				continue;
+			ClientGameObject* c = client.findObject(id);
+			std::map<int, std::set<uint32_t>> s, k;
+			for (const auto& [cat, set] : o->associates)
+				for (const SrvGORef& r : set)
+					if (r && !r->deleted && r->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE)
+						s[cat].insert(r.objid);
+			if (c)
+				for (const auto& [cat, set] : c->associates)
+					for (const CliGORef& r : set)
+						if (r)
+							k[cat].insert(r.objid);
+			for (auto it = s.begin(); it != s.end();)
+				it = it->second.empty() ? s.erase(it) : std::next(it);
+			for (auto it = k.begin(); it != k.end();)
+				it = it->second.empty() ? k.erase(it) : std::next(it);
+			if (!s.empty())
+				objects++;
+			for (const auto& [cat, ids] : s)
+				links += (int)ids.size();
+			if (s != k) {
+				if (wrong < 5)
+					printf("ASSOC   %s: object %u %s differs (server %zu categories, client %zu)\n", when, id, o->blueprint->getFullName().c_str(), s.size(), k.size());
+				wrong++;
+			}
+		}
+		printf("ASSOC %s: %d objects with %d associations, %d differ\n", when, objects, links, wrong);
+		if (wrong || !links)
+			failures++;
+	};
+	compare("loaded");
+	server.timeManager.unpause();
+	for (int i = 0; i < 600; i++) {
+		StepServer(server, 1);
+		pump();
+	}
+	compare("after 30 s");
+	// a change of each kind
+	ServerGameObject *a = nullptr, *b = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			(a ? b : a) = o;
+		if (b)
+			break;
+	}
+	const int cat = server.gameSet->associations.names.getIndex("Victims");
+	if (a && b && cat >= 0) {
+		a->associateObject(cat, b);
+		pump();
+		compare("associated");
+		a->dissociateObject(cat, b);
+		pump();
+		compare("dissociated");
+		a->associateObject(cat, b);
+		a->clearAssociates(cat);
+		pump();
+		compare("cleared");
+	}
+	// the Druids' Dark Portal condition on the client, as on the server
+	const int eq = server.gameSet->equations.names.getIndex("Don't Already have a portal");
+	int druids = 0;
+	if (eq >= 0)
+		for (const auto& [id, co] : server.idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->name.find("Druid") == std::string::npos || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+				continue;
+			ClientGameObject* c = client.findObject(id);
+			if (!c)
+				continue;
+			SrvScriptContext sctx(&server, o);
+			CliScriptContext cctx(&client, c);
+			const bool srv = server.gameSet->equations[eq]->booleval(&sctx), cli = client.gameSet->equations[eq]->booleval(&cctx);
+			printf("ASSOC   %s %u: \"Don't Already have a portal\" server %d, client %d\n", o->blueprint->name.c_str(), id, (int)srv, (int)cli);
+			if (srv != cli)
+				failures++;
+			druids++;
+		}
+	printf("ASSOC druids checked: %d\n", druids);
+	printf("ASSOC result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
+}
+
 // A save played on without a window, as fast as it goes: "runSave": { "path": "<full path of a .sav>",
 // "seconds": n } (default 120 game seconds). For a slow game (the play test's PERFORMANCE save): with
 // "profileSim" the simulation's parts every 10 s; here "RUNSAVE t=<s> real <ms> per game second,
@@ -11900,6 +12011,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_RunSave, "Run a save without a window (\"runSave\": path, seconds): real time per game second, slow steps, moving characters"},
 {Test_FarmBuilders, "Farm builders: three peasants given three farms each; a finished farm keeps its nearest builder, who farms it"},
 {Test_FireQuality, "Fire quality: Original, Low and High, the option and its config round trip, Original the old sprites, the flames, glow, smoke and shimmer"},
+{Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
 };
 
 void LaunchTest()
