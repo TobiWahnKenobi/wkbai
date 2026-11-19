@@ -5757,7 +5757,7 @@ void ClientInterface::iter()
 			std::vector<float>& lights = dgfx->shadows.fireLights;
 			lights.clear();
 			if (g_renderSettings.fireLights) {
-				struct Fire { Vector3 sum; float colour[3] = {}, alpha = 0, lowest = 1e9f; int count = 0; };
+				struct Fire { Vector3 sum, emitters; float colour[3] = {}, alpha = 0, lowest = 1e9f; int count = 0; bool standing = false; };
 				std::map<std::pair<void*, uint32_t>, Fire> fires;
 				const float now = client->timeManager.currentTime;
 				for (auto& [key, list] : particlesContainer->particles)
@@ -5770,6 +5770,8 @@ void ClientInterface::iter()
 						Fire& f = fires[{ key, p.objid }];
 						const Vector3 at = p.getPosition(now);
 						f.sum += at;
+						f.emitters += p.startPosition;
+						f.standing |= p.system->standingFire;
 						f.lowest = std::min(f.lowest, at.y);
 						const uint32_t c = p.getColor(now);
 						const float a = (c >> 24) / 255.0f;
@@ -5783,24 +5785,36 @@ void ClientInterface::iter()
 					// at the fire's base (its particles rise), so that it lights the ground around it
 					Vector3 at = f.sum / (float)f.count;
 					at.y = f.lowest + 1.5f;
+					const bool fireFx = FireFx::Level() > FireFx::ORIGINAL;
+					const uint32_t seed = (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U);
+					// Low and High fire (FireEffects.h): a standing fire's light at its emitters (not
+					// at its particles, jumping as they come and go), swaying with its flames
+					if (fireFx && f.standing) {
+						at = f.emitters / (float)f.count;
+						at.y += 1.0f;
+						at += FireFx::Sway(now, seed);
+					}
 					// the fire's hue at full brightness (the sprites' alpha-weighted colour, warmed:
 					// their middles are near white), as strong as there are visible sprites
 					if (f.alpha <= 0)
 						continue;
-					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
+					// (Low and High: more orange and a little dimmer, as their flames)
+					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * (fireFx ? 0.55f : 0.7f), f.colour[2] / f.alpha * (fireFx ? 0.18f : 0.35f) };
 					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
-					float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					float strength = std::min(1.0f, f.alpha / 3.0f) * (fireFx ? 1.2f : 1.5f);
 					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
-					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
-					// more its building is damaged
+					// Low and High fire: flickering with its flames; High: stronger and wider the more its
+					// building is damaged
 					// (a fire the weather is putting out: dimmer and nearer, as its flames shrink)
 					if (const float share = FireFx::ShareOf(key.second); share < 1.0f) {
 						strength *= 0.3f + 0.7f * share;
 						reach *= 0.6f + 0.4f * share;
 					}
+					if (fireFx)
+						strength *= FireFx::Flicker(now, seed);
 					if (FireFx::Level() >= FireFx::HIGH) {
 						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
-						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
+						strength *= 1.0f + 0.2f * damage;
 						reach *= 1.0f + 0.25f * damage;
 					}
 					std::array<float, 7> l = { at.x, at.y, at.z, reach,

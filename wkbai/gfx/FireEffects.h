@@ -16,6 +16,8 @@
 //    around each fire, the air shimmering above it (the frame behind, displaced), a thicker
 //    column of smoke, the fire lights (RenderSettings::fireLights) flickering with
 //    them and stronger and wider the more a building is damaged.
+//  Low and High: the fire lights (a burning building's light on the ground and the models) more
+//  orange, flickering and swaying.
 // Visual only: worked out each frame from the particles and the game time (no state, no rand()),
 // so nothing reaches the simulation and replays stay the same. Low and High need the enhanced
 // renderers on Diligent; without them the fires are Original's.
@@ -66,6 +68,9 @@ namespace FireFx {
 
 	// a fire's flicker about 1 (0.7..1.3) at a game time; seed: which fire (the same every time)
 	float Flicker(float time, uint32_t seed);
+	// where a fire's light is about its fire at a game time (metres, about 0.5 at most each way):
+	// it sways with the flames
+	Vector3 Sway(float time, uint32_t seed);
 	// a stable seed for a particle (its start)
 	uint32_t SeedOf(const Particle& p);
 
