@@ -247,7 +247,8 @@ float FormationController::maxDimension() const
 
 bool FormationController::isFormedUp() const
 {
-	if (!formed)
+	// (a form-up still to come, a new type or one asked for, is not formed: its members are about to walk)
+	if (!formed || reformWanted || layoutOf != formation->blueprint)
 		return false;
 	for (const auto& [childType, childList] : formation->children)
 		for (auto* member : childList)
