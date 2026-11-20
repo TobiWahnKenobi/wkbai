@@ -12001,10 +12001,13 @@ static void MapFolderImportInChildren(const nlohmann::json& cfg)
 		_putenv_s("WKB_TEST", std::to_string(g_launchedTest).c_str());
 		_putenv_s("WKB_MAPFOLDER_ONLY", only);
 		_putenv_s("WKB_MAPFOLDER_FROM", std::to_string(index).c_str());
-		// (cmd /c strips the outer quotes: the path in its own)
-		FILE* p = _popen(("\"\"" + exe + "\" < NUL\"").c_str(), "r");
-		if (!p)
+		// no console window (_popen's cmd.exe opened one on the screen for each game)
+		HiddenChild hc = PopenHidden(exe.c_str());
+		FILE* p = hc.out;
+		if (!p) {
+			PcloseHidden(hc);
 			return 0;
+		}
 		char buf[4096];
 		int found = 0; // 1: the game's line, 2: no level, 3: past the last map
 		while (fgets(buf, sizeof(buf), p)) {
@@ -12020,7 +12023,7 @@ static void MapFolderImportInChildren(const nlohmann::json& cfg)
 			else if (l.rfind("MAPFOLDER maps 0 ", 0) == 0 && !found)
 				found = 3;
 		}
-		const int code = _pclose(p);
+		const int code = PcloseHidden(hc);
 		if (!found && code != 0)
 			line = "the child process ended with " + std::to_string(code);
 		return found;
