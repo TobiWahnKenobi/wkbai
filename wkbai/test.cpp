@@ -11278,6 +11278,43 @@ void Test_MixedFormation()
 		else
 			check(false, "a second formation for the join");
 	}
+	// a unit training at a dummy joining the formation stops training; a member told to train
+	// doesn't (the play test of 2026-11-20: it went on training and pulled the formation about)
+	{
+		const GameObjBlueprint* dummyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Training Dummy");
+		const int train = gs->commands.names.getIndex("Train");
+		ServerGameObject* dummy = dummyBp && merged ? server.spawnObject(dummyBp, player, merged->position + Vector3(-25, 0, 15), Vector3(0, 0, 0)) : nullptr;
+		ServerGameObject* trainee = dummy ? server.spawnObject(spearBp, player, dummy->position + Vector3(4, 0, 0), Vector3(0, 0, 0)) : nullptr;
+		ServerGameObject* member = nullptr;
+		if (merged)
+			for (const auto& [type, children] : merged->children)
+				for (CommonGameObject* c : children)
+					if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						member = (ServerGameObject*)c;
+		if (trainee && member && train >= 0 && join >= 0) {
+			gs->commands[train].execute(trainee, dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 40; i++)
+				StepServer(server, 1);
+			Order* before = trainee->orderConfig.getCurrentOrder();
+			const std::string was = before ? gs->orders.getString(before->blueprint) : std::string("none");
+			gs->commands[join].execute(trainee, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 20; i++)
+				StepServer(server, 1);
+			Order* after = trainee->orderConfig.getCurrentOrder();
+			const std::string now = after ? gs->orders.getString(after->blueprint) : std::string("none");
+			check(trainee->getParent() == merged && now.rfind("Train", 0) != 0,
+				"a trainee (\"" + was + "\") joins the formation and stops training (now \"" + now + "\")");
+			gs->commands[train].execute(member, dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			Order* m = member->orderConfig.getCurrentOrder();
+			const std::string mnow = m ? gs->orders.getString(m->blueprint) : std::string("none");
+			// (as the original's Train command: the unit leaves the formation, then trains)
+			check(mnow.rfind("Train", 0) != 0 || member->getParent() != merged,
+				"a member told to train trains only out of the formation (\"" + mnow + "\", " + (member->getParent() == merged ? "still in it" : "left it") + ")");
+			loose.push_back(trainee);
+		}
+		else
+			check(false, "a Training Dummy, a trainee and the Train command");
+	}
 	// an order on the formation's own member (a right-click inside it): refused, not followed
 	if (merged) {
 		ServerGameObject* member = nullptr;

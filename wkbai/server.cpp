@@ -1566,6 +1566,16 @@ void ServerGameObject::setParent(ServerGameObject * newParent)
 		newParent = newParent->parent ? newParent->parent->dyncast<ServerGameObject>() : nullptr;
 	if (!newParent)
 		return;
+	// a unit training at a dummy that joins a formation (Join Formation, a script's transfer) stops
+	// training: it went on, out of its place, and pulled the formation about (the play test of
+	// 2026-11-20). (A command runs outside the simulation's step: not only then.)
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && newParent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+		&& Server::instance && Server::instance->gameSet)
+		if (Order* o = orderConfig.getCurrentOrder()) {
+			const std::string& name = Server::instance->gameSet->orders.getString(o->blueprint);
+			if (name == "Train" || name == "Train near Selected Dummy")
+				orderConfig.cancelAllOrders();
+		}
 
 	if (this->parent == newParent)
 		return;

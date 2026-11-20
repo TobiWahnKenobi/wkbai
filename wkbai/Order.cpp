@@ -458,6 +458,14 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 	// save, 2026-11-19): refused
 	if (target && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && target->getParent() == gameobj)
 		return nullptr;
+	// no training in a formation, for the formation or a member of it (the play test of 2026-11-20)
+	if (orderBlueprint && Server::instance && Server::instance->gameSet
+		&& (gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+			|| (gameobj->parent && gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION))) {
+		const std::string& name = Server::instance->gameSet->orders.getString(orderBlueprint);
+		if (name == "Train" || name == "Train near Selected Dummy")
+			return nullptr;
+	}
 	// Improved formations: a ranged member of a formation sent to fight with the melee "Attack" (the
 	// Formation Army's "Attack Victims", a mixed formation charging) takes its own attack's order
 	// instead (its DEFAULT_ATTACK_COMMAND's: Fire Arrow, Fire Bullet), so it shoots rather than
