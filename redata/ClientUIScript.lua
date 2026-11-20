@@ -83,18 +83,25 @@ function drawSelectionInformation(obj)
 		drawText(px + 129 - getTextWidth(text) / 2, py + 105, text)
 	end
 
-	-- wkbai's unit history: the name over the window (a hero's in gold, its birth name under
-	-- it), the age and the kills under the hit points; a formation's tally and heroes, and the
-	-- best of several selected, over the panel
+	-- wkbai's unit history: the name under the unit's picture in the window (a hero's in gold,
+	-- its birth name under it), with a shadow over the glass; the age and the kills under the
+	-- hit points; a formation's tally and heroes, and the best of several selected, over the
+	-- panel
 	local cx = px + 129
 	local name = getUnitName(obj)
+	local function shadowed(x, y, text, colour)
+		drawTextColor(x + 1, y + 1, text, 0xC0000000)
+		drawTextColor(x, y, text, colour)
+	end
 	if name ~= "" then
+		-- (the picture: 120 points square about the rose's middle, 130, 197)
+		local pcx = px + 130
 		if isUnitHero(obj) then
-			drawTextColor(cx - getTextWidth(name) / 2, py + 52, name, 0xFF46C8E6)
+			shadowed(pcx - getTextWidth(name) / 2, py + 244, name, 0xFF46C8E6)
 			local born = "born " .. getUnitBirthName(obj)
-			drawTextColor(cx - getTextWidth(born) / 2, py + 68, born, 0xFFC8C8C8)
+			shadowed(pcx - getTextWidth(born) / 2, py + 258, born, 0xFFC8C8C8)
 		else
-			drawText(cx - getTextWidth(name) / 2, py + 62, name)
+			shadowed(pcx - getTextWidth(name) / 2, py + 250, name, 0xFFFFFFFF)
 		end
 	end
 	local kills, razed = getUnitKills(obj), getUnitBuildingsDestroyed(obj)

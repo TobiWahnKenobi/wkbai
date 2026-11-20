@@ -2292,11 +2292,9 @@ std::string UnitAgeText(Client* client, uint32_t id)
 		else
 			snprintf(text, sizeof(text), "Age %d:%02d", s / 60, s % 60);
 	}
-	std::string out = text;
-	// a save from before the history: its age counted from the load
-	if (it->second.flags & 2)
-		out += " (since loading)";
-	return out;
+	// (a save from before the history: born at the game's start, its age the game's; no
+	// "since loading", the user's wish)
+	return std::string(text);
 }
 
 void ClientInterface::drawUnitHistoryOverlay()
@@ -3210,8 +3208,9 @@ void ClientInterface::drawSelectionPortrait()
 	Model* model = obj->getModel();
 	if (!model)
 		return;
-	// the window's middle in the panel (330 x 326 at the bottom left), in points
-	constexpr float CX = 128.0f, CY = 195.0f, SIZE = 120.0f;
+	// the window's middle in the panel (330 x 326 at the bottom left), in points: where the rose's
+	// petals meet in Bottom_Left_Panel.tga
+	constexpr float CX = 130.0f, CY = 197.0f, SIZE = 120.0f;
 	const float s = g_uiScale;
 	const float panelY = g_windowHeight / s - 326.0f;
 	const int px = (int)((CX - SIZE / 2) * s), py = (int)((panelY + CY - SIZE / 2) * s), size = (int)(SIZE * s);
@@ -3224,8 +3223,36 @@ void ClientInterface::drawSelectionPortrait()
 	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
 	// zoom in and out
 	const auto box = model->interpolateBoundingBox(0);
-	const Vector3 centre = (box[0] + box[1]) * 0.5f;
-	const Vector3 half = (box[1] - box[0]) * 0.5f;
+	Vector3 centre = (box[0] + box[1]) * 0.5f;
+	Vector3 half = (box[1] - box[0]) * 0.5f;
+	// a character: centred on its body, not on the box of all it holds (a spear's tip or a
+	// banner pulled the figure off the window's middle; the user saw it left of and below it).
+	// Its middle is its median vertex at frame 0 on each axis (most vertices are the body's);
+	// the square fits the 3rd to the 97th percentile around it. Once per model.
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		static std::map<Model*, std::pair<Vector3, Vector3>> bodies; // middle, half extent
+		auto it = bodies.find(model);
+		if (it == bodies.end()) {
+			std::pair<Vector3, Vector3> body{ centre, half };
+			StaticModel* sm = model->getStaticModel();
+			const size_t n = sm ? sm->getMesh().vertices.size() / 3 : 0;
+			const float* v = n ? model->interpolate(0) : nullptr;
+			if (v && n >= 20) {
+				std::vector<float> axis(n);
+				for (int a = 0; a < 3; a++) {
+					for (size_t i = 0; i < n; i++)
+						axis[i] = v[i * 3 + a];
+					std::sort(axis.begin(), axis.end());
+					const float lo = axis[n * 3 / 100], mid = axis[n / 2], hi = axis[n * 97 / 100];
+					(a == 0 ? body.first.x : a == 1 ? body.first.y : body.first.z) = mid;
+					(a == 0 ? body.second.x : a == 1 ? body.second.y : body.second.z) = std::max(hi - mid, mid - lo);
+				}
+			}
+			it = bodies.emplace(model, body).first;
+		}
+		centre = it->second.first;
+		half = it->second.second;
+	}
 	// the footprint's radius as it turns, and the half height
 	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
 	const float halfHeight = std::max(0.3f, half.y);

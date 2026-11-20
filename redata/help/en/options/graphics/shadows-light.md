@@ -50,11 +50,17 @@ On (the default): the small shadows where units' feet, fences and walls meet the
 
 ## Light from fires
 
-On (the default): fires light the ground and the models around them: burning buildings, flaming arrows, fire spells, up to 16 at once.
+On (the default): fires light the ground and the models around them: burning buildings, flaming arrows, fire spells, up to 16 at once. With [Fire](#fire) on Low or High the light is more orange and flickers and sways with the flames; on High it is also stronger and reaches further the more a building is damaged.
 
 ## Fire
 
-How fires look. **Original**: the original game's flame pictures. **Low**: drawn flames that move and flicker. **High** (the default): the drawn flames with a glow around them, smoke and the heat shimmering above them.
+How fires look.
+
+- **Original:** the original game's flame pictures.
+- **Low:** drawn flames that rise and flicker, sunk into a burning building rather than standing in front of it, with soot that thins out and fades as it rises, and a column of smoke above a burning building.
+- **High** (the default): Low's flames, finer, with a glow around each fire, a thicker column of smoke and the hot air shimmering above it.
+
+With Low and High, the [light from fires](#light-from-fires) is more orange and flickers and sways with the flames. Low and High need the enhanced renderers; without them fires look as with Original. Fire is only looks: it changes nothing in the game, and replays stay the same.
 
 ## Light from the sky
 
