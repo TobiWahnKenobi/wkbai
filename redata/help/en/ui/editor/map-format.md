@@ -68,7 +68,7 @@ The materials are data: `Maps\Materials\All_Textures.json` for the game's textur
 
 ## The build folder
 
-Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new or something in it changed, so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
+Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
 
 ## Importing an original map
 
