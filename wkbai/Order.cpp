@@ -259,6 +259,14 @@ void Task::start()
 					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder()) {
 					walkIntoRange = true;
 				}
+				// A conditional one (TASK "Attack", Michael's: PROXIMITY_DISSATISFIED_SEQUENCE "Target is
+				// out of attack range", a formation member switching to another enemy close by or
+				// stopping) is for a target that moves off too: WKB.exe runs it only for a unit that was
+				// in range (0x50cc10 -> 0x50d360); at the start the unit approaches. Run here, every
+				// rider of a formation told to attack a victim more than a few metres off stopped at
+				// once: a Column's riders behind its front never rode out (test 100)
+				else if (dist >= this->proximity && blueprint->proximityDissatisfiedEquation >= 0) {
+				}
 				else if (dist >= this->proximity) {
 					running.insert(go);
 					RunProximityDissatisfied(this->blueprint, go);
@@ -1395,6 +1403,19 @@ void ObjectReferenceTask::onUpdate()
 			this->proximitySatisfied = false;
 		}
 	}
+	// A FORMATION_CREATE task ("Change Formation - Line", ...: CREATE_FORMATION on itself) ends once
+	// its formation has formed up, every member at its place (WKB.exe 0x50cd25: task class 9, the
+	// unit's formation by message 0x7d1, 0x550ba0, then vtable+0x2C). Kept running, the formation
+	// never was idle again: the missile formation army's "New Enemy Seen" (IS_IDLE "My Formation")
+	// never shot, Javelineers in a Line let riders pass and stand among them (test 100).
+	if (this->target && blueprint->classType == Tags::ORDTSKTYPE_FORMATION_CREATE) {
+		ServerGameObject* go = this->order->gameObject;
+		ServerGameObject* formation = go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION ? go : go->getParent();
+		if (formation && formation->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && formation->formationController.isFormedUp()) {
+			terminate();
+			return;
+		}
+	}
 	if (this->target) {
 		ServerGameObject* go = this->order->gameObject;
 		// Following (Follow, guarding): the game set gives the follower the engine items "Follow
@@ -1550,8 +1571,16 @@ void ObjectReferenceTask::onUpdate()
 			if (!proximitySatisfied) {
 				proximitySatisfied = true;
 				TraceTask(this, "proximity satisfied");
-				blueprint->proximitySatisfiedSequence.run(order->gameObject);
-				blueprint->movementCompletedSequence.run(order->gameObject);
+				// one arrival is one event: PROXIMITY_SATISFIED where the task has that sequence, else
+				// MOVEMENT_COMPLETED (Garrison.cpp has only the latter). Both in the same step ran the
+				// Formation Army's "Move To Attack Range Of Original Victim" TERMINATE_TASK
+				// FINDER_CONTROLLER twice: the second ended the army's "Army Formation Attack" before
+				// it started, its cycling order ended, and the formation stood at the enemy until a hit
+				// woke it (the play test's charge into a line; a Column, Line or Wedge alike)
+				if (!blueprint->proximitySatisfiedSequence.actionList.empty())
+					blueprint->proximitySatisfiedSequence.run(order->gameObject);
+				else
+					blueprint->movementCompletedSequence.run(order->gameObject);
 
 				// Set the task animation
 				int animtoplay = -1;
