@@ -22,7 +22,7 @@ Probes (paths, orders, the game's hash, objects hidden by the fog of war) work o
 
 ## Map authoring
 
-A second MCP server, `wkbai_author_mcp.py`, is for designing maps rather than playing them. It doesn't open the game's window: every tool runs one of wkbai's headless `--author` commands. The design is in the RE repo's `docs/engine/map-authoring.md` (step 17.3; the land, ground, water, object, check and preview tools come in later steps).
+A second MCP server, `wkbai_author_mcp.py`, is for designing maps rather than playing them. It doesn't open the game's window: every tool runs one of wkbai's headless `--author` commands. The design is in the RE repo's `docs/engine/map-authoring.md` (steps 17.3 and 17.4; the ground, water, object, check and preview tools come in later steps).
 
 | Tool | What it does |
 |---|---|
@@ -33,6 +33,10 @@ A second MCP server, `wkbai_author_mcp.py`, is for designing maps rather than pl
 | `get_map` | A folder's `map.json`, its files, and the last compile's `report.json`. |
 | `set_map` | Changes `map.json` by a JSON patch: a list of RFC 6902 operations, or an object as an RFC 7386 merge patch. |
 | `compile` | Compiles the folder into `build\` and returns the report, with warnings and their tile coordinates. |
+| `plan_terrain` | Sets or changes the map's feature plan (`map.json`'s `terrain` and `features`: hills, ranges with passes, plateaus with ramps, valleys, basins, coasts, islands, rivers with fords, passes, terraces, flat sites; positions in playable metres, heights in metres) and generates the land from it. `features` replaces the list, `add` appends, `remove` drops by id or index, `patch` merges into `terrain`. |
+| `generate_terrain` | Generates `heights.png` from the plan: shapes, noise, thermal and hydraulic erosion, terraces, then passes, ramps and river beds carved last. The same seed gives the same heights, and `heights.hand.png` is never touched. Returns the stats: height range, slope histogram (the game's own per-tile measure), walkable share (45-degree units; 30 and 60 too; the largest walkable region), the sea, each feature's checks (plateau flatness, ramp and pass slopes, the river bed never rising) and the time taken, plus the relief picture. |
+| `import_heightmap` | A heightmap picture as the plan's base layer (`layers/source.png`): a PNG of 8 or 16 bits, a raw file, an SRTM `.hgt` or a GeoTIFF, cropped, mapped to a height range and blended with the plan, so rivers can be carved into real land. |
+| `import_elevation` | Real elevation data from files already on disk (Copernicus GLO-30 GeoTIFF, SRTM `.hgt`), fitted to the map: squeezed horizontally, the real slopes kept or exaggerated, flattened where too steep, the sea found. It never downloads: without the files it names each tile with its source, URL, size and licence, so the user is asked first. The licence and attribution go into `map.json`'s references. |
 
 The server works in a folder of its own (`--work`, by default `%TEMP%\wkbai-author-run`). It writes its own `wkconfig.json` there with `"test": true`, so a crash writes a dump and never opens a dialog. Maps go into `<work>\profile\saved\Maps\<name>.wkbai`, where that folder's game loads them as `Maps\<name>.wkbai`. With `--user-path <folder>`, they go into another wkbai user folder instead, such as yours (`%APPDATA%\wkbai`), so that the skirmish list shows them.
 
@@ -47,6 +51,11 @@ wkbai --author catalog [--mod <name>|none] [--gameset <file>] [--edges] [--out c
 wkbai --author describe "2 Player 4 Peaks.lvl" --png 4peaks.png --out 4peaks.json
 wkbai --author import "2 Player 4 Peaks.lvl" C:\maps\4Peaks.wkbai
 wkbai --author C:\maps\4Peaks.wkbai
+wkbai --author terrain C:\maps\4Peaks.wkbai [--seed <n>] --out stats.json
+wkbai --author terrain-stats C:\maps\4Peaks.wkbai
+wkbai --author heightmap C:\maps\4Peaks.wkbai --options heightmap.json
+wkbai --author elevation C:\maps\4Peaks.wkbai --options elevation.json
+wkbai --author elevation-tiles --options elevation.json
 ```
 
 Without `--out`, the JSON goes to standard output between the lines `AUTHOR-JSON-BEGIN` and `AUTHOR-JSON-END`. The last line printed is always `AUTHOR ok, ...` or `AUTHOR failed: ...`, and the exit code is 0 or 1.

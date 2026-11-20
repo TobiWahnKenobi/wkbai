@@ -11570,8 +11570,8 @@ void Test_FireQuality()
 		const float first = FireFx::Flicker(0.0f, 5);
 		for (int i = 0; i < 2000; i++) {
 			const float f = FireFx::Flicker(i * 0.0137f, 5);
-			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
-			varies |= std::abs(f - first) > 0.1f;
+			inRange &= f >= 0.45f && f <= 1.55f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.3f;
 		}
 		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
 	}
@@ -11670,7 +11670,8 @@ void Test_FireQuality()
 		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
 		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
 		if (level == FireFx::LOW)
-			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+			// the flames and the standing fire's smoke, no glow nor shimmer
+			check("Low: flames and smoke", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] >= 4 && kinds[3] == 0 && ordered && deterministic);
 		else
 			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
 			// the standing fire only
@@ -12776,14 +12777,20 @@ void Test_RiverCurrents()
 			run(3.0f);
 			const float moved = alive(u) ? (u->position - at).len2xz() : -1.0f, health = share(u);
 			const int carried = env.stats.carriedSeconds - carried0;
-			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s", name, hardy, c.drag,
-				health * 100.0f, moved, carried);
+			// (what moved it, if anything: its own walk, its order)
+			const Order* order = alive(u) ? u->orderConfig.getCurrentOrder() : nullptr;
+			const std::string orderName = order ? gs.orders.getString(order->blueprint->bpid) : std::string("none");
+			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s; walking on its own %d, order %s", name, hardy, c.drag,
+				health * 100.0f, moved, carried, alive(u) ? (int)(u->movementController.isMoving() || u->movement.isMoving()) : -1, orderName.c_str());
 			if (hardy == ServerEnvironment::WATER_MACHINE)
 				check(health < 0.7f && health > 0.0f && carried >= 1 && moved > 0.2f && moved < c.drag * 3.0f * 0.6f, std::string("a war machine sinks, dragged a little: ") + what);
 			else if (hardy == ServerEnvironment::WATER_HUGE)
 				check(alive(u) && health < 0.97f && carried >= 1 && moved > 0.5f * c.drag, std::string("a huge creature drifts, hurt: ") + what);
 			else
-				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && moved < 0.3f, std::string("otherworldly, untouched: ") + what);
+				// (not carried, not hurt; moved only by an order of its own: another copy of the game's
+				// data has an enemy in its sight there, and it goes for it)
+				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && (moved < 0.3f || order),
+					std::string("otherworldly, untouched: ") + what);
 			if (u.get()) server.deleteObject(u.get());
 		}
 	}
@@ -13788,6 +13795,9 @@ void Test_MapCatalog()
 	fflush(stdout);
 }
 
+// Step 17.4's test: MapTerrainTest.cpp
+void Test_MapTerrain();
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -13897,6 +13907,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
 {Test_SwimAnimations, "Swim animations: made from the walk where a unit has none, the Scout's own kept, a real one in a made one's place"},
 {Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
+{Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
 };
 
 void LaunchTest()

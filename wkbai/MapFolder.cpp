@@ -2,6 +2,7 @@
 
 #include "MapFolder.h"
 #include "MapAuthoring.h"
+#include "MapTerrain.h"
 #include "terrain.h"
 #include "server.h"
 #include "file.h"
@@ -1840,7 +1841,8 @@ int RunCommandLine(const std::vector<std::string>& args)
 	if (args.empty()) {
 		printf("usage: wkbai --author <folder.wkbai>\n       wkbai --author import <level.lvl> [<folder.wkbai>]\n"
 			"       wkbai --author catalog [--mod <name>|none] [--gameset <file>] [--edges] [--out <file.json>]\n"
-			"       wkbai --author describe <folder.wkbai | level> [--mod <name>|none] [--png <file.png>] [--out <file.json>]\n");
+			"       wkbai --author describe <folder.wkbai | level> [--mod <name>|none] [--png <file.png>] [--out <file.json>]\n"
+			"       wkbai --author terrain|terrain-stats|heightmap|elevation|elevation-tiles ... (MapTerrain.h)\n");
 		return 2;
 	}
 	// what can go on a map, and an existing map in numbers and a picture (MapAuthoring.h)
@@ -1848,6 +1850,10 @@ int RunCommandLine(const std::vector<std::string>& args)
 		return MapAuthoring::RunCatalog(std::vector<std::string>(args.begin() + 1, args.end()));
 	if (args[0] == "describe")
 		return MapAuthoring::RunDescribe(std::vector<std::string>(args.begin() + 1, args.end()));
+	// the land: the feature plan's generator, heightmap and elevation import (MapTerrain.h)
+	for (const char* c : { "terrain", "terrain-stats", "heightmap", "elevation", "elevation-tiles" })
+		if (args[0] == c)
+			return MapTerrain::RunCommandLine(args);
 	LoadBCP("data.bcp");
 	Result r;
 	if (args[0] == "import") {

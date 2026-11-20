@@ -1,8 +1,10 @@
 """wkbai map authoring as an MCP server (stdio), so that an AI assistant such as Claude Code can
 design maps for wkbai: know exactly what can go on a map (catalog), read existing maps back
-(describe_map, get_map), and make and change map folders (new_map, import_map, set_map, compile).
-Step 17.3 of the RE repo's docs/engine/map-authoring.md; the land, ground, water, object, check
-and preview tools follow in later steps.
+(describe_map, get_map), make and change map folders (new_map, import_map, set_map, compile), and
+make the land (plan_terrain, generate_terrain, import_heightmap, import_elevation).
+Steps 17.3 and 17.4 of the RE repo's docs/engine/map-authoring.md; the ground, water, object,
+check and preview tools follow in later steps. import_elevation never downloads: it names the
+tiles an area needs, and the agent asks the user before each download.
 
 Everything runs wkbai's headless commands (no window, nothing on the screen):
     wkbai --author catalog [--mod <name>|none] [--edges] --out <file>
@@ -83,6 +85,44 @@ TOOLS = [
      obj({"map": MAP, "patch": {"type": ["array", "object"]}}, ["map", "patch"])),
     ("compile", "Compile a map folder into its build\\ cache (heights, tiles, water, the level with the rules' objects) and return the report: sizes, hand vertices and tiles, lakes, tiles under water, objects, warnings with tile coordinates.",
      obj({"map": MAP}, ["map"])),
+    # --- the land (step 17.4): MapTerrain.h ---
+    ("plan_terrain", "Set or change a map's feature plan (map.json \"terrain\" and \"features\"), then generate the land from it (generate: false to only save the plan). "
+     "Positions in playable metres [x, z] (x east, z north, 0 the south-west corner), heights in metres. "
+     "terrain: {base (the plain's height, default 20), seaLevel, beach (m flattened around the sea level), noise {amplitude m, scale m, octaves, ridged 0-1, warp}, "
+     "erosion {hydraulic 0-2, thermal 0-2, talusDeg, dropsPerVertex}}. "
+     "features: a list, each {kind, id?, role?, irregularity 0-1.5 (how far the outline wanders, default 0.5)} and by kind: "
+     "hill {at, radius, height (peak), shape: dome|peak}; range {line [[x,z],...], width, height (peak, or [start, end]), passes (a count or points [[x,z]] or [{at, height}]), passHeight, passWidth, passMaxSlopeDeg}; "
+     "plateau {at (point + radius, or a polygon [[x,z],...]), height, cliffs 0-1, ramps (count), rampsAt [[x,z]], rampDeg, rampWidth}; "
+     "valley {line, width, depth (below base) or floorHeight [from, to], fall, floor (flat share 0-0.9)}; basin {at, radius, depth, water (a lake level)}; "
+     "coast {side north|south|east|west (or line + seaSide [x,z]), sea (m of sea from the side), seaDepth, shelf, beach, cliffs 0-1}; "
+     "island {at, radius or polygon, height, seaDepth, shelf}; river {line or from/to, width, depth, meander 0-1, fords (count), valleyWidth, valleyDepth, bank, bankDeg}; "
+     "pass {at, height (saddle), width, direction (deg, the way across), maxSlopeDeg}; terraces {at? (none: everywhere), step m, strength 0-1}; flat {at, radius, height? (default the mean)}. "
+     "features replaces the list; add appends; remove takes ids or indices; patch is a merge patch on terrain. Returns the stats as generate_terrain.",
+     obj({"map": MAP, "terrain": {"type": "object"}, "patch": {"type": "object"}, "features": {"type": "array", "items": {"type": "object"}},
+          "add": {"type": "array", "items": {"type": "object"}}, "remove": {"type": "array"}, "generate": BOOL, "picture": BOOL}, ["map"])),
+    ("generate_terrain", "Generate heights.png from the map's feature plan (shapes, noise, hydraulic and thermal erosion, terraces, carved passes, ramps and rivers), deterministic from the seed; "
+     "heights.hand.png (hand edits) is left alone. Returns the stats: height range, slope histogram (per tile, the game's own measure), walkable share "
+     "(tiles a 45-degree unit can stand on; 30 and 60 too; the largest walkable region), the sea, each feature's checks (plateau flatness, ramp and pass slopes, "
+     "river bed falling), time taken. seed: another seed for this run. picture (default true): the relief from describe_map.",
+     obj({"map": MAP, "seed": INT, "picture": BOOL}, ["map"])),
+    ("import_heightmap", "Use a heightmap picture as the land (the plan's base layer layers/source.png, blended with the plan's features, so e.g. rivers can be carved into it): "
+     "file (a PNG 8 or 16-bit, a .raw/.r16/.r8, an SRTM .hgt or a GeoTIFF; a full path), raw {width, height, bits 8|16, bigEndian, signed} for a raw file, "
+     "crop [x0, y0, x1, y1] pixels, cover playable (the picture over the playable area, the edge band continuing it mirrored) or whole, "
+     "range [lo, hi] metres the picture's lowest and highest map to (default [2, 60]), or verticalScale + offset, weight 0-1 (blend with the plan's base), "
+     "licence and attribution (go into map.json's references). Generates, returns the stats.",
+     obj({"map": MAP, "file": STR, "raw": {"type": "object"}, "crop": {"type": "array", "items": NUM}, "cover": {"type": "string", "enum": ["playable", "whole"]},
+          "range": {"type": "array", "items": NUM}, "verticalScale": NUM, "offset": NUM, "weight": NUM, "licence": STR, "attribution": STR, "generate": BOOL, "picture": BOOL},
+         ["map", "file"])),
+    ("import_elevation", "Real land from public elevation data, from files ALREADY ON DISK: this tool never downloads. "
+     "Without files (or with some missing) it lists the tiles the area needs: name, source, URL, size, licence; ASK THE USER before each download, then call again with files. "
+     "source copernicus (Copernicus DEM GLO-30 GeoTIFF, free with attribution) or srtm (SRTM .hgt, public domain); bbox [south, west, north, east] or centre [lat, lon] + sizeKm [ew, ns]; "
+     "the area is fitted to the map (keepAspect, default true): squeezed horizontally, heights by verticalScale (a number, map m per real m) or the real slopes kept (default) "
+     "times exaggerate, flattened so at most maxSteepShare (0.08) of the land is steeper than maxSlopeDeg (40); floor (lowest land, m), sea (auto: real 0 m is the sea), seaDepth. "
+     "The licence and attribution go into map.json's references. Generates, returns the stats and the scales used.",
+     obj({"map": MAP, "files": {"type": "array", "items": STR}, "source": {"type": "string", "enum": ["copernicus", "srtm"]},
+          "bbox": {"type": "array", "items": NUM}, "centre": {"type": "array", "items": NUM}, "sizeKm": {"type": ["number", "array"]},
+          "verticalScale": NUM, "exaggerate": NUM, "maxSlopeDeg": NUM, "maxSteepShare": NUM, "floor": NUM, "sea": BOOL, "seaDepth": NUM,
+          "keepAspect": BOOL, "weight": NUM, "generate": BOOL, "picture": BOOL}, ["map"])),
 ]
 
 
@@ -398,9 +438,106 @@ class Author:
                 r["report"] = json.load(f)
         return r
 
+    # --- the land ---
+    def _terrain_run(self, cmd, folder, options=None, extra=()):
+        """wkbai --author <cmd> <folder> [--options <file>] --out <file>: its JSON (an error's JSON in the AuthorError)"""
+        tdir = os.path.join(self.work, "terrain")
+        os.makedirs(tdir, exist_ok=True)
+        stem = re.sub(r"[^\w.-]", "_", os.path.basename(folder.rstrip("\\/")))
+        out = os.path.join(tdir, stem + "." + cmd + ".json")
+        if os.path.exists(out):
+            os.remove(out)
+        args = [cmd, folder, "--out", out] + list(extra)
+        if options is not None:
+            opt = os.path.join(tdir, stem + "." + cmd + ".options.json")
+            with open(opt, "w", encoding="utf-8") as f:
+                json.dump(options, f, indent=1)
+            args += ["--options", opt]
+        try:
+            self.run(*args)
+        except AuthorError as e:
+            if os.path.isfile(out):
+                with open(out, encoding="utf-8") as f:
+                    e.reply["result"] = json.load(f)
+            raise
+        with open(out, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _with_picture(self, a, result, folder):
+        if not a.get("picture", True):
+            return result
+        try:
+            self.run(folder)  # compiled first, so describe pictures the new land
+            pic = self.describe_map({"map": folder, "picture": True})
+        except AuthorError as e:
+            result["picture"] = e.reply
+            return result
+        if isinstance(pic, dict) and "image" in pic:
+            return {"description": result, "image": pic["image"], "path": pic["path"]}
+        return result
+
+    def plan_terrain(self, a):
+        folder = self.need_folder(a["map"])
+        path = os.path.join(folder, "map.json")
+        with open(path, encoding="utf-8") as f:
+            mj = json.load(f)
+        if "terrain" in a:
+            gen = (mj.get("terrain") or {}).get("generated")
+            mj["terrain"] = copy.deepcopy(a["terrain"])
+            if gen and "generated" not in mj["terrain"]:
+                mj["terrain"]["generated"] = gen  # the generator's own lakes are replaced next time
+        if "patch" in a:
+            mj["terrain"] = merge_patch(mj.get("terrain") or {}, a["patch"])
+        feats = list(mj.get("features") or [])
+        if "features" in a:
+            feats = list(a["features"])
+        if a.get("remove"):
+            rm = a["remove"]
+            feats = [f for i, f in enumerate(feats) if i not in rm and f.get("id") not in rm]
+        feats += list(a.get("add") or [])
+        kinds = {"hill", "range", "ridge", "plateau", "valley", "basin", "coast", "island", "river", "pass", "terraces", "flat"}
+        bad = [i for i, f in enumerate(feats) if not isinstance(f, dict) or f.get("kind") not in kinds]
+        if bad:
+            raise AuthorError({"error": "features %s: kind must be one of %s" % (bad, ", ".join(sorted(kinds)))})
+        mj["features"] = feats
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(mj, f, indent=1)
+        r = {"folder": folder, "terrain": mj.get("terrain"), "features": feats}
+        if a.get("generate", True):
+            r["stats"] = self._terrain_run("terrain", folder)
+            return self._with_picture(a, r, folder)
+        return r
+
+    def generate_terrain(self, a):
+        folder = self.need_folder(a["map"])
+        extra = ["--seed", str(int(a["seed"]))] if a.get("seed") else []
+        return self._with_picture(a, self._terrain_run("terrain", folder, extra=extra), folder)
+
+    def import_heightmap(self, a):
+        folder = self.need_folder(a["map"])
+        opts = {k: v for k, v in a.items() if k not in ("map", "picture")}
+        r = self._terrain_run("heightmap", folder, opts)
+        return self._with_picture(a, r, folder) if a.get("generate", True) else r
+
+    def import_elevation(self, a):
+        folder = self.need_folder(a["map"])
+        opts = {k: v for k, v in a.items() if k not in ("map", "picture")}
+        try:
+            r = self._terrain_run("elevation", folder, opts)
+        except AuthorError as e:
+            res = e.reply.get("result") or {}
+            if "needed" in res:
+                # nothing downloaded: the tiles named, for the user to agree to
+                return {"downloaded": False, "askTheUser": "Ask the user before each download: name the source, the tile, its size and licence.",
+                        "needed": res["needed"], "missing": res.get("missing", [])}
+            raise
+        return self._with_picture(a, r, folder) if a.get("generate", True) else r
+
     def call(self, name, a):
         f = {"catalog": self.catalog, "describe_map": self.describe_map, "new_map": self.new_map, "import_map": self.import_map,
-             "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile}.get(name)
+             "get_map": self.get_map, "set_map": self.set_map, "compile": self.compile,
+             "plan_terrain": self.plan_terrain, "generate_terrain": self.generate_terrain,
+             "import_heightmap": self.import_heightmap, "import_elevation": self.import_elevation}.get(name)
         if not f:
             raise AuthorError({"error": "unknown tool " + str(name)})
         return f(a)

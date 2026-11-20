@@ -232,13 +232,15 @@ float4 Flame(FIRE_OUTPUT i)
 		discard;
 	// the noise in the world (across the screen and up), about three cells across a flame:
 	// the flames of one fire move as one; it rises
-	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(size * 0.3, 0.05);
-	q.y -= t * 2.4;
-	q.x += seed * 0.37;
+	// (across: from the flame's own centre, not the world's: the camera's right from the map's
+	// origin swept the pattern across hundreds of cells as the camera turned)
+	float2 q = float2((i.UV.x - 0.5) * size, i.World.y) / max(size * 0.3, 0.05);
+	q.y -= t * 1.1;
+	q.x += seed * 7.3;
 	float n;
 	if (Params.y >= 2) {
 		// High: domain-warped (the noise displaced by noise: tongues that curl and split)
-		float2 warp = float2(Fbm(q * 0.55 + float2(0, t * 0.9), 2), Fbm(q * 0.55 + float2(5.2, 1.3 + t * 0.9), 2));
+		float2 warp = float2(Fbm(q * 0.55 + float2(0, t * 0.4), 2), Fbm(q * 0.55 + float2(5.2, 1.3 + t * 0.4), 2));
 		n = Fbm(q + (warp - 0.5) * 0.9, 4);
 		// (four octaves average out: their contrast back to two's, else the flames merge into sheets)
 		n = saturate(0.5 + (n - 0.5) * 1.45);
@@ -252,6 +254,10 @@ float4 Flame(FIRE_OUTPUT i)
 	float cool = saturate(1 - life * 1.5);
 	temp = saturate(body * cool * (0.8 + 0.3 * (heat - 1) / 0.6));
 	float soot = smoothstep(0.25, 0.75, life) * smoothstep(0.05, 0.5, body) * (0.35 + 0.65 * n);
+	// the soot dissolving over the last third of its life (the noise eating it from its thin parts,
+	// its edges first), not vanishing whole as the particle dies
+	float gone = smoothstep(0.65, 1.0, life);
+	soot *= saturate((n + 0.15 - gone * 1.2) * 4) * (1 - gone * gone);
 	if (temp <= 0.02 && soot <= 0.01)
 		discard;
 	// 800 K (a dull red at the edges and the tips) to 2600 K (the core's yellow-white)
@@ -277,7 +283,7 @@ float4 Glow(FIRE_OUTPUT i)
 	return float4(Blackbody(1300) * g * 0.08 * Params.w * (1 - i.Fog), 0);
 }
 
-// High's smoke: soft puffs, darker and denser young, lit by the sky and from below by the fire
+// the smoke (Low and High): soft puffs, darker and denser young, lit by the sky and from below by the fire
 float4 Smoke(FIRE_OUTPUT i)
 {
 	float2 c = i.UV * 2 - 1;
@@ -300,8 +306,8 @@ float4 Shimmer(FIRE_OUTPUT i)
 	float m = saturate(1 - x * x) * smoothstep(0.0, 0.2, y) * saturate(1 - y) * i.More.z * i.Look.x;
 	if (m <= 0.001)
 		discard;
-	float2 q = float2(dot(i.World, CamRight.xyz), i.World.y) / max(i.More.y * 0.12, 0.05);
-	q.y -= Params.x * 3.5;
+	float2 q = float2((i.UV.x - 0.5) * i.More.y, i.World.y) / max(i.More.y * 0.12, 0.05);
+	q.y -= Params.x * 1.8;
 	float2 d = float2(Noise(q), Noise(q + float2(7.7, 3.1))) - 0.5;
 	float2 uv = i.Pos.xy * float2(CamRight.w, CamUp.w) + d * m * 0.012 * saturate(60 / max(i.ViewZ, 1));
 	float3 behind = sceneTexture.SampleLevel(sLinear, uv, 0).rgb;
@@ -523,8 +529,20 @@ bool HasShare(uint32_t objid) { return s_shares && objid && s_shares->count(obji
 float Flicker(float time, uint32_t seed)
 {
 	const float s = Hash01(seed) * 6.2831853f, s2 = Hash01(seed ^ 0x5bd1e995U) * 6.2831853f;
-	return 1.0f + 0.13f * std::sin(time * 9.1f + s) + 0.09f * std::sin(time * 15.7f + s2) + 0.06f * std::sin(time * 23.3f + s + s2)
-		+ 0.02f * std::sin(time * 41.0f + 2.0f * s);
+	// (swells of a third to one a second, and quicker flickers on them, up to three a second:
+	// about half to one and a half times; no buzz)
+	return 1.0f + 0.2f * std::sin(time * 2.1f + s) + 0.15f * std::sin(time * 5.7f + s2) + 0.1f * std::sin(time * 11.3f + s + s2)
+		+ 0.06f * std::sin(time * 17.9f + 2.0f * s);
+}
+
+Vector3 Sway(float time, uint32_t seed)
+{
+	const float s = Hash01(seed ^ 0x3c6ef372U) * 6.2831853f, s2 = Hash01(seed ^ 0xa54ff53aU) * 6.2831853f;
+	// (a metre and a half or so across, half a metre up and down: the pool of light on the ground
+	// moving with the flames)
+	return Vector3(1.0f * std::sin(time * 1.3f + s) + 0.5f * std::sin(time * 3.7f + s2),
+		0.4f * std::sin(time * 2.3f + s2) + 0.2f * std::sin(time * 5.3f + s),
+		1.0f * std::sin(time * 1.1f + s2 + 1.0f) + 0.5f * std::sin(time * 4.1f + s));
 }
 
 uint32_t SeedOf(const Particle& p)
@@ -542,6 +560,10 @@ void Add(const Particle& p, float now, float size, float alpha)
 	// (a fire the rain is putting out, or snow holding down: smaller and fainter, cooler)
 	const float share = ShareOf(p.objid);
 	f.size = size * ShareSize(share);
+	{
+		const auto [s1, s2, si] = const_cast<ParticleSystem*>(p.system)->Particles.Scale_Gradient.getAtTime(0.875f * p.maxAge, size);
+		f.steady = (s1 + (s2 - s1) * si) * ShareSize(share);
+	}
 	f.alpha = Saturate(alpha * ShareAlpha(share));
 	f.life = p.maxAge > 0 ? Saturate((now - p.startTime) / p.maxAge) : 0.0f;
 	f.heat = 1.0f + (DamageOf(p.objid) - 1.0f) * share;
@@ -570,7 +592,7 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 	static std::unordered_map<uint64_t, size_t> index;
 	clusters.clear();
 	index.clear();
-	if (level >= HIGH) {
+	{
 		for (const Flame& f : s_pending) {
 			const bool standing = f.system->standingFire;
 			uint64_t key = (uint64_t)(uintptr_t)f.system * 0x9E3779B97F4A7C15ULL ^ ((uint64_t)f.objid << 20);
@@ -586,7 +608,7 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			}
 			Cluster& c = clusters[it->second];
 			c.sum += f.position;
-			c.size = std::max(c.size, f.size);
+			c.size = std::max(c.size, f.steady);
 			c.alpha += f.alpha;
 			c.heat = std::max(c.heat, f.heat);
 			c.lowest = std::min(c.lowest, f.position.y);
@@ -598,12 +620,13 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 				c.base.y = std::min(c.base.y, c.lowest + c.size * 0.25f);
 			}
 		// the shimmer above the flames, the frame behind displaced (first: the rest over it)
-		if (shimmer)
+		if (shimmer && level >= HIGH)
 			for (const Cluster& c : clusters)
 				if (c.standing)
 					push(c.base + Vector3(0, c.size * 0.35f, 0), c.size * 1.1f, Saturate(c.alpha), 0, 0, c.heat, SHIMMER, 1.9f, 0.4f, 1.0f);
-		// the smoke of a standing fire: puffs rising from its flames' tops, drifting with the wind,
-		// growing and thinning (a puff every LIFE / count seconds, each its own path)
+		// the smoke of a standing fire, at Low and High: a column of puffs rising from its flames'
+		// tops, drifting with the wind, growing and thinning (a puff every LIFE / count seconds, evenly,
+		// each its own path), thicker the more the building is damaged
 		// (the lobby's wind, Wind.h, also without the seasons; a gale's lean held to 6 m/s)
 		Vector3 wind = g_environment.wind;
 		if (wind.len2xz() > 6.0f)
@@ -612,22 +635,22 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			if (!c.standing)
 				continue;
 			const float damage = (c.heat - 1.0f) / 0.6f;
-			const int puffs = 3 + (int)std::lround(4.0f * damage);
-			const float LIFE = 7.0f, rise = 1.6f + 0.12f * c.size;
-			const float strength = Saturate(c.alpha * 0.6f) * (0.55f + 0.45f * damage);
+			const int puffs = (level >= HIGH ? 9 : 6) + (int)std::lround((level >= HIGH ? 6.0f : 3.0f) * damage);
+			const float LIFE = 10.0f, rise = 1.0f + 0.08f * c.size;
+			const float strength = Saturate(c.alpha * 0.8f) * (0.5f + 0.3f * damage);
 			for (int k = 0; k < puffs; k++) {
 				const uint32_t ps = Mix(c.seed + (uint32_t)k * 0x9E3779B1U);
-				const float offset = Hash01(ps);
+				const float offset = ((float)k + 0.6f * Hash01(ps)) / (float)puffs;
 				const float age = std::fmod(time / LIFE + offset, 1.0f) * LIFE;
 				const float u = age / LIFE;
 				Vector3 at = c.base + Vector3(0, c.size * 0.4f + rise * age, 0) + wind * (age * 0.8f);
 				at.x += (Hash01(ps ^ 0x1234567U) - 0.5f) * c.size * (0.3f + u);
 				at.z += (Hash01(ps ^ 0x7654321U) - 0.5f) * c.size * (0.3f + u);
-				const float width = c.size * (0.5f + 1.1f * u);
-				const float a = strength * std::sin(3.14159f * std::min(1.0f, u * 1.4f)) * (1.0f - u) * 0.85f;
+				const float width = c.size * (0.6f + 1.8f * u);
+				const float a = strength * Saturate(u * 8.0f) * (1.0f - u) * std::sqrt(1.0f - u);
 				if (a <= 0.01f)
 					continue;
-				const float grey = 0.16f + 0.22f * u + 0.06f * Hash01(ps ^ 0xabcdefU);
+				const float grey = 0.2f + 0.3f * u + 0.06f * Hash01(ps ^ 0xabcdefU);
 				push(at, width, a, u, Hash01(ps ^ 0x13579U), grey, SMOKE, 1.0f, 0.0f, Saturate(1.0f - u * 3.0f));
 			}
 		}
@@ -646,6 +669,10 @@ void BuildInstances(int level, float time, bool shimmer, std::vector<Instance>& 
 			aspect *= STANDING_TALL;
 			at.y -= width * 0.5f * aspect * STANDING_SINK;
 		}
+		// (its soot, as it dissolves, rising a little further than the particle: up to two thirds
+		// of the flame's width more by the end of its life)
+		const float late = Saturate((f.life - 0.5f) * 2.0f);
+		at.y += late * late * width * 0.65f;
 		push(at, width, f.alpha, f.life, Hash01(f.seed), f.heat, FLAME, aspect, 0.45f, 0.0f);
 	}
 	// the glow around each fire, flickering
