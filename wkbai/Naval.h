@@ -52,6 +52,10 @@ namespace Naval {
 		// the layer ferries no army of its own (a ministry's Admiralty, or a Lua AI at the helm,
 		// ferries its own); it still builds and fights at sea
 		bool manual = false;
+		// the war boats go for the enemies' docks once there are 3 or more (the ministries' Admiralty):
+		// a navy without its dock builds no more ships, and its army stays on its island
+		bool huntDocks = false;
+		int dockAttacks = 0;
 		std::vector<Ferry> ferries;
 		// the peasants sent to build the dock or a village (held from the work orders): id -> (foundation, since)
 		std::map<uint32_t, std::pair<uint32_t, float>> builders;

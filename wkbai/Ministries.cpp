@@ -389,6 +389,9 @@ void Ministries::update(Server& server)
 		auto& g = governments[p->id];
 		if (!g) {
 			g = std::make_unique<Government>(server, p->id);
+			// (from the first step, not War's first think: the placements' reach rule, position.cpp,
+			// applies to the ministry's players, and their first village is laid at the start)
+			p->aiController.ministryWaves = !(MinOff() & 128);
 			// (when it began: a level's clock needn't start at 0, Battleground's starts at 5916 s)
 			g->board.report("gov.start", g->now());
 			g->log(STRATEGIST, "a government of %zu departments", g->departments.size());

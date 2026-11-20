@@ -981,6 +981,33 @@ namespace {
 				st.coastAttacks++;
 				continue;
 			}
+			// the enemies' docks (huntDocks, 3 war boats or more): the nearest, shot at from within reach
+			if (st.huntDocks && warships.size() >= 3) {
+				ServerGameObject* dock = nullptr;
+				float dd = 0.0f;
+				for (ServerGameObject* e : Players()) {
+					if (e == player || !AIUtil::IsEnemy(player, e))
+						continue;
+					std::vector<ServerGameObject*> all;
+					Walk(e, all);
+					for (ServerGameObject* o : all)
+						if (IsDock(o) && o->isInteractable()) {
+							const float d = (o->position - w->position).sqlen2xz();
+							if (!dock || d < dd) { dock = o; dd = d; }
+						}
+				}
+				if (dock) {
+					if (!OutOfReach(w, dock->position, range + 20.0f)) {
+						AIAttack(w, dock);
+						st.dockAttacks++;
+					}
+					else if (!w->movementController.isMoving()) {
+						const Vector3 at = MovementController::nearestValidPosition(w->blueprint, dock->position, 10);
+						AIController::moveUnitsTo({ w }, player, at);
+					}
+					continue;
+				}
+			}
 			if (w->movementController.isMoving())
 				continue;
 			// on to where it is wanted (a little off: the boats spread around the place)
@@ -1324,6 +1351,11 @@ namespace Naval {
 		ServerGameObject* home = Home(player);
 		if (!home)
 			return false;
+		// (only to a home on the peasants' land: on 3 Isles Kolvas's home is on the central landmass
+		// and his Manor's search went there, the farms all refused and his commission stalled)
+		const int h = RegionNear(cls, home->position);
+		if (h < 0 || !std::binary_search(regions.begin(), regions.end(), h))
+			return false;
 		from = home->position;
 		return true;
 	}
@@ -1378,8 +1410,8 @@ namespace Naval {
 		for (ServerGameObject* s : Ships(player))
 			(IsTransport(s) ? transports : warships)++;
 		char buf[256];
-		snprintf(buf, sizeof(buf), "need %d, docks laid %d, ships %d+%d (ordered %d), ferries %d sent, %d landed (%d units), attacks %d at boats, %d at the coast",
-			(int)st.need, st.docksLaid, transports, warships, st.shipsOrdered, st.ferriesSent, st.ferriesLanded, st.unitsLanded, st.shipAttacks, st.coastAttacks);
+		snprintf(buf, sizeof(buf), "need %d, docks laid %d, ships %d+%d (ordered %d), ferries %d sent, %d landed (%d units), attacks %d at boats, %d at the coast, %d at docks",
+			(int)st.need, st.docksLaid, transports, warships, st.shipsOrdered, st.ferriesSent, st.ferriesLanded, st.unitsLanded, st.shipAttacks, st.coastAttacks, st.dockAttacks);
 		return buf;
 	}
 }

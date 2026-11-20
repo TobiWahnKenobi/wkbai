@@ -18,6 +18,7 @@
 #include "Naval.h"
 #include "server.h"
 #include "gameset/gameset.h"
+#include "gameset/ScriptContext.h"
 #include "settings.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -1099,6 +1100,28 @@ namespace {
 	struct Admiralty : Department {
 		uint8_t id() const override { return ADMIRALTY; }
 		float period() const override { return 5.0f; }
+		// A Kingmaker rush (Kingmaker Tactical Commissions.cpp) holds the peasants at their count ("War
+		// Peasants Needed") and builds nothing more until the rush army spawns and marches (Attack
+		// Scheduler.cpp, "Spawn The Attacking Army From The Defensive Army"). With every enemy across
+		// the sea it never marches: on 3 Isles a ministry player sat at 4 peasants and 46 food for 45
+		// minutes and died out. The Admiralty ends such a rush the way the scheduler does when the army
+		// spawns (the items back to 0 and "Setup My Building Commission"); the soldiers stay home.
+		void EndStrandedRush(Government& g, ServerGameObject* me) {
+			const GameSet* gs = g.server.gameSet.get();
+			const int rushing = gs->items.names.getIndex("I Am Rushing");
+			const int warMode = gs->items.names.getIndex("War Mode");
+			if (rushing < 0 || warMode < 0 || me->getItem(rushing) <= 0.0f || me->getItem(warMode) <= 0.0f)
+				return;
+			for (const char* name : { "War Mode", "War Peasants Needed", "War Farms Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "War Override" })
+				if (const int i = gs->items.names.getIndex(name); i >= 0)
+					me->setItem(i, 0.0f);
+			if (const int seq = gs->actionSequences.names.getIndex("Setup My Building Commission"); seq >= 0) {
+				SrvScriptContext ctx(&g.server, me);
+				auto _ = ctx.change(ctx.sequenceExecutor, me);
+				gs->actionSequences[seq].run(&ctx);
+			}
+			g.log(ADMIRALTY, "the rush can't march (every enemy is across the sea): ended, the building commission set up again");
+		}
 		void think(Government& g) override {
 			ServerGameObject* me = g.player();
 			if (!me || !g.server.aiNaval)
@@ -1107,6 +1130,7 @@ namespace {
 				ReadPersonality(g);
 			Naval::State& st = me->aiController.naval;
 			st.manual = true;
+			st.huntDocks = true;
 			const float ag = g.personality.aggression;
 			if (st.need == Naval::NEED_ONLY) {
 				// (an attack of 15 % of the population limit or more is more than one cog's 40 weight:
@@ -1119,6 +1143,7 @@ namespace {
 				const double wood = g.board.get("economy.wood");
 				if (wood > 1000.0)
 					st.wantWarships = std::min(8, st.wantWarships + (int)((wood - 1000.0) / 800.0));
+				EndStrandedRush(g, me);
 			}
 			else if (st.need == Naval::NEED_SHORTER) {
 				st.wantTransports = 1;
