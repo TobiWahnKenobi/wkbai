@@ -3125,7 +3125,10 @@ void Test_MinistryEconomy()
 					g->board.get("research.ordered"), g->board.get("builders.repaired"), g->board.get("missions.given"));
 				withinCap &= c.peasants <= cap + 3; // (those in training when the cap was reached)
 				goldSent |= g->board.get("labour.goldSent") > 0;
-				goldInTheWay |= g->board.get("economy.goldNeeded") > 0;
+				// (every miner sent while gold was in the way at that moment: a 5-minute sample of
+				// the need missed one the wood above 600 asked for and spent before the sample)
+				goldInTheWay |= g->board.get("economy.goldNeeded") > 0
+					|| (g->board.get("labour.goldSent") > 0 && g->board.get("labour.goldSentNeeded") >= g->board.get("labour.goldSent"));
 				with[id] = c;
 			}
 		}
