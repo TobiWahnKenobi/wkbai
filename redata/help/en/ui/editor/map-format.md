@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -20,9 +20,10 @@ The original game can't read map folders. To play a map in the original, use [Ex
 
 | File | What |
 |---|---|
-| `map.json` | The map's settings: its size, edge, height scale, sky, sun and fog, its textures, its ground's material, its players, and optionally its own day, seasons and weather (below) |
+| `map.json` | The map's settings: its size, edge, height scale, sky, sun and fog, its textures, its ground's material, its players, optionally its own day, seasons and weather (below), and optionally the plan its land is made from ([the land from a plan](#the-land-from-a-plan)) |
 | `heights.png` | The heights, as a 16-bit grey picture with a point for each corner of a 5 m tile; north at the top |
 | `heights.hand.png` | What the editor's brushes added to the heights |
+| `layers\source.png` | A heightmap or real land the heights were made from (optional, see [heightmaps and real land](#heightmaps-and-real-land)) |
 | `tiles.hand.json` | The tiles painted by hand |
 | `water.json` | The lakes (any number) and the [water design](water.md): surface, sea regions, waterways and their speeds, waterfalls |
 | `level.txt` | The level: players, objects, zones, aliases, and which objects were made by the map's rules and which by hand |
@@ -43,6 +44,22 @@ The skirmish lobby and the Map Editor list each folder once. A folder named "2 P
 
 A map's `map.json` may carry an `environment` block: whether the map has day and night and how long a day is, the hour and moon it starts with, whether it has seasons, how long they are, which comes first and how harsh they are, and how often the weather changes and which weathers may come. A new game on the map from the lobby starts with these in place of the [Seasons & Weather tab](../frontend/skirmish/weather.md)'s settings that were left at their defaults. A setting changed in the lobby stays as it was set there.
 
+## The land from a plan
+
+Instead of painting every hill by hand, a map maker (or an AI assistant) can describe the land in `map.json` and let wkbai make the heights from it:
+
+- **`terrain`:** the land in general: its base height, the sea's level and how wide its beaches are, how rough the land is (noise), and how much water and weather have worn it down (erosion).
+- **`features`:** a list of shapes, each at a position in metres, as objects are placed: **hill**, **range** (a ridge along a line, with passes through it), **plateau** (with ramps up), **valley**, **basin**, **coast**, **island**, **river** (with fords), **pass**, **terraces** and **flat** (a level site, for example for a base). Each may have a name and a note of what it is for ("player 1's base", "the ford").
+
+`wkbai --author terrain "<folder>"` turns the plan into `heights.png`: the shapes, then the roughness and the wearing, then the passes, ramps and river beds carved last, so that they stay passable. The same plan and seed always give the same land. Where the sea is, the folder's water gets a lake. It answers with numbers about the land: its heights, how steep it is, how much of it units can walk on (most units can stand on slopes up to 45 degrees), and for each shape whether it came out as asked: a plateau flat enough to build on, a pass or ramp not too steep, a river that never runs uphill. `wkbai --author terrain-stats "<folder>"` gives the same numbers for the land as it is now.
+
+**Your hand edits stay.** The plan only ever writes `heights.png`. What you changed with the [height brushes](terrain.md) is in `heights.hand.png`, which is never touched, and is added on top as before.
+
+## Heightmaps and real land
+
+- **A heightmap picture** (`wkbai --author heightmap`): a grey picture (PNG of 8 or 16 bits, a raw file, an SRTM `.hgt` or a GeoTIFF), cropped and fitted to a range of heights, becomes the base of the plan (`layers\source.png`). The plan's shapes are blended with it, so rivers and passes can be carved into it.
+- **Real land** (`wkbai --author elevation`): elevation data of a real place, from Copernicus GLO-30 GeoTIFF or SRTM `.hgt` files, fitted to the map: squeezed to the map's size, its slopes kept or made steeper, flattened where too steep to play, and the sea found. wkbai never downloads anything: without the files, `wkbai --author elevation-tiles` names the tiles the place needs, with where to get them, their size and their licence. The data's licence and the credit it asks for go into `map.json`'s references; keep them when you share the map.
+
 ## The build folder
 
 Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new or something in it changed, so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
@@ -61,7 +78,7 @@ Two commands help a map maker see what can go on a map and what is on one. They 
 
 ## Designing maps with an AI assistant
 
-The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, and build it. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
+The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
 
 ## In multiplayer
 

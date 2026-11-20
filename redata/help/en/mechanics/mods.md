@@ -1,6 +1,6 @@
 ---
 title: Mods
-ids: [mechanics/mods, mechanic/mods, mechanic/modding, mechanic/game-set]
+ids: [mechanics/mods, mechanic/mods, mechanic/modding, mechanic/game-set, mechanic/unknown-orders#levels-that-name-what-the-game-set-lacks]
 order: 230
 ---
 
@@ -30,6 +30,15 @@ wkbai reads more kinds of model and texture than the original, so a mod can brin
 - **glTF models:** a file `X.glb` or `X.gltf` beside a game model `X.mesh3`, at the same path, is drawn in its place. It may be in a mod, or in the `saved` folder of [your own folder](../files.md#your-own-folder). A glTF model has at most 65,535 vertices and no animation of its own, and keeps the original model's attachment points (flags, smoke, the place where new units appear).
 - **Exporting the game's models:** `"exportGltf": ["Warrior Kings Game Set\\Buildings\\Manor"]` in `wkconfig.json` writes each model of that folder and its subfolders (or a single `.mesh3` named there) as a `.glb` file into the `exported` folder of your own folder, at its own path. wkbai then closes. Take the setting out again afterwards. Edit an exported model and put it into `saved` at the same path to try it, for example `saved\Warrior Kings Game Set\Buildings\Manor\Fully Built\DEFAULT.glb`.
 - **Material maps:** beside a texture `T.tga`, the files `T_albedo`, `T_normal`, `T_orm` (ambient occlusion, roughness and metalness) and `T_emissive` (light of its own, such as lit windows), each `.png`, `.tga`, `.dds` or `.ktx2`, give the enhanced renderer more detail for every model that uses that texture. They show best with [Model highlights](../options/graphics/models.md#model-highlights) on.
+
+## Levels that name what the game set lacks
+
+A level made for another game set, or for a mod that isn't on, can give its objects orders or tasks that the game set you play with doesn't have. wkbai still loads it:
+
+- **An order the game set doesn't have** is left out.
+- **A task it doesn't have** is replaced by the order's own task where there is one, else left out.
+
+Each one writes a line starting with `WARNING:` to the game's log (the console window, see [the log](../troubleshooting.md#the-log)), with the object and the name. If a map behaves oddly, look there first: it often means a mod the map needs is off ([the Mods screen](../ui/frontend/mods.md)).
 
 ## Load order
 
