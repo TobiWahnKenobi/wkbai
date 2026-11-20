@@ -7973,6 +7973,17 @@ void Test_UnitNames()
 		if (server.timeManager.step())
 			server.simulate();
 	}
+	// a record as a save from before the history left it (its age unknown, counted from that
+	// load): after loading, born at the game's start, its age the whole game's (the panel shows
+	// a full age, no "since loading")
+	uint32_t unknownId = 0;
+	for (auto& [id, rec] : uh.records)
+		if (rec.death < 0.0f && !rec.hero && server.findObject(id)) {
+			unknownId = id;
+			rec.ageUnknown = true;
+			rec.birth = (float)server.timeManager.currentTime;
+			break;
+		}
 	const std::map<uint32_t, UnitHistory::Record> before = uh.records;
 	const uint64_t seed = uh.nameSeed;
 	check(server.saveGame(savePath.c_str()), "saved");
@@ -7985,7 +7996,8 @@ void Test_UnitNames()
 			ServerGameObject* ob = server.findObject(id);
 			ServerGameObject* ol = loaded.findObject(id);
 			const bool killsSame = (!ob && !ol) || (ob && ol && ob->kills == ol->kills) || (ob && !ol && rb.death >= 0.0f);
-			if (rl && rl->name == rb.name && rl->epithet == rb.epithet && rl->hero == rb.hero && rl->heroPending == rb.heroPending && rl->birth == rb.birth
+			if (rl && rl->name == rb.name && rl->epithet == rb.epithet && rl->hero == rb.hero && rl->heroPending == rb.heroPending
+				&& (id == unknownId ? rl->birth == 0.0f : rl->birth == rb.birth)
 				&& rl->death == rb.death && rl->formation == rb.formation && rl->formationKills == rb.formationKills && rl->slew == rb.slew && killsSame)
 				same++;
 			else {
@@ -7995,6 +8007,8 @@ void Test_UnitNames()
 			}
 		}
 		check(differ == 0 && same == (int)before.size(), "after loading: every record the same (" + std::to_string(same) + " of " + std::to_string(before.size()) + ")");
+		const UnitHistory::Record* ru = loaded.unitHistory.find(unknownId);
+		check(unknownId && ru && ru->birth == 0.0f, "an age unknown: born at the game's start after loading, not at the load (" + std::to_string(ru ? ru->birth : -1.0f) + ")");
 		check(loaded.unitHistory.nameSeed == seed && loaded.unitHistory.threshold == uh.threshold, "the name stream and the threshold kept");
 		// a unit made after loading draws the next name in both
 		ServerGameObject* lo = loaded.findObject(1027);
