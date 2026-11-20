@@ -1,0 +1,1743 @@
+{
+ "format": "wkbai materials",
+ "version": 1,
+ "database": "Maps\\Map_Textures\\All_Textures.dat",
+ "about": "The materials of the base game's texture database for map folders' ground rules (map.json \"ground\"; the RE repo's docs/engine/map-authoring.md, step 17.5). A mod or a texture set may ship its own Maps\\Materials\\<database name>.json, which replaces this one; a map adds or changes materials in map.json ground.materials. groups: per texture group its terrain, the terrain's speed (cost: below 1 slows), whether land units may cross it and its mean colour, from the game set's terrains; bridge: false: never a step between two other groups (snow between a cliff and grass).",
+ "materials": {
+  "grass": {
+   "description": "green grass, GRASS1 and GRASS3 in large patches",
+   "groups": [
+    [
+     "GRASS1",
+     3
+    ],
+    [
+     "GRASS3",
+     2
+    ]
+   ],
+   "patchScale": 260,
+   "mapColour": [
+    104,
+    160,
+    60
+   ]
+  },
+  "meadow": {
+   "description": "lush grass near water: fertile GRASS4 with GRASS1",
+   "groups": [
+    [
+     "GRASS4",
+     2
+    ],
+    [
+     "GRASS1",
+     1
+    ]
+   ],
+   "patchScale": 140,
+   "mapColour": [
+    40,
+    200,
+    90
+   ]
+  },
+  "dry grass": {
+   "description": "dry, yellowing grass far from water (GRASS2: borders grass, meadow, forest, mud)",
+   "groups": [
+    [
+     "GRASS2",
+     1
+    ]
+   ],
+   "mapColour": [
+    200,
+    190,
+    90
+   ]
+  },
+  "barren grass": {
+   "description": "barren upland grass (GRASS5: borders hills, scree, snow, sand)",
+   "groups": [
+    [
+     "GRASS5",
+     1
+    ]
+   ],
+   "mapColour": [
+    170,
+    150,
+    80
+   ]
+  },
+  "forest floor": {
+   "description": "the ground under a forest",
+   "groups": [
+    [
+     "FOREST3",
+     2
+    ],
+    [
+     "FOREST1",
+     1
+    ],
+    [
+     "FOREST2",
+     1
+    ]
+   ],
+   "patchScale": 160,
+   "mapColour": [
+    30,
+    90,
+    40
+   ]
+  },
+  "sand": {
+   "description": "desert and dune sand",
+   "groups": [
+    [
+     "SAND2",
+     2
+    ],
+    [
+     "SAND3",
+     1
+    ]
+   ],
+   "patchScale": 240,
+   "mapColour": [
+    240,
+    215,
+    150
+   ]
+  },
+  "beach": {
+   "description": "the shore's sand",
+   "groups": [
+    [
+     "SAND1",
+     1
+    ]
+   ],
+   "mapColour": [
+    250,
+    235,
+    170
+   ]
+  },
+  "hillside": {
+   "description": "grassy, stony hill slopes (and the step between grass and rock)",
+   "groups": [
+    [
+     "MIDHILL1",
+     1
+    ]
+   ],
+   "mapColour": [
+    150,
+    120,
+    70
+   ]
+  },
+  "low hill": {
+   "description": "gentle grassy rises",
+   "groups": [
+    [
+     "LOWHILL1",
+     1
+    ]
+   ],
+   "mapColour": [
+    140,
+    150,
+    80
+   ]
+  },
+  "rocky grass": {
+   "description": "stony grass at the foot of slopes (borders grass)",
+   "groups": [
+    [
+     "ROCKYGRASS2",
+     1
+    ]
+   ],
+   "mapColour": [
+    130,
+    140,
+    110
+   ]
+  },
+  "scree": {
+   "description": "scree and stony barren ground (borders barren grass)",
+   "groups": [
+    [
+     "ROCKYGRASS1",
+     1
+    ]
+   ],
+   "mapColour": [
+    160,
+    155,
+    140
+   ]
+  },
+  "rock": {
+   "description": "bare rock on steep slopes",
+   "groups": [
+    [
+     "ROCK1",
+     1
+    ]
+   ],
+   "mapColour": [
+    120,
+    110,
+    100
+   ]
+  },
+  "cliff": {
+   "description": "sheer mountain rock: blocks land units",
+   "groups": [
+    [
+     "MOUNTAIN1",
+     1
+    ]
+   ],
+   "mapColour": [
+    70,
+    60,
+    60
+   ]
+  },
+  "sea cliff": {
+   "description": "coastal cliffs: block land units",
+   "groups": [
+    [
+     "CLIFF1",
+     1
+    ]
+   ],
+   "mapColour": [
+    90,
+    70,
+    60
+   ]
+  },
+  "snow": {
+   "description": "snow, a few tones in patches",
+   "groups": [
+    [
+     "SNOW1",
+     3
+    ],
+    [
+     "SNOW4",
+     2
+    ],
+    [
+     "SNOW2",
+     1
+    ]
+   ],
+   "patchScale": 200,
+   "mapColour": [
+    250,
+    250,
+    255
+   ]
+  },
+  "mud": {
+   "description": "wet, muddy ground",
+   "groups": [
+    [
+     "GRASSY_MUD1",
+     1
+    ]
+   ],
+   "mapColour": [
+    100,
+    75,
+    45
+   ]
+  },
+  "river bed": {
+   "description": "a shallow river's bed (a ford: land units wade)",
+   "groups": [
+    [
+     "SHALLOW_RIVER",
+     1
+    ]
+   ],
+   "mapColour": [
+    90,
+    150,
+    200
+   ]
+  },
+  "deep river bed": {
+   "description": "a deep river's bed: blocks land units",
+   "groups": [
+    [
+     "DEEP_RIVER",
+     1
+    ]
+   ],
+   "mapColour": [
+    40,
+    80,
+    150
+   ]
+  },
+  "farmland": {
+   "description": "fertile ground for farms (Fertile Grasses, fertility 1.5)",
+   "groups": [
+    [
+     "GRASS4",
+     1
+    ]
+   ],
+   "mapColour": [
+    220,
+    160,
+    40
+   ]
+  },
+  "road": {
+   "description": "a cobbled road",
+   "groups": [
+    [
+     "COBBLES1",
+     1
+    ]
+   ],
+   "mapColour": [
+    200,
+    60,
+    60
+   ]
+  },
+  "track": {
+   "description": "an earth track or bare earth",
+   "groups": [
+    [
+     "EARTH1",
+     1
+    ]
+   ],
+   "mapColour": [
+    190,
+    120,
+    80
+   ]
+  },
+  "desert rock": {
+   "description": "rocky desert ground: blocks land units (keep it to steep slopes)",
+   "groups": [
+    [
+     "SAND4",
+     1
+    ]
+   ],
+   "mapColour": [
+    200,
+    140,
+    90
+   ]
+  },
+  "sandstone": {
+   "description": "desert mountains: block land units",
+   "groups": [
+    [
+     "SANDSTONE1",
+     2
+    ],
+    [
+     "SANDSTONE2",
+     1
+    ]
+   ],
+   "patchScale": 180,
+   "mapColour": [
+    170,
+    90,
+    60
+   ]
+  }
+ },
+ "presets": {
+  "temperate": {
+   "description": "green lowlands, meadows and mud by the water, forest patches, hillsides and rock on slopes, snow on the highest tops",
+   "default": "grass",
+   "rules": [
+    {
+     "material": "river bed",
+     "river": [
+      null,
+      0.9
+     ]
+    },
+    {
+     "material": "beach",
+     "water": true
+    },
+    {
+     "material": "beach",
+     "aboveSea": [
+      null,
+      2.2
+     ],
+     "slope": [
+      null,
+      16
+     ]
+    },
+    {
+     "material": "sea cliff",
+     "aboveSea": [
+      null,
+      9
+     ],
+     "slope": [
+      44,
+      null
+     ],
+     "seaDistance": [
+      null,
+      40
+     ]
+    },
+    {
+     "material": "cliff",
+     "slope": [
+      48,
+      null
+     ]
+    },
+    {
+     "material": "snow",
+     "heightRel": [
+      0.88,
+      null
+     ],
+     "slope": [
+      null,
+      40
+     ]
+    },
+    {
+     "material": "rock",
+     "slope": [
+      30,
+      null
+     ]
+    },
+    {
+     "material": "rock",
+     "heightRel": [
+      0.8,
+      null
+     ],
+     "slope": [
+      20,
+      null
+     ]
+    },
+    {
+     "material": "hillside",
+     "slope": [
+      19,
+      null
+     ]
+    },
+    {
+     "material": "hillside",
+     "heightRel": [
+      0.72,
+      null
+     ]
+    },
+    {
+     "material": "rocky grass",
+     "curvature": [
+      null,
+      -0.5
+     ],
+     "slope": [
+      9,
+      null
+     ]
+    },
+    {
+     "material": "mud",
+     "moisture": [
+      0.9,
+      null
+     ],
+     "slope": [
+      null,
+      5
+     ]
+    },
+    {
+     "material": "meadow",
+     "moisture": [
+      0.66,
+      null
+     ],
+     "slope": [
+      null,
+      14
+     ]
+    },
+    {
+     "material": "forest floor",
+     "noise": [
+      0.7,
+      null
+     ],
+     "noiseScale": 420,
+     "moisture": [
+      0.38,
+      null
+     ],
+     "slope": [
+      null,
+      18
+     ]
+    },
+    {
+     "material": "dry grass",
+     "moisture": [
+      null,
+      0.24
+     ]
+    }
+   ]
+  },
+  "nordic": {
+   "description": "a cold north: barren grass, wide forests, bare rock and snow well down the slopes, stony shores",
+   "default": "barren grass",
+   "rules": [
+    {
+     "material": "river bed",
+     "river": [
+      null,
+      0.9
+     ]
+    },
+    {
+     "material": "beach",
+     "water": true
+    },
+    {
+     "material": "scree",
+     "aboveSea": [
+      null,
+      1.6
+     ],
+     "slope": [
+      null,
+      16
+     ]
+    },
+    {
+     "material": "sea cliff",
+     "aboveSea": [
+      null,
+      9
+     ],
+     "slope": [
+      42,
+      null
+     ],
+     "seaDistance": [
+      null,
+      40
+     ]
+    },
+    {
+     "material": "cliff",
+     "slope": [
+      46,
+      null
+     ]
+    },
+    {
+     "material": "snow",
+     "heightRel": [
+      0.62,
+      null
+     ],
+     "slope": [
+      null,
+      38
+     ]
+    },
+    {
+     "material": "rock",
+     "slope": [
+      26,
+      null
+     ]
+    },
+    {
+     "material": "rock",
+     "heightRel": [
+      0.5,
+      null
+     ],
+     "slope": [
+      16,
+      null
+     ]
+    },
+    {
+     "material": "hillside",
+     "slope": [
+      15,
+      null
+     ]
+    },
+    {
+     "material": "scree",
+     "curvature": [
+      null,
+      -0.4
+     ],
+     "slope": [
+      7,
+      null
+     ]
+    },
+    {
+     "material": "mud",
+     "moisture": [
+      0.9,
+      null
+     ],
+     "slope": [
+      null,
+      5
+     ]
+    },
+    {
+     "material": "forest floor",
+     "noise": [
+      0.68,
+      null
+     ],
+     "noiseScale": 380,
+     "moisture": [
+      0.3,
+      null
+     ],
+     "slope": [
+      null,
+      22
+     ]
+    },
+    {
+     "material": "grass",
+     "moisture": [
+      0.55,
+      null
+     ]
+    },
+    {
+     "material": "grass",
+     "noise": [
+      0.74,
+      null
+     ],
+     "noiseScale": 300,
+     "slope": [
+      null,
+      14
+     ]
+    }
+   ]
+  },
+  "dry": {
+   "description": "a dry land: sand and dry grass, green only by the water, desert rock and sandstone on the slopes",
+   "default": "sand",
+   "rules": [
+    {
+     "material": "river bed",
+     "river": [
+      null,
+      0.9
+     ]
+    },
+    {
+     "material": "beach",
+     "water": true
+    },
+    {
+     "material": "beach",
+     "aboveSea": [
+      null,
+      2.5
+     ],
+     "slope": [
+      null,
+      16
+     ]
+    },
+    {
+     "material": "sandstone",
+     "slope": [
+      46,
+      null
+     ]
+    },
+    {
+     "material": "desert rock",
+     "slope": [
+      40,
+      null
+     ]
+    },
+    {
+     "material": "rock",
+     "slope": [
+      30,
+      null
+     ]
+    },
+    {
+     "material": "track",
+     "slope": [
+      14,
+      null
+     ]
+    },
+    {
+     "material": "meadow",
+     "moisture": [
+      0.85,
+      null
+     ],
+     "slope": [
+      null,
+      10
+     ]
+    },
+    {
+     "material": "grass",
+     "moisture": [
+      0.7,
+      null
+     ]
+    },
+    {
+     "material": "barren grass",
+     "moisture": [
+      0.5,
+      null
+     ]
+    },
+    {
+     "material": "track",
+     "noise": [
+      0.76,
+      null
+     ],
+     "noiseScale": 300,
+     "slope": [
+      null,
+      10
+     ]
+    }
+   ]
+  }
+ },
+ "groups": {
+  "CLIFF1": {
+   "terrain": "Coastline",
+   "cost": 0.75,
+   "landPassable": false,
+   "colour": [
+    200,
+    168,
+    111
+   ],
+   "bridge": false
+  },
+  "CLIFF1-GRASS1": {
+   "terrain": "Coastline",
+   "cost": 0.75,
+   "landPassable": false,
+   "colour": [
+    172,
+    156,
+    86
+   ]
+  },
+  "CLIFF1-SAND1": {
+   "terrain": "Coastline",
+   "cost": 0.75,
+   "landPassable": false,
+   "colour": [
+    218,
+    182,
+    122
+   ]
+  },
+  "COBBLES1": {
+   "terrain": "Cobbles",
+   "cost": 1.65,
+   "landPassable": true,
+   "colour": [
+    151,
+    121,
+    94
+   ],
+   "bridge": false
+  },
+  "COBBLES1-GRASS2": {
+   "terrain": "Cobbles Edge",
+   "cost": 1.55,
+   "landPassable": true,
+   "colour": [
+    148,
+    124,
+    77
+   ]
+  },
+  "DEEP_RIVER": {
+   "terrain": "River Bed",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    140,
+    105,
+    59
+   ],
+   "bridge": false
+  },
+  "DEEP_RIVER-SAND1": {
+   "terrain": "River Bed",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    200,
+    161,
+    104
+   ]
+  },
+  "DEEP_RIVER-SHALLOW_RIVER": {
+   "terrain": "River Bed",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    148,
+    112,
+    62
+   ]
+  },
+  "D_EARTH1": {
+   "terrain": "Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    212,
+    172,
+    126
+   ]
+  },
+  "D_EARTH1-ROCK1": {
+   "terrain": "Earth 'n' Rock",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    170,
+    141,
+    101
+   ]
+  },
+  "EARTH1": {
+   "terrain": "Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    172,
+    135,
+    92
+   ]
+  },
+  "EARTH1-ROCK1": {
+   "terrain": "Earth 'n' Rock",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    153,
+    128,
+    88
+   ]
+  },
+  "FOREST1": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    143,
+    105,
+    66
+   ],
+   "bridge": false
+  },
+  "FOREST1-FOREST2": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    138,
+    101,
+    63
+   ]
+  },
+  "FOREST2": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    130,
+    94,
+    58
+   ],
+   "bridge": false
+  },
+  "FOREST3": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    141,
+    128,
+    65
+   ],
+   "bridge": false
+  },
+  "FOREST3-FOREST1": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    142,
+    121,
+    65
+   ]
+  },
+  "FOREST3-FOREST2": {
+   "terrain": "Forest",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    138,
+    118,
+    63
+   ]
+  },
+  "GRASS1": {
+   "terrain": "Grass",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    128,
+    136,
+    48
+   ]
+  },
+  "GRASS1-FOREST3": {
+   "terrain": "Grass 'n' Forest",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    133,
+    133,
+    54
+   ]
+  },
+  "GRASS1-GRASS2": {
+   "terrain": "Grass",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    134,
+    132,
+    49
+   ]
+  },
+  "GRASS1-GRASS3": {
+   "terrain": "Grass",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    132,
+    136,
+    50
+   ]
+  },
+  "GRASS1-GRASS4": {
+   "terrain": "Fertile Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    119,
+    130,
+    30
+   ]
+  },
+  "GRASS1-GRASSY_MUD1": {
+   "terrain": "Mud",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    121,
+    119,
+    48
+   ]
+  },
+  "GRASS1-LOWHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    137,
+    139,
+    66
+   ]
+  },
+  "GRASS1-MIDHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    130,
+    127,
+    51
+   ]
+  },
+  "GRASS1-ROCKYGRASS2": {
+   "terrain": "Grass 'n' Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    134,
+    134,
+    60
+   ]
+  },
+  "GRASS1-SAND1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    176,
+    163,
+    85
+   ]
+  },
+  "GRASS1-SHALLOW_RIVER": {
+   "terrain": "Ford",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    129,
+    116,
+    54
+   ]
+  },
+  "GRASS1-SNOW1": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    179,
+    180,
+    134
+   ]
+  },
+  "GRASS1-SNOW4": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    169,
+    173,
+    117
+   ]
+  },
+  "GRASS2": {
+   "terrain": "Barren Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    143,
+    128,
+    50
+   ]
+  },
+  "GRASS2-FOREST3": {
+   "terrain": "Grass 'n' Forest",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    146,
+    128,
+    66
+   ]
+  },
+  "GRASS2-GRASS3": {
+   "terrain": "Grass",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    141,
+    131,
+    52
+   ]
+  },
+  "GRASS2-GRASS4": {
+   "terrain": "Barren Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    126,
+    127,
+    26
+   ]
+  },
+  "GRASS2-GRASSY_MUD1": {
+   "terrain": "Mud",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    139,
+    122,
+    53
+   ]
+  },
+  "GRASS3": {
+   "terrain": "Grass",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    139,
+    136,
+    55
+   ]
+  },
+  "GRASS3-GRASS4": {
+   "terrain": "Fertile Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    125,
+    130,
+    35
+   ]
+  },
+  "GRASS3-GRASS5": {
+   "terrain": "Barren Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    146,
+    136,
+    51
+   ]
+  },
+  "GRASS3_TO_FOREST3": {
+   "terrain": "Grass 'n' Forest",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    141,
+    130,
+    63
+   ]
+  },
+  "GRASS4": {
+   "terrain": "Fertile Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    109,
+    124,
+    6
+   ],
+   "bridge": false
+  },
+  "GRASS5": {
+   "terrain": "Barren Grasses",
+   "cost": 1.0,
+   "landPassable": true,
+   "colour": [
+    164,
+    138,
+    44
+   ]
+  },
+  "GRASS5-LOWHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    157,
+    136,
+    58
+   ]
+  },
+  "GRASS5-MIDHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    146,
+    124,
+    51
+   ]
+  },
+  "GRASS5-ROCKYGRASS1": {
+   "terrain": "Grass 'n' Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    168,
+    141,
+    58
+   ]
+  },
+  "GRASS5-SAND1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    195,
+    162,
+    79
+   ]
+  },
+  "GRASS5-SHRUB1": {
+   "terrain": "Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    179,
+    150,
+    75
+   ]
+  },
+  "GRASS5-SNOW1": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    204,
+    193,
+    129
+   ]
+  },
+  "GRASSY_MUD1": {
+   "terrain": "Mud",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    112,
+    96,
+    51
+   ],
+   "bridge": false
+  },
+  "LOWHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    151,
+    143,
+    100
+   ]
+  },
+  "MIDHILL1": {
+   "terrain": "Hills",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    130,
+    111,
+    54
+   ]
+  },
+  "MIDHILL1-ROCK1": {
+   "terrain": "Rock",
+   "cost": 0.5,
+   "landPassable": true,
+   "colour": [
+    132,
+    118,
+    74
+   ]
+  },
+  "MOUNTAIN1": {
+   "terrain": "Mountains",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    236,
+    236,
+    233
+   ]
+  },
+  "MOUNTAIN1-ROCK1": {
+   "terrain": "Mountains",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    169,
+    161,
+    135
+   ]
+  },
+  "MOUNTAIN1-SNOW1": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    245,
+    244,
+    243
+   ]
+  },
+  "ROCK1": {
+   "terrain": "Rock",
+   "cost": 0.5,
+   "landPassable": true,
+   "colour": [
+    132,
+    119,
+    82
+   ]
+  },
+  "ROCKYGRASS1": {
+   "terrain": "Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    174,
+    147,
+    84
+   ]
+  },
+  "ROCKYGRASS1-D_EARTH1": {
+   "terrain": "Rocky Grass 'n' Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    184,
+    152,
+    100
+   ]
+  },
+  "ROCKYGRASS1-EARTH1": {
+   "terrain": "Rocky Grass 'n' Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    173,
+    141,
+    88
+   ]
+  },
+  "ROCKYGRASS2": {
+   "terrain": "Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    143,
+    129,
+    83
+   ]
+  },
+  "ROCKYGRASS2-D_EARTH1": {
+   "terrain": "Rocky Grass 'n' Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    174,
+    148,
+    103
+   ]
+  },
+  "ROCKYGRASS2-EARTH1": {
+   "terrain": "Rocky Grass 'n' Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    152,
+    127,
+    82
+   ]
+  },
+  "SAND1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    251,
+    206,
+    141
+   ]
+  },
+  "SAND1-D_EARTH1": {
+   "terrain": "Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    227,
+    184,
+    130
+   ]
+  },
+  "SAND1-EARTH1": {
+   "terrain": "Earth",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    212,
+    170,
+    118
+   ]
+  },
+  "SAND1-ROCK1": {
+   "terrain": "Rock",
+   "cost": 0.5,
+   "landPassable": true,
+   "colour": [
+    198,
+    166,
+    114
+   ]
+  },
+  "SAND1-SAND2": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    237,
+    196,
+    141
+   ]
+  },
+  "SAND1-SAND3": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    231,
+    188,
+    132
+   ]
+  },
+  "SAND1-SAND4": {
+   "terrain": "Desert Rock",
+   "cost": 0.85,
+   "landPassable": false,
+   "colour": [
+    232,
+    185,
+    126
+   ]
+  },
+  "SAND1-SANDSTONE1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    233,
+    191,
+    133
+   ]
+  },
+  "SAND1-SANDSTONE2": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    238,
+    200,
+    150
+   ]
+  },
+  "SAND1-SHALLOW_RIVER": {
+   "terrain": "Ford",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    211,
+    169,
+    110
+   ]
+  },
+  "SAND2": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    223,
+    188,
+    141
+   ]
+  },
+  "SAND2-SAND3": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    217,
+    179,
+    133
+   ]
+  },
+  "SAND2-SAND4": {
+   "terrain": "Desert Rock",
+   "cost": 0.85,
+   "landPassable": false,
+   "colour": [
+    216,
+    175,
+    126
+   ]
+  },
+  "SAND2-SANDSTONE1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    217,
+    180,
+    132
+   ]
+  },
+  "SAND2-SANDSTONE2": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    223,
+    189,
+    150
+   ]
+  },
+  "SAND3": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    210,
+    171,
+    123
+   ]
+  },
+  "SAND3-SAND4": {
+   "terrain": "Desert Rock",
+   "cost": 0.85,
+   "landPassable": false,
+   "colour": [
+    209,
+    166,
+    117
+   ]
+  },
+  "SAND4": {
+   "terrain": "Desert Rock",
+   "cost": 0.85,
+   "landPassable": false,
+   "colour": [
+    208,
+    161,
+    110
+   ],
+   "bridge": false
+  },
+  "SANDSTONE1": {
+   "terrain": "Desert Mountain",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    215,
+    179,
+    126
+   ],
+   "bridge": false
+  },
+  "SANDSTONE1-SAND4": {
+   "terrain": "Desert Mountain",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    212,
+    172,
+    120
+   ]
+  },
+  "SANDSTONE1-SANDSTONE2": {
+   "terrain": "Desert Mountain",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    218,
+    184,
+    139
+   ]
+  },
+  "SANDSTONE2": {
+   "terrain": "Desert Mountain",
+   "cost": 0.5,
+   "landPassable": false,
+   "colour": [
+    223,
+    195,
+    163
+   ],
+   "bridge": false
+  },
+  "SHALLOW_RIVER": {
+   "terrain": "Ford",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    166,
+    129,
+    76
+   ],
+   "bridge": false
+  },
+  "SHRUB1": {
+   "terrain": "Rocky Grass",
+   "cost": 0.85,
+   "landPassable": true,
+   "colour": [
+    191,
+    161,
+    98
+   ]
+  },
+  "SHRUB1-SAND1": {
+   "terrain": "Sand",
+   "cost": 0.8,
+   "landPassable": true,
+   "colour": [
+    218,
+    180,
+    119
+   ]
+  },
+  "SNOW1": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    252,
+    252,
+    252
+   ],
+   "bridge": false
+  },
+  "SNOW1-SNOW2": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    255,
+    255,
+    254
+   ]
+  },
+  "SNOW1-SNOW3": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    245,
+    245,
+    239
+   ]
+  },
+  "SNOW1-SNOW4": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    241,
+    239,
+    235
+   ]
+  },
+  "SNOW2": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    247,
+    247,
+    247
+   ],
+   "bridge": false
+  },
+  "SNOW2-SNOW3": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    243,
+    243,
+    233
+   ]
+  },
+  "SNOW2-SNOW4": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    236,
+    236,
+    219
+   ]
+  },
+  "SNOW3": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    237,
+    237,
+    225
+   ],
+   "bridge": false
+  },
+  "SNOW3-SNOW4": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    235,
+    234,
+    224
+   ]
+  },
+  "SNOW4": {
+   "terrain": "Snow",
+   "cost": 0.75,
+   "landPassable": true,
+   "colour": [
+    234,
+    231,
+    224
+   ],
+   "bridge": false
+  }
+ }
+}

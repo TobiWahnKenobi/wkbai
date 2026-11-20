@@ -3,6 +3,7 @@
 
 #include "MapAuthoring.h"
 #include "MapFolder.h"
+#include "MapMaterials.h"
 #include "terrain.h"
 #include "server.h"
 #include "file.h"
@@ -128,66 +129,10 @@ namespace {
 		}
 	};
 
-	// The edge rules of a texture database, as its file has them (TerrainTextureDatabase::load
-	// reads the groups and textures only): per group, per texture (the TEXTURE's id; its MATCHING
-	// alternatives share them), per side, the textures that may lie beyond that side
-	struct EdgeRule { int side, otherSide; std::string group; int id, rot, xflip, zflip; };
-	struct EdgeRules {
-		std::map<std::string, std::map<int, std::vector<EdgeRule>>> rules; // group -> texture id -> rules
-		std::map<std::string, std::map<int, int>> matchingOf;               // group -> MATCHING id -> its TEXTURE's id
-		size_t count = 0;
-	};
-	int SideOf(const std::string& tag)
-	{
-		for (int s = 0; s < 4; s++)
-			if (StrCICompare(tag, Tags::MAPTEXDIR_tagDict.tags[s]) == 0)
-				return s;
-		return -1;
-	}
-	EdgeRules ReadEdgeRules(const std::string& dbFile)
-	{
-		EdgeRules er;
-		char* data = nullptr;
-		int size = 0;
-		if (!FileExists(dbFile.c_str()))
-			return er;
-		LoadFile(dbFile.c_str(), &data, &size, 1);
-		data[size] = 0;
-		std::istringstream in(std::string(data, size));
-		free(data);
-		std::string line, group;
-		int texture = -1, side = -1;
-		while (std::getline(in, line)) {
-			if (const size_t c = line.find("//"); c != std::string::npos)
-				line.resize(c);
-			std::istringstream ls(line);
-			std::vector<std::string> tok;
-			for (std::string t; ls >> t;) {
-				if (t.size() >= 2 && t.front() == '"' && t.back() == '"')
-					t = t.substr(1, t.size() - 2);
-				tok.push_back(t);
-			}
-			if (tok.empty())
-				continue;
-			const std::string& k = tok[0];
-			if (k == "TEXTURE_GROUP" && tok.size() >= 2)
-				group = tok[1], texture = -1, side = -1;
-			else if (k == "TEXTURE" && tok.size() >= 7)
-				texture = atoi(tok[6].c_str()), side = -1;
-			else if (k == "MATCHING" && tok.size() >= 7 && texture >= 0)
-				er.matchingOf[group][atoi(tok[6].c_str())] = texture;
-			else if (k == "EDGE" && tok.size() >= 7 && side >= 0 && texture >= 0) {
-				EdgeRule r{ side, SideOf(tok[1]), tok[2], atoi(tok[3].c_str()), atoi(tok[4].c_str()), atoi(tok[5].c_str()), atoi(tok[6].c_str()) };
-				er.rules[group][texture].push_back(r);
-				er.count++;
-			}
-			else if (tok.size() == 1 && SideOf(k) >= 0)
-				side = SideOf(k);
-			else if (k == "END_TEXTURE")
-				texture = -1, side = -1;
-		}
-		return er;
-	}
+	// the edge rules as the database's file has them (MapMaterials.h, shared with the solver)
+	using MapMaterials::EdgeRule;
+	using MapMaterials::EdgeRules;
+	using MapMaterials::ReadEdgeRules;
 
 	json NamesOf(const std::vector<bool>* mask, const GameSet& gs)
 	{

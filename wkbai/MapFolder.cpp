@@ -3,6 +3,7 @@
 #include "MapFolder.h"
 #include "MapAuthoring.h"
 #include "MapTerrain.h"
+#include "MapMaterials.h"
 #include "terrain.h"
 #include "server.h"
 #include "file.h"
@@ -284,11 +285,12 @@ namespace {
 	//   "textures": [ [group, id], ... ],
 	//   "rows": [ "<row z = 0>", ... ] }: per row tokens "<texture>.<turn><flips>" (flips: 0 none,
 	//   1 x, 2 z, 3 both), "-" a tile the rules make, each optionally "*<count>" for a run
-	bool ReadHandTiles(const fs::path& folder, const MapJson& m, std::map<int, HandTile>& out, std::vector<std::string>& warnings)
+	bool ReadHandTiles(const fs::path& folder, const MapJson& m, std::map<int, HandTile>& out, std::vector<std::string>& warnings,
+		const fs::path& file = "tiles.hand.json")
 	{
 		out.clear();
 		std::string text;
-		if (!ReadAll(folder / "tiles.hand.json", text))
+		if (!ReadAll(folder / file, text))
 			return true;
 		json j = json::parse(text, nullptr, false);
 		if (j.is_discarded() || !j.is_object() || j.value("format", "") != "wkbai hand tiles") {
@@ -1047,7 +1049,7 @@ namespace {
 	// The terrain from the folder (heights + hand, the rules' tiles + hand tiles, the lakes, the
 	// design); false with an error when the folder can't be read
 	bool BuildTerrain(const fs::path& folder, const MapJson& m, Terrain& t, std::vector<uint8_t>& minimapRGB, std::vector<std::string>& warnings,
-		json& report, std::string& error)
+		json& report, std::string& error, std::map<int, HandTile>* ruleTilesOut = nullptr)
 	{
 		t.width = m.width;
 		t.height = m.height;
@@ -1107,6 +1109,8 @@ namespace {
 		if (!m.fill.empty() && !t.texDb.groups.count(m.fill))
 			warnings.push_back("ground.fill: no texture group " + m.fill + " in " + m.textureDb);
 		int byRule = 0, byHand = 0, unset = 0;
+		std::vector<uint8_t> isHand((size_t)m.width * m.height, 0);
+		const bool byMaterials = MapMaterials::HasRules(m.raw);
 		for (int z = 0; z < m.height; z++)
 			for (int x = 0; x < m.width; x++) {
 				TerrainTile& tile = t.tiles[z * m.width + x];
@@ -1126,6 +1130,7 @@ namespace {
 						tile.xflip = h.xflip;
 						tile.zflip = h.zflip;
 						byHand++;
+						isHand[(size_t)z * m.width + x] = 1;
 					}
 					else
 						warnings.push_back("hand tile (" + std::to_string(x) + ", " + std::to_string(z) + "): no texture " + h.group + " " + std::to_string(h.id));
@@ -1145,7 +1150,7 @@ namespace {
 			}
 		report["tilesByHand"] = byHand;
 		report["tilesByRule"] = byRule;
-		if (unset)
+		if (unset && !byMaterials)
 			warnings.push_back(std::to_string(unset) + " tiles have no hand tile and no material (ground.fill): " + fallback->grp->name + " " + std::to_string(fallback->id));
 		// water
 		std::shared_ptr<WaterDesign> design;
@@ -1164,6 +1169,23 @@ namespace {
 				warnings.push_back("lake " + std::to_string(i) + " is off the map");
 			else if (!seed->fullOfWater)
 				warnings.push_back("lake " + std::to_string(i) + " at (" + std::to_string(sx) + ", " + std::to_string(sz) + ") floods nothing: the ground there is above its level");
+		}
+		// the ground by rule (MapMaterials.h): materials per vertex, then the edge-rule solver; the
+		// hand tiles stay
+		if (byMaterials) {
+			std::vector<uint8_t> ruleTile;
+			if (!MapMaterials::Paint(folder, m.raw, m.seed, t, isHand, report, warnings, ruleTile, error))
+				return false;
+			int n = 0;
+			for (size_t i = 0; i < ruleTile.size(); i++)
+				if (ruleTile[i]) {
+					n++;
+					if (ruleTilesOut) {
+						const TerrainTile& tile = t.tiles[i];
+						(*ruleTilesOut)[(int)i] = HandTile{ tile.texture->grp->name, tile.texture->id, (int)tile.rot, (int)tile.xflip, (int)tile.zflip };
+					}
+				}
+			report["tilesByRule"] = n;
 		}
 		if (!ReadMinimap(folder, minimapRGB))
 			minimapRGB = t.drawMinimap();
@@ -1335,6 +1357,9 @@ std::string InputsHash(const std::filesystem::path& folder)
 		h = Fnv(h, &there, 1);
 		h = Fnv(h, data.data(), data.size());
 	}
+	// the ground rules' data file and masks (MapMaterials.h)
+	const std::string mat = MapMaterials::Fingerprint(folder);
+	h = Fnv(h, mat.data(), mat.size());
 	return Hex64(h);
 }
 
@@ -1381,7 +1406,8 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	report["edge"] = m.edge;
 	Terrain t;
 	std::vector<uint8_t> minimap;
-	if (!BuildTerrain(folder, m, t, minimap, r.warnings, report, error))
+	std::map<int, HandTile> ruleTiles;
+	if (!BuildTerrain(folder, m, t, minimap, r.warnings, report, error, &ruleTiles))
 		return fail(error);
 	std::string level;
 	if (!BuildLevel(folder, m, t, level, r.warnings, report, error))
@@ -1399,6 +1425,11 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	else
 		fs::remove(build / "map.water", ec);
 	ok = ok && WriteAll(build / "level.txt", level);
+	// the tiles the rules painted, so the editor's Save knows which tiles a person changed
+	if (!ruleTiles.empty())
+		ok = ok && WriteHandTiles(build / "tiles.rules.json", m, ruleTiles);
+	else
+		fs::remove(build / "tiles.rules.json", ec);
 	if (!ok)
 		return fail("the cache can't be written");
 	report["ok"] = true;
@@ -1613,15 +1644,27 @@ Result SaveFromEditor(Server& server, const Terrain* clientTerrain, const std::f
 	}
 	bool ok = WriteGridPng(folder / "heights.hand.png", m, hand);
 	// tiles: those that aren't the rules' (or were hand tiles) are hand tiles
-	std::map<int, HandTile> oldHand, newHand;
+	std::map<int, HandTile> oldHand, newHand, painted;
 	ReadHandTiles(folder, m, oldHand, r.warnings);
+	// a map with ground rules: the tiles the rules painted at the last compile (MapMaterials.h)
+	const bool byMaterials = MapMaterials::HasRules(m.raw);
+	if (byMaterials)
+		ReadHandTiles(current.empty() ? folder : current, m, painted, r.warnings, fs::path("build") / "tiles.rules.json");
 	for (int z = 0; z < t->height; z++)
 		for (int x = 0; x < t->width; x++) {
 			const int i = z * t->width + x;
 			const TerrainTile& tile = t->tiles[i];
 			int rot = 0;
-			const TerrainTexture* rule = RuleTile(m, t->texDb, x, z, rot);
-			const bool differs = !rule || rule->grp->name != tile.texture->grp->name || rule->id != tile.texture->id || (int)tile.rot != rot || tile.xflip || tile.zflip;
+			bool differs;
+			if (byMaterials) {
+				auto p = painted.find(i);
+				differs = p == painted.end() || p->second.group != tile.texture->grp->name || p->second.id != tile.texture->id || p->second.rot != (int)tile.rot
+					|| p->second.xflip != (int)tile.xflip || p->second.zflip != (int)tile.zflip;
+			}
+			else {
+				const TerrainTexture* rule = RuleTile(m, t->texDb, x, z, rot);
+				differs = !rule || rule->grp->name != tile.texture->grp->name || rule->id != tile.texture->id || (int)tile.rot != rot || tile.xflip || tile.zflip;
+			}
 			if (differs || oldHand.count(i))
 				newHand[i] = HandTile{ tile.texture->grp->name, tile.texture->id, (int)tile.rot, (int)tile.xflip, (int)tile.zflip };
 		}
@@ -1842,7 +1885,8 @@ int RunCommandLine(const std::vector<std::string>& args)
 		printf("usage: wkbai --author <folder.wkbai>\n       wkbai --author import <level.lvl> [<folder.wkbai>]\n"
 			"       wkbai --author catalog [--mod <name>|none] [--gameset <file>] [--edges] [--out <file.json>]\n"
 			"       wkbai --author describe <folder.wkbai | level> [--mod <name>|none] [--png <file.png>] [--out <file.json>]\n"
-			"       wkbai --author terrain|terrain-stats|heightmap|elevation|elevation-tiles ... (MapTerrain.h)\n");
+			"       wkbai --author terrain|terrain-stats|heightmap|elevation|elevation-tiles ... (MapTerrain.h)\n"
+			"       wkbai --author materials <folder.wkbai> [--out <file.json>] [--png <file.png>] | material-presets (MapMaterials.h)\n");
 		return 2;
 	}
 	// what can go on a map, and an existing map in numbers and a picture (MapAuthoring.h)
@@ -1854,6 +1898,9 @@ int RunCommandLine(const std::vector<std::string>& args)
 	for (const char* c : { "terrain", "terrain-stats", "heightmap", "elevation", "elevation-tiles" })
 		if (args[0] == c)
 			return MapTerrain::RunCommandLine(args);
+	// the ground: materials by rule and the edge-rule solver (MapMaterials.h)
+	if (args[0] == "materials" || args[0] == "material-presets")
+		return MapMaterials::RunCommandLine(args);
 	LoadBCP("data.bcp");
 	Result r;
 	if (args[0] == "import") {

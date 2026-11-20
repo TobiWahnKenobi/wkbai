@@ -13841,6 +13841,8 @@ void Test_MapCatalog()
 
 // Step 17.4's test: MapTerrainTest.cpp
 void Test_MapTerrain();
+// Step 17.5's test: MapMaterialsTest.cpp
+void Test_MapMaterials();
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -13952,6 +13954,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_SwimAnimations, "Swim animations: made from the walk where a unit has none, the Scout's own kept, a real one in a made one's place"},
 {Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
 {Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
+{Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
 };
 
 void LaunchTest()

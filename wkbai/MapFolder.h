@@ -39,7 +39,7 @@ struct Server;
 namespace MapFolder {
 	constexpr int FORMAT_VERSION = 1;
 	// the compiler's own version: a new one makes every cache stale
-	constexpr int COMPILER_VERSION = 1;
+	constexpr int COMPILER_VERSION = 2; // 2: the ground by rule (MapMaterials.h)
 	constexpr int HAND_ZERO = 32768;
 
 	// whether a path names a map folder (ends in ".wkbai", with or without a slash)
