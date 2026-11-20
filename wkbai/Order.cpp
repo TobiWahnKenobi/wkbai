@@ -1403,6 +1403,19 @@ void ObjectReferenceTask::onUpdate()
 			this->proximitySatisfied = false;
 		}
 	}
+	// A FORMATION_CREATE task ("Change Formation - Line", ...: CREATE_FORMATION on itself) ends once
+	// its formation has formed up, every member at its place (WKB.exe 0x50cd25: task class 9, the
+	// unit's formation by message 0x7d1, 0x550ba0, then vtable+0x2C). Kept running, the formation
+	// never was idle again: the missile formation army's "New Enemy Seen" (IS_IDLE "My Formation")
+	// never shot, Javelineers in a Line let riders pass and stand among them (test 100).
+	if (this->target && blueprint->classType == Tags::ORDTSKTYPE_FORMATION_CREATE) {
+		ServerGameObject* go = this->order->gameObject;
+		ServerGameObject* formation = go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION ? go : go->getParent();
+		if (formation && formation->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && formation->formationController.isFormedUp()) {
+			terminate();
+			return;
+		}
+	}
 	if (this->target) {
 		ServerGameObject* go = this->order->gameObject;
 		// Following (Follow, guarding): the game set gives the follower the engine items "Follow

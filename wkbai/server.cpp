@@ -2118,10 +2118,21 @@ void ServerGameObject::updatePosition(const Vector3 & newposition, bool events)
 			}
 			if (newtileIndex != -1) {
 				server->tiles[newtileIndex].objList.push_back(this->id);
-				if (events) {
-					for (auto& no : server->tiles[newtileIndex].objList) {
-						if (ServerGameObject* nobj = no.getFrom<Server>())
-							nobj->sendEvent(Tags::PDEVENT_ON_SHARE_TILE, this);
+				// On Share Tile (WKB.exe 0x568de0, after joining the tile at 0x568ee5): the mover and
+				// each occupant of another player, neither a missile (message 0x7e2) nor terminated,
+				// both get it, each with the other as sender, the mover first. Only the occupants
+				// got it before, the mover's own side and the mover itself too: riders that rode
+				// into Javelineers never heard of them, the game set's "H2H Unit : Attack Enemy On
+				// Share Tile" never ran for them, and they stood among them (test 100).
+				if (events && blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE && !(flags & fTerminated)) {
+					const auto occupants = server->tiles[newtileIndex].objList;
+					for (auto& no : occupants) {
+						ServerGameObject* nobj = no.getFrom<Server>();
+						if (!nobj || nobj == this || nobj->getPlayer() == getPlayer() || (nobj->flags & fTerminated)
+							|| nobj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+							continue;
+						sendEvent(Tags::PDEVENT_ON_SHARE_TILE, nobj);
+						nobj->sendEvent(Tags::PDEVENT_ON_SHARE_TILE, this);
 					}
 				}
 			}
