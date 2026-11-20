@@ -3622,6 +3622,20 @@ namespace {
 	};
 }
 
+bool g_simProfileQuiet = false;
+
+SimProfileTotals GetSimProfileTotals()
+{
+	const SimProfile& p = g_simProfile;
+	SimProfileTotals t;
+	t.total = p.total; t.sequences = p.sequences; t.tree = p.tree; t.ai = p.ai;
+	t.orders = p.orders; t.movement = p.movement; t.sight = p.sight;
+	t.steps = p.steps; t.objects = p.objects; t.movers = p.movers;
+	t.byOrder = p.byOrder;
+	t.mvPosition = p.mvPosition; t.mvUpdate = p.mvUpdate; t.mvSpeed = p.mvSpeed; t.mvController = p.mvController;
+	return t;
+}
+
 int g_simulating = 0;
 
 void Server::simulate()
@@ -3673,7 +3687,7 @@ void Server::simulate()
 		environment.update(*this);
 	// wkbai's unit history: the hero threshold once the game runs
 	unitHistory.update(*this);
-	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
+	if (profile && !g_simProfileQuiet && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)
 			printf("SIMPROFILE t=%.0f steps %llu, per step ms: total %.2f, sequences %.2f, object tree %.2f (AI %.2f), orders %.2f, movement %.2f, sight %.2f; %llu objects processed per step\n",

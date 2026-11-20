@@ -10,6 +10,8 @@
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
 #include <cassert>
+#include <algorithm>
+#include <cmath>
 #include <SDL3/SDL_timer.h>
 #include <unordered_map>
 #include "tags.h"
@@ -895,8 +897,110 @@ namespace {
 double g_pathfindingMs = 0.0;
 uint64_t g_pathfindingSearches = 0;
 
+// The walking units by their destination's tile (MovementController::destCell). For one server
+// and its playable tiles; another server or another size starts it again from that server's
+// objects (generation: a controller listed in an older one is listed again).
+namespace {
+	struct DestIndex {
+		const Server* server = nullptr;
+		int w = 0, h = 0;
+		uint32_t generation = 0;
+		std::vector<std::vector<uint32_t>> cells;
+	} g_destIndex;
+
+	int DestCellOf(const MovementController& mc, int w, int h)
+	{
+		if (!mc.isMoving())
+			return -1;
+		const Vector3 d = mc.getDestination();
+		const int tx = std::clamp((int)std::floor(d.x / 5.0f), 0, w - 1), tz = std::clamp((int)std::floor(d.z / 5.0f), 0, h - 1);
+		return tz * w + tx;
+	}
+
+	// the index for the current server, made again (and filled from its objects) when it changed
+	bool EnsureDestIndex()
+	{
+		const Server* server = Server::instance;
+		if (!server || !server->terrain)
+			return false;
+		const auto [w, h] = server->terrain->getNumPlayableTiles();
+		if (w <= 0 || h <= 0)
+			return false;
+		DestIndex& di = g_destIndex;
+		if (di.server == server && di.w == w && di.h == h)
+			return true;
+		di.server = server;
+		di.w = w;
+		di.h = h;
+		di.generation++;
+		di.cells.assign((size_t)w * h, {});
+		for (const auto& [id, cobj] : server->idmap) {
+			ServerGameObject* obj = (ServerGameObject*)cobj;
+			MovementController& mc = obj->movementController;
+			mc.m_destGeneration = di.generation;
+			mc.m_destCell = DestCellOf(mc, w, h);
+			if (mc.m_destCell >= 0)
+				di.cells[mc.m_destCell].push_back(id);
+		}
+		return true;
+	}
+
+	// syncs the controller's entry when the function it is made in returns (every way out)
+	struct DestSync {
+		MovementController& mc;
+		explicit DestSync(MovementController& mc) : mc(mc) {}
+		~DestSync() { mc.syncDestIndex(); }
+	};
+}
+
+void MovementController::syncDestIndex()
+{
+	if (!m_object || !EnsureDestIndex())
+		return;
+	DestIndex& di = g_destIndex;
+	if (m_destGeneration != di.generation) {
+		m_destGeneration = di.generation;
+		m_destCell = -1;
+	}
+	const int cell = DestCellOf(*this, di.w, di.h);
+	if (cell == m_destCell)
+		return;
+	if (m_destCell >= 0) {
+		auto& v = di.cells[m_destCell];
+		auto it = std::find(v.begin(), v.end(), m_object->id);
+		if (it != v.end()) {
+			*it = v.back();
+			v.pop_back();
+		}
+	}
+	m_destCell = cell;
+	if (cell >= 0)
+		di.cells[cell].push_back(m_object->id);
+}
+
+MovementController::~MovementController()
+{
+	DestIndex& di = g_destIndex;
+	if (m_destCell >= 0 && m_destGeneration == di.generation && (size_t)m_destCell < di.cells.size() && m_object) {
+		auto& v = di.cells[m_destCell];
+		auto it = std::find(v.begin(), v.end(), m_object->id);
+		if (it != v.end()) {
+			*it = v.back();
+			v.pop_back();
+		}
+	}
+}
+
+const std::vector<uint32_t>* MovementController::destCell(int tx, int tz)
+{
+	if (!EnsureDestIndex() || tx < 0 || tz < 0 || tx >= g_destIndex.w || tz >= g_destIndex.h)
+		return nullptr;
+	return &g_destIndex.cells[(size_t)tz * g_destIndex.w + tx];
+}
+
 Vector3 MovementController::startMovement(const Vector3& destination)
 {
+	DestSync destSync(*this);
 	const uint64_t profileStart = SDL_GetPerformanceCounter();
 	struct ProfileEnd {
 		uint64_t start;
@@ -1113,6 +1217,7 @@ static void SmoothTurns(ServerGameObject* obj, std::vector<Vector3>& nodes)
 // The walk a request found, applied to its unit (as startMovement applied it at once before)
 struct PathSearchRunner {
 	static void apply(MovementController& mc, const PathRequest& r) {
+		DestSync destSync(mc);
 		using namespace Pathfinding;
 		mc.m_pending = false;
 		if (r.straight) {
@@ -1368,6 +1473,7 @@ void MovementController::runPathSearches()
 
 void MovementController::stopMovement()
 {
+	DestSync destSync(*this);
 	m_ticket++;
 	m_pending = false;
 	m_searchFailed = false;
@@ -1376,6 +1482,7 @@ void MovementController::stopMovement()
 
 void MovementController::endWalk()
 {
+	DestSync destSync(*this);
 	m_object->stopMovement();
 	m_pathNodes.clear();
 	m_started = false;
@@ -1388,6 +1495,7 @@ void MovementController::endWalk()
 // as it can get to the destination, it stops.
 void MovementController::walkToNextNode()
 {
+	DestSync destSync(*this);
 	while (m_pathNodes.size() >= 2) {
 		if ((m_object->position - m_pathNodes[m_pathNodes.size() - 2]).sqlen2xz() >= 0.01f) {
 			m_object->startMovement(m_pathNodes[m_pathNodes.size() - 2]);
@@ -1417,6 +1525,7 @@ bool MovementController::boatHeldFast() const
 
 void MovementController::updateMovement()
 {
+	DestSync destSync(*this);
 	// check if Movement is done, if yes, go to next path node...
 	if (!m_started) return;
 	// (the ice closing round a boat under way stops it)
