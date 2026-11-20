@@ -18,29 +18,40 @@ namespace {
 	const World* world = nullptr;
 	// ImGui: the item rectangles of this frame by id, until their label comes
 	std::unordered_map<ImGuiID, std::pair<ImRect, bool>> imguiItems;
+	bool helpRecording = false;
 }
 
-void AddPixels(const std::string& id, const std::string& label, int x, int y, int w, int h, bool enabled)
+bool Recording() { return AgentInput::Enabled() || helpRecording; }
+void SetHelpRecording(bool on) { helpRecording = on; }
+
+void AddPixels(const std::string& id, const std::string& label, int x, int y, int w, int h, bool enabled, const std::string& help)
 {
-	if (!AgentInput::Enabled() || w <= 0 || h <= 0)
+	if (!Recording() || w <= 0 || h <= 0)
 		return;
 	const int n = ++idCount[id];
-	building.push_back({ n > 1 ? id + "#" + std::to_string(n) : id, label, x, y, w, h, enabled });
+	building.push_back({ n > 1 ? id + "#" + std::to_string(n) : id, label, x, y, w, h, enabled, help });
 }
 
-void Add(const std::string& id, const std::string& label, float x, float y, float w, float h, bool enabled)
+void Add(const std::string& id, const std::string& label, float x, float y, float w, float h, bool enabled, const std::string& help)
 {
-	if (!AgentInput::Enabled())
+	if (!Recording())
 		return;
-	AddPixels(id, label, (int)(x * g_uiScale), (int)(y * g_uiScale), (int)(w * g_uiScale + 0.5f), (int)(h * g_uiScale + 0.5f), enabled);
+	AddPixels(id, label, (int)(x * g_uiScale), (int)(y * g_uiScale), (int)(w * g_uiScale + 0.5f), (int)(h * g_uiScale + 0.5f), enabled, help);
+}
+
+void AddHelpZone(const std::string& help, float x, float y, float w, float h)
+{
+	if (!helpRecording || help.empty())
+		return;
+	Add("help:" + help, "", x, y, w, h, false, help);
 }
 
 void EndFrame()
 {
 	if (ImGuiContext* ctx = ImGui::GetCurrentContext())
-		ctx->TestEngineHookItems = AgentInput::Enabled(); // ImGui's items only while it is on
+		ctx->TestEngineHookItems = Recording(); // ImGui's items only while it is on
 	imguiItems.clear();
-	if (!AgentInput::Enabled()) {
+	if (!Recording()) {
 		shown.clear();
 		building.clear();
 		idCount.clear();
@@ -71,7 +82,7 @@ const Element* At(int x, int y)
 	return nullptr;
 }
 
-void SetMinimap(const Minimap& m) { if (AgentInput::Enabled()) minimapBuilding = m; }
+void SetMinimap(const Minimap& m) { if (Recording()) minimapBuilding = m; }
 const Minimap& GetMinimap() { return minimap; }
 
 void SetWorld(const World* w) { world = w; }
@@ -91,7 +102,7 @@ void ImGuiTestEngineHook_ItemAdd(ImGuiContext* ctx, ImGuiID id, const ImRect& bb
 
 void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* label, ImGuiItemStatusFlags flags)
 {
-	(void)ctx; (void)flags;
+	(void)flags;
 	auto it = AgentUi::imguiItems.find(id);
 	if (it == AgentUi::imguiItems.end() || !label || !*label)
 		return;
@@ -99,12 +110,19 @@ void ImGuiTestEngineHook_ItemInfo(ImGuiContext* ctx, ImGuiID id, const char* lab
 	std::string text = label;
 	if (text == "Debug##Default")
 		return; // ImGui's implicit window, never shown
+	// the help: an "###option/<key>"-style id names its page; else the window's name, for the
+	// whole window's page (Help maps ImGui window names)
+	std::string help;
+	if (const size_t ids = text.find("###"); ids != std::string::npos && text.find('/', ids) != std::string::npos)
+		help = text.substr(ids + 3);
+	else if (ctx && ctx->CurrentWindow)
+		help = std::string("imguiwindow:") + ctx->CurrentWindow->Name;
 	if (const size_t hash = text.find("##"); hash != std::string::npos)
 		text.resize(hash);
 	if (text.empty())
 		return;
 	const ImRect& r = it->second.first;
-	AgentUi::Add("imgui:" + text, text, r.Min.x, r.Min.y, r.GetWidth(), r.GetHeight(), it->second.second);
+	AgentUi::Add("imgui:" + text, text, r.Min.x, r.Min.y, r.GetWidth(), r.GetHeight(), it->second.second, help);
 }
 
 void ImGuiTestEngineHook_Log(ImGuiContext*, const char*, ...) {}

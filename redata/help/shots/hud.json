@@ -1,0 +1,233 @@
+[
+ {
+  "name": "hud-overview",
+  "what": "The whole game screen in a skirmish (4 Peaks), a peasant selected: top bar, both bottom panels, minimap, build menu",
+  "game": {
+   "select": "Peasant",
+   "note": "A skirmish a few minutes in, a peasant selected so the build menu and the selection panel show; clouds off; daylight",
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-top-bar",
+  "what": "The top bar across the width: the five buttons at the left, the colour banner, population, food, wood, gold and the food bar at the right; the speed line under it",
+  "game": {
+   "note": "Any skirmish with farms, so the food bar shows; crop to the top 110 pixels",
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-selection-panel-soldier",
+  "what": "The lower left panel with a soldier selected: turning portrait, hit points, name and kills, experience arc, shield and sword rows, command buttons on the rim",
+  "game": {
+   "select": "Spearman",
+   "note": "A named soldier with some experience and kills (a hero if possible); enhanced graphics on for the portrait"
+  }
+ },
+ {
+  "name": "hud-selection-panel-peasant",
+  "what": "The lower left panel with a peasant carrying wood: food, wood, gold and stone rows",
+  "game": {
+   "select": "Peasant",
+   "note": "A peasant on its way back from chopping, carrying wood",
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-knuckle-buttons",
+  "what": "The command buttons round the rim of the selection panel, one lit under the mouse",
+  "game": {
+   "select": "Spearman",
+   "note": "Several soldiers selected; mouse over one command button so its tooltip shows"
+  }
+ },
+ {
+  "name": "hud-build-menu",
+  "what": "The build menu at the upper left with its three tabs, the Economic tab open",
+  "game": {
+   "select": "Peasant",
+   "note": "A peasant selected; Economic tab (benchmark buildTab ECONOMIC)",
+   "buildTab": "ECONOMIC",
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-train-queue",
+  "what": "A building selected: the train column with a count and the red progress bar, the research column beside it",
+  "game": {
+   "select": "Barracks",
+   "note": "A barracks with three or more units queued, one in progress"
+  }
+ },
+ {
+  "name": "hud-formation-buttons",
+  "what": "The four formation buttons at the bottom, Line pressed in",
+  "game": {
+   "note": "A Line formation of 12 spearmen selected"
+  }
+ },
+ {
+  "name": "hud-minimap",
+  "what": "The minimap panel: the map with dots, the white camera arrow, the four arc buttons (some green-rimmed), an alert dot or circle",
+  "game": {
+   "note": "Mid-game with fog of war on; an attack alert or a ping visible if possible",
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-peasant-activity",
+  "what": "All five peasant activity tubes above the minimap, with counts and red bars",
+  "game": {
+   "note": "Peasant activity open on all five tubes (benchmark peasantActivity 1), peasants at several jobs",
+   "peasantActivity": 1,
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-chat",
+  "what": "Chat lines at the left with the Say: line open",
+  "game": {
+   "note": "A multiplayer game with two or three chat messages, the chat key pressed"
+  }
+ },
+ {
+  "name": "hud-text-window",
+  "what": "A tutorial's text window in the gold frame, with page number and Back/Next buttons",
+  "game": {
+   "note": "Interactive Tutorial, the camera step window (several pages)"
+  }
+ },
+ {
+  "name": "hud-objectives",
+  "what": "The mission objectives window at the upper right, active and greyed entries",
+  "game": {
+   "note": "Interactive Tutorial with objectives shown, O pressed"
+  }
+ },
+ {
+  "name": "hud-ai-message",
+  "what": "An AI General's message window with the portrait and the coloured name",
+  "game": {
+   "note": "A skirmish against an AI General that has just sent a message (the script chat can trigger one)"
+  }
+ },
+ {
+  "name": "hud-diplomacy",
+  "what": "The Diplomacy window: rows of players with status buttons, one Accept offer blinking",
+  "game": {
+   "note": "Skirmish with Allow Diplomacy on, an AI having offered an alliance (benchmark diplomacyWindow [frame, 1])",
+   "diplomacyWindow": [
+    60,
+    1
+   ],
+   "todo": "scripted run gave an empty shot (diplomacy off in a default skirmish; stampdown preview not drawn at the mouse) - needs its own set-up"
+  }
+ },
+ {
+  "name": "hud-global-diplomacy",
+  "what": "The Global Diplomacy report for four players",
+  "game": {
+   "note": "Four players, the player owning a Tavern (benchmark diplomacyWindow [frame, 2])",
+   "diplomacyWindow": [
+    60,
+    2
+   ],
+   "todo": "scripted run gave an empty shot (diplomacy off in a default skirmish; stampdown preview not drawn at the mouse) - needs its own set-up"
+  }
+ },
+ {
+  "name": "hud-tributes",
+  "what": "The Tributes window with some gold set aside for one player",
+  "game": {
+   "note": "The player owning a Trading Post, diplomacy allowed (benchmark diplomacyWindow [frame, 3])",
+   "diplomacyWindow": [
+    60,
+    3
+   ],
+   "todo": "scripted run gave an empty shot (diplomacy off in a default skirmish; stampdown preview not drawn at the mouse) - needs its own set-up"
+  }
+ },
+ {
+  "name": "hud-statistics",
+  "what": "The statistics window (F6): the table and the gold graph",
+  "game": {
+   "note": "A replay or a long game, statistics open (benchmark statistics true), Graph set to Gold",
+   "statistics": true,
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-timeline",
+  "what": "The timeline window (F7) in the chronicle view with several entries",
+  "game": {
+   "note": "A replay at least 15 minutes in, timeline open (benchmark timeline true)",
+   "timeline": true,
+   "ready": true
+  }
+ },
+ {
+  "name": "hud-replay-controls",
+  "what": "The replay controls under the top bar: play, speeds, jump, Log, time and the bar with event ticks",
+  "game": {
+   "note": "A recording playing (benchmark replay), a few battles already on the bar"
+  }
+ },
+ {
+  "name": "hud-replay-log",
+  "what": "The replay's event log window with all four filters on",
+  "game": {
+   "note": "A recording playing, L pressed, Units filter switched on"
+  }
+ },
+ {
+  "name": "hud-world-markers",
+  "what": "On the battlefield: selected spearmen with health rings, a waypoint flag ahead of them, a building health bar",
+  "game": {
+   "select": "Peasant",
+   "note": "Several soldiers selected and sent to a point, a damaged building of the player's under the mouse"
+  }
+ },
+ {
+  "name": "controls-box-select",
+  "what": "A white selection box being dragged round a group of archers",
+  "game": {
+   "note": "Mid-drag with the left button; drawCursor on"
+  }
+ },
+ {
+  "name": "controls-right-drag",
+  "what": "A right-drag: the flag at the destination and the white facing line",
+  "game": {
+   "note": "Soldiers selected, right button held and dragged 4 m to one side of the flag; drawCursor on"
+  }
+ },
+ {
+  "name": "controls-formation-line",
+  "what": "Twelve spearmen in a Line formation wheeling into the dragged facing",
+  "game": {
+   "note": "4 Peaks, a Line of 12 spearmen sent 20 m with a right-drag facing north, shot as they march in"
+  }
+ },
+ {
+  "name": "controls-placement-valid",
+  "what": "A barracks being placed: green preview, green footprint squares, its range ring",
+  "game": {
+   "note": "A peasant selected, placing a barracks on open ground next to the city (benchmark stampdown)",
+   "select": "Peasant",
+   "stampdown": "Barracks",
+   "mouse": [
+    683,
+    600
+   ],
+   "drawCursor": true,
+   "todo": "scripted run gave an empty shot (diplomacy off in a default skirmish; stampdown preview not drawn at the mouse) - needs its own set-up"
+  }
+ },
+ {
+  "name": "controls-placement-refused",
+  "what": "A red building preview with the dark red Cannot build here box under the cursor",
+  "game": {
+   "note": "Placing a building on a steep slope or over another building; drawCursor on"
+  }
+ }
+]

@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "help/Help.h"
 #include "wkbre2.h"
 #include "platform.h"
 #include "Environment.h"
@@ -15,6 +16,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <array>
 #include "gameset/gameset.h"
 #include "file.h"
@@ -43,6 +45,7 @@
 #include "interface/ServerDebugger.h"
 #include "interface/ClientDebugger.h"
 #include "anim.h"
+#include "SwimAnim.h"
 #include "Camera.h"
 #include "gfx/DefaultTerrainRenderer.h"
 #include "interface/ClientInterface.h"
@@ -11567,8 +11570,8 @@ void Test_FireQuality()
 		const float first = FireFx::Flicker(0.0f, 5);
 		for (int i = 0; i < 2000; i++) {
 			const float f = FireFx::Flicker(i * 0.0137f, 5);
-			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
-			varies |= std::abs(f - first) > 0.1f;
+			inRange &= f >= 0.45f && f <= 1.55f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.3f;
 		}
 		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
 	}
@@ -11667,7 +11670,8 @@ void Test_FireQuality()
 		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
 		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
 		if (level == FireFx::LOW)
-			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+			// the flames and the standing fire's smoke, no glow nor shimmer
+			check("Low: flames and smoke", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] >= 4 && kinds[3] == 0 && ordered && deterministic);
 		else
 			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
 			// the standing fire only
@@ -11679,6 +11683,31 @@ void Test_FireQuality()
 	FireFx::BeginFrame(FireFx::ORIGINAL, false);
 	delete nul;
 	printf("FIRE all %d\n", all ? 1 : 0);
+}
+
+// The in-game help's pages (redata/help, help/Help.h): every link, help id and heading anchor of
+// the English pages, and of each translation, leads somewhere
+void Test_HelpPages()
+{
+	int failures = 0;
+	std::error_code ec;
+	std::vector<std::string> languages = { "en" };
+	for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path("redata") / "help", ec))
+		if (e.is_directory() && e.path().filename() != "en" && std::filesystem::exists(e.path() / "_language.json"))
+			languages.push_back(e.path().filename().string());
+	for (const std::string& lang : languages) {
+		const std::string problems = Help::Check(lang);
+		std::istringstream in(problems);
+		int n = 0;
+		for (std::string line; std::getline(in, line);) {
+			printf("UNITTEST FAILED: help (%s): %s\n", lang.c_str(), line.c_str());
+			n++;
+		}
+		printf("UNITTEST %s: help pages (%s), %d problems\n", n ? "FAILED" : "ok", lang.c_str(), n);
+		failures += n;
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+	fflush(stdout);
 }
 
 // Rain and snow on burning buildings (ServerEnvironment::updateBuildingFires, redata's "wkbai
@@ -12300,6 +12329,136 @@ void Test_MapFolderNew()
 //    than in the river (3% a second) yet not at once;
 //  - the save: "riverCurrents=1" and the "swim" lines, saved, loaded and saved again the same.
 // Prints "CURRENTS ok/FAILED ..." and "CURRENTS PASSED/FAILED".
+// wkbai's swim animations (SwimAnim.h): made from a unit's walk where it has no swim of its own;
+// the Scout's own SWIM1 kept; a real swim found later takes the made one's place
+void Test_SwimAnimations()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("SWIM %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player Forking River.lvl");
+	const GameSet& gs = *server.gameSet;
+	const int swimTag = gs.animations.names.getIndex("Swim"), moveTag = gs.animations.names.getIndex("Move");
+	check(swimTag >= 0 && moveTag >= 0, "the game set has Swim and Move");
+	if (swimTag < 0 || moveTag < 0) { printf("SWIM FAILED (%d)\n", failures); return; }
+	auto bbox = [](Anim& a, Vector3& lo, Vector3& hi) {
+		lo = Vector3(1e30f, 1e30f, 1e30f); hi = Vector3(-1e30f, -1e30f, -1e30f);
+		bool finite = true;
+		for (int c = 0; c < 3; c++) {
+			const auto& ac = a.coords[c];
+			for (size_t k = 0; k < ac.numFrames; k++) {
+				finite = finite && std::isfinite(ac.vertadd[k]) && std::isfinite(ac.vertmul[k]);
+				lo.coord[c] = std::min(lo.coord[c], ac.vertadd[k]);
+				hi.coord[c] = std::max(hi.coord[c], ac.vertadd[k] + ac.vertmul[k]);
+			}
+		}
+		return finite;
+	};
+	// the Scout: its own swim kept, and one made from its walk next to it
+	{
+		const GameObjBlueprint* scout = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Scout");
+		const auto* ap = scout ? scout->getAppearance(0, 0) : nullptr;
+		auto* own = ap && ap->animations.count(swimTag) ? dynamic_cast<AnimatedModel*>(ap->animations.at(swimTag).front()) : nullptr;
+		check(own && !own->generator && own->fileName.find("SWIM1.ANIM3") != std::string::npos, "the Scout keeps its own SWIM1");
+		auto* walk = ap && ap->animations.count(moveTag) ? dynamic_cast<AnimatedModel*>(ap->animations.at(moveTag).front()) : nullptr;
+		if (own && walk) {
+			Anim made;
+			const bool ok = MakeSwimAnim(walk->getAnim(), SwimStyle::Upright, made);
+			Vector3 lo, hi, olo, ohi;
+			const bool finite = bbox(made, lo, hi);
+			bbox(own->getAnim(), olo, ohi);
+			char what[300];
+			snprintf(what, sizeof(what), "made from the Scout's walk: %u vertices (%u), %u ms (walk %u), box y %.2f..%.2f z %.2f..%.2f; its own SWIM1 y %.2f..%.2f z %.2f..%.2f",
+				made.numVertices, walk->getAnim().numVertices, made.duration, walk->getAnim().duration, lo.y, hi.y, lo.z, hi.z, olo.y, ohi.y, olo.z, ohi.z);
+			check(ok && finite && made.numVertices == walk->getAnim().numVertices && made.duration == (uint32_t)std::lround(walk->getAnim().duration * 1.5f)
+				&& made.meshname == walk->getAnim().meshname && hi.y - lo.y < 2.1f && hi.z - lo.z > 1.8f && hi.y > -0.2f && hi.y < 1.4f && lo.y > -1.4f,
+				std::string("lying in the water like its own: ") + what);
+		}
+	}
+	// every character: a walk has a swim (its own or made), each made one sound
+	int made = 0, own = 0, none = 0, bad = 0;
+	int styles[4] = {};
+	std::string badOnes;
+	for (size_t b = 0; b < gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].size(); b++) {
+		const GameObjBlueprint& bp = gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][b];
+		for (const auto& [sid, st] : bp.subtypes)
+			for (const auto& [aid, ap] : st.appearances) {
+				auto mv = ap.animations.find(moveTag);
+				auto* walk = mv != ap.animations.end() && !mv->second.empty() ? dynamic_cast<AnimatedModel*>(mv->second.front()) : nullptr;
+				auto sw = ap.animations.find(swimTag);
+				auto* swim = sw != ap.animations.end() && !sw->second.empty() ? dynamic_cast<AnimatedModel*>(sw->second.front()) : nullptr;
+				if (!walk) continue;
+				if (!FileExists(walk->fileName.c_str()) || !SwimsByName(bp.name)) continue; // (game-set entries with no files; machines)
+				if (!swim) { none++; badOnes += " " + bp.name + "(none)"; continue; }
+				if (!swim->generator) { own++; continue; }
+				made++;
+				styles[(int)SwimStyleForFolder(walk->fileName)]++;
+				Anim& a = swim->getAnim();
+				Anim& w = walk->getAnim();
+				Vector3 lo, hi, wlo, whi;
+				const bool finite = bbox(a, lo, hi);
+				bbox(w, wlo, whi);
+				const float height = whi.y - wlo.y;
+				const bool sane = finite && a.numVertices == w.numVertices && a.duration > w.duration && swim->getStaticModel() == walk->getStaticModel()
+					&& hi.y < wlo.y + height * 0.75f && lo.y > wlo.y - height * 1.2f && a.attachPoints.size() == w.attachPoints.size();
+				if (!sane) { bad++; if (badOnes.size() < 600) badOnes += " " + bp.name; }
+			}
+	}
+	char what[400];
+	snprintf(what, sizeof(what), "%d made (upright %d, robed %d, mounted %d, swarm %d), %d their own, %d without, %d not sound:%s",
+		made, styles[0], styles[1], styles[2], styles[3], own, none, bad, badOnes.c_str());
+	check(made >= 60 && own >= 1 && none == 0 && bad == 0 && styles[2] >= 5 && styles[1] >= 3 && styles[3] >= 1, std::string("every walker swims: ") + what);
+	// "swimDumpObj": "<folder>": a few units' walk and swim as OBJ files, two poses each, to look at
+	if (const std::string folder = g_settings.value("swimDumpObj", std::string()); !folder.empty()) {
+		std::filesystem::create_directories(folder);
+		for (const char* name : { "Scout", "Spearman", "Pikeman", "Knight", "Priest", "Peasant", "Gibbering Horde", "Mounted Hand Gunner", "Bishop" }) {
+			const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
+			const auto* ap = bp ? bp->getAppearance(0, 0) : nullptr;
+			if (!ap) continue;
+			for (int tag : { moveTag, swimTag }) {
+				auto it = ap->animations.find(tag);
+				auto* m = it != ap->animations.end() && !it->second.empty() ? dynamic_cast<AnimatedModel*>(it->second.front()) : nullptr;
+				if (!m) continue;
+				const uint32_t dur = m->getAnim().duration;
+				for (int pose = 0; pose < 2; pose++) {
+					const float* v = m->interpolate(dur * pose / 2);
+					Mesh& mesh = m->getStaticModel()->getMesh();
+					std::string file = folder + "/" + name + (tag == swimTag ? (m->generator ? "_swim_made" : "_swim_own") : "_walk") + std::to_string(pose) + ".obj";
+					FILE* f = fopen(file.c_str(), "w");
+					if (!f) continue;
+					for (size_t i = 0; i < mesh.vertices.size() / 3; i++)
+						fprintf(f, "v %f %f %f\n", v[3 * i], v[3 * i + 1], v[3 * i + 2]);
+					if (mesh.polyLists.size() > 0)
+						for (size_t g = 0; g < mesh.polyLists[0].groups.size() && g < mesh.groupIndices.size(); g++)
+							for (const auto& t : mesh.polyLists[0].groups[g].tupleIndex)
+								fprintf(f, "f %u %u %u\n", mesh.groupIndices[g][t[0]].vertex + 1, mesh.groupIndices[g][t[1]].vertex + 1, mesh.groupIndices[g][t[2]].vertex + 1);
+					fclose(f);
+				}
+			}
+		}
+	}
+	// a real swim found later (another LOAD_ANIMATIONS_FROM, a mod's file, an HD model's) takes the
+	// made one's place
+	{
+		auto& spear = const_cast<GameObjBlueprint&>(*gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman"));
+		GameObjBlueprint::BPAppearance ap;
+		spear.loadAnimations(ap, "Warrior Kings Game Set\\Characters\\Spearman\\");
+		auto* m = ap.animations.count(swimTag) ? dynamic_cast<AnimatedModel*>(ap.animations[swimTag].front()) : nullptr;
+		const bool madeFirst = m && m->generator && ap.animations[swimTag].size() == 1;
+		spear.loadAnimations(ap, "Warrior Kings Game Set\\Characters\\Scout\\");
+		auto& list = ap.animations[swimTag];
+		auto* real = list.size() == 1 ? dynamic_cast<AnimatedModel*>(list.front()) : nullptr;
+		check(madeFirst && real && !real->generator && real->fileName.find("SWIM1") != std::string::npos,
+			"a swim made from the Spearman's walk, then the Scout's real SWIM1 in its place alone");
+	}
+	printf("SWIM %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 void Test_RiverCurrents()
 {
 	int failures = 0;
@@ -12446,6 +12605,34 @@ void Test_RiverCurrents()
 		for (int i = 0; i < 110 && env.swimmerCount() == 0; i++)
 			run(0.02f);
 		const size_t carriedNow = env.swimmerCount();
+		// (carried in water of normal depth: swimming, its Swim made from its walk, at its own speed)
+		snprintf(what, sizeof(what), "animation %d (Swim %d), speed %.2f, %zu carried", alive(u) ? u->animationIndex : -1,
+			gs.animations.names.getIndex("Swim"), alive(u) ? u->animSpeed : 0.0f, carriedNow);
+		if (g_settings.value<bool>("madeSwimAnimations", true))
+			check(alive(u) && carriedNow >= 1 && u->animationIndex == gs.animations.names.getIndex("Swim") && u->animSpeed == 1.0f,
+				std::string("swimming: its Swim, made from its walk (SwimAnim.h): ") + what);
+		// "swimSave": "<file>": more of them swimming there, saved, for a benchmark run that shows
+		// them (the client draws them at the surface)
+		if (const std::string file = g_settings.value("swimSave", std::string()); !file.empty()) {
+			float side = 3.0f;
+			std::vector<SrvGORef> shown;
+			for (const char* name : { "Priest", "Knight", "Peasant", "Pikeman", "Gibbering Horde", "Scout" }) {
+				if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name))
+					shown.push_back(server.spawnObject(bp, enemy, centre(fast) + Vector3(side, 0, side * 0.5f), Vector3(0, 0, 0)));
+				side = side > 0 ? -side : -side + 3.0f;
+			}
+			run(1.2f);
+			// (the picture: each as it swims, where it is; the currents carry the ones in deep water)
+			for (SrvGORef& o : shown)
+				if (o.get()) o->setAnimation(gs.animations.names.getIndex("Swim"));
+			const Vector3 c = centre(fast);
+			printf("CURRENTS swimmers saved to %s: %d (%zu carried), around (%.1f, %.1f, %.1f), the water at %.2f\n", file.c_str(),
+				(int)server.saveGame(file.c_str()), env.swimmerCount(), c.x, server.terrain->getHeight(c.x, c.z), c.z,
+				server.terrain->getPlayableTile((int)(c.x / 5), (int)(c.z / 5)) ? server.terrain->getPlayableTile((int)(c.x / 5), (int)(c.z / 5))->waterLevel : -1.0f);
+			printf("CURRENTS a picture run (swimSave): the checks after this are left out\n");
+			fflush(stdout);
+			return;
+		}
 		// the save while it is carried
 		const std::string text = env.saveText();
 		check(carriedNow >= 1 && text.find("riverCurrents=1") != std::string::npos && text.find("\nswim ") != std::string::npos, "the setting and the swimmer in the save");
@@ -12590,14 +12777,20 @@ void Test_RiverCurrents()
 			run(3.0f);
 			const float moved = alive(u) ? (u->position - at).len2xz() : -1.0f, health = share(u);
 			const int carried = env.stats.carriedSeconds - carried0;
-			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s", name, hardy, c.drag,
-				health * 100.0f, moved, carried);
+			// (what moved it, if anything: its own walk, its order)
+			const Order* order = alive(u) ? u->orderConfig.getCurrentOrder() : nullptr;
+			const std::string orderName = order ? gs.orders.getString(order->blueprint->bpid) : std::string("none");
+			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s; walking on its own %d, order %s", name, hardy, c.drag,
+				health * 100.0f, moved, carried, alive(u) ? (int)(u->movementController.isMoving() || u->movement.isMoving()) : -1, orderName.c_str());
 			if (hardy == ServerEnvironment::WATER_MACHINE)
 				check(health < 0.7f && health > 0.0f && carried >= 1 && moved > 0.2f && moved < c.drag * 3.0f * 0.6f, std::string("a war machine sinks, dragged a little: ") + what);
 			else if (hardy == ServerEnvironment::WATER_HUGE)
 				check(alive(u) && health < 0.97f && carried >= 1 && moved > 0.5f * c.drag, std::string("a huge creature drifts, hurt: ") + what);
 			else
-				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && moved < 0.3f, std::string("otherworldly, untouched: ") + what);
+				// (not carried, not hurt; moved only by an order of its own: another copy of the game's
+				// data has an enemy in its sight there, and it goes for it)
+				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && (moved < 0.3f || order),
+					std::string("otherworldly, untouched: ") + what);
 			if (u.get()) server.deleteObject(u.get());
 		}
 	}
@@ -13714,6 +13907,8 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
 {Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
 {Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
+{Test_SwimAnimations, "Swim animations: made from the walk where a unit has none, the Scout's own kept, a real one in a made one's place"},
+{Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
 {Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
 {Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
 };

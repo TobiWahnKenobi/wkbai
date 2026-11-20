@@ -2543,6 +2543,9 @@ void DiligentEnhancedTerrainRenderer::init()
 			hdesc.Height = haveH ? terrain->height + 1 : 1;
 			TextureSubResData hsub{ haveH ? (const void*)far.nearHorizon[k].data() : (const void*)&none, (Uint64)hdesc.Width * 4 };
 			TextureData hdata{ &hsub, 1 };
+			// (the old texture goes: its view, which the scene renderer reads, with it)
+			((DiligentGfx*)gfx)->shadows.farHorizon[k] = nullptr;
+			_impl->nearHorizonMap[k].Release();
 			device->CreateTexture(hdesc, &hdata, &_impl->nearHorizonMap[k]);
 			_impl->nearHorizonReal = haveH;
 			if (_impl->nearHorizonMap[k])
@@ -3180,6 +3183,10 @@ DiligentEnhancedTerrainRenderer::~DiligentEnhancedTerrainRenderer()
 		shadows.rtTerrainVersion++;
 		shadows.staticShadowDSV = shadows.staticShadowSRV = nullptr;
 		shadows.staticShadowValid = false;
+		// the Extend map's horizons (views of this renderer's textures, read by the scene
+		// renderer's depth pre-pass before a new terrain renderer has drawn: a map editor's new
+		// terrain renderer crashed on the freed view)
+		shadows.farHorizon[0] = shadows.farHorizon[1] = nullptr;
 		if (_impl->cloudMap)
 			gfx->FreeTexture(_impl->cloudMap);
 		if (_impl->waterTexture)

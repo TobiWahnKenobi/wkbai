@@ -15,6 +15,8 @@ find_package(OpenAL CONFIG REQUIRED)
 find_package(mpg123 CONFIG REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
 find_package(Lua REQUIRED)
+find_package(md4c CONFIG REQUIRED)
+find_package(lunasvg CONFIG REQUIRED)
 
 # Find enet
 find_path(ENET_INCLUDE_DIR enet/enet.h)
@@ -85,9 +87,9 @@ add_executable (wkbai "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lzr
   "gameset/gameset.cpp" "gameset/gameset.h" "tags.cpp" "tags.h" "util/TagDict.h" "gameset/GameObjBlueprint.cpp" "gameset/GameObjBlueprint.h"
 "util/IndexedStringList.h" "gameset/values.cpp" "gameset/values.h" "test.cpp" "server.cpp" "server.h" "client.cpp" "client.h" "common.h" "gameset/actions.cpp" "gameset/actions.h"
 "gameset/finder.cpp" "gameset/finder.h" "window.cpp" "window.h" "AgentInput.cpp" "AgentInput.h" "AgentServer.cpp" "AgentServer.h" "AgentUi.cpp" "AgentUi.h" "BuildIdentity.cpp" "BuildIdentity.h" "util/vecmat.cpp" "util/vecmat.h" "gfx/bitmap.cpp" "gfx/bitmap.h" "gfx/renderer.h" "gfx/renderer_null.cpp"
-"imguiimpl.cpp" "imguiimpl.h" "terrain.cpp" "terrain.h" "TrnTextureDb.cpp" "TrnTextureDb.h" "gfx/TextureCache.cpp" "gfx/TextureCache.h" "gfx/TeamEmblems.cpp" "gfx/TeamEmblems.h" "gfx/ChimneySmoke.cpp" "gfx/ChimneySmoke.h" "gfx/FireEffects.cpp" "gfx/FireEffects.h" "gfx/BloodDrip.cpp" "gfx/BloodDrip.h" "mesh.cpp" "mesh.h" "gltf.cpp" "network.cpp" "network.h"
+"imguiimpl.cpp" "imguiimpl.h" "help/Help.cpp" "help/Help.h" "help/HelpInternal.h" "help/HelpLibrary.cpp" "help/HelpView.cpp" "terrain.cpp" "terrain.h" "TrnTextureDb.cpp" "TrnTextureDb.h" "gfx/TextureCache.cpp" "gfx/TextureCache.h" "gfx/TeamEmblems.cpp" "gfx/TeamEmblems.h" "gfx/ChimneySmoke.cpp" "gfx/ChimneySmoke.h" "gfx/FireEffects.cpp" "gfx/FireEffects.h" "gfx/BloodDrip.cpp" "gfx/BloodDrip.h" "mesh.cpp" "mesh.h" "gltf.cpp" "network.cpp" "network.h"
 "util/DynArray.h" "netenetlink.cpp" "netenetlink.h" "gfx/SceneRenderer.h" "gfx/DefaultSceneRenderer.cpp" "gfx/DefaultSceneRenderer.h" "gameset/command.cpp" "gameset/command.h"
-"interface/ServerDebugger.cpp" "interface/ServerDebugger.h" "interface/ClientDebugger.cpp" "interface/ClientDebugger.h" "anim.cpp" "anim.h" "gfx/TerrainRenderer.h"
+"interface/ServerDebugger.cpp" "interface/ServerDebugger.h" "interface/ClientDebugger.cpp" "interface/ClientDebugger.h" "anim.cpp" "anim.h" "SwimAnim.cpp" "SwimAnim.h" "gfx/TerrainRenderer.h"
 "gfx/DefaultTerrainRenderer.cpp" "gfx/DefaultTerrainRenderer.h" "Camera.cpp" "Camera.h" "interface/ClientInterface.cpp" "interface/ClientInterface.h" "interface/GameChronicle.cpp" "interface/GameChronicle.h" "interface/ChronicleNarrator.cpp" "interface/ChronicleNarrator.h" "interface/ReplayView.cpp" "interface/ReplayView.h" "interface/MapRegions.cpp" "interface/MapRegions.h" "Model.cpp" "Model.h" "TreeModels.cpp" "TreeModels.h" "ExtendMap.cpp" "ExtendMap.h" "FarLandCache.cpp" "FarLandCache.h" "FarLandCacheTest.cpp"
 "scene.cpp" "scene.h" "TimeManager.cpp" "TimeManager.h" "gameset/OrderBlueprint.cpp" "gameset/OrderBlueprint.h" "Order.cpp" "Order.h" "Movement.cpp" "Movement.h" "GameObjectRef.h"
 "gameset/CommonEval.h" "gameset/position.cpp" "gameset/position.h" "gameset/reaction.cpp" "gameset/reaction.h" "gameset/ObjectCreation.cpp" "gameset/ObjectCreation.h"
@@ -105,6 +107,10 @@ add_executable (wkbai "wkbre2.cpp" "wkbre2.h" "file.cpp" "file.h" "lzrw3.c" "lzr
 "gfx/EnhancedTerrainData.h" "gfx/EnhancedTerrainData.cpp"
 "matchmaking/Matchmaking.h" "matchmaking/Matchmaking.cpp" "matchmaking/Services.h" "matchmaking/EnetTransport.h" "matchmaking/EnetTransport.cpp"
 "matchmaking/LocalService.cpp" "matchmaking/NakamaService.cpp" "matchmaking/PluginService.cpp" "matchmaking/HttpClient.h" "matchmaking/HttpClient.cpp" "matchmaking/wkbai_mm_plugin.h")
+# test.cpp (every built-in test) has outgrown an object file's 65,536 sections (MSVC C1128)
+if(MSVC)
+  set_source_files_properties(test.cpp PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_link_libraries (wkbai
   imgui
   SDL3::SDL3
@@ -115,6 +121,8 @@ target_link_libraries (wkbai
   MPG123::libmpg123
   $<$<BOOL:${USE_DISCORD}>:${DISCORDRPC_LIBRARY}>
   sol2::sol2
+  md4c::md4c
+  lunasvg::lunasvg
   ${LUA_LIBRARIES}
   Tracy::TracyClient
   Diligent-GraphicsEngineD3D12-static

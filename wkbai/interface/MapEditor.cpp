@@ -17,6 +17,7 @@
 #include "../file.h"
 #include "../window.h"
 #include "../tags.h"
+#include "../help/Help.h"
 #include "../gameset/gameset.h"
 #include "../gfx/renderer.h"
 #include "../gfx/TerrainRenderer.h"
@@ -1291,6 +1292,10 @@ void ClientInterface::editorWindow()
 	ImGui::SetNextWindowSize(ImVec2(360, 520), ImGuiCond_FirstUseEver);
 	bool open = true;
 	if (ImGui::Begin("Map editor (F8)", &open)) {
+		// the help: the mode's page (F1 over a control finds its heading there)
+		static const char* const modePages[] = { "terrain", "textures", "water", "objects", "players", "zones", "scripts", "regions" };
+		if (ed.mode >= 0 && ed.mode < (int)(sizeof(modePages) / sizeof(*modePages)))
+			Help::SetWindowPart("Map editor (F8)", std::string("ui/editor/") + modePages[ed.mode]);
 		ImGui::RadioButton("Terrain", &ed.mode, EditorState::TERRAIN);
 		ImGui::SameLine();
 		ImGui::RadioButton("Textures", &ed.mode, EditorState::TEXTURES);

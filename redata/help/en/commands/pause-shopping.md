@@ -1,0 +1,28 @@
+---
+title: Pause trading at Shop
+ids: [command/Pause Shopping]
+order: 10
+---
+
+# Pause trading at Shop
+
+<!-- gen:icon -->
+![Pause trading at Shop](game:interface/icons/SIC_Shop_Pause.tga)
+<!-- /gen:icon -->
+
+## Role
+
+Stops trade at this [Shop](../buildings/shop-stone.md) for now, to save your materials. The keeper stays at the shop and waits; he trades nothing and uses no materials. The button then changes to [Continue trading at Shop](continue-shopping.md).
+
+## Offered by
+
+<!-- gen:trained -->
+- **Offered by:** [Shop](../buildings/shop-stone.md)
+<!-- /gen:trained -->
+
+## Needs
+
+<!-- gen:needs -->
+- Nothing: it is there whenever the unit or building is.
+<!-- /gen:needs -->
+
