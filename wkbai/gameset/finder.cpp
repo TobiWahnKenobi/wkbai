@@ -247,8 +247,11 @@ struct FinderNearestToSatisfy : ObjectFinder {
 		search.start(ctx->gameState, center, radius);
 		AnyGO* nearest = nullptr;
 		float nearestDist = radius * radius;
+		const float now = ctx->isServer() && Server::instance ? Server::instance->timeManager.currentTime : 0.0f;
 		while (AnyGO* obj = (AnyGO*)search.next()) {
 			if (!obj->isInteractable()) continue;
+			// (one no unit could walk to: Order.cpp, failedSearches)
+			if (obj->unreachableUntil > now) continue;
 			const float d = (obj->position - center).sqlen2xz();
 			if (d > nearestDist || (nearest && d == nearestDist)) continue;
 			auto _ = ctx->change(ctx->candidate, obj);

@@ -559,6 +559,9 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		return false;
 	}
 	bool canBuildOn(CommonGameState* server, int tx, int tz) {
+		const int bt = objbp->buildingType;
+		const bool walls = bt == Tags::BUILDINGTYPE_WALL || bt == Tags::BUILDINGTYPE_WALL_CORNER_IN || bt == Tags::BUILDINGTYPE_WALL_CORNER_OUT
+			|| bt == Tags::BUILDINGTYPE_WALL_CROSSROADS || objbp->name.find("Gate") != std::string::npos;
 		for (auto& to : objbp->footprint->tiles) {
 			if (true /*!to.mode*/) {
 				int px = tx + to.offsetX, pz = tz + to.offsetZ;
@@ -569,6 +572,10 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 					return false;
 				// no farm in a city, past the walls (the play test: a farmer's farm inside them)
 				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInAnyCity(server, px, pz))
+					return false;
+				// not across a gate's way out (a blocking tile of the footprint; StampdownPlan.h)
+				// (walls and gates join there)
+				if (!to.mode && !walls && StampdownPlan::tileBesideGate(server, px, pz))
 					return false;
 			}
 		}

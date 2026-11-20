@@ -294,8 +294,11 @@ static void TraceTask(const Task* task, const char* what)
 	static const unsigned id = (unsigned)strtoul(env, nullptr, 10);
 	if (!task->order || !task->order->gameObject || task->order->gameObject->id != id)
 		return;
-	printf("TASK t=%.2f %u \"%s\": %s\n", Server::instance->timeManager.currentTime, id,
-		Server::instance->gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), what);
+	const ServerGameObject* go = task->order->gameObject;
+	const ServerGameObject* t = task->target.get();
+	printf("TASK t=%.2f %u \"%s\": %s (at %.0f, %.0f; target %s #%u at %.0f, %.0f)\n", Server::instance->timeManager.currentTime, id,
+		Server::instance->gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), what, go->position.x, go->position.z,
+		t ? t->blueprint->name.c_str() : "none", t ? t->id : 0u, t ? t->position.x : 0.0f, t ? t->position.z : 0.0f);
 }
 
 void Task::suspend()
@@ -1797,6 +1800,27 @@ void ObjectReferenceTask::onUpdate()
 				const bool searchFailed = go->movementController.takeSearchFailed();
 				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// A target no walk gets to (not a building: those end the order after five short walks
+				// below; not a character or formation, which move; not an enemy): the search failed with
+				// the start and the target's tile free, four times running. On 3 Isles a woodcutter's
+				// fallen tree stood in a pocket of the forest that closed after it had chopped there; it
+				// searched again every second for 30 minutes, and so did 33 others, while their player
+				// starved (wkbai's; no WKB.exe rule was traced for it). The target is marked unreachable
+				// for two minutes (the nearest-to-satisfy finders pass it by) and dropped: the task looks
+				// for another (its TASK_TARGET finder), or ends as one without a target.
+				if (go->movementController.isMoving())
+					failedSearches = 0;
+				else if (searchFailed && blueprint->classType != Tags::ORDTSKTYPE_ATTACK
+					&& target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING && target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER
+					&& target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION && !(go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), target.get()))
+					&& ++failedSearches >= 4) {
+					failedSearches = 0;
+					target->unreachableUntil = Server::instance->timeManager.currentTime + 120.0f;
+					TraceTask(this, "given up: no walk gets to the target (unreachable for 2 minutes)");
+					this->setTarget(nullptr);
+					this->proximitySatisfied = false;
+					return;
+				}
 				// an AI unit chasing an enemy it doesn't gain on gives up (ChaseGivesUp)
 				if (ChaseGivesUp(go, target.get())) {
 					TraceTask(this, "chase not gaining: the attack ends");

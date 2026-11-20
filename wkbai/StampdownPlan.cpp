@@ -52,6 +52,32 @@ bool StampdownPlan::tileInAnyCity(CommonGameState* gameState, int tx, int tz)
 	return false;
 }
 
+bool StampdownPlan::tileBesideGate(CommonGameState* gameState, int tx, int tz)
+{
+	if (!gameState->terrain || !gameState->tiles)
+		return false;
+	const auto [w, h] = gameState->terrain->getNumPlayableTiles();
+	for (int dz = -2; dz <= 2; dz++)
+		for (int dx = -2; dx <= 2; dx++) {
+			const int x = tx + dx, z = tz + dz;
+			if (x < 0 || z < 0 || x >= w || z >= h)
+				continue;
+			const auto& tile = gameState->tiles[(size_t)z * w + x];
+			if (!tile.buildingPassable)
+				continue;
+			const CommonGameObject* b = tile.building.getFrom(gameState);
+			if (!b || !b->blueprint->footprint)
+				continue;
+			// (a gate: walkable and blocked tiles both; a field, all walkable, is no gate)
+			bool blocked = false;
+			for (const auto& to : b->blueprint->footprint->tiles)
+				blocked |= !to.mode;
+			if (blocked)
+				return true;
+		}
+	return false;
+}
+
 bool StampdownPlan::isRural(const GameObjBlueprint* blueprint)
 {
 	return blueprint->buildingType == Tags::BUILDINGTYPE_RURAL || blueprint->buildingType == Tags::BUILDINGTYPE_RURAL_CENTRE;

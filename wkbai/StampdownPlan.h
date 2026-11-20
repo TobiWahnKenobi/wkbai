@@ -73,6 +73,11 @@ struct StampdownPlan {
 	// playable tile (tx, tz) in any player's city: no farm or village there (the original's
 	// placement check 6, CANNOT_BUILD_HERE; the play test: a farmer's farm inside the walls)
 	static bool tileInAnyCity(CommonGameState* gameState, int tx, int tz);
+	// playable tile (tx, tz) within two tiles of a gate's way through (a walkable tile of a
+	// building that also has blocked tiles: a gatehouse in a stockade or wall). The AI's sites
+	// leave it free (gameset/position.cpp): on 3 Isles a Kingmaker laid its Trading Post across
+	// the outside of its stockade's only gate and its peasants were shut in for the game.
+	static bool tileBesideGate(CommonGameState* gameState, int tx, int tz);
 	static bool isRural(const GameObjBlueprint* blueprint);
 	// whether the footprint tile may stand on playable tile (tx, tz) by its terrain
 	// (USE_TERRAIN_BLUEPRINT_LIST)

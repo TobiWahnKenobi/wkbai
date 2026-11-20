@@ -73,6 +73,10 @@ struct CommonGameObject {
 	};
 	int flags = fSelectable | fTargetable | fRenderable;
 	int disableCount = 0;
+	// (server) until when no land unit can walk to it: a walk to it failed again and again with the
+	// start and its tile free (a tree in a pocket of the forest that fallen trunks or buildings
+	// closed). The nearest-to-satisfy finders skip it until then (Order.cpp, gameset/finder.cpp)
+	float unreachableUntil = 0.0f;
 
 	std::string name;
 
