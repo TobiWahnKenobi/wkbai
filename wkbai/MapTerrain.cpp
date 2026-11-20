@@ -27,6 +27,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <sstream>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -920,6 +921,7 @@ namespace {
 		std::vector<float> v;
 		std::vector<uint8_t> valid;
 		bool geo = false;
+		bool metric = false; // lon0/lat0/dlon/dlat in a grid's metres (eastings, northings), not degrees
 		double lon0 = 0, lat0 = 0, dlon = 0, dlat = 0; // pixel (0, 0)'s centre and the step to the next pixel
 		std::string file, format;
 		float at(int x, int y) const { return v[(size_t)y * w + x]; }
@@ -1232,6 +1234,50 @@ namespace {
 		}
 		return true;
 	}
+	// An Esri ASCII grid (OS Terrain 50's .asc tiles: ncols, nrows, xllcorner, yllcorner, cellsize,
+	// optional NODATA_value, then the rows from the north): its position in the grid's own metres
+	// (British National Grid for OS data), so lon0/lat0 are eastings and northings here (r.metric)
+	bool LoadAsc(const fs::path& p, Raster& r, std::string& error)
+	{
+		std::string data;
+		if (!ReadAll(p, data)) { error = "can't read " + PathToUtf8(p); return false; }
+		std::istringstream in(data);
+		double xll = 0, yll = 0, cs = 0, nodata = -1e30;
+		bool centre = false;
+		std::string key;
+		for (int k = 0; k < 6; k++) {
+			const std::streampos at = in.tellg();
+			if (!(in >> key)) break;
+			const std::string lk = Lower(key);
+			if (lk == "ncols") in >> r.w;
+			else if (lk == "nrows") in >> r.h;
+			else if (lk == "xllcorner") in >> xll;
+			else if (lk == "yllcorner") in >> yll;
+			else if (lk == "xllcenter") { in >> xll; centre = true; }
+			else if (lk == "yllcenter") { in >> yll; centre = true; }
+			else if (lk == "cellsize") in >> cs;
+			else if (lk == "nodata_value") in >> nodata;
+			else { in.seekg(at); break; }
+		}
+		if (r.w <= 0 || r.h <= 0 || cs <= 0) { error = PathToUtf8(p) + ": not an ASCII grid"; return false; }
+		r.v.resize((size_t)r.w * r.h);
+		r.valid.assign(r.v.size(), 1);
+		for (size_t i = 0; i < r.v.size(); i++) {
+			double v = 0;
+			if (!(in >> v)) { error = PathToUtf8(p) + ": the grid ends early"; return false; }
+			r.v[i] = (float)v;
+			if (v == nodata) r.valid[i] = 0;
+		}
+		const double half = centre ? 0 : cs / 2;
+		r.geo = true;
+		r.metric = true;
+		r.lon0 = xll + half;
+		r.lat0 = yll + half + (r.h - 1) * cs;
+		r.dlon = cs;
+		r.dlat = -cs;
+		r.format = "asc";
+		return true;
+	}
 	bool LoadRaster(const fs::path& p, const json& o, Raster& r, std::string& error)
 	{
 		const std::string ext = Lower(p.extension().string());
@@ -1239,6 +1285,7 @@ namespace {
 		if (!fs::exists(p)) { error = "no file " + PathToUtf8(p); return false; }
 		if (ext == ".png") return LoadPng(p, r, error);
 		if (ext == ".hgt") return LoadHgt(p, r, error);
+		if (ext == ".asc") return LoadAsc(p, r, error);
 		if (ext == ".tif" || ext == ".tiff") return LoadTiff(p, r, error);
 		if (ext == ".raw" || ext == ".r16" || ext == ".r8" || ext == ".bin") {
 			json ro = o.value("raw", json::object());
@@ -2150,6 +2197,8 @@ namespace {
 	const char* COPERNICUS_LICENCE = "Copernicus DEM licence (License-COPDEM-30): free of charge for the public, with attribution; modified data credited as produced using Copernicus WorldDEM-30";
 	const char* COPERNICUS_ATTRIBUTION = "produced using Copernicus WorldDEM-30 \xC2\xA9 DLR e.V. 2010-2014 and \xC2\xA9 Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved";
 	const char* SRTM_LICENCE = "public domain (NASA/USGS SRTM)";
+	const char* OSGB_LICENCE = "Open Government Licence v3.0 (www.nationalarchives.gov.uk/doc/open-government-licence/version/3/): free for any use, with attribution";
+	const char* OSGB_ATTRIBUTION = "Contains OS data \xC2\xA9 Crown copyright and database right 2026 (OS Terrain 50)";
 	const char* SRTM_ATTRIBUTION = "NASA Shuttle Radar Topography Mission (SRTM) Global 1 arc second, NASA JPL / USGS EROS";
 }
 
@@ -2214,14 +2263,25 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	Map m;
 	if (!ReadMap(folder, m, error))
 		return false;
-	Area a;
-	if (!AreaOf(o, a, error))
-		return false;
 	const std::string src = Lower(o.value("source", "copernicus"));
+	// OS Terrain 50 (and any Esri ASCII grid in metres): the area as British National Grid metres
+	// "bng": [east0, north0, east1, north1] (or "bngKm"), the tiles in "files"
+	const bool metric = src == "os-terrain-50" || src == "osgb" || src == "asc";
+	Area a;
+	if (metric) {
+		const json& b = o.contains("bng") ? o["bng"] : o.value("bngKm", json());
+		const double f = o.contains("bng") ? 1.0 : 1000.0;
+		if (!b.is_array() || b.size() < 4) { error = "elevation (os-terrain-50): \"bng\" [east0, north0, east1, north1] metres (or \"bngKm\") and \"files\" (the .asc tiles)"; return false; }
+		a.w = b[0].get<double>() * f; a.s = b[1].get<double>() * f; a.e = b[2].get<double>() * f; a.n = b[3].get<double>() * f;
+	}
+	else if (!AreaOf(o, a, error))
+		return false;
+	auto kmEWOf = [&](const Area& q) { return metric ? (q.e - q.w) / 1000.0 : KmEW(q); };
+	auto kmNSOf = [&](const Area& q) { return metric ? (q.n - q.s) / 1000.0 : KmNS(q); };
 	// the map's shape: the area cut to the playable area's aspect (keepAspect), centred
 	const double mapAspect = (double)(m.W - 2 * m.E) / (m.H - 2 * m.E);
 	if (o.value("keepAspect", true)) {
-		const double ew = KmEW(a), ns = KmNS(a);
+		const double ew = kmEWOf(a), ns = kmNSOf(a);
 		if (ew / ns > mapAspect) {
 			const double keep = ns * mapAspect / ew, mid = (a.w + a.e) / 2, half = (a.e - a.w) / 2 * keep;
 			a.w = mid - half; a.e = mid + half;
@@ -2231,15 +2291,28 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 			a.s = mid - half; a.n = mid + half;
 		}
 	}
-	json tilesOpt = o;
-	tilesOpt["bbox"] = { a.s, a.w, a.n, a.e };
-	tilesOpt.erase("centre");
-	const json tiles = TilesFor(tilesOpt, folder);
+	json tiles;
 	json missing = json::array();
 	std::vector<std::string> files;
-	for (const json& t : tiles["tiles"]) {
-		if (t["given"].is_string()) files.push_back(t["given"].get<std::string>());
-		else missing.push_back(t);
+	if (metric) {
+		// the files as given (OS Terrain 50's tiles are named by the grid: SW53.asc)
+		tiles = { { "tiles", json::array() } };
+		for (const json& f : o.value("files", json::array()))
+			if (f.is_string()) {
+				files.push_back(f.get<std::string>());
+				tiles["tiles"].push_back({ { "tile", PathToUtf8(PathFromUtf8(f.get<std::string>()).stem()) }, { "source", "OS Terrain 50 (Ordnance Survey, 50 m grid)" }, { "given", f } });
+			}
+		if (files.empty()) { error = "elevation (os-terrain-50): no \"files\" (the .asc tiles over the area)"; return false; }
+	}
+	else {
+		json tilesOpt = o;
+		tilesOpt["bbox"] = { a.s, a.w, a.n, a.e };
+		tilesOpt.erase("centre");
+		tiles = TilesFor(tilesOpt, folder);
+		for (const json& t : tiles["tiles"]) {
+			if (t["given"].is_string()) files.push_back(t["given"].get<std::string>());
+			else missing.push_back(t);
+		}
 	}
 	if (!missing.empty() && !o.value("allowMissing", false)) {
 		out = { { "needed", tiles }, { "missing", missing } };
@@ -2251,23 +2324,27 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 		Raster r;
 		if (!LoadRaster(PathFromUtf8(f), o, r, error)) return false;
 		if (!r.geo) { error = f + ": no geographic position in the file (a GeoTIFF or an SRTM .hgt by its name)"; return false; }
+		if (r.metric != metric) { error = f + (metric ? ": not a grid in metres (os-terrain-50 takes .asc tiles)" : ": a grid in metres needs \"source\": \"os-terrain-50\" and \"bng\""); return false; }
 		rs.push_back(std::move(r));
 	}
+	size_t lastR = 0;
 	auto elev = [&](double lat, double lon) -> float {
-		for (const Raster& r : rs) {
+		for (size_t k = 0; k < rs.size(); k++) {
+			const size_t ri = (k + lastR) % rs.size();
+			const Raster& r = rs[ri];
 			const double x = (lon - r.lon0) / r.dlon, y = (lat - r.lat0) / r.dlat;
 			if (x >= -0.5 && y >= -0.5 && x <= r.w - 0.5 && y <= r.h - 0.5) {
 				const float v = r.sample(x, y);
-				if (!std::isnan(v)) return v;
+				if (!std::isnan(v)) { lastR = ri; return v; }
 			}
 		}
 		return NAN;
 	};
 	// metres on the map: the vertex grid over the area, the edge band beyond it
-	const double kmEW = KmEW(a), kmNS = KmNS(a);
+	const double kmEW = kmEWOf(a), kmNS = kmNSOf(a);
 	const double hRatio = (m.W - 2 * m.E) * TILE / (kmEW * 1000.0); // map metres per real metre
 	const double realPerVertex = TILE / hRatio;
-	const double pxM = rs.empty() ? 30 : std::abs(rs[0].dlat) * 110574.0;
+	const double pxM = rs.empty() ? 30 : metric ? std::abs(rs[0].dlat) : std::abs(rs[0].dlat) * 110574.0;
 	const int k = std::clamp((int)std::ceil(realPerVertex / pxM), 1, 6);
 	Grid e;
 	e.init(m.gw(), m.gh(), 0);
@@ -2287,8 +2364,12 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 			if (n) e.at(x, z) = (float)(sum / n);
 			else { e.at(x, z) = NAN; voids++; }
 		}
+	// voids: OS Terrain 50 leaves out the tiles that are all sea, so a void there is sea
+	if (voids && metric) {
+		for (float& v : e.v) if (std::isnan(v)) v = -2;
+	}
 	// voids (no data, a missing tile): the nearest known value, row by row then column by column
-	if (voids) {
+	else if (voids) {
 		for (int pass = 0; pass < 4; pass++)
 			for (int z = 0; z < m.gh(); z++)
 				for (int x = 0; x < m.gw(); x++) {
@@ -2305,13 +2386,50 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 				}
 		for (float& v : e.v) if (std::isnan(v)) v = 0;
 	}
-	// the sea: real heights at or below 0 (Copernicus and SRTM give the sea as 0)
+	// the sea: real heights at or below seaBelow (0.5 m: Copernicus and SRTM give the sea as 0, OS
+	// Terrain 50 about -1.7); "seaFromEdge" (default for os-terrain-50): only what joins the edge of
+	// the map, so land below the sea's level behind its banks (the Fens) stays land
+	const float seaBelow = Num(o, "seaBelow", 0.5f);
+	std::vector<uint8_t> isSea(e.v.size(), 0);
+	for (size_t i = 0; i < e.v.size(); i++) isSea[i] = e.v[i] <= seaBelow;
+	if (o.value("seaFromEdge", metric)) {
+		std::vector<uint8_t> keep(e.v.size(), 0);
+		std::vector<int> stack;
+		const int w = m.gw(), hh = m.gh();
+		// the seeds: "seaAt" points known to be sea (in the area's own coordinates: BNG metres or
+		// [lat, lon]), else every low vertex on the map's edge
+		const json seaAt = o.value("seaAt", json::array());
+		for (const json& pt : seaAt) {
+			if (!pt.is_array() || pt.size() < 2) continue;
+			double fx, fz;
+			if (metric) { fx = m.E + (pt[0].get<double>() - a.w) / (a.e - a.w) * pw; fz = m.E + (pt[1].get<double>() - a.s) / (a.n - a.s) * ph; }
+			else { fx = m.E + (pt[1].get<double>() - a.w) / (a.e - a.w) * pw; fz = m.E + (pt[0].get<double>() - a.s) / (a.n - a.s) * ph; }
+			const int x = std::clamp((int)std::lround(fx), 0, w - 1), z = std::clamp((int)std::lround(fz), 0, hh - 1);
+			if (isSea[(size_t)z * w + x] && !keep[(size_t)z * w + x]) { keep[(size_t)z * w + x] = 1; stack.push_back(z * w + x); }
+		}
+		if (seaAt.empty())
+			for (int z = 0; z < hh; z++)
+				for (int x = 0; x < w; x++)
+					if ((x == 0 || z == 0 || x == w - 1 || z == hh - 1) && isSea[(size_t)z * w + x]) { keep[(size_t)z * w + x] = 1; stack.push_back(z * w + x); }
+		while (!stack.empty()) {
+			const int i = stack.back();
+			stack.pop_back();
+			const int x = i % w, z = i / w;
+			const int nb[4][2] = { { x + 1, z }, { x - 1, z }, { x, z + 1 }, { x, z - 1 } };
+			for (auto& q : nb)
+				if (q[0] >= 0 && q[1] >= 0 && q[0] < w && q[1] < hh) {
+					const size_t u = (size_t)q[1] * w + q[0];
+					if (isSea[u] && !keep[u]) { keep[u] = 1; stack.push_back((int)u); }
+				}
+		}
+		isSea.swap(keep);
+	}
 	int seaV = 0, landV = 0;
 	float emin = 1e30f, emax = -1e30f;
 	for (int z = m.E; z <= m.H - m.E; z++)
 		for (int x = m.E; x <= m.W - m.E; x++) {
 			const float v = e.at(x, z);
-			if (v <= 0.5f) seaV++;
+			if (isSea[(size_t)z * m.gw() + x]) seaV++;
 			else { landV++; emin = std::min(emin, v); emax = std::max(emax, v); }
 		}
 	const std::string seaOpt = o.contains("sea") && o["sea"].is_boolean() ? (o["sea"].get<bool>() ? "true" : "false") : "auto";
@@ -2328,7 +2446,7 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	for (int z = m.E; z < m.H - m.E; z++)
 		for (int x = m.E; x < m.W - m.E; x++) {
 			const float v[4] = { e.at(x, z), e.at(x + 1, z), e.at(x, z + 1), e.at(x + 1, z + 1) };
-			if (sea && *std::max_element(v, v + 4) <= 0.5f) continue;
+			if (sea && isSea[(size_t)z * m.gw() + x] && isSea[(size_t)z * m.gw() + x + 1] && isSea[(size_t)(z + 1) * m.gw() + x] && isSea[(size_t)(z + 1) * m.gw() + x + 1]) continue;
 			rises.push_back(*std::max_element(v, v + 4) - *std::min_element(v, v + 4));
 		}
 	bool flattened = false;
@@ -2347,10 +2465,11 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	h.init(m.gw(), m.gh(), 0);
 	for (size_t i = 0; i < h.v.size(); i++)
 		h.v[i] = (sea ? seaLevel + 0.6f : floorM) + (float)((std::max(e.v[i], emin) - emin) * vs);
+	// (land below 0 behind banks, the Fens: kept above the sea's level by the max with emin = 0)
 	if (sea) {
 		// below the sea level, deeper away from the land (a chamfer distance in vertices)
 		std::vector<float> dist(h.v.size(), 1e9f);
-		for (size_t i = 0; i < h.v.size(); i++) if (e.v[i] > 0.5f) dist[i] = 0;
+		for (size_t i = 0; i < h.v.size(); i++) if (!isSea[i]) dist[i] = 0;
 		const int w = m.gw(), hh = m.gh();
 		for (int z = 0; z < hh; z++)
 			for (int x = 0; x < w; x++) {
@@ -2369,9 +2488,9 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 				if (x > 0 && z < hh - 1) d = std::min(d, dist[(size_t)(z + 1) * w + x - 1] + 1.414f);
 			}
 		for (size_t i = 0; i < h.v.size(); i++)
-			if (e.v[i] <= 0.5f) h.v[i] = seaLevel - 0.6f - seaDepth * std::min(1.0f, dist[i] * TILE / 120.0f);
+			if (isSea[i]) h.v[i] = seaLevel - 0.6f - seaDepth * std::min(1.0f, dist[i] * TILE / 120.0f);
 	}
-	json meta = { { "from", "elevation" }, { "source", src }, { "bbox", { a.s, a.w, a.n, a.e } }, { "km", { kmEW, kmNS } },
+	json meta = { { "from", "elevation" }, { "source", src }, { "bbox", metric ? json({ { "bng", { a.w, a.s, a.e, a.n } } }) : json({ a.s, a.w, a.n, a.e }) }, { "km", { kmEW, kmNS } },
 		{ "horizontalScale", hRatio }, { "realMetresPerMapMetre", 1 / hRatio }, { "verticalScale", vs }, { "verticalMode", vsMode },
 		{ "exaggeration", vs / hRatio }, { "flattenedForSlope", flattened }, { "realRangeM", { emin, emax } }, { "voidVertices", voids } };
 	json srcJ;
@@ -2384,8 +2503,9 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	json tileNames = json::array();
 	for (const json& t : tiles["tiles"]) if (t["given"].is_string()) tileNames.push_back(t["tile"]);
 	json ref = { { "use", "terrain.source" }, { "kind", "elevation" }, { "source", tiles["tiles"].empty() ? json("") : tiles["tiles"][0]["source"] },
-		{ "tiles", tileNames }, { "area", { a.s, a.w, a.n, a.e } },
-		{ "licence", src == "srtm" ? SRTM_LICENCE : COPERNICUS_LICENCE }, { "attribution", src == "srtm" ? SRTM_ATTRIBUTION : COPERNICUS_ATTRIBUTION },
+		{ "tiles", tileNames }, { "area", metric ? json({ { "bng", { a.w, a.s, a.e, a.n } } }) : json({ a.s, a.w, a.n, a.e }) },
+		{ "licence", metric ? OSGB_LICENCE : src == "srtm" ? SRTM_LICENCE : COPERNICUS_LICENCE },
+		{ "attribution", metric ? OSGB_ATTRIBUTION : src == "srtm" ? SRTM_ATTRIBUTION : COPERNICUS_ATTRIBUTION },
 		{ "ships", "name the data and its attribution in THIRD-PARTY-NOTICES.md when the map ships" } };
 	SetReference(raw, ref);
 	if (!WriteMapJson(folder, raw)) { error = "can't write map.json"; return false; }

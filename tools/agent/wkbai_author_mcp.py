@@ -118,11 +118,11 @@ TOOLS = [
          ["map", "file"])),
     ("import_elevation", "Real land from public elevation data, from files ALREADY ON DISK: this tool never downloads. "
      "Without files (or with some missing) it lists the tiles the area needs: name, source, URL, size, licence; ASK THE USER before each download, then call again with files. "
-     "source copernicus (Copernicus DEM GLO-30 GeoTIFF, free with attribution) or srtm (SRTM .hgt, public domain); bbox [south, west, north, east] or centre [lat, lon] + sizeKm [ew, ns]; "
+     "source copernicus (Copernicus DEM GLO-30 GeoTIFF, free with attribution) or srtm (SRTM .hgt, public domain); or os-terrain-50 (Ordnance Survey's 50 m grid of Great Britain, .asc tiles, Open Government Licence v3: the area as bng [east0, north0, east1, north1] metres or bngKm, files the tiles; tiles left out of the product are sea); seaAt: points known to be sea (BNG metres, or [lat, lon]) to start the sea from instead of the map's edge (land below sea level, the Fens), seaBelow (m, default 0.5); bbox [south, west, north, east] or centre [lat, lon] + sizeKm [ew, ns]; "
      "the area is fitted to the map (keepAspect, default true): squeezed horizontally, heights by verticalScale (a number, map m per real m) or the real slopes kept (default) "
      "times exaggerate, flattened so at most maxSteepShare (0.08) of the land is steeper than maxSlopeDeg (40); floor (lowest land, m), sea (auto: real 0 m is the sea), seaDepth. "
      "The licence and attribution go into map.json's references. Generates, returns the stats and the scales used.",
-     obj({"map": MAP, "files": {"type": "array", "items": STR}, "source": {"type": "string", "enum": ["copernicus", "srtm"]},
+     obj({"map": MAP, "files": {"type": "array", "items": STR}, "source": {"type": "string", "enum": ["copernicus", "srtm", "os-terrain-50"]}, "bng": {"type": "array", "items": NUM}, "bngKm": {"type": "array", "items": NUM}, "seaAt": {"type": "array"}, "seaBelow": NUM, "seaFromEdge": BOOL,
           "bbox": {"type": "array", "items": NUM}, "centre": {"type": "array", "items": NUM}, "sizeKm": {"type": ["number", "array"]},
           "verticalScale": NUM, "exaggerate": NUM, "maxSlopeDeg": NUM, "maxSteepShare": NUM, "floor": NUM, "sea": BOOL, "seaDepth": NUM,
           "keepAspect": BOOL, "weight": NUM, "generate": BOOL, "picture": BOOL}, ["map"])),
