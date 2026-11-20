@@ -41,12 +41,14 @@ A formation multiplies its members' attack and armour, and changes how fast they
 
 ## Fighting
 
-- **Ordered to attack**, a formation marches to its target as a block, stops, and each member picks a victim within 40 m (8 m for an Orb) and goes for it. Every member that has no victim of its own yet is sent at one, so the whole formation fights, not only the first few to make contact. Every 2.5 seconds stragglers more than 30 m away are called back, and when the fight is over the block re-forms where it stands.
+- **Ordered to attack**, a formation marches to its target as a block and attacks as soon as it arrives: each member picks a victim within 40 m (8 m for an Orb) and goes for it, riding or marching out to it when it is not yet in reach. Every member that has no victim of its own yet is sent at one, so the whole formation fights, in a Line, Column or Orb as in a Wedge, not only the first few to make contact. Every 2.5 seconds stragglers more than 30 m away are called back, and when the fight is over the block re-forms where it stands.
 - **Not ordered**, a hand-to-hand formation doesn't charge what comes near. It reacts to blows:
   - a blow on a member's **front** (or anywhere on an Orb) makes the whole formation fight back;
   - a blow on a member's **flank or rear** makes that member leave the formation and fight alone; after 5 seconds the rest of the formation takes up the fight too. The member rejoins when it is idle.
 - **Missile formations** shoot from their places and never walk out of the block to shoot. They fire at anything in range while standing, and ignore Hold Fire. Attacked hand to hand, they fight back.
 - **A Wedge's charge** works the same: the riders at the tip strike first, and the rest join in within a few seconds, also when the Wedge is ordered to move through the enemy.
+- **Riding into the enemy:** a rider that ends up among enemy soldiers, for example after a Wedge rides through a line of Javelineers or other skirmishers, fights them instead of standing among them.
+- **After a change of formation**, the formation counts as idle once it has formed up, so archers and other missile troops in it shoot at the enemies they see again.
 - **Light troops in formation don't skirmish.**
 - **Badly hurt members** (15% of their hit points or less) leave and run home.
 - There is no morale: a formation doesn't rout.

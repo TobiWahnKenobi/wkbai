@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -55,6 +55,12 @@ Instead of painting every hill by hand, a map maker (or an AI assistant) can des
 
 **Your hand edits stay.** The plan only ever writes `heights.png`. What you changed with the [height brushes](terrain.md) is in `heights.hand.png`, which is never touched, and is added on top as before.
 
+## The ground from rules
+
+The ground's textures can come from rules too, in `map.json`'s `ground`: a preset (temperate, nordic or dry), the material where no rule holds, and a list of rules, the first that holds wins. A rule names a material (such as grass, rock, sand or snow) and when it applies: by height, height above the sea, slope, how the land curves, how wet it is, near a river or the sea, a painted mask, and so on. `wkbai --author materials "<folder>"` paints the tiles from them: it picks a material for each point, then a picture for each tile whose sides match its neighbours' by the texture database's own edge rules, so that one ground passes into the next without seams. Tiles you painted by hand stay. It answers with how much of each material there is and where tiles didn't fit, with `--png` also as a map from above. `wkbai --author material-presets` lists the materials and the presets.
+
+The materials are data: `Maps\Materials\All_Textures.json` for the game's textures; a mod or texture set brings its own file of the same kind for its texture database.
+
 ## Heightmaps and real land
 
 - **A heightmap picture** (`wkbai --author heightmap`): a grey picture (PNG of 8 or 16 bits, a raw file, an SRTM `.hgt` or a GeoTIFF), cropped and fitted to a range of heights, becomes the base of the plan (`layers\source.png`). The plan's shapes are blended with it, so rivers and passes can be carved into it.
@@ -62,7 +68,7 @@ Instead of painting every hill by hand, a map maker (or an AI assistant) can des
 
 ## The build folder
 
-Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new or something in it changed, so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
+Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
 
 ## Importing an original map
 
@@ -78,7 +84,7 @@ Two commands help a map maker see what can go on a map and what is on one. They 
 
 ## Designing maps with an AI assistant
 
-The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
+The source code's `tools\agent` folder has a second server for AI assistants such as Claude Code, `wkbai_author_mcp.py`, beside the one for [agent control](../../options/agent-control.md). It lets an assistant design maps: look things up in the catalog, describe existing maps, make a new map folder, import an original map, read and change a folder's `map.json`, plan and make the land ([the land from a plan](#the-land-from-a-plan)), paint the ground by rules ([the ground from rules](#the-ground-from-rules)), bring in a heightmap or real land ([heightmaps and real land](#heightmaps-and-real-land)), and build it. Before it uses real elevation data, it tells you which files it needs and where they come from, so you decide whether to fetch them. It never opens the game's window. Its maps go into a work folder of its own, or into your own folder's `saved\Maps` so that Skirmish lists them. The file's own notes say how to set it up.
 
 ## In multiplayer
 

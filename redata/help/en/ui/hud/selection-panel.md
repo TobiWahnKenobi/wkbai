@@ -14,7 +14,7 @@ The [command buttons](command-panel.md#knuckle-buttons) for the selection sit ar
 
 ## The portrait
 
-The panel's window shows the unit or building as a small 3D model, turning slowly (once every 12 seconds). The window itself is drawn as stained glass.
+The panel's window shows the unit or building as a small 3D model, turning slowly (once every 12 seconds), in the middle of the glass rose. A soldier is centred on its body, so a long spear or a banner doesn't push it aside. The window itself is drawn as stained glass.
 
 > wkbai: the portrait and the glass need the enhanced graphics; with the basic renderer the window shows the panel's art only.
 
@@ -26,8 +26,10 @@ Under the heart: **hit points now / most hit points**, for example "45/60". For 
 
 wkbai names the soldiers it keeps a history of:
 
-- **the name** over the window. A **hero** has its name in gold, with "born ..." and its birth name under it;
+- **the name** under the unit's picture in the window, with a shadow so it reads over the glass. A **hero** has its name in gold, with "born ..." and its birth name under it;
 - under the hit points, **its age and its kills**: "Age 4:12, 7 kills +2". The age is in game minutes, or in days when day and night are on, or in years (from 25) with seasons. "+2" counts the buildings it has destroyed.
+
+The age is always the unit's whole age: a saved game keeps it. A unit from a save made before wkbai kept these histories counts as born when the game began.
 
 Peasants have no history. See [Unit history and heroes](help:mechanic/unit-history).
 
