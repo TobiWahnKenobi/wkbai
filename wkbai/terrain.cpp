@@ -904,8 +904,13 @@ int Terrain::slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::ve
 					l = std::max(l, lake);
 				for (size_t i = levels.size(); i-- > 0;) {
 					const Vector3& p = way.points[i];
-					const Tile* u = getTile(edge + (int)std::floor(p.x / 5.0f), edge + (int)std::floor(p.z / 5.0f));
-					if (!u || !u->fullOfWater || u->slopedWater || std::abs(u->waterLevel - lake) > 0.01f)
+					const int ux = edge + (int)std::floor(p.x / 5.0f), uz = edge + (int)std::floor(p.z / 5.0f);
+					const Tile* u = getTile(ux, uz);
+					// (out on the lake's open water, over half a metre deep: where the lake only just
+					// floods the river's channel back, the river had been lowered onto its floor there,
+					// the water no depth at all, and the stream broke off short of the lake)
+					if (!u || !u->fullOfWater || u->slopedWater || std::abs(u->waterLevel - lake) > 0.01f
+						|| lake - std::min({ getVertex(ux, uz), getVertex(ux + 1, uz), getVertex(ux, uz + 1), getVertex(ux + 1, uz + 1) }) < 0.5f)
 						break;
 					levels[i] = lake;
 				}
@@ -933,7 +938,10 @@ int Terrain::slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::ve
 				}
 		}
 	}
-	// Beyond the river's own width the water stands no higher than the ground there (else, where
+	// Beyond the river's reach (its half width and half a tile: its channel's floor, which the
+	// terrain generator makes at least a tile wide, stays under the water; at its own half width
+	// the water had dipped under the floor and the stream broke) the water stands no higher than
+	// the ground there (else, where
 	// the land beside it lies lower, below a cliff or on a slope across it, the tiles' water
 	// stood over it and ended in their square corners): the surface dips under the ground at
 	// such a corner, so the water ends where it meets the land. Not beside a lake's water (the
@@ -942,7 +950,7 @@ int Terrain::slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::ve
 		for (int vz = 0; vz < VH; vz++)
 			for (int vx = 0; vx < VW; vx++) {
 				const size_t k = (size_t)vz * VW + vx;
-				if (slopedSurface[k] == NO_SLOPED_SURFACE || nearest[k] <= halfWidth[k] + 0.5f)
+				if (slopedSurface[k] == NO_SLOPED_SURFACE || nearest[k] <= halfWidth[k] + 2.5f)
 					continue;
 				bool byLake = false;
 				for (int dz = -1; dz <= 0 && !byLake; dz++)

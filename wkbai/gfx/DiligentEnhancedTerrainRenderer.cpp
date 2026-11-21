@@ -48,7 +48,7 @@ SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
 Texture2D<float> seaTexture; // per tile: 1 in a sea's open water, 0 elsewhere (lakes; BuildWaterFlow)
-Texture2D<float> rapidsTexture; // per tile: a sloped river's rapids, 0 gentle to 1 steep (SlopedRapids)
+Texture2D<float> rapidsTexture; // per tile: 0 no sloped river, else 0.1 + 0.9 x its rapids (0 gentle to 1 steep, SlopedRapids)
 // per playable tile... of the renderer's grid (terrain width x height): the wind field's still
 // part (WindShelterMap: the factor on the wind's speed / 1.5), for the grass's Field level
 Texture2D<float> windShelter;
@@ -1344,7 +1344,7 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
 		float2 fdir = f.xy * 2 - 1;
 		// (a sloped river's rapids: up to three and a half times as fast, all rushing)
-		rapids = rapidsTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
+		rapids = saturate((rapidsTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz) - 0.1) / 0.9);
 		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow() * (1 + 2.5 * rapids); // units per second
 		river = f.a;
 		rush = max(f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5), rapids * 1.6);
@@ -1486,7 +1486,8 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x * FloodFlow(); // units per second
 	float tight = saturate((17 - halfWidth) / 11); // 1 where it is 12 units wide or less, 0 from 34
 	// a sloped river's rapids (SlopedRapids): faster, up to three and a half times, and tight
-	float rapids = rapidsTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
+	float slopedMark = rapidsTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
+	float sloped = saturate(slopedMark * 20), rapids = saturate((slopedMark - 0.1) / 0.9);
 	current *= 1 + 2.5 * rapids;
 	tight = max(tight, rapids);
 	const float rcycle = 3.0;
@@ -1617,6 +1618,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * FreshShare(river, input.World)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
+	// a sloped river reads as running water however thin (a stream 0.3 m deep over a grass bed had
+	// been nearly clear: the stream in pieces), soft only right at its waterline
+	alpha = max(alpha, 0.6 * sloped * saturate(depth / 0.15));
 	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
 	float toFar = NearToFarSea(input.World);
 	if (toFar > 0) {
@@ -3102,7 +3106,8 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 		std::vector<uint8_t> rapids((size_t)W * H, 0);
 		for (uint32_t z = 0; z < H; z++)
 			for (uint32_t x = 0; x < W; x++)
-				rapids[(size_t)z * W + x] = (uint8_t)std::lround(SlopedRapids(terrain, (int)x, (int)z) * 255.0f);
+				rapids[(size_t)z * W + x] = terrain->getTile((int)x, (int)z)->slopedWater
+					? (uint8_t)std::lround((0.1f + 0.9f * SlopedRapids(terrain, (int)x, (int)z)) * 255.0f) : 0;
 		put(rapidsMap, "rapids map", "rapidsTexture", W, H, TEX_FORMAT_R8_UNORM, 1, rapids.data());
 	}
 	put(coastMap, "coast distance map", "coastTexture", W, H, TEX_FORMAT_R8_UNORM, 1, coast.data());

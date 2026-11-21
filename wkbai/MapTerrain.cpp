@@ -1943,7 +1943,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	// Their water: a sloped surface along the course (the game's sloped rivers), its height at
 	// each point the bed there (as carved, or lower where a later channel cut it) plus the water's
 	// depth ("waterDepth", m; 0.45 of the channel's depth), thinner where the bed runs steeply
-	// (fast water: down to a fifth, at least 0.15 m: rapids, cascades and falls hug their bed),
+	// (fast water: a third at a slope of one in two, at least 0.25 m: rapids, cascades and falls hug their bed),
 	// smoothed a little and never rising downstream. Heights before the raise below.
 	struct WetWay { const Feature* f; std::vector<V2> c; std::vector<float> level; float width; };
 	std::vector<WetWay> wetWays;
@@ -1961,7 +1961,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		for (size_t i = 0; i < n; i++) {
 			const size_t a = i >= 3 ? i - 3 : 0, b = std::min(n - 1, i + 3);
 			const float slope = (bed[a] - bed[b]) / std::max((float)(b - a) * 5.0f, 1.0f);
-			level[i] = bed[i] + std::max(0.15f, wd / (1.0f + 8.0f * std::max(slope, 0.0f)));
+			level[i] = bed[i] + std::max(0.25f, wd / (1.0f + 4.0f * std::max(slope, 0.0f)));
 		}
 		auto lakeLevel = [&](size_t i) { return i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f ? wr.lakeAt[i] : -1e30f; };
 		std::vector<float> sm(n);
