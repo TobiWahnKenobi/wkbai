@@ -622,7 +622,10 @@ namespace {
 				for (size_t i = 0; i < sm.size(); i++) {
 					if (onLake(i)) { gs[i] = sm[i]; continue; }
 					float s = 0; int n = 0;
-					for (int j = -k; j <= k; j++) {
+					// (the window kept even about the point: near the head, one looking only
+					// downstream had dragged a mountain stream's top far below the ground)
+					const int kk = std::min({ k, (int)i, (int)(sm.size() - 1 - i) });
+					for (int j = -kk; j <= kk; j++) {
 						const long q = (long)i + j;
 						if (q >= 0 && q < (long)sm.size() && !onLake((size_t)q)) { s += sm[q]; n++; }
 					}
@@ -693,7 +696,11 @@ namespace {
 					const float pf = bb + 0.8f * std::min(1.0f, bd / fw) + std::max(0.0f, bd - fw) * tanFord;
 					prof = Lerp(prof, std::min(prof, pf), bf * (1 - Smooth(fw + 15, fw + 60, bd)));
 				}
-				g.at(x, z) = std::min(g.at(x, z), prof);
+				// faded out towards the reach (the banks rise at bankDeg out to it: on land steeper than
+				// that, a mountainside next to a glen, the cut had stopped dead at the reach, a cliff)
+				const float fade = 1 - Smooth(reach * 0.6f, reach, bd);
+				if (prof < g.at(x, z))
+					g.at(x, z) += (prof - g.at(x, z)) * fade;
 			}
 		return bed;
 	}
@@ -1782,8 +1789,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			s.maxDeg = Num(f.j, "maxSlopeDeg", 14); s.reach = Num(f.j, "reach", 200); s.feature = f.index;
 			passes.push_back(s);
 		}
-		else if (f.kind == "river") {
+		else if (f.kind == "river" && f.j.value("trough", true)) {
 			// the broad trough the river runs in, before the erosion, so the drainage finds it
+			// ("trough": false for rivers on real land, which has its valleys already: the trough's
+			// gentle sides had shaved the mountains beside the glens down to its own height)
 			const float width = Num(f.j, "width", 20);
 			const float vw = Num(f.j, "valleyWidth", std::max(width * 4, 70.0f)), vd = Num(f.j, "valleyDepth", Num(f.j, "depth", 3) * 1.5f);
 			const std::vector<V2> c = Course(f, width);
