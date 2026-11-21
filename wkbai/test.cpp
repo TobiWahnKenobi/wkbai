@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include <typeinfo>
+#include "help/Help.h"
 #include "wkbre2.h"
 #include "platform.h"
 #include "Environment.h"
@@ -16,6 +17,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <array>
 #include "gameset/gameset.h"
 #include "file.h"
@@ -31,6 +33,7 @@
 #include "TrnTextureDb.h"
 #include "terrain.h"
 #include "MapFolder.h"
+#include "MapAuthoring.h"
 #include "util/StriCompare.h"
 #include "gfx/bitmap.h"
 #include <SDL3/SDL_keycode.h>
@@ -43,6 +46,7 @@
 #include "interface/ServerDebugger.h"
 #include "interface/ClientDebugger.h"
 #include "anim.h"
+#include "SwimAnim.h"
 #include "Camera.h"
 #include "gfx/DefaultTerrainRenderer.h"
 #include "interface/ClientInterface.h"
@@ -83,6 +87,7 @@
 #include "gfx/FireEffects.h"
 #include "gfx/RenderSettings.h"
 #include "interface/MenuOptions.h"
+#include "Wind.h"
 #include <nlohmann/json.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -7975,6 +7980,17 @@ void Test_UnitNames()
 		if (server.timeManager.step())
 			server.simulate();
 	}
+	// a record as a save from before the history left it (its age unknown, counted from that
+	// load): after loading, born at the game's start, its age the whole game's (the panel shows
+	// a full age, no "since loading")
+	uint32_t unknownId = 0;
+	for (auto& [id, rec] : uh.records)
+		if (rec.death < 0.0f && !rec.hero && server.findObject(id)) {
+			unknownId = id;
+			rec.ageUnknown = true;
+			rec.birth = (float)server.timeManager.currentTime;
+			break;
+		}
 	const std::map<uint32_t, UnitHistory::Record> before = uh.records;
 	const uint64_t seed = uh.nameSeed;
 	check(server.saveGame(savePath.c_str()), "saved");
@@ -7987,7 +8003,8 @@ void Test_UnitNames()
 			ServerGameObject* ob = server.findObject(id);
 			ServerGameObject* ol = loaded.findObject(id);
 			const bool killsSame = (!ob && !ol) || (ob && ol && ob->kills == ol->kills) || (ob && !ol && rb.death >= 0.0f);
-			if (rl && rl->name == rb.name && rl->epithet == rb.epithet && rl->hero == rb.hero && rl->heroPending == rb.heroPending && rl->birth == rb.birth
+			if (rl && rl->name == rb.name && rl->epithet == rb.epithet && rl->hero == rb.hero && rl->heroPending == rb.heroPending
+				&& (id == unknownId ? rl->birth == 0.0f : rl->birth == rb.birth)
 				&& rl->death == rb.death && rl->formation == rb.formation && rl->formationKills == rb.formationKills && rl->slew == rb.slew && killsSame)
 				same++;
 			else {
@@ -7997,6 +8014,8 @@ void Test_UnitNames()
 			}
 		}
 		check(differ == 0 && same == (int)before.size(), "after loading: every record the same (" + std::to_string(same) + " of " + std::to_string(before.size()) + ")");
+		const UnitHistory::Record* ru = loaded.unitHistory.find(unknownId);
+		check(unknownId && ru && ru->birth == 0.0f, "an age unknown: born at the game's start after loading, not at the load (" + std::to_string(ru ? ru->birth : -1.0f) + ")");
 		check(loaded.unitHistory.nameSeed == seed && loaded.unitHistory.threshold == uh.threshold, "the name stream and the threshold kept");
 		// a unit made after loading draws the next name in both
 		ServerGameObject* lo = loaded.findObject(1027);
@@ -11438,286 +11457,6 @@ void Test_MixedFormation()
 		check(false, "the Disband command");
 	printf("MIXEDF result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
 }
-
-// A wedge of riders charging a line (the play test: the wedge stopped at first contact, only its
-// tip fought, the others stood). WKB.exe's scripts (Formation Army.cpp, Standard Heavy Cavalry
-// Targets.cpp; docs/re/combat-original-formations.md): the formation marches to the target, then
-// every member picks its own victim among the enemies within "My Individual Formation Attack
-// Range" (40 m) and rides out to it, at most "Number Of Units I Can Be Attacked By" (3) on one.
-// On 4 Peaks, 15 Knights in a Wedge and 24 Men at Arms in a Line 50 m off, facing each other:
-//  - case 0, "Formation Army Attack" on a man of the line (a right-click on it);
-//  - case 1, a Move through the line to 30 m behind it (a charge by moving);
-// every second each rider's order, target, distance to it and to the nearest enemy can be logged
-// (WKB_WEDGE_LOG=1). Fighting: an attack order on an enemy, or the game set's break-off of cavalry
-// that hit formed heavy infantry from the front. Checked: within 6 s of the first contact 60 %
-// of the riders fighting at once, from 2 to 12 s after it half of them on average (the
-// scripts hand out victims every 2.5 s, at most 3 riders on one), and in those 12 s none standing
-// idle (no order, not walking) with an enemy within 10 m for more than 3 s. Before the fix to ARE_ASSOCIATED (an idle
-// member's FINDER_TARGET finds nothing: 0, as WKB.exe's) only the tip and the 2 others nearest the
-// target fought, the rest stood. WKB_WEDGE_CASE=<n> runs one case.
-// Prints "WEDGE ok/FAILED ..." and "WEDGE PASSED/FAILED".
-void Test_WedgeCharge()
-{
-	int failures = 0;
-	auto check = [&](bool ok, const std::string& what) {
-		if (!ok) failures++;
-		printf("WEDGE %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
-		fflush(stdout);
-	};
-	LoadBCP("data.bcp");
-	const bool log = getenv("WKB_WEDGE_LOG") != nullptr;
-	const int onlyCase = getenv("WKB_WEDGE_CASE") ? atoi(getenv("WKB_WEDGE_CASE")) : -1;
-	// the riders' formation and their order (a move through the line only for the wedge)
-	// (5 and 6 against Javelineers, skirmishers: their Line shoots once formed up, the riders that
-	// ride into them hear of them by On Share Tile. Not the Orb: its members take victims only
-	// within 8 m, Formations.cpp's "My Individual Formation Attack Range", against skirmishers
-	// backing off only its front fights.)
-	struct Scenario { const char* type; bool attack; const char* foot; };
-	const Scenario scenarios[] = { { "Wedge", true, nullptr }, { "Wedge", false, nullptr }, { "Line", true, nullptr }, { "Column", true, nullptr }, { "Orb", true, nullptr },
-		{ "Wedge", true, "Javelineer" }, { "Wedge", false, "Javelineer" } };
-	for (int scenario = 0; scenario < (int)std::size(scenarios); scenario++) {
-		if (onlyCase >= 0 && onlyCase != scenario)
-			continue;
-		Server server;
-		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
-		ServerGameObject* own = server.findObject(1027);
-		ServerGameObject* enemy = server.findObject(1030);
-		const GameSet& gs = *server.gameSet;
-		const GameObjBlueprint* rider = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_RIDER") ? getenv("WKB_WEDGE_RIDER") : "Knight");
-		const GameObjBlueprint* foot = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_FOOT") ? getenv("WKB_WEDGE_FOOT") : scenarios[scenario].foot ? scenarios[scenario].foot : "Man At Arms");
-		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : scenarios[scenario].type), lineCmd = gs.commands.names.getIndex("Line");
-		const int attackCmd = gs.commands.names.getIndex("Formation Army Attack"), moveCmd = gs.commands.names.getIndex("Move");
-		if (!own || !enemy || !rider || !foot || wedgeCmd < 0 || lineCmd < 0 || attackCmd < 0 || moveCmd < 0
-			|| gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
-			printf("WEDGE FAILED (not set up)\n");
-			return;
-		}
-		const auto area = server.terrain->getPlayableArea();
-		// open ground: the spot nearest the map's middle with no tile blocked for either within
-		// 35 m across, 50 m ahead of the line and 55 m behind the riders (and under 12 m of height difference)
-		Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
-		{
-			auto open = [&](const Vector3& c) {
-				float lo = 1e9f, hi = -1e9f;
-				for (float dz = -50.0f; dz <= 55.0f; dz += 5.0f)
-					for (float dx = -35.0f; dx <= 35.0f; dx += 5.0f) {
-						const float x = c.x + dx, z = c.z + dz;
-						if (x < 10.0f || z < 10.0f || x > area.first - 10.0f || z > area.second - 10.0f)
-							return false;
-						if (MovementController::isTileBlocked(rider, (int)(x / 5.0f), (int)(z / 5.0f))
-							|| MovementController::isTileBlocked(foot, (int)(x / 5.0f), (int)(z / 5.0f)))
-							return false;
-						const float h = server.terrain->getHeight(x, z);
-						lo = std::min(lo, h);
-						hi = std::max(hi, h);
-					}
-				return hi - lo < 12.0f;
-			};
-			const Vector3 middle = centre;
-			bool found = false;
-			for (float r = 0.0f; r < 400.0f && !found; r += 10.0f)
-				for (int k = 0; k < std::max(1, (int)(r / 5.0f)) && !found; k++) {
-					const float a = k * 6.2831855f / std::max(1, (int)(r / 5.0f));
-					const Vector3 c = middle + Vector3(std::sin(a) * r, 0, std::cos(a) * r);
-					if (open(c)) {
-						centre = c;
-						found = true;
-					}
-				}
-			printf("WEDGE open ground at (%.0f, %.0f)\n", centre.x, centre.z);
-			if (!found) {
-				printf("WEDGE FAILED (no open ground)\n");
-				return;
-			}
-		}
-		auto at = [&](float x, float z, const GameObjBlueprint* bp) { return MovementController::nearestValidPosition(bp, centre + Vector3(x, 0, z)); };
-		server.timeManager.unpause();
-		server.timeManager.stepMs = 20;
-		auto step = [&]() {
-			server.timeManager.pendingMs = server.timeManager.stepMs;
-			if (server.timeManager.step())
-				server.simulate();
-		};
-		auto makeFormation = [&](ServerGameObject* player, const std::vector<ServerGameObject*>& units, float heading, int command) {
-			ServerGameObject* f = server.spawnObject(&gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
-			Vector3 sum;
-			for (ServerGameObject* u : units) {
-				sum += u->position;
-				u->setParent(f);
-			}
-			f->setPosition(sum / (float)units.size());
-			f->setOrientation(Vector3(0, heading, 0));
-			f->sendEvent(Tags::PDEVENT_ON_SPAWN);
-			gs.commands[command].execute(f, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
-			return SrvGORef(f);
-		};
-		// the riders south (+z), facing north (heading 0 faces -z); the line north, facing south
-		std::vector<ServerGameObject*> riders, foes;
-		for (int i = 0; i < 15; i++)
-			riders.push_back(server.spawnObject(rider, own, at(-12.0f + (i % 5) * 6.0f, 30.0f + (i / 5) * 6.0f, rider), Vector3(0, 0, 0)));
-		for (int i = 0; i < 24; i++)
-			foes.push_back(server.spawnObject(foot, enemy, at(-23.0f + (i % 12) * 4.0f, -20.0f - (i / 12) * 3.0f, foot), Vector3(0, 3.14159f, 0)));
-		std::vector<SrvGORef> riderRefs(riders.begin(), riders.end()), foeRefs(foes.begin(), foes.end());
-		SrvGORef wedge = makeFormation(own, riders, 0.0f, wedgeCmd);
-		SrvGORef line = makeFormation(enemy, foes, 3.14159f, lineCmd);
-		// (the formations' own objects: the type commands replace them)
-		for (int i = 0; i < 5 * 50; i++)
-			step();
-		wedge = riderRefs[0] ? SrvGORef(riderRefs[0]->getParent()) : SrvGORef();
-		line = foeRefs[0] ? SrvGORef(foeRefs[0]->getParent()) : SrvGORef();
-		const bool formedUp = wedge && wedge->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && line && line->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
-		printf("WEDGE case %d: %s of %zu (%s) at (%.0f, %.0f), %s of %zu (%s) at (%.0f, %.0f)\n", scenario,
-			wedge ? wedge->blueprint->name.c_str() : "-", riders.size(), rider->name.c_str(), wedge ? wedge->position.x : 0.0f, wedge ? wedge->position.z : 0.0f,
-			line ? line->blueprint->name.c_str() : "-", foes.size(), foot->name.c_str(), line ? line->position.x : 0.0f, line ? line->position.z : 0.0f);
-		if (log)
-			for (const SrvGORef& f : foeRefs)
-				if (f)
-					printf("WEDGE   foe %u at (%.1f, %.1f) under %s\n", f->id, f->position.x, f->position.z, f->getParent() ? f->getParent()->blueprint->name.c_str() : "-");
-		if (!formedUp) {
-			check(false, "both formations formed");
-			continue;
-		}
-		if (scenarios[scenario].attack)
-			gs.commands[attackCmd].execute(wedge.get(), foes[5], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
-		else
-			gs.commands[moveCmd].execute(wedge.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, line->position + Vector3(0, 0, -30.0f));
-		auto alive = [](const SrvGORef& r) { return r && !(r->flags & CommonGameObject::fTerminated) && r->blueprint->name.rfind("Dead", 0) != 0; };
-		auto nearestFoe = [&](const ServerGameObject* u) {
-			float best = 1e9f;
-			for (const SrvGORef& f : foeRefs)
-				if (alive(f))
-					best = std::min(best, std::sqrt((f->position - u->position).sqlen2xz()));
-			return best;
-		};
-		// fighting: an attack order of its own on a (living) enemy, or the game set's break-off of
-		// cavalry that struck formed heavy infantry from the front ("Run Away After Attack": "Rear
-		// and Flee", then "Move To Cavalry Broken Marker", and back to the fight)
-		auto inMelee = [&](ServerGameObject* u) {
-			Order* o = u->orderConfig.getCurrentOrder();
-			if (!o)
-				return false;
-			const std::string& on = gs.orders.names.getString(o->blueprint->bpid);
-			if (on.find("Flee") != std::string::npos || on.find("Broken Marker") != std::string::npos)
-				return true;
-			if (o->blueprint->classType != Tags::ORDTSKTYPE_ATTACK)
-				return false;
-			Task* t = o->getCurrentTask();
-			ServerGameObject* tg = t ? t->target.get() : nullptr;
-			return tg && !(tg->flags & CommonGameObject::fTerminated) && tg->getPlayer() != own;
-		};
-		float contact = -1.0f;
-		double shareSum = 0.0;
-		int shareCount = 0;
-		int peak = 0;
-		float longestIdle = 0.0f;
-		uint32_t longestIdleOf = 0;
-		std::map<uint32_t, float> idleSince; // riders standing idle with an enemy within 10 m, since when
-		const float t0 = server.timeManager.currentTime;
-		for (int s = 0; s < 40 * 50; s++) {
-			step();
-			const float now = server.timeManager.currentTime - t0;
-			int living = 0, melee = 0, idleNear = 0, foesLeft = 0;
-			for (const SrvGORef& f : foeRefs)
-				foesLeft += alive(f) ? 1 : 0;
-			for (const SrvGORef& r : riderRefs)
-				if (alive(r)) {
-					living++;
-					if (contact < 0.0f && nearestFoe(r.get()) < 4.0f)
-						contact = now;
-					if (inMelee(r.get()))
-						melee++;
-					if (!r->orderConfig.getCurrentOrder() && !r->movementController.isMoving() && nearestFoe(r.get()) < 10.0f) {
-						idleNear++;
-						auto it = idleSince.emplace(r->id, now).first;
-						if (contact >= 0.0f && now <= contact + 12.0f && foesLeft > 0)
-							if (now - it->second > longestIdle) {
-								longestIdle = now - it->second;
-								longestIdleOf = r->id;
-							}
-					}
-					else
-						idleSince.erase(r->id);
-				}
-			if (s % 50 == 49) {
-				// the riders' formation while some are in it, else the first rider's controller
-				ServerGameObject* wf = nullptr;
-				for (const SrvGORef& r : riderRefs)
-					if (alive(r) && r->getParent() && r->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
-						wf = r->getParent();
-						break;
-					}
-				if (!wf && riderRefs[0] && alive(riderRefs[0]))
-					wf = riderRefs[0]->getParent();
-				if (log) {
-					printf("WEDGE t=%4.1f %s %s at (%.1f, %.1f)%s; riders %d, in melee %d, idle near %d; foes %d\n", now,
-						wf ? wf->blueprint->name.c_str() : "-",
-						wf && wf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(wf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
-						wf ? wf->position.x : 0.0f, wf ? wf->position.z : 0.0f, wf && wf->movement.isMoving() ? " moving" : "", living, melee, idleNear, foesLeft);
-					ServerGameObject* lf = foeRefs[0] && alive(foeRefs[0]) ? foeRefs[0]->getParent() : nullptr;
-					printf("WEDGE   the foes' %s %s at (%.1f, %.1f)%s; foe 0 at (%.1f, %.1f) %s\n", lf ? lf->blueprint->name.c_str() : "-",
-						lf && lf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(lf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
-						lf ? lf->position.x : 0.0f, lf ? lf->position.z : 0.0f, lf && lf->movement.isMoving() ? " moving" : "",
-						foeRefs[0] ? foeRefs[0]->position.x : 0.0f, foeRefs[0] ? foeRefs[0]->position.z : 0.0f,
-						foeRefs[0] && foeRefs[0]->orderConfig.getCurrentOrder() ? gs.orders.names.getString(foeRefs[0]->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "(no order)");
-					for (const SrvGORef& r : riderRefs) {
-						if (!alive(r))
-							continue;
-						if (getenv("WKB_WEDGE_DEBUG")) {
-							SrvScriptContext ctx(&server, r.get());
-							const int fi = gs.objectFinderDefinitions.names.getIndex("Enemy Units Within Formation Attack Range metres of Me");
-							const int e1 = gs.equations.names.getIndex("I Am Not Already Attacking A Victim Of My Controller");
-							const int e2 = gs.equations.names.getIndex("No Victims Left");
-							const int e3 = gs.equations.names.getIndex("I Am In A Formation");
-							const int e4 = gs.equations.names.getIndex("I Am Currently Attacking");
-							printf("WEDGE   debug %u: victims %d, not already %.0f, none left (controller) %.0f, in a formation %.0f, attacking %.0f\n", r->id,
-								fi >= 0 ? (int)gs.objectFinderDefinitions[fi]->eval(&ctx).size() : -1,
-								e1 >= 0 ? gs.equations[e1]->eval(&ctx) : -9.0f,
-								[&] { SrvScriptContext c2(&server, r->getParent()); return e2 >= 0 ? gs.equations[e2]->eval(&c2) : -9.0f; }(),
-								e3 >= 0 ? gs.equations[e3]->eval(&ctx) : -9.0f, e4 >= 0 ? gs.equations[e4]->eval(&ctx) : -9.0f);
-							for (const char* fn : { "Most appropriate Victim for Heavy Cavalry From Formation", "My Armies Victims", "Victims Of My Controller" }) {
-								const int k = gs.objectFinderDefinitions.names.getIndex(fn);
-								printf("WEDGE   debug %u: \"%s\" %d\n", r->id, fn, k >= 0 ? (int)gs.objectFinderDefinitions[k]->eval(&ctx).size() : -1);
-							}
-							if (const int se = gs.equations.names.getIndex("Suitability of Candidate as Heavy Cavalry Target"); se >= 0 && r->getParent())
-								for (const SrvGORef& f : foeRefs)
-									if (alive(f) && f.get() == foeRefs[5].get()) {
-										auto _c = ctx.change(ctx.candidate, f.get());
-										printf("WEDGE   debug %u: suitability of %u %.2f\n", r->id, f->id, gs.equations[se]->eval(&ctx));
-									}
-						}
-						Order* o = r->orderConfig.getCurrentOrder();
-						Task* t = o ? o->getCurrentTask() : nullptr;
-						ServerGameObject* tg = t ? t->target.get() : nullptr;
-						printf("WEDGE   %u at (%.1f, %.1f)%s %s -> %u (%.1f m), nearest foe %.1f m, place %.1f m off, under %s\n", r->id, r->position.x, r->position.z,
-							r->movementController.isMoving() ? " moving" : "", o ? gs.orders.names.getString(o->blueprint->bpid).c_str() : "(no order)",
-							tg ? tg->id : 0u, tg ? std::sqrt((tg->position - r->position).sqlen2xz()) : 0.0f, nearestFoe(r.get()),
-							[&] { Vector3 pl; return r->getParent() && FormationController::memberPlace(r->getParent(), r.get(), pl) ? std::sqrt((pl - r->position).sqlen2xz()) : -1.0f; }(),
-							r->getParent() ? r->getParent()->blueprint->name.c_str() : "-");
-					}
-				}
-				// 2 to 12 s after the first contact: the riders fighting, of those alive
-				if (contact >= 0.0f && now >= contact + 2.0f && now <= contact + 12.0f && foesLeft > 0 && living > 0) {
-					shareSum += (double)melee / living;
-					shareCount++;
-				}
-				// the most fighting at once within 6 s of it
-				if (contact >= 0.0f && now <= contact + 6.0f && living > 0)
-					peak = std::max(peak, (int)std::lround(100.0 * melee / living));
-			}
-		}
-		const int share = shareCount ? (int)std::lround(100.0 * shareSum / shareCount) : -1;
-		printf("WEDGE case %d: first contact %.1f s after the order; within 6 s of it at most %d%% of the riders fighting at once, 2-12 s after it %d%% on average; the longest stand idle with an enemy within 10 m in those 12 s %.1f s (%u)\n",
-			scenario, contact, peak, share, longestIdle, longestIdleOf);
-		const std::string name = "case " + std::to_string(scenario) + " (" + std::string(scenarios[scenario].type) + ", " + (scenarios[scenario].attack ? "an attack order" : "a move through the line") + (scenarios[scenario].foot ? std::string(", against ") + scenarios[scenario].foot : std::string()) + ")";
-		check(contact >= 0.0f, name + ": the wedge reaches the line");
-		check(peak >= 60, name + ": within 6 s of contact most riders fight at once");
-		check(share >= 50, name + ": most riders fight in the 12 s after contact");
-		check(longestIdle <= 3.0f, name + ": none stands idle with an enemy in reach (more than 3 s)");
-	}
-	printf(failures ? "WEDGE FAILED (%d)\n" : "WEDGE PASSED\n", failures);
-}
-
-
 // Associations mirrored to the client (NETCLIMSG_OBJECT_ASSOCIATION): a save loaded with a local
 // client ("assocMirror": { "path": "<.sav>" }, default the AI play test's PERFORMANCE3), every
 // non-missile object's associates the same on both sides; after 30 game seconds of play again;
@@ -12583,6 +12322,143 @@ void Test_FarmBuilders()
 
 IRenderer* CreateNULLRenderer();
 
+// The wind (Wind.h): the lobby's settings and their text, the target by the weather and the
+// settings, the veering's bounds, the gusts' mean and range, the names, the wind chill and the
+// fires' factor, the save's round trip; all without the simulation's random numbers
+void Test_Wind()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("WIND %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// off by default (a game from before, the campaign): no text, nothing to send
+	EnvironmentSettings off;
+	check("off by default", off.wind == 0 && off.text().find("wind=") == std::string::npos);
+	EnvironmentSettings es;
+	for (auto [n, v] : { std::pair<const char*, float>{ "wind", 1 }, { "windFrom", 7 }, { "windStrength", 4 }, { "windVeers", 0 }, { "windEffects", 1 }, { "windSeed", 4242 } })
+		check(n, es.apply(n, v));
+	EnvironmentSettings back;
+	{
+		const std::string text = es.text();
+		size_t at = 0;
+		while (at < text.size()) {
+			const size_t end = text.find('\n', at), eq = text.find('=', at);
+			if (eq != std::string::npos && eq < end)
+				back.apply(text.substr(at, eq - at), (float)atof(text.c_str() + eq + 1));
+			at = end == std::string::npos ? text.size() : end + 1;
+		}
+	}
+	check("settings text round trip", back.wind == 1 && back.windFrom == 7 && back.windStrength == 4 && !back.windVeers && back.windEffects && back.windSeed == 4242);
+	check("clamped", [] { EnvironmentSettings c; c.apply("windFrom", 12); c.apply("windStrength", -3); return c.windFrom == 8 && c.windStrength == 0; }());
+
+	// fixed: from the west (7), not veering: it blows to the east (+x), the same at any time
+	{
+		const WindState a = WindTarget(es, WEATHER_CLEAR, 10.0f), b = WindTarget(es, WEATHER_BLIZZARD, 5000.0f);
+		check("from the west blows east", std::fabs(a.dirX - 1.0f) < 1e-4f && std::fabs(a.dirZ) < 1e-4f && std::fabs(b.dirX - a.dirX) < 1e-6f);
+		check("compass W", strcmp(WindCompass(a.dirX, a.dirZ), "W") == 0);
+		// Strong (4): 11 m/s, +-15 %, whatever the weather
+		check("fixed strength", a.speed > 9.3f && a.speed < 12.7f && b.speed > 9.3f && b.speed < 12.7f);
+	}
+	EnvironmentSettings n = es;
+	n.windFrom = 1;
+	check("compass N", strcmp(WindCompass(WindTarget(n, 0, 0).dirX, WindTarget(n, 0, 0).dirZ), "N") == 0
+		&& WindTarget(n, 0, 0).dirZ < -0.999f);
+	// by the weather, random, veering: fog calmer than a blizzard, always; the direction within
+	// 90 + 35 + 12 degrees of the west-south-west; deterministic
+	EnvironmentSettings w;
+	w.wind = 1;
+	w.windSeed = 777;
+	bool calmer = true, bounded = true, same = true;
+	float minDot = 1.0f;
+	for (int i = 0; i < 400; i++) {
+		const float t = i * 37.0f;
+		const WindState fog = WindTarget(w, WEATHER_FOG, t), bliz = WindTarget(w, WEATHER_BLIZZARD, t);
+		calmer &= fog.speed < 2.0f && bliz.speed > 11.0f;
+		const float dot = fog.dirX * WIND_DEFAULT_X + fog.dirZ * WIND_DEFAULT_Z;
+		minDot = std::min(minDot, dot);
+		bounded &= dot > std::cos((90.0f + 35.0f + 12.0f) * 3.14159265f / 180.0f) - 1e-3f;
+		same &= WindTarget(w, WEATHER_FOG, t).speed == fog.speed;
+	}
+	check("fog calmer than a blizzard", calmer);
+	check("direction bounded", bounded);
+	check("deterministic", same);
+	{
+		EnvironmentSettings steady = w;
+		steady.windVeers = false;
+		const WindState a = WindTarget(steady, WEATHER_RAIN, 0), b = WindTarget(steady, WEATHER_RAIN, 3000);
+		const Vector3 p = WindPrevailing(steady);
+		check("steady keeps its way", std::fabs(a.dirX - b.dirX) < 1e-6f && std::fabs(a.dirX - p.x) < 1e-5f && std::fabs(a.dirZ - p.z) < 1e-5f);
+	}
+	// the gusts: mean about 1, never below 0.3, squalls only when gusty
+	{
+		double sum = 0, sumCalm = 0;
+		float lo = 9, hi = 0, hiCalm = 0;
+		const int N = 20000;
+		for (int i = 0; i < N; i++) {
+			const float t = i * 0.37f;
+			const float g = WindGust(t, 0.6f, 99), c = WindGust(t, 0.1f, 99);
+			sum += g; sumCalm += c;
+			lo = std::min(lo, g); hi = std::max(hi, g); hiCalm = std::max(hiCalm, c);
+		}
+		printf("WIND gusts: mean %.3f (calm %.3f), %.2f .. %.2f (calm up to %.2f)\n", sum / N, sumCalm / N, lo, hi, hiCalm);
+		check("gust mean", std::fabs(sum / N - 1.0) < 0.12 && std::fabs(sumCalm / N - 1.0) < 0.05);
+		check("gust range", lo >= 0.3f && hi > 1.5f && hiCalm < 1.3f);
+	}
+	check("speed names", strcmp(WindSpeedName(0.2f), "calm") == 0 && strcmp(WindSpeedName(5.0f), "gentle breeze") == 0
+		&& strcmp(WindSpeedName(30.0f), "storm") == 0);
+
+	// the server's: the chill and the fires' factor by the speed, none with the effects off
+	{
+		ServerEnvironment env;
+		env.settings.wind = 1;
+		env.wind.speed = 17.0f;
+		const float chill = env.windChill(), fire = env.windFireFactor();
+		printf("WIND at 17 m/s: chill %.2f, fire factor %.2f\n", chill, fire);
+		check("gale chills", chill > 4.0f && chill < 5.5f && std::fabs(fire - 17.0f / 8.0f) < 1e-4f);
+		env.settings.windEffects = false;
+		check("no effects", env.windChill() == 0.0f && env.windFireFactor() == 0.0f);
+		env.settings.windEffects = true;
+		env.settings.wind = 0;
+		check("off no effects", env.windChill() == 0.0f && env.windFireFactor() == 0.0f);
+		// the save: the settings and the wind as it is
+		env.settings = es;
+		env.wind.dirX = 0.6f; env.wind.dirZ = -0.8f; env.wind.speed = 12.5f; env.wind.gustiness = 0.45f;
+		ServerEnvironment loaded;
+		loaded.loadText(env.saveText());
+		check("save round trip", loaded.settings.wind == 1 && loaded.settings.windSeed == 4242 && loaded.settings.windFrom == 7
+			&& std::fabs(loaded.wind.dirX - 0.6f) < 1e-6f && std::fabs(loaded.wind.dirZ + 0.8f) < 1e-6f
+			&& std::fabs(loaded.wind.speed - 12.5f) < 1e-5f && std::fabs(loaded.wind.gustiness - 0.45f) < 1e-6f);
+	}
+	// the graphics settings: their menu choices and defaults
+	{
+		const MenuOption* o = FindMenuOption("windTrees");
+		check("windTrees option", o && o->choices.size() == 3 && RenderSettings().windTrees == 2);
+		const MenuOption* g = FindMenuOption("grassWind");
+		check("grassWind option", g && g->choices.size() == 3 && RenderSettings().grassWind == 2);
+	}
+	// boats: before the wind faster, into it slower, across a little faster; a gale's limits
+	{
+		WindState w;
+		w.dirX = 1.0f; w.dirZ = 0.0f; w.speed = 8.0f;
+		const float before = WindBoatFactor(Vector3(10, 0, 0), w), into = WindBoatFactor(Vector3(-10, 0, 0), w), across = WindBoatFactor(Vector3(0, 0, 5), w);
+		printf("WIND boats at 8 m/s: before %.2f, across %.2f, into %.2f\n", before, across, into);
+		check("boats by the wind", std::fabs(before - 1.25f) < 1e-3f && std::fabs(across - 1.12f) < 1e-3f && std::fabs(into - 0.65f) < 1e-3f);
+		w.speed = 30.0f;
+		check("boats in a gale", std::fabs(WindBoatFactor(Vector3(-1, 0, 0), w) - 0.35f) < 1e-4f && std::fabs(WindBoatFactor(Vector3(1, 0, 0), w) - 1.5f) < 1e-4f);
+		ServerEnvironment env;
+		check("boats without the wind", env.windBoatFactor(Vector3(-1, 0, 0)) == 1.0f);
+	}
+	// the wind field's map: 1 before a build and outside, bilinear between the tiles' middles
+	{
+		WindShelterMap m;
+		check("shelter neutral", m.at(10, 10) == 1.0f);
+		m.width = 2; m.height = 1;
+		m.value = { 85, 255 }; // 0.5, 1.5
+		const float mid = m.at(5.0f, 2.5f), left = m.at(2.5f, 2.5f), out = m.at(-50.0f, 2.5f);
+		check("shelter bilinear", std::fabs(mid - 1.0f) < 1e-3f && std::fabs(left - 0.5f) < 1e-3f && std::fabs(out - 0.5f) < 1e-3f);
+	}
+	printf("WIND %s\n", all ? "PASSED" : "FAILED");
+}
+
 void Test_FireQuality()
 {
 	bool all = true;
@@ -12674,8 +12550,8 @@ void Test_FireQuality()
 		const float first = FireFx::Flicker(0.0f, 5);
 		for (int i = 0; i < 2000; i++) {
 			const float f = FireFx::Flicker(i * 0.0137f, 5);
-			inRange &= f >= 0.7f && f <= 1.3f && f == FireFx::Flicker(i * 0.0137f, 5);
-			varies |= std::abs(f - first) > 0.1f;
+			inRange &= f >= 0.45f && f <= 1.55f && f == FireFx::Flicker(i * 0.0137f, 5);
+			varies |= std::abs(f - first) > 0.3f;
 		}
 		check("flicker", inRange && varies && FireFx::Flicker(1.0f, 5) != FireFx::Flicker(1.0f, 6));
 	}
@@ -12774,7 +12650,8 @@ void Test_FireQuality()
 		printf("FIRE level %d instances: %d flames, %d glows, %d smoke, %d shimmer\n", level, kinds[0], kinds[1], kinds[2], kinds[3]);
 		const bool deterministic = inst.size() == again.size() && memcmp(inst.data(), again.data(), inst.size() * sizeof(FireFx::Instance)) == 0;
 		if (level == FireFx::LOW)
-			check("Low: flames only", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] == 0 && kinds[3] == 0 && deterministic);
+			// the flames and the standing fire's smoke, no glow nor shimmer
+			check("Low: flames and smoke", kinds[0] == (int)flames && kinds[1] == 0 && kinds[2] >= 4 && kinds[3] == 0 && ordered && deterministic);
 		else
 			// one glow per fire (the building's emitter, the arrow), the shimmer and the smoke over
 			// the standing fire only
@@ -12786,6 +12663,31 @@ void Test_FireQuality()
 	FireFx::BeginFrame(FireFx::ORIGINAL, false);
 	delete nul;
 	printf("FIRE all %d\n", all ? 1 : 0);
+}
+
+// The in-game help's pages (redata/help, help/Help.h): every link, help id and heading anchor of
+// the English pages, and of each translation, leads somewhere
+void Test_HelpPages()
+{
+	int failures = 0;
+	std::error_code ec;
+	std::vector<std::string> languages = { "en" };
+	for (const auto& e : std::filesystem::directory_iterator(std::filesystem::path("redata") / "help", ec))
+		if (e.is_directory() && e.path().filename() != "en" && std::filesystem::exists(e.path() / "_language.json"))
+			languages.push_back(e.path().filename().string());
+	for (const std::string& lang : languages) {
+		const std::string problems = Help::Check(lang);
+		std::istringstream in(problems);
+		int n = 0;
+		for (std::string line; std::getline(in, line);) {
+			printf("UNITTEST FAILED: help (%s): %s\n", lang.c_str(), line.c_str());
+			n++;
+		}
+		printf("UNITTEST %s: help pages (%s), %d problems\n", n ? "FAILED" : "ok", lang.c_str(), n);
+		failures += n;
+	}
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+	fflush(stdout);
 }
 
 // Rain and snow on burning buildings (ServerEnvironment::updateBuildingFires, redata's "wkbai
@@ -13042,14 +12944,105 @@ static uint64_t MapPlayHash(const std::string& level, int steps, uint64_t& terra
 	return WorldHash(server, nullptr, &objects);
 }
 
+// the test LaunchTest started (a test that runs itself again in child processes names it)
+static size_t g_launchedTest = 0;
+
 // Every original map imported into a map folder and played headless gives the same game hash as
 // the original: per map (its first level in Save_Games, "mapFolderTest": { "from": n, "count": n,
 // "steps": n } to run part of them) "MAPFOLDER <map> <level>: world <h> <h> terrain <h> <h> objects
-// <n> <n> same <0|1>", then "MAPFOLDER maps <n> same <n>"
+// <n> <n> same <0|1>", then "MAPFOLDER maps <n> same <n>".
+// Each game runs in a process of its own (this program again, as a child, with WKB_TEST and
+// WKB_MAPFOLDER_ONLY / _FROM): a second game in one process doesn't always play the same as the
+// first (some state outlives a Server), and the 54 maps' games one after another in one process
+// ran out of memory ("bad allocation" on the sixth map, 2026-11-19). "inProcess": true plays
+// both in this process as before; "only": "original" or "imported" plays that one game alone
+// (what a child does).
+static void MapFolderImportInChildren(const nlohmann::json& cfg)
+{
+	char* program = nullptr;
+	_get_pgmptr(&program);
+	const std::string exe = program ? program : "wkbai.exe";
+	const int from = cfg.value("from", 0), count = cfg.value("count", 1000);
+	auto child = [&](int index, const char* only, std::string& line) {
+		_putenv_s("WKB_TEST", std::to_string(g_launchedTest).c_str());
+		_putenv_s("WKB_MAPFOLDER_ONLY", only);
+		_putenv_s("WKB_MAPFOLDER_FROM", std::to_string(index).c_str());
+		// no console window (_popen's cmd.exe opened one on the screen for each game)
+		HiddenChild hc = PopenHidden(exe.c_str());
+		FILE* p = hc.out;
+		if (!p) {
+			PcloseHidden(hc);
+			return 0;
+		}
+		char buf[4096];
+		int found = 0; // 1: the game's line, 2: no level, 3: past the last map
+		while (fgets(buf, sizeof(buf), p)) {
+			const std::string l = buf;
+			if (l.rfind("MAPFOLDERONE ", 0) == 0) {
+				line = l;
+				found = 1;
+			}
+			else if (l.rfind("MAPFOLDER ", 0) == 0 && l.find("no level uses it") != std::string::npos) {
+				line = l;
+				found = 2;
+			}
+			else if (l.rfind("MAPFOLDER maps 0 ", 0) == 0 && !found)
+				found = 3;
+		}
+		const int code = PcloseHidden(hc);
+		if (!found && code != 0)
+			line = "the child process ended with " + std::to_string(code);
+		return found;
+	};
+	int maps = 0, same = 0;
+	for (int index = from; index < from + count; index++) {
+		std::string a, b;
+		const int fa = child(index, "original", a);
+		if (fa == 3)
+			break;
+		maps++;
+		if (fa == 2) {
+			printf("%s", a.c_str());
+			fflush(stdout);
+			continue;
+		}
+		const int fb = fa == 1 ? child(index, "imported", b) : 0;
+		// "MAPFOLDERONE <index> <dir> <kind> world <h> terrain <h> objects <n>..."
+		auto field = [](const std::string& l, const char* name) {
+			const size_t at = l.find(std::string(" ") + name + " ");
+			if (at == std::string::npos)
+				return std::string();
+			const size_t start = at + strlen(name) + 2;
+			return l.substr(start, l.find_first_of(" \r\n", start) - start);
+		};
+		const size_t kindAt = a.find(" original world ");
+		const std::string dir = fa == 1 && kindAt != std::string::npos ? a.substr(13, kindAt - 13) : std::to_string(index);
+		const bool ok = fa == 1 && fb == 1 && b.find(" import failed") == std::string::npos && field(a, "world") == field(b, "world")
+			&& field(a, "terrain") == field(b, "terrain") && field(a, "objects") == field(b, "objects") && !field(a, "world").empty();
+		same += ok;
+		printf("MAPFOLDER %s: world %s %s terrain %s %s objects %s %s same %d%s%s\n", dir.c_str(), field(a, "world").c_str(), field(b, "world").c_str(),
+			field(a, "terrain").c_str(), field(b, "terrain").c_str(), field(a, "objects").c_str(), field(b, "objects").c_str(), (int)ok,
+			ok ? "" : " | ", ok ? "" : (fa != 1 ? a : b).c_str());
+		fflush(stdout);
+	}
+	printf("MAPFOLDER maps %d same %d\n", maps, same);
+	fflush(stdout);
+}
+
 void Test_MapFolderImport()
 {
 	LoadBCP("data.bcp");
-	const nlohmann::json cfg = g_settings.value("mapFolderTest", nlohmann::json::object());
+	nlohmann::json cfg = g_settings.value("mapFolderTest", nlohmann::json::object());
+	// a child of MapFolderImportInChildren: its one game
+	if (const char* only = getenv("WKB_MAPFOLDER_ONLY"); only && *only) {
+		cfg["only"] = only;
+		cfg["from"] = atoi(getenv("WKB_MAPFOLDER_FROM") ? getenv("WKB_MAPFOLDER_FROM") : "0");
+		cfg["count"] = 1;
+	}
+	else if (!cfg.value("inProcess", false) && !cfg.contains("only")) {
+		MapFolderImportInChildren(cfg);
+		return;
+	}
 	const int from = cfg.value("from", 0), count = cfg.value("count", 1000), steps = cfg.value("steps", 750);
 	// each map's first level
 	std::map<std::string, std::string> levelOf;
@@ -13319,6 +13312,136 @@ void Test_MapFolderNew()
 //    than in the river (3% a second) yet not at once;
 //  - the save: "riverCurrents=1" and the "swim" lines, saved, loaded and saved again the same.
 // Prints "CURRENTS ok/FAILED ..." and "CURRENTS PASSED/FAILED".
+// wkbai's swim animations (SwimAnim.h): made from a unit's walk where it has no swim of its own;
+// the Scout's own SWIM1 kept; a real swim found later takes the made one's place
+void Test_SwimAnimations()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("SWIM %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player Forking River.lvl");
+	const GameSet& gs = *server.gameSet;
+	const int swimTag = gs.animations.names.getIndex("Swim"), moveTag = gs.animations.names.getIndex("Move");
+	check(swimTag >= 0 && moveTag >= 0, "the game set has Swim and Move");
+	if (swimTag < 0 || moveTag < 0) { printf("SWIM FAILED (%d)\n", failures); return; }
+	auto bbox = [](Anim& a, Vector3& lo, Vector3& hi) {
+		lo = Vector3(1e30f, 1e30f, 1e30f); hi = Vector3(-1e30f, -1e30f, -1e30f);
+		bool finite = true;
+		for (int c = 0; c < 3; c++) {
+			const auto& ac = a.coords[c];
+			for (size_t k = 0; k < ac.numFrames; k++) {
+				finite = finite && std::isfinite(ac.vertadd[k]) && std::isfinite(ac.vertmul[k]);
+				lo.coord[c] = std::min(lo.coord[c], ac.vertadd[k]);
+				hi.coord[c] = std::max(hi.coord[c], ac.vertadd[k] + ac.vertmul[k]);
+			}
+		}
+		return finite;
+	};
+	// the Scout: its own swim kept, and one made from its walk next to it
+	{
+		const GameObjBlueprint* scout = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Scout");
+		const auto* ap = scout ? scout->getAppearance(0, 0) : nullptr;
+		auto* own = ap && ap->animations.count(swimTag) ? dynamic_cast<AnimatedModel*>(ap->animations.at(swimTag).front()) : nullptr;
+		check(own && !own->generator && own->fileName.find("SWIM1.ANIM3") != std::string::npos, "the Scout keeps its own SWIM1");
+		auto* walk = ap && ap->animations.count(moveTag) ? dynamic_cast<AnimatedModel*>(ap->animations.at(moveTag).front()) : nullptr;
+		if (own && walk) {
+			Anim made;
+			const bool ok = MakeSwimAnim(walk->getAnim(), SwimStyle::Upright, made);
+			Vector3 lo, hi, olo, ohi;
+			const bool finite = bbox(made, lo, hi);
+			bbox(own->getAnim(), olo, ohi);
+			char what[300];
+			snprintf(what, sizeof(what), "made from the Scout's walk: %u vertices (%u), %u ms (walk %u), box y %.2f..%.2f z %.2f..%.2f; its own SWIM1 y %.2f..%.2f z %.2f..%.2f",
+				made.numVertices, walk->getAnim().numVertices, made.duration, walk->getAnim().duration, lo.y, hi.y, lo.z, hi.z, olo.y, ohi.y, olo.z, ohi.z);
+			check(ok && finite && made.numVertices == walk->getAnim().numVertices && made.duration == (uint32_t)std::lround(walk->getAnim().duration * 1.5f)
+				&& made.meshname == walk->getAnim().meshname && hi.y - lo.y < 2.1f && hi.z - lo.z > 1.8f && hi.y > -0.2f && hi.y < 1.4f && lo.y > -1.4f,
+				std::string("lying in the water like its own: ") + what);
+		}
+	}
+	// every character: a walk has a swim (its own or made), each made one sound
+	int made = 0, own = 0, none = 0, bad = 0;
+	int styles[4] = {};
+	std::string badOnes;
+	for (size_t b = 0; b < gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER].size(); b++) {
+		const GameObjBlueprint& bp = gs.objBlueprints[Tags::GAMEOBJCLASS_CHARACTER][b];
+		for (const auto& [sid, st] : bp.subtypes)
+			for (const auto& [aid, ap] : st.appearances) {
+				auto mv = ap.animations.find(moveTag);
+				auto* walk = mv != ap.animations.end() && !mv->second.empty() ? dynamic_cast<AnimatedModel*>(mv->second.front()) : nullptr;
+				auto sw = ap.animations.find(swimTag);
+				auto* swim = sw != ap.animations.end() && !sw->second.empty() ? dynamic_cast<AnimatedModel*>(sw->second.front()) : nullptr;
+				if (!walk) continue;
+				if (!FileExists(walk->fileName.c_str()) || !SwimsByName(bp.name)) continue; // (game-set entries with no files; machines)
+				if (!swim) { none++; badOnes += " " + bp.name + "(none)"; continue; }
+				if (!swim->generator) { own++; continue; }
+				made++;
+				styles[(int)SwimStyleForFolder(walk->fileName)]++;
+				Anim& a = swim->getAnim();
+				Anim& w = walk->getAnim();
+				Vector3 lo, hi, wlo, whi;
+				const bool finite = bbox(a, lo, hi);
+				bbox(w, wlo, whi);
+				const float height = whi.y - wlo.y;
+				const bool sane = finite && a.numVertices == w.numVertices && a.duration > w.duration && swim->getStaticModel() == walk->getStaticModel()
+					&& hi.y < wlo.y + height * 0.75f && lo.y > wlo.y - height * 1.2f && a.attachPoints.size() == w.attachPoints.size();
+				if (!sane) { bad++; if (badOnes.size() < 600) badOnes += " " + bp.name; }
+			}
+	}
+	char what[400];
+	snprintf(what, sizeof(what), "%d made (upright %d, robed %d, mounted %d, swarm %d), %d their own, %d without, %d not sound:%s",
+		made, styles[0], styles[1], styles[2], styles[3], own, none, bad, badOnes.c_str());
+	check(made >= 60 && own >= 1 && none == 0 && bad == 0 && styles[2] >= 5 && styles[1] >= 3 && styles[3] >= 1, std::string("every walker swims: ") + what);
+	// "swimDumpObj": "<folder>": a few units' walk and swim as OBJ files, two poses each, to look at
+	if (const std::string folder = g_settings.value("swimDumpObj", std::string()); !folder.empty()) {
+		std::filesystem::create_directories(folder);
+		for (const char* name : { "Scout", "Spearman", "Pikeman", "Knight", "Priest", "Peasant", "Gibbering Horde", "Mounted Hand Gunner", "Bishop" }) {
+			const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
+			const auto* ap = bp ? bp->getAppearance(0, 0) : nullptr;
+			if (!ap) continue;
+			for (int tag : { moveTag, swimTag }) {
+				auto it = ap->animations.find(tag);
+				auto* m = it != ap->animations.end() && !it->second.empty() ? dynamic_cast<AnimatedModel*>(it->second.front()) : nullptr;
+				if (!m) continue;
+				const uint32_t dur = m->getAnim().duration;
+				for (int pose = 0; pose < 2; pose++) {
+					const float* v = m->interpolate(dur * pose / 2);
+					Mesh& mesh = m->getStaticModel()->getMesh();
+					std::string file = folder + "/" + name + (tag == swimTag ? (m->generator ? "_swim_made" : "_swim_own") : "_walk") + std::to_string(pose) + ".obj";
+					FILE* f = fopen(file.c_str(), "w");
+					if (!f) continue;
+					for (size_t i = 0; i < mesh.vertices.size() / 3; i++)
+						fprintf(f, "v %f %f %f\n", v[3 * i], v[3 * i + 1], v[3 * i + 2]);
+					if (mesh.polyLists.size() > 0)
+						for (size_t g = 0; g < mesh.polyLists[0].groups.size() && g < mesh.groupIndices.size(); g++)
+							for (const auto& t : mesh.polyLists[0].groups[g].tupleIndex)
+								fprintf(f, "f %u %u %u\n", mesh.groupIndices[g][t[0]].vertex + 1, mesh.groupIndices[g][t[1]].vertex + 1, mesh.groupIndices[g][t[2]].vertex + 1);
+					fclose(f);
+				}
+			}
+		}
+	}
+	// a real swim found later (another LOAD_ANIMATIONS_FROM, a mod's file, an HD model's) takes the
+	// made one's place
+	{
+		auto& spear = const_cast<GameObjBlueprint&>(*gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman"));
+		GameObjBlueprint::BPAppearance ap;
+		spear.loadAnimations(ap, "Warrior Kings Game Set\\Characters\\Spearman\\");
+		auto* m = ap.animations.count(swimTag) ? dynamic_cast<AnimatedModel*>(ap.animations[swimTag].front()) : nullptr;
+		const bool madeFirst = m && m->generator && ap.animations[swimTag].size() == 1;
+		spear.loadAnimations(ap, "Warrior Kings Game Set\\Characters\\Scout\\");
+		auto& list = ap.animations[swimTag];
+		auto* real = list.size() == 1 ? dynamic_cast<AnimatedModel*>(list.front()) : nullptr;
+		check(madeFirst && real && !real->generator && real->fileName.find("SWIM1") != std::string::npos,
+			"a swim made from the Spearman's walk, then the Scout's real SWIM1 in its place alone");
+	}
+	printf("SWIM %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 void Test_RiverCurrents()
 {
 	int failures = 0;
@@ -13465,6 +13588,34 @@ void Test_RiverCurrents()
 		for (int i = 0; i < 110 && env.swimmerCount() == 0; i++)
 			run(0.02f);
 		const size_t carriedNow = env.swimmerCount();
+		// (carried in water of normal depth: swimming, its Swim made from its walk, at its own speed)
+		snprintf(what, sizeof(what), "animation %d (Swim %d), speed %.2f, %zu carried", alive(u) ? u->animationIndex : -1,
+			gs.animations.names.getIndex("Swim"), alive(u) ? u->animSpeed : 0.0f, carriedNow);
+		if (g_settings.value<bool>("madeSwimAnimations", true))
+			check(alive(u) && carriedNow >= 1 && u->animationIndex == gs.animations.names.getIndex("Swim") && u->animSpeed == 1.0f,
+				std::string("swimming: its Swim, made from its walk (SwimAnim.h): ") + what);
+		// "swimSave": "<file>": more of them swimming there, saved, for a benchmark run that shows
+		// them (the client draws them at the surface)
+		if (const std::string file = g_settings.value("swimSave", std::string()); !file.empty()) {
+			float side = 3.0f;
+			std::vector<SrvGORef> shown;
+			for (const char* name : { "Priest", "Knight", "Peasant", "Pikeman", "Gibbering Horde", "Scout" }) {
+				if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name))
+					shown.push_back(server.spawnObject(bp, enemy, centre(fast) + Vector3(side, 0, side * 0.5f), Vector3(0, 0, 0)));
+				side = side > 0 ? -side : -side + 3.0f;
+			}
+			run(1.2f);
+			// (the picture: each as it swims, where it is; the currents carry the ones in deep water)
+			for (SrvGORef& o : shown)
+				if (o.get()) o->setAnimation(gs.animations.names.getIndex("Swim"));
+			const Vector3 c = centre(fast);
+			printf("CURRENTS swimmers saved to %s: %d (%zu carried), around (%.1f, %.1f, %.1f), the water at %.2f\n", file.c_str(),
+				(int)server.saveGame(file.c_str()), env.swimmerCount(), c.x, server.terrain->getHeight(c.x, c.z), c.z,
+				server.terrain->getPlayableTile((int)(c.x / 5), (int)(c.z / 5)) ? server.terrain->getPlayableTile((int)(c.x / 5), (int)(c.z / 5))->waterLevel : -1.0f);
+			printf("CURRENTS a picture run (swimSave): the checks after this are left out\n");
+			fflush(stdout);
+			return;
+		}
 		// the save while it is carried
 		const std::string text = env.saveText();
 		check(carriedNow >= 1 && text.find("riverCurrents=1") != std::string::npos && text.find("\nswim ") != std::string::npos, "the setting and the swimmer in the save");
@@ -13609,14 +13760,20 @@ void Test_RiverCurrents()
 			run(3.0f);
 			const float moved = alive(u) ? (u->position - at).len2xz() : -1.0f, health = share(u);
 			const int carried = env.stats.carriedSeconds - carried0;
-			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s", name, hardy, c.drag,
-				health * 100.0f, moved, carried);
+			// (what moved it, if anything: its own walk, its order)
+			const Order* order = alive(u) ? u->orderConfig.getCurrentOrder() : nullptr;
+			const std::string orderName = order ? gs.orders.getString(order->blueprint->bpid) : std::string("none");
+			snprintf(what, sizeof(what), "%s (kind %d) in the flood (drag %.1f m/s): health %.1f%%, moved %.2f m, carried %d s; walking on its own %d, order %s", name, hardy, c.drag,
+				health * 100.0f, moved, carried, alive(u) ? (int)(u->movementController.isMoving() || u->movement.isMoving()) : -1, orderName.c_str());
 			if (hardy == ServerEnvironment::WATER_MACHINE)
 				check(health < 0.7f && health > 0.0f && carried >= 1 && moved > 0.2f && moved < c.drag * 3.0f * 0.6f, std::string("a war machine sinks, dragged a little: ") + what);
 			else if (hardy == ServerEnvironment::WATER_HUGE)
 				check(alive(u) && health < 0.97f && carried >= 1 && moved > 0.5f * c.drag, std::string("a huge creature drifts, hurt: ") + what);
 			else
-				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && moved < 0.3f, std::string("otherworldly, untouched: ") + what);
+				// (not carried, not hurt; moved only by an order of its own: another copy of the game's
+				// data has an enemy in its sight there, and it goes for it)
+				check(hardy == ServerEnvironment::WATER_UNHARMED && alive(u) && health > 0.999f && carried == 0 && (moved < 0.3f || order),
+					std::string("otherworldly, untouched: ") + what);
 			if (u.get()) server.deleteObject(u.get());
 		}
 	}
@@ -13935,6 +14092,1376 @@ void Test_NavalAI()
 	fflush(stdout);
 }
 
+// A wedge of riders charging a line (the play test: the wedge stopped at first contact, only its
+// tip fought, the others stood). WKB.exe's scripts (Formation Army.cpp, Standard Heavy Cavalry
+// Targets.cpp; docs/re/combat-original-formations.md): the formation marches to the target, then
+// every member picks its own victim among the enemies within "My Individual Formation Attack
+// Range" (40 m) and rides out to it, at most "Number Of Units I Can Be Attacked By" (3) on one.
+// On 4 Peaks, 15 Knights in a Wedge and 24 Men at Arms in a Line 50 m off, facing each other:
+//  - case 0, "Formation Army Attack" on a man of the line (a right-click on it);
+//  - case 1, a Move through the line to 30 m behind it (a charge by moving);
+//  - cases 2-4, the same riders in a Line, a Column and an Orb, with the attack order;
+// every second each rider's order, target, distance to it and to the nearest enemy can be logged
+// (WKB_WEDGE_LOG=1). Fighting: an attack order on an enemy, or the game set's break-off of cavalry
+// that hit formed heavy infantry from the front. Checked: within 6 s of the first contact 60 %
+// of the riders fighting at once, from 2 to 12 s after it half of them on average (the
+// scripts hand out victims every 2.5 s, at most 3 riders on one), and in those 12 s none standing
+// idle (no order, not walking) with an enemy within 10 m for more than 3 s. Before (the wedge:
+// 14 % and 12 %, idle 5 s) three things stood in the way: ARE_ASSOCIATED counted an idle member's
+// empty FINDER_TARGET as attacking (WKB.exe's fails: 0); the formation's arrival ran both its
+// PROXIMITY_SATISFIED and MOVEMENT_COMPLETED sequences, ending the army's attack task before it
+// began; and a member's Attack on a victim out of reach ran its dissatisfied sequence at the
+// start and stopped. WKB_WEDGE_CASE=<n> runs one case, WKB_WEDGE_TYPE=<formation> sets the type.
+// Prints "WEDGE ok/FAILED ..." and "WEDGE PASSED/FAILED".
+void Test_WedgeCharge()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("WEDGE %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	const bool log = getenv("WKB_WEDGE_LOG") != nullptr;
+	const int onlyCase = getenv("WKB_WEDGE_CASE") ? atoi(getenv("WKB_WEDGE_CASE")) : -1;
+	// the riders' formation and their order (a move through the line only for the wedge)
+	// (5 and 6 against Javelineers, skirmishers: their Line shoots once formed up, the riders that
+	// ride into them hear of them by On Share Tile. Not the Orb: its members take victims only
+	// within 8 m, Formations.cpp's "My Individual Formation Attack Range", against skirmishers
+	// backing off only its front fights.)
+	struct Scenario { const char* type; bool attack; const char* foot; };
+	const Scenario scenarios[] = { { "Wedge", true, nullptr }, { "Wedge", false, nullptr }, { "Line", true, nullptr }, { "Column", true, nullptr }, { "Orb", true, nullptr },
+		{ "Wedge", true, "Javelineer" }, { "Wedge", false, "Javelineer" } };
+	for (int scenario = 0; scenario < (int)std::size(scenarios); scenario++) {
+		if (onlyCase >= 0 && onlyCase != scenario)
+			continue;
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		ServerGameObject* own = server.findObject(1027);
+		ServerGameObject* enemy = server.findObject(1030);
+		const GameSet& gs = *server.gameSet;
+		const GameObjBlueprint* rider = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_RIDER") ? getenv("WKB_WEDGE_RIDER") : "Knight");
+		const GameObjBlueprint* foot = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_FOOT") ? getenv("WKB_WEDGE_FOOT") : scenarios[scenario].foot ? scenarios[scenario].foot : "Man At Arms");
+		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : scenarios[scenario].type), lineCmd = gs.commands.names.getIndex("Line");
+		const int attackCmd = gs.commands.names.getIndex("Formation Army Attack"), moveCmd = gs.commands.names.getIndex("Move");
+		if (!own || !enemy || !rider || !foot || wedgeCmd < 0 || lineCmd < 0 || attackCmd < 0 || moveCmd < 0
+			|| gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+			printf("WEDGE FAILED (not set up)\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		// open ground: the spot nearest the map's middle with no tile blocked for either within
+		// 35 m across, 50 m ahead of the line and 55 m behind the riders (and under 12 m of height difference)
+		Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		{
+			auto open = [&](const Vector3& c) {
+				float lo = 1e9f, hi = -1e9f;
+				for (float dz = -50.0f; dz <= 55.0f; dz += 5.0f)
+					for (float dx = -35.0f; dx <= 35.0f; dx += 5.0f) {
+						const float x = c.x + dx, z = c.z + dz;
+						if (x < 10.0f || z < 10.0f || x > area.first - 10.0f || z > area.second - 10.0f)
+							return false;
+						if (MovementController::isTileBlocked(rider, (int)(x / 5.0f), (int)(z / 5.0f))
+							|| MovementController::isTileBlocked(foot, (int)(x / 5.0f), (int)(z / 5.0f)))
+							return false;
+						const float h = server.terrain->getHeight(x, z);
+						lo = std::min(lo, h);
+						hi = std::max(hi, h);
+					}
+				return hi - lo < 12.0f;
+			};
+			const Vector3 middle = centre;
+			bool found = false;
+			for (float r = 0.0f; r < 400.0f && !found; r += 10.0f)
+				for (int k = 0; k < std::max(1, (int)(r / 5.0f)) && !found; k++) {
+					const float a = k * 6.2831855f / std::max(1, (int)(r / 5.0f));
+					const Vector3 c = middle + Vector3(std::sin(a) * r, 0, std::cos(a) * r);
+					if (open(c)) {
+						centre = c;
+						found = true;
+					}
+				}
+			printf("WEDGE open ground at (%.0f, %.0f)\n", centre.x, centre.z);
+			if (!found) {
+				printf("WEDGE FAILED (no open ground)\n");
+				return;
+			}
+		}
+		auto at = [&](float x, float z, const GameObjBlueprint* bp) { return MovementController::nearestValidPosition(bp, centre + Vector3(x, 0, z)); };
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto step = [&]() {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		};
+		auto makeFormation = [&](ServerGameObject* player, const std::vector<ServerGameObject*>& units, float heading, int command) {
+			ServerGameObject* f = server.spawnObject(&gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+			Vector3 sum;
+			for (ServerGameObject* u : units) {
+				sum += u->position;
+				u->setParent(f);
+			}
+			f->setPosition(sum / (float)units.size());
+			f->setOrientation(Vector3(0, heading, 0));
+			f->sendEvent(Tags::PDEVENT_ON_SPAWN);
+			gs.commands[command].execute(f, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			return SrvGORef(f);
+		};
+		// the riders south (+z), facing north (heading 0 faces -z); the line north, facing south
+		std::vector<ServerGameObject*> riders, foes;
+		for (int i = 0; i < 15; i++)
+			riders.push_back(server.spawnObject(rider, own, at(-12.0f + (i % 5) * 6.0f, 30.0f + (i / 5) * 6.0f, rider), Vector3(0, 0, 0)));
+		for (int i = 0; i < 24; i++)
+			foes.push_back(server.spawnObject(foot, enemy, at(-23.0f + (i % 12) * 4.0f, -20.0f - (i / 12) * 3.0f, foot), Vector3(0, 3.14159f, 0)));
+		std::vector<SrvGORef> riderRefs(riders.begin(), riders.end()), foeRefs(foes.begin(), foes.end());
+		SrvGORef wedge = makeFormation(own, riders, 0.0f, wedgeCmd);
+		SrvGORef line = makeFormation(enemy, foes, 3.14159f, lineCmd);
+		// (the formations' own objects: the type commands replace them)
+		for (int i = 0; i < 5 * 50; i++)
+			step();
+		wedge = riderRefs[0] ? SrvGORef(riderRefs[0]->getParent()) : SrvGORef();
+		line = foeRefs[0] ? SrvGORef(foeRefs[0]->getParent()) : SrvGORef();
+		const bool formedUp = wedge && wedge->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && line && line->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		printf("WEDGE case %d: %s of %zu (%s) at (%.0f, %.0f), %s of %zu (%s) at (%.0f, %.0f)\n", scenario,
+			wedge ? wedge->blueprint->name.c_str() : "-", riders.size(), rider->name.c_str(), wedge ? wedge->position.x : 0.0f, wedge ? wedge->position.z : 0.0f,
+			line ? line->blueprint->name.c_str() : "-", foes.size(), foot->name.c_str(), line ? line->position.x : 0.0f, line ? line->position.z : 0.0f);
+		if (log)
+			for (const SrvGORef& f : foeRefs)
+				if (f)
+					printf("WEDGE   foe %u at (%.1f, %.1f) under %s\n", f->id, f->position.x, f->position.z, f->getParent() ? f->getParent()->blueprint->name.c_str() : "-");
+		if (!formedUp) {
+			check(false, "both formations formed");
+			continue;
+		}
+		if (scenarios[scenario].attack)
+			gs.commands[attackCmd].execute(wedge.get(), foes[5], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		else
+			gs.commands[moveCmd].execute(wedge.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, line->position + Vector3(0, 0, -30.0f));
+		auto alive = [](const SrvGORef& r) { return r && !(r->flags & CommonGameObject::fTerminated) && r->blueprint->name.rfind("Dead", 0) != 0; };
+		auto nearestFoe = [&](const ServerGameObject* u) {
+			float best = 1e9f;
+			for (const SrvGORef& f : foeRefs)
+				if (alive(f))
+					best = std::min(best, std::sqrt((f->position - u->position).sqlen2xz()));
+			return best;
+		};
+		// fighting: an attack order of its own on a (living) enemy, or the game set's break-off of
+		// cavalry that struck formed heavy infantry from the front ("Run Away After Attack": "Rear
+		// and Flee", then "Move To Cavalry Broken Marker", and back to the fight)
+		auto inMelee = [&](ServerGameObject* u) {
+			Order* o = u->orderConfig.getCurrentOrder();
+			if (!o)
+				return false;
+			const std::string& on = gs.orders.names.getString(o->blueprint->bpid);
+			if (on.find("Flee") != std::string::npos || on.find("Broken Marker") != std::string::npos)
+				return true;
+			if (o->blueprint->classType != Tags::ORDTSKTYPE_ATTACK)
+				return false;
+			Task* t = o->getCurrentTask();
+			ServerGameObject* tg = t ? t->target.get() : nullptr;
+			return tg && !(tg->flags & CommonGameObject::fTerminated) && tg->getPlayer() != own;
+		};
+		float contact = -1.0f;
+		double shareSum = 0.0;
+		int shareCount = 0;
+		int peak = 0;
+		float longestIdle = 0.0f;
+		uint32_t longestIdleOf = 0;
+		std::map<uint32_t, float> idleSince; // riders standing idle with an enemy within 10 m, since when
+		const float t0 = server.timeManager.currentTime;
+		for (int s = 0; s < 40 * 50; s++) {
+			step();
+			const float now = server.timeManager.currentTime - t0;
+			int living = 0, melee = 0, idleNear = 0, foesLeft = 0;
+			for (const SrvGORef& f : foeRefs)
+				foesLeft += alive(f) ? 1 : 0;
+			for (const SrvGORef& r : riderRefs)
+				if (alive(r)) {
+					living++;
+					if (contact < 0.0f && nearestFoe(r.get()) < 4.0f)
+						contact = now;
+					if (inMelee(r.get()))
+						melee++;
+					if (!r->orderConfig.getCurrentOrder() && !r->movementController.isMoving() && nearestFoe(r.get()) < 10.0f) {
+						idleNear++;
+						auto it = idleSince.emplace(r->id, now).first;
+						if (contact >= 0.0f && now <= contact + 12.0f && foesLeft > 0)
+							if (now - it->second > longestIdle) {
+								longestIdle = now - it->second;
+								longestIdleOf = r->id;
+							}
+					}
+					else
+						idleSince.erase(r->id);
+				}
+			if (s % 50 == 49) {
+				// the riders' formation while some are in it, else the first rider's controller
+				ServerGameObject* wf = nullptr;
+				for (const SrvGORef& r : riderRefs)
+					if (alive(r) && r->getParent() && r->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+						wf = r->getParent();
+						break;
+					}
+				if (!wf && riderRefs[0] && alive(riderRefs[0]))
+					wf = riderRefs[0]->getParent();
+				if (log) {
+					printf("WEDGE t=%4.1f %s %s at (%.1f, %.1f)%s; riders %d, in melee %d, idle near %d; foes %d\n", now,
+						wf ? wf->blueprint->name.c_str() : "-",
+						wf && wf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(wf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						wf ? wf->position.x : 0.0f, wf ? wf->position.z : 0.0f, wf && wf->movement.isMoving() ? " moving" : "", living, melee, idleNear, foesLeft);
+					ServerGameObject* lf = foeRefs[0] && alive(foeRefs[0]) ? foeRefs[0]->getParent() : nullptr;
+					printf("WEDGE   the foes' %s %s at (%.1f, %.1f)%s; foe 0 at (%.1f, %.1f) %s\n", lf ? lf->blueprint->name.c_str() : "-",
+						lf && lf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(lf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						lf ? lf->position.x : 0.0f, lf ? lf->position.z : 0.0f, lf && lf->movement.isMoving() ? " moving" : "",
+						foeRefs[0] ? foeRefs[0]->position.x : 0.0f, foeRefs[0] ? foeRefs[0]->position.z : 0.0f,
+						foeRefs[0] && foeRefs[0]->orderConfig.getCurrentOrder() ? gs.orders.names.getString(foeRefs[0]->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "(no order)");
+					for (const SrvGORef& r : riderRefs) {
+						if (!alive(r))
+							continue;
+						if (getenv("WKB_WEDGE_DEBUG")) {
+							SrvScriptContext ctx(&server, r.get());
+							const int fi = gs.objectFinderDefinitions.names.getIndex("Enemy Units Within Formation Attack Range metres of Me");
+							const int e1 = gs.equations.names.getIndex("I Am Not Already Attacking A Victim Of My Controller");
+							const int e2 = gs.equations.names.getIndex("No Victims Left");
+							const int e3 = gs.equations.names.getIndex("I Am In A Formation");
+							const int e4 = gs.equations.names.getIndex("I Am Currently Attacking");
+							printf("WEDGE   debug %u: victims %d, not already %.0f, none left (controller) %.0f, in a formation %.0f, attacking %.0f\n", r->id,
+								fi >= 0 ? (int)gs.objectFinderDefinitions[fi]->eval(&ctx).size() : -1,
+								e1 >= 0 ? gs.equations[e1]->eval(&ctx) : -9.0f,
+								[&] { SrvScriptContext c2(&server, r->getParent()); return e2 >= 0 ? gs.equations[e2]->eval(&c2) : -9.0f; }(),
+								e3 >= 0 ? gs.equations[e3]->eval(&ctx) : -9.0f, e4 >= 0 ? gs.equations[e4]->eval(&ctx) : -9.0f);
+							for (const char* fn : { "Most appropriate Victim for Heavy Cavalry From Formation", "My Armies Victims", "Victims Of My Controller" }) {
+								const int k = gs.objectFinderDefinitions.names.getIndex(fn);
+								printf("WEDGE   debug %u: \"%s\" %d\n", r->id, fn, k >= 0 ? (int)gs.objectFinderDefinitions[k]->eval(&ctx).size() : -1);
+							}
+							if (const int se = gs.equations.names.getIndex("Suitability of Candidate as Heavy Cavalry Target"); se >= 0 && r->getParent())
+								for (const SrvGORef& f : foeRefs)
+									if (alive(f) && f.get() == foeRefs[5].get()) {
+										auto _c = ctx.change(ctx.candidate, f.get());
+										printf("WEDGE   debug %u: suitability of %u %.2f\n", r->id, f->id, gs.equations[se]->eval(&ctx));
+									}
+						}
+						Order* o = r->orderConfig.getCurrentOrder();
+						Task* t = o ? o->getCurrentTask() : nullptr;
+						ServerGameObject* tg = t ? t->target.get() : nullptr;
+						printf("WEDGE   %u at (%.1f, %.1f)%s %s -> %u (%.1f m), nearest foe %.1f m, place %.1f m off, under %s\n", r->id, r->position.x, r->position.z,
+							r->movementController.isMoving() ? " moving" : "", o ? gs.orders.names.getString(o->blueprint->bpid).c_str() : "(no order)",
+							tg ? tg->id : 0u, tg ? std::sqrt((tg->position - r->position).sqlen2xz()) : 0.0f, nearestFoe(r.get()),
+							[&] { Vector3 pl; return r->getParent() && FormationController::memberPlace(r->getParent(), r.get(), pl) ? std::sqrt((pl - r->position).sqlen2xz()) : -1.0f; }(),
+							r->getParent() ? r->getParent()->blueprint->name.c_str() : "-");
+					}
+				}
+				// 2 to 12 s after the first contact: the riders fighting, of those alive
+				if (contact >= 0.0f && now >= contact + 2.0f && now <= contact + 12.0f && foesLeft > 0 && living > 0) {
+					shareSum += (double)melee / living;
+					shareCount++;
+				}
+				// the most fighting at once within 6 s of it
+				if (contact >= 0.0f && now <= contact + 6.0f && living > 0)
+					peak = std::max(peak, (int)std::lround(100.0 * melee / living));
+			}
+		}
+		const int share = shareCount ? (int)std::lround(100.0 * shareSum / shareCount) : -1;
+		printf("WEDGE case %d: first contact %.1f s after the order; within 6 s of it at most %d%% of the riders fighting at once, 2-12 s after it %d%% on average; the longest stand idle with an enemy within 10 m in those 12 s %.1f s (%u)\n",
+			scenario, contact, peak, share, longestIdle, longestIdleOf);
+		const std::string name = "case " + std::to_string(scenario) + " (" + std::string(scenarios[scenario].type) + ", " + (scenarios[scenario].attack ? "an attack order" : "a move through the line") + (scenarios[scenario].foot ? std::string(", against ") + scenarios[scenario].foot : std::string()) + ")";
+		check(contact >= 0.0f, name + ": the wedge reaches the line");
+		check(peak >= 60, name + ": within 6 s of contact most riders fight at once");
+		check(share >= 50, name + ": most riders fight in the 12 s after contact");
+		check(longestIdle <= 3.0f, name + ": none stands idle with an enemy in reach (more than 3 s)");
+	}
+	printf(failures ? "WEDGE FAILED (%d)\n" : "WEDGE PASSED\n", failures);
+}
+
+// A gatehouse on a wall (the play test of 2026-11-18: "You cannot build a gatehouse on top of
+// walls"): a Manor stamped down on 4 Peaks for player 1027, then a Stockade Gatehouse placed as
+// the client's preview places it (the cursor's tile, snapped) over four straight pieces of its
+// ring, along the south run and, turned a quarter, along the west run. The plan must be valid, the
+// four pieces gone, the gatehouse in the city between the two pieces left at the run's ends.
+// Across the run, on a corner or on a gatehouse it is refused. Then, the walls built: a peasant
+// inside walks out through the open gate; with the gate closed, neither it nor an enemy crosses
+// the gate's tiles. Prints "GATEWALL ok|FAILED: <check>" and "GATEWALL all <0/1>".
+void Test_GatehouseOnWall()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("GATEWALL %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	// a client on a local link too: the preview's plan (the client's own copy of the walls) must
+	// agree with the server's
+	Server server;
+	Client client(true);
+	NetLocalBuffer toClient, toServer;
+	NetLocalLink srv2cli(&toClient, &toServer), cli2srv(&toServer, &toClient);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.startLevel();
+	auto pump = [&]() {
+		for (int i = 0; i < 1000 && cli2srv.available(); i++)
+			client.tick();
+	};
+	pump();
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemy = server.findObject(1030);
+	ClientGameObject* cliPlayer = client.findObject(1027);
+	const GameSet& gs = *server.gameSet;
+	const GameObjBlueprint* cliGate = client.gameSet ? client.gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation") : nullptr;
+	const GameObjBlueprint* manor = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+	const GameObjBlueprint* gateFoundation = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Foundation");
+	const GameObjBlueprint* gateClosed = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Stockade Gatehouse Closed");
+	const GameObjBlueprint* peasant = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+	const int move = gs.commands.names.getIndex("Move");
+	if (!player || !enemy || !cliPlayer || !cliGate || !manor || !gateFoundation || !gateClosed || !peasant || move < 0 || !server.terrain || !server.tiles || !client.tiles) {
+		printf("GATEWALL not set up\nGATEWALL all 0\n");
+		return;
+	}
+	for (ServerGameObject* p : { player, enemy }) {
+		p->setItem(Tags::PDITEM_FOOD, 1e6f);
+		p->setItem(Tags::PDITEM_WOOD, 1e6f);
+		p->setItem(Tags::PDITEM_GOLD, 1e6f);
+	}
+	const auto [tw, th] = server.terrain->getNumPlayableTiles();
+	auto tileCentre = [](const GameObjBlueprint* bp, int tx, int tz) {
+		return Vector3(tx * 5.0f + 2.5f + bp->footprint->originX, 0.0f, tz * 5.0f + 2.5f + bp->footprint->originZ);
+	};
+	// Manors stamped down one at a time, on a grid of spots from near the start outwards: each
+	// run is tried on the first city that has a site for it
+	ServerGameObject* first = nullptr;
+	ServerGameObject* city = nullptr;
+	int x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+	int nextSpot = 0, manors = 0;
+	auto nextCity = [&]() {
+		for (; nextSpot < 12 * 12; nextSpot++) {
+			const int tx = 50 + (nextSpot % 12) * 10, tz = 50 + (nextSpot / 12) * 10;
+			ServerGameObject* m = server.stampdownObject(manor, player, tileCentre(manor, tx, tz), Vector3(0, 0, 0), true, true);
+			if (!m || !m->parent || m->parent->blueprint->bpClass != Tags::GAMEOBJCLASS_CITY)
+				continue;
+			nextSpot++;
+			manors++;
+			pump();
+			first = m;
+			city = (ServerGameObject*)m->parent;
+			x0 = 1 << 30, z0 = 1 << 30, x1 = -1, z1 = -1;
+			for (const auto& r : city->cityRectangles) {
+				x0 = std::min(x0, r.xStart); z0 = std::min(z0, r.yStart);
+				x1 = std::max(x1, r.xEnd); z1 = std::max(z1, r.yEnd);
+			}
+			printf("GATEWALL Manor %d at tile (%d, %d), city tiles (%d, %d) to (%d, %d)\n", manors, tx, tz, x0, z0, x1, z1);
+			return true;
+		}
+		return false;
+	};
+	if (!nextCity()) {
+		printf("GATEWALL no Manor stamped down\nGATEWALL all 0\n");
+		return;
+	}
+	auto pieceOn = [&](int x, int z) -> ServerGameObject* {
+		if (x < 0 || z < 0 || x >= tw || z >= th)
+			return nullptr;
+		ServerGameObject* o = server.tiles[z * tw + x].building.getFrom<Server>();
+		return o && o->parent == city ? o : nullptr;
+	};
+	auto isStraight = [](const ServerGameObject* o) { return o && o->blueprint->buildingType == Tags::BUILDINGTYPE_WALL; };
+	auto quarterOf = [](float y) { return ((int)std::lround(y / 1.5707963f) % 4 + 4) % 4; };
+	// where the client's preview puts a building for a cursor on tile (cx, cz) (ClientInterface:
+	// the tile's centre plus the turned origin)
+	auto snapped = [&](const GameObjBlueprint* bp, int cx, int cz, float turn) {
+		const auto o = bp->footprint->rotateOrigin(turn);
+		Vector3 p(cx * 5.0f + 2.5f + o.first, 0.0f, cz * 5.0f + 2.5f + o.second);
+		p.y = server.terrain->getHeight(p.x, p.z);
+		return p;
+	};
+	int clientDiffers = 0, otherRefusals = 0;
+	struct Placed { Vector3 at; float turn = 0; std::vector<std::pair<int, int>> tiles; ServerGameObject* gate = nullptr; };
+	// along a run of the ring: the south one (z0, along x, no turn) and the west one (x0, along
+	// z, a quarter): every cursor tile whose footprint lies on four straight pieces with a
+	// straight piece beyond each end; the server's verdicts counted, the client's compared, and the
+	// first valid one (from the run's middle) taken. Sites on sloping ground beside the Manor are
+	// refused as WKB.exe does (OVERLAPS_NEIGHBOURING_BUILDING, 0x59c4d0: only wall pieces are
+	// left out of the neighbours).
+	auto placeOn = [&](bool west, const std::string& run) {
+		Placed r;
+		r.turn = west ? 1.5707964f : 0.0f;
+		const int len = west ? z1 - z0 + 1 : x1 - x0 + 1;
+		std::map<int, int> verdicts;
+		int sites = 0, differ = 0;
+		for (int d = 0; d < len; d++) {
+			const int k = len / 2 + ((d & 1) ? -(d + 1) / 2 : d / 2);
+			const int cx = west ? x0 : x0 + k, cz = west ? z0 + k : z0;
+			const Vector3 at = snapped(gateFoundation, cx, cz, r.turn);
+			const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, at, Vector3(0, r.turn, 0));
+			if (plan.tiles.size() != 4)
+				continue;
+			bool onRun = true;
+			std::vector<std::pair<int, int>> tiles;
+			for (const auto& t : plan.tiles) {
+				onRun &= isStraight(pieceOn(t.x, t.z));
+				tiles.emplace_back(t.x, t.z);
+			}
+			std::sort(tiles.begin(), tiles.end());
+			const auto [ax, az] = tiles.front();
+			const auto [bx, bz] = tiles.back();
+			const int ex = west ? 0 : 1, ez = west ? 1 : 0;
+			if (!onRun || !isStraight(pieceOn(ax - ex, az - ez)) || !isStraight(pieceOn(bx + ex, bz + ez)))
+				continue;
+			sites++;
+			verdicts[(int)plan.status]++;
+			const StampdownPlan cp = StampdownPlan::getStampdownPlan(&client, cliPlayer, cliGate, at, Vector3(0, r.turn, 0));
+			if (cp.status != plan.status || cp.toRemove.size() != plan.toRemove.size()) {
+				printf("GATEWALL %s at (%.1f, %.1f): the server says %d (%zu to remove), the client %d (%zu)\n", run.c_str(), at.x, at.z,
+					(int)plan.status, plan.toRemove.size(), (int)cp.status, cp.toRemove.size());
+				differ++;
+			}
+			if (r.tiles.empty() && plan.status == StampdownPlan::Status::Valid) {
+				r.at = at;
+				r.tiles = tiles;
+			}
+		}
+		printf("GATEWALL %s: %d sites on four straight pieces;", run.c_str(), sites);
+		for (const auto& [s, n] : verdicts)
+			printf(" status %d x %d,", s, n);
+		printf("\n");
+		clientDiffers += differ;
+		for (const auto& [s, n] : verdicts)
+			if (s != (int)StampdownPlan::Status::Valid && s != (int)StampdownPlan::Status::InvalidNeighbour)
+				otherRefusals += n;
+		return r;
+	};
+	for (bool west : { false, true }) {
+		const std::string run = west ? "west run (turned a quarter)" : "south run";
+		Placed p = placeOn(west, run);
+		// none here (the ground too uneven beside the Manor): another Manor elsewhere
+		while (p.tiles.empty() && manors < 8 && nextCity())
+			p = placeOn(west, run);
+		check(!p.tiles.empty(), run + ": a site on four straight pieces the gatehouse may take");
+		if (p.tiles.empty())
+			continue;
+		const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, p.at, Vector3(0, p.turn, 0));
+		printf("GATEWALL %s: at (%.1f, %.1f) turn %.2f, status %d, %zu to remove\n", run.c_str(), p.at.x, p.at.z, p.turn, (int)plan.status, plan.toRemove.size());
+		check(plan.toRemove.size() == 4, run + ": it takes the four pieces down");
+		// the placing interface pointed at one of those pieces (the client's copy, as hovered),
+		// the cursor's ground point one and two tiles behind the wall (inside the city: where the
+		// ray through a standing wall meets the ground), the gatehouse unturned and turned: onto
+		// the wall, a valid plan taking the four pieces
+		{
+			pump(); // (the client's copy of the walls, built since by the walk's part)
+			const auto [hx, hz] = p.tiles[1];
+			const ClientGameObject* hovered = nullptr;
+			if (const ServerGameObject* s = pieceOn(hx, hz))
+				hovered = client.findObject(s->id);
+			int onto = 0, tries = 0;
+			// (the eye outside the wall, looking in: 1 tile behind at the usual pitch, 0.9 rad,
+			// where the ray is 6.3 m up over the wall; 2 tiles behind at a flatter 0.6)
+			for (const int behind : { 1, 2 })
+				for (const int startQuarter : { 0, 1 }) {
+					tries++;
+					Vector3 ground(hx * 5.0f + 2.5f + (west ? behind * 5.0f : 0.0f), 0.0f, hz * 5.0f + 2.5f + (west ? 0.0f : behind * 5.0f));
+					ground.y = client.terrain->getHeight(ground.x, ground.z);
+					const float pitch = behind == 1 ? 0.9f : 0.6f, back = 40.0f / std::tan(pitch);
+					const Vector3 eye = ground + Vector3(west ? -back : 0.0f, 40.0f, west ? 0.0f : -back);
+					const CommonGameObject* pointed = StampdownPlan::wallOnRay(&client, eye, ground);
+					int quarter = startQuarter;
+					Vector3 at;
+					const bool snapped = pointed == hovered && StampdownPlan::gatehouseOntoWall(&client, cliPlayer, cliGate, pointed, ground, quarter, at);
+					const StampdownPlan sp = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, at, Vector3(0, quarter * 1.5707964f, 0));
+					const bool ok = snapped && sp.status == StampdownPlan::Status::Valid && sp.toRemove.size() == 4 && quarter % 2 == (west ? 1 : 0);
+					if (!ok)
+						printf("GATEWALL %s pointed at (%d, %d), ground %d behind, turn %d: snapped %d to (%.1f, %.1f) turn %d, status %d\n", run.c_str(), hx, hz,
+							behind, startQuarter, (int)snapped, at.x, at.z, quarter, (int)sp.status);
+					onto += ok;
+				}
+			check(hovered && onto == tries, run + ": pointed at the wall, the preview goes onto it (" + std::to_string(onto) + " of " + std::to_string(tries) + ")");
+		}
+		// across the run (turned the other way) it stands on one piece and off the wall: refused
+		const float across = west ? 0.0f : 1.5707964f;
+		const auto [mx, mz] = p.tiles[1];
+		const StampdownPlan crossing = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, snapped(gateFoundation, mx, mz, across), Vector3(0, across, 0));
+		printf("GATEWALL %s across: status %d\n", run.c_str(), (int)crossing.status);
+		// (the wall's own tile is red: a gatehouse takes no piece lying across it)
+		const bool wallTileRed = std::any_of(crossing.tiles.begin(), crossing.tiles.end(), [&](const StampdownPlan::TileVerdict& t) {
+			return isStraight(pieceOn(t.x, t.z)) && !t.ok; });
+		check(crossing.status != StampdownPlan::Status::Valid && crossing.toRemove.empty() && wallTileRed, run + ": across the run it is refused, on the wall's tile");
+		std::vector<SrvGORef> pieces;
+		for (const auto& [x, z] : p.tiles)
+			pieces.emplace_back(pieceOn(x, z));
+		p.gate = server.stampdownObject(gateFoundation, player, p.at, Vector3(0, p.turn, 0), true, true);
+		pump();
+		check(p.gate != nullptr, run + ": the server stamps it down");
+		if (!p.gate)
+			continue;
+		int gone = 0;
+		for (auto& ref : pieces)
+			if (!ref.get() || ref->deleted)
+				gone++;
+		check(gone == 4, run + ": the four pieces are gone (" + std::to_string(gone) + ")");
+		check(p.gate->parent == city, run + ": the gatehouse is in the wall's city");
+		int own = 0;
+		for (const auto& [x, z] : p.tiles)
+			own += server.tiles[z * tw + x].building.getFrom<Server>() == p.gate;
+		check(own == 4, run + ": it takes the four tiles (" + std::to_string(own) + ")");
+		const auto [ax, az] = p.tiles.front();
+		const auto [bx, bz] = p.tiles.back();
+		const int ex = west ? 0 : 1, ez = west ? 1 : 0;
+		ServerGameObject* endA = pieceOn(ax - ex, az - ez);
+		ServerGameObject* endB = pieceOn(bx + ex, bz + ez);
+		check(isStraight(endA) && isStraight(endB) && quarterOf(endA->orientation.y) % 2 == quarterOf(p.gate->orientation.y) % 2
+			&& quarterOf(endB->orientation.y) % 2 == quarterOf(p.gate->orientation.y) % 2,
+			run + ": the wall's ends meet the gatehouse, along its line");
+		// a second gatehouse over the first one: refused
+		const StampdownPlan again = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, p.at, Vector3(0, p.turn, 0));
+		check(again.status != StampdownPlan::Status::Valid, run + ": no gatehouse on a gatehouse");
+		if (west)
+			continue;
+		// the walk: the walls built (the foundations swapped for their finished buildings, the
+		// gatehouse's the open one), a peasant 3 tiles inside walks to 3 tiles outside
+		std::vector<ServerGameObject*> foundations;
+		for (const auto& [bpid, objlist] : city->children)
+			for (CommonGameObject* c : objlist)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation") && c != first)
+					foundations.push_back((ServerGameObject*)c);
+		ServerGameObject* openGate = nullptr;
+		for (ServerGameObject* o : foundations) {
+			const std::string built = o->blueprint->name.substr(0, o->blueprint->name.size() - 11);
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, built)) {
+				const Vector3 at = o->position, turn = o->orientation;
+				const bool mine = o == p.gate;
+				server.destroyObject(o);
+				ServerGameObject* b = server.spawnObject(bp, city, at, turn);
+				if (mine)
+					openGate = b;
+			}
+		}
+		check(openGate && openGate->blueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE, "the walls and the gatehouse built");
+		if (!openGate)
+			continue;
+		const float gx = (p.tiles[1].first + p.tiles[2].first) * 2.5f + 2.5f;
+		const float gz = p.tiles[1].second * 5.0f + 2.5f;
+		auto ground = [&](float x, float z) { return Vector3(x, server.terrain->getHeight(x, z), z); };
+		const Vector3 inside = ground(gx, gz + 15.0f), outside = ground(gx, gz - 15.0f);
+		auto crosses = [&](ServerGameObject* unit, const Vector3& to, float seconds, float& left) {
+			gs.commands[move].execute(unit, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, to);
+			const float start = server.timeManager.currentTime;
+			bool onGate = false;
+			while (server.timeManager.currentTime < start + seconds) {
+				server.timeManager.pendingMs = server.timeManager.stepMs;
+				if (server.timeManager.step())
+					server.simulate();
+				const int ux = (int)(unit->position.x / 5.0f), uz = (int)(unit->position.z / 5.0f);
+				for (const auto& [x, z] : p.tiles)
+					onGate |= x == ux && z == uz;
+			}
+			left = std::sqrt((unit->position - to).len2xz());
+			return onGate;
+		};
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		ServerGameObject* walker = server.spawnObject(peasant, player, inside, Vector3(0, 0, 0));
+		float left = 0;
+		const bool through = crosses(walker, outside, 40.0f, left);
+		printf("GATEWALL open gate: the peasant through %d, %.1f m from the point outside\n", (int)through, left);
+		check(through && left < 3.0f, "a peasant walks out through the open gate");
+		// closed: the gatehouse's closed version blocks all its tiles, for its own player and
+		// an enemy alike (the scripts open and close it by command)
+		const Vector3 gateAt = openGate->position, gateTurn = openGate->orientation;
+		server.destroyObject(openGate);
+		ServerGameObject* closed = server.spawnObject(gateClosed, city, gateAt, gateTurn);
+		float walkerLeft = 0;
+		const bool backIn = crosses(walker, inside, 40.0f, walkerLeft);
+		check(closed && !backIn, "with the gate closed the peasant doesn't cross it");
+		ServerGameObject* foe = server.spawnObject(peasant, enemy, ground(gx + 5.0f, gz - 15.0f), Vector3(0, 0, 0));
+		const bool foeIn = crosses(foe, inside, 40.0f, left);
+		printf("GATEWALL closed gate: own peasant crossed %d (%.1f m left), enemy crossed %d (%.1f m left)\n", (int)backIn, walkerLeft, (int)foeIn, left);
+		check(!foeIn, "with the gate closed an enemy doesn't cross it");
+		server.timeManager.pause();
+	}
+	check(clientDiffers == 0, "the client's preview agrees with the server on every site (" + std::to_string(clientDiffers) + " differ)");
+	// the straight sites refused were refused for the levelling only, as in WKB.exe
+	check(otherRefusals == 0, "sites on four straight pieces refused only by the levelling's neighbour rule (" + std::to_string(otherRefusals) + " otherwise)");
+	// a gatehouse over a corner piece, along the run that reaches it from the other side (the
+	// corner's arms run along -x and -z turned with it, so the gatehouse along the run is across
+	// one arm): refused. The ring's four outer corners, the first that has a piece.
+	{
+		const int corners[4][2] = { { x0, z1 }, { x1, z1 }, { x0, z0 }, { x1, z0 } };
+		ServerGameObject* corner = nullptr;
+		int cx = 0, cz = 0;
+		for (const auto& c : corners)
+			if (ServerGameObject* o = pieceOn(c[0], c[1]); o && o->blueprint->buildingType == Tags::BUILDINGTYPE_WALL_CORNER_OUT) {
+				corner = o, cx = c[0], cz = c[1];
+				break;
+			}
+		if (corner) {
+			// along x, the corner on its second tile and the rest on the run; and along z
+			const int inward = cx == x0 ? 1 : -1;
+			int refused = 0;
+			for (const float turn : { 0.0f, 1.5707964f }) {
+				const int qx = turn == 0.0f ? cx + inward : cx, qz = turn == 0.0f ? cz : cz + (cz == z0 ? 1 : -1);
+				const StampdownPlan plan = StampdownPlan::getStampdownPlan(&server, player, gateFoundation, snapped(gateFoundation, qx, qz, turn), Vector3(0, turn, 0));
+				const bool onCorner = std::any_of(plan.tiles.begin(), plan.tiles.end(), [&](const StampdownPlan::TileVerdict& t) { return t.x == cx && t.z == cz; });
+				printf("GATEWALL corner (%d, %d) %s, turn %.2f: on it %d, status %d\n", cx, cz, corner->blueprint->name.c_str(), turn, (int)onCorner, (int)plan.status);
+				refused += onCorner && plan.status != StampdownPlan::Status::Valid;
+			}
+			// one of the two lies along the corner's turned axis, as WKB.exe's 0x609cb0 allows
+			// (0x59bd63 takes all four piece types); the other crosses it
+			check(refused >= 1, "over an outer corner, across its axis, it is refused");
+		}
+		else
+			check(false, "an outer corner piece found");
+	}
+	// for a look in game: one more city, its walls built, saved as saved\Save_Games\
+	// GatehouseOnWall.sav with the first free site on its south run printed (the cursor's spot)
+	for (int k = 0; k < 6 && nextCity(); k++) {
+		std::vector<ServerGameObject*> foundations;
+		for (const auto& [bpid, objlist] : city->children)
+			for (CommonGameObject* c : objlist)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && c->blueprint->name.ends_with(" Foundation"))
+					foundations.push_back((ServerGameObject*)c);
+		for (ServerGameObject* o : foundations)
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_BUILDING, o->blueprint->name.substr(0, o->blueprint->name.size() - 11))) {
+				const Vector3 at = o->position, turn = o->orientation;
+				server.destroyObject(o);
+				server.spawnObject(bp, city, at, turn);
+			}
+		pump();
+		const Placed site = placeOn(false, "saved city's south run");
+		if (site.tiles.empty())
+			continue;
+		if (server.clientPlayerObjects.empty())
+			server.clientPlayerObjects.emplace_back(player->id);
+		const std::string path = PathToUtf8(g_userPath / "saved" / "Save_Games" / "GatehouseOnWall.sav");
+		printf("GATEWALL saved %d to %s: the site at (%.1f, %.1f, %.1f), the Manor at (%.1f, %.1f)\n", (int)server.saveGame(path.c_str()), path.c_str(),
+			site.at.x, site.at.y, site.at.z, first->position.x, first->position.z);
+		break;
+	}
+	printf("GATEWALL all %d\n", failures == 0 ? 1 : 0);
+	fflush(stdout);
+}
+
+// The trees under the fog of war (FogOfWar's tree memory) on 4 Peaks, A (1027) and B (1030): all
+// known at the start; one felled and one used up out of A's sight stay as A saw them, a new one
+// unknown, until A sees there; one felled where only B sees is updated once B shares its sight
+// with A as an ally; no sound from a fogged tree; the memory through the save
+void Test_TreeMemory()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("UNITTEST %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	Server::clearFogOfWar = false;
+	Server server;
+	Client clientA(true), clientB(true);
+	NetLocalBuffer a1, a2, b1, b2;
+	NetLocalLink srvA(&a1, &a2), cliA(&a2, &a1), srvB(&b1, &b2), cliB(&b2, &b1);
+	server.addClient(&srvA);
+	server.addClient(&srvB);
+	clientA.serverLink = &cliA;
+	clientB.serverLink = &cliB;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	server.setClientPlayerControl(0, 1027);
+	server.setClientPlayerControl(1, 1030);
+	server.timeManager.unpause();
+	server.startLevel();
+	FogOfWar fog; // A's
+	clientA.treeMemory = &fog;
+	fog.memoryOn = true;
+	auto step = [&](int frames) {
+		for (int i = 0; i < frames; i++) {
+			server.tick();
+			clientA.tick();
+			clientB.tick();
+			SDL_Delay(20);
+		}
+	};
+	// the fog's update, 250 ms apart
+	auto update = [&]() { step(14); fog.update(&clientA); };
+	step(10);
+	update();
+	ServerGameObject* A = server.findObject(1027);
+	ServerGameObject* B = server.findObject(1030);
+	check(fog.treesStarted() && fog.treeGhosts.empty() && fog.treeUnknown.empty(), "at the start: every tree known as it stands");
+	// the trees out of A's sight: the farthest from A's units, and one in B's sight
+	std::vector<ServerGameObject*> trees;
+	std::vector<Vector3> unitsB;
+	auto find = [&](CommonGameObject* obj, auto& self) -> void {
+		for (const auto& [type, children] : obj->children)
+			for (CommonGameObject* child : children) {
+				if (child->blueprint->name == "Coniferous Tree" || child->blueprint->name == "Deciduous Tree")
+					trees.push_back(child->dyncast<ServerGameObject>());
+				if (child->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && child->getPlayer() == B)
+					unitsB.push_back(child->position);
+				self(child, self);
+			}
+	};
+	find(server.getLevel(), find);
+	ServerGameObject *felled = nullptr, *usedUp = nullptr, *nearB = nullptr;
+	float nearest = 1e9f;
+	auto distB = [&](ServerGameObject* t) {
+		float d = 1e9f;
+		for (const Vector3& u : unitsB)
+			d = std::min(d, (u - t->position).len2xz());
+		return d;
+	};
+	for (ServerGameObject* t : trees)
+		if (!fog.isSeen(t->position) && distB(t) < nearest) {
+			nearest = distB(t);
+			nearB = t;
+		}
+	for (ServerGameObject* t : trees) {
+		if (fog.isSeen(t->position))
+			continue;
+		const bool byB = distB(t) < 80.0f;
+		if (byB)
+			continue;
+		if (!felled)
+			felled = t;
+		else if (!byB && !usedUp && (t->position - felled->position).len2xz() > 30.0f)
+			usedUp = t;
+	}
+	const GameObjBlueprint* fallenBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Fallen Tree");
+	const GameObjBlueprint* treeBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CONTAINER, "Coniferous Tree");
+	if (!A || !B || !felled || !usedUp || !nearB || !fallenBp || !treeBp) {
+		printf("UNITTEST FAILED (not set up: %zu trees, B's units %zu)\n", trees.size(), unitsB.size());
+		return;
+	}
+	const uint32_t felledId = felled->id, usedUpId = usedUp->id, nearBId = nearB->id;
+	const Vector3 usedUpAt = usedUp->position;
+	const std::string felledType = felled->blueprint->name;
+	printf("UNITTEST %zu trees; felled %u (%s) at (%.0f, %.0f), used up %u, by B's units %u (%.0f m)\n", trees.size(), felledId, felledType.c_str(),
+		felled->position.x, felled->position.z, usedUpId, nearBId, nearest);
+
+	// felled out of sight (as Tree Chopping.cpp's "Falling Version"), another used up and gone, a
+	// new tree out of sight
+	felled->convertTo(fallenBp);
+	usedUp->terminate();
+	const Vector3 newAt = felled->position + Vector3(8, 0, 8);
+	ServerGameObject* grown = server.spawnObject(treeBp, server.getLevel(), newAt, Vector3(0, 0, 0));
+	const uint32_t grownId = grown ? grown->id : 0;
+	nearB->convertTo(fallenBp);
+	update();
+	ClientGameObject* liveFelled = clientA.findObject(felledId);
+	check(liveFelled && liveFelled->blueprint == fallenBp, "A's client has the felled tree as the server: fallen");
+	auto ghost = [&](uint32_t id) -> ClientGameObject* { auto it = fog.treeGhosts.find(id); return it == fog.treeGhosts.end() ? nullptr : it->second.get(); };
+	check(ghost(felledId) && ghost(felledId)->blueprint->name == felledType && liveFelled && fog.treeHidden(liveFelled),
+		"felled out of sight: A still sees it standing");
+	ClientGameObject* liveUsed = clientA.findObject(usedUpId);
+	check(ghost(usedUpId) && ghost(usedUpId)->blueprint->name.find("Tree") != std::string::npos,
+		std::string("used up out of sight: still standing for A (the live one ") + (liveUsed ? "terminated" : "removed") + ")");
+	check(grownId && fog.treeUnknown.count(grownId) && clientA.findObject(grownId) && fog.treeHidden(clientA.findObject(grownId)),
+		"a tree grown out of sight: unknown to A");
+	check(ghost(nearBId) != nullptr, "felled where only B sees: standing for A");
+	check(liveFelled && fog.hidesTreeEffect(&clientA, liveFelled), "no sound from the fogged tree");
+	check(fog.treeGhosts.size() == 3 && fog.treeUnknown.size() == 1, "nothing else remembered (" + std::to_string(fog.treeGhosts.size()) + " copies, "
+		+ std::to_string(fog.treeUnknown.size()) + " unknown)");
+	printf("UNITTEST memory: %zu copies of %zu bytes and %zu unknown ids\n", fog.treeGhosts.size(), sizeof(ClientGameObject), fog.treeUnknown.size());
+
+	// the save: the local server has A's memory; written to the file, read back
+	const std::string mine = fog.treeMemoryText(&clientA);
+	check(server.getTreeMemory(1027) == mine && mine.find("ghost " + std::to_string(felledId) + " ") != std::string::npos
+		&& mine.find("unknown " + std::to_string(grownId)) != std::string::npos, "the server holds A's memory for a save");
+	const std::string file = PathToUtf8(g_userPath / "saved" / PathFromUtf8("Save_Games\\wkbai tree memory test.sav"));
+	check(server.saveGame(file.c_str()), "saved");
+	{
+		const Server::SaveParts parts = Server::ReadSaveParts(file.c_str());
+		check(parts.saveFile && parts.treeMemory.find("player 1027\n") != std::string::npos, "the save's treeMemory section");
+		server.treeMemoryLoadText(parts.treeMemory);
+		check(server.getTreeMemory(1027) == mine, "read back as written");
+		FogOfWar loaded;
+		loaded.loadTreeMemory(&clientA, server.getTreeMemory(1027));
+		check(loaded.treeMemoryText(&clientA) == mine && loaded.treeGhosts.count(felledId) && loaded.treeGhosts.at(felledId)->blueprint->name == felledType
+			&& (loaded.treeGhosts.at(felledId)->position - fog.treeGhosts.at(felledId)->position).len3() < 0.001f, "loaded: the same memory");
+		// an older save (none): every tree known as it stands
+		const Server::SaveParts old = Server::ReadSaveParts("Save_Games\\2 Player 4 Peaks.lvl");
+		FogOfWar fresh;
+		fresh.loadTreeMemory(&clientA, old.treeMemory);
+		check(old.treeMemory.empty() && fresh.treeGhosts.empty() && fresh.treeUnknown.empty(), "an older save: no memory, all trees known");
+	}
+	{
+		std::error_code ec;
+		std::filesystem::remove(PathFromUtf8(file), ec);
+	}
+
+	// A sees there: the felled tree fallen, the used up one gone, the new one there
+	fog.testViewers.push_back({ felled->position, 25.0f });
+	update();
+	check(!ghost(felledId) && liveFelled && !fog.treeHidden(liveFelled), "seen: A sees the felled tree fallen");
+	check(!fog.treeUnknown.count(grownId), "seen: and the new tree");
+	fog.testViewers.clear();
+	fog.testViewers.push_back({ usedUpAt, 25.0f });
+	update();
+	check(!ghost(usedUpId), "seen: the used up tree gone");
+	fog.testViewers.clear();
+	// B's sight shared with A: allies, Shared Vision (Reconnaissance Upgrade Status 2)
+	update();
+	check(ghost(nearBId) != nullptr, "an enemy's sight: nothing for A");
+	server.setDiplomaticStatus(A, B, 0);
+	const int recon = server.gameSet->items.names.getIndex("Reconnaissance Upgrade Status");
+	if (recon >= 0)
+		B->setItem(recon, 2.0f);
+	update();
+	update();
+	check(recon >= 0 && fog.isSeen(nearB->position) && !ghost(nearBId), "an ally's shared sight: A sees it fallen");
+	// a new game: the memory afresh
+	fog.resetTrees();
+	check(!fog.treesStarted() && fog.treeGhosts.empty(), "a new game: no memory until it starts");
+	clientA.treeMemory = nullptr;
+	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
+}
+
+#include "Language.h"
+#include <sol/sol.hpp>
+void Test_TextLineBreaks()
+{
+	bool all = true;
+	auto check = [&](const char* what, bool ok) { printf("BREAKS %s %d\n", what, ok ? 1 : 0); all &= ok; };
+
+	// the escape: "\n" a line break, "\\" and "\c" kept for the readers that interpret them
+	check("decode", Language::decodeLineBreaks("a\\nb") == "a\nb" && Language::decodeLineBreaks("a\\\\nb") == "a\\\\nb"
+		&& Language::decodeLineBreaks("\\cAdvisor:\\nLord") == "\\cAdvisor:\nLord" && Language::decodeLineBreaks("end\\") == "end\\"
+		&& Language::decodeLineBreaks("plain") == "plain");
+
+	// the real Language.txt: the lobby's question has a line break, no backslash
+	LoadBCP("data.bcp");
+	Language lang;
+	lang.load("Languages\\Language.txt");
+	const std::string text = lang.getText("FRONT_END_CHAT_SINGLE_PLAYER_GAME");
+	check("loaded", text.find('\n') != std::string::npos && text.find('\\') == std::string::npos);
+	size_t escaped = 0;
+	for (const auto& [key, value] : lang.text)
+		for (size_t p = value.find("\\n"); p != std::string::npos; p = value.find("\\n", p + 2))
+			if (p == 0 || value[p - 1] != '\\')
+				escaped++;
+	check("none left", escaped == 0);
+
+	// FrontEndUI.lua's wrapText (as the dialog wraps it): its own line breaks kept, each line
+	// wrapped at the width; textWidth here 10 pixels a character
+	std::ifstream in("redata\\FrontEndUI.lua", std::ios::binary);
+	std::string ui((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	ui.erase(std::remove(ui.begin(), ui.end(), '\r'), ui.end());
+	const size_t from = ui.find("local function wrapText(");
+	const size_t to = from == std::string::npos ? from : ui.find("\nend\n", from);
+	check("wrapText found", to != std::string::npos);
+	if (to != std::string::npos) {
+		sol::state lua;
+		lua.open_libraries(sol::lib::base, sol::lib::string, sol::lib::table);
+		lua.set_function("textWidth", [](const std::string&, const std::string& s, float scale) { return 10.0f * (float)s.size() * scale; });
+		sol::protected_function wrap = lua.script("S = 1\n" + ui.substr(from, to + 5 - from) + "return wrapText");
+		auto shown = [&](const std::string& s, float width) {
+			std::vector<std::string> lines;
+			sol::table t = wrap("Proportional 20", s, width);
+			for (size_t i = 1; i <= t.size(); i++) lines.push_back(t[i]);
+			return lines;
+		};
+		// wide enough for each sentence: the two of them
+		const auto wide = shown(text, 600.0f);
+		for (const auto& l : wide) printf("BREAKS  wide | %s\n", l.c_str());
+		check("two lines", wide == std::vector<std::string>{ "You have no opponents selected.", "Are you sure you want to start a single player game?" });
+		// narrower: the second wrapped too, never joined to the first
+		const auto narrow = shown(text, 320.0f);
+		for (const auto& l : narrow) printf("BREAKS  narrow | %s\n", l.c_str());
+		bool ok = narrow.size() == 3 && narrow[0] == "You have no opponents selected." && narrow[1].rfind("Are you", 0) == 0;
+		for (const auto& l : narrow) ok &= l.size() * 10 <= 320 && l.find('\\') == std::string::npos;
+		check("wrapped", ok);
+	}
+	printf("BREAKS all %d\n", all ? 1 : 0);
+}
+
+// The map catalog and describe (step 17.3, MapAuthoring.h; needs the game data): the catalog of
+// the base game alone and with WKB Plus (WKB_Plus.bcp, when the game folder has it) against the
+// game set's own counts (every class's blueprints) and the texture database file's (its
+// TEXTURE_GROUP, TEXTURE and MATCHING lines and EDGE rules); then describe on three original
+// levels and on test 98's PNG map (made first when it isn't there).
+// "MAPCATALOG <check> <0|1> ..." and "MAPCATALOG all <0|1>"
+void Test_MapCatalog()
+{
+	LoadBCP("data.bcp");
+	const std::string gsFile = "Warrior Kings Game Set\\multi-player extensions.cpp";
+	// the mods to try: none (the base game), and WKB Plus
+	std::string plusId;
+	for (const ModInfo& m : GetMods())
+		if (StrCICompare(m.id, "WKB_Plus.bcp") == 0)
+			plusId = m.id;
+	const nlohmann::json configured = g_settings.value("disabledMods", nlohmann::json::array());
+	bool all = true;
+	std::vector<std::pair<std::string, size_t>> totals;
+	for (int run = 0; run < (plusId.empty() ? 1 : 2); run++) {
+		nlohmann::json disabled = nlohmann::json::array();
+		for (const ModInfo& m : GetMods())
+			if (run == 0 || m.id != plusId)
+				disabled.push_back(m.id);
+		g_settings["disabledMods"] = disabled;
+		InitFileSystem();
+		const std::string label = run == 0 ? "base" : "WKB Plus";
+		GameSet gs(gsFile.c_str(), g_settings.value<int>("gameVersion", 0));
+		const nlohmann::ordered_json c = MapAuthoring::Catalog(gs, gsFile, run == 0);
+		bool ok = true;
+		size_t listed = 0, own = 0;
+		for (int k = 0; k < Tags::GAMEOBJCLASS_COUNT; k++) {
+			std::string cls = Tags::GAMEOBJCLASS_tagDict.tags[k];
+			for (char& ch : cls)
+				ch = (char)tolower((unsigned char)ch);
+			const size_t n = c["classes"][cls]["blueprints"].size();
+			listed += n;
+			own += gs.objBlueprints[k].size();
+			if (n != gs.objBlueprints[k].size()) {
+				printf("MAPCATALOG %s class %s: %zu listed, the game set has %zu\n", label.c_str(), cls.c_str(), n, gs.objBlueprints[k].size());
+				ok = false;
+			}
+			// every name once
+			std::set<std::string> names;
+			for (const auto& b : c["classes"][cls]["blueprints"])
+				names.insert(b["name"].get<std::string>());
+			ok = ok && names.size() == n;
+		}
+		// the texture database against its file's own lines
+		size_t groupsListed = 0, texturesListed = 0, rulesListed = 0, coloured = 0, withTerrain = 0;
+		size_t groupLines = 0, textureLines = 0, edgeLines = 0;
+		for (const auto& db : c["textureDatabases"]) {
+			groupsListed += db["groups"].size();
+			for (const auto& g : db["groups"]) {
+				texturesListed += g["textures"].size();
+				rulesListed += g["edgeRules"].get<size_t>();
+				coloured += !g["meanColour"].is_null();
+				withTerrain += !g["terrain"].is_null();
+			}
+			char* data = nullptr;
+			int size = 0;
+			LoadFile(db["file"].get<std::string>().c_str(), &data, &size, 1);
+			data[size] = 0;
+			std::istringstream in(std::string(data, size));
+			free(data);
+			for (std::string line; std::getline(in, line);) {
+				std::istringstream ls(line);
+				std::string tag;
+				ls >> tag;
+				groupLines += tag == "TEXTURE_GROUP";
+				textureLines += tag == "TEXTURE" || tag == "MATCHING";
+				edgeLines += tag == "EDGE";
+			}
+		}
+		const bool texOk = groupsListed == groupLines && texturesListed == textureLines && rulesListed == edgeLines && coloured == groupsListed && groupsListed > 0;
+		const auto& n = c["counts"];
+		const bool restOk = n["skies"].get<int>() > 0 && n["trees"].get<int>() > 0 && c["environment"]["weathers"].size() == WEATHER_COUNT
+			&& c["resources"].size() > 0 && c["terrains"].size() == gs.terrains.size();
+		printf("MAPCATALOG %s blueprints %d (%zu listed, the game set's %zu)\n", label.c_str(), (int)(ok && listed == own), listed, own);
+		printf("MAPCATALOG %s textures %d (%zu groups of %zu TEXTURE_GROUP lines, %zu textures of %zu TEXTURE/MATCHING lines, %zu edge rules of %zu EDGE lines, "
+			"%zu with a mean colour, %zu with a terrain)\n", label.c_str(), (int)texOk, groupsListed, groupLines, texturesListed, textureLines, rulesListed, edgeLines, coloured, withTerrain);
+		printf("MAPCATALOG %s rest %d (%d skies, %d trees, %zu terrains, %zu resources, %zu weathers)\n", label.c_str(), (int)restOk, n["skies"].get<int>(),
+			n["trees"].get<int>(), c["terrains"].size(), c["resources"].size(), c["environment"]["weathers"].size());
+		std::string perClass;
+		for (const auto& [k, v] : n.items())
+			if (k != "blueprints" && v.is_number() && c["classes"].contains(k))
+				perClass += " " + k + "=" + std::to_string(v.get<int>());
+		printf("MAPCATALOG %s per class:%s\n", label.c_str(), perClass.c_str());
+		all = all && ok && listed == own && texOk && restOk;
+		totals.emplace_back(label, listed);
+		fflush(stdout);
+	}
+	if (totals.size() == 2)
+		printf("MAPCATALOG mod adds %d (base %zu, with WKB Plus %zu blueprints)\n", (int)(totals[1].second > totals[0].second), totals[0].second, totals[1].second);
+	else
+		printf("MAPCATALOG no WKB_Plus.bcp in the game folder: the base game only\n");
+	g_settings["disabledMods"] = configured;
+	InitFileSystem();
+
+	// describe: three original levels and the PNG map
+	const std::string pngName = g_settings.value("mapFolderNewName", std::string("PNG Test"));
+	if (!std::filesystem::exists(g_userPath / "saved" / "Maps" / PathFromUtf8(pngName + ".wkbai") / "map.json"))
+		Test_MapFolderNew();
+	const std::filesystem::path outDir = g_userPath / "describe";
+	std::vector<std::string> maps = { "2 Player 4 Peaks.lvl", "2 Player Forking River.lvl", "8 Player Flynn's Fjords.lvl", "Maps\\" + pngName + ".wkbai" };
+	for (const auto& m : g_settings.value("mapCatalogMaps", nlohmann::json::array()))
+		maps.push_back(m.get<std::string>());
+	int described = 0;
+	for (const std::string& m : maps) {
+		nlohmann::ordered_json d;
+		std::string error, stem = m;
+		for (char& ch : stem)
+			if (ch == '\\' || ch == '/' || ch == ' ' || ch == '\'')
+				ch = '_';
+		const std::filesystem::path png = outDir / PathFromUtf8(stem + ".png");
+		std::error_code ec;
+		std::filesystem::remove(png, ec);
+		const bool loaded = MapAuthoring::Describe(m, PathToUtf8(png), d, error);
+		bool ok = loaded;
+		if (loaded) {
+			const int w = d["size"]["tiles"][0], h = d["size"]["tiles"][1];
+			double share = 0;
+			for (const auto& g : d["materials"]["textureGroups"])
+				share += g["share"].get<double>();
+			const int ppt = d["png"]["pixelsPerTile"], pw = d["png"]["size"][0], ph = d["png"]["size"][1];
+			const bool pic = std::filesystem::file_size(png, ec) > 1000 && pw == w * ppt && ph == h * ppt;
+			ok = w > 0 && h > 0 && d["heights"]["maxM"].get<double>() >= d["heights"]["minM"].get<double>() && std::abs(share - 1.0) < 1e-6
+				&& d["objects"]["count"].get<int>() > 0 && d["players"].size() > 0 && pic;
+			std::ofstream(outDir / PathFromUtf8(stem + ".json"), std::ios::binary) << d.dump(1) << "\n";
+			printf("MAPCATALOG describe %d %s: %d x %d tiles, heights %.1f-%.1f m, %d lakes, %d tiles under water, %zu waterways, %zu groups (top %s %.2f), "
+				"%d objects, %zu players, picture %dx%d\n", (int)ok, m.c_str(), w, h, d["heights"]["minM"].get<double>(), d["heights"]["maxM"].get<double>(),
+				d["water"]["lakeCount"].get<int>(), d["water"]["tilesUnderWater"].get<int>(),
+				d["water"]["design"].is_null() ? (size_t)0 : d["water"]["design"]["waterways"].size(), d["materials"]["textureGroups"].size(),
+				d["materials"]["textureGroups"][0]["name"].get<std::string>().c_str(), d["materials"]["textureGroups"][0]["share"].get<double>(),
+				d["objects"]["count"].get<int>(), d["players"].size(), pw, ph);
+		}
+		else
+			printf("MAPCATALOG describe 0 %s: %s\n", m.c_str(), error.c_str());
+		described += ok;
+		fflush(stdout);
+	}
+	all = all && described == (int)maps.size();
+	printf("MAPCATALOG described %d of %zu\n", described, maps.size());
+	printf("MAPCATALOG all %d\n", (int)all);
+	fflush(stdout);
+}
+
+// The simulation's cost with up to 10,000 units (needs the game data), the first number for
+// lockstep (every peer simulates every unit): two armies of half the units each, standing
+// (idle), marched to 20 m of each other (march; they engage by sight from there) and then each
+// unit attacking its counterpart in the other army (battle). Per phase: ms per step (average,
+// median, 95th percentile, longest), the share of one core at the game's 20 ms step, and its
+// parts as the server times them (sequences, object tree with the AI, orders with pathfinding,
+// movement, sight). No client: the server's messages to a client are not in it.
+// "simProfile" in wkconfig.json (all optional):
+//   { "level": "2 Player 4 Peaks.lvl", "own": 1027, "enemy": 1030, "units": [2500, 10000],
+//     "types": ["Man At Arms", "Archer", "Knight"], "shares": [60, 25, 15],
+//     "idle": 5, "march": 15, "battle": 30, "gap": 120, "spacing": 2.0,
+//     "detail": false, "report": "simprofile.json" }
+// The types fill the armies' columns from the front by their shares. "detail": true also turns
+// profileSim on (pathfinding's thread time, the sight's parts), whose own timers cost a little.
+void Test_SimProfile()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("simProfile", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
+	const uint32_t ownId = cfg.value("own", 1027u), enemyId = cfg.value("enemy", 1030u);
+	std::vector<int> unitCounts;
+	if (cfg.contains("units") && cfg["units"].is_array())
+		for (const auto& n : cfg["units"]) unitCounts.push_back(n.get<int>());
+	else if (cfg.contains("units"))
+		unitCounts.push_back(cfg["units"].get<int>());
+	else
+		unitCounts = { 2500, 10000 };
+	const std::vector<std::string> typeNames = cfg.value("types", std::vector<std::string>{ "Man At Arms", "Archer", "Knight" });
+	std::vector<float> shares = cfg.value("shares", std::vector<float>{ 60, 25, 15 });
+	shares.resize(typeNames.size(), shares.empty() ? 1.0f : shares.back());
+	const float phaseSeconds[3] = { cfg.value("idle", 5.0f), cfg.value("march", 15.0f), cfg.value("battle", 30.0f) };
+	const char* phaseNames[3] = { "idle", "march", "battle" };
+	const float gap = cfg.value("gap", 120.0f), spacing = cfg.value("spacing", 2.0f);
+	const bool detail = cfg.value("detail", false);
+	const std::string reportPath = cfg.value("report", std::string("simprofile.json"));
+	// (read once, at the first step)
+	g_settings["profileSim"] = detail;
+	// (the server's settings, read when it is made: "parallelSight", "commandsPerStep" 0 = no limit)
+	g_settings["parallelSight"] = cfg.value("parallelSight", false);
+	g_settings["commandsPerStep"] = cfg.value("commandsPerStep", 500u);
+	g_settings["commandWorkPerStep"] = cfg.value("commandWorkPerStep", (uint64_t)50000);
+	printf("SIMPROFILE parallelSight %d, commandsPerStep %u\n", cfg.value("parallelSight", false) ? 1 : 0, cfg.value("commandsPerStep", 500u));
+	extern bool g_actionProfile;
+	extern std::map<std::string, double> g_actionMs;
+	g_actionProfile = detail;
+	g_simProfileQuiet = true;
+	extern double g_pathfindingMs, g_astarMs, g_pathBatchMs[5], g_sightScanMs, g_sightSortMs, g_sightEventMs;
+	extern uint64_t g_pathBatchRequests, g_pathBatchSearches, g_freeSpotCalls, g_freeSpotMismatches;
+	extern double g_freeSpotMs, g_commandMs[5];
+	auto now = []() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); };
+	const double spikeMs = cfg.value("spikeMs", 250.0);
+	// the counters at one moment: the server's parts and pathfinding's (paths started in the
+	// orders, then the step's batch: its fill, lines, fields, search and apply, wall time)
+	struct Snap {
+		SimProfileTotals t;
+		double path = 0, batch[5] = {}, astar = 0, sightScan = 0, sightSort = 0, sightEvent = 0;
+		uint64_t requests = 0, searches = 0;
+		double freeSpotMs = 0, command[5] = {};
+		uint64_t freeSpots = 0;
+		std::map<std::string, double> actions;
+		double assign[6] = {};
+		std::map<std::string, double> finders;
+	};
+	auto snap = [&]() {
+		Snap s;
+		s.t = GetSimProfileTotals();
+		s.path = g_pathfindingMs;
+		for (int i = 0; i < 5; i++) s.batch[i] = g_pathBatchMs[i];
+		s.astar = g_astarMs;
+		s.sightScan = g_sightScanMs; s.sightSort = g_sightSortMs; s.sightEvent = g_sightEventMs;
+		s.requests = g_pathBatchRequests; s.searches = g_pathBatchSearches;
+		s.freeSpotMs = g_freeSpotMs; s.freeSpots = g_freeSpotCalls;
+		for (int i = 0; i < 5; i++) s.command[i] = g_commandMs[i];
+		if (detail) s.actions = g_actionMs;
+		extern double g_assignOrderMs[6];
+		for (int i = 0; i < 6; i++) s.assign[i] = g_assignOrderMs[i];
+		extern std::map<std::string, double> g_finderMs;
+		if (detail) s.finders = g_finderMs;
+		return s;
+	};
+	auto batchMs = [](const Snap& a, const Snap& b) { double s = 0; for (int i = 0; i < 5; i++) s += b.batch[i] - a.batch[i]; return s; };
+	// what the time between two snaps went on, per step (n steps)
+	auto detailText = [&](const Snap& a, const Snap& b, double n) {
+		char buf[512];
+		std::string s;
+		snprintf(buf, sizeof(buf), "path batch %.2f (fill %.2f, lines %.2f, fields %.2f, search %.2f, apply %.2f; %.0f requests, %.0f searches; search time on the threads %.2f), paths started %.2f",
+			batchMs(a, b) / n, (b.batch[0] - a.batch[0]) / n, (b.batch[1] - a.batch[1]) / n, (b.batch[2] - a.batch[2]) / n, (b.batch[3] - a.batch[3]) / n, (b.batch[4] - a.batch[4]) / n,
+			(double)(b.requests - a.requests) / n, (double)(b.searches - a.searches) / n, (b.astar - a.astar) / n, (b.path - a.path) / n);
+		s += buf;
+		snprintf(buf, sizeof(buf), "; free spots %.2f (%.1f searches); commands: conditions %.2f, start sequence %.2f, adding the order %.2f, its start %.2f, post-order %.2f",
+			(b.freeSpotMs - a.freeSpotMs) / n, (double)(b.freeSpots - a.freeSpots) / n, (b.command[0] - a.command[0]) / n, (b.command[1] - a.command[1]) / n,
+			(b.command[2] - a.command[2]) / n, (b.command[3] - a.command[3]) / n, (b.command[4] - a.command[4]) / n);
+		s += buf;
+		if (detail) {
+			snprintf(buf, sizeof(buf), "; sight scan %.2f, sort %.2f, events %.2f; movement of %.0f walkers: position %.2f, updatePosition %.2f, speed %.2f, path nodes %.2f",
+				(b.sightScan - a.sightScan) / n, (b.sightSort - a.sightSort) / n, (b.sightEvent - a.sightEvent) / n, (double)(b.t.movers - a.t.movers) / n,
+				(b.t.mvPosition - a.t.mvPosition) / n, (b.t.mvUpdate - a.t.mvUpdate) / n, (b.t.mvSpeed - a.t.mvSpeed) / n, (b.t.mvController - a.t.mvController) / n);
+			s += buf;
+			std::vector<std::pair<double, std::string>> top;
+			for (const auto& [name, ms] : b.t.byOrder) {
+				auto it = a.t.byOrder.find(name);
+				top.emplace_back(ms - (it != a.t.byOrder.end() ? it->second : 0.0), name);
+			}
+			std::sort(top.rbegin(), top.rend());
+			std::vector<std::pair<double, std::string>> acts;
+			for (const auto& [name, ms] : b.actions) {
+				auto it = a.actions.find(name);
+				acts.emplace_back(ms - (it != a.actions.end() ? it->second : 0.0), name);
+			}
+			std::sort(acts.rbegin(), acts.rend());
+			snprintf(buf, sizeof(buf), "; orders assigned: conditions %.2f, cancelling %.2f, tasks %.2f, init %.2f, start %.2f, building count %.2f",
+				(b.assign[0] - a.assign[0]) / n, (b.assign[1] - a.assign[1]) / n, (b.assign[2] - a.assign[2]) / n, (b.assign[3] - a.assign[3]) / n,
+				(b.assign[4] - a.assign[4]) / n, (b.assign[5] - a.assign[5]) / n);
+			s += buf;
+			{
+				std::vector<std::pair<double, std::string>> fs;
+				for (const auto& [name, ms] : b.finders) {
+					auto it = a.finders.find(name);
+					fs.emplace_back(ms - (it != a.finders.end() ? it->second : 0.0), name);
+				}
+				std::sort(fs.rbegin(), fs.rend());
+				s += "; finders (with theirs):";
+				for (size_t i = 0; i < fs.size() && i < 6; i++) {
+					snprintf(buf, sizeof(buf), " \"%s\" %.2f", fs[i].second.c_str(), fs[i].first / n);
+					s += buf;
+				}
+			}
+			s += "; actions by type:";
+			for (size_t i = 0; i < acts.size() && i < 6; i++) {
+				std::string name = acts[i].second;
+				if (name.rfind("struct ", 0) == 0) name = name.substr(7);
+				snprintf(buf, sizeof(buf), " %s %.2f", name.c_str(), acts[i].first / n);
+				s += buf;
+			}
+			s += "; orders by type:";
+			for (size_t i = 0; i < top.size() && i < 5; i++) {
+				snprintf(buf, sizeof(buf), " %s %.2f", top[i].second.c_str(), top[i].first / n);
+				s += buf;
+			}
+		}
+		return s;
+	};
+	auto partsText = [&](const Snap& a, const Snap& b) {
+		char buf[256];
+		snprintf(buf, sizeof(buf), "sequences %.1f, object tree %.1f (AI %.1f), orders %.1f, movement %.1f, sight %.1f",
+			b.t.sequences - a.t.sequences, (b.t.tree - b.t.ai) - (a.t.tree - a.t.ai), b.t.ai - a.t.ai, b.t.orders - a.t.orders, b.t.movement - a.t.movement, b.t.sight - a.t.sight);
+		return std::string(buf);
+	};
+
+	nlohmann::json report;
+	report["parallelSight"] = cfg.value("parallelSight", false);
+	report["commandsPerStep"] = cfg.value("commandsPerStep", 500u);
+	report["level"] = level;
+	report["threads"] = std::thread::hardware_concurrency();
+	report["detail"] = detail;
+	for (int units : unitCounts) {
+		Server server;
+		server.loadSaveGame(("Save_Games\\" + level).c_str());
+		ServerGameObject* players[2] = { server.findObject(ownId), server.findObject(enemyId) };
+		const GameSet& gs = *server.gameSet;
+		std::vector<const GameObjBlueprint*> types;
+		for (const std::string& name : typeNames)
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name))
+				types.push_back(bp);
+			else
+				printf("SIMPROFILE no unit type \"%s\"\n", name.c_str());
+		const int moveCmd = gs.commands.names.getIndex("Move"), attackCmd = gs.commands.names.getIndex("Attack");
+		if (!players[0] || !players[1] || types.size() != typeNames.size() || moveCmd < 0 || attackCmd < 0) {
+			printf("SIMPROFILE FAILED (not set up)\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		// each army a square block, its front gap/2 from the middle: own west (-x), enemy east
+		const int perSide = units / 2;
+		const int rows = std::max(1, (int)std::ceil(std::sqrt((float)perSide)));
+		const int cols = (perSide + rows - 1) / rows;
+		const float width = 2.0f * cols * spacing + gap;
+		printf("SIMPROFILE %d units on %s (%.0f x %.0f m): two blocks of %d columns x %d rows, %.0f m from back to back%s\n",
+			units, level.c_str(), area.first, area.second, cols, rows, width, width > area.first * 0.9f ? " (WIDER THAN THE MAP: units crowd its edges)" : "");
+		float shareSum = 0;
+		for (float s : shares) shareSum += s;
+		const uint64_t spawnStart = SDL_GetPerformanceCounter();
+		std::vector<SrvGORef> army[2];
+		std::vector<const GameObjBlueprint*> armyBp[2];
+		std::vector<Vector3> armyPos[2];
+		int snapped = 0;
+		for (int side = 0; side < 2; side++) {
+			const float dir = side == 0 ? -1.0f : 1.0f; // from the middle outwards
+			for (int i = 0; i < perSide; i++) {
+				const int col = i / rows, row = i % rows; // column 0 the front
+				float acc = 0;
+				const GameObjBlueprint* bp = types.back();
+				for (size_t t = 0; t < types.size(); t++) {
+					acc += shares[t] / shareSum;
+					if ((col + 0.5f) / cols <= acc) { bp = types[t]; break; }
+				}
+				const Vector3 want = centre + Vector3(dir * (gap * 0.5f + col * spacing), 0, (row - rows * 0.5f) * spacing);
+				const Vector3 pos = MovementController::nearestValidPosition(bp, want);
+				if ((Vector3(pos.x, 0, pos.z) - Vector3(want.x, 0, want.z)).len2xz() > 25.0f)
+					snapped++;
+				army[side].push_back(server.spawnObject(bp, players[side], pos, Vector3(0, side == 0 ? -1.5708f : 1.5708f, 0)));
+				armyBp[side].push_back(bp);
+				armyPos[side].push_back(pos);
+			}
+		}
+		const double spawnMs = (double)(SDL_GetPerformanceCounter() - spawnStart) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		printf("SIMPROFILE spawned %d units in %.0f ms (%d more than 5 m from their place: blocked ground)\n", perSide * 2, spawnMs, snapped);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto step = [&]() {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		};
+		auto alive = [&](int side) {
+			int n = 0;
+			for (size_t i = 0; i < army[side].size(); i++)
+				if (army[side][i] && army[side][i]->blueprint == armyBp[side][i]) n++;
+			return n;
+		};
+		nlohmann::json run;
+		run["units"] = perSide * 2;
+		run["spawnMs"] = spawnMs;
+		run["snapped"] = snapped;
+		for (int phase = 0; phase < 3; phase++) {
+			// the phase's orders (timed apart: a lockstep turn carrying them runs them in one step)
+			const Snap ordersBefore = snap();
+			const double ordersStart = now();
+			int ordered = 0;
+			for (int side = 0; side < 2 && phase > 0; side++) {
+				const float toward = side == 0 ? 1.0f : -1.0f;
+				for (size_t i = 0; i < army[side].size(); i++) {
+					ServerGameObject* u = army[side][i].get();
+					if (!u || u->blueprint != armyBp[side][i]) continue;
+					if (phase == 1) {
+						const Vector3 to = MovementController::nearestValidPosition(u->blueprint, armyPos[side][i] + Vector3(toward * (gap * 0.5f - 10.0f), 0, 0));
+						server.issueCommand(moveCmd, u->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, 0, to);
+						ordered++;
+					}
+					else {
+						// its counterpart, else the next one alive
+						const auto& foes = army[1 - side];
+						for (size_t k = 0; k < foes.size(); k++) {
+							const size_t j = (i + k) % foes.size();
+							if (foes[j] && foes[j]->blueprint == armyBp[1 - side][j]) {
+								server.issueCommand(attackCmd, u->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, foes[j]->id, Vector3());
+								ordered++;
+								break;
+							}
+						}
+					}
+				}
+			}
+			const double ordersMs = now() - ordersStart;
+			const Snap ordersAfter = snap();
+			if (ordered)
+				printf("SIMPROFILE %5d units %-6s   giving %d orders took %.0f ms: %s\n", perSide * 2, phaseNames[phase], ordered, ordersMs, detailText(ordersBefore, ordersAfter, 1.0).c_str());
+			const int steps = (int)(phaseSeconds[phase] * 50.0f);
+			const Snap phaseBefore = snap();
+			const SimProfileTotals& before = phaseBefore.t;
+			std::vector<double> ms;
+			ms.reserve(steps);
+			int spikes = 0;
+			const double phaseStart = now();
+			// the simulation thread's own cycles: the cost without the time other programs take the core
+			const unsigned long long cyclesStart = ThreadCycles();
+			// "sample": a phase's name: where its steps' time goes, by function (Windows)
+			const bool sampled = cfg.value("sample", std::string()) == phaseNames[phase];
+			if (sampled)
+				SamplerStart();
+			for (int i = 0; i < steps; i++) {
+				const Snap s0 = snap();
+				const double t0 = now();
+				step();
+				ms.push_back(now() - t0);
+				// a step that long printed with its parts (the first 8 of a phase)
+				if (ms.back() >= spikeMs && spikes++ < 8) {
+					const Snap s1 = snap();
+					printf("SIMPROFILE %5d units %-6s   SPIKE step %d: %.0f ms: %s; %s\n", perSide * 2, phaseNames[phase], i, ms.back(),
+						partsText(s0, s1).c_str(), detailText(s0, s1, 1.0).c_str());
+				}
+			}
+			const double wall = now() - phaseStart;
+			const unsigned long long cyclesEnd = ThreadCycles();
+			if (sampled)
+				printf("SAMPLES %s %s\n", phaseNames[phase], SamplerStop(cfg.value("sampleTop", 60)).c_str());
+			const Snap phaseAfter = snap();
+			const SimProfileTotals& after = phaseAfter.t;
+			const double n = (double)std::max<size_t>(1, ms.size());
+			std::vector<double> sorted = ms;
+			std::sort(sorted.begin(), sorted.end());
+			auto pct = [&](double q) { return sorted.empty() ? 0.0 : sorted[std::min(sorted.size() - 1, (size_t)(q * (sorted.size() - 1) + 0.5))]; };
+			double sum = 0;
+			for (double v : ms) sum += v;
+			const double avg = sum / n;
+			auto per = [&](double a, double b) { return (b - a) / n; };
+			// pathfinding: the paths started in the orders and the step's batch (both in "orders")
+			const double pathMs = (phaseAfter.path - phaseBefore.path + batchMs(phaseBefore, phaseAfter)) / n, astarMs = (phaseAfter.astar - phaseBefore.astar) / n;
+			const int aliveOwn = alive(0), aliveEnemy = alive(1);
+			printf("SIMPROFILE %5d units %-6s %4d steps (%.1f s wall): ms per step avg %.2f, p50 %.2f, p95 %.2f, max %.2f; %.0f%% of one core at 20 ms steps; %.2f million cycles per step\n",
+				perSide * 2, phaseNames[phase], steps, wall / 1000.0, avg, pct(0.5), pct(0.95), sorted.empty() ? 0.0 : sorted.back(), avg / 20.0 * 100.0,
+				(double)(cyclesEnd - cyclesStart) / 1e6 / std::max(1, steps));
+			printf("SIMPROFILE %5d units %-6s   parts per step: sequences %.2f, object tree %.2f (AI %.2f), orders %.2f (pathfinding %.2f%s), movement %.2f, sight %.2f; %.0f objects processed\n",
+				perSide * 2, phaseNames[phase], per(before.sequences, after.sequences), per(before.tree - before.ai, after.tree - after.ai), per(before.ai, after.ai),
+				per(before.orders, after.orders), pathMs, detail ? (", searches on the threads " + std::to_string(astarMs).substr(0, 5)).c_str() : "",
+				per(before.movement, after.movement), per(before.sight, after.sight), (double)(after.objects - before.objects) / n);
+			printf("SIMPROFILE %5d units %-6s   per step: %s\n", perSide * 2, phaseNames[phase], detailText(phaseBefore, phaseAfter, n).c_str());
+			{
+				printf("COMMANDWORK %s: %llu commands run, %llu work, %.0f per command%s", phaseNames[phase], (unsigned long long)server.commandsRun, (unsigned long long)server.commandWorkTotal,
+					server.commandsRun ? (double)server.commandWorkTotal / server.commandsRun : 0.0, "\n");
+				server.commandsRun = 0; server.commandWorkTotal = 0;
+			}
+			printf("SIMPROFILE %5d units %-6s   %d orders given in %.0f ms before the phase; %d steps over %.0f ms; at its end %d and %d alive\n",
+				perSide * 2, phaseNames[phase], ordered, ordersMs, spikes, spikeMs, aliveOwn, aliveEnemy);
+			fflush(stdout);
+			nlohmann::json& p = run["phases"][phaseNames[phase]];
+			p = { { "steps", steps }, { "wallS", wall / 1000.0 }, { "avgMs", avg }, { "p50Ms", pct(0.5) }, { "p95Ms", pct(0.95) },
+				{ "maxMs", sorted.empty() ? 0.0 : sorted.back() }, { "coreShare", avg / 20.0 },
+				{ "sequencesMs", per(before.sequences, after.sequences) }, { "treeMs", per(before.tree - before.ai, after.tree - after.ai) },
+				{ "aiMs", per(before.ai, after.ai) }, { "ordersMs", per(before.orders, after.orders) }, { "pathfindingMs", pathMs },
+				{ "movementMs", per(before.movement, after.movement) }, { "sightMs", per(before.sight, after.sight) },
+				{ "objectsPerStep", (double)(after.objects - before.objects) / n }, { "ordersGiven", ordered }, { "ordersGivenMs", ordersMs },
+				{ "aliveOwn", aliveOwn }, { "aliveEnemy", aliveEnemy }, { "spikes", spikes } };
+			if (detail) p["pathThreadMs"] = astarMs;
+		}
+		report["runs"].push_back(run);
+	}
+	if (FILE* f = fopen(reportPath.c_str(), "w")) {
+		fputs(report.dump(2).c_str(), f);
+		fclose(f);
+		printf("SIMPROFILE report written to %s\n", reportPath.c_str());
+	}
+	g_simProfileQuiet = false;
+	if (getenv("WKB_FREESPOT_CHECK"))
+		printf("SIMPROFILE free spots checked against the first way: %llu of %llu different\n", (unsigned long long)g_freeSpotMismatches, (unsigned long long)g_freeSpotCalls);
+	printf("SIMPROFILE done\n");
+}
+
+// Step 17.4's test: MapTerrainTest.cpp
+void Test_MapTerrain();
+// Step 17.5's test: MapMaterialsTest.cpp
+void Test_MapMaterials();
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -14038,10 +15565,20 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderImport, "Map folders: every original map imported into a .wkbai folder plays with the same game hash as the original"},
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
+{Test_Wind, "Wind: the lobby's settings and text, the target by the weather, veering and gusts, wind chill and the fires' factor, the save"},
+{Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it; Men at Arms, Javelineers); after contact most fight, none idle with an enemy in reach"},
+{Test_GatehouseOnWall, "Gatehouse on a wall: over four straight pieces (turned too) it replaces them between the wall's ends; refused across a run, on a corner, on a gatehouse; walked through open, not closed"},
+{Test_TreeMemory, "Trees under the fog of war: all known at the start, felled or used up out of sight still standing, new ones unknown, until seen (an ally's sight too), through a save"},
+{Test_TextLineBreaks, "Text line breaks: Language.txt's \\n a real line break at load, the dialog's word wrap keeping it (the lobby's single player question)"},
+{Test_MapCatalog, "Map catalog: every blueprint and texture group of the base game and WKB Plus against the game set's counts; describe on three original maps and the PNG map"},
+{Test_SwimAnimations, "Swim animations: made from the walk where a unit has none, the Scout's own kept, a real one in a made one's place"},
+{Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
+{Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
+{Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
+{Test_SimProfile, "Simulation profile: two armies of up to 10,000 units standing, marching and fighting; ms per step and its parts (lockstep's cost)"},
 {Test_NavalAI, "The AI at sea: a sea across 4 Peaks; a ferry boards, sails and lands; the Kingmaker, aggressive, Lua and ministry AIs each build a dock and ships, ferry an army across and attack"},
 {Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
 {Test_MixedFormation, "Improved mixed formations: Knights on the wings, Spearmen in front of Archers, the widest spacing, an Archer member's Attack its own, reach by kind"},
-{Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
 {Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
 };
 
@@ -14052,10 +15589,15 @@ void LaunchTest()
 		printf(" %2zu: %s\n", i, testList[i].second);
 	}
 	printf("Launch test number? ");
-	char inp[12];
-	gets_s(inp);
+	char inp[12] = {};
+	// WKB_TEST=<n>: that test without asking (a test running itself again in a child process)
+	if (const char* env = getenv("WKB_TEST"); env && *env)
+		snprintf(inp, sizeof(inp), "%s", env);
+	else
+		gets_s(inp);
 	printf("\n");
 	size_t testnum = (size_t)atoi(inp);
 	if (testnum >= testList.size()) testnum = 0;
+	g_launchedTest = testnum;
 	testList[testnum].first();
 }

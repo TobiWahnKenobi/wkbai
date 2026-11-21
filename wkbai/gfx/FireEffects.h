@@ -10,11 +10,14 @@
 //    (DefaultParticleRenderer).
 //  - Low: each fire particle drawn as a procedural flame instead of its sprite: value noise
 //    rising through a teardrop, its temperature (the particle's age, the noise, a building's
-//    damage) coloured along the black-body curve (Planck's law at 610, 550 and 465 nm).
+//    damage) coloured along the black-body curve (Planck's law at 610, 550 and 465 nm); smoke
+//    rising from a standing fire's flames (a burning building's).
 //  - High: finer flames (more octaves, the noise domain-warped by noise, after Quilez), a glow
-//    around each fire, the air shimmering above it (the frame behind, displaced), smoke rising
-//    from a standing fire's flames, the fire lights (RenderSettings::fireLights) flickering with
+//    around each fire, the air shimmering above it (the frame behind, displaced), a thicker
+//    column of smoke, the fire lights (RenderSettings::fireLights) flickering with
 //    them and stronger and wider the more a building is damaged.
+//  Low and High: the fire lights (a burning building's light on the ground and the models) more
+//  orange, flickering and swaying.
 // Visual only: worked out each frame from the particles and the game time (no state, no rand()),
 // so nothing reaches the simulation and replays stay the same. Low and High need the enhanced
 // renderers on Diligent; without them the fires are Original's.
@@ -65,6 +68,9 @@ namespace FireFx {
 
 	// a fire's flicker about 1 (0.7..1.3) at a game time; seed: which fire (the same every time)
 	float Flicker(float time, uint32_t seed);
+	// where a fire's light is about its fire at a game time (metres, about 0.5 at most each way):
+	// it sways with the flames
+	Vector3 Sway(float time, uint32_t seed);
 	// a stable seed for a particle (its start)
 	uint32_t SeedOf(const Particle& p);
 
@@ -73,6 +79,9 @@ namespace FireFx {
 		Vector3 position;  // the particle's
 		Vector3 emitter;   // where it started (a standing fire's emitter)
 		float size;        // the original sprite's size (its Scale_Gradient)
+		float steady;      // and the fire's, for its smoke, glow and shimmer: its system's size late in a
+		                   // particle's life, not the live particles' (their largest dying, the smoke
+		                   // jumped narrower every second)
 		float alpha;       // its colour's alpha, 0..1 (its Colour_Fn)
 		float life;        // its age over its maximum age, 0..1
 		float heat;        // DamageScale of its object

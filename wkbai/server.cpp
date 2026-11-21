@@ -28,6 +28,11 @@
 #include "util/SimRandom.h"
 #include "util/FrameStats.h"
 #include <SDL3/SDL_timer.h>
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#elif defined(__x86_64__)
+#include <x86intrin.h>
+#endif
 #include <optional>
 #include <functional>
 #include "util/StriCompare.h"
@@ -48,8 +53,15 @@ SimRandom g_simRandom;
 Server::Server()
 {
 	instance = this;
+	// (each server its own number: a server made where the one before was, at the same address,
+	// is told apart by it: MovementController's index of the walking units)
+	static uint64_t made = 0;
+	serial = ++made;
 	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
 	timeManager.stepMs = g_settings.value("simStepMs", 20u);
+	commandsPerStep = g_settings.value("commandsPerStep", 500u);
+	commandWorkPerStep = g_settings.value("commandWorkPerStep", (uint64_t)50000);
+	parallelSight = g_settings.value("parallelSight", false);
 }
 
 void Server::loadSaveGame(const char * filename)
@@ -247,6 +259,9 @@ void Server::loadSaveGame(const char * filename)
 	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)
 	DiscoveredLoadText(parts.discovered);
+	// the players' memory of the trees under the fog of war as saved (FogOfWar), else none: all
+	// trees known as they stand
+	treeMemoryLoadText(parts.treeMemory);
 	// wkbai's unit history as saved: kills, creators, the last hits
 	if (!parts.history.empty())
 		UnitHistory::loadText(*this, parts.history);
@@ -322,7 +337,7 @@ ServerGameObject* Server::createObject(const GameObjBlueprint * blueprint, uint3
 		id = nextUniqueId;
 	}
 	ServerGameObject *obj = new ServerGameObject(id, blueprint);
-	idmap[id] = obj;
+	idmapSet(id, obj);
 
 	obj->subtype = SimRand() % blueprint->subtypeNames.size();
 	auto bpSubtype = blueprint->subtypes.find(obj->subtype);
@@ -1076,8 +1091,15 @@ void Server::destroyObject(ServerGameObject* obj)
 	if (obj->sightBlock >= 0)
 		updateSightBlock(obj, true);
 
+	// off its tile's pointers (objList keeps the id, which no longer finds it)
+	if (obj->tileIndex >= 0 && tiles) {
+		auto& ptrs = tiles[obj->tileIndex].objects;
+		if (auto it = std::find(ptrs.begin(), ptrs.end(), (CommonGameObject*)obj); it != ptrs.end())
+			ptrs.erase(it);
+	}
+
 	// remove from ID map
-	idmap.erase(obj->id);
+	idmapErase(obj->id);
 
 	// delete the object, bye!
 	int id = obj->id;
@@ -1272,8 +1294,17 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 				}
 				else if (strtag == "ORDER") {
 					auto orderName = gsf.nextString(true);
-					int orderType = gameSet->orders.names.getIndex(orderName); assert(orderType != -1);
+					int orderType = gameSet->orders.names.getIndex(orderName);
 					gsf.advanceLine();
+					// an order the game set doesn't have: skipped to its END_ORDER (an index of -1
+					// read memory before the list)
+					if (orderType == -1) {
+						printf("WARNING: object %u: order \"%s\" isn't in the game set, left out\n", obj->id, orderName.c_str());
+						while (!gsf.eof && gsf.nextTag() != "END_ORDER")
+							gsf.advanceLine();
+						gsf.advanceLine();
+						continue;
+					}
 					const OrderBlueprint &orderBp = gameSet->orders[orderType];
 					obj->orderConfig.orders.emplace_back(0, &orderBp, obj);
 					Order &order = obj->orderConfig.orders.back();
@@ -1292,9 +1323,26 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 							order.currentTask = gsf.nextInt();
 						}
 						else if (ordtag == "TASK") {
-							int taskType = gameSet->tasks.names.getIndex(gsf.nextString(true)); assert(taskType != -1);
+							const std::string taskName = gsf.nextString(true);
+							int taskType = gameSet->tasks.names.getIndex(taskName);
 							gsf.advanceLine();
-							const TaskBlueprint &taskBp = gameSet->tasks[taskType];
+							// a task the game set doesn't have (2 Player Lakes.lvl's "Play Ambient Sound"
+							// orders name a task "Play Ambient Sound" that isn't there): the order's own
+							// task in that place, else the task is left out. Its index of -1 had read
+							// memory before the list: "bad allocation" or not, by the memory's layout
+							// (test 97, 2026-11-19).
+							const TaskBlueprint* knownBp = taskType != -1 ? &gameSet->tasks[taskType]
+								: order.tasks.size() < orderBp.tasks.size() ? orderBp.tasks[order.tasks.size()] : nullptr;
+							if (taskType == -1)
+								printf("WARNING: object %u: task \"%s\" isn't in the game set: %s\n", obj->id, taskName.c_str(),
+									knownBp ? ("the order's own, \"" + gameSet->tasks.names.getString(knownBp->bpid) + "\"").c_str() : "left out");
+							if (!knownBp) {
+								while (!gsf.eof && gsf.nextTag() != "END_TASK")
+									gsf.advanceLine();
+								gsf.advanceLine();
+								continue;
+							}
+							const TaskBlueprint &taskBp = *knownBp;
 							auto taskptr = Task::create(0, &taskBp, &order);
 							Task &task = *taskptr;
 							while (!gsf.eof) {
@@ -1313,7 +1361,10 @@ ServerGameObject* Server::loadObject(GSFileParser & gsf, const std::string &clsn
 									task.triggersStarted = gsf.nextInt();
 								}
 								else if (tsktag == "TRIGGER") {
-									task.triggers[gsf.nextInt()]->parse(gsf, *gameSet);
+									// (a trigger the task doesn't have, as a substituted task's: left out)
+									const int t = gsf.nextInt();
+									if (t >= 0 && t < (int)task.triggers.size())
+										task.triggers[t]->parse(gsf, *gameSet);
 								}
 								else if (tsktag == "FIRST_EXECUTION") {
 									task.firstExecution = gsf.nextInt();
@@ -1730,6 +1781,9 @@ void ServerGameObject::startMovement(const Vector3 & destination)
 			stopMovement();
 		return;
 	}
+	// boats: faster before the wind, slower into it, for this leg (Wind.h; 1 without the wind's effects)
+	if (blueprint->canWalkOnWater())
+		speed *= Server::instance->environment.windBoatFactor(destination - position);
 	movement.startMovement(position, destination, Server::instance->timeManager.currentTime, speed);
 	currentSpeed = speed;
 	NetPacketWriter npw{ NETCLIMSG_OBJECT_MOVEMENT_STARTED };
@@ -2195,9 +2249,13 @@ void ServerGameObject::updatePosition(const Vector3 & newposition, bool events)
 			if (prevtileIndex != -1) {
 				auto &vec = server->tiles[prevtileIndex].objList;
 				vec.erase(std::find(vec.begin(), vec.end(), this->id));
+				auto& ptrs = server->tiles[prevtileIndex].objects;
+				if (auto it = std::find(ptrs.begin(), ptrs.end(), (CommonGameObject*)this); it != ptrs.end())
+					ptrs.erase(it);
 			}
 			if (newtileIndex != -1) {
 				server->tiles[newtileIndex].objList.push_back(this->id);
+				server->tiles[newtileIndex].objects.push_back(this);
 				// On Share Tile (WKB.exe 0x568de0, after joining the tile at 0x568ee5): the mover and
 				// each occupant of another player, neither a missile (message 0x7e2) nor terminated,
 				// both get it, each with the other as sender, the mover first. Only the occupants
@@ -2270,33 +2328,59 @@ static double SightNow()
 	return profile ? (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency() : 0.0;
 }
 
-void ServerGameObject::lookForSightRangeEvents()
+// Sorts ids as std::sort does (ascending), by their bytes (radix, 3 passes of 11 bits): the
+// sight's lists of hundreds or thousands of ids sorted in a fraction of std::sort's time
+static void SortIds(std::vector<uint32_t>& ids)
+{
+	const size_t n = ids.size();
+	if (n < 128) {
+		std::sort(ids.begin(), ids.end());
+		return;
+	}
+	static thread_local std::vector<uint32_t> tmp;
+	tmp.resize(n);
+	uint32_t* src = ids.data();
+	uint32_t* dst = tmp.data();
+	for (int pass = 0; pass < 3; pass++) {
+		const int shift = pass * 11;
+		size_t count[2049] = {};
+		for (size_t i = 0; i < n; i++)
+			count[((src[i] >> shift) & 2047) + 1]++;
+		for (int b = 0; b < 2048; b++)
+			count[b + 1] += count[b];
+		for (size_t i = 0; i < n; i++)
+			dst[count[(src[i] >> shift) & 2047]++] = src[i];
+		std::swap(src, dst);
+	}
+	// (3 passes: the result is in tmp)
+	std::copy(src, src + n, ids.data());
+}
+
+float ServerGameObject::sightRange()
 {
 	if (!blueprint->receiveSightRangeEvents)
-		return;
+		return 0.0f;
 	if (blueprint->sightRangeEquation == -1) {
 		printf("receiveSightRangeEvents==true but sightRangeEquation not defined\n%s\n", blueprint->getFullName().c_str());
-		return;
+		return 0.0f;
 	}
 	SrvScriptContext ctx{ Server::instance, this };
 	if (blueprint->shouldProcessSightRange && !blueprint->shouldProcessSightRange->booleval(&ctx))
-		return;
-	float dist = Server::instance->gameSet->equations[blueprint->sightRangeEquation]->eval(&ctx);
-	if (dist <= 0.0f)
-		return;
-	// the objects in range now, by id, against the ones before (both sorted): the new ones are
-	// seen, the ones gone stop being seen (a sorted list: hash sets per call were most of the
-	// simulation's time in large games)
-	// (ids only: the objects are looked up again for the events, which a few are)
-	static std::vector<uint32_t> found;
+		return 0.0f;
+	return Server::instance->gameSet->equations[blueprint->sightRangeEquation]->eval(&ctx);
+}
+
+// the objects in range now, by id, and their fingerprint; sorted when not the same as before
+void ServerGameObject::sightScan(float dist, SightScan& out) const
+{
+	std::vector<uint32_t>& found = out.found;
 	found.clear();
 	// as WKB.exe (0x566D70): the range rounded to whole 5 m tiles, and a sphere around the viewer
 	// (3D distance: no height bonus). The tile search alone took a square.
 	const float radius = std::floor(dist + 0.5f) * 5.0f;
 	const float radius2 = radius * radius;
-	g_sightCalls++;
 	// (the blocks of objects that generate the events, Server::sightBlocks)
-	Server* server = Server::instance;
+	const Server* server = Server::instance;
 	const float blockSize = 5.0f * Server::SIGHT_BLOCK;
 	const int bx0 = std::max(0, (int)std::floor((position.x - radius) / blockSize)), bx1 = std::min(server->sightBlocksWidth - 1, (int)std::floor((position.x + radius) / blockSize));
 	const int bz0 = std::max(0, (int)std::floor((position.z - radius) / blockSize)), bz1 = std::min(server->sightBlocksHeight - 1, (int)std::floor((position.z + radius) / blockSize));
@@ -2308,7 +2392,6 @@ void ServerGameObject::lookForSightRangeEvents()
 	// sight's time
 	uint64_t hashA = 0, hashB = 0;
 	auto mix = [](uint64_t z) { z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull; z = (z ^ (z >> 27)) * 0x94d049bb133111ebull; return z ^ (z >> 31); };
-	double t0 = SightNow();
 	size_t n = 0;
 	for (int bz = bz0; bz <= bz1; bz++) {
 		// (blocks wholly outside the circle left out)
@@ -2318,7 +2401,7 @@ void ServerGameObject::lookForSightRangeEvents()
 			if (cx * cx + cz * cz > radius2)
 				continue;
 			const auto& list = server->sightBlocks[bz * server->sightBlocksWidth + bx];
-			g_sightCandidates += list.size();
+			out.candidates += list.size();
 			// (without branches: in range or not is a coin toss in an army)
 			// at night (wkbai's day and night) only lit targets are seen at the full range
 			if (server->nightSight.active()) {
@@ -2335,10 +2418,10 @@ void ServerGameObject::lookForSightRangeEvents()
 			}
 			if (found.size() < n + list.size())
 				found.resize(n + list.size() + 256);
-			uint32_t* out = found.data();
+			uint32_t* o = found.data();
 			for (const Server::SightEntry& e : list) {
 				const float dx = e.x - mx, dy = e.y - my, dz = e.z - mz;
-				out[n] = e.id;
+				o[n] = e.id;
 				n += (dx * dx + dy * dy + dz * dz <= radius2) ? 1 : 0;
 			}
 		}
@@ -2348,16 +2431,23 @@ void ServerGameObject::lookForSightRangeEvents()
 		hashA += mix(id + 0x9e3779b97f4a7c15ull);
 		hashB += mix((uint64_t)id * 0x632be59bd9b4e019ull + 0x2545f4914f6cdd1dull);
 	}
+	out.hashA = hashA;
+	out.hashB = hashB;
+	out.same = found.size() == seenObjects.size() && hashA == seenHashA && hashB == seenHashB;
+	if (!out.same || sightFromSave)
+		SortIds(found);
+}
+
+// the events of a scan: the new ones seen, the ones gone no longer seen (both lists sorted)
+void ServerGameObject::sightEvents(SightScan& scan)
+{
+	std::vector<uint32_t>& found = scan.found;
 	g_sightInRange += found.size();
-	g_sightScanMs += SightNow() - t0;
-	const bool same = found.size() == seenObjects.size() && hashA == seenHashA && hashB == seenHashB;
-	seenHashA = hashA;
-	seenHashB = hashB;
-	if (same && !sightFromSave)
+	g_sightCandidates += scan.candidates;
+	seenHashA = scan.hashA;
+	seenHashB = scan.hashB;
+	if (scan.same && !sightFromSave)
 		return;
-	double t1 = SightNow();
-	std::sort(found.begin(), found.end());
-	g_sightSortMs += SightNow() - t1;
 	if (sightFromSave) {
 		sightFromSave = false;
 		seenObjects.assign(found.begin(), found.end());
@@ -2387,6 +2477,21 @@ void ServerGameObject::lookForSightRangeEvents()
 	for (; b < before.size(); b++)
 		if (ServerGameObject* gone = Server::instance->findObject(before[b]))
 			this->sendEvent(Tags::PDEVENT_ON_STOP_SEEING_OBJECT, gone);
+}
+
+void ServerGameObject::lookForSightRangeEvents()
+{
+	const float dist = sightRange();
+	if (dist <= 0.0f)
+		return;
+	g_sightCalls++;
+	// (one scan's lists kept from call to call)
+	static SightScan scan;
+	scan.candidates = 0;
+	const double t0 = SightNow();
+	sightScan(dist, scan);
+	g_sightScanMs += SightNow() - t0;
+	sightEvents(scan);
 }
 
 // Attack at will: the scripts' "Aggression" sets "Become Aggressive" and sends "On Idle" once;
@@ -3716,7 +3821,24 @@ namespace {
 		uint64_t movers = 0;
 		std::map<std::string, double> byOrder; // orders time per order (with profileSim)
 		uint64_t steps = 0, lastPrint = 0, objects = 0;
-		static double now() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
+		// ms. Read twice for every object in every step (orders, movement, sight: 60,000 times a
+		// step with 10,000 units): on x86 the processor's time stamp counter, a few ns, its rate
+		// measured against the performance counter once (5 ms); QueryPerformanceCounter took 25-30.
+		static double now() {
+#if defined(_M_X64) || defined(__x86_64__)
+			static const double msPerTick = []() {
+				const uint64_t q0 = SDL_GetPerformanceCounter(), t0 = __rdtsc();
+				const uint64_t wait = SDL_GetPerformanceFrequency() / 200;
+				uint64_t q1;
+				while ((q1 = SDL_GetPerformanceCounter()) - q0 < wait) {}
+				const uint64_t t1 = __rdtsc();
+				return (double)(q1 - q0) * 1000.0 / (double)SDL_GetPerformanceFrequency() / (double)std::max<uint64_t>(1, t1 - t0);
+			}();
+			return (double)__rdtsc() * msPerTick;
+#else
+			return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency();
+#endif
+		}
 	} g_simProfile;
 	struct SimTimer {
 		double* into; double start;
@@ -3724,6 +3846,22 @@ namespace {
 		~SimTimer() { *into += SimProfile::now() - start; }
 	};
 }
+
+bool g_simProfileQuiet = false;
+
+SimProfileTotals GetSimProfileTotals()
+{
+	const SimProfile& p = g_simProfile;
+	SimProfileTotals t;
+	t.total = p.total; t.sequences = p.sequences; t.tree = p.tree; t.ai = p.ai;
+	t.orders = p.orders; t.movement = p.movement; t.sight = p.sight;
+	t.steps = p.steps; t.objects = p.objects; t.movers = p.movers;
+	t.byOrder = p.byOrder;
+	t.mvPosition = p.mvPosition; t.mvUpdate = p.mvUpdate; t.mvSpeed = p.mvSpeed; t.mvController = p.mvController;
+	return t;
+}
+
+void SimParallelFor(size_t n, const std::function<void(size_t)>& f); // MovementController.cpp
 
 int g_simulating = 0;
 
@@ -3765,18 +3903,22 @@ void Server::simulate()
 		recording->runPaused = timeManager.paused;
 		recording->runCount++;
 	}
+	// the commands that waited for this step (issueCommand)
+	g_simPhase = "commands";
+	runPendingCommands();
+	g_simPhase = "sequences";
 	// once a game second (while paused, every 30 steps: the clock stands)
 	if (timeManager.currentTime >= nextPeasantActivityUpdate || (timeManager.paused && simStepIndex % 30 == 0)) {
 		nextPeasantActivityUpdate = timeManager.currentTime + 1.0f;
 		updatePeasantActivity();
 	}
 	// wkbai's day and night, seasons and weather: once a game second, only when a setting is on
-	// (else once, for the game's sky)
-	if (environment.enabled() ? !timeManager.paused : environment.skyToSend())
+	// (else once, for the game's sky); the wind (Wind.h) also alone
+	if (environment.enabled() || environment.windOn() ? !timeManager.paused : environment.skyToSend())
 		environment.update(*this);
 	// wkbai's unit history: the hero threshold once the game runs
 	unitHistory.update(*this);
-	if (profile && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
+	if (profile && !g_simProfileQuiet && SDL_GetTicks() - g_simProfile.lastPrint >= 10000) {
 		auto& p = g_simProfile;
 		if (p.lastPrint)
 			printf("SIMPROFILE t=%.0f steps %llu, per step ms: total %.2f, sequences %.2f, object tree %.2f (AI %.2f), orders %.2f, movement %.2f, sight %.2f; %llu objects processed per step\n",
@@ -4015,7 +4157,9 @@ void Server::simulate()
 	// The sight scan as WKB.exe's (0x566c10): every object about once a second, round-robin, the
 	// objects spread evenly over the steps (here by a phase from the id: scanned when the second
 	// counted from its phase turns over)
-	const double sightNow = timeManager.currentTime, sightBefore = sightScanTime < 0.0 ? sightNow - 1.0 : sightScanTime;
+	// (the first step: as if a step had gone before it, so the objects whose turn it is, not all
+	// of them at once: 10,000 units scanned in one step took 3-10 s)
+	const double sightNow = timeManager.currentTime, sightBefore = sightScanTime < 0.0 ? sightNow - std::max(0.001, (double)timeManager.stepMs / 1000.0) : sightScanTime;
 	sightScanTime = sightNow;
 	// the intensity maps once a second too
 	if (std::floor(sightNow) != std::floor(sightBefore))
@@ -4095,12 +4239,17 @@ void Server::simulate()
 		moveTimer.reset();
 		// sight range events once a second (above)
 		if (obj->blueprint->receiveSightRangeEvents && sightDue(obj->id)) {
-			SimTimer sightTimer(g_simProfile.sight);
-			g_simPhase = "sight"; g_simPhaseObject = obj->id;
-			obj->lookForSightRangeEvents();
-			if (!ref) continue;
-			obj->wakeAggressiveIdle();
-			if (!ref) continue;
+			// ("parallelSight": scanned after the loop, below)
+			if (parallelSight)
+				sightQueue.push_back(ref);
+			else {
+				SimTimer sightTimer(g_simProfile.sight);
+				g_simPhase = "sight"; g_simPhaseObject = obj->id;
+				obj->lookForSightRangeEvents();
+				if (!ref) continue;
+				obj->wakeAggressiveIdle();
+				if (!ref) continue;
+			}
 		}
 		// (a character without sight events, a Spearman: its attack at will once a second too)
 		else if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && sightDue(obj->id)) {
@@ -4109,6 +4258,43 @@ void Server::simulate()
 		}
 		if (obj->blueprint->removeWhenNotReferenced)
 			obj->removeIfNotReferenced();
+	}
+	// "parallelSight" (wkconfig.json, off by default): the sight scans due this step after every
+	// object has moved, all from where the objects stand at the end of the loop, on the worker
+	// threads (the range's scripts first, here), then their events here in the loop's order. Not
+	// as the scans one by one in the loop, each seeing the objects before it moved and those
+	// after it not yet: another game (the same on every computer and with any thread count).
+	if (parallelSight && !sightQueue.empty()) {
+		SimTimer sightTimer(g_simProfile.sight);
+		g_simPhase = "sight";
+		const size_t n = sightQueue.size();
+		std::vector<float> ranges(n, 0.0f);
+		std::vector<ServerGameObject*> viewers(n, nullptr);
+		for (size_t i = 0; i < n; i++)
+			if (ServerGameObject* v = sightQueue[i].get()) {
+				viewers[i] = v;
+				ranges[i] = v->sightRange();
+			}
+		static std::vector<ServerGameObject::SightScan> scans;
+		if (scans.size() < n)
+			scans.resize(n);
+		SimParallelFor(n, [&](size_t i) {
+			if (viewers[i] && ranges[i] > 0.0f) {
+				scans[i].candidates = 0;
+				viewers[i]->sightScan(ranges[i], scans[i]);
+			}
+		});
+		for (size_t i = 0; i < n; i++) {
+			// (gone meanwhile: an earlier one's event)
+			if (!viewers[i] || ranges[i] <= 0.0f || !sightQueue[i])
+				continue;
+			g_sightCalls++;
+			g_simPhaseObject = viewers[i]->id;
+			viewers[i]->sightEvents(scans[i]);
+			if (!sightQueue[i]) continue;
+			viewers[i]->wakeAggressiveIdle();
+		}
+		sightQueue.clear();
 	}
 	// the step's path searches, on worker threads, their paths applied in the order asked for
 	{
@@ -4119,6 +4305,40 @@ void Server::simulate()
 	g_simPhase = "delete";
 	freeDeletedObjects();
 	g_simPhase = "between steps";
+}
+
+void Server::issueCommand(int command, uint32_t object, int mode, uint32_t target, const Vector3& destination, const Vector3& faceTo)
+{
+	if (command < 0 || (size_t)command >= gameSet->commands.size())
+		return;
+	if (!pendingCommands.empty() || !commandMayStart()) {
+		pendingCommands.push_back({ command, object, target, mode, destination, faceTo });
+		return;
+	}
+	runCommand(command, object, target, mode, destination, faceTo);
+}
+
+void Server::runCommand(int command, uint32_t object, uint32_t target, int mode, const Vector3& destination, const Vector3& faceTo)
+{
+	extern uint64_t g_scriptWork;
+	const uint64_t work = g_scriptWork;
+	commandsThisStep++;
+	commandsRun++;
+	// (a unit gone meanwhile: as a command for a gone unit was)
+	gameSet->commands[command].execute(findObject(object), findObject(target), mode, destination, faceTo);
+	commandWorkThisStep += g_scriptWork - work;
+	commandWorkTotal += g_scriptWork - work;
+}
+
+void Server::runPendingCommands()
+{
+	commandsThisStep = 0;
+	commandWorkThisStep = 0;
+	while (!pendingCommands.empty() && commandMayStart()) {
+		const PendingCommand c = pendingCommands.front();
+		pendingCommands.pop_front();
+		runCommand(c.command, c.object, c.target, c.mode, c.destination, c.faceTo);
+	}
 }
 
 void Server::network()
@@ -4415,7 +4635,7 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				int targetid = br.readUint32();
 				Vector3 destination = br.readVector3();
 				Vector3 faceTo = br.readVector3();
-				gameSet->commands[cmdid].execute(findObject(objid), findObject(targetid), mode, destination, faceTo);
+				issueCommand(cmdid, objid, mode, targetid, destination, faceTo);
 				break;
 			}
 			case NETSRVMSG_ENVIRONMENT_DEBUG: {

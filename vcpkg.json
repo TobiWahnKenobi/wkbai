@@ -5,6 +5,8 @@
     "bzip2",
     "enet",
     "lua",
+    "lunasvg",
+    "md4c",
     "mpg123",
     "nlohmann-json",
     "openal-soft",

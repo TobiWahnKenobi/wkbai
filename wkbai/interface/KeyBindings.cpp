@@ -88,6 +88,8 @@ namespace {
 				{ A::AgentTakeOver, "agentTakeOver", "Agent control: take the input over (again: give it back)", GAME, P::ALWAYS, false, false, { key(SDL_SCANCODE_F12, K::CTRL | K::ALT), none() } },
 
 				{ A::HideInterface, "hideInterface", "Show or hide the interface", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F3), none() } },
+				{ A::Help, "help", "Help for what is under the cursor", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F1), none() } },
+				{ A::WhatsThis, "whatsThis", "What's this? (then click on something)", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F1, K::SHIFT), none() } },
 				{ A::Statistics, "statistics", "Statistics", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F6), none() } },
 				{ A::Timeline, "timeline", "Timeline", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F7), none() } },
 				{ A::FrameTimings, "frameTimings", "Frame timings", WINDOWS, P::ALWAYS, false, false, { key(SDL_SCANCODE_F12, K::CTRL), none() } },
@@ -104,7 +106,7 @@ namespace {
 				{ A::ReplayFaster, "replayFaster", "Faster", REPLAY, P::REPLAY, false, false, { key(SDL_SCANCODE_KP_PLUS), none() } },
 				{ A::ReplaySlower, "replaySlower", "Slower", REPLAY, P::REPLAY, false, false, { key(SDL_SCANCODE_KP_MINUS), none() } },
 
-				{ A::ServerWindow, "serverWindow", "Server window (the whole game's state)", CHEATS, P::GAME, false, true, { key(SDL_SCANCODE_F1), none() } },
+				{ A::ServerWindow, "serverWindow", "Server window (the whole game's state)", CHEATS, P::GAME, false, true, { key(SDL_SCANCODE_F1, K::CTRL), none() } },
 				{ A::Debugger, "debugger", "Debugger", CHEATS, P::GAME, false, true, { key(SDL_SCANCODE_F2), none() } },
 				{ A::EnvironmentPanel, "environmentPanel", "Environment panel (sky, weather)", CHEATS, P::GAME, false, true, { key(SDL_SCANCODE_F9), none() } },
 			};

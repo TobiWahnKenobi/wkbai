@@ -24,6 +24,9 @@
 #include "NNSearch.h"
 #include "util/StriCompare.h"
 #include "AIUtil.h"
+#include <SDL3/SDL_timer.h>
+#include <cstdio>
+#include <cstdlib>
 #include "Model.h"
 #include "PeasantLodging.h"
 #include "gameset/command.h"
@@ -497,8 +500,20 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
 }
 
+// the profiling test's parts of assignOrder (with g_actionProfile): conditions, cancelling the
+// orders before, making the tasks, init, start, the building order count (ms)
+double g_assignOrderMs[6] = {};
+
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	extern bool g_actionProfile;
+	uint64_t lapAt = g_actionProfile ? SDL_GetPerformanceCounter() : 0;
+	auto lap = [&](int part) {
+		if (!g_actionProfile) return;
+		const uint64_t now = SDL_GetPerformanceCounter();
+		g_assignOrderMs[part] += (double)(now - lapAt) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		lapAt = now;
+	};
 	// a peasant on its way into its shelter for the night or winter, inside or waiting for one
 	// (PeasantLodging) takes no orders but the lodging's own: not the player's, the AI's or the
 	// scripts' (a dying one's "Die" still)
@@ -543,6 +558,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		}
 	}
 
+	lap(0);
 	Order* neworder;
 	bool orderInFront = false;
 	switch (assignMode) {
@@ -582,6 +598,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		neworder = &this->orders.back();
 		break;
 	}
+	lap(1);
 	for (TaskBlueprint* taskBp : orderBlueprint->tasks) {
 		int id = neworder->nextTaskId++;
 		neworder->tasks.push_back(Task::create(id, taskBp, neworder));
@@ -592,10 +609,14 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 	if (destination.x >= 0.0f) {
 		neworder->tasks.at(0)->destination = destination;
 	}
+	lap(2);
 	neworder->init();
+	lap(3);
 	if (orderInFront && startNow) // start order (and first task) immediately if no other working order behind
 		neworder->start();
+	lap(4);
 	this->gameobj->updateBuildingOrderCount(orderBlueprint);
+	lap(5);
 	return neworder;
 }
 
@@ -2137,7 +2158,9 @@ void SpawnTask::onStart()
 // The spot nearest to a place where a unit can stand clear of the other characters there or
 // walking there (rings 3 m apart around it, walkable tiles only): the units a building sends
 // to its rally point gather around it instead of on top of each other.
-Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
+// The first way of finding it, kept to check the one below (WKB_FREESPOT_CHECK): every character
+// on the tiles within SPACING * RINGS + 40 m, each against every spot tried.
+static Vector3 FreeStandingSpotAll(ServerGameObject* unit, const Vector3& place)
 {
 	// the room each keeps (PREFERRED_SPACING, WKB.exe 0x436120: free where |p - q| >= r + r_q);
 	// rings as far apart as two of the unit's
@@ -2175,6 +2198,151 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 		}
 	}
 	return place;
+}
+
+// (the profiling test's counters: calls, ms; with WKB_FREESPOT_CHECK the spots that came out
+// different from FreeStandingSpotAll's)
+uint64_t g_freeSpotCalls = 0, g_freeSpotMismatches = 0;
+double g_freeSpotMs = 0.0;
+
+// The same spot as FreeStandingSpotAll, without going through every character round it: a spot
+// of ring k can only be taken by a unit standing or going within k * SPACING + own + the
+// largest PREFERRED_SPACING of it, so the units are taken in as the rings grow (the tiles
+// within that reach): the standing ones from the tiles' lists by where they stand, the walking
+// ones from MovementController's index by where they go, those whose tile is on the first way's
+// tiles (its search round the place, SPACING * RINGS + 40 m) as it took them.
+Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
+{
+	const uint64_t start = SDL_GetPerformanceCounter();
+	// (WKB_FREESPOT_OLD: the first way only, to compare their times)
+	static const bool old = getenv("WKB_FREESPOT_OLD") != nullptr;
+	if (old) {
+		const Vector3 r = FreeStandingSpotAll(unit, place);
+		g_freeSpotCalls++;
+		g_freeSpotMs += (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		return r;
+	}
+	Server* server = Server::instance;
+	const float own = unit->blueprint->preferredSpacing;
+	const float SPACING = std::max(1.5f, 2.0f * own);
+	constexpr int RINGS = 10;
+	const auto [w, h] = server->terrain->getNumPlayableTiles();
+	// the largest PREFERRED_SPACING of the characters
+	static const GameSet* spacingFor = nullptr;
+	static float maxSpacing = 0.0f;
+	if (spacingFor != server->gameSet.get()) {
+		spacingFor = server->gameSet.get();
+		maxSpacing = 0.0f;
+		auto& chars = spacingFor->objBlueprints[Tags::GAMEOBJCLASS_CHARACTER];
+		for (size_t i = 0; i < chars.size(); i++)
+			maxSpacing = std::max(maxSpacing, chars[i].preferredSpacing);
+	}
+	// the first way's tiles (NNSearch::start's square)
+	const int tileradius = static_cast<int>((SPACING * RINGS + 40.0f) / 5.0f + 1.5f);
+	const int ctx = static_cast<int>(place.x / 5.0f), ctz = static_cast<int>(place.z / 5.0f);
+	const int sx0 = std::clamp(ctx - tileradius, 0, w - 1), sx1 = std::clamp(ctx + tileradius, 0, w - 1);
+	const int sz0 = std::clamp(ctz - tileradius, 0, h - 1), sz1 = std::clamp(ctz + tileradius, 0, h - 1);
+	// the units taken in, by the tile of where they stand or go (clamped to the map), on the first
+	// way's tiles (which hold every one: see reach): a spot looks only at the tiles round it
+	const int gw = sx1 - sx0 + 1, gh = sz1 - sz0 + 1;
+	static thread_local std::vector<std::vector<std::pair<Vector3, float>>> grid;
+	static thread_local std::vector<int> used;
+	if (grid.size() < (size_t)gw * gh)
+		grid.resize((size_t)gw * gh);
+	auto cellOf = [&](const Vector3& p) {
+		const int tx = std::clamp((int)std::floor(p.x / 5.0f), sx0, sx1), tz = std::clamp((int)std::floor(p.z / 5.0f), sz0, sz1);
+		return (tz - sz0) * gw + (tx - sx0);
+	};
+	auto add = [&](const Vector3& p, float r) {
+		const int c = cellOf(p);
+		if (grid[c].empty())
+			used.push_back(c);
+		grid[c].emplace_back(p, r);
+	};
+	auto take = [&](ServerGameObject* other, bool walking) {
+		if (!other || other == unit || other->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !other->isInteractable())
+			return;
+		if (other->movementController.isMoving() != walking)
+			return;
+		if (walking) {
+			// on the first way's tiles (where its tile list has it)
+			if (other->tileIndex < 0)
+				return;
+			const int ox = other->tileIndex % w, oz = other->tileIndex / w;
+			if (ox < sx0 || ox > sx1 || oz < sz0 || oz > sz1)
+				return;
+			add(other->movementController.getDestination(), other->blueprint->preferredSpacing);
+		}
+		else
+			add(other->position, other->blueprint->preferredSpacing);
+	};
+	// the tiles taken in so far (none yet: x0 > x1)
+	int bx0 = 0, bx1 = -1, bz0 = 0, bz1 = -1;
+	auto reach = [&](float radius) {
+		const int nx0 = std::clamp((int)std::floor((place.x - radius) / 5.0f), 0, w - 1), nx1 = std::clamp((int)std::floor((place.x + radius) / 5.0f), 0, w - 1);
+		const int nz0 = std::clamp((int)std::floor((place.z - radius) / 5.0f), 0, h - 1), nz1 = std::clamp((int)std::floor((place.z + radius) / 5.0f), 0, h - 1);
+		for (int tz = nz0; tz <= nz1; tz++)
+			for (int tx = nx0; tx <= nx1; tx++) {
+				if (tx >= bx0 && tx <= bx1 && tz >= bz0 && tz <= bz1)
+					continue; // taken in already
+				// (the tile's pointers: objList's objects without looking each id up)
+				for (CommonGameObject* o : server->tiles[(size_t)tz * w + tx].objects)
+					take((ServerGameObject*)o, false);
+				if (const std::vector<ServerGameObject*>* walkers = MovementController::destCell(tx, tz)) {
+					for (ServerGameObject* other : *walkers) {
+						// (its own cell only, once)
+						if (other->movementController.m_destCell != tz * w + tx)
+							continue;
+						take(other, true);
+					}
+				}
+			}
+		bx0 = nx0; bx1 = nx1; bz0 = nz0; bz1 = nz1;
+	};
+	// (a unit that takes the spot is within own + maxSpacing of it: on the tiles round it)
+	const float near = own + maxSpacing + 0.05f;
+	auto isFree = [&](const Vector3& spot) {
+		if (MovementController::isTileBlocked(unit->blueprint, (int)(spot.x / 5.0f), (int)(spot.z / 5.0f)))
+			return false;
+		const int x0 = std::clamp((int)std::floor((spot.x - near) / 5.0f), sx0, sx1), x1 = std::clamp((int)std::floor((spot.x + near) / 5.0f), sx0, sx1);
+		const int z0 = std::clamp((int)std::floor((spot.z - near) / 5.0f), sz0, sz1), z1 = std::clamp((int)std::floor((spot.z + near) / 5.0f), sz0, sz1);
+		for (int tz = z0; tz <= z1; tz++)
+			for (int tx = x0; tx <= x1; tx++)
+				for (const auto& [t, r] : grid[(tz - sz0) * gw + (tx - sx0)])
+					if ((t - spot).sqlen2xz() < (own + r) * (own + r))
+						return false;
+		return true;
+	};
+	Vector3 result = place;
+	bool found = false;
+	for (int ring = 0; ring <= RINGS && !found; ring++) {
+		reach(ring * SPACING + own + maxSpacing + 0.05f);
+		const int count = ring == 0 ? 1 : (int)(6.2831853f * ring);
+		for (int i = 0; i < count; i++) {
+			const float angle = 6.2831853f * i / count;
+			const Vector3 spot = place + Vector3(std::cos(angle), 0, std::sin(angle)) * (ring * SPACING);
+			if (isFree(spot)) {
+				result = spot;
+				found = true;
+				break;
+			}
+		}
+	}
+	for (int c : used)
+		grid[c].clear();
+	used.clear();
+	g_freeSpotCalls++;
+	g_freeSpotMs += (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+	static const bool check = getenv("WKB_FREESPOT_CHECK") != nullptr;
+	if (check) {
+		const Vector3 all = FreeStandingSpotAll(unit, place);
+		if (all.x != result.x || all.y != result.y || all.z != result.z) {
+			if (g_freeSpotMismatches++ < 20)
+				printf("FREESPOT MISMATCH unit %u at (%.2f, %.2f) for (%.2f, %.2f): all (%.3f, %.3f), indexed (%.3f, %.3f)\n", unit->id, unit->position.x, unit->position.z,
+					place.x, place.z, all.x, all.z, result.x, result.z);
+		}
+	}
+	return result;
 }
 
 // The object a building's spawned units take instead of their gone target: within 70 m of where

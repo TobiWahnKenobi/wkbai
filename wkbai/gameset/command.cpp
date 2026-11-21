@@ -2,6 +2,7 @@
 // (C) 2021AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include <SDL3/SDL_timer.h>
 #include "command.h"
 #include "gameset.h"
 #include "../util/util.h"
@@ -93,14 +94,27 @@ bool Command::canBeExecuted(ServerGameObject* self, ServerGameObject* target) co
 			|| std::all_of(this->cursorConditions.begin(), this->cursorConditions.end(), testEquation));
 }
 
+// the time a command's parts took (ms; the simulation profiling test): its conditions, start
+// sequence, adding the order, the order's start, the post-order sequence
+double g_commandMs[5] = {};
+
 void Command::execute(ServerGameObject *self, ServerGameObject *target, int assignmentMode, const Vector3 &destination, const Vector3& faceTo) const
 {
-	if (!canBeExecuted(self, target))
+	uint64_t lapAt = SDL_GetPerformanceCounter();
+	auto lap = [&](int part) {
+		const uint64_t now = SDL_GetPerformanceCounter();
+		g_commandMs[part] += (double)(now - lapAt) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		lapAt = now;
+	};
+	const bool can = canBeExecuted(self, target);
+	lap(0);
+	if (!can)
 		return;
 
 	SrvScriptContext ctx(Server::instance, self);
 	auto _ = ctx.change(ctx.target, target);
 	this->startSequence.run(&ctx);
+	lap(1);
 	// TODO: order (what to do first?)
 	Order* neworder = nullptr;
 	if (this->order) {
@@ -129,9 +143,11 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 		// am a Farmer", set by ORDER "Farm"'s start sequence; with the order starting only at the
 		// unit's next update, a second peasant sent to a farmed field stood idle by it (its order
 		// refused at the next update) instead of going to the nearest free farm.
+		lap(2);
 		if (neworder && neworder == self->orderConfig.getCurrentOrder() && !neworder->isWorking() && !neworder->isDone()
 			&& (assignmentMode == Tags::ORDERASSIGNMODE_DO_FIRST || assignmentMode == Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE))
 			neworder->start();
+		lap(3);
 	}
 	// The post-order sequence (Train's "I didn't get to Train", Farm's and Shop's "I didn't get
 	// the ... job", Siege Tower's docking) runs once the order has had its start, or was refused
@@ -139,4 +155,5 @@ void Command::execute(ServerGameObject *self, ServerGameObject *target, int assi
 	// order queued behind others (DO_LAST), which hasn't started yet
 	if (!this->postOrderSequence.actionList.empty() && (!this->order || !neworder || neworder->state != OTS_UNINITIALISED))
 		this->postOrderSequence.run(&ctx);
+	lap(4);
 }

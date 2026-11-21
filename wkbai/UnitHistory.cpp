@@ -818,7 +818,8 @@ void UnitHistory::terminated(Server& server, ServerGameObject* obj)
 					killer->buildingsDestroyed++;
 				// a tracked unit made outside spawnObject (a script's, the editor's): from now
 				if (!killerRec && trackable(killer->blueprint))
-					killerRec = track(server, killer, now, true, false);
+					// (born now, the best guess: not "unknown", which a load turns into the game's start)
+					killerRec = track(server, killer, now, false, false);
 				if (trace)
 					printf("UNITHISTORY t=%.2f %s %u %s by %u %s: kills %d, buildings %d\n", now,
 						cls == Tags::GAMEOBJCLASS_CHARACTER ? "killed" : "destroyed", victimId, name.c_str(), killerId, killer->blueprint->name.c_str(),
@@ -927,7 +928,9 @@ void UnitHistory::trackAll(Server& server, bool ageUnknown)
 	}
 	std::sort(chars.begin(), chars.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
 	for (ServerGameObject* obj : chars)
-		track(server, obj, ageUnknown ? (float)server.timeManager.currentTime : 0.0f, ageUnknown, false);
+		// (born at the game's start: a save without the history knows no birth, and its units are
+		// at most the game's age; the panel shows that full age, no "since loading")
+		track(server, obj, 0.0f, ageUnknown, false);
 }
 
 void UnitHistory::levelStarted(Server& server)
@@ -1098,6 +1101,10 @@ void UnitHistory::loadText(Server& server, const std::string& all)
 			r.hero = flags & 1;
 			r.heroPending = flags & 2;
 			r.ageUnknown = flags & 4;
+			// (an age unknown was counted from the load once: from the game's start now, the
+			// whole game long, as the panel shows a full age)
+			if (r.ageUnknown)
+				r.birth = 0.0f;
 			r.conscript = flags & 8;
 			r.participated = flags & 16;
 			r.female = flags & 32;

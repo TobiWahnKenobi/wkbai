@@ -408,6 +408,41 @@ int main(int argc, char** argv)
 				printf("IMAGE %s: %ix%i, mean %.0f %.0f %.0f\n", path.get<std::string>().c_str(), bm.width, bm.height, sum[0] / n, sum[1] / n, sum[2] / n);
 			}
 		}
+		else if (g_settings.contains("extractData")) {
+			// "extractData": { "folder": "Warrior Kings Game Set", "to": "<directory>" } writes that
+			// folder of the game's files (data.bcp, its archives and mods, as the game reads them)
+			// to the directory, with its subfolders, then quits: to read the game set's scripts
+			LoadBCP("data.bcp");
+			const nlohmann::json& cfg = g_settings.at("extractData");
+			const std::string folder = cfg.value("folder", std::string("Warrior Kings Game Set"));
+			const std::filesystem::path to = PathFromUtf8(cfg.value("to", std::string("extracted")));
+			int count = 0;
+			auto extract = [&](const std::string& dir, auto& self) -> void {
+				std::unique_ptr<std::vector<std::string>> files(ListFiles(dir.c_str()));
+				for (const std::string& name : *files) {
+					const std::string path = dir + "\\" + name;
+					char* data = nullptr;
+					int size = 0;
+					LoadFile(path.c_str(), &data, &size);
+					std::filesystem::path out = to;
+					std::string rel = path;
+					for (char& c : rel) if (c == '\\') c = '/';
+					out /= PathFromUtf8(rel);
+					std::filesystem::create_directories(out.parent_path());
+					if (FILE* f = _wfopen(out.c_str(), L"wb")) {
+						fwrite(data, 1, size, f);
+						fclose(f);
+						count++;
+					}
+					free(data);
+				}
+				std::unique_ptr<std::vector<std::string>> dirs(ListDirectories(dir.c_str()));
+				for (const std::string& sub : *dirs)
+					self(dir + "\\" + sub, self);
+			};
+			extract(folder, extract);
+			printf("EXTRACTED %d files of %s to %s\n", count, folder.c_str(), PathToUtf8(to).c_str());
+		}
 		else if (g_settings.value<bool>("test", false))
 			LaunchTest();
 		else

@@ -13,3 +13,24 @@ template<size_t N> void gets_s(char (&array)[N]) { gets_s(array, N); }
 void __debugbreak();
 char* itoa(int num, char* buffer, int base);
 #endif
+
+#ifdef _WIN32
+#include <cstdio>
+// A program started with no console window: its standard output read from `out`, its input and
+// errors NUL. (_popen runs cmd.exe, which a windowed program opens a console window for, one each
+// time: test 97 flashed 108 of them on the screen.) PcloseHidden waits for it: its exit code, -1
+// if it never started.
+struct HiddenChild { std::FILE* out = nullptr; void* process = nullptr; };
+HiddenChild PopenHidden(const char* exePath);
+int PcloseHidden(HiddenChild& child);
+#endif
+
+// the calling thread's own CPU cycles (Windows; nanoseconds of its CPU time elsewhere): a cost
+// measured without the time other programs take the core away
+unsigned long long ThreadCycles();
+
+// a sampling profiler of the calling thread (Windows; nothing elsewhere), for the tests: the top
+// functions by samples, inclusive and exclusive
+#include <string>
+void SamplerStart();
+std::string SamplerStop(int top);

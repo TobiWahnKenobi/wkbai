@@ -64,6 +64,19 @@ struct StampdownPlan {
 
 	static StampdownPlan getStampdownPlan(
 		CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint, Vector3 position, Vector3 orientation);
+	// The placing interface's help for a gatehouse pointed at a wall piece (wkbai's own): the
+	// cursor's ground point lies behind a standing wall, so the gatehouse went beside the wall.
+	// When `piece` is a wall piece: `quarter` (the player's turn, 0-3) is turned along it if it lay
+	// across, and `position` is set to the placement whose four tiles take the piece's tile, the
+	// one the plan accepts nearest `cursorGround` (else the nearest). False: not a wall piece,
+	// both left as they were.
+	static bool gatehouseOntoWall(CommonGameState* gameState, CommonGameObject* playerObj, const GameObjBlueprint* blueprint,
+		const CommonGameObject* piece, const Vector3& cursorGround, int& quarter, Vector3& position);
+	// The wall piece the cursor points at: from the ray's ground point back towards the eye, the
+	// first tile holding a wall piece while the ray is less than 10 m above the ground (a
+	// standing wall's height); null if none. Not the hovered object: the preview hides the
+	// pieces a gatehouse replaces, and a hidden piece is never hovered.
+	static const CommonGameObject* wallOnRay(CommonGameState* gameState, const Vector3& eye, const Vector3& cursorGround);
 	// the slope limit and the neighbour rule alone for the footprint, unturned, at playable tile
 	// (ox, oz), as WKB.exe's yes/no check (0x59b020) the searches for a site use
 	static bool groundAllows(CommonGameState* gameState, const Footprint* fp, int ox, int oz);

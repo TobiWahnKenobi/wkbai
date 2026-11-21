@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "help/Help.h"
 #include "window.h"
 #include "interface/KeyBindings.h"
 #include "AgentInput.h"
@@ -299,6 +300,8 @@ void HandleWindow()
 	g_modCtrl = kmod & SDL_KMOD_CTRL;
 	g_modShift = kmod & SDL_KMOD_SHIFT;
 	g_modAlt = kmod & SDL_KMOD_ALT;
+	// the help's keys and right-click menu (it may take a click away from the game)
+	Help::AfterInput();
 }
 
 void SetRenderer(IRenderer *gfx)

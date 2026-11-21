@@ -39,7 +39,7 @@ struct Server;
 namespace MapFolder {
 	constexpr int FORMAT_VERSION = 1;
 	// the compiler's own version: a new one makes every cache stale
-	constexpr int COMPILER_VERSION = 1;
+	constexpr int COMPILER_VERSION = 2; // 2: the ground by rule (MapMaterials.h)
 	constexpr int HAND_ZERO = 32768;
 
 	// whether a path names a map folder (ends in ".wkbai", with or without a slash)
@@ -98,8 +98,8 @@ namespace MapFolder {
 	// default (a setting the lobby changed stays the lobby's); how many were applied
 	int ApplyEnvironmentDefaults(const std::string& mapPath, EnvironmentSettings& settings);
 
-	// headless: "wkbai --author <folder>" and "wkbai --author import <level> [<folder>]"; returns
-	// the process's exit code
+	// headless: "wkbai --author <folder>", "wkbai --author import <level> [<folder>]", and "catalog" and
+	// "describe" (MapAuthoring.h); returns the process's exit code
 	int RunCommandLine(const std::vector<std::string>& args);
 
 	// 16-bit grey PNG (one channel), for the hand layers and tests

@@ -4,7 +4,9 @@
 
 #pragma once
 #include <atomic>
+#include <deque>
 #include <filesystem>
+#include <mutex>
 #include <memory>
 
 #include <cstdint>
@@ -136,6 +138,13 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();
+	// lookForSightRangeEvents in three parts, for "parallelSight": the range (scripts: the
+	// server's thread; <= 0 none), the scan and sort (no scripts, nothing changed: any thread)
+	// and the events (the server's thread)
+	struct SightScan { std::vector<uint32_t> found; uint64_t hashA = 0, hashB = 0; bool same = false; uint64_t candidates = 0; };
+	float sightRange();
+	void sightScan(float dist, SightScan& out) const;
+	void sightEvents(SightScan& scan);
 	// attack at will ("Become Aggressive"): idle with an enemy character in sight, "On Idle" again
 	void wakeAggressiveIdle();
 	void addZoneTile(int tx, int tz);
@@ -236,8 +245,18 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory;
 	};
+	// The players' memory of the trees under the fog of war (FogOfWar's tree memory, the
+	// treeMemory section): kept by each player's client on this machine, by player id, its text
+	// as FogOfWar::treeMemoryText writes it; as saved until the client sends its own. Only for
+	// what the server's own simulation never reads (a guest's memory stays on the guest).
+	std::mutex treeMemoryMutex;
+	std::map<uint32_t, std::string> treeMemory;
+	void setTreeMemory(uint32_t player, std::string text);
+	std::string getTreeMemory(uint32_t player);
+	std::string treeMemorySaveText();
+	void treeMemoryLoadText(const std::string& text);
 	static SaveParts ReadSaveParts(const char* filename);
 	// the walks going on, as a save keeps them (the movement section), and back
 	std::string movementSaveText() const;
@@ -418,6 +437,29 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
 	// agent control's harness: the simulation steps only when told ("harness.advance")
+	// The players' commands (NETSRVMSG_COMMAND, one per unit) run as they come, up to
+	// commandsPerStep in a step ("commandsPerStep" in wkconfig.json, default 500; 0 no limit);
+	// the rest wait here and run at the start of the next steps, in the order they came: a
+	// 10,000-unit order spreads over 20 steps instead of stalling one. Also no new one once the
+	// step's commands have done commandWorkPerStep of the scripts' work (g_scriptWork: finder
+	// candidates and actions, counted; "commandWorkPerStep", default 50,000, about 75 attack orders; 0 no limit): an attack order runs
+	// the army scripts, hundreds of times a move's work. The same on every computer and in a
+	// replay (by the messages' order and counts, not by time).
+	struct PendingCommand { int command; uint32_t object, target; int mode; Vector3 destination, faceTo; };
+	std::deque<PendingCommand> pendingCommands;
+	uint32_t commandsThisStep = 0, commandsPerStep = 500;
+	uint64_t commandWorkThisStep = 0, commandWorkPerStep = 50000, commandWorkTotal = 0, commandsRun = 0;
+	bool commandMayStart() const {
+		return (!commandsPerStep || commandsThisStep < commandsPerStep) && (!commandWorkPerStep || commandWorkThisStep < commandWorkPerStep);
+	}
+	void runCommand(int command, uint32_t object, uint32_t target, int mode, const Vector3& destination, const Vector3& faceTo);
+	void issueCommand(int command, uint32_t object, int mode, uint32_t target, const Vector3& destination, const Vector3& faceTo = Vector3(-1, 0, 0));
+	void runPendingCommands();
+	// "parallelSight": the step's sight scans after the object loop, on the worker threads
+	// (Server::simulate); off, each in the loop as before
+	bool parallelSight = false;
+	uint64_t serial = 0; // which server this is, counted from 1 (Server::Server)
+	std::vector<SrvGORef> sightQueue;
 	bool lockstep = false;
 	uint32_t lockstepSteps = 0;  // steps still to run
 	uint64_t lockstepDone = 0;   // steps run in lockstep so far
@@ -673,3 +715,15 @@ private:
 	friend struct UnitHistory;
 	friend struct ServerChronicle;
 };
+// The simulation's time per part so far (ms, summed over the steps since the program started;
+// the "profileSim" report every 10 s starts them again unless g_simProfileQuiet), for the
+// simulation profiling test (Test_SimProfile). "tree" includes "ai".
+struct SimProfileTotals {
+	double total = 0, sequences = 0, tree = 0, ai = 0, orders = 0, movement = 0, sight = 0;
+	uint64_t steps = 0, objects = 0, movers = 0;
+	// with profileSim only: orders' time per order, the walking objects' movement parts
+	std::map<std::string, double> byOrder;
+	double mvPosition = 0, mvUpdate = 0, mvSpeed = 0, mvController = 0;
+};
+SimProfileTotals GetSimProfileTotals();
+extern bool g_simProfileQuiet;

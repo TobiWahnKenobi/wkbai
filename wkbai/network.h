@@ -195,6 +195,9 @@ enum NetClientMessages {
 	// dissociated, 3 the category cleared), the object's id, the category (32 bits each), the
 	// associated object's id (32 bits; 0 for 3). All of them to a client joining.
 	NETCLIMSG_OBJECT_ASSOCIATION,
+	// wkbai's wind (Wind.h), once a game second while the lobby's wind is on: the settings
+	// (WindSettings::write) and the state (WindState::write)
+	NETCLIMSG_WIND,
 };
 
 enum NetServerMessages {

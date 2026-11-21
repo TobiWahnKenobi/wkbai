@@ -44,7 +44,39 @@ local PANEL_FILL = 0x46100A30
 local PANEL_BORDER = 0xFF1A14B4
 local DIM = 0x99000000
 
-local function T(key) return getText(key) end
+-- The in-game help (wkbai/help/Help.h): each control tells it its help ids, "a|b|c", the first
+-- with a page wins. T() remembers the language key of each text it gave, so a button's help id
+-- doesn't depend on the language (FRONT_END_MAIN_MENU_SKIRMISH); a readable one follows
+-- ("ui/frontend/main/skirmish"). While a row of one setting is drawn, FE_Help.context names the
+-- setting ("option/cameraSnapping") for every control in it.
+-- (a global table: the file's main chunk is at Lua's limit of 200 locals)
+FE_Help = { textKey = {}, screen = "", context = nil }
+local function T(key)
+	local t = getText(key)
+	FE_Help.textKey[t] = key
+	return t
+end
+function FE_Help.slug(text)
+	return (string.gsub(string.gsub(string.gsub(string.lower(text), " ", "-"), "[^%w%-]", ""), "%-%-+", "-"))
+end
+-- text: a control's label (its language key and its slug); part: a name of its own (a setting key)
+function FE_Help.idsFor(text, part)
+	local H = FE_Help
+	if H.context then return H.context end
+	local ids = {}
+	if text and H.textKey[text] then ids[#ids + 1] = H.textKey[text] end
+	local name = part or (text and H.slug(text)) or ""
+	if name ~= "" then
+		ids[#ids + 1] = "ui/frontend/" .. H.screen .. "/" .. name
+		ids[#ids + 1] = "ui/frontend/" .. H.screen .. "/**/" .. name
+		-- the multiplayer lobbies are the skirmish lobby's screens with more in them
+		if H.screen == "mphost" or H.screen == "mpguest" then
+			ids[#ids + 1] = "ui/frontend/skirmish/" .. name
+			ids[#ids + 1] = "ui/frontend/skirmish/**/" .. name
+		end
+	end
+	return table.concat(ids, "|")
+end
 
 ---------------------------------------------------------------------------- Layout and input
 
@@ -93,9 +125,10 @@ local function threeSlice(prefix, suffix, rim, x, y, w, h, colour)
 end
 
 -- A menu button; returns true when clicked
-local function button(text, x, y, w, h, enabled, selected)
+-- help: its help ids, where its text doesn't name it (a value it steps through, a key)
+local function button(text, x, y, w, h, enabled, selected, help)
 	if enabled == nil then enabled = true end
-	uiElement("button:" .. text, text, x, y, w, h, enabled) -- agent control's registry
+	uiElement("button:" .. text, text, x, y, w, h, enabled, help or FE_Help.idsFor(text)) -- agent control's registry, the help
 	local hot = enabled and hovered(x, y, w, h)
 	local suffix = ""
 	if selected or (hot and mouse.down) then suffix = "_Dep" elseif hot then suffix = "_High" end
@@ -106,8 +139,9 @@ local function button(text, x, y, w, h, enabled, selected)
 end
 
 -- A slider over a 0..1 position; returns the new position
-local function slider(id, pos, x, y, w, enabled, height)
+local function slider(id, pos, x, y, w, enabled, height, help)
 	local h = height or w / 3
+	uiElement("slider:" .. id, "", x, y, w, h, enabled, help or FE_Help.idsFor(nil, id))
 	drawImage(enabled and ART.slider or ART.sliderGrey, x, y, w, h)
 	-- the track runs between the rounded ends of the bar
 	local x0, x1 = x + w * 0.06, x + w * 0.94
@@ -130,13 +164,13 @@ local function slider(id, pos, x, y, w, enabled, height)
 end
 
 -- Tabs in a row; returns the index of the selected tab
-local function tabs(labels, selected, x, y, h, enabledList)
+local function tabs(labels, selected, x, y, h, enabledList, helps)
 	local cx = x
 	for i, label in ipairs(labels) do
 		local w = textWidth(FONT_BUTTON, label, S) + L(56)
 		local enabled = not enabledList or enabledList[i] ~= false
 		local hot = enabled and hovered(cx, y, w, h)
-		uiElement("tab:" .. label, label, cx, y, w, h, enabled)
+		uiElement("tab:" .. label, label, cx, y, w, h, enabled, (helps and helps[i]) or FE_Help.idsFor(label))
 		local suffix = (i == selected) and "_Dep" or (hot and "_High" or "")
 		threeSlice(ART.tab, suffix, TAB_RIM, cx, y, w, h)
 		centredText(FONT_BUTTON, label, cx, y, w, h, (i == selected) and WHITE or (enabled and GREY or DARK_GREY))
@@ -188,7 +222,7 @@ end
 
 -- A scrolling list of text rows (a string, or { text, colour }); state = { selected = index,
 -- scroll = first row }. Returns whether a row was double-clicked, and the row under the mouse.
-local function listBox(state, items, x, y, w, h)
+local function listBox(state, items, x, y, w, h, help)
 	local rowH = L(16)
 	local rows = math.floor((h - L(8)) / rowH)
 	if hovered(x, y, w, h) and mouse.wheel ~= 0 then
@@ -209,7 +243,7 @@ local function listBox(state, items, x, y, w, h)
 		end
 		local text, colour = item, YELLOW
 		if type(item) == "table" then text, colour = item[1], item[2] or YELLOW end
-		uiElement("item:" .. tostring(text), tostring(text), x, ry, w, rowH, true) -- (agent control: a row by its text)
+		uiElement("item:" .. tostring(text), tostring(text), x, ry, w, rowH, true, help) -- (agent control: a row by its text; the list's help)
 		drawText(FONT_LIST, x + L(8), ry, text, colour, S)
 		-- more columns: { text, x from the row's left, colour }
 		if type(item) == "table" and item.columns then
@@ -382,19 +416,8 @@ local function drawDialog()
 	local x, y = (W - w) / 2, (H - h) / 2
 	drawRect(0, 0, W, H, 0x66000000)
 	goldFrame(x, y, w, h)
-	-- the text, wrapped at spaces
-	local words, lines, line = {}, {}, ""
-	for word in string.gmatch(dialog.text, "%S+") do words[#words + 1] = word end
-	for _, word in ipairs(words) do
-		local try = (line == "") and word or (line .. " " .. word)
-		if textWidth(FONT_TEXT, try, S) > w - L(120) and line ~= "" then
-			lines[#lines + 1] = line
-			line = word
-		else
-			line = try
-		end
-	end
-	if line ~= "" then lines[#lines + 1] = line end
+	-- the text, wrapped at spaces, its own line breaks kept
+	local lines = wrapText(FONT_TEXT, dialog.text, w - L(120))
 	-- centred up and down in the space between the frame and the button row
 	local lh = fontHeight(FONT_TEXT, S)
 	local top, bottom = y + L(20), y + h - L(80)
@@ -440,8 +463,9 @@ MainMenuItems = {
 	{ key = "FRONT_END_MAIN_MENU_TUTORIAL", action = function() push("tutorial") end },
 	{ key = "FRONT_END_MAIN_MENU_OPTIONS", action = function() push("options") end },
 	{ text = "Mods", action = function() push("mods") end },
-	{ text = "Map Editor", action = function() push("editlevels") end },
-	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
+	-- wkbai's own: the Map Editor and the AI General Editor behind one button, and the help
+	{ text = "Editors", action = function() push("editors") end },
+	{ text = "Help", action = function() openHelp("ui/frontend/main") end },
 	{ key = "FRONT_END_MAIN_MENU_CREDITS", action = function() push("credits") end },
 	-- (the original asks first)
 	{ key = "FRONT_END_MAIN_MENU_EXIT", action = function() confirm(T("FRONT_END_EXIT_ARE_YOU_SURE"), function() request("quit") end) end },
@@ -455,6 +479,24 @@ Screens.main = {
 		drawImage(ART.logo, X(960 - 500 * k), Y(40), L(1000 * k), L(264 * k))
 		buttonColumn(MainMenuItems, Y(377), Y(1010))
 		drawText(FONT_LIST, W - L(100), H - L(26), "wkbai", WHITE, S)
+	end,
+}
+
+-- Editors ------------------------------------------------------------------------------
+-- wkbai's own: the main menu's Editors button, as the Tutorial screen (a global: the file's main
+-- chunk is at Lua's limit of 200 locals)
+
+EditorsItems = {
+	{ text = "Map Editor", action = function() push("editlevels") end },
+	{ key = "FRONT_END_OPTIONS_GENERAL_CREATION", action = function() push("generaleditor") end },
+}
+
+Screens.editors = {
+	background = sunsetBackground,
+	draw = function()
+		title("Editors")
+		buttonColumn(EditorsItems, Y(292), Y(412))
+		if button(T("FRONT_END_BUTTON_BACK"), X(960 - 101.5), Y(832), L(203), L(38)) then pop() end
 	end,
 }
 
@@ -516,7 +558,7 @@ Screens.mods = {
 			local m = list[i]
 			if not m then break end
 			local ry = top + (r - 1) * rowH
-			if button(m.enabled and T("FRONT_END_BUTTON_ON") or T("FRONT_END_BUTTON_OFF"), px + L(20), ry + L(4), L(140), L(34)) then
+			if button(m.enabled and T("FRONT_END_BUTTON_ON") or T("FRONT_END_BUTTON_OFF"), px + L(20), ry + L(4), L(140), L(34), nil, nil, FE_Help.idsFor(nil, "on-off")) then
 				m.enabled = not m.enabled
 				modsState.dirty = true
 			end
@@ -700,9 +742,9 @@ Screens.load = {
 		if replays then
 			for _, c in ipairs(REPLAY_COLUMNS) do drawText(FONT_LIST, X(100) + L(c[2]), Y(108), c[1], GREY, S) end
 			drawRect(X(96), Y(126), L(1728), L(1), PANEL_BORDER)
-			activated = listBox(loadState, names, X(92), Y(128), L(1736), L(878))
+			activated = listBox(loadState, names, X(92), Y(128), L(1736), L(878), FE_Help.idsFor(nil, "list"))
 		else
-			activated = listBox(loadState, names, X(92), Y(104), L(1736), L(902))
+			activated = listBox(loadState, names, X(92), Y(104), L(1736), L(902), FE_Help.idsFor(nil, "list"))
 		end
 		local chosen = saves[loadState.selected]
 		if button(T("FRONT_END_BUTTON_LOAD"), X(735), Y(1022), L(141), L(24), chosen ~= nil) or (activated and chosen) then
@@ -776,7 +818,7 @@ Screens.save = {
 		local before = saveState.selected
 		local lx, ly, lw, lh = x + L(50), y + L(75), w - L(100), L(380)
 		panel(lx, ly, lw, lh)
-		local activated = listBox(saveState, names, lx + L(2), ly + L(2), lw - L(4), lh - L(4))
+		local activated = listBox(saveState, names, lx + L(2), ly + L(2), lw - L(4), lh - L(4), FE_Help.idsFor(nil, "list"))
 		if saveState.selected ~= before and names[saveState.selected] then saveState.text = names[saveState.selected] end
 		drawText(FONT_TEXT, lx, ly + lh + L(16), T("FRONT_END_SAVE_GAME_FILENAME"), WHITE, S)
 		local entered = textField(saveState, lx, ly + lh + L(44), lw, L(32), FILE_NAME_REFUSED)
@@ -846,12 +888,24 @@ local function levelList(filter)
 	for _, m in ipairs(savesOfType(".wkbai")) do all[#all + 1] = m end
 	local have = {}
 	for _, l in ipairs(all) do have[string.lower(l)] = true end
+	-- a map folder replaces the level of the same name ("New map of another size" makes a level,
+	-- Save map then a folder of that name): the level is not listed twice
+	local folders = {}
+	for _, l in ipairs(all) do
+		if string.lower(string.sub(l, -6)) == ".wkbai" then
+			folders[string.lower(stripExtension(string.match(l, "([^\\/]+)$") or l))] = true
+		end
+	end
 	local function wanted(players) return not filter or filter == 0 or tonumber(players) == filter end
 	for _, l in ipairs(all) do
 		local base = stripExtension(l)
-		local players, name = string.match(base, "^(%d+) Player (.+)$")
+		if string.lower(string.sub(l, -4)) == ".lvl" and folders[string.lower(string.match(base, "([^\\/]+)$") or base)] then
+			goto continue
+		end
+		-- (a map folder may come with its folder, "Maps\\2 Player X.wkbai")
+		local players, name = string.match(string.match(base, "([^\\/]+)$") or base, "^(%d+) Player (.+)$")
 		local province = string.match(base, "^[Cc][Hh]2_(.-)_[Mm]ulti$") or string.match(base, "^[Cc][Hh]2_(.+)$")
-		if string.lower(string.sub(l, -6)) == ".wkbai" then
+		if string.lower(string.sub(l, -6)) == ".wkbai" and not players then
 			if not filter or filter == 0 then others[#others + 1] = l end
 		elseif players then
 			if wanted(players) then
@@ -871,6 +925,7 @@ local function levelList(filter)
 		elseif not isStoryLevel(l) and (not filter or filter == 0) then
 			others[#others + 1] = l
 		end
+		::continue::
 	end
 	table.sort(provinces, function(a, b) return a.name < b.name end)
 	for _, p in ipairs(provinces) do
@@ -889,7 +944,7 @@ local function levelPicker(x, y, w, h, filter)
 	local levels, names = levelList(filter)
 	panel(x, y, w, h)
 	local before = levelState.selected
-	local activated = listBox(levelState, names, x + L(2), y + L(4), w - L(4), h - L(8))
+	local activated = listBox(levelState, names, x + L(2), y + L(4), w - L(4), h - L(8), FE_Help.idsFor(nil, "list") .. "|" .. FE_Help.idsFor(nil, "maps"))
 	local chosen = levels[levelState.selected]
 	if chosen and levelState.selected ~= before then request("select_level", chosen) end
 	return chosen, activated
@@ -1063,7 +1118,7 @@ local function playersTab()
 		rows[i] = { i .. "  " .. text, colour }
 	end
 	-- tall enough for all 8 positions without scrolling (8 rows of 16, the list's 8 of margin)
-	listBox(skirmish.slotList, rows, X(22), Y(110), L(404), L(140))
+	listBox(skirmish.slotList, rows, X(22), Y(110), L(404), L(140), FE_Help.idsFor(nil, "positions"))
 	-- colour and team of each position: a click changes them
 	for r = 1, 8 do
 		local i = skirmish.slotList.scroll + r
@@ -1118,7 +1173,7 @@ local function playersTab()
 	end
 	panel(X(437), Y(108), L(1465), L(117))
 	local before = skirmish.generalList.selected
-	local _, hoveredRow = listBox(skirmish.generalList, list, X(439), Y(110), L(1461), L(113))
+	local _, hoveredRow = listBox(skirmish.generalList, list, X(439), Y(110), L(1461), L(113), FE_Help.idsFor(nil, "generals"))
 	if skirmish.generalList.selected ~= before and sel then
 		local g = entries[skirmish.generalList.selected]
 		slots[skirmish.slotList.selected] = { type = "ai", general = g and g.blueprint or nil, colour = sel.colour, team = sel.team, aiScript = sel.aiScript, ministries = sel.ministries }
@@ -1130,7 +1185,7 @@ local function playersTab()
 		for i, k in ipairs(kinds) do
 			if k[1] == (sel.aiScript or "") and k[2] == (sel.ministries == true) then current = i end
 		end
-		if button("AI: " .. kinds[current][3], X(439), Y(232), L(600), L(24), true) then
+		if button("AI: " .. kinds[current][3], X(439), Y(232), L(600), L(24), true, nil, FE_Help.idsFor(nil, "luaai")) then
 			local nextKind = kinds[current % #kinds + 1]
 			sel.aiScript = nextKind[1] ~= "" and nextKind[1] or nil
 			sel.ministries = nextKind[2] or nil
@@ -1189,7 +1244,7 @@ local function playersTab()
 				if hot and mouse.pressed then removing = guests[skirmish.guestList.scroll + r] end
 			end
 		end
-		local _, row = listBox(skirmish.guestList, rows, listX, listY, listW, L(174))
+		local _, row = listBox(skirmish.guestList, rows, listX, listY, listW, L(174), FE_Help.idsFor(nil, "guests"))
 		if removing then
 			request("kick_guest", tostring(removing.id))
 			skirmish.guestList.selected = 0
@@ -1265,6 +1320,10 @@ local SETTINGS = {
 	-- river currents (ServerEnvironment.h, with the seasons): the water's flow carries and hurts
 	-- the units in it, they swim to the shore; a game setting, the same for every player
 	riverCurrents = 1,
+	-- the wind (Wind.h): on, blowing by the weather from a random (mostly westerly) way, veering;
+	-- windFrom 0 random, 1-8 N .. NW; windStrength 0 by the weather, 1-5 calm .. gale; its
+	-- effects on the game (wildfires, wind chill)
+	wind = 1, windFrom = 0, windStrength = 0, windVeers = 1, windEffects = 1,
 	cheatMode = 0, -- the F9 panel (time of day, season, weather); skirmish against the AI only
 }
 skirmish.settings = {}
@@ -1276,10 +1335,13 @@ local function settingsRequests()
 	end
 end
 
--- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked
-local function roundButton(x, y, size, on, enabled)
+-- A round button of the original (Check_Box_*): on, off or greyed out; returns true when clicked.
+-- help: its help ids (else the options row's); label: the text beside it, which gets the same help
+local function roundButton(x, y, size, on, enabled, help, label)
 	local hot = enabled and hovered(x, y, size, size)
-	uiElement(on and "switch:on" or "switch:off", "", x, y, size, size, enabled)
+	help = help or FE_Help.context
+	if help and label then helpZone(help, x, y, size + L(12) + textWidth(FONT_LIST, label, S), size) end
+	uiElement(on and "switch:on" or "switch:off", label or "", x, y, size, size, enabled, help)
 	local art = "Interface\\FrontEnd\\Check_Box_" .. (not enabled and "Grey" or (on and "On" or (hot and "Blank_High" or "Blank"))) .. ".tga"
 	drawImage(art, x, y, size, size)
 	return hot and mouse.released
@@ -1288,9 +1350,10 @@ end
 -- A - or + button that steps on the press and again while held: after 0.4 s, then faster and
 -- faster (from 6 to 30 steps a second over 2 s). Returns how many steps to take this frame.
 local stepperHold = {} -- the button held: its key, when the press began, when it steps next
-local function stepperButton(kind, key, x, y, size)
+local function stepperButton(kind, key, x, y, size, help)
 	local hot = hovered(x, y, size, size)
-	uiElement("stepper:" .. key, kind, x, y, size, size, true)
+	-- (the setting's help: "startFood" for "startFood-")
+	uiElement("stepper:" .. key, kind, x, y, size, size, true, help or FE_Help.idsFor(nil, (string.gsub(key, "[%+%-]$", ""))))
 	local suffix = (hot and mouse.down) and "_Dep" or (hot and "_High" or "")
 	drawImage("Interface\\FrontEnd\\" .. kind .. "_Button" .. suffix .. ".tga", x, y, size, size)
 	local t = getTime()
@@ -1374,7 +1437,7 @@ local function settingsTab()
 		stepperRow(T("FRONT_END_SETTINGS_POPULATION_LIMIT"), "Interface\\InGame\\Info Panel\\Man.tga", "populationLimit", 10, 10, 10000, Y(742))
 		local lw = textWidth(FONT_LIST, T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), S)
 		drawText(FONT_LIST, X(170) - lw, Y(838), T("FRONT_END_SETTINGS_RESOURCE_LEVEL"), WHITE, S)
-		if button(T(RESOURCE_LEVELS[s.randomiseResources + 1]), X(200), Y(826), L(744), L(38)) then
+		if button(T(RESOURCE_LEVELS[s.randomiseResources + 1]), X(200), Y(826), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "randomiseResources")) then
 			s.randomiseResources = (s.randomiseResources + 1) % 4
 		end
 	else
@@ -1386,16 +1449,16 @@ local function settingsTab()
 	end
 
 	-- the mode, and the switches
-	if roundButton(X(958), Y(514), L(52), s.mode == 0, true) then s.mode = 0 end
+	if roundButton(X(958), Y(514), L(52), s.mode == 0, true, FE_Help.idsFor(nil, "mode"), T("FRONT_END_SETTINGS_GAME_TYPE_STANDARD_MODE")) then s.mode = 0 end
 	drawText(FONT_LIST, X(1022), Y(532), T("FRONT_END_SETTINGS_GAME_TYPE_STANDARD_MODE"), s.mode == 0 and YELLOW or WHITE, S)
-	if roundButton(X(958), Y(590), L(52), s.mode == 1, true) then s.mode = 1 end
+	if roundButton(X(958), Y(590), L(52), s.mode == 1, true, FE_Help.idsFor(nil, "mode"), T("FRONT_END_SETTINGS_GAME_TYPE_VALHALLA_MODE")) then s.mode = 1 end
 	drawText(FONT_LIST, X(1022), Y(608), T("FRONT_END_SETTINGS_GAME_TYPE_VALHALLA_MODE"), s.mode == 1 and YELLOW or WHITE, S)
 	-- Team Placement (WKB.exe's Settings - CheckBox - Team Placement): a team's members start side by side
-	if roundButton(X(958), Y(666), L(52), (s.teamPlacement or 0) ~= 0, true) then s.teamPlacement = ((s.teamPlacement or 0) ~= 0) and 0 or 1 end
+	if roundButton(X(958), Y(666), L(52), (s.teamPlacement or 0) ~= 0, true, FE_Help.idsFor(nil, "teamPlacement"), T("FRONT_END_SETTINGS_TEAM_PLACEMENT")) then s.teamPlacement = ((s.teamPlacement or 0) ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1022), Y(684), T("FRONT_END_SETTINGS_TEAM_PLACEMENT"), WHITE, S)
 	-- multiplayer: Lock Server (WKB.exe's Chat - CheckBox - Lock Server): no more guests join
 	if skirmish.multiplayer then
-		if roundButton(X(958), Y(742), L(52), skirmish.lockServer == true, true) then
+		if roundButton(X(958), Y(742), L(52), skirmish.lockServer == true, true, FE_Help.idsFor(nil, "lockServer"), T("FRONT_END_CHAT_LOCK_SERVER")) then
 			skirmish.lockServer = not skirmish.lockServer
 			request("skirmish_setting", "lockServer=" .. (skirmish.lockServer and 1 or 0))
 		end
@@ -1412,21 +1475,21 @@ local function settingsTab()
 	end
 	for _, sw in ipairs(switches) do
 		local name, key, y = sw[1], sw[2], sw[3]
-		if roundButton(X(1393), y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		if roundButton(X(1393), y, L(52), s[name] ~= 0, true, FE_Help.idsFor(nil, name), T(key)) then s[name] = (s[name] ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, X(1457), y + L(18), T(key), WHITE, S)
 	end
 	-- wkbre2's own: the AI with fewer peasants that attacks whenever it can afford an army
-	if roundButton(X(1393), Y(894), L(52), s.aggressiveAI ~= 0, true) then s.aggressiveAI = (s.aggressiveAI ~= 0) and 0 or 1 end
+	if roundButton(X(1393), Y(894), L(52), s.aggressiveAI ~= 0, true, FE_Help.idsFor(nil, "aggressiveAI"), "Aggressive AI") then s.aggressiveAI = (s.aggressiveAI ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(912), "Aggressive AI", WHITE, S)
 	-- wkbre2's own: the game recorded, to watch again (Load Game, Replays) without fog of war
-	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true) then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
+	if roundButton(X(1393), Y(970), L(52), s.recordGame ~= 0, true, FE_Help.idsFor(nil, "recordGame"), "Record game") then s.recordGame = (s.recordGame ~= 0) and 0 or 1 end
 	drawText(FONT_LIST, X(1457), Y(988), "Record game", WHITE, S)
 	-- wkbre2's own, multiplayer: an AI General plays on for a guest who leaves; guests with no
 	-- position (and ones who join the running game) may watch, up to a number
 	if skirmish.multiplayer then
-		if roundButton(X(200), Y(894), L(52), s.aiTakeOver ~= 0, true) then s.aiTakeOver = (s.aiTakeOver ~= 0) and 0 or 1 end
+		if roundButton(X(200), Y(894), L(52), s.aiTakeOver ~= 0, true, FE_Help.idsFor(nil, "aiTakeOver"), "AI takes over players who leave") then s.aiTakeOver = (s.aiTakeOver ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, X(264), Y(912), "AI takes over players who leave", WHITE, S)
-		if roundButton(X(200), Y(970), L(52), s.allowSpectators ~= 0, true) then s.allowSpectators = (s.allowSpectators ~= 0) and 0 or 1 end
+		if roundButton(X(200), Y(970), L(52), s.allowSpectators ~= 0, true, FE_Help.idsFor(nil, "allowSpectators"), "Allow spectators") then s.allowSpectators = (s.allowSpectators ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, X(264), Y(988), "Allow spectators", WHITE, S)
 		-- which mods guests may have: the host's game logic always (mods that change only looks
 		-- are free); the host sends its logic mods; no mods at all; only the host's own mods
@@ -1480,7 +1543,7 @@ local function weatherAllowed(s, w) return math.floor(s.weatherTypes / 2 ^ (w - 
 local function weatherTab()
 	local s = skirmish.settings
 	local function switch(name, label, x, y)
-		if roundButton(x, y, L(52), s[name] ~= 0, true) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		if roundButton(x, y, L(52), s[name] ~= 0, true, FE_Help.idsFor(nil, name), label) then s[name] = (s[name] ~= 0) and 0 or 1 end
 		drawText(FONT_LIST, x + L(64), y + L(18), label, s[name] ~= 0 and YELLOW or WHITE, S)
 	end
 	local function note(x, y, lines)
@@ -1499,7 +1562,7 @@ local function weatherTab()
 		-- the moon's phase: its lit part, its light and its shadows at night
 		local lw = textWidth(FONT_LIST, "Moon", S)
 		drawText(FONT_LIST, X(170) - lw, Y(404), "Moon", WHITE, S)
-		if button(MOON_PHASES[s.moonPhase + 1], X(200), Y(394), L(744), L(36)) then
+		if button(MOON_PHASES[s.moonPhase + 1], X(200), Y(394), L(744), L(36), nil, nil, FE_Help.idsFor(nil, "moonPhase")) then
 			s.moonPhase = (s.moonPhase + 1) % #MOON_PHASES
 		end
 	end
@@ -1513,10 +1576,10 @@ local function weatherTab()
 		stepperRow("Season (min)", nil, "seasonLength", 1, shortest, 600, Y(566))
 		local lw = textWidth(FONT_LIST, "First season", S)
 		drawText(FONT_LIST, X(170) - lw, Y(658), "First season", WHITE, S)
-		if button(SEASON_NAMES[s.startSeason + 1], X(200), Y(646), L(744), L(38)) then s.startSeason = (s.startSeason + 1) % 4 end
+		if button(SEASON_NAMES[s.startSeason + 1], X(200), Y(646), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "startSeason")) then s.startSeason = (s.startSeason + 1) % 4 end
 		lw = textWidth(FONT_LIST, "Temperature", S)
 		drawText(FONT_LIST, X(170) - lw, Y(724), "Temperature", WHITE, S)
-		if button(TEMPERATURE_SCALES[s.tempScale + 1], X(200), Y(712), L(744), L(38)) then s.tempScale = (s.tempScale + 1) % 3 end
+		if button(TEMPERATURE_SCALES[s.tempScale + 1], X(200), Y(712), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "tempScale")) then s.tempScale = (s.tempScale + 1) % 3 end
 		if s.dayNight ~= 0 then
 			note(X(60), Y(780), { "A season lasts at least one day (" .. math.floor(s.dayLength) .. " min)." })
 		end
@@ -1567,7 +1630,7 @@ local function weatherTab()
 			local x = X(1000) + ((w - 1) % 2) * L(440)
 			local y = Y(628) + math.floor((w - 1) / 2) * L(46)
 			local on = weatherAllowed(s, w)
-			if roundButton(x, y, L(40), on, true) then
+			if roundButton(x, y, L(40), on, true, FE_Help.idsFor(nil, "weatherTypes"), CLOUD_WEATHERS[w + 1]) then
 				s.weatherTypes = s.weatherTypes + (on and -1 or 1) * 2 ^ (w - 1)
 			end
 			drawText(FONT_LIST, x + L(50), y + L(12), CLOUD_WEATHERS[w + 1], on and YELLOW or WHITE, S)
@@ -1613,6 +1676,65 @@ local function weatherTab()
 		switch("cheatMode", "Cheat mode", X(1440), Y(962))
 		note(X(1440), Y(1016), { "F9: time of day, season, weather." })
 	end
+end
+
+-- The wind (Wind.h): on or off, where it blows from, how strong, whether it veers, its effects
+-- (in the skirmish table: the main chunk is at Lua's limit of 200 locals)
+skirmish.windTab = function()
+	local WIND_FROM = { "Random (mostly westerly)", "North", "North-east", "East", "South-east", "South", "South-west", "West", "North-west" }
+	local WIND_STRENGTHS = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" }
+	local WIND_STRENGTH_NOTES = {
+	"Calm in fog, light in a heatwave, a breeze when clear or cloudy, fresh in rain and",
+	"droughts, strong in heavy rain, gales in thunderstorms and blizzards; it rises and",
+	"falls as it goes, and gusts." }
+	local s = skirmish.settings
+	local function switch(name, label, x, y)
+		if roundButton(x, y, L(52), s[name] ~= 0, true, FE_Help.idsFor(nil, name), label) then s[name] = (s[name] ~= 0) and 0 or 1 end
+		drawText(FONT_LIST, x + L(64), y + L(18), label, s[name] ~= 0 and YELLOW or WHITE, S)
+	end
+	local function note(x, y, lines)
+		for i, line in ipairs(lines) do drawText(FONT_LIST, x, y + (i - 1) * L(22), line, GREY, S) end
+	end
+	panel(X(28), Y(100), L(930), L(940))
+	panel(X(968), Y(100), L(930), L(940))
+	switch("wind", "Wind", X(60), Y(124))
+	note(X(60), Y(186), { "The wind blows over the land, the same for every player: the clouds,",
+		"the rain and the snow, smoke and flames, the sea's waves, the grass,",
+		"the banners and the trees move with it." })
+	if s.wind ~= 0 then
+		local lw = textWidth(FONT_LIST, "From", S)
+		drawText(FONT_LIST, X(170) - lw, Y(278), "From", WHITE, S)
+		if button(WIND_FROM[s.windFrom + 1], X(200), Y(266), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "windFrom")) then s.windFrom = (s.windFrom + 1) % #WIND_FROM end
+		lw = textWidth(FONT_LIST, "Strength", S)
+		drawText(FONT_LIST, X(170) - lw, Y(344), "Strength", WHITE, S)
+		if button(WIND_STRENGTHS[s.windStrength + 1], X(200), Y(332), L(744), L(38), nil, nil, FE_Help.idsFor(nil, "windStrength")) then
+			s.windStrength = (s.windStrength + 1) % #WIND_STRENGTHS
+		end
+		if s.windStrength == 0 then
+			note(X(60), Y(394), WIND_STRENGTH_NOTES)
+		else
+			note(X(60), Y(394), { "About that strength all game, rising and falling a little, with gusts." })
+		end
+		switch("windVeers", "Changes direction", X(60), Y(486))
+		note(X(60), Y(548), { "It veers slowly, up to 35 degrees either way, faster in storms;",
+			"off: it keeps its way all game." })
+		switch("windEffects", "Effects on the game", X(60), Y(618))
+		note(X(60), Y(680), { "Off: the wind is only seen." })
+	end
+	drawText(FONT_BUTTON, X(1000), Y(130), "Effects on the game", (s.wind ~= 0 and s.windEffects ~= 0) and WHITE or GREY, S)
+	note(X(1000), Y(190), {
+		"Wildfires (with the seasons: heatwaves and droughts) break out more",
+		"often in the wind and spread faster and further, mostly downwind; they",
+		"burn hotter and out sooner, set buildings alight more often, and in a",
+		"strong wind throw embers well ahead of the fire.",
+		"",
+		"Wind chill: a wind makes the cold bite (1.5 degrees in a gentle",
+		"breeze, 5 in a gale): units in the open freeze sooner, most in a",
+		"blizzard. In the heat it cools them a little.",
+		"",
+		"Without the seasons only boats feel the wind; the rest is the look.",
+		"",
+		"The trees bending in it: Options, Terrain, \"Trees in the wind\"." })
 end
 
 -- "2 Player 4 Peaks.lvl" -> "4 Peaks (2)"
@@ -1707,7 +1829,7 @@ local function offerRow(x, y)
 		local ready = s.state == "ready"
 		local isLocal = s.id == "local"
 		local on = isLocal or (ready and s.chosen)
-		if roundButton(x, y, L(22), on, ready and not isLocal) then
+		if roundButton(x, y, L(22), on, ready and not isLocal, FE_Help.idsFor(nil, "offer"), s.title) then
 			local ids = {}
 			for _, o in ipairs(services) do
 				if o.id ~= "local" and (o.chosen ~= (o.id == s.id)) then ids[#ids + 1] = o.id end
@@ -1786,7 +1908,7 @@ local function armyPanel(army, budget)
 	panel(X(20), Y(88), L(408), L(260))
 	for i, a in ipairs(aligns) do
 		local key = "FRONT_END_ARMIES_ALIGNMENT_" .. (ALIGNMENT_KEYS[a] or "RANDOM")
-		if button(T(key), X(28), Y(96) + (i - 1) * L(40), L(392), L(34), true, army.alignment == a) and army.alignment ~= a then
+		if button(T(key), X(28), Y(96) + (i - 1) * L(40), L(392), L(34), true, army.alignment == a, FE_Help.idsFor(nil, "alignment")) and army.alignment ~= a then
 			army.alignment = a
 			-- the companies the new alignment can't have go
 			local kept = {}
@@ -1801,7 +1923,7 @@ local function armyPanel(army, budget)
 	-- the weapon platforms
 	panel(X(20), Y(356), L(408), L(260))
 	for i, f in ipairs(PLATFORM_FILTERS) do
-		if button(T("FRONT_END_ARMIES_WEAPON_PLATFORM_" .. f[1]), X(28), Y(364) + (i - 1) * L(40), L(392), L(34), true, armyState.platform == i) then
+		if button(T("FRONT_END_ARMIES_WEAPON_PLATFORM_" .. f[1]), X(28), Y(364) + (i - 1) * L(40), L(392), L(34), true, armyState.platform == i, FE_Help.idsFor(nil, "platform")) then
 			armyState.platform = i
 		end
 	end
@@ -1822,7 +1944,7 @@ local function armyPanel(army, budget)
 	end
 	drawText(FONT_BUTTON, X(440), Y(90), T("FRONT_END_ARMIES_COMPANIES"), WHITE, S)
 	panel(X(436), Y(118), L(560), L(500))
-	local activated = listBox(armyState.companies, rows, X(438), Y(120), L(556), L(496))
+	local activated = listBox(armyState.companies, rows, X(438), Y(120), L(556), L(496), FE_Help.idsFor(nil, "companies"))
 	local sel = shown[armyState.companies.selected]
 	if isRandom then
 		centredText(FONT_LIST, T("FRONT_END_ARMIES_ALIGNMENT_RANDOM"), X(436), Y(330), L(560), L(30), GREY)
@@ -1835,7 +1957,7 @@ local function armyPanel(army, budget)
 		local c = companyByName(name)
 		chosenRows[#chosenRows + 1] = (c and c.title or name) .. "  (" .. (c and c.cost or 0) .. ")"
 	end
-	local disbandNow = listBox(armyState.chosen, chosenRows, X(1006), Y(120), L(456), L(496))
+	local disbandNow = listBox(armyState.chosen, chosenRows, X(1006), Y(120), L(456), L(496), FE_Help.idsFor(nil, "chosen"))
 	-- Enlist (or a double click on a company), Disband (or a double click on a chosen one)
 	local canEnlist = sel ~= nil and sel.cost <= left
 	if (button(T("FRONT_END_ARMIES_ENLIST"), X(436), Y(626), L(272), L(30), canEnlist) or activated) and canEnlist then
@@ -1873,7 +1995,7 @@ local function armyPanel(army, budget)
 	end
 	local saved = listArmies()
 	panel(X(660), Y(700), L(600), L(284))
-	local load = listBox(armyState.saved, saved, X(662), Y(702), L(596), L(280))
+	local load = listBox(armyState.saved, saved, X(662), Y(702), L(596), L(280), FE_Help.idsFor(nil, "saved"))
 	if (button(T("FRONT_END_ARMIES_LOAD_ARMY"), X(1270), Y(720), L(200), L(28), #saved > 0) or load) and saved[armyState.saved.selected] then
 		local text = loadArmy(saved[armyState.saved.selected])
 		local lines = {}
@@ -1976,14 +2098,15 @@ local function drawLobby(multiplayer)
 	if skirmish.renaming then mouse.blocked = true end
 	if multiplayer then handleGuestRequests() end
 	title(T(multiplayer and "FRONT_END_MAIN_MENU_MULTIPLAYER" or "FRONT_END_LOBBY_TITLE_SKIRMISH"))
-	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather" }
+	local labels = { T("FRONT_END_LOBBY_CHAT"), T("FRONT_END_LOBBY_SETTINGS"), "Seasons & Weather", "Wind" }
 	-- Valhalla: the Army Enlistment tab
 	local valhalla = skirmish.settings.mode == 1
-	if valhalla then labels[4] = T("FRONT_END_LOBBY_ARMIES") elseif skirmish.tab == 4 then skirmish.tab = 1 end
+	if valhalla then labels[5] = T("FRONT_END_LOBBY_ARMIES") elseif skirmish.tab == 5 then skirmish.tab = 1 end
 	skirmish.tab = tabs(labels, skirmish.tab, X(8), Y(50), L(30))
 	panel(X(8), Y(80), L(1907), L(988), true)
 	if skirmish.tab == 1 then playersTab() elseif skirmish.tab == 3 then weatherTab()
-	elseif skirmish.tab == 4 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
+	elseif skirmish.tab == 4 then skirmish.windTab()
+	elseif skirmish.tab == 5 then armyPanel(skirmish.army, skirmish.settings.resourcePoints)
 	else settingsTab() end
 	-- agent control: who has it on, on every tab, in every lobby (the host's list)
 	if multiplayer then
@@ -2269,10 +2392,10 @@ local function campaignStartOptions(x, y, w)
 		local ry = y + L(56) + (i - 1) * L(66)
 		drawText(FONT_LIST, x + L(16), ry + L(14), T(r[2]), WHITE, S)
 		local bx = x + w - L(230)
-		local down = stepperButton("Minus", "campaign_" .. r[1] .. "-", bx, ry, L(44))
+		local down = stepperButton("Minus", "campaign_" .. r[1] .. "-", bx, ry, L(44), FE_Help.idsFor(nil, "start-options"))
 		if down > 0 then s[r[1]] = math.max(r[4], s[r[1]] - r[3] * down) end
 		centredText(FONT_LIST, tostring(math.floor(s[r[1]])), bx + L(48), ry, L(130), L(44), WHITE)
-		local up = stepperButton("Plus", "campaign_" .. r[1] .. "+", bx + L(182), ry, L(44))
+		local up = stepperButton("Plus", "campaign_" .. r[1] .. "+", bx + L(182), ry, L(44), FE_Help.idsFor(nil, "start-options"))
 		if up > 0 then s[r[1]] = math.min(r[5], s[r[1]] + r[3] * up) end
 	end
 end
@@ -2422,7 +2545,7 @@ Screens.campaign = {
 		local profiles = getCampaignProfiles()
 		local x, w = X(560), L(800)
 		panel(x, Y(90), w, L(600))
-		local activated = listBox(campaign.list, profiles, x + L(2), Y(92), w - L(4), L(596))
+		local activated = listBox(campaign.list, profiles, x + L(2), Y(92), w - L(4), L(596), FE_Help.idsFor(nil, "list"))
 		local chosen = profiles[campaign.list.selected]
 		drawText(FONT_TEXT, x, Y(710), T("FRONT_END_CAMPAIGN_ENTER_CAMPAIGN_NAME"), WHITE, S)
 		local entered = textField(campaign.name, x, Y(740), w, L(32), FILE_NAME_REFUSED, 40)
@@ -2723,8 +2846,8 @@ Screens.generaleditor = {
 		editor.portrait = math.max(1, math.min(editor.portrait, #portraits))
 		if portraits[editor.portrait] then drawImage(portraits[editor.portrait], px(10), py(90), pl(150), pl(200)) end
 		drawFrame(px(10), py(90), pl(150), pl(200), PANEL_BORDER, L(2))
-		if button("<", px(10), py(294), pl(40), pl(20), #portraits > 1) then editor.portrait = (editor.portrait - 2) % #portraits + 1 end
-		if button(">", px(120), py(294), pl(40), pl(20), #portraits > 1) then editor.portrait = editor.portrait % #portraits + 1 end
+		if button("<", px(10), py(294), pl(40), pl(20), #portraits > 1, nil, FE_Help.idsFor(nil, "portrait")) then editor.portrait = (editor.portrait - 2) % #portraits + 1 end
+		if button(">", px(120), py(294), pl(40), pl(20), #portraits > 1, nil, FE_Help.idsFor(nil, "portrait")) then editor.portrait = editor.portrait % #portraits + 1 end
 		centredText(FONT_LIST, editor.portrait .. " / " .. #portraits, px(50), py(294), pl(70), pl(20), WHITE)
 
 		-- name
@@ -2735,7 +2858,7 @@ Screens.generaleditor = {
 		if button(T(TIER_TEXT[GE_CATEGORIES[editor.category]] or GE_CATEGORIES[editor.category]), px(10), py(320), pl(150), pl(22)) then
 			editor.category = editor.category % #GE_CATEGORIES + 1
 		end
-		if button(GE_ALIGNMENTS[editor.alignment], px(10), py(346), pl(150), pl(22)) then
+		if button(GE_ALIGNMENTS[editor.alignment], px(10), py(346), pl(150), pl(22), nil, nil, FE_Help.idsFor(nil, "alignment")) then
 			editor.alignment = editor.alignment % #GE_ALIGNMENTS + 1
 		end
 		if button(T("FRONT_END_GENERAL_CREATION_RANDOM"), px(10), py(372), pl(150), pl(22)) then
@@ -2749,7 +2872,7 @@ Screens.generaleditor = {
 			for i, st in ipairs(list) do
 				local y = 58 + (i - 1) * 45
 				local v = editor.stats[st[1]] or 50
-				local pos = slider("ge" .. st[1], v / 100, px(x), py(y), pl(200), true, pl(20))
+				local pos = slider("ge" .. st[1], v / 100, px(x), py(y), pl(200), true, pl(20), FE_Help.idsFor(nil, list == GE_MILITARY and "military" or "diplomatic"))
 				editor.stats[st[1]] = math.floor(pos * 100 + 0.5)
 				local labels = st[2]
 				local lh = fontHeight(FONT_LIST, S)
@@ -2863,7 +2986,7 @@ Screens.mpload = {
 			else by, c = "AI General", YELLOW end
 			rows[i] = { i .. "  " .. h.name .. "  ->  " .. by, c }
 		end
-		listBox(mpLoad.list, rows, X(22), Y(116), L(926), L(574))
+		listBox(mpLoad.list, rows, X(22), Y(116), L(926), L(574), FE_Help.idsFor(nil, "players"))
 		local sel = humans[mpLoad.list.selected]
 		local function give(who)
 			for _, h in ipairs(humans) do if h.who == who then h.who = "AI" end end
@@ -2882,7 +3005,7 @@ Screens.mpload = {
 			grows[i] = { g.name .. (at and ("  (" .. at .. ")") or ""), at and 0xFF80FF80 or YELLOW }
 		end
 		mpLoad.guestList.selected = 0
-		listBox(mpLoad.guestList, grows, X(962), Y(116), L(938), L(274))
+		listBox(mpLoad.guestList, grows, X(962), Y(116), L(938), L(274), FE_Help.idsFor(nil, "guests"))
 		if mpLoad.guestList.selected > 0 and sel then give("G" .. guests[mpLoad.guestList.selected].id) end
 		if #guests == 0 then drawText(FONT_LIST, X(970), Y(120), "Waiting for players to join ...", GREY, S) end
 		chatPanel(X(960), Y(400), L(942), L(600))
@@ -3006,7 +3129,8 @@ Screens.multiplayer = {
 		title(T("FRONT_END_MAIN_MENU_MULTIPLAYER"))
 		-- a new game on a map, or a saved game to go on with
 		-- or a game to join: the local network's and the matchmaking services'
-		mpState.tab = tabs({ "New Game", T("FRONT_END_MAIN_MENU_LOAD_GAME"), "Find Games" }, mpState.tab, X(20), Y(50), L(30))
+		mpState.tab = tabs({ "New Game", T("FRONT_END_MAIN_MENU_LOAD_GAME"), "Find Games" }, mpState.tab, X(20), Y(50), L(30), nil,
+			{ FE_Help.idsFor(nil, "new-game"), FE_Help.idsFor(nil, "load-game"), FE_Help.idsFor(nil, "games") })
 		local chosen, listed, activated
 		if mpState.tab == 1 then
 			chosen = levelPicker(X(20), Y(80), L(1880), L(880))
@@ -3015,7 +3139,7 @@ Screens.multiplayer = {
 			-- the filter
 			local fx = X(1200)
 			for _, f in ipairs({ { "hideFull", "Hide full" }, { "hidePassword", "Hide locked" } }) do
-				if roundButton(fx, Y(52), L(22), gameList[f[1]], true) then
+				if roundButton(fx, Y(52), L(22), gameList[f[1]], true, FE_Help.idsFor(nil, f[1] == "hideFull" and "games/hide-full" or "games/hide-locked"), f[2]) then
 					gameList[f[1]] = not gameList[f[1]]
 					setGameListFilter({ hideFull = gameList.hideFull, hidePassword = gameList.hidePassword })
 				end
@@ -3037,7 +3161,7 @@ Screens.multiplayer = {
 			local names = {}
 			for i, sv in ipairs(saves) do names[i] = stripExtension(sv) end
 			panel(X(20), Y(80), L(1880), L(880))
-			listBox(mpState.saves, names, X(22), Y(82), L(1876), L(876))
+			listBox(mpState.saves, names, X(22), Y(82), L(1876), L(876), FE_Help.idsFor(nil, "load-game"))
 			chosen = saves[mpState.saves.selected]
 		end
 		-- the player name (both), the host's address (joining: "address" or "address:port")
@@ -3073,7 +3197,7 @@ Screens.multiplayer = {
 		-- a game from the list (double click, or the button)
 		if mpState.tab == 3 then
 			local canJoin = listed ~= nil and name ~= "" and listed.game.versionOk and listed.game.modsOk
-			if (button("Join game", X(1032), Y(1052), L(210), L(24), canJoin) or activated) and canJoin then
+			if (button("Join game", X(1032), Y(1052), L(210), L(24), canJoin, nil, FE_Help.idsFor(nil, "join")) or activated) and canJoin then
 				remember()
 				request("join_listing", listed.key)
 			end
@@ -3212,7 +3336,7 @@ local function keyboardPage(px, py, pw, ph)
 				local key = getKeyBinding(row.id, slot)
 				local label = waiting and "Press a key..." or (key ~= "" and keyLabel(key) or "(none)")
 				uiElement("key:" .. row.id .. ":" .. slot, label, bx, by, kw, kh, true) -- (agent control: the cell by its action)
-				if button(label, bx, by, kw, kh, true, waiting) then startKeyCapture(row.id, slot) end
+				if button(label, bx, by, kw, kh, true, waiting, "key/" .. row.id) then startKeyCapture(row.id, slot) end
 				-- a key that another action uses where this one works
 				if key ~= "" and #getKeyConflicts(row.id, slot, key) > 0 then
 					drawFrame(bx - L(3), by - L(3), kw + L(6), kh + L(6), RED, L(2))
@@ -3220,11 +3344,11 @@ local function keyboardPage(px, py, pw, ph)
 			end
 			if keyState.capture and keyState.capture.id == row.id then
 				-- (no key at all in the slot waited for)
-				if button("Clear", defX, ry + (rowH - kh) / 2, L(150), kh) then
+				if button("Clear", defX, ry + (rowH - kh) / 2, L(150), kh, nil, nil, "key/" .. row.id) then
 					setKeyBinding(row.id, keyState.capture.slot, "")
 					keyState.capture = nil
 				end
-			elseif button("Default", defX, ry + (rowH - kh) / 2, L(150), kh, not isKeyBindingDefault(row.id)) then
+			elseif button("Default", defX, ry + (rowH - kh) / 2, L(150), kh, not isKeyBindingDefault(row.id), nil, "key/" .. row.id) then
 				resetKeyBinding(row.id)
 			end
 		end
@@ -3236,7 +3360,7 @@ local function keyboardPage(px, py, pw, ph)
 	if #rowsList > rows then
 		drawText(FONT_LIST, px + L(30), py + ph - L(24), "Scroll for more keys", GREY, S)
 	end
-	if button("Reset all to defaults", px + pw - L(330), py + ph - L(52), L(300), L(30)) then
+	if button("Reset all to defaults", px + pw - L(330), py + ph - L(52), L(300), L(30), nil, nil, "ui/frontend/options/keyboard/reset-all") then
 		confirm("Put every key back to its default?", function() resetAllKeyBindings(); keyState.capture = nil end)
 	end
 end
@@ -3261,9 +3385,12 @@ Screens.options = {
 		local before = optionsState.page
 		local current = pages[optionsState.page] or pages[1]
 		local gi = groupOf[(current.group ~= nil and current.group ~= "") and current.group or current.title]
-		local glabels = {}
-		for i, g in ipairs(groups) do glabels[i] = g.title end
-		local ng = tabs(glabels, gi, X(90), Y(70), L(30))
+		local glabels, ghelps = {}, {}
+		for i, g in ipairs(groups) do
+			glabels[i] = g.title
+			ghelps[i] = #g.pages == 1 and ("ui/frontend/options/" .. pages[g.pages[1]].id) or ("ui/frontend/options/" .. FE_Help.slug(g.title))
+		end
+		local ng = tabs(glabels, gi, X(90), Y(70), L(30), nil, ghelps)
 		if ng ~= gi then
 			optionsState.page = optionsState.lastPage[ng] or groups[ng].pages[1]
 			gi = ng
@@ -3271,12 +3398,13 @@ Screens.options = {
 		local top = Y(100)
 		local group = groups[gi]
 		if #group.pages > 1 then
-			local slabels, si = {}, 1
+			local slabels, shelps, si = {}, {}, 1
 			for k, idx in ipairs(group.pages) do
 				slabels[k] = pages[idx].title
+				shelps[k] = "ui/frontend/options/" .. pages[idx].id
 				if idx == optionsState.page then si = k end
 			end
-			optionsState.page = group.pages[tabs(slabels, si, X(90), Y(104), L(28))]
+			optionsState.page = group.pages[tabs(slabels, si, X(90), Y(104), L(28), nil, shelps)]
 			top = Y(136)
 		end
 		optionsState.lastPage[gi] = optionsState.page
@@ -3299,6 +3427,9 @@ Screens.options = {
 			if not o then break end
 			local enabled = isOptionEnabled(o.id)
 			local ry = py + L(20) + (r - 1) * rowH
+			-- the help: the whole row, and every control in it, is this setting's
+			FE_Help.context = "option/" .. o.id
+			helpZone(FE_Help.context, px, ry, pw, rowH)
 			local labelColour = enabled and WHITE or GREY
 			-- the label right-aligned before the centre, the control after it
 			local lw = textWidth(FONT_BUTTON, o.label, S)
@@ -3350,6 +3481,7 @@ Screens.options = {
 				restart = true
 			end
 		end
+		FE_Help.context = nil
 		if #options > rows then
 			drawText(FONT_LIST, px + pw - L(260), py + ph - L(22), "Scroll for more settings", GREY, S)
 		end
@@ -3891,6 +4023,9 @@ function FE_Frame(place)
 
 	local name = stack[#stack]
 	local screen = Screens[name]
+	-- the help: the screen shown (F1 over nothing opens its page)
+	FE_Help.screen = name
+	setHelpScreen("ui/frontend/" .. name)
 	if place == "game" then
 		-- the screens opened from the in-game menu draw over the dimmed game
 		if name ~= "ingame" then drawRect(0, 0, W, H, DIM) end
@@ -3938,7 +4073,7 @@ function FE_Open(name)
 		local settings
 		tab, settings = string.match(tab, "^([^:]*):?(.*)$")
 		for k, v in string.gmatch(settings, "(%w+)=(%-?%d+)") do skirmish.settings[k] = tonumber(v) end
-		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or (tab == "army") and 4 or 1
+		skirmish.tab = (tab == "settings") and 2 or (tab == "weather") and 3 or (tab == "wind") and 4 or (tab == "army") and 5 or 1
 	end
 	-- "mpload.<save game>" (tests): host that save game, starting by itself once every guest has a
 	-- place or after 20 seconds alone

@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../help/Help.h"
 #include "../AgentUi.h"
 #include "../client.h"
 #include "FrontEnd.h"
@@ -546,9 +547,17 @@ struct FrontEnd::Impl {
 		lua.set_function("pushClip", [this](float x, float y, float w, float h) { drawList->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true); });
 		lua.set_function("popClip", [this]() { drawList->PopClipRect(); });
 		// agent control: an interactive element drawn this frame (AgentUi's registry)
-		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
-			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled, sol::optional<std::string> help) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true), help.value_or(std::string()));
 		});
+		// the in-game help (help/Help.h): a part of a screen that is no button, with its help ids;
+		// the screen being shown ("ui/frontend/<screen>"), for F1 over nothing
+		lua.set_function("helpZone", [](const std::string& help, float x, float y, float w, float h) {
+			AgentUi::AddHelpZone(help, x, y, w, h);
+		});
+		lua.set_function("setHelpScreen", [](const std::string& id) { Help::SetScreen(id); });
+		// the main menu's Help button: the help at a page ("" or nil: the start page)
+		lua.set_function("openHelp", [](sol::optional<std::string> ids) { Help::Open(ids && !ids->empty() ? *ids : "index"); });
 		lua.set_function("drawText", [this](const std::string& fontName, float x, float y, const std::string& text, sol::optional<uint32_t> colour, sol::optional<float> scale) {
 			if (const BitmapFont* f = font(fontName))
 				f->draw(drawList, x, y, text, colourArg(colour), scale ? *scale : 1.0f);
@@ -957,10 +966,7 @@ struct FrontEnd::Impl {
 				companiesLoaded = true;
 			}
 			auto text = [this](const std::string& key) {
-				std::string s = key.empty() ? std::string() : lang.getText(key);
-				size_t pos;
-				while ((pos = s.find("\\n")) != std::string::npos)
-					s.replace(pos, 2, "\n");
+				std::string s = key.empty() ? std::string() : lang.getText(key); // (its line breaks real ones: Language::load)
 				// a description's "|Title|" first line (the title is shown above it)
 				if (!s.empty() && s[0] == '|')
 					if (const size_t end = s.find('|', 1); end != std::string::npos)
@@ -1018,7 +1024,7 @@ struct FrontEnd::Impl {
 			int i = 1;
 			for (const General& g : generals) {
 				std::string bio = g.background.empty() ? std::string()
-					: g.background[0] == '"' ? g.background.substr(1) : lang.getText(g.background);
+					: g.background[0] == '"' ? Language::decodeLineBreaks(g.background.substr(1)) : lang.getText(g.background);
 				// "|Name|%s\n..." in Language.txt: the name between bars and a placeholder line
 				if (!bio.empty() && bio[0] == '|') {
 					const size_t end = bio.find('|', 1);
@@ -1027,10 +1033,6 @@ struct FrontEnd::Impl {
 				}
 				if (bio.rfind("%s", 0) == 0)
 					bio = bio.substr(2);
-				size_t pos;
-				// Language.txt writes line breaks as a backslash and n
-				while ((pos = bio.find("\\n")) != std::string::npos)
-					bio.replace(pos, 2, "\n");
 				sol::table stats = lua.create_table();
 				for (const auto& [item, value] : g.stats)
 					stats[item] = value;

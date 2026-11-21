@@ -94,7 +94,7 @@ namespace {
 	}
 
 	// The side files of an original-format save, or of an older wkbai save
-	const char* const SIDE_FILES[8] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt" };
+	const char* const SIDE_FILES[9] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt", ".trees.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -523,17 +523,18 @@ bool Server::saveGame(const char* filename)
 	// - day and night, seasons and weather (or only the game's sky);
 	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
 	//   id> <target> <path> <point> <tried>" each;
-	// - the unit history (UnitHistory);
-	// - the intensity maps (IntensityMaps: what the players had seen, the maps their units apply).
-	std::string settings, environmentText, paths, history, movements, government, discovered, intensity;
+	// - the unit history (UnitHistory).
+	std::string settings, environmentText, paths, history, movements, government, discovered, intensity, trees;
 	if (!savingLevel) {
 		movements = movementSaveText();
+		// the players' memory of the trees under the fog of war (FogOfWar)
+		trees = treeMemorySaveText();
 		discovered = DiscoveredSaveText();
 		intensity = intensityMaps.saveText();
 		government = ministries.saveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
-		if (environment.enabled() || es.skyWeather != 0 || es.skyCover != 45)
+		if (environment.enabled() || environment.windOn() || es.skyWeather != 0 || es.skyCover != 45)
 			environmentText = environment.saveText();
 		for (const auto& [id, cobj] : idmap) {
 			const ServerGameObject* obj = (const ServerGameObject*)cobj;
@@ -560,8 +561,8 @@ bool Server::saveGame(const char* filename)
 		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt, .ministries.txt,
 		// .discovered.txt and .intensity.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
-		const std::string* sides[8] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity };
-		for (int i = 0; i < 8; i++) {
+		const std::string* sides[9] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees };
+		for (int i = 0; i < 9; i++) {
 			if (!sides[i]->empty())
 				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
 			else
@@ -594,6 +595,7 @@ bool Server::saveGame(const char* filename)
 	file.add("ai", 1, std::move(government));
 	file.add("discovered", 1, std::move(discovered));
 	file.add("intensity", 1, std::move(intensity));
+	file.add("treeMemory", 1, std::move(trees));
 	const bool ok = writeFile(path, file.write(), false);
 	// an older save's side files of the same name would be stale: everything is in the file now
 	if (ok)
@@ -613,8 +615,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	if (!SaveFile::IsSaveFile(all)) {
 		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
 		parts.world = std::move(all);
-		std::string* sides[8] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity };
-		for (int i = 0; i < 8; i++)
+		std::string* sides[9] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity, &parts.treeMemory };
+		for (int i = 0; i < 9; i++)
 			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
 		return parts;
 	}
@@ -630,7 +632,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	std::string authoring;
 	const Known known[] = { { "authoring", &authoring }, { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
-		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity } };
+		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity },
+		{ "treeMemory", &parts.treeMemory } };
 	for (const SaveSection& s : file.sections) {
 		const Known* k = nullptr;
 		for (const Known& candidate : known)
@@ -647,6 +650,65 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 		*k->text += s.text;
 	}
 	return parts;
+}
+
+// The players' memory of the trees (the treeMemory section): "player <id>" and that player's
+// lines (FogOfWar::treeMemoryText) up to "end", players ascending. None: every player knows
+// every tree as it stands (an older save).
+void Server::setTreeMemory(uint32_t player, std::string text)
+{
+	std::lock_guard<std::mutex> lock(treeMemoryMutex);
+	treeMemory[player] = std::move(text);
+}
+
+std::string Server::getTreeMemory(uint32_t player)
+{
+	std::lock_guard<std::mutex> lock(treeMemoryMutex);
+	auto it = treeMemory.find(player);
+	return it == treeMemory.end() ? std::string() : it->second;
+}
+
+std::string Server::treeMemorySaveText()
+{
+	std::lock_guard<std::mutex> lock(treeMemoryMutex);
+	std::string out;
+	for (const auto& [player, text] : treeMemory) {
+		if (text.empty() || !findObject(player))
+			continue;
+		out += "player " + std::to_string(player) + "\n" + text;
+		if (text.back() != '\n')
+			out += '\n';
+		out += "end\n";
+	}
+	return out;
+}
+
+void Server::treeMemoryLoadText(const std::string& text)
+{
+	std::lock_guard<std::mutex> lock(treeMemoryMutex);
+	treeMemory.clear();
+	uint32_t player = 0;
+	std::string body;
+	size_t start = 0;
+	while (start < text.size()) {
+		size_t end = text.find('\n', start);
+		if (end == std::string::npos)
+			end = text.size();
+		const std::string line = text.substr(start, end - start);
+		start = end + 1;
+		if (line.rfind("player ", 0) == 0) {
+			player = (uint32_t)std::strtoul(line.c_str() + 7, nullptr, 10);
+			body.clear();
+		}
+		else if (line == "end") {
+			if (player)
+				treeMemory[player] = body;
+			player = 0;
+			body.clear();
+		}
+		else if (player && !line.empty())
+			body += line + "\n";
+	}
 }
 
 // The walks going on (the movement section): "<id> <controller walking> <pending> <requested x y z>
@@ -722,6 +784,7 @@ void Server::restoreMovements(const std::string& text)
 		}
 		mc.m_started = started;
 		mc.m_pathNodes = std::move(nodes);
+		mc.syncDestIndex(); // (FreeStandingSpot's index of the walking units)
 		if (moving && speed > 0.0f) {
 			obj->movement.startMovement(from, to, startTime, speed);
 			obj->currentSpeed = currentSpeed;

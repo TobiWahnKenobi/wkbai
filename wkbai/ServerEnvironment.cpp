@@ -237,8 +237,15 @@ void ServerEnvironment::updateFires(Server& server)
 		return;
 	}
 	const auto [aw, ah] = server.terrain->getPlayableArea();
+	// the wind (Wind.h, with its effects on): the fires break out more often, spread faster and
+	// further, mostly downwind (within an arc that narrows as it blows harder), burn hotter and out
+	// sooner, and in a strong wind throw embers ahead. w 0 (off): every chance as without it, and
+	// no random numbers more
+	const float w = windFireFactor();
+	const float downwind = std::atan2(wind.dirZ, wind.dirX);
+	auto spreadAngle = [&]() { return w > 0.0f ? downwind + (Rand01() - 0.5f) * 6.28f / (1.0f + 1.5f * w) : Rand01() * 6.28f; };
 	// out of nowhere: once in about three minutes in a full heatwave, somewhere that burns
-	if (risk > 0.0f && Rand01() < 0.006f * risk) {
+	if (risk > 0.0f && Rand01() < 0.006f * risk * (1.0f + 0.5f * w)) {
 		for (int tries = 0; tries < 12; tries++) {
 			const Vector3 at(Rand01() * aw, 0, Rand01() * ah);
 			if (fuelAt(server, at) >= 0.9f && igniteAt(server, at, 25.0f + 20.0f * Rand01())) {
@@ -255,8 +262,8 @@ void ServerEnvironment::updateFires(Server& server)
 		const int alias = server.gameSet->aliases.names.getIndex("Burning Buildings");
 		if (alias >= 0)
 			for (const auto& ref : server.aliases[alias])
-				if (ServerGameObject* b = ref.getFrom<Server>(); b && !b->deleted && Rand01() < 0.04f * risk) {
-					const float a = Rand01() * 6.28f, d = 7.0f + 6.0f * Rand01();
+				if (ServerGameObject* b = ref.getFrom<Server>(); b && !b->deleted && Rand01() < 0.04f * risk * (1.0f + w)) {
+					const float a = spreadAngle(), d = 7.0f + 6.0f * Rand01() + 3.0f * w;
 					if (igniteAt(server, b->position + Vector3(std::cos(a) * d, 0, std::sin(a) * d), 25.0f + 15.0f * Rand01())) {
 						stats.wildfires++;
 						stats.fromBuildings++;
@@ -273,16 +280,22 @@ void ServerEnvironment::updateFires(Server& server)
 	for (size_t i = 0; i < fires.size();) {
 		Wildfire& f = fires[i];
 		const float age = state.time - f.born;
-		if (age > f.life * (state.rain > 0.3f ? 0.4f : 1.0f)) {
+		if (age > f.life * (state.rain > 0.3f ? 0.4f : 1.0f) / (1.0f + 0.4f * w)) {
 			if (ServerGameObject* v = f.visual.get())
 				server.deleteObject(v);
 			fires.erase(fires.begin() + i);
 			continue;
 		}
 		// to the land around: much in the heat, a little once it is over
-		const float spread = 0.1f * std::max(risk, 0.15f);
-		if (f.gen < (int)(12.0f * std::max(risk, 0.3f)) && Rand01() < spread) {
-			const float a = Rand01() * 6.28f, d = 5.0f + 4.0f * Rand01();
+		const float spread = 0.1f * std::max(risk, 0.15f) * (1.0f + w);
+		const int reach = (int)(12.0f * std::max(risk, 0.3f) * (1.0f + 0.5f * w));
+		if (f.gen < reach && Rand01() < spread) {
+			const float a = spreadAngle(), d = 5.0f + 4.0f * Rand01() + 3.0f * w;
+			spreadTo.push_back({ f.pos + Vector3(std::cos(a) * d, 0, std::sin(a) * d), (float)(f.gen + 1) });
+		}
+		// embers carried 12-30 m downwind (a strong wind and more)
+		if (w > 1.0f && f.gen < reach && Rand01() < 0.04f * (w - 1.0f)) {
+			const float a = downwind + (Rand01() - 0.5f) * 0.6f, d = 12.0f + 7.0f * w * Rand01();
 			spreadTo.push_back({ f.pos + Vector3(std::cos(a) * d, 0, std::sin(a) * d), (float)(f.gen + 1) });
 		}
 		// who is in it, what stands on it
@@ -294,7 +307,7 @@ void ServerEnvironment::updateFires(Server& server)
 						continue;
 					auto& tile = server.tiles[(tz + dz) * tw + tx + dx];
 					if (ServerGameObject* b = tile.building.getFrom<Server>(); b && !b->deleted && setFire >= 0
-						&& buildingsDone.insert(b->id).second && Rand01() < 0.05f) {
+						&& buildingsDone.insert(b->id).second && Rand01() < 0.05f * (1.0f + w)) {
 						SrvScriptContext ctx(&server, b);
 						auto _ = ctx.change(ctx.sequenceExecutor, b);
 						server.gameSet->actionSequences[setFire].run(&ctx);
@@ -303,7 +316,7 @@ void ServerEnvironment::updateFires(Server& server)
 					for (const auto& ref : tile.objList)
 						if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
 							&& !o->blueprint->canWalkOnWater() && (o->position - f.pos).sqlen2xz() < 4.5f * 4.5f)
-							hurt.emplace_back(o, 0.04f);
+							hurt.emplace_back(o, 0.04f * (1.0f + 0.5f * w));
 				}
 		i++;
 	}
@@ -319,6 +332,15 @@ void ServerEnvironment::updateFires(Server& server)
 			}
 		}
 	stats.fireCellsMost = std::max(stats.fireCellsMost, (int)fires.size());
+	// (the tests: where the fire is, every 10 s: its patches' middle, and the wind)
+	if (trace && !fires.empty() && (int)state.time % 10 == 0) {
+		Vector3 mid;
+		for (const Wildfire& f : fires)
+			mid += f.pos;
+		mid = mid * (1.0f / fires.size());
+		printf("ENVIRONMENT t=%.0f fire: %zu patches around (%.0f, %.0f), %zu tiles burnt; wind factor %.2f to (%.2f, %.2f)\n", state.time, fires.size(),
+			mid.x, mid.z, burnt.size(), w, wind.dirX, wind.dirZ);
+	}
 }
 
 // ---- river currents (see ServerEnvironment.h) ----
@@ -587,7 +609,8 @@ namespace {
 	void CurrentLeg(Server& server, ServerGameObject* o, const Vector3& to, float speed, bool swims)
 	{
 		const float now = server.timeManager.currentTime;
-		// swimming: its "Swim" if its model has one (the Scout's), else its walk, slower; wading
+		// swimming: its "Swim" (its own, the Scout's, or one made from its walk: SwimAnim.h), else
+		// (no walk to make one from) its walk, slower; wading
 		// (shallow water, on its way): as it walks
 		if (swims || !o->movement.isMoving()) {
 			static const GameSet* of = nullptr;
@@ -915,12 +938,93 @@ float ServerEnvironment::winterAhead(float now, int* severity) const
 
 float ServerEnvironment::coldFeel() const
 {
-	return state.temperatureC - (state.weather == WEATHER_BLIZZARD ? 6.0f : state.snowfall * 3.0f) - state.wetness * 2.0f;
+	return state.temperatureC - (state.weather == WEATHER_BLIZZARD ? 6.0f : state.snowfall * 3.0f) - state.wetness * 2.0f - windChill();
 }
 
 float ServerEnvironment::heatFeel() const
 {
-	return state.temperatureC + (state.weather == WEATHER_DROUGHT ? 3.0f : 0.0f);
+	// (a wind cools a little in the heat too, less than it chills in the cold)
+	return state.temperatureC + (state.weather == WEATHER_DROUGHT ? 3.0f : 0.0f) - 0.4f * windChill();
+}
+
+float ServerEnvironment::windFireFactor() const
+{
+	if (!windOn() || !settings.windEffects)
+		return 0.0f;
+	return std::clamp(wind.speed / 8.0f, 0.0f, 2.5f);
+}
+
+float ServerEnvironment::windChill() const
+{
+	// about the wind chill's drop at a few degrees above freezing: 1.5 degrees in a gentle breeze
+	// (5 m/s), 3 in a strong one (11), 4.7 in a gale (17)
+	if (!windOn() || !settings.windEffects || wind.speed <= 1.5f)
+		return 0.0f;
+	return 0.6f * std::pow(wind.speed - 1.5f, 0.75f);
+}
+
+float ServerEnvironment::windBoatFactor(const Vector3& heading) const
+{
+	if (!windOn() || !settings.windEffects)
+		return 1.0f;
+	return WindBoatFactor(heading, wind);
+}
+
+// the weather the wind blows by: the seasons' (or the debug panel's held one), else the game's sky
+static int WindWeather(const EnvironmentSettings& s, const EnvironmentState& st, int forced)
+{
+	if (s.seasons || forced >= 0)
+		return st.weather;
+	if (s.skyWeather > 0)
+		return s.skyWeather - 1;
+	return s.skyCover >= 70 ? WEATHER_CLOUDY : WEATHER_CLEAR;
+}
+
+void ServerEnvironment::updateWind(Server& server)
+{
+	if (!windOn())
+		return;
+	const float now = server.timeManager.currentTime;
+	if (nextWindUpdate >= 0.0f && now < nextWindUpdate)
+		return;
+	const bool first = nextWindUpdate < 0.0f;
+	nextWindUpdate = now + 1.0f;
+	const WindState target = WindTarget(settings, WindWeather(settings, state, forceWeather), now);
+	wind.dirX = target.dirX;
+	wind.dirZ = target.dirZ;
+	if (first) {
+		wind.speed = target.speed;
+		wind.gustiness = target.gustiness;
+	}
+	else {
+		// the speed follows a change of weather over about 40 s (a storm's front: faster, 15 s)
+		const float tau = target.speed > wind.speed + 4.0f ? 15.0f : 40.0f;
+		wind.speed += (target.speed - wind.speed) * (1.0f - std::exp(-1.0f / tau));
+		wind.gustiness += (target.gustiness - wind.gustiness) * (1.0f - std::exp(-1.0f / 30.0f));
+	}
+	if (trace && (int)now % 60 == 0)
+		printf("ENVIRONMENT t=%.0f wind from %s at %.1f m/s (%s), gusts %.2f\n", now, WindCompass(wind.dirX, wind.dirZ), wind.speed,
+			WindSpeedName(wind.speed), wind.gustiness);
+	sendWind(server);
+}
+
+void ServerEnvironment::sendWind(Server& server, NetLink* only)
+{
+	// (off: nothing, unless the clients had it: then once, flag 4, the debug panel's switch)
+	if (!windOn() && !windSent)
+		return;
+	windSent = windOn();
+	NetPacketWriter msg(NETCLIMSG_WIND);
+	msg.writeUint8((uint8_t)((settings.windVeers ? 1 : 0) | (settings.windEffects ? 2 : 0) | (windOn() ? 0 : 4)));
+	msg.writeUint8((uint8_t)settings.windFrom);
+	msg.writeUint8((uint8_t)settings.windStrength);
+	msg.writeUint32((uint32_t)settings.windSeed);
+	wind.write(msg);
+	if (only)
+		only->send(msg);
+	else
+		for (NetLink* link : server.clientLinks)
+			link->send(msg);
 }
 
 float ServerEnvironment::waterTarget() const
@@ -1359,6 +1463,7 @@ void ServerEnvironment::update(Server& server)
 {
 	if (!server.getLevel() || !server.gameSet || !server.terrain)
 		return;
+	updateWind(server);
 	// without day and night and the seasons: only the game's sky, once, for the clients to draw
 	if (!enabled()) {
 		if (!skySent) {
@@ -1586,6 +1691,7 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 			link->send(msg);
 	sendCharred(server, only);
 	sendFireShares(server, only);
+	sendWind(server, only);
 }
 
 // the charred trees (NETCLIMSG_CHARRED_TREES): the new ones, or all of them to a client joining,
@@ -1638,6 +1744,8 @@ std::string ServerEnvironment::saveText() const
 		o << '\n';
 	}
 	o << "temperature " << temperatureBase << ' ' << heatNights << '\n';
+	if (windOn())
+		o << "wind " << wind.dirX << ' ' << wind.dirZ << ' ' << wind.speed << ' ' << wind.gustiness << ' ' << nextWindUpdate << '\n';
 	o << "timers " << nextUpdate << ' ' << weatherEnds << ' ' << nextLightning << ' ' << resolvedYear << ' ' << resolvedSeverity[0] << ' '
 		<< resolvedSeverity[1] << ' ' << resolvedSeverity[2] << ' ' << resolvedSeverity[3] << ' ' << (int)started << '\n';
 	for (const auto& [id, e] : exposure)
@@ -1685,6 +1793,8 @@ void ServerEnvironment::loadText(const std::string& text)
 			l >> nextUpdate >> weatherEnds >> nextLightning >> resolvedYear >> resolvedSeverity[0] >> resolvedSeverity[1] >> resolvedSeverity[2] >> resolvedSeverity[3] >> s;
 			started = s != 0;
 		}
+		else if (tag == "wind")
+			l >> wind.dirX >> wind.dirZ >> wind.speed >> wind.gustiness >> nextWindUpdate;
 		else if (tag == "fire") {
 			Wildfire f;
 			uint32_t id = 0;
