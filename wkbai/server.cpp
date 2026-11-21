@@ -28,6 +28,11 @@
 #include "util/SimRandom.h"
 #include "util/FrameStats.h"
 #include <SDL3/SDL_timer.h>
+#if defined(_MSC_VER) && defined(_M_X64)
+#include <intrin.h>
+#elif defined(__x86_64__)
+#include <x86intrin.h>
+#endif
 #include <optional>
 #include <functional>
 #include "util/StriCompare.h"
@@ -55,6 +60,7 @@ Server::Server()
 	// the simulation's time step in ms ("simStepMs", 0: as long as each frame took)
 	timeManager.stepMs = g_settings.value("simStepMs", 20u);
 	commandsPerStep = g_settings.value("commandsPerStep", 500u);
+	commandWorkPerStep = g_settings.value("commandWorkPerStep", (uint64_t)50000);
 	parallelSight = g_settings.value("parallelSight", false);
 }
 
@@ -331,7 +337,7 @@ ServerGameObject* Server::createObject(const GameObjBlueprint * blueprint, uint3
 		id = nextUniqueId;
 	}
 	ServerGameObject *obj = new ServerGameObject(id, blueprint);
-	idmap[id] = obj;
+	idmapSet(id, obj);
 
 	obj->subtype = SimRand() % blueprint->subtypeNames.size();
 	auto bpSubtype = blueprint->subtypes.find(obj->subtype);
@@ -1091,7 +1097,7 @@ void Server::destroyObject(ServerGameObject* obj)
 	}
 
 	// remove from ID map
-	idmap.erase(obj->id);
+	idmapErase(obj->id);
 
 	// delete the object, bye!
 	int id = obj->id;
@@ -3677,7 +3683,24 @@ namespace {
 		uint64_t movers = 0;
 		std::map<std::string, double> byOrder; // orders time per order (with profileSim)
 		uint64_t steps = 0, lastPrint = 0, objects = 0;
-		static double now() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); }
+		// ms. Read twice for every object in every step (orders, movement, sight: 60,000 times a
+		// step with 10,000 units): on x86 the processor's time stamp counter, a few ns, its rate
+		// measured against the performance counter once (5 ms); QueryPerformanceCounter took 25-30.
+		static double now() {
+#if defined(_M_X64) || defined(__x86_64__)
+			static const double msPerTick = []() {
+				const uint64_t q0 = SDL_GetPerformanceCounter(), t0 = __rdtsc();
+				const uint64_t wait = SDL_GetPerformanceFrequency() / 200;
+				uint64_t q1;
+				while ((q1 = SDL_GetPerformanceCounter()) - q0 < wait) {}
+				const uint64_t t1 = __rdtsc();
+				return (double)(q1 - q0) * 1000.0 / (double)SDL_GetPerformanceFrequency() / (double)std::max<uint64_t>(1, t1 - t0);
+			}();
+			return (double)__rdtsc() * msPerTick;
+#else
+			return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency();
+#endif
+		}
 	} g_simProfile;
 	struct SimTimer {
 		double* into; double start;
@@ -4107,23 +4130,33 @@ void Server::issueCommand(int command, uint32_t object, int mode, uint32_t targe
 {
 	if (command < 0 || (size_t)command >= gameSet->commands.size())
 		return;
-	if (commandsPerStep && (!pendingCommands.empty() || commandsThisStep >= commandsPerStep)) {
+	if (!pendingCommands.empty() || !commandMayStart()) {
 		pendingCommands.push_back({ command, object, target, mode, destination, faceTo });
 		return;
 	}
+	runCommand(command, object, target, mode, destination, faceTo);
+}
+
+void Server::runCommand(int command, uint32_t object, uint32_t target, int mode, const Vector3& destination, const Vector3& faceTo)
+{
+	extern uint64_t g_scriptWork;
+	const uint64_t work = g_scriptWork;
 	commandsThisStep++;
+	commandsRun++;
+	// (a unit gone meanwhile: as a command for a gone unit was)
 	gameSet->commands[command].execute(findObject(object), findObject(target), mode, destination, faceTo);
+	commandWorkThisStep += g_scriptWork - work;
+	commandWorkTotal += g_scriptWork - work;
 }
 
 void Server::runPendingCommands()
 {
 	commandsThisStep = 0;
-	while (!pendingCommands.empty() && (!commandsPerStep || commandsThisStep < commandsPerStep)) {
+	commandWorkThisStep = 0;
+	while (!pendingCommands.empty() && commandMayStart()) {
 		const PendingCommand c = pendingCommands.front();
 		pendingCommands.pop_front();
-		commandsThisStep++;
-		// (a unit gone meanwhile: as a command for a gone unit was)
-		gameSet->commands[c.command].execute(findObject(c.object), findObject(c.target), c.mode, c.destination, c.faceTo);
+		runCommand(c.command, c.object, c.target, c.mode, c.destination, c.faceTo);
 	}
 }
 

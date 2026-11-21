@@ -141,6 +141,10 @@ bool FinderFailsWhenEmpty(const ObjectFinder* finder)
 // the simulation profiling test ("detail", g_actionProfile): the time per named finder
 // (FINDER_RESULTS), with the finders it uses, ms
 std::map<std::string, double> g_finderMs;
+// the scripts' work, counted (not timed: the same on every computer): each candidate a finder
+// evaluates a condition or grade for, each action run (ActionSequence::run). The players'
+// commands are spread over steps by it (Server::issueCommand).
+uint64_t g_scriptWork = 0;
 
 struct FinderResults : ObjectFinder {
 	int ofd;
@@ -318,6 +322,7 @@ struct FinderNearestToSatisfy : ObjectFinder {
 		std::sort(near.begin() + base, near.end(), [](const Candidate& a, const Candidate& b) { return a.d != b.d ? a.d < b.d : a.order < b.order; });
 		AnyGO* found = nullptr;
 		for (size_t i = base; i < near.size(); i++) {
+			g_scriptWork++;
 			auto _ = ctx->change(ctx->candidate, near[i].obj);
 			if (vdcond->eval(ctx) > 0.0f) {
 				found = near[i].obj;
@@ -384,7 +389,10 @@ struct FinderReferencers : ObjectFinder {
 		// in the referencers' order, each once (a set of pointers came out in the order of their
 		// addresses, which differ from run to run: the same game played differently)
 		ObjectFinderResult vec;
-		std::unordered_set<CommonGameObject*> added;
+		// (each once: looked for in the few found so far, a hash set only past 32. A set made for
+		// every call, by millions in a battle of 10,000 and with nothing in it most times, took
+		// most of the time: MSVC's allocates when made)
+		std::unique_ptr<std::unordered_set<CommonGameObject*>> added;
 		for (CommonGameObject* obj : sctx->getSelf()->referencers) {
 			if (obj) {
 				Order* order = ((ServerGameObject*)obj)->orderConfig.getCurrentOrder();
@@ -393,8 +401,17 @@ struct FinderReferencers : ObjectFinder {
 				if (!task) continue;
 				//assert(task->target.get() == ctx->getSelf());
 				if (task->target != ctx->getSelf()) continue;
-				if (task->blueprint->category == category && added.insert(obj).second)
-					vec.push_back(obj);
+				if (task->blueprint->category != category) continue;
+				if (vec.size() < 32) {
+					if (std::find(vec.begin(), vec.end(), obj) == vec.end())
+						vec.push_back(obj);
+				}
+				else {
+					if (!added)
+						added = std::make_unique<std::unordered_set<CommonGameObject*>>(vec.begin(), vec.end());
+					if (added->insert(obj).second)
+						vec.push_back(obj);
+				}
 			}
 		}
 		return vec;
@@ -745,6 +762,7 @@ struct FinderFilter : ObjectFinder {
 	std::unique_ptr<ObjectFinder> finder;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		decltype(vec) res;
 		for (CommonGameObject *obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
@@ -856,12 +874,24 @@ struct FinderGradeSelect : ObjectFinder {
 		if (vdCount)
 			count = (int)vdCount->eval(ctx);
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		ValueDeterminer *vd = Server::instance->gameSet->equations[equation];
 
 		std::vector<std::pair<float,CommonGameObject*>> values(vec.size());
+		bool nan = false;
 		for (size_t i = 0; i < vec.size(); i++) {
 			auto _ = ctx->change(ctx->candidate, vec[i]);
 			values[i] = { vd->eval(ctx), vec[i] };
+			nan |= values[i].first != values[i].first;
+		}
+		// the best one only (an army soldier's victim among hundreds): the first best, as the
+		// stable sort's first (but for a NaN, which the sort may place anywhere)
+		if (count == 1 && vec.size() > 1 && !nan) {
+			size_t best = 0;
+			for (size_t i = 1; i < values.size(); i++)
+				if (byHighest ? values[i].first > values[best].first : values[i].first < values[best].first)
+					best = i;
+			return { values[best].second };
 		}
 		std::stable_sort(values.begin(), values.end(), [this](auto & a, auto & b) {return byHighest ? (a.first > b.first) : (a.first < b.first); });
 		if (count <= 0 || (size_t)count > vec.size())
@@ -964,6 +994,7 @@ struct FinderFilterCandidates : ObjectFinder {
 	FinderFilterCandidates(bool cull = false) : cull(cull) {}
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		decltype(vec) res;
 		for (CommonGameObject* obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
@@ -990,6 +1021,7 @@ struct FinderGradeSelectCandidates : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
 		const int count = vdCount ? (int)vdCount->eval(ctx) : (int)vec.size();
+		g_scriptWork += vec.size();
 		if (count <= 0)
 			return {};
 		if ((size_t)count >= vec.size())
