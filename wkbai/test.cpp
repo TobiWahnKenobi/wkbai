@@ -11283,6 +11283,16 @@ void Test_MixedFormation()
 				where.empty() ? "-" : where.c_str(), characters(merged));
 			check(in == 8 && characters(merged) == 27, what);
 			loose.insert(loose.end(), eight.begin(), eight.end());
+			// its 27 places within 25 m of its centre (the scripts let go of members beyond 30 m)
+			float farthest = 0.0f;
+			for (const auto& [type, children] : merged->children)
+				for (CommonGameObject* c : children) {
+					Vector3 p;
+					if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && FormationController::memberPlace(merged, (ServerGameObject*)c, p))
+						farthest = std::max(farthest, (p - merged->position).len2xz());
+				}
+			snprintf(what, sizeof(what), "the 27 places within 25 m of the formation's centre (the farthest %.1f m)", farthest);
+			check(farthest <= 25.5f, what);
 		}
 		else
 			check(false, "a second formation for the join");

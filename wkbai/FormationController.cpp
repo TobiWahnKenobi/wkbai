@@ -212,7 +212,7 @@ static std::vector<std::pair<float, float>> placesOf(const ServerGameObject* for
 	// widest member's (a knight's 4 x 6 among spearmen, not the spearmen squeezed or the knights
 	// spaced as spearmen)
 	const GameObjBlueprint* first = nullptr;
-	float sepX = 0.0f, sepY = 0.0f;
+	float sepX = 0.0f, sepY = 0.0f, minX = 1e9f, minY = 1e9f;
 	const bool improved = ImprovedFormations();
 	for (auto& [childType, childList] : formation->children)
 		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER && !childList.empty()) {
@@ -220,14 +220,31 @@ static std::vector<std::pair<float, float>> placesOf(const ServerGameObject* for
 				first = childList.front()->blueprint;
 			if (!improved)
 				break;
-			sepX = std::max(sepX, childList.front()->blueprint->formationSeparationX);
-			sepY = std::max(sepY, childList.front()->blueprint->formationSeparationY);
+			const GameObjBlueprint* bp = childList.front()->blueprint;
+			sepX = std::max(sepX, bp->formationSeparationX);
+			sepY = std::max(sepY, bp->formationSeparationY);
+			minX = std::min(minX, bp->formationSeparationX);
+			minY = std::min(minY, bp->formationSeparationY);
 		}
 	if (!first)
 		return {};
+	const FormationType type = formationTypeOf(formation);
 	if (!improved)
-		return formationPlaces(formationTypeOf(formation), count, first->formationSeparationX, first->formationSeparationY);
-	return formationPlaces(formationTypeOf(formation), count, sepX, sepY);
+		return formationPlaces(type, count, first->formationSeparationX, first->formationSeparationY);
+	auto places = formationPlaces(type, count, sepX, sepY);
+	// a big formation spaced for its widest member is kept within 25 m of its centre (its army's
+	// position): the scripts' "Army Formation Attack" hands every member more than 30 m from it
+	// back to the player (AI\Formation Army.cpp), and a Line of 27 with knights' spacing lost its
+	// ends that way. The spacing shrinks towards the narrowest member's, no further.
+	float reach = 0.0f;
+	for (const auto& p : places)
+		reach = std::max(reach, std::hypot(p.first, p.second));
+	constexpr float KEEP_WITHIN = 25.0f;
+	if (reach > KEEP_WITHIN && (sepX > minX || sepY > minY)) {
+		const float f = KEEP_WITHIN / reach;
+		places = formationPlaces(type, count, std::max(minX, sepX * f), std::max(minY, sepY * f));
+	}
+	return places;
 }
 
 float FormationController::maxDimension() const
