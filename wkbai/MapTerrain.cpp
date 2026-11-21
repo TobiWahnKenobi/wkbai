@@ -1759,7 +1759,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			const float width = Num(f.j, "width", 20);
 			const float vw = Num(f.j, "valleyWidth", std::max(width * 4, 70.0f)), vd = Num(f.j, "valleyDepth", Num(f.j, "depth", 3) * 1.5f);
 			const std::vector<V2> c = Course(f, width);
-			CarveChannel(m, g, c, vw * 0.3f, vd, vw * 0.5f, 9, {}, f.seed + 40);
+			// (no deeper than the river's own lowest bed, minBed: inland, troughs leaving the map
+			// had gone 10 m below the land and the whole map was raised to make up for it)
+			const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : -1e30f;
+			CarveChannel(m, g, c, vw * 0.3f, vd, vw * 0.5f, 9, {}, f.seed + 40, minBed);
 		}
 	}
 	for (const Feature& f : feats) {
@@ -2018,7 +2021,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		const float wd = Num(wr.f->j, "waterDepth", wr.depth * 0.45f);
 		std::vector<float> bed(n);
 		for (size_t i = 0; i < n; i++)
-			bed[i] = (i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) ? wr.bed[i] : std::min(wr.bed[i], g.sample(m.vx(wr.c[i].x), m.vz(wr.c[i].z)));
+			// (lower where a later channel cut it, but at most half a metre under its own carved bed:
+			// tributaries share the main river's lower course, and each river's water had followed
+			// the ground the river before it had lowered at its lips, a metre deeper per river)
+			bed[i] = (i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) ? wr.bed[i] : std::max(std::min(wr.bed[i], g.sample(m.vx(wr.c[i].x), m.vz(wr.c[i].z))), wr.bed[i] - 0.5f);
 		for (size_t i = 1; i < n; i++)
 			if (!(i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) && !(wr.lakeAt.size() > i - 1 && wr.lakeAt[i - 1] > -1e29f))
 				bed[i] = std::min(bed[i], bed[i - 1]);
@@ -2078,11 +2084,14 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 						if (over <= 0.0f)
 							continue;
 						const int x0 = (int)std::floor(m.vx(p.x)), z0 = (int)std::floor(m.vz(p.z));
+						// never below half a metre under this river's own carved bed (where rivers share
+						// a course, the lowering had fed on itself: a pit 11 m deep)
+						const float floorM = wr.bed[i] + (wr.bed[i + 1] - wr.bed[i]) * t - 0.5f;
 						for (int dz = 0; dz <= 1; dz++)
 							for (int dx = 0; dx <= 1; dx++) {
 								const int x = x0 + dx, z = z0 + dz;
 								if (x >= 0 && z >= 0 && x < m.gw() && z < m.gh())
-									g.at(x, z) -= over * 0.7f;
+									g.at(x, z) = std::max(g.at(x, z) - over * 0.7f, std::min(g.at(x, z), floorM));
 							}
 						lowered++;
 					}
