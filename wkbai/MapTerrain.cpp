@@ -574,7 +574,7 @@ namespace {
 	// floor, and falls on from that beyond it (a river through a lake no longer cuts a trench
 	// through its rim at the floor's depth, which drained it)
 	std::vector<float> CarveChannel(const Map& m, Grid& g, const std::vector<V2>& c, float width, float depth, float bank, float bankDeg,
-		const std::vector<float>& fordWeight, uint32_t seed, float minBed = -1e30f, const std::vector<float>* lakeAt = nullptr)
+		const std::vector<float>& fordWeight, uint32_t seed, float minBed = -1e30f, const std::vector<float>* lakeAt = nullptr, float gradeM = 0)
 	{
 		std::vector<float> bed(c.size());
 		float prev = 1e30f;
@@ -611,6 +611,27 @@ namespace {
 				sm[i] = bed[i];
 			else if (i > 0)
 				sm[i] = std::min(sm[i], sm[i - 1] - 0.005f);
+		}
+		// gradeM: the bed smoothed over that distance into an even fall (land from contours, as OS
+		// Terrain 50, has terraced valley floors: the bed followed them as flats and sudden drops,
+		// a fall at every terrace); kept falling, a lake's stretch kept as it is
+		if (gradeM > 5.0f) {
+			const int k = std::max(1, (int)std::lround(gradeM / 5.0f));
+			std::vector<float> gs = sm;
+			for (int pass = 0; pass < 2; pass++) {
+				for (size_t i = 0; i < sm.size(); i++) {
+					if (onLake(i)) { gs[i] = sm[i]; continue; }
+					float s = 0; int n = 0;
+					for (int j = -k; j <= k; j++) {
+						const long q = (long)i + j;
+						if (q >= 0 && q < (long)sm.size() && !onLake((size_t)q)) { s += sm[q]; n++; }
+					}
+					gs[i] = s / n;
+				}
+				for (size_t i = 1; i < gs.size(); i++)
+					if (!onLake(i)) gs[i] = std::min(gs[i], gs[i - 1] - 0.005f);
+				sm = gs;
+			}
 		}
 		// never below minBed (a river reaching the sea: its bed stays above the sea, which would
 		// otherwise run up the channel into the valley)
@@ -1636,6 +1657,13 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 
 	// 4. the forms set or cut
 	t1 = std::chrono::steady_clock::now();
+	// what the rivers' troughs and channels took off the land, per vertex (for the lakes' rims below)
+	Grid riverCut;
+	riverCut.init(gw, gh, 0.0f);
+	int lakeRimsMended = 0;
+	// per vertex the level of the lake a kept rim holds (the lowering at the rivers' lips stops there)
+	Grid rimHold;
+	rimHold.init(gw, gh, -1e30f);
 	for (const Feature& f : feats) {
 		if (f.kind == "plateau") {
 			Site st;
@@ -1762,7 +1790,9 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			// (no deeper than the river's own lowest bed, minBed: inland, troughs leaving the map
 			// had gone 10 m below the land and the whole map was raised to make up for it)
 			const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : -1e30f;
+			const Grid before = g;
 			CarveChannel(m, g, c, vw * 0.3f, vd, vw * 0.5f, 9, {}, f.seed + 40, minBed);
+			for (size_t i = 0; i < g.v.size(); i++) riverCut.v[i] += before.v[i] - g.v[i];
 		}
 	}
 	for (const Feature& f : feats) {
@@ -1991,8 +2021,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			fr.push_back({ c[at].x, c[at].z });
 		}
 		const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : hasSea ? sea + 0.4f : -1e30f; // (above the sea: it never runs up the channel)
+		const Grid beforeChannel = g;
 		const std::vector<float> bed = CarveChannel(m, g, c, width, depth, Num(f.j, "bank", width * 1.5f), Num(f.j, "bankDeg", 32), fw, f.seed + 41, minBed,
-			lakeAt.empty() ? nullptr : &lakeAt);
+			lakeAt.empty() ? nullptr : &lakeAt, Num(f.j, "grade", 0));
+		for (size_t i = 0; i < g.v.size(); i++) riverCut.v[i] += beforeChannel.v[i] - g.v[i];
 		float maxRise = -1e30f;
 		for (size_t i = 1; i < bed.size(); i++) maxRise = std::max(maxRise, bed[i] - bed[i - 1]);
 		json& r = rep(f);
@@ -2008,6 +2040,74 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		if (f.j.value("water", false))
 			wet.push_back({ &f, c, bed, width, depth, lakeAt });
 	}
+	// The lakes' rims kept: water.json's own lakes (lakes found on the land, not the generator's),
+	// each flooded from its point over the land as cut (8-connected below its level); where the flood
+	// would run out through land a river's trough or channel cut below the level, that land gets back
+	// what the river took (a lake left behind a low bar at its outlet; the river's water falls over
+	// it). Done here, before the rivers' water, so their water and the lakes see the land as it stays
+	// (mended afterwards, the rivers' water had stood above the land the lake no longer reached)
+	{
+		std::vector<std::array<float, 3>> own;
+		json wj0, gen0 = m.raw.value("terrain", json::object()).value("generated", json::object());
+		const float raised0 = gen0.value("raisedByM", 0.0f);
+		if (ReadJson(folder / "water.json", wj0) && wj0.is_object())
+			for (const json& l : wj0.value("lakes", json::array())) {
+				if (!l.is_array() || l.size() < 3) continue;
+				bool mine = false;
+				for (const json& p : gen0.value("lakes", json::array()))
+					if (p.is_array() && p.size() >= 3 && std::abs(l[0].get<float>() - p[0].get<float>()) < 0.05f
+						&& std::abs(l[1].get<float>() - p[1].get<float>()) < 0.05f && std::abs(l[2].get<float>() - p[2].get<float>()) < 0.05f)
+						mine = true;
+				if (!mine && (!hasSea || std::abs(l[1].get<float>() - raised0 - sea) > 0.01f))
+					own.push_back({ l[0].get<float>() / TILE, l[2].get<float>() / TILE, l[1].get<float>() - raised0 });
+			}
+		int mended = 0;
+		const int gw2 = m.gw(), gh2 = m.gh();
+		for (const auto& p : own) {
+			const float L = p[2];
+			// (in the heights as heights.png keeps them, as the game floods: a rim a hair above the
+			// level could round below it; a rim the river took within 5 cm of the level is put back
+			// a centimetre above it)
+			auto q = [&](float v) { return std::round(v / m.scale * 256.0f) / 256.0f * m.scale; };
+			for (int round = 0; round < 20; round++) {
+				// the seed: the lowest of the tile's corners
+				int sx = std::clamp((int)std::floor(p[0]), 0, gw2 - 2), sz = std::clamp((int)std::floor(p[1]), 0, gh2 - 2);
+				int seed = -1;
+				for (int c = 0; c < 4; c++) {
+					const int x = sx + (c & 1), z = sz + (c >> 1);
+					if (q(g.at(x, z)) < L && (seed < 0 || g.at(x, z) < g.v[seed])) seed = z * gw2 + x;
+				}
+				if (seed < 0) break;
+				std::vector<uint8_t> seen(g.v.size(), 0);
+				std::vector<int> stack = { seed }, breach;
+				seen[seed] = 1;
+				while (!stack.empty()) {
+					const int k = stack.back();
+					stack.pop_back();
+					const int x = k % gw2, z = k / gw2;
+					for (int dz = -1; dz <= 1; dz++)
+						for (int dx = -1; dx <= 1; dx++) {
+							const int nx = x + dx, nz = z + dz;
+							if (nx < 0 || nz < 0 || nx >= gw2 || nz >= gh2) continue;
+							const int nk = nz * gw2 + nx;
+							if (seen[nk] || q(g.v[nk]) >= L) continue;
+							seen[nk] = 1;
+							if (riverCut.v[nk] > 0 && g.v[nk] + riverCut.v[nk] >= L - 0.05f) breach.push_back(nk);
+							else stack.push_back(nk);
+						}
+				}
+				if (breach.empty()) break;
+				for (int k : breach) {
+					g.v[k] = std::max(g.v[k] + riverCut.v[k], L + m.scale / 256.0f);
+					riverCut.v[k] = 0;
+					rimHold.v[k] = std::max(rimHold.v[k], L + m.scale / 256.0f);
+					mended++;
+				}
+			}
+		}
+		if (mended) printf("Terrain: lake rims kept, %d vertices given back\n", mended);
+		lakeRimsMended = mended;
+	}
 	// Their water: a sloped surface along the course (the game's sloped rivers), its height at
 	// each point the bed there (as carved, or lower where a later channel cut it) plus the water's
 	// depth ("waterDepth", m; 0.45 of the channel's depth), thinner where the bed runs steeply
@@ -2015,16 +2115,26 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	// smoothed a little and never rising downstream. Heights before the raise below.
 	struct WetWay { const Feature* f; std::vector<V2> c; std::vector<float> level; float width; };
 	std::vector<WetWay> wetWays;
+	// the lakes and the sea as they flood the land now, every channel cut and the lakes' rims kept:
+	// the banks below, and each river's stretches on a lake again (found before its channel was cut,
+	// a lake had reached along troughs its kept rim now closes, and the river's water there had
+	// stayed at the lake's level, metres above the land)
+	if (!wet.empty()) {
+		floodLakes();
+		for (WetRiver& wr : wet)
+			if (!wr.lakeAt.empty())
+				for (size_t i = 0; i < wr.c.size() && i < wr.lakeAt.size(); i++) {
+					const int x = std::clamp((int)std::lround(m.vx(wr.c[i].x)), 0, m.gw() - 1), z = std::clamp((int)std::lround(m.vz(wr.c[i].z)), 0, m.gh() - 1);
+					wr.lakeAt[i] = lakeOn[(size_t)z * m.gw() + x];
+				}
+	}
 	for (const WetRiver& wr : wet) {
 		const size_t n = wr.c.size();
 		if (n < 2) continue;
 		const float wd = Num(wr.f->j, "waterDepth", wr.depth * 0.45f);
 		std::vector<float> bed(n);
 		for (size_t i = 0; i < n; i++)
-			// (lower where a later channel cut it, but at most half a metre under its own carved bed:
-			// tributaries share the main river's lower course, and each river's water had followed
-			// the ground the river before it had lowered at its lips, a metre deeper per river)
-			bed[i] = (i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) ? wr.bed[i] : std::max(std::min(wr.bed[i], g.sample(m.vx(wr.c[i].x), m.vz(wr.c[i].z))), wr.bed[i] - 0.5f);
+			bed[i] = (i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) ? wr.bed[i] : std::min(wr.bed[i], g.sample(m.vx(wr.c[i].x), m.vz(wr.c[i].z)));
 		for (size_t i = 1; i < n; i++)
 			if (!(i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) && !(wr.lakeAt.size() > i - 1 && wr.lakeAt[i - 1] > -1e29f))
 				bed[i] = std::min(bed[i], bed[i - 1]);
@@ -2056,6 +2166,29 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		// lake's level near the shore) at the lake's level, as the lake reaches up it
 		for (size_t i = n - 1; i-- > 0;)
 			sm[i] = std::max(sm[i], sm[i + 1]);
+		// never above the land beside the channel (the lower bank, half the width and 2 m out, plus
+		// 0.3 m; a bank under a lake or the sea: its surface, as the land now floods): the level of a
+		// lake or the sea carried upstream had held rivers 2-12 m above land lower than it but cut
+		// off from it (behind a lake's rim, behind the coast), a raised ribbon; then falling again
+		{
+			const float out = wr.width / 2 + 2;
+			for (size_t i = 0; i < n; i++) {
+				if (lakeLevel(i) > -1e29f) continue;
+				const V2 tan = Norm(wr.c[std::min(i + 1, n - 1)] - wr.c[i > 0 ? i - 1 : 0]);
+				const V2 a = wr.c[i] + Perp(tan) * out, b = wr.c[i] - Perp(tan) * out;
+				// (a bank under a lake: the lake's surface)
+				auto bankAt = [&](V2 p) {
+					const int vx = std::clamp((int)std::lround(m.vx(p.x)), 0, m.gw() - 1), vz = std::clamp((int)std::lround(m.vz(p.z)), 0, m.gh() - 1);
+					const float lk = lakeOn.empty() ? -1e30f : lakeOn[(size_t)vz * m.gw() + vx];
+					return std::max(g.sample(m.vx(p.x), m.vz(p.z)), lk);
+				};
+				const float bankLow = std::min(bankAt(a), bankAt(b));
+				sm[i] = std::min(sm[i], std::max(bankLow + 0.3f, bed[i] + 0.12f));
+			}
+			for (size_t i = 1; i < n; i++)
+				if (lakeLevel(i) < -1e29f)
+					sm[i] = std::min(sm[i], sm[i - 1]);
+		}
 		// The ground as the game draws it (Terrain::getSmoothHeight, a Catmull-Rom spline through the
 		// vertices) bulges above the vertices where the land bends, most at a fall's lip, and rose
 		// through the water there: the vertices round such a place lowered until it lies 0.15 m
@@ -2091,7 +2224,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 							for (int dx = 0; dx <= 1; dx++) {
 								const int x = x0 + dx, z = z0 + dz;
 								if (x >= 0 && z >= 0 && x < m.gw() && z < m.gh())
-									g.at(x, z) = std::max(g.at(x, z) - over * 0.7f, std::min(g.at(x, z), floorM));
+									g.at(x, z) = std::max(g.at(x, z) - over * 0.7f, std::min(g.at(x, z), std::max(floorM, rimHold.at(x, z))));
 							}
 						lowered++;
 					}
@@ -2169,6 +2302,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	gen["lakes"] = lakesJ;
 	gen["seaLevel"] = hasSea ? json(sea) : json();
 	gen["raisedByM"] = raisedBy;
+	if (lakeRimsMended) gen["lakeRimsKept"] = lakeRimsMended;
 	for (json& rv : riversGen)
 		for (json& pt : rv["course"])
 			pt[2] = pt[2].get<float>() + raisedBy;
