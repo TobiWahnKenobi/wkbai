@@ -21,6 +21,7 @@
 #include "gameset/ScriptContext.h"
 #include "gameset/condition.h"
 #include "NNSearch.h"
+#include "PeasantLodging.h"
 #include <algorithm>
 #include <cmath>
 
@@ -281,6 +282,14 @@ void EconomyNeeds(Government& g)
 		g.board.withdraw(ECONOMY, "workers.gold");
 }
 
+// a peasant in the lodging's hands (PeasantLodging.h: going in, inside or waiting for room): it
+// takes no orders, so Labour neither counts it idle nor picks it as a miner (at night it sent a
+// lodger to the gold, refused, and held it for two minutes as a miner that never mined)
+static bool Lodged(const ServerGameObject* p)
+{
+	return p->lodging != LODGE_NONE && p->lodging != LODGE_RETURNING;
+}
+
 // Labour & Population's acts (Labour::think): the cap, idle peasants, the gold miners asked for
 void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 {
@@ -464,7 +473,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			woodTaken++;
 		std::vector<ServerGameObject*> candidates;
 		for (ServerGameObject* p : peasants)
-			if (!ai.ministryHeld.count(p->id) && p->isInteractable()) {
+			if (!ai.ministryHeld.count(p->id) && p->isInteractable() && !Lodged(p)) {
 				const std::string order = CurrentOrder(srv, p);
 				if (order.empty() || (order == "Chop Tree" && woodTaken < fromWood))
 					candidates.push_back(p);
@@ -508,7 +517,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	{
 		int waiting = 0;
 		for (ServerGameObject* p : peasants)
-			waiting += !ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable();
+			waiting += !ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable() && !Lodged(p);
 		// ("labour.idleFrom": when more than two became idle, plus 1; 0 while not)
 		if (waiting <= 2)
 			g.board.report("labour.idleFrom", 0.0);
@@ -518,7 +527,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	const double idleFrom = g.board.get("labour.idleFrom");
 	if (!(MinOff() & 1) && idleFrom > 0.0 && now - (idleFrom - 1.0) >= 10.0)
 	for (ServerGameObject* p : peasants)
-		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable()) {
+		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable() && !Lodged(p)) {
 			if (++idle <= 2)
 				continue;
 			if (!AIUtil::EnemiesNear(me, p->position, 200.0f, false).empty())
