@@ -61,10 +61,60 @@ namespace {
 	constexpr int FALL_SEGMENTS = 18;  // the sheet's pieces from the rim down
 	// a painted river tile dropping this much (from its highest to its lowest corner) cascades
 	constexpr float CASCADE_DROP = 2.5f;
+	// sloped rivers (Terrain::slopedSurface): rapids from this slope of the surface, white all over
+	// RAPIDS_FULL steeper; a fall where its surface is at least as steep as SLOPED_FALL_SLOPE (as
+	// the lakes' falls, MIN_STEEPNESS: some 40 degrees), on down while steeper than half of it
+	constexpr float RAPIDS_SLOPE = 0.06f;
+	constexpr float RAPIDS_FULL = 0.30f;
+	constexpr float SLOPED_FALL_SLOPE = 0.8f;
+}
+
+// A sloped river tile's surface: its slope's gradient (up, per unit) from its corners
+static bool SlopedGradient(const Terrain* terrain, int x, int z, float& gx, float& gz)
+{
+	const TerrainTile* t = terrain->getTile(x, z);
+	if (!t || !t->slopedWater)
+		return false;
+	const float a = terrain->slopedSurfaceAt(x, z), b = terrain->slopedSurfaceAt(x + 1, z);
+	const float c = terrain->slopedSurfaceAt(x, z + 1), d = terrain->slopedSurfaceAt(x + 1, z + 1);
+	if (a == Terrain::NO_SLOPED_SURFACE || b == Terrain::NO_SLOPED_SURFACE || c == Terrain::NO_SLOPED_SURFACE || d == Terrain::NO_SLOPED_SURFACE)
+		return false;
+	gx = ((b - a) + (d - c)) * 0.5f / 5.0f;
+	gz = ((c - a) + (d - b)) * 0.5f / 5.0f;
+	return true;
+}
+
+float SlopedRapids(const Terrain* terrain, int x, int z)
+{
+	float gx, gz;
+	if (!SlopedGradient(terrain, x, z, gx, gz))
+		return 0.0f;
+	return std::clamp((std::sqrt(gx * gx + gz * gz) - RAPIDS_SLOPE) / (RAPIDS_FULL - RAPIDS_SLOPE), 0.0f, 1.0f);
+}
+
+// the way a sloped river tile flows along one axis (downhill on its surface; false: flat)
+static bool SlopedAxis(const Terrain* terrain, int x, int z, int& dx, int& dz)
+{
+	float gx, gz;
+	if (!SlopedGradient(terrain, x, z, gx, gz) || std::max(std::abs(gx), std::abs(gz)) < 1e-4f)
+		return false;
+	dx = dz = 0;
+	if (std::abs(gx) >= std::abs(gz))
+		dx = gx > 0 ? -1 : 1;
+	else
+		dz = gz > 0 ? -1 : 1;
+	return true;
 }
 
 float WaterLevelAtCorner(const Terrain* terrain, int x, int z, float level)
 {
+	// a sloped river's surface at the corner (the lake it runs into meets it there without a seam)
+	if (const float s = terrain->slopedSurfaceAt(x, z); s != Terrain::NO_SLOPED_SURFACE && std::abs(s - level) < WATERFALL_MIN_DROP) {
+		for (int dz = -1; dz <= 0; dz++)
+			for (int dx = -1; dx <= 0; dx++)
+				if (const auto* t = terrain->getTile(x + dx, z + dz); t && t->slopedWater)
+					return s;
+	}
 	float sum = 0;
 	int n = 0;
 	for (int dz = -1; dz <= 0; dz++)
@@ -76,6 +126,15 @@ float WaterLevelAtCorner(const Terrain* terrain, int x, int z, float level)
 			}
 		}
 	return n ? sum / n : level;
+}
+
+float TileWaterCorner(const Terrain* terrain, int tx, int tz, int cx, int cz)
+{
+	const TerrainTile* t = terrain->getTile(tx, tz);
+	if (t && t->slopedWater)
+		if (const float s = terrain->slopedSurfaceAt(cx, cz); s != Terrain::NO_SLOPED_SURFACE)
+			return s;
+	return WaterLevelAtCorner(terrain, cx, cz, t ? t->waterLevel : 0.0f);
 }
 
 // The ground's top at a point: the highest of the flat tile's two triangles (either diagonal),
@@ -113,6 +172,9 @@ std::vector<Waterfall> FindWaterfalls(const Terrain* terrain)
 				const TerrainTile* n = terrain->getTile(tx + dx, tz + dz);
 				// the same water (or a higher one) across the edge
 				if (!n || (n->fullOfWater && n->waterLevel > level - WATERFALL_MIN_DROP))
+					continue;
+				// a sloped river runs on down as its own surface (its falls below)
+				if (t->slopedWater && (n->slopedWater || !n->fullOfWater))
 					continue;
 				// the edge's corners, at vertex column/row 'line'
 				auto edgeCorners = [&](int k, float& h1, float& h2) {
@@ -169,6 +231,63 @@ std::vector<Waterfall> FindWaterfalls(const Terrain* terrain)
 		it->second = std::min(it->second, f.lip);
 	}
 	falls.erase(std::remove_if(falls.begin(), falls.end(), [&](const EdgeFall& f) { return f.lip > lowestLip[f.top] + SPILLWAY; }), falls.end());
+
+	// Sloped rivers' falls: at the top of a stretch whose surface is as steep as SLOPED_FALL_SLOPE
+	// or more along its flow (the tile above it gentler), the water pours over the edge between
+	// them, from the surface there down to where the stretch is no longer half as steep (as a
+	// lake's fall: the sheet follows the ground, the river's thin water under it)
+	int slopedFalls = 0;
+	auto slopeAlong = [&](int x, int z, int dx, int dz) {
+		float gx, gz;
+		if (!SlopedGradient(terrain, x, z, gx, gz))
+			return 0.0f;
+		return -(gx * dx + gz * dz);
+	};
+	for (int tz = 0; tz < terrain->height; tz++)
+		for (int tx = 0; tx < terrain->width; tx++) {
+			int dx, dz;
+			if (!SlopedAxis(terrain, tx, tz, dx, dz) || slopeAlong(tx, tz, dx, dz) < SLOPED_FALL_SLOPE)
+				continue;
+			const TerrainTile* u = terrain->getTile(tx - dx, tz - dz);
+			if (!u || !u->fullOfWater || slopeAlong(tx - dx, tz - dz, dx, dz) >= SLOPED_FALL_SLOPE)
+				continue; // within the stretch (its top has the fall), or no water above it
+			// down the stretch to where it runs gentler again
+			int k = 1;
+			while (k < MAX_REACH && slopeAlong(tx + dx * k, tz + dz * k, dx, dz) >= SLOPED_FALL_SLOPE * 0.5f)
+				k++;
+			const TerrainTile* foot = terrain->getTile(tx + dx * k, tz + dz * k);
+			if (!foot || !foot->fullOfWater)
+				continue;
+			// the edge above the stretch: its vertex line and the surface over it
+			int line, c1x, c1z, c2x, c2z;
+			if (dx != 0) {
+				line = tx + (dx > 0 ? 0 : 1);
+				c1x = c2x = line;
+				c1z = tz;
+				c2z = tz + 1;
+			}
+			else {
+				line = tz + (dz > 0 ? 0 : 1);
+				c1z = c2z = line;
+				c1x = tx;
+				c2x = tx + 1;
+			}
+			const float s1 = terrain->slopedSurfaceAt(c1x, c1z), s2 = terrain->slopedSurfaceAt(c2x, c2z);
+			const float top = (s1 != Terrain::NO_SLOPED_SURFACE && s2 != Terrain::NO_SLOPED_SURFACE) ? (s1 + s2) * 0.5f : u->waterLevel;
+			// the foot: the surface at the stretch's lower edge
+			const int fx = tx + dx * k, fz = tz + dz * k;
+			const float bottom = terrain->waterSurfaceAt((fx - terrain->edge + 0.5f - dx * 0.5f) * TILE, (fz - terrain->edge + 0.5f - dz * 0.5f) * TILE, foot);
+			if (top - bottom < WATERFALL_MIN_DROP)
+				continue;
+			int dir = 0;
+			for (int d = 0; d < 4; d++)
+				if (DIRS[d][0] == dx && DIRS[d][1] == dz)
+					dir = d;
+			falls.push_back({ dir, line, dx != 0 ? tz : tx, top, bottom, k * TILE, 0.0f });
+			slopedFalls++;
+		}
+	if (slopedFalls)
+		printf("Waterfalls: %d tile edges where sloped rivers fall\n", slopedFalls);
 
 	// the design's falls: each a lip along the tile edges (x or z, as the line runs more), the
 	// tiles' edges it covers, falling to the side whose ground is lower
@@ -1013,6 +1132,109 @@ void DiligentWaterfalls::Impl::build()
 					printf("  cascade foot at %.0f, %.0f (%.1f high), falling (%d, %d) into %s\n", start.x, start.z, footY, dx, dz, water ? "water" : "river");
 			}
 	}
+	// Sloped rivers' rapids and cascades: white water over their surface where it runs steeply
+	// (PS_Cascade, as the painted rivers'), on the rapid tiles and the river tiles around them,
+	// fading towards the banks and where it runs gently again; at the foot of a rapid stretch,
+	// where it runs into gentle water, foam, mist, spray and the cascades' sound
+	size_t rapidTiles = 0;
+	{
+		const int W = terrain->width, H = terrain->height;
+		std::vector<float> rapids((size_t)W * H, 0.0f);
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++)
+				rapids[(size_t)z * W + x] = SlopedRapids(terrain, x, z);
+		auto rapidAt = [&](int x, int z) { return (x < 0 || z < 0 || x >= W || z >= H) ? 0.0f : rapids[(size_t)z * W + x]; };
+		auto sloped = [&](int x, int z) { const TerrainTile* t = terrain->getTile(x, z); return t && t->slopedWater; };
+		// a corner: as rapid as the most rapid tile round it, where all four are the river
+		auto cornerOpacity = [&](int cx, int cz) {
+			float r = 0;
+			for (int dz = -1; dz <= 0; dz++)
+				for (int dx = -1; dx <= 0; dx++) {
+					if (!sloped(cx + dx, cz + dz))
+						return 0.0f;
+					r = std::max(r, rapidAt(cx + dx, cz + dz));
+				}
+			return r;
+		};
+		auto surfaceAt = [&](float wx, float wz) {
+			const float fx = wx / TILE + terrain->edge, fz = wz / TILE + terrain->edge;
+			const int ix = std::clamp((int)std::floor(fx), 0, W - 1), iz = std::clamp((int)std::floor(fz), 0, H - 1);
+			return terrain->waterSurfaceAt(wx, wz, terrain->getTile(ix, iz));
+		};
+		constexpr int PIECES = 4;
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				if (!sloped(x, z))
+					continue;
+				bool near = false;
+				for (int dz = -1; dz <= 1 && !near; dz++)
+					for (int dx = -1; dx <= 1 && !near; dx++)
+						near = rapidAt(x + dx, z + dz) > 0.0f;
+				if (!near)
+					continue;
+				rapidTiles++;
+				const float o[4] = { cornerOpacity(x, z), cornerOpacity(x + 1, z), cornerOpacity(x, z + 1), cornerOpacity(x + 1, z + 1) };
+				const float lx = (x - terrain->edge) * TILE, lz = (z - terrain->edge) * TILE;
+				const uint32_t first = (uint32_t)verts.size();
+				for (int j = 0; j <= PIECES; j++)
+					for (int i = 0; i <= PIECES; i++) {
+						const float fu = (float)i / PIECES, fv = (float)j / PIECES;
+						// (a hair inside the tile: its own surface, not the next one's)
+						const float wx = lx + std::clamp(fu, 0.001f, 0.999f) * TILE, wz = lz + std::clamp(fv, 0.001f, 0.999f) * TILE;
+						const float y = surfaceAt(wx, wz) + 0.04f;
+						const float gx = (surfaceAt(wx + 0.75f, wz) - surfaceAt(wx - 0.75f, wz)) / 1.5f;
+						const float gz = (surfaceAt(wx, wz + 0.75f) - surfaceAt(wx, wz - 0.75f)) / 1.5f;
+						const float slope = std::sqrt(gx * gx + gz * gz);
+						const float dx = slope > 1e-4f ? -gx / slope : 1.0f, dz = slope > 1e-4f ? -gz / slope : 0.0f;
+						const float opacity = (o[0] * (1 - fu) + o[1] * fu) * (1 - fv) + (o[2] * (1 - fu) + o[3] * fu) * fv;
+						FallVertex v;
+						v.pos = Vector3(lx + fu * TILE, y, lz + fv * TILE);
+						v.normal = Vector3(-gx, 1.0f, -gz).normal();
+						const float a[4] = { wx * -dz + wz * dx, (300.0f - y) * 1.2f + 3.0f, std::clamp((slope - 0.12f) / 0.6f, 0.0f, 1.0f), opacity * 2.5f };
+						const float b[4] = { slope * TILE, 2.5f, dx, dz };
+						std::copy_n(a, 4, v.a);
+						std::copy_n(b, 4, v.b);
+						verts.push_back(v);
+					}
+				for (int j = 0; j < PIECES; j++)
+					for (int i = 0; i < PIECES; i++) {
+						const uint32_t a = first + j * (PIECES + 1) + i, c = a + PIECES + 1;
+						cascadeIndices.insert(cascadeIndices.end(), { a, c, a + 1, a + 1, c, c + 1 });
+					}
+			}
+		// the feet: a rapid tile whose downstream neighbour runs gently (or is a lake)
+		int feet = 0;
+		for (int z = 0; z < H; z++)
+			for (int x = 0; x < W; x++) {
+				int dx, dz;
+				if (rapidAt(x, z) < 0.5f || !SlopedAxis(terrain, x, z, dx, dz))
+					continue;
+				const TerrainTile* t = terrain->getTile(x, z);
+				const TerrainTile* n = terrain->getTile(x + dx, z + dz);
+				if (!n || !n->fullOfWater || (n->slopedWater && rapidAt(x + dx, z + dz) >= 0.35f))
+					continue;
+				// the drop of the stretch above (up to 6 tiles of it)
+				float topLevel = t->waterLevel;
+				for (int k = 1; k <= 6; k++) {
+					const TerrainTile* u = terrain->getTile(x - dx * k, z - dz * k);
+					if (!u || !u->slopedWater || rapidAt(x - dx * k, z - dz * k) < 0.35f)
+						break;
+					topLevel = u->waterLevel;
+				}
+				const float drop = std::max(topLevel - n->waterLevel, 0.5f);
+				const float edgeX = (x - terrain->edge + (dx > 0 ? 1 : 0)) * TILE, edgeZ = (z - terrain->edge + (dz > 0 ? 1 : 0)) * TILE;
+				const Vector3 start = dx != 0 ? Vector3(edgeX, 0, (z - terrain->edge) * TILE) : Vector3((x - terrain->edge) * TILE, 0, edgeZ);
+				const Vector3 along = dx != 0 ? Vector3(0, 0, 1) : Vector3(1, 0, 0);
+				const float footY = terrain->waterSurfaceAt(start.x + along.x * TILE * 0.5f + dx * 2.5f, start.z + along.z * TILE * 0.5f + dz * 2.5f, n);
+				emitFoot(start, along, (float)dx, (float)dz, TILE, 0.5f, footY, std::min(drop, 6.0f), true);
+				addSound(Vector3(start.x + along.x * TILE * 0.5f, footY, start.z + along.z * TILE * 0.5f), std::min(drop, 6.0f) * TILE / 25.0f, true);
+				if (feet++ < 8)
+					printf("  rapids foot at %.0f, %.0f (%.1f high, %.1f below the stretch above)\n", start.x, start.z, footY, drop);
+			}
+		if (rapidTiles)
+			printf("Waterfalls: rapids on %zu sloped river tiles, %d feet\n", rapidTiles, feet);
+	}
+	cascadeTiles += rapidTiles;
 	// at most so many: a random part of each (any first part of them is spread evenly, so the
 	// lower qualities draw the first few)
 	std::shuffle(mist.begin(), mist.end(), rng);

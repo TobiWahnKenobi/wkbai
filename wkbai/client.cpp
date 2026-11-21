@@ -1239,12 +1239,16 @@ void Client::tick()
 					if (text != own) {
 						std::string error;
 						auto design = std::make_shared<WaterDesign>();
+						const bool slopedBefore = terrain->waterDesign && terrain->waterDesign->hasSlopedWater();
 						if (text.empty())
 							terrain->waterDesign.reset();
 						else if (design->fromText(text, error))
 							terrain->waterDesign = design;
 						else
 							printf("Client: the host's water design can't be read: %s\n", error.c_str());
+						// its sloped rivers are water the units wade through: as the host's server has it
+						if (slopedBefore || (terrain->waterDesign && terrain->waterDesign->hasSlopedWater()))
+							terrain->refillWater();
 						if (cliInterface)
 							cliInterface->waterDesignChanged = true;
 						printf("Client: the host's water design differs from ours, taken (%zu bytes)\n", text.size());

@@ -14122,6 +14122,8 @@ void Test_SimProfile()
 void Test_MapTerrain();
 // Step 17.5's test: MapMaterialsTest.cpp
 void Test_MapMaterials();
+// the sloped rivers' test: TiltedWaterTest.cpp
+void Test_TiltedWater();
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -14235,6 +14237,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
 {Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
 {Test_SimProfile, "Simulation profile: two armies of up to 10,000 units standing, marching and fighting; ms per step and its parts (lockstep's cost)"},
+{Test_TiltedWater, "Tilted water: a sloped stream down a hillside into a lake (format, never rising, the lake met without a seam, floating, rapids and a fall, wading); a generated river with water, compiled, server and client the same, played"},
 };
 
 void LaunchTest()

@@ -1343,7 +1343,7 @@ void ServerEnvironment::prepareFloods(Server& server)
 			if (tile && tile->fullOfWater) {
 				const float bed = std::min({ t->getVertex(t->edge + x, t->edge + z), t->getVertex(t->edge + x + 1, t->edge + z),
 					t->getVertex(t->edge + x, t->edge + z + 1), t->getVertex(t->edge + x + 1, t->edge + z + 1) });
-				if (tile->waterLevel - bed > 1.5f) {
+				if ((tile->slopedWater ? t->waterDepthAt(t->edge + x, t->edge + z) : tile->waterLevel - bed) > 1.5f) {
 					deepTiles.push_back(z * w + x);
 					deepGrid[z * w + x] = 1;
 				}

@@ -48,6 +48,7 @@ SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
 Texture2D<float> seaTexture; // per tile: 1 in a sea's open water, 0 elsewhere (lakes; BuildWaterFlow)
+Texture2D<float> rapidsTexture; // per tile: a sloped river's rapids, 0 gentle to 1 steep (SlopedRapids)
 // per playable tile... of the renderer's grid (terrain width x height): the wind field's still
 // part (WindShelterMap: the factor on the wind's speed / 1.5), for the grass's Field level
 Texture2D<float> windShelter;
@@ -1338,13 +1339,15 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
 	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
-	float rush = 0, river = 0, swellPhase = 0, swell = 0;
+	float rush = 0, river = 0, swellPhase = 0, swell = 0, rapids = 0;
 	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0) {
 		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
 		float2 fdir = f.xy * 2 - 1;
-		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow(); // units per second
+		// (a sloped river's rapids: up to three and a half times as fast, all rushing)
+		rapids = rapidsTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
+		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow() * (1 + 2.5 * rapids); // units per second
 		river = f.a;
-		rush = f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5);
+		rush = max(f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5), rapids * 1.6);
 		const float cycle = 2.0;
 		float p0 = frac(FlowClock() / cycle), p1 = frac(FlowClock() / cycle + 0.5);
 		float w0 = 1 - abs(2 * p0 - 1);
@@ -1394,6 +1397,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 			foam *= lerp(saturate(1 - input.Depth / 0.5), 1, river);
 		// white water where a narrow river runs fast, on the ripples' crests
 		foam = max(foam, saturate((slope.x + slope.y - 2) * 3 - 0.6) * rush * rush * 0.35);
+		// rapids: broken white water all over, the more the steeper
+		foam = max(foam, saturate((slope.x + slope.y - 2) * 2.5 + rapids * 1.3 - 0.45) * rapids * 0.85);
 		// the swell breaking: foam on its crests in the last 1.2 units of depth
 		foam = max(foam, saturate((sin(swellPhase) - 0.7) * 4) * saturate(1 - input.Depth / 0.8) * swell * 0.7);
 		foam *= 1 - 0.85 * input.Flood; // still water over the fields: no surf ring at its edge
@@ -1480,6 +1485,10 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float halfWidth = max(riverWidth.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz), 1.5);
 	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x * FloodFlow(); // units per second
 	float tight = saturate((17 - halfWidth) / 11); // 1 where it is 12 units wide or less, 0 from 34
+	// a sloped river's rapids (SlopedRapids): faster, up to three and a half times, and tight
+	float rapids = rapidsTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
+	current *= 1 + 2.5 * rapids;
+	tight = max(tight, rapids);
 	const float rcycle = 3.0;
 	float q0 = frac(FlowClock() / rcycle), q1 = frac(FlowClock() / rcycle + 0.5);
 	float v0 = 1 - abs(2 * q0 - 1);
@@ -1592,6 +1601,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	}
 	riverCrest *= tight * saturate(rf.y / 0.8);
 	float riverFoam = max(bankFoam, riverCrest) * river;
+	// rapids: streaks of white water carried down with the current, all white where it is steepest
+	float rapidNoise = RiverNoise(float2(s0 * 0.45, rf.y * 0.9)) * v0 + RiverNoise(float2(s1 * 0.45, rf.y * 0.9) + 0.5) * (1 - v0);
+	riverFoam = max(riverFoam, saturate((rapidNoise - 0.62 + rapids * 0.75) * 3.0) * rapids * 0.95);
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9 * (1 - 0.85 * input.Flood);
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
@@ -2007,6 +2019,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> pipeline;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
 	RefCntAutoPtr<ITexture> seaMap; // and where it is a sea's open water
+	RefCntAutoPtr<ITexture> rapidsMap; // and a sloped river's rapids (SlopedRapids)
 	RefCntAutoPtr<ITexture> coastMap; // and each tile's distance to the land (the sea's ice)
 	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
@@ -2422,6 +2435,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "seaTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "rapidsTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "coastTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "windShelter", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -2999,8 +3013,10 @@ void DiligentEnhancedTerrainRenderer::init()
 						// the corners at the mean level of the water around them at about this level (a clean
 						// step where waters at different heights meet: DiligentWaterfalls)
 						const float lv = tile->waterLevel;
-						const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
-						const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
+						// (a sloped river: its surface at the corners)
+						const float w00 = TileWaterCorner(terrain, x, z, x, z), w10 = TileWaterCorner(terrain, x, z, x + 1, z);
+						const float w11 = TileWaterCorner(terrain, x, z, x + 1, z + 1), w01 = TileWaterCorner(terrain, x, z, x, z + 1);
+						(void)lv;
 						lakeVertices.insert(lakeVertices.end(), {
 							LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 							LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
@@ -3082,6 +3098,13 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	const uint32_t W = terrain->width, H = terrain->height;
 	put(flowMap, "water flow map", "flowTexture", W, H, TEX_FORMAT_RGBA8_UNORM, 4, flow.data());
 	put(seaMap, "open sea map", "seaTexture", W, H, TEX_FORMAT_R8_UNORM, 1, sea.data());
+	{
+		std::vector<uint8_t> rapids((size_t)W * H, 0);
+		for (uint32_t z = 0; z < H; z++)
+			for (uint32_t x = 0; x < W; x++)
+				rapids[(size_t)z * W + x] = (uint8_t)std::lround(SlopedRapids(terrain, (int)x, (int)z) * 255.0f);
+		put(rapidsMap, "rapids map", "rapidsTexture", W, H, TEX_FORMAT_R8_UNORM, 1, rapids.data());
+	}
 	put(coastMap, "coast distance map", "coastTexture", W, H, TEX_FORMAT_R8_UNORM, 1, coast.data());
 	{
 		// the wind field (neutral until the client's first build, uploaded in render)
@@ -3303,8 +3326,9 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 					// the corners at the mean level of the water around them at about this level (a clean
 					// step where waters at different heights meet: DiligentWaterfalls)
 					const float lv = tile->waterLevel;
-					const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
-					const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
+					const float w00 = TileWaterCorner(terrain, x, z, x, z), w10 = TileWaterCorner(terrain, x, z, x + 1, z);
+					const float w11 = TileWaterCorner(terrain, x, z, x + 1, z + 1), w01 = TileWaterCorner(terrain, x, z, x, z + 1);
+					(void)lv;
 					lakeVertices.insert(lakeVertices.end(), {
 						LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 						LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },

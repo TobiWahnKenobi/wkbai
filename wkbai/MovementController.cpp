@@ -457,7 +457,8 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 		// deep water (wkbai's: the original's tile test has none, but its land units' masks keep them
 		// off water textures); a type that may traverse "Water" wades through any depth
 		if (!waterUnit && trnTile->fullOfWater && !blueprint->wades()) {
-			if (trnTile->waterLevel - *minH > 1.5f)
+			// (a sloped river: by its corners, Terrain::waterDepthAt; level water as it always was)
+			if ((trnTile->slopedWater ? trn->waterDepthAt(trn->edge + tx, trn->edge + tz) : trnTile->waterLevel - *minH) > 1.5f)
 				return true;
 		}
 
