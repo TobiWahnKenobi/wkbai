@@ -437,11 +437,19 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// The players' commands (NETSRVMSG_COMMAND, one per unit) run as they come, up to
 	// commandsPerStep in a step ("commandsPerStep" in wkconfig.json, default 500; 0 no limit);
 	// the rest wait here and run at the start of the next steps, in the order they came: a
-	// 10,000-unit order spreads over 20 steps instead of stalling one. The same on every
-	// computer and in a replay (by the messages' order, not by time).
+	// 10,000-unit order spreads over 20 steps instead of stalling one. Also no new one once the
+	// step's commands have done commandWorkPerStep of the scripts' work (g_scriptWork: finder
+	// candidates and actions, counted; "commandWorkPerStep", default 50,000, about 75 attack orders; 0 no limit): an attack order runs
+	// the army scripts, hundreds of times a move's work. The same on every computer and in a
+	// replay (by the messages' order and counts, not by time).
 	struct PendingCommand { int command; uint32_t object, target; int mode; Vector3 destination, faceTo; };
 	std::deque<PendingCommand> pendingCommands;
 	uint32_t commandsThisStep = 0, commandsPerStep = 500;
+	uint64_t commandWorkThisStep = 0, commandWorkPerStep = 50000, commandWorkTotal = 0, commandsRun = 0;
+	bool commandMayStart() const {
+		return (!commandsPerStep || commandsThisStep < commandsPerStep) && (!commandWorkPerStep || commandWorkThisStep < commandWorkPerStep);
+	}
+	void runCommand(int command, uint32_t object, uint32_t target, int mode, const Vector3& destination, const Vector3& faceTo);
 	void issueCommand(int command, uint32_t object, int mode, uint32_t target, const Vector3& destination, const Vector3& faceTo = Vector3(-1, 0, 0));
 	void runPendingCommands();
 	// "parallelSight": the step's sight scans after the object loop, on the worker threads

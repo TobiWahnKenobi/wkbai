@@ -24,3 +24,13 @@ struct HiddenChild { std::FILE* out = nullptr; void* process = nullptr; };
 HiddenChild PopenHidden(const char* exePath);
 int PcloseHidden(HiddenChild& child);
 #endif
+
+// the calling thread's own CPU cycles (Windows; nanoseconds of its CPU time elsewhere): a cost
+// measured without the time other programs take the core away
+unsigned long long ThreadCycles();
+
+// a sampling profiler of the calling thread (Windows; nothing elsewhere), for the tests: the top
+// functions by samples, inclusive and exclusive
+#include <string>
+void SamplerStart();
+std::string SamplerStop(int top);

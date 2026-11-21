@@ -13882,6 +13882,7 @@ void Test_SimProfile()
 	// (the server's settings, read when it is made: "parallelSight", "commandsPerStep" 0 = no limit)
 	g_settings["parallelSight"] = cfg.value("parallelSight", false);
 	g_settings["commandsPerStep"] = cfg.value("commandsPerStep", 500u);
+	g_settings["commandWorkPerStep"] = cfg.value("commandWorkPerStep", (uint64_t)50000);
 	printf("SIMPROFILE parallelSight %d, commandsPerStep %u\n", cfg.value("parallelSight", false) ? 1 : 0, cfg.value("commandsPerStep", 500u));
 	extern bool g_actionProfile;
 	extern std::map<std::string, double> g_actionMs;
@@ -14106,6 +14107,12 @@ void Test_SimProfile()
 			ms.reserve(steps);
 			int spikes = 0;
 			const double phaseStart = now();
+			// the simulation thread's own cycles: the cost without the time other programs take the core
+			const unsigned long long cyclesStart = ThreadCycles();
+			// "sample": a phase's name: where its steps' time goes, by function (Windows)
+			const bool sampled = cfg.value("sample", std::string()) == phaseNames[phase];
+			if (sampled)
+				SamplerStart();
 			for (int i = 0; i < steps; i++) {
 				const Snap s0 = snap();
 				const double t0 = now();
@@ -14119,6 +14126,9 @@ void Test_SimProfile()
 				}
 			}
 			const double wall = now() - phaseStart;
+			const unsigned long long cyclesEnd = ThreadCycles();
+			if (sampled)
+				printf("SAMPLES %s %s\n", phaseNames[phase], SamplerStop(cfg.value("sampleTop", 60)).c_str());
 			const Snap phaseAfter = snap();
 			const SimProfileTotals& after = phaseAfter.t;
 			const double n = (double)std::max<size_t>(1, ms.size());
@@ -14132,13 +14142,19 @@ void Test_SimProfile()
 			// pathfinding: the paths started in the orders and the step's batch (both in "orders")
 			const double pathMs = (phaseAfter.path - phaseBefore.path + batchMs(phaseBefore, phaseAfter)) / n, astarMs = (phaseAfter.astar - phaseBefore.astar) / n;
 			const int aliveOwn = alive(0), aliveEnemy = alive(1);
-			printf("SIMPROFILE %5d units %-6s %4d steps (%.1f s wall): ms per step avg %.2f, p50 %.2f, p95 %.2f, max %.2f; %.0f%% of one core at 20 ms steps\n",
-				perSide * 2, phaseNames[phase], steps, wall / 1000.0, avg, pct(0.5), pct(0.95), sorted.empty() ? 0.0 : sorted.back(), avg / 20.0 * 100.0);
+			printf("SIMPROFILE %5d units %-6s %4d steps (%.1f s wall): ms per step avg %.2f, p50 %.2f, p95 %.2f, max %.2f; %.0f%% of one core at 20 ms steps; %.2f million cycles per step\n",
+				perSide * 2, phaseNames[phase], steps, wall / 1000.0, avg, pct(0.5), pct(0.95), sorted.empty() ? 0.0 : sorted.back(), avg / 20.0 * 100.0,
+				(double)(cyclesEnd - cyclesStart) / 1e6 / std::max(1, steps));
 			printf("SIMPROFILE %5d units %-6s   parts per step: sequences %.2f, object tree %.2f (AI %.2f), orders %.2f (pathfinding %.2f%s), movement %.2f, sight %.2f; %.0f objects processed\n",
 				perSide * 2, phaseNames[phase], per(before.sequences, after.sequences), per(before.tree - before.ai, after.tree - after.ai), per(before.ai, after.ai),
 				per(before.orders, after.orders), pathMs, detail ? (", searches on the threads " + std::to_string(astarMs).substr(0, 5)).c_str() : "",
 				per(before.movement, after.movement), per(before.sight, after.sight), (double)(after.objects - before.objects) / n);
 			printf("SIMPROFILE %5d units %-6s   per step: %s\n", perSide * 2, phaseNames[phase], detailText(phaseBefore, phaseAfter, n).c_str());
+			{
+				printf("COMMANDWORK %s: %llu commands run, %llu work, %.0f per command%s", phaseNames[phase], (unsigned long long)server.commandsRun, (unsigned long long)server.commandWorkTotal,
+					server.commandsRun ? (double)server.commandWorkTotal / server.commandsRun : 0.0, "\n");
+				server.commandsRun = 0; server.commandWorkTotal = 0;
+			}
 			printf("SIMPROFILE %5d units %-6s   %d orders given in %.0f ms before the phase; %d steps over %.0f ms; at its end %d and %d alive\n",
 				perSide * 2, phaseNames[phase], ordered, ordersMs, spikes, spikeMs, aliveOwn, aliveEnemy);
 			fflush(stdout);

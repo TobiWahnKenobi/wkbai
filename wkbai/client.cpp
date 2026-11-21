@@ -448,7 +448,7 @@ void Client::tick()
 					auto &vec = obj->parent->children.at(obj->blueprint);
 					vec.erase(std::find(vec.begin(), vec.end(), obj));
 					// remove from ID map
-					idmap.erase(obj->id);
+					idmapErase(obj->id);
 					// delete the object, bye!
 					delete obj;
 				}
@@ -1609,7 +1609,7 @@ ClientGameObject * Client::createObject(const GameObjBlueprint * blueprint, uint
 {
 	ClientGameObject *obj = new ClientGameObject(id, blueprint);
 	assert(idmap[id] == nullptr);
-	idmap[id] = obj;
+	idmapSet(id, obj);
 	return obj;
 }
 

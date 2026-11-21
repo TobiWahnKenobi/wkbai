@@ -71,3 +71,127 @@ int PcloseHidden(HiddenChild& child)
 	return (int)code;
 }
 #endif
+
+#ifdef _WIN32
+unsigned long long ThreadCycles()
+{
+	ULONG64 c = 0;
+	QueryThreadCycleTime(GetCurrentThread(), &c);
+	return c;
+}
+#else
+#include <ctime>
+unsigned long long ThreadCycles()
+{
+	timespec t{};
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+	return (unsigned long long)t.tv_sec * 1000000000ull + t.tv_nsec;
+}
+#endif
+
+// A sampling profiler for the tests (Windows): a thread that stops the given one about 1000 times
+// a second and notes the functions on its stack (by the PDB). SamplerStop: the top functions by
+// samples with them on the stack (inclusive) and on top (exclusive).
+#ifdef _WIN32
+#include <dbghelp.h>
+#include <atomic>
+#include <map>
+#include <vector>
+#include <algorithm>
+#pragma comment(lib, "dbghelp.lib")
+#pragma comment(lib, "winmm.lib")
+extern "C" __declspec(dllimport) unsigned int __stdcall timeBeginPeriod(unsigned int);
+extern "C" __declspec(dllimport) unsigned int __stdcall timeEndPeriod(unsigned int);
+namespace {
+	std::atomic<bool> g_samplerRun{ false };
+	std::thread g_samplerThread;
+	std::vector<std::vector<DWORD64>> g_samples;
+}
+void SamplerStart()
+{
+	if (g_samplerRun) return;
+	HANDLE target = nullptr;
+	DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &target, THREAD_ALL_ACCESS, FALSE, 0);
+	g_samples.clear();
+	g_samplerRun = true;
+	timeBeginPeriod(1);
+	g_samplerThread = std::thread([target]() {
+		HANDLE process = GetCurrentProcess();
+		while (g_samplerRun) {
+			Sleep(1);
+			if (SuspendThread(target) == (DWORD)-1) continue;
+			CONTEXT c{};
+			c.ContextFlags = CONTEXT_FULL;
+			// (nothing allocated while it is stopped: it may hold the heap's lock)
+			DWORD64 frames[64];
+			int n = 0;
+			if (GetThreadContext(target, &c)) {
+				// (frames by the unwind tables)
+				for (; n < 64 && c.Rip; n++) {
+					frames[n] = c.Rip;
+					DWORD64 base = 0;
+					PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &base, nullptr);
+					if (!f) { c.Rip = *(DWORD64*)c.Rsp; c.Rsp += 8; continue; }
+					void* handler = nullptr; DWORD64 frame = 0;
+					RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, f, &c, &handler, &frame, nullptr);
+				}
+			}
+			ResumeThread(target);
+			if (n)
+				g_samples.emplace_back(frames, frames + n);
+		}
+		CloseHandle(target);
+		(void)process;
+	});
+}
+std::string SamplerStop(int top)
+{
+	if (!g_samplerRun) return {};
+	g_samplerRun = false;
+	g_samplerThread.join();
+	timeEndPeriod(1);
+	HANDLE process = GetCurrentProcess();
+	SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+	SymInitialize(process, nullptr, TRUE);
+	std::map<DWORD64, std::string> names;
+	auto nameOf = [&](DWORD64 a) -> const std::string& {
+		auto it = names.find(a);
+		if (it != names.end()) return it->second;
+		char buf[sizeof(SYMBOL_INFO) + 512] = {};
+		SYMBOL_INFO* sym = (SYMBOL_INFO*)buf;
+		sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+		sym->MaxNameLen = 511;
+		DWORD64 disp = 0;
+		std::string n = SymFromAddr(process, a, &disp, sym) ? std::string(sym->Name) : "?";
+		return names[a] = n;
+	};
+	std::map<std::string, int> incl, excl;
+	for (const auto& st : g_samples) {
+		std::vector<const std::string*> seen;
+		for (size_t i = 0; i < st.size(); i++) {
+			const std::string& n = nameOf(st[i]);
+			if (i == 0) excl[n]++;
+			if (std::find(seen.begin(), seen.end(), &n) == seen.end()) { seen.push_back(&n); incl[n]++; }
+		}
+	}
+	SymCleanup(process);
+	auto list = [&](std::map<std::string, int>& m, const char* title) {
+		std::vector<std::pair<int, std::string>> v;
+		for (auto& [n, c] : m) v.emplace_back(c, n);
+		std::sort(v.rbegin(), v.rend());
+		std::string s = std::string(title) + ":\n";
+		char buf[600];
+		for (int i = 0; i < top && i < (int)v.size(); i++) {
+			snprintf(buf, sizeof(buf), "  %5.1f%%  %s\n", 100.0 * v[i].first / std::max<size_t>(1, g_samples.size()), v[i].second.c_str());
+			s += buf;
+		}
+		return s;
+	};
+	char head[100];
+	snprintf(head, sizeof(head), "%zu samples\n", g_samples.size());
+	return head + list(incl, "on the stack") + list(excl, "on top");
+}
+#else
+void SamplerStart() {}
+std::string SamplerStop(int) { return {}; }
+#endif
