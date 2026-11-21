@@ -23,6 +23,36 @@ ObjectFinderResult ObjectFinder::fail(ScriptContext* ctx) {
 	return {};
 }
 
+// FINDER_ASSOCIATES and FINDER_ASSOCIATORS on the client: the server's associations as mirrored
+// (NETCLIMSG_OBJECT_ASSOCIATION, ClientGameObject::associates). A command button's condition is
+// drawn on the client: right-clicking with the Druid ended the game with "Invalid object finder
+// call from Client" (the Dark Portal's "Don't Already have a portal", the AI play test of
+// 2026-11-18).
+static ObjectFinderResult ClientAssociations(ScriptContext* ctx, int category, bool associators) {
+	CliScriptContext* cctx = (CliScriptContext*)ctx;
+	ClientGameObject* self = cctx->getSelf();
+	ObjectFinderResult vec;
+	if (!self)
+		return vec;
+	const auto& map = associators ? self->associators : self->associates;
+	if (auto it = map.find(category); it != map.end())
+		for (const CliGORef& ref : it->second)
+			if (ClientGameObject* o = ref.get(); o && o->isInteractable())
+				vec.push_back(o);
+	return vec;
+}
+
+// FINDER_REFERENCERS on the client: the referencers' current tasks live on the server only, so none
+// (said once a game run, not fatal)
+static ObjectFinderResult ClientHasNoReferencers(ScriptContext* ctx) {
+	static bool said = false;
+	if (!said) {
+		said = true;
+		printf("(FINDER_REFERENCERS on the %s: none there, the tasks are the server's)\n", ctx->gameState->getProgramName());
+	}
+	return {};
+}
+
 struct FinderUnknown : ObjectFinder {
 	std::string name;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
@@ -101,6 +131,9 @@ struct FinderController : ObjectFinder {
 	}
 };
 
+// WKB.exe's Object_Finder_Target (0x450880): the context's target, else the unit's current one
+// (message 0x7d4); with neither the finder fails (returns false), it doesn't find an empty set
+// (FinderFailsWhenEmpty, below)
 struct FinderTarget : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ctx->isServer()) {
@@ -124,6 +157,12 @@ struct FinderTarget : ObjectFinder {
 	}
 };
 
+// (ARE_ASSOCIATED, values.cpp: a FINDER_TARGET that found nothing failed, as in WKB.exe)
+bool FinderFailsWhenEmpty(const ObjectFinder* finder)
+{
+	return dynamic_cast<const FinderTarget*>(finder) != nullptr;
+}
+
 struct FinderResults : ObjectFinder {
 	int ofd;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
@@ -138,7 +177,7 @@ struct FinderResults : ObjectFinder {
 struct FinderAssociates : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientAssociations(ctx, category, false);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		const auto &set = sctx->getSelf()->associates[category];
 		ObjectFinderResult vec;
@@ -155,7 +194,7 @@ struct FinderAssociates : ObjectFinder {
 struct FinderAssociators : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientAssociations(ctx, category, true);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		const auto &set = sctx->getSelf()->associators[category];
 		ObjectFinderResult vec;
@@ -297,7 +336,7 @@ struct FinderDisabledAssociates : ObjectFinder {
 struct FinderReferencers : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientHasNoReferencers(ctx);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		// in the referencers' order, each once (a set of pointers came out in the order of their
 		// addresses, which differ from run to run: the same game played differently)

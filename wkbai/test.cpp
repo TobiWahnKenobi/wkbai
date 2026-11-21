@@ -3129,7 +3129,10 @@ void Test_MinistryEconomy()
 					g->board.get("research.ordered"), g->board.get("builders.repaired"), g->board.get("missions.given"));
 				withinCap &= c.peasants <= cap + 3; // (those in training when the cap was reached)
 				goldSent |= g->board.get("labour.goldSent") > 0;
-				goldInTheWay |= g->board.get("economy.goldNeeded") > 0;
+				// (every miner sent while gold was in the way at that moment: a 5-minute sample of
+				// the need missed one the wood above 600 asked for and spent before the sample)
+				goldInTheWay |= g->board.get("economy.goldNeeded") > 0
+					|| (g->board.get("labour.goldSent") > 0 && g->board.get("labour.goldSentNeeded") >= g->board.get("labour.goldSent"));
 				with[id] = c;
 			}
 		}
@@ -10941,6 +10944,907 @@ void Test_SmallerItems()
 	printf(failures ? "UNITTEST FAILED (%d)\n" : "UNITTEST PASSED\n", failures);
 }
 
+// Improved mixed formations (ImprovedFormations, on by default): on 4 Peaks a Line of 8 Spearmen,
+// 6 Archers and 2 Knights of player 1027. Formed up: the Knights on the outermost files, every
+// Spearman's row in front of every Archer's, the places at least the Knight's spacing apart; an
+// Archer member told the melee "Attack" on an enemy takes its own attack's order; the formation's
+// reach of a point only its Archers could shoot at: in reach. Prints "MIXEDF ..." and "MIXEDF
+// result: ok|FAIL".
+void Test_MixedFormation();
+
+// Attack at will (the "Aggression" command): on 4 Peaks, 4 Spearmen and 4 Archers of player 1027,
+// idle, out of formations, set to attack at will; an enemy Spearman walks past them at about
+// 12 m. Prints each second who of ours has an order (and which), and "ATWILL result: ok|FAIL"
+// (ok: at least half of ours went for the enemy within 15 s of it coming within 20 m).
+void Test_AttackAtWill()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	const GameSet* gs = server.gameSet.get();
+	ServerGameObject* player = server.findObject(1027);
+	ServerGameObject* enemyPlayer = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() && o->getPlayer() != player
+			&& o->getPlayer()->blueprint->name != "Neutral Player") {
+			enemyPlayer = o->getPlayer();
+			break;
+		}
+	}
+	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* archerBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Archer");
+	const int aggression = gs->commands.names.getIndex("Aggression"), move = gs->commands.names.getIndex("Move");
+	if (!player || !enemyPlayer || !spearBp || !archerBp || aggression < 0 || move < 0) {
+		printf("ATWILL not set up\nATWILL result: FAIL\n");
+		return;
+	}
+	Vector3 at(0, 0, 0);
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && o->getPlayer() == player && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+			at = o->position + Vector3(40, 0, 0);
+			break;
+		}
+	}
+	std::vector<ServerGameObject*> ours;
+	for (int i = 0; i < 8; i++)
+		if (ServerGameObject* u = server.spawnObject(i < 4 ? spearBp : archerBp, player, at + Vector3((float)(i % 4) * 3.0f, 0, (float)(i / 4) * 3.0f), Vector3(0, 0, 0)))
+			ours.push_back(u);
+	server.timeManager.unpause();
+	for (int i = 0; i < 20; i++)
+		StepServer(server, 1);
+	for (ServerGameObject* u : ours)
+		gs->commands[aggression].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// the enemy: 60 m to one side, walking past 12 m in front of them to 60 m on the other side
+	ServerGameObject* foe = server.spawnObject(spearBp, enemyPlayer, at + Vector3(-60, 0, 12), Vector3(0, 0, 0));
+	if (!foe) {
+		printf("ATWILL no enemy\nATWILL result: FAIL\n");
+		return;
+	}
+	// (it lives through the arrows, so that it walks past all of them)
+	if (const int cap = gs->items.names.getIndex("Hit Point Capacity"); cap >= 0)
+		foe->setItem(cap, 5000.0f);
+	if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+		foe->setItem(hp, 5000.0f);
+	gs->commands[move].execute(foe, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, at + Vector3(70, 0, 12));
+	float nearAt = -1.0f;
+	int most = 0, mostSpears = 0;
+	for (int step = 0; step < 20 * 40 * 4 && server.timeManager.currentTime < 80.0f; step++) {
+		StepServer(server, 1);
+		const float t = server.timeManager.currentTime;
+		const float d = (foe->position - at).len2xz();
+		if (nearAt < 0.0f && d < 20.0f)
+			nearAt = t;
+		// (once, the enemy 15 m away: the first Spearman's idle reaction's parts)
+		static bool told = false;
+		if (!told && d < 15.0f) {
+			told = true;
+			ServerGameObject* s = ours[0];
+			SrvScriptContext ctx(&server, s);
+			auto eqv = [&](const char* name) {
+				const int e = gs->equations.names.getIndex(name);
+				return e >= 0 ? gs->equations[e]->eval(&ctx) : -999.0f;
+			};
+			const int ofd = gs->objectFinderDefinitions.names.getIndex("Most appropriate Target In Idle Range for Heavy Infantry");
+			const size_t found = ofd >= 0 ? gs->objectFinderDefinitions[ofd]->eval(&ctx).size() : 0;
+			const int sight = gs->items.names.getIndex("Actual Sight Range");
+			printf("ATWILL   Spearman %u: player type %s, Controlled by Human %.0f, in Army %.0f, My Idle Attack Range %.1f (sight %.1f), idle-range finder %d -> %zu, sees %zu objects, order %s\n",
+				s->id, s->getPlayer()->blueprint->name.c_str(), eqv("Controlled by Human"), eqv("Controlled by Human, in Army"), eqv("My Idle Attack Range"),
+				sight >= 0 ? s->getItem(sight) : -1.0f, ofd, found, s->seenObjects.size(),
+				s->orderConfig.getCurrentOrder() ? gs->orders.getString(s->orderConfig.getCurrentOrder()->blueprint).c_str() : "-");
+		}
+		int going = 0, spearsGoing = 0;
+		std::string line;
+		for (ServerGameObject* u : ours) {
+			if (u->deleted)
+				continue;
+			Order* o = u->orderConfig.getCurrentOrder();
+			Task* task = o ? o->getCurrentTask() : nullptr;
+			if (task && task->target.get() == foe) {
+				going++;
+				if (u->blueprint == spearBp)
+					spearsGoing++;
+			}
+			if (step % 20 == 0)
+				line += std::string(" | ") + u->blueprint->name.substr(0, 5) + ": " + (o ? gs->orders.getString(o->blueprint) : std::string("-"))
+					+ (task && task->target.get() == foe ? " (foe)" : "") + " agg " + std::to_string((int)u->getItem(gs->items.names.getIndex("Become Aggressive")));
+		}
+		if (nearAt >= 0.0f && t - nearAt <= 15.0f) {
+			most = std::max(most, going);
+			mostSpears = std::max(mostSpears, spearsGoing);
+		}
+		if (step % 20 == 0)
+			printf("ATWILL t=%.0f foe %.0f m%s\n", t, d, line.c_str());
+		if (foe->deleted)
+			break;
+	}
+	printf("ATWILL went for the enemy within 15 s of it coming within 20 m: %d of %zu (Spearmen %d of 4)\n", most, ours.size(), mostSpears);
+	printf("ATWILL result: %s\n", nearAt >= 0.0f && most * 2 >= (int)ours.size() && mostSpears >= 2 ? "ok" : "FAIL");
+}
+
+void Test_MixedFormation()
+{
+	LoadBCP("data.bcp");
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("MIXEDF %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+	};
+	const GameSet* gs = server.gameSet.get();
+	ServerGameObject* player = server.findObject(1027);
+	// the enemy: the player of another player's character
+	ServerGameObject* enemyPlayer = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && o->getPlayer() && o->getPlayer() != player
+			&& o->getPlayer()->blueprint->name != "Neutral Player") {
+			enemyPlayer = o->getPlayer();
+			break;
+		}
+	}
+	const GameObjBlueprint* spearBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* archerBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Archer");
+	const GameObjBlueprint* knightBp = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Knight");
+	const GameObjBlueprint* lineBp = gs->findBlueprint(Tags::GAMEOBJCLASS_FORMATION, "Line");
+	if (!player || !enemyPlayer || !spearBp || !archerBp || !knightBp || !lineBp) {
+		printf("MIXEDF not set up: player %d, enemy %d, Spearman %d, Archer %d, Knight %d, Line %d\nMIXEDF result: FAIL\n", player != nullptr,
+			enemyPlayer != nullptr, spearBp != nullptr, archerBp != nullptr, knightBp != nullptr, lineBp != nullptr);
+		return;
+	}
+	// the enemies' units can't wander into the test (the AI off): only the formation's own fights
+	printf("MIXEDF enemy player %u\n", enemyPlayer->id);
+	// beside the player's Manor (its first building)
+	Vector3 at(0, 0, 0);
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && o->getPlayer() == player && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) {
+			at = o->position + Vector3(40, 0, 0);
+			break;
+		}
+	}
+	std::vector<ServerGameObject*> spears, archers, knights;
+	ServerGameObject* formation = server.spawnObject(lineBp, player, at, Vector3(0, 0, 0));
+	auto add = [&](const GameObjBlueprint* bp, int n, std::vector<ServerGameObject*>& list) {
+		for (int i = 0; i < n; i++) {
+			ServerGameObject* u = server.spawnObject(bp, player, at + Vector3((float)(i % 4) * 2.0f, 0, (float)(list.size() / 4) * 2.0f + (bp == archerBp ? 6.0f : bp == knightBp ? 12.0f : 0.0f)), Vector3(0, 0, 0));
+			if (u) {
+				u->setParent(formation);
+				list.push_back(u);
+			}
+		}
+	};
+	add(spearBp, 8, spears);
+	add(archerBp, 6, archers);
+	add(knightBp, 2, knights);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	server.timeManager.unpause();
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// each member's place in the layout: x across, z back from the front row
+	const Matrix m = formation->getWorldMatrix();
+	const Vector3 o = Vector3(0, 0, 0).transform(m), ax = Vector3(1, 0, 0).transform(m) - o, az = Vector3(0, 0, 1).transform(m) - o;
+	auto local = [&](ServerGameObject* u, float& x, float& z) {
+		Vector3 p;
+		if (!FormationController::memberPlace(formation, u, p))
+			return false;
+		const Vector3 d = p - o;
+		x = (d.x * ax.x + d.z * ax.z) / std::max(ax.sqlen2xz(), 1e-6f);
+		z = (d.x * az.x + d.z * az.z) / std::max(az.sqlen2xz(), 1e-6f);
+		return true;
+	};
+	float knightMinX = 1e9f, otherMaxX = 0.0f, spearMaxZ = -1e9f, archerMinZ = 1e9f;
+	bool placed = true;
+	std::vector<std::pair<float, float>> all;
+	for (auto* list : { &spears, &archers, &knights })
+		for (ServerGameObject* u : *list) {
+			float x, z;
+			if (!local(u, x, z)) {
+				placed = false;
+				continue;
+			}
+			all.emplace_back(x, z);
+			if (list == &knights)
+				knightMinX = std::min(knightMinX, std::abs(x));
+			else
+				otherMaxX = std::max(otherMaxX, std::abs(x));
+			if (list == &spears)
+				spearMaxZ = std::max(spearMaxZ, z);
+			if (list == &archers)
+				archerMinZ = std::min(archerMinZ, z);
+		}
+	float nearest = 1e9f;
+	for (size_t i = 0; i < all.size(); i++)
+		for (size_t j = i + 1; j < all.size(); j++)
+			nearest = std::min(nearest, std::hypot(all[i].first - all[j].first, all[i].second - all[j].second));
+	char what[200];
+	check(placed && all.size() == 16, "every member has a place");
+	snprintf(what, sizeof(what), "the Knights on the wings (their |x| at least %.1f, the others' at most %.1f)", knightMinX, otherMaxX);
+	check(knightMinX + 0.01f >= otherMaxX, what);
+	snprintf(what, sizeof(what), "the Spearmen in front (rows back to %.1f), the Archers behind (from %.1f)", spearMaxZ, archerMinZ);
+	check(spearMaxZ <= archerMinZ + 0.01f, what);
+	const float sep = std::min(knightBp->formationSeparationX, knightBp->formationSeparationY);
+	snprintf(what, sizeof(what), "spaced for the widest member: places %.2f m apart at least (the Knight's %.2f)", nearest, sep);
+	check(nearest + 0.01f >= sep, what);
+	// an Archer member sent the melee Attack on an enemy
+	ServerGameObject* enemy = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* e = (ServerGameObject*)co;
+		if (e && !e->deleted && e->getPlayer() == enemyPlayer && e->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+			enemy = e;
+			break;
+		}
+	}
+	const int attack = gs->orders.names.getIndex("Attack");
+	if (enemy && attack >= 0 && !archers.empty()) {
+		{
+			extern bool IsRangedUnit(const ServerGameObject* unit);
+			const int dac = archers[0]->blueprint->defaultAttackCommand;
+			printf("MIXEDF   Archer: default attack command %d \"%s\", ranged %d, parent %s, Attack order %d\n", dac,
+				dac >= 0 && dac < (int)gs->commands.names.size() ? gs->commands.names.getString(dac).c_str() : "-", (int)IsRangedUnit(archers[0]),
+				archers[0]->getParent() ? archers[0]->getParent()->blueprint->getFullName().c_str() : "-", attack);
+		}
+		archers[0]->orderConfig.addOrder(&gs->orders[attack], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, enemy);
+		Order* order = archers[0]->orderConfig.getCurrentOrder();
+		const std::string name = order ? gs->orders.getString(order->blueprint) : std::string("none");
+		check(order && order->blueprint->bpid != attack, "an Archer member told \"Attack\" takes \"" + name + "\"");
+		spears[0]->orderConfig.addOrder(&gs->orders[attack], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, enemy);
+		Order* sorder = spears[0]->orderConfig.getCurrentOrder();
+		check(sorder && sorder->blueprint->bpid == attack, "a Spearman member keeps \"Attack\"");
+	}
+	else
+		check(false, "an enemy character and the Attack order");
+	// reach by kind: a point 20 m from the formation's archers on their own ground is in reach (an
+	// archer's 30 m) even where a 3 m reach would not be (the point's own tile not on the members'
+	// ground: we take a point the Archers stand next to, so the test is that some kind reaches it)
+	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+	check(!OutOfReach(formation, archers.empty() ? at : archers[0]->position, 3.0f), "the formation reaches a point beside its own Archers");
+	// a new formation of the formation and 2 loose Spearmen (the selection's "Formation" button):
+	// every character directly in the new one, the old one left without members
+	for (ServerGameObject* u : { archers[0], spears[0] })
+		u->orderConfig.cancelAllOrders();
+	std::vector<ServerGameObject*> loose;
+	for (int i = 0; i < 2; i++)
+		if (ServerGameObject* u = server.spawnObject(spearBp, player, at + Vector3(-6.0f - 2.0f * i, 0, -6.0f), Vector3(0, 0, 0)))
+			loose.push_back(u);
+	extern ServerGameObject* CreateFormationFrom(Server& server, ServerGameObject* player, const std::vector<ServerGameObject*>& units);
+	std::vector<ServerGameObject*> selection{ formation };
+	selection.insert(selection.end(), loose.begin(), loose.end());
+	ServerGameObject* merged = CreateFormationFrom(server, player, selection);
+	auto characters = [](ServerGameObject* f) {
+		int n = 0;
+		for (const auto& [type, children] : f->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !((ServerGameObject*)c)->deleted)
+					n++;
+		return n;
+	};
+	snprintf(what, sizeof(what), "a formation and 2 loose units make one: %d characters in the new one, %d left in the old one",
+		merged ? characters(merged) : -1, characters(formation));
+	check(merged && characters(merged) == 18 && characters(formation) == 0, what);
+	for (int i = 0; i < 40; i++)
+		StepServer(server, 1);
+	// Join Formation (a right-click of a single unit on a member of the formation): the unit in it,
+	// the formation kept (the play test of 2026-11-19: it was disbanded)
+	const int join = gs->commands.names.getIndex("Join Formation");
+	if (merged && join >= 0) {
+		ServerGameObject* joiner = server.spawnObject(spearBp, player, merged->position + Vector3(10, 0, 10), Vector3(0, 0, 0));
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		if (joiner && member) {
+			gs->commands[join].execute(joiner, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 60; i++)
+				StepServer(server, 1);
+			snprintf(what, sizeof(what), "Join Formation: the unit's controller %s, the formation %s with %d characters (19 wanted)",
+				joiner->getParent() ? joiner->getParent()->blueprint->getFullName().c_str() : "-", merged->deleted ? "gone" : "there", characters(merged));
+			check(joiner->getParent() == merged && !merged->deleted && characters(merged) == 19, what);
+			loose.push_back(joiner);
+		}
+		else
+			check(false, "a unit and a member for Join Formation");
+	}
+	else
+		check(false, "the Join Formation command");
+	// a formation joining another (its member right-clicking a member of the other, the selection
+	// being its formation): the script disbands it and hands its members to the other
+	if (merged && join >= 0) {
+		std::vector<ServerGameObject*> eight;
+		for (int i = 0; i < 8; i++)
+			if (ServerGameObject* u = server.spawnObject(spearBp, player, merged->position + Vector3(20.0f + (i % 4) * 2.0f, 0, 20.0f + (i / 4) * 2.0f), Vector3(0, 0, 0)))
+				eight.push_back(u);
+		ServerGameObject* other = CreateFormationFrom(server, player, eight);
+		for (int i = 0; i < 40; i++)
+			StepServer(server, 1);
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		if (other && member) {
+			gs->commands[join].execute(other, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 60; i++)
+				StepServer(server, 1);
+			int in = 0;
+			std::string where;
+			for (ServerGameObject* u : eight) {
+				if (u->getParent() == merged)
+					in++;
+				else if (where.empty())
+					where = u->getParent() ? u->getParent()->blueprint->getFullName() : std::string("-");
+			}
+			snprintf(what, sizeof(what), "a formation joining another: %d of 8 in it (another under %s), %d characters in it (27 wanted)", in,
+				where.empty() ? "-" : where.c_str(), characters(merged));
+			check(in == 8 && characters(merged) == 27, what);
+			loose.insert(loose.end(), eight.begin(), eight.end());
+		}
+		else
+			check(false, "a second formation for the join");
+	}
+	// a unit training at a dummy joining the formation stops training; a member told to train
+	// doesn't (the play test of 2026-11-20: it went on training and pulled the formation about)
+	{
+		const GameObjBlueprint* dummyBp = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Training Dummy");
+		const int train = gs->commands.names.getIndex("Train");
+		ServerGameObject* dummy = dummyBp && merged ? server.spawnObject(dummyBp, player, merged->position + Vector3(-25, 0, 15), Vector3(0, 0, 0)) : nullptr;
+		ServerGameObject* trainee = dummy ? server.spawnObject(spearBp, player, dummy->position + Vector3(4, 0, 0), Vector3(0, 0, 0)) : nullptr;
+		ServerGameObject* member = nullptr;
+		if (merged)
+			for (const auto& [type, children] : merged->children)
+				for (CommonGameObject* c : children)
+					if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+						member = (ServerGameObject*)c;
+		if (trainee && member && train >= 0 && join >= 0) {
+			gs->commands[train].execute(trainee, dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 40; i++)
+				StepServer(server, 1);
+			Order* before = trainee->orderConfig.getCurrentOrder();
+			const std::string was = before ? gs->orders.getString(before->blueprint) : std::string("none");
+			gs->commands[join].execute(trainee, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			for (int i = 0; i < 20; i++)
+				StepServer(server, 1);
+			Order* after = trainee->orderConfig.getCurrentOrder();
+			const std::string now = after ? gs->orders.getString(after->blueprint) : std::string("none");
+			check(trainee->getParent() == merged && now.rfind("Train", 0) != 0,
+				"a trainee (\"" + was + "\") joins the formation and stops training (now \"" + now + "\")");
+			gs->commands[train].execute(member, dummy, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			Order* m = member->orderConfig.getCurrentOrder();
+			const std::string mnow = m ? gs->orders.getString(m->blueprint) : std::string("none");
+			// (as the original's Train command: the unit leaves the formation, then trains)
+			check(mnow.rfind("Train", 0) != 0 || member->getParent() != merged,
+				"a member told to train trains only out of the formation (\"" + mnow + "\", " + (member->getParent() == merged ? "still in it" : "left it") + ")");
+			loose.push_back(trainee);
+		}
+		else
+			check(false, "a Training Dummy, a trainee and the Train command");
+	}
+	// an order on the formation's own member (a right-click inside it): refused, not followed
+	if (merged) {
+		ServerGameObject* member = nullptr;
+		for (const auto& [type, children] : merged->children)
+			for (CommonGameObject* c : children)
+				if (!member && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					member = (ServerGameObject*)c;
+		const int follow = gs->commands.names.getIndex("Follow");
+		if (member && follow >= 0) {
+			gs->commands[follow].execute(merged, member, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			Order* o = merged->orderConfig.getCurrentOrder();
+			check(!o || o->getCurrentTask() == nullptr || o->getCurrentTask()->target.get() != member,
+				"Follow on the formation's own member refused (" + std::string(o ? gs->orders.getString(o->blueprint) : "no order") + ")");
+		}
+	}
+	// an attack on an enemy inside the formation (the play test: it walked away and stood): within
+	// 15 s most of its members fight it, the formation not more than 15 m from where it stood
+	// (a clean Line of 12 Spearmen, formed up and standing)
+	ServerGameObject* fresh = nullptr;
+	{
+		std::vector<ServerGameObject*> twelve;
+		for (int i = 0; i < 12; i++)
+			if (ServerGameObject* u = server.spawnObject(spearBp, player, at + Vector3(60.0f + (i % 6) * 2.5f, 0, 30.0f + (i / 6) * 2.5f), Vector3(0, 0, 0)))
+				twelve.push_back(u);
+		fresh = CreateFormationFrom(server, player, twelve);
+		for (int i = 0; i < 20 * 10; i++)
+			StepServer(server, 1);
+	}
+	if (fresh) {
+		const GameObjBlueprint* enemyBp = spearBp;
+		ServerGameObject* intruder = server.spawnObject(enemyBp, enemyPlayer, fresh->position + Vector3(1, 0, 1), Vector3(0, 0, 0));
+		const int fattack = gs->commands.names.getIndex("Formation Army Attack");
+		if (intruder && fattack >= 0) {
+			if (const int cap = gs->items.names.getIndex("Hit Point Capacity"); cap >= 0)
+				intruder->setItem(cap, 5000.0f);
+			if (const int hp = gs->items.names.getIndex("Hit Points"); hp >= 0)
+				intruder->setItem(hp, 5000.0f);
+			const Vector3 from = fresh->position;
+			gs->commands[fattack].execute(fresh, intruder, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			int most = 0;
+			float farthest = 0.0f;
+			for (int i = 0; i < 20 * 15 * 2 && !intruder->deleted && server.timeManager.currentTime >= 0.0f; i++) {
+				StepServer(server, 1);
+				int fighting = 0;
+				for (const auto& [type, children] : fresh->children)
+					for (CommonGameObject* c : children) {
+						ServerGameObject* m = (ServerGameObject*)c;
+						Order* o = m->orderConfig.getCurrentOrder();
+						if (o && o->getCurrentTask() && o->getCurrentTask()->target.get() == intruder)
+							fighting++;
+					}
+				most = std::max(most, fighting);
+				farthest = std::max(farthest, (fresh->position - from).len2xz());
+				if (i % 20 == 0) {
+					auto describe = [&](ServerGameObject* o) {
+						if (!o)
+							return std::string("-");
+						Order* ord = o->orderConfig.getCurrentOrder();
+						Task* tk = ord ? ord->getCurrentTask() : nullptr;
+						return o->blueprint->getFullName() + " at (" + std::to_string((int)o->position.x) + "," + std::to_string((int)o->position.z) + ") "
+							+ (ord ? gs->orders.getString(ord->blueprint) : std::string("-")) + " / " + (tk ? gs->tasks.names.getString(tk->blueprint->bpid) : std::string("-"))
+							+ (tk && tk->target.get() ? " -> " + tk->target->blueprint->name : std::string()) + (o->movementController.isMoving() ? " walking" : "");
+					};
+					printf("MIXEDF   t=%d formation %s | its controller %s | members %d, fighting %d, intruder at (%d,%d)\n", i / 20, describe(fresh).c_str(),
+						describe(fresh->getParent()).c_str(), characters(fresh), fighting, (int)intruder->position.x, (int)intruder->position.z);
+				}
+			}
+			// where the 27 members are after it: under whom, alive
+			{
+				std::map<std::string, int> under;
+				for (auto* list : { &spears, &archers, &knights, &loose })
+					for (ServerGameObject* u : *list)
+						under[u->deleted ? std::string("(gone)") : (u->getParent() ? u->getParent()->blueprint->getFullName() : std::string("-"))]++;
+				for (const auto& [who, n] : under)
+					printf("MIXEDF   after the attack: %d under %s\n", n, who.c_str());
+				printf("MIXEDF   the intruder: %s\n", intruder->deleted ? "gone" : "alive");
+			}
+			snprintf(what, sizeof(what), "an attack on an enemy inside it: at most %d of %d members fight it, the formation at most %.1f m from where it stood",
+				most, characters(fresh), farthest);
+			check(most * 2 >= 3 && farthest < 15.0f, what);
+		}
+		else
+			check(false, "an intruder and the Formation Army Attack command");
+	}
+	// Disband (the formation's button): its members back under the player
+	const int disband = gs->commands.names.getIndex("Disband");
+	if (merged && disband >= 0) {
+		gs->commands[disband].execute(merged, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		for (int i = 0; i < 40; i++)
+			StepServer(server, 1);
+		int still = 0;
+		for (auto* list : { &spears, &archers, &knights, &loose })
+			for (ServerGameObject* u : *list)
+				if (!u->deleted && u->getParent() == merged)
+					still++;
+		Order* order = merged->orderConfig.getCurrentOrder();
+		snprintf(what, sizeof(what), "Disband: %d of 27 still in the formation (its order: %s)", still,
+			order ? gs->orders.getString(order->blueprint).c_str() : "none");
+		check(still == 0, what);
+	}
+	else
+		check(false, "the Disband command");
+	printf("MIXEDF result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
+}
+
+// A wedge of riders charging a line (the play test: the wedge stopped at first contact, only its
+// tip fought, the others stood). WKB.exe's scripts (Formation Army.cpp, Standard Heavy Cavalry
+// Targets.cpp; docs/re/combat-original-formations.md): the formation marches to the target, then
+// every member picks its own victim among the enemies within "My Individual Formation Attack
+// Range" (40 m) and rides out to it, at most "Number Of Units I Can Be Attacked By" (3) on one.
+// On 4 Peaks, 15 Knights in a Wedge and 24 Men at Arms in a Line 50 m off, facing each other:
+//  - case 0, "Formation Army Attack" on a man of the line (a right-click on it);
+//  - case 1, a Move through the line to 30 m behind it (a charge by moving);
+// every second each rider's order, target, distance to it and to the nearest enemy can be logged
+// (WKB_WEDGE_LOG=1). Fighting: an attack order on an enemy, or the game set's break-off of cavalry
+// that hit formed heavy infantry from the front. Checked: within 6 s of the first contact 60 %
+// of the riders fighting at once, from 2 to 12 s after it half of them on average (the
+// scripts hand out victims every 2.5 s, at most 3 riders on one), and in those 12 s none standing
+// idle (no order, not walking) with an enemy within 10 m for more than 3 s. Before the fix to ARE_ASSOCIATED (an idle
+// member's FINDER_TARGET finds nothing: 0, as WKB.exe's) only the tip and the 2 others nearest the
+// target fought, the rest stood. WKB_WEDGE_CASE=<n> runs one case.
+// Prints "WEDGE ok/FAILED ..." and "WEDGE PASSED/FAILED".
+void Test_WedgeCharge()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("WEDGE %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	const bool log = getenv("WKB_WEDGE_LOG") != nullptr;
+	const int onlyCase = getenv("WKB_WEDGE_CASE") ? atoi(getenv("WKB_WEDGE_CASE")) : -1;
+	// the riders' formation and their order (a move through the line only for the wedge)
+	// (5 and 6 against Javelineers, skirmishers: their Line shoots once formed up, the riders that
+	// ride into them hear of them by On Share Tile. Not the Orb: its members take victims only
+	// within 8 m, Formations.cpp's "My Individual Formation Attack Range", against skirmishers
+	// backing off only its front fights.)
+	struct Scenario { const char* type; bool attack; const char* foot; };
+	const Scenario scenarios[] = { { "Wedge", true, nullptr }, { "Wedge", false, nullptr }, { "Line", true, nullptr }, { "Column", true, nullptr }, { "Orb", true, nullptr },
+		{ "Wedge", true, "Javelineer" }, { "Wedge", false, "Javelineer" } };
+	for (int scenario = 0; scenario < (int)std::size(scenarios); scenario++) {
+		if (onlyCase >= 0 && onlyCase != scenario)
+			continue;
+		Server server;
+		server.loadSaveGame("Save_Games\\2 Player 4 Peaks.lvl");
+		ServerGameObject* own = server.findObject(1027);
+		ServerGameObject* enemy = server.findObject(1030);
+		const GameSet& gs = *server.gameSet;
+		const GameObjBlueprint* rider = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_RIDER") ? getenv("WKB_WEDGE_RIDER") : "Knight");
+		const GameObjBlueprint* foot = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, getenv("WKB_WEDGE_FOOT") ? getenv("WKB_WEDGE_FOOT") : scenarios[scenario].foot ? scenarios[scenario].foot : "Man At Arms");
+		const int wedgeCmd = gs.commands.names.getIndex(getenv("WKB_WEDGE_TYPE") ? getenv("WKB_WEDGE_TYPE") : scenarios[scenario].type), lineCmd = gs.commands.names.getIndex("Line");
+		const int attackCmd = gs.commands.names.getIndex("Formation Army Attack"), moveCmd = gs.commands.names.getIndex("Move");
+		if (!own || !enemy || !rider || !foot || wedgeCmd < 0 || lineCmd < 0 || attackCmd < 0 || moveCmd < 0
+			|| gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION].size() == 0) {
+			printf("WEDGE FAILED (not set up)\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		// open ground: the spot nearest the map's middle with no tile blocked for either within
+		// 35 m across, 50 m ahead of the line and 55 m behind the riders (and under 12 m of height difference)
+		Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		{
+			auto open = [&](const Vector3& c) {
+				float lo = 1e9f, hi = -1e9f;
+				for (float dz = -50.0f; dz <= 55.0f; dz += 5.0f)
+					for (float dx = -35.0f; dx <= 35.0f; dx += 5.0f) {
+						const float x = c.x + dx, z = c.z + dz;
+						if (x < 10.0f || z < 10.0f || x > area.first - 10.0f || z > area.second - 10.0f)
+							return false;
+						if (MovementController::isTileBlocked(rider, (int)(x / 5.0f), (int)(z / 5.0f))
+							|| MovementController::isTileBlocked(foot, (int)(x / 5.0f), (int)(z / 5.0f)))
+							return false;
+						const float h = server.terrain->getHeight(x, z);
+						lo = std::min(lo, h);
+						hi = std::max(hi, h);
+					}
+				return hi - lo < 12.0f;
+			};
+			const Vector3 middle = centre;
+			bool found = false;
+			for (float r = 0.0f; r < 400.0f && !found; r += 10.0f)
+				for (int k = 0; k < std::max(1, (int)(r / 5.0f)) && !found; k++) {
+					const float a = k * 6.2831855f / std::max(1, (int)(r / 5.0f));
+					const Vector3 c = middle + Vector3(std::sin(a) * r, 0, std::cos(a) * r);
+					if (open(c)) {
+						centre = c;
+						found = true;
+					}
+				}
+			printf("WEDGE open ground at (%.0f, %.0f)\n", centre.x, centre.z);
+			if (!found) {
+				printf("WEDGE FAILED (no open ground)\n");
+				return;
+			}
+		}
+		auto at = [&](float x, float z, const GameObjBlueprint* bp) { return MovementController::nearestValidPosition(bp, centre + Vector3(x, 0, z)); };
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto step = [&]() {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		};
+		auto makeFormation = [&](ServerGameObject* player, const std::vector<ServerGameObject*>& units, float heading, int command) {
+			ServerGameObject* f = server.spawnObject(&gs.objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0], player, {}, {});
+			Vector3 sum;
+			for (ServerGameObject* u : units) {
+				sum += u->position;
+				u->setParent(f);
+			}
+			f->setPosition(sum / (float)units.size());
+			f->setOrientation(Vector3(0, heading, 0));
+			f->sendEvent(Tags::PDEVENT_ON_SPAWN);
+			gs.commands[command].execute(f, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			return SrvGORef(f);
+		};
+		// the riders south (+z), facing north (heading 0 faces -z); the line north, facing south
+		std::vector<ServerGameObject*> riders, foes;
+		for (int i = 0; i < 15; i++)
+			riders.push_back(server.spawnObject(rider, own, at(-12.0f + (i % 5) * 6.0f, 30.0f + (i / 5) * 6.0f, rider), Vector3(0, 0, 0)));
+		for (int i = 0; i < 24; i++)
+			foes.push_back(server.spawnObject(foot, enemy, at(-23.0f + (i % 12) * 4.0f, -20.0f - (i / 12) * 3.0f, foot), Vector3(0, 3.14159f, 0)));
+		std::vector<SrvGORef> riderRefs(riders.begin(), riders.end()), foeRefs(foes.begin(), foes.end());
+		SrvGORef wedge = makeFormation(own, riders, 0.0f, wedgeCmd);
+		SrvGORef line = makeFormation(enemy, foes, 3.14159f, lineCmd);
+		// (the formations' own objects: the type commands replace them)
+		for (int i = 0; i < 5 * 50; i++)
+			step();
+		wedge = riderRefs[0] ? SrvGORef(riderRefs[0]->getParent()) : SrvGORef();
+		line = foeRefs[0] ? SrvGORef(foeRefs[0]->getParent()) : SrvGORef();
+		const bool formedUp = wedge && wedge->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && line && line->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		printf("WEDGE case %d: %s of %zu (%s) at (%.0f, %.0f), %s of %zu (%s) at (%.0f, %.0f)\n", scenario,
+			wedge ? wedge->blueprint->name.c_str() : "-", riders.size(), rider->name.c_str(), wedge ? wedge->position.x : 0.0f, wedge ? wedge->position.z : 0.0f,
+			line ? line->blueprint->name.c_str() : "-", foes.size(), foot->name.c_str(), line ? line->position.x : 0.0f, line ? line->position.z : 0.0f);
+		if (log)
+			for (const SrvGORef& f : foeRefs)
+				if (f)
+					printf("WEDGE   foe %u at (%.1f, %.1f) under %s\n", f->id, f->position.x, f->position.z, f->getParent() ? f->getParent()->blueprint->name.c_str() : "-");
+		if (!formedUp) {
+			check(false, "both formations formed");
+			continue;
+		}
+		if (scenarios[scenario].attack)
+			gs.commands[attackCmd].execute(wedge.get(), foes[5], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		else
+			gs.commands[moveCmd].execute(wedge.get(), nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, line->position + Vector3(0, 0, -30.0f));
+		auto alive = [](const SrvGORef& r) { return r && !(r->flags & CommonGameObject::fTerminated) && r->blueprint->name.rfind("Dead", 0) != 0; };
+		auto nearestFoe = [&](const ServerGameObject* u) {
+			float best = 1e9f;
+			for (const SrvGORef& f : foeRefs)
+				if (alive(f))
+					best = std::min(best, std::sqrt((f->position - u->position).sqlen2xz()));
+			return best;
+		};
+		// fighting: an attack order of its own on a (living) enemy, or the game set's break-off of
+		// cavalry that struck formed heavy infantry from the front ("Run Away After Attack": "Rear
+		// and Flee", then "Move To Cavalry Broken Marker", and back to the fight)
+		auto inMelee = [&](ServerGameObject* u) {
+			Order* o = u->orderConfig.getCurrentOrder();
+			if (!o)
+				return false;
+			const std::string& on = gs.orders.names.getString(o->blueprint->bpid);
+			if (on.find("Flee") != std::string::npos || on.find("Broken Marker") != std::string::npos)
+				return true;
+			if (o->blueprint->classType != Tags::ORDTSKTYPE_ATTACK)
+				return false;
+			Task* t = o->getCurrentTask();
+			ServerGameObject* tg = t ? t->target.get() : nullptr;
+			return tg && !(tg->flags & CommonGameObject::fTerminated) && tg->getPlayer() != own;
+		};
+		float contact = -1.0f;
+		double shareSum = 0.0;
+		int shareCount = 0;
+		int peak = 0;
+		float longestIdle = 0.0f;
+		uint32_t longestIdleOf = 0;
+		std::map<uint32_t, float> idleSince; // riders standing idle with an enemy within 10 m, since when
+		const float t0 = server.timeManager.currentTime;
+		for (int s = 0; s < 40 * 50; s++) {
+			step();
+			const float now = server.timeManager.currentTime - t0;
+			int living = 0, melee = 0, idleNear = 0, foesLeft = 0;
+			for (const SrvGORef& f : foeRefs)
+				foesLeft += alive(f) ? 1 : 0;
+			for (const SrvGORef& r : riderRefs)
+				if (alive(r)) {
+					living++;
+					if (contact < 0.0f && nearestFoe(r.get()) < 4.0f)
+						contact = now;
+					if (inMelee(r.get()))
+						melee++;
+					if (!r->orderConfig.getCurrentOrder() && !r->movementController.isMoving() && nearestFoe(r.get()) < 10.0f) {
+						idleNear++;
+						auto it = idleSince.emplace(r->id, now).first;
+						if (contact >= 0.0f && now <= contact + 12.0f && foesLeft > 0)
+							if (now - it->second > longestIdle) {
+								longestIdle = now - it->second;
+								longestIdleOf = r->id;
+							}
+					}
+					else
+						idleSince.erase(r->id);
+				}
+			if (s % 50 == 49) {
+				// the riders' formation while some are in it, else the first rider's controller
+				ServerGameObject* wf = nullptr;
+				for (const SrvGORef& r : riderRefs)
+					if (alive(r) && r->getParent() && r->getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+						wf = r->getParent();
+						break;
+					}
+				if (!wf && riderRefs[0] && alive(riderRefs[0]))
+					wf = riderRefs[0]->getParent();
+				if (log) {
+					printf("WEDGE t=%4.1f %s %s at (%.1f, %.1f)%s; riders %d, in melee %d, idle near %d; foes %d\n", now,
+						wf ? wf->blueprint->name.c_str() : "-",
+						wf && wf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(wf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						wf ? wf->position.x : 0.0f, wf ? wf->position.z : 0.0f, wf && wf->movement.isMoving() ? " moving" : "", living, melee, idleNear, foesLeft);
+					ServerGameObject* lf = foeRefs[0] && alive(foeRefs[0]) ? foeRefs[0]->getParent() : nullptr;
+					printf("WEDGE   the foes' %s %s at (%.1f, %.1f)%s; foe 0 at (%.1f, %.1f) %s\n", lf ? lf->blueprint->name.c_str() : "-",
+						lf && lf->orderConfig.getCurrentOrder() ? gs.orders.names.getString(lf->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "-",
+						lf ? lf->position.x : 0.0f, lf ? lf->position.z : 0.0f, lf && lf->movement.isMoving() ? " moving" : "",
+						foeRefs[0] ? foeRefs[0]->position.x : 0.0f, foeRefs[0] ? foeRefs[0]->position.z : 0.0f,
+						foeRefs[0] && foeRefs[0]->orderConfig.getCurrentOrder() ? gs.orders.names.getString(foeRefs[0]->orderConfig.getCurrentOrder()->blueprint->bpid).c_str() : "(no order)");
+					for (const SrvGORef& r : riderRefs) {
+						if (!alive(r))
+							continue;
+						if (getenv("WKB_WEDGE_DEBUG")) {
+							SrvScriptContext ctx(&server, r.get());
+							const int fi = gs.objectFinderDefinitions.names.getIndex("Enemy Units Within Formation Attack Range metres of Me");
+							const int e1 = gs.equations.names.getIndex("I Am Not Already Attacking A Victim Of My Controller");
+							const int e2 = gs.equations.names.getIndex("No Victims Left");
+							const int e3 = gs.equations.names.getIndex("I Am In A Formation");
+							const int e4 = gs.equations.names.getIndex("I Am Currently Attacking");
+							printf("WEDGE   debug %u: victims %d, not already %.0f, none left (controller) %.0f, in a formation %.0f, attacking %.0f\n", r->id,
+								fi >= 0 ? (int)gs.objectFinderDefinitions[fi]->eval(&ctx).size() : -1,
+								e1 >= 0 ? gs.equations[e1]->eval(&ctx) : -9.0f,
+								[&] { SrvScriptContext c2(&server, r->getParent()); return e2 >= 0 ? gs.equations[e2]->eval(&c2) : -9.0f; }(),
+								e3 >= 0 ? gs.equations[e3]->eval(&ctx) : -9.0f, e4 >= 0 ? gs.equations[e4]->eval(&ctx) : -9.0f);
+							for (const char* fn : { "Most appropriate Victim for Heavy Cavalry From Formation", "My Armies Victims", "Victims Of My Controller" }) {
+								const int k = gs.objectFinderDefinitions.names.getIndex(fn);
+								printf("WEDGE   debug %u: \"%s\" %d\n", r->id, fn, k >= 0 ? (int)gs.objectFinderDefinitions[k]->eval(&ctx).size() : -1);
+							}
+							if (const int se = gs.equations.names.getIndex("Suitability of Candidate as Heavy Cavalry Target"); se >= 0 && r->getParent())
+								for (const SrvGORef& f : foeRefs)
+									if (alive(f) && f.get() == foeRefs[5].get()) {
+										auto _c = ctx.change(ctx.candidate, f.get());
+										printf("WEDGE   debug %u: suitability of %u %.2f\n", r->id, f->id, gs.equations[se]->eval(&ctx));
+									}
+						}
+						Order* o = r->orderConfig.getCurrentOrder();
+						Task* t = o ? o->getCurrentTask() : nullptr;
+						ServerGameObject* tg = t ? t->target.get() : nullptr;
+						printf("WEDGE   %u at (%.1f, %.1f)%s %s -> %u (%.1f m), nearest foe %.1f m, place %.1f m off, under %s\n", r->id, r->position.x, r->position.z,
+							r->movementController.isMoving() ? " moving" : "", o ? gs.orders.names.getString(o->blueprint->bpid).c_str() : "(no order)",
+							tg ? tg->id : 0u, tg ? std::sqrt((tg->position - r->position).sqlen2xz()) : 0.0f, nearestFoe(r.get()),
+							[&] { Vector3 pl; return r->getParent() && FormationController::memberPlace(r->getParent(), r.get(), pl) ? std::sqrt((pl - r->position).sqlen2xz()) : -1.0f; }(),
+							r->getParent() ? r->getParent()->blueprint->name.c_str() : "-");
+					}
+				}
+				// 2 to 12 s after the first contact: the riders fighting, of those alive
+				if (contact >= 0.0f && now >= contact + 2.0f && now <= contact + 12.0f && foesLeft > 0 && living > 0) {
+					shareSum += (double)melee / living;
+					shareCount++;
+				}
+				// the most fighting at once within 6 s of it
+				if (contact >= 0.0f && now <= contact + 6.0f && living > 0)
+					peak = std::max(peak, (int)std::lround(100.0 * melee / living));
+			}
+		}
+		const int share = shareCount ? (int)std::lround(100.0 * shareSum / shareCount) : -1;
+		printf("WEDGE case %d: first contact %.1f s after the order; within 6 s of it at most %d%% of the riders fighting at once, 2-12 s after it %d%% on average; the longest stand idle with an enemy within 10 m in those 12 s %.1f s (%u)\n",
+			scenario, contact, peak, share, longestIdle, longestIdleOf);
+		const std::string name = "case " + std::to_string(scenario) + " (" + std::string(scenarios[scenario].type) + ", " + (scenarios[scenario].attack ? "an attack order" : "a move through the line") + (scenarios[scenario].foot ? std::string(", against ") + scenarios[scenario].foot : std::string()) + ")";
+		check(contact >= 0.0f, name + ": the wedge reaches the line");
+		check(peak >= 60, name + ": within 6 s of contact most riders fight at once");
+		check(share >= 50, name + ": most riders fight in the 12 s after contact");
+		check(longestIdle <= 3.0f, name + ": none stands idle with an enemy in reach (more than 3 s)");
+	}
+	printf(failures ? "WEDGE FAILED (%d)\n" : "WEDGE PASSED\n", failures);
+}
+
+
+// Associations mirrored to the client (NETCLIMSG_OBJECT_ASSOCIATION): a save loaded with a local
+// client ("assocMirror": { "path": "<.sav>" }, default the AI play test's PERFORMANCE3), every
+// non-missile object's associates the same on both sides; after 30 game seconds of play again;
+// one associated, one dissociated, a category cleared, again. Then the Dark Portal's "Don't Already
+// have a portal" on the client for each Druid, as the server has it (right-clicking with a Druid
+// ended the game: FINDER_ASSOCIATES on the client). Prints "ASSOC ..." and "ASSOC result: ok|FAIL".
+void Test_AssocMirror()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("assocMirror", nlohmann::json::object());
+	const std::string path = cfg.value("path", std::string("C:/Dev/wkbai-saveformat/tests/PERFORMANCE3.sav"));
+	Server server;
+	Client client(true);
+	NetLocalBuffer toClient, toServer;
+	NetLocalLink srv2cli(&toClient, &toServer), cli2srv(&toServer, &toClient);
+	server.addClient(&srv2cli);
+	client.serverLink = &cli2srv;
+	server.loadSaveGame(path.c_str());
+	auto pump = [&]() {
+		for (int i = 0; i < 100000 && cli2srv.available(); i++)
+			client.tick();
+	};
+	pump();
+	int failures = 0;
+	auto compare = [&](const char* when) {
+		int objects = 0, links = 0, wrong = 0;
+		for (const auto& [id, co] : server.idmap) {
+			const ServerGameObject* o = (const ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+				continue;
+			ClientGameObject* c = client.findObject(id);
+			std::map<int, std::set<uint32_t>> s, k;
+			for (const auto& [cat, set] : o->associates)
+				for (const SrvGORef& r : set)
+					if (r && !r->deleted && r->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE)
+						s[cat].insert(r.objid);
+			if (c)
+				for (const auto& [cat, set] : c->associates)
+					for (const CliGORef& r : set)
+						if (r)
+							k[cat].insert(r.objid);
+			for (auto it = s.begin(); it != s.end();)
+				it = it->second.empty() ? s.erase(it) : std::next(it);
+			for (auto it = k.begin(); it != k.end();)
+				it = it->second.empty() ? k.erase(it) : std::next(it);
+			if (!s.empty())
+				objects++;
+			for (const auto& [cat, ids] : s)
+				links += (int)ids.size();
+			if (s != k) {
+				if (wrong < 5)
+					printf("ASSOC   %s: object %u %s differs (server %zu categories, client %zu)\n", when, id, o->blueprint->getFullName().c_str(), s.size(), k.size());
+				wrong++;
+			}
+		}
+		printf("ASSOC %s: %d objects with %d associations, %d differ\n", when, objects, links, wrong);
+		if (wrong || !links)
+			failures++;
+	};
+	compare("loaded");
+	server.timeManager.unpause();
+	for (int i = 0; i < 600; i++) {
+		StepServer(server, 1);
+		pump();
+	}
+	compare("after 30 s");
+	// a change of each kind
+	ServerGameObject *a = nullptr, *b = nullptr;
+	for (const auto& [id, co] : server.idmap) {
+		ServerGameObject* o = (ServerGameObject*)co;
+		if (o && !o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			(a ? b : a) = o;
+		if (b)
+			break;
+	}
+	const int cat = server.gameSet->associations.names.getIndex("Victims");
+	if (a && b && cat >= 0) {
+		a->associateObject(cat, b);
+		pump();
+		compare("associated");
+		a->dissociateObject(cat, b);
+		pump();
+		compare("dissociated");
+		a->associateObject(cat, b);
+		a->clearAssociates(cat);
+		pump();
+		compare("cleared");
+	}
+	// the Druids' Dark Portal condition on the client, as on the server
+	const int eq = server.gameSet->equations.names.getIndex("Don't Already have a portal");
+	int druids = 0;
+	// (a save without one: an Arch Druid of the first player, beside its first character)
+	{
+		bool any = false;
+		ServerGameObject* owner = nullptr;
+		Vector3 where;
+		for (const auto& [id, co] : server.idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+				continue;
+			if (o->blueprint->name.find("Druid") != std::string::npos)
+				any = true;
+			if (!owner && o->getPlayer()) {
+				owner = o->getPlayer();
+				where = o->position + Vector3(3, 0, 0);
+			}
+		}
+		const GameObjBlueprint* druidBp = server.gameSet->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Arch Druid");
+		if (!any && owner && druidBp) {
+			server.spawnObject(druidBp, owner, where, Vector3(0, 0, 0));
+			pump();
+		}
+		else if (!any)
+			printf("ASSOC   no Arch Druid type (%d) or owner (%d)\n", druidBp != nullptr, owner != nullptr);
+	}
+	if (eq >= 0)
+		for (const auto& [id, co] : server.idmap) {
+			ServerGameObject* o = (ServerGameObject*)co;
+			if (!o || o->deleted || o->blueprint->name.find("Druid") == std::string::npos || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+				continue;
+			ClientGameObject* c = client.findObject(id);
+			if (!c)
+				continue;
+			SrvScriptContext sctx(&server, o);
+			CliScriptContext cctx(&client, c);
+			const bool srv = server.gameSet->equations[eq]->booleval(&sctx), cli = client.gameSet->equations[eq]->booleval(&cctx);
+			printf("ASSOC   %s %u: \"Don't Already have a portal\" server %d, client %d\n", o->blueprint->name.c_str(), id, (int)srv, (int)cli);
+			if (srv != cli)
+				failures++;
+			druids++;
+		}
+	printf("ASSOC druids checked: %d\n", druids);
+	if (!druids)
+		failures++;
+	printf("ASSOC result: %s (%d failed)\n", failures ? "FAIL" : "ok", failures);
+}
+
 // A save played on without a window, as fast as it goes: "runSave": { "path": "<full path of a .sav>",
 // "seconds": n } (default 120 game seconds). For a slow game (the play test's PERFORMANCE save): with
 // "profileSim" the simulation's parts every 10 s; here "RUNSAVE t=<s> real <ms> per game second,
@@ -10973,6 +11877,40 @@ void Test_RunSave()
 		worst = std::max(worst, ms);
 		if (ms > 50.0)
 			slow++;
+		// ("formationDump": true) the Human Player's formations every half second: where, heading,
+		// order and task, its target or destination, walking, members walking
+		if (cfg.value("formationDump", false)) {
+			static int lastHalf = -1;
+			const int half = (int)((server.timeManager.currentTime - start) * 2.0f);
+			if (half != lastHalf) {
+				lastHalf = half;
+				const GameSet* gs = server.gameSet.get();
+				for (const auto& [id, co] : server.idmap) {
+					ServerGameObject* f = (ServerGameObject*)co;
+					if (!f || f->deleted || f->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION || !f->getPlayer()
+						|| f->getPlayer()->blueprint->name != "Human Player")
+						continue;
+					Order* o = f->orderConfig.getCurrentOrder();
+					Task* t = o ? o->getCurrentTask() : nullptr;
+					int members = 0, walking = 0, ordered = 0;
+					for (const auto& [type, children] : f->children)
+						for (CommonGameObject* c : children) {
+							ServerGameObject* m = (ServerGameObject*)c;
+							if (m->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+								continue;
+							members++;
+							walking += m->movementController.isMoving() ? 1 : 0;
+							ordered += m->orderConfig.getCurrentOrder() ? 1 : 0;
+						}
+					const Vector3 dest = f->movementController.getDestination();
+					printf("FDUMP t=%.1f %s %u at (%.1f, %.1f) facing %.2f: %s / %s%s, dest (%.1f, %.1f), walking %d, members %d walking %d with orders %d\n",
+						server.timeManager.currentTime - start, f->blueprint->name.c_str(), f->id, f->position.x, f->position.z, f->orientation.y,
+						o ? gs->orders.getString(o->blueprint).c_str() : "-", t ? gs->tasks.names.getString(t->blueprint->bpid).c_str() : "-",
+						t && t->target.get() ? (" -> " + t->target->blueprint->name + " " + std::to_string(t->target->id) + (t->target->getParent() == f ? " (its own member)" : "")).c_str() : "",
+						dest.x, dest.z, (int)f->movementController.isMoving(), members, walking, ordered);
+				}
+			}
+		}
 		if (server.timeManager.currentTime >= nextPrint) {
 			int moving = 0;
 			for (const auto& [id, o] : server.idmap) {
@@ -10983,6 +11921,39 @@ void Test_RunSave()
 			const double real = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 			printf("RUNSAVE t=%.0f real %.0f ms per game second, steps over 50 ms %d, characters moving %d\n", server.timeManager.currentTime - start,
 				real / 10.0, slow, moving);
+			// ("humanDump": true) the Human Player's characters with an enemy character within 40 m:
+			// controller, order, attack at will, the nearest enemy
+			if (cfg.value("humanDump", false)) {
+				const GameSet* gs = server.gameSet.get();
+				const int agg = gs->items.names.getIndex("Become Aggressive");
+				const int enemyStatus = gs->diplomaticStatuses.names.getIndex("Enemy");
+				for (const auto& [id, co] : server.idmap) {
+					ServerGameObject* u = (ServerGameObject*)co;
+					if (!u || u->deleted || u->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !u->getPlayer() || u->getPlayer()->blueprint->name != "Human Player")
+						continue;
+					ServerGameObject* nearest = nullptr;
+					float nd = 40.0f;
+					for (const auto& [id2, co2] : server.idmap) {
+						ServerGameObject* e = (ServerGameObject*)co2;
+						if (!e || e->deleted || e->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !e->getPlayer()
+							|| server.getDiplomaticStatus(e->getPlayer(), u->getPlayer()) != enemyStatus)
+							continue;
+						const float d = (e->position - u->position).len2xz();
+						if (d < nd) {
+							nd = d;
+							nearest = e;
+						}
+					}
+					if (!nearest)
+						continue;
+					Order* o = u->orderConfig.getCurrentOrder();
+					ServerGameObject* p = u->getParent();
+					printf("RUNSAVE   human %s %u: under %s %u, order %s, at will %.0f, sees %zu, enemy %s %u at %.1f m%s\n", u->blueprint->name.c_str(), u->id,
+						p ? p->blueprint->getFullName().c_str() : "-", p ? p->id : 0, o ? gs->orders.getString(o->blueprint).c_str() : "-",
+						agg >= 0 ? u->getItem(agg) : -1.0f, u->seenObjects.size(), nearest->blueprint->name.c_str(), nearest->id, nd,
+						nearest->movementController.isMoving() ? " moving" : "");
+				}
+			}
 			fflush(stdout);
 			t0 = std::chrono::steady_clock::now();
 			slow = 0;
@@ -13058,6 +14029,10 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_MapFolderNew, "Map folders: a map from a 16-bit PNG, one material, lakes and a Manor per player, compiled, loaded and played"},
 {Test_RiverCurrents, "River currents: calm shallow water nothing, moving water carries and hurts, swim to the shore, off nothing, floods faster, through a save"},
 {Test_NavalAI, "The AI at sea: a sea across 4 Peaks; a ferry boards, sails and lands; the Kingmaker, aggressive, Lua and ministry AIs each build a dock and ships, ferry an army across and attack"},
+{Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
+{Test_MixedFormation, "Improved mixed formations: Knights on the wings, Spearmen in front of Archers, the widest spacing, an Archer member's Attack its own, reach by kind"},
+{Test_WedgeCharge, "Wedge charge: riders in a Wedge charge a Line (an attack, a move through it); after contact most fight, none idle with an enemy in reach"},
+{Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
 };
 
 void LaunchTest()

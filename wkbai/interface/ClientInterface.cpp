@@ -1172,8 +1172,9 @@ void ClientInterface::sendRightClickCommand(Command* rightClickCommand, ClientGa
 	float nextPosRadius = SEPARATION;
 	for (ClientGameObject *sel : selection) {
 		if (sel) {
-			// the command's target itself is not sent it (Guard on itself)
-			if (nextSelectedObject && sel == nextSelectedObject)
+			// the command's target itself is not sent it (Guard on itself), nor the formation the
+			// target is in ("Join Formation" on its own member disbanded it)
+			if (nextSelectedObject && (sel == nextSelectedObject || nextSelectedObject->getParent() == sel))
 				continue;
 			if (std::find(sel->blueprint->offeredCommands.begin(), sel->blueprint->offeredCommands.end(), rightClickCommand) != sel->blueprint->offeredCommands.end()) {
 				// if object offers this command, send the command
@@ -3979,13 +3980,24 @@ void ClientInterface::iter()
 	Command *rightClickCommand = nullptr;
 	static std::vector<std::pair<WndCursor*, Command*>> availableCursorCommands;
 	availableCursorCommands.clear();
+	// The right-click's target: the object under the cursor, but not one of the selection's own, a
+	// selected unit or a member of a selected formation: a right-click inside a formation is a
+	// point on the ground, a Move there (it gave the formation "Follow" on its own member, and it
+	// went round in circles after it, the play test's FormationBug1 save, 2026-11-19)
+	ClientGameObject* cursorTarget = nextSelectedObject;
+	if (cursorTarget)
+		for (ClientGameObject* sel : selection)
+			if (sel && (sel == cursorTarget || cursorTarget->getParent() == sel)) {
+				cursorTarget = nullptr;
+				break;
+			}
 	{
 		static std::vector<ClientGameObject*> selected;
 		selected.clear();
 		for (ClientGameObject* sel : selection)
 			if (sel)
 				selected.push_back(sel);
-		availableCursorCommands = FindCursorCommands(client, selected, nextSelectedObject);
+		availableCursorCommands = FindCursorCommands(client, selected, cursorTarget);
 		if (!availableCursorCommands.empty()) {
 			nextCursor = availableCursorCommands[0].first;
 			rightClickCommand = availableCursorCommands[0].second;
@@ -4361,6 +4373,11 @@ void ClientInterface::iter()
 							selection.insert(obj);
 						}
 					}
+					// not into a formation: its members are the formation's, not loose units of the
+					// type (they selected the whole formation, and "Join Formation" on a member of it
+					// then disbanded it, the play test of 2026-11-19); as the original
+					if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION)
+						return;
 					for (const auto& [type, objList] : obj->children) {
 						for (const auto& child : objList) {
 							rec((ClientGameObject*)child, rec);
@@ -4431,7 +4448,7 @@ void ClientInterface::iter()
 					stampdownBlueprint = nullptr;
 			}
 		}
-		else if (rightClickCommand && !nextSelectedObject && !formationDrag.active
+		else if (rightClickCommand && !cursorTarget && !formationDrag.active
 			&& std::any_of(selection.begin(), selection.end(), [](const auto& s) {
 				return s && (s->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || s->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER); })) {
 			// units, groups and formations sent to the ground: the move goes on releasing the
@@ -4444,7 +4461,7 @@ void ClientInterface::iter()
 					f.held = true;
 		}
 		else if (rightClickCommand)
-			sendRightClickCommand(rightClickCommand, nextSelectedObject, peapos, Vector3(-1, 0, 0));
+			sendRightClickCommand(rightClickCommand, cursorTarget, peapos, Vector3(-1, 0, 0));
 	}
 	if (wallDrag.active && !g_mouseDown[SDL_BUTTON_RIGHT]) {
 		wallDrag.active = false;
@@ -4970,6 +4987,14 @@ void ClientInterface::iter()
 				if (it != cmd->conditionsWarning.end()) {
 					return (*it)->getFormattedHint(lang, &ctx);
 				}
+				// the attack-at-will button: the state it is in and what a click does (the button shows the
+				// action, "Aggression" the red fist while the unit is passive, as WKB.exe's; its hints only
+				// named the action, and the red fist read as "on", the play test of 2026-11-19)
+				const std::string& name = client->gameSet->commands.getString(cmd);
+				if (name == "Aggression")
+					return "Attack at will: off - click to turn on";
+				if (name == "Passivity")
+					return "Attack at will: on - click to turn off";
 				if (!cmd->defaultHint.empty())
 					return GSCondition::getFormattedHint(cmd->defaultHint, cmd->defaultHintValues, lang, &ctx);
 				return client->gameSet->commands.getString(cmd);

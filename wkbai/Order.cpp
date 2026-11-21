@@ -26,6 +26,7 @@
 #include "AIUtil.h"
 #include "Model.h"
 #include "PeasantLodging.h"
+#include "gameset/command.h"
 #include <map>
 #include <cstdio>
 
@@ -261,6 +262,14 @@ void Task::start()
 					&& blueprint->proximityDissatisfiedSequence.actionList[0]->endsOrder()) {
 					walkIntoRange = true;
 				}
+				// A conditional one (TASK "Attack", Michael's: PROXIMITY_DISSATISFIED_SEQUENCE "Target is
+				// out of attack range", a formation member switching to another enemy close by or
+				// stopping) is for a target that moves off too: WKB.exe runs it only for a unit that was
+				// in range (0x50cc10 -> 0x50d360); at the start the unit approaches. Run here, every
+				// rider of a formation told to attack a victim more than a few metres off stopped at
+				// once: a Column's riders behind its front never rode out (test 100)
+				else if (dist >= this->proximity && blueprint->proximityDissatisfiedEquation >= 0) {
+				}
 				else if (dist >= this->proximity) {
 					running.insert(go);
 					RunProximityDissatisfied(this->blueprint, go);
@@ -279,6 +288,19 @@ void Task::start()
 				return;
 			}
 		}
+	}
+	// An object-reference task without a target, a task target or a proximity, whose work is its
+	// start sequence (TASK "Disband Formation into Group": DISBAND_FORMATION FINDER_SELF, the
+	// formation's Disband button, an order given with no target): the sequence runs and the task
+	// ends. Without, it waited for a target that never came and the button did nothing (the play
+	// test of 2026-11-19).
+	else if (blueprint->classType == Tags::ORDTSKTYPE_OBJECT_REFERENCE && !blueprint->taskTarget && !blueprint->usePreviousTaskTarget
+		&& !blueprint->proximityRequirement && !blueprint->startSequence.actionList.empty()) {
+		this->blueprint->startSequence.run(order->gameObject);
+		this->startSequenceExecuted = true;
+		if (this->isWorking())
+			this->terminate();
+		return;
 	}
 	this->onStart();
 }
@@ -427,10 +449,51 @@ std::unique_ptr<Task> Task::create(int id, const TaskBlueprint* blueprint, Order
 
 
 
+bool ImprovedFormations(); // FormationController.cpp
+bool IsRangedUnit(const ServerGameObject* unit); // FormationController.cpp
+
 Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
 	if (gameobj->flags & CommonGameObject::fTerminated)
 		return nullptr;
+	// a formation given an order on its own member (Follow, Guard, Attack: a right-click inside it)
+	// went round in circles after the member it carried along (the play test's FormationBug1
+	// save, 2026-11-19): refused
+	if (target && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && target->getParent() == gameobj)
+		return nullptr;
+	// no training in a formation, for the formation or a member of it (the play test of 2026-11-20)
+	if (orderBlueprint && Server::instance && Server::instance->gameSet
+		&& (gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+			|| (gameobj->parent && gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION))) {
+		const std::string& name = Server::instance->gameSet->orders.getString(orderBlueprint);
+		if (name == "Train" || name == "Train near Selected Dummy")
+			return nullptr;
+	}
+	// Improved formations: a ranged member of a formation sent to fight with the melee "Attack" (the
+	// Formation Army's "Attack Victims", a mixed formation charging) takes its own attack's order
+	// instead (its DEFAULT_ATTACK_COMMAND's: Fire Arrow, Fire Bullet), so it shoots rather than
+	// runs in with the melee
+	if (target && orderBlueprint && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && gameobj->parent
+		&& gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && Server::instance && Server::instance->gameSet) {
+		static const GameSet* of = nullptr;
+		static int attackOrder = -1;
+		const GameSet* gs = Server::instance->gameSet.get();
+		if (of != gs) {
+			of = gs;
+			attackOrder = gs->orders.names.getIndex("Attack");
+		}
+		// (the command's USE_ORDER, or the order of its name: "Fire Arrow" has none and runs a start
+		// sequence that sends its archer to an army, Mechanics\Fire Arrow.cpp; its order "Fire
+		// Arrow" shoots)
+		if (orderBlueprint->bpid == attackOrder && ImprovedFormations() && IsRangedUnit(gameobj)) {
+			const int dac = gameobj->blueprint->defaultAttackCommand;
+			const Command* cmd = gs->commands.getPointer(dac);
+			if (cmd && cmd->order)
+				orderBlueprint = cmd->order;
+			else if (const int byName = gs->orders.names.getIndex(gs->commands.names.getString(dac)); byName >= 0)
+				orderBlueprint = &gs->orders[byName];
+		}
+	}
 	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
 }
 
@@ -1064,8 +1127,46 @@ static ServerGameObject* FirstCharacter(ServerGameObject* obj, int depth = 0)
 // spearman could climb drew every army of the enemy's, which stood at the foot of the slope (or
 // formed up and broke again) for the rest of the game. Ranged units find a reachable tile within
 // their range, and shoot.
+
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+
+// Improved formations: one character for each kind of member (movement class, ranged or not),
+// through formations (and the armies under an army: throughArmies), each kind's first in the
+// children's order
+static void MemberKinds(ServerGameObject* obj, bool throughArmies, std::map<int, ServerGameObject*>& kinds, int depth = 0)
+{
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		if (!obj->deleted)
+			kinds.emplace(MovementController::movementClass(obj->blueprint) * 2 + (IsRangedUnit(obj) ? 1 : 0), obj);
+		return;
+	}
+	if (depth > 4 || !(obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || (throughArmies && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)))
+		return;
+	for (const auto& [type, children] : obj->children)
+		for (CommonGameObject* c : children)
+			MemberKinds((ServerGameObject*)c, throughArmies, kinds, depth + 1);
+}
+
+// a mixed formation's (or army's) target is out of reach when no kind of its members can get
+// within its own reach of it (a ranged one 30 m, else 3 m): the spearmen below a hilltop scout
+// don't end the formation's attack while its archers can shoot at it. A few kinds at most, one
+// region test each.
+static bool KindsOutOfReach(ServerGameObject* obj, const Vector3& point, bool throughArmies)
+{
+	std::map<int, ServerGameObject*> kinds;
+	MemberKinds(obj, throughArmies, kinds);
+	if (kinds.empty())
+		return false;
+	for (const auto& [kind, rep] : kinds)
+		if (!OutOfReach(rep, point, IsRangedUnit(rep) ? 30.0f : 3.0f))
+			return false;
+	return true;
+}
+
 bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
 {
+	if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && ImprovedFormations())
+		return KindsOutOfReach(unit, point, false);
 	ServerGameObject* mover = FirstCharacter(unit);
 	if (!mover)
 		return false;
@@ -1095,6 +1196,8 @@ bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
 {
 	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
 		return false;
+	if (ImprovedFormations())
+		return KindsOutOfReach(army, target->position, true);
 	std::function<ServerGameObject*(ServerGameObject*, int)> first = [&](ServerGameObject* o, int depth) -> ServerGameObject* {
 		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 			return o->deleted ? nullptr : o;
@@ -1567,6 +1670,19 @@ void ObjectReferenceTask::onUpdate()
 			this->proximitySatisfied = false;
 		}
 	}
+	// A FORMATION_CREATE task ("Change Formation - Line", ...: CREATE_FORMATION on itself) ends once
+	// its formation has formed up, every member at its place (WKB.exe 0x50cd25: task class 9, the
+	// unit's formation by message 0x7d1, 0x550ba0, then vtable+0x2C). Kept running, the formation
+	// never was idle again: the missile formation army's "New Enemy Seen" (IS_IDLE "My Formation")
+	// never shot, Javelineers in a Line let riders pass and stand among them (test 100).
+	if (this->target && blueprint->classType == Tags::ORDTSKTYPE_FORMATION_CREATE) {
+		ServerGameObject* go = this->order->gameObject;
+		ServerGameObject* formation = go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION ? go : go->getParent();
+		if (formation && formation->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && formation->formationController.isFormedUp()) {
+			terminate();
+			return;
+		}
+	}
 	if (this->target) {
 		ServerGameObject* go = this->order->gameObject;
 		// Following (Follow, guarding): the game set gives the follower the engine items "Follow
@@ -1763,8 +1879,16 @@ void ObjectReferenceTask::onUpdate()
 			if (!proximitySatisfied) {
 				proximitySatisfied = true;
 				TraceTask(this, "proximity satisfied");
-				blueprint->proximitySatisfiedSequence.run(order->gameObject);
-				blueprint->movementCompletedSequence.run(order->gameObject);
+				// one arrival is one event: PROXIMITY_SATISFIED where the task has that sequence, else
+				// MOVEMENT_COMPLETED (Garrison.cpp has only the latter). Both in the same step ran the
+				// Formation Army's "Move To Attack Range Of Original Victim" TERMINATE_TASK
+				// FINDER_CONTROLLER twice: the second ended the army's "Army Formation Attack" before
+				// it started, its cycling order ended, and the formation stood at the enemy until a hit
+				// woke it (the play test's charge into a line; a Column, Line or Wedge alike)
+				if (!blueprint->proximitySatisfiedSequence.actionList.empty())
+					blueprint->proximitySatisfiedSequence.run(order->gameObject);
+				else
+					blueprint->movementCompletedSequence.run(order->gameObject);
 
 				// Set the task animation
 				int animtoplay = -1;

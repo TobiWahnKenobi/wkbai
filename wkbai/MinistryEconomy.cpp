@@ -489,6 +489,9 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			ai.ministryHeld.insert(p->id);
 			goldMiners[p->id] = now;
 			g.board.report("labour.goldSent", g.board.get("labour.goldSent") + 1);
+			// (sent while gold was in the way, for test 88: the need of the moment, not a 5-minute sample)
+			if (g.board.get("economy.goldNeeded") > 0.0)
+				g.board.report("labour.goldSentNeeded", g.board.get("labour.goldSentNeeded") + 1);
 			g.log(LABOUR, "peasant %u to mine gold at %s %u (%zu of %d)", p->id, gold->blueprint->name.c_str(), gold->id, goldMiners.size(), want);
 		}
 	}

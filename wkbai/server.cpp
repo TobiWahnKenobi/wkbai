@@ -1578,6 +1578,16 @@ void ServerGameObject::setParent(ServerGameObject * newParent)
 		newParent = newParent->parent ? newParent->parent->dyncast<ServerGameObject>() : nullptr;
 	if (!newParent)
 		return;
+	// a unit training at a dummy that joins a formation (Join Formation, a script's transfer) stops
+	// training: it went on, out of its place, and pulled the formation about (the play test of
+	// 2026-11-20). (A command runs outside the simulation's step: not only then.)
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && newParent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+		&& Server::instance && Server::instance->gameSet)
+		if (Order* o = orderConfig.getCurrentOrder()) {
+			const std::string& name = Server::instance->gameSet->orders.getString(o->blueprint);
+			if (name == "Train" || name == "Train near Selected Dummy")
+				orderConfig.cancelAllOrders();
+		}
 
 	if (this->parent == newParent)
 		return;
@@ -1815,10 +1825,73 @@ void ServerGameObject::sendEvent(int evt, ServerGameObject * sender)
 			r->actions.run(&ctx);
 }
 
+// A new formation of the player's selected units (NETSRVMSG_CREATE_NEW_FORMATION): its characters,
+// and the members of a formation among them (a selection of loose units and a formation: the
+// formation was left out and went on as one block beside the new one, keeping its spacing, the
+// play test of 2026-11-19; it is disbanded into the new one). A formation needs more than 7
+// characters (WKB.exe 0x54f0d0); fewer stay as they are. Returns the formation, or none.
+ServerGameObject* CreateFormationFrom(Server& server, ServerGameObject* player, const std::vector<ServerGameObject*>& units)
+{
+	std::vector<ServerGameObject*> subs, oldFormations;
+	auto add = [&](ServerGameObject* sub) {
+		if (sub && !sub->deleted && !(sub->flags & CommonGameObject::fTerminated) && sub->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
+			&& std::find(subs.begin(), subs.end(), sub) == subs.end())
+			subs.push_back(sub);
+	};
+	for (ServerGameObject* unit : units) {
+		if (!unit || unit->deleted)
+			continue;
+		if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+			if (std::find(oldFormations.begin(), oldFormations.end(), unit) == oldFormations.end())
+				oldFormations.push_back(unit);
+			for (const auto& [type, children] : unit->children)
+				for (CommonGameObject* c : children)
+					add((ServerGameObject*)c);
+		}
+		else
+			add(unit);
+	}
+	if (subs.size() < 8 || !player)
+		return nullptr;
+	for (ServerGameObject* old : oldFormations)
+		FormationController::disband(old);
+	const GameObjBlueprint* blueprint = &server.gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0];
+	ServerGameObject* formation = server.spawnObject(blueprint, player, {}, {});
+	if (!formation)
+		return nullptr;
+	Vector3 positionSum;
+	for (ServerGameObject* sub : subs) {
+		positionSum += sub->position;
+		// what the unit did on its own ends (training at a dummy went on in the formation, the
+		// formation never placing it): the formation leads it now
+		sub->orderConfig.cancelAllOrders();
+		sub->setParent(formation);
+	}
+	formation->setPosition(positionSum / (float)subs.size());
+	FormationController::faceMembersWay(formation);
+	formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+	return formation;
+}
+
+// (NETCLIMSG_OBJECT_ASSOCIATION) an association change, to the clients: not a missile's (an
+// arrow's firer and target, many a second in a battle; no button asks for them)
+static bool AssociationPacket(NetPacketWriter& msg, uint8_t change, const ServerGameObject* obj, int category, const ServerGameObject* other)
+{
+	if (!Server::instance || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE
+		|| (other && other->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE))
+		return false;
+	msg.writeUint8(change);
+	msg.writeUint32(obj->id);
+	msg.writeUint32((uint32_t)category);
+	msg.writeUint32(other ? other->id : 0);
+	return true;
+}
+
 void ServerGameObject::associateObject(int category, ServerGameObject * associated)
 {
 	assert(this && associated);
-	this->associates[category].insert(associated);
+	if (this->associates[category].insert(associated).second)
+		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 1, this, category, associated)) Server::instance->sendToAll(msg); }
 	associated->associators[category].insert(this);
 	// the AI tests: a missile's firer is registered after its target (Mechanics\fort attack.cpp,
 	// Fire Arrow.cpp): a building's shot counts for its player against the target's
@@ -1840,16 +1913,21 @@ void ServerGameObject::associateObject(int category, ServerGameObject * associat
 void ServerGameObject::dissociateObject(int category, ServerGameObject * associated)
 {
 	assert(this && associated);
-	this->associates[category].erase(associated);
+	if (this->associates[category].erase(associated))
+		{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 2, this, category, associated)) Server::instance->sendToAll(msg); }
 	associated->associators[category].erase(this);
 }
 
 void ServerGameObject::clearAssociates(int category)
 {
 	assert(this);
-	for (auto &obj : associates[category])
+	auto& set = associates[category];
+	if (set.empty())
+		return;
+	for (auto &obj : set)
 		obj->associators[category].erase(this);
-	associates[category].clear();
+	set.clear();
+	{ NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION); if (AssociationPacket(msg, 3, this, category, nullptr)) Server::instance->sendToAll(msg); }
 }
 
 void ServerGameObject::convertTo(const GameObjBlueprint * postbp)
@@ -2120,10 +2198,21 @@ void ServerGameObject::updatePosition(const Vector3 & newposition, bool events)
 			}
 			if (newtileIndex != -1) {
 				server->tiles[newtileIndex].objList.push_back(this->id);
-				if (events) {
-					for (auto& no : server->tiles[newtileIndex].objList) {
-						if (ServerGameObject* nobj = no.getFrom<Server>())
-							nobj->sendEvent(Tags::PDEVENT_ON_SHARE_TILE, this);
+				// On Share Tile (WKB.exe 0x568de0, after joining the tile at 0x568ee5): the mover and
+				// each occupant of another player, neither a missile (message 0x7e2) nor terminated,
+				// both get it, each with the other as sender, the mover first. Only the occupants
+				// got it before, the mover's own side and the mover itself too: riders that rode
+				// into Javelineers never heard of them, the game set's "H2H Unit : Attack Enemy On
+				// Share Tile" never ran for them, and they stood among them (test 100).
+				if (events && blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE && !(flags & fTerminated)) {
+					const auto occupants = server->tiles[newtileIndex].objList;
+					for (auto& no : occupants) {
+						ServerGameObject* nobj = no.getFrom<Server>();
+						if (!nobj || nobj == this || nobj->getPlayer() == getPlayer() || (nobj->flags & fTerminated)
+							|| nobj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+							continue;
+						sendEvent(Tags::PDEVENT_ON_SHARE_TILE, nobj);
+						nobj->sendEvent(Tags::PDEVENT_ON_SHARE_TILE, this);
 					}
 				}
 			}
@@ -2327,6 +2416,48 @@ void ServerGameObject::wakeAggressiveIdle()
 			sendEvent(Tags::PDEVENT_ON_IDLE);
 			return;
 		}
+	// A melee unit (not one in an army either): the scripts' idle reaction looks only 1.25 "Actual
+	// Sight Range" metres round it ("Most Appropriate Target In Idle Range for Heavy Infantry": 5.5 m
+	// for a Spearman, whose sight is 4.4 tiles), and it has no sight events, so it let enemies walk
+	// past 12 m away (the play test of 2026-11-19). wkbai's: the nearest enemy character within its
+	// sight (the item's tiles x 5 m, 10 to 30 m) that it can get at is attacked with its own attack
+	// command, as a right-click on it would.
+	extern bool IsRangedUnit(const ServerGameObject* unit);
+	extern bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+	if (IsRangedUnit(this) || !me || (getParent() && getParent()->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY))
+		return;
+	// (a melee type has no DEFAULT_ATTACK_COMMAND: the "Attack" command, a right-click's)
+	const Command* cmd = gs->commands.getPointer(blueprint->defaultAttackCommand);
+	if (!cmd)
+		cmd = gs->commands.getPointer(gs->commands.names.getIndex("Attack"));
+	if (!cmd)
+		return;
+	static const GameSet* sightOf = nullptr;
+	static int sightItem = -1;
+	if (sightOf != gs) {
+		sightOf = gs;
+		sightItem = gs->items.names.getIndex("Actual Sight Range");
+	}
+	const float radius = std::clamp(sightItem >= 0 ? getItem(sightItem) * 5.0f : 20.0f, 10.0f, 30.0f);
+	NNSearch search;
+	search.start(Server::instance, position, radius);
+	ServerGameObject* best = nullptr;
+	float bestD = 0.0f;
+	while (CommonGameObject* c = search.next()) {
+		ServerGameObject* o = (ServerGameObject*)c;
+		if (o == this || o->deleted || (o->flags & fTerminated) || o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || !o->getPlayer()
+			|| Server::instance->getDiplomaticStatus(o->getPlayer(), me) != enemy)
+			continue;
+		const float d = (o->position - position).sqlen2xz();
+		if (d > radius * radius || (best && (d > bestD || (d == bestD && o->id > best->id))))
+			continue;
+		if (OutOfReach(this, o->position, 3.0f))
+			continue;
+		best = o;
+		bestD = d;
+	}
+	if (best)
+		cmd->execute(this, best, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
 }
 
 void ServerGameObject::addZoneTile(int tx, int tz)
@@ -3373,6 +3504,22 @@ void Server::sendStateTo(NetLink* link)
 				sendObject(child->dyncast<ServerGameObject>());
 	};
 	sendObject(getLevel()->dyncast<ServerGameObject>());
+	// the associations, once every object is there (NETCLIMSG_OBJECT_ASSOCIATION)
+	for (const auto& [id, co] : idmap) {
+		const ServerGameObject* obj = (const ServerGameObject*)co;
+		if (!obj || obj->deleted || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
+			continue;
+		for (const auto& [category, set] : obj->associates)
+			for (const SrvGORef& ref : set)
+				if (const ServerGameObject* other = ref.get(); other && other->blueprint->bpClass != Tags::GAMEOBJCLASS_MISSILE) {
+					NetPacketWriter msg(NETCLIMSG_OBJECT_ASSOCIATION);
+					msg.writeUint8(1);
+					msg.writeUint32(obj->id);
+					msg.writeUint32((uint32_t)category);
+					msg.writeUint32(other->id);
+					send(msg);
+				}
+	}
 	for (const auto& [pair, status] : diplomaticStatuses) {
 		NetPacketWriter msg(NETCLIMSG_DIPLOMATIC_STATUS_SET);
 		msg.writeUint32(pair.first);
@@ -3768,8 +3915,16 @@ void Server::simulate()
 		if (obj->disableCount > 0)
 			return;
 		// moving without an order too: formation members walking to their places
+		// (and a character set to attack at will: its look for enemies once a second, wakeAggressiveIdle)
+		static const GameSet* aggressiveOf = nullptr;
+		static int aggressiveItem = -1;
+		if (aggressiveOf != gameSet.get()) {
+			aggressiveOf = gameSet.get();
+			aggressiveItem = gameSet->items.names.getIndex("Become Aggressive");
+		}
 		if (!obj->orderConfig.orders.empty() || obj->blueprint->receiveSightRangeEvents || obj->blueprint->removeWhenNotReferenced
-			|| obj->movement.isMoving())
+			|| obj->movement.isMoving()
+			|| (aggressiveItem >= 0 && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && obj->getItem(aggressiveItem) > 0.0f))
 			toprocess.emplace_back(obj);
 		if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY) {
 			Vector3 avg(0,0,0);
@@ -3944,6 +4099,11 @@ void Server::simulate()
 			g_simPhase = "sight"; g_simPhaseObject = obj->id;
 			obj->lookForSightRangeEvents();
 			if (!ref) continue;
+			obj->wakeAggressiveIdle();
+			if (!ref) continue;
+		}
+		// (a character without sight events, a Spearman: its attack at will once a second too)
+		else if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && sightDue(obj->id)) {
 			obj->wakeAggressiveIdle();
 			if (!ref) continue;
 		}
@@ -4438,29 +4598,12 @@ void Server::handlePacket(int clientIndex, const std::string& data)
 				break;
 			}
 			case NETSRVMSG_CREATE_NEW_FORMATION: {
-				// a formation needs more than 7 characters (WKB.exe 0x54f0d0); fewer stay as they are
-				std::vector<ServerGameObject*> subs;
+				std::vector<ServerGameObject*> units;
 				for (ServerGameObject* sub : clientInfos[clientIndex].unitsForNewFormation)
-					if (sub && !(sub->flags & CommonGameObject::fTerminated) && sub->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER
-						&& std::find(subs.begin(), subs.end(), sub) == subs.end())
-						subs.push_back(sub);
+					if (sub)
+						units.push_back(sub);
 				clientInfos[clientIndex].unitsForNewFormation.clear();
-				if (subs.size() < 8)
-					break;
-				const GameObjBlueprint* blueprint = &gameSet->objBlueprints[Tags::GAMEOBJCLASS_FORMATION][0];
-				ServerGameObject* formation = spawnObject(blueprint, player, {}, {});
-				Vector3 positionSum; int numUnits = 0;
-				for (ServerGameObject* sub : subs) {
-					positionSum += sub->position;
-					numUnits += 1;
-					// what the unit did on its own ends (training at a dummy went on in the
-					// formation, the formation never placing it): the formation leads it now
-					sub->orderConfig.cancelAllOrders();
-					sub->setParent(formation);
-				}
-				formation->setPosition(positionSum / numUnits);
-				FormationController::faceMembersWay(formation);
-				formation->sendEvent(Tags::PDEVENT_ON_SPAWN);
+				CreateFormationFrom(*this, player, units);
 				break;
 			}
 			case NETSRVMSG_SET_BUILDING_SPAWNED_UNIT_ORDER_TO_TARGET: {
