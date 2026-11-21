@@ -4,6 +4,7 @@
 
 #pragma once
 #include <atomic>
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <memory>
@@ -137,6 +138,13 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();
+	// lookForSightRangeEvents in three parts, for "parallelSight": the range (scripts: the
+	// server's thread; <= 0 none), the scan and sort (no scripts, nothing changed: any thread)
+	// and the events (the server's thread)
+	struct SightScan { std::vector<uint32_t> found; uint64_t hashA = 0, hashB = 0; bool same = false; uint64_t candidates = 0; };
+	float sightRange();
+	void sightScan(float dist, SightScan& out) const;
+	void sightEvents(SightScan& scan);
 	// attack at will ("Become Aggressive"): idle with an enemy character in sight, "On Idle" again
 	void wakeAggressiveIdle();
 	void addZoneTile(int tx, int tz);
@@ -426,6 +434,21 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
 	// agent control's harness: the simulation steps only when told ("harness.advance")
+	// The players' commands (NETSRVMSG_COMMAND, one per unit) run as they come, up to
+	// commandsPerStep in a step ("commandsPerStep" in wkconfig.json, default 500; 0 no limit);
+	// the rest wait here and run at the start of the next steps, in the order they came: a
+	// 10,000-unit order spreads over 20 steps instead of stalling one. The same on every
+	// computer and in a replay (by the messages' order, not by time).
+	struct PendingCommand { int command; uint32_t object, target; int mode; Vector3 destination, faceTo; };
+	std::deque<PendingCommand> pendingCommands;
+	uint32_t commandsThisStep = 0, commandsPerStep = 500;
+	void issueCommand(int command, uint32_t object, int mode, uint32_t target, const Vector3& destination, const Vector3& faceTo = Vector3(-1, 0, 0));
+	void runPendingCommands();
+	// "parallelSight": the step's sight scans after the object loop, on the worker threads
+	// (Server::simulate); off, each in the loop as before
+	bool parallelSight = false;
+	uint64_t serial = 0; // which server this is, counted from 1 (Server::Server)
+	std::vector<SrvGORef> sightQueue;
 	bool lockstep = false;
 	uint32_t lockstepSteps = 0;  // steps still to run
 	uint64_t lockstepDone = 0;   // steps run in lockstep so far

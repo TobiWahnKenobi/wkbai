@@ -1,3 +1,8 @@
+#include <SDL3/SDL_timer.h>
+#include <map>
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 // wkbre2 - WK Engine Reimplementation
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
@@ -133,10 +138,22 @@ bool FinderFailsWhenEmpty(const ObjectFinder* finder)
 	return dynamic_cast<const FinderTarget*>(finder) != nullptr;
 }
 
+// the simulation profiling test ("detail", g_actionProfile): the time per named finder
+// (FINDER_RESULTS), with the finders it uses, ms
+std::map<std::string, double> g_finderMs;
+
 struct FinderResults : ObjectFinder {
 	int ofd;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ofd == -1) return {}; // TODO: Remove this after implementing exception handling
+		extern bool g_actionProfile;
+		if (g_actionProfile && ctx->isServer()) {
+			const uint64_t start = SDL_GetPerformanceCounter();
+			ObjectFinderResult r = ctx->gameState->gameSet->objectFinderDefinitions[ofd]->eval(ctx);
+			g_finderMs[ctx->gameState->gameSet->objectFinderDefinitions.names.getString(ofd)] +=
+				(double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+			return r;
+		}
 		return ctx->gameState->gameSet->objectFinderDefinitions[ofd]->eval(ctx);
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
@@ -247,9 +264,10 @@ struct FinderSequenceExecutor : ObjectFinder {
 
 struct FinderNearestToSatisfy : ObjectFinder {
 	std::unique_ptr<ValueDeterminer> vdcond, vdradius;
-	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+	// The first way: every object on the tiles round it, in the tiles' order, the condition
+	// evaluated for each one nearer than the nearest found so far (kept to check the one below)
+	ObjectFinderResult evalAll(ScriptContext* ctx) {
 		using AnyGO = CommonGameObject;
-		// the nearest object within the radius that satisfies the condition (only that one)
 		float radius = vdradius->eval(ctx);
 		const Vector3 center = ctx->getSelf()->position;
 		NNSearch search;
@@ -268,6 +286,64 @@ struct FinderNearestToSatisfy : ObjectFinder {
 		}
 		if (nearest)
 			return { nearest };
+		return {};
+	}
+	// The nearest object within the radius that satisfies the condition (only that one): the
+	// objects within it sorted by distance (ties in the tiles' order, as the first way kept the
+	// first one found), the condition evaluated from the nearest out until one satisfies it. The
+	// same object as evalAll's, with fewer evaluations (each one evalAll made too): an army's
+	// "Most appropriate Victim" evaluated it for every unit within 10 m of each soldier.
+	// WKB_NEAREST_CHECK: each answer and the random numbers' state after it compared with evalAll's.
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		static const bool check = getenv("WKB_NEAREST_CHECK") != nullptr;
+		uint32_t randBefore = 0;
+		if (check)
+			randBefore = g_simRandom.state;
+		using AnyGO = CommonGameObject;
+		const float radius = vdradius->eval(ctx);
+		const Vector3 center = ctx->getSelf()->position;
+		struct Candidate { float d; uint32_t order; AnyGO* obj; };
+		static thread_local std::vector<Candidate> near;
+		const size_t base = near.size(); // (a condition may use this finder again: its own part)
+		NNSearch search;
+		search.start(ctx->gameState, center, radius);
+		uint32_t order = 0;
+		const float r2 = radius * radius;
+		while (AnyGO* obj = (AnyGO*)search.next()) {
+			if (!obj->isInteractable()) continue;
+			const float d = (obj->position - center).sqlen2xz();
+			if (d > r2) continue;
+			near.push_back({ d, order++, obj });
+		}
+		std::sort(near.begin() + base, near.end(), [](const Candidate& a, const Candidate& b) { return a.d != b.d ? a.d < b.d : a.order < b.order; });
+		AnyGO* found = nullptr;
+		for (size_t i = base; i < near.size(); i++) {
+			auto _ = ctx->change(ctx->candidate, near[i].obj);
+			if (vdcond->eval(ctx) > 0.0f) {
+				found = near[i].obj;
+				break;
+			}
+		}
+		near.resize(base);
+		if (check && ctx->isServer()) {
+			static uint64_t calls = 0, wrong = 0;
+			calls++;
+			const uint32_t randNew = g_simRandom.state;
+			g_simRandom.state = randBefore;
+			ObjectFinderResult all = evalAll(ctx);
+			AnyGO* old = all.empty() ? nullptr : all[0];
+			if (old != found || g_simRandom.state != randNew) {
+				if (wrong++ < 20)
+					printf("NEAREST MISMATCH (call %llu): all %u, sorted %u; random state %s\n", (unsigned long long)calls,
+						old ? old->id : 0u, found ? found->id : 0u, g_simRandom.state != randNew ? "different" : "the same");
+			}
+			if (calls % 10000 == 0)
+				printf("NEAREST checked %llu, %llu different\n", (unsigned long long)calls, (unsigned long long)wrong);
+			// (evalAll's state stands: the game as before)
+			found = old;
+		}
+		if (found)
+			return { found };
 		return {};
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {

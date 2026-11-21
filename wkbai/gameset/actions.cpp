@@ -18,6 +18,10 @@
 #include <functional>
 #include <set>
 #include <string_view>
+#include <map>
+#include <string>
+#include <typeinfo>
+#include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include "../util/SimRandom.h"
 
@@ -2614,13 +2618,30 @@ void ActionSequence::addActionFromGsf(GSFileParser& gsf, const GameSet& gs)
 	actionList.push_back(std::unique_ptr<Action>(ReadAction(gsf, gs)));
 }
 
+// the simulation profiling test ("detail"): the time per action type (its own, without the
+// actions it runs: an UPON_CONDITION's are theirs), ms
+bool g_actionProfile = false;
+std::map<std::string, double> g_actionMs;
+
 void ActionSequence::run(SrvScriptContext* ctx) const {
 	const bool hasDebugInfo = debugInfo.get();
 	for (size_t i = 0; i < actionList.size(); ++i) {
 		if (hasDebugInfo) {
 			BreakpointManager::instance().checkAndBreak(debugInfo->fileIndex, debugInfo->actionLineIndices[i]);
 		}
-		actionList[i]->run(ctx);
+		if (g_actionProfile) {
+			static double inner = 0.0; // the time of the actions run inside the one running
+			const double saved = inner;
+			inner = 0.0;
+			const uint64_t start = SDL_GetPerformanceCounter();
+			actionList[i]->run(ctx);
+			const double took = (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+			const Action& a = *actionList[i];
+			g_actionMs[typeid(a).name()] += took - inner;
+			inner = saved + took;
+		}
+		else
+			actionList[i]->run(ctx);
 	}
 }
 

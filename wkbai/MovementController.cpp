@@ -903,9 +903,10 @@ uint64_t g_pathfindingSearches = 0;
 namespace {
 	struct DestIndex {
 		const Server* server = nullptr;
+		uint64_t serial = 0; // (Server::serial: another server at the same address is another)
 		int w = 0, h = 0;
 		uint32_t generation = 0;
-		std::vector<std::vector<uint32_t>> cells;
+		std::vector<std::vector<ServerGameObject*>> cells;
 	} g_destIndex;
 
 	int DestCellOf(const MovementController& mc, int w, int h)
@@ -927,9 +928,10 @@ namespace {
 		if (w <= 0 || h <= 0)
 			return false;
 		DestIndex& di = g_destIndex;
-		if (di.server == server && di.w == w && di.h == h)
+		if (di.server == server && di.serial == server->serial && di.w == w && di.h == h)
 			return true;
 		di.server = server;
+		di.serial = server->serial;
 		di.w = w;
 		di.h = h;
 		di.generation++;
@@ -940,7 +942,7 @@ namespace {
 			mc.m_destGeneration = di.generation;
 			mc.m_destCell = DestCellOf(mc, w, h);
 			if (mc.m_destCell >= 0)
-				di.cells[mc.m_destCell].push_back(id);
+				di.cells[mc.m_destCell].push_back(obj);
 		}
 		return true;
 	}
@@ -967,7 +969,7 @@ void MovementController::syncDestIndex()
 		return;
 	if (m_destCell >= 0) {
 		auto& v = di.cells[m_destCell];
-		auto it = std::find(v.begin(), v.end(), m_object->id);
+		auto it = std::find(v.begin(), v.end(), m_object);
 		if (it != v.end()) {
 			*it = v.back();
 			v.pop_back();
@@ -975,7 +977,7 @@ void MovementController::syncDestIndex()
 	}
 	m_destCell = cell;
 	if (cell >= 0)
-		di.cells[cell].push_back(m_object->id);
+		di.cells[cell].push_back(m_object);
 }
 
 MovementController::~MovementController()
@@ -983,7 +985,7 @@ MovementController::~MovementController()
 	DestIndex& di = g_destIndex;
 	if (m_destCell >= 0 && m_destGeneration == di.generation && (size_t)m_destCell < di.cells.size() && m_object) {
 		auto& v = di.cells[m_destCell];
-		auto it = std::find(v.begin(), v.end(), m_object->id);
+		auto it = std::find(v.begin(), v.end(), m_object);
 		if (it != v.end()) {
 			*it = v.back();
 			v.pop_back();
@@ -991,7 +993,7 @@ MovementController::~MovementController()
 	}
 }
 
-const std::vector<uint32_t>* MovementController::destCell(int tx, int tz)
+const std::vector<ServerGameObject*>* MovementController::destCell(int tx, int tz)
 {
 	if (!EnsureDestIndex() || tx < 0 || tz < 0 || tx >= g_destIndex.w || tz >= g_destIndex.h)
 		return nullptr;
@@ -1257,6 +1259,26 @@ uint64_t g_pathBatchRequests = 0, g_pathBatchSearches = 0;
 // the batches' parts (lines, searches) that ran on the worker threads (4 requests or more)
 uint64_t g_pathPoolRuns = 0;
 
+// the path searches' worker threads, also for SimParallelFor (none with "pathThreads" 1; made
+// once, left running to the end of the program)
+static WorkerPool* SharedWorkerPool()
+{
+	static WorkerPool* pool = pathThreads() > 1 ? new WorkerPool(pathThreads()) : nullptr;
+	return pool;
+}
+
+// Other parts of the step on the same threads (the sight scans with "parallelSight"): f(0..n-1),
+// returning when all are done; in order here without threads or for a few
+void SimParallelFor(size_t n, const std::function<void(size_t)>& f)
+{
+	WorkerPool* pool = SharedWorkerPool();
+	if (pool && n >= 4)
+		pool->run(n, f);
+	else
+		for (size_t i = 0; i < n; i++)
+			f(i);
+}
+
 void MovementController::runPathSearches()
 {
 	using namespace Pathfinding;
@@ -1278,9 +1300,7 @@ void MovementController::runPathSearches()
 	// on the worker threads with the caches filled first; else here, as before (the test switches
 	// that look the ground up afresh)
 	const bool parallel = !g_noCache && !getenv("WKB_PATH_CHECKCACHE");
-	static WorkerPool* pool = nullptr;
-	if (parallel && !pool && pathThreads() > 1)
-		pool = new WorkerPool(pathThreads()); // (left running to the end of the program)
+	WorkerPool* pool = parallel ? SharedWorkerPool() : nullptr;
 	auto forEach = [&](size_t n, const std::function<void(size_t)>& f) {
 		// (fewer than 4 here: the threads' wake-up costs more; test runs: WKB_PATH_MINBATCH=1
 		// sends every batch to the threads)
