@@ -896,6 +896,17 @@ void ClientInterface::editorZones()
 
 void ClientInterface::applyWaterDesign()
 {
+	// sloped rivers (WaterDesign::Waterway::levels) are water of the terrain's own: laid again,
+	// the server's too (its units wade through them)
+	if (Terrain* trn = client ? client->terrain : nullptr; trn && ((trn->waterDesign && trn->waterDesign->hasSlopedWater()) || !trn->slopedSurface.empty())) {
+		trn->refillWater();
+		withServer([&](Server& server) {
+			if (server.terrain && server.terrain != trn && server.terrain->width == trn->width && server.terrain->height == trn->height) {
+				server.terrain->waterDesign = trn->waterDesign ? std::make_shared<WaterDesign>(*trn->waterDesign) : nullptr;
+				server.terrain->refillWater();
+			}
+		});
+	}
 	if (!terrainRenderer || !terrainRenderer->updateWater())
 		rebuildTerrainRenderer(true);
 }

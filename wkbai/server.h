@@ -681,3 +681,15 @@ private:
 	friend struct UnitHistory;
 	friend struct ServerChronicle;
 };
+// The simulation's time per part so far (ms, summed over the steps since the program started;
+// the "profileSim" report every 10 s starts them again unless g_simProfileQuiet), for the
+// simulation profiling test (Test_SimProfile). "tree" includes "ai".
+struct SimProfileTotals {
+	double total = 0, sequences = 0, tree = 0, ai = 0, orders = 0, movement = 0, sight = 0;
+	uint64_t steps = 0, objects = 0, movers = 0;
+	// with profileSim only: orders' time per order, the walking objects' movement parts
+	std::map<std::string, double> byOrder;
+	double mvPosition = 0, mvUpdate = 0, mvSpeed = 0, mvController = 0;
+};
+SimProfileTotals GetSimProfileTotals();
+extern bool g_simProfileQuiet;

@@ -12001,10 +12001,13 @@ static void MapFolderImportInChildren(const nlohmann::json& cfg)
 		_putenv_s("WKB_TEST", std::to_string(g_launchedTest).c_str());
 		_putenv_s("WKB_MAPFOLDER_ONLY", only);
 		_putenv_s("WKB_MAPFOLDER_FROM", std::to_string(index).c_str());
-		// (cmd /c strips the outer quotes: the path in its own)
-		FILE* p = _popen(("\"\"" + exe + "\" < NUL\"").c_str(), "r");
-		if (!p)
+		// no console window (_popen's cmd.exe opened one on the screen for each game)
+		HiddenChild hc = PopenHidden(exe.c_str());
+		FILE* p = hc.out;
+		if (!p) {
+			PcloseHidden(hc);
 			return 0;
+		}
 		char buf[4096];
 		int found = 0; // 1: the game's line, 2: no level, 3: past the last map
 		while (fgets(buf, sizeof(buf), p)) {
@@ -12020,7 +12023,7 @@ static void MapFolderImportInChildren(const nlohmann::json& cfg)
 			else if (l.rfind("MAPFOLDER maps 0 ", 0) == 0 && !found)
 				found = 3;
 		}
-		const int code = _pclose(p);
+		const int code = PcloseHidden(hc);
 		if (!found && code != 0)
 			line = "the child process ended with " + std::to_string(code);
 		return found;
@@ -13839,10 +13842,288 @@ void Test_MapCatalog()
 	fflush(stdout);
 }
 
+// The simulation's cost with up to 10,000 units (needs the game data), the first number for
+// lockstep (every peer simulates every unit): two armies of half the units each, standing
+// (idle), marched to 20 m of each other (march; they engage by sight from there) and then each
+// unit attacking its counterpart in the other army (battle). Per phase: ms per step (average,
+// median, 95th percentile, longest), the share of one core at the game's 20 ms step, and its
+// parts as the server times them (sequences, object tree with the AI, orders with pathfinding,
+// movement, sight). No client: the server's messages to a client are not in it.
+// "simProfile" in wkconfig.json (all optional):
+//   { "level": "2 Player 4 Peaks.lvl", "own": 1027, "enemy": 1030, "units": [2500, 10000],
+//     "types": ["Man At Arms", "Archer", "Knight"], "shares": [60, 25, 15],
+//     "idle": 5, "march": 15, "battle": 30, "gap": 120, "spacing": 2.0,
+//     "detail": false, "report": "simprofile.json" }
+// The types fill the armies' columns from the front by their shares. "detail": true also turns
+// profileSim on (pathfinding's thread time, the sight's parts), whose own timers cost a little.
+void Test_SimProfile()
+{
+	LoadBCP("data.bcp");
+	const nlohmann::json cfg = g_settings.value("simProfile", nlohmann::json::object());
+	const std::string level = cfg.value("level", std::string("2 Player 4 Peaks.lvl"));
+	const uint32_t ownId = cfg.value("own", 1027u), enemyId = cfg.value("enemy", 1030u);
+	std::vector<int> unitCounts;
+	if (cfg.contains("units") && cfg["units"].is_array())
+		for (const auto& n : cfg["units"]) unitCounts.push_back(n.get<int>());
+	else if (cfg.contains("units"))
+		unitCounts.push_back(cfg["units"].get<int>());
+	else
+		unitCounts = { 2500, 10000 };
+	const std::vector<std::string> typeNames = cfg.value("types", std::vector<std::string>{ "Man At Arms", "Archer", "Knight" });
+	std::vector<float> shares = cfg.value("shares", std::vector<float>{ 60, 25, 15 });
+	shares.resize(typeNames.size(), shares.empty() ? 1.0f : shares.back());
+	const float phaseSeconds[3] = { cfg.value("idle", 5.0f), cfg.value("march", 15.0f), cfg.value("battle", 30.0f) };
+	const char* phaseNames[3] = { "idle", "march", "battle" };
+	const float gap = cfg.value("gap", 120.0f), spacing = cfg.value("spacing", 2.0f);
+	const bool detail = cfg.value("detail", false);
+	const std::string reportPath = cfg.value("report", std::string("simprofile.json"));
+	// (read once, at the first step)
+	g_settings["profileSim"] = detail;
+	g_simProfileQuiet = true;
+	extern double g_pathfindingMs, g_astarMs, g_pathBatchMs[5], g_sightScanMs, g_sightSortMs, g_sightEventMs;
+	extern uint64_t g_pathBatchRequests, g_pathBatchSearches, g_freeSpotCalls, g_freeSpotMismatches;
+	extern double g_freeSpotMs, g_commandMs[5];
+	auto now = []() { return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency(); };
+	const double spikeMs = cfg.value("spikeMs", 250.0);
+	// the counters at one moment: the server's parts and pathfinding's (paths started in the
+	// orders, then the step's batch: its fill, lines, fields, search and apply, wall time)
+	struct Snap {
+		SimProfileTotals t;
+		double path = 0, batch[5] = {}, astar = 0, sightScan = 0, sightSort = 0, sightEvent = 0;
+		uint64_t requests = 0, searches = 0;
+		double freeSpotMs = 0, command[5] = {};
+		uint64_t freeSpots = 0;
+	};
+	auto snap = [&]() {
+		Snap s;
+		s.t = GetSimProfileTotals();
+		s.path = g_pathfindingMs;
+		for (int i = 0; i < 5; i++) s.batch[i] = g_pathBatchMs[i];
+		s.astar = g_astarMs;
+		s.sightScan = g_sightScanMs; s.sightSort = g_sightSortMs; s.sightEvent = g_sightEventMs;
+		s.requests = g_pathBatchRequests; s.searches = g_pathBatchSearches;
+		s.freeSpotMs = g_freeSpotMs; s.freeSpots = g_freeSpotCalls;
+		for (int i = 0; i < 5; i++) s.command[i] = g_commandMs[i];
+		return s;
+	};
+	auto batchMs = [](const Snap& a, const Snap& b) { double s = 0; for (int i = 0; i < 5; i++) s += b.batch[i] - a.batch[i]; return s; };
+	// what the time between two snaps went on, per step (n steps)
+	auto detailText = [&](const Snap& a, const Snap& b, double n) {
+		char buf[512];
+		std::string s;
+		snprintf(buf, sizeof(buf), "path batch %.2f (fill %.2f, lines %.2f, fields %.2f, search %.2f, apply %.2f; %.0f requests, %.0f searches; search time on the threads %.2f), paths started %.2f",
+			batchMs(a, b) / n, (b.batch[0] - a.batch[0]) / n, (b.batch[1] - a.batch[1]) / n, (b.batch[2] - a.batch[2]) / n, (b.batch[3] - a.batch[3]) / n, (b.batch[4] - a.batch[4]) / n,
+			(double)(b.requests - a.requests) / n, (double)(b.searches - a.searches) / n, (b.astar - a.astar) / n, (b.path - a.path) / n);
+		s += buf;
+		snprintf(buf, sizeof(buf), "; free spots %.2f (%.1f searches); commands: conditions %.2f, start sequence %.2f, adding the order %.2f, its start %.2f, post-order %.2f",
+			(b.freeSpotMs - a.freeSpotMs) / n, (double)(b.freeSpots - a.freeSpots) / n, (b.command[0] - a.command[0]) / n, (b.command[1] - a.command[1]) / n,
+			(b.command[2] - a.command[2]) / n, (b.command[3] - a.command[3]) / n, (b.command[4] - a.command[4]) / n);
+		s += buf;
+		if (detail) {
+			snprintf(buf, sizeof(buf), "; sight scan %.2f, sort %.2f, events %.2f; movement of %.0f walkers: position %.2f, updatePosition %.2f, speed %.2f, path nodes %.2f",
+				(b.sightScan - a.sightScan) / n, (b.sightSort - a.sightSort) / n, (b.sightEvent - a.sightEvent) / n, (double)(b.t.movers - a.t.movers) / n,
+				(b.t.mvPosition - a.t.mvPosition) / n, (b.t.mvUpdate - a.t.mvUpdate) / n, (b.t.mvSpeed - a.t.mvSpeed) / n, (b.t.mvController - a.t.mvController) / n);
+			s += buf;
+			std::vector<std::pair<double, std::string>> top;
+			for (const auto& [name, ms] : b.t.byOrder) {
+				auto it = a.t.byOrder.find(name);
+				top.emplace_back(ms - (it != a.t.byOrder.end() ? it->second : 0.0), name);
+			}
+			std::sort(top.rbegin(), top.rend());
+			s += "; orders by type:";
+			for (size_t i = 0; i < top.size() && i < 5; i++) {
+				snprintf(buf, sizeof(buf), " %s %.2f", top[i].second.c_str(), top[i].first / n);
+				s += buf;
+			}
+		}
+		return s;
+	};
+	auto partsText = [&](const Snap& a, const Snap& b) {
+		char buf[256];
+		snprintf(buf, sizeof(buf), "sequences %.1f, object tree %.1f (AI %.1f), orders %.1f, movement %.1f, sight %.1f",
+			b.t.sequences - a.t.sequences, (b.t.tree - b.t.ai) - (a.t.tree - a.t.ai), b.t.ai - a.t.ai, b.t.orders - a.t.orders, b.t.movement - a.t.movement, b.t.sight - a.t.sight);
+		return std::string(buf);
+	};
+
+	nlohmann::json report;
+	report["level"] = level;
+	report["threads"] = std::thread::hardware_concurrency();
+	report["detail"] = detail;
+	for (int units : unitCounts) {
+		Server server;
+		server.loadSaveGame(("Save_Games\\" + level).c_str());
+		ServerGameObject* players[2] = { server.findObject(ownId), server.findObject(enemyId) };
+		const GameSet& gs = *server.gameSet;
+		std::vector<const GameObjBlueprint*> types;
+		for (const std::string& name : typeNames)
+			if (const GameObjBlueprint* bp = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name))
+				types.push_back(bp);
+			else
+				printf("SIMPROFILE no unit type \"%s\"\n", name.c_str());
+		const int moveCmd = gs.commands.names.getIndex("Move"), attackCmd = gs.commands.names.getIndex("Attack");
+		if (!players[0] || !players[1] || types.size() != typeNames.size() || moveCmd < 0 || attackCmd < 0) {
+			printf("SIMPROFILE FAILED (not set up)\n");
+			return;
+		}
+		const auto area = server.terrain->getPlayableArea();
+		const Vector3 centre(area.first * 0.5f, 0, area.second * 0.5f);
+		// each army a square block, its front gap/2 from the middle: own west (-x), enemy east
+		const int perSide = units / 2;
+		const int rows = std::max(1, (int)std::ceil(std::sqrt((float)perSide)));
+		const int cols = (perSide + rows - 1) / rows;
+		const float width = 2.0f * cols * spacing + gap;
+		printf("SIMPROFILE %d units on %s (%.0f x %.0f m): two blocks of %d columns x %d rows, %.0f m from back to back%s\n",
+			units, level.c_str(), area.first, area.second, cols, rows, width, width > area.first * 0.9f ? " (WIDER THAN THE MAP: units crowd its edges)" : "");
+		float shareSum = 0;
+		for (float s : shares) shareSum += s;
+		const uint64_t spawnStart = SDL_GetPerformanceCounter();
+		std::vector<SrvGORef> army[2];
+		std::vector<const GameObjBlueprint*> armyBp[2];
+		std::vector<Vector3> armyPos[2];
+		int snapped = 0;
+		for (int side = 0; side < 2; side++) {
+			const float dir = side == 0 ? -1.0f : 1.0f; // from the middle outwards
+			for (int i = 0; i < perSide; i++) {
+				const int col = i / rows, row = i % rows; // column 0 the front
+				float acc = 0;
+				const GameObjBlueprint* bp = types.back();
+				for (size_t t = 0; t < types.size(); t++) {
+					acc += shares[t] / shareSum;
+					if ((col + 0.5f) / cols <= acc) { bp = types[t]; break; }
+				}
+				const Vector3 want = centre + Vector3(dir * (gap * 0.5f + col * spacing), 0, (row - rows * 0.5f) * spacing);
+				const Vector3 pos = MovementController::nearestValidPosition(bp, want);
+				if ((Vector3(pos.x, 0, pos.z) - Vector3(want.x, 0, want.z)).len2xz() > 25.0f)
+					snapped++;
+				army[side].push_back(server.spawnObject(bp, players[side], pos, Vector3(0, side == 0 ? -1.5708f : 1.5708f, 0)));
+				armyBp[side].push_back(bp);
+				armyPos[side].push_back(pos);
+			}
+		}
+		const double spawnMs = (double)(SDL_GetPerformanceCounter() - spawnStart) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		printf("SIMPROFILE spawned %d units in %.0f ms (%d more than 5 m from their place: blocked ground)\n", perSide * 2, spawnMs, snapped);
+		server.timeManager.unpause();
+		server.timeManager.stepMs = 20;
+		auto step = [&]() {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		};
+		auto alive = [&](int side) {
+			int n = 0;
+			for (size_t i = 0; i < army[side].size(); i++)
+				if (army[side][i] && army[side][i]->blueprint == armyBp[side][i]) n++;
+			return n;
+		};
+		nlohmann::json run;
+		run["units"] = perSide * 2;
+		run["spawnMs"] = spawnMs;
+		run["snapped"] = snapped;
+		for (int phase = 0; phase < 3; phase++) {
+			// the phase's orders (timed apart: a lockstep turn carrying them runs them in one step)
+			const Snap ordersBefore = snap();
+			const double ordersStart = now();
+			int ordered = 0;
+			for (int side = 0; side < 2 && phase > 0; side++) {
+				const float toward = side == 0 ? 1.0f : -1.0f;
+				for (size_t i = 0; i < army[side].size(); i++) {
+					ServerGameObject* u = army[side][i].get();
+					if (!u || u->blueprint != armyBp[side][i]) continue;
+					if (phase == 1) {
+						const Vector3 to = MovementController::nearestValidPosition(u->blueprint, armyPos[side][i] + Vector3(toward * (gap * 0.5f - 10.0f), 0, 0));
+						gs.commands[moveCmd].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, to);
+						ordered++;
+					}
+					else {
+						// its counterpart, else the next one alive
+						const auto& foes = army[1 - side];
+						for (size_t k = 0; k < foes.size(); k++) {
+							const size_t j = (i + k) % foes.size();
+							if (foes[j] && foes[j]->blueprint == armyBp[1 - side][j]) {
+								gs.commands[attackCmd].execute(u, foes[j].get(), Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+								ordered++;
+								break;
+							}
+						}
+					}
+				}
+			}
+			const double ordersMs = now() - ordersStart;
+			const Snap ordersAfter = snap();
+			if (ordered)
+				printf("SIMPROFILE %5d units %-6s   giving %d orders took %.0f ms: %s\n", perSide * 2, phaseNames[phase], ordered, ordersMs, detailText(ordersBefore, ordersAfter, 1.0).c_str());
+			const int steps = (int)(phaseSeconds[phase] * 50.0f);
+			const Snap phaseBefore = snap();
+			const SimProfileTotals& before = phaseBefore.t;
+			std::vector<double> ms;
+			ms.reserve(steps);
+			int spikes = 0;
+			const double phaseStart = now();
+			for (int i = 0; i < steps; i++) {
+				const Snap s0 = snap();
+				const double t0 = now();
+				step();
+				ms.push_back(now() - t0);
+				// a step that long printed with its parts (the first 8 of a phase)
+				if (ms.back() >= spikeMs && spikes++ < 8) {
+					const Snap s1 = snap();
+					printf("SIMPROFILE %5d units %-6s   SPIKE step %d: %.0f ms: %s; %s\n", perSide * 2, phaseNames[phase], i, ms.back(),
+						partsText(s0, s1).c_str(), detailText(s0, s1, 1.0).c_str());
+				}
+			}
+			const double wall = now() - phaseStart;
+			const Snap phaseAfter = snap();
+			const SimProfileTotals& after = phaseAfter.t;
+			const double n = (double)std::max<size_t>(1, ms.size());
+			std::vector<double> sorted = ms;
+			std::sort(sorted.begin(), sorted.end());
+			auto pct = [&](double q) { return sorted.empty() ? 0.0 : sorted[std::min(sorted.size() - 1, (size_t)(q * (sorted.size() - 1) + 0.5))]; };
+			double sum = 0;
+			for (double v : ms) sum += v;
+			const double avg = sum / n;
+			auto per = [&](double a, double b) { return (b - a) / n; };
+			// pathfinding: the paths started in the orders and the step's batch (both in "orders")
+			const double pathMs = (phaseAfter.path - phaseBefore.path + batchMs(phaseBefore, phaseAfter)) / n, astarMs = (phaseAfter.astar - phaseBefore.astar) / n;
+			const int aliveOwn = alive(0), aliveEnemy = alive(1);
+			printf("SIMPROFILE %5d units %-6s %4d steps (%.1f s wall): ms per step avg %.2f, p50 %.2f, p95 %.2f, max %.2f; %.0f%% of one core at 20 ms steps\n",
+				perSide * 2, phaseNames[phase], steps, wall / 1000.0, avg, pct(0.5), pct(0.95), sorted.empty() ? 0.0 : sorted.back(), avg / 20.0 * 100.0);
+			printf("SIMPROFILE %5d units %-6s   parts per step: sequences %.2f, object tree %.2f (AI %.2f), orders %.2f (pathfinding %.2f%s), movement %.2f, sight %.2f; %.0f objects processed\n",
+				perSide * 2, phaseNames[phase], per(before.sequences, after.sequences), per(before.tree - before.ai, after.tree - after.ai), per(before.ai, after.ai),
+				per(before.orders, after.orders), pathMs, detail ? (", searches on the threads " + std::to_string(astarMs).substr(0, 5)).c_str() : "",
+				per(before.movement, after.movement), per(before.sight, after.sight), (double)(after.objects - before.objects) / n);
+			printf("SIMPROFILE %5d units %-6s   per step: %s\n", perSide * 2, phaseNames[phase], detailText(phaseBefore, phaseAfter, n).c_str());
+			printf("SIMPROFILE %5d units %-6s   %d orders given in %.0f ms before the phase; %d steps over %.0f ms; at its end %d and %d alive\n",
+				perSide * 2, phaseNames[phase], ordered, ordersMs, spikes, spikeMs, aliveOwn, aliveEnemy);
+			fflush(stdout);
+			nlohmann::json& p = run["phases"][phaseNames[phase]];
+			p = { { "steps", steps }, { "wallS", wall / 1000.0 }, { "avgMs", avg }, { "p50Ms", pct(0.5) }, { "p95Ms", pct(0.95) },
+				{ "maxMs", sorted.empty() ? 0.0 : sorted.back() }, { "coreShare", avg / 20.0 },
+				{ "sequencesMs", per(before.sequences, after.sequences) }, { "treeMs", per(before.tree - before.ai, after.tree - after.ai) },
+				{ "aiMs", per(before.ai, after.ai) }, { "ordersMs", per(before.orders, after.orders) }, { "pathfindingMs", pathMs },
+				{ "movementMs", per(before.movement, after.movement) }, { "sightMs", per(before.sight, after.sight) },
+				{ "objectsPerStep", (double)(after.objects - before.objects) / n }, { "ordersGiven", ordered }, { "ordersGivenMs", ordersMs },
+				{ "aliveOwn", aliveOwn }, { "aliveEnemy", aliveEnemy }, { "spikes", spikes } };
+			if (detail) p["pathThreadMs"] = astarMs;
+		}
+		report["runs"].push_back(run);
+	}
+	if (FILE* f = fopen(reportPath.c_str(), "w")) {
+		fputs(report.dump(2).c_str(), f);
+		fclose(f);
+		printf("SIMPROFILE report written to %s\n", reportPath.c_str());
+	}
+	g_simProfileQuiet = false;
+	if (getenv("WKB_FREESPOT_CHECK"))
+		printf("SIMPROFILE free spots checked against the first way: %llu of %llu different\n", (unsigned long long)g_freeSpotMismatches, (unsigned long long)g_freeSpotCalls);
+	printf("SIMPROFILE done\n");
+}
+
 // Step 17.4's test: MapTerrainTest.cpp
 void Test_MapTerrain();
 // Step 17.5's test: MapMaterialsTest.cpp
 void Test_MapMaterials();
+// the sloped rivers' test: TiltedWaterTest.cpp
+void Test_TiltedWater();
 // The real-place maps' test: MapWaterObjectsTest.cpp
 void Test_MapWaterObjects();
 
@@ -13957,7 +14238,9 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_HelpPages, "Help pages: every link, help id and heading anchor of the in-game help leads to a page and heading, in every language"},
 {Test_MapTerrain, "Map terrain: three maps from three feature plans, one from a PNG heightmap, one from elevation files; walkable share and slopes, compiled and played"},
 {Test_MapMaterials, "Map materials: the ground by rule (presets temperate, nordic, dry; a mask) on the island, the river valley and the highland; the edge-rule solver's unmatched tiles, hand tiles through a rule change, determinism; compiled and played"},
-{Test_MapWaterObjects, "Map water, objects and far land: a stream with water (pools and sills, the water kept in the channel), forests and resources by rule (none on water, conifers higher up), a stored far land compiled into the cache and loaded with the map"},
+{Test_SimProfile, "Simulation profile: two armies of up to 10,000 units standing, marching and fighting; ms per step and its parts (lockstep's cost)"},
+{Test_TiltedWater, "Tilted water: a sloped stream down a hillside into a lake (format, never rising, the lake met without a seam, floating, rapids and a fall, wading); a generated river with water, compiled, server and client the same, played"},
+{Test_MapWaterObjects, "Map water, objects and far land: a stream with water (a sloped waterway, the water kept in the channel), forests and resources by rule (none on water, conifers higher up), a stored far land compiled into the cache and loaded with the map"},
 };
 
 void LaunchTest()

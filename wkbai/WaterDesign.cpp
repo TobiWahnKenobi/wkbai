@@ -26,6 +26,11 @@ bool WaterDesign::isEmpty() const
 		&& std::all_of(surface.begin(), surface.end(), [](char c) { return c == AUTO; });
 }
 
+bool WaterDesign::hasSlopedWater() const
+{
+	return std::any_of(waterways.begin(), waterways.end(), [](const Waterway& w) { return w.sloped(); });
+}
+
 int WaterDesign::nearestWaterway(float x, float z, float& dirX, float& dirZ, float& distance, float& toMouth) const
 {
 	int best = -1;
@@ -122,8 +127,20 @@ bool WaterDesign::fromText(const std::string& text, std::string& error)
 			Waterway ww;
 			ww.width = std::clamp(w.value("width", ww.width), 2.5f, 200.0f);
 			ww.speed = std::clamp(w.value("speed", 0.0f), 0.0f, 20.0f);
-			for (const auto& p : w.at("points"))
+			ww.by = w.value("by", "");
+			bool allLevels = true;
+			for (const auto& p : w.at("points")) {
 				ww.points.emplace_back(p.at(0).get<float>(), 0.0f, p.at(1).get<float>());
+				if (p.size() >= 3 && p[2].is_number())
+					ww.levels.push_back(p[2].get<float>());
+				else
+					allLevels = false;
+			}
+			// a level on every point, never rising downstream; else a river of the level water
+			if (!allLevels || ww.levels.size() != ww.points.size())
+				ww.levels.clear();
+			for (size_t i = 1; i < ww.levels.size(); i++)
+				ww.levels[i] = std::min(ww.levels[i], ww.levels[i - 1]);
 			if (ww.points.size() >= 2)
 				waterways.push_back(std::move(ww));
 		}
@@ -167,11 +184,18 @@ std::string WaterDesign::toText() const
 	auto ws = nlohmann::ordered_json::array();
 	for (const Waterway& w : waterways) {
 		auto pts = nlohmann::ordered_json::array();
-		for (const Vector3& p : w.points)
-			pts.push_back({ p.x, p.z });
+		for (size_t i = 0; i < w.points.size(); i++) {
+			const Vector3& p = w.points[i];
+			if (w.sloped())
+				pts.push_back({ p.x, p.z, std::round(w.levels[i] * 1000.0f) / 1000.0f });
+			else
+				pts.push_back({ p.x, p.z });
+		}
 		nlohmann::ordered_json way = { { "points", pts }, { "width", w.width } };
 		if (w.speed > 0.0f)
 			way["speed"] = w.speed;
+		if (!w.by.empty())
+			way["by"] = w.by;
 		ws.push_back(way);
 	}
 	j["waterways"] = ws;

@@ -1,5 +1,5 @@
 // wkbai - headless test of the map pieces made for real-place maps: rivers with water (the
-// generator's pools and sills: water in the channel, none spilling over the land), scatter rules
+// generator's sloped waterway: water in the channel, none spilling over the land), scatter rules
 // (forests and resources: objects placed, none on water, the broadleaf/conifer mix rising with the
 // height), and a map's stored far land (farland.png into the cache, loaded with the map).
 // Test "Map water, objects and far land" in test.cpp.
@@ -89,10 +89,21 @@ void Test_MapWaterObjects()
 	oj st;
 	std::string err;
 	const bool gen = MapTerrain::Generate(folder, st, err);
-	int pools = -1;
-	for (const oj& fr : st.value("features", oj::array()))
-		if (fr.value("kind", "") == "river") pools = fr.value("pools", -1);
-	check("river pools", gen && pools > 3, gen ? std::to_string(pools) + " pools" : err);
+	// the stream's water: a sloped waterway down its course (tilted water), never rising
+	int ways = 0, rises = 0, pts = 0;
+	{
+		const oj wj = oj::parse(Text(folder / "water.json"), nullptr, false);
+		for (const oj& w : wj.value("waterways", oj::array()))
+			if (w.value("by", "") == "terrain:beck") {
+				ways++;
+				float prev = 1e30f;
+				for (const oj& p : w.value("points", oj::array())) {
+					pts++;
+					if (p.size() >= 3) { if (p[2].get<float>() > prev + 0.001f) rises++; prev = p[2].get<float>(); }
+				}
+			}
+	}
+	check("river water", gen && ways == 1 && pts > 20 && rises == 0, gen ? std::to_string(ways) + " waterway, " + std::to_string(pts) + " points, " + std::to_string(rises) + " rises" : err);
 	const MapFolder::Result r = MapFolder::Compile(folder, true);
 	if (!r.ok) { check("compiled", false, r.error); printf("WATEROBJ all 0\n"); return; }
 	const oj rep = oj::parse(Text(folder / "build" / "report.json"));

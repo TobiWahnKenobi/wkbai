@@ -782,6 +782,7 @@ void Server::restoreMovements(const std::string& text)
 		}
 		mc.m_started = started;
 		mc.m_pathNodes = std::move(nodes);
+		mc.syncDestIndex(); // (FreeStandingSpot's index of the walking units)
 		if (moving && speed > 0.0f) {
 			obj->movement.startMovement(from, to, startTime, speed);
 			obj->currentSpeed = currentSpeed;

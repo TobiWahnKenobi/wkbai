@@ -215,6 +215,18 @@ uint64_t MapSeed(const Terrain& map)
 	return h;
 }
 
+// the map's sloped rivers' surface (Terrain::slopedSurface) into the bigger copy, n tiles in
+static void CopySlopedSurface(const Terrain& map, Terrain& ext, int n)
+{
+	ext.slopedSurface.clear();
+	if (map.slopedSurface.empty())
+		return;
+	ext.slopedSurface.assign((size_t)(ext.width + 1) * (ext.height + 1), Terrain::NO_SLOPED_SURFACE);
+	for (int z = 0; z <= map.height; z++)
+		for (int x = 0; x <= map.width; x++)
+			ext.slopedSurface[(size_t)(z + n) * (ext.width + 1) + (x + n)] = map.slopedSurface[(size_t)z * (map.width + 1) + x];
+}
+
 std::shared_ptr<WaterDesign> ShiftedDesign(const std::shared_ptr<WaterDesign>& design, int W, int H, int n)
 {
 	if (!design)
@@ -1165,6 +1177,7 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 			t.x = X;
 			t.z = Z;
 		}
+	CopySlopedSurface(map, e, n);
 	auto H_ = [&](int X, int Z) -> float& { return height[(size_t)std::clamp(Z, 0, H) * EW + std::clamp(X, 0, W)]; };
 
 	// ---- Rivers: each narrow water at the map's mesh edge carries on outwards, meandering,
@@ -2971,6 +2984,8 @@ void SyncExtendedWater(const Terrain& map, Terrain& ext)
 			const Terrain::Tile* s = map.getTile(x, z);
 			Terrain::Tile& t = ext.tiles[(size_t)(z + n) * ext.width + (x + n)];
 			t.fullOfWater = s->fullOfWater;
+			t.slopedWater = s->slopedWater;
 			t.waterLevel = s->waterLevel;
 		}
+	CopySlopedSurface(map, ext, n);
 }

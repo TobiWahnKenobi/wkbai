@@ -38,7 +38,7 @@ and never less than 0.
 - **Formations** multiply both again ([formations](formations.md#bonuses)).
 - **Three at a time.** At most three units fight one enemy hand to hand; others look for another victim nearby.
 - **Charge.** Cavalry gallop at their target, but a charge does no extra damage by itself. In a [Wedge](formations.md) the first blow does three times the damage. Heavy cavalry that hits formed heavy infantry from the front, outside a Wedge, breaks off after one blow and rides back.
-- **The Wedge's first blow** does three times the damage ([formations](formations.md)). Every rider of a Wedge takes part in the charge, not only those at the tip ([fighting in formation](formations.md#fighting)).
+- **The Wedge's first blow** does three times the damage ([formations](formations.md)). Every rider takes part in a charge, in a Wedge and in a Line, Column or Orb alike, not only those in front ([fighting in formation](formations.md#fighting)).
 - **Cavalry against pikes.** Heavy cavalry that strikes formed heavy infantry from the front breaks off after its blow and rides away, unless it attacks in a Wedge.
 
 ## Missiles
