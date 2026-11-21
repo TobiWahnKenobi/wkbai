@@ -440,8 +440,20 @@ Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int as
 	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
 }
 
+// the profiling test's parts of assignOrder (with g_actionProfile): conditions, cancelling the
+// orders before, making the tasks, init, start, the building order count (ms)
+double g_assignOrderMs[6] = {};
+
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	extern bool g_actionProfile;
+	uint64_t lapAt = g_actionProfile ? SDL_GetPerformanceCounter() : 0;
+	auto lap = [&](int part) {
+		if (!g_actionProfile) return;
+		const uint64_t now = SDL_GetPerformanceCounter();
+		g_assignOrderMs[part] += (double)(now - lapAt) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		lapAt = now;
+	};
 	// a peasant on its way into its shelter for the night or winter, inside or waiting for one
 	// (PeasantLodging) takes no orders but the lodging's own: not the player's, the AI's or the
 	// scripts' (a dying one's "Die" still)
@@ -486,6 +498,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		}
 	}
 
+	lap(0);
 	Order* neworder;
 	bool orderInFront = false;
 	switch (assignMode) {
@@ -525,6 +538,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		neworder = &this->orders.back();
 		break;
 	}
+	lap(1);
 	for (TaskBlueprint* taskBp : orderBlueprint->tasks) {
 		int id = neworder->nextTaskId++;
 		neworder->tasks.push_back(Task::create(id, taskBp, neworder));
@@ -535,10 +549,14 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 	if (destination.x >= 0.0f) {
 		neworder->tasks.at(0)->destination = destination;
 	}
+	lap(2);
 	neworder->init();
+	lap(3);
 	if (orderInFront && startNow) // start order (and first task) immediately if no other working order behind
 		neworder->start();
+	lap(4);
 	this->gameobj->updateBuildingOrderCount(orderBlueprint);
+	lap(5);
 	return neworder;
 }
 
@@ -1914,13 +1932,13 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 			for (int tx = nx0; tx <= nx1; tx++) {
 				if (tx >= bx0 && tx <= bx1 && tz >= bz0 && tz <= bz1)
 					continue; // taken in already
-				for (const auto& ref : server->tiles[(size_t)tz * w + tx].objList)
-					take((ServerGameObject*)server->findObject(ref.objid), false);
-				if (const std::vector<uint32_t>* walkers = MovementController::destCell(tx, tz)) {
-					for (uint32_t id : *walkers) {
-						ServerGameObject* other = (ServerGameObject*)server->findObject(id);
-						// (the index can hold a unit twice or one that has moved on: its own cell only, once)
-						if (!other || other->movementController.m_destCell != tz * w + tx)
+				// (the tile's pointers: objList's objects without looking each id up)
+				for (CommonGameObject* o : server->tiles[(size_t)tz * w + tx].objects)
+					take((ServerGameObject*)o, false);
+				if (const std::vector<ServerGameObject*>* walkers = MovementController::destCell(tx, tz)) {
+					for (ServerGameObject* other : *walkers) {
+						// (its own cell only, once)
+						if (other->movementController.m_destCell != tz * w + tx)
 							continue;
 						take(other, true);
 					}

@@ -13879,6 +13879,13 @@ void Test_SimProfile()
 	const std::string reportPath = cfg.value("report", std::string("simprofile.json"));
 	// (read once, at the first step)
 	g_settings["profileSim"] = detail;
+	// (the server's settings, read when it is made: "parallelSight", "commandsPerStep" 0 = no limit)
+	g_settings["parallelSight"] = cfg.value("parallelSight", false);
+	g_settings["commandsPerStep"] = cfg.value("commandsPerStep", 500u);
+	printf("SIMPROFILE parallelSight %d, commandsPerStep %u\n", cfg.value("parallelSight", false) ? 1 : 0, cfg.value("commandsPerStep", 500u));
+	extern bool g_actionProfile;
+	extern std::map<std::string, double> g_actionMs;
+	g_actionProfile = detail;
 	g_simProfileQuiet = true;
 	extern double g_pathfindingMs, g_astarMs, g_pathBatchMs[5], g_sightScanMs, g_sightSortMs, g_sightEventMs;
 	extern uint64_t g_pathBatchRequests, g_pathBatchSearches, g_freeSpotCalls, g_freeSpotMismatches;
@@ -13893,6 +13900,9 @@ void Test_SimProfile()
 		uint64_t requests = 0, searches = 0;
 		double freeSpotMs = 0, command[5] = {};
 		uint64_t freeSpots = 0;
+		std::map<std::string, double> actions;
+		double assign[6] = {};
+		std::map<std::string, double> finders;
 	};
 	auto snap = [&]() {
 		Snap s;
@@ -13904,6 +13914,11 @@ void Test_SimProfile()
 		s.requests = g_pathBatchRequests; s.searches = g_pathBatchSearches;
 		s.freeSpotMs = g_freeSpotMs; s.freeSpots = g_freeSpotCalls;
 		for (int i = 0; i < 5; i++) s.command[i] = g_commandMs[i];
+		if (detail) s.actions = g_actionMs;
+		extern double g_assignOrderMs[6];
+		for (int i = 0; i < 6; i++) s.assign[i] = g_assignOrderMs[i];
+		extern std::map<std::string, double> g_finderMs;
+		if (detail) s.finders = g_finderMs;
 		return s;
 	};
 	auto batchMs = [](const Snap& a, const Snap& b) { double s = 0; for (int i = 0; i < 5; i++) s += b.batch[i] - a.batch[i]; return s; };
@@ -13930,6 +13945,36 @@ void Test_SimProfile()
 				top.emplace_back(ms - (it != a.t.byOrder.end() ? it->second : 0.0), name);
 			}
 			std::sort(top.rbegin(), top.rend());
+			std::vector<std::pair<double, std::string>> acts;
+			for (const auto& [name, ms] : b.actions) {
+				auto it = a.actions.find(name);
+				acts.emplace_back(ms - (it != a.actions.end() ? it->second : 0.0), name);
+			}
+			std::sort(acts.rbegin(), acts.rend());
+			snprintf(buf, sizeof(buf), "; orders assigned: conditions %.2f, cancelling %.2f, tasks %.2f, init %.2f, start %.2f, building count %.2f",
+				(b.assign[0] - a.assign[0]) / n, (b.assign[1] - a.assign[1]) / n, (b.assign[2] - a.assign[2]) / n, (b.assign[3] - a.assign[3]) / n,
+				(b.assign[4] - a.assign[4]) / n, (b.assign[5] - a.assign[5]) / n);
+			s += buf;
+			{
+				std::vector<std::pair<double, std::string>> fs;
+				for (const auto& [name, ms] : b.finders) {
+					auto it = a.finders.find(name);
+					fs.emplace_back(ms - (it != a.finders.end() ? it->second : 0.0), name);
+				}
+				std::sort(fs.rbegin(), fs.rend());
+				s += "; finders (with theirs):";
+				for (size_t i = 0; i < fs.size() && i < 6; i++) {
+					snprintf(buf, sizeof(buf), " \"%s\" %.2f", fs[i].second.c_str(), fs[i].first / n);
+					s += buf;
+				}
+			}
+			s += "; actions by type:";
+			for (size_t i = 0; i < acts.size() && i < 6; i++) {
+				std::string name = acts[i].second;
+				if (name.rfind("struct ", 0) == 0) name = name.substr(7);
+				snprintf(buf, sizeof(buf), " %s %.2f", name.c_str(), acts[i].first / n);
+				s += buf;
+			}
 			s += "; orders by type:";
 			for (size_t i = 0; i < top.size() && i < 5; i++) {
 				snprintf(buf, sizeof(buf), " %s %.2f", top[i].second.c_str(), top[i].first / n);
@@ -13946,6 +13991,8 @@ void Test_SimProfile()
 	};
 
 	nlohmann::json report;
+	report["parallelSight"] = cfg.value("parallelSight", false);
+	report["commandsPerStep"] = cfg.value("commandsPerStep", 500u);
 	report["level"] = level;
 	report["threads"] = std::thread::hardware_concurrency();
 	report["detail"] = detail;
@@ -14031,7 +14078,7 @@ void Test_SimProfile()
 					if (!u || u->blueprint != armyBp[side][i]) continue;
 					if (phase == 1) {
 						const Vector3 to = MovementController::nearestValidPosition(u->blueprint, armyPos[side][i] + Vector3(toward * (gap * 0.5f - 10.0f), 0, 0));
-						gs.commands[moveCmd].execute(u, nullptr, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, to);
+						server.issueCommand(moveCmd, u->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, 0, to);
 						ordered++;
 					}
 					else {
@@ -14040,7 +14087,7 @@ void Test_SimProfile()
 						for (size_t k = 0; k < foes.size(); k++) {
 							const size_t j = (i + k) % foes.size();
 							if (foes[j] && foes[j]->blueprint == armyBp[1 - side][j]) {
-								gs.commands[attackCmd].execute(u, foes[j].get(), Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+								server.issueCommand(attackCmd, u->id, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, foes[j]->id, Vector3());
 								ordered++;
 								break;
 							}

@@ -177,6 +177,10 @@ struct CommonGameState {
 
 	struct Tile {
 		std::vector<CmnGORef> objList;
+		// (server) the objects on the tile now, as pointers: objList's, in its order, without the
+		// destroyed ones (objList keeps their ids), for the searches that would look each id up
+		// (FreeStandingSpot). Kept by ServerGameObject::updatePosition and Server::destroyObject.
+		std::vector<CommonGameObject*> objects;
 		//std::vector<CmnGORef> zoneList;
 		CmnGORef zone;
 		CmnGORef building;
