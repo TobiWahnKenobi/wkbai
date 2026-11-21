@@ -1190,7 +1190,8 @@ void DiligentWaterfalls::Impl::build()
 						FallVertex v;
 						v.pos = Vector3(lx + fu * TILE, y, lz + fv * TILE);
 						v.normal = Vector3(-gx, 1.0f, -gz).normal();
-						const float a[4] = { wx * -dz + wz * dx, (300.0f - y) * 1.2f + 3.0f, std::clamp((slope - 0.12f) / 0.6f, 0.0f, 1.0f), opacity * 2.5f };
+						// (opacity below 0 towards the river's edge: the noise never shows the tiles' outline)
+						const float a[4] = { wx * -dz + wz * dx, (300.0f - y) * 1.2f + 3.0f, std::clamp((slope - 0.12f) / 0.6f, 0.0f, 1.0f), (opacity * 1.6f - 0.6f) * 2.5f };
 						const float b[4] = { slope * TILE, 2.5f, dx, dz };
 						std::copy_n(a, 4, v.a);
 						std::copy_n(b, 4, v.b);

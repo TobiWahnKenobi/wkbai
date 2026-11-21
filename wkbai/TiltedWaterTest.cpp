@@ -351,7 +351,7 @@ void Test_TiltedWater()
 		mj["terrain"] = { { "base", 20 }, { "noise", { { "amplitude", 3 }, { "scale", 300 } } } };
 		mj["features"] = oj::array({
 			{ { "kind", "hill" }, { "id", "fell" }, { "at", { 230, 230 } }, { "radius", 300 }, { "height", 80 } },
-			{ { "kind", "basin" }, { "id", "mere" }, { "at", { 720, 720 } }, { "radius", 140 }, { "depth", 9 }, { "water", 16 } },
+			{ { "kind", "basin" }, { "id", "mere" }, { "at", { 720, 720 } }, { "radius", 140 }, { "depth", 9 }, { "water", 18.5 } },
 			{ { "kind", "river" }, { "id", "beck" }, { "line", { { 250, 250 }, { 420, 470 }, { 560, 560 }, { 700, 700 } } }, { "width", 8 }, { "depth", 2 },
 				{ "meander", 0.4 }, { "water", true } } });
 		std::vector<uint16_t> flat((size_t)(w + 1) * (w + 1), 20 * 256);
@@ -411,6 +411,15 @@ void Test_TiltedWater()
 		}
 		else
 			mismatch = -1;
+		// the mere floods (as the generator's lake map has it) and the beck runs into it at its level
+		{
+			int mere = 0;
+			for (int i = 0; server.terrain && i < server.terrain->width * server.terrain->height; i++)
+				mere += server.terrain->tiles[i].fullOfWater && !server.terrain->tiles[i].slopedWater && std::abs(server.terrain->tiles[i].waterLevel - 18.5f) < 0.01f;
+			const float mouth = d2.waterways.empty() || d2.waterways[0].levels.empty() ? 0.0f : d2.waterways[0].levels.back();
+			snprintf(b, sizeof(b), "%d tiles of the mere (18.5 m), the beck's last level %.2f", mere, mouth);
+			check("generated river into the mere", mere > 200 && std::abs(mouth - 18.5f) < 0.05f, b);
+		}
 		snprintf(b, sizeof(b), "compiled %d, %d sloped tiles on the server, %d tiles whose water differs from the client's", (int)r.ok, slopedTiles, mismatch);
 		check("server and client the same water", r.ok && slopedTiles > 30 && mismatch == 0, b);
 		server.startLevel();

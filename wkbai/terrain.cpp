@@ -933,6 +933,25 @@ int Terrain::slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::ve
 				}
 		}
 	}
+	// Beyond the river's own width the water stands no higher than the ground there (else, where
+	// the land beside it lies lower, below a cliff or on a slope across it, the tiles' water
+	// stood over it and ended in their square corners): the surface dips under the ground at
+	// such a corner, so the water ends where it meets the land. Not beside a lake's water (the
+	// river meets the lake at its level there).
+	if (toLakes)
+		for (int vz = 0; vz < VH; vz++)
+			for (int vx = 0; vx < VW; vx++) {
+				const size_t k = (size_t)vz * VW + vx;
+				if (slopedSurface[k] == NO_SLOPED_SURFACE || nearest[k] <= halfWidth[k] + 0.5f)
+					continue;
+				bool byLake = false;
+				for (int dz = -1; dz <= 0 && !byLake; dz++)
+					for (int dx = -1; dx <= 0 && !byLake; dx++)
+						if (const Tile* t = getTile(vx + dx, vz + dz))
+							byLake = t->fullOfWater && !t->slopedWater;
+				if (!byLake)
+					slopedSurface[k] = std::min(slopedSurface[k], getVertex(vx, vz) - 0.05f);
+			}
 	// the tiles within the half width (and half a tile) of a course: the mean of their corners
 	tileLevel.assign((size_t)width * height, NO_SLOPED_SURFACE);
 	tileHalf.assign((size_t)width * height, 0.0f);
