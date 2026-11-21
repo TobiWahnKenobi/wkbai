@@ -235,7 +235,14 @@ static void GrassTexel(const Bitmap& a, const std::array<std::pair<float, float>
 		}
 }
 // green enough for blades (not rock, sand, earth, snow)
-static bool IsGrassColour(float r, float g, float b) { return g > r * 1.05f && g > b * 1.15f && g > 40; }
+// green grass, or dry and barren grass (straw: yellower, but still far more green than blue; sand,
+// earth and rock are paler: their blue is closer to their green)
+static bool IsGrassColour(float r, float g, float b)
+{
+	if (g > r * 1.05f && g > b * 1.15f && g > 40)
+		return true;
+	return g > 40 && g > r * 0.8f && (g - b) > 0.55f * g;
+}
 
 // smooth value noise, 0-1, on a lattice of one unit (the blend's shifts; build time only)
 static float GrassNoise(float x, float z, uint32_t salt)

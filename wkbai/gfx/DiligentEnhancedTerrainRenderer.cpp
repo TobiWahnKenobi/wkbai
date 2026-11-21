@@ -2042,6 +2042,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	struct Chunk {
 		Vector3 low, high;
 		uint32_t grassFirst = 0, grassCount = 0; // its blades in grassBuffer
+		int grassSlot = -1;                      // streamed grass: its slot in the pool (-1: none)
 		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
 		std::vector<uint32_t> lakeIndices;
 		std::vector<uint32_t> floodIndices; // the water over its land that floods (drawn while wkbai's floods rise)
@@ -2060,6 +2061,21 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
+	// A large map's grass doesn't fit one buffer (a 1024-tile map at 18 a square unit: 210 million
+	// blades, 5 GB): above GRASS_BUDGET blades the grass is streamed instead. The buffer is a pool
+	// of slots, each one chunk's blades at the built density; a chunk within the grass distance
+	// gets a slot (the one used longest ago) and its blades built when it first needs them, a few
+	// chunks a frame, nearest first.
+	static constexpr size_t GRASS_BUDGET = 16u << 20;
+	static constexpr int GRASS_SLOTS = 96;
+	bool grassStreaming = false;
+	uint32_t grassSlotCapacity = 0;
+	std::vector<int> grassSlotChunk;       // per slot: the chunk in it (-1: free)
+	std::vector<uint64_t> grassSlotUsed;   // per slot: the frame it was last drawn in
+	uint64_t grassFrame = 0;
+	TerrainGrassBuilder grassStream;       // keeps the pictures and the tiles' shares between chunks
+	Terrain* grassTerrain = nullptr;
+	void streamGrass(IDeviceContext* ctx, std::vector<const Chunk*>& wanted, const Vector3& cam);
 	// the regions' waves into WaveBuffer (made with device the first time): the water design's
 	// ways, turned towards the lobby's prevailing wind (Wind.h) while it blows; again whenever
 	// that changes (once a game: the waves' phase jumps with their way)
@@ -3138,9 +3154,101 @@ void DiligentEnhancedTerrainRenderer::Impl::writeWaves(IRenderDevice* device, ID
 		ctx->UpdateBuffer(waveBuffer, 0, sizeof(waves), waves, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
+void DiligentEnhancedTerrainRenderer::Impl::streamGrass(IDeviceContext* ctx, std::vector<const Chunk*>& wanted, const Vector3& cam)
+{
+	constexpr int CHUNK = 16;
+	grassFrame++;
+	// the nearest first (the camera's chunk before the far ones)
+	auto dist = [&](const Chunk* c) {
+		const float dx = (c->low.x + c->high.x) * 0.5f - cam.x, dz = (c->low.z + c->high.z) * 0.5f - cam.z;
+		return dx * dx + dz * dz;
+	};
+	std::sort(wanted.begin(), wanted.end(), [&](const Chunk* a, const Chunk* b) { return dist(a) < dist(b); });
+	if (wanted.size() > (size_t)GRASS_SLOTS)
+		wanted.resize(GRASS_SLOTS);
+	for (const Chunk* c : wanted)
+		if (c->grassSlot >= 0)
+			grassSlotUsed[c->grassSlot] = grassFrame;
+	int built = 0;
+	std::vector<GrassBlade> blades;
+	for (const Chunk* cc : wanted) {
+		if (cc->grassSlot >= 0)
+			continue;
+		if (built >= 3)
+			break; // the rest in the next frames (no stall when the camera jumps)
+		Chunk* c = const_cast<Chunk*>(cc);
+		// the slot drawn longest ago (never one this frame's chunks hold)
+		int slot = -1;
+		for (int s = 0; s < GRASS_SLOTS; s++)
+			if (grassSlotUsed[s] != grassFrame && (slot < 0 || grassSlotUsed[s] < grassSlotUsed[slot]))
+				slot = s;
+		if (slot < 0)
+			break;
+		if (grassSlotChunk[slot] >= 0) {
+			Chunk& old = chunks[grassSlotChunk[slot]];
+			old.grassSlot = -1;
+			old.grassCount = 0;
+		}
+		const int ci = (int)(c - chunks.data());
+		const int cw = ((int)grassTerrain->width + CHUNK - 1) / CHUNK;
+		const int cx = (ci % cw) * CHUNK, cz = (ci / cw) * CHUNK;
+		blades.clear();
+		const int n = grassTerrain->extendedTiles;
+		for (int z = cz; z < std::min(cz + CHUNK, (int)grassTerrain->height); z++)
+			for (int x = cx; x < std::min(cx + CHUNK, (int)grassTerrain->width); x++) {
+				if (n > 0 && (x < n || z < n || x >= grassTerrain->width - n || z >= grassTerrain->height - n))
+					continue;
+				grassStream.addTile(grassTerrain, x, z, grassBuiltDensity, blades);
+			}
+		if (blades.size() > grassSlotCapacity)
+			blades.resize(grassSlotCapacity);
+		if (!blades.empty())
+			ctx->UpdateBuffer(grassBuffer, (Uint64)slot * grassSlotCapacity * sizeof(GrassBlade), (Uint64)(blades.size() * sizeof(GrassBlade)), blades.data(),
+				RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		c->grassSlot = slot;
+		c->grassFirst = (uint32_t)slot * grassSlotCapacity;
+		c->grassCount = (uint32_t)blades.size();
+		grassSlotChunk[slot] = ci;
+		grassSlotUsed[slot] = grassFrame;
+		built++;
+	}
+}
+
 void DiligentEnhancedTerrainRenderer::Impl::buildGrass(IRenderDevice* device, Terrain* terrain, float density)
 {
 	constexpr int CHUNK = 16; // as the chunks were made
+	// the blades the map would need: its grass share sampled on every 7th tile of every 7th row
+	{
+		TerrainGrassBuilder probe;
+		double share = 0;
+		int n = 0;
+		for (int z = 0; z < (int)terrain->height; z += 7)
+			for (int x = 0; x < (int)terrain->width; x += 7) {
+				share += probe.tileShare(terrain, x, z).share;
+				n++;
+			}
+		const double blades = n ? share / n * (double)terrain->width * terrain->height * 25.0 * density : 0;
+		grassStreaming = blades > (double)GRASS_BUDGET;
+		if (grassStreaming) {
+			grassTerrain = terrain;
+			grassStream = TerrainGrassBuilder();
+			grassSlotCapacity = (uint32_t)std::ceil(CHUNK * CHUNK * 25.0f * density);
+			grassSlotChunk.assign(GRASS_SLOTS, -1);
+			grassSlotUsed.assign(GRASS_SLOTS, 0);
+			for (Chunk& chunk : chunks) { chunk.grassSlot = -1; chunk.grassFirst = 0; chunk.grassCount = 0; }
+			grassBuffer.Release();
+			grassBuiltDensity = density;
+			BufferDesc grassDesc;
+			grassDesc.Name = "Terrain grass blades (streamed)";
+			grassDesc.Usage = USAGE_DEFAULT;
+			grassDesc.BindFlags = BIND_VERTEX_BUFFER;
+			grassDesc.Size = (Uint64)GRASS_SLOTS * grassSlotCapacity * sizeof(GrassBlade);
+			device->CreateBuffer(grassDesc, nullptr, &grassBuffer);
+			printf("Grass: streamed, about %.0f million blades on the map (%.0f per square unit), %d chunks of up to %u blades near the camera (%.0f MB)\n",
+				blades / 1e6, density, GRASS_SLOTS, grassSlotCapacity, grassDesc.Size / 1048576.0);
+			return;
+		}
+	}
 	TerrainGrassBuilder grassBuilder;
 	std::vector<GrassBlade> grass;
 	size_t c = 0;
@@ -3773,7 +3881,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	for (const Impl::Chunk& chunk : _impl->chunks) {
 		if (!visible(chunk.low, chunk.high))
 			continue;
-		if (chunk.grassCount > 0) {
+		if (chunk.grassCount > 0 || _impl->grassStreaming) {
 			// within the grass distance of the camera, by the box's nearest point
 			const Vector3& cam = camera->position;
 			const float dx = std::max({ chunk.low.x - cam.x, 0.0f, cam.x - chunk.high.x });
@@ -3866,6 +3974,8 @@ void DiligentEnhancedTerrainRenderer::render()
 	withMasks(_impl->lakeBinding);
 
 	// ----- Grass -----
+	if (g_renderSettings.grass && _impl->grassStreaming && _impl->grassBuffer && !grassChunks.empty())
+		_impl->streamGrass(ctx, grassChunks, camera->position);
 	if (g_renderSettings.grass && _impl->grassBuffer && !grassChunks.empty()) {
 		PROFILE_SCOPE("Grass");
 		ctx->SetPipelineState(_impl->grassPipeline);
@@ -3873,6 +3983,8 @@ void DiligentEnhancedTerrainRenderer::render()
 		ctx->SetVertexBuffers(0, 1, &gvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		for (const Impl::Chunk* chunk : grassChunks) {
+			if (!chunk->grassCount)
+				continue;
 			DrawAttribs draw;
 			draw.NumVertices = 9;
 			draw.NumInstances = chunk->grassCount;

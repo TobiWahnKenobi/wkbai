@@ -927,6 +927,249 @@ namespace {
 	}
 
 	// The level for the cache: level.txt (or a new one from map.json), the rules' objects made again,
+	// ---- scatter: objects by rule (map.json "scatter"), the Neutral Player's ----
+	// [{ "id": "forest", "objects": [["Coniferous Tree", ["Pine01", "Pine02"]], ["Deciduous Tree", []]],
+	//    "on": ["forest floor"] (materials, or texture groups), "density": 30 (per hectare),
+	//    "spacing": 6 (m), "clump": 0-1, "maxSlopeDeg": 32, "awayFromBases": 45 (m) },
+	//  { "id": "gold", "near": "bases", "objects": [["Gold Deposit Big", []], ...], "groups": 2 (per base),
+	//    "distance": [70, 160], "size": 3 (objects a group), "spread": 9 (m), "maxSlopeDeg": 14 },
+	//  { "id": "stone", "count": 10 (groups over the map), ... }]
+	// A second list, "objectsHigh", is picked at a share rising with the ground's height: highMin
+	// at or below highFrom (m), highMax at or above highTo, in patches (conifers up the hills,
+	// broadleaves in the valleys)
+	// Deterministic from the map's seed; objects never on water, steep ground or one another
+	uint32_t ScatterHash(uint32_t a, uint32_t b, uint32_t c, uint32_t d)
+	{
+		uint64_t v = ((uint64_t)a << 32 | b) ^ ((uint64_t)c << 17) ^ ((uint64_t)d << 3) ^ 0x9E3779B97F4A7C15ull;
+		v ^= v >> 30; v *= 0xBF58476D1CE4E5B9ull;
+		v ^= v >> 27; v *= 0x94D049BB133111EBull;
+		v ^= v >> 31;
+		return (uint32_t)v;
+	}
+	float ScatterUnit(uint32_t h) { return (h >> 8) * (1.0f / 16777216.0f); }
+	float ScatterNoise(float x, float z, uint32_t s)
+	{
+		const float fx = std::floor(x), fz = std::floor(z);
+		const int ix = (int)fx, iz = (int)fz;
+		float u = x - fx, v = z - fz;
+		u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v);
+		auto at = [&](int a, int b) { return ScatterUnit(ScatterHash(s, (uint32_t)(ix + a), (uint32_t)(iz + b), 7)); };
+		const float a = at(0, 0) + (at(1, 0) - at(0, 0)) * u, b = at(0, 1) + (at(1, 1) - at(0, 1)) * u;
+		return a + (b - a) * v;
+	}
+
+	int Scatter(const MapJson& m, const Terrain& terrain, std::vector<std::string>& lines, Authoring& auth,
+		std::map<std::string, std::vector<uint32_t>>& idsOf, uint32_t& next, std::vector<std::string>& warnings, json& report)
+	{
+		const json rules = m.raw.value("scatter", json::array());
+		if (!rules.is_array() || rules.empty())
+			return 0;
+		// the Neutral Player's block
+		uint32_t neutral = 0;
+		for (const std::string& l : lines) {
+			std::string cls, bp;
+			uint32_t id;
+			if (ObjectLine(l, cls, id, bp) && cls == "PLAYER" && bp == "Neutral Player") { neutral = id; break; }
+		}
+		const size_t end = neutral ? PlayerEnd(lines, neutral) : std::string::npos;
+		if (end == std::string::npos) {
+			warnings.push_back("scatter: the level has no Neutral Player");
+			return 0;
+		}
+		std::vector<std::string> materialWarnings;
+		const json data = MapMaterials::LoadMaterials(m.textureDb, m.raw, materialWarnings);
+		const int W = terrain.width, H = terrain.height, E = terrain.edge;
+		const float pw = (W - 2 * E) * 5.0f, ph = (H - 2 * E) * 5.0f;
+		// taken places, on a 4 m grid
+		std::set<std::pair<int, int>> taken;
+		auto free = [&](float x, float z, float r) {
+			const int c = (int)std::ceil(r / 4.0f);
+			const int gx = (int)(x / 4), gz = (int)(z / 4);
+			for (int dz = -c; dz <= c; dz++)
+				for (int dx = -c; dx <= c; dx++)
+					if (taken.count({ gx + dx, gz + dz })) return false;
+			return true;
+		};
+		auto take = [&](float x, float z) { taken.insert({ (int)(x / 4), (int)(z / 4) }); };
+		// the bases (map.json's starts), kept clear
+		std::vector<std::pair<float, float>> bases;
+		for (const MapPlayer& p : m.players)
+			if (p.hasStart) bases.push_back({ p.x, p.z });
+		auto tileAt = [&](float x, float z) { return terrain.getTile((int)(x / 5) + E, (int)(z / 5) + E); };
+		auto slopeDeg = [&](float x, float z) {
+			const int tx = (int)(x / 5) + E, tz = (int)(z / 5) + E;
+			const float a = terrain.getVertex(tx, tz), b = terrain.getVertex(tx + 1, tz), c = terrain.getVertex(tx, tz + 1), d = terrain.getVertex(tx + 1, tz + 1);
+			return std::atan((std::max({ a, b, c, d }) - std::min({ a, b, c, d })) / 5.0f) * 57.2958f;
+		};
+		auto ok = [&](float x, float z, float maxSlope) {
+			if (x < 2 || z < 2 || x > pw - 2 || z > ph - 2) return false;
+			const TerrainTile* t = tileAt(x, z);
+			if (!t || t->fullOfWater) return false;
+			// not beside water either (a tree in the river's edge)
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++) {
+					const TerrainTile* n = tileAt(x + dx * 5.0f, z + dz * 5.0f);
+					if (n && n->fullOfWater) return false;
+				}
+			return slopeDeg(x, z) <= maxSlope;
+		};
+		std::vector<std::string> block;
+		int made = 0;
+		json counts = json::object();
+		for (size_t ri = 0; ri < rules.size(); ri++) {
+			const json& r = rules[ri];
+			if (!r.is_object()) continue;
+			const std::string id = r.value("id", "scatter" + std::to_string(ri));
+			const std::string rule = "scatter:" + id;
+			if (auth.suppressed.count(rule)) continue;
+			// the objects: [blueprint, [subtypes]]
+			std::vector<std::pair<std::string, std::vector<std::string>>> objects;
+			for (const json& o : r.value("objects", json::array())) {
+				if (o.is_string()) objects.push_back({ o.get<std::string>(), {} });
+				else if (o.is_array() && !o.empty() && o[0].is_string()) {
+					std::vector<std::string> sub;
+					if (o.size() > 1 && o[1].is_array()) for (const json& st : o[1]) if (st.is_string()) sub.push_back(st.get<std::string>());
+					objects.push_back({ o[0].get<std::string>(), sub });
+				}
+			}
+			if (objects.empty()) { warnings.push_back(rule + ": no objects"); continue; }
+			std::vector<std::pair<std::string, std::vector<std::string>>> objectsHigh;
+			for (const json& o : r.value("objectsHigh", json::array())) {
+				if (o.is_string()) objectsHigh.push_back({ o.get<std::string>(), {} });
+				else if (o.is_array() && !o.empty() && o[0].is_string()) {
+					std::vector<std::string> sub;
+					if (o.size() > 1 && o[1].is_array()) for (const json& st : o[1]) if (st.is_string()) sub.push_back(st.get<std::string>());
+					objectsHigh.push_back({ o[0].get<std::string>(), sub });
+				}
+			}
+			const float highFrom = r.value("highFrom", 0.0f), highTo = r.value("highTo", 1.0f), highMin = r.value("highMin", 0.0f), highMax = r.value("highMax", 1.0f);
+			std::vector<uint32_t>& reuse = idsOf[rule];
+			const uint32_t rs = ScatterHash(m.seed, (uint32_t)ri, 0x5ca7, 1);
+			const float maxSlope = r.value("maxSlopeDeg", 32.0f), away = r.value("awayFromBases", 45.0f);
+			int n = 0;
+			auto place = [&](float x, float z, uint32_t h) {
+				bool high = false;
+				if (!objectsHigh.empty()) {
+					const float y = terrain.getHeight(x, z);
+					const float t = std::clamp((y - highFrom) / std::max(highTo - highFrom, 0.01f), 0.0f, 1.0f);
+					const float share = highMin + (highMax - highMin) * t * t * (3 - 2 * t);
+					// in stands: a slow noise shifts the share by up to a third
+					const float stand = (ScatterNoise(x / 45.0f, z / 45.0f, rs ^ 0x51u) - 0.5f) * 0.66f;
+					high = ScatterUnit(ScatterHash(h, 17, 17, 17)) < std::clamp(share + stand, 0.0f, 1.0f);
+				}
+				const auto& list = high ? objectsHigh : objects;
+				const auto& [bp, sub] = list[h % list.size()];
+				uint32_t oid;
+				if (!reuse.empty()) { oid = reuse.front(); reuse.erase(reuse.begin()); }
+				else oid = next++;
+				block.push_back("\t\tCONTAINER " + std::to_string(oid) + " \"" + bp + "\" \n");
+				block.push_back("\t\t\tPOSITION " + Num(x) + " " + Num(terrain.getHeight(x, z)) + " " + Num(z) + " \n");
+				block.push_back("\t\t\tORIENTATION 0.00 " + Num(ScatterUnit(ScatterHash(h, 3, 3, 3)) * 6.283f) + " 0.00 \n");
+				if (!sub.empty())
+					block.push_back("\t\t\tSUBTYPE \"" + sub[(h >> 12) % sub.size()] + "\" \n");
+				block.push_back("\t\tEND_CONTAINER \n");
+				block.push_back("\n");
+				auth.objects[oid] = rule;
+				auth.positions[oid] = { x, z };
+				take(x, z);
+				n++;
+			};
+			auto nearBase = [&](float x, float z) {
+				for (auto& [bx, bz] : bases) if ((x - bx) * (x - bx) + (z - bz) * (z - bz) < away * away) return true;
+				return false;
+			};
+			if (r.contains("on")) {
+				// by ground: the groups of the materials (or the groups) named; a transition counts half
+				std::set<std::string> groups;
+				for (const json& o : r["on"]) {
+					if (!o.is_string()) continue;
+					const std::string name = o.get<std::string>();
+					const json& mats = data["materials"];
+					if (mats.contains(name) && mats[name].is_object()) {
+						for (const json& gj : mats[name].value("groups", json::array()))
+							if (gj.is_array() && !gj.empty() && gj[0].is_string()) groups.insert(gj[0].get<std::string>());
+							else if (gj.is_string()) groups.insert(gj.get<std::string>());
+					}
+					else groups.insert(name);
+				}
+				const float density = r.value("density", 20.0f), spacing = std::max(2.0f, r.value("spacing", 6.0f)), clump = r.value("clump", 0.5f);
+				const int limit = r.value("max", 30000);
+				// a jittered grid of cells of `spacing`; a cell's chance is density x its area. First
+				// every place that would take one; over the limit, all of them thinned evenly (a cut in
+				// the order of the grid had left one side of the map bare)
+				const float chance = density * spacing * spacing / 10000.0f;
+				struct Spot { float x, z; uint32_t h; };
+				std::vector<Spot> spots;
+				for (float z = spacing / 2; z < ph; z += spacing)
+					for (float x = spacing / 2; x < pw; x += spacing) {
+						const uint32_t h = ScatterHash(rs, (uint32_t)(x * 4), (uint32_t)(z * 4), 11);
+						const float jx = x + (ScatterUnit(h) - 0.5f) * spacing * 0.8f, jz = z + (ScatterUnit(ScatterHash(h, 1, 2, 3)) - 0.5f) * spacing * 0.8f;
+						const TerrainTile* t = tileAt(jx, jz);
+						if (!t || !t->texture || !t->texture->grp) continue;
+						const std::string& gname = t->texture->grp->name;
+						float w = groups.count(gname) ? 1.0f : 0.0f;
+						if (w == 0 && gname.find('-') != std::string::npos)
+							for (const std::string& g : groups)
+								if (gname.find(g) != std::string::npos) { w = 0.5f; break; }
+						if (w == 0) continue;
+						// clumps: a slow noise thins the trees into stands and glades
+						const float cl = 1.0f - clump + clump * 2.0f * ScatterNoise(jx / 60.0f, jz / 60.0f, rs);
+						if (ScatterUnit(ScatterHash(h, 9, 9, 9)) >= chance * w * std::max(0.0f, cl)) continue;
+						if (nearBase(jx, jz) || !ok(jx, jz, maxSlope)) continue;
+						spots.push_back({ jx, jz, h });
+					}
+				const float keep = spots.size() > (size_t)limit ? (float)limit / spots.size() : 1.0f;
+				for (const Spot& sp : spots) {
+					if (n >= limit) break;
+					if (keep < 1 && ScatterUnit(ScatterHash(sp.h, 41, 41, 41)) >= keep) continue;
+					if (!free(sp.x, sp.z, spacing * 0.45f)) continue;
+					place(sp.x, sp.z, sp.h);
+				}
+			}
+			else {
+				// groups of objects: near each base, or over the map
+				const int perBase = r.value("groups", 2), count = r.value("count", 0), size = std::max(1, r.value("size", 3));
+				const float spread = r.value("spread", 9.0f);
+				json dist = r.value("distance", json::array({ 70, 160 }));
+				const float dmin = dist.is_array() && dist.size() > 1 ? dist[0].get<float>() : 70, dmax = dist.is_array() && dist.size() > 1 ? dist[1].get<float>() : 160;
+				std::vector<std::pair<float, float>> centres;
+				uint32_t h = rs;
+				auto groupAt = [&](float cx, float cz) {
+					int placed = 0;
+					for (int k = 0; k < size * 6 && placed < size; k++) {
+						h = ScatterHash(h, (uint32_t)k, 5, 5);
+						const float a = ScatterUnit(h) * 6.283f, d = ScatterUnit(ScatterHash(h, 2, 2, 2)) * spread;
+						const float x = cx + std::cos(a) * d, z = cz + std::sin(a) * d;
+						if (!ok(x, z, maxSlope) || !free(x, z, 3.5f)) continue;
+						place(x, z, h);
+						placed++;
+					}
+					return placed;
+				};
+				if (r.value("near", "") == "bases")
+					for (size_t b = 0; b < bases.size(); b++)
+						for (int gI = 0, tries = 0; gI < perBase && tries < 200; tries++) {
+							h = ScatterHash(rs, (uint32_t)b, (uint32_t)tries, 21);
+							const float a = ScatterUnit(h) * 6.283f, d = dmin + ScatterUnit(ScatterHash(h, 4, 4, 4)) * (dmax - dmin);
+							const float cx = bases[b].first + std::cos(a) * d, cz = bases[b].second + std::sin(a) * d;
+							if (!ok(cx, cz, maxSlope) || !free(cx, cz, spread + 6)) continue;
+							if (groupAt(cx, cz) > 0) gI++;
+						}
+				for (int gI = 0, tries = 0; gI < count && tries < count * 60; tries++) {
+					h = ScatterHash(rs, (uint32_t)tries, 31, 31);
+					const float cx = 30 + ScatterUnit(h) * (pw - 60), cz = 30 + ScatterUnit(ScatterHash(h, 6, 6, 6)) * (ph - 60);
+					if (nearBase(cx, cz) || !ok(cx, cz, maxSlope) || !free(cx, cz, spread + 30)) continue;
+					if (groupAt(cx, cz) > 0) gI++;
+				}
+			}
+			counts[id] = n;
+			made += n;
+		}
+		lines.insert(lines.begin() + end, block.begin(), block.end());
+		report["scatter"] = counts;
+		return made;
+	}
+
 	// the MAP line naming the folder
 	bool BuildLevel(const fs::path& folder, const MapJson& m, const Terrain& terrain, std::string& out, std::vector<std::string>& warnings,
 		json& report, std::string& error)
@@ -1033,6 +1276,8 @@ namespace {
 			SetStartCamera(lines, auth.players[i], Vector3(p.x, terrain.getHeight(p.x, p.z) + 45.0f, p.z + 70.0f), -0.67f, 3.15f);
 			changed = true;
 		}
+		made += Scatter(m, terrain, lines, auth, idsOf, next, warnings, report);
+		changed = true;
 		if (changed)
 			RebuildPredec(lines);
 		report["objectsByRules"] = made;
@@ -1350,7 +1595,7 @@ std::string InputsHash(const std::filesystem::path& folder)
 	h = Fnv(h, &version, sizeof(version));
 	const std::string game = GamePathOf(folder);
 	h = Fnv(h, game.data(), game.size());
-	for (const char* name : { "map.json", "heights.png", "heights.hand.png", "tiles.hand.json", "water.json", "level.txt", "minimap.png" }) {
+	for (const char* name : { "map.json", "heights.png", "heights.hand.png", "tiles.hand.json", "water.json", "level.txt", "minimap.png", "farland.png", "farland.json" }) {
 		std::string data;
 		const bool there = ReadAll(folder / name, data);
 		h = Fnv(h, name, strlen(name));
@@ -1425,6 +1670,36 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	else
 		fs::remove(build / "map.water", ec);
 	ok = ok && WriteAll(build / "level.txt", level);
+	// the map's own far land (farland.png + farland.json): what Extend map shows round the map
+	// instead of generating it. farland.json: { "x0": m, "z0": m (the picture's south-west pixel
+	// in playable metres, x east, z north), "cell": m, "min": m, "max": m (the picture's 0 and
+	// 65535), "seaLevel": m }; the picture's row 0 is its north edge
+	{
+		json fj;
+		std::string ftext;
+		int fw = 0, fh = 0;
+		std::vector<uint16_t> fpx;
+		if (ReadAll(folder / "farland.json", ftext) && !(fj = json::parse(ftext, nullptr, false)).is_discarded() && fj.is_object()
+			&& ReadPng16(folder / "farland.png", fw, fh, fpx) && fw > 1 && fh > 1) {
+			StoredFarLand f;
+			f.x0 = fj.value("x0", 0.0f) + m.edge * 5.0f;
+			f.z0 = fj.value("z0", 0.0f) + m.edge * 5.0f;
+			f.cell = fj.value("cell", 40.0f);
+			f.w = fw;
+			f.h = fh;
+			f.seaLevel = fj.contains("seaLevel") && fj["seaLevel"].is_number() ? fj["seaLevel"].get<float>() : -1e30f;
+			const float lo = fj.value("min", 0.0f), hi = fj.value("max", 100.0f);
+			f.v.resize((size_t)fw * fh);
+			for (int r = 0; r < fh; r++)
+				for (int x = 0; x < fw; x++)
+					f.v[(size_t)(fh - 1 - r) * fw + x] = lo + (hi - lo) * fpx[(size_t)r * fw + x] / 65535.0f;
+			ok = ok && Terrain::writeFarLand(build / "map.farland", f);
+			report["farLand"] = { { "cells", { fw, fh } }, { "cellM", f.cell }, { "fromM", { fj.value("x0", 0.0f), fj.value("z0", 0.0f) } },
+				{ "toM", { fj.value("x0", 0.0f) + f.cell * (fw - 1), fj.value("z0", 0.0f) + f.cell * (fh - 1) } } };
+		}
+		else
+			fs::remove(build / "map.farland", ec);
+	}
 	// the tiles the rules painted, so the editor's Save knows which tiles a person changed
 	if (!ruleTiles.empty())
 		ok = ok && WriteHandTiles(build / "tiles.rules.json", m, ruleTiles);

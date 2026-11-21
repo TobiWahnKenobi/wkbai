@@ -738,7 +738,11 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 	if (matBed < 0)
 		matBed = mats.find(K_SAND, matCount);
 	const float seaBed = bedN ? bedSum / bedN : lo;
-	const float seaLevel = bedN ? levelSum / bedN : -1e30f;
+	// (the map's own far land: its sea level when the map's edge has no sea of its own)
+	const float seaLevel = bedN ? levelSum / bedN : (map.farLand && map.farLand->seaLevel > -1e29f ? map.farLand->seaLevel : -1e30f);
+	const StoredFarLand* store = map.farLand.get();
+	// a place of the copy (copy tiles) in the whole map's world units
+	auto storeAt = [&](float px, float pz, float& weight) { return store ? store->sample((px - n) * 5.0f, (pz - n) * 5.0f, weight) : (weight = 0, 0.0f); };
 
 	// blurred fields over the map's vertices, read at the border
 	auto blur2D = [&](const std::vector<float>& in, int R) {
@@ -1054,6 +1058,22 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 				// (fading in from the map's edge like the land forms, so the seam shows no step)
 				const float h0 = base[i] + ramp2 * L.detail + bump1[i] + bump3[i] + bump8[i];
 				height[i] = h0 + (seaCap(h0, wet) - h0) * ramp2;
+			}
+			// the map's own far land: its heights (fading in over the first tiles from the map, and
+			// out where the store ends), its sea; none of the generated small relief there
+			{
+				float sw;
+				const float sv = storeAt(px, pz, sw);
+				if (sw > 0) {
+					const float k = sw * std::clamp(d / 3.0f, 0.0f, 1.0f);
+					height[i] += (sv - height[i]) * k;
+					bump1[i] *= 1 - k; bump3[i] *= 1 - k; bump8[i] *= 1 - k;
+					if (store->seaLevel > -1e29f) {
+						const float sWet = sv < store->seaLevel - 0.2f ? 1.0f : 0.0f;
+						wetAt[i] += (sWet - wetAt[i]) * k;
+						dryAt[i] = wetAt[i] < 0.3f;
+					}
+				}
 			}
 		}
 	});
@@ -2058,6 +2078,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		k.value(map.height);
 		k.value(map.edge);
 		k.array(map.vertices);
+		if (store) {
+			k.value(store->x0); k.value(store->z0); k.value(store->cell); k.value(store->w); k.value(store->h); k.value(store->seaLevel);
+			k.array(store->v);
+		}
 		k.array(map.heightFraction);
 		for (int z = 0; z < (int)map.height; z++)
 			for (int x = 0; x < (int)map.width; x++) {
@@ -2216,7 +2240,10 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 		// the height of the land alone (no rivers) at a place of a ring: for the normals
 		auto landHeight = [&](const auto& R, float px, float pz) {
 			const float foot = footAt(R, px, pz);
-			return farBase(px, pz, foot) + landAt(px, pz, foot).detail;
+			float sw;
+			const float sv = storeAt(px, pz, sw);
+			const float gen = sw < 1 ? farBase(px, pz, foot) + landAt(px, pz, foot).detail : 0.0f;
+			return gen + (sv - gen) * sw;
 		};
 		// The extension's end is round: the distance from the playable area (copy tiles) out to
 		// where the ground beyond takes over, the same as the shaders' FarGroundShare; the rings'
@@ -2270,8 +2297,21 @@ ExtendedTerrain BuildExtendedTerrain(const Terrain& map, int n, std::vector<Exte
 					// cut-off growing across the ring to the next ring's, so the detail falls off
 					// smoothly instead of halving at each ring's edge)
 					const float foot = footAt(R, px, pz);
-					const Land L = landAt(px, pz, foot);
+					Land L = landAt(px, pz, foot);
 					float v = seaCap(farBase(px, pz, foot) + L.detail, L.wet);
+					// the map's own far land: its heights and its sea, no generated lakes
+					{
+						float sw;
+						const float sv = storeAt(px, pz, sw);
+						if (sw > 0) {
+							v += (sv - v) * sw;
+							L.lake *= 1 - sw;
+							if (store->seaLevel > -1e29f) {
+								const float sWet = sv < store->seaLevel - 0.2f ? 1.0f : 0.0f;
+								L.wet += (sWet - L.wet) * sw;
+							}
+						}
+					}
 					R.mtn[gi] = L.mtn;
 					float lvl = -1e30f;
 					// a lake: its level the broad base's (without the octaves under 150 tiles, so

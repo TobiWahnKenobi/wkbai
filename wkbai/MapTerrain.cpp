@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cmath>
 #include <sstream>
+#include <unordered_set>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -569,7 +570,7 @@ namespace {
 	// carves a channel along the course, its bed never rising from the first point to the last;
 	// only ever lowers the land. Returns the bed's heights.
 	std::vector<float> CarveChannel(const Map& m, Grid& g, const std::vector<V2>& c, float width, float depth, float bank, float bankDeg,
-		const std::vector<float>& fordWeight, uint32_t seed)
+		const std::vector<float>& fordWeight, uint32_t seed, float minBed = -1e30f)
 	{
 		std::vector<float> bed(c.size());
 		float prev = 1e30f;
@@ -598,6 +599,9 @@ namespace {
 		}
 		for (size_t i = 1; i < sm.size(); i++)
 			sm[i] = std::min(sm[i], sm[i - 1] - 0.005f);
+		// never below minBed (a river reaching the sea: its bed stays above the sea, which would
+		// otherwise run up the channel into the valley)
+		for (float& b : sm) b = std::max(b, minBed);
 		bed = sm;
 
 		float x0 = 1e30f, x1 = -1e30f, z0 = 1e30f, z1 = -1e30f;
@@ -606,21 +610,34 @@ namespace {
 		const int vx0 = std::max(0, (int)m.vx(x0 - reach)), vx1 = std::min(m.gw() - 1, (int)m.vx(x1 + reach) + 1);
 		const int vz0 = std::max(0, (int)m.vz(z0 - reach)), vz1 = std::min(m.gh() - 1, (int)m.vz(z1 + reach) + 1);
 		const float tanBank = std::tan(bankDeg * PI / 180), tanFord = std::tan(7.0f * PI / 180);
+		// the nearest point of the course per vertex within reach of it: each piece of the course
+		// looks only at the vertices near it (a long course on a large map: millions of vertices
+		// times thousands of pieces otherwise)
+		const int bw = vx1 - vx0 + 1, bh = vz1 - vz0 + 1;
+		std::vector<float> nearD((size_t)bw * bh, 1e30f), nearB((size_t)bw * bh, 0), nearF((size_t)bw * bh, 0);
+		for (size_t i = 0; i + 1 < c.size(); i++) {
+			const V2 a = c[i], ab = c[i + 1] - a;
+			const int sx0 = std::max(vx0, (int)m.vx(std::min(a.x, c[i + 1].x) - reach)), sx1 = std::min(vx1, (int)m.vx(std::max(a.x, c[i + 1].x) + reach) + 1);
+			const int sz0 = std::max(vz0, (int)m.vz(std::min(a.z, c[i + 1].z) - reach)), sz1 = std::min(vz1, (int)m.vz(std::max(a.z, c[i + 1].z) + reach) + 1);
+			for (int z = sz0; z <= sz1; z++)
+				for (int x = sx0; x <= sx1; x++) {
+					const V2 p = m.pos(x, z);
+					const float t = std::clamp(Dot(p - a, ab) / std::max(Dot(ab, ab), 1e-9f), 0.0f, 1.0f);
+					const float d = Len(p - (a + ab * t));
+					const size_t k = (size_t)(z - vz0) * bw + (x - vx0);
+					if (d < nearD[k]) {
+						nearD[k] = d;
+						nearB[k] = Lerp(bed[i], bed[i + 1], t);
+						nearF[k] = fordWeight.empty() ? 0 : Lerp(fordWeight[i], fordWeight[i + 1], t);
+					}
+				}
+		}
 		for (int z = vz0; z <= vz1; z++)
 			for (int x = vx0; x <= vx1; x++) {
 				const V2 p = m.pos(x, z);
-				// the nearest point of the course
-				float bd = 1e30f, bb = 0, bf = 0;
-				for (size_t i = 0; i + 1 < c.size(); i++) {
-					const V2 a = c[i], ab = c[i + 1] - a;
-					const float t = std::clamp(Dot(p - a, ab) / std::max(Dot(ab, ab), 1e-9f), 0.0f, 1.0f);
-					const float d = Len(p - (a + ab * t));
-					if (d < bd) {
-						bd = d;
-						bb = Lerp(bed[i], bed[i + 1], t);
-						bf = fordWeight.empty() ? 0 : Lerp(fordWeight[i], fordWeight[i + 1], t);
-					}
-				}
+				const size_t k = (size_t)(z - vz0) * bw + (x - vx0);
+				if (nearD[k] > reach) continue;
+				const float bd = nearD[k], bb = nearB[k], bf = nearF[k];
 				const float hw = width / 2 * (1 + 0.2f * Noise(p.x / 60.0f, p.z / 60.0f, seed + 9) + 0.35f * Noise(p.x / 170.0f, p.z / 170.0f, seed + 10));
 				float prof;
 				if (bd < hw)
@@ -1456,6 +1473,12 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	json featRep = json::array();
 	// the rivers as carved (their course, width and bed), for the materials (MapMaterials.h)
 	json riversGen = json::array();
+	// rivers with water ("water": true): a lake point per pool (whole-map metres, the level before
+	// the raise below), and their courses for the water design's waterways
+	std::vector<std::array<float, 3>> riverLakes;
+	json riverWays = json::array();
+	struct WetRiver { const Feature* f; std::vector<V2> c; std::vector<float> bed; float width, depth, bank; };
+	std::vector<WetRiver> wet;
 	for (const Feature& f : feats) featRep.push_back({ { "index", f.index }, { "kind", f.kind } });
 	auto rep = [&](const Feature& f) -> json& {
 		for (json& r : featRep) if (r["index"] == f.index) return r;
@@ -1864,7 +1887,8 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			}
 			fr.push_back({ c[at].x, c[at].z });
 		}
-		const std::vector<float> bed = CarveChannel(m, g, c, width, depth, Num(f.j, "bank", width * 1.5f), Num(f.j, "bankDeg", 32), fw, f.seed + 41);
+		const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : hasSea ? sea + 0.4f : -1e30f; // (above the sea: it never runs up the channel)
+		const std::vector<float> bed = CarveChannel(m, g, c, width, depth, Num(f.j, "bank", width * 1.5f), Num(f.j, "bankDeg", 32), fw, f.seed + 41, minBed);
 		float maxRise = -1e30f;
 		for (size_t i = 1; i < bed.size(); i++) maxRise = std::max(maxRise, bed[i] - bed[i - 1]);
 		json& r = rep(f);
@@ -1876,7 +1900,108 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		json course = json::array();
 		for (size_t i = 0; i < c.size(); i += 2)
 			course.push_back({ std::round(c[i].x * 10) / 10, std::round(c[i].z * 10) / 10, std::round(bed[i] * 100) / 100 });
+		if (f.j.value("water", false))
+			wet.push_back({ &f, c, bed, width, depth, Num(f.j, "bank", width * 1.5f) });
 		riversGen.push_back({ { "id", f.j.value("id", "") }, { "width", width }, { "course", course }, { "fords", fr } });
+	}
+	// Water in the rivers that ask for it ("water": true), once every channel is cut (a later
+	// river's channel can cross an earlier one's bank). The game's water lies level, so a falling
+	// river is a chain of pools. A pool's level is its first point's bed plus waterDepth, but never
+	// above the lowest bank along it (the land beside the channel, both sides, after all carving)
+	// less a margin; it ends where the banks would be too low for it, or after 500 m, at a sill:
+	// a bar across the channel just above its level. Where no water fits (the banks at the bed),
+	// the stream runs dry there (rapids). The game draws cascades and falls where pools step down.
+	for (const WetRiver& wr : wet) {
+		const Feature& f = *wr.f;
+		const std::vector<V2>& c = wr.c;
+		const float hw = wr.width / 2, wd = Num(f.j, "waterDepth", wr.depth * 0.55f), margin = Num(f.j, "bankMargin", 0.35f);
+		// what holds the water at each point: on each side the highest land out to the bank's end
+		// (water spreads up the sloping bank until the land rises above it), the lower side counting
+		std::vector<float> bankMin(c.size(), 1e30f);
+		for (size_t i = 0; i < c.size(); i++) {
+			const V2 tan = Norm(c[std::min(i + 1, c.size() - 1)] - c[i > 0 ? i - 1 : 0]), across = Perp(tan);
+			for (float side : { -1.0f, 1.0f }) {
+				float rayMax = -1e30f;
+				for (float o = hw; o <= hw + wr.bank + 12; o += 2.5f) {
+					const V2 q = c[i] + across * (side * o);
+					rayMax = std::max(rayMax, g.sample(m.vx(q.x), m.vz(q.z)));
+				}
+				bankMin[i] = std::min(bankMin[i], rayMax);
+			}
+		}
+		int pools = 0, dry = 0, leaky = 0;
+		size_t s0 = 0;
+		json& r = rep(f);
+		while (s0 + 2 < c.size()) {
+			float wl = std::min(wr.bed[s0] + wd, bankMin[s0] - margin);
+			if (wl < wr.bed[s0] + 0.15f) { s0++; dry++; continue; } // no room for water here
+			size_t e = s0 + 1;
+			// on while the banks hold the water and the bed lies no more than a step below where
+			// the pool began (so its water keeps about the channel's width, not a pond's)
+			const float stepM = Num(f.j, "stepM", std::max(0.3f, wr.depth * 0.35f));
+			while (e + 1 < c.size() && bankMin[e] - margin >= wl && wr.bed[e] > wr.bed[s0] - stepM && (e - s0) * 5.0f < 500.0f) e++;
+			const size_t mid = (s0 + e) / 2;
+			const float lx = std::floor(m.vx(c[mid].x)) * TILE + 2.5f, lz = std::floor(m.vz(c[mid].z)) * TILE + 2.5f;
+			// the sill (one row of vertices across the channel and its banks; the next pool starts right
+			// below it, so the water steps down there, a cascade, with no dry gap); the last pool ends
+			// in one too, so it never spills into the sea or the river it joins
+			const V2 tan = Norm(c[std::min(e + 1, c.size() - 1)] - c[e > 0 ? e - 1 : 0]), across = Perp(tan);
+			const float reach = hw * 1.6f + 6;
+			const int x0 = std::max(0, (int)m.vx(c[e].x - reach) - 1), x1 = std::min(m.gw() - 1, (int)m.vx(c[e].x + reach) + 1);
+			const int z0 = std::max(0, (int)m.vz(c[e].z - reach) - 1), z1 = std::min(m.gh() - 1, (int)m.vz(c[e].z + reach) + 1);
+			for (int z = z0; z <= z1; z++)
+				for (int x = x0; x <= x1; x++) {
+					const V2 d = m.pos(x, z) - c[e];
+					if (std::abs(Dot(d, tan)) <= 2.6f && std::abs(Dot(d, across)) <= reach)
+						g.at(x, z) = std::max(g.at(x, z), wl + 0.25f);
+				}
+			// the pool's flood as the game fills it (8-connected below the level, from its tile's
+			// corners): beyond three times its own reach it leaks; lower it, else leave it dry
+			if (lx > 0 && lz > 0 && lx < m.W * TILE && lz < m.H * TILE && wr.bed[mid] < wl) {
+				const int tx = (int)(lx / TILE), tz = (int)(lz / TILE);
+				const size_t cap = (size_t)(3.0f * ((e - s0 + 1) * 5.0f + 20) * (wr.width + 20) / (TILE * TILE)) + 200;
+				auto floods = [&](float level) {
+					std::vector<std::pair<int, int>> st;
+					std::unordered_set<int64_t> seen;
+					for (int dz = 0; dz <= 1; dz++)
+						for (int dx = 0; dx <= 1; dx++)
+							if (g.at(tx + dx, tz + dz) < level) { st.push_back({ tx + dx, tz + dz }); seen.insert((int64_t)(tz + dz) * m.gw() + tx + dx); }
+					while (!st.empty()) {
+						auto [x, z] = st.back();
+						st.pop_back();
+						for (int oz = -1; oz <= 1; oz++)
+							for (int ox = -1; ox <= 1; ox++) {
+								const int nx = x + ox, nz = z + oz;
+								if (nx < 0 || nz < 0 || nx >= m.gw() || nz >= m.gh() || g.at(nx, nz) >= level) continue;
+								if (seen.insert((int64_t)nz * m.gw() + nx).second) {
+									if (seen.size() > cap) return false;
+									st.push_back({ nx, nz });
+								}
+							}
+					}
+					return !seen.empty();
+				};
+				float level = wl;
+				bool ok = false;
+				for (int k = 0; k < 4 && level > wr.bed[mid] + 0.1f && !ok; k++) {
+					ok = floods(level);
+					if (!ok) level -= 0.3f;
+				}
+				if (ok) {
+					riverLakes.push_back({ lx, level, lz });
+					pools++;
+				}
+				else
+					leaky++;
+			}
+			s0 = std::max(e, s0 + 1);
+		}
+		json pts = json::array();
+		for (size_t i = 0; i < c.size(); i += 4) pts.push_back({ std::round(c[i].x * 10) / 10, std::round(c[i].z * 10) / 10 });
+		riverWays.push_back({ { "points", pts }, { "width", std::round(wr.width * 1.3f * 10) / 10 }, { "by", "terrain:" + f.j.value("id", std::to_string(f.index)) } });
+		r["pools"] = pools;
+		r["dryPoints"] = dry;
+		r["leakyPoolsLeftDry"] = leaky;
 	}
 	timing["details"] = Ms(t1);
 
@@ -1898,6 +2023,7 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		for (const SeaBody& b : bodies)
 			lakes.push_back({ b.deepX * TILE + 2.5f, sea, b.deepZ * TILE + 2.5f });
 	}
+	for (auto& l : riverLakes) lakes.push_back({ l[0], l[1] + raisedBy, l[2] });
 	for (const Feature& f : feats)
 		if (f.kind == "basin" && f.j.contains("water") && f.j["water"].is_number()) {
 			const V2 c = f.shape.centre();
@@ -1967,6 +2093,14 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		}
 		for (auto& l : lakes) kept.push_back({ l[0], l[1], l[2], 0 });
 		wj["lakes"] = kept;
+		json ways = json::array();
+		for (const json& w : wj.value("waterways", json::array()))
+			if (!(w.is_object() && w.value("by", "").rfind("terrain:", 0) == 0)) ways.push_back(w);
+		for (const json& w : riverWays) ways.push_back(w);
+		if (!ways.empty() || wj.contains("waterways")) {
+			wj["waterways"] = ways;
+			if (!wj.contains("tiles")) wj["tiles"] = { m.W, m.H };
+		}
 		if (!lakes.empty() || !prevGen.value("lakes", json::array()).empty() || fs::exists(folder / "water.json"))
 			WriteAll(folder / "water.json", wj.dump(1) + "\n");
 	}

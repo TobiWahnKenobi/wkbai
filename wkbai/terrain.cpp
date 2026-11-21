@@ -294,6 +294,12 @@ void Terrain::readBCM(const char * filename) {
 	extras = extras.substr(0, extras.size() - 4) + ".wkbmap";
 	if (FileExists(extras.c_str()))
 		readMapExtras(extras.c_str());
+	// a map folder's far land (MapFolder's cache: map.farland)
+	{
+		std::string fl = filename;
+		fl = fl.substr(0, fl.size() - 4) + ".farland";
+		farLand = FileExists(fl.c_str()) ? readFarLand(fl) : nullptr;
+	}
 
 	floodfillWater();
 }
@@ -304,6 +310,73 @@ void Terrain::readBCM(const char * filename) {
 //   LAKE: u32 count, then per lake f32 x, y, z and u8 the 2 bits the BCM keeps (all of them;
 //         the BCM holds at most 63)
 static const char MAP_EXTRAS_MAGIC[8] = { 'W', 'K', 'B', 'M', 'A', 'P', 0, 0 };
+
+float StoredFarLand::sample(float wx, float wz, float& weight) const
+{
+	weight = 0;
+	if (w < 2 || h < 2)
+		return 0;
+	const float fx = (wx - x0) / cell, fz = (wz - z0) / cell;
+	if (fx < 0 || fz < 0 || fx > w - 1 || fz > h - 1)
+		return 0;
+	const int ix = std::min((int)fx, w - 2), iz = std::min((int)fz, h - 2);
+	const float tx = fx - ix, tz = fz - iz;
+	const float a = v[(size_t)iz * w + ix] + (v[(size_t)iz * w + ix + 1] - v[(size_t)iz * w + ix]) * tx;
+	const float b = v[(size_t)(iz + 1) * w + ix] + (v[(size_t)(iz + 1) * w + ix + 1] - v[(size_t)(iz + 1) * w + ix]) * tx;
+	// over the outer tenth, fading out
+	const float edge = std::min({ fx, fz, (w - 1) - fx, (h - 1) - fz }) / (0.1f * std::min(w, h));
+	const float k = std::clamp(edge, 0.0f, 1.0f);
+	weight = k * k * (3 - 2 * k);
+	return a + (b - a) * tz;
+}
+
+// <map>.farland: "WKBFARL\0", u32 version (1), f32 x0, z0, cell, i32 w, h, f32 seaLevel, then w x h f32
+std::shared_ptr<StoredFarLand> Terrain::readFarLand(const std::string& path)
+{
+	char* data = nullptr;
+	int size = 0;
+	LoadFile(path.c_str(), &data, &size);
+	if (!data)
+		return nullptr;
+	std::shared_ptr<StoredFarLand> f;
+	if (size >= 36 && memcmp(data, "WKBFARL", 7) == 0) {
+		uint32_t version;
+		memcpy(&version, data + 8, 4);
+		auto out = std::make_shared<StoredFarLand>();
+		memcpy(&out->x0, data + 12, 4);
+		memcpy(&out->z0, data + 16, 4);
+		memcpy(&out->cell, data + 20, 4);
+		memcpy(&out->w, data + 24, 4);
+		memcpy(&out->h, data + 28, 4);
+		memcpy(&out->seaLevel, data + 32, 4);
+		const size_t n = (size_t)std::max(out->w, 0) * std::max(out->h, 0);
+		if (version == 1 && out->w > 1 && out->h > 1 && (size_t)size >= 36 + n * 4) {
+			out->v.resize(n);
+			memcpy(out->v.data(), data + 36, n * 4);
+			f = out;
+		}
+	}
+	free(data);
+	return f;
+}
+
+bool Terrain::writeFarLand(const std::filesystem::path& path, const StoredFarLand& f)
+{
+	std::string out("WKBFARL\0", 8);
+	auto put = [&](const void* p, size_t n) { out.append((const char*)p, n); };
+	const uint32_t version = 1;
+	put(&version, 4);
+	put(&f.x0, 4); put(&f.z0, 4); put(&f.cell, 4);
+	put(&f.w, 4); put(&f.h, 4);
+	put(&f.seaLevel, 4);
+	put(f.v.data(), f.v.size() * 4);
+	FILE* file = _wfopen(path.c_str(), L"wb");
+	if (!file)
+		return false;
+	const bool ok = fwrite(out.data(), 1, out.size(), file) == out.size();
+	fclose(file);
+	return ok;
+}
 
 void Terrain::readMapExtras(const char* filename)
 {

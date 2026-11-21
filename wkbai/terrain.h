@@ -53,6 +53,20 @@ extern float g_lowestTerrainHeight;
 
 inline uint32_t g_terrainInstances = 0;
 
+// A map's own far land (a wkbai map folder's farland.png, kept with its cache as <map>.farland):
+// heights on a coarse grid round the map that Extend map takes instead of generating them (the
+// real land round a map made from elevation data). Positions in the whole map's world units (tile 0
+// at 0, x east, z north); row 0 is the south edge.
+struct StoredFarLand {
+	float x0 = 0, z0 = 0, cell = 40;
+	int w = 0, h = 0;
+	float seaLevel = -1e30f;
+	std::vector<float> v;
+	// the height at a place; weight: 1 inside, falling to 0 over the store's outer tenth (where the
+	// generated land takes over), 0 off it
+	float sample(float wx, float wz, float& weight) const;
+};
+
 struct Terrain
 {
 	typedef TerrainTile Tile;
@@ -67,6 +81,10 @@ struct Terrain
 	// null: none, everything found automatically)
 	std::string mapFile;
 	std::shared_ptr<WaterDesign> waterDesign;
+	// the map's own far land (<map>.farland beside the BCM; null: none, Extend map generates it)
+	std::shared_ptr<StoredFarLand> farLand;
+	static std::shared_ptr<StoredFarLand> readFarLand(const std::string& path);
+	static bool writeFarLand(const std::filesystem::path& path, const StoredFarLand& f);
 	// the texture translation (.lttt) readBCM applies: empty, the one named after the BCM
 	// (Maps\Map_Textures\<name>.lttt); "-" none. A wkbai map folder's (MapFolder.h) names its own.
 	std::string ltttPath;

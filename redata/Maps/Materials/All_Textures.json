@@ -374,8 +374,9 @@
      "material": "river bed",
      "river": [
       null,
-      0.9
-     ]
+      1.8
+     ],
+     "keepThin": true
     },
     {
      "material": "beach",
@@ -523,8 +524,9 @@
      "material": "river bed",
      "river": [
       null,
-      0.9
-     ]
+      1.8
+     ],
+     "keepThin": true
     },
     {
      "material": "beach",
@@ -666,8 +668,9 @@
      "material": "river bed",
      "river": [
       null,
-      0.9
-     ]
+      1.8
+     ],
+     "keepThin": true
     },
     {
      "material": "beach",
