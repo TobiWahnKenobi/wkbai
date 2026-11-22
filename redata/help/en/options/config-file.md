@@ -1,6 +1,6 @@
 ---
 title: Settings without a menu
-ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation, option/madeSwimAnimations#madeswimanimations, option/editorSaveFormat#editorsaveformat]
+ids: [options/config-file, option/gamePath#gamepath, option/gameVersion#gameversion, help/config-file, option/enhancedGraphics#enhancedgraphics, option/adapterIndex#adapterindex, option/windowWidth#windowwidth-and-windowheight, option/windowHeight#windowwidth-and-windowheight, option/ssaoRadius#ssaoradius-and-ssaostrength, option/ssaoStrength#ssaoradius-and-ssaostrength, option/bloomThreshold#bloomthreshold, option/bloomIntensity#bloomintensity, option/lightShaftStrength#lightshaftstrength, option/fogOfWarBrightness#fogofwarbrightness, option/stainedGlass#stainedglass, option/skyLight#skylight, option/modelSpecular#modelspecular, option/terrainOriginalLight#terrainoriginallight, option/chimneySmoke#chimneysmoke, option/drips#drips, option/introVideo#introvideo, option/playerName#playername, option/joinAddress#joinaddress, option/hostPort#hostport, option/hostBind#hostbind, option/modsPath#modspath, option/modAllowList#modallowlist, option/gfxValidation#gfxvalidation, option/madeSwimAnimations#madeswimanimations, option/editorSaveFormat#editorsaveformat, option/forest#forest]
 order: 90
 ---
 
@@ -77,6 +77,10 @@ With Model highlights: how strong the highlights on models are. Default 1.
 ## drips
 
 `true` (the default): drips falling from HD models that have them.
+
+## forest
+
+`true` (the default): trees that stand still are kept and drawn by the graphics card, much faster on maps with large forests ([trees in the wind](graphics/terrain-grass.md#trees-in-the-wind)). `false`: every tree is drawn the old way, one by one.
 
 ## introVideo
 

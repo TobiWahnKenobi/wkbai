@@ -54,13 +54,15 @@ With Keep the far land on disk: the most space it may take, 256 to 32,768 MB, in
 
 ## Trees in the wind
 
-How the trees and bushes move in the game's [wind](../../ui/frontend/skirmish/wind.md). The trunk stays rooted and the crown bends downwind, more in a stronger wind and in the gusts; each tree also sways at its own pace. Their shadows bend with them.
+How the trees and bushes move in the game's [wind](../../ui/frontend/skirmish/wind.md). The trunk stays rooted and the crown and branches bend downwind, more in a stronger wind and in the gusts. The trees sway in a few dozen groups, so neighbours don't move in step. Their shadows bend with them, the [ray-traced shadows](shadows-light.md#ray-traced-shadows) too.
 
 - **Off:** the trees stand still.
 - **Sway:** the trees bend and sway.
 - **Sway and leaves** (the default): also the twigs and leaves flutter.
 
 With the lobby's Wind off, the trees and grass still move as in a steady gentle breeze. **Cost:** none to speak of (at most about 0.04 ms with hundreds of trees in view).
+
+Large forests are drawn by the graphics card itself: trees that stand still stay there, and it picks and draws the ones in view, with their shadows. A map with 30,000 trees draws several times faster than before. A tree that is being chopped, is selected or is under the mouse is drawn the old way while it is. If forests look wrong on your graphics card, [`forest`](../config-file.md#forest) switches this off.
 
 ## Grass
 
