@@ -28,6 +28,13 @@ struct TerrainRenderer;
 struct IRenderer;
 struct SceneRenderer;
 struct ClientGameObject;
+struct CommonGameObject;
+
+// What the lower left panel shows for a selected object (its picture, hit points, name and stats):
+// the object itself, or for a formation its first member (lowest id, so it doesn't flicker); a
+// formation's own blueprint has no model and no hit points, and the panel stayed empty (the user's
+// report, 2026-11-22, after clicks on members came to select the formation)
+const CommonGameObject* PanelSubject(const CommonGameObject* obj);
 struct GameObjBlueprint;
 struct Command;
 struct ParticleContainer;

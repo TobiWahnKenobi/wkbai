@@ -3190,6 +3190,18 @@ void ClientInterface::drawStainedGlassPanel(int x, int y, int w, int h)
 	ImGui::GetBackgroundDrawList()->AddImage(glassFrames[f], ImVec2((float)x, (float)y), ImVec2((float)(x + w), (float)(y + h)));
 }
 
+const CommonGameObject* PanelSubject(const CommonGameObject* obj)
+{
+	if (!obj || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+		return obj;
+	const CommonGameObject* first = nullptr;
+	for (const auto& [type, members] : obj->children)
+		for (const CommonGameObject* m : members)
+			if (m && m->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !(m->flags & CommonGameObject::fTerminated) && (!first || m->id < first->id))
+				first = m;
+	return first ? first : obj;
+}
+
 // The selected (else the hovered) character standing in the middle of the lower left panel's
 // stained-glass window, slowly turning, as the original's selection window shows it: its model
 // with its current animation, drawn after the HUD into a square there (Diligent only).
@@ -3202,6 +3214,8 @@ void ClientInterface::drawSelectionPortrait()
 	ClientGameObject* obj = selection.empty() ? nullptr : selection.begin()->get();
 	if (!obj)
 		obj = nextSelectedObject.get();
+	// (a formation: a member of it)
+	obj = (ClientGameObject*)PanelSubject(obj);
 	// characters and buildings (a selected building stands in the window too; with the HD
 	// models its model is the glTF replacement, larger and with its own centre)
 	if (!obj || (obj->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && obj->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING))
@@ -5135,6 +5149,14 @@ void ClientInterface::iter()
 		lua.set_function("selectPeasantsByActivity", [this](int row) { return selectPeasantsByActivity(row); });
 		lua.set_function("getTextWidth",
 			[](const std::string& text) { return (int)ImGui::CalcTextSize(text.c_str()).x; });
+		// what the lower left panel shows for the first selected (a formation: a member, PanelSubject)
+		lua.set_function("getPanelSubject",
+			[this]() -> uint32_t {
+				if (selection.empty()) return 0u;
+				const CommonGameObject* obj = PanelSubject(selection.begin()->get());
+				return obj ? obj->id : 0u;
+			}
+		);
 		lua.set_function("getFirstSelection",
 			[this]() -> uint32_t {
 				if (selection.empty()) return 0u;
