@@ -530,6 +530,7 @@ bool Server::saveGame(const char* filename)
 		// the players' memory of the trees under the fog of war (FogOfWar)
 		trees = treeMemorySaveText();
 		discovered = DiscoveredSaveText();
+		intensity = intensityMaps.saveText();
 		government = ministries.saveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
@@ -557,7 +558,8 @@ bool Server::saveGame(const char* filename)
 	const bool original = savingLevel || saveOriginalFormat || g_settings.value("saveFormat", std::string()) == "original";
 	if (original) {
 		// the original's format (text mode: its line breaks), with wkbai's state beside it in
-		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt and .ministries.txt (none for a level)
+		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt, .ministries.txt,
+		// .discovered.txt and .intensity.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
 		const std::string* sides[9] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees };
 		for (int i = 0; i < 9; i++) {

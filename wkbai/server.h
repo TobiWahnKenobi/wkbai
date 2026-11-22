@@ -4,6 +4,7 @@
 
 #pragma once
 #include <atomic>
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <memory>
@@ -25,8 +26,8 @@
 #include "FormationController.h"
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
-#include "IntensityMaps.h"
 #include "Ministries.h"
+#include "IntensityMaps.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -137,6 +138,13 @@ struct ServerGameObject : SpecificGameObject<Server, ServerGameObject> {
 
 	void updatePosition(const Vector3 &newposition, bool events = false);
 	void lookForSightRangeEvents();
+	// lookForSightRangeEvents in three parts, for "parallelSight": the range (scripts: the
+	// server's thread; <= 0 none), the scan and sort (no scripts, nothing changed: any thread)
+	// and the events (the server's thread)
+	struct SightScan { std::vector<uint32_t> found; uint64_t hashA = 0, hashB = 0; bool same = false; uint64_t candidates = 0; };
+	float sightRange();
+	void sightScan(float dist, SightScan& out) const;
+	void sightEvents(SightScan& scan);
 	// attack at will ("Become Aggressive"): idle with an enemy character in sight, "On Idle" again
 	void wakeAggressiveIdle();
 	void addZoneTile(int tx, int tz);
@@ -344,6 +352,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
 	// target and go on to the next building, and the attacker is attacked back: "aiWar"
 	bool aiWar = true;
+	// the AI at sea (Naval.h): every AI player builds a dock and ships where the map has water
+	// between it and an enemy, ferries armies over, fights at sea: "aiNaval"
+	bool aiNaval = true;
 	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
 	// while it is being built (Phase 16): "aiMinistries"
 	bool aiMinistries = false;
@@ -397,7 +408,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
-	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation);
+	// spawner: the building that trained it, the sender of the character's "On Spawn"
+	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation, ServerGameObject* spawner = nullptr);
 	ServerGameObject* stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation,
 		bool sendEvent, bool inGameplay);
 	void deleteObject(ServerGameObject *obj);
@@ -426,6 +438,29 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 		MODS_ALLOWED = 3 }; // only the host's own mods and those in wkconfig.json "modAllowList"
 	int modPolicy = MODS_MATCH;
 	// agent control's harness: the simulation steps only when told ("harness.advance")
+	// The players' commands (NETSRVMSG_COMMAND, one per unit) run as they come, up to
+	// commandsPerStep in a step ("commandsPerStep" in wkconfig.json, default 500; 0 no limit);
+	// the rest wait here and run at the start of the next steps, in the order they came: a
+	// 10,000-unit order spreads over 20 steps instead of stalling one. Also no new one once the
+	// step's commands have done commandWorkPerStep of the scripts' work (g_scriptWork: finder
+	// candidates and actions, counted; "commandWorkPerStep", default 50,000, about 75 attack orders; 0 no limit): an attack order runs
+	// the army scripts, hundreds of times a move's work. The same on every computer and in a
+	// replay (by the messages' order and counts, not by time).
+	struct PendingCommand { int command; uint32_t object, target; int mode; Vector3 destination, faceTo; };
+	std::deque<PendingCommand> pendingCommands;
+	uint32_t commandsThisStep = 0, commandsPerStep = 500;
+	uint64_t commandWorkThisStep = 0, commandWorkPerStep = 50000, commandWorkTotal = 0, commandsRun = 0;
+	bool commandMayStart() const {
+		return (!commandsPerStep || commandsThisStep < commandsPerStep) && (!commandWorkPerStep || commandWorkThisStep < commandWorkPerStep);
+	}
+	void runCommand(int command, uint32_t object, uint32_t target, int mode, const Vector3& destination, const Vector3& faceTo);
+	void issueCommand(int command, uint32_t object, int mode, uint32_t target, const Vector3& destination, const Vector3& faceTo = Vector3(-1, 0, 0));
+	void runPendingCommands();
+	// "parallelSight": the step's sight scans after the object loop, on the worker threads
+	// (Server::simulate); off, each in the loop as before
+	bool parallelSight = false;
+	uint64_t serial = 0; // which server this is, counted from 1 (Server::Server)
+	std::vector<SrvGORef> sightQueue;
 	bool lockstep = false;
 	uint32_t lockstepSteps = 0;  // steps still to run
 	uint64_t lockstepDone = 0;   // steps run in lockstep so far

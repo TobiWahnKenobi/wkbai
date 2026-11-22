@@ -3,6 +3,9 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentRayShadows.h"
+#include "Forest.h"
+#include "TreeWind.h"
+#include "../scene.h"
 #include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "../util/util.h"
@@ -43,6 +46,7 @@ using namespace Diligent;
 // neighbours' positions, one ray from just off the surface towards a point of the sun's disc
 static const char maskShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D<float> tDepth;
 Texture2D<float> tHeights; // the terrain's vertex heights
 
@@ -158,7 +162,10 @@ float PS(VS_OUTPUT input) : SV_Target
 		RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> pq;
 		pq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, probe);
 )---" ALPHA_TEST_LOOP(pq) R"---(
-		if (pq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+		RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> pq2;
+		pq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0xFF, probe);
+)---" ALPHA_TEST_LOOP(pq2) R"---(
+		if (pq.CommittedStatus() != COMMITTED_TRIANGLE_HIT && pq2.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
 			// no terrain heights: lit by its own light alone (as before the self shadow)
 			n = SunDir.w > 0 ? normalize(float3(GroundHeight(p.xz - float2(1.5, 0)) - GroundHeight(p.xz + float2(1.5, 0)), 3.0,
 				GroundHeight(p.xz - float2(0, 1.5)) - GroundHeight(p.xz + float2(0, 1.5)))) : l;
@@ -185,7 +192,12 @@ float PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : self;
+	if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+		return fog;
+	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0xFF, ray);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	return rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : self;
 }
 )---";
 
@@ -197,6 +209,7 @@ float PS(VS_OUTPUT input) : SV_Target
 // ray's reach and the screen's edges.
 static const char reflectShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D tScene;
 Texture2D<float> tDepth;
 SamplerState sLinear;
@@ -239,9 +252,19 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+	bool any = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+	float t = any ? rq.CommittedRayT() : ray.TMax;
+	RayDesc ray2 = ray;
+	ray2.TMax = t;
+	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0x01, ray2);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	if (rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+		any = true;
+		t = rq2.CommittedRayT();
+	}
+	if (!any)
 		return float4(0, 0, 0, 0);
-	float t = rq.CommittedRayT();
 	float3 hit = ray.Origin + r * t;
 	float3 colour = Fallback.rgb;
 	float4 clip = mul(float4(hit, 1), Transform);
@@ -297,6 +320,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 		{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tHeights", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -390,12 +414,14 @@ void DiligentRayShadows::beginFrame()
 {
 	instances.clear();
 	frameCounter++;
+	lastAdded = nullptr;
 	for (auto it = animatedLastUse.begin(); it != animatedLastUse.end(); ) {
 		if (frameCounter - it->second > ANIMATED_KEEP) {
 			auto b = blases.find(it->first);
 			if (b != blases.end()) {
 				blasGeometryBase.erase(b->second.RawPtr());
 				blases.erase(b);
+				structuresChanged = true;
 			}
 			it = animatedLastUse.erase(it);
 		}
@@ -415,15 +441,9 @@ IBottomLevelAS* DiligentRayShadows::cached(const void* key, uint32_t frame)
 	return it->second;
 }
 
-IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, uint32_t frame, IBuffer* positions,
-	uint64_t positionOffset, uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups, bool animated)
+// the mesh's geometries for the alpha test, once per mesh (all its key frames share them)
+uint32_t DiligentRayShadows::geometryBaseOf(const std::vector<Group>& groups)
 {
-	if (animated)
-		animatedLastUse[{ key, frame }] = frameCounter;
-	auto& slot = blases[{ key, frame }];
-	if (slot)
-		return slot;
-	// the mesh's geometries for the alpha test, once per mesh (all its key frames share them)
 	auto base = geometryBases.find(&groups);
 	if (base == geometryBases.end()) {
 		base = geometryBases.emplace(&groups, (uint32_t)(geometryRecords.size() / 2)).first;
@@ -447,7 +467,18 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 		}
 		alphaDirty = true;
 	}
-	const uint32_t geometryBase = base->second;
+	return base->second;
+}
+
+IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, uint32_t frame, IBuffer* positions,
+	uint64_t positionOffset, uint32_t vertexCount, IBuffer* indices, const std::vector<Group>& groups, bool animated)
+{
+	if (animated)
+		animatedLastUse[{ key, frame }] = frameCounter;
+	auto& slot = blases[{ key, frame }];
+	if (slot)
+		return slot;
+	const uint32_t geometryBase = geometryBaseOf(groups);
 	std::vector<BLASTriangleDesc> descs;
 	std::vector<BLASBuildTriangleData> data;
 	std::vector<std::string> geometryNames;
@@ -491,6 +522,7 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 	device->CreateBLAS(desc, &slot);
 	if (!slot)
 		return nullptr;
+	structuresChanged = true;
 	const Uint64 need = slot->GetScratchBufferSizes().Build;
 	if (!scratch || scratch->GetDesc().Size < need) {
 		BufferDesc sd;
@@ -513,19 +545,374 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 	return slot;
 }
 
+// The trees' bend for their shadow structures (TreeWind.h): a mesh's rest positions in, per wind
+// group (the dispatch's y) its bent ones out, the group's region in the bent buffer
+static const char windComputeCode[] = R"---(
+cbuffer WindJob
+{
+	float4 Wind;  // WindBend (TreeWind.h)
+	uint4 Job;    // x the vertices, y the bent buffer's stride per group (vertices)
+};
+ByteAddressBuffer Rest;
+RWByteAddressBuffer Bent;
+
+[numthreads(64, 1, 1)]
+void CSWind(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= Job.x)
+		return;
+	float3 p = asfloat(Rest.Load3(id.x * 12));
+	Bent.Store3((id.y * Job.y + id.x) * 12, asuint(WindDeform(p, id.y, Wind)));
+}
+)---";
+
+void DiligentRayShadows::windDispatch(IDeviceContext* ctx, WindMesh& wm)
+{
+	void* mapped = nullptr;
+	ctx->MapBuffer(windConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+	uint32_t* c = (uint32_t*)mapped;
+	memcpy(c, windNow, 16);
+	c[4] = wm.vertexCount;
+	c[5] = wm.stride;
+	c[6] = c[7] = 0;
+	ctx->UnmapBuffer(windConstants, MAP_WRITE);
+	ctx->SetPipelineState(windPipeline);
+	ctx->CommitShaderResources(wm.srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	DispatchComputeAttribs da;
+	da.ThreadGroupCountX = (wm.vertexCount + 63) / 64;
+	da.ThreadGroupCountY = WIND_GROUPS;
+	ctx->DispatchCompute(da);
+}
+
+void DiligentRayShadows::windBegin(IDeviceContext* ctx, const float wind[4])
+{
+	const bool wasOn = windNow[3] > 0;
+	std::copy_n(wind, 4, windNow);
+	if (!windTried) {
+		windTried = true;
+		std::string source = std::string(g_treeWindHlsl) + windComputeCode;
+		ShaderCreateInfo sci;
+		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+		sci.Source = source.c_str();
+		sci.SourceLength = source.size();
+		sci.EntryPoint = "CSWind";
+		sci.Desc.ShaderType = SHADER_TYPE_COMPUTE;
+		sci.Desc.Name = "Tree wind (shadows)";
+		RefCntAutoPtr<IShader> shader;
+		ShaderCache::CreateShader(device, sci, &shader);
+		if (shader) {
+			ComputePipelineStateCreateInfo ci;
+			ci.PSODesc.Name = "Tree wind (shadows)";
+			ci.PSODesc.PipelineType = PIPELINE_TYPE_COMPUTE;
+			ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE;
+			ci.pCS = shader;
+			ShaderCache::CreateComputePipeline(device, ci, &windPipeline);
+		}
+		BufferDesc cb;
+		cb.Name = "Tree wind constants";
+		cb.Size = 32;
+		cb.BindFlags = BIND_UNIFORM_BUFFER;
+		cb.Usage = USAGE_DYNAMIC;
+		cb.CPUAccessFlags = CPU_ACCESS_WRITE;
+		device->CreateBuffer(cb, nullptr, &windConstants);
+		const uint16_t corners[6] = { 0, 1, 2, 3, 4, 5 };
+		BufferDesc ib;
+		ib.Name = "Tree wind corners";
+		ib.Size = 16;
+		ib.BindFlags = BIND_RAY_TRACING;
+		ib.Usage = USAGE_IMMUTABLE;
+		uint16_t padded[8] = {};
+		std::copy_n(corners, 6, padded);
+		BufferData init{ padded, sizeof(padded) };
+		device->CreateBuffer(ib, &init, &windCorners);
+		if (!windPipeline || !windConstants || !windCorners) {
+			windPipeline.Release();
+			printf("Ray-traced shadows: the trees' wind pass could not be made: shadows of the trees stand still\n");
+		}
+	}
+	if (!windPipeline || windNow[3] <= 0) {
+		if (wasOn)
+			structuresChanged = true; // (back to the still meshes)
+		return;
+	}
+	if (!wasOn)
+		structuresChanged = true;
+	// the meshes in the still structure or used of late: bent and refitted, every group, every
+	// frame. The refits without a barrier between them (each its own structure, its own scratch
+	// region): the structures and the bent buffers are moved to their states once, together
+	std::vector<WindMesh*> live;
+	for (auto& it : windMeshes)
+		if (it.second.inStill || it.second.lastUse + 2 >= frameCounter)
+			live.push_back(&it.second);
+	if (live.empty())
+		return;
+	for (WindMesh* wm : live)
+		windDispatch(ctx, *wm);
+	std::vector<StateTransitionDesc> barriers;
+	barriers.reserve(live.size() * (WIND_GROUPS + 1) + 1);
+	for (WindMesh* wm : live) {
+		barriers.push_back(StateTransitionDesc(wm->bent, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_BUILD_AS_READ, STATE_TRANSITION_FLAG_UPDATE_STATE));
+		for (auto& b : wm->blas)
+			barriers.push_back(StateTransitionDesc(b, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_BUILD_AS_WRITE, STATE_TRANSITION_FLAG_UPDATE_STATE));
+	}
+	barriers.push_back(StateTransitionDesc(windScratch, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_BUILD_AS_WRITE, STATE_TRANSITION_FLAG_UPDATE_STATE));
+	ctx->TransitionResourceStates((Uint32)barriers.size(), barriers.data());
+	std::vector<BLASBuildTriangleData> data;
+	for (WindMesh* wm : live) {
+		for (uint32_t g = 0; g < WIND_GROUPS; g++) {
+			data = wm->data;
+			for (auto& d : data)
+				d.VertexOffset += (uint64_t)g * wm->stride * 12;
+			BuildBLASAttribs ba;
+			ba.pBLAS = wm->blas[g];
+			ba.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_NONE;
+			ba.GeometryTransitionMode = RESOURCE_STATE_TRANSITION_MODE_NONE;
+			ba.pTriangleData = data.data();
+			ba.TriangleDataCount = (Uint32)data.size();
+			ba.pScratchBuffer = windScratch;
+			ba.ScratchBufferOffset = wm->scratchOffset[g];
+			ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_NONE;
+			ba.Update = true;
+			ctx->BuildBLAS(ba);
+		}
+	}
+	barriers.clear();
+	for (WindMesh* wm : live)
+		for (auto& b : wm->blas)
+			barriers.push_back(StateTransitionDesc(b, RESOURCE_STATE_BUILD_AS_WRITE, RESOURCE_STATE_BUILD_AS_READ, STATE_TRANSITION_FLAG_UPDATE_STATE));
+	ctx->TransitionResourceStates((Uint32)barriers.size(), barriers.data());
+}
+
+IBottomLevelAS* DiligentRayShadows::windBlas(IDeviceContext* ctx, const void* key, const std::function<std::vector<Vector3>()>& restOf,
+	IBuffer* indices, const std::vector<Group>& groups, uint32_t group)
+{
+	if (!windOn())
+		return nullptr;
+	auto it = windMeshes.find(key);
+	if (it == windMeshes.end()) {
+		const std::vector<Vector3> rest = restOf();
+		if (rest.empty())
+			return nullptr;
+		WindMesh& wm = windMeshes[key];
+		wm.vertexCount = (uint32_t)rest.size();
+		wm.stride = wm.vertexCount + 6;
+		// the farthest a bend reaches (WindDeform: 1 m + 20 % of the height), at its corners two
+		// triangles of a millimetre (the bounds then stay as they are, however the tree bends)
+		Vector3 lo = rest[0], hi = rest[0];
+		for (const Vector3& v : rest) {
+			lo = Vector3(std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z));
+			hi = Vector3(std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z));
+		}
+		const float reach = 1.05f + 0.2f * std::max(hi.y, 0.0f);
+		lo = lo - Vector3(reach, reach, reach);
+		hi = hi + Vector3(reach, reach, reach);
+		std::vector<Vector3> init;
+		init.reserve((size_t)wm.stride * WIND_GROUPS);
+		for (uint32_t g = 0; g < WIND_GROUPS; g++) {
+			init.insert(init.end(), rest.begin(), rest.end());
+			init.insert(init.end(), { lo, lo + Vector3(0.001f, 0, 0), lo + Vector3(0, 0, 0.001f),
+				hi, hi - Vector3(0.001f, 0, 0), hi - Vector3(0, 0, 0.001f) });
+		}
+		BufferDesc rd;
+		rd.Name = "Tree wind rest";
+		rd.Size = (uint64_t)rest.size() * 12;
+		rd.BindFlags = BIND_SHADER_RESOURCE;
+		rd.Usage = USAGE_IMMUTABLE;
+		rd.Mode = BUFFER_MODE_RAW;
+		BufferData rdata{ rest.data(), rd.Size };
+		device->CreateBuffer(rd, &rdata, &wm.rest);
+		BufferDesc bd;
+		bd.Name = "Tree wind bent";
+		bd.Size = (uint64_t)init.size() * 12;
+		bd.BindFlags = BIND_UNORDERED_ACCESS | BIND_RAY_TRACING;
+		bd.Usage = USAGE_DEFAULT;
+		bd.Mode = BUFFER_MODE_RAW;
+		BufferData bdata{ init.data(), bd.Size };
+		device->CreateBuffer(bd, &bdata, &wm.bent);
+		if (!wm.rest || !wm.bent) {
+			windMeshes.erase(key);
+			return nullptr;
+		}
+		windPipeline->CreateShaderResourceBinding(&wm.srb, true);
+		wm.srb->GetVariableByName(SHADER_TYPE_COMPUTE, "WindJob")->Set(windConstants);
+		wm.srb->GetVariableByName(SHADER_TYPE_COMPUTE, "Rest")->Set(wm.rest->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+		wm.srb->GetVariableByName(SHADER_TYPE_COMPUTE, "Bent")->Set(wm.bent->GetDefaultView(BUFFER_VIEW_UNORDERED_ACCESS));
+		// the geometries: the mesh's (their alpha test records copied) and the corners' (opaque)
+		const uint32_t meshBase = geometryBaseOf(groups);
+		const uint32_t base = (uint32_t)(geometryRecords.size() / 2);
+		std::vector<BLASTriangleDesc> descs;
+		wm.names.reserve(groups.size() + 1);
+		for (size_t g = 0; g < groups.size(); g++) {
+			const Group& gr = groups[g];
+			if (gr.indexCount < 3 || gr.vertexCount == 0)
+				continue;
+			const uint32_t rec = meshBase + (uint32_t)descs.size();
+			geometryRecords.push_back(geometryRecords[2 * rec]);
+			geometryRecords.push_back(geometryRecords[2 * rec + 1]);
+			wm.names.push_back("g" + std::to_string(g));
+			BLASTriangleDesc d;
+			d.MaxVertexCount = gr.vertexCount;
+			d.VertexValueType = VT_FLOAT32;
+			d.VertexComponentCount = 3;
+			d.MaxPrimitiveCount = gr.indexCount / 3;
+			d.IndexType = VT_UINT16;
+			descs.push_back(d);
+			BLASBuildTriangleData b;
+			b.pVertexBuffer = wm.bent;
+			b.VertexOffset = (uint64_t)gr.firstVertex * 12;
+			b.VertexStride = 12;
+			b.VertexCount = gr.vertexCount;
+			b.VertexValueType = VT_FLOAT32;
+			b.VertexComponentCount = 3;
+			b.PrimitiveCount = gr.indexCount / 3;
+			b.pIndexBuffer = indices;
+			b.IndexOffset = (uint64_t)gr.firstIndex * 2;
+			b.IndexType = VT_UINT16;
+			b.Flags = geometryRecords[2 * rec + 1] != 0 ? RAYTRACING_GEOMETRY_FLAG_NONE : RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+			wm.data.push_back(b);
+		}
+		if (descs.empty()) {
+			windMeshes.erase(key);
+			return nullptr;
+		}
+		geometryRecords.push_back(0);
+		geometryRecords.push_back(0);
+		alphaDirty = true;
+		wm.names.push_back("corners");
+		{
+			BLASTriangleDesc d;
+			d.MaxVertexCount = 6;
+			d.VertexValueType = VT_FLOAT32;
+			d.VertexComponentCount = 3;
+			d.MaxPrimitiveCount = 2;
+			d.IndexType = VT_UINT16;
+			descs.push_back(d);
+			BLASBuildTriangleData b;
+			b.pVertexBuffer = wm.bent;
+			b.VertexOffset = (uint64_t)wm.vertexCount * 12;
+			b.VertexStride = 12;
+			b.VertexCount = 6;
+			b.VertexValueType = VT_FLOAT32;
+			b.VertexComponentCount = 3;
+			b.PrimitiveCount = 2;
+			b.pIndexBuffer = windCorners;
+			b.IndexOffset = 0;
+			b.IndexType = VT_UINT16;
+			b.Flags = RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+			wm.data.push_back(b);
+		}
+		for (size_t k = 0; k < descs.size(); k++) {
+			descs[k].GeometryName = wm.names[k].c_str();
+			wm.data[k].GeometryName = wm.names[k].c_str();
+		}
+		BottomLevelASDesc desc;
+		desc.Name = "Tree in the wind";
+		desc.pTriangles = descs.data();
+		desc.TriangleCount = (Uint32)descs.size();
+		desc.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE | RAYTRACING_BUILD_AS_ALLOW_UPDATE;
+		wm.blas.resize(WIND_GROUPS);
+		wm.scratchOffset.resize(WIND_GROUPS);
+		for (uint32_t g = 0; g < WIND_GROUPS; g++) {
+			device->CreateBLAS(desc, &wm.blas[g]);
+			if (!wm.blas[g]) {
+				windMeshes.erase(key);
+				return nullptr;
+			}
+		}
+		// the refits' scratch: a region per structure (a bigger buffer when it doesn't fit)
+		for (uint32_t g = 0; g < WIND_GROUPS; g++) {
+			wm.scratchOffset[g] = windScratchNeed;
+			windScratchNeed += (wm.blas[g]->GetScratchBufferSizes().Update + 255) & ~255ull;
+		}
+		if (!windScratch || windScratch->GetDesc().Size < windScratchNeed) {
+			BufferDesc sd;
+			sd.Name = "Tree wind scratch";
+			sd.Size = std::max<uint64_t>(windScratchNeed + windScratchNeed / 2, 1 << 20);
+			sd.BindFlags = BIND_RAY_TRACING;
+			windScratch.Release();
+			device->CreateBuffer(sd, nullptr, &windScratch);
+		}
+		// bent as now, built in full
+		windDispatch(ctx, wm);
+		const Uint64 need = wm.blas[0]->GetScratchBufferSizes().Build;
+		if (!scratch || scratch->GetDesc().Size < need) {
+			BufferDesc sd;
+			sd.Name = "BLAS scratch";
+			sd.Size = std::max<Uint64>(need, 1 << 20);
+			sd.BindFlags = BIND_RAY_TRACING;
+			scratch.Release();
+			device->CreateBuffer(sd, nullptr, &scratch);
+		}
+		std::vector<BLASBuildTriangleData> data;
+		for (uint32_t g = 0; g < WIND_GROUPS; g++) {
+			data = wm.data;
+			for (auto& d : data)
+				d.VertexOffset += (uint64_t)g * wm.stride * 12;
+			BuildBLASAttribs ba;
+			ba.pBLAS = wm.blas[g];
+			ba.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+			ba.GeometryTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+			ba.pTriangleData = data.data();
+			ba.TriangleDataCount = (Uint32)data.size();
+			ba.pScratchBuffer = scratch;
+			ba.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+			ctx->BuildBLAS(ba);
+			blasGeometryBase[wm.blas[g].RawPtr()] = base;
+		}
+		std::vector<StateTransitionDesc> barriers;
+		for (auto& b : wm.blas)
+			barriers.push_back(StateTransitionDesc(b, RESOURCE_STATE_UNKNOWN, RESOURCE_STATE_BUILD_AS_READ, STATE_TRANSITION_FLAG_UPDATE_STATE));
+		ctx->TransitionResourceStates((Uint32)barriers.size(), barriers.data());
+		structuresChanged = true;
+		printf("Tree wind: a mesh of %u vertices bent for its shadows (%zu meshes, %.1f MiB of refit scratch)\n", wm.vertexCount, windMeshes.size(), windScratchNeed / 1048576.0);
+		it = windMeshes.find(key);
+	}
+	WindMesh& wm = it->second;
+	wm.lastUse = frameCounter;
+	if (collectingStill)
+		wm.inStill = true;
+	return wm.blas[group % WIND_GROUPS].RawPtr();
+}
+
 void DiligentRayShadows::add(IBottomLevelAS* b, const Matrix& transform)
 {
-	if (b)
-		instances.push_back({ b, transform, blasGeometryBase[b] });
+	if (!b)
+		return;
+	if (b != lastAdded) {
+		lastAdded = b;
+		lastAddedBase = blasGeometryBase[b];
+	}
+	instances.push_back({ b, transform, lastAddedBase });
 }
 
 void DiligentRayShadows::build(IDeviceContext* ctx)
 {
-	lastInstanceCount = instances.size();
-	built = false;
-	const bool withTerrain = terrainBlas != nullptr;
-	if (instances.empty() && !withTerrain)
+	lastInstanceCount = instances.size() + stillCasters;
+	const bool withTerrain = false; // (in the still structure: setForest)
+	// the same casters as the last build: its structure stays (with 30,000 trees the build took
+	// 10-20 ms a frame on the CPU; a forest doesn't move)
+	if (built && !structuresChanged && builtTerrain == terrainBlas.RawPtr() && instances.size() == builtInstances.size()) {
+		bool same = true;
+		for (size_t i = 0; i < instances.size() && same; i++) {
+			const Instance& a = instances[i];
+			const Instance& b = builtInstances[i];
+			same = a.blas == b.blas && a.geometryBase == b.geometryBase && memcmp(&a.transform, &b.transform, sizeof(Matrix)) == 0;
+		}
+		if (same) {
+			uploadAlpha(ctx);
+			built = movingBuilt || stillBuilt;
+			return;
+		}
+	}
+	movingBuilt = false;
+	built = stillBuilt;
+	structuresChanged = false;
+	builtInstances = instances;
+	builtTerrain = terrainBlas.RawPtr();
+	if (instances.empty() && !withTerrain) {
+		uploadAlpha(ctx);
 		return;
+	}
 	const Uint32 count = (Uint32)instances.size() + (withTerrain ? 1 : 0);
 	if (count > tlasCapacity) {
 		tlasCapacity = std::max<Uint32>(count * 2, 1024);
@@ -589,7 +976,140 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 	ta.BindingMode = HIT_GROUP_BINDING_MODE_PER_TLAS;
 	ctx->BuildTLAS(ta);
 	uploadAlpha(ctx);
+	movingBuilt = true;
 	built = true;
+}
+
+void DiligentRayShadows::setForest(IDeviceContext* ctx, const Forest* forest, bool rebuilt, const std::vector<uint32_t>& changed,
+	const std::function<IBottomLevelAS*(const ForestTree&)>& blasOf)
+{
+	const uint32_t slots = forest ? (uint32_t)forest->trees.size() : 0;
+	stillAge++;
+	if (!changed.empty())
+		stillPending = true;
+	bool full = rebuilt || slots != stillSlots || stillTerrain != terrainBlas.RawPtr() || !stillTlas || stillWind != windOn();
+	// the slots changed are taken in at most every 30 frames (with 30,000 trees an update costs a
+	// few ms): a tree felled keeps its shadow for up to half a second; a tree's model not ready
+	// (its leaves' texture not uploaded yet) is tried again as often
+	if (!full && !((stillPending || stillMissing) && stillAge >= 30))
+		return;
+	if (stillMissing)
+		full = true;
+	stillAge = 0;
+	stillPending = false;
+	stillMissing = 0;
+	stillSlots = slots;
+	stillTerrain = terrainBlas.RawPtr();
+	stillWind = windOn();
+	// (the trees' bent structures in it: bent every frame)
+	for (auto& wm : windMeshes)
+		wm.second.inStill = false;
+	collectingStill = true;
+	// the instances: a slot each (a tree gone or without a shadow: masked out), then the terrain
+	IBottomLevelAS* any = terrainBlas.RawPtr();
+	std::vector<IBottomLevelAS*> blasOfSlot(slots, nullptr);
+	stillCasters = 0;
+	for (uint32_t i = 0; i < slots; i++) {
+		const ForestTree& t = forest->trees[i];
+		const bool gone = !t.model || (t.hidden && !t.lifted);
+		if (gone)
+			continue;
+		IBottomLevelAS* b = blasOf(t);
+		if (!b) {
+			stillMissing++;
+			continue;
+		}
+		if (!(t.flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+			continue;
+		blasOfSlot[i] = b;
+		any = any ? any : b;
+		stillCasters++;
+	}
+	collectingStill = false;
+	const bool withTerrain = terrainBlas != nullptr;
+	const Uint32 count = slots + (withTerrain ? 1 : 0);
+	if (!any || count == 0 || (stillCasters == 0 && !withTerrain)) {
+		stillBuilt = false;
+		built = movingBuilt;
+		return;
+	}
+	// a full build when the slots or the terrain changed, else an update (the same instances,
+	// their structures, places and masks changed)
+	if (stillBuilt && stillCount != count)
+		full = true;
+	if (full && count > stillCapacity) {
+		stillCapacity = count + count / 4 + 64;
+		TopLevelASDesc td;
+		td.Name = "Still shadow casters";
+		td.MaxInstanceCount = stillCapacity;
+		td.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE | RAYTRACING_BUILD_AS_ALLOW_UPDATE;
+		stillTlas.Release();
+		device->CreateTLAS(td, &stillTlas);
+		if (!stillTlas) {
+			stillBuilt = false;
+			built = movingBuilt;
+			return;
+		}
+		BufferDesc ib;
+		ib.Name = "Still TLAS instances";
+		ib.Size = (Uint64)TLAS_INSTANCE_DATA_SIZE * stillCapacity;
+		ib.BindFlags = BIND_RAY_TRACING;
+		stillInstanceBuffer.Release();
+		device->CreateBuffer(ib, nullptr, &stillInstanceBuffer);
+		BufferDesc sd;
+		sd.Name = "Still TLAS scratch";
+		sd.Size = std::max(stillTlas->GetScratchBufferSizes().Build, stillTlas->GetScratchBufferSizes().Update);
+		sd.BindFlags = BIND_RAY_TRACING;
+		stillScratch.Release();
+		device->CreateBuffer(sd, nullptr, &stillScratch);
+	}
+	while (stillNames.size() < count)
+		stillNames.push_back("s" + std::to_string(stillNames.size()));
+	std::vector<TLASBuildInstanceData> data(count);
+	for (uint32_t i = 0; i < slots; i++) {
+		TLASBuildInstanceData& d = data[i];
+		d.InstanceName = stillNames[i].c_str();
+		IBottomLevelAS* b = blasOfSlot[i];
+		d.pBLAS = b ? b : any;
+		const Matrix& m = forest->trees[i].transform;
+		if (b) {
+			for (int r = 0; r < 3; r++) {
+				for (int c = 0; c < 3; c++)
+					d.Transform.data[r][c] = m.m[c][r];
+				d.Transform.data[r][3] = m.m[3][r];
+			}
+		}
+		d.Mask = b ? 0x01 : 0x00;
+		d.CustomId = b ? blasGeometryBase[b] : 0;
+		d.Flags = RAYTRACING_INSTANCE_TRIANGLE_FACING_CULL_DISABLE; // leaves seen from either side
+	}
+	if (withTerrain) {
+		// in world space already; opaque, so its CustomId isn't read
+		TLASBuildInstanceData& d = data[count - 1];
+		d.InstanceName = stillNames[count - 1].c_str();
+		d.pBLAS = terrainBlas;
+		d.Transform = InstanceMatrix{};
+		d.Mask = 0x02;
+		d.CustomId = 0;
+		d.Flags = RAYTRACING_INSTANCE_NONE;
+	}
+	BuildTLASAttribs ta;
+	ta.pTLAS = stillTlas;
+	ta.TLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.pInstances = data.data();
+	ta.InstanceCount = count;
+	ta.pInstanceBuffer = stillInstanceBuffer;
+	ta.InstanceBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.pScratchBuffer = stillScratch;
+	ta.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.BindingMode = HIT_GROUP_BINDING_MODE_PER_TLAS;
+	ta.Update = !full && stillBuilt;
+	ctx->BuildTLAS(ta);
+	stillCount = count;
+	stillBuilt = true;
+	built = true;
+	uploadAlpha(ctx);
 }
 
 void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain, uint64_t version)
@@ -604,6 +1124,7 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 	terrainKey = terrain;
 	terrainVersion = version;
 	terrainBlas.Release();
+	structuresChanged = true;
 	// the vertices as the terrain renderer places them: (x - edge, z - edge) tiles of 5 units
 	const int w = terrain->width, h = terrain->height;
 	const uint32_t vertexCount = (uint32_t)(w + 1) * (h + 1);
@@ -738,7 +1259,7 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		mask.Release();
 		device->CreateTexture(td, nullptr, &mask);
 	}
-	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer
+	if (!srb || boundDepth != depth || boundTlas != primary() || boundTlas2 != secondary() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer
 		|| boundHeights != heights) {
 		srb.Release();
 		signature->CreateShaderResourceBinding(&srb, true);
@@ -748,11 +1269,13 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		// (without the terrain's heights the depth stands in, unread: SunDir.w is 0)
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tHeights")->Set(heights ? heights : depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		boundHeights = heights;
-		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(srb);
 		maskAlphaVersion = alphaVersion;
 		boundDepth = depth;
-		boundTlas = tlas;
+		boundTlas = primary();
+		boundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(constants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
@@ -789,6 +1312,7 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 			{ SHADER_TYPE_PIXEL, "tScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -859,17 +1383,19 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 		if (!reflections)
 			return nullptr;
 	}
-	if (!reflectSrb || reflectBound[0] != scene || reflectBound[1] != sceneDepth || reflectBoundTlas != tlas.RawPtr() || reflectAlphaVersion != alphaVersion) {
+	if (!reflectSrb || reflectBound[0] != scene || reflectBound[1] != sceneDepth || reflectBoundTlas != primary() || reflectBoundTlas2 != secondary() || reflectAlphaVersion != alphaVersion) {
 		reflectSrb.Release();
 		reflectSignature->CreateShaderResourceBinding(&reflectSrb, true);
 		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tScene")->Set(scene->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(reflectSrb);
 		reflectAlphaVersion = alphaVersion;
 		reflectBound[0] = scene;
 		reflectBound[1] = sceneDepth;
-		reflectBoundTlas = tlas;
+		reflectBoundTlas = primary();
+		reflectBoundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(reflectConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
@@ -898,6 +1424,7 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 // shaders' sky and ground. Without the normal maps (the shape's normal from the depth).
 static const char modelReflShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D<float> tDepth;
 Texture2D tScene;
 SamplerState sLinear;
@@ -963,9 +1490,20 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+	bool any = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+	float t = any ? rq.CommittedRayT() : ray.TMax;
+	RayDesc ray2 = ray;
+	ray2.TMax = t;
+	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0x01, ray2);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	if (rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+		any = true;
+		t = rq2.CommittedRayT();
+	}
+	if (!any)
 		return float4(0, 0, 0, 0);
-	float3 hit = ray.Origin + r * rq.CommittedRayT();
+	float3 hit = ray.Origin + r * t;
 	// in sight now: the hit's depth against the pre-pass's where it is on the screen
 	float seen = 0.35;
 	float4 c = mul(float4(hit, 1), ViewProj);
@@ -1001,6 +1539,7 @@ ITextureView* DiligentRayShadows::renderModelReflections(IDeviceContext* ctx, IT
 			{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1083,18 +1622,20 @@ ITextureView* DiligentRayShadows::renderModelReflections(IDeviceContext* ctx, IT
 		if (!modelRefl)
 			return nullptr;
 	}
-	if (!modelReflSrb || modelReflBound[0] != depth || modelReflBound[1] != prevScene || modelReflBoundTlas != tlas.RawPtr()
+	if (!modelReflSrb || modelReflBound[0] != depth || modelReflBound[1] != prevScene || modelReflBoundTlas != primary() || modelReflBoundTlas2 != secondary()
 		|| modelReflAlphaVersion != alphaVersion) {
 		modelReflSrb.Release();
 		modelReflSignature->CreateShaderResourceBinding(&modelReflSrb, true);
 		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tScene")->Set(prevScene->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(modelReflSrb);
 		modelReflAlphaVersion = alphaVersion;
 		modelReflBound[0] = depth;
 		modelReflBound[1] = prevScene;
-		modelReflBoundTlas = tlas;
+		modelReflBoundTlas = primary();
+		modelReflBoundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(modelReflConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);

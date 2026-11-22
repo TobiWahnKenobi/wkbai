@@ -3,6 +3,7 @@
 // Licensed under the GNU General Public License 3
 
 #include "Order.h"
+#include <functional>
 #include <set>
 #include <map>
 #include <algorithm>
@@ -22,11 +23,13 @@
 #include "gameset/GameObjBlueprint.h"
 #include "NNSearch.h"
 #include "util/StriCompare.h"
+#include "AIUtil.h"
 #include <SDL3/SDL_timer.h>
 #include <cstdio>
 #include <cstdlib>
 #include "Model.h"
 #include "PeasantLodging.h"
+#include "gameset/command.h"
 #include <map>
 #include <cstdio>
 
@@ -289,6 +292,19 @@ void Task::start()
 			}
 		}
 	}
+	// An object-reference task without a target, a task target or a proximity, whose work is its
+	// start sequence (TASK "Disband Formation into Group": DISBAND_FORMATION FINDER_SELF, the
+	// formation's Disband button, an order given with no target): the sequence runs and the task
+	// ends. Without, it waited for a target that never came and the button did nothing (the play
+	// test of 2026-11-19).
+	else if (blueprint->classType == Tags::ORDTSKTYPE_OBJECT_REFERENCE && !blueprint->taskTarget && !blueprint->usePreviousTaskTarget
+		&& !blueprint->proximityRequirement && !blueprint->startSequence.actionList.empty()) {
+		this->blueprint->startSequence.run(order->gameObject);
+		this->startSequenceExecuted = true;
+		if (this->isWorking())
+			this->terminate();
+		return;
+	}
 	this->onStart();
 }
 
@@ -303,8 +319,11 @@ static void TraceTask(const Task* task, const char* what)
 	static const unsigned id = (unsigned)strtoul(env, nullptr, 10);
 	if (!task->order || !task->order->gameObject || task->order->gameObject->id != id)
 		return;
-	printf("TASK t=%.2f %u \"%s\": %s\n", Server::instance->timeManager.currentTime, id,
-		Server::instance->gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), what);
+	const ServerGameObject* go = task->order->gameObject;
+	const ServerGameObject* t = task->target.get();
+	printf("TASK t=%.2f %u \"%s\": %s (at %.0f, %.0f; target %s #%u at %.0f, %.0f)\n", Server::instance->timeManager.currentTime, id,
+		Server::instance->gameSet->tasks.names.getString(task->blueprint->bpid).c_str(), what, go->position.x, go->position.z,
+		t ? t->blueprint->name.c_str() : "none", t ? t->id : 0u, t ? t->position.x : 0.0f, t ? t->position.z : 0.0f);
 }
 
 void Task::suspend()
@@ -433,15 +452,68 @@ std::unique_ptr<Task> Task::create(int id, const TaskBlueprint* blueprint, Order
 
 
 
+bool ImprovedFormations(); // FormationController.cpp
+bool IsRangedUnit(const ServerGameObject* unit); // FormationController.cpp
+
 Order* OrderConfiguration::addOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
 	if (gameobj->flags & CommonGameObject::fTerminated)
 		return nullptr;
+	// a formation given an order on its own member (Follow, Guard, Attack: a right-click inside it)
+	// went round in circles after the member it carried along (the play test's FormationBug1
+	// save, 2026-11-19): refused
+	if (target && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && target->getParent() == gameobj)
+		return nullptr;
+	// no training in a formation, for the formation or a member of it (the play test of 2026-11-20)
+	if (orderBlueprint && Server::instance && Server::instance->gameSet
+		&& (gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION
+			|| (gameobj->parent && gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION))) {
+		const std::string& name = Server::instance->gameSet->orders.getString(orderBlueprint);
+		if (name == "Train" || name == "Train near Selected Dummy")
+			return nullptr;
+	}
+	// Improved formations: a ranged member of a formation sent to fight with the melee "Attack" (the
+	// Formation Army's "Attack Victims", a mixed formation charging) takes its own attack's order
+	// instead (its DEFAULT_ATTACK_COMMAND's: Fire Arrow, Fire Bullet), so it shoots rather than
+	// runs in with the melee
+	if (target && orderBlueprint && gameobj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && gameobj->parent
+		&& gameobj->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && Server::instance && Server::instance->gameSet) {
+		static const GameSet* of = nullptr;
+		static int attackOrder = -1;
+		const GameSet* gs = Server::instance->gameSet.get();
+		if (of != gs) {
+			of = gs;
+			attackOrder = gs->orders.names.getIndex("Attack");
+		}
+		// (the command's USE_ORDER, or the order of its name: "Fire Arrow" has none and runs a start
+		// sequence that sends its archer to an army, Mechanics\Fire Arrow.cpp; its order "Fire
+		// Arrow" shoots)
+		if (orderBlueprint->bpid == attackOrder && ImprovedFormations() && IsRangedUnit(gameobj)) {
+			const int dac = gameobj->blueprint->defaultAttackCommand;
+			const Command* cmd = gs->commands.getPointer(dac);
+			if (cmd && cmd->order)
+				orderBlueprint = cmd->order;
+			else if (const int byName = gs->orders.names.getIndex(gs->commands.names.getString(dac)); byName >= 0)
+				orderBlueprint = &gs->orders[byName];
+		}
+	}
 	return assignOrder(orderBlueprint, assignMode, target, destination, startNow);
 }
 
+// the profiling test's parts of assignOrder (with g_actionProfile): conditions, cancelling the
+// orders before, making the tasks, init, start, the building order count (ms)
+double g_assignOrderMs[6] = {};
+
 Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int assignMode, ServerGameObject *target, const Vector3 &destination, bool startNow)
 {
+	extern bool g_actionProfile;
+	uint64_t lapAt = g_actionProfile ? SDL_GetPerformanceCounter() : 0;
+	auto lap = [&](int part) {
+		if (!g_actionProfile) return;
+		const uint64_t now = SDL_GetPerformanceCounter();
+		g_assignOrderMs[part] += (double)(now - lapAt) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+		lapAt = now;
+	};
 	// a peasant on its way into its shelter for the night or winter, inside or waiting for one
 	// (PeasantLodging) takes no orders but the lodging's own: not the player's, the AI's or the
 	// scripts' (a dying one's "Die" still)
@@ -486,6 +558,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		}
 	}
 
+	lap(0);
 	Order* neworder;
 	bool orderInFront = false;
 	switch (assignMode) {
@@ -525,6 +598,7 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 		neworder = &this->orders.back();
 		break;
 	}
+	lap(1);
 	for (TaskBlueprint* taskBp : orderBlueprint->tasks) {
 		int id = neworder->nextTaskId++;
 		neworder->tasks.push_back(Task::create(id, taskBp, neworder));
@@ -535,10 +609,14 @@ Order* OrderConfiguration::assignOrder(const OrderBlueprint* orderBlueprint, int
 	if (destination.x >= 0.0f) {
 		neworder->tasks.at(0)->destination = destination;
 	}
+	lap(2);
 	neworder->init();
+	lap(3);
 	if (orderInFront && startNow) // start order (and first task) immediately if no other working order behind
 		neworder->start();
+	lap(4);
 	this->gameobj->updateBuildingOrderCount(orderBlueprint);
+	lap(5);
 	return neworder;
 }
 
@@ -1047,6 +1125,198 @@ void MissileTask::onUpdate()
 
 void AttackWallInTheWay(ServerGameObject* unit, ServerGameObject* target);
 
+// A formation's first character; a character itself; else none. (Not through armies: with a
+// "Formation Army" ending its attack on the scout, the Kingmaker's scripts sent its formations
+// back at once and they stood on the slope, PERFORMANCE save, 2026-11-18.)
+static ServerGameObject* FirstCharacter(ServerGameObject* obj, int depth = 0)
+{
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+		return obj->deleted ? nullptr : obj;
+	if (depth > 3 || obj->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION)
+		return nullptr;
+	for (const auto& [type, children] : obj->children)
+		for (CommonGameObject* c : children)
+			if (ServerGameObject* m = FirstCharacter((ServerGameObject*)c, depth + 1))
+				return m;
+	return nullptr;
+}
+
+// Whether an attacker can never get within `reach` metres of a point: no tile that close lies in
+// the attacker's terrain region (the ground its movement class can stand on, 8-connected; from
+// the terrain alone, buildings only block more, so another region is out of reach for good). A
+// formation goes by its first member. The AI play test of 2026-11-16: a scout on a hilltop no
+// spearman could climb drew every army of the enemy's, which stood at the foot of the slope (or
+// formed up and broke again) for the rest of the game. Ranged units find a reachable tile within
+// their range, and shoot.
+
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach);
+
+// Improved formations: one character for each kind of member (movement class, ranged or not),
+// through formations (and the armies under an army: throughArmies), each kind's first in the
+// children's order
+static void MemberKinds(ServerGameObject* obj, bool throughArmies, std::map<int, ServerGameObject*>& kinds, int depth = 0)
+{
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		if (!obj->deleted)
+			kinds.emplace(MovementController::movementClass(obj->blueprint) * 2 + (IsRangedUnit(obj) ? 1 : 0), obj);
+		return;
+	}
+	if (depth > 4 || !(obj->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION || (throughArmies && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)))
+		return;
+	for (const auto& [type, children] : obj->children)
+		for (CommonGameObject* c : children)
+			MemberKinds((ServerGameObject*)c, throughArmies, kinds, depth + 1);
+}
+
+// a mixed formation's (or army's) target is out of reach when no kind of its members can get
+// within its own reach of it (a ranged one 30 m, else 3 m): the spearmen below a hilltop scout
+// don't end the formation's attack while its archers can shoot at it. A few kinds at most, one
+// region test each.
+static bool KindsOutOfReach(ServerGameObject* obj, const Vector3& point, bool throughArmies)
+{
+	std::map<int, ServerGameObject*> kinds;
+	MemberKinds(obj, throughArmies, kinds);
+	if (kinds.empty())
+		return false;
+	for (const auto& [kind, rep] : kinds)
+		if (!OutOfReach(rep, point, IsRangedUnit(rep) ? 30.0f : 3.0f))
+			return false;
+	return true;
+}
+
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach)
+{
+	if (unit->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && ImprovedFormations())
+		return KindsOutOfReach(unit, point, false);
+	ServerGameObject* mover = FirstCharacter(unit);
+	if (!mover)
+		return false;
+	const int cls = MovementController::movementClass(mover->blueprint);
+	const int own = MovementController::terrainRegion(cls, (int)(mover->position.x / 5.0f), (int)(mover->position.z / 5.0f));
+	if (own < 0)
+		return false; // standing where its class can't (pushed, spawned): no judgement
+	const int r = std::clamp((int)std::ceil(reach / 5.0f), 1, 12);
+	const int cx = (int)(point.x / 5.0f), cz = (int)(point.z / 5.0f);
+	for (int dz = -r; dz <= r; dz++)
+		for (int dx = -r; dx <= r; dx++) {
+			// the tile's nearest point within reach of the point
+			const float nx = std::clamp(point.x, (cx + dx) * 5.0f, (cx + dx + 1) * 5.0f), nz = std::clamp(point.z, (cz + dz) * 5.0f, (cz + dz + 1) * 5.0f);
+			if ((nx - point.x) * (nx - point.x) + (nz - point.z) * (nz - point.z) > reach * reach)
+				continue;
+			if (MovementController::terrainRegion(cls, cx + dx, cz + dz) == own)
+				return false;
+		}
+	return true;
+}
+
+// (gameset/actions.cpp, an AI army's victims) whether an army's soldiers can never get within
+// reach of the target: its first character, through its formations and the armies under it (an
+// archer's 30 m, else 3 m). A target that isn't a character or formation (a building: walls and
+// gates are attacked from beside them) is always in reach.
+bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target)
+{
+	if (!army || !target || (target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER && target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION))
+		return false;
+	if (ImprovedFormations())
+		return KindsOutOfReach(army, target->position, true);
+	std::function<ServerGameObject*(ServerGameObject*, int)> first = [&](ServerGameObject* o, int depth) -> ServerGameObject* {
+		if (o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+			return o->deleted ? nullptr : o;
+		if (depth > 4 || (o->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION && o->blueprint->bpClass != Tags::GAMEOBJCLASS_ARMY))
+			return nullptr;
+		for (const auto& [type, children] : o->children)
+			for (CommonGameObject* c : children)
+				if (ServerGameObject* m = first((ServerGameObject*)c, depth + 1))
+					return m;
+		return nullptr;
+	};
+	ServerGameObject* m = first(army, 0);
+	return m && OutOfReach(m, target->position, AIUtil::ClassOf(m) == 2 ? 30.0f : 3.0f);
+}
+
+// Kiting (the AI play test of 2026-11-16: "Formation/groups from the enemy chase always the same
+// nearest target", so one fast unit led them around the map). wkbai's: an AI player's unit that
+// walks after a moving enemy character and hasn't come a metre nearer in 12 s gives up; for 30 s
+// it, its formation and its armies leave that enemy out of their victims (actions.cpp) and the
+// ministries' choices (AIUtil::CanReach). By the clock, every 2 s per unit; kept for this game
+// only (not saved: a loaded game forgets a chase under way and the last 30 s of give-ups).
+namespace {
+	struct Chase { float checkAt = 0.0f, best = 0.0f, since = 0.0f; };
+	std::map<std::pair<uint32_t, uint32_t>, Chase> s_chases;
+	std::map<std::pair<uint32_t, uint32_t>, float> s_gaveUp;
+	uint64_t s_chaseGame = 0;
+	void ChaseTablesForThisGame()
+	{
+		const uint64_t serial = Server::instance && Server::instance->gameSet ? Server::instance->gameSet->serial : 0;
+		if (s_chaseGame != serial) {
+			s_chaseGame = serial;
+			s_chases.clear();
+			s_gaveUp.clear();
+		}
+	}
+}
+constexpr float CHASE_CHECK = 2.0f, CHASE_PATIENCE = 12.0f, GAVE_UP_FOR = 30.0f;
+
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target)
+{
+	if (!holder || !target)
+		return false;
+	ChaseTablesForThisGame();
+	auto it = s_gaveUp.find({ holder->id, target->id });
+	return it != s_gaveUp.end() && Server::instance->timeManager.currentTime < it->second + GAVE_UP_FOR;
+}
+
+static bool ChaseGivesUp(ServerGameObject* go, ServerGameObject* target)
+{
+	ServerGameObject* player = go->getPlayer();
+	if (!target || go->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER
+		|| !player || !player->aiController.isAI() || !AIUtil::IsEnemy(player, target))
+		return false;
+	ChaseTablesForThisGame();
+	const float now = Server::instance->timeManager.currentTime;
+	const std::pair<uint32_t, uint32_t> key{ go->id, target->id };
+	// only while both walk: a unit at its target, or one standing, isn't chasing
+	if (!go->movementController.isMoving() || !target->movementController.isMoving()) {
+		s_chases.erase(key);
+		return false;
+	}
+	const float d = (target->position - go->position).len2xz();
+	auto [it, fresh] = s_chases.try_emplace(key);
+	Chase& c = it->second;
+	if (fresh) {
+		c.checkAt = now + CHASE_CHECK;
+		c.best = d;
+		c.since = now;
+		return false;
+	}
+	if (now < c.checkAt)
+		return false;
+	c.checkAt = now + CHASE_CHECK;
+	if (d < c.best - 1.0f) {
+		c.best = d;
+		c.since = now;
+		return false;
+	}
+	if (now - c.since < CHASE_PATIENCE)
+		return false;
+	s_chases.erase(key);
+	for (ServerGameObject* o = go; o && o->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER; o = o->getParent())
+		s_gaveUp[{ o->id, target->id }] = now;
+	return true;
+}
+
+// The reach an attacker needs to get within, from a task's range: a melee unit's (not an
+// archer's) at most 3 m. A "Move To Attack Range" walk has a 10 m range before the attack takes
+// over, and slope tiles within 10 m of a hilltop scout let a spearman stand 31 m below it for good
+// (the play test's PERFORMANCE2 save, 2026-11-17).
+static float MeleeReachCap(ServerGameObject* unit, float reach)
+{
+	ServerGameObject* m = FirstCharacter(unit);
+	if (!m || AIUtil::ClassOf(m) == 2)
+		return reach;
+	return std::min(reach, 3.0f);
+}
+
 void MoveTask::onStart()
 {
 }
@@ -1074,8 +1344,23 @@ void MoveTask::onUpdate()
 	}
 	// (a second between searches that found no way, as ObjectReferenceTask's; a search runs at
 	// the end of the step, and its unit is moving, pending, until then)
-	if (go->movementController.takeSearchFailed())
+	const bool searchFailed = go->movementController.takeSearchFailed();
+	if (searchFailed)
 		nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+	// A walk to an enemy (the Attack order's "Move To Attack Range") that ended short of a target
+	// it can never get within reach of (OutOfReach; a melee unit's 3 m): the task ends, and the
+	// whole order, as if the target were gone. A spearman stood 31 m below a hilltop scout for
+	// good, searching once a second (the play test's PERFORMANCE2 save, 2026-11-17).
+	if (this->target && !go->movementController.isMoving() && go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), this->target.get())
+		&& (searchFailed || (destination - dest).len2xz() > 2.0f)) {
+		const float need = MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f);
+		if (ServerGameObject* fc = FirstCharacter(go); fc && (this->target->position - fc->position).len2xz() > need && OutOfReach(go, this->target->position, need)) {
+			TraceTask(this, "walk ended short of a target out of reach: the order ends");
+			terminate();
+			order->terminate();
+			return;
+		}
+	}
 	if (!go->movementController.isMoving() && Server::instance->timeManager.currentTime >= nextMoveAttempt) {
 		destination = go->movementController.startMovement(dest);
 		if (!go->movementController.isMoving())
@@ -1543,6 +1828,47 @@ void ObjectReferenceTask::onUpdate()
 		}
 		if (arrived) {
 			shortWalks = 0;
+			// A formation "in range" of an enemy its members can never reach: its range counts from
+			// its centre and is wide, so the walk ends at once, satisfied, while its spearmen stand
+			// at the foot of a slope below a scout (the Kingmaker's "Move To Attack Range Of
+			// Original Victim", started again every 4 s all game: the play test of 2026-11-16).
+			// By the members' own reach (an archer's 30 m, else 3 m) the task ends as if the target
+			// were gone. (Out of reach by the terrain alone: a target behind a wall stays in reach,
+			// and the wall in the way is attacked, AttackWallInTheWay.)
+			// A unit "there" where its walk ended short (arrival counts from the walk's end, not the
+			// target): a spearman 31 m below a hilltop scout stood in "Move To Attack Range" for good
+			// (the play test's PERFORMANCE2 save, 2026-11-17). Once a second, by its id, from the
+			// clock alone (a loaded game checks at the same steps), out of a melee unit's 3 m or the
+			// task's range for an archer: the task ends as if the target were gone.
+			const int cl = go->blueprint->bpClass;
+			if (cl == Tags::GAMEOBJCLASS_CHARACTER
+				&& !go->movementController.isMoving() && go->getPlayer()
+				&& ((uint32_t)(Server::instance->timeManager.currentTime * 20.0f + 0.5f) + go->id) % 20 == 0
+				&& AIUtil::IsEnemy(go->getPlayer(), target.get())) {
+				const float need = MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f);
+				if (ServerGameObject* fc = FirstCharacter(go); fc && (target->position - fc->position).len2xz() > need && OutOfReach(go, target->position, need)) {
+					TraceTask(this, "arrived short of a target out of reach: the task ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
+			}
+			if (go->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION && !proximitySatisfied && go->getPlayer()
+				&& AIUtil::IsEnemy(go->getPlayer(), target.get())) {
+				const ServerGameObject* first = nullptr;
+				for (const auto& [type, children] : go->children)
+					for (CommonGameObject* c : children)
+						if (!first && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+							first = (const ServerGameObject*)c;
+				if (first && OutOfReach(go, target->position, AIUtil::ClassOf(first) == 2 ? 30.0f : 3.0f)) {
+					TraceTask(this, "target out of the members' reach: the task ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
+			}
 			// A task loaded as satisfied whose triggers hadn't started, on a standing unit and aimed
 			// at a building: WKB.exe runs its PROXIMITY_SATISFIED_SEQUENCE on the first tick
 			// (0x50d1e0), before the triggers. A cart loaded in "Wait to Collect Resources from
@@ -1619,6 +1945,51 @@ void ObjectReferenceTask::onUpdate()
 				const bool searchFailed = go->movementController.takeSearchFailed();
 				if (searchFailed)
 					nextMoveAttempt = Server::instance->timeManager.currentTime + 1.0f;
+				// A target no walk gets to (not a building: those end the order after five short walks
+				// below; not a character or formation, which move; not an enemy): the search failed with
+				// the start and the target's tile free, four times running. On 3 Isles a woodcutter's
+				// fallen tree stood in a pocket of the forest that closed after it had chopped there; it
+				// searched again every second for 30 minutes, and so did 33 others, while their player
+				// starved (wkbai's; no WKB.exe rule was traced for it). The target is marked unreachable
+				// for two minutes (the nearest-to-satisfy finders pass it by) and dropped: the task looks
+				// for another (its TASK_TARGET finder), or ends as one without a target.
+				if (go->movementController.isMoving())
+					failedSearches = 0;
+				else if (searchFailed && blueprint->classType != Tags::ORDTSKTYPE_ATTACK
+					&& target->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING && target->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER
+					&& target->blueprint->bpClass != Tags::GAMEOBJCLASS_FORMATION && !(go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), target.get()))
+					&& ++failedSearches >= 4) {
+					failedSearches = 0;
+					target->unreachableUntil = Server::instance->timeManager.currentTime + 120.0f;
+					TraceTask(this, "given up: no walk gets to the target (unreachable for 2 minutes)");
+					this->setTarget(nullptr);
+					this->proximitySatisfied = false;
+					return;
+				}
+				// an AI unit chasing an enemy it doesn't gain on gives up (ChaseGivesUp)
+				if (ChaseGivesUp(go, target.get())) {
+					TraceTask(this, "chase not gaining: the attack ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
+				// An attack (or a walk to an enemy: the Kingmaker formations' "Move To Attack Range
+				// Of Original Victim") whose walk ended short of a target it can never reach
+				// (OutOfReach: up a slope its class can't climb, across water): the task ends as if
+				// the target were gone, and the unit (or its AI's script) picks another, instead of
+				// standing there or searching again every second for the rest of the game (wkbai's;
+				// no WKB.exe rule was traced for it, docs/engine/ministry-ai.md step 16)
+				if ((blueprint->classType == Tags::ORDTSKTYPE_ATTACK || (go->getPlayer() && AIUtil::IsEnemy(go->getPlayer(), target.get())))
+					&& !go->movementController.isMoving()
+					&& (searchFailed || (destination - goal).len2xz() > 2.0f)
+					&& OutOfReach(go, goal, MeleeReachCap(go, std::max(this->proximity, 1.5f) + 1.0f))) {
+					TraceTask(this, "target out of reach: the attack ends");
+					terminate();
+					if (blueprint->terminateEntireOrderIfNoTarget)
+						order->terminate();
+					return;
+				}
 				// An attack whose walk ended out of range, a building in the way (WKB.exe 0x50dc50 ->
 				// 0x50e760): that building becomes the unit's "Attack Target" associate and it gets the
 				// event "Attack Wall Target" (the game set's "... Respond to Attack Wall Event" then
@@ -1914,13 +2285,13 @@ Vector3 FreeStandingSpot(ServerGameObject* unit, const Vector3& place)
 			for (int tx = nx0; tx <= nx1; tx++) {
 				if (tx >= bx0 && tx <= bx1 && tz >= bz0 && tz <= bz1)
 					continue; // taken in already
-				for (const auto& ref : server->tiles[(size_t)tz * w + tx].objList)
-					take((ServerGameObject*)server->findObject(ref.objid), false);
-				if (const std::vector<uint32_t>* walkers = MovementController::destCell(tx, tz)) {
-					for (uint32_t id : *walkers) {
-						ServerGameObject* other = (ServerGameObject*)server->findObject(id);
-						// (the index can hold a unit twice or one that has moved on: its own cell only, once)
-						if (!other || other->movementController.m_destCell != tz * w + tx)
+				// (the tile's pointers: objList's objects without looking each id up)
+				for (CommonGameObject* o : server->tiles[(size_t)tz * w + tx].objects)
+					take((ServerGameObject*)o, false);
+				if (const std::vector<ServerGameObject*>* walkers = MovementController::destCell(tx, tz)) {
+					for (ServerGameObject* other : *walkers) {
+						// (its own cell only, once)
+						if (other->movementController.m_destCell != tz * w + tx)
 							continue;
 						take(other, true);
 					}
@@ -2051,7 +2422,7 @@ void SpawnTask::onUpdate()
 	if (this->isDone()) {
 		ServerGameObject* obj = order->gameObject;
 		if (obj->getItem(Tags::PDITEM_HIT_POINTS_OF_OBJECT_BEING_SPAWNED) >= obj->getItem(Tags::PDITEM_HIT_POINT_CAPACITY_OF_OBJECT_BEING_SPAWNED)) {
-			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), SpawnSpot(obj), Vector3(0,0,0));
+			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), SpawnSpot(obj), Vector3(0,0,0), obj);
 			this->isSpawned = true;
 			if (obj->spawnedUnitCommand >= 0) {
 				const Command* command = &Server::instance->gameSet->commands[obj->spawnedUnitCommand];

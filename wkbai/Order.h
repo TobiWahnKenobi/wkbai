@@ -85,6 +85,9 @@ struct Task {
 	// sixth gives up (the play test: peasants stood at a foundation boxed in by other buildings,
 	// trying again every second, their queued orders never reached); wkbai's own
 	int shortWalks = 0;
+	// walk searches to a target (not a building, not an enemy) that failed one after the other
+	// (none since a walk started): the fourth marks it unreachable (unreachableUntil) and drops it
+	int failedSearches = 0;
 	// loaded from a save as having reached its target (PROXIMITY_SATISFIED 1): kept so until the
 	// task starts again or its target changes. The original's test 36 save has a cart "arrived"
 	// 28 m from its village's centre (15 m from its nearest delivery point), which the

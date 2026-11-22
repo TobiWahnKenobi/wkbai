@@ -18,6 +18,10 @@
 #include <functional>
 #include <set>
 #include <string_view>
+#include <map>
+#include <string>
+#include <typeinfo>
+#include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include "../util/SimRandom.h"
 
@@ -529,21 +533,39 @@ struct ActionCreateObjectVia : Action {
 	}
 };
 
+bool ArmyCannotReach(ServerGameObject* army, ServerGameObject* target); // Order.cpp
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target); // Order.cpp (kiting)
+
 struct ActionRegisterAssociates : Action {
 	std::unique_ptr<ObjectFinder> f_aors, f_ated;
 	int category;
+	// wkbai's: an AI army's "Units In Range I Should Attack" (the victims its formations go for,
+	// the Siege/Kingmaker armies' "What Units In Range Should I Attack?" reactions, by distance
+	// alone) leaves out enemies its soldiers can't get within reach of (ArmyCannotReach: a scout
+	// on a hilltop no spearman can climb). Three Kingmaker armies stood on the slope below one
+	// for good, "clearing" it every 4 s (the AI play test's PERFORMANCE3 save, 2026-11-18).
+	bool reachableOnly = false;
 	virtual void run(SrvScriptContext* ctx) override {
 		auto aors = f_aors->eval(ctx);
 		auto ated = f_ated->eval(ctx);
 		for (ServerGameObject *aor : aors) {
 			for (ServerGameObject *obj : ated)
-				aor->associateObject(category, obj);
+				if (!reachableOnly || (!ArmyCannotReach(aor, obj) && !RecentlyGaveUp(aor, obj)))
+					aor->associateObject(category, obj);
 		}
 	}
 	virtual void parse(GSFileParser & gsf, const GameSet & gs) override {
 		f_aors.reset(ReadFinder(gsf, gs));
 		category = gs.associations.readIndex(gsf);
 		f_ated.reset(ReadFinder(gsf, gs));
+		// (also a formation army's "Victims", "Enemy Units Within Formation Attack Range metres of
+		// Me" every 2.5 s, and a formation's "Original Victim": with the scout among them the
+		// Formation Army's attack never ended, its formation stood in "Wait" and the siege army's
+		// march to its next target found no idle formation to send, PERFORMANCE3)
+		if (category >= 0) {
+			const std::string& name = gs.associations.names.getString(category);
+			reachableOnly = name == "Units In Range I Should Attack" || name == "Victims" || name == "Original Victim";
+		}
 	}
 };
 
@@ -2614,13 +2636,32 @@ void ActionSequence::addActionFromGsf(GSFileParser& gsf, const GameSet& gs)
 	actionList.push_back(std::unique_ptr<Action>(ReadAction(gsf, gs)));
 }
 
+// the simulation profiling test ("detail"): the time per action type (its own, without the
+// actions it runs: an UPON_CONDITION's are theirs), ms
+bool g_actionProfile = false;
+std::map<std::string, double> g_actionMs;
+
 void ActionSequence::run(SrvScriptContext* ctx) const {
 	const bool hasDebugInfo = debugInfo.get();
+	extern uint64_t g_scriptWork;
+	g_scriptWork += actionList.size();
 	for (size_t i = 0; i < actionList.size(); ++i) {
 		if (hasDebugInfo) {
 			BreakpointManager::instance().checkAndBreak(debugInfo->fileIndex, debugInfo->actionLineIndices[i]);
 		}
-		actionList[i]->run(ctx);
+		if (g_actionProfile) {
+			static double inner = 0.0; // the time of the actions run inside the one running
+			const double saved = inner;
+			inner = 0.0;
+			const uint64_t start = SDL_GetPerformanceCounter();
+			actionList[i]->run(ctx);
+			const double took = (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+			const Action& a = *actionList[i];
+			g_actionMs[typeid(a).name()] += took - inner;
+			inner = saved + took;
+		}
+		else
+			actionList[i]->run(ctx);
 	}
 }
 

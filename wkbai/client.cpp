@@ -448,7 +448,7 @@ void Client::tick()
 					auto &vec = obj->parent->children.at(obj->blueprint);
 					vec.erase(std::find(vec.begin(), vec.end(), obj));
 					// remove from ID map
-					idmap.erase(obj->id);
+					idmapErase(obj->id);
 					// delete the object, bye!
 					delete obj;
 				}
@@ -759,6 +759,32 @@ void Client::tick()
 					if (treeMemory && obj->flags != flags)
 						treeMemory->beforeTreeChange(this, obj);
 					obj->flags = flags;
+				}
+				break;
+			}
+			case NETCLIMSG_OBJECT_ASSOCIATION: {
+				const uint8_t change = br.readUint8();
+				const uint32_t objid = br.readUint32();
+				const int category = (int)br.readUint32();
+				const uint32_t otherid = br.readUint32();
+				ClientGameObject* obj = findObject(objid);
+				if (!obj)
+					break;
+				if (change == 3) {
+					for (const CliGORef& ref : obj->associates[category])
+						if (ClientGameObject* other = ref.get())
+							other->associators[category].erase(obj);
+					obj->associates[category].clear();
+				}
+				else if (ClientGameObject* other = findObject(otherid)) {
+					if (change == 1) {
+						obj->associates[category].insert(other);
+						other->associators[category].insert(obj);
+					}
+					else {
+						obj->associates[category].erase(other);
+						other->associators[category].erase(obj);
+					}
 				}
 				break;
 			}
@@ -1613,7 +1639,7 @@ ClientGameObject * Client::createObject(const GameObjBlueprint * blueprint, uint
 {
 	ClientGameObject *obj = new ClientGameObject(id, blueprint);
 	assert(idmap[id] == nullptr);
-	idmap[id] = obj;
+	idmapSet(id, obj);
 	return obj;
 }
 

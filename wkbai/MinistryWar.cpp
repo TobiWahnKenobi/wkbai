@@ -15,8 +15,11 @@
 
 #include "MinistryDepartments.h"
 #include "AIUtil.h"
+#include "Naval.h"
+#include "PeasantLodging.h"
 #include "server.h"
 #include "gameset/gameset.h"
+#include "gameset/ScriptContext.h"
 #include "settings.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -72,7 +75,7 @@ namespace {
 			for (CommonGameObject* c : children) {
 				auto* p = (ServerGameObject*)c;
 				if (p != me && !p->deleted && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player"
-					&& !(p->flags & ServerGameObject::fTerminated) && AIUtil::IsEnemy(me, p)) {
+					&& !(p->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated)) && AIUtil::IsEnemy(me, p)) {
 					// (not an empty slot: the evaluations' "human" has nothing on the map, and four players,
 					// seed 9, a soldier walked to its start (0, 0) every 40 s from minute 19 to scout it)
 					bool any = false;
@@ -206,7 +209,25 @@ namespace {
 			for (ServerGameObject* e : enemies)
 				striking |= struck(e->id);
 			striking &= b.get("war.threats") == 0.0;
-			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f);
+			// no new attack while home is in danger (the warning, or the missions called home)
+			if (b.get("war.recall") > 0.0 || b.get("intel.approach") >= 5.0)
+				return;
+			// the night (peasant lodging, PeasantLodging.h): when most of the own peasants are going in
+			// or indoors, so are the enemy's (the same rule for every player, nothing seen needed).
+			// Their peasants can't come out as militia and none are in the fields: no raids, the next
+			// attack sooner and with a smaller margin (the lodging doc's "night waves" for the ministries)
+			bool night = false;
+			if (!(MinOff() & 65536)) {
+				int in = 0, all = 0;
+				for (ServerGameObject* p : AIUtil::Peasants(me)) {
+					all++;
+					in += p->lodging != LODGE_NONE && p->lodging != LODGE_RETURNING;
+				}
+				night = all >= 6 && in * 2 >= all;
+			}
+			b.report("war.night", night ? 1.0 : 0.0);
+			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f)
+				* (night ? 0.5f : 1.0f);
 			// (one more attack for every 30 free soldiers: in a stage-1 game 114 waited at home while two
 			// small missions were out)
 			const int freeNow = (int)b.get("war.available");
@@ -232,7 +253,15 @@ namespace {
 				uint8_t kind;
 				if (s.palace) { worth = 3.0f + 2.0f * c.siege; kind = Mission::PALACE; }
 				else if (s.building) { worth = 1.0f; kind = Mission::RAZE; }
-				else { worth = 0.6f + 1.4f * c.raiding; kind = Mission::RAID; }
+				else {
+					// (a raid only with 6 melee soldiers free: archers make none of the kills, improvement 4)
+					if (!(MinOff() & 4096) && b.get("war.availableMelee") < Tune("raidMelee", 6.0f))
+						continue;
+					if (night) // (indoors: the sighting is of an empty field)
+						continue;
+					worth = 0.6f + 1.4f * c.raiding;
+					kind = Mission::RAID;
+				}
 				const float revenge = striking && struck(s.player) ? 3.0f : 1.0f;
 				const float score = worth * grudge * peace * revenge / ((defence + 30.0f) * (1.0f + dist / 600.0f));
 				cands.push_back({ &s, kind, defence, score });
@@ -240,7 +269,7 @@ namespace {
 			std::sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b) {
 				return a.score != b.score ? a.score > b.score : a.s->id < b.s->id; });
 			// the first that the pool outmatches (the more aggressive, the smaller the margin)
-			const float margin = 1.6f - 0.6f * c.aggression;
+			const float margin = (1.6f - 0.6f * c.aggression) * (night ? 0.8f : 1.0f);
 			for (const Candidate& cand : cands) {
 				// what guards it, and a share of the enemy's whole known army (which can come)
 				const float known = (float)b.get("intel." + std::to_string(cand.s->player) + ".power");
@@ -265,6 +294,16 @@ namespace {
 				if (m.kind == Mission::PALACE)
 					want = std::max(want, (int)(pool * 0.8f));
 				m.want = std::min(want, pool);
+				// across the sea (Naval.h): one crossing that counts, not a trickle (on 3 Isles six-unit
+				// razes went over one after another and were lost on the beach while 1,700 power waited
+				// at home): at least 15 and three fifths of the free soldiers; no raid that far
+				if (Naval::PlaceOverseas(me, Vector3(m.tx, 0, m.tz))) {
+					if (m.kind == Mission::RAID)
+						continue;
+					m.want = std::min(pool, std::max({ m.want, 15, (int)(pool * 0.6f) }));
+					if (m.want < 12)
+						continue;
+				}
 				m.goal = m.kind == Mission::RAID ? 8 : m.kind == Mission::RAZE ? 3 : 1;
 				m.maxLoss = 0.5f + 0.3f * c.aggression;
 				// a decoy first, the other way, if the General is sneaky and there are soldiers to spare
@@ -295,7 +334,11 @@ namespace {
 			// of 15 % of the population limit (at least 12) goes at the best target anyway
 			const int popItem = g.server.gameSet->items.names.getIndex("Total Population Count");
 			const float popLimit = popItem >= 0 ? me->getItem(popItem) : 200.0f;
-			const int waveSize = std::max(12, (int)(popLimit * 0.15f));
+			int waveSize = std::max(12, (int)(popLimit * 0.15f));
+			// (across the sea the cogs carry 40 weight each, two or three of them a crossing: a wave of 15
+			// goes; at 30 the ministries waited with 21 free while the others' ferries landed 120)
+			if (!cands.empty() && Naval::PlaceOverseas(me, Vector3(cands.front().s->x, 0, cands.front().s->z)))
+				waveSize = 15;
 			if (pool >= waveSize && !cands.empty()) {
 				const Candidate& cand = cands.front();
 				Mission m;
@@ -447,11 +490,8 @@ namespace {
 				me->aiController.ministryUnits.insert(u->id);
 				if (gather)
 					continue;
-				ServerGameObject* best = t.enemies.front();
-				for (ServerGameObject* e : t.enemies)
-					if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-						best = e;
-				AIUtil::Attack({ u }, best);
+				if (ServerGameObject* best = AIUtil::NearestReachable(u, t.enemies))
+					AIUtil::Attack({ u }, best);
 			}
 			m.startUnits += (int)used;
 			home.erase(home.begin(), home.begin() + used);
@@ -548,7 +588,7 @@ namespace {
 				// known: with all of it kept, a General facing a big army never attacked at all and lost to
 				// the war layer's waves)
 				const float keep = against * (1.0f - 0.4f * g.personality.aggression);
-				const float share = armies > 1 ? 0.75f : 0.6f;
+				const float share = armies > 1 ? Tune("guardShareMany", 0.75f) : Tune("guardShare", 0.6f);
 				// the strongest stay home first
 				std::vector<ServerGameObject*> byPower = home;
 				std::stable_sort(byPower.begin(), byPower.end(), [](ServerGameObject* a, ServerGameObject* b) { return AIUtil::UnitPower(a) > AIUtil::UnitPower(b); });
@@ -572,13 +612,24 @@ namespace {
 				for (ServerGameObject* u : home)
 					homePower += AIUtil::UnitPower(u);
 				// (without War's defence: the threat map's threat over what is at home)
-				const bool recall = ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f;
+				// (and with the warning: 5 or more enemy fighters within 500 m, more than 1.2 times what is
+				// at home; the threat map's 250 m called them back when the wave was in the town already)
+				const float approach = (float)g.board.get("intel.approachPower");
+				const bool warned = g.board.get("intel.approach") >= 5.0 && approach > Tune("recallFactor", 1.2f) * homePower + 50.0f;
+				const bool recall = (ai.ministryDefence ? palaceUnmet : threat > 1.2f * homePower + 50.0f) || warned;
 				if (recall && g.board.get("war.recall") == 0.0)
 					g.log(WAR, "the missions come home: %s", palaceUnmet ? "the palace's attackers outmatch what is at home" : "a threat at home");
 				g.board.report("war.recall", recall ? 1.0 : 0.0);
 			}
 			g.board.report("war.available", available);
 			g.board.report("war.availablePower", power);
+			{
+				// (the free melee soldiers, for the Strategist's raids)
+				int melee = 0;
+				for (int i = guard; i < (int)home.size(); i++)
+					melee += AIUtil::ClassOf(home[i]) != 2 && AIUtil::ClassOf(home[i]) != 0;
+				g.board.report("war.availableMelee", melee);
+			}
 			g.board.report("war.inMissions", (double)ai.ministryUnits.size());
 			if (thinks % 10 == 0) // (every 30 s)
 				g.log(WAR, "%zu fighters free at home (guard %d, %d may go, power %.0f), %zu in missions; the war layer's defenders %zu",
@@ -595,7 +646,8 @@ namespace {
 				const int need = m.want - (int)have.size();
 				// (reinforcements in groups of 4 at least, or all that is needed: one at a time, they
 				// walked to the target alone and died there)
-				if (m.kind == Mission::DEFEND || need <= 0 || free.empty() || m.state == Mission::RETURNING || (m.state == Mission::OUT && (int)free.size() < std::min(need, 4)))
+				// (none for a mission at sea or landed across it: they can't walk there)
+				if (m.kind == Mission::DEFEND || need <= 0 || free.empty() || m.state == Mission::RETURNING || m.ferry || (m.state == Mission::OUT && (int)free.size() < std::min(need, 4)))
 					continue;
 				// those that counter the target's known army first (its classes' shares), then the strongest
 				float shares[5] = {};
@@ -613,6 +665,13 @@ namespace {
 					// a scout: the fastest (light cavalry first)
 					if (m.kind == Mission::SCOUT)
 						return (cls == 4 ? 1000.0f : cls == 3 ? 500.0f : 0.0f) - AIUtil::UnitPower(u);
+					// a raid (improvement 4): fast melee first, light then heavy cavalry, then foot, archers
+					// last (archers chasing peasants ended in melee, and raids made no kills)
+					// siege engines go with the attacks on buildings first, and never on a raid
+					if (IsSiegeName(u->blueprint->name) && !(MinOff() & 8192))
+						return m.kind == Mission::RAZE || m.kind == Mission::PALACE ? 5000.0f : -5000.0f;
+					if (m.kind == Mission::RAID && !(MinOff() & 4096))
+						return (cls == 4 ? 3000.0f : cls == 3 ? 2000.0f : cls == 1 ? 1000.0f : cls == 2 ? 0.0f : 500.0f) + AIUtil::UnitPower(u) * 0.01f;
 					return f * 100.0f + AIUtil::UnitPower(u) * 0.01f;
 				};
 				std::stable_sort(free.begin(), free.end(), [&](ServerGameObject* a, ServerGameObject* b) {
@@ -677,7 +736,15 @@ namespace {
 					continue;
 				}
 				const std::vector<ServerGameObject*> units = g.alive(m);
-				AIUtil::SendHome(me, units);
+				if (m.landed && !units.empty()) {
+					// landed across the sea: no walk home; they fight on as one of the scripts' waves
+					const std::vector<ServerGameObject*> near = AIUtil::EnemyBuildingsNear(me, Centre(units), 400.0f);
+					ServerGameObject* home = AIUtil::HomeArmy(me);
+					if (!near.empty())
+						me->aiController.launchWave(units, near.front(), home ? home : me);
+				}
+				else
+					AIUtil::SendHome(me, units);
 				for (uint32_t id : m.units)
 					me->aiController.ministryUnits.erase(id);
 				const int kills = KillsOf(srv, m) - m.kills0;
@@ -701,10 +768,88 @@ namespace {
 				const int have = (int)units.size();
 				const bool ready = have >= m.want || (now - m.since > 60.0f && have >= std::max(1, m.want * 6 / 10))
 					|| (now - m.since > 120.0f && have >= std::max(1, m.want / 2));
-				if (now - m.since > 180.0f && !ready)
+				if (now - m.since > 180.0f && !ready && !m.ferry)
 					return "gave up";
-				if (!ready)
+				if (!ready && !m.ferry)
 					return nullptr;
+				// across the sea (the Admiralty's ferries, Naval.h): they embark, sail and land, and the
+				// mission goes out from the shore where they landed, with those that landed
+				{
+					const Vector3 dest = target ? target->position : Vector3(m.tx, 0, m.tz);
+					if (m.ferry || (!units.empty() && Naval::Overseas(me, units.front(), dest))) {
+						if (!m.ferry) {
+							m.ferry = Naval::SendFerry(me, units, target, dest, Naval::Ferry::MINISTRY, m.id);
+							if (!m.ferry)
+								return now - m.since > 420.0f ? "no ship" : nullptr;
+							// more than one cog's load (40 weight): the rest on the other free cogs (one load went,
+							// and the rest were sent home)
+							auto aboardAny = [&](uint32_t id) {
+								for (uint32_t fid : std::vector<uint32_t>{ m.ferry })
+									if (const Naval::Ferry* f = Naval::FindFerry(me, fid); f && std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+										return true;
+								for (uint32_t fid : m.moreFerries)
+									if (const Naval::Ferry* f = Naval::FindFerry(me, fid); f && std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end())
+										return true;
+								return false;
+							};
+							for (int more = 0; more < 4; more++) {
+								std::vector<ServerGameObject*> rest;
+								for (ServerGameObject* u : units)
+									if (!aboardAny(u->id))
+										rest.push_back(u);
+								if (rest.empty())
+									break;
+								const uint32_t id = Naval::SendFerry(me, rest, target, dest, Naval::Ferry::MINISTRY, m.id);
+								if (!id)
+									break;
+								m.moreFerries.push_back(id);
+							}
+							g.log(GENERALS, "mission %u (%s) embarks on %zu ferries (the first %u): %zu units for (%.0f, %.0f) across the sea", m.id, Mission::KindName(m.kind),
+								1 + m.moreFerries.size(), m.ferry, units.size(), dest.x, dest.z);
+							g.board.report("naval.missionsAtSea", g.board.get("naval.missionsAtSea") + 1);
+						}
+						// its ferries: the first to land takes the mission ashore; those at sea still land after it
+						std::vector<const Naval::Ferry*> fs;
+						if (const Naval::Ferry* f = Naval::FindFerry(me, m.ferry))
+							fs.push_back(f);
+						for (uint32_t fid : m.moreFerries)
+							if (const Naval::Ferry* f = Naval::FindFerry(me, fid))
+								fs.push_back(f);
+						const Naval::Ferry* first = nullptr;
+						for (const Naval::Ferry* f : fs)
+							if (f->landed > 0 && !first)
+								first = f;
+						if (first && !m.landed) {
+							// the mission is those on its ferries (the rest went home)
+							m.landed = true;
+							std::vector<uint32_t> kept;
+							int landed = 0;
+							for (uint32_t id : m.units) {
+								bool on = false;
+								for (const Naval::Ferry* f : fs)
+									on |= std::find(f->passengers.begin(), f->passengers.end(), id) != f->passengers.end();
+								if (on)
+									kept.push_back(id);
+								else
+									me->aiController.ministryUnits.erase(id);
+							}
+							for (const Naval::Ferry* f : fs)
+								landed += f->landed;
+							m.units = kept;
+							units = g.alive(m);
+							// (those still aboard are disabled: the attack goes with those ashore)
+							units.erase(std::remove_if(units.begin(), units.end(), [](ServerGameObject* u) { return !u->isInteractable(); }), units.end());
+							g.log(GENERALS, "mission %u landed %d at (%.0f, %.0f), %zu ferries", m.id, landed, first->landing.x, first->landing.z, fs.size());
+						}
+						if (!m.landed) {
+							if (fs.empty())
+								return "lost at sea";
+							return nullptr;
+						}
+						if (units.empty())
+							return "lost";
+					}
+				}
 				m.state = Mission::OUT;
 				m.stateSince = now;
 				m.startUnits = (int)units.size();
@@ -787,7 +932,11 @@ namespace {
 						back.push_back(u);
 						continue;
 					}
-					if (tg && !tg->deleted && AIUtil::IsSoldier(tg) && tgInside)
+					// fighting a soldier in the zone: on with it, unless another is 15 m nearer (one
+					// fast rider led a whole defence round the town: the play test, 2026-11-16)
+					ServerGameObject* nearer = inside.empty() ? nullptr : AIUtil::NearestReachable(u, inside);
+					if (tg && !tg->deleted && AIUtil::IsSoldier(tg) && tgInside
+						&& !(nearer && nearer != tg && (nearer->position - u->position).len2xz() + 15.0f < (tg->position - u->position).len2xz()))
 						continue;
 					if (inside.empty()) {
 						// (gathering: one fighting out beyond the zone comes back to the others)
@@ -795,11 +944,8 @@ namespace {
 							back.push_back(u);
 						continue;
 					}
-					ServerGameObject* best = inside.front();
-					for (ServerGameObject* e : inside)
-						if ((e->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-							best = e;
-					AIUtil::Attack({ u }, best);
+					if (nearer)
+						AIUtil::Attack({ u }, nearer);
 				}
 				if (!back.empty())
 					AIUtil::Hold(me, back, place, nullptr);
@@ -824,7 +970,7 @@ namespace {
 				return "too long";
 			// home in danger: the threat there over what guards it, the attacks come back to defend it
 			// (not a decoy, nor one at its last building)
-			if (attacking && g.board.get("war.recall") > 0.0 && !winning)
+			if (attacking && g.board.get("war.recall") > 0.0 && !winning && !m.landed)
 				return "recalled";
 			// reinforcements once, for an attack that has lost a third and isn't winning
 			if (!m.reinforced && attacking && m.kind != Mission::RAID && losses > 0.35f) {
@@ -857,8 +1003,8 @@ namespace {
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
 						std::vector<ServerGameObject*> near = AIUtil::EnemiesNear(me, u->position, 40.0f, false);
-						if (!near.empty())
-							AIUtil::Attack({ u }, near.front());
+						if (ServerGameObject* n = AIUtil::NearestReachable(u, near))
+							AIUtil::Attack({ u }, n);
 						else if (target)
 							AIUtil::Attack({ u }, target);
 					}
@@ -942,11 +1088,8 @@ namespace {
 				// each idle raider takes the nearest
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
-						ServerGameObject* best = prey.front();
-						for (ServerGameObject* p : prey)
-							if ((p->position - u->position).sqlen2xz() < (best->position - u->position).sqlen2xz())
-								best = p;
-						AIUtil::Attack({ u }, best);
+						if (ServerGameObject* best = AIUtil::NearestReachable(u, prey))
+							AIUtil::Attack({ u }, best);
 					}
 				return nullptr;
 			}
@@ -958,12 +1101,90 @@ namespace {
 				for (ServerGameObject* u : units)
 					if (!u->orderConfig.getCurrentOrder()) {
 						std::vector<ServerGameObject*> near = AIUtil::EnemiesNear(me, u->position, 40.0f, false);
-						AIUtil::Attack({ u }, near.empty() ? target : near.front());
+						ServerGameObject* n = AIUtil::NearestReachable(u, near);
+						AIUtil::Attack({ u }, n ? n : target);
 					}
 			return nullptr;
 		}
 	};
 }
+
+namespace {
+	// ---- The Admiralty (the navy; Naval.h) ----
+	// Reads the naval layer's map (the sea between this player and its enemies), sets how many cogs
+	// and war boats the layer keeps (by the General's aggression), and leaves the ferrying to the
+	// Generals: the layer sends no army of its own for a ministry player (State::manual). Reports
+	// naval.* for the others (and the tests).
+	struct Admiralty : Department {
+		uint8_t id() const override { return ADMIRALTY; }
+		float period() const override { return 5.0f; }
+		// A Kingmaker rush (Kingmaker Tactical Commissions.cpp) holds the peasants at their count ("War
+		// Peasants Needed") and builds nothing more until the rush army spawns and marches (Attack
+		// Scheduler.cpp, "Spawn The Attacking Army From The Defensive Army"). With every enemy across
+		// the sea it never marches: on 3 Isles a ministry player sat at 4 peasants and 46 food for 45
+		// minutes and died out. The Admiralty ends such a rush the way the scheduler does when the army
+		// spawns (the items back to 0 and "Setup My Building Commission"); the soldiers stay home.
+		void EndStrandedRush(Government& g, ServerGameObject* me) {
+			const GameSet* gs = g.server.gameSet.get();
+			const int rushing = gs->items.names.getIndex("I Am Rushing");
+			const int warMode = gs->items.names.getIndex("War Mode");
+			if (rushing < 0 || warMode < 0 || me->getItem(rushing) <= 0.0f || me->getItem(warMode) <= 0.0f)
+				return;
+			for (const char* name : { "War Mode", "War Peasants Needed", "War Farms Needed", "The Army Type I Was Trying To Spawn", "I Am Rushing", "War Override" })
+				if (const int i = gs->items.names.getIndex(name); i >= 0)
+					me->setItem(i, 0.0f);
+			if (const int seq = gs->actionSequences.names.getIndex("Setup My Building Commission"); seq >= 0) {
+				SrvScriptContext ctx(&g.server, me);
+				auto _ = ctx.change(ctx.sequenceExecutor, me);
+				gs->actionSequences[seq].run(&ctx);
+			}
+			g.log(ADMIRALTY, "the rush can't march (every enemy is across the sea): ended, the building commission set up again");
+		}
+		void think(Government& g) override {
+			ServerGameObject* me = g.player();
+			if (!me || !g.server.aiNaval)
+				return;
+			if (!g.personality.read)
+				ReadPersonality(g);
+			Naval::State& st = me->aiController.naval;
+			st.manual = true;
+			st.huntDocks = true;
+			const float ag = g.personality.aggression;
+			if (st.need == Naval::NEED_ONLY) {
+				// (an attack of 15 % of the population limit or more is more than one cog's 40 weight:
+				// two cogs, three for an aggressive General, so a mission crosses in one go)
+				st.wantTransports = 2 + (ag > 0.6f ? 1 : 0);
+				st.wantWarships = 2 + (int)std::lround(ag * 2.0f);
+				// the wood the scripts don't spend into the fleet (on 3 Isles the ministries sat on 8,500
+				// wood): a war boat more for every 800 over 1,000, up to 8; the sea is the way in, and the
+				// war boats sink the enemy's cogs before they land and shoot what stands on its coast
+				const double wood = g.board.get("economy.wood");
+				if (wood > 1000.0)
+					st.wantWarships = std::min(8, st.wantWarships + (int)((wood - 1000.0) / 800.0));
+				EndStrandedRush(g, me);
+			}
+			else if (st.need == Naval::NEED_SHORTER) {
+				st.wantTransports = 1;
+				st.wantWarships = 1 + (ag > 0.6f ? 1 : 0);
+			}
+			else {
+				st.wantTransports = st.wantWarships = 0;
+			}
+			if (st.need <= Naval::NEED_NONE && st.ferries.empty())
+				return;
+			int transports = 0, warships = 0;
+			for (ServerGameObject* s : Naval::Ships(me))
+				(Naval::IsTransport(s) ? transports : warships)++;
+			g.board.report("naval.need", (double)st.need);
+			g.board.report("naval.transports", transports);
+			g.board.report("naval.warships", warships);
+			g.board.report("naval.ferriesSent", st.ferriesSent);
+			g.board.report("naval.unitsLanded", st.unitsLanded);
+			g.board.report("naval.docksLaid", st.docksLaid);
+		}
+	};
+}
+std::unique_ptr<Department> MakeAdmiralty() { return std::make_unique<Admiralty>(); }
 
 void SetWeightsFromCharacter(Government& g)
 {

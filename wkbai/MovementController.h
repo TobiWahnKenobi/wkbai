@@ -72,8 +72,9 @@ struct MovementController {
 	// The walking units by the tile of their destination (getDestination while isMoving), for
 	// FreeStandingSpot, which counts a walking unit where it goes: kept by syncDestIndex after
 	// each change of the walk (DestSync in the functions that change it, and a loaded game's).
-	// A cell may also hold stale ids (a unit gone, or listed twice): readers check the unit.
-	static const std::vector<uint32_t>* destCell(int tx, int tz);
+	// The units listed are alive (a controller leaves it when destroyed); readers check that a
+	// unit's own cell is the one read (m_destCell).
+	static const std::vector<ServerGameObject*>* destCell(int tx, int tz);
 	void syncDestIndex();
 	int m_destCell = -1; // its cell in the index, -1 none
 	uint32_t m_destGeneration = 0;

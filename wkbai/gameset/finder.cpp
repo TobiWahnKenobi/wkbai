@@ -1,3 +1,8 @@
+#include <SDL3/SDL_timer.h>
+#include <map>
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 // wkbre2 - WK Engine Reimplementation
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
@@ -20,6 +25,36 @@
 
 ObjectFinderResult ObjectFinder::fail(ScriptContext* ctx) {
 	ferr("Invalid object finder call from %s", ctx->gameState->getProgramName());
+	return {};
+}
+
+// FINDER_ASSOCIATES and FINDER_ASSOCIATORS on the client: the server's associations as mirrored
+// (NETCLIMSG_OBJECT_ASSOCIATION, ClientGameObject::associates). A command button's condition is
+// drawn on the client: right-clicking with the Druid ended the game with "Invalid object finder
+// call from Client" (the Dark Portal's "Don't Already have a portal", the AI play test of
+// 2026-11-18).
+static ObjectFinderResult ClientAssociations(ScriptContext* ctx, int category, bool associators) {
+	CliScriptContext* cctx = (CliScriptContext*)ctx;
+	ClientGameObject* self = cctx->getSelf();
+	ObjectFinderResult vec;
+	if (!self)
+		return vec;
+	const auto& map = associators ? self->associators : self->associates;
+	if (auto it = map.find(category); it != map.end())
+		for (const CliGORef& ref : it->second)
+			if (ClientGameObject* o = ref.get(); o && o->isInteractable())
+				vec.push_back(o);
+	return vec;
+}
+
+// FINDER_REFERENCERS on the client: the referencers' current tasks live on the server only, so none
+// (said once a game run, not fatal)
+static ObjectFinderResult ClientHasNoReferencers(ScriptContext* ctx) {
+	static bool said = false;
+	if (!said) {
+		said = true;
+		printf("(FINDER_REFERENCERS on the %s: none there, the tasks are the server's)\n", ctx->gameState->getProgramName());
+	}
 	return {};
 }
 
@@ -133,10 +168,26 @@ bool FinderFailsWhenEmpty(const ObjectFinder* finder)
 	return dynamic_cast<const FinderTarget*>(finder) != nullptr;
 }
 
+// the simulation profiling test ("detail", g_actionProfile): the time per named finder
+// (FINDER_RESULTS), with the finders it uses, ms
+std::map<std::string, double> g_finderMs;
+// the scripts' work, counted (not timed: the same on every computer): each candidate a finder
+// evaluates a condition or grade for, each action run (ActionSequence::run). The players'
+// commands are spread over steps by it (Server::issueCommand).
+uint64_t g_scriptWork = 0;
+
 struct FinderResults : ObjectFinder {
 	int ofd;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		if (ofd == -1) return {}; // TODO: Remove this after implementing exception handling
+		extern bool g_actionProfile;
+		if (g_actionProfile && ctx->isServer()) {
+			const uint64_t start = SDL_GetPerformanceCounter();
+			ObjectFinderResult r = ctx->gameState->gameSet->objectFinderDefinitions[ofd]->eval(ctx);
+			g_finderMs[ctx->gameState->gameSet->objectFinderDefinitions.names.getString(ofd)] +=
+				(double)(SDL_GetPerformanceCounter() - start) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+			return r;
+		}
 		return ctx->gameState->gameSet->objectFinderDefinitions[ofd]->eval(ctx);
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
@@ -147,7 +198,7 @@ struct FinderResults : ObjectFinder {
 struct FinderAssociates : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientAssociations(ctx, category, false);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		const auto &set = sctx->getSelf()->associates[category];
 		ObjectFinderResult vec;
@@ -164,7 +215,7 @@ struct FinderAssociates : ObjectFinder {
 struct FinderAssociators : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientAssociations(ctx, category, true);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		const auto &set = sctx->getSelf()->associators[category];
 		ObjectFinderResult vec;
@@ -247,17 +298,21 @@ struct FinderSequenceExecutor : ObjectFinder {
 
 struct FinderNearestToSatisfy : ObjectFinder {
 	std::unique_ptr<ValueDeterminer> vdcond, vdradius;
-	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+	// The first way: every object on the tiles round it, in the tiles' order, the condition
+	// evaluated for each one nearer than the nearest found so far (kept to check the one below)
+	ObjectFinderResult evalAll(ScriptContext* ctx) {
 		using AnyGO = CommonGameObject;
-		// the nearest object within the radius that satisfies the condition (only that one)
 		float radius = vdradius->eval(ctx);
 		const Vector3 center = ctx->getSelf()->position;
 		NNSearch search;
 		search.start(ctx->gameState, center, radius);
 		AnyGO* nearest = nullptr;
 		float nearestDist = radius * radius;
+		const float now = ctx->isServer() && Server::instance ? Server::instance->timeManager.currentTime : 0.0f;
 		while (AnyGO* obj = (AnyGO*)search.next()) {
 			if (!obj->isInteractable()) continue;
+			// (one no unit could walk to: Order.cpp, failedSearches)
+			if (obj->unreachableUntil > now) continue;
 			const float d = (obj->position - center).sqlen2xz();
 			if (d > nearestDist || (nearest && d == nearestDist)) continue;
 			auto _ = ctx->change(ctx->candidate, obj);
@@ -268,6 +323,65 @@ struct FinderNearestToSatisfy : ObjectFinder {
 		}
 		if (nearest)
 			return { nearest };
+		return {};
+	}
+	// The nearest object within the radius that satisfies the condition (only that one): the
+	// objects within it sorted by distance (ties in the tiles' order, as the first way kept the
+	// first one found), the condition evaluated from the nearest out until one satisfies it. The
+	// same object as evalAll's, with fewer evaluations (each one evalAll made too): an army's
+	// "Most appropriate Victim" evaluated it for every unit within 10 m of each soldier.
+	// WKB_NEAREST_CHECK: each answer and the random numbers' state after it compared with evalAll's.
+	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
+		static const bool check = getenv("WKB_NEAREST_CHECK") != nullptr;
+		uint32_t randBefore = 0;
+		if (check)
+			randBefore = g_simRandom.state;
+		using AnyGO = CommonGameObject;
+		const float radius = vdradius->eval(ctx);
+		const Vector3 center = ctx->getSelf()->position;
+		struct Candidate { float d; uint32_t order; AnyGO* obj; };
+		static thread_local std::vector<Candidate> near;
+		const size_t base = near.size(); // (a condition may use this finder again: its own part)
+		NNSearch search;
+		search.start(ctx->gameState, center, radius);
+		uint32_t order = 0;
+		const float r2 = radius * radius;
+		while (AnyGO* obj = (AnyGO*)search.next()) {
+			if (!obj->isInteractable()) continue;
+			const float d = (obj->position - center).sqlen2xz();
+			if (d > r2) continue;
+			near.push_back({ d, order++, obj });
+		}
+		std::sort(near.begin() + base, near.end(), [](const Candidate& a, const Candidate& b) { return a.d != b.d ? a.d < b.d : a.order < b.order; });
+		AnyGO* found = nullptr;
+		for (size_t i = base; i < near.size(); i++) {
+			g_scriptWork++;
+			auto _ = ctx->change(ctx->candidate, near[i].obj);
+			if (vdcond->eval(ctx) > 0.0f) {
+				found = near[i].obj;
+				break;
+			}
+		}
+		near.resize(base);
+		if (check && ctx->isServer()) {
+			static uint64_t calls = 0, wrong = 0;
+			calls++;
+			const uint32_t randNew = g_simRandom.state;
+			g_simRandom.state = randBefore;
+			ObjectFinderResult all = evalAll(ctx);
+			AnyGO* old = all.empty() ? nullptr : all[0];
+			if (old != found || g_simRandom.state != randNew) {
+				if (wrong++ < 20)
+					printf("NEAREST MISMATCH (call %llu): all %u, sorted %u; random state %s\n", (unsigned long long)calls,
+						old ? old->id : 0u, found ? found->id : 0u, g_simRandom.state != randNew ? "different" : "the same");
+			}
+			if (calls % 10000 == 0)
+				printf("NEAREST checked %llu, %llu different\n", (unsigned long long)calls, (unsigned long long)wrong);
+			// (evalAll's state stands: the game as before)
+			found = old;
+		}
+		if (found)
+			return { found };
 		return {};
 	}
 	virtual void parse(GSFileParser &gsf, const GameSet &gs) override {
@@ -303,12 +417,15 @@ struct FinderDisabledAssociates : ObjectFinder {
 struct FinderReferencers : ObjectFinder {
 	int category;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
-		if (!ctx->isServer()) return fail(ctx);
+		if (!ctx->isServer()) return ClientHasNoReferencers(ctx);
 		SrvScriptContext* sctx = (SrvScriptContext*)ctx;
 		// in the referencers' order, each once (a set of pointers came out in the order of their
 		// addresses, which differ from run to run: the same game played differently)
 		ObjectFinderResult vec;
-		std::unordered_set<CommonGameObject*> added;
+		// (each once: looked for in the few found so far, a hash set only past 32. A set made for
+		// every call, by millions in a battle of 10,000 and with nothing in it most times, took
+		// most of the time: MSVC's allocates when made)
+		std::unique_ptr<std::unordered_set<CommonGameObject*>> added;
 		for (CommonGameObject* obj : sctx->getSelf()->referencers) {
 			if (obj) {
 				Order* order = ((ServerGameObject*)obj)->orderConfig.getCurrentOrder();
@@ -317,8 +434,17 @@ struct FinderReferencers : ObjectFinder {
 				if (!task) continue;
 				//assert(task->target.get() == ctx->getSelf());
 				if (task->target != ctx->getSelf()) continue;
-				if (task->blueprint->category == category && added.insert(obj).second)
-					vec.push_back(obj);
+				if (task->blueprint->category != category) continue;
+				if (vec.size() < 32) {
+					if (std::find(vec.begin(), vec.end(), obj) == vec.end())
+						vec.push_back(obj);
+				}
+				else {
+					if (!added)
+						added = std::make_unique<std::unordered_set<CommonGameObject*>>(vec.begin(), vec.end());
+					if (added->insert(obj).second)
+						vec.push_back(obj);
+				}
 			}
 		}
 		return vec;
@@ -669,6 +795,7 @@ struct FinderFilter : ObjectFinder {
 	std::unique_ptr<ObjectFinder> finder;
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		decltype(vec) res;
 		for (CommonGameObject *obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
@@ -780,12 +907,24 @@ struct FinderGradeSelect : ObjectFinder {
 		if (vdCount)
 			count = (int)vdCount->eval(ctx);
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		ValueDeterminer *vd = Server::instance->gameSet->equations[equation];
 
 		std::vector<std::pair<float,CommonGameObject*>> values(vec.size());
+		bool nan = false;
 		for (size_t i = 0; i < vec.size(); i++) {
 			auto _ = ctx->change(ctx->candidate, vec[i]);
 			values[i] = { vd->eval(ctx), vec[i] };
+			nan |= values[i].first != values[i].first;
+		}
+		// the best one only (an army soldier's victim among hundreds): the first best, as the
+		// stable sort's first (but for a NaN, which the sort may place anywhere)
+		if (count == 1 && vec.size() > 1 && !nan) {
+			size_t best = 0;
+			for (size_t i = 1; i < values.size(); i++)
+				if (byHighest ? values[i].first > values[best].first : values[i].first < values[best].first)
+					best = i;
+			return { values[best].second };
 		}
 		std::stable_sort(values.begin(), values.end(), [this](auto & a, auto & b) {return byHighest ? (a.first > b.first) : (a.first < b.first); });
 		if (count <= 0 || (size_t)count > vec.size())
@@ -888,6 +1027,7 @@ struct FinderFilterCandidates : ObjectFinder {
 	FinderFilterCandidates(bool cull = false) : cull(cull) {}
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
+		g_scriptWork += vec.size();
 		decltype(vec) res;
 		for (CommonGameObject* obj : vec) {
 			auto _ = ctx->change(ctx->candidate, obj);
@@ -914,6 +1054,7 @@ struct FinderGradeSelectCandidates : ObjectFinder {
 	virtual ObjectFinderResult eval(ScriptContext* ctx) override {
 		auto vec = finder->eval(ctx);
 		const int count = vdCount ? (int)vdCount->eval(ctx) : (int)vec.size();
+		g_scriptWork += vec.size();
 		if (count <= 0)
 			return {};
 		if ((size_t)count >= vec.size())

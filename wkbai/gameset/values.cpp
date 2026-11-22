@@ -1076,6 +1076,19 @@ void DiscoveredLoadText(const std::string& text)
 	}
 }
 
+bool AIPeasantCapped(const GameObjBlueprint* type, const ServerGameObject* player)
+{
+	if (!type || !player || player->aiController.ministryPeasantCap < 0
+		|| player->aiController.ministryPeasants < player->aiController.ministryPeasantCap)
+		return false;
+	const GameSet* gs = Server::instance->gameSet.get();
+	static uint64_t of = 0;
+	static int peasantItem = -1;
+	if (of != gs->serial) { of = gs->serial; peasantItem = gs->items.names.getIndex("I Am A Peasant"); }
+	auto it = peasantItem >= 0 ? type->startItemValues.find(peasantItem) : type->startItemValues.end();
+	return it != type->startItemValues.end() && it->second > 0.0f;
+}
+
 bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildings)
 {
 	const GameSet* gs = Server::instance->gameSet.get();
@@ -1085,16 +1098,9 @@ bool AISpawnAllowed(const GameObjBlueprint* type, const SrvFinderResult& buildin
 	const int cmdid = gs->commands.names.getIndex(spawnName);
 	const Command* command = cmdid >= 0 ? &gs->commands[cmdid] : nullptr;
 	// the ministry AI's Labour & Population: no more peasants than its cap (room for soldiers)
-	{
-		static const GameSet* of = nullptr;
-		static int peasantItem = -1;
-		if (of != gs) { of = gs; peasantItem = gs->items.names.getIndex("I Am A Peasant"); }
-		if (peasantItem >= 0 && type->startItemValues.count(peasantItem) && type->startItemValues.at(peasantItem) > 0.0f)
-			for (ServerGameObject* building : buildings)
-				if (ServerGameObject* owner = building->getPlayer(); owner && owner->aiController.ministryPeasantCap >= 0
-					&& owner->aiController.ministryPeasants >= owner->aiController.ministryPeasantCap)
-					return false;
-	}
+	for (ServerGameObject* building : buildings)
+		if (AIPeasantCapped(type, building->getPlayer()))
+			return false;
 	for (ServerGameObject* building : buildings) {
 		if (building->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING)
 			continue;

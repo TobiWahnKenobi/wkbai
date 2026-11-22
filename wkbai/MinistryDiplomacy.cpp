@@ -103,7 +103,7 @@ namespace {
 				for (CommonGameObject* ch : children) {
 					auto* p = (ServerGameObject*)ch;
 					if (p != me && !p->deleted && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player"
-						&& !(p->flags & ServerGameObject::fTerminated))
+						&& !(p->flags & (ServerGameObject::fTerminated | ServerGameObject::fPlayerTerminated)))
 						players.push_back(p);
 				}
 			std::sort(players.begin(), players.end(), [](auto* a, auto* b) { return a->id < b->id; });

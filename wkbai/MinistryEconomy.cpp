@@ -21,6 +21,7 @@
 #include "gameset/ScriptContext.h"
 #include "gameset/condition.h"
 #include "NNSearch.h"
+#include "PeasantLodging.h"
 #include <algorithm>
 #include <cmath>
 
@@ -29,13 +30,14 @@ namespace Ministry {
 namespace {
 	struct Items {
 		const GameSet* of = nullptr;
-		int popLimit = -1, si = -1, siCap = -1;
+		int popLimit = -1, popCount = -1, si = -1, siCap = -1;
 		int mineGold = -1, chop = -1, repair = -1;
 		void update(const GameSet* gs) {
 			if (of == gs)
 				return;
 			of = gs;
 			popLimit = gs->items.names.getIndex("Total Population Count");
+			popCount = gs->items.names.getIndex("Population Count");
 			si = gs->items.names.getIndex("Structural Integrity");
 			siCap = gs->items.names.getIndex("Structural Integrity Capacity");
 			mineGold = gs->commands.names.getIndex("Mine Gold");
@@ -167,13 +169,17 @@ namespace {
 			if (MinOff() & 8) return;
 			Server& srv = g.server;
 			ServerGameObject* me = g.player();
-			if (!me || g.now() < 360.0f)
+			if (!me || g.played() < 360.0f)
 				return;
-			// a surplus over what War and the reserves need
-			if (me->getItem(Tags::PDITEM_FOOD) < 800.0f || me->getItem(Tags::PDITEM_WOOD) < 400.0f || me->getItem(Tags::PDITEM_GOLD) < 300.0f)
+			// a surplus over what War and the reserves need; near the population limit (90 %), when
+			// fighters can't be trained any more, half that, military first (improvement 7: alone under
+			// Plus v9.5 the ministries built half again as many buildings and ended at the same population)
+			const bool full = !(MinOff() & 32768) && g.board.get("labour.full") >= 0.9;
+			const float f = full ? 0.5f : 1.0f;
+			if (me->getItem(Tags::PDITEM_FOOD) < 800.0f * f || me->getItem(Tags::PDITEM_WOOD) < 400.0f * f || me->getItem(Tags::PDITEM_GOLD) < 300.0f * f)
 				return;
 			const GameSet* gs = srv.gameSet.get();
-			const bool military = g.personality.aggression >= 0.5f;
+			const bool military = full || g.personality.aggression >= 0.5f;
 			static const char* const MILITARY[] = { "Infantry", "Cavalry", "Crossbow", "Gunpowder", "Arrow", "Blade", "Armour", "Barding", "Chivalry", "Grapeshot", "Greek Fire" };
 			static const char* const ECONOMY[] = { "Sawmill", "Windmill", "Plough", "Crop", "Banking", "Harness", "Alchemy" };
 			auto kindOf = [&](const std::string& name) {
@@ -230,7 +236,7 @@ void EconomyNeeds(Government& g)
 	// than there is. (Asked for whenever gold didn't come in, the miners came from the wood and cost a
 	// third of the soldiers one against one, while the gold stayed unspent: 400-500 at the end.)
 	double goldNeeded = 0.0;
-	if (now > 180.0f && g.department(ECONOMY) && g.department(ECONOMY)->thinks % 15 == 0) {
+	if (g.played() > 180.0f && g.department(ECONOMY) && g.department(ECONOMY)->thinks % 15 == 0) {
 		Server& srv = g.server;
 		const GameSet* gs = srv.gameSet.get();
 		std::vector<ServerGameObject*> todo{ me };
@@ -276,6 +282,14 @@ void EconomyNeeds(Government& g)
 		g.board.withdraw(ECONOMY, "workers.gold");
 }
 
+// a peasant in the lodging's hands (PeasantLodging.h: going in, inside or waiting for room): it
+// takes no orders, so Labour neither counts it idle nor picks it as a miner (at night it sent a
+// lodger to the gold, refused, and held it for two minutes as a miner that never mined)
+static bool Lodged(const ServerGameObject* p)
+{
+	return p->lodging != LODGE_NONE && p->lodging != LODGE_RETURNING;
+}
+
 // Labour & Population's acts (Labour::think): the cap, idle peasants, the gold miners asked for
 void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 {
@@ -290,6 +304,27 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	// the cap: a share of the population limit (40-60 %), at least 20
 	const float limit = g_items.popLimit >= 0 ? me->getItem(g_items.popLimit) : 200.0f;
 	ai.ministryPeasantCap = std::max(20, (int)(limit * (0.6f - 0.2f * g.personality.aggression)));
+	// how full the population is (improvement 7: near the limit the surplus goes into research and
+	// better units, Research and Tactics)
+	g.board.report("labour.full", g_items.popCount >= 0 && limit > 0.0f ? me->getItem(g_items.popCount) / limit : 0.0);
+	// the warning (DangerShort): while enemy fighters near the palace outnumber the own, no more
+	// peasants than there were when the hold began (at least 25), so the food goes into fighters.
+	// (The cap following the count let them grow from 25 to 50 by minute 13 with food at 0 and 6
+	// soldiers trained. Held for the opening's guard instead, four players under plain WKB stalled
+	// at 27 peasants from minute 9 to 13 with no food to train: 43 characters at minute 15 against 52.)
+	if (DangerShort(g) > 0) {
+		if (g.board.get("opening.hold") <= 0.0)
+			g.board.report("opening.hold", std::max(25, (int)peasants.size()));
+		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, (int)g.board.get("opening.hold"));
+	}
+	else if (g.board.get("opening.hold") > 0.0)
+		g.board.report("opening.hold", 0);
+	// the opening's guard short (OpeningShort): no more than "openingPeasants" peasants (30; 0: no hold),
+	// so the food goes into the guard. (Belisar's ministry, Battleground seed 9: food at 0 from minute
+	// 2 to 25 with 40 peasants, 1,400 wood unspent, 1 fighter at home for 12 minutes. Fair maps, 120 games: the ministries won 66 with
+	// the hold, 54 without; slot 1 30 of 60 against 21.)
+	if (const int hold = (int)Tune("openingPeasants", 30.0f); hold > 0 && OpeningShort(g) > 0)
+		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, std::max(hold, (int)peasants.size())); // (a hold, no peasant is lost: those over it stay, none comes)
 	ai.ministryPeasants = (int)peasants.size();
 	g.board.report("labour.cap", ai.ministryPeasantCap);
 	ServerGameObject* palace = AIUtil::Palace(me);
@@ -444,7 +479,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			woodTaken++;
 		std::vector<ServerGameObject*> candidates;
 		for (ServerGameObject* p : peasants)
-			if (!ai.ministryHeld.count(p->id) && p->isInteractable()) {
+			if (!ai.ministryHeld.count(p->id) && p->isInteractable() && !Lodged(p)) {
 				const std::string order = CurrentOrder(srv, p);
 				if (order.empty() || (order == "Chop Tree" && woodTaken < fromWood))
 					candidates.push_back(p);
@@ -469,6 +504,9 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 			ai.ministryHeld.insert(p->id);
 			goldMiners[p->id] = now;
 			g.board.report("labour.goldSent", g.board.get("labour.goldSent") + 1);
+			// (sent while gold was in the way, for test 88: the need of the moment, not a 5-minute sample)
+			if (g.board.get("economy.goldNeeded") > 0.0)
+				g.board.report("labour.goldSentNeeded", g.board.get("labour.goldSentNeeded") + 1);
 			g.log(LABOUR, "peasant %u to mine gold at %s %u (%zu of %d)", p->id, gold->blueprint->name.c_str(), gold->id, goldMiners.size(), want);
 		}
 	}
@@ -485,7 +523,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	{
 		int waiting = 0;
 		for (ServerGameObject* p : peasants)
-			waiting += !ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable();
+			waiting += !ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable() && !Lodged(p);
 		// ("labour.idleFrom": when more than two became idle, plus 1; 0 while not)
 		if (waiting <= 2)
 			g.board.report("labour.idleFrom", 0.0);
@@ -495,7 +533,7 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	const double idleFrom = g.board.get("labour.idleFrom");
 	if (!(MinOff() & 1) && idleFrom > 0.0 && now - (idleFrom - 1.0) >= 10.0)
 	for (ServerGameObject* p : peasants)
-		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable()) {
+		if (!ai.ministryHeld.count(p->id) && !p->orderConfig.getCurrentOrder() && p->isInteractable() && !Lodged(p)) {
 			if (++idle <= 2)
 				continue;
 			if (!AIUtil::EnemiesNear(me, p->position, 200.0f, false).empty())

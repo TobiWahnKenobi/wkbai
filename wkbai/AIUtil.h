@@ -48,8 +48,13 @@ namespace AIUtil {
 	// the player's peasants (straight under it)
 	std::vector<ServerGameObject*> Peasants(ServerGameObject* player);
 
-	// each unit attacks the target
+	// each unit attacks the target, with its own attack (an archer shoots); not one that can't reach it
 	void Attack(const std::vector<ServerGameObject*>& units, ServerGameObject* target);
+	// whether the unit can come within its attack's reach of the target (not up a slope its class
+	// can't climb, nor across water)
+	bool CanReach(ServerGameObject* unit, ServerGameObject* target);
+	// the nearest of the candidates the unit can reach, or null
+	ServerGameObject* NearestReachable(ServerGameObject* unit, const std::vector<ServerGameObject*>& candidates);
 	// soldiers back into the defensive army, all walking to the manor
 	void SendHome(ServerGameObject* player, const std::vector<ServerGameObject*>& units);
 	// units into an army of the AI's own (the given one, else a new one) walking to the point;

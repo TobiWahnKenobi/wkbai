@@ -9,6 +9,7 @@
 #include "terrain.h"
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
+#include "WaterOverlay.h"
 #include <cassert>
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,8 @@
 uint64_t g_astarSearches = 0, g_astarTiles = 0;
 // the searches a group field answered, the fields made, the goals no search could reach
 uint64_t g_fieldPaths = 0, g_fieldBuilds = 0, g_unreachableGoals = 0;
+// the unreachable goals by the asking object (on when a test sets it: Test_RunSave)
+std::map<uint32_t, int>* g_unreachableBy = nullptr;
 double g_astarMs = 0.0;
 // test runs: WKB_PATH_STATS=1 prints the game's totals at exit (searches, tiles taken from the open
 // lists, search ms on the threads, the path nodes walks got)
@@ -450,7 +453,21 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 				if (it != groups.end())
 					tile.terrainType = (short)(it->second - &server->gameSet->terrains[0]);
 			}
-			if (tile.terrainType >= 0 && tile.terrainType < (int)passable->size() && !(*passable)[tile.terrainType])
+			int terrain = tile.terrainType;
+			// a boat goes by WKB.exe's water overlay ("Shallow Water", "Water"; WaterOverlay.h), not
+			// the sea bed's texture
+			if (waterUnit) {
+				static uint64_t of = 0;
+				static int shallow = -1, deep = -1;
+				if (of != server->gameSet->serial) {
+					of = server->gameSet->serial;
+					shallow = server->gameSet->terrains.names.getIndex("Shallow Water");
+					deep = server->gameSet->terrains.names.getIndex("Water");
+				}
+				if (const int ov = WaterOverlayClass(trn, tx, tz))
+					terrain = ov == 2 ? deep : shallow;
+			}
+			if (terrain >= 0 && terrain < (int)passable->size() && !(*passable)[terrain])
 				return true;
 		}
 
@@ -904,9 +921,10 @@ uint64_t g_pathfindingSearches = 0;
 namespace {
 	struct DestIndex {
 		const Server* server = nullptr;
+		uint64_t serial = 0; // (Server::serial: another server at the same address is another)
 		int w = 0, h = 0;
 		uint32_t generation = 0;
-		std::vector<std::vector<uint32_t>> cells;
+		std::vector<std::vector<ServerGameObject*>> cells;
 	} g_destIndex;
 
 	int DestCellOf(const MovementController& mc, int w, int h)
@@ -928,9 +946,10 @@ namespace {
 		if (w <= 0 || h <= 0)
 			return false;
 		DestIndex& di = g_destIndex;
-		if (di.server == server && di.w == w && di.h == h)
+		if (di.server == server && di.serial == server->serial && di.w == w && di.h == h)
 			return true;
 		di.server = server;
+		di.serial = server->serial;
 		di.w = w;
 		di.h = h;
 		di.generation++;
@@ -941,7 +960,7 @@ namespace {
 			mc.m_destGeneration = di.generation;
 			mc.m_destCell = DestCellOf(mc, w, h);
 			if (mc.m_destCell >= 0)
-				di.cells[mc.m_destCell].push_back(id);
+				di.cells[mc.m_destCell].push_back(obj);
 		}
 		return true;
 	}
@@ -968,7 +987,7 @@ void MovementController::syncDestIndex()
 		return;
 	if (m_destCell >= 0) {
 		auto& v = di.cells[m_destCell];
-		auto it = std::find(v.begin(), v.end(), m_object->id);
+		auto it = std::find(v.begin(), v.end(), m_object);
 		if (it != v.end()) {
 			*it = v.back();
 			v.pop_back();
@@ -976,7 +995,7 @@ void MovementController::syncDestIndex()
 	}
 	m_destCell = cell;
 	if (cell >= 0)
-		di.cells[cell].push_back(m_object->id);
+		di.cells[cell].push_back(m_object);
 }
 
 MovementController::~MovementController()
@@ -984,7 +1003,7 @@ MovementController::~MovementController()
 	DestIndex& di = g_destIndex;
 	if (m_destCell >= 0 && m_destGeneration == di.generation && (size_t)m_destCell < di.cells.size() && m_object) {
 		auto& v = di.cells[m_destCell];
-		auto it = std::find(v.begin(), v.end(), m_object->id);
+		auto it = std::find(v.begin(), v.end(), m_object);
 		if (it != v.end()) {
 			*it = v.back();
 			v.pop_back();
@@ -992,7 +1011,7 @@ MovementController::~MovementController()
 	}
 }
 
-const std::vector<uint32_t>* MovementController::destCell(int tx, int tz)
+const std::vector<ServerGameObject*>* MovementController::destCell(int tx, int tz)
 {
 	if (!EnsureDestIndex() || tx < 0 || tz < 0 || tx >= g_destIndex.w || tz >= g_destIndex.h)
 		return nullptr;
@@ -1024,6 +1043,19 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();
 	const GameObjBlueprint* blueprint = m_object->blueprint;
+	// a formation goes where its members can: by the ground of the member type that climbs least
+	// (the formation type's own has no slope limit: on the play test's save the Kingmaker's
+	// formations stood on a summit by the scout they were sent at, their spearmen climbing to their
+	// places for the rest of the game, 2026-11-17)
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		const GameObjBlueprint* member = nullptr;
+		for (const auto& [type, children] : m_object->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && (!member || c->blueprint->maxGradient < member->maxGradient))
+					member = c->blueprint;
+		if (member)
+			blueprint = member;
+	}
 	const int cls = movementClass(blueprint);
 	auto pred = [cls](PFPos pfp) -> bool { return isTileBlockedFast(cls, pfp.x, pfp.z); };
 
@@ -1258,6 +1290,26 @@ uint64_t g_pathBatchRequests = 0, g_pathBatchSearches = 0;
 // the batches' parts (lines, searches) that ran on the worker threads (4 requests or more)
 uint64_t g_pathPoolRuns = 0;
 
+// the path searches' worker threads, also for SimParallelFor (none with "pathThreads" 1; made
+// once, left running to the end of the program)
+static WorkerPool* SharedWorkerPool()
+{
+	static WorkerPool* pool = pathThreads() > 1 ? new WorkerPool(pathThreads()) : nullptr;
+	return pool;
+}
+
+// Other parts of the step on the same threads (the sight scans with "parallelSight"): f(0..n-1),
+// returning when all are done; in order here without threads or for a few
+void SimParallelFor(size_t n, const std::function<void(size_t)>& f)
+{
+	WorkerPool* pool = SharedWorkerPool();
+	if (pool && n >= 4)
+		pool->run(n, f);
+	else
+		for (size_t i = 0; i < n; i++)
+			f(i);
+}
+
 void MovementController::runPathSearches()
 {
 	using namespace Pathfinding;
@@ -1279,9 +1331,7 @@ void MovementController::runPathSearches()
 	// on the worker threads with the caches filled first; else here, as before (the test switches
 	// that look the ground up afresh)
 	const bool parallel = !g_noCache && !getenv("WKB_PATH_CHECKCACHE");
-	static WorkerPool* pool = nullptr;
-	if (parallel && !pool && pathThreads() > 1)
-		pool = new WorkerPool(pathThreads()); // (left running to the end of the program)
+	WorkerPool* pool = parallel ? SharedWorkerPool() : nullptr;
 	auto forEach = [&](size_t n, const std::function<void(size_t)>& f) {
 		// (fewer than 4 here: the threads' wake-up costs more; test runs: WKB_PATH_MINBATCH=1
 		// sends every batch to the threads)
@@ -1405,8 +1455,12 @@ void MovementController::runPathSearches()
 		PathRequest& r = *rp;
 		if (r.straight)
 			continue;
-		if (r.unreachable)
+		if (r.unreachable) {
 			g_unreachableGoals++;
+			// (Test_RunSave: who asks for them)
+			if (g_unreachableBy && r.object.get())
+				(*g_unreachableBy)[r.object.get()->id]++;
+		}
 		if (r.searchEnd == r.end && !g_noFields && !r.threat) {
 			const ClassGrid* c = &g.classes[r.cls];
 			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));

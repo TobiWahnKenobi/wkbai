@@ -3,6 +3,9 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <functional>
+#include <string>
+#include <vector>
 
 // Ray-traced sun shadows of the buildings, trees, units and the terrain (RenderSettings::rtShadows; RE
 // repository docs/engine/gi-clouds.md), with hardware ray tracing through Diligent (inline ray
@@ -71,7 +74,27 @@ public:
 	static constexpr uint64_t ANIMATED_KEEP = 600;
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
-	// the frame's top-level structure from the casters added
+	// The forest (Forest.h) as still casters: a structure of their own with the terrain, built in
+	// full when the forest was rebuilt (or its slots or the terrain changed), else updated for the
+	// slots changed, at most every 30 frames. blasOf: a tree model's structure (null: not ready).
+	// The shaders trace it and the frame's structure of the other casters (build).
+	void setForest(Diligent::IDeviceContext* ctx, const struct Forest* forest, bool rebuilt, const std::vector<uint32_t>& changed,
+		const std::function<Diligent::IBottomLevelAS*(const struct ForestTree&)>& blasOf);
+	// beginFrame's count (SceneEntity::rtFrame)
+	uint64_t frame() const { return frameCounter; }
+
+	// The trees in the wind (TreeWind.h): per tree mesh (key) one bent structure per wind group,
+	// all of a mesh's groups bent by one compute pass and refitted every frame (windBegin, with
+	// the frame's wind: WindBend); their bounds held fixed (two tiny triangles at the corners of
+	// the farthest a bend reaches), so the still structure of the forest that holds them needn't
+	// be built again as they bend. rest: the mesh's positions (asked for once). nullptr until
+	// made, and with the wind off
+	void windBegin(Diligent::IDeviceContext* ctx, const float wind[4]);
+	Diligent::IBottomLevelAS* windBlas(Diligent::IDeviceContext* ctx, const void* key, const std::function<std::vector<Vector3>()>& rest,
+		Diligent::IBuffer* indices, const std::vector<Group>& groups, uint32_t group);
+	bool windOn() const { return windNow[3] > 0 && windPipeline; }
+	// the frame's top-level structure from the casters added (kept when they are the last
+	// build's: the same structures at the same places)
 	void build(Diligent::IDeviceContext* ctx);
 	// the shadow mask (R8: 1 sunlit, 0 in shadow) of the scene's depth, for its size;
 	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors);
@@ -105,6 +128,25 @@ public:
 
 private:
 	Diligent::IRenderDevice* device;
+	uint32_t geometryBaseOf(const std::vector<Group>& groups);
+	struct WindMesh {
+		std::vector<Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS>> blas; // per wind group
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> rest, bent;
+		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> srb;
+		std::vector<std::string> names;
+		std::vector<Diligent::BLASBuildTriangleData> data; // group 0's (the others' vertices further on)
+		uint32_t vertexCount = 0, stride = 0; // the bent buffer: per group stride vertices
+		std::vector<uint64_t> scratchOffset; // per group, in windScratch
+		uint64_t lastUse = 0;
+		bool inStill = false;
+	};
+	std::map<const void*, WindMesh> windMeshes;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineState> windPipeline;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> windConstants, windCorners, windScratch;
+	uint64_t windScratchNeed = 0;
+	bool windTried = false, collectingStill = false, stillWind = false;
+	float windNow[4] = {};
+	void windDispatch(Diligent::IDeviceContext* ctx, WindMesh& wm);
 	std::map<std::pair<const void*, uint32_t>, Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS>> blases;
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> scratch, tlasScratch, instanceBuffer;
 	Diligent::RefCntAutoPtr<Diligent::ITopLevelAS> tlas;
@@ -126,6 +168,25 @@ private:
 	void uploadAlpha(Diligent::IDeviceContext* ctx);
 	void bindAlpha(Diligent::IShaderResourceBinding* srb);
 	std::vector<Instance> instances;
+	// the instances of the last top-level structure built: a frame with the same ones (a still
+	// scene; a forest's trees) keeps it; any structure made or dropped since builds it again
+	std::vector<Instance> builtInstances;
+	Diligent::IBottomLevelAS* builtTerrain = nullptr;
+	bool structuresChanged = true;
+	// the still structure (setForest) and the moving one's state; each is bound for the other
+	// while that one is empty
+	Diligent::RefCntAutoPtr<Diligent::ITopLevelAS> stillTlas;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> stillInstanceBuffer, stillScratch;
+	uint32_t stillCapacity = 0, stillCount = 0, stillSlots = ~0u, stillMissing = 0, stillAge = 0;
+	size_t stillCasters = 0;
+	Diligent::IBottomLevelAS* stillTerrain = nullptr;
+	std::vector<std::string> stillNames;
+	bool stillBuilt = false, stillPending = false, movingBuilt = false;
+	Diligent::ITopLevelAS* primary() const { return movingBuilt ? tlas.RawPtr() : stillTlas.RawPtr(); }
+	Diligent::ITopLevelAS* secondary() const { return stillBuilt ? stillTlas.RawPtr() : tlas.RawPtr(); }
+	// add's last structure and its first geometry (an entity list is mostly of one mesh)
+	Diligent::IBottomLevelAS* lastAdded = nullptr;
+	uint32_t lastAddedBase = 0;
 	// the terrain's structure (setTerrain), its positions and indices
 	Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS> terrainBlas;
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> terrainVertices, terrainIndices;
@@ -142,7 +203,7 @@ private:
 	Diligent::ITexture* boundDepth = nullptr;
 	Diligent::IBuffer* boundFog = nullptr;
 	Diligent::ITextureView* boundHeights = nullptr;
-	Diligent::ITopLevelAS* boundTlas = nullptr;
+	Diligent::ITopLevelAS* boundTlas = nullptr, *boundTlas2 = nullptr;
 	// the water's reflections
 	bool reflectOk = false, reflectTried = false;
 	Diligent::RefCntAutoPtr<Diligent::IShader> reflectVs, reflectPs;
@@ -153,7 +214,7 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> reflectConstants;
 	Diligent::RefCntAutoPtr<Diligent::ITexture> reflections;
 	Diligent::ITexture* reflectBound[2] = {};
-	Diligent::ITopLevelAS* reflectBoundTlas = nullptr;
+	Diligent::ITopLevelAS* reflectBoundTlas = nullptr, *reflectBoundTlas2 = nullptr;
 	// the models' reflections (renderModelReflections): made at the first use
 	bool modelReflTried = false;
 	Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> modelReflSignature;
@@ -162,6 +223,6 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> modelReflConstants;
 	Diligent::RefCntAutoPtr<Diligent::ITexture> modelRefl;
 	Diligent::ITexture* modelReflBound[2] = {};
-	Diligent::ITopLevelAS* modelReflBoundTlas = nullptr;
+	Diligent::ITopLevelAS* modelReflBoundTlas = nullptr, *modelReflBoundTlas2 = nullptr;
 	uint32_t modelReflAlphaVersion = ~0u;
 };

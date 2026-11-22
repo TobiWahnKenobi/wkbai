@@ -13,6 +13,7 @@
 
 #include "MinistryDepartments.h"
 #include "AIUtil.h"
+#include "Naval.h"
 #include "server.h"
 #include "gameset/gameset.h"
 #include "gameset/command.h"
@@ -142,6 +143,57 @@ int UseAbilities(Government& g, const std::vector<ServerGameObject*>& units, std
 	return used;
 }
 
+// The opening. One against one, 15 seeds on each of plain WKB, WKB Plus 2021 and Plus v9.5, the
+// games were decided by the first wave: about 10 soldiers at minutes 15-22 (plain, 2021), 40-80 at
+// minutes 7-9 (v9.5), against a side with 0-6 soldiers among 20-60 peasants. And the ministries
+// changed nothing before minute 7-16: they trained only with food over 500, which the scripts'
+// peasant spawns never left. So from minute 4 to 20 a home guard: 12 fighters, or 1.2 times the
+// most fighters an enemy has been seen with (at most 60). While it is short, Tactics trains
+// whatever is affordable. (Labour held the peasants too while it was short; four players under
+// plain WKB, with food at 0-50, that stalled the economy at 27 peasants for minutes, so the hold
+// now follows the warning, DangerShort.)
+int OpeningShort(Government& g)
+{
+	ServerGameObject* me = g.player();
+	if (!me || (MinOff() & 1024))
+		return 0;
+	const float now = g.played();
+	if (now < 240.0f || now > Tune("openingEnd", 1200.0f))
+		return 0;
+	std::map<uint32_t, int> seen;
+	for (const auto& [id, s] : g.picture.sightings)
+		if (s.fighter)
+			seen[s.player]++;
+	int most = 0;
+	for (const auto& [p, n] : seen)
+		most = std::max(most, n);
+	// (the floor by the map: 12 with an enemy starting within 700 m, 8 further away; improvement 6)
+	const double nearest = g.board.get("map.nearestEnemy", -1.0);
+	const int floor = (int)Tune("openingFloor", 12.0f) - (nearest >= 0.0 && nearest > 700.0 ? 4 : 0);
+	int want = std::min((int)Tune("openingCap", 60.0f), std::max(floor, (int)std::ceil(most * Tune("openingFactor", 1.2f))));
+	// (on an island, the sea the only way in: no land rush can come, so a guard of 4, and the
+	// peasants aren't held for one; on 3 Isles the guard kept the economy small for 16 minutes)
+	if (me->aiController.naval.need == Naval::NEED_ONLY)
+		want = std::min(want, 4);
+	const int have = me->aiController.fighters();
+	g.board.report("opening.guard", want);
+	return std::max(0, want - have);
+}
+
+// The warning: enemy fighters near the palace (Intelligence's intel.approach); short while there
+// are fewer than 1.2 times as many of the own. Any time in the game: Tactics trains, Labour holds
+// the peasants (their food goes into soldiers), War calls the missions home.
+int DangerShort(Government& g)
+{
+	ServerGameObject* me = g.player();
+	if (!me || (MinOff() & 2048))
+		return 0;
+	const int seen = (int)g.board.get("intel.approach");
+	if (seen <= 0)
+		return 0;
+	return std::max(0, (int)std::ceil(seen * Tune("warnFactor", 1.2f)) - me->aiController.fighters());
+}
+
 int TrainByCounters(Government& g)
 {
 	ServerGameObject* me = g.player();
@@ -149,8 +201,11 @@ int TrainByCounters(Government& g)
 	if (!me)
 		return 0;
 	const GameSet* gs = srv.gameSet.get();
-	const float now = g.now();
-	if (now < 120.0f || me->getItem(Tags::PDITEM_FOOD) <= 500.0f)
+	const float now = g.played();
+	// (the opening's guard short: whatever is affordable, Train checks)
+	const int short_ = std::max(OpeningShort(g), DangerShort(g));
+	const float spare = Tune("trainFood", 500.0f);
+	if (short_ == 0 && (now < 120.0f || me->getItem(Tags::PDITEM_FOOD) <= spare))
 		return 0;
 	// the main enemy: the one whose known army is strongest; its classes' share of power
 	float shares[5] = {}, total = 0.0f;
@@ -175,6 +230,38 @@ int TrainByCounters(Government& g)
 	const Personality& c = g.personality;
 	const int bigGuys = gs->items.names.getIndex("Summons Big Guys");
 	const bool summons = bigGuys >= 0 && me->getItem(bigGuys) > 0.0f;
+	// The army's own composition (improvement 5; WKB_MINOFF 8192 off): a mix by the General's
+	// character that the counters lean on, so the army isn't all one class. Heavy infantry holds,
+	// archers shoot, heavy cavalry breaks archers, light cavalry raids (more of it for a raider).
+	// Plus v9.5's own script armies (Siege, Sapper, Guarding, Formation) exist only under v9.5; this
+	// works on every version.
+	float mix[5] = { 0.0f, 0.35f, 0.30f, 0.20f, 0.15f };
+	mix[4] += 0.2f * (c.raiding - 0.5f);
+	mix[1] += 0.1f * (1.0f - c.aggression) - 0.05f;
+	{
+		float sum = 0.0f;
+		for (int k = 1; k < 5; k++) { mix[k] = std::max(0.05f, mix[k]); sum += mix[k]; }
+		for (int k = 1; k < 5; k++) mix[k] /= sum;
+	}
+	const bool composing = !(MinOff() & 8192);
+	// siege engines: a General who likes siege wants two (one otherwise) once enemy towers or a
+	// palace are known, after minute 12, from the surplus only
+	auto isSiege = [](const std::string& n) { return IsSiegeName(n); };
+	int siegeOwn = 0, siegeWant = 0;
+	if (composing && short_ == 0 && now > 720.0f) {
+		bool hard = false;
+		for (const auto& [key, v] : g.board.reports)
+			if (key.rfind("intel.", 0) == 0 && v > 0.0 && (key.size() > 7 && (key.compare(key.size() - 7, 7, ".towers") == 0 || key.compare(key.size() - 7, 7, ".palace") == 0)))
+				hard = true;
+		if (hard) {
+			siegeWant = c.siege > 0.5f ? 2 : 1;
+			for (ServerGameObject* u : me->aiController.freeFighters(me->playerStartCameraPosition))
+				siegeOwn += isSiege(u->blueprint->name);
+			for (Mission& m : g.missions)
+				for (ServerGameObject* u : g.alive(m))
+					siegeOwn += isSiege(u->blueprint->name);
+		}
+	}
 	int ordered = 0;
 	for (const auto& [b, names] : AIUtil::Trainers(me, false)) {
 		const std::string* best = nullptr;
@@ -183,7 +270,8 @@ int TrainByCounters(Government& g)
 			const GameObjBlueprint* type = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, name);
 			const int cls = AIUtil::TypeClass(type);
 			const bool big = name.find("Abaddon") != std::string::npos || name.find("Michael") != std::string::npos || name.find("Archangel") != std::string::npos;
-			if (cls == 0 && !big)
+			const bool siege = cls == 0 && isSiege(name);
+			if (cls == 0 && !big && !(siege && siegeOwn < siegeWant))
 				continue;
 			float score = 1.0f;
 			if (total > 0.0f) {
@@ -191,21 +279,29 @@ int TrainByCounters(Government& g)
 				for (int k = 0; k < 5; k++)
 					score += shares[k] / total * AIUtil::ClassFactor(cls, k);
 			}
-			// combined arms: less of a class that is over 40% of the army already
-			if (ownTotal >= 8 && c.combined > 0.5f && own[cls] > ownTotal * 0.4f)
+			if (composing && cls > 0 && ownTotal >= 6)
+				// towards the mix: up to +-0.3 for a class far under or over its share
+				score += std::clamp((mix[cls] - (float)own[cls] / ownTotal) * (0.5f + c.combined), -0.3f, 0.3f);
+			else if (!composing && ownTotal >= 8 && c.combined > 0.5f && own[cls] > ownTotal * 0.4f)
+				// combined arms: less of a class that is over 40% of the army already
 				score -= 0.2f;
 			if (big)
 				score = summons ? 3.0f : -1e9f;
-			// a little for the cheaper: more soldiers for the food
-			score -= AIUtil::TypeCost(type) * 0.0002f;
+			if (siege)
+				score = 2.0f;
+			// a little for the cheaper: more soldiers for the food; near the population limit (80 %) the
+			// dearer instead, each place counts (improvement 7)
+			const bool full = !(MinOff() & 32768) && g.board.get("labour.full") >= 0.8;
+			score += AIUtil::TypeCost(type) * (full ? 0.0002f : -0.0002f);
 			if (score > bestScore) { bestScore = score; best = &name; }
 		}
 		if (best && AIUtil::Train(me, b, *best)) {
 			ordered++;
 			own[AIUtil::TypeClass(gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, *best))]++;
+			siegeOwn += isSiege(*best);
 			const std::string k = "war.trained." + *best;
 			g.board.report(k, g.board.get(k) + 1);
-			if (me->getItem(Tags::PDITEM_FOOD) <= 500.0f)
+			if (short_ > 0 ? ordered >= short_ : me->getItem(Tags::PDITEM_FOOD) <= spare)
 				break;
 		}
 	}

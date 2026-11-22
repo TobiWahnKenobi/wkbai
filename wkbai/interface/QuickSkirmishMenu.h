@@ -85,6 +85,7 @@ private:
 	bool aiLifeline = true; // Server::aiLifeline
 	bool aiHomeGuard = true; // Server::aiHomeGuard
 	bool aiWar = true; // Server::aiWar
+	bool aiNaval = true; // Server::aiNaval
 	bool aiMinistries = false; // Server::aiMinistries
 	int aiVision = 0; // Server::aiVision
 	int aiGenerals = 4; // Server::aiGenerals
