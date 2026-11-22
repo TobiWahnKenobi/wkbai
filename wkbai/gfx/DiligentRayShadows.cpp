@@ -3,6 +3,8 @@
 // Licensed under the GNU General Public License 3
 
 #include "DiligentRayShadows.h"
+#include "Forest.h"
+#include "../scene.h"
 #include "ShaderCache.h"
 #include "../util/LoadingProgress.h"
 #include "../util/util.h"
@@ -43,6 +45,7 @@ using namespace Diligent;
 // neighbours' positions, one ray from just off the surface towards a point of the sun's disc
 static const char maskShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D<float> tDepth;
 Texture2D<float> tHeights; // the terrain's vertex heights
 
@@ -158,7 +161,10 @@ float PS(VS_OUTPUT input) : SV_Target
 		RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> pq;
 		pq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, probe);
 )---" ALPHA_TEST_LOOP(pq) R"---(
-		if (pq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+		RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> pq2;
+		pq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0xFF, probe);
+)---" ALPHA_TEST_LOOP(pq2) R"---(
+		if (pq.CommittedStatus() != COMMITTED_TRIANGLE_HIT && pq2.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
 			// no terrain heights: lit by its own light alone (as before the self shadow)
 			n = SunDir.w > 0 ? normalize(float3(GroundHeight(p.xz - float2(1.5, 0)) - GroundHeight(p.xz + float2(1.5, 0)), 3.0,
 				GroundHeight(p.xz - float2(0, 1.5)) - GroundHeight(p.xz + float2(0, 1.5)))) : l;
@@ -185,7 +191,12 @@ float PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFF, ray);
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	return rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : self;
+	if (rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
+		return fog;
+	RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES | RAY_FLAG_CULL_BACK_FACING_TRIANGLES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0xFF, ray);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	return rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? fog : self;
 }
 )---";
 
@@ -197,6 +208,7 @@ float PS(VS_OUTPUT input) : SV_Target
 // ray's reach and the screen's edges.
 static const char reflectShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D tScene;
 Texture2D<float> tDepth;
 SamplerState sLinear;
@@ -239,9 +251,19 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+	bool any = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+	float t = any ? rq.CommittedRayT() : ray.TMax;
+	RayDesc ray2 = ray;
+	ray2.TMax = t;
+	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0x01, ray2);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	if (rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+		any = true;
+		t = rq2.CommittedRayT();
+	}
+	if (!any)
 		return float4(0, 0, 0, 0);
-	float t = rq.CommittedRayT();
 	float3 hit = ray.Origin + r * t;
 	float3 colour = Fallback.rgb;
 	float4 clip = mul(float4(hit, 1), Transform);
@@ -297,6 +319,7 @@ DiligentRayShadows::DiligentRayShadows(IRenderDevice* device) : device(device)
 		{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tHeights", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+		{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 		{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -529,8 +552,8 @@ void DiligentRayShadows::add(IBottomLevelAS* b, const Matrix& transform)
 
 void DiligentRayShadows::build(IDeviceContext* ctx)
 {
-	lastInstanceCount = instances.size();
-	const bool withTerrain = terrainBlas != nullptr;
+	lastInstanceCount = instances.size() + stillCasters;
+	const bool withTerrain = false; // (in the still structure: setForest)
 	// the same casters as the last build: its structure stays (with 30,000 trees the build took
 	// 10-20 ms a frame on the CPU; a forest doesn't move)
 	if (built && !structuresChanged && builtTerrain == terrainBlas.RawPtr() && instances.size() == builtInstances.size()) {
@@ -542,15 +565,19 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 		}
 		if (same) {
 			uploadAlpha(ctx);
+			built = movingBuilt || stillBuilt;
 			return;
 		}
 	}
-	built = false;
+	movingBuilt = false;
+	built = stillBuilt;
 	structuresChanged = false;
 	builtInstances = instances;
 	builtTerrain = terrainBlas.RawPtr();
-	if (instances.empty() && !withTerrain)
+	if (instances.empty() && !withTerrain) {
+		uploadAlpha(ctx);
 		return;
+	}
 	const Uint32 count = (Uint32)instances.size() + (withTerrain ? 1 : 0);
 	if (count > tlasCapacity) {
 		tlasCapacity = std::max<Uint32>(count * 2, 1024);
@@ -614,7 +641,134 @@ void DiligentRayShadows::build(IDeviceContext* ctx)
 	ta.BindingMode = HIT_GROUP_BINDING_MODE_PER_TLAS;
 	ctx->BuildTLAS(ta);
 	uploadAlpha(ctx);
+	movingBuilt = true;
 	built = true;
+}
+
+void DiligentRayShadows::setForest(IDeviceContext* ctx, const Forest* forest, bool rebuilt, const std::vector<uint32_t>& changed,
+	const std::function<IBottomLevelAS*(Model*)>& blasOf)
+{
+	const uint32_t slots = forest ? (uint32_t)forest->trees.size() : 0;
+	stillAge++;
+	if (!changed.empty())
+		stillPending = true;
+	bool full = rebuilt || slots != stillSlots || stillTerrain != terrainBlas.RawPtr() || !stillTlas;
+	// the slots changed are taken in at most every 30 frames (with 30,000 trees an update costs a
+	// few ms): a tree felled keeps its shadow for up to half a second; a tree's model not ready
+	// (its leaves' texture not uploaded yet) is tried again as often
+	if (!full && !((stillPending || stillMissing) && stillAge >= 30))
+		return;
+	if (stillMissing)
+		full = true;
+	stillAge = 0;
+	stillPending = false;
+	stillMissing = 0;
+	stillSlots = slots;
+	stillTerrain = terrainBlas.RawPtr();
+	// the instances: a slot each (a tree gone or without a shadow: masked out), then the terrain
+	IBottomLevelAS* any = terrainBlas.RawPtr();
+	std::vector<IBottomLevelAS*> blasOfSlot(slots, nullptr);
+	stillCasters = 0;
+	for (uint32_t i = 0; i < slots; i++) {
+		const ForestTree& t = forest->trees[i];
+		const bool gone = !t.model || (t.hidden && !t.lifted);
+		if (gone)
+			continue;
+		IBottomLevelAS* b = blasOf(t.model);
+		if (!b) {
+			stillMissing++;
+			continue;
+		}
+		if (!(t.flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)))
+			continue;
+		blasOfSlot[i] = b;
+		any = any ? any : b;
+		stillCasters++;
+	}
+	const bool withTerrain = terrainBlas != nullptr;
+	const Uint32 count = slots + (withTerrain ? 1 : 0);
+	if (!any || count == 0 || (stillCasters == 0 && !withTerrain)) {
+		stillBuilt = false;
+		built = movingBuilt;
+		return;
+	}
+	// a full build when the slots or the terrain changed, else an update (the same instances,
+	// their structures, places and masks changed)
+	if (stillBuilt && stillCount != count)
+		full = true;
+	if (full && count > stillCapacity) {
+		stillCapacity = count + count / 4 + 64;
+		TopLevelASDesc td;
+		td.Name = "Still shadow casters";
+		td.MaxInstanceCount = stillCapacity;
+		td.Flags = RAYTRACING_BUILD_AS_PREFER_FAST_TRACE | RAYTRACING_BUILD_AS_ALLOW_UPDATE;
+		stillTlas.Release();
+		device->CreateTLAS(td, &stillTlas);
+		if (!stillTlas) {
+			stillBuilt = false;
+			built = movingBuilt;
+			return;
+		}
+		BufferDesc ib;
+		ib.Name = "Still TLAS instances";
+		ib.Size = (Uint64)TLAS_INSTANCE_DATA_SIZE * stillCapacity;
+		ib.BindFlags = BIND_RAY_TRACING;
+		stillInstanceBuffer.Release();
+		device->CreateBuffer(ib, nullptr, &stillInstanceBuffer);
+		BufferDesc sd;
+		sd.Name = "Still TLAS scratch";
+		sd.Size = std::max(stillTlas->GetScratchBufferSizes().Build, stillTlas->GetScratchBufferSizes().Update);
+		sd.BindFlags = BIND_RAY_TRACING;
+		stillScratch.Release();
+		device->CreateBuffer(sd, nullptr, &stillScratch);
+	}
+	while (stillNames.size() < count)
+		stillNames.push_back("s" + std::to_string(stillNames.size()));
+	std::vector<TLASBuildInstanceData> data(count);
+	for (uint32_t i = 0; i < slots; i++) {
+		TLASBuildInstanceData& d = data[i];
+		d.InstanceName = stillNames[i].c_str();
+		IBottomLevelAS* b = blasOfSlot[i];
+		d.pBLAS = b ? b : any;
+		const Matrix& m = forest->trees[i].transform;
+		if (b) {
+			for (int r = 0; r < 3; r++) {
+				for (int c = 0; c < 3; c++)
+					d.Transform.data[r][c] = m.m[c][r];
+				d.Transform.data[r][3] = m.m[3][r];
+			}
+		}
+		d.Mask = b ? 0x01 : 0x00;
+		d.CustomId = b ? blasGeometryBase[b] : 0;
+		d.Flags = RAYTRACING_INSTANCE_TRIANGLE_FACING_CULL_DISABLE; // leaves seen from either side
+	}
+	if (withTerrain) {
+		// in world space already; opaque, so its CustomId isn't read
+		TLASBuildInstanceData& d = data[count - 1];
+		d.InstanceName = stillNames[count - 1].c_str();
+		d.pBLAS = terrainBlas;
+		d.Transform = InstanceMatrix{};
+		d.Mask = 0x02;
+		d.CustomId = 0;
+		d.Flags = RAYTRACING_INSTANCE_NONE;
+	}
+	BuildTLASAttribs ta;
+	ta.pTLAS = stillTlas;
+	ta.TLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.BLASTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.pInstances = data.data();
+	ta.InstanceCount = count;
+	ta.pInstanceBuffer = stillInstanceBuffer;
+	ta.InstanceBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.pScratchBuffer = stillScratch;
+	ta.ScratchBufferTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+	ta.BindingMode = HIT_GROUP_BINDING_MODE_PER_TLAS;
+	ta.Update = !full && stillBuilt;
+	ctx->BuildTLAS(ta);
+	stillCount = count;
+	stillBuilt = true;
+	built = true;
+	uploadAlpha(ctx);
 }
 
 void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain, uint64_t version)
@@ -764,7 +918,7 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		mask.Release();
 		device->CreateTexture(td, nullptr, &mask);
 	}
-	if (!srb || boundDepth != depth || boundTlas != tlas.RawPtr() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer
+	if (!srb || boundDepth != depth || boundTlas != primary() || boundTlas2 != secondary() || maskAlphaVersion != alphaVersion || boundFog != fogBuffer
 		|| boundHeights != heights) {
 		srb.Release();
 		signature->CreateShaderResourceBinding(&srb, true);
@@ -774,11 +928,13 @@ ITextureView* DiligentRayShadows::renderMask(IDeviceContext* ctx, ITexture* dept
 		// (without the terrain's heights the depth stands in, unread: SunDir.w is 0)
 		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tHeights")->Set(heights ? heights : depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		boundHeights = heights;
-		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		srb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(srb);
 		maskAlphaVersion = alphaVersion;
 		boundDepth = depth;
-		boundTlas = tlas;
+		boundTlas = primary();
+		boundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(constants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
@@ -815,6 +971,7 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 			{ SHADER_TYPE_PIXEL, "tScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -885,17 +1042,19 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 		if (!reflections)
 			return nullptr;
 	}
-	if (!reflectSrb || reflectBound[0] != scene || reflectBound[1] != sceneDepth || reflectBoundTlas != tlas.RawPtr() || reflectAlphaVersion != alphaVersion) {
+	if (!reflectSrb || reflectBound[0] != scene || reflectBound[1] != sceneDepth || reflectBoundTlas != primary() || reflectBoundTlas2 != secondary() || reflectAlphaVersion != alphaVersion) {
 		reflectSrb.Release();
 		reflectSignature->CreateShaderResourceBinding(&reflectSrb, true);
 		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tScene")->Set(scene->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(sceneDepth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		reflectSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(reflectSrb);
 		reflectAlphaVersion = alphaVersion;
 		reflectBound[0] = scene;
 		reflectBound[1] = sceneDepth;
-		reflectBoundTlas = tlas;
+		reflectBoundTlas = primary();
+		reflectBoundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(reflectConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
@@ -924,6 +1083,7 @@ ITextureView* DiligentRayShadows::beginWaterReflections(IDeviceContext* ctx, IBu
 // shaders' sky and ground. Without the normal maps (the shape's normal from the depth).
 static const char modelReflShaderCode[] = ALPHA_TEST_CODE R"---(
 RaytracingAccelerationStructure tlas;
+RaytracingAccelerationStructure tlas2; // the still casters: the forest, the terrain (DiligentRayShadows::setForest)
 Texture2D<float> tDepth;
 Texture2D tScene;
 SamplerState sLinear;
@@ -989,9 +1149,20 @@ float4 PS(VS_OUTPUT input) : SV_Target
 	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq;
 	rq.TraceRayInline(tlas, RAY_FLAG_NONE, 0x01, ray); // the models only, not the terrain
 )---" ALPHA_TEST_LOOP(rq) R"---(
-	if (rq.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+	bool any = rq.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+	float t = any ? rq.CommittedRayT() : ray.TMax;
+	RayDesc ray2 = ray;
+	ray2.TMax = t;
+	RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rq2;
+	rq2.TraceRayInline(tlas2, RAY_FLAG_NONE, 0x01, ray2);
+)---" ALPHA_TEST_LOOP(rq2) R"---(
+	if (rq2.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
+		any = true;
+		t = rq2.CommittedRayT();
+	}
+	if (!any)
 		return float4(0, 0, 0, 0);
-	float3 hit = ray.Origin + r * rq.CommittedRayT();
+	float3 hit = ray.Origin + r * t;
 	// in sight now: the hit's depth against the pre-pass's where it is on the screen
 	float seen = 0.35;
 	float4 c = mul(float4(hit, 1), ViewProj);
@@ -1027,6 +1198,7 @@ ITextureView* DiligentRayShadows::renderModelReflections(IDeviceContext* ctx, IT
 			{ SHADER_TYPE_PIXEL, "tDepth", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tScene", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "tlas", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
+			{ SHADER_TYPE_PIXEL, "tlas2", 1, SHADER_RESOURCE_TYPE_ACCEL_STRUCT, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtGeometries", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "rtUVs", 1, SHADER_RESOURCE_TYPE_BUFFER_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
 			{ SHADER_TYPE_PIXEL, "alphaTextures", MAX_ALPHA_TEXTURES, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE },
@@ -1109,18 +1281,20 @@ ITextureView* DiligentRayShadows::renderModelReflections(IDeviceContext* ctx, IT
 		if (!modelRefl)
 			return nullptr;
 	}
-	if (!modelReflSrb || modelReflBound[0] != depth || modelReflBound[1] != prevScene || modelReflBoundTlas != tlas.RawPtr()
+	if (!modelReflSrb || modelReflBound[0] != depth || modelReflBound[1] != prevScene || modelReflBoundTlas != primary() || modelReflBoundTlas2 != secondary()
 		|| modelReflAlphaVersion != alphaVersion) {
 		modelReflSrb.Release();
 		modelReflSignature->CreateShaderResourceBinding(&modelReflSrb, true);
 		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tDepth")->Set(depth->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
 		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tScene")->Set(prevScene->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
-		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(tlas);
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas")->Set(primary());
+		modelReflSrb->GetVariableByName(SHADER_TYPE_PIXEL, "tlas2")->Set(secondary());
 		bindAlpha(modelReflSrb);
 		modelReflAlphaVersion = alphaVersion;
 		modelReflBound[0] = depth;
 		modelReflBound[1] = prevScene;
-		modelReflBoundTlas = tlas;
+		modelReflBoundTlas = primary();
+		modelReflBoundTlas2 = secondary();
 	}
 	void* mapped = nullptr;
 	ctx->MapBuffer(modelReflConstants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);

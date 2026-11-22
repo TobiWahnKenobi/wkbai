@@ -39,6 +39,19 @@ struct ClientGameObject : SpecificGameObject<Client, ClientGameObject> {
 	std::unordered_map<int, int> buildingOrderCountMap;
 	// ENABLE_/DISABLE_SHADOW (mods): -1 as its type has it, 0 no static shadow, 1 one
 	int8_t shadowSwitch = -1;
+	// The forest (gfx/Forest.h, ClientInterface::drawObject): this tree's slot while forestGen is
+	// the forest's, and what its look was worked out from (checked each frame; zeroed before it
+	// is filled, so that it compares with memcmp)
+	struct ForestKey {
+		Vector3 position, orientation, scale;
+		const GameObjBlueprint* blueprint;
+		int subtype, appearance, animationIndex, animationVariant;
+		uint32_t flags;
+		int color;
+	};
+	int forestSlot = -1;
+	uint32_t forestGen = 0;
+	ForestKey forestKey;
 
 	void updatePosition(const Vector3& newposition);
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);

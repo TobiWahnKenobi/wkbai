@@ -3,6 +3,9 @@
 // Licensed under the GNU General Public License 3
 
 #pragma once
+#include <functional>
+#include <string>
+#include <vector>
 
 // Ray-traced sun shadows of the buildings, trees, units and the terrain (RenderSettings::rtShadows; RE
 // repository docs/engine/gi-clouds.md), with hardware ray tracing through Diligent (inline ray
@@ -71,6 +74,12 @@ public:
 	static constexpr uint64_t ANIMATED_KEEP = 600;
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
+	// The forest (Forest.h) as still casters: a structure of their own with the terrain, built in
+	// full when the forest was rebuilt (or its slots or the terrain changed), else updated for the
+	// slots changed, at most every 30 frames. blasOf: a tree model's structure (null: not ready).
+	// The shaders trace it and the frame's structure of the other casters (build).
+	void setForest(Diligent::IDeviceContext* ctx, const struct Forest* forest, bool rebuilt, const std::vector<uint32_t>& changed,
+		const std::function<Diligent::IBottomLevelAS*(struct Model*)>& blasOf);
 	// beginFrame's count (SceneEntity::rtFrame)
 	uint64_t frame() const { return frameCounter; }
 	// the frame's top-level structure from the casters added (kept when they are the last
@@ -134,6 +143,17 @@ private:
 	std::vector<Instance> builtInstances;
 	Diligent::IBottomLevelAS* builtTerrain = nullptr;
 	bool structuresChanged = true;
+	// the still structure (setForest) and the moving one's state; each is bound for the other
+	// while that one is empty
+	Diligent::RefCntAutoPtr<Diligent::ITopLevelAS> stillTlas;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> stillInstanceBuffer, stillScratch;
+	uint32_t stillCapacity = 0, stillCount = 0, stillSlots = ~0u, stillMissing = 0, stillAge = 0;
+	size_t stillCasters = 0;
+	Diligent::IBottomLevelAS* stillTerrain = nullptr;
+	std::vector<std::string> stillNames;
+	bool stillBuilt = false, stillPending = false, movingBuilt = false;
+	Diligent::ITopLevelAS* primary() const { return movingBuilt ? tlas.RawPtr() : stillTlas.RawPtr(); }
+	Diligent::ITopLevelAS* secondary() const { return stillBuilt ? stillTlas.RawPtr() : tlas.RawPtr(); }
 	// add's last structure and its first geometry (an entity list is mostly of one mesh)
 	Diligent::IBottomLevelAS* lastAdded = nullptr;
 	uint32_t lastAddedBase = 0;
@@ -153,7 +173,7 @@ private:
 	Diligent::ITexture* boundDepth = nullptr;
 	Diligent::IBuffer* boundFog = nullptr;
 	Diligent::ITextureView* boundHeights = nullptr;
-	Diligent::ITopLevelAS* boundTlas = nullptr;
+	Diligent::ITopLevelAS* boundTlas = nullptr, *boundTlas2 = nullptr;
 	// the water's reflections
 	bool reflectOk = false, reflectTried = false;
 	Diligent::RefCntAutoPtr<Diligent::IShader> reflectVs, reflectPs;
@@ -164,7 +184,7 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> reflectConstants;
 	Diligent::RefCntAutoPtr<Diligent::ITexture> reflections;
 	Diligent::ITexture* reflectBound[2] = {};
-	Diligent::ITopLevelAS* reflectBoundTlas = nullptr;
+	Diligent::ITopLevelAS* reflectBoundTlas = nullptr, *reflectBoundTlas2 = nullptr;
 	// the models' reflections (renderModelReflections): made at the first use
 	bool modelReflTried = false;
 	Diligent::RefCntAutoPtr<Diligent::IPipelineResourceSignature> modelReflSignature;
@@ -173,6 +193,6 @@ private:
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> modelReflConstants;
 	Diligent::RefCntAutoPtr<Diligent::ITexture> modelRefl;
 	Diligent::ITexture* modelReflBound[2] = {};
-	Diligent::ITopLevelAS* modelReflBoundTlas = nullptr;
+	Diligent::ITopLevelAS* modelReflBoundTlas = nullptr, *modelReflBoundTlas2 = nullptr;
 	uint32_t modelReflAlphaVersion = ~0u;
 };

@@ -11,6 +11,7 @@
 #include "../server.h"
 #include "../Environment.h"
 #include "../gfx/RenderSettings.h"
+#include "../platform.h"
 #include <SDL3/SDL_timer.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
@@ -191,6 +192,10 @@ void BenchmarkFrameEnd(bool worldLoaded)
 	if (frame <= warmup) {
 		if (frame == warmup)
 			ProfilerResetTotals(); // the per-pass times over the recorded frames only
+		// "sample": true: the main thread sampled over the recorded frames (the report's "sampler":
+		// the top functions, inclusive and exclusive)
+		if (frame == warmup && bm->value("sample", false))
+			SamplerStart();
 		if (frame == warmup && Server::instance) {
 			gameStart = Server::instance->timeManager.currentTime;
 			realStart = SDL_GetTicks();
@@ -224,6 +229,8 @@ void BenchmarkFrameEnd(bool worldLoaded)
 			{ "corrupt", sc.corrupt }, { "failed", sc.failed }, { "compileMs", sc.compileMs }, { "loadMs", sc.loadMs },
 			{ "pipelines", sc.pipelines }, { "pipelineMs", sc.pipelineMs }, { "rebuilt", sc.rebuilt }, { "reason", sc.reason } };
 	}
+	if (bm->value("sample", false))
+		report["sampler"] = SamplerStop(60);
 	report["frames"] = s.frames;
 	report["avgMs"] = s.avgMs;
 	report["p50Ms"] = s.p50Ms;

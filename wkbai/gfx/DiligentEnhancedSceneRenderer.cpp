@@ -19,6 +19,7 @@
 #include "DiligentClouds.h"
 #include "DiligentGI.h"
 #include "DiligentRayShadows.h"
+#include "Forest.h"
 #include "GpuProfiler.h"
 #include <unordered_set>
 #include "../Model.h"
@@ -1490,6 +1491,185 @@ struct MotionInstance {
 };
 static_assert(sizeof(MotionInstance) == 160);
 
+// The forest's GPU copy (Forest.h): every slot's instance (as the vertex shader reads it) and its
+// bounding sphere, group (model and UV set) and state, kept between frames and updated per slot
+// changed. Per pass a compute shader culls them against the pass's view (and the casters' flags
+// of a shadow pass) into a compact region per group, and writes the indirect draws' instance
+// counts; the draws then read the compact regions as their instance buffer (StartInstance: the
+// region's start). Two regions per group: every instance (drawn with the bark materials), and
+// those whose leaves are drawn (not bare: SEFLAG_BARE with bark, or charred).
+static const char forestCullCode[] = R"---(
+cbuffer CullBuffer
+{
+	float4 Planes[6];
+	uint4 Info; // the slots, the casters' flags (0: all), the groups, the draws
+};
+ByteAddressBuffer Instances; // 80 bytes a slot
+ByteAddressBuffer Cull;      // 32: centre, radius; group, flags, state (1 hidden, 2 leaves not drawn)
+ByteAddressBuffer Groups;    // 16: region all, region leaves
+ByteAddressBuffer Draws;     // 32: index count, first index, base vertex, group; region kind (0 all, 1 leaves)
+RWByteAddressBuffer Counters; // 2 per group
+RWByteAddressBuffer Compact;  // 80 bytes an instance
+RWByteAddressBuffer Args;     // 20 bytes a draw
+
+[numthreads(64, 1, 1)]
+void CSClear(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x < Info.z * 2)
+		Counters.Store(id.x * 4, 0);
+}
+
+void CopyInstance(uint from, uint to)
+{
+	for (uint k = 0; k < 5; k++)
+		Compact.Store4(to * 80 + k * 16, Instances.Load4(from * 80 + k * 16));
+}
+
+[numthreads(64, 1, 1)]
+void CSCull(uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+	if (i >= Info.x)
+		return;
+	float4 s = asfloat(Cull.Load4(i * 32));
+	uint4 c = Cull.Load4(i * 32 + 16);
+	if ((c.z & 1) != 0 || (Info.y != 0 && (c.y & Info.y) == 0))
+		return;
+	[unroll] for (uint p = 0; p < 6; p++)
+		if (dot(Planes[p].xyz, s.xyz) + Planes[p].w < -s.w)
+			return;
+	uint2 g = Groups.Load2(c.x * 16);
+	uint n;
+	Counters.InterlockedAdd(c.x * 8, 1, n);
+	CopyInstance(i, g.x + n);
+	if ((c.z & 2) == 0) {
+		Counters.InterlockedAdd(c.x * 8 + 4, 1, n);
+		CopyInstance(i, g.y + n);
+	}
+}
+
+[numthreads(64, 1, 1)]
+void CSArgs(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= Info.w)
+		return;
+	uint4 d = Draws.Load4(id.x * 32);
+	uint kind = Draws.Load(id.x * 32 + 16);
+	uint n = Counters.Load(d.w * 8 + kind * 4);
+	Args.Store4(id.x * 20, uint4(d.x, n, d.y, d.z));
+	Args.Store(id.x * 20 + 16, 0); // (the region: the instance buffer's offset; Vulkan's indirect first instance is optional)
+}
+)---";
+
+// a tree's material without its leaves: its bark (SEFLAG_BARE draws only that)
+static bool IsBarkTexture(const std::string& f)
+{
+	std::string l = f;
+	for (char& c : l) c = (char)tolower((unsigned char)c);
+	return l.find("bark") != std::string::npos;
+}
+
+struct ForestGpu {
+	struct Material { uint32_t matId; texture tex; bool alpha, bark; uint32_t firstDraw, drawCount; };
+	struct Group {
+		StaticModel* model;
+		int uvSet;
+		uint32_t members = 0, capacity = 0, regionA = 0, regionB = 0;
+		std::vector<Material> materials;
+	};
+	struct Draw { uint32_t indexCount, firstIndex, baseVertex, group, kind, pad[3]; };
+	struct CullEntry { float centre[3], radius; uint32_t group, flags, state, pad; };
+	std::vector<Group> groups;
+	std::map<std::pair<StaticModel*, int>, uint32_t> groupOf;
+	std::vector<int32_t> slotGroup;
+	std::vector<Draw> draws;
+	uint32_t slots = 0, slotCapacity = 0, compactSize = 0;
+	RefCntAutoPtr<IBuffer> instances, cull, groupBuf, drawBuf, counters, compact, args, constants;
+	RefCntAutoPtr<IPipelineState> psos[3]; // clear, cull, arguments
+	RefCntAutoPtr<IShaderResourceBinding> srbs[3];
+	bool buffersBound = false;
+	uint64_t syncedFrame = ~0ull;
+	// slots changed this frame for the ray-traced structures (all: rebuilt)
+	std::vector<uint32_t> changedForRt;
+	bool rebuiltForRt = true;
+
+	static RefCntAutoPtr<IBuffer> rawBuffer(IRenderDevice* device, const char* name, uint64_t size, BIND_FLAGS bind)
+	{
+		BufferDesc d;
+		d.Name = name;
+		d.Size = std::max<uint64_t>((size + 15) & ~15ull, 16);
+		d.BindFlags = bind;
+		d.Usage = USAGE_DEFAULT;
+		d.Mode = BUFFER_MODE_RAW;
+		RefCntAutoPtr<IBuffer> b;
+		device->CreateBuffer(d, nullptr, &b);
+		if (!b)
+			ferr("Diligent: could not create the forest's buffer \"%s\"", name);
+		return b;
+	}
+
+	void makePipelines(IRenderDevice* device)
+	{
+		if (psos[1])
+			return;
+		const char* entries[3] = { "CSClear", "CSCull", "CSArgs" };
+		for (int k = 0; k < 3; k++) {
+			ShaderCreateInfo sci;
+			sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
+			sci.Source = forestCullCode;
+			sci.SourceLength = sizeof(forestCullCode) - 1;
+			sci.EntryPoint = entries[k];
+			sci.Desc.ShaderType = SHADER_TYPE_COMPUTE;
+			sci.Desc.Name = entries[k];
+			RefCntAutoPtr<IShader> shader;
+			ShaderCache::CreateShader(device, sci, &shader);
+			if (!shader)
+				ferr("Diligent: failed to compile the forest's shader %s", entries[k]);
+			ComputePipelineStateCreateInfo ci;
+			ci.PSODesc.Name = entries[k];
+			ci.PSODesc.PipelineType = PIPELINE_TYPE_COMPUTE;
+			ci.PSODesc.ResourceLayout.DefaultVariableType = SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE;
+			ci.pCS = shader;
+			ShaderCache::CreateComputePipeline(device, ci, &psos[k]);
+			if (!psos[k])
+				ferr("Diligent: could not create the forest's pipeline %s", entries[k]);
+			psos[k]->CreateShaderResourceBinding(&srbs[k], true);
+		}
+		BufferDesc cb;
+		cb.Name = "Forest cull constants";
+		cb.Size = 112;
+		cb.BindFlags = BIND_UNIFORM_BUFFER;
+		cb.Usage = USAGE_DYNAMIC;
+		cb.CPUAccessFlags = CPU_ACCESS_WRITE;
+		device->CreateBuffer(cb, nullptr, &constants);
+	}
+
+	void bind()
+	{
+		// (new bindings each time: a mutable variable is set once, a second Set is ignored, and
+		// the passes kept writing the buffers replaced by a rebuild)
+		for (int k = 0; k < 3; k++) {
+			srbs[k].Release();
+			psos[k]->CreateShaderResourceBinding(&srbs[k], true);
+		}
+		for (auto& srb : srbs) {
+			auto set = [&](const char* name, IDeviceObject* view) {
+				if (IShaderResourceVariable* v = srb->GetVariableByName(SHADER_TYPE_COMPUTE, name))
+					v->Set(view);
+			};
+			set("CullBuffer", constants);
+			set("Instances", instances->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			set("Cull", cull->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			set("Groups", groupBuf->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			set("Draws", drawBuf->GetDefaultView(BUFFER_VIEW_SHADER_RESOURCE));
+			set("Counters", counters->GetDefaultView(BUFFER_VIEW_UNORDERED_ACCESS));
+			set("Compact", compact->GetDefaultView(BUFFER_VIEW_UNORDERED_ACCESS));
+			set("Args", args->GetDefaultView(BUFFER_VIEW_UNORDERED_ACCESS));
+		}
+		buffersBound = true;
+	}
+};
+
 // Half the side of the square around the camera's view centre covered by the static shadow map
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
 static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
@@ -1515,6 +1695,7 @@ static float NightCastShare(bool ungraded)
 struct DiligentEnhancedSceneRenderer::Impl {
 	std::map<StaticModel*, DilMesh> meshMap;
 	std::map<StaticModel*, bool> hasBark; // a tree's model with bark (SEFLAG_BARE draws only that)
+	ForestGpu forest; // the forest's GPU copy (Forest.h)
 	std::map<AnimatedModel*, DilAnim> animMap;
 	std::map<StaticModel*, RefCntAutoPtr<IBuffer>> animBinds; // per animated mesh (BakeAnimBind)
 	RefCntAutoPtr<IBuffer> normalTable;
@@ -2579,6 +2760,267 @@ void DiligentEnhancedSceneRenderer::render()
 	// DRAW_DEPTH: the depth pre-pass's, the same meshes as DRAW_SCENE
 	enum DrawMode { DRAW_SCENE, DRAW_SHADOWS, DRAW_MOTION, DRAW_SKY, DRAW_GI, DRAW_GI_EMIT, DRAW_DEPTH };
 	const uint64_t frameIndex = dgfx->FrameIndex();
+	// The forest (Forest.h): its GPU copy brought up to date once a frame (the slots changed, or
+	// all of them), then culled and drawn in every pass of drawMeshes but the motion vectors'
+	// (still trees: the camera's motion covers them, as for any entity that didn't move)
+	Forest* forestData = shadows.portraitPass ? nullptr : shadows.forest;
+	ForestGpu& fg = _impl->forest;
+	auto meshOf = [&](StaticModel* sm) -> DilMesh& {
+		auto mt = _impl->meshMap.find(sm);
+		if (mt == _impl->meshMap.end())
+			mt = _impl->meshMap.emplace(sm, DilMesh::create(sm, device)).first;
+		return mt->second;
+	};
+	auto modelHasBark = [&](StaticModel* sm) {
+		auto bt = _impl->hasBark.find(sm);
+		if (bt == _impl->hasBark.end()) {
+			bool any = false;
+			for (uint32_t id : sm->matIds)
+				any |= IsBarkTexture(scene->modelCache->getMaterial(id).textureFilename);
+			bt = _impl->hasBark.emplace(sm, any).first;
+		}
+		return bt->second;
+	};
+	if (forestData && fg.syncedFrame != dgfx->FrameIndex()) {
+		fg.syncedFrame = dgfx->FrameIndex();
+		fg.makePipelines(device);
+		const std::vector<ForestTree>& trees = forestData->trees;
+		const uint32_t n = (uint32_t)trees.size();
+		auto keyOf = [&](const ForestTree& t) {
+			StaticModel* sm = t.model->getStaticModel();
+			const int uvSets = std::max(1, (int)meshOf(sm).texcoords.size());
+			return std::make_pair(sm, ((t.color % uvSets) + uvSets) % uvSets);
+		};
+		auto entryOf = [&](uint32_t slot, Instance& inst, ForestGpu::CullEntry& ce) {
+			const ForestTree& t = trees[slot];
+			inst = Instance{};
+			ce = ForestGpu::CullEntry{};
+			const int32_t g = fg.slotGroup[slot];
+			if (t.model && g >= 0) {
+				inst.transform = t.transform.getTranspose();
+				inst.flags = (t.flags & 0xFFFFFF) | (uint32_t)TeamColours::index(t.color) << 24;
+				ce.centre[0] = t.centre.x;
+				ce.centre[1] = t.centre.y;
+				ce.centre[2] = t.centre.z;
+				ce.radius = t.radius + 2.0f; // (the ground's lift, the wind's bend)
+				ce.flags = t.flags;
+				const bool bare = (t.flags & SceneEntity::SEFLAG_BARE) && (modelHasBark(fg.groups[g].model) || (t.flags & SceneEntity::SEFLAG_CHARRED));
+				ce.state = (t.hidden ? 1u : 0u) | (bare ? 2u : 0u);
+			}
+			else
+				ce.state = 1;
+			ce.group = (uint32_t)std::max(g, 0);
+		};
+		bool full = forestData->rebuilt || n != fg.slots || fg.groups.empty();
+		if (!full) {
+			// a slot that moved to another group: kept in place while that group has room
+			for (uint32_t slot : forestData->changed) {
+				const ForestTree& t = trees[slot];
+				if (!t.model)
+					continue;
+				auto g = fg.groupOf.find(keyOf(t));
+				if (g == fg.groupOf.end()) {
+					full = true;
+					break;
+				}
+				const int32_t old = fg.slotGroup[slot];
+				if ((int32_t)g->second != old) {
+					ForestGpu::Group& ng = fg.groups[g->second];
+					if (ng.members >= ng.capacity) {
+						full = true;
+						break;
+					}
+					ng.members++;
+					if (old >= 0)
+						fg.groups[old].members--;
+					fg.slotGroup[slot] = (int32_t)g->second;
+				}
+			}
+		}
+		if (full) {
+			fg.groups.clear();
+			fg.groupOf.clear();
+			fg.slotGroup.assign(n, -1);
+			for (uint32_t slot = 0; slot < n; slot++) {
+				const ForestTree& t = trees[slot];
+				if (!t.model)
+					continue;
+				const auto key = keyOf(t);
+				auto [it, isNew] = fg.groupOf.try_emplace(key, (uint32_t)fg.groups.size());
+				if (isNew) {
+					fg.groups.emplace_back();
+					fg.groups.back().model = key.first;
+					fg.groups.back().uvSet = key.second;
+				}
+				fg.groups[it->second].members++;
+				fg.slotGroup[slot] = (int32_t)it->second;
+			}
+			// the compact regions (a quarter more than the members: trees moving between groups
+			// as the seasons turn them bare) and the draws, grouped by material
+			uint32_t offset = 0;
+			fg.draws.clear();
+			std::vector<uint32_t> groupWords;
+			for (uint32_t g = 0; g < (uint32_t)fg.groups.size(); g++) {
+				ForestGpu::Group& gr = fg.groups[g];
+				gr.capacity = gr.members + gr.members / 4 + 16;
+				gr.regionA = offset;
+				offset += gr.capacity;
+				gr.regionB = offset;
+				offset += gr.capacity;
+				groupWords.insert(groupWords.end(), { gr.regionA, gr.regionB, 0u, 0u });
+				meshOf(gr.model);
+				const PolygonList& pl = gr.model->mesh.polyLists[0];
+				std::vector<uint32_t> mats;
+				for (size_t k = 0; k < pl.groups.size(); k++)
+					if (std::find(mats.begin(), mats.end(), gr.model->matIds[k]) == mats.end())
+						mats.push_back(gr.model->matIds[k]);
+				gr.materials.clear();
+				for (uint32_t matId : mats) {
+					const Material& mat = scene->modelCache->getMaterial(matId);
+					ForestGpu::Material fm;
+					fm.matId = matId;
+					fm.tex = scene->texCache.getTexture(mat.textureFilename.c_str());
+					fm.alpha = mat.alphaTest;
+					fm.bark = IsBarkTexture(mat.textureFilename);
+					fm.firstDraw = (uint32_t)fg.draws.size();
+					uint32_t startIndex = 0, startVertex = 0;
+					for (size_t k = 0; k < pl.groups.size(); k++) {
+						const uint32_t numIndices = 3 * (uint32_t)pl.groups[k].tupleIndex.size();
+						const uint32_t numVertices = (uint32_t)gr.model->mesh.groupIndices[k].size();
+						if (gr.model->matIds[k] == matId && numIndices > 0)
+							fg.draws.push_back({ numIndices, startIndex, startVertex, g, fm.bark ? 0u : 1u, { 0, 0, 0 } });
+						startIndex += numIndices;
+						startVertex += numVertices;
+					}
+					fm.drawCount = (uint32_t)fg.draws.size() - fm.firstDraw;
+					gr.materials.push_back(fm);
+				}
+			}
+			// the buffers (grown with room to spare)
+			if (n > fg.slotCapacity || !fg.instances) {
+				fg.slotCapacity = n + n / 4 + 256;
+				fg.instances = ForestGpu::rawBuffer(device, "Forest instances", (uint64_t)fg.slotCapacity * sizeof(Instance), BIND_SHADER_RESOURCE);
+				fg.cull = ForestGpu::rawBuffer(device, "Forest culling", (uint64_t)fg.slotCapacity * sizeof(ForestGpu::CullEntry), BIND_SHADER_RESOURCE);
+			}
+			if (offset > fg.compactSize || !fg.compact) {
+				fg.compactSize = offset + offset / 4 + 256;
+				fg.compact = ForestGpu::rawBuffer(device, "Forest visible instances", (uint64_t)fg.compactSize * sizeof(Instance), BIND_UNORDERED_ACCESS | BIND_VERTEX_BUFFER);
+			}
+			fg.groupBuf = ForestGpu::rawBuffer(device, "Forest groups", groupWords.size() * 4, BIND_SHADER_RESOURCE);
+			fg.drawBuf = ForestGpu::rawBuffer(device, "Forest draws", fg.draws.size() * sizeof(ForestGpu::Draw), BIND_SHADER_RESOURCE);
+			fg.counters = ForestGpu::rawBuffer(device, "Forest counters", fg.groups.size() * 8, BIND_UNORDERED_ACCESS);
+			fg.args = ForestGpu::rawBuffer(device, "Forest draw arguments", fg.draws.size() * 20, BIND_UNORDERED_ACCESS | BIND_INDIRECT_DRAW_ARGS);
+			if (!groupWords.empty())
+				ctx->UpdateBuffer(fg.groupBuf, 0, groupWords.size() * 4, groupWords.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			if (!fg.draws.empty())
+				ctx->UpdateBuffer(fg.drawBuf, 0, fg.draws.size() * sizeof(ForestGpu::Draw), fg.draws.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			std::vector<Instance> inst(n);
+			std::vector<ForestGpu::CullEntry> cullData(n);
+			for (uint32_t slot = 0; slot < n; slot++)
+				entryOf(slot, inst[slot], cullData[slot]);
+			if (n) {
+				ctx->UpdateBuffer(fg.instances, 0, (uint64_t)n * sizeof(Instance), inst.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				ctx->UpdateBuffer(fg.cull, 0, (uint64_t)n * sizeof(ForestGpu::CullEntry), cullData.data(), RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			}
+			fg.slots = n;
+			fg.bind();
+			fg.rebuiltForRt = true;
+			fg.changedForRt.clear();
+		}
+		else {
+			std::sort(forestData->changed.begin(), forestData->changed.end());
+			forestData->changed.erase(std::unique(forestData->changed.begin(), forestData->changed.end()), forestData->changed.end());
+			for (uint32_t slot : forestData->changed) {
+				Instance inst;
+				ForestGpu::CullEntry ce;
+				entryOf(slot, inst, ce);
+				ctx->UpdateBuffer(fg.instances, (uint64_t)slot * sizeof(Instance), sizeof(Instance), &inst, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				ctx->UpdateBuffer(fg.cull, (uint64_t)slot * sizeof(ForestGpu::CullEntry), sizeof(ce), &ce, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			}
+			fg.changedForRt.insert(fg.changedForRt.end(), forestData->changed.begin(), forestData->changed.end());
+		}
+		forestData->changed.clear();
+		forestData->rebuilt = false;
+	}
+	const bool forestOn = forestData && fg.slots > 0 && !fg.draws.empty() && fg.buffersBound;
+	// culls the forest against the current transform (and, with casterFlags, to the casters) and
+	// draws it with the pass's pipelines (pipelineKind: a DrawMode); whether anything could be drawn
+	auto drawForest = [&](int pipelineKind, uint32_t casterFlags) -> bool {
+		if (!forestOn)
+			return false;
+		PROFILE_SCOPE("Forest");
+		const Matrix& m = dgfx->CurrentTransform();
+		float planes[6][4];
+		float c[4][4];
+		for (int j = 0; j < 4; j++)
+			for (int i = 0; i < 4; i++)
+				c[j][i] = m.m[i][j];
+		for (int i = 0; i < 4; i++) {
+			planes[0][i] = c[3][i] + c[0][i];
+			planes[1][i] = c[3][i] - c[0][i];
+			planes[2][i] = c[3][i] + c[1][i];
+			planes[3][i] = c[3][i] - c[1][i];
+			planes[4][i] = c[3][i] + c[2][i]; // (z >= -w: loose for a 0..1 depth)
+			planes[5][i] = c[3][i] - c[2][i];
+		}
+		for (auto& p : planes) {
+			const float len = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+			if (len > 1e-12f)
+				for (float& v : p) v /= len;
+		}
+		void* mapped = nullptr;
+		ctx->MapBuffer(fg.constants, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
+		memcpy(mapped, planes, sizeof(planes));
+		const uint32_t info[4] = { fg.slots, casterFlags, (uint32_t)fg.groups.size(), (uint32_t)fg.draws.size() };
+		memcpy((uint8_t*)mapped + 96, info, 16);
+		ctx->UnmapBuffer(fg.constants, MAP_WRITE);
+		auto uavBarrier = [&](IBuffer* b) {
+			StateTransitionDesc t(b, RESOURCE_STATE_UNORDERED_ACCESS, RESOURCE_STATE_UNORDERED_ACCESS, STATE_TRANSITION_FLAG_UPDATE_STATE);
+			ctx->TransitionResourceStates(1, &t);
+		};
+		auto dispatch = [&](int k, uint32_t threads) {
+			ctx->SetPipelineState(fg.psos[k]);
+			ctx->CommitShaderResources(fg.srbs[k], RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+			ctx->DispatchCompute(DispatchComputeAttribs{ std::max(1u, (threads + 63) / 64), 1, 1 });
+		};
+		dispatch(0, (uint32_t)fg.groups.size() * 2);
+		uavBarrier(fg.counters);
+		dispatch(1, fg.slots);
+		uavBarrier(fg.counters);
+		uavBarrier(fg.compact);
+		dispatch(2, (uint32_t)fg.draws.size());
+		uavBarrier(fg.args);
+		const auto& table = pipelineKind == DRAW_GI_EMIT ? _impl->giEmitPipelines : pipelineKind == DRAW_GI ? _impl->giPipelines
+			: pipelineKind == DRAW_SHADOWS ? _impl->shadowPipelines : pipelineKind == DRAW_DEPTH ? _impl->depthPipelines : _impl->pipelines;
+		for (ForestGpu::Group& gr : fg.groups) {
+			if (gr.members == 0)
+				continue;
+			DilMesh& mesh = meshOf(gr.model);
+			for (const ForestGpu::Material& fm : gr.materials) {
+				if (fm.drawCount == 0)
+					continue;
+				const Material& mat = scene->modelCache->getMaterial(fm.matId);
+				IShaderResourceBinding* srb = getBinding(fm.tex, mat);
+				ctx->SetPipelineState(table[0][fm.alpha ? 1 : 0]);
+				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				IBuffer* buffers[5] = { mesh.vertices, mesh.normals, mesh.texcoords[gr.uvSet], fg.compact, mesh.emblemSlot() };
+				const Uint64 offsets[5] = { 0, 0, 0, (Uint64)(fm.bark ? gr.regionA : gr.regionB) * sizeof(Instance), 0 };
+				ctx->SetVertexBuffers(0, 5, buffers, offsets, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
+				ctx->SetIndexBuffer(mesh.indices, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				for (uint32_t d = fm.firstDraw; d < fm.firstDraw + fm.drawCount; d++) {
+					DrawIndexedIndirectAttribs a;
+					a.IndexType = VT_UINT16;
+					a.pAttribsBuffer = fg.args;
+					a.DrawArgsOffset = (Uint64)d * 20;
+					a.Flags = DRAW_FLAG_VERIFY_ALL;
+					a.AttribsBufferStateTransitionMode = RESOURCE_STATE_TRANSITION_MODE_TRANSITION;
+					ctx->DrawIndexedIndirect(a);
+				}
+			}
+		}
+		return true;
+	};
 	auto drawMeshes = [&](DrawMode mode) {
 		const bool giPass = mode == DRAW_GI || mode == DRAW_GI_EMIT;
 		const bool shadowPass = mode == DRAW_SHADOWS || mode == DRAW_SKY || giPass, motionPass = mode == DRAW_MOTION;
@@ -2738,6 +3180,8 @@ void DiligentEnhancedSceneRenderer::render()
 			}
 			flush();
 		}
+		if (mode != DRAW_MOTION && drawForest(mode == DRAW_SKY ? DRAW_SHADOWS : mode, shadowPass ? casterFlags : 0))
+			drawn = true;
 		return drawn;
 	};
 
@@ -2865,14 +3309,9 @@ void DiligentEnhancedSceneRenderer::render()
 			DiligentRayShadows* rts = shadows.rayShadows;
 			rts->beginFrame();
 			const uint64_t rtFrame = rts->frame();
-			for (const auto& it : scene->matInsts) {
-				auto* model = it.first.second;
-				auto* staticModel = model->getStaticModel();
-				auto mt = _impl->meshMap.find(staticModel);
-				if (mt == _impl->meshMap.end())
-					continue;
-				DilMesh& mesh = mt->second;
-				// the alpha-tested groups (leaves): their texture as drawn and per triangle its UVs
+			// a mesh's alpha-tested groups (leaves) for the structures: their texture as drawn and per
+			// triangle its UVs; false until they are known
+			auto resolveRtAlpha = [&](StaticModel* staticModel, DilMesh& mesh) -> bool {
 				if (!mesh.rtAlphaResolved) {
 					// (only once their textures are on the GPU: the binding's stand-in would stay in
 					// the structures for good; asked for meanwhile, the mesh casts no shadow until then)
@@ -2884,7 +3323,7 @@ void DiligentEnhancedSceneRenderer::render()
 							ready = false;
 					}
 					if (!ready)
-						continue;
+						return false;
 					mesh.rtAlphaResolved = true;
 					const Mesh& m = staticModel->mesh;
 					const PolygonList& pl = m.polyLists[0];
@@ -2906,6 +3345,17 @@ void DiligentEnhancedSceneRenderer::render()
 							}
 					}
 				}
+				return true;
+			};
+			for (const auto& it : scene->matInsts) {
+				auto* model = it.first.second;
+				auto* staticModel = model->getStaticModel();
+				auto mt = _impl->meshMap.find(staticModel);
+				if (mt == _impl->meshMap.end())
+					continue;
+				DilMesh& mesh = mt->second;
+				if (!resolveRtAlpha(staticModel, mesh))
+					continue;
 				const DilAnim* anim = nullptr;
 				if (model != staticModel) {
 					auto at = _impl->animMap.find((AnimatedModel*)model);
@@ -2979,6 +3429,23 @@ void DiligentEnhancedSceneRenderer::render()
 				}
 			}
 			rts->setTerrain(ctx, shadows.rayShadowsOn ? shadows.rtTerrain : nullptr, shadows.rtTerrainVersion);
+			// the forest's trees: the still structure (built again or updated as the forest changes)
+			{
+				PROFILE_SCOPE("Forest");
+				std::map<Model*, IBottomLevelAS*> known;
+				rts->setForest(ctx, forestOn ? forestData : nullptr, fg.rebuiltForRt, fg.changedForRt, [&](Model* mdl) -> IBottomLevelAS* {
+					auto k = known.find(mdl);
+					if (k != known.end())
+						return k->second;
+					StaticModel* sm = mdl->getStaticModel();
+					DilMesh& mesh = meshOf(sm);
+					IBottomLevelAS* b = resolveRtAlpha(sm, mesh) ? rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups) : nullptr;
+					known[mdl] = b;
+					return b;
+				});
+				fg.rebuiltForRt = false;
+				fg.changedForRt.clear();
+			}
 			PROFILE_SCOPE("Top level");
 			rts->build(ctx);
 		}

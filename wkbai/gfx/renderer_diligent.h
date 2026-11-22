@@ -32,6 +32,8 @@ struct DiligentGfx : IRenderer
 
 	// Shader resource view of a texture from CreateTexture (a white texture for nullptr).
 	virtual Diligent::ITextureView* GetTextureView(texture t) = 0;
+	// the matrix last set by SetTransformMatrix (world -> clip, row vectors)
+	virtual const Matrix& CurrentTransform() const = 0;
 
 	// Copy data into the current frame's stream buffers, returning the buffer and the byte
 	// offset to bind it at. The data stays valid until the end of the frame.
@@ -133,6 +135,9 @@ struct DiligentGfx : IRenderer
 		// (x, z, in map space: world plus the map edge). The terrain renderer draws them into a
 		// map-sized shadow texture that the terrain multiplies in, and clears the list.
 		std::vector<float> blobs;
+		// the forest (Forest.h): the still trees, kept by the client interface between frames and
+		// drawn from the scene renderer's GPU copy; null: none (all trees in the scene)
+		struct Forest* forest = nullptr;
 		// The frame's fire lights (RenderSettings::fireLights), at most MAX_FIRE_LIGHTS, nearest
 		// to the camera first: each as position x, y, z, radius, then colour r, g, b (0-1, times
 		// the strength). Filled by the client interface from the fire particle systems.
