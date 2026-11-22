@@ -31,7 +31,7 @@ With Water at Low or above; on by default. Rivers flow downstream instead of rip
 
 ## Waterfalls
 
-The waterfalls and the cascades where painted rivers drop:
+The waterfalls and the cascades where painted rivers drop, and the rapids, cascades and falls of a map folder's sloped rivers ([rivers with water](../../ui/editor/map-format.md#the-land-from-a-plan)):
 
 - **Off:** none (the original has none either).
 - **Low:** the falling sheet of water and the cascades.

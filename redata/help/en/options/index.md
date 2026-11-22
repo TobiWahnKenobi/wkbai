@@ -10,6 +10,8 @@ wkbai's settings: graphics, controls and keys, the interface, sound, the display
 
 ![The Options screen, Graphics > View and fog](shot:options-view)
 
+> wkbai: wkbai's other windows (Statistics, Timeline, the map editor's panels, the environment panel and the developer windows) are drawn in Warrior Kings' colours: dark brown windows, bronze title bars, tabs and buttons, gold check marks and sliders, and parchment text.
+
 ## Opening the options
 
 - **From the main menu:** Options.

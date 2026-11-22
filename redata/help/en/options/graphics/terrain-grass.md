@@ -27,7 +27,7 @@ Needs a graphics card that can tessellate. **Cost:** small at Medium, more at Hi
 
 ## Extend map
 
-The land goes on beyond the map's edge, with hills, coasts and seas made to match the map, so the world doesn't end at the border. It is only drawn: units can't go there, and the game itself is unchanged.
+The land goes on beyond the map's edge, with hills, coasts and seas made to match the map, so the world doesn't end at the border. It is only drawn: units can't go there, and the game itself is unchanged. A map that brings its own far land (a map of a real place, for example) shows that instead ([stored far land](../../ui/editor/map-format.md#stored-far-land)).
 
 - **Off** (the default).
 - **Near:** a band of land around the map, 64 tiles wide.

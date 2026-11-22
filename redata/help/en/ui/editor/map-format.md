@@ -1,6 +1,6 @@
 ---
 title: wkbai's map format
-ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
+ids: [ui/editor/map-format, ui/editor/map-folder, mechanic/map-format, mechanic/map-folders, mechanic/map-authoring#designing-maps-with-an-ai-assistant, mechanic/map-catalog#the-catalog-and-describe, mechanic/map-terrain#the-land-from-a-plan, mechanic/map-materials#the-ground-from-rules, mechanic/map-scatter#woods-and-resources-from-rules, mechanic/far-land#stored-far-land, mechanic/ground-rules#the-ground-from-rules, mechanic/terrain-generator#the-land-from-a-plan, mechanic/heightmap-import#heightmaps-and-real-land, mechanic/elevation-import#heightmaps-and-real-land, ui/editor/import#importing-an-original-map, ui/editor/compile#the-build-folder]
 order: 95
 ---
 
@@ -38,7 +38,7 @@ The files are plain JSON, text and PNG pictures, so a map maker can also change 
 - the `Maps` folder of an enabled [mod](../../mechanics/mods.md);
 - the game folder's `saved\Maps`.
 
-The skirmish lobby and the Map Editor list each folder once. A folder named "2 Player Green Vale" is listed among the skirmish maps as "Green Vale (2)" and found by the Players filter; under any other name it is at the end of the list, with the filter on All. A level of the same name as a folder is not listed again.
+The skirmish lobby and the Map Editor list each folder once. A folder named "2 Player Green Vale" is listed among the skirmish maps as "Green Vale (2)" and found by the Players filter; under any other name it is at the end of the list, with the filter on All, with one player position for each of its starts. A level of the same name as a folder is not listed again.
 
 ## The map's own day and weather
 
@@ -53,22 +53,32 @@ Instead of painting every hill by hand, a map maker (or an AI assistant) can des
 
 `wkbai --author terrain "<folder>"` turns the plan into `heights.png`: the shapes, then the roughness and the wearing, then the passes, ramps and river beds carved last, so that they stay passable. The same plan and seed always give the same land. Where the sea is, the folder's water gets a lake. It answers with numbers about the land: its heights, how steep it is, how much of it units can walk on (most units can stand on slopes up to 45 degrees), and for each shape whether it came out as asked: a plateau flat enough to build on, a pass or ramp not too steep, a river that never runs uphill. `wkbai --author terrain-stats "<folder>"` gives the same numbers for the land as it is now.
 
+**Rivers with water:** a river in the plan with `"water": true` gets its water too: one sloped surface that runs down its course, with rapids, cascades and falls where the land drops ([waterfalls](../../options/graphics/water.md#waterfalls)). `grade` smooths its bed into an even fall over that many metres; `"trough": false` leaves out the broad valley it carves first, for rivers in real land that has its own valleys. The water never stands above its banks, and lakes on the land keep their rims.
+
 **Your hand edits stay.** The plan only ever writes `heights.png`. What you changed with the [height brushes](terrain.md) is in `heights.hand.png`, which is never touched, and is added on top as before.
 
 ## The ground from rules
 
 The ground's textures can come from rules too, in `map.json`'s `ground`: a preset (temperate, nordic or dry), the material where no rule holds, and a list of rules, the first that holds wins. A rule names a material (such as grass, rock, sand or snow) and when it applies: by height, height above the sea, slope, how the land curves, how wet it is, near a river or the sea, a painted mask, and so on. `wkbai --author materials "<folder>"` paints the tiles from them: it picks a material for each point, then a picture for each tile whose sides match its neighbours' by the texture database's own edge rules, so that one ground passes into the next without seams. Tiles you painted by hand stay. It answers with how much of each material there is and where tiles didn't fit, with `--png` also as a map from above. `wkbai --author material-presets` lists the materials and the presets.
 
+## Woods and resources from rules
+
+`map.json`'s `scatter` places trees and resources for the map by rule each time it is built, as the Neutral Player's: forests on chosen materials, with their density, spacing, clumping, slope and distance from the bases, up to a most; gold and stone in groups near the bases or over the map. A forest's mix of trees can change with the height (`objectsHigh`), or follow a painted layer with `"highMask"` (for example a picture of where the pines are). Nothing is put on water, on steep ground or on another object. The build's report counts what was placed.
+
+## Stored far land
+
+A map folder can bring the land around it: `farland.png` (16-bit heights, north at the top) and `farland.json` (where its south-west corner lies, its cell size, its lowest and highest heights and its sea level). With [Extend map](../../options/graphics/terrain-grass.md#extend-map) on, that land is drawn around the map in place of made-up hills and coasts, blending in from the map's edge.
+
 The materials are data: `Maps\Materials\All_Textures.json` for the game's textures; a mod or texture set brings its own file of the same kind for its texture database.
 
 ## Heightmaps and real land
 
 - **A heightmap picture** (`wkbai --author heightmap`): a grey picture (PNG of 8 or 16 bits, a raw file, an SRTM `.hgt` or a GeoTIFF), cropped and fitted to a range of heights, becomes the base of the plan (`layers\source.png`). The plan's shapes are blended with it, so rivers and passes can be carved into it.
-- **Real land** (`wkbai --author elevation`): elevation data of a real place, from Copernicus GLO-30 GeoTIFF or SRTM `.hgt` files, fitted to the map: squeezed to the map's size, its slopes kept or made steeper, flattened where too steep to play, and the sea found. wkbai never downloads anything: without the files, `wkbai --author elevation-tiles` names the tiles the place needs, with where to get them, their size and their licence. The data's licence and the credit it asks for go into `map.json`'s references; keep them when you share the map.
+- **Real land** (`wkbai --author elevation`): elevation data of a real place, from Copernicus GLO-30 GeoTIFF or SRTM `.hgt` files, or for Great Britain the Ordnance Survey's OS Terrain 50 (`.asc` tiles on the British National Grid, `"source": "os-terrain-50"`), fitted to the map: squeezed to the map's size, its slopes kept or made steeper, flattened where too steep to play, and the sea found. wkbai never downloads anything: without the files, `wkbai --author elevation-tiles` names the tiles the place needs, with where to get them, their size and their licence. The data's licence and the credit it asks for go into `map.json`'s references; keep them when you share the map. Maps of real places may carry more credits, for example for their woods and rivers, under `region.data`.
 
 ## The build folder
 
-Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. You can delete `build\` at any time, or leave it out when you share the map.
+Before a map folder can be played, wkbai builds it into `build\` inside the folder: a map, a level and the water in the form the game loads, with a report of what it found. It does this by itself when the folder is new, when something in it changed, or when a new version of wkbai builds maps differently (as the one that brought [the ground from rules](#the-ground-from-rules) does), so the first load after a change takes a moment longer. In the skirmish lobby this happens in the background, under a "Preparing the map" window with a progress bar ([the map list](../frontend/skirmish/settings.md#the-map-list)). You can delete `build\` at any time, or leave it out when you share the map.
 
 ## Importing an original map
 
