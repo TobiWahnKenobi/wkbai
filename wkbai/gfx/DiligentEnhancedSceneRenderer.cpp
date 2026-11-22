@@ -39,6 +39,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <chrono>
 #include <iterator>
 #include <map>
 #include <set>
@@ -1691,6 +1692,8 @@ struct DiligentEnhancedSceneRenderer::Impl {
 	// the ray-traced shadows' animated poses built this frame (a few a frame, the rest later)
 	uint64_t poseFrame = ~0ull;
 	int posesBuilt = 0;
+	double poseMs = 0.0;
+	std::vector<Vector3> poseScratch; // (the pose's positions, reused)
 	IBuffer* animBind(StaticModel* staticModel, IRenderDevice* device) {
 		auto& b = animBinds[staticModel];
 		if (!b) {
@@ -3009,6 +3012,10 @@ void DiligentEnhancedSceneRenderer::render()
 		const uint32_t casterFlags = (mode == DRAW_SKY || (giPass && shadows.giMode < 2)) ? SceneEntity::SEFLAG_STATIC_SHADOW
 			: (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW);
 		bool drawn = false;
+		// the environment's binding committed once per call (it stays bound across the pipelines,
+		// which share its signature): each commit takes fresh shader-visible descriptors for its
+		// DYNAMIC variables, and one per batch ran the frame's share out late in a long game
+		bool envCommitted = false;
 		for (const auto& it : scene->matInsts) {
 			const Material& mat = scene->modelCache->getMaterial(it.first.first);
 			const int alpha = mat.alphaTest ? 1 : 0;
@@ -3056,7 +3063,10 @@ void DiligentEnhancedSceneRenderer::render()
 					: motionPass ? _impl->motionPipelines : mode == DRAW_DEPTH ? _impl->depthPipelines : _impl->pipelines)[enhAnim ? 1 : 0][alpha]);
 				drawn = true;
 				ctx->CommitShaderResources(srb, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-				ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+				if (!envCommitted) {
+					ctx->CommitShaderResources(_impl->envBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+					envCommitted = true;
+				}
 				if (enhAnim)
 					ctx->CommitShaderResources(enhAnim->binding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 				else {
@@ -3291,6 +3301,7 @@ void DiligentEnhancedSceneRenderer::render()
 			shadows.rayShadowsSupported = false;
 		else {
 			DiligentRayShadows* rts = shadows.rayShadows;
+			const auto rtStart = std::chrono::steady_clock::now();
 			rts->beginFrame();
 			const uint64_t rtFrame = rts->frame();
 			{
@@ -3393,27 +3404,31 @@ void DiligentEnhancedSceneRenderer::render()
 						if (_impl->poseFrame != frameIndex) {
 							_impl->poseFrame = frameIndex;
 							_impl->posesBuilt = 0;
+							_impl->poseMs = 0.0;
 						}
-						if (!blas && _impl->posesBuilt < 24) {
+						// (new poses within the frame's allowance, up to 24 and 1.5 ms, and while
+						// the animation's pool has a structure free: the positions into
+						// DiligentRayShadows's shared buffer, built into it; no GPU allocation
+						// here, those are made on a worker thread: the play test of 2026-11-16's
+						// hitches of up to 2.8 s were a buffer and a structure made per pose)
+						if (!blas && _impl->posesBuilt < 24 && _impl->poseMs < 1.5 && rts->poseSlot(anim, mesh.rtGroups)) {
+							const auto p0 = std::chrono::steady_clock::now();
 							_impl->posesBuilt++;
 							auto* animModel = (AnimatedModel*)model;
 							const Vector3* v = (const Vector3*)animModel->interpolate(poseTime);
-							std::vector<Vector3> pose;
+							std::vector<Vector3>& pose = _impl->poseScratch;
+							pose.clear();
 							pose.reserve(mesh.totVertices);
 							for (auto& grp : staticModel->mesh.groupIndices)
 								for (auto& tup : grp)
 									pose.push_back(v[tup.vertex]);
-							BufferDesc pd;
-							pd.Name = "RT pose";
-							pd.Size = std::max<uint64_t>(pose.size() * 12, 12);
-							pd.BindFlags = BIND_RAY_TRACING;
-							pd.Usage = USAGE_IMMUTABLE;
-							BufferData init{ pose.data(), pose.size() * 12 };
-							RefCntAutoPtr<IBuffer> poseBuffer;
-							device->CreateBuffer(pd, &init, &poseBuffer);
-							if (poseBuffer)
-								blas = rts->blas(ctx, anim, poseId, poseBuffer, 0, mesh.totVertices, mesh.indices, mesh.rtGroups, true);
+							blas = rts->pose(ctx, anim, poseId, (const float*)pose.data(), mesh.totVertices, mesh.indices, mesh.rtGroups);
+							_impl->poseMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - p0).count();
 						}
+						// meanwhile the nearest pose made already (within two key frames) stands
+						// in, rather than no shadow at all
+						if (!blas)
+							blas = rts->cachedNear(anim, poseId, 2 * SUBSTEPS);
 						if (!blas)
 							continue;
 					}
@@ -3461,6 +3476,13 @@ void DiligentEnhancedSceneRenderer::render()
 			}
 			PROFILE_SCOPE("Top level");
 			rts->build(ctx);
+			const double rtMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - rtStart).count();
+			if (rtMs > 30.0) {
+				const auto& st = rts->stats;
+				printf("RT structures: %.1f ms (frame %llu): %d new structures %.1f ms, %d dropped %.1f ms, terrain %d %.1f ms, top level %.1f ms%s; %zu structures, %zu instances\n",
+					rtMs, (unsigned long long)frameIndex, st.created, st.createMs, st.evicted, st.evictMs, st.terrain, st.terrainMs, st.tlasMs,
+					st.tlasGrown ? " (grown)" : "", rts->blasCount(), rts->instanceCount());
+			}
 		}
 	}
 
