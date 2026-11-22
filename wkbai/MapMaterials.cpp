@@ -603,7 +603,11 @@ namespace {
 			}
 		return true;
 	}
+}
 
+bool ReadMaskLayer(const std::filesystem::path& file, int gw, int gh, std::vector<float>& out) { return ReadMask(file, gw, gh, out); }
+
+namespace {
 	bool WritePngRgb(const fs::path& file, int w, int h, const std::vector<uint8_t>& rgb, int channels = 3)
 	{
 		std::string out;
@@ -671,6 +675,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	if (!er.count)
 		warnings.push_back("ground: " + dbFile + " has no edge rules: tiles are chosen by their corners only");
 	const auto tLib = clock::now();
+	MapFolder::ReportProgress("the ground: the land", 0.03f);
 
 	// ---- materials and rules ----
 	json data = LoadMaterials(dbFile, mapJson, warnings);
@@ -974,6 +979,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 			masks[r.mask] = std::move(m);
 		}
 	const auto tLand = clock::now();
+	MapFolder::ReportProgress("the ground: materials and corners", 0.05f);
 
 	// ---- a material per vertex: the first rule that holds ----
 	std::vector<int16_t> vm(NV, (int16_t)defaultMat);
@@ -1442,6 +1448,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	// it lowest, a step from what the rules want costing a little
 	std::vector<uint8_t> queued(NV, 0);
 	for (int pass = 0; pass < 24; pass++) {
+		MapFolder::ReportProgress("the ground: materials and corners", 0.08f + 0.25f * pass / 24);
 		std::vector<int> todo;
 		for (int z = 0; z < H; z++)
 			for (int x = 0; x < W; x++)
@@ -1499,6 +1506,86 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		changedTotal += changed;
 		if (!changed) break;
 	}
+	// Last resort, where the search left a window it can't paint (three groups meeting where no
+	// picture joins them, mostly on mountains: scree, rock, hillside and grass in a few metres): a
+	// patch of one group over it, the one among those round it that leaves the least wrong round
+	// the patch (a step from what the rules want breaking ties), the patch a vertex wider each round
+	// until its rim fits. Only taken when it lowers the cost there.
+	int patched = 0, patchRounds = 0, badBeforePatches = 0, badAfterPatches = 0;
+	{
+		auto regionCost = [&](int x0, int z0, int x1, int z1) {
+			int c = 0;
+			for (int z = z0 - 2; z <= z1; z++)
+				for (int x = x0 - 2; x <= x1; x++)
+					c += windowCost(x, z, 2, 1) + windowCost(x, z, 1, 2) + tileCost(x, z);
+			return c;
+		};
+		std::vector<int16_t> keep;
+		for (int r = 0; r < 8; r++) {
+			std::vector<std::pair<int, int>> badTiles;
+			for (int z = 0; z < H; z++)
+				for (int x = 0; x < W; x++)
+					if (bad(x, z)) badTiles.push_back({ x, z });
+			if (r == 0) badBeforePatches = (int)badTiles.size();
+			badAfterPatches = (int)badTiles.size();
+			if (badTiles.empty()) break;
+			patchRounds = r + 1;
+			MapFolder::ReportProgress("the ground: mending where three grounds meet", 0.33f + 0.11f * r / 8);
+			for (auto [x, z] : badTiles) {
+				if (!bad(x, z)) continue;
+				const int x0 = std::max(0, x - r), z0 = std::max(0, z - r), x1 = std::min(gw - 1, x + 2 + r), z1 = std::min(gh - 1, z + 2 + r);
+				std::vector<int> cands;
+				for (int vz = std::max(0, z0 - 1); vz <= std::min(gh - 1, z1 + 1); vz++)
+					for (int vx = std::max(0, x0 - 1); vx <= std::min(gw - 1, x1 + 1); vx++)
+						cands.push_back(vg[(size_t)vz * gw + vx]);
+				std::sort(cands.begin(), cands.end());
+				cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+				// the patch and a ring round it: the ring's vertices may take the group on the way
+				// from theirs to the patch's (a bridge), so the patch meets what lies round it
+				const int rx0 = std::max(0, x0 - 1), rz0 = std::max(0, z0 - 1), rx1 = std::min(gw - 1, x1 + 1), rz1 = std::min(gh - 1, z1 + 1);
+				keep.clear();
+				for (int vz = rz0; vz <= rz1; vz++)
+					for (int vx = rx0; vx <= rx1; vx++) keep.push_back(vg[(size_t)vz * gw + vx]);
+				auto restore = [&]() {
+					size_t k = 0;
+					for (int vz = rz0; vz <= rz1; vz++)
+						for (int vx = rx0; vx <= rx1; vx++) vg[(size_t)vz * gw + vx] = keep[k++];
+				};
+				const int before = regionCost(rx0, rz0, rx1, rz1);
+				int best = -1, bestC = before, bestW = 1 << 30;
+				bool bestRing = false;
+				auto apply = [&](int g, bool ring) {
+					int wdist = 0;
+					for (int vz = rz0; vz <= rz1; vz++)
+						for (int vx = rx0; vx <= rx1; vx++) {
+							const size_t v = (size_t)vz * gw + vx;
+							if (fixedV[v]) continue;
+							const bool inner = vx >= x0 && vx <= x1 && vz >= z0 && vz <= z1;
+							if (inner) vg[v] = (int16_t)g;
+							else if (ring && L.dist[keep[(size_t)(vz - rz0) * (rx1 - rx0 + 1) + (vx - rx0)]][g] > 1) {
+								const int nb = L.next[keep[(size_t)(vz - rz0) * (rx1 - rx0 + 1) + (vx - rx0)]][g];
+								if (nb >= 0 && !L.pure[nb].empty()) vg[v] = (int16_t)nb;
+							}
+							wdist += std::min(L.dist[vg[v]][want[v]], 6);
+						}
+					if (blocks[g]) wdist += 1000; // (a blocking patch only when nothing else fits)
+					return wdist;
+				};
+				for (int g : cands) {
+					if (L.pure[g].empty()) continue; // a group with no pictures of its own can't fill a patch
+					for (bool ring : { false, true }) {
+						const int wdist = apply(g, ring);
+						const int c = regionCost(rx0, rz0, rx1, rz1);
+						if (c < bestC || (c == bestC && best >= 0 && wdist < bestW)) { bestC = c; best = g; bestW = wdist; bestRing = ring; }
+						restore();
+					}
+				}
+				if (best < 0) continue;
+				apply(best, bestRing);
+				patched++;
+			}
+		}
+	}
 	{
 		int diff = 0;
 		for (size_t i = 0; i < NV; i++) diff += vg[i] != want[i];
@@ -1519,6 +1606,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		WriteAll(PathFromUtf8(std::string(dump) + "." + PathToUtf8(folder.filename()) + ".json"), d.dump());
 	}
 	const auto tLegal = clock::now();
+	MapFolder::ReportProgress("the ground: placing tiles", 0.44f);
 
 	// ---- the tiles: per tile the pictures that fit its corners; then the edges: each tile one
 	// whose four sides fit its neighbours by the EDGE rules (first a scan, then repairs) ----
@@ -1604,11 +1692,15 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		cur[ti] = cs[best[Hash(seed ^ 0x51u, (uint32_t)x, (uint32_t)z, salt) % best.size()]];
 		return bestN;
 	};
-	for (int z = 0; z < H; z++)
+	for (int z = 0; z < H; z++) {
+		if ((z & 31) == 0)
+			MapFolder::ReportProgress("the ground: placing tiles", 0.44f + 0.19f * z / H);
 		for (int x = 0; x < W; x++)
 			if (cand[(size_t)z * W + x]) choose(x, z, 0);
+	}
 	int repairPasses = 0;
 	for (int pass = 1; pass <= 12; pass++) {
+		MapFolder::ReportProgress("the ground: fitting the edges", 0.63f + 0.25f * pass / 12);
 		int bad = 0, fixed = 0;
 		for (int z = 0; z < H; z++)
 			for (int x = 0; x < W; x++) {
@@ -1698,6 +1790,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 					+ cur[b].tex->grp->name + " " + std::to_string(cur[b].tex->id) + ": no EDGE rule allows them in these turns" + (hand[a] || hand[b] ? " (beside a hand tile)" : "") });
 			}
 	const auto tSolve = clock::now();
+	MapFolder::ReportProgress("the ground: the report", 0.88f);
 
 	// ---- the report ----
 	json mr = json::object();
@@ -1799,7 +1892,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		mr["moistureAbout"] = "the moisture rules read, over the playable land (water left out): set moisture limits against these";
 	}
 	mr["solver"] = { { "groups", G }, { "transitions", L.fits.size() }, { "edgeRules", L.ruleCount }, { "picturesWithCorners", L.corners.size() },
-		{ "legalisePasses", legalPasses }, { "localRepairs", localFixed }, { "localBlocksTried", localTried }, { "verticesAbsorbed", absorbed }, { "verticesOpened", opened }, { "verticesChanged", changedTotal }, { "repairPasses", repairPasses }, { "rivers", riverCount },
+		{ "legalisePasses", legalPasses }, { "localRepairs", localFixed }, { "localBlocksTried", localTried }, { "verticesAbsorbed", absorbed }, { "verticesOpened", opened }, { "verticesChanged", changedTotal }, { "patches", patched }, { "patchRounds", patchRounds }, { "badBeforePatches", badBeforePatches }, { "badLastRound", badAfterPatches }, { "repairPasses", repairPasses }, { "rivers", riverCount },
 		{ "moisture", moistFromLayer ? "layers/moisture.png" : "made: distance to water and rivers, drainage, hollows" } };
 	mr["timeMs"] = { { "library", std::round(std::chrono::duration<double, std::milli>(tLib - t0).count()) },
 		{ "land", std::round(std::chrono::duration<double, std::milli>(tLand - tLib).count()) },

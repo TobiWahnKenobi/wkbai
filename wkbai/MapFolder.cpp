@@ -27,6 +27,10 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <thread>
 
 // the mods' folder, as file.cpp's (its own is file-local): "modsPath" in wkconfig.json, else "mods"
 static std::filesystem::path ModsPath()
@@ -958,7 +962,7 @@ namespace {
 		return a + (b - a) * v;
 	}
 
-	int Scatter(const MapJson& m, const Terrain& terrain, std::vector<std::string>& lines, Authoring& auth,
+	int Scatter(const fs::path& folder, const MapJson& m, const Terrain& terrain, std::vector<std::string>& lines, Authoring& auth,
 		std::map<std::string, std::vector<uint32_t>>& idsOf, uint32_t& next, std::vector<std::string>& warnings, json& report)
 	{
 		const json rules = m.raw.value("scatter", json::array());
@@ -1043,6 +1047,14 @@ namespace {
 				}
 			}
 			const float highFrom = r.value("highFrom", 0.0f), highTo = r.value("highTo", 1.0f), highMin = r.value("highMin", 0.0f), highMax = r.value("highMax", 1.0f);
+			// "highMask": a layer (layers\<name>.png) giving the share of objectsHigh instead of the
+			// height (a real map's conifer share by wood, from a forest inventory)
+			std::vector<float> highMask;
+			if (r.contains("highMask") && r["highMask"].is_string()) {
+				const std::string mk = r["highMask"].get<std::string>();
+				if (!MapMaterials::ReadMaskLayer(folder / "layers" / (mk + ".png"), W + 1, H + 1, highMask))
+					warnings.push_back(rule + ": no mask layers/" + mk + ".png (the height decides)");
+			}
 			std::vector<uint32_t>& reuse = idsOf[rule];
 			const uint32_t rs = ScatterHash(m.seed, (uint32_t)ri, 0x5ca7, 1);
 			const float maxSlope = r.value("maxSlopeDeg", 32.0f), away = r.value("awayFromBases", 45.0f);
@@ -1050,11 +1062,19 @@ namespace {
 			auto place = [&](float x, float z, uint32_t h) {
 				bool high = false;
 				if (!objectsHigh.empty()) {
-					const float y = terrain.getHeight(x, z);
-					const float t = std::clamp((y - highFrom) / std::max(highTo - highFrom, 0.01f), 0.0f, 1.0f);
-					const float share = highMin + (highMax - highMin) * t * t * (3 - 2 * t);
+					float share, standAmp = 0.66f;
+					if (!highMask.empty()) {
+						const int vx = std::clamp((int)std::lround(x / 5) + E, 0, W), vz = std::clamp((int)std::lround(z / 5) + E, 0, H);
+						share = highMask[(size_t)vz * (W + 1) + vx];
+						standAmp = 0.3f; // the mask is the wood's own mix: stands within it only
+					}
+					else {
+						const float y = terrain.getHeight(x, z);
+						const float t = std::clamp((y - highFrom) / std::max(highTo - highFrom, 0.01f), 0.0f, 1.0f);
+						share = highMin + (highMax - highMin) * t * t * (3 - 2 * t);
+					}
 					// in stands: a slow noise shifts the share by up to a third
-					const float stand = (ScatterNoise(x / 45.0f, z / 45.0f, rs ^ 0x51u) - 0.5f) * 0.66f;
+					const float stand = (ScatterNoise(x / 45.0f, z / 45.0f, rs ^ 0x51u) - 0.5f) * standAmp;
 					high = ScatterUnit(ScatterHash(h, 17, 17, 17)) < std::clamp(share + stand, 0.0f, 1.0f);
 				}
 				const auto& list = high ? objectsHigh : objects;
@@ -1276,7 +1296,7 @@ namespace {
 			SetStartCamera(lines, auth.players[i], Vector3(p.x, terrain.getHeight(p.x, p.z) + 45.0f, p.z + 70.0f), -0.67f, 3.15f);
 			changed = true;
 		}
-		made += Scatter(m, terrain, lines, auth, idsOf, next, warnings, report);
+		made += Scatter(folder, m, terrain, lines, auth, idsOf, next, warnings, report);
 		changed = true;
 		if (changed)
 			RebuildPredec(lines);
@@ -1399,6 +1419,7 @@ namespace {
 			warnings.push_back(std::to_string(unset) + " tiles have no hand tile and no material (ground.fill): " + fallback->grp->name + " " + std::to_string(fallback->id));
 		// water
 		std::shared_ptr<WaterDesign> design;
+		ReportProgress("the water", 0.01f);
 		ReadWater(folder, m, t.lakes, t.lakeExtraBits, design, warnings);
 		t.waterDesign = design;
 		t.floodfillWater();
@@ -1418,6 +1439,7 @@ namespace {
 		// the ground by rule (MapMaterials.h): materials per vertex, then the edge-rule solver; the
 		// hand tiles stay
 		if (byMaterials) {
+			ReportProgress("the ground", 0.02f);
 			std::vector<uint8_t> ruleTile;
 			if (!MapMaterials::Paint(folder, m.raw, m.seed, t, isHand, report, warnings, ruleTile, error))
 				return false;
@@ -1608,6 +1630,30 @@ std::string InputsHash(const std::filesystem::path& folder)
 	return Hex64(h);
 }
 
+namespace {
+	// one compile at a time (the menus' background one, the server's, the editor's): the second
+	// waits, then finds the cache fresh
+	std::recursive_mutex g_compileMutex;
+	std::mutex g_progressMutex;
+	Progress g_progress;
+	std::chrono::steady_clock::time_point g_stageStart;
+	std::string g_stageName;
+	std::thread g_background;
+	std::atomic<bool> g_backgroundBusy{ false };
+	std::atomic<bool> g_cancel{ false }; // the game is closing: the background compile stops at its next stage
+	std::thread::id g_backgroundId;
+	struct Cancelled {};
+	std::set<std::string> g_failed; // "<folder>|<inputs hash>" of background compiles that failed
+	struct JoinAtExit {
+		~JoinAtExit()
+		{
+			g_cancel = true;
+			if (g_background.joinable())
+				g_background.join();
+		}
+	} g_joinAtExit; // (after g_background: destroyed before it)
+}
+
 bool IsFresh(const std::filesystem::path& folder)
 {
 	std::string stored;
@@ -1623,11 +1669,31 @@ Result Compile(const std::filesystem::path& folder, bool force)
 		r.error = "no map folder " + PathToUtf8(folder);
 		return r;
 	}
+	std::lock_guard<std::recursive_mutex> compiling(g_compileMutex);
 	if (!force && IsFresh(folder)) {
 		r.ok = true;
 		r.reportPath = PathToUtf8(folder / "build" / "report.json");
 		return r;
 	}
+	// the progress the menus show (CompileProgress), over whatever way this returns
+	struct Busy {
+		Busy(const fs::path& f)
+		{
+			{
+				std::lock_guard<std::mutex> lock(g_progressMutex);
+				g_progress.busy = true;
+				g_progress.map = PathToUtf8(f.stem());
+				g_stageName.clear();
+			}
+			ReportProgress("reading the map", 0);
+		}
+		~Busy()
+		{
+			ReportProgress("done", 1);
+			std::lock_guard<std::mutex> lock(g_progressMutex);
+			g_progress.busy = false;
+		}
+	} busy(folder);
 	const std::string hash = InputsHash(folder);
 	printf("Map folder: compiling %s\n", PathToUtf8(folder).c_str());
 	MapJson m;
@@ -1652,11 +1718,14 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	Terrain t;
 	std::vector<uint8_t> minimap;
 	std::map<int, HandTile> ruleTiles;
+	ReportProgress("the heights", 0.005f);
 	if (!BuildTerrain(folder, m, t, minimap, r.warnings, report, error, &ruleTiles))
 		return fail(error);
+	ReportProgress("the objects", 0.94f);
 	std::string level;
 	if (!BuildLevel(folder, m, t, level, r.warnings, report, error))
 		return fail(error);
+	ReportProgress("writing the cache", 0.955f);
 	const fs::path build = folder / "build";
 	std::error_code ec;
 	fs::create_directories(build, ec);
@@ -1718,6 +1787,70 @@ Result Compile(const std::filesystem::path& folder, bool force)
 	printf("Map folder: compiled %s (%d x %d tiles, %zu lakes, %d objects by rules)\n", PathToUtf8(folder).c_str(), m.width, m.height, t.lakes.size(),
 		report.value("objectsByRules", 0));
 	return r;
+}
+
+Progress CompileProgress()
+{
+	std::lock_guard<std::mutex> lock(g_progressMutex);
+	return g_progress;
+}
+
+void ReportProgress(const char* stage, float fraction)
+{
+	if (g_cancel && std::this_thread::get_id() == g_backgroundId && fraction < 1)
+		throw Cancelled{};
+	std::lock_guard<std::mutex> lock(g_progressMutex);
+	const auto now = std::chrono::steady_clock::now();
+	if (stage && g_stageName != stage) {
+		// "compileTimes": true in wkconfig.json prints how long each stage took
+		if (!g_stageName.empty() && g_settings.value("compileTimes", false))
+			printf("Map folder: %-40s %6.2f s\n", g_stageName.c_str(), std::chrono::duration<double>(now - g_stageStart).count());
+		g_stageName = stage;
+		g_stageStart = now;
+		g_progress.stage = stage;
+	}
+	g_progress.fraction = std::clamp(fraction, 0.0f, 1.0f);
+}
+
+std::string LevelFileIfFresh(const std::string& path)
+{
+	const fs::path folder = Resolve(path);
+	if (folder.empty())
+		return {};
+	if (g_backgroundBusy)
+		return {};
+	if (IsFresh(folder))
+		return PathToUtf8(folder / "build" / "level.txt");
+	const std::string key = PathToUtf8(folder) + "|" + InputsHash(folder);
+	{
+		std::lock_guard<std::mutex> lock(g_progressMutex);
+		if (g_failed.count(key))
+			return {};
+	}
+	if (g_background.joinable())
+		g_background.join();
+	g_backgroundBusy = true;
+	{
+		std::lock_guard<std::mutex> lock(g_progressMutex);
+		g_progress.background = true;
+	}
+	g_background = std::thread([folder, key]() {
+		g_backgroundId = std::this_thread::get_id();
+		Result r;
+		try {
+			r = Compile(folder);
+		}
+		catch (const Cancelled&) {
+			printf("Map folder: compiling %s stopped (the game closes)\n", PathToUtf8(folder).c_str());
+		}
+		std::lock_guard<std::mutex> lock(g_progressMutex);
+		if (!r.ok && !g_cancel)
+			g_failed.insert(key);
+		g_progress.background = false;
+		g_progress.finished++;
+		g_backgroundBusy = false;
+	});
+	return {};
 }
 
 std::string LevelFileOf(const std::string& path)
