@@ -2864,7 +2864,7 @@ void DiligentEnhancedSceneRenderer::render()
 		else {
 			DiligentRayShadows* rts = shadows.rayShadows;
 			rts->beginFrame();
-			std::unordered_set<SceneEntity*> added;
+			const uint64_t rtFrame = rts->frame();
 			for (const auto& it : scene->matInsts) {
 				auto* model = it.first.second;
 				auto* staticModel = model->getStaticModel();
@@ -2912,9 +2912,13 @@ void DiligentEnhancedSceneRenderer::render()
 					if (at != _impl->animMap.end() && at->second.animTimes.size() >= 2 && at->second.duration > 0)
 						anim = &at->second;
 				}
+				// a still mesh's structure, looked up once for the list (not per tree)
+				IBottomLevelAS* stillBlas = nullptr;
+				bool stillLooked = false;
 				for (SceneEntity* ent : it.second.list) {
-					if (!(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)) || !added.insert(ent).second)
+					if (!(ent->flags & (SceneEntity::SEFLAG_STATIC_SHADOW | SceneEntity::SEFLAG_DYNAMIC_SHADOW)) || ent->rtFrame == rtFrame)
 						continue;
+					ent->rtFrame = rtFrame;
 					IBottomLevelAS* blas = nullptr;
 					if (anim) {
 						// the pose's structure, cached (DiligentRayShadows drops the ones unused for a
@@ -2964,12 +2968,18 @@ void DiligentEnhancedSceneRenderer::render()
 						if (!blas)
 							continue;
 					}
-					else
-						blas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
+					else {
+						if (!stillLooked) {
+							stillBlas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
+							stillLooked = true;
+						}
+						blas = stillBlas;
+					}
 					rts->add(blas, ent->transform);
 				}
 			}
 			rts->setTerrain(ctx, shadows.rayShadowsOn ? shadows.rtTerrain : nullptr, shadows.rtTerrainVersion);
+			PROFILE_SCOPE("Top level");
 			rts->build(ctx);
 		}
 	}

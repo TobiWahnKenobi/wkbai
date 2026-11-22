@@ -71,7 +71,10 @@ public:
 	static constexpr uint64_t ANIMATED_KEEP = 600;
 	// a caster this frame (its world transform, row vectors)
 	void add(Diligent::IBottomLevelAS* blas, const Matrix& transform);
-	// the frame's top-level structure from the casters added
+	// beginFrame's count (SceneEntity::rtFrame)
+	uint64_t frame() const { return frameCounter; }
+	// the frame's top-level structure from the casters added (kept when they are the last
+	// build's: the same structures at the same places)
 	void build(Diligent::IDeviceContext* ctx);
 	// the shadow mask (R8: 1 sunlit, 0 in shadow) of the scene's depth, for its size;
 	// projection: the camera's (P11, P22, P33, P43), inverseView: view -> world (row vectors);
@@ -126,6 +129,14 @@ private:
 	void uploadAlpha(Diligent::IDeviceContext* ctx);
 	void bindAlpha(Diligent::IShaderResourceBinding* srb);
 	std::vector<Instance> instances;
+	// the instances of the last top-level structure built: a frame with the same ones (a still
+	// scene; a forest's trees) keeps it; any structure made or dropped since builds it again
+	std::vector<Instance> builtInstances;
+	Diligent::IBottomLevelAS* builtTerrain = nullptr;
+	bool structuresChanged = true;
+	// add's last structure and its first geometry (an entity list is mostly of one mesh)
+	Diligent::IBottomLevelAS* lastAdded = nullptr;
+	uint32_t lastAddedBase = 0;
 	// the terrain's structure (setTerrain), its positions and indices
 	Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS> terrainBlas;
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> terrainVertices, terrainIndices;

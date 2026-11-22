@@ -660,6 +660,13 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
 	static const ImU32 treeColor = IM_COL32(28, 72, 24, 255);
+	// The trees' dots, one per minimap pixel: a map with 30,000 trees had 30,000 dots (120,000
+	// vertices) a frame, most of them on top of each other in a dense forest. A tree dot whose
+	// centre falls on a pixel that already has one is left out (the same colour and size, less than
+	// a pixel apart)
+	static std::vector<uint8_t> treePixels;
+	const int cellsW = std::max(1, (int)std::ceil(mapW)), cellsH = std::max(1, (int)std::ceil(mapH));
+	treePixels.assign((size_t)cellsW * cellsH, 0);
 	auto drawDot = [&](ClientGameObject* obj, bool remembered) {
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
 			return;
@@ -686,6 +693,13 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			dotColor = treeColor; // neutral resources such as trees
 		const float size = (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) ? 2.5f : 1.5f;
 		ImVec2 c = toMinimap(obj->position.x, obj->position.z);
+		if (dotColor == treeColor) {
+			const int cx = std::clamp((int)(c.x - mapX), 0, cellsW - 1), cy = std::clamp((int)(c.y - mapY), 0, cellsH - 1);
+			uint8_t& cell = treePixels[(size_t)cy * cellsW + cx];
+			if (cell)
+				return;
+			cell = 1;
+		}
 		drawList->AddRectFilled(ImVec2(c.x - size, c.y - size), ImVec2(c.x + size, c.y + size), dotColor);
 	};
 	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
@@ -5746,8 +5760,10 @@ void ClientInterface::iter()
 			gpuBlobShadows = &dgfx->shadows.blobs;
 			gpuBlobShadows->clear();
 		}
-		if (client->getLevel())
+		if (client->getLevel()) {
+			PROFILE_SCOPE("Objects");
 			drawObject(client->getLevel());
+		}
 		drawExtendedTrees();
 		if (fogOfWarOn()) {
 			for (const auto& [id, copy] : fogOfWar.remembered)

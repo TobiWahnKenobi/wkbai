@@ -390,12 +390,14 @@ void DiligentRayShadows::beginFrame()
 {
 	instances.clear();
 	frameCounter++;
+	lastAdded = nullptr;
 	for (auto it = animatedLastUse.begin(); it != animatedLastUse.end(); ) {
 		if (frameCounter - it->second > ANIMATED_KEEP) {
 			auto b = blases.find(it->first);
 			if (b != blases.end()) {
 				blasGeometryBase.erase(b->second.RawPtr());
 				blases.erase(b);
+				structuresChanged = true;
 			}
 			it = animatedLastUse.erase(it);
 		}
@@ -491,6 +493,7 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 	device->CreateBLAS(desc, &slot);
 	if (!slot)
 		return nullptr;
+	structuresChanged = true;
 	const Uint64 need = slot->GetScratchBufferSizes().Build;
 	if (!scratch || scratch->GetDesc().Size < need) {
 		BufferDesc sd;
@@ -515,15 +518,37 @@ IBottomLevelAS* DiligentRayShadows::blas(IDeviceContext* ctx, const void* key, u
 
 void DiligentRayShadows::add(IBottomLevelAS* b, const Matrix& transform)
 {
-	if (b)
-		instances.push_back({ b, transform, blasGeometryBase[b] });
+	if (!b)
+		return;
+	if (b != lastAdded) {
+		lastAdded = b;
+		lastAddedBase = blasGeometryBase[b];
+	}
+	instances.push_back({ b, transform, lastAddedBase });
 }
 
 void DiligentRayShadows::build(IDeviceContext* ctx)
 {
 	lastInstanceCount = instances.size();
-	built = false;
 	const bool withTerrain = terrainBlas != nullptr;
+	// the same casters as the last build: its structure stays (with 30,000 trees the build took
+	// 10-20 ms a frame on the CPU; a forest doesn't move)
+	if (built && !structuresChanged && builtTerrain == terrainBlas.RawPtr() && instances.size() == builtInstances.size()) {
+		bool same = true;
+		for (size_t i = 0; i < instances.size() && same; i++) {
+			const Instance& a = instances[i];
+			const Instance& b = builtInstances[i];
+			same = a.blas == b.blas && a.geometryBase == b.geometryBase && memcmp(&a.transform, &b.transform, sizeof(Matrix)) == 0;
+		}
+		if (same) {
+			uploadAlpha(ctx);
+			return;
+		}
+	}
+	built = false;
+	structuresChanged = false;
+	builtInstances = instances;
+	builtTerrain = terrainBlas.RawPtr();
 	if (instances.empty() && !withTerrain)
 		return;
 	const Uint32 count = (Uint32)instances.size() + (withTerrain ? 1 : 0);
@@ -604,6 +629,7 @@ void DiligentRayShadows::setTerrain(IDeviceContext* ctx, const Terrain* terrain,
 	terrainKey = terrain;
 	terrainVersion = version;
 	terrainBlas.Release();
+	structuresChanged = true;
 	// the vertices as the terrain renderer places them: (x - edge, z - edge) tiles of 5 units
 	const int w = terrain->width, h = terrain->height;
 	const uint32_t vertexCount = (uint32_t)(w + 1) * (h + 1);
