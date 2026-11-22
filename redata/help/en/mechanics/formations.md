@@ -10,7 +10,7 @@ Eight or more soldiers of one type can form up as a block. A formation moves tog
 
 ## Forming up
 
-- **At least 8** units of the same type. A mixed selection splits into one formation per type.
+- **At least 8** units. Foot and horse, archers and pikes may be mixed in one formation ([mixed formations](#mixed-formations)).
 - **Four shapes:** Line, Column, Orb and Wedge. The Wedge is for heavy units only.
 - **Joining:** more units of the type can [join](../commands/join-formation.md) a formation; it re-forms with them.
 - **Breaking up:** a formation that falls below **8** members disbands into single units.
@@ -57,6 +57,18 @@ A formation multiplies its members' attack and armour, and changes how fast they
 
 - A formation keeps together at about the pace of its slowest member, changed by the shape (table above).
 - Over rough ground members may fall out of their places for a while and catch up.
+
+## Mixed formations
+
+In the original, a mixed formation took its spacing from whichever unit came first and put each member where it happened to stand, so archers ended up in the front rank and knights crowded spearmen.
+
+With wkbai's **Improved mixed formations** (on by default, [the option](../options/controls/mouse.md#improved-mixed-formations)):
+
+- the places are spaced for the widest member, but never more than 25 m from the centre, so the ends stay in the fight;
+- in a Line, Column or Wedge, horsemen take the outer files, hand-to-hand troops the front rows and archers and gunners the rear;
+- whether the formation is in reach of a target is judged for each kind of member, and when the formation is sent to fight, its archers and gunners shoot instead of drawing swords.
+
+The formation marches at its slowest member's pace either way.
 
 ![A Line of pikemen holding against cavalry, with an Orb behind](shot:mech-formations-line-orb)
 

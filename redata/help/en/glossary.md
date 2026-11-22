@@ -34,7 +34,7 @@ The words this help uses, in alphabetical order, with the page that explains eac
 - **Knuckle buttons:** the order buttons on the "knuckles" round the rim of the lower left panel ([command buttons](ui/hud/command-panel.md#knuckle-buttons)).
 - **Lua AI:** an AI General played by a Lua script, chosen per position in the lobby ([AI opponents](mechanics/ai-opponents.md)).
 - **Map folder (`.wkbai`):** wkbai's own map format, a folder that holds a map, its level and its water; the map editor saves into one ([wkbai's map format](ui/editor/map-format.md)).
-- **Ministry AI:** wkbai's lobby setting that runs every AI General as a government of departments ([AI opponents](mechanics/ai-opponents.md)).
+- **Ministry AI:** wkbai's choice for an AI position in the lobby that runs its General as a government of departments ([AI opponents](mechanics/ai-opponents.md#the-ministry-ai)).
 - **Mod:** files that add to or replace the game's, such as new rules, maps or art ([mods](mechanics/mods.md), [the Mods screen](ui/frontend/mods.md)).
 - **Population Limit:** the most people a player may have ([food, population and upkeep](mechanics/population-and-food.md#the-population-limit)).
 - **Recording, replay:** a recorded game, and watching it again ([saves and replays](mechanics/saves-and-replays.md)).

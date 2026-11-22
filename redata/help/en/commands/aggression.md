@@ -17,6 +17,8 @@ Sets the selected soldiers to go after enemies that shoot at them. Most soldiers
 ## How it works
 
 - **Effect:** a hand-to-hand unit hit by an arrow, a bullet, a thrown stone or a spew attack charges whoever shot it.
+- **Enemies passing by:** an idle hand-to-hand unit set to Attack at Will, not in a formation or an army, goes for the nearest enemy soldier it can reach within its sight (10 to 30 m). wkbai's rule: in the original, only enemies within a few metres set it off.
+- **The button's hint** says the setting: "Attack at will: off - click to turn on" on the red fist, "on - click to turn off" on the Stand your Ground button.
 - **Friends join in:** your other soldiers set to Attack at Will within 20 m, not in a formation or a group, join the charge. The charge also takes on the enemy soldiers within 20 m of the shooter.
 - **In a formation:** the formation is told it is under attack and deals with the shooter as a body.
 - **Close combat:** units fight back when struck hand to hand whatever the setting; this one only decides what they do about missile fire.
