@@ -32,6 +32,7 @@
 #include "RenderSettings.h"
 #include "TeamEmblems.h"
 #include "../Environment.h"
+#include "../Wind.h"
 #include <nlohmann/json.hpp>
 #include <cmath>
 #include <cstring>
@@ -279,7 +280,42 @@ cbuffer SunBuffer
 	float4x4 ReflViewProj;
 	float4x4 ReflPrevViewProj;
 	float4 Reflect;
+	// the trees in the wind (Wind.h, RenderSettings::windTrees; the entities with SEFLAG_WIND): xy
+	// the lean (the way it blows times how far a crown 10 m up moves, m), z the sway clock (s), w 0
+	// off, 1 sway, 2 sway and the leaves; WindPrev the same in the frame before (motion vectors)
+	float4 WindBend;
+	float4 WindPrev;
 };
+
+// A tree bent in the wind (TreeBend): a skeleton made on the fly, without bones in the mesh. The
+// trunk is one bone from the tree's foot (its transform's origin): every vertex moves downwind by
+// the square of its height over the foot (a cantilever's curve: the foot stands, the crown moves
+// most), held to its length (it sinks a little as it leans), swinging on the lean at the tree's
+// own pace (a tall tree slower; each tree its own phase by where it stands) and circling a little
+// across it. Sway and leaves: the vertices out from the trunk (the twigs and leaves of the crown)
+// also flutter, quickly, each by its own place, the more the stronger the wind. World positions
+// in and out.
+float3 TreeBend(float3 p, float3 base, float4 wb)
+{
+	float h = max(p.y - base.y, 0);
+	float hn = h * 0.1;
+	float seed = frac(sin(dot(base.xz, float2(12.9898, 78.233))) * 43758.5453);
+	float amp = length(wb.xy);
+	float pace = 1 / (0.8 + 0.25 * hn);
+	float swing = sin(wb.z * 1.7 * pace + seed * 6.283) * 0.4 + sin(wb.z * 2.9 * pace + seed * 17.0) * 0.15;
+	float2 off = wb.xy * ((1 + swing) * hn * hn);
+	off += float2(-wb.y, wb.x) * (sin(wb.z * 1.3 * pace + seed * 9.1) * 0.15 * hn * hn);
+	float len = length(off);
+	off *= min(1, 0.18 * h / max(len, 1e-4)); // (no tree leans more than about 10 degrees)
+	p.xz += off;
+	p.y -= dot(off, off) / (2 * max(h, 0.5));
+	if (wb.w > 1.5 && amp > 1e-4) {
+		float r = length(p.xz - base.xz);
+		float f = sin(wb.z * 11 + dot(p, float3(1.7, 2.3, 1.3)) + seed * 40) * (0.02 + 0.1 * amp) * saturate(r * 0.4) * saturate(hn * 2);
+		p += float3(wb.x / amp * 0.5, 1, wb.y / amp * 0.5) * f;
+	}
+	return p;
+}
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
 // out over its radius, half wrapped around the surface so that fires also light the ground
@@ -415,7 +451,14 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float2 EmblemUV, flo
 	float4x4 EntityTransform = transpose(float4x4(T0, T1, T2, T3));
 	VS_OUTPUT output = (VS_OUTPUT)0;
 	float4x4 trans = mul(EntityTransform, Transform);
-	output.Pos = mul(float4(Pos, 1), trans);
+	// (a tree in the wind: bent, TreeBend)
+	float3 bentWorld = mul(float4(Pos, 1), EntityTransform).xyz;
+	if ((EntityFlags & 1024) && WindBend.w > 0) {
+		bentWorld = TreeBend(bentWorld, EntityTransform[3].xyz, WindBend);
+		output.Pos = mul(float4(bentWorld, 1), Transform);
+	}
+	else
+		output.Pos = mul(float4(Pos, 1), trans);
 	if(EntityFlags & 1) {
 		output.Norm = float3(0,0,0);
 		output.Color = float4(1,1,1,1);
@@ -456,7 +499,7 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float2 EmblemUV, flo
 	output.Texcoord = Texcoord;
 	output.Team = (EntityFlags >> 24) & 7;
 	output.EmblemUV = EmblemUV;
-	float3 worldPos = mul(float4(Pos, 1), EntityTransform).xyz;
+	float3 worldPos = bentWorld;
 	output.WorldPos = worldPos;
 	output.Fog = FogAmount(worldPos, distance(worldPos, FogCamera.xyz));
 	return output;
@@ -1033,13 +1076,18 @@ struct MOTION_OUTPUT
 	float4 Prev : TEXCOORD2;
 };
 
-MOTION_OUTPUT Motion(float3 pos, float3 prevPos, float2 texcoord, float4 T0, float4 T1, float4 T2, float4 T3, float4 P0, float4 P1, float4 P2, float4 P3)
+MOTION_OUTPUT Motion(float3 pos, float3 prevPos, float2 texcoord, float4 T0, float4 T1, float4 T2, float4 T3, float4 P0, float4 P1, float4 P2, float4 P3, uint flags)
 {
 	float4x4 cur = transpose(float4x4(T0, T1, T2, T3)), prev = transpose(float4x4(P0, P1, P2, P3));
 	MOTION_OUTPUT o;
-	o.Pos = mul(float4(pos, 1), mul(cur, Transform));
-	o.Cur = mul(mul(float4(pos, 1), cur), MotionViewProj);
-	o.Prev = mul(mul(float4(prevPos, 1), prev), MotionPrevViewProj);
+	float3 wc = mul(float4(pos, 1), cur).xyz, wp = mul(float4(prevPos, 1), prev).xyz;
+	if ((flags & 1024) && WindBend.w > 0) { // (a tree in the wind: bent now and as it was)
+		wc = TreeBend(wc, cur[3].xyz, WindBend);
+		wp = TreeBend(wp, prev[3].xyz, WindPrev);
+	}
+	o.Pos = mul(float4(wc, 1), Transform);
+	o.Cur = mul(float4(wc, 1), MotionViewProj);
+	o.Prev = mul(float4(wp, 1), MotionPrevViewProj);
 	o.Texcoord = texcoord;
 	return o;
 }
@@ -1048,7 +1096,7 @@ MOTION_OUTPUT VS_Motion(float3 Pos : ATTRIB0, float2 Texcoord : ATTRIB2,
 	float4 T0 : ATTRIB3, float4 T1 : ATTRIB4, float4 T2 : ATTRIB5, float4 T3 : ATTRIB6, uint4 Anim : ATTRIB7,
 	float4 P0 : ATTRIB8, float4 P1 : ATTRIB9, float4 P2 : ATTRIB10, float4 P3 : ATTRIB11, uint4 PrevAnim : ATTRIB12)
 {
-	return Motion(Pos, Pos, Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
+	return Motion(Pos, Pos, Texcoord, T0, T1, T2, T3, P0, P1, P2, P3, Anim.w);
 }
 
 float3 AnimPosition(uint4 anim, uint vertexId, float3 rest)
@@ -1061,7 +1109,7 @@ MOTION_OUTPUT VS_AnimMotion(float3 Pos : ATTRIB0, float2 Texcoord : ATTRIB2,
 	float4 P0 : ATTRIB8, float4 P1 : ATTRIB9, float4 P2 : ATTRIB10, float4 P3 : ATTRIB11, uint4 PrevAnim : ATTRIB12,
 	uint VertexId : SV_VertexID)
 {
-	return Motion(AnimPosition(Anim, VertexId, Pos), AnimPosition(PrevAnim, VertexId, Pos), Texcoord, T0, T1, T2, T3, P0, P1, P2, P3);
+	return Motion(AnimPosition(Anim, VertexId, Pos), AnimPosition(PrevAnim, VertexId, Pos), Texcoord, T0, T1, T2, T3, P0, P1, P2, P3, Anim.w);
 }
 
 // the last frame's position minus the current, in UV
@@ -1893,7 +1941,7 @@ void DiligentEnhancedSceneRenderer::init()
 	cbDesc.Name = "Scene constants";
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sceneConstBuffer);
 	cbDesc.Name = "Scene sun";
-	cbDesc.Size = 816;
+	cbDesc.Size = 848;
 	device->CreateBuffer(cbDesc, nullptr, &_impl->sunConstBuffer);
 	cbDesc.Name = "Scene motion";
 	cbDesc.Size = 128;
@@ -2345,7 +2393,7 @@ void DiligentEnhancedSceneRenderer::render()
 		UpdateCloudBuffer(dgfx, *camera, scene->sunDirection, scene->sunColor);
 	void* mapped = nullptr;
 	ctx->MapBuffer(_impl->sunConstBuffer, MAP_WRITE, MAP_FLAG_DISCARD, mapped);
-	memset(mapped, 0, 816);
+	memset(mapped, 0, 848);
 	*(Vector3*)mapped = scene->sunDirection.normal();
 	float* sunColour = (float*)mapped + 4;
 	sunColour[0] = ((scene->sunColor >> 16) & 255) / 255.0f;
@@ -2397,6 +2445,23 @@ void DiligentEnhancedSceneRenderer::render()
 		refl[33] = camera->projMatrix._33;
 		refl[34] = camera->projMatrix._43;
 		refl[35] = (float)(dgfx->FrameIndex() % 1024);
+	}
+	{
+		// the trees in the wind (Wind.h, WindBend): the lean by the wind now (with its gust), a
+		// crown 10 m up moving 4 cm in still air, 13 cm in a gentle breeze, 30 in a fresh one,
+		// 84 in a gale; once a frame, the frame before's kept for the motion vectors
+		static float cur[4] = {}, prv[4] = {};
+		static uint64_t frame = ~0ull;
+		if (dgfx->FrameIndex() != frame) {
+			const bool first = frame == ~0ull;
+			frame = dgfx->FrameIndex();
+			const float a = 0.04f + 0.8f * std::pow(g_wind.strength(), 1.6f);
+			const float next[4] = { g_wind.dir.x * a, g_wind.dir.z * a, (float)g_wind.swayClock, (float)std::clamp(g_renderSettings.windTrees, 0, 2) };
+			std::copy_n(first ? next : cur, 4, prv);
+			std::copy_n(next, 4, cur);
+		}
+		std::copy_n(cur, 4, (float*)mapped + 204);
+		std::copy_n(prv, 4, (float*)mapped + 208);
 	}
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;

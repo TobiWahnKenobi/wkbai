@@ -45,3 +45,5 @@ CMakeSettings.json
 CMakeUserPresets.json
 wkconfig.json
 dist/
+# the help's buildings pages (build*/ above would hide them)
+!redata/help/*/buildings/

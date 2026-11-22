@@ -2,6 +2,7 @@
 // (C) 2021 AdrienTD
 // Licensed under the GNU General Public License 3
 
+#include "../help/Help.h"
 #include "../SoundPlayer.h"
 #include "../Order.h"
 #include "../MovementController.h"
@@ -70,6 +71,49 @@
 #include <tracy/TracyC.h>
 #include "../util/FrameStats.h"
 #include "../util/LoadingProgress.h"
+#include "../Wind.h"
+
+// The wind's look on the models (Wind.h):
+// the banners and flags (a model whose file's path names a flag, banner or pennant): with the
+// lobby's wind their animation runs on the wind's flag clock (slower in a calm, up to 2.2 times
+// in a gale), each a little apart (offset: its id's); without it as before
+static bool IsBannerModel(Model* m)
+{
+	static std::unordered_map<Model*, bool> known;
+	auto [it, isNew] = known.try_emplace(m, false);
+	if (isNew && m) {
+		std::string n;
+		if (auto* am = dynamic_cast<AnimatedModel*>(m))
+			n = am->fileName;
+		else if (StaticModel* sm = m->getStaticModel())
+			n = sm->fileName;
+		for (char& c : n)
+			c = (char)std::tolower((unsigned char)c);
+		it->second = n.find("flag") != std::string::npos || n.find("banner") != std::string::npos || n.find("pennant") != std::string::npos;
+	}
+	return it->second;
+}
+
+static uint32_t WindAnimTime(Model* m, uint32_t ms, uint32_t offset, float speed)
+{
+	if (!g_wind.on || !m || !IsBannerModel(m))
+		return ms;
+	return (uint32_t)(g_wind.flagClock * 1000.0 * std::max(speed, 0.05f)) + offset * 7919u % 4000u;
+}
+
+// the trees and bushes that bend in it (SEFLAG_WIND): by their blueprint's name, as the seasons'
+static bool IsWindTree(const GameObjBlueprint* bp)
+{
+	static std::unordered_map<const GameObjBlueprint*, bool> known;
+	auto [it, isNew] = known.try_emplace(bp, false);
+	if (isNew && bp) {
+		const std::string& name = bp->name;
+		it->second = (name.find("Tree") != std::string::npos && name.find("Bird") == std::string::npos && name.find("Stump") == std::string::npos)
+			|| name.find("Bush") != std::string::npos || name.find("Deciduous") != std::string::npos || name.find("Willow") != std::string::npos
+			|| name.find("Pine") != std::string::npos || name.find("Fir ") != std::string::npos || name.find("Cedar") != std::string::npos;
+	}
+	return it->second;
+}
 
 // The players' colours by index, taken from the HUD's Interface/InGame/Top Panel/Player<n>.tga
 static const ImU32 playerColors[9] = {
@@ -199,6 +243,7 @@ namespace {
 ClientInterface::~ClientInterface()
 {
 	SetKeyCheatGate(nullptr);
+	Help::SetGame(nullptr, nullptr);
 	if (AgentUi::GetWorld() == &agentWorld)
 		AgentUi::SetWorld(nullptr);
 }
@@ -624,6 +669,9 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			return;
 		if (fogOn && !remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 			return;
+		// and the trees as last seen
+		if (fogOn && !remembered && fogOfWar.treeHidden(obj))
+			return;
 		// Hidden when all its display categories are toggled off
 		const uint8_t categories = obj->blueprint->minimapCategories;
 		if (categories && !(categories & ~minimapHiddenCategories))
@@ -648,10 +696,14 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 	};
 	if (client->getLevel())
 		drawDots(client->getLevel(), drawDots);
-	if (fogOn)
+	if (fogOn) {
 		for (const auto& [id, copy] : fogOfWar.remembered)
 			if (!fogOfWar.isBuildingSeen(copy->position))
 				drawDot(copy.get(), true);
+		for (const auto& [id, copy] : fogOfWar.treeGhosts)
+			if (!fogOfWar.isSeen(copy->position))
+				drawDot(copy.get(), true);
+	}
 	// the selection keys' pings: a ring shrinking onto the object for a second and a half
 	{
 		const uint32_t now = SDL_GetTicks();
@@ -1670,7 +1722,15 @@ void ClientInterface::drawSettingsWindow(bool* open)
 		ImGui::Checkbox("Terrain bump mapping", &s.bumpMapping);
 		ImGui::Checkbox("Terrain lit as the original (light kept at least 1/3 up)", &s.terrainOriginalLight);
 		ImGui::SliderFloat("Ground Fresnel (sky sheen at grazing angles; 0 off)", &s.terrainFresnel, 0.0f, 1.0f);
+		{
+			static const char* const windTreeLevels[] = { "Off", "Sway", "Sway and leaves" };
+			ImGui::Combo("Trees in the wind", &s.windTrees, windTreeLevels, 3);
+		}
 		ImGui::Checkbox("Grass", &s.grass);
+		{
+			static const char* const grassWindLevels[] = { "Off", "Waves", "Field (shelter, gust cells, swirl)" };
+			ImGui::Combo("Grass in the wind", &s.grassWind, grassWindLevels, 3);
+		}
 		ImGui::BeginDisabled(!s.grass);
 		ImGui::SliderFloat("Grass density (blades per m²)", &s.grassDensity, 0.0f, 24.0f, "%.1f");
 		ImGui::SliderFloat("Grass height", &s.grassHeight, 0.2f, 3.0f, "%.2f");
@@ -1744,6 +1804,32 @@ void ClientInterface::drawSettingsWindow(bool* open)
 	if (ImGui::Button("Reload saved"))
 		s.load();
 	ImGui::End();
+}
+
+// wkbai's swimming (the river currents): the water's surface over a place, its tile's water (and
+// the flooded land's, while a flood is up: FindFloodLand's tiles, as drawn) raised by the
+// weather's rise; NAN where there is no water
+static float SwimSurface(Client* client, const Vector3& at)
+{
+	const Terrain* t = client->terrain;
+	if (!t)
+		return NAN;
+	const int tx = (int)std::floor(at.x / 5.0f), tz = (int)std::floor(at.z / 5.0f);
+	const float rise = client->environmentActive ? client->environment.waterRise : 0.0f;
+	if (const auto* tile = t->getPlayableTile(tx, tz); tile && tile->fullOfWater)
+		return tile->waterLevel + rise;
+	if (rise <= 0.05f)
+		return NAN;
+	static const Terrain* of = nullptr;
+	static std::unordered_map<int64_t, float> flood;
+	if (of != t) {
+		of = t;
+		flood.clear();
+		for (const FloodLand& f : FindFloodLand(t))
+			flood[(int64_t)f.z << 32 | (uint32_t)f.x] = f.water;
+	}
+	auto it = flood.find((int64_t)tz << 32 | (uint32_t)tx);
+	return it != flood.end() ? it->second + rise : NAN;
 }
 
 // SHEAR_MODEL: a world-space shear that keeps the model upright but lifts each vertex by the
@@ -1851,7 +1937,7 @@ void ClientInterface::prewarmLevel()
 		};
 		auto loadable = [&](Model* m) {
 			if (auto* anim = dynamic_cast<AnimatedModel*>(m)) {
-				if (!anim->ready && !FileExists(anim->fileName.c_str()))
+				if (!anim->ready && !(anim->madeFrom ? FileExists(anim->madeFrom->fileName.c_str()) : FileExists(anim->fileName.c_str())))
 					return false;
 				StaticModel* mesh = anim->getStaticModel();
 				return mesh && (mesh->ready || mesh->generator || meshExists(mesh->fileName));
@@ -2207,11 +2293,9 @@ std::string UnitAgeText(Client* client, uint32_t id)
 		else
 			snprintf(text, sizeof(text), "Age %d:%02d", s / 60, s % 60);
 	}
-	std::string out = text;
-	// a save from before the history: its age counted from the load
-	if (it->second.flags & 2)
-		out += " (since loading)";
-	return out;
+	// (a save from before the history: born at the game's start, its age the game's; no
+	// "since loading", the user's wish)
+	return std::string(text);
 }
 
 void ClientInterface::drawUnitHistoryOverlay()
@@ -2312,6 +2396,61 @@ void ClientInterface::drawUnitHistoryOverlay()
 // The statistics (F6) and the timeline (F7), from GameChronicle. In a game the statistics show
 // this player and its allies only, and the timeline what it saw; in a replay, everyone and
 // everything. A timeline entry clicked moves the camera there.
+void ClientInterface::drawWindGauge()
+{
+	if (!client || !client->windActive || !g_settings.value("windGauge", true))
+		return;
+	ImGuiIO& io = ImGui::GetIO();
+	const float scale = std::clamp(io.DisplaySize.y / 1080.0f, 0.7f, 2.0f);
+	const float r = 34.0f * scale;
+	// (its reading below kept on the screen)
+	const float textHalf = std::max(ImGui::CalcTextSize("WSW 30 m/s").x, ImGui::CalcTextSize(WindSpeedName(g_wind.speed)).x) * 0.5f;
+	const ImVec2 c(io.DisplaySize.x - std::max(r, textHalf) - 14.0f * scale, 150.0f * scale);
+	ImDrawList* dl = ImGui::GetForegroundDrawList();
+	// the camera's frame on the ground: up on the screen is where it looks
+	Vector3 f(client->camera.direction.x, 0.0f, client->camera.direction.z);
+	f = f.sqlen2xz() > 1e-6f ? f.normal2xz() : Vector3(0, 0, 1);
+	const Vector3 right(f.z, 0.0f, -f.x);
+	auto screen = [&](float wx, float wz, float len) { return ImVec2(c.x + (wx * right.x + wz * right.z) * len, c.y - (wx * f.x + wz * f.z) * len); };
+	dl->AddCircleFilled(c, r, IM_COL32(20, 16, 10, 170), 40);
+	dl->AddCircle(c, r, IM_COL32(200, 170, 110, 220), 40, 2.0f * scale);
+	// north (+z) and the other points
+	const char* points[4] = { "N", "E", "S", "W" };
+	const float px[4] = { 0, 1, 0, -1 }, pz[4] = { 1, 0, -1, 0 };
+	for (int i = 0; i < 4; i++) {
+		const ImVec2 at = screen(px[i], pz[i], r - 8.0f * scale);
+		const ImVec2 size = ImGui::CalcTextSize(points[i]);
+		dl->AddText(ImVec2(at.x - size.x * 0.5f, at.y - size.y * 0.5f), i == 0 ? IM_COL32(255, 220, 120, 255) : IM_COL32(190, 180, 160, 200), points[i]);
+	}
+	// the arrow: from upwind to downwind, longer and redder the stronger (with the gust now)
+	const float s = g_wind.strength();
+	const float len = r * (0.35f + 0.45f * std::sqrt(s));
+	const ImU32 col = s < 0.25f ? IM_COL32(150, 220, 150, 255) : s < 0.55f ? IM_COL32(240, 220, 110, 255) : IM_COL32(240, 110, 80, 255);
+	const ImVec2 tail = screen(-g_wind.dir.x, -g_wind.dir.z, len), head = screen(g_wind.dir.x, g_wind.dir.z, len);
+	dl->AddLine(tail, head, col, 3.0f * scale);
+	const ImVec2 back = screen(-g_wind.dir.x, -g_wind.dir.z, 9.0f * scale), side = screen(g_wind.dir.z, -g_wind.dir.x, 5.0f * scale);
+	const ImVec2 b(back.x - c.x, back.y - c.y), sd(side.x - c.x, side.y - c.y);
+	dl->AddTriangleFilled(head, ImVec2(head.x + b.x + sd.x, head.y + b.y + sd.y), ImVec2(head.x + b.x - sd.x, head.y + b.y - sd.y), col);
+	// the reading below: from where, how fast (the mean), its name
+	char text[64];
+	snprintf(text, sizeof(text), "%s %.0f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed);
+	ImVec2 size = ImGui::CalcTextSize(text);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale), IM_COL32(235, 225, 200, 255), text);
+	const char* name = WindSpeedName(g_wind.speed);
+	size = ImGui::CalcTextSize(name);
+	dl->AddText(ImVec2(c.x - size.x * 0.5f, c.y + r + 4.0f * scale + ImGui::GetTextLineHeight()), IM_COL32(190, 180, 160, 220), name);
+	// its tooltip
+	const ImVec2 m = io.MousePos;
+	if ((m.x - c.x) * (m.x - c.x) + (m.y - c.y) * (m.y - c.y) < r * r) {
+		ImGui::BeginTooltip();
+		ImGui::Text("Wind from %s at %.1f m/s (%s), now %.1f m/s", WindCompass(g_wind.dir.x, g_wind.dir.z), g_wind.speed, WindSpeedName(g_wind.speed), g_wind.now());
+		if (client->environmentSettings.windEffects)
+			ImGui::TextUnformatted("Boats run faster before it and slower into it. It fans wildfires\nand chills units in the cold.");
+		ImGui::TextDisabled("Options, Interface: \"Wind gauge (direction and strength)\" to hide it");
+		ImGui::EndTooltip();
+	}
+}
+
 void ClientInterface::drawChronicle()
 {
 	// a replay shows everyone and everything; a game the player's own statistics and its allies',
@@ -2928,6 +3067,36 @@ void ClientInterface::drawEnvironmentDebug()
 	if (ImGui::Combo("Weather changes", &stabilityChoice, "Frequent\0Normal\0Seldom\0Random\0Custom\0"))
 		send("weatherStability", (float)stabilityChoice);
 	ImGui::EndDisabled();
+	// the wind (Wind.h): the server's now and as drawn (with its gust), its settings
+	{
+		ImGui::Separator();
+		if (client->windActive)
+			ImGui::Text("wind from %s at %.1f m/s (%s), gusts %.2f; drawn %.1f m/s", WindCompass(client->wind.dirX, client->wind.dirZ),
+				client->wind.speed, WindSpeedName(client->wind.speed), client->wind.gustiness, g_wind.now());
+		else
+			ImGui::TextDisabled("wind off (the fixed look from before)");
+		bool windOn = client->windActive;
+		if (ImGui::Checkbox("Wind", &windOn))
+			send("wind", windOn ? 1.0f : 0.0f);
+		ImGui::BeginDisabled(!client->windActive);
+		static const char* const froms[] = { "Random", "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+		static const char* const strengths[] = { "By the weather", "Calm", "Light", "Breeze", "Strong", "Gale" };
+		int from = std::clamp(es.windFrom, 0, 8), strength = std::clamp(es.windStrength, 0, 5);
+		ImGui::SetNextItemWidth(110);
+		if (ImGui::Combo("From", &from, froms, 9))
+			send("windFrom", (float)from);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(130);
+		if (ImGui::Combo("Strength", &strength, strengths, 6))
+			send("windStrength", (float)strength);
+		bool veers = es.windVeers, effects = es.windEffects;
+		if (ImGui::Checkbox("Veers", &veers))
+			send("windVeers", veers ? 1.0f : 0.0f);
+		ImGui::SameLine();
+		if (ImGui::Checkbox("Effects on the game", &effects))
+			send("windEffects", effects ? 1.0f : 0.0f);
+		ImGui::EndDisabled();
+	}
 	int scale = es.tempScale;
 	ImGui::SetNextItemWidth(120);
 	if (ImGui::Combo("Temperature", &scale, "Celsius\0Fahrenheit\0Kelvin\0"))
@@ -3040,8 +3209,9 @@ void ClientInterface::drawSelectionPortrait()
 	Model* model = obj->getModel();
 	if (!model)
 		return;
-	// the window's middle in the panel (330 x 326 at the bottom left), in points
-	constexpr float CX = 128.0f, CY = 195.0f, SIZE = 120.0f;
+	// the window's middle in the panel (330 x 326 at the bottom left), in points: where the rose's
+	// petals meet in Bottom_Left_Panel.tga
+	constexpr float CX = 130.0f, CY = 197.0f, SIZE = 120.0f;
 	const float s = g_uiScale;
 	const float panelY = g_windowHeight / s - 326.0f;
 	const int px = (int)((CX - SIZE / 2) * s), py = (int)((panelY + CY - SIZE / 2) * s), size = (int)(SIZE * s);
@@ -3054,8 +3224,36 @@ void ClientInterface::drawSelectionPortrait()
 	// loose: a building filled a third of the square); at frame 0, so a walking figure doesn't
 	// zoom in and out
 	const auto box = model->interpolateBoundingBox(0);
-	const Vector3 centre = (box[0] + box[1]) * 0.5f;
-	const Vector3 half = (box[1] - box[0]) * 0.5f;
+	Vector3 centre = (box[0] + box[1]) * 0.5f;
+	Vector3 half = (box[1] - box[0]) * 0.5f;
+	// a character: centred on its body, not on the box of all it holds (a spear's tip or a
+	// banner pulled the figure off the window's middle; the user saw it left of and below it).
+	// Its middle is its median vertex at frame 0 on each axis (most vertices are the body's);
+	// the square fits the 3rd to the 97th percentile around it. Once per model.
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+		static std::map<Model*, std::pair<Vector3, Vector3>> bodies; // middle, half extent
+		auto it = bodies.find(model);
+		if (it == bodies.end()) {
+			std::pair<Vector3, Vector3> body{ centre, half };
+			StaticModel* sm = model->getStaticModel();
+			const size_t n = sm ? sm->getMesh().vertices.size() / 3 : 0;
+			const float* v = n ? model->interpolate(0) : nullptr;
+			if (v && n >= 20) {
+				std::vector<float> axis(n);
+				for (int a = 0; a < 3; a++) {
+					for (size_t i = 0; i < n; i++)
+						axis[i] = v[i * 3 + a];
+					std::sort(axis.begin(), axis.end());
+					const float lo = axis[n * 3 / 100], mid = axis[n / 2], hi = axis[n * 97 / 100];
+					(a == 0 ? body.first.x : a == 1 ? body.first.y : body.first.z) = mid;
+					(a == 0 ? body.second.x : a == 1 ? body.second.y : body.second.z) = std::max(hi - mid, mid - lo);
+				}
+			}
+			it = bodies.emplace(model, body).first;
+		}
+		centre = it->second.first;
+		half = it->second.second;
+	}
 	// the footprint's radius as it turns, and the half height
 	const float footprint = std::max(0.3f, std::sqrt(half.x * half.x + half.z * half.z));
 	const float halfHeight = std::max(0.3f, half.y);
@@ -3139,6 +3337,9 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		return;
 	// and enemy buildings out of sight: drawn as last seen (FogOfWar::remembered) instead
 	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fogOfWarOn() && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
+		return;
+	// and trees changed out of sight: drawn as last seen (FogOfWar::treeGhosts), new ones not at all
+	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
 		return;
 
 	static const float tolerance = 25.0f;
@@ -3273,6 +3474,38 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	if (obj->blueprint->shearModel && client->terrain)
 		obj->sceneEntity.transform *= GetShearToGroundMatrix(client->terrain, model, transformMatrix, obj->position);
+	// a swimmer (the river currents play its "Swim": SwimAnim.h, the Scout's own) is drawn at the
+	// water's surface, its swim's origin there, instead of on the bed; eased up as it starts and
+	// down to its feet as it stops (the game keeps its height: the server and multiplayer as before)
+	if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !remembered) {
+		static const GameSet* of = nullptr;
+		static int swimTag = -1;
+		static std::unordered_map<uint32_t, std::pair<float, float>> lifts; // id -> (lift, time)
+		if (of != client->gameSet.get()) {
+			of = client->gameSet.get();
+			swimTag = of->animations.names.getIndex("Swim");
+			lifts.clear();
+		}
+		const bool swimming = swimTag >= 0 && obj->animationIndex == swimTag;
+		auto it = lifts.find(obj->id);
+		if (swimming || it != lifts.end()) {
+			float want = 0.0f;
+			if (swimming) {
+				const float surface = SwimSurface(client, obj->position);
+				if (!std::isnan(surface))
+					want = std::clamp(surface - obj->sceneEntity.transform._42, 0.0f, 6.0f);
+			}
+			const float now = (float)client->timeManager.currentTime;
+			auto& [lift, last] = it != lifts.end() ? it->second : lifts[obj->id];
+			if (it == lifts.end()) last = now;
+			const float step = std::clamp(now - last, 0.0f, 0.5f) * 1.5f; // (1.5 m a second)
+			last = now;
+			lift = want > lift ? std::min(want, lift + step) : std::max(want, lift - step);
+			obj->sceneEntity.transform._42 += lift;
+			if (!swimming && lift <= 0.0f)
+				lifts.erase(obj->id);
+		}
+	}
 	// a remembered building has no parent: its colour and frame are those it had when last seen
 	obj->sceneEntity.color = remembered ? obj->color : obj->getPlayer()->color;
 	if (disguise && client->clientPlayer)
@@ -3289,8 +3522,11 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		obj->sceneEntity.animTime = (uint32_t)(model->getDuration() * most * 1000.0f);
 	}
 	else if (!remembered)
-		obj->sceneEntity.animTime = (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f);
+		obj->sceneEntity.animTime = WindAnimTime(model, (uint32_t)((client->timeManager.currentTime - obj->animStartTime) * obj->animSpeed * 1000.0f), obj->id, obj->animSpeed);
 	obj->sceneEntity.flags = 0;
+	// the trees and bushes bend in the wind (Wind.h; drawn by RenderSettings::windTrees)
+	if (IsWindTree(obj->blueprint))
+		obj->sceneEntity.flags |= SceneEntity::SEFLAG_WIND;
 	if (obj->animClamped) obj->sceneEntity.flags |= SceneEntity::SEFLAG_ANIM_CLAMP_END;
 	// walls (RenderSettings::wallShadows): the sheared wall segments and every other piece of a
 	// wall line by its building type, as the corners aren't sheared and would leave holes
@@ -3559,7 +3795,7 @@ void ClientInterface::drawAttachmentPoints(SceneEntity* sceneEntity, uint32_t ob
 				apse.model = cached->second;
 				apse.transform = Matrix::getTranslationMatrix(state.position) * sceneEntity->transform;
 				apse.color = sceneEntity->color;
-				apse.animTime = (uint32_t)(client->timeManager.currentTime * 1000.0f);
+				apse.animTime = WindAnimTime(apse.model, (uint32_t)(client->timeManager.currentTime * 1000.0f), objid * 31u + (uint32_t)i, 1.0f);
 				scene->add(&apse);
 				// Recursively draw attach. points of the attach. point's model!
 				drawAttachmentPoints(&apse, objid); // NOTE: Same objid kept, trail might be shared!!
@@ -3753,6 +3989,10 @@ void ClientInterface::controlGroupKeys()
 void ClientInterface::iter()
 {
 	setUpAgentWorld();
+	// the help: the game's screen for F1 over nothing, the game set for its names and numbers
+	Help::SetScreen("ui/hud");
+	Help::SetGame(client->gameSet.get(), client->gameSet ? &lang : nullptr);
+	Help::SetHovered({});
 	ZoneScoped;
 	static uint32_t oldCliTime = SDL_GetTicks();
 	uint32_t cliTime = SDL_GetTicks();
@@ -5132,8 +5372,12 @@ void ClientInterface::iter()
 		// ImGui
 		lua.set_function("setTooltip",[](const std::string& str) { ImGui::SetTooltip("%s", str.c_str()); });
 		// agent control: an interactive element drawn this frame (AgentUi's registry; nothing while it is off)
-		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled) {
-			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true));
+		lua.set_function("uiElement", [](const std::string& id, const std::string& label, float x, float y, float w, float h, sol::optional<bool> enabled, sol::optional<std::string> help) {
+			AgentUi::Add(id, label, x, y, w, h, enabled.value_or(true), help.value_or(std::string()));
+		});
+		// the in-game help: a part of the screen that is no button (a panel, a read-out), with its help ids
+		lua.set_function("helpZone", [](const std::string& help, float x, float y, float w, float h) {
+			AgentUi::AddHelpZone(help, x, y, w, h);
 		});
 		lua.set_function("commandName", [this](const Command* cmd) { return cmd ? client->gameSet->commands.getString(cmd) : std::string(); });
 		// Button
@@ -5335,7 +5579,10 @@ void ClientInterface::iter()
 		// (with Extend map, drawn 40 tiles on over its land: further than any sight reaches past
 		// the border, so the land beyond is unseen alike)
 		fogOfWar.drawPad = terrainRenderer && terrainRenderer->extendedTiles() > 0 ? 40 : 0;
-		fogOfWar.update(client);
+	// the trees as last seen (FogOfWar): told of the server's changes to them
+	client->treeMemory = &fogOfWar;
+	fogOfWar.memoryOn = fogOn;
+	fogOfWar.update(client);
 	if (postGfx) {
 		const bool effects = UseEnhancedRenderers(gfx) && (g_renderSettings.ssao || g_renderSettings.bloom || g_renderSettings.antiAliasing > 0 || g_renderSettings.upscaling > 0);
 		postGfx->BeginPostProcessing(client->getLevel() && (effects || fogOn), UseEnhancedRenderers(gfx));
@@ -5527,10 +5774,14 @@ void ClientInterface::iter()
 		if (client->getLevel())
 			drawObject(client->getLevel());
 		drawExtendedTrees();
-		if (fogOfWarOn())
+		if (fogOfWarOn()) {
 			for (const auto& [id, copy] : fogOfWar.remembered)
 				if (!fogOfWar.isBuildingSeen(copy->position))
 					drawObject(copy.get(), true);
+			for (const auto& [id, copy] : fogOfWar.treeGhosts)
+				if (!fogOfWar.isSeen(copy->position))
+					drawObject(copy.get(), true);
+		}
 		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
 		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
 		// The particle renderer only draws sprites; these were blank squares before.
@@ -5568,7 +5819,7 @@ void ClientInterface::iter()
 			std::vector<float>& lights = dgfx->shadows.fireLights;
 			lights.clear();
 			if (g_renderSettings.fireLights) {
-				struct Fire { Vector3 sum; float colour[3] = {}, alpha = 0, lowest = 1e9f; int count = 0; };
+				struct Fire { Vector3 sum, emitters; float colour[3] = {}, alpha = 0, lowest = 1e9f; int count = 0; bool standing = false; };
 				std::map<std::pair<void*, uint32_t>, Fire> fires;
 				const float now = client->timeManager.currentTime;
 				for (auto& [key, list] : particlesContainer->particles)
@@ -5581,6 +5832,8 @@ void ClientInterface::iter()
 						Fire& f = fires[{ key, p.objid }];
 						const Vector3 at = p.getPosition(now);
 						f.sum += at;
+						f.emitters += p.startPosition;
+						f.standing |= p.system->standingFire;
 						f.lowest = std::min(f.lowest, at.y);
 						const uint32_t c = p.getColor(now);
 						const float a = (c >> 24) / 255.0f;
@@ -5594,24 +5847,40 @@ void ClientInterface::iter()
 					// at the fire's base (its particles rise), so that it lights the ground around it
 					Vector3 at = f.sum / (float)f.count;
 					at.y = f.lowest + 1.5f;
+					const bool fireFx = FireFx::Level() > FireFx::ORIGINAL;
+					const uint32_t seed = (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U);
+					// Low and High fire (FireEffects.h): a standing fire's light at its emitters (not
+					// at its particles, jumping as they come and go), swaying with its flames
+					if (fireFx && f.standing) {
+						at = f.emitters / (float)f.count;
+						at.y += 1.0f;
+						at += FireFx::Sway(now, seed);
+					}
 					// the fire's hue at full brightness (the sprites' alpha-weighted colour, warmed:
 					// their middles are near white), as strong as there are visible sprites
 					if (f.alpha <= 0)
 						continue;
-					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * 0.7f, f.colour[2] / f.alpha * 0.35f };
+					// (Low and High: more orange and a little dimmer, as their flames)
+					float hue[3] = { f.colour[0] / f.alpha, f.colour[1] / f.alpha * (fireFx ? 0.55f : 0.7f), f.colour[2] / f.alpha * (fireFx ? 0.18f : 0.35f) };
 					const float peak = std::max({ hue[0], hue[1], hue[2], 1e-3f });
-					float strength = std::min(1.0f, f.alpha / 3.0f) * 1.5f;
+					float strength = std::min(1.0f, f.alpha / 3.0f) * (fireFx ? 1.2f : 1.5f);
 					float reach = 12.0f + 12.0f * std::min(1.0f, f.count / 24.0f);
-					// High fire (FireEffects.h): flickering with its flames, and stronger and wider the
-					// more its building is damaged
+					// Low and High fire: flickering with its flames; High: stronger and wider the more its
+					// building is damaged
 					// (a fire the weather is putting out: dimmer and nearer, as its flames shrink)
 					if (const float share = FireFx::ShareOf(key.second); share < 1.0f) {
 						strength *= 0.3f + 0.7f * share;
 						reach *= 0.6f + 0.4f * share;
 					}
+					// (and its pool of light breathing with it)
+					if (fireFx) {
+						const float flicker = FireFx::Flicker(now, seed);
+						strength *= flicker;
+						reach *= 0.85f + 0.15f * flicker;
+					}
 					if (FireFx::Level() >= FireFx::HIGH) {
 						const float damage = (FireFx::DamageOf(key.second) - 1.0f) / 0.6f;
-						strength *= FireFx::Flicker(now, (uint32_t)(uintptr_t)key.first ^ (key.second * 0x9E3779B1U)) * (1.0f + 0.2f * damage);
+						strength *= 1.0f + 0.2f * damage;
 						reach *= 1.0f + 0.25f * damage;
 					}
 					std::array<float, 7> l = { at.x, at.y, at.z, reach,
@@ -5634,6 +5903,35 @@ void ClientInterface::iter()
 			particlesContainer->generate(psCache->getPS(particleTest), at, 0, client->timeManager.previousTime, client->timeManager.currentTime);
 		}
 		nextSelectedObject = nextSelectedObjectByMesh ? nextSelectedObjectByMesh : nextSelectedObjectBySphere;
+		// the help for what is under the cursor (F1, Alt+right-click): what it looks like to this
+		// player, so a disguised spy opens the page of what it pretends to be
+		if (nextSelectedObject && nextSelectedObject->blueprint) {
+			const GameObjBlueprint* bp = nextSelectedObject->blueprint;
+			if (const Client::Disguise* d = client->disguiseFor(nextSelectedObject); d && d->blueprint)
+				bp = d->blueprint;
+			if (bp->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+				Help::SetHovered("unit/" + bp->name);
+			else if (bp->bpClass == Tags::GAMEOBJCLASS_BUILDING)
+				Help::SetHovered("building/" + bp->name);
+			else if (client->gameSet) {
+				// a tree, a stone or gold outcrop, a sack (containers and props): its own page if it
+				// has one, else the good it holds (the resources page's heading), else the screen
+				std::string ids = "object/" + bp->name;
+				if (bp->name.find("Sack") != std::string::npos)
+					ids += "|mechanic/sacks";
+				for (const char* good : { "Wood", "Stone", "Gold", "Food" }) {
+					const int x = client->gameSet->items.names.getIndex(good);
+					const auto it = x >= 0 ? bp->startItemValues.find(x) : bp->startItemValues.end();
+					if (it != bp->startItemValues.end() && it->second > 0) {
+						std::string lower = good;
+						for (char& c : lower) c = (char)tolower((unsigned char)c);
+						ids += "|mechanic/" + lower;
+						break;
+					}
+				}
+				Help::SetHovered(ids);
+			}
+		}
 
 		// highlight hovered object; not in test runs ("benchmark"): they start detached but still read
 		// the real cursor, and a building under it was drawn unshaded (SEFLAG_NOLIGHTING), so test
@@ -5758,7 +6056,8 @@ void ClientInterface::iter()
 				test.model = finishedModel(stampdownBlueprint);
 				// turned with [ and ]: the model, its footprint and its origin (WKB.exe 0x59a4d0 turns
 				// the origin as the tiles), the city rectangle (StampdownPlan)
-				const Vector3 orientation = stampdownOrientation();
+				Vector3 orientation = stampdownOrientation();
+				const Vector3 cursorGround = peapos;
 				if (auto* fp = stampdownBlueprint->footprint) {
 					const auto rotOrigin = fp->rotateOrigin(orientation.y);
 					peapos.x = std::floor(peapos.x / 5.0f) * 5.0f + 2.5f + rotOrigin.first;
@@ -5766,6 +6065,18 @@ void ClientInterface::iter()
 					if (client->terrain)
 						peapos.y = client->terrain->getHeightEx(peapos.x, peapos.z, stampdownBlueprint->canWalkOnWater());
 				}
+				// A gatehouse pointed at a wall piece goes onto that wall (wkbai's own help; the play
+				// test of 2026-11-18: "You cannot build a gatehouse on top of walls"): the cursor's
+				// ground point lies behind a standing wall, a tile or more, so the gatehouse went
+				// beside the wall, never onto it. The piece is the one the ray passes over (not the
+				// hovered object: the preview hides the pieces it replaces, which then can't be
+				// hovered, and the gatehouse flickered on and off the wall). It is turned along the
+				// piece if it lay across (as ] would) and put where its four tiles take the piece's
+				// tile (StampdownPlan); the click sends that spot.
+				if (stampdownBlueprint->buildingType == Tags::BUILDINGTYPE_GATEHOUSE && client->terrain
+					&& StampdownPlan::gatehouseOntoWall(client, client->clientPlayer.get(), stampdownBlueprint,
+						StampdownPlan::wallOnRay(client, client->camera.position, cursorGround), cursorGround, stampdownQuarter, peapos))
+					orientation = stampdownOrientation();
 				test.transform = Matrix::getRotationYMatrix(-orientation.y) * Matrix::getTranslationMatrix(peapos);
 				test.color = stampdownPlayer->color;
 				scene->add(&test);
@@ -5913,7 +6224,7 @@ void ClientInterface::iter()
 			flag.model = client->gameSet->modelCache.getModel(rallyFlagPath);
 			flag.transform = Matrix::getTranslationMatrix(Vector3(dest.x, client->terrain->getHeightEx(dest.x, dest.z, true), dest.z));
 			flag.color = sel->getPlayer()->color;
-			flag.animTime = (uint32_t)SDL_GetTicks();
+			flag.animTime = WindAnimTime(flag.model, (uint32_t)SDL_GetTicks(), sel->id, 1.0f);
 			scene->add(&flag);
 		}
 		// (the fire levels: a looping effect's particles carry its object's id, a burning building's
@@ -6082,6 +6393,7 @@ void ClientInterface::iter()
 	drawLoadingScreen();
 	if (loadingDone) {
 		drawChronicle();
+		drawWindGauge();
 	}
 	// agent control: every player and spectator sees who has it on (the host's list), all game long
 	if (!client->agentPlayers.empty()) {
@@ -6295,7 +6607,7 @@ void ClientInterface::drawExtendedTrees()
 		const bool bare = l.bare && winterLooks && TreeBareInWinter(client, l.id);
 		e.model = bare ? l.bare : l.snowy && TreeSnowLaden(client, l.id) ? l.snowy : l.leafy;
 		e.transform = bare ? l.bareTransform : l.leafyTransform;
-		e.flags = bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags;
+		e.flags = (bare ? (l.flags & ~SceneEntity::SEFLAG_LEAVES) : l.flags) | SceneEntity::SEFLAG_WIND; // (in the wind, Wind.h)
 	}
 	const Vector3 cam = client->camera.position;
 	const Vector3 dir = client->camera.direction;

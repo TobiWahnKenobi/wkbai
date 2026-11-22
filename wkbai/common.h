@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <algorithm>
 #include "util/vecmat.h"
 #include "Movement.h"
 #include "GameObjectRef.h"
@@ -173,6 +174,24 @@ struct CommonGameState {
 	// (with the trees and props, tens of thousands of objects) was a cost of its own. Nothing
 	// may depend on its order: what walks it sorts by id.
 	std::unordered_map<uint32_t, CommonGameObject*> idmap;
+	// the same objects in an array by id (ids below ID_ARRAY_LIMIT; nullptr where none): every
+	// reference followed, by millions a step with 10,000 units, without the hash map's lookup.
+	// Written with idmap only through idmapSet and idmapErase.
+	static constexpr uint32_t ID_ARRAY_LIMIT = 1u << 22;
+	std::vector<CommonGameObject*> idArray;
+	void idmapSet(uint32_t id, CommonGameObject* obj) {
+		idmap[id] = obj;
+		if (id < ID_ARRAY_LIMIT) {
+			if (id >= idArray.size())
+				idArray.resize(std::max<size_t>(id + 1, idArray.size() * 2), nullptr);
+			idArray[id] = obj;
+		}
+	}
+	void idmapErase(uint32_t id) {
+		idmap.erase(id);
+		if (id < idArray.size())
+			idArray[id] = nullptr;
+	}
 
 	// ordered by object id: the scripts walk them, and a set ordered by its insertions walked
 	// differently after a save game was loaded (a replay played another game)
@@ -181,6 +200,10 @@ struct CommonGameState {
 
 	struct Tile {
 		std::vector<CmnGORef> objList;
+		// (server) the objects on the tile now, as pointers: objList's, in its order, without the
+		// destroyed ones (objList keeps their ids), for the searches that would look each id up
+		// (FreeStandingSpot). Kept by ServerGameObject::updatePosition and Server::destroyObject.
+		std::vector<CommonGameObject*> objects;
 		//std::vector<CmnGORef> zoneList;
 		CmnGORef zone;
 		CmnGORef building;
@@ -199,7 +222,14 @@ struct CommonGameState {
 	NightSight nightSight;
 
 	CommonGameObject* getLevel() const { return level; }
-	CommonGameObject* findObject(uint32_t id) { auto it = idmap.find(id); return (it != idmap.end()) ? it->second : nullptr; }
+	CommonGameObject* findObject(uint32_t id) {
+		if (id < idArray.size())
+			return idArray[id];
+		if (id < ID_ARRAY_LIMIT)
+			return nullptr;
+		auto it = idmap.find(id);
+		return (it != idmap.end()) ? it->second : nullptr;
+	}
 
 	int getDiplomaticStatus(CommonGameObject* a, CommonGameObject* b) const;
 

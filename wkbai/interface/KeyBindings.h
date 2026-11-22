@@ -37,6 +37,8 @@ enum class KeyAction {
 	AgentTakeOver,
 	// windows and tools
 	HideInterface, Statistics, Timeline, FrameTimings, MapEditor,
+	// the help (help/Help.h): for what is under the cursor; "What's this?"
+	Help, WhatsThis,
 	// the map editor
 	EditorUndo, EditorRedo, EditorGrab, EditorTurn, EditorTurnBack,
 	// replays

@@ -68,6 +68,13 @@ struct EnvironmentSettings {
 	// their graphics. Off here (a save or recording without it: as before); the lobby's default
 	// is on
 	bool riverCurrents = false;
+	// the wind (Wind.h): "wind" 0 off (the fixed look from before, no effect on the game), 1 on;
+	// "windFrom" 0 random by windSeed (mostly westerly), 1-8 from the north, north-east, ... north-
+	// west; "windStrength" 0 by the weather, 1-5 calm, light, breeze, strong, gale; "windVeers" its
+	// direction turns slowly; "windEffects" it acts on the game (wildfires, wind chill);
+	// "windSeed" 1-16777215 (chosen when the game starts, QuickSkirmishMenu; 0 not chosen yet)
+	int wind = 0, windFrom = 0, windStrength = 0, windSeed = 0;
+	bool windVeers = true, windEffects = true;
 	// the phase at a game time, 0..1 (0 new, 0.25 first quarter, 0.5 full, 0.75 third quarter)
 	float moonAge(float time) const;
 	// the time between changes in seconds (lo, hi); false: random, the season's length has it

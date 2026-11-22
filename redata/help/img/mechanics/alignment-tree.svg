@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560" font-family="Segoe UI, Arial, sans-serif" font-size="14">
+  <title>The five paths: which building turns your Manor into a Keep, Castle and Palace</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4d4535"/>
+    </marker>
+    <style>
+      .imp { fill: #e8eef8; stroke: #5470a8; stroke-width: 1.5; }
+      .ren { fill: #f3efe2; stroke: #8f7b45; stroke-width: 1.5; }
+      .pag { fill: #eaf3e4; stroke: #5d8a44; stroke-width: 1.5; }
+      .mix { fill: #f4eaf3; stroke: #8a5a85; stroke-width: 1.5; }
+      .row { fill: #f7f5f0; stroke: none; }
+      .l { stroke: #4d4535; stroke-width: 1.5; fill: none; marker-end: url(#a); }
+      .h { font-weight: bold; fill: #2b261c; }
+      .s { fill: #5f5747; font-size: 12px; }
+      .tier { font-weight: bold; fill: #5f5747; font-size: 13px; }
+    </style>
+  </defs>
+  <rect x="0" y="0" width="960" height="560" fill="#ffffff"/>
+
+  <!-- row bands and the headquarters ladder -->
+  <rect class="row" x="0" y="30" width="960" height="80"/>
+  <rect class="row" x="0" y="250" width="960" height="80"/>
+  <text class="tier" x="12" y="66">Manor</text>
+  <text class="s" x="12" y="84">(start)</text>
+  <text class="tier" x="12" y="176">Keep</text>
+  <text class="tier" x="12" y="286">Castle</text>
+  <text class="tier" x="12" y="406">Palace</text>
+
+  <!-- column heads -->
+  <text class="h" x="175" y="20">Imperial</text>
+  <text class="h" x="480" y="20">Renaissance</text>
+  <text class="h" x="790" y="20">Pagan</text>
+
+  <!-- tier 0: from the Village -->
+  <rect class="imp" x="140" y="45" width="150" height="50" rx="6"/>
+  <text class="h" x="155" y="67">Church</text>
+  <text class="s" x="155" y="85">needs a Village</text>
+  <rect class="ren" x="445" y="45" width="150" height="50" rx="6"/>
+  <text class="h" x="460" y="67">Guildhall</text>
+  <text class="s" x="460" y="85">needs a Village</text>
+  <rect class="pag" x="755" y="45" width="150" height="50" rx="6"/>
+  <text class="h" x="770" y="67">Maypole</text>
+  <text class="s" x="770" y="85">needs a Village</text>
+
+  <!-- tier 1 -->
+  <rect class="imp" x="140" y="150" width="150" height="50" rx="6"/>
+  <text class="h" x="155" y="172">Monastery</text>
+  <text class="s" x="155" y="190">Manor → Keep</text>
+  <rect class="ren" x="445" y="150" width="150" height="50" rx="6"/>
+  <text class="h" x="460" y="172">Windmill or Sawmill</text>
+  <text class="s" x="460" y="190">Manor → Keep</text>
+  <rect class="pag" x="755" y="150" width="150" height="50" rx="6"/>
+  <text class="h" x="770" y="172">Temple</text>
+  <text class="s" x="770" y="190">Manor → Keep</text>
+  <line class="l" x1="215" y1="95" x2="215" y2="148"/>
+  <line class="l" x1="520" y1="95" x2="520" y2="148"/>
+  <line class="l" x1="830" y1="95" x2="830" y2="148"/>
+
+  <!-- tier 2 -->
+  <rect class="imp" x="140" y="265" width="150" height="50" rx="6"/>
+  <text class="h" x="155" y="287">Cathedral</text>
+  <text class="s" x="155" y="305">Keep → Castle</text>
+  <rect class="ren" x="445" y="265" width="150" height="50" rx="6"/>
+  <text class="h" x="460" y="287">Observatory</text>
+  <text class="s" x="460" y="305">needs the Sawmill</text>
+  <rect class="pag" x="755" y="265" width="150" height="50" rx="6"/>
+  <text class="h" x="770" y="287">Black Mass</text>
+  <text class="s" x="770" y="305">Keep → Castle</text>
+  <line class="l" x1="215" y1="200" x2="215" y2="263"/>
+  <line class="l" x1="520" y1="200" x2="520" y2="263"/>
+  <line class="l" x1="830" y1="200" x2="830" y2="263"/>
+  <text class="s" x="600" y="330">Keep → Castle</text>
+
+  <!-- tier 3 -->
+  <rect class="imp" x="90" y="385" width="150" height="58" rx="6"/>
+  <text class="h" x="104" y="407">Michael Statue</text>
+  <text class="s" x="104" y="425">after the Crusade</text>
+  <text class="s" x="104" y="439">research</text>
+  <rect class="mix" x="265" y="385" width="160" height="58" rx="6"/>
+  <text class="h" x="279" y="407">Scriptorium</text>
+  <text class="s" x="279" y="425">Cathedral and</text>
+  <text class="s" x="279" y="439">Observatory</text>
+  <rect class="ren" x="445" y="385" width="150" height="58" rx="6"/>
+  <text class="h" x="460" y="407">University</text>
+  <text class="s" x="460" y="425">Observatory</text>
+  <rect class="mix" x="615" y="385" width="160" height="58" rx="6"/>
+  <text class="h" x="629" y="407">Arcanum</text>
+  <text class="s" x="629" y="425">Black Mass and</text>
+  <text class="s" x="629" y="439">Observatory</text>
+  <rect class="pag" x="795" y="385" width="150" height="58" rx="6"/>
+  <text class="h" x="809" y="407">Wickerman</text>
+  <text class="s" x="809" y="425">Black Mass</text>
+
+  <line class="l" x1="190" y1="315" x2="165" y2="383"/>
+  <line class="l" x1="250" y1="315" x2="320" y2="383"/>
+  <line class="l" x1="470" y1="315" x2="370" y2="383"/>
+  <line class="l" x1="520" y1="315" x2="520" y2="383"/>
+  <line class="l" x1="570" y1="315" x2="660" y2="383"/>
+  <line class="l" x1="790" y1="315" x2="720" y2="383"/>
+  <line class="l" x1="860" y1="315" x2="870" y2="383"/>
+
+  <!-- the five paths -->
+  <text class="h" x="104" y="475">Imperial</text>
+  <text class="h" x="279" y="475">Imperial</text>
+  <text class="h" x="279" y="492">Renaissance</text>
+  <text class="h" x="460" y="475">Renaissance</text>
+  <text class="h" x="629" y="475">Pagan</text>
+  <text class="h" x="629" y="492">Renaissance</text>
+  <text class="h" x="809" y="475">Pagan</text>
+  <text class="s" x="12" y="530">Each tier's first finished building decides the Keep's or Castle's kind. The Palace's kind follows the third-tier building</text>
+  <text class="s" x="12" y="547">(Scriptorium and Arcanum: your Castle's kind if it matches, otherwise Renaissance). Later tiers shut some other paths for good.</text>
+</svg>

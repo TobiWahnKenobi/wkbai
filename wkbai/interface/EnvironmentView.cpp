@@ -15,6 +15,7 @@
 #include "../gfx/RenderSettings.h"
 #include "../gfx/DiligentWaterfalls.h"
 #include "../SoundPlayer.h"
+#include "../Wind.h"
 #include "../imgui/imgui.h"
 #include <SDL3/SDL_timer.h>
 #include <algorithm>
@@ -24,6 +25,8 @@
 #include <cstdio>
 #include <memory>
 #include <unordered_map>
+#include <chrono>
+#include <future>
 
 namespace {
 	// the map's own sun and fog, put back when the environment goes
@@ -58,8 +61,83 @@ namespace {
 	}
 }
 
+// The wind drawn (Wind.h, g_wind): the server's (once a game second) eased between its messages,
+// this frame's gust on it, and its clocks. Without the lobby's wind the fixed one from before,
+// steady. Every frame, whatever the day and night and the seasons.
+static void UpdateWindView(Client* client)
+{
+	WindView& w = g_wind;
+	static uint64_t last = 0;
+	const uint64_t now = SDL_GetTicksNS();
+	const float dt = last != 0 ? std::min((now - last) / 1e9f, 0.25f) : 0.0f;
+	last = now;
+	const bool on = client->windActive;
+	if (!on) {
+		w.dir = Vector3(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
+		w.speed = WIND_REFERENCE_SPEED;
+		w.gustiness = 0.0f;
+		w.gust = 1.0f;
+	}
+	else {
+		const WindState& s = client->wind;
+		if (!w.on) { // (its first message: at once)
+			w.dir = s.direction();
+			w.speed = s.speed;
+			w.gustiness = s.gustiness;
+		}
+		else {
+			const float k = 1.0f - std::exp(-dt / 1.5f);
+			Vector3 d = w.dir + (s.direction() - w.dir) * k;
+			w.dir = d.sqlen2xz() > 1e-6f ? d.normal() : s.direction();
+			w.speed += (s.speed - w.speed) * k;
+			w.gustiness += (s.gustiness - w.gustiness) * k;
+		}
+		const float seconds = (float)std::fmod(now / 1e9, 86400.0);
+		w.gust = WindGust(seconds, w.gustiness, (uint32_t)client->environmentSettings.windSeed * 2654435761u);
+	}
+	w.on = on;
+	w.prevailing = on ? WindPrevailing(client->environmentSettings) : Vector3(WIND_DEFAULT_X, 0.0f, WIND_DEFAULT_Z);
+	const float v = w.now();
+	w.driftX = std::fmod(w.driftX + w.dir.x * v * dt, 100000.0);
+	w.driftZ = std::fmod(w.driftZ + w.dir.z * v * dt, 100000.0);
+	w.along = std::fmod(w.along + v * dt, 100000.0);
+	// the wind field's still part (WindShelterMap: the lee of hills, woods and buildings), for the
+	// grass's Field level: again for a new map, when the wind has turned 10 degrees, every 10 s
+	// (gathered here, worked out on a worker thread: 7 ms for a 128-tile map, a dropped frame every
+	// 10 s on the main thread; the gathering 0.3 ms)
+	static std::future<WindShelterMap> pendingShelter;
+	if (pendingShelter.valid() && pendingShelter.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+		WindShelterMap m = pendingShelter.get();
+		m.revision = g_windShelter.revision + 1;
+		g_windShelter = std::move(m);
+	}
+	if (on && g_renderSettings.grassWind >= 2 && client->terrain && !pendingShelter.valid()) {
+		static const Terrain* shelterFor = nullptr;
+		static uint64_t shelterAt = 0;
+		if (shelterFor != client->terrain || w.dir.dot(g_windShelter.dir) < 0.985f || now - shelterAt > 10000000000ull) {
+			const uint64_t t0 = SDL_GetTicksNS();
+			WindShelterInput in = GatherWindShelter(client, w.dir);
+			static bool told = false;
+			if (!told) {
+				told = true;
+				printf("wind field: gathered %d x %d tiles in %.2f ms\n", in.width, in.height, (SDL_GetTicksNS() - t0) / 1e6);
+			}
+			pendingShelter = std::async(std::launch::async, [in = std::move(in)]() { WindShelterMap m; ComputeWindShelter(in, m); return m; });
+			shelterFor = client->terrain;
+			shelterAt = now;
+		}
+	}
+	const Vector3 pv = w.particle();
+	w.particleX = std::fmod(w.particleX + pv.x * dt, 100000.0);
+	w.particleZ = std::fmod(w.particleZ + pv.z * dt, 100000.0);
+	w.flagClock = std::fmod(w.flagClock + dt * w.flagRate(), 3600.0);
+	// the trees' sway: a little quicker in a strong wind (their own swing stays slow)
+	w.swayClock = std::fmod(w.swayClock + dt * (0.7f + 0.03f * v), 3600.0);
+}
+
 void UpdateEnvironmentView(Client* client, Scene* scene)
 {
+	UpdateWindView(client);
 	Terrain* terrain = client->terrain;
 	if (g_mapLook.terrain != terrain) {
 		g_mapLook = MapLook();
@@ -79,6 +157,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 			g_mapLook.changed = false;
 		}
 		g_environment = EnvironmentView();
+		g_environment.wind = g_wind.particle();
 		if (client->environmentSkyKnown && terrain) {
 			g_environment.skyWeather = client->environmentSettings.skyWeather;
 			g_environment.skyCover = client->environmentSettings.skyCover / 100.0f;
@@ -89,6 +168,7 @@ void UpdateEnvironmentView(Client* client, Scene* scene)
 	const EnvironmentState& st = client->environment;
 	EnvironmentView& v = g_environment;
 	v.active = true;
+	v.wind = g_wind.particle();
 	// day and night without the seasons: the game's sky (the server's weather stays clear)
 	v.skyWeather = es.seasons ? -1 : es.skyWeather;
 	v.skyCover = es.skyCover / 100.0f;
@@ -491,8 +571,9 @@ void DrawWeather(IRenderer* gfx, Client* client, const Camera& camera)
 	auto placeIn = [&](int i, float fallSpeed, float sway, const Vector3& centre, float box, float height, Vector3& out) {
 		const float hx = Hash(i * 3 + 1) * box, hz = Hash(i * 3 + 2) * box, hy = Hash(i * 3 + 3);
 		const float fall = std::fmod(hy * height + time * fallSpeed, height);
-		const float x = hx + v.wind.x * time - (centre.x - box * 0.5f);
-		const float z = hz + v.wind.z * time - (centre.z - box * 0.5f);
+		// (drifting with the wind: its way integrated, so a change of the wind never jumps them)
+		const float x = hx + (float)g_wind.particleX - (centre.x - box * 0.5f);
+		const float z = hz + (float)g_wind.particleZ - (centre.z - box * 0.5f);
 		out.x = wrap(x, centre.x - box * 0.5f, box) + std::sin(time * 1.3f + i) * sway;
 		out.z = wrap(z, centre.z - box * 0.5f, box) + std::cos(time * 1.1f + i * 0.7f) * sway;
 		const float ground = client->terrain->getHeight(out.x, out.z);

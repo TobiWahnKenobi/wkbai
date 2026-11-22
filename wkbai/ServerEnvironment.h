@@ -11,6 +11,7 @@
 #include "Environment.h"
 #include "GameObjectRef.h"
 #include "PeasantLodging.h"
+#include "Wind.h"
 
 struct Server;
 struct ServerGameObject;
@@ -47,6 +48,19 @@ struct ServerEnvironment {
 	// ground): in the heat it may set the land alight, a large fire at once
 	float fireRisk() const;
 	void fireLanded(Server& server, const Vector3& pos, bool sure = false);
+
+	// the wind (Wind.h): simulated once a game second while the lobby's wind is on (whatever the
+	// day and night and the seasons), sent to the clients (NETCLIMSG_WIND), saved
+	WindState wind;
+	bool windOn() const { return settings.wind != 0; }
+	// how much it fans the fires: 0 (off, no effects, still air) .. 2.5 (a gale), 1 at 8 m/s
+	float windFireFactor() const;
+	// the felt cold's and heat's drop from the wind (degrees; 0 without its effects)
+	float windChill() const;
+	// a boat's speed factor on a leg heading that way (xz): with the wind faster, against it slower,
+	// by the angle and the wind's speed (WindBoatFactor; 1 without its effects)
+	float windBoatFactor(const Vector3& heading) const;
+	void sendWind(Server& server, NetLink* only = nullptr);
 
 	// ---- for the AI (AIWeather.cpp): what the weather does, asked without random numbers ----
 	// the felt temperatures (the exposure's): below 2 C the cold exposure grows, below -4 C it
@@ -126,8 +140,9 @@ struct ServerEnvironment {
 	//  - A waterway of the map's water design with its own "speed" (WaterDesign::Waterway, m/s):
 	//    its water's speed is that, the classes slow below 0.5 m/s, normal below 1.2 m/s, fast
 	//    (as flow 0.3, 0.45: designedFlow), the weather's factor on it as on the rest.
-	//  - Carried and swimming, a unit plays its "Swim" animation if its model has one (the
-	//    Scout's), else its walk, slower; out of the water an idle one stops, its default again.
+	//  - Carried and swimming, a unit plays its "Swim" animation: its model's own (the Scout's, a
+	//    mod's) or one made from its walk (SwimAnim.h; the client draws it at the water's surface),
+	//    else (no walk) its walk, slower; out of the water an idle one stops, its default again.
 	//  - waterHardiness: the war machines (rams, bombards, trebuchets, mangonels, siege towers,
 	//    carts, the Infernal Engine ...) sink where the water would carry them (normal depth, a
 	//    flood: MACHINE_SINK of their health a second), dragged MACHINE_DRAG of the current's way
@@ -227,6 +242,9 @@ struct ServerEnvironment {
 
 private:
 	float nextUpdate = -1.0f;
+	float nextWindUpdate = -1.0f; // (saved on the "wind" line; below 0: not started)
+	bool windSent = false; // the clients were sent the wind on (not saved: a loaded game sends it again)
+	void updateWind(Server& server);
 	float weatherEnds = 0.0f, nextLightning = 0.0f;
 	int resolvedYear = -1;
 	int resolvedSeverity[4] = { 1, 1, 1, 1 };

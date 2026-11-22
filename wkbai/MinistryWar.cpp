@@ -16,6 +16,7 @@
 #include "MinistryDepartments.h"
 #include "AIUtil.h"
 #include "Naval.h"
+#include "PeasantLodging.h"
 #include "server.h"
 #include "gameset/gameset.h"
 #include "gameset/ScriptContext.h"
@@ -211,7 +212,22 @@ namespace {
 			// no new attack while home is in danger (the warning, or the missions called home)
 			if (b.get("war.recall") > 0.0 || b.get("intel.approach") >= 5.0)
 				return;
-			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f);
+			// the night (peasant lodging, PeasantLodging.h): when most of the own peasants are going in
+			// or indoors, so are the enemy's (the same rule for every player, nothing seen needed).
+			// Their peasants can't come out as militia and none are in the fields: no raids, the next
+			// attack sooner and with a smaller margin (the lodging doc's "night waves" for the ministries)
+			bool night = false;
+			if (!(MinOff() & 65536)) {
+				int in = 0, all = 0;
+				for (ServerGameObject* p : AIUtil::Peasants(me)) {
+					all++;
+					in += p->lodging != LODGE_NONE && p->lodging != LODGE_RETURNING;
+				}
+				night = all >= 6 && in * 2 >= all;
+			}
+			b.report("war.night", night ? 1.0 : 0.0);
+			const float cooldown = 120.0f * (1.6f - c.impatience - 0.4f * c.aggression) * (succeeded > lastSucceeded || striking ? 0.5f : 1.0f)
+				* (night ? 0.5f : 1.0f);
 			// (one more attack for every 30 free soldiers: in a stage-1 game 114 waited at home while two
 			// small missions were out)
 			const int freeNow = (int)b.get("war.available");
@@ -241,6 +257,8 @@ namespace {
 					// (a raid only with 6 melee soldiers free: archers make none of the kills, improvement 4)
 					if (!(MinOff() & 4096) && b.get("war.availableMelee") < Tune("raidMelee", 6.0f))
 						continue;
+					if (night) // (indoors: the sighting is of an empty field)
+						continue;
 					worth = 0.6f + 1.4f * c.raiding;
 					kind = Mission::RAID;
 				}
@@ -251,7 +269,7 @@ namespace {
 			std::sort(cands.begin(), cands.end(), [](const Candidate& a, const Candidate& b) {
 				return a.score != b.score ? a.score > b.score : a.s->id < b.s->id; });
 			// the first that the pool outmatches (the more aggressive, the smaller the margin)
-			const float margin = 1.6f - 0.6f * c.aggression;
+			const float margin = (1.6f - 0.6f * c.aggression) * (night ? 0.8f : 1.0f);
 			for (const Candidate& cand : cands) {
 				// what guards it, and a share of the enemy's whole known army (which can come)
 				const float known = (float)b.get("intel." + std::to_string(cand.s->player) + ".power");

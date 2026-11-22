@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO_URL = 'https://github.com/TobiWahnKenobi/wkbai'
 
 # vcpkg ports in the release (their licence: vcpkg_installed/<triplet>/share/<port>/copyright)
-VCPKG_PORTS = ('sdl3', 'openal-soft', 'mpg123', 'fmt', 'lua', 'bzip2', 'enet', 'nlohmann-json', 'sol2', 'stb')
+VCPKG_PORTS = ('sdl3', 'openal-soft', 'mpg123', 'fmt', 'lua', 'bzip2', 'enet', 'nlohmann-json', 'sol2', 'stb', 'md4c', 'lunasvg', 'plutovg')
 
 # Diligent and the libraries it links in: (licence file in DiligentCore's source, name in licenses/)
 DILIGENT_LICENSES = (

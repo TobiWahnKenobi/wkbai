@@ -24,6 +24,7 @@
 #include "../StampdownPlan.h"
 #include "../MovementController.h"
 #include "../Naval.h"
+#include "../AIUtil.h"
 #include <algorithm>
 #include <map>
 #include <numeric>
@@ -521,6 +522,47 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 			}
 		}
 	}
+	// The enemies' doorsteps, for the ministry AI's players (WKB_MINOFF 131072 off): no site in the square
+	// of 275 m round an enemy's palace (FINDER_METRE_RADIUS searches a square of tiles, NNSearch, so its
+	// "250m" reaches 257 m along the axes and 364 m at the corners). The Kingmaker scripts laid a wood village and 14-19 farms within 250 m of
+	// the enemy's Manor at dawn ("Enemies Within 250m of My Manor"); that set off the enemy's War Mode,
+	// some 35 of its peasants took up arms as militia and wiped out the town (4 Peaks, slot 1, docs
+	// engine/ministry-ai.md). At most 0.75 of the palaces' distance along the farther axis, so a close
+	// start keeps its own ground.
+	std::vector<std::pair<Vector3, float>> doorsteps;
+	void setDoorsteps(ScriptContext* ctx) {
+		doorsteps.clear();
+		Server* srv = Server::instance;
+		static const bool off = getenv("WKB_MINOFF") && (atoi(getenv("WKB_MINOFF")) & 131072);
+		if (off || !srv || ctx->gameState != srv)
+			return;
+		CommonGameObject* self = ctx->getSelf();
+		ServerGameObject* player = self ? (ServerGameObject*)self->getPlayer() : nullptr;
+		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !MinistryPlayer(srv, player))
+			return;
+		ServerGameObject* level = (ServerGameObject*)srv->getLevel();
+		if (!level)
+			return;
+		ServerGameObject* mine = AIUtil::Palace(player);
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* p = (ServerGameObject*)child;
+				if (p == player || p->deleted || p->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !AIUtil::IsEnemy(player, p))
+					continue;
+				if (ServerGameObject* palace = AIUtil::Palace(p)) {
+					float r = 275.0f;
+					if (mine)
+						r = std::min(r, 0.75f * std::max(std::abs(mine->position.x - palace->position.x), std::abs(mine->position.z - palace->position.z)));
+					doorsteps.emplace_back(palace->position, r);
+				}
+			}
+		if (getenv("WKB_TRACE_DOOR")) {
+			static int shown = 0;
+			if (shown++ < 40)
+				for (const auto& [at, r] : doorsteps)
+					printf("DOOR t=%.0f player %u %s: keep %.0f m off (%.0f, %.0f)\n", srv->timeManager.currentTime, player->id, objbp->name.c_str(), r, at.x, at.z);
+		}
+	}
 	bool reachable(int tx, int tz) const {
 		if (reachRegion < 0)
 			return true;
@@ -582,6 +624,13 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		// where a land unit can get to from the start (GLOBAL_CAN_REACH_FOR_CONSTRUCTION)
 		if (!reachable(tx, tz))
 			return false;
+		// not on an enemy's doorstep (setDoorsteps)
+		if (!doorsteps.empty()) {
+			const float x = tx * 5.0f + objbp->footprint->originX + 2.5f, z = tz * 5.0f + objbp->footprint->originZ + 2.5f;
+			for (const auto& [at, r] : doorsteps)
+				if (std::abs(x - at.x) < r && std::abs(z - at.z) < r)
+					return false;
+		}
 		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)
 		return StampdownPlan::groundAllows(server, objbp->footprint, tx, tz);
 	}
@@ -625,6 +674,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 			return po;
 		const Vector3 asked = po.position;
 		setReach(ctx, po.position);
+		setDoorsteps(ctx);
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
 		const int sx = ox, sz = oz;
@@ -632,6 +682,13 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		// no reachable site at all: the search as without the rule (on 3 Isles Kolvas's farms found
 		// farmland only on another island; refused, his commission stopped at its farms and laid
 		// nothing else for 25 minutes. A site that can't be reached costs the commission less.)
+		// (and none off the doorsteps: the search as without them)
+		if (!doorsteps.empty() && !canBuildOn(ctx->gameState, ox, oz)) {
+			doorsteps.clear();
+			ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
+			oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
+			std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
+		}
 		if (reachRegion >= 0 && !canBuildOn(ctx->gameState, ox, oz)) {
 			reachRegion = -1;
 			ox = (int)((asked.x - objbp->footprint->originX) / 5.0f);

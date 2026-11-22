@@ -65,6 +65,19 @@ struct MovementController {
 	}
 
 	MovementController(ServerGameObject* object) : m_object(object) {}
+	~MovementController();
+	MovementController(const MovementController&) = delete;
+	MovementController& operator=(const MovementController&) = delete;
+
+	// The walking units by the tile of their destination (getDestination while isMoving), for
+	// FreeStandingSpot, which counts a walking unit where it goes: kept by syncDestIndex after
+	// each change of the walk (DestSync in the functions that change it, and a loaded game's).
+	// The units listed are alive (a controller leaves it when destroyed); readers check that a
+	// unit's own cell is the one read (m_destCell).
+	static const std::vector<ServerGameObject*>* destCell(int tx, int tz);
+	void syncDestIndex();
+	int m_destCell = -1; // its cell in the index, -1 none
+	uint32_t m_destGeneration = 0;
 
 	// Whether an object of this type can't stand on the playable tile (tx, tz): off the map, a
 	// building that isn't passable, water too deep for a land unit or land for a boat, a slope
