@@ -39,7 +39,7 @@ struct Server;
 namespace MapFolder {
 	constexpr int FORMAT_VERSION = 1;
 	// the compiler's own version: a new one makes every cache stale
-	constexpr int COMPILER_VERSION = 2; // 2: the ground by rule (MapMaterials.h)
+	constexpr int COMPILER_VERSION = 3; // 2: the ground by rule (MapMaterials.h); 3: patches where the solver left a tile, scatter masks
 	constexpr int HAND_ZERO = 32768;
 
 	// whether a path names a map folder (ends in ".wkbai", with or without a slash)
@@ -69,6 +69,23 @@ namespace MapFolder {
 	Result Compile(const std::filesystem::path& folder, bool force = false);
 	// the cache's files (compiled first when stale); empty when the folder can't be compiled
 	std::string LevelFileOf(const std::string& path);
+	// The menus' way (no frozen screen while a large map compiles): the cache's level when it is
+	// fresh; else "" and the folder is compiled in the background (one at a time; a folder whose
+	// compile failed isn't tried again until its inputs change). Compile itself waits for a
+	// background compile, so the game never reads a half-written cache.
+	std::string LevelFileIfFresh(const std::string& path);
+	// what a compile is doing: the menus draw it as a progress bar
+	struct Progress {
+		bool busy = false;       // a compile is running (any, the background one or not)
+		bool background = false; // the background one
+		std::string map;         // the folder's name ("Isle of Skye")
+		std::string stage;       // "the ground: placing tiles"
+		float fraction = 0;      // 0-1
+		int finished = 0;        // background compiles finished so far (the menus drop what they cached)
+	};
+	Progress CompileProgress();
+	// set by the compiler's stages (MapMaterials' solver too)
+	void ReportProgress(const char* stage, float fraction);
 	std::string TerrainFileOf(const std::string& path);
 	// map.json's texture translation (.lttt) for the cache's BCM ("" when none)
 	std::string TranslationOf(const std::filesystem::path& folder);

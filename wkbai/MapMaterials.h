@@ -62,6 +62,9 @@ namespace MapMaterials {
 	// what the materials of a map folder depend on beyond its own files (the data file), for the
 	// cache's inputs hash
 	std::string Fingerprint(const std::filesystem::path& folder);
+	// a mask picture of layers\ (8 or 16 bits, any size, row 0 the north edge) sampled per vertex
+	// of a gw x gh grid, 0-1; false when there is none (the scatter rules read them too)
+	bool ReadMaskLayer(const std::filesystem::path& file, int gw, int gh, std::vector<float>& out);
 
 	// Paints the rules' tiles onto t: t's heights, lakes and texture database are set, the water
 	// flooded; hand[i] (per tile) marks the hand tiles, which stay as they are (the solver works

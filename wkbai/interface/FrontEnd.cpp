@@ -16,6 +16,7 @@
 #include "../gfx/bitmap.h"
 #include "../gfx/renderer.h"
 #include "../imgui/imgui.h"
+#include "../imgui/imgui_internal.h"
 #include "../file.h"
 #include "../window.h"
 #include "../Language.h"
@@ -361,8 +362,16 @@ struct FrontEnd::Impl {
 		if (!isNew)
 			return it->second;
 		std::string path = "Save_Games\\" + level;
-		if (MapFolder::IsMapPath(path))
-			path = MapFolder::LevelFileOf(path);
+		if (MapFolder::IsMapPath(path)) {
+			// a map folder still compiling (in the background, the progress window over the menu):
+			// nothing cached, asked again next frame
+			path = MapFolder::LevelFileIfFresh(path);
+			if (path.empty() && MapFolder::CompileProgress().background) {
+				images.erase(it);
+				static const Image none;
+				return none;
+			}
+		}
 		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
@@ -422,8 +431,14 @@ struct FrontEnd::Impl {
 		if (!isNew)
 			return it->second;
 		std::string path = "Save_Games\\" + level;
-		if (MapFolder::IsMapPath(path))
-			path = MapFolder::LevelFileOf(path);
+		if (MapFolder::IsMapPath(path)) {
+			path = MapFolder::LevelFileIfFresh(path);
+			if (path.empty() && MapFolder::CompileProgress().background) {
+				levelStarts.erase(it);
+				static const std::vector<std::pair<float, float>> none;
+				return none;
+			}
+		}
 		if (path.empty() || !FileExists(path.c_str()))
 			return it->second;
 		char* data = nullptr;
@@ -1268,6 +1283,31 @@ void FrontEnd::frame(Place place)
 	impl->nextWindowAreas.clear();
 	impl->nextModalWindow = false;
 	impl->call("FE_Frame", place == Place::IN_GAME ? "game" : "menu");
+	// a map folder compiling in the background (MapFolder::LevelFileIfFresh): a progress window
+	// over the menu, which takes the mouse (the menu's mouse.blocked) until it is done
+	const MapFolder::Progress progress = MapFolder::CompileProgress();
+	if (progress.background) {
+		const ImGuiViewport* vp = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(vp->Pos);
+		ImGui::SetNextWindowSize(vp->Size);
+		ImGui::SetNextWindowBgAlpha(0.45f);
+		ImGui::Begin("##mapcompileblock", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings
+			| ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
+		ImGui::End();
+		const float w = std::min(520.0f, vp->Size.x - 40.0f);
+		ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + vp->Size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowSize(ImVec2(w, 0));
+		ImGui::Begin("Preparing the map##mapcompile", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+			| ImGuiWindowFlags_NoSavedSettings);
+		ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+		ImGui::TextWrapped("Compiling \"%s\". A large map takes a minute or so; this happens once, until the map changes.", progress.map.c_str());
+		ImGui::Spacing();
+		char label[32];
+		snprintf(label, sizeof(label), "%d %%", (int)(progress.fraction * 100 + 0.5f));
+		ImGui::ProgressBar(progress.fraction, ImVec2(-1, 0), label);
+		ImGui::TextDisabled("%s", progress.stage.c_str());
+		ImGui::End();
+	}
 	impl->windowAreas = std::move(impl->nextWindowAreas);
 	impl->modalWindow = impl->nextModalWindow;
 	if (place != Place::IN_GAME) {
@@ -1340,7 +1380,7 @@ void FrontEnd::setCanSave(bool canSave) { impl->canSave = canSave; }
 std::vector<FrontEnd::SaveGameHuman> FrontEnd::ReadSaveGameHumans(const std::string& levelPath)
 {
 	std::vector<SaveGameHuman> humans;
-	const std::string path = MapFolder::IsMapPath(levelPath) ? MapFolder::LevelFileOf(levelPath) : levelPath;
+	const std::string path = MapFolder::IsMapPath(levelPath) ? MapFolder::LevelFileIfFresh(levelPath) : levelPath;
 	if (path.empty() || !FileExists(path.c_str()))
 		return humans;
 	char* data = nullptr;
