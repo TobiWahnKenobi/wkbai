@@ -22,6 +22,10 @@
 #include "KeywordStubs.h"
 #include "../util/SimRandom.h"
 #include "../StampdownPlan.h"
+#include "../MovementController.h"
+#include "../Naval.h"
+#include "../AIUtil.h"
+#include <algorithm>
 #include <map>
 #include <numeric>
 
@@ -446,6 +450,138 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	const GameObjBlueprint* objbp;
 	std::unique_ptr<PositionDeterminer> p;
 	std::unique_ptr<ObjectFinder> fdExemptTilesReservedBy;
+	// GLOBAL_CAN_REACH_FOR_CONSTRUCTION "Land Unit" (Passability_Fields.cpp: "used by
+	// NEAREST_VALID_STAMPDOWN_POSITION, NEAREST_CONSTRUCTION_SITE, RESERVE_SPACE_FOR_CONSTRUCTION"):
+	// a site only where the player's land units can walk: a tile of the footprint in a land region
+	// where it has peasants (its home's always). Not the home's alone: on 3 Isles Kolvas starts with
+	// buildings and peasants on a second landmass too, and his farms there were refused. wkbre2 had none: on 3 Isles the Kingmaker's first village went to
+	// another player's island, its builder waited there for the whole game and its economy never
+	// started (WKB.exe refuses AI Generals on the island maps). -1: no limit (the client, or a
+	// start no land unit can stand near).
+	// whether the ministry AI plays this player (as Ministries::update picks them: the level's
+	// players by id, the lobby's aiMinistriesSlots): known from the start, before the first village
+	// is laid and before the government's first step
+	static bool MinistryPlayer(Server* srv, ServerGameObject* player) {
+		if (!srv->aiMinistries || !player->aiController.isAI())
+			return false;
+		if (player->aiController.ministryWaves || srv->aiMinistriesSlots == 0)
+			return true;
+		ServerGameObject* level = (ServerGameObject*)srv->getLevel();
+		if (!level)
+			return false;
+		std::vector<uint32_t> ids;
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* p = (ServerGameObject*)child;
+				if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && !p->deleted)
+					ids.push_back(p->id);
+			}
+		std::sort(ids.begin(), ids.end());
+		const size_t i = std::find(ids.begin(), ids.end(), player->id) - ids.begin();
+		return i < ids.size() && i < 31 && ((srv->aiMinistriesSlots >> i) & 1);
+	}
+	int reachClass = -1, reachRegion = -1;
+	const std::vector<int>* reachRegions = nullptr; // where the player has peasants
+	void setReach(ScriptContext* ctx, Vector3& from) {
+		reachClass = reachRegion = -1;
+		Server* srv = Server::instance;
+		// (on for the ministry AI's players only: on 3 Isles it took the first village off another
+		// player's island, but the Lua AI's Kolvas then laid no farm at all; WKB_REACH=1 turns it on
+		// for every player, WKB_REACH=0 off for all)
+		static const char* const env = getenv("WKB_REACH");
+		static const int mode = env ? atoi(env) : -1;
+		if (mode == 0 || !srv || ctx->gameState != srv || !srv->terrain)
+			return;
+		CommonGameObject* self = ctx->getSelf();
+		ServerGameObject* player = self ? (ServerGameObject*)self->getPlayer() : nullptr;
+		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
+			return;
+		if (mode != 1 && !MinistryPlayer(srv, player))
+			return;
+		// (villages only, unless WKB_REACH=1: the first village is what went to another island; with
+		// the farms in the rule too, Kolvas's farm search was refused and his commissions stalled)
+		if (mode != 1 && objbp->name.find("Village") == std::string::npos)
+			return;
+		int cls = -1;
+		reachRegions = &Naval::PeasantRegions(player, &cls);
+		// (a search from land without the player's peasants, e.g. 3 Isles' start buildings on the
+		// central landmass, from home: else no site at all, and Kolvas had no farm)
+		Naval::StartAtHomeIfUnreachable(player, from);
+		reachRegion = reachRegions->empty() ? -1 : reachRegions->front();
+		const auto [w, h] = srv->terrain->getNumPlayableTiles();
+		if (reachRegion >= 0)
+			reachClass = cls;
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && reachRegion >= 0 && atoi(e) == reachRegion) {
+			static int shown = 0;
+			if (shown++ < 30) {
+				std::string regs;
+				for (int r : *reachRegions)
+					regs += " " + std::to_string(r);
+				printf("REACH search t=%.0f %s by %s #%u from (%.0f, %.0f), regions%s\n", srv->timeManager.currentTime, objbp->name.c_str(),
+					self->blueprint->name.c_str(), self->id, from.x, from.z, regs.c_str());
+			}
+		}
+	}
+	// The enemies' doorsteps, for the ministry AI's players (WKB_MINOFF 131072 off): no site in the square
+	// of 275 m round an enemy's palace (FINDER_METRE_RADIUS searches a square of tiles, NNSearch, so its
+	// "250m" reaches 257 m along the axes and 364 m at the corners). The Kingmaker scripts laid a wood village and 14-19 farms within 250 m of
+	// the enemy's Manor at dawn ("Enemies Within 250m of My Manor"); that set off the enemy's War Mode,
+	// some 35 of its peasants took up arms as militia and wiped out the town (4 Peaks, slot 1, docs
+	// engine/ministry-ai.md). At most 0.75 of the palaces' distance along the farther axis, so a close
+	// start keeps its own ground.
+	std::vector<std::pair<Vector3, float>> doorsteps;
+	void setDoorsteps(ScriptContext* ctx) {
+		doorsteps.clear();
+		Server* srv = Server::instance;
+		static const bool off = getenv("WKB_MINOFF") && (atoi(getenv("WKB_MINOFF")) & 131072);
+		if (off || !srv || ctx->gameState != srv)
+			return;
+		CommonGameObject* self = ctx->getSelf();
+		ServerGameObject* player = self ? (ServerGameObject*)self->getPlayer() : nullptr;
+		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !MinistryPlayer(srv, player))
+			return;
+		ServerGameObject* level = (ServerGameObject*)srv->getLevel();
+		if (!level)
+			return;
+		ServerGameObject* mine = AIUtil::Palace(player);
+		for (const auto& [type, children] : level->children)
+			for (CommonGameObject* child : children) {
+				ServerGameObject* p = (ServerGameObject*)child;
+				if (p == player || p->deleted || p->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER || !AIUtil::IsEnemy(player, p))
+					continue;
+				if (ServerGameObject* palace = AIUtil::Palace(p)) {
+					float r = 275.0f;
+					if (mine)
+						r = std::min(r, 0.75f * std::max(std::abs(mine->position.x - palace->position.x), std::abs(mine->position.z - palace->position.z)));
+					doorsteps.emplace_back(palace->position, r);
+				}
+			}
+		if (getenv("WKB_TRACE_DOOR")) {
+			static int shown = 0;
+			if (shown++ < 40)
+				for (const auto& [at, r] : doorsteps)
+					printf("DOOR t=%.0f player %u %s: keep %.0f m off (%.0f, %.0f)\n", srv->timeManager.currentTime, player->id, objbp->name.c_str(), r, at.x, at.z);
+		}
+	}
+	bool reachable(int tx, int tz) const {
+		if (reachRegion < 0)
+			return true;
+		for (const auto& to : objbp->footprint->tiles) {
+			const int r = MovementController::terrainRegion(reachClass, tx + to.offsetX, tz + to.offsetZ);
+			if (r >= 0 && reachRegions && std::binary_search(reachRegions->begin(), reachRegions->end(), r))
+				return true;
+		}
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && (atoi(e) == 1 || atoi(e) == reachRegion)) {
+			static int shown = 0;
+			if (shown++ < 12) {
+				std::string regs;
+				for (const auto& to : objbp->footprint->tiles)
+					regs += " " + std::to_string(MovementController::terrainRegion(reachClass, tx + to.offsetX, tz + to.offsetZ));
+				printf("REACH refused %s at tile (%d, %d), home region %d, the footprint's:%s\n", objbp->name.c_str(), tx, tz, reachRegion, regs.c_str());
+			}
+		}
+		return false;
+	}
 	bool isTileFree(CommonGameState* server, int tx, int tz) {
 		int sx, sz;
 		std::tie(sx, sz) = server->terrain->getNumPlayableTiles();
@@ -465,6 +601,9 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		return false;
 	}
 	bool canBuildOn(CommonGameState* server, int tx, int tz) {
+		const int bt = objbp->buildingType;
+		const bool walls = bt == Tags::BUILDINGTYPE_WALL || bt == Tags::BUILDINGTYPE_WALL_CORNER_IN || bt == Tags::BUILDINGTYPE_WALL_CORNER_OUT
+			|| bt == Tags::BUILDINGTYPE_WALL_CROSSROADS || objbp->name.find("Gate") != std::string::npos;
 		for (auto& to : objbp->footprint->tiles) {
 			if (true /*!to.mode*/) {
 				int px = tx + to.offsetX, pz = tz + to.offsetZ;
@@ -476,7 +615,21 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 				// no farm in a city, past the walls (the play test: a farmer's farm inside them)
 				if (StampdownPlan::isRural(objbp) && StampdownPlan::tileInAnyCity(server, px, pz))
 					return false;
+				// not across a gate's way out (a blocking tile of the footprint; StampdownPlan.h)
+				// (walls and gates join there)
+				if (!to.mode && !walls && StampdownPlan::tileBesideGate(server, px, pz))
+					return false;
 			}
+		}
+		// where a land unit can get to from the start (GLOBAL_CAN_REACH_FOR_CONSTRUCTION)
+		if (!reachable(tx, tz))
+			return false;
+		// not on an enemy's doorstep (setDoorsteps)
+		if (!doorsteps.empty()) {
+			const float x = tx * 5.0f + objbp->footprint->originX + 2.5f, z = tz * 5.0f + objbp->footprint->originZ + 2.5f;
+			for (const auto& [at, r] : doorsteps)
+				if (std::abs(x - at.x) < r && std::abs(z - at.z) < r)
+					return false;
 		}
 		// and the slope limit and the neighbour rule, as WKB.exe's site checks (0x59b020)
 		return StampdownPlan::groundAllows(server, objbp->footprint, tx, tz);
@@ -519,9 +672,32 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		// for them, and its builders spent the game walking there.
 		if (!objbp->footprint || (po.position.x == 0.0f && po.position.z == 0.0f))
 			return po;
+		const Vector3 asked = po.position;
+		setReach(ctx, po.position);
+		setDoorsteps(ctx);
 		int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
+		const int sx = ox, sz = oz;
 		std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
+		// no reachable site at all: the search as without the rule (on 3 Isles Kolvas's farms found
+		// farmland only on another island; refused, his commission stopped at its farms and laid
+		// nothing else for 25 minutes. A site that can't be reached costs the commission less.)
+		// (and none off the doorsteps: the search as without them)
+		if (!doorsteps.empty() && !canBuildOn(ctx->gameState, ox, oz)) {
+			doorsteps.clear();
+			ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
+			oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
+			std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
+		}
+		if (reachRegion >= 0 && !canBuildOn(ctx->gameState, ox, oz)) {
+			reachRegion = -1;
+			ox = (int)((asked.x - objbp->footprint->originX) / 5.0f);
+			oz = (int)((asked.z - objbp->footprint->originZ) / 5.0f);
+			std::tie(ox, oz) = findPos(ctx->gameState, ox, oz);
+		}
+		if (const char* e = getenv("WKB_TRACE_REACH"); e && reachRegion >= 0 && atoi(e) == reachRegion)
+			printf("REACH result %s: from tile (%d, %d) to (%d, %d), %s\n", objbp->name.c_str(), sx, sz, ox, oz,
+				canBuildOn(ctx->gameState, ox, oz) ? "a site" : "NO SITE (the start returned)");
 		float fx = ox * 5 + objbp->footprint->originX + 2.5f;
 		float fz = oz * 5 + objbp->footprint->originZ + 2.5f;
 		return { Vector3(fx, ctx->gameState->terrain->getHeight(fx, fz), fz) };
@@ -650,44 +826,65 @@ struct PDNearestConstructionSite : public PDNearestValidStampdownPos {
 		const int join = (int)val2->eval(ctx), range = (int)val3->eval(ctx);
 		if (minSites <= 0 || join <= 0 || range <= 0)
 			return none;
+		const Vector3 asked = po.position;
+		setReach(ctx, po.position);
 		const int ox = (int)((po.position.x - objbp->footprint->originX) / 5.0f);
 		const int oz = (int)((po.position.z - objbp->footprint->originZ) / 5.0f);
 		const int r = range / 5, jr = join / 5;
 		// the sites, and their index by tile
 		std::vector<std::pair<int, int>> sites;
 		std::map<std::pair<int, int>, int> siteAt;
-		for (int dz = -r; dz <= r; dz++)
-			for (int dx = -r; dx <= r; dx++)
-				if ((dx * dx + dz * dz) * 25 <= range * range && canBuildOn(ctx->gameState, ox + dx, oz + dz)) {
-					siteAt[{ ox + dx, oz + dz }] = (int)sites.size();
-					sites.push_back({ ox + dx, oz + dz });
-				}
-		if (sites.empty())
-			return none;
-		// clusters: sites within the cluster distance joined (union-find)
-		std::vector<int> parent(sites.size());
-		std::iota(parent.begin(), parent.end(), 0);
-		auto root = [&](int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
-		for (size_t i = 0; i < sites.size(); i++)
-			for (int dz = -jr; dz <= jr; dz++)
-				for (int dx = -jr; dx <= jr; dx++) {
-					if ((dx * dx + dz * dz) * 25 > join * join)
-						continue;
-					auto it = siteAt.find({ sites[i].first + dx, sites[i].second + dz });
-					if (it != siteAt.end())
-						parent[root((int)i)] = root(it->second);
-				}
+		auto collect = [&](int cx, int cz) {
+			for (int dz = -r; dz <= r; dz++)
+				for (int dx = -r; dx <= r; dx++)
+					if ((dx * dx + dz * dz) * 25 <= range * range && canBuildOn(ctx->gameState, cx + dx, cz + dz)) {
+						siteAt[{ cx + dx, cz + dz }] = (int)sites.size();
+						sites.push_back({ cx + dx, cz + dz });
+					}
+		};
+		collect(ox, oz);
+		// clusters: sites within the cluster distance joined (union-find); the biggest with
+		// minSites or more
 		std::map<int, std::pair<int, std::pair<double, double>>> clusters; // root: count, sum of x and z
-		for (size_t i = 0; i < sites.size(); i++) {
-			auto& c = clusters[root((int)i)];
-			c.first++;
-			c.second.first += sites[i].first;
-			c.second.second += sites[i].second;
+		auto biggest = [&]() -> const std::pair<int, std::pair<double, double>>* {
+			clusters.clear();
+			std::vector<int> parent(sites.size());
+			std::iota(parent.begin(), parent.end(), 0);
+			auto root = [&](int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
+			for (size_t i = 0; i < sites.size(); i++)
+				for (int dz = -jr; dz <= jr; dz++)
+					for (int dx = -jr; dx <= jr; dx++) {
+						if ((dx * dx + dz * dz) * 25 > join * join)
+							continue;
+						auto it = siteAt.find({ sites[i].first + dx, sites[i].second + dz });
+						if (it != siteAt.end())
+							parent[root((int)i)] = root(it->second);
+					}
+			for (size_t i = 0; i < sites.size(); i++) {
+				auto& c = clusters[root((int)i)];
+				c.first++;
+				c.second.first += sites[i].first;
+				c.second.second += sites[i].second;
+			}
+			const std::pair<int, std::pair<double, double>>* best = nullptr;
+			for (const auto& [_, c] : clusters)
+				if (c.first >= minSites && (!best || c.first > best->first))
+					best = &c;
+			return best;
+		};
+		const std::pair<int, std::pair<double, double>>* best = biggest();
+		// none in reach: the search as without the rule (on 3 Isles Kolvas's farms found farmland
+		// only on another island; refused, his commission stopped at its farms and laid nothing
+		// else for 25 minutes. A site that can't be reached costs the commission less.)
+		if (!best && reachRegion >= 0) {
+			reachRegion = -1;
+			sites.clear();
+			siteAt.clear();
+			collect((int)((asked.x - objbp->footprint->originX) / 5.0f), (int)((asked.z - objbp->footprint->originZ) / 5.0f));
+			best = biggest();
+			if (getenv("WKB_TRACE_REACH"))
+				printf("REACH fallback %s from (%.0f, %.0f): %zu sites, %s\n", objbp->name.c_str(), asked.x, asked.z, sites.size(), best ? "a cluster" : "none");
 		}
-		const std::pair<int, std::pair<double, double>>* best = nullptr;
-		for (const auto& [_, c] : clusters)
-			if (c.first >= minSites && (!best || c.first > best->first))
-				best = &c;
 		if (!best)
 			return none;
 		const int bx = (int)std::lround(best->second.first / best->first), bz = (int)std::lround(best->second.second / best->first);

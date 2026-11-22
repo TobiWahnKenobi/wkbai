@@ -601,6 +601,10 @@ void AIController::update()
 	const bool war = Server::instance->aggressiveAI && Server::instance->aiWar && !lua && !advanced();
 	if (war)
 		warUpdate();
+	// the AI at sea (Naval.cpp): for every AI (the Kingmaker, the aggressive one, a Lua AI, the
+	// ministries); nothing on a map without a sea between the players
+	if (Server::instance->aiNaval && gameObj->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER)
+		Naval::Update(gameObj);
 
 	// ---- Attack waves (the aggressive AI's operations, not in WKB.exe) ----
 	// At 25 minutes the Kingmaker's soldiers stayed home: the Co-ordinator's armies held 13-96 units
@@ -1128,6 +1132,20 @@ void AIController::update()
 		for (int r = 0; r < 3; r++)
 			cost[r] = type ? type->getStartingItemValue(COST_ITEMS[r]) : 0.0f;
 	};
+	if (const char* e = getenv("WKB_TRACE_SITES"); e && (uint32_t)atoi(e) == gameObj->id) {
+		static float next = 0.0f;
+		if (Server::instance->timeManager.currentTime >= next) {
+			next = Server::instance->timeManager.currentTime + 60.0f;
+			std::string list;
+			for (const auto& [prio, cid] : byPriority) {
+				const CommissionInstance& ci = commissionInstances[cid];
+				list += " \"" + Server::instance->gameSet->commissions.getString(ci.blueprint) + "\"(" + std::to_string((int)prio) + (ci.handlerObject ? "" : ", no handler")
+					+ (ci.suspendedSince >= 0.0f ? ", suspended" : "") + ", " + std::to_string(ci.blueprint->buildingRequirements.size()) + " buildings)";
+			}
+			printf("SITES t=%.0f player %u: %zu commissions:%s; plan %s\n", Server::instance->timeManager.currentTime, gameObj->id, byPriority.size(), list.c_str(),
+				planBlueprint ? "running" : "none");
+		}
+	}
 	for (const auto& [commissionPriority, cid] : byPriority) {
 		auto& cominst = commissionInstances[cid];
 		const GSCommission* gscomm = cominst.blueprint;
@@ -1187,6 +1205,9 @@ void AIController::update()
 				// a Spearman).
 				const GameSet* gs = Server::instance->gameSet.get();
 				for (auto& rung : gsreq.ladder->entries) {
+					// (the ministry AI's peasant cap: the commissions' peasants too, which went past it)
+					if (AIPeasantCapped(rung.type, this->gameObj->getPlayer()))
+						continue;
 					const std::string spawnName = "Spawn " + rung.type->name;
 					const int ordid = gs->orders.names.getIndex(spawnName);
 					if (ordid < 0)
@@ -1310,24 +1331,48 @@ void AIController::update()
 			while (!saving && existingCount + inCtrCount < requiredCount) {
 				auto posori = gsreq.pdBuildPosition->eval(&ctx);
 				// no site (the position's finder found nothing): no foundation this time
-				if (posori.position.x == 0.0f && posori.position.z == 0.0f)
+				if (posori.position.x == 0.0f && posori.position.z == 0.0f) {
+					if (const char* e = getenv("WKB_TRACE_SITES"); e && (uint32_t)atoi(e) == obj->getPlayer()->id)
+						printf("SITES t=%.0f player %u: \"%s\" no site for %s (%zu of %zu)\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str(), existingCount + inCtrCount, requiredCount);
 					break;
+				}
 				// nor on land a flood could cover (wkbai's weather, AIWeather.cpp)
 				if (weatherAvoidsSite(posori.position))
 					break;
 				const GameObjBlueprint* bpFoundation = Server::instance->gameSet->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, gsreq.bpBuilding->name + " Foundation");
+				// not across the water from home (Naval::HomeSite: on the island maps the scripts' sites
+				// went to other players' islands, and the first village never came)
+				if (bpFoundation) {
+					posori.position = Naval::HomeSite(obj->getPlayer(), bpFoundation, posori.position);
+					if (posori.position.x == 0.0f && posori.position.z == 0.0f)
+						break;
+				}
 				// a resource reserved above, or the foundation's cost short (which reserves it):
 				// WKB.exe's building requirement (0x4c4da0 -> 0x4c6b30, 0x4c6b60)
 				float cost[3];
 				typeCost(bpFoundation, cost);
-				if (usesReserved(cost))
+				const char* traceSites = getenv("WKB_TRACE_SITES");
+				const bool tracing = traceSites && (uint32_t)atoi(traceSites) == obj->getPlayer()->id;
+				if (usesReserved(cost)) {
+					if (tracing)
+						printf("SITES t=%.0f player %u: \"%s\" %s waits: a resource reserved\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str());
 					break;
+				}
 				if (!affordOrReserve(cost)) {
+					if (tracing)
+						printf("SITES t=%.0f player %u: \"%s\" %s waits: can't afford it\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
+							Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str());
 					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding))
 						saving = true;
 					break;
 				}
 				ServerGameObject* foundation = Server::instance->stampdownObject(bpFoundation, obj->getPlayer(), posori.position, Vector3(0,0,0), false, true);
+				if (tracing)
+					printf("SITES t=%.0f player %u: \"%s\" %s at (%.0f, %.0f): %s\n", Server::instance->timeManager.currentTime, obj->getPlayer()->id,
+						Server::instance->gameSet->commissions.getString(gscomm).c_str(), gsreq.bpBuilding->name.c_str(), posori.position.x, posori.position.z,
+						foundation ? "laid" : "REFUSED");
 				if (!foundation) {
 					if (aggressive && bpFoundation && TrainsFighters(gsreq.bpBuilding) && !obj->getPlayer()->canAffordObject(bpFoundation))
 						saving = true;

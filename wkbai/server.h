@@ -26,8 +26,8 @@
 #include "FormationController.h"
 #include "ServerEnvironment.h"
 #include "UnitHistory.h"
-#include "IntensityMaps.h"
 #include "Ministries.h"
+#include "IntensityMaps.h"
 
 struct GameSet;
 struct GSFileParser;
@@ -352,6 +352,9 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// AI's population limit also take the scripts' idle attackers, waves fight what defends their
 	// target and go on to the next building, and the attacker is attacked back: "aiWar"
 	bool aiWar = true;
+	// the AI at sea (Naval.h): every AI player builds a dock and ships where the map has water
+	// between it and an enemy, ferries armies over, fights at sea: "aiNaval"
+	bool aiNaval = true;
 	// the ministry AI (Ministries.h): every AI player a government of departments; off by default
 	// while it is being built (Phase 16): "aiMinistries"
 	bool aiMinistries = false;
@@ -405,7 +408,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
-	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation);
+	// spawner: the building that trained it, the sender of the character's "On Spawn"
+	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation, ServerGameObject* spawner = nullptr);
 	ServerGameObject* stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation,
 		bool sendEvent, bool inGameplay);
 	void deleteObject(ServerGameObject *obj);

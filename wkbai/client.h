@@ -39,6 +39,9 @@ struct ClientGameObject : SpecificGameObject<Client, ClientGameObject> {
 	std::unordered_map<int, int> buildingOrderCountMap;
 	// ENABLE_/DISABLE_SHADOW (mods): -1 as its type has it, 0 no static shadow, 1 one
 	int8_t shadowSwitch = -1;
+	// the server's associations, mirrored (NETCLIMSG_OBJECT_ASSOCIATION): FINDER_ASSOCIATES and
+	// FINDER_ASSOCIATORS on the client (command buttons' conditions)
+	std::map<int, std::set<CliGORef>> associates, associators;
 
 	void updatePosition(const Vector3& newposition);
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);

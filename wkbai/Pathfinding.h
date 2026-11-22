@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cmath>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <functional>
 #include <limits>

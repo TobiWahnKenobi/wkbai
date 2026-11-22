@@ -9,6 +9,7 @@
 #include "terrain.h"
 #include "gameset/gameset.h"
 #include "TrnTextureDb.h"
+#include "WaterOverlay.h"
 #include <cassert>
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,8 @@
 uint64_t g_astarSearches = 0, g_astarTiles = 0;
 // the searches a group field answered, the fields made, the goals no search could reach
 uint64_t g_fieldPaths = 0, g_fieldBuilds = 0, g_unreachableGoals = 0;
+// the unreachable goals by the asking object (on when a test sets it: Test_RunSave)
+std::map<uint32_t, int>* g_unreachableBy = nullptr;
 double g_astarMs = 0.0;
 // test runs: WKB_PATH_STATS=1 prints the game's totals at exit (searches, tiles taken from the open
 // lists, search ms on the threads, the path nodes walks got)
@@ -450,7 +453,21 @@ bool MovementController::isTerrainBlocked(const GameObjBlueprint* blueprint, int
 				if (it != groups.end())
 					tile.terrainType = (short)(it->second - &server->gameSet->terrains[0]);
 			}
-			if (tile.terrainType >= 0 && tile.terrainType < (int)passable->size() && !(*passable)[tile.terrainType])
+			int terrain = tile.terrainType;
+			// a boat goes by WKB.exe's water overlay ("Shallow Water", "Water"; WaterOverlay.h), not
+			// the sea bed's texture
+			if (waterUnit) {
+				static uint64_t of = 0;
+				static int shallow = -1, deep = -1;
+				if (of != server->gameSet->serial) {
+					of = server->gameSet->serial;
+					shallow = server->gameSet->terrains.names.getIndex("Shallow Water");
+					deep = server->gameSet->terrains.names.getIndex("Water");
+				}
+				if (const int ov = WaterOverlayClass(trn, tx, tz))
+					terrain = ov == 2 ? deep : shallow;
+			}
+			if (terrain >= 0 && terrain < (int)passable->size() && !(*passable)[terrain])
 				return true;
 		}
 
@@ -1025,6 +1042,19 @@ Vector3 MovementController::startMovement(const Vector3& destination)
 	Terrain* trn = Server::instance->terrain;
 	auto trnsize = trn->getNumPlayableTiles();
 	const GameObjBlueprint* blueprint = m_object->blueprint;
+	// a formation goes where its members can: by the ground of the member type that climbs least
+	// (the formation type's own has no slope limit: on the play test's save the Kingmaker's
+	// formations stood on a summit by the scout they were sent at, their spearmen climbing to their
+	// places for the rest of the game, 2026-11-17)
+	if (blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION) {
+		const GameObjBlueprint* member = nullptr;
+		for (const auto& [type, children] : m_object->children)
+			for (CommonGameObject* c : children)
+				if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && (!member || c->blueprint->maxGradient < member->maxGradient))
+					member = c->blueprint;
+		if (member)
+			blueprint = member;
+	}
 	const int cls = movementClass(blueprint);
 	auto pred = [cls](PFPos pfp) -> bool { return isTileBlockedFast(cls, pfp.x, pfp.z); };
 
@@ -1424,8 +1454,12 @@ void MovementController::runPathSearches()
 		PathRequest& r = *rp;
 		if (r.straight)
 			continue;
-		if (r.unreachable)
+		if (r.unreachable) {
 			g_unreachableGoals++;
+			// (Test_RunSave: who asks for them)
+			if (g_unreachableBy && r.object.get())
+				(*g_unreachableBy)[r.object.get()->id]++;
+		}
 		if (r.searchEnd == r.end && !g_noFields && !r.threat) {
 			const ClassGrid* c = &g.classes[r.cls];
 			r.field = parallel ? groupField(r.cls, w, h, r.end, FilledPred{ server, c, w, h }) : groupField(r.cls, w, h, r.end, lazyPred(r.cls));

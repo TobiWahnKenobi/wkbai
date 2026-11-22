@@ -168,6 +168,7 @@ void QuickSkirmishMenu::setSetting(const std::string& name, int value)
 	else if (name == "aiLifeline") aiLifeline = value != 0;
 	else if (name == "aiHomeGuard") aiHomeGuard = value != 0;
 	else if (name == "aiWar") aiWar = value != 0;
+	else if (name == "aiNaval") aiNaval = value != 0;
 	else if (name == "aiMinistries") aiMinistries = value != 0;
 	else if (name == "aiVision") aiVision = std::clamp(value, 0, 1);
 	else if (name == "aiGenerals") aiGenerals = std::clamp(value, 1, 8);
@@ -261,6 +262,7 @@ void QuickSkirmishMenu::applySettings(Server& server)
 	ServerGameObject* level = server.getLevel();
 	const bool isWKBattles = server.gameSet->version == GameSet::GSVERSION_WKBATTLES;
 	std::vector<SrvGORef> aiPlayers; // the AI players, in a game without any human
+	std::vector<uint32_t> positionIds; // the player at each start position (the slots')
 
 	if (mode == StandardMode) {
 		for (auto& [objType, objList] : level->children) {
@@ -346,6 +348,8 @@ void QuickSkirmishMenu::applySettings(Server& server)
 			for (CommonGameObject* obj : it->second)
 				players.push_back(obj->dyncast<ServerGameObject>());
 		std::sort(players.begin(), players.end(), [](auto* a, auto* b) { return a->id < b->id; });
+		for (ServerGameObject* p : players)
+			positionIds.push_back(p->id);
 
 		// The AI Generals: the PLAYER blueprints "... Kingmaker" (AI_Personalities.gsf)
 		std::vector<const GameObjBlueprint*> generals;
@@ -557,11 +561,35 @@ void QuickSkirmishMenu::applySettings(Server& server)
 		server.aiLifeline = aiLifeline;
 		server.aiHomeGuard = aiHomeGuard;
 		server.aiWar = aiWar;
+		server.aiNaval = aiNaval;
 		server.aiMinistries = aiMinistries;
 		server.aiVision = aiVision;
 		server.aiGenerals = aiGenerals;
 		server.aiReaction = aiReaction;
 		server.aiMinistriesSlots = aiMinistriesSlots;
+		// "aiMinistriesSlots" names start positions (the lobby's AI choice per position, bit 0 the
+		// first); Ministries::update counts the players there are (by id, not the Neutral Player).
+		// An empty position's player is gone, so the bits go over to the players' places in that count.
+		if (aiMinistries && aiMinistriesSlots != 0 && !positionIds.empty()) {
+			std::vector<uint32_t> live;
+			for (const auto& [type, children] : level->children)
+				for (CommonGameObject* child : children) {
+					ServerGameObject* p = child->dyncast<ServerGameObject>();
+					if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && !p->deleted)
+						live.push_back(p->id);
+				}
+			std::sort(live.begin(), live.end());
+			int mask = 0;
+			for (size_t i = 0; i < positionIds.size() && i < 31; i++)
+				if ((aiMinistriesSlots >> i) & 1)
+					if (auto it = std::find(live.begin(), live.end(), positionIds[i]); it != live.end() && it - live.begin() < 31)
+						mask |= 1 << (it - live.begin());
+			server.aiMinistriesSlots = mask;
+			// (none of them plays: no ministries, not every AI's)
+			if (mask == 0)
+				server.aiMinistries = false;
+			printf("Skirmish: ministry AI at positions 0x%x, players 0x%x\n", aiMinistriesSlots, mask);
+		}
 		server.aiWeather = aiWeather;
 		server.aiHumanFocus = aiHumanFocus;
 		server.modPolicy = modPolicy;
