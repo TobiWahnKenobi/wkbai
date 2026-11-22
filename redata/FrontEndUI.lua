@@ -1320,6 +1320,9 @@ local SETTINGS = {
 	-- river currents (ServerEnvironment.h, with the seasons): the water's flow carries and hurts
 	-- the units in it, they swim to the shore; a game setting, the same for every player
 	riverCurrents = 1,
+	-- artillery breaks the ice (ServerEnvironment.h, with the seasons): shots on frozen water open
+	-- holes, who stands there falls in, the holes freeze over again in the frost
+	breakingIce = 1,
 	-- the wind (Wind.h): on, blowing by the weather from a random (mostly westerly) way, veering;
 	-- windFrom 0 random, 1-8 N .. NW; windStrength 0 by the weather, 1-5 calm .. gale; its
 	-- effects on the game (wildfires, wind chill)

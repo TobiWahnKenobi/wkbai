@@ -200,6 +200,43 @@ struct ServerEnvironment {
 	const std::vector<int>& wadeableTiles(Server& server);
 	size_t swimmerCount() const { return swimmers.size(); }
 
+	// ---- artillery breaks the ice (settings.breakingIce, with the seasons; iceStruck) ----
+	// A heavy shot (ShotHoleRadius: a bombard's ball, a trebuchet's, a mangonel's, a rocket)
+	// coming down on frozen water (Terrain::frozenAt: walkable ice), on the ice or on a unit
+	// standing on it, breaks a hole in it that wide (Order.cpp, the missile's landing). A shot
+	// into a hole freezing over again breaks the new ice as far as it reaches. The holes are the
+	// terrain's (Terrain::iceHoles: its tiles open water, not frozenAt, for the path finding, the
+	// heights, the boats), sent to the clients (NETCLIMSG_ICE_HOLES), drawn there, saved.
+	//  - Who stands on deep water (applyFloods' deepTiles) where it opens falls in: ICE_FALL_HARM
+	//    of their health at once, then ICE_WATER_HARM a second in the icy water (the undead twice
+	//    that), while they swim (the Swim animation, SWIM_SHARE of their speed) to the nearest
+	//    ice or shore they can walk on. War machines sink (ICE_MACHINE_SINK a second), the huge
+	//    creatures can't swim out, the otherworldly walk the bed untouched. A death in a hole is
+	//    the shooter's kill (UnitHistory: the hole's shooter is the victim's last hit, each
+	//    second); deaths are counted as drowned (stats.iceDrowned too).
+	//  - In the frost (iceTemperature below 0) a hole closes: its radius shrinks by
+	//    ICE_CLOSE_RATE m a second a degree of frost (at least ICE_CLOSE_MIN, at most
+	//    ICE_CLOSE_MAX: about 2 minutes for a bombard's hole at -10 C), the new ice drawn thinner
+	//    out to where it was widest; under Terrain::ICE_HOLE_MIN wide it is ice again, the thin
+	//    ice fading out after. Not in the frost it stays open; the ice gone (below ICE_WALKABLE),
+	//    the holes are too.
+	// With the setting off, without the seasons or without ice, nothing of this runs.
+	static constexpr float ICE_FALL_HARM = 0.1f, ICE_WATER_HARM = 0.06f, ICE_MACHINE_SINK = 0.25f;
+	static constexpr float ICE_CLOSE_RATE = 0.004f, ICE_CLOSE_MIN = 0.005f, ICE_CLOSE_MAX = 0.05f;
+	static constexpr size_t ICE_HOLES_MOST = 128;
+	struct IceHole { float x = 0, z = 0, radius = 0, widest = 0; uint32_t shooter = 0; float born = 0; };
+	// the hole a missile of this blueprint breaks (radius, m; 0: none, not artillery)
+	static float ShotHoleRadius(const std::string& missileName);
+	// a missile came down at a place (Order.cpp): breaks the ice there if it is artillery
+	void iceStruck(Server& server, ServerGameObject* missile, const Vector3& at);
+	// a hole that wide broken at a place by that shooter (its unit's id; 0 none); false: no ice
+	// there to break (or the setting off)
+	bool breakIce(Server& server, const Vector3& at, float radius, uint32_t shooter);
+	const std::vector<IceHole>& iceHoles() const { return holes; }
+	size_t iceSwimmerCount() const { return iceSwimmers.size(); }
+	// tests: the ice's temperature held there (below -999: not)
+	float forceIceTemperature = -1000.0f;
+
 	// the peasants' lodging at night and in winter (PeasantLodging.h)
 	PeasantLodging lodging;
 
@@ -214,6 +251,7 @@ struct ServerEnvironment {
 	struct Stats { int carriedSeconds = 0, carriedMost = 0, sweptAway = 0, rainedOut = 0, firesShrunk = 0, frozen = 0, thirst = 0, drowned = 0, lightningUnits = 0, lightningBuildings = 0, lightningGround = 0, floodedBuildings = 0; float floodDamage = 0;
 		size_t floodTiles = 0, floodedTiles = 0; int onIceMost = 0, onIceSeconds = 0, fallowHarvests = 0;
 		int wildfires = 0, fireCells = 0, fireCellsMost = 0, fireDeaths = 0, buildingsFired = 0, fromMissiles = 0, fromBuildings = 0, spontaneous = 0;
+		int iceHolesBroken = 0, iceFallen = 0, iceDrowned = 0, iceSwamOut = 0, iceSwimSeconds = 0;
 		// the deaths by player id: 0 frozen, 1 thirst, 2 drowned (floods and the ice), 3 fire, 4 lightning
 		std::map<uint32_t, std::array<int, 5>> deathsBy; } stats;
 	// what happens: frozen units, strikes (for the tests' census)
@@ -321,6 +359,18 @@ private:
 	std::map<uint32_t, Swimmer> swimmers;
 	void prepareCurrents(Server& server);
 	void applyCurrents(Server& server);
+	// the holes in the ice (saved, "icehole" lines), the units in them swimming (by id; saved,
+	// "iceswim" lines), whether the terrain has them (not after a load until the next update)
+	// and whether the clients do
+	std::vector<IceHole> holes;
+	std::set<uint32_t> iceSwimmers;
+	bool holesOnTerrain = true, holesSent = true;
+	void updateIceHoles(Server& server);
+	void holesToTerrain(Server& server);
+	void sendIceHoles(Server& server, NetLink* only);
+	// the units in the holes' open water (all holes, or the one at index `only`): fallen in now
+	// (the harm of the fall) or for a second already; each swims out, or sinks
+	void iceHoleUnits(Server& server, int only, bool fell);
 	CurrentAt currentAtTile(int ti) const;
 	void sendFireShares(Server& server, NetLink* only);
 	void charTrees(Server& server, const Vector3& at);

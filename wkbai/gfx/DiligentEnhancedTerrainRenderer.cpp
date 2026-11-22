@@ -311,6 +311,11 @@ cbuffer SunBuffer
 	// the grass in the wind (RenderSettings::grassWind): x 0 off, 1 waves, 2 field; y the gusts'
 	// clock (s, wrapped)
 	float4 WindParams2;
+	// the holes artillery broke in the ice (Terrain::iceHoles, ServerEnvironment::iceStruck): x how
+	// many of IceHoles are in use (the nearest the camera); each x, z (playable world), the open
+	// radius, the widest it was (the new ice thinner out to there)
+	float4 IceHoleInfo;
+	float4 IceHoles[32];
 };
 
 Texture2D<float> heightTexture; // the terrain's vertex heights, (width + 1) x (height + 1)
@@ -553,6 +558,70 @@ float IceShare(float3 world, float sea, float coast)
 	float reach = WeatherParams3.x;
 	float atSea = reach > 0 ? fresh * smoothstep(0.6, -0.6, coast + SeaIceEdge(world.xz, reach) - reach) : 0;
 	return lerp(fresh, atSea, saturate(sea));
+}
+
+// The holes artillery broke in the ice (IceHoles): x how open the water is there (1: open), y how
+// thin the ice (1: just frozen again, darker and clearer), z the cracks running out from a hole
+// into the ice. A hole's edge is ragged (two noises of the place); round it, out to 1.4 times its
+// radius, the ice lies broken in floes (cells of a jittered grid about 1.4 m wide, cracks between
+// them), more of them gone (sunk, drifted off) nearer the hole; cracks run out to 2.2 times the
+// radius. Refreezing, the new ice from the radius out to the widest is thinnest at the open water.
+float2 IceFloeCell(float2 p, out float edgeDist)
+{
+	float2 base = floor(p);
+	float f1 = 10, f2 = 10;
+	float2 id = 0;
+	for (int j = -1; j <= 1; j++)
+		for (int i = -1; i <= 1; i++) {
+			float2 c = base + float2(i, j);
+			uint h = IceHash((int2)c + int2(733, 4111));
+			float2 q = c + 0.15 + 0.7 * float2((h & 1023) / 1023.0, ((h >> 10) & 1023) / 1023.0);
+			float d = distance(p, q);
+			if (d < f1) { f2 = f1; f1 = d; id = c; }
+			else if (d < f2) f2 = d;
+		}
+	edgeDist = f2 - f1;
+	return id;
+}
+float3 IceHoleAt(float2 xz)
+{
+	float3 r = 0;
+	int n = (int)IceHoleInfo.x;
+	[loop] for (int i = 0; i < n; i++) {
+		float4 h = IceHoles[i];
+		float big = max(h.z, h.w);
+		float dist = distance(xz, h.xy);
+		if (dist > big * 2.2 + 1.5)
+			continue;
+		float rag = (IceValue(xz * 0.8 + h.xy * 0.37) - 0.5) * 0.9 + (IceValue(xz * 2.6 + 11.3) - 0.5) * 0.35;
+		float edge = h.z + rag * saturate(h.z);
+		float open = h.z > 0 ? smoothstep(edge + 0.1, edge - 0.1, dist) : 0;
+		if (h.z > 0) {
+			// the floes round it
+			float ring = saturate((h.z * 1.4 + 0.6 - dist) / (h.z * 0.4 + 0.6));
+			if (ring > 0) {
+				float gap;
+				float2 cell = IceFloeCell(xz / 1.4, gap);
+				uint ch = IceHash((int2)cell + int2(91, 7));
+				float gone = (ch >> 24) / 255.0 < ring * 0.6 ? 1 : 0;
+				float crackGap = 1 - smoothstep(0.03, 0.09, gap);
+				open = max(open, max(gone, crackGap * 0.85) * ring);
+			}
+			// the cracks out into the ice
+			float2 d = xz - h.xy;
+			float a = atan2(d.y, d.x) / 6.2831853 * 9 + IceValue(xz * 0.35 + h.xy) * 1.6 + h.x * 0.17;
+			// (thin lines where the angle's fraction wraps; their angular width shrinking outwards)
+			float width = clamp(0.12 * max(h.z, 1) / max(dist, 1), 0.02, 0.12);
+			float crackLine = smoothstep(1 - width, 1, abs(frac(a) - 0.5) * 2);
+			float reach = saturate((h.z * 2.2 - dist) / max(h.z * 0.8, 0.5)) * step(edge, dist);
+			r.z = max(r.z, saturate(crackLine) * reach);
+		}
+		// the new ice where it froze again: thinnest at the open water
+		if (h.w > h.z && dist > edge - 0.1)
+			r.y = max(r.y, saturate((h.w + rag - dist) / max(h.w - max(h.z, 0), 0.3)));
+		r.x = max(r.x, open);
+	}
+	return r;
 }
 
 
@@ -1187,12 +1256,25 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	if (share <= 0)
 		return c;
 	float q = WeatherParams3.z;
+	// the holes artillery broke in it (IceHoleAt): open water, the new ice thin, cracks
+	float3 hole = IceHoleInfo.x > 0 ? IceHoleAt(world.xz) : float3(0, 0, 0);
+	if (hole.x > 0) {
+		// the open water in it dark and nearly opaque, as water in ice looks (the water's own
+		// transparency had shown the snowy bed under it, as pale as the ice)
+		float4 open = float4(lerp(c.rgb, GradeColour(float3(0.035, 0.075, 0.10)), 0.65), max(c.a, 0.94));
+		c = lerp(c, open, hole.x);
+	}
+	share *= 1 - hole.x;
+	if (share <= 0)
+		return c;
 	// the snow on it: along the shore (over its first tile or so, a wandering edge) and in drifts
 	float edge = coast + (WeatherNoise(world.xz * 0.21) - 0.5) * 1.2;
 	float onIce = WeatherParams.x * max(smoothstep(1.5, 0.3, edge), saturate((WeatherNoise(world.xz * 0.06 + 7.1) - 0.58) * 3) * 0.7);
+	onIce *= 1 - max(hole.y, hole.z * 0.5);
 	if (q < 0.5) {
 		float cracks = WeatherNoise(world.xz * 0.6) * 0.15;
 		float3 ice = lerp(float3(0.80, 0.87, 0.93) - cracks, float3(1.0, 1.02, 1.06), onIce);
+		ice = lerp(ice, float3(0.36, 0.46, 0.55), hole.y * 0.75) * (1 - 0.4 * hole.z);
 		return float4(lerp(c.rgb, GradeColour(ice), share), lerp(c.a, 1, share));
 	}
 	float3 v = normalize(FogCamera.xyz - world);
@@ -1211,6 +1293,8 @@ float4 IceOver(float4 c, float3 world, float share, float coast, float4 svpos)
 	float crack = (1 - smoothstep(0.0, 0.035, abs(cn - 0.5))) * saturate(1 - dist / 300);
 	float3 albedo = lerp(float3(0.52, 0.64, 0.76), float3(0.70, 0.80, 0.89), WeatherNoise(world.xz * 0.09));
 	albedo *= 1 - 0.35 * crack;
+	// (the new ice of a hole closing: dark, the water showing through; the cracks round a hole)
+	albedo = lerp(albedo, float3(0.17, 0.26, 0.34), hole.y * 0.8) * (1 - 0.45 * hole.z);
 	if (q > 1.5) {
 		float b = WeatherNoise(inner * 2.7 + 1.9);
 		albedo = lerp(albedo, float3(0.86, 0.92, 0.97), smoothstep(0.82, 0.9, b) * 0.6 * saturate(1 - dist / 120));
@@ -2401,7 +2485,7 @@ void DiligentEnhancedTerrainRenderer::init()
 
 	BufferDesc cbDesc;
 	cbDesc.Name = "Terrain sun";
-	cbDesc.Size = 960;
+	cbDesc.Size = 960 + 16 + 32 * 16; // (the ice holes from 960)
 	cbDesc.BindFlags = BIND_UNIFORM_BUFFER;
 	cbDesc.Usage = USAGE_DYNAMIC;
 	cbDesc.CPUAccessFlags = CPU_ACCESS_WRITE;
@@ -3661,6 +3745,29 @@ void DiligentEnhancedTerrainRenderer::render()
 	weather3[0] = g_environment.active ? SeaIceReach(g_environment.severity, g_environment.ice) : 0.0f;
 	weather3[1] = (float)std::clamp(g_renderSettings.snowQuality, 0, 2);
 	weather3[2] = (float)std::clamp(g_renderSettings.iceQuality, 0, 2);
+	// the holes artillery broke in the ice (IceHoles; the map's terrain has them, the client's from
+	// NETCLIMSG_ICE_HOLES): the 32 nearest the camera
+	{
+		float* info = (float*)(sbdata + 960);
+		float* holes = (float*)(sbdata + 976);
+		std::fill(info, info + 4, 0.0f);
+		const Terrain* src = mapTerrain ? mapTerrain : terrain;		if (g_environment.active && src && src->waterFrozen && !src->iceHoles.empty()) {
+			std::vector<std::pair<float, const Terrain::IceHole*>> near;
+			near.reserve(src->iceHoles.size());
+			const Vector3& cam = camera->position;
+			for (const Terrain::IceHole& h : src->iceHoles)
+				near.push_back({ (h.x - cam.x) * (h.x - cam.x) + (h.z - cam.z) * (h.z - cam.z), &h });
+			const size_t n = std::min<size_t>(near.size(), 32);
+			std::partial_sort(near.begin(), near.begin() + n, near.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			for (size_t i = 0; i < n; i++) {
+				holes[4 * i + 0] = near[i].second->x;
+				holes[4 * i + 1] = near[i].second->z;
+				holes[4 * i + 2] = near[i].second->radius;
+				holes[4 * i + 3] = near[i].second->widest;
+			}
+			info[0] = (float)n;
+		}
+	}
 	// the lobby's wind for the grass (WindParams)
 	float* wind2 = (float*)(sbdata + 944);
 	wind2[0] = g_wind.on && g_renderSettings.grass ? (float)std::clamp(g_renderSettings.grassWind, 0, 2) : 0.0f;

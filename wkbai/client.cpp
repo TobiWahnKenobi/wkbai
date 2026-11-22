@@ -1214,6 +1214,19 @@ void Client::tick()
 					charredTrees.insert(br.readUint32());
 				break;
 			}
+			case NETCLIMSG_ICE_HOLES: {
+				// the holes artillery broke in the ice (ServerEnvironment::iceStruck): this terrain's
+				// open tiles as the server's (the heights its units are drawn at), drawn
+				std::vector<Terrain::IceHole> holes(br.readUint16());
+				for (Terrain::IceHole& h : holes) {
+					h.x = br.readFloat();
+					h.z = br.readFloat();
+					h.radius = br.readFloat();
+					h.widest = br.readFloat();
+				}
+				if (terrain)
+					terrain->setIceHoles(holes);				break;
+			}
 			case NETCLIMSG_FIRE_SHARES: {
 				fireShares.clear();
 				const uint8_t n = br.readUint8();

@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 
 namespace {
@@ -763,6 +764,296 @@ void ServerEnvironment::applyCurrents(Server& server)
 				countDeath(o, 2);
 			}
 		}
+}
+
+// ---- artillery breaks the ice (ServerEnvironment.h) ----
+
+float ServerEnvironment::ShotHoleRadius(const std::string& name)
+{
+	auto has = [&](const char* s) {
+		return std::search(name.begin(), name.end(), s, s + strlen(s), [](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); }) != name.end();
+	};
+	// (the game set's: "Trebuchet Ball", "Greek Fire Trebuchet Ball", "Bombard Ball", "Mangonel
+	// Ball", "Mangonel Boat Ball", "Ship Mangonel Ball", "Rocket"; a mod's cannons and catapults)
+	if (has("trebuchet"))
+		return 5.5f;
+	if (has("bombard") || has("cannon"))
+		return 4.0f;
+	if (has("mangonel") || has("catapult"))
+		return 3.5f;
+	if (has("rocket"))
+		return 2.5f;
+	return 0.0f;
+}
+
+void ServerEnvironment::iceStruck(Server& server, ServerGameObject* missile, const Vector3& at)
+{
+	if (!settings.seasons || !settings.breakingIce || !server.terrain || !server.terrain->waterFrozen || !missile)
+		return;
+	const float radius = ShotHoleRadius(missile->blueprint->name);
+	if (radius <= 0.0f)
+		return;
+	// (a hit high above the ice, a tower's, a cliff's: none)
+	if (at.y > server.terrain->getHeightEx(at.x, at.z, true) + 4.0f)
+		return;
+	breakIce(server, at, radius, server.unitHistory.resolve(server, missile));
+}
+
+bool ServerEnvironment::breakIce(Server& server, const Vector3& at, float radius, uint32_t shooter)
+{
+	Terrain* t = server.terrain;
+	if (!settings.seasons || !settings.breakingIce || !t || !t->waterFrozen || radius <= 0.0f)
+		return false;
+	const int tx = (int)std::floor(at.x / 5.0f) + t->edge, tz = (int)std::floor(at.z / 5.0f) + t->edge;
+	const TerrainTile* tile = t->getTile(tx, tz);
+	if (!tile || !tile->fullOfWater)
+		return false;
+	if (!holesOnTerrain)
+		holesToTerrain(server);
+	// on the ice, or on a hole (open or freezing over again: the last one it is in)
+	int into = -1;
+	float intoDist = 0.0f;
+	for (size_t i = 0; i < holes.size(); i++) {
+		const float dx = at.x - holes[i].x, dz = at.z - holes[i].z;
+		const float d = std::sqrt(dx * dx + dz * dz);
+		if (d <= std::max(holes[i].widest, holes[i].radius)) {
+			into = (int)i;
+			intoDist = d;
+		}
+	}
+	if (into < 0 && !t->frozenAt(tx, tz))
+		return false;
+	if (!floodPrepared)
+		prepareFloods(server);
+	int index;
+	if (into >= 0 && intoDist + radius <= holes[into].widest) {
+		// the new ice of a hole closing broken again, as far as the shot reaches
+		IceHole& h = holes[into];
+		h.radius = std::max(h.radius, std::min(h.widest, intoDist + radius));
+		if (shooter)
+			h.shooter = shooter;
+		index = into;
+	}
+	else {
+		if (holes.size() >= ICE_HOLES_MOST) {
+			// (the most: the smallest one goes, frozen over at once)
+			size_t smallest = 0;
+			for (size_t i = 1; i < holes.size(); i++)
+				if (holes[i].radius < holes[smallest].radius)
+					smallest = i;
+			holes.erase(holes.begin() + smallest);
+		}
+		IceHole h;
+		h.x = at.x;
+		h.z = at.z;
+		h.radius = h.widest = radius;
+		h.shooter = shooter;
+		h.born = server.timeManager.currentTime;
+		holes.push_back(h);
+		index = (int)holes.size() - 1;
+	}
+	stats.iceHolesBroken++;
+	holesToTerrain(server);
+	sendIceHoles(server, nullptr);
+	if (trace)
+		printf("ENVIRONMENT t=%.1f ice broken at (%.1f, %.1f), %.1f m, by %u: %zu holes\n", (float)server.timeManager.currentTime, at.x, at.z, radius, shooter, holes.size());
+	iceHoleUnits(server, index, true);
+	return true;
+}
+
+void ServerEnvironment::holesToTerrain(Server& server)
+{
+	holesOnTerrain = true;
+	if (!server.terrain)
+		return;
+	std::vector<Terrain::IceHole> list;
+	list.reserve(holes.size());
+	for (const IceHole& h : holes)
+		list.push_back({ h.x, h.z, h.radius, h.widest });
+	server.terrain->setIceHoles(list);
+}
+
+void ServerEnvironment::sendIceHoles(Server& server, NetLink* only)
+{
+	NetPacketWriter msg(NETCLIMSG_ICE_HOLES);
+	const size_t n = std::min<size_t>(holes.size(), 65535);
+	msg.writeUint16((uint16_t)n);
+	for (size_t i = 0; i < n; i++) {
+		msg.writeFloat(holes[i].x);
+		msg.writeFloat(holes[i].z);
+		msg.writeFloat(holes[i].radius);
+		msg.writeFloat(holes[i].widest);
+	}
+	if (only)
+		only->send(msg);
+	else // (as Server::sendToAll: not to a guest still waiting for the game's state)
+		for (size_t i = 0; i < server.clientLinks.size(); i++)
+			if (i >= server.clientInfos.size() || !server.clientInfos[i].awaitingState)
+				server.clientLinks[i]->send(msg);
+	holesSent = true;
+}
+
+void ServerEnvironment::iceHoleUnits(Server& server, int only, bool fell)
+{
+	Terrain* t = server.terrain;
+	if (!server.tiles || !t)
+		return;
+	const auto [pw, ph] = t->getNumPlayableTiles();
+	const int hp = server.gameSet->items.names.getIndex("Hit Points");
+	const float now = server.timeManager.currentTime;
+	const bool deepKnown = gridW == pw && gridH == ph && deepGrid.size() == (size_t)pw * ph;
+	// whether a hole opened a tile (Terrain::setIceHoles' rule)
+	auto covers = [&](const IceHole& h, int x, int z) {
+		const float dx = (x + 0.5f) * 5.0f - h.x, dz = (z + 0.5f) * 5.0f - h.z;
+		return (x == (int)std::floor(h.x / 5.0f) && z == (int)std::floor(h.z / 5.0f)) || dx * dx + dz * dz <= h.radius * h.radius;
+	};
+	// the units in the holes' open deep water, by id, with the hole (the last one over their tile)
+	std::map<uint32_t, std::pair<SrvGORef, int>> inHole;
+	const int first = only >= 0 ? only : 0, last = only >= 0 ? only + 1 : (int)holes.size();
+	for (int hi = first; hi < last && deepKnown && !t->iceOpen.empty(); hi++) {
+		const IceHole& h = holes[hi];
+		if (h.radius < Terrain::ICE_HOLE_MIN)
+			continue;
+		const int x0 = std::max(0, (int)std::floor((h.x - h.radius) / 5.0f)), x1 = std::min(pw - 1, (int)std::floor((h.x + h.radius) / 5.0f));
+		const int z0 = std::max(0, (int)std::floor((h.z - h.radius) / 5.0f)), z1 = std::min(ph - 1, (int)std::floor((h.z + h.radius) / 5.0f));
+		for (int z = z0; z <= z1; z++)
+			for (int x = x0; x <= x1; x++) {
+				if (!deepGrid[z * pw + x] || !covers(h, x, z) || !t->iceOpenAt(t->edge + x, t->edge + z))
+					continue;
+				for (const auto& ref : server.tiles[z * pw + x].objList)
+					if (ServerGameObject* o = ref.getFrom<Server>(); o && !o->deleted && !(o->flags & CommonGameObject::fTerminated)
+						&& o->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && !o->blueprint->canWalkOnWater() && (hp < 0 || o->getItem(hp) > 0.0f))
+						inHole[o->id] = std::make_pair(SrvGORef(o), hi);
+			}
+	}
+	// the ones out of the water (or the hole frozen over round them): on the ice again
+	if (!fell)
+		for (auto it = iceSwimmers.begin(); it != iceSwimmers.end();) {
+			if (inHole.count(*it)) {
+				++it;
+				continue;
+			}
+			ServerGameObject* o = server.findObject(*it);
+			if (o && !o->deleted && !(o->flags & CommonGameObject::fTerminated)) {
+				stats.iceSwamOut++;
+				if (!o->movementController.isMoving())
+					o->stopMovement();
+			}
+			it = iceSwimmers.erase(it);
+		}
+	struct Hit { SrvGORef obj; float frac; };
+	std::vector<Hit> hits;
+	for (auto& [id, entry] : inHole) {
+		ServerGameObject* o = entry.first.get();
+		if (!o)
+			continue;
+		const IceHole& h = holes[entry.second];
+		const uint8_t hardy = waterHardiness(o->blueprint);
+		if (hardy == WATER_UNHARMED)
+			continue; // (otherworldly: walks the bed, untouched)
+		const uint8_t k = kindOf(o->blueprint);
+		const bool machine = hardy == WATER_MACHINE || k == K_MACHINE;
+		const bool fallsNow = fell && !iceSwimmers.count(id);
+		if (fell && !fallsNow)
+			continue; // (swimming already: the next update's)
+		float harm = fallsNow ? ICE_FALL_HARM : (machine ? ICE_MACHINE_SINK : ICE_WATER_HARM * (k == K_UNDEAD ? 2.0f : 1.0f));
+		if (fallsNow)
+			stats.iceFallen++;
+		// the shooter's: a death in the hole is its kill (UnitHistory::terminated)
+		if (h.shooter && h.shooter != o->id) {
+			o->lastHitBy = h.shooter;
+			o->lastHitTime = now;
+		}
+		hits.push_back({ o, harm });
+		iceSwimmers.insert(id);
+		if (!fallsNow)
+			stats.iceSwimSeconds++;
+		// swimming out (not a formation's member: its formation leads it; machines and the huge
+		// can't swim)
+		const bool member = o->parent && o->parent->blueprint->bpClass == Tags::GAMEOBJCLASS_FORMATION;
+		if (member || machine || hardy != WATER_ANY)
+			continue;
+		const float speed = o->computeSpeed() * SWIM_SHARE;
+		if (speed < 0.05f)
+			continue;
+		// the nearest ice or shore it can walk on: along 8 ways, the way out of the hole first
+		auto walkable = [&](const Vector3& q) {
+			const int x = (int)std::floor(q.x / 5.0f), z = (int)std::floor(q.z / 5.0f);
+			return x >= 0 && z >= 0 && x < pw && z < ph && !t->iceOpenAt(t->edge + x, t->edge + z) && !MovementController::isTileBlocked(o->blueprint, x, z);
+		};
+		Vector3 away(o->position.x - h.x, 0, o->position.z - h.z);
+		away = away.len2xz() < 0.1f ? Vector3(1, 0, 0) : away.normal2xz();
+		Vector3 dir = away;
+		float best = 1e30f;
+		for (int a = 0; a < 8; a++) {
+			const float angle = (float)((a + 1) / 2) * (a % 2 ? 1.0f : -1.0f) * 0.785398163f;
+			const float c = std::cos(angle), s = std::sin(angle);
+			const Vector3 d(away.x * c - away.z * s, 0, away.x * s + away.z * c);
+			for (int step = 1; step <= 16 && step * 1.5f < best; step++)
+				if (walkable(o->position + d * (step * 1.5f))) {
+					best = step * 1.5f;
+					dir = d;
+					break;
+				}
+		}
+		// (1 m onto it; a leg of 1.5 s, as the currents')
+		const float travel = std::min(speed * 1.5f, best < 1e29f ? best + 1.0f : speed * 1.5f);
+		Vector3 to = o->position + dir * travel;
+		to.y = t->getHeightEx(to.x, to.z, false);
+		CurrentLeg(server, o, to, travel / 1.5f, true);
+	}
+	if (trace && !inHole.empty())
+		printf("ENVIRONMENT t=%.1f ice holes: %zu holes, %zu units in them%s\n", now, holes.size(), inHole.size(), fell ? " (fell in)" : "");
+	for (auto& [ref, frac] : hits)
+		if (ServerGameObject* o = ref.get()) {
+			const bool wasAlive = hp >= 0 && o->getItem(hp) > 0.0f;
+			damage(server, o, frac, "drowned under the ice");
+			if (ServerGameObject* u = ref.get(); wasAlive && (!u || u->getItem(hp) <= 0.0f)) {
+				stats.drowned++;
+				stats.iceDrowned++;
+				countDeath(o, 2);
+				iceSwimmers.erase(o->id);
+			}
+		}
+}
+
+void ServerEnvironment::updateIceHoles(Server& server)
+{
+	if (!holesOnTerrain) {
+		// (a game loaded: the terrain and the clients get its holes)
+		holesToTerrain(server);
+		sendIceHoles(server, nullptr);
+	}
+	if (holes.empty() && iceSwimmers.empty())
+		return;
+	bool changed = false;
+	if (!server.terrain->waterFrozen) {
+		// the ice gone: its holes too (who swam in them swims on in the open water)
+		changed = !holes.empty();
+		holes.clear();
+	}
+	else {
+		const float t = forceIceTemperature > -999.0f ? forceIceTemperature : iceTemperature();
+		if (t < 0.0f && !holes.empty()) {
+			const float rate = std::clamp(-t * ICE_CLOSE_RATE, ICE_CLOSE_MIN, ICE_CLOSE_MAX);
+			for (IceHole& h : holes) {
+				if (h.radius > 0.0f) {
+					h.radius -= rate;
+					if (h.radius < Terrain::ICE_HOLE_MIN)
+						h.radius = 0.0f;
+				}
+				else
+					h.widest -= 2.0f * rate; // (the thin new ice fading out)
+			}
+			holes.erase(std::remove_if(holes.begin(), holes.end(), [](const IceHole& h) { return h.radius <= 0.0f && h.widest <= 0.0f; }), holes.end());
+			changed = true;
+		}
+	}
+	if (changed) {
+		holesToTerrain(server);
+		sendIceHoles(server, nullptr);
+	}
+	iceHoleUnits(server, -1, false);
 }
 
 float ServerEnvironment::roofSnow(uint32_t id) const
@@ -1626,6 +1917,9 @@ void ServerEnvironment::update(Server& server)
 			strikeLightning(server);
 		applyExposure(server);
 		applyFloods(server);
+		// (after the floods' ice: frozen or thawed now)
+		if (settings.breakingIce || !holes.empty() || !iceSwimmers.empty())
+			updateIceHoles(server);
 		applyCurrents(server);
 		if (forceFireAt >= 0.0f && now >= forceFireAt) {
 			forceFireAt = -1.0f;
@@ -1692,6 +1986,9 @@ void ServerEnvironment::send(Server& server, NetLink* only)
 	sendCharred(server, only);
 	sendFireShares(server, only);
 	sendWind(server, only);
+	// (a client joining: the holes in the ice; the others get them as they change)
+	if (only && !holes.empty())
+		sendIceHoles(server, only);
 }
 
 // the charred trees (NETCLIMSG_CHARRED_TREES): the new ones, or all of them to a client joining,
@@ -1759,6 +2056,15 @@ std::string ServerEnvironment::saveText() const
 	for (const auto& [id, s] : swimmers)
 		o << "swim " << id << ' ' << (int)s.pathing << ' ' << s.node.x << ' ' << s.node.y << ' ' << s.node.z << ' '
 			<< s.leg.x << ' ' << s.leg.y << ' ' << s.leg.z << '\n';
+	// the holes artillery broke in the ice and who swims in them (a save from before them: none)
+	for (const IceHole& h : holes)
+		o << "icehole " << h.x << ' ' << h.z << ' ' << h.radius << ' ' << h.widest << ' ' << h.shooter << ' ' << h.born << '\n';
+	if (!iceSwimmers.empty()) {
+		o << "iceswim";
+		for (uint32_t id : iceSwimmers)
+			o << ' ' << id;
+		o << '\n';
+	}
 	if (Server::instance)
 		o << lodging.saveText(*Server::instance);
 	return o.str();
@@ -1834,6 +2140,17 @@ void ServerEnvironment::loadText(const std::string& text)
 			l >> id >> pathing >> s.node.x >> s.node.y >> s.node.z >> s.leg.x >> s.leg.y >> s.leg.z;
 			s.pathing = pathing != 0;
 			swimmers[id] = s;
+		}
+		else if (tag == "icehole") {
+			IceHole h;
+			l >> h.x >> h.z >> h.radius >> h.widest >> h.shooter >> h.born;
+			holes.push_back(h);
+			holesOnTerrain = false; // (put on the terrain at the next update)
+		}
+		else if (tag == "iceswim") {
+			uint32_t id;
+			while (l >> id)
+				iceSwimmers.insert(id);
 		}
 		else if (tag == "lodging" || tag == "lodger")
 			lodging.loadLine(tag, line);
