@@ -42,7 +42,7 @@ With Character shadows and Building shadows; on by default. Units cast shadows o
 
 ## Ray-traced shadows
 
-With Building shadows; off by default. The sun's shadows of buildings, trees and units are traced ray by ray instead of drawn from a shadow map, so they are exact at any distance and never blocky. Needs a graphics card with ray tracing; see [Graphics](index.md#ray-tracing). **Cost:** about the same as the shadow map they replace.
+With Building shadows; off by default. The sun's shadows of buildings, trees and units are traced ray by ray instead of drawn from a shadow map, so they are exact at any distance and never blocky. Needs a graphics card with ray tracing; see [Graphics](index.md#ray-tracing). **Cost:** less work for the processor than before, but more for the graphics card: in wkbai's performance test, about 5 to 6 ms more graphics-card time a frame than the shadow map they replace (10 ms in all instead of 4.4, Radeon RX 6900 XT). Where the processor holds the game back, as on that test machine, the game still runs faster; on a weaker graphics card it may run slower.
 
 ## Contact shadows
 
