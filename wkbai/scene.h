@@ -28,6 +28,9 @@ struct SceneEntity {
 	uint32_t drawnAnimTime = 0, previousAnimTime = 0;
 	uint64_t drawnFrame = ~0ull;
 	bool previousValid = false;
+	// the ray-traced shadows' frame (DiligentRayShadows::frame) the entity was added to their
+	// casters in: once a frame, though it is in a list per material
+	uint64_t rtFrame = ~0ull;
 
 	enum Flags {
 		SEFLAG_NOLIGHTING = 1, // disable light shading on entity

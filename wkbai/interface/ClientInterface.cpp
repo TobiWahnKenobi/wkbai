@@ -101,6 +101,21 @@ static uint32_t WindAnimTime(Model* m, uint32_t ms, uint32_t offset, float speed
 	return (uint32_t)(g_wind.flagClock * 1000.0 * std::max(speed, 0.05f)) + offset * 7919u % 4000u;
 }
 
+// a model the forest can draw (gfx/Forest.h): none of its attachment points does anything drawn
+// (drawAttachmentPoints: particles "PS_..." or an attached model; the trees' work positions do nothing)
+static bool ForestModelOk(Model* m)
+{
+	static std::unordered_map<Model*, bool> known;
+	auto [it, isNew] = known.try_emplace(m, true);
+	if (isNew)
+		for (size_t i = 0; i < m->getNumAPs(); i++) {
+			const AttachmentPoint& ap = m->getAPInfo(i);
+			if (!ap.path.empty() || (ap.tag.size() >= 3 && (ap.tag[0] == 'P' || ap.tag[0] == 'p') && (ap.tag[1] == 'S' || ap.tag[1] == 's') && ap.tag[2] == '_'))
+				it->second = false;
+		}
+	return it->second;
+}
+
 // the trees and bushes that bend in it (SEFLAG_WIND): by their blueprint's name, as the seasons'
 static bool IsWindTree(const GameObjBlueprint* bp)
 {
@@ -660,9 +675,69 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 
 	// Objects whose blueprint has DISPLAY_ON_MINIMAP, in their player's colour
 	static const ImU32 treeColor = IM_COL32(28, 72, 24, 255);
+	// The trees' dots, one per minimap pixel: a map with 30,000 trees had 30,000 dots (120,000
+	// vertices) a frame, most of them on top of each other in a dense forest. A tree dot whose
+	// centre falls on a pixel that already has one is left out (the same colour and size, less than
+	// a pixel apart)
+	static std::vector<uint8_t> treePixels;
+	const int cellsW = std::max(1, (int)std::ceil(mapW)), cellsH = std::max(1, (int)std::ceil(mapH));
+	treePixels.assign((size_t)cellsW * cellsH, 0);
+	// the forest's trees (gfx/Forest.h): their dots in one picture, made again when the forest
+	// changed, by the same rules as drawDot's (the trees the forest has are those drawn, real or as
+	// the fog of war's ghosts)
+	if (forestOn) {
+		const int tw = std::max(1, (int)std::lround(mapW * g_uiScale)), th = std::max(1, (int)std::lround(mapH * g_uiScale));
+		const uint32_t now = SDL_GetTicks();
+		const bool resized = tw != minimapForestW || th != minimapForestH;
+		if ((forest.version != minimapForestVersion || minimapHiddenCategories != minimapForestCats || resized)
+			&& (now - minimapForestTick >= 500 || !minimapForestTexture || resized)) {
+			Bitmap bmp;
+			bmp.width = tw;
+			bmp.height = th;
+			bmp.format = BMFORMAT_R8G8B8A8;
+			bmp.pixels.resize((size_t)tw * th * 4);
+			memset(bmp.pixels.data(), 0, bmp.pixels.size());
+			const float half = 1.5f * g_uiScale;
+			for (const ForestTree& t : forest.trees) {
+				if ((t.hidden && !t.lifted) || !(t.minimap & 0x8000))
+					continue;
+				const uint8_t cats = (uint8_t)(t.minimap & 0xFF);
+				if (cats && !(cats & ~minimapHiddenCategories))
+					continue;
+				const float fx = std::clamp(t.transform._41 / areaWidth, 0.0f, 1.0f) * tw;
+				const float fy = std::clamp(1.0f - t.transform._43 / areaDepth, 0.0f, 1.0f) * th;
+				const ImU32 col = t.color == 0 ? treeColor : playerColors[(t.color >= 0 && t.color < 9) ? t.color : 0];
+				// (as wide as drawDot's square: 3 points)
+				const int side = std::max(1, (int)std::lround(2.0f * half));
+				const int sx = (int)std::lround(fx - half), sy = (int)std::lround(fy - half);
+				const int x0 = std::max(0, sx), x1 = std::min(tw, sx + side);
+				const int y0 = std::max(0, sy), y1 = std::min(th, sy + side);
+				for (int y = y0; y < y1; y++)
+					for (int x = x0; x < x1; x++)
+						memcpy(&bmp.pixels[((size_t)y * tw + x) * 4], &col, 4); // (ImU32: r, g, b, a in memory)
+			}
+			if (minimapForestTexture && resized) {
+				gfx->FreeTexture(minimapForestTexture);
+				minimapForestTexture = nullptr;
+			}
+			if (minimapForestTexture)
+				gfx->UpdateTexture(minimapForestTexture, bmp);
+			else
+				minimapForestTexture = gfx->CreateTexture(bmp, 1);
+			minimapForestVersion = forest.version;
+			minimapForestCats = minimapHiddenCategories;
+			minimapForestW = tw;
+			minimapForestH = th;
+			minimapForestTick = now;
+		}
+		if (minimapForestTexture)
+			drawList->AddImage(minimapForestTexture, ImVec2(mapX, mapY), ImVec2(mapX + mapW, mapY + mapH));
+	}
 	auto drawDot = [&](ClientGameObject* obj, bool remembered) {
 		if (!obj->blueprint || !obj->blueprint->displayOnMinimap || (obj->flags & ClientGameObject::fTerminated))
 			return;
+		if (forestOn && forestHas(obj))
+			return; // (in the forest's picture)
 		// enemy characters in the fog of war aren't shown, and enemy buildings only as last seen
 		if (fogOn && (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
 			&& !fogOfWar.isSeen(obj->position) && !fogOfWar.isFriendly(client, obj))
@@ -686,6 +761,13 @@ bool ClientInterface::drawMinimap(int x, int y, int w, int h)
 			dotColor = treeColor; // neutral resources such as trees
 		const float size = (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING) ? 2.5f : 1.5f;
 		ImVec2 c = toMinimap(obj->position.x, obj->position.z);
+		if (dotColor == treeColor) {
+			const int cx = std::clamp((int)(c.x - mapX), 0, cellsW - 1), cy = std::clamp((int)(c.y - mapY), 0, cellsH - 1);
+			uint8_t& cell = treePixels[(size_t)cy * cellsW + cx];
+			if (cell)
+				return;
+			cell = 1;
+		}
 		drawList->AddRectFilled(ImVec2(c.x - size, c.y - size), ImVec2(c.x + size, c.y + size), dotColor);
 	};
 	auto drawDots = [&](ClientGameObject* obj, const auto& self) -> void {
@@ -3326,10 +3408,23 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		}
 	}
 
-	if (!devMode && !(obj->flags & ClientGameObject::fRenderable))
+	// the forest (gfx/Forest.h): a tree whose look is known and unchanged is drawn by the renderer
+	// from its slot; here only its picking. A tree that may be one (its blueprint a tree's) skips
+	// the culling below: the GPU culls the forest per pass.
+	// (the fog of war's tree ghosts too: the trees out of sight are drawn as last seen)
+	const bool inForest = forestHas(obj);
+	if (inForest && forestStill(obj, remembered))
 		return;
-	if (!stampdownHidden.empty() && std::find(stampdownHidden.begin(), stampdownHidden.end(), obj->id) != stampdownHidden.end())
+	const bool forestCandidate = forestOn && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CONTAINER && IsWindTree(obj->blueprint);
+
+	if (!devMode && !(obj->flags & ClientGameObject::fRenderable)) {
+		if (inForest) forestRelease(obj);
 		return;
+	}
+	if (!stampdownHidden.empty() && std::find(stampdownHidden.begin(), stampdownHidden.end(), obj->id) != stampdownHidden.end()) {
+		if (inForest) forestRelease(obj);
+		return;
+	}
 	// the fog of war hides enemy characters no unit of the player's sees, and their missiles
 	// (arrows, bolts, a siege engine's shots: flying through the fog they showed what fired there)
 	if ((obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER || obj->blueprint->bpClass == Tags::GAMEOBJCLASS_MISSILE)
@@ -3339,8 +3434,10 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && fogOfWarOn() && !fogOfWar.isBuildingSeen(obj->position) && fogOfWar.isRemembered(client, obj))
 		return;
 	// and trees changed out of sight: drawn as last seen (FogOfWar::treeGhosts), new ones not at all
-	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
+	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn()) {
+		if (inForest) forestRelease(obj);
 		return;
+	}
 
 	static const float tolerance = 25.0f;
 	// (with the ray-traced shadows at a low sun an object off the view may cast its shadow into
@@ -3363,7 +3460,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	const float dirDist = client->camera.direction.dot(obj->position - client->camera.position);
 	const float nearBound = client->camera.nearDist - tolerance - shadowReach;
 	const float farBound = client->camera.farDist + tolerance;
-	if (dirDist < nearBound || dirDist > farBound)
+	if (!forestCandidate && (dirDist < nearBound || dirDist > farBound))
 		return;
 
 	const Vector3 side = client->camera.direction.cross(Vector3(0, 1, 0));
@@ -3377,7 +3474,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	const float sideDist = std::abs(side.dot(obj->position - client->camera.position));
 	const float sideBound = std::max(0.0f, dirDist) * tanFov + tolerance / cosFov + shadowReach;
-	if (sideDist > sideBound)
+	if (!forestCandidate && sideDist > sideBound)
 		return;
 
 	Model* model = nullptr;
@@ -3414,8 +3511,10 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	}
 	if (!model && devMode)
 		model = obj->blueprint->representAs;
-	if (!model)
+	if (!model) {
+		if (inForest) forestRelease(obj);
 		return;
+	}
 
 	const Matrix transformMatrix = obj->getWorldMatrix();
 
@@ -3436,6 +3535,16 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 	// shadow on the ground along the sun, at a third, two thirds and its end, tested as the
 	// object itself (at a low sun the trees just off the screen cast no shadow, theirs ended at
 	// the screen's edge, the play test of 2026-11-11)
+	// (a tree for the forest: a static model without attachment points or a blob shadow; the GPU
+	// culls the forest per pass)
+	// (a unit's shadow: the sun's shadow map's with the real character shadows, else a blob sprite
+	// each frame, which the forest doesn't draw)
+	const bool shapeShadow = obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows && gpuBlobShadows
+		&& g_renderSettings.realCharacterShadows && g_renderSettings.staticShadows;
+	const bool forestModel = forestCandidate && model == model->getStaticModel() && ForestModelOk(model)
+		&& (!(obj->blueprint->hasDynamicShadow && g_renderSettings.characterShadows) || shapeShadow);
+	if (!onCam && forestModel)
+		onCam = true;
 	if (!onCam) {
 		const Vector3 sun = rtSun;
 		const float flat = std::sqrt(sun.x * sun.x + sun.z * sun.z);
@@ -3453,8 +3562,10 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			}
 		}
 	}
-	if (!onCam)
+	if (!onCam) {
+		if (inForest) forestRelease(obj);
 		return;
+	}
 	// wkbai's unit history: a hero on screen gets its name over its head
 	if (obj->blueprint->bpClass == GAMEOBJCLASS_CHARACTER && !remembered && !client->unitInfo.empty()) {
 		auto hit = client->unitInfo.find(obj->id);
@@ -3598,7 +3709,49 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		highlightedObjects.insert(obj);
 	}
 
-	scene->add(&obj->sceneEntity);
+	// a still tree: into the forest (its slot gets this look; the renderer draws it from there),
+	// not into this frame's scene
+	Model* drawn = obj->sceneEntity.model;
+	if (forestModel && !highlighted && drawn && drawn == drawn->getStaticModel() && ForestModelOk(drawn)) {
+		int slot = inForest ? obj->forestSlot : -1;
+		if (slot < 0) {
+			if (!forestFree.empty()) {
+				slot = (int)forestFree.back();
+				forestFree.pop_back();
+			}
+			else {
+				slot = (int)forest.trees.size();
+				forest.trees.emplace_back();
+				forestSeen.push_back(0);
+				forestOwner.push_back(0);
+			}
+			obj->forestSlot = slot;
+			obj->forestGen = forestGen;
+			forestOwner[slot] = obj->id;
+		}
+		ForestTree t;
+		t.model = drawn;
+		t.transform = obj->sceneEntity.transform;
+		t.centre = sphereCenter;
+		t.radius = sphereRadius;
+		t.flags = obj->sceneEntity.flags | (shapeShadow ? SceneEntity::SEFLAG_DYNAMIC_SHADOW : 0);
+		t.color = obj->sceneEntity.color;
+		t.hidden = false;
+		t.minimap = (uint16_t)((obj->blueprint->displayOnMinimap ? 0x8000 : 0) | obj->blueprint->minimapCategories);
+		ForestTree& cur = forest.trees[slot];
+		if (cur.hidden || cur.model != t.model || cur.flags != t.flags || cur.color != t.color || cur.minimap != t.minimap
+			|| memcmp(&cur.transform, &t.transform, sizeof(Matrix)) != 0) {
+			cur = t;
+			forest.markChanged((uint32_t)slot);
+		}
+		forestSeen[slot] = forestFrame;
+		obj->forestKey = forestKeyOf(obj);
+	}
+	else {
+		if (inForest)
+			forestRelease(obj);
+		scene->add(&obj->sceneEntity);
+	}
 	numObjectsDrawn++;
 	if (!remembered && obj->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING)
 		s_benchFireBuildings.push_back(obj);
@@ -3663,6 +3816,14 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		terrainSpriteContainer->addSprite(*shadowTexture, p1, p2, p3);
 	}
 
+	pickObject(obj, model, &ttpp);
+}
+
+// The mouse ray's test of an object drawn (its bounding sphere, then its mesh's triangles: the
+// nearest hit is hovered) and the selection box's (screen: its sphere's centre on the screen, or
+// null: worked out here)
+void ClientInterface::pickObject(ClientGameObject* obj, Model* model, const Vector3* screen)
+{
 	if (devMode || (obj->flags & (ClientGameObject::fSelectable | ClientGameObject::fTargetable))) {
 		// Ray collision check
 		if (auto spherePoint = RayIntersectsSphere(client->camera.position, rayDirection, obj->position + obj->sceneEntity.model->getSphereCenter() * obj->scale, obj->sceneEntity.model->getSphereRadius() * std::max({ obj->scale.x, obj->scale.y, obj->scale.z }))) {
@@ -3701,6 +3862,7 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 		}
 		// Box selection check
 		if (selBoxOn) {
+			const Vector3 ttpp = screen ? *screen : (obj->position + model->getSphereCenter() * obj->scale).transformScreenCoords(client->camera.sceneMatrix);
 			int bx = static_cast<int>((ttpp.x + 1.0f) * g_windowWidth / 2.0f);
 			int by = static_cast<int>((-ttpp.y + 1.0f) * g_windowHeight / 2.0f);
 			bool inBox = ((selBoxStartX < bx) && (bx < selBoxEndX)) || ((selBoxEndX < bx) && (bx < selBoxStartX));
@@ -3710,6 +3872,138 @@ void ClientInterface::drawObject(ClientGameObject *obj, bool remembered)
 			}
 		}
 	}
+}
+
+// The forest (gfx/Forest.h)
+
+ClientGameObject::ForestKey ClientInterface::forestKeyOf(ClientGameObject* obj)
+{
+	ClientGameObject::ForestKey k;
+	memset(&k, 0, sizeof(k));
+	k.position = obj->position;
+	k.orientation = obj->orientation;
+	k.scale = obj->scale;
+	k.blueprint = obj->blueprint;
+	k.subtype = obj->subtype;
+	k.appearance = obj->appearance;
+	k.animationIndex = obj->animationIndex;
+	k.animationVariant = obj->animationVariant;
+	k.flags = (uint32_t)obj->flags;
+	CommonGameObject* player = obj->getPlayer();
+	k.color = player ? player->color : 0;
+	return k;
+}
+
+bool ClientInterface::forestStill(ClientGameObject* obj, bool remembered)
+{
+	const uint32_t slot = (uint32_t)obj->forestSlot;
+	// every so often a slot's look is worked out in full again: the seasons, the snow and the
+	// fires change the trees one by one over time (by their ids), with nothing of the tree itself
+	// changing. A 1024th... of the forest a frame: 30,000 trees every 30 frames.
+	const uint64_t period = forest.trees.size() / 1024 + 1;
+	if (slot % period == forestFrame % period)
+		return false;
+	ClientGameObject::ForestKey k = forestKeyOf(obj);
+	if (memcmp(&k, &obj->forestKey, sizeof(k)) != 0)
+		return false;
+	if (!remembered && fogOfWar.treeHidden(obj) && fogOfWarOn())
+		return false;
+	// worked at: it shakes (its animated model)
+	if (forestWorkedItem >= 0 && obj->getItem(forestWorkedItem) > 0.0f)
+		return false;
+	if (!stampdownHidden.empty() && std::find(stampdownHidden.begin(), stampdownHidden.end(), obj->id) != stampdownHidden.end())
+		return false;
+	if (!selection.empty() && selection.count(obj))
+		return false;
+	forestSeen[slot] = forestFrame;
+	numObjectsDrawn++;
+	pickObject(obj, forest.trees[slot].model, nullptr);
+	return true;
+}
+
+void ClientInterface::forestRelease(ClientGameObject* obj)
+{
+	if (!forestHas(obj)) {
+		obj->forestSlot = -1;
+		return;
+	}
+	const uint32_t slot = (uint32_t)obj->forestSlot;
+	forest.trees[slot].hidden = true;
+	forest.trees[slot].lifted = false;
+	forest.markChanged(slot);
+	forestOwner[slot] = 0;
+	forestFree.push_back(slot);
+	obj->forestSlot = -1;
+}
+
+void ClientInterface::forestBegin()
+{
+	auto* dgfx = dynamic_cast<DiligentGfx*>(gfx);
+	static const bool allowed = g_settings.value("forest", true);
+	const bool on = allowed && dgfx && client->terrain && client->getLevel() && UseEnhancedRenderers(gfx) && !devMode;
+	// what the trees' looks depend on beside the trees themselves: a change starts a new forest
+	uint64_t h = 1469598103934665603ull;
+	auto mix = [&](uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+	mix((uint64_t)(uintptr_t)client->getLevel());
+	mix((uint64_t)(uintptr_t)client->gameSet.get());
+	mix((uint64_t)(uintptr_t)client->terrain);
+	mix(g_terrainTessellationActive);
+	mix(fogOfWarOn());
+	mix(client->environmentActive);
+	mix(client->environmentSettings.seasons);
+	mix(g_renderSettings.characterShadows);
+	mix(g_renderSettings.realCharacterShadows);
+	mix(g_renderSettings.staticShadows);
+	mix(g_renderSettings.wallShadows);
+	if (!on || h != forestSettings || !forestOn) {
+		forest.clear();
+		forestGen++;
+		forestSeen.clear();
+		forestOwner.clear();
+		forestFree.clear();
+		forestLifted.clear();
+		forestSettings = h;
+	}
+	forestOn = on;
+	if (dgfx)
+		dgfx->shadows.forest = on ? &forest : nullptr;
+	if (!on)
+		return;
+	forestFrame++;
+	// the trees lifted out last frame (hovered) back in, if still there
+	for (uint32_t slot : forestLifted)
+		if (slot < forest.trees.size() && forestOwner[slot] != 0 && forest.trees[slot].hidden) {
+			forest.trees[slot].hidden = false;
+			forest.trees[slot].lifted = false;
+			forest.markChanged(slot);
+		}
+	forestLifted.clear();
+	if (forestWorkedOf != client->gameSet.get()) {
+		forestWorkedOf = client->gameSet.get();
+		forestWorkedItem = client->gameSet ? client->gameSet->items.names.getIndex("I'm Being Worked at") : -1;
+	}
+}
+
+void ClientInterface::forestEnd()
+{
+	if (!forestOn)
+		return;
+	// (its size in the log, as it grows or shrinks by a thousand)
+	static size_t reported = 0;
+	const size_t trees = forest.trees.size() - forestFree.size();
+	if (trees > reported + 1000 || trees + 1000 < reported) {
+		printf("Forest: %zu trees\n", trees);
+		reported = trees;
+	}
+	// the trees not visited this frame are gone
+	for (uint32_t slot = 0; slot < (uint32_t)forest.trees.size(); slot++)
+		if (forestOwner[slot] != 0 && forestSeen[slot] != forestFrame) {
+			forest.trees[slot].hidden = true;
+			forest.trees[slot].lifted = false;
+			forest.markChanged(slot);
+			forestOwner[slot] = 0;
+			forestFree.push_back(slot);
+		}
 }
 
 // test runs: "benchmark": { "burnBuildings": n, "burnDamage": d } sets the n buildings drawn
@@ -5771,8 +6065,11 @@ void ClientInterface::iter()
 			gpuBlobShadows = &dgfx->shadows.blobs;
 			gpuBlobShadows->clear();
 		}
-		if (client->getLevel())
+		forestBegin();
+		if (client->getLevel()) {
+			PROFILE_SCOPE("Objects");
 			drawObject(client->getLevel());
+		}
 		drawExtendedTrees();
 		if (fogOfWarOn()) {
 			for (const auto& [id, copy] : fogOfWar.remembered)
@@ -5782,6 +6079,7 @@ void ClientInterface::iter()
 				if (!fogOfWar.isSeen(copy->position))
 					drawObject(copy.get(), true);
 		}
+		forestEnd();
 		// Mesh particles (wood planks, bricks, coins, shrapnel): their model at the particle,
 		// spinning at the system's Rotations_Per_Second about an axis of its own, at its scale.
 		// The particle renderer only draws sprites; these were blank squares before.
@@ -5969,6 +6267,15 @@ void ClientInterface::iter()
 			chargeBarCapacity = client->gameSet->items.names.getIndex("Charge Bar Capacity");
 		}
 		for (const auto& obj : highlightedObjects) {
+			// a tree of the forest hovered: lifted out of it for this frame, drawn unshaded in the scene
+			if (forestOn && forestHas(obj)) {
+				const uint32_t slot = (uint32_t)obj->forestSlot;
+				forest.trees[slot].hidden = true;
+				forest.trees[slot].lifted = true;
+				forest.markChanged(slot);
+				forestLifted.push_back(slot);
+				scene->add(&obj->sceneEntity);
+			}
 			obj->sceneEntity.flags |= SceneEntity::SEFLAG_NOLIGHTING;
 			if (obj->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && terrainSpriteContainer && client->terrain) {
 				float health = obj->getItem(Tags::PDITEM_HIT_POINTS);

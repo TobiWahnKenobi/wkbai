@@ -30,47 +30,69 @@ void ImGuiImpl_RenderDrawLists(ImDrawData *dr, IRenderer *renderer)
 	renderer->BeginBatchDrawing();
 	renderer->EnableScissor();
 
+	// A draw list over 65536 vertices (the minimap's dots of a map with some 16,000 objects or more:
+	// a forest of 20,000 trees) comes in parts: ImGui gives each command a VtxOffset its 16-bit
+	// indices count from (ImGuiBackendFlags_RendererHasVtxOffset, set in ImGuiImpl_Init). Each run of
+	// commands with the same VtxOffset gets its own vertex and index buffers (before, the indices
+	// wrapped past 65535 and the UI's panels filled with stray triangles)
 	for(int i = 0; i < dr->CmdListsCount; i++)
 	{
 		ImDrawList *cl = dr->CmdLists[i];
-
-		RVertexBuffer *vb = renderer->CreateVertexBuffer(cl->VtxBuffer.size());
-		RIndexBuffer *ib = renderer->CreateIndexBuffer(cl->IdxBuffer.size());
-		batchVertex *vm = vb->lock();
-		for(int j = 0; j < cl->VtxBuffer.size(); j++)
+		for(int j = 0; j < cl->CmdBuffer.size(); )
 		{
-			ImDrawVert *a = &cl->VtxBuffer[j];
-			vm[j].x = a->pos.x * g_uiScale;
-			vm[j].y = a->pos.y * g_uiScale;
-			vm[j].z = 0;
-			vm[j].color = BGRA_TO_RGBA(a->col);
-			vm[j].u = a->uv.x;
-			vm[j].v = a->uv.y;
-		}
-		vb->unlock();
-		uint16_t *im = ib->lock();
-		for(int j = 0; j < cl->IdxBuffer.size(); j++)
-			im[j] = cl->IdxBuffer[j];
-		ib->unlock();
-		renderer->SetVertexBuffer(vb);
-		renderer->SetIndexBuffer(ib);
+			const unsigned int vtxOffset = cl->CmdBuffer[j].VtxOffset;
+			int k = j;
+			while(k < cl->CmdBuffer.size() && cl->CmdBuffer[k].VtxOffset == vtxOffset)
+				k++;
+			// the run's vertices: from its offset to the next run's (or the end), at most 65536
+			const unsigned int vtxEnd = k < cl->CmdBuffer.size() && cl->CmdBuffer[k].VtxOffset > vtxOffset ? cl->CmdBuffer[k].VtxOffset : (unsigned int)cl->VtxBuffer.size();
+			const int nv = (int)std::min<unsigned int>(vtxEnd - vtxOffset, 65536u);
+			int ni = 0;
+			for(int c = j; c < k; c++)
+				ni += cl->CmdBuffer[c].ElemCount;
+			if(nv <= 0 || ni <= 0) { j = k; continue; }
 
-		int e = 0;
-		for(int j = 0; j < cl->CmdBuffer.size(); j++)
-		{
-			ImDrawCmd *cmd = &cl->CmdBuffer[j];
-			//if(cmd->TextureId)
+			RVertexBuffer *vb = renderer->CreateVertexBuffer(nv);
+			RIndexBuffer *ib = renderer->CreateIndexBuffer(ni);
+			batchVertex *vm = vb->lock();
+			for(int v = 0; v < nv; v++)
+			{
+				ImDrawVert *a = &cl->VtxBuffer[vtxOffset + v];
+				vm[v].x = a->pos.x * g_uiScale;
+				vm[v].y = a->pos.y * g_uiScale;
+				vm[v].z = 0;
+				vm[v].color = BGRA_TO_RGBA(a->col);
+				vm[v].u = a->uv.x;
+				vm[v].v = a->uv.y;
+			}
+			vb->unlock();
+			uint16_t *im = ib->lock();
+			int w = 0;
+			for(int c = j; c < k; c++)
+			{
+				const ImDrawCmd *cmd = &cl->CmdBuffer[c];
+				for(unsigned int q = 0; q < cmd->ElemCount; q++)
+					im[w++] = cl->IdxBuffer[cmd->IdxOffset + q];
+			}
+			ib->unlock();
+			renderer->SetVertexBuffer(vb);
+			renderer->SetIndexBuffer(ib);
+
+			int e = 0;
+			for(int c = j; c < k; c++)
+			{
+				ImDrawCmd *cmd = &cl->CmdBuffer[c];
 				renderer->SetTexture(0, (texture)cmd->GetTexID());
-			//else
-			//	renderer->NoTexture(0);
-			renderer->SetScissorRect((int)(cmd->ClipRect.x * g_uiScale), (int)(cmd->ClipRect.y * g_uiScale),
-						(int)((cmd->ClipRect.z - cmd->ClipRect.x) * g_uiScale),
-						(int)((cmd->ClipRect.w - cmd->ClipRect.y) * g_uiScale));
-			renderer->DrawBuffer(e, cmd->ElemCount);
-			e += cmd->ElemCount;
-		}
+				renderer->SetScissorRect((int)(cmd->ClipRect.x * g_uiScale), (int)(cmd->ClipRect.y * g_uiScale),
+							(int)((cmd->ClipRect.z - cmd->ClipRect.x) * g_uiScale),
+							(int)((cmd->ClipRect.w - cmd->ClipRect.y) * g_uiScale));
+				renderer->DrawBuffer(e, cmd->ElemCount);
+				e += cmd->ElemCount;
+			}
 
-		delete vb; delete ib;
+			delete vb; delete ib;
+			j = k;
+		}
 	}
 
 	renderer->DisableScissor();
@@ -100,6 +122,8 @@ void ImGuiImpl_Init()
 	ImGui::CreateContext();
 	//imguienabled = true;
 	ImGuiIO &io = ImGui::GetIO();
+	// large draw lists in parts (ImGuiImpl_RenderDrawLists)
+	io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
 
 	//io.ImeWindowHandle = WndGetNativeWindowHandle(); // FIXME (as in XXL Editor)
 

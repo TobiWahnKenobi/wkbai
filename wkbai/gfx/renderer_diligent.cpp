@@ -2073,6 +2073,7 @@ struct DiligentRenderer : DiligentGfx
 		transform = *m;
 		writeTransformBuffer();
 	}
+	const Matrix& CurrentTransform() const override { return transform; }
 
 	void SetTexture(uint32_t x, texture t) override
 	{

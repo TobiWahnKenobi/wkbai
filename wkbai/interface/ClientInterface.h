@@ -15,6 +15,8 @@
 #include "FogOfWar.h"
 #include "GameChronicle.h"
 #include "ReplayView.h"
+#include "../gfx/Forest.h"
+#include "../client.h"
 #include <deque>
 #include <list>
 #include <functional>
@@ -325,6 +327,36 @@ private:
 	const void* extTreesFor = nullptr; // the tree list and model count the entities were made for
 	size_t extTreesModels = 0;
 	void drawExtendedTrees();
+	// The forest (gfx/Forest.h): the still trees, their look worked out once and checked each
+	// frame, drawn by the enhanced renderer from GPU buffers (it gets it in its ShadowEnvironment).
+	// On with the enhanced renderers on Diligent, off in dev mode.
+	Forest forest;
+	bool forestOn = false;
+	uint32_t forestGen = 1;            // ClientGameObject::forestGen: slots of this forest
+	uint64_t forestFrame = 0;          // counts the frames the forest was kept
+	uint64_t forestSettings = 0;       // what the looks depend on (a change starts a new forest)
+	std::vector<uint64_t> forestSeen;  // per slot: the frame its tree was last visited
+	std::vector<uint32_t> forestOwner; // per slot: its tree's id (0: free)
+	std::vector<uint32_t> forestFree;  // empty slots
+	std::vector<uint32_t> forestLifted; // slots taken out for this frame (hovered: drawn unshaded)
+	int forestWorkedItem = -1;         // "I'm Being Worked at": a worked tree shakes (animated)
+	const void* forestWorkedOf = nullptr;
+	// the frame's start (a new forest when its settings changed) and its end (slots of trees
+	// that weren't visited are freed; hovered trees are lifted out)
+	void forestBegin();
+	void forestEnd();
+	// drawObject: a tree in the forest (or a fog of war's tree ghost) that hasn't changed (true:
+	// nothing else to do for it but its picking); its slot given back
+	bool forestStill(ClientGameObject* obj, bool remembered);
+	void forestRelease(ClientGameObject* obj);
+	ClientGameObject::ForestKey forestKeyOf(ClientGameObject* obj);
+	// the mouse ray's and the selection box's tests of an object drawn (by its bounding sphere,
+	// then its mesh)
+	void pickObject(ClientGameObject* obj, Model* model, const Vector3* screen);
+	bool forestHas(const ClientGameObject* obj) const {
+		return obj->forestGen == forestGen && obj->forestSlot >= 0 && (size_t)obj->forestSlot < forest.trees.size()
+			&& forestOwner[obj->forestSlot] == obj->id && !forest.trees[obj->forestSlot].hidden;
+	}
 	// test runs: "benchmark": { "burnBuildings": n } sets the n drawn buildings nearest the camera on fire (FireEffects.h)
 	void drawBenchmarkFires();
 	std::unordered_map<const AttachmentPoint*, Model*> attachmentModels; // the models of attachment points with a path
@@ -341,6 +373,12 @@ private:
 	// the fog of war over the minimap, and the FogOfWar::version in it
 	void* minimapFogTexture = nullptr;
 	uint32_t minimapFogVersion = ~0u, minimapFogWidth = 0, minimapFogHeight = 0;
+	// the forest's trees on the minimap: one picture of their dots, made again when the forest or
+	// the shown categories changed (at most twice a second)
+	void* minimapForestTexture = nullptr;
+	uint64_t minimapForestVersion = 0;
+	uint32_t minimapForestTick = 0, minimapForestCats = ~0u;
+	int minimapForestW = 0, minimapForestH = 0;
 	// Draws the minimap into the given screen rectangle (called from the HUD script);
 	// returns true while the mouse is over it, a left click/drag moves the camera there
 	bool drawMinimap(int x, int y, int w, int h);
