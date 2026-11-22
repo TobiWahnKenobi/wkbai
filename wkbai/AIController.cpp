@@ -1132,6 +1132,7 @@ void AIController::update()
 		for (int r = 0; r < 3; r++)
 			cost[r] = type ? type->getStartingItemValue(COST_ITEMS[r]) : 0.0f;
 	};
+	extern std::string PlanWhere(const PlanNodeSequence&, const PlanNodeSequence::State&); // Plan.cpp
 	if (const char* e = getenv("WKB_TRACE_SITES"); e && (uint32_t)atoi(e) == gameObj->id) {
 		static float next = 0.0f;
 		if (Server::instance->timeManager.currentTime >= next) {
@@ -1143,7 +1144,7 @@ void AIController::update()
 					+ (ci.suspendedSince >= 0.0f ? ", suspended" : "") + ", " + std::to_string(ci.blueprint->buildingRequirements.size()) + " buildings)";
 			}
 			printf("SITES t=%.0f player %u: %zu commissions:%s; plan %s\n", Server::instance->timeManager.currentTime, gameObj->id, byPriority.size(), list.c_str(),
-				planBlueprint ? "running" : "none");
+				planBlueprint ? ("running at " + PlanWhere(*planBlueprint, planState)).c_str() : "none");
 		}
 	}
 	for (const auto& [commissionPriority, cid] : byPriority) {

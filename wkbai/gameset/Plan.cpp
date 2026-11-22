@@ -389,3 +389,31 @@ bool PlanNodeSequence::execute(State* state, SrvScriptContext* ctx) const
 	}
 	return state->currentNode >= nodes.size();
 }
+
+// Where a plan stands (the site trace, WKB_TRACE_SITES): the nodes from the plan down to the one
+// running, "<index>:<kind>" each, an embedded plan by its name
+std::string PlanWhere(const PlanNodeSequence& seq, const PlanNodeSequence::State& state)
+{
+	if (state.currentNode >= seq.nodes.size())
+		return std::to_string(state.currentNode) + ":end";
+	PlanNodeBlueprint* node = seq.nodes[state.currentNode].get();
+	PlanNodeState* ns = state.nodeStates[state.currentNode];
+	std::string s = std::to_string(state.currentNode) + ":";
+	if (auto* n = dynamic_cast<PFNStartLoop*>(node))
+		return s + "loop > " + PlanWhere(n->sequence, ((PFNStartLoop::State*)ns)->seqState);
+	if (auto* n = dynamic_cast<PFNIf*>(node)) {
+		auto* st = (PFNIf::State*)ns;
+		if (!st->chosenSequence)
+			return s + "if";
+		const bool t = st->chosenSequence == &n->sequenceTrue;
+		return s + (t ? "if(true) > " : "if(false) > ") + PlanWhere(*st->chosenSequence, t ? st->seqStateTrue : st->seqStateFalse);
+	}
+	if (auto* n = dynamic_cast<PFNEmbeddedPlan*>(node))
+		return s + "plan \"" + Server::instance->gameSet->plans.getString(n->embeddedPlan) + "\" > " + PlanWhere(*n->embeddedPlan, ((PFNEmbeddedPlan::State*)ns)->seqState);
+	if (dynamic_cast<PFNWaitUntil*>(node)) return s + "wait until";
+	if (dynamic_cast<PFNWaitFor*>(node)) return s + "wait for";
+	if (dynamic_cast<PFNDeployArmyFrom*>(node)) return s + "deploy army";
+	if (dynamic_cast<PFNRegisterWorkOrder*>(node)) return s + "work order";
+	if (dynamic_cast<PFNAction*>(node)) return s + "action";
+	return s + "other";
+}

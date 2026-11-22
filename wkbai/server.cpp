@@ -6,6 +6,7 @@
 #include <random>
 #include "server.h"
 #include "MapFolder.h"
+#include "Naval.h"
 #include "util/util.h"
 #include "util/LoadingProgress.h"
 #include <set>
@@ -255,6 +256,9 @@ void Server::loadSaveGame(const char * filename)
 	// the ministry AI's governments as saved
 	if (!parts.ai.empty())
 		ministries.loadText(*this, parts.ai);
+	// the AIs' navies as saved (ferries, colonies, route cogs), else none: taken up again by the
+	// naval layer as it finds them
+	Naval::LoadText(parts.naval);
 	// the peasants in for the night or the winter (PeasantLodging): their states on the units
 	environment.afterWorldLoaded(*this);
 	// what each player had discovered (IS_DISCOVERED): as saved, else nothing (and not the last game's)

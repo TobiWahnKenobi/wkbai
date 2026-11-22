@@ -245,7 +245,7 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// original-format file and its side files (ServerSave.cpp)
 	struct SaveParts {
 		bool saveFile = false;
-		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory;
+		std::string world, settings, environment, paths, history, movement, ai, discovered, intensity, treeMemory, naval;
 	};
 	// The players' memory of the trees under the fog of war (FogOfWar's tree memory, the
 	// treeMemory section): kept by each player's client on this machine, by player id, its text

@@ -19,6 +19,7 @@
 #include <cmath>
 #include "Order.h"
 #include "AIController.h"
+#include "Naval.h"
 #include "gameset/gameset.h"
 #include "gameset/OrderBlueprint.h"
 #include "gameset/WorkOrder.h"
@@ -94,7 +95,7 @@ namespace {
 	}
 
 	// The side files of an original-format save, or of an older wkbai save
-	const char* const SIDE_FILES[9] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt", ".trees.txt" };
+	const char* const SIDE_FILES[10] = { ".ai.txt", ".env.txt", ".paths.txt", ".history.txt", ".movement.txt", ".ministries.txt", ".discovered.txt", ".intensity.txt", ".trees.txt", ".naval.txt" };
 
 	std::string inQuotes(const std::string& s) { return "\"" + s + "\""; }
 
@@ -524,7 +525,7 @@ bool Server::saveGame(const char* filename)
 	// - the workers' attachment paths (RestoreAttachmentPath), a line "<object> <order id> <task
 	//   id> <target> <path> <point> <tried>" each;
 	// - the unit history (UnitHistory).
-	std::string settings, environmentText, paths, history, movements, government, discovered, intensity, trees;
+	std::string settings, environmentText, paths, history, movements, government, discovered, intensity, trees, naval;
 	if (!savingLevel) {
 		movements = movementSaveText();
 		// the players' memory of the trees under the fog of war (FogOfWar)
@@ -532,6 +533,8 @@ bool Server::saveGame(const char* filename)
 		discovered = DiscoveredSaveText();
 		intensity = intensityMaps.saveText();
 		government = ministries.saveText();
+		// the AIs' navies: ferries, colonies, route cogs (Naval::SaveText)
+		naval = Naval::SaveText();
 		settings = aiSettingsText();
 		const EnvironmentSettings& es = environment.settings;
 		if (environment.enabled() || environment.windOn() || es.skyWeather != 0 || es.skyCover != 45)
@@ -561,8 +564,8 @@ bool Server::saveGame(const char* filename)
 		// <save>.ai.txt, .env.txt, .paths.txt, .history.txt, .movement.txt, .ministries.txt,
 		// .discovered.txt and .intensity.txt (none for a level)
 		const bool ok = writeFile(path, world, true);
-		const std::string* sides[9] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees };
-		for (int i = 0; i < 9; i++) {
+		const std::string* sides[10] = { &settings, &environmentText, &paths, &history, &movements, &government, &discovered, &intensity, &trees, &naval };
+		for (int i = 0; i < 10; i++) {
 			if (!sides[i]->empty())
 				writeFile(sidePath(SIDE_FILES[i]), *sides[i], false);
 			else
@@ -596,6 +599,7 @@ bool Server::saveGame(const char* filename)
 	file.add("discovered", 1, std::move(discovered));
 	file.add("intensity", 1, std::move(intensity));
 	file.add("treeMemory", 1, std::move(trees));
+	file.add("naval", 1, std::move(naval));
 	const bool ok = writeFile(path, file.write(), false);
 	// an older save's side files of the same name would be stale: everything is in the file now
 	if (ok)
@@ -615,8 +619,8 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	if (!SaveFile::IsSaveFile(all)) {
 		// an original save game or level, or a save of wkbai before 2026-11-13 with its side files
 		parts.world = std::move(all);
-		std::string* sides[9] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity, &parts.treeMemory };
-		for (int i = 0; i < 9; i++)
+		std::string* sides[10] = { &parts.settings, &parts.environment, &parts.paths, &parts.history, &parts.movement, &parts.ai, &parts.discovered, &parts.intensity, &parts.treeMemory, &parts.naval };
+		for (int i = 0; i < 10; i++)
 			*sides[i] = readFile(std::string(filename) + SIDE_FILES[i]);
 		return parts;
 	}
@@ -633,7 +637,7 @@ Server::SaveParts Server::ReadSaveParts(const char* filename)
 	const Known known[] = { { "authoring", &authoring }, { "world", &parts.world }, { "settings", &parts.settings }, { "players", &parts.settings },
 		{ "visibility", &parts.settings }, { "environment", &parts.environment }, { "paths", &parts.paths }, { "history", &parts.history },
 		{ "movement", &parts.movement }, { "ai", &parts.ai }, { "discovered", &parts.discovered }, { "intensity", &parts.intensity },
-		{ "treeMemory", &parts.treeMemory } };
+		{ "treeMemory", &parts.treeMemory }, { "naval", &parts.naval } };
 	for (const SaveSection& s : file.sections) {
 		const Known* k = nullptr;
 		for (const Known& candidate : known)

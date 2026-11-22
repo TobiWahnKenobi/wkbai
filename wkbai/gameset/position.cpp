@@ -485,9 +485,10 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 	void setReach(ScriptContext* ctx, Vector3& from) {
 		reachClass = reachRegion = -1;
 		Server* srv = Server::instance;
-		// (on for the ministry AI's players only: on 3 Isles it took the first village off another
-		// player's island, but the Lua AI's Kolvas then laid no farm at all; WKB_REACH=1 turns it on
-		// for every player, WKB_REACH=0 off for all)
+		// (the villages' rule for every player: 3 Isles' position 0 laid its first village on another
+		// island and built nothing more all game, whatever AI played it but the ministry, 31 buildings
+		// in 45 minutes; with it 85-118 in 30, and the Lua AI's Kolvas still builds, 82-93. WKB_REACH=1
+		// every building for every player, 3 the ministry's players only (as before 2026-11-22), 0 off)
 		static const char* const env = getenv("WKB_REACH");
 		static const int mode = env ? atoi(env) : -1;
 		if (mode == 0 || !srv || ctx->gameState != srv || !srv->terrain)
@@ -496,7 +497,7 @@ struct PDNearestValidStampdownPos : PositionDeterminer {
 		ServerGameObject* player = self ? (ServerGameObject*)self->getPlayer() : nullptr;
 		if (!player || player->blueprint->bpClass != Tags::GAMEOBJCLASS_PLAYER)
 			return;
-		if (mode != 1 && !MinistryPlayer(srv, player))
+		if (mode == 3 && !MinistryPlayer(srv, player))
 			return;
 		// (villages only, unless WKB_REACH=1: the first village is what went to another island; with
 		// the farms in the rule too, Kolvas's farm search was refused and his commissions stalled)
