@@ -52,6 +52,9 @@ struct ClientGameObject : SpecificGameObject<Client, ClientGameObject> {
 	int forestSlot = -1;
 	uint32_t forestGen = 0;
 	ForestKey forestKey;
+	// the server's associations, mirrored (NETCLIMSG_OBJECT_ASSOCIATION): FINDER_ASSOCIATES and
+	// FINDER_ASSOCIATORS on the client (command buttons' conditions)
+	std::map<int, std::set<CliGORef>> associates, associators;
 
 	void updatePosition(const Vector3& newposition);
 	void updateOccupiedTiles(const Vector3& oldposition, const Vector3& oldorientation, const Vector3& newposition, const Vector3& neworientation);

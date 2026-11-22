@@ -6,6 +6,7 @@
 
 #include "gameset/Plan.h"
 #include "GameObjectRef.h"
+#include "Naval.h"
 #include "util/vecmat.h"
 #include <map>
 #include <set>
@@ -170,6 +171,10 @@ struct AIController {
 	// refuses peasants at the cap)
 	std::set<uint32_t> ministryHeld;
 	int ministryPeasantCap = -1, ministryPeasants = 0;
+	// the AI at sea (Naval.h, "aiNaval"): its navy and ferries; the units on a ferry (boarding,
+	// aboard, landing), which the war layer, the waves and the ministries leave alone
+	Naval::State naval;
+	std::set<uint32_t> navalUnits;
 	// the war layer's pool: the fighters at home, and the scripts' idle or not-fighting attackers
 	// near the base; not those in the armies `mine` nor the units `inWaves`
 	std::vector<ServerGameObject*> warPool(const Vector3& base, const std::set<uint32_t>& mine, const std::set<uint32_t>& inWaves);
@@ -218,6 +223,8 @@ std::string DiscoveredSaveText();
 void DiscoveredLoadText(const std::string& text);
 // Whether one of the buildings may spawn the type now (gameset/values.cpp)
 bool AISpawnAllowed(const GameObjBlueprint* type, const SpecificFinderResult<ServerGameObject>& buildings);
+// Whether the type is a peasant and the player's ministry AI has its peasants at the cap (gameset/values.cpp)
+bool AIPeasantCapped(const GameObjBlueprint* type, const ServerGameObject* player);
 // How many characters each character requirement of the commission needs, evaluated for its
 // handler; with forceBalance, a requirement none of whose ladder's types can be spawned now
 // gives what it still misses to the others that can and need some (gameset/values.cpp)

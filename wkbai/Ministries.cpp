@@ -19,7 +19,7 @@ double g_deptMs[DEPT_COUNT] = {};
 uint64_t g_deptThinks[DEPT_COUNT] = {};
 
 namespace {
-	const char* const NAMES[DEPT_COUNT] = { "strategist", "economy", "labour", "builders", "research", "war", "generals", "intelligence", "diplomacy" };
+	const char* const NAMES[DEPT_COUNT] = { "strategist", "economy", "labour", "builders", "research", "war", "generals", "intelligence", "diplomacy", "admiralty" };
 
 	// the game set's items the departments read, looked up once per game set
 	struct Items {
@@ -189,6 +189,7 @@ namespace {
 		g.departments.push_back(MakeGenerals());
 		g.departments.push_back(MakeIntelligence());
 		g.departments.push_back(MakeDiplomacy());
+		g.departments.push_back(MakeAdmiralty());
 	}
 
 	// "aiTrace" / WKB_TRACE_AI: 0 off, 1 every AI, else a player's id
@@ -318,6 +319,7 @@ Department* Government::department(uint8_t id) const
 }
 
 float Government::now() const { return server.timeManager.currentTime; }
+float Government::played() const { return now() - (float)board.get("gov.start"); }
 
 void Government::log(uint8_t dept, const char* fmt, ...)
 {
@@ -369,7 +371,9 @@ void Ministries::update(Server& server)
 	for (const auto& [type, children] : level->children)
 		for (CommonGameObject* child : children) {
 			ServerGameObject* p = (ServerGameObject*)child;
-			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player")
+			// (not one deleted, an empty start position's: the count is the same from the first step
+			// on, as QuickSkirmishMenu::applySettings maps the positions onto it)
+			if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player" && !p->deleted)
 				all.push_back(p);
 		}
 	std::sort(all.begin(), all.end(), [](auto* a, auto* b) { return a->id < b->id; });
@@ -385,6 +389,11 @@ void Ministries::update(Server& server)
 		auto& g = governments[p->id];
 		if (!g) {
 			g = std::make_unique<Government>(server, p->id);
+			// (from the first step, not War's first think: the placements' reach rule, position.cpp,
+			// applies to the ministry's players, and their first village is laid at the start)
+			p->aiController.ministryWaves = !(MinOff() & 128);
+			// (when it began: a level's clock needn't start at 0, Battleground's starts at 5916 s)
+			g->board.report("gov.start", g->now());
 			g->log(STRATEGIST, "a government of %zu departments", g->departments.size());
 			SetWeightsFromCharacter(*g);
 		}

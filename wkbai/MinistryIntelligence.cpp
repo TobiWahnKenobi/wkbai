@@ -262,6 +262,38 @@ namespace {
 			g.board.report("intel.rivals", (double)std::count_if(enemies.begin(), enemies.end(), [](ServerGameObject* p) { return AIUtil::Palace(p) != nullptr; }));
 			if (myPalace)
 				g.board.report("intel.threat.home", pic.threatNear(myPalace->position.x, myPalace->position.z, 250.0f));
+			// the map (improvement 6): how far the nearest enemy starts from the palace (their start
+			// cameras, known from the start as in a skirmish's lobby), and each enemy's
+			if (myPalace && !(MinOff() & 16384)) {
+				float nearest = -1.0f;
+				for (ServerGameObject* p : enemies) {
+					const Vector3 at = p->playerStartCameraPosition;
+					if (at.x == 0.0f && at.z == 0.0f)
+						continue;
+					const float d = std::hypot(at.x - myPalace->position.x, at.z - myPalace->position.z);
+					g.board.report("map." + std::to_string(p->id) + ".start", d);
+					if (nearest < 0.0f || d < nearest)
+						nearest = d;
+				}
+				g.board.report("map.nearestEnemy", nearest);
+			}
+			// the warning (improvement 2): enemy fighters seen within 500 m of the palace in the last
+			// minute, before they are at it (four players, plain WKB, seed 7: the threat map's 250 m saw the
+			// wave of minute 16 when it was in the town, and it killed all 27 peasants)
+			{
+				int n = 0;
+				float power = 0.0f;
+				if (myPalace && !(MinOff() & 2048))
+					for (const auto& [id, s] : pic.sightings)
+						if (s.fighter && now - s.seen < 60.0f && std::hypot(s.x - myPalace->position.x, s.z - myPalace->position.z) < Tune("warnRadius", 500.0f)) {
+							n++;
+							power += s.power;
+						}
+				if (n > 0 && g.board.get("intel.approach") == 0.0)
+					g.log(INTELLIGENCE, "warning: %d enemy fighters within 500 m (power %.0f)", n, power);
+				g.board.report("intel.approach", n);
+				g.board.report("intel.approachPower", power);
+			}
 			if (thinks % 15 == 0)
 				g.log(INTELLIGENCE, "%d sightings of %zu enemies; the threat at home %.0f", total, enemies.size(),
 					myPalace ? pic.threatNear(myPalace->position.x, myPalace->position.z, 250.0f) : 0.0f);

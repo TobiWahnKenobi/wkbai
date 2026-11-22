@@ -158,18 +158,93 @@ namespace {
 	std::vector<SrvGORef> pendingHalts; // marches stopped by a fight (distortion)
 }
 
+// wkbai's improved mixed formations ("improvedFormations", on by default; off: as WKB.exe, see the
+// RE repo's docs/re/mixed-formations.md): the places spaced for the widest member, members placed
+// by role (cavalry on the wings, melee in front, ranged behind), the reach of a formation judged
+// for each kind of member, a formation's archers shooting when it is sent to fight. Read once a
+// game (a change in the options counts from the next game).
+bool ImprovedFormations()
+{
+	static uint64_t readFor = ~0ull;
+	static bool on = true;
+	const uint64_t serial = Server::instance && Server::instance->gameSet ? Server::instance->gameSet->serial : 0;
+	if (readFor != serial) {
+		readFor = serial;
+		on = g_settings.value("improvedFormations", true);
+	}
+	return on;
+}
+
+// a unit whose own attack is a missile's (its DEFAULT_ATTACK_COMMAND not the melee "Attack": Fire
+// Arrow, Fire Bullet, a mounted archer's)
+bool IsRangedUnit(const ServerGameObject* unit)
+{
+	const Server* server = Server::instance;
+	if (!server || !server->gameSet || unit->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER)
+		return false;
+	const int cmd = unit->blueprint->defaultAttackCommand;
+	if (cmd < 0 || cmd >= (int)server->gameSet->commands.names.size())
+		return false;
+	return server->gameSet->commands.names.getString(cmd) != "Attack";
+}
+
+namespace {
+	// a member's role in an improved formation: 0 melee on foot, 1 ranged on foot, 2 mounted (the
+	// "I'm a military unit" classes 3 and 4, HC and LC)
+	int RoleOf(const ServerGameObject* member)
+	{
+		static const GameSet* of = nullptr;
+		static int military = -1;
+		if (Server::instance && of != Server::instance->gameSet.get()) {
+			of = Server::instance->gameSet.get();
+			military = of->items.names.getIndex("I'm A Military Unit");
+		}
+		const float c = military >= 0 ? const_cast<ServerGameObject*>(member)->getItem(military) : 0.0f;
+		if (c >= 2.5f && c <= 4.5f)
+			return 2;
+		return IsRangedUnit(member) ? 1 : 0;
+	}
+}
+
 static std::vector<std::pair<float, float>> placesOf(const ServerGameObject* formation, int count)
 {
-	// as the original, the separations of one member's type (the first one's)
+	// as the original, the separations of one member's type (the first one's); improved, the
+	// widest member's (a knight's 4 x 6 among spearmen, not the spearmen squeezed or the knights
+	// spaced as spearmen)
 	const GameObjBlueprint* first = nullptr;
+	float sepX = 0.0f, sepY = 0.0f, minX = 1e9f, minY = 1e9f;
+	const bool improved = ImprovedFormations();
 	for (auto& [childType, childList] : formation->children)
 		if (childType.bpClass() == Tags::GAMEOBJCLASS_CHARACTER && !childList.empty()) {
-			first = childList.front()->blueprint;
-			break;
+			if (!first)
+				first = childList.front()->blueprint;
+			if (!improved)
+				break;
+			const GameObjBlueprint* bp = childList.front()->blueprint;
+			sepX = std::max(sepX, bp->formationSeparationX);
+			sepY = std::max(sepY, bp->formationSeparationY);
+			minX = std::min(minX, bp->formationSeparationX);
+			minY = std::min(minY, bp->formationSeparationY);
 		}
 	if (!first)
 		return {};
-	return formationPlaces(formationTypeOf(formation), count, first->formationSeparationX, first->formationSeparationY);
+	const FormationType type = formationTypeOf(formation);
+	if (!improved)
+		return formationPlaces(type, count, first->formationSeparationX, first->formationSeparationY);
+	auto places = formationPlaces(type, count, sepX, sepY);
+	// a big formation spaced for its widest member is kept within 25 m of its centre (its army's
+	// position): the scripts' "Army Formation Attack" hands every member more than 30 m from it
+	// back to the player (AI\Formation Army.cpp), and a Line of 27 with knights' spacing lost its
+	// ends that way. The spacing shrinks towards the narrowest member's, no further.
+	float reach = 0.0f;
+	for (const auto& p : places)
+		reach = std::max(reach, std::hypot(p.first, p.second));
+	constexpr float KEEP_WITHIN = 25.0f;
+	if (reach > KEEP_WITHIN && (sepX > minX || sepY > minY)) {
+		const float f = KEEP_WITHIN / reach;
+		places = formationPlaces(type, count, std::max(minX, sepX * f), std::max(minY, sepY * f));
+	}
+	return places;
 }
 
 float FormationController::maxDimension() const
@@ -267,6 +342,46 @@ void FormationController::formUp()
 		world[i] = worldPlace(formation, places[i], members[0]);
 	std::vector<bool> taken(places.size(), false), placed(members.size(), false);
 	std::vector<float> dist(members.size(), 0.0f);
+	// Improved, a mixed formation (members of more than one role; not an Orb, which faces every
+	// way): each role its own places, the mounted the outermost files (the wings), then the front
+	// rows for melee and the rear rows for the ranged; a member takes only a place of its role.
+	// The places' order fully decided (|x|, row, index), the same on every machine.
+	std::vector<int> memberRole(members.size(), 0), slotRole(places.size(), 0);
+	bool byRole = false;
+	if (ImprovedFormations() && formationTypeOf(formation) != FormationType::Orb && places.size() == members.size()) {
+		int counts[3] = { 0, 0, 0 };
+		for (size_t m = 0; m < members.size(); m++)
+			counts[memberRole[m] = RoleOf(members[m])]++;
+		byRole = (counts[0] > 0) + (counts[1] > 0) + (counts[2] > 0) > 1;
+		if (byRole) {
+			std::vector<int> idx(places.size());
+			for (size_t s = 0; s < idx.size(); s++)
+				idx[s] = (int)s;
+			std::sort(idx.begin(), idx.end(), [&](int a, int b) {
+				const float ax = std::abs(places[a].first), bx = std::abs(places[b].first);
+				if (ax != bx) return ax > bx;
+				if (places[a].second != places[b].second) return places[a].second < places[b].second;
+				return a < b;
+			});
+			std::vector<bool> wing(places.size(), false);
+			for (int i = 0; i < counts[2]; i++) {
+				wing[idx[i]] = true;
+				slotRole[idx[i]] = 2;
+			}
+			std::vector<int> rest;
+			for (size_t s = 0; s < places.size(); s++)
+				if (!wing[s])
+					rest.push_back((int)s);
+			std::sort(rest.begin(), rest.end(), [&](int a, int b) {
+				if (places[a].second != places[b].second) return places[a].second < places[b].second;
+				const float ax = std::abs(places[a].first), bx = std::abs(places[b].first);
+				if (ax != bx) return ax < bx;
+				return a < b;
+			});
+			for (size_t i = 0; i < rest.size(); i++)
+				slotRole[rest[i]] = (int)i < counts[0] ? 0 : 1;
+		}
+	}
 	for (size_t round = 0; round < members.size(); round++) {
 		int bestMember = -1, bestSlot = -1;
 		float bestNear = -1.0f;
@@ -276,7 +391,7 @@ void FormationController::formUp()
 			int nearSlot = -1;
 			float near2 = 0.0f;
 			for (size_t s = 0; s < world.size(); s++) {
-				if (taken[s])
+				if (taken[s] || (byRole && slotRole[s] != memberRole[m]))
 					continue;
 				const float d2 = (members[m]->position - world[s]).sqlen2xz();
 				if (nearSlot < 0 || d2 < near2) {
@@ -310,7 +425,7 @@ void FormationController::formUp()
 			bool swapped = false;
 			for (size_t a = 0; a < members.size(); a++)
 				for (size_t b = a + 1; b < members.size(); b++) {
-					if (slotIdx[a] < 0 || slotIdx[b] < 0)
+					if (slotIdx[a] < 0 || slotIdx[b] < 0 || (byRole && memberRole[a] != memberRole[b]))
 						continue;
 					if (cost(a, slotIdx[b]) + cost(b, slotIdx[a]) + 0.01f < cost(a, slotIdx[a]) + cost(b, slotIdx[b])) {
 						std::swap(slotIdx[a], slotIdx[b]);
@@ -617,6 +732,44 @@ void FormationController::update()
 	if (members.empty())
 		return;
 
+	// standing where its members can't get (a formation moved by its own type's ground, which has
+	// no slope limit, before 2026-11-17: the play test's saves have six on a summit plateau, a
+	// terrain region of its own ringed by slopes no spearman climbs, their spearmen climbing for
+	// good): to the nearest tile of its first member's region, at once. Not while it walks (its
+	// walk keeps to its members' ground now, MovementController::startMovement).
+	if (server && server->terrain && !formation->movementController.isMoving()) {
+		const GameObjBlueprint* climbsLeast = nullptr;
+		for (ServerGameObject* m : members)
+			if (!climbsLeast || m->blueprint->maxGradient < climbsLeast->maxGradient)
+				climbsLeast = m->blueprint;
+		const int cls = MovementController::movementClass(climbsLeast);
+		const int theirs = MovementController::terrainRegion(cls, (int)(members[0]->position.x / 5.0f), (int)(members[0]->position.z / 5.0f));
+		const int tx = (int)(formation->position.x / 5.0f), tz = (int)(formation->position.z / 5.0f);
+		if (theirs >= 0 && MovementController::terrainRegion(cls, tx, tz) != theirs) {
+			// rings of tiles outwards, the nearest tile centre of the members' region
+			float best = -1.0f;
+			Vector3 at;
+			for (int r = 1; r <= 40 && best < 0.0f; r++)
+				for (int dz = -r; dz <= r; dz++)
+					for (int dx = -r; dx <= r; dx++) {
+						if (std::abs(dx) != r && std::abs(dz) != r)
+							continue;
+						if (MovementController::terrainRegion(cls, tx + dx, tz + dz) != theirs)
+							continue;
+						const Vector3 c((tx + dx) * 5.0f + 2.5f, 0.0f, (tz + dz) * 5.0f + 2.5f);
+						const float d = (c - formation->position).sqlen2xz();
+						if (best < 0.0f || d < best) {
+							best = d;
+							at = c;
+						}
+					}
+			if (best >= 0.0f) {
+				at.y = server->terrain->getHeightEx(at.x, at.z, climbsLeast->canWalkOnWater());
+				formation->setPosition(at);
+			}
+		}
+	}
+
 	// members gone (dead, left): their places stay empty, but an Orb closes up; a formation that had
 	// formed up and has fewer than 8 left disbands (WKB.exe 0x54f1d0)
 	bool lost = false;
@@ -847,7 +1000,15 @@ void FormationController::update()
 		const bool moving = member->movementController.isMoving();
 		if (d > ARRIVED || formSpeed > 0.0f) {
 			const Vector3& asked = member->movementController.getRequestedDestination();
-			if (!moving || (asked - target).sqlen2xz() > RETARGET * RETARGET
+			// a member standing although it asked for this place already: its search found no way
+			// there (a place up a slope it can't climb, in water, in a wall) or ended short. It
+			// asks again once a second, by its id, not every step: 65 members of two formations
+			// round a scout on a hilltop asked 20 times a second each, all game long (the AI play
+			// test's PERFORMANCE save, 2026-11-16). From the saved request and the clock alone, so a
+			// loaded game asks at the same steps.
+			const bool askedHere = (asked - target).sqlen2xz() <= RETARGET * RETARGET;
+			const bool retryDue = !server || ((uint32_t)(server->timeManager.currentTime * 20.0f + 0.5f) + member->id) % 20 == 0;
+			if ((!moving && (!askedHere || retryDue)) || (moving && !askedHere)
 				|| (formSpeed > 0.0f && (asked - member->position).sqlen2xz() < formSpeed * formSpeed)) {
 				extern uint64_t g_formationWalks;
 				g_formationWalks++;

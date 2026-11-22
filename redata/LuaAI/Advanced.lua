@@ -14,6 +14,10 @@
 --   ones first. With more than 150 at home, the best one anyway.
 -- - A wave that is losing (under half the strength around it, having lost a fifth) comes home;
 --   one whose target fell goes on to the nearest enemy building within 150 m.
+-- - At sea (NAVY, below; wkbai's naval layer, ai.naval): where an enemy is across the sea, the game
+--   builds a dock, cogs and war boats; this script takes the helm of the ferries: every 30 s the
+--   soldiers at home over a guard (NAVAL_WAVE or more) board a free cog for the enemy's building
+--   nearest its shore, and once ashore they attack it as a wave.
 --
 -- To make your own AI: copy this file to a mod as LuaAI\<name>.lua (or LuaAI\Advanced.lua to
 -- change this one) and change it. The "ai" table the game gives is described in the wkbai
@@ -38,7 +42,7 @@ local MUSTER = false
 local defenders = {}          -- unit id -> { x, z, since }
 local waves = {}              -- { army, target, tx, tz, size }
 local nextWaveCheck = 0
-local counts = { threats = 0, defenders = 0, fled = 0, held = 0, recalled = 0, retargeted = 0 }
+local counts = { threats = 0, defenders = 0, fled = 0, held = 0, recalled = 0, retargeted = 0, ferries = 0, landed = 0 }
 
 local function dist2(ax, az, bx, bz)
 	local dx, dz = ax - bx, az - bz
@@ -344,8 +348,62 @@ local MILITIA_PEASANTS = 25
 -- the rest. Set WAR to false for this script's own.
 local WAR = true
 
+-- The navy (ai.naval, ai.ferry): set NAVY to false to leave the ferries to the game's naval layer
+local NAVY = true
+local NAVAL_WAVE = 6          -- soldiers that go on a ferry at least
+local NAVAL_GUARD = 4         -- soldiers that stay home, plus a quarter
+local nextNavy = 0
+local ferries = {}            -- ferry id -> { units, target }
+local function navy(ai, now)
+	local n = ai.naval()
+	if not n then return end
+	-- ours the helm only where the sea counts
+	ai.navalHelm(n.need == "only" or n.need == "shorter")
+	if n.need ~= "only" and n.need ~= "shorter" then return end
+	-- the ferries ashore: their soldiers attack as a wave
+	for id, f in pairs(ferries) do
+		local state = ai.ferryState(id)
+		if state == "ashore" or state == "returning" or state == "done" then
+			local alive = {}
+			for _, u in ipairs(f.units) do
+				if ai.alive(u) then alive[#alive + 1] = u end
+			end
+			local target = f.target
+			if #alive > 0 then
+				if not ai.alive(target) then
+					local x, z = ai.position(alive[1])
+					target = ai.buildingsNear(x, z, 400)[1]
+				end
+				if target and ai.launch(alive, target) then counts.landed = counts.landed + #alive end
+			end
+			ferries[id] = nil
+		end
+	end
+	if now < nextNavy then return end
+	nextNavy = now + 30
+	if #n.transports == 0 or not n.enemy or n.enemy == 0 then return end
+	-- (the war layer's pool: ai.home() is the scripts' defensive army alone, and the war layer
+	-- keeps its soldiers in armies of its own)
+	local home = ai.freeFighters and ai.freeFighters() or ai.home()
+	table.sort(home)
+	local keep = NAVAL_GUARD + #home // 4
+	ai.log(string.format("navy: %d free at home, %d stay, %d cogs", #home, keep, #n.transports))
+	if #home - keep < NAVAL_WAVE then return end
+	local wave = {}
+	for i = keep + 1, #home do wave[#wave + 1] = home[i] end
+	local target = ai.buildingsNear(n.enemyShore.x, n.enemyShore.z, 300)[1]
+	if not target then return end
+	local id = ai.ferry(wave, target)
+	if id then
+		ferries[id] = { units = wave, target = target }
+		counts.ferries = counts.ferries + 1
+		ai.log(string.format("ferry %d: %d soldiers across the sea", id, #wave))
+	end
+end
+
 function think(ai)
 	local now = ai.time()
+	if NAVY and ai.naval then navy(ai, now) end
 	if WAR then
 		ai.war()
 		if now >= nextWaveManage then
@@ -375,6 +433,6 @@ end
 
 -- for the AI test's census
 function census()
-	return string.format("threats met %d (%d defenders), peasants sent home %d; trained %d; rallied home %d; mustered %d; waves held %d, recalled %d, retargeted %d, out %d",
-		counts.threats, counts.defenders, counts.fled, counts.trained or 0, counts.rallied or 0, counts.mustered or 0, counts.held, counts.recalled, counts.retargeted, #waves)
+	return string.format("threats met %d (%d defenders), peasants sent home %d; trained %d; rallied home %d; mustered %d; waves held %d, recalled %d, retargeted %d, out %d; ferries %d, landed %d",
+		counts.threats, counts.defenders, counts.fled, counts.trained or 0, counts.rallied or 0, counts.mustered or 0, counts.held, counts.recalled, counts.retargeted, #waves, counts.ferries, counts.landed)
 end

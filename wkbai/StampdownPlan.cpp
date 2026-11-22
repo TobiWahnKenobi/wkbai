@@ -4,6 +4,7 @@
 #include "gameset/GameObjBlueprint.h"
 #include "tags.h"
 #include "terrain.h"
+#include "WaterOverlay.h"
 #include "gameset/Footprint.h"
 #include <algorithm>
 #include <iterator>
@@ -64,6 +65,32 @@ bool StampdownPlan::tileInAnyCity(CommonGameState* gameState, int tx, int tz)
 	return false;
 }
 
+bool StampdownPlan::tileBesideGate(CommonGameState* gameState, int tx, int tz)
+{
+	if (!gameState->terrain || !gameState->tiles)
+		return false;
+	const auto [w, h] = gameState->terrain->getNumPlayableTiles();
+	for (int dz = -2; dz <= 2; dz++)
+		for (int dx = -2; dx <= 2; dx++) {
+			const int x = tx + dx, z = tz + dz;
+			if (x < 0 || z < 0 || x >= w || z >= h)
+				continue;
+			const auto& tile = gameState->tiles[(size_t)z * w + x];
+			if (!tile.buildingPassable)
+				continue;
+			const CommonGameObject* b = tile.building.getFrom(gameState);
+			if (!b || !b->blueprint->footprint)
+				continue;
+			// (a gate: walkable and blocked tiles both; a field, all walkable, is no gate)
+			bool blocked = false;
+			for (const auto& to : b->blueprint->footprint->tiles)
+				blocked |= !to.mode;
+			if (blocked)
+				return true;
+		}
+	return false;
+}
+
 bool StampdownPlan::isRural(const GameObjBlueprint* blueprint)
 {
 	return blueprint->buildingType == Tags::BUILDINGTYPE_RURAL || blueprint->buildingType == Tags::BUILDINGTYPE_RURAL_CENTRE;
@@ -117,6 +144,21 @@ bool StampdownPlan::tileTerrainAllowed(const CommonGameState* gameState, const F
 {
 	if (!to.terrains || to.terrains->empty())
 		return true;
+	// a list with a water terrain (a dock's water rows) takes WKB.exe's water overlay of the tile
+	// ("Shallow Water", "Water"; WaterOverlay.h): the original maps' sea beds are sand and grass
+	{
+		static uint64_t of = 0;
+		static int shallow = -1, deep = -1;
+		if (of != gameState->gameSet->serial) {
+			of = gameState->gameSet->serial;
+			shallow = gameState->gameSet->terrains.names.getIndex("Shallow Water");
+			deep = gameState->gameSet->terrains.names.getIndex("Water");
+		}
+		auto in = [&](int i) { return i >= 0 && i < (int)to.terrains->size() && (*to.terrains)[i]; };
+		if (in(shallow) || in(deep))
+			if (const int ov = WaterOverlayClass(gameState->terrain, tx, tz))
+				return in(ov == 2 ? deep : shallow);
+	}
 	const auto* tile = gameState->terrain->getPlayableTile(tx, tz);
 	if (!tile || !tile->texture || !tile->texture->grp)
 		return false;

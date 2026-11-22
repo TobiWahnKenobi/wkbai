@@ -39,7 +39,7 @@
 namespace {
 	struct Items {
 		const GameSet* of = nullptr;
-		int hp = -1, hpCap = -1, h2h = -1, missile = -1, range = -1, armour = -1, military = -1, peasant = -1, village = -1, defensiveMode = -1;
+		int hp = -1, hpCap = -1, h2h = -1, missile = -1, range = -1, armour = -1, military = -1, peasant = -1, village = -1, defensiveMode = -1, boat = -1;
 		int enemyStatus = -1, attackOrder = -1, moveHome = -1;
 		void update(const GameSet* gs) {
 			if (of == gs)
@@ -55,6 +55,7 @@ namespace {
 			peasant = gs->items.names.getIndex("I Am A Peasant");
 			village = gs->items.names.getIndex("I Am A Village");
 			defensiveMode = gs->items.names.getIndex("Defensive Mode");
+			boat = gs->items.names.getIndex("I am a boat");
 			enemyStatus = gs->diplomaticStatuses.names.getIndex("Enemy");
 			attackOrder = gs->orders.names.getIndex("Attack");
 			moveHome = gs->orderAssignments.names.getIndex("Move to Manor");
@@ -94,6 +95,9 @@ namespace {
 	// wagon or priest
 	bool IsFighter(const ServerGameObject* o)
 	{
+		// (not a boat: the navy is the naval layer's, Naval.cpp; no wave takes a ship to fight on land)
+		if (Item(o, g_items.boat) > 0.0f)
+			return false;
 		if (IsSoldier(o))
 			return true;
 		if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_CHARACTER || IsPeasant(o))
@@ -328,6 +332,9 @@ namespace {
 
 // ---- AIUtil (AIUtil.h): the helpers above, and the orders the Lua AIs and the ministry AI give ----
 
+bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach); // Order.cpp
+bool RecentlyGaveUp(const ServerGameObject* holder, const ServerGameObject* target); // Order.cpp (kiting)
+
 namespace AIUtil {
 	int ClassOf(const ServerGameObject* o) { g_items.update(Server::instance->gameSet.get()); return ::ClassOf(o); }
 	int TypeClass(const GameObjBlueprint* type)
@@ -436,8 +443,35 @@ namespace AIUtil {
 		g_items.update(gs);
 		if (!target || target->deleted || g_items.attackOrder < 0)
 			return;
+		// each with its own attack (DEFAULT_ATTACK_COMMAND: an archer's Fire Arrow), as a right-click
+		// gives it; the melee "Attack" order for all sent the ministries' archers into the enemy's
+		// village to fight in melee, where they stood and killed no one (the AI play test,
+		// 2026-11-16). Not a unit that can't reach the target at all (CanReach).
 		for (ServerGameObject* u : units)
-			AIAttack(u, target); // its own default attack (a unit's, not the melee "Attack")
+			if (CanReach(u, target))
+				AIAttack(u, target);
+	}
+	// whether the unit can come within its attack's reach of the target (Order.cpp's OutOfReach:
+	// a tile that near in the ground its class can stand on); an archer's reach 30 m, else 3 m
+	bool CanReach(ServerGameObject* unit, ServerGameObject* target)
+	{
+		// (and not an enemy it gave up chasing in the last 30 s, Order.cpp ChaseGivesUp)
+		return !target || (!OutOfReach(unit, target->position, ClassOf(unit) == 2 ? 30.0f : 3.0f) && !RecentlyGaveUp(unit, target));
+	}
+	ServerGameObject* NearestReachable(ServerGameObject* unit, const std::vector<ServerGameObject*>& candidates)
+	{
+		ServerGameObject* best = nullptr;
+		float bd = 0.0f;
+		for (ServerGameObject* c : candidates) {
+			if (!c || c->deleted)
+				continue;
+			const float d = (c->position - unit->position).sqlen2xz();
+			if ((!best || d < bd) && CanReach(unit, c)) {
+				best = c;
+				bd = d;
+			}
+		}
+		return best;
 	}
 	void SendHome(ServerGameObject* p, const std::vector<ServerGameObject*>& units)
 	{
@@ -1000,7 +1034,7 @@ std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const 
 						if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 							units.push_back((ServerGameObject*)c);
 			for (ServerGameObject* u : units)
-				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id) && !inWaves.count(u->id))
+				if (IsFighter(u) && u->isInteractable() && weatherPoolable(u->id) && !inWaves.count(u->id) && !navalUnits.count(u->id))
 					pool.push_back(u);
 		}
 	}
@@ -1014,15 +1048,21 @@ std::vector<ServerGameObject*> AIController::warPool(const Vector3& base, const 
 		std::vector<ServerGameObject*> armies;
 		CollectArmies(gameObj, armies);
 		std::vector<ServerGameObject*> loose;
-		for (ServerGameObject* a : armies)
+		for (ServerGameObject* a : armies) {
 			if (a->blueprint == armyBp && !mine.count(a->id) && !(myFort >= 0 && a->associates.count(myFort) && !a->associates.at(myFort).empty()))
 				CollectUnits(a, loose);
+			// the game's default "Human Army" too (the soldiers trained with no Kingmaker Defensive Army
+			// to commission them join it: on 3 Isles a player without one had 52 of its 62 soldiers
+			// there, and the war layer, the ministries and the naval layer saw none of them)
+			else if (a->blueprint->name == "Human Army" && !mine.count(a->id))
+				CollectUnits(a, loose);
+		}
 		for (const auto& [type, children] : gameObj->children)
 			for (CommonGameObject* c : children)
 				if (!((ServerGameObject*)c)->deleted && c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
 					loose.push_back((ServerGameObject*)c);
 		for (ServerGameObject* u : loose) {
-			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id))
+			if (!IsFighter(u) || !u->isInteractable() || !weatherPoolable(u->id) || navalUnits.count(u->id))
 				continue;
 			const float d2 = (u->position - base).sqlen2xz();
 			const bool idle = !u->orderConfig.getCurrentOrder();
@@ -1801,6 +1841,92 @@ void AIController::startLuaAI(const std::string& name)
 		if (ok)
 			p->aiController.trained++;
 		return ok;
+	});
+
+	// The navy (Naval.h, "aiNaval"): what the map asks ("none", "shorter", "only", "unknown"), the
+	// enemy across the sea, the shores, the dock, the ships and the ferries under way. The naval
+	// layer builds the dock and ships on its own; it ferries armies of its own too unless the Lua
+	// AI takes the helm (ai.navalHelm(true)) and sends its own (ai.ferry).
+	ai.set_function("naval", [player](sol::this_state ts) -> sol::object {
+		sol::state_view lua(ts);
+		ServerGameObject* p = player();
+		if (!p)
+			return sol::make_object(lua, sol::lua_nil);
+		const Naval::State& st = p->aiController.naval;
+		static const char* needs[] = { "unknown", "none", "shorter", "only" };
+		sol::table t = lua.create_table();
+		t["need"] = needs[std::clamp((int)st.need + 1, 0, 3)];
+		t["enemy"] = st.enemy;
+		t["homeShore"] = lua.create_table_with("x", st.homeShore.x, "z", st.homeShore.z);
+		t["enemyShore"] = lua.create_table_with("x", st.enemyShore.x, "z", st.enemyShore.z);
+		t["dock"] = st.dock;
+		t["helm"] = st.manual;
+		sol::table transports = lua.create_table(), warships = lua.create_table(), ferries = lua.create_table();
+		int nt = 1, nw = 1, nf = 1;
+		for (ServerGameObject* s : Naval::Ships(p)) {
+			if (Naval::IsTransport(s))
+				transports[nt++] = s->id;
+			else
+				warships[nw++] = s->id;
+		}
+		static const char* states[] = { "boarding", "sailing", "landing", "ashore", "returning", "done" };
+		for (const Naval::Ferry& f : st.ferries) {
+			sol::table ft = lua.create_table();
+			ft["id"] = f.id;
+			ft["ship"] = f.ship;
+			ft["state"] = states[f.state];
+			ft["landed"] = f.landed;
+			ft["target"] = f.target;
+			ferries[nf++] = ft;
+		}
+		t["transports"] = transports;
+		t["warships"] = warships;
+		t["ferries"] = ferries;
+		return sol::make_object(lua, t);
+	});
+	// the fighters free at home (the war layer's pool, as the naval layer takes its ferries' from):
+	// those in the defensive army and the Co-ordinator, and the scripts' idle attackers near home
+	ai.set_function("freeFighters", [player](sol::this_state ts) {
+		ServerGameObject* p = player();
+		ServerGameObject* palace = p ? AIUtil::Palace(p) : nullptr;
+		std::vector<ServerGameObject*> list;
+		if (p && palace)
+			for (ServerGameObject* u : p->aiController.freeFighters(palace->position))
+				if (!p->aiController.navalUnits.count(u->id))
+					list.push_back(u);
+		std::sort(list.begin(), list.end(), [](ServerGameObject* a, ServerGameObject* b) { return a->id < b->id; });
+		return IdList(ts, list);
+	});
+	ai.set_function("navalHelm", [player](bool helm) {
+		if (ServerGameObject* p = player())
+			p->aiController.naval.manual = helm;
+	});
+	// how many cogs and war boats the layer keeps (negative: its own numbers)
+	ai.set_function("navalShips", [player](int transports, int warships) {
+		if (ServerGameObject* p = player()) {
+			p->aiController.naval.wantTransports = transports;
+			p->aiController.naval.wantWarships = warships;
+		}
+	});
+	// whether the unit can't walk to (x, z) but a ship could take it there
+	ai.set_function("overseas", [player](uint32_t unit, float x, float z) {
+		ServerGameObject* u = Server::instance->findObject(unit);
+		return u && !u->deleted && Naval::Overseas(player(), u, Vector3(x, 0, z));
+	});
+	// the units ferried to the target (0: the place x, z): the ferry's id, nil when no ship is free;
+	// once ashore they are the Lua AI's again (ai.ferryState(id) "ashore", "returning" or "done")
+	ai.set_function("ferry", [player](sol::table units, uint32_t target, sol::optional<float> x, sol::optional<float> z) -> sol::optional<uint32_t> {
+		ServerGameObject* t = target ? Server::instance->findObject(target) : nullptr;
+		const Vector3 place = t ? t->position : Vector3(x.value_or(0.0f), 0, z.value_or(0.0f));
+		const uint32_t id = Naval::SendFerry(player(), Objects(units), t, place, Naval::Ferry::LUA);
+		if (!id)
+			return sol::nullopt;
+		return id;
+	});
+	ai.set_function("ferryState", [player](uint32_t ferry) {
+		static const char* states[] = { "boarding", "sailing", "landing", "ashore", "returning", "done" };
+		const Naval::Ferry* f = Naval::FindFerry(player(), ferry);
+		return std::string(f ? states[f->state] : "done");
 	});
 
 	// The ministry AI (Ministries.h), with "aiMinistries" on: this player's government, read and
