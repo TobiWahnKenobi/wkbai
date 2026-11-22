@@ -35,7 +35,16 @@ struct Terrain;
 //                                        flowing from its first point to its last: the water
 //                                        within width of it is a river flowing along it, its
 //                                        mouth at the last point; "speed" (m/s, optional): its
-//                                        current set by hand (0 or left out: found from the land)
+//                                        current set by hand (0 or left out: found from the land).
+//                                        A point may carry a third number, [x, z, level]: the
+//                                        water's surface height there (world units). With a level
+//                                        on every point the waterway is a sloped river
+//                                        (Terrain::applySlopedWater): its surface runs down along
+//                                        the course (never rising downstream), between the points
+//                                        as a line, over the tiles within width / 2 of it whose
+//                                        ground lies below it; rapids, cascades and falls where
+//                                        it steepens (DiligentWaterfalls). Older readers take
+//                                        the first two numbers only: a river of the level water.
 //     "waterfalls": [ { "from": [x, z], "to": [x, z] }, ... ],
 //                                        falls placed by hand: the lip they pour over, along the
 //                                        tile edges (x or z, whichever the line runs along more),
@@ -54,6 +63,11 @@ struct WaterDesign {
 		std::vector<Vector3> points; // x, z (y unused)
 		float width = 25.0f;
 		float speed = 0.0f; // m/s set by the map's maker; 0: found from the land, as without it
+		// a sloped river: the surface's height at each point (as many as points), else empty
+		std::vector<float> levels;
+		// who made it ("by": the terrain generator's own are "terrain:<river>"; kept as it is)
+		std::string by;
+		bool sloped() const { return levels.size() == points.size() && points.size() >= 2; }
 	};
 	struct PlacedFall {
 		Vector3 from, to; // x, z
@@ -73,6 +87,7 @@ struct WaterDesign {
 	static int seaRegionOf(char c) { return c >= 'A' && c < 'A' + MAX_SEA_REGIONS ? c - 'A' : -1; }
 	// whether it changes anything (else the file isn't needed)
 	bool isEmpty() const;
+	bool hasSlopedWater() const;
 
 	// The nearest waterway within its width of a point (world x, z): its index (-1: none), the
 	// way it flows there (unit x, z), the distance to it and how far along it is still to its

@@ -15509,6 +15509,10 @@ void Test_SimProfile()
 void Test_MapTerrain();
 // Step 17.5's test: MapMaterialsTest.cpp
 void Test_MapMaterials();
+// the sloped rivers' test: TiltedWaterTest.cpp
+void Test_TiltedWater();
+// The real-place maps' test: MapWaterObjectsTest.cpp
+void Test_MapWaterObjects();
 
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
@@ -15628,6 +15632,8 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AssocMirror, "Associations mirrored to the client: a save's, after play, each kind of change; the Druid's Dark Portal condition on the client as on the server"},
 {Test_MixedFormation, "Improved mixed formations: Knights on the wings, Spearmen in front of Archers, the widest spacing, an Archer member's Attack its own, reach by kind"},
 {Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
+{Test_TiltedWater, "Tilted water: a sloped stream down a hillside into a lake (format, never rising, the lake met without a seam, floating, rapids and a fall, wading); a generated river with water, compiled, server and client the same, played"},
+{Test_MapWaterObjects, "Map water, objects and far land: a stream with water (a sloped waterway, the water kept in the channel), forests and resources by rule (none on water, conifers higher up), a stored far land compiled into the cache and loaded with the map"},
 };
 
 void LaunchTest()

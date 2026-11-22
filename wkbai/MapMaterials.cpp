@@ -20,7 +20,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <fstream>
+#include <functional>
 #include <queue>
 #include <set>
 #include <sstream>
@@ -435,6 +437,7 @@ namespace {
 		int material = -1;
 		std::vector<Cond> conds;
 		int water = -1; // -1 any, 0 dry, 1 at water
+		bool keepThin = false; // a line (a stream's bed, a track): kept by the clean-ups that remove slivers
 		float noiseScale = 350, jitterScale = 60;
 		std::string mask;
 		int index = 0;
@@ -791,9 +794,10 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 			r.conds.push_back({ C_MASK, mr, j });
 		}
 		if (rj.contains("water") && rj["water"].is_boolean()) r.water = rj["water"].get<bool>() ? 1 : 0;
+		r.keepThin = rj.value("keepThin", false);
 		for (const auto& [k, v] : rj.items()) {
 			bool known = k == "material" || k == "water" || k == "jitter" || k == "jitterScale" || k == "noiseScale" || k == "mask" || k == "maskRange"
-				|| k == "id" || k == "note" || k == "role";
+				|| k == "id" || k == "note" || k == "role" || k == "keepThin";
 			for (int c = 0; c < C_COUNT; c++) known = known || k == COND_NAMES[c];
 			if (!known) warnings.push_back("ground rule " + std::to_string(i) + ": unknown key " + k + " (left out)");
 		}
@@ -973,6 +977,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 
 	// ---- a material per vertex: the first rule that holds ----
 	std::vector<int16_t> vm(NV, (int16_t)defaultMat);
+	std::vector<uint8_t> thin(NV, 0); // set by a keepThin rule: no opening, no speck removal
 	std::vector<int> ruleHits(rules.size(), 0);
 	for (int z = 0; z < gh; z++)
 		for (int x = 0; x < gw; x++) {
@@ -1002,6 +1007,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 				}
 				if (ok) {
 					vm[i] = (int16_t)r.material;
+					thin[i] = r.keepThin;
 					ruleHits[ri]++;
 					break;
 				}
@@ -1015,7 +1021,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	int opened = 0;
 	for (int pass = 0; pass < opening; pass++) {
 		auto at = [&](int x, int z) { return vm[(size_t)std::clamp(z, 0, gh - 1) * gw + std::clamp(x, 0, gw - 1)]; };
-		std::vector<uint8_t> core(NV, 1), keep(NV, 0);
+		std::vector<uint8_t> core(NV, 1), keep(thin);
 		for (int z = 0; z < gh; z++)
 			for (int x = 0; x < gw; x++)
 				for (int oz = -1; oz <= 1 && core[(size_t)z * gw + x]; oz++)
@@ -1087,7 +1093,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 					else around[vm[u]]++;
 				}
 			}
-			if ((int)members.size() >= minPatch || around.empty()) continue;
+			if ((int)members.size() >= minPatch || around.empty() || thin[members[0]]) continue;
 			int best = -1, bn = -1;
 			for (auto& [mm, n] : around) if (n > bn) { bn = n; best = mm; }
 			for (int v : members) vm[v] = (int16_t)best;
@@ -1498,6 +1504,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		for (size_t i = 0; i < NV; i++) diff += vg[i] != want[i];
 		changedTotal = diff;
 	}
+	const int localFixed = 0, localTried = 0; // (a local block search found nothing the passes above hadn't: removed)
 	// test runs: "WKB_MATERIALS_DUMP=<file>": the groups' names, then per vertex row the wished and
 	// the placed group index
 	if (const char* dump = getenv("WKB_MATERIALS_DUMP")) {
@@ -1518,8 +1525,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 	struct Unmatched { int x, z; std::string kind, detail; };
 	std::vector<Unmatched> unmatched;
 	std::vector<const std::vector<Placed>*> cand(NT, nullptr);
-	std::vector<std::vector<Placed>> fallbackCands;
-	fallbackCands.reserve(1024);
+	std::deque<std::vector<Placed>> fallbackCands; // (a deque: the tiles keep pointers into it)
 	std::vector<Placed> cur(NT, Placed{ nullptr, 0 });
 	for (int z = 0; z < H; z++)
 		for (int x = 0; x < W; x++) {
@@ -1540,17 +1546,35 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 				cand[ti] = &L.fits.at({ a, b })[bits];
 				continue;
 			}
-			// no picture fits these corners: the commonest group's own (reported)
-			int best = c[0], bn = 0;
-			for (int k = 0; k < 4; k++) {
-				int n = 0;
-				for (int q = 0; q < 4; q++) n += c[q] == c[k];
-				if (n > bn && !L.pure[c[k]].empty()) { bn = n; best = c[k]; }
-			}
+			// no picture fits these corners: the pictures nearest them (transitions too), a corner
+			// of its own group counting 2, one a transition away 1, so the seam fades rather
+			// than stepping as a square of one material (reported)
+			auto score = [&](const std::array<int, 4>& pc) {
+				int sc = 0;
+				for (int k = 0; k < 4; k++) sc += pc[k] == c[k] ? 2 : (pc[k] >= 0 && L.dist[pc[k]][c[k]] <= 1 ? 1 : 0);
+				return sc;
+			};
+			int bestScore = -1;
+			std::vector<Placed> bestList;
+			auto consider = [&](const std::vector<Placed>& list) {
+				for (const Placed& pl : list) {
+					const int sc = score(L.worldCorners(pl));
+					if (sc > bestScore) { bestScore = sc; bestList.clear(); }
+					if (sc == bestScore) bestList.push_back(pl);
+				}
+			};
+			std::set<int> seen;
+			for (int k = 0; k < 4; k++)
+				if (seen.insert(c[k]).second) consider(L.pure[c[k]]);
+			for (const auto& [pair, table] : L.fits)
+				if (seen.count(pair.first) || seen.count(pair.second))
+					for (const auto& list : table) consider(list);
 			std::string d = "corners";
 			for (int k = 0; k < 4; k++) d += " " + L.groups[c[k]];
-			unmatched.push_back({ x, z, "corners", d + ": no picture joins them; " + L.groups[best] + " used" });
-			cand[ti] = &L.pure[best];
+			fallbackCands.push_back(bestList);
+			const Placed& shown = bestList.empty() ? L.pure[c[0]].front() : bestList.front();
+			unmatched.push_back({ x, z, "corners", d + ": no picture joins them; the nearest used (" + shown.tex->grp->name + ", " + std::to_string(bestScore) + " of 8)" });
+			cand[ti] = &fallbackCands.back();
 		}
 	auto conflicts = [&](int x, int z, const Placed& p) {
 		int n = 0;
@@ -1775,7 +1799,7 @@ bool Paint(const std::filesystem::path& folder, const json& mapJson, uint32_t se
 		mr["moistureAbout"] = "the moisture rules read, over the playable land (water left out): set moisture limits against these";
 	}
 	mr["solver"] = { { "groups", G }, { "transitions", L.fits.size() }, { "edgeRules", L.ruleCount }, { "picturesWithCorners", L.corners.size() },
-		{ "legalisePasses", legalPasses }, { "verticesAbsorbed", absorbed }, { "verticesOpened", opened }, { "verticesChanged", changedTotal }, { "repairPasses", repairPasses }, { "rivers", riverCount },
+		{ "legalisePasses", legalPasses }, { "localRepairs", localFixed }, { "localBlocksTried", localTried }, { "verticesAbsorbed", absorbed }, { "verticesOpened", opened }, { "verticesChanged", changedTotal }, { "repairPasses", repairPasses }, { "rivers", riverCount },
 		{ "moisture", moistFromLayer ? "layers/moisture.png" : "made: distance to water and rivers, drainage, hollows" } };
 	mr["timeMs"] = { { "library", std::round(std::chrono::duration<double, std::milli>(tLib - t0).count()) },
 		{ "land", std::round(std::chrono::duration<double, std::milli>(tLand - tLib).count()) },

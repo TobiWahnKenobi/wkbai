@@ -27,7 +27,16 @@ constexpr float WATERFALL_MIN_DROP = 1.5f;
 // The water surface's height at a tile corner for a tile at this level: the mean level of the
 // water tiles around the corner at about the same level (within WATERFALL_MIN_DROP), so that
 // waters at different heights keep a clean step where they meet (the waterfall's)
+// waters at different heights keep a clean step where they meet (the waterfall's). Where a sloped
+// river (Terrain::slopedSurface) touches the corner within that, its surface there.
 float WaterLevelAtCorner(const Terrain* terrain, int x, int z, float level);
+// A water tile's corner (tx, tz: the tile, cx, cz: one of its corners): a sloped river's surface
+// there, else WaterLevelAtCorner at the tile's level
+float TileWaterCorner(const Terrain* terrain, int tx, int tz, int cx, int cz);
+
+// A sloped river tile's rapids (Terrain::slopedSurface): 0 where its surface runs gently, up to 1
+// where it is steep (white water; the water's shaders by it, through the renderer's rapids map)
+float SlopedRapids(const Terrain* terrain, int x, int z);
 
 // One fall: a run of tile edges along a line, falling the same way
 struct Waterfall {

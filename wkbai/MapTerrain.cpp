@@ -27,6 +27,8 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <sstream>
+#include <unordered_set>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -567,12 +569,21 @@ namespace {
 	}
 	// carves a channel along the course, its bed never rising from the first point to the last;
 	// only ever lowers the land. Returns the bed's heights.
+	// lakeAt (optional, per point): the level of the lake the course is on there (else below
+	// -1e29): the bed is held a little under the lake's level there instead of following its
+	// floor, and falls on from that beyond it (a river through a lake no longer cuts a trench
+	// through its rim at the floor's depth, which drained it)
 	std::vector<float> CarveChannel(const Map& m, Grid& g, const std::vector<V2>& c, float width, float depth, float bank, float bankDeg,
-		const std::vector<float>& fordWeight, uint32_t seed)
+		const std::vector<float>& fordWeight, uint32_t seed, float minBed = -1e30f, const std::vector<float>* lakeAt = nullptr, float gradeM = 0)
 	{
 		std::vector<float> bed(c.size());
 		float prev = 1e30f;
+		auto onLake = [&](size_t i) { return lakeAt && i < lakeAt->size() && (*lakeAt)[i] > -1e29f; };
 		for (size_t i = 0; i < c.size(); i++) {
+			if (onLake(i)) {
+				bed[i] = prev = (*lakeAt)[i] - depth * 0.5f;
+				continue;
+			}
 			// the ground: the lowest of the course point and its neighbours across (so a bank doesn't lift the bed)
 			float ground = g.sample(m.vx(c[i].x), m.vz(c[i].z));
 			const V2 tan = Norm(c[std::min(i + 1, c.size() - 1)] - c[i > 0 ? i - 1 : 0]);
@@ -595,8 +606,39 @@ namespace {
 			}
 			sm[i] = s / n;
 		}
-		for (size_t i = 1; i < sm.size(); i++)
-			sm[i] = std::min(sm[i], sm[i - 1] - 0.005f);
+		for (size_t i = 0; i < sm.size(); i++) {
+			if (onLake(i))
+				sm[i] = bed[i];
+			else if (i > 0)
+				sm[i] = std::min(sm[i], sm[i - 1] - 0.005f);
+		}
+		// gradeM: the bed smoothed over that distance into an even fall (land from contours, as OS
+		// Terrain 50, has terraced valley floors: the bed followed them as flats and sudden drops,
+		// a fall at every terrace); kept falling, a lake's stretch kept as it is
+		if (gradeM > 5.0f) {
+			const int k = std::max(1, (int)std::lround(gradeM / 5.0f));
+			std::vector<float> gs = sm;
+			for (int pass = 0; pass < 2; pass++) {
+				for (size_t i = 0; i < sm.size(); i++) {
+					if (onLake(i)) { gs[i] = sm[i]; continue; }
+					float s = 0; int n = 0;
+					// (the window kept even about the point: near the head, one looking only
+					// downstream had dragged a mountain stream's top far below the ground)
+					const int kk = std::min({ k, (int)i, (int)(sm.size() - 1 - i) });
+					for (int j = -kk; j <= kk; j++) {
+						const long q = (long)i + j;
+						if (q >= 0 && q < (long)sm.size() && !onLake((size_t)q)) { s += sm[q]; n++; }
+					}
+					gs[i] = s / n;
+				}
+				for (size_t i = 1; i < gs.size(); i++)
+					if (!onLake(i)) gs[i] = std::min(gs[i], gs[i - 1] - 0.005f);
+				sm = gs;
+			}
+		}
+		// never below minBed (a river reaching the sea: its bed stays above the sea, which would
+		// otherwise run up the channel into the valley)
+		for (float& b : sm) b = std::max(b, minBed);
 		bed = sm;
 
 		float x0 = 1e30f, x1 = -1e30f, z0 = 1e30f, z1 = -1e30f;
@@ -605,22 +647,40 @@ namespace {
 		const int vx0 = std::max(0, (int)m.vx(x0 - reach)), vx1 = std::min(m.gw() - 1, (int)m.vx(x1 + reach) + 1);
 		const int vz0 = std::max(0, (int)m.vz(z0 - reach)), vz1 = std::min(m.gh() - 1, (int)m.vz(z1 + reach) + 1);
 		const float tanBank = std::tan(bankDeg * PI / 180), tanFord = std::tan(7.0f * PI / 180);
+		// the nearest point of the course per vertex within reach of it: each piece of the course
+		// looks only at the vertices near it (a long course on a large map: millions of vertices
+		// times thousands of pieces otherwise)
+		const int bw = vx1 - vx0 + 1, bh = vz1 - vz0 + 1;
+		std::vector<float> nearD((size_t)bw * bh, 1e30f), nearB((size_t)bw * bh, 0), nearF((size_t)bw * bh, 0);
+		for (size_t i = 0; i + 1 < c.size(); i++) {
+			const V2 a = c[i], ab = c[i + 1] - a;
+			const int sx0 = std::max(vx0, (int)m.vx(std::min(a.x, c[i + 1].x) - reach)), sx1 = std::min(vx1, (int)m.vx(std::max(a.x, c[i + 1].x) + reach) + 1);
+			const int sz0 = std::max(vz0, (int)m.vz(std::min(a.z, c[i + 1].z) - reach)), sz1 = std::min(vz1, (int)m.vz(std::max(a.z, c[i + 1].z) + reach) + 1);
+			for (int z = sz0; z <= sz1; z++)
+				for (int x = sx0; x <= sx1; x++) {
+					const V2 p = m.pos(x, z);
+					const float t = std::clamp(Dot(p - a, ab) / std::max(Dot(ab, ab), 1e-9f), 0.0f, 1.0f);
+					const float d = Len(p - (a + ab * t));
+					const size_t k = (size_t)(z - vz0) * bw + (x - vx0);
+					if (d < nearD[k]) {
+						nearD[k] = d;
+						nearB[k] = Lerp(bed[i], bed[i + 1], t);
+						nearF[k] = fordWeight.empty() ? 0 : Lerp(fordWeight[i], fordWeight[i + 1], t);
+					}
+				}
+		}
 		for (int z = vz0; z <= vz1; z++)
 			for (int x = vx0; x <= vx1; x++) {
 				const V2 p = m.pos(x, z);
-				// the nearest point of the course
-				float bd = 1e30f, bb = 0, bf = 0;
-				for (size_t i = 0; i + 1 < c.size(); i++) {
-					const V2 a = c[i], ab = c[i + 1] - a;
-					const float t = std::clamp(Dot(p - a, ab) / std::max(Dot(ab, ab), 1e-9f), 0.0f, 1.0f);
-					const float d = Len(p - (a + ab * t));
-					if (d < bd) {
-						bd = d;
-						bb = Lerp(bed[i], bed[i + 1], t);
-						bf = fordWeight.empty() ? 0 : Lerp(fordWeight[i], fordWeight[i + 1], t);
-					}
-				}
-				const float hw = width / 2 * (1 + 0.2f * Noise(p.x / 60.0f, p.z / 60.0f, seed + 9) + 0.35f * Noise(p.x / 170.0f, p.z / 170.0f, seed + 10));
+				const size_t k = (size_t)(z - vz0) * bw + (x - vx0);
+				if (nearD[k] > reach) continue;
+				const float bd = nearD[k], bb = nearB[k], bf = nearF[k];
+				float hw = width / 2 * (1 + 0.2f * Noise(p.x / 60.0f, p.z / 60.0f, seed + 9) + 0.35f * Noise(p.x / 170.0f, p.z / 170.0f, seed + 10));
+				// a river with water (lakeAt given): its floor at least a tile wide, so that a row of
+				// vertices always lies under its water (narrow stretches, the width's noise down to
+				// half, had left the drawn ground closing over the water: the stream in pieces)
+				if (lakeAt)
+					hw = std::max(hw, 5.0f);
 				float prof;
 				if (bd < hw)
 					prof = bb + depth * 0.3f * (bd / hw) * (bd / hw);
@@ -636,7 +696,11 @@ namespace {
 					const float pf = bb + 0.8f * std::min(1.0f, bd / fw) + std::max(0.0f, bd - fw) * tanFord;
 					prof = Lerp(prof, std::min(prof, pf), bf * (1 - Smooth(fw + 15, fw + 60, bd)));
 				}
-				g.at(x, z) = std::min(g.at(x, z), prof);
+				// faded out towards the reach (the banks rise at bankDeg out to it: on land steeper than
+				// that, a mountainside next to a glen, the cut had stopped dead at the reach, a cliff)
+				const float fade = 1 - Smooth(reach * 0.6f, reach, bd);
+				if (prof < g.at(x, z))
+					g.at(x, z) += (prof - g.at(x, z)) * fade;
 			}
 		return bed;
 	}
@@ -920,6 +984,7 @@ namespace {
 		std::vector<float> v;
 		std::vector<uint8_t> valid;
 		bool geo = false;
+		bool metric = false; // lon0/lat0/dlon/dlat in a grid's metres (eastings, northings), not degrees
 		double lon0 = 0, lat0 = 0, dlon = 0, dlat = 0; // pixel (0, 0)'s centre and the step to the next pixel
 		std::string file, format;
 		float at(int x, int y) const { return v[(size_t)y * w + x]; }
@@ -1232,6 +1297,50 @@ namespace {
 		}
 		return true;
 	}
+	// An Esri ASCII grid (OS Terrain 50's .asc tiles: ncols, nrows, xllcorner, yllcorner, cellsize,
+	// optional NODATA_value, then the rows from the north): its position in the grid's own metres
+	// (British National Grid for OS data), so lon0/lat0 are eastings and northings here (r.metric)
+	bool LoadAsc(const fs::path& p, Raster& r, std::string& error)
+	{
+		std::string data;
+		if (!ReadAll(p, data)) { error = "can't read " + PathToUtf8(p); return false; }
+		std::istringstream in(data);
+		double xll = 0, yll = 0, cs = 0, nodata = -1e30;
+		bool centre = false;
+		std::string key;
+		for (int k = 0; k < 6; k++) {
+			const std::streampos at = in.tellg();
+			if (!(in >> key)) break;
+			const std::string lk = Lower(key);
+			if (lk == "ncols") in >> r.w;
+			else if (lk == "nrows") in >> r.h;
+			else if (lk == "xllcorner") in >> xll;
+			else if (lk == "yllcorner") in >> yll;
+			else if (lk == "xllcenter") { in >> xll; centre = true; }
+			else if (lk == "yllcenter") { in >> yll; centre = true; }
+			else if (lk == "cellsize") in >> cs;
+			else if (lk == "nodata_value") in >> nodata;
+			else { in.seekg(at); break; }
+		}
+		if (r.w <= 0 || r.h <= 0 || cs <= 0) { error = PathToUtf8(p) + ": not an ASCII grid"; return false; }
+		r.v.resize((size_t)r.w * r.h);
+		r.valid.assign(r.v.size(), 1);
+		for (size_t i = 0; i < r.v.size(); i++) {
+			double v = 0;
+			if (!(in >> v)) { error = PathToUtf8(p) + ": the grid ends early"; return false; }
+			r.v[i] = (float)v;
+			if (v == nodata) r.valid[i] = 0;
+		}
+		const double half = centre ? 0 : cs / 2;
+		r.geo = true;
+		r.metric = true;
+		r.lon0 = xll + half;
+		r.lat0 = yll + half + (r.h - 1) * cs;
+		r.dlon = cs;
+		r.dlat = -cs;
+		r.format = "asc";
+		return true;
+	}
 	bool LoadRaster(const fs::path& p, const json& o, Raster& r, std::string& error)
 	{
 		const std::string ext = Lower(p.extension().string());
@@ -1239,6 +1348,7 @@ namespace {
 		if (!fs::exists(p)) { error = "no file " + PathToUtf8(p); return false; }
 		if (ext == ".png") return LoadPng(p, r, error);
 		if (ext == ".hgt") return LoadHgt(p, r, error);
+		if (ext == ".asc") return LoadAsc(p, r, error);
 		if (ext == ".tif" || ext == ".tiff") return LoadTiff(p, r, error);
 		if (ext == ".raw" || ext == ".r16" || ext == ".r8" || ext == ".bin") {
 			json ro = o.value("raw", json::object());
@@ -1409,6 +1519,10 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	json featRep = json::array();
 	// the rivers as carved (their course, width and bed), for the materials (MapMaterials.h)
 	json riversGen = json::array();
+	// rivers with water ("water": true): their courses, carved beds and sizes, made into sloped
+	// waterways (WaterDesign::Waterway::levels) once every channel is cut
+	struct WetRiver { const Feature* f; std::vector<V2> c; std::vector<float> bed; float width, depth; std::vector<float> lakeAt; };
+	std::vector<WetRiver> wet;
 	for (const Feature& f : feats) featRep.push_back({ { "index", f.index }, { "kind", f.kind } });
 	auto rep = [&](const Feature& f) -> json& {
 		for (json& r : featRep) if (r["index"] == f.index) return r;
@@ -1550,6 +1664,13 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 
 	// 4. the forms set or cut
 	t1 = std::chrono::steady_clock::now();
+	// what the rivers' troughs and channels took off the land, per vertex (for the lakes' rims below)
+	Grid riverCut;
+	riverCut.init(gw, gh, 0.0f);
+	int lakeRimsMended = 0;
+	// per vertex the level of the lake a kept rim holds (the lowering at the rivers' lips stops there)
+	Grid rimHold;
+	rimHold.init(gw, gh, -1e30f);
 	for (const Feature& f : feats) {
 		if (f.kind == "plateau") {
 			Site st;
@@ -1668,12 +1789,19 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			s.maxDeg = Num(f.j, "maxSlopeDeg", 14); s.reach = Num(f.j, "reach", 200); s.feature = f.index;
 			passes.push_back(s);
 		}
-		else if (f.kind == "river") {
+		else if (f.kind == "river" && f.j.value("trough", true)) {
 			// the broad trough the river runs in, before the erosion, so the drainage finds it
+			// ("trough": false for rivers on real land, which has its valleys already: the trough's
+			// gentle sides had shaved the mountains beside the glens down to its own height)
 			const float width = Num(f.j, "width", 20);
 			const float vw = Num(f.j, "valleyWidth", std::max(width * 4, 70.0f)), vd = Num(f.j, "valleyDepth", Num(f.j, "depth", 3) * 1.5f);
 			const std::vector<V2> c = Course(f, width);
-			CarveChannel(m, g, c, vw * 0.3f, vd, vw * 0.5f, 9, {}, f.seed + 40);
+			// (no deeper than the river's own lowest bed, minBed: inland, troughs leaving the map
+			// had gone 10 m below the land and the whole map was raised to make up for it)
+			const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : -1e30f;
+			const Grid before = g;
+			CarveChannel(m, g, c, vw * 0.3f, vd, vw * 0.5f, 9, {}, f.seed + 40, minBed);
+			for (size_t i = 0; i < g.v.size(); i++) riverCut.v[i] += before.v[i] - g.v[i];
 		}
 	}
 	for (const Feature& f : feats) {
@@ -1802,10 +1930,94 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 				fr["passPaths"].push_back({ { "way", WayJson(way) }, { "saddleM", saddle } });
 			}
 	}
+	// The lakes on the land as the rivers find it (for the rivers with water: their beds and water
+	// through a lake at its level): per vertex the highest lake over it, flooded from each lake's
+	// point as the game floods (Terrain::floodfillWater: from tile to tile across an edge with a
+	// corner below the level), its tiles' corners below the level (the sea, the basins' lakes,
+	// water.json's own lakes: those the generator didn't make, at their level less the last
+	// run's raise)
+	std::vector<float> lakeOn;
+	auto floodLakes = [&]() {
+		lakeOn.assign(g.v.size(), -1e30f);
+		std::vector<std::array<float, 3>> points; // vertex x, z, level
+		if (hasSea) {
+			std::vector<SeaBody> bodies;
+			SeaTiles(m, g, sea, 100, &bodies);
+			for (const SeaBody& b : bodies) points.push_back({ (float)b.deepX, (float)b.deepZ, sea });
+		}
+		for (const Feature& f : feats)
+			if (f.kind == "basin" && f.j.contains("water") && f.j["water"].is_number()) {
+				const V2 c = f.shape.centre();
+				points.push_back({ m.vx(c.x), m.vz(c.z), f.j["water"].get<float>() });
+			}
+		{
+			json wj0, gen0 = m.raw.value("terrain", json::object()).value("generated", json::object());
+			const float raised0 = gen0.value("raisedByM", 0.0f);
+			if (ReadJson(folder / "water.json", wj0) && wj0.is_object())
+				for (const json& l : wj0.value("lakes", json::array())) {
+					if (!l.is_array() || l.size() < 3) continue;
+					bool mine = false;
+					for (const json& p : gen0.value("lakes", json::array()))
+						if (p.is_array() && p.size() >= 3 && std::abs(l[0].get<float>() - p[0].get<float>()) < 0.05f
+							&& std::abs(l[1].get<float>() - p[1].get<float>()) < 0.05f && std::abs(l[2].get<float>() - p[2].get<float>()) < 0.05f)
+							mine = true;
+					if (!mine) points.push_back({ l[0].get<float>() / TILE, l[2].get<float>() / TILE, l[1].get<float>() - raised0 });
+				}
+		}
+		std::vector<float> tileLake((size_t)m.W * m.H, -1e30f);
+		for (const auto& p : points) {
+			const int sx = std::clamp((int)std::floor(p[0]), 0, m.W - 1), sz = std::clamp((int)std::floor(p[1]), 0, m.H - 1);
+			// (the heights as heights.png keeps them, in 256ths of the scale, as the game floods: lakes
+			// from elevation data lie on the data's flat water, the ground at their level, and in the
+			// unrounded heights a lake had run out over land a thousandth of a metre below it)
+			const float L = p[2];
+			auto q = [&](float v) { return std::round(v / m.scale * 256.0f) / 256.0f * m.scale; };
+			auto lowest = [&](int x, int z) { return std::min({ q(g.at(x, z)), q(g.at(x + 1, z)), q(g.at(x, z + 1)), q(g.at(x + 1, z + 1)) }); };
+			if (lowest(sx, sz) >= L || tileLake[(size_t)sz * m.W + sx] >= L) continue;
+			std::vector<int> queue = { sz * m.W + sx };
+			tileLake[queue[0]] = L;
+			for (size_t qi = 0; qi < queue.size(); qi++) {
+				const int x = queue[qi] % m.W, z = queue[qi] / m.W;
+				const int nb[4][6] = { { x + 1, z, x + 1, z, x + 1, z + 1 }, { x - 1, z, x, z, x, z + 1 },
+					{ x, z + 1, x, z + 1, x + 1, z + 1 }, { x, z - 1, x, z, x + 1, z } };
+				for (const auto& n : nb) {
+					if (n[0] < 0 || n[1] < 0 || n[0] >= m.W || n[1] >= m.H) continue;
+					const size_t t = (size_t)n[1] * m.W + n[0];
+					if (tileLake[t] >= L || std::min(q(g.at(n[2], n[3])), q(g.at(n[4], n[5]))) >= L) continue;
+					tileLake[t] = L;
+					queue.push_back((int)t);
+				}
+			}
+			printf("Terrain: the rivers' lake at tile (%d, %d), level %.2f: %zu tiles\n", sx, sz, L, queue.size());
+		}
+		for (int z = 0; z < m.H; z++)
+			for (int x = 0; x < m.W; x++) {
+				const float L = tileLake[(size_t)z * m.W + x];
+				if (L < -1e29f) continue;
+				for (int c = 0; c < 4; c++) {
+					const size_t k = (size_t)(z + (c >> 1)) * m.gw() + x + (c & 1);
+					if (g.v[k] <= L + 0.01f) lakeOn[k] = std::max(lakeOn[k], L);
+				}
+			}
+	};
+	bool lakesFlooded = false;
 	for (const Feature& f : feats) {
 		if (f.kind != "river") continue;
 		const float width = Num(f.j, "width", 20), depth = Num(f.j, "depth", 3);
 		const std::vector<V2> c = Course(f, width);
+		// a river with water: the lake under each point of its course (else none)
+		std::vector<float> lakeAt;
+		if (f.j.value("water", false)) {
+			if (!lakesFlooded) {
+				floodLakes();
+				lakesFlooded = true;
+			}
+			lakeAt.assign(c.size(), -1e30f);
+			for (size_t i = 0; i < c.size(); i++) {
+				const int x = std::clamp((int)std::lround(m.vx(c[i].x)), 0, m.gw() - 1), z = std::clamp((int)std::lround(m.vz(c[i].z)), 0, m.gh() - 1);
+				lakeAt[i] = lakeOn[(size_t)z * m.gw() + x];
+			}
+		}
 		std::vector<float> fw(c.size(), 0.0f);
 		const int fords = std::max(0, (int)Num(f.j, "fords", 0));
 		json fr = json::array();
@@ -1817,7 +2029,11 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 			}
 			fr.push_back({ c[at].x, c[at].z });
 		}
-		const std::vector<float> bed = CarveChannel(m, g, c, width, depth, Num(f.j, "bank", width * 1.5f), Num(f.j, "bankDeg", 32), fw, f.seed + 41);
+		const float minBed = f.j.contains("minBed") && f.j["minBed"].is_number() ? f.j["minBed"].get<float>() : hasSea ? sea + 0.4f : -1e30f; // (above the sea: it never runs up the channel)
+		const Grid beforeChannel = g;
+		const std::vector<float> bed = CarveChannel(m, g, c, width, depth, Num(f.j, "bank", width * 1.5f), Num(f.j, "bankDeg", 32), fw, f.seed + 41, minBed,
+			lakeAt.empty() ? nullptr : &lakeAt, Num(f.j, "grade", 0));
+		for (size_t i = 0; i < g.v.size(); i++) riverCut.v[i] += beforeChannel.v[i] - g.v[i];
 		float maxRise = -1e30f;
 		for (size_t i = 1; i < bed.size(); i++) maxRise = std::max(maxRise, bed[i] - bed[i - 1]);
 		json& r = rep(f);
@@ -1830,6 +2046,207 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		for (size_t i = 0; i < c.size(); i += 2)
 			course.push_back({ std::round(c[i].x * 10) / 10, std::round(c[i].z * 10) / 10, std::round(bed[i] * 100) / 100 });
 		riversGen.push_back({ { "id", f.j.value("id", "") }, { "width", width }, { "course", course }, { "fords", fr } });
+		if (f.j.value("water", false))
+			wet.push_back({ &f, c, bed, width, depth, lakeAt });
+	}
+	// The lakes' rims kept: water.json's own lakes (lakes found on the land, not the generator's),
+	// each flooded from its point over the land as cut (8-connected below its level); where the flood
+	// would run out through land a river's trough or channel cut below the level, that land gets back
+	// what the river took (a lake left behind a low bar at its outlet; the river's water falls over
+	// it). Done here, before the rivers' water, so their water and the lakes see the land as it stays
+	// (mended afterwards, the rivers' water had stood above the land the lake no longer reached)
+	{
+		std::vector<std::array<float, 3>> own;
+		json wj0, gen0 = m.raw.value("terrain", json::object()).value("generated", json::object());
+		const float raised0 = gen0.value("raisedByM", 0.0f);
+		if (ReadJson(folder / "water.json", wj0) && wj0.is_object())
+			for (const json& l : wj0.value("lakes", json::array())) {
+				if (!l.is_array() || l.size() < 3) continue;
+				bool mine = false;
+				for (const json& p : gen0.value("lakes", json::array()))
+					if (p.is_array() && p.size() >= 3 && std::abs(l[0].get<float>() - p[0].get<float>()) < 0.05f
+						&& std::abs(l[1].get<float>() - p[1].get<float>()) < 0.05f && std::abs(l[2].get<float>() - p[2].get<float>()) < 0.05f)
+						mine = true;
+				if (!mine && (!hasSea || std::abs(l[1].get<float>() - raised0 - sea) > 0.01f))
+					own.push_back({ l[0].get<float>() / TILE, l[2].get<float>() / TILE, l[1].get<float>() - raised0 });
+			}
+		int mended = 0;
+		const int gw2 = m.gw(), gh2 = m.gh();
+		for (const auto& p : own) {
+			const float L = p[2];
+			// (in the heights as heights.png keeps them, as the game floods: a rim a hair above the
+			// level could round below it; a rim the river took within 5 cm of the level is put back
+			// a centimetre above it)
+			auto q = [&](float v) { return std::round(v / m.scale * 256.0f) / 256.0f * m.scale; };
+			for (int round = 0; round < 20; round++) {
+				// the seed: the lowest of the tile's corners
+				int sx = std::clamp((int)std::floor(p[0]), 0, gw2 - 2), sz = std::clamp((int)std::floor(p[1]), 0, gh2 - 2);
+				int seed = -1;
+				for (int c = 0; c < 4; c++) {
+					const int x = sx + (c & 1), z = sz + (c >> 1);
+					if (q(g.at(x, z)) < L && (seed < 0 || g.at(x, z) < g.v[seed])) seed = z * gw2 + x;
+				}
+				if (seed < 0) break;
+				std::vector<uint8_t> seen(g.v.size(), 0);
+				std::vector<int> stack = { seed }, breach;
+				seen[seed] = 1;
+				while (!stack.empty()) {
+					const int k = stack.back();
+					stack.pop_back();
+					const int x = k % gw2, z = k / gw2;
+					for (int dz = -1; dz <= 1; dz++)
+						for (int dx = -1; dx <= 1; dx++) {
+							const int nx = x + dx, nz = z + dz;
+							if (nx < 0 || nz < 0 || nx >= gw2 || nz >= gh2) continue;
+							const int nk = nz * gw2 + nx;
+							if (seen[nk] || q(g.v[nk]) >= L) continue;
+							seen[nk] = 1;
+							if (riverCut.v[nk] > 0 && g.v[nk] + riverCut.v[nk] >= L - 0.05f) breach.push_back(nk);
+							else stack.push_back(nk);
+						}
+				}
+				if (breach.empty()) break;
+				for (int k : breach) {
+					g.v[k] = std::max(g.v[k] + riverCut.v[k], L + m.scale / 256.0f);
+					riverCut.v[k] = 0;
+					rimHold.v[k] = std::max(rimHold.v[k], L + m.scale / 256.0f);
+					mended++;
+				}
+			}
+		}
+		if (mended) printf("Terrain: lake rims kept, %d vertices given back\n", mended);
+		lakeRimsMended = mended;
+	}
+	// Their water: a sloped surface along the course (the game's sloped rivers), its height at
+	// each point the bed there (as carved, or lower where a later channel cut it) plus the water's
+	// depth ("waterDepth", m; 0.45 of the channel's depth), thinner where the bed runs steeply
+	// (fast water: a third at a slope of one in two, at least 0.25 m: rapids, cascades and falls hug their bed),
+	// smoothed a little and never rising downstream. Heights before the raise below.
+	struct WetWay { const Feature* f; std::vector<V2> c; std::vector<float> level; float width; };
+	std::vector<WetWay> wetWays;
+	// the lakes and the sea as they flood the land now, every channel cut and the lakes' rims kept:
+	// the banks below, and each river's stretches on a lake again (found before its channel was cut,
+	// a lake had reached along troughs its kept rim now closes, and the river's water there had
+	// stayed at the lake's level, metres above the land)
+	if (!wet.empty()) {
+		floodLakes();
+		for (WetRiver& wr : wet)
+			if (!wr.lakeAt.empty())
+				for (size_t i = 0; i < wr.c.size() && i < wr.lakeAt.size(); i++) {
+					const int x = std::clamp((int)std::lround(m.vx(wr.c[i].x)), 0, m.gw() - 1), z = std::clamp((int)std::lround(m.vz(wr.c[i].z)), 0, m.gh() - 1);
+					wr.lakeAt[i] = lakeOn[(size_t)z * m.gw() + x];
+				}
+	}
+	for (const WetRiver& wr : wet) {
+		const size_t n = wr.c.size();
+		if (n < 2) continue;
+		const float wd = Num(wr.f->j, "waterDepth", wr.depth * 0.45f);
+		std::vector<float> bed(n);
+		for (size_t i = 0; i < n; i++)
+			bed[i] = (i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) ? wr.bed[i] : std::min(wr.bed[i], g.sample(m.vx(wr.c[i].x), m.vz(wr.c[i].z)));
+		for (size_t i = 1; i < n; i++)
+			if (!(i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f) && !(wr.lakeAt.size() > i - 1 && wr.lakeAt[i - 1] > -1e29f))
+				bed[i] = std::min(bed[i], bed[i - 1]);
+		std::vector<float> level(n);
+		for (size_t i = 0; i < n; i++) {
+			const size_t a = i >= 3 ? i - 3 : 0, b = std::min(n - 1, i + 3);
+			const float slope = (bed[a] - bed[b]) / std::max((float)(b - a) * 5.0f, 1.0f);
+			level[i] = bed[i] + std::max(0.25f, wd / (1.0f + 4.0f * std::max(slope, 0.0f)));
+		}
+		auto lakeLevel = [&](size_t i) { return i < wr.lakeAt.size() && wr.lakeAt[i] > -1e29f ? wr.lakeAt[i] : -1e30f; };
+		std::vector<float> sm(n);
+		for (size_t i = 0; i < n; i++) {
+			float sum = 0; int k = 0;
+			for (long j = (long)i - 2; j <= (long)i + 2; j++)
+				if (j >= 0 && j < (long)n) { sum += level[j]; k++; }
+			// (only ever shallower than before: averaged across a steep drop the water had stood
+			// above the land at its foot)
+			sm[i] = std::max(std::min(sum / k, level[i]), bed[i] + 0.12f);
+		}
+		for (size_t i = 0; i < n; i++) {
+			if (lakeLevel(i) > -1e29f)
+				sm[i] = lakeLevel(i); // on a lake: its level
+			else if (i > 0)
+				sm[i] = std::min(sm[i], sm[i - 1]);
+		}
+		if (hasSea)
+			for (float& l : sm) l = std::max(l, sea);
+		// never below the lake it runs into: the stretch above a lake (its channel cut below the
+		// lake's level near the shore) at the lake's level, as the lake reaches up it
+		for (size_t i = n - 1; i-- > 0;)
+			sm[i] = std::max(sm[i], sm[i + 1]);
+		// never above the land beside the channel (the lower bank, half the width and 2 m out, plus
+		// 0.3 m; a bank under a lake or the sea: its surface, as the land now floods): the level of a
+		// lake or the sea carried upstream had held rivers 2-12 m above land lower than it but cut
+		// off from it (behind a lake's rim, behind the coast), a raised ribbon; then falling again
+		{
+			const float out = wr.width / 2 + 2;
+			for (size_t i = 0; i < n; i++) {
+				if (lakeLevel(i) > -1e29f) continue;
+				const V2 tan = Norm(wr.c[std::min(i + 1, n - 1)] - wr.c[i > 0 ? i - 1 : 0]);
+				const V2 a = wr.c[i] + Perp(tan) * out, b = wr.c[i] - Perp(tan) * out;
+				// (a bank under a lake: the lake's surface)
+				auto bankAt = [&](V2 p) {
+					const int vx = std::clamp((int)std::lround(m.vx(p.x)), 0, m.gw() - 1), vz = std::clamp((int)std::lround(m.vz(p.z)), 0, m.gh() - 1);
+					const float lk = lakeOn.empty() ? -1e30f : lakeOn[(size_t)vz * m.gw() + vx];
+					return std::max(g.sample(m.vx(p.x), m.vz(p.z)), lk);
+				};
+				const float bankLow = std::min(bankAt(a), bankAt(b));
+				sm[i] = std::min(sm[i], std::max(bankLow + 0.3f, bed[i] + 0.12f));
+			}
+			for (size_t i = 1; i < n; i++)
+				if (lakeLevel(i) < -1e29f)
+					sm[i] = std::min(sm[i], sm[i - 1]);
+		}
+		// The ground as the game draws it (Terrain::getSmoothHeight, a Catmull-Rom spline through the
+		// vertices) bulges above the vertices where the land bends, most at a fall's lip, and rose
+		// through the water there: the vertices round such a place lowered until it lies 0.15 m
+		// under the water (the water wears its lip down), checked every metre of the course
+		{
+			auto vert = [&](int x, int z) { return g.at(std::clamp(x, 0, m.gw() - 1), std::clamp(z, 0, m.gh() - 1)); };
+			auto spline = [](float a, float b, float c, float d, float t) {
+				return 0.5f * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (3 * b - a - 3 * c + d) * t * t * t);
+			};
+			auto smoothAt = [&](float px, float pz) {
+				const float gx = m.vx(px), gz = m.vz(pz);
+				const int ix = (int)std::floor(gx), iz = (int)std::floor(gz);
+				const float fx = gx - ix, fz = gz - iz;
+				float row[4];
+				for (int k = -1; k <= 2; k++)
+					row[k + 1] = spline(vert(ix - 1, iz + k), vert(ix, iz + k), vert(ix + 1, iz + k), vert(ix + 2, iz + k), fx);
+				return spline(row[0], row[1], row[2], row[3], fz);
+			};
+			int lowered = 0;
+			for (int pass = 0; pass < 4; pass++)
+				for (size_t i = 0; i + 1 < n; i++)
+					for (int s = 0; s < 5; s++) {
+						const float t = s / 5.0f;
+						const V2 p = wr.c[i] + (wr.c[i + 1] - wr.c[i]) * t;
+						const float want = sm[i] + (sm[i + 1] - sm[i]) * t - 0.15f, over = smoothAt(p.x, p.z) - want;
+						if (over <= 0.0f)
+							continue;
+						const int x0 = (int)std::floor(m.vx(p.x)), z0 = (int)std::floor(m.vz(p.z));
+						// never below half a metre under this river's own carved bed (where rivers share
+						// a course, the lowering had fed on itself: a pit 11 m deep)
+						const float floorM = wr.bed[i] + (wr.bed[i + 1] - wr.bed[i]) * t - 0.5f;
+						for (int dz = 0; dz <= 1; dz++)
+							for (int dx = 0; dx <= 1; dx++) {
+								const int x = x0 + dx, z = z0 + dz;
+								if (x >= 0 && z >= 0 && x < m.gw() && z < m.gh())
+									g.at(x, z) = std::max(g.at(x, z) - over * 0.7f, std::min(g.at(x, z), std::max(floorM, rimHold.at(x, z))));
+							}
+						lowered++;
+					}
+			json& rr = rep(*wr.f);
+			rr["waterLipsLowered"] = lowered;
+		}
+		wetWays.push_back({ wr.f, wr.c, sm, wr.width });
+		json& r = rep(*wr.f);
+		r["waterFromM"] = sm.front();
+		r["waterToM"] = sm.back();
+		float steepest = 0;
+		for (size_t i = 1; i < n; i++) steepest = std::max(steepest, (sm[i - 1] - sm[i]) / 5.0f);
+		r["waterSteepest"] = std::round(steepest * 1000) / 1000;
 	}
 	timing["details"] = Ms(t1);
 
@@ -1894,10 +2311,22 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 	gen["lakes"] = lakesJ;
 	gen["seaLevel"] = hasSea ? json(sea) : json();
 	gen["raisedByM"] = raisedBy;
+	if (lakeRimsMended) gen["lakeRimsKept"] = lakeRimsMended;
 	for (json& rv : riversGen)
 		for (json& pt : rv["course"])
 			pt[2] = pt[2].get<float>() + raisedBy;
 	gen["rivers"] = riversGen;
+	// the sloped waterways, every second point of the course (10 m apart), the last one too, and
+	// every point where the water's fall bends (at a fall's lip and foot: a line over the next
+	// points cut the corner, and the water ran under the ground at the lip)
+	json riverWays = json::array();
+	for (const WetWay& w : wetWays) {
+		json pts = json::array();
+		for (size_t i = 0; i < w.c.size(); i++)
+			if (i % 2 == 0 || i + 1 == w.c.size() || std::abs(w.level[i] - (w.level[i - 1] + w.level[i + 1]) * 0.5f) > 0.03f)
+				pts.push_back({ std::round(w.c[i].x * 10) / 10, std::round(w.c[i].z * 10) / 10, std::round((w.level[i] + raisedBy) * 1000) / 1000 });
+		riverWays.push_back({ { "points", pts }, { "width", w.width }, { "by", "terrain:" + w.f->j.value("id", std::to_string(w.f->index)) } });
+	}
 	json terrainOut = raw.value("terrain", json::object());
 	if (!terrainOut.is_object()) terrainOut = json::object();
 	terrainOut["generated"] = gen;
@@ -1920,7 +2349,16 @@ bool Generate(const fs::path& folder, json& out, std::string& error, uint32_t se
 		}
 		for (auto& l : lakes) kept.push_back({ l[0], l[1], l[2], 0 });
 		wj["lakes"] = kept;
-		if (!lakes.empty() || !prevGen.value("lakes", json::array()).empty() || fs::exists(folder / "water.json"))
+		// the waterways: the generator's own replaced ("by": "terrain:<id>"), the others kept
+		json ways = json::array();
+		for (const json& w : wj.value("waterways", json::array()))
+			if (!(w.is_object() && w.value("by", "").rfind("terrain:", 0) == 0)) ways.push_back(w);
+		for (const json& w : riverWays) ways.push_back(w);
+		if (!ways.empty() || wj.contains("waterways")) {
+			wj["waterways"] = ways;
+			if (!wj.contains("tiles")) wj["tiles"] = { m.W, m.H };
+		}
+		if (!lakes.empty() || !riverWays.empty() || !prevGen.value("lakes", json::array()).empty() || fs::exists(folder / "water.json"))
 			WriteAll(folder / "water.json", wj.dump(1) + "\n");
 	}
 
@@ -2150,6 +2588,8 @@ namespace {
 	const char* COPERNICUS_LICENCE = "Copernicus DEM licence (License-COPDEM-30): free of charge for the public, with attribution; modified data credited as produced using Copernicus WorldDEM-30";
 	const char* COPERNICUS_ATTRIBUTION = "produced using Copernicus WorldDEM-30 \xC2\xA9 DLR e.V. 2010-2014 and \xC2\xA9 Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved";
 	const char* SRTM_LICENCE = "public domain (NASA/USGS SRTM)";
+	const char* OSGB_LICENCE = "Open Government Licence v3.0 (www.nationalarchives.gov.uk/doc/open-government-licence/version/3/): free for any use, with attribution";
+	const char* OSGB_ATTRIBUTION = "Contains OS data \xC2\xA9 Crown copyright and database right 2026 (OS Terrain 50)";
 	const char* SRTM_ATTRIBUTION = "NASA Shuttle Radar Topography Mission (SRTM) Global 1 arc second, NASA JPL / USGS EROS";
 }
 
@@ -2214,14 +2654,25 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	Map m;
 	if (!ReadMap(folder, m, error))
 		return false;
-	Area a;
-	if (!AreaOf(o, a, error))
-		return false;
 	const std::string src = Lower(o.value("source", "copernicus"));
+	// OS Terrain 50 (and any Esri ASCII grid in metres): the area as British National Grid metres
+	// "bng": [east0, north0, east1, north1] (or "bngKm"), the tiles in "files"
+	const bool metric = src == "os-terrain-50" || src == "osgb" || src == "asc";
+	Area a;
+	if (metric) {
+		const json& b = o.contains("bng") ? o["bng"] : o.value("bngKm", json());
+		const double f = o.contains("bng") ? 1.0 : 1000.0;
+		if (!b.is_array() || b.size() < 4) { error = "elevation (os-terrain-50): \"bng\" [east0, north0, east1, north1] metres (or \"bngKm\") and \"files\" (the .asc tiles)"; return false; }
+		a.w = b[0].get<double>() * f; a.s = b[1].get<double>() * f; a.e = b[2].get<double>() * f; a.n = b[3].get<double>() * f;
+	}
+	else if (!AreaOf(o, a, error))
+		return false;
+	auto kmEWOf = [&](const Area& q) { return metric ? (q.e - q.w) / 1000.0 : KmEW(q); };
+	auto kmNSOf = [&](const Area& q) { return metric ? (q.n - q.s) / 1000.0 : KmNS(q); };
 	// the map's shape: the area cut to the playable area's aspect (keepAspect), centred
 	const double mapAspect = (double)(m.W - 2 * m.E) / (m.H - 2 * m.E);
 	if (o.value("keepAspect", true)) {
-		const double ew = KmEW(a), ns = KmNS(a);
+		const double ew = kmEWOf(a), ns = kmNSOf(a);
 		if (ew / ns > mapAspect) {
 			const double keep = ns * mapAspect / ew, mid = (a.w + a.e) / 2, half = (a.e - a.w) / 2 * keep;
 			a.w = mid - half; a.e = mid + half;
@@ -2231,15 +2682,28 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 			a.s = mid - half; a.n = mid + half;
 		}
 	}
-	json tilesOpt = o;
-	tilesOpt["bbox"] = { a.s, a.w, a.n, a.e };
-	tilesOpt.erase("centre");
-	const json tiles = TilesFor(tilesOpt, folder);
+	json tiles;
 	json missing = json::array();
 	std::vector<std::string> files;
-	for (const json& t : tiles["tiles"]) {
-		if (t["given"].is_string()) files.push_back(t["given"].get<std::string>());
-		else missing.push_back(t);
+	if (metric) {
+		// the files as given (OS Terrain 50's tiles are named by the grid: SW53.asc)
+		tiles = { { "tiles", json::array() } };
+		for (const json& f : o.value("files", json::array()))
+			if (f.is_string()) {
+				files.push_back(f.get<std::string>());
+				tiles["tiles"].push_back({ { "tile", PathToUtf8(PathFromUtf8(f.get<std::string>()).stem()) }, { "source", "OS Terrain 50 (Ordnance Survey, 50 m grid)" }, { "given", f } });
+			}
+		if (files.empty()) { error = "elevation (os-terrain-50): no \"files\" (the .asc tiles over the area)"; return false; }
+	}
+	else {
+		json tilesOpt = o;
+		tilesOpt["bbox"] = { a.s, a.w, a.n, a.e };
+		tilesOpt.erase("centre");
+		tiles = TilesFor(tilesOpt, folder);
+		for (const json& t : tiles["tiles"]) {
+			if (t["given"].is_string()) files.push_back(t["given"].get<std::string>());
+			else missing.push_back(t);
+		}
 	}
 	if (!missing.empty() && !o.value("allowMissing", false)) {
 		out = { { "needed", tiles }, { "missing", missing } };
@@ -2251,23 +2715,27 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 		Raster r;
 		if (!LoadRaster(PathFromUtf8(f), o, r, error)) return false;
 		if (!r.geo) { error = f + ": no geographic position in the file (a GeoTIFF or an SRTM .hgt by its name)"; return false; }
+		if (r.metric != metric) { error = f + (metric ? ": not a grid in metres (os-terrain-50 takes .asc tiles)" : ": a grid in metres needs \"source\": \"os-terrain-50\" and \"bng\""); return false; }
 		rs.push_back(std::move(r));
 	}
+	size_t lastR = 0;
 	auto elev = [&](double lat, double lon) -> float {
-		for (const Raster& r : rs) {
+		for (size_t k = 0; k < rs.size(); k++) {
+			const size_t ri = (k + lastR) % rs.size();
+			const Raster& r = rs[ri];
 			const double x = (lon - r.lon0) / r.dlon, y = (lat - r.lat0) / r.dlat;
 			if (x >= -0.5 && y >= -0.5 && x <= r.w - 0.5 && y <= r.h - 0.5) {
 				const float v = r.sample(x, y);
-				if (!std::isnan(v)) return v;
+				if (!std::isnan(v)) { lastR = ri; return v; }
 			}
 		}
 		return NAN;
 	};
 	// metres on the map: the vertex grid over the area, the edge band beyond it
-	const double kmEW = KmEW(a), kmNS = KmNS(a);
+	const double kmEW = kmEWOf(a), kmNS = kmNSOf(a);
 	const double hRatio = (m.W - 2 * m.E) * TILE / (kmEW * 1000.0); // map metres per real metre
 	const double realPerVertex = TILE / hRatio;
-	const double pxM = rs.empty() ? 30 : std::abs(rs[0].dlat) * 110574.0;
+	const double pxM = rs.empty() ? 30 : metric ? std::abs(rs[0].dlat) : std::abs(rs[0].dlat) * 110574.0;
 	const int k = std::clamp((int)std::ceil(realPerVertex / pxM), 1, 6);
 	Grid e;
 	e.init(m.gw(), m.gh(), 0);
@@ -2287,8 +2755,12 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 			if (n) e.at(x, z) = (float)(sum / n);
 			else { e.at(x, z) = NAN; voids++; }
 		}
+	// voids: OS Terrain 50 leaves out the tiles that are all sea, so a void there is sea
+	if (voids && metric) {
+		for (float& v : e.v) if (std::isnan(v)) v = -2;
+	}
 	// voids (no data, a missing tile): the nearest known value, row by row then column by column
-	if (voids) {
+	else if (voids) {
 		for (int pass = 0; pass < 4; pass++)
 			for (int z = 0; z < m.gh(); z++)
 				for (int x = 0; x < m.gw(); x++) {
@@ -2305,13 +2777,50 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 				}
 		for (float& v : e.v) if (std::isnan(v)) v = 0;
 	}
-	// the sea: real heights at or below 0 (Copernicus and SRTM give the sea as 0)
+	// the sea: real heights at or below seaBelow (0.5 m: Copernicus and SRTM give the sea as 0, OS
+	// Terrain 50 about -1.7); "seaFromEdge" (default for os-terrain-50): only what joins the edge of
+	// the map, so land below the sea's level behind its banks (the Fens) stays land
+	const float seaBelow = Num(o, "seaBelow", 0.5f);
+	std::vector<uint8_t> isSea(e.v.size(), 0);
+	for (size_t i = 0; i < e.v.size(); i++) isSea[i] = e.v[i] <= seaBelow;
+	if (o.value("seaFromEdge", metric)) {
+		std::vector<uint8_t> keep(e.v.size(), 0);
+		std::vector<int> stack;
+		const int w = m.gw(), hh = m.gh();
+		// the seeds: "seaAt" points known to be sea (in the area's own coordinates: BNG metres or
+		// [lat, lon]), else every low vertex on the map's edge
+		const json seaAt = o.value("seaAt", json::array());
+		for (const json& pt : seaAt) {
+			if (!pt.is_array() || pt.size() < 2) continue;
+			double fx, fz;
+			if (metric) { fx = m.E + (pt[0].get<double>() - a.w) / (a.e - a.w) * pw; fz = m.E + (pt[1].get<double>() - a.s) / (a.n - a.s) * ph; }
+			else { fx = m.E + (pt[1].get<double>() - a.w) / (a.e - a.w) * pw; fz = m.E + (pt[0].get<double>() - a.s) / (a.n - a.s) * ph; }
+			const int x = std::clamp((int)std::lround(fx), 0, w - 1), z = std::clamp((int)std::lround(fz), 0, hh - 1);
+			if (isSea[(size_t)z * w + x] && !keep[(size_t)z * w + x]) { keep[(size_t)z * w + x] = 1; stack.push_back(z * w + x); }
+		}
+		if (seaAt.empty())
+			for (int z = 0; z < hh; z++)
+				for (int x = 0; x < w; x++)
+					if ((x == 0 || z == 0 || x == w - 1 || z == hh - 1) && isSea[(size_t)z * w + x]) { keep[(size_t)z * w + x] = 1; stack.push_back(z * w + x); }
+		while (!stack.empty()) {
+			const int i = stack.back();
+			stack.pop_back();
+			const int x = i % w, z = i / w;
+			const int nb[4][2] = { { x + 1, z }, { x - 1, z }, { x, z + 1 }, { x, z - 1 } };
+			for (auto& q : nb)
+				if (q[0] >= 0 && q[1] >= 0 && q[0] < w && q[1] < hh) {
+					const size_t u = (size_t)q[1] * w + q[0];
+					if (isSea[u] && !keep[u]) { keep[u] = 1; stack.push_back((int)u); }
+				}
+		}
+		isSea.swap(keep);
+	}
 	int seaV = 0, landV = 0;
 	float emin = 1e30f, emax = -1e30f;
 	for (int z = m.E; z <= m.H - m.E; z++)
 		for (int x = m.E; x <= m.W - m.E; x++) {
 			const float v = e.at(x, z);
-			if (v <= 0.5f) seaV++;
+			if (isSea[(size_t)z * m.gw() + x]) seaV++;
 			else { landV++; emin = std::min(emin, v); emax = std::max(emax, v); }
 		}
 	const std::string seaOpt = o.contains("sea") && o["sea"].is_boolean() ? (o["sea"].get<bool>() ? "true" : "false") : "auto";
@@ -2328,7 +2837,7 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	for (int z = m.E; z < m.H - m.E; z++)
 		for (int x = m.E; x < m.W - m.E; x++) {
 			const float v[4] = { e.at(x, z), e.at(x + 1, z), e.at(x, z + 1), e.at(x + 1, z + 1) };
-			if (sea && *std::max_element(v, v + 4) <= 0.5f) continue;
+			if (sea && isSea[(size_t)z * m.gw() + x] && isSea[(size_t)z * m.gw() + x + 1] && isSea[(size_t)(z + 1) * m.gw() + x] && isSea[(size_t)(z + 1) * m.gw() + x + 1]) continue;
 			rises.push_back(*std::max_element(v, v + 4) - *std::min_element(v, v + 4));
 		}
 	bool flattened = false;
@@ -2347,10 +2856,11 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	h.init(m.gw(), m.gh(), 0);
 	for (size_t i = 0; i < h.v.size(); i++)
 		h.v[i] = (sea ? seaLevel + 0.6f : floorM) + (float)((std::max(e.v[i], emin) - emin) * vs);
+	// (land below 0 behind banks, the Fens: kept above the sea's level by the max with emin = 0)
 	if (sea) {
 		// below the sea level, deeper away from the land (a chamfer distance in vertices)
 		std::vector<float> dist(h.v.size(), 1e9f);
-		for (size_t i = 0; i < h.v.size(); i++) if (e.v[i] > 0.5f) dist[i] = 0;
+		for (size_t i = 0; i < h.v.size(); i++) if (!isSea[i]) dist[i] = 0;
 		const int w = m.gw(), hh = m.gh();
 		for (int z = 0; z < hh; z++)
 			for (int x = 0; x < w; x++) {
@@ -2369,9 +2879,9 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 				if (x > 0 && z < hh - 1) d = std::min(d, dist[(size_t)(z + 1) * w + x - 1] + 1.414f);
 			}
 		for (size_t i = 0; i < h.v.size(); i++)
-			if (e.v[i] <= 0.5f) h.v[i] = seaLevel - 0.6f - seaDepth * std::min(1.0f, dist[i] * TILE / 120.0f);
+			if (isSea[i]) h.v[i] = seaLevel - 0.6f - seaDepth * std::min(1.0f, dist[i] * TILE / 120.0f);
 	}
-	json meta = { { "from", "elevation" }, { "source", src }, { "bbox", { a.s, a.w, a.n, a.e } }, { "km", { kmEW, kmNS } },
+	json meta = { { "from", "elevation" }, { "source", src }, { "bbox", metric ? json({ { "bng", { a.w, a.s, a.e, a.n } } }) : json({ a.s, a.w, a.n, a.e }) }, { "km", { kmEW, kmNS } },
 		{ "horizontalScale", hRatio }, { "realMetresPerMapMetre", 1 / hRatio }, { "verticalScale", vs }, { "verticalMode", vsMode },
 		{ "exaggeration", vs / hRatio }, { "flattenedForSlope", flattened }, { "realRangeM", { emin, emax } }, { "voidVertices", voids } };
 	json srcJ;
@@ -2384,8 +2894,9 @@ bool ImportElevation(const fs::path& folder, const json& o, json& out, std::stri
 	json tileNames = json::array();
 	for (const json& t : tiles["tiles"]) if (t["given"].is_string()) tileNames.push_back(t["tile"]);
 	json ref = { { "use", "terrain.source" }, { "kind", "elevation" }, { "source", tiles["tiles"].empty() ? json("") : tiles["tiles"][0]["source"] },
-		{ "tiles", tileNames }, { "area", { a.s, a.w, a.n, a.e } },
-		{ "licence", src == "srtm" ? SRTM_LICENCE : COPERNICUS_LICENCE }, { "attribution", src == "srtm" ? SRTM_ATTRIBUTION : COPERNICUS_ATTRIBUTION },
+		{ "tiles", tileNames }, { "area", metric ? json({ { "bng", { a.w, a.s, a.e, a.n } } }) : json({ a.s, a.w, a.n, a.e }) },
+		{ "licence", metric ? OSGB_LICENCE : src == "srtm" ? SRTM_LICENCE : COPERNICUS_LICENCE },
+		{ "attribution", metric ? OSGB_ATTRIBUTION : src == "srtm" ? SRTM_ATTRIBUTION : COPERNICUS_ATTRIBUTION },
 		{ "ships", "name the data and its attribution in THIRD-PARTY-NOTICES.md when the map ships" } };
 	SetReference(raw, ref);
 	if (!WriteMapJson(folder, raw)) { error = "can't write map.json"; return false; }

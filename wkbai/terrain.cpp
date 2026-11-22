@@ -74,8 +74,11 @@ float Terrain::getHeightEx(float x, float z, bool floatOnWater) const
 		int iz = (int)(edge + z / 5.0f);
 		if (ix >= 0 && ix < width && iz >= 0 && iz < height && (floatOnWater || frozenAt(ix, iz))) {
 			if (const Tile* tile = getTile(ix, iz)) {
-				if (tile->fullOfWater && tile->waterLevel > h)
-					h = tile->waterLevel;
+				if (tile->fullOfWater) {
+					const float level = waterSurfaceAt(x, z, tile);
+					if (level > h)
+						h = level;
+				}
 			}
 		}
 	}
@@ -159,6 +162,10 @@ void Terrain::readFromFile(const char* filename)
 		waterDesign = design;
 		printf("Water design: %s (%zu sea regions, %zu waterways, %zu waterfalls)\n", WaterDesign::pathFor(loadFrom).c_str(),
 			design->seas.size(), design->waterways.size(), design->waterfalls.size());
+		// (the BCM's water was flooded before the design was read: again, its rivers the lakes'
+		// outlets)
+		if (design->hasSlopedWater())
+			refillWater();
 	}
 	else if (design->width)
 		printf("WARNING: %s is for a map of %d x %d tiles, not %d x %d; not used\n", WaterDesign::pathFor(loadFrom).c_str(), design->width, design->height, width, height);
@@ -294,6 +301,12 @@ void Terrain::readBCM(const char * filename) {
 	extras = extras.substr(0, extras.size() - 4) + ".wkbmap";
 	if (FileExists(extras.c_str()))
 		readMapExtras(extras.c_str());
+	// a map folder's far land (MapFolder's cache: map.farland)
+	{
+		std::string fl = filename;
+		fl = fl.substr(0, fl.size() - 4) + ".farland";
+		farLand = FileExists(fl.c_str()) ? readFarLand(fl) : nullptr;
+	}
 
 	floodfillWater();
 }
@@ -304,6 +317,73 @@ void Terrain::readBCM(const char * filename) {
 //   LAKE: u32 count, then per lake f32 x, y, z and u8 the 2 bits the BCM keeps (all of them;
 //         the BCM holds at most 63)
 static const char MAP_EXTRAS_MAGIC[8] = { 'W', 'K', 'B', 'M', 'A', 'P', 0, 0 };
+
+float StoredFarLand::sample(float wx, float wz, float& weight) const
+{
+	weight = 0;
+	if (w < 2 || h < 2)
+		return 0;
+	const float fx = (wx - x0) / cell, fz = (wz - z0) / cell;
+	if (fx < 0 || fz < 0 || fx > w - 1 || fz > h - 1)
+		return 0;
+	const int ix = std::min((int)fx, w - 2), iz = std::min((int)fz, h - 2);
+	const float tx = fx - ix, tz = fz - iz;
+	const float a = v[(size_t)iz * w + ix] + (v[(size_t)iz * w + ix + 1] - v[(size_t)iz * w + ix]) * tx;
+	const float b = v[(size_t)(iz + 1) * w + ix] + (v[(size_t)(iz + 1) * w + ix + 1] - v[(size_t)(iz + 1) * w + ix]) * tx;
+	// over the outer tenth, fading out
+	const float edge = std::min({ fx, fz, (w - 1) - fx, (h - 1) - fz }) / (0.1f * std::min(w, h));
+	const float k = std::clamp(edge, 0.0f, 1.0f);
+	weight = k * k * (3 - 2 * k);
+	return a + (b - a) * tz;
+}
+
+// <map>.farland: "WKBFARL\0", u32 version (1), f32 x0, z0, cell, i32 w, h, f32 seaLevel, then w x h f32
+std::shared_ptr<StoredFarLand> Terrain::readFarLand(const std::string& path)
+{
+	char* data = nullptr;
+	int size = 0;
+	LoadFile(path.c_str(), &data, &size);
+	if (!data)
+		return nullptr;
+	std::shared_ptr<StoredFarLand> f;
+	if (size >= 36 && memcmp(data, "WKBFARL", 7) == 0) {
+		uint32_t version;
+		memcpy(&version, data + 8, 4);
+		auto out = std::make_shared<StoredFarLand>();
+		memcpy(&out->x0, data + 12, 4);
+		memcpy(&out->z0, data + 16, 4);
+		memcpy(&out->cell, data + 20, 4);
+		memcpy(&out->w, data + 24, 4);
+		memcpy(&out->h, data + 28, 4);
+		memcpy(&out->seaLevel, data + 32, 4);
+		const size_t n = (size_t)std::max(out->w, 0) * std::max(out->h, 0);
+		if (version == 1 && out->w > 1 && out->h > 1 && (size_t)size >= 36 + n * 4) {
+			out->v.resize(n);
+			memcpy(out->v.data(), data + 36, n * 4);
+			f = out;
+		}
+	}
+	free(data);
+	return f;
+}
+
+bool Terrain::writeFarLand(const std::filesystem::path& path, const StoredFarLand& f)
+{
+	std::string out("WKBFARL\0", 8);
+	auto put = [&](const void* p, size_t n) { out.append((const char*)p, n); };
+	const uint32_t version = 1;
+	put(&version, 4);
+	put(&f.x0, 4); put(&f.z0, 4); put(&f.cell, 4);
+	put(&f.w, 4); put(&f.h, 4);
+	put(&f.seaLevel, 4);
+	put(f.v.data(), f.v.size() * 4);
+	FILE* file = _wfopen(path.c_str(), L"wb");
+	if (!file)
+		return false;
+	const bool ok = fwrite(out.data(), 1, out.size(), file) == out.size();
+	fclose(file);
+	return ok;
+}
 
 void Terrain::readMapExtras(const char* filename)
 {
@@ -744,6 +824,10 @@ void Terrain::readTRN(const char* filename)
 	free(text);
 }
 
+// how far from a sloped river's course its channel's banks reach (MapTerrain's CarveChannel: the
+// bed, then banks of 1.5 widths rising to the land): a lake's dam at its outlet (floodfillWater)
+static float OutletZone(float halfWidth) { return halfWidth * 4.0f + 10.0f; }
+
 void Terrain::floodfillWater()
 {
 	// Each lake is a point whose height is its water level. The water spreads from the point's
@@ -753,6 +837,48 @@ void Terrain::floodfillWater()
 	// Unite leak over its rim through diagonal corners and flood the whole map.) A higher lake
 	// overrides a lower one's tiles.
 	std::vector<std::pair<int, int>> queue;
+	// Sloped rivers (applySlopedWater) are the lakes' outlets. Where a river's surface first drops
+	// below a lake's level along its course (it runs out of the lake there, at the lake's level:
+	// the terrain generator writes the levels so), the lake stops: a dam without any ground, a
+	// half disc across the channel and its banks (OutletZone) on its downstream side. Else a lake
+	// would run out down the channel cut through its rim (and over its banks, which slope up from
+	// the river below the lake's level near it) and flood the low land.
+	struct Dam { float x, z, dx, dz, r; };
+	const bool sloped = waterDesign && waterDesign->hasSlopedWater();
+	float damsFor = NO_SLOPED_SURFACE;
+	std::vector<Dam> dams;
+	auto makeDams = [&](float lvl) {
+		damsFor = lvl;
+		dams.clear();
+		for (const WaterDesign::Waterway& way : waterDesign->waterways) {
+			if (!way.sloped())
+				continue;
+			const float below = lvl - 0.25f;
+			for (size_t i = 1; i < way.points.size(); i++) {
+				const float a = way.levels[i - 1], b = way.levels[i];
+				if (!(a >= below && b < below))
+					continue;
+				const float t = a > b ? (a - below) / (a - b) : 0.0f;
+				const Vector3 p = way.points[i - 1] + (way.points[i] - way.points[i - 1]) * t;
+				const float sx = way.points[i].x - way.points[i - 1].x, sz = way.points[i].z - way.points[i - 1].z;
+				const float len = std::max(std::hypot(sx, sz), 1e-4f);
+				dams.push_back({ p.x, p.z, sx / len, sz / len, OutletZone(way.width * 0.5f) });
+			}
+		}
+	};
+	auto outlet = [&](int tx, int tz, float lvl) {
+		if (!sloped)
+			return false;
+		if (damsFor != lvl)
+			makeDams(lvl);
+		const float cx = (tx - (int)edge + 0.5f) * 5.0f, cz = (tz - (int)edge + 0.5f) * 5.0f;
+		for (const Dam& d : dams) {
+			const float ox = cx - d.x, oz = cz - d.z;
+			if (ox * ox + oz * oz <= d.r * d.r && ox * d.dx + oz * d.dz >= -2.5f)
+				return true;
+		}
+		return false;
+	};
 	for (const Vector3& lake : lakes) {
 		const int sx = (int)(lake.x / 5.0f), sz = (int)(lake.z / 5.0f);
 		const float lvl = lake.y;
@@ -778,12 +904,189 @@ void Terrain::floodfillWater()
 					continue;
 				if (std::min(getVertex(n[2], n[3]), getVertex(n[4], n[5])) >= lvl)
 					continue;
+				if (outlet(n[0], n[1], lvl))
+					continue;
 				tile.waterLevel = lvl;
 				tile.fullOfWater = true;
 				queue.push_back({ n[0], n[1] });
 			}
 		}
+		if (sloped)
+			printf("Sloped water: lake at (%.0f, %.0f), level %.2f: %zu tiles\n", lake.x, lake.z, lvl, queue.size());
 	}
+	applySlopedWater();
+}
+
+void Terrain::applySlopedWater()
+{
+	const bool any = waterDesign && waterDesign->hasSlopedWater();
+	if (!any) {
+		slopedSurface.clear();
+		return;
+	}
+	std::vector<float> level, half;
+	const int ways = slopedCorridor(true, level, half);
+	// the tiles: within the half width (and half a tile) of a course, their ground below the surface
+	int tilesSloped = 0;
+	for (int z = 0; z < (int)height; z++)
+		for (int x = 0; x < (int)width; x++) {
+			const size_t i = (size_t)z * width + x;
+			if (level[i] == NO_SLOPED_SURFACE)
+				continue;
+			const float ground = std::min({ getVertex(x, z), getVertex(x + 1, z), getVertex(x, z + 1), getVertex(x + 1, z + 1) });
+			if (level[i] <= ground + 0.02f)
+				continue;
+			Tile& tile = tiles[i];
+			if (tile.fullOfWater && !tile.slopedWater && tile.waterLevel >= level[i] - 0.02f)
+				continue; // the lake's (or the sea's) own water
+			tile.fullOfWater = true;
+			tile.slopedWater = true;
+			tile.waterLevel = level[i];
+			tilesSloped++;
+		}
+	printf("Sloped water: %d waterways over %d tiles\n", ways, tilesSloped);
+}
+
+int Terrain::slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::vector<float>& tileHalf)
+{
+	const int VW = width + 1, VH = height + 1;
+	slopedSurface.assign((size_t)VW * VH, NO_SLOPED_SURFACE);
+	// per vertex: the distance to the nearest sloped course and that waterway's half width
+	std::vector<float> nearest((size_t)VW * VH, 1e30f), halfWidth((size_t)VW * VH, 0.0f);
+	int ways = 0;
+	for (const WaterDesign::Waterway& way : waterDesign->waterways) {
+		if (!way.sloped())
+			continue;
+		ways++;
+		std::vector<float> levels = way.levels;
+		// its points out on a lake's water at the lake's level (crossing it, or leaving it)
+		for (size_t i = 0; toLakes && i < levels.size(); i++) {
+			const Vector3& p = way.points[i];
+			const Tile* u = getTile(edge + (int)std::floor(p.x / 5.0f), edge + (int)std::floor(p.z / 5.0f));
+			if (u && u->fullOfWater && !u->slopedWater && u->waterLevel > levels[i])
+				levels[i] = u->waterLevel;
+		}
+		// into a lake or the sea: at its level, never below it, and its points out on the lake's
+		// water at the lake's level (the river runs down into it, no ledge over it)
+		if (toLakes) {
+			const Vector3& mouth = way.points.back();
+			const Tile* t = getTile(edge + (int)std::floor(mouth.x / 5.0f), edge + (int)std::floor(mouth.z / 5.0f));
+			if (t && t->fullOfWater && !t->slopedWater) {
+				const float lake = t->waterLevel;
+				for (float& l : levels)
+					l = std::max(l, lake);
+				for (size_t i = levels.size(); i-- > 0;) {
+					const Vector3& p = way.points[i];
+					const int ux = edge + (int)std::floor(p.x / 5.0f), uz = edge + (int)std::floor(p.z / 5.0f);
+					const Tile* u = getTile(ux, uz);
+					// (out on the lake's open water, over half a metre deep: where the lake only just
+					// floods the river's channel back, the river had been lowered onto its floor there,
+					// the water no depth at all, and the stream broke off short of the lake)
+					if (!u || !u->fullOfWater || u->slopedWater || std::abs(u->waterLevel - lake) > 0.01f
+						|| lake - std::min({ getVertex(ux, uz), getVertex(ux + 1, uz), getVertex(ux, uz + 1), getVertex(ux + 1, uz + 1) }) < 0.5f)
+						break;
+					levels[i] = lake;
+				}
+			}
+		}
+		const float hw = way.width * 0.5f, reach = hw + 7.5f;
+		for (size_t i = 0; i + 1 < way.points.size(); i++) {
+			const Vector3 a = way.points[i], b = way.points[i + 1];
+			const float sx = b.x - a.x, sz = b.z - a.z, len2 = sx * sx + sz * sz;
+			const int vx0 = std::max(0, (int)std::floor((std::min(a.x, b.x) - reach) / 5.0f) + (int)edge);
+			const int vx1 = std::min(VW - 1, (int)std::ceil((std::max(a.x, b.x) + reach) / 5.0f) + (int)edge);
+			const int vz0 = std::max(0, (int)std::floor((std::min(a.z, b.z) - reach) / 5.0f) + (int)edge);
+			const int vz1 = std::min(VH - 1, (int)std::ceil((std::max(a.z, b.z) + reach) / 5.0f) + (int)edge);
+			for (int vz = vz0; vz <= vz1; vz++)
+				for (int vx = vx0; vx <= vx1; vx++) {
+					const float px = (vx - (int)edge) * 5.0f, pz = (vz - (int)edge) * 5.0f;
+					const float t = len2 > 1e-6f ? std::clamp(((px - a.x) * sx + (pz - a.z) * sz) / len2, 0.0f, 1.0f) : 0.0f;
+					const float d = std::hypot(px - (a.x + sx * t), pz - (a.z + sz * t));
+					const size_t k = (size_t)vz * VW + vx;
+					if (d <= reach && d < nearest[k]) {
+						nearest[k] = d;
+						halfWidth[k] = hw;
+						slopedSurface[k] = levels[i] + (levels[i + 1] - levels[i]) * t;
+					}
+				}
+		}
+	}
+	// Beyond the river's reach (its half width and half a tile: its channel's floor, which the
+	// terrain generator makes at least a tile wide, stays under the water; at its own half width
+	// the water had dipped under the floor and the stream broke) the water stands no higher than
+	// the ground there (else, where
+	// the land beside it lies lower, below a cliff or on a slope across it, the tiles' water
+	// stood over it and ended in their square corners): the surface dips under the ground at
+	// such a corner, so the water ends where it meets the land. Not beside a lake's water (the
+	// river meets the lake at its level there).
+	if (toLakes)
+		for (int vz = 0; vz < VH; vz++)
+			for (int vx = 0; vx < VW; vx++) {
+				const size_t k = (size_t)vz * VW + vx;
+				if (slopedSurface[k] == NO_SLOPED_SURFACE || nearest[k] <= halfWidth[k] + 2.5f)
+					continue;
+				bool byLake = false;
+				for (int dz = -1; dz <= 0 && !byLake; dz++)
+					for (int dx = -1; dx <= 0 && !byLake; dx++)
+						if (const Tile* t = getTile(vx + dx, vz + dz))
+							byLake = t->fullOfWater && !t->slopedWater;
+				if (!byLake)
+					slopedSurface[k] = std::min(slopedSurface[k], getVertex(vx, vz) - 0.05f);
+			}
+	// the tiles within the half width (and half a tile) of a course: the mean of their corners
+	tileLevel.assign((size_t)width * height, NO_SLOPED_SURFACE);
+	tileHalf.assign((size_t)width * height, 0.0f);
+	for (int z = 0; z < (int)height; z++)
+		for (int x = 0; x < (int)width; x++) {
+			const size_t k[4] = { (size_t)z * VW + x, (size_t)z * VW + x + 1, (size_t)(z + 1) * VW + x, (size_t)(z + 1) * VW + x + 1 };
+			float sum = 0, closest = 1e30f, hw = 0;
+			bool all = true;
+			for (size_t c : k) {
+				all = all && slopedSurface[c] != NO_SLOPED_SURFACE;
+				sum += slopedSurface[c];
+				if (nearest[c] < closest) {
+					closest = nearest[c];
+					hw = halfWidth[c];
+				}
+			}
+			if (!all || closest > hw + 2.5f)
+				continue;
+			tileLevel[(size_t)z * width + x] = sum * 0.25f;
+			tileHalf[(size_t)z * width + x] = hw;
+		}
+	return ways;
+}
+
+float Terrain::waterDepthAt(int tx, int tz) const
+{
+	const Tile* t = getTile(tx, tz);
+	if (!t || !t->fullOfWater)
+		return 0.0f;
+	if (t->slopedWater && !slopedSurface.empty()) {
+		float deepest = -1e30f;
+		for (int c = 0; c < 4; c++) {
+			const int vx = tx + (c & 1), vz = tz + (c >> 1);
+			const float s = slopedSurfaceAt(vx, vz);
+			if (s != NO_SLOPED_SURFACE)
+				deepest = std::max(deepest, s - getVertex(vx, vz));
+		}
+		if (deepest > -1e29f)
+			return deepest;
+	}
+	return t->waterLevel - std::min({ getVertex(tx, tz), getVertex(tx + 1, tz), getVertex(tx, tz + 1), getVertex(tx + 1, tz + 1) });
+}
+
+float Terrain::waterSurfaceAt(float x, float z, const Tile* tile) const
+{
+	if (!tile || !tile->slopedWater || slopedSurface.empty())
+		return tile ? tile->waterLevel : -1.0f;
+	const float fx = edge + x / 5.0f, fz = edge + z / 5.0f;
+	const int ix = std::clamp((int)std::floor(fx), 0, (int)width - 1), iz = std::clamp((int)std::floor(fz), 0, (int)height - 1);
+	const float u = std::clamp(fx - ix, 0.0f, 1.0f), v = std::clamp(fz - iz, 0.0f, 1.0f);
+	const float a = slopedSurfaceAt(ix, iz), b = slopedSurfaceAt(ix + 1, iz), c = slopedSurfaceAt(ix, iz + 1), d = slopedSurfaceAt(ix + 1, iz + 1);
+	if (a == NO_SLOPED_SURFACE || b == NO_SLOPED_SURFACE || c == NO_SLOPED_SURFACE || d == NO_SLOPED_SURFACE)
+		return tile->waterLevel;
+	return (a + (b - a) * u) * (1 - v) + (c + (d - c) * u) * v;
 }
 
 void Terrain::refillWater()
@@ -791,6 +1094,7 @@ void Terrain::refillWater()
 	revision++;
 	for (int i = 0; i < width * height; i++) {
 		tiles[i].fullOfWater = false;
+		tiles[i].slopedWater = false;
 		tiles[i].waterLevel = -1.0f;
 	}
 	floodfillWater();
