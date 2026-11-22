@@ -3694,8 +3694,11 @@ void Test_AIvsAI()
 					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), living, livingSoldiers, armyValue);
 				{
 					static const int cartsRequired = server.gameSet->items.names.getIndex("Carts Required");
-					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f\n", player->id, carts,
-						cartsRequired >= 0 ? player->getItem(cartsRequired) : -1.0f, villages, villageFood, villageWood, villageGold);
+					// (the Stats Screen's totals: what the farmers gathered, and what reached the stocks after the support)
+					static const int gathered = server.gameSet->items.names.getIndex("Total Food Gathered"), delivered = server.gameSet->items.names.getIndex("Total Food Delivered To Global Stocks");
+					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f; food gathered %.0f delivered %.0f\n", player->id, carts,
+						cartsRequired >= 0 ? player->getItem(cartsRequired) : -1.0f, villages, villageFood, villageWood, villageGold,
+						gathered >= 0 ? player->getItem(gathered) : -1.0f, delivered >= 0 ? player->getItem(delivered) : -1.0f);
 				}
 				std::string markerList;
 				for (const auto& [name, n] : markers)
@@ -11389,6 +11392,14 @@ void Test_MixedFormation()
 		}
 		else
 			check(false, "a Training Dummy, a trainee and the Train command");
+	}
+	// the lower left panel for a selected formation shows a member (its picture, hit points and
+	// stats; the user's report: empty for a selected Spearmen formation)
+	if (merged) {
+		const CommonGameObject* shown = PanelSubject(merged);
+		check(shown && shown != merged && shown->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && shown->getParent() == merged,
+			"the panel of a selected formation shows one of its members");
+		check(PanelSubject(shown) == shown, "the panel of a selected unit shows the unit");
 	}
 	// an order on the formation's own member (a right-click inside it): refused, not followed
 	if (merged) {
