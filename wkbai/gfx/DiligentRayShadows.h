@@ -79,9 +79,20 @@ public:
 	// slots changed, at most every 30 frames. blasOf: a tree model's structure (null: not ready).
 	// The shaders trace it and the frame's structure of the other casters (build).
 	void setForest(Diligent::IDeviceContext* ctx, const struct Forest* forest, bool rebuilt, const std::vector<uint32_t>& changed,
-		const std::function<Diligent::IBottomLevelAS*(struct Model*)>& blasOf);
+		const std::function<Diligent::IBottomLevelAS*(const struct ForestTree&)>& blasOf);
 	// beginFrame's count (SceneEntity::rtFrame)
 	uint64_t frame() const { return frameCounter; }
+
+	// The trees in the wind (TreeWind.h): per tree mesh (key) one bent structure per wind group,
+	// all of a mesh's groups bent by one compute pass and refitted every frame (windBegin, with
+	// the frame's wind: WindBend); their bounds held fixed (two tiny triangles at the corners of
+	// the farthest a bend reaches), so the still structure of the forest that holds them needn't
+	// be built again as they bend. rest: the mesh's positions (asked for once). nullptr until
+	// made, and with the wind off
+	void windBegin(Diligent::IDeviceContext* ctx, const float wind[4]);
+	Diligent::IBottomLevelAS* windBlas(Diligent::IDeviceContext* ctx, const void* key, const std::function<std::vector<Vector3>()>& rest,
+		Diligent::IBuffer* indices, const std::vector<Group>& groups, uint32_t group);
+	bool windOn() const { return windNow[3] > 0 && windPipeline; }
 	// the frame's top-level structure from the casters added (kept when they are the last
 	// build's: the same structures at the same places)
 	void build(Diligent::IDeviceContext* ctx);
@@ -117,6 +128,25 @@ public:
 
 private:
 	Diligent::IRenderDevice* device;
+	uint32_t geometryBaseOf(const std::vector<Group>& groups);
+	struct WindMesh {
+		std::vector<Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS>> blas; // per wind group
+		Diligent::RefCntAutoPtr<Diligent::IBuffer> rest, bent;
+		Diligent::RefCntAutoPtr<Diligent::IShaderResourceBinding> srb;
+		std::vector<std::string> names;
+		std::vector<Diligent::BLASBuildTriangleData> data; // group 0's (the others' vertices further on)
+		uint32_t vertexCount = 0, stride = 0; // the bent buffer: per group stride vertices
+		std::vector<uint64_t> scratchOffset; // per group, in windScratch
+		uint64_t lastUse = 0;
+		bool inStill = false;
+	};
+	std::map<const void*, WindMesh> windMeshes;
+	Diligent::RefCntAutoPtr<Diligent::IPipelineState> windPipeline;
+	Diligent::RefCntAutoPtr<Diligent::IBuffer> windConstants, windCorners, windScratch;
+	uint64_t windScratchNeed = 0;
+	bool windTried = false, collectingStill = false, stillWind = false;
+	float windNow[4] = {};
+	void windDispatch(Diligent::IDeviceContext* ctx, WindMesh& wm);
 	std::map<std::pair<const void*, uint32_t>, Diligent::RefCntAutoPtr<Diligent::IBottomLevelAS>> blases;
 	Diligent::RefCntAutoPtr<Diligent::IBuffer> scratch, tlasScratch, instanceBuffer;
 	Diligent::RefCntAutoPtr<Diligent::ITopLevelAS> tlas;

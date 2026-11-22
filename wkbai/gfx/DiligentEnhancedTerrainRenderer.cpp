@@ -2037,19 +2037,30 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	std::map<TerrainTexture*, TexturePair> textures;
 	std::map<TexturePair, RefCntAutoPtr<IShaderResourceBinding>> bindings;
 	// The terrain in chunks of CHUNK x CHUNK tiles, with their index lists per texture and their
-	// water quads prebuilt: each frame only the chunks' bounding boxes are tested against the
-	// view, and the visible chunks' lists are concatenated (one draw per texture, one for water).
+	// water quads prebuilt, all in two index buffers on the GPU (landIndices, lakeIndices: per
+	// texture chunk after chunk, the water chunk after chunk): each frame only the chunks'
+	// bounding boxes are tested against the view, and the visible chunks' ranges drawn (one
+	// multi-draw per texture, one for the water; neighbouring chunks' ranges joined). Until
+	// 2026-11-22 the visible chunks' lists were copied into one list and streamed to the GPU every
+	// frame, twice (depth and shading): ~10 ms of a frame on a big map.
+	struct IndexRange { uint32_t first = 0, count = 0; };
 	struct Chunk {
 		Vector3 low, high;
 		uint32_t grassFirst = 0, grassCount = 0; // its blades in grassBuffer
 		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
 		std::vector<uint32_t> lakeIndices;
 		std::vector<uint32_t> floodIndices; // the water over its land that floods (drawn while wkbai's floods rise)
+		// their places in landIndices (per texture pair, as indicesPerTexture) and lakeIndices
+		std::vector<std::pair<int, IndexRange>> landRanges;
+		IndexRange lakeRange, floodRange;
 	};
 	std::vector<Chunk> chunks;
 	std::vector<TexturePair> texturePairs;
-	std::vector<std::vector<uint32_t>> frameIndices; // per texture pair, this frame
-	std::vector<uint32_t> frameLakeIndices;
+	RefCntAutoPtr<IBuffer> landIndices, lakeIndices;
+	bool indicesDirty = true; // the chunks' lists changed: the index buffers made again
+	void uploadIndices(IRenderDevice* device);
+	std::vector<std::vector<MultiDrawIndexedItem>> frameIndices; // per texture pair, this frame
+	std::vector<MultiDrawIndexedItem> frameLakeIndices;
 	RefCntAutoPtr<IBuffer> lakeVertexBuffer;
 	RefCntAutoPtr<IPipelineState> lakePipeline;
 	RefCntAutoPtr<IPipelineState> grassPipeline;
@@ -3021,6 +3032,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		}
 	}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
+	_impl->indicesDirty = true;
 	LoadingDetail("grass");
 	_impl->buildGrass(device, terrain, TerrainGrassBuilder::BuildDensity(g_renderSettings.grassDensity));
 	AddFloodWater(terrain, lakeVertices, _impl->chunks, CHUNK);
@@ -3272,6 +3284,7 @@ bool DiligentEnhancedTerrainRenderer::updateTiles()
 				chunk.indicesPerTexture.emplace_back(index, std::move(list));
 		}
 	_impl->frameIndices.resize(_impl->texturePairs.size());
+	_impl->indicesDirty = true;
 	_impl->albedoDirty = true;
 	return true;
 }
@@ -3316,6 +3329,7 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 				}
 		}
 	AddFloodWater(terrain, lakeVertices, _impl->chunks, CHUNK);
+	_impl->indicesDirty = true;
 	_impl->lakeVertexBuffer.Release();
 	if (!lakeVertices.empty()) {
 		BufferDesc lakeDesc;
@@ -3343,7 +3357,7 @@ void DiligentEnhancedTerrainRenderer::renderDepth(ITextureView* dsv)
 
 void DiligentEnhancedTerrainRenderer::renderWaterDepth()
 {
-	if (!_impl->lakeVertexBuffer || _impl->frameLakeIndices.empty())
+	if (!_impl->lakeVertexBuffer || _impl->frameLakeIndices.empty() || !_impl->lakeIndices)
 		return;
 	DiligentGfx* dgfx = (DiligentGfx*)gfx;
 	IDeviceContext* ctx = dgfx->ctx;
@@ -3353,15 +3367,54 @@ void DiligentEnhancedTerrainRenderer::renderWaterDepth()
 	const Uint64 vbOffset = 0;
 	ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 	ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-	constexpr size_t maxIndicesPerDraw = 6 * 8192;
-	const std::vector<uint32_t>& indices = _impl->frameLakeIndices;
-	for (size_t first = 0; first < indices.size(); first += maxIndicesPerDraw) {
-		const size_t count = std::min(indices.size() - first, maxIndicesPerDraw);
-		uint64_t ibOffset = 0;
-		IBuffer* ib = dgfx->StreamIndexData(indices.data() + first, count * sizeof(uint32_t), ibOffset);
-		ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)count, VT_UINT32, DRAW_FLAG_VERIFY_ALL });
+	ctx->SetIndexBuffer(_impl->lakeIndices, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+	MultiDrawIndexedAttribs md;
+	md.DrawCount = (Uint32)_impl->frameLakeIndices.size();
+	md.pDrawItems = _impl->frameLakeIndices.data();
+	md.IndexType = VT_UINT32;
+	md.Flags = DRAW_FLAG_VERIFY_ALL;
+	ctx->MultiDrawIndexed(md);
+}
+
+// the chunks' lists into the two index buffers, and their places
+void DiligentEnhancedTerrainRenderer::Impl::uploadIndices(IRenderDevice* device)
+{
+	indicesDirty = false;
+	std::vector<uint32_t> land, lake;
+	std::vector<std::vector<std::pair<size_t, size_t>>> perPair(texturePairs.size()); // (chunk, entry)
+	for (size_t c = 0; c < chunks.size(); c++) {
+		Chunk& chunk = chunks[c];
+		chunk.landRanges.clear();
+		for (size_t e = 0; e < chunk.indicesPerTexture.size(); e++) {
+			const int t = chunk.indicesPerTexture[e].first;
+			if (t >= 0 && (size_t)t < perPair.size())
+				perPair[t].emplace_back(c, e);
+		}
+		chunk.lakeRange = { (uint32_t)lake.size(), (uint32_t)chunk.lakeIndices.size() };
+		lake.insert(lake.end(), chunk.lakeIndices.begin(), chunk.lakeIndices.end());
+		chunk.floodRange = { (uint32_t)lake.size(), (uint32_t)chunk.floodIndices.size() };
+		lake.insert(lake.end(), chunk.floodIndices.begin(), chunk.floodIndices.end());
 	}
+	for (size_t t = 0; t < perPair.size(); t++)
+		for (const auto& [c, e] : perPair[t]) {
+			const auto& list = chunks[c].indicesPerTexture[e].second;
+			chunks[c].landRanges.emplace_back((int)t, IndexRange{ (uint32_t)land.size(), (uint32_t)list.size() });
+			land.insert(land.end(), list.begin(), list.end());
+		}
+	auto make = [&](RefCntAutoPtr<IBuffer>& buffer, const char* name, const std::vector<uint32_t>& data) {
+		buffer.Release();
+		if (data.empty())
+			return;
+		BufferDesc d;
+		d.Name = name;
+		d.Size = data.size() * sizeof(uint32_t);
+		d.BindFlags = BIND_INDEX_BUFFER;
+		d.Usage = USAGE_IMMUTABLE;
+		BufferData init{ data.data(), d.Size };
+		device->CreateBuffer(d, &init, &buffer);
+	};
+	make(landIndices, "Terrain indices", land);
+	make(lakeIndices, "Terrain water indices", lake);
 }
 
 void DiligentEnhancedTerrainRenderer::render()
@@ -3763,9 +3816,24 @@ void DiligentEnhancedTerrainRenderer::render()
 				return false;
 		return true;
 	};
+	if (_impl->indicesDirty)
+		_impl->uploadIndices(dgfx->device);
 	for (auto& list : _impl->frameIndices)
 		list.clear();
 	_impl->frameLakeIndices.clear();
+	// a range drawn: joined to the one before when it follows on
+	auto addRange = [](std::vector<MultiDrawIndexedItem>& items, const Impl::IndexRange& r) {
+		if (r.count == 0)
+			return;
+		if (!items.empty() && items.back().FirstIndexLocation + items.back().NumIndices == r.first)
+			items.back().NumIndices += r.count;
+		else {
+			MultiDrawIndexedItem it;
+			it.NumIndices = r.count;
+			it.FirstIndexLocation = r.first;
+			items.push_back(it);
+		}
+	};
 	// wkbai's floods: the flooded land's water (AddFloodWater) instead of EnvironmentView's sheet
 	const bool flooding = g_environment.active && g_environment.waterRise > 0.05f;
 	g_terrainDrawsFlood = true;
@@ -3782,23 +3850,25 @@ void DiligentEnhancedTerrainRenderer::render()
 			if (dx * dx + dy * dy + dz * dz < g_renderSettings.grassDistance * g_renderSettings.grassDistance)
 				grassChunks.push_back(&chunk);
 		}
-		for (const auto& [index, list] : chunk.indicesPerTexture)
-			_impl->frameIndices[index].insert(_impl->frameIndices[index].end(), list.begin(), list.end());
-		_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.lakeIndices.begin(), chunk.lakeIndices.end());
+		for (const auto& [index, range] : chunk.landRanges)
+			addRange(_impl->frameIndices[index], range);
+		addRange(_impl->frameLakeIndices, chunk.lakeRange);
 		if (flooding)
-			_impl->frameLakeIndices.insert(_impl->frameLakeIndices.end(), chunk.floodIndices.begin(), chunk.floodIndices.end());
+			addRange(_impl->frameLakeIndices, chunk.floodRange);
 	}
 
-	// Draws in blocks that fit in the stream buffer
-	auto drawIndices = [&](const std::vector<uint32_t>& indices) {
-		constexpr size_t maxIndicesPerDraw = 6 * 8192;
-		for (size_t first = 0; first < indices.size(); first += maxIndicesPerDraw) {
-			const size_t count = std::min(indices.size() - first, maxIndicesPerDraw);
-			uint64_t ibOffset = 0;
-			IBuffer* ib = dgfx->StreamIndexData(indices.data() + first, count * sizeof(uint32_t), ibOffset);
-			ctx->SetIndexBuffer(ib, ibOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-			ctx->DrawIndexed(DrawIndexedAttribs{ (Uint32)count, VT_UINT32, DRAW_FLAG_VERIFY_ALL });
-		}
+	// the visible ranges of an index buffer (landIndices, lakeIndices) in one multi-draw
+	auto drawIndices = [&](const std::vector<MultiDrawIndexedItem>& items, bool water = false) {
+		IBuffer* ib = water ? _impl->lakeIndices.RawPtr() : _impl->landIndices.RawPtr();
+		if (items.empty() || !ib)
+			return;
+		ctx->SetIndexBuffer(ib, 0, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		MultiDrawIndexedAttribs md;
+		md.DrawCount = (Uint32)items.size();
+		md.pDrawItems = items.data();
+		md.IndexType = VT_UINT32;
+		md.Flags = DRAW_FLAG_VERIFY_ALL;
+		ctx->MultiDrawIndexed(md);
 	};
 
 	// the depth pre-pass's masks of this frame, or white (unread: FogBuffer.LightMasks is 0)
@@ -3914,7 +3984,7 @@ void DiligentEnhancedTerrainRenderer::render()
 			if (refl) {
 				IBuffer* rvb = _impl->lakeVertexBuffer;
 				ctx->SetVertexBuffers(0, 1, &rvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
-				drawIndices(_impl->frameLakeIndices);
+				drawIndices(_impl->frameLakeIndices, true);
 				dgfx->RestoreRenderTargets();
 				if (_impl->boundReflections != refl) {
 					_impl->lakeBinding->GetVariableByName(SHADER_TYPE_PIXEL, "rtReflectTexture")->Set(refl, SET_SHADER_RESOURCE_FLAG_ALLOW_OVERWRITE);
@@ -3930,7 +4000,7 @@ void DiligentEnhancedTerrainRenderer::render()
 		IBuffer* lvb = _impl->lakeVertexBuffer;
 		ctx->SetVertexBuffers(0, 1, &lvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
-		drawIndices(_impl->frameLakeIndices);
+		drawIndices(_impl->frameLakeIndices, true);
 	}
 	// ----- Waterfalls, over the water -----
 	// (with the frame behind the water when it was copied in this frame; FSR 3.1's reactive

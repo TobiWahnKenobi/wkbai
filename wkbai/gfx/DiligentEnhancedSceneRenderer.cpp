@@ -20,6 +20,7 @@
 #include "DiligentGI.h"
 #include "DiligentRayShadows.h"
 #include "Forest.h"
+#include "TreeWind.h"
 #include "GpuProfiler.h"
 #include <unordered_set>
 #include "../Model.h"
@@ -288,35 +289,7 @@ cbuffer SunBuffer
 	float4 WindPrev;
 };
 
-// A tree bent in the wind (TreeBend): a skeleton made on the fly, without bones in the mesh. The
-// trunk is one bone from the tree's foot (its transform's origin): every vertex moves downwind by
-// the square of its height over the foot (a cantilever's curve: the foot stands, the crown moves
-// most), held to its length (it sinks a little as it leans), swinging on the lean at the tree's
-// own pace (a tall tree slower; each tree its own phase by where it stands) and circling a little
-// across it. Sway and leaves: the vertices out from the trunk (the twigs and leaves of the crown)
-// also flutter, quickly, each by its own place, the more the stronger the wind. World positions
-// in and out.
-float3 TreeBend(float3 p, float3 base, float4 wb)
-{
-	float h = max(p.y - base.y, 0);
-	float hn = h * 0.1;
-	float seed = frac(sin(dot(base.xz, float2(12.9898, 78.233))) * 43758.5453);
-	float amp = length(wb.xy);
-	float pace = 1 / (0.8 + 0.25 * hn);
-	float swing = sin(wb.z * 1.7 * pace + seed * 6.283) * 0.4 + sin(wb.z * 2.9 * pace + seed * 17.0) * 0.15;
-	float2 off = wb.xy * ((1 + swing) * hn * hn);
-	off += float2(-wb.y, wb.x) * (sin(wb.z * 1.3 * pace + seed * 9.1) * 0.15 * hn * hn);
-	float len = length(off);
-	off *= min(1, 0.18 * h / max(len, 1e-4)); // (no tree leans more than about 10 degrees)
-	p.xz += off;
-	p.y -= dot(off, off) / (2 * max(h, 0.5));
-	if (wb.w > 1.5 && amp > 1e-4) {
-		float r = length(p.xz - base.xz);
-		float f = sin(wb.z * 11 + dot(p, float3(1.7, 2.3, 1.3)) + seed * 40) * (0.02 + 0.1 * amp) * saturate(r * 0.4) * saturate(hn * 2);
-		p += float3(wb.x / amp * 0.5, 1, wb.y / amp * 0.5) * f;
-	}
-	return p;
-}
+// (the trees in the wind: WindDeform, TreeWind.h, put in front of this source)
 
 // The frame's fire lights (ShadowEnvironment::fireLights): each a warm point light that fades
 // out over its radius, half wrapped around the surface so that fires also light the ground
@@ -452,14 +425,11 @@ VS_OUTPUT Shade(float3 Pos, float3 Normal, float2 Texcoord, float2 EmblemUV, flo
 	float4x4 EntityTransform = transpose(float4x4(T0, T1, T2, T3));
 	VS_OUTPUT output = (VS_OUTPUT)0;
 	float4x4 trans = mul(EntityTransform, Transform);
-	// (a tree in the wind: bent, TreeBend)
+	// (a tree in the wind: bent in its model space by its wind group, as its shadow, WindDeform)
+	if ((EntityFlags & 1024) && WindBend.w > 0)
+		Pos = WindDeform(Pos, (EntityFlags >> 11) & 31, WindBend);
 	float3 bentWorld = mul(float4(Pos, 1), EntityTransform).xyz;
-	if ((EntityFlags & 1024) && WindBend.w > 0) {
-		bentWorld = TreeBend(bentWorld, EntityTransform[3].xyz, WindBend);
-		output.Pos = mul(float4(bentWorld, 1), Transform);
-	}
-	else
-		output.Pos = mul(float4(Pos, 1), trans);
+	output.Pos = mul(float4(Pos, 1), trans);
 	if(EntityFlags & 1) {
 		output.Norm = float3(0,0,0);
 		output.Color = float4(1,1,1,1);
@@ -1081,11 +1051,11 @@ MOTION_OUTPUT Motion(float3 pos, float3 prevPos, float2 texcoord, float4 T0, flo
 {
 	float4x4 cur = transpose(float4x4(T0, T1, T2, T3)), prev = transpose(float4x4(P0, P1, P2, P3));
 	MOTION_OUTPUT o;
-	float3 wc = mul(float4(pos, 1), cur).xyz, wp = mul(float4(prevPos, 1), prev).xyz;
 	if ((flags & 1024) && WindBend.w > 0) { // (a tree in the wind: bent now and as it was)
-		wc = TreeBend(wc, cur[3].xyz, WindBend);
-		wp = TreeBend(wp, prev[3].xyz, WindPrev);
+		pos = WindDeform(pos, (flags >> 11) & 31, WindBend);
+		prevPos = WindDeform(prevPos, (flags >> 11) & 31, WindPrev);
 	}
+	float3 wc = mul(float4(pos, 1), cur).xyz, wp = mul(float4(prevPos, 1), prev).xyz;
 	o.Pos = mul(float4(wc, 1), Transform);
 	o.Cur = mul(float4(wc, 1), MotionViewProj);
 	o.Prev = mul(float4(wp, 1), MotionPrevViewProj);
@@ -1674,6 +1644,25 @@ struct ForestGpu {
 static constexpr float STATIC_SHADOW_RADIUS = 200.0f;
 static constexpr float STATIC_SHADOW_DEPTH = 1000.0f;
 
+// The trees in the wind (Wind.h, WindBend, TreeWind.h): the lean by the wind now (with its gust),
+// a crown 10 m up moving 4 cm in still air, 13 cm in a gentle breeze, 30 in a fresh one, 84 in a
+// gale; once a frame, the frame before's kept (prev) for the motion vectors. The scene's shaders
+// and the shadow structures' bend read the same
+static const float* TreeWindNow(uint64_t frameIndex, bool prev)
+{
+	static float cur[4] = {}, prv[4] = {};
+	static uint64_t frame = ~0ull;
+	if (frameIndex != frame) {
+		const bool first = frame == ~0ull;
+		frame = frameIndex;
+		const float a = 0.04f + 0.8f * std::pow(g_wind.strength(), 1.6f);
+		const float next[4] = { g_wind.dir.x * a, g_wind.dir.z * a, (float)g_wind.swayClock, (float)std::clamp(g_renderSettings.windTrees, 0, 2) };
+		std::copy_n(first ? next : cur, 4, prv);
+		std::copy_n(next, 4, cur);
+	}
+	return prev ? prv : cur;
+}
+
 // The night's share of the windows' cast light: 1 - daylight, and no brighter than at midnight
 // through the dawn and the dusk. With the Physical sky the grade lifts to the day's from 8 degrees
 // under the horizon, while the night's lights only fade once the sun is 11 degrees up. So at
@@ -2253,7 +2242,7 @@ void DiligentEnhancedSceneRenderer::init()
 		teamColours += c;
 	}
 	teamColours += " };\n";
-	const std::string source = std::string(g_cloudShaderCode) + teamColours + esShaderCode;
+	const std::string source = std::string(g_cloudShaderCode) + teamColours + g_treeWindHlsl + esShaderCode;
 	auto createShader = [&](SHADER_TYPE type, const char* entryPoint) {
 		ShaderCreateInfo sci;
 		sci.SourceLanguage = SHADER_SOURCE_LANGUAGE_HLSL;
@@ -2631,18 +2620,9 @@ void DiligentEnhancedSceneRenderer::render()
 		// the trees in the wind (Wind.h, WindBend): the lean by the wind now (with its gust), a
 		// crown 10 m up moving 4 cm in still air, 13 cm in a gentle breeze, 30 in a fresh one,
 		// 84 in a gale; once a frame, the frame before's kept for the motion vectors
-		static float cur[4] = {}, prv[4] = {};
-		static uint64_t frame = ~0ull;
-		if (dgfx->FrameIndex() != frame) {
-			const bool first = frame == ~0ull;
-			frame = dgfx->FrameIndex();
-			const float a = 0.04f + 0.8f * std::pow(g_wind.strength(), 1.6f);
-			const float next[4] = { g_wind.dir.x * a, g_wind.dir.z * a, (float)g_wind.swayClock, (float)std::clamp(g_renderSettings.windTrees, 0, 2) };
-			std::copy_n(first ? next : cur, 4, prv);
-			std::copy_n(next, 4, cur);
-		}
+		const float* cur = TreeWindNow(dgfx->FrameIndex(), false);
 		std::copy_n(cur, 4, (float*)mapped + 204);
-		std::copy_n(prv, 4, (float*)mapped + 208);
+		std::copy_n(TreeWindNow(dgfx->FrameIndex(), true), 4, (float*)mapped + 208);
 	}
 	float* fire = (float*)mapped + 32;
 	const std::vector<float>& fireLights = shadows.fireLights;
@@ -2799,6 +2779,8 @@ void DiligentEnhancedSceneRenderer::render()
 			if (t.model && g >= 0) {
 				inst.transform = t.transform.getTranspose();
 				inst.flags = (t.flags & 0xFFFFFF) | (uint32_t)TeamColours::index(t.color) << 24;
+				if (t.flags & SceneEntity::SEFLAG_WIND)
+					inst.flags |= WindGroupOf(t.transform) << WIND_GROUP_SHIFT;
 				ce.centre[0] = t.centre.x;
 				ce.centre[1] = t.centre.y;
 				ce.centre[2] = t.centre.z;
@@ -3160,6 +3142,8 @@ void DiligentEnhancedSceneRenderer::render()
 				inst.transform = ent->transform.getTranspose();
 				// (bits 24-26: the owner's team colour, TeamColours, for the HD models' team materials)
 				inst.flags = (ent->flags & 0xFFFFFF) | (uint32_t)TeamColours::index(ent->color) << 24;
+				if (ent->flags & SceneEntity::SEFLAG_WIND)
+					inst.flags |= WindGroupOf(ent->transform) << WIND_GROUP_SHIFT;
 				if (animated)
 					keyFrames(inst, enhAnim, (AnimatedModel*)model, ent->animTime);
 				const int actualColor = ent->color % enhMesh->texcoords.size();
@@ -3309,6 +3293,21 @@ void DiligentEnhancedSceneRenderer::render()
 			DiligentRayShadows* rts = shadows.rayShadows;
 			rts->beginFrame();
 			const uint64_t rtFrame = rts->frame();
+			{
+				PROFILE_SCOPE("Wind");
+				rts->windBegin(ctx, TreeWindNow(dgfx->FrameIndex(), false));
+			}
+			// a tree's structure bent in the wind by its group (TreeWind.h), null with the wind off
+			auto windBlasOf = [&](StaticModel* sm, DilMesh& mesh, const Matrix& transform) -> IBottomLevelAS* {
+				return rts->windBlas(ctx, &mesh, [&]() {
+					std::vector<Vector3> rest;
+					rest.reserve(mesh.totVertices);
+					for (auto& grp : sm->mesh.groupIndices)
+						for (auto& tup : grp)
+							rest.push_back(*(const Vector3*)(sm->mesh.vertices.data() + 3 * tup.vertex));
+					return rest;
+				}, mesh.indices, mesh.rtGroups, WindGroupOf(transform));
+			};
 			// a mesh's alpha-tested groups (leaves) for the structures: their texture as drawn and per
 			// triangle its UVs; false until they are known
 			auto resolveRtAlpha = [&](StaticModel* staticModel, DilMesh& mesh) -> bool {
@@ -3419,11 +3418,15 @@ void DiligentEnhancedSceneRenderer::render()
 							continue;
 					}
 					else {
-						if (!stillLooked) {
-							stillBlas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
-							stillLooked = true;
+						if ((ent->flags & SceneEntity::SEFLAG_WIND) && rts->windOn())
+							blas = windBlasOf(staticModel, mesh, ent->transform);
+						if (!blas) {
+							if (!stillLooked) {
+								stillBlas = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
+								stillLooked = true;
+							}
+							blas = stillBlas;
 						}
-						blas = stillBlas;
 					}
 					rts->add(blas, ent->transform);
 				}
@@ -3432,15 +3435,25 @@ void DiligentEnhancedSceneRenderer::render()
 			// the forest's trees: the still structure (built again or updated as the forest changes)
 			{
 				PROFILE_SCOPE("Forest");
-				std::map<Model*, IBottomLevelAS*> known;
-				rts->setForest(ctx, forestOn ? forestData : nullptr, fg.rebuiltForRt, fg.changedForRt, [&](Model* mdl) -> IBottomLevelAS* {
-					auto k = known.find(mdl);
+				// (per model and wind group: a tree in the wind its group's bent structure)
+				std::map<std::pair<Model*, uint32_t>, IBottomLevelAS*> known;
+				const bool wind = rts->windOn();
+				rts->setForest(ctx, forestOn ? forestData : nullptr, fg.rebuiltForRt, fg.changedForRt, [&](const ForestTree& t) -> IBottomLevelAS* {
+					const bool bends = wind && (t.flags & SceneEntity::SEFLAG_WIND);
+					const uint32_t group = bends ? WindGroupOf(t.transform) : ~0u;
+					auto k = known.find({ t.model, group });
 					if (k != known.end())
 						return k->second;
-					StaticModel* sm = mdl->getStaticModel();
+					StaticModel* sm = t.model->getStaticModel();
 					DilMesh& mesh = meshOf(sm);
-					IBottomLevelAS* b = resolveRtAlpha(sm, mesh) ? rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups) : nullptr;
-					known[mdl] = b;
+					IBottomLevelAS* b = nullptr;
+					if (resolveRtAlpha(sm, mesh)) {
+						if (bends)
+							b = windBlasOf(sm, mesh, t.transform);
+						if (!b)
+							b = rts->blas(ctx, &mesh, 0, mesh.vertices, 0, mesh.totVertices, mesh.indices, mesh.rtGroups);
+					}
+					known[{ t.model, group }] = b;
 					return b;
 				});
 				fg.rebuiltForRt = false;
