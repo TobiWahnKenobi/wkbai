@@ -11396,10 +11396,37 @@ void Test_MixedFormation()
 	// the lower left panel for a selected formation shows a member (its picture, hit points and
 	// stats; the user's report: empty for a selected Spearmen formation)
 	if (merged) {
-		const CommonGameObject* shown = PanelSubject(merged);
-		check(shown && shown != merged && shown->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER && shown->getParent() == merged,
-			"the panel of a selected formation shows one of its members");
-		check(PanelSubject(shown) == shown, "the panel of a selected unit shows the unit");
+		// (a formation of several types: one figure of each in the picture, no member's stats)
+		std::set<const GameObjBlueprint*> types;
+		for (const auto& [type, members] : merged->children)
+			for (const CommonGameObject* m : members)
+				if (m->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER)
+					types.insert(m->blueprint);
+		const std::vector<const CommonGameObject*> figures = PanelSubjects(merged);
+		std::set<const GameObjBlueprint*> shownTypes;
+		bool members = true;
+		for (const CommonGameObject* f : figures) {
+			shownTypes.insert(f->blueprint);
+			members &= f->getParent() == merged;
+		}
+		check(types.size() >= 2 && figures.size() == types.size() && shownTypes == types && members,
+			"the picture of a formation of " + std::to_string(types.size()) + " types shows one member of each (" + std::to_string(figures.size()) + ")");
+		check(PanelSubject(merged) == merged, "a formation of several types shows no member's stats");
+		// the scene saved, to look at the panel in the client (a benchmark run: "saveGame": "Mixed
+		// Formation.sav", "select": the formation's type printed here)
+		{
+			std::error_code ec;
+			std::filesystem::create_directories(g_userPath / "saved" / "Save_Games", ec);
+			const std::string save = PathToUtf8(g_userPath / "saved" / "Save_Games" / "Mixed Formation.sav");
+			// (the formation's owner as the human player: the client loads the save as it, and its
+			// panel shows the selection)
+			const std::vector<SrvGORef> clients = server.clientPlayerObjects;
+			server.clientPlayerObjects.clear();
+			server.clientPlayerObjects.emplace_back(player);
+			printf("MIXEDF saved %s (the formation: %s %u): %d\n", save.c_str(), merged->blueprint->name.c_str(), merged->id, (int)server.saveGame(save.c_str()));
+			server.clientPlayerObjects = clients;
+		}
+		check(figures.size() > 0 && PanelSubject(figures[0]) == figures[0] && PanelSubjects(figures[0]).size() == 1, "the panel of a selected unit shows the unit");
 	}
 	// an order on the formation's own member (a right-click inside it): refused, not followed
 	if (merged) {
@@ -11428,6 +11455,12 @@ void Test_MixedFormation()
 		fresh = CreateFormationFrom(server, player, twelve);
 		for (int i = 0; i < 20 * 10; i++)
 			StepServer(server, 1);
+	}
+	// a formation of one type (12 Spearmen): the panel shows one of its members, stats and all
+	if (fresh) {
+		const CommonGameObject* shown = PanelSubject(fresh);
+		check(shown && shown != fresh && shown->getParent() == fresh && PanelSubjects(fresh).size() == 1,
+			"the panel of a selected formation of one type shows one of its members");
 	}
 	if (fresh) {
 		const GameObjBlueprint* enemyBp = spearBp;
