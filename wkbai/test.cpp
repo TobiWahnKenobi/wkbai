@@ -3560,6 +3560,7 @@ void Test_AIvsAI()
 				std::pair<float, float> sightLow{ 1e9f, 0.0f }, sightHigh{ -1e9f, 0.0f }; // characters' sight (tiles), at height
 				int characters = 0, buildings = 0, soldiers = 0; // soldiers: characters but peasants, carts, merchants, clergy
 				int living = 0, livingSoldiers = 0; // (the characters count corpses too: "Dead Peasant", "Rider Dying")
+				float armyValue = 0.0f;
 				int carts = 0, villages = 0;
 				float villageFood = 0, villageWood = 0, villageGold = 0; // what the villages hold, not yet carted home
 				std::map<std::string, int> orders; // the characters' current orders
@@ -3590,6 +3591,9 @@ void Test_AIvsAI()
 									if (n.rfind("Dead ", 0) != 0 && n.find("Dying") == std::string::npos) {
 										living++;
 										livingSoldiers += !civilian;
+										if (!civilian) // what the living soldiers cost, the evaluation's measure of strength
+											armyValue += o->blueprint->getStartingItemValue(Tags::PDITEM_FOOD_COST) + o->blueprint->getStartingItemValue(Tags::PDITEM_WOOD_COST)
+												+ o->blueprint->getStartingItemValue(Tags::PDITEM_GOLD_COST);
 									}
 									static const char* engines[] = { "Battering Ram", "Trebuchet", "Mangonel", "Siege Tower" };
 									if (std::any_of(std::begin(engines), std::end(engines), [&](const char* e) { return n.find(e) != std::string::npos; })) {
@@ -3685,9 +3689,9 @@ void Test_AIvsAI()
 						}
 				};
 				count(player, count);
-				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f; living %d (%d soldiers)\n", when,
+				printf("AITEST %s t=%.0f player %u (%s): %d characters (%d soldiers, %zu raised, %d sent home wounded), %d buildings, food %.0f wood %.0f gold %.0f; living %d (%d soldiers), army value %.0f\n", when,
 					server.timeManager.currentTime, player->id, player->blueprint->name.c_str(), characters, soldiers, raised[player->id].size(), player->aiController.retreated, buildings,
-					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), living, livingSoldiers);
+					player->getItem(Tags::PDITEM_FOOD), player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), living, livingSoldiers, armyValue);
 				{
 					static const int cartsRequired = server.gameSet->items.names.getIndex("Carts Required");
 					printf("AITEST   economy player %u: carts %d (the scripts want %.0f), villages %d holding food %.0f wood %.0f gold %.0f\n", player->id, carts,
