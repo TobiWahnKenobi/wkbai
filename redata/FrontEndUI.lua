@@ -982,7 +982,14 @@ local TIERS = { { "CONSCRIPT", "FRONT_END_CHAT_AI_CONSCRIPT" }, { "VETERAN", "FR
 local function resetSlots(level)
 	skirmish.level = level
 	skirmish.slots = {}
-	local players = tonumber(string.match(level or "", "^(%d+) Player")) or 2
+	-- the count in the name ("2 Player 4 Peaks", "Maps\\8 Player Skye.wkbai"), else a map
+	-- folder's start positions (none yet while it compiles: the lobby asks again when it's done)
+	local players = tonumber(string.match(string.match(level or "", "([^\\/]+)$") or "", "^(%d+) Player"))
+	if not players and level then
+		local starts = getLevelStarts(level)
+		if #starts > 0 then players = #starts end
+	end
+	players = players or 2
 	for i = 1, players do
 		skirmish.slots[i] = { type = (i == 1) and "human" or "ai", colour = ((i - 1) % 8) + 1, team = 0 }
 	end
@@ -1201,7 +1208,13 @@ local function playersTab()
 	local mapSize = L(420)
 	local mapX, mapY = X(20) + bioW - mapSize - L(10), Y(288) + L(712) - mapSize - L(10)
 	if skirmish.level and drawLevelPreview(skirmish.level, mapX, mapY, mapSize, mapSize) then
-		for i, start in ipairs(getLevelStarts(skirmish.level)) do
+		local starts = getLevelStarts(skirmish.level)
+		-- a map folder named without its count, compiled since it was chosen: a slot per start
+		if #starts > 0 and #starts ~= #skirmish.slots and not string.match(string.match(skirmish.level, "([^\\/]+)$") or "", "^%d+ Player") then
+			resetSlots(skirmish.level)
+			slots = skirmish.slots
+		end
+		for i, start in ipairs(starts) do
 			local slot = slots[i]
 			local sx, sy = mapX + start.x * mapSize, mapY + start.y * mapSize
 			-- the slot's flag (the in-game diplomacy window's Player Flag <colour>), faded for a
@@ -4065,6 +4078,13 @@ function FE_IsOpen()
 end
 
 function FE_Open(name)
+	-- "select:<level>" (tests, after "skirmish"): the lobby's map chosen ("8 Player Isle of Skye.wkbai")
+	local chosenLevel = string.match(name, "^select:(.+)$")
+	if chosenLevel then
+		resetSlots(chosenLevel)
+		request("select_level", chosenLevel)
+		return
+	end
 	-- "screen.tab" opens a screen at one of its tabs (tests)
 	local screenName, tab = string.match(name, "^([^.]+)%.(.+)$")
 	if screenName == "skirmish" then

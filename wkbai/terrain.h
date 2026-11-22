@@ -45,6 +45,9 @@ struct TerrainTile {
 	unsigned int rot : 2, xflip : 1, zflip : 1;
 	unsigned int x, z;
 	float waterLevel = -1.0f; bool fullOfWater = false;
+	// under a sloped river (Terrain::applySlopedWater): its surface is Terrain::slopedSurface at
+	// the tile's corners, waterLevel their mean
+	bool slopedWater = false;
 	//unsigned int lakeId; // when removing lake, do a full autofill again.
 };
 
@@ -52,6 +55,20 @@ struct TerrainTile {
 extern float g_lowestTerrainHeight;
 
 inline uint32_t g_terrainInstances = 0;
+
+// A map's own far land (a wkbai map folder's farland.png, kept with its cache as <map>.farland):
+// heights on a coarse grid round the map that Extend map takes instead of generating them (the
+// real land round a map made from elevation data). Positions in the whole map's world units (tile 0
+// at 0, x east, z north); row 0 is the south edge.
+struct StoredFarLand {
+	float x0 = 0, z0 = 0, cell = 40;
+	int w = 0, h = 0;
+	float seaLevel = -1e30f;
+	std::vector<float> v;
+	// the height at a place; weight: 1 inside, falling to 0 over the store's outer tenth (where the
+	// generated land takes over), 0 off it
+	float sample(float wx, float wz, float& weight) const;
+};
 
 struct Terrain
 {
@@ -67,6 +84,10 @@ struct Terrain
 	// null: none, everything found automatically)
 	std::string mapFile;
 	std::shared_ptr<WaterDesign> waterDesign;
+	// the map's own far land (<map>.farland beside the BCM; null: none, Extend map generates it)
+	std::shared_ptr<StoredFarLand> farLand;
+	static std::shared_ptr<StoredFarLand> readFarLand(const std::string& path);
+	static bool writeFarLand(const std::filesystem::path& path, const StoredFarLand& f);
 	// the texture translation (.lttt) readBCM applies: empty, the one named after the BCM
 	// (Maps\Map_Textures\<name>.lttt); "-" none. A wkbai map folder's (MapFolder.h) names its own.
 	std::string ltttPath;
@@ -172,5 +193,31 @@ struct Terrain
 	void floodfillWater();
 	// the water again from the lakes (the map editor added, moved or removed one)
 	void refillWater();
+
+	// wkbai's sloped rivers (WaterDesign::Waterway::levels): the water design's sloped waterways
+	// laid over the level water (floodfillWater does it after the lakes; readFromFile again once
+	// the design is read). Per vertex the sloped surface's height (NO_SLOPED_SURFACE: none), and
+	// per tile under it slopedWater, fullOfWater and waterLevel (the mean of its corners). A lake
+	// or the sea keeps its own tiles where its level is as high: a river runs into it at its level,
+	// and its points out on a lake take the lake's level. The rivers are the lakes' outlets: a
+	// lake's flood stops where a river's surface drops below its level (floodfillWater).
+	static constexpr float NO_SLOPED_SURFACE = -1e30f;
+	std::vector<float> slopedSurface;
+	void applySlopedWater();
+	// the sloped courses' surface (slopedSurface) and per tile within them its level (the mean of
+	// its corners; NO_SLOPED_SURFACE outside) and the course's half width; toLakes: the courses
+	// at the lakes' levels where they are on them (else the design's own levels). Their number.
+	int slopedCorridor(bool toLakes, std::vector<float>& tileLevel, std::vector<float>& tileHalf);
+	// the sloped surface at a vertex (full coordinates; NO_SLOPED_SURFACE where none)
+	float slopedSurfaceAt(int vx, int vz) const
+	{
+		return (slopedSurface.empty() || vx < 0 || vz < 0 || vx > width || vz > height) ? NO_SLOPED_SURFACE : slopedSurface[(size_t)vz * (width + 1) + vx];
+	}
+	// the water's surface at a point (world x, z of the playable area) over a water tile: its level,
+	// or the sloped river's surface between the tile's corners
+	float waterSurfaceAt(float x, float z, const Tile* tile) const;
+	// how deep a water tile (full coordinates) is for wading: its level over its lowest corner;
+	// on a sloped river the deepest of its corners (its surface there over the ground there)
+	float waterDepthAt(int tx, int tz) const;
 };
 		

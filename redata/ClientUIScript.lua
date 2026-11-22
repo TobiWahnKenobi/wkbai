@@ -387,7 +387,9 @@ function CCUI_PerFrame()
 	sel = getFirstSelection()
 	-- the selection's information in the window of the lower left panel, as the original's
 	-- CSelectionInformationPanel (WKB.exe 0x78D4F0); with nothing selected, the object under the mouse
-	local info = sel
+	-- (a formation selected: one of its members, getPanelSubject; the formation itself has no
+	-- picture or hit points, and the panel stayed empty)
+	local info = getPanelSubject()
 	if info == 0 then info = getHoveredObject() end
 	-- (a disguised enemy shows nothing: the panel would give it away)
 	if info ~= 0 and not isDisguised(info) then drawSelectionInformation(info) end

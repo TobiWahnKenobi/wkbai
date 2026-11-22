@@ -48,6 +48,7 @@ SamplerComparisonState shadowSampler;
 Texture2D<float> blobTexture;
 Texture2D flowTexture; // the water's flow per tile (BuildWaterFlow)
 Texture2D<float> seaTexture; // per tile: 1 in a sea's open water, 0 elsewhere (lakes; BuildWaterFlow)
+Texture2D<float> rapidsTexture; // per tile: 0 no sloped river, else 0.1 + 0.9 x its rapids (0 gentle to 1 steep, SlopedRapids)
 // per playable tile... of the renderer's grid (terrain width x height): the wind field's still
 // part (WindShelterMap: the factor on the wind's speed / 1.5), for the grass's Field level
 Texture2D<float> windShelter;
@@ -1338,13 +1339,15 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 	float3 tex = 0.5 * (inpTexture.Sample(cloudSampler, uv + WaterLayers.xy).rgb + inpTexture.Sample(cloudSampler, uv + WaterLayers.zw).rgb);
 	float2 ruv = input.World.xz * WaterParams.z;
 	float2 slope = normalTexture.Sample(cloudSampler, ruv + WaterRipples.xy).xy + normalTexture.Sample(cloudSampler, ruv * 1.7 + WaterRipples.zw).yx;
-	float rush = 0, river = 0, swellPhase = 0, swell = 0;
+	float rush = 0, river = 0, swellPhase = 0, swell = 0, rapids = 0;
 	if (WaterFlowParams.x != 0 && WaterSkyUp.w != 0) {
 		float4 f = flowTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz);
 		float2 fdir = f.xy * 2 - 1;
-		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow(); // units per second
+		// (a sloped river's rapids: up to three and a half times as fast, all rushing)
+		rapids = saturate((rapidsTexture.Sample(inpSampler, (input.World.xz + BlobParams.w) * BlobParams.yz) - 0.1) / 0.9);
+		float2 flow = fdir * f.z * WaterFlowParams.y * FloodFlow() * (1 + 2.5 * rapids); // units per second
 		river = f.a;
-		rush = f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5);
+		rush = max(f.z * saturate(length(fdir) * 1.5) * river * min(FloodFlow(), 1.5), rapids * 1.6);
 		const float cycle = 2.0;
 		float p0 = frac(FlowClock() / cycle), p1 = frac(FlowClock() / cycle + 0.5);
 		float w0 = 1 - abs(2 * p0 - 1);
@@ -1394,6 +1397,8 @@ float4 PS_Lake(LAKE_OUTPUT input) : SV_Target
 			foam *= lerp(saturate(1 - input.Depth / 0.5), 1, river);
 		// white water where a narrow river runs fast, on the ripples' crests
 		foam = max(foam, saturate((slope.x + slope.y - 2) * 3 - 0.6) * rush * rush * 0.35);
+		// rapids: broken white water all over, the more the steeper
+		foam = max(foam, saturate((slope.x + slope.y - 2) * 2.5 + rapids * 1.3 - 0.45) * rapids * 0.85);
 		// the swell breaking: foam on its crests in the last 1.2 units of depth
 		foam = max(foam, saturate((sin(swellPhase) - 0.7) * 4) * saturate(1 - input.Depth / 0.8) * swell * 0.7);
 		foam *= 1 - 0.85 * input.Flood; // still water over the fields: no surf ring at its edge
@@ -1480,6 +1485,11 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float halfWidth = max(riverWidth.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz), 1.5);
 	float current = clamp(14.0 / halfWidth, 0.6, 3.5) * WaterFlowParams.x * FloodFlow(); // units per second
 	float tight = saturate((17 - halfWidth) / 11); // 1 where it is 12 units wide or less, 0 from 34
+	// a sloped river's rapids (SlopedRapids): faster, up to three and a half times, and tight
+	float slopedMark = rapidsTexture.Sample(inpSampler, (base + BlobParams.w) * BlobParams.yz);
+	float sloped = saturate(slopedMark * 20), rapids = saturate((slopedMark - 0.1) / 0.9);
+	current *= 1 + 2.5 * rapids;
+	tight = max(tight, rapids);
 	const float rcycle = 3.0;
 	float q0 = frac(FlowClock() / rcycle), q1 = frac(FlowClock() / rcycle + 0.5);
 	float v0 = 1 - abs(2 * q0 - 1);
@@ -1592,6 +1602,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	}
 	riverCrest *= tight * saturate(rf.y / 0.8);
 	float riverFoam = max(bankFoam, riverCrest) * river;
+	// rapids: streaks of white water carried down with the current, all white where it is steepest
+	float rapidNoise = RiverNoise(float2(s0 * 0.45, rf.y * 0.9)) * v0 + RiverNoise(float2(s1 * 0.45, rf.y * 0.9) + 0.5) * (1 - v0);
+	riverFoam = max(riverFoam, saturate((rapidNoise - 0.62 + rapids * 0.75) * 3.0) * rapids * 0.95);
 	float foam = saturate(max(max(crestFoam, shoreFoam), riverFoam)) * 0.9 * (1 - 0.85 * input.Flood);
 	// what the waves reflect: the frame along the ray (bent by the waves, less by the ripples),
 	// else the sky
@@ -1605,6 +1618,9 @@ float4 PS_LakeHigh(LAKE_OUTPUT input) : SV_Target
 	float clear = lerp(lerp(0.35, 0.95, saturate(depth / 2.5)), clamp(1 - exp(-1.3 * depth), 0.2, 0.96), river);
 	clear = lerp(clear, max(clear, 0.92), WeatherParams2.y * FreshShare(river, input.World)); // muddy water is opaque
 	float alpha = saturate(clear + mirror * 0.25 + glint + foam) * FloodShore(input.Flood, depth);
+	// a sloped river reads as running water however thin (a stream 0.3 m deep over a grass bed had
+	// been nearly clear: the stream in pieces), soft only right at its waterline
+	alpha = max(alpha, 0.6 * sloped * saturate(depth / 0.15));
 	// Extend map: towards the near ring's end, the far sea's look (no line where they meet)
 	float toFar = NearToFarSea(input.World);
 	if (toFar > 0) {
@@ -2007,6 +2023,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IPipelineState> pipeline;
 	RefCntAutoPtr<ITexture> flowMap; // the water's flow, one texel per tile
 	RefCntAutoPtr<ITexture> seaMap; // and where it is a sea's open water
+	RefCntAutoPtr<ITexture> rapidsMap; // and a sloped river's rapids (SlopedRapids)
 	RefCntAutoPtr<ITexture> coastMap; // and each tile's distance to the land (the sea's ice)
 	RefCntAutoPtr<ITexture> riverField; // the rivers' coordinates (BuildRiverField)
 	RefCntAutoPtr<ITexture> riverWidth; // and their half width
@@ -2047,6 +2064,7 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	struct Chunk {
 		Vector3 low, high;
 		uint32_t grassFirst = 0, grassCount = 0; // its blades in grassBuffer
+		int grassSlot = -1;                      // streamed grass: its slot in the pool (-1: none)
 		std::vector<std::pair<int, std::vector<uint32_t>>> indicesPerTexture; // texture pair index
 		std::vector<uint32_t> lakeIndices;
 		std::vector<uint32_t> floodIndices; // the water over its land that floods (drawn while wkbai's floods rise)
@@ -2071,6 +2089,21 @@ struct DiligentEnhancedTerrainRenderer::Impl {
 	RefCntAutoPtr<IBuffer> grassBuffer; // GrassBlade instances, chunk after chunk
 	float grassBuiltDensity = 0; // the blades per square unit in grassBuffer (TerrainGrassBuilder::BuildDensity)
 	void buildGrass(IRenderDevice* device, Terrain* terrain, float density);
+	// A large map's grass doesn't fit one buffer (a 1024-tile map at 18 a square unit: 210 million
+	// blades, 5 GB): above GRASS_BUDGET blades the grass is streamed instead. The buffer is a pool
+	// of slots, each one chunk's blades at the built density; a chunk within the grass distance
+	// gets a slot (the one used longest ago) and its blades built when it first needs them, a few
+	// chunks a frame, nearest first.
+	static constexpr size_t GRASS_BUDGET = 16u << 20;
+	static constexpr int GRASS_SLOTS = 96;
+	bool grassStreaming = false;
+	uint32_t grassSlotCapacity = 0;
+	std::vector<int> grassSlotChunk;       // per slot: the chunk in it (-1: free)
+	std::vector<uint64_t> grassSlotUsed;   // per slot: the frame it was last drawn in
+	uint64_t grassFrame = 0;
+	TerrainGrassBuilder grassStream;       // keeps the pictures and the tiles' shares between chunks
+	Terrain* grassTerrain = nullptr;
+	void streamGrass(IDeviceContext* ctx, std::vector<const Chunk*>& wanted, const Vector3& cam);
 	// the regions' waves into WaveBuffer (made with device the first time): the water design's
 	// ways, turned towards the lobby's prevailing wind (Wind.h) while it blows; again whenever
 	// that changes (once a game: the waves' phase jumps with their way)
@@ -2433,6 +2466,7 @@ void DiligentEnhancedTerrainRenderer::init()
 		{ SHADER_TYPE_PIXEL, "blobTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "flowTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "seaTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
+		{ SHADER_TYPE_PIXEL, "rapidsTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL, "coastTexture", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_VERTEX | SHADER_TYPE_PIXEL, "windShelter", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
 		{ SHADER_TYPE_PIXEL | tessStages, "waveRegions0", 1, SHADER_RESOURCE_TYPE_TEXTURE_SRV, SHADER_RESOURCE_VARIABLE_TYPE_STATIC },
@@ -3010,8 +3044,10 @@ void DiligentEnhancedTerrainRenderer::init()
 						// the corners at the mean level of the water around them at about this level (a clean
 						// step where waters at different heights meet: DiligentWaterfalls)
 						const float lv = tile->waterLevel;
-						const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
-						const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
+						// (a sloped river: its surface at the corners)
+						const float w00 = TileWaterCorner(terrain, x, z, x, z), w10 = TileWaterCorner(terrain, x, z, x + 1, z);
+						const float w11 = TileWaterCorner(terrain, x, z, x + 1, z + 1), w01 = TileWaterCorner(terrain, x, z, x, z + 1);
+						(void)lv;
 						lakeVertices.insert(lakeVertices.end(), {
 							LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 							LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
@@ -3094,6 +3130,14 @@ void DiligentEnhancedTerrainRenderer::Impl::buildWaterMaps(IRenderDevice* device
 	const uint32_t W = terrain->width, H = terrain->height;
 	put(flowMap, "water flow map", "flowTexture", W, H, TEX_FORMAT_RGBA8_UNORM, 4, flow.data());
 	put(seaMap, "open sea map", "seaTexture", W, H, TEX_FORMAT_R8_UNORM, 1, sea.data());
+	{
+		std::vector<uint8_t> rapids((size_t)W * H, 0);
+		for (uint32_t z = 0; z < H; z++)
+			for (uint32_t x = 0; x < W; x++)
+				rapids[(size_t)z * W + x] = terrain->getTile((int)x, (int)z)->slopedWater
+					? (uint8_t)std::lround((0.1f + 0.9f * SlopedRapids(terrain, (int)x, (int)z)) * 255.0f) : 0;
+		put(rapidsMap, "rapids map", "rapidsTexture", W, H, TEX_FORMAT_R8_UNORM, 1, rapids.data());
+	}
 	put(coastMap, "coast distance map", "coastTexture", W, H, TEX_FORMAT_R8_UNORM, 1, coast.data());
 	{
 		// the wind field (neutral until the client's first build, uploaded in render)
@@ -3150,9 +3194,101 @@ void DiligentEnhancedTerrainRenderer::Impl::writeWaves(IRenderDevice* device, ID
 		ctx->UpdateBuffer(waveBuffer, 0, sizeof(waves), waves, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 }
 
+void DiligentEnhancedTerrainRenderer::Impl::streamGrass(IDeviceContext* ctx, std::vector<const Chunk*>& wanted, const Vector3& cam)
+{
+	constexpr int CHUNK = 16;
+	grassFrame++;
+	// the nearest first (the camera's chunk before the far ones)
+	auto dist = [&](const Chunk* c) {
+		const float dx = (c->low.x + c->high.x) * 0.5f - cam.x, dz = (c->low.z + c->high.z) * 0.5f - cam.z;
+		return dx * dx + dz * dz;
+	};
+	std::sort(wanted.begin(), wanted.end(), [&](const Chunk* a, const Chunk* b) { return dist(a) < dist(b); });
+	if (wanted.size() > (size_t)GRASS_SLOTS)
+		wanted.resize(GRASS_SLOTS);
+	for (const Chunk* c : wanted)
+		if (c->grassSlot >= 0)
+			grassSlotUsed[c->grassSlot] = grassFrame;
+	int built = 0;
+	std::vector<GrassBlade> blades;
+	for (const Chunk* cc : wanted) {
+		if (cc->grassSlot >= 0)
+			continue;
+		if (built >= 3)
+			break; // the rest in the next frames (no stall when the camera jumps)
+		Chunk* c = const_cast<Chunk*>(cc);
+		// the slot drawn longest ago (never one this frame's chunks hold)
+		int slot = -1;
+		for (int s = 0; s < GRASS_SLOTS; s++)
+			if (grassSlotUsed[s] != grassFrame && (slot < 0 || grassSlotUsed[s] < grassSlotUsed[slot]))
+				slot = s;
+		if (slot < 0)
+			break;
+		if (grassSlotChunk[slot] >= 0) {
+			Chunk& old = chunks[grassSlotChunk[slot]];
+			old.grassSlot = -1;
+			old.grassCount = 0;
+		}
+		const int ci = (int)(c - chunks.data());
+		const int cw = ((int)grassTerrain->width + CHUNK - 1) / CHUNK;
+		const int cx = (ci % cw) * CHUNK, cz = (ci / cw) * CHUNK;
+		blades.clear();
+		const int n = grassTerrain->extendedTiles;
+		for (int z = cz; z < std::min(cz + CHUNK, (int)grassTerrain->height); z++)
+			for (int x = cx; x < std::min(cx + CHUNK, (int)grassTerrain->width); x++) {
+				if (n > 0 && (x < n || z < n || x >= grassTerrain->width - n || z >= grassTerrain->height - n))
+					continue;
+				grassStream.addTile(grassTerrain, x, z, grassBuiltDensity, blades);
+			}
+		if (blades.size() > grassSlotCapacity)
+			blades.resize(grassSlotCapacity);
+		if (!blades.empty())
+			ctx->UpdateBuffer(grassBuffer, (Uint64)slot * grassSlotCapacity * sizeof(GrassBlade), (Uint64)(blades.size() * sizeof(GrassBlade)), blades.data(),
+				RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+		c->grassSlot = slot;
+		c->grassFirst = (uint32_t)slot * grassSlotCapacity;
+		c->grassCount = (uint32_t)blades.size();
+		grassSlotChunk[slot] = ci;
+		grassSlotUsed[slot] = grassFrame;
+		built++;
+	}
+}
+
 void DiligentEnhancedTerrainRenderer::Impl::buildGrass(IRenderDevice* device, Terrain* terrain, float density)
 {
 	constexpr int CHUNK = 16; // as the chunks were made
+	// the blades the map would need: its grass share sampled on every 7th tile of every 7th row
+	{
+		TerrainGrassBuilder probe;
+		double share = 0;
+		int n = 0;
+		for (int z = 0; z < (int)terrain->height; z += 7)
+			for (int x = 0; x < (int)terrain->width; x += 7) {
+				share += probe.tileShare(terrain, x, z).share;
+				n++;
+			}
+		const double blades = n ? share / n * (double)terrain->width * terrain->height * 25.0 * density : 0;
+		grassStreaming = blades > (double)GRASS_BUDGET;
+		if (grassStreaming) {
+			grassTerrain = terrain;
+			grassStream = TerrainGrassBuilder();
+			grassSlotCapacity = (uint32_t)std::ceil(CHUNK * CHUNK * 25.0f * density);
+			grassSlotChunk.assign(GRASS_SLOTS, -1);
+			grassSlotUsed.assign(GRASS_SLOTS, 0);
+			for (Chunk& chunk : chunks) { chunk.grassSlot = -1; chunk.grassFirst = 0; chunk.grassCount = 0; }
+			grassBuffer.Release();
+			grassBuiltDensity = density;
+			BufferDesc grassDesc;
+			grassDesc.Name = "Terrain grass blades (streamed)";
+			grassDesc.Usage = USAGE_DEFAULT;
+			grassDesc.BindFlags = BIND_VERTEX_BUFFER;
+			grassDesc.Size = (Uint64)GRASS_SLOTS * grassSlotCapacity * sizeof(GrassBlade);
+			device->CreateBuffer(grassDesc, nullptr, &grassBuffer);
+			printf("Grass: streamed, about %.0f million blades on the map (%.0f per square unit), %d chunks of up to %u blades near the camera (%.0f MB)\n",
+				blades / 1e6, density, GRASS_SLOTS, grassSlotCapacity, grassDesc.Size / 1048576.0);
+			return;
+		}
+	}
 	TerrainGrassBuilder grassBuilder;
 	std::vector<GrassBlade> grass;
 	size_t c = 0;
@@ -3316,8 +3452,9 @@ bool DiligentEnhancedTerrainRenderer::updateWater()
 					// the corners at the mean level of the water around them at about this level (a clean
 					// step where waters at different heights meet: DiligentWaterfalls)
 					const float lv = tile->waterLevel;
-					const float w00 = WaterLevelAtCorner(terrain, x, z, lv), w10 = WaterLevelAtCorner(terrain, x + 1, z, lv);
-					const float w11 = WaterLevelAtCorner(terrain, x + 1, z + 1, lv), w01 = WaterLevelAtCorner(terrain, x, z + 1, lv);
+					const float w00 = TileWaterCorner(terrain, x, z, x, z), w10 = TileWaterCorner(terrain, x, z, x + 1, z);
+					const float w11 = TileWaterCorner(terrain, x, z, x + 1, z + 1), w01 = TileWaterCorner(terrain, x, z, x, z + 1);
+					(void)lv;
 					lakeVertices.insert(lakeVertices.end(), {
 						LakeVertex{ Vector3(lx, w00, lz), w00 - terrain->getVertex(x, z) },
 						LakeVertex{ Vector3(lx + tilesize, w10, lz), w10 - terrain->getVertex(x + 1, z) },
@@ -3841,7 +3978,7 @@ void DiligentEnhancedTerrainRenderer::render()
 	for (const Impl::Chunk& chunk : _impl->chunks) {
 		if (!visible(chunk.low, chunk.high))
 			continue;
-		if (chunk.grassCount > 0) {
+		if (chunk.grassCount > 0 || _impl->grassStreaming) {
 			// within the grass distance of the camera, by the box's nearest point
 			const Vector3& cam = camera->position;
 			const float dx = std::max({ chunk.low.x - cam.x, 0.0f, cam.x - chunk.high.x });
@@ -3936,6 +4073,8 @@ void DiligentEnhancedTerrainRenderer::render()
 	withMasks(_impl->lakeBinding);
 
 	// ----- Grass -----
+	if (g_renderSettings.grass && _impl->grassStreaming && _impl->grassBuffer && !grassChunks.empty())
+		_impl->streamGrass(ctx, grassChunks, camera->position);
 	if (g_renderSettings.grass && _impl->grassBuffer && !grassChunks.empty()) {
 		PROFILE_SCOPE("Grass");
 		ctx->SetPipelineState(_impl->grassPipeline);
@@ -3943,6 +4082,8 @@ void DiligentEnhancedTerrainRenderer::render()
 		ctx->SetVertexBuffers(0, 1, &gvb, &vbOffset, RESOURCE_STATE_TRANSITION_MODE_TRANSITION, SET_VERTEX_BUFFERS_FLAG_RESET);
 		ctx->CommitShaderResources(_impl->lakeBinding, RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
 		for (const Impl::Chunk* chunk : grassChunks) {
+			if (!chunk->grassCount)
+				continue;
 			DrawAttribs draw;
 			draw.NumVertices = 9;
 			draw.NumInstances = chunk->grassCount;
