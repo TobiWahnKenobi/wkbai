@@ -319,6 +319,12 @@ void LabourActs(Government& g, std::map<uint32_t, float>& goldMiners)
 	}
 	else if (g.board.get("opening.hold") > 0.0)
 		g.board.report("opening.hold", 0);
+	// the opening's guard short (OpeningShort): no more than "openingPeasants" peasants (30; 0: no hold),
+	// so the food goes into the guard. (Belisar's ministry, Battleground seed 9: food at 0 from minute
+	// 2 to 25 with 40 peasants, 1,400 wood unspent, 1 fighter at home for 12 minutes. Fair maps, 120 games: the ministries won 66 with
+	// the hold, 54 without; slot 1 30 of 60 against 21.)
+	if (const int hold = (int)Tune("openingPeasants", 30.0f); hold > 0 && OpeningShort(g) > 0)
+		ai.ministryPeasantCap = std::min(ai.ministryPeasantCap, std::max(hold, (int)peasants.size())); // (a hold, no peasant is lost: those over it stay, none comes)
 	ai.ministryPeasants = (int)peasants.size();
 	g.board.report("labour.cap", ai.ministryPeasantCap);
 	ServerGameObject* palace = AIUtil::Palace(me);

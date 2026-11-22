@@ -3701,6 +3701,37 @@ void Test_AIvsAI()
 				for (const auto& [name, n] : markers)
 					markerList += " " + name + "=" + std::to_string(n);
 				printf("AITEST   markers:%s\n", markerList.c_str());
+					// the living characters by type (not the peasants), each with the army it is in (the Monks of a
+					// Celestial player: in the Healing Monk Army, or taken by the waves)
+					{
+						std::map<std::string, std::map<std::string, int>> types; // type -> army -> count
+						std::function<void(const CommonGameObject*, const std::string&)> walk = [&](const CommonGameObject* o, const std::string& army) {
+							for (const auto& [t, cs] : o->children)
+								for (const CommonGameObject* c : cs) {
+									const auto* so = (const ServerGameObject*)c;
+									if (so->deleted)
+										continue;
+									if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_CHARACTER) {
+										if (!AIUtil::IsPeasant(so))
+											types[c->blueprint->name][army]++;
+									}
+									else if (c->blueprint->bpClass == Tags::GAMEOBJCLASS_ARMY)
+										walk(c, army.empty() ? c->blueprint->name : army);
+								}
+						};
+						walk(player, "");
+						std::string typeList;
+						for (const auto& [name, in] : types) {
+							int n = 0;
+							std::string where;
+							for (const auto& [army, k] : in) {
+								n += k;
+								where += (where.empty() ? "" : ",") + (army.empty() ? std::string("none") : army) + ":" + std::to_string(k);
+							}
+							typeList += " " + name + "=" + std::to_string(n) + "(" + where + ")";
+						}
+						printf("AITEST   types player %u:%s\n", player->id, typeList.c_str());
+					}
 				// the armies: type, then its members (direct children; formations count their own)
 				std::map<std::string, std::pair<int, int>> armies; // type -> (armies, members)
 				std::function<int(const CommonGameObject*)> members = [&](const CommonGameObject* o) {

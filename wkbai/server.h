@@ -408,7 +408,8 @@ struct Server : SpecificGameState<ServerGameObject, ProgramType::SERVER>
 	// The USER object (under the first player, as FINDER_USER), or null
 	ServerGameObject* findUser();
 	ServerGameObject *createObject(const GameObjBlueprint *blueprint, uint32_t id = 0);
-	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation);
+	// spawner: the building that trained it, the sender of the character's "On Spawn"
+	ServerGameObject* spawnObject(const GameObjBlueprint* blueprint, ServerGameObject* parent, const Vector3& initialPosition, const Vector3& initialOrientation, ServerGameObject* spawner = nullptr);
 	ServerGameObject* stampdownObject(const GameObjBlueprint* blueprint, ServerGameObject* player, const Vector3& position, const Vector3& orientation,
 		bool sendEvent, bool inGameplay);
 	void deleteObject(ServerGameObject *obj);

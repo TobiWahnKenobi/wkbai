@@ -2422,7 +2422,7 @@ void SpawnTask::onUpdate()
 	if (this->isDone()) {
 		ServerGameObject* obj = order->gameObject;
 		if (obj->getItem(Tags::PDITEM_HIT_POINTS_OF_OBJECT_BEING_SPAWNED) >= obj->getItem(Tags::PDITEM_HIT_POINT_CAPACITY_OF_OBJECT_BEING_SPAWNED)) {
-			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), SpawnSpot(obj), Vector3(0,0,0));
+			ServerGameObject* spawned = Server::instance->spawnObject(toSpawn, obj->getPlayer(), SpawnSpot(obj), Vector3(0,0,0), obj);
 			this->isSpawned = true;
 			if (obj->spawnedUnitCommand >= 0) {
 				const Command* command = &Server::instance->gameSet->commands[obj->spawnedUnitCommand];
