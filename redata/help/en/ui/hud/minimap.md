@@ -14,7 +14,7 @@ The round panel in the lower right corner holds a map of the whole playable area
 
 - **The land:** the map's own picture. With weather on, snow and ice show on it too.
 - **Fog of war:** where none of your units see, the map is darker (with fog of war on; see [Fog of war](help:mechanic/fog-of-war)).
-- **Units and buildings** as small squares in their player's colour; buildings are larger. Trees and other neutral resources are dark green.
+- **Units and buildings** as small squares in their player's colour; buildings are larger. Trees and other neutral resources are dark green; a forest shows as a dark-green patch, one dot per point of the minimap.
 - **Enemies in the fog:** enemy units you can't see aren't shown; enemy buildings show where you last saw them.
 - **A disguised enemy** shows in your own colour, as it looks to you.
 

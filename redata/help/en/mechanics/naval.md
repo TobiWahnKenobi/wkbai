@@ -8,7 +8,9 @@ order: 115
 
 ## Docks only without AI Generals
 
-The [Dock](../buildings/dock-wood.md) appears in the build menu only when **no AI General plays** in the game: human-only multiplayer games, or a skirmish where you are alone on the map. The AI can't use ships, so the game set takes them out when it plays. A dock needs a [Village](../buildings/village-wood.md).
+The [Dock](../buildings/dock-wood.md) appears in your build menu only when **no AI General plays** in the game: human-only multiplayer games, or a skirmish where you are alone on the map. The original's AI couldn't use ships, so the game set takes them out when it plays. A dock needs a [Village](../buildings/village-wood.md).
+
+> wkbai: its AIs use ships on their own ([the AI at sea](ai-opponents.md#the-ai-at-sea)); your Dock button still follows the game set's rule.
 
 ## Boats
 

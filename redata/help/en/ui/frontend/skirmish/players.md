@@ -1,6 +1,6 @@
 ---
 title: Players tab
-ids: [ui/frontend/skirmish/players, ui/frontend/mphost/players, ui/frontend/skirmish/players/positions#start-positions, ui/frontend/skirmish/players/colour#colour, ui/frontend/skirmish/players/team#team, ui/frontend/skirmish/players/human#human-player, ui/frontend/skirmish/players/kick#kick-ai-general, ui/frontend/skirmish/players/add#add-ai-general, ui/frontend/skirmish/players/tier#tiers, ui/frontend/skirmish/players/generals#ai-generals, ui/frontend/skirmish/players/random#ai-generals, ui/frontend/skirmish/players/luaai#lua-ai, ui/frontend/skirmish/players/biography#portrait-and-story, ui/frontend/skirmish/players/map#the-map, ui/frontend/skirmish/players/rename#rename, ui/frontend/skirmish/players/portrait#select-portrait, ui/frontend/skirmish/players/rename-dialog#rename, FRONT_END_LOBBY_CHAT, FRONT_END_CHAT_PLAYER_NAME#human-player, FRONT_END_CHAT_KICK_GENERAL#kick-ai-general, FRONT_END_CHAT_ADD_AI_GENERAL#add-ai-general, FRONT_END_CHAT_RANDOM_GENERAL#ai-generals, FRONT_END_CHAT_AI_PLAYER#start-positions, FRONT_END_CHAT_COLOUR#colour, FRONT_END_CHAT_TEAM#team, FRONT_END_CHAT_AI_CONSCRIPT#tiers, FRONT_END_CHAT_AI_VETERAN#tiers, FRONT_END_CHAT_AI_ELITE#tiers, FRONT_END_CHAT_RENAME#rename, FRONT_END_CHAT_RENAME_LABEL#rename, FRONT_END_CHAT_PORTRAIT#select-portrait, FRONT_END_CHAT_POINTS#start-positions]
+ids: [ui/frontend/skirmish/players, ui/frontend/mphost/players, ui/frontend/skirmish/players/positions#start-positions, ui/frontend/skirmish/players/colour#colour, ui/frontend/skirmish/players/team#team, ui/frontend/skirmish/players/human#human-player, ui/frontend/skirmish/players/kick#kick-ai-general, ui/frontend/skirmish/players/add#add-ai-general, ui/frontend/skirmish/players/tier#tiers, ui/frontend/skirmish/players/generals#ai-generals, ui/frontend/skirmish/players/random#ai-generals, ui/frontend/skirmish/players/luaai#ai, ui/frontend/skirmish/settings/aiMinistries#ai, ui/frontend/skirmish/players/biography#portrait-and-story, ui/frontend/skirmish/players/map#the-map, ui/frontend/skirmish/players/rename#rename, ui/frontend/skirmish/players/portrait#select-portrait, ui/frontend/skirmish/players/rename-dialog#rename, FRONT_END_LOBBY_CHAT, FRONT_END_CHAT_PLAYER_NAME#human-player, FRONT_END_CHAT_KICK_GENERAL#kick-ai-general, FRONT_END_CHAT_ADD_AI_GENERAL#add-ai-general, FRONT_END_CHAT_RANDOM_GENERAL#ai-generals, FRONT_END_CHAT_AI_PLAYER#start-positions, FRONT_END_CHAT_COLOUR#colour, FRONT_END_CHAT_TEAM#team, FRONT_END_CHAT_AI_CONSCRIPT#tiers, FRONT_END_CHAT_AI_VETERAN#tiers, FRONT_END_CHAT_AI_ELITE#tiers, FRONT_END_CHAT_RENAME#rename, FRONT_END_CHAT_RENAME_LABEL#rename, FRONT_END_CHAT_PORTRAIT#select-portrait, FRONT_END_CHAT_POINTS#start-positions]
 order: 10
 ---
 
@@ -15,7 +15,7 @@ Who plays at each of the map's start positions: you, an AI General, or nobody. E
 The list at the top left has one row per start position of the map, numbered as on the map:
 
 - **Your position** shows your name (or "Human Player") in orange.
-- **An AI General's position** shows the general's name, or "Random AI General" when the game picks one at the start. A chosen [Lua AI](#lua-ai) follows in brackets.
+- **An AI General's position** shows the general's name, or "Random AI General" when the game picks one at the start. A chosen [Lua AI or the ministries](#ai) follow in brackets.
 - **An empty position** shows a grey "&lt;AI General Slot&gt;": nobody plays there, and that start's buildings and units are removed when the game starts.
 - **In Valhalla mode** each human's row also shows the points of the army they enlisted.
 
@@ -49,14 +49,16 @@ The three bars above the list of generals choose which tier of AI General it sho
 
 The generals of the chosen tier, by name, with **Random AI General** first. A click puts that general at the selected position (it becomes an AI position if it wasn't one). The row of the general already chosen there is highlighted. Your own generals from the [AI General Editor](../general-editor.md) are listed under their tier too.
 
-## Lua AI
+## AI
 
-When an AI position is selected, the button under the general list shows its Lua AI. A click takes the next one:
+When an AI position is selected, the **AI** button under the general list shows which AI plays it. A click takes the next one:
 
-- **none (the Kingmaker scripts):** the general plays with the game's own AI scripts alone.
-- **A script's name** (wkbai comes with **Advanced**; mods can add more): the Kingmaker scripts still build the economy and decide which soldiers to train, but the script decides where and when the army attacks, defends and retreats.
+- **Kingmaker (default):** the general plays with the game's own AI scripts alone.
+- **Ministries:** the [ministry AI](../../../mechanics/ai-opponents.md#the-ministry-ai): the general runs as a government of departments on top of the scripts.
+- **Lua *name*** (wkbai comes with **Advanced**; mods can add more): the Kingmaker scripts still build the economy and decide which soldiers to train, but the script decides where and when the army attacks, defends and retreats.
+- **Lua *name* + Ministries:** the Lua AI with the ministries under it, which it reads and steers.
 
-The button is grey when there are no Lua AI scripts. A Lua AI needs [Aggressive AI](settings.md#aggressive-ai) on.
+Each AI position has its own choice, so one General can play with the ministries and another without. The player list shows it after the name: "[Ministries]", "[Advanced]" or "[Advanced+Min]". A Lua AI needs [Aggressive AI](settings.md#aggressive-ai) on.
 
 ## Portrait and story
 

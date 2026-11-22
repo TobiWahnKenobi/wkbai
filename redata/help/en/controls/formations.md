@@ -30,7 +30,8 @@ With a formation selected, the [formation buttons](../ui/hud/command-panel.md#fo
 
 ## Selecting a formation
 
-- Pointing at one member lights the whole formation; clicking selects the formation.
+- Pointing at one member lights the whole formation; clicking selects the formation. A click on a single soldier near a formation selects that soldier's kind around it, but never the members of a formation.
+- **Right-click inside your own selected formation** is a move to that point, not an order on its member. An enemy under the cursor is still attacked.
 - A box over its members selects the formation, not them.
 - **Space** goes to its centre.
 - Over the panel, a line gives its kill tally and its heroes.
@@ -51,5 +52,7 @@ A member that gets into a fight leaves its place; the others close up round it. 
 - **Halt (H)** on a formation: it forms up again where it stands.
 - A formation left with **fewer than 8** members breaks up.
 - Its **Disband** button breaks it up at once.
+- **Formation** with a formation and loose units selected: the formation's members join the new one.
+- **Training:** a formation or its members can't be sent to train at a [Training Dummy](../buildings/training-dummy.md). A soldier who is training stops when it joins a formation.
 
 > wkbai: the formations' places are the original's; the march along one shared track and the wheeling are wkbai's close copy of the original's behaviour.

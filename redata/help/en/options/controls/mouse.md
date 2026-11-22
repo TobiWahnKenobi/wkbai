@@ -1,6 +1,6 @@
 ---
 title: Mouse
-ids: [ui/frontend/options/mouse, option/cameraRotationSpeed#camera-rotation-speed-middle-button, option/mouseLookSensitivity#camera-rotation-speed-middle-button, option/invertMouseWheel#invert-mouse-wheel, option/edgeScroll#scroll-at-the-windows-edge, option/singleClickSelectsAll#single-click-selects-all-units]
+ids: [ui/frontend/options/mouse, option/cameraRotationSpeed#camera-rotation-speed-middle-button, option/mouseLookSensitivity#camera-rotation-speed-middle-button, option/invertMouseWheel#invert-mouse-wheel, option/edgeScroll#scroll-at-the-windows-edge, option/singleClickSelectsAll#single-click-selects-all-units, option/improvedFormations#improved-mixed-formations]
 order: 20
 ---
 
@@ -25,3 +25,7 @@ Off by default. On: the view scrolls while the mouse rests at an edge of the win
 On by default, as in the original. On: for the units the game marks for it (soldiers, mostly), a single click selects every unit of that type nearby and a double click selects just the one; for all other units it is the other way round. Off: a single click always selects one unit, and a double click all of its type nearby.
 
 > wkbai: Single click selects all units is the original's setting. The others are wkbai's own.
+
+## Improved mixed formations
+
+On (the default): a formation of mixed units is spaced for its widest member, with horsemen on the wings, hand-to-hand troops in front and archers behind, and its archers shoot when it fights ([mixed formations](../../mechanics/formations.md#mixed-formations)). Off: as in the original. A change counts from the next game.

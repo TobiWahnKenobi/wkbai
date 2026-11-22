@@ -1,6 +1,6 @@
 ---
 title: AI opponents
-ids: [mechanics/ai-opponents, mechanic/ai, mechanic/ai-generals, mechanic/ai-difficulty, mechanic/ai-tiers, mechanic/ministries, mechanic/lua-ai]
+ids: [mechanics/ai-opponents, mechanic/ai, mechanic/ai-generals, mechanic/ai-difficulty, mechanic/ai-tiers, mechanic/ministries#the-ministry-ai, mechanic/lua-ai, mechanic/ai-at-sea#the-ai-at-sea, mechanic/naval-ai#the-ai-at-sea, mechanic/colonies#the-ai-at-sea]
 order: 180
 ---
 
@@ -41,12 +41,33 @@ The AI of *Warrior Kings: Battles* is mostly game-set script, the "Kingmaker" AI
 | Choice | Where | What runs |
 |---|---|---|
 | **The Kingmaker scripts** (default) | | the original's scripts, with wkbai's war layer: it defends its palace, towns and peasants, sends attack waves sized to the population limit, strikes back and retreats when outmatched |
-| **A Lua AI** | the players tab, for the selected AI position ([players](help:ui/frontend/skirmish/players)) | a Lua script plays that General (the bundled *Advanced*, or one from a mod); the war layer is off for it |
-| **Ministry AI** | the settings tab, for every AI General ([settings](help:ui/frontend/skirmish/settings/aiMinistries)) | each General becomes a government of departments (economy, labour, builders, research, war, intelligence, diplomacy) under a strategist, on top of the scripts. Its war department sends Generals on missions: raze a town, kill peasants, tie the enemy down. It acts only on what its units have seen. |
+| **A Lua AI** | the players tab's AI button, for the selected AI position ([players](help:ui/frontend/skirmish/players/luaai)) | a Lua script plays that General (the bundled *Advanced*, or one from a mod); the war layer is off for it |
+| **Ministries** | the same button, for the selected AI position; also with a Lua AI | the General becomes a government of departments under a strategist, on top of the scripts ([below](#the-ministry-ai)) |
 
 - **Aggressive AI** (lobby setting, on by default): the Kingmaker AI builds its barracks and stables first, keeps a minimum of peasants, focuses its attacks on its nearest enemy, and shares farmers between its settlements. Off, the AI plays as the original's scripts alone, which is much more passive.
 - **Weather and night:** wkbai's AIs shelter from the cold, store food for winter, fight fires and may wait for the night to attack ([seasons and weather](seasons-weather.md)).
-- **Islands:** the AI can't use ships, so maps where players start on separate islands don't allow AI Generals, and docks are only offered without them ([ships](naval.md)).
+- **At sea:** every AI uses ships where the map has water between it and its enemies ([below](#the-ai-at-sea)).
+- **Archers and kiting:** an AI soldier gives up a chase it isn't gaining on, and AI armies leave out enemies their soldiers can't reach, so you can no longer lead them round in circles or pin them against water.
 - **Players who leave** a multiplayer game can be taken over by an AI General ([multiplayer](multiplayer.md)).
+
+## The ministry AI
+
+> **wkbai.** Chosen per AI position with the players tab's AI button ([players](help:ui/frontend/skirmish/players/luaai)).
+
+The General becomes a government of departments (economy, labour, builders, research, war, intelligence, diplomacy, and at sea an admiralty) under a strategist, on top of the Kingmaker scripts. It acts only on what its units have seen.
+
+- **War:** its war department sends its Generals on missions: raze a town, kill peasants, tie the enemy down. It defends its own towns and peasants first and calls up militia when attacked. In the opening it keeps its new peasants at home until its home guard stands.
+- **Night attacks:** with peasant lodging, when the peasants have gone indoors for the night (its own and so its enemies'), it sends no raids on peasants but attacks sooner and with a smaller lead.
+- **Building:** it keeps its building sites about 275 m clear of an enemy's palace, and lays no village on land its peasants can't walk to.
+- **Diplomacy:** it remembers. What it loses to a player leaves a grudge (twice as deep from a player it trusted), and tribute from a player leaves gratitude; both fade over some minutes. A deep grudge leads to war and draws its attacks; trust brings peace offers and alliances, and offers to it are accepted when it trusts you enough. A treacherous General may break an alliance with one it doesn't trust ([diplomacy](diplomacy.md)).
+
+## The AI at sea
+
+> **wkbai.** The original's AI never uses ships.
+
+Every AI (the Kingmaker scripts, Aggressive AI, a Lua AI and the ministry AI) reads the map. Where water lies between it and its enemies, and the sea is the shorter way or the only one, it builds a [Dock](../buildings/dock-wood.md), trains [Cogs](../units/cog.md) and war boats, ferries its armies over, lands them at a safe shore, regroups and attacks. Its war boats fight enemy ships, go for enemy docks and shoot at the coast.
+
+- **Colonies:** an AI may settle other islands for their resources. It either builds a Manor of its own on the island, where it is allowed to and the island holds enough to repay it, or opens a supply route by sea: the island village's cart to a dock, a Cog to the home dock, a cart to the Manor ([supply lines](../commands/set-up-oversea-supply-route.md)).
+- **Island maps:** "3 Isles" and "Four Islands" still don't take AI Generals in the lobby, as in the original.
 
 ![The lobby's player list with three AI Generals of different tiers](shot:mech-ai-lobby)
