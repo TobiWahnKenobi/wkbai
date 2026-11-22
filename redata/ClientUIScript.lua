@@ -391,6 +391,12 @@ function CCUI_PerFrame()
 	-- picture or hit points, and the panel stayed empty)
 	local info = getPanelSubject()
 	if info == 0 then info = getHoveredObject() end
+	-- (a formation of several types: no stats or names apply, only its tally over the panel)
+	if info ~= 0 and getBlueprint(info).bpClass == GAMEOBJCLASS_FORMATION then
+		local over = getFormationSummary(info)
+		if over ~= "" then drawText(12, getWindowHeight() - 346, over) end
+		info = 0
+	end
 	-- (a disguised enemy shows nothing: the panel would give it away)
 	if info ~= 0 and not isDisguised(info) then drawSelectionInformation(info) end
 	-- a replay takes no orders: no command panels, only what is selected
