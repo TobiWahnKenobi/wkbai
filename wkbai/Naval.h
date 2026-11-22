@@ -25,15 +25,45 @@ namespace Naval {
 	struct Ferry {
 		enum State : uint8_t { BOARDING, SAILING, LANDING, ASHORE, RETURNING, DONE };
 		// who sent it: the naval layer itself (the scripts' AIs), a Lua AI, or a ministry mission
-		enum Owner : uint8_t { LAYER, LUA, MINISTRY };
+		enum Owner : uint8_t { LAYER, LUA, MINISTRY, COLONY };
 		uint32_t id = 0, ship = 0, target = 0;
 		Vector3 targetAt, embark, landing;
 		std::vector<uint32_t> passengers;
 		State state = BOARDING;
 		Owner owner = LAYER;
 		uint32_t mission = 0; // the ministry's mission
-		float since = 0.0f, stateSince = 0.0f, nextNudge = 0.0f;
+		float since = 0.0f, stateSince = 0.0f, nextNudge = 0.0f, nextSail = 0.0f;
 		int landed = 0; // passengers put ashore
+	};
+
+	// A colony: the player's foothold on another island for its resources (not in WKB.exe, whose AI
+	// never uses ships). Peasants ferried over (or a village of the player's already there, stranded)
+	// work the island; its stock reaches the treasury one of two ways, as the game set offers:
+	// - MANOR: a Manor of its own on the island ("Can Build Manor", which a Castle gives; 750 wood,
+	//   150 gold): the carts and peasants deliver to it, into the global stock;
+	// - ROUTE: the game set's supply route (Mechanics\Cart Delivery.cpp, Cog Delivery.cpp): the
+	//   island village's cart to a dock on the island ("Overland Supply Depot"), a Cog from there to
+	//   the home dock ("Cog Set Up Drop Off Dock", "Oversea Supply Depot"), a cart from the home dock
+	//   to the Manor ("Transport Resources from Village to Global Stocks").
+	// The AI weighs the two (Naval.cpp, WeighColony): the Manor where it may be built, can be paid for
+	// and the island holds enough to repay it; the route otherwise (and a route turns into a Manor
+	// once that pays).
+	struct Colony {
+		enum Plan : uint8_t { UNDECIDED, MANOR, ROUTE };
+		enum Stage : uint8_t { SETTLING, FOUNDING, WORKING };
+		uint32_t id = 0;
+		int region = -1;             // the island: a Peasant's land region
+		Vector3 site;                // where it was founded (the richest spot)
+		Plan plan = UNDECIDED;
+		Stage stage = SETTLING;
+		uint32_t ferry = 0;          // the settlers' ferry (SETTLING)
+		uint32_t village = 0, manor = 0, dock = 0, cog = 0, homeCart = 0;
+		std::vector<uint32_t> settlers; // the peasants working it (held from the scripts)
+		float since = 0.0f, nextWork = 0.0f, nextWeigh = 0.0f, nextLay = 0.0f, nextCart = 0.0f, nextSettlers = 0.0f;
+		float value = 0.0f;          // the resources round it at the last weighing
+		float cogLoad = 0.0f;        // the cog's load at the last look (a drop to 0 at home: shipped)
+		bool routeSet = false;       // the associations of the route made
+		int shipped = 0, trips = 0;  // what the cog brought home
 	};
 
 	// one AI player's navy (AIController::naval)
@@ -64,6 +94,12 @@ namespace Naval {
 		// counts for the census and the tests
 		int docksLaid = 0, shipsOrdered = 0, warshipsOrdered = 0, ferriesSent = 0, ferriesLanded = 0, unitsLanded = 0;
 		int shipAttacks = 0, coastAttacks = 0, villagesLaid = 0;
+		// the colonies (Colony above); the original home (its palace: a colony's Manor is never the home)
+		std::vector<Colony> colonies;
+		uint32_t homeId = 0, nextColony = 1;
+		float nextColonyCheck = 0.0f, nextFounding = 0.0f;
+		int coloniesFounded = 0, colonyManors = 0, routesOpened = 0;
+		std::map<int, std::pair<int, float>> colonyFails; // island -> (settler ferries lost, left alone until)
 	};
 
 	// every AI player's step (AIController::update), with "aiNaval" on
@@ -104,8 +140,11 @@ namespace Naval {
 	// whether a place is across the sea from the player's home (another land region, a sea route
 	// known: need > NONE)
 	bool PlaceOverseas(ServerGameObject* player, const Vector3& place);
-	// for the census: one line
+	// for the census: one line (and the colonies': another)
 	std::string Census(ServerGameObject* player);
+	std::string ColonyCensus(ServerGameObject* player);
+	// a ship on a colony's supply route (not for ferries)
+	bool OnRoute(ServerGameObject* player, uint32_t ship);
 	// the type of a land unit for the map's regions (a Spearman, else a Peasant)
 	const GameObjBlueprint* LandType();
 	const GameObjBlueprint* BoatType();

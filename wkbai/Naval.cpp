@@ -27,6 +27,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <queue>
+#include <set>
 
 void AIAttack(ServerGameObject* unit, ServerGameObject* target); // AIController.cpp
 bool OutOfReach(ServerGameObject* unit, const Vector3& point, float reach); // Order.cpp
@@ -42,6 +43,11 @@ namespace {
 		int readyToBoard = -1;        // the event "I'm ready to Board"
 		int buildOrder = -1;
 		const GameObjBlueprint* dock = nullptr, * dockFoundation = nullptr, * cog = nullptr, * land = nullptr, * villageFoundation = nullptr;
+		// the colonies: the Manor, the village, the cart, the route's commands and associations
+		const GameObjBlueprint* manorFoundation = nullptr, * village = nullptr, * cart = nullptr, * peasant = nullptr;
+		int canBuildManor = -1, palaceBuilding = -1;            // items
+		int cogDropOff = -1, cartTransport = -1, chop = -1, mineGold = -1; // commands
+		int overland = -1, oversea = -1;                         // associations
 		void update(const GameSet* gs) {
 			if (of == gs->serial)
 				return;
@@ -66,6 +72,18 @@ namespace {
 			land = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
 			if (!land)
 				land = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+			manorFoundation = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Manor Foundation");
+			village = gs->findBlueprint(Tags::GAMEOBJCLASS_BUILDING, "Village Wood");
+			cart = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Cart");
+			peasant = gs->findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Peasant");
+			canBuildManor = gs->items.names.getIndex("Can Build Manor");
+			palaceBuilding = gs->items.names.getIndex("Palace Building");
+			cogDropOff = gs->commands.names.getIndex("Cog Set Up Drop Off Dock");
+			cartTransport = gs->commands.names.getIndex("Transport Resources from Village to Global Stocks");
+			chop = gs->commands.names.getIndex("Chop Tree");
+			mineGold = gs->commands.names.getIndex("Mine Gold");
+			overland = gs->associations.names.getIndex("Overland Supply Depot");
+			oversea = gs->associations.names.getIndex("Oversea Supply Depot");
 		}
 	} g_ids;
 
@@ -218,10 +236,18 @@ namespace {
 			}
 	}
 
+	ServerGameObject* Obj(uint32_t id);
 	ServerGameObject* Home(ServerGameObject* player)
 	{
-		if (ServerGameObject* p = AIUtil::Palace(player))
+		// the first palace the layer saw (a colony's Manor, found first by the scripts' finder, would
+		// have moved the home, and the navy's shore with it, to the island)
+		Naval::State& st = player->aiController.naval;
+		if (ServerGameObject* h = Obj(st.homeId); h && h->getPlayer() == player)
+			return h;
+		if (ServerGameObject* p = AIUtil::Palace(player)) {
+			st.homeId = p->id;
 			return p;
+		}
 		std::vector<ServerGameObject*> all;
 		Walk(player, all);
 		ServerGameObject* best = nullptr;
@@ -510,7 +536,12 @@ namespace {
 			ServerGameObject* f = Obj(it->second.first);
 			const bool done = !f || (f->blueprint != g_ids.dockFoundation && f->blueprint != g_ids.villageFoundation) || Now() - it->second.second > 240.0f;
 			if (done) {
-				player->aiController.ministryHeld.erase(it->first);
+				// (a colony's settler stays held: the colony works it)
+				bool settler = false;
+				for (const Naval::Colony& c : st.colonies)
+					settler = settler || std::find(c.settlers.begin(), c.settlers.end(), it->first) != c.settlers.end();
+				if (!settler)
+					player->aiController.ministryHeld.erase(it->first);
 				it = st.builders.erase(it);
 			}
 			else
@@ -752,7 +783,7 @@ namespace {
 					// its "Move To" sends only once at its marker; the group's arrival spread stopped
 					// five of six spearmen 9 m short of theirs and they stood there)
 					if (g_ids.readyToBoard >= 0 && !ship->movementController.isMoving() && !u->movementController.isMoving()
-						&& (u->position - ship->position).sqlen2xz() < 15.0f * 15.0f && now - f.stateSince > 3.0f)
+						&& (u->position - ship->position).sqlen2xz() < 20.0f * 20.0f && now - f.stateSince > 3.0f)
 						ship->sendEvent(g_ids.readyToBoard, u);
 				}
 			}
@@ -818,6 +849,30 @@ namespace {
 				for (ServerGameObject* u : alive)
 					if (!Aboard(ship, u) && !u->orderConfig.getCurrentOrder() && g_ids.board >= 0)
 						gs->commands[g_ids.board].execute(u, ship, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			}
+			// The boarders wait at their landing point on the shore ("Move to Landing Point and Await
+			// Vessel", then "Wait for Instructions from Vessel") for the ship, which stayed where it
+			// was: peasants 150-190 m off stood there until the ferry gave up (3 Isles, 2026-11-22).
+			// The ship sails to the water nearest them (every 10 s while it stands 25 m or more away).
+			if (waiting > 0 && !ship->movementController.isMoving() && now - f.stateSince > 6.0f && now >= f.nextSail) {
+				f.nextSail = now + 10.0f;
+				Vector3 c;
+				int n = 0;
+				for (ServerGameObject* u : alive)
+					if (!Aboard(ship, u) && !u->movementController.isMoving()) {
+						c += u->position;
+						n++;
+					}
+				if (n > 0) {
+					c = c * (1.0f / n);
+					if ((c - ship->position).len2xz() > 25.0f) {
+						const Vector3 at = MovementController::nearestValidPosition(ship->blueprint, c, 12);
+						if ((at - c).len2xz() < 60.0f && (at - ship->position).len2xz() > 8.0f) {
+							AIController::moveUnitsTo({ ship }, player, at);
+							Log(player, "ferry %u: the ship sails to its %d boarders at (%.0f, %.0f)", f.id, n, at.x, at.z);
+						}
+					}
+				}
 			}
 			return;
 		}
@@ -1010,8 +1065,16 @@ namespace {
 			}
 			if (w->movementController.isMoving())
 				continue;
-			// on to where it is wanted (a little off: the boats spread around the place)
+			// on to where it is wanted (a little off: the boats spread around the place); with no ferry
+			// to clear the way for, every other one guards a supply route's cog (cogs on the route were
+			// sunk one after another, 3 Isles 2026-11-22)
 			Vector3 to = escort ? escort->landing : (st.need == Naval::NEED_NONE ? st.homeShore : st.enemyShore);
+			if (!escort && (w->id % 2) == 0)
+				for (const Naval::Colony& c : st.colonies)
+					if (ServerGameObject* cog = Obj(c.cog)) {
+						to = cog->position;
+						break;
+					}
 			const int k = (int)(w->id % 5);
 			to.x += (k - 2) * 8.0f;
 			to.z += ((k * 3) % 5 - 2) * 8.0f;
@@ -1032,7 +1095,7 @@ namespace {
 		AIController& ai = player->aiController;
 		ServerGameObject* transport = nullptr;
 		for (ServerGameObject* s : Naval::Ships(player))
-			if (Naval::IsTransport(s) && !InFerry(st, s->id) && PassengersOf(s) == 0 && (!transport || s->id < transport->id))
+			if (Naval::IsTransport(s) && !InFerry(st, s->id) && !Naval::OnRoute(player, s->id) && PassengersOf(s) == 0 && (!transport || s->id < transport->id))
 				transport = s;
 		if (!transport)
 			return;
@@ -1080,6 +1143,681 @@ namespace {
 			return;
 		if (Naval::SendFerry(player, go, target, target->position, Naval::Ferry::LAYER))
 			st.lastFerry = now;
+	}
+
+	// ---- the colonies (Naval.h, Colony) ----
+
+	bool IsRouteShip(const Naval::State& st, uint32_t ship)
+	{
+		return ship && std::any_of(st.colonies.begin(), st.colonies.end(), [&](const Naval::Colony& c) { return c.cog == ship; });
+	}
+	bool IsSettler(const Naval::State& st, uint32_t id)
+	{
+		for (const Naval::Colony& c : st.colonies)
+			if (std::find(c.settlers.begin(), c.settlers.end(), id) != c.settlers.end())
+				return true;
+		return false;
+	}
+	bool IsPalace(const ServerGameObject* o)
+	{
+		return o && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && g_ids.palaceBuilding >= 0
+			&& const_cast<ServerGameObject*>(o)->getItem(g_ids.palaceBuilding) > 0.0f;
+	}
+	int PeasantClass() { return g_ids.peasant ? MovementController::movementClass(g_ids.peasant) : -1; }
+	int TileRegion(int cls, const Vector3& p) { return RegionNear(cls, p); }
+
+	// a resource on the map: a tree (its wood) or a gold deposit (its gold)
+	struct Resource { Vector3 p; int region; float wood, gold; uint32_t id; };
+	std::vector<Resource> Resources(int cls)
+	{
+		std::vector<Resource> out;
+		std::vector<ServerGameObject*> todo;
+		if (CommonGameObject* level = Srv()->getLevel())
+			todo.push_back((ServerGameObject*)level);
+		while (!todo.empty()) {
+			ServerGameObject* o = todo.back();
+			todo.pop_back();
+			for (const auto& [type, children] : o->children)
+				for (CommonGameObject* c : children) {
+					auto* u = (ServerGameObject*)c;
+					if (u->deleted)
+						continue;
+					const int bc = u->blueprint->bpClass;
+					if (bc == Tags::GAMEOBJCLASS_CONTAINER) {
+						const std::string& n = u->blueprint->name;
+						const bool tree = n.find("Tree") != std::string::npos && n.find("Fallen") == std::string::npos;
+						const bool gold = n.find("Gold Deposit") != std::string::npos;
+						if (!tree && !gold)
+							continue;
+						Resource r{ u->position, RegionNear(cls, u->position), 0.0f, 0.0f, u->id };
+						if (r.region < 0)
+							continue;
+						// (a tree whose wood the game set keeps elsewhere: 100, a tree's usual)
+						if (tree)
+							r.wood = u->getItem(Tags::PDITEM_WOOD) > 0.0f ? u->getItem(Tags::PDITEM_WOOD) : 100.0f;
+						else
+							r.gold = std::max(u->getItem(Tags::PDITEM_GOLD), 0.0f);
+						if (r.wood + r.gold > 0.0f)
+							out.push_back(r);
+					}
+					else if (bc == Tags::GAMEOBJCLASS_PLAYER || bc == Tags::GAMEOBJCLASS_LEVEL)
+						todo.push_back(u);
+				}
+		}
+		std::sort(out.begin(), out.end(), [](const Resource& a, const Resource& b) { return a.id < b.id; });
+		return out;
+	}
+	// what lies within r metres of a place, in a region (gold counts twice: it is the scarcer)
+	float ValueNear(const std::vector<Resource>& res, int region, const Vector3& at, float r)
+	{
+		float v = 0.0f;
+		for (const Resource& x : res)
+			if (x.region == region && (x.p - at).sqlen2xz() <= r * r)
+				v += x.wood + 2.0f * x.gold;
+		return v;
+	}
+
+	// the player's palaces (built or foundations) and villages, by land region
+	void Holdings(ServerGameObject* player, int cls, std::map<int, int>& palaces, std::map<int, std::vector<ServerGameObject*>>& villages)
+	{
+		std::vector<ServerGameObject*> all;
+		Walk(player, all);
+		for (ServerGameObject* o : all) {
+			if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || (o->flags & ServerGameObject::fTerminated))
+				continue;
+			const int r = RegionNear(cls, o->position);
+			if (r < 0)
+				continue;
+			if (IsPalace(o))
+				palaces[r]++;
+			else if (o->blueprint == g_ids.village || o->blueprint == g_ids.villageFoundation)
+				villages[r].push_back(o);
+		}
+	}
+
+	// a valid site for a foundation in the region, rings 10 to 90 m round a place; (0, 0, 0) for none
+	Vector3 SiteNear(ServerGameObject* player, const GameObjBlueprint* bp, int cls, int region, const Vector3& at)
+	{
+		for (float r = 10.0f; r <= 90.0f; r += 8.0f)
+			for (int k = 0; k < 16; k++) {
+				const float a = k * 6.2831853f / 16.0f + r * 0.05f;
+				Vector3 p(at.x + r * std::sin(a), 0.0f, at.z + r * std::cos(a));
+				const int tx = TileX(p.x), tz = TileX(p.z);
+				if (!InMap(tx, tz) || MovementController::terrainRegion(cls, tx, tz) != region)
+					continue;
+				p = TileCentre(tx, tz);
+				if (StampdownPlan::getStampdownPlan(Srv(), player, bp, p, Vector3(0, 0, 0)).status == StampdownPlan::Status::Valid)
+					return p;
+			}
+		return Vector3(0, 0, 0);
+	}
+
+	// a dock site on the region's shore, in the home sea, the nearest to a place
+	bool DockSite(ServerGameObject* player, int region, int seaRegion, const Vector3& at, Vector3& p, float& yaw)
+	{
+		const int landCls = PeasantClass(), boatCls = MovementController::movementClass(g_ids.cog);
+		const Shore s = ShoreNear(boatCls, seaRegion, landCls, region, at, 80);
+		if (!s.ok)
+			return false;
+		struct Site { float d; Vector3 p; };
+		std::vector<Site> sites;
+		for (int dz = -12; dz <= 12; dz++)
+			for (int dx = -12; dx <= 12; dx++) {
+				const int x = s.wx + dx, z = s.wz + dz;
+				if (!InMap(x, z) || MovementController::terrainRegion(boatCls, x, z) != seaRegion)
+					continue;
+				bool nearLand = false;
+				for (int k = -2; k <= 2 && !nearLand; k++)
+					for (int l = -2; l <= 2 && !nearLand; l++)
+						nearLand = InMap(x + l, z + k) && MovementController::terrainRegion(landCls, x + l, z + k) == region;
+				if (nearLand) {
+					const Vector3 q = TileCentre(x, z);
+					sites.push_back({ (q - at).len2xz(), q });
+				}
+			}
+		std::sort(sites.begin(), sites.end(), [](const Site& a, const Site& b) { return a.d != b.d ? a.d < b.d : (a.p.x != b.p.x ? a.p.x < b.p.x : a.p.z < b.p.z); });
+		for (const Site& site : sites)
+			for (int q = 0; q < 4; q++) {
+				const float y = q * 1.57079633f;
+				if (StampdownPlan::getStampdownPlan(Srv(), player, g_ids.dockFoundation, site.p, Vector3(0, y, 0)).status == StampdownPlan::Status::Valid) {
+					p = site.p;
+					yaw = y;
+					return true;
+				}
+			}
+		return false;
+	}
+
+	// the settlers build a foundation: those not already at it, two at most
+	void SettlersBuild(ServerGameObject* player, Naval::Colony& c, ServerGameObject* foundation)
+	{
+		if (!foundation || g_ids.buildOrder < 0)
+			return;
+		int n = 0;
+		for (uint32_t id : c.settlers)
+			if (ServerGameObject* u = Obj(id)) {
+				Order* o = u->orderConfig.getCurrentOrder();
+				Task* t = o ? o->getCurrentTask() : nullptr;
+				if (t && t->target.get() == foundation)
+					n++;
+			}
+		for (uint32_t id : c.settlers) {
+			if (n >= 2)
+				break;
+			ServerGameObject* u = Obj(id);
+			if (!u || !u->isInteractable() || player->aiController.navalUnits.count(id))
+				continue;
+			Order* o = u->orderConfig.getCurrentOrder();
+			Task* t = o ? o->getCurrentTask() : nullptr;
+			if (t && t->target.get() && t->target.get()->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING
+				&& t->target.get()->blueprint->name.find("Foundation") != std::string::npos)
+				continue; // (building another)
+			if (u->orderConfig.addOrder(&Srv()->gameSet->orders[g_ids.buildOrder], Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE, foundation))
+				n++;
+		}
+	}
+
+	// the idle settlers to work: the nearest tree or gold deposit on the island, round the colony's seat
+	void SettlersWork(ServerGameObject* player, Naval::Colony& c, const std::vector<Resource>& res, const Vector3& seat)
+	{
+		const GameSet* gs = Srv()->gameSet.get();
+		int k = 0;
+		for (uint32_t id : c.settlers) {
+			ServerGameObject* u = Obj(id);
+			if (!u || !u->isInteractable() || u->orderConfig.getCurrentOrder() || player->aiController.navalUnits.count(id))
+				continue;
+			// every third to gold where there is some (it counts twice), the rest to the trees
+			const bool wantGold = (k++ % 3) == 2;
+			const Resource* best = nullptr;
+			float bd = 0.0f;
+			for (int pass = 0; pass < 2 && !best; pass++)
+				for (const Resource& r : res) {
+					if (r.region != c.region || ((r.gold > 0.0f) != (pass == 0 ? wantGold : !wantGold)))
+						continue;
+					const float d = (r.p - seat).sqlen2xz() + (r.p - u->position).sqlen2xz();
+					if (!best || d < bd) { best = &r; bd = d; }
+				}
+			ServerGameObject* target = best ? Obj(best->id) : nullptr;
+			const int cmd = best && best->gold > 0.0f ? g_ids.mineGold : g_ids.chop;
+			if (target && cmd >= 0)
+				gs->commands[cmd].execute(u, target, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+		}
+	}
+
+	// Manor or route (Naval.h, Colony): the Manor where the player may build one ("Can Build Manor"),
+	// can pay it with a reserve left, there is a site, and the island still holds 2,500 or more to
+	// repay its 900 (a route costs a dock, a cog's time and two cart trips each load, and the stock
+	// waits on the sea); the route otherwise. Undecided a while (3 minutes) when the Manor is allowed
+	// and half paid for: the wood may come.
+	void WeighColony(ServerGameObject* player, Naval::State& st, Naval::Colony& c, const std::vector<Resource>& res)
+	{
+		const Vector3 seat = Obj(c.village) ? Obj(c.village)->position : c.site;
+		c.value = ValueNear(res, c.region, seat, 120.0f);
+		const bool allowed = g_ids.manorFoundation && g_ids.canBuildManor >= 0 && player->getItem(g_ids.canBuildManor) > 0.0f;
+		const float woodCost = g_ids.manorFoundation ? g_ids.manorFoundation->getStartingItemValue(Tags::PDITEM_WOOD_COST) : 750.0f;
+		const float goldCost = g_ids.manorFoundation ? g_ids.manorFoundation->getStartingItemValue(Tags::PDITEM_GOLD_COST) : 150.0f;
+		const float wood = player->getItem(Tags::PDITEM_WOOD), gold = player->getItem(Tags::PDITEM_GOLD);
+		const bool affordable = wood >= woodCost + 150.0f && gold >= goldCost;
+		const bool worth = c.value >= 2500.0f;
+		bool site = false;
+		if (allowed && worth)
+			site = SiteNear(player, g_ids.manorFoundation, PeasantClass(), c.region, seat).x != 0.0f;
+		Naval::Colony::Plan plan = Naval::Colony::ROUTE;
+		const char* why = "";
+		if (!allowed)
+			why = "no Manor allowed (no Castle)";
+		else if (!worth)
+			why = "too little left on the island for a Manor";
+		else if (!site)
+			why = "no site for a Manor";
+		else if (affordable) {
+			plan = Naval::Colony::MANOR;
+			why = "a Manor allowed, paid for, worth it";
+		}
+		else if (c.plan == Naval::Colony::UNDECIDED && Now() - c.since < 180.0f && wood >= woodCost * 0.5f) {
+			plan = Naval::Colony::UNDECIDED;
+			why = "a Manor allowed, half paid for: waiting for the wood";
+		}
+		else
+			why = "a Manor allowed but not paid for";
+		// (a route once running turns into a Manor only for one paid for now)
+		if (plan != c.plan) {
+			printf("AI %u: colony %u at (%.0f, %.0f): %s (%s; %.0f on the island, %.0f wood %.0f gold)\n", player->id, c.id, seat.x, seat.z,
+				plan == Naval::Colony::MANOR ? "a Manor of its own" : plan == Naval::Colony::ROUTE ? "the supply route by sea" : "undecided", why, c.value, wood, gold);
+			c.plan = plan;
+		}
+	}
+
+	// the route's associations (Cog Delivery.cpp, Cart Delivery.cpp): the village delivers to the
+	// island dock, the island dock's oversea depot is the home dock
+	void SetRoute(ServerGameObject* player, Naval::Colony& c, ServerGameObject* village, ServerGameObject* dock, ServerGameObject* homeDock)
+	{
+		if (g_ids.overland < 0 || g_ids.oversea < 0)
+			return;
+		village->clearAssociates(g_ids.overland);
+		village->associateObject(g_ids.overland, dock);
+		dock->clearAssociates(g_ids.oversea);
+		dock->associateObject(g_ids.oversea, homeDock);
+		c.routeSet = true;
+	}
+
+	void EndRoute(ServerGameObject* player, Naval::State& st, Naval::Colony& c)
+	{
+		if (ServerGameObject* cog = Obj(c.cog))
+			cog->orderConfig.cancelAllOrders();
+		if (ServerGameObject* v = Obj(c.village); v && g_ids.overland >= 0)
+			v->clearAssociates(g_ids.overland);
+		c.cog = 0;
+		c.routeSet = false;
+	}
+
+	// whether anyone else (an enemy, an ally) has a building within r metres
+	bool OthersBuildingNear(ServerGameObject* player, const Vector3& at, float r)
+	{
+		NNSearch search;
+		search.start(Srv(), at, r);
+		while (ServerGameObject* o = (ServerGameObject*)search.next())
+			if (!o->deleted && o->blueprint->bpClass == Tags::GAMEOBJCLASS_BUILDING && o->getPlayer() && o->getPlayer() != player
+				&& (o->position - at).sqlen2xz() <= r * r && o->getPlayer()->blueprint->name.find("Neutral") == std::string::npos)
+				return true;
+		return false;
+	}
+
+	// n settlers to a colony: free peasants at home (8 or more free kept back), the nearest to the
+	// home dock, by ferry to the colony's site; held from the scripts from now on. Whether a ferry went.
+	bool SendSettlers(ServerGameObject* player, Naval::State& st, Naval::Colony& c, int n)
+	{
+		ServerGameObject* home = Home(player);
+		ServerGameObject* homeDock = FindDock(player, st, true);
+		const int cls = PeasantClass();
+		if (!home || !homeDock || cls < 0)
+			return false;
+		const int homeRegion = RegionNear(cls, home->position);
+		std::vector<ServerGameObject*> free;
+		for (ServerGameObject* u : AIUtil::Peasants(player))
+			if (u->isInteractable() && !player->aiController.ministryHeld.count(u->id) && !player->aiController.navalUnits.count(u->id)
+				&& RegionNear(cls, u->position) == homeRegion)
+				free.push_back(u);
+		if ((int)free.size() < n + 8)
+			return false;
+		const Vector3 d = homeDock->position;
+		std::sort(free.begin(), free.end(), [&](ServerGameObject* a, ServerGameObject* b) {
+			const float da = (a->position - d).sqlen2xz(), db = (b->position - d).sqlen2xz();
+			return da != db ? da < db : a->id < b->id; });
+		free.resize(n);
+		const Vector3 to = Obj(c.village) ? Obj(c.village)->position : c.site;
+		const uint32_t ferry = Naval::SendFerry(player, free, nullptr, to, Naval::Ferry::COLONY);
+		if (!ferry)
+			return false;
+		c.ferry = ferry;
+		if (const Naval::Ferry* f = Naval::FindFerry(player, ferry))
+			for (uint32_t id : f->passengers) {
+				if (std::find(c.settlers.begin(), c.settlers.end(), id) == c.settlers.end())
+					c.settlers.push_back(id);
+				player->aiController.ministryHeld.insert(id);
+			}
+		printf("AI %u: colony %u: %d settlers sent by ferry %u to (%.0f, %.0f) at t=%.0f\n", player->id, c.id, n, ferry, to.x, to.z, Now());
+		return true;
+	}
+
+	// A new colony: once 10 minutes in, with a built dock at home, 12 peasants or more and nothing
+	// being founded; the richest spot (resources within 60 m) on an island of the home sea without a
+	// palace of anyone's and without enemy buildings within 200 m, worth 3,000 or more, taken when
+	// home holds less than twice as much round the palace or 20 minutes are past. Four settlers.
+	void FoundColony(ServerGameObject* player, Naval::State& st, const std::vector<Resource>& res)
+	{
+		const float now = Now();
+		if (now < st.nextFounding || now - st.start < 600.0f || st.colonies.size() >= 2)
+			return;
+		st.nextFounding = now + 60.0f;
+		for (const Naval::Colony& c : st.colonies)
+			if (c.stage != Naval::Colony::WORKING)
+				return;
+		ServerGameObject* homeDock = FindDock(player, st, true);
+		ServerGameObject* home = Home(player);
+		const int cls = PeasantClass();
+		if (!homeDock || !home || cls < 0)
+			return;
+		const int homeRegion = RegionNear(cls, home->position);
+		const int boatCls = MovementController::movementClass(g_ids.cog);
+		const int sea = MovementController::terrainRegion(boatCls, TileX(st.homeShore.x), TileX(st.homeShore.z));
+		std::vector<ServerGameObject*> peasants = AIUtil::Peasants(player);
+		if (peasants.size() < 12 || sea < 0 || homeRegion < 0)
+			return;
+		// the regions taken: any palace (anyone's), a colony of ours
+		std::set<int> taken;
+		for (ServerGameObject* p : Players()) {
+			std::map<int, int> palaces;
+			std::map<int, std::vector<ServerGameObject*>> villages;
+			Holdings(p, cls, palaces, villages);
+			for (const auto& [r, n] : palaces)
+				taken.insert(r);
+		}
+		for (const Naval::Colony& c : st.colonies)
+			taken.insert(c.region);
+		// (and the islands another player is settling: two AIs sailed for the same spot, 3 Isles)
+		for (ServerGameObject* p : Players())
+			if (p != player)
+				for (const Naval::Colony& c : p->aiController.naval.colonies)
+					taken.insert(c.region);
+		taken.insert(homeRegion);
+		const Resource* best = nullptr;
+		float bestValue = 0.0f;
+		for (const Resource& r : res) {
+			if (taken.count(r.region) || (st.colonyFails.count(r.region) && now < st.colonyFails[r.region].second))
+				continue;
+			const float v = ValueNear(res, r.region, r.p, 60.0f);
+			if (v <= bestValue)
+				continue;
+			if (!ShoreNear(boatCls, sea, cls, r.region, r.p, 60).ok || OthersBuildingNear(player, r.p, 200.0f))
+				continue;
+			best = &r;
+			bestValue = v;
+		}
+		const float homeValue = ValueNear(res, homeRegion, home->position, 250.0f);
+		if (Trace())
+			Log(player, "colony: the best island spot %s worth %.0f, home %.0f round the palace", best ? "found" : "none", bestValue, homeValue);
+		if (!best || bestValue < 3000.0f || (homeValue >= 2.0f * bestValue && now - st.start < 1200.0f))
+			return;
+		Naval::Colony c;
+		c.id = st.nextColony++;
+		c.region = best->region;
+		c.site = best->p;
+		c.since = now;
+		if (!SendSettlers(player, st, c, 4)) {
+			Log(player, "colony: no settlers or no free transport for them");
+			return;
+		}
+		st.colonies.push_back(c);
+		st.coloniesFounded++;
+		printf("AI %u: colony %u: %zu settlers sail for (%.0f, %.0f), worth %.0f (home %.0f) at t=%.0f\n", player->id, c.id, c.settlers.size(), best->p.x, best->p.z,
+			bestValue, homeValue, now);
+	}
+
+	void Colonies(ServerGameObject* player, Naval::State& st)
+	{
+		const float now = Now();
+		if (now < st.nextColonyCheck || !g_ids.peasant || !g_ids.village)
+			return;
+		st.nextColonyCheck = now + 5.0f;
+		const int cls = PeasantClass();
+		const std::vector<Resource> res = Resources(cls);
+		std::map<int, int> palaces;
+		std::map<int, std::vector<ServerGameObject*>> villages;
+		Holdings(player, cls, palaces, villages);
+		// villages already stranded (a script's, a player's): a colony each island
+		for (const auto& [r, list] : villages) {
+			if (palaces.count(r) || std::any_of(st.colonies.begin(), st.colonies.end(), [&](const Naval::Colony& c) { return c.region == r; }))
+				continue;
+			Naval::Colony c;
+			c.id = st.nextColony++;
+			c.region = r;
+			c.site = list.front()->position;
+			c.village = list.front()->id;
+			c.stage = Naval::Colony::WORKING;
+			c.since = now;
+			st.colonies.push_back(c);
+			printf("AI %u: colony %u: the village %u at (%.0f, %.0f) has no Manor it can reach\n", player->id, c.id, c.village, c.site.x, c.site.z);
+		}
+		FoundColony(player, st, res);
+		ServerGameObject* homeDock = FindDock(player, st, true);
+		const GameSet* gs = Srv()->gameSet.get();
+		for (auto it = st.colonies.begin(); it != st.colonies.end();) {
+			Naval::Colony& c = *it;
+			// the settlers: on its island, the player's peasants there (held from the scripts)
+			if (c.stage == Naval::Colony::SETTLING) {
+				const Naval::Ferry* f = Naval::FindFerry(player, c.ferry);
+				const Naval::Ferry::State fs = f ? f->state : Naval::Ferry::DONE;
+				if (fs == Naval::Ferry::ASHORE || fs == Naval::Ferry::RETURNING || (fs == Naval::Ferry::DONE && f && f->landed > 0))
+					c.stage = Naval::Colony::FOUNDING;
+				else if (fs == Naval::Ferry::DONE) {
+					printf("AI %u: colony %u: the settlers never landed\n", player->id, c.id);
+					// (two lost there: that island left alone for 15 minutes; the enemy's war boats sank
+					// ten ferries of settlers in a row on 3 Isles' contested island)
+					auto& fail = st.colonyFails[c.region];
+					if (++fail.first >= 2) {
+						fail.second = now + 900.0f;
+						fail.first = 0;
+						printf("AI %u: the island %d left alone for 15 minutes (settlers lost twice)\n", player->id, c.region);
+					}
+					for (uint32_t id : c.settlers)
+						player->aiController.ministryHeld.erase(id);
+					st.nextFounding = now + 300.0f;
+					it = st.colonies.erase(it);
+					continue;
+				}
+				else {
+					++it;
+					continue;
+				}
+			}
+			// (those on their way, in a ferry still, stay held and on the list)
+			std::vector<uint32_t> settlers;
+			int working = 0;
+			for (ServerGameObject* u : AIUtil::Peasants(player))
+				if (RegionNear(cls, u->position) == c.region && !player->aiController.navalUnits.count(u->id)) {
+					settlers.push_back(u->id);
+					working++;
+				}
+			for (uint32_t id : c.settlers)
+				if (std::find(settlers.begin(), settlers.end(), id) == settlers.end()) {
+					if (Obj(id) && player->aiController.navalUnits.count(id))
+						settlers.push_back(id);
+					else
+						player->aiController.ministryHeld.erase(id);
+				}
+			for (uint32_t id : settlers)
+				player->aiController.ministryHeld.insert(id);
+			c.settlers = settlers;
+			// too few on the island (a stranded village nobody works, settlers lost at boarding): more,
+			// once the last ferry is over, every 2 minutes at most
+			const Naval::Ferry::State lastFerry = c.ferry ? Naval::FerryState(player, c.ferry) : Naval::Ferry::DONE;
+			if (working < 2 && (lastFerry == Naval::Ferry::DONE || lastFerry == Naval::Ferry::RETURNING) && now >= c.nextSettlers) {
+				c.nextSettlers = now + 120.0f;
+				SendSettlers(player, st, c, 3);
+			}
+			// a colony at work (its Manor, its route open) grows to 8 settlers, 3 at a time every 3
+			// minutes while home keeps 8 free peasants or more (SendSettlers): two to four settlers
+			// brought 60 to 900 home in 45 minutes
+			else if (c.stage == Naval::Colony::WORKING && working < 8 && (c.routeSet || c.plan == Naval::Colony::MANOR) && working >= 2
+				&& (lastFerry == Naval::Ferry::DONE || lastFerry == Naval::Ferry::RETURNING) && now >= c.nextSettlers) {
+				c.nextSettlers = now + 180.0f;
+				SendSettlers(player, st, c, std::min(3, 8 - working));
+			}
+			// the colony's buildings: its village, Manor (or foundations), dock on the island
+			ServerGameObject* village = nullptr, * manor = nullptr, * dock = nullptr;
+			std::vector<ServerGameObject*> all;
+			Walk(player, all);
+			for (ServerGameObject* o : all) {
+				if (o->blueprint->bpClass != Tags::GAMEOBJCLASS_BUILDING || (o->flags & ServerGameObject::fTerminated) || RegionNear(cls, o->position) != c.region) {
+					if (IsDock(o) && !dock) {
+						// (a dock stands in the water: its land is the region beside it)
+						bool beside = false;
+						const int tx = TileX(o->position.x), tz = TileX(o->position.z);
+						for (int dz = -3; dz <= 3 && !beside; dz++)
+							for (int dx = -3; dx <= 3 && !beside; dx++)
+								beside = InMap(tx + dx, tz + dz) && MovementController::terrainRegion(cls, tx + dx, tz + dz) == c.region;
+						if (beside)
+							dock = o;
+					}
+					continue;
+				}
+				if ((IsPalace(o) || o->blueprint == g_ids.manorFoundation) && (!manor || o->blueprint != g_ids.manorFoundation))
+					manor = o;
+				else if ((o->blueprint == g_ids.village || o->blueprint == g_ids.villageFoundation) && (!village || o->blueprint == g_ids.village))
+					village = o;
+				else if (IsDock(o))
+					dock = o;
+			}
+			// (the Manor laid by the colony, by its id: the walk through the player's objects missed the
+			// foundation under the new settlement it makes; its conversion to the Manor keeps the place)
+			if (!manor && c.manor)
+				if (ServerGameObject* m = Obj(c.manor); m && m->getPlayer() == player && RegionNear(cls, m->position) == c.region)
+					manor = m;
+			if (!manor && c.manor) {
+				// (converted: the built Manor stands where the foundation stood)
+				NNSearch search;
+				search.start(Srv(), c.site, 150.0f);
+				while (ServerGameObject* o = (ServerGameObject*)search.next())
+					if (!o->deleted && o->getPlayer() == player && IsPalace(o) && RegionNear(cls, o->position) == c.region) {
+						manor = o;
+						break;
+					}
+			}
+			c.village = village ? village->id : 0;
+			c.manor = manor ? manor->id : 0;
+			c.dock = dock ? dock->id : 0;
+			if (settlers.empty() && !village && !manor && !dock) {
+				printf("AI %u: colony %u lost (no settler, no building)\n", player->id, c.id);
+				EndRoute(player, st, c);
+				it = st.colonies.erase(it);
+				continue;
+			}
+			// (weighed until a Manor is laid: its cost paid, the wood left would have turned it back to the route)
+			if (now >= c.nextWeigh && !manor) {
+				c.nextWeigh = now + 30.0f;
+				WeighColony(player, st, c, res);
+			}
+			const Vector3 seat = manor ? manor->position : village ? village->position : c.site;
+			const bool manorBuilt = manor && manor->blueprint != g_ids.manorFoundation;
+			if (manorBuilt) {
+				// its own Manor: the carts and peasants deliver there; a route that ran is ended
+				if (c.cog || c.routeSet) {
+					printf("AI %u: colony %u: its Manor is built, the supply route ends\n", player->id, c.id);
+					EndRoute(player, st, c);
+				}
+				if (c.plan != Naval::Colony::MANOR || c.stage != Naval::Colony::WORKING) {
+					if (c.stage != Naval::Colony::WORKING)
+						printf("AI %u: colony %u: its Manor %u is built at t=%.0f\n", player->id, c.id, manor->id, now);
+					c.plan = Naval::Colony::MANOR;
+					c.stage = Naval::Colony::WORKING;
+					st.colonyManors++;
+				}
+			}
+			// (nothing laid without a settler on the island to build it: a Lua AI that never had a ship
+			// paid 900 for a Manor on its stranded village's island that nobody could reach)
+			else if (working == 0) {
+			}
+			else if (c.plan == Naval::Colony::MANOR && !manor && now >= c.nextLay) {
+				c.nextLay = now + 20.0f;
+				const Vector3 p = SiteNear(player, g_ids.manorFoundation, cls, c.region, seat);
+				if (p.x != 0.0f && player->canAffordObject(g_ids.manorFoundation)) {
+					if (ServerGameObject* f = Srv()->stampdownObject(g_ids.manorFoundation, player, p, Vector3(0, 0, 0), false, true)) {
+						printf("AI %u: colony %u: a Manor laid down at (%.0f, %.0f) at t=%.0f\n", player->id, c.id, p.x, p.z, now);
+						manor = f;
+						c.manor = f->id;
+					}
+				}
+			}
+			else if (c.plan == Naval::Colony::ROUTE && now >= c.nextLay) {
+				c.nextLay = now + 20.0f;
+				if (!village && player->canAffordObject(g_ids.villageFoundation)) {
+					const Vector3 p = SiteNear(player, g_ids.villageFoundation, cls, c.region, c.site);
+					if (p.x != 0.0f)
+						if (ServerGameObject* f = Srv()->stampdownObject(g_ids.villageFoundation, player, p, Vector3(0, 0, 0), false, true)) {
+							printf("AI %u: colony %u: a village laid down at (%.0f, %.0f) at t=%.0f\n", player->id, c.id, p.x, p.z, now);
+							village = f;
+							c.village = f->id;
+						}
+				}
+				if (!dock && homeDock && player->canAffordObject(g_ids.dockFoundation)) {
+					const int boatCls = MovementController::movementClass(g_ids.cog);
+					const int sea = MovementController::terrainRegion(boatCls, TileX(homeDock->position.x), TileX(homeDock->position.z));
+					Vector3 p;
+					float yaw = 0.0f;
+					int seaHere = sea;
+					if (seaHere < 0) {
+						// (a dock's own tile is blocked for boats: the home sea by the shore the navy uses)
+						seaHere = MovementController::terrainRegion(boatCls, TileX(st.homeShore.x), TileX(st.homeShore.z));
+					}
+					if (seaHere >= 0 && DockSite(player, c.region, seaHere, seat, p, yaw))
+						if (ServerGameObject* f = Srv()->stampdownObject(g_ids.dockFoundation, player, p, Vector3(0, yaw, 0), false, true)) {
+							printf("AI %u: colony %u: a dock laid down at (%.0f, %.0f) at t=%.0f, for the supply route\n", player->id, c.id, p.x, p.z, now);
+							dock = f;
+							c.dock = f->id;
+						}
+				}
+			}
+			// the foundations built by the settlers
+			for (ServerGameObject* f : { manor, village, dock })
+				if (f && f->blueprint->name.find("Foundation") != std::string::npos)
+					SettlersBuild(player, c, f);
+			// the route: village and dock built, the home dock there: the associations, a cog on the
+			// drop-off order, a cart at the home dock
+			const bool villageBuilt = village && village->blueprint == g_ids.village;
+			const bool dockBuilt = dock && dock->blueprint == g_ids.dock;
+			if (c.plan == Naval::Colony::ROUTE && villageBuilt && dockBuilt && homeDock) {
+				if (!c.routeSet) {
+					SetRoute(player, c, village, dock, homeDock);
+					c.stage = Naval::Colony::WORKING;
+					st.routesOpened++;
+					printf("AI %u: colony %u: the supply route opened, village %u -> dock %u -> dock %u -> the Manor, at t=%.0f\n", player->id, c.id,
+						village->id, dock->id, homeDock->id, now);
+				}
+				ServerGameObject* cog = Obj(c.cog);
+				if (!cog) {
+					c.cog = 0;
+					ServerGameObject* best = nullptr;
+					for (ServerGameObject* s : Naval::Ships(player))
+						if (Naval::IsTransport(s) && !InFerry(st, s->id) && !IsRouteShip(st, s->id) && PassengersOf(s) == 0
+							&& (!best || (s->position - dock->position).sqlen2xz() < (best->position - dock->position).sqlen2xz()))
+							best = s;
+					if (best && g_ids.cogDropOff >= 0) {
+						gs->commands[g_ids.cogDropOff].execute(best, dock, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+						c.cog = best->id;
+						c.cogLoad = 0.0f;
+						printf("AI %u: colony %u: the cog %u sails the route\n", player->id, c.id, best->id);
+					}
+				}
+				else {
+					// (its order lost: again; its load home counted)
+					if (!cog->orderConfig.getCurrentOrder() && g_ids.cogDropOff >= 0)
+						gs->commands[g_ids.cogDropOff].execute(cog, dock, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+					const float load = cog->getItem(Tags::PDITEM_WOOD) + cog->getItem(Tags::PDITEM_GOLD) + cog->getItem(Tags::PDITEM_FOOD);
+					if (load <= 0.0f && c.cogLoad > 0.0f && (cog->position - homeDock->position).len2xz() < 60.0f) {
+						c.shipped += (int)c.cogLoad;
+						c.trips++;
+					}
+					c.cogLoad = load;
+				}
+				// a cart at the home dock, to the Manor: a new one from the palace, else the nearest at home
+				ServerGameObject* cart = Obj(c.homeCart);
+				Order* co = cart ? cart->orderConfig.getCurrentOrder() : nullptr;
+				if (!cart || !co) {
+					if (!cart) {
+						ServerGameObject* home = Home(player);
+						const int homeRegion = home ? RegionNear(cls, home->position) : -1;
+						for (ServerGameObject* o : all)
+							if (o->blueprint == g_ids.cart && o->isInteractable() && RegionNear(cls, o->position) == homeRegion
+								&& !std::any_of(st.colonies.begin(), st.colonies.end(), [&](const Naval::Colony& k) { return k.homeCart == o->id; })
+								&& (!cart || (o->position - homeDock->position).sqlen2xz() < (cart->position - homeDock->position).sqlen2xz()))
+								cart = o;
+						if (!cart && home && now >= c.nextCart && homeDock->getItem(Tags::PDITEM_WOOD) + homeDock->getItem(Tags::PDITEM_GOLD) > 0.0f) {
+							c.nextCart = now + 60.0f;
+							if (AIUtil::Train(player, home, "Cart"))
+								printf("AI %u: colony %u: a cart ordered for the home dock\n", player->id, c.id);
+						}
+					}
+					if (cart && g_ids.cartTransport >= 0) {
+						gs->commands[g_ids.cartTransport].execute(cart, homeDock, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+						if (c.homeCart != cart->id)
+							printf("AI %u: colony %u: the cart %u carries from the home dock %u to the Manor\n", player->id, c.id, cart->id, homeDock->id);
+						c.homeCart = cart->id;
+					}
+				}
+			}
+			// the island's own carts, idle: back to their village
+			if (villageBuilt && g_ids.cartTransport >= 0)
+				for (ServerGameObject* o : all)
+					if (o->blueprint == g_ids.cart && o->isInteractable() && !o->orderConfig.getCurrentOrder() && RegionNear(cls, o->position) == c.region)
+						gs->commands[g_ids.cartTransport].execute(o, village, Tags::ORDERASSIGNMODE_FORGET_EVERYTHING_ELSE);
+			// and the settlers to work
+			if (now >= c.nextWork) {
+				c.nextWork = now + 10.0f;
+				SettlersWork(player, c, res, seat);
+			}
+			++it;
+		}
 	}
 }
 
@@ -1145,7 +1883,7 @@ namespace Naval {
 		centre = centre * (1.0f / units.size());
 		ServerGameObject* ship = nullptr;
 		for (ServerGameObject* s : Ships(player))
-			if (IsTransport(s) && !InFerry(st, s->id) && PassengersOf(s) == 0
+			if (IsTransport(s) && !InFerry(st, s->id) && !OnRoute(player, s->id) && PassengersOf(s) == 0
 				&& (!ship || (s->position - centre).sqlen2xz() < (ship->position - centre).sqlen2xz()))
 				ship = s;
 		if (!ship)
@@ -1210,8 +1948,13 @@ namespace Naval {
 		State& st = player->aiController.naval;
 		const float now = Now();
 		// (the game's own start: a map's clock may not start at 0, 3 Isles' at 6242 s)
-		if (st.start < 0.0f)
+		if (st.start < 0.0f) {
 			st.start = now;
+			// (tests: WKB_COLONY_MANOR=1 gives every AI "Can Build Manor" from the start, as a Castle
+			// would, to see the colonies' Manors without playing an hour to a Castle)
+			if (const char* e = getenv("WKB_COLONY_MANOR"); e && atoi(e) == 1 && g_ids.canBuildManor >= 0)
+				player->setItem(g_ids.canBuildManor, 1.0f);
+		}
 		// the map, every 60 s (from 5 s: the regions are made then)
 		if (now >= st.nextCheck && now - st.start >= 5.0f) {
 			st.nextCheck = now + 60.0f;
@@ -1242,11 +1985,18 @@ namespace Naval {
 			warships += ag > 0.7f ? 1 : ag < 0.3f ? -1 : 0;
 			if (st.wantTransports >= 0) transports = st.wantTransports;
 			if (st.wantWarships >= 0) warships = st.wantWarships;
+			// a cog more for each colony's supply route (and one for the settlers' ferry while one
+			// is being founded with every transport at work)
+			for (const Colony& c : st.colonies)
+				transports += (c.plan == Colony::ROUTE) + (c.plan == Colony::ROUTE && c.routeSet && !c.cog);
 			// cogs first; war boats once the first ferry could go (not before minute 6, or the
 			// opening's wood went into them)
 			TrainShips(player, st, transports, now - st.start > 360.0f || ministry ? std::max(warships, 0) : 0, aggressive);
 		}
 		st.hadShips = st.hadShips || !Ships(player).empty();
+		// the colonies: other islands' resources (a Manor there, or the supply route by sea)
+		if (st.need > NEED_NONE || !st.colonies.empty())
+			Colonies(player, st);
 		if (Trace() && now >= st.nextTrace) {
 			st.nextTrace = now + 30.0f;
 			ServerGameObject* d = FindDock(player, st, false);
@@ -1257,7 +2007,7 @@ namespace Naval {
 		Fleet(player, st);
 		// a ship carrying passengers no ferry knows of (a loaded game: ferries aren't saved): sailed on
 		for (ServerGameObject* s : Ships(player))
-			if (IsTransport(s) && PassengersOf(s) > 0 && !InFerry(st, s->id) && st.need > NEED_NONE && g_ids.passengers >= 0) {
+			if (IsTransport(s) && PassengersOf(s) > 0 && !InFerry(st, s->id) && !IsRouteShip(st, s->id) && st.need > NEED_NONE && g_ids.passengers >= 0) {
 				Ferry f;
 				f.id = st.nextFerry++;
 				f.ship = s->id;
@@ -1401,6 +2151,26 @@ namespace Naval {
 		}
 		Log(player, "%s moved from (%.0f, %.0f) across the water to (%.0f, %.0f) on its own land", foundation->name.c_str(), wanted.x, wanted.z, best.x, best.z);
 		return best;
+	}
+
+	bool OnRoute(ServerGameObject* player, uint32_t ship)
+	{
+		return player && IsRouteShip(player->aiController.naval, ship);
+	}
+
+	std::string ColonyCensus(ServerGameObject* player)
+	{
+		const State& st = player->aiController.naval;
+		std::string s = "founded " + std::to_string(st.coloniesFounded) + ", manors " + std::to_string(st.colonyManors) + ", routes " + std::to_string(st.routesOpened);
+		for (const Colony& c : st.colonies) {
+			char buf[256];
+			snprintf(buf, sizeof(buf), "; colony %u (%s, %s): %zu settlers, village %u, manor %u, dock %u, cog %u, %d trips, %d shipped", c.id,
+				c.plan == Colony::MANOR ? "manor" : c.plan == Colony::ROUTE ? "route" : "undecided",
+				c.stage == Colony::SETTLING ? "settling" : c.stage == Colony::FOUNDING ? "founding" : "working",
+				c.settlers.size(), c.village, c.manor, c.dock, c.cog, c.trips, c.shipped);
+			s += buf;
+		}
+		return s;
 	}
 
 	std::string Census(ServerGameObject* player)

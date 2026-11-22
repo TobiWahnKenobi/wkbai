@@ -3729,6 +3729,8 @@ void Test_AIvsAI()
 				}
 				// the navy (Naval.h)
 				printf("NAVALCENSUS t=%.0f player %u: %s\n", server.timeManager.currentTime, player->id, Naval::Census(player).c_str());
+				printf("COLONYCENSUS t=%.0f player %u: %s; stock %.0f wood %.0f gold %.0f food\n", server.timeManager.currentTime, player->id, Naval::ColonyCensus(player).c_str(),
+					player->getItem(Tags::PDITEM_WOOD), player->getItem(Tags::PDITEM_GOLD), player->getItem(Tags::PDITEM_FOOD));
 				// its Lua AI, if any, and what it did (the script's census())
 				if (const std::string lua = player->aiController.luaCensus(); !lua.empty())
 					printf("AITEST   lua player %u: %s\n", player->id, lua.c_str());
