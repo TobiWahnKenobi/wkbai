@@ -41,7 +41,7 @@ The ground's pictures (`Maps\Map_Textures\<name>`, each an atlas of 4 x 4 cells)
 
 The maps cover the whole atlas in the picture's own layout, cell for cell. Blur and make mipmaps within each cell, never across a cell's edge, since the cells are unrelated pictures. They are read as linear data, not sRGB, and the normal map should match the height map's slopes.
 
-The ground's [generated transitions](../ui/editor/map-format.md#generated-transitions) are blended from the pictures that are loaded, a mod's or the HD pack's included, and made again when one of them changes.
+The ground's [generated transitions](../ui/editor/map-format.md#generated-transitions) are blended from the pictures as loaded, a mod's included. Switching a mod that replaces ground pictures under the same names and sizes doesn't make them again: delete `saved\Maps\Map_Textures\Generated` in your user folder and they are made anew.
 
 ## Levels that name what the game set lacks
 
