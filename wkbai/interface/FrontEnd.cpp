@@ -1197,6 +1197,7 @@ struct FrontEnd::Impl {
 		lua.set_function("beginEditOptions", []() { BeginEditMenuOptions(); });
 		lua.set_function("saveOptions", []() { SaveMenuOptions(); });
 		lua.set_function("revertOptions", []() { RevertMenuOptions(); });
+		lua.set_function("resetOptionsPage", [](const std::string& page) { ResetMenuPage(page); });
 	}
 
 	template <typename... Args> void call(const char* function, Args&&... args)

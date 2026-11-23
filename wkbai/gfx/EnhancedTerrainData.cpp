@@ -8,6 +8,7 @@
 #include "TextureCache.h"
 #include "bitmap.h"
 #include "../settings.h"
+#include "../file.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <array>
@@ -33,6 +34,18 @@ static constexpr uint32_t NormalToR10G10B10A2(const Vector3& vec) {
 // original-comparison.md in the RE repository); Rock1's normals then average 0.80 up
 static constexpr float BUMP_NORMAL_UP = 0.05f;
 
+std::string TerrainOverrideMap(TextureCache* texcache, const std::string& atlasFile, const char* suffix)
+{
+	const size_t ext = atlasFile.rfind('.');
+	const std::string base = ext != std::string::npos ? atlasFile.substr(0, ext) : atlasFile;
+	for (const char* e : { ".png", ".tga", ".dds", ".ktx2" }) {
+		const std::string name = base + suffix + e;
+		if (FileExists((texcache->directory + name).c_str()))
+			return name;
+	}
+	return {};
+}
+
 void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::map<TerrainTexture*, EnhancedTerrainTexture>& textures)
 {
 	// Load terrain color textures
@@ -44,6 +57,17 @@ void LoadEnhancedTerrainTextures(Terrain* terrain, TextureCache* texcache, std::
 		for (const auto &tex : grp.second->textures) {
 			EnhancedTerrainTexture ld;
 			ld.diffuseMap = texcache->getTexture(tex.second->file.c_str());
+			// the override pack's material maps (docs/engine/terrain-pbr.md in the RE repository)
+			if (std::string f = TerrainOverrideMap(texcache, tex.second->file, "_orm"); !f.empty())
+				ld.ormMap = texcache->getTexture(f.c_str());
+			if (std::string f = TerrainOverrideMap(texcache, tex.second->file, "_height"); !f.empty())
+				ld.heightMap = texcache->getTexture(f.c_str());
+			if (std::string f = TerrainOverrideMap(texcache, tex.second->file, "_normal"); !f.empty()) {
+				ld.normalMap = texcache->getTexture(f.c_str());
+				ld.nativeNormal = true;
+				textures[tex.second.get()] = ld;
+				continue;
+			}
 
 			std::string nrm;
 			size_t ext = tex.second->file.rfind('.');
