@@ -15547,6 +15547,248 @@ void Test_TiltedWater();
 // The real-place maps' test: MapWaterObjectsTest.cpp
 void Test_MapWaterObjects();
 
+// Artillery breaks the ice (ServerEnvironment::iceStruck, the game setting "breakingIce"): on
+// Forking River with the seasons on and its water held frozen (ice 1), the ice's temperature held
+// at -10 C (spring otherwise: no one freezes), on a tile of deep frozen water:
+//  - the missiles: a bombard's, trebuchet's, mangonel's ball break holes of 4, 5.5, 3.5 m, an arrow none;
+//  - a Bombard Ball (its creator a spearman of an enemy) comes down there: a hole of 4 m, the shooter
+//    its shooter; the tile open water (not frozenAt), blocked for walkers (also the path cache's);
+//  - two spearmen on it fall in: a hurt one drowns, the shooter credited with the kill; the other
+//    swims (Swim) out onto the ice, alive; a third one 10 m off stays dry;
+//  - in the frost the hole closes (its radius shrinks), the tile walkable again, then the hole gone;
+//  - not in the frost (3 C) a hole stays open;
+//  - the save: "breakingIce=1" and the "icehole" lines, saved, loaded and saved again the same; loaded
+//    into the server, the terrain has the hole again;
+//  - the ice thawing (0.6): the holes gone; the setting off: no hole.
+// Prints "ICEHOLES ok/FAILED ..." and "ICEHOLES PASSED/FAILED".
+void Test_IceHoles()
+{
+	int failures = 0;
+	auto check = [&](bool ok, const std::string& what) {
+		if (!ok) failures++;
+		printf("ICEHOLES %s: %s\n", ok ? "ok" : "FAILED", what.c_str());
+		fflush(stdout);
+	};
+	LoadBCP("data.bcp");
+	g_settings["simSeed"] = 97;
+	Server server;
+	server.loadSaveGame("Save_Games\\2 Player Forking River.lvl");
+	server.startLevel();
+	const GameSet& gs = *server.gameSet;
+	ServerGameObject* enemy = server.findObject(1030);
+	const GameObjBlueprint* spear = gs.findBlueprint(Tags::GAMEOBJCLASS_CHARACTER, "Spearman");
+	const GameObjBlueprint* ball = gs.findBlueprint(Tags::GAMEOBJCLASS_MISSILE, "Bombard Ball");
+	const int hp = gs.items.names.getIndex("Hit Points");
+	const int hpCap = gs.items.names.getIndex("Hit Point Capacity");
+	const int swimAnim = gs.animations.names.getIndex("Swim");
+	// the shooter's player: one at war with the enemy
+	ServerGameObject* shooterPlayer = nullptr;
+	for (const auto& [type, players] : server.getLevel()->children)
+		for (CommonGameObject* p : players)
+			if (!shooterPlayer && p != enemy && p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player"
+				&& enemy && server.getDiplomaticStatus(p, enemy) >= 2)
+				shooterPlayer = (ServerGameObject*)p;
+	if (!enemy || !spear || !ball || hp < 0 || hpCap < 0 || !shooterPlayer) {
+		printf("ICEHOLES not set up\nICEHOLES FAILED (1)\n");
+		return;
+	}
+	// the missiles' holes
+	{
+		const float b = ServerEnvironment::ShotHoleRadius("Bombard Ball"), t = ServerEnvironment::ShotHoleRadius("Trebuchet Ball");
+		const float m = ServerEnvironment::ShotHoleRadius("Mangonel Ball"), a = ServerEnvironment::ShotHoleRadius("Arrow");
+		char what[160];
+		snprintf(what, sizeof(what), "the holes: Bombard Ball %.1f, Trebuchet Ball %.1f, Mangonel Ball %.1f, Arrow %.1f m", b, t, m, a);
+		check(b == 4.0f && t == 5.5f && m == 3.5f && a == 0.0f, what);
+	}
+	ServerEnvironment& env = server.environment;
+	env.settings.seasons = true;
+	env.settings.seasonLengthMin = 600;
+	env.settings.breakingIce = true;
+	env.forceWeather = WEATHER_CLEAR;
+	env.forceIce = 1.0f;
+	env.forceIceTemperature = -10.0f;
+	env.trace = true;
+	env.debugSet(server, "season", 0.5f); // (mid-spring: mild, no one freezes; the ice held)
+	server.timeManager.unpause();
+	server.timeManager.stepMs = 20;
+	auto run = [&](float seconds) {
+		for (int step = 0; step < (int)(seconds * 50.0f); step++) {
+			server.timeManager.pendingMs = server.timeManager.stepMs;
+			if (server.timeManager.step())
+				server.simulate();
+		}
+	};
+	run(3.0f);
+	Terrain* t = server.terrain;
+	check(t->waterFrozen, "the water frozen (ice held at 1)");
+	const auto [pw, ph] = t->getNumPlayableTiles();
+	auto centre = [&](int x, int z) { Vector3 p(x * 5.0f + 2.5f, 0, z * 5.0f + 2.5f); p.y = t->getHeightEx(p.x, p.z, false); return p; };
+	// a tile of deep frozen water with deep frozen water all round it (two tiles out; the one
+	// nearest the map's middle)
+	int hx = -1, hz = -1;
+	for (int z = 4; z < ph - 4; z++)
+		for (int x = 4; x < pw - 4; x++) {
+			bool ok = true;
+			for (int dz = -2; dz <= 2 && ok; dz++)
+				for (int dx = -2; dx <= 2 && ok; dx++)
+					ok = env.onDeepWater(centre(x + dx, z + dz)) && t->frozenAt(t->edge + x + dx, t->edge + z + dz) && !MovementController::isTerrainBlocked(spear, x + dx, z + dz);
+			if (ok && (hx < 0 || std::abs(x - pw / 2) + std::abs(z - ph / 2) < std::abs(hx - pw / 2) + std::abs(hz - ph / 2)))
+				hx = x, hz = z;
+		}
+	if (hx < 0) {
+		check(false, "a tile of deep frozen water");
+		printf("ICEHOLES FAILED (%d)\n", failures);
+		return;
+	}
+	const Vector3 at = centre(hx, hz);
+	printf("ICEHOLES the hole's tile (%d, %d) at (%.1f, %.1f, %.1f)\n", hx, hz, at.x, at.y, at.z);
+	// "iceSave": "<file>": a picture run in midwinter: a hole half frozen over again, a fresh
+	// bombard's hole with spearmen swimming in it, a trebuchet's beside it; saved, for a benchmark
+	// run that shows them; the checks are left out
+	if (const std::string file = g_settings.value("iceSave", std::string()); !file.empty()) {
+		env.debugSet(server, "season", 3.5f);
+		run(2.0f);
+		env.breakIce(server, at + Vector3(-9.0f, 0, -6.0f), 4.0f, 0);
+		run(40.0f); // (at -10 C: about 1.6 m frozen over again)
+		// (every player's: whichever the picture is seen as, some are in sight)
+		std::vector<ServerGameObject*> all;
+		for (const auto& [type, players] : server.getLevel()->children)
+			for (CommonGameObject* p : players)
+				if (p->blueprint->bpClass == Tags::GAMEOBJCLASS_PLAYER && p->blueprint->name != "Neutral Player")
+					all.push_back((ServerGameObject*)p);
+		for (int i = 0; i < 4; i++)
+			server.spawnObject(spear, all[0], at + Vector3(-1.5f + i, 0, (i % 2) * 1.2f - 0.6f), Vector3(0, 0, 0));
+		for (int i = 0; i < 3; i++)
+			server.spawnObject(spear, all[1 % all.size()], at + Vector3(4.0f + 2.0f * i, 0, 7.0f), Vector3(0, 0, 0));
+		env.breakIce(server, at, 4.0f, 0);
+		env.breakIce(server, at + Vector3(10.0f, 0, 8.0f), 5.5f, 0);
+		run(0.6f);
+		printf("ICEHOLES holes saved to %s: %d, %zu holes, %zu swimming, around (%.1f, %.1f, %.1f)\n", file.c_str(), (int)server.saveGame(file.c_str()),
+			env.iceHoles().size(), env.iceSwimmerCount(), at.x, at.y, at.z);
+		printf("ICEHOLES a picture run (iceSave): the checks after this are left out\n");
+		return;
+	}
+	// a land tile for the shooter
+	Vector3 land(0, 0, 0);
+	for (int z = 2; z < ph - 2 && land.x == 0; z++)
+		for (int x = 2; x < pw - 2 && land.x == 0; x++)
+			if (const TerrainTile* tile = t->getPlayableTile(x, z); tile && !tile->fullOfWater && !MovementController::isTerrainBlocked(spear, x, z))
+				land = centre(x, z);
+	ServerGameObject* shooter = server.spawnObject(spear, shooterPlayer, land, Vector3(0, 0, 0));
+	SrvGORef a = server.spawnObject(spear, enemy, at, Vector3(0, 0, 0));
+	SrvGORef b = server.spawnObject(spear, enemy, at + Vector3(1.0f, 0, 1.0f), Vector3(0, 0, 0));
+	SrvGORef c = server.spawnObject(spear, enemy, centre(hx, hz) + Vector3(0, 0, 0), Vector3(0, 0, 0));
+	// (the third one two tiles off, on the ice)
+	if (ServerGameObject* o = c.get()) {
+		Vector3 p = centre(hx + 2 < pw - 1 ? hx + 2 : hx - 2, hz);
+		o->updatePosition(p);
+	}
+	if (ServerGameObject* o = b.get())
+		o->setItem(hp, o->getItem(hpCap) * 0.12f);
+	const int killsBefore = shooter ? shooter->kills : 0;
+	run(0.2f);
+	const bool walkableBefore = !MovementController::isTerrainBlocked(spear, hx, hz) && !MovementController::isTileBlocked(spear, hx, hz);
+	// the shot
+	ServerGameObject* missile = server.spawnObject(ball, shooterPlayer, at + Vector3(0, 0.3f, 0), Vector3(0, 0, 0));
+	if (missile && shooter)
+		missile->creatorId = shooter->id;
+	if (missile)
+		env.iceStruck(server, missile, at);
+	if (missile)
+		server.deleteObject(missile);
+	{
+		const auto& holes = env.iceHoles();
+		char what[260];
+		snprintf(what, sizeof(what), "a Bombard Ball on the ice: %zu holes, radius %.1f, shooter %u (the spearman %u); the tile walkable before %d, open now %d, blocked %d (cache %d); fallen in %d",
+			holes.size(), holes.empty() ? 0.0f : holes[0].radius, holes.empty() ? 0 : holes[0].shooter, shooter ? shooter->id : 0, (int)walkableBefore,
+			(int)!t->frozenAt(t->edge + hx, t->edge + hz), (int)MovementController::isTerrainBlocked(spear, hx, hz), (int)MovementController::isTileBlocked(spear, hx, hz),
+			env.stats.iceFallen);
+		check(missile && shooter && holes.size() == 1 && holes[0].radius == 4.0f && holes[0].shooter == shooter->id && walkableBefore
+			&& !t->frozenAt(t->edge + hx, t->edge + hz) && MovementController::isTerrainBlocked(spear, hx, hz) && MovementController::isTileBlocked(spear, hx, hz)
+			&& env.stats.iceFallen == 2, what);
+	}
+	run(1.2f);
+	{
+		ServerGameObject* oa = a.get();
+		ServerGameObject* ob = b.get();
+		const bool bDead = !ob || ob->deleted || (ob->flags & CommonGameObject::fTerminated) || ob->getItem(hp) <= 0.0f;
+		char what[260];
+		snprintf(what, sizeof(what), "in the water: the hurt one dead %d (drowned %d), the shooter's kills %d -> %d; the other alive %d, swimming %d (animation %d, Swim %d)",
+			(int)bDead, env.stats.iceDrowned, killsBefore, shooter ? shooter->kills : -1, (int)(oa && oa->getItem(hp) > 0.0f), (int)(oa && env.iceSwimmerCount() >= 1),
+			oa ? oa->animationIndex : -1, swimAnim);
+		check(bDead && env.stats.iceDrowned == 1 && oa && oa->getItem(hp) > 0.0f && env.iceSwimmerCount() >= 1
+			&& (swimAnim < 0 || oa->animationIndex == swimAnim), what);
+	}
+	run(8.0f);
+	{
+		ServerGameObject* oa = a.get();
+		ServerGameObject* oc = c.get();
+		const int ax = oa ? (int)(oa->position.x / 5.0f) : -1, az = oa ? (int)(oa->position.z / 5.0f) : -1;
+		char what[260];
+		snprintf(what, sizeof(what), "swum out: alive %d at %.0f%% health, on tile (%d, %d) open %d; out of the water %d (swam out %d, %d s in it); the third one dry at full health %d",
+			(int)(oa && oa->getItem(hp) > 0.0f), oa ? 100.0f * oa->getItem(hp) / oa->getItem(hpCap) : 0.0f, ax, az, (int)(oa && t->iceOpenAt(t->edge + ax, t->edge + az)),
+			(int)(env.iceSwimmerCount() == 0), env.stats.iceSwamOut, env.stats.iceSwimSeconds, (int)(oc && oc->getItem(hp) >= oc->getItem(hpCap)));
+		check(oa && oa->getItem(hp) > 0.0f && !t->iceOpenAt(t->edge + ax, t->edge + az) && env.iceSwimmerCount() == 0 && env.stats.iceSwamOut >= 1
+			&& oc && oc->getItem(hp) >= oc->getItem(hpCap), what);
+		snprintf(what, sizeof(what), "the drowned one the shooter's kill: its kills %d -> %d", killsBefore, shooter ? shooter->kills : -1);
+		check(shooter && shooter->kills == killsBefore + 1, what);
+	}
+	// refreezing at -10 C: 0.04 m a second
+	{
+		const float r0 = env.iceHoles().empty() ? 0.0f : env.iceHoles()[0].radius;
+		run(20.0f);
+		const float r1 = env.iceHoles().empty() ? 0.0f : env.iceHoles()[0].radius;
+		float walkableAt = -1.0f, goneAt = -1.0f;
+		for (int s = 0; s < 240 && goneAt < 0.0f; s++) {
+			run(1.0f);
+			if (walkableAt < 0.0f && !MovementController::isTileBlocked(spear, hx, hz))
+				walkableAt = 21.0f + s;
+			if (env.iceHoles().empty())
+				goneAt = 21.0f + s;
+		}
+		char what[220];
+		snprintf(what, sizeof(what), "in the frost (-10 C): radius %.2f -> %.2f in 20 s; the tile walkable again %.0f s on, the hole gone %.0f s on", r0, r1, walkableAt, goneAt);
+		check(r0 > 3.0f && r1 < r0 - 0.6f && r1 > r0 - 1.0f && walkableAt > 40.0f && goneAt > walkableAt && goneAt < 200.0f, what);
+	}
+	// not in the frost: it stays
+	env.forceIceTemperature = 3.0f;
+	const bool broken = env.breakIce(server, at, 4.0f, shooter ? shooter->id : 0);
+	run(10.0f);
+	{
+		char what[160];
+		snprintf(what, sizeof(what), "at 3 C: broken %d, the hole's radius after 10 s %.2f", (int)broken, env.iceHoles().empty() ? 0.0f : env.iceHoles()[0].radius);
+		check(broken && env.iceHoles().size() == 1 && env.iceHoles()[0].radius == 4.0f, what);
+	}
+	// the save
+	{
+		const std::string text = env.saveText();
+		ServerEnvironment copy;
+		copy.loadText(text);
+		const bool same = copy.saveText() == text && copy.iceHoles().size() == 1 && copy.settings.breakingIce;
+		check(text.find("breakingIce=1") != std::string::npos && text.find("\nicehole ") != std::string::npos && same, "the setting and the hole in the save, loaded and saved again the same");
+		// loaded into the server (its terrain's holes put back at the next update)
+		env.loadText(text);
+		env.forceWeather = WEATHER_CLEAR;
+		env.forceIce = 1.0f;
+		env.forceIceTemperature = 3.0f;
+		env.trace = true;
+		t->setIceHoles({});
+		const bool clearedFirst = !t->iceOpenAt(t->edge + hx, t->edge + hz);
+		run(1.5f);
+		check(clearedFirst && t->iceOpenAt(t->edge + hx, t->edge + hz) && env.iceHoles().size() == 1, "loaded into the server: the terrain has the hole again");
+	}
+	// the ice thawing: the holes gone
+	env.forceIce = 0.6f;
+	run(2.5f);
+	check(!t->waterFrozen && env.iceHoles().empty() && t->iceOpen.empty(), "the ice thawed (0.6): no holes, no open tiles");
+	// the setting off: none
+	env.forceIce = 1.0f;
+	env.settings.breakingIce = false;
+	run(2.5f);
+	check(t->waterFrozen && !env.breakIce(server, at, 4.0f, 0) && env.iceHoles().empty(), "the setting off: the ice frozen, no hole broken");
+	printf("ICEHOLES %s (%d)\n", failures ? "FAILED" : "PASSED", failures);
+}
+
 const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_GameSet, "Game set loading"},
 {Test_GSFileParser, "GSF Parser"},
@@ -15667,6 +15909,7 @@ const std::vector<std::pair<void(*)(), const char*> > testList = {
 {Test_AttackAtWill, "Attack at will: idle Spearmen and Archers set to attack at will go for an enemy walking past 12 m away"},
 {Test_TiltedWater, "Tilted water: a sloped stream down a hillside into a lake (format, never rising, the lake met without a seam, floating, rapids and a fall, wading); a generated river with water, compiled, server and client the same, played"},
 {Test_MapWaterObjects, "Map water, objects and far land: a stream with water (a sloped waterway, the water kept in the channel), forests and resources by rule (none on water, conifers higher up), a stored far land compiled into the cache and loaded with the map"},
+{Test_IceHoles, "Ice holes: artillery breaks the ice, units on it fall in (one drowns, the shooter's kill; one swims out), the hole refreezes in the frost, stays in the warm, through a save, gone in a thaw"},
 };
 
 void LaunchTest()

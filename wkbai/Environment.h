@@ -68,6 +68,11 @@ struct EnvironmentSettings {
 	// their graphics. Off here (a save or recording without it: as before); the lobby's default
 	// is on
 	bool riverCurrents = false;
+	// artillery breaks the ice ("breakingIce", with the seasons; ServerEnvironment.h, iceStruck):
+	// a bombard's, trebuchet's, mangonel's or rocket's shot coming down on frozen water opens a
+	// hole in it; who stands there falls in, swims out or drowns; the hole freezes over again in
+	// the frost. Off here (a save or recording without it: as before); the lobby's default is on
+	bool breakingIce = false;
 	// the wind (Wind.h): "wind" 0 off (the fixed look from before, no effect on the game), 1 on;
 	// "windFrom" 0 random by windSeed (mostly westerly), 1-8 from the north, north-east, ... north-
 	// west; "windStrength" 0 by the weather, 1-5 calm, light, breeze, strong, gale; "windVeers" its

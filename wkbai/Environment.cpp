@@ -80,6 +80,8 @@ std::string EnvironmentSettings::text() const
 	}
 	if (seasons && riverCurrents)
 		out += "riverCurrents=1\n";
+	if (seasons && breakingIce)
+		out += "breakingIce=1\n";
 	if (dayShift != 0.0f || yearShift != 0.0f) {
 		snprintf(buf, sizeof(buf), "dayShift=%.9g\nyearShift=%.9g\n", dayShift, yearShift);
 		out += buf;
@@ -146,6 +148,7 @@ bool EnvironmentSettings::apply(const std::string& name, float v)
 	else if (name == "peasantsSleep") peasantsSleep = i != 0;
 	else if (name == "farmersWinter") farmersWinter = i != 0;
 	else if (name == "riverCurrents") riverCurrents = i != 0;
+	else if (name == "breakingIce") breakingIce = i != 0;
 	else if (name == "wind") wind = std::clamp(i, 0, 1);
 	else if (name == "windFrom") windFrom = std::clamp(i, 0, 8);
 	else if (name == "windStrength") windStrength = std::clamp(i, 0, 5);

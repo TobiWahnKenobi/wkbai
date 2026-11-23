@@ -198,6 +198,11 @@ enum NetClientMessages {
 	// wkbai's wind (Wind.h), once a game second while the lobby's wind is on: the settings
 	// (WindSettings::write) and the state (WindState::write)
 	NETCLIMSG_WIND,
+	// wkbai's holes in the ice that artillery broke (ServerEnvironment::iceStruck, Terrain::
+	// iceHoles): count (16 bits), then each one's x, z, radius and widest (floats, playable world
+	// coordinates). Whenever they change (a shot, refreezing, the ice gone), all of them to a
+	// client joining (after NETCLIMSG_ENVIRONMENT)
+	NETCLIMSG_ICE_HOLES,
 };
 
 enum NetServerMessages {
