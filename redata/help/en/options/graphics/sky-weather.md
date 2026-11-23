@@ -94,6 +94,8 @@ How frozen water looks:
 - **Medium** (the default): lit, mirroring the sky, with cracks.
 - **High:** also a glossy highlight, glittering frost and bubbles frozen in.
 
+Holes that artillery breaks into the ice ([breaking the ice](../../mechanics/seasons-weather.md#breaking-the-ice)) show as broken plates and floes at every level, lit flat at Low.
+
 **Cost:** very small.
 
 ## Rainbows

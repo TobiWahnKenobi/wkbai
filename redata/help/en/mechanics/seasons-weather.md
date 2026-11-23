@@ -1,6 +1,6 @@
 ---
 title: Seasons and weather
-ids: [mechanics/seasons-weather, mechanic/seasons-weather, mechanic/seasons, mechanic/weather, mechanic/temperature, mechanic/cold, mechanic/snow, mechanic/rain, mechanic/floods, mechanic/ice, mechanic/lightning, mechanic/wildfires, mechanic/winter, mechanic/wind#wind, mechanic/wind-chill#wind, mechanic/rain-on-fires#rain-and-snow-on-burning-buildings, mechanic/building-fires-weather#rain-and-snow-on-burning-buildings]
+ids: [mechanics/seasons-weather, mechanic/seasons-weather, mechanic/seasons, mechanic/weather, mechanic/temperature, mechanic/cold, mechanic/snow, mechanic/rain, mechanic/floods, mechanic/ice, mechanic/ice-holes#breaking-the-ice, mechanic/breaking-ice#breaking-the-ice, mechanic/lightning, mechanic/wildfires, mechanic/winter, mechanic/wind#wind, mechanic/wind-chill#wind, mechanic/rain-on-fires#rain-and-snow-on-burning-buildings, mechanic/building-fires-weather#rain-and-snow-on-burning-buildings]
 order: 140
 ---
 
@@ -54,6 +54,18 @@ On the shipped maps towns stand above the floods; they matter mostly on shores a
 ### Ice
 
 In a hard frost rivers and lakes freeze. Once the ice is thick, land units can walk across water of any depth and boats are held fast. When it thaws, anyone still on deep water falls through and drowns quickly.
+
+### Breaking the ice
+
+> **wkbai.** On by default in a skirmish with the seasons; the lobby has no switch for it.
+
+Artillery shots that land on the ice, or hit a unit standing on it, break a hole into it: a [Trebuchet](../units/trebuchet.md)'s ball about 5.5 m wide, a [Bombard](../units/bombard.md)'s 4 m, a [Mangonel](../units/mangonel.md)'s 3.5 m (also from a ship), a [Rocket Launcher](../units/rocket-launcher.md)'s rocket 2.5 m. Arrows, bullets and javelins don't.
+
+- **Falling in:** every unit over deep water in the hole falls in and loses a tenth of its health at once, then more every second it stays in the icy water. A unit that can swim swims at half its speed to the nearest ice or shore it can stand on; war machines sink, and the huge creatures and members of a formation can't swim out. In shallow water units just wade.
+- **Drowned:** a unit that dies in the hole counts as the shooter's kill, if their players are enemies, and as drowned in the statistics.
+- **Holes on the map:** walkers go round them, and a boat in a hole is free to move.
+- **Freezing over:** while it freezes, a hole closes from its edges, faster the harder the frost: a Bombard's hole in about a minute and a half at -10 °C, over ten minutes at -1 °C. Above freezing it stays open; when the ice thaws, the holes go with it. A shot into thin new ice breaks it again.
+- **Drawn** as broken ice: the edge runs along the ice's plates, the plates round it are sunk and tilted with open cracks between them, and floes drift in the dark water ([ice quality](../options/graphics/sky-weather.md#ice-quality)). Saved games keep the holes.
 
 ### Wildfires
 
